@@ -84,6 +84,17 @@ const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* c
     static const proto::ProtoString* errorKey =
         ctx->fromUTF8String("__error__")->asString(ctx);
 
+    // F6 v2 T2: with a parallel worker draining the same queue, an empty
+    // queue does NOT immediately imply deadlock — the worker may have just
+    // popped the actor and be in the middle of processing. We give it one
+    // short bounded wait on the scheduler cv before declaring deadlock. The
+    // worker notifies schedCv on every drainOne exit (incl. future
+    // resolution), so this returns promptly when progress happens. If we
+    // wake up and the queue is still empty AND the future is still pending,
+    // that's a true deadlock.
+    int emptyStrikes = 0;
+    constexpr int kMaxEmptyStrikes = 50;          // 50 × 10ms = 500ms total
+    constexpr unsigned kPerWaitMillis = 10;
     while (true) {
         auto* st = r->getAttribute(ctx, stateKey);
         long long s = st ? st->asLong(ctx) : 0;
@@ -98,8 +109,15 @@ const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* c
                 : std::string("rejected");
             throw std::runtime_error("Future rejected: " + msg);
         }
-        // Pending: pull the next message off the scheduler.
-        if (!rt.drainOne(ctx)) {
+        // Pending: try to pull the next message off the scheduler.
+        if (rt.drainOne(ctx)) {
+            emptyStrikes = 0;  // progress: reset the deadlock budget
+            continue;
+        }
+        // Queue empty. Either the worker has the actor in flight, or there
+        // truly is no scheduled work. Wait briefly for either case.
+        rt.waitForSchedulerProgress(kPerWaitMillis);
+        if (++emptyStrikes >= kMaxEmptyStrikes) {
             throw std::runtime_error(
                 "Future wait: pending and scheduler empty (deadlock)");
         }

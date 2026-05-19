@@ -10,6 +10,8 @@
 #include "modules/STModuleProvider.h"
 #include "protoCore.h"
 
+#include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdlib>
 #include <filesystem>
@@ -85,9 +87,23 @@ struct STRuntime::Impl {
     // F6 v2 T1: scheduler synchronization. `schedMu` guards readyQueue and
     // scheduledSet so a worker thread (added in T2) can safely cooperate with
     // foreground schedule() calls. `mutable` allows const accessors such as
-    // scheduledCount() to lock it. No waiters exist yet; T2 introduces them.
+    // scheduledCount() to lock it.
     mutable std::mutex schedMu;
     std::condition_variable schedCv;
+
+    // F6 v2 T2: parallel drain via a managed ProtoThread.
+    //
+    // - `pinnedActors` keeps actors alive while they sit in the readyQueue.
+    //   The queue is std::queue<const ProtoObject*> — a plain STL container
+    //   the tracing GC cannot see — and the worker thread may consume entries
+    //   asynchronously. Pinning via asyncRoots makes the actor reachable from
+    //   a GC root for the schedule()..drainOne() window.
+    // - `worker` is the lone managed ProtoThread spawned in the STRuntime
+    //   constructor; protoCore gives it its own root ProtoContext chain.
+    // - `shutdown` is set by ~STRuntime to make the worker exit its wait loop.
+    std::unordered_map<const proto::ProtoObject*, proto::ProtoRootSet::Handle> pinnedActors;
+    const proto::ProtoThread* worker = nullptr;
+    std::atomic<bool> shutdown { false };
 
     // F5-M2 module cache: canonical absolute path -> module object.
     std::unordered_map<std::string, const proto::ProtoObject*> moduleCache;
@@ -132,6 +148,27 @@ struct STRuntime::Impl {
     }
 };
 
+// F6 v2 T2: trampoline entered by the managed worker ProtoThread. protoCore
+// gives this thread its own root ProtoContext chain (passed as the first
+// argument). We decode the STRuntime* from args[0] (an ExternalPointer that
+// the constructor wrapped this pointer into) and delegate to workerLoop().
+static const proto::ProtoObject* st_worker_main(
+    proto::ProtoContext* ctx,
+    const proto::ProtoObject* /*self*/,
+    const proto::ParentLink* /*parentLink*/,
+    const proto::ProtoList* args,
+    const proto::ProtoSparseList* /*kwargs*/) {
+    if (!args || args->getSize(ctx) < 1) return PROTO_NONE;
+    const proto::ProtoObject* first = args->getAt(ctx, 0);
+    const proto::ProtoExternalPointer* ep =
+        first ? first->asExternalPointer(ctx) : nullptr;
+    if (!ep) return PROTO_NONE;
+    STRuntime* rt = static_cast<STRuntime*>(ep->getPointer(ctx));
+    if (!rt) return PROTO_NONE;
+    rt->workerLoop(ctx);
+    return PROTO_NONE;
+}
+
 STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
     installIntPrimitives(*this);
     installBoolPrimitives(*this);
@@ -163,12 +200,73 @@ STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
             ctx, ctx->fromUTF8String("provider:st"));
         impl_->space.setResolutionChain(chain->asObject(ctx));
     }
+
+    // F6 v2 T2: spawn one managed worker ProtoThread that drains the scheduler
+    // queue in parallel with the foreground (Future>>wait) drain. The worker
+    // gets its own root ProtoContext from protoCore. The first arg is an
+    // ExternalPointer wrapping `this`; st_worker_main decodes it and delegates
+    // to workerLoop().
+    {
+        auto* ctx = impl_->rootCtx;
+        const proto::ProtoList* argsForThread = ctx->newList();
+        argsForThread = argsForThread->appendLast(
+            ctx, ctx->fromExternalPointer(this, nullptr));
+        const proto::ProtoString* threadName =
+            ctx->fromUTF8String("protoST-worker-0")->asString(ctx);
+        impl_->worker = impl_->space.newThread(
+            ctx, threadName, st_worker_main, argsForThread, nullptr);
+        // If newThread returns nullptr we silently fall back to main-thread
+        // drain only — existing F6 v1 behaviour, no regression.
+    }
 }
 STRuntime::~STRuntime() {
+    // F6 v2 T2: signal the worker to exit, then join it. Predicate in
+    // workerLoop checks shutdown before the queue, so notify_all is enough
+    // even if the worker is currently inside the cv.wait predicate window.
+    if (impl_->worker) {
+        impl_->shutdown.store(true, std::memory_order_release);
+        impl_->schedCv.notify_all();
+        // ProtoThread::join takes the CALLING context (main thread's root).
+        // newThread returns const ProtoThread*; join is non-const.
+        const_cast<proto::ProtoThread*>(impl_->worker)->join(impl_->rootCtx);
+        impl_->worker = nullptr;
+    }
+
     // F5 v2: clear the thread-local pointer if it still references us, so a
     // late provider lookup after destruction doesn't dereference a dead
     // runtime.
     if (currentSTRuntime() == this) setCurrentSTRuntime(nullptr);
+}
+
+bool STRuntime::waitForSchedulerProgress(unsigned millis) {
+    std::unique_lock<std::mutex> lock(impl_->schedMu);
+    auto status = impl_->schedCv.wait_for(
+        lock, std::chrono::milliseconds(millis));
+    return status == std::cv_status::no_timeout;
+}
+
+void STRuntime::workerLoop(proto::ProtoContext* ctx) {
+    while (true) {
+        {
+            std::unique_lock<std::mutex> lock(impl_->schedMu);
+            impl_->schedCv.wait(lock, [this]{
+                return impl_->shutdown.load(std::memory_order_acquire)
+                    || !impl_->readyQueue.empty();
+            });
+            // If shutdown requested and nothing left to drain, exit.
+            // If shutdown requested but queue is non-empty, prefer to keep
+            // draining so we don't lose pending work (the destructor will
+            // not return until join() completes).
+            if (impl_->shutdown.load(std::memory_order_acquire)
+                && impl_->readyQueue.empty()) {
+                return;
+            }
+        }
+        // drainOne reacquires the lock for its pop. It is safe to race with
+        // the main thread; whichever pops first owns the actor for this
+        // iteration.
+        drainOne(ctx);
+    }
 }
 
 proto::ProtoSpace*   STRuntime::space()         const { return &impl_->space; }
@@ -228,19 +326,25 @@ void STRuntime::schedule(const proto::ProtoObject* actor) {
     if (!actor) return;
     {
         std::lock_guard<std::mutex> lock(impl_->schedMu);
-        if (impl_->scheduledSet.insert(actor).second) {
-            impl_->readyQueue.push(actor);
-        } else {
+        if (!impl_->scheduledSet.insert(actor).second) {
             return;  // already scheduled; no need to notify
         }
+        // F6 v2 T2: pin the actor in asyncRoots while it sits in the queue.
+        // readyQueue is a plain std::queue invisible to the tracing GC, and a
+        // worker thread on a separate ProtoContext chain may consume entries
+        // asynchronously. Pinning bridges the gap.
+        if (impl_->asyncRoots) {
+            impl_->pinnedActors[actor] = impl_->asyncRoots->add(actor);
+        }
+        impl_->readyQueue.push(actor);
     }
-    // F6 v2 T1: prepare for a worker thread (added in T2) to wake on enqueue.
-    // No waiters exist yet, so the notify is a no-op today.
+    // Wake one waiter; the worker thread (added in T2) loops on schedCv.
     impl_->schedCv.notify_one();
 }
 
 bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     const proto::ProtoObject* actor = nullptr;
+    proto::ProtoRootSet::Handle pinHandle = proto::ProtoRootSet::kNullHandle;
     {
         // F6 v2 T1: only the queue/set mutation is under the lock. Mailbox
         // and future updates below run unlocked so concurrent schedule()
@@ -250,7 +354,30 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
         actor = impl_->readyQueue.front();
         impl_->readyQueue.pop();
         impl_->scheduledSet.erase(actor);
+        // F6 v2 T2: claim ownership of this actor's pin handle. If the
+        // processing path below re-schedules the actor, schedule() will pin
+        // it again with a fresh handle independent of this one.
+        auto it = impl_->pinnedActors.find(actor);
+        if (it != impl_->pinnedActors.end()) {
+            pinHandle = it->second;
+            impl_->pinnedActors.erase(it);
+        }
     }
+
+    // F6 v2 T2: RAII release of the per-iteration pin on all exit paths.
+    // The handle was minted by schedule() and must be returned exactly once.
+    // The destructor also notifies schedCv so a Future>>wait stuck on an
+    // empty queue (because the worker beat us to the actor) wakes promptly
+    // once we've finished resolving / rejecting the future.
+    struct DrainGuard {
+        proto::ProtoRootSet* rs;
+        proto::ProtoRootSet::Handle h;
+        std::condition_variable* cv;
+        ~DrainGuard() {
+            if (rs && h != proto::ProtoRootSet::kNullHandle) rs->remove(h);
+            if (cv) cv->notify_all();
+        }
+    } drainGuard{impl_->asyncRoots, pinHandle, &impl_->schedCv};
 
     static const proto::ProtoString* mailboxKey =
         ctx->fromUTF8String("__mailbox__")->asString(ctx);

@@ -58,6 +58,21 @@ public:
     bool drainOne(proto::ProtoContext* ctx);   // returns true if a message was processed
     size_t scheduledCount() const;              // size of ready queue (for testing)
 
+    // F6 v2 T2: entry called by the managed worker ProtoThread spawned in the
+    // constructor. Loops on the scheduler cv, calling drainOne() until shutdown
+    // is requested by the destructor. Public for the C-style ProtoMethod
+    // trampoline; embedders should not invoke this directly.
+    void workerLoop(proto::ProtoContext* ctx);
+
+    // F6 v2 T2: wait briefly on schedCv for a state change.
+    //
+    // Used by Future>>wait so the foreground thread doesn't busy-spin (nor
+    // throw a spurious deadlock) when the worker has stolen the only ready
+    // actor. drainOne notifies after every iteration (including future
+    // resolution), so this returns quickly whenever the worker makes progress.
+    // Returns true if notified within the timeout; false on plain timeout.
+    bool waitForSchedulerProgress(unsigned millis);
+
     // F6-A4 helpers
     // Allocates a new pending Future (mutable child of futureProto) with the
     // canonical attribute layout (__state__=0, __value__=nil, __error__=nil).
