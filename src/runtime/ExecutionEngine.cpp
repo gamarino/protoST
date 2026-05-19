@@ -1,10 +1,12 @@
 #include "ExecutionEngine.h"
 #include "BytecodeModule.h"
+#include "Bootstrap.h"
 #include "Opcodes.h"
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
 #include "protoCore.h"
 
+#include <algorithm>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -14,7 +16,16 @@ namespace protoST {
 const proto::ProtoObject*
 ExecutionEngine::run(proto::ProtoContext* ctx,
                      const BytecodeModule& m,
-                     const proto::ProtoObject* /*self*/) {
+                     const proto::ProtoObject* self) {
+    return runWithArgs(ctx, m, self, nullptr, 0);
+}
+
+const proto::ProtoObject*
+ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
+                             const BytecodeModule& m,
+                             const proto::ProtoObject* /*self*/,
+                             const proto::ProtoObject* const* args,
+                             int argc) {
     const auto& bytes = m.bytes();
     std::size_t pc = 0;
 
@@ -25,8 +36,9 @@ ExecutionEngine::run(proto::ProtoContext* ctx,
 
     // F2: per-method locals as a small std::vector. Replaced with
     // ProtoSparseList in Task 50 when actors arrive (out of scope for F1+F2).
-    std::vector<const proto::ProtoObject*> locals;
-    locals.reserve(16);
+    // Pre-populate slots 0..argc-1 from incoming args (Task 44: block invocation).
+    std::vector<const proto::ProtoObject*> locals(args, args + argc);
+    locals.reserve(std::max<size_t>(16, locals.size() + 8));
 
     auto ensureLocal = [&](uint8_t slot) {
         if (slot >= locals.size())
@@ -75,6 +87,20 @@ ExecutionEngine::run(proto::ProtoContext* ctx,
                 const proto::ProtoObject* r =
                     stack.empty() ? PROTO_NONE : stack.back();
                 return r;
+            }
+            case Op::PUSH_BLOCK: {
+                // arg = block index inside m.blocks(). Create a fresh BlockClosure
+                // (a mutable child of the Block prototype) that carries an opaque
+                // pointer to the sub-module under attribute "__bc_ptr__".
+                auto* blkProto = rt_.bootstrap().blockProto;
+                auto* block = blkProto->newChild(ctx, /*isMutable=*/true);
+                static const proto::ProtoString* bcKey =
+                    ctx->fromUTF8String("__bc_ptr__")->asString(ctx);
+                auto* bcPtrObj = ctx->fromLong(
+                    reinterpret_cast<long long>(&m.block(arg)));
+                block->setAttribute(ctx, bcKey, bcPtrObj);
+                stack.push_back(block);
+                break;
             }
             case Op::SEND_UNARY:
             case Op::SEND_BINARY:

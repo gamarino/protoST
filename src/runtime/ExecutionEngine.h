@@ -19,6 +19,14 @@ public:
                                   const BytecodeModule& m,
                                   const proto::ProtoObject* self = nullptr);
 
+    // Runs `m` with `argc` arguments pre-loaded into locals 0..argc-1.
+    // Used by BlockClosure>>value etc. (Task 44).
+    const proto::ProtoObject* runWithArgs(proto::ProtoContext* ctx,
+                                          const BytecodeModule& m,
+                                          const proto::ProtoObject* self,
+                                          const proto::ProtoObject* const* args,
+                                          int argc);
+
 private:
     STRuntime& rt_;
 };

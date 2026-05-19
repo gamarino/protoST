@@ -4,6 +4,8 @@
 #include "runtime/ExecutionEngine.h"
 #include "runtime/BytecodeModule.h"
 #include "runtime/Opcodes.h"
+#include "frontend/Parser.h"
+#include "frontend/Compiler.h"
 #include "protoCore.h"
 
 TEST_CASE("ExecutionEngine: empty module returns nil", "[engine]") {
@@ -105,3 +107,24 @@ TEST_CASE("Engine: 'ab' , 'cd' returns 'abcd'", "[engine][primitives]") {
     // protoCore exposes UTF-8 via asString(ctx)->toStdString(ctx).
     REQUIRE(r->asString(rt.rootCtx())->toStdString(rt.rootCtx()) == "abcd");
 }
+
+TEST_CASE("Engine: [ :a :b | a + b ] value: 3 value: 4 returns 7", "[engine][block]") {
+    protoST::Parser P("[ :a :b | a + b ] value: 3 value: 4.");
+    protoST::Compiler C; auto bc = C.compileModule(*P.parseModule());
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r->asLong(rt.rootCtx()) == 7);
+}
+
+TEST_CASE("Engine: true ifTrue: [ 42 ] returns 42", "[engine][block]") {
+    protoST::Parser P("true ifTrue: [ 42 ].");
+    protoST::Compiler C; auto bc = C.compileModule(*P.parseModule());
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r->asLong(rt.rootCtx()) == 42);
+}
+

@@ -7,15 +7,11 @@
 
 namespace protoST {
 
-// invokeBlock is implemented in block_prims.cpp (Task 44). For now we ship a
-// stub that throws if any code actually reaches BlockClosure>>value via
-// ifTrue:/ifFalse:. Task 44 will move the real definition into block_prims.cpp
-// and REMOVE this stub.
-const proto::ProtoObject* invokeBlock(STRuntime&, proto::ProtoContext*,
-                                       const proto::ProtoObject*,
-                                       const proto::ProtoObject* const*, int) {
-    throw std::runtime_error("BlockClosure>>value not yet installed (Task 44)");
-}
+// invokeBlock is defined in block_prims.cpp (Task 44). The forward declaration
+// lets bool_prims.cpp call into it via external linkage.
+const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
+                                       const proto::ProtoObject* block,
+                                       const proto::ProtoObject* const* args, int argc);
 
 namespace {
 
