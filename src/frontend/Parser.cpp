@@ -72,6 +72,15 @@ ast::NodePtr Parser::parseStatement() {
         if (inner) n->children.push_back(std::move(inner));
         return n;
     }
+    if (current_.kind == TokenKind::Identifier && lexer_.peek().kind == TokenKind::Assign) {
+        Token id = current_; advance();   // identifier
+        advance();                         // ':='
+        auto rhs = parseExpression();
+        auto n = ast::makeNode(ast::NodeKind::Assignment, id.line, id.column);
+        n->text = id.text;
+        if (rhs) n->children.push_back(std::move(rhs));
+        return n;
+    }
     return parseExpression();
 }
 
@@ -226,6 +235,35 @@ ast::NodePtr Parser::parsePrimary() {
         }
         case TokenKind::LBracket:
             return parseBlock();
+        case TokenKind::LBrace: {
+            Token open = current_; advance();
+            auto arr = ast::makeNode(ast::NodeKind::DynArrayLit, open.line, open.column);
+            while (current_.kind != TokenKind::RBrace && current_.kind != TokenKind::EndOfFile) {
+                auto e = parseExpression();
+                if (e) arr->children.push_back(std::move(e));
+                if (!match(TokenKind::Period)) break;
+            }
+            consume(TokenKind::RBrace, "expected '}' to close dynamic array");
+            return arr;
+        }
+        case TokenKind::HashLParen: {
+            Token open = current_; advance();
+            auto arr = ast::makeNode(ast::NodeKind::ArrayLit, open.line, open.column);
+            while (current_.kind != TokenKind::RParen && current_.kind != TokenKind::EndOfFile) {
+                // only literals inside a frozen array
+                Token t = current_;
+                ast::NodePtr lit;
+                if (t.kind == TokenKind::Integer) { advance(); lit = ast::makeNode(ast::NodeKind::IntegerLit, t.line, t.column); lit->intValue = t.intValue; }
+                else if (t.kind == TokenKind::Float) { advance(); lit = ast::makeNode(ast::NodeKind::FloatLit, t.line, t.column); lit->floatValue = t.floatValue; }
+                else if (t.kind == TokenKind::String) { advance(); lit = ast::makeNode(ast::NodeKind::StringLit, t.line, t.column); lit->text = t.text; }
+                else if (t.kind == TokenKind::Symbol) { advance(); lit = ast::makeNode(ast::NodeKind::SymbolLit, t.line, t.column); lit->text = t.text; }
+                else if (t.kind == TokenKind::Identifier) { advance(); lit = ast::makeNode(ast::NodeKind::SymbolLit, t.line, t.column); lit->text = t.text; } // bare ids inside #(..) are symbols
+                else { error(current_, "unexpected token in frozen array literal"); advance(); continue; }
+                arr->children.push_back(std::move(lit));
+            }
+            consume(TokenKind::RParen, "expected ')' to close frozen array");
+            return arr;
+        }
         default:
             error(current_, std::string("expected primary expression, got ") + tokenKindName(current_.kind));
             advance();

@@ -137,3 +137,30 @@ TEST_CASE("Parser: empty block", "[parser]") {
     REQUIRE(blk->intValue == 0);
     REQUIRE(blk->children.empty());
 }
+
+TEST_CASE("Parser: assignment", "[parser]") {
+    Parser P("x := 1 + 2.");
+    auto m = P.parseModule(); REQUIRE(P.errors().empty());
+    auto& a = m->children[0];
+    REQUIRE(a->kind == NodeKind::Assignment);
+    REQUIRE(a->text == "x");
+    REQUIRE(a->children[0]->kind == NodeKind::BinarySend);
+}
+
+TEST_CASE("Parser: dynamic array literal { a. b. c }", "[parser]") {
+    Parser P("{ 1. 2. 3 }.");
+    auto m = P.parseModule(); REQUIRE(P.errors().empty());
+    auto& arr = m->children[0];
+    REQUIRE(arr->kind == NodeKind::DynArrayLit);
+    REQUIRE(arr->children.size() == 3);
+}
+
+TEST_CASE("Parser: frozen array literal #(1 2 'a')", "[parser]") {
+    Parser P("#(1 2 'a').");
+    auto m = P.parseModule(); REQUIRE(P.errors().empty());
+    auto& arr = m->children[0];
+    REQUIRE(arr->kind == NodeKind::ArrayLit);
+    REQUIRE(arr->children.size() == 3);
+    REQUIRE(arr->children[0]->kind == NodeKind::IntegerLit);
+    REQUIRE(arr->children[2]->kind == NodeKind::StringLit);
+}
