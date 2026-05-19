@@ -31,9 +31,47 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
 }
 
 void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
-    (void)n;
-    error("expression kind not yet supported in compiler scaffold");
-    m.emit(Op::PUSH_NIL, 0);
+    switch (n.kind) {
+        case NodeKind::IntegerLit: {
+            auto idx = m.addInteger(n.intValue);
+            if (idx > 255) { error("integer constant pool overflow > 255 (EXTEND not yet emitted in F2)"); return; }
+            m.emit(Op::PUSH_CONST, static_cast<uint8_t>(idx));
+            return;
+        }
+        case NodeKind::FloatLit: {
+            auto idx = m.addFloat(n.floatValue);
+            if (idx > 255) { error("float constant pool overflow"); return; }
+            m.emit(Op::PUSH_CONST, static_cast<uint8_t>(idx));
+            return;
+        }
+        case NodeKind::StringLit: {
+            auto idx = m.addString(n.text);
+            if (idx > 255) { error("string constant pool overflow"); return; }
+            m.emit(Op::PUSH_CONST, static_cast<uint8_t>(idx));
+            return;
+        }
+        case NodeKind::SymbolLit: {
+            auto idx = m.internSymbol(n.text);
+            if (idx > 255) { error("symbol constant pool overflow"); return; }
+            m.emit(Op::PUSH_CONST, static_cast<uint8_t>(idx));
+            return;
+        }
+        case NodeKind::CharLit: {
+            auto idx = m.addChar(n.text);
+            if (idx > 255) { error("char constant pool overflow"); return; }
+            m.emit(Op::PUSH_CONST, static_cast<uint8_t>(idx));
+            return;
+        }
+        case NodeKind::TrueLit:  m.emit(Op::PUSH_TRUE, 0); return;
+        case NodeKind::FalseLit: m.emit(Op::PUSH_FALSE, 0); return;
+        case NodeKind::NilLit:   m.emit(Op::PUSH_NIL, 0); return;
+        case NodeKind::Self:     m.emit(Op::PUSH_SELF, 0); return;
+        case NodeKind::Super:    m.emit(Op::PUSH_SUPER, 0); return;
+        default:
+            error("expression kind not yet supported");
+            m.emit(Op::PUSH_NIL, 0);
+            return;
+    }
 }
 
 int Compiler::declareLocal(const std::string& name) {
