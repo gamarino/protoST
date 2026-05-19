@@ -13,4 +13,9 @@ target_sources(protost_unit_tests PRIVATE
     unit/test_lexer.cpp
     ${CMAKE_SOURCE_DIR}/src/frontend/Lexer.cpp
 )
+target_sources(protost_unit_tests PRIVATE
+    unit/test_parser.cpp
+    ${CMAKE_SOURCE_DIR}/src/frontend/Parser.cpp
+    ${CMAKE_SOURCE_DIR}/src/frontend/AST.cpp
+)
 catch_discover_tests(protost_unit_tests)
