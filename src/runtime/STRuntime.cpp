@@ -27,6 +27,7 @@ namespace protoST { void installBlockPrimitives(STRuntime& rt); }
 namespace protoST { void installDebuggerPrimitives(STRuntime& rt); }
 namespace protoST { void installObjectPrimitives(STRuntime& rt); }
 namespace protoST { void installFuturePrimitives(STRuntime& rt); }
+namespace protoST { void installImportGlobal(STRuntime& rt); }
 
 // F6-A6: future callback dispatch helpers defined alongside the Future
 // primitives. drainOne uses these to fire thenDo:/catch: blocks at the moment
@@ -80,6 +81,14 @@ struct STRuntime::Impl {
     // F5-M2 module cache: canonical absolute path -> module object.
     std::unordered_map<std::string, const proto::ProtoObject*> moduleCache;
 
+    // F5-M3: Keep compiled BytecodeModules alive for the lifetime of the
+    // runtime. Block method wrappers store raw pointers into a module's
+    // `block(idx)` storage via __bc_ptr__; if the BytecodeModule were
+    // destroyed at the end of loadModuleFromFile those pointers would
+    // dangle and any subsequent send on a module-resident class would
+    // segfault.
+    std::vector<std::unique_ptr<BytecodeModule>> loadedModules;
+
     Impl() {
         // protoCore exposes the root context as a public field on ProtoSpace
         // (see protoCore/headers/protoCore.h:1234 and protoJS/src/JSContext.cpp:100).
@@ -120,6 +129,7 @@ STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
     installDebuggerPrimitives(*this);
     installObjectPrimitives(*this);
     installFuturePrimitives(*this);
+    installImportGlobal(*this);
 }
 STRuntime::~STRuntime() = default;
 
@@ -458,6 +468,13 @@ const proto::ProtoObject* STRuntime::loadModuleFromFile(
             moduleObj->setAttribute(ctx, classSym, classObj);
         }
     }
+
+    // F5-M3: Retain the compiled BytecodeModule for the runtime's lifetime so
+    // method __bc_ptr__ pointers into its block storage remain valid across
+    // subsequent sends. Without this the bc would be destroyed at function
+    // return and any later send on a class declared by the module would
+    // dereference freed memory.
+    impl_->loadedModules.push_back(std::move(bc));
 
     return moduleObj;
 }

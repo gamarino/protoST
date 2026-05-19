@@ -567,3 +567,24 @@ TEST_CASE("Module loader: missing logical path throws", "[engine][modules]") {
     REQUIRE_THROWS_WITH(rt.loadModule(rt.rootCtx(), "no_such_module_xyz_zz"),
                          Catch::Matchers::ContainsSubstring("module not found"));
 }
+
+TEST_CASE("Smalltalk-side: Import from: 'lib_simple' returns module wrapper with Greeter", "[engine][modules][import]") {
+    std::string fixtures = PROTOST_FIXTURES_DIR;
+    setenv("STPATH", fixtures.c_str(), 1);
+
+    const char* src =
+        "m := Import from: 'lib_simple'. "
+        "m Greeter newChild twice: 21.";
+
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C; auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r->asLong(rt.rootCtx()) == 42);
+
+    unsetenv("STPATH");
+}

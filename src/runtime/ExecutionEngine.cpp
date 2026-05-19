@@ -288,8 +288,30 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
                     stack.push_back(result ? result : PROTO_NONE);
                     break;
                 }
+                // F5-M3: member-access semantics. If the attribute is not a
+                // method (no __bc_ptr__) and is not a primitive marker (a
+                // tagged SmallInteger with bit 62 set), then a unary send is
+                // treated as a property read — the attribute is itself the
+                // result. This is what lets `m Greeter` resolve the class
+                // stored on a module wrapper (or any plain value attribute).
+                // For non-unary sends, treating a value attribute as a method
+                // is still an error.
+                if (!attr->isInteger(ctx)) {
+                    if (argc == 0) {
+                        stack.push_back(attr);
+                        break;
+                    }
+                    throw std::runtime_error(
+                        "non-primitive method in F2 (F3 work): " + selStr);
+                }
                 long long marker = attr->asLong(ctx);
                 if (!(marker & (1LL << 62))) {
+                    // Plain integer value stored as an attribute — same
+                    // member-access rule as above.
+                    if (argc == 0) {
+                        stack.push_back(attr);
+                        break;
+                    }
                     throw std::runtime_error("non-primitive method in F2 (F3 work)");
                 }
                 int primIdx = static_cast<int>(marker & ((1LL << 62) - 1));

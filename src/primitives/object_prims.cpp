@@ -76,6 +76,23 @@ const proto::ProtoObject* prim_Object_installMethod(STRuntime&,
     return r;
 }
 
+// Import from: 'foo'
+//
+// F5-M3: Resolves 'foo' via the STRuntime module loader (cwd, $STPATH, active
+// venv) and returns the module wrapper produced by loadModule(). The receiver
+// is the Import singleton object itself — only used as a dispatch site.
+const proto::ProtoObject* prim_Import_from(STRuntime& rt, proto::ProtoContext* ctx,
+                                            const proto::ProtoObject* /*recv*/,
+                                            const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("Import>>from: expects 1 arg (logical path string)");
+    auto* arg = a[0];
+    if (!arg) throw std::runtime_error("Import>>from: arg is null");
+    auto* str = arg->asString(ctx);
+    if (!str) throw std::runtime_error("Import>>from: arg must be a string");
+    std::string logical = str->toStdString(ctx);
+    return rt.loadModule(ctx, logical);
+}
+
 } // anon
 
 void installObjectPrimitives(STRuntime& rt) {
@@ -87,6 +104,28 @@ void installObjectPrimitives(STRuntime& rt) {
                   reg.registerPrim(prim_Object_installMethod));
     bindPrimitive(rt, b.objectProto, "asActor",
                   reg.registerPrim(prim_Object_asActor));
+}
+
+// F5-M3: Allocate the `Import` singleton (mutable child of objectProto), bind
+// `from:` on it, and register it in globals so user code can write
+// `m := Import from: 'foo'.`
+void installImportGlobal(STRuntime& rt) {
+    auto& reg = rt.registry();
+    auto& b   = rt.bootstrap();
+    auto* ctx = rt.rootCtx();
+
+    // Create the Import singleton — mutable child of objectProto.
+    auto* importObj = const_cast<proto::ProtoObject*>(b.objectProto)
+        ->newChild(ctx, /*isMutable=*/true);
+
+    // Bind from: on it.
+    int idx = reg.registerPrim(prim_Import_from);
+    bindPrimitive(rt, importObj, "from:", idx);
+
+    // Register in globals so PUSH_GLOBAL resolves `Import`.
+    auto* importKey = ctx->fromUTF8String("Import")->asString(ctx);
+    auto* g = rt.globals();
+    g->setAttribute(ctx, importKey, importObj);
 }
 
 } // namespace protoST
