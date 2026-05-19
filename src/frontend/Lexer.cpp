@@ -64,6 +64,41 @@ Token Lexer::lexNumber() {
     return t;
 }
 
+Token Lexer::lexString() {
+    int startLine = line_, startCol = col_;
+    advance();  // consume opening '
+    std::string out;
+    while (pos_ < source_.size()) {
+        char c = source_[pos_];
+        if (c == '\'') {
+            // possible escape: '' -> '
+            if (pos_ + 1 < source_.size() && source_[pos_ + 1] == '\'') {
+                out += '\'';
+                advance(); advance();
+                continue;
+            }
+            advance();
+            Token t; t.kind = TokenKind::String; t.text = std::move(out);
+            t.line = startLine; t.column = startCol; return t;
+        }
+        out += c;
+        advance();
+    }
+    return makeError("unterminated string literal", startLine, startCol);
+}
+
+Token Lexer::lexChar() {
+    int startLine = line_, startCol = col_;
+    advance(); // consume '$'
+    if (pos_ >= source_.size()) {
+        return makeError("unterminated char literal", startLine, startCol);
+    }
+    Token t; t.kind = TokenKind::Char; t.text = std::string(1, source_[pos_]);
+    t.line = startLine; t.column = startCol;
+    advance();
+    return t;
+}
+
 Token Lexer::makeError(const std::string& msg, int l, int c) {
     Token t; t.kind = TokenKind::Error; t.text = msg; t.line = l; t.column = c; return t;
 }
@@ -77,6 +112,8 @@ Token Lexer::next() {
     char c = current();
     if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') return lexIdentifier();
     if (std::isdigit(static_cast<unsigned char>(c)))             return lexNumber();
+    if (c == '\'') return lexString();
+    if (c == '$')  return lexChar();
 
     int startLine = line_, startCol = col_;
     auto single = [&](TokenKind k) -> Token {

@@ -86,3 +86,29 @@ TEST_CASE("lexer recognizes keyword selectors", "[lexer]") {
     REQUIRE(t5.kind == TokenKind::Identifier);
     REQUIRE(t5.text == "baz");
 }
+
+TEST_CASE("lexer reads single-quoted strings with '' escapes", "[lexer]") {
+    Lexer L("'hola' 'it''s ok' ''");
+    auto t1 = L.next();
+    REQUIRE(t1.kind == TokenKind::String);
+    REQUIRE(t1.text == "hola");
+    auto t2 = L.next();
+    REQUIRE(t2.kind == TokenKind::String);
+    REQUIRE(t2.text == "it's ok");
+    auto t3 = L.next();
+    REQUIRE(t3.kind == TokenKind::String);
+    REQUIRE(t3.text == "");
+}
+
+TEST_CASE("lexer reads char literals $x", "[lexer]") {
+    Lexer L("$a $$ $ ");
+    auto t1 = L.next();
+    REQUIRE(t1.kind == TokenKind::Char);
+    REQUIRE(t1.text == "a");
+    auto t2 = L.next();
+    REQUIRE(t2.kind == TokenKind::Char);
+    REQUIRE(t2.text == "$");
+    auto t3 = L.next();
+    REQUIRE(t3.kind == TokenKind::Char);
+    REQUIRE(t3.text == " ");
+}

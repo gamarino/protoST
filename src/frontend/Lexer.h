@@ -28,6 +28,8 @@ private:
     void   skipWhitespace();
     Token  lexIdentifier();
     Token  lexNumber();
+    Token  lexString();
+    Token  lexChar();
     Token  makeError(const std::string& msg, int l, int c);
 };
 
