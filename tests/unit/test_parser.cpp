@@ -51,3 +51,54 @@ TEST_CASE("Parser: parenthesised expression preserves inner kind", "[parser]") {
     REQUIRE(P.errors().empty());
     REQUIRE(m->children[0]->kind == NodeKind::IntegerLit);
 }
+
+TEST_CASE("Parser: unary chain", "[parser]") {
+    Parser P("foo printNl size.");
+    auto m = P.parseModule(); REQUIRE(P.errors().empty());
+    auto& outer = m->children[0];                 // UnarySend size
+    REQUIRE(outer->kind == NodeKind::UnarySend);
+    REQUIRE(outer->text == "size");
+    auto& inner = outer->children[0];             // UnarySend printNl
+    REQUIRE(inner->kind == NodeKind::UnarySend);
+    REQUIRE(inner->text == "printNl");
+    REQUIRE(inner->children[0]->kind == NodeKind::Identifier);
+    REQUIRE(inner->children[0]->text == "foo");
+}
+
+TEST_CASE("Parser: binary message left-assoc", "[parser]") {
+    Parser P("1 + 2 + 3.");
+    auto m = P.parseModule(); REQUIRE(P.errors().empty());
+    auto& top = m->children[0];                   // (1+2)+3
+    REQUIRE(top->kind == NodeKind::BinarySend);
+    REQUIRE(top->text == "+");
+    REQUIRE(top->children[1]->kind == NodeKind::IntegerLit);
+    REQUIRE(top->children[1]->intValue == 3);
+    auto& left = top->children[0];
+    REQUIRE(left->kind == NodeKind::BinarySend);
+    REQUIRE(left->children[0]->intValue == 1);
+    REQUIRE(left->children[1]->intValue == 2);
+}
+
+TEST_CASE("Parser: keyword send aggregates parts", "[parser]") {
+    Parser P("dict at: 1 put: 'one'.");
+    auto m = P.parseModule(); REQUIRE(P.errors().empty());
+    auto& kw = m->children[0];
+    REQUIRE(kw->kind == NodeKind::KeywordSend);
+    REQUIRE(kw->text == "at:put:");
+    REQUIRE(kw->children.size() == 3);            // receiver + 2 args
+    REQUIRE(kw->children[0]->kind == NodeKind::Identifier);
+    REQUIRE(kw->children[1]->intValue == 1);
+    REQUIRE(kw->children[2]->kind == NodeKind::StringLit);
+}
+
+TEST_CASE("Parser: precedence unary > binary > keyword", "[parser]") {
+    Parser P("x at: y size + 1 put: z.");
+    auto m = P.parseModule(); REQUIRE(P.errors().empty());
+    auto& kw = m->children[0];
+    REQUIRE(kw->kind == NodeKind::KeywordSend);
+    REQUIRE(kw->text == "at:put:");
+    auto& arg1 = kw->children[1];                 // y size + 1
+    REQUIRE(arg1->kind == NodeKind::BinarySend);
+    REQUIRE(arg1->text == "+");
+    REQUIRE(arg1->children[0]->kind == NodeKind::UnarySend); // y size
+}

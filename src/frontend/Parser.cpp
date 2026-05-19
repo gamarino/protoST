@@ -73,9 +73,52 @@ ast::NodePtr Parser::parseExpression() {
     return parseKeywordSend();
 }
 
-ast::NodePtr Parser::parseKeywordSend() { return parseBinarySend(); }
-ast::NodePtr Parser::parseBinarySend()  { return parseUnarySend(); }
-ast::NodePtr Parser::parseUnarySend()   { return parsePrimary(); }
+ast::NodePtr Parser::parseUnarySend() {
+    auto recv = parsePrimary();
+    while (recv && current_.kind == TokenKind::Identifier) {
+        // distinguish: only an identifier that is NOT followed by ':' is a unary selector;
+        // keyword selectors come tokenised as TokenKind::Keyword.
+        Token sel = current_;
+        advance();
+        auto n = ast::makeNode(ast::NodeKind::UnarySend, sel.line, sel.column);
+        n->text = sel.text;
+        n->children.push_back(std::move(recv));
+        recv = std::move(n);
+    }
+    return recv;
+}
+
+ast::NodePtr Parser::parseBinarySend() {
+    auto left = parseUnarySend();
+    while (left && current_.kind == TokenKind::BinaryOp) {
+        Token op = current_; advance();
+        auto right = parseUnarySend();
+        auto n = ast::makeNode(ast::NodeKind::BinarySend, op.line, op.column);
+        n->text = op.text;
+        n->children.push_back(std::move(left));
+        if (right) n->children.push_back(std::move(right));
+        left = std::move(n);
+    }
+    return left;
+}
+
+ast::NodePtr Parser::parseKeywordSend() {
+    auto recv = parseBinarySend();
+    if (recv && current_.kind == TokenKind::Keyword) {
+        auto n = ast::makeNode(ast::NodeKind::KeywordSend, current_.line, current_.column);
+        n->children.push_back(std::move(recv));
+        std::string selector;
+        while (current_.kind == TokenKind::Keyword) {
+            selector += current_.text;            // includes trailing ':'
+            advance();
+            auto arg = parseBinarySend();
+            if (arg) n->children.push_back(std::move(arg));
+        }
+        n->text = std::move(selector);
+        return n;
+    }
+    return recv;
+}
 
 ast::NodePtr Parser::parsePrimary() {
     Token t = current_;
