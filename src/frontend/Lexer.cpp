@@ -97,8 +97,10 @@ Token Lexer::next() {
         case ';': return single(TokenKind::Semicolon);
         case '^': return single(TokenKind::Caret);
         case '|': return single(TokenKind::Pipe);
-        case '+': case '*': case '/': case '&':
-            return bin1(std::string(1, c).c_str());
+        case '+': return bin1("+");
+        case '*': return bin1("*");
+        case '/': return bin1("/");
+        case '&': return bin1("&");
         case ',': return bin1(",");
         case '-':
             if (lookahead() == '>') {
