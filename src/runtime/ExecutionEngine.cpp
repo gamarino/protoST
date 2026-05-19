@@ -2,12 +2,14 @@
 #include "BytecodeModule.h"
 #include "Bootstrap.h"
 #include "Opcodes.h"
+#include "ActorLock.h"
 #include "debugger/DebuggerRuntime.h"
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
 #include "protoCore.h"
 
 #include <algorithm>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -218,15 +220,38 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
                     msg->setAttribute(ctx, msgArgsKey, argsList->asObject(ctx));
                     msg->setAttribute(ctx, msgFutKey, fut);
 
-                    // Enqueue (FIFO) into the actor's mailbox.
-                    auto* mbObj = recv->getAttribute(ctx, mbKey);
-                    auto* mailbox = mbObj ? mbObj->asList(ctx) : ctx->newList();
-                    auto* newMailbox = mailbox->appendLast(ctx, msg);
-                    const_cast<proto::ProtoObject*>(recv)
-                        ->setAttribute(ctx, mbKey, newMailbox->asObject(ctx));
+                    // F6 v2 T3: hold the per-actor lock across the mailbox
+                    // read-modify-write. Without this, the worker thread's
+                    // drainOne can pop a message between our getAttribute and
+                    // setAttribute calls below; our setAttribute would then
+                    // overwrite the popped state and either lose the popped
+                    // message (if our append went on top of stale state) or
+                    // double-process it.
+                    //
+                    // We pull the lock pointer outside the {} so we can hold
+                    // the guard for the entire RMW and drop it before
+                    // schedule() — schedule() takes schedMu internally and
+                    // mixing the two acquisition orders elsewhere would risk
+                    // deadlock (drainOne acquires schedMu first, then the
+                    // actor lock).
+                    std::mutex* actorLock = getActorLock(ctx, recv);
+                    {
+                        std::unique_lock<std::mutex> guard;
+                        if (actorLock) guard = std::unique_lock<std::mutex>(*actorLock);
+
+                        // Enqueue (FIFO) into the actor's mailbox.
+                        auto* mbObj = recv->getAttribute(ctx, mbKey);
+                        auto* mailbox = mbObj ? mbObj->asList(ctx) : ctx->newList();
+                        auto* newMailbox = mailbox->appendLast(ctx, msg);
+                        const_cast<proto::ProtoObject*>(recv)
+                            ->setAttribute(ctx, mbKey, newMailbox->asObject(ctx));
+                    }
 
                     // Schedule the actor for processing and stash the Future
-                    // as the apparent result of the send.
+                    // as the apparent result of the send. schedule() acquires
+                    // schedMu; doing it OUTSIDE the actor lock keeps the
+                    // global acquisition order (schedMu first, actor lock
+                    // second) consistent with drainOne.
                     rt_.schedule(recv);
                     stack.push_back(fut);
                     break;

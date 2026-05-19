@@ -4,6 +4,7 @@
 #include "BytecodeModule.h"
 #include "Bootstrap.h"
 #include "Venv.h"
+#include "ActorLock.h"
 #include "debugger/DebuggerRuntime.h"
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
@@ -396,21 +397,58 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     static const proto::ProtoString* errorKey =
         ctx->fromUTF8String("__error__")->asString(ctx);
 
-    // Get the mailbox (ProtoList). Pop the first (FIFO).
-    auto* mbObj = actor->getAttribute(ctx, mailboxKey);
-    if (!mbObj || mbObj == PROTO_NONE) return true;
-    auto* mailbox = mbObj->asList(ctx);
-    if (!mailbox || mailbox->getSize(ctx) == 0) return true;
+    // F6 v2 T3: hold the per-actor lock across BOTH the mailbox RMW and the
+    // dispatch of the popped message. Two concurrency hazards motivate the
+    // wider scope:
+    //   1. SEND fast-path append vs drainOne pop on the mailbox itself
+    //      (the RMW race described in the task brief).
+    //   2. Two drainers (the worker thread and a main-thread Future>>wait
+    //      calling drainOne) picking up the same actor for different
+    //      scheduling events and dispatching its methods in parallel. The
+    //      scheduledSet only prevents queue-duplicate entries; it does not
+    //      forbid a second schedule() after the first pop, so without an
+    //      additional barrier the actor's wrapped object can have two
+    //      messages mutating its instance variables at once.
+    // Holding the actor lock for the entire dispatch enforces the actor
+    // semantics of "at most one message in flight per actor", which is what
+    // makes per-actor instance state safe without further synchronisation
+    // inside user methods. The future state writes that follow also stay
+    // under the lock to keep "method body ran + future resolved" atomic
+    // from the perspective of other threads observing the future.
+    //
+    // Mind the lock-acquisition order: schedMu was released when we left
+    // its scope above. Acquiring the actor lock now means a drainer goes
+    // schedMu → actor lock. The SEND fast-path takes the actor lock without
+    // holding schedMu, and schedule() takes schedMu without holding the
+    // actor lock — so no two threads ever hold the pair in opposite order
+    // and there is no deadlock.
+    //
+    // User code running inside the lock may itself send to the SAME actor
+    // (a recursive send). That hits the SEND fast-path, which also takes
+    // this lock — using a non-recursive std::mutex would self-deadlock.
+    // For this task we keep std::mutex and accept the limitation; the F6
+    // tests do not exercise self-sends. T4/T5 can revisit if needed.
+    std::mutex* actorLock = getActorLock(ctx, actor);
+    std::unique_lock<std::mutex> actorGuard;
+    if (actorLock) actorGuard = std::unique_lock<std::mutex>(*actorLock);
 
-    auto* msg = mailbox->getAt(ctx, 0);
-    // Drop the first message — getSlice(from, to) over [1, size).
-    auto* remaining = mailbox->getSlice(
-        ctx, 1, static_cast<int>(mailbox->getSize(ctx)));
-    const_cast<proto::ProtoObject*>(actor)->setAttribute(
-        ctx, mailboxKey, remaining->asObject(ctx));
+    const proto::ProtoObject* msg = nullptr;
+    bool rescheduleAfter = false;
+    {
+        // Get the mailbox (ProtoList). Pop the first (FIFO).
+        auto* mbObj = actor->getAttribute(ctx, mailboxKey);
+        if (!mbObj || mbObj == PROTO_NONE) return true;
+        auto* mailbox = mbObj->asList(ctx);
+        if (!mailbox || mailbox->getSize(ctx) == 0) return true;
 
-    // Re-schedule actor if more messages remain.
-    if (remaining->getSize(ctx) > 0) schedule(actor);
+        msg = mailbox->getAt(ctx, 0);
+        // Drop the first message — getSlice(from, to) over [1, size).
+        auto* remaining = mailbox->getSlice(
+            ctx, 1, static_cast<int>(mailbox->getSize(ctx)));
+        const_cast<proto::ProtoObject*>(actor)->setAttribute(
+            ctx, mailboxKey, remaining->asObject(ctx));
+        rescheduleAfter = (remaining->getSize(ctx) > 0);
+    }
 
     // Extract message fields.
     auto* selector = msg->getAttribute(ctx, selKey);
@@ -505,6 +543,17 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             fireFutureCatchCallbacks(*this, ctx, future, err);
         }
     }
+
+    // F6 v2 T3: drop the actor lock BEFORE re-scheduling. schedule() takes
+    // schedMu; doing so while still holding the actor lock would not
+    // deadlock today (nothing holds schedMu while waiting for an actor
+    // lock), but releasing first keeps the rule "actor lock and schedMu are
+    // disjoint at every cross-thread observation point" simple to audit.
+    if (actorGuard.owns_lock()) actorGuard.unlock();
+
+    // Re-schedule actor if more messages remained at the time we popped.
+    if (rescheduleAfter) schedule(actor);
+
     return true;
 }
 

@@ -3,6 +3,7 @@
 #include "runtime/Bootstrap.h"
 #include "protoCore.h"
 
+#include <mutex>
 #include <stdexcept>
 
 namespace protoST {
@@ -52,6 +53,32 @@ const proto::ProtoObject* prim_Object_asActor(STRuntime& rt, proto::ProtoContext
     static const proto::ProtoString* stateKey =
         ctx->fromUTF8String("__state__")->asString(ctx);
     actor->setAttribute(ctx, stateKey, ctx->fromLong(0));
+
+    // F6 v2 T3: per-actor mutex for thread-safe mailbox.
+    //
+    // The actor's mailbox is read-modify-written by two paths:
+    //   * SEND fast-path in ExecutionEngine.cpp (foreground sender)
+    //   * STRuntime::drainOne (worker thread or foreground Future>>wait)
+    // setAttribute is individually atomic in protoCore but the RMW pair
+    // (getAttribute + appendLast/getSlice + setAttribute) is not, so we
+    // install a std::mutex per actor and the two call sites lock it for the
+    // duration of the RMW. The mutex is heap-allocated and wrapped in an
+    // ExternalPointer; the finalizer fires when the GC reclaims the actor
+    // (at which point no thread can possibly hold the lock, since the actor
+    // is unreachable).
+    //
+    // We use createSymbol("__lock__") because the key is permanent vocabulary
+    // that every actor shares; a non-symbol ProtoString would needlessly be
+    // re-interned on every actor creation. The pointer to the ProtoString is
+    // cached in a function-local static so the symbol intern table is hit
+    // exactly once per process for this key.
+    static const proto::ProtoString* lockKey =
+        proto::ProtoString::createSymbol(ctx, "__lock__");
+    std::mutex* lockPtr = new std::mutex();
+    auto* lockEP = ctx->fromExternalPointer(
+        lockPtr,
+        [](void* p) { delete static_cast<std::mutex*>(p); });
+    actor->setAttribute(ctx, lockKey, lockEP);
 
     return actor;
 }

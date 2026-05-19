@@ -353,34 +353,55 @@ TEST_CASE("STRuntime scheduler: schedule + drainOne basics", "[engine][scheduler
     auto* b = rt.bootstrap().actorProto->newChild(ctx, true);
     auto* c = rt.bootstrap().actorProto->newChild(ctx, true);
 
+    // F6 v2 T3: with a worker thread also draining the queue in parallel
+    // (added in T2) the only deterministic invariants this test can check
+    // are the post-conditions:
+    //   * after enough schedule/drain rounds, scheduledCount() returns to 0
+    //   * schedule() is idempotent against the *current* scheduled set
+    //   * a freshly empty queue can accept a new actor and report size 1
+    // Probing the exact queue size after a sequence of schedule() calls is no
+    // longer reliable because the worker may have drained some entries by
+    // the time scheduledCount() is read. Tests of internal queue progression
+    // are deferred to T6 (single-thread-mode toggle).
     REQUIRE(rt.scheduledCount() == 0);
     rt.schedule(a);
     rt.schedule(b);
     rt.schedule(c);
-    REQUIRE(rt.scheduledCount() == 3);
 
-    // schedule is idempotent
+    // schedule is idempotent (won't insert a second time if a is still queued
+    // at the moment of this call; if the worker already drained it, the
+    // re-schedule is a fresh enqueue — both outcomes leave the queue valid).
     rt.schedule(a);
-    REQUIRE(rt.scheduledCount() == 3);
 
-    // Drain three times → drains all
-    REQUIRE(rt.drainOne(ctx));
-    REQUIRE(rt.drainOne(ctx));
-    REQUIRE(rt.drainOne(ctx));
+    // Drain on this thread until the queue is empty. The worker may pull
+    // some entries first; what we want to verify is that we eventually reach
+    // an empty queue and that drainOne returns false on that empty state.
+    while (rt.drainOne(ctx)) { /* keep draining */ }
+    // Wait briefly for any in-flight worker drain to complete, then confirm.
+    rt.waitForSchedulerProgress(10);
+    while (rt.drainOne(ctx)) { /* drain anything the worker re-queued */ }
+    REQUIRE(rt.scheduledCount() == 0);
     REQUIRE_FALSE(rt.drainOne(ctx));
 
-    REQUIRE(rt.scheduledCount() == 0);
-
-    // After drain, a can be re-scheduled
+    // After drain, a can be re-scheduled. We don't probe the exact count —
+    // by the time we check, the worker may have drained it already. Just
+    // verify the call succeeds and the queue is in a valid state.
     rt.schedule(a);
-    REQUIRE(rt.scheduledCount() == 1);
+    while (rt.drainOne(ctx)) { /* drain it back to empty */ }
+    REQUIRE_FALSE(rt.drainOne(ctx));
 }
 
 TEST_CASE("Engine: actor SEND returns a pending Future + drainOne resolves it",
           "[engine][actors]") {
     // F6-A4: wrap a Box class instance as an actor, send `add: 100 with: 23`
-    // to it, observe that the send returns a pending Future, then drain the
-    // mailbox and verify the Future resolves to 123.
+    // to it, then verify the Future eventually resolves to 123.
+    //
+    // F6 v2 T3: the worker thread (T2) may drain the message before we get
+    // a chance to call drainOne ourselves, so the original "Future is
+    // pending immediately after the top-level returns" probe is no longer
+    // reliable. We now only assert the end state: after draining (on either
+    // thread) the future is resolved to 123. Tests that need the deterministic
+    // single-thread sequencing are deferred to T6.
     const char* src =
         "Object subclass: #Box. "
         "Box >> add: x with: y ^ x + y. "
@@ -396,19 +417,21 @@ TEST_CASE("Engine: actor SEND returns a pending Future + drainOne resolves it",
     protoST::STRuntime rt;
     auto* fut = rt.runTopLevel(*bc);
 
-    // At this point, the actor was scheduled but not yet drained.
-    // The send should have returned a pending Future.
     REQUIRE(fut != nullptr);
     REQUIRE(fut != PROTO_NONE);
 
     auto* ctx = rt.rootCtx();
     auto* stateKey = ctx->fromUTF8String("__state__")->asString(ctx);
     auto* valueKey = ctx->fromUTF8String("__value__")->asString(ctx);
-    REQUIRE(fut->getAttribute(ctx, stateKey)->asLong(ctx) == 0);  // pending
 
-    // Drain the queue manually.
-    REQUIRE(rt.drainOne(ctx));        // processes the add:with: message
-    REQUIRE_FALSE(rt.drainOne(ctx));  // empty queue now
+    // Drain the queue manually until empty. drainOne is safe to call even
+    // if the worker already processed the message — it just returns false.
+    while (rt.drainOne(ctx)) { /* keep draining */ }
+    // Allow any concurrent worker drain to settle, then drain anything
+    // residual one more time.
+    rt.waitForSchedulerProgress(10);
+    while (rt.drainOne(ctx)) { /* keep draining */ }
+    REQUIRE_FALSE(rt.drainOne(ctx));
 
     // Future should be resolved now with value 123.
     REQUIRE(fut->getAttribute(ctx, stateKey)->asLong(ctx) == 1);  // resolved
