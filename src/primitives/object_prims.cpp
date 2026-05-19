@@ -22,6 +22,40 @@ const proto::ProtoObject* prim_Object_newChild(STRuntime&,
     return r->newChild(ctx, /*isMutable=*/true);
 }
 
+// recv asActor → new Actor wrapping recv
+//
+// F6-A2: Wraps any object as an Actor by creating a mutable child of
+// actorProto with three attributes:
+//   __wrapped__ : the original receiver
+//   __mailbox__ : an empty (mutable) ProtoList serving as the cons-stack mailbox
+//   __state__   : SmallInteger(0) — 0 = idle, non-zero values reserved for
+//                 scheduler use (running / waiting) in later F6 tasks.
+const proto::ProtoObject* prim_Object_asActor(STRuntime& rt, proto::ProtoContext* ctx,
+                                               const proto::ProtoObject* r,
+                                               const proto::ProtoObject* const*, int) {
+    auto& b = rt.bootstrap();
+    // Create a new mutable child of actorProto.
+    auto* actor = b.actorProto->newChild(ctx, /*isMutable=*/true);
+
+    // __wrapped__ = recv
+    static const proto::ProtoString* wrappedKey =
+        ctx->fromUTF8String("__wrapped__")->asString(ctx);
+    actor->setAttribute(ctx, wrappedKey, r);
+
+    // __mailbox__ = empty ProtoList (Lisp-style cons stack)
+    static const proto::ProtoString* mailboxKey =
+        ctx->fromUTF8String("__mailbox__")->asString(ctx);
+    auto* emptyList = ctx->newList();
+    actor->setAttribute(ctx, mailboxKey, emptyList->asObject(ctx));
+
+    // __state__ = 0 (idle)
+    static const proto::ProtoString* stateKey =
+        ctx->fromUTF8String("__state__")->asString(ctx);
+    actor->setAttribute(ctx, stateKey, ctx->fromLong(0));
+
+    return actor;
+}
+
 // class __installMethod: methodObj as: selectorSym
 //   → setAttribute(class, selectorSym, methodObj)
 //   → returns class (recv)
@@ -51,6 +85,8 @@ void installObjectPrimitives(STRuntime& rt) {
                   reg.registerPrim(prim_Object_newChild));
     bindPrimitive(rt, b.objectProto, "__installMethod:as:",
                   reg.registerPrim(prim_Object_installMethod));
+    bindPrimitive(rt, b.objectProto, "asActor",
+                  reg.registerPrim(prim_Object_asActor));
 }
 
 } // namespace protoST

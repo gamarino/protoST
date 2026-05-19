@@ -4,6 +4,7 @@
 #include "runtime/ExecutionEngine.h"
 #include "runtime/BytecodeModule.h"
 #include "runtime/Opcodes.h"
+#include "runtime/Bootstrap.h"
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
 #include "protoCore.h"
@@ -280,6 +281,36 @@ TEST_CASE("Engine: user method on class — args + locals only", "[engine][metho
     protoST::STRuntime rt;
     auto* r = rt.runTopLevel(*bc);
     REQUIRE(r->asLong(rt.rootCtx()) == 7);
+}
+
+TEST_CASE("Engine: Object>>asActor wraps object as Actor", "[engine][actors]") {
+    // Hand-build: 42 asActor.
+    protoST::STRuntime rt;
+    protoST::BytecodeModule m;
+    m.addInteger(42);          // const 0
+    m.internSymbol("asActor"); // const 1
+    m.emit(protoST::Op::PUSH_CONST, 0);
+    m.emit(protoST::Op::SEND_UNARY, 1);
+    m.emit(protoST::Op::RETURN_TOP, 0);
+
+    auto* actor = rt.runTopLevel(m);
+    REQUIRE(actor != nullptr);
+    REQUIRE(actor != PROTO_NONE);
+
+    auto* ctx = rt.rootCtx();
+    // Actor should have __wrapped__ = 42
+    auto* wrappedKey = ctx->fromUTF8String("__wrapped__")->asString(ctx);
+    auto* wrapped = actor->getAttribute(ctx, wrappedKey);
+    REQUIRE(wrapped != nullptr);
+    REQUIRE(wrapped->asLong(ctx) == 42);
+
+    // Actor should have __state__ = 0
+    auto* stateKey = ctx->fromUTF8String("__state__")->asString(ctx);
+    auto* state = actor->getAttribute(ctx, stateKey);
+    REQUIRE(state->asLong(ctx) == 0);
+
+    // Actor's prototype chain reaches actorProto
+    REQUIRE(actor != rt.bootstrap().actorProto);  // It's a child, not the proto itself
 }
 
 TEST_CASE("Engine: user method with instance variable", "[engine][methods][instvars]") {
