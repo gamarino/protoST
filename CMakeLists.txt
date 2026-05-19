@@ -41,6 +41,7 @@ add_library(protost_frontend STATIC
     src/frontend/Parser.cpp
     src/frontend/AST.cpp
     src/frontend/ASTPrinter.cpp
+    src/frontend/Compiler.cpp
 )
 target_include_directories(protost_frontend PUBLIC
     src
