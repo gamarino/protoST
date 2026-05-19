@@ -18,4 +18,7 @@ target_sources(protost_unit_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/frontend/Parser.cpp
     ${CMAKE_SOURCE_DIR}/src/frontend/AST.cpp
 )
+target_compile_definitions(protost_unit_tests PRIVATE
+    PROTOST_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures"
+)
 catch_discover_tests(protost_unit_tests)

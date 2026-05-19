@@ -397,6 +397,8 @@ ast::NodePtr Parser::parseMethodDecl(Token classIdent, bool classSide) {
 
     // body: statements until we see a token that can only start a top-level form
     // (another Identifier followed by '>>' / 'class' / 'subclass:', or EOF).
+    // A '^' return statement also terminates the body (anything following is a
+    // new top-level form).
     while (current_.kind != TokenKind::EndOfFile) {
         // stop at the start of another method/class decl
         if (current_.kind == TokenKind::Identifier) {
@@ -406,8 +408,10 @@ ast::NodePtr Parser::parseMethodDecl(Token classIdent, bool classSide) {
             if (p.kind == TokenKind::Keyword && p.text == "subclass:") break;
         }
         auto stmt = parseStatement();
+        bool isReturn = stmt && stmt->kind == ast::NodeKind::Return;
         if (stmt) md->children.push_back(std::move(stmt));
         if (!match(TokenKind::Period)) break;
+        if (isReturn) break; // return terminates the method body
     }
     return md;
 }

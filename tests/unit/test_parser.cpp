@@ -1,8 +1,16 @@
 #include <catch2/catch_all.hpp>
+#include <fstream>
+#include <sstream>
 #include "frontend/Parser.h"
 
 using protoST::Parser;
 using protoST::ast::NodeKind;
+
+static std::string readFile(const std::string& path) {
+    std::ifstream f(path);
+    std::stringstream ss; ss << f.rdbuf();
+    return ss.str();
+}
 
 TEST_CASE("Parser scaffold builds empty module from empty source", "[parser]") {
     Parser P("");
@@ -222,4 +230,18 @@ TEST_CASE("Parser: class declaration with inst vars", "[parser]") {
     REQUIRE(cd->stringList[0] == "Object");
     REQUIRE(cd->stringList[1] == "value");
     REQUIRE(cd->stringList[2] == "step");
+}
+
+TEST_CASE("Parser: counter.st fixture parses cleanly", "[parser][fixture]") {
+    auto src = readFile(std::string(PROTOST_FIXTURES_DIR) + "/counter.st");
+    REQUIRE(!src.empty());
+    Parser P(std::move(src));
+    auto m = P.parseModule();
+    REQUIRE(P.errors().empty());
+    REQUIRE(m->children.size() == 6);            // class decl + 4 methods + 1 top-level
+    REQUIRE(m->children[0]->kind == NodeKind::ClassDecl);
+    REQUIRE(m->children[1]->kind == NodeKind::MethodDecl);
+    REQUIRE(m->children[4]->kind == NodeKind::MethodDecl);
+    REQUIRE(m->children[4]->boolFlag == true);   // class side
+    REQUIRE(m->children[5]->kind == NodeKind::UnarySend); // (... increment)
 }
