@@ -117,3 +117,23 @@ TEST_CASE("Parser: cascade collects messages on same receiver", "[parser]") {
     REQUIRE(casc->children[1]->children.size() == 1); // one keyword arg, no receiver
     REQUIRE(casc->children[3]->children.empty());
 }
+
+TEST_CASE("Parser: block with arguments and locals", "[parser]") {
+    Parser P("[ :a :b | | x | a + b ].");
+    auto m = P.parseModule(); REQUIRE(P.errors().empty());
+    auto& blk = m->children[0];
+    REQUIRE(blk->kind == NodeKind::Block);
+    REQUIRE(blk->intValue == 2);                 // arg count
+    REQUIRE(blk->stringList == std::vector<std::string>{"a","b","x"});
+    REQUIRE(blk->children.size() == 1);
+    REQUIRE(blk->children[0]->kind == NodeKind::BinarySend);
+}
+
+TEST_CASE("Parser: empty block", "[parser]") {
+    Parser P("[].");
+    auto m = P.parseModule(); REQUIRE(P.errors().empty());
+    auto& blk = m->children[0];
+    REQUIRE(blk->kind == NodeKind::Block);
+    REQUIRE(blk->intValue == 0);
+    REQUIRE(blk->children.empty());
+}

@@ -224,6 +224,8 @@ ast::NodePtr Parser::parsePrimary() {
             consume(TokenKind::RParen, "expected ')'");
             return inner;
         }
+        case TokenKind::LBracket:
+            return parseBlock();
         default:
             error(current_, std::string("expected primary expression, got ") + tokenKindName(current_.kind));
             advance();
@@ -231,9 +233,49 @@ ast::NodePtr Parser::parsePrimary() {
     }
 }
 
+ast::NodePtr Parser::parseBlock() {
+    Token open = current_; advance(); // consume '['
+    auto blk = ast::makeNode(ast::NodeKind::Block, open.line, open.column);
+
+    // arguments: : name : name ... (then a '|' if any arg present)
+    int nArgs = 0;
+    while (current_.kind == TokenKind::Colon) {
+        advance();
+        if (current_.kind != TokenKind::Identifier) {
+            error(current_, "expected block argument name after ':'");
+            break;
+        }
+        blk->stringList.push_back(current_.text);
+        ++nArgs;
+        advance();
+    }
+    if (nArgs > 0) consume(TokenKind::Pipe, "expected '|' after block arguments");
+
+    // locals between '|...|' (if first token is Pipe)
+    if (current_.kind == TokenKind::Pipe) {
+        advance();
+        while (current_.kind == TokenKind::Identifier) {
+            blk->stringList.push_back(current_.text);
+            advance();
+        }
+        consume(TokenKind::Pipe, "expected '|' to close block locals");
+    }
+
+    blk->intValue = nArgs;
+
+    // statements
+    while (current_.kind != TokenKind::RBracket &&
+           current_.kind != TokenKind::EndOfFile) {
+        auto stmt = parseStatement();
+        if (stmt) blk->children.push_back(std::move(stmt));
+        if (!match(TokenKind::Period)) break;
+    }
+    consume(TokenKind::RBracket, "expected ']' to close block");
+    return blk;
+}
+
 // Stubs that subsequent tasks fill in
 ast::NodePtr Parser::parseAssignmentRHS(ast::NodePtr) { return nullptr; }
-ast::NodePtr Parser::parseBlock()      { return nullptr; }
 ast::NodePtr Parser::parseClassDecl(Token)         { return nullptr; }
 ast::NodePtr Parser::parseMethodDecl(Token, bool)  { return nullptr; }
 
