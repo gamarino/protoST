@@ -71,6 +71,16 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
             // through to dispatch the next instruction.
         }
 
+        // F2 location breakpoint: halt BEFORE executing the instruction at pc.
+        if (rt_.debugger().attached() && rt_.debugger().breakpoints().isSet(&m, pc)) {
+            DebugFrame frame;
+            frame.module = &m;
+            frame.pc = pc;
+            frame.stack.assign(stack.begin(), stack.end());
+            frame.locals.assign(locals.begin(), locals.end());
+            rt_.debugger().enterSession(rt_, std::move(frame), "breakpoint");
+        }
+
         const Op op = static_cast<Op>(bytes[pc]);
         const uint8_t arg = bytes[pc + 1];
         pc += kInstrSize;

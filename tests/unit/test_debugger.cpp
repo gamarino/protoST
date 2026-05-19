@@ -76,3 +76,21 @@ TEST_CASE("Debugger: single-step halts every instruction until cont", "[debugger
     while ((pos = out.str().find("(stdbg)", pos)) != std::string::npos) { ++count; ++pos; }
     REQUIRE(count >= 3);
 }
+
+TEST_CASE("Debugger: location breakpoint halts at given pc", "[debugger][bp]") {
+    protoST::Parser P("1 + 2.");          // PUSH_CONST 0; PUSH_CONST 1; SEND_BINARY 2; RETURN_TOP
+    protoST::Compiler C; auto bc = C.compileModule(*P.parseModule());
+    protoST::STRuntime rt;
+    rt.debugger().attach();
+    rt.debugger().breakpoints().add(bc.get(), 4);  // before SEND_BINARY
+
+    std::istringstream in("where\ncont\n");
+    std::ostringstream out;
+    rt.debugger().setInputStream(&in);
+    rt.debugger().setOutputStream(&out);
+
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r->asLong(rt.rootCtx()) == 3);
+    REQUIRE(out.str().find("breakpoint") != std::string::npos);
+    REQUIRE(out.str().find("pc: 4")     != std::string::npos);
+}

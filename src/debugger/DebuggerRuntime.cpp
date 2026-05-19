@@ -93,7 +93,28 @@ void DebuggerRuntime::enterSession(STRuntime& rt, DebugFrame frame, const std::s
             continue;
         }
 
-        out << "?? unknown command: " << line << " (try: c, s, n, f, q, where, locals, print)\n";
+        if (line.rfind("break ", 0) == 0) {
+            try {
+                size_t bpc = std::stoul(line.substr(6));
+                breakpoints_.add(frame.module, bpc);
+                out << "  break set at pc=" << bpc << "\n";
+            } catch (...) { out << "  invalid pc\n"; }
+            continue;
+        }
+        if (line == "info breaks") {
+            out << "  " << breakpoints_.size() << " breakpoints set\n";
+            continue;
+        }
+        if (line.rfind("clear ", 0) == 0) {
+            try {
+                size_t bpc = std::stoul(line.substr(6));
+                breakpoints_.remove(frame.module, bpc);
+                out << "  cleared pc=" << bpc << "\n";
+            } catch (...) { out << "  invalid pc\n"; }
+            continue;
+        }
+
+        out << "?? unknown command: " << line << " (try: c, s, n, f, q, where, locals, print, break, clear, info breaks)\n";
     }
 }
 

@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "BreakpointTable.h"
 namespace proto { class ProtoContext; class ProtoObject; }
 
 namespace protoST {
@@ -49,12 +50,15 @@ public:
     void setInputStream(std::istream* is)  { inStream_  = is; }
     void setOutputStream(std::ostream* os) { outStream_ = os; }
 
+    BreakpointTable& breakpoints() { return breakpoints_; }
+
 private:
     std::atomic<bool> attached_{false};
     Command           lastCommand_ = Command::Continue;
     std::atomic<uint8_t> mode_{static_cast<uint8_t>(Mode::Free)};
     std::istream* inStream_  = nullptr; // nullptr → use std::cin
     std::ostream* outStream_ = nullptr; // nullptr → use std::cout
+    BreakpointTable breakpoints_;
 };
 
 } // namespace protoST
