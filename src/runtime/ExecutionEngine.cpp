@@ -115,6 +115,17 @@ ExecutionEngine::run(proto::ProtoContext* ctx,
                 stack.push_back(result ? result : PROTO_NONE);
                 break;
             }
+            case Op::JUMP:          pc += static_cast<size_t>(arg) * kInstrSize; break;
+            case Op::JUMP_IF_TRUE: {
+                auto* v = stack.back(); stack.pop_back();
+                if (v == PROTO_TRUE) pc += static_cast<size_t>(arg) * kInstrSize;
+                break;
+            }
+            case Op::JUMP_IF_FALSE: {
+                auto* v = stack.back(); stack.pop_back();
+                if (v == PROTO_FALSE) pc += static_cast<size_t>(arg) * kInstrSize;
+                break;
+            }
             default:
                 throw std::runtime_error(
                     "ExecutionEngine: unimplemented opcode at pc=" +
