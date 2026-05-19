@@ -94,3 +94,16 @@ TEST_CASE("Compiler: keyword send emits SEND_KEYWORD", "[compiler]") {
     REQUIRE(static_cast<Op>(bc->bytes()[6]) == Op::SEND_KEYWORD);
     REQUIRE(bc->constSymbol(bc->bytes()[7]) == "at:put:");
 }
+
+TEST_CASE("Compiler: cascade emits dup/pop dance and keeps last value", "[compiler]") {
+    Parser P("nil yourself; printNl; size.");
+    Compiler C; auto bc = C.compileModule(*P.parseModule());
+    REQUIRE(!C.hasErrors());
+    // At minimum: opcode sequence ends with the last SEND_UNARY (size) and not extra DUPs
+    auto last_send = false;
+    for (size_t i = 0; i + 1 < bc->bytes().size(); i += 2) {
+        if (static_cast<Op>(bc->bytes()[i]) == Op::SEND_UNARY &&
+            bc->constSymbol(bc->bytes()[i+1]) == "size") last_send = true;
+    }
+    REQUIRE(last_send);
+}

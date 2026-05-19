@@ -125,6 +125,43 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             m.emit(Op::SEND_KEYWORD, static_cast<uint8_t>(sym));
             return;
         }
+        case NodeKind::Cascade: {
+            // children[0] is the receiver; children[1..] are partial sends.
+            emitExpr(m, *n.children[0]);
+            int tmp = declareLocal("__cascade_tmp_" + std::to_string(scopes_.back().nextSlot));
+            for (size_t i = 1; i < n.children.size(); ++i) {
+                auto& msg = *n.children[i];
+                // For all but the last partial, duplicate receiver before evaluating the send,
+                // then POP the result. For the last partial we keep the result.
+                bool isLast = (i + 1 == n.children.size());
+                m.emit(Op::DUP, 0); // duplicate receiver for this send
+                // emit args; receiver is already on stack just below the args
+                if (msg.kind == NodeKind::UnarySend) {
+                    auto sym = m.internSymbol(msg.text);
+                    m.emit(Op::SEND_UNARY, static_cast<uint8_t>(sym));
+                } else if (msg.kind == NodeKind::BinarySend) {
+                    if (msg.children.empty()) { error("cascade binary missing arg"); }
+                    else emitExpr(m, *msg.children[0]);
+                    auto sym = m.internSymbol(msg.text);
+                    m.emit(Op::SEND_BINARY, static_cast<uint8_t>(sym));
+                } else if (msg.kind == NodeKind::KeywordSend) {
+                    for (auto& a : msg.children) emitExpr(m, *a);
+                    auto sym = m.internSymbol(msg.text);
+                    m.emit(Op::SEND_KEYWORD, static_cast<uint8_t>(sym));
+                } else {
+                    error("unexpected node in cascade");
+                }
+                if (isLast) {
+                    // stack: [receiver, last_result]; stash result, pop receiver, push result back
+                    m.emit(Op::STORE_LOCAL, static_cast<uint8_t>(tmp));
+                    m.emit(Op::POP, 0);            // discard receiver
+                    m.emit(Op::PUSH_LOCAL, static_cast<uint8_t>(tmp));
+                } else {
+                    m.emit(Op::POP, 0);            // discard this result, keep receiver
+                }
+            }
+            return;
+        }
         default:
             error("expression kind not yet supported");
             m.emit(Op::PUSH_NIL, 0);
