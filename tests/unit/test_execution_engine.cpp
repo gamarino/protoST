@@ -1,4 +1,5 @@
 #include <catch2/catch_all.hpp>
+#include <cstdlib>
 
 #include "protoST/STRuntime.h"
 #include "runtime/ExecutionEngine.h"
@@ -539,4 +540,30 @@ TEST_CASE("Engine: F6 hero — Counter wrapped as actor, async increments, sync 
     protoST::STRuntime rt;
     auto* r = rt.runTopLevel(*bc);
     REQUIRE(r->asLong(rt.rootCtx()) == 3);
+}
+
+TEST_CASE("Module loader: caching returns same instance", "[engine][modules]") {
+    // Pre-set STPATH so we can find lib_simple.st in the fixtures dir.
+    // For test simplicity, use loadModule with an explicit absolute path workaround:
+    // findModuleFile only handles relative-to-cwd or STPATH. We'll set STPATH at test time.
+    std::string fixtures = PROTOST_FIXTURES_DIR;
+    setenv("STPATH", fixtures.c_str(), /*overwrite=*/1);
+
+    protoST::STRuntime rt;
+    auto* ctx = rt.rootCtx();
+
+    auto* m1 = rt.loadModule(ctx, "lib_simple");
+    auto* m2 = rt.loadModule(ctx, "lib_simple");
+
+    REQUIRE(m1 != nullptr);
+    REQUIRE(m1 == m2);  // same instance
+
+    // Cleanup
+    unsetenv("STPATH");
+}
+
+TEST_CASE("Module loader: missing logical path throws", "[engine][modules]") {
+    protoST::STRuntime rt;
+    REQUIRE_THROWS_WITH(rt.loadModule(rt.rootCtx(), "no_such_module_xyz_zz"),
+                         Catch::Matchers::ContainsSubstring("module not found"));
 }

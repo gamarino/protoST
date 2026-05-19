@@ -16,6 +16,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -75,6 +76,9 @@ struct STRuntime::Impl {
     // F6 scheduler
     std::queue<const proto::ProtoObject*> readyQueue;
     std::unordered_set<const proto::ProtoObject*> scheduledSet;  // for idempotency
+
+    // F5-M2 module cache: canonical absolute path -> module object.
+    std::unordered_map<std::string, const proto::ProtoObject*> moduleCache;
 
     Impl() {
         // protoCore exposes the root context as a public field on ProtoSpace
@@ -456,6 +460,27 @@ const proto::ProtoObject* STRuntime::loadModuleFromFile(
     }
 
     return moduleObj;
+}
+
+// F5-M2: cached module loader. Repeated calls for the same logical path
+// return the same ProtoObject (keyed by the canonical absolute filesystem
+// path so two distinct logical names that resolve to the same file share
+// a single module instance — sys.modules-style).
+const proto::ProtoObject* STRuntime::loadModule(proto::ProtoContext* ctx, const std::string& logicalPath) {
+    auto path = findModuleFile(logicalPath);
+    if (path.empty()) {
+        throw std::runtime_error("module not found: " + logicalPath);
+    }
+    // Use the absolute resolved path as cache key for canonical identity.
+    namespace fs = std::filesystem;
+    std::string canonical = fs::absolute(path).string();
+
+    auto it = impl_->moduleCache.find(canonical);
+    if (it != impl_->moduleCache.end()) return it->second;
+
+    auto* mod = loadModuleFromFile(ctx, path, logicalPath);
+    impl_->moduleCache[canonical] = mod;
+    return mod;
 }
 
 } // namespace protoST

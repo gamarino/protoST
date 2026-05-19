@@ -79,6 +79,9 @@ public:
     const proto::ProtoObject* loadModuleFromFile(
         proto::ProtoContext* ctx, const std::string& filePath, const std::string& logicalName);
 
+    // Loads a module by logical path with caching. Throws if not found.
+    const proto::ProtoObject* loadModule(proto::ProtoContext* ctx, const std::string& logicalPath);
+
     inline const char* versionTag() const { return "0.1.0-pre"; }
 
 private:
