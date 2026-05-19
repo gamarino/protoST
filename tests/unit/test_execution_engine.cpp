@@ -128,3 +128,15 @@ TEST_CASE("Engine: true ifTrue: [ 42 ] returns 42", "[engine][block]") {
     REQUIRE(r->asLong(rt.rootCtx()) == 42);
 }
 
+TEST_CASE("Engine: F2 hero — closed-form sum 1..100 returns 5050", "[engine][hero]") {
+    const char* src = "[ :n | n * (n + 1) / 2 ] value: 100.";
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C; auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+    protoST::STRuntime rt;
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r->asLong(rt.rootCtx()) == 5050);
+}
+

@@ -42,6 +42,17 @@ const proto::ProtoObject* prim_Block_value(STRuntime& rt, proto::ProtoContext* c
     return invokeBlock(rt, ctx, r, a, argc);
 }
 
+const proto::ProtoObject* prim_Block_whileTrue(STRuntime& rt, proto::ProtoContext* ctx,
+                                                const proto::ProtoObject* r,
+                                                const proto::ProtoObject* const* a, int) {
+    while (true) {
+        auto* cond = invokeBlock(rt, ctx, r, nullptr, 0);
+        if (cond != PROTO_TRUE) break;
+        invokeBlock(rt, ctx, a[0], nullptr, 0);
+    }
+    return PROTO_NONE;
+}
+
 } // anon
 
 void installBlockPrimitives(STRuntime& rt) {
@@ -53,6 +64,11 @@ void installBlockPrimitives(STRuntime& rt) {
     bindPrimitive(rt, b.blockProto, "value:value:",             idx);
     bindPrimitive(rt, b.blockProto, "value:value:value:",       idx);
     bindPrimitive(rt, b.blockProto, "value:value:value:value:", idx);
+
+    int wIdx = reg.registerPrim(prim_Block_whileTrue);
+    // Functional but not exercised by F2 tests — needs closures (F3+) for the
+    // typical loop idiom over mutable counters.
+    bindPrimitive(rt, b.blockProto, "whileTrue:", wIdx);
 }
 
 } // namespace protoST
