@@ -88,3 +88,6 @@ add_test(NAME cli_venv
 
 add_test(NAME cli_eval
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_eval.sh $<TARGET_FILE:protost>)
+
+add_test(NAME cli_debugger
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_debugger.sh $<TARGET_FILE:protost> ${CMAKE_SOURCE_DIR}/tests/fixtures)
