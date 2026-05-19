@@ -6,9 +6,6 @@
 #include "debugger/DebuggerRuntime.h"
 #include "protoCore.h"
 
-#include <cstring>
-#include <new>
-#include <type_traits>
 #include <vector>
 
 namespace protoST { void installIntPrimitives(STRuntime& rt); }
@@ -38,15 +35,8 @@ void bindPrimitive(STRuntime& rt, const proto::ProtoObject* proto, const char* s
     const_cast<proto::ProtoObject*>(proto)->setAttribute(ctx, sel, val);
 }
 
-// protoCore's ProtoSpace constructor does not zero-initialise its
-// `rootContext` member before the inner ProtoContext constructor reads it
-// (via the main-thread auto-detect path).  When the raw bytes happen to
-// look like a valid pointer, the dereference segfaults.  Workaround: zero
-// the ProtoSpace storage with placement-new before invoking the ctor so
-// the auto-detect short-circuits safely on nullptr.
 struct STRuntime::Impl {
-    alignas(proto::ProtoSpace) unsigned char spaceStorage[sizeof(proto::ProtoSpace)];
-    proto::ProtoSpace*   spacePtr   = nullptr;
+    proto::ProtoSpace    space;
     proto::ProtoContext* rootCtx    = nullptr;
     proto::ProtoRootSet* asyncRoots = nullptr;
     Bootstrap            bootstrap;
@@ -54,23 +44,17 @@ struct STRuntime::Impl {
     DebuggerRuntime      debugger;
 
     Impl() {
-        std::memset(spaceStorage, 0, sizeof(spaceStorage));
-        spacePtr = new (spaceStorage) proto::ProtoSpace();
         // protoCore exposes the root context as a public field on ProtoSpace
         // (see protoCore/headers/protoCore.h:1234 and protoJS/src/JSContext.cpp:100).
-        rootCtx    = spacePtr->rootContext;
-        asyncRoots = spacePtr->createRootSet("protoST-async");
-        bootstrapPrototypes(*spacePtr, rootCtx, bootstrap);
+        rootCtx    = space.rootContext;
+        asyncRoots = space.createRootSet("protoST-async");
+        bootstrapPrototypes(space, rootCtx, bootstrap);
     }
 
     ~Impl() {
         if (asyncRoots) {
-            spacePtr->destroyRootSet(asyncRoots);
+            space.destroyRootSet(asyncRoots);
             asyncRoots = nullptr;
-        }
-        if (spacePtr) {
-            spacePtr->~ProtoSpace();
-            spacePtr = nullptr;
         }
     }
 };
@@ -84,7 +68,7 @@ STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
 }
 STRuntime::~STRuntime() = default;
 
-proto::ProtoSpace*   STRuntime::space()         const { return impl_->spacePtr; }
+proto::ProtoSpace*   STRuntime::space()         const { return &impl_->space; }
 proto::ProtoContext* STRuntime::rootCtx()       const { return impl_->rootCtx; }
 proto::ProtoRootSet* STRuntime::asyncRootSet()  const { return impl_->asyncRoots; }
 const Bootstrap&     STRuntime::bootstrap()     const { return impl_->bootstrap; }
