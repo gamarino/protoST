@@ -182,6 +182,56 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
                 const proto::ProtoObject* recv = stack.back(); stack.pop_back();
 
                 auto* selSym = ctx->fromUTF8String(selStr.c_str())->asString(ctx);
+
+                // F6-A4: actor fast-path. If the receiver is an actor (i.e.
+                // carries a __wrapped__ attribute installed by Object>>asActor),
+                // we bypass the synchronous dispatch entirely. The send is
+                // converted into a Message envelope, enqueued on the actor's
+                // mailbox, the actor is scheduled, and a fresh pending Future
+                // is pushed onto the operand stack as the apparent result of
+                // the send. The actual method execution happens later when
+                // STRuntime::drainOne pulls a message from the mailbox.
+                if (rt_.isActor(ctx, recv)) {
+                    static const proto::ProtoString* mbKey =
+                        ctx->fromUTF8String("__mailbox__")->asString(ctx);
+                    static const proto::ProtoString* msgSelKey =
+                        ctx->fromUTF8String("__selector__")->asString(ctx);
+                    static const proto::ProtoString* msgArgsKey =
+                        ctx->fromUTF8String("__args__")->asString(ctx);
+                    static const proto::ProtoString* msgFutKey =
+                        ctx->fromUTF8String("__future__")->asString(ctx);
+
+                    // Allocate a fresh pending Future.
+                    auto* fut = const_cast<proto::ProtoObject*>(rt_.newFuture(ctx));
+
+                    // Build the message envelope (a fresh mutable child of objectProto).
+                    auto* msg = const_cast<proto::ProtoObject*>(rt_.bootstrap().objectProto)
+                        ->newChild(ctx, /*isMutable=*/true);
+
+                    // Build args ProtoList by FIFO appendLast of each arg.
+                    auto* argsList = ctx->newList();
+                    for (int i = 0; i < argc; ++i) {
+                        argsList = argsList->appendLast(ctx, args[i]);
+                    }
+
+                    msg->setAttribute(ctx, msgSelKey, reinterpret_cast<const proto::ProtoObject*>(selSym));
+                    msg->setAttribute(ctx, msgArgsKey, argsList->asObject(ctx));
+                    msg->setAttribute(ctx, msgFutKey, fut);
+
+                    // Enqueue (FIFO) into the actor's mailbox.
+                    auto* mbObj = recv->getAttribute(ctx, mbKey);
+                    auto* mailbox = mbObj ? mbObj->asList(ctx) : ctx->newList();
+                    auto* newMailbox = mailbox->appendLast(ctx, msg);
+                    const_cast<proto::ProtoObject*>(recv)
+                        ->setAttribute(ctx, mbKey, newMailbox->asObject(ctx));
+
+                    // Schedule the actor for processing and stash the Future
+                    // as the apparent result of the send.
+                    rt_.schedule(recv);
+                    stack.push_back(fut);
+                    break;
+                }
+
                 // Lookup walks from the receiver itself first, then up the
                 // prototype chain.  Starting at the receiver matters for
                 // "class as receiver" patterns (F4): a class prototype

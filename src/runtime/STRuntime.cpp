@@ -7,6 +7,8 @@
 #include "protoCore.h"
 
 #include <queue>
+#include <stdexcept>
+#include <string>
 #include <unordered_set>
 #include <vector>
 
@@ -157,18 +159,158 @@ void STRuntime::schedule(const proto::ProtoObject* actor) {
 }
 
 bool STRuntime::drainOne(proto::ProtoContext* ctx) {
-    (void)ctx;
     if (impl_->readyQueue.empty()) return false;
     auto* actor = impl_->readyQueue.front();
     impl_->readyQueue.pop();
     impl_->scheduledSet.erase(actor);
-    // F6-A4 will wire actor message processing here; for now it's a no-op stub.
-    // We still record that work was done (one actor was popped).
+
+    static const proto::ProtoString* mailboxKey =
+        ctx->fromUTF8String("__mailbox__")->asString(ctx);
+    static const proto::ProtoString* wrappedKey =
+        ctx->fromUTF8String("__wrapped__")->asString(ctx);
+    static const proto::ProtoString* selKey =
+        ctx->fromUTF8String("__selector__")->asString(ctx);
+    static const proto::ProtoString* argsKey =
+        ctx->fromUTF8String("__args__")->asString(ctx);
+    static const proto::ProtoString* futKey =
+        ctx->fromUTF8String("__future__")->asString(ctx);
+    static const proto::ProtoString* stateKey =
+        ctx->fromUTF8String("__state__")->asString(ctx);
+    static const proto::ProtoString* valueKey =
+        ctx->fromUTF8String("__value__")->asString(ctx);
+    static const proto::ProtoString* errorKey =
+        ctx->fromUTF8String("__error__")->asString(ctx);
+
+    // Get the mailbox (ProtoList). Pop the first (FIFO).
+    auto* mbObj = actor->getAttribute(ctx, mailboxKey);
+    if (!mbObj || mbObj == PROTO_NONE) return true;
+    auto* mailbox = mbObj->asList(ctx);
+    if (!mailbox || mailbox->getSize(ctx) == 0) return true;
+
+    auto* msg = mailbox->getAt(ctx, 0);
+    // Drop the first message — getSlice(from, to) over [1, size).
+    auto* remaining = mailbox->getSlice(
+        ctx, 1, static_cast<int>(mailbox->getSize(ctx)));
+    const_cast<proto::ProtoObject*>(actor)->setAttribute(
+        ctx, mailboxKey, remaining->asObject(ctx));
+
+    // Re-schedule actor if more messages remain.
+    if (remaining->getSize(ctx) > 0) schedule(actor);
+
+    // Extract message fields.
+    auto* selector = msg->getAttribute(ctx, selKey);
+    auto* argsList = msg->getAttribute(ctx, argsKey);
+    auto* future   = msg->getAttribute(ctx, futKey);
+    auto* wrapped  = actor->getAttribute(ctx, wrappedKey);
+
+    // Build args array.
+    auto* argsListAsList = argsList ? argsList->asList(ctx) : nullptr;
+    int argc = argsListAsList ? static_cast<int>(argsListAsList->getSize(ctx)) : 0;
+    std::vector<const proto::ProtoObject*> args;
+    args.reserve(static_cast<size_t>(argc));
+    for (int i = 0; i < argc; ++i) {
+        args.push_back(argsListAsList->getAt(ctx, i));
+    }
+
+    // Resolve selector to a symbol string.
+    auto* selStr = selector ? selector->asString(ctx) : nullptr;
+    if (!selStr) {
+        if (future) {
+            const_cast<proto::ProtoObject*>(future)
+                ->setAttribute(ctx, stateKey, ctx->fromLong(2));
+            const_cast<proto::ProtoObject*>(future)
+                ->setAttribute(ctx, errorKey,
+                               ctx->fromUTF8String("invalid selector"));
+        }
+        return true;
+    }
+
+    try {
+        auto* method = wrapped ? wrapped->getAttribute(ctx, selStr) : nullptr;
+        const proto::ProtoObject* result = nullptr;
+
+        // Detect user method (has __bc_ptr__) vs primitive marker (tagged int).
+        static const proto::ProtoString* bcKey =
+            ctx->fromUTF8String("__bc_ptr__")->asString(ctx);
+        auto* bcPtrObj = method ? method->getAttribute(ctx, bcKey) : nullptr;
+        if (bcPtrObj && bcPtrObj != PROTO_NONE) {
+            // User method: invoke via a sub-engine with wrapped as self.
+            const BytecodeModule* sub =
+                reinterpret_cast<const BytecodeModule*>(bcPtrObj->asLong(ctx));
+            std::vector<const proto::ProtoObject*> methodArgs;
+            methodArgs.reserve(static_cast<size_t>(argc) + 1);
+            methodArgs.push_back(wrapped);
+            for (int i = 0; i < argc; ++i) methodArgs.push_back(args[i]);
+            // Honour the method's captured-dict if any (matches Engine path).
+            static const proto::ProtoString* capKey =
+                ctx->fromUTF8String("__captured__")->asString(ctx);
+            auto* capDict = method->getAttribute(ctx, capKey);
+            if (capDict == PROTO_NONE) capDict = nullptr;
+            ExecutionEngine subEng(*this);
+            result = subEng.runWithArgs(
+                ctx, *sub, /*self=*/wrapped,
+                methodArgs.data(),
+                static_cast<int>(methodArgs.size()),
+                capDict);
+        } else if (method) {
+            long long marker = method->asLong(ctx);
+            if (marker & (1LL << 62)) {
+                int idx = static_cast<int>(marker & ((1LL << 62) - 1));
+                auto fn = impl_->registry.at(idx);
+                result = fn(*this, ctx, wrapped, args.data(), argc);
+            } else {
+                throw std::runtime_error("unknown method shape");
+            }
+        } else {
+            throw std::runtime_error(
+                std::string("doesNotUnderstand: ") +
+                std::string(selStr->toStdString(ctx)));
+        }
+
+        // Resolve future.
+        if (future) {
+            const_cast<proto::ProtoObject*>(future)
+                ->setAttribute(ctx, stateKey, ctx->fromLong(1));
+            const_cast<proto::ProtoObject*>(future)
+                ->setAttribute(ctx, valueKey, result ? result : PROTO_NONE);
+        }
+    } catch (const std::exception& e) {
+        if (future) {
+            const_cast<proto::ProtoObject*>(future)
+                ->setAttribute(ctx, stateKey, ctx->fromLong(2));
+            const_cast<proto::ProtoObject*>(future)
+                ->setAttribute(ctx, errorKey, ctx->fromUTF8String(e.what()));
+        }
+    }
     return true;
 }
 
 size_t STRuntime::scheduledCount() const {
     return impl_->readyQueue.size();
+}
+
+const proto::ProtoObject* STRuntime::newFuture(proto::ProtoContext* ctx) {
+    auto* fut = const_cast<proto::ProtoObject*>(impl_->bootstrap.futureProto)
+        ->newChild(ctx, /*isMutable=*/true);
+    static const proto::ProtoString* stateKey =
+        ctx->fromUTF8String("__state__")->asString(ctx);
+    static const proto::ProtoString* valueKey =
+        ctx->fromUTF8String("__value__")->asString(ctx);
+    static const proto::ProtoString* errKey =
+        ctx->fromUTF8String("__error__")->asString(ctx);
+    fut->setAttribute(ctx, stateKey, ctx->fromLong(0));  // 0 = pending
+    fut->setAttribute(ctx, valueKey, PROTO_NONE);
+    fut->setAttribute(ctx, errKey,   PROTO_NONE);
+    return fut;
+}
+
+bool STRuntime::isActor(proto::ProtoContext* ctx,
+                        const proto::ProtoObject* obj) const {
+    if (!obj || obj == PROTO_NONE) return false;
+    static const proto::ProtoString* wrappedKey =
+        ctx->fromUTF8String("__wrapped__")->asString(ctx);
+    auto* w = obj->getAttribute(ctx, wrappedKey);
+    return (w != nullptr && w != PROTO_NONE);
 }
 
 } // namespace protoST

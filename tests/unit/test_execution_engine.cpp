@@ -375,3 +375,41 @@ TEST_CASE("STRuntime scheduler: schedule + drainOne basics", "[engine][scheduler
     REQUIRE(rt.scheduledCount() == 1);
 }
 
+TEST_CASE("Engine: actor SEND returns a pending Future + drainOne resolves it",
+          "[engine][actors]") {
+    // F6-A4: wrap a Box class instance as an actor, send `add: 100 with: 23`
+    // to it, observe that the send returns a pending Future, then drain the
+    // mailbox and verify the Future resolves to 123.
+    const char* src =
+        "Object subclass: #Box. "
+        "Box >> add: x with: y ^ x + y. "
+        "actor := Box newChild asActor. "
+        "f := actor add: 100 with: 23. "
+        "f.";
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C; auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    auto* fut = rt.runTopLevel(*bc);
+
+    // At this point, the actor was scheduled but not yet drained.
+    // The send should have returned a pending Future.
+    REQUIRE(fut != nullptr);
+    REQUIRE(fut != PROTO_NONE);
+
+    auto* ctx = rt.rootCtx();
+    auto* stateKey = ctx->fromUTF8String("__state__")->asString(ctx);
+    auto* valueKey = ctx->fromUTF8String("__value__")->asString(ctx);
+    REQUIRE(fut->getAttribute(ctx, stateKey)->asLong(ctx) == 0);  // pending
+
+    // Drain the queue manually.
+    REQUIRE(rt.drainOne(ctx));        // processes the add:with: message
+    REQUIRE_FALSE(rt.drainOne(ctx));  // empty queue now
+
+    // Future should be resolved now with value 123.
+    REQUIRE(fut->getAttribute(ctx, stateKey)->asLong(ctx) == 1);  // resolved
+    REQUIRE(fut->getAttribute(ctx, valueKey)->asLong(ctx) == 123);
+}

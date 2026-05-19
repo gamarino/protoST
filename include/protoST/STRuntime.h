@@ -57,6 +57,14 @@ public:
     bool drainOne(proto::ProtoContext* ctx);   // returns true if a message was processed
     size_t scheduledCount() const;              // size of ready queue (for testing)
 
+    // F6-A4 helpers
+    // Allocates a new pending Future (mutable child of futureProto) with the
+    // canonical attribute layout (__state__=0, __value__=nil, __error__=nil).
+    const proto::ProtoObject* newFuture(proto::ProtoContext* ctx);
+    // Cheap actor detection: an object is treated as an actor iff it carries
+    // a non-nil __wrapped__ attribute (set by Object>>asActor).
+    bool isActor(proto::ProtoContext* ctx, const proto::ProtoObject* obj) const;
+
     inline const char* versionTag() const { return "0.1.0-pre"; }
 
 private:
