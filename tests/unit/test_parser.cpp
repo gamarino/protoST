@@ -102,3 +102,18 @@ TEST_CASE("Parser: precedence unary > binary > keyword", "[parser]") {
     REQUIRE(arg1->text == "+");
     REQUIRE(arg1->children[0]->kind == NodeKind::UnarySend); // y size
 }
+
+TEST_CASE("Parser: cascade collects messages on same receiver", "[parser]") {
+    Parser P("Transcript show: 'a'; show: 'b'; cr.");
+    auto m = P.parseModule(); REQUIRE(P.errors().empty());
+    auto& casc = m->children[0];
+    REQUIRE(casc->kind == NodeKind::Cascade);
+    REQUIRE(casc->children.size() == 4); // receiver + 3 partial sends
+    REQUIRE(casc->children[0]->kind == NodeKind::Identifier);
+    REQUIRE(casc->children[1]->kind == NodeKind::KeywordSend);
+    REQUIRE(casc->children[2]->kind == NodeKind::KeywordSend);
+    REQUIRE(casc->children[3]->kind == NodeKind::UnarySend);
+    // partial sends have NO receiver in children[0]
+    REQUIRE(casc->children[1]->children.size() == 1); // one keyword arg, no receiver
+    REQUIRE(casc->children[3]->children.empty());
+}

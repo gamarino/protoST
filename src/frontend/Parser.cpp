@@ -2,6 +2,12 @@
 
 namespace protoST {
 
+static bool isSendKind(ast::NodeKind k) {
+    return k == ast::NodeKind::UnarySend
+        || k == ast::NodeKind::BinarySend
+        || k == ast::NodeKind::KeywordSend;
+}
+
 Parser::Parser(std::string source) : lexer_(std::move(source)) {
     advance();
 }
@@ -70,7 +76,56 @@ ast::NodePtr Parser::parseStatement() {
 }
 
 ast::NodePtr Parser::parseExpression() {
-    return parseKeywordSend();
+    auto first = parseKeywordSend();
+    if (!first || current_.kind != TokenKind::Semicolon || !isSendKind(first->kind)) {
+        return first;
+    }
+    // Promote receiver: cascade.children[0] = first.children[0]; rest are headless sends
+    auto cascade = ast::makeNode(ast::NodeKind::Cascade, first->line, first->column);
+    cascade->children.push_back(std::move(first->children[0]));
+    first->children.erase(first->children.begin());
+    cascade->children.push_back(std::move(first));
+    while (match(TokenKind::Semicolon)) {
+        // parse a single message with receiver=nullptr (we manufacture)
+        Token t = current_;
+        if (current_.kind == TokenKind::Identifier) {
+            // unary selector
+            advance();
+            auto n = ast::makeNode(ast::NodeKind::UnarySend, t.line, t.column);
+            n->text = t.text;
+            // chain unary
+            while (current_.kind == TokenKind::Identifier) {
+                Token chained = current_; advance();
+                auto outer = ast::makeNode(ast::NodeKind::UnarySend, chained.line, chained.column);
+                outer->text = chained.text;
+                outer->children.push_back(std::move(n));
+                n = std::move(outer);
+            }
+            cascade->children.push_back(std::move(n));
+        } else if (current_.kind == TokenKind::BinaryOp) {
+            Token op = current_; advance();
+            auto right = parseUnarySend();
+            auto n = ast::makeNode(ast::NodeKind::BinarySend, op.line, op.column);
+            n->text = op.text;
+            // partial: no receiver (placeholder will be filled at codegen time)
+            if (right) n->children.push_back(std::move(right));
+            cascade->children.push_back(std::move(n));
+        } else if (current_.kind == TokenKind::Keyword) {
+            auto n = ast::makeNode(ast::NodeKind::KeywordSend, current_.line, current_.column);
+            std::string selector;
+            while (current_.kind == TokenKind::Keyword) {
+                selector += current_.text; advance();
+                auto arg = parseBinarySend();
+                if (arg) n->children.push_back(std::move(arg));
+            }
+            n->text = std::move(selector);
+            cascade->children.push_back(std::move(n));
+        } else {
+            error(current_, "expected message after ';' in cascade");
+            break;
+        }
+    }
+    return cascade;
 }
 
 ast::NodePtr Parser::parseUnarySend() {
