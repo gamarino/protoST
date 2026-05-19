@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <cstdint>
 #include <iosfwd>
 #include <stdexcept>
 #include <string>
@@ -40,6 +41,10 @@ public:
     Command lastCommand() const { return lastCommand_; }
     void    setCommand(Command c) { lastCommand_ = c; }
 
+    enum class Mode : uint8_t { Free, SingleStep, RunToReturn };
+    void setMode(Mode m) { mode_.store(static_cast<uint8_t>(m), std::memory_order_relaxed); }
+    Mode mode() const    { return static_cast<Mode>(mode_.load(std::memory_order_relaxed)); }
+
     // Test/embedder hooks
     void setInputStream(std::istream* is)  { inStream_  = is; }
     void setOutputStream(std::ostream* os) { outStream_ = os; }
@@ -47,6 +52,7 @@ public:
 private:
     std::atomic<bool> attached_{false};
     Command           lastCommand_ = Command::Continue;
+    std::atomic<uint8_t> mode_{static_cast<uint8_t>(Mode::Free)};
     std::istream* inStream_  = nullptr; // nullptr → use std::cin
     std::ostream* outStream_ = nullptr; // nullptr → use std::cout
 };

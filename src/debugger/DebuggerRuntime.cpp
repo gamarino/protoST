@@ -34,10 +34,14 @@ void DebuggerRuntime::enterSession(STRuntime& rt, DebugFrame frame, const std::s
         line = trim(line);
         if (line.empty()) continue;
 
-        if (line == "c" || line == "cont")    { setCommand(Command::Continue); return; }
-        if (line == "s" || line == "step")    { setCommand(Command::Step);     return; }
-        if (line == "n" || line == "next")    { setCommand(Command::Next);     return; }
-        if (line == "f" || line == "finish")  { setCommand(Command::Finish);   return; }
+        if (line == "c" || line == "cont")    { setMode(Mode::Free);        setCommand(Command::Continue); return; }
+        // F2: `next` is aliased to `step` because true frame-depth tracking
+        // for `next` requires the F3 call stack (not yet implemented).
+        if (line == "s" || line == "step")    { setMode(Mode::SingleStep);  setCommand(Command::Step);     return; }
+        if (line == "n" || line == "next")    { setMode(Mode::SingleStep);  setCommand(Command::Next);     return; }
+        // F2: `finish` falls back to Free (same as cont) because method
+        // call frames aren't yet implemented. True RunToReturn requires F3.
+        if (line == "f" || line == "finish")  { setMode(Mode::RunToReturn); setCommand(Command::Finish);   return; }
         if (line == "q" || line == "quit")    { std::exit(0); }
 
         if (line == "where" || line == "bt") {

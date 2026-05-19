@@ -57,3 +57,22 @@ TEST_CASE("Debugger: where shows pc and instructions; print evaluates", "[debugg
     REQUIRE(text.find("pc:") != std::string::npos);
     REQUIRE(text.find("  3")  != std::string::npos);   // result of 1+2
 }
+
+TEST_CASE("Debugger: single-step halts every instruction until cont", "[debugger][step]") {
+    protoST::Parser P("nil halt. 1 + 2.");
+    protoST::Compiler C; auto bc = C.compileModule(*P.parseModule());
+    protoST::STRuntime rt;
+    rt.debugger().attach();
+    // Step a couple of times then continue
+    std::istringstream in("step\nstep\nstep\ncont\n");
+    std::ostringstream out;
+    rt.debugger().setInputStream(&in);
+    rt.debugger().setOutputStream(&out);
+
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r->asLong(rt.rootCtx()) == 3);
+    // Should have entered the session at least 3 times (the initial halt + 2 steps)
+    size_t count = 0; size_t pos = 0;
+    while ((pos = out.str().find("(stdbg)", pos)) != std::string::npos) { ++count; ++pos; }
+    REQUIRE(count >= 3);
+}

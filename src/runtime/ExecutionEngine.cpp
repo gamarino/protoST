@@ -46,8 +46,31 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
             locals.resize(static_cast<size_t>(slot) + 1, PROTO_NONE);
     };
 
+    // Outer loop: lets us resume after a DebuggerHalt is caught and the
+    // user steps/conts out of the session. Without this wrapper the catch
+    // handler would return early and the remainder of the module would be
+    // skipped.
+    while (true) {
     try {
     while (pc + 1 < bytes.size()) {
+        // F2 single-step support: if the debugger is attached and in a
+        // non-Free mode, enter the session BEFORE each instruction. The
+        // session may flip mode back to Free (e.g. user typed 'c'), in
+        // which case subsequent instructions run at full speed.
+        // Calling enterSession directly (rather than throwing Halt) avoids
+        // the cost of unwinding the C++ stack on every step.
+        auto dbgMode = rt_.debugger().mode();
+        if (rt_.debugger().attached() && dbgMode != DebuggerRuntime::Mode::Free) {
+            DebugFrame frame;
+            frame.module = &m;
+            frame.pc = pc;
+            frame.stack.assign(stack.begin(), stack.end());
+            frame.locals.assign(locals.begin(), locals.end());
+            rt_.debugger().enterSession(rt_, std::move(frame), "step");
+            // Session may have updated mode (e.g. user typed 'c'); fall
+            // through to dispatch the next instruction.
+        }
+
         const Op op = static_cast<Op>(bytes[pc]);
         const uint8_t arg = bytes[pc + 1];
         pc += kInstrSize;
@@ -168,8 +191,16 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
         frame.stack.assign(stack.begin(), stack.end());
         frame.locals.assign(locals.begin(), locals.end());
         rt_.debugger().enterSession(rt_, std::move(frame), h.reason());
-        return PROTO_NONE;
+        // After the session resumes (user typed c/s/n/f), fall back through
+        // the outer while(true) and continue executing from the current pc.
+        // The halt primitive pushes PROTO_NONE as its return value into the
+        // caller's stack via the SEND_UNARY handler, but throwing aborted
+        // that. Push PROTO_NONE now so the operand stack matches what the
+        // compiler expects after a unary send.
+        stack.push_back(PROTO_NONE);
+        continue;
     }
+    } // outer while(true)
 }
 
 } // namespace protoST
