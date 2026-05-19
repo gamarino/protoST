@@ -481,3 +481,32 @@ TEST_CASE("Engine: Future>>thenDo: fires after actor resolves",
     auto* r = rt.runTopLevel(*bc);
     REQUIRE(r->asLong(rt.rootCtx()) == 123);
 }
+
+TEST_CASE("Engine: F6 hero — Counter wrapped as actor, async increments, sync wait", "[engine][actors][hero]") {
+    const char* src =
+        "Object subclass: #Counter instanceVariableNames: 'value'. "
+        "Counter >> initialize value := 0. "
+        "Counter >> increment value := value + 1. "
+        "Counter >> value ^ value. "
+        // Initialize first synchronously (no actor wrapping yet).
+        "c := Counter newChild. "
+        "c initialize. "
+        // Now wrap it as actor.
+        "a := c asActor. "
+        // Async increments via the actor. Each returns a Future (discarded).
+        "a increment. "
+        "a increment. "
+        "a increment. "
+        // Final sync read via wait.
+        "(a value) wait.";
+
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C; auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r->asLong(rt.rootCtx()) == 3);
+}
