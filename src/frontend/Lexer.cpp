@@ -26,9 +26,22 @@ Token Lexer::lexIdentifier() {
            (std::isalnum(static_cast<unsigned char>(source_[pos_])) || source_[pos_] == '_')) {
         advance();
     }
+    // Keyword selector: identifier IMMEDIATELY followed by ':' (no whitespace)
+    if (pos_ < source_.size() && source_[pos_] == ':' &&
+        (pos_ + 1 >= source_.size() || source_[pos_ + 1] != '=')) {
+        advance();   // consume ':'
+        Token t;
+        t.kind = TokenKind::Keyword;
+        t.text = source_.substr(start, pos_ - start);
+        t.line = startLine; t.column = startCol;
+        return t;
+    }
     Token t;
     t.kind = TokenKind::Identifier;
     t.text = source_.substr(start, pos_ - start);
+    if (t.text == "true")  t.kind = TokenKind::True;
+    else if (t.text == "false") t.kind = TokenKind::False;
+    else if (t.text == "nil")   t.kind = TokenKind::Nil;
     t.line = startLine; t.column = startCol;
     return t;
 }

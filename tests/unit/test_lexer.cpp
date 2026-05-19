@@ -63,3 +63,26 @@ TEST_CASE("lexer recognizes binary operators and := and >>", "[lexer]") {
     REQUIRE(L.next().kind == TokenKind::Assign);
     REQUIRE(L.next().kind == TokenKind::GtGt);
 }
+
+TEST_CASE("lexer recognizes keyword selectors", "[lexer]") {
+    Lexer L("at: put: foo bar:baz");
+    auto t1 = L.next();
+    REQUIRE(t1.kind == TokenKind::Keyword);
+    REQUIRE(t1.text == "at:");
+
+    auto t2 = L.next();
+    REQUIRE(t2.kind == TokenKind::Keyword);
+    REQUIRE(t2.text == "put:");
+
+    auto t3 = L.next();
+    REQUIRE(t3.kind == TokenKind::Identifier);
+    REQUIRE(t3.text == "foo");
+
+    auto t4 = L.next();
+    REQUIRE(t4.kind == TokenKind::Keyword);
+    REQUIRE(t4.text == "bar:");
+
+    auto t5 = L.next();
+    REQUIRE(t5.kind == TokenKind::Identifier);
+    REQUIRE(t5.text == "baz");
+}
