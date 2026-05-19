@@ -122,3 +122,15 @@ TEST_CASE("Compiler: block compiles to a sub-module referenced by PUSH_BLOCK", "
     REQUIRE(static_cast<Op>(blk.bytes()[2]) == Op::PUSH_LOCAL);
     REQUIRE(static_cast<Op>(blk.bytes()[4]) == Op::SEND_BINARY);
 }
+
+TEST_CASE("Compiler: F2 hero expression parses and compiles", "[compiler]") {
+    Parser P("(1 to: 100) inject: 0 into: [:a :b | a + b].");
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    Compiler C; auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+    REQUIRE(bc->bytes().size() >= 8);                      // non-trivial program
+    REQUIRE(bc->numBlocks() == 1);                          // the [:a :b| ...] block
+    // ends with RETURN_TOP
+    REQUIRE(static_cast<Op>(bc->bytes()[bc->bytes().size()-2]) == Op::RETURN_TOP);
+}
