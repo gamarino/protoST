@@ -1,0 +1,34 @@
+# Build directories
+build/
+build_*/
+cmake-build-*/
+
+# Local virtual environments (protoST venv layout)
+.venv/
+
+# Compiled artifacts
+*.o
+*.so
+*.a
+*.exe
+*.dylib
+*.dll
+
+# CMake leftovers if a build is run in-tree by mistake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+
+# Bytecode cache
+*.stbc
+
+# Editor / IDE
+.vscode/
+.idea/
+.vs/
+*.swp
+*~
+.DS_Store
