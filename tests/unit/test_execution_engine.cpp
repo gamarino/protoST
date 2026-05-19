@@ -66,3 +66,15 @@ TEST_CASE("Engine: locals round-trip via STORE_LOCAL / PUSH_LOCAL", "[engine]") 
     auto* r = rt.runTopLevel(m);
     REQUIRE(r->asLong(rt.rootCtx()) == 7);
 }
+
+TEST_CASE("Engine: SEND raises on unknown selector", "[engine]") {
+    protoST::STRuntime rt;
+    protoST::BytecodeModule m;
+    m.addInteger(1);
+    m.internSymbol("noSuch");
+    m.emit(protoST::Op::PUSH_CONST, 0);
+    m.emit(protoST::Op::SEND_UNARY, 1);
+    m.emit(protoST::Op::RETURN_TOP, 0);
+
+    REQUIRE_THROWS_WITH(rt.runTopLevel(m), Catch::Matchers::ContainsSubstring("doesNotUnderstand"));
+}

@@ -2,6 +2,7 @@
 #include "BytecodeModule.h"
 #include "Opcodes.h"
 #include "protoST/STRuntime.h"
+#include "protoST/primitives.h"
 #include "protoCore.h"
 
 #include <stdexcept>
@@ -11,7 +12,7 @@
 namespace protoST {
 
 const proto::ProtoObject*
-ExecutionEngine::run(proto::ProtoContext* /*ctx*/,
+ExecutionEngine::run(proto::ProtoContext* ctx,
                      const BytecodeModule& m,
                      const proto::ProtoObject* /*self*/) {
     const auto& bytes = m.bytes();
@@ -74,6 +75,42 @@ ExecutionEngine::run(proto::ProtoContext* /*ctx*/,
                 const proto::ProtoObject* r =
                     stack.empty() ? PROTO_NONE : stack.back();
                 return r;
+            }
+            case Op::SEND_UNARY:
+            case Op::SEND_BINARY:
+            case Op::SEND_KEYWORD: {
+                // pop N args (0 for unary, 1 for binary, count from selector for keyword)
+                int argc = (op == Op::SEND_UNARY)  ? 0
+                         : (op == Op::SEND_BINARY) ? 1
+                         : /* keyword */ 0;
+                const std::string& selStr = m.constSymbol(arg);
+                if (op == Op::SEND_KEYWORD) for (char c : selStr) if (c == ':') ++argc;
+
+                if (static_cast<int>(stack.size()) < argc + 1)
+                    throw std::runtime_error("SEND with insufficient stack");
+                if (argc > 8) throw std::runtime_error("F2 limit: <=8 args per send");
+                const proto::ProtoObject* args[8];
+                for (int i = argc - 1; i >= 0; --i) {
+                    args[i] = stack.back();
+                    stack.pop_back();
+                }
+                const proto::ProtoObject* recv = stack.back(); stack.pop_back();
+
+                auto* selSym = ctx->fromUTF8String(selStr.c_str())->asString(ctx);
+                auto* proto = recv->getFirstParent(ctx);
+                auto* attr  = proto ? proto->getAttribute(ctx, selSym) : nullptr;
+                if (!attr || attr == PROTO_NONE) {
+                    throw std::runtime_error("doesNotUnderstand: " + selStr);
+                }
+                long long marker = attr->asLong(ctx);
+                if (!(marker & (1LL << 62))) {
+                    throw std::runtime_error("non-primitive method in F2 (F3 work)");
+                }
+                int primIdx = static_cast<int>(marker & ((1LL << 62) - 1));
+                auto fn = rt_.registry().at(primIdx);
+                auto* result = fn(rt_, ctx, recv, args, argc);
+                stack.push_back(result ? result : PROTO_NONE);
+                break;
             }
             default:
                 throw std::runtime_error(

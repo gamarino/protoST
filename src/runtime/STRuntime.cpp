@@ -1,16 +1,39 @@
 #include "protoST/STRuntime.h"
+#include "protoST/primitives.h"
 #include "ExecutionEngine.h"
 #include "BytecodeModule.h"
 #include "Bootstrap.h"
 #include "protoCore.h"
 
+#include <vector>
+
 namespace protoST {
+
+struct PrimitiveRegistry::Impl { std::vector<PrimFn> fns; };
+PrimitiveRegistry::PrimitiveRegistry() : impl(std::make_unique<Impl>()) {}
+PrimitiveRegistry::~PrimitiveRegistry() = default;
+int PrimitiveRegistry::registerPrim(PrimFn fn) {
+    impl->fns.push_back(fn);
+    return static_cast<int>(impl->fns.size()) - 1;
+}
+PrimFn PrimitiveRegistry::at(int i) const { return impl->fns.at(i); }
+size_t PrimitiveRegistry::size() const   { return impl->fns.size(); }
+
+void bindPrimitive(STRuntime& rt, const proto::ProtoObject* proto, const char* selector, int idx) {
+    auto* ctx = rt.rootCtx();
+    auto* selStr = ctx->fromUTF8String(selector);                  // create ProtoString
+    auto* sel = selStr->asString(ctx);                              // intern as symbol
+    // Tag bit 62 marks "this is a primitive marker, not a real method object".
+    auto* val = ctx->fromLong(static_cast<long long>(idx) | (1LL << 62));
+    const_cast<proto::ProtoObject*>(proto)->setAttribute(ctx, sel, val);
+}
 
 struct STRuntime::Impl {
     proto::ProtoSpace    space;
     proto::ProtoContext* rootCtx    = nullptr;
     proto::ProtoRootSet* asyncRoots = nullptr;
     Bootstrap            bootstrap;
+    PrimitiveRegistry    registry;
 
     Impl() {
         // protoCore exposes the root context as a public field on ProtoSpace
@@ -35,6 +58,7 @@ proto::ProtoSpace*   STRuntime::space()         const { return &impl_->space; }
 proto::ProtoContext* STRuntime::rootCtx()       const { return impl_->rootCtx; }
 proto::ProtoRootSet* STRuntime::asyncRootSet()  const { return impl_->asyncRoots; }
 const Bootstrap&     STRuntime::bootstrap()     const { return impl_->bootstrap; }
+PrimitiveRegistry&   STRuntime::registry()            { return impl_->registry; }
 
 const proto::ProtoObject*
 STRuntime::materialize(const BytecodeModule& m, size_t i) const {

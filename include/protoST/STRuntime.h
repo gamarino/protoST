@@ -16,6 +16,7 @@ namespace protoST {
 class BytecodeModule;
 class ExecutionEngine;
 struct Bootstrap;
+struct PrimitiveRegistry;
 
 class STRuntime {
 public:
@@ -30,6 +31,9 @@ public:
 
     // Access to the bootstrap prototype set (Object/Number/...).
     const Bootstrap& bootstrap() const;
+
+    // Access to the primitive registry that backs SEND dispatch.
+    PrimitiveRegistry& registry();
 
     // Convert a BytecodeModule constant pool entry to a ProtoObject (lazy materialisation).
     const proto::ProtoObject* materialize(const BytecodeModule& m, size_t constIdx) const;
