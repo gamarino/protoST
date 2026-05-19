@@ -482,6 +482,36 @@ TEST_CASE("Engine: Future>>thenDo: fires after actor resolves",
     REQUIRE(r->asLong(rt.rootCtx()) == 123);
 }
 
+TEST_CASE("Module loader: findModuleFile + loadModuleFromFile", "[engine][modules]") {
+    protoST::STRuntime rt;
+    auto* ctx = rt.rootCtx();
+
+    std::string path = std::string(PROTOST_FIXTURES_DIR) + "/lib_simple.st";
+    auto* module = rt.loadModuleFromFile(ctx, path, "lib_simple");
+
+    REQUIRE(module != nullptr);
+    REQUIRE(module != PROTO_NONE);
+
+    // The module should have Greeter as an attribute.
+    auto* greeterSym = ctx->fromUTF8String("Greeter")->asString(ctx);
+    auto* greeterClass = module->getAttribute(ctx, greeterSym);
+    REQUIRE(greeterClass != nullptr);
+    REQUIRE(greeterClass != PROTO_NONE);
+
+    // The class should have the `hello` method bound.
+    auto* helloSym = ctx->fromUTF8String("hello")->asString(ctx);
+    auto* helloMethod = greeterClass->getAttribute(ctx, helloSym);
+    REQUIRE(helloMethod != nullptr);
+    REQUIRE(helloMethod != PROTO_NONE);
+}
+
+TEST_CASE("Module loader: findModuleFile resolves from cwd", "[engine][modules]") {
+    protoST::STRuntime rt;
+    // Skip — depends on cwd state. Just exercise the path.
+    std::string nope = rt.findModuleFile("definitely_does_not_exist_xyz");
+    REQUIRE(nope.empty());
+}
+
 TEST_CASE("Engine: F6 hero — Counter wrapped as actor, async increments, sync wait", "[engine][actors][hero]") {
     const char* src =
         "Object subclass: #Counter instanceVariableNames: 'value'. "

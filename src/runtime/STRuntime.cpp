@@ -3,10 +3,17 @@
 #include "ExecutionEngine.h"
 #include "BytecodeModule.h"
 #include "Bootstrap.h"
+#include "Venv.h"
 #include "debugger/DebuggerRuntime.h"
+#include "frontend/Parser.h"
+#include "frontend/Compiler.h"
 #include "protoCore.h"
 
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <queue>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
@@ -333,6 +340,122 @@ bool STRuntime::isActor(proto::ProtoContext* ctx,
         ctx->fromUTF8String("__wrapped__")->asString(ctx);
     auto* w = obj->getAttribute(ctx, wrappedKey);
     return (w != nullptr && w != PROTO_NONE);
+}
+
+// F5-M1: Resolve a logical module path to a filesystem path.
+// Search order: cwd, $STPATH (colon-separated), active venv modules dir.
+std::string STRuntime::findModuleFile(const std::string& logicalPath) const {
+    namespace fs = std::filesystem;
+
+    // Ensure .st suffix.
+    std::string name = logicalPath;
+    if (name.size() < 3 || name.substr(name.size() - 3) != ".st") {
+        name += ".st";
+    }
+
+    // 1. Current working directory.
+    {
+        std::error_code ec;
+        fs::path p = fs::current_path(ec) / name;
+        if (!ec && fs::exists(p)) return p.string();
+    }
+
+    // 2. $STPATH (colon-separated list of directories).
+    if (const char* env = std::getenv("STPATH")) {
+        std::string paths = env;
+        size_t start = 0;
+        while (start <= paths.size()) {
+            size_t end = paths.find(':', start);
+            std::string entry = (end == std::string::npos)
+                ? paths.substr(start)
+                : paths.substr(start, end - start);
+            if (!entry.empty()) {
+                fs::path p = fs::path(entry) / name;
+                if (fs::exists(p)) return p.string();
+            }
+            if (end == std::string::npos) break;
+            start = end + 1;
+        }
+    }
+
+    // 3. Active venv's lib/protoST/modules/. Prefer the existing venv
+    // discovery helper (walks parents looking for .venv/stenv.cfg, falls back
+    // to $STENV); also accept a bare $STENV pointing directly at a venv dir.
+    {
+        std::string venv = venvDiscover("");
+        if (venv.empty()) {
+            if (const char* env = std::getenv("STENV")) venv = env;
+        }
+        if (!venv.empty()) {
+            fs::path p = fs::path(venv) / "lib" / "protoST" / "modules" / name;
+            if (fs::exists(p)) return p.string();
+        }
+    }
+
+    return "";
+}
+
+// F5-M1: Read, parse, compile, and execute a module file. Wraps the classes
+// the module declared as attributes of a fresh ProtoObject and returns it.
+const proto::ProtoObject* STRuntime::loadModuleFromFile(
+    proto::ProtoContext* ctx,
+    const std::string& filePath,
+    const std::string& logicalName)
+{
+    namespace fs = std::filesystem;
+    if (!fs::exists(filePath)) {
+        throw std::runtime_error("module file not found: " + filePath);
+    }
+
+    // Read the file.
+    std::ifstream f(filePath, std::ios::binary);
+    if (!f) {
+        throw std::runtime_error("module open failed: " + filePath);
+    }
+    std::stringstream ss; ss << f.rdbuf();
+    std::string src = ss.str();
+
+    // Parse.
+    Parser P(src);
+    auto ast = P.parseModule();
+    if (!P.errors().empty()) {
+        std::string msg = "module parse errors in " + logicalName + ":";
+        for (auto& e : P.errors()) {
+            msg += "\n  " + std::to_string(e.line) + ":"
+                 + std::to_string(e.column) + " " + e.message;
+        }
+        throw std::runtime_error(msg);
+    }
+
+    // Compile.
+    Compiler C;
+    auto bc = C.compileModule(*ast);
+    if (C.hasErrors()) {
+        std::string msg = "module compile errors in " + logicalName + ":";
+        for (auto& s : C.errors()) msg += "\n  " + s;
+        throw std::runtime_error(msg);
+    }
+
+    // Execute the module's top-level (registers classes/methods in globals).
+    runTopLevel(*bc);
+
+    // Build the module wrapper: a fresh mutable child of objectProto whose
+    // attributes name the classes the module declared.
+    auto* moduleObj = const_cast<proto::ProtoObject*>(impl_->bootstrap.objectProto)
+        ->newChild(ctx, /*isMutable=*/true);
+    auto* g = globals();
+
+    for (const auto& [className, info] : C.classes()) {
+        (void)info;  // metadata; only the name is used here.
+        if (className.empty() || className[0] == '_') continue;
+        auto* classSym = ctx->fromUTF8String(className.c_str())->asString(ctx);
+        auto* classObj = g->getAttribute(ctx, classSym);
+        if (classObj && classObj != PROTO_NONE) {
+            moduleObj->setAttribute(ctx, classSym, classObj);
+        }
+    }
+
+    return moduleObj;
 }
 
 } // namespace protoST

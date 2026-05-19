@@ -1,6 +1,7 @@
 #pragma once
 #include <cstddef>
 #include <memory>
+#include <string>
 
 // Forward declarations to avoid dragging protoCore headers into the public include.
 namespace proto {
@@ -64,6 +65,19 @@ public:
     // Cheap actor detection: an object is treated as an actor iff it carries
     // a non-nil __wrapped__ attribute (set by Object>>asActor).
     bool isActor(proto::ProtoContext* ctx, const proto::ProtoObject* obj) const;
+
+    // F5 module system
+    // Resolve a logical module path (e.g. "mylib") to a filesystem path.
+    // Search order: cwd, $STPATH (colon-separated), active venv's
+    // lib/protoST/modules/. The ".st" suffix is auto-appended if missing.
+    // Returns "" if not found.
+    std::string findModuleFile(const std::string& logicalPath) const;
+    // Read, parse, compile, and execute the module at filePath. After running
+    // the module's top-level, wrap the classes it declared (skipping names
+    // starting with '_') as attributes of a freshly allocated module object.
+    // Throws std::runtime_error on parse or compile errors.
+    const proto::ProtoObject* loadModuleFromFile(
+        proto::ProtoContext* ctx, const std::string& filePath, const std::string& logicalName);
 
     inline const char* versionTag() const { return "0.1.0-pre"; }
 
