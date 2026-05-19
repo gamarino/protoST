@@ -162,7 +162,28 @@ void Compiler::analyseClosures(const Node& mod) {
     analysis_.capturedByScope[nullptr] = analysis_.moduleCaptured;
 }
 
+void Compiler::collectClasses(const Node& module) {
+    classes_.clear();
+    if (module.kind != NodeKind::Module) return;
+    for (const auto& topPtr : module.children) {
+        if (!topPtr || topPtr->kind != NodeKind::ClassDecl) continue;
+        const auto& cd = *topPtr;
+        ClassInfo info;
+        info.name = cd.text;
+        // ClassDecl AST shape (see Parser::parseClassDecl):
+        //   stringList[0] = superclass name; stringList[1..] = inst var names.
+        if (!cd.stringList.empty()) info.superclassName = cd.stringList[0];
+        for (size_t i = 1; i < cd.stringList.size(); ++i) {
+            info.instVarNames.push_back(cd.stringList[i]);
+        }
+        classes_[info.name] = std::move(info);
+    }
+}
+
 std::unique_ptr<BytecodeModule> Compiler::compileModule(const Node& mod) {
+    // F4-U2: gather per-class info before emission so MethodDecl emission
+    // (F4-U3+) can resolve instance-variable names to slot indices.
+    collectClasses(mod);
     // Run closure analysis up-front so that emission can decide between
     // slot-based and captured-dict-based variable access.
     analyseClosures(mod);
@@ -193,6 +214,34 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         if (!n.children.empty()) emitExpr(m, *n.children[0]);
         else                     m.emit(Op::PUSH_NIL, 0);
         m.emit(Op::RETURN, 0);
+        return;
+    }
+    if (n.kind == NodeKind::ClassDecl) {
+        // F4-U2: at runtime, materialize the new class by sending #newChild
+        // to the superclass global, then bind it under the class name in
+        // globals. We DUP before STORE_GLOBAL so the value remains on the
+        // stack as this statement's result (matching the Assignment pattern;
+        // the module-level loop will POP it between statements).
+        const std::string& superName =
+            n.stringList.empty() ? std::string("Object") : n.stringList[0];
+        auto superIdx     = m.internSymbol(superName);
+        auto newChildIdx  = m.internSymbol("newChild");
+        auto classNameIdx = m.internSymbol(n.text);
+        if (superIdx > 255 || newChildIdx > 255 || classNameIdx > 255) {
+            error("symbol pool overflow in ClassDecl");
+            m.emit(Op::PUSH_NIL, 0);
+            return;
+        }
+        m.emit(Op::PUSH_GLOBAL,  static_cast<uint8_t>(superIdx));
+        m.emit(Op::SEND_UNARY,   static_cast<uint8_t>(newChildIdx));
+        m.emit(Op::DUP,          0);
+        m.emit(Op::STORE_GLOBAL, static_cast<uint8_t>(classNameIdx));
+        return;
+    }
+    if (n.kind == NodeKind::MethodDecl) {
+        // F4-U3 will implement actual method emission. For now, emit a
+        // placeholder so the surrounding module-level POP doesn't underflow.
+        m.emit(Op::PUSH_NIL, 0);
         return;
     }
     if (n.kind == NodeKind::Assignment) {

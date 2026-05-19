@@ -226,3 +226,31 @@ TEST_CASE("Compiler emit: block-local args do NOT trigger captured path", "[comp
     }
     REQUIRE_FALSE(sawAnyCaptured);
 }
+
+TEST_CASE("Compiler: ClassDecl pre-pass collects ClassInfo", "[compiler][classes]") {
+    Parser P("Object subclass: #Counter instanceVariableNames: 'value step'.");
+    Compiler C; C.compileModule(*P.parseModule());
+    REQUIRE(C.classes().count("Counter") == 1);
+    const auto& info = C.classes().at("Counter");
+    REQUIRE(info.name == "Counter");
+    REQUIRE(info.superclassName == "Object");
+    REQUIRE(info.instVarNames == std::vector<std::string>{"value", "step"});
+}
+
+TEST_CASE("Compiler: ClassDecl emits PUSH_GLOBAL/SEND/STORE_GLOBAL", "[compiler][classes]") {
+    Parser P("Object subclass: #Counter.");
+    Compiler C; auto bc = C.compileModule(*P.parseModule());
+    REQUIRE(!C.hasErrors());
+
+    bool sawPushSuper = false, sawSendNewChild = false, sawStoreClass = false;
+    for (size_t i = 0; i + 1 < bc->bytes().size(); i += 2) {
+        Op op = static_cast<Op>(bc->bytes()[i]);
+        uint8_t arg = bc->bytes()[i+1];
+        if (op == Op::PUSH_GLOBAL  && bc->constSymbol(arg) == "Object")   sawPushSuper = true;
+        if (op == Op::SEND_UNARY   && bc->constSymbol(arg) == "newChild") sawSendNewChild = true;
+        if (op == Op::STORE_GLOBAL && bc->constSymbol(arg) == "Counter")  sawStoreClass = true;
+    }
+    REQUIRE(sawPushSuper);
+    REQUIRE(sawSendNewChild);
+    REQUIRE(sawStoreClass);
+}

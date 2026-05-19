@@ -231,3 +231,27 @@ TEST_CASE("Engine: STORE_GLOBAL + PUSH_GLOBAL roundtrip", "[engine][globals]") {
     REQUIRE(r->asLong(rt.rootCtx()) == 42);
 }
 
+TEST_CASE("Engine: ClassDecl creates class accessible as global", "[engine][classes]") {
+    // After running `Object subclass: #Counter.` the global "Counter" must
+    // exist and be a fresh object distinct from Object (Object's child).
+    protoST::Parser P("Object subclass: #Counter.");
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C; auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    rt.runTopLevel(*bc);
+
+    auto* g = rt.globals();
+    auto* ctx = rt.rootCtx();
+    auto* counterSym = ctx->fromUTF8String("Counter")->asString(ctx);
+    auto* counter = g->getAttribute(ctx, counterSym);
+    REQUIRE(counter != nullptr);
+    REQUIRE(counter != PROTO_NONE);
+
+    auto* objectSym = ctx->fromUTF8String("Object")->asString(ctx);
+    auto* object = g->getAttribute(ctx, objectSym);
+    REQUIRE(counter != object);   // fresh child, not the same object as Object
+}
+

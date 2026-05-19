@@ -25,8 +25,18 @@ public:
         std::unordered_set<std::string> moduleCaptured;
     };
 
+    // F4-U2: per-class metadata gathered by a pre-pass over the module's
+    // top-level forms. Populated by collectClasses(mod) before emission.
+    struct ClassInfo {
+        std::string name;                       // e.g., "Counter"
+        std::string superclassName;             // e.g., "Object"
+        std::vector<std::string> instVarNames;  // e.g., {"value"}
+    };
+
     void analyseClosures(const ast::Node& module);
     const ScopeAnalysis& analysis() const { return analysis_; }
+
+    const std::unordered_map<std::string, ClassInfo>& classes() const { return classes_; }
 
 private:
     struct Scope {
@@ -43,7 +53,11 @@ private:
     std::vector<Scope> scopes_;
     std::vector<std::string> errors_;
     ScopeAnalysis analysis_;
+    // F4-U2: collected by collectClasses() before emission; queried by
+    // downstream passes (e.g., MethodDecl emission) to map inst-var refs.
+    std::unordered_map<std::string, ClassInfo> classes_;
 
+    void   collectClasses(const ast::Node& module);
     void   emitExpr(BytecodeModule& m, const ast::Node& n);
     void   emitStatement(BytecodeModule& m, const ast::Node& n);
     int    declareLocal(const std::string& name);
