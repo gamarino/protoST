@@ -78,9 +78,14 @@ const proto::ProtoObject* prim_Object_installMethod(STRuntime&,
 
 // Import from: 'foo'
 //
-// F5-M3: Resolves 'foo' via the STRuntime module loader (cwd, $STPATH, active
-// venv) and returns the module wrapper produced by loadModule(). The receiver
-// is the Import singleton object itself — only used as a dispatch site.
+// F5 v2-M2: Resolves 'foo' via protoCore's Unified Module Discovery
+// (getImportModule) — which consults SharedModuleCache and walks the registered
+// provider chain (STModuleProvider, installed in M1). The receiver is the
+// Import singleton object itself — only used as a dispatch site.
+//
+// getImportModule returns a wrapper object whose `exports` attribute points to
+// the actual module ProtoObject loaded by STModuleProvider. We unwrap that so
+// Smalltalk code sees the module directly (and can do `m Counter newChild`).
 const proto::ProtoObject* prim_Import_from(STRuntime& rt, proto::ProtoContext* ctx,
                                             const proto::ProtoObject* /*recv*/,
                                             const proto::ProtoObject* const* a, int argc) {
@@ -90,7 +95,17 @@ const proto::ProtoObject* prim_Import_from(STRuntime& rt, proto::ProtoContext* c
     auto* str = arg->asString(ctx);
     if (!str) throw std::runtime_error("Import>>from: arg must be a string");
     std::string logical = str->toStdString(ctx);
-    return rt.loadModule(ctx, logical);
+
+    auto* wrapper = rt.space()->getImportModule(ctx, logical.c_str(), "exports");
+    if (!wrapper || wrapper == PROTO_NONE) {
+        throw std::runtime_error("module not found: " + logical);
+    }
+    // Unwrap: getImportModule returns a wrapper with `exports` attribute
+    // pointing to the module.
+    static const proto::ProtoString* exportsKey =
+        ctx->fromUTF8String("exports")->asString(ctx);
+    auto* mod = wrapper->getAttribute(ctx, exportsKey);
+    return (mod && mod != PROTO_NONE) ? mod : wrapper;
 }
 
 } // anon

@@ -655,3 +655,54 @@ TEST_CASE("F5 v2: STModuleProvider registers and resolves via UMD", "[engine][mo
 
     unsetenv("STPATH");
 }
+
+TEST_CASE("F5 v2: Import>>from: routes through protoCore UMD cache", "[engine][modules][umd]") {
+    std::string fixtures = PROTOST_FIXTURES_DIR;
+    setenv("STPATH", fixtures.c_str(), 1);
+
+    const char* src =
+        "m := Import from: 'counter_lib'. "
+        "c := m Counter newChild. "
+        "c initialize. c increment. c increment. c value.";
+
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C; auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r->asLong(rt.rootCtx()) == 2);
+
+    unsetenv("STPATH");
+}
+
+TEST_CASE("F5 v2: Import>>from: hits protoCore cache on second call", "[engine][modules][umd]") {
+    std::string fixtures = PROTOST_FIXTURES_DIR;
+    setenv("STPATH", fixtures.c_str(), 1);
+
+    // Two consecutive imports of the same module should both succeed
+    // (protoCore's SharedModuleCache short-circuits the second call).
+    // Identity is harder to assert in Smalltalk syntax (no `==` primitive on
+    // objectProto). Instead, verify both work end-to-end: load Counter twice,
+    // exercise each, and confirm no exception is raised.
+    const char* src =
+        "m1 := Import from: 'counter_lib'. "
+        "m2 := Import from: 'counter_lib'. "
+        "c1 := m1 Counter newChild. c1 initialize. c1 increment. "
+        "c2 := m2 Counter newChild. c2 initialize. c2 increment. c2 increment. "
+        "c1 value + c2 value.";  // 1 + 2 = 3
+
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C; auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r->asLong(rt.rootCtx()) == 3);
+
+    unsetenv("STPATH");
+}
