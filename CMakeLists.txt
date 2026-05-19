@@ -41,3 +41,7 @@ add_executable(protost src/main.cpp)
 target_link_libraries(protost PRIVATE ${PROTOCORE_LIBRARY})
 
 enable_testing()
+
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(FindOrFetchCatch2)
+add_subdirectory(tests)
