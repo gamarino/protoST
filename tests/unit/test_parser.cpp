@@ -164,3 +164,42 @@ TEST_CASE("Parser: frozen array literal #(1 2 'a')", "[parser]") {
     REQUIRE(arr->children[0]->kind == NodeKind::IntegerLit);
     REQUIRE(arr->children[2]->kind == NodeKind::StringLit);
 }
+
+TEST_CASE("Parser: unary method", "[parser]") {
+    Parser P("Counter >> increment value := value + 1.");
+    auto m = P.parseModule(); REQUIRE(P.errors().empty());
+    REQUIRE(m->children.size() == 1);
+    auto& md = m->children[0];
+    REQUIRE(md->kind == NodeKind::MethodDecl);
+    REQUIRE(md->text == "Counter");
+    REQUIRE(md->boolFlag == false);
+    REQUIRE(md->stringList[0] == "increment");
+    REQUIRE(md->intValue == 0);
+    REQUIRE(md->children.size() == 1);          // one statement
+    REQUIRE(md->children[0]->kind == NodeKind::Assignment);
+}
+
+TEST_CASE("Parser: keyword method on class side", "[parser]") {
+    Parser P("Counter class >> startingAt: n | c | c := self new. c setValue: n. ^ c.");
+    auto m = P.parseModule(); REQUIRE(P.errors().empty());
+    auto& md = m->children[0];
+    REQUIRE(md->kind == NodeKind::MethodDecl);
+    REQUIRE(md->text == "Counter");
+    REQUIRE(md->boolFlag == true);              // class side
+    REQUIRE(md->stringList[0] == "startingAt:");
+    REQUIRE(md->stringList.at(1) == "n");       // arg
+    REQUIRE(md->stringList.at(2) == "c");       // local
+    REQUIRE(md->intValue == 1);                 // 1 argument
+    REQUIRE(md->children.size() == 3);
+    REQUIRE(md->children[2]->kind == NodeKind::Return);
+}
+
+TEST_CASE("Parser: binary method", "[parser]") {
+    Parser P("Number >> + other ^ self primAdd: other.");
+    auto m = P.parseModule(); REQUIRE(P.errors().empty());
+    auto& md = m->children[0];
+    REQUIRE(md->kind == NodeKind::MethodDecl);
+    REQUIRE(md->stringList[0] == "+");
+    REQUIRE(md->stringList.at(1) == "other");
+    REQUIRE(md->intValue == 1);
+}

@@ -56,11 +56,39 @@ ast::NodePtr Parser::parseModule() {
 }
 
 ast::NodePtr Parser::parseTopForm() {
+    // class/method declarations begin with `Identifier`. Distinguish:
+    //   Identifier 'subclass:' #Identifier ... .                 -> ClassDecl
+    //   Identifier ['class'] '>>' <selector-pattern> body        -> MethodDecl
+    //   else                                                     -> expression statement '.'
+    if (current_.kind == TokenKind::Identifier) {
+        Token classId = current_;
+        Token after = lexer_.peek();
+        if (after.kind == TokenKind::GtGt) {
+            advance(); // consume class id
+            advance(); // consume >>
+            return parseMethodDecl(classId, /*classSide=*/false);
+        }
+        if (after.kind == TokenKind::Identifier && after.text == "class") {
+            // peek one more - need a 2-token lookahead. Pull both tokens into prev.
+            advance(); // class id
+            advance(); // 'class'
+            if (current_.kind == TokenKind::GtGt) {
+                advance(); // >>
+                return parseMethodDecl(classId, /*classSide=*/true);
+            }
+            // not a method decl; bail to expression - rewind impossible, so report error
+            error(current_, "expected '>>' after 'class'");
+            synchronize();
+            return nullptr;
+        }
+        if (after.kind == TokenKind::Keyword && after.text == "subclass:") {
+            advance();
+            return parseClassDecl(classId);
+        }
+    }
     auto stmt = parseStatement();
-    if (!match(TokenKind::Period)) {
-        // implicit period at EOF is allowed
-        if (current_.kind != TokenKind::EndOfFile)
-            error(current_, "expected '.' after top-level expression");
+    if (!match(TokenKind::Period) && current_.kind != TokenKind::EndOfFile) {
+        error(current_, "expected '.' after top-level expression");
     }
     return stmt;
 }
@@ -312,9 +340,77 @@ ast::NodePtr Parser::parseBlock() {
     return blk;
 }
 
+ast::NodePtr Parser::parseMethodDecl(Token classIdent, bool classSide) {
+    auto md = ast::makeNode(ast::NodeKind::MethodDecl, classIdent.line, classIdent.column);
+    md->text = classIdent.text;
+    md->boolFlag = classSide;
+
+    std::string selector;
+    int nArgs = 0;
+
+    if (current_.kind == TokenKind::Identifier) {
+        // unary
+        selector = current_.text;
+        advance();
+    } else if (current_.kind == TokenKind::BinaryOp) {
+        selector = current_.text;
+        advance();
+        if (current_.kind != TokenKind::Identifier) {
+            error(current_, "expected argument name after binary selector");
+        } else {
+            md->stringList.push_back(current_.text);
+            advance();
+            ++nArgs;
+        }
+    } else if (current_.kind == TokenKind::Keyword) {
+        while (current_.kind == TokenKind::Keyword) {
+            selector += current_.text;
+            advance();
+            if (current_.kind != TokenKind::Identifier) {
+                error(current_, "expected argument name after keyword");
+                break;
+            }
+            md->stringList.push_back(current_.text);
+            advance();
+            ++nArgs;
+        }
+    } else {
+        error(current_, "expected method selector");
+    }
+
+    // selector occupies index 0; shift arguments to start at index 1
+    md->stringList.insert(md->stringList.begin(), selector);
+    md->intValue = nArgs;
+
+    // optional locals
+    if (current_.kind == TokenKind::Pipe) {
+        advance();
+        while (current_.kind == TokenKind::Identifier) {
+            md->stringList.push_back(current_.text);
+            advance();
+        }
+        consume(TokenKind::Pipe, "expected '|' to close method locals");
+    }
+
+    // body: statements until we see a token that can only start a top-level form
+    // (another Identifier followed by '>>' / 'class' / 'subclass:', or EOF).
+    while (current_.kind != TokenKind::EndOfFile) {
+        // stop at the start of another method/class decl
+        if (current_.kind == TokenKind::Identifier) {
+            Token p = lexer_.peek();
+            if (p.kind == TokenKind::GtGt) break;
+            if (p.kind == TokenKind::Identifier && p.text == "class") break;
+            if (p.kind == TokenKind::Keyword && p.text == "subclass:") break;
+        }
+        auto stmt = parseStatement();
+        if (stmt) md->children.push_back(std::move(stmt));
+        if (!match(TokenKind::Period)) break;
+    }
+    return md;
+}
+
 // Stubs that subsequent tasks fill in
 ast::NodePtr Parser::parseAssignmentRHS(ast::NodePtr) { return nullptr; }
 ast::NodePtr Parser::parseClassDecl(Token)         { return nullptr; }
-ast::NodePtr Parser::parseMethodDecl(Token, bool)  { return nullptr; }
 
 } // namespace protoST
