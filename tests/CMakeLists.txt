@@ -9,4 +9,8 @@ target_link_libraries(protost_unit_tests PRIVATE
     Catch2::Catch2WithMain
     ${PROTOCORE_LIBRARY}
 )
+target_sources(protost_unit_tests PRIVATE
+    unit/test_lexer.cpp
+    ${CMAKE_SOURCE_DIR}/src/frontend/Lexer.cpp
+)
 catch_discover_tests(protost_unit_tests)
