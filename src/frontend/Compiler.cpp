@@ -19,6 +19,13 @@ struct ScopeWalker {
     std::unordered_set<std::string> declared;
     std::unordered_set<std::string> directRefs;
     std::unordered_set<std::string> innerNeeds;
+    // True if this scope is a Block. In Smalltalk a block does NOT introduce
+    // new bindings through assignment — only through its argument list and
+    // its `| ... |` temps. So inside a block, the LHS of `:=` is a *reference*
+    // to a name owned by some enclosing scope, not a declaration. At module
+    // and method scope, by contrast, first-seen assignment is the declaration
+    // site (preserves pre-F3-C5 semantics for top-level temps).
+    bool isBlock = false;
 };
 
 // Forward declarations.
@@ -72,9 +79,17 @@ void walkNode(const Node& n, ScopeWalker& cur,
             return;
 
         case NodeKind::Assignment: {
-            // The LHS name is declared in this scope; the RHS expression
-            // (children[0]) is walked normally.
-            if (!n.text.empty()) cur.declared.insert(n.text);
+            // The LHS is treated differently depending on scope kind:
+            //   * Module / method scope: assignment IS the declaration site
+            //     (Smalltalk doesn't require a `|...|` pipe at module level).
+            //   * Block scope: an assignment is *not* a declaration — it
+            //     refers to a name owned by some enclosing scope. We record
+            //     it as a direct reference so it bubbles up as a free var
+            //     and lands in an outer scope's captured dict (F3-C5).
+            if (!n.text.empty()) {
+                if (cur.isBlock) cur.directRefs.insert(n.text);
+                else             cur.declared.insert(n.text);
+            }
             if (!n.children.empty()) walkNode(*n.children[0], cur, out, nullptr);
             return;
         }
@@ -82,6 +97,7 @@ void walkNode(const Node& n, ScopeWalker& cur,
         case NodeKind::Block: {
             // Open a fresh scope for the block.
             ScopeWalker blockScope;
+            blockScope.isBlock = true;
             // n.stringList holds: nArgs args followed by locals.
             for (const auto& name : n.stringList) {
                 blockScope.declared.insert(name);

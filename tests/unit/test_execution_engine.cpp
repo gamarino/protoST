@@ -155,3 +155,21 @@ TEST_CASE("Engine: F2 hero — closed-form sum 1..100 returns 5050", "[engine][h
     REQUIRE(r->asLong(rt.rootCtx()) == 5050);
 }
 
+TEST_CASE("Engine: block captures outer mutable state via shared dict", "[engine][closures]") {
+    // Top-level declares i := 0. The inner block writes i := 42.
+    // After the block is invoked (via `value`), the top-level should see i == 42.
+    const char* src =
+        "i := 0. "
+        "[ i := 42 ] value. "
+        "i.";
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C; auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r->asLong(rt.rootCtx()) == 42);
+}
+

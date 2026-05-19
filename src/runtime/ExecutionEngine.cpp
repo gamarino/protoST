@@ -138,9 +138,16 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
                 auto* block = blkProto->newChild(ctx, /*isMutable=*/true);
                 static const proto::ProtoString* bcKey =
                     ctx->fromUTF8String("__bc_ptr__")->asString(ctx);
+                static const proto::ProtoString* capKey =
+                    ctx->fromUTF8String("__captured__")->asString(ctx);
                 auto* bcPtrObj = ctx->fromLong(
                     reinterpret_cast<long long>(&m.block(arg)));
                 block->setAttribute(ctx, bcKey, bcPtrObj);
+                // F3-C5: stash the current frame's captured dict so the block can
+                // resolve free variables back to the outer scope at invocation time.
+                block->setAttribute(
+                    ctx, capKey,
+                    captured ? captured : PROTO_NONE);
                 stack.push_back(block);
                 break;
             }
