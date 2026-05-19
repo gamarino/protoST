@@ -37,6 +37,9 @@ struct Bootstrap {
     const proto::ProtoObject* stringProto        = nullptr;
     const proto::ProtoObject* symbolProto        = nullptr;
     const proto::ProtoObject* blockProto         = nullptr;
+    // F6: actor model — mutable so methods can later be bound on them.
+    const proto::ProtoObject* actorProto         = nullptr;
+    const proto::ProtoObject* futureProto        = nullptr;
     const proto::ProtoObject* nilProto           = nullptr;
 };
 

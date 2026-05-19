@@ -28,6 +28,10 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     out.blockProto        = out.objectProto->newChild(ctx, /*isMutable=*/true);
     out.nilProto          = out.objectProto->newChild(ctx, /*isMutable=*/true);
 
+    // F6 actor + future prototypes — mutable so methods can be bound.
+    out.actorProto        = const_cast<proto::ProtoObject*>(out.objectProto)->newChild(ctx, /*isMutable=*/true);
+    out.futureProto       = const_cast<proto::ProtoObject*>(out.objectProto)->newChild(ctx, /*isMutable=*/true);
+
     // Bind protoCore primitive slots so values produced by fromLong/fromDouble/etc.
     // walk up through our Smalltalk prototypes.  This mirrors protoJS's
     // NumberPrototype.cpp pattern (space->smallIntegerPrototype = const_cast<...>).

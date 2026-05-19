@@ -62,6 +62,14 @@ struct STRuntime::Impl {
             bootstrap.objectProto->newChild(rootCtx, /*isMutable=*/true));
         auto* objKey = rootCtx->fromUTF8String("Object")->asString(rootCtx);
         globals->setAttribute(rootCtx, objKey, bootstrap.objectProto);
+
+        // F6: register Actor and Future in globals so user code can refer to
+        // them via PUSH_GLOBAL (e.g. `Actor subclass: ...`, `Future new`).
+        auto* actorKey = rootCtx->fromUTF8String("Actor")->asString(rootCtx);
+        globals->setAttribute(rootCtx, actorKey, bootstrap.actorProto);
+
+        auto* futureKey = rootCtx->fromUTF8String("Future")->asString(rootCtx);
+        globals->setAttribute(rootCtx, futureKey, bootstrap.futureProto);
     }
 
     ~Impl() {

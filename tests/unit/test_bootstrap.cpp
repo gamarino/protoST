@@ -34,3 +34,22 @@ TEST_CASE("Bootstrap binds protoCore prototype slots", "[bootstrap]") {
     REQUIRE(sp->stringPrototype       == b.stringProto);
     REQUIRE(sp->booleanPrototype      == b.booleanProto);
 }
+
+TEST_CASE("Bootstrap: actorProto and futureProto exist and are registered as globals", "[bootstrap][f6]") {
+    protoST::STRuntime rt;
+    auto* g = rt.globals();
+    REQUIRE(g != nullptr);
+    auto* ctx = rt.rootCtx();
+    auto* aKey = ctx->fromUTF8String("Actor")->asString(ctx);
+    auto* fKey = ctx->fromUTF8String("Future")->asString(ctx);
+    auto* actorVal  = g->getAttribute(ctx, aKey);
+    auto* futureVal = g->getAttribute(ctx, fKey);
+    REQUIRE(actorVal  != nullptr);
+    REQUIRE(actorVal  != PROTO_NONE);
+    REQUIRE(futureVal != nullptr);
+    REQUIRE(futureVal != PROTO_NONE);
+    REQUIRE(actorVal != futureVal);    // Different prototypes
+    // Bootstrap accessor should also expose them:
+    REQUIRE(rt.bootstrap().actorProto  == actorVal);
+    REQUIRE(rt.bootstrap().futureProto == futureVal);
+}
