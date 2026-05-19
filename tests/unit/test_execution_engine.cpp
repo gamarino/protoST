@@ -413,3 +413,41 @@ TEST_CASE("Engine: actor SEND returns a pending Future + drainOne resolves it",
     REQUIRE(fut->getAttribute(ctx, stateKey)->asLong(ctx) == 1);  // resolved
     REQUIRE(fut->getAttribute(ctx, valueKey)->asLong(ctx) == 123);
 }
+
+TEST_CASE("Engine: Future wait drains queue and returns resolved value",
+          "[engine][actors][future]") {
+    // F6-A5: end-to-end actor-send-wait. `wait` should drain the scheduler
+    // until the future settles, then return the resolved value (123).
+    const char* src =
+        "Object subclass: #Box. "
+        "Box >> add: x with: y ^ x + y. "
+        "(Box newChild asActor add: 100 with: 23) wait.";
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C; auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r->asLong(rt.rootCtx()) == 123);
+}
+
+TEST_CASE("Engine: Future wait raises on rejection",
+          "[engine][actors][future]") {
+    // F6-A5: sending a selector the wrapped object doesn't understand causes
+    // the scheduler to reject the future. `wait` must then surface the
+    // rejection as a runtime_error carrying "Future rejected:" in its message.
+    const char* src =
+        "Object subclass: #Empty. "
+        "(Empty newChild asActor noSuchMethod) wait.";
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C; auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    REQUIRE_THROWS_WITH(rt.runTopLevel(*bc),
+                        Catch::Matchers::ContainsSubstring("Future rejected"));
+}

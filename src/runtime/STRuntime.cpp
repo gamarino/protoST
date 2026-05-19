@@ -18,6 +18,7 @@ namespace protoST { void installStringPrimitives(STRuntime& rt); }
 namespace protoST { void installBlockPrimitives(STRuntime& rt); }
 namespace protoST { void installDebuggerPrimitives(STRuntime& rt); }
 namespace protoST { void installObjectPrimitives(STRuntime& rt); }
+namespace protoST { void installFuturePrimitives(STRuntime& rt); }
 
 namespace protoST {
 
@@ -95,6 +96,7 @@ STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
     installBlockPrimitives(*this);
     installDebuggerPrimitives(*this);
     installObjectPrimitives(*this);
+    installFuturePrimitives(*this);
 }
 STRuntime::~STRuntime() = default;
 
