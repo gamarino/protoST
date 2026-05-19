@@ -39,3 +39,30 @@ TEST_CASE("ExecutionEngine: empty bytestream returns nil", "[engine]") {
     protoST::BytecodeModule m;
     REQUIRE(rt.runTopLevel(m) == PROTO_NONE);
 }
+
+TEST_CASE("Engine: PUSH_CONST returns the materialised integer", "[engine]") {
+    protoST::STRuntime rt;
+    protoST::BytecodeModule m;
+    m.addInteger(42);
+    m.emit(protoST::Op::PUSH_CONST, 0);
+    m.emit(protoST::Op::RETURN_TOP, 0);
+
+    auto* r = rt.runTopLevel(m);
+    auto* ctx = rt.rootCtx();
+    REQUIRE(r->asLong(ctx) == 42);   // protoCore's ProtoObject::asLong
+}
+
+TEST_CASE("Engine: locals round-trip via STORE_LOCAL / PUSH_LOCAL", "[engine]") {
+    protoST::STRuntime rt;
+    protoST::BytecodeModule m;
+    m.addInteger(7);
+    m.emit(protoST::Op::PUSH_CONST,  0);   // 7
+    m.emit(protoST::Op::DUP,         0);
+    m.emit(protoST::Op::STORE_LOCAL, 0);   // x := 7 (leaves 7 on stack)
+    m.emit(protoST::Op::POP,         0);
+    m.emit(protoST::Op::PUSH_LOCAL,  0);   // x
+    m.emit(protoST::Op::RETURN_TOP,  0);
+
+    auto* r = rt.runTopLevel(m);
+    REQUIRE(r->asLong(rt.rootCtx()) == 7);
+}

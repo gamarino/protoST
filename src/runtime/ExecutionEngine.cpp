@@ -22,11 +22,19 @@ ExecutionEngine::run(proto::ProtoContext* /*ctx*/,
     std::vector<const proto::ProtoObject*> stack;
     stack.reserve(64);
 
+    // F2: per-method locals as a small std::vector. Replaced with
+    // ProtoSparseList in Task 50 when actors arrive (out of scope for F1+F2).
+    std::vector<const proto::ProtoObject*> locals;
+    locals.reserve(16);
+
+    auto ensureLocal = [&](uint8_t slot) {
+        if (slot >= locals.size())
+            locals.resize(static_cast<size_t>(slot) + 1, PROTO_NONE);
+    };
+
     while (pc + 1 < bytes.size()) {
         const Op op = static_cast<Op>(bytes[pc]);
-        // arg is decoded here for future opcodes; the F2 scaffold ignores it
-        // for the implemented opcodes, but we keep pc advancing by kInstrSize.
-        (void) bytes[pc + 1];
+        const uint8_t arg = bytes[pc + 1];
         pc += kInstrSize;
 
         switch (op) {
@@ -41,6 +49,27 @@ ExecutionEngine::run(proto::ProtoContext* /*ctx*/,
             case Op::PUSH_FALSE:
                 stack.push_back(PROTO_FALSE);
                 break;
+            case Op::PUSH_CONST:
+                stack.push_back(rt_.materialize(m, arg));
+                break;
+            case Op::DUP:
+                stack.push_back(stack.back());
+                break;
+            case Op::POP:
+                stack.pop_back();
+                break;
+            case Op::PUSH_LOCAL:
+                ensureLocal(arg);
+                stack.push_back(locals[arg]);
+                break;
+            case Op::STORE_LOCAL: {
+                ensureLocal(arg);
+                if (stack.empty())
+                    throw std::runtime_error("STORE_LOCAL with empty stack");
+                locals[arg] = stack.back();
+                stack.pop_back();
+                break;
+            }
             case Op::RETURN_TOP: {
                 const proto::ProtoObject* r =
                     stack.empty() ? PROTO_NONE : stack.back();
