@@ -42,3 +42,25 @@ TEST_CASE("Compiler: nil/true/false push the dedicated opcodes", "[compiler]") {
     REQUIRE(static_cast<Op>(compile("true.")->bytes()[0])  == Op::PUSH_TRUE);
     REQUIRE(static_cast<Op>(compile("false.")->bytes()[0]) == Op::PUSH_FALSE);
 }
+
+TEST_CASE("Compiler: assignment creates slot and emits STORE_LOCAL", "[compiler]") {
+    Parser P("x := 42. x.");
+    Compiler C; auto bc = C.compileModule(*P.parseModule());
+    REQUIRE(!C.hasErrors());
+    // Sequence (STORE_LOCAL pops; DUP keeps assignment-as-expression value on stack):
+    //   PUSH_CONST 0   (42)
+    //   DUP
+    //   STORE_LOCAL 0  (x)
+    //   POP            (top-level statement separator)
+    //   PUSH_LOCAL 0
+    //   RETURN_TOP
+    REQUIRE(static_cast<Op>(bc->bytes()[0]) == Op::PUSH_CONST);
+    REQUIRE(bc->bytes()[1] == 0);
+    REQUIRE(static_cast<Op>(bc->bytes()[2]) == Op::DUP);
+    REQUIRE(static_cast<Op>(bc->bytes()[4]) == Op::STORE_LOCAL);
+    REQUIRE(bc->bytes()[5] == 0);
+    REQUIRE(static_cast<Op>(bc->bytes()[6]) == Op::POP);
+    REQUIRE(static_cast<Op>(bc->bytes()[8]) == Op::PUSH_LOCAL);
+    REQUIRE(bc->bytes()[9] == 0);
+    REQUIRE(static_cast<Op>(bc->bytes()[10]) == Op::RETURN_TOP);
+}

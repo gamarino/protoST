@@ -27,6 +27,16 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         m.emit(Op::RETURN, 0);
         return;
     }
+    if (n.kind == NodeKind::Assignment) {
+        // Statement-level assignment: declare slot, evaluate RHS, DUP so STORE_LOCAL
+        // (which pops) leaves the assigned value on the stack for the top-level POP
+        // separator (or RETURN_TOP, when it is the last statement).
+        int slot = declareLocal(n.text);
+        emitExpr(m, *n.children[0]);
+        m.emit(Op::DUP, 0);
+        m.emit(Op::STORE_LOCAL, static_cast<uint8_t>(slot));
+        return;
+    }
     emitExpr(m, n);
 }
 
@@ -67,6 +77,26 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
         case NodeKind::NilLit:   m.emit(Op::PUSH_NIL, 0); return;
         case NodeKind::Self:     m.emit(Op::PUSH_SELF, 0); return;
         case NodeKind::Super:    m.emit(Op::PUSH_SUPER, 0); return;
+        case NodeKind::Identifier: {
+            int slot = resolveLocal(n.text);
+            if (slot < 0) {
+                error("unknown identifier '" + n.text + "'");
+                m.emit(Op::PUSH_NIL, 0);
+                return;
+            }
+            m.emit(Op::PUSH_LOCAL, static_cast<uint8_t>(slot));
+            return;
+        }
+        case NodeKind::Assignment: {
+            // Expression-position assignment: declare slot, evaluate RHS, then DUP so
+            // STORE_LOCAL (which pops) leaves the assigned value on the stack as the
+            // expression's result.
+            int slot = declareLocal(n.text);
+            emitExpr(m, *n.children[0]);
+            m.emit(Op::DUP, 0);
+            m.emit(Op::STORE_LOCAL, static_cast<uint8_t>(slot));
+            return;
+        }
         default:
             error("expression kind not yet supported");
             m.emit(Op::PUSH_NIL, 0);
