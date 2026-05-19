@@ -134,3 +134,33 @@ TEST_CASE("Compiler: F2 hero expression parses and compiles", "[compiler]") {
     // ends with RETURN_TOP
     REQUIRE(static_cast<Op>(bc->bytes()[bc->bytes().size()-2]) == Op::RETURN_TOP);
 }
+
+TEST_CASE("Compiler analysis: simple module-level capture", "[compiler][closures]") {
+    Parser P("sum := 0. i := 1. [ i <= 100 ].");
+    Compiler C; C.analyseClosures(*P.parseModule());
+    const auto& a = C.analysis();
+    // 'i' is declared at module level AND used in the inner block -> captured.
+    // 'sum' is declared at module level but NOT used in any inner block -> NOT captured.
+    REQUIRE(a.moduleCaptured.count("i") == 1);
+    REQUIRE(a.moduleCaptured.count("sum") == 0);
+}
+
+TEST_CASE("Compiler analysis: no inner blocks -> nothing captured", "[compiler][closures]") {
+    Parser P("x := 1. y := 2.");
+    Compiler C; C.analyseClosures(*P.parseModule());
+    REQUIRE(C.analysis().moduleCaptured.empty());
+}
+
+TEST_CASE("Compiler analysis: block-local args are not captured (they are block-private)", "[compiler][closures]") {
+    Parser P("[ :a :b | a + b ].");
+    Compiler C; C.analyseClosures(*P.parseModule());
+    // 'a' and 'b' are block-local args, not module-level.
+    REQUIRE(C.analysis().moduleCaptured.empty());
+}
+
+TEST_CASE("Compiler analysis: nested blocks bubble free vars up", "[compiler][closures]") {
+    // Inner block uses 'x' which is declared at module level — through a nested block.
+    Parser P("x := 0. [ [ x ] ].");
+    Compiler C; C.analyseClosures(*P.parseModule());
+    REQUIRE(C.analysis().moduleCaptured.count("x") == 1);
+}

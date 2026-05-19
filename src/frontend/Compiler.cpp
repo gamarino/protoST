@@ -3,6 +3,149 @@
 namespace protoST {
 using namespace ast;
 
+namespace {
+
+// One walker per scope (module, method, or block). Accumulates:
+//   - declared: names introduced in THIS scope (module-level assignments,
+//               method args/locals, block args/locals)
+//   - directRefs: identifier references that occur directly in this scope's
+//                 statements (not recursing into nested blocks)
+//   - innerNeeds: union of free variables (referencedHere - declaredThere) of
+//                 each immediately-nested Block. These are the names inner
+//                 blocks expect to find in some enclosing scope. The subset
+//                 of declared ∩ innerNeeds is what this scope must keep in
+//                 its captured dict.
+struct ScopeWalker {
+    std::unordered_set<std::string> declared;
+    std::unordered_set<std::string> directRefs;
+    std::unordered_set<std::string> innerNeeds;
+};
+
+// Forward declarations.
+void walkNode(const Node& n, ScopeWalker& cur,
+              Compiler::ScopeAnalysis& out, const Node* scopeKey);
+void walkBlockBody(const Node& blockNode, ScopeWalker& blockScope,
+                   Compiler::ScopeAnalysis& out);
+
+// Compute the free variables a scope exposes to its parent:
+//   (directRefs ∪ innerNeeds) − declared.
+std::unordered_set<std::string> freeVarsOf(const ScopeWalker& sw) {
+    std::unordered_set<std::string> out;
+    out.reserve(sw.directRefs.size() + sw.innerNeeds.size());
+    for (const auto& r : sw.directRefs) {
+        if (sw.declared.count(r) == 0) out.insert(r);
+    }
+    for (const auto& r : sw.innerNeeds) {
+        if (sw.declared.count(r) == 0) out.insert(r);
+    }
+    return out;
+}
+
+// Compute the captured set of a scope:
+//   declared ∩ innerNeeds. These are this scope's bindings that some inner
+//   block referenced and that therefore must live in the captured dict.
+std::unordered_set<std::string> capturedOf(const ScopeWalker& sw) {
+    std::unordered_set<std::string> out;
+    for (const auto& n : sw.declared) {
+        if (sw.innerNeeds.count(n) != 0) out.insert(n);
+    }
+    return out;
+}
+
+// Walk a single AST node, updating the current scope walker. When a nested
+// Block is encountered, a fresh ScopeWalker is opened, the block body is
+// processed, and the block's free vars are added to the parent's innerNeeds.
+// MethodDecl is treated as a scope boundary as well — inner blocks of a
+// method capture from the method's scope, not from the module's.
+void walkNode(const Node& n, ScopeWalker& cur,
+              Compiler::ScopeAnalysis& out, const Node* /*scopeKey*/) {
+    switch (n.kind) {
+        case NodeKind::Identifier:
+            // Self/Super/ThisContext are separate NodeKinds and never reach here.
+            if (!n.text.empty()) cur.directRefs.insert(n.text);
+            return;
+
+        case NodeKind::Self:
+        case NodeKind::Super:
+        case NodeKind::ThisContext:
+            // Pseudo-variables; not regular identifier references.
+            return;
+
+        case NodeKind::Assignment: {
+            // The LHS name is declared in this scope; the RHS expression
+            // (children[0]) is walked normally.
+            if (!n.text.empty()) cur.declared.insert(n.text);
+            if (!n.children.empty()) walkNode(*n.children[0], cur, out, nullptr);
+            return;
+        }
+
+        case NodeKind::Block: {
+            // Open a fresh scope for the block.
+            ScopeWalker blockScope;
+            // n.stringList holds: nArgs args followed by locals.
+            for (const auto& name : n.stringList) {
+                blockScope.declared.insert(name);
+            }
+            walkBlockBody(n, blockScope, out);
+            // Record this block's captured set under its node pointer.
+            out.capturedByScope[&n] = capturedOf(blockScope);
+            // Bubble the block's free vars up to the enclosing scope's innerNeeds.
+            auto freeVars = freeVarsOf(blockScope);
+            for (const auto& f : freeVars) cur.innerNeeds.insert(f);
+            return;
+        }
+
+        case NodeKind::MethodDecl: {
+            // A method is a scope boundary; treat like a block for analysis
+            // purposes, but it does NOT bubble free vars up to the module.
+            // n.stringList[0] = selector (skip); the rest are args+locals.
+            ScopeWalker methodScope;
+            for (size_t i = 1; i < n.stringList.size(); ++i) {
+                methodScope.declared.insert(n.stringList[i]);
+            }
+            for (const auto& child : n.children) {
+                walkNode(*child, methodScope, out, &n);
+            }
+            out.capturedByScope[&n] = capturedOf(methodScope);
+            // Intentionally do not propagate to cur — method bodies aren't
+            // executed inline at module scope.
+            return;
+        }
+
+        default:
+            // Generic compound node — recurse into children. Also walk any
+            // stringList? No: stringList is structural (selector, var names),
+            // not expressions, so children alone are correct here.
+            for (const auto& child : n.children) {
+                if (child) walkNode(*child, cur, out, nullptr);
+            }
+            return;
+    }
+}
+
+void walkBlockBody(const Node& blockNode, ScopeWalker& blockScope,
+                   Compiler::ScopeAnalysis& out) {
+    for (const auto& child : blockNode.children) {
+        if (child) walkNode(*child, blockScope, out, &blockNode);
+    }
+}
+
+} // namespace
+
+void Compiler::analyseClosures(const Node& mod) {
+    analysis_ = ScopeAnalysis{};
+    ScopeWalker moduleScope;
+    // Module-level: walk every statement under the module node.
+    for (const auto& child : mod.children) {
+        if (child) walkNode(*child, moduleScope, analysis_, nullptr);
+    }
+    analysis_.moduleCaptured = capturedOf(moduleScope);
+    // Also expose the module-level captured set under the nullptr key
+    // (matches the documented contract on ScopeAnalysis::capturedByScope
+    // for the module scope).
+    analysis_.capturedByScope[nullptr] = analysis_.moduleCaptured;
+}
+
 std::unique_ptr<BytecodeModule> Compiler::compileModule(const Node& mod) {
     auto bc = std::make_unique<BytecodeModule>();
     scopes_.clear();
