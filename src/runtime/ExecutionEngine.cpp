@@ -2,6 +2,7 @@
 #include "BytecodeModule.h"
 #include "Bootstrap.h"
 #include "Opcodes.h"
+#include "debugger/DebuggerRuntime.h"
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
 #include "protoCore.h"
@@ -45,6 +46,7 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
             locals.resize(static_cast<size_t>(slot) + 1, PROTO_NONE);
     };
 
+    try {
     while (pc + 1 < bytes.size()) {
         const Op op = static_cast<Op>(bytes[pc]);
         const uint8_t arg = bytes[pc + 1];
@@ -159,6 +161,15 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
         }
     }
     return PROTO_NONE;
+    } catch (DebuggerHalt& h) {
+        DebugFrame frame;
+        frame.module = &m;
+        frame.pc = pc;
+        frame.stack.assign(stack.begin(), stack.end());
+        frame.locals.assign(locals.begin(), locals.end());
+        rt_.debugger().enterSession(rt_, std::move(frame), h.reason());
+        return PROTO_NONE;
+    }
 }
 
 } // namespace protoST

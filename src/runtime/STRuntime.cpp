@@ -3,6 +3,7 @@
 #include "ExecutionEngine.h"
 #include "BytecodeModule.h"
 #include "Bootstrap.h"
+#include "debugger/DebuggerRuntime.h"
 #include "protoCore.h"
 
 #include <cstring>
@@ -14,6 +15,7 @@ namespace protoST { void installIntPrimitives(STRuntime& rt); }
 namespace protoST { void installBoolPrimitives(STRuntime& rt); }
 namespace protoST { void installStringPrimitives(STRuntime& rt); }
 namespace protoST { void installBlockPrimitives(STRuntime& rt); }
+namespace protoST { void installDebuggerPrimitives(STRuntime& rt); }
 
 namespace protoST {
 
@@ -49,6 +51,7 @@ struct STRuntime::Impl {
     proto::ProtoRootSet* asyncRoots = nullptr;
     Bootstrap            bootstrap;
     PrimitiveRegistry    registry;
+    DebuggerRuntime      debugger;
 
     Impl() {
         std::memset(spaceStorage, 0, sizeof(spaceStorage));
@@ -77,6 +80,7 @@ STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
     installBoolPrimitives(*this);
     installStringPrimitives(*this);
     installBlockPrimitives(*this);
+    installDebuggerPrimitives(*this);
 }
 STRuntime::~STRuntime() = default;
 
@@ -85,6 +89,7 @@ proto::ProtoContext* STRuntime::rootCtx()       const { return impl_->rootCtx; }
 proto::ProtoRootSet* STRuntime::asyncRootSet()  const { return impl_->asyncRoots; }
 const Bootstrap&     STRuntime::bootstrap()     const { return impl_->bootstrap; }
 PrimitiveRegistry&   STRuntime::registry()            { return impl_->registry; }
+DebuggerRuntime&     STRuntime::debugger()            { return impl_->debugger; }
 
 const proto::ProtoObject*
 STRuntime::materialize(const BytecodeModule& m, size_t i) const {

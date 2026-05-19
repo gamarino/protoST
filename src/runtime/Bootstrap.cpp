@@ -4,8 +4,13 @@
 namespace protoST {
 
 void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootstrap& out) {
-    // Root of the protoST class tree is protoCore's objectPrototype.
-    out.objectProto       = sp.objectPrototype;
+    // Root of the protoST class tree is a *mutable* child of protoCore's
+    // objectPrototype.  Using a mutable proxy is required so that
+    // `bindPrimitive` (which calls `setAttribute` and discards the result)
+    // installs methods in place rather than returning a fresh COW copy that
+    // the bootstrap pointer would not see — the latter would silently lose
+    // every Object>>method binding (e.g. Object>>halt, Object>>printNl).
+    out.objectProto       = sp.objectPrototype->newChild(ctx, /*isMutable=*/true);
 
     // Number tree.  Prototypes are *mutable* so that `setAttribute` (used by
     // bindPrimitive) installs methods in place; otherwise immutable
@@ -36,6 +41,10 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     sp.doublePrototype       = const_cast<proto::ProtoObject*>(out.floatProto);
     sp.stringPrototype       = const_cast<proto::ProtoObject*>(out.stringProto);
     sp.booleanPrototype      = const_cast<proto::ProtoObject*>(out.booleanProto);
+    // Route nil (PROTO_NONE) through our nilProto so that selectors defined
+    // on objectProto (e.g. Object>>halt, Object>>printNl) are reachable from
+    // the nil receiver. nilProto's parent is objectProto so the walk succeeds.
+    sp.nonePrototype         = const_cast<proto::ProtoObject*>(out.nilProto);
 }
 
 } // namespace protoST

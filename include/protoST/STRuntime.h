@@ -11,6 +11,8 @@ namespace proto {
     class ProtoString;
 }
 
+namespace protoST { class DebuggerRuntime; }
+
 namespace protoST {
 
 class BytecodeModule;
@@ -34,6 +36,9 @@ public:
 
     // Access to the primitive registry that backs SEND dispatch.
     PrimitiveRegistry& registry();
+
+    // Access to the debugger runtime (attach state + session entry).
+    DebuggerRuntime& debugger();
 
     // Convert a BytecodeModule constant pool entry to a ProtoObject (lazy materialisation).
     const proto::ProtoObject* materialize(const BytecodeModule& m, size_t constIdx) const;
