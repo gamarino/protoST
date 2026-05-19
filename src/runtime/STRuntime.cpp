@@ -1,6 +1,7 @@
 #include "protoST/STRuntime.h"
 #include "ExecutionEngine.h"
 #include "BytecodeModule.h"
+#include "Bootstrap.h"
 #include "protoCore.h"
 
 namespace protoST {
@@ -9,12 +10,14 @@ struct STRuntime::Impl {
     proto::ProtoSpace    space;
     proto::ProtoContext* rootCtx    = nullptr;
     proto::ProtoRootSet* asyncRoots = nullptr;
+    Bootstrap            bootstrap;
 
     Impl() {
         // protoCore exposes the root context as a public field on ProtoSpace
         // (see protoCore/headers/protoCore.h:1234 and protoJS/src/JSContext.cpp:100).
         rootCtx    = space.rootContext;
         asyncRoots = space.createRootSet("protoST-async");
+        bootstrapPrototypes(space, rootCtx, bootstrap);
     }
 
     ~Impl() {
@@ -31,6 +34,7 @@ STRuntime::~STRuntime() = default;
 proto::ProtoSpace*   STRuntime::space()         const { return &impl_->space; }
 proto::ProtoContext* STRuntime::rootCtx()       const { return impl_->rootCtx; }
 proto::ProtoRootSet* STRuntime::asyncRootSet()  const { return impl_->asyncRoots; }
+const Bootstrap&     STRuntime::bootstrap()     const { return impl_->bootstrap; }
 
 const proto::ProtoObject*
 STRuntime::materialize(const BytecodeModule& m, size_t i) const {

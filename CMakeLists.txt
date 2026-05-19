@@ -53,6 +53,7 @@ add_library(protost_runtime STATIC
     src/runtime/BytecodeModule.cpp
     src/runtime/STRuntime.cpp
     src/runtime/ExecutionEngine.cpp
+    src/runtime/Bootstrap.cpp
 )
 target_include_directories(protost_runtime PUBLIC src include ${PROTOCORE_INCLUDE_DIRS})
 target_compile_definitions(protost_runtime PRIVATE

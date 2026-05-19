@@ -15,6 +15,7 @@ namespace protoST {
 
 class BytecodeModule;
 class ExecutionEngine;
+struct Bootstrap;
 
 class STRuntime {
 public:
@@ -26,6 +27,9 @@ public:
     proto::ProtoSpace*   space()         const;
     proto::ProtoContext* rootCtx()       const;
     proto::ProtoRootSet* asyncRootSet()  const;
+
+    // Access to the bootstrap prototype set (Object/Number/...).
+    const Bootstrap& bootstrap() const;
 
     // Convert a BytecodeModule constant pool entry to a ProtoObject (lazy materialisation).
     const proto::ProtoObject* materialize(const BytecodeModule& m, size_t constIdx) const;
