@@ -45,3 +45,6 @@ enable_testing()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(FindOrFetchCatch2)
 add_subdirectory(tests)
+
+add_test(NAME cli_help
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_help.sh $<TARGET_FILE:protost>)
