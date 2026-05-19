@@ -5,4 +5,5 @@ PROTOST="$1"
 "$PROTOST" -e "'hello' , ' world'." | grep -qx "hello world" || { echo "FAIL str ,"; exit 1; }
 "$PROTOST" -e "[ :a :b | a + b ] value: 3 value: 4." | grep -qx 7 || { echo "FAIL block"; exit 1; }
 "$PROTOST" -e "[ :n | n * (n + 1) / 2 ] value: 100." | grep -qx 5050 || { echo "FAIL hero"; exit 1; }
+"$PROTOST" -e " sum := 0. i := 1. [ i <= 100 ] whileTrue: [ sum := sum + i. i := i + 1 ]. sum." | grep -qx 5050 || { echo "FAIL whileTrue 5050"; exit 1; }
 echo OK

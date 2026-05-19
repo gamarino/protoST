@@ -173,3 +173,19 @@ TEST_CASE("Engine: block captures outer mutable state via shared dict", "[engine
     REQUIRE(r->asLong(rt.rootCtx()) == 42);
 }
 
+TEST_CASE("Engine: F3 hero - sum 1..100 via whileTrue + closures = 5050", "[engine][hero][closures]") {
+    const char* src =
+        "sum := 0. i := 1. "
+        "[ i <= 100 ] whileTrue: [ sum := sum + i. i := i + 1 ]. "
+        "sum.";
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C; auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r->asLong(rt.rootCtx()) == 5050);
+}
+
