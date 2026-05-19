@@ -9,6 +9,7 @@
 
 namespace protoST { void installIntPrimitives(STRuntime& rt); }
 namespace protoST { void installBoolPrimitives(STRuntime& rt); }
+namespace protoST { void installStringPrimitives(STRuntime& rt); }
 
 namespace protoST {
 
@@ -57,6 +58,7 @@ struct STRuntime::Impl {
 STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
     installIntPrimitives(*this);
     installBoolPrimitives(*this);   // needs BlockClosure value to exist — added in Task 44
+    installStringPrimitives(*this);
 }
 STRuntime::~STRuntime() = default;
 

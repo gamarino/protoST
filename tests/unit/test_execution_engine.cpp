@@ -91,3 +91,17 @@ TEST_CASE("Engine: 1 + 2 returns 3", "[engine][primitives]") {
     auto* r = rt.runTopLevel(m);
     REQUIRE(r->asLong(rt.rootCtx()) == 3);   // protoCore uses asLong, not toLong
 }
+
+TEST_CASE("Engine: 'ab' , 'cd' returns 'abcd'", "[engine][primitives]") {
+    protoST::STRuntime rt;
+    protoST::BytecodeModule m;
+    m.addString("ab"); m.addString("cd"); m.internSymbol(",");
+    m.emit(protoST::Op::PUSH_CONST, 0);
+    m.emit(protoST::Op::PUSH_CONST, 1);
+    m.emit(protoST::Op::SEND_BINARY, 2);
+    m.emit(protoST::Op::RETURN_TOP, 0);
+
+    auto* r = rt.runTopLevel(m);
+    // protoCore exposes UTF-8 via asString(ctx)->toStdString(ctx).
+    REQUIRE(r->asString(rt.rootCtx())->toStdString(rt.rootCtx()) == "abcd");
+}
