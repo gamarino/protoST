@@ -588,3 +588,43 @@ TEST_CASE("Smalltalk-side: Import from: 'lib_simple' returns module wrapper with
 
     unsetenv("STPATH");
 }
+
+TEST_CASE("F5 e2e: import counter_lib + use Counter end-to-end", "[engine][modules][hero]") {
+    std::string fixtures = PROTOST_FIXTURES_DIR;
+    setenv("STPATH", fixtures.c_str(), 1);
+
+    const char* src =
+        "lib := Import from: 'counter_lib'. "
+        "c := lib Counter newChild. "
+        "c initialize. "
+        "c increment. "
+        "c increment. "
+        "c incrementBy: 10. "
+        "c value.";
+
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C; auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r->asLong(rt.rootCtx()) == 12);  // 2 + 10 = 12
+
+    unsetenv("STPATH");
+}
+
+TEST_CASE("F5 e2e: import is cached — same module instance across calls", "[engine][modules]") {
+    std::string fixtures = PROTOST_FIXTURES_DIR;
+    setenv("STPATH", fixtures.c_str(), 1);
+
+    protoST::STRuntime rt;
+    auto* ctx = rt.rootCtx();
+    auto* m1 = rt.loadModule(ctx, "counter_lib");
+    auto* m2 = rt.loadModule(ctx, "counter_lib");
+    REQUIRE(m1 != nullptr);
+    REQUIRE(m1 == m2);  // pointer identity
+
+    unsetenv("STPATH");
+}
