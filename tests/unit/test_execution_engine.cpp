@@ -1,0 +1,41 @@
+#include <catch2/catch_all.hpp>
+
+#include "protoST/STRuntime.h"
+#include "runtime/ExecutionEngine.h"
+#include "runtime/BytecodeModule.h"
+#include "runtime/Opcodes.h"
+#include "protoCore.h"
+
+TEST_CASE("ExecutionEngine: empty module returns nil", "[engine]") {
+    protoST::STRuntime rt;
+    protoST::BytecodeModule m;
+    m.emit(protoST::Op::PUSH_NIL, 0);
+    m.emit(protoST::Op::RETURN_TOP, 0);
+
+    auto* result = rt.runTopLevel(m);
+    REQUIRE(result == PROTO_NONE);   // nil maps to PROTO_NONE
+}
+
+TEST_CASE("ExecutionEngine: PUSH_TRUE returns true sentinel", "[engine]") {
+    protoST::STRuntime rt;
+    protoST::BytecodeModule m;
+    m.emit(protoST::Op::PUSH_TRUE, 0);
+    m.emit(protoST::Op::RETURN_TOP, 0);
+
+    REQUIRE(rt.runTopLevel(m) == PROTO_TRUE);
+}
+
+TEST_CASE("ExecutionEngine: PUSH_FALSE returns false sentinel", "[engine]") {
+    protoST::STRuntime rt;
+    protoST::BytecodeModule m;
+    m.emit(protoST::Op::PUSH_FALSE, 0);
+    m.emit(protoST::Op::RETURN_TOP, 0);
+
+    REQUIRE(rt.runTopLevel(m) == PROTO_FALSE);
+}
+
+TEST_CASE("ExecutionEngine: empty bytestream returns nil", "[engine]") {
+    protoST::STRuntime rt;
+    protoST::BytecodeModule m;
+    REQUIRE(rt.runTopLevel(m) == PROTO_NONE);
+}

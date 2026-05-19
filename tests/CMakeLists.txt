@@ -29,6 +29,9 @@ target_sources(protost_unit_tests PRIVATE
 target_sources(protost_unit_tests PRIVATE
     unit/test_compiler.cpp
 )
+target_sources(protost_unit_tests PRIVATE
+    unit/test_execution_engine.cpp
+)
 target_compile_definitions(protost_unit_tests PRIVATE
     PROTOST_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures"
 )
