@@ -7,6 +7,8 @@
 
 #include <vector>
 
+namespace protoST { void installIntPrimitives(STRuntime& rt); }
+
 namespace protoST {
 
 struct PrimitiveRegistry::Impl { std::vector<PrimFn> fns; };
@@ -51,7 +53,9 @@ struct STRuntime::Impl {
     }
 };
 
-STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {}
+STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
+    installIntPrimitives(*this);
+}
 STRuntime::~STRuntime() = default;
 
 proto::ProtoSpace*   STRuntime::space()         const { return &impl_->space; }

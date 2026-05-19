@@ -7,18 +7,21 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     // Root of the protoST class tree is protoCore's objectPrototype.
     out.objectProto       = sp.objectPrototype;
 
-    // Number tree.
-    out.numberProto       = out.objectProto->newChild(ctx, /*isMutable=*/false);
-    out.smallIntegerProto = out.numberProto->newChild(ctx, /*isMutable=*/false);
-    out.largeIntegerProto = out.numberProto->newChild(ctx, /*isMutable=*/false);
-    out.floatProto        = out.numberProto->newChild(ctx, /*isMutable=*/false);
+    // Number tree.  Prototypes are *mutable* so that `setAttribute` (used by
+    // bindPrimitive) installs methods in place; otherwise immutable
+    // setAttribute returns a new ProtoObject* and the bootstrap pointer (also
+    // held in sp.smallIntegerPrototype) would be left bare.
+    out.numberProto       = out.objectProto->newChild(ctx, /*isMutable=*/true);
+    out.smallIntegerProto = out.numberProto->newChild(ctx, /*isMutable=*/true);
+    out.largeIntegerProto = out.numberProto->newChild(ctx, /*isMutable=*/true);
+    out.floatProto        = out.numberProto->newChild(ctx, /*isMutable=*/true);
 
     // Booleans, strings/symbols, blocks, nil.
-    out.booleanProto      = out.objectProto->newChild(ctx, /*isMutable=*/false);
-    out.stringProto       = out.objectProto->newChild(ctx, /*isMutable=*/false);
-    out.symbolProto       = out.stringProto->newChild(ctx, /*isMutable=*/false);
-    out.blockProto        = out.objectProto->newChild(ctx, /*isMutable=*/false);
-    out.nilProto          = out.objectProto->newChild(ctx, /*isMutable=*/false);
+    out.booleanProto      = out.objectProto->newChild(ctx, /*isMutable=*/true);
+    out.stringProto       = out.objectProto->newChild(ctx, /*isMutable=*/true);
+    out.symbolProto       = out.stringProto->newChild(ctx, /*isMutable=*/true);
+    out.blockProto        = out.objectProto->newChild(ctx, /*isMutable=*/true);
+    out.nilProto          = out.objectProto->newChild(ctx, /*isMutable=*/true);
 
     // Bind protoCore primitive slots so values produced by fromLong/fromDouble/etc.
     // walk up through our Smalltalk prototypes.  This mirrors protoJS's

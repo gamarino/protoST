@@ -78,3 +78,16 @@ TEST_CASE("Engine: SEND raises on unknown selector", "[engine]") {
 
     REQUIRE_THROWS_WITH(rt.runTopLevel(m), Catch::Matchers::ContainsSubstring("doesNotUnderstand"));
 }
+
+TEST_CASE("Engine: 1 + 2 returns 3", "[engine][primitives]") {
+    protoST::STRuntime rt;
+    protoST::BytecodeModule m;
+    m.addInteger(1); m.addInteger(2); m.internSymbol("+");
+    m.emit(protoST::Op::PUSH_CONST, 0);
+    m.emit(protoST::Op::PUSH_CONST, 1);
+    m.emit(protoST::Op::SEND_BINARY, 2);
+    m.emit(protoST::Op::RETURN_TOP, 0);
+
+    auto* r = rt.runTopLevel(m);
+    REQUIRE(r->asLong(rt.rootCtx()) == 3);   // protoCore uses asLong, not toLong
+}

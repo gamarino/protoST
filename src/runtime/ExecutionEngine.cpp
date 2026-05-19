@@ -97,8 +97,11 @@ ExecutionEngine::run(proto::ProtoContext* ctx,
                 const proto::ProtoObject* recv = stack.back(); stack.pop_back();
 
                 auto* selSym = ctx->fromUTF8String(selStr.c_str())->asString(ctx);
-                auto* proto = recv->getFirstParent(ctx);
-                auto* attr  = proto ? proto->getAttribute(ctx, selSym) : nullptr;
+                // Use getPrototype (not getFirstParent) so tagged immediates
+                // (SmallInteger, Boolean, inline String, ...) resolve to their
+                // prototype via ProtoSpace::*Prototype slots set by bootstrap.
+                auto* proto = recv->getPrototype(ctx);
+                auto* attr  = (proto && proto != PROTO_NONE) ? proto->getAttribute(ctx, selSym) : nullptr;
                 if (!attr || attr == PROTO_NONE) {
                     throw std::runtime_error("doesNotUnderstand: " + selStr);
                 }
