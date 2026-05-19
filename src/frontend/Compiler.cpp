@@ -147,9 +147,18 @@ void Compiler::analyseClosures(const Node& mod) {
 }
 
 std::unique_ptr<BytecodeModule> Compiler::compileModule(const Node& mod) {
+    // Run closure analysis up-front so that emission can decide between
+    // slot-based and captured-dict-based variable access.
+    analyseClosures(mod);
+
     auto bc = std::make_unique<BytecodeModule>();
     scopes_.clear();
     scopes_.emplace_back();
+    {
+        auto& s = scopes_.back();
+        s.astNode = nullptr; // module scope
+        s.capturedNames = analysis_.moduleCaptured;
+    }
     if (mod.children.empty()) {
         bc->emit(Op::PUSH_NIL, 0);
     } else {
@@ -171,9 +180,19 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         return;
     }
     if (n.kind == NodeKind::Assignment) {
-        // Statement-level assignment: declare slot, evaluate RHS, DUP so STORE_LOCAL
-        // (which pops) leaves the assigned value on the stack for the top-level POP
-        // separator (or RETURN_TOP, when it is the last statement).
+        // Statement-level assignment. If the name is captured-by-an-inner-block,
+        // it lives in the shared captured dict; otherwise it gets a local slot.
+        // In both cases we DUP after evaluating the RHS so the assigned value
+        // remains on the stack for the top-level POP separator (or RETURN_TOP,
+        // when it is the last statement).
+        if (isCaptured(n.text)) {
+            emitExpr(m, *n.children[0]);
+            auto sym = m.internSymbol(n.text);
+            if (sym > 255) { error("captured-name symbol pool overflow"); return; }
+            m.emit(Op::DUP, 0);
+            m.emit(Op::STORE_CAPTURED, static_cast<uint8_t>(sym));
+            return;
+        }
         int slot = declareLocal(n.text);
         emitExpr(m, *n.children[0]);
         m.emit(Op::DUP, 0);
@@ -221,6 +240,14 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
         case NodeKind::Self:     m.emit(Op::PUSH_SELF, 0); return;
         case NodeKind::Super:    m.emit(Op::PUSH_SUPER, 0); return;
         case NodeKind::Identifier: {
+            // Captured-dict path: any ancestor scope marked this name as
+            // captured by an inner block.
+            if (isCaptured(n.text)) {
+                auto sym = m.internSymbol(n.text);
+                if (sym > 255) { error("captured-name symbol pool overflow"); return; }
+                m.emit(Op::PUSH_CAPTURED, static_cast<uint8_t>(sym));
+                return;
+            }
             int slot = resolveLocal(n.text);
             if (slot < 0) {
                 error("unknown identifier '" + n.text + "'");
@@ -231,9 +258,18 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             return;
         }
         case NodeKind::Assignment: {
-            // Expression-position assignment: declare slot, evaluate RHS, then DUP so
-            // STORE_LOCAL (which pops) leaves the assigned value on the stack as the
+            // Expression-position assignment. If the name is captured, write
+            // into the shared captured dict; otherwise use a local slot.
+            // In both cases we DUP so the value is left on the stack as the
             // expression's result.
+            if (isCaptured(n.text)) {
+                emitExpr(m, *n.children[0]);
+                auto sym = m.internSymbol(n.text);
+                if (sym > 255) { error("captured-name symbol pool overflow"); return; }
+                m.emit(Op::DUP, 0);
+                m.emit(Op::STORE_CAPTURED, static_cast<uint8_t>(sym));
+                return;
+            }
             int slot = declareLocal(n.text);
             emitExpr(m, *n.children[0]);
             m.emit(Op::DUP, 0);
@@ -309,6 +345,14 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             auto sub = std::make_unique<BytecodeModule>();
             // open fresh scope for block
             scopes_.emplace_back();
+            {
+                auto& s = scopes_.back();
+                s.astNode = &n;
+                auto it = analysis_.capturedByScope.find(&n);
+                if (it != analysis_.capturedByScope.end()) {
+                    s.capturedNames = it->second;
+                }
+            }
             int nArgs = static_cast<int>(n.intValue);
             sub->setArgCount(nArgs);
             // declare args first (slots 0..nArgs-1), then locals
@@ -350,6 +394,18 @@ int Compiler::resolveLocal(const std::string& name) const {
         if (f != it->slots.end()) return f->second;
     }
     return -1;
+}
+
+bool Compiler::isCaptured(const std::string& name) const {
+    // A name is captured-at-use if some enclosing scope marked it as captured
+    // by an inner block. Walk innermost-first; honour shadowing: if a closer
+    // scope already binds this name as a non-captured local slot, that wins
+    // and the use is NOT captured.
+    for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
+        if (it->capturedNames.count(name) != 0) return true;
+        if (it->slots.count(name) != 0) return false;
+    }
+    return false;
 }
 
 void Compiler::error(const std::string& msg) { errors_.push_back(msg); }

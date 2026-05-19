@@ -164,3 +164,65 @@ TEST_CASE("Compiler analysis: nested blocks bubble free vars up", "[compiler][cl
     Compiler C; C.analyseClosures(*P.parseModule());
     REQUIRE(C.analysis().moduleCaptured.count("x") == 1);
 }
+
+TEST_CASE("Compiler emit: captured var uses PUSH_CAPTURED / STORE_CAPTURED", "[compiler][closures]") {
+    // `i` is module-local AND used in inner block → captured
+    // Inner block has no own locals; references `i` → should emit PUSH_CAPTURED with const idx of symbol "i"
+    Parser P("i := 0. [ i ].");
+    Compiler C; auto bc = C.compileModule(*P.parseModule());
+    REQUIRE(!C.hasErrors());
+
+    // Find at least one STORE_CAPTURED in the top-level module bytecode
+    bool sawStoreCaptured = false;
+    bool sawPushCapturedInOuter = false;
+    for (size_t i = 0; i + 1 < bc->bytes().size(); i += 2) {
+        if (static_cast<Op>(bc->bytes()[i]) == Op::STORE_CAPTURED) sawStoreCaptured = true;
+        if (static_cast<Op>(bc->bytes()[i]) == Op::PUSH_CAPTURED) sawPushCapturedInOuter = true;
+    }
+    REQUIRE(sawStoreCaptured);
+
+    // Inside the block sub-module, find PUSH_CAPTURED with the symbol "i"
+    REQUIRE(bc->numBlocks() == 1);
+    auto& blk = bc->block(0);
+    bool sawPushCapturedInBlock = false;
+    uint8_t pushedSymIdx = 255;
+    for (size_t i = 0; i + 1 < blk.bytes().size(); i += 2) {
+        if (static_cast<Op>(blk.bytes()[i]) == Op::PUSH_CAPTURED) {
+            sawPushCapturedInBlock = true;
+            pushedSymIdx = blk.bytes()[i+1];
+        }
+    }
+    REQUIRE(sawPushCapturedInBlock);
+    REQUIRE(blk.constSymbol(pushedSymIdx) == "i");
+}
+
+TEST_CASE("Compiler emit: non-captured locals still use PUSH_LOCAL", "[compiler][closures]") {
+    // `x` is module-local, no inner block uses it → NOT captured → slot-vector path
+    Parser P("x := 7. x.");
+    Compiler C; auto bc = C.compileModule(*P.parseModule());
+    REQUIRE(!C.hasErrors());
+    // Should see PUSH_LOCAL and STORE_LOCAL, NOT PUSH_CAPTURED
+    bool sawPushCapturedAnywhere = false;
+    bool sawStoreCapturedAnywhere = false;
+    for (size_t i = 0; i + 1 < bc->bytes().size(); i += 2) {
+        if (static_cast<Op>(bc->bytes()[i]) == Op::PUSH_CAPTURED)  sawPushCapturedAnywhere = true;
+        if (static_cast<Op>(bc->bytes()[i]) == Op::STORE_CAPTURED) sawStoreCapturedAnywhere = true;
+    }
+    REQUIRE_FALSE(sawPushCapturedAnywhere);
+    REQUIRE_FALSE(sawStoreCapturedAnywhere);
+}
+
+TEST_CASE("Compiler emit: block-local args do NOT trigger captured path", "[compiler][closures]") {
+    // `a` and `b` are block-private args; should be PUSH_LOCAL within block, no PUSH_CAPTURED.
+    Parser P("[ :a :b | a + b ].");
+    Compiler C; auto bc = C.compileModule(*P.parseModule());
+    REQUIRE(!C.hasErrors());
+    REQUIRE(bc->numBlocks() == 1);
+    auto& blk = bc->block(0);
+    bool sawAnyCaptured = false;
+    for (size_t i = 0; i + 1 < blk.bytes().size(); i += 2) {
+        auto op = static_cast<Op>(blk.bytes()[i]);
+        if (op == Op::PUSH_CAPTURED || op == Op::STORE_CAPTURED) sawAnyCaptured = true;
+    }
+    REQUIRE_FALSE(sawAnyCaptured);
+}

@@ -32,6 +32,12 @@ private:
     struct Scope {
         std::unordered_map<std::string, int> slots; // name -> slot index
         int nextSlot = 0;
+        // Names that should be stored in the captured dictionary instead of
+        // local slots. Populated from ScopeAnalysis at scope-entry.
+        std::unordered_set<std::string> capturedNames;
+        // AST node pointer for this scope (nullptr for module, Block/MethodDecl
+        // ast::Node* otherwise). Used to look up capturedByScope[node].
+        const ast::Node* astNode = nullptr;
     };
 
     std::vector<Scope> scopes_;
@@ -42,6 +48,9 @@ private:
     void   emitStatement(BytecodeModule& m, const ast::Node& n);
     int    declareLocal(const std::string& name);
     int    resolveLocal(const std::string& name) const;
+    // Returns true if `name` appears in the capturedNames set of the current
+    // scope or any enclosing scope (innermost-first lookup).
+    bool   isCaptured(const std::string& name) const;
     void   error(const std::string& msg);
 };
 
