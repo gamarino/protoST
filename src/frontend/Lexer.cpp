@@ -264,4 +264,15 @@ const Token& Lexer::peek() {
     return peekTok_;
 }
 
+std::vector<Token> Lexer::tokenize() {
+    std::vector<Token> result;
+    while (true) {
+        auto t = next();
+        bool eof = (t.kind == TokenKind::EndOfFile);
+        result.push_back(std::move(t));
+        if (eof) break;
+    }
+    return result;
+}
+
 } // namespace protoST

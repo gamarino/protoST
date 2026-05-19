@@ -160,3 +160,13 @@ TEST_CASE("lexer reads floats", "[lexer]") {
     REQUIRE(t3.kind == TokenKind::Integer);
     REQUIRE(t3.intValue == 42);
 }
+
+TEST_CASE("Lexer::tokenize returns full sequence ending in EOF", "[lexer]") {
+    auto tokens = Lexer("a := 1.").tokenize();
+    REQUIRE(tokens.size() == 5);   // a, :=, 1, ., EOF
+    REQUIRE(tokens[0].kind == TokenKind::Identifier);
+    REQUIRE(tokens[1].kind == TokenKind::Assign);
+    REQUIRE(tokens[2].kind == TokenKind::Integer);
+    REQUIRE(tokens[3].kind == TokenKind::Period);
+    REQUIRE(tokens[4].kind == TokenKind::EndOfFile);
+}

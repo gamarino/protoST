@@ -2,6 +2,7 @@
 #include "Token.h"
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace protoST {
 
@@ -11,6 +12,7 @@ public:
     Token next();
     const Token& peek();
     bool  atEnd() const { return pos_ >= source_.size(); }
+    std::vector<Token> tokenize();
 
 private:
     std::string source_;
