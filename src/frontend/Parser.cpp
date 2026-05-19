@@ -1,5 +1,7 @@
 #include "Parser.h"
 
+#include <cctype>
+
 namespace protoST {
 
 static bool isSendKind(ast::NodeKind k) {
@@ -82,7 +84,8 @@ ast::NodePtr Parser::parseTopForm() {
             return nullptr;
         }
         if (after.kind == TokenKind::Keyword && after.text == "subclass:") {
-            advance();
+            advance(); // consume class id
+            advance(); // consume 'subclass:'
             return parseClassDecl(classId);
         }
     }
@@ -411,6 +414,55 @@ ast::NodePtr Parser::parseMethodDecl(Token classIdent, bool classSide) {
 
 // Stubs that subsequent tasks fill in
 ast::NodePtr Parser::parseAssignmentRHS(ast::NodePtr) { return nullptr; }
-ast::NodePtr Parser::parseClassDecl(Token)         { return nullptr; }
+
+ast::NodePtr Parser::parseClassDecl(Token classIdent) {
+    auto cd = ast::makeNode(ast::NodeKind::ClassDecl, classIdent.line, classIdent.column);
+    cd->stringList.push_back(classIdent.text);   // superclass name at [0]
+
+    // expect a Symbol literal #Name
+    if (current_.kind != TokenKind::Symbol) {
+        error(current_, "expected #ClassName after subclass:");
+        synchronize();
+        return cd;
+    }
+    cd->text = current_.text;
+    advance();
+
+    auto parseStringList = [&](std::vector<std::string>& out) {
+        // parses a single 'a b c' string literal as space-separated identifiers
+        if (current_.kind == TokenKind::String) {
+            std::string s = current_.text;
+            advance();
+            std::string cur;
+            for (char ch : s) {
+                if (std::isspace(static_cast<unsigned char>(ch))) {
+                    if (!cur.empty()) { out.push_back(std::move(cur)); cur.clear(); }
+                } else cur += ch;
+            }
+            if (!cur.empty()) out.push_back(std::move(cur));
+        } else {
+            error(current_, "expected string literal");
+        }
+    };
+
+    while (current_.kind == TokenKind::Keyword) {
+        if (current_.text == "instanceVariableNames:") {
+            advance();
+            parseStringList(cd->stringList);
+        } else if (current_.text == "classVariableNames:") {
+            advance();
+            // ignore class-var contents for now; future MetaclassDecl pulls them out
+            if (current_.kind == TokenKind::String) advance();
+            else error(current_, "expected string after classVariableNames:");
+        } else {
+            error(current_, "unknown keyword in class declaration: " + current_.text);
+            break;
+        }
+    }
+
+    // consume optional terminating '.'
+    match(TokenKind::Period);
+    return cd;
+}
 
 } // namespace protoST

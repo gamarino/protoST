@@ -203,3 +203,23 @@ TEST_CASE("Parser: binary method", "[parser]") {
     REQUIRE(md->stringList.at(1) == "other");
     REQUIRE(md->intValue == 1);
 }
+
+TEST_CASE("Parser: class declaration minimal", "[parser]") {
+    Parser P("Object subclass: #Counter.");
+    auto m = P.parseModule(); REQUIRE(P.errors().empty());
+    auto& cd = m->children[0];
+    REQUIRE(cd->kind == NodeKind::ClassDecl);
+    REQUIRE(cd->text == "Counter");
+    REQUIRE(cd->stringList[0] == "Object");
+    // no instance vars by default
+}
+
+TEST_CASE("Parser: class declaration with inst vars", "[parser]") {
+    Parser P("Object subclass: #Counter instanceVariableNames: 'value step'.");
+    auto m = P.parseModule(); REQUIRE(P.errors().empty());
+    auto& cd = m->children[0];
+    REQUIRE(cd->stringList.size() == 3);
+    REQUIRE(cd->stringList[0] == "Object");
+    REQUIRE(cd->stringList[1] == "value");
+    REQUIRE(cd->stringList[2] == "step");
+}
