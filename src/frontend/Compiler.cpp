@@ -97,6 +97,34 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             m.emit(Op::STORE_LOCAL, static_cast<uint8_t>(slot));
             return;
         }
+        case NodeKind::UnarySend: {
+            emitExpr(m, *n.children[0]);
+            auto sym = m.internSymbol(n.text);
+            if (sym > 255) { error("selector pool overflow"); return; }
+            m.emit(Op::SEND_UNARY, static_cast<uint8_t>(sym));
+            return;
+        }
+        case NodeKind::BinarySend: {
+            // receiver, then arg, then SEND_BINARY
+            emitExpr(m, *n.children[0]);
+            if (n.children.size() < 2) { error("binary send missing argument"); return; }
+            emitExpr(m, *n.children[1]);
+            auto sym = m.internSymbol(n.text);
+            if (sym > 255) { error("selector pool overflow"); return; }
+            m.emit(Op::SEND_BINARY, static_cast<uint8_t>(sym));
+            return;
+        }
+        case NodeKind::KeywordSend: {
+            // receiver, then each arg in order, then SEND_KEYWORD
+            emitExpr(m, *n.children[0]);
+            for (size_t i = 1; i < n.children.size(); ++i) {
+                emitExpr(m, *n.children[i]);
+            }
+            auto sym = m.internSymbol(n.text);
+            if (sym > 255) { error("selector pool overflow"); return; }
+            m.emit(Op::SEND_KEYWORD, static_cast<uint8_t>(sym));
+            return;
+        }
         default:
             error("expression kind not yet supported");
             m.emit(Op::PUSH_NIL, 0);

@@ -64,3 +64,33 @@ TEST_CASE("Compiler: assignment creates slot and emits STORE_LOCAL", "[compiler]
     REQUIRE(bc->bytes()[9] == 0);
     REQUIRE(static_cast<Op>(bc->bytes()[10]) == Op::RETURN_TOP);
 }
+
+TEST_CASE("Compiler: unary send emits SEND_UNARY", "[compiler]") {
+    Parser P("nil printNl.");
+    Compiler C; auto bc = C.compileModule(*P.parseModule());
+    REQUIRE(!C.hasErrors());
+    REQUIRE(static_cast<Op>(bc->bytes()[0]) == Op::PUSH_NIL);
+    REQUIRE(static_cast<Op>(bc->bytes()[2]) == Op::SEND_UNARY);
+    REQUIRE(bc->constSymbol(bc->bytes()[3]) == "printNl");
+}
+
+TEST_CASE("Compiler: binary send emits SEND_BINARY", "[compiler]") {
+    Parser P("1 + 2.");
+    Compiler C; auto bc = C.compileModule(*P.parseModule());
+    REQUIRE(!C.hasErrors());
+    // PUSH_CONST 0 (1), PUSH_CONST 1 (2), SEND_BINARY (sym +)
+    REQUIRE(static_cast<Op>(bc->bytes()[0]) == Op::PUSH_CONST);
+    REQUIRE(static_cast<Op>(bc->bytes()[2]) == Op::PUSH_CONST);
+    REQUIRE(static_cast<Op>(bc->bytes()[4]) == Op::SEND_BINARY);
+    REQUIRE(bc->constSymbol(bc->bytes()[5]) == "+");
+}
+
+TEST_CASE("Compiler: keyword send emits SEND_KEYWORD", "[compiler]") {
+    Parser P("nil at: 1 put: 2.");
+    Compiler C; auto bc = C.compileModule(*P.parseModule());
+    REQUIRE(!C.hasErrors());
+    // PUSH_NIL, PUSH_CONST(1), PUSH_CONST(2), SEND_KEYWORD sym(at:put:)
+    REQUIRE(static_cast<Op>(bc->bytes()[0]) == Op::PUSH_NIL);
+    REQUIRE(static_cast<Op>(bc->bytes()[6]) == Op::SEND_KEYWORD);
+    REQUIRE(bc->constSymbol(bc->bytes()[7]) == "at:put:");
+}
