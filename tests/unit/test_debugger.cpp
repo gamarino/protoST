@@ -41,3 +41,19 @@ TEST_CASE("Debugger: session reads a 'cont' command and resumes", "[debugger][se
     REQUIRE(r == PROTO_NONE);
     REQUIRE(out.str().find("halted") != std::string::npos);
 }
+
+TEST_CASE("Debugger: where shows pc and instructions; print evaluates", "[debugger][cmds]") {
+    protoST::Parser P("nil halt.");
+    protoST::Compiler C; auto bc = C.compileModule(*P.parseModule());
+    protoST::STRuntime rt;
+    rt.debugger().attach();
+    std::istringstream in("where\nprint 1 + 2\ncont\n");
+    std::ostringstream out;
+    rt.debugger().setInputStream(&in);
+    rt.debugger().setOutputStream(&out);
+
+    rt.runTopLevel(*bc);
+    auto text = out.str();
+    REQUIRE(text.find("pc:") != std::string::npos);
+    REQUIRE(text.find("  3")  != std::string::npos);   // result of 1+2
+}
