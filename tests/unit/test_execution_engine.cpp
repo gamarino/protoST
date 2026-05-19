@@ -628,3 +628,30 @@ TEST_CASE("F5 e2e: import is cached — same module instance across calls", "[en
 
     unsetenv("STPATH");
 }
+
+TEST_CASE("F5 v2: STModuleProvider registers and resolves via UMD", "[engine][modules][umd]") {
+    std::string fixtures = PROTOST_FIXTURES_DIR;
+    setenv("STPATH", fixtures.c_str(), 1);
+
+    protoST::STRuntime rt;
+    auto* ctx = rt.rootCtx();
+
+    // Use protoCore's UMD path directly — not yet through Import>>from: (that's M2).
+    auto* wrapper = rt.space()->getImportModule(ctx, "counter_lib", "exports");
+    REQUIRE(wrapper != nullptr);
+    REQUIRE(wrapper != PROTO_NONE);
+
+    // Wrapper has attribute "exports" → the actual module.
+    auto* exportsKey = ctx->fromUTF8String("exports")->asString(ctx);
+    auto* mod = wrapper->getAttribute(ctx, exportsKey);
+    REQUIRE(mod != nullptr);
+    REQUIRE(mod != PROTO_NONE);
+
+    // Module should have Counter class as attribute.
+    auto* counterKey = ctx->fromUTF8String("Counter")->asString(ctx);
+    auto* counter = mod->getAttribute(ctx, counterKey);
+    REQUIRE(counter != nullptr);
+    REQUIRE(counter != PROTO_NONE);
+
+    unsetenv("STPATH");
+}

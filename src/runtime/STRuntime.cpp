@@ -7,11 +7,14 @@
 #include "debugger/DebuggerRuntime.h"
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
+#include "modules/STModuleProvider.h"
 #include "protoCore.h"
 
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <memory>
+#include <mutex>
 #include <queue>
 #include <sstream>
 #include <stdexcept>
@@ -130,8 +133,35 @@ STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
     installObjectPrimitives(*this);
     installFuturePrimitives(*this);
     installImportGlobal(*this);
+
+    // F5 v2: register STModuleProvider once globally with protoCore's
+    // ProviderRegistry; subsequent STRuntime instances reuse the same provider.
+    static std::once_flag s_providerRegistered;
+    std::call_once(s_providerRegistered, []() {
+        proto::ProviderRegistry::instance().registerProvider(
+            std::make_unique<STModuleProvider>());
+    });
+
+    // Point the (thread-local) "current runtime" pointer the provider consults
+    // at this STRuntime so tryLoad() dispatches back into our findModuleFile /
+    // loadModuleFromFile helpers.
+    setCurrentSTRuntime(this);
+
+    // Set the resolution chain on this space: protoST's source provider only.
+    {
+        auto* ctx = impl_->rootCtx;
+        auto* chain = ctx->newList();
+        chain = chain->appendLast(
+            ctx, ctx->fromUTF8String("provider:st"));
+        impl_->space.setResolutionChain(chain->asObject(ctx));
+    }
 }
-STRuntime::~STRuntime() = default;
+STRuntime::~STRuntime() {
+    // F5 v2: clear the thread-local pointer if it still references us, so a
+    // late provider lookup after destruction doesn't dereference a dead
+    // runtime.
+    if (currentSTRuntime() == this) setCurrentSTRuntime(nullptr);
+}
 
 proto::ProtoSpace*   STRuntime::space()         const { return &impl_->space; }
 proto::ProtoContext* STRuntime::rootCtx()       const { return impl_->rootCtx; }

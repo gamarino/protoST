@@ -63,6 +63,7 @@ add_library(protost_runtime STATIC
     src/primitives/debugger_prims.cpp
     src/primitives/object_prims.cpp
     src/primitives/future_prims.cpp
+    src/modules/STModuleProvider.cpp
 )
 target_include_directories(protost_runtime PUBLIC src include ${PROTOCORE_INCLUDE_DIRS})
 target_compile_definitions(protost_runtime PRIVATE
