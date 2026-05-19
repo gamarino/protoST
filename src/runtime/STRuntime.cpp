@@ -20,6 +20,18 @@ namespace protoST { void installDebuggerPrimitives(STRuntime& rt); }
 namespace protoST { void installObjectPrimitives(STRuntime& rt); }
 namespace protoST { void installFuturePrimitives(STRuntime& rt); }
 
+// F6-A6: future callback dispatch helpers defined alongside the Future
+// primitives. drainOne uses these to fire thenDo:/catch: blocks at the moment
+// the future transitions out of pending, without re-implementing the loop.
+namespace protoST {
+void fireFutureThenCallbacks(STRuntime& rt, proto::ProtoContext* ctx,
+                              const proto::ProtoObject* future,
+                              const proto::ProtoObject* value);
+void fireFutureCatchCallbacks(STRuntime& rt, proto::ProtoContext* ctx,
+                               const proto::ProtoObject* future,
+                               const proto::ProtoObject* error);
+}
+
 namespace protoST {
 
 struct PrimitiveRegistry::Impl { std::vector<PrimFn> fns; };
@@ -218,11 +230,13 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     auto* selStr = selector ? selector->asString(ctx) : nullptr;
     if (!selStr) {
         if (future) {
+            auto* err = ctx->fromUTF8String("invalid selector");
             const_cast<proto::ProtoObject*>(future)
                 ->setAttribute(ctx, stateKey, ctx->fromLong(2));
             const_cast<proto::ProtoObject*>(future)
-                ->setAttribute(ctx, errorKey,
-                               ctx->fromUTF8String("invalid selector"));
+                ->setAttribute(ctx, errorKey, err);
+            // F6-A6: fire any catch: callbacks registered while pending.
+            fireFutureCatchCallbacks(*this, ctx, future, err);
         }
         return true;
     }
@@ -271,17 +285,23 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
 
         // Resolve future.
         if (future) {
+            auto* v = result ? result : PROTO_NONE;
             const_cast<proto::ProtoObject*>(future)
                 ->setAttribute(ctx, stateKey, ctx->fromLong(1));
             const_cast<proto::ProtoObject*>(future)
-                ->setAttribute(ctx, valueKey, result ? result : PROTO_NONE);
+                ->setAttribute(ctx, valueKey, v);
+            // F6-A6: fire any thenDo: callbacks registered while pending.
+            fireFutureThenCallbacks(*this, ctx, future, v);
         }
     } catch (const std::exception& e) {
         if (future) {
+            auto* err = ctx->fromUTF8String(e.what());
             const_cast<proto::ProtoObject*>(future)
                 ->setAttribute(ctx, stateKey, ctx->fromLong(2));
             const_cast<proto::ProtoObject*>(future)
-                ->setAttribute(ctx, errorKey, ctx->fromUTF8String(e.what()));
+                ->setAttribute(ctx, errorKey, err);
+            // F6-A6: fire any catch: callbacks registered while pending.
+            fireFutureCatchCallbacks(*this, ctx, future, err);
         }
     }
     return true;

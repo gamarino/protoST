@@ -451,3 +451,33 @@ TEST_CASE("Engine: Future wait raises on rejection",
     REQUIRE_THROWS_WITH(rt.runTopLevel(*bc),
                         Catch::Matchers::ContainsSubstring("Future rejected"));
 }
+
+TEST_CASE("Engine: Future>>thenDo: fires after actor resolves",
+          "[engine][actors][future]") {
+    // F6-A6: register a thenDo: callback on a Future returned by an actor
+    // send. The callback captures the resolved value into a logger object's
+    // inst-var. After wait drains the scheduler, the logger must hold the
+    // resolved value (23 + 100 = 123).
+    const char* src =
+        "Object subclass: #Box instanceVariableNames: 'log'. "
+        "Box >> initialize log := 0. "
+        "Box >> add: x ^ x + 100. "
+        "Box >> setLog: v log := v. "
+        "Box >> getLog ^ log. "
+        "logger := Box newChild. "
+        "logger initialize. "
+        "actor := Box newChild asActor. "
+        "f := actor add: 23. "
+        "f thenDo: [ :v | logger setLog: v ]. "
+        "f wait. "
+        "logger getLog.";
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C; auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r->asLong(rt.rootCtx()) == 123);
+}

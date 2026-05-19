@@ -8,19 +8,65 @@
 
 namespace protoST {
 
+// Defined in block_prims.cpp — runs a BlockClosure with the given arg vector.
+extern const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
+                                              const proto::ProtoObject* block,
+                                              const proto::ProtoObject* const* args,
+                                              int argc);
+
 namespace {
 
 // F6-A5: Future synchronisation primitives.
 //
-// A Future is a mutable child of futureProto with three attributes:
-//   __state__ : SmallInteger — 0 = pending, 1 = resolved, 2 = rejected
-//   __value__ : the resolved value (only meaningful when state == 1)
-//   __error__ : the rejection cause (only meaningful when state == 2)
+// A Future is a mutable child of futureProto with five attributes:
+//   __state__     : SmallInteger — 0 = pending, 1 = resolved, 2 = rejected
+//   __value__     : the resolved value (only meaningful when state == 1)
+//   __error__     : the rejection cause (only meaningful when state == 2)
+//   __then_cbs__  : ProtoList of BlockClosure callbacks for thenDo: (F6-A6)
+//   __catch_cbs__ : ProtoList of BlockClosure callbacks for catch:   (F6-A6)
 //
 // These primitives are bound on futureProto. Because Future is *not* an actor
 // (it lacks __wrapped__), SEND dispatch goes through the normal prototype-chain
 // lookup, hits the tagged primitive marker on futureProto, and invokes the
 // corresponding C++ function below.
+
+// F6-A6: fire each registered callback with `arg`. Callback errors are
+// swallowed: a misbehaving thenDo:/catch: handler must not poison the
+// resolution path or starve other registered callbacks.
+static void fireCallbacks(STRuntime& rt, proto::ProtoContext* ctx,
+                          const proto::ProtoObject* future,
+                          const proto::ProtoString* cbsKey,
+                          const proto::ProtoObject* arg) {
+    auto* cbsObj = future->getAttribute(ctx, cbsKey);
+    if (!cbsObj || cbsObj == PROTO_NONE) return;
+    auto* cbs = cbsObj->asList(ctx);
+    if (!cbs) return;
+    long long n = cbs->getSize(ctx);
+    const proto::ProtoObject* args[] = { arg ? arg : PROTO_NONE };
+    for (long long i = 0; i < n; ++i) {
+        auto* cb = cbs->getAt(ctx, static_cast<int>(i));
+        try { invokeBlock(rt, ctx, cb, args, 1); }
+        catch (...) { /* swallow callback errors for F6 v1 */ }
+    }
+}
+
+// F6-A6: register a callback block on the list stored at `cbsKey`. If the
+// list slot is missing or nil, allocate a fresh empty list. Always rewrites
+// the slot with the appended list (structural sharing makes appendLast COW).
+static void registerCallback(proto::ProtoContext* ctx,
+                             const proto::ProtoObject* future,
+                             const proto::ProtoString* cbsKey,
+                             const proto::ProtoObject* block) {
+    auto* existing = future->getAttribute(ctx, cbsKey);
+    const proto::ProtoList* list = nullptr;
+    if (existing && existing != PROTO_NONE) {
+        list = existing->asList(ctx);
+    }
+    if (!list) list = ctx->newList();
+    auto* newList = list->appendLast(ctx, block);
+    const_cast<proto::ProtoObject*>(future)
+        ->setAttribute(ctx, cbsKey, newList->asObject(ctx));
+}
 
 // Future>>wait
 //
@@ -64,8 +110,9 @@ const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* c
 //
 // Idempotent: transitions a pending future to the resolved state with the
 // given value. On an already-settled future, returns the receiver unchanged.
-// Callback firing lands in F6-A6.
-const proto::ProtoObject* prim_Future_resolve(STRuntime&, proto::ProtoContext* ctx,
+// On a successful pending→resolved transition, fires any registered thenDo:
+// callbacks (F6-A6).
+const proto::ProtoObject* prim_Future_resolve(STRuntime& rt, proto::ProtoContext* ctx,
                                                const proto::ProtoObject* r,
                                                const proto::ProtoObject* const* a,
                                                int argc) {
@@ -74,11 +121,14 @@ const proto::ProtoObject* prim_Future_resolve(STRuntime&, proto::ProtoContext* c
         ctx->fromUTF8String("__state__")->asString(ctx);
     static const proto::ProtoString* valueKey =
         ctx->fromUTF8String("__value__")->asString(ctx);
+    static const proto::ProtoString* thenCbsKey =
+        ctx->fromUTF8String("__then_cbs__")->asString(ctx);
     auto* st = r->getAttribute(ctx, stateKey);
     long long s = st ? st->asLong(ctx) : 0;
     if (s != 0) return r;  // already settled — no-op
     const_cast<proto::ProtoObject*>(r)->setAttribute(ctx, stateKey, ctx->fromLong(1));
     const_cast<proto::ProtoObject*>(r)->setAttribute(ctx, valueKey, a[0]);
+    fireCallbacks(rt, ctx, r, thenCbsKey, a[0]);
     return r;
 }
 
@@ -86,7 +136,9 @@ const proto::ProtoObject* prim_Future_resolve(STRuntime&, proto::ProtoContext* c
 //
 // Idempotent: transitions a pending future to the rejected state with the
 // given error. On an already-settled future, returns the receiver unchanged.
-const proto::ProtoObject* prim_Future_rejectWith(STRuntime&, proto::ProtoContext* ctx,
+// On a successful pending→rejected transition, fires any registered catch:
+// callbacks (F6-A6).
+const proto::ProtoObject* prim_Future_rejectWith(STRuntime& rt, proto::ProtoContext* ctx,
                                                   const proto::ProtoObject* r,
                                                   const proto::ProtoObject* const* a,
                                                   int argc) {
@@ -95,15 +147,106 @@ const proto::ProtoObject* prim_Future_rejectWith(STRuntime&, proto::ProtoContext
         ctx->fromUTF8String("__state__")->asString(ctx);
     static const proto::ProtoString* errorKey =
         ctx->fromUTF8String("__error__")->asString(ctx);
+    static const proto::ProtoString* catchCbsKey =
+        ctx->fromUTF8String("__catch_cbs__")->asString(ctx);
     auto* st = r->getAttribute(ctx, stateKey);
     long long s = st ? st->asLong(ctx) : 0;
     if (s != 0) return r;  // already settled — no-op
     const_cast<proto::ProtoObject*>(r)->setAttribute(ctx, stateKey, ctx->fromLong(2));
     const_cast<proto::ProtoObject*>(r)->setAttribute(ctx, errorKey, a[0]);
+    fireCallbacks(rt, ctx, r, catchCbsKey, a[0]);
+    return r;
+}
+
+// Future>>thenDo: aBlock
+//
+// Registers `aBlock` to be invoked with the resolved value once the future
+// resolves. If the future is already resolved, fires the block synchronously
+// with the current value. If already rejected, does nothing (catch: covers
+// that path). Returns the receiver so chains can continue.
+const proto::ProtoObject* prim_Future_thenDo(STRuntime& rt, proto::ProtoContext* ctx,
+                                              const proto::ProtoObject* r,
+                                              const proto::ProtoObject* const* a,
+                                              int argc) {
+    if (argc != 1) throw std::runtime_error("Future>>thenDo: expects 1 arg");
+    static const proto::ProtoString* stateKey =
+        ctx->fromUTF8String("__state__")->asString(ctx);
+    static const proto::ProtoString* valueKey =
+        ctx->fromUTF8String("__value__")->asString(ctx);
+    static const proto::ProtoString* thenCbsKey =
+        ctx->fromUTF8String("__then_cbs__")->asString(ctx);
+    auto* block = a[0];
+    auto* st = r->getAttribute(ctx, stateKey);
+    long long s = st ? st->asLong(ctx) : 0;
+    if (s == 1) {
+        // Already resolved — fire callback immediately with __value__.
+        auto* v = r->getAttribute(ctx, valueKey);
+        const proto::ProtoObject* args[] = { v ? v : PROTO_NONE };
+        try { invokeBlock(rt, ctx, block, args, 1); }
+        catch (...) { /* swallow */ }
+    } else if (s == 0) {
+        // Pending — register for later firing on resolve.
+        registerCallback(ctx, r, thenCbsKey, block);
+    }
+    // s == 2 (already rejected): thenDo callbacks never fire on the
+    // rejection path; drop silently.
+    return r;
+}
+
+// Future>>catch: aBlock
+//
+// Registers `aBlock` to be invoked with the error value once the future is
+// rejected. If the future is already rejected, fires the block synchronously
+// with the current error. If already resolved, does nothing. Returns the
+// receiver so chains can continue.
+const proto::ProtoObject* prim_Future_catch(STRuntime& rt, proto::ProtoContext* ctx,
+                                             const proto::ProtoObject* r,
+                                             const proto::ProtoObject* const* a,
+                                             int argc) {
+    if (argc != 1) throw std::runtime_error("Future>>catch: expects 1 arg");
+    static const proto::ProtoString* stateKey =
+        ctx->fromUTF8String("__state__")->asString(ctx);
+    static const proto::ProtoString* errorKey =
+        ctx->fromUTF8String("__error__")->asString(ctx);
+    static const proto::ProtoString* catchCbsKey =
+        ctx->fromUTF8String("__catch_cbs__")->asString(ctx);
+    auto* block = a[0];
+    auto* st = r->getAttribute(ctx, stateKey);
+    long long s = st ? st->asLong(ctx) : 0;
+    if (s == 2) {
+        // Already rejected — fire callback immediately with __error__.
+        auto* e = r->getAttribute(ctx, errorKey);
+        const proto::ProtoObject* args[] = { e ? e : PROTO_NONE };
+        try { invokeBlock(rt, ctx, block, args, 1); }
+        catch (...) { /* swallow */ }
+    } else if (s == 0) {
+        // Pending — register for later firing on reject.
+        registerCallback(ctx, r, catchCbsKey, block);
+    }
+    // s == 1 (already resolved): catch callbacks never fire on the
+    // resolved path; drop silently.
     return r;
 }
 
 } // anon
+
+// Exposed for STRuntime::drainOne to fire callbacks at the resolve/reject
+// transition points without re-implementing the iteration loop.
+void fireFutureThenCallbacks(STRuntime& rt, proto::ProtoContext* ctx,
+                              const proto::ProtoObject* future,
+                              const proto::ProtoObject* value) {
+    static const proto::ProtoString* thenCbsKey =
+        ctx->fromUTF8String("__then_cbs__")->asString(ctx);
+    fireCallbacks(rt, ctx, future, thenCbsKey, value);
+}
+
+void fireFutureCatchCallbacks(STRuntime& rt, proto::ProtoContext* ctx,
+                               const proto::ProtoObject* future,
+                               const proto::ProtoObject* error) {
+    static const proto::ProtoString* catchCbsKey =
+        ctx->fromUTF8String("__catch_cbs__")->asString(ctx);
+    fireCallbacks(rt, ctx, future, catchCbsKey, error);
+}
 
 void installFuturePrimitives(STRuntime& rt) {
     auto& reg = rt.registry();
@@ -114,6 +257,10 @@ void installFuturePrimitives(STRuntime& rt) {
                   reg.registerPrim(prim_Future_resolve));
     bindPrimitive(rt, b.futureProto, "rejectWith:",
                   reg.registerPrim(prim_Future_rejectWith));
+    bindPrimitive(rt, b.futureProto, "thenDo:",
+                  reg.registerPrim(prim_Future_thenDo));
+    bindPrimitive(rt, b.futureProto, "catch:",
+                  reg.registerPrim(prim_Future_catch));
 }
 
 } // namespace protoST
