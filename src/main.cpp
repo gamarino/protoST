@@ -1,4 +1,6 @@
 #include "protoST/STRuntime.h"
+#include "frontend/Parser.h"
+#include "frontend/ASTPrinter.h"
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -37,7 +39,23 @@ int main(int argc, char** argv) {
 
     if (mode == "--help" || mode == "-h")   { printUsage(argv[0]); return 0; }
     if (mode == "--version" || mode == "-v"){ printVersion();      return 0; }
-    if (mode == "--dump-ast")               { return 1; /* implemented in Task 23 */ }
+    if (mode == "--dump-ast") {
+        if (argc < 3) { std::fprintf(stderr, "--dump-ast requires a path\n"); return 64; }
+        const char* path = argv[2];
+        std::FILE* fp = std::fopen(path, "rb");
+        if (!fp) { std::fprintf(stderr, "cannot open %s\n", path); return 66; }
+        std::fseek(fp, 0, SEEK_END); long n = std::ftell(fp); std::fseek(fp, 0, SEEK_SET);
+        std::string src(static_cast<size_t>(n), '\0');
+        std::fread(src.data(), 1, static_cast<size_t>(n), fp);
+        std::fclose(fp);
+
+        protoST::Parser P(std::move(src));
+        auto m = P.parseModule();
+        for (auto& e : P.errors())
+            std::fprintf(stderr, "%s:%d:%d: %s\n", path, e.line, e.column, e.message.c_str());
+        std::fputs(protoST::astToString(*m).c_str(), stdout);
+        return P.errors().empty() ? 0 : 65;
+    }
     if (mode == "-e")                       { return 1; /* implemented in Task 48 */ }
     if (mode == "-d")                       { return 1; /* implemented in Task 56 */ }
     if (mode == "venv")                     { return 1; /* implemented in Task 24 */ }

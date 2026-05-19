@@ -36,9 +36,19 @@ endif()
 
 include_directories(${PROTOCORE_INCLUDE_DIRS} include)
 
-# Placeholder hello-world executable; replaced with real CLI in Task 22.
+add_library(protost_frontend STATIC
+    src/frontend/Lexer.cpp
+    src/frontend/Parser.cpp
+    src/frontend/AST.cpp
+    src/frontend/ASTPrinter.cpp
+)
+target_include_directories(protost_frontend PUBLIC
+    src
+    include
+    ${PROTOCORE_INCLUDE_DIRS})
+
 add_executable(protost src/main.cpp)
-target_link_libraries(protost PRIVATE ${PROTOCORE_LIBRARY})
+target_link_libraries(protost PRIVATE protost_frontend ${PROTOCORE_LIBRARY})
 
 enable_testing()
 
@@ -48,3 +58,8 @@ add_subdirectory(tests)
 
 add_test(NAME cli_help
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_help.sh $<TARGET_FILE:protost>)
+
+add_test(NAME cli_dump_ast
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_dump_ast.sh
+            $<TARGET_FILE:protost>
+            ${CMAKE_SOURCE_DIR}/tests/fixtures)

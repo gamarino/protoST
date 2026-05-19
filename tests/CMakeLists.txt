@@ -7,20 +7,17 @@ target_include_directories(protost_unit_tests PRIVATE
 )
 target_link_libraries(protost_unit_tests PRIVATE
     Catch2::Catch2WithMain
+    protost_frontend
     ${PROTOCORE_LIBRARY}
 )
 target_sources(protost_unit_tests PRIVATE
     unit/test_lexer.cpp
-    ${CMAKE_SOURCE_DIR}/src/frontend/Lexer.cpp
 )
 target_sources(protost_unit_tests PRIVATE
     unit/test_parser.cpp
-    ${CMAKE_SOURCE_DIR}/src/frontend/Parser.cpp
-    ${CMAKE_SOURCE_DIR}/src/frontend/AST.cpp
 )
 target_sources(protost_unit_tests PRIVATE
     unit/test_ast_printer.cpp
-    ${CMAKE_SOURCE_DIR}/src/frontend/ASTPrinter.cpp
 )
 target_compile_definitions(protost_unit_tests PRIVATE
     PROTOST_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures"
