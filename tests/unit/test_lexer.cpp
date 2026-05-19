@@ -112,3 +112,30 @@ TEST_CASE("lexer reads char literals $x", "[lexer]") {
     REQUIRE(t3.kind == TokenKind::Char);
     REQUIRE(t3.text == " ");
 }
+
+TEST_CASE("lexer reads identifier symbols", "[lexer]") {
+    Lexer L("#foo #valueOf");
+    auto t1 = L.next();
+    REQUIRE(t1.kind == TokenKind::Symbol);
+    REQUIRE(t1.text == "foo");
+    auto t2 = L.next();
+    REQUIRE(t2.kind == TokenKind::Symbol);
+    REQUIRE(t2.text == "valueOf");
+}
+
+TEST_CASE("lexer reads binary symbols", "[lexer]") {
+    Lexer L("#+ #<= #==");
+    REQUIRE(L.next().text == "+");
+    REQUIRE(L.next().text == "<=");
+    REQUIRE(L.next().text == "==");
+}
+
+TEST_CASE("lexer reads keyword-selector symbols", "[lexer]") {
+    Lexer L("#at:put: #foo:");
+    auto t1 = L.next();
+    REQUIRE(t1.kind == TokenKind::Symbol);
+    REQUIRE(t1.text == "at:put:");
+    auto t2 = L.next();
+    REQUIRE(t2.kind == TokenKind::Symbol);
+    REQUIRE(t2.text == "foo:");
+}

@@ -30,6 +30,7 @@ private:
     Token  lexNumber();
     Token  lexString();
     Token  lexChar();
+    Token  lexSymbol();
     Token  makeError(const std::string& msg, int l, int c);
 };
 

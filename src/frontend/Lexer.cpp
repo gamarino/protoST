@@ -99,6 +99,48 @@ Token Lexer::lexChar() {
     return t;
 }
 
+Token Lexer::lexSymbol() {
+    int startLine = line_, startCol = col_;
+    advance(); // consume '#'
+    if (pos_ >= source_.size()) {
+        return makeError("incomplete symbol", startLine, startCol);
+    }
+    char c = source_[pos_];
+    Token t; t.kind = TokenKind::Symbol; t.line = startLine; t.column = startCol;
+
+    if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
+        // identifier OR keyword-chain
+        std::string out;
+        while (pos_ < source_.size() &&
+               (std::isalnum(static_cast<unsigned char>(source_[pos_])) || source_[pos_] == '_')) {
+            out += source_[pos_]; advance();
+        }
+        // chain of `name:` segments
+        while (pos_ < source_.size() && source_[pos_] == ':' &&
+               (pos_ + 1 >= source_.size() || source_[pos_ + 1] != '=')) {
+            out += ':'; advance();
+            while (pos_ < source_.size() &&
+                   (std::isalnum(static_cast<unsigned char>(source_[pos_])) || source_[pos_] == '_')) {
+                out += source_[pos_]; advance();
+            }
+        }
+        t.text = std::move(out);
+        return t;
+    }
+
+    // binary operator symbol: take 1–2 chars from the binop alphabet
+    static const std::string binChars = "+-*/=~<>&|@,";
+    if (binChars.find(c) != std::string::npos) {
+        std::string out; out += c; advance();
+        if (pos_ < source_.size() && binChars.find(source_[pos_]) != std::string::npos) {
+            out += source_[pos_]; advance();
+        }
+        t.text = std::move(out);
+        return t;
+    }
+    return makeError("malformed symbol literal", startLine, startCol);
+}
+
 Token Lexer::makeError(const std::string& msg, int l, int c) {
     Token t; t.kind = TokenKind::Error; t.text = msg; t.line = l; t.column = c; return t;
 }
@@ -112,6 +154,13 @@ Token Lexer::next() {
     char c = current();
     if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') return lexIdentifier();
     if (std::isdigit(static_cast<unsigned char>(c)))             return lexNumber();
+    if (c == '#') {
+        if (lookahead() == '(') {
+            Token t; t.kind = TokenKind::HashLParen; t.text = "#(";
+            t.line = line_; t.column = col_; advance(); advance(); return t;
+        }
+        return lexSymbol();
+    }
     if (c == '\'') return lexString();
     if (c == '$')  return lexChar();
 
