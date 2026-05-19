@@ -24,3 +24,20 @@ TEST_CASE("Debugger: halt when attached enters the session (stub) and returns ni
     auto* r = rt.runTopLevel(*bc);
     REQUIRE(r == PROTO_NONE);
 }
+
+#include <sstream>
+
+TEST_CASE("Debugger: session reads a 'cont' command and resumes", "[debugger][session]") {
+    protoST::Parser P("nil halt.");
+    protoST::Compiler C; auto bc = C.compileModule(*P.parseModule());
+    protoST::STRuntime rt;
+    rt.debugger().attach();
+    std::istringstream in("cont\n");
+    std::ostringstream out;
+    rt.debugger().setInputStream(&in);
+    rt.debugger().setOutputStream(&out);
+
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r == PROTO_NONE);
+    REQUIRE(out.str().find("halted") != std::string::npos);
+}

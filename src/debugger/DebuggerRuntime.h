@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <iosfwd>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -39,9 +40,15 @@ public:
     Command lastCommand() const { return lastCommand_; }
     void    setCommand(Command c) { lastCommand_ = c; }
 
+    // Test/embedder hooks
+    void setInputStream(std::istream* is)  { inStream_  = is; }
+    void setOutputStream(std::ostream* os) { outStream_ = os; }
+
 private:
     std::atomic<bool> attached_{false};
     Command           lastCommand_ = Command::Continue;
+    std::istream* inStream_  = nullptr; // nullptr → use std::cin
+    std::ostream* outStream_ = nullptr; // nullptr → use std::cout
 };
 
 } // namespace protoST
