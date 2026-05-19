@@ -26,9 +26,16 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
                              const BytecodeModule& m,
                              const proto::ProtoObject* /*self*/,
                              const proto::ProtoObject* const* args,
-                             int argc) {
+                             int argc,
+                             const proto::ProtoObject* capturedDict) {
     const auto& bytes = m.bytes();
     std::size_t pc = 0;
+
+    // F3: captured-locals dictionary. At the top level the dict is
+    // pre-allocated by STRuntime::runTopLevel; for block invocations the
+    // outer's dict is threaded through via invokeBlock. nullptr means the
+    // module declares no captured names.
+    const proto::ProtoObject* captured = capturedDict;
 
     // F2: a plain operand stack. The "no std::vector" rule applies fully
     // when the actor model arrives in F6, which is out of scope for this task.
@@ -187,9 +194,28 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
                 if (v == PROTO_FALSE) pc += static_cast<size_t>(arg) * kInstrSize;
                 break;
             }
-            case Op::PUSH_CAPTURED:
-            case Op::STORE_CAPTURED:
-                throw std::runtime_error("PUSH_CAPTURED / STORE_CAPTURED not yet implemented (F3-C4)");
+            case Op::PUSH_CAPTURED: {
+                // arg = constant pool index of the (interned) symbol name.
+                const std::string& nameStr = m.constSymbol(arg);
+                auto* sym = ctx->fromUTF8String(nameStr.c_str())->asString(ctx);
+                const proto::ProtoObject* val = captured
+                    ? captured->getAttribute(ctx, sym)
+                    : nullptr;
+                stack.push_back(val ? val : PROTO_NONE);
+                break;
+            }
+            case Op::STORE_CAPTURED: {
+                if (stack.empty())
+                    throw std::runtime_error("STORE_CAPTURED with empty stack");
+                const proto::ProtoObject* val = stack.back();
+                stack.pop_back();
+                if (!captured)
+                    throw std::runtime_error("STORE_CAPTURED without captured dict");
+                const std::string& nameStr = m.constSymbol(arg);
+                auto* sym = ctx->fromUTF8String(nameStr.c_str())->asString(ctx);
+                const_cast<proto::ProtoObject*>(captured)->setAttribute(ctx, sym, val);
+                break;
+            }
             default:
                 throw std::runtime_error(
                     "ExecutionEngine: unimplemented opcode at pc=" +

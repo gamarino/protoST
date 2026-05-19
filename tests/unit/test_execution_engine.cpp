@@ -128,6 +128,21 @@ TEST_CASE("Engine: true ifTrue: [ 42 ] returns 42", "[engine][block]") {
     REQUIRE(r->asLong(rt.rootCtx()) == 42);
 }
 
+TEST_CASE("Engine: captured locals roundtrip at top-level", "[engine][closures]") {
+    // `i` is referenced inside the inner block, so the closure analysis marks
+    // it as captured in the outer (top-level) scope. The compiler then emits
+    // STORE_CAPTURED for `i := 7` and PUSH_CAPTURED for the trailing `i`.
+    // We never invoke the block — we only need the top-level frame to
+    // successfully round-trip the value through the captured dict.
+    protoST::Parser P("i := 7. [ i ]. i.");
+    protoST::Compiler C; auto bc = C.compileModule(*P.parseModule());
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r->asLong(rt.rootCtx()) == 7);
+}
+
 TEST_CASE("Engine: F2 hero — closed-form sum 1..100 returns 5050", "[engine][hero]") {
     const char* src = "[ :n | n * (n + 1) / 2 ] value: 100.";
     protoST::Parser P(src);

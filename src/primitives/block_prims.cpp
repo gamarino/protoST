@@ -19,6 +19,8 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* const* args, int argc) {
     static const proto::ProtoString* bcKey =
         ctx->fromUTF8String("__bc_ptr__")->asString(ctx);
+    static const proto::ProtoString* capKey =
+        ctx->fromUTF8String("__captured__")->asString(ctx);
     auto* bcPtrObj = block->getAttribute(ctx, bcKey);
     if (!bcPtrObj || bcPtrObj == PROTO_NONE)
         throw std::runtime_error("block missing __bc_ptr__");
@@ -30,8 +32,14 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
             std::to_string(sub->argCount()) + ", got " +
             std::to_string(argc) + ")");
     }
+    // F3: thread the captured dict through. PUSH_BLOCK in F3-C5 will install
+    // it on the closure under "__captured__"; until then this read may return
+    // nil/nullptr and the block runs with no captured environment.
+    const proto::ProtoObject* capDict = block->getAttribute(ctx, capKey);
+    if (capDict == PROTO_NONE) capDict = nullptr;
+
     ExecutionEngine eng(rt);
-    return eng.runWithArgs(ctx, *sub, /*self=*/PROTO_NONE, args, argc);
+    return eng.runWithArgs(ctx, *sub, /*self=*/PROTO_NONE, args, argc, capDict);
 }
 
 namespace {

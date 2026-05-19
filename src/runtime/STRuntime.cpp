@@ -108,7 +108,16 @@ STRuntime::materialize(const BytecodeModule& m, size_t i) const {
 const proto::ProtoObject*
 STRuntime::runTopLevel(const BytecodeModule& m) {
     ExecutionEngine eng(*this);
-    return eng.run(impl_->rootCtx, m, /*self=*/PROTO_NONE);
+    auto* ctx = impl_->rootCtx;
+    // F3: pre-allocate a mutable dict for module-level captured locals.
+    // A mutable child of objectProto behaves as a per-name attribute store —
+    // setAttribute mutates this object directly and getAttribute reads it back.
+    // Block creation (F3-C5) will inherit this same dict so inner blocks can
+    // observe and mutate top-level captured names.
+    auto* capturedDict = const_cast<proto::ProtoObject*>(impl_->bootstrap.objectProto)
+        ->newChild(ctx, /*isMutable=*/true);
+    return eng.runWithArgs(ctx, m, /*self=*/PROTO_NONE,
+                           /*args=*/nullptr, /*argc=*/0, capturedDict);
 }
 
 } // namespace protoST

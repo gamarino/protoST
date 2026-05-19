@@ -21,11 +21,17 @@ public:
 
     // Runs `m` with `argc` arguments pre-loaded into locals 0..argc-1.
     // Used by BlockClosure>>value etc. (Task 44).
+    //
+    // `capturedDict` (F3) — optional mutable ProtoObject acting as the closure
+    // environment for captured (free) variables in `m`. PUSH_CAPTURED reads
+    // attributes from it, STORE_CAPTURED writes them. Pass nullptr if `m`
+    // does not use any captured names.
     const proto::ProtoObject* runWithArgs(proto::ProtoContext* ctx,
                                           const BytecodeModule& m,
                                           const proto::ProtoObject* self,
                                           const proto::ProtoObject* const* args,
-                                          int argc);
+                                          int argc,
+                                          const proto::ProtoObject* capturedDict = nullptr);
 
 private:
     STRuntime& rt_;
