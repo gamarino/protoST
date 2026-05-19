@@ -10,6 +10,7 @@
 #include "modules/STModuleProvider.h"
 #include "protoCore.h"
 
+#include <condition_variable>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -80,6 +81,13 @@ struct STRuntime::Impl {
     // F6 scheduler
     std::queue<const proto::ProtoObject*> readyQueue;
     std::unordered_set<const proto::ProtoObject*> scheduledSet;  // for idempotency
+
+    // F6 v2 T1: scheduler synchronization. `schedMu` guards readyQueue and
+    // scheduledSet so a worker thread (added in T2) can safely cooperate with
+    // foreground schedule() calls. `mutable` allows const accessors such as
+    // scheduledCount() to lock it. No waiters exist yet; T2 introduces them.
+    mutable std::mutex schedMu;
+    std::condition_variable schedCv;
 
     // F5-M2 module cache: canonical absolute path -> module object.
     std::unordered_map<std::string, const proto::ProtoObject*> moduleCache;
@@ -218,16 +226,31 @@ STRuntime::runTopLevel(const BytecodeModule& m) {
 
 void STRuntime::schedule(const proto::ProtoObject* actor) {
     if (!actor) return;
-    if (impl_->scheduledSet.insert(actor).second) {
-        impl_->readyQueue.push(actor);
+    {
+        std::lock_guard<std::mutex> lock(impl_->schedMu);
+        if (impl_->scheduledSet.insert(actor).second) {
+            impl_->readyQueue.push(actor);
+        } else {
+            return;  // already scheduled; no need to notify
+        }
     }
+    // F6 v2 T1: prepare for a worker thread (added in T2) to wake on enqueue.
+    // No waiters exist yet, so the notify is a no-op today.
+    impl_->schedCv.notify_one();
 }
 
 bool STRuntime::drainOne(proto::ProtoContext* ctx) {
-    if (impl_->readyQueue.empty()) return false;
-    auto* actor = impl_->readyQueue.front();
-    impl_->readyQueue.pop();
-    impl_->scheduledSet.erase(actor);
+    const proto::ProtoObject* actor = nullptr;
+    {
+        // F6 v2 T1: only the queue/set mutation is under the lock. Mailbox
+        // and future updates below run unlocked so concurrent schedule()
+        // calls can proceed while the current message is being processed.
+        std::lock_guard<std::mutex> lock(impl_->schedMu);
+        if (impl_->readyQueue.empty()) return false;
+        actor = impl_->readyQueue.front();
+        impl_->readyQueue.pop();
+        impl_->scheduledSet.erase(actor);
+    }
 
     static const proto::ProtoString* mailboxKey =
         ctx->fromUTF8String("__mailbox__")->asString(ctx);
@@ -359,6 +382,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
 }
 
 size_t STRuntime::scheduledCount() const {
+    std::lock_guard<std::mutex> lock(impl_->schedMu);
     return impl_->readyQueue.size();
 }
 
