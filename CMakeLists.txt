@@ -49,6 +49,7 @@ target_include_directories(protost_frontend PUBLIC
 
 add_library(protost_runtime STATIC
     src/runtime/Venv.cpp
+    src/runtime/BytecodeModule.cpp
 )
 target_include_directories(protost_runtime PUBLIC src include ${PROTOCORE_INCLUDE_DIRS})
 target_compile_definitions(protost_runtime PRIVATE
