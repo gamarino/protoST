@@ -18,3 +18,36 @@ TEST_CASE("Parser reports unexpected token", "[parser]") {
     auto mod = P.parseModule();
     REQUIRE(!P.errors().empty());
 }
+
+TEST_CASE("Parser: literal integers", "[parser]") {
+    Parser P("42.");
+    auto mod = P.parseModule();
+    REQUIRE(P.errors().empty());
+    REQUIRE(mod->children.size() == 1);
+    auto& expr = mod->children[0];
+    REQUIRE(expr->kind == NodeKind::IntegerLit);
+    REQUIRE(expr->intValue == 42);
+}
+
+TEST_CASE("Parser: identifiers and self/super/nil/true/false", "[parser]") {
+    auto parseOne = [](const char* src) {
+        Parser P(src);
+        auto m = P.parseModule();
+        REQUIRE(P.errors().empty());
+        REQUIRE(m->children.size() == 1);
+        return std::move(m->children[0]);
+    };
+    REQUIRE(parseOne("foo.")->kind == NodeKind::Identifier);
+    REQUIRE(parseOne("self.")->kind == NodeKind::Self);
+    REQUIRE(parseOne("super.")->kind == NodeKind::Super);
+    REQUIRE(parseOne("nil.")->kind == NodeKind::NilLit);
+    REQUIRE(parseOne("true.")->kind == NodeKind::TrueLit);
+    REQUIRE(parseOne("false.")->kind == NodeKind::FalseLit);
+}
+
+TEST_CASE("Parser: parenthesised expression preserves inner kind", "[parser]") {
+    Parser P("(42).");
+    auto m = P.parseModule();
+    REQUIRE(P.errors().empty());
+    REQUIRE(m->children[0]->kind == NodeKind::IntegerLit);
+}
