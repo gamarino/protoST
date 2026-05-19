@@ -51,6 +51,12 @@ public:
     // Run a module against the runtime; returns the final value (top of stack at RETURN_TOP).
     const proto::ProtoObject* runTopLevel(const BytecodeModule& m);
 
+    // F6 actor scheduler — single-thread MVP.
+    // schedule() is idempotent for already-scheduled actors.
+    void schedule(const proto::ProtoObject* actor);
+    bool drainOne(proto::ProtoContext* ctx);   // returns true if a message was processed
+    size_t scheduledCount() const;              // size of ready queue (for testing)
+
     inline const char* versionTag() const { return "0.1.0-pre"; }
 
 private:

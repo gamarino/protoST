@@ -6,6 +6,8 @@
 #include "debugger/DebuggerRuntime.h"
 #include "protoCore.h"
 
+#include <queue>
+#include <unordered_set>
 #include <vector>
 
 namespace protoST { void installIntPrimitives(STRuntime& rt); }
@@ -47,6 +49,10 @@ struct STRuntime::Impl {
     // A mutable child of objectProto so setAttribute updates this object in
     // place (rather than producing a COW copy that the engine would not see).
     proto::ProtoObject*  globals     = nullptr;
+
+    // F6 scheduler
+    std::queue<const proto::ProtoObject*> readyQueue;
+    std::unordered_set<const proto::ProtoObject*> scheduledSet;  // for idempotency
 
     Impl() {
         // protoCore exposes the root context as a public field on ProtoSpace
@@ -141,6 +147,28 @@ STRuntime::runTopLevel(const BytecodeModule& m) {
         ->newChild(ctx, /*isMutable=*/true);
     return eng.runWithArgs(ctx, m, /*self=*/PROTO_NONE,
                            /*args=*/nullptr, /*argc=*/0, capturedDict);
+}
+
+void STRuntime::schedule(const proto::ProtoObject* actor) {
+    if (!actor) return;
+    if (impl_->scheduledSet.insert(actor).second) {
+        impl_->readyQueue.push(actor);
+    }
+}
+
+bool STRuntime::drainOne(proto::ProtoContext* ctx) {
+    (void)ctx;
+    if (impl_->readyQueue.empty()) return false;
+    auto* actor = impl_->readyQueue.front();
+    impl_->readyQueue.pop();
+    impl_->scheduledSet.erase(actor);
+    // F6-A4 will wire actor message processing here; for now it's a no-op stub.
+    // We still record that work was done (one actor was popped).
+    return true;
+}
+
+size_t STRuntime::scheduledCount() const {
+    return impl_->readyQueue.size();
 }
 
 } // namespace protoST

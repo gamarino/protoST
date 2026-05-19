@@ -343,3 +343,35 @@ TEST_CASE("Engine: user method with instance variable", "[engine][methods][instv
     REQUIRE(r->asLong(rt.rootCtx()) == 3);
 }
 
+TEST_CASE("STRuntime scheduler: schedule + drainOne basics", "[engine][scheduler]") {
+    protoST::STRuntime rt;
+    auto* ctx = rt.rootCtx();
+
+    // Create three dummy "actors" — just any ProtoObject will do for this queue test
+    auto* a = rt.bootstrap().actorProto->newChild(ctx, true);
+    auto* b = rt.bootstrap().actorProto->newChild(ctx, true);
+    auto* c = rt.bootstrap().actorProto->newChild(ctx, true);
+
+    REQUIRE(rt.scheduledCount() == 0);
+    rt.schedule(a);
+    rt.schedule(b);
+    rt.schedule(c);
+    REQUIRE(rt.scheduledCount() == 3);
+
+    // schedule is idempotent
+    rt.schedule(a);
+    REQUIRE(rt.scheduledCount() == 3);
+
+    // Drain three times → drains all
+    REQUIRE(rt.drainOne(ctx));
+    REQUIRE(rt.drainOne(ctx));
+    REQUIRE(rt.drainOne(ctx));
+    REQUIRE_FALSE(rt.drainOne(ctx));
+
+    REQUIRE(rt.scheduledCount() == 0);
+
+    // After drain, a can be re-scheduled
+    rt.schedule(a);
+    REQUIRE(rt.scheduledCount() == 1);
+}
+
