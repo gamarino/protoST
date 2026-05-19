@@ -282,3 +282,33 @@ TEST_CASE("Engine: user method on class — args + locals only", "[engine][metho
     REQUIRE(r->asLong(rt.rootCtx()) == 7);
 }
 
+TEST_CASE("Engine: user method with instance variable", "[engine][methods][instvars]") {
+    // F4-U5: a Counter class with an instance variable `value`. The three
+    // methods exercise both inst-var read (PUSH_INSTVAR) and write
+    // (STORE_INSTVAR), plus the compiler's name-resolution priority
+    // (`value` as a method selector vs. inst-var identifier in body).
+    //
+    // Pipeline: ClassDecl → three MethodDecls → Counter newChild instance →
+    //   initialize sets value:=0; three increments bring it to 3;
+    //   `c value` reads it back via the value getter.
+    const char* src =
+        "Object subclass: #Counter instanceVariableNames: 'value'. "
+        "Counter >> initialize value := 0. "
+        "Counter >> increment value := value + 1. "
+        "Counter >> value ^ value. "
+        "c := Counter newChild. "
+        "c initialize. "
+        "c increment. c increment. c increment. "
+        "c value.";
+
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C; auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r->asLong(rt.rootCtx()) == 3);
+}
+

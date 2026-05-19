@@ -56,6 +56,12 @@ private:
     // F4-U2: collected by collectClasses() before emission; queried by
     // downstream passes (e.g., MethodDecl emission) to map inst-var refs.
     std::unordered_map<std::string, ClassInfo> classes_;
+    // F4-U5: name resolution context while emitting a method body. Set on
+    // entry to MethodDecl emission, cleared after. Identifier/Assignment
+    // emission consults currentInstVars_ to choose between PUSH_LOCAL,
+    // PUSH_INSTVAR, and PUSH_GLOBAL.
+    std::string currentMethodClass_;
+    std::vector<std::string> currentInstVars_;
 
     void   collectClasses(const ast::Node& module);
     void   emitExpr(BytecodeModule& m, const ast::Node& n);

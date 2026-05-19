@@ -304,9 +304,51 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
                 g->setAttribute(ctx, sym, val);
                 break;
             }
-            case Op::PUSH_INSTVAR:
-            case Op::STORE_INSTVAR:
-                throw std::runtime_error("PUSH_INSTVAR / STORE_INSTVAR not yet implemented (F4-U4)");
+            case Op::PUSH_INSTVAR: {
+                // F4-U5: read an instance variable from `self`. `self` is
+                // populated by runWithArgs into slot 0 of locals (see the
+                // user-method dispatch path in SEND_*). arg is the constant-
+                // pool index of the (interned) inst-var name symbol.
+                //
+                // We store inst vars under a mangled key ("_iv_<name>") so
+                // their storage does NOT collide with same-named method
+                // selectors in the receiver's prototype chain. Without this,
+                // `Counter >> value ^ value.` would have the message-send
+                // `c value` find the integer attribute stored by STORE_INSTVAR
+                // instead of the method installed on the class, since
+                // getAttribute walks own-attrs first.
+                const std::string& nameStr = m.constSymbol(arg);
+                std::string mangled = "_iv_";
+                mangled += nameStr;
+                auto* sym = ctx->fromUTF8String(mangled.c_str())->asString(ctx);
+                if (locals.empty())
+                    throw std::runtime_error("PUSH_INSTVAR with no self");
+                const proto::ProtoObject* self = locals[0];
+                auto* val = self ? self->getAttribute(ctx, sym) : nullptr;
+                stack.push_back(val ? val : PROTO_NONE);
+                break;
+            }
+            case Op::STORE_INSTVAR: {
+                // F4-U5: write an instance variable on `self`. Mirror of
+                // PUSH_INSTVAR; pops the value-to-store from the operand
+                // stack and setAttribute's it under the mangled "_iv_<name>"
+                // key on slot-0 self. See PUSH_INSTVAR for rationale.
+                if (stack.empty())
+                    throw std::runtime_error("STORE_INSTVAR empty stack");
+                const proto::ProtoObject* val = stack.back();
+                stack.pop_back();
+                const std::string& nameStr = m.constSymbol(arg);
+                std::string mangled = "_iv_";
+                mangled += nameStr;
+                auto* sym = ctx->fromUTF8String(mangled.c_str())->asString(ctx);
+                if (locals.empty())
+                    throw std::runtime_error("STORE_INSTVAR with no self");
+                const proto::ProtoObject* self = locals[0];
+                if (!self)
+                    throw std::runtime_error("STORE_INSTVAR self is null");
+                const_cast<proto::ProtoObject*>(self)->setAttribute(ctx, sym, val);
+                break;
+            }
             default:
                 throw std::runtime_error(
                     "ExecutionEngine: unimplemented opcode at pc=" +

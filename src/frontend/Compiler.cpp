@@ -255,6 +255,17 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         // the class proto, same as instance-side). F4-v2 will split via a
         // proper classside parent.
 
+        // F4-U5: record the current method's class + its instance-variable
+        // names BEFORE emitting the body, so that emitExpr/emitStatement
+        // can resolve identifiers against this class's inst vars before
+        // falling back to globals.
+        currentMethodClass_ = n.text;
+        {
+            auto it = classes_.find(n.text);
+            if (it != classes_.end()) currentInstVars_ = it->second.instVarNames;
+            else                      currentInstVars_.clear();
+        }
+
         // Build sub-BytecodeModule for the method body.
         auto sub = std::make_unique<BytecodeModule>();
 
@@ -317,6 +328,10 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         m.emit(Op::PUSH_BLOCK,   static_cast<uint8_t>(blkIdx));      // method wrapper
         m.emit(Op::PUSH_CONST,   static_cast<uint8_t>(selectorIdx)); // selector symbol
         m.emit(Op::SEND_KEYWORD, static_cast<uint8_t>(installIdx));  // → class
+
+        // F4-U5: clear the method-body name-resolution context.
+        currentMethodClass_.clear();
+        currentInstVars_.clear();
         return;
     }
     if (n.kind == NodeKind::Assignment) {
@@ -332,6 +347,17 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             m.emit(Op::DUP, 0);
             m.emit(Op::STORE_CAPTURED, static_cast<uint8_t>(sym));
             return;
+        }
+        // F4-U5: instance variable of the current method's class.
+        for (const auto& iv : currentInstVars_) {
+            if (iv == n.text) {
+                emitExpr(m, *n.children[0]);
+                auto sym = m.internSymbol(n.text);
+                if (sym > 255) { error("inst-var symbol pool overflow"); return; }
+                m.emit(Op::DUP, 0);
+                m.emit(Op::STORE_INSTVAR, static_cast<uint8_t>(sym));
+                return;
+            }
         }
         int slot = declareLocal(n.text);
         emitExpr(m, *n.children[0]);
@@ -393,7 +419,18 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                 m.emit(Op::PUSH_LOCAL, static_cast<uint8_t>(slot));
                 return;
             }
-            // F4-U3 fix (sliver of F4-U5): fall back to the global namespace.
+            // F4-U5: instance variable of the current method's class.
+            // Only consulted while emitting a method body (currentInstVars_
+            // is populated by the MethodDecl branch in emitStatement).
+            for (const auto& iv : currentInstVars_) {
+                if (iv == n.text) {
+                    auto sym = m.internSymbol(n.text);
+                    if (sym > 255) { error("inst-var symbol pool overflow"); return; }
+                    m.emit(Op::PUSH_INSTVAR, static_cast<uint8_t>(sym));
+                    return;
+                }
+            }
+            // F4-U3: fall back to the global namespace.
             // ST-80 semantics: free identifiers in expressions resolve through
             // the scope chain, then globals. A failed runtime lookup will
             // throw "undefined global: X" with the actual name.
@@ -414,6 +451,17 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                 m.emit(Op::DUP, 0);
                 m.emit(Op::STORE_CAPTURED, static_cast<uint8_t>(sym));
                 return;
+            }
+            // F4-U5: instance variable of the current method's class.
+            for (const auto& iv : currentInstVars_) {
+                if (iv == n.text) {
+                    emitExpr(m, *n.children[0]);
+                    auto sym = m.internSymbol(n.text);
+                    if (sym > 255) { error("inst-var symbol pool overflow"); return; }
+                    m.emit(Op::DUP, 0);
+                    m.emit(Op::STORE_INSTVAR, static_cast<uint8_t>(sym));
+                    return;
+                }
             }
             int slot = declareLocal(n.text);
             emitExpr(m, *n.children[0]);
