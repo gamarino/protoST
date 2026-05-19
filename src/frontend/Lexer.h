@@ -9,7 +9,7 @@ class Lexer {
 public:
     explicit Lexer(std::string source);
     Token next();
-    Token peek();
+    const Token& peek();
     bool  atEnd() const { return pos_ >= source_.size(); }
 
 private:

@@ -1,5 +1,6 @@
 #include "Lexer.h"
 #include <cctype>
+#include <stdexcept>
 
 namespace protoST {
 
@@ -41,7 +42,11 @@ Token Lexer::lexNumber() {
     Token t;
     t.kind = TokenKind::Integer;
     t.text = source_.substr(start, pos_ - start);
-    t.intValue = std::stoll(t.text);
+    try {
+        t.intValue = std::stoll(t.text);
+    } catch (const std::out_of_range&) {
+        return makeError("integer literal out of range", startLine, startCol);
+    }
     t.line = startLine; t.column = startCol;
     return t;
 }
@@ -127,7 +132,7 @@ Token Lexer::next() {
     return makeError(std::string("unexpected character '") + c + "'", line_, col_);
 }
 
-Token Lexer::peek() {
+const Token& Lexer::peek() {
     if (!hasPeek_) { peekTok_ = next(); hasPeek_ = true; }
     return peekTok_;
 }
