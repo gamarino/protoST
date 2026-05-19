@@ -1,9 +1,12 @@
 #include "protoST/STRuntime.h"
 #include "frontend/Parser.h"
 #include "frontend/ASTPrinter.h"
+#include "frontend/Compiler.h"
 #include "runtime/Venv.h"
+#include "protoCore.h"
 #include <cstdio>
 #include <cstring>
+#include <exception>
 #include <string>
 #include <vector>
 
@@ -57,7 +60,41 @@ int main(int argc, char** argv) {
         std::fputs(protoST::astToString(*m).c_str(), stdout);
         return P.errors().empty() ? 0 : 65;
     }
-    if (mode == "-e")                       { return 1; /* implemented in Task 48 */ }
+    if (mode == "-e") {
+        if (argc < 3) { std::fprintf(stderr, "-e requires an expression\n"); return 64; }
+        std::string src = argv[2];
+        protoST::Parser P(std::move(src));
+        auto ast = P.parseModule();
+        for (auto& e : P.errors())
+            std::fprintf(stderr, "<expr>:%d:%d: %s\n", e.line, e.column, e.message.c_str());
+        if (!P.errors().empty()) return 65;
+
+        protoST::Compiler C;
+        auto bc = C.compileModule(*ast);
+        if (C.hasErrors()) {
+            for (auto& s : C.errors()) std::fprintf(stderr, "compile error: %s\n", s.c_str());
+            return 70;
+        }
+        try {
+            protoST::STRuntime rt;
+            auto* r = rt.runTopLevel(*bc);
+            auto* ctx = rt.rootCtx();
+            if (r == PROTO_NONE)            std::puts("nil");
+            else if (r == PROTO_TRUE)       std::puts("true");
+            else if (r == PROTO_FALSE)      std::puts("false");
+            else {
+                try { std::printf("%lld\n", r->asLong(ctx)); }
+                catch (...) {
+                    auto s = r->asString(ctx) ? r->asString(ctx)->toStdString(ctx) : std::string("<obj>");
+                    std::puts(s.c_str());
+                }
+            }
+            return 0;
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "error: %s\n", e.what());
+            return 1;
+        }
+    }
     if (mode == "-d")                       { return 1; /* implemented in Task 56 */ }
     if (mode == "venv") {
         if (argc < 3) { std::fprintf(stderr, "venv requires a subcommand: create|activate|info\n"); return 64; }

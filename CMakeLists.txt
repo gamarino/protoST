@@ -82,3 +82,6 @@ add_test(NAME cli_dump_ast
 
 add_test(NAME cli_venv
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_venv.sh $<TARGET_FILE:protost>)
+
+add_test(NAME cli_eval
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_eval.sh $<TARGET_FILE:protost>)
