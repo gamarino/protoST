@@ -59,6 +59,71 @@ Token Lexer::next() {
     char c = current();
     if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') return lexIdentifier();
     if (std::isdigit(static_cast<unsigned char>(c)))             return lexNumber();
+
+    int startLine = line_, startCol = col_;
+    auto single = [&](TokenKind k) -> Token {
+        Token t; t.kind = k; t.text = std::string(1, c); t.line = startLine; t.column = startCol; advance(); return t;
+    };
+    auto bin1 = [&](const char* s) -> Token {
+        Token t; t.kind = TokenKind::BinaryOp; t.text = s; t.line = startLine; t.column = startCol; advance(); return t;
+    };
+
+    switch (c) {
+        case '(': return single(TokenKind::LParen);
+        case ')': return single(TokenKind::RParen);
+        case '[': return single(TokenKind::LBracket);
+        case ']': return single(TokenKind::RBracket);
+        case '{': return single(TokenKind::LBrace);
+        case '}': return single(TokenKind::RBrace);
+        case '.': return single(TokenKind::Period);
+        case ';': return single(TokenKind::Semicolon);
+        case '^': return single(TokenKind::Caret);
+        case '|': return single(TokenKind::Pipe);
+        case '+': case '*': case '/': case '&':
+            return bin1(std::string(1, c).c_str());
+        case ',': return bin1(",");
+        case '-':
+            if (lookahead() == '>') {
+                Token t; t.kind = TokenKind::BinaryOp; t.text = "->";
+                t.line = startLine; t.column = startCol; advance(); advance(); return t;
+            }
+            return bin1("-");
+        case '=':
+            if (lookahead() == '=') {
+                Token t; t.kind = TokenKind::BinaryOp; t.text = "==";
+                t.line = startLine; t.column = startCol; advance(); advance(); return t;
+            }
+            return bin1("=");
+        case '~':
+            if (lookahead() == '=') {
+                Token t; t.kind = TokenKind::BinaryOp; t.text = "~=";
+                t.line = startLine; t.column = startCol; advance(); advance(); return t;
+            }
+            return makeError("unexpected '~'", startLine, startCol);
+        case '<':
+            if (lookahead() == '=') {
+                Token t; t.kind = TokenKind::BinaryOp; t.text = "<=";
+                t.line = startLine; t.column = startCol; advance(); advance(); return t;
+            }
+            return bin1("<");
+        case '>':
+            if (lookahead() == '=') {
+                Token t; t.kind = TokenKind::BinaryOp; t.text = ">=";
+                t.line = startLine; t.column = startCol; advance(); advance(); return t;
+            }
+            if (lookahead() == '>') {
+                Token t; t.kind = TokenKind::GtGt; t.text = ">>";
+                t.line = startLine; t.column = startCol; advance(); advance(); return t;
+            }
+            return bin1(">");
+        case ':':
+            if (lookahead() == '=') {
+                Token t; t.kind = TokenKind::Assign; t.text = ":=";
+                t.line = startLine; t.column = startCol; advance(); advance(); return t;
+            }
+            return single(TokenKind::Colon);
+    }
+
     return makeError(std::string("unexpected character '") + c + "'", line_, col_);
 }
 

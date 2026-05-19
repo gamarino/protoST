@@ -34,3 +34,32 @@ TEST_CASE("lexer tracks line numbers across newlines", "[lexer]") {
     auto t2 = L.next(); REQUIRE(t2.line == 2); REQUIRE(t2.column == 2);
     auto t3 = L.next(); REQUIRE(t3.line == 3); REQUIRE(t3.column == 3);
 }
+
+TEST_CASE("lexer recognizes single-char punctuation", "[lexer]") {
+    Lexer L("( ) [ ] { } . ; ^ |");
+    REQUIRE(L.next().kind == TokenKind::LParen);
+    REQUIRE(L.next().kind == TokenKind::RParen);
+    REQUIRE(L.next().kind == TokenKind::LBracket);
+    REQUIRE(L.next().kind == TokenKind::RBracket);
+    REQUIRE(L.next().kind == TokenKind::LBrace);
+    REQUIRE(L.next().kind == TokenKind::RBrace);
+    REQUIRE(L.next().kind == TokenKind::Period);
+    REQUIRE(L.next().kind == TokenKind::Semicolon);
+    REQUIRE(L.next().kind == TokenKind::Caret);
+    REQUIRE(L.next().kind == TokenKind::Pipe);
+}
+
+TEST_CASE("lexer recognizes binary operators and := and >>", "[lexer]") {
+    Lexer L("+ - * / = == ~= <= >= < > & , -> := >>");
+    auto checkBin = [&](const char* expected) {
+        auto t = L.next();
+        REQUIRE(t.kind == TokenKind::BinaryOp);
+        REQUIRE(t.text == expected);
+    };
+    checkBin("+"); checkBin("-"); checkBin("*"); checkBin("/");
+    checkBin("="); checkBin("=="); checkBin("~="); checkBin("<=");
+    checkBin(">="); checkBin("<"); checkBin(">"); checkBin("&");
+    checkBin(","); checkBin("->");
+    REQUIRE(L.next().kind == TokenKind::Assign);
+    REQUIRE(L.next().kind == TokenKind::GtGt);
+}
