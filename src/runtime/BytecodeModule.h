@@ -49,11 +49,16 @@ public:
     const BytecodeModule& block(size_t i) const { return *blocks_[i]; }
     size_t              numBlocks() const { return blocks_.size(); }
 
+    // block metadata
+    void setArgCount(int n) { argCount_ = n; }
+    int  argCount() const   { return argCount_; }
+
 private:
     std::vector<uint8_t>                bytes_;
     std::vector<Const>                  consts_;
     std::unordered_map<std::string, size_t> symbolIndex_;
     std::vector<std::unique_ptr<BytecodeModule>> blocks_;
+    int argCount_ = 0;
 };
 
 } // namespace protoST

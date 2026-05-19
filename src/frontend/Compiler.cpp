@@ -162,6 +162,29 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             }
             return;
         }
+        case NodeKind::Block: {
+            auto sub = std::make_unique<BytecodeModule>();
+            // open fresh scope for block
+            scopes_.emplace_back();
+            int nArgs = static_cast<int>(n.intValue);
+            sub->setArgCount(nArgs);
+            // declare args first (slots 0..nArgs-1), then locals
+            for (size_t i = 0; i < n.stringList.size(); ++i) {
+                declareLocal(n.stringList[i]);
+            }
+            // emit body statements; last value implicitly returned
+            if (n.children.empty()) sub->emit(Op::PUSH_NIL, 0);
+            for (size_t i = 0; i < n.children.size(); ++i) {
+                emitStatement(*sub, *n.children[i]);
+                if (i + 1 != n.children.size()) sub->emit(Op::POP, 0);
+            }
+            sub->emit(Op::RETURN_TOP, 0);
+            scopes_.pop_back();
+            size_t blkIdx = m.addBlockModule(std::move(sub));
+            if (blkIdx > 255) { error("block index pool overflow"); return; }
+            m.emit(Op::PUSH_BLOCK, static_cast<uint8_t>(blkIdx));
+            return;
+        }
         default:
             error("expression kind not yet supported");
             m.emit(Op::PUSH_NIL, 0);

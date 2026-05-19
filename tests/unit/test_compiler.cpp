@@ -107,3 +107,18 @@ TEST_CASE("Compiler: cascade emits dup/pop dance and keeps last value", "[compil
     }
     REQUIRE(last_send);
 }
+
+TEST_CASE("Compiler: block compiles to a sub-module referenced by PUSH_BLOCK", "[compiler]") {
+    Parser P("[ :a :b | a + b ].");
+    Compiler C; auto bc = C.compileModule(*P.parseModule());
+    REQUIRE(!C.hasErrors());
+    // PUSH_BLOCK 0 ; RETURN_TOP
+    REQUIRE(static_cast<Op>(bc->bytes()[0]) == Op::PUSH_BLOCK);
+    REQUIRE(bc->bytes()[1] == 0);
+    REQUIRE(bc->numBlocks() == 1);
+    auto& blk = bc->block(0);
+    // body should end with RETURN_TOP after PUSH_LOCAL 0, PUSH_LOCAL 1, SEND_BINARY +
+    REQUIRE(static_cast<Op>(blk.bytes()[0]) == Op::PUSH_LOCAL);
+    REQUIRE(static_cast<Op>(blk.bytes()[2]) == Op::PUSH_LOCAL);
+    REQUIRE(static_cast<Op>(blk.bytes()[4]) == Op::SEND_BINARY);
+}
