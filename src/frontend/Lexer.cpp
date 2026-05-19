@@ -14,8 +14,16 @@ void Lexer::advance() {
 }
 
 void Lexer::skipWhitespace() {
-    while (pos_ < source_.size() && std::isspace(static_cast<unsigned char>(source_[pos_]))) {
-        advance();
+    while (pos_ < source_.size()) {
+        char c = source_[pos_];
+        if (std::isspace(static_cast<unsigned char>(c))) { advance(); continue; }
+        if (c == '"') {
+            advance();
+            while (pos_ < source_.size() && source_[pos_] != '"') advance();
+            if (pos_ < source_.size()) advance();
+            continue;
+        }
+        break;
     }
 }
 
@@ -52,15 +60,33 @@ Token Lexer::lexNumber() {
     while (pos_ < source_.size() && std::isdigit(static_cast<unsigned char>(source_[pos_]))) {
         advance();
     }
-    Token t;
-    t.kind = TokenKind::Integer;
-    t.text = source_.substr(start, pos_ - start);
-    try {
-        t.intValue = std::stoll(t.text);
-    } catch (const std::out_of_range&) {
-        return makeError("integer literal out of range", startLine, startCol);
+    bool isFloat = false;
+    if (pos_ < source_.size() && source_[pos_] == '.' &&
+        pos_ + 1 < source_.size() && std::isdigit(static_cast<unsigned char>(source_[pos_ + 1]))) {
+        isFloat = true;
+        advance(); // .
+        while (pos_ < source_.size() && std::isdigit(static_cast<unsigned char>(source_[pos_]))) {
+            advance();
+        }
     }
+    Token t;
+    t.text = source_.substr(start, pos_ - start);
     t.line = startLine; t.column = startCol;
+    if (isFloat) {
+        try {
+            t.kind = TokenKind::Float;
+            t.floatValue = std::stod(t.text);
+        } catch (const std::out_of_range&) {
+            return makeError("float literal out of range", startLine, startCol);
+        }
+    } else {
+        try {
+            t.kind = TokenKind::Integer;
+            t.intValue = std::stoll(t.text);
+        } catch (const std::out_of_range&) {
+            return makeError("integer literal out of range", startLine, startCol);
+        }
+    }
     return t;
 }
 

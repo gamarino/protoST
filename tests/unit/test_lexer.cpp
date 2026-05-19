@@ -139,3 +139,24 @@ TEST_CASE("lexer reads keyword-selector symbols", "[lexer]") {
     REQUIRE(t2.kind == TokenKind::Symbol);
     REQUIRE(t2.text == "foo:");
 }
+
+TEST_CASE("lexer skips ST-style \"...\" comments", "[lexer]") {
+    Lexer L("\"a comment\" 42 \"another\nmultiline\" foo");
+    REQUIRE(L.next().intValue == 42);
+    auto t = L.next();
+    REQUIRE(t.kind == TokenKind::Identifier);
+    REQUIRE(t.text == "foo");
+}
+
+TEST_CASE("lexer reads floats", "[lexer]") {
+    Lexer L("3.14 0.5 42");
+    auto t1 = L.next();
+    REQUIRE(t1.kind == TokenKind::Float);
+    REQUIRE(t1.floatValue == Catch::Approx(3.14));
+    auto t2 = L.next();
+    REQUIRE(t2.kind == TokenKind::Float);
+    REQUIRE(t2.floatValue == Catch::Approx(0.5));
+    auto t3 = L.next();
+    REQUIRE(t3.kind == TokenKind::Integer);
+    REQUIRE(t3.intValue == 42);
+}
