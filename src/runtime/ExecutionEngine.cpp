@@ -125,7 +125,17 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
                 stack.pop_back();
                 break;
             }
+            case Op::RETURN:
             case Op::RETURN_TOP: {
+                // F4-U4: Op::RETURN is emitted by an explicit `^expr` in a
+                // method or block body; Op::RETURN_TOP is emitted by the
+                // compiler as the implicit trailer for a top-level module
+                // and for blocks. In the current engine both pop the top of
+                // the operand stack and return it to the caller of this
+                // runWithArgs invocation. (True non-local-return semantics —
+                // `^` from inside a nested block unwinds to its enclosing
+                // method — is out of scope for F4-U4 and will be revisited
+                // when blocks-inside-methods become reachable.)
                 const proto::ProtoObject* r =
                     stack.empty() ? PROTO_NONE : stack.back();
                 return r;
@@ -189,6 +199,44 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
                 auto* attr = recv->getAttribute(ctx, selSym);
                 if (!attr || attr == PROTO_NONE) {
                     throw std::runtime_error("doesNotUnderstand: " + selStr);
+                }
+                // F4-U4: detect user method (Block-shaped wrapper carrying
+                // __bc_ptr__). User methods are installed by Compiler-emitted
+                // __installMethod:as: and are not tagged primitive markers.
+                // We probe for __bc_ptr__ first; if absent, fall through to
+                // the legacy primitive-marker (tagged SmallInteger with bit
+                // 62 set) dispatch.
+                static const proto::ProtoString* bcKey =
+                    ctx->fromUTF8String("__bc_ptr__")->asString(ctx);
+                static const proto::ProtoString* capKey =
+                    ctx->fromUTF8String("__captured__")->asString(ctx);
+                auto* bcPtrObj = attr->getAttribute(ctx, bcKey);
+                if (bcPtrObj && bcPtrObj != PROTO_NONE) {
+                    // User method: invoke the sub-module with recv prepended
+                    // to the args (recv lands in slot 0 as `self`).
+                    const protoST::BytecodeModule* sub =
+                        reinterpret_cast<const protoST::BytecodeModule*>(
+                            bcPtrObj->asLong(ctx));
+                    if (sub->argCount() != argc + 1) {
+                        throw std::runtime_error(
+                            "method " + selStr + " expects " +
+                            std::to_string(sub->argCount() - 1) +
+                            " args, got " + std::to_string(argc));
+                    }
+                    auto* capDict = attr->getAttribute(ctx, capKey);
+                    if (capDict == PROTO_NONE) capDict = nullptr;
+                    std::vector<const proto::ProtoObject*> methodArgs;
+                    methodArgs.reserve(static_cast<size_t>(argc) + 1);
+                    methodArgs.push_back(recv);
+                    for (int i = 0; i < argc; ++i) methodArgs.push_back(args[i]);
+                    ExecutionEngine subEng(rt_);
+                    auto* result = subEng.runWithArgs(
+                        ctx, *sub, /*self=*/recv,
+                        methodArgs.data(),
+                        static_cast<int>(methodArgs.size()),
+                        capDict);
+                    stack.push_back(result ? result : PROTO_NONE);
+                    break;
                 }
                 long long marker = attr->asLong(ctx);
                 if (!(marker & (1LL << 62))) {

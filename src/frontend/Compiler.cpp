@@ -239,9 +239,84 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         return;
     }
     if (n.kind == NodeKind::MethodDecl) {
-        // F4-U3 will implement actual method emission. For now, emit a
-        // placeholder so the surrounding module-level POP doesn't underflow.
-        m.emit(Op::PUSH_NIL, 0);
+        // F4-U3: compile the method body as a sub-BytecodeModule and emit
+        // module-level bytecode that, at runtime, installs the resulting
+        // method wrapper on the target class.
+        //
+        // AST shape (see Parser::parseMethodDecl):
+        //   n.text                            = class name
+        //   n.stringList[0]                   = selector
+        //   n.stringList[1..n.intValue]       = arg names
+        //   n.stringList[n.intValue+1..]      = local names
+        //   n.children                        = body statements
+        //   n.boolFlag                        = true if class-side method
+        //
+        // F4-U3 v1 ignores n.boolFlag (class-side methods get installed on
+        // the class proto, same as instance-side). F4-v2 will split via a
+        // proper classside parent.
+
+        // Build sub-BytecodeModule for the method body.
+        auto sub = std::make_unique<BytecodeModule>();
+
+        // Open fresh scope; slot 0 = "self", slots 1..nArgs = args,
+        // remaining slots = method locals.
+        scopes_.emplace_back();
+        {
+            auto& s = scopes_.back();
+            s.astNode = nullptr;  // F4-U3: no captured analysis for methods
+        }
+        int nArgs = static_cast<int>(n.intValue);
+        declareLocal("self");                              // slot 0
+        for (int i = 0; i < nArgs; ++i) {
+            declareLocal(n.stringList[1 + i]);             // slots 1..nArgs
+        }
+        for (size_t i = static_cast<size_t>(1 + nArgs); i < n.stringList.size(); ++i) {
+            declareLocal(n.stringList[i]);                 // method locals
+        }
+        sub->setArgCount(nArgs + 1);  // +1 for self
+
+        // Emit body statements.
+        if (n.children.empty()) {
+            sub->emit(Op::PUSH_NIL, 0);
+        }
+        for (size_t i = 0; i < n.children.size(); ++i) {
+            emitStatement(*sub, *n.children[i]);
+            if (i + 1 != n.children.size()) sub->emit(Op::POP, 0);
+        }
+        // ST-80 default return: a method returns `self` if there is no
+        // explicit `^`. If the last statement is already a Return, the
+        // body's RETURN was already emitted by emitStatement.
+        bool endsWithReturn = !n.children.empty()
+            && n.children.back()->kind == NodeKind::Return;
+        if (!endsWithReturn) {
+            // Discard the last expression's value, push self, and return.
+            if (!n.children.empty()) sub->emit(Op::POP, 0);
+            sub->emit(Op::PUSH_LOCAL, 0);  // self
+            sub->emit(Op::RETURN, 0);
+        }
+
+        scopes_.pop_back();
+
+        // Attach the method module as a sub-block of the outer (module) bytecode.
+        size_t blkIdx = m.addBlockModule(std::move(sub));
+        if (blkIdx > 255) { error("method block index overflow"); return; }
+
+        // Module-level emission: load class, push method wrapper, push selector
+        // symbol, send #__installMethod:as: to the class. The send returns the
+        // class (the receiver), leaving it on the stack. The surrounding module
+        // loop's POP separator (or RETURN_TOP) consumes it cleanly.
+        auto classIdx    = m.internSymbol(n.text);
+        auto selectorIdx = m.internSymbol(n.stringList[0]);
+        auto installIdx  = m.internSymbol("__installMethod:as:");
+        if (classIdx > 255 || selectorIdx > 255 || installIdx > 255) {
+            error("symbol pool overflow in MethodDecl");
+            return;
+        }
+
+        m.emit(Op::PUSH_GLOBAL,  static_cast<uint8_t>(classIdx));    // class
+        m.emit(Op::PUSH_BLOCK,   static_cast<uint8_t>(blkIdx));      // method wrapper
+        m.emit(Op::PUSH_CONST,   static_cast<uint8_t>(selectorIdx)); // selector symbol
+        m.emit(Op::SEND_KEYWORD, static_cast<uint8_t>(installIdx));  // → class
         return;
     }
     if (n.kind == NodeKind::Assignment) {
@@ -314,12 +389,17 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                 return;
             }
             int slot = resolveLocal(n.text);
-            if (slot < 0) {
-                error("unknown identifier '" + n.text + "'");
-                m.emit(Op::PUSH_NIL, 0);
+            if (slot >= 0) {
+                m.emit(Op::PUSH_LOCAL, static_cast<uint8_t>(slot));
                 return;
             }
-            m.emit(Op::PUSH_LOCAL, static_cast<uint8_t>(slot));
+            // F4-U3 fix (sliver of F4-U5): fall back to the global namespace.
+            // ST-80 semantics: free identifiers in expressions resolve through
+            // the scope chain, then globals. A failed runtime lookup will
+            // throw "undefined global: X" with the actual name.
+            auto symIdx = m.internSymbol(n.text);
+            if (symIdx > 255) { error("global symbol pool overflow"); return; }
+            m.emit(Op::PUSH_GLOBAL, static_cast<uint8_t>(symIdx));
             return;
         }
         case NodeKind::Assignment: {

@@ -255,3 +255,30 @@ TEST_CASE("Engine: ClassDecl creates class accessible as global", "[engine][clas
     REQUIRE(counter != object);   // fresh child, not the same object as Object
 }
 
+TEST_CASE("Engine: user method on class — args + locals only", "[engine][methods]") {
+    // Method body that doesn't touch instance variables (those land in F4-U5).
+    // We only exercise method args and method locals, plus the dispatch from
+    // an instance to its class proto.
+    //
+    // Pipeline exercised here:
+    //   * ClassDecl       → STORE_GLOBAL                (Adder global)
+    //   * MethodDecl      → installs sum:with: on Adder via __installMethod:as:
+    //   * Adder newChild  → fresh instance whose parent is Adder
+    //   * sum: 3 with: 4  → SEND_KEYWORD dispatches via parent chain to Adder's method
+    //   * Method body     → x + y stored in local r, returned via `^ r`
+    const char* src =
+        "Object subclass: #Adder. "
+        "Adder >> sum: x with: y | r | r := x + y. ^ r. "
+        "Adder newChild sum: 3 with: 4.";
+
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C; auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r->asLong(rt.rootCtx()) == 7);
+}
+
