@@ -37,6 +37,11 @@ enum class Op : uint8_t {
     // Closures (F3)
     PUSH_CAPTURED   = 22,   // arg = constant pool index (symbol name)
     STORE_CAPTURED  = 23,   // arg = constant pool index (symbol name)
+    // User classes (F4)
+    PUSH_GLOBAL     = 24,   // arg = constant pool symbol index (name of global)
+    STORE_GLOBAL    = 25,   // arg = constant pool symbol index
+    PUSH_INSTVAR    = 26,   // arg = constant pool symbol index (name of inst var, accessed on self/slot 0)
+    STORE_INSTVAR   = 27,   // arg = constant pool symbol index
     // Extend for >256-index args
     EXTEND          = 254,
     // Debugger primitive guard

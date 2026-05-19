@@ -223,6 +223,12 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
                 const_cast<proto::ProtoObject*>(captured)->setAttribute(ctx, sym, val);
                 break;
             }
+            case Op::PUSH_GLOBAL:
+            case Op::STORE_GLOBAL:
+                throw std::runtime_error("PUSH_GLOBAL / STORE_GLOBAL not yet implemented (F4-U1)");
+            case Op::PUSH_INSTVAR:
+            case Op::STORE_INSTVAR:
+                throw std::runtime_error("PUSH_INSTVAR / STORE_INSTVAR not yet implemented (F4-U4)");
             default:
                 throw std::runtime_error(
                     "ExecutionEngine: unimplemented opcode at pc=" +
