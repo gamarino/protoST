@@ -214,6 +214,7 @@ Token Lexer::next() {
         case '/': return bin1("/");
         case '&': return bin1("&");
         case ',': return bin1(",");
+        case '@': return bin1("@");
         case '-':
             if (lookahead() == '>') {
                 Token t; t.kind = TokenKind::BinaryOp; t.text = "->";
@@ -256,7 +257,11 @@ Token Lexer::next() {
             return single(TokenKind::Colon);
     }
 
-    return makeError(std::string("unexpected character '") + c + "'", line_, col_);
+    {
+        int errLine = line_, errCol = col_;
+        advance();  // consume the unknown character so callers don't spin
+        return makeError(std::string("unexpected character '") + c + "'", errLine, errCol);
+    }
 }
 
 const Token& Lexer::peek() {
