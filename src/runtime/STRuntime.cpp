@@ -13,6 +13,7 @@ namespace protoST { void installBoolPrimitives(STRuntime& rt); }
 namespace protoST { void installStringPrimitives(STRuntime& rt); }
 namespace protoST { void installBlockPrimitives(STRuntime& rt); }
 namespace protoST { void installDebuggerPrimitives(STRuntime& rt); }
+namespace protoST { void installObjectPrimitives(STRuntime& rt); }
 
 namespace protoST {
 
@@ -42,6 +43,10 @@ struct STRuntime::Impl {
     Bootstrap            bootstrap;
     PrimitiveRegistry    registry;
     DebuggerRuntime      debugger;
+    // F4-U1: mutable globals namespace, used by PUSH_GLOBAL / STORE_GLOBAL.
+    // A mutable child of objectProto so setAttribute updates this object in
+    // place (rather than producing a COW copy that the engine would not see).
+    proto::ProtoObject*  globals     = nullptr;
 
     Impl() {
         // protoCore exposes the root context as a public field on ProtoSpace
@@ -49,6 +54,14 @@ struct STRuntime::Impl {
         rootCtx    = space.rootContext;
         asyncRoots = space.createRootSet("protoST-async");
         bootstrapPrototypes(space, rootCtx, bootstrap);
+
+        // Allocate the globals namespace as a mutable child of objectProto so
+        // setAttribute updates it in place. Pre-register "Object" so that
+        // `Object subclass: #Foo ...` patterns (F4-U2) can look it up.
+        globals = const_cast<proto::ProtoObject*>(
+            bootstrap.objectProto->newChild(rootCtx, /*isMutable=*/true));
+        auto* objKey = rootCtx->fromUTF8String("Object")->asString(rootCtx);
+        globals->setAttribute(rootCtx, objKey, bootstrap.objectProto);
     }
 
     ~Impl() {
@@ -65,6 +78,7 @@ STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
     installStringPrimitives(*this);
     installBlockPrimitives(*this);
     installDebuggerPrimitives(*this);
+    installObjectPrimitives(*this);
 }
 STRuntime::~STRuntime() = default;
 
@@ -74,6 +88,7 @@ proto::ProtoRootSet* STRuntime::asyncRootSet()  const { return impl_->asyncRoots
 const Bootstrap&     STRuntime::bootstrap()     const { return impl_->bootstrap; }
 PrimitiveRegistry&   STRuntime::registry()            { return impl_->registry; }
 DebuggerRuntime&     STRuntime::debugger()            { return impl_->debugger; }
+proto::ProtoObject*  STRuntime::globals()       const { return impl_->globals; }
 
 const proto::ProtoObject*
 STRuntime::materialize(const BytecodeModule& m, size_t i) const {

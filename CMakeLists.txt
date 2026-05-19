@@ -61,6 +61,7 @@ add_library(protost_runtime STATIC
     src/primitives/string_prims.cpp
     src/primitives/block_prims.cpp
     src/primitives/debugger_prims.cpp
+    src/primitives/object_prims.cpp
 )
 target_include_directories(protost_runtime PUBLIC src include ${PROTOCORE_INCLUDE_DIRS})
 target_compile_definitions(protost_runtime PRIVATE

@@ -189,3 +189,45 @@ TEST_CASE("Engine: F3 hero - sum 1..100 via whileTrue + closures = 5050", "[engi
     REQUIRE(r->asLong(rt.rootCtx()) == 5050);
 }
 
+TEST_CASE("Engine: STRuntime exposes globals with Object pre-registered", "[engine][globals]") {
+    protoST::STRuntime rt;
+    auto* g = rt.globals();
+    REQUIRE(g != nullptr);
+    auto* ctx = rt.rootCtx();
+    auto* sym = ctx->fromUTF8String("Object")->asString(ctx);
+    auto* obj = g->getAttribute(ctx, sym);
+    REQUIRE(obj != nullptr);
+    REQUIRE(obj != PROTO_NONE);
+}
+
+TEST_CASE("Engine: Object>>newChild returns a fresh mutable instance", "[engine][globals]") {
+    // Hand-build bytecode: PUSH_GLOBAL #Object; SEND_UNARY #newChild; RETURN_TOP
+    protoST::STRuntime rt;
+    protoST::BytecodeModule m;
+    m.internSymbol("Object");        // const idx 0
+    m.internSymbol("newChild");      // const idx 1
+    m.emit(protoST::Op::PUSH_GLOBAL, 0);
+    m.emit(protoST::Op::SEND_UNARY, 1);
+    m.emit(protoST::Op::RETURN_TOP, 0);
+
+    auto* r = rt.runTopLevel(m);
+    REQUIRE(r != nullptr);
+    REQUIRE(r != PROTO_NONE);
+}
+
+TEST_CASE("Engine: STORE_GLOBAL + PUSH_GLOBAL roundtrip", "[engine][globals]") {
+    protoST::STRuntime rt;
+    protoST::BytecodeModule m;
+    m.addInteger(42);             // idx 0
+    m.internSymbol("Foo");        // idx 1
+    m.emit(protoST::Op::PUSH_CONST,   0);   // push 42
+    m.emit(protoST::Op::DUP,          0);   // keep one copy on stack
+    m.emit(protoST::Op::STORE_GLOBAL, 1);   // Foo := 42  (consumes one copy)
+    m.emit(protoST::Op::POP,          0);   // drop the residual
+    m.emit(protoST::Op::PUSH_GLOBAL,  1);   // load Foo
+    m.emit(protoST::Op::RETURN_TOP,   0);
+
+    auto* r = rt.runTopLevel(m);
+    REQUIRE(r->asLong(rt.rootCtx()) == 42);
+}
+

@@ -31,6 +31,11 @@ public:
     proto::ProtoContext* rootCtx()       const;
     proto::ProtoRootSet* asyncRootSet()  const;
 
+    // Mutable globals namespace (PUSH_GLOBAL / STORE_GLOBAL). Allocated at
+    // STRuntime construction as a mutable child of objectProto, with "Object"
+    // pre-registered so that `Object subclass: ...` compiles can resolve it.
+    proto::ProtoObject*  globals()       const;
+
     // Access to the bootstrap prototype set (Object/Number/...).
     const Bootstrap& bootstrap() const;
 

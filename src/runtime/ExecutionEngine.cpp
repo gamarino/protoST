@@ -172,11 +172,21 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
                 const proto::ProtoObject* recv = stack.back(); stack.pop_back();
 
                 auto* selSym = ctx->fromUTF8String(selStr.c_str())->asString(ctx);
-                // Use getPrototype (not getFirstParent) so tagged immediates
-                // (SmallInteger, Boolean, inline String, ...) resolve to their
-                // prototype via ProtoSpace::*Prototype slots set by bootstrap.
-                auto* proto = recv->getPrototype(ctx);
-                auto* attr  = (proto && proto != PROTO_NONE) ? proto->getAttribute(ctx, selSym) : nullptr;
+                // Lookup walks from the receiver itself first, then up the
+                // prototype chain.  Starting at the receiver matters for
+                // "class as receiver" patterns (F4): a class prototype
+                // carries its instance methods as own-attributes, and
+                // messages sent to the class itself must resolve to those
+                // methods.  For ordinary instance receivers, getAttribute
+                // walks past the (typically empty) own-attribute slot to the
+                // prototype where the method is bound.
+                //
+                // Note: getAttribute on a tagged immediate (SmallInteger,
+                // Boolean, ...) correctly delegates to its protoCore
+                // prototype slot (smallIntegerPrototype etc.), which our
+                // bootstrap has already re-pointed at the protoST
+                // prototypes (see Bootstrap.cpp).
+                auto* attr = recv->getAttribute(ctx, selSym);
                 if (!attr || attr == PROTO_NONE) {
                     throw std::runtime_error("doesNotUnderstand: " + selStr);
                 }
@@ -223,9 +233,29 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
                 const_cast<proto::ProtoObject*>(captured)->setAttribute(ctx, sym, val);
                 break;
             }
-            case Op::PUSH_GLOBAL:
-            case Op::STORE_GLOBAL:
-                throw std::runtime_error("PUSH_GLOBAL / STORE_GLOBAL not yet implemented (F4-U1)");
+            case Op::PUSH_GLOBAL: {
+                // arg = constant pool index of the (interned) global name.
+                const std::string& nameStr = m.constSymbol(arg);
+                auto* sym = ctx->fromUTF8String(nameStr.c_str())->asString(ctx);
+                auto* g = rt_.globals();
+                auto* val = g ? g->getAttribute(ctx, sym) : nullptr;
+                if (!val || val == PROTO_NONE)
+                    throw std::runtime_error("undefined global: " + nameStr);
+                stack.push_back(val);
+                break;
+            }
+            case Op::STORE_GLOBAL: {
+                if (stack.empty())
+                    throw std::runtime_error("STORE_GLOBAL with empty stack");
+                const proto::ProtoObject* val = stack.back();
+                stack.pop_back();
+                const std::string& nameStr = m.constSymbol(arg);
+                auto* sym = ctx->fromUTF8String(nameStr.c_str())->asString(ctx);
+                auto* g = rt_.globals();
+                if (!g) throw std::runtime_error("globals not initialized");
+                g->setAttribute(ctx, sym, val);
+                break;
+            }
             case Op::PUSH_INSTVAR:
             case Op::STORE_INSTVAR:
                 throw std::runtime_error("PUSH_INSTVAR / STORE_INSTVAR not yet implemented (F4-U4)");
