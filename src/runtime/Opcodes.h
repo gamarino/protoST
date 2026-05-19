@@ -34,6 +34,9 @@ enum class Op : uint8_t {
     PUSH_BLOCK      = 20,   // arg = bytecode-module-table index
     // Cascade helper
     DUP_RECEIVER    = 21,   // dup the value at depth = arg
+    // Closures (F3)
+    PUSH_CAPTURED   = 22,   // arg = constant pool index (symbol name)
+    STORE_CAPTURED  = 23,   // arg = constant pool index (symbol name)
     // Extend for >256-index args
     EXTEND          = 254,
     // Debugger primitive guard

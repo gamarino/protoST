@@ -187,6 +187,9 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
                 if (v == PROTO_FALSE) pc += static_cast<size_t>(arg) * kInstrSize;
                 break;
             }
+            case Op::PUSH_CAPTURED:
+            case Op::STORE_CAPTURED:
+                throw std::runtime_error("PUSH_CAPTURED / STORE_CAPTURED not yet implemented (F3-C4)");
             default:
                 throw std::runtime_error(
                     "ExecutionEngine: unimplemented opcode at pc=" +
