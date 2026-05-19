@@ -1,0 +1,3 @@
+home = @HOME_BIN@
+version = @VERSION@
+include-system-modules = false

@@ -8,6 +8,7 @@ target_include_directories(protost_unit_tests PRIVATE
 target_link_libraries(protost_unit_tests PRIVATE
     Catch2::Catch2WithMain
     protost_frontend
+    protost_runtime
     ${PROTOCORE_LIBRARY}
 )
 target_sources(protost_unit_tests PRIVATE
@@ -18,6 +19,9 @@ target_sources(protost_unit_tests PRIVATE
 )
 target_sources(protost_unit_tests PRIVATE
     unit/test_ast_printer.cpp
+)
+target_sources(protost_unit_tests PRIVATE
+    unit/test_venv.cpp
 )
 target_compile_definitions(protost_unit_tests PRIVATE
     PROTOST_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures"

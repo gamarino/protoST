@@ -1,6 +1,7 @@
 #include "protoST/STRuntime.h"
 #include "frontend/Parser.h"
 #include "frontend/ASTPrinter.h"
+#include "runtime/Venv.h"
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -58,7 +59,22 @@ int main(int argc, char** argv) {
     }
     if (mode == "-e")                       { return 1; /* implemented in Task 48 */ }
     if (mode == "-d")                       { return 1; /* implemented in Task 56 */ }
-    if (mode == "venv")                     { return 1; /* implemented in Task 24 */ }
+    if (mode == "venv") {
+        if (argc < 3) { std::fprintf(stderr, "venv requires a subcommand: create|activate|info\n"); return 64; }
+        std::string sub = argv[2];
+        if (sub == "create") {
+            std::string path = (argc >= 4) ? argv[3] : ".venv";
+            return protoST::venvCreate(path, "/usr/local/bin", "0.1.0");
+        }
+        if (sub == "activate") {
+            std::string p = (argc >= 4) ? argv[3] : protoST::venvDiscover("");
+            if (p.empty()) { std::fprintf(stderr, "no venv to activate\n"); return 1; }
+            return protoST::venvActivateSnippet(p);
+        }
+        if (sub == "info") return protoST::venvInfo("");
+        std::fprintf(stderr, "unknown venv subcommand: %s\n", sub.c_str());
+        return 64;
+    }
 
     // unknown leading flag → treat as script path (future): for now error.
     std::fprintf(stderr, "Unknown option or mode: %s\n", argv[1]);

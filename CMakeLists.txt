@@ -47,8 +47,15 @@ target_include_directories(protost_frontend PUBLIC
     include
     ${PROTOCORE_INCLUDE_DIRS})
 
+add_library(protost_runtime STATIC
+    src/runtime/Venv.cpp
+)
+target_include_directories(protost_runtime PUBLIC src include ${PROTOCORE_INCLUDE_DIRS})
+target_compile_definitions(protost_runtime PRIVATE
+    PROTOST_TEMPLATE_DIR="${CMAKE_SOURCE_DIR}/src/venv_template")
+
 add_executable(protost src/main.cpp)
-target_link_libraries(protost PRIVATE protost_frontend ${PROTOCORE_LIBRARY})
+target_link_libraries(protost PRIVATE protost_frontend protost_runtime ${PROTOCORE_LIBRARY})
 
 enable_testing()
 
