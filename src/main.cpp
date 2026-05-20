@@ -149,7 +149,46 @@ int main(int argc, char** argv) {
         return 64;
     }
 
-    // unknown leading flag → treat as script path (future): for now error.
-    std::fprintf(stderr, "Unknown option or mode: %s\n", argv[1]);
-    return 64;
+    // Default: treat argv[1] as a path to a .st script file and execute it.
+    {
+        const char* path = argv[1];
+        std::FILE* fp = std::fopen(path, "rb");
+        if (!fp) { std::fprintf(stderr, "Unknown option or mode: %s\n", path); return 64; }
+        std::fseek(fp, 0, SEEK_END); long n = std::ftell(fp); std::fseek(fp, 0, SEEK_SET);
+        std::string src(static_cast<size_t>(n), '\0');
+        std::fread(src.data(), 1, static_cast<size_t>(n), fp);
+        std::fclose(fp);
+
+        protoST::Parser P(std::move(src));
+        auto ast = P.parseModule();
+        for (auto& e : P.errors())
+            std::fprintf(stderr, "%s:%d:%d: %s\n", path, e.line, e.column, e.message.c_str());
+        if (!P.errors().empty()) return 65;
+
+        protoST::Compiler C;
+        auto bc = C.compileModule(*ast);
+        if (C.hasErrors()) {
+            for (auto& s : C.errors()) std::fprintf(stderr, "compile error: %s\n", s.c_str());
+            return 70;
+        }
+        try {
+            protoST::STRuntime rt;
+            auto* r = rt.runTopLevel(*bc);
+            auto* ctx = rt.rootCtx();
+            if (r == PROTO_NONE)            std::puts("nil");
+            else if (r == PROTO_TRUE)       std::puts("true");
+            else if (r == PROTO_FALSE)      std::puts("false");
+            else {
+                try { std::printf("%lld\n", r->asLong(ctx)); }
+                catch (...) {
+                    auto s = r->asString(ctx) ? r->asString(ctx)->toStdString(ctx) : std::string("<obj>");
+                    std::puts(s.c_str());
+                }
+            }
+            return 0;
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "error: %s\n", e.what());
+            return 1;
+        }
+    }
 }
