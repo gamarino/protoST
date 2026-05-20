@@ -58,6 +58,7 @@ add_library(protost_runtime STATIC
     src/runtime/STRuntime.cpp
     src/runtime/ExecutionEngine.cpp
     src/runtime/Bootstrap.cpp
+    src/runtime/ValueFormat.cpp
     src/debugger/DebuggerRuntime.cpp
     src/debugger/BreakpointTable.cpp
     src/primitives/int_prims.cpp

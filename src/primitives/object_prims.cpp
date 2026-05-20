@@ -143,6 +143,69 @@ const proto::ProtoObject* prim_Object_installMethod(STRuntime&,
     return r;
 }
 
+// class __setClassName: nameString
+//   → setAttribute(class, #__class_name__, nameString)
+//   → returns class (recv)
+//
+// BL-3: emitted by the compiler's ClassDecl path right after `newChild`, so
+// every user class object carries its declared name. printString reads this
+// attribute (walking the prototype chain) to render "a Counter" etc.
+const proto::ProtoObject* prim_Object_setClassName(STRuntime&,
+                                                    proto::ProtoContext* ctx,
+                                                    const proto::ProtoObject* r,
+                                                    const proto::ProtoObject* const* a,
+                                                    int argc) {
+    if (argc != 1) throw std::runtime_error("__setClassName: expects 1 arg");
+    static const proto::ProtoString* nameKey =
+        proto::ProtoString::createSymbol(ctx, "__class_name__");
+    const_cast<proto::ProtoObject*>(r)->setAttribute(ctx, nameKey, a[0]);
+    return r;
+}
+
+// recv printString → human-readable ProtoString
+//
+// BL-3: default Object>>printString. Resolves the receiver's class name by
+// reading the `__class_name__` attribute (getAttribute walks the prototype
+// chain, so an instance finds the name stamped on its class object) and
+// returns "a ClassName" — or "an ClassName" when the class name starts with a
+// vowel. A user class can override this by defining its own `printString`
+// method; ordinary inheritance handles that with no special-casing here.
+//
+// If the receiver IS a class object (it carries `__class_name__` as an OWN
+// attribute), the bare class name is returned ("Counter") rather than
+// "a Counter" — nicer for printing the class itself.
+const proto::ProtoObject* prim_Object_printString(STRuntime&,
+                                                   proto::ProtoContext* ctx,
+                                                   const proto::ProtoObject* r,
+                                                   const proto::ProtoObject* const*,
+                                                   int) {
+    static const proto::ProtoString* nameKey =
+        proto::ProtoString::createSymbol(ctx, "__class_name__");
+
+    // An own `__class_name__` means the receiver is itself a class object.
+    const proto::ProtoObject* ownName =
+        r ? r->getOwnAttributeDirect(ctx, nameKey) : nullptr;
+    if (ownName && ownName != PROTO_NONE) {
+        auto* s = ownName->asString(ctx);
+        if (s) return s->asObject(ctx);
+    }
+
+    // Otherwise walk the prototype chain for the class name.
+    const proto::ProtoObject* nameObj =
+        r ? r->getAttribute(ctx, nameKey) : nullptr;
+    std::string name;
+    if (nameObj && nameObj != PROTO_NONE) {
+        auto* s = nameObj->asString(ctx);
+        if (s) name = s->toStdString(ctx);
+    }
+    if (name.empty()) return ctx->fromUTF8String("an object");
+
+    char c0 = name.empty() ? '\0' : name[0];
+    bool vowel = (c0 == 'A' || c0 == 'E' || c0 == 'I' || c0 == 'O' || c0 == 'U');
+    std::string out = (vowel ? "an " : "a ") + name;
+    return ctx->fromUTF8String(out.c_str());
+}
+
 // Import from: 'foo'
 //
 // F5 v2-M2: Resolves 'foo' via protoCore's Unified Module Discovery
@@ -198,6 +261,12 @@ void installObjectPrimitives(STRuntime& rt) {
                   reg.registerPrim(prim_Object_installMethod));
     bindPrimitive(rt, b.objectProto, "asActor",
                   reg.registerPrim(prim_Object_asActor));
+    // BL-3: rich printString. `__setClassName:` is emitted by the compiler's
+    // ClassDecl path; `printString` is the default inherited by every object.
+    bindPrimitive(rt, b.objectProto, "__setClassName:",
+                  reg.registerPrim(prim_Object_setClassName));
+    bindPrimitive(rt, b.objectProto, "printString",
+                  reg.registerPrim(prim_Object_printString));
     // F6 v2 T6: sleep primitive — test-only helper for the wall-clock
     // parallelism proof. Bound on objectProto so any object responds to it.
     bindPrimitive(rt, b.objectProto, "sleep:",

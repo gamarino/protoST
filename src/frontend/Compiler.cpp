@@ -242,6 +242,18 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         // needed, so there is no longer a 256-symbol ceiling.
         m.emitWide(Op::PUSH_GLOBAL,  static_cast<unsigned int>(superIdx), currentLine_);
         m.emitWide(Op::SEND_UNARY,   static_cast<unsigned int>(newChildIdx), currentLine_);
+        // BL-3: stamp the declared class name onto the fresh class object so
+        // printString can render instances as "a Counter". We send
+        // `__setClassName:` (a keyword primitive on objectProto) with the name
+        // as a string literal; the send leaves the class object on the stack
+        // (the primitive returns its receiver). DUP then keeps a copy as the
+        // statement's value while STORE_GLOBAL binds the class under its name.
+        {
+            auto setNameIdx = m.internSymbol("__setClassName:");
+            auto nameStrIdx = m.addString(n.text);
+            m.emitWide(Op::PUSH_CONST,   static_cast<unsigned int>(nameStrIdx), currentLine_);
+            m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(setNameIdx), currentLine_);
+        }
         m.emit(Op::DUP,          0, currentLine_);
         m.emitWide(Op::STORE_GLOBAL, static_cast<unsigned int>(classNameIdx), currentLine_);
         return;

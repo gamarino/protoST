@@ -1151,3 +1151,90 @@ TEST_CASE("BL-1: SEND_SUPER opcode dispatches to the parent implementation",
     // the same handler branch (superPending), so this asserts the shared code.
     REQUIRE(r->asLong(rt.rootCtx()) == 11);
 }
+
+// ---------------------------------------------------------------------------
+// BL-3: printString — objects display as "a ClassName" instead of "<obj>".
+// ---------------------------------------------------------------------------
+#include "runtime/ValueFormat.h"
+
+TEST_CASE("BL-3: a user-class instance printString is 'a Counter'",
+          "[engine][printstring][bl3]") {
+    protoST::STRuntime rt;
+    auto* r = bl1Run(rt,
+        "Object subclass: #Counter instanceVariableNames: 'count'. "
+        "Counter newChild printString.");
+    auto* s = r->asString(rt.rootCtx());
+    REQUIRE(s != nullptr);
+    REQUIRE(s->toStdString(rt.rootCtx()) == "a Counter");
+}
+
+TEST_CASE("BL-3: a vowel-initial class name uses 'an'",
+          "[engine][printstring][bl3]") {
+    protoST::STRuntime rt;
+    auto* r = bl1Run(rt,
+        "Object subclass: #Engine instanceVariableNames: ''. "
+        "Engine newChild printString.");
+    auto* s = r->asString(rt.rootCtx());
+    REQUIRE(s != nullptr);
+    REQUIRE(s->toStdString(rt.rootCtx()) == "an Engine");
+}
+
+TEST_CASE("BL-3: a class object itself printString is its bare name",
+          "[engine][printstring][bl3]") {
+    protoST::STRuntime rt;
+    auto* r = bl1Run(rt,
+        "Object subclass: #Widget instanceVariableNames: ''. "
+        "Widget printString.");
+    auto* s = r->asString(rt.rootCtx());
+    REQUIRE(s != nullptr);
+    REQUIRE(s->toStdString(rt.rootCtx()) == "Widget");
+}
+
+TEST_CASE("BL-3: a user printString override is honoured via inheritance",
+          "[engine][printstring][bl3]") {
+    protoST::STRuntime rt;
+    auto* r = bl1Run(rt,
+        "Object subclass: #Greeting instanceVariableNames: ''. "
+        "Greeting >> printString ^ 'hello'. "
+        "Greeting newChild printString.");
+    auto* s = r->asString(rt.rootCtx());
+    REQUIRE(s != nullptr);
+    REQUIRE(s->toStdString(rt.rootCtx()) == "hello");
+}
+
+TEST_CASE("BL-3: formatValue renders a user instance as 'a Counter'",
+          "[engine][printstring][bl3][formatvalue]") {
+    protoST::STRuntime rt;
+    auto* r = bl1Run(rt,
+        "Object subclass: #Counter instanceVariableNames: 'count'. "
+        "Counter newChild.");
+    REQUIRE(protoST::formatValue(rt, rt.rootCtx(), r) == "a Counter");
+}
+
+TEST_CASE("BL-3: formatValue handles primitives — nil/true/false/int/string",
+          "[engine][printstring][bl3][formatvalue]") {
+    protoST::STRuntime rt;
+    auto* ctx = rt.rootCtx();
+    REQUIRE(protoST::formatValue(rt, ctx, PROTO_NONE)  == "nil");
+    REQUIRE(protoST::formatValue(rt, ctx, nullptr)     == "nil");
+    REQUIRE(protoST::formatValue(rt, ctx, PROTO_TRUE)  == "true");
+    REQUIRE(protoST::formatValue(rt, ctx, PROTO_FALSE) == "false");
+    REQUIRE(protoST::formatValue(rt, ctx, ctx->fromLong(42)) == "42");
+    REQUIRE(protoST::formatValue(rt, ctx, ctx->fromUTF8String("hi")) == "hi");
+}
+
+TEST_CASE("BL-3: formatValue renders a bootstrap actor as 'an Actor'",
+          "[engine][printstring][bl3][formatvalue]") {
+    protoST::STRuntime rt;
+    // An actor instance is a child of actorProto, which carries the
+    // __class_name__ "Actor". formatValue resolves it purely in C++.
+    auto* r = bl1Run(rt, "7 asActor.");
+    REQUIRE(protoST::formatValue(rt, rt.rootCtx(), r) == "an Actor");
+}
+
+TEST_CASE("BL-3: formatValue renders a bootstrap future as 'a Future'",
+          "[engine][printstring][bl3][formatvalue]") {
+    protoST::STRuntime rt;
+    auto* fut = rt.newFuture(rt.rootCtx());
+    REQUIRE(protoST::formatValue(rt, rt.rootCtx(), fut) == "a Future");
+}

@@ -1,6 +1,7 @@
 #include "DebuggerRuntime.h"
 #include "protoST/STRuntime.h"
 #include "../runtime/BytecodeModule.h"
+#include "../runtime/ValueFormat.h"
 #include "../runtime/Opcodes.h"
 #include "../frontend/Parser.h"
 #include "../frontend/Compiler.h"
@@ -38,16 +39,9 @@ bool DebuggerRuntime::evaluateExpression(STRuntime& rt, const std::string& expr,
     }
     try {
         auto* r = rt.runTopLevel(*bc);
-        if (r == PROTO_NONE)       out = "nil";
-        else if (r == PROTO_TRUE)  out = "true";
-        else if (r == PROTO_FALSE) out = "false";
-        else {
-            try { out = std::to_string(r->asLong(rt.rootCtx())); }
-            catch (...) {
-                auto* s = r->asString(rt.rootCtx());
-                out = s ? s->toStdString(rt.rootCtx()) : std::string("<obj>");
-            }
-        }
+        // BL-3: shared formatter — non-primitive objects render as
+        // "a ClassName" instead of "<obj>".
+        out = protoST::formatValue(rt, rt.rootCtx(), r);
         return true;
     } catch (const std::exception& e) {
         out = std::string("error: ") + e.what();
@@ -122,7 +116,10 @@ void DebuggerRuntime::enterSession(STRuntime& rt, DebugFrame frame, const std::s
         }
         if (line == "locals") {
             for (size_t k = 0; k < frame.locals.size(); ++k) {
-                out << "  [" << k << "] " << (frame.locals[k] ? "<obj>" : "nil") << "\n";
+                // BL-3: shared formatter — render objects as "a ClassName".
+                out << "  [" << k << "] "
+                    << protoST::formatValue(rt, rt.rootCtx(), frame.locals[k])
+                    << "\n";
             }
             continue;
         }

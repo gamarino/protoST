@@ -49,6 +49,36 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     // on objectProto (e.g. Object>>halt, Object>>printNl) are reachable from
     // the nil receiver. nilProto's parent is objectProto so the walk succeeds.
     sp.nonePrototype         = const_cast<proto::ProtoObject*>(out.nilProto);
+
+    // BL-3: stamp each bootstrap prototype with its class name under the
+    // perpetual `__class_name__` symbol key. printString (object_prims.cpp)
+    // walks the prototype chain looking for this attribute to build a
+    // human-readable "a ClassName" string. Built-in "classes" are just these
+    // prototypes, so an Actor instance can print as "an Actor", etc.
+    //
+    // The key is a strong symbol — eternal vocabulary shared by every class
+    // object — so it is created once via ProtoString::createSymbol and never
+    // re-interned. The name values are short ProtoStrings created here; they
+    // are attributes of the (permanently rooted) prototype objects, so they
+    // stay reachable for the runtime's lifetime.
+    const proto::ProtoString* nameKey =
+        proto::ProtoString::createSymbol(ctx, "__class_name__");
+    auto stamp = [&](const proto::ProtoObject* proto, const char* name) {
+        const_cast<proto::ProtoObject*>(proto)->setAttribute(
+            ctx, nameKey, ctx->fromUTF8String(name));
+    };
+    stamp(out.objectProto,       "Object");
+    stamp(out.numberProto,       "Number");
+    stamp(out.smallIntegerProto, "SmallInteger");
+    stamp(out.largeIntegerProto, "LargeInteger");
+    stamp(out.floatProto,        "Float");
+    stamp(out.booleanProto,      "Boolean");
+    stamp(out.stringProto,       "String");
+    stamp(out.symbolProto,       "Symbol");
+    stamp(out.blockProto,        "Block");
+    stamp(out.actorProto,        "Actor");
+    stamp(out.futureProto,       "Future");
+    stamp(out.nilProto,          "UndefinedObject");
 }
 
 } // namespace protoST

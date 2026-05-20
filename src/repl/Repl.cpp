@@ -4,6 +4,7 @@
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
 #include "runtime/BytecodeModule.h"
+#include "runtime/ValueFormat.h"
 #include "protoCore.h"
 
 #include <readline/readline.h>
@@ -108,20 +109,8 @@ bool readLine(const char* prompt, bool interactive, std::string& out, bool* eof)
 }
 
 void printResult(STRuntime& rt, const proto::ProtoObject* r) {
-    auto* ctx = rt.rootCtx();
-    if (r == PROTO_NONE || r == nullptr) { std::puts("=> nil"); return; }
-    if (r == PROTO_TRUE)  { std::puts("=> true");  return; }
-    if (r == PROTO_FALSE) { std::puts("=> false"); return; }
-    try {
-        std::printf("=> %lld\n", r->asLong(ctx));
-    } catch (...) {
-        try {
-            auto* s = r->asString(ctx);
-            std::printf("=> %s\n", s ? s->toStdString(ctx).c_str() : "<obj>");
-        } catch (...) {
-            std::puts("=> <obj>");
-        }
-    }
+    // BL-3: shared formatter — non-primitive objects render as "a ClassName".
+    std::printf("=> %s\n", protoST::formatValue(rt, rt.rootCtx(), r).c_str());
 }
 
 void printHelp() {

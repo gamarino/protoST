@@ -27,6 +27,17 @@ y := x + 10.
 y.
 EOF
 
+# BL-3: a second script whose top-level variable holds a user-class instance,
+# so the DAP `variables` panel can be checked for "a Counter" instead of the
+# old "<obj>".
+OBJSCRIPT="$WORK/objprog.st"
+cat > "$OBJSCRIPT" <<'EOF'
+Object subclass: #Counter instanceVariableNames: 'count'.
+c := Counter newChild.
+z := 99.
+z.
+EOF
+
 # The Python driver. It speaks framed DAP, reacts to events, and prints a
 # summary line beginning with RESULT: that the shell asserts on.
 DRIVER="$WORK/driver.py"
@@ -88,7 +99,11 @@ def await_response(want_seq):
 send('{"seq":1,"type":"request","command":"initialize","arguments":{}}')
 send('{"seq":2,"type":"request","command":"launch","arguments":{"program":"%s","stopOnEntry":false}}' % script)
 
-if mode in ("breakpoint", "inspect"):
+if mode == "objvar":
+    # Break at line 4 (`z.`) so the prior assignments to `c` and `z` have run.
+    send('{"seq":3,"type":"request","command":"setBreakpoints","arguments":'
+         '{"source":{"path":"%s"},"breakpoints":[{"line":4}]}}' % script)
+elif mode in ("breakpoint", "inspect"):
     send('{"seq":3,"type":"request","command":"setBreakpoints","arguments":'
          '{"source":{"path":"%s"},"breakpoints":[{"line":2}]}}' % script)
 else:
@@ -107,6 +122,28 @@ while time.time() < deadline:
         break
     if '"event":"stopped"' in m and '"reason":"breakpoint"' in m:
         got_stopped = True
+        if mode == "objvar":
+            # BL-3: an object-valued variable must show "a Counter", not "<obj>".
+            st_seq = seq; seq += 1
+            request(st_seq, "stackTrace", {"threadId": 1})
+            st = await_response(st_seq)
+            frames = (st or {}).get("body", {}).get("stackFrames", [])
+            frame_id = frames[0]["id"] if frames else None
+
+            sc_seq = seq; seq += 1
+            request(sc_seq, "scopes", {"frameId": frame_id})
+            sc = await_response(sc_seq)
+            scopes = (sc or {}).get("body", {}).get("scopes", [])
+            locals_scope = next((s for s in scopes
+                                 if s.get("name") == "Locals"), None)
+            var_ref = locals_scope["variablesReference"] if locals_scope else 0
+
+            va_seq = seq; seq += 1
+            request(va_seq, "variables", {"variablesReference": var_ref})
+            va = await_response(va_seq)
+            variables = (va or {}).get("body", {}).get("variables", [])
+            byname = {v["name"]: v["value"] for v in variables}
+            inspect_ok = int(byname.get("c") == "a Counter")
         if mode == "inspect":
             # stackTrace
             st_seq = seq; seq += 1
@@ -187,5 +224,11 @@ out=$(python3 "$DRIVER" "$PROTOST" "$SCRIPT" inspect)
 echo "$out"
 echo "$out" | grep -q 'RESULT: stopped=1 terminated=1 inspect=1 exit=0' \
     || { echo "FAIL: inspection path"; exit 1; }
+
+# --- path 4: BL-3 — an object-valued variable shows "a Counter" --------------
+out=$(python3 "$DRIVER" "$PROTOST" "$OBJSCRIPT" objvar)
+echo "$out"
+echo "$out" | grep -q 'RESULT: stopped=1 terminated=1 inspect=1 exit=0' \
+    || { echo "FAIL: BL-3 object-variable formatting path"; exit 1; }
 
 echo OK

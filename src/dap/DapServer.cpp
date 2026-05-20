@@ -5,6 +5,7 @@
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
 #include "runtime/BytecodeModule.h"
+#include "runtime/ValueFormat.h"
 #include "debugger/DebuggerRuntime.h"
 #include "protoCore.h"
 
@@ -414,23 +415,18 @@ private:
     }
 
     // Standard ProtoObject -> display string, matching the -e / REPL / text
-    // debugger convention.
+    // debugger convention. BL-3: delegates to the shared protoST::formatValue
+    // helper so non-primitive objects render as "a ClassName" instead of
+    // "<obj>". The C++-only resolution path is safe to call while the engine
+    // is stopped (no bytecode runs, so no re-entrancy).
     std::string formatValue(const proto::ProtoObject* obj) {
-        if (obj == nullptr || obj == PROTO_NONE) return "nil";
-        if (obj == PROTO_TRUE)  return "true";
-        if (obj == PROTO_FALSE) return "false";
-        proto::ProtoContext* ctx = runtime_ ? runtime_->rootCtx() : nullptr;
-        if (!ctx) return "<obj>";
-        try {
-            return std::to_string(obj->asLong(ctx));
-        } catch (...) {
-            try {
-                const auto* s = obj->asString(ctx);
-                return s ? s->toStdString(ctx) : std::string("<obj>");
-            } catch (...) {
-                return "<obj>";
-            }
+        if (!runtime_) {
+            if (obj == nullptr || obj == PROTO_NONE) return "nil";
+            if (obj == PROTO_TRUE)  return "true";
+            if (obj == PROTO_FALSE) return "false";
+            return "an object";
         }
+        return protoST::formatValue(*runtime_, runtime_->rootCtx(), obj);
     }
 
     // --- stackTrace ---------------------------------------------------------

@@ -6,6 +6,7 @@
 #include "debugger/DebuggerRuntime.h"
 #include "repl/Repl.h"
 #include "dap/DapServer.h"
+#include "runtime/ValueFormat.h"
 #include "protoCore.h"
 #include <cstdio>
 #include <cstring>
@@ -90,17 +91,9 @@ int main(int argc, char** argv) {
         try {
             protoST::STRuntime rt;
             auto* r = rt.runTopLevel(*bc);
-            auto* ctx = rt.rootCtx();
-            if (r == PROTO_NONE)            std::puts("nil");
-            else if (r == PROTO_TRUE)       std::puts("true");
-            else if (r == PROTO_FALSE)      std::puts("false");
-            else {
-                try { std::printf("%lld\n", r->asLong(ctx)); }
-                catch (...) {
-                    auto s = r->asString(ctx) ? r->asString(ctx)->toStdString(ctx) : std::string("<obj>");
-                    std::puts(s.c_str());
-                }
-            }
+            // BL-3: shared formatter — non-primitive objects render as
+            // "a ClassName" via the default printString logic.
+            std::puts(protoST::formatValue(rt, rt.rootCtx(), r).c_str());
             return 0;
         } catch (const std::exception& e) {
             std::fprintf(stderr, "error: %s\n", e.what());
@@ -133,10 +126,10 @@ int main(int argc, char** argv) {
         rt.debugger().attach();
         try {
             auto* r = rt.runTopLevel(*bc);
-            auto* ctx = rt.rootCtx();
             if (r && r != PROTO_NONE) {
-                try { std::printf("=> %lld\n", r->asLong(ctx)); }
-                catch (...) { std::printf("=> <obj>\n"); }
+                // BL-3: shared formatter.
+                std::printf("=> %s\n",
+                    protoST::formatValue(rt, rt.rootCtx(), r).c_str());
             }
             return 0;
         } catch (const std::exception& e) {
@@ -187,17 +180,8 @@ int main(int argc, char** argv) {
         try {
             protoST::STRuntime rt;
             auto* r = rt.runTopLevel(*bc);
-            auto* ctx = rt.rootCtx();
-            if (r == PROTO_NONE)            std::puts("nil");
-            else if (r == PROTO_TRUE)       std::puts("true");
-            else if (r == PROTO_FALSE)      std::puts("false");
-            else {
-                try { std::printf("%lld\n", r->asLong(ctx)); }
-                catch (...) {
-                    auto s = r->asString(ctx) ? r->asString(ctx)->toStdString(ctx) : std::string("<obj>");
-                    std::puts(s.c_str());
-                }
-            }
+            // BL-3: shared formatter.
+            std::puts(protoST::formatValue(rt, rt.rootCtx(), r).c_str());
             return 0;
         } catch (const std::exception& e) {
             std::fprintf(stderr, "error: %s\n", e.what());
