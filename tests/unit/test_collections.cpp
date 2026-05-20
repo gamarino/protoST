@@ -1271,6 +1271,279 @@ TEST_CASE("COL-d: derived protocol over a Dictionary iterates values",
     }
 }
 
+// =========================  COL-e — Interval  ==============================
+
+TEST_CASE("COL-e: 1 to: 5 builds an Interval of size 5 with at:",
+          "[collections][track2]") {
+    {
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, "(1 to: 5) size.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 5);
+    }
+    {
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, "(1 to: 5) at: 1.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 1);
+    }
+    {
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, "(1 to: 5) at: 5.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 5);
+    }
+}
+
+TEST_CASE("COL-e: 1 to: 10 by: 2 — size 5, strided elements",
+          "[collections][track2]") {
+    {
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, "(1 to: 10 by: 2) size.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 5);
+    }
+    {
+        // elements are 1 3 5 7 9
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, "(1 to: 10 by: 2) at: 4.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 7);
+    }
+    {
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, "(1 to: 10 by: 2) last.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 9);
+    }
+}
+
+TEST_CASE("COL-e: (1 to: 5) do: sums into a method local",
+          "[collections][track2]") {
+    // The block closes over the method temp `s`.
+    const char* src =
+        "Object subclass: #Adder. "
+        "Adder >> run "
+        "  | s | "
+        "  s := 0. "
+        "  (1 to: 5) do: [ :i | s := s + i ]. "
+        "  ^ s. "
+        "a := Adder newChild. a run.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r != nullptr);
+    REQUIRE(r->asLong(rt.rootCtx()) == 15);
+}
+
+TEST_CASE("COL-e: 5 to: 1 (start > stop, positive step) is empty",
+          "[collections][track2]") {
+    {
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, "(5 to: 1) size.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 0);
+    }
+    {
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, "(5 to: 1) isEmpty.");
+        REQUIRE(r == PROTO_TRUE);
+    }
+}
+
+TEST_CASE("COL-e: 10 to: 1 by: (0 - 1) counts down 10 9 .. 1",
+          "[collections][track2]") {
+    {
+        // do: over a descending interval sums 10+9+...+1 = 55
+        const char* src =
+            "Object subclass: #Down. "
+            "Down >> run "
+            "  | s | "
+            "  s := 0. "
+            "  (10 to: 1 by: (0 - 1)) do: [ :i | s := s + i ]. "
+            "  ^ s. "
+            "d := Down newChild. d run.";
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, src);
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 55);
+    }
+    {
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, "(10 to: 1 by: (0 - 1)) size.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 10);
+    }
+    {
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, "(10 to: 1 by: (0 - 1)) at: 1.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 10);
+    }
+    {
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, "(10 to: 1 by: (0 - 1)) last.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 1);
+    }
+}
+
+TEST_CASE("COL-e: 1 to: 10 do: as a single to:do: keyword message",
+          "[collections][track2]") {
+    const char* src =
+        "Object subclass: #Loop. "
+        "Loop >> run "
+        "  | s | "
+        "  s := 0. "
+        "  1 to: 10 do: [ :i | s := s + i ]. "
+        "  ^ s. "
+        "l := Loop newChild. l run.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r != nullptr);
+    REQUIRE(r->asLong(rt.rootCtx()) == 55);
+}
+
+TEST_CASE("COL-e: 1 to: 10 by: 2 do: as a to:by:do: keyword message",
+          "[collections][track2]") {
+    // sums 1 3 5 7 9 = 25
+    const char* src =
+        "Object subclass: #StepLoop. "
+        "StepLoop >> run "
+        "  | s | "
+        "  s := 0. "
+        "  1 to: 10 by: 2 do: [ :i | s := s + i ]. "
+        "  ^ s. "
+        "l := StepLoop newChild. l run.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r != nullptr);
+    REQUIRE(r->asLong(rt.rootCtx()) == 25);
+}
+
+TEST_CASE("COL-e: derived protocol works on an Interval",
+          "[collections][track2]") {
+    {
+        // inject:into: folds the elements 1..5 → 15
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, "(1 to: 5) inject: 0 into: [ :a :b | a + b ].");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 15);
+    }
+    {
+        // collect: maps and yields an Array (Interval is lazy/read-only)
+        protoST::STRuntime rt;
+        auto* sp = runSrc(rt, "((1 to: 5) collect: [ :x | x * x ]) species.");
+        REQUIRE(sp == rt.bootstrap().arrayProto);
+    }
+    {
+        // the mapped Array has the squared elements 1 4 9 16 25
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, "((1 to: 5) collect: [ :x | x * x ]) at: 3.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 9);
+    }
+    {
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, "((1 to: 5) collect: [ :x | x * x ]) at: 5.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 25);
+    }
+    {
+        // select: filters — the even numbers in 1..10 → an Array of size 5
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt,
+            "((1 to: 10) select: [ :x | (x / 2) * 2 = x ]) size.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 5);
+    }
+}
+
+TEST_CASE("COL-e: (1 to: 5) asArray yields an Array of 1..5",
+          "[collections][track2]") {
+    {
+        protoST::STRuntime rt;
+        auto* sp = runSrc(rt, "((1 to: 5) asArray) species.");
+        REQUIRE(sp == rt.bootstrap().arrayProto);
+    }
+    {
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, "((1 to: 5) asArray) size.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 5);
+    }
+    {
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, "((1 to: 5) asArray) at: 4.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 4);
+    }
+}
+
+TEST_CASE("COL-e: Interval at: out of range signals an Error caught by on:do:",
+          "[collections][track2]") {
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt,
+        "[ (1 to: 5) at: 99 ] on: Error do: [ :e | 777 ].");
+    REQUIRE(r != nullptr);
+    REQUIRE(r->asLong(rt.rootCtx()) == 777);
+}
+
+TEST_CASE("COL-e: Interval first / last", "[collections][track2]") {
+    {
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, "(3 to: 9) first.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 3);
+    }
+    {
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, "(3 to: 9) last.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 9);
+    }
+    {
+        // first on an empty interval signals an Error
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt,
+            "[ (5 to: 1) first ] on: Error do: [ :e | 0 ].");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 0);
+    }
+}
+
+TEST_CASE("COL-e: regression — Array/OrderedCollection/Set/Bag/Dictionary "
+          "unaffected by Interval", "[collections][track2]") {
+    {
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, "#(1 2 3) size.");
+        REQUIRE(r->asLong(rt.rootCtx()) == 3);
+    }
+    {
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt,
+            "c := OrderedCollection new. c add: 7. c add: 8. c size.");
+        REQUIRE(r->asLong(rt.rootCtx()) == 2);
+    }
+    {
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt,
+            "s := Set new. s add: 1. s add: 1. s add: 2. s size.");
+        REQUIRE(r->asLong(rt.rootCtx()) == 2);
+    }
+    {
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt,
+            "b := Bag new. b add: 5. b add: 5. b occurrencesOf: 5.");
+        REQUIRE(r->asLong(rt.rootCtx()) == 2);
+    }
+    {
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt,
+            "d := Dictionary new. d at: #k put: 42. d at: #k.");
+        REQUIRE(r->asLong(rt.rootCtx()) == 42);
+    }
+}
+
 TEST_CASE("COL-d: species regression — Array/OrderedCollection/Set/Bag unchanged",
           "[collections][track2]") {
     {

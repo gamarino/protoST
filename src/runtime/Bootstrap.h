@@ -62,6 +62,12 @@ struct Bootstrap {
     const proto::ProtoObject* arrayProto                  = nullptr;
     // Track 2 slice b (COL-b): growable sequenceable collection.
     const proto::ProtoObject* orderedCollectionProto      = nullptr;
+    // Track 2 slice e (COL-e): `Interval` — a lazy sequenceable collection.
+    //   SequenceableCollection
+    //     `-- Interval               (lazy — no backing store; start/stop/step)
+    // An Interval (`1 to: 10 [by: 2]`) computes its elements on demand from the
+    // three bound attributes `start`/`stop`/`step` — it carries no `__data__`.
+    const proto::ProtoObject* intervalProto               = nullptr;
     // Track 2 slice c (COL-c): hashed collections.
     //   HashedCollection
     //     |-- Set                    (concrete — ProtoSet backing)

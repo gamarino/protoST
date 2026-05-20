@@ -251,6 +251,10 @@ struct STRuntime::Impl {
         globals->setAttribute(rootCtx,
             proto::ProtoString::createSymbol(rootCtx, "OrderedCollection"),
             bootstrap.orderedCollectionProto);
+        // Track 2 slice e (COL-e): the lazy interval collection.
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "Interval"),
+            bootstrap.intervalProto);
         // Track 2 slice c (COL-c): the hashed collections.
         globals->setAttribute(rootCtx,
             proto::ProtoString::createSymbol(rootCtx, "Set"),
@@ -337,6 +341,10 @@ struct STRuntime::Impl {
             pinPermanent(bootstrap.arrayProto);
             // Track 2 slice b (COL-b): the growable sequenceable collection.
             pinPermanent(bootstrap.orderedCollectionProto);
+            // Track 2 slice e (COL-e): the lazy `Interval` carries its base
+            // operations and `Number>>to:` builds instances — pin it for the
+            // runtime's whole lifetime, like every other built-in class.
+            pinPermanent(bootstrap.intervalProto);
             // Track 2 slice c (COL-c): the hashed collections — Set / Bag carry
             // their base operations; pin them for the runtime's whole lifetime.
             pinPermanent(bootstrap.setProto);

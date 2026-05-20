@@ -183,7 +183,91 @@ void setDictData(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
         ctx, dataKey(ctx), updated->asObject(ctx));
 }
 
+// --- Interval backing — a LAZY collection (no `__data__`) ------------------
+//
+// Track 2 slice e (COL-e): an `Interval` (`1 to: 10 [by: 2]`) does NOT store
+// its elements. An instance is a mutable child of `intervalProto` carrying
+// three integer attributes — `start`, `stop`, `step` — and computes each
+// element on demand. There is no `__data__`; iteration strides from `start`
+// by `step` while not past `stop`.
+
+const proto::ProtoString* intervalStartKey(proto::ProtoContext* ctx) {
+    return proto::ProtoString::createSymbol(ctx, "__interval_start__");
+}
+const proto::ProtoString* intervalStopKey(proto::ProtoContext* ctx) {
+    return proto::ProtoString::createSymbol(ctx, "__interval_stop__");
+}
+const proto::ProtoString* intervalStepKey(proto::ProtoContext* ctx) {
+    return proto::ProtoString::createSymbol(ctx, "__interval_step__");
+}
+
+// Read one integer Interval bound; a missing/nil attribute defaults to `dflt`.
+long long intervalAttr(proto::ProtoContext* ctx, const proto::ProtoObject* iv,
+                        const proto::ProtoString* key, long long dflt) {
+    const proto::ProtoObject* v = iv ? iv->getAttribute(ctx, key) : nullptr;
+    if (!v || v == PROTO_NONE) return dflt;
+    return v->asLong(ctx);
+}
+
+// The element count of an Interval. For `step > 0`: max(0, (stop-start)/step+1);
+// the analogous count for `step < 0`. Integer arithmetic, never negative.
+long long intervalSize(long long start, long long stop, long long step) {
+    if (step == 0) return 0;                       // degenerate — empty
+    if (step > 0) {
+        if (stop < start) return 0;
+        return (stop - start) / step + 1;
+    }
+    if (stop > start) return 0;
+    return (start - stop) / (-step) + 1;
+}
+
+// True when `obj` descends from `intervalProto` — an `Interval` instance. An
+// Interval has no `__data__`, so forEachElement detects it by prototype
+// identity rather than by a backing-store probe.
+//
+// The walk is bounded: it stops at `objectProto`, the root of the protoST
+// class tree. Walking past it into the protoCore built-in prototypes is both
+// pointless (no Interval lives there) and unsafe — the protoCore root's
+// `getPrototype` is self-referential, so an unbounded walk that never matches
+// would spin forever. `speciesProtoOf` escapes that only because it always
+// finds a concrete collection prototype before reaching the cycle.
+bool isIntervalBacked(STRuntime& rt, proto::ProtoContext* ctx,
+                      const proto::ProtoObject* obj) {
+    const proto::ProtoObject* ivProto  = rt.bootstrap().intervalProto;
+    const proto::ProtoObject* objProto = rt.bootstrap().objectProto;
+    const proto::ProtoObject* prev     = nullptr;
+    for (const proto::ProtoObject* p = obj; p && p != PROTO_NONE && p != prev;
+         prev = p, p = p->getPrototype(ctx)) {
+        if (p == ivProto) return true;
+        if (p == objProto) break;   // reached the protoST root — no Interval above
+    }
+    return false;
+}
+
 } // namespace
+
+// --- makeIntervalInstance — the canonical Interval constructor -------------
+//
+// Builds a fresh lazy Interval: a mutable child of `intervalProto` carrying
+// the three integer bounds. No `__data__` — elements are computed on demand.
+// Exposed (non-anonymous) so `Number>>to:` / `to:by:` can call it.
+const proto::ProtoObject* makeIntervalInstance(STRuntime& rt,
+                                               proto::ProtoContext* ctx,
+                                               long long start,
+                                               long long stop,
+                                               long long step) {
+    const proto::ProtoObject* iv =
+        const_cast<proto::ProtoObject*>(rt.bootstrap().intervalProto)
+            ->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinIv(ctx, iv);
+    const_cast<proto::ProtoObject*>(iv)->setAttribute(
+        ctx, intervalStartKey(ctx), ctx->fromLong(start));
+    const_cast<proto::ProtoObject*>(iv)->setAttribute(
+        ctx, intervalStopKey(ctx), ctx->fromLong(stop));
+    const_cast<proto::ProtoObject*>(iv)->setAttribute(
+        ctx, intervalStepKey(ctx), ctx->fromLong(step));
+    return iv;
+}
 
 // --- makeArrayInstance — the canonical Array constructor -------------------
 //
@@ -274,6 +358,14 @@ namespace {
 // of them (an abstract `Collection`, or some hand-built object) falls back to
 // `Array` — the sensible default the spec mandates.
 //
+// COL-e: an `Interval` is lazy and read-only — a `collect:`/`select:` result
+// cannot be an Interval. An Interval matches none of the concrete prototypes
+// below, so the walk falls through to the `arrayProto` default — exactly the
+// spec's rule that `(1 to: 5) collect: [...]` yields an `Array`. The walk is
+// bounded at `objectProto` (the protoST root): without that bound an Interval
+// receiver — matching nothing — would walk on into the protoCore built-in
+// prototypes, whose root `getPrototype` is self-referential, and spin forever.
+//
 // COL-d: a `Dictionary` is special. `collect:`/`select:` over a Dictionary map
 // or filter its *values* (Dictionary iterates values), and the result cannot
 // stay a Dictionary — the keys are gone. The protoST simplification (matching
@@ -288,14 +380,19 @@ const proto::ProtoObject* speciesProtoOf(STRuntime& rt, proto::ProtoContext* ctx
     const proto::ProtoObject* setProto   = rt.bootstrap().setProto;
     const proto::ProtoObject* bagProto   = rt.bootstrap().bagProto;
     const proto::ProtoObject* dictProto  = rt.bootstrap().dictionaryProto;
-    for (const proto::ProtoObject* p = r; p && p != PROTO_NONE;
-         p = p->getPrototype(ctx)) {
+    const proto::ProtoObject* objProto   = rt.bootstrap().objectProto;
+    const proto::ProtoObject* prev       = nullptr;
+    for (const proto::ProtoObject* p = r; p && p != PROTO_NONE && p != prev;
+         prev = p, p = p->getPrototype(ctx)) {
         if (p == ocProto)    return ocProto;
         if (p == arrayProto) return arrayProto;
         if (p == setProto)   return setProto;
         if (p == bagProto)   return bagProto;
         // A Dictionary's derived results lose the keys — build an Array.
         if (p == dictProto)  return arrayProto;
+        // Reached the protoST root — stop before the protoCore prototypes
+        // (whose root is self-referential). An `Interval` falls through here.
+        if (p == objProto)   break;
     }
     return arrayProto;
 }
@@ -315,8 +412,23 @@ const proto::ProtoObject* speciesProtoOf(STRuntime& rt, proto::ProtoContext* ctx
 // `fn` returns false to stop early (used by detect:/anySatisfy:/allSatisfy:);
 // forEachElement returns true if it ran to completion, false if `fn` stopped it.
 template <typename Fn>
-bool forEachElement(STRuntime& /*rt*/, proto::ProtoContext* ctx,
+bool forEachElement(STRuntime& rt, proto::ProtoContext* ctx,
                     const proto::ProtoObject* collection, Fn&& fn) {
+    // COL-e: an `Interval` is LAZY — it has no `__data__`. Detect it by
+    // prototype identity and compute each element on demand: stride from
+    // `start` by `step` while not past `stop`. After this arm the whole
+    // derived protocol (`collect:`/`select:`/`inject:into:`/…) works on it.
+    if (isIntervalBacked(rt, ctx, collection)) {
+        long long start = intervalAttr(ctx, collection, intervalStartKey(ctx), 1);
+        long long stop  = intervalAttr(ctx, collection, intervalStopKey(ctx), 0);
+        long long step  = intervalAttr(ctx, collection, intervalStepKey(ctx), 1);
+        long long n     = intervalSize(start, stop, step);
+        long long cur   = start;
+        for (long long i = 0; i < n; ++i, cur += step) {
+            if (!fn(ctx->fromLong(cur))) return false;
+        }
+        return true;
+    }
     if (isListBacked(ctx, collection)) {
         const proto::ProtoList* data = arrayData(ctx, collection);
         unsigned long n = data->getSize(ctx);
@@ -363,7 +475,8 @@ bool forEachElement(STRuntime& /*rt*/, proto::ProtoContext* ctx,
         return true;
     }
     // COL-c: a `Bag` is ProtoList-backed (one slot per occurrence) — it flows
-    // through the ProtoList arm above. COL-e: extend here (Interval kind).
+    // through the ProtoList arm above. COL-e: the `Interval` kind is handled
+    // by the lazy arm at the top of this function (it has no `__data__`).
     throw std::runtime_error("collection does not understand iteration");
 }
 
@@ -1857,6 +1970,180 @@ const proto::ProtoObject* prim_Collection_asArray(STRuntime& rt, proto::ProtoCon
     return makeArrayInstance(rt, ctx, out);
 }
 
+// =====================  Interval base operations  ==========================
+//
+// COL-e: an `Interval` is LAZY and READ-ONLY — no `add:` / `at:put:`. Each
+// base operation reads the `start`/`stop`/`step` bounds and computes its
+// answer; no element is ever materialised except by `do:` (one at a time) or
+// the derived protocol (via `forEachElement`'s lazy arm).
+
+// anInterval size → element count (a SmallInteger), never negative.
+const proto::ProtoObject* prim_Interval_size(STRuntime&, proto::ProtoContext* ctx,
+                                             const proto::ProtoObject* r,
+                                             const proto::ProtoObject* const*, int) {
+    long long start = intervalAttr(ctx, r, intervalStartKey(ctx), 1);
+    long long stop  = intervalAttr(ctx, r, intervalStopKey(ctx), 0);
+    long long step  = intervalAttr(ctx, r, intervalStepKey(ctx), 1);
+    return ctx->fromLong(intervalSize(start, stop, step));
+}
+
+// anInterval isEmpty → true when size = 0.
+const proto::ProtoObject* prim_Interval_isEmpty(STRuntime&, proto::ProtoContext* ctx,
+                                                const proto::ProtoObject* r,
+                                                const proto::ProtoObject* const*, int) {
+    long long start = intervalAttr(ctx, r, intervalStartKey(ctx), 1);
+    long long stop  = intervalAttr(ctx, r, intervalStopKey(ctx), 0);
+    long long step  = intervalAttr(ctx, r, intervalStepKey(ctx), 1);
+    return intervalSize(start, stop, step) == 0 ? PROTO_TRUE : PROTO_FALSE;
+}
+
+// anInterval notEmpty → true when size > 0.
+const proto::ProtoObject* prim_Interval_notEmpty(STRuntime&, proto::ProtoContext* ctx,
+                                                 const proto::ProtoObject* r,
+                                                 const proto::ProtoObject* const*, int) {
+    long long start = intervalAttr(ctx, r, intervalStartKey(ctx), 1);
+    long long stop  = intervalAttr(ctx, r, intervalStopKey(ctx), 0);
+    long long step  = intervalAttr(ctx, r, intervalStepKey(ctx), 1);
+    return intervalSize(start, stop, step) != 0 ? PROTO_TRUE : PROTO_FALSE;
+}
+
+// anInterval at: index → the 1-based element `start + (index-1)*step`. Out of
+// range `1..size` signals an Error (via std::runtime_error → translate).
+const proto::ProtoObject* prim_Interval_at(STRuntime&, proto::ProtoContext* ctx,
+                                           const proto::ProtoObject* r,
+                                           const proto::ProtoObject* const* a,
+                                           int argc) {
+    if (argc != 1) throw std::runtime_error("at: expects 1 arg (index)");
+    long long start = intervalAttr(ctx, r, intervalStartKey(ctx), 1);
+    long long stop  = intervalAttr(ctx, r, intervalStopKey(ctx), 0);
+    long long step  = intervalAttr(ctx, r, intervalStepKey(ctx), 1);
+    long long n     = intervalSize(start, stop, step);
+    long long idx1  = a[0]->asLong(ctx);             // 1-based
+    if (idx1 < 1 || idx1 > n) {
+        throw std::runtime_error(
+            "Interval>>at:: index " + std::to_string(idx1) +
+            " out of range 1.." + std::to_string(n));
+    }
+    return ctx->fromLong(start + (idx1 - 1) * step);
+}
+
+// anInterval first → the first element (`start`). An empty Interval signals
+// an Error.
+const proto::ProtoObject* prim_Interval_first(STRuntime&, proto::ProtoContext* ctx,
+                                              const proto::ProtoObject* r,
+                                              const proto::ProtoObject* const*, int) {
+    long long start = intervalAttr(ctx, r, intervalStartKey(ctx), 1);
+    long long stop  = intervalAttr(ctx, r, intervalStopKey(ctx), 0);
+    long long step  = intervalAttr(ctx, r, intervalStepKey(ctx), 1);
+    if (intervalSize(start, stop, step) == 0)
+        throw std::runtime_error("Interval>>first: interval is empty");
+    return ctx->fromLong(start);
+}
+
+// anInterval last → the last element (`start + (size-1)*step`). An empty
+// Interval signals an Error.
+const proto::ProtoObject* prim_Interval_last(STRuntime&, proto::ProtoContext* ctx,
+                                             const proto::ProtoObject* r,
+                                             const proto::ProtoObject* const*, int) {
+    long long start = intervalAttr(ctx, r, intervalStartKey(ctx), 1);
+    long long stop  = intervalAttr(ctx, r, intervalStopKey(ctx), 0);
+    long long step  = intervalAttr(ctx, r, intervalStepKey(ctx), 1);
+    long long n     = intervalSize(start, stop, step);
+    if (n == 0)
+        throw std::runtime_error("Interval>>last: interval is empty");
+    return ctx->fromLong(start + (n - 1) * step);
+}
+
+// anInterval do: aBlock → lazily evaluate the one-arg block for each element,
+// striding from `start` by `step`. Returns the receiver.
+const proto::ProtoObject* prim_Interval_do(STRuntime& rt, proto::ProtoContext* ctx,
+                                           const proto::ProtoObject* r,
+                                           const proto::ProtoObject* const* a,
+                                           int argc) {
+    if (argc != 1) throw std::runtime_error("do: expects 1 arg (block)");
+    const proto::ProtoObject* block = a[0];
+    TransientPin pinRecv(ctx, r);
+    forEachElement(rt, ctx, r, [&](const proto::ProtoObject* e) {
+        const proto::ProtoObject* arg0 = e;
+        invokeBlock(rt, ctx, block, &arg0, 1);
+        return true;
+    });
+    return r;
+}
+
+// =====================  Number iteration — to:/to:by:/to:do:/to:by:do:  ====
+//
+// COL-e: bound on `numberProto` so every numeric receiver inherits them
+// (protoST currently has integers only, but the binding follows the shared
+// prototype rather than `smallIntegerProto`). `to:` / `to:by:` build a lazy
+// `Interval`; `to:do:` / `to:by:do:` iterate inline — the common Smalltalk
+// loop — and return the receiver.
+
+// aNumber to: stop → an Interval [receiver .. stop] with step 1.
+const proto::ProtoObject* prim_Number_to(STRuntime& rt, proto::ProtoContext* ctx,
+                                         const proto::ProtoObject* r,
+                                         const proto::ProtoObject* const* a,
+                                         int argc) {
+    if (argc != 1) throw std::runtime_error("to: expects 1 arg (stop)");
+    return makeIntervalInstance(rt, ctx, r->asLong(ctx), a[0]->asLong(ctx), 1);
+}
+
+// aNumber to: stop by: step → an Interval with the given stride.
+const proto::ProtoObject* prim_Number_toBy(STRuntime& rt, proto::ProtoContext* ctx,
+                                           const proto::ProtoObject* r,
+                                           const proto::ProtoObject* const* a,
+                                           int argc) {
+    if (argc != 2) throw std::runtime_error("to:by: expects 2 args (stop, step)");
+    return makeIntervalInstance(rt, ctx,
+                                r->asLong(ctx), a[0]->asLong(ctx), a[1]->asLong(ctx));
+}
+
+// aNumber to: stop do: aBlock → iterate from the receiver by 1 while <= stop,
+// evaluating `aBlock value: i`. Returns the receiver.
+const proto::ProtoObject* prim_Number_toDo(STRuntime& rt, proto::ProtoContext* ctx,
+                                           const proto::ProtoObject* r,
+                                           const proto::ProtoObject* const* a,
+                                           int argc) {
+    if (argc != 2) throw std::runtime_error("to:do: expects 2 args (stop, block)");
+    long long start = r->asLong(ctx);
+    long long stop  = a[0]->asLong(ctx);
+    const proto::ProtoObject* block = a[1];
+    TransientPin pinRecv(ctx, r);
+    for (long long i = start; i <= stop; ++i) {
+        const proto::ProtoObject* arg0 = ctx->fromLong(i);
+        invokeBlock(rt, ctx, block, &arg0, 1);
+    }
+    return r;
+}
+
+// aNumber to: stop by: step do: aBlock → iterate with an explicit stride. For
+// `step > 0` while <= stop, for `step < 0` while >= stop. Returns the receiver.
+const proto::ProtoObject* prim_Number_toByDo(STRuntime& rt, proto::ProtoContext* ctx,
+                                             const proto::ProtoObject* r,
+                                             const proto::ProtoObject* const* a,
+                                             int argc) {
+    if (argc != 3)
+        throw std::runtime_error("to:by:do: expects 3 args (stop, step, block)");
+    long long start = r->asLong(ctx);
+    long long stop  = a[0]->asLong(ctx);
+    long long step  = a[1]->asLong(ctx);
+    const proto::ProtoObject* block = a[2];
+    if (step == 0) throw std::runtime_error("to:by:do: step must be non-zero");
+    TransientPin pinRecv(ctx, r);
+    if (step > 0) {
+        for (long long i = start; i <= stop; i += step) {
+            const proto::ProtoObject* arg0 = ctx->fromLong(i);
+            invokeBlock(rt, ctx, block, &arg0, 1);
+        }
+    } else {
+        for (long long i = start; i >= stop; i += step) {
+            const proto::ProtoObject* arg0 = ctx->fromLong(i);
+            invokeBlock(rt, ctx, block, &arg0, 1);
+        }
+    }
+    return r;
+}
+
 } // namespace
 
 void installCollectionPrimitives(STRuntime& rt) {
@@ -1933,6 +2220,36 @@ void installCollectionPrimitives(STRuntime& rt) {
                   reg.registerPrim(prim_OC_classNew));
     bindPrimitive(rt, b.orderedCollectionProto, "withAll:",
                   reg.registerPrim(prim_OC_classWithAll));
+
+    // --- Interval base operations — bound on the Interval prototype --------
+    // COL-e: a lazy, read-only sequenceable collection — no add:/at:put:.
+    bindPrimitive(rt, b.intervalProto, "size",
+                  reg.registerPrim(prim_Interval_size));
+    bindPrimitive(rt, b.intervalProto, "isEmpty",
+                  reg.registerPrim(prim_Interval_isEmpty));
+    bindPrimitive(rt, b.intervalProto, "notEmpty",
+                  reg.registerPrim(prim_Interval_notEmpty));
+    bindPrimitive(rt, b.intervalProto, "at:",
+                  reg.registerPrim(prim_Interval_at));
+    bindPrimitive(rt, b.intervalProto, "first",
+                  reg.registerPrim(prim_Interval_first));
+    bindPrimitive(rt, b.intervalProto, "last",
+                  reg.registerPrim(prim_Interval_last));
+    bindPrimitive(rt, b.intervalProto, "do:",
+                  reg.registerPrim(prim_Interval_do));
+
+    // --- Number iteration — bound on numberProto, inherited by all numbers -
+    // COL-e: `to:` / `to:by:` build a lazy Interval; `to:do:` / `to:by:do:`
+    // iterate inline. Bound on `numberProto` (the shared numeric prototype)
+    // so integers — and any future Float — inherit them uniformly.
+    bindPrimitive(rt, b.numberProto, "to:",
+                  reg.registerPrim(prim_Number_to));
+    bindPrimitive(rt, b.numberProto, "to:by:",
+                  reg.registerPrim(prim_Number_toBy));
+    bindPrimitive(rt, b.numberProto, "to:do:",
+                  reg.registerPrim(prim_Number_toDo));
+    bindPrimitive(rt, b.numberProto, "to:by:do:",
+                  reg.registerPrim(prim_Number_toByDo));
 
     // --- Set base operations — bound on the Set prototype ------------------
     bindPrimitive(rt, b.setProto, "add:",
