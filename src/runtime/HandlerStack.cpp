@@ -57,8 +57,22 @@ static bool matchesGuard(proto::ProtoContext* ctx,
 }
 
 const HandlerEntry* handlerStackFindMatch(proto::ProtoContext* ctx,
-                                          const proto::ProtoObject* exceptionInstance) {
-    for (std::size_t i = g_handlerStack.size(); i-- > 0; ) {
+                                          const proto::ProtoObject* exceptionInstance,
+                                          unsigned long searchBelowId) {
+    // When `searchBelowId` is set (EXC-b `pass`), locate that entry's stack
+    // index and start the search strictly OUTER to it — skipping the entry
+    // itself and everything inner. If the id is no longer present (already
+    // popped) the search falls back to the whole stack.
+    std::size_t startIdx = g_handlerStack.size();
+    if (searchBelowId != 0) {
+        for (std::size_t i = g_handlerStack.size(); i-- > 0; ) {
+            if (g_handlerStack[i].handlerId == searchBelowId) {
+                startIdx = i;   // search begins below this index
+                break;
+            }
+        }
+    }
+    for (std::size_t i = startIdx; i-- > 0; ) {
         const HandlerEntry& e = g_handlerStack[i];
         if (!e.enabled) continue;
         if (matchesGuard(ctx, exceptionInstance, e.guardClass))

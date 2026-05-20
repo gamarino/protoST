@@ -1,38 +1,49 @@
-// Track 1, slice 2 (EXC-a): the exception protocol primitives.
+// Track 1, slice 2 (EXC-a + EXC-b): the exception protocol primitives.
 //
 // Implements the class hierarchy accessors, `signal` / `signal:`, the
-// protected-block primitive `on:do:`, and the handler action `return:`.
-// Resumption (`resume:`), `retry` and `pass` are EXC-b; `ensure:` /
+// protected-block primitives `on:do:` / `on:do:on:do:`, and the handler
+// actions `return:`, `resume:`, `retry`, `pass` / `outer`. `ensure:` /
 // `ifCurtailed:` are EXC-c; native C++ exception translation is EXC-d.
 //
 // Control-flow summary:
 //
-//   * `on:do:` (on blockProto) pushes a HandlerEntry, runs the protected
-//     block via invokeBlock, and pops the entry on EVERY exit path. It owns
-//     a unique handlerId; an UnwindToHandler carrying that id is this
-//     `on:do:`'s signal to return the carried value.
+//   * `on:do:` / `on:do:on:do:` (on blockProto) push one or more
+//     HandlerEntries, run the protected block via invokeBlock, and pop the
+//     entries on EVERY exit path. Each owns a unique handlerId; an
+//     UnwindToHandler carrying any of those ids is this construct's signal to
+//     return the carried value. A RetrySignal carrying one of those ids
+//     re-evaluates the protected block from scratch.
 //
-//   * `signal` walks the thread-local handler stack for the newest enabled
-//     matching entry. With NO matching handler it throws a std::runtime_error
-//     (the EXC-a default action — REPL/-e prints it, an actor rejects its
-//     Future). With a match it stamps the handler id onto the exception
-//     instance, disables that entry plus every inner one (so a signal inside
-//     the handler escapes outward), runs the handler block IN PLACE, and —
-//     on fall-through — throws UnwindToHandler{ handlerId, handlerResult }.
-//
-//   * `return:` throws UnwindToHandler{ activeHandlerId(self), v } — the
-//     explicit form of handler fall-through, reaching the same `on:do:`.
+//   * `signal` runs a LOOP over the thread-local handler stack. Each turn it
+//     finds the newest enabled matching entry, stamps the handler id onto the
+//     instance, disables that entry plus every inner one, and runs the handler
+//     block IN PLACE. The handler outcome is then dispatched:
+//       - fall-through / `return:` → throw UnwindToHandler (unwind the
+//         protected block, the `on:do:` yields the value);
+//       - `resume:` (ResumeSignal) → caught here; `signal` RETURNS the value,
+//         the protected block continues from the signal point;
+//       - `pass` / `outer` (PassSignal) → caught here; the loop searches
+//         OUTWARD for the next matching handler;
+//       - `retry` (RetrySignal) → NOT caught here; propagates to `on:do:`.
+//     With NO matching handler the exception's default action runs (EXC-b
+//     refinement: a resumable Exception/Warning resumes with nil; an Error /
+//     non-resumable one aborts via std::runtime_error).
 
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/HandlerStack.h"
 #include "runtime/UnwindToHandler.h"
+#include "runtime/ResumeSignal.h"
+#include "runtime/RetrySignal.h"
+#include "runtime/PassSignal.h"
 #include "runtime/TransientPin.h"
 #include "protoCore.h"
 
+#include <cstdio>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace protoST {
 
@@ -57,6 +68,31 @@ const proto::ProtoString* activeHandlerKey(proto::ProtoContext* ctx) {
 }
 const proto::ProtoString* classNameKey(proto::ProtoContext* ctx) {
     return proto::ProtoString::createSymbol(ctx, "__class_name__");
+}
+const proto::ProtoString* resumableKey(proto::ProtoContext* ctx) {
+    return proto::ProtoString::createSymbol(ctx, "__resumable__");
+}
+
+// True when the exception instance is resumable. The `__resumable__` marker is
+// installed class-side at bootstrap (`Exception`/`Warning` true, `Error`
+// false) and inherited by instances and user subclasses; an instance may
+// override it. Absent marker is treated as resumable (the `Exception` root
+// default) — only `Error` and its descendants stamp `false`.
+bool isResumable(proto::ProtoContext* ctx, const proto::ProtoObject* exc) {
+    if (!exc) return false;
+    const proto::ProtoObject* m = exc->getAttribute(ctx, resumableKey(ctx));
+    if (!m || m == PROTO_NONE) return true;
+    return m == PROTO_TRUE;
+}
+
+// The active handler id stamped onto `exc` by `signal`, or 0 when the
+// exception is not currently being handled.
+unsigned long activeHandlerIdOf(proto::ProtoContext* ctx,
+                                const proto::ProtoObject* exc) {
+    const proto::ProtoObject* idObj =
+        exc ? exc->getAttribute(ctx, activeHandlerKey(ctx)) : nullptr;
+    if (!idObj || idObj == PROTO_NONE) return 0;
+    return static_cast<unsigned long>(idObj->asLong(ctx));
 }
 
 // True when `obj` is a class object (carries `__class_name__` as an OWN
@@ -93,55 +129,113 @@ std::string defaultActionMessage(proto::ProtoContext* ctx,
     return std::string("unhandled exception");
 }
 
+// --- Default action for an unhandled exception (EXC-b refinement) ----------
+//
+// Runs when the handler search exhausts the stack with no match. The outcome
+// depends on whether the exception is resumable:
+//   * resumable (Exception base, Warning) → for a Warning, print its
+//     messageText to stderr; then RESUME the signal with nil so the
+//     computation continues. `signal` returns the result of this function.
+//   * non-resumable (Error and descendants) → abort the activation by
+//     throwing std::runtime_error — an actor rejects its Future, the REPL/-e
+//     prints it. This function does not return in that case.
+const proto::ProtoObject* defaultAction(proto::ProtoContext* ctx,
+                                        const proto::ProtoObject* exc) {
+    if (!isResumable(ctx, exc)) {
+        // Error / non-resumable: abort, as in EXC-a.
+        throw std::runtime_error(defaultActionMessage(ctx, exc));
+    }
+    // Resumable and unhandled. A Warning announces itself; the bare Exception
+    // base resumes silently. The distinction is the presence of a messageText
+    // worth reporting — print it for any resumable exception that carries one.
+    {
+        std::string m = messageTextOf(ctx, exc);
+        if (!m.empty()) {
+            std::fputs("Warning: ", stderr);
+            std::fputs(m.c_str(), stderr);
+            std::fputc('\n', stderr);
+        }
+    }
+    // Resume with nil: `signal` returns nil, the computation continues.
+    return PROTO_NONE;
+}
+
 // --- Core: signal an exception INSTANCE ------------------------------------
 //
 // Shared by instance-side `signal` and class-side `signal` / `signal:`.
+//
+// EXC-b restructures the handler-running as a LOOP so `pass` can move the
+// search outward. Each turn finds the newest enabled matching entry, runs its
+// handler block in place, and dispatches on the outcome:
+//   * fall-through → throw UnwindToHandler (the `on:do:` yields the value);
+//   * ResumeSignal for this id → return the value (the protected block
+//     continues from the signal point);
+//   * PassSignal for this id → continue the loop, searching strictly outward;
+//   * RetrySignal / UnwindToHandler / anything else → propagate past `signal`
+//     (RetrySignal reaches `on:do:`; a foreign throw bubbles on).
 const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx,
                                           const proto::ProtoObject* exc) {
     // Pin the instance for the whole primitive — it is held across handler-
     // stack walks and invokeBlock (which spins a full nested engine).
     TransientPin pinExc(ctx, exc);
 
-    const HandlerEntry* entry = handlerStackFindMatch(ctx, exc);
-    if (!entry) {
-        // EXC-a default action: no matching handler. Abort the current
-        // activation with the message — an actor rejects its Future, the
-        // REPL/-e prints it. (Warning's print-and-resume default is EXC-b.)
-        throw std::runtime_error(defaultActionMessage(ctx, exc));
-    }
+    unsigned long searchBelowId = 0;   // 0 == search from the top of the stack
+    for (;;) {
+        const HandlerEntry* entry = handlerStackFindMatch(ctx, exc, searchBelowId);
+        if (!entry) {
+            // No (further) matching handler: run the exception's default
+            // action. For a resumable exception this returns a value that
+            // `signal` yields; for an Error it throws.
+            return defaultAction(ctx, exc);
+        }
 
-    unsigned long handlerId          = entry->handlerId;
-    const proto::ProtoObject* hBlock = entry->handlerBlock;
+        unsigned long handlerId          = entry->handlerId;
+        const proto::ProtoObject* hBlock = entry->handlerBlock;
 
-    // Stamp the active handler id onto the instance so `return:` (which only
-    // receives the exception as its receiver) can reach this same `on:do:`.
-    const_cast<proto::ProtoObject*>(exc)->setAttribute(
-        ctx, activeHandlerKey(ctx), ctx->fromLong(static_cast<long long>(handlerId)));
+        // Stamp the active handler id onto the instance so the handler
+        // actions (`return:`, `resume:`, `retry`, `pass`) — which only
+        // receive the exception as their receiver — can reach this entry.
+        const_cast<proto::ProtoObject*>(exc)->setAttribute(
+            ctx, activeHandlerKey(ctx),
+            ctx->fromLong(static_cast<long long>(handlerId)));
 
-    // Disable this entry and every inner one, so a `signal` raised while the
-    // handler block runs is caught by an OUTER handler — not by this `on:do:`
-    // again and not by a handler nested inside the protected block.
-    std::vector<unsigned long> disabled = handlerStackDisableFrom(handlerId);
+        // Disable this entry and every inner one, so a `signal` raised while
+        // the handler block runs is caught by an OUTER handler.
+        std::vector<unsigned long> disabled = handlerStackDisableFrom(handlerId);
 
-    // Run the handler block IN PLACE with the signalling stack intact,
-    // passing the exception instance as its sole argument.
-    const proto::ProtoObject* handlerResult = nullptr;
-    try {
-        const proto::ProtoObject* a0 = exc;
-        handlerResult = invokeBlock(rt, ctx, hBlock, &a0, 1);
-    } catch (...) {
-        // The handler did `return:` (UnwindToHandler), a non-local return,
-        // a cooperative yield, or raised another error. Re-enable what we
-        // disabled so the handler stack is consistent for outer handlers,
-        // then let the throw continue to its target.
+        const proto::ProtoObject* handlerResult = nullptr;
+        try {
+            const proto::ProtoObject* a0 = exc;
+            handlerResult = invokeBlock(rt, ctx, hBlock, &a0, 1);
+        } catch (const ResumeSignal& r) {
+            // `resume: v` — only ours is consumed here; an inner id belongs
+            // to an outer signal loop.
+            if (r.handlerId() != handlerId) { handlerStackRestore(disabled); throw; }
+            handlerStackRestore(disabled);
+            // `signal` returns v: the protected block (its stack never
+            // unwound) continues from the signal point.
+            return r.value() ? r.value() : PROTO_NONE;
+        } catch (const PassSignal& p) {
+            // `pass` / `outer` — search outward for the next matching handler.
+            if (p.handlerId() != handlerId) { handlerStackRestore(disabled); throw; }
+            handlerStackRestore(disabled);
+            searchBelowId = handlerId;   // resume search strictly outer to this
+            continue;
+        } catch (...) {
+            // UnwindToHandler (return:), RetrySignal (retry), NonLocalReturn,
+            // a cooperative yield, or another error. Re-enable what we
+            // disabled so the handler stack stays consistent for outer
+            // handlers / the owning `on:do:`, then let the throw continue.
+            handlerStackRestore(disabled);
+            throw;
+        }
+
+        // The handler fell off its end without return:/resume:/retry/pass.
+        // Fall-through == `return: handlerResult`.
         handlerStackRestore(disabled);
-        throw;
+        throw UnwindToHandler{ handlerId,
+                               handlerResult ? handlerResult : PROTO_NONE };
     }
-
-    // The handler fell off its end without return:/resume:/etc.
-    // EXC-a: handler fall-through == `return: handlerResult`.
-    handlerStackRestore(disabled);
-    throw UnwindToHandler{ handlerId, handlerResult ? handlerResult : PROTO_NONE };
 }
 
 // --- Build an instance from a class object ---------------------------------
@@ -221,42 +315,144 @@ const proto::ProtoObject* prim_Exception_return(STRuntime&, proto::ProtoContext*
     throw UnwindToHandler{ handlerId, a[0] ? a[0] : PROTO_NONE };
 }
 
-// protectedBlock on: GuardClass do: handlerBlock
+// anException resume: v  /  anException resume
 //
-// Pushes a HandlerEntry, runs the protected block, and pops the entry on
-// every exit path. An UnwindToHandler whose id matches this `on:do:`'s entry
-// means "yield this value"; any other UnwindToHandler is for an outer
-// `on:do:` and is re-thrown.
+// Handler action: make the matching `signal` RETURN `v` without unwinding —
+// the protected computation continues from the signal point. Valid only for a
+// resumable exception; `resume:` on an `Error` is itself an error.
+const proto::ProtoObject* prim_Exception_resume(STRuntime&, proto::ProtoContext* ctx,
+                                                 const proto::ProtoObject* r,
+                                                 const proto::ProtoObject* const* a,
+                                                 int argc) {
+    if (argc > 1)
+        throw std::runtime_error("resume: expects 0 or 1 arg (value)");
+    if (!isResumable(ctx, r)) {
+        // `resume:` on a non-resumable exception (an Error). The native stack
+        // analogue is already gone — reject it as a hard error.
+        throw std::runtime_error("cannot resume a non-resumable exception");
+    }
+    unsigned long handlerId = activeHandlerIdOf(ctx, r);
+    if (handlerId == 0)
+        throw std::runtime_error("resume: sent to an exception with no active handler");
+    // `resume` with no argument == `resume: nil`.
+    const proto::ProtoObject* v = (argc == 1 && a[0]) ? a[0] : PROTO_NONE;
+    throw ResumeSignal{ handlerId, v };
+}
+
+// anException retry
+//
+// Handler action: unwind to the owning `on:do:` and re-evaluate the protected
+// block from scratch. Propagates PAST `signal` to the `on:do:` primitive.
+const proto::ProtoObject* prim_Exception_retry(STRuntime&, proto::ProtoContext* ctx,
+                                                const proto::ProtoObject* r,
+                                                const proto::ProtoObject* const*,
+                                                int) {
+    unsigned long handlerId = activeHandlerIdOf(ctx, r);
+    if (handlerId == 0)
+        throw std::runtime_error("retry sent to an exception with no active handler");
+    throw RetrySignal{ handlerId };
+}
+
+// anException pass  (a.k.a. anException outer)
+//
+// Handler action: resume the handler search OUTWARD from the current handler.
+// Caught by `signal`'s loop. For this MVP `outer` is an alias of `pass` — see
+// PassSignal.h for the documented simplification.
+const proto::ProtoObject* prim_Exception_pass(STRuntime&, proto::ProtoContext* ctx,
+                                               const proto::ProtoObject* r,
+                                               const proto::ProtoObject* const*,
+                                               int) {
+    unsigned long handlerId = activeHandlerIdOf(ctx, r);
+    if (handlerId == 0)
+        throw std::runtime_error("pass sent to an exception with no active handler");
+    throw PassSignal{ handlerId };
+}
+
+// --- Shared protected-block runner -----------------------------------------
+//
+// Backs both `on:do:` and `on:do:on:do:`. Pushes one HandlerEntry per
+// (guard, handler) pair, runs the protected block, and pops every entry on
+// EVERY exit path. The pairs arrive innermost-LAST (matching single `on:do:`
+// where the sole guard is the innermost); they are pushed in order so the
+// LAST pair is the innermost / first-searched entry — but since the search
+// order among sibling guards on one block is by stack recency, the caller
+// passes them so the intended priority holds. An UnwindToHandler /
+// RetrySignal carrying ANY of this construct's ids is for this construct;
+// retry re-evaluates the protected block with a fresh set of handler ids.
+const proto::ProtoObject* runProtected(
+        STRuntime& rt, proto::ProtoContext* ctx,
+        const proto::ProtoObject* protectedBlock,
+        const std::vector<std::pair<const proto::ProtoObject*,
+                                    const proto::ProtoObject*>>& guards) {
+    for (;;) {   // each turn is one attempt; `retry` loops back here
+        std::vector<unsigned long> ids;
+        ids.reserve(guards.size());
+        for (const auto& g : guards)
+            ids.push_back(handlerStackPush(g.first, g.second));
+
+        auto popAll = [&]() {
+            // Idempotent; pop newest-first so the stack stays well-formed.
+            for (std::size_t i = ids.size(); i-- > 0; )
+                handlerStackPop(ids[i]);
+        };
+        auto owns = [&](unsigned long id) {
+            for (unsigned long x : ids) if (x == id) return true;
+            return false;
+        };
+
+        try {
+            const proto::ProtoObject* result =
+                invokeBlock(rt, ctx, protectedBlock, nullptr, 0);
+            popAll();
+            return result;
+        } catch (const UnwindToHandler& u) {
+            popAll();
+            if (owns(u.handlerId()))
+                return u.value() ? u.value() : PROTO_NONE;
+            throw;   // targets an OUTER construct
+        } catch (const RetrySignal& r) {
+            popAll();
+            if (owns(r.handlerId()))
+                continue;   // re-evaluate the protected block — loop again
+            throw;          // targets an OUTER construct
+        } catch (...) {
+            // NonLocalReturn, FutureYield, ResumeSignal/PassSignal escaping a
+            // bug, std::exception — all must leave the handler stack balanced.
+            popAll();
+            throw;
+        }
+    }
+}
+
+// protectedBlock on: GuardClass do: handlerBlock
 const proto::ProtoObject* prim_Block_on_do(STRuntime& rt, proto::ProtoContext* ctx,
                                             const proto::ProtoObject* protectedBlock,
                                             const proto::ProtoObject* const* a,
                                             int argc) {
     if (argc != 2)
         throw std::runtime_error("on:do: expects 2 args (guard class, handler block)");
-    const proto::ProtoObject* guardClass   = a[0];
-    const proto::ProtoObject* handlerBlock = a[1];
+    std::vector<std::pair<const proto::ProtoObject*, const proto::ProtoObject*>> guards;
+    guards.emplace_back(a[0], a[1]);
+    return runProtected(rt, ctx, protectedBlock, guards);
+}
 
-    unsigned long handlerId = handlerStackPush(guardClass, handlerBlock);
-    try {
-        const proto::ProtoObject* result = invokeBlock(rt, ctx, protectedBlock, nullptr, 0);
-        handlerStackPop(handlerId);
-        return result;
-    } catch (const UnwindToHandler& u) {
-        // popHandlerEntry is idempotent — the entry may already be gone if a
-        // nested path removed it. Ensure it is removed regardless.
-        handlerStackPop(handlerId);
-        if (u.handlerId() == handlerId) {
-            // This `on:do:` is the unwind target. Yield the carried value.
-            return u.value() ? u.value() : PROTO_NONE;
-        }
-        // Targets an OUTER on:do: — keep propagating.
-        throw;
-    } catch (...) {
-        // Any other exit (NonLocalReturn, FutureYield, std::exception, ...)
-        // must still leave the handler stack balanced.
-        handlerStackPop(handlerId);
-        throw;
-    }
+// protectedBlock on: G1 do: H1 on: G2 do: H2
+//
+// Two guards on one protected block. Both entries are pushed (G1 first, then
+// G2 — so G2 is the innermost / searched first when both would match); the
+// protected block runs once; an unwind / retry carrying either id is honoured.
+const proto::ProtoObject* prim_Block_on_do_on_do(STRuntime& rt,
+                                                  proto::ProtoContext* ctx,
+                                                  const proto::ProtoObject* protectedBlock,
+                                                  const proto::ProtoObject* const* a,
+                                                  int argc) {
+    if (argc != 4)
+        throw std::runtime_error(
+            "on:do:on:do: expects 4 args (guard, handler, guard, handler)");
+    std::vector<std::pair<const proto::ProtoObject*, const proto::ProtoObject*>> guards;
+    guards.emplace_back(a[0], a[1]);
+    guards.emplace_back(a[2], a[3]);
+    return runProtected(rt, ctx, protectedBlock, guards);
 }
 
 } // namespace
@@ -273,7 +469,7 @@ void installExceptionPrimitives(STRuntime& rt) {
     bindPrimitive(rt, b.exceptionProto, "signal",  signalIdx);
     bindPrimitive(rt, b.exceptionProto, "signal:", signalTextIdx);
 
-    // Accessors + the `return:` handler action.
+    // Accessors + the handler actions.
     bindPrimitive(rt, b.exceptionProto, "messageText",
                   reg.registerPrim(prim_Exception_messageText));
     bindPrimitive(rt, b.exceptionProto, "messageText:",
@@ -281,9 +477,21 @@ void installExceptionPrimitives(STRuntime& rt) {
     bindPrimitive(rt, b.exceptionProto, "return:",
                   reg.registerPrim(prim_Exception_return));
 
-    // on:do: — the protected-block primitive, on blockProto.
+    // EXC-b handler actions: resume:/resume, retry, pass/outer.
+    int resumeIdx = reg.registerPrim(prim_Exception_resume);
+    bindPrimitive(rt, b.exceptionProto, "resume:", resumeIdx);
+    bindPrimitive(rt, b.exceptionProto, "resume",  resumeIdx);
+    bindPrimitive(rt, b.exceptionProto, "retry",
+                  reg.registerPrim(prim_Exception_retry));
+    int passIdx = reg.registerPrim(prim_Exception_pass);
+    bindPrimitive(rt, b.exceptionProto, "pass",  passIdx);
+    bindPrimitive(rt, b.exceptionProto, "outer", passIdx);   // MVP alias
+
+    // on:do: / on:do:on:do: — the protected-block primitives, on blockProto.
     bindPrimitive(rt, b.blockProto, "on:do:",
                   reg.registerPrim(prim_Block_on_do));
+    bindPrimitive(rt, b.blockProto, "on:do:on:do:",
+                  reg.registerPrim(prim_Block_on_do_on_do));
 }
 
 } // namespace protoST

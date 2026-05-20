@@ -43,11 +43,18 @@ void handlerStackPop(unsigned long handlerId);
 // (the instance is the guard class itself, or a prototype-chain descendant of
 // it — protoCore `hasParent` / identity). Returns nullptr if none matches.
 //
+// `searchBelowId` supports `pass` (EXC-b): when non-zero, the search skips the
+// entry with that id and every entry inner to it, resuming from the first
+// entry OUTER to it — so a handler that did `pass` hands off to a strictly
+// outer handler. When zero the search starts at the top of the stack (the
+// ordinary `signal` entry point).
+//
 // The returned pointer is into the thread-local vector; it is valid only until
 // the next push/pop on this thread. Callers (signal) read handlerId / block
 // from it immediately.
 const HandlerEntry* handlerStackFindMatch(proto::ProtoContext* ctx,
-                                          const proto::ProtoObject* exceptionInstance);
+                                          const proto::ProtoObject* exceptionInstance,
+                                          unsigned long searchBelowId = 0);
 
 // Disable the entry with id `targetHandlerId` and every entry inner to it
 // (pushed after it), so a `signal` raised while the handler runs is caught by

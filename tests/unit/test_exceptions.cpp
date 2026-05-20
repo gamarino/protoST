@@ -1,10 +1,11 @@
-// Track 1, slice 2 (EXC-a) — the exception protocol core.
+// Track 1, slice 2 (EXC-a + EXC-b) — the exception protocol core.
 //
 // Exercises the class hierarchy (`Exception`/`Error`/`Warning`), `signal` /
-// `signal:`, the protected-block primitive `on:do:`, the handler action
-// `return:`, and handler fall-through. Resumption (`resume:`/`retry`/`pass`)
-// is EXC-b; `ensure:`/`ifCurtailed:` is EXC-c; native exception translation
-// is EXC-d — none of those are covered here.
+// `signal:`, the protected-block primitives `on:do:` / `on:do:on:do:`, and
+// the handler actions `return:`, `resume:`, `retry`, `pass` / `outer`, plus
+// handler fall-through and the refined default action. `ensure:`/
+// `ifCurtailed:` is EXC-c; native exception translation is EXC-d — neither is
+// covered here.
 //
 // See docs/superpowers/specs/2026-05-20-exceptions.md.
 
@@ -287,4 +288,216 @@ TEST_CASE("EXC-a: Exception, Error and Warning resolve as globals and the "
     auto* r = runSrc(rt, src);
     REQUIRE(r->asString(rt.rootCtx()) != nullptr);
     REQUIRE(r->asString(rt.rootCtx())->toStdString(rt.rootCtx()) == "fuel");
+}
+
+// ===========================================================================
+// EXC-b: resume:, retry, pass / outer, on:do:on:do:, refined default action.
+// ===========================================================================
+
+TEST_CASE("EXC-b: resume: makes the signal yield the resumed value and the "
+          "protected block continues",
+          "[exceptions][track1]") {
+    // The handler does `e resume: 99`; the signal in the protected block
+    // returns 99, is stored in `r`, and the post-signal expression `r` runs.
+    // The protected block thus yields 99 — its stack was never unwound.
+    const char* src =
+        "Object subclass: #Res. "
+        "Res >> run "
+        "  ^ [ | r | r := Warning signal: 'w'. r ] "
+        "      on: Warning do: [ :e | e resume: 99 ]. "
+        "x := Res newChild. "
+        "x run.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r->asLong(rt.rootCtx()) == 99);
+}
+
+TEST_CASE("EXC-b: resume with no argument resumes the signal with nil",
+          "[exceptions][track1]") {
+    // `e resume` == `e resume: nil`; the protected block continues and yields
+    // a literal so the test has a definite value to assert.
+    const char* src =
+        "Object subclass: #ResNil. "
+        "ResNil >> run "
+        "  ^ [ Warning signal: 'w'. 7 ] on: Warning do: [ :e | e resume ]. "
+        "x := ResNil newChild. "
+        "x run.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r->asLong(rt.rootCtx()) == 7);
+}
+
+TEST_CASE("EXC-b: resume: on a non-resumable Error is itself an error",
+          "[exceptions][track1]") {
+    // `Error` is non-resumable; `e resume: 1` in its handler must fail.
+    const char* src =
+        "Object subclass: #BadResume. "
+        "BadResume >> run "
+        "  ^ [ Error signal: 'x' ] on: Error do: [ :e | e resume: 1 ]. "
+        "x := BadResume newChild. "
+        "x run.";
+    protoST::STRuntime rt;
+    REQUIRE_THROWS_WITH(runSrc(rt, src),
+                        Catch::Matchers::ContainsSubstring("resume"));
+}
+
+TEST_CASE("EXC-b: retry re-evaluates the protected block from scratch",
+          "[exceptions][track1]") {
+    // The first attempt: the protected block sees the gate state "pending",
+    // flips it to "done", and signals an Error. The handler `retry`s. The
+    // second attempt sees "done", skips the signal, and yields 42 — proving
+    // the protected block re-ran. The one-shot gate guarantees termination
+    // (a never-flipped flag would loop forever).
+    //
+    // The gate lives as an attribute on the globally-named subclass `RetryErr`
+    // because, in the current build, block closures cannot capture method
+    // locals or `self` — a globally-resolvable prototype is the only mutable
+    // state a protected block can reach. (When block capture lands this test
+    // can use an ordinary instance-variable counter.)
+    const char* src =
+        "Error subclass: #RetryErr. "
+        "RetryErr messageText: 'pending'. "
+        "Object subclass: #Retrier. "
+        "Retrier >> run "
+        "  ^ [ (RetryErr messageText = 'pending') "
+        "        ifTrue: [ RetryErr messageText: 'done'. Error signal: 'first' ]. "
+        "      42 ] "
+        "      on: Error do: [ :e | e retry ]. "
+        "x := Retrier newChild. "
+        "x run.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r->asLong(rt.rootCtx()) == 42);
+}
+
+TEST_CASE("EXC-b: pass hands the exception to an outer handler",
+          "[exceptions][track1]") {
+    // The inner `on: Error do:` handler does `e pass`; the signal search
+    // resumes outward and the outer `on: Error do:` handler runs, yielding 88.
+    const char* src =
+        "Object subclass: #Passer. "
+        "Passer >> run "
+        "  ^ [ [ Error signal: 'x' ] on: Error do: [ :e | e pass ] ] "
+        "      on: Error do: [ :e | 88 ]. "
+        "x := Passer newChild. "
+        "x run.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r->asLong(rt.rootCtx()) == 88);
+}
+
+TEST_CASE("EXC-b: outer is an alias of pass",
+          "[exceptions][track1]") {
+    // `e outer` behaves as `e pass` for this MVP — the outer handler runs.
+    const char* src =
+        "Object subclass: #Outerer. "
+        "Outerer >> run "
+        "  ^ [ [ Error signal: 'x' ] on: Error do: [ :e | e outer ] ] "
+        "      on: Error do: [ :e | 71 ]. "
+        "x := Outerer newChild. "
+        "x run.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r->asLong(rt.rootCtx()) == 71);
+}
+
+TEST_CASE("EXC-b: pass with no outer handler runs the default action",
+          "[exceptions][track1]") {
+    // A single handler does `e pass`; with no outer handler the Error's
+    // default action aborts the activation with its message.
+    const char* src =
+        "Object subclass: #PassNone. "
+        "PassNone >> run "
+        "  ^ [ Error signal: 'fellthrough' ] on: Error do: [ :e | e pass ]. "
+        "x := PassNone newChild. "
+        "x run.";
+    protoST::STRuntime rt;
+    REQUIRE_THROWS_WITH(runSrc(rt, src),
+                        Catch::Matchers::ContainsSubstring("fellthrough"));
+}
+
+TEST_CASE("EXC-b: on:do:on:do: — the matching guard's handler runs",
+          "[exceptions][track1]") {
+    // Two guards on one protected block. A signalled Error matches the Error
+    // guard and yields 1; a signalled Warning matches the Warning guard and
+    // yields 2.
+    const char* errSrc =
+        "Object subclass: #TwoGuardE. "
+        "TwoGuardE >> run "
+        "  ^ [ Error signal: 'e' ] "
+        "      on: Error   do: [ :e | 1 ] "
+        "      on: Warning do: [ :e | 2 ]. "
+        "x := TwoGuardE newChild. "
+        "x run.";
+    const char* warnSrc =
+        "Object subclass: #TwoGuardW. "
+        "TwoGuardW >> run "
+        "  ^ [ Warning signal: 'w' ] "
+        "      on: Error   do: [ :e | 1 ] "
+        "      on: Warning do: [ :e | 2 ]. "
+        "x := TwoGuardW newChild. "
+        "x run.";
+    {
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, errSrc);
+        REQUIRE(r->asLong(rt.rootCtx()) == 1);
+    }
+    {
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, warnSrc);
+        REQUIRE(r->asLong(rt.rootCtx()) == 2);
+    }
+}
+
+TEST_CASE("EXC-b: an unhandled Warning resumes with nil — no abort",
+          "[exceptions][track1]") {
+    // No handler for the Warning. The refined default action prints and
+    // resumes with nil: `signal` returns nil, the post-signal `123` runs, and
+    // the top level yields 123 instead of aborting.
+    const char* src =
+        "Warning signal: 'just-a-warning'. "
+        "123.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r->asLong(rt.rootCtx()) == 123);
+}
+
+TEST_CASE("EXC-b: an unhandled base Exception resumes with nil",
+          "[exceptions][track1]") {
+    // The bare resumable `Exception` base, unhandled, resumes with nil too.
+    const char* src =
+        "Exception signal: 'base'. "
+        "55.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r->asLong(rt.rootCtx()) == 55);
+}
+
+TEST_CASE("EXC-b: an unhandled Error still aborts (non-resumable)",
+          "[exceptions][track1]") {
+    // The non-resumable Error keeps the EXC-a default action: abort.
+    const char* src =
+        "Error signal: 'still-fatal'. "
+        "1.";
+    protoST::STRuntime rt;
+    REQUIRE_THROWS_WITH(runSrc(rt, src),
+                        Catch::Matchers::ContainsSubstring("still-fatal"));
+}
+
+TEST_CASE("EXC-b: a signal inside a handler still escapes to an outer handler",
+          "[exceptions][track1]") {
+    // Regression check from EXC-a, re-verified after the signal-loop
+    // restructure: a handler that itself signals escapes outward.
+    const char* src =
+        "Object subclass: #InHandler2. "
+        "InHandler2 >> run "
+        "  ^ [ [ Error signal: 'first' ] "
+        "        on: Error do: [ :e | Error signal: 'second' ] ] "
+        "      on: Error do: [ :e | e messageText ]. "
+        "i := InHandler2 newChild. "
+        "i run.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r->asString(rt.rootCtx()) != nullptr);
+    REQUIRE(r->asString(rt.rootCtx())->toStdString(rt.rootCtx()) == "second");
 }

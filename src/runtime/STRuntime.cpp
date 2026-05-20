@@ -4,6 +4,9 @@
 #include "FutureYield.h"
 #include "NonLocalReturn.h"
 #include "UnwindToHandler.h"
+#include "ResumeSignal.h"
+#include "RetrySignal.h"
+#include "PassSignal.h"
 #include "BytecodeModule.h"
 #include "Bootstrap.h"
 #include "Venv.h"
@@ -646,6 +649,20 @@ STRuntime::runTopLevel(const BytecodeModule& m) {
         // owning `on:do:` was already gone). Surface it as a runtime error.
         throw std::runtime_error(
             "exception unwind: no matching on:do: handler activation");
+    } catch (const RetrySignal&) {
+        // EXC-b: a `retry` reached the top level with no `on:do:` to re-enter
+        // — same bug class as a stray UnwindToHandler.
+        throw std::runtime_error(
+            "exception retry: no matching on:do: handler activation");
+    } catch (const ResumeSignal&) {
+        // EXC-b: a `resume:` escaped its `signal` loop — a bug; `signal`
+        // always consumes the ResumeSignal for its own id.
+        throw std::runtime_error(
+            "exception resume: no active signal to resume");
+    } catch (const PassSignal&) {
+        // EXC-b: a `pass` escaped its `signal` loop — a bug.
+        throw std::runtime_error(
+            "exception pass: no active signal to pass");
     }
 }
 
@@ -1003,6 +1020,39 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                     TransientPin pinErr(ctx, err);
                     rejectFutureFromDrain(*this, ctx, msgFut, err);
                 }
+            } catch (const RetrySignal&) {
+                // EXC-b: stray `retry` — same bug class as a stray unwind.
+                SCHED_DIAG("drainOne RESUME STRAY exception-retry actor="
+                           << actor);
+                setCurrentActor(nullptr);
+                if (msgFut && msgFut != PROTO_NONE) {
+                    auto* err = ctx->fromUTF8String(
+                        "exception retry: no matching on:do: handler activation");
+                    TransientPin pinErr(ctx, err);
+                    rejectFutureFromDrain(*this, ctx, msgFut, err);
+                }
+            } catch (const ResumeSignal&) {
+                // EXC-b: stray `resume:` — `signal` always consumes its own.
+                SCHED_DIAG("drainOne RESUME STRAY exception-resume actor="
+                           << actor);
+                setCurrentActor(nullptr);
+                if (msgFut && msgFut != PROTO_NONE) {
+                    auto* err = ctx->fromUTF8String(
+                        "exception resume: no active signal to resume");
+                    TransientPin pinErr(ctx, err);
+                    rejectFutureFromDrain(*this, ctx, msgFut, err);
+                }
+            } catch (const PassSignal&) {
+                // EXC-b: stray `pass` — `signal` always consumes its own.
+                SCHED_DIAG("drainOne RESUME STRAY exception-pass actor="
+                           << actor);
+                setCurrentActor(nullptr);
+                if (msgFut && msgFut != PROTO_NONE) {
+                    auto* err = ctx->fromUTF8String(
+                        "exception pass: no active signal to pass");
+                    TransientPin pinErr(ctx, err);
+                    rejectFutureFromDrain(*this, ctx, msgFut, err);
+                }
             } catch (const std::exception& e) {
                 setCurrentActor(nullptr);
                 if (msgFut && msgFut != PROTO_NONE) {
@@ -1207,6 +1257,43 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
         if (future) {
             auto* err = ctx->fromUTF8String(
                 "exception unwind: no matching on:do: handler activation");
+            TransientPin pinErr(ctx, err);
+            rejectFutureFromDrain(*this, ctx, future, err);
+        }
+        actorGuard.release();
+        return true;
+    } catch (const RetrySignal&) {
+        // EXC-b: a stray `retry` escaped the actor handler — a balanced
+        // `on:do:` always catches its own id. Reject the message Future.
+        SCHED_DIAG("drainOne STRAY exception-retry actor=" << actor);
+        setCurrentActor(nullptr);
+        if (future) {
+            auto* err = ctx->fromUTF8String(
+                "exception retry: no matching on:do: handler activation");
+            TransientPin pinErr(ctx, err);
+            rejectFutureFromDrain(*this, ctx, future, err);
+        }
+        actorGuard.release();
+        return true;
+    } catch (const ResumeSignal&) {
+        // EXC-b: a stray `resume:` escaped its `signal` loop — a bug.
+        SCHED_DIAG("drainOne STRAY exception-resume actor=" << actor);
+        setCurrentActor(nullptr);
+        if (future) {
+            auto* err = ctx->fromUTF8String(
+                "exception resume: no active signal to resume");
+            TransientPin pinErr(ctx, err);
+            rejectFutureFromDrain(*this, ctx, future, err);
+        }
+        actorGuard.release();
+        return true;
+    } catch (const PassSignal&) {
+        // EXC-b: a stray `pass` escaped its `signal` loop — a bug.
+        SCHED_DIAG("drainOne STRAY exception-pass actor=" << actor);
+        setCurrentActor(nullptr);
+        if (future) {
+            auto* err = ctx->fromUTF8String(
+                "exception pass: no active signal to pass");
             TransientPin pinErr(ctx, err);
             rejectFutureFromDrain(*this, ctx, future, err);
         }
