@@ -50,6 +50,9 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     out.sequenceableCollectionProto = const_cast<proto::ProtoObject*>(out.collectionProto)->newChild(ctx, /*isMutable=*/true);
     out.hashedCollectionProto       = const_cast<proto::ProtoObject*>(out.collectionProto)->newChild(ctx, /*isMutable=*/true);
     out.arrayProto                  = const_cast<proto::ProtoObject*>(out.sequenceableCollectionProto)->newChild(ctx, /*isMutable=*/true);
+    // Track 2 slice b (COL-b): `OrderedCollection` — a growable sequenceable
+    // collection, ProtoList-backed like `Array` but with add:/remove* mutators.
+    out.orderedCollectionProto      = const_cast<proto::ProtoObject*>(out.sequenceableCollectionProto)->newChild(ctx, /*isMutable=*/true);
 
     // Bind protoCore primitive slots so values produced by fromLong/fromDouble/etc.
     // walk up through our Smalltalk prototypes.  This mirrors protoJS's
@@ -105,6 +108,7 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     stamp(out.sequenceableCollectionProto, "SequenceableCollection");
     stamp(out.hashedCollectionProto,       "HashedCollection");
     stamp(out.arrayProto,                  "Array");
+    stamp(out.orderedCollectionProto,      "OrderedCollection");
 
     // Track 1 slice 2 (EXC-a): the class-derived `resumable` marker. Carried
     // on the class prototypes so an instance inherits it via the chain;

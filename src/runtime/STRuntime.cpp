@@ -247,6 +247,10 @@ struct STRuntime::Impl {
         globals->setAttribute(rootCtx,
             proto::ProtoString::createSymbol(rootCtx, "Array"),
             bootstrap.arrayProto);
+        // Track 2 slice b (COL-b): the growable sequenceable collection.
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "OrderedCollection"),
+            bootstrap.orderedCollectionProto);
 
         // F6 v3 E2b: create the single live-registry GC root and pin it.
         //
@@ -317,6 +321,8 @@ struct STRuntime::Impl {
             pinPermanent(bootstrap.sequenceableCollectionProto);
             pinPermanent(bootstrap.hashedCollectionProto);
             pinPermanent(bootstrap.arrayProto);
+            // Track 2 slice b (COL-b): the growable sequenceable collection.
+            pinPermanent(bootstrap.orderedCollectionProto);
         }
     }
 
