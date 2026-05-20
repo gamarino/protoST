@@ -101,6 +101,7 @@ source .venv/bin/activate
 | Document | What it covers |
 |---|---|
 | [DESIGN.md](DESIGN.md) → [spec](docs/superpowers/specs/2026-05-19-protost-design.md) | Full technical specification: architecture, object model, actor model, modules, debugger, venv, phases. |
+| [docs/debugging.md](docs/debugging.md) | Debugging `.st` scripts in VS Code via the `protost --dap` Debug Adapter Protocol adapter. |
 | [CLAUDE.md](CLAUDE.md) | Project-specific instructions for Claude Code (to be populated). |
 
 ## Related projects

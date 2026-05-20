@@ -2,6 +2,10 @@
 
 Demos that exercise the protoST runtime end-to-end.
 
+> **Debugging:** these scripts can be debugged in VS Code via the protoST DAP
+> adapter. See [`../docs/debugging.md`](../docs/debugging.md) for setup; a
+> ready-to-use `launch.json` is in [`.vscode/launch.json`](.vscode/launch.json).
+
 ## `pump_twin.st` — Digital-twin with parallel sensors
 
 A minimal industrial digital twin: one pump (FSM with `off` / `running` states)

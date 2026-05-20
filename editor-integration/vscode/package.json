@@ -1,0 +1,96 @@
+{
+  "name": "protost-debug",
+  "displayName": "protoST Debugger",
+  "description": "Debug protoST (.st) scripts via the protost --dap Debug Adapter Protocol adapter.",
+  "version": "0.1.0",
+  "publisher": "protost-placeholder",
+  "engines": {
+    "vscode": "^1.66.0"
+  },
+  "categories": [
+    "Debuggers"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onDebug"
+  ],
+  "contributes": {
+    "configuration": {
+      "title": "protoST",
+      "properties": {
+        "protost.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the protost executable. Leave empty to resolve 'protost' from PATH."
+        }
+      }
+    },
+    "languages": [
+      {
+        "id": "smalltalk",
+        "aliases": [
+          "protoST",
+          "Smalltalk"
+        ],
+        "extensions": [
+          ".st"
+        ]
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "smalltalk"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "protost",
+        "label": "protoST",
+        "languages": [
+          "smalltalk"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Absolute path to the protoST (.st) script to debug.",
+                "default": "${workspaceFolder}/${file}"
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Stop once on entry before executing the first statement.",
+                "default": false
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "protost",
+            "request": "launch",
+            "name": "Debug current protoST script",
+            "program": "${file}",
+            "stopOnEntry": false
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "protoST: Launch current script",
+            "description": "Debug the active .st file with the protoST DAP adapter.",
+            "body": {
+              "type": "protost",
+              "request": "launch",
+              "name": "Debug current protoST script",
+              "program": "^\"\\${file}\"",
+              "stopOnEntry": false
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
