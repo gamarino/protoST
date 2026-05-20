@@ -501,3 +501,195 @@ TEST_CASE("EXC-b: a signal inside a handler still escapes to an outer handler",
     REQUIRE(r->asString(rt.rootCtx()) != nullptr);
     REQUIRE(r->asString(rt.rootCtx())->toStdString(rt.rootCtx()) == "second");
 }
+
+// ---------------------------------------------------------------------------
+// EXC-c: ensure: / ifCurtailed: — cleanup blocks.
+//
+// A cleanup block cannot read the enclosing method's `self` or locals (block
+// closures currently run with self == PROTO_NONE and capture nothing — a
+// deferred F3 gap). Each test therefore observes the cleanup's effect through
+// an attribute on a globally-named prototype, the same pattern EXC-b's `retry`
+// test uses.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("EXC-c: ensure: runs the cleanup on normal completion and yields the "
+          "protected block's value",
+          "[exceptions][track1]") {
+    // The protected block returns 7; the cleanup flips `Flag1 messageText`
+    // from 'pending' to 'ran'. A second statement reads the flag back to
+    // prove the cleanup ran.
+    const char* src =
+        "Error subclass: #Flag1. "
+        "Flag1 messageText: 'pending'. "
+        "Object subclass: #EnsureCalm. "
+        "EnsureCalm >> run "
+        "  ^ [ 7 ] ensure: [ Flag1 messageText: 'ran' ]. "
+        "c := EnsureCalm newChild. "
+        "v := c run. "
+        "Flag1 messageText.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r->asString(rt.rootCtx()) != nullptr);
+    REQUIRE(r->asString(rt.rootCtx())->toStdString(rt.rootCtx()) == "ran");
+}
+
+TEST_CASE("EXC-c: ensure: yields the protected block's value, not the cleanup's",
+          "[exceptions][track1]") {
+    // `[ 7 ] ensure: [ 99 ]` yields 7 — the cleanup's value is discarded.
+    const char* src =
+        "Object subclass: #EnsureVal. "
+        "EnsureVal >> run "
+        "  ^ [ 7 ] ensure: [ 99 ]. "
+        "v := EnsureVal newChild. "
+        "v run.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r->asLong(rt.rootCtx()) == 7);
+}
+
+TEST_CASE("EXC-c: ensure: runs the cleanup on an abnormal exit — a signal "
+          "unwinding through it",
+          "[exceptions][track1]") {
+    // An `ensure:` sits BETWEEN a `signal` and the `on: Error do:` that
+    // catches it. The signal's UnwindToHandler unwinds through the `ensure:`,
+    // which runs its cleanup (sets `Flag2 messageText` to 'ran') before
+    // re-propagating to the outer handler.
+    const char* src =
+        "Error subclass: #Flag2. "
+        "Flag2 messageText: 'pending'. "
+        "Object subclass: #EnsureUnwind. "
+        "EnsureUnwind >> run "
+        "  ^ [ [ Error signal: 'boom' ] "
+        "        ensure: [ Flag2 messageText: 'ran' ] ] "
+        "      on: Error do: [ :e | e messageText ]. "
+        "u := EnsureUnwind newChild. "
+        "caught := u run. "
+        "Flag2 messageText.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r->asString(rt.rootCtx()) != nullptr);
+    REQUIRE(r->asString(rt.rootCtx())->toStdString(rt.rootCtx()) == "ran");
+}
+
+TEST_CASE("EXC-c: ensure: runs the cleanup when a non-local return unwinds "
+          "through the protected block",
+          "[exceptions][track1]") {
+    // The protected block contains `^42` — a non-local return from the home
+    // method `run`. The NonLocalReturn unwinds through the `ensure:`, which
+    // runs its cleanup (sets `Flag3 messageText` to 'ran').
+    const char* src =
+        "Error subclass: #Flag3. "
+        "Flag3 messageText: 'pending'. "
+        "Object subclass: #EnsureNLR. "
+        "EnsureNLR >> run "
+        "  [ ^ 42 ] ensure: [ Flag3 messageText: 'ran' ]. "
+        "  ^ 0. "
+        "n := EnsureNLR newChild. "
+        "v := n run. "
+        "Flag3 messageText.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r->asString(rt.rootCtx()) != nullptr);
+    REQUIRE(r->asString(rt.rootCtx())->toStdString(rt.rootCtx()) == "ran");
+}
+
+TEST_CASE("EXC-c: the non-local return through an ensure: still returns from "
+          "the home method",
+          "[exceptions][track1]") {
+    // Same shape as above, but reads back the method's RESULT — `^42` inside
+    // the protected block must still return 42 from `run` (the `^0` after the
+    // `ensure:` is abandoned), proving the cleanup did not swallow the unwind.
+    const char* src =
+        "Error subclass: #Flag3b. "
+        "Flag3b messageText: 'pending'. "
+        "Object subclass: #EnsureNLRv. "
+        "EnsureNLRv >> run "
+        "  [ ^ 42 ] ensure: [ Flag3b messageText: 'ran' ]. "
+        "  ^ 0. "
+        "n := EnsureNLRv newChild. "
+        "n run.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r->asLong(rt.rootCtx()) == 42);
+}
+
+TEST_CASE("EXC-c: ifCurtailed: does NOT run the cleanup on normal completion",
+          "[exceptions][track1]") {
+    // The protected block completes normally with 5; `ifCurtailed:`'s cleanup
+    // is SKIPPED, so `Flag4 messageText` stays 'pending'.
+    const char* src =
+        "Error subclass: #Flag4. "
+        "Flag4 messageText: 'pending'. "
+        "Object subclass: #CurtCalm. "
+        "CurtCalm >> run "
+        "  ^ [ 2 + 3 ] ifCurtailed: [ Flag4 messageText: 'ran' ]. "
+        "c := CurtCalm newChild. "
+        "v := c run. "
+        "Flag4 messageText.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r->asString(rt.rootCtx()) != nullptr);
+    REQUIRE(r->asString(rt.rootCtx())->toStdString(rt.rootCtx()) == "pending");
+}
+
+TEST_CASE("EXC-c: ifCurtailed: yields the protected block's value on normal "
+          "completion",
+          "[exceptions][track1]") {
+    // `[ 5 ] ifCurtailed: [ ... ]` yields 5 — the normal path returns the
+    // protected block's value untouched.
+    const char* src =
+        "Object subclass: #CurtVal. "
+        "CurtVal >> run "
+        "  ^ [ 2 + 3 ] ifCurtailed: [ 99 ]. "
+        "v := CurtVal newChild. "
+        "v run.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r->asLong(rt.rootCtx()) == 5);
+}
+
+TEST_CASE("EXC-c: ifCurtailed: DOES run the cleanup on an abnormal exit",
+          "[exceptions][track1]") {
+    // A `signal` unwinds through the `ifCurtailed:` to an outer handler; the
+    // abnormal exit fires the cleanup, setting `Flag5 messageText` to 'ran'.
+    const char* src =
+        "Error subclass: #Flag5. "
+        "Flag5 messageText: 'pending'. "
+        "Object subclass: #CurtUnwind. "
+        "CurtUnwind >> run "
+        "  ^ [ [ Error signal: 'boom' ] "
+        "        ifCurtailed: [ Flag5 messageText: 'ran' ] ] "
+        "      on: Error do: [ :e | e messageText ]. "
+        "u := CurtUnwind newChild. "
+        "caught := u run. "
+        "Flag5 messageText.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r->asString(rt.rootCtx()) != nullptr);
+    REQUIRE(r->asString(rt.rootCtx())->toStdString(rt.rootCtx()) == "ran");
+}
+
+TEST_CASE("EXC-c: nested ensure: — both cleanups run, innermost first",
+          "[exceptions][track1]") {
+    // Two nested `ensure:` blocks around a `signal` caught by an outer
+    // handler. As the UnwindToHandler propagates outward, the INNER ensure:'s
+    // catch runs first, then the OUTER's. Each cleanup APPENDS a marker to
+    // `Order messageText`: the inner cleanup writes 'I', the outer 'O', so the
+    // final string 'IO' proves innermost-first ordering.
+    const char* src =
+        "Error subclass: #Order. "
+        "Order messageText: ''. "
+        "Object subclass: #NestEnsure. "
+        "NestEnsure >> run "
+        "  ^ [ [ [ Error signal: 'boom' ] "
+        "          ensure: [ Order messageText: (Order messageText , 'I') ] ] "
+        "        ensure: [ Order messageText: (Order messageText , 'O') ] ] "
+        "      on: Error do: [ :e | e messageText ]. "
+        "n := NestEnsure newChild. "
+        "caught := n run. "
+        "Order messageText.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r->asString(rt.rootCtx()) != nullptr);
+    REQUIRE(r->asString(rt.rootCtx())->toStdString(rt.rootCtx()) == "IO");
+}

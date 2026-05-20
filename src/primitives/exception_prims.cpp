@@ -37,6 +37,7 @@
 #include "runtime/ResumeSignal.h"
 #include "runtime/RetrySignal.h"
 #include "runtime/PassSignal.h"
+#include "runtime/FutureYield.h"
 #include "runtime/TransientPin.h"
 #include "protoCore.h"
 
@@ -455,6 +456,104 @@ const proto::ProtoObject* prim_Block_on_do_on_do(STRuntime& rt,
     return runProtected(rt, ctx, protectedBlock, guards);
 }
 
+// --- EXC-c: ensure: / ifCurtailed: -----------------------------------------
+//
+// `[ block ] ensure: [ cleanup ]` runs `cleanup` whether `block` exits
+// normally OR is abandoned by an unwind. `[ block ] ifCurtailed: [ cleanup ]`
+// runs `cleanup` ONLY on an abnormal (unwound) exit.
+//
+// The spec (§5) describes registering the cleanup against the frame so the
+// `frames_` unwinder fires it. For the current engine — where the protected
+// block runs via `invokeBlock`, a full nested ExecutionEngine — the concrete
+// realisation is simpler and exact: a C++ try/catch around `invokeBlock`. Any
+// unwinding exception that abandons the protected block (`UnwindToHandler`
+// from a handler's `return:`/fall-through, `RetrySignal` from `retry`,
+// `NonLocalReturn` from `^expr`, or any `std::exception`) propagates out of
+// `invokeBlock` as a C++ throw and is seen by `catch (...)`.
+//
+// FutureYield is deliberately EXCLUDED from triggering the cleanup: a
+// cooperative yield is a SUSPENSION of the protected block, not a termination
+// of it. The block will be resumed later from the snapshot, at which point it
+// finishes (or unwinds) normally. Running the cleanup on the yield would (a)
+// be semantically wrong — the protected computation has not finished — and
+// (b) run the cleanup a SECOND time when the block later completes. So
+// FutureYield is caught specifically before `catch (...)` and merely
+// re-thrown.
+//
+// ResumeSignal / PassSignal are not a concern here: they are thrown by a
+// handler running INSIDE `signal`, which runs INSIDE the protected block;
+// `signal`'s own loop consumes them before control ever leaves the protected
+// block, so they never reach this primitive.
+//
+// Re-throw correctness: the `catch (...)` branch runs the cleanup and then
+// re-throws the ORIGINAL exception with a bare `throw;`, so an
+// UnwindToHandler / RetrySignal / NonLocalReturn still reaches its real
+// target frame.
+//
+// Sharp edge (documented, not engineered around): if the cleanup block itself
+// unwinds while an exception is already in flight, ordinary C++ semantics
+// apply (a throw escaping a catch during an active exception calls
+// std::terminate). The common, supported path is a normally-completing
+// cleanup.
+//
+// Block-capture limitation: block closures currently run with
+// `self == PROTO_NONE` and do not capture method locals / instance variables
+// (a deferred F3 gap, see block_prims.cpp). A cleanup block therefore cannot
+// read the enclosing method's `self` or locals; it observes its effect
+// through state reachable by a block (e.g. an attribute on a globally-named
+// object) — the same pattern EXC-b's `retry` test uses.
+
+// protectedBlock ensure: cleanupBlock
+const proto::ProtoObject* prim_Block_ensure(STRuntime& rt, proto::ProtoContext* ctx,
+                                            const proto::ProtoObject* protectedBlock,
+                                            const proto::ProtoObject* const* a,
+                                            int argc) {
+    if (argc != 1)
+        throw std::runtime_error("ensure: expects 1 arg (cleanup block)");
+    const proto::ProtoObject* cleanupBlock = a[0];
+    try {
+        const proto::ProtoObject* result =
+            invokeBlock(rt, ctx, protectedBlock, nullptr, 0);
+        // Normal exit → run the cleanup; its value is discarded.
+        invokeBlock(rt, ctx, cleanupBlock, nullptr, 0);
+        return result;
+    } catch (const FutureYield&) {
+        // A yield is a suspension, not an exit — propagate without cleanup.
+        throw;
+    } catch (...) {
+        // Abnormal exit (UnwindToHandler / RetrySignal / NonLocalReturn /
+        // std::exception) → run the cleanup, then re-propagate the original.
+        invokeBlock(rt, ctx, cleanupBlock, nullptr, 0);
+        throw;
+    }
+}
+
+// protectedBlock ifCurtailed: cleanupBlock
+//
+// Identical to `ensure:` but the cleanup runs ONLY on an abnormal exit — the
+// normal path returns the result WITHOUT running the cleanup.
+const proto::ProtoObject* prim_Block_ifCurtailed(STRuntime& rt, proto::ProtoContext* ctx,
+                                                 const proto::ProtoObject* protectedBlock,
+                                                 const proto::ProtoObject* const* a,
+                                                 int argc) {
+    if (argc != 1)
+        throw std::runtime_error("ifCurtailed: expects 1 arg (cleanup block)");
+    const proto::ProtoObject* cleanupBlock = a[0];
+    try {
+        const proto::ProtoObject* result =
+            invokeBlock(rt, ctx, protectedBlock, nullptr, 0);
+        // Normal exit → cleanup SKIPPED.
+        return result;
+    } catch (const FutureYield&) {
+        // A yield is a suspension, not a curtailment — propagate, no cleanup.
+        throw;
+    } catch (...) {
+        // Abnormal exit only → run the cleanup, then re-propagate.
+        invokeBlock(rt, ctx, cleanupBlock, nullptr, 0);
+        throw;
+    }
+}
+
 } // namespace
 
 void installExceptionPrimitives(STRuntime& rt) {
@@ -492,6 +591,12 @@ void installExceptionPrimitives(STRuntime& rt) {
                   reg.registerPrim(prim_Block_on_do));
     bindPrimitive(rt, b.blockProto, "on:do:on:do:",
                   reg.registerPrim(prim_Block_on_do_on_do));
+
+    // EXC-c: ensure: / ifCurtailed: — the cleanup primitives, on blockProto.
+    bindPrimitive(rt, b.blockProto, "ensure:",
+                  reg.registerPrim(prim_Block_ensure));
+    bindPrimitive(rt, b.blockProto, "ifCurtailed:",
+                  reg.registerPrim(prim_Block_ifCurtailed));
 }
 
 } // namespace protoST
