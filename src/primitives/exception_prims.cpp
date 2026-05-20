@@ -38,6 +38,8 @@
 #include "runtime/RetrySignal.h"
 #include "runtime/PassSignal.h"
 #include "runtime/FutureYield.h"
+#include "runtime/UnhandledSTException.h"
+#include "runtime/NativeExceptionBridge.h"
 #include "runtime/TransientPin.h"
 #include "protoCore.h"
 
@@ -138,13 +140,20 @@ std::string defaultActionMessage(proto::ProtoContext* ctx,
 //     messageText to stderr; then RESUME the signal with nil so the
 //     computation continues. `signal` returns the result of this function.
 //   * non-resumable (Error and descendants) → abort the activation by
-//     throwing std::runtime_error — an actor rejects its Future, the REPL/-e
+//     throwing UnhandledSTException — an actor rejects its Future, the REPL/-e
 //     prints it. This function does not return in that case.
+//
+// EXC-d: the abort throw is UnhandledSTException, NOT a bare std::runtime_error.
+// It derives from std::runtime_error so the `drainOne` / `runTopLevel`
+// `catch (const std::exception&)` clauses keep working unchanged; the dedicated
+// type lets the EXC-d native-translation wrapper recognise an
+// already-protoST exception and re-throw it instead of double-translating it.
 const proto::ProtoObject* defaultAction(proto::ProtoContext* ctx,
                                         const proto::ProtoObject* exc) {
     if (!isResumable(ctx, exc)) {
-        // Error / non-resumable: abort, as in EXC-a.
-        throw std::runtime_error(defaultActionMessage(ctx, exc));
+        // Error / non-resumable: abort the activation (EXC-a behaviour, EXC-d
+        // dedicated type).
+        throw UnhandledSTException(defaultActionMessage(ctx, exc));
     }
     // Resumable and unhandled. A Warning announces itself; the bare Exception
     // base resumes silently. The distinction is the presence of a messageText
@@ -238,6 +247,44 @@ const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx
                                handlerResult ? handlerResult : PROTO_NONE };
     }
 }
+
+} // namespace
+
+// --- EXC-d: translate a native C++ exception into a protoST Error ----------
+//
+// Declared in NativeExceptionBridge.h; called by `translateNativeException`'s
+// catch branches at every native call boundary.
+//
+// Builds a fresh, NON-resumable `Error` instance — a mutable child of the
+// `Error` prototype, so it inherits `__resumable__ == false` and is caught by
+// an ordinary `on: Error do:` guard — stamps `messageText`, and runs it
+// through the very same `signalInstance` path a script-level `Error signal:`
+// uses. An active handler therefore catches it; with no handler the search
+// exhausts and `defaultAction` throws `UnhandledSTException`.
+//
+// May throw (all correct, all propagate out of the wrapper): `UnwindToHandler`
+// when a handler caught the translated Error and did `return:` / fell through,
+// `RetrySignal` on `retry`, `UnhandledSTException` when nothing caught it.
+const proto::ProtoObject* signalNativeError(STRuntime& rt,
+                                            proto::ProtoContext* ctx,
+                                            const char* message) {
+    const proto::ProtoObject* errorCls = rt.bootstrap().errorProto;
+    // Fresh mutable child of Error — inherits the non-resumable marker.
+    const proto::ProtoObject* exc =
+        const_cast<proto::ProtoObject*>(errorCls)->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinExc(ctx, exc);
+    const proto::ProtoObject* text =
+        ctx->fromUTF8String(message ? message : "native exception");
+    const_cast<proto::ProtoObject*>(exc)->setAttribute(
+        ctx, msgTextKey(ctx), text);
+    // Force non-resumable on the instance too, defensively — a translated
+    // native exception is never resumable (the native stack is already gone).
+    const_cast<proto::ProtoObject*>(exc)->setAttribute(
+        ctx, resumableKey(ctx), PROTO_FALSE);
+    return signalInstance(rt, ctx, exc);
+}
+
+namespace {
 
 // --- Build an instance from a class object ---------------------------------
 //

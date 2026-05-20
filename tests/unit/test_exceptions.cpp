@@ -693,3 +693,125 @@ TEST_CASE("EXC-c: nested ensure: — both cleanups run, innermost first",
     REQUIRE(r->asString(rt.rootCtx()) != nullptr);
     REQUIRE(r->asString(rt.rootCtx())->toStdString(rt.rootCtx()) == "IO");
 }
+
+// ===========================================================================
+// EXC-d — native / UMD C++ exception translation.
+//
+// A native primitive that throws a C++ std::exception is translated, at the
+// engine's primitive-call boundary, into a non-resumable protoST `Error` that
+// goes through the ordinary `signal` path — so an `on: Error do:` handler
+// catches it, an `ensure:` cleanup still runs, and with no handler it still
+// aborts (now as UnhandledSTException, which is-a std::exception). The integer
+// `/` primitive throws `std::runtime_error("ZeroDivide")` on a zero divisor —
+// a clean, real native error used here as the test vehicle.
+// ===========================================================================
+
+TEST_CASE("EXC-d: a native primitive C++ exception is caught by on: Error do:",
+          "[exceptions][track1]") {
+    // `1 / 0` throws std::runtime_error("ZeroDivide") inside the native int
+    // division primitive. The engine's translation wrapper turns it into a
+    // protoST Error; `on: Error do:` catches it and the handler reads a
+    // sensible messageText carrying the C++ what() string.
+    const char* src =
+        "Object subclass: #NativeCatch. "
+        "NativeCatch >> run "
+        "  ^ [ 1 / 0 ] on: Error do: [ :e | e messageText ]. "
+        "n := NativeCatch newChild. "
+        "n run.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r->asString(rt.rootCtx()) != nullptr);
+    REQUIRE(r->asString(rt.rootCtx())->toStdString(rt.rootCtx()) == "ZeroDivide");
+}
+
+TEST_CASE("EXC-d: the handler can return: a value for a translated native error",
+          "[exceptions][track1]") {
+    // A translated native Error is an ordinary Error — the handler may
+    // `return:` a substitute value, which the `on:do:` yields.
+    const char* src =
+        "Object subclass: #NativeReturn. "
+        "NativeReturn >> run "
+        "  ^ [ 1 / 0 ] on: Error do: [ :e | e return: 42 ]. "
+        "n := NativeReturn newChild. "
+        "n run.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r->asLong(rt.rootCtx()) == 42);
+}
+
+TEST_CASE("EXC-d: an UNCAUGHT native primitive exception still aborts",
+          "[exceptions][track1]") {
+    // With no handler, the translated Error's default action runs: it is
+    // non-resumable, so it aborts the activation. The abort surfaces as
+    // UnhandledSTException — which is-a std::exception, so REQUIRE_THROWS_WITH
+    // still sees a throw carrying the native message. No behaviour change
+    // from before EXC-d for the uncaught case.
+    const char* src =
+        "Object subclass: #NativeAbort. "
+        "NativeAbort >> run "
+        "  ^ 1 / 0. "
+        "n := NativeAbort newChild. "
+        "n run.";
+    protoST::STRuntime rt;
+    REQUIRE_THROWS_WITH(runSrc(rt, src),
+                        Catch::Matchers::ContainsSubstring("ZeroDivide"));
+}
+
+TEST_CASE("EXC-d: ensure: cleanup runs when a translated native error unwinds "
+          "through it",
+          "[exceptions][track1]") {
+    // The native `1 / 0` error unwinds out of an `ensure:` on its way to the
+    // outer `on: Error do:`. EXC-c's `catch (...)` path must run the cleanup
+    // for a translated error exactly as for a script-signalled one.
+    const char* src =
+        "Error subclass: #NFlag. "
+        "NFlag messageText: 'pending'. "
+        "Object subclass: #NativeEnsure. "
+        "NativeEnsure >> run "
+        "  ^ [ [ 1 / 0 ] ensure: [ NFlag messageText: 'cleaned' ] ] "
+        "      on: Error do: [ :e | e messageText ]. "
+        "n := NativeEnsure newChild. "
+        "caught := n run. "
+        "NFlag messageText.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r->asString(rt.rootCtx()) != nullptr);
+    REQUIRE(r->asString(rt.rootCtx())->toStdString(rt.rootCtx()) == "cleaned");
+}
+
+TEST_CASE("EXC-d: a translated native Error is non-resumable — resume: errors",
+          "[exceptions][track1]") {
+    // A translated native exception is forced non-resumable (the native stack
+    // is already gone). `e resume:` inside the handler is itself an error;
+    // with no outer handler it aborts.
+    const char* src =
+        "Object subclass: #NativeResume. "
+        "NativeResume >> run "
+        "  ^ [ 1 / 0 ] on: Error do: [ :e | e resume: 7 ]. "
+        "n := NativeResume newChild. "
+        "n run.";
+    protoST::STRuntime rt;
+    REQUIRE_THROWS_WITH(
+        runSrc(rt, src),
+        Catch::Matchers::ContainsSubstring("resume"));
+}
+
+TEST_CASE("EXC-d: control flow is unaffected — a non-translated on:do: still "
+          "catches a script-signalled Error after EXC-d",
+          "[exceptions][track1]") {
+    // A regression guard: the translation wrapper must not perturb an
+    // ordinary script `signal` path. `Error signal:` in a protected block is
+    // still caught by `on: Error do:` and yields the handler's value — the
+    // wrapper re-throws UnwindToHandler untouched.
+    const char* src =
+        "Object subclass: #StillWorks. "
+        "StillWorks >> run "
+        "  ^ [ Error signal: 'scripted' ] "
+        "      on: Error do: [ :e | e messageText ]. "
+        "s := StillWorks newChild. "
+        "s run.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r->asString(rt.rootCtx()) != nullptr);
+    REQUIRE(r->asString(rt.rootCtx())->toStdString(rt.rootCtx()) == "scripted");
+}

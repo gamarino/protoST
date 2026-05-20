@@ -15,6 +15,8 @@
 #include "GcSafeBlocking.h"
 #include "GcSafeMutex.h"
 #include "TransientPin.h"
+#include "UnhandledSTException.h"
+#include "NativeExceptionBridge.h"
 #include "debugger/DebuggerRuntime.h"
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
@@ -1182,7 +1184,16 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             if (marker & (1LL << 62)) {
                 int idx = static_cast<int>(marker & ((1LL << 62) - 1));
                 auto fn = impl_->registry.at(idx);
-                result = fn(*this, ctx, wrapped, args.data(), argc);
+                // EXC-d: an actor's method dispatched as a native primitive is
+                // a native call boundary — wrap it so a C++ exception from the
+                // primitive becomes a catchable protoST Error. The wrapper
+                // re-throws the control-flow siblings (FutureYield etc.) and
+                // DebuggerHalt / UnhandledSTException untouched, so the
+                // drainOne catch clauses below see exactly what they did
+                // before for those types.
+                result = translateNativeException(
+                    *this, ctx,
+                    [&] { return fn(*this, ctx, wrapped, args.data(), argc); });
             } else {
                 throw std::runtime_error("unknown method shape");
             }

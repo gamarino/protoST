@@ -27,6 +27,7 @@
 #include "ActorLock.h"
 #include "GcSafeMutex.h"
 #include "TransientPin.h"
+#include "NativeExceptionBridge.h"
 #include "debugger/DebuggerRuntime.h"
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
@@ -951,7 +952,19 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // nesting depth makes that acceptable for F6 v3 A; the
                 // unbounded user-method recursion was the actual target of
                 // this refactor and is now gone.
-                auto* result = fn(rt_, ctx, recv, sendArgs, argcOp);
+                //
+                // EXC-d: this is the engine's single native-primitive call
+                // boundary. Wrap it in translateNativeException so a C++
+                // exception thrown by the primitive (a std::runtime_error
+                // from a bad selector / arity / arithmetic, or any UMD-native
+                // throw) becomes a catchable protoST Error. The control-flow
+                // siblings (NonLocalReturn / UnwindToHandler / RetrySignal /
+                // ResumeSignal / PassSignal / FutureYield) and DebuggerHalt /
+                // UnhandledSTException are re-thrown untouched by the wrapper,
+                // so primitives that raise them on purpose are unaffected.
+                auto* result = translateNativeException(
+                    rt_, ctx,
+                    [&] { return fn(rt_, ctx, recv, sendArgs, argcOp); });
                 push(f, result ? result : PROTO_NONE);
                 break;
             }
