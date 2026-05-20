@@ -143,6 +143,46 @@ void setSetData(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
         ctx, dataKey(ctx), updated->asObject(ctx));
 }
 
+// --- Dictionary backing — a hash->bucket ProtoSparseList -------------------
+//
+// protoCore's `ProtoSparseList` is keyed by `unsigned long`, so it cannot
+// store arbitrary object keys directly. A `Dictionary` keeps its `__data__`
+// as a `ProtoSparseList` keyed by `key->getHash(ctx)`; each slot holds a
+// *bucket* — a `ProtoList` of alternating `[key0, value0, key1, value1, …]`.
+// Multiple keys that collide on a hash coexist in one bucket, and the key
+// objects themselves are retained (needed for `keysDo:` / `keys` / equality
+// comparison). Lookup walks: hash → bucket → linear scan comparing keys by
+// protoCore object equality (`compare(...) == 0`), exactly as Set/Bag's
+// `remove:` does.
+
+// The backing ProtoSparseList of a Dictionary instance. A nullptr or missing
+// `__data__` yields a fresh empty sparse list — defensive, like arrayData.
+const proto::ProtoSparseList* dictData(proto::ProtoContext* ctx,
+                                       const proto::ProtoObject* d) {
+    const proto::ProtoObject* raw =
+        d ? d->getAttribute(ctx, dataKey(ctx)) : nullptr;
+    if (!raw || raw == PROTO_NONE) return ctx->newSparseList();
+    const proto::ProtoSparseList* sl = raw->asSparseList(ctx);
+    return sl ? sl : ctx->newSparseList();
+}
+
+// True when `obj`'s `__data__` is a ProtoSparseList (i.e. a `Dictionary`).
+bool isDictBacked(proto::ProtoContext* ctx, const proto::ProtoObject* obj) {
+    if (!obj) return false;
+    const proto::ProtoObject* raw = obj->getAttribute(ctx, dataKey(ctx));
+    return raw && raw != PROTO_NONE && raw->asSparseList(ctx) != nullptr;
+}
+
+// Replace a Dictionary's `__data__` with a fresh ProtoSparseList snapshot.
+// Every Dictionary mutator (`at:put:`, `removeKey:`) ends here.
+void setDictData(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
+                 const proto::ProtoSparseList* updated) {
+    TransientPin pinUpdated(
+        ctx, reinterpret_cast<const proto::ProtoObject*>(updated));
+    const_cast<proto::ProtoObject*>(coll)->setAttribute(
+        ctx, dataKey(ctx), updated->asObject(ctx));
+}
+
 } // namespace
 
 // --- makeArrayInstance — the canonical Array constructor -------------------
@@ -233,18 +273,29 @@ namespace {
 // collection prototype it descends from IS its species. A receiver that is none
 // of them (an abstract `Collection`, or some hand-built object) falls back to
 // `Array` — the sensible default the spec mandates.
+//
+// COL-d: a `Dictionary` is special. `collect:`/`select:` over a Dictionary map
+// or filter its *values* (Dictionary iterates values), and the result cannot
+// stay a Dictionary — the keys are gone. The protoST simplification (matching
+// the spec) is that a Dictionary's species result-building yields an `Array`:
+// `Dictionary` resolves to `arrayProto` here, so `collect:`/`select:` over a
+// dictionary's values produce an `Array`. `select:` losing the keys is the
+// documented limitation of this slice.
 const proto::ProtoObject* speciesProtoOf(STRuntime& rt, proto::ProtoContext* ctx,
                                          const proto::ProtoObject* r) {
     const proto::ProtoObject* ocProto    = rt.bootstrap().orderedCollectionProto;
     const proto::ProtoObject* arrayProto = rt.bootstrap().arrayProto;
     const proto::ProtoObject* setProto   = rt.bootstrap().setProto;
     const proto::ProtoObject* bagProto   = rt.bootstrap().bagProto;
+    const proto::ProtoObject* dictProto  = rt.bootstrap().dictionaryProto;
     for (const proto::ProtoObject* p = r; p && p != PROTO_NONE;
          p = p->getPrototype(ctx)) {
         if (p == ocProto)    return ocProto;
         if (p == arrayProto) return arrayProto;
         if (p == setProto)   return setProto;
         if (p == bagProto)   return bagProto;
+        // A Dictionary's derived results lose the keys — build an Array.
+        if (p == dictProto)  return arrayProto;
     }
     return arrayProto;
 }
@@ -287,9 +338,32 @@ bool forEachElement(STRuntime& /*rt*/, proto::ProtoContext* ctx,
         }
         return true;
     }
+    // COL-d: a `Dictionary` is ProtoSparseList-backed (hash -> bucket). Iterating
+    // a Dictionary visits its VALUES — consistent with `Dictionary>>do:` and the
+    // Smalltalk convention. Walk every bucket, and within each bucket every
+    // [key, value] pair, yielding the value. After this the derived protocol
+    // (`inject:into:`, `detect:`, `collect:`, …) works on a Dictionary over its
+    // values.
+    if (isDictBacked(ctx, collection)) {
+        const proto::ProtoSparseList* data = dictData(ctx, collection);
+        const proto::ProtoSparseListIterator* it = data->getIterator(ctx);
+        while (it && it->hasNext(ctx)) {
+            const proto::ProtoObject* bucketObj = it->nextValue(ctx);
+            it = const_cast<proto::ProtoSparseListIterator*>(it)->advance(ctx);
+            const proto::ProtoList* bucket =
+                bucketObj ? bucketObj->asList(ctx) : nullptr;
+            if (!bucket) continue;
+            unsigned long bn = bucket->getSize(ctx);
+            for (unsigned long i = 1; i < bn; i += 2) {  // values at odd slots
+                const proto::ProtoObject* v =
+                    bucket->getAt(ctx, static_cast<int>(i));
+                if (!fn(v ? v : PROTO_NONE)) return false;
+            }
+        }
+        return true;
+    }
     // COL-c: a `Bag` is ProtoList-backed (one slot per occurrence) — it flows
-    // through the ProtoList arm above. COL-d..e: extend here (Dictionary /
-    // Interval kinds).
+    // through the ProtoList arm above. COL-e: extend here (Interval kind).
     throw std::runtime_error("collection does not understand iteration");
 }
 
@@ -1008,6 +1082,488 @@ const proto::ProtoObject* prim_Bag_classWithAll(STRuntime& rt, proto::ProtoConte
     return makeBagInstance(rt, ctx, data);
 }
 
+// =========================  Association  ===================================
+//
+// An `Association` is a minimal key->value pair — NOT a collection (it is a
+// direct child of `Object`). It exists to support `Dictionary>>associationsDo:`
+// and the `aKey -> aValue` literal. The key and value are plain attributes
+// (`__assoc_key__` / `__assoc_value__`); `key`/`value`/`key:`/`value:` are
+// accessors.
+
+const proto::ProtoString* assocKeyKey(proto::ProtoContext* ctx) {
+    return proto::ProtoString::createSymbol(ctx, "__assoc_key__");
+}
+const proto::ProtoString* assocValueKey(proto::ProtoContext* ctx) {
+    return proto::ProtoString::createSymbol(ctx, "__assoc_value__");
+}
+
+// makeAssociation — build a fresh Association instance for `key -> value`.
+const proto::ProtoObject* makeAssociation(STRuntime& rt, proto::ProtoContext* ctx,
+                                          const proto::ProtoObject* key,
+                                          const proto::ProtoObject* value) {
+    if (!key)   key   = PROTO_NONE;
+    if (!value) value = PROTO_NONE;
+    TransientPin pinKey(ctx, key);
+    TransientPin pinValue(ctx, value);
+    const proto::ProtoObject* assoc =
+        const_cast<proto::ProtoObject*>(rt.bootstrap().associationProto)
+            ->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinAssoc(ctx, assoc);
+    const_cast<proto::ProtoObject*>(assoc)->setAttribute(
+        ctx, assocKeyKey(ctx), key);
+    const_cast<proto::ProtoObject*>(assoc)->setAttribute(
+        ctx, assocValueKey(ctx), value);
+    return assoc;
+}
+
+// aKey -> aValue → a fresh Association. Bound as a binary primitive on
+// `objectProto`, so any object is a valid association key.
+const proto::ProtoObject* prim_Object_arrow(STRuntime& rt, proto::ProtoContext* ctx,
+                                            const proto::ProtoObject* r,
+                                            const proto::ProtoObject* const* a,
+                                            int argc) {
+    if (argc != 1) throw std::runtime_error("-> expects 1 arg (value)");
+    return makeAssociation(rt, ctx, r, a[0]);
+}
+
+// anAssociation key → the key.
+const proto::ProtoObject* prim_Assoc_key(STRuntime&, proto::ProtoContext* ctx,
+                                         const proto::ProtoObject* r,
+                                         const proto::ProtoObject* const*, int) {
+    const proto::ProtoObject* k = r ? r->getAttribute(ctx, assocKeyKey(ctx)) : nullptr;
+    return k ? k : PROTO_NONE;
+}
+
+// anAssociation value → the value.
+const proto::ProtoObject* prim_Assoc_value(STRuntime&, proto::ProtoContext* ctx,
+                                           const proto::ProtoObject* r,
+                                           const proto::ProtoObject* const*, int) {
+    const proto::ProtoObject* v = r ? r->getAttribute(ctx, assocValueKey(ctx)) : nullptr;
+    return v ? v : PROTO_NONE;
+}
+
+// anAssociation key: aKey → set the key; return the receiver.
+const proto::ProtoObject* prim_Assoc_keyPut(STRuntime&, proto::ProtoContext* ctx,
+                                            const proto::ProtoObject* r,
+                                            const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("key: expects 1 arg");
+    const_cast<proto::ProtoObject*>(r)->setAttribute(
+        ctx, assocKeyKey(ctx), a[0] ? a[0] : PROTO_NONE);
+    return r;
+}
+
+// anAssociation value: aValue → set the value; return the receiver.
+const proto::ProtoObject* prim_Assoc_valuePut(STRuntime&, proto::ProtoContext* ctx,
+                                              const proto::ProtoObject* r,
+                                              const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("value: expects 1 arg");
+    const_cast<proto::ProtoObject*>(r)->setAttribute(
+        ctx, assocValueKey(ctx), a[0] ? a[0] : PROTO_NONE);
+    return r;
+}
+
+// =========================  Dictionary base operations  ====================
+//
+// A `Dictionary` is a hashed key->value map with arbitrary object keys. It
+// uses the mutable-holder representation — a mutable child of the `Dictionary`
+// prototype with `__data__` — but `__data__` holds a `ProtoSparseList` keyed
+// by `key->getHash(ctx)`, each slot a bucket `ProtoList` of alternating
+// `[key0, value0, key1, value1, …]` (see the dictData comment block above).
+// Lookup: hash → bucket → linear scan comparing keys by protoCore object
+// equality. Every mutator swaps `__data__` for the new ProtoSparseList.
+
+// Scan a bucket for `key`; return the index of its key slot (an even index),
+// or -1 if absent. Keys are compared by protoCore object equality, with a
+// pointer-identity fast path (matches Bag's indexOfEqual).
+int bucketIndexOfKey(proto::ProtoContext* ctx, const proto::ProtoList* bucket,
+                     const proto::ProtoObject* key) {
+    if (!bucket) return -1;
+    if (!key) key = PROTO_NONE;
+    unsigned long n = bucket->getSize(ctx);
+    for (unsigned long i = 0; i < n; i += 2) {
+        const proto::ProtoObject* k = bucket->getAt(ctx, static_cast<int>(i));
+        if (!k) k = PROTO_NONE;
+        if (k == key || k->compare(ctx, key) == 0) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+// Look up `key` in `data`. On a hit, returns the value and sets `*found`;
+// on a miss returns PROTO_NONE with `*found` false.
+const proto::ProtoObject* dictLookup(proto::ProtoContext* ctx,
+                                     const proto::ProtoSparseList* data,
+                                     const proto::ProtoObject* key, bool* found) {
+    *found = false;
+    if (!key) key = PROTO_NONE;
+    unsigned long h = key->getHash(ctx);
+    if (!data->has(ctx, h)) return PROTO_NONE;
+    const proto::ProtoObject* bucketObj = data->getAt(ctx, h);
+    const proto::ProtoList* bucket = bucketObj ? bucketObj->asList(ctx) : nullptr;
+    int ki = bucketIndexOfKey(ctx, bucket, key);
+    if (ki < 0) return PROTO_NONE;
+    *found = true;
+    const proto::ProtoObject* v = bucket->getAt(ctx, ki + 1);
+    return v ? v : PROTO_NONE;
+}
+
+// Count of entries across every bucket.
+long long dictSize(proto::ProtoContext* ctx, const proto::ProtoSparseList* data) {
+    long long n = 0;
+    const proto::ProtoSparseListIterator* it = data->getIterator(ctx);
+    while (it && it->hasNext(ctx)) {
+        const proto::ProtoObject* bucketObj = it->nextValue(ctx);
+        it = const_cast<proto::ProtoSparseListIterator*>(it)->advance(ctx);
+        const proto::ProtoList* bucket =
+            bucketObj ? bucketObj->asList(ctx) : nullptr;
+        if (bucket) n += static_cast<long long>(bucket->getSize(ctx)) / 2;
+    }
+    return n;
+}
+
+// makeDictInstance — build a fresh Dictionary instance wrapping `data`.
+const proto::ProtoObject* makeDictInstance(STRuntime& rt, proto::ProtoContext* ctx,
+                                           const proto::ProtoSparseList* data) {
+    if (!data) data = ctx->newSparseList();
+    TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
+    const proto::ProtoObject* d =
+        const_cast<proto::ProtoObject*>(rt.bootstrap().dictionaryProto)
+            ->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinD(ctx, d);
+    const_cast<proto::ProtoObject*>(d)->setAttribute(
+        ctx, dataKey(ctx), data->asObject(ctx));
+    return d;
+}
+
+// Store `key -> value` into `data`, returning the updated ProtoSparseList.
+// Replaces the value if the key is already present, else appends to the bucket.
+const proto::ProtoSparseList* dictStore(proto::ProtoContext* ctx,
+                                        const proto::ProtoSparseList* data,
+                                        const proto::ProtoObject* key,
+                                        const proto::ProtoObject* value) {
+    if (!key)   key   = PROTO_NONE;
+    if (!value) value = PROTO_NONE;
+    unsigned long h = key->getHash(ctx);
+    const proto::ProtoList* bucket =
+        data->has(ctx, h) ? data->getAt(ctx, h)->asList(ctx) : nullptr;
+    if (!bucket) bucket = ctx->newList();
+    int ki = bucketIndexOfKey(ctx, bucket, key);
+    if (ki >= 0) {
+        bucket = bucket->setAt(ctx, ki + 1, value);   // overwrite the value
+    } else {
+        bucket = bucket->appendLast(ctx, key);        // append [key, value]
+        bucket = bucket->appendLast(ctx, value);
+    }
+    TransientPin pinBucket(ctx, reinterpret_cast<const proto::ProtoObject*>(bucket));
+    return data->setAt(ctx, h, bucket->asObject(ctx));
+}
+
+// aDictionary at: key → the value. Absent key signals an Error (catchable).
+const proto::ProtoObject* prim_Dict_at(STRuntime&, proto::ProtoContext* ctx,
+                                       const proto::ProtoObject* r,
+                                       const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("at: expects 1 arg (key)");
+    bool found = false;
+    const proto::ProtoObject* v = dictLookup(ctx, dictData(ctx, r), a[0], &found);
+    if (!found) throw std::runtime_error("Dictionary>>at:: key not found");
+    return v;
+}
+
+// aDictionary at: key ifAbsent: aBlock → the value, or aBlock value on a miss.
+const proto::ProtoObject* prim_Dict_atIfAbsent(STRuntime& rt, proto::ProtoContext* ctx,
+                                               const proto::ProtoObject* r,
+                                               const proto::ProtoObject* const* a, int argc) {
+    if (argc != 2)
+        throw std::runtime_error("at:ifAbsent: expects 2 args (key, block)");
+    bool found = false;
+    const proto::ProtoObject* v = dictLookup(ctx, dictData(ctx, r), a[0], &found);
+    if (found) return v;
+    const proto::ProtoObject* fallback = invokeBlock(rt, ctx, a[1], nullptr, 0);
+    return fallback ? fallback : PROTO_NONE;
+}
+
+// aDictionary at: key ifAbsentPut: aBlock → the value if present, else store
+// `aBlock value` under `key` and return it.
+const proto::ProtoObject* prim_Dict_atIfAbsentPut(STRuntime& rt, proto::ProtoContext* ctx,
+                                                  const proto::ProtoObject* r,
+                                                  const proto::ProtoObject* const* a, int argc) {
+    if (argc != 2)
+        throw std::runtime_error("at:ifAbsentPut: expects 2 args (key, block)");
+    bool found = false;
+    const proto::ProtoSparseList* data = dictData(ctx, r);
+    const proto::ProtoObject* v = dictLookup(ctx, data, a[0], &found);
+    if (found) return v;
+    const proto::ProtoObject* fresh = invokeBlock(rt, ctx, a[1], nullptr, 0);
+    if (!fresh) fresh = PROTO_NONE;
+    TransientPin pinFresh(ctx, fresh);
+    setDictData(ctx, r, dictStore(ctx, dictData(ctx, r), a[0], fresh));
+    return fresh;
+}
+
+// aDictionary at: key put: value → store the entry; return `value`.
+const proto::ProtoObject* prim_Dict_atPut(STRuntime&, proto::ProtoContext* ctx,
+                                          const proto::ProtoObject* r,
+                                          const proto::ProtoObject* const* a, int argc) {
+    if (argc != 2)
+        throw std::runtime_error("at:put: expects 2 args (key, value)");
+    const proto::ProtoObject* value = a[1] ? a[1] : PROTO_NONE;
+    setDictData(ctx, r, dictStore(ctx, dictData(ctx, r), a[0], value));
+    return value;
+}
+
+// Remove `key` from `data`. On a hit returns the value via `*out` and the
+// updated ProtoSparseList; on a miss `*out` is null and `data` is returned.
+const proto::ProtoSparseList* dictRemove(proto::ProtoContext* ctx,
+                                         const proto::ProtoSparseList* data,
+                                         const proto::ProtoObject* key,
+                                         const proto::ProtoObject** out) {
+    *out = nullptr;
+    if (!key) key = PROTO_NONE;
+    unsigned long h = key->getHash(ctx);
+    if (!data->has(ctx, h)) return data;
+    const proto::ProtoList* bucket = data->getAt(ctx, h)->asList(ctx);
+    int ki = bucketIndexOfKey(ctx, bucket, key);
+    if (ki < 0) return data;
+    const proto::ProtoObject* v = bucket->getAt(ctx, ki + 1);
+    *out = v ? v : PROTO_NONE;
+    // Drop the [key, value] pair — remove the value slot first so the key
+    // slot index stays valid.
+    bucket = bucket->removeAt(ctx, ki + 1);
+    bucket = bucket->removeAt(ctx, ki);
+    if (bucket->getSize(ctx) == 0) {
+        return data->removeAt(ctx, h);            // bucket empty — drop the slot
+    }
+    TransientPin pinBucket(ctx, reinterpret_cast<const proto::ProtoObject*>(bucket));
+    return data->setAt(ctx, h, bucket->asObject(ctx));
+}
+
+// aDictionary removeKey: key → remove the entry, return the value. Absent key
+// signals an Error.
+const proto::ProtoObject* prim_Dict_removeKey(STRuntime&, proto::ProtoContext* ctx,
+                                              const proto::ProtoObject* r,
+                                              const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("removeKey: expects 1 arg (key)");
+    const proto::ProtoObject* removed = nullptr;
+    const proto::ProtoSparseList* updated =
+        dictRemove(ctx, dictData(ctx, r), a[0], &removed);
+    if (!removed) throw std::runtime_error("Dictionary>>removeKey:: key not found");
+    setDictData(ctx, r, updated);
+    return removed;
+}
+
+// aDictionary removeKey: key ifAbsent: aBlock → as removeKey:, but on a miss
+// evaluate `aBlock` (no args) and return its value.
+const proto::ProtoObject* prim_Dict_removeKeyIfAbsent(STRuntime& rt, proto::ProtoContext* ctx,
+                                                      const proto::ProtoObject* r,
+                                                      const proto::ProtoObject* const* a,
+                                                      int argc) {
+    if (argc != 2)
+        throw std::runtime_error("removeKey:ifAbsent: expects 2 args (key, block)");
+    const proto::ProtoObject* removed = nullptr;
+    const proto::ProtoSparseList* updated =
+        dictRemove(ctx, dictData(ctx, r), a[0], &removed);
+    if (!removed) {
+        const proto::ProtoObject* fallback = invokeBlock(rt, ctx, a[1], nullptr, 0);
+        return fallback ? fallback : PROTO_NONE;
+    }
+    setDictData(ctx, r, updated);
+    return removed;
+}
+
+// aDictionary includesKey: key → true when the key has an entry.
+const proto::ProtoObject* prim_Dict_includesKey(STRuntime&, proto::ProtoContext* ctx,
+                                                const proto::ProtoObject* r,
+                                                const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("includesKey: expects 1 arg (key)");
+    bool found = false;
+    dictLookup(ctx, dictData(ctx, r), a[0], &found);
+    return found ? PROTO_TRUE : PROTO_FALSE;
+}
+
+// aDictionary includes: value → true when at least one entry has that value.
+const proto::ProtoObject* prim_Dict_includes(STRuntime& rt, proto::ProtoContext* ctx,
+                                             const proto::ProtoObject* r,
+                                             const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("includes: expects 1 arg (value)");
+    const proto::ProtoObject* value = a[0] ? a[0] : PROTO_NONE;
+    bool hit = false;
+    forEachElement(rt, ctx, r, [&](const proto::ProtoObject* v) {
+        if (v == value || v->compare(ctx, value) == 0) { hit = true; return false; }
+        return true;
+    });
+    return hit ? PROTO_TRUE : PROTO_FALSE;
+}
+
+// aDictionary size → number of entries.
+const proto::ProtoObject* prim_Dict_size(STRuntime&, proto::ProtoContext* ctx,
+                                         const proto::ProtoObject* r,
+                                         const proto::ProtoObject* const*, int) {
+    return ctx->fromLong(dictSize(ctx, dictData(ctx, r)));
+}
+
+const proto::ProtoObject* prim_Dict_isEmpty(STRuntime&, proto::ProtoContext* ctx,
+                                            const proto::ProtoObject* r,
+                                            const proto::ProtoObject* const*, int) {
+    return dictSize(ctx, dictData(ctx, r)) == 0 ? PROTO_TRUE : PROTO_FALSE;
+}
+
+const proto::ProtoObject* prim_Dict_notEmpty(STRuntime&, proto::ProtoContext* ctx,
+                                             const proto::ProtoObject* r,
+                                             const proto::ProtoObject* const*, int) {
+    return dictSize(ctx, dictData(ctx, r)) != 0 ? PROTO_TRUE : PROTO_FALSE;
+}
+
+// dictForEachEntry — the shared bucket walk for keysDo:/valuesDo:/etc. Calls
+// `fn(key, value)` for every entry; `fn` returns false to stop early.
+template <typename Fn>
+void dictForEachEntry(proto::ProtoContext* ctx, const proto::ProtoObject* r, Fn&& fn) {
+    const proto::ProtoSparseList* data = dictData(ctx, r);
+    const proto::ProtoSparseListIterator* it = data->getIterator(ctx);
+    while (it && it->hasNext(ctx)) {
+        const proto::ProtoObject* bucketObj = it->nextValue(ctx);
+        it = const_cast<proto::ProtoSparseListIterator*>(it)->advance(ctx);
+        const proto::ProtoList* bucket =
+            bucketObj ? bucketObj->asList(ctx) : nullptr;
+        if (!bucket) continue;
+        unsigned long bn = bucket->getSize(ctx);
+        for (unsigned long i = 0; i + 1 < bn; i += 2) {
+            const proto::ProtoObject* k = bucket->getAt(ctx, static_cast<int>(i));
+            const proto::ProtoObject* v = bucket->getAt(ctx, static_cast<int>(i + 1));
+            if (!fn(k ? k : PROTO_NONE, v ? v : PROTO_NONE)) return;
+        }
+    }
+}
+
+// aDictionary keysDo: aBlock → evaluate the one-arg block for each key.
+const proto::ProtoObject* prim_Dict_keysDo(STRuntime& rt, proto::ProtoContext* ctx,
+                                           const proto::ProtoObject* r,
+                                           const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("keysDo: expects 1 arg (block)");
+    const proto::ProtoObject* block = a[0];
+    TransientPin pinRecv(ctx, r);
+    dictForEachEntry(ctx, r, [&](const proto::ProtoObject* k,
+                                 const proto::ProtoObject*) {
+        const proto::ProtoObject* arg0 = k;
+        invokeBlock(rt, ctx, block, &arg0, 1);
+        return true;
+    });
+    return r;
+}
+
+// aDictionary valuesDo: aBlock → evaluate the one-arg block for each value.
+const proto::ProtoObject* prim_Dict_valuesDo(STRuntime& rt, proto::ProtoContext* ctx,
+                                             const proto::ProtoObject* r,
+                                             const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("valuesDo: expects 1 arg (block)");
+    const proto::ProtoObject* block = a[0];
+    TransientPin pinRecv(ctx, r);
+    dictForEachEntry(ctx, r, [&](const proto::ProtoObject*,
+                                 const proto::ProtoObject* v) {
+        const proto::ProtoObject* arg0 = v;
+        invokeBlock(rt, ctx, block, &arg0, 1);
+        return true;
+    });
+    return r;
+}
+
+// aDictionary do: aBlock → iterates the VALUES (Smalltalk convention).
+const proto::ProtoObject* prim_Dict_do(STRuntime& rt, proto::ProtoContext* ctx,
+                                       const proto::ProtoObject* r,
+                                       const proto::ProtoObject* const* a, int argc) {
+    return prim_Dict_valuesDo(rt, ctx, r, a, argc);
+}
+
+// aDictionary keysAndValuesDo: aBlock → evaluate the two-arg block (key, value)
+// for each entry.
+const proto::ProtoObject* prim_Dict_keysAndValuesDo(STRuntime& rt, proto::ProtoContext* ctx,
+                                                    const proto::ProtoObject* r,
+                                                    const proto::ProtoObject* const* a,
+                                                    int argc) {
+    if (argc != 1)
+        throw std::runtime_error("keysAndValuesDo: expects 1 arg (block)");
+    const proto::ProtoObject* block = a[0];
+    TransientPin pinRecv(ctx, r);
+    dictForEachEntry(ctx, r, [&](const proto::ProtoObject* k,
+                                 const proto::ProtoObject* v) {
+        const proto::ProtoObject* args[2] = { k, v };
+        invokeBlock(rt, ctx, block, args, 2);
+        return true;
+    });
+    return r;
+}
+
+// aDictionary associationsDo: aBlock → evaluate the one-arg block for each
+// entry, passing a fresh Association.
+const proto::ProtoObject* prim_Dict_associationsDo(STRuntime& rt, proto::ProtoContext* ctx,
+                                                   const proto::ProtoObject* r,
+                                                   const proto::ProtoObject* const* a,
+                                                   int argc) {
+    if (argc != 1)
+        throw std::runtime_error("associationsDo: expects 1 arg (block)");
+    const proto::ProtoObject* block = a[0];
+    TransientPin pinRecv(ctx, r);
+    dictForEachEntry(ctx, r, [&](const proto::ProtoObject* k,
+                                 const proto::ProtoObject* v) {
+        const proto::ProtoObject* assoc = makeAssociation(rt, ctx, k, v);
+        const proto::ProtoObject* arg0 = assoc;
+        invokeBlock(rt, ctx, block, &arg0, 1);
+        return true;
+    });
+    return r;
+}
+
+// aDictionary keys → a Set of the keys.
+const proto::ProtoObject* prim_Dict_keys(STRuntime& rt, proto::ProtoContext* ctx,
+                                         const proto::ProtoObject* r,
+                                         const proto::ProtoObject* const*, int) {
+    const proto::ProtoSet* set = ctx->newSet();
+    TransientPin pinSet(ctx, reinterpret_cast<const proto::ProtoObject*>(set));
+    dictForEachEntry(ctx, r, [&](const proto::ProtoObject* k,
+                                 const proto::ProtoObject*) {
+        set = set->add(ctx, k);
+        pinSet.reset(reinterpret_cast<const proto::ProtoObject*>(set));
+        return true;
+    });
+    return makeSetInstance(rt, ctx, set);
+}
+
+// aDictionary values → an Array of the values.
+const proto::ProtoObject* prim_Dict_values(STRuntime& rt, proto::ProtoContext* ctx,
+                                           const proto::ProtoObject* r,
+                                           const proto::ProtoObject* const*, int) {
+    const proto::ProtoList* out = ctx->newList();
+    TransientPin pinOut(ctx, reinterpret_cast<const proto::ProtoObject*>(out));
+    dictForEachEntry(ctx, r, [&](const proto::ProtoObject*,
+                                 const proto::ProtoObject* v) {
+        out = out->appendLast(ctx, v);
+        pinOut.reset(reinterpret_cast<const proto::ProtoObject*>(out));
+        return true;
+    });
+    return makeArrayInstance(rt, ctx, out);
+}
+
+// aDictionary associations → an Array of Associations.
+const proto::ProtoObject* prim_Dict_associations(STRuntime& rt, proto::ProtoContext* ctx,
+                                                 const proto::ProtoObject* r,
+                                                 const proto::ProtoObject* const*, int) {
+    const proto::ProtoList* out = ctx->newList();
+    TransientPin pinOut(ctx, reinterpret_cast<const proto::ProtoObject*>(out));
+    dictForEachEntry(ctx, r, [&](const proto::ProtoObject* k,
+                                 const proto::ProtoObject* v) {
+        const proto::ProtoObject* assoc = makeAssociation(rt, ctx, k, v);
+        out = out->appendLast(ctx, assoc);
+        pinOut.reset(reinterpret_cast<const proto::ProtoObject*>(out));
+        return true;
+    });
+    return makeArrayInstance(rt, ctx, out);
+}
+
+// Dictionary new → a fresh empty Dictionary.
+const proto::ProtoObject* prim_Dict_classNew(STRuntime& rt, proto::ProtoContext* ctx,
+                                             const proto::ProtoObject* /*cls*/,
+                                             const proto::ProtoObject* const*, int) {
+    return makeDictInstance(rt, ctx, ctx->newSparseList());
+}
+
 // =====================  Derived iteration protocol  ========================
 //
 // Bound on `Collection`, inherited by every collection. Each is built on
@@ -1427,6 +1983,63 @@ void installCollectionPrimitives(STRuntime& rt) {
                   reg.registerPrim(prim_Bag_classNew));
     bindPrimitive(rt, b.bagProto, "withAll:",
                   reg.registerPrim(prim_Bag_classWithAll));
+
+    // --- Dictionary base operations — bound on the Dictionary prototype ----
+    bindPrimitive(rt, b.dictionaryProto, "at:",
+                  reg.registerPrim(prim_Dict_at));
+    bindPrimitive(rt, b.dictionaryProto, "at:ifAbsent:",
+                  reg.registerPrim(prim_Dict_atIfAbsent));
+    bindPrimitive(rt, b.dictionaryProto, "at:ifAbsentPut:",
+                  reg.registerPrim(prim_Dict_atIfAbsentPut));
+    bindPrimitive(rt, b.dictionaryProto, "at:put:",
+                  reg.registerPrim(prim_Dict_atPut));
+    bindPrimitive(rt, b.dictionaryProto, "removeKey:",
+                  reg.registerPrim(prim_Dict_removeKey));
+    bindPrimitive(rt, b.dictionaryProto, "removeKey:ifAbsent:",
+                  reg.registerPrim(prim_Dict_removeKeyIfAbsent));
+    bindPrimitive(rt, b.dictionaryProto, "includesKey:",
+                  reg.registerPrim(prim_Dict_includesKey));
+    bindPrimitive(rt, b.dictionaryProto, "includes:",
+                  reg.registerPrim(prim_Dict_includes));
+    bindPrimitive(rt, b.dictionaryProto, "size",
+                  reg.registerPrim(prim_Dict_size));
+    bindPrimitive(rt, b.dictionaryProto, "isEmpty",
+                  reg.registerPrim(prim_Dict_isEmpty));
+    bindPrimitive(rt, b.dictionaryProto, "notEmpty",
+                  reg.registerPrim(prim_Dict_notEmpty));
+    bindPrimitive(rt, b.dictionaryProto, "do:",
+                  reg.registerPrim(prim_Dict_do));
+    bindPrimitive(rt, b.dictionaryProto, "keysDo:",
+                  reg.registerPrim(prim_Dict_keysDo));
+    bindPrimitive(rt, b.dictionaryProto, "valuesDo:",
+                  reg.registerPrim(prim_Dict_valuesDo));
+    bindPrimitive(rt, b.dictionaryProto, "keysAndValuesDo:",
+                  reg.registerPrim(prim_Dict_keysAndValuesDo));
+    bindPrimitive(rt, b.dictionaryProto, "associationsDo:",
+                  reg.registerPrim(prim_Dict_associationsDo));
+    bindPrimitive(rt, b.dictionaryProto, "keys",
+                  reg.registerPrim(prim_Dict_keys));
+    bindPrimitive(rt, b.dictionaryProto, "values",
+                  reg.registerPrim(prim_Dict_values));
+    bindPrimitive(rt, b.dictionaryProto, "associations",
+                  reg.registerPrim(prim_Dict_associations));
+    // --- Dictionary class-side constructor ---------------------------------
+    bindPrimitive(rt, b.dictionaryProto, "new",
+                  reg.registerPrim(prim_Dict_classNew));
+
+    // --- Association — bound on the Association prototype ------------------
+    bindPrimitive(rt, b.associationProto, "key",
+                  reg.registerPrim(prim_Assoc_key));
+    bindPrimitive(rt, b.associationProto, "value",
+                  reg.registerPrim(prim_Assoc_value));
+    bindPrimitive(rt, b.associationProto, "key:",
+                  reg.registerPrim(prim_Assoc_keyPut));
+    bindPrimitive(rt, b.associationProto, "value:",
+                  reg.registerPrim(prim_Assoc_valuePut));
+    // `aKey -> aValue` builds an Association — bound on Object so any object
+    // is a valid association key.
+    bindPrimitive(rt, b.objectProto, "->",
+                  reg.registerPrim(prim_Object_arrow));
 
     // --- Derived iteration protocol — bound on Collection, inherited by all -
     bindPrimitive(rt, b.collectionProto, "species",

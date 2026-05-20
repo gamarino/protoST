@@ -68,6 +68,13 @@ struct Bootstrap {
     //     `-- Bag                    (concrete — ProtoMultiset backing)
     const proto::ProtoObject* setProto                    = nullptr;
     const proto::ProtoObject* bagProto                    = nullptr;
+    // Track 2 slice d (COL-d): the key->value map.
+    //   HashedCollection
+    //     `-- Dictionary             (concrete — hash->bucket ProtoSparseList)
+    // `Association` is a minimal key->value pair (child of Object), not a
+    // collection — it supports `associationsDo:` and the `->` literal.
+    const proto::ProtoObject* dictionaryProto             = nullptr;
+    const proto::ProtoObject* associationProto            = nullptr;
 };
 
 // Build the prototype tree on top of `sp.objectPrototype` and bind the result

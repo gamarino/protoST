@@ -911,3 +911,400 @@ TEST_CASE("COL-c: Set isEmpty / notEmpty", "[collections][track2]") {
         REQUIRE(r == PROTO_TRUE);
     }
 }
+
+// =========================  COL-d — Dictionary  ============================
+
+TEST_CASE("COL-d: Dictionary new + at:put: then at: reads it back",
+          "[collections][track2]") {
+    protoST::STRuntime rt;
+    {
+        const char* src =
+            "Object subclass: #DD. "
+            "DD >> run "
+            "  | d | "
+            "  d := Dictionary new. "
+            "  d at: #x put: 10. "
+            "  d at: #y put: 20. "
+            "  d at: #z put: 30. "
+            "  ^ ((d at: #x) + (d at: #y)) + (d at: #z). "
+            "o := DD newChild. o run.";
+        auto* r = runSrc(rt, src);
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 60);
+    }
+    {
+        // at:put: returns the stored value.
+        auto* r = runSrc(rt, "d := Dictionary new. d at: #k put: 99.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 99);
+    }
+}
+
+TEST_CASE("COL-d: at:ifAbsent: fallback fires on a miss",
+          "[collections][track2]") {
+    protoST::STRuntime rt;
+    {
+        // Present key — returns the value, fallback not run.
+        auto* r = runSrc(rt,
+            "d := Dictionary new. d at: #a put: 5. "
+            "d at: #a ifAbsent: [ 0 - 1 ].");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 5);
+    }
+    {
+        // Absent key — fallback block runs.
+        auto* r = runSrc(rt,
+            "d := Dictionary new. d at: #missing ifAbsent: [ 123 ].");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 123);
+    }
+}
+
+TEST_CASE("COL-d: at:ifAbsentPut: stores and returns the fresh value",
+          "[collections][track2]") {
+    protoST::STRuntime rt;
+    {
+        const char* src =
+            "Object subclass: #DIP. "
+            "DIP >> run "
+            "  | d a b | "
+            "  d := Dictionary new. "
+            "  a := d at: #k ifAbsentPut: [ 7 ]. "  // stores 7, returns 7
+            "  b := d at: #k ifAbsentPut: [ 999 ]. " // present — returns 7
+            "  ^ (a * 100) + b. "
+            "o := DIP newChild. o run.";
+        auto* r = runSrc(rt, src);
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 707);
+    }
+}
+
+TEST_CASE("COL-d: at: on an absent key signals an Error caught by on:do:",
+          "[collections][track2]") {
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt,
+        "[ d := Dictionary new. d at: #nope ] on: Error do: [ :e | 555 ].");
+    REQUIRE(r != nullptr);
+    REQUIRE(r->asLong(rt.rootCtx()) == 555);
+}
+
+TEST_CASE("COL-d: removeKey: removes, ifAbsent fallback, absent signals",
+          "[collections][track2]") {
+    {
+        // removeKey: drops the entry and returns the value.
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt,
+            "d := Dictionary new. d at: #a put: 1. d at: #b put: 2. "
+            "d removeKey: #a.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 1);
+    }
+    {
+        // After removeKey:, size shrinks.
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt,
+            "d := Dictionary new. d at: #a put: 1. d at: #b put: 2. "
+            "d removeKey: #a. d size.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 1);
+    }
+    {
+        // removeKey:ifAbsent: runs the fallback block on a miss.
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt,
+            "d := Dictionary new. d removeKey: #x ifAbsent: [ 88 ].");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 88);
+    }
+    {
+        // removeKey: an absent key signals an Error, catchable by on:do:.
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt,
+            "[ d := Dictionary new. d removeKey: #x. 0 ] "
+            "  on: Error do: [ :e | 44 ].");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 44);
+    }
+}
+
+TEST_CASE("COL-d: includesKey: true and false", "[collections][track2]") {
+    protoST::STRuntime rt;
+    {
+        auto* r = runSrc(rt,
+            "d := Dictionary new. d at: #present put: 1. d includesKey: #present.");
+        REQUIRE(r == PROTO_TRUE);
+    }
+    {
+        auto* r = runSrc(rt,
+            "d := Dictionary new. d at: #present put: 1. d includesKey: #absent.");
+        REQUIRE(r == PROTO_FALSE);
+    }
+}
+
+TEST_CASE("COL-d: object keys of different kinds in one dictionary",
+          "[collections][track2]") {
+    // A symbol key, a string key and an integer key — all retrievable, the
+    // key objects retained by the bucket scheme.
+    protoST::STRuntime rt;
+    const char* src =
+        "Object subclass: #DK. "
+        "DK >> run "
+        "  | d | "
+        "  d := Dictionary new. "
+        "  d at: #sym put: 1. "
+        "  d at: 'str' put: 2. "
+        "  d at: 42 put: 3. "
+        "  ^ (((d at: #sym) + (d at: 'str')) + (d at: 42)). "
+        "o := DK newChild. o run.";
+    auto* r = runSrc(rt, src);
+    REQUIRE(r != nullptr);
+    REQUIRE(r->asLong(rt.rootCtx()) == 6);
+}
+
+TEST_CASE("COL-d: many keys all retrievable — exercises the bucket scan",
+          "[collections][track2]") {
+    // Twenty integer keys 1..20, value = key*key. Reading them all back
+    // exercises the hash->bucket lookup and per-bucket key-equality scan.
+    protoST::STRuntime rt;
+    const char* src =
+        "Object subclass: #DM. "
+        "DM >> run "
+        "  | d i sum | "
+        "  d := Dictionary new. "
+        "  i := 1. "
+        "  [ i <= 20 ] whileTrue: [ d at: i put: (i * i). i := i + 1 ]. "
+        "  sum := 0. "
+        "  i := 1. "
+        "  [ i <= 20 ] whileTrue: [ sum := sum + (d at: i). i := i + 1 ]. "
+        "  ^ sum. "
+        "o := DM newChild. o run.";
+    auto* r = runSrc(rt, src);
+    REQUIRE(r != nullptr);
+    // sum of squares 1..20 = 2870
+    REQUIRE(r->asLong(rt.rootCtx()) == 2870);
+}
+
+TEST_CASE("COL-d: overwriting an existing key does not grow size",
+          "[collections][track2]") {
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt,
+        "d := Dictionary new. "
+        "d at: #k put: 1. d at: #k put: 2. d at: #k put: 3. "
+        "d size.");
+    REQUIRE(r != nullptr);
+    REQUIRE(r->asLong(rt.rootCtx()) == 1);
+}
+
+TEST_CASE("COL-d: keysDo: / valuesDo: visit every entry",
+          "[collections][track2]") {
+    {
+        // valuesDo: sums the values.
+        protoST::STRuntime rt;
+        const char* src =
+            "Object subclass: #DV. "
+            "DV >> run "
+            "  | d sum | "
+            "  d := Dictionary new. "
+            "  d at: #a put: 10. d at: #b put: 20. d at: #c put: 30. "
+            "  sum := 0. "
+            "  d valuesDo: [ :v | sum := sum + v ]. "
+            "  ^ sum. "
+            "o := DV newChild. o run.";
+        auto* r = runSrc(rt, src);
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 60);
+    }
+    {
+        // keysDo: counts the keys.
+        protoST::STRuntime rt;
+        const char* src =
+            "Object subclass: #DKD. "
+            "DKD >> run "
+            "  | d n | "
+            "  d := Dictionary new. "
+            "  d at: #a put: 1. d at: #b put: 1. d at: #c put: 1. "
+            "  n := 0. "
+            "  d keysDo: [ :k | n := n + 1 ]. "
+            "  ^ n. "
+            "o := DKD newChild. o run.";
+        auto* r = runSrc(rt, src);
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 3);
+    }
+}
+
+TEST_CASE("COL-d: keysAndValuesDo: visits each (key, value) pair",
+          "[collections][track2]") {
+    // The two-arg block sums key*value over every entry. Integer keys so the
+    // arithmetic is well-defined: 1*100 + 2*200 + 3*300 = 1400.
+    protoST::STRuntime rt;
+    const char* src =
+        "Object subclass: #DKV. "
+        "DKV >> run "
+        "  | d acc | "
+        "  d := Dictionary new. "
+        "  d at: 1 put: 100. d at: 2 put: 200. d at: 3 put: 300. "
+        "  acc := 0. "
+        "  d keysAndValuesDo: [ :k :v | acc := acc + (k * v) ]. "
+        "  ^ acc. "
+        "o := DKV newChild. o run.";
+    auto* r = runSrc(rt, src);
+    REQUIRE(r != nullptr);
+    REQUIRE(r->asLong(rt.rootCtx()) == 1400);
+}
+
+TEST_CASE("COL-d: associationsDo: visits an Association per entry",
+          "[collections][track2]") {
+    // Each Association carries its key and value — sum key+value over entries.
+    protoST::STRuntime rt;
+    const char* src =
+        "Object subclass: #DA. "
+        "DA >> run "
+        "  | d acc | "
+        "  d := Dictionary new. "
+        "  d at: 1 put: 10. d at: 2 put: 20. "
+        "  acc := 0. "
+        "  d associationsDo: [ :a | acc := acc + (a key + a value) ]. "
+        "  ^ acc. "
+        "o := DA newChild. o run.";
+    auto* r = runSrc(rt, src);
+    REQUIRE(r != nullptr);
+    // (1+10) + (2+20) = 33
+    REQUIRE(r->asLong(rt.rootCtx()) == 33);
+}
+
+TEST_CASE("COL-d: keys yields a Set, values an enumerable",
+          "[collections][track2]") {
+    {
+        // keys → a Set; deduped count of keys.
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt,
+            "d := Dictionary new. d at: #a put: 1. d at: #b put: 2. "
+            "d keys size.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 2);
+    }
+    {
+        // keys answers a Set — includes: a present key.
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt,
+            "d := Dictionary new. d at: #a put: 1. (d keys) includes: #a.");
+        REQUIRE(r == PROTO_TRUE);
+    }
+    {
+        // values → an Array; inject:into: sums it.
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt,
+            "d := Dictionary new. d at: #a put: 10. d at: #b put: 20. "
+            "(d values) inject: 0 into: [ :s :v | s + v ].");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 30);
+    }
+}
+
+TEST_CASE("COL-d: -> builds an Association with the right key and value",
+          "[collections][track2]") {
+    {
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, "(#a -> 42) value.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 42);
+    }
+    {
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, "(7 -> 99) key.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 7);
+    }
+    {
+        // key: / value: mutators.
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt,
+            "a := 1 -> 2. a value: 50. a value.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 50);
+    }
+}
+
+TEST_CASE("COL-d: derived protocol over a Dictionary iterates values",
+          "[collections][track2]") {
+    {
+        // inject:into: sums the values (Dictionary iterates values).
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt,
+            "d := Dictionary new. "
+            "d at: #a put: 1. d at: #b put: 2. d at: #c put: 3. "
+            "d inject: 0 into: [ :s :v | s + v ].");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 6);
+    }
+    {
+        // detect: over the values finds a value satisfying the predicate.
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt,
+            "d := Dictionary new. "
+            "d at: #a put: 5. d at: #b put: 15. d at: #c put: 25. "
+            "d detect: [ :v | v > 20 ].");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 25);
+    }
+    {
+        // includes: searches the values.
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt,
+            "d := Dictionary new. d at: #a put: 1. d at: #b put: 2. "
+            "d includes: 2.");
+        REQUIRE(r == PROTO_TRUE);
+        auto* r2 = runSrc(rt,
+            "d := Dictionary new. d at: #a put: 1. d at: #b put: 2. "
+            "d includes: 99.");
+        REQUIRE(r2 == PROTO_FALSE);
+    }
+    {
+        // collect: over a Dictionary maps the values, yielding an Array.
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt,
+            "d := Dictionary new. d at: #a put: 1. d at: #b put: 2. "
+            "(d collect: [ :v | v * 10 ]) inject: 0 into: [ :s :v | s + v ].");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 30);
+    }
+}
+
+TEST_CASE("COL-d: species regression — Array/OrderedCollection/Set/Bag unchanged",
+          "[collections][track2]") {
+    {
+        // Array collect: still yields an Array (at: works).
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, "(#(1 2 3) collect: [ :x | x + 1 ]) at: 1.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 2);
+    }
+    {
+        // OrderedCollection collect: still yields an OrderedCollection.
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt,
+            "c := OrderedCollection new. c add: 1. c add: 2. "
+            "(c collect: [ :x | x * 3 ]) removeLast.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 6);
+    }
+    {
+        // Set select: still yields a Set.
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt,
+            "s := Set new. s add: 1. s add: 2. s add: 3. "
+            "(s select: [ :x | x > 1 ]) size.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 2);
+    }
+    {
+        // Bag select: still yields a Bag (occurrencesOf: works).
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt,
+            "b := Bag new. b add: 5. b add: 5. b add: 9. "
+            "(b select: [ :x | x = 5 ]) occurrencesOf: 5.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 2);
+    }
+}

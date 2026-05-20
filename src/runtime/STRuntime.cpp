@@ -258,6 +258,13 @@ struct STRuntime::Impl {
         globals->setAttribute(rootCtx,
             proto::ProtoString::createSymbol(rootCtx, "Bag"),
             bootstrap.bagProto);
+        // Track 2 slice d (COL-d): the key->value map and the key->value pair.
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "Dictionary"),
+            bootstrap.dictionaryProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "Association"),
+            bootstrap.associationProto);
 
         // F6 v3 E2b: create the single live-registry GC root and pin it.
         //
@@ -334,6 +341,11 @@ struct STRuntime::Impl {
             // their base operations; pin them for the runtime's whole lifetime.
             pinPermanent(bootstrap.setProto);
             pinPermanent(bootstrap.bagProto);
+            // Track 2 slice d (COL-d): the Dictionary carries its base
+            // operations, Association the key->value accessors — pin both for
+            // the runtime's whole lifetime, like every other built-in class.
+            pinPermanent(bootstrap.dictionaryProto);
+            pinPermanent(bootstrap.associationProto);
         }
     }
 

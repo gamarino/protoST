@@ -58,6 +58,12 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     // duplicates). Both share the mutable-holder `__data__` representation.
     out.setProto                    = const_cast<proto::ProtoObject*>(out.hashedCollectionProto)->newChild(ctx, /*isMutable=*/true);
     out.bagProto                    = const_cast<proto::ProtoObject*>(out.hashedCollectionProto)->newChild(ctx, /*isMutable=*/true);
+    // Track 2 slice d (COL-d): `Dictionary` — a key->value map with arbitrary
+    // object keys, backed by a hash->bucket `ProtoSparseList`. `Association` is
+    // a minimal key->value pair (a direct child of `Object`, NOT a collection)
+    // supporting `associationsDo:` and the `aKey -> aValue` literal.
+    out.dictionaryProto             = const_cast<proto::ProtoObject*>(out.hashedCollectionProto)->newChild(ctx, /*isMutable=*/true);
+    out.associationProto            = const_cast<proto::ProtoObject*>(out.objectProto)->newChild(ctx, /*isMutable=*/true);
 
     // Bind protoCore primitive slots so values produced by fromLong/fromDouble/etc.
     // walk up through our Smalltalk prototypes.  This mirrors protoJS's
@@ -116,6 +122,8 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     stamp(out.orderedCollectionProto,      "OrderedCollection");
     stamp(out.setProto,                    "Set");
     stamp(out.bagProto,                    "Bag");
+    stamp(out.dictionaryProto,             "Dictionary");
+    stamp(out.associationProto,            "Association");
 
     // Track 1 slice 2 (EXC-a): the class-derived `resumable` marker. Carried
     // on the class prototypes so an instance inherits it via the chain;
