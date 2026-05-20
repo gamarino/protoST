@@ -11,6 +11,7 @@
 #include "modules/STModuleProvider.h"
 #include "protoCore.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -23,6 +24,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -107,11 +109,15 @@ struct STRuntime::Impl {
     //   the tracing GC cannot see — and the worker thread may consume entries
     //   asynchronously. Pinning via asyncRoots makes the actor reachable from
     //   a GC root for the schedule()..drainOne() window.
-    // - `worker` is the lone managed ProtoThread spawned in the STRuntime
-    //   constructor; protoCore gives it its own root ProtoContext chain.
-    // - `shutdown` is set by ~STRuntime to make the worker exit its wait loop.
+    // - `workers` holds N managed ProtoThreads spawned in the STRuntime
+    //   constructor (F6 v2 T7). Each gets its own root ProtoContext chain and
+    //   independently drains the shared readyQueue under schedMu. The pool
+    //   size is hardware_concurrency() (defaulted to 2, capped at 8); the
+    //   PROTOST_WORKERS env var overrides it for tests + experimentation.
+    // - `shutdown` is set by ~STRuntime to make every worker exit its wait
+    //   loop; schedCv.notify_all() wakes all of them at once.
     std::unordered_map<const proto::ProtoObject*, proto::ProtoRootSet::Handle> pinnedActors;
-    const proto::ProtoThread* worker = nullptr;
+    std::vector<const proto::ProtoThread*> workers;
     std::atomic<bool> shutdown { false };
 
     // F5-M2 module cache: canonical absolute path -> module object.
@@ -210,35 +216,70 @@ STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
         impl_->space.setResolutionChain(chain->asObject(ctx));
     }
 
-    // F6 v2 T2: spawn one managed worker ProtoThread that drains the scheduler
-    // queue in parallel with the foreground (Future>>wait) drain. The worker
-    // gets its own root ProtoContext from protoCore. The first arg is an
-    // ExternalPointer wrapping `this`; st_worker_main decodes it and delegates
-    // to workerLoop().
+    // F6 v2 T7: spawn N managed worker ProtoThreads that drain the scheduler
+    // queue in parallel with the foreground (Future>>wait) drain. Each worker
+    // gets its own root ProtoContext from protoCore.
+    //
+    // Pool sizing:
+    //   * default = std::thread::hardware_concurrency() (clamped to >=2 when
+    //     the runtime cannot determine it, which would defeat the purpose of
+    //     having a pool at all),
+    //   * overridable via the PROTOST_WORKERS environment variable (>=1) for
+    //     tests + benchmarking,
+    //   * capped at 8 to keep the per-runtime resource footprint bounded.
+    //
+    // The first argument passed to st_worker_main is an ExternalPointer
+    // wrapping `this`; the trampoline decodes it and delegates to
+    // workerLoop(). If newThread returns nullptr (e.g. resource exhaustion)
+    // we silently skip that slot — the remaining workers (and the main-thread
+    // Future>>wait drain) keep correctness intact, the pool just runs with
+    // fewer effective workers.
     {
         auto* ctx = impl_->rootCtx;
-        const proto::ProtoList* argsForThread = ctx->newList();
-        argsForThread = argsForThread->appendLast(
-            ctx, ctx->fromExternalPointer(this, nullptr));
-        const proto::ProtoString* threadName =
-            ctx->fromUTF8String("protoST-worker-0")->asString(ctx);
-        impl_->worker = impl_->space.newThread(
-            ctx, threadName, st_worker_main, argsForThread, nullptr);
-        // If newThread returns nullptr we silently fall back to main-thread
-        // drain only — existing F6 v1 behaviour, no regression.
+        unsigned numWorkers = std::thread::hardware_concurrency();
+        if (numWorkers == 0) numWorkers = 2;
+        if (const char* env = std::getenv("PROTOST_WORKERS")) {
+            try {
+                int parsed = std::stoi(env);
+                if (parsed >= 1) numWorkers = static_cast<unsigned>(parsed);
+            } catch (...) {
+                // Malformed env var: keep the hardware-derived default rather
+                // than refusing to start; logging would be the only thing we
+                // could do here and STRuntime construction is meant to be
+                // silent.
+            }
+        }
+        if (numWorkers > 8u) numWorkers = 8u;
+
+        for (unsigned i = 0; i < numWorkers; ++i) {
+            const proto::ProtoList* argsForThread = ctx->newList();
+            argsForThread = argsForThread->appendLast(
+                ctx, ctx->fromExternalPointer(this, nullptr));
+            std::string nameStr = "protoST-worker-" + std::to_string(i);
+            const proto::ProtoString* threadName =
+                ctx->fromUTF8String(nameStr.c_str())->asString(ctx);
+            const proto::ProtoThread* t = impl_->space.newThread(
+                ctx, threadName, st_worker_main, argsForThread, nullptr);
+            if (t) impl_->workers.push_back(t);
+        }
     }
 }
 STRuntime::~STRuntime() {
-    // F6 v2 T2: signal the worker to exit, then join it. Predicate in
-    // workerLoop checks shutdown before the queue, so notify_all is enough
-    // even if the worker is currently inside the cv.wait predicate window.
-    if (impl_->worker) {
+    // F6 v2 T7: signal every worker to exit, then join them. workerLoop's
+    // cv predicate checks `shutdown` before the queue, so a single
+    // notify_all wakes the whole pool even if some workers were inside the
+    // cv.wait predicate window. We then join each in turn on the main
+    // thread's root context. join() is sequential but cheap because every
+    // worker exits its loop in parallel as soon as it observes the flag.
+    if (!impl_->workers.empty()) {
         impl_->shutdown.store(true, std::memory_order_release);
         impl_->schedCv.notify_all();
-        // ProtoThread::join takes the CALLING context (main thread's root).
-        // newThread returns const ProtoThread*; join is non-const.
-        const_cast<proto::ProtoThread*>(impl_->worker)->join(impl_->rootCtx);
-        impl_->worker = nullptr;
+        for (auto* t : impl_->workers) {
+            // ProtoThread::join takes the CALLING context (main thread's
+            // root). newThread returns const ProtoThread*; join is non-const.
+            const_cast<proto::ProtoThread*>(t)->join(impl_->rootCtx);
+        }
+        impl_->workers.clear();
     }
 
     // F5 v2: clear the thread-local pointer if it still references us, so a
@@ -559,6 +600,13 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
 size_t STRuntime::scheduledCount() const {
     std::lock_guard<std::mutex> lock(impl_->schedMu);
     return impl_->readyQueue.size();
+}
+
+size_t STRuntime::workerCount() const {
+    // No lock needed: workers is populated once at construction and only
+    // mutated by ~STRuntime; observers between those points see a stable
+    // value.
+    return impl_->workers.size();
 }
 
 const proto::ProtoObject* STRuntime::newFuture(proto::ProtoContext* ctx) {

@@ -73,6 +73,12 @@ public:
     // Returns true if notified within the timeout; false on plain timeout.
     bool waitForSchedulerProgress(unsigned millis);
 
+    // F6 v2 T7: how many worker threads were actually spawned by the
+    // constructor. Reflects PROTOST_WORKERS / hardware_concurrency selection
+    // and is used by tests to skip the wall-clock parallelism proof when
+    // running on a single-core CI.
+    size_t workerCount() const;
+
     // F6-A4 helpers
     // Allocates a new pending Future (mutable child of futureProto) with the
     // canonical attribute layout (__state__=0, __value__=nil, __error__=nil).

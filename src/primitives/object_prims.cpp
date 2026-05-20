@@ -3,8 +3,10 @@
 #include "runtime/Bootstrap.h"
 #include "protoCore.h"
 
+#include <chrono>
 #include <mutex>
 #include <stdexcept>
+#include <thread>
 
 namespace protoST {
 
@@ -83,6 +85,31 @@ const proto::ProtoObject* prim_Object_asActor(STRuntime& rt, proto::ProtoContext
     return actor;
 }
 
+// Object>>sleep:
+//
+// F6 v2 T6 test helper. Sleeps the current OS thread for the requested number
+// of milliseconds and returns the receiver. Used exclusively by the
+// wall-clock parallelism proof tests to make actor messages take an
+// observable amount of real time without depending on Smalltalk-side busy
+// loops (which would be sensitive to interpreter perf changes).
+//
+// This is a low-level helper meant for the test suite; it is intentionally
+// not advertised in user-facing docs. It blocks the entire worker thread for
+// the duration, which is exactly what the test needs to observe parallel
+// execution on different workers.
+const proto::ProtoObject* prim_Object_sleepMs(STRuntime&,
+                                               proto::ProtoContext* ctx,
+                                               const proto::ProtoObject* r,
+                                               const proto::ProtoObject* const* a,
+                                               int argc) {
+    if (argc != 1) throw std::runtime_error("sleep: expects 1 arg (milliseconds)");
+    long long ms = a[0]->asLong(ctx);
+    if (ms > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+    }
+    return r;
+}
+
 // class __installMethod: methodObj as: selectorSym
 //   → setAttribute(class, selectorSym, methodObj)
 //   → returns class (recv)
@@ -146,6 +173,10 @@ void installObjectPrimitives(STRuntime& rt) {
                   reg.registerPrim(prim_Object_installMethod));
     bindPrimitive(rt, b.objectProto, "asActor",
                   reg.registerPrim(prim_Object_asActor));
+    // F6 v2 T6: sleep primitive — test-only helper for the wall-clock
+    // parallelism proof. Bound on objectProto so any object responds to it.
+    bindPrimitive(rt, b.objectProto, "sleep:",
+                  reg.registerPrim(prim_Object_sleepMs));
 }
 
 // F5-M3: Allocate the `Import` singleton (mutable child of objectProto), bind
