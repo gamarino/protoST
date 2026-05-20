@@ -175,6 +175,73 @@ TEST_CASE("Engine: block captures outer mutable state via shared dict", "[engine
     REQUIRE(r->asLong(rt.rootCtx()) == 42);
 }
 
+TEST_CASE("F6 v3 A2: direct block value: runs through engine frames", "[engine][blocks][f6v3]") {
+    // The previous implementation routed `value:` through a primitive
+    // (block_prims.cpp::prim_Block_value) that constructed a fresh
+    // recursive ExecutionEngine. After F6 v3 A2 the SEND_KEYWORD case in
+    // ExecutionEngine pushes the block's bytecode as a Frame and continues
+    // the dispatch loop — no sub-engine. This test exercises the
+    // single-arg path.
+    const char* src = "[ :x | x * 2 ] value: 21.";
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C; auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r->asLong(rt.rootCtx()) == 42);
+}
+
+TEST_CASE("F6 v3 A2: direct block value: with captured variable", "[engine][blocks][closures][f6v3]") {
+    // The new direct-block path must still thread the closure's
+    // `__captured__` dict into the callee Frame's capturedDict — without
+    // that, PUSH_CAPTURED inside the block body cannot resolve `a`.
+    const char* src =
+        "a := 10. "
+        "[ :x | x + a ] value: 5.";
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C; auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r->asLong(rt.rootCtx()) == 15);
+}
+
+TEST_CASE("F6 v3 A2: direct block value (zero-arg) runs through engine frames", "[engine][blocks][f6v3]") {
+    // Bare `value` (SEND_UNARY path). The block has no arguments; the
+    // implicit RETURN_TOP at end-of-body hands the literal back.
+    const char* src = "[ 7 ] value.";
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C; auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r->asLong(rt.rootCtx()) == 7);
+}
+
+TEST_CASE("F6 v3 A2: direct block value:value:value: (3-arg) runs through engine frames", "[engine][blocks][f6v3]") {
+    // Stress the multi-keyword selector path; argc must match the block's
+    // declared arity (sub->argCount()).
+    const char* src = "[ :a :b :c | a + b + c ] value: 1 value: 2 value: 3.";
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C; auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r->asLong(rt.rootCtx()) == 6);
+}
+
 TEST_CASE("Engine: F3 hero - sum 1..100 via whileTrue + closures = 5050", "[engine][hero][closures]") {
     const char* src =
         "sum := 0. i := 1. "

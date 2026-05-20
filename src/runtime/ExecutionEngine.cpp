@@ -1,3 +1,22 @@
+// ExecutionEngine — non-recursive Smalltalk bytecode dispatcher.
+//
+// COOPERATIVE YIELD LIMITATION (F6 v3 v1):
+//   Block invocation via direct `value` / `value:` / `value:value:` / ...
+//   SEND is non-recursive (F6 v3 A2: handled inline in this engine by
+//   pushing a Frame) and therefore yieldable from inside the block body.
+//
+//   Block invocation via primitives that take the block as an argument
+//   and evaluate it internally — `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:`,
+//   `whileTrue:`, `thenDo:`, `catch:` — currently goes through
+//   block_prims.cpp::invokeBlock, which spins up a fresh recursive
+//   ExecutionEngine on the C++ stack. A `Future>>wait` inside such a
+//   primitive-evaluated block will block its worker thread the F6 v2 way
+//   and is NOT cooperatively yieldable.
+//
+//   The common digital-twin patterns (sequential statements with `wait`
+//   and a direct `[ ... ] value`) are fully cooperative; loops and
+//   conditionals containing `wait` are not. Lifting those primitives into
+//   the engine is future work.
 #include "ExecutionEngine.h"
 #include "BytecodeModule.h"
 #include "Bootstrap.h"
@@ -297,6 +316,96 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     rt_.schedule(recv);
                     f.opStack.push_back(fut);
                     break;
+                }
+
+                // F6 v3 A2: direct block invocation fast-path. If the
+                // receiver carries `__bc_ptr__` as an OWN attribute (it is a
+                // BlockClosure built by PUSH_BLOCK) AND the selector is a
+                // `value`-family selector matching its formal-arg count, we
+                // push a block Frame onto frames_ and let runLoop continue.
+                // This is the equivalent of the user-method push-frame path
+                // (F6 v3 A) but specialised for blocks: no self-binding into
+                // slot 0, args go into slots 0..argcOp-1, captured dict
+                // threaded from the closure's `__captured__` attribute.
+                //
+                // The legacy path (primitive `prim_Block_value` in
+                // block_prims.cpp spinning a fresh recursive
+                // ExecutionEngine) remains as a fallback for indirect block
+                // invocation (e.g. via `perform:` once that exists, or any
+                // dispatch path that does NOT come through SEND_UNARY /
+                // SEND_KEYWORD here). It is also still used by
+                // `ifTrue:`/`whileTrue:`/`thenDo:` primitives that take a
+                // block as an argument and evaluate it internally — those
+                // remain non-yieldable. See the limitation block at the top
+                // of this file.
+                {
+                    static const proto::ProtoString* recvBcKey =
+                        ctx->fromUTF8String("__bc_ptr__")->asString(ctx);
+                    static const proto::ProtoString* recvCapKey =
+                        ctx->fromUTF8String("__captured__")->asString(ctx);
+                    // getAttribute walks the receiver first then the proto
+                    // chain. `__bc_ptr__` is set only on BlockClosures (by
+                    // PUSH_BLOCK), never on `blockProto` itself, so a hit
+                    // here is unambiguous evidence that `recv` is a block.
+                    auto* recvBcPtr = recv->getAttribute(ctx, recvBcKey);
+                    if (recvBcPtr && recvBcPtr != PROTO_NONE) {
+                        // Validate selector matches the value/value:/...
+                        // pattern for argcOp formal parameters. argcOp is
+                        // already computed from the selector colons above
+                        // (or 0 for SEND_UNARY which uses bare `value`).
+                        bool isValueFamily = false;
+                        if (op == Op::SEND_UNARY) {
+                            isValueFamily = (selStr == "value");
+                        } else if (op == Op::SEND_KEYWORD) {
+                            // selector must be exactly argcOp repetitions
+                            // of "value:" — i.e. "value:", "value:value:",
+                            // "value:value:value:", ...
+                            isValueFamily = true;
+                            std::string expected;
+                            for (int i = 0; i < argcOp; ++i) expected += "value:";
+                            if (selStr != expected) isValueFamily = false;
+                        }
+                        // SEND_BINARY never matches value-family.
+                        if (isValueFamily) {
+                            const protoST::BytecodeModule* sub =
+                                reinterpret_cast<const protoST::BytecodeModule*>(
+                                    recvBcPtr->asLong(ctx));
+                            if (sub->argCount() != argcOp) {
+                                throw std::runtime_error(
+                                    "block arg count mismatch (expected " +
+                                    std::to_string(sub->argCount()) +
+                                    ", got " + std::to_string(argcOp) + ")");
+                            }
+                            auto* capDict = recv->getAttribute(ctx, recvCapKey);
+                            if (!capDict || capDict == PROTO_NONE) capDict = nullptr;
+
+                            Frame callee;
+                            callee.m = sub;
+                            callee.pc = 0;
+                            callee.opStack.reserve(64);
+                            callee.locals.reserve(
+                                std::max<std::size_t>(16,
+                                    static_cast<std::size_t>(argcOp) + 8));
+                            // Blocks bind args into slots 0..argcOp-1 (no
+                            // implicit self slot; cf. invokeBlock which
+                            // passes self=PROTO_NONE). PUSH_INSTVAR inside
+                            // a block reads f.locals[0] which would
+                            // therefore be the first arg, not the
+                            // enclosing method's self — same pre-existing
+                            // limitation as the legacy invokeBlock path.
+                            for (int i = 0; i < argcOp; ++i)
+                                callee.locals.push_back(sendArgs[i]);
+                            callee.selfObj = PROTO_NONE;
+                            callee.capturedDict = capDict;
+                            frames_.push_back(std::move(callee));
+                            // `f` is now invalidated when frames_ grows
+                            // its backing storage. Continue the loop so
+                            // the next iteration re-acquires
+                            // frames_.back() and dispatches the block
+                            // from its pc=0.
+                            continue;
+                        }
+                    }
                 }
 
                 // Lookup walks from the receiver itself first, then up the
