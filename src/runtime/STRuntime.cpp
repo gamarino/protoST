@@ -36,16 +36,24 @@ namespace protoST { void installObjectPrimitives(STRuntime& rt); }
 namespace protoST { void installFuturePrimitives(STRuntime& rt); }
 namespace protoST { void installImportGlobal(STRuntime& rt); }
 
-// F6-A6: future callback dispatch helpers defined alongside the Future
-// primitives. drainOne uses these to fire thenDo:/catch: blocks at the moment
-// the future transitions out of pending, without re-implementing the loop.
+// F6-A6 / F6 v2 T4: future transition helpers defined alongside the Future
+// primitives.
+//
+// * resolveFutureFromDrain / rejectFutureFromDrain perform the atomic
+//   (write state, fire callbacks, notify cv) sequence under the future's
+//   cv mutex. drainOne calls these instead of writing state and firing
+//   callbacks itself. Holding the mutex across the callback loop ensures
+//   "Future>>wait returns ⇒ all thenDo:/catch: blocks completed".
+// * installFutureCV attaches a fresh per-future condition_variable to a
+//   newly allocated future (called once from newFuture below).
 namespace protoST {
-void fireFutureThenCallbacks(STRuntime& rt, proto::ProtoContext* ctx,
-                              const proto::ProtoObject* future,
-                              const proto::ProtoObject* value);
-void fireFutureCatchCallbacks(STRuntime& rt, proto::ProtoContext* ctx,
-                               const proto::ProtoObject* future,
-                               const proto::ProtoObject* error);
+void installFutureCV(proto::ProtoContext* ctx, const proto::ProtoObject* fut);
+void resolveFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
+                            const proto::ProtoObject* future,
+                            const proto::ProtoObject* value);
+void rejectFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
+                           const proto::ProtoObject* future,
+                           const proto::ProtoObject* error);
 }
 
 namespace protoST {
@@ -390,12 +398,9 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
         ctx->fromUTF8String("__args__")->asString(ctx);
     static const proto::ProtoString* futKey =
         ctx->fromUTF8String("__future__")->asString(ctx);
-    static const proto::ProtoString* stateKey =
-        ctx->fromUTF8String("__state__")->asString(ctx);
-    static const proto::ProtoString* valueKey =
-        ctx->fromUTF8String("__value__")->asString(ctx);
-    static const proto::ProtoString* errorKey =
-        ctx->fromUTF8String("__error__")->asString(ctx);
+    // F6 v2 T4: future state/value/error keys are no longer referenced here;
+    // resolveFutureFromDrain / rejectFutureFromDrain in future_prims.cpp own
+    // the entire transition including the attribute writes.
 
     // F6 v2 T3: hold the per-actor lock across BOTH the mailbox RMW and the
     // dispatch of the popped message. Two concurrency hazards motivate the
@@ -470,12 +475,10 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     if (!selStr) {
         if (future) {
             auto* err = ctx->fromUTF8String("invalid selector");
-            const_cast<proto::ProtoObject*>(future)
-                ->setAttribute(ctx, stateKey, ctx->fromLong(2));
-            const_cast<proto::ProtoObject*>(future)
-                ->setAttribute(ctx, errorKey, err);
-            // F6-A6: fire any catch: callbacks registered while pending.
-            fireFutureCatchCallbacks(*this, ctx, future, err);
+            // F6 v2 T4: atomic (write state, snapshot cbs, notify) under
+            // the future's cv mutex; catch: callbacks fire outside the
+            // mutex on the snapshot. See future_prims.cpp.
+            rejectFutureFromDrain(*this, ctx, future, err);
         }
         return true;
     }
@@ -525,22 +528,18 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
         // Resolve future.
         if (future) {
             auto* v = result ? result : PROTO_NONE;
-            const_cast<proto::ProtoObject*>(future)
-                ->setAttribute(ctx, stateKey, ctx->fromLong(1));
-            const_cast<proto::ProtoObject*>(future)
-                ->setAttribute(ctx, valueKey, v);
-            // F6-A6: fire any thenDo: callbacks registered while pending.
-            fireFutureThenCallbacks(*this, ctx, future, v);
+            // F6 v2 T4: atomic (write state, snapshot cbs, notify cv)
+            // under the future's mutex; thenDo: callbacks fire outside the
+            // mutex on the snapshot. Closes the registration race where a
+            // concurrent thenDo: could land its callback into __then_cbs__
+            // AFTER drainOne had already taken its snapshot.
+            resolveFutureFromDrain(*this, ctx, future, v);
         }
     } catch (const std::exception& e) {
         if (future) {
             auto* err = ctx->fromUTF8String(e.what());
-            const_cast<proto::ProtoObject*>(future)
-                ->setAttribute(ctx, stateKey, ctx->fromLong(2));
-            const_cast<proto::ProtoObject*>(future)
-                ->setAttribute(ctx, errorKey, err);
-            // F6-A6: fire any catch: callbacks registered while pending.
-            fireFutureCatchCallbacks(*this, ctx, future, err);
+            // F6 v2 T4: same atomic pattern as the resolve path above.
+            rejectFutureFromDrain(*this, ctx, future, err);
         }
     }
 
@@ -574,6 +573,12 @@ const proto::ProtoObject* STRuntime::newFuture(proto::ProtoContext* ctx) {
     fut->setAttribute(ctx, stateKey, ctx->fromLong(0));  // 0 = pending
     fut->setAttribute(ctx, valueKey, PROTO_NONE);
     fut->setAttribute(ctx, errKey,   PROTO_NONE);
+    // F6 v2 T4: attach a per-future condition_variable so Future>>wait can
+    // block (rather than busy-retry) and resolve/rejectWith/drainOne can
+    // wake the waiter via notify_all. Every future built through this path
+    // carries a cv; Future>>wait throws if asked to wait on a future
+    // without one.
+    installFutureCV(ctx, fut);
     return fut;
 }
 
