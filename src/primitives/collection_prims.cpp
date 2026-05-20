@@ -84,13 +84,42 @@ const proto::ProtoList* listData(proto::ProtoContext* ctx,
     return arrayData(ctx, coll);
 }
 
+// The backing ProtoSet of a Set instance. Stored (wrapped as a ProtoObject)
+// under `__data__`; this unwraps it. A nullptr or missing `__data__` yields a
+// fresh empty set — defensive, like arrayData.
+const proto::ProtoSet* setDataOf(proto::ProtoContext* ctx,
+                                 const proto::ProtoObject* s) {
+    const proto::ProtoObject* d =
+        s ? s->getAttribute(ctx, dataKey(ctx)) : nullptr;
+    if (!d || d == PROTO_NONE) return ctx->newSet();
+    const proto::ProtoSet* set = d->asSet(ctx);
+    return set ? set : ctx->newSet();
+}
+
+// True when `obj`'s `__data__` is a ProtoSet (i.e. a `Set` instance).
+bool isSetBacked(proto::ProtoContext* ctx, const proto::ProtoObject* obj) {
+    if (!obj) return false;
+    const proto::ProtoObject* d = obj->getAttribute(ctx, dataKey(ctx));
+    return d && d != PROTO_NONE && d->asSet(ctx) != nullptr;
+}
+
 // True when `obj` is a list-backed collection instance — it carries `__data__`
-// reachable through the prototype chain. Both `Array` and `OrderedCollection`
-// answer true, so forEachElement's single ProtoList arm covers both.
+// reachable through the prototype chain holding a ProtoList. `Array`,
+// `OrderedCollection` and `Bag` all answer true, so forEachElement's single
+// ProtoList arm covers them. A `Set` instance also carries `__data__`, but
+// holding a ProtoSet — so this checks the backing IS a ProtoList.
+//
+// `Bag` is intentionally ProtoList-backed (one slot per occurrence) rather
+// than ProtoMultiset-backed: protoCore's ProtoMultiset stores element->count
+// keyed by the element HASH and never retains the element object itself, so a
+// ProtoMultiset cannot be iterated to recover its elements. A ProtoList of
+// occurrences gives correct `do:` / `occurrencesOf:` / derived-protocol
+// behaviour. `species` still resolves `Bag` by prototype identity, so a Bag's
+// `collect:`/`select:` still yields a Bag.
 bool isListBacked(proto::ProtoContext* ctx, const proto::ProtoObject* obj) {
     if (!obj) return false;
     const proto::ProtoObject* d = obj->getAttribute(ctx, dataKey(ctx));
-    return d && d != PROTO_NONE;
+    return d && d != PROTO_NONE && d->asList(ctx) != nullptr;
 }
 
 // Replace a list-backed collection's `__data__` with a fresh snapshot. Every
@@ -98,6 +127,16 @@ bool isListBacked(proto::ProtoContext* ctx, const proto::ProtoObject* obj) {
 // pinned across the key interning + setAttribute, both of which allocate.
 void setData(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
              const proto::ProtoList* updated) {
+    TransientPin pinUpdated(
+        ctx, reinterpret_cast<const proto::ProtoObject*>(updated));
+    const_cast<proto::ProtoObject*>(coll)->setAttribute(
+        ctx, dataKey(ctx), updated->asObject(ctx));
+}
+
+// Replace a Set instance's `__data__` with a fresh ProtoSet snapshot. Every
+// Set mutator (`add:`, `remove:`) ends here.
+void setSetData(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
+                const proto::ProtoSet* updated) {
     TransientPin pinUpdated(
         ctx, reinterpret_cast<const proto::ProtoObject*>(updated));
     const_cast<proto::ProtoObject*>(coll)->setAttribute(
@@ -133,21 +172,48 @@ const proto::ProtoObject* makeArrayInstance(STRuntime& rt,
     return arr;
 }
 
-// --- makeInstanceOfSpecies — wrap a ProtoList as an instance of any class ---
+// --- makeInstanceOfSpecies — wrap accumulated elements as the target class --
 //
-// `Array` and `OrderedCollection` share the mutable-holder representation: an
-// instance is a mutable child of the class prototype with `__data__` = a
-// ProtoList. This builds such an instance for ANY of those class prototypes —
-// the single "wrap as species" helper the derived protocol uses to honour
-// `species` (an OrderedCollection's collect: yields an OrderedCollection, an
-// Array's an Array). For `Array` it is exactly makeArrayInstance.
-const proto::ProtoObject* makeInstanceOfSpecies(STRuntime& /*rt*/,
+// The derived protocol (`collect:`/`select:`/`reject:`/`,`) accumulates result
+// elements into a `ProtoList`, then calls this once at the end of iteration to
+// materialise an instance of the receiver's `species`. List-backed species
+// (`Array`, `OrderedCollection`, `Bag`) wrap the `ProtoList` directly — for
+// `Array` that is exactly makeArrayInstance, and a `Bag` stores one slot per
+// occurrence so the list IS its backing. A `Set` species converts: it builds a
+// fresh `ProtoSet` by `add`-ing each accumulated element (deduplicating). One
+// end-of-collection conversion — the derived primitives never change how they
+// accumulate.
+const proto::ProtoObject* makeInstanceOfSpecies(STRuntime& rt,
                                                 proto::ProtoContext* ctx,
                                                 const proto::ProtoObject* classProto,
                                                 const proto::ProtoList* data) {
     if (!data) data = ctx->newList();
     TransientPin pinData(
         ctx, reinterpret_cast<const proto::ProtoObject*>(data));
+
+    // Set species: convert the accumulated ProtoList into a deduplicating
+    // ProtoSet, then store that under `__data__`.
+    if (classProto == rt.bootstrap().setProto) {
+        const proto::ProtoObject* inst =
+            const_cast<proto::ProtoObject*>(classProto)
+                ->newChild(ctx, /*isMutable=*/true);
+        TransientPin pinInst(ctx, inst);
+        unsigned long n = data->getSize(ctx);
+        const proto::ProtoSet* set = ctx->newSet();
+        TransientPin pinSet(
+            ctx, reinterpret_cast<const proto::ProtoObject*>(set));
+        for (unsigned long i = 0; i < n; ++i) {
+            const proto::ProtoObject* e =
+                data->getAt(ctx, static_cast<int>(i));
+            set = set->add(ctx, e ? e : PROTO_NONE);
+            pinSet.reset(reinterpret_cast<const proto::ProtoObject*>(set));
+        }
+        const_cast<proto::ProtoObject*>(inst)->setAttribute(
+            ctx, dataKey(ctx), set->asObject(ctx));
+        return inst;
+    }
+
+    // List-backed species (`Array`, `OrderedCollection`, `Bag`): wrap directly.
     const proto::ProtoObject* inst =
         const_cast<proto::ProtoObject*>(classProto)
             ->newChild(ctx, /*isMutable=*/true);
@@ -171,10 +237,14 @@ const proto::ProtoObject* speciesProtoOf(STRuntime& rt, proto::ProtoContext* ctx
                                          const proto::ProtoObject* r) {
     const proto::ProtoObject* ocProto    = rt.bootstrap().orderedCollectionProto;
     const proto::ProtoObject* arrayProto = rt.bootstrap().arrayProto;
+    const proto::ProtoObject* setProto   = rt.bootstrap().setProto;
+    const proto::ProtoObject* bagProto   = rt.bootstrap().bagProto;
     for (const proto::ProtoObject* p = r; p && p != PROTO_NONE;
          p = p->getPrototype(ctx)) {
         if (p == ocProto)    return ocProto;
         if (p == arrayProto) return arrayProto;
+        if (p == setProto)   return setProto;
+        if (p == bagProto)   return bagProto;
     }
     return arrayProto;
 }
@@ -205,7 +275,21 @@ bool forEachElement(STRuntime& /*rt*/, proto::ProtoContext* ctx,
         }
         return true;
     }
-    // COL-b..e: extend here (Set / Bag / Dictionary / Interval kinds).
+    // COL-c: a `Set` is ProtoSet-backed — iterate it via ProtoSetIterator,
+    // visiting each distinct element once.
+    if (isSetBacked(ctx, collection)) {
+        const proto::ProtoSet* data = setDataOf(ctx, collection);
+        const proto::ProtoSetIterator* it = data->getIterator(ctx);
+        while (it && it->hasNext(ctx)) {
+            const proto::ProtoObject* e = it->next(ctx);
+            if (!fn(e ? e : PROTO_NONE)) return false;
+            it = it->advance(ctx);
+        }
+        return true;
+    }
+    // COL-c: a `Bag` is ProtoList-backed (one slot per occurrence) — it flows
+    // through the ProtoList arm above. COL-d..e: extend here (Dictionary /
+    // Interval kinds).
     throw std::runtime_error("collection does not understand iteration");
 }
 
@@ -606,6 +690,324 @@ const proto::ProtoObject* prim_OC_classWithAll(STRuntime& rt, proto::ProtoContex
     return makeInstanceOfSpecies(rt, ctx, rt.bootstrap().orderedCollectionProto, data);
 }
 
+// =========================  Set base operations  ===========================
+//
+// A `Set` is a hashed collection of unique elements. It uses the same
+// mutable-holder representation as the sequenceable collections — a mutable
+// child of the `Set` prototype with `__data__` — but `__data__` holds an
+// immutable protoCore `ProtoSet` (wrapped via `asObject`) rather than a
+// `ProtoList`. Every mutator (`add:`, `remove:`) swaps `__data__` for the new
+// snapshot the protoCore mutator returns. Element equality / hashing for
+// membership is protoCore's own (handled inside `ProtoSet::add`/`has`/`remove`).
+//
+// Because the backing store is a `ProtoSet`, `Set` flows through
+// forEachElement's ProtoSet arm, so the whole derived protocol works on it.
+
+// makeSetInstance — build a fresh Set instance wrapping `data`.
+const proto::ProtoObject* makeSetInstance(STRuntime& rt, proto::ProtoContext* ctx,
+                                          const proto::ProtoSet* data) {
+    if (!data) data = ctx->newSet();
+    TransientPin pinData(
+        ctx, reinterpret_cast<const proto::ProtoObject*>(data));
+    const proto::ProtoObject* s =
+        const_cast<proto::ProtoObject*>(rt.bootstrap().setProto)
+            ->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinS(ctx, s);
+    const_cast<proto::ProtoObject*>(s)->setAttribute(
+        ctx, dataKey(ctx), data->asObject(ctx));
+    return s;
+}
+
+// aSet add: anObject → add the element; return it. Adding a duplicate is a
+// no-op — ProtoSet dedups.
+const proto::ProtoObject* prim_Set_add(STRuntime&, proto::ProtoContext* ctx,
+                                       const proto::ProtoObject* r,
+                                       const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("add: expects 1 arg (element)");
+    const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
+    setSetData(ctx, r, setDataOf(ctx, r)->add(ctx, e));
+    return e;
+}
+
+// aSet remove: anObject → remove the element; return it. Not present signals
+// an Error.
+const proto::ProtoObject* prim_Set_remove(STRuntime&, proto::ProtoContext* ctx,
+                                          const proto::ProtoObject* r,
+                                          const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("remove: expects 1 arg (element)");
+    const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
+    const proto::ProtoSet* data = setDataOf(ctx, r);
+    if (data->has(ctx, e) != PROTO_TRUE)
+        throw std::runtime_error("Set>>remove:: element not found");
+    setSetData(ctx, r, data->remove(ctx, e));
+    return e;
+}
+
+// aSet remove: anObject ifAbsent: aBlock → as remove:, but on a miss evaluate
+// `aBlock` (no args) and return its value instead of signalling.
+const proto::ProtoObject* prim_Set_removeIfAbsent(STRuntime& rt, proto::ProtoContext* ctx,
+                                                  const proto::ProtoObject* r,
+                                                  const proto::ProtoObject* const* a,
+                                                  int argc) {
+    if (argc != 2)
+        throw std::runtime_error("remove:ifAbsent: expects 2 args (element, block)");
+    const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
+    const proto::ProtoSet* data = setDataOf(ctx, r);
+    if (data->has(ctx, e) != PROTO_TRUE) {
+        const proto::ProtoObject* fallback = invokeBlock(rt, ctx, a[1], nullptr, 0);
+        return fallback ? fallback : PROTO_NONE;
+    }
+    setSetData(ctx, r, data->remove(ctx, e));
+    return e;
+}
+
+// aSet includes: anObject → true when the element is a member.
+const proto::ProtoObject* prim_Set_includes(STRuntime&, proto::ProtoContext* ctx,
+                                            const proto::ProtoObject* r,
+                                            const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("includes: expects 1 arg (element)");
+    const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
+    return setDataOf(ctx, r)->has(ctx, e) == PROTO_TRUE ? PROTO_TRUE : PROTO_FALSE;
+}
+
+// aSet size → number of distinct elements.
+const proto::ProtoObject* prim_Set_size(STRuntime&, proto::ProtoContext* ctx,
+                                        const proto::ProtoObject* r,
+                                        const proto::ProtoObject* const*, int) {
+    return ctx->fromLong(
+        static_cast<long long>(setDataOf(ctx, r)->getSize(ctx)));
+}
+
+const proto::ProtoObject* prim_Set_isEmpty(STRuntime&, proto::ProtoContext* ctx,
+                                           const proto::ProtoObject* r,
+                                           const proto::ProtoObject* const*, int) {
+    return setDataOf(ctx, r)->getSize(ctx) == 0 ? PROTO_TRUE : PROTO_FALSE;
+}
+
+const proto::ProtoObject* prim_Set_notEmpty(STRuntime&, proto::ProtoContext* ctx,
+                                            const proto::ProtoObject* r,
+                                            const proto::ProtoObject* const*, int) {
+    return setDataOf(ctx, r)->getSize(ctx) != 0 ? PROTO_TRUE : PROTO_FALSE;
+}
+
+// aSet do: aBlock → evaluate the one-arg block once for each distinct element.
+const proto::ProtoObject* prim_Set_do(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* r,
+                                      const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("do: expects 1 arg (block)");
+    const proto::ProtoObject* block = a[0];
+    TransientPin pinRecv(ctx, r);
+    forEachElement(rt, ctx, r, [&](const proto::ProtoObject* e) {
+        const proto::ProtoObject* arg0 = e;
+        invokeBlock(rt, ctx, block, &arg0, 1);
+        return true;
+    });
+    return r;
+}
+
+// Set new → a fresh empty Set.
+const proto::ProtoObject* prim_Set_classNew(STRuntime& rt, proto::ProtoContext* ctx,
+                                            const proto::ProtoObject* /*cls*/,
+                                            const proto::ProtoObject* const*, int) {
+    return makeSetInstance(rt, ctx, ctx->newSet());
+}
+
+// Set withAll: aCollection → a Set of the distinct elements of the argument
+// (any collection the iteration protocol understands).
+const proto::ProtoObject* prim_Set_classWithAll(STRuntime& rt, proto::ProtoContext* ctx,
+                                                const proto::ProtoObject* /*cls*/,
+                                                const proto::ProtoObject* const* a,
+                                                int argc) {
+    if (argc != 1) throw std::runtime_error("withAll: expects 1 arg (collection)");
+    const proto::ProtoSet* data = ctx->newSet();
+    TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
+    forEachElement(rt, ctx, a[0], [&](const proto::ProtoObject* e) {
+        data = data->add(ctx, e);
+        pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
+        return true;
+    });
+    return makeSetInstance(rt, ctx, data);
+}
+
+// =========================  Bag base operations  ===========================
+//
+// A `Bag` is a hashed collection that counts occurrences. It uses the same
+// mutable-holder representation, but — unlike `Set` — `__data__` holds a
+// `ProtoList` with ONE slot per occurrence (an element added three times
+// occupies three slots). protoCore's `ProtoMultiset` cannot back a `Bag`: it
+// stores element->count keyed by the element's HASH and never retains the
+// element object, so a ProtoMultiset cannot be iterated to recover elements.
+// A ProtoList of occurrences gives correct `do:` / `occurrencesOf:` and lets
+// the whole derived protocol work — `Bag` flows through forEachElement's
+// ProtoList arm. Element equality for `remove:` / `occurrencesOf:` uses
+// protoCore's object comparison via `indexOfEqual` (declared above).
+
+// makeBagInstance — build a fresh Bag instance wrapping `data` (one slot per
+// occurrence). Routed through makeInstanceOfSpecies, which for the Bag
+// prototype wraps a ProtoList directly.
+const proto::ProtoObject* makeBagInstance(STRuntime& rt, proto::ProtoContext* ctx,
+                                          const proto::ProtoList* data) {
+    return makeInstanceOfSpecies(rt, ctx, rt.bootstrap().bagProto,
+                                 data ? data : ctx->newList());
+}
+
+// aBag add: anObject → add one occurrence; return the element.
+const proto::ProtoObject* prim_Bag_add(STRuntime&, proto::ProtoContext* ctx,
+                                       const proto::ProtoObject* r,
+                                       const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("add: expects 1 arg (element)");
+    const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
+    setData(ctx, r, listData(ctx, r)->appendLast(ctx, e));
+    return e;
+}
+
+// aBag add: anObject withOccurrences: n → add N occurrences; return the element.
+const proto::ProtoObject* prim_Bag_addWithOccurrences(STRuntime&, proto::ProtoContext* ctx,
+                                                      const proto::ProtoObject* r,
+                                                      const proto::ProtoObject* const* a,
+                                                      int argc) {
+    if (argc != 2)
+        throw std::runtime_error("add:withOccurrences: expects 2 args (element, count)");
+    const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
+    long long n = a[1]->asLong(ctx);
+    if (n < 0) throw std::runtime_error("Bag>>add:withOccurrences:: negative count");
+    const proto::ProtoList* data = listData(ctx, r);
+    TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
+    for (long long i = 0; i < n; ++i) {
+        data = data->appendLast(ctx, e);
+        pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
+    }
+    setData(ctx, r, data);
+    return e;
+}
+
+// aBag remove: anObject → remove one occurrence; return the element. Absent
+// signals an Error.
+const proto::ProtoObject* prim_Bag_remove(STRuntime&, proto::ProtoContext* ctx,
+                                          const proto::ProtoObject* r,
+                                          const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("remove: expects 1 arg (element)");
+    const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
+    const proto::ProtoList* data = listData(ctx, r);
+    int idx = indexOfEqual(ctx, data, e);
+    if (idx < 0)
+        throw std::runtime_error("Bag>>remove:: element not found");
+    setData(ctx, r, data->removeAt(ctx, idx));
+    return e;
+}
+
+// aBag remove: anObject ifAbsent: aBlock → as remove:, but on a miss evaluate
+// `aBlock` (no args) and return its value instead of signalling.
+const proto::ProtoObject* prim_Bag_removeIfAbsent(STRuntime& rt, proto::ProtoContext* ctx,
+                                                  const proto::ProtoObject* r,
+                                                  const proto::ProtoObject* const* a,
+                                                  int argc) {
+    if (argc != 2)
+        throw std::runtime_error("remove:ifAbsent: expects 2 args (element, block)");
+    const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
+    const proto::ProtoList* data = listData(ctx, r);
+    int idx = indexOfEqual(ctx, data, e);
+    if (idx < 0) {
+        const proto::ProtoObject* fallback = invokeBlock(rt, ctx, a[1], nullptr, 0);
+        return fallback ? fallback : PROTO_NONE;
+    }
+    setData(ctx, r, data->removeAt(ctx, idx));
+    return e;
+}
+
+// Count how many slots of `data` are equal to `value`, using protoCore's
+// object comparison — the per-occurrence count.
+long long countEqual(proto::ProtoContext* ctx, const proto::ProtoList* data,
+                     const proto::ProtoObject* value) {
+    if (!value) value = PROTO_NONE;
+    long long n = 0;
+    unsigned long sz = data->getSize(ctx);
+    for (unsigned long i = 0; i < sz; ++i) {
+        const proto::ProtoObject* e = data->getAt(ctx, static_cast<int>(i));
+        if (!e) e = PROTO_NONE;
+        if (e == value || e->compare(ctx, value) == 0) ++n;
+    }
+    return n;
+}
+
+// aBag includes: anObject → true when at least one occurrence is present.
+const proto::ProtoObject* prim_Bag_includes(STRuntime&, proto::ProtoContext* ctx,
+                                            const proto::ProtoObject* r,
+                                            const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("includes: expects 1 arg (element)");
+    const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
+    return indexOfEqual(ctx, listData(ctx, r), e) >= 0 ? PROTO_TRUE : PROTO_FALSE;
+}
+
+// aBag occurrencesOf: anObject → the occurrence count for the element.
+const proto::ProtoObject* prim_Bag_occurrencesOf(STRuntime&, proto::ProtoContext* ctx,
+                                                 const proto::ProtoObject* r,
+                                                 const proto::ProtoObject* const* a,
+                                                 int argc) {
+    if (argc != 1) throw std::runtime_error("occurrencesOf: expects 1 arg (element)");
+    const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
+    return ctx->fromLong(countEqual(ctx, listData(ctx, r), e));
+}
+
+// aBag size → total number of elements, duplicates included.
+const proto::ProtoObject* prim_Bag_size(STRuntime&, proto::ProtoContext* ctx,
+                                        const proto::ProtoObject* r,
+                                        const proto::ProtoObject* const*, int) {
+    return ctx->fromLong(
+        static_cast<long long>(listData(ctx, r)->getSize(ctx)));
+}
+
+const proto::ProtoObject* prim_Bag_isEmpty(STRuntime&, proto::ProtoContext* ctx,
+                                           const proto::ProtoObject* r,
+                                           const proto::ProtoObject* const*, int) {
+    return listData(ctx, r)->getSize(ctx) == 0 ? PROTO_TRUE : PROTO_FALSE;
+}
+
+const proto::ProtoObject* prim_Bag_notEmpty(STRuntime&, proto::ProtoContext* ctx,
+                                            const proto::ProtoObject* r,
+                                            const proto::ProtoObject* const*, int) {
+    return listData(ctx, r)->getSize(ctx) != 0 ? PROTO_TRUE : PROTO_FALSE;
+}
+
+// aBag do: aBlock → evaluate the one-arg block once per occurrence.
+const proto::ProtoObject* prim_Bag_do(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* r,
+                                      const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("do: expects 1 arg (block)");
+    const proto::ProtoObject* block = a[0];
+    TransientPin pinRecv(ctx, r);
+    forEachElement(rt, ctx, r, [&](const proto::ProtoObject* e) {
+        const proto::ProtoObject* arg0 = e;
+        invokeBlock(rt, ctx, block, &arg0, 1);
+        return true;
+    });
+    return r;
+}
+
+// Bag new → a fresh empty Bag.
+const proto::ProtoObject* prim_Bag_classNew(STRuntime& rt, proto::ProtoContext* ctx,
+                                            const proto::ProtoObject* /*cls*/,
+                                            const proto::ProtoObject* const*, int) {
+    return makeBagInstance(rt, ctx, ctx->newList());
+}
+
+// Bag withAll: aCollection → a Bag of every element of the argument (any
+// collection the iteration protocol understands), keeping duplicates.
+const proto::ProtoObject* prim_Bag_classWithAll(STRuntime& rt, proto::ProtoContext* ctx,
+                                                const proto::ProtoObject* /*cls*/,
+                                                const proto::ProtoObject* const* a,
+                                                int argc) {
+    if (argc != 1) throw std::runtime_error("withAll: expects 1 arg (collection)");
+    const proto::ProtoList* data = ctx->newList();
+    TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
+    forEachElement(rt, ctx, a[0], [&](const proto::ProtoObject* e) {
+        data = data->appendLast(ctx, e);
+        pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
+        return true;
+    });
+    return makeBagInstance(rt, ctx, data);
+}
+
 // =====================  Derived iteration protocol  ========================
 //
 // Bound on `Collection`, inherited by every collection. Each is built on
@@ -975,6 +1377,56 @@ void installCollectionPrimitives(STRuntime& rt) {
                   reg.registerPrim(prim_OC_classNew));
     bindPrimitive(rt, b.orderedCollectionProto, "withAll:",
                   reg.registerPrim(prim_OC_classWithAll));
+
+    // --- Set base operations — bound on the Set prototype ------------------
+    bindPrimitive(rt, b.setProto, "add:",
+                  reg.registerPrim(prim_Set_add));
+    bindPrimitive(rt, b.setProto, "remove:",
+                  reg.registerPrim(prim_Set_remove));
+    bindPrimitive(rt, b.setProto, "remove:ifAbsent:",
+                  reg.registerPrim(prim_Set_removeIfAbsent));
+    bindPrimitive(rt, b.setProto, "includes:",
+                  reg.registerPrim(prim_Set_includes));
+    bindPrimitive(rt, b.setProto, "size",
+                  reg.registerPrim(prim_Set_size));
+    bindPrimitive(rt, b.setProto, "isEmpty",
+                  reg.registerPrim(prim_Set_isEmpty));
+    bindPrimitive(rt, b.setProto, "notEmpty",
+                  reg.registerPrim(prim_Set_notEmpty));
+    bindPrimitive(rt, b.setProto, "do:",
+                  reg.registerPrim(prim_Set_do));
+    // --- Set class-side constructors — bound on the Set prototype ----------
+    bindPrimitive(rt, b.setProto, "new",
+                  reg.registerPrim(prim_Set_classNew));
+    bindPrimitive(rt, b.setProto, "withAll:",
+                  reg.registerPrim(prim_Set_classWithAll));
+
+    // --- Bag base operations — bound on the Bag prototype ------------------
+    bindPrimitive(rt, b.bagProto, "add:",
+                  reg.registerPrim(prim_Bag_add));
+    bindPrimitive(rt, b.bagProto, "add:withOccurrences:",
+                  reg.registerPrim(prim_Bag_addWithOccurrences));
+    bindPrimitive(rt, b.bagProto, "remove:",
+                  reg.registerPrim(prim_Bag_remove));
+    bindPrimitive(rt, b.bagProto, "remove:ifAbsent:",
+                  reg.registerPrim(prim_Bag_removeIfAbsent));
+    bindPrimitive(rt, b.bagProto, "includes:",
+                  reg.registerPrim(prim_Bag_includes));
+    bindPrimitive(rt, b.bagProto, "occurrencesOf:",
+                  reg.registerPrim(prim_Bag_occurrencesOf));
+    bindPrimitive(rt, b.bagProto, "size",
+                  reg.registerPrim(prim_Bag_size));
+    bindPrimitive(rt, b.bagProto, "isEmpty",
+                  reg.registerPrim(prim_Bag_isEmpty));
+    bindPrimitive(rt, b.bagProto, "notEmpty",
+                  reg.registerPrim(prim_Bag_notEmpty));
+    bindPrimitive(rt, b.bagProto, "do:",
+                  reg.registerPrim(prim_Bag_do));
+    // --- Bag class-side constructors — bound on the Bag prototype ----------
+    bindPrimitive(rt, b.bagProto, "new",
+                  reg.registerPrim(prim_Bag_classNew));
+    bindPrimitive(rt, b.bagProto, "withAll:",
+                  reg.registerPrim(prim_Bag_classWithAll));
 
     // --- Derived iteration protocol — bound on Collection, inherited by all -
     bindPrimitive(rt, b.collectionProto, "species",

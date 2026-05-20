@@ -251,6 +251,13 @@ struct STRuntime::Impl {
         globals->setAttribute(rootCtx,
             proto::ProtoString::createSymbol(rootCtx, "OrderedCollection"),
             bootstrap.orderedCollectionProto);
+        // Track 2 slice c (COL-c): the hashed collections.
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "Set"),
+            bootstrap.setProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "Bag"),
+            bootstrap.bagProto);
 
         // F6 v3 E2b: create the single live-registry GC root and pin it.
         //
@@ -323,6 +330,10 @@ struct STRuntime::Impl {
             pinPermanent(bootstrap.arrayProto);
             // Track 2 slice b (COL-b): the growable sequenceable collection.
             pinPermanent(bootstrap.orderedCollectionProto);
+            // Track 2 slice c (COL-c): the hashed collections — Set / Bag carry
+            // their base operations; pin them for the runtime's whole lifetime.
+            pinPermanent(bootstrap.setProto);
+            pinPermanent(bootstrap.bagProto);
         }
     }
 

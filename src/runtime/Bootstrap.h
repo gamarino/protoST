@@ -62,6 +62,12 @@ struct Bootstrap {
     const proto::ProtoObject* arrayProto                  = nullptr;
     // Track 2 slice b (COL-b): growable sequenceable collection.
     const proto::ProtoObject* orderedCollectionProto      = nullptr;
+    // Track 2 slice c (COL-c): hashed collections.
+    //   HashedCollection
+    //     |-- Set                    (concrete — ProtoSet backing)
+    //     `-- Bag                    (concrete — ProtoMultiset backing)
+    const proto::ProtoObject* setProto                    = nullptr;
+    const proto::ProtoObject* bagProto                    = nullptr;
 };
 
 // Build the prototype tree on top of `sp.objectPrototype` and bind the result

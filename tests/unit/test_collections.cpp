@@ -666,3 +666,248 @@ TEST_CASE("COL-b: first / last convenience accessors", "[collections][track2]") 
     REQUIRE(r != nullptr);
     REQUIRE(r->asLong(rt.rootCtx()) == 1133);
 }
+
+// ============================================================================
+// Track 2, slice c (COL-c) — Set and Bag.
+//
+// Exercises the `Set` (ProtoSet-backed, deduplicating) and `Bag`
+// (ProtoMultiset-backed, counting) base operations, the forEachElement arms
+// that iterate them, and the derived iteration protocol on a hashed receiver
+// (collect:/select: yield the receiver's species, not an Array).
+//
+// See docs/superpowers/specs/2026-05-20-collections.md.
+// ============================================================================
+
+TEST_CASE("COL-c: Set dedups — adding the same element twice keeps size 1",
+          "[collections][track2]") {
+    protoST::STRuntime rt;
+    {
+        const char* src =
+            "Object subclass: #SD. "
+            "SD >> run "
+            "  | s | "
+            "  s := Set new. "
+            "  s add: 42. s add: 42. "
+            "  ^ s size. "
+            "x := SD newChild. x run.";
+        auto* r = runSrc(rt, src);
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 1);
+    }
+    {
+        // includes: sees a member and rejects a non-member.
+        auto* r = runSrc(rt, "s := Set new. s add: 7. s includes: 7.");
+        REQUIRE(r == PROTO_TRUE);
+        auto* r2 = runSrc(rt, "s := Set new. s add: 7. s includes: 99.");
+        REQUIRE(r2 == PROTO_FALSE);
+    }
+}
+
+TEST_CASE("COL-c: Set remove: — present, ifAbsent fallback, absent signals",
+          "[collections][track2]") {
+    {
+        // remove: a present element drops it.
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt,
+            "s := Set new. s add: 1. s add: 2. s remove: 1. s size.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 1);
+    }
+    {
+        // remove:ifAbsent: runs the fallback block on a miss.
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt,
+            "s := Set new. s add: 1. s remove: 99 ifAbsent: [ 0 - 1 ].");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == -1);
+    }
+    {
+        // remove: an absent element signals an Error, catchable by on:do:.
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt,
+            "[ s := Set new. s remove: 5. 0 ] on: Error do: [ :e | 77 ].");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 77);
+    }
+}
+
+TEST_CASE("COL-c: Bag counts duplicates — size and occurrencesOf:",
+          "[collections][track2]") {
+    protoST::STRuntime rt;
+    {
+        const char* src =
+            "Object subclass: #BC. "
+            "BC >> run "
+            "  | b | "
+            "  b := Bag new. "
+            "  b add: 9. b add: 9. b add: 9. "
+            "  ^ b size. "
+            "x := BC newChild. x run.";
+        auto* r = runSrc(rt, src);
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 3);
+    }
+    {
+        auto* r = runSrc(rt,
+            "b := Bag new. b add: 9. b add: 9. b add: 9. b occurrencesOf: 9.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 3);
+    }
+    {
+        auto* r = runSrc(rt, "b := Bag new. b add: 9. b includes: 9.");
+        REQUIRE(r == PROTO_TRUE);
+    }
+}
+
+TEST_CASE("COL-c: Bag remove: drops one occurrence", "[collections][track2]") {
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt,
+        "b := Bag new. b add: 4. b add: 4. b add: 4. "
+        "b remove: 4. b occurrencesOf: 4.");
+    REQUIRE(r != nullptr);
+    REQUIRE(r->asLong(rt.rootCtx()) == 2);
+}
+
+TEST_CASE("COL-c: Bag add:withOccurrences:", "[collections][track2]") {
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt,
+        "b := Bag new. b add: 3 withOccurrences: 5. b occurrencesOf: 3.");
+    REQUIRE(r != nullptr);
+    REQUIRE(r->asLong(rt.rootCtx()) == 5);
+}
+
+TEST_CASE("COL-c: do: over a Set visits each distinct element",
+          "[collections][track2]") {
+    // The block closes over a method local `total`; the Set has a duplicate
+    // added, so a correct (deduplicating) do: sums 1+2+3 = 6, not 1+2+2+3.
+    const char* src =
+        "Object subclass: #SDo. "
+        "SDo >> run "
+        "  | s total | "
+        "  s := Set new. "
+        "  s add: 1. s add: 2. s add: 2. s add: 3. "
+        "  total := 0. "
+        "  s do: [ :e | total := total + e ]. "
+        "  ^ total. "
+        "x := SDo newChild. x run.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r != nullptr);
+    REQUIRE(r->asLong(rt.rootCtx()) == 6);
+}
+
+TEST_CASE("COL-c: do: over a Bag visits each occurrence",
+          "[collections][track2]") {
+    // The block closes over a method local `total`; a Bag keeps duplicates so
+    // do: visits 5 three times → 15.
+    const char* src =
+        "Object subclass: #BDo. "
+        "BDo >> run "
+        "  | b total | "
+        "  b := Bag new. "
+        "  b add: 5. b add: 5. b add: 5. "
+        "  total := 0. "
+        "  b do: [ :e | total := total + e ]. "
+        "  ^ total. "
+        "x := BDo newChild. x run.";
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, src);
+    REQUIRE(r != nullptr);
+    REQUIRE(r->asLong(rt.rootCtx()) == 15);
+}
+
+TEST_CASE("COL-c: derived protocol on a Set — species, inject, detect, collect",
+          "[collections][track2]") {
+    protoST::STRuntime rt;
+    {
+        // select: on a Set yields a Set (species).
+        auto* sp = runSrc(rt,
+            "((Set withAll: #(1 2 3 4)) select: [ :x | x > 2 ]) species.");
+        REQUIRE(sp == rt.bootstrap().setProto);
+    }
+    {
+        // collect: on a Set yields a Set (species).
+        auto* sp = runSrc(rt,
+            "((Set withAll: #(1 2 3)) collect: [ :x | x * 10 ]) species.");
+        REQUIRE(sp == rt.bootstrap().setProto);
+    }
+    {
+        // inject:into: folds over the distinct elements.
+        auto* r = runSrc(rt,
+            "(Set withAll: #(1 2 3)) inject: 0 into: [ :a :b | a + b ].");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 6);
+    }
+    {
+        // detect: finds a matching element.
+        auto* r = runSrc(rt,
+            "(Set withAll: #(10 20 30)) detect: [ :x | x = 20 ].");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 20);
+    }
+}
+
+TEST_CASE("COL-c: select: on a Bag yields a Bag", "[collections][track2]") {
+    protoST::STRuntime rt;
+    auto* sp = runSrc(rt,
+        "((Bag withAll: #(1 2 2 3)) select: [ :x | x > 1 ]) species.");
+    REQUIRE(sp == rt.bootstrap().bagProto);
+}
+
+TEST_CASE("COL-c: Set/Bag class>>withAll: from a literal with duplicates",
+          "[collections][track2]") {
+    {
+        // Set withAll: dedups — #(1 2 2 3 3 3) → 3 distinct.
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, "(Set withAll: #(1 2 2 3 3 3)) size.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 3);
+    }
+    {
+        // Bag withAll: keeps every element — total size 6.
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, "(Bag withAll: #(1 2 2 3 3 3)) size.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 6);
+    }
+    {
+        // Bag withAll: occurrencesOf: 3 → 3.
+        protoST::STRuntime rt;
+        auto* r = runSrc(rt, "(Bag withAll: #(1 2 2 3 3 3)) occurrencesOf: 3.");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(rt.rootCtx()) == 3);
+    }
+}
+
+TEST_CASE("COL-c: species regressions — Array/OrderedCollection collect: unchanged",
+          "[collections][track2]") {
+    protoST::STRuntime rt;
+    {
+        // An Array's collect: still yields an Array.
+        auto* sp = runSrc(rt, "(#(1 2 3) collect: [ :x | x + 1 ]) species.");
+        REQUIRE(sp == rt.bootstrap().arrayProto);
+    }
+    {
+        // An OrderedCollection's collect: still yields an OrderedCollection.
+        auto* sp = runSrc(rt,
+            "((OrderedCollection withAll: #(1 2 3)) collect: [ :x | x ]) species.");
+        REQUIRE(sp == rt.bootstrap().orderedCollectionProto);
+    }
+    {
+        // asArray on a Set still yields an Array.
+        auto* sp = runSrc(rt, "((Set withAll: #(1 2 3)) asArray) species.");
+        REQUIRE(sp == rt.bootstrap().arrayProto);
+    }
+}
+
+TEST_CASE("COL-c: Set isEmpty / notEmpty", "[collections][track2]") {
+    protoST::STRuntime rt;
+    {
+        auto* r = runSrc(rt, "(Set new) isEmpty.");
+        REQUIRE(r == PROTO_TRUE);
+    }
+    {
+        auto* r = runSrc(rt, "s := Set new. s add: 1. s notEmpty.");
+        REQUIRE(r == PROTO_TRUE);
+    }
+}
