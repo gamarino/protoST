@@ -294,17 +294,36 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         scopes_.emplace_back();
         {
             auto& s = scopes_.back();
-            s.astNode = nullptr;  // F4-U3: no captured analysis for methods
+            // CLO Part 2: a method IS a closure scope boundary. Load the set
+            // of names that inner blocks capture from this method so that
+            // isCaptured() routes those names to PUSH_CAPTURED/STORE_CAPTURED.
+            s.astNode = &n;
+            auto it = analysis_.capturedByScope.find(&n);
+            if (it != analysis_.capturedByScope.end()) {
+                s.capturedNames = it->second;
+            }
         }
         int nArgs = static_cast<int>(n.intValue);
         declareLocal("self");                              // slot 0
         for (int i = 0; i < nArgs; ++i) {
+            // CLO Part 2: a captured argument keeps a real local slot too —
+            // pushFrame binds the incoming value there and the prologue
+            // copies it into the captured dict. Declaring it unconditionally
+            // keeps slot numbering stable for the copy-in PUSH_LOCAL.
             declareLocal(n.stringList[1 + i]);             // slots 1..nArgs
         }
         for (size_t i = static_cast<size_t>(1 + nArgs); i < n.stringList.size(); ++i) {
             declareLocal(n.stringList[i]);                 // method locals
         }
         sub->setArgCount(nArgs + 1);  // +1 for self
+
+        // CLO Part 2: method prologue. If any name is captured by an inner
+        // block, allocate the method's captured dict (MAKE_CAPTURED) and copy
+        // each captured ARGUMENT's incoming value from its local slot into
+        // the dict. Captured method locals/temps need no copy — the body
+        // assigns them via STORE_CAPTURED.
+        emitCaptureProlog(*sub, /*isMethod=*/true, n.stringList, /*nArgs=*/nArgs,
+                          /*argNameOffset=*/1);
 
         // Emit body statements.
         if (n.children.empty()) {
@@ -580,6 +599,15 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             for (size_t i = 0; i < n.stringList.size(); ++i) {
                 declareLocal(n.stringList[i]);
             }
+            // CLO Part 2: a block reuses the captured dict it inherited via
+            // PUSH_BLOCK's __captured__ stamp — it emits NO MAKE_CAPTURED.
+            // But if one of this block's OWN arguments is captured by an
+            // inner block, copy that argument's incoming value into the
+            // (shared) captured dict, exactly like a method's argument
+            // copy-in. The block's stringList is all args+locals; the first
+            // nArgs entries are the arguments.
+            emitCaptureProlog(*sub, /*isMethod=*/false, n.stringList,
+                              /*nArgs=*/nArgs, /*argNameOffset=*/0);
             // emit body statements; last value implicitly returned
             if (n.children.empty()) sub->emit(Op::PUSH_NIL, 0, currentLine_);
             for (size_t i = 0; i < n.children.size(); ++i) {
@@ -642,6 +670,30 @@ void Compiler::recordLocalNames(BytecodeModule& m) const {
             names[static_cast<size_t>(slot)] = name;
     }
     m.setLocalNames(std::move(names));
+}
+
+void Compiler::emitCaptureProlog(BytecodeModule& m, bool isMethod,
+                                 const std::vector<std::string>& argNames,
+                                 int nArgs, int argNameOffset) {
+    const auto& s = scopes_.back();
+    if (s.capturedNames.empty()) return;
+    // A method whose inner blocks capture anything needs its own captured
+    // dict in frame slot 0. Blocks reuse the dict inherited via PUSH_BLOCK.
+    if (isMethod) {
+        m.emit(Op::MAKE_CAPTURED, 0, currentLine_);
+    }
+    // Copy each captured ARGUMENT's incoming value from its local slot into
+    // the captured dict. Captured locals/temps need no copy — the body
+    // assigns them through STORE_CAPTURED directly.
+    for (int i = 0; i < nArgs; ++i) {
+        const std::string& argName = argNames[static_cast<size_t>(argNameOffset + i)];
+        if (s.capturedNames.count(argName) == 0) continue;
+        int slot = resolveLocal(argName);
+        if (slot < 0) continue;  // defensive — should always resolve
+        auto sym = m.internSymbol(argName);
+        m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slot), currentLine_);
+        m.emitWide(Op::STORE_CAPTURED, static_cast<unsigned int>(sym), currentLine_);
+    }
 }
 
 void Compiler::error(const std::string& msg) { errors_.push_back(msg); }

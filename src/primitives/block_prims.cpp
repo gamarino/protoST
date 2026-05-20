@@ -52,8 +52,19 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
     if (homeObj && homeObj != PROTO_NONE)
         homeFrameId = static_cast<unsigned long>(homeObj->asLong(ctx));
 
+    // CLO Part 1: a block created inside a method inherits that method's
+    // receiver as its `self`. PUSH_BLOCK stamps it onto the closure as
+    // `__block_self__`; pass it as the block frame's self so `self` and
+    // PUSH_INSTVAR inside the block resolve to the enclosing method's
+    // receiver. Absent for blocks not built by PUSH_BLOCK — fall back to
+    // PROTO_NONE.
+    static const proto::ProtoString* blkSelfKey =
+        proto::ProtoString::createSymbol(ctx, "__block_self__");
+    const proto::ProtoObject* blkSelf = block->getAttribute(ctx, blkSelfKey);
+    if (!blkSelf || blkSelf == PROTO_NONE) blkSelf = PROTO_NONE;
+
     ExecutionEngine eng(rt);
-    return eng.runWithArgs(ctx, *sub, /*self=*/PROTO_NONE, args, argc,
+    return eng.runWithArgs(ctx, *sub, /*self=*/blkSelf, args, argc,
                            capDict, homeFrameId);
 }
 

@@ -94,6 +94,16 @@ private:
     // as a slot-indexed vector, so the DAP Variables panel can show real
     // identifiers instead of "slot N". Call before popping the scope.
     void   recordLocalNames(BytecodeModule& m) const;
+    // CLO Part 2: emit the closure-capture prologue for the current scope.
+    // For a method (isMethod==true) with a non-empty captured set this emits
+    // MAKE_CAPTURED; for both methods and blocks it then copies each captured
+    // ARGUMENT's incoming value from its local slot into the captured dict
+    // (PUSH_LOCAL <slot> ; STORE_CAPTURED <nameSymbol>). `argNames` is the
+    // scope's full args+locals name list; the first `nArgs` entries starting
+    // at `argNameOffset` are the argument names.
+    void   emitCaptureProlog(BytecodeModule& m, bool isMethod,
+                             const std::vector<std::string>& argNames,
+                             int nArgs, int argNameOffset);
     // Returns true if `name` appears in the capturedNames set of the current
     // scope or any enclosing scope (innermost-first lookup).
     bool   isCaptured(const std::string& name) const;

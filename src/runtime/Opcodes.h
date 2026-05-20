@@ -42,6 +42,9 @@ enum class Op : uint8_t {
     STORE_GLOBAL    = 25,   // arg = constant pool symbol index
     PUSH_INSTVAR    = 26,   // arg = constant pool symbol index (name of inst var, accessed on self/slot 0)
     STORE_INSTVAR   = 27,   // arg = constant pool symbol index
+    // Closure capture in methods (CLO): allocate a fresh per-method captured
+    // dict and install it in frame slot 0 (no operand; pass 0).
+    MAKE_CAPTURED   = 28,
     // Extend for >256-index args
     EXTEND          = 254,
     // Debugger primitive guard

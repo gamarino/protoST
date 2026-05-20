@@ -56,6 +56,9 @@ target_sources(protost_unit_tests PRIVATE
 target_sources(protost_unit_tests PRIVATE
     unit/test_exceptions.cpp
 )
+target_sources(protost_unit_tests PRIVATE
+    unit/test_closure_capture.cpp
+)
 target_compile_definitions(protost_unit_tests PRIVATE
     PROTOST_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures"
 )

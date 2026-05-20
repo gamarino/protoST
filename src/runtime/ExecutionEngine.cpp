@@ -529,6 +529,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     proto::ProtoString::createSymbol(ctx, "__captured__");
                 static const proto::ProtoString* homeKey =
                     proto::ProtoString::createSymbol(ctx, "__home_frame__");
+                static const proto::ProtoString* blkSelfKey =
+                    proto::ProtoString::createSymbol(ctx, "__block_self__");
                 auto* bcPtrObj = ctx->fromLong(
                     reinterpret_cast<long long>(&f.m->block(arg)));
                 // `bcPtrObj` is held across the setAttribute below — pin it.
@@ -554,6 +556,20 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // on the mutable block object (which allocates) — pin it.
                 TransientPin pinHome(ctx, homeObj);
                 block->setAttribute(ctx, homeKey, homeObj);
+                // CLO Part 1: stamp the block with the `self` of the frame
+                // that creates it (the header self-slot, baseSlot+1). For a
+                // block created directly in a method this is the method's
+                // receiver; for a block nested inside another block the
+                // creating frame's self is already the inherited self, so the
+                // stamp is transitive. Block invocation then builds the block
+                // frame with this self instead of PROTO_NONE, making
+                // `self` / PUSH_INSTVAR work inside method-level blocks.
+                const proto::ProtoObject* creatorSelf = getSelf(f);
+                if (!creatorSelf) creatorSelf = PROTO_NONE;
+                // `creatorSelf` is an already-rooted frame value, but pin it
+                // for symmetry across the setAttribute (which allocates).
+                TransientPin pinBlkSelf(ctx, creatorSelf);
+                block->setAttribute(ctx, blkSelfKey, creatorSelf);
                 push(f, block);
                 break;
             }
@@ -738,6 +754,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         proto::ProtoString::createSymbol(ctx, "__captured__");
                     static const proto::ProtoString* recvHomeKey =
                         proto::ProtoString::createSymbol(ctx, "__home_frame__");
+                    static const proto::ProtoString* recvBlkSelfKey =
+                        proto::ProtoString::createSymbol(ctx, "__block_self__");
                     // getAttribute walks the receiver first then the proto
                     // chain. `__bc_ptr__` is set only on BlockClosures (by
                     // PUSH_BLOCK), never on `blockProto` itself, so a hit
@@ -788,17 +806,21 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                                 blkHome = static_cast<unsigned long>(
                                     homeObj->asLong(ctx));
 
-                            // F6 v3 E3: blocks bind args into locals
-                            // 0..argcOp-1 (no implicit self slot; cf.
-                            // invokeBlock which passes self=PROTO_NONE).
-                            // PUSH_INSTVAR inside a block reads local 0
-                            // which would therefore be the first arg, not
-                            // the enclosing method's self — same
-                            // pre-existing limitation as the legacy
-                            // invokeBlock path. pushFrame packs the
-                            // callee's region into the engine context's
-                            // GC-traced automaticLocals.
-                            pushFrame(sub, /*self=*/PROTO_NONE, capDict,
+                            // CLO Part 1: blocks bind args into locals
+                            // 0..argcOp-1. The block frame's `self` (header
+                            // slot, baseSlot+1) is the `self` stamped onto
+                            // the block by PUSH_BLOCK as `__block_self__` —
+                            // the receiver of the method the block was
+                            // textually created in. PUSH_SELF / PUSH_INSTVAR
+                            // inside the block read that header slot and so
+                            // resolve to the enclosing method's receiver.
+                            // Absent only for blocks not built by PUSH_BLOCK
+                            // — fall back to PROTO_NONE.
+                            const proto::ProtoObject* blkSelf =
+                                recv->getAttribute(ctx, recvBlkSelfKey);
+                            if (!blkSelf || blkSelf == PROTO_NONE)
+                                blkSelf = PROTO_NONE;
+                            pushFrame(sub, /*self=*/blkSelf, capDict,
                                       sendArgs,
                                       static_cast<unsigned int>(argcOp),
                                       blkHome);
@@ -1052,9 +1074,12 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 std::string mangled = "_iv_";
                 mangled += nameStr;
                 auto* sym = proto::ProtoString::createSymbol(ctx, mangled.c_str());
-                if (f.localCount == 0)
-                    throw std::runtime_error("PUSH_INSTVAR with no self");
-                const proto::ProtoObject* self = getLocal(f, 0);
+                // CLO Part 1: read `self` from the frame's header self-slot
+                // (baseSlot+1). For a method frame this equals local 0; for a
+                // block frame local 0 is the first block argument, so the
+                // header slot is the only correct source. PUSH_BLOCK stamps
+                // the block's self and block invocation primes that slot.
+                const proto::ProtoObject* self = getSelf(f);
                 auto* val = (self && self != PROTO_NONE)
                     ? self->getAttribute(ctx, sym) : nullptr;
                 push(f, val ? val : PROTO_NONE);
@@ -1077,24 +1102,43 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // `self` stay rooted via their frame slots; `sym` does not.
                 TransientPin pinSym(
                     ctx, reinterpret_cast<const proto::ProtoObject*>(sym));
-                if (f.localCount == 0)
-                    throw std::runtime_error("STORE_INSTVAR with no self");
-                const proto::ProtoObject* self = getLocal(f, 0);
+                // CLO Part 1: write to `self` from the frame's header
+                // self-slot (baseSlot+1) — correct for both method and block
+                // frames (see PUSH_INSTVAR rationale).
+                const proto::ProtoObject* self = getSelf(f);
                 if (!self || self == PROTO_NONE)
                     throw std::runtime_error("STORE_INSTVAR self is null");
                 const_cast<proto::ProtoObject*>(self)->setAttribute(ctx, sym, val);
                 break;
             }
+            case Op::MAKE_CAPTURED: {
+                // CLO Part 2: allocate a fresh per-method (or per-block)
+                // captured dict and install it in frame slot 0, where
+                // getCaptured / PUSH_CAPTURED / STORE_CAPTURED read it. The
+                // compiler emits this in the prologue of a method whose
+                // captured set is non-empty, before any STORE_CAPTURED. A
+                // nested block does NOT emit it — PUSH_BLOCK already stamped
+                // the block with the creating frame's captured dict.
+                auto* dict = const_cast<proto::ProtoObject*>(
+                                 rt_.bootstrap().objectProto)
+                                 ->newChild(ctx, /*isMutable=*/true);
+                // `dict` is a fresh mutable object reachable from nowhere the
+                // GC traces until setCaptured lands it in the frame's slot 0.
+                // setAutomaticLocal does not allocate, so a TransientPin is
+                // strictly needed only if anything allocated between newChild
+                // and the store — nothing does. Pin defensively anyway.
+                TransientPin pinDict(ctx, dict);
+                setCaptured(f, dict);
+                break;
+            }
             case Op::PUSH_SELF: {
-                // BL-1: push the current frame's `self`. For a method frame,
-                // `self` is local slot 0 (the SEND_* user-method path sets
-                // methodArgs[0] = recv → local 0). The header self-slot
-                // (getSelf, baseSlot+1) is also primed at pushFrame time and
-                // is inherited for nested non-method frames; local 0 matches
-                // PUSH_INSTVAR's own convention, so use it when present and
-                // fall back to the header slot otherwise.
-                const proto::ProtoObject* self =
-                    (f.localCount > 0) ? getLocal(f, 0) : getSelf(f);
+                // CLO Part 1: push the current frame's `self` from the header
+                // self-slot (getSelf, baseSlot+1). pushFrame primes that slot
+                // for method frames (= the receiver) and block invocation
+                // primes it from the block's stamped `__block_self__`, so it
+                // is correct for both. Reading local 0 (the old behaviour)
+                // would be wrong for a block whose local 0 is its first arg.
+                const proto::ProtoObject* self = getSelf(f);
                 if (!self) self = PROTO_NONE;
                 push(f, self);
                 break;
@@ -1105,8 +1149,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // one level above the class defining the current method.
                 // We push `self` (so the receiver is correct) and arm
                 // f.superPending so the next SEND_* redirects its lookup.
-                const proto::ProtoObject* self =
-                    (f.localCount > 0) ? getLocal(f, 0) : getSelf(f);
+                // CLO Part 1: read from the header self-slot (see PUSH_SELF).
+                const proto::ProtoObject* self = getSelf(f);
                 if (!self) self = PROTO_NONE;
                 push(f, self);
                 f.superPending = true;
