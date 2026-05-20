@@ -78,6 +78,28 @@ public:
     const proto::ProtoObject* snapshotFrames(proto::ProtoContext* ctx) const;
     void restoreFrames(proto::ProtoContext* ctx, const proto::ProtoObject* snapshot);
 
+    // F6 v3 C+D: resume helpers used by STRuntime::drainOne on the
+    // cooperative-resume path.
+    //
+    // resumeWith injects the result of the Future>>wait that originally
+    // yielded into the resumed engine. When the awaited future resolved
+    // (`error` is nullptr), it pushes `value` onto the top frame's
+    // operand stack — exactly the slot the original `wait` would have
+    // produced on return. When the awaited future rejected (`error` is
+    // non-null), it instead throws std::runtime_error carrying the error
+    // message; the engine's normal SEND-time exception path will
+    // propagate that out through continueRun, where drainOne can reject
+    // the message's own future.
+    //
+    // continueRun re-enters the same dispatch loop runWithArgs uses,
+    // operating on the frames_ already restored by restoreFrames +
+    // primed by resumeWith. It returns whatever the resumed frame stack
+    // ultimately produces at RETURN_TOP.
+    void resumeWith(proto::ProtoContext* ctx,
+                    const proto::ProtoObject* value,
+                    const proto::ProtoObject* error);
+    const proto::ProtoObject* continueRun(proto::ProtoContext* ctx);
+
 private:
     // F6 v3 A: explicit frame stack. One Frame per active Smalltalk method
     // (top-level module also gets a Frame). User-method SENDs push a new

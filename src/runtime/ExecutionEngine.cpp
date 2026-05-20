@@ -20,6 +20,7 @@
 #include "ExecutionEngine.h"
 #include "BytecodeModule.h"
 #include "Bootstrap.h"
+#include "FutureYield.h"
 #include "Opcodes.h"
 #include "ActorLock.h"
 #include "debugger/DebuggerRuntime.h"
@@ -631,6 +632,72 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     // implicit RETURN_TOP trailer is normally emitted by the compiler,
     // but be defensive).
     return PROTO_NONE;
+    } catch (const FutureYield& y) {
+        // F6 v3 C: cooperative yield. The wait primitive threw because we
+        // are inside an actor handler AND the awaited future is still
+        // pending. Snapshot the frame stack onto the actor and rethrow so
+        // STRuntime::drainOne sees the yield and returns the worker to
+        // the ready queue without resolving the message's future.
+        //
+        // The snapshot is taken BEFORE we clear frames_; restoreFrames
+        // (used by the resume path) will rebuild the same shape later.
+        const proto::ProtoObject* actor = rt_.currentActor();
+        if (!actor) {
+            // FutureYield outside an actor handler is a programming
+            // error. Convert to a normal runtime_error rather than
+            // letting an unmatched exception escape. Future>>wait only
+            // throws when currentActor() != nullptr, so reaching here
+            // would indicate a primitive misuse.
+            throw std::runtime_error("FutureYield outside of actor handler");
+        }
+
+        // Symbols resolved fresh from the live ctx (not cached in statics):
+        // protoCore interns symbols per-ProtoSpace, so a static binds to the
+        // first runtime's space and dangles for every later STRuntime. The
+        // matching drainOne resume path resolves the same names the same
+        // way; consistency across both sites is what makes the suspended-
+        // frame handoff observable.
+        const proto::ProtoString* suspKey =
+            ctx->fromUTF8String("__suspended_frame__")->asString(ctx);
+        const proto::ProtoString* waitingOnKey =
+            ctx->fromUTF8String("__waiting_on__")->asString(ctx);
+
+        const proto::ProtoObject* snap = snapshotFrames(ctx);
+        const_cast<proto::ProtoObject*>(actor)->setAttribute(ctx, suspKey, snap);
+        if (y.future()) {
+            const_cast<proto::ProtoObject*>(actor)->setAttribute(
+                ctx, waitingOnKey, y.future());
+
+            // Append the actor to the future's __waiters__ list under the
+            // future's cv mutex so it cannot race with resolve/reject on
+            // a different thread. The helper returns false if the future
+            // had ALREADY settled between Future>>wait's state check and
+            // our acquisition of the mutex; in that case the
+            // resolveFutureFromDrain run that just finished took an
+            // empty waiters snapshot, so we must schedule the actor
+            // ourselves to make sure the resume path runs.
+            //
+            // We import the helper indirectly from future_prims.cpp; the
+            // linker connects them.
+            extern bool appendFutureWaiterLocked(
+                proto::ProtoContext* ctx,
+                const proto::ProtoObject* fut,
+                const proto::ProtoObject* waiterActor);
+            bool parked = appendFutureWaiterLocked(ctx, y.future(), actor);
+            if (!parked) {
+                // Race window: producer settled the future in the gap
+                // between wait's mutex release and our re-acquisition.
+                // Schedule the actor explicitly so the resume path
+                // observes the settled state.
+                rt_.schedule(actor);
+            }
+        }
+
+        // Drop frames_ now that the snapshot owns the state; the engine
+        // is single-shot and will not be reused. Rethrow so drainOne's
+        // catch path runs.
+        frames_.clear();
+        throw;
     } catch (DebuggerHalt& h) {
         // F6 v3 A: enter the debugger session on the CURRENT top frame.
         // The legacy engine captured pc/stack/locals from local C++ vars;
@@ -681,12 +748,16 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
 
 const proto::ProtoObject*
 ExecutionEngine::snapshotFrames(proto::ProtoContext* ctx) const {
-    static const proto::ProtoString* pcKey       = proto::ProtoString::createSymbol(ctx, "pc");
-    static const proto::ProtoString* opStackKey  = proto::ProtoString::createSymbol(ctx, "op_stack");
-    static const proto::ProtoString* localsKey   = proto::ProtoString::createSymbol(ctx, "locals");
-    static const proto::ProtoString* selfKey     = proto::ProtoString::createSymbol(ctx, "self_obj");
-    static const proto::ProtoString* capturedKey = proto::ProtoString::createSymbol(ctx, "captured_dict");
-    static const proto::ProtoString* mPtrKey     = proto::ProtoString::createSymbol(ctx, "m_ptr");
+    // Resolve fresh from the live ctx — symbols are interned per-ProtoSpace,
+    // so a function-local static would dangle once the runtime that first
+    // ran snapshotFrames is destroyed. restoreFrames resolves the identical
+    // names; the two must agree within a runtime for the round trip to work.
+    const proto::ProtoString* pcKey       = ctx->fromUTF8String("pc")->asString(ctx);
+    const proto::ProtoString* opStackKey  = ctx->fromUTF8String("op_stack")->asString(ctx);
+    const proto::ProtoString* localsKey   = ctx->fromUTF8String("locals")->asString(ctx);
+    const proto::ProtoString* selfKey     = ctx->fromUTF8String("self_obj")->asString(ctx);
+    const proto::ProtoString* capturedKey = ctx->fromUTF8String("captured_dict")->asString(ctx);
+    const proto::ProtoString* mPtrKey     = ctx->fromUTF8String("m_ptr")->asString(ctx);
 
     const proto::ProtoList* result = ctx->newList();
     for (const Frame& fr : frames_) {
@@ -746,12 +817,14 @@ ExecutionEngine::snapshotFrames(proto::ProtoContext* ctx) const {
 void
 ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
                                const proto::ProtoObject* snapshot) {
-    static const proto::ProtoString* pcKey       = proto::ProtoString::createSymbol(ctx, "pc");
-    static const proto::ProtoString* opStackKey  = proto::ProtoString::createSymbol(ctx, "op_stack");
-    static const proto::ProtoString* localsKey   = proto::ProtoString::createSymbol(ctx, "locals");
-    static const proto::ProtoString* selfKey     = proto::ProtoString::createSymbol(ctx, "self_obj");
-    static const proto::ProtoString* capturedKey = proto::ProtoString::createSymbol(ctx, "captured_dict");
-    static const proto::ProtoString* mPtrKey     = proto::ProtoString::createSymbol(ctx, "m_ptr");
+    // Resolve fresh from the live ctx — see snapshotFrames for the
+    // per-space interning rationale.
+    const proto::ProtoString* pcKey       = ctx->fromUTF8String("pc")->asString(ctx);
+    const proto::ProtoString* opStackKey  = ctx->fromUTF8String("op_stack")->asString(ctx);
+    const proto::ProtoString* localsKey   = ctx->fromUTF8String("locals")->asString(ctx);
+    const proto::ProtoString* selfKey     = ctx->fromUTF8String("self_obj")->asString(ctx);
+    const proto::ProtoString* capturedKey = ctx->fromUTF8String("captured_dict")->asString(ctx);
+    const proto::ProtoString* mPtrKey     = ctx->fromUTF8String("m_ptr")->asString(ctx);
 
     if (!snapshot)
         throw std::runtime_error("restoreFrames: snapshot is null");
@@ -820,6 +893,59 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
 
         frames_.push_back(std::move(fr));
     }
+}
+
+// ---------------------------------------------------------------------------
+// F6 v3 C+D: resume entry points.
+//
+// resumeWith is called after restoreFrames has populated frames_ from a
+// snapshot. It primes the topmost frame's operand stack with the result the
+// yielded `Future>>wait` would have returned synchronously:
+//
+//   * resolved → push `value` (or PROTO_NONE if null) onto opStack.
+//   * rejected → throw std::runtime_error so the engine's normal
+//     in-flight exception path takes over from continueRun. The error
+//     surfaces in drainOne's std::exception catch, which rejects the
+//     message-level future with the same string a synchronous
+//     `wait` on a rejected future would have produced.
+//
+// continueRun then re-enters runLoop. The dispatch loop reads frames_.back()
+// and resumes at the pc the snapshot was taken on — which the engine
+// already advanced past the SEND of `wait` (pc is incremented BEFORE the
+// switch). So the next bytecode executed is whatever was emitted AFTER
+// the `wait` call site, with the resumed value sitting on top of the
+// operand stack exactly as the SEND handler would have left it.
+// ---------------------------------------------------------------------------
+
+void
+ExecutionEngine::resumeWith(proto::ProtoContext* ctx,
+                            const proto::ProtoObject* value,
+                            const proto::ProtoObject* error) {
+    if (error) {
+        std::string msg = "Future rejected: ";
+        // Best-effort string materialisation — error is the same object the
+        // future stored under __error__, which Future>>wait would have
+        // formatted via asString. We mirror that here so the rejection
+        // surface is identical between the synchronous-wait and resume
+        // paths.
+        auto* es = error->asString(ctx);
+        if (es) msg += es->toStdString(ctx);
+        throw std::runtime_error(msg);
+    }
+    if (frames_.empty()) {
+        // No frames to resume — restoreFrames must have been called with an
+        // empty snapshot. There's nothing to push the value onto; treat as
+        // a no-op so continueRun returns PROTO_NONE.
+        return;
+    }
+    frames_.back().opStack.push_back(value ? value : PROTO_NONE);
+}
+
+const proto::ProtoObject*
+ExecutionEngine::continueRun(proto::ProtoContext* ctx) {
+    // Same dispatch loop as runWithArgs; frames_ has been primed by
+    // restoreFrames + resumeWith.
+    return runLoop(ctx);
 }
 
 } // namespace protoST

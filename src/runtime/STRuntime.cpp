@@ -1,6 +1,7 @@
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
 #include "ExecutionEngine.h"
+#include "FutureYield.h"
 #include "BytecodeModule.h"
 #include "Bootstrap.h"
 #include "Venv.h"
@@ -59,6 +60,16 @@ void rejectFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
 }
 
 namespace protoST {
+
+// F6 v3 C: thread-local "actor currently being processed on THIS thread".
+// drainOne writes it before invoking the user method body; Future>>wait
+// reads it to decide between blocking on the future's cv (nullptr ⇒ main
+// thread / non-actor context) and throwing FutureYield (non-null ⇒ inside
+// an actor handler). Worker threads each see their own slot because
+// thread_local is per-OS-thread.
+namespace {
+    thread_local const proto::ProtoObject* g_currentActor = nullptr;
+}
 
 struct PrimitiveRegistry::Impl { std::vector<PrimFn> fns; };
 PrimitiveRegistry::PrimitiveRegistry() : impl(std::make_unique<Impl>()) {}
@@ -286,6 +297,15 @@ STRuntime::~STRuntime() {
     // late provider lookup after destruction doesn't dereference a dead
     // runtime.
     if (currentSTRuntime() == this) setCurrentSTRuntime(nullptr);
+
+    // F6 v3 C: clear the thread-local current-actor pointer if it still
+    // refers to an actor of this (now-dying) runtime. Without this a stale
+    // pointer from a worker thread that is being reused across STRuntime
+    // instances could make a subsequent Future>>wait misfire FutureYield.
+    // The main thread is the common case (each test constructs a fresh
+    // STRuntime on the same thread); worker threads are freshly spawned
+    // per runtime so their slots start clean anyway.
+    if (currentActor() != nullptr) setCurrentActor(nullptr);
 }
 
 bool STRuntime::waitForSchedulerProgress(unsigned millis) {
@@ -326,6 +346,17 @@ const Bootstrap&     STRuntime::bootstrap()     const { return impl_->bootstrap;
 PrimitiveRegistry&   STRuntime::registry()            { return impl_->registry; }
 DebuggerRuntime&     STRuntime::debugger()            { return impl_->debugger; }
 proto::ProtoObject*  STRuntime::globals()       const { return impl_->globals; }
+
+// F6 v3 C: thread-local current-actor accessors. Implementation is a flat
+// thread_local pointer (see anonymous namespace above); the STRuntime methods
+// only proxy to it so callers can keep using the STRuntime handle they
+// already have, without depending on a free function.
+void STRuntime::setCurrentActor(const proto::ProtoObject* actor) {
+    g_currentActor = actor;
+}
+const proto::ProtoObject* STRuntime::currentActor() const {
+    return g_currentActor;
+}
 
 const proto::ProtoObject*
 STRuntime::materialize(const BytecodeModule& m, size_t i) const {
@@ -439,6 +470,34 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
         ctx->fromUTF8String("__args__")->asString(ctx);
     static const proto::ProtoString* futKey =
         ctx->fromUTF8String("__future__")->asString(ctx);
+    // F6 v3 C+D: per-actor yield/resume bookkeeping.
+    //  * __suspended_frame__ : engine snapshot taken at the FutureYield site.
+    //  * __waiting_on__      : the future the actor is currently awaiting.
+    //  * __suspended_future__ : the message-level Future to resolve when the
+    //    resumed run completes (i.e. the future that drainOne would have
+    //    resolved on the synchronous-completion path).
+    //
+    // These are deliberately NOT cached in function-local statics: protoCore
+    // interns symbols per-ProtoSpace, so a static would bind to whichever
+    // runtime ran drainOne first and become a dangling pointer into a freed
+    // space for every subsequent STRuntime. The engine's FutureYield catch
+    // and the future-side waiter helpers resolve the same names; resolving
+    // fresh from the live `ctx` on every call keeps the symbol identity
+    // consistent across all three sites within a single runtime. The
+    // interning lookup is cheap relative to the surrounding getAttribute
+    // traffic.
+    const proto::ProtoString* suspKey =
+        ctx->fromUTF8String("__suspended_frame__")->asString(ctx);
+    const proto::ProtoString* waitingOnKey =
+        ctx->fromUTF8String("__waiting_on__")->asString(ctx);
+    const proto::ProtoString* suspFutKey =
+        ctx->fromUTF8String("__suspended_future__")->asString(ctx);
+    const proto::ProtoString* fValueKey =
+        ctx->fromUTF8String("__value__")->asString(ctx);
+    const proto::ProtoString* fErrorKey =
+        ctx->fromUTF8String("__error__")->asString(ctx);
+    const proto::ProtoString* fStateKey =
+        ctx->fromUTF8String("__state__")->asString(ctx);
     // F6 v2 T4: future state/value/error keys are no longer referenced here;
     // resolveFutureFromDrain / rejectFutureFromDrain in future_prims.cpp own
     // the entire transition including the attribute writes.
@@ -477,6 +536,96 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     std::mutex* actorLock = getActorLock(ctx, actor);
     std::unique_lock<std::mutex> actorGuard;
     if (actorLock) actorGuard = std::unique_lock<std::mutex>(*actorLock);
+
+    // F6 v3 C+D: check for a suspended-frame snapshot BEFORE looking at the
+    // mailbox. If present, this drainOne tick is a resume of a previously
+    // yielded message rather than a fresh pop. We restore the snapshot into
+    // a fresh ExecutionEngine, push the resolved value of the awaited
+    // future onto the top frame's operand stack (matching what the
+    // original `wait` would have returned), and let runLoop continue.
+    {
+        auto* snapAttr = actor->getAttribute(ctx, suspKey);
+        if (snapAttr && snapAttr != PROTO_NONE) {
+            // Pull the message-level future the original drainOne would
+            // have resolved on synchronous completion. Stored on the actor
+            // at yield time so the resume path knows which future to
+            // settle on RETURN_TOP (or reject on rethrow).
+            auto* msgFut = actor->getAttribute(ctx, suspFutKey);
+            // Pull the awaited future and read its settled value/error.
+            auto* awaited = actor->getAttribute(ctx, waitingOnKey);
+            const proto::ProtoObject* resumeValue = PROTO_NONE;
+            const proto::ProtoObject* resumeError = nullptr;
+            if (awaited && awaited != PROTO_NONE) {
+                auto* st = awaited->getAttribute(ctx, fStateKey);
+                long long s = st ? st->asLong(ctx) : 0;
+                if (s == 1) {
+                    auto* v = awaited->getAttribute(ctx, fValueKey);
+                    resumeValue = v ? v : PROTO_NONE;
+                } else if (s == 2) {
+                    auto* e = awaited->getAttribute(ctx, fErrorKey);
+                    resumeError = e ? e : PROTO_NONE;
+                }
+                // s == 0 (still pending) shouldn't happen here — the
+                // future's transition is what scheduled us. Treat as
+                // PROTO_NONE rather than re-yielding silently.
+            }
+
+            // Clear the suspended-state attributes BEFORE running so a
+            // re-yield from the resumed body installs a fresh snapshot
+            // rather than racing with the one we just consumed.
+            const_cast<proto::ProtoObject*>(actor)->setAttribute(ctx, suspKey, PROTO_NONE);
+            const_cast<proto::ProtoObject*>(actor)->setAttribute(ctx, waitingOnKey, PROTO_NONE);
+            const_cast<proto::ProtoObject*>(actor)->setAttribute(ctx, suspFutKey, PROTO_NONE);
+
+            setCurrentActor(actor);
+            ExecutionEngine eng(*this);
+            try {
+                eng.restoreFrames(ctx, snapAttr);
+                eng.resumeWith(ctx, resumeValue, resumeError);
+                // After resumeWith pushes the value (or rethrows the error
+                // into the caller), continueRun executes the rest of the
+                // frames_ stack and returns the final value.
+                const proto::ProtoObject* result = eng.continueRun(ctx);
+                setCurrentActor(nullptr);
+                if (msgFut && msgFut != PROTO_NONE) {
+                    resolveFutureFromDrain(*this, ctx, msgFut,
+                                           result ? result : PROTO_NONE);
+                }
+            } catch (const FutureYield&) {
+                // Re-yield: the engine has already snapshotted + recorded
+                // the new awaited future on the actor. Keep msgFut on the
+                // actor for the next resume. The actor lock will release
+                // on return; whoever resolves the new awaited future will
+                // re-schedule us.
+                setCurrentActor(nullptr);
+                // Preserve __suspended_future__ so the next resume still
+                // knows which message-level future to settle on completion.
+                if (msgFut && msgFut != PROTO_NONE) {
+                    const_cast<proto::ProtoObject*>(actor)->setAttribute(
+                        ctx, suspFutKey, msgFut);
+                }
+                if (actorGuard.owns_lock()) actorGuard.unlock();
+                return true;
+            } catch (const std::exception& e) {
+                setCurrentActor(nullptr);
+                if (msgFut && msgFut != PROTO_NONE) {
+                    auto* err = ctx->fromUTF8String(e.what());
+                    rejectFutureFromDrain(*this, ctx, msgFut, err);
+                }
+            }
+
+            if (actorGuard.owns_lock()) actorGuard.unlock();
+            // The actor was scheduled to resume; any mailbox messages that
+            // accumulated during the yield window must still be drained.
+            // We re-schedule unconditionally if the mailbox is non-empty.
+            auto* mbAfter = actor->getAttribute(ctx, mailboxKey);
+            if (mbAfter && mbAfter != PROTO_NONE) {
+                auto* mbList = mbAfter->asList(ctx);
+                if (mbList && mbList->getSize(ctx) > 0) schedule(actor);
+            }
+            return true;
+        }
+    }
 
     const proto::ProtoObject* msg = nullptr;
     bool rescheduleAfter = false;
@@ -523,6 +672,11 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
         }
         return true;
     }
+
+    // F6 v3 C: mark this thread as "inside an actor handler" so
+    // Future>>wait throws FutureYield instead of blocking on cv. Cleared
+    // unconditionally on every exit path below.
+    setCurrentActor(actor);
 
     try {
         auto* method = wrapped ? wrapped->getAttribute(ctx, selStr) : nullptr;
@@ -576,6 +730,22 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             // AFTER drainOne had already taken its snapshot.
             resolveFutureFromDrain(*this, ctx, future, v);
         }
+    } catch (const FutureYield&) {
+        // F6 v3 C: the engine has already snapshotted frames_, stored the
+        // snapshot under __suspended_frame__ on the actor, recorded the
+        // awaited future under __waiting_on__, and appended us to the
+        // future's __waiters__ list. We just need to stash the
+        // message-level future so the resume path knows which future to
+        // resolve when the suspended frame eventually returns. We do NOT
+        // resolve `future` here and we do NOT re-schedule the actor; the
+        // future's resolve/reject will schedule us via __waiters__.
+        setCurrentActor(nullptr);
+        if (future) {
+            const_cast<proto::ProtoObject*>(actor)->setAttribute(
+                ctx, suspFutKey, future);
+        }
+        if (actorGuard.owns_lock()) actorGuard.unlock();
+        return true;
     } catch (const std::exception& e) {
         if (future) {
             auto* err = ctx->fromUTF8String(e.what());
@@ -583,6 +753,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             rejectFutureFromDrain(*this, ctx, future, err);
         }
     }
+    setCurrentActor(nullptr);
 
     // F6 v2 T3: drop the actor lock BEFORE re-scheduling. schedule() takes
     // schedMu; doing so while still holding the actor lock would not

@@ -1,6 +1,7 @@
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
+#include "runtime/FutureYield.h"
 #include "protoCore.h"
 
 #include <condition_variable>
@@ -50,6 +51,30 @@ FutureCV* getFutureCV(proto::ProtoContext* ctx, const proto::ProtoObject* fut) {
     auto* ep = cvObj->asExternalPointer(ctx);
     if (!ep) return nullptr;
     return static_cast<FutureCV*>(ep->getPointer(ctx));
+}
+
+// F6 v3 C+D: snapshot the __waiters__ list (callers always run this with
+// the future's cv mutex held, so the snapshot is atomic with respect to
+// other transitions) and clear the slot. The returned list is the set of
+// actors to schedule once the mutex is released.
+//
+// Symbol resolved fresh from the live ctx, not a function-local static:
+// protoCore interns symbols per-ProtoSpace, so a static would dangle for
+// every STRuntime after the first. The engine's FutureYield catch and
+// drainOne's resume path resolve the identical name; consistency within a
+// runtime is what makes the waiter handoff correct.
+const proto::ProtoList*
+takeAndClearWaitersLocked(proto::ProtoContext* ctx,
+                          const proto::ProtoObject* fut) {
+    const proto::ProtoString* waitersKey =
+        ctx->fromUTF8String("__waiters__")->asString(ctx);
+    auto* w = fut->getAttribute(ctx, waitersKey);
+    if (!w || w == PROTO_NONE) return nullptr;
+    auto* list = w->asList(ctx);
+    if (!list || list->getSize(ctx) == 0) return nullptr;
+    const_cast<proto::ProtoObject*>(fut)->setAttribute(
+        ctx, waitersKey, ctx->newList()->asObject(ctx));
+    return list;
 }
 
 // F6-A5: Future synchronisation primitives.
@@ -124,7 +149,7 @@ static void registerCallback(proto::ProtoContext* ctx,
 // protoCore's attribute writes are individually atomic, so getAttribute inside
 // the predicate is safe even though the future's mutex is orthogonal to
 // protoCore's own attribute CAS. The mutex here governs the cv contract only.
-const proto::ProtoObject* prim_Future_wait(STRuntime& /*rt*/, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* ctx,
                                             const proto::ProtoObject* r,
                                             const proto::ProtoObject* const*, int) {
     static const proto::ProtoString* stateKey =
@@ -142,6 +167,38 @@ const proto::ProtoObject* prim_Future_wait(STRuntime& /*rt*/, proto::ProtoContex
         // as a programming error rather than silently spinning.
         throw std::runtime_error(
             "Future>>wait: no condition variable installed on receiver");
+    }
+
+    // F6 v3 C: if we are currently executing an actor message handler
+    // (STRuntime::currentActor() is non-null on this thread) AND the
+    // future has not yet settled, COOPERATIVELY YIELD by throwing
+    // FutureYield. The engine catches this at the dispatch-loop
+    // boundary, snapshots its frame stack onto the actor, and rethrows
+    // to drainOne — which returns the worker thread to the ready queue
+    // without blocking on this future.
+    //
+    // We probe state under the cv mutex so the resolve/reject path
+    // (which holds the same mutex while writing state) cannot land
+    // between our state read and the throw. If we observed pending
+    // outside the mutex and the future settled before our throw, we
+    // would yield even though the value was already available — a
+    // performance bug but not a correctness one (the future's
+    // resolveFutureFromDrain will schedule us via __waiters__ and the
+    // resume path will see state == settled). Doing it under the mutex
+    // simply avoids that wasted round-trip.
+    if (rt.currentActor() != nullptr) {
+        std::unique_lock<std::mutex> lock(fcv->mu);
+        auto* st = r->getAttribute(ctx, stateKey);
+        long long s = st ? st->asLong(ctx) : 0;
+        if (s == 0) {
+            // Drop the lock BEFORE throwing — the engine's catch site
+            // appends us to the future's __waiters__ list, which
+            // re-acquires this same mutex via appendFutureWaiterLocked.
+            // Holding it across the throw would self-deadlock.
+            lock.unlock();
+            throw FutureYield(r);
+        }
+        // Already settled — fall through to the synchronous read below.
     }
 
     {
@@ -201,6 +258,7 @@ const proto::ProtoObject* prim_Future_resolve(STRuntime& rt, proto::ProtoContext
     // simplest way to enforce that is to fire callbacks while still holding
     // the mutex the waiter must reacquire to return from cv.wait.
     auto* fcv = getFutureCV(ctx, r);
+    const proto::ProtoList* waitersSnapshot = nullptr;
     auto doTransition = [&]() {
         const_cast<proto::ProtoObject*>(r)->setAttribute(ctx, stateKey, ctx->fromLong(1));
         const_cast<proto::ProtoObject*>(r)->setAttribute(ctx, valueKey, a[0]);
@@ -216,6 +274,9 @@ const proto::ProtoObject* prim_Future_resolve(STRuntime& rt, proto::ProtoContext
                 }
             }
         }
+        // F6 v3 D: parity with resolveFutureFromDrain — user-facing
+        // Future>>resolve: must also wake yielded waiters.
+        waitersSnapshot = takeAndClearWaitersLocked(ctx, r);
     };
     if (fcv) {
         std::lock_guard<std::mutex> lock(fcv->mu);
@@ -223,6 +284,13 @@ const proto::ProtoObject* prim_Future_resolve(STRuntime& rt, proto::ProtoContext
         fcv->cv.notify_all();
     } else {
         doTransition();
+    }
+    if (waitersSnapshot) {
+        long long n = waitersSnapshot->getSize(ctx);
+        for (long long i = 0; i < n; ++i) {
+            auto* w = waitersSnapshot->getAt(ctx, static_cast<int>(i));
+            if (w && w != PROTO_NONE) rt.schedule(w);
+        }
     }
     return r;
 }
@@ -250,6 +318,7 @@ const proto::ProtoObject* prim_Future_rejectWith(STRuntime& rt, proto::ProtoCont
 
     // F6 v2 T4: same locked-transition pattern as prim_Future_resolve.
     auto* fcv = getFutureCV(ctx, r);
+    const proto::ProtoList* waitersSnapshot = nullptr;
     auto doTransition = [&]() {
         const_cast<proto::ProtoObject*>(r)->setAttribute(ctx, stateKey, ctx->fromLong(2));
         const_cast<proto::ProtoObject*>(r)->setAttribute(ctx, errorKey, a[0]);
@@ -265,6 +334,7 @@ const proto::ProtoObject* prim_Future_rejectWith(STRuntime& rt, proto::ProtoCont
                 }
             }
         }
+        waitersSnapshot = takeAndClearWaitersLocked(ctx, r);
     };
     if (fcv) {
         std::lock_guard<std::mutex> lock(fcv->mu);
@@ -272,6 +342,13 @@ const proto::ProtoObject* prim_Future_rejectWith(STRuntime& rt, proto::ProtoCont
         fcv->cv.notify_all();
     } else {
         doTransition();
+    }
+    if (waitersSnapshot) {
+        long long n = waitersSnapshot->getSize(ctx);
+        for (long long i = 0; i < n; ++i) {
+            auto* w = waitersSnapshot->getAt(ctx, static_cast<int>(i));
+            if (w && w != PROTO_NONE) rt.schedule(w);
+        }
     }
     return r;
 }
@@ -384,6 +461,71 @@ const proto::ProtoObject* prim_Future_catch(STRuntime& rt, proto::ProtoContext* 
 
 } // anon
 
+// F6 v3 C: append an actor to the future's __waiters__ list while
+// holding the future's cv mutex. The engine's FutureYield catch path
+// calls this after recording __suspended_frame__ on the actor, so by the
+// time we return the actor is fully parked and any future state
+// transition will see it in __waiters__. Without the mutex a producer
+// thread could (a) snapshot an old __waiters__, (b) finish its
+// transition, (c) we land our actor into __waiters__ — and the actor
+// would never wake.
+//
+// Returns true if the actor was successfully parked on __waiters__;
+// false if the future had already settled between the FutureYield throw
+// and our acquisition of the mutex (in which case the caller must
+// schedule the actor itself to consume the resolved/rejected value).
+// This atomic state-check + append closes the race where:
+//   * Future>>wait reads state==0, drops the mutex, throws FutureYield;
+//   * a producer on another thread takes the mutex, transitions to
+//     settled, snapshots+clears __waiters__ (empty), notifies cv;
+//   * we re-acquire the mutex and would append a waiter to a SETTLED
+//     future whose transition path has already passed — parking the
+//     actor forever.
+// By re-reading state under the mutex BEFORE appending and signalling
+// the caller via the return value, we collapse that window.
+//
+// Declared `extern` inside ExecutionEngine.cpp at the catch site; the
+// linker connects them.
+bool appendFutureWaiterLocked(proto::ProtoContext* ctx,
+                              const proto::ProtoObject* fut,
+                              const proto::ProtoObject* waiterActor) {
+    if (!fut || !waiterActor) return false;
+    // Symbols resolved fresh from the live ctx (per-ProtoSpace interning;
+    // see takeAndClearWaitersLocked).
+    const proto::ProtoString* waitersKey =
+        ctx->fromUTF8String("__waiters__")->asString(ctx);
+    const proto::ProtoString* stateKey =
+        ctx->fromUTF8String("__state__")->asString(ctx);
+    auto* fcv = getFutureCV(ctx, fut);
+    bool parked = false;
+    auto doAppend = [&]() {
+        auto* st = fut->getAttribute(ctx, stateKey);
+        long long s = st ? st->asLong(ctx) : 0;
+        if (s != 0) {
+            // Future already settled. Don't append — caller schedules
+            // the actor manually so the resume path sees the settled
+            // state.
+            parked = false;
+            return;
+        }
+        auto* existing = fut->getAttribute(ctx, waitersKey);
+        const proto::ProtoList* list = nullptr;
+        if (existing && existing != PROTO_NONE) list = existing->asList(ctx);
+        if (!list) list = ctx->newList();
+        auto* newList = list->appendLast(ctx, waiterActor);
+        const_cast<proto::ProtoObject*>(fut)
+            ->setAttribute(ctx, waitersKey, newList->asObject(ctx));
+        parked = true;
+    };
+    if (fcv) {
+        std::lock_guard<std::mutex> lock(fcv->mu);
+        doAppend();
+    } else {
+        doAppend();
+    }
+    return parked;
+}
+
 // F6 v2 T4: attach a fresh FutureCV to a newly minted future. The cv is
 // owned by an ExternalPointer whose finalizer (futureCVFinalizer) deletes
 // the heap object at GC reclamation. Called from STRuntime::newFuture.
@@ -445,6 +587,7 @@ void resolveFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
         proto::ProtoString::createSymbol(ctx, "__then_cbs__");
 
     auto* fcv = getFutureCV(ctx, future);
+    const proto::ProtoList* waitersSnapshot = nullptr;
     auto doTransition = [&]() {
         const_cast<proto::ProtoObject*>(future)
             ->setAttribute(ctx, stateKey, ctx->fromLong(1));
@@ -462,6 +605,9 @@ void resolveFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
                 }
             }
         }
+        // F6 v3 D: snapshot + clear __waiters__ before releasing the
+        // mutex; scheduling happens outside the mutex below.
+        waitersSnapshot = takeAndClearWaitersLocked(ctx, future);
     };
     if (fcv) {
         std::lock_guard<std::mutex> lock(fcv->mu);
@@ -469,6 +615,17 @@ void resolveFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
         fcv->cv.notify_all();
     } else {
         doTransition();
+    }
+    // F6 v3 D: reschedule every yielded actor that was waiting on this
+    // future. schedule() takes schedMu; doing so outside fcv->mu keeps
+    // the established lock order (schedMu disjoint from per-future
+    // mutexes) consistent with drainOne and the SEND fast-path.
+    if (waitersSnapshot) {
+        long long n = waitersSnapshot->getSize(ctx);
+        for (long long i = 0; i < n; ++i) {
+            auto* a = waitersSnapshot->getAt(ctx, static_cast<int>(i));
+            if (a && a != PROTO_NONE) rt.schedule(a);
+        }
     }
 }
 
@@ -484,6 +641,7 @@ void rejectFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
         proto::ProtoString::createSymbol(ctx, "__catch_cbs__");
 
     auto* fcv = getFutureCV(ctx, future);
+    const proto::ProtoList* waitersSnapshot = nullptr;
     auto doTransition = [&]() {
         const_cast<proto::ProtoObject*>(future)
             ->setAttribute(ctx, stateKey, ctx->fromLong(2));
@@ -501,6 +659,11 @@ void rejectFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
                 }
             }
         }
+        // F6 v3 D: same waiter-handoff as resolveFutureFromDrain — a
+        // yielded actor that was waiting on a future that ends up
+        // rejected still needs to be resumed (the resume path will
+        // detect state==2 and rethrow inside the resumed frame).
+        waitersSnapshot = takeAndClearWaitersLocked(ctx, future);
     };
     if (fcv) {
         std::lock_guard<std::mutex> lock(fcv->mu);
@@ -508,6 +671,13 @@ void rejectFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
         fcv->cv.notify_all();
     } else {
         doTransition();
+    }
+    if (waitersSnapshot) {
+        long long n = waitersSnapshot->getSize(ctx);
+        for (long long i = 0; i < n; ++i) {
+            auto* a = waitersSnapshot->getAt(ctx, static_cast<int>(i));
+            if (a && a != PROTO_NONE) rt.schedule(a);
+        }
     }
 }
 

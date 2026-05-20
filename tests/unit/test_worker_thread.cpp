@@ -167,3 +167,212 @@ TEST_CASE("F6 v2 T7: two actors run in parallel (wall-clock proof)",
     // workers in parallel, which is exactly the bug we want to detect.
     REQUIRE(elapsed_ms < 350);
 }
+
+// ---------------------------------------------------------------------------
+// F6 v3 C+D — cooperative yield + resume.
+//
+// The flagship test below exercises the full yield/resume cycle from
+// Smalltalk code:
+//
+//   1. Two actors `echo` and `caller` are created. `caller` holds a
+//      reference to `echo` in an instance variable.
+//   2. The main thread sends `ask: 21` to `caller`, getting back a Future.
+//   3. `caller`'s handler sends `respond: 21` to `echo` (returns a Future)
+//      and then calls `wait` on it.
+//   4. Because we are inside an actor handler AND the inner future is
+//      still pending, Future>>wait throws FutureYield. ExecutionEngine
+//      catches it, snapshots `caller`'s frames onto `caller`, appends
+//      `caller` to the inner future's __waiters__, and rethrows.
+//   5. STRuntime::drainOne catches FutureYield, stashes the message-
+//      level Future on `caller`, and returns without resolving it. The
+//      worker thread is now free to drain another actor.
+//   6. Some worker (possibly the same one) picks up `echo`, runs
+//      `echo respond: 21`, resolves the inner future with 42. The
+//      resolveFutureFromDrain helper walks the inner future's
+//      __waiters__ list and schedules `caller` for resume.
+//   7. drainOne pops `caller`, sees __suspended_frame__, restores the
+//      snapshot, pushes 42 onto the resumed frame's opStack (the value
+//      `wait` would have returned synchronously), and continues. The
+//      handler returns 42; drainOne resolves the message-level future.
+//   8. The main thread's outer `fa wait` returns 42.
+//
+// This is the load-bearing F6 v3 test: every component (FutureYield
+// throw, snapshot, waiter handoff, schedule from resolve, resume from
+// snapshot, opStack injection) has to behave correctly or the test
+// either hangs (timeout) or returns the wrong value.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("F6 v3 C+D: actor handler that waits on another actor's future "
+          "yields and resumes",
+          "[engine][actors][f6v3][yield]") {
+    const char* src =
+        "Object subclass: #Echo. "
+        "Echo >> respond: x ^ x * 2. "
+        "Object subclass: #Caller instanceVariableNames: 'echo'. "
+        "Caller >> initWith: e echo := e. "
+        "Caller >> ask: x | f | f := echo respond: x. ^ f wait. "
+        "echo := Echo newChild asActor. "
+        "caller := Caller newChild. "
+        "caller initWith: echo. "
+        "callerActor := caller asActor. "
+        "fa := callerActor ask: 21. "
+        "fa wait.";
+
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C;
+    auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r != nullptr);
+    REQUIRE(r->asLong(rt.rootCtx()) == 42);
+}
+
+TEST_CASE("F6 v3 C+D: actor waiting on an already-resolved future does not "
+          "yield (fast path)",
+          "[engine][actors][f6v3][yield]") {
+    // When an actor's handler calls wait on a future that has ALREADY
+    // resolved, the synchronous fast-path inside prim_Future_wait should
+    // return the value without throwing FutureYield. This exercises the
+    // "in actor handler but state != 0" branch of the wait primitive.
+    //
+    // We construct the scenario by:
+    //   1. Sending `respond:` to `echo` from the main thread, getting
+    //      back a Future `innerF`.
+    //   2. Calling `innerF wait` from main to make sure the future is
+    //      fully resolved (state == 1, __value__ set) BEFORE we ever
+    //      forward it to an actor.
+    //   3. Sending `waitF: innerF` to a Holder actor. The handler
+    //      calls `innerF wait`. Since the future is already resolved,
+    //      this should return synchronously without yielding.
+    //
+    // If the wait incorrectly yielded on a resolved future, the resumed
+    // actor would either hang (no waiter handoff path) or read the
+    // wrong value. A correct fast-path returns `__value__` directly.
+    const char* src =
+        "Object subclass: #Echo. "
+        "Echo >> respond: x ^ x * 3. "
+        "Object subclass: #Holder. "
+        "Holder >> waitF: anF ^ anF wait. "
+        "echo := Echo newChild asActor. "
+        "h := Holder newChild asActor. "
+        "innerF := echo respond: 33. "
+        "innerF wait. "
+        "(h waitF: innerF) wait.";
+
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C;
+    auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r != nullptr);
+    REQUIRE(r->asLong(rt.rootCtx()) == 99);
+}
+
+TEST_CASE("F6 v3 C+D: rejected awaited future propagates through resumed actor "
+          "as a rejection on the message-level future",
+          "[engine][actors][f6v3][yield]") {
+    // Scenario: caller's handler waits on a future that ends up REJECTED.
+    // resumeWith throws std::runtime_error inside the resumed engine,
+    // which propagates out through continueRun, drainOne catches it and
+    // rejects the message-level future. The main thread's outer wait
+    // re-throws as std::runtime_error.
+    //
+    // The producer here is a primitive on Echo that uses Future>>rejectWith:
+    // directly inside its body. The synchronous-completion path of
+    // drainOne would normally resolve the message future with the
+    // method's return value, but rejectWith: + return of nil from a
+    // method that already settled the future is fine — the resolve at
+    // the end of drainOne sees state != 0 and no-ops.
+    //
+    // To keep the test focused, we use a method that throws via the
+    // doesNotUnderstand path on a junk send; the standard exception
+    // catch in drainOne rejects the future for us.
+    const char* src =
+        "Object subclass: #Echo. "
+        "Echo >> failNow ^ self noSuchSelectorEver. "
+        "Object subclass: #Caller instanceVariableNames: 'echo'. "
+        "Caller >> initWith: e echo := e. "
+        "Caller >> ask | f | f := echo failNow. ^ f wait. "
+        "echo := Echo newChild asActor. "
+        "caller := Caller newChild. "
+        "caller initWith: echo. "
+        "callerActor := caller asActor. "
+        "fa := callerActor ask. ";
+
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C;
+    auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    auto* fa = rt.runTopLevel(*bc);
+    REQUIRE(fa != nullptr);
+
+    // The message-level future for callerActor::ask should be rejected
+    // because the inner echo::failNow rejection propagates through the
+    // yielded wait. We invoke wait from the main thread to read the
+    // status; the wait should throw std::runtime_error.
+    //
+    // Future>>wait on a rejected future throws std::runtime_error with
+    // "Future rejected: ..." prefix. We probe via the future's state
+    // directly so the test stays independent of the exact message text.
+    auto* ctx = rt.rootCtx();
+    auto* stateKey = proto::ProtoString::createSymbol(ctx, "__state__");
+    // The main thread blocks here until the actor pipeline settles fa.
+    bool rejected = false;
+    try {
+        // Compile + run a `fa wait` snippet in a fresh module since fa
+        // is exposed only through the original top-level eval. Reuse
+        // the same runtime so the queue and workers keep draining.
+        // Simpler: poll the future state for up to a few hundred ms.
+        for (int i = 0; i < 200; ++i) {
+            auto* st = fa->getAttribute(ctx, stateKey);
+            long long s = st ? st->asLong(ctx) : 0;
+            if (s != 0) {
+                rejected = (s == 2);
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    } catch (...) { /* polling path doesn't throw */ }
+    REQUIRE(rejected);
+}
+
+TEST_CASE("F6 v3 C+D: main-thread wait on pending future still blocks on cv "
+          "(no yield outside actor context)",
+          "[engine][actors][f6v3][yield]") {
+    // Regression guard for the original F6 v2 main-thread wait path:
+    // when no actor is currently being processed on the calling thread
+    // (i.e. STRuntime::currentActor() returns nullptr), wait must NOT
+    // throw FutureYield. The existing F6 hero test (Counter actor +
+    // wait from main) already covers this, but we add an explicit check
+    // here to make the contract observable in the F6 v3 test group.
+    const char* src =
+        "Object subclass: #Adder. "
+        "Adder >> add: x ^ x + 100. "
+        "a := Adder newChild asActor. "
+        "f := a add: 42. "
+        "f wait.";
+
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C;
+    auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r != nullptr);
+    REQUIRE(r->asLong(rt.rootCtx()) == 142);
+}

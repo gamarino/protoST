@@ -87,6 +87,19 @@ public:
     // a non-nil __wrapped__ attribute (set by Object>>asActor).
     bool isActor(proto::ProtoContext* ctx, const proto::ProtoObject* obj) const;
 
+    // F6 v3 C: thread-local "actor currently being processed by drainOne on
+    // THIS thread". Future>>wait consults this to decide between blocking on
+    // the future's cv (main thread / non-actor context) and throwing
+    // FutureYield (inside an actor handler).
+    //
+    // drainOne is the sole writer: it sets the pointer to the actor before
+    // dispatching the user method, clears it after (including on the
+    // FutureYield catch path). Workers each have their own slot because the
+    // pointer is thread_local, so two workers processing two different
+    // actors don't trample each other.
+    void setCurrentActor(const proto::ProtoObject* actor);
+    const proto::ProtoObject* currentActor() const;
+
     // F5 module system
     // Resolve a logical module path (e.g. "mylib") to a filesystem path.
     // Search order: cwd, $STPATH (colon-separated), active venv's
