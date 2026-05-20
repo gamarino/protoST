@@ -38,8 +38,23 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
     const proto::ProtoObject* capDict = block->getAttribute(ctx, capKey);
     if (capDict == PROTO_NONE) capDict = nullptr;
 
+    // Track 1 slice 1: thread the block's home method activation through to
+    // the nested engine's initial (block) frame. PUSH_BLOCK stamped
+    // `__home_frame__` with the creating method's homeFrameId; an `^expr`
+    // inside this block must return from THAT method, not from the block.
+    // The nested engine cannot see the home frame (it lives in the parent
+    // engine's frames_), so its RETURN handler throws a NonLocalReturn which
+    // bubbles past invokeBlock to the parent engine's runLoop.
+    static const proto::ProtoString* homeKey =
+        proto::ProtoString::createSymbol(ctx, "__home_frame__");
+    unsigned long homeFrameId = 0;
+    const proto::ProtoObject* homeObj = block->getAttribute(ctx, homeKey);
+    if (homeObj && homeObj != PROTO_NONE)
+        homeFrameId = static_cast<unsigned long>(homeObj->asLong(ctx));
+
     ExecutionEngine eng(rt);
-    return eng.runWithArgs(ctx, *sub, /*self=*/PROTO_NONE, args, argc, capDict);
+    return eng.runWithArgs(ctx, *sub, /*self=*/PROTO_NONE, args, argc,
+                           capDict, homeFrameId);
 }
 
 namespace {

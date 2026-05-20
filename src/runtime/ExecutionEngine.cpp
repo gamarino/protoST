@@ -21,6 +21,7 @@
 #include "BytecodeModule.h"
 #include "Bootstrap.h"
 #include "FutureYield.h"
+#include "NonLocalReturn.h"
 #include "SchedDiag.h"
 #include "Opcodes.h"
 #include "ActorLock.h"
@@ -32,6 +33,7 @@
 #include "protoCore.h"
 
 #include <algorithm>
+#include <atomic>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -40,6 +42,14 @@
 namespace protoST {
 
 namespace {
+
+// Track 1 slice 1: process-global frame-id allocator. Every frame pushed by
+// ANY ExecutionEngine on ANY thread takes the next id. 0 is the reserved
+// "none" sentinel (a default-constructed Frame, or "no home recorded"), so
+// the counter starts at 1. Global ids let a block's homeFrameId identify its
+// home method unambiguously across engine boundaries and across the
+// snapshot/restore that backs cooperative yield.
+std::atomic<unsigned long> g_nextFrameId{1};
 
 // F6 v3 E3: per-frame slot geometry.
 //
@@ -181,13 +191,20 @@ ExecutionEngine::pushFrame(const BytecodeModule* m,
                            const proto::ProtoObject* self,
                            const proto::ProtoObject* captured,
                            const proto::ProtoObject* const* args,
-                           unsigned int argc) {
+                           unsigned int argc,
+                           unsigned long homeFrameId) {
     Frame fr;
     fr.m          = m;
     fr.pc         = 0;
     fr.localCount = computeLocalCount(*m, argc);
     fr.maxStack   = kFrameMaxStk;
     fr.sp         = 0;
+    // Track 1 slice 1: assign frame identity. homeFrameId == 0 means "I am my
+    // own home" — a method or top-level frame returns from itself. A non-zero
+    // homeFrameId is a block frame inheriting its creating method's home, so
+    // an `^` inside it returns from that method.
+    fr.frameId     = g_nextFrameId.fetch_add(1, std::memory_order_relaxed);
+    fr.homeFrameId = (homeFrameId == 0) ? fr.frameId : homeFrameId;
     // F6 v3 E5: the engine's slot capacity and the TransientPin scratch
     // geometry must agree — pushFrame is a member function so it can see the
     // private constant. Frame regions occupy [0, kFrameRegionLimit); the top
@@ -248,7 +265,8 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
                              const proto::ProtoObject* selfObj,
                              const proto::ProtoObject* const* args,
                              int argc,
-                             const proto::ProtoObject* capturedDict) {
+                             const proto::ProtoObject* capturedDict,
+                             unsigned long homeFrameId) {
     // F6 v3 A: build the initial Frame and enter the single dispatch loop.
     // F6 v3 E3: the frame stack is backed by the engine context's
     // automaticLocals — a flat, GC-traced slot array. We pre-size that array
@@ -270,7 +288,8 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
     slotBase_ = g_slotCursor;
 
     pushFrame(&m, selfObj, capturedDict, args,
-              static_cast<unsigned int>(argc < 0 ? 0 : argc));
+              static_cast<unsigned int>(argc < 0 ? 0 : argc),
+              homeFrameId);
 
     return runLoop(ctx);
 }
@@ -429,24 +448,13 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 setLocal(f, arg, pop(f));
                 break;
             }
-            case Op::RETURN:
             case Op::RETURN_TOP: {
-                // F4-U4: Op::RETURN is emitted by an explicit `^expr` in a
-                // method or block body; Op::RETURN_TOP is emitted by the
-                // compiler as the implicit trailer for a top-level module
-                // and for blocks. Both pop the current frame's top-of-stack
-                // and hand it back to the caller frame (or return it to the
-                // C++ caller of run/runWithArgs when this was the last
-                // frame).
-                //
-                // F6 v3 A: with the explicit Frame stack, "caller frame" is
-                // simply frames_[size-2] after the pop. True non-local-return
-                // semantics — `^` from inside a nested block unwinds to its
-                // enclosing method — remains out of scope (the current test
-                // suite does not exercise it; the legacy recursive engine
-                // also did not implement it).
-                // TODO(F6 v3 follow-up): support non-local return by walking
-                // frames_ back to the enclosing method frame on Op::RETURN.
+                // RETURN_TOP is the compiler's implicit trailer for a block
+                // body and for a top-level module. It is ALWAYS a local
+                // return: pop exactly this frame and hand its top-of-stack
+                // to the caller frame (or back to the C++ caller of
+                // run/runWithArgs when this was the last frame). Falling off
+                // the end of a block therefore returns only from the block.
                 const proto::ProtoObject* r =
                     f.sp == 0 ? PROTO_NONE : peek(f);
                 popFrame();
@@ -455,6 +463,50 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // Reference `f` is now dangling — continue the loop so the
                 // next iteration re-acquires frames_.back().
                 continue;
+            }
+            case Op::RETURN: {
+                // Op::RETURN is emitted by an explicit `^expr` and by a
+                // method's implicit trailer. Track 1 slice 1 makes it
+                // home-aware.
+                const proto::ProtoObject* r =
+                    f.sp == 0 ? PROTO_NONE : peek(f);
+
+                if (f.homeFrameId == f.frameId) {
+                    // A method or top-level frame returning normally: the
+                    // home IS this frame. Local return — identical to
+                    // RETURN_TOP.
+                    popFrame();
+                    if (frames_.empty()) return r;
+                    push(frames_.back(), r);
+                    continue;
+                }
+
+                // A block frame running `^expr` — non-local return. Find the
+                // home method activation in THIS engine's frame stack.
+                std::size_t homeIdx = frames_.size();
+                for (std::size_t i = frames_.size(); i-- > 0; ) {
+                    if (frames_[i].frameId == f.homeFrameId) {
+                        homeIdx = i;
+                        break;
+                    }
+                }
+                if (homeIdx != frames_.size()) {
+                    // Home found locally: unwind every frame from the top
+                    // down to AND INCLUDING the home frame. popFrame()
+                    // rewinds g_slotCursor per pop, so the cursor stays
+                    // correct across the multi-frame unwind.
+                    while (frames_.size() > homeIdx)
+                        popFrame();
+                    if (frames_.empty()) return r;
+                    push(frames_.back(), r);
+                    continue;
+                }
+
+                // The home lives in an outer engine — the block was invoked
+                // through invokeBlock's nested-engine boundary. Throw so the
+                // exception unwinds the C++ stack (running RAII guards) up to
+                // the engine that owns the home frame.
+                throw NonLocalReturn(f.homeFrameId, r);
             }
             case Op::PUSH_BLOCK: {
                 // arg = block index inside f.m->blocks(). Create a fresh
@@ -474,6 +526,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     proto::ProtoString::createSymbol(ctx, "__bc_ptr__");
                 static const proto::ProtoString* capKey =
                     proto::ProtoString::createSymbol(ctx, "__captured__");
+                static const proto::ProtoString* homeKey =
+                    proto::ProtoString::createSymbol(ctx, "__home_frame__");
                 auto* bcPtrObj = ctx->fromLong(
                     reinterpret_cast<long long>(&f.m->block(arg)));
                 // `bcPtrObj` is held across the setAttribute below — pin it.
@@ -486,6 +540,19 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 block->setAttribute(
                     ctx, capKey,
                     (capD && capD != PROTO_NONE) ? capD : PROTO_NONE);
+                // Track 1 slice 1: stamp the block with the HOME method
+                // activation. We store the creating frame's homeFrameId
+                // (NOT its frameId): a block created directly in a method
+                // gets that method's home, and a block created inside an
+                // outer block inherits the same method home the outer block
+                // already carries — so `^` from any nesting depth targets
+                // the method. `f.homeFrameId` gives both cases.
+                auto* homeObj = ctx->fromLong(
+                    static_cast<long long>(f.homeFrameId));
+                // F6 v3 E5 discipline: `homeObj` is held across setAttribute
+                // on the mutable block object (which allocates) — pin it.
+                TransientPin pinHome(ctx, homeObj);
+                block->setAttribute(ctx, homeKey, homeObj);
                 push(f, block);
                 break;
             }
@@ -668,6 +735,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         proto::ProtoString::createSymbol(ctx, "__bc_ptr__");
                     static const proto::ProtoString* recvCapKey =
                         proto::ProtoString::createSymbol(ctx, "__captured__");
+                    static const proto::ProtoString* recvHomeKey =
+                        proto::ProtoString::createSymbol(ctx, "__home_frame__");
                     // getAttribute walks the receiver first then the proto
                     // chain. `__bc_ptr__` is set only on BlockClosures (by
                     // PUSH_BLOCK), never on `blockProto` itself, so a hit
@@ -704,6 +773,20 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                             auto* capDict = recv->getAttribute(ctx, recvCapKey);
                             if (!capDict || capDict == PROTO_NONE) capDict = nullptr;
 
+                            // Track 1 slice 1: read the block's home method
+                            // activation, stamped by PUSH_BLOCK. The block
+                            // frame inherits it as its homeFrameId so an
+                            // `^expr` inside the block returns from that
+                            // method, not just from the block. Absent only
+                            // for blocks not built by PUSH_BLOCK — fall back
+                            // to 0 ("own home", a plain local return).
+                            unsigned long blkHome = 0;
+                            auto* homeObj =
+                                recv->getAttribute(ctx, recvHomeKey);
+                            if (homeObj && homeObj != PROTO_NONE)
+                                blkHome = static_cast<unsigned long>(
+                                    homeObj->asLong(ctx));
+
                             // F6 v3 E3: blocks bind args into locals
                             // 0..argcOp-1 (no implicit self slot; cf.
                             // invokeBlock which passes self=PROTO_NONE).
@@ -716,7 +799,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                             // GC-traced automaticLocals.
                             pushFrame(sub, /*self=*/PROTO_NONE, capDict,
                                       sendArgs,
-                                      static_cast<unsigned int>(argcOp));
+                                      static_cast<unsigned int>(argcOp),
+                                      blkHome);
                             // `f` is now invalidated when frames_ grows
                             // its backing storage. Continue the loop so
                             // the next iteration re-acquires
@@ -1058,6 +1142,39 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     // implicit RETURN_TOP trailer is normally emitted by the compiler,
     // but be defensive).
     return PROTO_NONE;
+    } catch (const NonLocalReturn& nlr) {
+        // Track 1 slice 1: a non-local return is propagating up the C++
+        // stack. It was thrown either by THIS engine's RETURN handler (home
+        // not in our frames_) or by a nested engine reached via invokeBlock.
+        // Either way, check whether the home method activation lives in this
+        // engine's frame stack.
+        std::size_t homeIdx = frames_.size();
+        for (std::size_t i = frames_.size(); i-- > 0; ) {
+            if (frames_[i].frameId == nlr.homeFrameId()) {
+                homeIdx = i;
+                break;
+            }
+        }
+        if (homeIdx == frames_.size()) {
+            // The home belongs to an outer engine — let the exception
+            // propagate. invokeBlock's nested-engine call site does NOT
+            // swallow it; it bubbles to the parent engine's runLoop, which
+            // repeats this check.
+            throw;
+        }
+        // The home is ours: unwind every frame from the top down to and
+        // including the home frame, then resume normally with the value
+        // pushed onto the home frame's caller (or return it to the C++
+        // caller if the home was the outermost frame here).
+        const proto::ProtoObject* r = nlr.value();
+        while (frames_.size() > homeIdx)
+            popFrame();
+        if (frames_.empty())
+            return r ? r : PROTO_NONE;
+        push(frames_.back(), r ? r : PROTO_NONE);
+        // Fall through to the outer while(true) so the dispatch loop
+        // resumes on the (now top) home-caller frame.
+        continue;
     } catch (const FutureYield& y) {
         // F6 v3 C: cooperative yield. The wait primitive threw because we
         // are inside an actor handler AND the awaited future is still
@@ -1194,7 +1311,12 @@ ExecutionEngine::snapshotFrames(proto::ProtoContext* ctx) const {
     const proto::ProtoString* selfKey     = proto::ProtoString::createSymbol(ctx, "self_obj");
     const proto::ProtoString* capturedKey = proto::ProtoString::createSymbol(ctx, "captured_dict");
     const proto::ProtoString* mPtrKey     = proto::ProtoString::createSymbol(ctx, "m_ptr");
-    // F6 v3 E5: the six attribute keys are freshly interned ProtoStrings held
+    // Track 1 slice 1: frame identity. Global ids stay valid across a
+    // yield/resume with no renumbering, so a non-local return that survives a
+    // cooperative yield still finds its home after restore.
+    const proto::ProtoString* frameIdKey  = proto::ProtoString::createSymbol(ctx, "frame_id");
+    const proto::ProtoString* homeIdKey   = proto::ProtoString::createSymbol(ctx, "home_frame_id");
+    // F6 v3 E5: the attribute keys are freshly interned ProtoStrings held
     // in C++ locals for the entire frame-encoding loop, which allocates one
     // mutable object plus three lists plus an ExternalPointer PER FRAME — a
     // deep cooperative chain snapshots dozens of frames, so a GC cycle mid-
@@ -1205,6 +1327,8 @@ ExecutionEngine::snapshotFrames(proto::ProtoContext* ctx) const {
     TransientPin pinSelfKey(ctx, reinterpret_cast<const proto::ProtoObject*>(selfKey));
     TransientPin pinCapKey(ctx, reinterpret_cast<const proto::ProtoObject*>(capturedKey));
     TransientPin pinMKey(ctx, reinterpret_cast<const proto::ProtoObject*>(mPtrKey));
+    TransientPin pinFidKey(ctx, reinterpret_cast<const proto::ProtoObject*>(frameIdKey));
+    TransientPin pinHidKey(ctx, reinterpret_cast<const proto::ProtoObject*>(homeIdKey));
 
     // `result` accumulates one frameObj per frame via appendLast (COW); a
     // single pin tracks the latest list value.
@@ -1283,6 +1407,16 @@ ExecutionEngine::snapshotFrames(proto::ProtoContext* ctx) const {
                 const_cast<protoST::BytecodeModule*>(fr.m),
                 /*finalizer=*/nullptr));
 
+        // Track 1 slice 1: frame identity. Stored as SmallIntegers; the
+        // global ids are NOT renumbered on restore so a suspended home frame
+        // resolves the same way after resume.
+        frameObj->setAttribute(
+            ctx, frameIdKey,
+            ctx->fromLong(static_cast<long long>(fr.frameId)));
+        frameObj->setAttribute(
+            ctx, homeIdKey,
+            ctx->fromLong(static_cast<long long>(fr.homeFrameId)));
+
         result = result->appendLast(ctx, frameObj);
         pinResult.reset(
             reinterpret_cast<const proto::ProtoObject*>(result));
@@ -1315,7 +1449,10 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
     const proto::ProtoString* selfKey     = proto::ProtoString::createSymbol(ctx, "self_obj");
     const proto::ProtoString* capturedKey = proto::ProtoString::createSymbol(ctx, "captured_dict");
     const proto::ProtoString* mPtrKey     = proto::ProtoString::createSymbol(ctx, "m_ptr");
-    // F6 v3 E5: the six keys are held across the per-frame getAttribute loop
+    // Track 1 slice 1: frame identity (see snapshotFrames).
+    const proto::ProtoString* frameIdKey  = proto::ProtoString::createSymbol(ctx, "frame_id");
+    const proto::ProtoString* homeIdKey   = proto::ProtoString::createSymbol(ctx, "home_frame_id");
+    // F6 v3 E5: the keys are held across the per-frame getAttribute loop
     // (each turn interns nothing, but a getAttribute walk that crosses a
     // safepoint plus the array writes below can sit either side of a GC
     // cycle). Pin them — the context was sized above so the scratch region
@@ -1326,6 +1463,8 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
     TransientPin pinSelfKey(ctx, reinterpret_cast<const proto::ProtoObject*>(selfKey));
     TransientPin pinCapKey(ctx, reinterpret_cast<const proto::ProtoObject*>(capturedKey));
     TransientPin pinMKey(ctx, reinterpret_cast<const proto::ProtoObject*>(mPtrKey));
+    TransientPin pinFidKey(ctx, reinterpret_cast<const proto::ProtoObject*>(frameIdKey));
+    TransientPin pinHidKey(ctx, reinterpret_cast<const proto::ProtoObject*>(homeIdKey));
 
     if (!snapshot)
         throw std::runtime_error("restoreFrames: snapshot is null");
@@ -1382,6 +1521,18 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
         auto* selfVal = frameObj->getAttribute(ctx, selfKey);
         auto* capVal  = frameObj->getAttribute(ctx, capturedKey);
 
+        // Track 1 slice 1: frame identity. Older snapshots (none exist on
+        // disk, but be defensive) without these keys fall back to 0 — the
+        // frame then becomes its own home, i.e. plain local returns.
+        unsigned long frameId = 0;
+        unsigned long homeId  = 0;
+        auto* frameIdVal = frameObj->getAttribute(ctx, frameIdKey);
+        if (frameIdVal && frameIdVal != PROTO_NONE)
+            frameId = static_cast<unsigned long>(frameIdVal->asLong(ctx));
+        auto* homeIdVal = frameObj->getAttribute(ctx, homeIdKey);
+        if (homeIdVal && homeIdVal != PROTO_NONE)
+            homeId = static_cast<unsigned long>(homeIdVal->asLong(ctx));
+
         // F6 v3 E3: allocate this frame's slot region. localCount must be at
         // least the snapshot's locals count AND the module's own ceiling, so
         // a resumed frame can store every local the body touches. maxStack
@@ -1396,6 +1547,10 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
             kFrameMaxStk, static_cast<unsigned int>(opN));
         fr.sp         = static_cast<unsigned int>(opN);
         fr.baseSlot   = g_slotCursor;
+        // Track 1 slice 1: restore the global ids verbatim — no renumbering,
+        // so a non-local return that survives the yield finds its home.
+        fr.frameId    = frameId;
+        fr.homeFrameId = (homeId == 0) ? frameId : homeId;
 
         const unsigned int regionSize = frameRegionSize(fr);
         const unsigned int regionEnd  = fr.baseSlot + regionSize;

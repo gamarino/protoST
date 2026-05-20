@@ -2,6 +2,7 @@
 #include "protoST/primitives.h"
 #include "ExecutionEngine.h"
 #include "FutureYield.h"
+#include "NonLocalReturn.h"
 #include "BytecodeModule.h"
 #include "Bootstrap.h"
 #include "Venv.h"
@@ -609,8 +610,17 @@ STRuntime::runTopLevel(const BytecodeModule& m) {
         ~CapturedAnchorGuard() { self->registryRemove(ctx, dict); }
     } capturedAnchorGuard{this, ctx, capturedDict};
 
-    return eng.runWithArgs(ctx, m, /*self=*/PROTO_NONE,
-                           /*args=*/nullptr, /*argc=*/0, capturedDict);
+    // Track 1 slice 1: a NonLocalReturn that escapes the top-level engine has
+    // no live home frame anywhere — the block's home method already returned
+    // (a "dead home"). Convert it to a std::runtime_error so the REPL / `-e`
+    // / script callers render it the same way as any other runtime fault.
+    try {
+        return eng.runWithArgs(ctx, m, /*self=*/PROTO_NONE,
+                               /*args=*/nullptr, /*argc=*/0, capturedDict);
+    } catch (const NonLocalReturn&) {
+        throw std::runtime_error(
+            "non-local return: home method has already returned");
+    }
 }
 
 // F6 v3 E2b: anchor `o` in the live registry so the tracing GC reaches it
@@ -939,6 +949,20 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                 keepAnchored = true;
                 actorGuard.release();
                 return true;
+            } catch (const NonLocalReturn&) {
+                // Track 1 slice 1: a non-local return escaped the resumed
+                // engine with no live home frame — the home method already
+                // returned during or before the yield window (a dead home).
+                // Reject the message future the same way the fresh-handler
+                // path does.
+                SCHED_DIAG("drainOne RESUME DEAD-HOME actor=" << actor);
+                setCurrentActor(nullptr);
+                if (msgFut && msgFut != PROTO_NONE) {
+                    auto* err = ctx->fromUTF8String(
+                        "non-local return: home method has already returned");
+                    TransientPin pinErr(ctx, err);
+                    rejectFutureFromDrain(*this, ctx, msgFut, err);
+                }
             } catch (const std::exception& e) {
                 setCurrentActor(nullptr);
                 if (msgFut && msgFut != PROTO_NONE) {
@@ -1115,6 +1139,21 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
         // without the entry a fully-suspended chain would have no live GC
         // root and the tracing collector would reclaim it.
         keepAnchored = true;
+        actorGuard.release();
+        return true;
+    } catch (const NonLocalReturn&) {
+        // Track 1 slice 1: a non-local return escaped the actor handler's
+        // engine with no live home frame — the home method already returned
+        // (a "dead home"). Reject the message's Future with the dead-home
+        // error, the same way the synchronous top-level path surfaces it.
+        SCHED_DIAG("drainOne DEAD-HOME non-local return actor=" << actor);
+        setCurrentActor(nullptr);
+        if (future) {
+            auto* err = ctx->fromUTF8String(
+                "non-local return: home method has already returned");
+            TransientPin pinErr(ctx, err);
+            rejectFutureFromDrain(*this, ctx, future, err);
+        }
         actorGuard.release();
         return true;
     } catch (const std::exception& e) {

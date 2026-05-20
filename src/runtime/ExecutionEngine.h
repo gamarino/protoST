@@ -44,12 +44,20 @@ public:
     // environment for captured (free) variables in `m`. PUSH_CAPTURED reads
     // attributes from it, STORE_CAPTURED writes them. Pass nullptr if `m`
     // does not use any captured names.
+    //
+    // Track 1 slice 1: `homeFrameId` selects the initial frame's home method
+    // activation. 0 (the default) means the initial frame is its own home —
+    // used for top-level modules and user-method dispatch. A non-zero value
+    // is passed by invokeBlock when this engine runs a BLOCK whose home lives
+    // in an outer engine: an `^expr` inside such a block then throws a
+    // NonLocalReturn carrying that id, which the outer engine catches.
     const proto::ProtoObject* runWithArgs(proto::ProtoContext* ctx,
                                           const BytecodeModule& m,
                                           const proto::ProtoObject* self,
                                           const proto::ProtoObject* const* args,
                                           int argc,
-                                          const proto::ProtoObject* capturedDict = nullptr);
+                                          const proto::ProtoObject* capturedDict = nullptr,
+                                          unsigned long homeFrameId = 0);
 
     // F6 v3 B: snapshot/restore round-trip for the engine's frame stack.
     //
@@ -132,6 +140,18 @@ private:
         // that defines the currently executing method (f.m->definingClass())
         // and start at that class's parent.
         bool                  superPending = false;
+        // Track 1 slice 1: non-local return identity.
+        //   frameId      — process-globally unique id for this activation,
+        //                  assigned from g_nextFrameId at pushFrame time.
+        //   homeFrameId  — id of the home method activation. For a method or
+        //                  top-level frame homeFrameId == frameId (it is its
+        //                  own home). For a block frame it is the home id
+        //                  carried by the block object's __home_frame__ —
+        //                  the method in which the block was textually
+        //                  created. `Op::RETURN` in a block frame returns
+        //                  from the frame whose frameId == homeFrameId.
+        unsigned long         frameId      = 0;
+        unsigned long         homeFrameId  = 0;
     };
 
     // Header slots reserved at the start of every frame region.
@@ -182,11 +202,19 @@ private:
     // the vector growth; callers re-acquire frames_.back(). Initialises the
     // region's slots to PROTO_NONE, then binds the supplied arg objects into
     // locals 0..argc-1. `self` / `captured` go into the header slots.
+    //
+    // Track 1 slice 1: every pushed frame gets a process-globally unique
+    // `frameId`. `homeFrameId` selects the frame's home method activation:
+    //   * 0  — the frame IS its own home (a method or top-level frame);
+    //          pushFrame sets fr.homeFrameId = fr.frameId.
+    //   * !=0 — a block frame; fr.homeFrameId = the supplied id (the home
+    //          carried by the block object's __home_frame__ attribute).
     void pushFrame(const BytecodeModule* m,
                    const proto::ProtoObject* self,
                    const proto::ProtoObject* captured,
                    const proto::ProtoObject* const* args,
-                   unsigned int argc);
+                   unsigned int argc,
+                   unsigned long homeFrameId = 0);
 
     // Pop the top frame, rewinding the shared thread-local slot cursor.
     void popFrame();
