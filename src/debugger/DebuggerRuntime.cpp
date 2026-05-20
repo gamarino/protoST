@@ -100,11 +100,23 @@ void DebuggerRuntime::enterSession(STRuntime& rt, DebugFrame frame, const std::s
         if (line == "where" || line == "bt") {
             out << "frame depth: " << frame.frameDepth << "\n";
             out << "pc: "          << frame.pc << " / " << frame.module->bytes().size() << "\n";
-            // dump next 6 instructions
-            for (size_t k = 0; k < 6 && (frame.pc + k * 2) < frame.module->bytes().size(); ++k) {
-                Op op = static_cast<Op>(frame.module->bytes()[frame.pc + k*2]);
-                uint8_t arg = frame.module->bytes()[frame.pc + k*2 + 1];
-                out << "  " << (frame.pc + k*2) << ": op=" << static_cast<int>(op) << " arg=" << static_cast<int>(arg) << "\n";
+            // Dump the next 6 instructions. BL-2: instructions are variable
+            // width (an EXTEND prefix word per extra operand byte), so step
+            // by the real decoded width rather than a fixed 2 bytes.
+            const auto& dbg = frame.module->bytes();
+            size_t cur = frame.pc;
+            for (size_t k = 0; k < 6 && cur + 1 < dbg.size(); ++k) {
+                size_t start = cur;
+                Op op = static_cast<Op>(dbg[cur]);
+                unsigned int arg = dbg[cur + 1];
+                cur += 2;
+                while (op == Op::EXTEND && cur + 1 < dbg.size()) {
+                    op  = static_cast<Op>(dbg[cur]);
+                    arg = (arg << 8) | dbg[cur + 1];
+                    cur += 2;
+                }
+                out << "  " << start << ": op=" << static_cast<int>(op)
+                    << " arg=" << static_cast<int>(arg) << "\n";
             }
             continue;
         }

@@ -45,6 +45,9 @@ target_sources(protost_unit_tests PRIVATE
     unit/test_line_mapping.cpp
 )
 target_sources(protost_unit_tests PRIVATE
+    unit/test_wide_operands.cpp
+)
+target_sources(protost_unit_tests PRIVATE
     unit/test_dap_transport.cpp
 )
 target_compile_definitions(protost_unit_tests PRIVATE

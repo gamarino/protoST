@@ -625,18 +625,19 @@ TEST_CASE("F6 v3 E: coordinator awaits a fan-out of worker actors on 2 workers "
 // mutex acquisition GC-safe — a would-be blocking lock first leaves the GC
 // running set. This 120-link test reliably exercises that interleaving too.
 //
-// NOTE: chains substantially deeper than this currently hit a SEPARATE,
-// pre-existing defect — under deep cumulative allocation a class / method
-// binding object is reclaimed by the tracing GC, surfacing as a spurious
-// `doesNotUnderstand` (NOT a deadlock — gdb confirms the process always exits
-// with the error, never wedges). That is an engine GC-bridge / object-rooting
-// gap, distinct from this scheduler liveness fix, and is tracked separately.
-// This regression test is therefore set at a depth (120) that is reliable
-// across worker counts while still firmly exercising the fixed deadlock.
-TEST_CASE("F6 v3 E2: 120-link dependency chain runs on 2 workers without "
-          "stalling (cooperative)",
-          "[engine][f6v3][yield][cooperative]") {
-    REQUIRE(runChain(120, "2") == 120);
+// BL-2: this regression was previously capped at depth 120. The chain helper
+// declares N+1 module-level variables (a0..aN-1 plus `tail`); past N==255 the
+// 256th local's slot index wrapped the 8-bit operand and the chain mis-wired.
+// With wide operands (EXTEND prefix) that ISA ceiling is gone, so the depth is
+// raised to 400 — comfortably past 255 — exercising both the cooperative
+// scheduler liveness fix AND the wide local-slot encoding under deep
+// cumulative allocation. The historical "spurious doesNotUnderstand at deeper
+// chains" note no longer reproduces at 400 (the F6 v3 E3/E5 frame GC-rooting
+// work that post-dated that note keeps the binding objects reachable).
+TEST_CASE("BL-2: 400-link dependency chain runs on 2 workers without "
+          "stalling (cooperative, wide locals)",
+          "[engine][f6v3][yield][cooperative][bl2]") {
+    REQUIRE(runChain(400, "2") == 400);
 }
 
 // Single-worker variant: one worker thread serving a 120-deep interdependent
@@ -644,10 +645,10 @@ TEST_CASE("F6 v3 E2: 120-link dependency chain runs on 2 workers without "
 // deadlock at depth 1, and the GC-starvation deadlock fixed in E2 would wedge
 // it once a GC cycle fires. Cooperative yield + GC-safe blocking keep it
 // alive.
-TEST_CASE("F6 v3 E2: 120-link dependency chain runs on a SINGLE worker "
-          "without stalling (cooperative)",
-          "[engine][f6v3][yield][cooperative]") {
-    REQUIRE(runChain(120, "1") == 120);
+TEST_CASE("BL-2: 400-link dependency chain runs on a SINGLE worker "
+          "without stalling (cooperative, wide locals)",
+          "[engine][f6v3][yield][cooperative][bl2]") {
+    REQUIRE(runChain(400, "1") == 400);
 }
 
 // F6 v3 E3 — engine frame stack GC-rooting tests.
@@ -780,9 +781,11 @@ TEST_CASE("F6 v3 E3: cooperative chain survives aggressive GC (frame slots "
     setenv("PROTOCORE_GC_CONTEXT_THRESHOLD", "1", 1);
 
     // Single worker: the strongest cooperative-yield stress — one thread
-    // cycles through all 51 actors, snapshotting/restoring frames repeatedly
-    // while the GC hammers every allocation.
-    REQUIRE(runChain(50, "1") == 50);
+    // cycles through all 401 actors, snapshotting/restoring frames repeatedly
+    // while the GC hammers every allocation. BL-2: raised from 50 to 400 so
+    // this also exercises wide local-slot operands (a0..a399 are module
+    // locals) under aggressive GC.
+    REQUIRE(runChain(400, "1") == 400);
 
     unsetenv("PROTOCORE_GC_CONTEXT_THRESHOLD");
 }

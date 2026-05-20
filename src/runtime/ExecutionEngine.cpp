@@ -81,11 +81,20 @@ unsigned int computeLocalCount(const BytecodeModule& m, unsigned int argc) {
     const auto& bytes = m.bytes();
     unsigned int maxSlot = 0;
     bool sawSlot = false;
-    for (std::size_t pc = 0; pc + 1 < bytes.size(); pc += kInstrSize) {
-        const Op op = static_cast<Op>(bytes[pc]);
+    // BL-2: the scan must decode EXTEND prefixes exactly as the engine does,
+    // or a PUSH_LOCAL / STORE_LOCAL with a slot index > 255 would be read as
+    // its low byte only and the frame's slot region would be undersized.
+    for (std::size_t pc = 0; pc + 1 < bytes.size(); ) {
+        Op op = static_cast<Op>(bytes[pc]);
+        unsigned int arg = bytes[pc + 1];
+        pc += kInstrSize;
+        while (op == Op::EXTEND && pc + 1 < bytes.size()) {
+            op  = static_cast<Op>(bytes[pc]);
+            arg = (arg << 8) | bytes[pc + 1];
+            pc += kInstrSize;
+        }
         if (op == Op::PUSH_LOCAL || op == Op::STORE_LOCAL) {
-            unsigned int slot = bytes[pc + 1];
-            if (!sawSlot || slot > maxSlot) { maxSlot = slot; sawSlot = true; }
+            if (!sawSlot || arg > maxSlot) { maxSlot = arg; sawSlot = true; }
         }
     }
     unsigned int needed = sawSlot ? (maxSlot + 1) : 0;
@@ -366,9 +375,27 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                                         "breakpoint");
         }
 
-        const Op op = static_cast<Op>(bytes[f.pc]);
-        const uint8_t arg = bytes[f.pc + 1];
+        // BL-2: wide-operand decode. An instruction is one or more EXTEND
+        // prefix words followed by the real opcode word. Each EXTEND carries
+        // the next-most-significant 8 bits of the operand; the engine shifts
+        // the accumulator left 8 and ORs in each prefix, then ORs the real
+        // word's low byte. A plain (non-wide) instruction skips the loop and
+        // `arg` is just bytes[pc+1], identical to the pre-BL-2 behaviour.
+        //
+        // `f.pc` is advanced past EVERY consumed word so it always lands on
+        // the next instruction boundary — snapshot/restore (which stores the
+        // raw pc) therefore still resumes correctly.
+        Op op = static_cast<Op>(bytes[f.pc]);
+        unsigned int arg = bytes[f.pc + 1];
         f.pc += kInstrSize;
+        while (op == Op::EXTEND) {
+            if (f.pc + 1 >= bytes.size())
+                throw std::runtime_error(
+                    "ExecutionEngine: truncated EXTEND prefix");
+            op  = static_cast<Op>(bytes[f.pc]);
+            arg = (arg << 8) | bytes[f.pc + 1];
+            f.pc += kInstrSize;
+        }
 
         switch (op) {
             case Op::NOP:
@@ -1013,6 +1040,13 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     push(frames_.back(), r);
                     continue;
                 }
+            case Op::EXTEND:
+                // BL-2: unreachable — the decode loop above consumes every
+                // EXTEND prefix before the switch. A bare EXTEND reaching
+                // here would mean a malformed instruction stream.
+                throw std::runtime_error(
+                    "ExecutionEngine: stray EXTEND prefix at pc=" +
+                    std::to_string(f.pc - kInstrSize));
             default:
                 throw std::runtime_error(
                     "ExecutionEngine: unimplemented opcode at pc=" +

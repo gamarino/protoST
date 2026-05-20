@@ -22,11 +22,21 @@ public:
 
     // emission
     // `line` is the 1-based source line the instruction originates from;
-    // 0 means "unknown". One line entry is recorded per 2-byte instruction.
+    // 0 means "unknown". One line entry is recorded per emitted 2-byte
+    // instruction word. With wide operands an instruction may span several
+    // words (one or more EXTEND prefixes plus the real opcode word); each
+    // word records the same line and its own byte-start, so the line map
+    // stays correct for variable-width instructions (BL-2).
     void emit(Op op, uint8_t arg, int line = 0);
 
+    // BL-2: emit `op` with a possibly-wide operand. When `arg` exceeds 255 an
+    // EXTEND prefix word is emitted carrying the high byte(s); the engine
+    // latches those bits and combines them with the real word's low byte.
+    // Operands up to 2^24-1 are supported (two EXTEND prefixes at most).
+    void emitWide(Op op, unsigned int arg, int line = 0);
+
     // patching (for jumps) — patchArg rewrites only the arg byte of an
-    // already-emitted instruction, so the line map is unaffected.
+    // already-emitted instruction word, so the line map is unaffected.
     size_t  pos() const { return bytes_.size(); }
     void    patchArg(size_t bytePos, uint8_t arg) { bytes_[bytePos + 1] = arg; }
 
@@ -64,21 +74,40 @@ public:
     void setDefiningClass(const std::string& s) { definingClass_ = s; }
     const std::string& definingClass() const { return definingClass_; }
 
-    // F8-1: source-line mapping. Each 2-byte instruction has one entry in
-    // instrLines_; instruction index = pc / 2.
+    // F8-1 / BL-2: source-line mapping. instrLines_ holds one line entry per
+    // emitted 2-byte word; instrStartPc_ holds the byte offset of each word.
+    // For a fixed-width module (no EXTEND prefixes) instrStartPc_[i] == i*2,
+    // so pc/2 indexing still holds; once wide operands appear the byte offset
+    // is no longer i*2 and lineForPc must look pc up by its real start.
+    //
+    // The F8-1 API is unchanged: lineForPc(pc) -> line, firstPcForLine(line)
+    // -> lowest breakable pc. Only the indexing scheme behind them changed.
     int lineForPc(size_t pc) const {
-        size_t i = pc / 2;
-        return (i < instrLines_.size()) ? instrLines_[i] : 0;
+        // Fast path: an instruction word starts exactly at `pc`.
+        for (size_t i = 0; i < instrStartPc_.size(); ++i) {
+            if (instrStartPc_[i] == pc) return instrLines_[i];
+        }
+        // Slow path: `pc` lands inside a word (defensive — callers always
+        // pass instruction-aligned pcs). Return the line of the word that
+        // contains it.
+        int last = 0;
+        for (size_t i = 0; i < instrStartPc_.size(); ++i) {
+            if (instrStartPc_[i] <= pc) last = instrLines_[i];
+            else break;
+        }
+        return (pc < bytes_.size()) ? last : 0;
     }
     // Lowest pc whose instruction maps to `line`. Returns SIZE_MAX when no
     // instruction maps to that line (used for breakpoint resolution).
     size_t firstPcForLine(int line) const {
         for (size_t i = 0; i < instrLines_.size(); ++i) {
-            if (instrLines_[i] == line) return i * 2;
+            if (instrLines_[i] == line) return instrStartPc_[i];
         }
         return SIZE_MAX;
     }
     const std::vector<int>& instrLines() const { return instrLines_; }
+    // BL-2: byte offset of each instruction word, parallel to instrLines_.
+    const std::vector<size_t>& instrStartPc() const { return instrStartPc_; }
 
     // F8-4: local-slot names. The compiler addresses locals by slot index;
     // the bytecode itself carries no names. To let the DAP Variables panel
@@ -112,7 +141,8 @@ public:
 
 private:
     std::vector<uint8_t>                bytes_;
-    std::vector<int>                    instrLines_;  // F8-1: line per instruction
+    std::vector<int>                    instrLines_;   // F8-1: line per word
+    std::vector<size_t>                 instrStartPc_; // BL-2: byte start per word
     std::string                         sourceName_;  // F8-1: source file path
     std::vector<std::string>            localNames_;  // F8-4: name per local slot
     std::string                         debugName_;   // F8-4: human label

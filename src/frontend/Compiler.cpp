@@ -238,15 +238,12 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         auto superIdx     = m.internSymbol(superName);
         auto newChildIdx  = m.internSymbol("newChild");
         auto classNameIdx = m.internSymbol(n.text);
-        if (superIdx > 255 || newChildIdx > 255 || classNameIdx > 255) {
-            error("symbol pool overflow in ClassDecl");
-            m.emit(Op::PUSH_NIL, 0, currentLine_);
-            return;
-        }
-        m.emit(Op::PUSH_GLOBAL,  static_cast<uint8_t>(superIdx), currentLine_);
-        m.emit(Op::SEND_UNARY,   static_cast<uint8_t>(newChildIdx), currentLine_);
+        // BL-2: indices may exceed 255 — emitWide prefixes EXTEND words as
+        // needed, so there is no longer a 256-symbol ceiling.
+        m.emitWide(Op::PUSH_GLOBAL,  static_cast<unsigned int>(superIdx), currentLine_);
+        m.emitWide(Op::SEND_UNARY,   static_cast<unsigned int>(newChildIdx), currentLine_);
         m.emit(Op::DUP,          0, currentLine_);
-        m.emit(Op::STORE_GLOBAL, static_cast<uint8_t>(classNameIdx), currentLine_);
+        m.emitWide(Op::STORE_GLOBAL, static_cast<unsigned int>(classNameIdx), currentLine_);
         return;
     }
     if (n.kind == NodeKind::MethodDecl) {
@@ -328,7 +325,6 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
 
         // Attach the method module as a sub-block of the outer (module) bytecode.
         size_t blkIdx = m.addBlockModule(std::move(sub));
-        if (blkIdx > 255) { error("method block index overflow"); return; }
 
         // Module-level emission: load class, push method wrapper, push selector
         // symbol, send #__installMethod:as: to the class. The send returns the
@@ -337,15 +333,11 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         auto classIdx    = m.internSymbol(n.text);
         auto selectorIdx = m.internSymbol(n.stringList[0]);
         auto installIdx  = m.internSymbol("__installMethod:as:");
-        if (classIdx > 255 || selectorIdx > 255 || installIdx > 255) {
-            error("symbol pool overflow in MethodDecl");
-            return;
-        }
 
-        m.emit(Op::PUSH_GLOBAL,  static_cast<uint8_t>(classIdx), currentLine_);    // class
-        m.emit(Op::PUSH_BLOCK,   static_cast<uint8_t>(blkIdx), currentLine_);      // method wrapper
-        m.emit(Op::PUSH_CONST,   static_cast<uint8_t>(selectorIdx), currentLine_); // selector symbol
-        m.emit(Op::SEND_KEYWORD, static_cast<uint8_t>(installIdx), currentLine_);  // → class
+        m.emitWide(Op::PUSH_GLOBAL,  static_cast<unsigned int>(classIdx), currentLine_);    // class
+        m.emitWide(Op::PUSH_BLOCK,   static_cast<unsigned int>(blkIdx), currentLine_);      // method wrapper
+        m.emitWide(Op::PUSH_CONST,   static_cast<unsigned int>(selectorIdx), currentLine_); // selector symbol
+        m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(installIdx), currentLine_);  // → class
 
         // F4-U5: clear the method-body name-resolution context.
         currentMethodClass_.clear();
@@ -361,9 +353,8 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         if (isCaptured(n.text)) {
             emitExpr(m, *n.children[0]);
             auto sym = m.internSymbol(n.text);
-            if (sym > 255) { error("captured-name symbol pool overflow"); return; }
             m.emit(Op::DUP, 0, currentLine_);
-            m.emit(Op::STORE_CAPTURED, static_cast<uint8_t>(sym), currentLine_);
+            m.emitWide(Op::STORE_CAPTURED, static_cast<unsigned int>(sym), currentLine_);
             return;
         }
         // F4-U5: instance variable of the current method's class.
@@ -371,9 +362,8 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             if (iv == n.text) {
                 emitExpr(m, *n.children[0]);
                 auto sym = m.internSymbol(n.text);
-                if (sym > 255) { error("inst-var symbol pool overflow"); return; }
                 m.emit(Op::DUP, 0, currentLine_);
-                m.emit(Op::STORE_INSTVAR, static_cast<uint8_t>(sym), currentLine_);
+                m.emitWide(Op::STORE_INSTVAR, static_cast<unsigned int>(sym), currentLine_);
                 return;
             }
         }
@@ -382,15 +372,14 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         if (replMode_ && atModuleScope()) {
             emitExpr(m, *n.children[0]);
             auto sym = m.internSymbol(n.text);
-            if (sym > 255) { error("global symbol pool overflow"); return; }
             m.emit(Op::DUP, 0, currentLine_);
-            m.emit(Op::STORE_GLOBAL, static_cast<uint8_t>(sym), currentLine_);
+            m.emitWide(Op::STORE_GLOBAL, static_cast<unsigned int>(sym), currentLine_);
             return;
         }
         int slot = declareLocal(n.text);
         emitExpr(m, *n.children[0]);
         m.emit(Op::DUP, 0, currentLine_);
-        m.emit(Op::STORE_LOCAL, static_cast<uint8_t>(slot), currentLine_);
+        m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slot), currentLine_);
         return;
     }
     emitExpr(m, n);
@@ -402,32 +391,29 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
     switch (n.kind) {
         case NodeKind::IntegerLit: {
             auto idx = m.addInteger(n.intValue);
-            if (idx > 255) { error("integer constant pool overflow > 255 (EXTEND not yet emitted in F2)"); return; }
-            m.emit(Op::PUSH_CONST, static_cast<uint8_t>(idx), currentLine_);
+            // BL-2: constant-pool indices may exceed 255 — emitWide prefixes
+            // EXTEND words as needed, lifting the old 256-constant ceiling.
+            m.emitWide(Op::PUSH_CONST, static_cast<unsigned int>(idx), currentLine_);
             return;
         }
         case NodeKind::FloatLit: {
             auto idx = m.addFloat(n.floatValue);
-            if (idx > 255) { error("float constant pool overflow"); return; }
-            m.emit(Op::PUSH_CONST, static_cast<uint8_t>(idx), currentLine_);
+            m.emitWide(Op::PUSH_CONST, static_cast<unsigned int>(idx), currentLine_);
             return;
         }
         case NodeKind::StringLit: {
             auto idx = m.addString(n.text);
-            if (idx > 255) { error("string constant pool overflow"); return; }
-            m.emit(Op::PUSH_CONST, static_cast<uint8_t>(idx), currentLine_);
+            m.emitWide(Op::PUSH_CONST, static_cast<unsigned int>(idx), currentLine_);
             return;
         }
         case NodeKind::SymbolLit: {
             auto idx = m.internSymbol(n.text);
-            if (idx > 255) { error("symbol constant pool overflow"); return; }
-            m.emit(Op::PUSH_CONST, static_cast<uint8_t>(idx), currentLine_);
+            m.emitWide(Op::PUSH_CONST, static_cast<unsigned int>(idx), currentLine_);
             return;
         }
         case NodeKind::CharLit: {
             auto idx = m.addChar(n.text);
-            if (idx > 255) { error("char constant pool overflow"); return; }
-            m.emit(Op::PUSH_CONST, static_cast<uint8_t>(idx), currentLine_);
+            m.emitWide(Op::PUSH_CONST, static_cast<unsigned int>(idx), currentLine_);
             return;
         }
         case NodeKind::TrueLit:  m.emit(Op::PUSH_TRUE, 0, currentLine_); return;
@@ -440,13 +426,12 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             // captured by an inner block.
             if (isCaptured(n.text)) {
                 auto sym = m.internSymbol(n.text);
-                if (sym > 255) { error("captured-name symbol pool overflow"); return; }
-                m.emit(Op::PUSH_CAPTURED, static_cast<uint8_t>(sym), currentLine_);
+                m.emitWide(Op::PUSH_CAPTURED, static_cast<unsigned int>(sym), currentLine_);
                 return;
             }
             int slot = resolveLocal(n.text);
             if (slot >= 0) {
-                m.emit(Op::PUSH_LOCAL, static_cast<uint8_t>(slot), currentLine_);
+                m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slot), currentLine_);
                 return;
             }
             // F4-U5: instance variable of the current method's class.
@@ -455,8 +440,7 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             for (const auto& iv : currentInstVars_) {
                 if (iv == n.text) {
                     auto sym = m.internSymbol(n.text);
-                    if (sym > 255) { error("inst-var symbol pool overflow"); return; }
-                    m.emit(Op::PUSH_INSTVAR, static_cast<uint8_t>(sym), currentLine_);
+                    m.emitWide(Op::PUSH_INSTVAR, static_cast<unsigned int>(sym), currentLine_);
                     return;
                 }
             }
@@ -465,8 +449,7 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             // the scope chain, then globals. A failed runtime lookup will
             // throw "undefined global: X" with the actual name.
             auto symIdx = m.internSymbol(n.text);
-            if (symIdx > 255) { error("global symbol pool overflow"); return; }
-            m.emit(Op::PUSH_GLOBAL, static_cast<uint8_t>(symIdx), currentLine_);
+            m.emitWide(Op::PUSH_GLOBAL, static_cast<unsigned int>(symIdx), currentLine_);
             return;
         }
         case NodeKind::Assignment: {
@@ -477,9 +460,8 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             if (isCaptured(n.text)) {
                 emitExpr(m, *n.children[0]);
                 auto sym = m.internSymbol(n.text);
-                if (sym > 255) { error("captured-name symbol pool overflow"); return; }
                 m.emit(Op::DUP, 0, currentLine_);
-                m.emit(Op::STORE_CAPTURED, static_cast<uint8_t>(sym), currentLine_);
+                m.emitWide(Op::STORE_CAPTURED, static_cast<unsigned int>(sym), currentLine_);
                 return;
             }
             // F4-U5: instance variable of the current method's class.
@@ -487,9 +469,8 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                 if (iv == n.text) {
                     emitExpr(m, *n.children[0]);
                     auto sym = m.internSymbol(n.text);
-                    if (sym > 255) { error("inst-var symbol pool overflow"); return; }
                     m.emit(Op::DUP, 0, currentLine_);
-                    m.emit(Op::STORE_INSTVAR, static_cast<uint8_t>(sym), currentLine_);
+                    m.emitWide(Op::STORE_INSTVAR, static_cast<unsigned int>(sym), currentLine_);
                     return;
                 }
             }
@@ -497,22 +478,20 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             if (replMode_ && atModuleScope()) {
                 emitExpr(m, *n.children[0]);
                 auto sym = m.internSymbol(n.text);
-                if (sym > 255) { error("global symbol pool overflow"); return; }
                 m.emit(Op::DUP, 0, currentLine_);
-                m.emit(Op::STORE_GLOBAL, static_cast<uint8_t>(sym), currentLine_);
+                m.emitWide(Op::STORE_GLOBAL, static_cast<unsigned int>(sym), currentLine_);
                 return;
             }
             int slot = declareLocal(n.text);
             emitExpr(m, *n.children[0]);
             m.emit(Op::DUP, 0, currentLine_);
-            m.emit(Op::STORE_LOCAL, static_cast<uint8_t>(slot), currentLine_);
+            m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slot), currentLine_);
             return;
         }
         case NodeKind::UnarySend: {
             emitExpr(m, *n.children[0]);
             auto sym = m.internSymbol(n.text);
-            if (sym > 255) { error("selector pool overflow"); return; }
-            m.emit(Op::SEND_UNARY, static_cast<uint8_t>(sym), currentLine_);
+            m.emitWide(Op::SEND_UNARY, static_cast<unsigned int>(sym), currentLine_);
             return;
         }
         case NodeKind::BinarySend: {
@@ -521,8 +500,7 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             if (n.children.size() < 2) { error("binary send missing argument"); return; }
             emitExpr(m, *n.children[1]);
             auto sym = m.internSymbol(n.text);
-            if (sym > 255) { error("selector pool overflow"); return; }
-            m.emit(Op::SEND_BINARY, static_cast<uint8_t>(sym), currentLine_);
+            m.emitWide(Op::SEND_BINARY, static_cast<unsigned int>(sym), currentLine_);
             return;
         }
         case NodeKind::KeywordSend: {
@@ -532,8 +510,7 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                 emitExpr(m, *n.children[i]);
             }
             auto sym = m.internSymbol(n.text);
-            if (sym > 255) { error("selector pool overflow"); return; }
-            m.emit(Op::SEND_KEYWORD, static_cast<uint8_t>(sym), currentLine_);
+            m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(sym), currentLine_);
             return;
         }
         case NodeKind::Cascade: {
@@ -549,24 +526,24 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                 // emit args; receiver is already on stack just below the args
                 if (msg.kind == NodeKind::UnarySend) {
                     auto sym = m.internSymbol(msg.text);
-                    m.emit(Op::SEND_UNARY, static_cast<uint8_t>(sym), currentLine_);
+                    m.emitWide(Op::SEND_UNARY, static_cast<unsigned int>(sym), currentLine_);
                 } else if (msg.kind == NodeKind::BinarySend) {
                     if (msg.children.empty()) { error("cascade binary missing arg"); }
                     else emitExpr(m, *msg.children[0]);
                     auto sym = m.internSymbol(msg.text);
-                    m.emit(Op::SEND_BINARY, static_cast<uint8_t>(sym), currentLine_);
+                    m.emitWide(Op::SEND_BINARY, static_cast<unsigned int>(sym), currentLine_);
                 } else if (msg.kind == NodeKind::KeywordSend) {
                     for (auto& a : msg.children) emitExpr(m, *a);
                     auto sym = m.internSymbol(msg.text);
-                    m.emit(Op::SEND_KEYWORD, static_cast<uint8_t>(sym), currentLine_);
+                    m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(sym), currentLine_);
                 } else {
                     error("unexpected node in cascade");
                 }
                 if (isLast) {
                     // stack: [receiver, last_result]; stash result, pop receiver, push result back
-                    m.emit(Op::STORE_LOCAL, static_cast<uint8_t>(tmp), currentLine_);
+                    m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(tmp), currentLine_);
                     m.emit(Op::POP, 0, currentLine_);            // discard receiver
-                    m.emit(Op::PUSH_LOCAL, static_cast<uint8_t>(tmp), currentLine_);
+                    m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(tmp), currentLine_);
                 } else {
                     m.emit(Op::POP, 0, currentLine_);            // discard this result, keep receiver
                 }
@@ -602,8 +579,7 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             sub->setDebugName("<block>");
             scopes_.pop_back();
             size_t blkIdx = m.addBlockModule(std::move(sub));
-            if (blkIdx > 255) { error("block index pool overflow"); return; }
-            m.emit(Op::PUSH_BLOCK, static_cast<uint8_t>(blkIdx), currentLine_);
+            m.emitWide(Op::PUSH_BLOCK, static_cast<unsigned int>(blkIdx), currentLine_);
             return;
         }
         default:
