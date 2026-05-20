@@ -184,8 +184,16 @@ const proto::ProtoObject* prim_Import_from(STRuntime& rt, proto::ProtoContext* c
 void installObjectPrimitives(STRuntime& rt) {
     auto& reg = rt.registry();
     auto& b   = rt.bootstrap();
-    bindPrimitive(rt, b.objectProto, "newChild",
-                  reg.registerPrim(prim_Object_newChild));
+    {
+        // BL-1: `newChild` and the conventional Smalltalk `new` both
+        // allocate a fresh mutable child of the receiver. Class-side methods
+        // such as `Counter class >> startingAt:` call `self new`; bind `new`
+        // as an alias so that pattern resolves without forcing user code to
+        // spell `newChild`.
+        auto newChildPrim = reg.registerPrim(prim_Object_newChild);
+        bindPrimitive(rt, b.objectProto, "newChild", newChildPrim);
+        bindPrimitive(rt, b.objectProto, "new", newChildPrim);
+    }
     bindPrimitive(rt, b.objectProto, "__installMethod:as:",
                   reg.registerPrim(prim_Object_installMethod));
     bindPrimitive(rt, b.objectProto, "asActor",

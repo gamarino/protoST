@@ -56,6 +56,14 @@ public:
     void setArgCount(int n) { argCount_ = n; }
     int  argCount() const   { return argCount_; }
 
+    // BL-1: the name of the class whose method body this module compiles.
+    // Empty for the top-level module and for plain blocks. The engine uses
+    // it to resolve `super` sends: a `super foo` inside a method defined on
+    // class C must start method lookup at C's parent, not at the receiver's
+    // own class. Set by the compiler's MethodDecl emission.
+    void setDefiningClass(const std::string& s) { definingClass_ = s; }
+    const std::string& definingClass() const { return definingClass_; }
+
     // F8-1: source-line mapping. Each 2-byte instruction has one entry in
     // instrLines_; instruction index = pc / 2.
     int lineForPc(size_t pc) const {
@@ -112,6 +120,7 @@ private:
     std::unordered_map<std::string, size_t> symbolIndex_;
     std::vector<std::unique_ptr<BytecodeModule>> blocks_;
     int argCount_ = 0;
+    std::string definingClass_;   // BL-1: class owning this method body
 };
 
 } // namespace protoST

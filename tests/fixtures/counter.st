@@ -11,6 +11,9 @@ Counter >> increment
 Counter >> value
   ^ value.
 
+Counter >> setValue: n
+  value := n.
+
 Counter class >> startingAt: n
   | c |
   c := self new.

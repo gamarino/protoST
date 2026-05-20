@@ -238,10 +238,10 @@ TEST_CASE("Parser: counter.st fixture parses cleanly", "[parser][fixture]") {
     Parser P(std::move(src));
     auto m = P.parseModule();
     REQUIRE(P.errors().empty());
-    REQUIRE(m->children.size() == 6);            // class decl + 4 methods + 1 top-level
+    REQUIRE(m->children.size() == 7);            // class decl + 5 methods + 1 top-level
     REQUIRE(m->children[0]->kind == NodeKind::ClassDecl);
     REQUIRE(m->children[1]->kind == NodeKind::MethodDecl);
-    REQUIRE(m->children[4]->kind == NodeKind::MethodDecl);
-    REQUIRE(m->children[4]->boolFlag == true);   // class side
-    REQUIRE(m->children[5]->kind == NodeKind::UnarySend); // (... increment)
+    REQUIRE(m->children[5]->kind == NodeKind::MethodDecl);
+    REQUIRE(m->children[5]->boolFlag == true);   // class side (Counter class >> startingAt:)
+    REQUIRE(m->children[6]->kind == NodeKind::UnarySend); // (... increment)
 }

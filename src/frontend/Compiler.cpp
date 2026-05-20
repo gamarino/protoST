@@ -321,6 +321,9 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         sub->setDebugName(n.text + ">>" +
                           (n.stringList.empty() ? std::string("<method>")
                                                 : n.stringList[0]));
+        // BL-1: record the defining class so the engine can resolve `super`
+        // sends inside this method body (lookup starts at the class's parent).
+        sub->setDefiningClass(n.text);
         scopes_.pop_back();
 
         // Attach the method module as a sub-block of the outer (module) bytecode.

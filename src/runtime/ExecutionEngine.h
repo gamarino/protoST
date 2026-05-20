@@ -126,6 +126,12 @@ private:
         unsigned int          localCount = 0;   // local-slot count for this frame
         unsigned int          maxStack   = 0;   // operand-stack capacity
         unsigned int          sp         = 0;   // current operand-stack depth
+        // BL-1: set by PUSH_SUPER, consumed by the next SEND_*. When true,
+        // the upcoming send is a `super` send: the receiver value on the
+        // operand stack is `self`, but method lookup must skip the class
+        // that defines the currently executing method (f.m->definingClass())
+        // and start at that class's parent.
+        bool                  superPending = false;
     };
 
     // Header slots reserved at the start of every frame region.

@@ -464,14 +464,25 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             }
             case Op::SEND_UNARY:
             case Op::SEND_BINARY:
-            case Op::SEND_KEYWORD: {
+            case Op::SEND_KEYWORD:
+            case Op::SEND_SUPER: {
                 // pop N args (0 for unary, 1 for binary, count from selector
-                // for keyword)
+                // for keyword / super)
                 int argcOp = (op == Op::SEND_UNARY)  ? 0
                            : (op == Op::SEND_BINARY) ? 1
-                           : /* keyword */ 0;
+                           : /* keyword / super */ 0;
                 const std::string& selStr = f.m->constSymbol(arg);
-                if (op == Op::SEND_KEYWORD) for (char c : selStr) if (c == ':') ++argcOp;
+                if (op == Op::SEND_KEYWORD || op == Op::SEND_SUPER)
+                    for (char c : selStr) if (c == ':') ++argcOp;
+                // BL-1: SEND_SUPER is an explicit super-send opcode (the
+                // current compiler routes `super foo` through PUSH_SUPER +
+                // SEND_*, but honour the dedicated opcode too).
+                if (op == Op::SEND_SUPER) f.superPending = true;
+                // BL-1: capture & clear the super flag for this send. It is
+                // armed by PUSH_SUPER (or SEND_SUPER above) and applies to
+                // exactly one send.
+                const bool isSuperSend = f.superPending;
+                f.superPending = false;
 
                 if (static_cast<int>(f.sp) < argcOp + 1)
                     throw std::runtime_error("SEND with insufficient stack");
@@ -703,7 +714,45 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // prototype slot (smallIntegerPrototype etc.), which our
                 // bootstrap has already re-pointed at the protoST
                 // prototypes (see Bootstrap.cpp).
-                auto* attr = recv->getAttribute(ctx, selSym);
+                //
+                // BL-1: `super` sends. The receiver value (`recv`) is the
+                // same object as `self` — it is still bound into the callee's
+                // local 0 and passed to primitives. What differs is WHERE the
+                // method lookup begins: not at `recv` itself, but one level
+                // above the class that defines the currently executing
+                // method (f.m->definingClass()). We resolve that class via
+                // globals, take its first parent, and look the selector up
+                // from there. This correctly skips an override on the
+                // receiver's own class while still finding the inherited
+                // implementation.
+                const proto::ProtoObject* lookupFrom = recv;
+                if (isSuperSend) {
+                    const std::string& defCls = f.m->definingClass();
+                    if (defCls.empty())
+                        throw std::runtime_error(
+                            "super send outside a method body");
+                    auto* clsSym =
+                        proto::ProtoString::createSymbol(ctx, defCls.c_str());
+                    TransientPin pinClsSym(
+                        ctx, reinterpret_cast<const proto::ProtoObject*>(clsSym));
+                    auto* g = rt_.globals();
+                    auto* defClsObj =
+                        g ? g->getAttribute(ctx, clsSym) : nullptr;
+                    if (!defClsObj || defClsObj == PROTO_NONE)
+                        throw std::runtime_error(
+                            "super: cannot resolve defining class " + defCls);
+                    // First parent of the defining class is the superclass
+                    // proto where inherited methods are bound.
+                    auto* parents = defClsObj->getParents(ctx);
+                    const proto::ProtoObject* superProto = nullptr;
+                    if (parents && parents->getSize(ctx) > 0)
+                        superProto = parents->getAt(ctx, 0);
+                    if (!superProto || superProto == PROTO_NONE)
+                        throw std::runtime_error(
+                            "super: class " + defCls + " has no superclass");
+                    lookupFrom = superProto;
+                }
+                auto* attr = lookupFrom->getAttribute(ctx, selSym);
                 if (!attr || attr == PROTO_NONE) {
                     throw std::runtime_error("doesNotUnderstand: " + selStr);
                 }
@@ -912,6 +961,58 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 const_cast<proto::ProtoObject*>(self)->setAttribute(ctx, sym, val);
                 break;
             }
+            case Op::PUSH_SELF: {
+                // BL-1: push the current frame's `self`. For a method frame,
+                // `self` is local slot 0 (the SEND_* user-method path sets
+                // methodArgs[0] = recv → local 0). The header self-slot
+                // (getSelf, baseSlot+1) is also primed at pushFrame time and
+                // is inherited for nested non-method frames; local 0 matches
+                // PUSH_INSTVAR's own convention, so use it when present and
+                // fall back to the header slot otherwise.
+                const proto::ProtoObject* self =
+                    (f.localCount > 0) ? getLocal(f, 0) : getSelf(f);
+                if (!self) self = PROTO_NONE;
+                push(f, self);
+                break;
+            }
+            case Op::PUSH_SUPER: {
+                // BL-1: a `super` send. `super` evaluates to the SAME object
+                // as `self`; what differs is method lookup, which must start
+                // one level above the class defining the current method.
+                // We push `self` (so the receiver is correct) and arm
+                // f.superPending so the next SEND_* redirects its lookup.
+                const proto::ProtoObject* self =
+                    (f.localCount > 0) ? getLocal(f, 0) : getSelf(f);
+                if (!self) self = PROTO_NONE;
+                push(f, self);
+                f.superPending = true;
+                break;
+            }
+            case Op::DUP_RECEIVER: {
+                // BL-1: duplicate the operand-stack value at depth `arg`
+                // (0 == top) and push the copy. Used to keep a receiver
+                // around for a follow-up send (cascades, multi-send
+                // patterns). The current compiler emits plain DUP for
+                // cascades, so this is reached only by hand-written or
+                // future bytecode; implement it faithfully regardless.
+                if (f.sp <= arg)
+                    throw std::runtime_error("DUP_RECEIVER depth out of range");
+                push(f, opAt(f, arg));
+                break;
+            }
+            case Op::HALT:
+                // BL-1: clean program-end terminator. Treated like an
+                // implicit RETURN_TOP: hand the current top-of-stack (or
+                // PROTO_NONE) back to the caller frame, or out to the C++
+                // caller when this is the last frame.
+                {
+                    const proto::ProtoObject* r =
+                        f.sp == 0 ? PROTO_NONE : peek(f);
+                    popFrame();
+                    if (frames_.empty()) return r;
+                    push(frames_.back(), r);
+                    continue;
+                }
             default:
                 throw std::runtime_error(
                     "ExecutionEngine: unimplemented opcode at pc=" +
