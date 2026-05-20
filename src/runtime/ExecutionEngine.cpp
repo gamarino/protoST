@@ -21,6 +21,7 @@
 #include "BytecodeModule.h"
 #include "Bootstrap.h"
 #include "FutureYield.h"
+#include "SchedDiag.h"
 #include "Opcodes.h"
 #include "ActorLock.h"
 #include "debugger/DebuggerRuntime.h"
@@ -663,6 +664,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             ctx->fromUTF8String("__waiting_on__")->asString(ctx);
 
         const proto::ProtoObject* snap = snapshotFrames(ctx);
+        SCHED_DIAG("engine YIELD actor=" << actor
+                   << " future=" << y.future()
+                   << " frames=" << frames_.size());
         const_cast<proto::ProtoObject*>(actor)->setAttribute(ctx, suspKey, snap);
         if (y.future()) {
             const_cast<proto::ProtoObject*>(actor)->setAttribute(

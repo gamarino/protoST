@@ -2,8 +2,11 @@
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/FutureYield.h"
+#include "runtime/SchedDiag.h"
+#include "runtime/GcSafeBlocking.h"
 #include "protoCore.h"
 
+#include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <stdexcept>
@@ -186,10 +189,14 @@ const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* c
     // resolveFutureFromDrain will schedule us via __waiters__ and the
     // resume path will see state == settled). Doing it under the mutex
     // simply avoids that wasted round-trip.
+    SCHED_DIAG("prim_Future_wait ENTER future=" << r
+               << " currentActor=" << rt.currentActor());
     if (rt.currentActor() != nullptr) {
         std::unique_lock<std::mutex> lock(fcv->mu);
         auto* st = r->getAttribute(ctx, stateKey);
         long long s = st ? st->asLong(ctx) : 0;
+        SCHED_DIAG("prim_Future_wait future=" << r << " state=" << s
+                   << " (actor path)");
         if (s == 0) {
             // Drop the lock BEFORE throwing — the engine's catch site
             // appends us to the future's __waiters__ list, which
@@ -201,12 +208,57 @@ const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* c
         // Already settled — fall through to the synchronous read below.
     }
 
-    {
-        std::unique_lock<std::mutex> lock(fcv->mu);
-        fcv->cv.wait(lock, [&]() {
+    // F6 v3 E2: GC-safe blocking wait. Sleeping on the future's own
+    // std::condition_variable while still counted in ProtoSpace::runningThreads
+    // would deadlock a concurrent stop-the-world GC (it waits for every
+    // running thread to reach a safepoint, which a thread asleep on a foreign
+    // cv never can). The GcBlockingRegion enter/exit calls below remove this
+    // thread from the running set for the duration of each genuine sleep.
+    // See GcSafeBlocking.h for the full rationale.
+    //
+    // Two invariants this loop must preserve, both learned the hard way:
+    //
+    //  (1) NO protoCore heap access while outside the running set. Between
+    //      `enterGcBlocking` and `exitGcBlocking` the GC may run a full
+    //      stop-the-world cycle WITHOUT waiting for this thread (that is the
+    //      whole point — the thread is discounted from the quorum). Touching
+    //      a ProtoObject in that window races the collector's mark phase and
+    //      corrupts live state. The state probe (`getAttribute`) is therefore
+    //      done strictly while the thread is still a running mutator; only
+    //      the pure `cv.wait_for` sleep (a futex wait — no heap) runs inside
+    //      the region.
+    //
+    //  (2) The exit's `safepoint()` must NOT run while `fcv->mu` is held. A
+    //      producer (resolveFutureFromDrain / Future>>resolve:) blocked on
+    //      `fcv->mu` is not itself at a safepoint, so a STW park holding
+    //      `fcv->mu` would wedge the GC quorum. We therefore unlock `fcv->mu`
+    //      before exitGcBlocking.
+    //
+    // The sleep is bounded (wait_for 50 ms) so a notify delivered in the
+    // unlock / region-teardown window is never lost — the next loop turn
+    // re-probes the state.
+    for (;;) {
+        bool settled = false;
+        {
+            // Running-set member here: heap access is safe.
+            std::unique_lock<std::mutex> lock(fcv->mu);
             auto* st = r->getAttribute(ctx, stateKey);
-            return st && st->asLong(ctx) != 0;  // 1 = resolved, 2 = rejected
-        });
+            if (st && st->asLong(ctx) != 0) {
+                settled = true;  // 1 = resolved, 2 = rejected
+            } else {
+                // Still pending. Leave the running set, then sleep on the
+                // future cv with NO heap access until woken. `lock` is held
+                // across enterGcBlocking (only globalMutex is taken there,
+                // never another future mutex — no lock cycle) and across the
+                // bounded sleep; it is released before exitGcBlocking so the
+                // safepoint there runs with no future lock held.
+                enterGcBlocking(ctx);
+                fcv->cv.wait_for(lock, std::chrono::milliseconds(50));
+            }
+        }
+        if (settled) break;
+        // `fcv->mu` released above; rejoin the running set + safepoint here.
+        exitGcBlocking(ctx);
     }
 
     // State observed under the cv's mutex above is the same we re-read here:
@@ -523,6 +575,9 @@ bool appendFutureWaiterLocked(proto::ProtoContext* ctx,
     } else {
         doAppend();
     }
+    SCHED_DIAG("appendFutureWaiterLocked future=" << fut
+               << " actor=" << waiterActor
+               << " parked=" << parked);
     return parked;
 }
 
@@ -620,6 +675,9 @@ void resolveFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
     // future. schedule() takes schedMu; doing so outside fcv->mu keeps
     // the established lock order (schedMu disjoint from per-future
     // mutexes) consistent with drainOne and the SEND fast-path.
+    long long nWaiters = waitersSnapshot ? waitersSnapshot->getSize(ctx) : 0;
+    SCHED_DIAG("resolveFutureFromDrain future=" << future
+               << " value=" << value << " waiters=" << nWaiters);
     if (waitersSnapshot) {
         long long n = waitersSnapshot->getSize(ctx);
         for (long long i = 0; i < n; ++i) {

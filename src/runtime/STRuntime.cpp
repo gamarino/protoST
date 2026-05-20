@@ -6,6 +6,8 @@
 #include "Bootstrap.h"
 #include "Venv.h"
 #include "ActorLock.h"
+#include "SchedDiag.h"
+#include "GcSafeBlocking.h"
 #include "debugger/DebuggerRuntime.h"
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
@@ -128,6 +130,30 @@ struct STRuntime::Impl {
     // - `shutdown` is set by ~STRuntime to make every worker exit its wait
     //   loop; schedCv.notify_all() wakes all of them at once.
     std::unordered_map<const proto::ProtoObject*, proto::ProtoRootSet::Handle> pinnedActors;
+
+    // F6 v3 E2: GC root for SUSPENDED (cooperatively-yielded) actors.
+    //
+    // `pinnedActors` only keeps an actor rooted while it sits in `readyQueue`
+    // (schedule()..drainOne pop). A cooperatively-yielded actor is NOT in the
+    // queue: between throwing FutureYield and being rescheduled by its
+    // awaited future's resolution, it lives only as an entry in that future's
+    // `__waiters__` list. In a deep dependency chain EVERY actor can be
+    // suspended at once (each waiting on the next), so at the deepest point
+    // there is no live readyQueue entry anchoring any of them — and the whole
+    // suspended chain (actors, their `__suspended_frame__` snapshots, their
+    // wrapped objects, and transitively the Link/Tail class objects the
+    // wrapped objects inherit from) becomes unreachable from every GC root.
+    // protoCore defers GC until allocation pressure builds, so this only
+    // bites once the chain is deep enough to trigger a cycle (~110 links),
+    // which then reclaims live state and surfaces as `doesNotUnderstand`.
+    //
+    // `suspendedPins` bridges exactly that gap: the actor is pinned here from
+    // the moment it yields until the moment it is re-popped for resume, so a
+    // suspended actor is always reachable from a GC root. Each pin is added
+    // once on the yield path and removed once on the resume-pop path —
+    // balanced, so asyncRoots cannot grow without bound.
+    std::unordered_map<const proto::ProtoObject*, proto::ProtoRootSet::Handle> suspendedPins;
+
     std::vector<const proto::ProtoThread*> workers;
     std::atomic<bool> shutdown { false };
 
@@ -164,6 +190,49 @@ struct STRuntime::Impl {
 
         auto* futureKey = rootCtx->fromUTF8String("Future")->asString(rootCtx);
         globals->setAttribute(rootCtx, futureKey, bootstrap.futureProto);
+
+        // F6 v3 E2: permanently pin the runtime-wide GC roots.
+        //
+        // protoCore's tracing GC marks from a fixed set of roots: the
+        // built-in `space->*Prototype` slots, registered ProtoRootSets, and
+        // live thread contexts. protoST builds its own Smalltalk prototype
+        // tree (objectProto, actorProto, futureProto, numberProto, ...) as
+        // children of the protoCore prototypes, and a `globals` namespace
+        // holding every user-declared class. bootstrapPrototypes re-points a
+        // FEW protoCore slots at protoST protos (smallInteger, string, ...),
+        // so those are transitively rooted — but `objectProto`, `numberProto`,
+        // `symbolProto`, `blockProto`, `actorProto`, `futureProto` and
+        // `globals` are reachable from NO root. Tracing runs parent→reference,
+        // never parent→child, so a protoCore prototype does not keep its
+        // protoST child alive.
+        //
+        // As long as GC never ran (it is deferred until allocation pressure
+        // builds) this was invisible. Once a deep workload triggers a cycle,
+        // the collector reclaims these unrooted prototypes and the method
+        // bindings installed on them — observed as spurious `doesNotUnderstand`
+        // (e.g. `+` on an integer, `linkTo:`/`compute` on an actor) after the
+        // first GC cycle. Pinning them in asyncRoots for the runtime's whole
+        // lifetime closes that gap. The pins are intentionally never released
+        // before ~Impl destroys the whole root set — these objects are live
+        // for exactly as long as the runtime is.
+        if (asyncRoots) {
+            auto pinPermanent = [this](const proto::ProtoObject* o) {
+                if (o && o != PROTO_NONE) asyncRoots->add(o);
+            };
+            pinPermanent(globals);
+            pinPermanent(bootstrap.objectProto);
+            pinPermanent(bootstrap.numberProto);
+            pinPermanent(bootstrap.smallIntegerProto);
+            pinPermanent(bootstrap.largeIntegerProto);
+            pinPermanent(bootstrap.floatProto);
+            pinPermanent(bootstrap.booleanProto);
+            pinPermanent(bootstrap.stringProto);
+            pinPermanent(bootstrap.symbolProto);
+            pinPermanent(bootstrap.blockProto);
+            pinPermanent(bootstrap.actorProto);
+            pinPermanent(bootstrap.futureProto);
+            pinPermanent(bootstrap.nilProto);
+        }
     }
 
     ~Impl() {
@@ -316,17 +385,49 @@ bool STRuntime::waitForSchedulerProgress(unsigned millis) {
 }
 
 void STRuntime::workerLoop(proto::ProtoContext* ctx) {
+    auto predicate = [this] {
+        return impl_->shutdown.load(std::memory_order_acquire)
+            || !impl_->readyQueue.empty();
+    };
     while (true) {
+        // F6 v3 E2: an idle worker asleep on `schedCv` would, like the
+        // Future>>wait blocking path, deadlock a concurrent stop-the-world
+        // GC: it stays counted in ProtoSpace::runningThreads yet, parked on
+        // this non-protoCore cv, can never reach a safepoint to satisfy the
+        // GC's `parkedThreads >= runningThreads` quorum. Each genuine cv
+        // sleep is therefore bracketed by enterGcBlocking/exitGcBlocking so
+        // the worker leaves the running set for the sleep's duration.
+        //
+        // The two GcSafeBlocking rules are honoured here:
+        //  * No heap access inside the region — the predicate only reads
+        //    `readyQueue` (a std::queue) and the `shutdown` atomic, never a
+        //    ProtoObject; the sleep itself is a pure cv wait.
+        //  * exitGcBlocking's safepoint() runs only AFTER `schedMu` is
+        //    released, so a STW park never happens while the worker holds
+        //    the scheduler lock.
+        // The sleep is bounded (wait_for 50 ms) so a wakeup delivered in the
+        // unlock / teardown window is picked up on the next loop turn.
+        SCHED_DIAG("workerLoop cv.wait ENTER");
+        while (true) {
+            if (predicate()) break;
+            {
+                std::unique_lock<std::mutex> lock(impl_->schedMu);
+                if (predicate()) break;
+                enterGcBlocking(ctx);
+                impl_->schedCv.wait_for(lock, std::chrono::milliseconds(50));
+                // `lock` releases `schedMu` at end of scope.
+            }
+            // schedMu released — safe to park at the safepoint here.
+            exitGcBlocking(ctx);
+        }
+        SCHED_DIAG("workerLoop cv.wait WAKE shutdown="
+                   << impl_->shutdown.load(std::memory_order_acquire));
         {
-            std::unique_lock<std::mutex> lock(impl_->schedMu);
-            impl_->schedCv.wait(lock, [this]{
-                return impl_->shutdown.load(std::memory_order_acquire)
-                    || !impl_->readyQueue.empty();
-            });
-            // If shutdown requested and nothing left to drain, exit.
-            // If shutdown requested but queue is non-empty, prefer to keep
-            // draining so we don't lose pending work (the destructor will
-            // not return until join() completes).
+            // Shutdown handling re-takes the lock briefly. If shutdown was
+            // requested and nothing remains to drain, exit; otherwise keep
+            // draining so pending work is not lost (the destructor blocks on
+            // join() until every worker has exited this loop).
+            std::lock_guard<std::mutex> lock(impl_->schedMu);
             if (impl_->shutdown.load(std::memory_order_acquire)
                 && impl_->readyQueue.empty()) {
                 return;
@@ -399,6 +500,32 @@ STRuntime::runTopLevel(const BytecodeModule& m) {
     // observe and mutate top-level captured names.
     auto* capturedDict = const_cast<proto::ProtoObject*>(impl_->bootstrap.objectProto)
         ->newChild(ctx, /*isMutable=*/true);
+
+    // F6 v3 E2: pin the module-level captured-locals dict as a GC root for
+    // the whole top-level run.
+    //
+    // `capturedDict` holds every module-level variable — including, for the
+    // cooperative-chain workloads, all N actor objects. While the top-level
+    // script blocks in Future>>wait, the only C++-side reference to
+    // `capturedDict` is this ExecutionEngine's `frames_` vector, which is a
+    // plain std::vector the tracing GC cannot see. A GC cycle that fires
+    // while the main thread is parked in `wait` (now reachable since the
+    // GC-starvation deadlock is fixed) would otherwise reclaim `capturedDict`
+    // and every actor/class hanging off it — observed as `doesNotUnderstand`
+    // once the chain is deep enough to trigger a cycle mid-run. Pinning it in
+    // asyncRoots for the lifetime of runTopLevel closes that window; the
+    // handle is released on every exit path (including exceptions) by the
+    // RAII guard below.
+    proto::ProtoRootSet::Handle capturedPin = proto::ProtoRootSet::kNullHandle;
+    if (impl_->asyncRoots) capturedPin = impl_->asyncRoots->add(capturedDict);
+    struct CapturedPinGuard {
+        proto::ProtoRootSet* rs;
+        proto::ProtoRootSet::Handle h;
+        ~CapturedPinGuard() {
+            if (rs && h != proto::ProtoRootSet::kNullHandle) rs->remove(h);
+        }
+    } capturedPinGuard{impl_->asyncRoots, capturedPin};
+
     return eng.runWithArgs(ctx, m, /*self=*/PROTO_NONE,
                            /*args=*/nullptr, /*argc=*/0, capturedDict);
 }
@@ -408,8 +535,12 @@ void STRuntime::schedule(const proto::ProtoObject* actor) {
     {
         std::lock_guard<std::mutex> lock(impl_->schedMu);
         if (!impl_->scheduledSet.insert(actor).second) {
+            SCHED_DIAG("schedule REJECTED (already in scheduledSet) actor="
+                       << actor << " queue=" << impl_->readyQueue.size());
             return;  // already scheduled; no need to notify
         }
+        SCHED_DIAG("schedule actor=" << actor
+                   << " queue=" << (impl_->readyQueue.size() + 1));
         // F6 v2 T2: pin the actor in asyncRoots while it sits in the queue.
         // readyQueue is a plain std::queue invisible to the tracing GC, and a
         // worker thread on a separate ProtoContext chain may consume entries
@@ -435,6 +566,8 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
         actor = impl_->readyQueue.front();
         impl_->readyQueue.pop();
         impl_->scheduledSet.erase(actor);
+        SCHED_DIAG("drainOne POP actor=" << actor
+                   << " queue=" << impl_->readyQueue.size());
         // F6 v2 T2: claim ownership of this actor's pin handle. If the
         // processing path below re-schedules the actor, schedule() will pin
         // it again with a fresh handle independent of this one.
@@ -444,6 +577,37 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             impl_->pinnedActors.erase(it);
         }
     }
+
+    // F6 v3 E2: suspended-actor GC root helpers (see Impl::suspendedPins).
+    //
+    //  * pinSuspended(actor): called on every yield path, just before
+    //    drainOne returns, to keep the actor reachable from a GC root while
+    //    it is parked on its awaited future's __waiters__ list. Idempotent —
+    //    if an entry already exists (defensive) the old handle is released
+    //    first so asyncRoots never accumulates duplicates.
+    //  * unpinSuspended(actor): called once on the resume-pop path, after we
+    //    have confirmed __suspended_frame__ is present, to balance the pin.
+    //
+    // Both take schedMu (it guards suspendedPins, same as pinnedActors).
+    auto pinSuspended = [this](const proto::ProtoObject* a) {
+        if (!a || !impl_->asyncRoots) return;
+        std::lock_guard<std::mutex> lock(impl_->schedMu);
+        auto it = impl_->suspendedPins.find(a);
+        if (it != impl_->suspendedPins.end()) {
+            impl_->asyncRoots->remove(it->second);
+            impl_->suspendedPins.erase(it);
+        }
+        impl_->suspendedPins[a] = impl_->asyncRoots->add(a);
+    };
+    auto unpinSuspended = [this](const proto::ProtoObject* a) {
+        if (!a || !impl_->asyncRoots) return;
+        std::lock_guard<std::mutex> lock(impl_->schedMu);
+        auto it = impl_->suspendedPins.find(a);
+        if (it != impl_->suspendedPins.end()) {
+            impl_->asyncRoots->remove(it->second);
+            impl_->suspendedPins.erase(it);
+        }
+    };
 
     // F6 v2 T2: RAII release of the per-iteration pin on all exit paths.
     // The handle was minted by schedule() and must be returned exactly once.
@@ -535,7 +699,12 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     // tests do not exercise self-sends. T4/T5 can revisit if needed.
     std::mutex* actorLock = getActorLock(ctx, actor);
     std::unique_lock<std::mutex> actorGuard;
-    if (actorLock) actorGuard = std::unique_lock<std::mutex>(*actorLock);
+    if (actorLock) {
+        SCHED_DIAG("drainOne actorLock WAIT actor=" << actor
+                   << " lock=" << static_cast<void*>(actorLock));
+        actorGuard = std::unique_lock<std::mutex>(*actorLock);
+        SCHED_DIAG("drainOne actorLock HELD actor=" << actor);
+    }
 
     // F6 v3 C+D: check for a suspended-frame snapshot BEFORE looking at the
     // mailbox. If present, this drainOne tick is a resume of a previously
@@ -545,7 +714,15 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     // original `wait` would have returned), and let runLoop continue.
     {
         auto* snapAttr = actor->getAttribute(ctx, suspKey);
+        SCHED_DIAG("drainOne actor=" << actor << " mode="
+                   << ((snapAttr && snapAttr != PROTO_NONE) ? "RESUME"
+                                                            : "FRESH-POP"));
         if (snapAttr && snapAttr != PROTO_NONE) {
+            // F6 v3 E2: this actor was suspended and is now being resumed.
+            // Release the suspended-actor GC pin added on its yield path;
+            // from here on the per-iteration `pinHandle` (or, on a re-yield,
+            // a fresh pinSuspended call) keeps it rooted.
+            unpinSuspended(actor);
             // Pull the message-level future the original drainOne would
             // have resolved on synchronous completion. Stored on the actor
             // at yield time so the resume path knows which future to
@@ -587,11 +764,14 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                 // frames_ stack and returns the final value.
                 const proto::ProtoObject* result = eng.continueRun(ctx);
                 setCurrentActor(nullptr);
+                SCHED_DIAG("drainOne RESUME-COMPLETE actor=" << actor
+                           << " msgFut=" << msgFut << " result=" << result);
                 if (msgFut && msgFut != PROTO_NONE) {
                     resolveFutureFromDrain(*this, ctx, msgFut,
                                            result ? result : PROTO_NONE);
                 }
             } catch (const FutureYield&) {
+                SCHED_DIAG("drainOne RESUME-REYIELD actor=" << actor);
                 // Re-yield: the engine has already snapshotted + recorded
                 // the new awaited future on the actor. Keep msgFut on the
                 // actor for the next resume. The actor lock will release
@@ -604,6 +784,10 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                     const_cast<proto::ProtoObject*>(actor)->setAttribute(
                         ctx, suspFutKey, msgFut);
                 }
+                // F6 v3 E2: re-pin the actor as a GC root for the new
+                // suspension window (yield→resume). Balanced by the
+                // unpinSuspended at the top of the resume branch.
+                pinSuspended(actor);
                 if (actorGuard.owns_lock()) actorGuard.unlock();
                 return true;
             } catch (const std::exception& e) {
@@ -699,12 +883,15 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                 ctx->fromUTF8String("__captured__")->asString(ctx);
             auto* capDict = method->getAttribute(ctx, capKey);
             if (capDict == PROTO_NONE) capDict = nullptr;
+            SCHED_DIAG("drainOne USER-METHOD ENTER actor=" << actor);
             ExecutionEngine subEng(*this);
             result = subEng.runWithArgs(
                 ctx, *sub, /*self=*/wrapped,
                 methodArgs.data(),
                 static_cast<int>(methodArgs.size()),
                 capDict);
+            SCHED_DIAG("drainOne USER-METHOD EXIT actor=" << actor
+                       << " result=" << result);
         } else if (method) {
             long long marker = method->asLong(ctx);
             if (marker & (1LL << 62)) {
@@ -731,6 +918,8 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             resolveFutureFromDrain(*this, ctx, future, v);
         }
     } catch (const FutureYield&) {
+        SCHED_DIAG("drainOne FRESH-YIELD actor=" << actor
+                   << " msgFut=" << future);
         // F6 v3 C: the engine has already snapshotted frames_, stored the
         // snapshot under __suspended_frame__ on the actor, recorded the
         // awaited future under __waiting_on__, and appended us to the
@@ -744,6 +933,11 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             const_cast<proto::ProtoObject*>(actor)->setAttribute(
                 ctx, suspFutKey, future);
         }
+        // F6 v3 E2: pin the actor as a GC root for the suspension window.
+        // The per-iteration `pinHandle` is about to be released by
+        // DrainGuard; without this pin a fully-suspended chain would have no
+        // live GC root and the tracing collector would reclaim it.
+        pinSuspended(actor);
         if (actorGuard.owns_lock()) actorGuard.unlock();
         return true;
     } catch (const std::exception& e) {

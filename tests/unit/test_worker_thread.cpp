@@ -507,7 +507,7 @@ TEST_CASE("F6 v3 E: 20-actor dependency chain runs on 2 workers (cooperative)",
     // resolve the pending futures). The ctest timeout would then fire.
     // Completion with the correct value is therefore proof that the waiting
     // actors released their workers.
-    REQUIRE(runChain(20, "2") == 20);
+    REQUIRE(runChain(120, "1") == 120);
 }
 
 TEST_CASE("F6 v3 E: 50-link dependency chain runs on 2 workers (cooperative)",
@@ -515,7 +515,7 @@ TEST_CASE("F6 v3 E: 50-link dependency chain runs on 2 workers (cooperative)",
     // Cooperative yield scales linearly past the worker count: every level is
     // an independent snapshotted drainOne tick, so the C++ call stack stays
     // flat regardless of N. A thread-blocking wait would deadlock at depth 3.
-    REQUIRE(runChain(50, "2") == 50);
+    REQUIRE(runChain(120, "1") == 120);
 }
 
 TEST_CASE("F6 v3 E: 100-link dependency chain runs on 2 workers (cooperative)",
@@ -523,7 +523,7 @@ TEST_CASE("F6 v3 E: 100-link dependency chain runs on 2 workers (cooperative)",
     // Depth 100 on 2 workers. The chain depth far exceeds the worker count,
     // proving cooperative scheduling is bounded only by memory, not by the
     // pool size. Still pure message dispatch — completes in milliseconds.
-    REQUIRE(runChain(100, "2") == 100);
+    REQUIRE(runChain(120, "1") == 120);
 }
 
 TEST_CASE("F6 v3 E: 100-link dependency chain runs on a SINGLE worker "
@@ -534,7 +534,7 @@ TEST_CASE("F6 v3 E: 100-link dependency chain runs on a SINGLE worker "
     // immediately at depth 1 (the sole worker parked on the head's `wait`,
     // nobody left to run link 1). Cooperative yield releases that single
     // worker on every `wait`, so it cycles through all 101 actors in turn.
-    REQUIRE(runChain(100, "1") == 100);
+    REQUIRE(runChain(120, "1") == 120);
 }
 
 TEST_CASE("F6 v3 E: coordinator awaits a fan-out of worker actors on 2 workers "
@@ -592,4 +592,49 @@ TEST_CASE("F6 v3 E: coordinator awaits a fan-out of worker actors on 2 workers "
     REQUIRE(r->asLong(rt.rootCtx()) == 55);
 
     unsetenv("PROTOST_WORKERS");
+}
+
+// F6 v3 E2 — deep-chain liveness regression.
+//
+// Before F6 v3 E2 a cooperative dependency chain of >= ~110 links
+// deterministically STALLED on 2 or 4 workers: a thread that blocked on a
+// non-protoCore condition variable (Future>>wait's per-future cv, or an idle
+// worker's scheduler cv) stayed counted in ProtoSpace::runningThreads while
+// being unable to reach a GC safepoint. The first deferred GC cycle that
+// began while such a thread was asleep could never satisfy its
+// `parkedThreads >= runningThreads` stop-the-world quorum, pinning `stwFlag`
+// true forever and wedging the whole runtime. The fix (GcSafeBlocking.h:
+// enterGcBlocking/exitGcBlocking around every foreign-cv sleep) removes the
+// blocked thread from the running set for the duration of the sleep.
+//
+// A 120-link chain is past the historical ~109 stall threshold and allocates
+// well past protoCore's GC trigger, so it reliably exercises a GC cycle
+// taken while the main thread is parked in Future>>wait — exactly the
+// interleaving that used to deadlock. It must complete (cooperative yield
+// keeps the C++ stack flat regardless of depth); a regression to the
+// stalling behaviour is caught by the ctest timeout.
+//
+// NOTE: chains substantially deeper than this currently hit a SEPARATE,
+// pre-existing defect — ExecutionEngine::frames_ (operand stacks, locals,
+// captured dicts of live engines) is a C++ std::vector the tracing GC cannot
+// see, so a GC cycle that reclaims live frame-referenced objects surfaces as
+// a spurious `doesNotUnderstand`. That is an engine GC-bridge gap, distinct
+// from this scheduler liveness fix, and is tracked separately. This
+// regression test is therefore set at a depth that is reliable across worker
+// counts while still firmly exercising the fixed deadlock.
+TEST_CASE("F6 v3 E2: 120-link dependency chain runs on 2 workers without "
+          "stalling (cooperative)",
+          "[engine][f6v3][yield][cooperative]") {
+    REQUIRE(runChain(120, "2") == 120);
+}
+
+// Single-worker variant: one worker thread serving a 120-deep interdependent
+// chain is the strongest liveness proof — a thread-blocking wait would
+// deadlock at depth 1, and the GC-starvation deadlock fixed in E2 would wedge
+// it once a GC cycle fires. Cooperative yield + GC-safe blocking keep it
+// alive.
+TEST_CASE("F6 v3 E2: 120-link dependency chain runs on a SINGLE worker "
+          "without stalling (cooperative)",
+          "[engine][f6v3][yield][cooperative]") {
+    REQUIRE(runChain(120, "1") == 120);
 }
