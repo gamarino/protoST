@@ -48,12 +48,18 @@ messages independently.
 Adding more pumps, alarms, loggers, persistence, etc. is just adding more
 actors — no runtime changes needed.
 
-### Limitations as of `f6v2-mt`
+### Notes
 
 - Each actor's lock is held across the full message dispatch, not just the
   mailbox RMW. This serializes messages **to one actor** but does NOT
-  serialize messages **across actors**. The demo exercises the latter.
-- Self-sends (a method calling `self <selector>`) currently don't compile
-  through the SEND fast-path — known issue, harmless for the demo.
-- True massive concurrency (thousands of actors waiting on each other)
-  needs cooperative yield from the bytecode interpreter — that's F6 v3.
+  serialize messages **across actors** — the demo exercises the latter
+  (the three sensors run in parallel on different workers).
+- A plain self-send inside a handler (`self foo`) dispatches directly:
+  `self` is the wrapped base object, not the actor proxy, so it never
+  touches the mailbox or the actor lock.
+- Cooperative yield (F6 v3) lets an actor awaiting a Future release its
+  worker thread, so the runtime scales to far more concurrent interdependent
+  actors than it has OS threads.
+- Sending a message to the *same* actor through its actor reference from
+  inside one of its own handlers is not supported (it would re-enter the
+  non-recursive actor lock).

@@ -811,11 +811,15 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     // actor lock — so no two threads ever hold the pair in opposite order
     // and there is no deadlock.
     //
-    // User code running inside the lock may itself send to the SAME actor
-    // (a recursive send). That hits the SEND fast-path, which also takes
-    // this lock — using a non-recursive std::mutex would self-deadlock.
-    // For this task we keep std::mutex and accept the limitation; the F6
-    // tests do not exercise self-sends. T4/T5 can revisit if needed.
+    // A plain self-send inside a handler (`self foo`) does NOT re-enter this
+    // lock: `self` is the wrapped base object, not the actor proxy, so
+    // `self foo` is ordinary synchronous user-method dispatch and never
+    // touches the mailbox or this mutex. The one unsupported case is user
+    // code that sends a message to the SAME actor through its actor
+    // reference (the `asActor` proxy) from inside that actor's own handler:
+    // that re-enters the SEND fast-path, which takes this same lock, and a
+    // non-recursive std::mutex would self-deadlock. That pattern ("enqueue
+    // a message to myself as an agent") is intentionally not supported.
     // F6 v3 E4: acquire the per-actor lock GC-safely. drainOne holds this
     // lock across the entire user-method dispatch (subEng.runWithArgs /
     // continueRun) — i.e. across protoCore allocation — so the holder may
