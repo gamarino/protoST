@@ -5,6 +5,7 @@
 #include "runtime/SchedDiag.h"
 #include "runtime/GcSafeBlocking.h"
 #include "runtime/GcSafeMutex.h"
+#include "runtime/TransientPin.h"
 #include "protoCore.h"
 
 #include <chrono>
@@ -71,13 +72,22 @@ const proto::ProtoList*
 takeAndClearWaitersLocked(proto::ProtoContext* ctx,
                           const proto::ProtoObject* fut) {
     const proto::ProtoString* waitersKey =
-        ctx->fromUTF8String("__waiters__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__waiters__");
+    // F6 v3 E5: `waitersKey` is freshly interned and held across the
+    // setAttribute below (which allocates a sparse-list node on the mutable
+    // future, plus a fresh empty list). Pin it.
+    TransientPin pinWaitersKey(
+        ctx, reinterpret_cast<const proto::ProtoObject*>(waitersKey));
     auto* w = fut->getAttribute(ctx, waitersKey);
     if (!w || w == PROTO_NONE) return nullptr;
     auto* list = w->asList(ctx);
     if (!list || list->getSize(ctx) == 0) return nullptr;
     const_cast<proto::ProtoObject*>(fut)->setAttribute(
         ctx, waitersKey, ctx->newList()->asObject(ctx));
+    // NOTE: the returned `list` is the OLD waiters list — once the slot above
+    // is overwritten it is no longer reachable via `fut`. Every caller pins
+    // it immediately on return (it is iterated across rt.schedule, which
+    // allocates). See the TransientPin at each call site.
     return list;
 }
 
@@ -128,7 +138,14 @@ static void registerCallback(proto::ProtoContext* ctx,
         list = existing->asList(ctx);
     }
     if (!list) list = ctx->newList();
+    // F6 v3 E5: `list` may be a fresh ctx->newList() transient held across
+    // appendLast; `newList` is held across setAttribute on the mutable
+    // future. Pin both.
+    TransientPin pinList(
+        ctx, reinterpret_cast<const proto::ProtoObject*>(list));
     auto* newList = list->appendLast(ctx, block);
+    TransientPin pinNewList(
+        ctx, reinterpret_cast<const proto::ProtoObject*>(newList));
     const_cast<proto::ProtoObject*>(future)
         ->setAttribute(ctx, cbsKey, newList->asObject(ctx));
 }
@@ -313,11 +330,11 @@ const proto::ProtoObject* prim_Future_resolve(STRuntime& rt, proto::ProtoContext
                                                int argc) {
     if (argc != 1) throw std::runtime_error("Future>>resolve: expects 1 arg");
     static const proto::ProtoString* stateKey =
-        ctx->fromUTF8String("__state__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__state__");
     static const proto::ProtoString* valueKey =
-        ctx->fromUTF8String("__value__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__value__");
     static const proto::ProtoString* thenCbsKey =
-        ctx->fromUTF8String("__then_cbs__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__then_cbs__");
     auto* st = r->getAttribute(ctx, stateKey);
     long long s = st ? st->asLong(ctx) : 0;
     if (s != 0) return r;  // already settled — no-op
@@ -357,6 +374,12 @@ const proto::ProtoObject* prim_Future_resolve(STRuntime& rt, proto::ProtoContext
         doTransition();
     }
     if (waitersSnapshot) {
+        // F6 v3 E5: `waitersSnapshot` is the detached old __waiters__ list —
+        // no longer reachable via the future after takeAndClearWaitersLocked
+        // overwrote the slot. It is iterated here across rt.schedule, which
+        // allocates inside registryAdd. Pin it for the iteration.
+        TransientPin pinWaiters(
+            ctx, reinterpret_cast<const proto::ProtoObject*>(waitersSnapshot));
         long long n = waitersSnapshot->getSize(ctx);
         for (long long i = 0; i < n; ++i) {
             auto* w = waitersSnapshot->getAt(ctx, static_cast<int>(i));
@@ -378,11 +401,11 @@ const proto::ProtoObject* prim_Future_rejectWith(STRuntime& rt, proto::ProtoCont
                                                   int argc) {
     if (argc != 1) throw std::runtime_error("Future>>rejectWith: expects 1 arg");
     static const proto::ProtoString* stateKey =
-        ctx->fromUTF8String("__state__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__state__");
     static const proto::ProtoString* errorKey =
-        ctx->fromUTF8String("__error__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__error__");
     static const proto::ProtoString* catchCbsKey =
-        ctx->fromUTF8String("__catch_cbs__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__catch_cbs__");
     auto* st = r->getAttribute(ctx, stateKey);
     long long s = st ? st->asLong(ctx) : 0;
     if (s != 0) return r;  // already settled — no-op
@@ -415,6 +438,9 @@ const proto::ProtoObject* prim_Future_rejectWith(STRuntime& rt, proto::ProtoCont
         doTransition();
     }
     if (waitersSnapshot) {
+        // F6 v3 E5: pin the detached waiters list across rt.schedule.
+        TransientPin pinWaiters(
+            ctx, reinterpret_cast<const proto::ProtoObject*>(waitersSnapshot));
         long long n = waitersSnapshot->getSize(ctx);
         for (long long i = 0; i < n; ++i) {
             auto* w = waitersSnapshot->getAt(ctx, static_cast<int>(i));
@@ -563,9 +589,16 @@ bool appendFutureWaiterLocked(proto::ProtoContext* ctx,
     // Symbols resolved fresh from the live ctx (per-ProtoSpace interning;
     // see takeAndClearWaitersLocked).
     const proto::ProtoString* waitersKey =
-        ctx->fromUTF8String("__waiters__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__waiters__");
     const proto::ProtoString* stateKey =
-        ctx->fromUTF8String("__state__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__state__");
+    // F6 v3 E5: both keys are freshly interned and held across the
+    // getAttribute/appendLast/setAttribute sequence inside `doAppend`. Pin
+    // them for the function's whole scope (covers the lambda invocation).
+    TransientPin pinWaitersKey(
+        ctx, reinterpret_cast<const proto::ProtoObject*>(waitersKey));
+    TransientPin pinStateKey(
+        ctx, reinterpret_cast<const proto::ProtoObject*>(stateKey));
     auto* fcv = getFutureCV(ctx, fut);
     bool parked = false;
     auto doAppend = [&]() {
@@ -582,7 +615,13 @@ bool appendFutureWaiterLocked(proto::ProtoContext* ctx,
         const proto::ProtoList* list = nullptr;
         if (existing && existing != PROTO_NONE) list = existing->asList(ctx);
         if (!list) list = ctx->newList();
+        // F6 v3 E5: `list` may be a fresh ctx->newList() transient held
+        // across appendLast; `newList` is then held across setAttribute.
+        TransientPin pinList(
+            ctx, reinterpret_cast<const proto::ProtoObject*>(list));
         auto* newList = list->appendLast(ctx, waiterActor);
+        TransientPin pinNewList(
+            ctx, reinterpret_cast<const proto::ProtoObject*>(newList));
         const_cast<proto::ProtoObject*>(fut)
             ->setAttribute(ctx, waitersKey, newList->asObject(ctx));
         parked = true;
@@ -608,6 +647,8 @@ void installFutureCV(proto::ProtoContext* ctx, const proto::ProtoObject* fut) {
         proto::ProtoString::createSymbol(ctx, "__cv__");
     auto* fcv = new FutureCV();
     auto* ep = ctx->fromExternalPointer(fcv, futureCVFinalizer);
+    // F6 v3 E5: `ep` is held across setAttribute on the mutable future. Pin it.
+    TransientPin pinEp(ctx, ep);
     const_cast<proto::ProtoObject*>(fut)->setAttribute(ctx, cvKey, ep);
 }
 
@@ -697,6 +738,9 @@ void resolveFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
     SCHED_DIAG("resolveFutureFromDrain future=" << future
                << " value=" << value << " waiters=" << nWaiters);
     if (waitersSnapshot) {
+        // F6 v3 E5: pin the detached waiters list across rt.schedule.
+        TransientPin pinWaiters(
+            ctx, reinterpret_cast<const proto::ProtoObject*>(waitersSnapshot));
         long long n = waitersSnapshot->getSize(ctx);
         for (long long i = 0; i < n; ++i) {
             auto* a = waitersSnapshot->getAt(ctx, static_cast<int>(i));
@@ -749,6 +793,9 @@ void rejectFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
         doTransition();
     }
     if (waitersSnapshot) {
+        // F6 v3 E5: pin the detached waiters list across rt.schedule.
+        TransientPin pinWaiters(
+            ctx, reinterpret_cast<const proto::ProtoObject*>(waitersSnapshot));
         long long n = waitersSnapshot->getSize(ctx);
         for (long long i = 0; i < n; ++i) {
             auto* a = waitersSnapshot->getAt(ctx, static_cast<int>(i));

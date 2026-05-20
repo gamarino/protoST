@@ -800,3 +800,72 @@ TEST_CASE("F6 v3 E3: cooperative chain survives aggressive GC on 4 workers",
     REQUIRE(runChain(50, "4") == 50);
     unsetenv("PROTOCORE_GC_CONTEXT_THRESHOLD");
 }
+
+// F6 v3 E5 — deep-chain GC-rooting proof.
+//
+// E5 closed the transient-pointer GC-rooting bug class: every interned
+// attribute-key and every transient ProtoObject* held across an allocation is
+// now either an eternal strong symbol (createSymbol — recorded in the
+// per-space SymbolTable, never reclaimed) or pinned in the engine context's
+// GC-traced scratch region (TransientPin). Before E5 a deep cooperative chain
+// hit a spurious `doesNotUnderstand` at ~140 links: a heap ProtoString
+// attribute key (selectors / __wrapped__ / __bc_ptr__ / ...) produced by
+// `fromUTF8String()->asString()` was reachable from no GC root and a GC cycle
+// reclaimed it mid-run. E5 also fixed an off-safepoint deadlock in
+// ~STRuntime's worker-join (now bracketed in a GC-blocking region).
+//
+// `runChain` builds the chain with N+1 module-level variables (a0..a(N-1) +
+// tail). The bytecode format encodes every opcode operand — local-slot index,
+// constant-pool index — in a single byte (Compiler.cpp emits
+// `static_cast<uint8_t>(...)`), so the chain helper self-limits at N == 255
+// (256 module variables, indices 0..255). N == 255 is therefore the deepest
+// chain expressible in the current ISA; beyond it the operand wraps and the
+// failure is a compiler/bytecode-format limitation, NOT a GC-rooting bug.
+//
+// 255 is far past the pre-E5 ~140 ceiling. Completion with the exact value
+// across worker counts — and, crucially, under aggressive GC — is the proof
+// that no transient is left unrooted.
+TEST_CASE("F6 v3 E5: 255-link cooperative chain (bytecode-format ceiling) on "
+          "1 worker",
+          "[engine][f6v3][yield][cooperative]") {
+    REQUIRE(runChain(255, "1") == 255);
+}
+
+TEST_CASE("F6 v3 E5: 255-link cooperative chain on 2 workers",
+          "[engine][f6v3][yield][cooperative]") {
+    REQUIRE(runChain(255, "2") == 255);
+}
+
+TEST_CASE("F6 v3 E5: 255-link cooperative chain on 4 workers",
+          "[engine][f6v3][yield][cooperative]") {
+    REQUIRE(runChain(255, "4") == 255);
+}
+
+TEST_CASE("F6 v3 E5: 255-link cooperative chain survives aggressive GC "
+          "(1 worker)",
+          "[engine][f6v3][yield][cooperative][gc]") {
+    // The make-or-break proof: PROTOCORE_GC_CONTEXT_THRESHOLD=1 fires the GC
+    // near every allocation. A 255-deep chain on a single worker, repeatedly
+    // snapshotting / restoring frames while the collector hammers every
+    // allocation, completing with the exact value, proves the E5 audit left
+    // no transient ProtoObject* unrooted.
+    setenv("PROTOCORE_GC_CONTEXT_THRESHOLD", "1", 1);
+    REQUIRE(runChain(255, "1") == 255);
+    unsetenv("PROTOCORE_GC_CONTEXT_THRESHOLD");
+}
+
+TEST_CASE("F6 v3 E5: 255-link cooperative chain survives aggressive GC "
+          "(2 workers)",
+          "[engine][f6v3][yield][cooperative][gc]") {
+    setenv("PROTOCORE_GC_CONTEXT_THRESHOLD", "1", 1);
+    REQUIRE(runChain(255, "2") == 255);
+    unsetenv("PROTOCORE_GC_CONTEXT_THRESHOLD");
+}
+
+TEST_CASE("F6 v3 E5: 255-link cooperative chain survives aggressive GC "
+          "(4 workers)",
+          "[engine][f6v3][yield][cooperative][gc]") {
+    setenv("PROTOCORE_GC_CONTEXT_THRESHOLD", "1", 1);
+    REQUIRE(runChain(255, "4") == 255);
+    unsetenv("PROTOCORE_GC_CONTEXT_THRESHOLD");
+}

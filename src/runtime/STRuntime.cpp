@@ -9,6 +9,7 @@
 #include "SchedDiag.h"
 #include "GcSafeBlocking.h"
 #include "GcSafeMutex.h"
+#include "TransientPin.h"
 #include "debugger/DebuggerRuntime.h"
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
@@ -88,8 +89,17 @@ size_t PrimitiveRegistry::size() const   { return impl->fns.size(); }
 
 void bindPrimitive(STRuntime& rt, const proto::ProtoObject* proto, const char* selector, int idx) {
     auto* ctx = rt.rootCtx();
-    auto* selStr = ctx->fromUTF8String(selector);                  // create ProtoString
-    auto* sel = selStr->asString(ctx);                              // intern as symbol
+    // F6 v3 E5: intern the selector as a STRONG SYMBOL via createSymbol. A
+    // strong symbol is eternal — recorded in the per-space SymbolTable and
+    // never reclaimed by the GC — so the method binding installed under it
+    // can never lose its key. Previously this used fromUTF8String()->asString
+    // which, for selectors longer than 6 bytes (INLINE_STRING_MAX_BYTES),
+    // produced an ordinary heap ProtoString reachable from no GC root: a GC
+    // cycle could reclaim it, leaving the method effectively un-findable
+    // (observed as a deep-chain `doesNotUnderstand`). The SEND-dispatch site
+    // (ExecutionEngine.cpp) now also interns selectors via createSymbol, so
+    // both sides agree on the same eternal symbol.
+    auto* sel = proto::ProtoString::createSymbol(ctx, selector);
     // Tag bit 62 marks "this is a primitive marker, not a real method object".
     auto* val = ctx->fromLong(static_cast<long long>(idx) | (1LL << 62));
     const_cast<proto::ProtoObject*>(proto)->setAttribute(ctx, sel, val);
@@ -192,15 +202,15 @@ struct STRuntime::Impl {
         // `Object subclass: #Foo ...` patterns (F4-U2) can look it up.
         globals = const_cast<proto::ProtoObject*>(
             bootstrap.objectProto->newChild(rootCtx, /*isMutable=*/true));
-        auto* objKey = rootCtx->fromUTF8String("Object")->asString(rootCtx);
+        auto* objKey = proto::ProtoString::createSymbol(rootCtx, "Object");
         globals->setAttribute(rootCtx, objKey, bootstrap.objectProto);
 
         // F6: register Actor and Future in globals so user code can refer to
         // them via PUSH_GLOBAL (e.g. `Actor subclass: ...`, `Future new`).
-        auto* actorKey = rootCtx->fromUTF8String("Actor")->asString(rootCtx);
+        auto* actorKey = proto::ProtoString::createSymbol(rootCtx, "Actor");
         globals->setAttribute(rootCtx, actorKey, bootstrap.actorProto);
 
-        auto* futureKey = rootCtx->fromUTF8String("Future")->asString(rootCtx);
+        auto* futureKey = proto::ProtoString::createSymbol(rootCtx, "Future");
         globals->setAttribute(rootCtx, futureKey, bootstrap.futureProto);
 
         // F6 v3 E2b: create the single live-registry GC root and pin it.
@@ -364,7 +374,7 @@ STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
                 ctx, ctx->fromExternalPointer(this, nullptr));
             std::string nameStr = "protoST-worker-" + std::to_string(i);
             const proto::ProtoString* threadName =
-                ctx->fromUTF8String(nameStr.c_str())->asString(ctx);
+                proto::ProtoString::createSymbol(ctx, nameStr.c_str());
             const proto::ProtoThread* t = impl_->space.newThread(
                 ctx, threadName, st_worker_main, argsForThread, nullptr);
             if (t) impl_->workers.push_back(t);
@@ -381,11 +391,34 @@ STRuntime::~STRuntime() {
     if (!impl_->workers.empty()) {
         impl_->shutdown.store(true, std::memory_order_release);
         impl_->schedCv.notify_all();
+        // F6 v3 E5: the join() loop blocks the main thread in the kernel
+        // (pthread_join) while it is STILL counted in
+        // ProtoSpace::runningThreads. This is the same off-safepoint-blocking
+        // hazard E2/E4 closed for cv sleeps and mutex acquisition — and a
+        // genuine deadlock the deep-chain audit uncovered:
+        //
+        //   * a worker still inside drainOne hits allocCell, sees stwFlag set
+        //     and PARKS for a stop-the-world cycle (parkedThreads++);
+        //   * the GC thread's Phase-1 quorum is `parkedThreads >=
+        //     runningThreads`, but the main thread, blocked in join() and
+        //     never reaching a safepoint, keeps runningThreads above
+        //     parkedThreads forever;
+        //   * the GC never finishes, the parked worker never wakes, never
+        //     exits its loop, and join() never returns. Total deadlock.
+        //
+        // Bracketing the whole join loop in a GC-blocking region removes the
+        // main thread from the running set for its duration, so the STW
+        // quorum is computed only over threads that can actually park. No
+        // protoCore heap access happens inside the region (join() is a pure
+        // pthread wait), and no protoST lock is held across exitGcBlocking —
+        // both GcSafeBlocking rules are honoured.
+        enterGcBlocking(impl_->rootCtx);
         for (auto* t : impl_->workers) {
             // ProtoThread::join takes the CALLING context (main thread's
             // root). newThread returns const ProtoThread*; join is non-const.
             const_cast<proto::ProtoThread*>(t)->join(impl_->rootCtx);
         }
+        exitGcBlocking(impl_->rootCtx);
         impl_->workers.clear();
     }
 
@@ -512,10 +545,15 @@ STRuntime::materialize(const BytecodeModule& m, size_t i) const {
         case K::String:
             return ctx->fromUTF8String(m.constString(i).c_str());
         case K::Symbol: {
-            const proto::ProtoObject* s =
-                ctx->fromUTF8String(m.constSymbol(i).c_str());
-            // ProtoObject::asString returns a ProtoString view of the value.
-            return reinterpret_cast<const proto::ProtoObject*>(s->asString(ctx));
+            // F6 v3 E5: a Smalltalk symbol literal (`#foo`) is interned as a
+            // STRONG SYMBOL via createSymbol — eternal, recorded in the
+            // per-space SymbolTable, never GC-reclaimed. This matters because
+            // these materialised symbols are used as attribute KEYS (notably
+            // the selector argument of `__installMethod:as:`); an ordinary
+            // heap ProtoString key would be reachable from no GC root once it
+            // left the operand stack and could be reclaimed mid-program.
+            return reinterpret_cast<const proto::ProtoObject*>(
+                proto::ProtoString::createSymbol(ctx, m.constSymbol(i).c_str()));
         }
         case K::Char:
             // F2 simplification: treat character literal as a 1-char string.
@@ -541,6 +579,12 @@ STRuntime::runTopLevel(const BytecodeModule& m) {
     // observe and mutate top-level captured names.
     auto* capturedDict = const_cast<proto::ProtoObject*>(impl_->bootstrap.objectProto)
         ->newChild(ctx, /*isMutable=*/true);
+    // F6 v3 E5: `capturedDict` is unrooted between this newChild and the
+    // registryAdd below — and registryAdd itself allocates (ptrRegistryKey +
+    // setAttribute) before `capturedDict` lands in liveRegistry. Pin it for
+    // the brief pre-anchor window; once registryAdd returns, the liveRegistry
+    // entry roots it and this pin is redundant but harmless.
+    TransientPin pinCapturedDict(ctx, capturedDict);
 
     // F6 v3 E2b: anchor the module-level captured-locals dict in the live
     // registry for the whole top-level run.
@@ -581,8 +625,15 @@ void STRuntime::registryAdd(proto::ProtoContext* ctx, const proto::ProtoObject* 
     // schedMu, so the holder may park at a GC safepoint with the lock owned.
     // Every other schedMu acquirer therefore takes it GC-safely.
     GcSafeLockGuard lock(ctx, impl_->schedMu);
+    // F6 v3 E5: ptrRegistryKey allocates a fresh ProtoString; holding it in a
+    // C++ temporary across setAttribute (which allocates a sparse-list node on
+    // the mutable liveRegistry) is a transient-across-allocation gap. Pin the
+    // key. `o` is the object being anchored — it is the caller's already-live
+    // value and gets permanently rooted by the setAttribute itself.
+    auto* key = ptrRegistryKey(ctx, o);
+    TransientPin pinKey(ctx, reinterpret_cast<const proto::ProtoObject*>(key));
     const_cast<proto::ProtoObject*>(impl_->liveRegistry)
-        ->setAttribute(ctx, ptrRegistryKey(ctx, o), o);
+        ->setAttribute(ctx, key, o);
 }
 
 // F6 v3 E2b: drop `o` from the live registry. Balanced against registryAdd;
@@ -593,8 +644,13 @@ void STRuntime::registryRemove(proto::ProtoContext* ctx, const proto::ProtoObjec
     // F6 v3 E4: GC-safe acquire (see registryAdd — removeAttribute /
     // ptrRegistryKey may allocate while schedMu is held).
     GcSafeLockGuard lock(ctx, impl_->schedMu);
+    // F6 v3 E5: same transient-key gap as registryAdd — removeAttribute on a
+    // mutable object also allocates (a new sparse-list node for the smaller
+    // tree). Pin the key across the call.
+    auto* key = ptrRegistryKey(ctx, o);
+    TransientPin pinKey(ctx, reinterpret_cast<const proto::ProtoObject*>(key));
     const_cast<proto::ProtoObject*>(impl_->liveRegistry)
-        ->removeAttribute(ctx, ptrRegistryKey(ctx, o));
+        ->removeAttribute(ctx, key);
 }
 
 void STRuntime::schedule(proto::ProtoContext* ctx, const proto::ProtoObject* actor) {
@@ -675,15 +731,15 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     } drainGuard{this, ctx, actor, &keepAnchored, &impl_->schedCv};
 
     static const proto::ProtoString* mailboxKey =
-        ctx->fromUTF8String("__mailbox__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__mailbox__");
     static const proto::ProtoString* wrappedKey =
-        ctx->fromUTF8String("__wrapped__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__wrapped__");
     static const proto::ProtoString* selKey =
-        ctx->fromUTF8String("__selector__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__selector__");
     static const proto::ProtoString* argsKey =
-        ctx->fromUTF8String("__args__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__args__");
     static const proto::ProtoString* futKey =
-        ctx->fromUTF8String("__future__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__future__");
     // F6 v3 C+D: per-actor yield/resume bookkeeping.
     //  * __suspended_frame__ : engine snapshot taken at the FutureYield site.
     //  * __waiting_on__      : the future the actor is currently awaiting.
@@ -701,17 +757,30 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     // interning lookup is cheap relative to the surrounding getAttribute
     // traffic.
     const proto::ProtoString* suspKey =
-        ctx->fromUTF8String("__suspended_frame__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__suspended_frame__");
     const proto::ProtoString* waitingOnKey =
-        ctx->fromUTF8String("__waiting_on__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__waiting_on__");
     const proto::ProtoString* suspFutKey =
-        ctx->fromUTF8String("__suspended_future__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__suspended_future__");
     const proto::ProtoString* fValueKey =
-        ctx->fromUTF8String("__value__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__value__");
     const proto::ProtoString* fErrorKey =
-        ctx->fromUTF8String("__error__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__error__");
     const proto::ProtoString* fStateKey =
-        ctx->fromUTF8String("__state__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__state__");
+    // F6 v3 E5: these six keys are freshly interned ProtoStrings (per-space
+    // interning forbids static caching) and are held in C++ locals across the
+    // ENTIRE drainOne body — which runs a full ExecutionEngine (arbitrary
+    // user-code allocation), resolveFutureFromDrain / rejectFutureFromDrain,
+    // and many getAttribute/setAttribute calls. Pin all six for the function
+    // scope. drainOne's `ctx` is a worker (or main) context; TransientPin
+    // sizes it on demand if an engine has not already.
+    TransientPin pinSuspKey(ctx, reinterpret_cast<const proto::ProtoObject*>(suspKey));
+    TransientPin pinWaitKey(ctx, reinterpret_cast<const proto::ProtoObject*>(waitingOnKey));
+    TransientPin pinSuspFutKey(ctx, reinterpret_cast<const proto::ProtoObject*>(suspFutKey));
+    TransientPin pinFValKey(ctx, reinterpret_cast<const proto::ProtoObject*>(fValueKey));
+    TransientPin pinFErrKey(ctx, reinterpret_cast<const proto::ProtoObject*>(fErrorKey));
+    TransientPin pinFStKey(ctx, reinterpret_cast<const proto::ProtoObject*>(fStateKey));
     // F6 v2 T4: future state/value/error keys are no longer referenced here;
     // resolveFutureFromDrain / rejectFutureFromDrain in future_prims.cpp own
     // the entire transition including the attribute writes.
@@ -837,8 +906,13 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                 SCHED_DIAG("drainOne RESUME-COMPLETE actor=" << actor
                            << " msgFut=" << msgFut << " result=" << result);
                 if (msgFut && msgFut != PROTO_NONE) {
-                    resolveFutureFromDrain(*this, ctx, msgFut,
-                                           result ? result : PROTO_NONE);
+                    // F6 v3 E5: `result` is the resumed run's final value —
+                    // unrooted once continueRun has unwound; held across
+                    // resolveFutureFromDrain (allocates). Pin it.
+                    const proto::ProtoObject* rv =
+                        result ? result : PROTO_NONE;
+                    TransientPin pinResumeResult(ctx, rv);
+                    resolveFutureFromDrain(*this, ctx, msgFut, rv);
                 }
             } catch (const FutureYield&) {
                 SCHED_DIAG("drainOne RESUME-REYIELD actor=" << actor);
@@ -865,6 +939,9 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                 setCurrentActor(nullptr);
                 if (msgFut && msgFut != PROTO_NONE) {
                     auto* err = ctx->fromUTF8String(e.what());
+                    // F6 v3 E5: `err` held across rejectFutureFromDrain
+                    // (allocates) — pin it.
+                    TransientPin pinErr(ctx, err);
                     rejectFutureFromDrain(*this, ctx, msgFut, err);
                 }
             }
@@ -899,12 +976,23 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
 
         msg = mailbox->getAt(ctx, 0);
         // Drop the first message — getSlice(from, to) over [1, size).
+        // F6 v3 E5: `remaining` is a freshly sliced list held across asObject
+        // + setAttribute. Pin it.
         auto* remaining = mailbox->getSlice(
             ctx, 1, static_cast<int>(mailbox->getSize(ctx)));
+        TransientPin pinRemaining(
+            ctx, reinterpret_cast<const proto::ProtoObject*>(remaining));
         const_cast<proto::ProtoObject*>(actor)->setAttribute(
             ctx, mailboxKey, remaining->asObject(ctx));
         rescheduleAfter = (remaining->getSize(ctx) > 0);
     }
+    // F6 v3 E5: the setAttribute above overwrote the actor's __mailbox__
+    // slot, so `msg` is no longer reachable via actor->__mailbox__. It is
+    // held across the field-extraction getAttributes, the args-vector build,
+    // and the full user-method ExecutionEngine run — and the message's
+    // selector / args / future are reached transitively THROUGH `msg`. Pin it
+    // for the rest of drainOne so the whole message envelope stays rooted.
+    TransientPin pinMsg(ctx, msg);
 
     // Extract message fields.
     auto* selector = msg->getAttribute(ctx, selKey);
@@ -926,6 +1014,8 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     if (!selStr) {
         if (future) {
             auto* err = ctx->fromUTF8String("invalid selector");
+            // F6 v3 E5: `err` held across rejectFutureFromDrain — pin it.
+            TransientPin pinErr(ctx, err);
             // F6 v2 T4: atomic (write state, snapshot cbs, notify) under
             // the future's cv mutex; catch: callbacks fire outside the
             // mutex on the snapshot. See future_prims.cpp.
@@ -945,7 +1035,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
 
         // Detect user method (has __bc_ptr__) vs primitive marker (tagged int).
         static const proto::ProtoString* bcKey =
-            ctx->fromUTF8String("__bc_ptr__")->asString(ctx);
+            proto::ProtoString::createSymbol(ctx, "__bc_ptr__");
         auto* bcPtrObj = method ? method->getAttribute(ctx, bcKey) : nullptr;
         if (bcPtrObj && bcPtrObj != PROTO_NONE) {
             // User method: invoke via a sub-engine with wrapped as self.
@@ -957,7 +1047,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             for (int i = 0; i < argc; ++i) methodArgs.push_back(args[i]);
             // Honour the method's captured-dict if any (matches Engine path).
             static const proto::ProtoString* capKey =
-                ctx->fromUTF8String("__captured__")->asString(ctx);
+                proto::ProtoString::createSymbol(ctx, "__captured__");
             auto* capDict = method->getAttribute(ctx, capKey);
             if (capDict == PROTO_NONE) capDict = nullptr;
             SCHED_DIAG("drainOne USER-METHOD ENTER actor=" << actor);
@@ -987,6 +1077,12 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
         // Resolve future.
         if (future) {
             auto* v = result ? result : PROTO_NONE;
+            // F6 v3 E5: `result` is the user method's return value — a fresh
+            // object reachable from no traced root once the engine that
+            // produced it has unwound. It is held across resolveFutureFrom-
+            // Drain, which writes future state, fires thenDo: callbacks (user
+            // code) and schedules waiters — all of which allocate. Pin it.
+            TransientPin pinResult(ctx, v);
             // F6 v2 T4: atomic (write state, snapshot cbs, notify cv)
             // under the future's mutex; thenDo: callbacks fire outside the
             // mutex on the snapshot. Closes the registration race where a
@@ -1020,6 +1116,8 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     } catch (const std::exception& e) {
         if (future) {
             auto* err = ctx->fromUTF8String(e.what());
+            // F6 v3 E5: `err` held across rejectFutureFromDrain — pin it.
+            TransientPin pinErr(ctx, err);
             // F6 v2 T4: same atomic pattern as the resolve path above.
             rejectFutureFromDrain(*this, ctx, future, err);
         }
@@ -1063,12 +1161,17 @@ size_t STRuntime::workerCount() const {
 const proto::ProtoObject* STRuntime::newFuture(proto::ProtoContext* ctx) {
     auto* fut = const_cast<proto::ProtoObject*>(impl_->bootstrap.futureProto)
         ->newChild(ctx, /*isMutable=*/true);
+    // F6 v3 E5: `fut` is a fresh mutable object held across three setAttribute
+    // calls and installFutureCV (which allocates an ExternalPointer and does
+    // another setAttribute). The sole caller (the engine actor SEND fast-path)
+    // runs on a sized engine context, so the scratch region exists. Pin it.
+    TransientPin pinFut(ctx, fut);
     static const proto::ProtoString* stateKey =
-        ctx->fromUTF8String("__state__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__state__");
     static const proto::ProtoString* valueKey =
-        ctx->fromUTF8String("__value__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__value__");
     static const proto::ProtoString* errKey =
-        ctx->fromUTF8String("__error__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__error__");
     fut->setAttribute(ctx, stateKey, ctx->fromLong(0));  // 0 = pending
     fut->setAttribute(ctx, valueKey, PROTO_NONE);
     fut->setAttribute(ctx, errKey,   PROTO_NONE);
@@ -1085,7 +1188,7 @@ bool STRuntime::isActor(proto::ProtoContext* ctx,
                         const proto::ProtoObject* obj) const {
     if (!obj || obj == PROTO_NONE) return false;
     static const proto::ProtoString* wrappedKey =
-        ctx->fromUTF8String("__wrapped__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__wrapped__");
     auto* w = obj->getAttribute(ctx, wrappedKey);
     return (w != nullptr && w != PROTO_NONE);
 }
@@ -1191,12 +1294,20 @@ const proto::ProtoObject* STRuntime::loadModuleFromFile(
     // attributes name the classes the module declared.
     auto* moduleObj = const_cast<proto::ProtoObject*>(impl_->bootstrap.objectProto)
         ->newChild(ctx, /*isMutable=*/true);
+    // F6 v3 E5: `moduleObj` is held across the class-binding loop, which
+    // interns a fresh symbol and runs getAttribute + setAttribute per class.
+    // Pin it. The prior runTopLevel run already sized `ctx`.
+    TransientPin pinModuleObj(ctx, moduleObj);
     auto* g = globals();
 
     for (const auto& [className, info] : C.classes()) {
         (void)info;  // metadata; only the name is used here.
         if (className.empty() || className[0] == '_') continue;
-        auto* classSym = ctx->fromUTF8String(className.c_str())->asString(ctx);
+        auto* classSym = proto::ProtoString::createSymbol(ctx, className.c_str());
+        // F6 v3 E5: `classSym` is freshly interned and held across the
+        // getAttribute + setAttribute below — pin it per iteration.
+        TransientPin pinClassSym(
+            ctx, reinterpret_cast<const proto::ProtoObject*>(classSym));
         auto* classObj = g->getAttribute(ctx, classSym);
         if (classObj && classObj != PROTO_NONE) {
             moduleObj->setAttribute(ctx, classSym, classObj);

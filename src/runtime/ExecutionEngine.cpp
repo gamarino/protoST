@@ -25,6 +25,7 @@
 #include "Opcodes.h"
 #include "ActorLock.h"
 #include "GcSafeMutex.h"
+#include "TransientPin.h"
 #include "debugger/DebuggerRuntime.h"
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
@@ -95,6 +96,21 @@ unsigned int computeLocalCount(const BytecodeModule& m, unsigned int argc) {
 
 } // namespace
 
+// F6 v3 E5: definition of the thread-local transient-pin scratch cursor
+// declared `extern` in TransientPin.h. Counts CONSUMED scratch slots; the
+// scratch region fills the top kScratchSlots slots of automaticLocals from
+// the top downward, while frame regions fill from slot 0 upward. The two
+// cursors grow toward each other; pushFrame asserts they never collide.
+thread_local unsigned int g_scratchCursor = 0;
+
+// Compile-time consistency: the scratch geometry in TransientPin.h must match
+// this engine's slot capacity (8192), or a primitive would pin into slots the
+// engine believes are free frame storage. ExecutionEngine::kSlotCapacity is
+// asserted equal to kEngineSlotCapacity inside pushFrame (a member function
+// with access to the private constant).
+static_assert(kEngineSlotCapacity == 8192,
+              "TransientPin scratch geometry assumes an 8192-slot engine context");
+
 // ---------------------------------------------------------------------------
 // F6 v3 E3: slot accessors. Every ProtoObject* a frame touches is read/written
 // through the engine context's automaticLocals so the GC sees it.
@@ -163,12 +179,23 @@ ExecutionEngine::pushFrame(const BytecodeModule* m,
     fr.localCount = computeLocalCount(*m, argc);
     fr.maxStack   = kFrameMaxStk;
     fr.sp         = 0;
+    // F6 v3 E5: the engine's slot capacity and the TransientPin scratch
+    // geometry must agree — pushFrame is a member function so it can see the
+    // private constant. Frame regions occupy [0, kFrameRegionLimit); the top
+    // kScratchSlots slots are reserved for transient pins.
+    static_assert(kSlotCapacity == kEngineSlotCapacity,
+                  "engine kSlotCapacity must equal TransientPin kEngineSlotCapacity");
+
     // Allocate this frame's region from the shared thread-local cursor so it
     // never overlaps an outer (nested-engine) frame's region.
     fr.baseSlot = g_slotCursor;
     const unsigned int regionSize = frameRegionSize(fr);
     const unsigned int regionEnd  = fr.baseSlot + regionSize;
-    if (regionEnd > kSlotCapacity)
+    // F6 v3 E5: frame regions must not grow into the transient-pin scratch
+    // region at the top of automaticLocals. The previous bound was
+    // kSlotCapacity; it is now kFrameRegionLimit (== kSlotCapacity -
+    // kScratchSlots) so the scratch slots are never aliased by frame storage.
+    if (regionEnd > kFrameRegionLimit)
         throw std::runtime_error("engine slot region exhausted");
 
     // Initialise the whole region to PROTO_NONE (header + locals + opStack).
@@ -389,12 +416,21 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // attribute "__bc_ptr__".
                 auto* blkProto = rt_.bootstrap().blockProto;
                 auto* block = blkProto->newChild(ctx, /*isMutable=*/true);
+                // F6 v3 E5: `block` is a fresh mutable object held in a C++
+                // local across the fromUTF8String key interning (first call
+                // allocates), fromLong (allocates), and two setAttribute
+                // calls on a mutable object (each allocates a sparse-list
+                // node). Until `push(f, block)` lands it in a GC-traced frame
+                // slot it is reachable from nowhere the collector traces.
+                TransientPin pinBlock(ctx, block);
                 static const proto::ProtoString* bcKey =
-                    ctx->fromUTF8String("__bc_ptr__")->asString(ctx);
+                    proto::ProtoString::createSymbol(ctx, "__bc_ptr__");
                 static const proto::ProtoString* capKey =
-                    ctx->fromUTF8String("__captured__")->asString(ctx);
+                    proto::ProtoString::createSymbol(ctx, "__captured__");
                 auto* bcPtrObj = ctx->fromLong(
                     reinterpret_cast<long long>(&f.m->block(arg)));
+                // `bcPtrObj` is held across the setAttribute below — pin it.
+                TransientPin pinBcPtr(ctx, bcPtrObj);
                 block->setAttribute(ctx, bcKey, bcPtrObj);
                 // F3-C5: stash the current frame's captured dict so the
                 // block can resolve free variables back to the outer scope
@@ -431,7 +467,19 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     sendArgs[i] = pop(f);
                 const proto::ProtoObject* recv = pop(f);
 
-                auto* selSym = ctx->fromUTF8String(selStr.c_str())->asString(ctx);
+                auto* selSym = proto::ProtoString::createSymbol(ctx, selStr.c_str());
+                // F6 v3 E5: `selSym` is a freshly interned ProtoString held in
+                // a bare C++ local for the ENTIRE remainder of this handler —
+                // across getAttribute walks, the actor-path allocations
+                // (newFuture / newChild / newList / appendLast / setAttribute),
+                // primitive dispatch, and pushFrame. None of those root it
+                // (the receiver and popped args stay rooted via their frame
+                // slots, but `selSym` is brand new and reachable from nowhere
+                // the GC traces). A GC cycle between here and the last use
+                // would reclaim it → use-after-free, observed as the deep-
+                // chain `doesNotUnderstand` (the known #5 bug). Pin it.
+                TransientPin pinSelSym(
+                    ctx, reinterpret_cast<const proto::ProtoObject*>(selSym));
 
                 // F6-A4: actor fast-path. If the receiver is an actor (i.e.
                 // carries a __wrapped__ attribute installed by Object>>asActor),
@@ -443,25 +491,42 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // STRuntime::drainOne pulls a message from the mailbox.
                 if (rt_.isActor(ctx, recv)) {
                     static const proto::ProtoString* mbKey =
-                        ctx->fromUTF8String("__mailbox__")->asString(ctx);
+                        proto::ProtoString::createSymbol(ctx, "__mailbox__");
                     static const proto::ProtoString* msgSelKey =
-                        ctx->fromUTF8String("__selector__")->asString(ctx);
+                        proto::ProtoString::createSymbol(ctx, "__selector__");
                     static const proto::ProtoString* msgArgsKey =
-                        ctx->fromUTF8String("__args__")->asString(ctx);
+                        proto::ProtoString::createSymbol(ctx, "__args__");
                     static const proto::ProtoString* msgFutKey =
-                        ctx->fromUTF8String("__future__")->asString(ctx);
+                        proto::ProtoString::createSymbol(ctx, "__future__");
 
                     // Allocate a fresh pending Future.
+                    // F6 v3 E5: `fut` is held in a C++ local across newChild,
+                    // newList, the appendLast loop, three setAttribute calls
+                    // on mutable objects, getActorLock, the locked mailbox
+                    // RMW and schedule() — all of which allocate. Pin it.
                     auto* fut = const_cast<proto::ProtoObject*>(rt_.newFuture(ctx));
+                    TransientPin pinFut(ctx, fut);
 
                     // Build the message envelope (a fresh mutable child of objectProto).
+                    // F6 v3 E5: `msg` is held across the appendLast loop, the
+                    // setAttribute calls, the RMW and schedule() — pin it.
                     auto* msg = const_cast<proto::ProtoObject*>(rt_.bootstrap().objectProto)
                         ->newChild(ctx, /*isMutable=*/true);
+                    TransientPin pinMsg(ctx, msg);
 
                     // Build args ProtoList by FIFO appendLast of each arg.
+                    // F6 v3 E5: `argsList` is rebuilt by appendLast each turn
+                    // (structural-sharing COW) and then held across the
+                    // setAttribute calls. A single pin tracks the latest list
+                    // value via reset(); the previous values become garbage
+                    // immediately and need no rooting.
                     auto* argsList = ctx->newList();
+                    TransientPin pinArgsList(
+                        ctx, reinterpret_cast<const proto::ProtoObject*>(argsList));
                     for (int i = 0; i < argcOp; ++i) {
                         argsList = argsList->appendLast(ctx, sendArgs[i]);
+                        pinArgsList.reset(
+                            reinterpret_cast<const proto::ProtoObject*>(argsList));
                     }
 
                     msg->setAttribute(ctx, msgSelKey, reinterpret_cast<const proto::ProtoObject*>(selSym));
@@ -494,9 +559,18 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         GcSafeLockGuard guard(ctx, actorLock);
 
                         // Enqueue (FIFO) into the actor's mailbox.
+                        // F6 v3 E5: `mailbox` may be a fresh ctx->newList()
+                        // (a transient reachable from nowhere the GC traces)
+                        // and is held across appendLast, which allocates.
+                        // `newMailbox` is then held across asObject +
+                        // setAttribute. Pin both.
                         auto* mbObj = recv->getAttribute(ctx, mbKey);
                         auto* mailbox = mbObj ? mbObj->asList(ctx) : ctx->newList();
+                        TransientPin pinMailbox(
+                            ctx, reinterpret_cast<const proto::ProtoObject*>(mailbox));
                         auto* newMailbox = mailbox->appendLast(ctx, msg);
+                        TransientPin pinNewMailbox(
+                            ctx, reinterpret_cast<const proto::ProtoObject*>(newMailbox));
                         const_cast<proto::ProtoObject*>(recv)
                             ->setAttribute(ctx, mbKey, newMailbox->asObject(ctx));
                     }
@@ -533,9 +607,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // of this file.
                 {
                     static const proto::ProtoString* recvBcKey =
-                        ctx->fromUTF8String("__bc_ptr__")->asString(ctx);
+                        proto::ProtoString::createSymbol(ctx, "__bc_ptr__");
                     static const proto::ProtoString* recvCapKey =
-                        ctx->fromUTF8String("__captured__")->asString(ctx);
+                        proto::ProtoString::createSymbol(ctx, "__captured__");
                     // getAttribute walks the receiver first then the proto
                     // chain. `__bc_ptr__` is set only on BlockClosures (by
                     // PUSH_BLOCK), never on `blockProto` itself, so a hit
@@ -620,9 +694,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // the legacy primitive-marker (tagged SmallInteger with bit
                 // 62 set) dispatch.
                 static const proto::ProtoString* bcKey =
-                    ctx->fromUTF8String("__bc_ptr__")->asString(ctx);
+                    proto::ProtoString::createSymbol(ctx, "__bc_ptr__");
                 static const proto::ProtoString* capKey =
-                    ctx->fromUTF8String("__captured__")->asString(ctx);
+                    proto::ProtoString::createSymbol(ctx, "__captured__");
                 auto* bcPtrObj = attr->getAttribute(ctx, bcKey);
                 if (bcPtrObj && bcPtrObj != PROTO_NONE) {
                     // User method: F6 v3 A previously recursed via
@@ -715,7 +789,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             case Op::PUSH_CAPTURED: {
                 // arg = constant pool index of the (interned) symbol name.
                 const std::string& nameStr = f.m->constSymbol(arg);
-                auto* sym = ctx->fromUTF8String(nameStr.c_str())->asString(ctx);
+                auto* sym = proto::ProtoString::createSymbol(ctx, nameStr.c_str());
                 const proto::ProtoObject* capD = getCaptured(f);
                 const proto::ProtoObject* val =
                     (capD && capD != PROTO_NONE)
@@ -732,14 +806,20 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 if (!capD || capD == PROTO_NONE)
                     throw std::runtime_error("STORE_CAPTURED without captured dict");
                 const std::string& nameStr = f.m->constSymbol(arg);
-                auto* sym = ctx->fromUTF8String(nameStr.c_str())->asString(ctx);
+                auto* sym = proto::ProtoString::createSymbol(ctx, nameStr.c_str());
+                // F6 v3 E5: `sym` is freshly interned and held across
+                // setAttribute on the mutable captured dict, which allocates a
+                // sparse-list node. `val` was popped but stays rooted in its
+                // frame slot; `sym` is reachable from nowhere — pin it.
+                TransientPin pinSym(
+                    ctx, reinterpret_cast<const proto::ProtoObject*>(sym));
                 const_cast<proto::ProtoObject*>(capD)->setAttribute(ctx, sym, val);
                 break;
             }
             case Op::PUSH_GLOBAL: {
                 // arg = constant pool index of the (interned) global name.
                 const std::string& nameStr = f.m->constSymbol(arg);
-                auto* sym = ctx->fromUTF8String(nameStr.c_str())->asString(ctx);
+                auto* sym = proto::ProtoString::createSymbol(ctx, nameStr.c_str());
                 auto* g = rt_.globals();
                 auto* val = g ? g->getAttribute(ctx, sym) : nullptr;
                 if (!val || val == PROTO_NONE)
@@ -752,7 +832,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     throw std::runtime_error("STORE_GLOBAL with empty stack");
                 const proto::ProtoObject* val = pop(f);
                 const std::string& nameStr = f.m->constSymbol(arg);
-                auto* sym = ctx->fromUTF8String(nameStr.c_str())->asString(ctx);
+                auto* sym = proto::ProtoString::createSymbol(ctx, nameStr.c_str());
+                // F6 v3 E5: `sym` held across setAttribute on the mutable
+                // globals object (allocates) — pin it.
+                TransientPin pinSym(
+                    ctx, reinterpret_cast<const proto::ProtoObject*>(sym));
                 auto* g = rt_.globals();
                 if (!g) throw std::runtime_error("globals not initialized");
                 g->setAttribute(ctx, sym, val);
@@ -774,7 +858,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 const std::string& nameStr = f.m->constSymbol(arg);
                 std::string mangled = "_iv_";
                 mangled += nameStr;
-                auto* sym = ctx->fromUTF8String(mangled.c_str())->asString(ctx);
+                auto* sym = proto::ProtoString::createSymbol(ctx, mangled.c_str());
                 if (f.localCount == 0)
                     throw std::runtime_error("PUSH_INSTVAR with no self");
                 const proto::ProtoObject* self = getLocal(f, 0);
@@ -794,7 +878,12 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 const std::string& nameStr = f.m->constSymbol(arg);
                 std::string mangled = "_iv_";
                 mangled += nameStr;
-                auto* sym = ctx->fromUTF8String(mangled.c_str())->asString(ctx);
+                auto* sym = proto::ProtoString::createSymbol(ctx, mangled.c_str());
+                // F6 v3 E5: `sym` held across setAttribute on `self` (a
+                // mutable object — allocates a sparse-list node). `val` and
+                // `self` stay rooted via their frame slots; `sym` does not.
+                TransientPin pinSym(
+                    ctx, reinterpret_cast<const proto::ProtoObject*>(sym));
                 if (f.localCount == 0)
                     throw std::runtime_error("STORE_INSTVAR with no self");
                 const proto::ProtoObject* self = getLocal(f, 0);
@@ -840,11 +929,22 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         // way; consistency across both sites is what makes the suspended-
         // frame handoff observable.
         const proto::ProtoString* suspKey =
-            ctx->fromUTF8String("__suspended_frame__")->asString(ctx);
+            proto::ProtoString::createSymbol(ctx, "__suspended_frame__");
         const proto::ProtoString* waitingOnKey =
-            ctx->fromUTF8String("__waiting_on__")->asString(ctx);
+            proto::ProtoString::createSymbol(ctx, "__waiting_on__");
+        // F6 v3 E5: `suspKey` / `waitingOnKey` are freshly interned strings
+        // held across snapshotFrames (which allocates a ProtoList plus one
+        // mutable object and several lists per frame — heavy GC pressure) and
+        // the setAttribute calls below. Pin both.
+        TransientPin pinSuspKey(
+            ctx, reinterpret_cast<const proto::ProtoObject*>(suspKey));
+        TransientPin pinWaitKey(
+            ctx, reinterpret_cast<const proto::ProtoObject*>(waitingOnKey));
 
         const proto::ProtoObject* snap = snapshotFrames(ctx);
+        // `snap` is held across the setAttribute below and across
+        // appendFutureWaiterLocked (which allocates) — pin it.
+        TransientPin pinSnap(ctx, snap);
         SCHED_DIAG("engine YIELD actor=" << actor
                    << " future=" << y.future()
                    << " frames=" << frames_.size());
@@ -933,14 +1033,29 @@ ExecutionEngine::snapshotFrames(proto::ProtoContext* ctx) const {
     // so a function-local static would dangle once the runtime that first
     // ran snapshotFrames is destroyed. restoreFrames resolves the identical
     // names; the two must agree within a runtime for the round trip to work.
-    const proto::ProtoString* pcKey       = ctx->fromUTF8String("pc")->asString(ctx);
-    const proto::ProtoString* opStackKey  = ctx->fromUTF8String("op_stack")->asString(ctx);
-    const proto::ProtoString* localsKey   = ctx->fromUTF8String("locals")->asString(ctx);
-    const proto::ProtoString* selfKey     = ctx->fromUTF8String("self_obj")->asString(ctx);
-    const proto::ProtoString* capturedKey = ctx->fromUTF8String("captured_dict")->asString(ctx);
-    const proto::ProtoString* mPtrKey     = ctx->fromUTF8String("m_ptr")->asString(ctx);
+    const proto::ProtoString* pcKey       = proto::ProtoString::createSymbol(ctx, "pc");
+    const proto::ProtoString* opStackKey  = proto::ProtoString::createSymbol(ctx, "op_stack");
+    const proto::ProtoString* localsKey   = proto::ProtoString::createSymbol(ctx, "locals");
+    const proto::ProtoString* selfKey     = proto::ProtoString::createSymbol(ctx, "self_obj");
+    const proto::ProtoString* capturedKey = proto::ProtoString::createSymbol(ctx, "captured_dict");
+    const proto::ProtoString* mPtrKey     = proto::ProtoString::createSymbol(ctx, "m_ptr");
+    // F6 v3 E5: the six attribute keys are freshly interned ProtoStrings held
+    // in C++ locals for the entire frame-encoding loop, which allocates one
+    // mutable object plus three lists plus an ExternalPointer PER FRAME — a
+    // deep cooperative chain snapshots dozens of frames, so a GC cycle mid-
+    // loop is near-certain under aggressive GC. Pin every key for the loop.
+    TransientPin pinPcKey(ctx, reinterpret_cast<const proto::ProtoObject*>(pcKey));
+    TransientPin pinOpKey(ctx, reinterpret_cast<const proto::ProtoObject*>(opStackKey));
+    TransientPin pinLocKey(ctx, reinterpret_cast<const proto::ProtoObject*>(localsKey));
+    TransientPin pinSelfKey(ctx, reinterpret_cast<const proto::ProtoObject*>(selfKey));
+    TransientPin pinCapKey(ctx, reinterpret_cast<const proto::ProtoObject*>(capturedKey));
+    TransientPin pinMKey(ctx, reinterpret_cast<const proto::ProtoObject*>(mPtrKey));
 
+    // `result` accumulates one frameObj per frame via appendLast (COW); a
+    // single pin tracks the latest list value.
     const proto::ProtoList* result = ctx->newList();
+    TransientPin pinResult(
+        ctx, reinterpret_cast<const proto::ProtoObject*>(result));
     for (const Frame& fr : frames_) {
         // Each frame becomes a fresh mutable child of objectProto. This
         // mirrors how Object>>asActor builds the actor wrapper and how the
@@ -949,6 +1064,10 @@ ExecutionEngine::snapshotFrames(proto::ProtoContext* ctx) const {
         // elsewhere in this file.
         auto* frameObj = const_cast<proto::ProtoObject*>(rt_.bootstrap().objectProto)
             ->newChild(ctx, /*isMutable=*/true);
+        // F6 v3 E5: `frameObj` is held across every setAttribute, the two
+        // inner appendLast loops, fromLong / fromExternalPointer, and the
+        // final result->appendLast. Pin it for the iteration.
+        TransientPin pinFrameObj(ctx, frameObj);
 
         // pc
         frameObj->setAttribute(
@@ -958,20 +1077,31 @@ ExecutionEngine::snapshotFrames(proto::ProtoContext* ctx) const {
         // op_stack as ProtoList (preserve order: index 0 = bottom of stack).
         // F6 v3 E3: the live operand stack is the [0, sp) slice of the
         // frame's operand-stack slot region inside automaticLocals.
+        // F6 v3 E5: `opList` is rebuilt by appendLast each turn; a single pin
+        // tracks the latest value across the inner loop's allocations.
         const proto::ProtoList* opList = ctx->newList();
+        TransientPin pinOpList(
+            ctx, reinterpret_cast<const proto::ProtoObject*>(opList));
         for (unsigned int j = 0; j < fr.sp; ++j) {
             const proto::ProtoObject* v =
                 ctx->getAutomaticLocal(opStackBase(fr) + j);
             opList = opList->appendLast(ctx, v ? v : PROTO_NONE);
+            pinOpList.reset(
+                reinterpret_cast<const proto::ProtoObject*>(opList));
         }
         frameObj->setAttribute(ctx, opStackKey, opList->asObject(ctx));
 
         // locals as ProtoList (size == localCount). F6 v3 E3: read every
         // local slot out of the frame's region.
+        // F6 v3 E5: same per-turn rebuild as opList — single pin via reset.
         const proto::ProtoList* locList = ctx->newList();
+        TransientPin pinLocList(
+            ctx, reinterpret_cast<const proto::ProtoObject*>(locList));
         for (unsigned int j = 0; j < fr.localCount; ++j) {
             const proto::ProtoObject* v = getLocal(fr, j);
             locList = locList->appendLast(ctx, v ? v : PROTO_NONE);
+            pinLocList.reset(
+                reinterpret_cast<const proto::ProtoObject*>(locList));
         }
         frameObj->setAttribute(ctx, localsKey, locList->asObject(ctx));
 
@@ -999,6 +1129,8 @@ ExecutionEngine::snapshotFrames(proto::ProtoContext* ctx) const {
                 /*finalizer=*/nullptr));
 
         result = result->appendLast(ctx, frameObj);
+        pinResult.reset(
+            reinterpret_cast<const proto::ProtoObject*>(result));
     }
     return result->asObject(ctx);
 }
@@ -1006,28 +1138,45 @@ ExecutionEngine::snapshotFrames(proto::ProtoContext* ctx) const {
 void
 ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
                                const proto::ProtoObject* snapshot) {
+    // F6 v3 E3: restoreFrames is the engine's entry point on the resume path
+    // (drainOne calls it before resumeWith + continueRun). Establish the same
+    // engine-context state runWithArgs would: bind ctx_, ensure the GC-traced
+    // slot array is pre-sized, and anchor this engine's frame regions at the
+    // current thread-local cursor so a nested engine cannot overlap them.
+    //
+    // F6 v3 E5: the resize MUST happen before any TransientPin is claimed —
+    // the pin writes into the scratch region of automaticLocals, which only
+    // exists once the array is sized to kSlotCapacity. The worker context on
+    // a resume may be a fresh per-thread context never previously sized by a
+    // runWithArgs, so this resize is load-bearing for the pins below.
+    ctx_ = ctx;
+    ctx_->resizeAutomaticLocals(kSlotCapacity);
+
     // Resolve fresh from the live ctx — see snapshotFrames for the
     // per-space interning rationale.
-    const proto::ProtoString* pcKey       = ctx->fromUTF8String("pc")->asString(ctx);
-    const proto::ProtoString* opStackKey  = ctx->fromUTF8String("op_stack")->asString(ctx);
-    const proto::ProtoString* localsKey   = ctx->fromUTF8String("locals")->asString(ctx);
-    const proto::ProtoString* selfKey     = ctx->fromUTF8String("self_obj")->asString(ctx);
-    const proto::ProtoString* capturedKey = ctx->fromUTF8String("captured_dict")->asString(ctx);
-    const proto::ProtoString* mPtrKey     = ctx->fromUTF8String("m_ptr")->asString(ctx);
+    const proto::ProtoString* pcKey       = proto::ProtoString::createSymbol(ctx, "pc");
+    const proto::ProtoString* opStackKey  = proto::ProtoString::createSymbol(ctx, "op_stack");
+    const proto::ProtoString* localsKey   = proto::ProtoString::createSymbol(ctx, "locals");
+    const proto::ProtoString* selfKey     = proto::ProtoString::createSymbol(ctx, "self_obj");
+    const proto::ProtoString* capturedKey = proto::ProtoString::createSymbol(ctx, "captured_dict");
+    const proto::ProtoString* mPtrKey     = proto::ProtoString::createSymbol(ctx, "m_ptr");
+    // F6 v3 E5: the six keys are held across the per-frame getAttribute loop
+    // (each turn interns nothing, but a getAttribute walk that crosses a
+    // safepoint plus the array writes below can sit either side of a GC
+    // cycle). Pin them — the context was sized above so the scratch region
+    // exists.
+    TransientPin pinPcKey(ctx, reinterpret_cast<const proto::ProtoObject*>(pcKey));
+    TransientPin pinOpKey(ctx, reinterpret_cast<const proto::ProtoObject*>(opStackKey));
+    TransientPin pinLocKey(ctx, reinterpret_cast<const proto::ProtoObject*>(localsKey));
+    TransientPin pinSelfKey(ctx, reinterpret_cast<const proto::ProtoObject*>(selfKey));
+    TransientPin pinCapKey(ctx, reinterpret_cast<const proto::ProtoObject*>(capturedKey));
+    TransientPin pinMKey(ctx, reinterpret_cast<const proto::ProtoObject*>(mPtrKey));
 
     if (!snapshot)
         throw std::runtime_error("restoreFrames: snapshot is null");
     auto* asList = snapshot->asList(ctx);
     if (!asList)
         throw std::runtime_error("restoreFrames: snapshot is not a list");
-
-    // F6 v3 E3: restoreFrames is the engine's entry point on the resume path
-    // (drainOne calls it before resumeWith + continueRun). Establish the same
-    // engine-context state runWithArgs would: bind ctx_, ensure the GC-traced
-    // slot array is pre-sized, and anchor this engine's frame regions at the
-    // current thread-local cursor so a nested engine cannot overlap them.
-    ctx_ = ctx;
-    ctx_->resizeAutomaticLocals(kSlotCapacity);
 
     frames_.clear();
     slotBase_ = g_slotCursor;
@@ -1095,7 +1244,8 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
 
         const unsigned int regionSize = frameRegionSize(fr);
         const unsigned int regionEnd  = fr.baseSlot + regionSize;
-        if (regionEnd > kSlotCapacity)
+        // F6 v3 E5: keep frame regions out of the transient-pin scratch region.
+        if (regionEnd > kFrameRegionLimit)
             throw std::runtime_error("engine slot region exhausted");
 
         // Initialise the region, then write self/captured/locals/opStack.

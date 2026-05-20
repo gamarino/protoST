@@ -1,6 +1,7 @@
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
+#include "runtime/TransientPin.h"
 #include "protoCore.h"
 
 #include <chrono>
@@ -39,21 +40,31 @@ const proto::ProtoObject* prim_Object_asActor(STRuntime& rt, proto::ProtoContext
     auto& b = rt.bootstrap();
     // Create a new mutable child of actorProto.
     auto* actor = b.actorProto->newChild(ctx, /*isMutable=*/true);
+    // F6 v3 E5: `actor` is a fresh mutable object held in a C++ local across
+    // every line of this primitive — four setAttribute calls on a mutable
+    // object (each allocates a sparse-list node), ctx->newList, ctx->fromLong,
+    // ProtoString::createSymbol, and ctx->fromExternalPointer. Until it is
+    // returned (and the caller pushes it onto a GC-traced operand slot) it is
+    // reachable from no traced root. Pin it for the primitive's lifetime.
+    TransientPin pinActor(ctx, actor);
 
     // __wrapped__ = recv
     static const proto::ProtoString* wrappedKey =
-        ctx->fromUTF8String("__wrapped__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__wrapped__");
     actor->setAttribute(ctx, wrappedKey, r);
 
     // __mailbox__ = empty ProtoList (Lisp-style cons stack)
     static const proto::ProtoString* mailboxKey =
-        ctx->fromUTF8String("__mailbox__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__mailbox__");
     auto* emptyList = ctx->newList();
+    // `emptyList` is held across asObject + setAttribute — pin it.
+    TransientPin pinEmptyList(
+        ctx, reinterpret_cast<const proto::ProtoObject*>(emptyList));
     actor->setAttribute(ctx, mailboxKey, emptyList->asObject(ctx));
 
     // __state__ = 0 (idle)
     static const proto::ProtoString* stateKey =
-        ctx->fromUTF8String("__state__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__state__");
     actor->setAttribute(ctx, stateKey, ctx->fromLong(0));
 
     // F6 v2 T3: per-actor mutex for thread-safe mailbox.
@@ -80,6 +91,8 @@ const proto::ProtoObject* prim_Object_asActor(STRuntime& rt, proto::ProtoContext
     auto* lockEP = ctx->fromExternalPointer(
         lockPtr,
         [](void* p) { delete static_cast<std::mutex*>(p); });
+    // `lockEP` is held across the final setAttribute — pin it.
+    TransientPin pinLockEP(ctx, lockEP);
     actor->setAttribute(ctx, lockKey, lockEP);
 
     return actor;
@@ -154,10 +167,14 @@ const proto::ProtoObject* prim_Import_from(STRuntime& rt, proto::ProtoContext* c
     if (!wrapper || wrapper == PROTO_NONE) {
         throw std::runtime_error("module not found: " + logical);
     }
+    // F6 v3 E5: `wrapper` is a fresh object held across the `exportsKey`
+    // interning (first call allocates the symbol) and the getAttribute walk.
+    // Pin it.
+    TransientPin pinWrapper(ctx, wrapper);
     // Unwrap: getImportModule returns a wrapper with `exports` attribute
     // pointing to the module.
     static const proto::ProtoString* exportsKey =
-        ctx->fromUTF8String("exports")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "exports");
     auto* mod = wrapper->getAttribute(ctx, exportsKey);
     return (mod && mod != PROTO_NONE) ? mod : wrapper;
 }
@@ -196,7 +213,7 @@ void installImportGlobal(STRuntime& rt) {
     bindPrimitive(rt, importObj, "from:", idx);
 
     // Register in globals so PUSH_GLOBAL resolves `Import`.
-    auto* importKey = ctx->fromUTF8String("Import")->asString(ctx);
+    auto* importKey = proto::ProtoString::createSymbol(ctx, "Import");
     auto* g = rt.globals();
     g->setAttribute(ctx, importKey, importObj);
 }

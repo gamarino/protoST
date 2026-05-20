@@ -18,9 +18,9 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* block,
                                        const proto::ProtoObject* const* args, int argc) {
     static const proto::ProtoString* bcKey =
-        ctx->fromUTF8String("__bc_ptr__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__bc_ptr__");
     static const proto::ProtoString* capKey =
-        ctx->fromUTF8String("__captured__")->asString(ctx);
+        proto::ProtoString::createSymbol(ctx, "__captured__");
     auto* bcPtrObj = block->getAttribute(ctx, bcKey);
     if (!bcPtrObj || bcPtrObj == PROTO_NONE)
         throw std::runtime_error("block missing __bc_ptr__");
