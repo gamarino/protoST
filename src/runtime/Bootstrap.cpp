@@ -40,6 +40,17 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     out.errorProto        = const_cast<proto::ProtoObject*>(out.exceptionProto)->newChild(ctx, /*isMutable=*/true);
     out.warningProto      = const_cast<proto::ProtoObject*>(out.exceptionProto)->newChild(ctx, /*isMutable=*/true);
 
+    // Track 2 slice a (COL-a): collection class hierarchy. Ordinary mutable
+    // prototypes — the abstract `Collection` carries the derived iteration
+    // protocol (collect:/select:/detect:/...), `Array` carries the concrete
+    // base operations. `SequenceableCollection` and `HashedCollection` are
+    // declared now even though only `Array` is concrete in COL-a, so the
+    // hierarchy slot exists for OrderedCollection/Set/Bag/Dictionary (COL-b..e).
+    out.collectionProto             = const_cast<proto::ProtoObject*>(out.objectProto)->newChild(ctx, /*isMutable=*/true);
+    out.sequenceableCollectionProto = const_cast<proto::ProtoObject*>(out.collectionProto)->newChild(ctx, /*isMutable=*/true);
+    out.hashedCollectionProto       = const_cast<proto::ProtoObject*>(out.collectionProto)->newChild(ctx, /*isMutable=*/true);
+    out.arrayProto                  = const_cast<proto::ProtoObject*>(out.sequenceableCollectionProto)->newChild(ctx, /*isMutable=*/true);
+
     // Bind protoCore primitive slots so values produced by fromLong/fromDouble/etc.
     // walk up through our Smalltalk prototypes.  This mirrors protoJS's
     // NumberPrototype.cpp pattern (space->smallIntegerPrototype = const_cast<...>).
@@ -90,6 +101,10 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     stamp(out.exceptionProto,    "Exception");
     stamp(out.errorProto,        "Error");
     stamp(out.warningProto,      "Warning");
+    stamp(out.collectionProto,             "Collection");
+    stamp(out.sequenceableCollectionProto, "SequenceableCollection");
+    stamp(out.hashedCollectionProto,       "HashedCollection");
+    stamp(out.arrayProto,                  "Array");
 
     // Track 1 slice 2 (EXC-a): the class-derived `resumable` marker. Carried
     // on the class prototypes so an instance inherits it via the chain;

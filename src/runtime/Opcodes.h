@@ -45,6 +45,11 @@ enum class Op : uint8_t {
     // Closure capture in methods (CLO): allocate a fresh per-method captured
     // dict and install it in frame slot 0 (no operand; pass 0).
     MAKE_CAPTURED   = 28,
+    // Collection literals (COL-a): pop `arg` values off the operand stack
+    // (oldest pushed first → element 0) and push a fresh Array instance
+    // wrapping them. `arg` is wide-operand capable (EXTEND), so a literal may
+    // contain more than 255 elements. Backs both `#(...)` and `{...}`.
+    MAKE_ARRAY      = 29,
     // Extend for >256-index args
     EXTEND          = 254,
     // Debugger primitive guard

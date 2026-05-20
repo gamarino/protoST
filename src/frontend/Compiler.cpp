@@ -581,6 +581,28 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             }
             return;
         }
+        case NodeKind::ArrayLit:
+        case NodeKind::DynArrayLit: {
+            // COL-a: collection literals lower to a sequence of element
+            // pushes followed by MAKE_ARRAY N. The MAKE_ARRAY engine handler
+            // pops the N values (oldest-first → element 0) and pushes a fresh
+            // Array instance.
+            //
+            //   #(...) — the parser only admits compile-time literals
+            //            (IntegerLit/FloatLit/StringLit/SymbolLit; a bare
+            //            identifier was already turned into a SymbolLit). Each
+            //            child is therefore an ordinary literal expression and
+            //            emitExpr emits a single PUSH_CONST for it.
+            //   {...}  — each child is an arbitrary expression evaluated at
+            //            runtime; emitExpr emits whatever it needs.
+            for (const auto& child : n.children) {
+                if (child) emitExpr(m, *child);
+            }
+            m.emitWide(Op::MAKE_ARRAY,
+                       static_cast<unsigned int>(n.children.size()),
+                       currentLine_);
+            return;
+        }
         case NodeKind::Block: {
             auto sub = std::make_unique<BytecodeModule>();
             // open fresh scope for block

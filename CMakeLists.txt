@@ -70,6 +70,7 @@ add_library(protost_runtime STATIC
     src/primitives/object_prims.cpp
     src/primitives/future_prims.cpp
     src/primitives/exception_prims.cpp
+    src/primitives/collection_prims.cpp
     src/modules/STModuleProvider.cpp
     src/repl/Repl.cpp
     src/dap/DapTransport.cpp

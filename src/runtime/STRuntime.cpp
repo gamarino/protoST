@@ -52,6 +52,7 @@ namespace protoST { void installObjectPrimitives(STRuntime& rt); }
 namespace protoST { void installFuturePrimitives(STRuntime& rt); }
 namespace protoST { void installImportGlobal(STRuntime& rt); }
 namespace protoST { void installExceptionPrimitives(STRuntime& rt); }
+namespace protoST { void installCollectionPrimitives(STRuntime& rt); }
 
 // F6-A6 / F6 v2 T4: future transition helpers defined alongside the Future
 // primitives.
@@ -231,6 +232,22 @@ struct STRuntime::Impl {
         auto* warningKey = proto::ProtoString::createSymbol(rootCtx, "Warning");
         globals->setAttribute(rootCtx, warningKey, bootstrap.warningProto);
 
+        // Track 2 slice a (COL-a): register the collection class hierarchy in
+        // globals so user code can name `Collection`, `Array`, etc. and do
+        // `Array new: 3` / `Array withAll: ...`.
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "Collection"),
+            bootstrap.collectionProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "SequenceableCollection"),
+            bootstrap.sequenceableCollectionProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "HashedCollection"),
+            bootstrap.hashedCollectionProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "Array"),
+            bootstrap.arrayProto);
+
         // F6 v3 E2b: create the single live-registry GC root and pin it.
         //
         // This is the ONLY object ever handed to asyncRoots->add(). Every
@@ -293,6 +310,13 @@ struct STRuntime::Impl {
             pinPermanent(bootstrap.exceptionProto);
             pinPermanent(bootstrap.errorProto);
             pinPermanent(bootstrap.warningProto);
+            // Track 2 slice a (COL-a): the collection prototypes carry the
+            // iteration protocol + Array base operations — pin them for the
+            // runtime's whole lifetime, exactly like the other built-in classes.
+            pinPermanent(bootstrap.collectionProto);
+            pinPermanent(bootstrap.sequenceableCollectionProto);
+            pinPermanent(bootstrap.hashedCollectionProto);
+            pinPermanent(bootstrap.arrayProto);
         }
     }
 
@@ -334,6 +358,7 @@ STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
     installObjectPrimitives(*this);
     installFuturePrimitives(*this);
     installExceptionPrimitives(*this);
+    installCollectionPrimitives(*this);
     installImportGlobal(*this);
 
     // F5 v2: register STModuleProvider once globally with protoCore's

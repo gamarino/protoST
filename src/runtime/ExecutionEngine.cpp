@@ -42,6 +42,12 @@
 
 namespace protoST {
 
+// COL-a: build a fresh Array instance wrapping the given protoCore ProtoList.
+// Defined in collection_prims.cpp; used here by the MAKE_ARRAY opcode handler.
+const proto::ProtoObject* makeArrayInstance(STRuntime& rt,
+                                            proto::ProtoContext* ctx,
+                                            const proto::ProtoList* data);
+
 namespace {
 
 // Track 1 slice 1: process-global frame-id allocator. Every frame pushed by
@@ -1129,6 +1135,33 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // and the store — nothing does. Pin defensively anyway.
                 TransientPin pinDict(ctx, dict);
                 setCaptured(f, dict);
+                break;
+            }
+            case Op::MAKE_ARRAY: {
+                // COL-a: collection-literal builder. `arg` element values are
+                // on the operand stack, oldest-pushed deepest (so element 0 is
+                // at depth arg-1). Collect them bottom-up into a ProtoList,
+                // pop them, wrap the list as a fresh Array instance and push.
+                if (f.sp < arg)
+                    throw std::runtime_error("MAKE_ARRAY with insufficient stack");
+                const proto::ProtoList* data = ctx->newList();
+                // `data` is a transient reachable from nowhere the GC traces;
+                // it is rebuilt by appendLast each turn (structural-sharing
+                // COW). The element values stay rooted via their frame slots
+                // (pop only decrements sp; the slots remain GC-traced). A
+                // single pin tracks the latest list value.
+                TransientPin pinData(
+                    ctx, reinterpret_cast<const proto::ProtoObject*>(data));
+                for (unsigned int i = 0; i < arg; ++i) {
+                    const proto::ProtoObject* v = opAt(f, arg - 1 - i);
+                    data = data->appendLast(ctx, v ? v : PROTO_NONE);
+                    pinData.reset(
+                        reinterpret_cast<const proto::ProtoObject*>(data));
+                }
+                for (unsigned int i = 0; i < arg; ++i) pop(f);
+                const proto::ProtoObject* arr =
+                    makeArrayInstance(rt_, ctx, data);
+                push(f, arr ? arr : PROTO_NONE);
                 break;
             }
             case Op::PUSH_SELF: {

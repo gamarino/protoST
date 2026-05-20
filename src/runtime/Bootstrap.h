@@ -49,6 +49,16 @@ struct Bootstrap {
     const proto::ProtoObject* exceptionProto     = nullptr;
     const proto::ProtoObject* errorProto         = nullptr;
     const proto::ProtoObject* warningProto       = nullptr;
+    // Track 2 slice a (COL-a): collection class hierarchy.
+    //   Collection                 (abstract — shared iteration protocol)
+    //     |-- SequenceableCollection (abstract — ordered, indexable)
+    //     |     `-- Array            (concrete — ProtoList backing)
+    //     `-- HashedCollection      (abstract — Set/Bag/Dictionary later)
+    // Mutable so the collection primitives can be bound on them.
+    const proto::ProtoObject* collectionProto             = nullptr;
+    const proto::ProtoObject* sequenceableCollectionProto = nullptr;
+    const proto::ProtoObject* hashedCollectionProto       = nullptr;
+    const proto::ProtoObject* arrayProto                  = nullptr;
 };
 
 // Build the prototype tree on top of `sp.objectPrototype` and bind the result
