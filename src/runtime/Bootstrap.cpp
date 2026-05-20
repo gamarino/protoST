@@ -32,6 +32,14 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     out.actorProto        = const_cast<proto::ProtoObject*>(out.objectProto)->newChild(ctx, /*isMutable=*/true);
     out.futureProto       = const_cast<proto::ProtoObject*>(out.objectProto)->newChild(ctx, /*isMutable=*/true);
 
+    // Track 1 slice 2 (EXC-a): exception class hierarchy. Ordinary mutable
+    // prototypes — `Exception subclass: #MyError` works through the standard
+    // `subclass:`/`newChild` path with no special-casing. `signal`, `on:do:`
+    // and `return:` are bound later by installExceptionPrimitives.
+    out.exceptionProto    = const_cast<proto::ProtoObject*>(out.objectProto)->newChild(ctx, /*isMutable=*/true);
+    out.errorProto        = const_cast<proto::ProtoObject*>(out.exceptionProto)->newChild(ctx, /*isMutable=*/true);
+    out.warningProto      = const_cast<proto::ProtoObject*>(out.exceptionProto)->newChild(ctx, /*isMutable=*/true);
+
     // Bind protoCore primitive slots so values produced by fromLong/fromDouble/etc.
     // walk up through our Smalltalk prototypes.  This mirrors protoJS's
     // NumberPrototype.cpp pattern (space->smallIntegerPrototype = const_cast<...>).
@@ -79,6 +87,24 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     stamp(out.actorProto,        "Actor");
     stamp(out.futureProto,       "Future");
     stamp(out.nilProto,          "UndefinedObject");
+    stamp(out.exceptionProto,    "Exception");
+    stamp(out.errorProto,        "Error");
+    stamp(out.warningProto,      "Warning");
+
+    // Track 1 slice 2 (EXC-a): the class-derived `resumable` marker. Carried
+    // on the class prototypes so an instance inherits it via the chain;
+    // `Error` overrides `Exception`'s true with false. EXC-a does not yet act
+    // on this flag (resume:/retry/pass land in EXC-b) — it is recorded now so
+    // the hierarchy is complete and EXC-b can read it without a re-bootstrap.
+    const proto::ProtoString* resumableKey =
+        proto::ProtoString::createSymbol(ctx, "__resumable__");
+    auto markResumable = [&](const proto::ProtoObject* proto, bool resumable) {
+        const_cast<proto::ProtoObject*>(proto)->setAttribute(
+            ctx, resumableKey, resumable ? PROTO_TRUE : PROTO_FALSE);
+    };
+    markResumable(out.exceptionProto, true);   // Exception — resumable
+    markResumable(out.errorProto,     false);  // Error — not resumable
+    markResumable(out.warningProto,   true);   // Warning — resumable
 }
 
 } // namespace protoST

@@ -3,6 +3,7 @@
 #include "ExecutionEngine.h"
 #include "FutureYield.h"
 #include "NonLocalReturn.h"
+#include "UnwindToHandler.h"
 #include "BytecodeModule.h"
 #include "Bootstrap.h"
 #include "Venv.h"
@@ -45,6 +46,7 @@ namespace protoST { void installDebuggerPrimitives(STRuntime& rt); }
 namespace protoST { void installObjectPrimitives(STRuntime& rt); }
 namespace protoST { void installFuturePrimitives(STRuntime& rt); }
 namespace protoST { void installImportGlobal(STRuntime& rt); }
+namespace protoST { void installExceptionPrimitives(STRuntime& rt); }
 
 // F6-A6 / F6 v2 T4: future transition helpers defined alongside the Future
 // primitives.
@@ -214,6 +216,16 @@ struct STRuntime::Impl {
         auto* futureKey = proto::ProtoString::createSymbol(rootCtx, "Future");
         globals->setAttribute(rootCtx, futureKey, bootstrap.futureProto);
 
+        // Track 1 slice 2 (EXC-a): register the exception class hierarchy in
+        // globals so user code can name `Exception`, `Error`, `Warning` and
+        // do `Exception subclass: #MyError`.
+        auto* exceptionKey = proto::ProtoString::createSymbol(rootCtx, "Exception");
+        globals->setAttribute(rootCtx, exceptionKey, bootstrap.exceptionProto);
+        auto* errorKey = proto::ProtoString::createSymbol(rootCtx, "Error");
+        globals->setAttribute(rootCtx, errorKey, bootstrap.errorProto);
+        auto* warningKey = proto::ProtoString::createSymbol(rootCtx, "Warning");
+        globals->setAttribute(rootCtx, warningKey, bootstrap.warningProto);
+
         // F6 v3 E2b: create the single live-registry GC root and pin it.
         //
         // This is the ONLY object ever handed to asyncRoots->add(). Every
@@ -270,6 +282,12 @@ struct STRuntime::Impl {
             pinPermanent(bootstrap.actorProto);
             pinPermanent(bootstrap.futureProto);
             pinPermanent(bootstrap.nilProto);
+            // Track 1 slice 2 (EXC-a): the exception prototypes carry the
+            // signal / on:do: / return: bindings — pin them for the runtime's
+            // whole lifetime, exactly like the other built-in classes.
+            pinPermanent(bootstrap.exceptionProto);
+            pinPermanent(bootstrap.errorProto);
+            pinPermanent(bootstrap.warningProto);
         }
     }
 
@@ -310,6 +328,7 @@ STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
     installDebuggerPrimitives(*this);
     installObjectPrimitives(*this);
     installFuturePrimitives(*this);
+    installExceptionPrimitives(*this);
     installImportGlobal(*this);
 
     // F5 v2: register STModuleProvider once globally with protoCore's
@@ -620,6 +639,13 @@ STRuntime::runTopLevel(const BytecodeModule& m) {
     } catch (const NonLocalReturn&) {
         throw std::runtime_error(
             "non-local return: home method has already returned");
+    } catch (const UnwindToHandler&) {
+        // Track 1 slice 2 (EXC-a): an UnwindToHandler reached the top level
+        // with no `on:do:` to catch it. A balanced `on:do:` always catches
+        // its own id, so this is a bug (an exception handler ran but its
+        // owning `on:do:` was already gone). Surface it as a runtime error.
+        throw std::runtime_error(
+            "exception unwind: no matching on:do: handler activation");
     }
 }
 
@@ -963,6 +989,20 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                     TransientPin pinErr(ctx, err);
                     rejectFutureFromDrain(*this, ctx, msgFut, err);
                 }
+            } catch (const UnwindToHandler&) {
+                // Track 1 slice 2 (EXC-a): a stray UnwindToHandler escaped the
+                // resumed engine — a balanced `on:do:` always catches its own
+                // id, so this is a bug. Reject the message future, mirroring
+                // the dead-home non-local-return path above.
+                SCHED_DIAG("drainOne RESUME STRAY exception-unwind actor="
+                           << actor);
+                setCurrentActor(nullptr);
+                if (msgFut && msgFut != PROTO_NONE) {
+                    auto* err = ctx->fromUTF8String(
+                        "exception unwind: no matching on:do: handler activation");
+                    TransientPin pinErr(ctx, err);
+                    rejectFutureFromDrain(*this, ctx, msgFut, err);
+                }
             } catch (const std::exception& e) {
                 setCurrentActor(nullptr);
                 if (msgFut && msgFut != PROTO_NONE) {
@@ -1151,6 +1191,22 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
         if (future) {
             auto* err = ctx->fromUTF8String(
                 "non-local return: home method has already returned");
+            TransientPin pinErr(ctx, err);
+            rejectFutureFromDrain(*this, ctx, future, err);
+        }
+        actorGuard.release();
+        return true;
+    } catch (const UnwindToHandler&) {
+        // Track 1 slice 2 (EXC-a): an UnwindToHandler escaped the actor
+        // handler's engine with no `on:do:` to catch it. A balanced `on:do:`
+        // always catches its own id, so this is a bug; reject the message's
+        // Future with a clear error rather than letting a non-std::exception
+        // escape drainOne and call std::terminate.
+        SCHED_DIAG("drainOne STRAY exception-unwind actor=" << actor);
+        setCurrentActor(nullptr);
+        if (future) {
+            auto* err = ctx->fromUTF8String(
+                "exception unwind: no matching on:do: handler activation");
             TransientPin pinErr(ctx, err);
             rejectFutureFromDrain(*this, ctx, future, err);
         }

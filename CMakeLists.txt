@@ -58,6 +58,7 @@ add_library(protost_runtime STATIC
     src/runtime/STRuntime.cpp
     src/runtime/ExecutionEngine.cpp
     src/runtime/Bootstrap.cpp
+    src/runtime/HandlerStack.cpp
     src/runtime/ValueFormat.cpp
     src/debugger/DebuggerRuntime.cpp
     src/debugger/BreakpointTable.cpp
@@ -68,6 +69,7 @@ add_library(protost_runtime STATIC
     src/primitives/debugger_prims.cpp
     src/primitives/object_prims.cpp
     src/primitives/future_prims.cpp
+    src/primitives/exception_prims.cpp
     src/modules/STModuleProvider.cpp
     src/repl/Repl.cpp
     src/dap/DapTransport.cpp

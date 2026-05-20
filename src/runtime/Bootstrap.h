@@ -41,6 +41,14 @@ struct Bootstrap {
     const proto::ProtoObject* actorProto         = nullptr;
     const proto::ProtoObject* futureProto        = nullptr;
     const proto::ProtoObject* nilProto           = nullptr;
+    // Track 1 slice 2 (EXC-a): exception class hierarchy.
+    //   Exception
+    //     |-- Error
+    //     `-- Warning
+    // Mutable so signal / on:do: / return: primitives can be bound on them.
+    const proto::ProtoObject* exceptionProto     = nullptr;
+    const proto::ProtoObject* errorProto         = nullptr;
+    const proto::ProtoObject* warningProto       = nullptr;
 };
 
 // Build the prototype tree on top of `sp.objectPrototype` and bind the result
