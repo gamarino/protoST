@@ -188,6 +188,13 @@ private:
     // Build a DebugFrame (module/pc/stack/locals) from a frame's slot region.
     DebugFrame makeDebugFrame(const Frame& f) const;
 
+    // F8-4: build a DebugFrame for the current (innermost) frame whose
+    // `callStack` field carries the WHOLE frame stack — every entry in
+    // `frames_` snapshotted oldest-first, current frame last. The returned
+    // top-level fields mirror the innermost frame so single-frame consumers
+    // (the text debugger) keep working unchanged.
+    DebugFrame makeDebugStack() const;
+
     // Single dispatch loop operating on frames_.back(). Returns when frames_
     // becomes empty (the original C++ caller's frame's RETURN_TOP popped the
     // last frame) — the returned value is whatever that final frame produced.

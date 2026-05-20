@@ -90,6 +90,10 @@ private:
     void   emitStatement(BytecodeModule& m, const ast::Node& n);
     int    declareLocal(const std::string& name);
     int    resolveLocal(const std::string& name) const;
+    // F8-4: write the current (innermost) scope's slot->name mapping into `m`
+    // as a slot-indexed vector, so the DAP Variables panel can show real
+    // identifiers instead of "slot N". Call before popping the scope.
+    void   recordLocalNames(BytecodeModule& m) const;
     // Returns true if `name` appears in the capturedNames set of the current
     // scope or any enclosing scope (innermost-first lookup).
     bool   isCaptured(const std::string& name) const;

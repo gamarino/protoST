@@ -213,6 +213,8 @@ std::unique_ptr<BytecodeModule> Compiler::compileModule(const Node& mod) {
         }
     }
     bc->emit(Op::RETURN_TOP, 0, currentLine_);
+    recordLocalNames(*bc);
+    bc->setDebugName("<module>");
     return bc;
 }
 
@@ -315,6 +317,10 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             sub->emit(Op::RETURN, 0, currentLine_);
         }
 
+        recordLocalNames(*sub);
+        sub->setDebugName(n.text + ">>" +
+                          (n.stringList.empty() ? std::string("<method>")
+                                                : n.stringList[0]));
         scopes_.pop_back();
 
         // Attach the method module as a sub-block of the outer (module) bytecode.
@@ -589,6 +595,8 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                 if (i + 1 != n.children.size()) sub->emit(Op::POP, 0, currentLine_);
             }
             sub->emit(Op::RETURN_TOP, 0, currentLine_);
+            recordLocalNames(*sub);
+            sub->setDebugName("<block>");
             scopes_.pop_back();
             size_t blkIdx = m.addBlockModule(std::move(sub));
             if (blkIdx > 255) { error("block index pool overflow"); return; }
@@ -629,6 +637,20 @@ bool Compiler::isCaptured(const std::string& name) const {
         if (it->slots.count(name) != 0) return false;
     }
     return false;
+}
+
+void Compiler::recordLocalNames(BytecodeModule& m) const {
+    // The innermost scope's `slots` map is name->slot; invert it into a
+    // slot-indexed vector sized to the highest slot in use. Captured names
+    // live in the closure dict rather than a local slot, but they never
+    // appear in `slots`, so the inversion only covers real local slots.
+    const auto& s = scopes_.back();
+    std::vector<std::string> names(static_cast<size_t>(s.nextSlot));
+    for (const auto& [name, slot] : s.slots) {
+        if (slot >= 0 && static_cast<size_t>(slot) < names.size())
+            names[static_cast<size_t>(slot)] = name;
+    }
+    m.setLocalNames(std::move(names));
 }
 
 void Compiler::error(const std::string& msg) { errors_.push_back(msg); }

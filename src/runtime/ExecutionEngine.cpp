@@ -282,6 +282,26 @@ ExecutionEngine::makeDebugFrame(const Frame& f) const {
     return d;
 }
 
+// F8-4: snapshot the whole `frames_` stack. The top-level DebugFrame mirrors
+// the innermost frame (so single-frame consumers are unaffected); its
+// `callStack` carries every frame oldest-first, current frame last, each with
+// its own frameDepth set to its index in the stack.
+DebugFrame
+ExecutionEngine::makeDebugStack() const {
+    DebugFrame top;
+    if (frames_.empty())
+        return top;
+    top = makeDebugFrame(frames_.back());
+    top.callStack.reserve(frames_.size());
+    for (size_t i = 0; i < frames_.size(); ++i) {
+        DebugFrame d = makeDebugFrame(frames_[i]);
+        d.frameDepth = static_cast<int>(i);
+        top.callStack.push_back(std::move(d));
+    }
+    top.frameDepth = static_cast<int>(frames_.size()) - 1;
+    return top;
+}
+
 const proto::ProtoObject*
 ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     // F6 v3 E3: locals are no longer grown lazily — every frame's region is
@@ -335,14 +355,14 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         // the cost of unwinding the C++ stack on every step.
         auto dbgMode = rt_.debugger().mode();
         if (rt_.debugger().attached() && dbgMode != DebuggerRuntime::Mode::Free) {
-            rt_.debugger().enterSession(rt_, makeDebugFrame(f), "step");
+            rt_.debugger().enterSession(rt_, makeDebugStack(), "step");
             // Session may have updated mode (e.g. user typed 'c'); fall
             // through to dispatch the next instruction.
         }
 
         // F2 location breakpoint: halt BEFORE executing the instruction at pc.
         if (rt_.debugger().attached() && rt_.debugger().breakpoints().isSet(f.m, f.pc)) {
-            rt_.debugger().enterSession(rt_, makeDebugFrame(f),
+            rt_.debugger().enterSession(rt_, makeDebugStack(),
                                         "breakpoint");
         }
 
@@ -993,7 +1013,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         // contract.
         DebugFrame dframe;
         if (!frames_.empty()) {
-            dframe = makeDebugFrame(frames_.back());
+            dframe = makeDebugStack();
         }
         rt_.debugger().enterSession(rt_, std::move(dframe), h.reason());
         // After the session resumes (user typed c/s/n/f), fall back through

@@ -19,6 +19,13 @@ struct DebugFrame {
     int                                    frameDepth = 0;
     std::vector<const proto::ProtoObject*> stack;
     std::vector<const proto::ProtoObject*> locals;
+
+    // F8-4: the full engine call stack at the stop point, oldest frame first
+    // and the current (innermost) frame last. Populated by the engine when it
+    // enters the debugger so the DAP adapter can render a multi-level
+    // `stackTrace`. Empty when the engine could not snapshot the stack; in
+    // that case the single-frame fields above are the only data available.
+    std::vector<DebugFrame>                callStack;
 };
 
 class DebuggerHalt : public std::runtime_error {
@@ -53,6 +60,18 @@ public:
     void setOutputStream(std::ostream* os) { outStream_ = os; }
 
     BreakpointTable& breakpoints() { return breakpoints_; }
+
+    // F8-4: evaluate a source expression in the runtime and format the
+    // result as a display string. Shared by the `-d` text debugger's
+    // `print`/`p` command and the DAP adapter's `evaluate` request so the
+    // parse -> compile -> run -> format pipeline lives in exactly one place.
+    //
+    // `expr` is a source fragment WITHOUT the trailing `.` (it is appended
+    // here, matching protoST statement syntax). On success returns true and
+    // writes the formatted value to `out`. On a parse / compile / runtime
+    // error returns false and writes the diagnostic message to `out`.
+    static bool evaluateExpression(STRuntime& rt, const std::string& expr,
+                                   std::string& out);
 
     // F8-3: a pluggable stop handler. When a frontend is installed, the
     // engine's stop points route through `frontend_->onStopped(...)` instead

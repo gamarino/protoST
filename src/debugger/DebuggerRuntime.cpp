@@ -19,6 +19,42 @@ std::string trim(std::string s) {
 }
 } // anon
 
+bool DebuggerRuntime::evaluateExpression(STRuntime& rt, const std::string& expr,
+                                         std::string& out) {
+    // Append the statement terminator protoST expects; the caller passes a
+    // bare expression.
+    std::string src = expr + ".";
+    protoST::Parser pp(src);
+    auto ast = pp.parseModule();
+    if (!pp.errors().empty()) {
+        out = "parse error: " + pp.errors().front().message;
+        return false;
+    }
+    protoST::Compiler cc;
+    auto bc = cc.compileModule(*ast);
+    if (cc.hasErrors()) {
+        out = "compile error: " + cc.errors().front();
+        return false;
+    }
+    try {
+        auto* r = rt.runTopLevel(*bc);
+        if (r == PROTO_NONE)       out = "nil";
+        else if (r == PROTO_TRUE)  out = "true";
+        else if (r == PROTO_FALSE) out = "false";
+        else {
+            try { out = std::to_string(r->asLong(rt.rootCtx())); }
+            catch (...) {
+                auto* s = r->asString(rt.rootCtx());
+                out = s ? s->toStdString(rt.rootCtx()) : std::string("<obj>");
+            }
+        }
+        return true;
+    } catch (const std::exception& e) {
+        out = std::string("error: ") + e.what();
+        return false;
+    }
+}
+
 void DebuggerRuntime::enterSession(STRuntime& rt, DebugFrame frame, const std::string& reason) {
     // F8-3: when a frontend is installed (e.g. the DAP adapter), route the
     // stop through it instead of the built-in text REPL. The frontend blocks
@@ -79,34 +115,11 @@ void DebuggerRuntime::enterSession(STRuntime& rt, DebugFrame frame, const std::s
             continue;
         }
         if (line.rfind("print ", 0) == 0 || line.rfind("p ", 0) == 0) {
-            std::string src = line.substr(line.find(' ') + 1) + ".";
-            protoST::Parser pp(src);
-            auto ast = pp.parseModule();
-            if (!pp.errors().empty()) {
-                for (auto& e : pp.errors()) out << "  parse error: " << e.message << "\n";
-                continue;
-            }
-            protoST::Compiler cc;
-            auto bc = cc.compileModule(*ast);
-            if (cc.hasErrors()) {
-                for (auto& s : cc.errors()) out << "  compile error: " << s << "\n";
-                continue;
-            }
-            try {
-                auto* r = rt.runTopLevel(*bc);
-                if (r == PROTO_NONE)       out << "  nil\n";
-                else if (r == PROTO_TRUE)  out << "  true\n";
-                else if (r == PROTO_FALSE) out << "  false\n";
-                else {
-                    try { out << "  " << r->asLong(rt.rootCtx()) << "\n"; }
-                    catch (...) {
-                        auto* s = r->asString(rt.rootCtx());
-                        out << "  " << (s ? s->toStdString(rt.rootCtx()) : std::string("<obj>")) << "\n";
-                    }
-                }
-            } catch (const std::exception& e) {
-                out << "  error: " << e.what() << "\n";
-            }
+            // F8-4: parse -> compile -> run -> format now lives in the shared
+            // evaluateExpression helper, reused by the DAP `evaluate` request.
+            std::string result;
+            evaluateExpression(rt, line.substr(line.find(' ') + 1), result);
+            out << "  " << result << "\n";
             continue;
         }
 

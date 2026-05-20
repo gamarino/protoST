@@ -120,3 +120,45 @@ TEST_CASE("F8-1: sub-block instructions carry their own source lines",
     // in the sub-block must map to it.
     REQUIRE(method.firstPcForLine(3) != SIZE_MAX);
 }
+
+// --- F8-4: local-slot names + module debug name ----------------------------
+// The DAP Variables panel relies on BytecodeModule::localName(slot) to show
+// real identifiers instead of "slot N". The compiler records the declared
+// name per local slot; debugName labels the module in the call stack.
+
+TEST_CASE("F8-4: module records its top-level local names",
+          "[compiler][f8][locals]") {
+    const char* src =
+        "count := 1.\n"
+        "total := count + 2.\n"
+        "total.\n";
+    auto bc = compileSrc(src);
+
+    // Slot 0 = count, slot 1 = total (declaration order at module scope).
+    REQUIRE(bc->localName(0) == "count");
+    REQUIRE(bc->localName(1) == "total");
+    // Out-of-range slot yields an empty name (caller falls back to "slot N").
+    REQUIRE(bc->localName(99).empty());
+    // The module carries a human label for the DAP call stack.
+    REQUIRE(bc->debugName() == "<module>");
+}
+
+TEST_CASE("F8-4: a method's sub-module records self/args/locals by name",
+          "[compiler][f8][locals]") {
+    const char* src =
+        "Object subclass: #Box instanceVariableNames: ''.\n"
+        "Box >> compute: n\n"
+        "  | total |\n"
+        "  total := n + 100.\n"
+        "  ^ total.\n";
+    auto bc = compileSrc(src);
+    REQUIRE(bc->numBlocks() >= 1);
+
+    const BytecodeModule& method = bc->block(0);
+    // Method scope: slot 0 = self, slot 1 = first arg, then locals.
+    REQUIRE(method.localName(0) == "self");
+    REQUIRE(method.localName(1) == "n");
+    REQUIRE(method.localName(2) == "total");
+    // The method module is labelled "<class>>><selector>".
+    REQUIRE(method.debugName() == "Box>>compute:");
+}

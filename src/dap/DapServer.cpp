@@ -9,6 +9,7 @@
 #include "protoCore.h"
 
 #include <atomic>
+#include <cctype>
 #include <condition_variable>
 #include <cstdio>
 #include <exception>
@@ -90,6 +91,13 @@ public:
             haveFrame_     = true;
             stopped_       = true;
             resumeReady_   = false;
+            // F8-4: a new stop invalidates every handle from the previous
+            // one. Reset the frameId / variablesReference maps; they are
+            // repopulated lazily as stackTrace / scopes are requested.
+            frameTable_.clear();
+            varRefTable_.clear();
+            nextFrameId_  = 1;
+            nextVarRef_   = 1;
         }
         sendEvent("stopped", {
             {"reason",            reason},
@@ -127,7 +135,12 @@ private:
             return false;
         }
 
-        // ---- F8-4 hook: stackTrace, scopes, variables, evaluate -----------
+        // ---- F8-4: stackTrace, scopes, variables, evaluate ----------------
+        if (command == "stackTrace") { handleStackTrace(req); return false; }
+        if (command == "scopes")     { handleScopes(req);     return false; }
+        if (command == "variables")  { handleVariables(req);  return false; }
+        if (command == "evaluate")   { handleEvaluate(req);   return false; }
+
         std::cerr << "[dap] unhandled command: " << command << '\n';
         sendResponse(req, /*success=*/true, json::object());
         return false;
@@ -384,6 +397,225 @@ private:
             sendResponse(req, /*success=*/true, json::object());
     }
 
+    // --- F8-4: inspection ---------------------------------------------------
+    //
+    // Handle scheme. Each stop assigns fresh integer handles:
+    //   * frameId  — identifies one DebugFrame in the snapshotted call stack;
+    //                used as `frameId` by scopes / evaluate.
+    //   * variablesReference — identifies an expandable "thing". MVP exposes
+    //                one kind: the Locals of a frame. 0 means not expandable.
+    // Both maps are cleared in onStopped; stale handles from a prior stop
+    // resolve to nothing and yield an empty response (VS Code tolerates it).
+
+    // Basename of a path (last component after '/' or '\\').
+    static std::string basename(const std::string& path) {
+        size_t p = path.find_last_of("/\\");
+        return p == std::string::npos ? path : path.substr(p + 1);
+    }
+
+    // Standard ProtoObject -> display string, matching the -e / REPL / text
+    // debugger convention.
+    std::string formatValue(const proto::ProtoObject* obj) {
+        if (obj == nullptr || obj == PROTO_NONE) return "nil";
+        if (obj == PROTO_TRUE)  return "true";
+        if (obj == PROTO_FALSE) return "false";
+        proto::ProtoContext* ctx = runtime_ ? runtime_->rootCtx() : nullptr;
+        if (!ctx) return "<obj>";
+        try {
+            return std::to_string(obj->asLong(ctx));
+        } catch (...) {
+            try {
+                const auto* s = obj->asString(ctx);
+                return s ? s->toStdString(ctx) : std::string("<obj>");
+            } catch (...) {
+                return "<obj>";
+            }
+        }
+    }
+
+    // --- stackTrace ---------------------------------------------------------
+    void handleStackTrace(const json& req) {
+        const json& args = req.value("arguments", json::object());
+        int startFrame = args.value("startFrame", 0);
+        int levels     = args.value("levels", 0);   // 0 == all
+
+        std::vector<DebugFrame> stack;
+        {
+            std::lock_guard<std::mutex> lk(sessionMu_);
+            if (haveFrame_) {
+                if (!stoppedFrame_.callStack.empty())
+                    stack = stoppedFrame_.callStack;       // oldest-first
+                else
+                    stack.push_back(stoppedFrame_);        // single-frame
+            }
+        }
+
+        // DAP convention: frame 0 is the innermost (current) frame. The
+        // engine snapshot is oldest-first, so reverse it.
+        std::vector<const DebugFrame*> ordered;
+        for (auto it = stack.rbegin(); it != stack.rend(); ++it)
+            ordered.push_back(&*it);
+
+        json frames = json::array();
+        int total = static_cast<int>(ordered.size());
+        for (int i = startFrame; i < total; ++i) {
+            if (levels > 0 && static_cast<int>(frames.size()) >= levels)
+                break;
+            const DebugFrame& df = *ordered[static_cast<size_t>(i)];
+
+            int frameId = nextFrameId_++;
+            frameTable_[frameId] = df;
+
+            const BytecodeModule* mod = df.module;
+            std::string srcPath = mod ? mod->sourceName() : std::string();
+            int line = mod ? mod->lineForPc(df.pc) : 0;
+            std::string name = (mod && !mod->debugName().empty())
+                ? mod->debugName()
+                : ("frame " + std::to_string(i));
+
+            json frame = {
+                {"id",     frameId},
+                {"name",   name},
+                {"line",   line},
+                {"column", 1},
+            };
+            if (!srcPath.empty()) {
+                frame["source"] = {
+                    {"name", basename(srcPath)},
+                    {"path", srcPath},
+                };
+            }
+            frames.push_back(std::move(frame));
+        }
+
+        sendResponse(req, /*success=*/true, {
+            {"stackFrames", frames},
+            {"totalFrames", total},
+        });
+    }
+
+    // --- scopes -------------------------------------------------------------
+    void handleScopes(const json& req) {
+        const json& args = req.value("arguments", json::object());
+        int frameId = args.value("frameId", 0);
+
+        json scopes = json::array();
+        std::lock_guard<std::mutex> lk(sessionMu_);
+        auto it = frameTable_.find(frameId);
+        if (it != frameTable_.end()) {
+            int localsRef = nextVarRef_++;
+            varRefTable_[localsRef] = VarRef{VarRef::Locals, frameId};
+            scopes.push_back({
+                {"name",               "Locals"},
+                {"variablesReference", localsRef},
+                {"expensive",          false},
+            });
+        }
+        sendResponse(req, /*success=*/true, { {"scopes", scopes} });
+    }
+
+    // --- variables ----------------------------------------------------------
+    void handleVariables(const json& req) {
+        const json& args = req.value("arguments", json::object());
+        int ref = args.value("variablesReference", 0);
+
+        json vars = json::array();
+        {
+            std::lock_guard<std::mutex> lk(sessionMu_);
+            auto rit = varRefTable_.find(ref);
+            if (rit != varRefTable_.end() && rit->second.kind == VarRef::Locals) {
+                auto fit = frameTable_.find(rit->second.frameId);
+                if (fit != frameTable_.end()) {
+                    const DebugFrame& df = fit->second;
+                    const BytecodeModule* mod = df.module;
+                    for (size_t i = 0; i < df.locals.size(); ++i) {
+                        std::string name;
+                        if (mod && !mod->localName(i).empty())
+                            name = mod->localName(i);
+                        else if (i == 0)
+                            name = "self";       // method frame slot 0
+                        else
+                            name = "slot " + std::to_string(i);
+                        vars.push_back({
+                            {"name",               name},
+                            {"value",              formatValue(df.locals[i])},
+                            {"variablesReference", 0},
+                        });
+                    }
+                }
+            }
+        }
+        sendResponse(req, /*success=*/true, { {"variables", vars} });
+    }
+
+    // True if `s` is a single bare identifier (letters/digits/underscore,
+    // not starting with a digit). Used to short-circuit `evaluate` of a watch
+    // expression that is just a variable name.
+    static bool isBareIdentifier(const std::string& s) {
+        if (s.empty()) return false;
+        unsigned char c0 = static_cast<unsigned char>(s[0]);
+        if (!(std::isalpha(c0) || c0 == '_')) return false;
+        for (char ch : s) {
+            unsigned char c = static_cast<unsigned char>(ch);
+            if (!(std::isalnum(c) || c == '_')) return false;
+        }
+        return true;
+    }
+
+    // --- evaluate -----------------------------------------------------------
+    void handleEvaluate(const json& req) {
+        const json& args = req.value("arguments", json::object());
+        std::string expr = args.value("expression", "");
+        int frameId = args.value("frameId", 0);
+
+        if (!runtime_) {
+            sendErrorResponse(req, "evaluate: no active runtime");
+            return;
+        }
+
+        // Frame-aware fast path: a bare identifier that names a local slot of
+        // the requested frame resolves directly against that frame's snapshot.
+        // An expression compiled on the fly runs as its own module and cannot
+        // reach another module's slot-addressed locals, so without this a
+        // watch on an in-scope variable would fail. Bounded to the common
+        // watch/hover case (a single variable); compound expressions fall
+        // through to the general compile+run path.
+        if (isBareIdentifier(expr)) {
+            std::lock_guard<std::mutex> lk(sessionMu_);
+            auto fit = frameTable_.find(frameId);
+            if (fit != frameTable_.end()) {
+                const DebugFrame& df = fit->second;
+                const BytecodeModule* mod = df.module;
+                if (mod) {
+                    for (size_t i = 0; i < df.locals.size(); ++i) {
+                        if (mod->localName(i) == expr) {
+                            sendResponse(req, /*success=*/true, {
+                                {"result",             formatValue(df.locals[i])},
+                                {"variablesReference", 0},
+                            });
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        // General path: parse -> compile -> run -> format, the same pipeline
+        // the `-d` text debugger's `print` command uses (shared helper).
+        std::string result;
+        bool ok = DebuggerRuntime::evaluateExpression(*runtime_, expr, result);
+        if (!ok) {
+            sendErrorResponse(req, result);
+            return;
+        }
+        // sendResponse already wraps the argument in the message's `body`;
+        // pass the evaluate body fields directly (no extra nesting).
+        sendResponse(req, /*success=*/true, {
+            {"result",             result},
+            {"variablesReference", 0},
+        });
+    }
+
     // --- disconnect ---------------------------------------------------------
     void handleDisconnect(const json& req) {
         sendResponse(req, /*success=*/true, json::object());
@@ -486,6 +718,17 @@ private:
     bool                       haveFrame_    = false;
     DebuggerRuntime::Command   resumeCommand_ = DebuggerRuntime::Command::Continue;
     DebugFrame                 stoppedFrame_;   // F8-4 reads this for inspection
+
+    // --- F8-4: inspection handle maps --------------------------------------
+    // Rebuilt every stop (cleared in onStopped). Guarded by sessionMu_.
+    struct VarRef {
+        enum Kind { Locals } kind;
+        int                  frameId;   // which frame's locals
+    };
+    std::unordered_map<int, DebugFrame> frameTable_;    // frameId  -> frame
+    std::unordered_map<int, VarRef>     varRefTable_;   // varRef   -> thing
+    int                                 nextFrameId_ = 1;
+    int                                 nextVarRef_  = 1;
 };
 
 } // namespace

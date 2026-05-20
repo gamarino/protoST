@@ -72,6 +72,26 @@ public:
     }
     const std::vector<int>& instrLines() const { return instrLines_; }
 
+    // F8-4: local-slot names. The compiler addresses locals by slot index;
+    // the bytecode itself carries no names. To let the DAP Variables panel
+    // show real identifiers (`count`, `x`, `self`, ...) the compiler records
+    // the declared name for each slot here, parallel to the slot index. Slot
+    // i's name is localNames_[i]; an out-of-range slot (or a name never
+    // recorded) yields an empty string and the caller falls back to "slot N".
+    void setLocalNames(std::vector<std::string> names) {
+        localNames_ = std::move(names);
+    }
+    const std::string& localName(size_t slot) const {
+        static const std::string kEmpty;
+        return (slot < localNames_.size()) ? localNames_[slot] : kEmpty;
+    }
+    const std::vector<std::string>& localNames() const { return localNames_; }
+
+    // F8-4: an optional human label for this module (method selector, block,
+    // or "<module>"). Used as the stack-frame name in the DAP call stack.
+    const std::string& debugName() const { return debugName_; }
+    void setDebugName(const std::string& s) { debugName_ = s; }
+
     // F8-1: source file path/name this module was compiled from. Set
     // recursively so that already-attached sub-blocks inherit the name.
     const std::string& sourceName() const { return sourceName_; }
@@ -86,6 +106,8 @@ private:
     std::vector<uint8_t>                bytes_;
     std::vector<int>                    instrLines_;  // F8-1: line per instruction
     std::string                         sourceName_;  // F8-1: source file path
+    std::vector<std::string>            localNames_;  // F8-4: name per local slot
+    std::string                         debugName_;   // F8-4: human label
     std::vector<Const>                  consts_;
     std::unordered_map<std::string, size_t> symbolIndex_;
     std::vector<std::unique_ptr<BytecodeModule>> blocks_;
