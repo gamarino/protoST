@@ -76,6 +76,7 @@ int main(int argc, char** argv) {
 
         protoST::Compiler C;
         auto bc = C.compileModule(*ast);
+        bc->setSourceName("<expr>");
         if (C.hasErrors()) {
             for (auto& s : C.errors()) std::fprintf(stderr, "compile error: %s\n", s.c_str());
             return 70;
@@ -117,6 +118,7 @@ int main(int argc, char** argv) {
             return 65;
         }
         protoST::Compiler C; auto bc = C.compileModule(*ast);
+        bc->setSourceName(path);
         if (C.hasErrors()) {
             for (auto& s : C.errors()) std::fprintf(stderr, "compile error: %s\n", s.c_str());
             return 70;
@@ -171,6 +173,7 @@ int main(int argc, char** argv) {
 
         protoST::Compiler C;
         auto bc = C.compileModule(*ast);
+        bc->setSourceName(path);
         if (C.hasErrors()) {
             for (auto& s : C.errors()) std::fprintf(stderr, "compile error: %s\n", s.c_str());
             return 70;

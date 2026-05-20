@@ -21,9 +21,12 @@ public:
     };
 
     // emission
-    void emit(Op op, uint8_t arg);
+    // `line` is the 1-based source line the instruction originates from;
+    // 0 means "unknown". One line entry is recorded per 2-byte instruction.
+    void emit(Op op, uint8_t arg, int line = 0);
 
-    // patching (for jumps)
+    // patching (for jumps) — patchArg rewrites only the arg byte of an
+    // already-emitted instruction, so the line map is unaffected.
     size_t  pos() const { return bytes_.size(); }
     void    patchArg(size_t bytePos, uint8_t arg) { bytes_[bytePos + 1] = arg; }
 
@@ -53,8 +56,36 @@ public:
     void setArgCount(int n) { argCount_ = n; }
     int  argCount() const   { return argCount_; }
 
+    // F8-1: source-line mapping. Each 2-byte instruction has one entry in
+    // instrLines_; instruction index = pc / 2.
+    int lineForPc(size_t pc) const {
+        size_t i = pc / 2;
+        return (i < instrLines_.size()) ? instrLines_[i] : 0;
+    }
+    // Lowest pc whose instruction maps to `line`. Returns SIZE_MAX when no
+    // instruction maps to that line (used for breakpoint resolution).
+    size_t firstPcForLine(int line) const {
+        for (size_t i = 0; i < instrLines_.size(); ++i) {
+            if (instrLines_[i] == line) return i * 2;
+        }
+        return SIZE_MAX;
+    }
+    const std::vector<int>& instrLines() const { return instrLines_; }
+
+    // F8-1: source file path/name this module was compiled from. Set
+    // recursively so that already-attached sub-blocks inherit the name.
+    const std::string& sourceName() const { return sourceName_; }
+    void setSourceName(const std::string& s) {
+        sourceName_ = s;
+        for (auto& b : blocks_) {
+            if (b) b->setSourceName(s);
+        }
+    }
+
 private:
     std::vector<uint8_t>                bytes_;
+    std::vector<int>                    instrLines_;  // F8-1: line per instruction
+    std::string                         sourceName_;  // F8-1: source file path
     std::vector<Const>                  consts_;
     std::unordered_map<std::string, size_t> symbolIndex_;
     std::vector<std::unique_ptr<BytecodeModule>> blocks_;

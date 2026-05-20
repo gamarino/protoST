@@ -172,6 +172,7 @@ void evaluate(STRuntime& rt,
     Compiler C;
     C.setReplMode(true);
     auto bc = C.compileModule(*ast);
+    bc->setSourceName("<repl>");
     if (C.hasErrors()) {
         for (auto& s : C.errors())
             std::fprintf(stderr, "compile error: %s\n", s.c_str());

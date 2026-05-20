@@ -1281,6 +1281,9 @@ const proto::ProtoObject* STRuntime::loadModuleFromFile(
     // Compile.
     Compiler C;
     auto bc = C.compileModule(*ast);
+    // F8-1: stamp the source file path so the debugger can map this
+    // module (and its sub-blocks) back to a source file.
+    bc->setSourceName(filePath);
     if (C.hasErrors()) {
         std::string msg = "module compile errors in " + logicalName + ":";
         for (auto& s : C.errors()) msg += "\n  " + s;

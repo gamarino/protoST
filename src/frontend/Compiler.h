@@ -76,6 +76,12 @@ private:
     // namespace so REPL state persists across separately-compiled inputs.
     bool replMode_ = false;
 
+    // F8-1: the source line currently being emitted. Updated on entry to
+    // emitStatement / emitExpr from the AST node's `line` field (when valid)
+    // and stamped onto every instruction via emit(). Synthesised nodes that
+    // lack a line (line == 0) leave the previous value untouched.
+    int currentLine_ = 0;
+
     // True while emitting at the outermost (module) scope.
     bool atModuleScope() const { return scopes_.size() == 1; }
 
