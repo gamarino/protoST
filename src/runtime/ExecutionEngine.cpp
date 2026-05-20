@@ -37,6 +37,167 @@
 
 namespace protoST {
 
+namespace {
+
+// F6 v3 E3: per-frame slot geometry.
+//
+// The frame stack is backed by the engine context's automaticLocals (a flat,
+// GC-traced array). Each frame needs a FIXED region size decided at push
+// time, since automaticLocals is pre-sized once and never grown afterwards.
+//
+// localCount: scan the module's bytecode for the highest local-slot index
+//   referenced by PUSH_LOCAL / STORE_LOCAL, take +1, and floor it at the
+//   module's declared argCount and a small minimum. The legacy engine grew
+//   `locals` lazily via ensureLocal; this pre-computes the same ceiling.
+// maxStack: a fixed conservative bound. Smalltalk method/block bodies in
+//   this language are small; 48 operand slots is far past any real depth
+//   (the legacy engine merely `reserve`d 64 and grew on demand).
+constexpr unsigned int kMinLocals    = 4;
+constexpr unsigned int kFrameMaxStk  = 48;
+
+// F6 v3 E3: thread-local high-water mark into the engine context's
+// automaticLocals. A ProtoContext is per-thread, but several ExecutionEngines
+// can nest on the SAME thread's C++ stack on the SAME context — e.g. a
+// primitive (`ifTrue:`, `thenDo:`, `whileTrue:`, `value`) called from inside
+// an opcode handler spins up a fresh ExecutionEngine via invokeBlock(). Each
+// engine therefore cannot assume slot 0 is free: it must pack its frame
+// regions ABOVE whatever the outer engines already occupy.
+//
+// g_slotCursor is the next free slot on the current thread. pushFrame
+// allocates [cursor, cursor+regionSize) and advances it; popping a frame
+// rewinds it. Because engines nest strictly (LIFO) on the C++ stack, the
+// cursor is a correct shared allocator: a nested engine sees the cursor
+// already advanced past the outer engine's live frames, and on return the
+// outer engine's cursor is exactly where it left it.
+//
+// Cooperative yield clears frames_ and rewinds the cursor by the engine's
+// own consumed span (cursor - slotBase_); a resumed engine re-allocates from
+// the cursor as restoreFrames rebuilds the stack.
+thread_local unsigned int g_slotCursor = 0;
+
+unsigned int computeLocalCount(const BytecodeModule& m, unsigned int argc) {
+    const auto& bytes = m.bytes();
+    unsigned int maxSlot = 0;
+    bool sawSlot = false;
+    for (std::size_t pc = 0; pc + 1 < bytes.size(); pc += kInstrSize) {
+        const Op op = static_cast<Op>(bytes[pc]);
+        if (op == Op::PUSH_LOCAL || op == Op::STORE_LOCAL) {
+            unsigned int slot = bytes[pc + 1];
+            if (!sawSlot || slot > maxSlot) { maxSlot = slot; sawSlot = true; }
+        }
+    }
+    unsigned int needed = sawSlot ? (maxSlot + 1) : 0;
+    needed = std::max(needed, argc);
+    needed = std::max(needed, kMinLocals);
+    return needed;
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
+// F6 v3 E3: slot accessors. Every ProtoObject* a frame touches is read/written
+// through the engine context's automaticLocals so the GC sees it.
+// ---------------------------------------------------------------------------
+
+const proto::ProtoObject*
+ExecutionEngine::getLocal(const Frame& f, unsigned int i) const {
+    return ctx_->getAutomaticLocal(localsBase(f) + i);
+}
+void
+ExecutionEngine::setLocal(const Frame& f, unsigned int i,
+                          const proto::ProtoObject* v) {
+    ctx_->setAutomaticLocal(localsBase(f) + i, v);
+}
+const proto::ProtoObject*
+ExecutionEngine::getSelf(const Frame& f) const {
+    return ctx_->getAutomaticLocal(f.baseSlot + 1);
+}
+void
+ExecutionEngine::setSelf(const Frame& f, const proto::ProtoObject* v) {
+    ctx_->setAutomaticLocal(f.baseSlot + 1, v);
+}
+const proto::ProtoObject*
+ExecutionEngine::getCaptured(const Frame& f) const {
+    return ctx_->getAutomaticLocal(f.baseSlot + 0);
+}
+void
+ExecutionEngine::setCaptured(const Frame& f, const proto::ProtoObject* v) {
+    ctx_->setAutomaticLocal(f.baseSlot + 0, v);
+}
+void
+ExecutionEngine::push(Frame& f, const proto::ProtoObject* v) {
+    if (f.sp >= f.maxStack)
+        throw std::runtime_error("engine operand stack overflow");
+    ctx_->setAutomaticLocal(opStackBase(f) + f.sp, v);
+    ++f.sp;
+}
+const proto::ProtoObject*
+ExecutionEngine::pop(Frame& f) {
+    if (f.sp == 0)
+        throw std::runtime_error("engine operand stack underflow");
+    --f.sp;
+    return ctx_->getAutomaticLocal(opStackBase(f) + f.sp);
+}
+const proto::ProtoObject*
+ExecutionEngine::peek(const Frame& f) const {
+    if (f.sp == 0)
+        throw std::runtime_error("engine operand stack peek on empty");
+    return ctx_->getAutomaticLocal(opStackBase(f) + f.sp - 1);
+}
+const proto::ProtoObject*
+ExecutionEngine::opAt(const Frame& f, unsigned int depth) const {
+    // depth 0 == top of stack.
+    return ctx_->getAutomaticLocal(opStackBase(f) + f.sp - 1 - depth);
+}
+
+void
+ExecutionEngine::pushFrame(const BytecodeModule* m,
+                           const proto::ProtoObject* self,
+                           const proto::ProtoObject* captured,
+                           const proto::ProtoObject* const* args,
+                           unsigned int argc) {
+    Frame fr;
+    fr.m          = m;
+    fr.pc         = 0;
+    fr.localCount = computeLocalCount(*m, argc);
+    fr.maxStack   = kFrameMaxStk;
+    fr.sp         = 0;
+    // Allocate this frame's region from the shared thread-local cursor so it
+    // never overlaps an outer (nested-engine) frame's region.
+    fr.baseSlot = g_slotCursor;
+    const unsigned int regionSize = frameRegionSize(fr);
+    const unsigned int regionEnd  = fr.baseSlot + regionSize;
+    if (regionEnd > kSlotCapacity)
+        throw std::runtime_error("engine slot region exhausted");
+
+    // Initialise the whole region to PROTO_NONE (header + locals + opStack).
+    for (unsigned int s = fr.baseSlot; s < regionEnd; ++s)
+        ctx_->setAutomaticLocal(s, PROTO_NONE);
+
+    // Header slots.
+    ctx_->setAutomaticLocal(fr.baseSlot + 0, captured ? captured : PROTO_NONE);
+    ctx_->setAutomaticLocal(fr.baseSlot + 1, self ? self : PROTO_NONE);
+
+    // Bind incoming args into locals 0..argc-1.
+    for (unsigned int i = 0; i < argc; ++i)
+        ctx_->setAutomaticLocal(localsBase(fr) + i,
+                                args[i] ? args[i] : PROTO_NONE);
+
+    g_slotCursor += regionSize;
+    frames_.push_back(fr);
+}
+
+// F6 v3 E3: pop the top frame and rewind the shared slot cursor by exactly
+// its region size. Frames are pushed/popped strictly LIFO, so the cursor
+// always rewinds to the popped frame's baseSlot.
+void
+ExecutionEngine::popFrame() {
+    if (frames_.empty()) return;
+    const Frame& top = frames_.back();
+    g_slotCursor = top.baseSlot;   // == g_slotCursor - frameRegionSize(top)
+    frames_.pop_back();
+}
+
 const proto::ProtoObject*
 ExecutionEngine::run(proto::ProtoContext* ctx,
                      const BytecodeModule& m,
@@ -52,42 +213,70 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
                              int argc,
                              const proto::ProtoObject* capturedDict) {
     // F6 v3 A: build the initial Frame and enter the single dispatch loop.
-    // Previously the operand stack / locals / pc lived as C++ stack variables
-    // and a recursive runWithArgs call ran a sub-engine; now everything is
-    // explicit in frames_ and user-method SENDs push frames instead of
-    // recursing.
+    // F6 v3 E3: the frame stack is backed by the engine context's
+    // automaticLocals — a flat, GC-traced slot array. We pre-size that array
+    // ONCE here, before any opcode runs and before any allocation that could
+    // trigger a GC cycle. resizeAutomaticLocals is grow-only and idempotent,
+    // so a worker context reused across many drainOne ticks pays the
+    // reallocation cost at most once. Crucially, this thread is actively
+    // running (not parked at a safepoint) during the resize, so a concurrent
+    // stop-the-world GC cannot proceed mid-realloc — it needs every thread
+    // parked first. No new ProtoContext is ever created.
+    ctx_ = ctx;
+    ctx_->resizeAutomaticLocals(kSlotCapacity);
+
     frames_.clear();
-    // Pre-reserve to keep Frame references stable across moderate push depth.
-    // 64 is a typical recursive Smalltalk method nesting; we never read &back
-    // across a push without re-acquiring, but the reservation avoids excess
-    // reallocation churn anyway.
     frames_.reserve(64);
 
-    Frame top;
-    top.m = &m;
-    top.pc = 0;
-    top.opStack.reserve(64);
-    // Pre-populate slots 0..argc-1 from incoming args (Task 44: block
-    // invocation and user-method dispatch both arrive here with `args`
-    // already including `self` in slot 0 when applicable).
-    top.locals.assign(args, args + argc);
-    top.locals.reserve(std::max<std::size_t>(16, top.locals.size() + 8));
-    top.selfObj = selfObj;
-    top.capturedDict = capturedDict;
-    frames_.push_back(std::move(top));
+    // Capture where this engine's frame regions begin — the current
+    // thread-local cursor, already advanced past any outer (nested) engine.
+    slotBase_ = g_slotCursor;
+
+    pushFrame(&m, selfObj, capturedDict, args,
+              static_cast<unsigned int>(argc < 0 ? 0 : argc));
 
     return runLoop(ctx);
 }
 
+// F6 v3 E3: build a DebugFrame snapshot from a frame's slot region. The
+// operand stack is the live [0, sp) portion; locals are all localCount slots.
+DebugFrame
+ExecutionEngine::makeDebugFrame(const Frame& f) const {
+    DebugFrame d;
+    d.module = f.m;
+    d.pc     = f.pc;
+    d.stack.reserve(f.sp);
+    for (unsigned int i = 0; i < f.sp; ++i)
+        d.stack.push_back(ctx_->getAutomaticLocal(opStackBase(f) + i));
+    d.locals.reserve(f.localCount);
+    for (unsigned int i = 0; i < f.localCount; ++i)
+        d.locals.push_back(getLocal(f, i));
+    return d;
+}
+
 const proto::ProtoObject*
 ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
-    // Helper to ensure a local slot exists in the current frame. The old
-    // engine grew `locals` lazily on first STORE_LOCAL/PUSH_LOCAL; we keep
-    // that behaviour for compatibility.
-    auto ensureLocal = [](Frame& f, uint8_t slot) {
-        if (slot >= f.locals.size())
-            f.locals.resize(static_cast<std::size_t>(slot) + 1, PROTO_NONE);
+    // F6 v3 E3: locals are no longer grown lazily — every frame's region is
+    // pre-sized at pushFrame time (computeLocalCount scans the module for the
+    // highest slot referenced). A slot index past localCount is a compiler /
+    // sizing bug; reject it rather than silently aliasing another frame's
+    // region.
+    auto checkLocal = [](const Frame& f, uint8_t slot) {
+        if (slot >= f.localCount)
+            throw std::runtime_error("engine local slot out of range");
     };
+
+    // F6 v3 E3: whatever happens (normal return, cooperative yield rethrow,
+    // or a std::exception propagating out to drainOne), the shared slot
+    // cursor MUST rewind to where this engine started — otherwise a later
+    // engine on the same thread would leak slots and eventually hit the
+    // "engine slot region exhausted" cap. On a clean RETURN popFrame() has
+    // already rewound it to slotBase_; this guard makes the exceptional
+    // exits equally safe and is a harmless no-op on the clean path.
+    struct SlotCursorGuard {
+        unsigned int restoreTo;
+        ~SlotCursorGuard() { g_slotCursor = restoreTo; }
+    } cursorGuard{slotBase_};
 
     // Outer loop: lets us resume after a DebuggerHalt is caught and the
     // user steps/conts out of the session. Without this wrapper the catch
@@ -103,10 +292,10 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             // with PROTO_NONE on an empty stack, matching the legacy
             // engine's fallthrough behaviour.
             const proto::ProtoObject* r =
-                f.opStack.empty() ? PROTO_NONE : f.opStack.back();
-            frames_.pop_back();
+                f.sp == 0 ? PROTO_NONE : peek(f);
+            popFrame();
             if (frames_.empty()) return r;
-            frames_.back().opStack.push_back(r);
+            push(frames_.back(), r);
             continue;
         }
 
@@ -118,24 +307,15 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         // the cost of unwinding the C++ stack on every step.
         auto dbgMode = rt_.debugger().mode();
         if (rt_.debugger().attached() && dbgMode != DebuggerRuntime::Mode::Free) {
-            DebugFrame dframe;
-            dframe.module = f.m;
-            dframe.pc = f.pc;
-            dframe.stack.assign(f.opStack.begin(), f.opStack.end());
-            dframe.locals.assign(f.locals.begin(), f.locals.end());
-            rt_.debugger().enterSession(rt_, std::move(dframe), "step");
+            rt_.debugger().enterSession(rt_, makeDebugFrame(f), "step");
             // Session may have updated mode (e.g. user typed 'c'); fall
             // through to dispatch the next instruction.
         }
 
         // F2 location breakpoint: halt BEFORE executing the instruction at pc.
         if (rt_.debugger().attached() && rt_.debugger().breakpoints().isSet(f.m, f.pc)) {
-            DebugFrame dframe;
-            dframe.module = f.m;
-            dframe.pc = f.pc;
-            dframe.stack.assign(f.opStack.begin(), f.opStack.end());
-            dframe.locals.assign(f.locals.begin(), f.locals.end());
-            rt_.debugger().enterSession(rt_, std::move(dframe), "breakpoint");
+            rt_.debugger().enterSession(rt_, makeDebugFrame(f),
+                                        "breakpoint");
         }
 
         const Op op = static_cast<Op>(bytes[f.pc]);
@@ -146,33 +326,32 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             case Op::NOP:
                 break;
             case Op::PUSH_NIL:
-                f.opStack.push_back(PROTO_NONE);
+                push(f, PROTO_NONE);
                 break;
             case Op::PUSH_TRUE:
-                f.opStack.push_back(PROTO_TRUE);
+                push(f, PROTO_TRUE);
                 break;
             case Op::PUSH_FALSE:
-                f.opStack.push_back(PROTO_FALSE);
+                push(f, PROTO_FALSE);
                 break;
             case Op::PUSH_CONST:
-                f.opStack.push_back(rt_.materialize(*f.m, arg));
+                push(f, rt_.materialize(*f.m, arg));
                 break;
             case Op::DUP:
-                f.opStack.push_back(f.opStack.back());
+                push(f, peek(f));
                 break;
             case Op::POP:
-                f.opStack.pop_back();
+                pop(f);
                 break;
             case Op::PUSH_LOCAL:
-                ensureLocal(f, arg);
-                f.opStack.push_back(f.locals[arg]);
+                checkLocal(f, arg);
+                push(f, getLocal(f, arg));
                 break;
             case Op::STORE_LOCAL: {
-                ensureLocal(f, arg);
-                if (f.opStack.empty())
+                checkLocal(f, arg);
+                if (f.sp == 0)
                     throw std::runtime_error("STORE_LOCAL with empty stack");
-                f.locals[arg] = f.opStack.back();
-                f.opStack.pop_back();
+                setLocal(f, arg, pop(f));
                 break;
             }
             case Op::RETURN:
@@ -194,10 +373,10 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // TODO(F6 v3 follow-up): support non-local return by walking
                 // frames_ back to the enclosing method frame on Op::RETURN.
                 const proto::ProtoObject* r =
-                    f.opStack.empty() ? PROTO_NONE : f.opStack.back();
-                frames_.pop_back();
+                    f.sp == 0 ? PROTO_NONE : peek(f);
+                popFrame();
                 if (frames_.empty()) return r;
-                frames_.back().opStack.push_back(r);
+                push(frames_.back(), r);
                 // Reference `f` is now dangling — continue the loop so the
                 // next iteration re-acquires frames_.back().
                 continue;
@@ -219,10 +398,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // F3-C5: stash the current frame's captured dict so the
                 // block can resolve free variables back to the outer scope
                 // at invocation time.
+                const proto::ProtoObject* capD = getCaptured(f);
                 block->setAttribute(
                     ctx, capKey,
-                    f.capturedDict ? f.capturedDict : PROTO_NONE);
-                f.opStack.push_back(block);
+                    (capD && capD != PROTO_NONE) ? capD : PROTO_NONE);
+                push(f, block);
                 break;
             }
             case Op::SEND_UNARY:
@@ -236,15 +416,19 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 const std::string& selStr = f.m->constSymbol(arg);
                 if (op == Op::SEND_KEYWORD) for (char c : selStr) if (c == ':') ++argcOp;
 
-                if (static_cast<int>(f.opStack.size()) < argcOp + 1)
+                if (static_cast<int>(f.sp) < argcOp + 1)
                     throw std::runtime_error("SEND with insufficient stack");
                 if (argcOp > 8) throw std::runtime_error("F2 limit: <=8 args per send");
+                // F6 v3 E3: pop args/receiver off the operand stack. `pop`
+                // only decrements sp — the values remain physically in the
+                // frame's slot region, which the GC traces in full (the whole
+                // automaticLocals array is scanned, not just [0, sp)). So the
+                // popped objects stay rooted while we build the send below,
+                // even though `sendArgs` is a plain C++ array.
                 const proto::ProtoObject* sendArgs[8];
-                for (int i = argcOp - 1; i >= 0; --i) {
-                    sendArgs[i] = f.opStack.back();
-                    f.opStack.pop_back();
-                }
-                const proto::ProtoObject* recv = f.opStack.back(); f.opStack.pop_back();
+                for (int i = argcOp - 1; i >= 0; --i)
+                    sendArgs[i] = pop(f);
+                const proto::ProtoObject* recv = pop(f);
 
                 auto* selSym = ctx->fromUTF8String(selStr.c_str())->asString(ctx);
 
@@ -316,7 +500,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // global acquisition order (schedMu first, actor lock
                     // second) consistent with drainOne.
                     rt_.schedule(ctx, recv);
-                    f.opStack.push_back(fut);
+                    push(f, fut);
                     break;
                 }
 
@@ -381,25 +565,19 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                             auto* capDict = recv->getAttribute(ctx, recvCapKey);
                             if (!capDict || capDict == PROTO_NONE) capDict = nullptr;
 
-                            Frame callee;
-                            callee.m = sub;
-                            callee.pc = 0;
-                            callee.opStack.reserve(64);
-                            callee.locals.reserve(
-                                std::max<std::size_t>(16,
-                                    static_cast<std::size_t>(argcOp) + 8));
-                            // Blocks bind args into slots 0..argcOp-1 (no
-                            // implicit self slot; cf. invokeBlock which
-                            // passes self=PROTO_NONE). PUSH_INSTVAR inside
-                            // a block reads f.locals[0] which would
-                            // therefore be the first arg, not the
-                            // enclosing method's self — same pre-existing
-                            // limitation as the legacy invokeBlock path.
-                            for (int i = 0; i < argcOp; ++i)
-                                callee.locals.push_back(sendArgs[i]);
-                            callee.selfObj = PROTO_NONE;
-                            callee.capturedDict = capDict;
-                            frames_.push_back(std::move(callee));
+                            // F6 v3 E3: blocks bind args into locals
+                            // 0..argcOp-1 (no implicit self slot; cf.
+                            // invokeBlock which passes self=PROTO_NONE).
+                            // PUSH_INSTVAR inside a block reads local 0
+                            // which would therefore be the first arg, not
+                            // the enclosing method's self — same
+                            // pre-existing limitation as the legacy
+                            // invokeBlock path. pushFrame packs the
+                            // callee's region into the engine context's
+                            // GC-traced automaticLocals.
+                            pushFrame(sub, /*self=*/PROTO_NONE, capDict,
+                                      sendArgs,
+                                      static_cast<unsigned int>(argcOp));
                             // `f` is now invalidated when frames_ grows
                             // its backing storage. Continue the loop so
                             // the next iteration re-acquires
@@ -461,20 +639,15 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     auto* capDict = attr->getAttribute(ctx, capKey);
                     if (capDict == PROTO_NONE) capDict = nullptr;
 
-                    Frame callee;
-                    callee.m = sub;
-                    callee.pc = 0;
-                    callee.opStack.reserve(64);
-                    callee.locals.reserve(
-                        std::max<std::size_t>(16,
-                            static_cast<std::size_t>(argcOp) + 1 + 8));
-                    // Slot 0 = recv (self), slots 1..argcOp = call args.
-                    callee.locals.push_back(recv);
+                    // F6 v3 E3: local 0 = recv (self), locals 1..argcOp =
+                    // call args. pushFrame packs them into the callee's
+                    // region inside the GC-traced automaticLocals.
+                    const proto::ProtoObject* methodArgs[9];
+                    methodArgs[0] = recv;
                     for (int i = 0; i < argcOp; ++i)
-                        callee.locals.push_back(sendArgs[i]);
-                    callee.selfObj = recv;
-                    callee.capturedDict = capDict;
-                    frames_.push_back(std::move(callee));
+                        methodArgs[i + 1] = sendArgs[i];
+                    pushFrame(sub, /*self=*/recv, capDict, methodArgs,
+                              static_cast<unsigned int>(argcOp) + 1);
                     // `f` is now invalidated by the vector growth (when it
                     // reallocates). Continue the loop so the next iteration
                     // re-acquires frames_.back() and dispatches the callee
@@ -491,7 +664,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // is still an error.
                 if (!attr->isInteger(ctx)) {
                     if (argcOp == 0) {
-                        f.opStack.push_back(attr);
+                        push(f, attr);
                         break;
                     }
                     throw std::runtime_error(
@@ -502,7 +675,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // Plain integer value stored as an attribute — same
                     // member-access rule as above.
                     if (argcOp == 0) {
-                        f.opStack.push_back(attr);
+                        push(f, attr);
                         break;
                     }
                     throw std::runtime_error("non-primitive method in F2 (F3 work)");
@@ -518,17 +691,17 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // unbounded user-method recursion was the actual target of
                 // this refactor and is now gone.
                 auto* result = fn(rt_, ctx, recv, sendArgs, argcOp);
-                f.opStack.push_back(result ? result : PROTO_NONE);
+                push(f, result ? result : PROTO_NONE);
                 break;
             }
             case Op::JUMP:          f.pc += static_cast<std::size_t>(arg) * kInstrSize; break;
             case Op::JUMP_IF_TRUE: {
-                auto* v = f.opStack.back(); f.opStack.pop_back();
+                auto* v = pop(f);
                 if (v == PROTO_TRUE) f.pc += static_cast<std::size_t>(arg) * kInstrSize;
                 break;
             }
             case Op::JUMP_IF_FALSE: {
-                auto* v = f.opStack.back(); f.opStack.pop_back();
+                auto* v = pop(f);
                 if (v == PROTO_FALSE) f.pc += static_cast<std::size_t>(arg) * kInstrSize;
                 break;
             }
@@ -536,22 +709,24 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // arg = constant pool index of the (interned) symbol name.
                 const std::string& nameStr = f.m->constSymbol(arg);
                 auto* sym = ctx->fromUTF8String(nameStr.c_str())->asString(ctx);
-                const proto::ProtoObject* val = f.capturedDict
-                    ? f.capturedDict->getAttribute(ctx, sym)
-                    : nullptr;
-                f.opStack.push_back(val ? val : PROTO_NONE);
+                const proto::ProtoObject* capD = getCaptured(f);
+                const proto::ProtoObject* val =
+                    (capD && capD != PROTO_NONE)
+                        ? capD->getAttribute(ctx, sym)
+                        : nullptr;
+                push(f, val ? val : PROTO_NONE);
                 break;
             }
             case Op::STORE_CAPTURED: {
-                if (f.opStack.empty())
+                if (f.sp == 0)
                     throw std::runtime_error("STORE_CAPTURED with empty stack");
-                const proto::ProtoObject* val = f.opStack.back();
-                f.opStack.pop_back();
-                if (!f.capturedDict)
+                const proto::ProtoObject* val = pop(f);
+                const proto::ProtoObject* capD = getCaptured(f);
+                if (!capD || capD == PROTO_NONE)
                     throw std::runtime_error("STORE_CAPTURED without captured dict");
                 const std::string& nameStr = f.m->constSymbol(arg);
                 auto* sym = ctx->fromUTF8String(nameStr.c_str())->asString(ctx);
-                const_cast<proto::ProtoObject*>(f.capturedDict)->setAttribute(ctx, sym, val);
+                const_cast<proto::ProtoObject*>(capD)->setAttribute(ctx, sym, val);
                 break;
             }
             case Op::PUSH_GLOBAL: {
@@ -562,14 +737,13 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 auto* val = g ? g->getAttribute(ctx, sym) : nullptr;
                 if (!val || val == PROTO_NONE)
                     throw std::runtime_error("undefined global: " + nameStr);
-                f.opStack.push_back(val);
+                push(f, val);
                 break;
             }
             case Op::STORE_GLOBAL: {
-                if (f.opStack.empty())
+                if (f.sp == 0)
                     throw std::runtime_error("STORE_GLOBAL with empty stack");
-                const proto::ProtoObject* val = f.opStack.back();
-                f.opStack.pop_back();
+                const proto::ProtoObject* val = pop(f);
                 const std::string& nameStr = f.m->constSymbol(arg);
                 auto* sym = ctx->fromUTF8String(nameStr.c_str())->asString(ctx);
                 auto* g = rt_.globals();
@@ -594,30 +768,30 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 std::string mangled = "_iv_";
                 mangled += nameStr;
                 auto* sym = ctx->fromUTF8String(mangled.c_str())->asString(ctx);
-                if (f.locals.empty())
+                if (f.localCount == 0)
                     throw std::runtime_error("PUSH_INSTVAR with no self");
-                const proto::ProtoObject* self = f.locals[0];
-                auto* val = self ? self->getAttribute(ctx, sym) : nullptr;
-                f.opStack.push_back(val ? val : PROTO_NONE);
+                const proto::ProtoObject* self = getLocal(f, 0);
+                auto* val = (self && self != PROTO_NONE)
+                    ? self->getAttribute(ctx, sym) : nullptr;
+                push(f, val ? val : PROTO_NONE);
                 break;
             }
             case Op::STORE_INSTVAR: {
                 // F4-U5: write an instance variable on `self`. Mirror of
                 // PUSH_INSTVAR; pops the value-to-store from the operand
                 // stack and setAttribute's it under the mangled "_iv_<name>"
-                // key on slot-0 self. See PUSH_INSTVAR for rationale.
-                if (f.opStack.empty())
+                // key on local-0 self. See PUSH_INSTVAR for rationale.
+                if (f.sp == 0)
                     throw std::runtime_error("STORE_INSTVAR empty stack");
-                const proto::ProtoObject* val = f.opStack.back();
-                f.opStack.pop_back();
+                const proto::ProtoObject* val = pop(f);
                 const std::string& nameStr = f.m->constSymbol(arg);
                 std::string mangled = "_iv_";
                 mangled += nameStr;
                 auto* sym = ctx->fromUTF8String(mangled.c_str())->asString(ctx);
-                if (f.locals.empty())
+                if (f.localCount == 0)
                     throw std::runtime_error("STORE_INSTVAR with no self");
-                const proto::ProtoObject* self = f.locals[0];
-                if (!self)
+                const proto::ProtoObject* self = getLocal(f, 0);
+                if (!self || self == PROTO_NONE)
                     throw std::runtime_error("STORE_INSTVAR self is null");
                 const_cast<proto::ProtoObject*>(self)->setAttribute(ctx, sym, val);
                 break;
@@ -712,11 +886,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         // contract.
         DebugFrame dframe;
         if (!frames_.empty()) {
-            Frame& f = frames_.back();
-            dframe.module = f.m;
-            dframe.pc = f.pc;
-            dframe.stack.assign(f.opStack.begin(), f.opStack.end());
-            dframe.locals.assign(f.locals.begin(), f.locals.end());
+            dframe = makeDebugFrame(frames_.back());
         }
         rt_.debugger().enterSession(rt_, std::move(dframe), h.reason());
         // After the session resumes (user typed c/s/n/f), fall back through
@@ -726,7 +896,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         // that. Push PROTO_NONE now so the operand stack matches what the
         // compiler expects after a unary send.
         if (!frames_.empty()) {
-            frames_.back().opStack.push_back(PROTO_NONE);
+            push(frames_.back(), PROTO_NONE);
         }
         continue;
     }
@@ -779,28 +949,36 @@ ExecutionEngine::snapshotFrames(proto::ProtoContext* ctx) const {
             ctx->fromLong(static_cast<long long>(fr.pc)));
 
         // op_stack as ProtoList (preserve order: index 0 = bottom of stack).
+        // F6 v3 E3: the live operand stack is the [0, sp) slice of the
+        // frame's operand-stack slot region inside automaticLocals.
         const proto::ProtoList* opList = ctx->newList();
-        for (const proto::ProtoObject* v : fr.opStack) {
+        for (unsigned int j = 0; j < fr.sp; ++j) {
+            const proto::ProtoObject* v =
+                ctx->getAutomaticLocal(opStackBase(fr) + j);
             opList = opList->appendLast(ctx, v ? v : PROTO_NONE);
         }
         frameObj->setAttribute(ctx, opStackKey, opList->asObject(ctx));
 
-        // locals as ProtoList (size == locals.size(), nullptr -> PROTO_NONE).
+        // locals as ProtoList (size == localCount). F6 v3 E3: read every
+        // local slot out of the frame's region.
         const proto::ProtoList* locList = ctx->newList();
-        for (const proto::ProtoObject* v : fr.locals) {
+        for (unsigned int j = 0; j < fr.localCount; ++j) {
+            const proto::ProtoObject* v = getLocal(fr, j);
             locList = locList->appendLast(ctx, v ? v : PROTO_NONE);
         }
         frameObj->setAttribute(ctx, localsKey, locList->asObject(ctx));
 
-        // self_obj
+        // self_obj — read from the frame's header slot.
+        const proto::ProtoObject* selfV = getSelf(fr);
         frameObj->setAttribute(
             ctx, selfKey,
-            fr.selfObj ? fr.selfObj : PROTO_NONE);
+            selfV ? selfV : PROTO_NONE);
 
-        // captured_dict
+        // captured_dict — read from the frame's header slot.
+        const proto::ProtoObject* capV = getCaptured(fr);
         frameObj->setAttribute(
             ctx, capturedKey,
-            fr.capturedDict ? fr.capturedDict : PROTO_NONE);
+            capV ? capV : PROTO_NONE);
 
         // m_ptr — borrow the BytecodeModule pointer; no finalizer because the
         // module is owned by STRuntime::loadedModules or by the original
@@ -836,7 +1014,17 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
     if (!asList)
         throw std::runtime_error("restoreFrames: snapshot is not a list");
 
+    // F6 v3 E3: restoreFrames is the engine's entry point on the resume path
+    // (drainOne calls it before resumeWith + continueRun). Establish the same
+    // engine-context state runWithArgs would: bind ctx_, ensure the GC-traced
+    // slot array is pre-sized, and anchor this engine's frame regions at the
+    // current thread-local cursor so a nested engine cannot overlap them.
+    ctx_ = ctx;
+    ctx_->resizeAutomaticLocals(kSlotCapacity);
+
     frames_.clear();
+    slotBase_ = g_slotCursor;
+
     const unsigned long n = asList->getSize(ctx);
     frames_.reserve(std::max<std::size_t>(64, static_cast<std::size_t>(n)));
 
@@ -846,13 +1034,12 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
         if (!frameObj)
             throw std::runtime_error("restoreFrames: null frame entry");
 
-        Frame fr;
-
         // pc
         auto* pcVal = frameObj->getAttribute(ctx, pcKey);
         if (!pcVal || pcVal == PROTO_NONE)
             throw std::runtime_error("restoreFrames: missing pc");
-        fr.pc = static_cast<std::size_t>(pcVal->asLong(ctx));
+        const std::size_t pc =
+            static_cast<std::size_t>(pcVal->asLong(ctx));
 
         // op_stack
         auto* opStackVal = frameObj->getAttribute(ctx, opStackKey);
@@ -860,9 +1047,6 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
         if (!opList)
             throw std::runtime_error("restoreFrames: missing op_stack");
         const unsigned long opN = opList->getSize(ctx);
-        fr.opStack.reserve(std::max<std::size_t>(64, static_cast<std::size_t>(opN)));
-        for (unsigned long j = 0; j < opN; ++j)
-            fr.opStack.push_back(opList->getAt(ctx, static_cast<int>(j)));
 
         // locals
         auto* locVal = frameObj->getAttribute(ctx, localsKey);
@@ -870,19 +1054,6 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
         if (!locList)
             throw std::runtime_error("restoreFrames: missing locals");
         const unsigned long locN = locList->getSize(ctx);
-        fr.locals.reserve(std::max<std::size_t>(16, static_cast<std::size_t>(locN)));
-        for (unsigned long j = 0; j < locN; ++j)
-            fr.locals.push_back(locList->getAt(ctx, static_cast<int>(j)));
-
-        // self_obj — convert PROTO_NONE sentinel back to nullptr to mirror
-        // the convention used by runWithArgs (selfObj may legitimately be
-        // nullptr at the top frame for module-level code).
-        auto* selfVal = frameObj->getAttribute(ctx, selfKey);
-        fr.selfObj = (selfVal == PROTO_NONE) ? nullptr : selfVal;
-
-        // captured_dict — same nullptr-vs-PROTO_NONE convention.
-        auto* capVal = frameObj->getAttribute(ctx, capturedKey);
-        fr.capturedDict = (capVal == PROTO_NONE) ? nullptr : capVal;
 
         // m_ptr
         auto* mPtrVal = frameObj->getAttribute(ctx, mPtrKey);
@@ -891,11 +1062,55 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
         auto* ep = mPtrVal->asExternalPointer(ctx);
         if (!ep)
             throw std::runtime_error("restoreFrames: m_ptr is not an ExternalPointer");
-        fr.m = static_cast<const BytecodeModule*>(ep->getPointer(ctx));
-        if (!fr.m)
+        const BytecodeModule* m =
+            static_cast<const BytecodeModule*>(ep->getPointer(ctx));
+        if (!m)
             throw std::runtime_error("restoreFrames: m_ptr decoded to nullptr");
 
-        frames_.push_back(std::move(fr));
+        // self_obj / captured_dict — PROTO_NONE sentinel kept as-is in slots.
+        auto* selfVal = frameObj->getAttribute(ctx, selfKey);
+        auto* capVal  = frameObj->getAttribute(ctx, capturedKey);
+
+        // F6 v3 E3: allocate this frame's slot region. localCount must be at
+        // least the snapshot's locals count AND the module's own ceiling, so
+        // a resumed frame can store every local the body touches. maxStack
+        // must hold the snapshotted operand stack.
+        Frame fr;
+        fr.m          = m;
+        fr.pc         = pc;
+        fr.localCount = std::max<unsigned int>(
+            computeLocalCount(*m, 0),
+            static_cast<unsigned int>(locN));
+        fr.maxStack   = std::max<unsigned int>(
+            kFrameMaxStk, static_cast<unsigned int>(opN));
+        fr.sp         = static_cast<unsigned int>(opN);
+        fr.baseSlot   = g_slotCursor;
+
+        const unsigned int regionSize = frameRegionSize(fr);
+        const unsigned int regionEnd  = fr.baseSlot + regionSize;
+        if (regionEnd > kSlotCapacity)
+            throw std::runtime_error("engine slot region exhausted");
+
+        // Initialise the region, then write self/captured/locals/opStack.
+        for (unsigned int s = fr.baseSlot; s < regionEnd; ++s)
+            ctx_->setAutomaticLocal(s, PROTO_NONE);
+        ctx_->setAutomaticLocal(fr.baseSlot + 0,
+                                capVal ? capVal : PROTO_NONE);
+        ctx_->setAutomaticLocal(fr.baseSlot + 1,
+                                selfVal ? selfVal : PROTO_NONE);
+        for (unsigned long j = 0; j < locN; ++j) {
+            const proto::ProtoObject* v = locList->getAt(ctx, static_cast<int>(j));
+            ctx_->setAutomaticLocal(localsBase(fr) + static_cast<unsigned int>(j),
+                                    v ? v : PROTO_NONE);
+        }
+        for (unsigned long j = 0; j < opN; ++j) {
+            const proto::ProtoObject* v = opList->getAt(ctx, static_cast<int>(j));
+            ctx_->setAutomaticLocal(opStackBase(fr) + static_cast<unsigned int>(j),
+                                    v ? v : PROTO_NONE);
+        }
+
+        g_slotCursor += regionSize;
+        frames_.push_back(fr);
     }
 }
 
@@ -942,7 +1157,8 @@ ExecutionEngine::resumeWith(proto::ProtoContext* ctx,
         // a no-op so continueRun returns PROTO_NONE.
         return;
     }
-    frames_.back().opStack.push_back(value ? value : PROTO_NONE);
+    // F6 v3 E3: push onto the top frame's GC-traced operand-stack region.
+    push(frames_.back(), value ? value : PROTO_NONE);
 }
 
 const proto::ProtoObject*

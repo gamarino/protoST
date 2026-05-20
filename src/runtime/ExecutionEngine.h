@@ -12,6 +12,7 @@ namespace protoST {
 
 class STRuntime;
 class BytecodeModule;
+struct DebugFrame;
 
 // F6 v3 A: ExecutionEngine is now non-recursive. Each user-method SEND no
 // longer creates a sub-engine on the C++ stack — instead a Frame is pushed
@@ -101,24 +102,91 @@ public:
     const proto::ProtoObject* continueRun(proto::ProtoContext* ctx);
 
 private:
-    // F6 v3 A: explicit frame stack. One Frame per active Smalltalk method
-    // (top-level module also gets a Frame). User-method SENDs push a new
-    // Frame; RETURN/RETURN_TOP pops the current Frame and threads the
-    // result back onto the caller frame's operand stack.
+    // F6 v3 E3: GC-correctness fix. The frame stack no longer holds any
+    // ProtoObject* in plain C++ std::vectors — protoCore's tracing GC cannot
+    // see the C++ heap. Instead, EVERY ProtoObject* a frame needs (locals,
+    // operand stack, self, captured dict) lives in a slot of the ONE engine
+    // context's `automaticLocals` array, which the GC already traces.
     //
-    // Field layout mirrors the per-call locals that the old recursive engine
-    // held as C++ stack variables.
+    // `automaticLocals` is treated as concatenated per-frame regions:
+    //
+    //   [frame0 region][frame1 region][frame2 region] ...
+    //
+    // Each frame's region is laid out as:
+    //
+    //   [ capturedDict ][ self ][ localCount locals ][ maxStack opStack ]
+    //   ^baseSlot       ^+1     ^+kHeaderSlots        ^+kHeaderSlots+localCount
+    //
+    // Frame carries only plain integers/pointers — fine as C++ fields, the GC
+    // never needs to see them.
     struct Frame {
-        const BytecodeModule*                   m = nullptr;
-        std::size_t                             pc = 0;
-        std::vector<const proto::ProtoObject*>  opStack;
-        std::vector<const proto::ProtoObject*>  locals;
-        const proto::ProtoObject*               selfObj = nullptr;
-        const proto::ProtoObject*               capturedDict = nullptr;
+        const BytecodeModule* m          = nullptr;
+        std::size_t           pc         = 0;
+        unsigned int          baseSlot   = 0;   // region start in automaticLocals
+        unsigned int          localCount = 0;   // local-slot count for this frame
+        unsigned int          maxStack   = 0;   // operand-stack capacity
+        unsigned int          sp         = 0;   // current operand-stack depth
     };
 
-    STRuntime&         rt_;
-    std::vector<Frame> frames_;
+    // Header slots reserved at the start of every frame region.
+    //   slot 0 = capturedDict, slot 1 = self
+    static constexpr unsigned int kHeaderSlots = 2;
+
+    STRuntime&            rt_;
+    std::vector<Frame>    frames_;
+    proto::ProtoContext*  ctx_ = nullptr;   // the engine context (GC-traced)
+
+    // F6 v3 E3: the automaticLocals slot index where THIS engine's frame
+    // regions begin. Captured from the shared thread-local slot cursor at
+    // engine entry; nested engines (invoked by primitives) pack their regions
+    // above this engine's. Used to rewind the cursor when frames_ is cleared
+    // (yield / completion).
+    unsigned int          slotBase_ = 0;
+
+    // Total automaticLocals capacity reserved once at engine entry. Frame
+    // regions are packed into [0, kSlotCapacity). Overflow is a hard error.
+    static constexpr unsigned int kSlotCapacity = 8192;
+
+    // --- per-frame region geometry -----------------------------------------
+    static unsigned int frameRegionSize(const Frame& f) {
+        return kHeaderSlots + f.localCount + f.maxStack;
+    }
+    // Slot index where this frame's locals begin.
+    static unsigned int localsBase(const Frame& f) {
+        return f.baseSlot + kHeaderSlots;
+    }
+    // Slot index where this frame's operand stack begins.
+    static unsigned int opStackBase(const Frame& f) {
+        return f.baseSlot + kHeaderSlots + f.localCount;
+    }
+
+    // --- slot accessors (route through the GC-traced context) --------------
+    const proto::ProtoObject* getLocal(const Frame& f, unsigned int i) const;
+    void setLocal(const Frame& f, unsigned int i, const proto::ProtoObject* v);
+    const proto::ProtoObject* getSelf(const Frame& f) const;
+    void setSelf(const Frame& f, const proto::ProtoObject* v);
+    const proto::ProtoObject* getCaptured(const Frame& f) const;
+    void setCaptured(const Frame& f, const proto::ProtoObject* v);
+    void push(Frame& f, const proto::ProtoObject* v);
+    const proto::ProtoObject* pop(Frame& f);
+    const proto::ProtoObject* peek(const Frame& f) const;
+    const proto::ProtoObject* opAt(const Frame& f, unsigned int depth) const;
+
+    // Push a new frame for module `m`, returning a reference is unsafe across
+    // the vector growth; callers re-acquire frames_.back(). Initialises the
+    // region's slots to PROTO_NONE, then binds the supplied arg objects into
+    // locals 0..argc-1. `self` / `captured` go into the header slots.
+    void pushFrame(const BytecodeModule* m,
+                   const proto::ProtoObject* self,
+                   const proto::ProtoObject* captured,
+                   const proto::ProtoObject* const* args,
+                   unsigned int argc);
+
+    // Pop the top frame, rewinding the shared thread-local slot cursor.
+    void popFrame();
+
+    // Build a DebugFrame (module/pc/stack/locals) from a frame's slot region.
+    DebugFrame makeDebugFrame(const Frame& f) const;
 
     // Single dispatch loop operating on frames_.back(). Returns when frames_
     // becomes empty (the original C++ caller's frame's RETURN_TOP popped the

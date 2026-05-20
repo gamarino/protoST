@@ -638,3 +638,154 @@ TEST_CASE("F6 v3 E2: 120-link dependency chain runs on a SINGLE worker "
           "[engine][f6v3][yield][cooperative]") {
     REQUIRE(runChain(120, "1") == 120);
 }
+
+// F6 v3 E3 — engine frame stack GC-rooting tests.
+//
+// Before E3, ExecutionEngine::Frame stored its operand stack, locals, self and
+// captured dict in plain C++ std::vectors. protoCore's tracing GC cannot see
+// the C++ heap, so a GC cycle that fired mid-execution could reclaim objects
+// reachable ONLY through a live engine frame — surfacing as a dangling pointer
+// (segfault) or a spurious `doesNotUnderstand` / corrupt-bytecode error. E3
+// moves every frame's ProtoObject* into slots of the engine context's
+// automaticLocals, which the GC already traces.
+//
+// The tests below run with PROTOCORE_GC_CONTEXT_THRESHOLD=1: protoCore then
+// submits a context's young generation on (almost) every allocation, so a GC
+// cycle runs almost constantly while the bytecode engine is mid-frame. That
+// env var is read by the ProtoSpace constructor, so it MUST be set before the
+// STRuntime is built.
+//
+// They exercise the two distinct frame-bearing paths under that pressure:
+//   * a deep SYNCHRONOUS recursion (frames never snapshotted — the path the
+//     E3 slot backing protects directly), and
+//   * a cooperative actor chain (frames snapshotted/restored across yields),
+//     across 1/2/4 worker configurations.
+// Both must produce the exact arithmetic result; with the E3 slot backing the
+// frame-referenced objects stay rooted through every GC cycle.
+
+// Build a deeply nested SYNCHRONOUS recursive walk over a linked structure of
+// plain (non-actor) objects. Every active call frame allocates a fresh object,
+// stores it in a LOCAL slot, recurses, and then reads that local back AFTER
+// the recursive call returns.
+//
+//   Leaf >> walk  ^ 0.
+//   Link >> walk
+//     | kid |
+//     kid := Marker newChild.    "fresh object, reachable ONLY via this
+//                                  frame's `kid` local"
+//     kid setTag: 1.
+//     ^ (next walk) + (kid tag).
+//
+// Two classes (Link / Leaf) provide the base case via polymorphism, so no
+// in-method conditional and no non-local `^` inside a block is needed (those
+// are separate unimplemented-engine areas, unrelated to GC rooting).
+//
+// `next` holds a PLAIN object, so `next walk` is a synchronous user-method
+// SEND — it pushes a new engine frame inline. A chain of N Links makes N
+// frames simultaneously live on the engine frame stack, each owning a distinct
+// `kid`. The recursion bottoms out at the Leaf, then unwinds reading `kid tag`
+// at every level. Result == N (each Link contributes kid tag == 1).
+//
+// `kid` of an OUTER frame is reachable ONLY through that frame's local slot
+// for the whole duration of the deeper recursion — it is never snapshotted
+// (this is a synchronous, non-yielding call path). Before F6 v3 E3 those slots
+// lived in a C++ std::vector the tracing GC could not see; with E3 they live
+// in the engine context's GC-traced automaticLocals and stay rooted. This test
+// drives 60 such frames under maximal GC pressure and asserts the walk sums to
+// exactly N — proving the slot-cursor allocation, region rewind on RETURN, and
+// per-frame localCount sizing are correct for deep synchronous recursion.
+static std::string buildNestedWalkSource(int n) {
+    std::string src =
+        "Object subclass: #Marker instanceVariableNames: 'tag'. "
+        "Marker >> setTag: t tag := t. "
+        "Marker >> tag ^ tag. "
+        "Object subclass: #Leaf. "
+        "Leaf >> walk ^ 0. "
+        "Object subclass: #Link instanceVariableNames: 'next'. "
+        "Link >> linkTo: aNode next := aNode. "
+        "Link >> walk "
+        "  | kid | "
+        "  kid := Marker newChild. "
+        "  kid setTag: 1. "
+        "  ^ (next walk) + (kid tag). ";
+
+    // Allocate the leaf and N links (plain objects — synchronous dispatch).
+    src += "leaf := Leaf newChild. ";
+    for (int i = 0; i < n; ++i)
+        src += "n" + std::to_string(i) + " := Link newChild. ";
+
+    // Wire the chain: last link -> leaf, each earlier link -> the next link.
+    src += "(n" + std::to_string(n - 1) + " linkTo: leaf). ";
+    for (int i = n - 2; i >= 0; --i)
+        src += "(n" + std::to_string(i) + " linkTo: n"
+             + std::to_string(i + 1) + "). ";
+
+    // Drive the synchronous nested walk from the head link.
+    src += "(n0 walk).";
+    return src;
+}
+
+// Run the nested-walk module under aggressive GC and return the result.
+static long long runNestedWalk(int n) {
+    std::string src = buildNestedWalkSource(n);
+
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C;
+    auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+
+    protoST::STRuntime rt;
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r != nullptr);
+    return r->asLong(rt.rootCtx());
+}
+
+TEST_CASE("F6 v3 E3: deep nested frames keep their locals rooted under "
+          "aggressive GC",
+          "[engine][f6v3][gc]") {
+    // PROTOCORE_GC_CONTEXT_THRESHOLD=1 makes protoCore submit a context's
+    // young generation on (almost) every allocation, so a GC cycle runs while
+    // the synchronous recursion is dozens of frames deep. Must be set before
+    // the ProtoSpace constructor — each Catch2 case is its own process under
+    // catch_discover_tests, so this does not leak into other cases.
+    setenv("PROTOCORE_GC_CONTEXT_THRESHOLD", "1", 1);
+
+    // 60 frames deep: well past protoCore's GC trigger, deep enough that the
+    // outer frames' `kid` objects are held only by the engine frame stack for
+    // many GC cycles, yet within the engine's pre-sized slot capacity.
+    REQUIRE(runNestedWalk(60) == 60);
+
+    unsetenv("PROTOCORE_GC_CONTEXT_THRESHOLD");
+}
+
+TEST_CASE("F6 v3 E3: cooperative chain survives aggressive GC (frame slots "
+          "are GC roots)",
+          "[engine][f6v3][yield][cooperative][gc]") {
+    // Must be set before the ProtoSpace constructor runs (inside runChain's
+    // STRuntime). Each Catch2 test case runs in its own process under
+    // catch_discover_tests, so this does not leak into other cases.
+    setenv("PROTOCORE_GC_CONTEXT_THRESHOLD", "1", 1);
+
+    // Single worker: the strongest cooperative-yield stress — one thread
+    // cycles through all 51 actors, snapshotting/restoring frames repeatedly
+    // while the GC hammers every allocation.
+    REQUIRE(runChain(50, "1") == 50);
+
+    unsetenv("PROTOCORE_GC_CONTEXT_THRESHOLD");
+}
+
+TEST_CASE("F6 v3 E3: cooperative chain survives aggressive GC on 2 workers",
+          "[engine][f6v3][yield][cooperative][gc]") {
+    setenv("PROTOCORE_GC_CONTEXT_THRESHOLD", "1", 1);
+    REQUIRE(runChain(50, "2") == 50);
+    unsetenv("PROTOCORE_GC_CONTEXT_THRESHOLD");
+}
+
+TEST_CASE("F6 v3 E3: cooperative chain survives aggressive GC on 4 workers",
+          "[engine][f6v3][yield][cooperative][gc]") {
+    setenv("PROTOCORE_GC_CONTEXT_THRESHOLD", "1", 1);
+    REQUIRE(runChain(50, "4") == 50);
+    unsetenv("PROTOCORE_GC_CONTEXT_THRESHOLD");
+}
