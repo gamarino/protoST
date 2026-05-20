@@ -315,7 +315,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // schedMu; doing it OUTSIDE the actor lock keeps the
                     // global acquisition order (schedMu first, actor lock
                     // second) consistent with drainOne.
-                    rt_.schedule(recv);
+                    rt_.schedule(ctx, recv);
                     f.opStack.push_back(fut);
                     break;
                 }
@@ -693,7 +693,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // between wait's mutex release and our re-acquisition.
                 // Schedule the actor explicitly so the resume path
                 // observes the settled state.
-                rt_.schedule(actor);
+                rt_.schedule(ctx, actor);
             }
         }
 

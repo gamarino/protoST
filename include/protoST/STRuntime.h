@@ -54,7 +54,13 @@ public:
 
     // F6 actor scheduler — single-thread MVP.
     // schedule() is idempotent for already-scheduled actors.
-    void schedule(const proto::ProtoObject* actor);
+    //
+    // F6 v3 E2b: `ctx` is the calling thread's context — used to anchor the
+    // actor in the live-registry GC root (registryAdd) so it survives GC
+    // while it sits in the readyQueue. Each worker / foreground caller passes
+    // its own context, so the key-string allocation never races on a shared
+    // per-thread allocation cache.
+    void schedule(proto::ProtoContext* ctx, const proto::ProtoObject* actor);
     bool drainOne(proto::ProtoContext* ctx);   // returns true if a message was processed
     size_t scheduledCount() const;              // size of ready queue (for testing)
 
@@ -119,6 +125,13 @@ public:
     inline const char* versionTag() const { return "0.1.0-pre"; }
 
 private:
+    // F6 v3 E2b: live-registry GC anchoring. registryAdd makes `o` reachable
+    // from the single pinned root (so it survives GC); registryRemove drops
+    // it. Both serialize under the scheduler mutex. No-ops for null /
+    // PROTO_NONE / before the registry is created.
+    void registryAdd(proto::ProtoContext* ctx, const proto::ProtoObject* o);
+    void registryRemove(proto::ProtoContext* ctx, const proto::ProtoObject* o);
+
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

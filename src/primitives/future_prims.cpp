@@ -341,7 +341,7 @@ const proto::ProtoObject* prim_Future_resolve(STRuntime& rt, proto::ProtoContext
         long long n = waitersSnapshot->getSize(ctx);
         for (long long i = 0; i < n; ++i) {
             auto* w = waitersSnapshot->getAt(ctx, static_cast<int>(i));
-            if (w && w != PROTO_NONE) rt.schedule(w);
+            if (w && w != PROTO_NONE) rt.schedule(ctx, w);
         }
     }
     return r;
@@ -399,7 +399,7 @@ const proto::ProtoObject* prim_Future_rejectWith(STRuntime& rt, proto::ProtoCont
         long long n = waitersSnapshot->getSize(ctx);
         for (long long i = 0; i < n; ++i) {
             auto* w = waitersSnapshot->getAt(ctx, static_cast<int>(i));
-            if (w && w != PROTO_NONE) rt.schedule(w);
+            if (w && w != PROTO_NONE) rt.schedule(ctx, w);
         }
     }
     return r;
@@ -682,7 +682,7 @@ void resolveFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
         long long n = waitersSnapshot->getSize(ctx);
         for (long long i = 0; i < n; ++i) {
             auto* a = waitersSnapshot->getAt(ctx, static_cast<int>(i));
-            if (a && a != PROTO_NONE) rt.schedule(a);
+            if (a && a != PROTO_NONE) rt.schedule(ctx, a);
         }
     }
 }
@@ -734,7 +734,7 @@ void rejectFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
         long long n = waitersSnapshot->getSize(ctx);
         for (long long i = 0; i < n; ++i) {
             auto* a = waitersSnapshot->getAt(ctx, static_cast<int>(i));
-            if (a && a != PROTO_NONE) rt.schedule(a);
+            if (a && a != PROTO_NONE) rt.schedule(ctx, a);
         }
     }
 }

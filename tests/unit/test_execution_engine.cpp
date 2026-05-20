@@ -431,14 +431,14 @@ TEST_CASE("STRuntime scheduler: schedule + drainOne basics", "[engine][scheduler
     // the time scheduledCount() is read. Tests of internal queue progression
     // are deferred to T6 (single-thread-mode toggle).
     REQUIRE(rt.scheduledCount() == 0);
-    rt.schedule(a);
-    rt.schedule(b);
-    rt.schedule(c);
+    rt.schedule(ctx, a);
+    rt.schedule(ctx, b);
+    rt.schedule(ctx, c);
 
     // schedule is idempotent (won't insert a second time if a is still queued
     // at the moment of this call; if the worker already drained it, the
     // re-schedule is a fresh enqueue — both outcomes leave the queue valid).
-    rt.schedule(a);
+    rt.schedule(ctx, a);
 
     // Drain on this thread until the queue is empty. The worker may pull
     // some entries first; what we want to verify is that we eventually reach
@@ -453,7 +453,7 @@ TEST_CASE("STRuntime scheduler: schedule + drainOne basics", "[engine][scheduler
     // After drain, a can be re-scheduled. We don't probe the exact count —
     // by the time we check, the worker may have drained it already. Just
     // verify the call succeeds and the queue is in a valid state.
-    rt.schedule(a);
+    rt.schedule(ctx, a);
     while (rt.drainOne(ctx)) { /* drain it back to empty */ }
     REQUIRE_FALSE(rt.drainOne(ctx));
 }

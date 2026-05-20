@@ -51,8 +51,9 @@
 //
 // Safety: the thread's GC roots stay reachable for the whole region — its
 // ProtoContext stays registered in `space->threads` (stack still scanned)
-// and protoST keeps live actors/futures pinned in the asyncRoots
-// ProtoRootSet. Leaving the running set never risks reclamation; it only
+// and protoST keeps live actors/futures reachable from its single
+// live-registry root pinned in the asyncRoots ProtoRootSet. Leaving the
+// running set never risks reclamation; it only
 // tells the collector "do not wait for me to reach a safepoint while I
 // sleep."
 #ifndef PROTOST_GC_SAFE_BLOCKING_H

@@ -18,6 +18,8 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -92,6 +94,19 @@ void bindPrimitive(STRuntime& rt, const proto::ProtoObject* proto, const char* s
     const_cast<proto::ProtoObject*>(proto)->setAttribute(ctx, sel, val);
 }
 
+// F6 v3 E2b: derive a unique ProtoString attribute key from an object
+// pointer. The live registry (a mutable ProtoObject) stores each anchored
+// object under such a key so the entry can later be removed by pointer
+// identity. Pointer identity is stable for a live object — exactly what is
+// needed since the object is kept alive precisely while the entry exists.
+static const proto::ProtoString*
+ptrRegistryKey(proto::ProtoContext* ctx, const proto::ProtoObject* o) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "p%llx",
+                  static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(o)));
+    return ctx->fromUTF8String(buf)->asString(ctx);
+}
+
 struct STRuntime::Impl {
     proto::ProtoSpace    space;
     proto::ProtoContext* rootCtx    = nullptr;
@@ -115,44 +130,40 @@ struct STRuntime::Impl {
     mutable std::mutex schedMu;
     std::condition_variable schedCv;
 
-    // F6 v2 T2: parallel drain via a managed ProtoThread.
+    // F6 v3 E2b: single live-registry GC root for all transient liveness.
     //
-    // - `pinnedActors` keeps actors alive while they sit in the readyQueue.
-    //   The queue is std::queue<const ProtoObject*> — a plain STL container
-    //   the tracing GC cannot see — and the worker thread may consume entries
-    //   asynchronously. Pinning via asyncRoots makes the actor reachable from
-    //   a GC root for the schedule()..drainOne() window.
-    // - `workers` holds N managed ProtoThreads spawned in the STRuntime
-    //   constructor (F6 v2 T7). Each gets its own root ProtoContext chain and
-    //   independently drains the shared readyQueue under schedMu. The pool
-    //   size is hardware_concurrency() (defaulted to 2, capped at 8); the
-    //   PROTOST_WORKERS env var overrides it for tests + experimentation.
-    // - `shutdown` is set by ~STRuntime to make every worker exit its wait
-    //   loop; schedCv.notify_all() wakes all of them at once.
-    std::unordered_map<const proto::ProtoObject*, proto::ProtoRootSet::Handle> pinnedActors;
-
-    // F6 v3 E2: GC root for SUSPENDED (cooperatively-yielded) actors.
+    // protoCore's tracing GC is designed so that to keep transient objects
+    // alive you hang them off ONE already-pinned structure — a single root
+    // reference is enough, since the collector traverses everything reachable
+    // from that root during marking. We therefore do NOT mint a ProtoRootSet
+    // handle per object. Instead `liveRegistry` is a single mutable
+    // ProtoObject pinned once in asyncRoots for the runtime's whole lifetime;
+    // every transient object that must survive GC is added as an attribute of
+    // it (keyed by the object's pointer) and removed when it no longer needs
+    // pinning.
     //
-    // `pinnedActors` only keeps an actor rooted while it sits in `readyQueue`
-    // (schedule()..drainOne pop). A cooperatively-yielded actor is NOT in the
-    // queue: between throwing FutureYield and being rescheduled by its
-    // awaited future's resolution, it lives only as an entry in that future's
-    // `__waiters__` list. In a deep dependency chain EVERY actor can be
-    // suspended at once (each waiting on the next), so at the deepest point
-    // there is no live readyQueue entry anchoring any of them — and the whole
-    // suspended chain (actors, their `__suspended_frame__` snapshots, their
-    // wrapped objects, and transitively the Link/Tail class objects the
-    // wrapped objects inherit from) becomes unreachable from every GC root.
-    // protoCore defers GC until allocation pressure builds, so this only
-    // bites once the chain is deep enough to trigger a cycle (~110 links),
-    // which then reclaims live state and surfaces as `doesNotUnderstand`.
+    // It anchors:
+    //  - scheduled actors, while they sit in the readyQueue (a plain
+    //    std::queue the tracing GC cannot see);
+    //  - cooperatively-suspended actors, parked on an awaited future's
+    //    __waiters__ list between yield and resume. In a deep dependency
+    //    chain EVERY actor can be suspended at once with no live readyQueue
+    //    entry anchoring any of them; keeping each one in the registry from
+    //    its first schedule() until final completion bridges that gap.
+    //  - the module-level captured-locals dict during runTopLevel;
+    //  - the runtime-wide permanent prototypes + globals.
     //
-    // `suspendedPins` bridges exactly that gap: the actor is pinned here from
-    // the moment it yields until the moment it is re-popped for resume, so a
-    // suspended actor is always reachable from a GC root. Each pin is added
-    // once on the yield path and removed once on the resume-pop path —
-    // balanced, so asyncRoots cannot grow without bound.
-    std::unordered_map<const proto::ProtoObject*, proto::ProtoRootSet::Handle> suspendedPins;
+    // Registry mutations are serialized under `schedMu` (see registryAdd /
+    // registryRemove), the same lock that guards readyQueue / scheduledSet.
+    //
+    // `workers` holds N managed ProtoThreads spawned in the STRuntime
+    // constructor (F6 v2 T7). Each gets its own root ProtoContext chain and
+    // independently drains the shared readyQueue under schedMu. The pool
+    // size is hardware_concurrency() (defaulted to 2, capped at 8); the
+    // PROTOST_WORKERS env var overrides it for tests + experimentation.
+    // `shutdown` is set by ~STRuntime to make every worker exit its wait
+    // loop; schedCv.notify_all() wakes all of them at once.
+    const proto::ProtoObject* liveRegistry = nullptr;
 
     std::vector<const proto::ProtoThread*> workers;
     std::atomic<bool> shutdown { false };
@@ -191,7 +202,20 @@ struct STRuntime::Impl {
         auto* futureKey = rootCtx->fromUTF8String("Future")->asString(rootCtx);
         globals->setAttribute(rootCtx, futureKey, bootstrap.futureProto);
 
-        // F6 v3 E2: permanently pin the runtime-wide GC roots.
+        // F6 v3 E2b: create the single live-registry GC root and pin it.
+        //
+        // This is the ONLY object ever handed to asyncRoots->add(). Every
+        // other liveness need — transient actors and the permanent
+        // prototypes/globals below — is expressed as an attribute of this
+        // mutable ProtoObject, so the tracing collector reaches them all from
+        // this one root. The pin is never released before ~Impl destroys the
+        // whole root set.
+        if (asyncRoots) {
+            liveRegistry = bootstrap.objectProto->newChild(rootCtx, /*isMutable=*/true);
+            asyncRoots->add(liveRegistry);
+        }
+
+        // F6 v3 E2: anchor the runtime-wide GC roots in the live registry.
         //
         // protoCore's tracing GC marks from a fixed set of roots: the
         // built-in `space->*Prototype` slots, registered ProtoRootSets, and
@@ -211,13 +235,15 @@ struct STRuntime::Impl {
         // the collector reclaims these unrooted prototypes and the method
         // bindings installed on them — observed as spurious `doesNotUnderstand`
         // (e.g. `+` on an integer, `linkTo:`/`compute` on an actor) after the
-        // first GC cycle. Pinning them in asyncRoots for the runtime's whole
-        // lifetime closes that gap. The pins are intentionally never released
-        // before ~Impl destroys the whole root set — these objects are live
-        // for exactly as long as the runtime is.
-        if (asyncRoots) {
+        // first GC cycle. Adding them to the live registry for the runtime's
+        // whole lifetime closes that gap. These entries are never removed —
+        // they are live for exactly as long as the runtime is.
+        if (liveRegistry) {
             auto pinPermanent = [this](const proto::ProtoObject* o) {
-                if (o && o != PROTO_NONE) asyncRoots->add(o);
+                if (o && o != PROTO_NONE) {
+                    const_cast<proto::ProtoObject*>(liveRegistry)
+                        ->setAttribute(rootCtx, ptrRegistryKey(rootCtx, o), o);
+                }
             };
             pinPermanent(globals);
             pinPermanent(bootstrap.objectProto);
@@ -501,8 +527,8 @@ STRuntime::runTopLevel(const BytecodeModule& m) {
     auto* capturedDict = const_cast<proto::ProtoObject*>(impl_->bootstrap.objectProto)
         ->newChild(ctx, /*isMutable=*/true);
 
-    // F6 v3 E2: pin the module-level captured-locals dict as a GC root for
-    // the whole top-level run.
+    // F6 v3 E2b: anchor the module-level captured-locals dict in the live
+    // registry for the whole top-level run.
     //
     // `capturedDict` holds every module-level variable — including, for the
     // cooperative-chain workloads, all N actor objects. While the top-level
@@ -512,26 +538,56 @@ STRuntime::runTopLevel(const BytecodeModule& m) {
     // while the main thread is parked in `wait` (now reachable since the
     // GC-starvation deadlock is fixed) would otherwise reclaim `capturedDict`
     // and every actor/class hanging off it — observed as `doesNotUnderstand`
-    // once the chain is deep enough to trigger a cycle mid-run. Pinning it in
-    // asyncRoots for the lifetime of runTopLevel closes that window; the
-    // handle is released on every exit path (including exceptions) by the
-    // RAII guard below.
-    proto::ProtoRootSet::Handle capturedPin = proto::ProtoRootSet::kNullHandle;
-    if (impl_->asyncRoots) capturedPin = impl_->asyncRoots->add(capturedDict);
-    struct CapturedPinGuard {
-        proto::ProtoRootSet* rs;
-        proto::ProtoRootSet::Handle h;
-        ~CapturedPinGuard() {
-            if (rs && h != proto::ProtoRootSet::kNullHandle) rs->remove(h);
-        }
-    } capturedPinGuard{impl_->asyncRoots, capturedPin};
+    // once the chain is deep enough to trigger a cycle mid-run. Adding it to
+    // the live registry for the lifetime of runTopLevel closes that window;
+    // the RAII guard below removes the entry on every exit path (exceptions
+    // included).
+    registryAdd(ctx, capturedDict);
+    struct CapturedAnchorGuard {
+        STRuntime* self;
+        proto::ProtoContext* ctx;
+        const proto::ProtoObject* dict;
+        ~CapturedAnchorGuard() { self->registryRemove(ctx, dict); }
+    } capturedAnchorGuard{this, ctx, capturedDict};
 
     return eng.runWithArgs(ctx, m, /*self=*/PROTO_NONE,
                            /*args=*/nullptr, /*argc=*/0, capturedDict);
 }
 
-void STRuntime::schedule(const proto::ProtoObject* actor) {
+// F6 v3 E2b: anchor `o` in the live registry so the tracing GC reaches it
+// from the single pinned root. Idempotent — setAttribute with the same
+// pointer-derived key simply overwrites. Serialized under schedMu, the same
+// lock guarding readyQueue / scheduledSet, so concurrent schedule / drain
+// callers never race on the registry. Callers MUST NOT already hold schedMu.
+void STRuntime::registryAdd(proto::ProtoContext* ctx, const proto::ProtoObject* o) {
+    if (!o || o == PROTO_NONE || !impl_->liveRegistry) return;
+    std::lock_guard<std::mutex> lock(impl_->schedMu);
+    const_cast<proto::ProtoObject*>(impl_->liveRegistry)
+        ->setAttribute(ctx, ptrRegistryKey(ctx, o), o);
+}
+
+// F6 v3 E2b: drop `o` from the live registry. Balanced against registryAdd;
+// safe to call for an object that was never added (removeAttribute of a
+// missing key is a no-op). Callers MUST NOT already hold schedMu.
+void STRuntime::registryRemove(proto::ProtoContext* ctx, const proto::ProtoObject* o) {
+    if (!o || o == PROTO_NONE || !impl_->liveRegistry) return;
+    std::lock_guard<std::mutex> lock(impl_->schedMu);
+    const_cast<proto::ProtoObject*>(impl_->liveRegistry)
+        ->removeAttribute(ctx, ptrRegistryKey(ctx, o));
+}
+
+void STRuntime::schedule(proto::ProtoContext* ctx, const proto::ProtoObject* actor) {
     if (!actor) return;
+    // F6 v3 E2b: anchor the actor in the live registry BEFORE it enters the
+    // readyQueue. readyQueue is a plain std::queue invisible to the tracing
+    // GC, and a worker thread on a separate ProtoContext chain may consume
+    // entries asynchronously; the registry entry keeps the actor reachable
+    // from the single pinned root for the schedule()..completion window.
+    // registryAdd is idempotent and takes schedMu internally, so it runs
+    // before the queue-mutation scope below (callers must not hold schedMu).
+    // If the actor was scheduled before and not yet removed, this is a
+    // harmless overwrite of the same key.
+    registryAdd(ctx, actor);
     {
         std::lock_guard<std::mutex> lock(impl_->schedMu);
         if (!impl_->scheduledSet.insert(actor).second) {
@@ -541,13 +597,6 @@ void STRuntime::schedule(const proto::ProtoObject* actor) {
         }
         SCHED_DIAG("schedule actor=" << actor
                    << " queue=" << (impl_->readyQueue.size() + 1));
-        // F6 v2 T2: pin the actor in asyncRoots while it sits in the queue.
-        // readyQueue is a plain std::queue invisible to the tracing GC, and a
-        // worker thread on a separate ProtoContext chain may consume entries
-        // asynchronously. Pinning bridges the gap.
-        if (impl_->asyncRoots) {
-            impl_->pinnedActors[actor] = impl_->asyncRoots->add(actor);
-        }
         impl_->readyQueue.push(actor);
     }
     // Wake one waiter; the worker thread (added in T2) loops on schedCv.
@@ -556,7 +605,6 @@ void STRuntime::schedule(const proto::ProtoObject* actor) {
 
 bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     const proto::ProtoObject* actor = nullptr;
-    proto::ProtoRootSet::Handle pinHandle = proto::ProtoRootSet::kNullHandle;
     {
         // F6 v2 T1: only the queue/set mutation is under the lock. Mailbox
         // and future updates below run unlocked so concurrent schedule()
@@ -568,61 +616,38 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
         impl_->scheduledSet.erase(actor);
         SCHED_DIAG("drainOne POP actor=" << actor
                    << " queue=" << impl_->readyQueue.size());
-        // F6 v2 T2: claim ownership of this actor's pin handle. If the
-        // processing path below re-schedules the actor, schedule() will pin
-        // it again with a fresh handle independent of this one.
-        auto it = impl_->pinnedActors.find(actor);
-        if (it != impl_->pinnedActors.end()) {
-            pinHandle = it->second;
-            impl_->pinnedActors.erase(it);
-        }
     }
 
-    // F6 v3 E2: suspended-actor GC root helpers (see Impl::suspendedPins).
+    // F6 v3 E2b: GC anchoring for the popped actor.
     //
-    //  * pinSuspended(actor): called on every yield path, just before
-    //    drainOne returns, to keep the actor reachable from a GC root while
-    //    it is parked on its awaited future's __waiters__ list. Idempotent —
-    //    if an entry already exists (defensive) the old handle is released
-    //    first so asyncRoots never accumulates duplicates.
-    //  * unpinSuspended(actor): called once on the resume-pop path, after we
-    //    have confirmed __suspended_frame__ is present, to balance the pin.
+    // The actor was added to the live registry by schedule() and is still
+    // there. Its lifecycle within the registry is:
+    //   - normal completion / exception → registryRemove (the actor no
+    //     longer needs anchoring once its message is fully processed);
+    //   - cooperative yield (FutureYield)  → keep it in the registry, so a
+    //     fully-suspended deep chain still has every actor reachable from
+    //     the single pinned root while parked on awaited futures'
+    //     __waiters__ lists. The whoever-resolves path re-schedules it,
+    //     which re-adds it harmlessly (idempotent overwrite of the same
+    //     key). It is finally removed on the resume's completion path.
     //
-    // Both take schedMu (it guards suspendedPins, same as pinnedActors).
-    auto pinSuspended = [this](const proto::ProtoObject* a) {
-        if (!a || !impl_->asyncRoots) return;
-        std::lock_guard<std::mutex> lock(impl_->schedMu);
-        auto it = impl_->suspendedPins.find(a);
-        if (it != impl_->suspendedPins.end()) {
-            impl_->asyncRoots->remove(it->second);
-            impl_->suspendedPins.erase(it);
-        }
-        impl_->suspendedPins[a] = impl_->asyncRoots->add(a);
-    };
-    auto unpinSuspended = [this](const proto::ProtoObject* a) {
-        if (!a || !impl_->asyncRoots) return;
-        std::lock_guard<std::mutex> lock(impl_->schedMu);
-        auto it = impl_->suspendedPins.find(a);
-        if (it != impl_->suspendedPins.end()) {
-            impl_->asyncRoots->remove(it->second);
-            impl_->suspendedPins.erase(it);
-        }
-    };
-
-    // F6 v2 T2: RAII release of the per-iteration pin on all exit paths.
-    // The handle was minted by schedule() and must be returned exactly once.
-    // The destructor also notifies schedCv so a Future>>wait stuck on an
-    // empty queue (because the worker beat us to the actor) wakes promptly
-    // once we've finished resolving / rejecting the future.
+    // `releaseActor` is the RAII completion hook: by default it removes the
+    // actor from the registry. Any yield path sets `keepAnchored = true`
+    // first so the entry survives the suspension window. It also notifies
+    // schedCv so a Future>>wait stuck on an empty queue (because a worker
+    // beat us to the actor) wakes promptly once the future is settled.
+    bool keepAnchored = false;
     struct DrainGuard {
-        proto::ProtoRootSet* rs;
-        proto::ProtoRootSet::Handle h;
+        STRuntime* self;
+        proto::ProtoContext* ctx;
+        const proto::ProtoObject* actor;
+        const bool* keepAnchored;
         std::condition_variable* cv;
         ~DrainGuard() {
-            if (rs && h != proto::ProtoRootSet::kNullHandle) rs->remove(h);
+            if (!*keepAnchored) self->registryRemove(ctx, actor);
             if (cv) cv->notify_all();
         }
-    } drainGuard{impl_->asyncRoots, pinHandle, &impl_->schedCv};
+    } drainGuard{this, ctx, actor, &keepAnchored, &impl_->schedCv};
 
     static const proto::ProtoString* mailboxKey =
         ctx->fromUTF8String("__mailbox__")->asString(ctx);
@@ -718,11 +743,12 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                    << ((snapAttr && snapAttr != PROTO_NONE) ? "RESUME"
                                                             : "FRESH-POP"));
         if (snapAttr && snapAttr != PROTO_NONE) {
-            // F6 v3 E2: this actor was suspended and is now being resumed.
-            // Release the suspended-actor GC pin added on its yield path;
-            // from here on the per-iteration `pinHandle` (or, on a re-yield,
-            // a fresh pinSuspended call) keeps it rooted.
-            unpinSuspended(actor);
+            // F6 v3 E2b: this actor was suspended and is now being resumed.
+            // It has stayed in the live registry the whole time (the yield
+            // path set keepAnchored so DrainGuard left it in place), so no
+            // re-add is needed here — the registry entry already roots it.
+            // The DrainGuard for THIS drainOne tick will remove it on normal
+            // completion, or a re-yield below will set keepAnchored again.
             // Pull the message-level future the original drainOne would
             // have resolved on synchronous completion. Stored on the actor
             // at yield time so the resume path knows which future to
@@ -784,10 +810,11 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                     const_cast<proto::ProtoObject*>(actor)->setAttribute(
                         ctx, suspFutKey, msgFut);
                 }
-                // F6 v3 E2: re-pin the actor as a GC root for the new
-                // suspension window (yield→resume). Balanced by the
-                // unpinSuspended at the top of the resume branch.
-                pinSuspended(actor);
+                // F6 v3 E2b: the actor re-yielded — keep its live-registry
+                // entry in place so it stays reachable from the pinned root
+                // across the new suspension window. DrainGuard sees
+                // keepAnchored and leaves the entry untouched.
+                keepAnchored = true;
                 if (actorGuard.owns_lock()) actorGuard.unlock();
                 return true;
             } catch (const std::exception& e) {
@@ -805,7 +832,13 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             auto* mbAfter = actor->getAttribute(ctx, mailboxKey);
             if (mbAfter && mbAfter != PROTO_NONE) {
                 auto* mbList = mbAfter->asList(ctx);
-                if (mbList && mbList->getSize(ctx) > 0) schedule(actor);
+                if (mbList && mbList->getSize(ctx) > 0) {
+                    // F6 v3 E2b: re-queued — keep the registry entry so
+                    // DrainGuard does not remove what schedule() just
+                    // (re-)anchored. The next drainOne owns its lifecycle.
+                    keepAnchored = true;
+                    schedule(ctx, actor);
+                }
             }
             return true;
         }
@@ -933,11 +966,11 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             const_cast<proto::ProtoObject*>(actor)->setAttribute(
                 ctx, suspFutKey, future);
         }
-        // F6 v3 E2: pin the actor as a GC root for the suspension window.
-        // The per-iteration `pinHandle` is about to be released by
-        // DrainGuard; without this pin a fully-suspended chain would have no
-        // live GC root and the tracing collector would reclaim it.
-        pinSuspended(actor);
+        // F6 v3 E2b: keep the actor's live-registry entry in place for the
+        // suspension window. DrainGuard would otherwise remove it on return;
+        // without the entry a fully-suspended chain would have no live GC
+        // root and the tracing collector would reclaim it.
+        keepAnchored = true;
         if (actorGuard.owns_lock()) actorGuard.unlock();
         return true;
     } catch (const std::exception& e) {
@@ -957,7 +990,12 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     if (actorGuard.owns_lock()) actorGuard.unlock();
 
     // Re-schedule actor if more messages remained at the time we popped.
-    if (rescheduleAfter) schedule(actor);
+    // F6 v3 E2b: keep the registry entry — schedule() re-anchors the actor
+    // for its next queue residency, so DrainGuard must not strip it.
+    if (rescheduleAfter) {
+        keepAnchored = true;
+        schedule(ctx, actor);
+    }
 
     return true;
 }
