@@ -24,6 +24,7 @@
 #include "SchedDiag.h"
 #include "Opcodes.h"
 #include "ActorLock.h"
+#include "GcSafeMutex.h"
 #include "debugger/DebuggerRuntime.h"
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
@@ -483,8 +484,14 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // actor lock).
                     std::mutex* actorLock = getActorLock(ctx, recv);
                     {
-                        std::unique_lock<std::mutex> guard;
-                        if (actorLock) guard = std::unique_lock<std::mutex>(*actorLock);
+                        // F6 v3 E4: acquire the per-actor lock GC-safely. The
+                        // drainOne holder keeps this lock across the entire
+                        // user-method dispatch — i.e. across protoCore
+                        // allocation — and may park at a GC safepoint while
+                        // holding it. A plain std::mutex::lock() here would
+                        // block this thread off-safepoint while it is still a
+                        // counted mutator, stalling the STW quorum forever.
+                        GcSafeLockGuard guard(ctx, actorLock);
 
                         // Enqueue (FIFO) into the actor's mailbox.
                         auto* mbObj = recv->getAttribute(ctx, mbKey);

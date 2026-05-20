@@ -8,6 +8,7 @@
 #include "ActorLock.h"
 #include "SchedDiag.h"
 #include "GcSafeBlocking.h"
+#include "GcSafeMutex.h"
 #include "debugger/DebuggerRuntime.h"
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
@@ -404,9 +405,21 @@ STRuntime::~STRuntime() {
 }
 
 bool STRuntime::waitForSchedulerProgress(unsigned millis) {
-    std::unique_lock<std::mutex> lock(impl_->schedMu);
-    auto status = impl_->schedCv.wait_for(
-        lock, std::chrono::milliseconds(millis));
+    // F6 v3 E4: acquire `schedMu` GC-safely (a registryAdd / registryRemove
+    // holder parks at a GC safepoint while holding it), then E2-style bracket
+    // the cv sleep so this thread leaves the GC running set while parked on
+    // the foreign cv. `lock` is released before exitGcBlocking so the
+    // safepoint there runs with no protoST lock held.
+    auto* ctx = impl_->rootCtx;
+    std::cv_status status;
+    {
+        gcSafeLock(ctx, impl_->schedMu);
+        std::unique_lock<std::mutex> lock(impl_->schedMu, std::adopt_lock);
+        enterGcBlocking(ctx);
+        status = impl_->schedCv.wait_for(
+            lock, std::chrono::milliseconds(millis));
+    }
+    exitGcBlocking(ctx);
     return status == std::cv_status::no_timeout;
 }
 
@@ -453,7 +466,9 @@ void STRuntime::workerLoop(proto::ProtoContext* ctx) {
             // requested and nothing remains to drain, exit; otherwise keep
             // draining so pending work is not lost (the destructor blocks on
             // join() until every worker has exited this loop).
-            std::lock_guard<std::mutex> lock(impl_->schedMu);
+            // F6 v3 E4: GC-safe acquire — a registryAdd/Remove holder parks
+            // at a GC safepoint while owning schedMu.
+            GcSafeLockGuard lock(ctx, impl_->schedMu);
             if (impl_->shutdown.load(std::memory_order_acquire)
                 && impl_->readyQueue.empty()) {
                 return;
@@ -561,7 +576,11 @@ STRuntime::runTopLevel(const BytecodeModule& m) {
 // callers never race on the registry. Callers MUST NOT already hold schedMu.
 void STRuntime::registryAdd(proto::ProtoContext* ctx, const proto::ProtoObject* o) {
     if (!o || o == PROTO_NONE || !impl_->liveRegistry) return;
-    std::lock_guard<std::mutex> lock(impl_->schedMu);
+    // F6 v3 E4: GC-safe acquire. This critical section runs setAttribute /
+    // ptrRegistryKey on the live registry — i.e. it allocates while holding
+    // schedMu, so the holder may park at a GC safepoint with the lock owned.
+    // Every other schedMu acquirer therefore takes it GC-safely.
+    GcSafeLockGuard lock(ctx, impl_->schedMu);
     const_cast<proto::ProtoObject*>(impl_->liveRegistry)
         ->setAttribute(ctx, ptrRegistryKey(ctx, o), o);
 }
@@ -571,7 +590,9 @@ void STRuntime::registryAdd(proto::ProtoContext* ctx, const proto::ProtoObject* 
 // missing key is a no-op). Callers MUST NOT already hold schedMu.
 void STRuntime::registryRemove(proto::ProtoContext* ctx, const proto::ProtoObject* o) {
     if (!o || o == PROTO_NONE || !impl_->liveRegistry) return;
-    std::lock_guard<std::mutex> lock(impl_->schedMu);
+    // F6 v3 E4: GC-safe acquire (see registryAdd — removeAttribute /
+    // ptrRegistryKey may allocate while schedMu is held).
+    GcSafeLockGuard lock(ctx, impl_->schedMu);
     const_cast<proto::ProtoObject*>(impl_->liveRegistry)
         ->removeAttribute(ctx, ptrRegistryKey(ctx, o));
 }
@@ -589,7 +610,9 @@ void STRuntime::schedule(proto::ProtoContext* ctx, const proto::ProtoObject* act
     // harmless overwrite of the same key.
     registryAdd(ctx, actor);
     {
-        std::lock_guard<std::mutex> lock(impl_->schedMu);
+        // F6 v3 E4: GC-safe acquire — registryAdd/Remove park at a GC
+        // safepoint while holding this same lock.
+        GcSafeLockGuard lock(ctx, impl_->schedMu);
         if (!impl_->scheduledSet.insert(actor).second) {
             SCHED_DIAG("schedule REJECTED (already in scheduledSet) actor="
                        << actor << " queue=" << impl_->readyQueue.size());
@@ -609,7 +632,9 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
         // F6 v2 T1: only the queue/set mutation is under the lock. Mailbox
         // and future updates below run unlocked so concurrent schedule()
         // calls can proceed while the current message is being processed.
-        std::lock_guard<std::mutex> lock(impl_->schedMu);
+        // F6 v3 E4: GC-safe acquire — registryAdd/Remove park at a GC
+        // safepoint while holding this same lock.
+        GcSafeLockGuard lock(ctx, impl_->schedMu);
         if (impl_->readyQueue.empty()) return false;
         actor = impl_->readyQueue.front();
         impl_->readyQueue.pop();
@@ -722,12 +747,31 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     // this lock — using a non-recursive std::mutex would self-deadlock.
     // For this task we keep std::mutex and accept the limitation; the F6
     // tests do not exercise self-sends. T4/T5 can revisit if needed.
+    // F6 v3 E4: acquire the per-actor lock GC-safely. drainOne holds this
+    // lock across the entire user-method dispatch (subEng.runWithArgs /
+    // continueRun) — i.e. across protoCore allocation — so the holder may
+    // park at a GC safepoint while owning it. A second drainer (or the SEND
+    // fast-path) blocking on a plain std::mutex::lock() here would stall the
+    // STW quorum: it would be parked off-safepoint while still counted as a
+    // running mutator. gcSafeLock leaves the running set for the blocking
+    // acquire. `actorLockHeld` tracks ownership across the explicit unlock
+    // points on the yield / completion paths below (a plain std::unique_lock
+    // is no longer used: its blocking constructor is exactly the hazard).
     std::mutex* actorLock = getActorLock(ctx, actor);
-    std::unique_lock<std::mutex> actorGuard;
+    // RAII holder: tracks ownership of `actorLock` and drops it on any return
+    // / throw path. `release()` is called explicitly at the yield / completion
+    // sites that previously did `actorGuard.unlock()`.
+    struct ActorLockGuard {
+        std::mutex* m;
+        bool held = false;
+        void release() { if (held) { m->unlock(); held = false; } }
+        ~ActorLockGuard() { release(); }
+    } actorGuard{actorLock};
     if (actorLock) {
         SCHED_DIAG("drainOne actorLock WAIT actor=" << actor
                    << " lock=" << static_cast<void*>(actorLock));
-        actorGuard = std::unique_lock<std::mutex>(*actorLock);
+        gcSafeLock(ctx, *actorLock);
+        actorGuard.held = true;
         SCHED_DIAG("drainOne actorLock HELD actor=" << actor);
     }
 
@@ -815,7 +859,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                 // across the new suspension window. DrainGuard sees
                 // keepAnchored and leaves the entry untouched.
                 keepAnchored = true;
-                if (actorGuard.owns_lock()) actorGuard.unlock();
+                actorGuard.release();
                 return true;
             } catch (const std::exception& e) {
                 setCurrentActor(nullptr);
@@ -825,7 +869,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                 }
             }
 
-            if (actorGuard.owns_lock()) actorGuard.unlock();
+            actorGuard.release();
             // The actor was scheduled to resume; any mailbox messages that
             // accumulated during the yield window must still be drained.
             // We re-schedule unconditionally if the mailbox is non-empty.
@@ -971,7 +1015,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
         // without the entry a fully-suspended chain would have no live GC
         // root and the tracing collector would reclaim it.
         keepAnchored = true;
-        if (actorGuard.owns_lock()) actorGuard.unlock();
+        actorGuard.release();
         return true;
     } catch (const std::exception& e) {
         if (future) {
@@ -987,7 +1031,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     // deadlock today (nothing holds schedMu while waiting for an actor
     // lock), but releasing first keeps the rule "actor lock and schedMu are
     // disjoint at every cross-thread observation point" simple to audit.
-    if (actorGuard.owns_lock()) actorGuard.unlock();
+    actorGuard.release();
 
     // Re-schedule actor if more messages remained at the time we popped.
     // F6 v3 E2b: keep the registry entry — schedule() re-anchors the actor
@@ -1001,7 +1045,11 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
 }
 
 size_t STRuntime::scheduledCount() const {
-    std::lock_guard<std::mutex> lock(impl_->schedMu);
+    // F6 v3 E4: GC-safe acquire — a registryAdd/Remove holder parks at a GC
+    // safepoint while owning schedMu, so even this read-only accessor must
+    // not block the lock off-safepoint. Uses the root context (this is a
+    // main-thread test/diagnostic accessor).
+    GcSafeLockGuard lock(impl_->rootCtx, impl_->schedMu);
     return impl_->readyQueue.size();
 }
 

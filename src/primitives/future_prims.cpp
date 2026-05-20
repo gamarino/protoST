@@ -4,6 +4,7 @@
 #include "runtime/FutureYield.h"
 #include "runtime/SchedDiag.h"
 #include "runtime/GcSafeBlocking.h"
+#include "runtime/GcSafeMutex.h"
 #include "protoCore.h"
 
 #include <chrono>
@@ -192,20 +193,30 @@ const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* c
     SCHED_DIAG("prim_Future_wait ENTER future=" << r
                << " currentActor=" << rt.currentActor());
     if (rt.currentActor() != nullptr) {
-        std::unique_lock<std::mutex> lock(fcv->mu);
-        auto* st = r->getAttribute(ctx, stateKey);
-        long long s = st ? st->asLong(ctx) : 0;
-        SCHED_DIAG("prim_Future_wait future=" << r << " state=" << s
-                   << " (actor path)");
-        if (s == 0) {
-            // Drop the lock BEFORE throwing — the engine's catch site
-            // appends us to the future's __waiters__ list, which
-            // re-acquires this same mutex via appendFutureWaiterLocked.
-            // Holding it across the throw would self-deadlock.
-            lock.unlock();
-            throw FutureYield(r);
+        // F6 v3 E4: acquire the future cv mutex GC-safely. A producer
+        // (resolveFutureFromDrain / Future>>resolve:) holds this same mutex
+        // across invokeBlock — i.e. across protoCore allocation — and may
+        // park at a GC safepoint while holding it. A plain std::mutex::lock()
+        // here would block this thread in the kernel while it is still
+        // counted as a running mutator, stalling the STW quorum forever.
+        // See GcSafeMutex.h.
+        bool yield = false;
+        {
+            GcSafeLockGuard lock(ctx, fcv->mu);
+            auto* st = r->getAttribute(ctx, stateKey);
+            long long s = st ? st->asLong(ctx) : 0;
+            SCHED_DIAG("prim_Future_wait future=" << r << " state=" << s
+                       << " (actor path)");
+            // s == 0: still pending — cooperatively yield. We must DROP the
+            // lock before throwing: the engine's catch site appends us to
+            // the future's __waiters__ list, which re-acquires this same
+            // mutex via appendFutureWaiterLocked. Holding it across the
+            // throw would self-deadlock. The GcSafeLockGuard releases on
+            // scope exit below, before the throw.
+            yield = (s == 0);
+            // Already settled — fall through to the synchronous read below.
         }
-        // Already settled — fall through to the synchronous read below.
+        if (yield) throw FutureYield(r);
     }
 
     // F6 v3 E2: GC-safe blocking wait. Sleeping on the future's own
@@ -240,8 +251,16 @@ const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* c
     for (;;) {
         bool settled = false;
         {
+            // F6 v3 E4: acquire `fcv->mu` GC-safely. The plain
+            // `std::unique_lock` constructor would block this thread in the
+            // kernel — not at a protoCore safepoint — while a producer that
+            // holds `fcv->mu` across an allocation is parked, stalling the
+            // STW quorum. gcSafeLock leaves the running set for the blocking
+            // acquire; we then adopt the already-owned mutex into a
+            // unique_lock so `cv.wait_for` can release/re-acquire it.
+            gcSafeLock(ctx, fcv->mu);
+            std::unique_lock<std::mutex> lock(fcv->mu, std::adopt_lock);
             // Running-set member here: heap access is safe.
-            std::unique_lock<std::mutex> lock(fcv->mu);
             auto* st = r->getAttribute(ctx, stateKey);
             if (st && st->asLong(ctx) != 0) {
                 settled = true;  // 1 = resolved, 2 = rejected
@@ -331,7 +350,7 @@ const proto::ProtoObject* prim_Future_resolve(STRuntime& rt, proto::ProtoContext
         waitersSnapshot = takeAndClearWaitersLocked(ctx, r);
     };
     if (fcv) {
-        std::lock_guard<std::mutex> lock(fcv->mu);
+        GcSafeLockGuard lock(ctx, fcv->mu);  // F6 v3 E4: GC-safe acquire
         doTransition();
         fcv->cv.notify_all();
     } else {
@@ -389,7 +408,7 @@ const proto::ProtoObject* prim_Future_rejectWith(STRuntime& rt, proto::ProtoCont
         waitersSnapshot = takeAndClearWaitersLocked(ctx, r);
     };
     if (fcv) {
-        std::lock_guard<std::mutex> lock(fcv->mu);
+        GcSafeLockGuard lock(ctx, fcv->mu);  // F6 v3 E4: GC-safe acquire
         doTransition();
         fcv->cv.notify_all();
     } else {
@@ -438,10 +457,9 @@ const proto::ProtoObject* prim_Future_thenDo(STRuntime& rt, proto::ProtoContext*
     long long s = 0;
     const proto::ProtoObject* settledValue = nullptr;
     {
-        // Use a unique_lock so we can unconditionally lock when fcv is non-null;
-        // skip the lock entirely for futures without a cv (pre-T4 fallback only).
-        std::unique_lock<std::mutex> guard;
-        if (fcv) guard = std::unique_lock<std::mutex>(fcv->mu);
+        // F6 v3 E4: GC-safe acquire. fcv may be null (pre-T4 fallback) — the
+        // pointer-form GcSafeLockGuard locks only when it is non-null.
+        GcSafeLockGuard guard(ctx, fcv ? &fcv->mu : nullptr);
 
         auto* st = r->getAttribute(ctx, stateKey);
         s = st ? st->asLong(ctx) : 0;
@@ -491,8 +509,8 @@ const proto::ProtoObject* prim_Future_catch(STRuntime& rt, proto::ProtoContext* 
     long long s = 0;
     const proto::ProtoObject* settledError = nullptr;
     {
-        std::unique_lock<std::mutex> guard;
-        if (fcv) guard = std::unique_lock<std::mutex>(fcv->mu);
+        // F6 v3 E4: GC-safe acquire (see prim_Future_thenDo).
+        GcSafeLockGuard guard(ctx, fcv ? &fcv->mu : nullptr);
 
         auto* st = r->getAttribute(ctx, stateKey);
         s = st ? st->asLong(ctx) : 0;
@@ -570,7 +588,7 @@ bool appendFutureWaiterLocked(proto::ProtoContext* ctx,
         parked = true;
     };
     if (fcv) {
-        std::lock_guard<std::mutex> lock(fcv->mu);
+        GcSafeLockGuard lock(ctx, fcv->mu);  // F6 v3 E4: GC-safe acquire
         doAppend();
     } else {
         doAppend();
@@ -665,7 +683,7 @@ void resolveFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
         waitersSnapshot = takeAndClearWaitersLocked(ctx, future);
     };
     if (fcv) {
-        std::lock_guard<std::mutex> lock(fcv->mu);
+        GcSafeLockGuard lock(ctx, fcv->mu);  // F6 v3 E4: GC-safe acquire
         doTransition();
         fcv->cv.notify_all();
     } else {
@@ -724,7 +742,7 @@ void rejectFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
         waitersSnapshot = takeAndClearWaitersLocked(ctx, future);
     };
     if (fcv) {
-        std::lock_guard<std::mutex> lock(fcv->mu);
+        GcSafeLockGuard lock(ctx, fcv->mu);  // F6 v3 E4: GC-safe acquire
         doTransition();
         fcv->cv.notify_all();
     } else {

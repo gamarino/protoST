@@ -614,14 +614,25 @@ TEST_CASE("F6 v3 E: coordinator awaits a fan-out of worker actors on 2 workers "
 // keeps the C++ stack flat regardless of depth); a regression to the
 // stalling behaviour is caught by the ctest timeout.
 //
+// F6 v3 E4 — a SECOND deep-chain deadlock, of the same class, was found and
+// fixed after E2: E2 made condition-variable SLEEPS GC-safe but left blocking
+// std::mutex ACQUISITION exposed. A worker parked at a GC safepoint inside
+// allocCell while holding a protoST std::mutex (a future cv mutex, a per-actor
+// lock, or schedMu) wedged any other worker that then blocked in
+// std::mutex::lock() — that contender stalls off-safepoint while still counted
+// in runningThreads, so the STW quorum can never be met. The fix
+// (GcSafeMutex.h: gcSafeLock / GcSafeLockGuard) makes every contended protoST
+// mutex acquisition GC-safe — a would-be blocking lock first leaves the GC
+// running set. This 120-link test reliably exercises that interleaving too.
+//
 // NOTE: chains substantially deeper than this currently hit a SEPARATE,
-// pre-existing defect — ExecutionEngine::frames_ (operand stacks, locals,
-// captured dicts of live engines) is a C++ std::vector the tracing GC cannot
-// see, so a GC cycle that reclaims live frame-referenced objects surfaces as
-// a spurious `doesNotUnderstand`. That is an engine GC-bridge gap, distinct
-// from this scheduler liveness fix, and is tracked separately. This
-// regression test is therefore set at a depth that is reliable across worker
-// counts while still firmly exercising the fixed deadlock.
+// pre-existing defect — under deep cumulative allocation a class / method
+// binding object is reclaimed by the tracing GC, surfacing as a spurious
+// `doesNotUnderstand` (NOT a deadlock — gdb confirms the process always exits
+// with the error, never wedges). That is an engine GC-bridge / object-rooting
+// gap, distinct from this scheduler liveness fix, and is tracked separately.
+// This regression test is therefore set at a depth (120) that is reliable
+// across worker counts while still firmly exercising the fixed deadlock.
 TEST_CASE("F6 v3 E2: 120-link dependency chain runs on 2 workers without "
           "stalling (cooperative)",
           "[engine][f6v3][yield][cooperative]") {
