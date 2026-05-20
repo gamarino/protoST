@@ -64,13 +64,22 @@ add_library(protost_runtime STATIC
     src/primitives/object_prims.cpp
     src/primitives/future_prims.cpp
     src/modules/STModuleProvider.cpp
+    src/repl/Repl.cpp
 )
 target_include_directories(protost_runtime PUBLIC src include ${PROTOCORE_INCLUDE_DIRS})
 target_compile_definitions(protost_runtime PRIVATE
     PROTOST_TEMPLATE_DIR="${CMAKE_SOURCE_DIR}/src/venv_template")
 
+# --- libreadline: line editing + history for the interactive REPL (F7) ---
+find_library(READLINE_LIBRARY NAMES readline REQUIRED)
+find_path(READLINE_INCLUDE_DIR NAMES readline/readline.h)
+if(READLINE_INCLUDE_DIR)
+    target_include_directories(protost_runtime PRIVATE ${READLINE_INCLUDE_DIR})
+endif()
+target_link_libraries(protost_runtime PUBLIC ${READLINE_LIBRARY})
+
 add_executable(protost src/main.cpp)
-target_link_libraries(protost PRIVATE protost_frontend protost_runtime ${PROTOCORE_LIBRARY})
+target_link_libraries(protost PRIVATE protost_frontend protost_runtime ${PROTOCORE_LIBRARY} ${READLINE_LIBRARY})
 
 enable_testing()
 
@@ -94,3 +103,6 @@ add_test(NAME cli_eval
 
 add_test(NAME cli_debugger
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_debugger.sh $<TARGET_FILE:protost> ${CMAKE_SOURCE_DIR}/tests/fixtures)
+
+add_test(NAME cli_repl
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_repl.sh $<TARGET_FILE:protost>)

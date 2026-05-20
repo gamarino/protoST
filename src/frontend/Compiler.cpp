@@ -151,6 +151,13 @@ void walkBlockBody(const Node& blockNode, ScopeWalker& blockScope,
 void Compiler::analyseClosures(const Node& mod) {
     analysis_ = ScopeAnalysis{};
     ScopeWalker moduleScope;
+    // F7-REPL: in REPL mode a top-level assignment is not a declaration of a
+    // module local — it binds a persistent global. Marking the module scope
+    // as a "block" makes the analysis treat `x := ...` as a reference, so the
+    // name is never added to `declared` and therefore never enters the
+    // module captured dict. Inner blocks that reference it then fall through
+    // to PUSH_GLOBAL, consistent with the STORE_GLOBAL emitted below.
+    moduleScope.isBlock = replMode_;
     // Module-level: walk every statement under the module node.
     for (const auto& child : mod.children) {
         if (child) walkNode(*child, moduleScope, analysis_, nullptr);
@@ -359,6 +366,16 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
                 return;
             }
         }
+        // F7-REPL: at module scope, a top-level assignment binds a persistent
+        // global so it is visible to subsequently-compiled REPL inputs.
+        if (replMode_ && atModuleScope()) {
+            emitExpr(m, *n.children[0]);
+            auto sym = m.internSymbol(n.text);
+            if (sym > 255) { error("global symbol pool overflow"); return; }
+            m.emit(Op::DUP, 0);
+            m.emit(Op::STORE_GLOBAL, static_cast<uint8_t>(sym));
+            return;
+        }
         int slot = declareLocal(n.text);
         emitExpr(m, *n.children[0]);
         m.emit(Op::DUP, 0);
@@ -462,6 +479,15 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                     m.emit(Op::STORE_INSTVAR, static_cast<uint8_t>(sym));
                     return;
                 }
+            }
+            // F7-REPL: module-scope assignment-expression binds a global.
+            if (replMode_ && atModuleScope()) {
+                emitExpr(m, *n.children[0]);
+                auto sym = m.internSymbol(n.text);
+                if (sym > 255) { error("global symbol pool overflow"); return; }
+                m.emit(Op::DUP, 0);
+                m.emit(Op::STORE_GLOBAL, static_cast<uint8_t>(sym));
+                return;
             }
             int slot = declareLocal(n.text);
             emitExpr(m, *n.children[0]);

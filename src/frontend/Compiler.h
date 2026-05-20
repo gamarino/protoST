@@ -15,6 +15,15 @@ public:
     bool hasErrors() const { return !errors_.empty(); }
     const std::vector<std::string>& errors() const { return errors_; }
 
+    // F7-REPL: when enabled, module-scope assignments compile to STORE_GLOBAL
+    // (and bare module-scope identifiers resolve through globals) instead of
+    // module-local slots. This lets each REPL input — compiled as its own
+    // BytecodeModule — see the bindings established by previous inputs, since
+    // the runtime's `globals()` namespace persists across modules. It has no
+    // effect on whole-program / script compilation, which keeps slot-based
+    // module locals.
+    void setReplMode(bool on) { replMode_ = on; }
+
     // Per-scope analysis result. For F3-C1: just the captured names.
     // Computed by analyseClosures(mod) before emission.
     struct ScopeAnalysis {
@@ -62,6 +71,13 @@ private:
     // PUSH_INSTVAR, and PUSH_GLOBAL.
     std::string currentMethodClass_;
     std::vector<std::string> currentInstVars_;
+    // F7-REPL: see setReplMode(). When true and emission is at module scope
+    // (scopes_.size() == 1), top-level assignments target the global
+    // namespace so REPL state persists across separately-compiled inputs.
+    bool replMode_ = false;
+
+    // True while emitting at the outermost (module) scope.
+    bool atModuleScope() const { return scopes_.size() == 1; }
 
     void   collectClasses(const ast::Node& module);
     void   emitExpr(BytecodeModule& m, const ast::Node& n);

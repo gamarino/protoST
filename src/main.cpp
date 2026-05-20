@@ -4,6 +4,7 @@
 #include "frontend/Compiler.h"
 #include "runtime/Venv.h"
 #include "debugger/DebuggerRuntime.h"
+#include "repl/Repl.h"
 #include "protoCore.h"
 #include <cstdio>
 #include <cstring>
@@ -60,6 +61,9 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "%s:%d:%d: %s\n", path, e.line, e.column, e.message.c_str());
         std::fputs(protoST::astToString(*m).c_str(), stdout);
         return P.errors().empty() ? 0 : 65;
+    }
+    if (mode == "-i") {
+        return protoST::runRepl();
     }
     if (mode == "-e") {
         if (argc < 3) { std::fprintf(stderr, "-e requires an expression\n"); return 64; }
