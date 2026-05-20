@@ -20,6 +20,23 @@ std::string trim(std::string s) {
 } // anon
 
 void DebuggerRuntime::enterSession(STRuntime& rt, DebugFrame frame, const std::string& reason) {
+    // F8-3: when a frontend is installed (e.g. the DAP adapter), route the
+    // stop through it instead of the built-in text REPL. The frontend blocks
+    // until the user resumes and returns the resume command; we apply the
+    // command/mode it chose and return. The `-d` text path (frontend_ ==
+    // nullptr) below is unchanged.
+    if (frontend_) {
+        Command cmd = frontend_->onStopped(rt, frame, reason);
+        setCommand(cmd);
+        switch (cmd) {
+            case Command::Continue: setMode(Mode::Free);        break;
+            case Command::Step:     setMode(Mode::SingleStep);  break;
+            case Command::Next:     setMode(Mode::SingleStep);  break;
+            case Command::Finish:   setMode(Mode::RunToReturn); break;
+        }
+        return;
+    }
+
     auto& out = outStream_ ? *outStream_ : std::cout;
     auto& in  = inStream_  ? *inStream_  : std::cin;
 

@@ -115,3 +115,6 @@ add_test(NAME cli_repl
 
 add_test(NAME cli_dap
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_dap.sh $<TARGET_FILE:protost>)
+
+add_test(NAME cli_dap_session
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_dap_session.sh $<TARGET_FILE:protost>)
