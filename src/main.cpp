@@ -5,6 +5,7 @@
 #include "runtime/Venv.h"
 #include "debugger/DebuggerRuntime.h"
 #include "repl/Repl.h"
+#include "dap/DapServer.h"
 #include "protoCore.h"
 #include <cstdio>
 #include <cstring>
@@ -20,6 +21,7 @@ void printUsage(const char* prog) {
         "       %s -e '<expr>'\n"
         "       %s -i                     (REPL — F7)\n"
         "       %s -d <script.st>         (debugger — F2)\n"
+        "       %s --dap                  (DAP debug adapter — F8)\n"
         "       %s --dump-ast <script.st>\n"
         "       %s venv <subcommand> [args]\n"
         "       %s compile <script.st> -o <out.stbc>\n"
@@ -27,10 +29,11 @@ void printUsage(const char* prog) {
         "  -e '<expr>'    Evaluate expression and print result\n"
         "  -i             Start REPL (F7)\n"
         "  -d             Debug script (F2)\n"
+        "  --dap          Run the DAP debug adapter over stdin/stdout (F8)\n"
         "  --dump-ast     Parse and dump AST (F1)\n"
         "  --help         Show this message\n"
         "  --version      Show version\n",
-        prog, prog, prog, prog, prog, prog, prog);
+        prog, prog, prog, prog, prog, prog, prog, prog);
 }
 
 void printVersion() {
@@ -64,6 +67,9 @@ int main(int argc, char** argv) {
     }
     if (mode == "-i") {
         return protoST::runRepl();
+    }
+    if (mode == "--dap") {
+        return protoST::runDapServer();
     }
     if (mode == "-e") {
         if (argc < 3) { std::fprintf(stderr, "-e requires an expression\n"); return 64; }

@@ -36,6 +36,10 @@ endif()
 
 include_directories(${PROTOCORE_INCLUDE_DIRS} include)
 
+# --- nlohmann/json: DAP message (de)serialization (F8) ---
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(FindOrFetchNlohmannJson)
+
 add_library(protost_frontend STATIC
     src/frontend/Lexer.cpp
     src/frontend/Parser.cpp
@@ -65,8 +69,11 @@ add_library(protost_runtime STATIC
     src/primitives/future_prims.cpp
     src/modules/STModuleProvider.cpp
     src/repl/Repl.cpp
+    src/dap/DapTransport.cpp
+    src/dap/DapServer.cpp
 )
 target_include_directories(protost_runtime PUBLIC src include ${PROTOCORE_INCLUDE_DIRS})
+target_link_libraries(protost_runtime PUBLIC nlohmann_json::nlohmann_json)
 target_compile_definitions(protost_runtime PRIVATE
     PROTOST_TEMPLATE_DIR="${CMAKE_SOURCE_DIR}/src/venv_template")
 
@@ -83,7 +90,6 @@ target_link_libraries(protost PRIVATE protost_frontend protost_runtime ${PROTOCO
 
 enable_testing()
 
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(FindOrFetchCatch2)
 add_subdirectory(tests)
 
@@ -106,3 +112,6 @@ add_test(NAME cli_debugger
 
 add_test(NAME cli_repl
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_repl.sh $<TARGET_FILE:protost>)
+
+add_test(NAME cli_dap
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_dap.sh $<TARGET_FILE:protost>)
