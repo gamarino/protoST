@@ -662,4 +662,164 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     } // outer while(true)
 }
 
+// ---------------------------------------------------------------------------
+// F6 v3 B: snapshot/restore round-trip for cooperative yield.
+//
+// Encoding (one ProtoObject per frame, packaged into a ProtoList):
+//   pc            -> ProtoInteger (long long via ctx->fromLong)
+//   op_stack      -> ProtoList of operand-stack contents (oldest at index 0)
+//   locals        -> ProtoList of local-slot contents; nullptr slots become
+//                    PROTO_NONE so the list size equals locals.size()
+//   self_obj      -> the frame's self, or PROTO_NONE
+//   captured_dict -> the frame's captured-vars environment, or PROTO_NONE
+//   m_ptr         -> ExternalPointer wrapping the const BytecodeModule*,
+//                    finalizer = nullptr (modules are owned elsewhere)
+//
+// Keys are interned symbols cached in function-local statics so the symbol
+// table is hit at most once per process per key.
+// ---------------------------------------------------------------------------
+
+const proto::ProtoObject*
+ExecutionEngine::snapshotFrames(proto::ProtoContext* ctx) const {
+    static const proto::ProtoString* pcKey       = proto::ProtoString::createSymbol(ctx, "pc");
+    static const proto::ProtoString* opStackKey  = proto::ProtoString::createSymbol(ctx, "op_stack");
+    static const proto::ProtoString* localsKey   = proto::ProtoString::createSymbol(ctx, "locals");
+    static const proto::ProtoString* selfKey     = proto::ProtoString::createSymbol(ctx, "self_obj");
+    static const proto::ProtoString* capturedKey = proto::ProtoString::createSymbol(ctx, "captured_dict");
+    static const proto::ProtoString* mPtrKey     = proto::ProtoString::createSymbol(ctx, "m_ptr");
+
+    const proto::ProtoList* result = ctx->newList();
+    for (const Frame& fr : frames_) {
+        // Each frame becomes a fresh mutable child of objectProto. This
+        // mirrors how Object>>asActor builds the actor wrapper and how the
+        // SEND fast-path builds message envelopes — see the
+        // `bootstrap.objectProto->newChild(ctx, /*isMutable=*/true)` pattern
+        // elsewhere in this file.
+        auto* frameObj = const_cast<proto::ProtoObject*>(rt_.bootstrap().objectProto)
+            ->newChild(ctx, /*isMutable=*/true);
+
+        // pc
+        frameObj->setAttribute(
+            ctx, pcKey,
+            ctx->fromLong(static_cast<long long>(fr.pc)));
+
+        // op_stack as ProtoList (preserve order: index 0 = bottom of stack).
+        const proto::ProtoList* opList = ctx->newList();
+        for (const proto::ProtoObject* v : fr.opStack) {
+            opList = opList->appendLast(ctx, v ? v : PROTO_NONE);
+        }
+        frameObj->setAttribute(ctx, opStackKey, opList->asObject(ctx));
+
+        // locals as ProtoList (size == locals.size(), nullptr -> PROTO_NONE).
+        const proto::ProtoList* locList = ctx->newList();
+        for (const proto::ProtoObject* v : fr.locals) {
+            locList = locList->appendLast(ctx, v ? v : PROTO_NONE);
+        }
+        frameObj->setAttribute(ctx, localsKey, locList->asObject(ctx));
+
+        // self_obj
+        frameObj->setAttribute(
+            ctx, selfKey,
+            fr.selfObj ? fr.selfObj : PROTO_NONE);
+
+        // captured_dict
+        frameObj->setAttribute(
+            ctx, capturedKey,
+            fr.capturedDict ? fr.capturedDict : PROTO_NONE);
+
+        // m_ptr — borrow the BytecodeModule pointer; no finalizer because the
+        // module is owned by STRuntime::loadedModules or by the original
+        // top-level caller. const_cast is safe here: the snapshot only reads
+        // the module through the const protoST::BytecodeModule* recovered on
+        // restoreFrames.
+        frameObj->setAttribute(
+            ctx, mPtrKey,
+            ctx->fromExternalPointer(
+                const_cast<protoST::BytecodeModule*>(fr.m),
+                /*finalizer=*/nullptr));
+
+        result = result->appendLast(ctx, frameObj);
+    }
+    return result->asObject(ctx);
+}
+
+void
+ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
+                               const proto::ProtoObject* snapshot) {
+    static const proto::ProtoString* pcKey       = proto::ProtoString::createSymbol(ctx, "pc");
+    static const proto::ProtoString* opStackKey  = proto::ProtoString::createSymbol(ctx, "op_stack");
+    static const proto::ProtoString* localsKey   = proto::ProtoString::createSymbol(ctx, "locals");
+    static const proto::ProtoString* selfKey     = proto::ProtoString::createSymbol(ctx, "self_obj");
+    static const proto::ProtoString* capturedKey = proto::ProtoString::createSymbol(ctx, "captured_dict");
+    static const proto::ProtoString* mPtrKey     = proto::ProtoString::createSymbol(ctx, "m_ptr");
+
+    if (!snapshot)
+        throw std::runtime_error("restoreFrames: snapshot is null");
+    auto* asList = snapshot->asList(ctx);
+    if (!asList)
+        throw std::runtime_error("restoreFrames: snapshot is not a list");
+
+    frames_.clear();
+    const unsigned long n = asList->getSize(ctx);
+    frames_.reserve(std::max<std::size_t>(64, static_cast<std::size_t>(n)));
+
+    for (unsigned long i = 0; i < n; ++i) {
+        const proto::ProtoObject* frameObj =
+            asList->getAt(ctx, static_cast<int>(i));
+        if (!frameObj)
+            throw std::runtime_error("restoreFrames: null frame entry");
+
+        Frame fr;
+
+        // pc
+        auto* pcVal = frameObj->getAttribute(ctx, pcKey);
+        if (!pcVal || pcVal == PROTO_NONE)
+            throw std::runtime_error("restoreFrames: missing pc");
+        fr.pc = static_cast<std::size_t>(pcVal->asLong(ctx));
+
+        // op_stack
+        auto* opStackVal = frameObj->getAttribute(ctx, opStackKey);
+        auto* opList = opStackVal ? opStackVal->asList(ctx) : nullptr;
+        if (!opList)
+            throw std::runtime_error("restoreFrames: missing op_stack");
+        const unsigned long opN = opList->getSize(ctx);
+        fr.opStack.reserve(std::max<std::size_t>(64, static_cast<std::size_t>(opN)));
+        for (unsigned long j = 0; j < opN; ++j)
+            fr.opStack.push_back(opList->getAt(ctx, static_cast<int>(j)));
+
+        // locals
+        auto* locVal = frameObj->getAttribute(ctx, localsKey);
+        auto* locList = locVal ? locVal->asList(ctx) : nullptr;
+        if (!locList)
+            throw std::runtime_error("restoreFrames: missing locals");
+        const unsigned long locN = locList->getSize(ctx);
+        fr.locals.reserve(std::max<std::size_t>(16, static_cast<std::size_t>(locN)));
+        for (unsigned long j = 0; j < locN; ++j)
+            fr.locals.push_back(locList->getAt(ctx, static_cast<int>(j)));
+
+        // self_obj — convert PROTO_NONE sentinel back to nullptr to mirror
+        // the convention used by runWithArgs (selfObj may legitimately be
+        // nullptr at the top frame for module-level code).
+        auto* selfVal = frameObj->getAttribute(ctx, selfKey);
+        fr.selfObj = (selfVal == PROTO_NONE) ? nullptr : selfVal;
+
+        // captured_dict — same nullptr-vs-PROTO_NONE convention.
+        auto* capVal = frameObj->getAttribute(ctx, capturedKey);
+        fr.capturedDict = (capVal == PROTO_NONE) ? nullptr : capVal;
+
+        // m_ptr
+        auto* mPtrVal = frameObj->getAttribute(ctx, mPtrKey);
+        if (!mPtrVal || mPtrVal == PROTO_NONE)
+            throw std::runtime_error("restoreFrames: missing m_ptr");
+        auto* ep = mPtrVal->asExternalPointer(ctx);
+        if (!ep)
+            throw std::runtime_error("restoreFrames: m_ptr is not an ExternalPointer");
+        fr.m = static_cast<const BytecodeModule*>(ep->getPointer(ctx));
+        if (!fr.m)
+            throw std::runtime_error("restoreFrames: m_ptr decoded to nullptr");
+
+        frames_.push_back(std::move(fr));
+    }
+}
+
 } // namespace protoST

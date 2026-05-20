@@ -50,6 +50,34 @@ public:
                                           int argc,
                                           const proto::ProtoObject* capturedDict = nullptr);
 
+    // F6 v3 B: snapshot/restore round-trip for the engine's frame stack.
+    //
+    // snapshotFrames serialises the entire `frames_` vector (oldest first,
+    // most recent last) into a single ProtoObject (a ProtoList of per-frame
+    // mutable objects). The encoding captures pc, operand stack, locals,
+    // selfObj, capturedDict and an opaque pointer to the frame's
+    // BytecodeModule. Modules are NOT cloned — the BytecodeModule* is wrapped
+    // as a finalizer-free ExternalPointer because module lifetime is owned
+    // by STRuntime's loadedModules vector (or the top-level caller's stack
+    // BytecodeModule); the snapshot only borrows the pointer.
+    //
+    // restoreFrames is the inverse: it clears frames_ and rebuilds it from
+    // the snapshot. After restoreFrames returns, the engine is ready to
+    // continue execution from where the snapshot was taken — runLoop() will
+    // pick up frames_.back() and dispatch the instruction at its pc.
+    //
+    // These methods are the plumbing for cooperative yield/resume in F6 v3
+    // C+: a Future>>wait that cannot resolve synchronously will snapshot
+    // the engine, hand the snapshot to the Future as a continuation, and
+    // unwind; the worker thread that eventually resolves the Future will
+    // restore the snapshot into a fresh engine and resume execution.
+    //
+    // No behaviour change for normal execution — these methods are not
+    // wired into any opcode in F6 v3 B; they exist only to be exercised by
+    // the F6 v3 C+ yield path and by the round-trip test in this task.
+    const proto::ProtoObject* snapshotFrames(proto::ProtoContext* ctx) const;
+    void restoreFrames(proto::ProtoContext* ctx, const proto::ProtoObject* snapshot);
+
 private:
     // F6 v3 A: explicit frame stack. One Frame per active Smalltalk method
     // (top-level module also gets a Frame). User-method SENDs push a new
