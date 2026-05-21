@@ -3,9 +3,10 @@
 > **Status.** This is the authoritative reference for the protoST language —
 > Track 6, slice 1 of the project roadmap (`docs/ROADMAP.md`). It describes
 > the language as it is *intended* to behave. Where the present implementation
-> deviates from that intent, the deviation is documented in
-> [§14 Known deviations](#14-known-deviations); the conformance suite is
-> expected to have tests that fail on those deviations, which is intentional.
+> deviates from that intent, [§14 Known deviations](#14-known-deviations)
+> summarises the delta and defers to the live tracker `docs/STATUS.md` for the
+> current state of each item; the conformance suite is expected to have tests
+> that fail on the open deviations, which is intentional.
 >
 > A second engineer, or a conformance-test author, should be able to read
 > *only* this document and know how protoST is supposed to behave, without
@@ -1396,138 +1397,119 @@ The CLI always constructs exactly one.
 
 ## 14. Known deviations
 
-This section records every place where the current implementation does not
-match the behaviour described in the main text. The conformance suite is
-expected to have tests that fail on these — that is intentional; the failures
-surface the bugs.
+This section summarises every place where the current implementation does not
+match the behaviour described in the main text, **split into deviations that
+are deliberate and deviations that are not**.
 
-### D1. Negative integer literals do not lex
+> **`docs/STATUS.md` is the live tracker.** This section is a stable summary;
+> the *current* state of each item — still open, fixed, with repro and
+> severity, and the fixing commit when closed — lives in `docs/STATUS.md`.
+> When in doubt about whether an item below is still true, consult
+> `docs/STATUS.md`, which is verified against the build and updated with every
+> change. The conformance suite is expected to have tests that fail on the
+> open deviations — that is intentional; the failures surface the bugs.
 
-`-1` does not lex as a single integer literal. A leading `-` is always the
-binary minus operator. **Workaround:** `0 - 1`. Likewise `-3.14` is `0 - 3.14`.
-*Affects:* [§2.4](#24-integer-literals).
+The id scheme (`D1..D18`) is shared with `docs/STATUS.md`. Items D6, D19 and
+D20 are described in `docs/STATUS.md`: D6 is now closed (not reproducible),
+and D19 (class variables) / D20 (`LargeInteger` arithmetic and overflow
+promotion) are tracked there as not-yet-implemented features.
 
-### D2. Second `STRuntime` corrupts symbol interning
+### 14.1 Intentional deviations
 
-protoCore's symbol caches are per-`ProtoSpace` C++ statics. Constructing a
-second `STRuntime` in the same process re-enters this state and corrupts symbol
-interning. **Constraint:** single runtime per process. *Affects:*
-[§13.2](#132-single-runtime-per-process).
+These are deliberate design decisions. protoST diverges from standard
+Smalltalk here *on purpose*; they are not bugs and they stay, documented with
+their rationale. See `docs/STATUS.md` § *Intentional deviations* for the
+canonical list.
 
-### D3. `doesNotUnderstand` is a hard failure, not a catchable `Error`
+- **D2 — single `STRuntime` per process.** A second `STRuntime` corrupts
+  symbol interning, because protoCore's symbol caches are per-`ProtoSpace`
+  C++ statics. protoST adopts "one runtime per process" as its operating
+  contract rather than working around it; the CLI always constructs exactly
+  one. *Affects:* [§13.2](#132-single-runtime-per-process).
+- **D4 — `new` does not auto-invoke `initialize`.** `ClassName new` returns a
+  raw instance; the caller sends `initialize` explicitly. This is a deliberate
+  MVP semantics choice — `new` is the raw allocator. Standard Smalltalk-80
+  defines `new` as `super new initialize`; protoST may align later.
+  *Affects:* [§4.4](#44-creating-instances).
+- **D7 — `outer` is an alias of `pass`.** An MVP simplification of the handler
+  protocol. Strict `outer` semantics (run the enclosing handler, then return
+  to the inner one) require resumable handler re-entry that is not built;
+  `pass` is the shipped behaviour. *Affects:* [§8.4](#84-handler-actions).
+- **D12 — no `main:` auto-invocation.** A script is simply its top-level forms
+  run in order; the printed value is the last top-level statement. protoST
+  scripts deliberately have no distinguished entry point.
+  *Affects:* [§13](#13-the-cli).
 
-Sending an unknown selector raises a hard runtime error
-(`doesNotUnderstand: <selector>`) that is **not** a protoST `Error` — it cannot
-be caught by `on: Error do:`. The intended behaviour is a catchable
-`doesNotUnderstand:` message send. *Affects:* [§5.2](#52-doesnotunderstand).
+### 14.2 Known bugs and not-yet-implemented features
 
-### D4. `new` does not auto-invoke `initialize`
+These deviations are *not* deliberate: either something is broken (a bug) or a
+planned feature is simply absent (not yet implemented). `docs/STATUS.md` is the
+authoritative tracker — it carries the repro, severity, owning roadmap track,
+and (once fixed) the closing commit for each.
 
-`ClassName new` returns a raw instance; it does **not** send `initialize`. The
-caller must send `initialize` explicitly. Standard Smalltalk-80 `new` is
-`super new initialize`. *Affects:* [§4.4](#44-creating-instances).
+**Bugs** — broken behaviour that contradicts the language's own intent or
+examples:
 
-### D5. Class-side methods are not isolated from instances
+- **D1 — negative integer/float literals do not lex.** A leading `-` is always
+  binary minus, so `-5` and `-3.14` fail to parse as literals. **Workaround:**
+  `0 - 5`. *Affects:* [§2.4](#24-integer-literals).
+- **D3 — `doesNotUnderstand` is a hard failure, not a catchable `Error`.** An
+  unknown selector raises a hard runtime error that `on: Error do:` cannot
+  catch; the intended behaviour is a catchable `doesNotUnderstand:` send.
+  *Affects:* [§5.2](#52-doesnotunderstand).
+- **D5 — class-side methods are not isolated from instances.** A
+  `ClassName class >> selector` method installs on the same prototype as
+  instance methods, so an instance can also receive it.
+  *Affects:* [§4.7](#47-class-side-methods).
+- **D8 — dead-home non-local return is a hard error, not `BlockCannotReturn`.**
+  A `^` in a block whose home method has already returned raises a hard
+  runtime error rather than a catchable `BlockCannotReturn`.
+  *Affects:* [§7.1](#71-dead-home).
+- **D13 — `protost compile` not implemented.** The usage text advertises
+  `protost compile script.st -o out.stbc`, but the subcommand is rejected.
+  *Affects:* [§13](#13-the-cli).
+- **D15 — `classVariableNames:` is parsed then silently discarded.** The clause
+  is accepted but its contents are dropped with no diagnostic. (The underlying
+  missing *feature*, class variables, is tracked separately as D19.)
+  *Affects:* [§3.2](#32-class-declarations).
+- **D16 — nested literal arrays not parsed.** A `#( … )` literal admits only
+  flat elements; a nested `#( … )` fails to parse. (A `{ … }` dynamic array
+  may contain any expression.) *Affects:* [§2.9](#29-array-literal-syntax).
+- **D18 — identity comparison `==` / `~~` unbound; `=` not universal.** `==`
+  and `~~` lex and parse but are bound on no class. `=` is bound only on
+  `SmallInteger` and `String`; `~=` only on `SmallInteger`.
+  *Affects:* [§2.10](#210-operators-and-punctuation),
+  [§12.2](#122-number-smallinteger-largeinteger-float).
 
-A method defined with `ClassName class >> selector` is installed on the same
-prototype as instance-side methods, so an *instance* can also receive it. The
-intended behaviour is a class-side/instance-side split where `startingAt:`
-defined class-side is **not** reachable from an instance. *Affects:*
-[§4.7](#47-class-side-methods).
+**Not yet implemented** — planned features absent today (owning roadmap track
+noted in `docs/STATUS.md`):
 
-### D6. Captured-name shadowing between a method and a nested block
-
-A block cannot declare a temporary/argument with the same name as a captured
-variable of its enclosing method — the flat per-method captured dictionary
-cannot hold two distinct variables of the same name. The two would alias.
-*Affects:* [§6.3](#63-closures-variable-capture).
-
-### D7. `outer` is an alias of `pass`
-
-The handler action `outer` is currently identical to `pass`. The strict
-Smalltalk `outer` semantics — evaluate the enclosing handler and *return* to
-the inner one — are not implemented. *Affects:* [§8.4](#84-handler-actions).
-
-### D8. Dead-home non-local return is a hard error, not `BlockCannotReturn`
-
-A `^` in a block whose home method has already returned raises a hard runtime
-error (`non-local return: home method has already returned`) rather than a
-catchable `BlockCannotReturn` exception. *Affects:*
-[§7.1](#71-dead-home).
-
-### D9. Limited control-flow selector set
-
-Only `ifTrue:` and `ifFalse:` are bound on `Boolean`. The standard
-`ifTrue:ifFalse:`, `ifFalse:ifTrue:`, `and:`, `or:`, `&`, `|` (boolean), and the
-`nil`-test selectors `ifNil:`, `ifNotNil:`, `isNil`, `notNil` are **not**
-bound. A two-armed conditional must be written as two separate sends. *Affects:*
-[§6.4](#64-control-flow-with-blocks).
-
-### D10. No `Transcript`
-
-The standard output-stream object `Transcript` is not provided; `Transcript
-show:`/`cr` do not work. Use `printNl` to print. (Some examples and the
-exception spec text use `Transcript` illustratively.) *Affects:*
-[§12.9](#129-import).
-
-### D11. Float / LargeInteger arithmetic not separately bound
-
-Arithmetic and comparison primitives (`+`, `-`, `*`, `/`, `<`, `=`, …) are
-bound on `SmallInteger` only. `Float` arithmetic and mixed-mode integer/float
-arithmetic are not bound — a float arithmetic send is a `doesNotUnderstand`.
-Float *literals* lex and parse correctly; only the operations are missing.
-*Affects:* [§12.2](#122-number-smallinteger-largeinteger-float).
-
-### D12. No `main:` auto-invocation
-
-The CLI does not look for a top-level `main:` selector when running a script.
-A script's behaviour is simply its top-level forms executed in order; the value
-printed is the last top-level statement's value. *Affects:*
-[§13](#13-the-cli).
-
-### D13. `protost compile` not implemented
-
-The usage text advertises `protost compile script.st -o out.stbc`, but the
-subcommand is not handled — the argument falls through and is treated as a
-script path. Standalone bytecode compilation is not available. *Affects:*
-[§13](#13-the-cli).
-
-### D14. REPL meta-commands limited to `:help` and `:quit`
-
-The design spec lists `:load`, `:reload`, `:edit`, `:time`, `:doc`. Only
-`:help`/`:h` and `:quit`/`:q` are implemented. *Affects:*
-[§13.1](#131-the-repl).
-
-### D15. `classVariableNames:` is ignored
-
-The `classVariableNames:` clause of a class declaration is parsed but its
-contents are discarded — class variables are not implemented. *Affects:*
-[§3.2](#32-class-declarations).
-
-### D16. Nested literal arrays not parsed
-
-A `#( ... )` literal admits only flat literal elements (integers, floats,
-strings, characters, symbols, bare-identifier-as-symbol). A nested `#( ... )`
-inside a `#( ... )` is not parsed. (A `{ ... }` dynamic array may of course
-contain any expression, including another array literal.) *Affects:*
-[§2.9](#29-array-literal-syntax).
-
-### D17. `thisContext` is reserved but inert
-
-`thisContext` parses to its own node but the reflective context protocol is not
-implemented; it has no useful behaviour. *Affects:* [§3.10](#310-thiscontext).
-
-### D18. Identity comparison `==` / `~~` not bound; `=` only on SmallInteger and String
-
-The identity-comparison operators `==` and `~~` lex and parse as binary
-operators but are not bound on any class — an `==` send is a
-`doesNotUnderstand`. The equality operator `=` is bound only on `SmallInteger`
-(numeric equality) and `String` (content equality); `=` on other receivers,
-and `~=` on anything but `SmallInteger`, is a `doesNotUnderstand`. (The pump
-example in the design spec uses `state == #operating`, which does not work
-today — `state = 'running'` with a string value works because `=` is bound on
-`String`.) *Affects:* [§2.10](#210-operators-and-punctuation),
-[§12.2](#122-number-smallinteger-largeinteger-float).
+- **D9 — richer control-flow selector set.** Only `ifTrue:` / `ifFalse:` are
+  bound on `Boolean`. Missing: `ifTrue:ifFalse:`, `ifFalse:ifTrue:`, `and:`,
+  `or:`, boolean `&` / `|`, and the nil-test selectors `ifNil:`, `ifNotNil:`,
+  `isNil`, `notNil`. *Affects:* [§6.4](#64-control-flow-with-blocks).
+- **D10 — no `Transcript`.** The standard output-stream object is not
+  provided; use `printNl`. *Affects:* [§12.9](#129-import).
+- **D11 — `Float` and mixed-mode arithmetic not bound.** Arithmetic and
+  comparison primitives are bound on `SmallInteger` only; a float arithmetic
+  send is a `doesNotUnderstand`. Float *literals* lex and parse correctly.
+  *Affects:* [§12.2](#122-number-smallinteger-largeinteger-float).
+- **D20 — `LargeInteger` arithmetic not bound; no overflow promotion.**
+  protoCore provides arbitrary-precision integers and promotes transparently
+  on overflow; protoST binds arithmetic on `SmallInteger` only, so an
+  overflowing `SmallInteger` computation has no arbitrary-precision path.
+  Transparent promotion to `LargeInteger` is a planned feature — the integer
+  half of the same numeric-tower gap as D11.
+  *Affects:* [§12.2](#122-number-smallinteger-largeinteger-float).
+- **D14 — REPL meta-commands limited to `:help` / `:quit`.** `:load`,
+  `:reload`, `:edit`, `:time`, `:doc` are not implemented.
+  *Affects:* [§13.1](#131-the-repl).
+- **D17 — `thisContext` is reserved but inert.** It parses to its own node but
+  the reflective context protocol is not built.
+  *Affects:* [§3.10](#310-thiscontext).
+- **D19 — class variables not implemented.** The runtime feature behind D15: a
+  per-class shared variable visible to all instances and class-side methods.
+  *Affects:* [§3.2](#32-class-declarations).
 
 ---
 
