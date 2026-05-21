@@ -119,6 +119,19 @@ are noted where useful.
 - [x] CLI debugger (`protost -d`)
 - [x] DAP server (`protost --dap`) for VS Code
 
+### Packaging
+- [x] **CPack installers** — `cmake --build` followed by `cpack` produces
+      native packages: `.deb` / `.rpm` / `.tar.gz` on Linux, a `.dmg` on
+      macOS, an NSIS installer + `.zip` on Windows. The `protost` binary
+      installs to `<prefix>/bin`; the stdlib `.st` modules to
+      `<prefix>/share/protoST/lib` (the discovery in `STRuntime.cpp` probes an
+      install-relative `<exe>/../share/protoST/lib`, so an installed binary
+      resolves `Import from: …` with no `PROTOST_LIB`). The Debian package
+      depends on `protocore` and the RPM `Requires: protoCore`. `cpack -G DEB`
+      and `-G TGZ` verified on Linux; the macOS and Windows generators are
+      configured per CPack's documented requirements but unverified on this
+      host. *(Track 10)*
+
 ### Documentation
 - [x] **The dual-audience tutorial** — [`docs/TUTORIAL.md`](TUTORIAL.md) plus
       14 chapters under `docs/tutorial/`. Teaches protoST from the ground up

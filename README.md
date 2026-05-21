@@ -96,6 +96,47 @@ ctest --test-dir build               # run the test suite
 See [`docs/debugging.md`](docs/debugging.md) for debugging `.st` scripts in
 VS Code.
 
+## Installation
+
+protoST ships native installers built with CPack. Every package depends on
+[protoCore](../protoCore) — install protoCore's package first (it provides
+`libprotoCore`).
+
+**Debian / Ubuntu** — install the `.deb`:
+
+```bash
+sudo apt install ./protocore-<version>.deb     # the protoCore dependency
+sudo apt install ./protost-<version>-Linux.deb # protoST itself
+# or, lower-level:
+sudo dpkg -i protost-<version>-Linux.deb && sudo apt-get install -f
+```
+
+**macOS** — open the `.dmg` and drag `protoST` to `Applications`.
+
+**Windows** — run the NSIS installer (`protost-<version>-win64.exe`) and
+follow the wizard, or unzip the portable `.zip`.
+
+The installed `protost` lands on your `PATH`; the standard library is installed
+to `<prefix>/share/protoST/lib`, so `Import from: 'stream'` resolves with no
+`PROTOST_LIB` set.
+
+### Building the packages from source
+
+After a normal build, run CPack from the build directory:
+
+```bash
+cmake -B build -S . && cmake --build build -j
+cd build
+cpack -G DEB    # Debian/Ubuntu .deb (Linux)
+cpack -G RPM    # RPM (Linux, needs rpmbuild)
+cpack -G TGZ    # portable .tar.gz (Linux)
+cpack -G DragNDrop   # .dmg (macOS)
+cpack -G NSIS        # installer .exe (Windows, needs NSIS)
+```
+
+The generators are selected automatically per platform; `cpack` with no `-G`
+builds every generator enabled for the host OS.
+
 ## Documentation
 
 | Document | What it covers |

@@ -264,6 +264,37 @@ and the fastest way for a newcomer to get productive.
 **Dependencies:** the language; grows with every feature.
 **Size:** open-ended — one example is one contribution.
 
+### Track 10 — Installation packaging — ✅ done
+
+**Status:** complete. `protoST/CMakeLists.txt` carries `install()` rules and a
+CPack configuration; `cpack -G DEB` and `cpack -G TGZ` are verified on Linux.
+
+**Goal:** native installers so protoST can be installed without a source
+build — a Debian/Ubuntu `.deb`, an RPM and a `.tar.gz` on Linux, a drag-and-drop
+`.dmg` on macOS, and an NSIS installer (plus a plain `.zip`) on Windows, all
+driven by CPack — and a packaged binary that resolves the standard library out
+of the box.
+
+- `install(TARGETS protost …)` places the binary under `<prefix>/bin`; the
+  stdlib `.st` modules ship under `<prefix>/share/protoST/lib`, and the T4-a
+  discovery in `src/runtime/STRuntime.cpp` probes an install-relative
+  `<exe>/../share/protoST/lib`, so an installed `bin/protost` resolves
+  `Import from: 'stream'` with no `PROTOST_LIB` set. `LICENSE` and the `docs/`
+  tree are installed too.
+- The Debian package declares a dependency on protoCore
+  (`CPACK_DEBIAN_PACKAGE_DEPENDS = protocore`) and the RPM a matching
+  `Requires: protoCore` — protoST links `libprotoCore`, so the package metadata
+  must declare it. Install RPATH (`$ORIGIN/../lib`,
+  `@executable_path/../lib`) lets the installed binary find `libprotoCore`
+  without `LD_LIBRARY_PATH` / `DYLD_LIBRARY_PATH`.
+
+**Why it matters:** a one-command install (`apt`/`dpkg`, the `.dmg`, the
+Windows installer) removes the build-from-source barrier and is a prerequisite
+for protoST being *usable* rather than only *buildable*.
+
+**Dependencies:** a working build (Tracks 1–4) and protoCore's own packaging.
+**Size:** small.
+
 ---
 
 ## Beyond the language: the digital-twin layer
@@ -291,6 +322,7 @@ enables.
   Track 7 (onboarding)               ── starts now, grows continuously
   Track 8 (dual-audience tutorial)   ── after the language reference (Track 6)
   Track 9 (comprehensive examples)   ── grows with every feature
+  Track 10 (installation packaging)  ── needs a working build (Tracks 1–4)
 ```
 
 A reasonable **1.0 milestone**: language core complete (Track 1), the

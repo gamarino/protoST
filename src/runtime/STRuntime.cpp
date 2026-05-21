@@ -1505,9 +1505,11 @@ bool STRuntime::isActor(proto::ProtoContext* ctx,
 // Discovery scheme (first hit wins):
 //   1. $PROTOST_LIB — an explicit override pointing straight at a `lib/` dir.
 //   2. Derived from the executable: read /proc/self/exe, then probe
-//      <dir-of-exe>/lib, <dir-of-exe>/../lib and <dir-of-exe>/../../lib. A dev
-//      build runs `build/protost`, so `../lib` resolves the project `lib/`;
-//      an installed `bin/protost` finds `<prefix>/lib` likewise.
+//      <dir-of-exe>/lib, <dir-of-exe>/../lib, <dir-of-exe>/../../lib and the
+//      installed layout <dir-of-exe>/../share/protoST/lib. A dev build runs
+//      `build/protost`, so `../lib` resolves the project `lib/`; an installed
+//      `bin/protost` finds `<prefix>/share/protoST/lib` (where CPack places
+//      the stdlib `.st` modules).
 //   3. <cwd>/lib — convenient when running from a project checkout.
 // Returns "" if no `lib/` directory is found.
 static std::string discoverStdlibDir() {
@@ -1532,6 +1534,9 @@ static std::string discoverStdlibDir() {
                 dir / "lib",
                 dir.parent_path() / "lib",
                 dir.parent_path().parent_path() / "lib",
+                // Installed layout: <prefix>/bin/protost ->
+                // <prefix>/share/protoST/lib.
+                dir.parent_path() / "share" / "protoST" / "lib",
             };
             for (const auto& c : candidates) {
                 if (fs::is_directory(c, ec)) return c.string();

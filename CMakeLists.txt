@@ -124,3 +124,82 @@ add_test(NAME cli_dap
 
 add_test(NAME cli_dap_session
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_dap_session.sh $<TARGET_FILE:protost>)
+
+# --- Track 10: Installation packaging ---------------------------------------
+# Install RPATH so an installed `bin/protost` finds libprotoCore.so under
+# <prefix>/lib without LD_LIBRARY_PATH / DYLD_LIBRARY_PATH (mirrors protoPython).
+if(UNIX)
+    if(APPLE)
+        set_target_properties(protost PROPERTIES
+            INSTALL_RPATH "@executable_path/../${CMAKE_INSTALL_LIBDIR}")
+    else()
+        set_target_properties(protost PROPERTIES
+            INSTALL_RPATH "\$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
+    endif()
+endif()
+
+# The `protost` binary.
+install(TARGETS protost
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    COMPONENT protoST)
+
+# The standard-library `.st` modules. They are installed to
+# <prefix>/share/protoST/lib; the stdlib discovery in src/runtime/STRuntime.cpp
+# probes an install-relative <exe>/../share/protoST/lib so an installed
+# `bin/protost` resolves `Import from: 'stream'` with no PROTOST_LIB set.
+install(DIRECTORY lib/
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/protoST/lib
+    COMPONENT protoST
+    FILES_MATCHING PATTERN "*.st" PATTERN "README.md")
+
+# License and documentation.
+install(FILES LICENSE
+    DESTINATION ${CMAKE_INSTALL_DOCDIR}
+    COMPONENT protoST)
+install(DIRECTORY docs/
+    DESTINATION ${CMAKE_INSTALL_DOCDIR}
+    COMPONENT protoST
+    FILES_MATCHING PATTERN "*.md")
+
+# VS Code editor integration (DAP debugger glue), if present.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/editor-integration/vscode")
+    install(DIRECTORY editor-integration/vscode
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/protoST/editor-integration
+        COMPONENT protoST)
+endif()
+
+# --- CPack configuration ----------------------------------------------------
+set(CPACK_PACKAGE_NAME "protost")
+set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+    "protoST - a Smalltalk-flavoured language on the protoCore runtime")
+set(CPACK_PACKAGE_VENDOR "numaes")
+set(CPACK_PACKAGE_CONTACT "gamarino@gmail.com")
+set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+set(CPACK_COMPONENTS_ALL protoST)
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "protoST")
+
+# Platform-specific generators.
+if(APPLE)
+    # macOS drag-and-drop .dmg (unverified on a Linux build host).
+    set(CPACK_GENERATOR "DragNDrop")
+elseif(UNIX)
+    set(CPACK_GENERATOR "DEB;RPM;TGZ")
+    # protoST links libprotoCore — the package metadata must declare it.
+    # protoCore's CPack package name is "protoCore"; the DEB generator
+    # lowercases it to "protocore", the RPM generator keeps the case.
+    set(CPACK_DEBIAN_PACKAGE_MAINTAINER "gamarino@gmail.com")
+    set(CPACK_DEBIAN_PACKAGE_SECTION "interpreters")
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS "protocore")
+    set(CPACK_RPM_PACKAGE_LICENSE "MIT")
+    set(CPACK_RPM_PACKAGE_GROUP "Development/Languages")
+    set(CPACK_RPM_PACKAGE_REQUIRES "protoCore")
+elseif(WIN32)
+    # Windows NSIS installer + plain ZIP (unverified on a Linux build host).
+    set(CPACK_GENERATOR "NSIS;ZIP")
+    set(CPACK_NSIS_HELP_LINK "https://github.com/gamarino/protoST")
+    set(CPACK_NSIS_PACKAGE_NAME "protoST")
+endif()
+
+include(CPack)
