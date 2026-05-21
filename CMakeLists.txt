@@ -64,6 +64,7 @@ add_library(protost_runtime STATIC
     src/debugger/BreakpointTable.cpp
     src/primitives/int_prims.cpp
     src/primitives/math_prims.cpp
+    src/primitives/time_prims.cpp
     src/primitives/bool_prims.cpp
     src/primitives/string_prims.cpp
     src/primitives/block_prims.cpp

@@ -35,6 +35,7 @@ The `lib/` directory itself is found, first hit wins, by:
 | `stream` | `Import from: 'stream'` | `ReadStream`, `WriteStream`     |
 | `random` | `Import from: 'random'` | `Random` (seedable PRNG)        |
 | `json`   | `Import from: 'json'`   | `JSON` (`parse:` / `stringify:`)|
+| `time`   | `Import from: 'time'`   | `Time`, `Timestamp`, `Duration` |
 
 ## Adding a module
 

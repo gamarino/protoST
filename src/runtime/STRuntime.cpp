@@ -45,6 +45,7 @@
 
 namespace protoST { void installIntPrimitives(STRuntime& rt); }
 namespace protoST { void installMathPrimitives(STRuntime& rt); }
+namespace protoST { void installTimePrimitives(STRuntime& rt); }
 namespace protoST { void installBoolPrimitives(STRuntime& rt); }
 namespace protoST { void installStringPrimitives(STRuntime& rt); }
 namespace protoST { void installBlockPrimitives(STRuntime& rt); }
@@ -433,6 +434,7 @@ static const proto::ProtoObject* st_worker_main(
 STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
     installIntPrimitives(*this);
     installMathPrimitives(*this);
+    installTimePrimitives(*this);
     installBoolPrimitives(*this);
     installStringPrimitives(*this);
     installBlockPrimitives(*this);

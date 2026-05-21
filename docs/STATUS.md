@@ -117,6 +117,17 @@ are noted where useful.
       `at:` / `asInteger` and `Number>>asCharacter` (UTF-8-aware codepoint
       conversion), and registering `String` / `Boolean` as globals so the
       module can extend them with double-dispatch methods *(track4, T4-d)*
+- [x] `lib/time.st` — the `Time` module: wall-clock access with a small
+      timestamp / duration object model. `Time now` answers a `Timestamp`
+      for the current instant; `Time millisecondsToRun:` benchmarks a block.
+      `Timestamp` wraps epoch milliseconds (`asMilliseconds` / `asSeconds`,
+      comparison, `Timestamp - Timestamp → Duration`,
+      `Timestamp + Duration → Timestamp`); `Duration` wraps a millisecond
+      span (`seconds:` / `milliseconds:` / `minutes:` constructors,
+      arithmetic, comparison). Backed by two C++ clock primitives
+      (`__currentMillis` from `system_clock`, `__monotonicMillis` from
+      `steady_clock`) bootstrapped onto Object; no timezones, no calendar
+      *(track4, T4-e)*
 
 ### Builtins / primitives
 - [x] Numeric tower: `SmallInteger`, `LargeInteger` and `Float` arithmetic &
