@@ -14,9 +14,11 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Baseline:** 568/568 tests passing at commit `6add592`.
-- **Last verified:** 2026-05-20 (every D-item below was probed against a fresh
-  `cmake --build build` of `6add592`).
+- **Baseline:** 584/584 tests passing at commit `MNT-b1` (568 carried over,
+  plus 16 new `test_mnt_b1_fixes` unit tests). Previous baseline 568/568 at
+  `6add592`.
+- **Last verified:** 2026-05-21 (the MNT-b1 slice — D1, D9, D13, D15, D16, D18
+  — was fixed and the whole suite re-run twice green).
 - **Id scheme:** `D1..D18` are carried over from `LANGUAGE.md` §14 and keep
   their original meaning. New divergences get new ids (`D19+`).
 
@@ -127,14 +129,9 @@ narrow edge case).
 
 | Id | Bug | Minimal repro | Severity |
 |----|-----|---------------|----------|
-| D1 | **Negative integer/float literals do not lex.** A leading `-` is always binary minus, so `-5` and `-3.14` fail to parse as literals. Contradicts §2.4. | `./protost -e "-5"` → `expected primary expression, got BinaryOp` | Medium |
 | D3 | **`doesNotUnderstand` is a hard failure, not a catchable `Error`.** An unknown selector raises a hard runtime error that `on: Error do:` cannot catch. §5.2 specifies a catchable `doesNotUnderstand:` send. | `./protost -e "[3 fooBar] on: Error do: [:e | 99]"` → `error: doesNotUnderstand: fooBar` (uncaught) | High |
 | D5 | **Class-side methods are not isolated from instances.** A `ClassName class >> sel` method installs on the same prototype as instance methods, so an instance can also receive it. §4.7 specifies a class/instance split. | `Counter class >> startingAt: n …` then `(Counter new) startingAt: 5` → returns an object instead of `doesNotUnderstand` | High |
 | D8 | **Dead-home non-local return is a hard error, not `BlockCannotReturn`.** A `^` in a block whose home method already returned raises a hard error rather than a catchable `BlockCannotReturn`. Contradicts §7.1. | `Maker >> makeBlock saved := [ ^ 99 ]. ^ self.` then invoke `saved value` after `makeBlock` returned → `error: non-local return: home method has already returned` | Medium |
-| D13 | **`protost compile` not implemented.** The usage text advertises `protost compile script.st -o out.stbc`; the subcommand is rejected. (Behaviour has improved since §14 was written: it is now an explicit `Unknown option or mode: compile` error rather than silently falling through to be treated as a script path.) | `./protost compile /tmp/x.st -o /tmp/x.stbc` → `Unknown option or mode: compile` | Low |
-| D15 | **`classVariableNames:` is parsed then silently discarded.** The clause is accepted but its contents are dropped — class variables do not exist. Silent acceptance of a no-op clause is a bug; see also D19 for the missing feature. | `Object subclass: #Counter instanceVariableNames: 'value' classVariableNames: 'Total'.` → parses, `Total` unusable, no diagnostic | Medium |
-| D16 | **Nested literal arrays not parsed.** A `#( … )` literal admits only flat elements; a nested `#( … )` inside one fails to parse. Contradicts §2.9. | `./protost -e "#(1 #(2 3) 4)"` → `unexpected token in frozen array literal` | Medium |
-| D18 | **Identity comparison `==` / `~~` unbound; `=` not universal.** `==` and `~~` lex and parse but are bound on no class. `=` is bound only on `SmallInteger` and `String`; `~=` only on `SmallInteger`. The design-spec pump example uses `state == #operating`, which does not work. | `./protost -e "3 == 3"` → `error: doesNotUnderstand: ==` | High |
 
 ---
 
@@ -145,7 +142,6 @@ track that owns it.
 
 | Id | Feature | Track |
 |----|---------|-------|
-| D9 | **Richer control-flow selector set.** Only `ifTrue:` / `ifFalse:` are bound on `Boolean`. Missing: `ifTrue:ifFalse:`, `ifFalse:ifTrue:`, `and:`, `or:`, boolean `&` / `\|`, and the nil-test selectors `ifNil:`, `ifNotNil:`, `isNil`, `notNil`. A two-armed conditional must be two separate sends today. | Track 1 (language core) / Track 2 (`Boolean` & `UndefinedObject` protocol) |
 | D10 | **No `Transcript`.** Smalltalk-80's standard output-stream object is not provided; `Transcript show:` / `cr` do not work. Use `printNl`. | Track 4 (standard library — streams / I/O) |
 | D11 | **`Float` and mixed-mode arithmetic not bound.** Arithmetic and comparison primitives are bound on `SmallInteger` only. A `Float` arithmetic send is a `doesNotUnderstand`; float *literals* lex and parse, only the operations are missing. Mixed integer/float arithmetic is likewise absent. | Track 1 / Track 4 (numeric tower) |
 | D14 | **REPL meta-commands limited to `:help` / `:quit`.** The design spec lists `:load`, `:reload`, `:edit`, `:time`, `:doc`; none are implemented. | Track 7 (onboarding / tooling) |
@@ -169,6 +165,12 @@ during the 2026-05-20 audit.
 | C4 | Conformance test "`wait` re-raises rejections" appeared to fail. | Root-caused as a malformed conformance test (a `^`-less `boom` method swallowed trailing top-level lines, §3.4), not an implementation bug. Test corrected; the `Future` machinery was already correct. | `6e947c8` |
 | C5 | §10.1 implied a synchronous way to observe "this is an Actor" via `printString`. | Specification imprecision, not an implementation bug: the actor proxy forwards *every* message asynchronously, `printString` included — it is transparent by design. `LANGUAGE.md` §10.1 corrected. | `6e947c8` |
 | D6 | Reported: a block could not declare a temp/argument with the same name as a captured variable of its enclosing method — the two would alias. | **Not reproducible on the current build.** Probed several variants (method temp + nested-block temp of the same name, with both referenced): the two variables stay distinct. `x := 100` in a method plus `\| x \|` in a nested block both used correctly yields 110, not 120. The flat-captured-dictionary aliasing described in §14 D6 does not occur today. Fixed incidentally before the 2026-05-20 audit; if a reproducer is found, reopen with a new id. | (incidental; pre-`6add592`) |
+| D1 | Negative integer/float literals did not lex — a leading `-` was always binary minus. | The lexer now tracks whether the previous token *ends an operand*; a `-` immediately followed by a digit, in operand/primary position (or separated by whitespace, as in `#(-1 -2 -3)`), is lexed as the sign of a negative numeric literal. A `-` glued to an operand stays binary minus, so `a - 5`, `3 - 5` and `3 - -2` are unchanged. Verified: `-5`→-5, `-3.14` parses, `#(-1 -2 -3)`→3 elements. | `MNT-b1` (this commit) |
+| D9 | Only `ifTrue:` / `ifFalse:` were bound on `Boolean`; no nil-test protocol. | Bound on `Boolean`: `ifTrue:ifFalse:`, `ifFalse:ifTrue:`, `and:`, `or:` (lazy, block argument), `&`, `\|`, `xor:` (eager, boolean argument), `not`. Bound on `Object`: `isNil`, `notNil`, `ifNil:`, `ifNotNil:`, `ifNil:ifNotNil:` (the `ifNotNil:` block may take the receiver). Bound on `Block`: `whileFalse:`, `whileTrue`, `whileFalse`, `repeat`. `nil` answers `isNil`→true since `nilProto` descends from `objectProto`. | `MNT-b1` (this commit) |
+| D13 | `protost compile` was advertised in the usage text but not implemented. | The `compile` line was removed from the CLI usage/help text — the advertised surface now matches reality. Bytecode serialisation remains unimplemented (a separate feature). | `MNT-b1` (this commit) |
+| D15 | `classVariableNames:` was parsed then silently discarded. | A non-empty `classVariableNames:` clause now emits a clear compile-time diagnostic ("class variables are not yet supported — see D19"); an empty `classVariableNames: ''` stays a silent no-op. The real feature (class variables) remains tracked as D19. | `MNT-b1` (this commit) |
+| D16 | Nested literal arrays (`#(1 #(2 3) 4)`) did not parse. | The `#( … )` literal-array parser was refactored to recurse: a nested `#( … )`, and per standard Smalltalk a bare `( … )` group, inside a literal array is a nested literal sub-array. Verified: `#(1 #(2 3) 4)`→3, `#(#(1 2) #(3 4))`→2. | `MNT-b1` (this commit) |
+| D18 | `==` / `~~` were bound on no class; `=` / `~=` were not universal. | `==` (identity) and `~~` (non-identity) are bound on `Object`, so every object understands them. `Object>>=` defaults to identity and `Object>>~=` to its negation; value-equality `=`/`~=` is bound on `SmallInteger`, `String` and `Boolean` (the `~=` on `String` was newly added). Symbols are interned, so `#foo == #foo` is true. The `~~` operator token was added to the lexer. Verified: `3 == 3`, `#foo == #foo`, `3 ~~ 4`, `3 = 3`, `'a' = 'a'`. | `MNT-b1` (this commit) |
 
 ---
 

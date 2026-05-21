@@ -1,6 +1,7 @@
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
+#include "runtime/BytecodeModule.h"
 #include "runtime/TransientPin.h"
 #include "protoCore.h"
 
@@ -11,7 +12,28 @@
 
 namespace protoST {
 
+// invokeBlock and blockArgCount are defined in block_prims.cpp; the forward
+// declarations let the nil-test primitives evaluate their argument blocks and
+// dispatch on block arity through the single shared `__bc_ptr__` code path.
+const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
+                                       const proto::ProtoObject* block,
+                                       const proto::ProtoObject* const* args, int argc);
+int blockArgCount(proto::ProtoContext* ctx, const proto::ProtoObject* block);
+
 namespace {
+
+// D9: evaluate `block`, passing the receiver `r` to it when it is a one-arg
+// block and nothing when it is a zero-arg block. `ifNotNil:` / `ifNil:ifNotNil:`
+// thus accept either arity (modern `[:x| …]` or classic `[…]`).
+const proto::ProtoObject* invokeNilTestBlock(STRuntime& rt, proto::ProtoContext* ctx,
+                                              const proto::ProtoObject* block,
+                                              const proto::ProtoObject* r) {
+    if (blockArgCount(ctx, block) >= 1) {
+        const proto::ProtoObject* args[1] = { r };
+        return invokeBlock(rt, ctx, block, args, 1);
+    }
+    return invokeBlock(rt, ctx, block, nullptr, 0);
+}
 
 // Object>>newChild
 //
@@ -242,6 +264,79 @@ const proto::ProtoObject* prim_Import_from(STRuntime& rt, proto::ProtoContext* c
     return (mod && mod != PROTO_NONE) ? mod : wrapper;
 }
 
+// --- D9: nil-test protocol on Object ---------------------------------------
+//
+// `nil` is PROTO_NONE; every other object is non-nil. These primitives are
+// bound on objectProto so every object — nil included, since nilProto's parent
+// is objectProto — answers them.
+
+const proto::ProtoObject* prim_Object_isNil(STRuntime&, proto::ProtoContext*,
+                                             const proto::ProtoObject* r,
+                                             const proto::ProtoObject* const*, int) {
+    return (r == PROTO_NONE) ? PROTO_TRUE : PROTO_FALSE;
+}
+const proto::ProtoObject* prim_Object_notNil(STRuntime&, proto::ProtoContext*,
+                                              const proto::ProtoObject* r,
+                                              const proto::ProtoObject* const*, int) {
+    return (r == PROTO_NONE) ? PROTO_FALSE : PROTO_TRUE;
+}
+
+// `ifNil:` — evaluate the block when the receiver is nil, else answer the
+// receiver. `ifNotNil:` — evaluate the block (optionally passed the receiver)
+// when the receiver is non-nil, else answer nil.
+const proto::ProtoObject* prim_Object_ifNil(STRuntime& rt, proto::ProtoContext* ctx,
+                                             const proto::ProtoObject* r,
+                                             const proto::ProtoObject* const* a, int) {
+    if (r == PROTO_NONE) return invokeBlock(rt, ctx, a[0], nullptr, 0);
+    return r;
+}
+const proto::ProtoObject* prim_Object_ifNotNil(STRuntime& rt, proto::ProtoContext* ctx,
+                                                const proto::ProtoObject* r,
+                                                const proto::ProtoObject* const* a, int) {
+    if (r == PROTO_NONE) return PROTO_NONE;
+    return invokeNilTestBlock(rt, ctx, a[0], r);
+}
+// `ifNil:ifNotNil:` — a[0] is the nil arm (0-arg), a[1] the non-nil arm
+// (0-arg or 1-arg). Exactly one arm runs.
+const proto::ProtoObject* prim_Object_ifNilIfNotNil(STRuntime& rt, proto::ProtoContext* ctx,
+                                                     const proto::ProtoObject* r,
+                                                     const proto::ProtoObject* const* a, int) {
+    if (r == PROTO_NONE) return invokeBlock(rt, ctx, a[0], nullptr, 0);
+    return invokeNilTestBlock(rt, ctx, a[1], r);
+}
+
+// --- D18: identity and default equality on Object --------------------------
+//
+// `==` is pointer identity; `~~` its negation. `=` defaults to identity (a
+// value-equality override on a subtype — SmallInteger, String, … — shadows
+// it); `~=` is `(self = arg) not`, routed through the receiver's own `=` so an
+// override is honoured.
+
+const proto::ProtoObject* prim_Object_identEq(STRuntime&, proto::ProtoContext*,
+                                               const proto::ProtoObject* r,
+                                               const proto::ProtoObject* const* a, int) {
+    return (r == a[0]) ? PROTO_TRUE : PROTO_FALSE;
+}
+const proto::ProtoObject* prim_Object_identNe(STRuntime&, proto::ProtoContext*,
+                                               const proto::ProtoObject* r,
+                                               const proto::ProtoObject* const* a, int) {
+    return (r != a[0]) ? PROTO_TRUE : PROTO_FALSE;
+}
+// Default `=` — identity. Overridden on value types.
+const proto::ProtoObject* prim_Object_eq(STRuntime&, proto::ProtoContext*,
+                                          const proto::ProtoObject* r,
+                                          const proto::ProtoObject* const* a, int) {
+    return (r == a[0]) ? PROTO_TRUE : PROTO_FALSE;
+}
+// Default `~=` — the negation of identity `=`. Value types that override `=`
+// (SmallInteger, String) also bind their own `~=`, so this is reached only by
+// objects whose `=` is the default identity comparison.
+const proto::ProtoObject* prim_Object_ne(STRuntime&, proto::ProtoContext*,
+                                          const proto::ProtoObject* r,
+                                          const proto::ProtoObject* const* a, int) {
+    return (r != a[0]) ? PROTO_TRUE : PROTO_FALSE;
+}
+
 } // anon
 
 void installObjectPrimitives(STRuntime& rt) {
@@ -271,6 +366,29 @@ void installObjectPrimitives(STRuntime& rt) {
     // parallelism proof. Bound on objectProto so any object responds to it.
     bindPrimitive(rt, b.objectProto, "sleep:",
                   reg.registerPrim(prim_Object_sleepMs));
+    // D9: nil-test protocol — bound on Object so every object (nil included,
+    // since nilProto descends from objectProto) answers it.
+    bindPrimitive(rt, b.objectProto, "isNil",
+                  reg.registerPrim(prim_Object_isNil));
+    bindPrimitive(rt, b.objectProto, "notNil",
+                  reg.registerPrim(prim_Object_notNil));
+    bindPrimitive(rt, b.objectProto, "ifNil:",
+                  reg.registerPrim(prim_Object_ifNil));
+    bindPrimitive(rt, b.objectProto, "ifNotNil:",
+                  reg.registerPrim(prim_Object_ifNotNil));
+    bindPrimitive(rt, b.objectProto, "ifNil:ifNotNil:",
+                  reg.registerPrim(prim_Object_ifNilIfNotNil));
+    // D18: identity comparison and default equality, bound on Object so every
+    // object answers them. `=` here is the identity default; value-equality
+    // overrides on SmallInteger / String shadow it on those types.
+    bindPrimitive(rt, b.objectProto, "==",
+                  reg.registerPrim(prim_Object_identEq));
+    bindPrimitive(rt, b.objectProto, "~~",
+                  reg.registerPrim(prim_Object_identNe));
+    bindPrimitive(rt, b.objectProto, "=",
+                  reg.registerPrim(prim_Object_eq));
+    bindPrimitive(rt, b.objectProto, "~=",
+                  reg.registerPrim(prim_Object_ne));
 }
 
 // F5-M3: Allocate the `Import` singleton (mutable child of objectProto), bind

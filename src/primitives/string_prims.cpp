@@ -37,6 +37,15 @@ const proto::ProtoObject* prim_StrEq(STRuntime&, proto::ProtoContext* ctx,
     return (toUtf8(r, ctx) == toUtf8(a[0], ctx)) ? PROTO_TRUE : PROTO_FALSE;
 }
 
+// D18: `~=` on String — value-inequality. Object's default `~=` is
+// identity-negation, which would wrongly report two distinct equal-valued
+// String objects as unequal; String overrides it to compare contents.
+const proto::ProtoObject* prim_StrNe(STRuntime&, proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* r,
+                                      const proto::ProtoObject* const* a, int) {
+    return (toUtf8(r, ctx) != toUtf8(a[0], ctx)) ? PROTO_TRUE : PROTO_FALSE;
+}
+
 const proto::ProtoObject* prim_PrintNl(STRuntime&, proto::ProtoContext* ctx,
                                         const proto::ProtoObject* r,
                                         const proto::ProtoObject* const*, int) {
@@ -54,6 +63,7 @@ void installStringPrimitives(STRuntime& rt) {
     bindPrimitive(rt, b.stringProto, ",",       reg.registerPrim(prim_StrConcat));
     bindPrimitive(rt, b.stringProto, "size",    reg.registerPrim(prim_StrSize));
     bindPrimitive(rt, b.stringProto, "=",       reg.registerPrim(prim_StrEq));
+    bindPrimitive(rt, b.stringProto, "~=",      reg.registerPrim(prim_StrNe));
     bindPrimitive(rt, b.stringProto, "printNl", reg.registerPrim(prim_PrintNl));
     bindPrimitive(rt, b.objectProto, "printNl", reg.registerPrim(prim_PrintNl)); // fallback
 }

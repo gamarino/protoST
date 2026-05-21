@@ -54,7 +54,11 @@ Token Lexer::lexIdentifier() {
     return t;
 }
 
-Token Lexer::lexNumber() {
+// D1: a `-` immediately preceding a digit, in operand position, is the sign of
+// a negative numeric literal. `next()` decides whether the sign belongs to the
+// literal and, if so, has already consumed the `-` before calling here with
+// `negative == true`; `startLine`/`startCol` are captured from the `-`.
+Token Lexer::lexNumber(bool negative) {
     int startLine = line_, startCol = col_;
     size_t start = pos_;
     while (pos_ < source_.size() && std::isdigit(static_cast<unsigned char>(source_[pos_]))) {
@@ -71,6 +75,10 @@ Token Lexer::lexNumber() {
     }
     Token t;
     t.text = source_.substr(start, pos_ - start);
+    if (negative) {
+        t.text.insert(t.text.begin(), '-');
+        startCol -= 1;  // the sign sits one column to the left of the digits
+    }
     t.line = startLine; t.column = startCol;
     if (isFloat) {
         try {
@@ -171,15 +179,51 @@ Token Lexer::makeError(const std::string& msg, int l, int c) {
     Token t; t.kind = TokenKind::Error; t.text = msg; t.line = l; t.column = c; return t;
 }
 
+// D1: tokens after which a `-` must be the binary minus operator. These are
+// exactly the tokens that *end an operand* — a literal, an identifier, or a
+// closing bracket. In every other position (start of stream, after a binary
+// operator, a keyword, `(`, `[`, `^`, `:=`, `.`, `;`, `>>`) a `-` directly
+// followed by a digit opens a negative numeric literal.
+bool Lexer::prevEndsOperand() const {
+    switch (prevReturnedKind_) {
+        case TokenKind::Integer:
+        case TokenKind::Float:
+        case TokenKind::String:
+        case TokenKind::Char:
+        case TokenKind::Symbol:
+        case TokenKind::True:
+        case TokenKind::False:
+        case TokenKind::Nil:
+        case TokenKind::Identifier:
+        case TokenKind::RParen:
+        case TokenKind::RBracket:
+        case TokenKind::RBrace:
+            return true;
+        default:
+            return false;
+    }
+}
+
 Token Lexer::next() {
+    Token t = nextImpl_();
+    prevReturnedKind_ = t.kind;
+    return t;
+}
+
+Token Lexer::nextImpl_() {
     if (hasPeek_) { hasPeek_ = false; return peekTok_; }
+    size_t beforeWs = pos_;
     skipWhitespace();
+    // D1: did whitespace (or a comment) separate this token from the previous
+    // one? A `-digit` after whitespace is in primary position even when the
+    // previous token ends an operand (e.g. each `-2` element of `#(-1 -2 -3)`).
+    bool spaceBefore = (pos_ != beforeWs);
     if (pos_ >= source_.size()) {
         Token t; t.kind = TokenKind::EndOfFile; t.line = line_; t.column = col_; return t;
     }
     char c = current();
     if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') return lexIdentifier();
-    if (std::isdigit(static_cast<unsigned char>(c)))             return lexNumber();
+    if (std::isdigit(static_cast<unsigned char>(c)))             return lexNumber(false);
     if (c == '#') {
         if (lookahead() == '(') {
             Token t; t.kind = TokenKind::HashLParen; t.text = "#(";
@@ -220,6 +264,18 @@ Token Lexer::next() {
                 Token t; t.kind = TokenKind::BinaryOp; t.text = "->";
                 t.line = startLine; t.column = startCol; advance(); advance(); return t;
             }
+            // D1: a `-` directly followed by a digit is the sign of a
+            // negative numeric literal when it is in primary position —
+            // either the previous token does not end an operand, or there is
+            // whitespace separating it from that previous token. A `-` glued
+            // to an operand (`3-5`, `(x)-5`) stays the binary minus operator,
+            // so `a - 5`, `3 - 5`, `3-5` all remain subtraction sends while
+            // `-5` and each `-2` inside `#(-1 -2 -3)` lex as literals.
+            if (std::isdigit(static_cast<unsigned char>(lookahead())) &&
+                (!prevEndsOperand() || spaceBefore)) {
+                advance();  // consume the '-'
+                return lexNumber(/*negative=*/true);
+            }
             return bin1("-");
         case '=':
             if (lookahead() == '=') {
@@ -230,6 +286,13 @@ Token Lexer::next() {
         case '~':
             if (lookahead() == '=') {
                 Token t; t.kind = TokenKind::BinaryOp; t.text = "~=";
+                t.line = startLine; t.column = startCol; advance(); advance(); return t;
+            }
+            // D18: `~~` is the identity-inequality binary operator (the mirror
+            // of `==`). Two characters from the operator alphabet form one
+            // binary operator (§2.10).
+            if (lookahead() == '~') {
+                Token t; t.kind = TokenKind::BinaryOp; t.text = "~~";
                 t.line = startLine; t.column = startCol; advance(); advance(); return t;
             }
             return makeError("unexpected '~'", startLine, startCol);

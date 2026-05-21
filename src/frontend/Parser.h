@@ -42,6 +42,12 @@ private:
     ast::NodePtr parseUnarySend();
     ast::NodePtr parsePrimary();
     ast::NodePtr parseBlock();
+    // D16: parses one element of a `#( … )` literal array. Elements are
+    // compile-time literals; a nested `#( … )` or a bare `( … )` group is
+    // itself a nested literal array. `closeKind` is the bracket that closes
+    // the current array (always RParen) — passed for recursion clarity.
+    ast::NodePtr parseLiteralArray(int openLine, int openCol);
+    ast::NodePtr parseLiteralArrayElement();
     ast::NodePtr parseClassDecl(Token classIdent);
     ast::NodePtr parseMethodDecl(Token classIdent, bool classSide);
 };

@@ -155,9 +155,13 @@ An integer literal is a run of decimal digits:
 
 There is no radix syntax (`16r1F`), no digit separators, and no exponent.
 
-> **Negative integer literals do not exist.** A leading `-` is always lexed as
-> the binary minus operator, never as part of a literal. Write `0 - 1` to
-> obtain `-1`. See [§14](#14-known-deviations).
+> **Negative numeric literals.** A `-` immediately followed by a digit, in
+> operand/primary position (start of stream, or after a binary operator,
+> keyword, `(`, `[`, `^`, `:=`, `.`, `;` or `>>`), is the sign of a negative
+> numeric literal: `-1` and `-3.14` are literals, and `#(-1 -2 -3)` is a
+> three-element array. A `-` that immediately follows an operand (a literal,
+> identifier or closing bracket) is still the binary minus operator, so
+> `a - 5` and `3 - 5` remain subtraction sends.
 
 An integer literal that overflows a 64-bit signed range is a lexical error.
 Small integers are represented inline (tagged); larger values promote to a
@@ -221,10 +225,12 @@ alphabet `+ - * / = ~ < > & | @ ,`.
 Two bracketed forms produce arrays:
 
 - `#( ... )` — a **literal array**. Its elements are *compile-time literals
-  only*: integers, floats, strings, characters, and symbols. A **bare
-  identifier inside `#( ... )` is treated as a symbol** (e.g. `#(foo bar)` is an
-  array of the symbols `#foo` and `#bar`). Nested `#( ... )` is **not** parsed
-  by the current implementation.
+  only*: integers (including negative literals), floats, strings, characters,
+  and symbols. A **bare identifier inside `#( ... )` is treated as a symbol**
+  (e.g. `#(foo bar)` is an array of the symbols `#foo` and `#bar`). A nested
+  `#( ... )` — and, per standard Smalltalk, a bare `( ... )` group — inside a
+  literal array is itself a nested literal sub-array (`#(1 #(2 3) 4)` has three
+  elements; `#(#(1 2) #(3 4))` has two).
 - `{ ... }` — a **dynamic array**. Its elements are arbitrary expressions
   separated by `.`; each is evaluated at runtime when the literal is reached.
 
@@ -243,7 +249,7 @@ Both forms produce an `Array` (see [§9](#9-collections)).
 | Token | Meaning |
 |-------|---------|
 | `+ - * / = ~= < > <= >= & \| @ , ->` | binary operator selectors |
-| `==` | binary operator (identity comparison) |
+| `== ~~` | binary operators (identity / non-identity comparison) |
 | `:=` | assignment |
 | `^` | method return |
 | `;` | cascade separator |
@@ -314,8 +320,10 @@ Object subclass: #Counter
   classVariableNames: ''.
 ```
 
-The trailing `.` is optional. `classVariableNames:` is accepted by the parser
-but its contents are currently ignored (see [§14](#14-known-deviations)).
+The trailing `.` is optional. An empty `classVariableNames: ''` clause is a
+documented no-op. A *non-empty* `classVariableNames:` clause is rejected with a
+compile-time diagnostic: class variables are not yet implemented (tracked as
+D19 in `docs/STATUS.md`), so the clause is no longer silently discarded.
 
 ### 3.3 Method definitions
 
@@ -754,12 +762,22 @@ argument block is evaluated. `whileTrue:` returns `nil`.
 
 ```smalltalk
 1 to: 5 do: [ :i | sum := sum + i ].          "i takes 1,2,3,4,5"
-10 to: 1 by: -1 do: [ :i | ... ].             "counts down (use 0 - 1 for -1)"
+10 to: 1 by: -1 do: [ :i | ... ].             "counts down"
 ```
 
-> The conditional set provided today is `ifTrue:` and `ifFalse:` only.
-> `ifTrue:ifFalse:`, `ifFalse:ifTrue:`, `and:`, `or:`, `ifNil:`, `ifNotNil:`
-> are not currently bound. See [§14](#14-known-deviations).
+**Conditional and boolean protocol on `Boolean`** — `ifTrue:`, `ifFalse:`,
+`ifTrue:ifFalse:`, `ifFalse:ifTrue:`; the short-circuit combinators `and:` /
+`or:` (the argument is a block, evaluated only when needed); the eager
+combinators `&` / `|` / `xor:` (the argument is an already-evaluated boolean);
+and `not`.
+
+**Nil-test protocol on `Object`** — `isNil`, `notNil`, `ifNil:`, `ifNotNil:`,
+`ifNil:ifNotNil:`. `nil` (the sole `UndefinedObject`) answers `isNil` → `true`;
+every other object answers `isNil` → `false`. An `ifNotNil:` block may take the
+receiver as an argument (`anObject ifNotNil: [ :x | … ]`) or take none.
+
+**Block loop protocol** — `whileTrue:`, `whileFalse:`, `whileTrue`,
+`whileFalse` and `repeat` (an unbounded loop, exited by a non-local return).
 
 ---
 
@@ -1276,6 +1294,10 @@ It is a reference snapshot of the current implementation.
 | `printNl` | print the receiver followed by a newline; returns the receiver |
 | `asActor` | wrap the receiver as an `Actor` |
 | `->` | build an `Association` (`key -> value`) |
+| `==` `~~` | identity / non-identity — same object, or not |
+| `=` `~=` | equality / inequality; the default is identity, overridden to value-equality on `SmallInteger`, `String`, `Symbol`, `Boolean` and other value types |
+| `isNil` `notNil` | nil test — `false` / `true` for every object except `nil` |
+| `ifNil:` `ifNotNil:` `ifNil:ifNotNil:` | nil-conditional evaluation; an `ifNotNil:` block may take the receiver as an argument |
 | `on:do:`, `on:do:on:do:`, `ensure:`, `ifCurtailed:` | exception protocol (these are bound on `Block`; see §12.7) |
 | `sleep:` | sleep the current thread N ms (a test helper, not for production use) |
 
@@ -1308,6 +1330,11 @@ Iteration helpers are bound on `Number`:
 |----------|---------|
 | `ifTrue:` | evaluate the block if the receiver is `true`, else `nil` |
 | `ifFalse:` | evaluate the block if the receiver is `false`, else `nil` |
+| `ifTrue:ifFalse:` `ifFalse:ifTrue:` | two-armed conditional; exactly one block runs |
+| `and:` `or:` | short-circuit conjunction / disjunction; the argument is a block |
+| `&` `\|` `xor:` | eager conjunction / disjunction / exclusive-or; the argument is a boolean |
+| `not` | logical negation |
+| `=` | value equality (identity for the tagged boolean immediates) |
 
 ### 12.4 `String` / `Symbol`
 
@@ -1315,7 +1342,7 @@ Iteration helpers are bound on `Number`:
 |----------|---------|
 | `,` | concatenation → a new `String` |
 | `size` | character count |
-| `=` | content equality |
+| `=` `~=` | content equality / inequality |
 | `printNl` | print followed by a newline |
 
 ### 12.5 `Block`
@@ -1324,6 +1351,9 @@ Iteration helpers are bound on `Number`:
 |----------|---------|
 | `value` … `value:value:value:value:` | evaluate with 0–4 arguments |
 | `whileTrue:` | loop: while the receiver block is `true`, evaluate the argument |
+| `whileFalse:` | loop: while the receiver block is `false`, evaluate the argument |
+| `whileTrue` `whileFalse` | loop: re-evaluate the receiver while it stays `true` / `false` |
+| `repeat` | loop forever — exited only by a non-local return |
 | `on:do:`, `on:do:on:do:` | run as a protected block |
 | `ensure:`, `ifCurtailed:` | run with a cleanup block |
 
@@ -1383,9 +1413,10 @@ continuation prompt. Each result is printed. Meta-commands begin with `:` —
 `:help` (`:h`) and `:quit` (`:q`) are supported; `Ctrl-D` also exits.
 
 > The richer meta-command set from the design spec (`:load`, `:reload`,
-> `:edit`, `:time`, `:doc`) is not implemented. `protost compile` is documented
-> in the usage text but not implemented. `main:` selector auto-invocation is
-> not implemented. See [§14](#14-known-deviations).
+> `:edit`, `:time`, `:doc`) is not implemented. Bytecode compilation
+> (`protost compile`) is not implemented and is no longer advertised in the
+> usage text. `main:` selector auto-invocation is not implemented.
+> See [§14](#14-known-deviations).
 
 ### 13.2 Single runtime per process
 
@@ -1450,9 +1481,6 @@ and (once fixed) the closing commit for each.
 **Bugs** — broken behaviour that contradicts the language's own intent or
 examples:
 
-- **D1 — negative integer/float literals do not lex.** A leading `-` is always
-  binary minus, so `-5` and `-3.14` fail to parse as literals. **Workaround:**
-  `0 - 5`. *Affects:* [§2.4](#24-integer-literals).
 - **D3 — `doesNotUnderstand` is a hard failure, not a catchable `Error`.** An
   unknown selector raises a hard runtime error that `on: Error do:` cannot
   catch; the intended behaviour is a catchable `doesNotUnderstand:` send.
@@ -1465,29 +1493,17 @@ examples:
   A `^` in a block whose home method has already returned raises a hard
   runtime error rather than a catchable `BlockCannotReturn`.
   *Affects:* [§7.1](#71-dead-home).
-- **D13 — `protost compile` not implemented.** The usage text advertises
-  `protost compile script.st -o out.stbc`, but the subcommand is rejected.
-  *Affects:* [§13](#13-the-cli).
-- **D15 — `classVariableNames:` is parsed then silently discarded.** The clause
-  is accepted but its contents are dropped with no diagnostic. (The underlying
-  missing *feature*, class variables, is tracked separately as D19.)
-  *Affects:* [§3.2](#32-class-declarations).
-- **D16 — nested literal arrays not parsed.** A `#( … )` literal admits only
-  flat elements; a nested `#( … )` fails to parse. (A `{ … }` dynamic array
-  may contain any expression.) *Affects:* [§2.9](#29-array-literal-syntax).
-- **D18 — identity comparison `==` / `~~` unbound; `=` not universal.** `==`
-  and `~~` lex and parse but are bound on no class. `=` is bound only on
-  `SmallInteger` and `String`; `~=` only on `SmallInteger`.
-  *Affects:* [§2.10](#210-operators-and-punctuation),
-  [§12.2](#122-number-smallinteger-largeinteger-float).
+
+> **Fixed (commit `MNT-b1`).** D1 (negative numeric literals), D13 (the CLI no
+> longer advertises an unimplemented `compile` subcommand), D15
+> (`classVariableNames:` now emits a compile-time diagnostic instead of being
+> silently discarded), D16 (nested literal arrays parse) and D18 (`==`/`~~`
+> bound on `Object`; `=`/`~=` universal with value-equality overrides) are
+> resolved — see `docs/STATUS.md` *Closed items*.
 
 **Not yet implemented** — planned features absent today (owning roadmap track
 noted in `docs/STATUS.md`):
 
-- **D9 — richer control-flow selector set.** Only `ifTrue:` / `ifFalse:` are
-  bound on `Boolean`. Missing: `ifTrue:ifFalse:`, `ifFalse:ifTrue:`, `and:`,
-  `or:`, boolean `&` / `|`, and the nil-test selectors `ifNil:`, `ifNotNil:`,
-  `isNil`, `notNil`. *Affects:* [§6.4](#64-control-flow-with-blocks).
 - **D10 — no `Transcript`.** The standard output-stream object is not
   provided; use `printNl`. *Affects:* [§12.9](#129-import).
 - **D11 — `Float` and mixed-mode arithmetic not bound.** Arithmetic and

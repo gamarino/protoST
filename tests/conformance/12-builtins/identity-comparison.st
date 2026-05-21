@@ -1,4 +1,4 @@
-"XFAIL: EXPECT: true"
-"§2.10 + D18: identity comparison == is not bound. Spec-correct: #foo == #foo
-should be true (symbols are interned). Currently == is a doesNotUnderstand."
+"EXPECT: true"
+"§2.10 + D18: identity comparison == is bound on Object; #foo == #foo is
+true (symbols are interned)."
 #foo == #foo.

@@ -17,6 +17,9 @@
 namespace {
 
 void printUsage(const char* prog) {
+    // D13: `compile <script.st> -o <out.stbc>` was advertised here but never
+    // implemented (bytecode serialisation is out of scope). The usage text is
+    // kept honest — only the modes the binary actually supports are listed.
     std::fprintf(stderr,
         "Usage: %s [options] <script.st> [args...]\n"
         "       %s -e '<expr>'\n"
@@ -25,7 +28,6 @@ void printUsage(const char* prog) {
         "       %s --dap                  (DAP debug adapter — F8)\n"
         "       %s --dump-ast <script.st>\n"
         "       %s venv <subcommand> [args]\n"
-        "       %s compile <script.st> -o <out.stbc>\n"
         "\nOptions:\n"
         "  -e '<expr>'    Evaluate expression and print result\n"
         "  -i             Start REPL (F7)\n"
@@ -34,7 +36,7 @@ void printUsage(const char* prog) {
         "  --dump-ast     Parse and dump AST (F1)\n"
         "  --help         Show this message\n"
         "  --version      Show version\n",
-        prog, prog, prog, prog, prog, prog, prog, prog);
+        prog, prog, prog, prog, prog, prog, prog);
 }
 
 void printVersion() {

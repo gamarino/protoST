@@ -146,11 +146,12 @@ ast::NodePtr Parser::parseExpression() {
                 n = std::move(outer);
             }
             cascade->children.push_back(std::move(n));
-        } else if (current_.kind == TokenKind::BinaryOp) {
+        } else if (current_.kind == TokenKind::BinaryOp ||
+                   current_.kind == TokenKind::Pipe) {
             Token op = current_; advance();
             auto right = parseUnarySend();
             auto n = ast::makeNode(ast::NodeKind::BinarySend, op.line, op.column);
-            n->text = op.text;
+            n->text = (op.kind == TokenKind::Pipe) ? "|" : op.text;
             // partial: no receiver (placeholder will be filled at codegen time)
             if (right) n->children.push_back(std::move(right));
             cascade->children.push_back(std::move(n));
@@ -187,13 +188,24 @@ ast::NodePtr Parser::parseUnarySend() {
     return recv;
 }
 
+// D9: a `|` token following an operand is the eager boolean-or binary
+// operator. `|` is overloaded: it also delimits the `| locals |` declaration,
+// but those declarations are consumed up front (before any statement) by
+// parseBlock / parseMethodDecl, so a `|` reaching a binary-send position is
+// unambiguously the operator. `parseBinaryOpToken` normalises a `Pipe` token
+// to its operator spelling.
+static bool isBinaryOpToken(TokenKind k) {
+    return k == TokenKind::BinaryOp || k == TokenKind::Pipe;
+}
+
 ast::NodePtr Parser::parseBinarySend() {
     auto left = parseUnarySend();
-    while (left && current_.kind == TokenKind::BinaryOp) {
+    while (left && isBinaryOpToken(current_.kind)) {
         Token op = current_; advance();
+        std::string opText = (op.kind == TokenKind::Pipe) ? "|" : op.text;
         auto right = parseUnarySend();
         auto n = ast::makeNode(ast::NodeKind::BinarySend, op.line, op.column);
-        n->text = op.text;
+        n->text = opText;
         n->children.push_back(std::move(left));
         if (right) n->children.push_back(std::move(right));
         left = std::move(n);
@@ -283,25 +295,73 @@ ast::NodePtr Parser::parsePrimary() {
         }
         case TokenKind::HashLParen: {
             Token open = current_; advance();
-            auto arr = ast::makeNode(ast::NodeKind::ArrayLit, open.line, open.column);
-            while (current_.kind != TokenKind::RParen && current_.kind != TokenKind::EndOfFile) {
-                // only literals inside a frozen array
-                Token t = current_;
-                ast::NodePtr lit;
-                if (t.kind == TokenKind::Integer) { advance(); lit = ast::makeNode(ast::NodeKind::IntegerLit, t.line, t.column); lit->intValue = t.intValue; }
-                else if (t.kind == TokenKind::Float) { advance(); lit = ast::makeNode(ast::NodeKind::FloatLit, t.line, t.column); lit->floatValue = t.floatValue; }
-                else if (t.kind == TokenKind::String) { advance(); lit = ast::makeNode(ast::NodeKind::StringLit, t.line, t.column); lit->text = t.text; }
-                else if (t.kind == TokenKind::Char) { advance(); lit = ast::makeNode(ast::NodeKind::CharLit, t.line, t.column); lit->text = t.text; }
-                else if (t.kind == TokenKind::Symbol) { advance(); lit = ast::makeNode(ast::NodeKind::SymbolLit, t.line, t.column); lit->text = t.text; }
-                else if (t.kind == TokenKind::Identifier) { advance(); lit = ast::makeNode(ast::NodeKind::SymbolLit, t.line, t.column); lit->text = t.text; } // bare ids inside #(..) are symbols
-                else { error(current_, "unexpected token in frozen array literal"); advance(); continue; }
-                arr->children.push_back(std::move(lit));
-            }
-            consume(TokenKind::RParen, "expected ')' to close frozen array");
-            return arr;
+            return parseLiteralArray(open.line, open.column);
         }
         default:
             error(current_, std::string("expected primary expression, got ") + tokenKindName(current_.kind));
+            advance();
+            return nullptr;
+    }
+}
+
+// D16: parse a `#( … )` literal array. The opening `#(` (or, when nested, a
+// `(` standing in for `#(`) has already been consumed; the elements run up to
+// the matching `)`. Each element is a compile-time literal — a number, char,
+// string, symbol, the booleans / nil, a bare identifier (taken as a symbol),
+// or a nested literal array introduced by `#(` or by a plain `(`.
+ast::NodePtr Parser::parseLiteralArray(int openLine, int openCol) {
+    auto arr = ast::makeNode(ast::NodeKind::ArrayLit, openLine, openCol);
+    while (current_.kind != TokenKind::RParen &&
+           current_.kind != TokenKind::EndOfFile) {
+        auto elem = parseLiteralArrayElement();
+        if (elem) arr->children.push_back(std::move(elem));
+        else      break;  // parseLiteralArrayElement already reported the error
+    }
+    consume(TokenKind::RParen, "expected ')' to close frozen array");
+    return arr;
+}
+
+ast::NodePtr Parser::parseLiteralArrayElement() {
+    Token t = current_;
+    switch (t.kind) {
+        case TokenKind::Integer:
+            advance();
+            { auto n = ast::makeNode(ast::NodeKind::IntegerLit, t.line, t.column);
+              n->intValue = t.intValue; n->text = t.text; return n; }
+        case TokenKind::Float:
+            advance();
+            { auto n = ast::makeNode(ast::NodeKind::FloatLit, t.line, t.column);
+              n->floatValue = t.floatValue; n->text = t.text; return n; }
+        case TokenKind::String:
+            advance();
+            { auto n = ast::makeNode(ast::NodeKind::StringLit, t.line, t.column);
+              n->text = t.text; return n; }
+        case TokenKind::Char:
+            advance();
+            { auto n = ast::makeNode(ast::NodeKind::CharLit, t.line, t.column);
+              n->text = t.text; return n; }
+        case TokenKind::Symbol:
+            advance();
+            { auto n = ast::makeNode(ast::NodeKind::SymbolLit, t.line, t.column);
+              n->text = t.text; return n; }
+        case TokenKind::True:  advance(); return ast::makeNode(ast::NodeKind::TrueLit,  t.line, t.column);
+        case TokenKind::False: advance(); return ast::makeNode(ast::NodeKind::FalseLit, t.line, t.column);
+        case TokenKind::Nil:   advance(); return ast::makeNode(ast::NodeKind::NilLit,   t.line, t.column);
+        // A bare identifier inside `#( … )` is a symbol (`#(foo bar)` is two
+        // symbols). Keyword tokens (`at:`) likewise form a symbol element.
+        case TokenKind::Identifier:
+        case TokenKind::Keyword:
+            advance();
+            { auto n = ast::makeNode(ast::NodeKind::SymbolLit, t.line, t.column);
+              n->text = t.text; return n; }
+        // A nested `#( … )` element, or — standard Smalltalk — a bare `( … )`
+        // group, which inside a literal array is itself a nested literal array.
+        case TokenKind::HashLParen:
+        case TokenKind::LParen:
+            advance();
+            return parseLiteralArray(t.line, t.column);
+        default:
+            error(current_, "unexpected token in frozen array literal");
             advance();
             return nullptr;
     }
@@ -459,10 +519,29 @@ ast::NodePtr Parser::parseClassDecl(Token classIdent) {
             advance();
             parseStringList(cd->stringList);
         } else if (current_.text == "classVariableNames:") {
+            Token kw = current_;
             advance();
-            // ignore class-var contents for now; future MetaclassDecl pulls them out
-            if (current_.kind == TokenKind::String) advance();
-            else error(current_, "expected string after classVariableNames:");
+            // D15: class variables are not implemented (tracked as D19).
+            // Previously the clause was parsed and its contents silently
+            // discarded — a class declared with `classVariableNames:` would
+            // compile cleanly yet the named variables simply did not exist.
+            // Silent acceptance of a no-op clause is a bug: emit a clear
+            // diagnostic instead, so the gap is visible at compile time.
+            std::string names;
+            if (current_.kind == TokenKind::String) {
+                names = current_.text;
+                advance();
+            } else {
+                error(current_, "expected string after classVariableNames:");
+            }
+            // Trim to decide whether any names were actually requested; an
+            // empty `classVariableNames: ''` is a documented no-op and stays
+            // silent (see LANGUAGE.md §4.2).
+            bool anyNames = names.find_first_not_of(" \t\r\n") != std::string::npos;
+            if (anyNames) {
+                error(kw, "classVariableNames: is not yet supported — class "
+                          "variables are not implemented (see docs/STATUS.md D19)");
+            }
         } else {
             error(current_, "unknown keyword in class declaration: " + current_.text);
             break;
