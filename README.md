@@ -114,6 +114,19 @@ source .venv/bin/activate
 
 `proto` — built on protoCore. `ST` — Smalltalk. The name signals what it is and where it lives in the family.
 
+## The Swarm of One
+
+**The Swarm of One** enables a paradigm shift in software development. protoST
+went from an approved design to a complete actor-native Smalltalk runtime —
+non-local return, a full exception protocol, a collection hierarchy, a
+cooperative-yield scheduler, an interactive REPL, and a Debug Adapter Protocol
+debugger — in record time. By orchestrating a swarm of specialized AI agents, a
+single architect has built a runtime where Smalltalk objects share the same
+64-byte cell DNA as protoCore, protoJS, and protoPython. This is the
+democratization of high-level engineering: bridging language paradigms without
+the traditional overhead of massive R&D teams.
+
 ## License
 
-To be confirmed. The expectation is to mirror the licence chosen for protoCore.
+protoST is released under the [MIT License](LICENSE) — the same licence as
+protoCore, protoJS, and protoPython.
