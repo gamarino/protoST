@@ -61,9 +61,12 @@ concurrently on a worker pool — is in
 protoST is in active development and runs. Phases F1–F8 are complete — lexer,
 parser, bytecode VM, closures, classes, modules, the actor model with
 cooperative yield, an interactive REPL, and a Debug Adapter Protocol debugger.
-Roadmap Tracks 1 (non-local return + a full exception protocol), 2 (the
-collection hierarchy) and 6 (a defensible conformance suite) are done; Track 4
-(the standard library) is underway. The test suite stands at ~584 tests.
+Roadmap Tracks 1–6 are complete: non-local return and a full exception
+protocol, the collection hierarchy, the advanced object model (multiple
+inheritance, mixins, runtime behaviour composition), the standard library
+(Stream, Math, Random, JSON, Time), a defensible conformance suite, and
+cross-language UMD interop. Tracks 7–9 (onboarding, tutorial, examples)
+remain. The test suite stands at ~700 tests.
 
 - [`docs/LANGUAGE.md`](docs/LANGUAGE.md) — the language reference.
 - [`docs/STATUS.md`](docs/STATUS.md) — the live state: what works, intentional
