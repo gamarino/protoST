@@ -1,6 +1,7 @@
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
+#include "runtime/ValueFormat.h"
 #include "protoCore.h"
 
 #include <cstdio>
@@ -46,10 +47,14 @@ const proto::ProtoObject* prim_StrNe(STRuntime&, proto::ProtoContext* ctx,
     return (toUtf8(r, ctx) != toUtf8(a[0], ctx)) ? PROTO_TRUE : PROTO_FALSE;
 }
 
-const proto::ProtoObject* prim_PrintNl(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_PrintNl(STRuntime& rt, proto::ProtoContext* ctx,
                                         const proto::ProtoObject* r,
                                         const proto::ProtoObject* const*, int) {
-    auto s = toUtf8(r, ctx);
+    // `formatValue` renders strings, the whole numeric tower (SmallInteger /
+    // LargeInteger / Float) and the default object form. protoCore's
+    // `asString` answers nil for a number, so a bare `asString` here would
+    // fault on `2 printNl` / `25 factorial printNl`.
+    std::string s = formatValue(rt, ctx, r);
     std::fwrite(s.data(), 1, s.size(), stdout);
     std::fputc('\n', stdout);
     return r;

@@ -1310,13 +1310,42 @@ It is a reference snapshot of the current implementation.
 
 ### 12.2 `Number`, `SmallInteger`, `LargeInteger`, `Float`
 
-Arithmetic and comparison are bound on `SmallInteger`:
+protoST has a full numeric tower. `SmallInteger`, `LargeInteger` and `Float`
+all descend from `Number`, and arithmetic, comparison and the unary numeric
+operations are bound **once on `Number`**, so every numeric kind understands
+the same protocol:
 
 | Selector | Meaning |
 |----------|---------|
-| `+` `-` `*` `/` | arithmetic; `/` by zero signals `ZeroDivide` |
+| `+` `-` `*` | arithmetic |
+| `/` | division; `/` by zero signals a `ZeroDivide` error |
+| `//` | integer (truncating) division |
+| `\\` | modulo — the remainder |
 | `<` `<=` `>` `>=` | ordered comparison → a boolean |
-| `=` `~=` | equality / inequality → a boolean |
+| `=` `~=` | equality / inequality → a boolean (value equality across the tower, so `2 = 2.0`) |
+| `negated` | the receiver with its sign flipped |
+| `abs` | the absolute value |
+| `isEven` `isOdd` | integer parity (a non-integral `Float` is neither) |
+| `printString` | the value's decimal digits — a `Float` always shows a fractional part (`4.0`), a `LargeInteger` shows its exact digits in full |
+
+The arithmetic primitives delegate to protoCore's own `ProtoObject`
+arithmetic, which gives the tower three properties for free:
+
+- **Mixed-mode coercion.** An operation with one `Float` operand produces a
+  `Float`: `1 + 2.5` → `3.5`, `2.5 + 1` → `3.5`, `1 / 2.0` → `0.5`.
+- **Transparent overflow promotion.** An integer result that exceeds the
+  56-bit inline `SmallInteger` range is automatically promoted to a heap
+  arbitrary-precision `LargeInteger` and stays exact — a `whileTrue:` loop
+  computing `25!` yields the exact `15511210043330985984000000`, not a
+  wrapped value. The boundary is invisible to the program.
+- **One protocol.** Because the primitives are bound on `Number`, a `Float`
+  and a `LargeInteger` answer exactly the same selectors a `SmallInteger`
+  does.
+
+> **Division.** `/` between two integers is *truncating* integer division
+> (`4 / 2` → `2`, `1 / 3` → `0`) — protoST has no `Fraction` type, so it
+> follows protoCore's integer `/`. `//` is an explicit integer-division alias.
+> If either operand is a `Float`, `/` is float division (`1 / 2.0` → `0.5`).
 
 Iteration helpers are bound on `Number`:
 
@@ -1326,10 +1355,6 @@ Iteration helpers are bound on `Number`:
 | `to:by:` | an `Interval` with the given step |
 | `to:do:` | iterate `receiver..stop`, evaluating the block per integer |
 | `to:by:do:` | iterate with a step |
-
-> Arithmetic primitives are bound on `SmallInteger` only. `Float` and
-> `LargeInteger` arithmetic is not separately bound. See
-> [§14](#14-known-deviations).
 
 ### 12.3 `Boolean` (`True` / `False`)
 
@@ -1447,10 +1472,11 @@ are deliberate and deviations that are not**.
 > change. The conformance suite is expected to have tests that fail on the
 > open deviations — that is intentional; the failures surface the bugs.
 
-The id scheme (`D1..D18`) is shared with `docs/STATUS.md`. Items D6, D19 and
-D20 are described in `docs/STATUS.md`: D6 is now closed (not reproducible),
-and D19 (class variables) / D20 (`LargeInteger` arithmetic and overflow
-promotion) are tracked there as not-yet-implemented features.
+The id scheme (`D1..D18`) is shared with `docs/STATUS.md`. Items D6, D11, D19
+and D20 are described in `docs/STATUS.md`: D6 is now closed (not reproducible),
+D11 (`Float` / mixed-mode arithmetic) and D20 (`LargeInteger` arithmetic and
+overflow promotion) are now closed (the numeric tower — see §12.2), and D19
+(class variables) is tracked there as a not-yet-implemented feature.
 
 ### 14.1 Intentional deviations
 
@@ -1505,22 +1531,17 @@ examples:
 > already returned signals a catchable `BlockCannotReturn`, a subclass of
 > `Error`) are resolved — see `docs/STATUS.md` *Closed items*.
 
+> **Fixed (commit `MNT-c`).** D11 (`Float` and mixed-mode arithmetic) and D20
+> (`LargeInteger` arithmetic with transparent overflow promotion) are resolved
+> — the numeric tower now works (see §12.2). The arithmetic primitives delegate
+> to protoCore's own promoting / coercing `ProtoObject` arithmetic and are
+> bound on the shared `Number` prototype — see `docs/STATUS.md` *Closed items*.
+
 **Not yet implemented** — planned features absent today (owning roadmap track
 noted in `docs/STATUS.md`):
 
 - **D10 — no `Transcript`.** The standard output-stream object is not
   provided; use `printNl`. *Affects:* [§12.9](#129-import).
-- **D11 — `Float` and mixed-mode arithmetic not bound.** Arithmetic and
-  comparison primitives are bound on `SmallInteger` only; a float arithmetic
-  send is a `doesNotUnderstand`. Float *literals* lex and parse correctly.
-  *Affects:* [§12.2](#122-number-smallinteger-largeinteger-float).
-- **D20 — `LargeInteger` arithmetic not bound; no overflow promotion.**
-  protoCore provides arbitrary-precision integers and promotes transparently
-  on overflow; protoST binds arithmetic on `SmallInteger` only, so an
-  overflowing `SmallInteger` computation has no arbitrary-precision path.
-  Transparent promotion to `LargeInteger` is a planned feature — the integer
-  half of the same numeric-tower gap as D11.
-  *Affects:* [§12.2](#122-number-smallinteger-largeinteger-float).
 - **D14 — REPL meta-commands limited to `:help` / `:quit`.** `:load`,
   `:reload`, `:edit`, `:time`, `:doc` are not implemented.
   *Affects:* [§13.1](#131-the-repl).

@@ -29,4 +29,22 @@ class STRuntime;
 std::string formatValue(STRuntime& rt, proto::ProtoContext* ctx,
                         const proto::ProtoObject* v);
 
+// Numeric tower rendering (D11 / D20).
+//
+// protoCore stores numbers as tagged `SmallInteger`, heap `LargeInteger` and
+// heap `Double`, but does NOT expose a number -> string conversion (its
+// `asString` answers nil for a number). protoST therefore renders numbers
+// itself:
+//   * a Float          -> the shortest round-tripping decimal, always with a
+//                         fractional part (`4.0`, not `4`)
+//   * a SmallInteger    -> its decimal digits via `asLong`
+//   * a LargeInteger    -> its exact decimal digits, extracted with repeated
+//                         protoCore `divmod` by 10 (so a value far past the
+//                         56-bit inline range still prints exactly)
+//
+// `isNumber` answers whether `v` is any number; `formatNumber` renders one
+// (the caller must have established it is a number, e.g. via `isNumber`).
+bool isNumber(proto::ProtoContext* ctx, const proto::ProtoObject* v);
+std::string formatNumber(proto::ProtoContext* ctx, const proto::ProtoObject* v);
+
 } // namespace protoST

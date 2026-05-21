@@ -14,12 +14,13 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Baseline:** 597/597 tests passing at commit `MNT-b2` (584 carried over,
-  plus 13 new `test_mnt_b2_fixes` unit tests). Previous baseline 584/584 at
-  `MNT-b1`.
-- **Last verified:** 2026-05-21 (the MNT-b2 slice — D3, D5, D8 — was fixed and
-  the whole suite re-run twice green; the formerly-XFAIL conformance tests for
-  D3, D5, D8 were promoted to conforming).
+- **Baseline:** 622/622 tests passing at commit `MNT-c` (597 carried over,
+  plus 14 new `test_mnt_c_numbers` unit tests and 11 new numeric-tower
+  conformance tests). Previous baseline 597/597 at `MNT-b2`.
+- **Last verified:** 2026-05-21 (the MNT-c slice — D11, D20 — was fixed and the
+  whole suite re-run three times green; the formerly-XFAIL conformance test for
+  D11 was promoted to conforming, and `float-literal.st` was re-pinned to its
+  spec-correct value).
 - **Id scheme:** `D1..D18` are carried over from `LANGUAGE.md` §14 and keep
   their original meaning. New divergences get new ids (`D19+`).
 
@@ -97,8 +98,13 @@ are noted where useful.
 - [x] `lib/` infrastructure + the `Stream` module *(track4, T4-a)*
 
 ### Builtins / primitives
-- [x] `SmallInteger` arithmetic & comparison (`+ - * /`, `< <= > >=`, `= ~=`)
-- [x] `SmallInteger` predicates `isEven` / `isOdd` *(closed: C2)*
+- [x] Numeric tower: `SmallInteger`, `LargeInteger` and `Float` arithmetic &
+      comparison (`+ - * / // \\`, `< <= > >=`, `= ~=`, `negated`, `abs`),
+      bound on the shared `Number` prototype, delegating to protoCore's own
+      promoting / coercing arithmetic. Mixed-mode (`1 + 2.5`) coerces to
+      `Float`; an integer overflowing the 56-bit `SmallInteger` range promotes
+      transparently to an exact `LargeInteger` *(closed: D11, D20)*
+- [x] `Number` predicates `isEven` / `isOdd` *(closed: C2)*
 - [x] `Number` iteration helpers (`to:`, `to:by:`, `to:do:`, `to:by:do:`)
 - [x] `Boolean` `ifTrue:`, `ifFalse:`
 - [x] `String` / `Symbol` (`,`, `size`, `=`, `printNl`)
@@ -142,11 +148,9 @@ track that owns it.
 | Id | Feature | Track |
 |----|---------|-------|
 | D10 | **No `Transcript`.** Smalltalk-80's standard output-stream object is not provided; `Transcript show:` / `cr` do not work. Use `printNl`. | Track 4 (standard library — streams / I/O) |
-| D11 | **`Float` and mixed-mode arithmetic not bound.** Arithmetic and comparison primitives are bound on `SmallInteger` only. A `Float` arithmetic send is a `doesNotUnderstand`; float *literals* lex and parse, only the operations are missing. Mixed integer/float arithmetic is likewise absent. | Track 1 / Track 4 (numeric tower) |
 | D14 | **REPL meta-commands limited to `:help` / `:quit`.** The design spec lists `:load`, `:reload`, `:edit`, `:time`, `:doc`; none are implemented. | Track 7 (onboarding / tooling) |
 | D17 | **`thisContext` is reserved but inert.** It parses to its own node but the reflective context protocol is unbuilt; using it errors with `expression kind not yet supported`. | Track 3 (advanced object model / reflection) |
 | D19 | **Class variables are not implemented.** The runtime feature behind D15: a per-class shared variable visible to all instances and class-side methods. D15 (the silent-discard parser bug) and D19 (the missing feature) are tracked separately so D15 can be fixed — by diagnosing or honouring the clause — independently of building D19. | Track 1 (language core) / Track 3 |
-| D20 | **`LargeInteger` arithmetic not bound — no overflow promotion.** protoCore already provides arbitrary-precision integers and *transparently promotes* on overflow. protoST binds arithmetic on `SmallInteger` only, so a `SmallInteger` computation that overflows does **not** promote to `LargeInteger` — it has no defined arbitrary-precision path. The owner explicitly wants `LargeInteger` supported: `SmallInteger` arithmetic must promote transparently on overflow, mirroring protoCore. This is the integer half of the same numeric-tower gap as D11 (the float half). | Track 1 / Track 4 (numeric tower) |
 
 ---
 
@@ -172,6 +176,8 @@ during the 2026-05-20 audit.
 | D18 | `==` / `~~` were bound on no class; `=` / `~=` were not universal. | `==` (identity) and `~~` (non-identity) are bound on `Object`, so every object understands them. `Object>>=` defaults to identity and `Object>>~=` to its negation; value-equality `=`/`~=` is bound on `SmallInteger`, `String` and `Boolean` (the `~=` on `String` was newly added). Symbols are interned, so `#foo == #foo` is true. The `~~` operator token was added to the lexer. Verified: `3 == 3`, `#foo == #foo`, `3 ~~ 4`, `3 = 3`, `'a' = 'a'`. | `MNT-b1` |
 | D3 | `doesNotUnderstand` was a hard, uncatchable failure. | An unresolved selector now signals a catchable `MessageNotUnderstood` (a new subclass of `Error`) through the normal `signalInstance` handler-stack path. Root cause: the throw lived in the engine's own SEND dispatch, NOT inside a primitive, so it bypassed the EXC-d `translateNativeException` boundary (which wraps only the primitive call). The dispatch site now signals instead of throwing; with no handler the search still exhausts to `defaultAction` → `UnhandledSTException`, preserving the top-level/REPL abort. Verified: `[ 3 fooBar ] on: Error do: [:e| e messageText ]` → `doesNotUnderstand: fooBar`. The optional `doesNotUnderstand:` user hook was not implemented. | `MNT-b2` (this commit) |
 | D5 | Class-side methods were not isolated from instances. | Class-side isolation via a marker (option b of the brief). `ClassName class >> sel` now installs through `__installClassMethod:as:`, which stamps the method wrapper with `__class_side__`; the engine's SEND dispatch hides a `__class_side__`-marked method when the receiver is an instance (does not own `__class_name__` as a direct attribute) — the send then falls through to `doesNotUnderstand`. Only this one direction is enforced: an instance-side method sent to a class object stays allowed, because the built-in class prototypes (`Array`, `Error`, …) deliberately double as both the class object and the instance-behaviour holder, and `__class_side__` is only ever stamped on USER class-side methods. The fuller separate-behaviours metamodel (option a) was judged too large to land safely in this slice. Verified: `(Counter startingAt: 10) value` → 10; `Counter new classOnly` → `doesNotUnderstand`. Incidental fix: `__setClassName:` now interns its key fresh per call (a stale per-`ProtoSpace` symbol made later runtimes' classes unrecognisable). | `MNT-b2` (this commit) |
+| D11 | `Float` and mixed-mode arithmetic were not bound — a float arithmetic send was a `doesNotUnderstand`. | The numeric primitives (`+ - * / // \\`, `< <= > >=`, `= ~=`, `negated`, `abs`, `printString`) were rewritten to delegate to protoCore's own `ProtoObject` arithmetic — `add` / `subtract` / `multiply` / `divide` / `modulo` / `compare` / `negate` / `abs` — and rebound on the shared `Number` prototype, so `SmallInteger`, `LargeInteger` and `Float` all inherit one protocol. protoCore's arithmetic already coerces mixed Int/Float operands. The protoST way — minimal decoration over protoCore — so this was a rebinding + delegation change, not new arithmetic. The old primitives computed with raw C `long long` (`asLong`/`fromLong`), which could not touch a Float and silently wrapped on overflow. `Float` `printString` was also added (protoCore does not render numbers to strings; protoST formats them — a Float always shows a fractional part). Verified: `1.5 + 2.5` → `4.0`, `1 + 2.5` → `3.5`. | `MNT-c` (this commit) |
+| D20 | `LargeInteger` arithmetic was not bound — a `SmallInteger` computation that overflowed did not promote. | Closed by the same delegation as D11: protoCore's arithmetic *transparently promotes* an integer result that exceeds the 56-bit inline `SmallInteger` range to a heap arbitrary-precision `LargeInteger`. Because the protoST primitives now forward to it, an overflowing protoST computation stays exact with no extra work. `LargeInteger` `printString` extracts the exact decimal digits via repeated protoCore `divmod` by 10 (protoCore exposes no number→string conversion, and `asLong` would overflow). Verified: a `whileTrue:` loop computing `25!` yields the exact `15511210043330985984000000`. | `MNT-c` (this commit) |
 | D8 | Dead-home non-local return was a hard error. | A `^` in a block whose home method has already returned now signals a catchable `BlockCannotReturn` (a new subclass of `Error`). The engine keeps a thread-local registry of live `ExecutionEngine` instances; the block-frame `RETURN` opcode queries it (`homeFrameAlive`) — if no live engine on the thread holds the home activation, the home is genuinely dead and `BlockCannotReturn` is signalled THERE, while the handler stack is still intact. Signalling at the old outermost-`runWithArgs` escape site would have been too late: any `on:do:` on the path pops its handler as the `NonLocalReturn` unwinds through it. With no handler the run still aborts via `UnhandledSTException`. Verified: `[ blk value ] on: Error do: [:e| e messageText ]` → `non-local return: home method has already returned`; a live-home `^` is unaffected. | `MNT-b2` (this commit) |
 
 ---

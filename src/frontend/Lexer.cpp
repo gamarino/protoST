@@ -255,7 +255,14 @@ Token Lexer::nextImpl_() {
         case '|': return single(TokenKind::Pipe);
         case '+': return bin1("+");
         case '*': return bin1("*");
-        case '/': return bin1("/");
+        case '/':
+            // D11/D20: `//` is the integer (truncating) division operator of
+            // the numeric tower. Two slashes form one binary selector.
+            if (lookahead() == '/') {
+                Token t; t.kind = TokenKind::BinaryOp; t.text = "//";
+                t.line = startLine; t.column = startCol; advance(); advance(); return t;
+            }
+            return bin1("/");
         case '&': return bin1("&");
         case ',': return bin1(",");
         case '@': return bin1("@");
@@ -325,6 +332,14 @@ Token Lexer::nextImpl_() {
                 t.line = startLine; t.column = startCol; advance(); advance(); return t;
             }
             return single(TokenKind::Colon);
+        case '\\':
+            // D11/D20: `\\` is the modulo (remainder) binary operator of the
+            // numeric tower. Two backslashes form one binary selector.
+            if (lookahead() == '\\') {
+                Token t; t.kind = TokenKind::BinaryOp; t.text = "\\\\";
+                t.line = startLine; t.column = startCol; advance(); advance(); return t;
+            }
+            return makeError("unexpected '\\'", startLine, startCol);
     }
 
     {
