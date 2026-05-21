@@ -245,7 +245,17 @@ single biggest lever on adoption.
 Tracks 3–5 land.
 **Size:** large.
 
-### Track 9 — A comprehensive example set
+### Track 9 — A comprehensive example set — ✅ done
+
+**Status:** complete. 40 complete, idiomatic, runnable protoST programs live
+under `examples/`, grouped by theme (`basics/`, `blocks/`, `collections/`,
+`exceptions/`, `nonlocal/`, `actors/`, `stdlib/`, `modules/`, `programs/`) and
+indexed by `examples/README.md`. They span focused single-feature
+illustrations through genuine end-to-end programs — a recursive-descent
+calculator, an RPN interpreter, a Monte-Carlo pi estimate, a JSON data
+transform and two digital-twin simulations. Every example carries an
+`"EXPECT: …"` directive and is registered as a CTest smoke case via
+`run_conformance.sh` (`ctest -R '^examples/'`, 40/40 green).
 
 **Goal:** an extensive set of complete, idiomatic, runnable protoST programs,
 covering every feature: the object model, blocks and closures, collections,

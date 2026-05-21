@@ -1,3 +1,4 @@
+"EXPECT: 3"
 "-- pump_twin.st: digital-twin demo for protoST --"
 "--                                                                  --"
 "--   A simulated industrial pump with 3 sensors (temperature, flow, --"

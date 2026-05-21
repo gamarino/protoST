@@ -112,3 +112,25 @@ foreach(conf_file ${PROTOST_CONFORMANCE_FILES})
                 $<TARGET_FILE:protost>
                 "${conf_file}")
 endforeach()
+
+# --- examples smoke layer (Track 9) --------------------------------------
+# The examples/ tree (docs(examples): comprehensive runnable example set) is
+# also a smoke layer: every example carries an "EXPECT: <text>" directive on
+# its first line, so the conformance runner verifies it black-box exactly as
+# it does a conformance test. Module-helper files prefixed with `_` are
+# importable libraries, not standalone examples, and are excluded.
+file(GLOB_RECURSE PROTOST_EXAMPLE_FILES
+    CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/examples/*.st")
+foreach(ex_file ${PROTOST_EXAMPLE_FILES})
+    get_filename_component(ex_name "${ex_file}" NAME)
+    string(SUBSTRING "${ex_name}" 0 1 ex_first)
+    if(ex_first STREQUAL "_")
+        continue()
+    endif()
+    file(RELATIVE_PATH ex_rel "${CMAKE_SOURCE_DIR}/examples" "${ex_file}")
+    add_test(NAME "examples/${ex_rel}"
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/conformance/run_conformance.sh
+                $<TARGET_FILE:protost>
+                "${ex_file}")
+endforeach()

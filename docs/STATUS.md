@@ -139,6 +139,17 @@ are noted where useful.
       catalogues every departure from Smalltalk-80 for Smalltalk programmers
       (Chapter 14). Every non-trivial code snippet was executed against the
       `protost` build. *(Track 8)*
+- [x] **The comprehensive example set** — 40 complete, idiomatic, runnable
+      protoST programs under `examples/`, grouped by theme (`basics/`,
+      `blocks/`, `collections/`, `exceptions/`, `nonlocal/`, `actors/`,
+      `stdlib/`, `modules/`, `programs/`). They span focused single-feature
+      illustrations through genuine end-to-end programs — a recursive-descent
+      calculator, an RPN interpreter, a Monte-Carlo pi estimate, a JSON data
+      transform and two digital-twin simulations (a traffic intersection and
+      the pump twin). Every example carries an `"EXPECT: …"` directive and is
+      registered as a CTest case via `run_conformance.sh`, so the example tree
+      is also a verified smoke layer (`ctest -R '^examples/'`, 40/40). The
+      `examples/README.md` indexes the set. *(Track 9)*
 
 ### Standard library
 - [x] `lib/` infrastructure + the `Stream` module *(track4, T4-a)*

@@ -1,65 +1,137 @@
 # protoST examples
 
-Demos that exercise the protoST runtime end-to-end.
+A comprehensive set of **complete, idiomatic, runnable** protoST programs —
+Track 9 of the roadmap. They range from focused single-feature illustrations
+to genuine end-to-end programs, and together they cover every feature of the
+language: the object model, blocks and closures, the collection hierarchy,
+exceptions, non-local return, actors and futures, modules, the standard
+library, and digital-twin patterns.
+
+Every example is **executed and verified**. Each carries an
+`"EXPECT: <text>"` directive on its first line — the same directive the
+conformance suite uses — so the whole tree doubles as a smoke layer and is
+registered with CTest (see [Running](#running) below).
 
 > **Debugging:** these scripts can be debugged in VS Code via the protoST DAP
-> adapter. See [`../docs/debugging.md`](../docs/debugging.md) for setup; a
-> ready-to-use `launch.json` is in [`.vscode/launch.json`](.vscode/launch.json).
+> adapter. See [`../docs/debugging.md`](../docs/debugging.md) for setup.
 
-## `pump_twin.st` — Digital-twin with parallel sensors
+## Running
 
-A minimal industrial digital twin: one pump (FSM with `off` / `running` states)
-and three sensors (temperature, flow, vibration). Each sensor read has a
-simulated 50 ms I/O latency.
-
-The Controller runs `cycle`s — each cycle fires the 3 sensor reads, gets back
-3 Futures, then waits on all 3. Because each sensor is wrapped as an actor,
-the runtime schedules them on different workers and the reads execute in
-parallel.
-
-### Run
+Run any single example with the `protost` binary. Examples that `Import` a
+module must be run from their own directory so the bare module name resolves:
 
 ```bash
-# Default: workers = min(hardware_concurrency, 8)
-time ./build/protost examples/pump_twin.st
-# Expected: returns "3", wall-clock ~200ms
+# A self-contained example — run from anywhere:
+./build/protost examples/basics/01_classes_and_instances.st
 
-# Forced serial (proof that parallelism is what's saving time)
-time PROTOST_WORKERS=1 ./build/protost examples/pump_twin.st
-# Expected: returns "3", wall-clock ~500ms
+# An example that imports a sibling module — run from its directory:
+cd examples/modules && ../../build/protost 01_import_module.st
 ```
 
-The ~2.5× speedup (200 ms vs 500 ms) is real parallelism across OS threads —
-the runtime spawns N managed `ProtoThread` workers (T7 of F6 v2) and each
-sensor's `read` message runs on a different worker.
+The whole set is also registered as a CTest smoke layer (one case per file).
+Run it with:
 
-### The "digital-twin" pattern this demonstrates
+```bash
+ctest --test-dir build -R '^examples/' --output-on-failure
+```
 
-Each physical component (pump, sensors) becomes its own actor with:
-- its own mailbox (private state, serialized message processing),
-- its own protoCore mutex (no shared-memory races),
-- independent scheduling (the runtime decides which worker runs which message).
+Files whose name starts with `_` (e.g. `modules/_geometry.st`) are importable
+helper modules, not standalone examples, and are excluded from the smoke layer.
 
-The Controller is a regular object (not an actor) that **fans out** to its
-component actors. This is the inverse of a traditional FSM: instead of one
-big state machine, you compose many small state-holders that react to
-messages independently.
+## Index
 
-Adding more pumps, alarms, loggers, persistence, etc. is just adding more
-actors — no runtime changes needed.
+### `basics/` — the object model
 
-### Notes
+| File | Shows |
+|------|-------|
+| `01_classes_and_instances.st` | Declaring a class with an instance variable; `new` + explicit `initialize`; sending messages. |
+| `02_inheritance_and_super.st` | A two-level subclass chain; `super` reusing the inherited implementation. |
+| `03_class_side_methods.st` | A class-side method acting as a custom constructor. |
+| `04_mixins_and_uses.st` | Multiple inheritance via the `uses:` clause — assembling a class from two mixins. |
+| `05_runtime_composition.st` | `addBehavior:` — composing behaviour into a class at runtime, no recompilation. |
+| `06_printstring_override.st` | Overriding `printString` for a domain-specific rendering. |
 
-- Each actor's lock is held across the full message dispatch, not just the
-  mailbox RMW. This serializes messages **to one actor** but does NOT
-  serialize messages **across actors** — the demo exercises the latter
-  (the three sensors run in parallel on different workers).
-- A plain self-send inside a handler (`self foo`) dispatches directly:
-  `self` is the wrapped base object, not the actor proxy, so it never
-  touches the mailbox or the actor lock.
-- Cooperative yield (F6 v3) lets an actor awaiting a Future release its
-  worker thread, so the runtime scales to far more concurrent interdependent
-  actors than it has OS threads.
-- Sending a message to the *same* actor through its actor reference from
-  inside one of its own handlers is not supported (it would re-enter the
-  non-recursive actor lock).
+### `blocks/` — blocks and closures
+
+| File | Shows |
+|------|-------|
+| `01_closures_capture_state.st` | A closure capturing and mutating private state that outlives its method. |
+| `02_higher_order.st` | Higher-order patterns — passing and returning blocks; function composition. |
+| `03_control_flow_as_messages.st` | Control flow as ordinary message sends — `to:do:`, `ifTrue:ifFalse:` (FizzBuzz). |
+| `04_whiletrue_loop.st` | `whileTrue:` as a message to a block (the Fibonacci sequence). |
+
+### `collections/` — the collection hierarchy
+
+| File | Shows |
+|------|-------|
+| `01_iteration_protocol.st` | The shared protocol — `select:` / `collect:` / `inject:into:` over an `Array`. |
+| `02_ordered_collection.st` | `OrderedCollection` — `add:` cascades, `removeFirst` / `removeLast`. |
+| `03_set_and_bag.st` | `Set` (deduplicating) versus `Bag` (counting) contrasted. |
+| `04_dictionary.st` | `Dictionary` — a word-frequency count with `at:ifAbsent:` / `at:put:`. |
+| `05_interval.st` | `Interval` — a lazy arithmetic sequence answering the iteration protocol. |
+| `06_detect_and_count.st` | `count:` and trial-division — counting the primes below 100. |
+
+### `exceptions/` — the exception protocol
+
+| File | Shows |
+|------|-------|
+| `01_on_do_basics.st` | `on:do:` — catching a signalled exception, reading `messageText`. |
+| `02_ensure_cleanup.st` | `ensure:` — a cleanup block that runs on normal exit and on unwind. |
+| `03_resume_and_retry.st` | `retry` — re-running a protected block until a flaky operation succeeds. |
+| `04_warning_resume.st` | `resume:` — continuing a protected computation past the signal point. |
+| `05_custom_exception.st` | A user `Error` subclass; `pass` re-raising outward. |
+
+### `nonlocal/` — non-local return
+
+| File | Shows |
+|------|-------|
+| `01_early_return.st` | `^` inside a block returning straight out of a `do:` loop — a hand-written `detect:`. |
+| `02_guard_clauses.st` | `^` in a method body as a guard clause — recursive factorial. |
+
+### `actors/` — actors and futures
+
+| File | Shows |
+|------|-------|
+| `01_async_and_wait.st` | `asActor`, asynchronous sends returning `Future`s, `wait`. |
+| `02_future_thendo.st` | `Future` callbacks — `thenDo:` and `wait` on an actor's result. |
+| `03_fan_out_fan_in.st` | The fan-out / fan-in pattern — parallel workers, results gathered. |
+| `04_pipeline.st` | An actor pipeline — three stages, each its own actor. |
+
+### `stdlib/` — the standard library
+
+| File | Shows |
+|------|-------|
+| `01_stream.st` | The `stream` module — `ReadStream` / `WriteStream`. |
+| `02_math.st` | The `Number` math protocol — `squared`, `sqrt`, `rounded`, `Float pi`. |
+| `03_random.st` | The `random` module — a seedable, deterministic PRNG. |
+| `04_json.st` | The `json` module — `JSON parse:` of a nested document. |
+| `05_time.st` | The `time` module — `Time millisecondsToRun:` and `Duration`. |
+
+### `modules/` — modules
+
+| File | Shows |
+|------|-------|
+| `01_import_module.st` | `Import from:` — loading a `.st` file as a module, reaching its classes. |
+| `02_subclass_imported.st` | Subclassing an imported class; `super` reaching the module's implementation. |
+| `_geometry.st` | *(helper module — imported by the two examples above, not run standalone.)* |
+
+### `programs/` — complete small programs
+
+| File | Shows |
+|------|-------|
+| `calculator.st` | A recursive-descent calculator — `+ - * /` with precedence and parentheses. |
+| `rpn_interpreter.st` | A tiny postfix (RPN) stack interpreter — a `Dictionary` dispatch table. |
+| `monte_carlo_pi.st` | A Monte-Carlo estimate of pi — combining `random` and the math protocol. |
+| `json_transform.st` | A JSON-driven data transform — parse, walk, aggregate an order document. |
+| `traffic_intersection.st` | A digital-twin simulation — a traffic intersection of cooperating FSM actors. |
+| `pump_twin.st` | A digital-twin simulation — an industrial pump with three parallel sensor actors. |
+
+## The digital-twin pattern
+
+`programs/traffic_intersection.st` and `pump_twin.st` are the two end-to-end
+digital-twin demonstrations. Both express the same idea: each physical
+component becomes its own actor — a finite state machine with private state,
+a serialised mailbox, and independent scheduling — and a plain controller
+object **fans out** messages to the component actors. Adding a component is
+adding an actor; the runtime needs no changes. See the header comment of each
+file for the specifics.
