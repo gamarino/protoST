@@ -151,6 +151,19 @@ are noted where useful.
       is also a verified smoke layer (`ctest -R '^examples/'`, 40/40). The
       `examples/README.md` indexes the set. *(Track 9)*
 
+### Benchmarks
+- [x] **Performance benchmark suite** — `benchmarks/` carries two benchmark
+      families and a harness. `benchmarks/comparable/*.st` is the protoPython
+      core benchmark suite translated to idiomatic protoST (same algorithm,
+      same N), so `benchmarks/run_benchmarks.py` can place protoST, CPython
+      and (when a built `protopy` is found) protoPython side by side.
+      `benchmarks/actors/*.st` are actor-model benchmarks with no Python
+      counterpart — parallel speedup, cooperative-yield scaling (1000 actors
+      on K=2 worker threads) and mailbox throughput. The harness does warmup +
+      timed runs, reports the median and a geometric mean, and writes a dated
+      report; `benchmarks/reports/2026-05-21-baseline.md` is the first one and
+      `README.md` carries the headline numbers. *(Track 11)*
+
 ### Standard library
 - [x] `lib/` infrastructure + the `Stream` module *(track4, T4-a)*
 - [x] Mathematical protocol — `sqrt`, trig (`sin`/`cos`/`tan` + inverses),
@@ -229,6 +242,7 @@ narrow edge case).
 | Id | Bug | Minimal repro | Severity |
 |----|-----|---------------|----------|
 | D22 | **Guard-clause `^` of a bare instance variable can be mis-parsed.** A method written in the guard-clause style — `(cond) ifTrue: [ ^ ivar ].` followed by further statements that also touch that same instance variable — produces a spurious `>: argument is not a number` (or similar) error. The robust workaround is the *expression* form: `^ (cond) ifTrue: [...] ifFalse: [...]`, computing the whole result and returning it once. Surfaced while writing the Track 8 tutorial; the tutorial teaches the expression form and Chapter 14 §14.7 documents the caveat. | `Object subclass: #A instanceVariableNames: 'balance log'. A >> initialize balance := 100. log := OrderedCollection new. ^ self. A >> t: amount  amount > balance ifTrue: [ ^ balance ].  balance := balance - amount.  ^ balance.  x := A new. x initialize. x t: 50.` → `error: >: argument is not a number` (expected `50`). A guard block returning a literal or a non-ivar expression is unaffected; using a `self`-accessor in the condition also avoids it. | Medium |
+| D23 | **Un-drained mailbox load deadlocks the actor scheduler non-deterministically.** A sender that fires many asynchronous sends at one actor *without* `wait`ing on the returned Futures — so the live-`Future` set grows unbounded — stalls indefinitely on a fraction of runs. The failure is non-deterministic and not a clean N threshold: a fire-and-forget loop of 1,000 sends timed out on ~3 of 8 repeated runs, while *larger* drained runs completed reliably in ~0.25 s. Surfaced building the Track 11 message-throughput benchmark, which now uses the *drained* pattern (`wait` on every send, bounding outstanding Futures to one) to stay stable. Likely a scheduling / GC race under sustained un-drained mailbox pressure. | `Object subclass: #Sink instanceVariableNames: 'count'. Sink >> initialize count := 0. ^ self. Sink >> ping count := count + 1. ^ count. Sink >> count ^ count. base := Sink new. base initialize. sink := base asActor. 1 to: 1000 do: [ :i \| sink ping ]. (sink count) wait.` → completes in <0.1 s on most runs, hangs indefinitely on others. The drained form `1 to: 2000 do: [ :i \| (sink ping) wait ]` is stable. | High |
 
 ---
 

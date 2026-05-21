@@ -56,6 +56,40 @@ complete, runnable digital-twin demo — a pump with three sensors read
 concurrently on a worker pool — is in
 [`examples/pump_twin.st`](examples/pump_twin.st).
 
+## Performance
+
+protoST ships a benchmark suite ([`benchmarks/`](benchmarks/)) with two
+families: the protoPython core workloads translated to idiomatic Smalltalk
+(same algorithm, same N — directly comparable against CPython) and
+actor-model benchmarks that have no Python counterpart.
+
+**Single-thread, vs CPython 3.14** — protoST is a young runtime and is slower
+on raw arithmetic; the suite reports this honestly:
+
+| Workload | protoST | CPython | Ratio |
+|---|---:|---:|---:|
+| `int_sum_loop` (sum 1..100k) | ~569 ms | ~30 ms | ~19× slower |
+| `list_append` (10k appends) | ~107 ms | ~29 ms | ~3.7× slower |
+| `range_iterate` (iterate 100k) | ~696 ms | ~31 ms | ~23× slower |
+
+Recursive `fib(25)` and the O(N²) `str_concat` are far slower still — message
+dispatch and immutable-string concatenation are not yet optimised. Raw
+single-thread speed is **not** where protoST competes.
+
+**The actor model is the differentiator** — and protoPython has nothing to
+compare against here:
+
+| Actor benchmark | Result |
+|---|---|
+| **Parallel speedup** | 12 CPU-bound worker actors run **~1.9× faster** on the full worker pool than pinned to one worker (`PROTOST_WORKERS=1`) — extra cores, no code change. |
+| **Cooperative-yield scaling** | **1,000** actors, each parked on a nested `wait`, all hosted on just **2** worker threads. Thread-per-actor blocking would need 1,000 OS threads; protoST parks the waiters and reuses the two. |
+
+The cooperative-yield number is the headline: a thousand suspended actors on
+two OS threads is a structural capability, not a tuning result. See the full
+dated report — [`benchmarks/reports/2026-05-21-baseline.md`](benchmarks/reports/2026-05-21-baseline.md)
+— for the complete table, the host details, and a known mailbox-scheduler
+issue surfaced by the throughput benchmark.
+
 ## Project status
 
 protoST is in active development and runs. Phases F1–F8 are complete — lexer,

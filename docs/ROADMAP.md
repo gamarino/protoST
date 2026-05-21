@@ -305,6 +305,42 @@ for protoST being *usable* rather than only *buildable*.
 **Dependencies:** a working build (Tracks 1–4) and protoCore's own packaging.
 **Size:** small.
 
+### Track 11 — Performance benchmarks — ✅ done
+
+**Status:** complete. `benchmarks/` carries a benchmark suite with two
+families and a harness; `benchmarks/reports/2026-05-21-baseline.md` is the
+first dated report, and `README.md` has a Performance section with the
+headline numbers.
+
+**Goal:** a reproducible benchmark suite that measures protoST both *against
+the other runtimes* and *on its own distinctive ground* — the actor model.
+
+- **Comparable workloads** — the protoPython core benchmark suite translated
+  to idiomatic protoST (`benchmarks/comparable/*.st`): integer-sum loop,
+  recursive `fib(25)`, list append, string concatenation, attribute lookup,
+  range iteration, exception latency. Each `.st` file runs the *same
+  algorithm with the same N* as its protoPython `.py` twin, so the harness
+  can place protoST, CPython and (when a built `protopy` is present)
+  protoPython side by side.
+- **Actor-model benchmarks** — protoST-specific workloads
+  (`benchmarks/actors/*.st`) that protoPython has no counterpart for:
+  *parallel speedup* (N CPU-bound actors, full pool vs `PROTOST_WORKERS=1`),
+  *cooperative-yield scaling* (a thousand actors each parked on a nested
+  `wait`, hosted on K=2 worker threads — the thing thread-per-actor blocking
+  cannot do) and *mailbox message throughput*.
+- **The harness** — `benchmarks/run_benchmarks.py` (with a thin
+  `benchmarks/run.sh` wrapper) runs every benchmark with `WARMUP_RUNS`
+  warmup + `N_RUNS` timed runs, reports the median wall-clock and a
+  geometric mean, and emits a dated markdown report under
+  `benchmarks/reports/`.
+
+**Why it matters:** honest, repeatable numbers tell contributors where the
+runtime stands and where the optimisation work is. The actor benchmarks turn
+protoST's defining feature into a measurable result rather than a claim.
+
+**Dependencies:** a working build (Tracks 1–4) and the actor model (Phase F).
+**Size:** small; the suite grows one workload at a time.
+
 ---
 
 ## Beyond the language: the digital-twin layer
@@ -333,6 +369,7 @@ enables.
   Track 8 (dual-audience tutorial)   ── after the language reference (Track 6)
   Track 9 (comprehensive examples)   ── grows with every feature
   Track 10 (installation packaging)  ── needs a working build (Tracks 1–4)
+  Track 11 (performance benchmarks)  ── needs the build + the actor model
 ```
 
 A reasonable **1.0 milestone**: language core complete (Track 1), the
