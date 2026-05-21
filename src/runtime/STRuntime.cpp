@@ -44,6 +44,7 @@
 #include <vector>
 
 namespace protoST { void installIntPrimitives(STRuntime& rt); }
+namespace protoST { void installMathPrimitives(STRuntime& rt); }
 namespace protoST { void installBoolPrimitives(STRuntime& rt); }
 namespace protoST { void installStringPrimitives(STRuntime& rt); }
 namespace protoST { void installBlockPrimitives(STRuntime& rt); }
@@ -279,6 +280,24 @@ struct STRuntime::Impl {
             proto::ProtoString::createSymbol(rootCtx, "Association"),
             bootstrap.associationProto);
 
+        // Track 4 slice b (T4-b): register the numeric class hierarchy in
+        // globals so user code can name `Number`, `SmallInteger`,
+        // `LargeInteger` and `Float`. `Float` in particular carries the
+        // class-side math constants — `Float pi`, `Float e`, `Float infinity`,
+        // `Float nan` — bound by installMathPrimitives.
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "Number"),
+            bootstrap.numberProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "SmallInteger"),
+            bootstrap.smallIntegerProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "LargeInteger"),
+            bootstrap.largeIntegerProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "Float"),
+            bootstrap.floatProto);
+
         // F6 v3 E2b: create the single live-registry GC root and pin it.
         //
         // This is the ONLY object ever handed to asyncRoots->add(). Every
@@ -402,6 +421,7 @@ static const proto::ProtoObject* st_worker_main(
 
 STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
     installIntPrimitives(*this);
+    installMathPrimitives(*this);
     installBoolPrimitives(*this);
     installStringPrimitives(*this);
     installBlockPrimitives(*this);

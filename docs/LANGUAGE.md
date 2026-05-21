@@ -1356,6 +1356,54 @@ Iteration helpers are bound on `Number`:
 | `to:do:` | iterate `receiver..stop`, evaluating the block per integer |
 | `to:by:do:` | iterate with a step |
 
+#### Mathematical protocol
+
+The mathematical operations are also bound on `Number` (so every numeric kind
+understands them) — they are idiomatic unary / keyword messages on a number,
+always available with no `Import`. They are C++ primitives, the transcendentals
+thin wrappers over `<cmath>` (libm).
+
+| Selector | Meaning |
+|----------|---------|
+| `sqrt` | square root → a `Float` |
+| `sin` `cos` `tan` | trigonometric functions (radians) → a `Float` |
+| `arcSin` `arcCos` `arcTan` | inverse trigonometric functions → a `Float` |
+| `ln` | natural logarithm → a `Float` |
+| `exp` | `e` raised to the receiver → a `Float` |
+| `log` | base-10 logarithm → a `Float` |
+| `log:` | logarithm in the given base → a `Float` |
+| `floor` `ceiling` `rounded` `truncated` | round to an **integer** (an integer receiver answers itself) |
+| `sign` | `-1` / `0` / `1` |
+| `squared` | `self * self` (an integer square promotes to `LargeInteger` if it overflows) |
+| `reciprocal` | `1 / self`, always a `Float` |
+| `isZero` | comparison with zero → a boolean |
+| `min:` `max:` | the smaller / larger of receiver and argument |
+| `between:and:` | inclusive range test `low <= self <= high` → a boolean |
+| `asFloat` | the receiver as a `Float` |
+| `asInteger` | the receiver as an integer (a `Float` is truncated toward zero) |
+| `even` `odd` | integer parity (aliases of `isEven` / `isOdd`) |
+| `factorial` | `1 * 2 * ... * n` on a non-negative integer — exact, promotes to `LargeInteger` |
+| `raisedTo:` | exponentiation — see below |
+| `gcd:` `lcm:` | greatest common divisor / least common multiple of two integers |
+
+Class-side **constants** are bound on `Float`: `Float pi`, `Float e`,
+`Float infinity`, `Float nan`.
+
+> **Exact exponentiation and factorial.** `raisedTo:` with a non-negative
+> integer exponent, and `factorial`, are computed by exact repeated
+> multiplication, so each intermediate product promotes to a `LargeInteger`
+> the moment it leaves the 56-bit `SmallInteger` range — `2 raisedTo: 100` and
+> `30 factorial` are exact arbitrary-precision integers, never an overflowed
+> `double`. A `Float` exponent (or a negative integer exponent) routes through
+> libm `pow` and answers a `Float`.
+
+> **Domain errors.** A libm domain error — `(-1) sqrt`, `0 ln` — is **not**
+> turned into a protoST `Error`; the IEEE-754 result (`nan` / `inf`) is let
+> through, the same total contract libm offers. The math protocol therefore
+> never raises a domain error. Genuinely invalid *arguments* still raise a
+> catchable `Error`: `factorial` of a negative integer, `gcd:` of zero and
+> zero, a non-numeric argument to `min:` / `raisedTo:` / etc.
+
 ### 12.3 `Boolean` (`True` / `False`)
 
 | Selector | Meaning |

@@ -96,6 +96,14 @@ are noted where useful.
 
 ### Standard library
 - [x] `lib/` infrastructure + the `Stream` module *(track4, T4-a)*
+- [x] Mathematical protocol — `sqrt`, trig (`sin`/`cos`/`tan` + inverses),
+      `ln`/`exp`/`log`/`log:`, rounding (`floor`/`ceiling`/`rounded`/
+      `truncated`), `sign`/`squared`/`reciprocal`/`isZero`/`min:`/`max:`/
+      `between:and:`/`asFloat`/`asInteger`/`even`/`odd`/`gcd:`/`lcm:`,
+      exact `raisedTo:` and `factorial` (LargeInteger-safe), and class-side
+      `Float` constants (`pi`/`e`/`infinity`/`nan`). Bootstrapped C++
+      primitives on `Number` — always available, not a loadable module
+      *(track4, T4-b)*
 
 ### Builtins / primitives
 - [x] Numeric tower: `SmallInteger`, `LargeInteger` and `Float` arithmetic &
