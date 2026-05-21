@@ -1,0 +1,321 @@
+# Chapter 10 — Actors and futures
+
+[Tutorial index](../TUTORIAL.md) · Previous: [Chapter 9](09-standard-library.md) · Next: [Chapter 11 — The advanced object model](11-advanced-object-model.md)
+
+---
+
+This is the chapter that makes protoST *protoST*. Everything so far — objects,
+messages, blocks, classes, exceptions, collections — is recognisable
+Smalltalk-80. The **actor model** is protoST's own contribution: a built-in
+concurrency model where any object can become a self-scheduling, thread-safe
+unit, and message sends to it run in parallel.
+
+If you are a Smalltalk programmer, this is the first chapter that is *not* the
+dialect you know. If you come from Python or JavaScript, this is `async`/`await`
+and threads — but reorganised around the object, not around the function.
+
+## 10.1 The problem actors solve
+
+Concurrency is hard because of *shared mutable state*. Two threads touching the
+same object's fields at the same time produce races, and the usual cure —
+locks — is error-prone, deadlock-prone, and clutters every method.
+
+The actor model removes the problem instead of managing it. An **actor** is an
+object with three guarantees:
+
+1. It has **private state** that nothing outside it can touch directly.
+2. Messages sent to it go into a **mailbox** and are processed **one at a
+   time** — never two at once.
+3. Different actors run **in parallel**, on a pool of worker threads.
+
+Because only one message runs on a given actor at a time, that actor's state is
+never racing against itself — and you never wrote a lock. Because different
+actors run in parallel, you still get real concurrency. The single-message
+rule *is* the synchronisation.
+
+protoST builds this into the language. It is not a library you import; it is
+two messages — `asActor` and `wait` — and a scheduler.
+
+## 10.2 Promoting an object to an actor
+
+Any object becomes an actor by sending it `asActor`:
+
+```smalltalk
+sensor := TempSensor new.
+sensor initialize.
+actor := sensor asActor.
+```
+
+`asActor` answers an **actor proxy** wrapping the original object. The wrapped
+object is unchanged — `asActor` does not mutate it. From now on you send
+messages to the *proxy*, and the proxy is where the actor guarantees live.
+
+> **In Python** the closest thing is wrapping an object so its methods run on a
+> dedicated thread or in an `asyncio` task — there is no built-in. **In
+> JavaScript** a Web Worker is an isolated execution context, but you cannot
+> simply "promote an existing object" into one. **In protoST** `asActor` does
+> exactly that: take an ordinary object, get back a concurrency-safe proxy of
+> it, in one message. The object did not have to be *written* as an actor.
+
+## 10.3 Sending to an actor returns a `Future`
+
+Here is the behaviour that changes everything. A message sent to an actor proxy
+does **not** run immediately and does **not** block the caller. It is placed on
+the actor's mailbox, and the send returns — *right away* — a **`Future`**: a
+placeholder for the answer that does not exist yet.
+
+```smalltalk
+"-- actor-send.st --"
+Object subclass: #Calc
+  instanceVariableNames: ''.
+
+Calc >> double: n
+  ^ n * 2.
+
+calc := (Calc newChild) asActor.
+f := calc double: 21.        "f is a Future — NOT 42, not yet"
+f wait.                      "block until the actor finishes; answer 42"
+```
+
+```bash
+$ ./build/protost actor-send.st
+42
+```
+
+`calc double: 21` returns instantly with a `Future`. The actor's worker runs
+`double:` at some point. `f wait` blocks the caller until the future *settles*,
+then answers the resolved value, `42`.
+
+> **In JavaScript** this is `async`/`await` exactly: an `async` function call
+> returns a `Promise` immediately; `await` waits for it. A protoST `Future` *is*
+> a JavaScript `Promise`, and `wait` *is* `await`. **In Python** it is an
+> `asyncio` coroutine returning an awaitable. The mental model transfers
+> directly — with one difference: in JS/Python *you* decide which functions are
+> `async`. In protoST, *every* send to an actor is asynchronous, automatically,
+> because the asynchrony belongs to the actor, not to the method.
+
+## 10.4 The `Future` protocol
+
+A `Future` is `pending` until the actor finishes its message, then either
+`resolved` with a value or `rejected` with an exception. You interact with it
+through:
+
+| Message | Effect |
+|---------|--------|
+| `wait` | block until settled; answer the value, or re-raise the rejection |
+| `thenDo:` | register a block to run with the value once resolved |
+| `catch:` | register a block to run with the cause once rejected |
+| `resolve:` | settle the future with a value (for a manually-created future) |
+| `rejectWith:` | settle the future with a rejection cause |
+
+`wait` is the synchronous workhorse. `thenDo:` is the *callback* form — it
+registers code to run later, without blocking:
+
+```smalltalk
+"-- then-do.st --"
+Object subclass: #Calc
+  instanceVariableNames: ''.
+
+Calc >> square: n
+  ^ n * n.
+
+calc := (Calc newChild) asActor.
+f := calc square: 9.
+captured := nil.
+f thenDo: [ :v | captured := v ].
+f wait.
+captured.
+```
+
+```bash
+$ ./build/protost then-do.st
+81
+```
+
+`thenDo:` registers the block; when the future resolves with `81`, the block
+runs and stores it. (The `wait` here is only to make the script wait for the
+actor before reading `captured` — `thenDo:` itself does not block.)
+
+You can also build a `Future` directly with `Future new` and settle it yourself
+with `resolve:` — useful when you need a promise that something *other* than an
+actor will fulfil:
+
+```bash
+$ ./build/protost -e '| f | f := Future new. f resolve: 99. f wait'
+```
+
+(That one is multi-statement — run it as a file in practice; the point is
+`Future new` gives a first-class, settle-it-yourself promise.)
+
+## 10.5 The payoff: real parallelism
+
+The single most important consequence of "every actor send returns a future
+immediately" is that you can **fire many sends and let them run at once**. You
+do not wait for each before starting the next — you start them all, *then*
+collect the results.
+
+```smalltalk
+"-- parallel.st --"
+Object subclass: #Sensor
+  instanceVariableNames: ''.
+
+Sensor >> read
+  Object sleep: 100.        "simulate 100ms of I/O latency"
+  ^ 7.
+
+a := (Sensor newChild) asActor.
+b := (Sensor newChild) asActor.
+c := (Sensor newChild) asActor.
+
+"Fire all three reads — each returns a Future instantly."
+fa := a read.
+fb := b read.
+fc := c read.
+
+"Now collect — the three reads ran concurrently on different workers."
+(fa wait) + (fb wait) + (fc wait).
+```
+
+```bash
+$ time ./build/protost parallel.st
+21
+
+real	0m0,117s
+```
+
+Three sensor reads, each taking 100ms, complete in ~117ms — *not* 300ms. The
+three actors ran their `read` methods in parallel on different worker threads.
+The proof: force the runtime to a single worker and the same script takes
+~316ms:
+
+```bash
+$ time PROTOST_WORKERS=1 ./build/protost parallel.st
+21
+
+real	0m0,316s
+```
+
+Same program, same result, ~2.7× the wall-clock time — because with one worker
+the three reads are forced to run one after another. The speedup is genuine
+parallelism across OS threads, and you did not write a single thread, lock, or
+`async` keyword to get it.
+
+> **In JavaScript** the parallel pattern is `await Promise.all([a, b, c])` —
+> start all the promises, then await them together. **In protoST** the pattern
+> is "send to all the actors first (`fa := a read. fb := b read. …`), wait on
+> all the futures after". Same shape: *fan out, then join*. The mistake to
+> avoid is the same in both languages — `(a read) wait` immediately, then
+> `(b read) wait` — which serialises what could be parallel.
+
+## 10.6 `self` inside an actor, and the synchronisation boundary
+
+When a method runs *on behalf of* an actor, `self` is the **wrapped base
+object**, not the proxy. So a self-send inside an actor method — `self
+helper` — is an ordinary synchronous dispatch: it does *not* re-enqueue on the
+mailbox and does *not* take the actor lock. The actor boundary is crossed only
+by sending a message to the *proxy*.
+
+This matters for three rules you must honour:
+
+1. **One actor per wrapped object.** The lock-equivalent belongs to the proxy.
+   Wrapping the same object in two proxies and driving both re-introduces the
+   races `asActor` was meant to remove.
+2. **A pre-`asActor` reference bypasses the lock.** If you keep the original
+   object reference and send to *it* (not the proxy) after promotion, that send
+   runs on your thread, unsynchronised against the actor's worker.
+3. **Actors talk only through proxies.** One actor never reaches inside another
+   actor's wrapped object — cross-actor communication is exclusively
+   message sends to the proxy.
+
+Follow these and the actor model's safety holds. Break them and you are back to
+shared-state concurrency.
+
+> The actor proxy is *fully transparent*: it forwards **every** message
+> asynchronously, with no exceptions — even `printString`. Sending
+> `printString` to a proxy returns a `Future` resolving to the *wrapped
+> object's* `printString`. There is deliberately no synchronous way to ask a
+> proxy "are you an actor?" — that opacity is the point. To get a proxy's
+> printable form, `wait` on the future: `(actor printString) wait`.
+
+## 10.7 Cooperative yield — scaling past the thread count
+
+There is one more piece, and it is what lets protoST run *thousands* of actors
+on a handful of threads.
+
+When an actor's running method sends `wait` to a *pending* future — for
+instance, an actor that has delegated work to another actor and now needs the
+answer — the actor **suspends cooperatively**. Its worker thread is *released*
+to run other actors. When the awaited future settles, the suspended actor
+resumes (on some worker) and its method continues from the `wait` point with
+the resolved value.
+
+The consequence: a `wait` inside an actor does *not* tie up a worker thread.
+So you can have ten thousand actors, each waiting on each other, on a pool of
+eight threads — the waiting actors cost nothing while they wait. This is how
+the digital-twin pattern scales: a fleet of interdependent twins is a fleet of
+mostly-waiting actors, and mostly-waiting actors are nearly free.
+
+> **In Python** this is the `asyncio` event loop — an `await` yields control so
+> the loop can run other tasks. **In JavaScript** it is the same single-loop
+> cooperative scheduling. **In protoST** the cooperative yield happens on a
+> `wait` inside actor code, and crucially it is *multi-threaded* underneath:
+> protoST gets `asyncio`-style scaling (cheap waiting) *and* real multi-core
+> parallelism (the worker pool) at once. Note one boundary: a `wait` from the
+> *main* thread — a script's top level, the REPL — instead blocks that OS
+> thread. The main thread is a synchronous client of the actor world.
+
+## 10.8 Errors in an actor
+
+An exception unhandled inside an actor method does not crash the program. It
+propagates to the actor's worker loop, which **rejects that message's future**
+with the exception. The actor stays alive and goes on to its next message.
+
+A `wait` on a rejected future re-raises the rejection, so you catch it with an
+ordinary handler ([Chapter 7](07-exceptions.md)):
+
+```smalltalk
+"-- actor-error.st --"
+Object subclass: #Risky
+  instanceVariableNames: ''.
+
+Risky >> attempt
+  ^ Error signal: 'the actor failed'.
+
+actor := (Risky newChild) asActor.
+f := actor attempt.
+[ f wait ] on: Error do: [ :e | 'handled: ' , e messageText ].
+```
+
+```bash
+$ ./build/protost actor-error.st
+handled: Future rejected: the actor failed
+```
+
+The actor's `attempt` signals an `Error`; that rejects `f`; `f wait` re-raises
+it; the `on: Error do:` handler catches it. Note the message text — `wait`
+re-raises the rejection wrapped with a `Future rejected:` prefix, so you can
+tell a re-raised actor failure from a directly-signalled one. One caveat worth
+knowing: a partial mutation an actor method performed *before* it raised is
+**not** rolled back — protoST has no transactional default.
+
+## 10.9 Summary
+
+- An **actor** is an object with private state, a one-message-at-a-time
+  mailbox, and parallel scheduling. The single-message rule is the
+  synchronisation — you never write locks.
+- `anObject asActor` promotes any object to an actor proxy.
+- A message to a proxy returns a **`Future`** *immediately*; the actor runs the
+  message later. `wait` blocks for the value (or re-raises a rejection);
+  `thenDo:` / `catch:` register callbacks.
+- **Fan out, then join**: fire many actor sends (collecting futures), then
+  `wait` on the futures — that is what gives real, multi-core parallelism.
+- Inside an actor method, `self` is the wrapped object; a self-send is ordinary
+  synchronous dispatch. Cross the actor boundary only via the proxy.
+- A `wait` *inside* an actor yields cooperatively, freeing its worker — so
+  thousands of mostly-waiting actors run on a small thread pool.
+- An exception inside an actor rejects that message's future; the actor lives
+  on.
+
+---
+
+Next: [Chapter 11 — The advanced object model](11-advanced-object-model.md)

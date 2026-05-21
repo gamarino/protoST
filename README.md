@@ -65,8 +65,9 @@ Roadmap Tracks 1–6 are complete: non-local return and a full exception
 protocol, the collection hierarchy, the advanced object model (multiple
 inheritance, mixins, runtime behaviour composition), the standard library
 (Stream, Math, Random, JSON, Time), a defensible conformance suite, and
-cross-language UMD interop. Tracks 7–9 (onboarding, tutorial, examples)
-remain. The test suite stands at ~700 tests.
+cross-language UMD interop. Track 8 (the dual-audience tutorial) is also done —
+see [`docs/TUTORIAL.md`](docs/TUTORIAL.md). Tracks 7 and 9 (onboarding guides,
+the broader example set) remain. The test suite stands at ~700 tests.
 
 - [`docs/LANGUAGE.md`](docs/LANGUAGE.md) — the language reference.
 - [`docs/STATUS.md`](docs/STATUS.md) — the live state: what works, intentional
@@ -99,6 +100,7 @@ VS Code.
 
 | Document | What it covers |
 |---|---|
+| [docs/TUTORIAL.md](docs/TUTORIAL.md) | The dual-audience tutorial — teaches protoST from the ground up for Python/JavaScript developers, and catalogues every departure from Smalltalk-80 for Smalltalk programmers. 14 chapters under `docs/tutorial/`. |
 | [docs/LANGUAGE.md](docs/LANGUAGE.md) | The language reference — lexical structure, grammar, semantics, the full built-in protocol. |
 | [docs/STATUS.md](docs/STATUS.md) | The living status tracker — implemented features, intentional deviations, open bugs. |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | The roadmap — remaining tracks and how to contribute. |

@@ -207,7 +207,13 @@ Python.
 Tracks 8 and 9 develop this onboarding goal in depth — the tutorial and the
 example set are its concrete deliverables.
 
-### Track 8 — A dual-audience tutorial
+### Track 8 — A dual-audience tutorial — ✅ done
+
+**Status:** complete. The tutorial is [`docs/TUTORIAL.md`](TUTORIAL.md) plus 14
+chapters under `docs/tutorial/`. It teaches protoST from the ground up for
+Python / JavaScript developers and catalogues every departure from
+Smalltalk-80 for Smalltalk programmers (Chapter 14). Every non-trivial snippet
+was verified against the `protost` build.
 
 **Goal:** one extensive, complete tutorial that teaches protoST to two
 audiences at once.

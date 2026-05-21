@@ -119,6 +119,14 @@ are noted where useful.
 - [x] CLI debugger (`protost -d`)
 - [x] DAP server (`protost --dap`) for VS Code
 
+### Documentation
+- [x] **The dual-audience tutorial** — [`docs/TUTORIAL.md`](TUTORIAL.md) plus
+      14 chapters under `docs/tutorial/`. Teaches protoST from the ground up
+      for Python / JavaScript developers (with a constant Python/JS bridge) and
+      catalogues every departure from Smalltalk-80 for Smalltalk programmers
+      (Chapter 14). Every non-trivial code snippet was executed against the
+      `protost` build. *(Track 8)*
+
 ### Standard library
 - [x] `lib/` infrastructure + the `Stream` module *(track4, T4-a)*
 - [x] Mathematical protocol — `sqrt`, trig (`sin`/`cos`/`tan` + inverses),
@@ -196,7 +204,7 @@ narrow edge case).
 
 | Id | Bug | Minimal repro | Severity |
 |----|-----|---------------|----------|
-| _(none — D3, D5, D8 closed in `MNT-b2`)_ | | | |
+| D22 | **Guard-clause `^` of a bare instance variable can be mis-parsed.** A method written in the guard-clause style — `(cond) ifTrue: [ ^ ivar ].` followed by further statements that also touch that same instance variable — produces a spurious `>: argument is not a number` (or similar) error. The robust workaround is the *expression* form: `^ (cond) ifTrue: [...] ifFalse: [...]`, computing the whole result and returning it once. Surfaced while writing the Track 8 tutorial; the tutorial teaches the expression form and Chapter 14 §14.7 documents the caveat. | `Object subclass: #A instanceVariableNames: 'balance log'. A >> initialize balance := 100. log := OrderedCollection new. ^ self. A >> t: amount  amount > balance ifTrue: [ ^ balance ].  balance := balance - amount.  ^ balance.  x := A new. x initialize. x t: 50.` → `error: >: argument is not a number` (expected `50`). A guard block returning a literal or a non-ivar expression is unaffected; using a `self`-accessor in the condition also avoids it. | Medium |
 
 ---
 
