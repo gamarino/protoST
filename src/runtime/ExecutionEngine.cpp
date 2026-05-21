@@ -938,13 +938,63 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     if (defCls.empty())
                         throw std::runtime_error(
                             "super send outside a method body");
-                    auto* clsSym =
-                        proto::ProtoString::createSymbol(ctx, defCls.c_str());
-                    TransientPin pinClsSym(
-                        ctx, reinterpret_cast<const proto::ProtoObject*>(clsSym));
-                    auto* g = rt_.globals();
-                    auto* defClsObj =
-                        g ? g->getAttribute(ctx, clsSym) : nullptr;
+                    // T3-a: resolve the defining class by IDENTITY, not by
+                    // re-resolving its name through the global namespace.
+                    //
+                    // The defining class is recorded by the compiler only as a
+                    // *name* (BL-1). A name lookup through `globals()` breaks the
+                    // moment the defining class is not a top-level global —
+                    // notably a class defined inside an imported module: the
+                    // module's classes are attributes of the module object, not
+                    // globals of the importing program. So a `super` send inside
+                    // such a module's own method would fail to resolve.
+                    //
+                    // Instead, walk the receiver's own prototype chain (which is
+                    // built from real object identities — `FastCounter` ->
+                    // `Counter` -> `Object`, crossing module boundaries freely)
+                    // and find the chain entry whose `__class_name__` equals the
+                    // defining class name. That entry IS the defining class
+                    // object; its first parent is the superclass where the
+                    // inherited implementation lives. This is robust regardless
+                    // of where the class was defined.
+                    const proto::ProtoString* classNameSym =
+                        proto::ProtoString::createSymbol(ctx, "__class_name__");
+                    const proto::ProtoObject* defClsObj = nullptr;
+                    {
+                        // Bounded walk up the parent chain starting at the
+                        // receiver. Single inheritance: follow parent 0.
+                        const proto::ProtoObject* node = recv;
+                        for (int hops = 0; node && node != PROTO_NONE
+                                 && hops < 256; ++hops) {
+                            auto* own =
+                                node->getOwnAttributeDirect(ctx, classNameSym);
+                            if (own && own != PROTO_NONE) {
+                                auto* nameStr = own->asString(ctx);
+                                if (nameStr &&
+                                    defCls == nameStr->toStdString(ctx)) {
+                                    defClsObj = node;
+                                    break;
+                                }
+                            }
+                            auto* ps = node->getParents(ctx);
+                            node = (ps && ps->getSize(ctx) > 0)
+                                       ? ps->getAt(ctx, 0)
+                                       : nullptr;
+                        }
+                    }
+                    if (!defClsObj || defClsObj == PROTO_NONE) {
+                        // Fallback: the receiver's chain does not name the
+                        // defining class (e.g. a class object used directly as
+                        // receiver, or a built-in). Resolve through globals as
+                        // before so existing behaviour is preserved.
+                        auto* clsSym = proto::ProtoString::createSymbol(
+                            ctx, defCls.c_str());
+                        TransientPin pinClsSym(
+                            ctx, reinterpret_cast<const proto::ProtoObject*>(
+                                     clsSym));
+                        auto* g = rt_.globals();
+                        defClsObj = g ? g->getAttribute(ctx, clsSym) : nullptr;
+                    }
                     if (!defClsObj || defClsObj == PROTO_NONE)
                         throw std::runtime_error(
                             "super: cannot resolve defining class " + defCls);

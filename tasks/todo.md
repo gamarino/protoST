@@ -27,3 +27,17 @@
   `Number>>asCharacter` (UTF-8 codepoint primitives), `String>>size` made
   codepoint-based, and `String` / `Boolean` registered as globals.
 - Full suite: 674/674 green, three consecutive runs. Smoke test OK.
+
+## T3-a — Extensible classes from modules (Track 3)
+
+- `subclass:` / `subclass:instanceVariableNames:` added as runtime messages on
+  objectProto so any class object (incl. an imported module class reached
+  through an expression) can be subclassed; the new class is bound globally
+  under its name so following `>>` method definitions resolve.
+- `super` resolution reworked: the defining class is now found by walking the
+  receiver's prototype chain by object identity instead of re-resolving its
+  name through globals — so `super` is correct across a module boundary even
+  when the defining class is not a global. Global lookup kept as a fallback.
+- 5 conformance tests added under tests/conformance/11-modules/ plus a
+  `_extensible_counter.st` module helper. Full suite: 686/686 green (three
+  runs). Smoke `pump_twin.st` => 3.

@@ -582,7 +582,13 @@ d := Dog new.
 d describe.        "evaluates to 'an animal that barks'"
 ```
 
-`super` is only meaningful inside a method body.
+`super` is only meaningful inside a method body. The defining class is
+resolved by **object identity**, not by re-resolving its name through the
+global namespace: a `super`-send walks the receiver's actual prototype chain
+to find the class object that owns the running method, then continues at that
+class's superclass. This makes `super` correct even when the defining class is
+not a top-level global — notably a class defined inside an imported module
+(see [§4.10]).
 
 ### 4.7 Class-side methods
 
@@ -625,6 +631,58 @@ level. A free identifier in an expression that is not a local, argument, or
 instance variable resolves as a global. A failed global lookup is a runtime
 error (`undefined global: X`).
 
+### 4.10 Extensible classes from modules
+
+`subclass:` is not only the textual class-declaration form ([§3.2]) — it is
+also a **runtime message** understood by every class object. This lets a
+program import a class from a module, subclass it locally, override its
+methods, and call `super` in an override to reuse the module's original
+implementation:
+
+```smalltalk
+lib := Import from: 'counter_lib'.
+
+"Subclass an imported class. The receiver is an expression (the module
+ attribute `lib Counter`), so the message form of `subclass:` applies."
+lib Counter subclass: #FastCounter instanceVariableNames: ''.
+
+"Override a method; `super` reaches the imported Counter's implementation."
+FastCounter >> incrementBy: n
+  super incrementBy: n.
+  super incrementBy: n.        "FastCounter doubles every increment"
+  ^ self.
+
+c := FastCounter newChild.
+c initialize.                   "inherited unchanged from the module's Counter"
+c incrementBy: 10.
+c value.                        "=> 20"
+```
+
+How it works:
+
+- **`subclass:` / `subclass:instanceVariableNames:`** sent to any class object
+  return a fresh prototype child of that class, stamped with the new class
+  name and bound as a global under that name (so a following
+  `NewClass >> selector` method definition resolves it). The new class's
+  parent is the receiver — *the actual class object*, even when it lives in
+  another module — so method lookup, instance-variable access, and `super`
+  all traverse the real prototype chain by identity.
+- **Overriding** is ordinary: a `NewClass >> selector` method shadows the
+  inherited one for instances of `NewClass`.
+- **`super`** in an override resolves the defining class by walking the
+  receiver's prototype chain (see [§4.6]); the next class searched is that
+  class's superclass — the imported module class — so the module's
+  implementation runs. This holds across any depth of chain (a subclass of a
+  subclass of a module class) and regardless of module boundaries.
+- Instances of the subclass are instances of the subclass (their
+  `printString` reports the subclass name) and still inherit every other
+  method of the imported class.
+
+> The textual form `Identifier subclass: #Name …` ([§3.2]) is unchanged; it is
+> simply the special case where the superclass is named by a bare identifier.
+> When the superclass is reached through an expression — a module attribute, a
+> block result, an array element — the message form above applies.
+
 ---
 
 ## 5. Messages and dispatch
@@ -666,6 +724,13 @@ A `super`-send (`super selector ...`) is resolved exactly as in [§5.1] except
 that the lookup begins at the **first parent of the defining method's class**,
 skipping any override on the receiver itself. The receiver bound to `self` in
 the invoked method is still the original receiver.
+
+The defining class is located by walking the receiver's prototype chain by
+**object identity** for the class whose name matches the one the compiler
+recorded for the running method. Because the chain is traversed by identity —
+not by re-resolving the class name through globals — `super` is correct even
+when the defining class is not a global, such as a class defined inside an
+imported module and then subclassed locally (see [§4.10]).
 
 ### 5.4 Argument count
 

@@ -218,6 +218,86 @@ const proto::ProtoObject* prim_Object_setClassName(STRuntime&,
     return r;
 }
 
+// --- T3-a: subclass: as a runtime message ----------------------------------
+//
+// The compiler recognises the textual form `Identifier subclass: #Name …` and
+// desugars it to `newChild` + `__setClassName:` (see Compiler::emitStatement).
+// That textual form ONLY fires when the receiver is a bare identifier — it can
+// not subclass a class reached through an expression, e.g. an imported module
+// class: `(lib Counter) subclass: #FastCounter …`.
+//
+// These primitives make `subclass:` a genuine message on every object, so any
+// class object — wherever it came from, including across a module boundary —
+// can be subclassed. The new class is a fresh mutable child of the receiver
+// (its prototype parent), stamped with its class name. Method lookup, `super`,
+// and instance-variable access all walk the parent chain by object identity,
+// so the parent living in another module is irrelevant.
+//
+// Like the compiler's textual form, the new class is also bound into globals
+// under its name — so `lib Counter subclass: #FastCounter …` followed by
+// `FastCounter >> incrementBy: …` resolves `FastCounter` (a PUSH_GLOBAL emitted
+// by the MethodDecl path) with no separate assignment required. The primitive
+// still returns the class, so an explicit `Sub := … subclass: …` also works.
+
+namespace {
+// Shared helper: create a named subclass of `superCls` and bind it as a global.
+const proto::ProtoObject* makeSubclass(STRuntime& rt, proto::ProtoContext* ctx,
+                                       const proto::ProtoObject* superCls,
+                                       const proto::ProtoObject* nameArg) {
+    if (!superCls || superCls == PROTO_NONE)
+        throw std::runtime_error("subclass:: superclass is nil");
+    auto* nameStr = nameArg ? nameArg->asString(ctx) : nullptr;
+    if (!nameStr)
+        throw std::runtime_error(
+            "subclass:: class name must be a symbol or string");
+    auto* sub = superCls->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinSub(ctx, sub);
+    const proto::ProtoString* nameKey =
+        proto::ProtoString::createSymbol(ctx, "__class_name__");
+    const_cast<proto::ProtoObject*>(sub)->setAttribute(
+        ctx, nameKey, nameStr->asObject(ctx));
+    // Bind the class globally under its declared name, mirroring the textual
+    // `subclass:` form's STORE_GLOBAL. The class name is a symbol/string; the
+    // global key is its interned-symbol form.
+    std::string name = nameStr->toStdString(ctx);
+    auto* nameSym = proto::ProtoString::createSymbol(ctx, name.c_str());
+    if (auto* g = rt.globals()) g->setAttribute(ctx, nameSym, sub);
+    return sub;
+}
+} // namespace
+
+// superClass subclass: #Name
+//   → fresh mutable child of superClass, stamped with the class name.
+const proto::ProtoObject* prim_Object_subclass(STRuntime& rt,
+                                               proto::ProtoContext* ctx,
+                                               const proto::ProtoObject* r,
+                                               const proto::ProtoObject* const* a,
+                                               int argc) {
+    if (argc != 1) throw std::runtime_error("subclass: expects 1 arg");
+    return makeSubclass(rt, ctx, r, a[0]);
+}
+
+// superClass subclass: #Name instanceVariableNames: 'a b c'
+//   → same as subclass:, plus the instance-variable names string is accepted.
+//
+// Instance variables in protoST are plain attributes resolved by symbol on
+// `self` (STORE_INSTVAR / PUSH_INSTVAR walk the parent chain), so no slot
+// layout has to be reserved here — declaring them is informational. The names
+// string is validated for shape and otherwise carried only so the surface
+// syntax matches the textual `subclass:instanceVariableNames:` form.
+const proto::ProtoObject* prim_Object_subclassIvars(
+    STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* r,
+    const proto::ProtoObject* const* a, int argc) {
+    if (argc != 2)
+        throw std::runtime_error(
+            "subclass:instanceVariableNames: expects 2 args");
+    // a[1] is the instance-variable-names string; accept any string (incl. '').
+    if (a[1] && a[1] != PROTO_NONE && !a[1]->asString(ctx))
+        throw std::runtime_error(
+            "subclass:instanceVariableNames:: ivar names must be a string");
+    return makeSubclass(rt, ctx, r, a[0]);
+}
+
 // recv printString → human-readable ProtoString
 //
 // BL-3: default Object>>printString. Resolves the receiver's class name by
@@ -396,6 +476,13 @@ void installObjectPrimitives(STRuntime& rt) {
     // ClassDecl path; `printString` is the default inherited by every object.
     bindPrimitive(rt, b.objectProto, "__setClassName:",
                   reg.registerPrim(prim_Object_setClassName));
+    // T3-a: `subclass:` as a runtime message so any class object — including
+    // one imported from a module — can be subclassed via an expression
+    // receiver, not just the compiler's textual `Identifier subclass: …` form.
+    bindPrimitive(rt, b.objectProto, "subclass:",
+                  reg.registerPrim(prim_Object_subclass));
+    bindPrimitive(rt, b.objectProto, "subclass:instanceVariableNames:",
+                  reg.registerPrim(prim_Object_subclassIvars));
     bindPrimitive(rt, b.objectProto, "printString",
                   reg.registerPrim(prim_Object_printString));
     // F6 v2 T6: sleep primitive — test-only helper for the wall-clock

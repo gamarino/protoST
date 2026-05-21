@@ -50,6 +50,10 @@ are noted where useful.
 - [x] `self` / `super` sends
 - [x] Class-side methods *(defined; but see D5 — not isolated)*
 - [x] `printString`
+- [x] **Extensible classes from modules** — `subclass:` is a runtime message
+      on any class object, so an imported module class can be subclassed in
+      the importing program, methods overridden, and `super` used in an
+      override to reuse the module's implementation *(Track 3, T3-a)*
 
 ### Blocks / closures
 - [x] Block syntax, 0–4 argument blocks
