@@ -31,78 +31,76 @@ Today, building this typically requires combining MQTT + Python microservices + 
 
 ## A flavour of the language
 
-A minimal digital twin written in protoST:
+A pump twin — a stateful object promoted to an actor:
 
 ```smalltalk
-"-- pump.st --"
-Object subclass: #Pump
-  instanceVariableNames: 'state pressure temperature serial'.
+"-- a pump as a state machine, run as an actor --"
+Object subclass: #Pump instanceVariableNames: 'state ticks'.
 
-Pump >> initialize
-  state := #operating.
-  pressure := 0. temperature := 0.
+Pump >> initialize  state := #idle.  ticks := 0.  ^ self.
+Pump >> start       state := #running.            ^ self.
+Pump >> tick
+  state == #running ifTrue: [ ticks := ticks + 1 ].
+  ^ ticks.
+Pump >> ticks  ^ ticks.
 
-Pump >> sensorReading: aReading
-  state == #operating ifTrue: [ ^ self handleOperating: aReading ].
-  state == #warning   ifTrue: [ ^ self handleWarning:   aReading ].
-  state == #shutdown  ifTrue: [ ^ self handleShutdown:  aReading ].
-
-Pump >> handleOperating: aReading
-  pressure := aReading pressure.
-  temperature := aReading temperature.
-  (pressure > 80 or: [ temperature > 90 ])
-    ifTrue: [ state := #warning. self notifyWarning ].
-
-Pump >> handleWarning: aReading
-  (aReading pressure > 95) ifTrue: [ state := #shutdown. self emergencyStop ].
+p := Pump newChild.  p initialize.  p start.
+a := p asActor.                 "promote the pump to an actor"
+a tick.  a tick.  a tick.       "asynchronous sends — each returns a Future"
+(a ticks) wait.                 "=> 3, once the three ticks have run"
 ```
 
-And a sensor-batch fan-out across a fleet of pumps:
-
-```smalltalk
-"-- ingest a batch of readings into a fleet of twins --"
-ingestBatch: aBatch into: aFleet
-  | futures |
-  futures := aBatch collect: [:reading |
-      (aFleet pumpForSerial: reading pumpId) sensorReading: reading ].
-  ^ Future whenAll: futures.   "resolves when every twin has processed its event"
-```
-
-Each `(aFleet pumpForSerial: id)` is an actor proxy. The `sensorReading:` send is asynchronous and returns a Future. `whenAll:` produces a single Future that resolves when every twin in the batch has finished. The scheduler runs as many of them concurrently as cores allow.
+Every send to `a` is dispatched asynchronously and returns a `Future`; the
+single-method invariant guarantees the three `tick`s never interleave. A
+complete, runnable digital-twin demo — a pump with three sensors read
+concurrently on a worker pool — is in
+[`examples/pump_twin.st`](examples/pump_twin.st).
 
 ## Project status
 
-> ⚠️ **Early development.** The design specification is approved, implementation has not yet started. The repository currently contains only the design documents.
+protoST is in active development and runs. Phases F1–F8 are complete — lexer,
+parser, bytecode VM, closures, classes, modules, the actor model with
+cooperative yield, an interactive REPL, and a Debug Adapter Protocol debugger.
+Roadmap Tracks 1 (non-local return + a full exception protocol), 2 (the
+collection hierarchy) and 6 (a defensible conformance suite) are done; Track 4
+(the standard library) is underway. The test suite stands at ~584 tests.
 
-See the [design specification](docs/superpowers/specs/2026-05-19-protost-design.md) for the complete technical specification. Implementation is planned in nine phases (F1–F9), summarised in § 13 of the spec.
+- [`docs/LANGUAGE.md`](docs/LANGUAGE.md) — the language reference.
+- [`docs/STATUS.md`](docs/STATUS.md) — the live state: what works, intentional
+  deviations from standard Smalltalk, and open bugs.
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — what is planned and how to contribute.
 
 ## Getting started
 
-> Build instructions will be added during F1. The runtime depends on [protoCore](../protoCore) which must be built first.
-
-Roughly:
+protoST depends on [protoCore](../protoCore), which must be built first.
 
 ```bash
 cd protoST
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build . -j
+cmake -B build -S .
+cmake --build build -j
 
-# Once F1 is complete:
-./protost venv create .venv         # create an isolated env (Python-venv style)
-source .venv/bin/activate
-./protost -i                        # REPL with multiline, history, completion
-./protost script.st                 # run a .st script as principal module
-./protost -d script.st              # run under the CLI debugger (from F2)
+./build/protost script.st           # run a .st script
+./build/protost -e 'expr'           # evaluate an expression
+./build/protost -i                  # interactive REPL (history, multi-line)
+./build/protost -d script.st        # run under the CLI debugger
+./build/protost --dap               # Debug Adapter Protocol server (VS Code)
+./build/protost venv create .venv   # create an isolated environment
+
+ctest --test-dir build               # run the test suite
 ```
+
+See [`docs/debugging.md`](docs/debugging.md) for debugging `.st` scripts in
+VS Code.
 
 ## Documentation
 
 | Document | What it covers |
 |---|---|
-| [DESIGN.md](DESIGN.md) → [spec](docs/superpowers/specs/2026-05-19-protost-design.md) | Full technical specification: architecture, object model, actor model, modules, debugger, venv, phases. |
+| [docs/LANGUAGE.md](docs/LANGUAGE.md) | The language reference — lexical structure, grammar, semantics, the full built-in protocol. |
+| [docs/STATUS.md](docs/STATUS.md) | The living status tracker — implemented features, intentional deviations, open bugs. |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | The roadmap — remaining tracks and how to contribute. |
 | [docs/debugging.md](docs/debugging.md) | Debugging `.st` scripts in VS Code via the `protost --dap` Debug Adapter Protocol adapter. |
-| [CLAUDE.md](CLAUDE.md) | Project-specific instructions for Claude Code (to be populated). |
+| [design spec](docs/superpowers/specs/2026-05-19-protost-design.md) | The original technical design specification. |
 
 ## Related projects
 
