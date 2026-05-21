@@ -10,12 +10,15 @@
 #include <readline/readline.h>
 #include <readline/history.h>
 
+#include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 #include <unistd.h>
@@ -115,8 +118,13 @@ void printResult(STRuntime& rt, const proto::ProtoObject* r) {
 
 void printHelp() {
     std::puts("Commands:");
-    std::puts("  :help, :h    Show this message");
-    std::puts("  :quit, :q    Exit the REPL (also Ctrl-D)");
+    std::puts("  :help, :h         Show this message");
+    std::puts("  :quit, :q         Exit the REPL (also Ctrl-D)");
+    std::puts("  :load <path>      Execute a .st file in the current session");
+    std::puts("  :reset            Discard all session state (vars, classes, methods)");
+    std::puts("  :vars, :env       List user-defined globals in the session");
+    std::puts("  :time <expr>      Evaluate <expr> and report wall-clock time");
+    std::puts("  :history          Show recent input lines");
     std::puts("Enter Smalltalk expressions ending with '.' to evaluate them.");
     std::puts("Incomplete input (open '[', '(', or a multi-line method) keeps");
     std::puts("reading at the '   ...> ' continuation prompt.");
@@ -146,37 +154,221 @@ Completeness classify(const std::string& buffer) {
     return Completeness::Error;
 }
 
+// The REPL session: a persistent runtime plus the bytecode modules it has
+// installed. `:reset` rebuilds the whole struct from scratch.
+struct Session {
+    std::unique_ptr<STRuntime> rt;
+    std::vector<std::unique_ptr<BytecodeModule>> retained;
+    // Snapshot of the global names the runtime pre-registers at construction
+    // (Object, Number, Array, …). `:vars` reports only the names absent from
+    // this set, i.e. the names the user actually defined.
+    std::set<std::string> builtinGlobals;
+
+    Session() { rebuild(); }
+
+    // Construct a fresh STRuntime and re-snapshot its builtin globals. The old
+    // runtime, if any, is destroyed first — protoST's "one STRuntime per
+    // process" contract (LANGUAGE.md §13.2 / D2) forbids two *simultaneously*
+    // live runtimes, not a sequential rebuild.
+    void rebuild() {
+        retained.clear();
+        rt.reset();
+        rt = std::make_unique<STRuntime>();
+        builtinGlobals = currentGlobalNames();
+    }
+
+    // Collect the own-attribute names of the globals namespace right now.
+    std::set<std::string> currentGlobalNames() const {
+        std::set<std::string> names;
+        proto::ProtoObject* g = rt->globals();
+        if (!g) return names;
+        proto::ProtoContext* ctx = rt->rootCtx();
+        const proto::ProtoSparseList* own = g->getOwnAttributes(ctx);
+        if (!own) return names;
+        auto* it = const_cast<proto::ProtoSparseListIterator*>(
+            own->getIterator(ctx));
+        while (it && it->hasNext(ctx)) {
+            unsigned long key = it->nextKey(ctx);
+            auto* sym = reinterpret_cast<const proto::ProtoObject*>(key)
+                            ->asString(ctx);
+            if (sym) names.insert(sym->toStdString(ctx));
+            it = const_cast<proto::ProtoSparseListIterator*>(it->advance(ctx));
+        }
+        return names;
+    }
+};
+
 // Parse + compile + run a complete buffer. Retains the module so installed
 // method/class bytecode pointers stay valid for the rest of the session.
-void evaluate(STRuntime& rt,
-              std::vector<std::unique_ptr<BytecodeModule>>& retained,
-              const std::string& buffer) {
+// `sourceName` labels diagnostics ("<repl>", or a file path for :load).
+// Returns true on a clean run, false if a parse / compile / runtime error was
+// reported. When `printIt` is true the result value is echoed.
+bool evaluate(Session& s, const std::string& buffer,
+              const char* sourceName, bool printIt) {
     Parser P{std::string(buffer)};
     auto ast = P.parseModule();
     if (!P.errors().empty()) {
         for (auto& e : P.errors())
-            std::fprintf(stderr, "<repl>:%d:%d: %s\n", e.line, e.column, e.message.c_str());
-        return;
+            std::fprintf(stderr, "%s:%d:%d: %s\n",
+                         sourceName, e.line, e.column, e.message.c_str());
+        return false;
     }
     Compiler C;
     C.setReplMode(true);
     auto bc = C.compileModule(*ast);
-    bc->setSourceName("<repl>");
+    bc->setSourceName(sourceName);
     if (C.hasErrors()) {
-        for (auto& s : C.errors())
-            std::fprintf(stderr, "compile error: %s\n", s.c_str());
-        return;
+        for (auto& str : C.errors())
+            std::fprintf(stderr, "compile error: %s\n", str.c_str());
+        return false;
     }
     BytecodeModule* mod = bc.get();
-    retained.push_back(std::move(bc));
+    s.retained.push_back(std::move(bc));
     try {
-        auto* r = rt.runTopLevel(*mod);
-        printResult(rt, r);
+        auto* r = s.rt->runTopLevel(*mod);
+        if (printIt) printResult(*s.rt, r);
+        return true;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "error: %s\n", e.what());
+        return false;
     } catch (...) {
         std::fprintf(stderr, "error: unknown runtime failure\n");
+        return false;
     }
+}
+
+// --- meta-command implementations -------------------------------------------
+
+// :load <path> — read a .st file and execute it in the current session.
+void cmdLoad(Session& s, const std::string& arg) {
+    std::string path = trim(arg);
+    if (path.empty()) {
+        std::fprintf(stderr, ":load requires a file path\n");
+        return;
+    }
+    std::FILE* fp = std::fopen(path.c_str(), "rb");
+    if (!fp) {
+        std::fprintf(stderr, ":load: cannot open %s\n", path.c_str());
+        return;
+    }
+    std::fseek(fp, 0, SEEK_END);
+    long n = std::ftell(fp);
+    std::fseek(fp, 0, SEEK_SET);
+    if (n < 0) { std::fclose(fp); std::fprintf(stderr, ":load: cannot read %s\n", path.c_str()); return; }
+    std::string src(static_cast<size_t>(n), '\0');
+    size_t got = std::fread(src.data(), 1, static_cast<size_t>(n), fp);
+    src.resize(got);
+    std::fclose(fp);
+
+    // Execute against the live session — definitions and variables persist
+    // exactly as if the file's text had been typed at the prompt. The result
+    // value is not echoed (a file is a sequence of statements, not one
+    // expression); a clean run is confirmed instead.
+    if (evaluate(s, src, path.c_str(), /*printIt=*/false))
+        std::printf("loaded %s\n", path.c_str());
+}
+
+// :reset — discard all session state and start a fresh STRuntime.
+void cmdReset(Session& s) {
+    s.rebuild();
+    std::puts("session reset — all user variables, classes and methods cleared");
+}
+
+// :vars / :env — list the user-defined globals in the current session.
+void cmdVars(Session& s) {
+    std::set<std::string> all = s.currentGlobalNames();
+    std::vector<std::string> userNames;
+    for (const auto& name : all)
+        if (s.builtinGlobals.find(name) == s.builtinGlobals.end())
+            userNames.push_back(name);
+    if (userNames.empty()) {
+        std::puts("(no user-defined globals)");
+        return;
+    }
+    proto::ProtoObject* g = s.rt->globals();
+    proto::ProtoContext* ctx = s.rt->rootCtx();
+    for (const auto& name : userNames) {
+        auto* key = proto::ProtoString::createSymbol(ctx, name.c_str());
+        const proto::ProtoObject* val = g->getOwnAttributeDirect(ctx, key);
+        std::string rendered = protoST::formatValue(*s.rt, ctx, val);
+        std::printf("  %s = %s\n", name.c_str(), rendered.c_str());
+    }
+}
+
+// :time <expr> — evaluate <expr>, reporting wall-clock time alongside the
+// result.
+void cmdTime(Session& s, const std::string& arg) {
+    std::string expr = trim(arg);
+    if (expr.empty()) {
+        std::fprintf(stderr, ":time requires an expression\n");
+        return;
+    }
+    auto start = std::chrono::steady_clock::now();
+    bool ok = evaluate(s, expr, "<repl>", /*printIt=*/true);
+    auto end = std::chrono::steady_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(end - start).count();
+    if (ok)
+        std::printf("time: %.3f ms\n", ms);
+}
+
+// :history — show the most recent input lines.
+void cmdHistory() {
+    HIST_ENTRY** list = ::history_list();
+    if (!list || !list[0]) {
+        std::puts("(history empty)");
+        return;
+    }
+    int total = 0;
+    while (list[total]) ++total;
+    int from = total > 20 ? total - 20 : 0;
+    for (int i = from; i < total; ++i)
+        std::printf("  %d  %s\n", i + 1, list[i]->line);
+}
+
+// Dispatch a `:`-prefixed line. Returns true if the REPL should exit.
+bool dispatchMeta(Session& s, const std::string& trimmed) {
+    // Split into the command word and the remaining argument text.
+    size_t sp = trimmed.find_first_of(" \t");
+    std::string cmd = (sp == std::string::npos) ? trimmed : trimmed.substr(0, sp);
+    std::string arg = (sp == std::string::npos) ? std::string()
+                                                : trimmed.substr(sp + 1);
+
+    if (cmd == ":quit" || cmd == ":q") {
+        std::puts("bye");
+        return true;
+    }
+    if (cmd == ":help" || cmd == ":h") {
+        printHelp();
+        std::fflush(stdout);
+        return false;
+    }
+    if (cmd == ":load") {
+        cmdLoad(s, arg);
+        std::fflush(stdout);
+        return false;
+    }
+    if (cmd == ":reset") {
+        cmdReset(s);
+        std::fflush(stdout);
+        return false;
+    }
+    if (cmd == ":vars" || cmd == ":env") {
+        cmdVars(s);
+        std::fflush(stdout);
+        return false;
+    }
+    if (cmd == ":time") {
+        cmdTime(s, arg);
+        std::fflush(stdout);
+        return false;
+    }
+    if (cmd == ":history") {
+        cmdHistory();
+        std::fflush(stdout);
+        return false;
+    }
+    std::fprintf(stderr, "unknown command: %s\n", cmd.c_str());
+    return false;
 }
 
 } // namespace
@@ -192,8 +384,7 @@ int runRepl() {
     std::puts(":help for commands, :quit or Ctrl-D to exit");
     std::fflush(stdout);
 
-    STRuntime rt;
-    std::vector<std::unique_ptr<BytecodeModule>> retained;
+    Session session;
 
     const char* primary = "protoST> ";
     const char* continuation = "   ...> ";
@@ -218,16 +409,11 @@ int runRepl() {
         // Meta-commands are only recognised at the primary prompt (when not
         // in the middle of accumulating a multi-line form).
         if (!inMultiline && !trimmed.empty() && trimmed[0] == ':') {
-            if (trimmed == ":quit" || trimmed == ":q") {
-                std::puts("bye");
+            // Record the meta-command in history too so :history is honest.
+            if (interactive)
+                ::add_history(line.c_str());
+            if (dispatchMeta(session, trimmed))
                 break;
-            }
-            if (trimmed == ":help" || trimmed == ":h") {
-                printHelp();
-                std::fflush(stdout);
-                continue;
-            }
-            std::fprintf(stderr, "unknown command: %s\n", trimmed.c_str());
             continue;
         }
 
@@ -247,7 +433,7 @@ int runRepl() {
         // A blank line at the continuation prompt always forces evaluation so
         // the user can escape a stuck multi-line state.
         if (inMultiline && blankLine) {
-            evaluate(rt, retained, buffer);
+            evaluate(session, buffer, "<repl>", /*printIt=*/true);
             buffer.clear();
             inMultiline = false;
             std::fflush(stdout);
@@ -261,14 +447,14 @@ int runRepl() {
         }
         if (verdict == Completeness::Error) {
             // Surface the real error and reset.
-            evaluate(rt, retained, buffer);
+            evaluate(session, buffer, "<repl>", /*printIt=*/true);
             buffer.clear();
             inMultiline = false;
             std::fflush(stdout);
             continue;
         }
         // Complete.
-        evaluate(rt, retained, buffer);
+        evaluate(session, buffer, "<repl>", /*printIt=*/true);
         buffer.clear();
         inMultiline = false;
         std::fflush(stdout);

@@ -43,4 +43,51 @@ echo "$out" | grep -q ":quit" || { echo "FAIL: :help did not list commands"; ech
 # --- 9. Ctrl-D (EOF) exits cleanly with code 0 --------------------------------
 printf '5 + 5.\n' | "$PROTOST" -i >/dev/null 2>&1 || { echo "FAIL: EOF exit non-zero"; exit 1; }
 
+# --- 10. :help lists every meta-command ---------------------------------------
+out=$(run ':help\n:quit\n')
+for c in ':load' ':reset' ':vars' ':time' ':help' ':quit'; do
+    echo "$out" | grep -q "$c" || { echo "FAIL: :help missing $c"; echo "$out"; exit 1; }
+done
+
+# --- 11. :vars lists a user-defined variable ----------------------------------
+out=$(run 'w := 123.\n:vars\n:quit\n')
+echo "$out" | grep -q "w = 123" || { echo "FAIL: :vars did not list w"; echo "$out"; exit 1; }
+# A pristine session has no user globals.
+out=$(run ':vars\n:quit\n')
+echo "$out" | grep -q "no user-defined globals" || { echo "FAIL: :vars on empty session"; echo "$out"; exit 1; }
+
+# --- 12. :reset clears a previously-defined variable --------------------------
+out=$(run 'k := 99.\n:reset\nk.\n:quit\n')
+echo "$out" | grep -q "session reset" || { echo "FAIL: :reset not confirmed"; echo "$out"; exit 1; }
+echo "$out" | grep -qi "undefined global: k" || { echo "FAIL: :reset did not clear k"; echo "$out"; exit 1; }
+# The session is still usable after a reset.
+out=$(run 'a := 1.\n:reset\n8 + 8.\n:quit\n')
+echo "$out" | grep -q "=> 16" || { echo "FAIL: session unusable after :reset"; echo "$out"; exit 1; }
+
+# --- 13. :time reports a time and the correct result --------------------------
+out=$(run ':time 6 * 7\n:quit\n')
+echo "$out" | grep -q "=> 42" || { echo "FAIL: :time wrong result"; echo "$out"; exit 1; }
+echo "$out" | grep -q "time:.*ms" || { echo "FAIL: :time did not report a time"; echo "$out"; exit 1; }
+
+# --- 14. :load executes a .st file into the current session -------------------
+LOADFILE=$(mktemp /tmp/protost_replXXXX.st)
+trap 'rm -f "$LOADFILE"' EXIT
+printf "loadedVar := 7 * 8.\n" > "$LOADFILE"
+out=$(run ":load $LOADFILE\nloadedVar.\n:quit\n")
+echo "$out" | grep -q "loaded $LOADFILE" || { echo "FAIL: :load not confirmed"; echo "$out"; exit 1; }
+echo "$out" | grep -q "=> 56" || { echo "FAIL: :load definitions not available"; echo "$out"; exit 1; }
+# A missing file is reported, not fatal.
+out=$(run ':load /no/such/file.st\n2 + 2.\n:quit\n')
+echo "$out" | grep -q "cannot open" || { echo "FAIL: :load missing file not reported"; echo "$out"; exit 1; }
+echo "$out" | grep -q "=> 4" || { echo "FAIL: session died after bad :load"; echo "$out"; exit 1; }
+
+# --- 15. regression: script execution and -e are unaffected -------------------
+SCRIPTFILE=$(mktemp /tmp/protost_scriptXXXX.st)
+printf "3 + 39.\n" > "$SCRIPTFILE"
+"$PROTOST" "$SCRIPTFILE" | grep -qx 42 || { echo "FAIL: script execution affected"; rm -f "$SCRIPTFILE"; exit 1; }
+rm -f "$SCRIPTFILE"
+"$PROTOST" -e "20 + 22." | grep -qx 42 || { echo "FAIL: -e affected"; exit 1; }
+# Meta-commands must not be recognised by -e (it is a plain expression path).
+"$PROTOST" -e ":vars" >/dev/null 2>&1 && { echo "FAIL: -e treated :vars as a command"; exit 1; }
+
 echo OK

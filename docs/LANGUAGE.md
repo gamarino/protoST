@@ -1678,14 +1678,29 @@ The runtime executable is `protost`.
 
 `protost -i` starts a read-eval-print loop. It auto-detects incomplete input
 (unbalanced brackets, an unfinished multi-line method) and keeps reading at a
-continuation prompt. Each result is printed. Meta-commands begin with `:` —
-`:help` (`:h`) and `:quit` (`:q`) are supported; `Ctrl-D` also exits.
+continuation prompt. Each result is printed. The session is persistent:
+variables, classes and methods defined at one prompt remain available at the
+next.
 
-> The richer meta-command set from the design spec (`:load`, `:reload`,
-> `:edit`, `:time`, `:doc`) is not implemented. Bytecode compilation
-> (`protost compile`) is not implemented and is no longer advertised in the
-> usage text. `main:` selector auto-invocation is not implemented.
-> See [§14](#14-known-deviations).
+Meta-commands begin with `:` and are recognised only at the primary prompt
+(never mid multi-line input). An unrecognised `:foo` reports `unknown command`.
+
+| Command | Effect |
+|---------|--------|
+| `:help`, `:h` | List the meta-commands. |
+| `:quit`, `:q` | Exit the REPL (`Ctrl-D` also exits). |
+| `:load <path>` | Read a `.st` file and execute it in the current session. Its definitions and variables persist exactly as if the text had been typed. A clean run is confirmed; a parse / compile / runtime error is reported and the session continues. |
+| `:reset` | Discard all session state — every user variable, class and method — and start a fresh runtime. |
+| `:vars`, `:env` | List the user-defined globals in the session (variables and classes), each with a short rendering of its value. Built-in names (`Object`, `Array`, …) are not shown. |
+| `:time <expr>` | Evaluate `<expr>`, print its result, then report the wall-clock time it took. |
+| `:history` | Show the most recent input lines. |
+
+Meta-commands are a REPL feature only — they have no effect on
+`protost script.st` or `protost -e`.
+
+> Bytecode compilation (`protost compile`) is not implemented and is no longer
+> advertised in the usage text. `main:` selector auto-invocation is not
+> implemented. See [§14](#14-known-deviations).
 
 ### 13.2 Single runtime per process
 
@@ -1779,9 +1794,6 @@ noted in `docs/STATUS.md`):
 
 - **D10 — no `Transcript`.** The standard output-stream object is not
   provided; use `printNl`. *Affects:* [§12.9](#129-import).
-- **D14 — REPL meta-commands limited to `:help` / `:quit`.** `:load`,
-  `:reload`, `:edit`, `:time`, `:doc` are not implemented.
-  *Affects:* [§13.1](#131-the-repl).
 - **D17 — `thisContext` is reserved but inert.** It parses to its own node but
   the reflective context protocol is not built.
   *Affects:* [§3.10](#310-thiscontext).
