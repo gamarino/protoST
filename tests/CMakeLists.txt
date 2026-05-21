@@ -83,6 +83,9 @@ target_sources(protost_unit_tests PRIVATE
 target_sources(protost_unit_tests PRIVATE
     unit/test_t3c_addbehavior.cpp
 )
+target_sources(protost_unit_tests PRIVATE
+    unit/test_t5a_interop.cpp
+)
 target_compile_definitions(protost_unit_tests PRIVATE
     PROTOST_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures"
 )

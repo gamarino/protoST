@@ -650,12 +650,19 @@ const proto::ProtoObject* prim_Import_from(STRuntime& rt, proto::ProtoContext* c
         throw std::runtime_error("module not found: " + logical);
     }
     // F6 v3 E5: `wrapper` is a fresh object held across the `exportsKey`
-    // interning (first call allocates the symbol) and the getAttribute walk.
-    // Pin it.
+    // interning and the getAttribute walk. Pin it.
     TransientPin pinWrapper(ctx, wrapper);
     // Unwrap: getImportModule returns a wrapper with `exports` attribute
     // pointing to the module.
-    static const proto::ProtoString* exportsKey =
+    //
+    // T5-a: resolve `exportsKey` FRESH from the live ctx every call — symbols
+    // are interned per-ProtoSpace, so a function-local `static` would bind to
+    // the FIRST runtime's space and never match the `exports` attribute key
+    // that protoCore's getImportModule stamps on the wrapper in a LATER
+    // runtime's space (the multi-runtime unit harness, and any host embedding
+    // protoST alongside a foreign runtime). A stale key made the unwrap miss
+    // and return the wrapper itself, so `m Widget` saw `doesNotUnderstand`.
+    const proto::ProtoString* exportsKey =
         proto::ProtoString::createSymbol(ctx, "exports");
     auto* mod = wrapper->getAttribute(ctx, exportsKey);
     return (mod && mod != PROTO_NONE) ? mod : wrapper;

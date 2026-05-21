@@ -1716,4 +1716,41 @@ const proto::ProtoObject* STRuntime::loadModule(proto::ProtoContext* ctx, const 
     return mod;
 }
 
+// T5-a: consumer-side cross-language interop.
+//
+// protoST's constructor sets the space's resolution chain to just
+// `["provider:st"]` — its own UMD provider. protoCore's getImportModule walks
+// that chain entry-by-entry; for a `provider:<key>` entry it looks the key up
+// in the global ProviderRegistry. A foreign runtime's provider (protoJS,
+// protoPython, or a test stand-in) may be *registered* with the registry, but
+// it is never *reached* unless its spec is in this space's chain. This method
+// closes that gap: it appends a foreign provider spec to the chain, leaving
+// `provider:st` first so a same-named protoST module still shadows a foreign
+// one. The filesystem fallback that getImportModule applies after the chain is
+// unchanged.
+void STRuntime::addModuleProviderToChain(const std::string& providerSpec) {
+    if (providerSpec.empty()) return;
+    auto* ctx = impl_->rootCtx;
+
+    // The current chain is a ProtoList of ProtoString specs. Read it back,
+    // scan for an existing identical entry (idempotency), and append if absent.
+    const proto::ProtoObject* chainObj = impl_->space.getResolutionChain();
+    const proto::ProtoList* chain =
+        (chainObj && chainObj != PROTO_NONE) ? chainObj->asList(ctx) : nullptr;
+    if (!chain) chain = ctx->newList();
+
+    unsigned long n = chain->getSize(ctx);
+    for (unsigned long i = 0; i < n; ++i) {
+        const proto::ProtoObject* e = chain->getAt(ctx, static_cast<int>(i));
+        const proto::ProtoString* es = e ? e->asString(ctx) : nullptr;
+        if (es && es->toStdString(ctx) == providerSpec) {
+            return;  // already present — nothing to do
+        }
+    }
+
+    const proto::ProtoList* updated =
+        chain->appendLast(ctx, ctx->fromUTF8String(providerSpec.c_str()));
+    impl_->space.setResolutionChain(updated->asObject(ctx));
+}
+
 } // namespace protoST

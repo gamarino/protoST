@@ -122,6 +122,24 @@ public:
     // Loads a module by logical path with caching. Throws if not found.
     const proto::ProtoObject* loadModule(proto::ProtoContext* ctx, const std::string& logicalPath);
 
+    // T5-a (cross-language interop, consumer side). Appends a UMD provider
+    // spec to this space's module-resolution chain so that `Import from:` can
+    // reach modules published by another protoCore runtime (protoJS,
+    // protoPython, …) or any other registered `proto::ModuleProvider`.
+    //
+    // `providerSpec` is a UMD spec string in the form "provider:<alias>" or
+    // "provider:<guid>" — the same form protoCore's resolution chain uses; the
+    // provider itself must already be registered with
+    // `proto::ProviderRegistry::instance()`. Out of the box protoST's chain is
+    // just its own `provider:st` plus the filesystem fallback, so without this
+    // call a foreign provider is registered-but-unreachable. The foreign spec
+    // is appended *after* `provider:st`, so a protoST module of the same
+    // logical name still wins; a host embedding protoST alongside another
+    // runtime calls this once per foreign provider at startup.
+    //
+    // Idempotent: a spec already present in the chain is not added twice.
+    void addModuleProviderToChain(const std::string& providerSpec);
+
     inline const char* versionTag() const { return "0.1.0-pre"; }
 
 private:
