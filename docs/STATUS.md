@@ -108,6 +108,15 @@ are noted where useful.
       pseudo-random generator (`seed:`, `new`, `next`, `nextInt:`,
       `between:and:`, `next:`). Pure protoST, a 32-bit LCG; no new
       primitives *(track4, T4-c)*
+- [x] `lib/json.st` — the `JSON` module: `JSON parse:` (a JSON document →
+      `Dictionary` / `Array` / `String` / number / `Boolean` / `nil`,
+      recursive to any depth) and `JSON stringify:` (the inverse, with JSON
+      string escaping). A hand-written recursive-descent scanner, pure
+      protoST. Required two enabling additions, since the `String` protocol
+      previously exposed no character access: minimal `String` accessors
+      `at:` / `asInteger` and `Number>>asCharacter` (UTF-8-aware codepoint
+      conversion), and registering `String` / `Boolean` as globals so the
+      module can extend them with double-dispatch methods *(track4, T4-d)*
 
 ### Builtins / primitives
 - [x] Numeric tower: `SmallInteger`, `LargeInteger` and `Float` arithmetic &
@@ -119,7 +128,9 @@ are noted where useful.
 - [x] `Number` predicates `isEven` / `isOdd` *(closed: C2)*
 - [x] `Number` iteration helpers (`to:`, `to:by:`, `to:do:`, `to:by:do:`)
 - [x] `Boolean` `ifTrue:`, `ifFalse:`
-- [x] `String` / `Symbol` (`,`, `size`, `=`, `printNl`)
+- [x] `String` / `Symbol` (`,`, `size`, `=`, `~=`, `at:`, `asInteger`,
+      `printNl`); `Number>>asCharacter`. `size` and `at:` are codepoint-based
+      (UTF-8-aware) *(`at:` / `asInteger` / `asCharacter` added in T4-d)*
 - [x] `Block` evaluation and control-flow protocol
 
 ---

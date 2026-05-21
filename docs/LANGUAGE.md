@@ -1381,6 +1381,7 @@ thin wrappers over `<cmath>` (libm).
 | `between:and:` | inclusive range test `low <= self <= high` → a boolean |
 | `asFloat` | the receiver as a `Float` |
 | `asInteger` | the receiver as an integer (a `Float` is truncated toward zero) |
+| `asCharacter` | the integer code point as a 1-character `String` (the inverse of `String>>asInteger`) |
 | `even` `odd` | integer parity (aliases of `isEven` / `isOdd`) |
 | `factorial` | `1 * 2 * ... * n` on a non-negative integer — exact, promotes to `LargeInteger` |
 | `raisedTo:` | exponentiation — see below |
@@ -1421,9 +1422,16 @@ Class-side **constants** are bound on `Float`: `Float pi`, `Float e`,
 | Selector | Meaning |
 |----------|---------|
 | `,` | concatenation → a new `String` |
-| `size` | character count |
+| `size` | character count (Unicode codepoints) |
+| `at:` | the n-th character (1-based) as a 1-character `String`; an out-of-bounds index signals an `Error` |
+| `asInteger` | the Unicode code point of the first character (`nil` for the empty string) |
 | `=` `~=` | content equality / inequality |
 | `printNl` | print followed by a newline |
+
+> protoST has no distinct `Character` type — a character is a 1-character
+> `String` — so `'abc' at: 2` answers the `String` `'b'`. `Number>>asCharacter`
+> is the inverse of `String>>asInteger`: it answers the 1-character `String`
+> for a Unicode code point.
 
 ### 12.5 `Block`
 

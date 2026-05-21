@@ -298,6 +298,17 @@ struct STRuntime::Impl {
             proto::ProtoString::createSymbol(rootCtx, "Float"),
             bootstrap.floatProto);
 
+        // Register `String` and `Boolean` in globals so user code (and stdlib
+        // modules) can name them — to extend them with `String >> selector`
+        // double-dispatch methods, the same way `Number` is nameable. Their
+        // prototypes already exist; only the global binding was missing.
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "String"),
+            bootstrap.stringProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "Boolean"),
+            bootstrap.booleanProto);
+
         // F6 v3 E2b: create the single live-registry GC root and pin it.
         //
         // This is the ONLY object ever handed to asyncRoots->add(). Every
