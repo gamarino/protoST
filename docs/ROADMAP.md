@@ -204,6 +204,60 @@ Python.
 **Dependencies:** grows with the language; the basics can start immediately.
 **Size:** ongoing.
 
+Tracks 8 and 9 develop this onboarding goal in depth — the tutorial and the
+example set are its concrete deliverables.
+
+### Track 8 — A dual-audience tutorial
+
+**Goal:** one extensive, complete tutorial that teaches protoST to two
+audiences at once.
+
+- **For developers coming from Python or JavaScript** — teach Smalltalk from
+  the ground up, with a constant mental bridge to concepts they already know:
+  objects and message sends vs. methods/function calls; blocks vs.
+  lambdas/closures/arrow functions; "there are no control-flow keywords —
+  `ifTrue:`/`whileTrue:` are messages"; keyword messages vs. named arguments;
+  prototypes and classes; the absence of a statement/expression split; etc.
+  Every new idea is introduced against its Python/JS analogue.
+- **For traditional Smalltalk programmers** — show clearly where protoST
+  *departs* from standard Smalltalk: the actor model and futures, cooperative
+  yield, the non-standard object-model features (multiple inheritance, class
+  aggregates, mixins — Track 3), the module/venv system, and every documented
+  deviation in `docs/LANGUAGE.md` §"Known deviations". A Smalltalker should be
+  able to read one section and know exactly what is and is not the dialect
+  they know.
+
+As extensive and complete as possible — progressive, from first message send
+through classes, blocks, exceptions, collections, actors, and digital-twin
+patterns. Built on `docs/LANGUAGE.md` (the language reference, Track 6).
+
+**Why it matters:** protoST's natural audiences are exactly JS/Python
+developers and Smalltalkers; a tutorial that speaks to both directly is the
+single biggest lever on adoption.
+
+**Dependencies:** the language reference (Track 6, slice 1, done); grows as
+Tracks 3–5 land.
+**Size:** large.
+
+### Track 9 — A comprehensive example set
+
+**Goal:** an extensive set of complete, idiomatic, runnable protoST programs,
+covering every feature: the object model, blocks and closures, collections,
+exceptions, actors and futures, modules, and digital-twin patterns.
+
+- Examples may live embedded in the Track 8 tutorial *and* as standalone files
+  under `examples/` — ideally both: the tutorial references runnable examples.
+- Every example is executable and verified; the example set doubles as a
+  smoke layer for the Track 6 conformance suite.
+- Range from one-liners illustrating a single selector to full small programs
+  (a digital-twin simulation, a worked actor pipeline, a parser, …).
+
+**Why it matters:** runnable examples are the most trustworthy documentation
+and the fastest way for a newcomer to get productive.
+
+**Dependencies:** the language; grows with every feature.
+**Size:** open-ended — one example is one contribution.
+
 ---
 
 ## Beyond the language: the digital-twin layer
@@ -229,14 +283,16 @@ enables.
   Track 5 (cross-language interop)   ── parallel, needs cross-project design
   Track 6 (defensible test suite)    ── starts now, runs continuously
   Track 7 (onboarding)               ── starts now, grows continuously
+  Track 8 (dual-audience tutorial)   ── after the language reference (Track 6)
+  Track 9 (comprehensive examples)   ── grows with every feature
 ```
 
 A reasonable **1.0 milestone**: language core complete (Track 1), the
 collection hierarchy (Track 2), an essential standard library (a first slice
-of Track 4), a defensible test suite (Track 6), and basic onboarding (Track 7).
-The showcase tracks (3, 5) and the digital-twin layer can land before or after
-1.0 — they are what make protoST *interesting*, but 1.0 is what makes it
-*usable*.
+of Track 4), a defensible test suite (Track 6), and onboarding — the tutorial
+and example set (Tracks 7–9). The showcase tracks (3, 5) and the digital-twin
+layer can land before or after 1.0 — they are what make protoST *interesting*,
+but 1.0 is what makes it *usable*.
 
 ## Contributing
 
