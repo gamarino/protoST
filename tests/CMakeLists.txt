@@ -66,3 +66,25 @@ target_compile_definitions(protost_unit_tests PRIVATE
     PROTOST_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures"
 )
 catch_discover_tests(protost_unit_tests)
+
+# --- conformance suite (Track 6, slice 2) --------------------------------
+# A defensible suite derived from docs/LANGUAGE.md. Every tests/conformance/
+# **/*.st program is registered as one CTest case, run black-box through the
+# protost binary by run_conformance.sh. Module-helper files prefixed with `_`
+# are importable libraries, not standalone tests, and are excluded.
+file(GLOB_RECURSE PROTOST_CONFORMANCE_FILES
+    CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/conformance/*.st")
+foreach(conf_file ${PROTOST_CONFORMANCE_FILES})
+    get_filename_component(conf_name "${conf_file}" NAME)
+    string(SUBSTRING "${conf_name}" 0 1 conf_first)
+    if(conf_first STREQUAL "_")
+        continue()
+    endif()
+    file(RELATIVE_PATH conf_rel
+        "${CMAKE_CURRENT_SOURCE_DIR}/conformance" "${conf_file}")
+    add_test(NAME "conformance/${conf_rel}"
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/conformance/run_conformance.sh
+                $<TARGET_FILE:protost>
+                "${conf_file}")
+endforeach()
