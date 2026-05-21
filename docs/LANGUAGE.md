@@ -71,7 +71,8 @@ Notable deliberate departures from Smalltalk-80:
 - **Actors and futures are built in**, not a library.
 - protoCore supports multiple parents; protoST exposes this through the
   `uses:` mixin clause (§4.11) — a class may inherit from several superclasses
-  / mixins.
+  / mixins — and through `addBehavior:` (§4.12), which composes a behaviour
+  into a class at runtime with no recompilation.
 
 ### 1.2 A first example
 
@@ -745,9 +746,52 @@ exactly as it does its own (instance variables are resolved by name on `self`,
 walking the prototype chain).
 
 > A class assembled with `uses:` has its full parent chain baked in at
-> definition time, before any instance exists. Adding a parent to a class
-> *after* instances have been created is a separate, on-the-fly capability
-> (Track 3, T3-c).
+> definition time, before any instance exists. Composing a *further*
+> behaviour into a class *after* it is defined is the on-the-fly capability
+> of §4.12.
+
+### 4.12 On-the-fly behaviour composition (`addBehavior:`)
+
+A behaviour can be composed into a class **at runtime**, with no
+recompilation. A *behaviour* is just a mixin — an ordinary class carrying
+methods. `addBehavior:` adds it as a further parent of the class:
+
+```smalltalk
+Object subclass: #Greeter.
+Object subclass: #Loud.
+Loud >> shout  ^ 'HEY!'.
+
+Greeter addBehavior: Loud.
+(Greeter newChild) shout.   "=> 'HEY!' — Greeter gained Loud's behaviour at runtime"
+```
+
+After `addBehavior:`, the class object **and every instance created from it
+afterwards** respond to the mixin's methods. The class keeps all of its own
+methods, its instance variables, and its `super` path; the mixin is searched
+**after** the class's existing superclass / `uses:` subtrees, consistent with
+the [§4.11] resolution order. `addBehavior:` composes freely with `uses:` — a
+class defined with mixins can be given still more behaviour later — and may be
+called more than once.
+
+`addParent:` is a lower-level alias of `addBehavior:` — the same operation
+named after the underlying prototype mechanism.
+
+This is the most direct demonstration of what the prototype kernel allows: a
+class's behaviour assembled incrementally at runtime from independent mixins.
+
+> **Future instances only.** `addBehavior:` affects the class object and every
+> instance created *after* the call. An instance created *before* the call
+> does **not** gain the new behaviour — it keeps the parent chain it was
+> constructed with. This is a deliberate, documented limitation
+> (`STATUS.md` D21): protoCore freezes an object's parent chain into its base
+> cell at construction, so a class can only present a new chain to *future*
+> instances. (Methods installed directly on a class with `>>` *are* seen by
+> pre-existing instances — only new *parents* are not.) Lifting this to "all
+> instances" would require a protoCore change and is out of scope today.
+
+`removeBehavior:` is **not provided**: protoCore's parent API offers no clean
+removal of a parent baked into a frozen base chain, so it is out of scope for
+this release.
 
 ---
 

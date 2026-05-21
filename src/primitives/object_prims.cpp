@@ -378,6 +378,150 @@ const proto::ProtoObject* makeSubclassWithMixins(
 }
 } // namespace
 
+// --- T3-c: on-the-fly behaviour composition --------------------------------
+//
+// `aClass addBehavior: aMixin` composes a behaviour (a mixin — just a class
+// carrying methods) into a class at runtime, with no recompilation. After the
+// call the class — and every instance created AFTER the call — responds to the
+// mixin's methods.
+//
+// THE PROTOCORE CONSTRAINT (probed directly, see commit message / docs):
+// protoCore freezes an object's parent chain into its BASE CELL at
+// construction. `newChild` copies that frozen base chain; a later `addParent`
+// or `setParents` on the (mutable) class mutates only the class object's own
+// snapshot — which children created by `newChild` never read. Crucially this
+// was found to hold even for instances created AFTER the mutation: a plain
+// `aClass addParent: aMixin` is invisible to ALL of that class's instances,
+// past and future. (Method *attributes* installed directly on the class via
+// `>>` ARE seen by existing instances — lookup reaches the class object and
+// reads its current own-attributes — but new *parents* are not.)
+//
+// Therefore `addBehavior:` cannot simply mutate the class. It REBUILDS the
+// class as a fresh object whose base cell carries the mixin:
+//
+//   1. Take the old class's full (flattened) parent chain via `getParents`.
+//   2. Build an immutable "shape" — `addParent` on an immutable cell bakes the
+//      parent and its de-duplicated ancestors into the BASE chain — carrying
+//      [old-parents…, aMixin], so the mixin is searched AFTER the existing
+//      superclass/`uses:` subtrees (consistent with `uses:` resolution order).
+//   3. The new class is a mutable `newChild` of that shape.
+//   4. Copy every OWN attribute of the old class onto the new class — its
+//      methods, `__class_name__`, class-side methods. The new class is thus a
+//      single object carrying all the old behaviour PLUS the mixin in its base
+//      chain, so `newChild` instances inherit everything.
+//   5. Rebind the class's global name to the new object, so subsequent
+//      `ClassName` references (every `PUSH_GLOBAL` re-resolves) and subsequent
+//      `ClassName >> sel` method installs land on the rebuilt class.
+//
+// Because the rebuilt class is a single object (the old class is NOT kept in
+// the chain), there is exactly one entry carrying the class's `__class_name__`
+// — so `super` (which locates the defining class by walking the receiver's
+// chain for a name match) stays correct for methods defined before OR after
+// the `addBehavior:` call.
+//
+// DOCUMENTED LIMITATION — pre-existing instances. An instance created before
+// `addBehavior:` froze its parent chain at its own construction; it keeps the
+// old chain and does NOT gain the mixin. Lifting this would require a
+// protoCore change to make `newChild`-frozen chains observe later parent
+// mutations — out of scope for this slice. `addBehavior:` therefore has
+// "future instances" semantics: it affects the class object and instances
+// created after the call.
+
+namespace {
+// Rebuild `oldCls` as a fresh class object inheriting every parent of
+// `oldCls` plus `mixin` (added last → searched after the existing parents),
+// carrying a copy of every own attribute of `oldCls`. Rebinds the class's
+// global name to the rebuilt object and returns it.
+const proto::ProtoObject* addBehaviorToClass(STRuntime& rt,
+                                             proto::ProtoContext* ctx,
+                                             const proto::ProtoObject* oldCls,
+                                             const proto::ProtoObject* mixin) {
+    if (!oldCls || oldCls == PROTO_NONE)
+        throw std::runtime_error("addBehavior:: receiver is nil");
+    if (!mixin || mixin == PROTO_NONE)
+        throw std::runtime_error("addBehavior:: behaviour (mixin) is nil");
+
+    // Build the immutable shape carrying [old parents…, mixin]. `addParent`
+    // PREPENDS at the chain head, so to leave the head-first walk order
+    //   [old-parent0, old-parent1, …, mixin]
+    // the mixin is added first (becomes the tail-most non-Object entry) and
+    // the old parents are added in reverse so parent 0 ends at the head.
+    const proto::ProtoObject* shape =
+        rt.bootstrap().objectProto->newChild(ctx, /*isMutable=*/false);
+    TransientPin pinShape(ctx, shape);
+    shape = shape->addParent(ctx, mixin);
+    pinShape.reset(shape);
+    const proto::ProtoList* oldParents = oldCls->getParents(ctx);
+    if (oldParents) {
+        for (long i = static_cast<long>(oldParents->getSize(ctx)) - 1; i >= 0;
+             --i) {
+            const proto::ProtoObject* p =
+                oldParents->getAt(ctx, static_cast<int>(i));
+            if (!p || p == PROTO_NONE) continue;
+            shape = shape->addParent(ctx, p);
+            pinShape.reset(shape);
+        }
+    }
+
+    // The rebuilt class: a mutable child of the shape, so `>>` can keep
+    // installing methods in place and the base chain carries the mixin.
+    auto* newCls = shape->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinNew(ctx, newCls);
+
+    // Copy every OWN attribute of the old class onto the rebuilt class — its
+    // methods, `__class_name__`, class-side markers. getOwnAttributes does NOT
+    // walk the parent chain, so only the class's own behaviour is copied; the
+    // inherited behaviour comes from the shape's parent chain.
+    const proto::ProtoSparseList* own = oldCls->getOwnAttributes(ctx);
+    if (own) {
+        auto* it = const_cast<proto::ProtoSparseListIterator*>(
+            own->getIterator(ctx));
+        while (it && it->hasNext(ctx)) {
+            unsigned long key = it->nextKey(ctx);
+            const proto::ProtoObject* val = it->nextValue(ctx);
+            // The own-attribute key is an interned-symbol ProtoString whose
+            // pointer is stored as the sparse-list index.
+            auto* sym = reinterpret_cast<const proto::ProtoObject*>(key)
+                            ->asString(ctx);
+            if (sym) newCls->setAttribute(ctx, sym, val);
+            it = const_cast<proto::ProtoSparseListIterator*>(it->advance(ctx));
+        }
+    }
+
+    // Rebind the class's global name to the rebuilt object so subsequent
+    // `ClassName` PUSH_GLOBALs and `ClassName >> sel` installs see it.
+    const proto::ProtoString* nameKey =
+        proto::ProtoString::createSymbol(ctx, "__class_name__");
+    const proto::ProtoObject* nameObj =
+        oldCls->getOwnAttributeDirect(ctx, nameKey);
+    if (nameObj && nameObj != PROTO_NONE) {
+        auto* nameStr = nameObj->asString(ctx);
+        if (nameStr) {
+            std::string name = nameStr->toStdString(ctx);
+            auto* nameSym =
+                proto::ProtoString::createSymbol(ctx, name.c_str());
+            if (auto* g = rt.globals()) g->setAttribute(ctx, nameSym, newCls);
+        }
+    }
+    return newCls;
+}
+} // namespace
+
+// aClass addBehavior: aMixin   (alias: aClass addParent: aClass2)
+//   → composes `aMixin`'s behaviour into `aClass` at runtime. Returns the
+//     rebuilt class. The class object and every instance created AFTER the
+//     call respond to the mixin's methods; pre-existing instances keep the
+//     parent chain frozen at their construction (see docs/LANGUAGE.md §4.12).
+const proto::ProtoObject* prim_Object_addBehavior(STRuntime& rt,
+                                                  proto::ProtoContext* ctx,
+                                                  const proto::ProtoObject* r,
+                                                  const proto::ProtoObject* const* a,
+                                                  int argc) {
+    if (argc != 1)
+        throw std::runtime_error("addBehavior: expects 1 arg (a mixin class)");
+    return addBehaviorToClass(rt, ctx, r, a[0]);
+}
+
 // superClass subclass: #Name uses: aCollection
 //   → fresh named subclass of superClass that also inherits each class in the
 //     `uses:` collection. The expression-receiver counterpart of the textual
@@ -631,6 +775,15 @@ void installObjectPrimitives(STRuntime& rt) {
                   reg.registerPrim(prim_Object_subclassUses));
     bindPrimitive(rt, b.objectProto, "subclass:instanceVariableNames:uses:",
                   reg.registerPrim(prim_Object_subclassIvarsUses));
+    // T3-c: on-the-fly behaviour composition. `addBehavior:` composes a mixin
+    // into a class at runtime by rebuilding the class with the mixin baked
+    // into its base chain; `addParent:` is a lower-level alias. Affects the
+    // class and instances created after the call (see docs/LANGUAGE.md §4.12).
+    {
+        auto addBehaviorPrim = reg.registerPrim(prim_Object_addBehavior);
+        bindPrimitive(rt, b.objectProto, "addBehavior:", addBehaviorPrim);
+        bindPrimitive(rt, b.objectProto, "addParent:", addBehaviorPrim);
+    }
     bindPrimitive(rt, b.objectProto, "printString",
                   reg.registerPrim(prim_Object_printString));
     // F6 v2 T6: sleep primitive — test-only helper for the wall-clock

@@ -14,12 +14,13 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Baseline:** 694/694 tests passing at the T3-b commit (686 carried over,
-  plus 7 new `mixin-*` object-model conformance tests and 1 new
-  `test_t3b_mixins` unit case). Previous baseline 686/686 at `0d5e762`
-  (Track 3, T3-a); 622/622 at `MNT-c`.
-- **Last verified:** 2026-05-21 (the T3-b slice — multiple inheritance /
-  mixins via `uses:` — landed and the whole suite re-run three times green).
+- **Baseline:** 699/699 tests passing at the T3-c commit (694 carried over,
+  plus 4 new `addbehavior-*` object-model conformance tests and 1 new
+  `test_t3c_addbehavior` unit case). Previous baseline 694/694 at `a464247`
+  (Track 3, T3-b); 686/686 at `0d5e762` (Track 3, T3-a); 622/622 at `MNT-c`.
+- **Last verified:** 2026-05-21 (the T3-c slice — on-the-fly behaviour
+  composition via `addBehavior:` — landed and the whole suite re-run twice
+  green; Track 3 complete).
 - **Id scheme:** `D1..D18` are carried over from `LANGUAGE.md` §14 and keep
   their original meaning. New divergences get new ids (`D19+`).
 
@@ -61,6 +62,11 @@ are noted where useful.
       depth-first, left-to-right — the primary superclass subtree first, then
       each mixin subtree in listed order; the diamond case resolves to the
       first in that order. Mixin instance variables work. *(Track 3, T3-b)*
+- [x] **On-the-fly behaviour composition** — `aClass addBehavior: aMixin`
+      (lower-level alias `addParent:`) composes a behaviour into a class at
+      runtime with no recompilation. The class object and every instance
+      created *after* the call respond to the mixin's methods. *(Track 3,
+      T3-c)* — see D20 for the documented "future instances only" limitation.
 
 ### Blocks / closures
 - [x] Block syntax, 0–4 argument blocks
@@ -168,6 +174,7 @@ decisions, not defects; they stay, documented with their rationale.
 | D4 | **`new` does not auto-invoke `initialize`.** `ClassName new` returns a raw instance; the caller sends `initialize` explicitly. | A deliberate MVP semantics choice: `new` is the raw allocator and nothing more. Standard Smalltalk-80 defines `new` as `super new initialize`; protoST may adopt that later, but today the explicit two-step is the documented contract (§4.4). *(Intent is genuinely a judgement call — most Smalltalkers would expect auto-`initialize`. Left intentional because it is consistently documented and self-consistent; revisit if Track 1/3 decides to align with Smalltalk-80.)* |
 | D7 | **`outer` is an alias of `pass`.** | MVP simplification of the handler protocol. True `outer` semantics (run the enclosing handler, then *return to the inner* handler) require resumable handler re-entry that is not built. `pass` (continue the search outward, do not return) is the shipped behaviour and covers the common case. Closing this is a strict-semantics refinement, not a correctness fix. |
 | D12 | **No `main:` auto-invocation.** A script is simply its top-level forms run in order; the printed value is the last top-level statement. | Deliberate CLI semantics: protoST scripts are sequences of top-level forms, not programs with an entry point. Documented in §13. |
+| D21 | **`addBehavior:` affects future instances only.** `aClass addBehavior: aMixin` makes the class object and every instance created *after* the call respond to the mixin's methods; an instance created *before* the call does **not** gain them. | protoCore freezes an object's parent chain into its base cell at construction — `newChild` copies that frozen chain, and a later `addParent`/`setParents` on the class is invisible to the class's instances (verified by direct probing: even instances created *after* the mutation do not see it). `addBehavior:` therefore rebuilds the class with the mixin baked into the base chain and rebinds the global; this necessarily produces a new chain that only *future* `newChild` instances copy. Method *attributes* installed directly on a class (via `>>`) **are** seen by pre-existing instances — only new *parents* are not. Lifting D21 (making `newChild`-frozen chains observe later parent mutations) is a protoCore-level change, deliberately out of scope for this slice. Documented in `LANGUAGE.md` §4.12. *(Borderline: a real constraint born of a protoCore design choice; classified intentional because protoST exposes a genuinely useful capability — runtime behaviour composition with no recompilation — within the constraint rather than working around it. If protoCore ever makes parent chains live, this item simply closes and `addBehavior:` gains "all instances" semantics.)* |
 
 ---
 
