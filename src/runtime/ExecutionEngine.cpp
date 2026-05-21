@@ -933,6 +933,12 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // receiver's own class while still finding the inherited
                 // implementation.
                 const proto::ProtoObject* lookupFrom = recv;
+                // T3-b: when a `super` send resolves the inherited method by
+                // a multi-parent depth-first walk, the resolved attribute is
+                // captured here so the shared lookup below uses it directly
+                // rather than re-running getAttribute from a single node.
+                bool superResolved = false;
+                const proto::ProtoObject* superResolvedAttr = nullptr;
                 if (isSuperSend) {
                     const std::string& defCls = f.m->definingClass();
                     if (defCls.empty())
@@ -961,11 +967,21 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         proto::ProtoString::createSymbol(ctx, "__class_name__");
                     const proto::ProtoObject* defClsObj = nullptr;
                     {
-                        // Bounded walk up the parent chain starting at the
-                        // receiver. Single inheritance: follow parent 0.
-                        const proto::ProtoObject* node = recv;
-                        for (int hops = 0; node && node != PROTO_NONE
-                                 && hops < 256; ++hops) {
+                        // T3-b: bounded depth-first, left-to-right walk over
+                        // the FULL parent list, starting at the receiver. With
+                        // single inheritance this follows parent 0, identical
+                        // to the pre-T3-b behaviour. With multiple parents
+                        // (a `uses:` class) the defining class may be reached
+                        // through any parent subtree — a mixin's own method
+                        // doing a `super` send — so every parent must be
+                        // searched, in resolution order.
+                        std::vector<const proto::ProtoObject*> stack;
+                        stack.push_back(recv);
+                        for (int hops = 0; !stack.empty() && hops < 4096;
+                             ++hops) {
+                            const proto::ProtoObject* node = stack.back();
+                            stack.pop_back();
+                            if (!node || node == PROTO_NONE) continue;
                             auto* own =
                                 node->getOwnAttributeDirect(ctx, classNameSym);
                             if (own && own != PROTO_NONE) {
@@ -977,9 +993,15 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                                 }
                             }
                             auto* ps = node->getParents(ctx);
-                            node = (ps && ps->getSize(ctx) > 0)
-                                       ? ps->getAt(ctx, 0)
-                                       : nullptr;
+                            if (ps) {
+                                // Push parents in reverse so the depth-first
+                                // pop order is left-to-right (parent 0 first).
+                                unsigned long sz = ps->getSize(ctx);
+                                for (unsigned long k = sz; k > 0; --k)
+                                    stack.push_back(
+                                        ps->getAt(ctx,
+                                                  static_cast<int>(k - 1)));
+                            }
                         }
                     }
                     if (!defClsObj || defClsObj == PROTO_NONE) {
@@ -998,18 +1020,55 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     if (!defClsObj || defClsObj == PROTO_NONE)
                         throw std::runtime_error(
                             "super: cannot resolve defining class " + defCls);
-                    // First parent of the defining class is the superclass
-                    // proto where inherited methods are bound.
+                    // T3-b: `super` across multiple parents. Single
+                    // inheritance has one parent; the defining class then has
+                    // exactly one place the inherited method can live, and the
+                    // pre-T3-b behaviour (search parent 0) is unchanged.
+                    //
+                    // With multiple parents (a class assembled with `uses:`
+                    // mixins) the inherited implementation may live in ANY of
+                    // the defining class's parent subtrees. `super` must take
+                    // the NEXT class in the resolution order after the
+                    // defining class: depth-first, left-to-right over
+                    // `getParents` — the primary superclass subtree first,
+                    // then each mixin subtree in listed order. The diamond
+                    // case (a selector reachable via two parents) resolves to
+                    // the first in this order.
+                    //
+                    // `getAttribute` already performs the depth-first walk of
+                    // a single subtree (the node itself plus its parents), so
+                    // searching each parent in order via `getAttribute` and
+                    // taking the first non-nil hit yields exactly that order.
                     auto* parents = defClsObj->getParents(ctx);
-                    const proto::ProtoObject* superProto = nullptr;
-                    if (parents && parents->getSize(ctx) > 0)
-                        superProto = parents->getAt(ctx, 0);
-                    if (!superProto || superProto == PROTO_NONE)
+                    if (!parents || parents->getSize(ctx) == 0)
                         throw std::runtime_error(
                             "super: class " + defCls + " has no superclass");
-                    lookupFrom = superProto;
+                    const proto::ProtoObject* superAttr = nullptr;
+                    unsigned long pcount = parents->getSize(ctx);
+                    for (unsigned long pi = 0; pi < pcount; ++pi) {
+                        const proto::ProtoObject* parent =
+                            parents->getAt(ctx, static_cast<int>(pi));
+                        if (!parent || parent == PROTO_NONE) continue;
+                        const proto::ProtoObject* hit =
+                            parent->getAttribute(ctx, selSym);
+                        if (hit && hit != PROTO_NONE) {
+                            superAttr = hit;
+                            break;
+                        }
+                    }
+                    // Reaching here with no hit means no parent subtree
+                    // defines the selector — fall through to `doesNotUnderstand`
+                    // exactly as a normal failed lookup would. Anchor the
+                    // lookup at parent 0 so the unresolved path below still has
+                    // a coherent `lookupFrom` (its getAttribute also returns
+                    // nil, so the doesNotUnderstand signal fires).
+                    superResolvedAttr = superAttr;
+                    superResolved = true;
+                    lookupFrom = parents->getAt(ctx, 0);
                 }
-                auto* attr = lookupFrom->getAttribute(ctx, selSym);
+                auto* attr = superResolved
+                                 ? superResolvedAttr
+                                 : lookupFrom->getAttribute(ctx, selSym);
                 // D5 (MNT-b2): class-side / instance-side isolation. A method
                 // installed by `ClassName class >> sel` carries the
                 // `__class_side__` marker (stamped by __installClassMethod:as:).

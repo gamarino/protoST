@@ -69,9 +69,9 @@ Notable deliberate departures from Smalltalk-80:
 - **Prototype-based kernel.** A class is a prototype object; an instance is a
   child of that prototype. Inheritance is prototype-chain delegation.
 - **Actors and futures are built in**, not a library.
-- protoCore supports multiple parents, so protoST is not fundamentally
-  single-inheritance, although the surface syntax exposes only single
-  inheritance today.
+- protoCore supports multiple parents; protoST exposes this through the
+  `uses:` mixin clause (§4.11) — a class may inherit from several superclasses
+  / mixins.
 
 ### 1.2 A first example
 
@@ -304,6 +304,7 @@ class object and install the method); see [§4](#4-the-object-model).
 classDecl  ::=  Identifier 'subclass:' SymbolLit
                   ( 'instanceVariableNames:' StringLit )?
                   ( 'classVariableNames:'    StringLit )?
+                  ( 'uses:'                  Expression )?
                   '.'?
 ```
 
@@ -324,6 +325,16 @@ The trailing `.` is optional. An empty `classVariableNames: ''` clause is a
 documented no-op. A *non-empty* `classVariableNames:` clause is rejected with a
 compile-time diagnostic: class variables are not yet implemented (tracked as
 D19 in `docs/STATUS.md`), so the clause is no longer silently discarded.
+
+The optional `uses:` clause declares **multiple inheritance / mixins** — see
+§4.7. It takes a collection of class objects (typically a `{ … }` dynamic
+array) which become additional parents alongside the primary superclass.
+
+`subclass:` is also an ordinary message understood by every class object, so a
+class reached through an *expression* — for instance a class imported from a
+module — can be subclassed too: `(lib Counter) subclass: #Fast`. The
+`uses:` clause has the same expression-receiver form:
+`(lib Counter) subclass: #Fast uses: { LoggingMixin }`.
 
 ### 3.3 Method definitions
 
@@ -590,6 +601,12 @@ class's superclass. This makes `super` correct even when the defining class is
 not a top-level global — notably a class defined inside an imported module
 (see [§4.10]).
 
+When the defining class has **several parents** (a class assembled with
+`uses:` mixins — see §4.11), `super` searches them in the documented
+resolution order: the primary superclass subtree first, then each mixin
+subtree in listed order. It binds to the first match. With a single parent
+this is identical to the single-inheritance behaviour above.
+
 ### 4.7 Class-side methods
 
 A method defined with the `class` marker — `ClassName class >> selector` — is
@@ -683,6 +700,55 @@ How it works:
 > When the superclass is reached through an expression — a module attribute, a
 > block result, an array element — the message form above applies.
 
+### 4.11 Multiple inheritance and mixins (`uses:`)
+
+A class may be defined with **several superclasses / mixins**. A *mixin* is not
+a separate kind of entity — it is just a class. "Mixing in" means adding that
+class as an additional parent. The `uses:` clause of a class declaration takes
+a collection of class objects (typically a `{ … }` dynamic array) to add as
+extra parents, alongside the primary superclass:
+
+```smalltalk
+Object subclass: #Comparable.
+Comparable >> > other  ^ (self compareTo: other) > 0.
+Comparable >> < other  ^ (self compareTo: other) < 0.
+
+Object subclass: #Printable.
+Printable >> describe  ^ 'a ', self typeName.
+
+Object subclass: #Money
+  instanceVariableNames: 'cents'
+  uses: { Comparable. Printable }.
+
+Money >> compareTo: other  ^ cents - other cents.
+Money >> typeName         ^ 'Money'.
+"A Money now understands >, < (from Comparable) and describe (from Printable)."
+```
+
+`uses:` is also available in the message form, so the primary superclass may
+be an expression — including a class imported from a module:
+`(lib Counter) subclass: #Fast uses: { LoggingMixin }`. The two forms
+`subclass:uses:` and `subclass:instanceVariableNames:uses:` are ordinary
+messages on every class object.
+
+**Resolution order.** Method and attribute lookup walks the parents
+**depth-first, left-to-right**: the primary superclass subtree first, then each
+`uses:` mixin subtree in the order listed. A selector reachable through two
+parents (the *diamond* case) resolves to the **first** in this order; shared
+ancestors are visited once. `super` from a method of a multiply-inheriting
+class searches this same order, starting after the method's defining class.
+
+**Instance variables.** Each parent may declare its own instance variables;
+they combine as the union. A mixin declaring `instanceVariableNames:` works as
+a parent — an instance of the using class reads and writes the mixin's ivars
+exactly as it does its own (instance variables are resolved by name on `self`,
+walking the prototype chain).
+
+> A class assembled with `uses:` has its full parent chain baked in at
+> definition time, before any instance exists. Adding a parent to a class
+> *after* instances have been created is a separate, on-the-fly capability
+> (Track 3, T3-c).
+
 ---
 
 ## 5. Messages and dispatch
@@ -721,9 +787,15 @@ an error message).
 ### 5.3 `super` dispatch
 
 A `super`-send (`super selector ...`) is resolved exactly as in [§5.1] except
-that the lookup begins at the **first parent of the defining method's class**,
+that the lookup begins at the **parents of the defining method's class**,
 skipping any override on the receiver itself. The receiver bound to `self` in
 the invoked method is still the original receiver.
+
+With single inheritance the defining class has one parent and the lookup
+begins there. With multiple parents (a class assembled with `uses:` mixins —
+see §4.11) the parents are searched in the resolution order: the primary
+superclass subtree first, then each mixin subtree in listed order; `super`
+binds to the first match.
 
 The defining class is located by walking the receiver's prototype chain by
 **object identity** for the class whose name matches the one the compiler

@@ -235,9 +235,58 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         // the module-level loop will POP it between statements).
         const std::string& superName =
             n.stringList.empty() ? std::string("Object") : n.stringList[0];
+        auto classNameIdx = m.internSymbol(n.text);
+
+        // T3-b: multiple inheritance / mixins. A `uses: { … }` clause is
+        // stored as the ClassDecl node's single child (an expression yielding
+        // a collection of class objects). When present, the new class must be
+        // assembled with ALL its parents baked into the prototype chain BEFORE
+        // any instance is created — protoCore freezes an object's parent chain
+        // at construction, so a parent added afterwards is invisible to
+        // instances. The class is therefore built by the `subclass:uses:`
+        // runtime primitive, which assembles the full chain in one shot.
+        // The textual form desugars to a genuine message send to the
+        // superclass: `superGlobal subclass: #Name uses: <mixins>`.
+        if (!n.children.empty() && n.children[0]) {
+            auto superIdx = m.internSymbol(superName);
+            m.emitWide(Op::PUSH_GLOBAL,
+                       static_cast<unsigned int>(superIdx), currentLine_);
+            // arg 0: the class name (a symbol literal — emitted exactly as a
+            // SymbolLit node would: an interned symbol pushed via PUSH_CONST).
+            auto nameSymIdx = m.internSymbol(n.text);
+            m.emitWide(Op::PUSH_CONST,
+                       static_cast<unsigned int>(nameSymIdx), currentLine_);
+            std::string selector;
+            if (n.stringList.size() > 1) {
+                // declared instance variables → subclass:instanceVariableNames:uses:
+                std::string ivars;
+                for (size_t i = 1; i < n.stringList.size(); ++i) {
+                    if (i > 1) ivars += ' ';
+                    ivars += n.stringList[i];
+                }
+                auto ivStrIdx = m.addString(ivars);
+                m.emitWide(Op::PUSH_CONST,
+                           static_cast<unsigned int>(ivStrIdx), currentLine_);
+                selector = "subclass:instanceVariableNames:uses:";
+            } else {
+                selector = "subclass:uses:";
+            }
+            // final arg: the mixin collection expression
+            emitExpr(m, *n.children[0]);
+            auto selIdx = m.internSymbol(selector);
+            m.emitWide(Op::SEND_KEYWORD,
+                       static_cast<unsigned int>(selIdx), currentLine_);
+            // The primitive already binds the class as a global under its
+            // name; DUP keeps it on the stack as this statement's value and
+            // STORE_GLOBAL rebinds it (idempotent), matching the plain form.
+            m.emit(Op::DUP, 0, currentLine_);
+            m.emitWide(Op::STORE_GLOBAL,
+                       static_cast<unsigned int>(classNameIdx), currentLine_);
+            return;
+        }
+
         auto superIdx     = m.internSymbol(superName);
         auto newChildIdx  = m.internSymbol("newChild");
-        auto classNameIdx = m.internSymbol(n.text);
         // BL-2: indices may exceed 255 — emitWide prefixes EXTEND words as
         // needed, so there is no longer a 256-symbol ceiling.
         m.emitWide(Op::PUSH_GLOBAL,  static_cast<unsigned int>(superIdx), currentLine_);

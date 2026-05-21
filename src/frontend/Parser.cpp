@@ -518,6 +518,17 @@ ast::NodePtr Parser::parseClassDecl(Token classIdent) {
         if (current_.text == "instanceVariableNames:") {
             advance();
             parseStringList(cd->stringList);
+        } else if (current_.text == "uses:") {
+            // T3-b: multiple inheritance / mixins. `uses:` takes an expression
+            // — typically a `{ MixinA. MixinB }` dynamic-array literal — whose
+            // elements are class objects to add as additional parents,
+            // alongside the primary superclass. The argument expression is
+            // stored as the single child of the ClassDecl node; the compiler
+            // emits it and routes the result through `__addMixins:`.
+            advance();
+            auto mixins = parseBinarySend();
+            if (mixins) cd->children.push_back(std::move(mixins));
+            else error(current_, "expected an expression after uses:");
         } else if (current_.text == "classVariableNames:") {
             Token kw = current_;
             advance();

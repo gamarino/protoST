@@ -266,6 +266,145 @@ const proto::ProtoObject* makeSubclass(STRuntime& rt, proto::ProtoContext* ctx,
 }
 } // namespace
 
+// --- T3-b: multiple inheritance / mixins -----------------------------------
+//
+// A mixin is just a class; "mixing in" means adding it as an additional
+// parent. protoCore's prototype model supports several parents natively, and
+// attribute/method lookup already walks the whole linearised parent chain, so
+// protoST only adds the surface syntax (`uses:`) and assembles the chain.
+//
+// A protoCore object freezes its parent chain into its base cell at
+// construction. `newChild` copies the base-cell chain of its prototype; an
+// `addParent` on a mutable class mutates only the class's *snapshot*, which a
+// child created by `newChild` never reads — so a parent added AFTER the class
+// exists is invisible to that class's instances. Therefore a multiply-
+// inheriting class must have its FULL parent chain in place before any
+// instance is created.
+//
+// The class is assembled as a mutable `newChild` of an immutable "shape"
+// object that carries the full linearised chain. The shape is built by
+// applying protoCore's own `addParent` to an immutable cell — on an immutable
+// object `addParent` returns a fresh cell with the parent (and its flattened
+// ancestors) baked into the BASE chain, exactly what `newChild` later copies.
+//
+// Resolution order: the primary superclass subtree first, then each `uses:`
+// mixin subtree in listed order. `addParent` prepends at the chain head, so
+// the mixins are added in REVERSE listed order and the primary superclass is
+// added last — leaving the head-first walk order
+// [primary, primary-ancestors…, mixin0, mixin0-ancestors…, mixin1, …]. The
+// diamond case (a selector reachable via two parents) resolves to the first
+// in this order; `addParent` already de-duplicates shared ancestors.
+
+namespace {
+// Extract the backing ProtoList of the `uses:` collection. The collection is
+// an Array-shaped object (its `__data__` attribute holds the ProtoList) —
+// exactly what a `{ … }` dynamic-array literal evaluates to. A nil collection
+// yields nullptr (no mixins).
+const proto::ProtoList* mixinList(proto::ProtoContext* ctx,
+                                  const proto::ProtoObject* mixinColl) {
+    if (!mixinColl || mixinColl == PROTO_NONE) return nullptr;
+    const proto::ProtoString* dataKey =
+        proto::ProtoString::createSymbol(ctx, "__data__");
+    const proto::ProtoObject* dataObj = mixinColl->getAttribute(ctx, dataKey);
+    const proto::ProtoList* list =
+        (dataObj && dataObj != PROTO_NONE) ? dataObj->asList(ctx)
+                                           : mixinColl->asList(ctx);
+    if (!list)
+        throw std::runtime_error(
+            "uses:: argument must be a collection of classes");
+    return list;
+}
+
+// Build a named subclass of `superCls` that also inherits every class in the
+// `uses:` collection, with the full prototype chain baked into the new class's
+// base cell so instances see all parents. Stamps the class name and binds the
+// class as a global, mirroring `makeSubclass`.
+const proto::ProtoObject* makeSubclassWithMixins(
+    STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* superCls,
+    const proto::ProtoObject* nameArg, const proto::ProtoObject* mixinColl) {
+    if (!superCls || superCls == PROTO_NONE)
+        throw std::runtime_error("subclass:uses:: superclass is nil");
+    auto* nameStr = nameArg ? nameArg->asString(ctx) : nullptr;
+    if (!nameStr)
+        throw std::runtime_error(
+            "subclass:uses:: class name must be a symbol or string");
+    const proto::ProtoList* mixins = mixinList(ctx, mixinColl);
+
+    // Build the immutable "shape" carrying the full linearised parent chain.
+    // `addParent` PREPENDS the new parent (and its flattened, de-duplicated
+    // ancestors) at the chain head. To leave the head-first walk order
+    //   [primary, primary-ancestors…, mixin0, mixin0-ancestors…, mixin1, …]
+    // the parents are added LAST-WANTED-FIRST: each mixin in reverse listed
+    // order, then the primary superclass last so it becomes the chain head.
+    //
+    // The shape starts from an immutable child of objectProto purely as a
+    // construction anchor (objectProto is an ancestor of every class and gets
+    // de-duplicated by `addParent` into its natural tail position).
+    const proto::ProtoObject* shape =
+        rt.bootstrap().objectProto->newChild(ctx, /*isMutable=*/false);
+    TransientPin pinShape(ctx, shape);
+    if (mixins) {
+        for (long i = static_cast<long>(mixins->getSize(ctx)) - 1; i >= 0;
+             --i) {
+            const proto::ProtoObject* mixin =
+                mixins->getAt(ctx, static_cast<int>(i));
+            if (!mixin || mixin == PROTO_NONE)
+                throw std::runtime_error("uses:: a mixin is nil");
+            // addParent on an immutable cell returns a fresh immutable cell
+            // with the parent baked into the base chain.
+            shape = shape->addParent(ctx, mixin);
+            pinShape.reset(shape);
+        }
+    }
+    // Primary superclass added last → it becomes the chain head, so its
+    // subtree is searched before any mixin subtree.
+    shape = shape->addParent(ctx, superCls);
+    pinShape.reset(shape);
+
+    // The class object itself: a mutable child of the shape, so `>>` can
+    // install methods in place. Its base parent is the shape, whose base
+    // chain is the full linearised MRO — so `class new` instances inherit
+    // every parent.
+    auto* sub = shape->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinSub(ctx, sub);
+    const proto::ProtoString* nameKey =
+        proto::ProtoString::createSymbol(ctx, "__class_name__");
+    const_cast<proto::ProtoObject*>(sub)->setAttribute(
+        ctx, nameKey, nameStr->asObject(ctx));
+    std::string name = nameStr->toStdString(ctx);
+    auto* nameSym = proto::ProtoString::createSymbol(ctx, name.c_str());
+    if (auto* g = rt.globals()) g->setAttribute(ctx, nameSym, sub);
+    return sub;
+}
+} // namespace
+
+// superClass subclass: #Name uses: aCollection
+//   → fresh named subclass of superClass that also inherits each class in the
+//     `uses:` collection. The expression-receiver counterpart of the textual
+//     `subclass:uses:` form, so an imported module class can be the primary
+//     superclass: `(lib Counter) subclass: #Fast uses: { MixA }`.
+const proto::ProtoObject* prim_Object_subclassUses(
+    STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* r,
+    const proto::ProtoObject* const* a, int argc) {
+    if (argc != 2)
+        throw std::runtime_error("subclass:uses: expects 2 args");
+    return makeSubclassWithMixins(rt, ctx, r, a[0], a[1]);
+}
+
+// superClass subclass: #Name instanceVariableNames: 'a b' uses: aCollection
+//   → as subclass:instanceVariableNames:, plus the `uses:` mixins.
+const proto::ProtoObject* prim_Object_subclassIvarsUses(
+    STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* r,
+    const proto::ProtoObject* const* a, int argc) {
+    if (argc != 3)
+        throw std::runtime_error(
+            "subclass:instanceVariableNames:uses: expects 3 args");
+    if (a[1] && a[1] != PROTO_NONE && !a[1]->asString(ctx))
+        throw std::runtime_error(
+            "subclass:instanceVariableNames:uses:: ivar names must be a string");
+    return makeSubclassWithMixins(rt, ctx, r, a[0], a[2]);
+}
+
 // superClass subclass: #Name
 //   → fresh mutable child of superClass, stamped with the class name.
 const proto::ProtoObject* prim_Object_subclass(STRuntime& rt,
@@ -483,6 +622,15 @@ void installObjectPrimitives(STRuntime& rt) {
                   reg.registerPrim(prim_Object_subclass));
     bindPrimitive(rt, b.objectProto, "subclass:instanceVariableNames:",
                   reg.registerPrim(prim_Object_subclassIvars));
+    // T3-b: multiple inheritance / mixins. `subclass:uses:` and
+    // `subclass:instanceVariableNames:uses:` assemble a class with several
+    // parents. The compiler's textual `Object subclass: #Foo uses: { … }`
+    // form desugars to a send of these selectors; they also serve the
+    // expression-receiver form (e.g. an imported module class).
+    bindPrimitive(rt, b.objectProto, "subclass:uses:",
+                  reg.registerPrim(prim_Object_subclassUses));
+    bindPrimitive(rt, b.objectProto, "subclass:instanceVariableNames:uses:",
+                  reg.registerPrim(prim_Object_subclassIvarsUses));
     bindPrimitive(rt, b.objectProto, "printString",
                   reg.registerPrim(prim_Object_printString));
     // F6 v2 T6: sleep primitive — test-only helper for the wall-clock

@@ -14,13 +14,12 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Baseline:** 622/622 tests passing at commit `MNT-c` (597 carried over,
-  plus 14 new `test_mnt_c_numbers` unit tests and 11 new numeric-tower
-  conformance tests). Previous baseline 597/597 at `MNT-b2`.
-- **Last verified:** 2026-05-21 (the MNT-c slice — D11, D20 — was fixed and the
-  whole suite re-run three times green; the formerly-XFAIL conformance test for
-  D11 was promoted to conforming, and `float-literal.st` was re-pinned to its
-  spec-correct value).
+- **Baseline:** 694/694 tests passing at the T3-b commit (686 carried over,
+  plus 7 new `mixin-*` object-model conformance tests and 1 new
+  `test_t3b_mixins` unit case). Previous baseline 686/686 at `0d5e762`
+  (Track 3, T3-a); 622/622 at `MNT-c`.
+- **Last verified:** 2026-05-21 (the T3-b slice — multiple inheritance /
+  mixins via `uses:` — landed and the whole suite re-run three times green).
 - **Id scheme:** `D1..D18` are carried over from `LANGUAGE.md` §14 and keep
   their original meaning. New divergences get new ids (`D19+`).
 
@@ -54,6 +53,14 @@ are noted where useful.
       on any class object, so an imported module class can be subclassed in
       the importing program, methods overridden, and `super` used in an
       override to reuse the module's implementation *(Track 3, T3-a)*
+- [x] **Multiple inheritance / mixins** — a class may be defined with several
+      superclasses / mixins via the `uses:` clause
+      (`Object subclass: #Foo uses: { MixinA. MixinB }`, also
+      `subclass:instanceVariableNames:uses:` and the expression-receiver
+      message form). Method/attribute lookup and `super` walk the parents
+      depth-first, left-to-right — the primary superclass subtree first, then
+      each mixin subtree in listed order; the diamond case resolves to the
+      first in that order. Mixin instance variables work. *(Track 3, T3-b)*
 
 ### Blocks / closures
 - [x] Block syntax, 0–4 argument blocks
