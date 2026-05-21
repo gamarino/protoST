@@ -104,6 +104,10 @@ are noted where useful.
       `Float` constants (`pi`/`e`/`infinity`/`nan`). Bootstrapped C++
       primitives on `Number` — always available, not a loadable module
       *(track4, T4-b)*
+- [x] `lib/random.st` — the `Random` module: a seedable, deterministic
+      pseudo-random generator (`seed:`, `new`, `next`, `nextInt:`,
+      `between:and:`, `next:`). Pure protoST, a 32-bit LCG; no new
+      primitives *(track4, T4-c)*
 
 ### Builtins / primitives
 - [x] Numeric tower: `SmallInteger`, `LargeInteger` and `Float` arithmetic &

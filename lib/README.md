@@ -30,9 +30,10 @@ The `lib/` directory itself is found, first hit wins, by:
 
 ## Modules
 
-| Module   | Imports as            | Provides                          |
-|----------|-----------------------|-----------------------------------|
+| Module   | Imports as              | Provides                        |
+|----------|-------------------------|---------------------------------|
 | `stream` | `Import from: 'stream'` | `ReadStream`, `WriteStream`     |
+| `random` | `Import from: 'random'` | `Random` (seedable PRNG)        |
 
 ## Adding a module
 
