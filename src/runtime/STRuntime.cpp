@@ -1452,8 +1452,60 @@ bool STRuntime::isActor(proto::ProtoContext* ctx,
     return (w != nullptr && w != PROTO_NONE);
 }
 
+// Track 4 (T4-a): Locate the standard-library `lib/` directory holding the
+// stdlib `.st` modules (lib/stream.st, lib/math.st, ...).
+//
+// Discovery scheme (first hit wins):
+//   1. $PROTOST_LIB — an explicit override pointing straight at a `lib/` dir.
+//   2. Derived from the executable: read /proc/self/exe, then probe
+//      <dir-of-exe>/lib, <dir-of-exe>/../lib and <dir-of-exe>/../../lib. A dev
+//      build runs `build/protost`, so `../lib` resolves the project `lib/`;
+//      an installed `bin/protost` finds `<prefix>/lib` likewise.
+//   3. <cwd>/lib — convenient when running from a project checkout.
+// Returns "" if no `lib/` directory is found.
+static std::string discoverStdlibDir() {
+    namespace fs = std::filesystem;
+
+    // 1. Explicit override.
+    if (const char* env = std::getenv("PROTOST_LIB")) {
+        if (env[0] != '\0') {
+            std::error_code ec;
+            fs::path p(env);
+            if (fs::is_directory(p, ec)) return p.string();
+        }
+    }
+
+    // 2. Derived from the executable location (/proc/self/exe on Linux).
+    {
+        std::error_code ec;
+        fs::path exe = fs::read_symlink("/proc/self/exe", ec);
+        if (!ec && !exe.empty()) {
+            fs::path dir = exe.parent_path();
+            const fs::path candidates[] = {
+                dir / "lib",
+                dir.parent_path() / "lib",
+                dir.parent_path().parent_path() / "lib",
+            };
+            for (const auto& c : candidates) {
+                if (fs::is_directory(c, ec)) return c.string();
+            }
+        }
+    }
+
+    // 3. <cwd>/lib.
+    {
+        std::error_code ec;
+        fs::path p = fs::current_path(ec) / "lib";
+        if (!ec && fs::is_directory(p, ec)) return p.string();
+    }
+
+    return "";
+}
+
 // F5-M1: Resolve a logical module path to a filesystem path.
-// Search order: cwd, $STPATH (colon-separated), active venv modules dir.
+// Search order: cwd, $STPATH (colon-separated), active venv modules dir,
+// and finally the standard-library `lib/` directory (T4-a). The user's cwd
+// and $STPATH take precedence, so a user module can shadow a stdlib module.
 std::string STRuntime::findModuleFile(const std::string& logicalPath) const {
     namespace fs = std::filesystem;
 
@@ -1498,6 +1550,16 @@ std::string STRuntime::findModuleFile(const std::string& logicalPath) const {
         }
         if (!venv.empty()) {
             fs::path p = fs::path(venv) / "lib" / "protoST" / "modules" / name;
+            if (fs::exists(p)) return p.string();
+        }
+    }
+
+    // 4. Standard-library `lib/` directory (T4-a). Lowest precedence — a
+    // same-named module in the cwd, $STPATH or the venv shadows the stdlib.
+    {
+        std::string libDir = discoverStdlibDir();
+        if (!libDir.empty()) {
+            fs::path p = fs::path(libDir) / name;
             if (fs::exists(p)) return p.string();
         }
     }

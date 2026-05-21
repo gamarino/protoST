@@ -238,6 +238,13 @@ Token Lexer::next() {
                 Token t; t.kind = TokenKind::BinaryOp; t.text = "<=";
                 t.line = startLine; t.column = startCol; advance(); advance(); return t;
             }
+            // `<<` is a two-character binary operator (the Smalltalk stream
+            // append/output selector). Two characters from the operator
+            // alphabet form one binary operator (§2.10).
+            if (lookahead() == '<') {
+                Token t; t.kind = TokenKind::BinaryOp; t.text = "<<";
+                t.line = startLine; t.column = startCol; advance(); advance(); return t;
+            }
             return bin1("<");
         case '>':
             if (lookahead() == '=') {
