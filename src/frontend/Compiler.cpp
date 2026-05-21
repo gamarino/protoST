@@ -358,12 +358,22 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         size_t blkIdx = m.addBlockModule(std::move(sub));
 
         // Module-level emission: load class, push method wrapper, push selector
-        // symbol, send #__installMethod:as: to the class. The send returns the
+        // symbol, send the install selector to the class. The send returns the
         // class (the receiver), leaving it on the stack. The surrounding module
         // loop's POP separator (or RETURN_TOP) consumes it cleanly.
+        //
+        // D5 (MNT-b2): an instance-side method is installed via
+        // `__installMethod:as:`; a `ClassName class >> sel` (n.boolFlag) via
+        // `__installClassMethod:as:`, which additionally stamps the method
+        // wrapper with `__class_side__`. Both still install onto the SAME class
+        // object — the metamodel is unchanged — but the marker lets the engine's
+        // SEND dispatch refuse a class-side method when the receiver is an
+        // instance (not a class), so class-side and instance-side protocols are
+        // no longer reachable from the same receiver.
         auto classIdx    = m.internSymbol(n.text);
         auto selectorIdx = m.internSymbol(n.stringList[0]);
-        auto installIdx  = m.internSymbol("__installMethod:as:");
+        auto installIdx  = m.internSymbol(
+            n.boolFlag ? "__installClassMethod:as:" : "__installMethod:as:");
 
         m.emitWide(Op::PUSH_GLOBAL,  static_cast<unsigned int>(classIdx), currentLine_);    // class
         m.emitWide(Op::PUSH_BLOCK,   static_cast<unsigned int>(blkIdx), currentLine_);      // method wrapper

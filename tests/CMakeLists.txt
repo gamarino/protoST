@@ -68,6 +68,9 @@ target_sources(protost_unit_tests PRIVATE
 target_sources(protost_unit_tests PRIVATE
     unit/test_mnt_b1_fixes.cpp
 )
+target_sources(protost_unit_tests PRIVATE
+    unit/test_mnt_b2_fixes.cpp
+)
 target_compile_definitions(protost_unit_tests PRIVATE
     PROTOST_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures"
 )

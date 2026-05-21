@@ -598,10 +598,12 @@ Counter class >> startingAt: n
   ^ c.
 ```
 
-> **Implementation note.** In the current implementation class-side methods are
-> installed on the same prototype as instance-side methods, so an instance can
-> also see them. The intended behaviour is the class-side/instance-side split.
-> See [§14](#14-known-deviations).
+> **Implementation note.** Class-side and instance-side protocols are disjoint:
+> a `ClassName class >> selector` method is reachable from the class object but
+> *not* from its instances — an instance sending a class-side selector gets a
+> `MessageNotUnderstood`. Internally both still install onto the one class
+> object; class-side methods carry a marker that the send-dispatch path honours
+> when the receiver is an instance.
 
 ### 4.8 `printString`
 
@@ -647,12 +649,16 @@ Dispatch resolves the selector against the receiver:
 Sending a selector that no prototype in the receiver's chain understands is a
 **doesNotUnderstand** condition.
 
-> In the intended design, `doesNotUnderstand:` is a catchable Smalltalk message
-> the runtime sends to the receiver. In the current implementation it is a
-> **hard runtime failure** — a `doesNotUnderstand: <selector>` error that is
-> *not* a catchable protoST `Error`. It aborts the current run (an actor
-> rejects its `Future`; a script terminates with an error message). See
-> [§14](#14-known-deviations).
+An unresolved selector signals a **`MessageNotUnderstood`** exception — a
+subclass of `Error` — through the normal exception machinery. An
+`on: Error do:` (or `on: MessageNotUnderstood do:`) handler catches it, and the
+caught exception's `messageText` reads `doesNotUnderstand: <selector>`. With no
+handler the run aborts (an actor rejects its `Future`; a script terminates with
+an error message).
+
+> The reflective `doesNotUnderstand:` user hook — a method the runtime sends to
+> the receiver so it can intercept unknown sends — is not implemented; an
+> unresolved send always signals `MessageNotUnderstood` directly.
 
 ### 5.3 `super` dispatch
 
@@ -811,10 +817,11 @@ the block (an escaped closure) is then evaluated with a `^` inside it — the
 non-local return has no live method to target. This is the **dead-home**
 condition.
 
-The intended behaviour is for this to signal a catchable `BlockCannotReturn`
-exception. In the current implementation it surfaces as a hard runtime error
-(`non-local return: home method has already returned`); inside an actor it
-rejects that actor's `Future`. See [§14](#14-known-deviations).
+This signals a catchable **`BlockCannotReturn`** exception — a subclass of
+`Error` — through the normal exception machinery, so an `on: Error do:` (or
+`on: BlockCannotReturn do:`) handler catches it; the caught exception's
+`messageText` reads `non-local return: home method has already returned`. With
+no handler the run aborts; inside an actor it rejects that actor's `Future`.
 
 ---
 
@@ -1481,18 +1488,8 @@ and (once fixed) the closing commit for each.
 **Bugs** — broken behaviour that contradicts the language's own intent or
 examples:
 
-- **D3 — `doesNotUnderstand` is a hard failure, not a catchable `Error`.** An
-  unknown selector raises a hard runtime error that `on: Error do:` cannot
-  catch; the intended behaviour is a catchable `doesNotUnderstand:` send.
-  *Affects:* [§5.2](#52-doesnotunderstand).
-- **D5 — class-side methods are not isolated from instances.** A
-  `ClassName class >> selector` method installs on the same prototype as
-  instance methods, so an instance can also receive it.
-  *Affects:* [§4.7](#47-class-side-methods).
-- **D8 — dead-home non-local return is a hard error, not `BlockCannotReturn`.**
-  A `^` in a block whose home method has already returned raises a hard
-  runtime error rather than a catchable `BlockCannotReturn`.
-  *Affects:* [§7.1](#71-dead-home).
+> _No open bugs. The last open bugs — D3, D5, D8 — were fixed in `MNT-b2`
+> (see below)._
 
 > **Fixed (commit `MNT-b1`).** D1 (negative numeric literals), D13 (the CLI no
 > longer advertises an unimplemented `compile` subcommand), D15
@@ -1500,6 +1497,13 @@ examples:
 > silently discarded), D16 (nested literal arrays parse) and D18 (`==`/`~~`
 > bound on `Object`; `=`/`~=` universal with value-equality overrides) are
 > resolved — see `docs/STATUS.md` *Closed items*.
+
+> **Fixed (commit `MNT-b2`).** D3 (an unresolved selector signals a catchable
+> `MessageNotUnderstood`, a subclass of `Error`), D5 (class-side methods are
+> isolated from instances — a `ClassName class >> sel` method is no longer
+> reachable from an instance) and D8 (a `^` in a block whose home method has
+> already returned signals a catchable `BlockCannotReturn`, a subclass of
+> `Error`) are resolved — see `docs/STATUS.md` *Closed items*.
 
 **Not yet implemented** — planned features absent today (owning roadmap track
 noted in `docs/STATUS.md`):

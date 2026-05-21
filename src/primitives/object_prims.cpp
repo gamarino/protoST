@@ -165,6 +165,35 @@ const proto::ProtoObject* prim_Object_installMethod(STRuntime&,
     return r;
 }
 
+// class __installClassMethod: methodObj as: selectorSym
+//   → stamp methodObj with `__class_side__ = true`
+//   → setAttribute(class, selectorSym, methodObj)
+//   → returns class (recv)
+//
+// D5 (MNT-b2): the class-side counterpart of `__installMethod:as:`. The method
+// still lands on the SAME class object, but the `__class_side__` marker on the
+// wrapper lets the engine's SEND dispatch refuse it when the receiver is an
+// instance — so `ClassName class >> sel` is reachable from the class object and
+// NOT from its instances.
+const proto::ProtoObject* prim_Object_installClassMethod(STRuntime&,
+                                                         proto::ProtoContext* ctx,
+                                                         const proto::ProtoObject* r,
+                                                         const proto::ProtoObject* const* a,
+                                                         int argc) {
+    if (argc != 2)
+        throw std::runtime_error("__installClassMethod:as: expects 2 args");
+    auto* selStr = a[1]->asString(ctx);
+    if (!selStr)
+        throw std::runtime_error(
+            "__installClassMethod:as: selector must be a symbol");
+    const proto::ProtoString* classSideKey =
+        proto::ProtoString::createSymbol(ctx, "__class_side__");
+    const_cast<proto::ProtoObject*>(a[0])->setAttribute(
+        ctx, classSideKey, PROTO_TRUE);
+    r->setAttribute(ctx, selStr, a[0]);
+    return r;
+}
+
 // class __setClassName: nameString
 //   → setAttribute(class, #__class_name__, nameString)
 //   → returns class (recv)
@@ -178,7 +207,12 @@ const proto::ProtoObject* prim_Object_setClassName(STRuntime&,
                                                     const proto::ProtoObject* const* a,
                                                     int argc) {
     if (argc != 1) throw std::runtime_error("__setClassName: expects 1 arg");
-    static const proto::ProtoString* nameKey =
+    // Resolve the symbol fresh from the live ctx — symbols are interned
+    // per-ProtoSpace, so a function-local `static` would stamp later runtimes'
+    // classes under a stale key from the first runtime's space. The D5
+    // class/instance-side test reads this attribute back via `__class_name__`;
+    // a stale key here would make every class look like a non-class.
+    const proto::ProtoString* nameKey =
         proto::ProtoString::createSymbol(ctx, "__class_name__");
     const_cast<proto::ProtoObject*>(r)->setAttribute(ctx, nameKey, a[0]);
     return r;
@@ -354,6 +388,8 @@ void installObjectPrimitives(STRuntime& rt) {
     }
     bindPrimitive(rt, b.objectProto, "__installMethod:as:",
                   reg.registerPrim(prim_Object_installMethod));
+    bindPrimitive(rt, b.objectProto, "__installClassMethod:as:",
+                  reg.registerPrim(prim_Object_installClassMethod));
     bindPrimitive(rt, b.objectProto, "asActor",
                   reg.registerPrim(prim_Object_asActor));
     // BL-3: rich printString. `__setClassName:` is emitted by the compiler's

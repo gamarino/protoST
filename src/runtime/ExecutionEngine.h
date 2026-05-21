@@ -30,7 +30,20 @@ struct DebugFrame;
 // unrelated to the unbounded user-method recursion this task targets.
 class ExecutionEngine {
 public:
-    explicit ExecutionEngine(STRuntime& rt) : rt_(rt) {}
+    explicit ExecutionEngine(STRuntime& rt);
+    ~ExecutionEngine();
+
+    ExecutionEngine(const ExecutionEngine&) = delete;
+    ExecutionEngine& operator=(const ExecutionEngine&) = delete;
+
+    // D8 (MNT-b2): true when SOME currently-live engine on THIS thread holds a
+    // frame whose `frameId` equals `frameId` — i.e. the activation is still on
+    // the (possibly multi-engine) call chain. Engines nest strictly LIFO on the
+    // C++ stack and register themselves for their whole lifetime, so a query
+    // that finds no match means the home method has genuinely already returned
+    // (a "dead home"). The block-frame `Op::RETURN` path uses this to decide
+    // between a legitimate non-local return and a catchable `BlockCannotReturn`.
+    static bool homeFrameAlive(unsigned long frameId);
 
     // Runs `m` in `ctx`; returns the value at RETURN_TOP (or method RETURN).
     const proto::ProtoObject* run(proto::ProtoContext* ctx,

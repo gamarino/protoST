@@ -231,6 +231,15 @@ struct STRuntime::Impl {
         globals->setAttribute(rootCtx, errorKey, bootstrap.errorProto);
         auto* warningKey = proto::ProtoString::createSymbol(rootCtx, "Warning");
         globals->setAttribute(rootCtx, warningKey, bootstrap.warningProto);
+        // MNT-b2 (D3 / D8): the two runtime-signalled Error subclasses are
+        // nameable so a script can guard on them specifically
+        // (`on: MessageNotUnderstood do:`), not only via the `Error` base.
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "MessageNotUnderstood"),
+            bootstrap.messageNotUnderstoodProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "BlockCannotReturn"),
+            bootstrap.blockCannotReturnProto);
 
         // Track 2 slice a (COL-a): register the collection class hierarchy in
         // globals so user code can name `Collection`, `Array`, etc. and do
@@ -332,6 +341,11 @@ struct STRuntime::Impl {
             pinPermanent(bootstrap.exceptionProto);
             pinPermanent(bootstrap.errorProto);
             pinPermanent(bootstrap.warningProto);
+            // MNT-b2 (D3 / D8): the runtime-signalled Error subclasses carry
+            // method bindings inherited from Error — pin them for the
+            // runtime's whole lifetime, like every other built-in class.
+            pinPermanent(bootstrap.messageNotUnderstoodProto);
+            pinPermanent(bootstrap.blockCannotReturnProto);
             // Track 2 slice a (COL-a): the collection prototypes carry the
             // iteration protocol + Array base operations — pin them for the
             // runtime's whole lifetime, exactly like the other built-in classes.

@@ -265,23 +265,40 @@ const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx
 // May throw (all correct, all propagate out of the wrapper): `UnwindToHandler`
 // when a handler caught the translated Error and did `return:` / fell through,
 // `RetrySignal` on `retry`, `UnhandledSTException` when nothing caught it.
-const proto::ProtoObject* signalNativeError(STRuntime& rt,
-                                            proto::ProtoContext* ctx,
-                                            const char* message) {
-    const proto::ProtoObject* errorCls = rt.bootstrap().errorProto;
-    // Fresh mutable child of Error — inherits the non-resumable marker.
+// MNT-b2 (D3 / D8): signal a fresh, NON-resumable instance of `errorClass`
+// (which MUST be `Error` or a subclass of it) carrying `message` as its
+// `messageText`, through the very same `signalInstance` path a script-level
+// `Error signal:` uses. An active handler — guarding the specific class OR the
+// `Error` base — catches it; with no handler `defaultAction` throws
+// `UnhandledSTException`. This is the shared core of `signalNativeError`
+// (errorClass == Error) and of the runtime-internal `doesNotUnderstand` /
+// dead-home-return signals (errorClass == MessageNotUnderstood /
+// BlockCannotReturn).
+const proto::ProtoObject* signalErrorOfClass(STRuntime& rt,
+                                             proto::ProtoContext* ctx,
+                                             const proto::ProtoObject* errorClass,
+                                             const char* message) {
+    // Fresh mutable child of the error class — inherits the non-resumable
+    // marker from Error and a chain to objectProto.
     const proto::ProtoObject* exc =
-        const_cast<proto::ProtoObject*>(errorCls)->newChild(ctx, /*isMutable=*/true);
+        const_cast<proto::ProtoObject*>(errorClass)->newChild(ctx, /*isMutable=*/true);
     TransientPin pinExc(ctx, exc);
     const proto::ProtoObject* text =
-        ctx->fromUTF8String(message ? message : "native exception");
+        ctx->fromUTF8String(message ? message : "error");
     const_cast<proto::ProtoObject*>(exc)->setAttribute(
         ctx, msgTextKey(ctx), text);
-    // Force non-resumable on the instance too, defensively — a translated
-    // native exception is never resumable (the native stack is already gone).
+    // Force non-resumable on the instance too, defensively — a runtime-raised
+    // error of this kind is never resumable (the offending stack is gone).
     const_cast<proto::ProtoObject*>(exc)->setAttribute(
         ctx, resumableKey(ctx), PROTO_FALSE);
     return signalInstance(rt, ctx, exc);
+}
+
+const proto::ProtoObject* signalNativeError(STRuntime& rt,
+                                            proto::ProtoContext* ctx,
+                                            const char* message) {
+    return signalErrorOfClass(rt, ctx, rt.bootstrap().errorProto,
+                              message ? message : "native exception");
 }
 
 namespace {

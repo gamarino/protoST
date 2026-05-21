@@ -14,11 +14,12 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Baseline:** 584/584 tests passing at commit `MNT-b1` (568 carried over,
-  plus 16 new `test_mnt_b1_fixes` unit tests). Previous baseline 568/568 at
-  `6add592`.
-- **Last verified:** 2026-05-21 (the MNT-b1 slice — D1, D9, D13, D15, D16, D18
-  — was fixed and the whole suite re-run twice green).
+- **Baseline:** 597/597 tests passing at commit `MNT-b2` (584 carried over,
+  plus 13 new `test_mnt_b2_fixes` unit tests). Previous baseline 584/584 at
+  `MNT-b1`.
+- **Last verified:** 2026-05-21 (the MNT-b2 slice — D3, D5, D8 — was fixed and
+  the whole suite re-run twice green; the formerly-XFAIL conformance tests for
+  D3, D5, D8 were promoted to conforming).
 - **Id scheme:** `D1..D18` are carried over from `LANGUAGE.md` §14 and keep
   their original meaning. New divergences get new ids (`D19+`).
 
@@ -129,9 +130,7 @@ narrow edge case).
 
 | Id | Bug | Minimal repro | Severity |
 |----|-----|---------------|----------|
-| D3 | **`doesNotUnderstand` is a hard failure, not a catchable `Error`.** An unknown selector raises a hard runtime error that `on: Error do:` cannot catch. §5.2 specifies a catchable `doesNotUnderstand:` send. | `./protost -e "[3 fooBar] on: Error do: [:e | 99]"` → `error: doesNotUnderstand: fooBar` (uncaught) | High |
-| D5 | **Class-side methods are not isolated from instances.** A `ClassName class >> sel` method installs on the same prototype as instance methods, so an instance can also receive it. §4.7 specifies a class/instance split. | `Counter class >> startingAt: n …` then `(Counter new) startingAt: 5` → returns an object instead of `doesNotUnderstand` | High |
-| D8 | **Dead-home non-local return is a hard error, not `BlockCannotReturn`.** A `^` in a block whose home method already returned raises a hard error rather than a catchable `BlockCannotReturn`. Contradicts §7.1. | `Maker >> makeBlock saved := [ ^ 99 ]. ^ self.` then invoke `saved value` after `makeBlock` returned → `error: non-local return: home method has already returned` | Medium |
+| _(none — D3, D5, D8 closed in `MNT-b2`)_ | | | |
 
 ---
 
@@ -170,7 +169,10 @@ during the 2026-05-20 audit.
 | D13 | `protost compile` was advertised in the usage text but not implemented. | The `compile` line was removed from the CLI usage/help text — the advertised surface now matches reality. Bytecode serialisation remains unimplemented (a separate feature). | `MNT-b1` (this commit) |
 | D15 | `classVariableNames:` was parsed then silently discarded. | A non-empty `classVariableNames:` clause now emits a clear compile-time diagnostic ("class variables are not yet supported — see D19"); an empty `classVariableNames: ''` stays a silent no-op. The real feature (class variables) remains tracked as D19. | `MNT-b1` (this commit) |
 | D16 | Nested literal arrays (`#(1 #(2 3) 4)`) did not parse. | The `#( … )` literal-array parser was refactored to recurse: a nested `#( … )`, and per standard Smalltalk a bare `( … )` group, inside a literal array is a nested literal sub-array. Verified: `#(1 #(2 3) 4)`→3, `#(#(1 2) #(3 4))`→2. | `MNT-b1` (this commit) |
-| D18 | `==` / `~~` were bound on no class; `=` / `~=` were not universal. | `==` (identity) and `~~` (non-identity) are bound on `Object`, so every object understands them. `Object>>=` defaults to identity and `Object>>~=` to its negation; value-equality `=`/`~=` is bound on `SmallInteger`, `String` and `Boolean` (the `~=` on `String` was newly added). Symbols are interned, so `#foo == #foo` is true. The `~~` operator token was added to the lexer. Verified: `3 == 3`, `#foo == #foo`, `3 ~~ 4`, `3 = 3`, `'a' = 'a'`. | `MNT-b1` (this commit) |
+| D18 | `==` / `~~` were bound on no class; `=` / `~=` were not universal. | `==` (identity) and `~~` (non-identity) are bound on `Object`, so every object understands them. `Object>>=` defaults to identity and `Object>>~=` to its negation; value-equality `=`/`~=` is bound on `SmallInteger`, `String` and `Boolean` (the `~=` on `String` was newly added). Symbols are interned, so `#foo == #foo` is true. The `~~` operator token was added to the lexer. Verified: `3 == 3`, `#foo == #foo`, `3 ~~ 4`, `3 = 3`, `'a' = 'a'`. | `MNT-b1` |
+| D3 | `doesNotUnderstand` was a hard, uncatchable failure. | An unresolved selector now signals a catchable `MessageNotUnderstood` (a new subclass of `Error`) through the normal `signalInstance` handler-stack path. Root cause: the throw lived in the engine's own SEND dispatch, NOT inside a primitive, so it bypassed the EXC-d `translateNativeException` boundary (which wraps only the primitive call). The dispatch site now signals instead of throwing; with no handler the search still exhausts to `defaultAction` → `UnhandledSTException`, preserving the top-level/REPL abort. Verified: `[ 3 fooBar ] on: Error do: [:e| e messageText ]` → `doesNotUnderstand: fooBar`. The optional `doesNotUnderstand:` user hook was not implemented. | `MNT-b2` (this commit) |
+| D5 | Class-side methods were not isolated from instances. | Class-side isolation via a marker (option b of the brief). `ClassName class >> sel` now installs through `__installClassMethod:as:`, which stamps the method wrapper with `__class_side__`; the engine's SEND dispatch hides a `__class_side__`-marked method when the receiver is an instance (does not own `__class_name__` as a direct attribute) — the send then falls through to `doesNotUnderstand`. Only this one direction is enforced: an instance-side method sent to a class object stays allowed, because the built-in class prototypes (`Array`, `Error`, …) deliberately double as both the class object and the instance-behaviour holder, and `__class_side__` is only ever stamped on USER class-side methods. The fuller separate-behaviours metamodel (option a) was judged too large to land safely in this slice. Verified: `(Counter startingAt: 10) value` → 10; `Counter new classOnly` → `doesNotUnderstand`. Incidental fix: `__setClassName:` now interns its key fresh per call (a stale per-`ProtoSpace` symbol made later runtimes' classes unrecognisable). | `MNT-b2` (this commit) |
+| D8 | Dead-home non-local return was a hard error. | A `^` in a block whose home method has already returned now signals a catchable `BlockCannotReturn` (a new subclass of `Error`). The engine keeps a thread-local registry of live `ExecutionEngine` instances; the block-frame `RETURN` opcode queries it (`homeFrameAlive`) — if no live engine on the thread holds the home activation, the home is genuinely dead and `BlockCannotReturn` is signalled THERE, while the handler stack is still intact. Signalling at the old outermost-`runWithArgs` escape site would have been too late: any `on:do:` on the path pops its handler as the `NonLocalReturn` unwinds through it. With no handler the run still aborts via `UnhandledSTException`. Verified: `[ blk value ] on: Error do: [:e| e messageText ]` → `non-local return: home method has already returned`; a live-home `^` is unaffected. | `MNT-b2` (this commit) |
 
 ---
 

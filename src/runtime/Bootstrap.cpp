@@ -39,6 +39,13 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     out.exceptionProto    = const_cast<proto::ProtoObject*>(out.objectProto)->newChild(ctx, /*isMutable=*/true);
     out.errorProto        = const_cast<proto::ProtoObject*>(out.exceptionProto)->newChild(ctx, /*isMutable=*/true);
     out.warningProto      = const_cast<proto::ProtoObject*>(out.exceptionProto)->newChild(ctx, /*isMutable=*/true);
+    // MNT-b2 (D3 / D8): two runtime-signalled Error subclasses. They are
+    // children of `Error`, so an `on: Error do:` guard catches them, and they
+    // inherit `Error`'s non-resumable marker.
+    out.messageNotUnderstoodProto =
+        const_cast<proto::ProtoObject*>(out.errorProto)->newChild(ctx, /*isMutable=*/true);
+    out.blockCannotReturnProto =
+        const_cast<proto::ProtoObject*>(out.errorProto)->newChild(ctx, /*isMutable=*/true);
 
     // Track 2 slice a (COL-a): collection class hierarchy. Ordinary mutable
     // prototypes — the abstract `Collection` carries the derived iteration
@@ -119,6 +126,8 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     stamp(out.exceptionProto,    "Exception");
     stamp(out.errorProto,        "Error");
     stamp(out.warningProto,      "Warning");
+    stamp(out.messageNotUnderstoodProto, "MessageNotUnderstood");
+    stamp(out.blockCannotReturnProto,    "BlockCannotReturn");
     stamp(out.collectionProto,             "Collection");
     stamp(out.sequenceableCollectionProto, "SequenceableCollection");
     stamp(out.hashedCollectionProto,       "HashedCollection");

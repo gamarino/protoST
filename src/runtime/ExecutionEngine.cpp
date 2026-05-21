@@ -137,6 +137,19 @@ thread_local unsigned int g_scratchCursor = 0;
 static_assert(kEngineSlotCapacity == 8192,
               "TransientPin scratch geometry assumes an 8192-slot engine context");
 
+// D8 (MNT-b2): per-thread registry of live ExecutionEngine instances.
+//
+// Engines nest strictly LIFO on the C++ stack — invokeBlock and user-method
+// dispatch each spin a fresh nested engine, run it to completion, and destroy
+// it before their own caller continues. Every engine registers itself here for
+// its whole lifetime (ctor → push_back, dtor → erase). `homeFrameAlive` scans
+// the registry to answer "is the method activation with this frameId still on
+// the call chain anywhere on this thread?" — a `^` whose home is NOT found is a
+// dead-home non-local return and must signal a catchable `BlockCannotReturn`
+// rather than throw an uncatchable C++ exception that would unwind past
+// `on:do:` handlers before anyone could convert it.
+static thread_local std::vector<ExecutionEngine*> g_liveEngines;
+
 // ---------------------------------------------------------------------------
 // F6 v3 E3: slot accessors. Every ProtoObject* a frame touches is read/written
 // through the engine context's automaticLocals so the GC sees it.
@@ -191,6 +204,35 @@ const proto::ProtoObject*
 ExecutionEngine::opAt(const Frame& f, unsigned int depth) const {
     // depth 0 == top of stack.
     return ctx_->getAutomaticLocal(opStackBase(f) + f.sp - 1 - depth);
+}
+
+// D8 (MNT-b2): registry-managed lifetime. Each engine joins g_liveEngines on
+// construction and leaves on destruction. The vector grows/shrinks LIFO with
+// the C++ engine nesting, so an erase is always of the back element in the
+// common case; a defensive search-and-erase handles any non-LIFO surprise.
+ExecutionEngine::ExecutionEngine(STRuntime& rt) : rt_(rt) {
+    g_liveEngines.push_back(this);
+}
+
+ExecutionEngine::~ExecutionEngine() {
+    for (std::size_t i = g_liveEngines.size(); i-- > 0; ) {
+        if (g_liveEngines[i] == this) {
+            g_liveEngines.erase(g_liveEngines.begin() +
+                                static_cast<std::ptrdiff_t>(i));
+            return;
+        }
+    }
+}
+
+bool
+ExecutionEngine::homeFrameAlive(unsigned long frameId) {
+    if (frameId == 0) return false;
+    for (ExecutionEngine* e : g_liveEngines) {
+        for (const Frame& f : e->frames_) {
+            if (f.frameId == frameId) return true;
+        }
+    }
+    return false;
 }
 
 void
@@ -509,10 +551,35 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     continue;
                 }
 
-                // The home lives in an outer engine — the block was invoked
-                // through invokeBlock's nested-engine boundary. Throw so the
-                // exception unwinds the C++ stack (running RAII guards) up to
-                // the engine that owns the home frame.
+                // The home is not in THIS engine's frames_. Two cases:
+                //
+                //  * D8 (MNT-b2): the home method has ALREADY RETURNED — a
+                //    "dead home". `homeFrameAlive` scans every live engine on
+                //    this thread; if none holds the home activation, the `^`
+                //    can never reach a live method. Previously this surfaced
+                //    only later, as an uncatchable `std::runtime_error` at the
+                //    outermost `runWithArgs` — by which point any `on:do:` on
+                //    the path had already popped its handler. Signal a
+                //    catchable `BlockCannotReturn` (a subclass of `Error`)
+                //    HERE instead, while the handler stack is still intact, so
+                //    `[ … ] on: Error do: [:e| …]` catches it.
+                //
+                //  * The home lives in an OUTER engine — a legitimate
+                //    non-local return across an invokeBlock boundary. Throw
+                //    NonLocalReturn so the C++ stack unwinds (running RAII
+                //    guards) up to the engine that owns the home frame.
+                if (!homeFrameAlive(f.homeFrameId)) {
+                    auto* res = signalErrorOfClass(
+                        rt_, ctx, rt_.bootstrap().blockCannotReturnProto,
+                        "non-local return: home method has already returned");
+                    // BlockCannotReturn is non-resumable, so signalErrorOfClass
+                    // normally threw (UnwindToHandler to a catching `on:do:`,
+                    // or UnhandledSTException at top level). If a handler did
+                    // `resume:` anyway, treat the resumed value as this `^`'s
+                    // result and continue from the block.
+                    push(f, res ? res : PROTO_NONE);
+                    break;
+                }
                 throw NonLocalReturn(f.homeFrameId, r);
             }
             case Op::PUSH_BLOCK: {
@@ -893,8 +960,74 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     lookupFrom = superProto;
                 }
                 auto* attr = lookupFrom->getAttribute(ctx, selSym);
+                // D5 (MNT-b2): class-side / instance-side isolation. A method
+                // installed by `ClassName class >> sel` carries the
+                // `__class_side__` marker (stamped by __installClassMethod:as:).
+                // Such a method must NOT be reachable from an instance — only
+                // from a class object. The receiver is a class object when it
+                // owns `__class_name__` as a DIRECT own attribute (every user
+                // class is stamped with `__setClassName:`; a built-in class
+                // prototype is stamped at bootstrap). An instance merely
+                // inherits that attribute through its chain, so it does not own
+                // it. When a class-side method resolves for an instance
+                // receiver, drop it — the send then falls through to the
+                // `doesNotUnderstand` path below, signalling
+                // `MessageNotUnderstood`, exactly as the spec's class/instance
+                // protocol split requires.
+                //
+                // Only this one direction is enforced: an instance-side method
+                // sent to a class object is still allowed, because the built-in
+                // class prototypes (Array, Error, ...) deliberately double as
+                // both the class object and the instance-behaviour holder, and
+                // selectors such as `Array new:` rely on that. A `__class_side__`
+                // marker is only ever stamped on USER class-side methods, so
+                // this filter never touches the built-ins.
+                if (attr && attr != PROTO_NONE) {
+                    // Symbols are interned per-ProtoSpace: a function-local
+                    // `static` would bind to the FIRST runtime's space and
+                    // dangle for every later STRuntime (the multi-runtime unit
+                    // harness). Resolve fresh from the live ctx each send —
+                    // the same discipline exception_prims.cpp uses.
+                    const proto::ProtoString* classSideKey =
+                        proto::ProtoString::createSymbol(ctx, "__class_side__");
+                    const proto::ProtoString* classNameKey =
+                        proto::ProtoString::createSymbol(ctx, "__class_name__");
+                    const proto::ProtoObject* csMark =
+                        attr->getAttribute(ctx, classSideKey);
+                    if (csMark == PROTO_TRUE) {
+                        const proto::ProtoObject* ownName =
+                            recv->getOwnAttributeDirect(ctx, classNameKey);
+                        bool recvIsClass = ownName && ownName != PROTO_NONE;
+                        if (!recvIsClass)
+                            attr = nullptr;   // hide it — instance receiver
+                    }
+                }
                 if (!attr || attr == PROTO_NONE) {
-                    throw std::runtime_error("doesNotUnderstand: " + selStr);
+                    // D3 (MNT-b2): an unresolved selector is NOT a hard abort.
+                    // It happens inside the engine's own SEND dispatch, never
+                    // inside a primitive, so it bypasses the EXC-d
+                    // `translateNativeException` boundary (which wraps only the
+                    // primitive call below). Signal a catchable
+                    // `MessageNotUnderstood` (a subclass of `Error`) through
+                    // the normal `signalInstance` handler-stack path, so
+                    // `[ obj bogusSel ] on: Error do: [:e| …]` catches it and
+                    // `e messageText` reads back informatively. With no
+                    // handler, `defaultAction` throws `UnhandledSTException`,
+                    // preserving the previous uncaught-error behaviour for the
+                    // top level / REPL. `UnwindToHandler` from a `return:`
+                    // handler propagates out of runLoop untouched (the engine
+                    // does not catch it) straight to the owning `on:do:`.
+                    std::string mntMsg = "doesNotUnderstand: " + selStr;
+                    auto* r = signalErrorOfClass(
+                        rt_, ctx, rt_.bootstrap().messageNotUnderstoodProto,
+                        mntMsg.c_str());
+                    // A resumable handler (`resume:`) would let `signalInstance`
+                    // return a value here — push it as the send's result. A
+                    // MessageNotUnderstood is non-resumable, so in practice the
+                    // line above either threw or this pushes nil; handling it
+                    // keeps the send well-formed regardless.
+                    push(f, r ? r : PROTO_NONE);
+                    break;
                 }
                 // F4-U4: detect user method (Block-shaped wrapper carrying
                 // __bc_ptr__). User methods are installed by Compiler-emitted

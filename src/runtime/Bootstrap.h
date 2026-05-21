@@ -49,6 +49,14 @@ struct Bootstrap {
     const proto::ProtoObject* exceptionProto     = nullptr;
     const proto::ProtoObject* errorProto         = nullptr;
     const proto::ProtoObject* warningProto       = nullptr;
+    // MNT-b2 (D3 / D8): two concrete Error subclasses signalled by the runtime
+    // itself rather than by a script-level `signal`. `MessageNotUnderstood` is
+    // raised when a send resolves no method (an unknown selector);
+    // `BlockCannotReturn` is raised when a `^` runs in a block whose home
+    // method has already returned. Both are children of `Error`, so both are
+    // caught by an ordinary `on: Error do:` guard and are non-resumable.
+    const proto::ProtoObject* messageNotUnderstoodProto = nullptr;
+    const proto::ProtoObject* blockCannotReturnProto    = nullptr;
     // Track 2 slice a (COL-a): collection class hierarchy.
     //   Collection                 (abstract — shared iteration protocol)
     //     |-- SequenceableCollection (abstract — ordered, indexable)

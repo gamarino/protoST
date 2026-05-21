@@ -65,6 +65,19 @@ const proto::ProtoObject* signalNativeError(STRuntime& rt,
                                             proto::ProtoContext* ctx,
                                             const char* message);
 
+// MNT-b2 (D3 / D8): signal a fresh, non-resumable instance of `errorClass`
+// (`Error` or a subclass) carrying `message` as `messageText`, through the
+// same `signalInstance` path as a script-level `signal`. Used by the engine
+// to raise `MessageNotUnderstood` for an unknown selector and
+// `BlockCannotReturn` for a dead-home non-local return — both then catchable
+// by an ordinary `on: Error do:` handler. Defined in exception_prims.cpp.
+//
+// May throw the same control-flow exceptions as `signalNativeError`.
+const proto::ProtoObject* signalErrorOfClass(STRuntime& rt,
+                                             proto::ProtoContext* ctx,
+                                             const proto::ProtoObject* errorClass,
+                                             const char* message);
+
 // Run `call` (a native / primitive / UMD invocation) and translate any C++
 // exception it throws per the contract above. `Call` must be invocable with no
 // arguments and return `const proto::ProtoObject*`.
