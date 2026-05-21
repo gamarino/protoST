@@ -555,6 +555,23 @@ const proto::ProtoObject* prim_Future_catch(STRuntime& rt, proto::ProtoContext* 
     return r;
 }
 
+// Future>>new
+//
+// `Future new` must yield a *usable* pending future — a first-class promise —
+// not a bare newChild of futureProto. A bare child lacks the `__state__`,
+// `__value__`, `__error__` and `__cv__` attributes that resolve:/rejectWith:/
+// wait depend on; sending `resolve:` to it fails with "Object is not an
+// integer type" because the state probe reads a nil (PROTO_NONE) slot and
+// calls asLong on it. Routing through STRuntime::newFuture installs the full
+// future machinery, so a manually-constructed Future behaves identically to
+// one produced by an actor send: it starts pending, settles via resolve: /
+// rejectWith:, and wait blocks until then.
+const proto::ProtoObject* prim_Future_new(STRuntime& rt, proto::ProtoContext* ctx,
+                                           const proto::ProtoObject*,
+                                           const proto::ProtoObject* const*, int) {
+    return rt.newFuture(ctx);
+}
+
 } // anon
 
 // F6 v3 C: append an actor to the future's __waiters__ list while
@@ -817,6 +834,10 @@ void installFuturePrimitives(STRuntime& rt) {
                   reg.registerPrim(prim_Future_thenDo));
     bindPrimitive(rt, b.futureProto, "catch:",
                   reg.registerPrim(prim_Future_catch));
+    // `Future new` — a first-class, manually-resolvable promise. Overrides the
+    // inherited Object>>new so the result carries the full future machinery.
+    bindPrimitive(rt, b.futureProto, "new",
+                  reg.registerPrim(prim_Future_new));
 }
 
 } // namespace protoST

@@ -41,6 +41,18 @@ const proto::ProtoObject* prim_##NAME(STRuntime&, proto::ProtoContext* ctx,     
 DEFCMP(IntLt, <) DEFCMP(IntLe, <=) DEFCMP(IntGt, >) DEFCMP(IntGe, >=)
 DEFCMP(IntEq, ==) DEFCMP(IntNe, !=)
 
+const proto::ProtoObject* prim_IntIsEven(STRuntime&, proto::ProtoContext* ctx,
+                                          const proto::ProtoObject* r,
+                                          const proto::ProtoObject* const*, int) {
+    return (r->asLong(ctx) % 2 == 0) ? PROTO_TRUE : PROTO_FALSE;
+}
+
+const proto::ProtoObject* prim_IntIsOdd(STRuntime&, proto::ProtoContext* ctx,
+                                         const proto::ProtoObject* r,
+                                         const proto::ProtoObject* const*, int) {
+    return (r->asLong(ctx) % 2 != 0) ? PROTO_TRUE : PROTO_FALSE;
+}
+
 } // anon
 
 void installIntPrimitives(STRuntime& rt) {
@@ -56,6 +68,10 @@ void installIntPrimitives(STRuntime& rt) {
     auto idxGe  = reg.registerPrim(prim_IntGe);  bindPrimitive(rt, b.smallIntegerProto, ">=", idxGe);
     auto idxEq  = reg.registerPrim(prim_IntEq);  bindPrimitive(rt, b.smallIntegerProto, "=",  idxEq);
     auto idxNe  = reg.registerPrim(prim_IntNe);  bindPrimitive(rt, b.smallIntegerProto, "~=", idxNe);
+    auto idxIsEven = reg.registerPrim(prim_IntIsEven);
+    bindPrimitive(rt, b.smallIntegerProto, "isEven", idxIsEven);
+    auto idxIsOdd = reg.registerPrim(prim_IntIsOdd);
+    bindPrimitive(rt, b.smallIntegerProto, "isOdd", idxIsOdd);
 }
 
 } // namespace protoST

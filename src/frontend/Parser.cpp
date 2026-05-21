@@ -103,6 +103,14 @@ ast::NodePtr Parser::parseStatement() {
         if (inner) n->children.push_back(std::move(inner));
         return n;
     }
+    return parseExpression();
+}
+
+ast::NodePtr Parser::parseExpression() {
+    // An assignment is itself an expression yielding the assigned value, so it
+    // may appear as the right-hand side of another assignment (§3.6: chained
+    // assignment `a := b := 0`). Detect `identifier :=` here, before falling
+    // through to message-send parsing, and recurse for the RHS.
     if (current_.kind == TokenKind::Identifier && lexer_.peek().kind == TokenKind::Assign) {
         Token id = current_; advance();   // identifier
         advance();                         // ':='
@@ -112,10 +120,6 @@ ast::NodePtr Parser::parseStatement() {
         if (rhs) n->children.push_back(std::move(rhs));
         return n;
     }
-    return parseExpression();
-}
-
-ast::NodePtr Parser::parseExpression() {
     auto first = parseKeywordSend();
     if (!first || current_.kind != TokenKind::Semicolon || !isSendKind(first->kind)) {
         return first;

@@ -1121,14 +1121,24 @@ protoST's concurrency model is the actor model. It is built in, not a library.
 
 ### 10.1 Promoting an object to an actor
 
-`anObject asActor` returns an **actor proxy** wrapping `anObject`. The proxy is
-an instance of `Actor`; the wrapped object is unchanged.
+`anObject asActor` returns an **actor proxy** wrapping `anObject`. The wrapped
+object is unchanged.
 
 ```smalltalk
 sensor := TempSensor new.
 sensor initialize.
 actor := sensor asActor.
 ```
+
+The proxy is **fully transparent**: it forwards *every* message it receives to
+the wrapped object asynchronously (see [§10.2](#102-sending-to-an-actor)) —
+there is no exception, not even for introspection selectors. Sending
+`printString` to the proxy is itself an asynchronous send: it returns a
+`Future` that resolves to the *wrapped object's* `printString`, never a
+synchronous string describing "an Actor". Because every send is forwarded,
+there is no synchronous way to observe, from the proxy, that it is an actor at
+all — that opacity is the point. To obtain the wrapped object's printable form,
+`wait` on the future: `(actor printString) wait`.
 
 ### 10.2 Sending to an actor
 
