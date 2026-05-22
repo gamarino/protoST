@@ -26,25 +26,43 @@ struct ScopeWalker {
     // and method scope, by contrast, first-seen assignment is the declaration
     // site (preserves pre-F3-C5 semantics for top-level temps).
     bool isBlock = false;
+    // D22: instance-variable names of the enclosing method's class — minus any
+    // method temp/arg that shadows one. nullptr at module scope (no instance
+    // variables exist there). Threaded unchanged into every nested block
+    // scope. An instance variable is owned by `self`, not by any lexical
+    // scope: it is accessed through PUSH_INSTVAR / STORE_INSTVAR and must
+    // never enter the closure-capture machinery. Excluding it from freeVarsOf
+    // keeps it out of every enclosing scope's innerNeeds, hence out of every
+    // captured set — so a method that both assigns an instance variable and
+    // references it from a nested block no longer boxes the variable into an
+    // (uninitialised) closure dict.
+    const std::unordered_set<std::string>* instVars = nullptr;
 };
+
+using ClassMap = std::unordered_map<std::string, Compiler::ClassInfo>;
 
 // Forward declarations.
 void walkNode(const Node& n, ScopeWalker& cur,
-              Compiler::ScopeAnalysis& out, const Node* scopeKey);
+              Compiler::ScopeAnalysis& out, const Node* scopeKey,
+              const ClassMap* classes);
 void walkBlockBody(const Node& blockNode, ScopeWalker& blockScope,
-                   Compiler::ScopeAnalysis& out);
+                   Compiler::ScopeAnalysis& out, const ClassMap* classes);
 
 // Compute the free variables a scope exposes to its parent:
-//   (directRefs ∪ innerNeeds) − declared.
+//   (directRefs ∪ innerNeeds) − declared − instanceVariables.
+// D22: an instance variable is excluded — it is not a free variable of any
+// lexical scope, it belongs to `self`. Dropping it here stops it bubbling
+// into an enclosing scope's innerNeeds and therefore into a captured set.
 std::unordered_set<std::string> freeVarsOf(const ScopeWalker& sw) {
     std::unordered_set<std::string> out;
     out.reserve(sw.directRefs.size() + sw.innerNeeds.size());
-    for (const auto& r : sw.directRefs) {
-        if (sw.declared.count(r) == 0) out.insert(r);
-    }
-    for (const auto& r : sw.innerNeeds) {
-        if (sw.declared.count(r) == 0) out.insert(r);
-    }
+    auto consider = [&](const std::string& r) {
+        if (sw.declared.count(r) != 0) return;
+        if (sw.instVars && sw.instVars->count(r) != 0) return;
+        out.insert(r);
+    };
+    for (const auto& r : sw.directRefs)  consider(r);
+    for (const auto& r : sw.innerNeeds)  consider(r);
     return out;
 }
 
@@ -65,7 +83,8 @@ std::unordered_set<std::string> capturedOf(const ScopeWalker& sw) {
 // MethodDecl is treated as a scope boundary as well — inner blocks of a
 // method capture from the method's scope, not from the module's.
 void walkNode(const Node& n, ScopeWalker& cur,
-              Compiler::ScopeAnalysis& out, const Node* /*scopeKey*/) {
+              Compiler::ScopeAnalysis& out, const Node* /*scopeKey*/,
+              const ClassMap* classes) {
     switch (n.kind) {
         case NodeKind::Identifier:
             // Self/Super/ThisContext are separate NodeKinds and never reach here.
@@ -90,7 +109,7 @@ void walkNode(const Node& n, ScopeWalker& cur,
                 if (cur.isBlock) cur.directRefs.insert(n.text);
                 else             cur.declared.insert(n.text);
             }
-            if (!n.children.empty()) walkNode(*n.children[0], cur, out, nullptr);
+            if (!n.children.empty()) walkNode(*n.children[0], cur, out, nullptr, classes);
             return;
         }
 
@@ -98,11 +117,15 @@ void walkNode(const Node& n, ScopeWalker& cur,
             // Open a fresh scope for the block.
             ScopeWalker blockScope;
             blockScope.isBlock = true;
+            // D22: a block sees the enclosing method's instance variables —
+            // thread the set through unchanged so an ivar referenced inside
+            // the block is excluded from the block's free vars.
+            blockScope.instVars = cur.instVars;
             // n.stringList holds: nArgs args followed by locals.
             for (const auto& name : n.stringList) {
                 blockScope.declared.insert(name);
             }
-            walkBlockBody(n, blockScope, out);
+            walkBlockBody(n, blockScope, out, classes);
             // Record this block's captured set under its node pointer.
             out.capturedByScope[&n] = capturedOf(blockScope);
             // Bubble the block's free vars up to the enclosing scope's innerNeeds.
@@ -119,8 +142,27 @@ void walkNode(const Node& n, ScopeWalker& cur,
             for (size_t i = 1; i < n.stringList.size(); ++i) {
                 methodScope.declared.insert(n.stringList[i]);
             }
+            // D22: the instance variables visible in this method body — the
+            // declaring class's instance variables, minus any method temp/arg
+            // that shadows one (within the method that name is a local). The
+            // set is local to this case but is walked entirely before it goes
+            // out of scope, so every nested block's `instVars` pointer into it
+            // stays valid for the whole MethodDecl subtree.
+            std::unordered_set<std::string> ivarSet;
+            if (classes) {
+                auto cit = classes->find(n.text);
+                if (cit != classes->end()) {
+                    for (const auto& iv : cit->second.instVarNames) {
+                        ivarSet.insert(iv);
+                    }
+                }
+            }
+            for (size_t i = 1; i < n.stringList.size(); ++i) {
+                ivarSet.erase(n.stringList[i]);  // a method-local shadows it
+            }
+            methodScope.instVars = &ivarSet;
             for (const auto& child : n.children) {
-                walkNode(*child, methodScope, out, &n);
+                walkNode(*child, methodScope, out, &n, classes);
             }
             out.capturedByScope[&n] = capturedOf(methodScope);
             // Intentionally do not propagate to cur — method bodies aren't
@@ -133,16 +175,16 @@ void walkNode(const Node& n, ScopeWalker& cur,
             // stringList? No: stringList is structural (selector, var names),
             // not expressions, so children alone are correct here.
             for (const auto& child : n.children) {
-                if (child) walkNode(*child, cur, out, nullptr);
+                if (child) walkNode(*child, cur, out, nullptr, classes);
             }
             return;
     }
 }
 
 void walkBlockBody(const Node& blockNode, ScopeWalker& blockScope,
-                   Compiler::ScopeAnalysis& out) {
+                   Compiler::ScopeAnalysis& out, const ClassMap* classes) {
     for (const auto& child : blockNode.children) {
-        if (child) walkNode(*child, blockScope, out, &blockNode);
+        if (child) walkNode(*child, blockScope, out, &blockNode, classes);
     }
 }
 
@@ -158,9 +200,12 @@ void Compiler::analyseClosures(const Node& mod) {
     // module captured dict. Inner blocks that reference it then fall through
     // to PUSH_GLOBAL, consistent with the STORE_GLOBAL emitted below.
     moduleScope.isBlock = replMode_;
-    // Module-level: walk every statement under the module node.
+    // Module-level: walk every statement under the module node. `classes_` is
+    // populated by collectClasses() (run first in compileModule), so the
+    // MethodDecl walk can resolve each method's class to its instance
+    // variables — see D22 / ScopeWalker::instVars.
     for (const auto& child : mod.children) {
-        if (child) walkNode(*child, moduleScope, analysis_, nullptr);
+        if (child) walkNode(*child, moduleScope, analysis_, nullptr, &classes_);
     }
     analysis_.moduleCaptured = capturedOf(moduleScope);
     // Also expose the module-level captured set under the nullptr key

@@ -270,30 +270,40 @@ here so you do *not* worry about them — they behave correctly now.
 - **Class-side methods are isolated** from instances (STATUS.md D5), and
   **chained assignment** `a := b := 0` parses (STATUS.md C1).
 
-## 14.7 A known parser caveat
+## 14.7 Guard clauses and the trailing `^`
 
-One current rough edge is worth flagging because it is easy to hit and not yet
-in the deviation tracker as a numbered item:
+The *guard-clause* style — an early `^` inside an `ifTrue:` block, followed by
+the method's main body — works as written:
 
-> **A guard-clause `^` returning a bare instance variable can be mis-parsed.**
-> A method written in the *guard-clause* style — `(cond) ifTrue: [ ^ ivar ].`
-> followed by further statements that also touch that instance variable — may
-> on the current build produce a spurious error. The reliable shape is the
-> **expression form**: compute the whole result with `ifTrue:ifFalse:` and `^`
-> it once at the end of the method:
->
-> ```smalltalk
-> "robust — the expression form"
-> Account >> withdraw: amount
->   ^ (amount > balance)
->       ifTrue:  [ InsufficientFunds signal: 'insufficient funds' ]
->       ifFalse: [ balance := balance - amount. balance ].
-> ```
+```smalltalk
+"guard-clause style — works"
+Account >> withdraw: amount
+  amount > balance ifTrue: [ ^ self error: 'insufficient funds' ].
+  balance := balance - amount.
+  ^ balance.
+```
 
-[Chapter 7](07-exceptions.md) §7.7 discusses this. As a general habit — for
-this reason and for the `^`-terminator rule of [Chapter 5](05-classes-and-methods.md)
-§5.3 — write methods so the body computes a result and ends with a single
-trailing `^`.
+> A guard-clause `^` returning a bare instance variable used to be mis-compiled
+> (the variable was wrongly boxed into a closure). That was tracker item D22,
+> closed — the guard-clause form is now reliable. See `docs/STATUS.md`.
+
+The **expression form** — compute the whole result and `^` it once — is equally
+valid and many Smalltalkers prefer it stylistically:
+
+```smalltalk
+"expression form — also valid"
+Account >> withdraw: amount
+  ^ (amount > balance)
+      ifTrue:  [ InsufficientFunds signal: 'insufficient funds' ]
+      ifFalse: [ balance := balance - amount. balance ].
+```
+
+One genuine rule still applies, and it is a deliberate parser characteristic,
+not a bug: the **first *top-level* `^` terminates the method body** (the
+`^`-terminator rule of [Chapter 5](05-classes-and-methods.md) §5.3). A `^`
+*nested in a block* — as in the guard clause above — does not terminate the
+method; only a `^` written as a top-level statement does. The safe universal
+habit remains: end every method with a single explicit top-level `^`.
 
 ## 14.8 What is unchanged — the Smalltalk you keep
 
