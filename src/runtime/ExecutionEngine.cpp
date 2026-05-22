@@ -616,9 +616,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 const proto::ProtoString* capKey =
                     rt_.bootstrap().sym.captured;
                 const proto::ProtoString* homeKey =
-                    proto::ProtoString::createSymbol(ctx, "__home_frame__");
+                    rt_.bootstrap().sym.homeFrame;
                 const proto::ProtoString* blkSelfKey =
-                    proto::ProtoString::createSymbol(ctx, "__block_self__");
+                    rt_.bootstrap().sym.blockSelf;
                 auto* bcPtrObj = ctx->fromLong(
                     reinterpret_cast<long long>(&f.m->block(arg)));
                 // `bcPtrObj` is held across the setAttribute below — pin it.
@@ -835,9 +835,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     const proto::ProtoString* recvCapKey =
                         rt_.bootstrap().sym.captured;
                     const proto::ProtoString* recvHomeKey =
-                        proto::ProtoString::createSymbol(ctx, "__home_frame__");
+                        rt_.bootstrap().sym.homeFrame;
                     const proto::ProtoString* recvBlkSelfKey =
-                        proto::ProtoString::createSymbol(ctx, "__block_self__");
+                        rt_.bootstrap().sym.blockSelf;
                     // getAttribute walks the receiver first then the proto
                     // chain. `__bc_ptr__` is set only on BlockClosures (by
                     // PUSH_BLOCK), never on `blockProto` itself, so a hit
