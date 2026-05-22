@@ -149,6 +149,16 @@ private:
     void registryAdd(proto::ProtoContext* ctx, const proto::ProtoObject* o);
     void registryRemove(proto::ProtoContext* ctx, const proto::ProtoObject* o);
 
+    // Anchor / unanchor an actor in the live registry — but only a genuinely
+    // suspended actor needs it. A scheduled actor is rooted by the `__ready__`
+    // ProtoList; a running one by drainOne's TransientPin. So registryAdd /
+    // registryRemove (which build a per-pointer hex-string key — measured the
+    // #1 message-path cost) run ONLY when an actor parks on a future, gated by
+    // a cheap per-actor `__anchored__` flag so the common non-suspending path
+    // pays nothing.
+    void anchorActor(proto::ProtoContext* ctx, const proto::ProtoObject* actor);
+    void unanchorActor(proto::ProtoContext* ctx, const proto::ProtoObject* actor);
+
     // Lock-free scheduler primitives — there is no scheduler mutex.
     //
     // The ready queue is a protoCore immutable ProtoList held under

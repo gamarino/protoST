@@ -783,6 +783,38 @@ void STRuntime::registryRemove(proto::ProtoContext* ctx, const proto::ProtoObjec
         ->removeAttribute(ctx, key);
 }
 
+// Anchor an actor in the live registry — only ever called for a genuinely
+// suspended actor (finishDrain's parked path). Gated by the per-actor
+// `__anchored__` flag so a repeated call is a cheap no-op. The expensive
+// part (ptrRegistryKey building a hex-string key, then interning it) thus
+// runs at most once per suspension, never on the common non-suspending
+// message path — which is the whole point of the gate.
+void STRuntime::anchorActor(proto::ProtoContext* ctx,
+                            const proto::ProtoObject* actor) {
+    if (!actor) return;
+    const proto::ProtoObject* a =
+        actor->getOwnAttributeDirect(ctx, impl_->bootstrap.sym.anchored);
+    if (a == PROTO_TRUE) return;  // already anchored — no string built
+    registryAdd(ctx, actor);
+    const_cast<proto::ProtoObject*>(actor)->setAttribute(
+        ctx, impl_->bootstrap.sym.anchored, PROTO_TRUE);
+}
+
+// Drop an actor's live-registry anchor. For an actor that was never anchored
+// (the common case — it never suspended) this is a single cheap attribute
+// read that returns immediately: NO hex-string key is built, no registry
+// mutation happens.
+void STRuntime::unanchorActor(proto::ProtoContext* ctx,
+                              const proto::ProtoObject* actor) {
+    if (!actor) return;
+    const proto::ProtoObject* a =
+        actor->getOwnAttributeDirect(ctx, impl_->bootstrap.sym.anchored);
+    if (a != PROTO_TRUE) return;  // not anchored — nothing to do
+    registryRemove(ctx, actor);
+    const_cast<proto::ProtoObject*>(actor)->setAttribute(
+        ctx, impl_->bootstrap.sym.anchored, PROTO_FALSE);
+}
+
 // ---------------------------------------------------------------------------
 // Lock-free scheduler primitives. The ready queue is the ProtoList under
 // liveRegistry.__ready__; each op is a CAS-retry over that one attribute —
@@ -869,9 +901,12 @@ bool STRuntime::mailboxHasWork(proto::ProtoContext* ctx,
 
 void STRuntime::schedule(proto::ProtoContext* ctx, const proto::ProtoObject* actor) {
     if (!actor) return;
-    // Anchor the actor in the live registry first (idempotent overwrite of
-    // the same pointer-key); the ready ProtoList traces it too once enqueued.
-    registryAdd(ctx, actor);
+    // No registryAdd here. A queued actor is rooted by the `__ready__`
+    // ProtoList it lands in (a traced protoCore object); a running one by
+    // drainOne's TransientPin. Only a *suspended* actor — off the queue,
+    // parked on a future — needs the live registry, and finishDrain anchors
+    // it there (anchorActor) on exactly that path. This removes the
+    // per-message hex-string-key churn the profile flagged as the #1 cost.
     // Drive the 3-state __sched__ flag:
     //   0 -> 1  we claim the actor and enqueue it;
     //   1 -> 2  the actor is mid-turn — mark a pending wakeup, finishDrain
@@ -914,26 +949,22 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     if (!actor) return false;
     SCHED_DIAG("drainOne POP actor=" << actor);
 
-    // F6 v3 E2b: GC anchoring for the popped actor.
-    //
-    // The actor was added to the live registry by schedule() and is still
-    // there. Its lifecycle within the registry is:
-    //   - normal completion / exception → registryRemove (the actor no
-    //     longer needs anchoring once its message is fully processed);
-    //   - cooperative yield (FutureYield)  → keep it in the registry, so a
-    //     fully-suspended deep chain still has every actor reachable from
-    //     the single pinned root while parked on awaited futures'
-    //     __waiters__ lists. The whoever-resolves path re-schedules it,
-    //     which re-adds it harmlessly (idempotent overwrite of the same
-    //     key). It is finally removed on the resume's completion path.
-    //
+    // GC-root the popped actor for the whole turn. dequeueReady removed it
+    // from the `__ready__` ProtoList, so it is no longer reachable through
+    // the queue, and a raw C++ local is not traced. TransientPin hangs it off
+    // the context's pin set — cheap (no string built, no setAttribute),
+    // unlike the per-message registryAdd this replaces. Declared before the
+    // DrainGuard, it is destroyed AFTER it (reverse order) so the pin also
+    // covers finishDrain.
+    TransientPin pinActor(ctx, actor);
+
     // Turn lifecycle guard: on EVERY exit path (return or caught throw) it
-    // runs finishDrain, which under schedMu either re-queues the actor (its
-    // mailbox still holds messages) or releases it from scheduledSet and the
-    // live registry. A FutureYield sets `suspended = true` so finishDrain
-    // instead just drops scheduledSet ownership and keeps the registry
-    // anchor for the suspension window — whoever resolves the awaited future
-    // reschedules the actor.
+    // runs finishDrain, which drives the 3-state __sched__ flag — re-queueing
+    // the actor (a wakeup arrived, or its mailbox still holds messages) or
+    // releasing it. A FutureYield sets `suspended = true`; finishDrain then
+    // anchors the parked actor in the live registry (anchorActor) for the
+    // suspension window — a suspended actor is off the ready queue, so only
+    // the registry roots it until its awaited future reschedules it.
     struct DrainGuard {
         STRuntime* self;
         proto::ProtoContext* ctx;
@@ -1464,13 +1495,22 @@ void STRuntime::finishDrain(proto::ProtoContext* ctx,
                 enqueueReady(ctx, actor);
                 SCHED_DIAG("finishDrain RE-QUEUE (backlog) actor=" << actor);
             }
+            // Back on the ready queue (rooted by `__ready__`) — drop any
+            // suspension anchor. A no-op for an actor that never suspended.
+            unanchorActor(ctx, actor);
             return;
         }
-        // Fully released. A suspended actor stays anchored in the live
-        // registry (its awaited future's settle will reschedule it via
-        // schedule(), which the 3-state flag turns into an enqueue); a
-        // completed actor with an empty mailbox drops its anchor.
-        if (!suspended) registryRemove(ctx, actor);
+        // Fully released.
+        //   * suspended  — the actor is parked on a future, off the ready
+        //     queue; anchor it in the live registry so it survives GC until
+        //     the future's settle reschedules it (the 3-state flag turns
+        //     that schedule() into an enqueue).
+        //   * completed  — empty mailbox, nothing to run; drop any anchor.
+        // anchorActor / unanchorActor are gated on the `__anchored__` flag,
+        // so the common non-suspending turn pays only one cheap attribute
+        // read here — no hex-string key, no registry mutation.
+        if (suspended) anchorActor(ctx, actor);
+        else           unanchorActor(ctx, actor);
         SCHED_DIAG("finishDrain RELEASE actor=" << actor
                    << (suspended ? " (suspended)" : ""));
         return;

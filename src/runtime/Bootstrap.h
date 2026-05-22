@@ -124,6 +124,7 @@ struct Bootstrap {
         const proto::ProtoString* atomValue       = nullptr;  // __atom_value__
         const proto::ProtoString* ready           = nullptr;  // __ready__  (lock-free ready queue)
         const proto::ProtoString* sched           = nullptr;  // __sched__  (per-actor 3-state flag)
+        const proto::ProtoString* anchored        = nullptr;  // __anchored__ (in the live registry?)
     } sym;
 };
 
