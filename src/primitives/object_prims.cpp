@@ -71,12 +71,12 @@ const proto::ProtoObject* prim_Object_asActor(STRuntime& rt, proto::ProtoContext
     TransientPin pinActor(ctx, actor);
 
     // __wrapped__ = recv
-    static const proto::ProtoString* wrappedKey =
+    const proto::ProtoString* wrappedKey =
         proto::ProtoString::createSymbol(ctx, "__wrapped__");
     actor->setAttribute(ctx, wrappedKey, r);
 
     // __mailbox__ = empty ProtoList (Lisp-style cons stack)
-    static const proto::ProtoString* mailboxKey =
+    const proto::ProtoString* mailboxKey =
         proto::ProtoString::createSymbol(ctx, "__mailbox__");
     auto* emptyList = ctx->newList();
     // `emptyList` is held across asObject + setAttribute — pin it.
@@ -85,7 +85,7 @@ const proto::ProtoObject* prim_Object_asActor(STRuntime& rt, proto::ProtoContext
     actor->setAttribute(ctx, mailboxKey, emptyList->asObject(ctx));
 
     // __state__ = 0 (idle)
-    static const proto::ProtoString* stateKey =
+    const proto::ProtoString* stateKey =
         proto::ProtoString::createSymbol(ctx, "__state__");
     actor->setAttribute(ctx, stateKey, ctx->fromLong(0));
 
@@ -576,7 +576,7 @@ const proto::ProtoObject* prim_Object_printString(STRuntime&,
                                                    const proto::ProtoObject* r,
                                                    const proto::ProtoObject* const*,
                                                    int) {
-    static const proto::ProtoString* nameKey =
+    const proto::ProtoString* nameKey =
         proto::ProtoString::createSymbol(ctx, "__class_name__");
 
     // An own `__class_name__` means the receiver is itself a class object.

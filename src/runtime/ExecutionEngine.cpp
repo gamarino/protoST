@@ -594,13 +594,13 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // node). Until `push(f, block)` lands it in a GC-traced frame
                 // slot it is reachable from nowhere the collector traces.
                 TransientPin pinBlock(ctx, block);
-                static const proto::ProtoString* bcKey =
+                const proto::ProtoString* bcKey =
                     proto::ProtoString::createSymbol(ctx, "__bc_ptr__");
-                static const proto::ProtoString* capKey =
+                const proto::ProtoString* capKey =
                     proto::ProtoString::createSymbol(ctx, "__captured__");
-                static const proto::ProtoString* homeKey =
+                const proto::ProtoString* homeKey =
                     proto::ProtoString::createSymbol(ctx, "__home_frame__");
-                static const proto::ProtoString* blkSelfKey =
+                const proto::ProtoString* blkSelfKey =
                     proto::ProtoString::createSymbol(ctx, "__block_self__");
                 auto* bcPtrObj = ctx->fromLong(
                     reinterpret_cast<long long>(&f.m->block(arg)));
@@ -703,13 +703,13 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // the send. The actual method execution happens later when
                 // STRuntime::drainOne pulls a message from the mailbox.
                 if (rt_.isActor(ctx, recv)) {
-                    static const proto::ProtoString* mbKey =
+                    const proto::ProtoString* mbKey =
                         proto::ProtoString::createSymbol(ctx, "__mailbox__");
-                    static const proto::ProtoString* msgSelKey =
+                    const proto::ProtoString* msgSelKey =
                         proto::ProtoString::createSymbol(ctx, "__selector__");
-                    static const proto::ProtoString* msgArgsKey =
+                    const proto::ProtoString* msgArgsKey =
                         proto::ProtoString::createSymbol(ctx, "__args__");
-                    static const proto::ProtoString* msgFutKey =
+                    const proto::ProtoString* msgFutKey =
                         proto::ProtoString::createSymbol(ctx, "__future__");
 
                     // Allocate a fresh pending Future.
@@ -811,13 +811,13 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // remain non-yieldable. See the limitation block at the top
                 // of this file.
                 {
-                    static const proto::ProtoString* recvBcKey =
+                    const proto::ProtoString* recvBcKey =
                         proto::ProtoString::createSymbol(ctx, "__bc_ptr__");
-                    static const proto::ProtoString* recvCapKey =
+                    const proto::ProtoString* recvCapKey =
                         proto::ProtoString::createSymbol(ctx, "__captured__");
-                    static const proto::ProtoString* recvHomeKey =
+                    const proto::ProtoString* recvHomeKey =
                         proto::ProtoString::createSymbol(ctx, "__home_frame__");
-                    static const proto::ProtoString* recvBlkSelfKey =
+                    const proto::ProtoString* recvBlkSelfKey =
                         proto::ProtoString::createSymbol(ctx, "__block_self__");
                     // getAttribute walks the receiver first then the proto
                     // chain. `__bc_ptr__` is set only on BlockClosures (by
@@ -1134,9 +1134,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // We probe for __bc_ptr__ first; if absent, fall through to
                 // the legacy primitive-marker (tagged SmallInteger with bit
                 // 62 set) dispatch.
-                static const proto::ProtoString* bcKey =
+                const proto::ProtoString* bcKey =
                     proto::ProtoString::createSymbol(ctx, "__bc_ptr__");
-                static const proto::ProtoString* capKey =
+                const proto::ProtoString* capKey =
                     proto::ProtoString::createSymbol(ctx, "__captured__");
                 auto* bcPtrObj = attr->getAttribute(ctx, bcKey);
                 if (bcPtrObj && bcPtrObj != PROTO_NONE) {

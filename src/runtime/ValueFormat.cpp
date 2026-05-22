@@ -115,7 +115,7 @@ std::string formatValue(STRuntime& /*rt*/, proto::ProtoContext* ctx,
 
     // Any other object: replicate the default Object>>printString in C++.
     // (object_prims.cpp prim_Object_printString — kept in sync.)
-    static const proto::ProtoString* nameKey =
+    const proto::ProtoString* nameKey =
         proto::ProtoString::createSymbol(ctx, "__class_name__");
 
     // An own `__class_name__` means the value is itself a class object —

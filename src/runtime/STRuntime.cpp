@@ -115,7 +115,7 @@ void bindPrimitive(STRuntime& rt, const proto::ProtoObject* proto, const char* s
 // object under such a key so the entry can later be removed by pointer
 // identity. Pointer identity is stable for a live object — exactly what is
 // needed since the object is kept alive precisely while the entry exists.
-static const proto::ProtoString*
+const proto::ProtoString*
 ptrRegistryKey(proto::ProtoContext* ctx, const proto::ProtoObject* o) {
     char buf[32];
     std::snprintf(buf, sizeof(buf), "p%llx",
@@ -915,15 +915,15 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
         ~DrainGuard() { self->finishDrain(ctx, actor, suspended); }
     } drainGuard{this, ctx, actor};
 
-    static const proto::ProtoString* mailboxKey =
+    const proto::ProtoString* mailboxKey =
         proto::ProtoString::createSymbol(ctx, "__mailbox__");
-    static const proto::ProtoString* wrappedKey =
+    const proto::ProtoString* wrappedKey =
         proto::ProtoString::createSymbol(ctx, "__wrapped__");
-    static const proto::ProtoString* selKey =
+    const proto::ProtoString* selKey =
         proto::ProtoString::createSymbol(ctx, "__selector__");
-    static const proto::ProtoString* argsKey =
+    const proto::ProtoString* argsKey =
         proto::ProtoString::createSymbol(ctx, "__args__");
-    static const proto::ProtoString* futKey =
+    const proto::ProtoString* futKey =
         proto::ProtoString::createSymbol(ctx, "__future__");
     // F6 v3 C+D: per-actor yield/resume bookkeeping.
     //  * __suspended_frame__ : engine snapshot taken at the FutureYield site.
@@ -1230,7 +1230,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
         const proto::ProtoObject* result = nullptr;
 
         // Detect user method (has __bc_ptr__) vs primitive marker (tagged int).
-        static const proto::ProtoString* bcKey =
+        const proto::ProtoString* bcKey =
             proto::ProtoString::createSymbol(ctx, "__bc_ptr__");
         auto* bcPtrObj = method ? method->getAttribute(ctx, bcKey) : nullptr;
         if (bcPtrObj && bcPtrObj != PROTO_NONE) {
@@ -1242,7 +1242,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             methodArgs.push_back(wrapped);
             for (int i = 0; i < argc; ++i) methodArgs.push_back(args[i]);
             // Honour the method's captured-dict if any (matches Engine path).
-            static const proto::ProtoString* capKey =
+            const proto::ProtoString* capKey =
                 proto::ProtoString::createSymbol(ctx, "__captured__");
             auto* capDict = method->getAttribute(ctx, capKey);
             if (capDict == PROTO_NONE) capDict = nullptr;
@@ -1509,11 +1509,11 @@ const proto::ProtoObject* STRuntime::newFuture(proto::ProtoContext* ctx) {
     // another setAttribute). The sole caller (the engine actor SEND fast-path)
     // runs on a sized engine context, so the scratch region exists. Pin it.
     TransientPin pinFut(ctx, fut);
-    static const proto::ProtoString* stateKey =
+    const proto::ProtoString* stateKey =
         proto::ProtoString::createSymbol(ctx, "__state__");
-    static const proto::ProtoString* valueKey =
+    const proto::ProtoString* valueKey =
         proto::ProtoString::createSymbol(ctx, "__value__");
-    static const proto::ProtoString* errKey =
+    const proto::ProtoString* errKey =
         proto::ProtoString::createSymbol(ctx, "__error__");
     fut->setAttribute(ctx, stateKey, ctx->fromLong(0));  // 0 = pending
     fut->setAttribute(ctx, valueKey, PROTO_NONE);
@@ -1528,7 +1528,7 @@ const proto::ProtoObject* STRuntime::newFuture(proto::ProtoContext* ctx) {
 bool STRuntime::isActor(proto::ProtoContext* ctx,
                         const proto::ProtoObject* obj) const {
     if (!obj || obj == PROTO_NONE) return false;
-    static const proto::ProtoString* wrappedKey =
+    const proto::ProtoString* wrappedKey =
         proto::ProtoString::createSymbol(ctx, "__wrapped__");
     auto* w = obj->getAttribute(ctx, wrappedKey);
     return (w != nullptr && w != PROTO_NONE);

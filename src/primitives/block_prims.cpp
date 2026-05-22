@@ -17,7 +17,7 @@ namespace protoST {
 // `invokeBlock` and `blockArgCount` never disagree about whether a block
 // carries `__bc_ptr__`, even across the multi-runtime test harness.
 static const proto::ProtoString* bcPtrKey(proto::ProtoContext* ctx) {
-    static const proto::ProtoString* key =
+    const proto::ProtoString* key =
         proto::ProtoString::createSymbol(ctx, "__bc_ptr__");
     return key;
 }
@@ -30,7 +30,7 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* block,
                                        const proto::ProtoObject* const* args, int argc) {
     const proto::ProtoString* bcKey = bcPtrKey(ctx);
-    static const proto::ProtoString* capKey =
+    const proto::ProtoString* capKey =
         proto::ProtoString::createSymbol(ctx, "__captured__");
     auto* bcPtrObj = block->getAttribute(ctx, bcKey);
     if (!bcPtrObj || bcPtrObj == PROTO_NONE)
@@ -56,7 +56,7 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
     // The nested engine cannot see the home frame (it lives in the parent
     // engine's frames_), so its RETURN handler throws a NonLocalReturn which
     // bubbles past invokeBlock to the parent engine's runLoop.
-    static const proto::ProtoString* homeKey =
+    const proto::ProtoString* homeKey =
         proto::ProtoString::createSymbol(ctx, "__home_frame__");
     unsigned long homeFrameId = 0;
     const proto::ProtoObject* homeObj = block->getAttribute(ctx, homeKey);
@@ -69,7 +69,7 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
     // PUSH_INSTVAR inside the block resolve to the enclosing method's
     // receiver. Absent for blocks not built by PUSH_BLOCK — fall back to
     // PROTO_NONE.
-    static const proto::ProtoString* blkSelfKey =
+    const proto::ProtoString* blkSelfKey =
         proto::ProtoString::createSymbol(ctx, "__block_self__");
     const proto::ProtoObject* blkSelf = block->getAttribute(ctx, blkSelfKey);
     if (!blkSelf || blkSelf == PROTO_NONE) blkSelf = PROTO_NONE;
