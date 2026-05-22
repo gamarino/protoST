@@ -140,7 +140,7 @@ public:
     // Idempotent: a spec already present in the chain is not added twice.
     void addModuleProviderToChain(const std::string& providerSpec);
 
-    inline const char* versionTag() const { return "0.1.0-pre"; }
+    inline const char* versionTag() const { return "0.1.0"; }
 
 private:
     // F6 v3 E2b: live-registry GC anchoring. registryAdd makes `o` reachable
@@ -168,6 +168,6 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-inline const char* versionString() { return "protoST 0.1.0-pre"; }
+inline const char* versionString() { return "protoST 0.1.0"; }
 
 } // namespace protoST

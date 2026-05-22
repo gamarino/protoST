@@ -18,14 +18,14 @@ stable id and file it in the right bucket.
   carried over, plus 4 new regression cases (two conformance `.st` for D22,
   one conformance `.st` + one `cli_actor_stress` shell test for D23). Earlier:
   702/702 at the T5-a commit; 699/699 at T3-c; 622/622 at `MNT-c`.
-- **Last verified:** 2026-05-22 (de-locking landed — the per-actor mailbox
-  mutex and the per-future mutex+condition-variable are removed; the actor
-  mailbox and the Future state machine are now lock-free over protoCore's
-  atomic attribute CAS. Whole suite green 4/4 consecutive `ctest` runs,
-  including `cli_actor_stress`). Earlier: 2026-05-21 (D23 closed — `workerLoop`
-  now acquires `schedMu` GC-safely, so the actor scheduler no longer
-  deadlocks under un-drained mailbox load; D23 repro 60/60).
-- **Open bugs:** none.
+- **Last verified:** 2026-05-22 (**0.1.0 initial release** — de-locking landed
+  [lock-free actor mailbox + Future], the `Atom` optimistic-concurrency cell
+  added, and the symbol half of D2 fixed [symbols resolved fresh per call].
+  Whole `ctest` suite green, 751/751, multiple consecutive runs). Earlier:
+  2026-05-21 (D23 closed — `workerLoop` acquires `schedMu` GC-safely).
+- **Open bugs:** none. Hard edges that are not language-design choices —
+  one-runtime-per-process, very large ropes, no `%` formatting — are recorded
+  honestly in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md).
 - **Id scheme:** `D1..D18` are carried over from `LANGUAGE.md` §14 and keep
   their original meaning. New divergences get new ids (`D19+`).
 
@@ -238,7 +238,7 @@ decisions, not defects; they stay, documented with their rationale.
 
 | Id | Deviation | Rationale |
 |----|-----------|-----------|
-| D2 | **Single `STRuntime` per process.** A second `STRuntime` corrupts symbol interning. | protoCore's symbol caches are per-`ProtoSpace` C++ statics. Enforcing one runtime per process is the deliberate operating contract (the CLI always constructs exactly one); lifting it is a protoCore-level concern, not a protoST bug. Documented in §13.2. *(Borderline: it is a real constraint born of a protoCore implementation detail. It is classified intentional because protoST chooses to live within it rather than work around it; if protoCore ever makes the caches per-space-instance, this item simply closes.)* |
+| D2 | **Single `STRuntime` per process.** A second `STRuntime` in the same process can mis-resolve module imports. | The larger half of this — function-local `static` caches holding per-`ProtoSpace` interned symbols, which dangled into a freed space for every later runtime — is **fixed** (commit `8bf5b9c`, 0.1.0): symbols are now resolved fresh per call. The residual is process-global UMD state — protoCore's module provider and module cache outlive a `ProtoSpace`. The CLI always constructs exactly one runtime, so this never affects normal use. Tracked in `KNOWN_ISSUES.md` (K1). *(Classified intentional because protoST lives within the one-runtime-per-process contract; the residual closes when the UMD provider/cache become per-runtime.)* |
 | D4 | **`new` does not auto-invoke `initialize`.** `ClassName new` returns a raw instance; the caller sends `initialize` explicitly. | A deliberate MVP semantics choice: `new` is the raw allocator and nothing more. Standard Smalltalk-80 defines `new` as `super new initialize`; protoST may adopt that later, but today the explicit two-step is the documented contract (§4.4). *(Intent is genuinely a judgement call — most Smalltalkers would expect auto-`initialize`. Left intentional because it is consistently documented and self-consistent; revisit if Track 1/3 decides to align with Smalltalk-80.)* |
 | D7 | **`outer` is an alias of `pass`.** | MVP simplification of the handler protocol. True `outer` semantics (run the enclosing handler, then *return to the inner* handler) require resumable handler re-entry that is not built. `pass` (continue the search outward, do not return) is the shipped behaviour and covers the common case. Closing this is a strict-semantics refinement, not a correctness fix. |
 | D12 | **No `main:` auto-invocation.** A script is simply its top-level forms run in order; the printed value is the last top-level statement. | Deliberate CLI semantics: protoST scripts are sequences of top-level forms, not programs with an entry point. Documented in §13. |
