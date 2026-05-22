@@ -680,8 +680,10 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     sendArgs[i] = pop(f);
                 const proto::ProtoObject* recv = pop(f);
 
-                auto* selSym = proto::ProtoString::createSymbol(ctx, selStr.c_str());
-                // F6 v3 E5: `selSym` is a freshly interned ProtoString held in
+                // Selector symbol — interned once and cached on the module
+                // (constSym), not re-interned on every send.
+                auto* selSym = f.m->constSym(ctx, arg);
+                // `selSym` is an interned (perennial) ProtoString held in
                 // a bare C++ local for the ENTIRE remainder of this handler —
                 // across getAttribute walks, the actor-path allocations
                 // (newFuture / newChild / newList / appendLast / setAttribute),
@@ -1241,8 +1243,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             }
             case Op::PUSH_CAPTURED: {
                 // arg = constant pool index of the (interned) symbol name.
-                const std::string& nameStr = f.m->constSymbol(arg);
-                auto* sym = proto::ProtoString::createSymbol(ctx, nameStr.c_str());
+                auto* sym = f.m->constSym(ctx, arg);
                 const proto::ProtoObject* capD = getCaptured(f);
                 const proto::ProtoObject* val =
                     (capD && capD != PROTO_NONE)
@@ -1258,9 +1259,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 const proto::ProtoObject* capD = getCaptured(f);
                 if (!capD || capD == PROTO_NONE)
                     throw std::runtime_error("STORE_CAPTURED without captured dict");
-                const std::string& nameStr = f.m->constSymbol(arg);
-                auto* sym = proto::ProtoString::createSymbol(ctx, nameStr.c_str());
-                // F6 v3 E5: `sym` is freshly interned and held across
+                auto* sym = f.m->constSym(ctx, arg);
+                // `sym` is an interned (perennial) ProtoString held across
                 // setAttribute on the mutable captured dict, which allocates a
                 // sparse-list node. `val` was popped but stays rooted in its
                 // frame slot; `sym` is reachable from nowhere — pin it.
@@ -1272,7 +1272,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             case Op::PUSH_GLOBAL: {
                 // arg = constant pool index of the (interned) global name.
                 const std::string& nameStr = f.m->constSymbol(arg);
-                auto* sym = proto::ProtoString::createSymbol(ctx, nameStr.c_str());
+                auto* sym = f.m->constSym(ctx, arg);
                 auto* g = rt_.globals();
                 auto* val = g ? g->getAttribute(ctx, sym) : nullptr;
                 if (!val || val == PROTO_NONE)
@@ -1284,10 +1284,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 if (f.sp == 0)
                     throw std::runtime_error("STORE_GLOBAL with empty stack");
                 const proto::ProtoObject* val = pop(f);
-                const std::string& nameStr = f.m->constSymbol(arg);
-                auto* sym = proto::ProtoString::createSymbol(ctx, nameStr.c_str());
-                // F6 v3 E5: `sym` held across setAttribute on the mutable
-                // globals object (allocates) — pin it.
+                auto* sym = f.m->constSym(ctx, arg);
+                // `sym` is interned (perennial); held across setAttribute on
+                // the mutable globals object (allocates) — pin it.
                 TransientPin pinSym(
                     ctx, reinterpret_cast<const proto::ProtoObject*>(sym));
                 auto* g = rt_.globals();
@@ -1308,10 +1307,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // `c value` find the integer attribute stored by STORE_INSTVAR
                 // instead of the method installed on the class, since
                 // getAttribute walks own-attrs first.
-                const std::string& nameStr = f.m->constSymbol(arg);
-                std::string mangled = "_iv_";
-                mangled += nameStr;
-                auto* sym = proto::ProtoString::createSymbol(ctx, mangled.c_str());
+                // Mangled "_iv_<name>" key, interned once and cached on the
+                // module (BytecodeModule::ivSymbol) — NOT rebuilt as a
+                // std::string and re-interned on every instance-variable
+                // access, which the profile measured as the dominant cost.
+                auto* sym = f.m->ivSymbol(ctx, arg);
                 // CLO Part 1: read `self` from the frame's header self-slot
                 // (baseSlot+1). For a method frame this equals local 0; for a
                 // block frame local 0 is the first block argument, so the
@@ -1331,10 +1331,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 if (f.sp == 0)
                     throw std::runtime_error("STORE_INSTVAR empty stack");
                 const proto::ProtoObject* val = pop(f);
-                const std::string& nameStr = f.m->constSymbol(arg);
-                std::string mangled = "_iv_";
-                mangled += nameStr;
-                auto* sym = proto::ProtoString::createSymbol(ctx, mangled.c_str());
+                // Mangled "_iv_<name>" key, interned once and cached on the
+                // module (BytecodeModule::ivSymbol) — NOT rebuilt as a
+                // std::string and re-interned on every instance-variable
+                // access, which the profile measured as the dominant cost.
+                auto* sym = f.m->ivSymbol(ctx, arg);
                 // F6 v3 E5: `sym` held across setAttribute on `self` (a
                 // mutable object — allocates a sparse-list node). `val` and
                 // `self` stay rooted via their frame slots; `sym` does not.

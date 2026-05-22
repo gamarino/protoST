@@ -1,6 +1,30 @@
 #include "BytecodeModule.h"
+#include "protoCore.h"
 #include <stdexcept>
 namespace protoST {
+
+const proto::ProtoString* BytecodeModule::constSym(proto::ProtoContext* ctx,
+                                                   size_t i) const {
+    if (symCache_.size() != consts_.size())
+        symCache_.assign(consts_.size(), nullptr);
+    const proto::ProtoString*& slot = symCache_[i];
+    if (!slot)
+        slot = proto::ProtoString::createSymbol(ctx, consts_[i].sval.c_str());
+    return slot;
+}
+
+const proto::ProtoString* BytecodeModule::ivSymbol(proto::ProtoContext* ctx,
+                                                   size_t i) const {
+    if (ivSymCache_.size() != consts_.size())
+        ivSymCache_.assign(consts_.size(), nullptr);
+    const proto::ProtoString*& slot = ivSymCache_[i];
+    if (!slot) {
+        std::string mangled = "_iv_";
+        mangled += consts_[i].sval;
+        slot = proto::ProtoString::createSymbol(ctx, mangled.c_str());
+    }
+    return slot;
+}
 
 void BytecodeModule::emit(Op op, uint8_t arg, int line) {
     // Record the byte offset of this word BEFORE appending its two bytes, so

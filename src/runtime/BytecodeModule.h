@@ -6,6 +6,8 @@
 #include <unordered_map>
 #include <vector>
 
+namespace proto { class ProtoContext; class ProtoString; }
+
 namespace protoST {
 
 class BytecodeModule {
@@ -55,6 +57,20 @@ public:
     const std::string&  constString(size_t i)  const { return consts_[i].sval; }
     const std::string&  constSymbol(size_t i)  const { return consts_[i].sval; }
     ConstKind           constKind(size_t i)    const { return consts_[i].kind; }
+
+    // Interned symbol for constant-pool entry `i`, cached. The opcodes that
+    // resolve a name — SEND_* (the selector), PUSH/STORE_GLOBAL,
+    // PUSH/STORE_CAPTURED — run constantly; calling createSymbol (a SymbolTable
+    // hash over a freshly parsed rope) on every execution was measured as a
+    // dominant message-path cost. The symbol for a given constant never
+    // changes, so it is interned once and cached.
+    const proto::ProtoString* constSym(proto::ProtoContext* ctx, size_t i) const;
+
+    // Cached interned "_iv_<name>" symbol for constant-pool entry `i` — the
+    // mangled instance-variable storage key (PUSH_INSTVAR / STORE_INSTVAR).
+    // Same rationale as constSym; a separate cache because the key carries
+    // the "_iv_" prefix.
+    const proto::ProtoString* ivSymbol(proto::ProtoContext* ctx, size_t i) const;
     size_t              constBlockRef(size_t i)const { return consts_[i].blockIndex; }
 
     // sub-modules
@@ -147,6 +163,11 @@ private:
     std::vector<std::string>            localNames_;  // F8-4: name per local slot
     std::string                         debugName_;   // F8-4: human label
     std::vector<Const>                  consts_;
+    // Lazy per-constant caches of interned symbols (constSym / ivSymbol).
+    // mutable: filled on demand. Hold perennial interned ProtoStrings, valid
+    // for the runtime's ProtoSpace (one runtime per process).
+    mutable std::vector<const proto::ProtoString*> symCache_;
+    mutable std::vector<const proto::ProtoString*> ivSymCache_;
     std::unordered_map<std::string, size_t> symbolIndex_;
     std::vector<std::unique_ptr<BytecodeModule>> blocks_;
     int argCount_ = 0;
