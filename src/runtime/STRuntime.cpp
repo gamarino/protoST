@@ -55,18 +55,12 @@ namespace protoST { void installImportGlobal(STRuntime& rt); }
 namespace protoST { void installExceptionPrimitives(STRuntime& rt); }
 namespace protoST { void installCollectionPrimitives(STRuntime& rt); }
 
-// F6-A6 / F6 v2 T4: future transition helpers defined alongside the Future
-// primitives.
-//
-// * resolveFutureFromDrain / rejectFutureFromDrain perform the atomic
-//   (write state, fire callbacks, notify cv) sequence under the future's
-//   cv mutex. drainOne calls these instead of writing state and firing
-//   callbacks itself. Holding the mutex across the callback loop ensures
-//   "Future>>wait returns ⇒ all thenDo:/catch: blocks completed".
-// * installFutureCV attaches a fresh per-future condition_variable to a
-//   newly allocated future (called once from newFuture below).
+// F6-A6: future transition helpers defined alongside the Future primitives.
+// resolveFutureFromDrain / rejectFutureFromDrain perform the lock-free
+// settle sequence (claim via setAttributeIfEqual, write value, fire
+// callbacks, publish state, schedule waiters). drainOne calls these instead
+// of writing state and firing callbacks itself.
 namespace protoST {
-void installFutureCV(proto::ProtoContext* ctx, const proto::ProtoObject* fut);
 void resolveFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
                             const proto::ProtoObject* future,
                             const proto::ProtoObject* value);
@@ -1518,12 +1512,10 @@ const proto::ProtoObject* STRuntime::newFuture(proto::ProtoContext* ctx) {
     fut->setAttribute(ctx, stateKey, ctx->fromLong(0));  // 0 = pending
     fut->setAttribute(ctx, valueKey, PROTO_NONE);
     fut->setAttribute(ctx, errKey,   PROTO_NONE);
-    // F6 v2 T4: attach a per-future condition_variable so Future>>wait can
-    // block (rather than busy-retry) and resolve/rejectWith/drainOne can
-    // wake the waiter via notify_all. Every future built through this path
-    // carries a cv; Future>>wait throws if asked to wait on a future
-    // without one.
-    installFutureCV(ctx, fut);
+    // No per-future mutex / condition_variable. The future state machine is
+    // lock-free: resolve/reject claim the settlement with an attribute CAS
+    // (ProtoObject::setAttributeIfEqual), and Future>>wait polls __state__
+    // with a GC-safe bounded sleep. See future_prims.cpp.
     return fut;
 }
 

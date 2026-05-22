@@ -1537,7 +1537,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
 
         const proto::ProtoObject* snap = snapshotFrames(ctx);
         // `snap` is held across the setAttribute below and across
-        // appendFutureWaiterLocked (which allocates) — pin it.
+        // appendFutureWaiter (which allocates) — pin it.
         TransientPin pinSnap(ctx, snap);
         SCHED_DIAG("engine YIELD actor=" << actor
                    << " future=" << y.future()
@@ -1547,26 +1547,23 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             const_cast<proto::ProtoObject*>(actor)->setAttribute(
                 ctx, waitingOnKey, y.future());
 
-            // Append the actor to the future's __waiters__ list under the
-            // future's cv mutex so it cannot race with resolve/reject on
-            // a different thread. The helper returns false if the future
-            // had ALREADY settled between Future>>wait's state check and
-            // our acquisition of the mutex; in that case the
-            // resolveFutureFromDrain run that just finished took an
-            // empty waiters snapshot, so we must schedule the actor
-            // ourselves to make sure the resume path runs.
+            // CAS-append the actor to the future's __waiters__ list. The
+            // helper returns false if the future had ALREADY settled — its
+            // settle drained __waiters__ before our append landed — in which
+            // case we must schedule the actor ourselves so the resume path
+            // runs and consumes the settled value.
             //
             // We import the helper indirectly from future_prims.cpp; the
             // linker connects them.
-            extern bool appendFutureWaiterLocked(
+            extern bool appendFutureWaiter(
                 proto::ProtoContext* ctx,
                 const proto::ProtoObject* fut,
                 const proto::ProtoObject* waiterActor);
-            bool parked = appendFutureWaiterLocked(ctx, y.future(), actor);
+            bool parked = appendFutureWaiter(ctx, y.future(), actor);
             if (!parked) {
-                // Race window: producer settled the future in the gap
-                // between wait's mutex release and our re-acquisition.
-                // Schedule the actor explicitly so the resume path
+                // The future settled before our append landed; the settle's
+                // waiter drain did not see this actor. Schedule it explicitly
+                // so the resume path
                 // observes the settled state.
                 rt_.schedule(ctx, actor);
             }
