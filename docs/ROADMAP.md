@@ -343,6 +343,211 @@ protoST's defining feature into a measurable result rather than a claim.
 
 ---
 
+## Phase 2 — From a complete language to a serious actor runtime
+
+Tracks 1–11 make protoST a **complete, usable language**. They do not yet make
+it a **serious actor runtime** — one that could be weighed against BEAM
+(Erlang/Elixir), Akka or Orleans. That step needs production-grade scheduling,
+supervision, backpressure, non-blocking I/O and observability. This phase is
+that work.
+
+**Honest positioning.** protoST's distinct asset is **zero-copy,
+data-race-free message passing on a shared heap, GIL-free, polyglot
+in-process** — genuine against BEAM (which deep-copies every message) and
+against Akka (shared heap, but safe only by unenforced convention). protoST
+does **not** try to beat BEAM at distributed, telecom-grade fault tolerance.
+Its lane is the one where its asset is decisive and the tradeoffs hurt least:
+**the highest-fidelity single-(large-)machine, polyglot agent-based /
+digital-twin simulation**, with the world state shared zero-copy and immutable.
+Phase 2 is scoped to make protoST a serious competitor *in that lane* — not a
+universal BEAM replacement.
+
+**The architecture principle.** The protoST runtime is a **microkernel of
+mechanism and hooks**; the actor *platform* features — supervision trees,
+observability UIs, persistence, distribution — are **modules** over those
+hooks. Policy is not baked into the runtime. This mirrors protoCore's
+relationship to its languages, and Erlang's own split: `link`/`monitor` are VM
+primitives, while `supervisor` is an OTP *library*. The phase is therefore in
+two parts: **core-runtime tracks** (mechanism that cannot be a module) and
+**the module layer** (everything that can).
+
+### The core runtime
+
+#### Track 12 — Fair scheduling: reduction-counted preemption
+
+**Goal:** no actor can starve the others — a CPU-bound handler must not hog a
+worker thread.
+
+Scheduling is cooperative-only today: a handler that never `wait`s holds its
+worker until it completes. The fix needs **no OS preemption** — it is BEAM's
+approach. BEAM is not OS-preemptive either; its VM counts *reductions* (units
+of work) and the interpreter yields the process at a reduction boundary. The
+engine counts work units per turn (loop back-edges, sends, calls); when the
+budget is spent it forces a yield — snapshotting the frames and rescheduling
+the actor, exactly what a `Future wait` already does. The machinery largely
+exists: the engine already polls a GC safepoint in its dispatch loop, and the
+cooperative yield already snapshots and resumes frames. Residual: a
+long-running *native primitive* has no yield points (BEAM's "dirty NIF"
+problem) — that is Track 15's dirty pool.
+
+**Why it matters:** fairness is table stakes; without it protoST is not a
+serious actor runtime.
+**Dependencies:** the engine (done), cooperative yield (done).
+**Size:** medium — mostly wiring parts that already exist.
+
+#### Track 13 — Bounded mailboxes and backpressure
+
+**Goal:** a fast producer must not grow a slow consumer's mailbox without
+bound; resource saturation must degrade gracefully, not crash.
+
+Mailboxes are unbounded lists today — a fast producer against a slow consumer
+is unbounded memory growth. Add a bounded mailbox with a policy (block the
+sender / reject / drop-oldest). Then the key unification: **memory pressure is
+backpressure on another resource.** protoCore already exposes a soft heap
+watermark; wire it so that crossing the watermark makes the runtime **refuse
+new actor spawns and new external messages** ("system overloaded") while
+admitted actors run on and the GC catches up. The hard-limit out-of-memory
+callback is the application's domain-shedding hook; the controlled `abort()`
+retreats to genuine last resort. "Graceful degradation", decomposed by
+resource, is mostly this track (memory, mailbox) plus Track 12 (CPU) plus
+Track 14 (faults) — it is not a separate subsystem.
+
+**Why it matters:** unbounded mailboxes are a known footgun; a serious runtime
+degrades under load, it does not fall over.
+**Dependencies:** the scheduler; protoCore's heap watermarks (done).
+**Size:** low–medium.
+
+#### Track 14 — Actor lifecycle and failure primitives
+
+**Goal:** the runtime-level primitives on which supervision is built.
+
+An unhandled exception already rejects the message's `Future` and the actor
+lives on — that *is* failure detection — but there is no `link`/`monitor` and
+no restart. Add the primitives: `link` / `monitor` (an actor is notified when
+another terminates), exit signals, graceful stop, and restart-with-clean-state.
+This is exactly Erlang's split — these are *runtime primitives*; supervision
+*trees and strategies* are a module on top (see the module layer below).
+
+**Why it matters:** for digital twins an unsupervised actor model is not
+credible — the twin of a physical device must be resilient.
+**Dependencies:** the actor model (done).
+**Size:** medium.
+
+#### Track 15 — Non-blocking I/O: the reactor and the dirty pool
+
+**Goal:** an actor that performs I/O must never block a worker thread.
+
+A worker blocked in a syscall cannot run other actors; N blocked workers freeze
+the scheduler. Oversizing the main pool is **not** the answer — it
+oversubscribes the CPUs and destroys CPU-bound throughput. Two mechanisms:
+
+- **An I/O reactor** over `epoll` / `io_uring` (Linux), `kqueue` / IOCP
+  elsewhere. protoST's I/O primitives — file, socket, timer, `sleep:` — become
+  asynchronous: they submit the operation to the reactor and **yield the
+  actor**, returning a `Future` the reactor resolves on completion. "Blocking
+  I/O" in actor code becomes a yield, reusing the cooperative-yield machinery.
+  The main worker pool stays at `#CPUs` and never blocks.
+- **A dirty pool** for the genuinely-unavoidable blocking (legacy C libraries,
+  blocking DNS): a separate, large, elastic pool of mostly-parked threads. The
+  runtime moves the blocking call there and yields the actor. The two pools are
+  sized by *different* rules on purpose — the main pool = `#CPUs` (no
+  oversubscription), the dirty pool large (a parked thread is nearly free).
+
+The unifying idea: every kind of blocking — an internal `wait`, I/O, a dirty
+call — becomes the same cooperative yield/resume; only the *completer* of the
+`Future` differs (a peer actor / the reactor / a dirty-pool thread). The worker
+is never what blocks.
+
+**Why it matters:** without this protoST is unusable for any actor that touches
+the outside world — which is every digital twin.
+**Dependencies:** cooperative yield (done).
+**Size:** large.
+
+#### Track 16 — Runtime hooks for the module layer
+
+**Goal:** expose the minimal, well-chosen hooks that let the platform features
+be *modules* rather than baked-in policy.
+
+The runtime emits and exposes; the modules consume:
+
+- **observability events** — actor lifecycle, mailbox metrics, scheduler
+  stats, the dead-letter queue, a per-message trace callback;
+- **object-graph serialization** — to and from bytes; a distribution module
+  needs it, since the zero-copy advantage is intra-process and a process
+  boundary necessarily serializes;
+- **remote-proxy routing** — an actor reference marked "remote" whose sends are
+  handed to a module instead of a local mailbox;
+- **state-snapshot access** — read an actor's current (immutable) state, which
+  a persistence module checkpoints without quiescing the actor.
+
+**Why it matters:** this is what makes the microkernel architecture real — the
+runtime stays a small mechanism, the platform is modules.
+**Dependencies:** grows with Tracks 12–15.
+**Size:** medium, incremental.
+
+#### Track 17 — Performance
+
+**Goal:** bring message throughput and single-thread speed toward competitive —
+"soft-real-time, better than Java" is the bar.
+
+protoST is a young runtime; today's numbers (≈7,700 round-trip messages/second,
+≈20× slower than CPython single-thread) reflect youth, not an architectural
+ceiling. The architecture has headroom — no GIL, lock-free mailbox and `Future`
+paths. Continuous work: pool / inline the per-message envelope, elide the
+`Future` for fire-and-forget sends, cheapen the scheduler, and over time the
+interpreter (faster dispatch, eventually a JIT). This is a **continuous track**,
+not a milestone, measured by the Track 11 benchmark suite.
+
+**Why it matters:** a serious actor runtime must move messages cheaply.
+**Dependencies:** continuous.
+**Size:** open-ended.
+
+### The actor-platform module layer
+
+Built **over the Track 16 hooks**, not inside the runtime. Each is an
+independent contribution.
+
+- **Supervision trees and strategies** — over the Track 14 `link`/`monitor`
+  primitives: supervisor actors, restart strategies (one-for-one, all-for-one),
+  restart-intensity limits. This is the OTP `supervisor` library, ported.
+- **Observability interface** — over the Track 16 event hooks: metrics export
+  (e.g. Prometheus), tracing, a live actor-system inspector. The runtime emits
+  events; this module defines their presentation and wire format.
+- **Persistence** — over state-snapshot access: event sourcing and/or periodic
+  snapshotting so an actor survives a restart. The immutable, structural-sharing
+  data model makes a snapshot cheap and consistent — it is the current
+  immutable state pointer, grabbed without stopping the actor. (This dovetails
+  with the digital-twin layer below.)
+- **Distribution / clustering** — over remote-proxy routing, serialization and
+  naming: multi-node actor systems. The unit of distribution is a whole protoST
+  process; crossing a node boundary serializes (the zero-copy advantage is
+  intra-process, and that is fine). Strategy: scale *up* first — one large
+  machine, zero-copy — then scale *out*, coarse-grained.
+
+### Settled design decisions (explicit non-goals)
+
+So contributors do not re-propose them:
+
+- **GC pause locality is not pursued.** protoCore uses one shared heap with a
+  stop-the-world tracing GC (the STW phase is the root scan only; mark and
+  sweep are concurrent). This is a *deliberate* choice, not a debt. The
+  alternatives that give per-actor pause locality buy it by spending the
+  developer's effort — Pony with its reference-capability type system, Rust
+  with manual ownership. protoST's product *is* ease of modelling and minimal
+  developer burden; paying that price would destroy the thing being sold. The
+  bar is "soft-real-time, better than Java", and keeping the STW root scan
+  short is tuning within the existing design — not a project.
+- **Hard-crash isolation is not offered.** BEAM-grade isolation — any process
+  can crash without affecting the others — requires isolated per-process heaps,
+  the exact thing protoST gave up to get zero-copy message passing. It is the
+  *dual* of the zero-copy decision and is architecturally unavailable inside
+  one process. protoST's resilience story is three-layered instead: logical
+  faults → supervision (Track 14 + the module); resource saturation →
+  backpressure (Track 13); a hard fault → handled *out of process* by an
+  external supervisor restarting the process, with the persistence module
+  restoring state. The protoST *language* is memory-safe, so a hard fault is a
+  protoCore bug, not a state a user program can reach.
+
 ## Beyond the language: the digital-twin layer
 
 Once the language core is solid, the distinguishing work begins: the
@@ -378,6 +583,14 @@ of Track 4), a defensible test suite (Track 6), and onboarding — the tutorial
 and example set (Tracks 7–9). The showcase tracks (3, 5) and the digital-twin
 layer can land before or after 1.0 — they are what make protoST *interesting*,
 but 1.0 is what makes it *usable*.
+
+**Phase 2 (Tracks 12–17) follows 1.0.** Tracks 1–11 make protoST a usable
+*language*; Phase 2 makes it a serious actor *runtime*. Within Phase 2 the
+core-runtime ordering is: Track 12 (fair scheduling) and Track 15
+(non-blocking I/O) first — without them the actor model is not viable under
+real load — then Track 13 (backpressure) and Track 14 (lifecycle primitives),
+with Track 16 (hooks) growing alongside and Track 17 (performance) continuous.
+The module layer follows the hooks it depends on.
 
 ## Contributing
 
