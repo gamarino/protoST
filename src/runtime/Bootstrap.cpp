@@ -156,6 +156,29 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     markResumable(out.exceptionProto, true);   // Exception — resumable
     markResumable(out.errorProto,     false);  // Error — not resumable
     markResumable(out.warningProto,   true);   // Warning — resumable
+
+    // Pre-intern the hot-path attribute vocabulary once, here, so the actor /
+    // Future / Atom message paths never pay a per-operation SymbolTable
+    // lookup. See Bootstrap::Symbols.
+    auto S = [&](const char* n) { return proto::ProtoString::createSymbol(ctx, n); };
+    out.sym.mailbox         = S("__mailbox__");
+    out.sym.wrapped         = S("__wrapped__");
+    out.sym.selector        = S("__selector__");
+    out.sym.args            = S("__args__");
+    out.sym.future          = S("__future__");
+    out.sym.state           = S("__state__");
+    out.sym.value           = S("__value__");
+    out.sym.error           = S("__error__");
+    out.sym.thenCbs         = S("__then_cbs__");
+    out.sym.catchCbs        = S("__catch_cbs__");
+    out.sym.waiters         = S("__waiters__");
+    out.sym.settling        = S("__settling__");
+    out.sym.suspendedFrame  = S("__suspended_frame__");
+    out.sym.waitingOn       = S("__waiting_on__");
+    out.sym.suspendedFuture = S("__suspended_future__");
+    out.sym.bcPtr           = S("__bc_ptr__");
+    out.sym.captured        = S("__captured__");
+    out.sym.atomValue       = S("__atom_value__");
 }
 
 } // namespace protoST

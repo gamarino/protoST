@@ -5,6 +5,7 @@ namespace proto {
     class ProtoSpace;
     class ProtoContext;
     class ProtoObject;
+    class ProtoString;
 }
 
 namespace protoST {
@@ -92,6 +93,36 @@ struct Bootstrap {
     // collection — it supports `associationsDo:` and the `->` literal.
     const proto::ProtoObject* dictionaryProto             = nullptr;
     const proto::ProtoObject* associationProto            = nullptr;
+
+    // Pre-interned hot-path attribute symbols.
+    //
+    // Interning is idempotent — the same content always yields the same
+    // pointer within a ProtoSpace — so a symbol, once interned, is a stable
+    // value that can be cached. These are interned ONCE at bootstrap and the
+    // pointers cached here, per-runtime (which is per-ProtoSpace, so this is
+    // free of the cross-space dangling that a function-local `static` has —
+    // deviation D2). The actor / Future / Atom hot paths read these instead
+    // of calling createSymbol — a SymbolTable hash+lock — on every message.
+    struct Symbols {
+        const proto::ProtoString* mailbox         = nullptr;  // __mailbox__
+        const proto::ProtoString* wrapped         = nullptr;  // __wrapped__
+        const proto::ProtoString* selector        = nullptr;  // __selector__
+        const proto::ProtoString* args            = nullptr;  // __args__
+        const proto::ProtoString* future          = nullptr;  // __future__
+        const proto::ProtoString* state           = nullptr;  // __state__
+        const proto::ProtoString* value           = nullptr;  // __value__
+        const proto::ProtoString* error           = nullptr;  // __error__
+        const proto::ProtoString* thenCbs         = nullptr;  // __then_cbs__
+        const proto::ProtoString* catchCbs        = nullptr;  // __catch_cbs__
+        const proto::ProtoString* waiters         = nullptr;  // __waiters__
+        const proto::ProtoString* settling        = nullptr;  // __settling__
+        const proto::ProtoString* suspendedFrame  = nullptr;  // __suspended_frame__
+        const proto::ProtoString* waitingOn       = nullptr;  // __waiting_on__
+        const proto::ProtoString* suspendedFuture = nullptr;  // __suspended_future__
+        const proto::ProtoString* bcPtr           = nullptr;  // __bc_ptr__
+        const proto::ProtoString* captured        = nullptr;  // __captured__
+        const proto::ProtoString* atomValue       = nullptr;  // __atom_value__
+    } sym;
 };
 
 // Build the prototype tree on top of `sp.objectPrototype` and bind the result

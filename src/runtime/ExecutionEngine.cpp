@@ -595,9 +595,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // slot it is reachable from nowhere the collector traces.
                 TransientPin pinBlock(ctx, block);
                 const proto::ProtoString* bcKey =
-                    proto::ProtoString::createSymbol(ctx, "__bc_ptr__");
+                    rt_.bootstrap().sym.bcPtr;
                 const proto::ProtoString* capKey =
-                    proto::ProtoString::createSymbol(ctx, "__captured__");
+                    rt_.bootstrap().sym.captured;
                 const proto::ProtoString* homeKey =
                     proto::ProtoString::createSymbol(ctx, "__home_frame__");
                 const proto::ProtoString* blkSelfKey =
@@ -704,13 +704,13 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // STRuntime::drainOne pulls a message from the mailbox.
                 if (rt_.isActor(ctx, recv)) {
                     const proto::ProtoString* mbKey =
-                        proto::ProtoString::createSymbol(ctx, "__mailbox__");
+                        rt_.bootstrap().sym.mailbox;
                     const proto::ProtoString* msgSelKey =
-                        proto::ProtoString::createSymbol(ctx, "__selector__");
+                        rt_.bootstrap().sym.selector;
                     const proto::ProtoString* msgArgsKey =
-                        proto::ProtoString::createSymbol(ctx, "__args__");
+                        rt_.bootstrap().sym.args;
                     const proto::ProtoString* msgFutKey =
-                        proto::ProtoString::createSymbol(ctx, "__future__");
+                        rt_.bootstrap().sym.future;
 
                     // Allocate a fresh pending Future.
                     // F6 v3 E5: `fut` is held in a C++ local across newChild,
@@ -812,9 +812,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // of this file.
                 {
                     const proto::ProtoString* recvBcKey =
-                        proto::ProtoString::createSymbol(ctx, "__bc_ptr__");
+                        rt_.bootstrap().sym.bcPtr;
                     const proto::ProtoString* recvCapKey =
-                        proto::ProtoString::createSymbol(ctx, "__captured__");
+                        rt_.bootstrap().sym.captured;
                     const proto::ProtoString* recvHomeKey =
                         proto::ProtoString::createSymbol(ctx, "__home_frame__");
                     const proto::ProtoString* recvBlkSelfKey =
@@ -1135,9 +1135,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // the legacy primitive-marker (tagged SmallInteger with bit
                 // 62 set) dispatch.
                 const proto::ProtoString* bcKey =
-                    proto::ProtoString::createSymbol(ctx, "__bc_ptr__");
+                    rt_.bootstrap().sym.bcPtr;
                 const proto::ProtoString* capKey =
-                    proto::ProtoString::createSymbol(ctx, "__captured__");
+                    rt_.bootstrap().sym.captured;
                 auto* bcPtrObj = attr->getAttribute(ctx, bcKey);
                 if (bcPtrObj && bcPtrObj != PROTO_NONE) {
                     // User method: F6 v3 A previously recursed via
@@ -1523,9 +1523,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         // way; consistency across both sites is what makes the suspended-
         // frame handoff observable.
         const proto::ProtoString* suspKey =
-            proto::ProtoString::createSymbol(ctx, "__suspended_frame__");
+            rt_.bootstrap().sym.suspendedFrame;
         const proto::ProtoString* waitingOnKey =
-            proto::ProtoString::createSymbol(ctx, "__waiting_on__");
+            rt_.bootstrap().sym.waitingOn;
         // F6 v3 E5: `suspKey` / `waitingOnKey` are freshly interned strings
         // held across snapshotFrames (which allocates a ProtoList plus one
         // mutable object and several lists per frame — heavy GC pressure) and

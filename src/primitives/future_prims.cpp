@@ -130,17 +130,17 @@ void settleFuture(STRuntime& rt, proto::ProtoContext* ctx,
                   bool reject, const proto::ProtoObject* payload) {
     if (!future) return;
     const proto::ProtoString* settlingKey =
-        proto::ProtoString::createSymbol(ctx, "__settling__");
+        rt.bootstrap().sym.settling;
     const proto::ProtoString* stateKey =
         proto::ProtoString::createSymbol(ctx, "__state__");
     const proto::ProtoString* valueKey =
-        proto::ProtoString::createSymbol(ctx, "__value__");
+        rt.bootstrap().sym.value;
     const proto::ProtoString* errorKey =
-        proto::ProtoString::createSymbol(ctx, "__error__");
+        rt.bootstrap().sym.error;
     const proto::ProtoString* thenCbsKey =
-        proto::ProtoString::createSymbol(ctx, "__then_cbs__");
+        rt.bootstrap().sym.thenCbs;
     const proto::ProtoString* catchCbsKey =
-        proto::ProtoString::createSymbol(ctx, "__catch_cbs__");
+        rt.bootstrap().sym.catchCbs;
     const proto::ProtoString* waitersKey =
         proto::ProtoString::createSymbol(ctx, "__waiters__");
 
@@ -210,9 +210,9 @@ const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* c
                                             const proto::ProtoObject* r,
                                             const proto::ProtoObject* const*, int) {
     const proto::ProtoString* valueKey =
-        proto::ProtoString::createSymbol(ctx, "__value__");
+        rt.bootstrap().sym.value;
     const proto::ProtoString* errorKey =
-        proto::ProtoString::createSymbol(ctx, "__error__");
+        rt.bootstrap().sym.error;
 
     SCHED_DIAG("prim_Future_wait ENTER future=" << r
                << " currentActor=" << rt.currentActor());
@@ -290,9 +290,9 @@ const proto::ProtoObject* prim_Future_thenDo(STRuntime& rt, proto::ProtoContext*
                                               int argc) {
     if (argc != 1) throw std::runtime_error("Future>>thenDo: expects 1 arg");
     const proto::ProtoString* valueKey =
-        proto::ProtoString::createSymbol(ctx, "__value__");
+        rt.bootstrap().sym.value;
     const proto::ProtoString* thenCbsKey =
-        proto::ProtoString::createSymbol(ctx, "__then_cbs__");
+        rt.bootstrap().sym.thenCbs;
     auto* block = a[0];
 
     // Fast paths on an already-settled future (__state__ is published last by
@@ -324,9 +324,9 @@ const proto::ProtoObject* prim_Future_catch(STRuntime& rt, proto::ProtoContext* 
                                              int argc) {
     if (argc != 1) throw std::runtime_error("Future>>catch: expects 1 arg");
     const proto::ProtoString* errorKey =
-        proto::ProtoString::createSymbol(ctx, "__error__");
+        rt.bootstrap().sym.error;
     const proto::ProtoString* catchCbsKey =
-        proto::ProtoString::createSymbol(ctx, "__catch_cbs__");
+        rt.bootstrap().sym.catchCbs;
     auto* block = a[0];
 
     long long s = readState(ctx, r);

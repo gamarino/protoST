@@ -916,15 +916,15 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     } drainGuard{this, ctx, actor};
 
     const proto::ProtoString* mailboxKey =
-        proto::ProtoString::createSymbol(ctx, "__mailbox__");
+        impl_->bootstrap.sym.mailbox;
     const proto::ProtoString* wrappedKey =
-        proto::ProtoString::createSymbol(ctx, "__wrapped__");
+        impl_->bootstrap.sym.wrapped;
     const proto::ProtoString* selKey =
-        proto::ProtoString::createSymbol(ctx, "__selector__");
+        impl_->bootstrap.sym.selector;
     const proto::ProtoString* argsKey =
-        proto::ProtoString::createSymbol(ctx, "__args__");
+        impl_->bootstrap.sym.args;
     const proto::ProtoString* futKey =
-        proto::ProtoString::createSymbol(ctx, "__future__");
+        impl_->bootstrap.sym.future;
     // F6 v3 C+D: per-actor yield/resume bookkeeping.
     //  * __suspended_frame__ : engine snapshot taken at the FutureYield site.
     //  * __waiting_on__      : the future the actor is currently awaiting.
@@ -942,17 +942,17 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     // interning lookup is cheap relative to the surrounding getAttribute
     // traffic.
     const proto::ProtoString* suspKey =
-        proto::ProtoString::createSymbol(ctx, "__suspended_frame__");
+        impl_->bootstrap.sym.suspendedFrame;
     const proto::ProtoString* waitingOnKey =
-        proto::ProtoString::createSymbol(ctx, "__waiting_on__");
+        impl_->bootstrap.sym.waitingOn;
     const proto::ProtoString* suspFutKey =
-        proto::ProtoString::createSymbol(ctx, "__suspended_future__");
+        impl_->bootstrap.sym.suspendedFuture;
     const proto::ProtoString* fValueKey =
-        proto::ProtoString::createSymbol(ctx, "__value__");
+        impl_->bootstrap.sym.value;
     const proto::ProtoString* fErrorKey =
-        proto::ProtoString::createSymbol(ctx, "__error__");
+        impl_->bootstrap.sym.error;
     const proto::ProtoString* fStateKey =
-        proto::ProtoString::createSymbol(ctx, "__state__");
+        impl_->bootstrap.sym.state;
     // F6 v3 E5: these six keys are freshly interned ProtoStrings (per-space
     // interning forbids static caching) and are held in C++ locals across the
     // ENTIRE drainOne body — which runs a full ExecutionEngine (arbitrary
@@ -1231,7 +1231,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
 
         // Detect user method (has __bc_ptr__) vs primitive marker (tagged int).
         const proto::ProtoString* bcKey =
-            proto::ProtoString::createSymbol(ctx, "__bc_ptr__");
+            impl_->bootstrap.sym.bcPtr;
         auto* bcPtrObj = method ? method->getAttribute(ctx, bcKey) : nullptr;
         if (bcPtrObj && bcPtrObj != PROTO_NONE) {
             // User method: invoke via a sub-engine with wrapped as self.
@@ -1243,7 +1243,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             for (int i = 0; i < argc; ++i) methodArgs.push_back(args[i]);
             // Honour the method's captured-dict if any (matches Engine path).
             const proto::ProtoString* capKey =
-                proto::ProtoString::createSymbol(ctx, "__captured__");
+                impl_->bootstrap.sym.captured;
             auto* capDict = method->getAttribute(ctx, capKey);
             if (capDict == PROTO_NONE) capDict = nullptr;
             SCHED_DIAG("drainOne USER-METHOD ENTER actor=" << actor);
@@ -1406,7 +1406,7 @@ void STRuntime::finishDrain(proto::ProtoContext* ctx,
 
     // Created outside the lock — just interned-symbol lookups.
     const proto::ProtoString* mbKey =
-        proto::ProtoString::createSymbol(ctx, "__mailbox__");
+        impl_->bootstrap.sym.mailbox;
 
     if (suspended) {
         // The actor parked on an awaited future. Drop scheduler ownership so
@@ -1426,9 +1426,9 @@ void STRuntime::finishDrain(proto::ProtoContext* ctx,
         // the actor here. A resolve happening AFTER the erase enqueues the
         // actor itself, and a double schedule() is deduplicated harmlessly.
         const proto::ProtoString* waitingOnKey =
-            proto::ProtoString::createSymbol(ctx, "__waiting_on__");
+            impl_->bootstrap.sym.waitingOn;
         const proto::ProtoString* stateKey =
-            proto::ProtoString::createSymbol(ctx, "__state__");
+            impl_->bootstrap.sym.state;
         const proto::ProtoObject* awaited =
             actor->getOwnAttributeDirect(ctx, waitingOnKey);
         if (awaited && awaited != PROTO_NONE) {
@@ -1510,11 +1510,11 @@ const proto::ProtoObject* STRuntime::newFuture(proto::ProtoContext* ctx) {
     // runs on a sized engine context, so the scratch region exists. Pin it.
     TransientPin pinFut(ctx, fut);
     const proto::ProtoString* stateKey =
-        proto::ProtoString::createSymbol(ctx, "__state__");
+        impl_->bootstrap.sym.state;
     const proto::ProtoString* valueKey =
-        proto::ProtoString::createSymbol(ctx, "__value__");
+        impl_->bootstrap.sym.value;
     const proto::ProtoString* errKey =
-        proto::ProtoString::createSymbol(ctx, "__error__");
+        impl_->bootstrap.sym.error;
     fut->setAttribute(ctx, stateKey, ctx->fromLong(0));  // 0 = pending
     fut->setAttribute(ctx, valueKey, PROTO_NONE);
     fut->setAttribute(ctx, errKey,   PROTO_NONE);
@@ -1529,7 +1529,7 @@ bool STRuntime::isActor(proto::ProtoContext* ctx,
                         const proto::ProtoObject* obj) const {
     if (!obj || obj == PROTO_NONE) return false;
     const proto::ProtoString* wrappedKey =
-        proto::ProtoString::createSymbol(ctx, "__wrapped__");
+        impl_->bootstrap.sym.wrapped;
     auto* w = obj->getAttribute(ctx, wrappedKey);
     return (w != nullptr && w != PROTO_NONE);
 }
