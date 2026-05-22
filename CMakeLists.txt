@@ -1,6 +1,16 @@
 cmake_minimum_required(VERSION 3.20)
 project(protoST VERSION 0.1.0 LANGUAGES CXX)
 
+# Default to an optimised build. Without this a plain `cmake -B build` leaves
+# CMAKE_BUILD_TYPE empty — GCC then compiles at -O0, and every casual build
+# (and benchmark) runs unoptimised. RelWithDebInfo keeps debug symbols for
+# profiling; override with -DCMAKE_BUILD_TYPE=Release for a stripped -O3 build.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
+    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
+        Debug Release RelWithDebInfo MinSizeRel)
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
