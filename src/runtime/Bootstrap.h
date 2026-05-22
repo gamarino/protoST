@@ -40,6 +40,9 @@ struct Bootstrap {
     // F6: actor model — mutable so methods can later be bound on them.
     const proto::ProtoObject* actorProto         = nullptr;
     const proto::ProtoObject* futureProto        = nullptr;
+    // Atom: a shared mutable cell with lock-free optimistic-concurrency
+    // compare-and-swap (the agent/atom pair, atom side).
+    const proto::ProtoObject* atomProto          = nullptr;
     const proto::ProtoObject* nilProto           = nullptr;
     // Track 1 slice 2 (EXC-a): exception class hierarchy.
     //   Exception

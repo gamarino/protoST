@@ -51,6 +51,7 @@ namespace protoST { void installBlockPrimitives(STRuntime& rt); }
 namespace protoST { void installDebuggerPrimitives(STRuntime& rt); }
 namespace protoST { void installObjectPrimitives(STRuntime& rt); }
 namespace protoST { void installFuturePrimitives(STRuntime& rt); }
+namespace protoST { void installAtomPrimitives(STRuntime& rt); }
 namespace protoST { void installImportGlobal(STRuntime& rt); }
 namespace protoST { void installExceptionPrimitives(STRuntime& rt); }
 namespace protoST { void installCollectionPrimitives(STRuntime& rt); }
@@ -216,6 +217,10 @@ struct STRuntime::Impl {
 
         auto* futureKey = proto::ProtoString::createSymbol(rootCtx, "Future");
         globals->setAttribute(rootCtx, futureKey, bootstrap.futureProto);
+
+        // Atom — the shared mutable cell with optimistic-concurrency CAS.
+        auto* atomKey = proto::ProtoString::createSymbol(rootCtx, "Atom");
+        globals->setAttribute(rootCtx, atomKey, bootstrap.atomProto);
 
         // Track 1 slice 2 (EXC-a): register the exception class hierarchy in
         // globals so user code can name `Exception`, `Error`, `Warning` and
@@ -434,6 +439,7 @@ STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
     installDebuggerPrimitives(*this);
     installObjectPrimitives(*this);
     installFuturePrimitives(*this);
+    installAtomPrimitives(*this);
     installExceptionPrimitives(*this);
     installCollectionPrimitives(*this);
     installImportGlobal(*this);

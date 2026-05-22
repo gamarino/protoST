@@ -1427,6 +1427,72 @@ which **rejects that message's `Future`** with the exception. The actor stays
 alive and processes its next message. Partial mutations performed before the
 raise are *not* rolled back — protoST has no transactional default.
 
+### 10.8 Atoms — optimistic-concurrency cells
+
+An **`Atom`** is a shared mutable cell updated lock-free, by an optimistic
+compare-and-swap. It is the third concurrency tool, alongside immutable values
+and actors:
+
+- an **immutable value** is shared freely — it cannot change;
+- an **actor** serialises arbitrary logic over a piece of state;
+- an **`Atom`** is a bare cell that many threads update *directly*, with a
+  compare-and-swap retry rather than a lock.
+
+This is the *agent / atom* pair: where an actor is the *agent*, an `Atom` is
+the *atom*. Reach for an `Atom` when many actors must update one shared value
+— a counter, a registry, a world graph — and routing every update through a
+single owner actor would be a bottleneck.
+
+```smalltalk
+total := Atom on: 0.        "a cell holding an initial value"
+total value.               "=> 0   — read the current snapshot"
+```
+
+**`value:ifCurrent:`** is the raw compare-and-swap. It installs the new value
+only if the cell still holds the expected one (by pointer identity), and
+answers whether it did:
+
+```smalltalk
+total value: 1 ifCurrent: 0.   "=> true  — 0 was current, cell is now 1"
+total value: 9 ifCurrent: 0.   "=> false — 0 is not current; nothing written"
+```
+
+A failed CAS means another thread won the race. The caller drives its own
+retry — re-reading the now-current value (the *updated* graph) and rebuilding:
+
+```smalltalk
+[ old := total value.
+  new := old + 1.
+  total value: new ifCurrent: old ] whileFalse.
+```
+
+**`swap:`** is that loop, done for you: it applies a block to the current value
+and CASes the result in, retrying from a fresh read on contention. It answers
+the value finally installed. The block may run more than once, so it must be
+side-effect free:
+
+```smalltalk
+total swap: [ :running | running + 1 ].
+```
+
+Because the comparison is pointer identity over **immutable snapshots**, the
+classic ABA hazard does not arise: if the pointer is unchanged the value
+genuinely is the one observed. A CAS-retry over an `Atom` therefore needs none
+of the guards a compare-and-swap over raw mutable memory would.
+
+**`setInstVar:from:to:`** exposes the same compare-and-swap directly on any
+object's instance variable — the unwrapped form, for a CAS on an object you do
+not want to wrap in an `Atom`:
+
+```smalltalk
+"set #count to new only if it currently holds old; answer whether it did"
+account setInstVar: #count from: old to: new.
+```
+
+An unset instance variable reads as `nil`; pass `nil` as the expected value to
+match it. The name is matched against the receiver's own instance variables,
+never its methods.
+
 ---
 
 ## 11. Modules
@@ -1487,6 +1553,7 @@ It is a reference snapshot of the current implementation.
 | `isNil` `notNil` | nil test — `false` / `true` for every object except `nil` |
 | `ifNil:` `ifNotNil:` `ifNil:ifNotNil:` | nil-conditional evaluation; an `ifNotNil:` block may take the receiver as an argument |
 | `on:do:`, `on:do:on:do:`, `ensure:`, `ifCurtailed:` | exception protocol (these are bound on `Block`; see §12.7) |
+| `setInstVar:from:to:` | atomic compare-and-swap on an instance variable: set it to the third argument only if it currently holds the second; answer whether it did (see §10.8) |
 | `sleep:` | sleep the current thread N ms (a test helper, not for production use) |
 
 ### 12.2 `Number`, `SmallInteger`, `LargeInteger`, `Float`
@@ -1629,6 +1696,18 @@ Class-side **constants** are bound on `Float`: `Float pi`, `Float e`,
 ### 12.6 `Future`
 
 `wait`, `thenDo:`, `catch:`, `resolve:`, `rejectWith:` — see [§10.3](#103-future).
+
+### 12.6a `Atom`
+
+A shared mutable cell with optimistic-concurrency compare-and-swap — see
+[§10.8](#108-atoms--optimistic-concurrency-cells).
+
+| Selector | Meaning |
+|----------|---------|
+| `Atom on: aValue` | a fresh cell holding `aValue` |
+| `value` | the current snapshot |
+| `value: new ifCurrent: expected` | raw CAS — install `new` iff the cell still holds `expected`; answer whether it did |
+| `swap: aBlock` | read-modify-CAS retry loop; applies `aBlock` to the current value, retrying on contention; answers the value installed |
 
 ### 12.7 `Exception` / `Error` / `Warning`
 

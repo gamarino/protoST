@@ -109,6 +109,11 @@ are noted where useful.
       A language built on protoCore carries no synchronisation locks of its
       own; only the DAP/debugger I/O locks remain (external-protocol
       coordination, outside protoCore's object model).
+- [x] **`Atom`** — a shared mutable cell with optimistic-concurrency CAS:
+      `Atom on:`, `value`, `value:ifCurrent:` (the raw compare-and-swap) and
+      `swap:` (the read-modify-CAS retry loop). The agent/atom pair, atom
+      side. Plus `Object>>setInstVar:from:to:` — the raw CAS exposed on any
+      instance variable, for callers driving their own validate-and-retry.
 
 ### Modules
 - [x] File-to-module mapping; `Import from:`

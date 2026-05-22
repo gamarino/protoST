@@ -298,7 +298,99 @@ tell a re-raised actor failure from a directly-signalled one. One caveat worth
 knowing: a partial mutation an actor method performed *before* it raised is
 **not** rolled back — protoST has no transactional default.
 
-## 10.9 Summary
+## 10.9 Atoms — lock-free shared cells
+
+An actor serialises *logic* over a piece of state: one message at a time. That
+is exactly what you want for a stateful entity — a pump, an account. But
+sometimes many actors need to update **one shared value** — a global counter, a
+registry, a shared world graph — and there is no logic to serialise, just an
+update. Routing every update through a single "owner" actor works, but that
+actor becomes a bottleneck: every other actor queues behind it.
+
+For that, protoST gives you a third tool, next to immutable values and actors:
+the **`Atom`** — a shared mutable cell updated *lock-free*, by an optimistic
+compare-and-swap. (If you know Clojure: an actor is its `agent`, an `Atom` is
+its `atom`.)
+
+```smalltalk
+total := Atom on: 0.        "a shared cell, starting at 0"
+total value.                "=> 0"
+```
+
+You update it with **`swap:`** — you hand it a block that maps the current
+value to the next one:
+
+```smalltalk
+total swap: [ :n | n + 1 ].
+total value.                "=> 1"
+```
+
+The interesting part is what `swap:` does under contention. It reads the
+current value, applies your block, and *compare-and-swaps* the result back —
+"store this, but only if nobody changed the cell since I read it." If another
+actor won the race, the swap **fails, re-reads the now-current value, and runs
+your block again**. No update is ever lost, and no lock is ever taken. Your
+block may therefore run more than once, so it must be a pure function of its
+argument — no side effects.
+
+Here four actors hammer one shared `Atom` in parallel:
+
+```smalltalk
+"-- atom-counter.st --"
+total := Atom on: 0.
+
+Object subclass: #Meter.
+Meter >> bump: anAtom
+  1 to: 250 do: [ :i | anAtom swap: [ :n | n + 1 ] ].
+  ^ self.
+
+m1 := Meter new asActor.  m2 := Meter new asActor.
+m3 := Meter new asActor.  m4 := Meter new asActor.
+
+f1 := m1 bump: total.  f2 := m2 bump: total.
+f3 := m3 bump: total.  f4 := m4 bump: total.
+f1 wait.  f2 wait.  f3 wait.  f4 wait.
+
+total value.
+```
+
+```bash
+$ ./build/protost atom-counter.st
+1000
+```
+
+Exactly `4 × 250` — not a single increment lost, on four cores, with no lock.
+
+If you want to drive the retry yourself — your own validation, your own
+back-off — use the raw compare-and-swap, **`value:ifCurrent:`**. It installs
+the new value only if the cell still holds the one you expected, and answers
+`true`/`false`:
+
+```smalltalk
+[ old := total value.
+  new := old + 1.
+  total value: new ifCurrent: old ] whileFalse.
+```
+
+That loop *is* what `swap:` does for you. `whileFalse:` re-runs the block while
+the CAS keeps failing; each retry re-reads `total value` — the *updated* value
+— and rebuilds from there. This is **optimistic concurrency**: assume no
+conflict, do the work, and only retry if the commit is rejected.
+
+The same raw CAS is available on any object's instance variable, without
+wrapping it in an `Atom`, as `setInstVar:from:to:`:
+
+```smalltalk
+account setInstVar: #balance from: old to: new.   "answers true/false"
+```
+
+> **Why this is safe without ABA guards.** A CAS over raw memory has the
+> classic *ABA problem*: a value can change A → B → A and a naive CAS cannot
+> tell. protoST's CAS compares **immutable snapshots by pointer identity** — if
+> the pointer is unchanged, the value genuinely *is* the one you read, because
+> it could not have been mutated in place. The hazard simply does not arise.
+
+## 10.10 Summary
 
 - An **actor** is an object with private state, a one-message-at-a-time
   mailbox, and parallel scheduling. The single-message rule is the
@@ -315,6 +407,10 @@ knowing: a partial mutation an actor method performed *before* it raised is
   thousands of mostly-waiting actors run on a small thread pool.
 - An exception inside an actor rejects that message's future; the actor lives
   on.
+- An **`Atom`** is a shared cell updated lock-free: `swap:` runs a pure block
+  in a compare-and-swap retry loop; `value:ifCurrent:` is the raw CAS for your
+  own retry policy. Use it when many actors update one shared value and an
+  owner actor would be a bottleneck.
 
 ---
 

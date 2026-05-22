@@ -31,6 +31,8 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     // F6 actor + future prototypes — mutable so methods can be bound.
     out.actorProto        = const_cast<proto::ProtoObject*>(out.objectProto)->newChild(ctx, /*isMutable=*/true);
     out.futureProto       = const_cast<proto::ProtoObject*>(out.objectProto)->newChild(ctx, /*isMutable=*/true);
+    // Atom prototype — a shared mutable cell with optimistic-concurrency CAS.
+    out.atomProto         = const_cast<proto::ProtoObject*>(out.objectProto)->newChild(ctx, /*isMutable=*/true);
 
     // Track 1 slice 2 (EXC-a): exception class hierarchy. Ordinary mutable
     // prototypes — `Exception subclass: #MyError` works through the standard
@@ -122,6 +124,7 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     stamp(out.blockProto,        "Block");
     stamp(out.actorProto,        "Actor");
     stamp(out.futureProto,       "Future");
+    stamp(out.atomProto,         "Atom");
     stamp(out.nilProto,          "UndefinedObject");
     stamp(out.exceptionProto,    "Exception");
     stamp(out.errorProto,        "Error");

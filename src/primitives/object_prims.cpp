@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <stdexcept>
+#include <string>
 #include <thread>
 
 namespace protoST {
@@ -718,6 +719,56 @@ const proto::ProtoObject* prim_Object_ne(STRuntime&, proto::ProtoContext*,
     return (r != a[0]) ? PROTO_TRUE : PROTO_FALSE;
 }
 
+// recv setInstVar: #name from: expected to: newValue
+//
+// Optimistic-concurrency compare-and-swap on a single instance variable. If
+// `recv`'s instance variable `name` currently holds (by pointer identity)
+// `expected`, atomically replace it with `newValue` and answer true;
+// otherwise write nothing and answer false. This exposes protoCore's atomic
+// attribute CAS (ProtoObject::setAttributeIfEqual) directly — the building
+// block for lock-free, user-controlled retry:
+//
+//   [ old := obj count.
+//     new := old + 1.
+//     obj setInstVar: #count from: old to: new ] whileFalse.
+//
+// A failed CAS means another thread won the race; the loop re-reads the now
+// current value and retries. Because the comparison is pointer identity over
+// immutable snapshots, the classic ABA hazard does not arise: if the pointer
+// is unchanged, the value genuinely is the one observed.
+//
+// Instance variables are stored under the mangled key "_iv_<name>" (see
+// PUSH_INSTVAR / STORE_INSTVAR in the engine), so this never collides with a
+// same-named method selector. An unset instance variable reads as nil; pass
+// `nil` as `expected` to match it.
+const proto::ProtoObject* prim_Object_setInstVarFromTo(
+        STRuntime&, proto::ProtoContext* ctx,
+        const proto::ProtoObject* r,
+        const proto::ProtoObject* const* a, int argc) {
+    if (argc != 3)
+        throw std::runtime_error("setInstVar:from:to: expects 3 arguments");
+    auto* nameStr = a[0] ? a[0]->asString(ctx) : nullptr;
+    if (!nameStr)
+        throw std::runtime_error(
+            "setInstVar:from:to: — the variable name must be a symbol or string");
+    std::string mangled = "_iv_";
+    mangled += nameStr->toStdString(ctx);
+    auto* slot = proto::ProtoString::createSymbol(ctx, mangled.c_str());
+    const proto::ProtoObject* expected = a[1] ? a[1] : PROTO_NONE;
+    const proto::ProtoObject* newValue = a[2] ? a[2] : PROTO_NONE;
+
+    // An unset instance variable is physically absent yet reads as nil. Map a
+    // `nil` expectation onto the absent slot so a CAS "from nil" matches it;
+    // every other case passes `expected` straight through to the CAS, which
+    // re-validates it atomically.
+    const proto::ProtoObject* cur = r->getOwnAttributeDirect(ctx, slot);
+    const proto::ProtoObject* casExpected =
+        (cur == nullptr && expected == PROTO_NONE) ? nullptr : expected;
+    bool ok = const_cast<proto::ProtoObject*>(r)
+        ->setAttributeIfEqual(ctx, slot, casExpected, newValue);
+    return ok ? PROTO_TRUE : PROTO_FALSE;
+}
+
 } // anon
 
 void installObjectPrimitives(STRuntime& rt) {
@@ -739,6 +790,11 @@ void installObjectPrimitives(STRuntime& rt) {
                   reg.registerPrim(prim_Object_installClassMethod));
     bindPrimitive(rt, b.objectProto, "asActor",
                   reg.registerPrim(prim_Object_asActor));
+    // Optimistic-concurrency CAS on a single instance variable — the raw,
+    // unwrapped form of protoCore's atomic attribute compare-and-swap. See
+    // the Atom class for the wrapped idiom.
+    bindPrimitive(rt, b.objectProto, "setInstVar:from:to:",
+                  reg.registerPrim(prim_Object_setInstVarFromTo));
     // BL-3: rich printString. `__setClassName:` is emitted by the compiler's
     // ClassDecl path; `printString` is the default inherited by every object.
     bindPrimitive(rt, b.objectProto, "__setClassName:",

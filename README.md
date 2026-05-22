@@ -61,6 +61,7 @@ Combined with the rest of the triple, protoST forms a coherent platform for agen
 | Need | Component |
 |---|---|
 | Many stateful concurrent agents | **protoST** (actor model on Smalltalk syntax) |
+| Lock-free shared state across agents | **protoST** (`Atom` — optimistic-concurrency CAS cell) |
 | Numerical / ML models inside twins | **protoPython** (numpy, scipy, sklearn) |
 | Operator dashboards, visualisation | **protoJS** (web tooling) |
 | Real parallelism, no GIL | **protoCore** (kernel) |
