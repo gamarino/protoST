@@ -89,12 +89,18 @@ const proto::ProtoObject* prim_Object_asActor(STRuntime& rt, proto::ProtoContext
         proto::ProtoString::createSymbol(ctx, "__state__");
     actor->setAttribute(ctx, stateKey, ctx->fromLong(0));
 
-    // No per-actor mutex. The mailbox read-modify-write done by the SEND
-    // fast-path and by STRuntime::drainOne is lock-free: each side uses
-    // ProtoObject::setAttributeIfEqual (protoCore's atomic attribute CAS) in
-    // a retry loop. "At most one message in flight per actor" is enforced by
-    // the scheduler keeping the actor in scheduledSet for the whole turn —
-    // see STRuntime::drainOne / STRuntime::finishDrain.
+    // __sched__ = 0 — the lock-free scheduler's per-actor 3-state turn-
+    // ownership flag (0 idle / 1 active / 2 active+wakeup-pending). It MUST
+    // exist as SmallInteger 0 from birth so STRuntime::casSchedState's
+    // 0->1 compare-and-swap has a concrete value to match against.
+    actor->setAttribute(ctx, rt.bootstrap().sym.sched, ctx->fromLong(0));
+
+    // No per-actor mutex and no scheduler mutex. The mailbox read-modify-write
+    // (SEND fast-path / STRuntime::drainOne) and the scheduler itself are
+    // lock-free over ProtoObject::setAttributeIfEqual — protoCore's atomic
+    // attribute CAS. "At most one message in flight per actor" is enforced by
+    // the __sched__ flag staying non-zero for the whole turn — see
+    // STRuntime::drainOne / STRuntime::schedule / STRuntime::finishDrain.
     return actor;
 }
 

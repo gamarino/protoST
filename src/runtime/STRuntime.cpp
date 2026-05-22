@@ -135,16 +135,13 @@ struct STRuntime::Impl {
     // place (rather than producing a COW copy that the engine would not see).
     proto::ProtoObject*  globals     = nullptr;
 
-    // F6 scheduler
-    std::queue<const proto::ProtoObject*> readyQueue;
-    std::unordered_set<const proto::ProtoObject*> scheduledSet;  // for idempotency
-
-    // F6 v2 T1: scheduler synchronization. `schedMu` guards readyQueue and
-    // scheduledSet so a worker thread (added in T2) can safely cooperate with
-    // foreground schedule() calls. `mutable` allows const accessors such as
-    // scheduledCount() to lock it.
-    mutable std::mutex schedMu;
-    std::condition_variable schedCv;
+    // F6 scheduler — lock-free. The ready queue and the per-actor
+    // "scheduled" state live in protoCore objects mutated by compare-and-swap,
+    // not in C++ containers — so there is no scheduler mutex and no condition
+    // variable. The ready queue is the ProtoList under `liveRegistry.__ready__`;
+    // the per-actor turn-ownership flag is the `__sched__` attribute (3-state:
+    // 0 idle / 1 active / 2 active+wakeup-pending). See STRuntime.h
+    // (enqueueReady / dequeueReady / schedState) and workerLoop.
 
     // F6 v3 E2b: single live-registry GC root for all transient liveness.
     //
@@ -159,8 +156,10 @@ struct STRuntime::Impl {
     // pinning.
     //
     // It anchors:
-    //  - scheduled actors, while they sit in the readyQueue (a plain
-    //    std::queue the tracing GC cannot see);
+    //  - scheduled actors. The ready queue (`liveRegistry.__ready__`) is a
+    //    protoCore ProtoList and is itself traced, so a queued actor is
+    //    reachable through it; the per-pointer registry entry keeps it
+    //    anchored across the brief schedule()..enqueue window too;
     //  - cooperatively-suspended actors, parked on an awaited future's
     //    __waiters__ list between yield and resume. In a deep dependency
     //    chain EVERY actor can be suspended at once with no live readyQueue
@@ -169,16 +168,17 @@ struct STRuntime::Impl {
     //  - the module-level captured-locals dict during runTopLevel;
     //  - the runtime-wide permanent prototypes + globals.
     //
-    // Registry mutations are serialized under `schedMu` (see registryAdd /
-    // registryRemove), the same lock that guards readyQueue / scheduledSet.
+    // Registry mutations are plain setAttribute / removeAttribute on this
+    // mutable object — protoCore's per-attribute CAS makes concurrent
+    // mutations atomic with no external lock (see registryAdd / registryRemove).
     //
     // `workers` holds N managed ProtoThreads spawned in the STRuntime
     // constructor (F6 v2 T7). Each gets its own root ProtoContext chain and
-    // independently drains the shared readyQueue under schedMu. The pool
+    // independently drains the shared lock-free ready queue. The pool
     // size is hardware_concurrency() (defaulted to 2, capped at 8); the
     // PROTOST_WORKERS env var overrides it for tests + experimentation.
-    // `shutdown` is set by ~STRuntime to make every worker exit its wait
-    // loop; schedCv.notify_all() wakes all of them at once.
+    // `shutdown` is set by ~STRuntime; each worker observes it on its next
+    // poll iteration (within the backoff interval) and exits.
     const proto::ProtoObject* liveRegistry = nullptr;
 
     std::vector<const proto::ProtoThread*> workers;
@@ -319,6 +319,12 @@ struct STRuntime::Impl {
         if (asyncRoots) {
             liveRegistry = bootstrap.objectProto->newChild(rootCtx, /*isMutable=*/true);
             asyncRoots->add(liveRegistry);
+            // The lock-free ready queue lives here, under `__ready__`, as a
+            // protoCore ProtoList mutated by CAS. Initialise it to an empty
+            // list once so enqueue / dequeue always CAS against a real list.
+            const_cast<proto::ProtoObject*>(liveRegistry)->setAttribute(
+                rootCtx, bootstrap.sym.ready,
+                rootCtx->newList()->asObject(rootCtx));
         }
 
         // F6 v3 E2: anchor the runtime-wide GC roots in the live registry.
@@ -523,7 +529,8 @@ STRuntime::~STRuntime() {
     // worker exits its loop in parallel as soon as it observes the flag.
     if (!impl_->workers.empty()) {
         impl_->shutdown.store(true, std::memory_order_release);
-        impl_->schedCv.notify_all();
+        // No cv to notify — each worker observes `shutdown` on its next poll
+        // iteration (within the backoff interval) and exits workerLoop.
         // F6 v3 E5: the join() loop blocks the main thread in the kernel
         // (pthread_join) while it is STILL counted in
         // ProtoSpace::runningThreads. This is the same off-safepoint-blocking
@@ -571,99 +578,43 @@ STRuntime::~STRuntime() {
 }
 
 bool STRuntime::waitForSchedulerProgress(unsigned millis) {
-    // F6 v3 E4: acquire `schedMu` GC-safely (a registryAdd / registryRemove
-    // holder parks at a GC safepoint while holding it), then E2-style bracket
-    // the cv sleep so this thread leaves the GC running set while parked on
-    // the foreign cv. `lock` is released before exitGcBlocking so the
-    // safepoint there runs with no protoST lock held.
+    // The lock-free scheduler has no condition variable to park on. A caller
+    // (a Future>>wait drive loop, a test) just needs a bounded GC-safe pause
+    // before re-polling. Bracket the sleep in a GC-blocking region so this
+    // thread leaves the running set for its duration (it must not stall the
+    // stop-the-world quorum off-safepoint).
     auto* ctx = impl_->rootCtx;
-    std::cv_status status;
-    {
-        gcSafeLock(ctx, impl_->schedMu);
-        std::unique_lock<std::mutex> lock(impl_->schedMu, std::adopt_lock);
-        enterGcBlocking(ctx);
-        status = impl_->schedCv.wait_for(
-            lock, std::chrono::milliseconds(millis));
-    }
+    enterGcBlocking(ctx);
+    std::this_thread::sleep_for(std::chrono::milliseconds(millis));
     exitGcBlocking(ctx);
-    return status == std::cv_status::no_timeout;
+    return false;  // no progress signal — the caller re-checks its condition
 }
 
 void STRuntime::workerLoop(proto::ProtoContext* ctx) {
-    auto predicate = [this] {
-        return impl_->shutdown.load(std::memory_order_acquire)
-            || !impl_->readyQueue.empty();
-    };
+    // Poll the lock-free ready queue. drainOne CAS-pops the head; when the
+    // queue is empty the worker backs off with a GC-safe bounded sleep
+    // (bracketed by enterGcBlocking/exitGcBlocking so an idle worker leaves
+    // the running set and never stalls a stop-the-world GC — the same E2
+    // discipline the old cv sleep used). With no mutex anywhere on this path
+    // the D23 deadlock class (a worker blocking off-safepoint on schedMu
+    // while another parks at a GC safepoint owning it) cannot occur.
+    int idle = 0;
     while (true) {
-        // F6 v3 E2: an idle worker asleep on `schedCv` would, like the
-        // Future>>wait blocking path, deadlock a concurrent stop-the-world
-        // GC: it stays counted in ProtoSpace::runningThreads yet, parked on
-        // this non-protoCore cv, can never reach a safepoint to satisfy the
-        // GC's `parkedThreads >= runningThreads` quorum. Each genuine cv
-        // sleep is therefore bracketed by enterGcBlocking/exitGcBlocking so
-        // the worker leaves the running set for the sleep's duration.
-        //
-        // The two GcSafeBlocking rules are honoured here:
-        //  * No heap access inside the region — the predicate only reads
-        //    `readyQueue` (a std::queue) and the `shutdown` atomic, never a
-        //    ProtoObject; the sleep itself is a pure cv wait.
-        //  * exitGcBlocking's safepoint() runs only AFTER `schedMu` is
-        //    released, so a STW park never happens while the worker holds
-        //    the scheduler lock.
-        // The sleep is bounded (wait_for 50 ms) so a wakeup delivered in the
-        // unlock / teardown window is picked up on the next loop turn.
-        SCHED_DIAG("workerLoop cv.wait ENTER");
-        while (true) {
-            if (predicate()) break;
-            {
-                // F6 v3 E4 / D23: acquire `schedMu` GC-safely. A plain
-                // `std::unique_lock<std::mutex> lock(schedMu)` here blocks the
-                // worker in the kernel futex while it is STILL counted as a
-                // running mutator. Every OTHER `schedMu` acquirer
-                // (registryAdd / registryRemove / schedule / drainOne) takes
-                // it through gcSafeLock and, by design, may park at a GC
-                // safepoint while owning it (GcSafeMutex.h). When that
-                // happens, a worker blocked here off-safepoint never bumps
-                // `parkedThreads`, the stop-the-world quorum
-                // (parkedThreads >= runningThreads) is never met, the holder's
-                // safepoint never returns, and `schedMu` is never released —
-                // the D23 deadlock, confirmed by gdb (a worker stuck in
-                // std::unique_lock::lock() on schedMu while another worker
-                // held it parked in exitGcBlocking's safepoint). gcSafeLock
-                // leaves the running set for the blocking acquire, so the GC
-                // quorum is computed without this thread; we then adopt the
-                // already-owned mutex into a unique_lock so schedCv.wait_for
-                // can release / re-acquire it. Matches prim_Future_wait.
-                gcSafeLock(ctx, impl_->schedMu);
-                std::unique_lock<std::mutex> lock(impl_->schedMu,
-                                                  std::adopt_lock);
-                if (predicate()) break;
-                enterGcBlocking(ctx);
-                impl_->schedCv.wait_for(lock, std::chrono::milliseconds(50));
-                // `lock` releases `schedMu` at end of scope.
-            }
-            // schedMu released — safe to park at the safepoint here.
-            exitGcBlocking(ctx);
+        if (impl_->shutdown.load(std::memory_order_acquire)) {
+            // Drain whatever is left, then exit once the queue is empty so no
+            // pending work is lost (the destructor join() waits for this).
+            if (!drainOne(ctx)) return;
+            continue;
         }
-        SCHED_DIAG("workerLoop cv.wait WAKE shutdown="
-                   << impl_->shutdown.load(std::memory_order_acquire));
-        {
-            // Shutdown handling re-takes the lock briefly. If shutdown was
-            // requested and nothing remains to drain, exit; otherwise keep
-            // draining so pending work is not lost (the destructor blocks on
-            // join() until every worker has exited this loop).
-            // F6 v3 E4: GC-safe acquire — a registryAdd/Remove holder parks
-            // at a GC safepoint while owning schedMu.
-            GcSafeLockGuard lock(ctx, impl_->schedMu);
-            if (impl_->shutdown.load(std::memory_order_acquire)
-                && impl_->readyQueue.empty()) {
-                return;
-            }
-        }
-        // drainOne reacquires the lock for its pop. It is safe to race with
-        // the main thread; whichever pops first owns the actor for this
-        // iteration.
-        drainOne(ctx);
+        if (drainOne(ctx)) { idle = 0; continue; }
+        // Nothing to drain — back off. The interval ramps so a busy pool
+        // (queue never empties) never sleeps, while a fully idle pool settles
+        // at a low wake rate.
+        ++idle;
+        unsigned ms = idle < 8 ? 1u : (idle < 64 ? 4u : 16u);
+        enterGcBlocking(ctx);
+        std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+        exitGcBlocking(ctx);
     }
 }
 
@@ -803,11 +754,9 @@ STRuntime::runTopLevel(const BytecodeModule& m) {
 // callers never race on the registry. Callers MUST NOT already hold schedMu.
 void STRuntime::registryAdd(proto::ProtoContext* ctx, const proto::ProtoObject* o) {
     if (!o || o == PROTO_NONE || !impl_->liveRegistry) return;
-    // F6 v3 E4: GC-safe acquire. This critical section runs setAttribute /
-    // ptrRegistryKey on the live registry — i.e. it allocates while holding
-    // schedMu, so the holder may park at a GC safepoint with the lock owned.
-    // Every other schedMu acquirer therefore takes it GC-safely.
-    GcSafeLockGuard lock(ctx, impl_->schedMu);
+    // No lock: setAttribute on a mutable object is internally atomic
+    // (protoCore's per-attribute shard CAS), so concurrent registryAdd /
+    // registryRemove / enqueueReady calls on liveRegistry never corrupt it.
     // F6 v3 E5: ptrRegistryKey allocates a fresh ProtoString; holding it in a
     // C++ temporary across setAttribute (which allocates a sparse-list node on
     // the mutable liveRegistry) is a transient-across-allocation gap. Pin the
@@ -824,9 +773,7 @@ void STRuntime::registryAdd(proto::ProtoContext* ctx, const proto::ProtoObject* 
 // missing key is a no-op). Callers MUST NOT already hold schedMu.
 void STRuntime::registryRemove(proto::ProtoContext* ctx, const proto::ProtoObject* o) {
     if (!o || o == PROTO_NONE || !impl_->liveRegistry) return;
-    // F6 v3 E4: GC-safe acquire (see registryAdd — removeAttribute /
-    // ptrRegistryKey may allocate while schedMu is held).
-    GcSafeLockGuard lock(ctx, impl_->schedMu);
+    // No lock — see registryAdd (per-attribute CAS makes this atomic).
     // F6 v3 E5: same transient-key gap as registryAdd — removeAttribute on a
     // mutable object also allocates (a new sparse-list node for the smaller
     // tree). Pin the key across the call.
@@ -836,56 +783,136 @@ void STRuntime::registryRemove(proto::ProtoContext* ctx, const proto::ProtoObjec
         ->removeAttribute(ctx, key);
 }
 
+// ---------------------------------------------------------------------------
+// Lock-free scheduler primitives. The ready queue is the ProtoList under
+// liveRegistry.__ready__; each op is a CAS-retry over that one attribute —
+// the same lock-free pattern as the actor mailbox. The per-actor `__sched__`
+// flag is a SmallInteger CAS'd via setAttributeIfEqual.
+// ---------------------------------------------------------------------------
+
+void STRuntime::enqueueReady(proto::ProtoContext* ctx,
+                             const proto::ProtoObject* actor) {
+    if (!actor || !impl_->liveRegistry) return;
+    auto* reg = const_cast<proto::ProtoObject*>(impl_->liveRegistry);
+    const proto::ProtoString* readyKey = impl_->bootstrap.sym.ready;
+    for (;;) {
+        const proto::ProtoObject* cur = reg->getOwnAttributeDirect(ctx, readyKey);
+        const proto::ProtoList* curList =
+            (cur && cur != PROTO_NONE) ? cur->asList(ctx) : ctx->newList();
+        const proto::ProtoList* nextList = curList->appendLast(ctx, actor);
+        // `nextList` / its object form are held across the CAS — pin them.
+        TransientPin pinNext(
+            ctx, reinterpret_cast<const proto::ProtoObject*>(nextList));
+        const proto::ProtoObject* nextObj = nextList->asObject(ctx);
+        TransientPin pinNextObj(ctx, nextObj);
+        if (reg->setAttributeIfEqual(ctx, readyKey, cur, nextObj)) return;
+    }
+}
+
+const proto::ProtoObject* STRuntime::dequeueReady(proto::ProtoContext* ctx) {
+    if (!impl_->liveRegistry) return nullptr;
+    auto* reg = const_cast<proto::ProtoObject*>(impl_->liveRegistry);
+    const proto::ProtoString* readyKey = impl_->bootstrap.sym.ready;
+    for (;;) {
+        const proto::ProtoObject* cur = reg->getOwnAttributeDirect(ctx, readyKey);
+        if (!cur || cur == PROTO_NONE) return nullptr;
+        const proto::ProtoList* curList = cur->asList(ctx);
+        if (!curList) return nullptr;
+        long long n = curList->getSize(ctx);
+        if (n == 0) return nullptr;
+        const proto::ProtoObject* head = curList->getAt(ctx, 0);
+        const proto::ProtoList* rest =
+            curList->getSlice(ctx, 1, static_cast<int>(n));
+        TransientPin pinHead(ctx, head);
+        TransientPin pinRest(
+            ctx, reinterpret_cast<const proto::ProtoObject*>(rest));
+        const proto::ProtoObject* restObj = rest->asObject(ctx);
+        TransientPin pinRestObj(ctx, restObj);
+        if (reg->setAttributeIfEqual(ctx, readyKey, cur, restObj)) return head;
+    }
+}
+
+long long STRuntime::schedState(proto::ProtoContext* ctx,
+                                const proto::ProtoObject* actor) {
+    const proto::ProtoObject* s =
+        actor->getOwnAttributeDirect(ctx, impl_->bootstrap.sym.sched);
+    return (s && s != PROTO_NONE) ? s->asLong(ctx) : 0;
+}
+
+bool STRuntime::casSchedState(proto::ProtoContext* ctx,
+                              const proto::ProtoObject* actor,
+                              long long from, long long to) {
+    auto* a = const_cast<proto::ProtoObject*>(actor);
+    const proto::ProtoString* k = impl_->bootstrap.sym.sched;
+    if (from == 0) {
+        // "idle" is either an explicit SmallInteger 0 or the `__sched__`
+        // attribute being ABSENT — an actor not built through the asActor
+        // primitive (e.g. a unit-test fixture) starts without it. Accept
+        // both: if currently absent, CAS against nullptr (= "absent"); the
+        // CAS itself is the atomic check, so a racing writer is handled by
+        // the caller's retry loop.
+        const proto::ProtoObject* cur = actor->getOwnAttributeDirect(ctx, k);
+        if (!cur || cur == PROTO_NONE)
+            return a->setAttributeIfEqual(ctx, k, nullptr, ctx->fromLong(to));
+    }
+    return a->setAttributeIfEqual(ctx, k, ctx->fromLong(from), ctx->fromLong(to));
+}
+
+bool STRuntime::mailboxHasWork(proto::ProtoContext* ctx,
+                               const proto::ProtoObject* actor) {
+    const proto::ProtoObject* mb =
+        actor->getOwnAttributeDirect(ctx, impl_->bootstrap.sym.mailbox);
+    if (!mb || mb == PROTO_NONE) return false;
+    const proto::ProtoList* mbList = mb->asList(ctx);
+    return mbList && mbList->getSize(ctx) > 0;
+}
+
 void STRuntime::schedule(proto::ProtoContext* ctx, const proto::ProtoObject* actor) {
     if (!actor) return;
-    // F6 v3 E2b: anchor the actor in the live registry BEFORE it enters the
-    // readyQueue. readyQueue is a plain std::queue invisible to the tracing
-    // GC, and a worker thread on a separate ProtoContext chain may consume
-    // entries asynchronously; the registry entry keeps the actor reachable
-    // from the single pinned root for the schedule()..completion window.
-    // registryAdd is idempotent and takes schedMu internally, so it runs
-    // before the queue-mutation scope below (callers must not hold schedMu).
-    // If the actor was scheduled before and not yet removed, this is a
-    // harmless overwrite of the same key.
+    // Anchor the actor in the live registry first (idempotent overwrite of
+    // the same pointer-key); the ready ProtoList traces it too once enqueued.
     registryAdd(ctx, actor);
-    {
-        // F6 v3 E4: GC-safe acquire — registryAdd/Remove park at a GC
-        // safepoint while holding this same lock.
-        GcSafeLockGuard lock(ctx, impl_->schedMu);
-        if (!impl_->scheduledSet.insert(actor).second) {
-            SCHED_DIAG("schedule REJECTED (already in scheduledSet) actor="
-                       << actor << " queue=" << impl_->readyQueue.size());
-            return;  // already scheduled; no need to notify
+    // Drive the 3-state __sched__ flag:
+    //   0 -> 1  we claim the actor and enqueue it;
+    //   1 -> 2  the actor is mid-turn — mark a pending wakeup, finishDrain
+    //           will re-queue it;
+    //   2       a wakeup is already marked — nothing to do.
+    for (;;) {
+        long long s = schedState(ctx, actor);
+        if (s == 2) {
+            SCHED_DIAG("schedule actor=" << actor << " already marked (2)");
+            return;
         }
-        SCHED_DIAG("schedule actor=" << actor
-                   << " queue=" << (impl_->readyQueue.size() + 1));
-        impl_->readyQueue.push(actor);
+        if (s == 1) {
+            if (casSchedState(ctx, actor, 1, 2)) {
+                SCHED_DIAG("schedule actor=" << actor << " marked wakeup (1->2)");
+                return;
+            }
+            continue;  // flag changed under us — retry
+        }
+        // s == 0
+        if (casSchedState(ctx, actor, 0, 1)) {
+            enqueueReady(ctx, actor);
+            SCHED_DIAG("schedule actor=" << actor << " enqueued (0->1)");
+            return;
+        }
+        continue;  // flag changed under us — retry
     }
-    // Wake one waiter; the worker thread (added in T2) loops on schedCv.
-    impl_->schedCv.notify_one();
 }
 
 bool STRuntime::drainOne(proto::ProtoContext* ctx) {
-    const proto::ProtoObject* actor = nullptr;
-    {
-        // F6 v2 T1: only the queue/set mutation is under the lock. Mailbox
-        // and future updates below run unlocked so concurrent schedule()
-        // calls can proceed while the current message is being processed.
-        // F6 v3 E4: GC-safe acquire — registryAdd/Remove park at a GC
-        // safepoint while holding this same lock.
-        GcSafeLockGuard lock(ctx, impl_->schedMu);
-        if (impl_->readyQueue.empty()) return false;
-        actor = impl_->readyQueue.front();
-        impl_->readyQueue.pop();
-        // The actor is deliberately NOT erased from scheduledSet here. It
-        // stays "owned by the scheduler" for the whole turn so a SEND that
-        // arrives mid-turn cannot re-enqueue it and let a second worker
-        // dispatch it in parallel — that is the turn-serialisation the old
-        // per-actor mutex provided. finishDrain (run by DrainGuard on every
-        // exit path) erases it, or re-queues it, once the turn ends.
-        SCHED_DIAG("drainOne POP actor=" << actor
-                   << " queue=" << impl_->readyQueue.size());
-    }
+    // CAS-pop the head of the lock-free ready queue. If two drainers race,
+    // exactly one wins the head; the loser re-reads and gets the next actor
+    // or an empty queue. The popped actor's `__sched__` flag is 1 or 2 — it
+    // stays "owned by the scheduler" for the whole turn (turn-serialisation:
+    // a SEND arriving mid-turn finds the flag non-zero and marks 1->2 rather
+    // than re-enqueueing, so no second drainer can dispatch the same actor in
+    // parallel). finishDrain (run by DrainGuard on every exit path) consumes
+    // the flag — re-queueing on a 2, or on leftover mailbox work — once the
+    // turn ends.
+    const proto::ProtoObject* actor = dequeueReady(ctx);
+    if (!actor) return false;
+    SCHED_DIAG("drainOne POP actor=" << actor);
 
     // F6 v3 E2b: GC anchoring for the popped actor.
     //
@@ -1404,94 +1431,62 @@ void STRuntime::finishDrain(proto::ProtoContext* ctx,
                             bool suspended) {
     if (!actor) return;
 
-    // Created outside the lock — just interned-symbol lookups.
-    const proto::ProtoString* mbKey =
-        impl_->bootstrap.sym.mailbox;
-
-    if (suspended) {
-        // The actor parked on an awaited future. Drop scheduler ownership so
-        // the future's resolve/reject can reschedule it.
-        {
-            GcSafeLockGuard lock(ctx, impl_->schedMu);
-            impl_->scheduledSet.erase(actor);
-        }
-        // Lost-wakeup guard. The engine appended `actor` to its awaited
-        // future's __waiters__ list DURING dispatch — before this point. If
-        // another worker resolved that future in the window between the park
-        // and the erase above, its resolve called schedule(actor) while the
-        // actor was still in scheduledSet, so the insert no-op'd and the
-        // actor was never re-queued — a lost wakeup that stalls a multi-worker
-        // cooperative chain. Now that scheduledSet ownership is dropped,
-        // re-check the awaited future: if it has already settled, reschedule
-        // the actor here. A resolve happening AFTER the erase enqueues the
-        // actor itself, and a double schedule() is deduplicated harmlessly.
-        const proto::ProtoString* waitingOnKey =
-            impl_->bootstrap.sym.waitingOn;
-        const proto::ProtoString* stateKey =
-            impl_->bootstrap.sym.state;
-        const proto::ProtoObject* awaited =
-            actor->getOwnAttributeDirect(ctx, waitingOnKey);
-        if (awaited && awaited != PROTO_NONE) {
-            const proto::ProtoObject* st =
-                awaited->getOwnAttributeDirect(ctx, stateKey);
-            if (st && st != PROTO_NONE && st->asLong(ctx) != 0) {
-                // 1 = resolved, 2 = rejected — either way the actor must run.
-                schedule(ctx, actor);
+    // Drive the 3-state `__sched__` flag to its turn-end resolution. The flag
+    // is 1 or 2 on entry (the actor was running this turn). There is no lock:
+    // a concurrent SEND or future-settle calling schedule() either marks
+    // 1->2 before our CAS 1->0 (so our CAS fails, we loop, see 2, re-queue)
+    // or sees state 0 after our CAS and enqueues the actor itself. The CAS is
+    // the linearisation point — a wakeup can never be stranded.
+    for (;;) {
+        long long s = schedState(ctx, actor);
+        if (s == 2) {
+            // A wakeup arrived during the turn — consume it and re-queue.
+            if (casSchedState(ctx, actor, 2, 1)) {
+                enqueueReady(ctx, actor);
+                SCHED_DIAG("finishDrain RE-QUEUE (wakeup) actor=" << actor);
+                return;
             }
+            continue;  // raced — retry
         }
-        impl_->schedCv.notify_all();
+        // s == 1 — turn owner, no wakeup marked yet. Release the flag.
+        if (!casSchedState(ctx, actor, 1, 0)) continue;  // became 2 — loop
+
+        // Released (state 0). A SEND racing this CAS now sees 0 and enqueues
+        // the actor itself; one that raced just before us marked 1->2 and the
+        // CAS above would have failed. So from here we only need to handle
+        // work this turn-owner already knows about: a completed turn whose
+        // mailbox still holds messages (one turn drains one message).
+        if (!suspended && mailboxHasWork(ctx, actor)) {
+            // Re-claim and re-queue. If a concurrent schedule() already
+            // re-claimed (0->1) and enqueued it, our CAS fails and we leave
+            // it to them — enqueued exactly once either way.
+            if (casSchedState(ctx, actor, 0, 1)) {
+                enqueueReady(ctx, actor);
+                SCHED_DIAG("finishDrain RE-QUEUE (backlog) actor=" << actor);
+            }
+            return;
+        }
+        // Fully released. A suspended actor stays anchored in the live
+        // registry (its awaited future's settle will reschedule it via
+        // schedule(), which the 3-state flag turns into an enqueue); a
+        // completed actor with an empty mailbox drops its anchor.
+        if (!suspended) registryRemove(ctx, actor);
+        SCHED_DIAG("finishDrain RELEASE actor=" << actor
+                   << (suspended ? " (suspended)" : ""));
         return;
     }
-
-    // Turn finished (not suspended). Reading the mailbox and updating
-    // scheduledSet under the SAME lock makes the decision atomic against a
-    // concurrent SEND: a SEND CAS-appends its message BEFORE calling
-    // schedule(), and schedule() needs schedMu — so either we observe its
-    // message here and re-queue the actor, or its schedule() runs after this
-    // critical section and (re-)enqueues the actor itself. Either way the
-    // message is never stranded.
-    bool reEnqueued = false;
-    {
-        // F6 v3 E4: GC-safe acquire — schedMu holders may park at a GC
-        // safepoint while owning it.
-        GcSafeLockGuard lock(ctx, impl_->schedMu);
-        const proto::ProtoObject* mbObj =
-            actor->getOwnAttributeDirect(ctx, mbKey);
-        bool hasWork = false;
-        if (mbObj && mbObj != PROTO_NONE) {
-            auto* mbList = mbObj->asList(ctx);
-            hasWork = mbList && mbList->getSize(ctx) > 0;
-        }
-        if (hasWork) {
-            // Keep the actor in scheduledSet; just put it back in line.
-            impl_->readyQueue.push(actor);
-            reEnqueued = true;
-            SCHED_DIAG("finishDrain RE-QUEUE actor=" << actor
-                       << " queue=" << impl_->readyQueue.size());
-        } else {
-            impl_->scheduledSet.erase(actor);
-            SCHED_DIAG("finishDrain RELEASE actor=" << actor);
-        }
-    }
-    // registryRemove takes schedMu itself — call it only after releasing.
-    // A re-queued actor keeps its live-registry anchor; a fully finished one
-    // drops it.
-    if (!reEnqueued) {
-        registryRemove(ctx, actor);
-    }
-    // Wake a worker (or a Future>>wait driving drainOne): promptly for a
-    // freshly re-queued actor, and so a waiter on an empty queue re-checks
-    // once this turn's future writes are visible.
-    impl_->schedCv.notify_all();
 }
 
 size_t STRuntime::scheduledCount() const {
-    // F6 v3 E4: GC-safe acquire — a registryAdd/Remove holder parks at a GC
-    // safepoint while owning schedMu, so even this read-only accessor must
-    // not block the lock off-safepoint. Uses the root context (this is a
-    // main-thread test/diagnostic accessor).
-    GcSafeLockGuard lock(impl_->rootCtx, impl_->schedMu);
-    return impl_->readyQueue.size();
+    // Read the lock-free ready queue's length. A diagnostic / test accessor;
+    // a plain read of the ProtoList size off the (pinned) live registry.
+    auto* ctx = impl_->rootCtx;
+    if (!impl_->liveRegistry) return 0;
+    const proto::ProtoObject* cur =
+        impl_->liveRegistry->getOwnAttributeDirect(ctx, impl_->bootstrap.sym.ready);
+    if (!cur || cur == PROTO_NONE) return 0;
+    const proto::ProtoList* curList = cur->asList(ctx);
+    return curList ? static_cast<size_t>(curList->getSize(ctx)) : 0;
 }
 
 size_t STRuntime::workerCount() const {

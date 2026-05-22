@@ -179,6 +179,8 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     out.sym.bcPtr           = S("__bc_ptr__");
     out.sym.captured        = S("__captured__");
     out.sym.atomValue       = S("__atom_value__");
+    out.sym.ready           = S("__ready__");
+    out.sym.sched           = S("__sched__");
 }
 
 } // namespace protoST

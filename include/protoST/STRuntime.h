@@ -145,22 +145,35 @@ public:
 private:
     // F6 v3 E2b: live-registry GC anchoring. registryAdd makes `o` reachable
     // from the single pinned root (so it survives GC); registryRemove drops
-    // it. Both serialize under the scheduler mutex. No-ops for null /
-    // PROTO_NONE / before the registry is created.
+    // it. No-ops for null / PROTO_NONE / before the registry is created.
     void registryAdd(proto::ProtoContext* ctx, const proto::ProtoObject* o);
     void registryRemove(proto::ProtoContext* ctx, const proto::ProtoObject* o);
 
+    // Lock-free scheduler primitives — there is no scheduler mutex.
+    //
+    // The ready queue is a protoCore immutable ProtoList held under
+    // `liveRegistry.__ready__`, mutated by compare-and-swap (the same pattern
+    // as the lock-free actor mailbox). The "is this actor owned by the
+    // scheduler" state is a per-actor 3-state flag in the `__sched__`
+    // attribute, also CAS'd:
+    //   0 = idle (not queued, not running);
+    //   1 = active (queued, or running a turn — no pending wakeup);
+    //   2 = running a turn AND a wakeup arrived — re-queue at turn end.
+    void enqueueReady(proto::ProtoContext* ctx, const proto::ProtoObject* actor);
+    const proto::ProtoObject* dequeueReady(proto::ProtoContext* ctx);
+    long long schedState(proto::ProtoContext* ctx, const proto::ProtoObject* actor);
+    bool casSchedState(proto::ProtoContext* ctx, const proto::ProtoObject* actor,
+                       long long from, long long to);
+    bool mailboxHasWork(proto::ProtoContext* ctx, const proto::ProtoObject* actor);
+
     // Turn-end finaliser for drainOne, run by its RAII guard on every exit
-    // path. With no per-actor lock, "at most one message in flight per actor"
-    // is upheld by keeping the actor in `scheduledSet` for the whole turn
-    // (it is NOT erased at pop). finishDrain runs under the scheduler mutex:
-    //   * suspended == true  (the actor yielded on an awaited future) — erase
-    //     it from scheduledSet so the future's resolve can reschedule it;
-    //   * suspended == false (the turn finished) — re-push the actor to the
-    //     ready queue if its mailbox still holds messages, otherwise erase it
-    //     from scheduledSet and drop its live-registry anchor.
-    // Reading the mailbox and updating scheduledSet under the same lock makes
-    // the decision atomic against a concurrent SEND's schedule().
+    // path. Drives the 3-state `__sched__` flag: s==2 means a wakeup arrived
+    // during the turn (CAS 2->1, re-queue); s==1 with leftover mailbox work
+    // (completed turn) re-queues; s==1 otherwise releases (CAS 1->0). A
+    // `suspended` turn (yielded on an awaited future) never re-queues for
+    // mailbox reasons — the future's settle reschedules it — but still
+    // consumes a pending wakeup via the 2->1 path. The 3-state flag makes the
+    // decision atomic against a concurrent SEND / future-settle with no lock.
     void finishDrain(proto::ProtoContext* ctx, const proto::ProtoObject* actor,
                      bool suspended);
 
