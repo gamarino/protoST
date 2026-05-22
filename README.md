@@ -83,12 +83,12 @@ compare against here:
 |---|---|
 | **Parallel speedup** | 12 CPU-bound worker actors run **~1.9× faster** on the full worker pool than pinned to one worker (`PROTOST_WORKERS=1`) — extra cores, no code change. |
 | **Cooperative-yield scaling** | **1,000** actors, each parked on a nested `wait`, all hosted on just **2** worker threads. Thread-per-actor blocking would need 1,000 OS threads; protoST parks the waiters and reuses the two. |
+| **Message throughput** | **~7,700 messages/second** — 2,000 drained round-trip sends to one actor (enqueue → schedule → execute → settle the `Future` → wake the sender). |
 
 The cooperative-yield number is the headline: a thousand suspended actors on
 two OS threads is a structural capability, not a tuning result. See the full
 dated report — [`benchmarks/reports/2026-05-21-baseline.md`](benchmarks/reports/2026-05-21-baseline.md)
-— for the complete table, the host details, and a known mailbox-scheduler
-issue surfaced by the throughput benchmark.
+— for the complete table and the host details.
 
 ## Project status
 

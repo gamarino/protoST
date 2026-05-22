@@ -133,10 +133,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", default=None,
                         help="report path (default: reports/<date>-baseline.md)")
-    parser.add_argument("--with-throughput", action="store_true",
-                        help="also run message_throughput.st — opt-in because it "
-                             "exercises a known non-deterministic actor-scheduler "
-                             "deadlock (docs/STATUS.md D23)")
+    parser.add_argument("--skip-throughput", action="store_true",
+                        help="skip message_throughput.st (it runs by default; "
+                             "D23 — the scheduler deadlock that once made it "
+                             "opt-in — is fixed, docs/STATUS.md)")
     args = parser.parse_args()
 
     protost = Path(os.environ.get("PROTOST_BIN", PROJECT_ROOT / "build" / "protost"))
@@ -216,22 +216,22 @@ def main():
     print(f"  N=1000 actors on K=2 workers: {coop_ms:.0f}ms"
           if ok_coop else "  FAIL")
 
-    # message_throughput is opt-in (--with-throughput): it exercises a known
-    # actor-scheduler deadlock (docs/STATUS.md D23) that hangs the run
-    # non-deterministically, so it is kept out of the default timed path.
+    # message_throughput runs by default. It was once opt-in because of D23 —
+    # a non-deterministic actor-scheduler deadlock under sustained mailbox
+    # load — which is now fixed (docs/STATUS.md D23, Closed). --skip-throughput
+    # still skips it for a faster run.
     tp_messages = 2000  # must match the loop bound in message_throughput.st
     tp_ms = None
     tp_rate = None
-    if args.with_throughput:
+    if not args.skip_throughput:
         tp_file = ACTORS_DIR / "message_throughput.st"
         print("  message_throughput", end="", flush=True)
         tp_ms, ok_tp, _ = timed([str(protost), str(tp_file)])
         tp_rate = (tp_messages / (tp_ms / 1000.0)) if (ok_tp and tp_ms) else None
         print(f"  {tp_messages} msgs: {tp_ms:.0f}ms  ({tp_rate:,.0f} msg/s)"
-              if tp_rate else "  FAIL (known scheduler deadlock — STATUS.md D23)")
+              if tp_rate else "  FAIL")
     else:
-        print("  message_throughput  skipped "
-              "(opt-in: --with-throughput; see STATUS.md D23)")
+        print("  message_throughput  skipped (--skip-throughput)")
 
     # --- Report ---------------------------------------------------------------
     write_report(out_path, host_cpu, ncpu, protost, cpython, protopy,
@@ -313,30 +313,12 @@ def write_report(path, host_cpu, ncpu, protost, cpython, protopy,
                       f"worker threads — completes in {coop_ms:.0f} ms. "
                       f"Thread-per-actor blocking would need 1000 OS threads. |")
     if tp_rate:
-        lines.append(f"| **Message throughput** | {tp_messages:,} messages "
-                      f"through one actor's mailbox in {tp_ms:.0f} ms — "
-                      f"**{tp_rate:,.0f} messages/second** (opt-in run). |")
+        lines.append(f"| **Message throughput** | {tp_messages:,} drained "
+                      f"round-trip sends to one actor in {tp_ms:.0f} ms — "
+                      f"**{tp_rate:,.0f} messages/second**. |")
     else:
-        lines.append("| **Message throughput** | _not run — opt-in "
-                      "(`--with-throughput`); see the known issue below._ |")
-    lines.append("")
-    lines.append("### Known issue — actor-scheduler deadlock under "
-                 "sustained mailbox load")
-    lines.append("")
-    lines.append("The message-throughput benchmark "
-                 "(`benchmarks/actors/message_throughput.st`) is **kept out "
-                 "of the default timed path** and only runs with "
-                 "`--with-throughput`. Sending many messages to one actor — "
-                 "fire-and-forget *or* drained — hangs the runtime "
-                 "**non-deterministically**: repeated runs alternate between "
-                 "sub-second completion and indefinite stalls, and a *larger* "
-                 "message count sometimes completes where a smaller one hung. "
-                 "This is a scheduling / GC race under sustained mailbox "
-                 "pressure, not a clean N threshold. It is a real runtime bug "
-                 "— tracked as **D23** in `docs/STATUS.md` — and the benchmark "
-                 "file is retained as its repro. The two actor benchmarks "
-                 "above (parallel speedup, cooperative-yield) are stable and "
-                 "are the reported actor results.")
+        lines.append("| **Message throughput** | _skipped "
+                      "(`--skip-throughput`)._ |")
     lines.append("")
     lines.append("### Reading these numbers")
     lines.append("")

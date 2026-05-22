@@ -30,7 +30,7 @@ column; they showcase protoST's distinctive feature.
 |---|---|
 | `parallel_speedup.st` | 12 CPU-bound worker actors — wall-clock with the full worker pool vs `PROTOST_WORKERS=1`; the harness reports the speedup. |
 | `cooperative_yield.st` | 1000 waiter actors, each parked on a nested `wait`, all hosted on K=2 worker threads — what thread-per-actor blocking cannot do. |
-| `message_throughput.st` | 2000 messages through one actor's mailbox; the harness reports messages/second. **Opt-in** (`--with-throughput`) — it exercises a known non-deterministic actor-scheduler deadlock (`docs/STATUS.md` D23) and is kept out of the default timed path; the file is retained as the bug's repro. |
+| `message_throughput.st` | 2000 drained round-trip sends through one actor's mailbox; the harness reports messages/second. Runs by default; `--skip-throughput` opts out. (It was once opt-in because of D23, a scheduler deadlock under sustained mailbox load — now fixed; see `docs/STATUS.md`.) |
 
 ## Running
 
