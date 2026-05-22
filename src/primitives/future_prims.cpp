@@ -230,17 +230,23 @@ const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* c
         // already settled — fall through to the synchronous read below.
     }
 
-    // Non-actor (or already-settled) path: poll __state__ with a GC-safe,
-    // backed-off bounded sleep. Sleeping while still counted in
-    // ProtoSpace::runningThreads would stall a stop-the-world GC, so each
-    // genuine sleep is bracketed by enter/exitGcBlocking — and NO protoCore
-    // heap is touched between them (the state read happens strictly while the
-    // thread is a running mutator). The poll interval backs off from 1 ms to
-    // 32 ms so a fast future returns promptly while a long wait does not hammer
-    // the GC's globalMutex through the enter/exit calls.
-    unsigned sleepUs = 1000;
+    // Non-actor (or already-settled) path. The waiting thread is the main /
+    // a foreground thread — it is NOT an actor, so it DRIVES the scheduler
+    // itself: each iteration drains one message. A pure sleep-poll would make
+    // every wait pay a full backoff interval while only the worker pool made
+    // progress — a serial `(x) wait` round-trip pattern would be capped near
+    // 1/firstSleep messages per second. Driving drainOne instead settles the
+    // awaited future on this very thread when the work is ours to do, and
+    // keeps the thread hitting allocation safepoints so a concurrent
+    // stop-the-world GC is never stalled. Only when there is genuinely
+    // nothing to drain (a worker holds the actor mid-turn) does it back off,
+    // GC-safely (the sleep is bracketed by enter/exitGcBlocking, no protoCore
+    // heap touched between them), ramping 50 us .. 32 ms.
+    unsigned sleepUs = 0;
     for (;;) {
         if (readState(ctx, r) != 0) break;
+        if (rt.drainOne(ctx)) { sleepUs = 0; continue; }  // did work — re-check now
+        if (sleepUs == 0) sleepUs = 50;
         enterGcBlocking(ctx);
         std::this_thread::sleep_for(std::chrono::microseconds(sleepUs));
         exitGcBlocking(ctx);
