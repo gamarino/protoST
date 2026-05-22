@@ -18,9 +18,13 @@ stable id and file it in the right bucket.
   carried over, plus 4 new regression cases (two conformance `.st` for D22,
   one conformance `.st` + one `cli_actor_stress` shell test for D23). Earlier:
   702/702 at the T5-a commit; 699/699 at T3-c; 622/622 at `MNT-c`.
-- **Last verified:** 2026-05-21 (D23 closed — `workerLoop` now acquires
-  `schedMu` GC-safely, so the actor scheduler no longer deadlocks under
-  un-drained mailbox load; whole suite green, D23 repro 60/60).
+- **Last verified:** 2026-05-22 (de-locking landed — the per-actor mailbox
+  mutex and the per-future mutex+condition-variable are removed; the actor
+  mailbox and the Future state machine are now lock-free over protoCore's
+  atomic attribute CAS. Whole suite green 4/4 consecutive `ctest` runs,
+  including `cli_actor_stress`). Earlier: 2026-05-21 (D23 closed — `workerLoop`
+  now acquires `schedMu` GC-safely, so the actor scheduler no longer
+  deadlocks under un-drained mailbox load; D23 repro 60/60).
 - **Open bugs:** none.
 - **Id scheme:** `D1..D18` are carried over from `LANGUAGE.md` §14 and keep
   their original meaning. New divergences get new ids (`D19+`).
@@ -99,6 +103,12 @@ are noted where useful.
 - [x] `Future`: `wait`, `thenDo:`, `catch:`, `resolve:`, `rejectWith:`
 - [x] **`Future new`** yields a usable first-class promise *(closed: C3)*
 - [x] Cooperative suspension; parallel scheduler
+- [x] **Lock-free actor mailbox + Future** — no per-actor or per-future mutex;
+      the mailbox read-modify-write and the Future state machine run on
+      protoCore's atomic attribute compare-and-swap (`setAttributeIfEqual`).
+      A language built on protoCore carries no synchronisation locks of its
+      own; only the DAP/debugger I/O locks remain (external-protocol
+      coordination, outside protoCore's object model).
 
 ### Modules
 - [x] File-to-module mapping; `Import from:`
