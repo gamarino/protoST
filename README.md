@@ -6,6 +6,46 @@ protoST is a Smalltalk-80-inspired language runtime with a **first-class embedde
 
 protoST's distinct contribution is putting **actors at the centre of the language**: any object can be promoted to an actor with `asActor`, every message sent to it is dispatched asynchronously and returns a `Future`, and an internal invariant guarantees that exactly one method of a given actor runs at a time. Tens of thousands of actors share a small worker pool through cooperative scheduling — an actor suspends transparently when it waits on a future, freeing its worker for someone else.
 
+## A message is a pointer, not a copy
+
+An actor system lives or dies by its message passing, and every mainstream
+runtime makes a hard compromise there:
+
+- **Erlang/Elixir (BEAM)** gives each process a private heap, so a message is
+  **deep-copied** from sender to receiver. Safe — but every send pays for the
+  copy.
+- **Node.js worker threads** cannot share JavaScript objects at all: a message
+  is a `structured-clone` copy, or raw bytes through a `SharedArrayBuffer`.
+- **The JVM and Go** pass a pointer — fast — but the pointee is *mutable shared
+  state*, so you inherit data races, locks, and a subtle memory model.
+
+protoST does not compromise. **A message is a pointer.** When one actor hands a
+10 000-node world model to another, nothing is copied and nothing is
+serialized — the receiver, on another core, reads the very same object. And it
+is safe, with **no locks and no caveats**.
+
+That is possible because of protoCore's object model. A mutable object is not a
+block of mutable memory — it is an *atomic reference to an immutable snapshot*.
+"Mutating" it installs a **new** snapshot; it never overwrites anything another
+thread might be reading. So everything you can ever observe — a plain value, or
+the current state of a mutable object — is a complete, frozen, internally
+consistent graph. **Torn reads cannot occur.** Sharing a pointer to something
+that cannot change is unconditionally safe: no copy (unlike BEAM), no data race
+(unlike the JVM), no serialization boundary (unlike Node).
+
+This is the *identity / value* distinction — a mutable object is a stable
+*identity* whose *value* is always immutable — promoted from a library pattern
+to the **universal object model**, running under true parallelism with no GIL.
+The safety lives in the *data model*, not in the actor model: it holds for
+every actor and every message by construction — not by discipline, not by
+runtime cooperation between actors.
+
+For agents, this changes what is cheap. Ten actors read the same world snapshot
+**in parallel with zero contention** — it cannot change under them. "Updating" a
+large shared structure costs **O(log n)** new nodes through structural sharing,
+and the previous snapshot stays valid for whoever still holds it. That is the
+foundation the digital-twin story below is built on.
+
 ## Why this matters: digital twins
 
 A digital twin is, structurally, a collection of finite state machines (FSMs) that mirror real-world entities — a pump, a vehicle, a patient, a substation — and react to events. The conventional implementation routes each event to a state-dependent handler via a dispatcher. The actor model expresses the same semantics with the order inverted: each method is the handler, and the actor's state is consulted *inside* it.
