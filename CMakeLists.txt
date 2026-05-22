@@ -125,6 +125,11 @@ add_test(NAME cli_dap
 add_test(NAME cli_dap_session
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_dap_session.sh $<TARGET_FILE:protost>)
 
+# D23 regression: un-drained actor mailbox load must not deadlock the
+# scheduler. Non-deterministic when broken, so the test repeats the workload.
+add_test(NAME cli_actor_stress
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_actor_stress.sh $<TARGET_FILE:protost>)
+
 # --- Track 10: Installation packaging ---------------------------------------
 # Install RPATH so an installed `bin/protost` finds libprotoCore.so under
 # <prefix>/lib without LD_LIBRARY_PATH / DYLD_LIBRARY_PATH (mirrors protoPython).

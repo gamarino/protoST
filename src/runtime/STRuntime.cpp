@@ -617,7 +617,27 @@ void STRuntime::workerLoop(proto::ProtoContext* ctx) {
         while (true) {
             if (predicate()) break;
             {
-                std::unique_lock<std::mutex> lock(impl_->schedMu);
+                // F6 v3 E4 / D23: acquire `schedMu` GC-safely. A plain
+                // `std::unique_lock<std::mutex> lock(schedMu)` here blocks the
+                // worker in the kernel futex while it is STILL counted as a
+                // running mutator. Every OTHER `schedMu` acquirer
+                // (registryAdd / registryRemove / schedule / drainOne) takes
+                // it through gcSafeLock and, by design, may park at a GC
+                // safepoint while owning it (GcSafeMutex.h). When that
+                // happens, a worker blocked here off-safepoint never bumps
+                // `parkedThreads`, the stop-the-world quorum
+                // (parkedThreads >= runningThreads) is never met, the holder's
+                // safepoint never returns, and `schedMu` is never released —
+                // the D23 deadlock, confirmed by gdb (a worker stuck in
+                // std::unique_lock::lock() on schedMu while another worker
+                // held it parked in exitGcBlocking's safepoint). gcSafeLock
+                // leaves the running set for the blocking acquire, so the GC
+                // quorum is computed without this thread; we then adopt the
+                // already-owned mutex into a unique_lock so schedCv.wait_for
+                // can release / re-acquire it. Matches prim_Future_wait.
+                gcSafeLock(ctx, impl_->schedMu);
+                std::unique_lock<std::mutex> lock(impl_->schedMu,
+                                                  std::adopt_lock);
                 if (predicate()) break;
                 enterGcBlocking(ctx);
                 impl_->schedCv.wait_for(lock, std::chrono::milliseconds(50));
