@@ -208,11 +208,28 @@ ExecutionEngine::opAt(const Frame& f, unsigned int depth) const {
 // construction and leaves on destruction. The vector grows/shrinks LIFO with
 // the C++ engine nesting, so an erase is always of the back element in the
 // common case; a defensive search-and-erase handles any non-LIFO surprise.
+// Per-thread frame-stack buffer pool (see ExecutionEngine.h — framePool_).
+thread_local std::vector<std::vector<ExecutionEngine::Frame>>
+    ExecutionEngine::framePool_;
+
 ExecutionEngine::ExecutionEngine(STRuntime& rt) : rt_(rt) {
     g_liveEngines.push_back(this);
+    // Borrow a frame-stack buffer from the per-thread pool. The borrowed
+    // vector keeps the capacity a previous engine grew it to, so
+    // runWithArgs's reserve() does not malloc. clear() empties it without
+    // releasing that capacity.
+    if (!framePool_.empty()) {
+        frames_ = std::move(framePool_.back());
+        framePool_.pop_back();
+        frames_.clear();
+    }
 }
 
 ExecutionEngine::~ExecutionEngine() {
+    // Return the frame-stack buffer to the per-thread pool, capacity intact,
+    // for the next engine on this thread to reuse.
+    frames_.clear();
+    framePool_.push_back(std::move(frames_));
     for (std::size_t i = g_liveEngines.size(); i-- > 0; ) {
         if (g_liveEngines[i] == this) {
             g_liveEngines.erase(g_liveEngines.begin() +

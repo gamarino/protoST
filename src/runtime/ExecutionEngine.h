@@ -175,6 +175,16 @@ private:
     std::vector<Frame>    frames_;
     proto::ProtoContext*  ctx_ = nullptr;   // the engine context (GC-traced)
 
+    // Per-thread pool of frame-stack buffers. A fresh ExecutionEngine is
+    // built on every message turn (and every nested invocation); without a
+    // pool, runWithArgs's frames_.reserve() malloc'd ~4 KB per turn — the
+    // profile's #1 mutator-thread hotspot. The constructor borrows a buffer
+    // (keeping its capacity from a previous engine) and the destructor
+    // returns it. After warm-up the pool holds one buffer per nesting level
+    // and the message path never mallocs here. thread_local: engines run on
+    // one thread (mirrors g_liveEngines / g_slotCursor).
+    static thread_local std::vector<std::vector<Frame>> framePool_;
+
     // F6 v3 E3: the automaticLocals slot index where THIS engine's frame
     // regions begin. Captured from the shared thread-local slot cursor at
     // engine entry; nested engines (invoked by primitives) pack their regions
