@@ -150,6 +150,20 @@ private:
     void registryAdd(proto::ProtoContext* ctx, const proto::ProtoObject* o);
     void registryRemove(proto::ProtoContext* ctx, const proto::ProtoObject* o);
 
+    // Turn-end finaliser for drainOne, run by its RAII guard on every exit
+    // path. With no per-actor lock, "at most one message in flight per actor"
+    // is upheld by keeping the actor in `scheduledSet` for the whole turn
+    // (it is NOT erased at pop). finishDrain runs under the scheduler mutex:
+    //   * suspended == true  (the actor yielded on an awaited future) — erase
+    //     it from scheduledSet so the future's resolve can reschedule it;
+    //   * suspended == false (the turn finished) — re-push the actor to the
+    //     ready queue if its mailbox still holds messages, otherwise erase it
+    //     from scheduledSet and drop its live-registry anchor.
+    // Reading the mailbox and updating scheduledSet under the same lock makes
+    // the decision atomic against a concurrent SEND's schedule().
+    void finishDrain(proto::ProtoContext* ctx, const proto::ProtoObject* actor,
+                     bool suspended);
+
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

@@ -24,8 +24,6 @@
 #include "NonLocalReturn.h"
 #include "SchedDiag.h"
 #include "Opcodes.h"
-#include "ActorLock.h"
-#include "GcSafeMutex.h"
 #include "TransientPin.h"
 #include "NativeExceptionBridge.h"
 #include "debugger/DebuggerRuntime.h"
@@ -717,8 +715,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // Allocate a fresh pending Future.
                     // F6 v3 E5: `fut` is held in a C++ local across newChild,
                     // newList, the appendLast loop, three setAttribute calls
-                    // on mutable objects, getActorLock, the locked mailbox
-                    // RMW and schedule() — all of which allocate. Pin it.
+                    // on mutable objects, the CAS-retry mailbox append and
+                    // schedule() — all of which allocate. Pin it.
                     auto* fut = const_cast<proto::ProtoObject*>(rt_.newFuture(ctx));
                     TransientPin pinFut(ctx, fut);
 
@@ -748,46 +746,38 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     msg->setAttribute(ctx, msgArgsKey, argsList->asObject(ctx));
                     msg->setAttribute(ctx, msgFutKey, fut);
 
-                    // F6 v2 T3: hold the per-actor lock across the mailbox
-                    // read-modify-write. Without this, the worker thread's
-                    // drainOne can pop a message between our getAttribute and
-                    // setAttribute calls below; our setAttribute would then
-                    // overwrite the popped state and either lose the popped
-                    // message (if our append went on top of stale state) or
-                    // double-process it.
+                    // Append to the actor's mailbox with a lock-free
+                    // compare-and-swap retry. The mailbox is held under the
+                    // actor's __mailbox__ attribute; a concurrent drainOne pop
+                    // or a parallel SEND is a competing read-modify-write.
+                    // Each try reads the current mailbox, builds the
+                    // FIFO-extended list, and publishes it only if __mailbox__
+                    // still holds exactly the snapshot we read
+                    // (ProtoObject::setAttributeIfEqual — protoCore's atomic
+                    // attribute CAS). A lost CAS means another writer won
+                    // since our read; re-read and retry. This replaces the
+                    // former per-actor std::mutex: no language-level lock, so
+                    // no GC-safe acquire and no way to stall the STW quorum.
                     //
-                    // We pull the lock pointer outside the {} so we can hold
-                    // the guard for the entire RMW and drop it before
-                    // schedule() — schedule() takes schedMu internally and
-                    // mixing the two acquisition orders elsewhere would risk
-                    // deadlock (drainOne acquires schedMu first, then the
-                    // actor lock).
-                    std::mutex* actorLock = getActorLock(ctx, recv);
-                    {
-                        // F6 v3 E4: acquire the per-actor lock GC-safely. The
-                        // drainOne holder keeps this lock across the entire
-                        // user-method dispatch — i.e. across protoCore
-                        // allocation — and may park at a GC safepoint while
-                        // holding it. A plain std::mutex::lock() here would
-                        // block this thread off-safepoint while it is still a
-                        // counted mutator, stalling the STW quorum forever.
-                        GcSafeLockGuard guard(ctx, actorLock);
-
-                        // Enqueue (FIFO) into the actor's mailbox.
-                        // F6 v3 E5: `mailbox` may be a fresh ctx->newList()
-                        // (a transient reachable from nowhere the GC traces)
-                        // and is held across appendLast, which allocates.
-                        // `newMailbox` is then held across asObject +
-                        // setAttribute. Pin both.
-                        auto* mbObj = recv->getAttribute(ctx, mbKey);
-                        auto* mailbox = mbObj ? mbObj->asList(ctx) : ctx->newList();
+                    // F6 v3 E5: `mailbox`, `newMailbox` and `newMbObj` are
+                    // transients reachable from nothing the GC traces, held
+                    // across allocating calls — pin each for the iteration.
+                    for (;;) {
+                        const proto::ProtoObject* mbObj =
+                            recv->getOwnAttributeDirect(ctx, mbKey);
+                        auto* mailbox = (mbObj && mbObj != PROTO_NONE)
+                            ? mbObj->asList(ctx) : ctx->newList();
                         TransientPin pinMailbox(
                             ctx, reinterpret_cast<const proto::ProtoObject*>(mailbox));
                         auto* newMailbox = mailbox->appendLast(ctx, msg);
                         TransientPin pinNewMailbox(
                             ctx, reinterpret_cast<const proto::ProtoObject*>(newMailbox));
-                        const_cast<proto::ProtoObject*>(recv)
-                            ->setAttribute(ctx, mbKey, newMailbox->asObject(ctx));
+                        const proto::ProtoObject* newMbObj =
+                            newMailbox->asObject(ctx);
+                        TransientPin pinNewMbObj(ctx, newMbObj);
+                        if (const_cast<proto::ProtoObject*>(recv)
+                                ->setAttributeIfEqual(ctx, mbKey, mbObj, newMbObj))
+                            break;
                     }
 
                     // Schedule the actor for processing and stash the Future

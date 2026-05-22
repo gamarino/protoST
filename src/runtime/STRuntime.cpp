@@ -10,7 +10,6 @@
 #include "BytecodeModule.h"
 #include "Bootstrap.h"
 #include "Venv.h"
-#include "ActorLock.h"
 #include "SchedDiag.h"
 #include "GcSafeBlocking.h"
 #include "GcSafeMutex.h"
@@ -878,7 +877,12 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
         if (impl_->readyQueue.empty()) return false;
         actor = impl_->readyQueue.front();
         impl_->readyQueue.pop();
-        impl_->scheduledSet.erase(actor);
+        // The actor is deliberately NOT erased from scheduledSet here. It
+        // stays "owned by the scheduler" for the whole turn so a SEND that
+        // arrives mid-turn cannot re-enqueue it and let a second worker
+        // dispatch it in parallel — that is the turn-serialisation the old
+        // per-actor mutex provided. finishDrain (run by DrainGuard on every
+        // exit path) erases it, or re-queues it, once the turn ends.
         SCHED_DIAG("drainOne POP actor=" << actor
                    << " queue=" << impl_->readyQueue.size());
     }
@@ -896,23 +900,20 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     //     which re-adds it harmlessly (idempotent overwrite of the same
     //     key). It is finally removed on the resume's completion path.
     //
-    // `releaseActor` is the RAII completion hook: by default it removes the
-    // actor from the registry. Any yield path sets `keepAnchored = true`
-    // first so the entry survives the suspension window. It also notifies
-    // schedCv so a Future>>wait stuck on an empty queue (because a worker
-    // beat us to the actor) wakes promptly once the future is settled.
-    bool keepAnchored = false;
+    // Turn lifecycle guard: on EVERY exit path (return or caught throw) it
+    // runs finishDrain, which under schedMu either re-queues the actor (its
+    // mailbox still holds messages) or releases it from scheduledSet and the
+    // live registry. A FutureYield sets `suspended = true` so finishDrain
+    // instead just drops scheduledSet ownership and keeps the registry
+    // anchor for the suspension window — whoever resolves the awaited future
+    // reschedules the actor.
     struct DrainGuard {
         STRuntime* self;
         proto::ProtoContext* ctx;
         const proto::ProtoObject* actor;
-        const bool* keepAnchored;
-        std::condition_variable* cv;
-        ~DrainGuard() {
-            if (!*keepAnchored) self->registryRemove(ctx, actor);
-            if (cv) cv->notify_all();
-        }
-    } drainGuard{this, ctx, actor, &keepAnchored, &impl_->schedCv};
+        bool suspended = false;
+        ~DrainGuard() { self->finishDrain(ctx, actor, suspended); }
+    } drainGuard{this, ctx, actor};
 
     static const proto::ProtoString* mailboxKey =
         proto::ProtoString::createSymbol(ctx, "__mailbox__");
@@ -969,68 +970,20 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     // resolveFutureFromDrain / rejectFutureFromDrain in future_prims.cpp own
     // the entire transition including the attribute writes.
 
-    // F6 v2 T3: hold the per-actor lock across BOTH the mailbox RMW and the
-    // dispatch of the popped message. Two concurrency hazards motivate the
-    // wider scope:
-    //   1. SEND fast-path append vs drainOne pop on the mailbox itself
-    //      (the RMW race described in the task brief).
-    //   2. Two drainers (the worker thread and a main-thread Future>>wait
-    //      calling drainOne) picking up the same actor for different
-    //      scheduling events and dispatching its methods in parallel. The
-    //      scheduledSet only prevents queue-duplicate entries; it does not
-    //      forbid a second schedule() after the first pop, so without an
-    //      additional barrier the actor's wrapped object can have two
-    //      messages mutating its instance variables at once.
-    // Holding the actor lock for the entire dispatch enforces the actor
-    // semantics of "at most one message in flight per actor", which is what
-    // makes per-actor instance state safe without further synchronisation
-    // inside user methods. The future state writes that follow also stay
-    // under the lock to keep "method body ran + future resolved" atomic
-    // from the perspective of other threads observing the future.
-    //
-    // Mind the lock-acquisition order: schedMu was released when we left
-    // its scope above. Acquiring the actor lock now means a drainer goes
-    // schedMu → actor lock. The SEND fast-path takes the actor lock without
-    // holding schedMu, and schedule() takes schedMu without holding the
-    // actor lock — so no two threads ever hold the pair in opposite order
-    // and there is no deadlock.
-    //
-    // A plain self-send inside a handler (`self foo`) does NOT re-enter this
-    // lock: `self` is the wrapped base object, not the actor proxy, so
-    // `self foo` is ordinary synchronous user-method dispatch and never
-    // touches the mailbox or this mutex. The one unsupported case is user
-    // code that sends a message to the SAME actor through its actor
-    // reference (the `asActor` proxy) from inside that actor's own handler:
-    // that re-enters the SEND fast-path, which takes this same lock, and a
-    // non-recursive std::mutex would self-deadlock. That pattern ("enqueue
-    // a message to myself as an agent") is intentionally not supported.
-    // F6 v3 E4: acquire the per-actor lock GC-safely. drainOne holds this
-    // lock across the entire user-method dispatch (subEng.runWithArgs /
-    // continueRun) — i.e. across protoCore allocation — so the holder may
-    // park at a GC safepoint while owning it. A second drainer (or the SEND
-    // fast-path) blocking on a plain std::mutex::lock() here would stall the
-    // STW quorum: it would be parked off-safepoint while still counted as a
-    // running mutator. gcSafeLock leaves the running set for the blocking
-    // acquire. `actorLockHeld` tracks ownership across the explicit unlock
-    // points on the yield / completion paths below (a plain std::unique_lock
-    // is no longer used: its blocking constructor is exactly the hazard).
-    std::mutex* actorLock = getActorLock(ctx, actor);
-    // RAII holder: tracks ownership of `actorLock` and drops it on any return
-    // / throw path. `release()` is called explicitly at the yield / completion
-    // sites that previously did `actorGuard.unlock()`.
-    struct ActorLockGuard {
-        std::mutex* m;
-        bool held = false;
-        void release() { if (held) { m->unlock(); held = false; } }
-        ~ActorLockGuard() { release(); }
-    } actorGuard{actorLock};
-    if (actorLock) {
-        SCHED_DIAG("drainOne actorLock WAIT actor=" << actor
-                   << " lock=" << static_cast<void*>(actorLock));
-        gcSafeLock(ctx, *actorLock);
-        actorGuard.held = true;
-        SCHED_DIAG("drainOne actorLock HELD actor=" << actor);
-    }
+    // Turn serialisation — "at most one message in flight per actor" — no
+    // longer needs a per-actor lock. Two hazards used to motivate one:
+    //   1. SEND-append vs drainOne-pop racing on the mailbox itself. This is
+    //      now closed by the lock-free CAS: both the SEND fast-path and the
+    //      drainOne pop below use ProtoObject::setAttributeIfEqual in a retry
+    //      loop, so the read-modify-write is atomic without any mutex.
+    //   2. Two drainers dispatching the same actor in parallel. This is now
+    //      closed by the scheduler: the actor stays in `scheduledSet` for the
+    //      whole turn (it is not erased at pop), so a SEND arriving mid-turn
+    //      finds it already scheduled and cannot re-enqueue it; finishDrain
+    //      re-queues it once, after the turn, if its mailbox is non-empty.
+    // A drainer therefore owns the actor for the turn by construction, and
+    // per-actor instance state stays single-writer with no language-level
+    // lock and no GC-safe-lock machinery on this path.
 
     // F6 v3 C+D: check for a suspended-frame snapshot BEFORE looking at the
     // mailbox. If present, this drainOne tick is a resume of a previously
@@ -1046,10 +999,10 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
         if (snapAttr && snapAttr != PROTO_NONE) {
             // F6 v3 E2b: this actor was suspended and is now being resumed.
             // It has stayed in the live registry the whole time (the yield
-            // path set keepAnchored so DrainGuard left it in place), so no
+            // path's finishDrain(suspended) left the anchor in place), so no
             // re-add is needed here — the registry entry already roots it.
-            // The DrainGuard for THIS drainOne tick will remove it on normal
-            // completion, or a re-yield below will set keepAnchored again.
+            // The DrainGuard for THIS drainOne tick will release it on normal
+            // completion, or a re-yield below will set drainGuard.suspended.
             // Pull the message-level future the original drainOne would
             // have resolved on synchronous completion. Stored on the actor
             // at yield time so the resume path knows which future to
@@ -1106,9 +1059,8 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                 SCHED_DIAG("drainOne RESUME-REYIELD actor=" << actor);
                 // Re-yield: the engine has already snapshotted + recorded
                 // the new awaited future on the actor. Keep msgFut on the
-                // actor for the next resume. The actor lock will release
-                // on return; whoever resolves the new awaited future will
-                // re-schedule us.
+                // actor for the next resume. Whoever resolves the new awaited
+                // future will re-schedule us.
                 setCurrentActor(nullptr);
                 // Preserve __suspended_future__ so the next resume still
                 // knows which message-level future to settle on completion.
@@ -1116,12 +1068,10 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                     const_cast<proto::ProtoObject*>(actor)->setAttribute(
                         ctx, suspFutKey, msgFut);
                 }
-                // F6 v3 E2b: the actor re-yielded — keep its live-registry
-                // entry in place so it stays reachable from the pinned root
-                // across the new suspension window. DrainGuard sees
-                // keepAnchored and leaves the entry untouched.
-                keepAnchored = true;
-                actorGuard.release();
+                // The actor re-yielded — finishDrain(suspended) drops its
+                // scheduledSet ownership and leaves the live-registry anchor
+                // in place across the new suspension window.
+                drainGuard.suspended = true;
                 return true;
             } catch (const NonLocalReturn&) {
                 // Track 1 slice 1: a non-local return escaped the resumed
@@ -1195,45 +1145,42 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                 }
             }
 
-            actorGuard.release();
-            // The actor was scheduled to resume; any mailbox messages that
-            // accumulated during the yield window must still be drained.
-            // We re-schedule unconditionally if the mailbox is non-empty.
-            auto* mbAfter = actor->getAttribute(ctx, mailboxKey);
-            if (mbAfter && mbAfter != PROTO_NONE) {
-                auto* mbList = mbAfter->asList(ctx);
-                if (mbList && mbList->getSize(ctx) > 0) {
-                    // F6 v3 E2b: re-queued — keep the registry entry so
-                    // DrainGuard does not remove what schedule() just
-                    // (re-)anchored. The next drainOne owns its lifecycle.
-                    keepAnchored = true;
-                    schedule(ctx, actor);
-                }
-            }
+            // The resume turn is over. Any mailbox messages that accumulated
+            // during the yield window are handled by finishDrain (run by
+            // DrainGuard): it re-queues the actor if its mailbox is non-empty,
+            // keeping the registry anchor; otherwise it releases both.
             return true;
         }
     }
 
     const proto::ProtoObject* msg = nullptr;
-    bool rescheduleAfter = false;
     {
-        // Get the mailbox (ProtoList). Pop the first (FIFO).
-        auto* mbObj = actor->getAttribute(ctx, mailboxKey);
-        if (!mbObj || mbObj == PROTO_NONE) return true;
-        auto* mailbox = mbObj->asList(ctx);
-        if (!mailbox || mailbox->getSize(ctx) == 0) return true;
+        // Pop the FIFO head off the mailbox with a lock-free compare-and-swap
+        // retry — the mirror of the SEND fast-path's CAS append. A concurrent
+        // SEND appends to the tail; if it lands between our read and our
+        // write the setAttributeIfEqual fails and we re-read. Re-reading is
+        // safe: the head we want is still element 0 (a SEND only appends),
+        // and getSlice(1, newSize) keeps whatever the SEND added.
+        for (;;) {
+            const proto::ProtoObject* mbObj =
+                actor->getOwnAttributeDirect(ctx, mailboxKey);
+            if (!mbObj || mbObj == PROTO_NONE) return true;
+            auto* mailbox = mbObj->asList(ctx);
+            if (!mailbox || mailbox->getSize(ctx) == 0) return true;
 
-        msg = mailbox->getAt(ctx, 0);
-        // Drop the first message — getSlice(from, to) over [1, size).
-        // F6 v3 E5: `remaining` is a freshly sliced list held across asObject
-        // + setAttribute. Pin it.
-        auto* remaining = mailbox->getSlice(
-            ctx, 1, static_cast<int>(mailbox->getSize(ctx)));
-        TransientPin pinRemaining(
-            ctx, reinterpret_cast<const proto::ProtoObject*>(remaining));
-        const_cast<proto::ProtoObject*>(actor)->setAttribute(
-            ctx, mailboxKey, remaining->asObject(ctx));
-        rescheduleAfter = (remaining->getSize(ctx) > 0);
+            msg = mailbox->getAt(ctx, 0);
+            // F6 v3 E5: `remaining` is a freshly sliced list held across
+            // asObject + the CAS. Pin it.
+            auto* remaining = mailbox->getSlice(
+                ctx, 1, static_cast<int>(mailbox->getSize(ctx)));
+            TransientPin pinRemaining(
+                ctx, reinterpret_cast<const proto::ProtoObject*>(remaining));
+            const proto::ProtoObject* newMbObj = remaining->asObject(ctx);
+            TransientPin pinNewMbObj(ctx, newMbObj);
+            if (const_cast<proto::ProtoObject*>(actor)
+                    ->setAttributeIfEqual(ctx, mailboxKey, mbObj, newMbObj))
+                break;
+        }
     }
     // F6 v3 E5: the setAttribute above overwrote the actor's __mailbox__
     // slot, so `msg` is no longer reachable via actor->__mailbox__. It is
@@ -1364,12 +1311,11 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             const_cast<proto::ProtoObject*>(actor)->setAttribute(
                 ctx, suspFutKey, future);
         }
-        // F6 v3 E2b: keep the actor's live-registry entry in place for the
-        // suspension window. DrainGuard would otherwise remove it on return;
-        // without the entry a fully-suspended chain would have no live GC
-        // root and the tracing collector would reclaim it.
-        keepAnchored = true;
-        actorGuard.release();
+        // The actor yielded — finishDrain(suspended) drops its scheduledSet
+        // ownership and keeps the live-registry anchor for the suspension
+        // window; without the anchor a fully-suspended chain would have no
+        // live GC root and the tracing collector would reclaim it.
+        drainGuard.suspended = true;
         return true;
     } catch (const NonLocalReturn&) {
         // Track 1 slice 1: a non-local return escaped the actor handler's
@@ -1384,7 +1330,6 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             TransientPin pinErr(ctx, err);
             rejectFutureFromDrain(*this, ctx, future, err);
         }
-        actorGuard.release();
         return true;
     } catch (const UnwindToHandler&) {
         // Track 1 slice 2 (EXC-a): an UnwindToHandler escaped the actor
@@ -1400,7 +1345,6 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             TransientPin pinErr(ctx, err);
             rejectFutureFromDrain(*this, ctx, future, err);
         }
-        actorGuard.release();
         return true;
     } catch (const RetrySignal&) {
         // EXC-b: a stray `retry` escaped the actor handler — a balanced
@@ -1413,7 +1357,6 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             TransientPin pinErr(ctx, err);
             rejectFutureFromDrain(*this, ctx, future, err);
         }
-        actorGuard.release();
         return true;
     } catch (const ResumeSignal&) {
         // EXC-b: a stray `resume:` escaped its `signal` loop — a bug.
@@ -1425,7 +1368,6 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             TransientPin pinErr(ctx, err);
             rejectFutureFromDrain(*this, ctx, future, err);
         }
-        actorGuard.release();
         return true;
     } catch (const PassSignal&) {
         // EXC-b: a stray `pass` escaped its `signal` loop — a bug.
@@ -1437,7 +1379,6 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             TransientPin pinErr(ctx, err);
             rejectFutureFromDrain(*this, ctx, future, err);
         }
-        actorGuard.release();
         return true;
     } catch (const std::exception& e) {
         if (future) {
@@ -1450,22 +1391,98 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     }
     setCurrentActor(nullptr);
 
-    // F6 v2 T3: drop the actor lock BEFORE re-scheduling. schedule() takes
-    // schedMu; doing so while still holding the actor lock would not
-    // deadlock today (nothing holds schedMu while waiting for an actor
-    // lock), but releasing first keeps the rule "actor lock and schedMu are
-    // disjoint at every cross-thread observation point" simple to audit.
-    actorGuard.release();
+    // The turn is over. finishDrain (run by DrainGuard) decides under schedMu
+    // whether to re-queue the actor — if a SEND left messages in its mailbox
+    // during this turn — or to release it from scheduledSet and the live
+    // registry. No explicit reschedule here: doing it via schedule() would
+    // race the still-present scheduledSet entry.
+    return true;
+}
 
-    // Re-schedule actor if more messages remained at the time we popped.
-    // F6 v3 E2b: keep the registry entry — schedule() re-anchors the actor
-    // for its next queue residency, so DrainGuard must not strip it.
-    if (rescheduleAfter) {
-        keepAnchored = true;
-        schedule(ctx, actor);
+void STRuntime::finishDrain(proto::ProtoContext* ctx,
+                            const proto::ProtoObject* actor,
+                            bool suspended) {
+    if (!actor) return;
+
+    // Created outside the lock — just interned-symbol lookups.
+    const proto::ProtoString* mbKey =
+        proto::ProtoString::createSymbol(ctx, "__mailbox__");
+
+    if (suspended) {
+        // The actor parked on an awaited future. Drop scheduler ownership so
+        // the future's resolve/reject can reschedule it.
+        {
+            GcSafeLockGuard lock(ctx, impl_->schedMu);
+            impl_->scheduledSet.erase(actor);
+        }
+        // Lost-wakeup guard. The engine appended `actor` to its awaited
+        // future's __waiters__ list DURING dispatch — before this point. If
+        // another worker resolved that future in the window between the park
+        // and the erase above, its resolve called schedule(actor) while the
+        // actor was still in scheduledSet, so the insert no-op'd and the
+        // actor was never re-queued — a lost wakeup that stalls a multi-worker
+        // cooperative chain. Now that scheduledSet ownership is dropped,
+        // re-check the awaited future: if it has already settled, reschedule
+        // the actor here. A resolve happening AFTER the erase enqueues the
+        // actor itself, and a double schedule() is deduplicated harmlessly.
+        const proto::ProtoString* waitingOnKey =
+            proto::ProtoString::createSymbol(ctx, "__waiting_on__");
+        const proto::ProtoString* stateKey =
+            proto::ProtoString::createSymbol(ctx, "__state__");
+        const proto::ProtoObject* awaited =
+            actor->getOwnAttributeDirect(ctx, waitingOnKey);
+        if (awaited && awaited != PROTO_NONE) {
+            const proto::ProtoObject* st =
+                awaited->getOwnAttributeDirect(ctx, stateKey);
+            if (st && st != PROTO_NONE && st->asLong(ctx) != 0) {
+                // 1 = resolved, 2 = rejected — either way the actor must run.
+                schedule(ctx, actor);
+            }
+        }
+        impl_->schedCv.notify_all();
+        return;
     }
 
-    return true;
+    // Turn finished (not suspended). Reading the mailbox and updating
+    // scheduledSet under the SAME lock makes the decision atomic against a
+    // concurrent SEND: a SEND CAS-appends its message BEFORE calling
+    // schedule(), and schedule() needs schedMu — so either we observe its
+    // message here and re-queue the actor, or its schedule() runs after this
+    // critical section and (re-)enqueues the actor itself. Either way the
+    // message is never stranded.
+    bool reEnqueued = false;
+    {
+        // F6 v3 E4: GC-safe acquire — schedMu holders may park at a GC
+        // safepoint while owning it.
+        GcSafeLockGuard lock(ctx, impl_->schedMu);
+        const proto::ProtoObject* mbObj =
+            actor->getOwnAttributeDirect(ctx, mbKey);
+        bool hasWork = false;
+        if (mbObj && mbObj != PROTO_NONE) {
+            auto* mbList = mbObj->asList(ctx);
+            hasWork = mbList && mbList->getSize(ctx) > 0;
+        }
+        if (hasWork) {
+            // Keep the actor in scheduledSet; just put it back in line.
+            impl_->readyQueue.push(actor);
+            reEnqueued = true;
+            SCHED_DIAG("finishDrain RE-QUEUE actor=" << actor
+                       << " queue=" << impl_->readyQueue.size());
+        } else {
+            impl_->scheduledSet.erase(actor);
+            SCHED_DIAG("finishDrain RELEASE actor=" << actor);
+        }
+    }
+    // registryRemove takes schedMu itself — call it only after releasing.
+    // A re-queued actor keeps its live-registry anchor; a fully finished one
+    // drops it.
+    if (!reEnqueued) {
+        registryRemove(ctx, actor);
+    }
+    // Wake a worker (or a Future>>wait driving drainOne): promptly for a
+    // freshly re-queued actor, and so a waiter on an empty queue re-checks
+    // once this turn's future writes are visible.
+    impl_->schedCv.notify_all();
 }
 
 size_t STRuntime::scheduledCount() const {
