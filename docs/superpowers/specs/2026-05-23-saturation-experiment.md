@@ -222,6 +222,67 @@ printed every 5 cycles, which suppressed output for short
 benchmarks like ours. Revert before merging into protoCore if
 the per-cycle print floods stderr on a long-running test.
 
+## perf stat + perf record found the culprit: createSymbol in every SEND
+
+`perf stat` at workers=8 showed system time at 8.63 s vs user time
+of 6.02 s — 60 % of the run in the kernel — with 585 K
+context-switches in 2.75 s. That ruled out the GC and the allocator
+and pointed at futex churn.
+
+`perf record -g --call-graph=dwarf` then surfaced the actual hot
+caller: **51 % of CPU was in `proto::SymbolTable::intern`**, of which
+~ 24 % was `std::mutex::lock` and ~ 24 % in `lll_lock_wait` /
+`futex_wait`. The callers were all on the SEND dispatch path in
+`runLoop`.
+
+Source: `ExecutionEngine.cpp` lines ~ 1207-1210 called
+`ProtoString::createSymbol(ctx, "__class_side__")` and
+`createSymbol(ctx, "__class_name__")` **on every SEND_** dispatch
+to filter out class-side methods. Both strings are longer than 6
+bytes so they skip the inline-string fast path and hit the
+SymbolTable shard lock. Under 8-worker saturation that's
+~ 5 000 SENDs/work × 160 work() = 1.6 M intern calls, all racing
+on the same shard (because the string content is identical).
+
+Same pattern, smaller magnitude, at line ~ 1073 for the super-send
+class-name lookup.
+
+## Fix: cache the two keys on `Bootstrap.sym`
+
+Added `className` and `classSide` to `Bootstrap::Symbols`, interned
+once at bootstrap, read directly in the SEND filter. Mirrors the
+discipline already used for `mailbox`, `wrapped`, `selector`, …
+
+Sweep result, best of 3, same machine + cgroup:
+
+| workers | drain pre-fix | drain post-fix | improvement |
+|---|---|---|---|
+| 1 | 3987 ms | **697 ms** | **5.7×** |
+| 2 | 2387 ms | **418 ms** | **5.7×** |
+| 4 | 2373 ms | **218 ms** | **10.9×** |
+| 8 | 2201 ms | **244 ms** | **9.0×** |
+
+Speedup curve also recovers strongly:
+
+| workers | speedup vs w=1 (post-fix) |
+|---|---|
+| 1 | 1.00× |
+| 2 | 1.67× |
+| 4 | **3.20×** |
+| 8 | **2.86×** |
+
+w=8 has a small regression vs w=4 (244 vs 218 ms) — that is the
+new ceiling. But w=4 = 3.20× is now within shouting distance of the
+ideal 4×, where the pre-fix run was ~ 1.7× and stuck. The earlier
+~ 2× plateau was almost entirely a single mutex; with it gone the
+mutator path scales nearly linearly through w=4.
+
+MaxRSS also dropped from ~ 1.0 GiB to ~ 220 MiB — the per-SEND
+`createSymbol` calls were building a fresh `ProtoStringImplementation`
+rope each time and throwing it away (only the canonical interned
+symbol gets retained); with the cache there is one allocation per
+key for the whole runtime, not one per SEND.
+
 ## Policy fix in protoCore (`ea2c17f4`)
 
 After the (A) measurement showed that the GC's Phase-1 wait was

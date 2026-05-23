@@ -1070,8 +1070,10 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // object; its first parent is the superclass where the
                     // inherited implementation lives. This is robust regardless
                     // of where the class was defined.
-                    const proto::ProtoString* classNameSym =
-                        proto::ProtoString::createSymbol(ctx, "__class_name__");
+                    // Cached on Bootstrap (see Bootstrap.h) — same per-space
+                    // discipline as the inline createSymbol call but read once
+                    // at construction instead of on every super send.
+                    const proto::ProtoString* classNameSym = rt_.bootstrap().sym.className;
                     const proto::ProtoObject* defClsObj = nullptr;
                     {
                         // T3-b: bounded depth-first, left-to-right walk over
@@ -1199,15 +1201,14 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // marker is only ever stamped on USER class-side methods, so
                 // this filter never touches the built-ins.
                 if (attr && attr != PROTO_NONE) {
-                    // Symbols are interned per-ProtoSpace: a function-local
-                    // `static` would bind to the FIRST runtime's space and
-                    // dangle for every later STRuntime (the multi-runtime unit
-                    // harness). Resolve fresh from the live ctx each send —
-                    // the same discipline exception_prims.cpp uses.
-                    const proto::ProtoString* classSideKey =
-                        proto::ProtoString::createSymbol(ctx, "__class_side__");
-                    const proto::ProtoString* classNameKey =
-                        proto::ProtoString::createSymbol(ctx, "__class_name__");
+                    // Symbols are interned per-ProtoSpace; rather than calling
+                    // createSymbol on every SEND (which hits the SymbolTable
+                    // shard mutex — measured as 51 % of CPU under 8-worker
+                    // saturation), read the pointers cached on the Bootstrap
+                    // at runtime construction. Same per-space discipline,
+                    // amortised once.
+                    const proto::ProtoString* classSideKey = rt_.bootstrap().sym.classSide;
+                    const proto::ProtoString* classNameKey = rt_.bootstrap().sym.className;
                     const proto::ProtoObject* csMark =
                         attr->getAttribute(ctx, classSideKey);
                     if (csMark == PROTO_TRUE) {

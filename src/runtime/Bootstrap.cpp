@@ -190,6 +190,9 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     out.sym.actor           = S("__actor__");
     out.sym.lockHandle      = S("__lockHandle__");
     out.sym.resume          = S("__resume__");
+    // 2026-05-23 night: SEND-path class-side filter hot keys. See header.
+    out.sym.className       = S("__class_name__");
+    out.sym.classSide       = S("__class_side__");
 }
 
 } // namespace protoST

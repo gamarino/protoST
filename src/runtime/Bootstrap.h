@@ -145,6 +145,14 @@ struct Bootstrap {
         const proto::ProtoString* actor           = nullptr;  // __actor__ (on a task: which actor it targets)
         const proto::ProtoString* lockHandle      = nullptr;  // __lockHandle__ (on actor: ExtPtr to ActorLock)
         const proto::ProtoString* resume          = nullptr;  // __resume__ (on a task: marks a resume-from-yield task)
+        // 2026-05-23 night: profile of saturation under 8 workers showed
+        // 51 % of CPU in SymbolTable::intern + mutex contention, traced to
+        // two createSymbol calls per SEND_* dispatch (one for __class_name__,
+        // one for __class_side__ — both > 6 bytes, so they skip the
+        // inline-string path and hit the shard mutex). Cache them here so
+        // every SEND reads a Bootstrap-perpetual pointer instead.
+        const proto::ProtoString* className       = nullptr;  // __class_name__ (every SEND class-side filter)
+        const proto::ProtoString* classSide       = nullptr;  // __class_side__ (every SEND class-side filter)
     } sym;
 };
 
