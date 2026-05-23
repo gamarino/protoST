@@ -221,3 +221,42 @@ The instrumentation prints every cycle by default
 printed every 5 cycles, which suppressed output for short
 benchmarks like ours. Revert before merging into protoCore if
 the per-cycle print floods stderr on a long-running test.
+
+## Policy fix in protoCore (`ea2c17f4`)
+
+After the (A) measurement showed that the GC's Phase-1 wait was
+dead time rather than mutator pause time, the trigger itself
+was removed from `getFreeCells`. Old policy: every freelist
+exhaustion unconditionally fired the GC, regardless of cap or
+heap size. New policy: `getFreeCells` does NOT trigger; the GC
+fires only when a soft/hard cap path needs it
+(`reclaimWaitLocked`, `waitForHeapHeadroom`), when application
+code calls `triggerGC()` explicitly, or at shutdown.
+
+Behavioural change on the saturation workload (best of 3):
+
+| workers | with trigger | without trigger | delta |
+|---|---|---|---|
+| 1 | 3987 ms | 4129 ms | +4 % |
+| 2 | 2387    | 2457    | +3 % |
+| 4 | 2373    | 2323    | -2 % |
+| 8 | 2201    | 2272    | +3 % |
+
+Identical within noise. MaxRSS still ~ 1 GiB. `PROTOCORE_GC_PROFILE=1`
+now prints zero `[GC-PROFILE]` lines for this benchmark — there
+are no cycles to print, which is the point.
+
+Confirms what the profile already showed: the late sweep that
+the spurious trigger produced was returning ~ 30 ms of memory at
+the end of the run, too late to help any drain. The new policy
+removes dead work without sacrificing throughput. Capped
+configurations are unchanged: the soft/hard paths still trigger
+the GC via `reclaimWaitLocked`. **The change is exclusively in
+the default (uncapped) case.**
+
+This also clarifies the residual ~ 2× plateau diagnosis: with
+the GC out of the picture entirely, the plateau must live in
+the mutator path — `posix_memalign` / glibc-arena contention
+under N-worker refills, CAS contention on scheduler state,
+or false sharing. The original suspects list above still stands;
+the GC has been definitively excluded.
