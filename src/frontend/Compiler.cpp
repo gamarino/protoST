@@ -639,6 +639,33 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             return;
         }
         case NodeKind::KeywordSend: {
+            // 2026-05-24: doYielding: compiler-desugar. When the source
+            // is exactly `<receiver> doYielding: [ :elem | <body> ]`
+            // (one keyword, one arg, the arg a literal one-parameter
+            // block), emit a bytecode loop using `at:` + `value:`
+            // instead of dispatching `doYielding:` as a normal SEND.
+            // The block's `value:` send hits the engine's inline
+            // block-frame fast path (yieldable), so a `wait` inside
+            // the block parks correctly mid-iteration.
+            //
+            // Receivers that do not support `at:` and `size` will
+            // surface doesNotUnderstand at runtime — fail-fast, by
+            // design. `do:` itself is untouched: callers using `do:`
+            // get the unchanged polymorphic primitive.
+            //
+            // Any non-matching shape (variable as block, wrong
+            // arity, etc.) falls through to the normal SEND_KEYWORD
+            // path. Since no primitive is bound for `doYielding:`,
+            // that surfaces doesNotUnderstand at runtime.
+            //
+            // See docs/superpowers/specs/2026-05-24-doyielding-design.md.
+            if (n.text == "doYielding:"
+                && n.children.size() == 2
+                && n.children[1]->kind == NodeKind::Block
+                && n.children[1]->intValue == 1) {
+                emitDoYieldingLoop(m, *n.children[0], *n.children[1]);
+                return;
+            }
             // receiver, then each arg in order, then SEND_KEYWORD
             emitExpr(m, *n.children[0]);
             for (size_t i = 1; i < n.children.size(); ++i) {
@@ -820,6 +847,138 @@ void Compiler::emitCaptureProlog(BytecodeModule& m, bool isMethod,
         m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slot), currentLine_);
         m.emitWide(Op::STORE_CAPTURED, static_cast<unsigned int>(sym), currentLine_);
     }
+}
+
+// 2026-05-24: Emit the bytecode loop for `<recv> doYielding: [ :elem | body ]`.
+//
+// Layout (offsets in 2-byte instruction units; assumes no EXTEND-widened
+// opcodes in the loop body — see "Constraints" below):
+//
+//   [ receiver expr ... ]
+//   STORE_LOCAL coll                    ; cache receiver in a fresh local
+//   PUSH_LOCAL coll
+//   SEND_UNARY size
+//   STORE_LOCAL n                       ; n := coll size
+//   PUSH_CONST 1                        ; (1 added to constant pool)
+//   STORE_LOCAL i
+// LOOP_TEST:
+//   PUSH_LOCAL i
+//   PUSH_LOCAL n
+//   SEND_BINARY <=
+//   JUMP_IF_FALSE -> LOOP_END           ; patched once body length is known
+//   PUSH_LOCAL coll
+//   PUSH_LOCAL i
+//   SEND_KEYWORD at:
+//   [ block expr ... ]                  ; emits PUSH_BLOCK
+//   SEND_KEYWORD value:                 ; yieldable — engine inline frame push
+//   POP                                  ; discard block result
+//   PUSH_LOCAL i
+//   PUSH_CONST 1
+//   SEND_BINARY +
+//   STORE_LOCAL i
+//   JUMP_BACK -> LOOP_TEST              ; backward offset
+// LOOP_END:
+//   PUSH_LOCAL coll                     ; do:'s return value is the receiver
+//
+// Constraints (v1):
+//   * The forward JUMP_IF_FALSE and the backward JUMP_BACK use 8-bit args.
+//     If the body grows past 255 instructions, the compiler will detect it
+//     (`bytePos` arithmetic) and surface an error. Both offsets are well
+//     under that bound for realistic loop bodies.
+//   * `instrStartPc()` is consulted to convert byte positions back into
+//     instruction indices — that handles any EXTEND prefixes inside the
+//     body's nested expressions (e.g. a STORE_LOCAL with slot index > 255
+//     in the block body) by counting them as one logical instruction.
+void Compiler::emitDoYieldingLoop(BytecodeModule& m,
+                                  const ast::Node& receiverNode,
+                                  const ast::Node& blockNode) {
+    // Reserve fresh locals — mangled with the next-slot count so each
+    // nested doYielding: in the same scope gets distinct names.
+    int baseSlot = scopes_.back().nextSlot;
+    int slotColl = declareLocal("__dy_coll_" + std::to_string(baseSlot));
+    int slotBlk  = declareLocal("__dy_blk_"  + std::to_string(baseSlot));
+    int slotN    = declareLocal("__dy_n_"    + std::to_string(baseSlot));
+    int slotI    = declareLocal("__dy_i_"    + std::to_string(baseSlot));
+
+    // The interned `1` constant — reused for the i++ at loop tail.
+    size_t oneConstIdx = m.addInteger(1);
+
+    // Helper: current instruction index (count of words already emitted).
+    auto curInstrIdx = [&]() -> size_t {
+        return m.instrStartPc().size();
+    };
+
+    // ---- Setup: coll := receiver; blk := the block (hoisted, 1 PUSH_BLOCK
+    // for the whole loop instead of one per iter); n := coll size; i := 1.
+    emitExpr(m, receiverNode);
+    m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slotColl), currentLine_);
+    emitExpr(m, blockNode);  // → PUSH_BLOCK
+    m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slotBlk),  currentLine_);
+    m.emitWide(Op::PUSH_LOCAL,  static_cast<unsigned int>(slotColl), currentLine_);
+    m.emitWide(Op::SEND_UNARY,  static_cast<unsigned int>(m.internSymbol("size")), currentLine_);
+    m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slotN),    currentLine_);
+    m.emitWide(Op::PUSH_CONST,  static_cast<unsigned int>(oneConstIdx), currentLine_);
+    m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slotI),    currentLine_);
+
+    // ---- LOOP_TEST:
+    size_t loopTestInstrIdx = curInstrIdx();
+
+    m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotI), currentLine_);
+    m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotN), currentLine_);
+    m.emitWide(Op::SEND_BINARY,
+               static_cast<unsigned int>(m.internSymbol("<=")), currentLine_);
+
+    // JUMP_IF_FALSE — placeholder, patched below. emit() (not emitWide()) so
+    // this is exactly one 2-byte word and the arg byte sits at bytes()[N+1].
+    size_t jumpFalseInstrIdx = curInstrIdx();
+    size_t jumpFalseBytePos  = m.bytes().size();
+    m.emit(Op::JUMP_IF_FALSE, 0, currentLine_);
+
+    // ---- Body:  blk value: (coll at: i)
+    // Stack discipline: SEND_KEYWORD `value:` pops 1 arg then receiver from
+    // top — so receiver (the block) must be pushed FIRST, then the arg.
+    m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotBlk),  currentLine_);
+    m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotColl), currentLine_);
+    m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotI),    currentLine_);
+    m.emitWide(Op::SEND_KEYWORD,
+               static_cast<unsigned int>(m.internSymbol("at:")), currentLine_);
+    m.emitWide(Op::SEND_KEYWORD,
+               static_cast<unsigned int>(m.internSymbol("value:")), currentLine_);
+    m.emit(Op::POP, 0, currentLine_);
+
+    // ---- Increment: i := i + 1
+    m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotI), currentLine_);
+    m.emitWide(Op::PUSH_CONST, static_cast<unsigned int>(oneConstIdx), currentLine_);
+    m.emitWide(Op::SEND_BINARY,
+               static_cast<unsigned int>(m.internSymbol("+")), currentLine_);
+    m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slotI), currentLine_);
+
+    // ---- JUMP_BACK to LOOP_TEST.
+    // The handler does f.pc -= arg * kInstrSize AFTER pc has already been
+    // advanced past this JUMP_BACK word. So the arg = number of full
+    // instructions from LOOP_TEST up to and INCLUDING this JUMP_BACK.
+    size_t jumpBackInstrIdx = curInstrIdx();
+    size_t backOffset = jumpBackInstrIdx - loopTestInstrIdx + 1;
+    if (backOffset > 255) {
+        error("doYielding: loop body too large for 8-bit JUMP_BACK offset");
+        return;
+    }
+    m.emit(Op::JUMP_BACK, static_cast<uint8_t>(backOffset), currentLine_);
+
+    // ---- LOOP_END: patch the JUMP_IF_FALSE forward offset.
+    // JUMP_IF_FALSE's pc advance happens BEFORE the arg shift; arg = number
+    // of instructions to skip forward from the slot RIGHT AFTER
+    // JUMP_IF_FALSE.
+    size_t loopEndInstrIdx = curInstrIdx();
+    size_t fwdOffset = loopEndInstrIdx - jumpFalseInstrIdx - 1;
+    if (fwdOffset > 255) {
+        error("doYielding: loop body too large for 8-bit JUMP_IF_FALSE offset");
+        return;
+    }
+    m.patchArg(jumpFalseBytePos, static_cast<uint8_t>(fwdOffset));
+
+    // ---- do:'s return value is the receiver.
+    m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotColl), currentLine_);
 }
 
 void Compiler::error(const std::string& msg) { errors_.push_back(msg); }

@@ -50,6 +50,11 @@ enum class Op : uint8_t {
     // wrapping them. `arg` is wide-operand capable (EXTEND), so a literal may
     // contain more than 255 elements. Backs both `#(...)` and `{...}`.
     MAKE_ARRAY      = 29,
+    // 2026-05-24: backward jump used by the compiler's doYielding: desugar.
+    // arg = backward offset in instructions (i.e. multiple of 2 bytes).
+    // The dispatch loop computes f.pc = f.pc - arg * kInstrSize, taking pc
+    // BACK to the loop test. Complement of JUMP (forward).
+    JUMP_BACK       = 30,
     // Extend for >256-index args
     EXTEND          = 254,
     // Debugger primitive guard

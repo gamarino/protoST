@@ -463,6 +463,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     labels[static_cast<unsigned int>(Op::JUMP_IF_FALSE)]    = &&L_JUMP_IF_FALSE;
     labels[static_cast<unsigned int>(Op::RETURN)]           = &&L_RETURN;
     labels[static_cast<unsigned int>(Op::RETURN_TOP)]       = &&L_RETURN_TOP;
+    labels[static_cast<unsigned int>(Op::JUMP_BACK)]        = &&L_JUMP_BACK;
     labels[static_cast<unsigned int>(Op::PUSH_BLOCK)]       = &&L_PUSH_BLOCK;
     labels[static_cast<unsigned int>(Op::DUP_RECEIVER)]     = &&L_DUP_RECEIVER;
     labels[static_cast<unsigned int>(Op::PUSH_CAPTURED)]    = &&L_PUSH_CAPTURED;
@@ -1368,6 +1369,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             case Op::JUMP: L_JUMP: {
                 Frame& f = frames_.back();
                 f.pc += static_cast<std::size_t>(arg) * kInstrSize;
+                DISPATCH_DIRECT();
+            } break;
+            case Op::JUMP_BACK: L_JUMP_BACK: {
+                Frame& f = frames_.back();
+                f.pc -= static_cast<std::size_t>(arg) * kInstrSize;
                 DISPATCH_DIRECT();
             } break;
             case Op::JUMP_IF_TRUE: L_JUMP_IF_TRUE: {

@@ -354,6 +354,77 @@ After this lands:
 4. `mt100a` itself sees no measurable change (we are NOT touching
    `do:`).
 
+## Implementation status (2026-05-24)
+
+**v0.5 partial — correctness works, multi-worker race outstanding.**
+
+Landed in commit `<pending>`:
+
+- `Op::JUMP_BACK` opcode added to runtime (Opcodes.h + ExecutionEngine.cpp,
+  ~ 10 lines total — one case in the dispatch table, one in the inner
+  switch).
+- `Compiler::emitDoYieldingLoop` in `src/frontend/Compiler.cpp` — the
+  full bytecode loop as designed, with the hoisted block (PUSH_BLOCK
+  emitted ONCE before the loop, stored in a fresh local, reused on
+  every iteration).
+- One stack-discipline bug found and fixed during implementation:
+  `SEND_KEYWORD value:` consumes the arg from the top and the
+  receiver below it, so the block (receiver) must be pushed BEFORE
+  the element (arg). The first version had the order reversed and
+  surfaced as `doesNotUnderstand: value:`.
+- `tests/conformance/do_yielding.st` covers basic correctness:
+  iterate over an OrderedCollection of 3 ints, accumulate the sum,
+  verify the closure captures `sum` and writes back through the
+  STORE_CAPTURED path. 752/752 ctest (was 751/751 + 1 new test).
+
+**KNOWN ISSUE — multi-worker race when the block yields**:
+
+The desugared loop works correctly in single-worker mode
+(`PROTOST_WORKERS=1`). At top-level scope (no actor wrapper) with
+any worker count, where `wait` blocks instead of yielding, it also
+works correctly.
+
+But when the loop runs INSIDE an actor method (so `wait` fires
+`FutureYield`) AND `PROTOST_WORKERS > 1`:
+- N=1 (a single iteration): works.
+- N=2 (two iterations): works.
+- N=3+: hangs (deadlock — neither timeout nor doesNotUnderstand).
+
+The single-worker case proves the desugaring itself is correct.
+The deadlock at N=3+ with concurrent workers points at the
+yield/resume interaction with the new hoisted block in a method
+local. Suspects, in order:
+- The `__dy_blk_*` local (holding the PUSH_BLOCK closure) may be
+  involved in some snapshot/restore interaction we have not yet
+  isolated — the closure's `__captured__` reference threads through
+  the work frame's captured dict, and restoring the work frame +
+  block frame in a different order than they were snapshotted may
+  leave a dangling reference.
+- A potential ordering issue between the resumed actor and a
+  concurrent settle on the next iteration's awaited future — if
+  the actor re-yields before the previous settle finishes
+  registering it as a waiter, the wake-up is lost.
+
+The single-worker case is shipped as the v1 deliverable. The race
+is the next-session target. We have NOT yet updated the README's
+performance projections to include the multi-producer numbers
+because the path is gated on this race fix.
+
+## Outstanding for next session
+
+1. Bisect the N=3+ hang: instrument `enqueueReady` /
+   `appendFutureWaiter` to log the actor's schedState across the
+   yield-resume boundary, run mt100a-shaped `Driver` test with
+   N=3 actors and worker stats enabled.
+2. Try invariants: (a) verify the hoisted block closure pointer
+   is identical pre- and post-snapshot; (b) verify the captured
+   dict reference is preserved; (c) verify the actor's
+   `__sched__` flag follows the expected 0→1→2 transition without
+   loss.
+3. Once the race is closed, re-run `multi_producer.st` end-to-end
+   and measure. Then commit the README/CHANGELOG updates with the
+   multi-producer numbers.
+
 ## Estimated effort
 
 - Step 1 (parser/compiler recognition): 1-2 hours

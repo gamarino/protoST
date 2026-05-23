@@ -104,6 +104,12 @@ private:
     void   emitCaptureProlog(BytecodeModule& m, bool isMethod,
                              const std::vector<std::string>& argNames,
                              int nArgs, int argNameOffset);
+    // 2026-05-24: Compile `<receiver> doYielding: [ :elem | <body> ]` to a
+    // bytecode loop using `at:` and `value:` so the block may yield mid-
+    // iteration. See docs/superpowers/specs/2026-05-24-doyielding-design.md.
+    void   emitDoYieldingLoop(BytecodeModule& m,
+                              const ast::Node& receiverNode,
+                              const ast::Node& blockNode);
     // Returns true if `name` appears in the capturedNames set of the current
     // scope or any enclosing scope (innermost-first lookup).
     bool   isCaptured(const std::string& name) const;
