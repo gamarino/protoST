@@ -1705,15 +1705,82 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         TransientPin pinWaitKey(
             ctx, reinterpret_cast<const proto::ProtoObject*>(waitingOnKey));
 
-        const proto::ProtoObject* snap = snapshotFrames(ctx);
-        // `snap` is held across the setAttribute below and across
-        // appendFutureWaiter (which allocates) — pin it.
-        TransientPin pinSnap(ctx, snap);
+        // F6 v6 (2026-05-23 night): coalesce snapshots across nested
+        // engines. A primitive that calls invokeBlock (`ifTrue:`,
+        // `whileTrue:`, `catch:`, `do:`, `select:` … — anything in
+        // collection_prims / bool_prims / atom_prims that takes a block
+        // argument) spins up a fresh recursive ExecutionEngine on the
+        // C++ stack. A `Future>>wait` from inside that nested engine
+        // yields normally — the INNER engine catches FutureYield here,
+        // snapshots its frames, registers with the future, rethrows.
+        // The throw propagates through invokeBlock + the primitive
+        // back into SEND_* of the OUTER engine, which lands here
+        // again. Pre-fix the outer catch unconditionally OVERWROTE the
+        // actor's __suspended_frame__ — only the outermost engine's
+        // frames survived restore, losing the inner block frame and
+        // every state mutation it would have performed on resume.
+        //
+        // Fix: read whatever a deeper engine already stored and PREPEND
+        // our frames so the combined list orders frames outermost-first
+        // (i.e. `frames_` order after restoreFrames). Only the FIRST
+        // (innermost) catch is the one that owns the future
+        // registration: outer catches that follow it must not
+        // re-append the actor to the future's waiter list (that would
+        // wake the actor twice) and must not overwrite __waiting_on__.
+        const proto::ProtoObject* existing =
+            actor->getAttribute(ctx, suspKey);
+        const bool firstCatch = (!existing || existing == PROTO_NONE);
+
+        const proto::ProtoObject* mySnap = snapshotFrames(ctx);
+        // `mySnap` is held across appendLast iterations (which allocate
+        // sparse-list nodes) and across the final setAttribute on the
+        // actor — pin it.
+        TransientPin pinMySnap(ctx, mySnap);
         SCHED_DIAG("engine YIELD actor=" << actor
                    << " future=" << y.future()
-                   << " frames=" << frames_.size());
-        const_cast<proto::ProtoObject*>(actor)->setAttribute(ctx, suspKey, snap);
-        if (y.future()) {
+                   << " frames=" << frames_.size()
+                   << " firstCatch=" << firstCatch);
+
+        const proto::ProtoObject* combined;
+        if (firstCatch) {
+            combined = mySnap;
+        } else {
+            // mySnap holds OUTER frames (this catch's engine);
+            // `existing` already holds the INNER engines' frames. We
+            // want frames_ on restore to read outermost-first, last
+            // entry = innermost — so concatenate ours first, then the
+            // existing list.
+            const proto::ProtoList* myList = mySnap->asList(ctx);
+            const proto::ProtoList* exList = existing->asList(ctx);
+            const proto::ProtoList* result = ctx->newList();
+            TransientPin pinResult(
+                ctx, reinterpret_cast<const proto::ProtoObject*>(result));
+            if (myList) {
+                const unsigned long mn = myList->getSize(ctx);
+                for (unsigned long i = 0; i < mn; ++i) {
+                    result = result->appendLast(
+                        ctx, myList->getAt(ctx, static_cast<int>(i)));
+                    pinResult.reset(
+                        reinterpret_cast<const proto::ProtoObject*>(result));
+                }
+            }
+            if (exList) {
+                const unsigned long en = exList->getSize(ctx);
+                for (unsigned long i = 0; i < en; ++i) {
+                    result = result->appendLast(
+                        ctx, exList->getAt(ctx, static_cast<int>(i)));
+                    pinResult.reset(
+                        reinterpret_cast<const proto::ProtoObject*>(result));
+                }
+            }
+            combined = result->asObject(ctx);
+        }
+        TransientPin pinCombined(ctx, combined);
+
+        const_cast<proto::ProtoObject*>(actor)->setAttribute(
+            ctx, suspKey, combined);
+
+        if (firstCatch && y.future()) {
             const_cast<proto::ProtoObject*>(actor)->setAttribute(
                 ctx, waitingOnKey, y.future());
 
