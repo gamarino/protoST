@@ -1,29 +1,21 @@
 "multi_producer.st - Multi-producer message-throughput benchmark."
 ""
-"Goal: measure how throughput scales with worker count when SENDs are"
-"emitted from MANY actors in parallel (not from a single main thread)."
-"This is the missing companion to mt100a, which only has main as the"
-"sender — and so saturates main long before workers run out of room."
+"NPROD driver actors each own a private slice of SINKS_PER_DRIVER sink"
+"actors. Every driver is itself an actor: when sent #run it spins a"
+"ROUNDS-iteration loop that fan-outs SENDs to each of its sinks, then"
+"waits on the returned Futures. Drivers run independently — so up to"
+"NPROD producers emit SEND traffic in parallel."
 ""
-"Structure:"
-"  * 8 driver actors. Each owns 12 private sink actors."
-"  * Each round, main fan-outs `roundOnce` to every driver and waits"
-"    for the eight returned futures. The eight drivers therefore run"
-"    in parallel on the worker pool; up to 8 producers are emitting"
-"    SEND traffic to their sinks simultaneously."
-"  * `Driver >> roundOnce` is hand-unrolled (12 send/wait pairs in"
-"    method body, not a `do:` loop). protoST's current runtime cannot"
-"    yield from inside a `do:` block in an actor method (see"
-"    docs/superpowers/specs/2026-05-23-multiproducer-blocker.md and the"
-"    coalesce-snapshot fix in ExecutionEngine.cpp); inline send + inline"
-"    wait stay in the actor's outer engine and yield correctly."
-"  * Main's `do:` loops are fine — main is not an actor; its own engine"
-"    blocks on `f wait` rather than yielding."
+"With workers >= NPROD every driver gets a worker and produces at full"
+"speed; the main thread is idle from kickoff onward. This isolates"
+"worker scaling from main-thread producer rate (which is the cuello in"
+"mt100a's single-producer pattern)."
 ""
-"Total messages = 8 * 12 * 1000 = 96 000."
+"The driver method uses `doYielding:` (compiler-desugared yieldable"
+"iteration) so the per-element `f wait` inside the loop parks the"
+"driver cooperatively instead of blocking its worker."
 ""
-"Run:  PROTOST_WORKERS={1,2,4,8} protost multi_producer.st"
-"Expected result: 96 000."
+"Total messages = NPROD * SINKS_PER_DRIVER * ROUNDS  (= 96 000 default)."
 
 Object subclass: #Sink instanceVariableNames: 'count'.
 
@@ -35,39 +27,28 @@ Sink >> ping
   count := count + 1.
   ^ count.
 
-Object subclass: #Driver instanceVariableNames: 'sinks'.
+Object subclass: #Driver instanceVariableNames: 'sinks rounds'.
 
-Driver >> setSinks: ss
+Driver >> initWith: ss r: n
   sinks := ss.
+  rounds := n.
   ^ self.
 
-Driver >> roundOnce
-  | f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 |
-  f1  := (sinks at: 1)  ping.
-  f2  := (sinks at: 2)  ping.
-  f3  := (sinks at: 3)  ping.
-  f4  := (sinks at: 4)  ping.
-  f5  := (sinks at: 5)  ping.
-  f6  := (sinks at: 6)  ping.
-  f7  := (sinks at: 7)  ping.
-  f8  := (sinks at: 8)  ping.
-  f9  := (sinks at: 9)  ping.
-  f10 := (sinks at: 10) ping.
-  f11 := (sinks at: 11) ping.
-  f12 := (sinks at: 12) ping.
-  f1 wait.
-  f2 wait.
-  f3 wait.
-  f4 wait.
-  f5 wait.
-  f6 wait.
-  f7 wait.
-  f8 wait.
-  f9 wait.
-  f10 wait.
-  f11 wait.
-  f12 wait.
-  ^ 12.
+Driver >> run
+  | total futures roundsList |
+  total := 0.
+  roundsList := OrderedCollection new.
+  "Build the rounds list FIRST (no wait inside; the regular `do:` here is
+   safe because the block does not yield). Then iterate it with doYielding:
+   so the outer loop is yieldable too — required because each iteration's
+   inner `f wait` will yield, and the outer to:do: primitive's C++ stack
+   state cannot survive a yield. doYielding: lives entirely in bytecode."
+  1 to: rounds do: [ :r | roundsList add: r ].
+  roundsList doYielding: [ :r |
+    futures := OrderedCollection new.
+    sinks doYielding: [ :s | futures add: (s ping) ].
+    futures doYielding: [ :f | total := total + f wait ] ].
+  ^ total.
 
 drivers := OrderedCollection new.
 1 to: 8 do: [ :d |
@@ -79,14 +60,12 @@ drivers := OrderedCollection new.
     s initialize.
     slice add: (s asActor) ].
   drv := Driver new.
-  drv setSinks: slice.
+  drv initWith: slice r: 1000.
   drivers add: (drv asActor) ].
 
-total := 0.
-1 to: 1000 do: [ :r |
-  | futures |
-  futures := OrderedCollection new.
-  drivers do: [ :d | futures add: (d roundOnce) ].
-  futures do: [ :f | total := total + f wait ] ].
+futures := OrderedCollection new.
+drivers do: [ :d | futures add: (d run) ].
 
-total.
+sum := 0.
+futures do: [ :f | sum := sum + f wait ].
+sum.

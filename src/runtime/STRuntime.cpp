@@ -1806,9 +1806,31 @@ void STRuntime::finishDrain(proto::ProtoContext* ctx,
                 // OTHER SEND's mailbox-then-sched ordering: any concurrent
                 // SEND that wins its 1 -> 2 transition will trap us at
                 // the 1 -> 0 CAS below and force us back through the loop.
-                if (mailboxHasWork(ctx, actor)) {
+                //
+                // 2026-05-24 bug fix: the original predicate was just
+                // mailboxHasWork(actor) — releasing when empty. That LOST
+                // WAKEUPS for a yielded actor whose awaited future had
+                // ALREADY settled by the time the engine's FutureYield
+                // handler tried to register the actor as a waiter:
+                // appendFutureWaiter returns parked=0, the handler calls
+                // schedule(actor) which marks state 1->2 ("please
+                // re-schedule me to consume the value"), and the drain
+                // exits suspended=true with mailbox still empty (it is the
+                // FUTURE that has the value, not a new message). The empty
+                // mailbox is a "stale" wakeup only when we are NOT in a
+                // suspended state — a suspended drain whose state is 2 is
+                // an explicit ask to re-enter (drainOne's resume path
+                // observes __suspended_frame__ on the actor and reads the
+                // settled value from __waiting_on__).
+                //
+                // Symptom of the lost wakeup: doYielding: in an actor
+                // method, w >= 2, N >= 3 elements deadlocked because the
+                // third iteration's settle-before-yield race lost the
+                // re-schedule.
+                if (mailboxHasWork(ctx, actor) || suspended) {
                     enqueueReady(ctx, actor);
-                    SCHED_DIAG("finishDrain RE-QUEUE (wakeup) actor=" << actor);
+                    SCHED_DIAG("finishDrain RE-QUEUE actor=" << actor
+                        << (suspended ? " (suspended wakeup)" : " (mailbox)"));
                     return;
                 }
                 // Stale wakeup — try to release. If a SEND raced and
