@@ -852,11 +852,20 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     auto* fut = const_cast<proto::ProtoObject*>(rt_.newFuture(ctx));
                     TransientPin pinFut(ctx, fut);
 
-                    // Build the message envelope (a fresh mutable child of objectProto).
-                    // F6 v3 E5: `msg` is held across the appendLast loop, the
-                    // setAttribute calls, the RMW and schedule() — pin it.
-                    auto* msg = const_cast<proto::ProtoObject*>(rt_.bootstrap().objectProto)
-                        ->newChild(ctx, /*isMutable=*/true);
+                    // Build the message envelope. F6 v6 (2026-05-23 night):
+                    // the envelope is built IMMUTABLE. After construction
+                    // its only consumer is drainOne, which `getAttribute`s
+                    // its three fields and then drops the reference — the
+                    // envelope is never mutated. An immutable setAttribute
+                    // returns a fresh ProtoObjectCell with the new
+                    // attribute, allocating one SparseList node + one cell
+                    // (vs the mutable path's three allocations + shard CAS
+                    // + global mutex). Saves ~ 1 cell per setAttribute
+                    // and removes the mutable shard contention entirely;
+                    // with 100K SENDs that is ~ 300K cells.
+                    const proto::ProtoObject* msg =
+                        rt_.bootstrap().objectProto->newChild(
+                            ctx, /*isMutable=*/false);
                     TransientPin pinMsg(ctx, msg);
 
                     // Build args ProtoList by FIFO appendLast of each arg.
@@ -874,9 +883,16 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                             reinterpret_cast<const proto::ProtoObject*>(argsList));
                     }
 
-                    msg->setAttribute(ctx, msgSelKey, reinterpret_cast<const proto::ProtoObject*>(selSym));
-                    msg->setAttribute(ctx, msgArgsKey, argsList->asObject(ctx));
-                    msg->setAttribute(ctx, msgFutKey, fut);
+                    // Immutable setAttribute: each call returns a NEW cell.
+                    // Reseat the local handle and the pin to keep the latest
+                    // version anchored.
+                    msg = msg->setAttribute(ctx, msgSelKey,
+                                            reinterpret_cast<const proto::ProtoObject*>(selSym));
+                    pinMsg.reset(msg);
+                    msg = msg->setAttribute(ctx, msgArgsKey, argsList->asObject(ctx));
+                    pinMsg.reset(msg);
+                    msg = msg->setAttribute(ctx, msgFutKey, fut);
+                    pinMsg.reset(msg);
 
                     // Append to the actor's mailbox with a lock-free
                     // compare-and-swap retry. The mailbox is held under the

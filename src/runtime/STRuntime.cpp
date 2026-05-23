@@ -1759,20 +1759,28 @@ size_t STRuntime::workerCount() const {
 const proto::ProtoObject* STRuntime::newFuture(proto::ProtoContext* ctx) {
     auto* fut = const_cast<proto::ProtoObject*>(impl_->bootstrap.futureProto)
         ->newChild(ctx, /*isMutable=*/true);
-    // F6 v3 E5: `fut` is a fresh mutable object held across three setAttribute
-    // calls and installFutureCV (which allocates an ExternalPointer and does
-    // another setAttribute). The sole caller (the engine actor SEND fast-path)
-    // runs on a sized engine context, so the scratch region exists. Pin it.
+    // F6 v3 E5: `fut` is a fresh mutable object held across one setAttribute
+    // call. The sole caller (the engine actor SEND fast-path) runs on a sized
+    // engine context, so the scratch region exists. Pin it.
     TransientPin pinFut(ctx, fut);
+
+    // F6 v6 (2026-05-23 night): only stamp `__state__` here — that is the
+    // attribute the settle-path CAS (setAttributeIfEqual) operates on, so
+    // it has to live as an OWN attribute on the future before any settle
+    // can find expected==0. `__value__` and `__error__` are set lazily by
+    // the resolve/reject paths; while the future is pending, any read of
+    // them falls through to the prototype chain and yields PROTO_NONE,
+    // which is exactly the contract Future>>wait observes.
+    //
+    // Pre-fix newFuture did THREE setAttribute calls (state + value + error).
+    // Each setAttribute on a mutable object COWs the attribute SparseList
+    // tree, the ProtoObjectCell, and the shard root — three allocations per
+    // call, nine per newFuture. With mt100a issuing 100 K SEND_* (one
+    // newFuture each) that's 900 K extra cell allocs per run.
+    // setAttribute on the freshly-built mutable saves two-thirds of that.
     const proto::ProtoString* stateKey =
         impl_->bootstrap.sym.state;
-    const proto::ProtoString* valueKey =
-        impl_->bootstrap.sym.value;
-    const proto::ProtoString* errKey =
-        impl_->bootstrap.sym.error;
     fut->setAttribute(ctx, stateKey, ctx->fromLong(0));  // 0 = pending
-    fut->setAttribute(ctx, valueKey, PROTO_NONE);
-    fut->setAttribute(ctx, errKey,   PROTO_NONE);
     // No per-future mutex / condition_variable. The future state machine is
     // lock-free: resolve/reject claim the settlement with an attribute CAS
     // (ProtoObject::setAttributeIfEqual), and Future>>wait polls __state__
