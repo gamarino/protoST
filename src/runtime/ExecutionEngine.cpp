@@ -882,18 +882,6 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // compare-and-swap retry. The mailbox is held under the
                     // actor's __mailbox__ attribute; a concurrent drainOne pop
                     // or a parallel SEND is a competing read-modify-write.
-                    // Each try reads the current mailbox, builds the
-                    // FIFO-extended list, and publishes it only if __mailbox__
-                    // still holds exactly the snapshot we read
-                    // (ProtoObject::setAttributeIfEqual — protoCore's atomic
-                    // attribute CAS). A lost CAS means another writer won
-                    // since our read; re-read and retry. This replaces the
-                    // former per-actor std::mutex: no language-level lock, so
-                    // no GC-safe acquire and no way to stall the STW quorum.
-                    //
-                    // F6 v3 E5: `mailbox`, `newMailbox` and `newMbObj` are
-                    // transients reachable from nothing the GC traces, held
-                    // across allocating calls — pin each for the iteration.
                     for (;;) {
                         const proto::ProtoObject* mbObj =
                             recv->getOwnAttributeDirect(ctx, mbKey);
@@ -913,10 +901,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     }
 
                     // Schedule the actor for processing and stash the Future
-                    // as the apparent result of the send. schedule() acquires
-                    // schedMu; doing it OUTSIDE the actor lock keeps the
-                    // global acquisition order (schedMu first, actor lock
-                    // second) consistent with drainOne.
+                    // as the apparent result of the send.
                     rt_.schedule(ctx, recv);
                     push(f, fut);
                     DISPATCH_DIRECT();

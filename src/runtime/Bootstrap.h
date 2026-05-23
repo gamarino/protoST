@@ -134,6 +134,17 @@ struct Bootstrap {
         // liveRegistry. See docs/superpowers/specs/2026-05-23-ready-queue-mpmc-spec.md.
         const proto::ProtoString* live            = nullptr;  // __live__       (per-actor anchor flag)
         const proto::ProtoString* liveActors      = nullptr;  // __live_actors__ (anchor list on liveRegistry)
+        // F6 v5 (2026-05-23): single global task list (ProtoList of task
+        // ProtoObjects) replaces the per-actor mailbox + global ready queue.
+        // Each task has: __actor__, selector (sym.selector already cached),
+        // args (sym.args), future (sym.future). Per-actor `__lockHandle__`
+        // is an ExternalPointer to a C++ ActorLock (binary_semaphore-based
+        // blocking lock) — enforces single-thread-of-execution per actor.
+        // See docs/superpowers/specs/2026-05-23-task-list-spec.md (TODO).
+        const proto::ProtoString* tasks           = nullptr;  // __tasks__ (on liveRegistry: the one task list)
+        const proto::ProtoString* actor           = nullptr;  // __actor__ (on a task: which actor it targets)
+        const proto::ProtoString* lockHandle      = nullptr;  // __lockHandle__ (on actor: ExtPtr to ActorLock)
+        const proto::ProtoString* resume          = nullptr;  // __resume__ (on a task: marks a resume-from-yield task)
     } sym;
 };
 

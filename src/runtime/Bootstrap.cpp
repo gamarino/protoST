@@ -186,6 +186,10 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     out.sym.blockSelf       = S("__block_self__");
     out.sym.live            = S("__live__");
     out.sym.liveActors      = S("__live_actors__");
+    out.sym.tasks           = S("__tasks__");
+    out.sym.actor           = S("__actor__");
+    out.sym.lockHandle      = S("__lockHandle__");
+    out.sym.resume          = S("__resume__");
 }
 
 } // namespace protoST

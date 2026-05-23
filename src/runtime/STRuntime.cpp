@@ -152,6 +152,26 @@ ptrRegistryKey(proto::ProtoContext* ctx, const proto::ProtoObject* o) {
 // via tagged pointers / hazard pointers is follow-up work.
 // ---------------------------------------------------------------------------
 namespace {
+
+// F6 v5 (2026-05-23): per-actor blocking lock for the new task-list scheduler.
+// Replaces the per-actor __sched__ flag (which was a 3-state non-blocking
+// turn-ownership marker — workers skipped contended actors). The new model
+// is: workers POP a task from the global task list (which is FIFO), then
+// acquire the target actor's lock — blocking via a binary_semaphore if
+// another worker is currently inside the actor. The semaphore is FIFO-fair
+// on Linux (futex_wait wakes in arrival order), so two waiters for the
+// same actor are released in the order they popped their tasks from the
+// global FIFO list — preserves per-actor message ordering automatically.
+//
+// The ActorLock C++ struct is heap-allocated in asActor and attached to
+// the actor ProtoObject via an ExternalPointer attribute (__lockHandle__).
+// Lifetime: the actor holds an opaque pointer; the lock leaks when the
+// actor is GC'd (no protoCore finalizer hook). Acceptable for the
+// benchmark workloads and for typical actor populations.
+struct ActorLock {
+    std::binary_semaphore sem{1};   // counter=1 means "currently unlocked"
+};
+
 struct ReadyNode {
     const proto::ProtoObject* actor;
     ReadyNode*                next;
@@ -460,6 +480,13 @@ struct STRuntime::Impl {
             // (legacy code, tests) gets PROTO_NONE rather than a stale list.
             const_cast<proto::ProtoObject*>(liveRegistry)->setAttribute(
                 rootCtx, bootstrap.sym.liveActors,
+                rootCtx->newList()->asObject(rootCtx));
+            // F6 v5: the new global task list (ProtoList of task ProtoObjects).
+            // GC trivially reaches every in-flight task and transitively every
+            // actor / future / args via this anchor. CAS-appended by senders,
+            // CAS-popped (getSlice(1,n)) by workers — both O(log n) AVL.
+            const_cast<proto::ProtoObject*>(liveRegistry)->setAttribute(
+                rootCtx, bootstrap.sym.tasks,
                 rootCtx->newList()->asObject(rootCtx));
         }
 
@@ -1043,6 +1070,86 @@ void STRuntime::acquireMainWait(proto::ProtoContext* ctx) {
     enterGcBlocking(ctx);
     impl_->mainWaitSem.acquire();
     exitGcBlocking(ctx);
+}
+
+void STRuntime::attachActorLock(proto::ProtoContext* ctx,
+                                const proto::ProtoObject* actor) {
+    if (!actor) return;
+    // Heap-allocate an ActorLock and wrap it as an ExternalPointer attribute.
+    // The lock is owned by the actor for its lifetime; it leaks on actor GC
+    // (no protoCore finalizer). Bounded by total actor population.
+    ActorLock* lock = new ActorLock();
+    auto* extPtr = ctx->fromExternalPointer(lock, nullptr);
+    const_cast<proto::ProtoObject*>(actor)->setAttribute(
+        ctx, impl_->bootstrap.sym.lockHandle, extPtr);
+}
+
+static ActorLock* readActorLock(proto::ProtoContext* ctx,
+                                const proto::ProtoObject* actor,
+                                const proto::ProtoString* lockKey) {
+    if (!actor) return nullptr;
+    auto* extPtr = actor->getOwnAttributeDirect(ctx, lockKey);
+    if (!extPtr || extPtr == PROTO_NONE) return nullptr;
+    const void* raw = extPtr->asExternalPointer(ctx);
+    return static_cast<ActorLock*>(const_cast<void*>(raw));
+}
+
+void STRuntime::acquireActorLock(proto::ProtoContext* ctx,
+                                 const proto::ProtoObject* actor) {
+    auto* lock = readActorLock(ctx, actor, impl_->bootstrap.sym.lockHandle);
+    if (!lock) return;
+    enterGcBlocking(ctx);
+    lock->sem.acquire();
+    exitGcBlocking(ctx);
+}
+
+void STRuntime::releaseActorLock(proto::ProtoContext* ctx,
+                                 const proto::ProtoObject* actor) {
+    auto* lock = readActorLock(ctx, actor, impl_->bootstrap.sym.lockHandle);
+    if (!lock) return;
+    lock->sem.release();
+}
+
+void STRuntime::enqueueResumeTask(proto::ProtoContext* ctx,
+                                  const proto::ProtoObject* actor) {
+    if (!actor) return;
+    // Build a minimal resume-task ProtoObject. Two attributes: __actor__
+    // (target) and __resume__ (TRUE marker). The worker that pops it will
+    // restore the actor's __suspended_frame__ and continue from there.
+    auto* task = const_cast<proto::ProtoObject*>(impl_->bootstrap.objectProto)
+        ->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinTask(ctx, task);
+    task->setAttribute(ctx, impl_->bootstrap.sym.actor, actor);
+    task->setAttribute(ctx, impl_->bootstrap.sym.resume, PROTO_TRUE);
+    enqueueTask(ctx, task);
+}
+
+void STRuntime::enqueueTask(proto::ProtoContext* ctx,
+                            const proto::ProtoObject* task) {
+    if (!task || !impl_->liveRegistry) return;
+    auto* reg = const_cast<proto::ProtoObject*>(impl_->liveRegistry);
+    const proto::ProtoString* tasksKey = impl_->bootstrap.sym.tasks;
+    // CAS-append to the global FIFO task list. ProtoList::appendLast is
+    // O(log n) AVL — for the typical short list (≤ N_workers under load)
+    // this is ~3-5 micro-ops; the rebuilt list takes one extra small
+    // allocation per push. No second indirection: the task itself carries
+    // every field a worker needs to dispatch (actor / selector / args /
+    // future), and the tracing GC reaches all of them through this list.
+    for (;;) {
+        const proto::ProtoObject* cur = reg->getOwnAttributeDirect(ctx, tasksKey);
+        const proto::ProtoList* curList =
+            (cur && cur != PROTO_NONE) ? cur->asList(ctx) : ctx->newList();
+        const proto::ProtoList* nextList = curList->appendLast(ctx, task);
+        TransientPin pinNext(
+            ctx, reinterpret_cast<const proto::ProtoObject*>(nextList));
+        const proto::ProtoObject* nextObj = nextList->asObject(ctx);
+        TransientPin pinNextObj(ctx, nextObj);
+        if (reg->setAttributeIfEqual(ctx, tasksKey, cur, nextObj)) break;
+    }
+    // Wake exactly one worker. If all busy, the counter accumulates and
+    // the next worker to come back from drainOne will see the queue
+    // non-empty (or, equivalently, acquire returns immediately).
+    impl_->workerSem.release();
 }
 
 void STRuntime::notifyMainWaiterIfFor(const proto::ProtoObject* future) {

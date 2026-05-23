@@ -97,6 +97,30 @@ public:
     void acquireMainWait(proto::ProtoContext* ctx);
     void notifyMainWaiterIfFor(const proto::ProtoObject* future);
 
+    // F6 v5 (2026-05-23): per-actor blocking lock. Each actor gets a
+    // heap-allocated `ActorLock` (binary_semaphore) attached via the
+    // `__lockHandle__` ExternalPointer attribute on construction (asActor).
+    // attachActorLock is called by asActor; acquire/release are called by
+    // workers in drainOne to enforce single-thread-of-execution per actor.
+    // The acquire is GC-safe (bracketed by enter/exitGcBlocking).
+    void attachActorLock(proto::ProtoContext* ctx, const proto::ProtoObject* actor);
+    void acquireActorLock(proto::ProtoContext* ctx, const proto::ProtoObject* actor);
+    void releaseActorLock(proto::ProtoContext* ctx, const proto::ProtoObject* actor);
+
+    // F6 v5 (2026-05-23): publish a task on the global task list. The task
+    // is a ProtoObject carrying `__actor__`, selector, args, future, and
+    // (optionally) `__resume__` (for resume-from-yield tasks). CAS-appends
+    // to `liveRegistry.__tasks__` (a ProtoList, FIFO) and releases the
+    // worker semaphore to wake one sleeping worker. O(log N_tasks) per
+    // append — typical N is small (≤ N_workers under normal load).
+    void enqueueTask(proto::ProtoContext* ctx, const proto::ProtoObject* task);
+
+    // Build and enqueue a resume-task (no selector / args / future-to-settle —
+    // just `__actor__` = actor and `__resume__` = TRUE). Pushed by the settler
+    // of a future that has one or more parked waiter actors; workers pick it
+    // up, acquire the actor lock, and restore the suspended frame.
+    void enqueueResumeTask(proto::ProtoContext* ctx, const proto::ProtoObject* actor);
+
     // F6 v2 T7: how many worker threads were actually spawned by the
     // constructor. Reflects PROTOST_WORKERS / hardware_concurrency selection
     // and is used by tests to skip the wall-clock parallelism proof when

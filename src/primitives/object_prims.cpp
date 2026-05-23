@@ -101,6 +101,15 @@ const proto::ProtoObject* prim_Object_asActor(STRuntime& rt, proto::ProtoContext
     // attribute CAS. "At most one message in flight per actor" is enforced by
     // the __sched__ flag staying non-zero for the whole turn — see
     // STRuntime::drainOne / STRuntime::schedule / STRuntime::finishDrain.
+
+    // F6 v5 (2026-05-23): attach a per-actor blocking lock for the new
+    // task-list scheduler. A C++ binary_semaphore wrapped in an
+    // ExternalPointer under __lockHandle__; drainOne acquires before
+    // invoking the method and releases after. FIFO-fair via Linux futex
+    // ordering, so two waiters on the same actor are released in the
+    // order they popped their tasks from the global FIFO __tasks__ list.
+    rt.attachActorLock(ctx, actor);
+
     return actor;
 }
 
