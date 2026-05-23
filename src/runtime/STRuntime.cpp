@@ -880,6 +880,32 @@ void STRuntime::workerLoop(proto::ProtoContext* ctx) {
             return;
         }
 
+        // Spin briefly before parking. Workloads like mt100a hammer 1
+        // SEND per msg from a single main thread; each SEND wakes a
+        // worker that drains 1 msg, finds the mailbox empty, and parks
+        // again — paying a full futex park/wake cycle (~ 10-15 µs) per
+        // message. Spinning a couple of microseconds checking the ready
+        // stack lets us catch the next SEND in-flight and skip the
+        // futex entirely. On a CPU-bound workload that is genuinely
+        // idle this costs a handful of µs before we park anyway.
+        //
+        // 256 PAUSE iterations ~ 250-500 ns on Zen2; 8 outer rounds ~
+        // 2-4 µs total spin budget. drainOne does CAS pop on the ready
+        // stack (cheap), so the inner cost is just the failed pop.
+        bool gotWork = false;
+        for (int outer = 0; outer < 8 && !gotWork; ++outer) {
+            for (int inner = 0; inner < 256; ++inner) {
+#if defined(__x86_64__) || defined(__i386__)
+                __builtin_ia32_pause();
+#endif
+            }
+            if (drainOne(ctx)) {
+                g_drainHits[wid].fetch_add(1, std::memory_order_relaxed);
+                gotWork = true;
+            }
+        }
+        if (gotWork) continue;  // back to the drain-all loop
+
         // Queue empty — block on the semaphore. A sender's release() or
         // a shutdown release will wake us.
         g_parkCount[wid].fetch_add(1, std::memory_order_relaxed);
