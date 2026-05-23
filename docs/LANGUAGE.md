@@ -952,6 +952,25 @@ argument block is evaluated. `whileTrue:` returns `nil`.
 10 to: 1 by: -1 do: [ :i | ... ].             "counts down"
 ```
 
+**Yieldable collection iteration** — `doYielding:` is the compiler-
+recognised counterpart of `do:` for `SequenceableCollection`s
+(Array, OrderedCollection, Interval, String) when the block needs to
+cooperatively `wait` inside an actor method:
+
+```smalltalk
+sensors doYielding: [ :s | results add: (s read) wait ].
+```
+
+`do:` itself is a polymorphic primitive that loops in C++ and calls
+the block via a recursive engine; a cooperative yield inside the
+block loses the iteration state. `doYielding:` instead emits a
+bytecode loop using `at:` + `value:` that lives entirely inside the
+engine's dispatch, so the block may yield at any iteration without
+losing place. Receivers that do not respond to `at:` and `size`
+(Set, Dictionary, Bag) raise `doesNotUnderstand: doYielding:` at
+runtime — those keep using `do:` and may not contain `wait`. See
+Chapter 10.8 of [the tutorial](TUTORIAL.md) for a worked example.
+
 **Conditional and boolean protocol on `Boolean`** — `ifTrue:`, `ifFalse:`,
 `ifTrue:ifFalse:`, `ifFalse:ifTrue:`; the short-circuit combinators `and:` /
 `or:` (the argument is a block, evaluated only when needed); the eager

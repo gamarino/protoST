@@ -264,7 +264,89 @@ mostly-waiting actors, and mostly-waiting actors are nearly free.
 > *main* thread — a script's top level, the REPL — instead blocks that OS
 > thread. The main thread is a synchronous client of the actor world.
 
-## 10.8 Errors in an actor
+## 10.8 Iterating over actors — `doYielding:`
+
+The fan-out pattern in §10.5 works because it is *manually unrolled*: you
+write each send and each `wait` by name. That is fine for two or three
+known actors, but suppose you have an `OrderedCollection` of N actors —
+sensors, twins, drivers — and you want each to handle a request and then
+collect the answers. The natural Smalltalk shape is `do:`:
+
+```smalltalk
+"-- BROKEN if `wait` yields cooperatively --"
+sensors do: [ :s | results add: (s read) wait ].
+```
+
+This **does not work safely inside an actor method**. `do:` is a
+primitive that calls the block via a recursive C++ stack frame; when the
+inner `wait` yields cooperatively, the iteration state of `do:` is lost
+with the C++ stack unwind. The block runs once and the rest of the
+sensors are skipped.
+
+The compiler-recognised selector **`doYielding:`** replaces `do:` for
+the case you need iteration with cooperative `wait`:
+
+```smalltalk
+"-- worked example: a Driver actor that fan-outs to its sensors --"
+Object subclass: #Driver instanceVariableNames: 'sensors'.
+
+Driver >> setSensors: ss  sensors := ss.  ^ self.
+
+Driver >> readAll
+  | results |
+  results := OrderedCollection new.
+  sensors doYielding: [ :s | results add: (s read) wait ].
+  ^ results.
+```
+
+`doYielding:` is the compiler's bytecode-loop desugar of `do:` — same
+iteration semantics, but the loop body lives in bytecode (using `at:` +
+`value:`) inside the engine's normal dispatch, so the block can yield
+cooperatively without losing place in the iteration.
+
+The shape applies on both legs of a fan-out / fan-in:
+
+```smalltalk
+Driver >> readAllParallel
+  | requests results |
+  requests := OrderedCollection new.
+  results  := OrderedCollection new.
+  "Fan-out — no wait, no yield, regular `do:` would also work here, but
+   `doYielding:` is consistent."
+  sensors doYielding: [ :s | requests add: (s read) ].
+  "Fan-in — `wait` may yield per element. doYielding: keeps the loop alive."
+  requests doYielding: [ :r | results add: r wait ].
+  ^ results.
+```
+
+**Two limits worth knowing**:
+
+1. **`doYielding:` only works on `SequenceableCollection`s** (Array,
+   OrderedCollection, Interval, String) — collections that answer
+   `at:` and `size`. Set, Dictionary and Bag still use the regular
+   polymorphic `do:`; iteration over those is unchanged but cannot
+   contain a `wait`.
+
+2. **`1 to: N do: [...]` is the integer iteration primitive**, also
+   non-yieldable. If you need a counted loop where the body yields,
+   build the index list first:
+
+   ```smalltalk
+   indices := OrderedCollection new.
+   1 to: rounds do: [ :i | indices add: i ].   "no wait — safe"
+   indices doYielding: [ :i | ... do something with wait ... ].
+   ```
+
+The benchmark `benchmarks/actors/multi_producer.st` shows the full
+multi-driver fan-out / fan-in pattern using these two rules.
+
+> **In JavaScript** the analogue is `for (const s of sensors)
+> { results.push(await s.read()) }` — the `for...of` works correctly
+> with `await` because JavaScript loops are themselves bytecode in V8,
+> not a primitive that calls back into the engine. `doYielding:` is
+> the equivalent: the iteration is bytecode, so `wait` cooperates.
+
+## 10.9 Errors in an actor
 
 An exception unhandled inside an actor method does not crash the program. It
 propagates to the actor's worker loop, which **rejects that message's future**
@@ -298,7 +380,7 @@ tell a re-raised actor failure from a directly-signalled one. One caveat worth
 knowing: a partial mutation an actor method performed *before* it raised is
 **not** rolled back — protoST has no transactional default.
 
-## 10.9 Atoms — lock-free shared cells
+## 10.10 Atoms — lock-free shared cells
 
 An actor serialises *logic* over a piece of state: one message at a time. That
 is exactly what you want for a stateful entity — a pump, an account. But
@@ -390,7 +472,7 @@ account setInstVar: #balance from: old to: new.   "answers true/false"
 > the pointer is unchanged, the value genuinely *is* the one you read, because
 > it could not have been mutated in place. The hazard simply does not arise.
 
-## 10.10 Summary
+## 10.11 Summary
 
 - An **actor** is an object with private state, a one-message-at-a-time
   mailbox, and parallel scheduling. The single-message rule is the

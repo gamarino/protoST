@@ -3,6 +3,72 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
+## 0.3.0 — yieldable iteration (2026-05-24)
+
+Adds `doYielding:` — the compiler-recognised yieldable counterpart of
+`do:`. Lifts the old "no `wait` inside a `do:` block of an actor
+method" limitation that blocked driver-actor multi-producer patterns.
+
+### New language feature
+
+- **`coll doYielding: [ :elem | body ]`** — when the compiler sees
+  this exact shape (literal block, one formal parameter), it emits a
+  bytecode loop using `at:` + `value:` instead of dispatching the
+  primitive `doYielding:`. The block's `value:` send uses the
+  engine's inline block-frame fast path (yieldable), so a `wait`
+  inside the block parks cooperatively without losing iteration state.
+  See `docs/tutorial/10-actors-and-futures.md` §10.8 for a worked
+  example.
+- **Limit**: only `SequenceableCollection`s (Array, OrderedCollection,
+  Interval, String) support it — receivers without `at:` / `size`
+  raise `doesNotUnderstand: doYielding:` at runtime. `do:` itself is
+  unchanged.
+- **Limit**: the integer `to:do:` and `whileTrue:` primitives are
+  still non-yieldable. For a counted loop with `wait` inside, build
+  an index list first and iterate with `doYielding:`.
+
+### Runtime fixes
+
+- **`finishDrain` stale-wakeup must respect `suspended`** (commit
+  `7637e4f`). The 2026-05-23 stale-wakeup optimisation released the
+  actor whenever schedState==2 with an empty mailbox, even when the
+  drain exited via `FutureYield` (`suspended=true`). That LOST
+  WAKEUPS for an actor whose awaited future had already settled by
+  the time the engine tried to register it as a waiter:
+  `appendFutureWaiter` returned `parked=0`, the handler called
+  `schedule()` to mark state 1→2 ("re-schedule me to consume the
+  value"), and finishDrain interpreted the 2 as stale and unanchored.
+  The actor was left with `__suspended_frame__` set but no one to
+  schedule it. Symptom: `doYielding:` in an actor method, w >= 2,
+  N >= 3 iterations deadlocked. Fix: re-enqueue when `suspended=true
+  || mailboxHasWork`.
+
+### New runtime opcode
+
+- `Op::JUMP_BACK` — backward complement of the existing forward
+  `JUMP`. Used by the `doYielding:` desugar to close the loop. Five
+  lines in `ExecutionEngine.cpp`; no other call sites.
+
+### New benchmarks
+
+- `benchmarks/actors/multi_producer.st` — rewritten to use
+  `doYielding:` (was blocked by the limitation). Each of 8 driver
+  actors fan-outs to 12 private sinks over 1000 rounds (96 000 ping
+  messages, summing settle counts to 48 048 000). The benchmark
+  RUNS and produces the correct answer; **throughput is comparable
+  to `mt100a`, NOT the 10× the design speculated** — each driver
+  pays a yield-resume cycle on every fan-out element, more expensive
+  than main's blocking wait. The real value of `doYielding:` is
+  correctness + composability, not aggregate throughput. The
+  honest performance number remains the 0.2.0 figure
+  (mt100a w=2 ~ 67-72 K msg/s on the 5500U notebook).
+
+### Test count
+
+752 → 753: one new conformance test for the race fix
+(`tests/conformance/do_yielding_actor.st` — 3 sinks × driver-actor
+with `doYielding:` containing `wait`, multi-worker stable).
+
 ## 0.2.0 — Performance pass (2026-05-23)
 
 A focused overnight optimisation pass on the actor dispatch path.
