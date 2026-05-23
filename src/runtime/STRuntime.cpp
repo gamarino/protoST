@@ -696,7 +696,16 @@ STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
         }
     }
 }
+// Forward-declared: defined down by workerLoop alongside the
+// per-worker stats globals.
+namespace { void printWorkerStatsAtExit(); }
+
 STRuntime::~STRuntime() {
+    // Print per-worker drain/park stats if PROTOST_WORKER_STATS=1. Done
+    // BEFORE joining the workers so a runtime that destructs without ever
+    // shutting cleanly still emits something useful — even an empty table
+    // is a signal that no worker ever entered drainOne.
+    printWorkerStatsAtExit();
     // F6 v2 T7: signal every worker to exit, then join them. workerLoop's
     // cv predicate checks `shutdown` before the queue, so a single
     // notify_all wakes the whole pool even if some workers were inside the
@@ -773,6 +782,41 @@ bool STRuntime::waitForSchedulerProgress(unsigned millis) {
     return false;  // no progress signal — the caller re-checks its condition
 }
 
+// F6 v6 (2026-05-23 night): per-worker stats for the scaling
+// investigation. PROTOST_WORKER_STATS=1 makes workerLoop count its
+// drainOne hits and parks; the destructor prints the per-worker
+// totals. Lets us see whether the pool is actually parallelising —
+// if one worker drains 90 % of the work while the others sit idle,
+// it's a scheduling-fairness problem, not a throughput-of-one
+// problem.
+//
+// 16 slots is bigger than any current worker count. Atomic adds
+// (relaxed: we only print after join). Each workerLoop captures its
+// slot once via a fetch_add on `nextWorkerStatsId`.
+namespace {
+constexpr int kMaxWorkerStatsSlots = 16;
+std::atomic<long long> g_drainHits[kMaxWorkerStatsSlots]   = {};
+std::atomic<long long> g_parkCount[kMaxWorkerStatsSlots]   = {};
+std::atomic<int>       g_nextWorkerStatsId{0};
+thread_local int       t_workerStatsId = -1;
+
+void printWorkerStatsAtExit() {
+    if (!std::getenv("PROTOST_WORKER_STATS")) return;
+    bool any = false;
+    for (int i = 0; i < kMaxWorkerStatsSlots; ++i) {
+        long long d = g_drainHits[i].load();
+        long long p = g_parkCount[i].load();
+        if (d || p) {
+            if (!any) {
+                std::fprintf(stderr, "[worker-stats] id drains parks\n");
+                any = true;
+            }
+            std::fprintf(stderr, "[worker-stats]  %d %lld %lld\n", i, d, p);
+        }
+    }
+}
+} // anon
+
 void STRuntime::workerLoop(proto::ProtoContext* ctx) {
     // F6 v4 (2026-05-23): event-driven worker pool. Workers loop draining
     // the ready stack until empty, then block on the semaphore until a
@@ -790,6 +834,11 @@ void STRuntime::workerLoop(proto::ProtoContext* ctx) {
     // Shutdown: ~STRuntime sets `shutdown` then issues one `release()`
     // per worker so every blocked worker wakes, observes the flag, drains
     // whatever is left, and exits.
+    if (t_workerStatsId < 0) {
+        t_workerStatsId = g_nextWorkerStatsId.fetch_add(
+            1, std::memory_order_relaxed) % kMaxWorkerStatsSlots;
+    }
+    const int wid = t_workerStatsId;
     while (true) {
         // F6 v6 (2026-05-23 night): pool-pause gate. When
         // STRuntime::stopProcessing has flipped `processingPaused`, no
@@ -819,16 +868,21 @@ void STRuntime::workerLoop(proto::ProtoContext* ctx) {
         }
 
         // Drain everything currently in the queue.
-        while (drainOne(ctx)) { /* keep going */ }
+        while (drainOne(ctx)) {
+            g_drainHits[wid].fetch_add(1, std::memory_order_relaxed);
+        }
 
         if (impl_->shutdown.load(std::memory_order_acquire)) {
             // Final drain in case a sender pushed after our last pop.
-            while (drainOne(ctx)) { /* keep going */ }
+            while (drainOne(ctx)) {
+                g_drainHits[wid].fetch_add(1, std::memory_order_relaxed);
+            }
             return;
         }
 
         // Queue empty — block on the semaphore. A sender's release() or
         // a shutdown release will wake us.
+        g_parkCount[wid].fetch_add(1, std::memory_order_relaxed);
         enterGcBlocking(ctx);
         impl_->workerSem.acquire();
         exitGcBlocking(ctx);
@@ -1695,13 +1749,53 @@ void STRuntime::finishDrain(proto::ProtoContext* ctx,
     for (;;) {
         long long s = schedState(ctx, actor);
         if (s == 2) {
-            // A wakeup arrived during the turn — consume it and re-queue.
+            // A wakeup arrived during the turn. Pre-fix this unconditionally
+            // re-enqueued the actor, but the wakeup is just a flag — it does
+            // NOT guarantee the mailbox has any unprocessed work. With the
+            // F6 v5 drain-all-per-turn loop a single drainOne empties the
+            // entire mailbox, so a 1->2 transition fired by a SEND that
+            // happened BEFORE this drain even started is already covered
+            // by the drain itself. Re-enqueuing then makes the worker pop
+            // the actor again, popMailboxHead returns null, the drain loop
+            // exits empty, and finishDrain runs a second time — pure
+            // dispatch overhead with no work done.
+            //
+            // 2026-05-23 night: worker-stats on saturation_big revealed
+            // EXACTLY this pattern (32 actors × 2 drains per actor =
+            // 64 drains observed, half of them empty). The empty drain
+            // also drives an extra workerSem.release inside enqueueReady
+            // that wakes a parked worker for nothing.
+            //
+            // Fix: CAS 2 -> 1 first (claim exclusivity), THEN check the
+            // mailbox. If a SEND races us with a new message, the SEND will
+            // either see state 1 (and CAS 1 -> 2, which makes our 1 -> 0
+            // transition fail and we loop back to handle the now-real
+            // wakeup) or state 0 (after we release and the SEND enqueues
+            // the actor itself). The check-then-CAS order is the
+            // load-bearing invariant — checking the mailbox BEFORE
+            // claiming exclusivity was a race that lost wakeups
+            // (mt100k timed out at 30 s).
             if (casSchedState(ctx, actor, 2, 1)) {
-                enqueueReady(ctx, actor);
-                SCHED_DIAG("finishDrain RE-QUEUE (wakeup) actor=" << actor);
-                return;
+                // Won. Now safe to check the mailbox without racing the
+                // OTHER SEND's mailbox-then-sched ordering: any concurrent
+                // SEND that wins its 1 -> 2 transition will trap us at
+                // the 1 -> 0 CAS below and force us back through the loop.
+                if (mailboxHasWork(ctx, actor)) {
+                    enqueueReady(ctx, actor);
+                    SCHED_DIAG("finishDrain RE-QUEUE (wakeup) actor=" << actor);
+                    return;
+                }
+                // Stale wakeup — try to release. If a SEND raced and
+                // re-marked state to 2, the CAS fails and we loop back
+                // to consume the now-real wakeup.
+                if (casSchedState(ctx, actor, 1, 0)) {
+                    unanchorActor(ctx, actor);
+                    SCHED_DIAG("finishDrain RELEASE (stale wakeup) actor=" << actor);
+                    return;
+                }
+                continue;  // raced — state went 1 -> 2, retry
             }
-            continue;  // raced — retry
+            continue;  // raced — state changed before our 2 -> 1
         }
         // s == 1 — turn owner, no wakeup marked yet. Release the flag.
         if (!casSchedState(ctx, actor, 1, 0)) continue;  // became 2 — loop
