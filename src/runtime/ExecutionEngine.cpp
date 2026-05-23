@@ -418,6 +418,95 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         ~SlotCursorGuard() { g_slotCursor = restoreTo; }
     } cursorGuard{slotBase_};
 
+    // --- threaded-goto dispatch (Stage 1 of the perf spec) ---------------
+    //
+    // Each `case Op::X:` carries an `L_X:` label and a shadow
+    // `Frame& f = frames_.back();` at the top. After running its body, the
+    // case ends with DISPATCH_DIRECT() — read the next opcode and goto its
+    // L_X label, bypassing the outer-while + switch indirect jump. Each
+    // case has its OWN indirect jump → the CPU's branch predictor sees
+    // per-transition history rather than one centralised hop, which is the
+    // threaded-goto win for a hot bytecode loop.
+    //
+    // The FIRST instruction of every runWithArgs call still enters via the
+    // existing switch (the outer-while's prelude runs once); from there
+    // onward the threaded gotos take over. The outer while only iterates
+    // again on a DebuggerHalt exception.
+    //
+    // `op` / `arg` move to function scope so a goto'd-into case can read
+    // them on either entry path (the initial switch or DISPATCH_DIRECT).
+    //
+    // Forward references to L_X are legal in GCC: the computed-goto address
+    // expression `&&L_X` resolves within the same function regardless of
+    // textual order. `&&L_BAD_OP` covers any opcode byte we do not
+    // recognise. EXTEND never reaches dispatch because DISPATCH_DIRECT's
+    // inner loop swallows EXTEND prefix words and accumulates `arg`.
+    void* labels[256];
+    for (int i__ = 0; i__ < 256; ++i__) labels[i__] = &&L_BAD_OP;
+    labels[static_cast<unsigned int>(Op::NOP)]              = &&L_NOP;
+    labels[static_cast<unsigned int>(Op::PUSH_CONST)]       = &&L_PUSH_CONST;
+    labels[static_cast<unsigned int>(Op::PUSH_LOCAL)]       = &&L_PUSH_LOCAL;
+    labels[static_cast<unsigned int>(Op::STORE_LOCAL)]      = &&L_STORE_LOCAL;
+    labels[static_cast<unsigned int>(Op::DUP)]              = &&L_DUP;
+    labels[static_cast<unsigned int>(Op::POP)]              = &&L_POP;
+    labels[static_cast<unsigned int>(Op::PUSH_SELF)]        = &&L_PUSH_SELF;
+    labels[static_cast<unsigned int>(Op::PUSH_SUPER)]       = &&L_PUSH_SUPER;
+    labels[static_cast<unsigned int>(Op::PUSH_NIL)]         = &&L_PUSH_NIL;
+    labels[static_cast<unsigned int>(Op::PUSH_TRUE)]        = &&L_PUSH_TRUE;
+    labels[static_cast<unsigned int>(Op::PUSH_FALSE)]       = &&L_PUSH_FALSE;
+    labels[static_cast<unsigned int>(Op::SEND_UNARY)]       = &&L_SEND_UNARY;
+    labels[static_cast<unsigned int>(Op::SEND_BINARY)]      = &&L_SEND_BINARY;
+    labels[static_cast<unsigned int>(Op::SEND_KEYWORD)]     = &&L_SEND_KEYWORD;
+    labels[static_cast<unsigned int>(Op::SEND_SUPER)]       = &&L_SEND_SUPER;
+    labels[static_cast<unsigned int>(Op::JUMP)]             = &&L_JUMP;
+    labels[static_cast<unsigned int>(Op::JUMP_IF_TRUE)]     = &&L_JUMP_IF_TRUE;
+    labels[static_cast<unsigned int>(Op::JUMP_IF_FALSE)]    = &&L_JUMP_IF_FALSE;
+    labels[static_cast<unsigned int>(Op::RETURN)]           = &&L_RETURN;
+    labels[static_cast<unsigned int>(Op::RETURN_TOP)]       = &&L_RETURN_TOP;
+    labels[static_cast<unsigned int>(Op::PUSH_BLOCK)]       = &&L_PUSH_BLOCK;
+    labels[static_cast<unsigned int>(Op::DUP_RECEIVER)]     = &&L_DUP_RECEIVER;
+    labels[static_cast<unsigned int>(Op::PUSH_CAPTURED)]    = &&L_PUSH_CAPTURED;
+    labels[static_cast<unsigned int>(Op::STORE_CAPTURED)]   = &&L_STORE_CAPTURED;
+    labels[static_cast<unsigned int>(Op::PUSH_GLOBAL)]      = &&L_PUSH_GLOBAL;
+    labels[static_cast<unsigned int>(Op::STORE_GLOBAL)]     = &&L_STORE_GLOBAL;
+    labels[static_cast<unsigned int>(Op::PUSH_INSTVAR)]     = &&L_PUSH_INSTVAR;
+    labels[static_cast<unsigned int>(Op::STORE_INSTVAR)]    = &&L_STORE_INSTVAR;
+    labels[static_cast<unsigned int>(Op::MAKE_CAPTURED)]    = &&L_MAKE_CAPTURED;
+    labels[static_cast<unsigned int>(Op::MAKE_ARRAY)]       = &&L_MAKE_ARRAY;
+    labels[static_cast<unsigned int>(Op::HALT)]             = &&L_HALT;
+
+    unsigned int arg = 0;
+    Op op = Op::NOP;
+
+    #define DISPATCH_DIRECT() do {                                              \
+        if (frames_.empty()) goto L_RUN_DONE;                                   \
+        Frame& f__ = frames_.back();                                            \
+        const auto& bytes__ = f__.m->bytes();                                   \
+        if (f__.pc + 1 >= bytes__.size()) goto L_OFF_END;                       \
+        if (rt_.debugger().attached()) {                                        \
+            auto dbgMode__ = rt_.debugger().mode();                             \
+            if (dbgMode__ != DebuggerRuntime::Mode::Free) {                     \
+                rt_.debugger().enterSession(rt_, makeDebugStack(), "step");     \
+            }                                                                   \
+            if (rt_.debugger().breakpoints().isSet(f__.m, f__.pc)) {            \
+                rt_.debugger().enterSession(rt_, makeDebugStack(),              \
+                                            "breakpoint");                      \
+            }                                                                   \
+        }                                                                       \
+        op  = static_cast<Op>(bytes__[f__.pc]);                                 \
+        arg = bytes__[f__.pc + 1];                                              \
+        f__.pc += kInstrSize;                                                   \
+        while (op == Op::EXTEND) {                                              \
+            if (f__.pc + 1 >= bytes__.size())                                   \
+                throw std::runtime_error(                                       \
+                    "ExecutionEngine: truncated EXTEND prefix");                \
+            op  = static_cast<Op>(bytes__[f__.pc]);                             \
+            arg = (arg << 8) | bytes__[f__.pc + 1];                             \
+            f__.pc += kInstrSize;                                               \
+        }                                                                       \
+        goto *labels[static_cast<unsigned int>(op)];                            \
+    } while (0)
+
     // Outer loop: lets us resume after a DebuggerHalt is caught and the
     // user steps/conts out of the session. Without this wrapper the catch
     // handler would return early and the remainder of the module would be
@@ -468,8 +557,10 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         // `f.pc` is advanced past EVERY consumed word so it always lands on
         // the next instruction boundary — snapshot/restore (which stores the
         // raw pc) therefore still resumes correctly.
-        Op op = static_cast<Op>(bytes[f.pc]);
-        unsigned int arg = bytes[f.pc + 1];
+        // `op` / `arg` are function-scope (declared above) so a goto'd-into
+        // case can read them. Here (the first-iteration prelude) we assign.
+        op = static_cast<Op>(bytes[f.pc]);
+        arg = bytes[f.pc + 1];
         f.pc += kInstrSize;
         while (op == Op::EXTEND) {
             if (f.pc + 1 >= bytes.size())
@@ -481,38 +572,56 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         }
 
         switch (op) {
-            case Op::NOP:
+            case Op::NOP: L_NOP:
+                DISPATCH_DIRECT();
                 break;
-            case Op::PUSH_NIL:
+            case Op::PUSH_NIL: L_PUSH_NIL: {
+                Frame& f = frames_.back();
                 push(f, PROTO_NONE);
-                break;
-            case Op::PUSH_TRUE:
+                DISPATCH_DIRECT();
+            } break;
+            case Op::PUSH_TRUE: L_PUSH_TRUE: {
+                Frame& f = frames_.back();
                 push(f, PROTO_TRUE);
-                break;
-            case Op::PUSH_FALSE:
+                DISPATCH_DIRECT();
+            } break;
+            case Op::PUSH_FALSE: L_PUSH_FALSE: {
+                Frame& f = frames_.back();
                 push(f, PROTO_FALSE);
-                break;
-            case Op::PUSH_CONST:
+                DISPATCH_DIRECT();
+            } break;
+            case Op::PUSH_CONST: L_PUSH_CONST: {
+                Frame& f = frames_.back();
                 push(f, rt_.materialize(*f.m, arg));
-                break;
-            case Op::DUP:
+                DISPATCH_DIRECT();
+            } break;
+            case Op::DUP: L_DUP: {
+                Frame& f = frames_.back();
                 push(f, peek(f));
-                break;
-            case Op::POP:
+                DISPATCH_DIRECT();
+            } break;
+            case Op::POP: L_POP: {
+                Frame& f = frames_.back();
                 pop(f);
-                break;
-            case Op::PUSH_LOCAL:
+                DISPATCH_DIRECT();
+            } break;
+            case Op::PUSH_LOCAL: L_PUSH_LOCAL: {
+                Frame& f = frames_.back();
                 checkLocal(f, arg);
                 push(f, getLocal(f, arg));
-                break;
-            case Op::STORE_LOCAL: {
+                DISPATCH_DIRECT();
+            } break;
+            case Op::STORE_LOCAL: L_STORE_LOCAL: {
+                Frame& f = frames_.back();
                 checkLocal(f, arg);
                 if (f.sp == 0)
                     throw std::runtime_error("STORE_LOCAL with empty stack");
                 setLocal(f, arg, pop(f));
+                DISPATCH_DIRECT();
                 break;
             }
-            case Op::RETURN_TOP: {
+            case Op::RETURN_TOP: L_RETURN_TOP: {
+                Frame& f = frames_.back();
                 // RETURN_TOP is the compiler's implicit trailer for a block
                 // body and for a top-level module. It is ALWAYS a local
                 // return: pop exactly this frame and hand its top-of-stack
@@ -524,11 +633,12 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 popFrame();
                 if (frames_.empty()) return r;
                 push(frames_.back(), r);
-                // Reference `f` is now dangling — continue the loop so the
-                // next iteration re-acquires frames_.back().
-                continue;
+                // DISPATCH_DIRECT re-reads frames_.back() — `f` is stale
+                // here after popFrame but the macro rebinds.
+                DISPATCH_DIRECT();
             }
-            case Op::RETURN: {
+            case Op::RETURN: L_RETURN: {
+                Frame& f = frames_.back();
                 // Op::RETURN is emitted by an explicit `^expr` and by a
                 // method's implicit trailer. Track 1 slice 1 makes it
                 // home-aware.
@@ -542,7 +652,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     popFrame();
                     if (frames_.empty()) return r;
                     push(frames_.back(), r);
-                    continue;
+                    DISPATCH_DIRECT();
                 }
 
                 // A block frame running `^expr` — non-local return. Find the
@@ -551,7 +661,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 for (std::size_t i = frames_.size(); i-- > 0; ) {
                     if (frames_[i].frameId == f.homeFrameId) {
                         homeIdx = i;
-                        break;
+                        break;  // INNER for-loop break — stays as break.
                     }
                 }
                 if (homeIdx != frames_.size()) {
@@ -563,7 +673,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         popFrame();
                     if (frames_.empty()) return r;
                     push(frames_.back(), r);
-                    continue;
+                    DISPATCH_DIRECT();
                 }
 
                 // The home is not in THIS engine's frames_. Two cases:
@@ -593,11 +703,12 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // `resume:` anyway, treat the resumed value as this `^`'s
                     // result and continue from the block.
                     push(f, res ? res : PROTO_NONE);
-                    break;
+                    DISPATCH_DIRECT();
                 }
                 throw NonLocalReturn(f.homeFrameId, r);
             }
-            case Op::PUSH_BLOCK: {
+            case Op::PUSH_BLOCK: L_PUSH_BLOCK: {
+                Frame& f = frames_.back();
                 // arg = block index inside f.m->blocks(). Create a fresh
                 // BlockClosure (a mutable child of the Block prototype) that
                 // carries an opaque pointer to the sub-module under
@@ -659,12 +770,14 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 TransientPin pinBlkSelf(ctx, creatorSelf);
                 block->setAttribute(ctx, blkSelfKey, creatorSelf);
                 push(f, block);
+                DISPATCH_DIRECT();
                 break;
             }
-            case Op::SEND_UNARY:
-            case Op::SEND_BINARY:
-            case Op::SEND_KEYWORD:
-            case Op::SEND_SUPER: {
+            case Op::SEND_UNARY: L_SEND_UNARY:
+            case Op::SEND_BINARY: L_SEND_BINARY:
+            case Op::SEND_KEYWORD: L_SEND_KEYWORD:
+            case Op::SEND_SUPER: L_SEND_SUPER: {
+                Frame& f = frames_.back();
                 // pop N args (0 for unary, 1 for binary, count from selector
                 // for keyword / super)
                 int argcOp = (op == Op::SEND_UNARY)  ? 0
@@ -806,6 +919,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // second) consistent with drainOne.
                     rt_.schedule(ctx, recv);
                     push(f, fut);
+                    DISPATCH_DIRECT();
                     break;
                 }
 
@@ -907,11 +1021,10 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                                       static_cast<unsigned int>(argcOp),
                                       blkHome);
                             // `f` is now invalidated when frames_ grows
-                            // its backing storage. Continue the loop so
-                            // the next iteration re-acquires
-                            // frames_.back() and dispatches the block
-                            // from its pc=0.
-                            continue;
+                            // its backing storage. DISPATCH_DIRECT
+                            // re-reads frames_.back() and dispatches the
+                            // block from its pc=0.
+                            DISPATCH_DIRECT();
                         }
                     }
                 }
@@ -1145,6 +1258,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // line above either threw or this pushes nil; handling it
                     // keeps the send well-formed regardless.
                     push(f, r ? r : PROTO_NONE);
+                    DISPATCH_DIRECT();
                     break;
                 }
                 // F4-U4: detect user method (Block-shaped wrapper carrying
@@ -1190,10 +1304,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     pushFrame(sub, /*self=*/recv, capDict, methodArgs,
                               static_cast<unsigned int>(argcOp) + 1);
                     // `f` is now invalidated by the vector growth (when it
-                    // reallocates). Continue the loop so the next iteration
-                    // re-acquires frames_.back() and dispatches the callee
-                    // from its pc=0.
-                    continue;
+                    // reallocates). DISPATCH_DIRECT re-reads frames_.back()
+                    // and dispatches the callee from its pc=0.
+                    DISPATCH_DIRECT();
                 }
                 // F5-M3: member-access semantics. If the attribute is not a
                 // method (no __bc_ptr__) and is not a primitive marker (a
@@ -1206,6 +1319,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 if (!attr->isInteger(ctx)) {
                     if (argcOp == 0) {
                         push(f, attr);
+                        DISPATCH_DIRECT();
                         break;
                     }
                     throw std::runtime_error(
@@ -1217,6 +1331,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // member-access rule as above.
                     if (argcOp == 0) {
                         push(f, attr);
+                        DISPATCH_DIRECT();
                         break;
                     }
                     throw std::runtime_error("non-primitive method in F2 (F3 work)");
@@ -1245,20 +1360,30 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     rt_, ctx,
                     [&] { return fn(rt_, ctx, recv, sendArgs, argcOp); });
                 push(f, result ? result : PROTO_NONE);
+                DISPATCH_DIRECT();
                 break;
             }
-            case Op::JUMP:          f.pc += static_cast<std::size_t>(arg) * kInstrSize; break;
-            case Op::JUMP_IF_TRUE: {
+            case Op::JUMP: L_JUMP: {
+                Frame& f = frames_.back();
+                f.pc += static_cast<std::size_t>(arg) * kInstrSize;
+                DISPATCH_DIRECT();
+            } break;
+            case Op::JUMP_IF_TRUE: L_JUMP_IF_TRUE: {
+                Frame& f = frames_.back();
                 auto* v = pop(f);
                 if (v == PROTO_TRUE) f.pc += static_cast<std::size_t>(arg) * kInstrSize;
+                DISPATCH_DIRECT();
                 break;
             }
-            case Op::JUMP_IF_FALSE: {
+            case Op::JUMP_IF_FALSE: L_JUMP_IF_FALSE: {
+                Frame& f = frames_.back();
                 auto* v = pop(f);
                 if (v == PROTO_FALSE) f.pc += static_cast<std::size_t>(arg) * kInstrSize;
+                DISPATCH_DIRECT();
                 break;
             }
-            case Op::PUSH_CAPTURED: {
+            case Op::PUSH_CAPTURED: L_PUSH_CAPTURED: {
+                Frame& f = frames_.back();
                 // arg = constant pool index of the (interned) symbol name.
                 auto* sym = f.m->constSym(ctx, arg);
                 const proto::ProtoObject* capD = getCaptured(f);
@@ -1267,9 +1392,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         ? capD->getAttribute(ctx, sym)
                         : nullptr;
                 push(f, val ? val : PROTO_NONE);
+                DISPATCH_DIRECT();
                 break;
             }
-            case Op::STORE_CAPTURED: {
+            case Op::STORE_CAPTURED: L_STORE_CAPTURED: {
+                Frame& f = frames_.back();
                 if (f.sp == 0)
                     throw std::runtime_error("STORE_CAPTURED with empty stack");
                 const proto::ProtoObject* val = pop(f);
@@ -1284,9 +1411,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 TransientPin pinSym(
                     ctx, reinterpret_cast<const proto::ProtoObject*>(sym));
                 const_cast<proto::ProtoObject*>(capD)->setAttribute(ctx, sym, val);
+                DISPATCH_DIRECT();
                 break;
             }
-            case Op::PUSH_GLOBAL: {
+            case Op::PUSH_GLOBAL: L_PUSH_GLOBAL: {
+                Frame& f = frames_.back();
                 // arg = constant pool index of the (interned) global name.
                 const std::string& nameStr = f.m->constSymbol(arg);
                 auto* sym = f.m->constSym(ctx, arg);
@@ -1295,9 +1424,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 if (!val || val == PROTO_NONE)
                     throw std::runtime_error("undefined global: " + nameStr);
                 push(f, val);
+                DISPATCH_DIRECT();
                 break;
             }
-            case Op::STORE_GLOBAL: {
+            case Op::STORE_GLOBAL: L_STORE_GLOBAL: {
+                Frame& f = frames_.back();
                 if (f.sp == 0)
                     throw std::runtime_error("STORE_GLOBAL with empty stack");
                 const proto::ProtoObject* val = pop(f);
@@ -1309,9 +1440,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 auto* g = rt_.globals();
                 if (!g) throw std::runtime_error("globals not initialized");
                 g->setAttribute(ctx, sym, val);
+                DISPATCH_DIRECT();
                 break;
             }
-            case Op::PUSH_INSTVAR: {
+            case Op::PUSH_INSTVAR: L_PUSH_INSTVAR: {
+                Frame& f = frames_.back();
                 // F4-U5: read an instance variable from `self`. `self` is
                 // populated by runWithArgs into slot 0 of locals (see the
                 // user-method dispatch path in SEND_*). arg is the constant-
@@ -1338,9 +1471,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 auto* val = (self && self != PROTO_NONE)
                     ? self->getAttribute(ctx, sym) : nullptr;
                 push(f, val ? val : PROTO_NONE);
+                DISPATCH_DIRECT();
                 break;
             }
-            case Op::STORE_INSTVAR: {
+            case Op::STORE_INSTVAR: L_STORE_INSTVAR: {
+                Frame& f = frames_.back();
                 // F4-U5: write an instance variable on `self`. Mirror of
                 // PUSH_INSTVAR; pops the value-to-store from the operand
                 // stack and setAttribute's it under the mangled "_iv_<name>"
@@ -1365,9 +1500,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 if (!self || self == PROTO_NONE)
                     throw std::runtime_error("STORE_INSTVAR self is null");
                 const_cast<proto::ProtoObject*>(self)->setAttribute(ctx, sym, val);
+                DISPATCH_DIRECT();
                 break;
             }
-            case Op::MAKE_CAPTURED: {
+            case Op::MAKE_CAPTURED: L_MAKE_CAPTURED: {
+                Frame& f = frames_.back();
                 // CLO Part 2: allocate a fresh per-method (or per-block)
                 // captured dict and install it in frame slot 0, where
                 // getCaptured / PUSH_CAPTURED / STORE_CAPTURED read it. The
@@ -1385,9 +1522,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // and the store — nothing does. Pin defensively anyway.
                 TransientPin pinDict(ctx, dict);
                 setCaptured(f, dict);
+                DISPATCH_DIRECT();
                 break;
             }
-            case Op::MAKE_ARRAY: {
+            case Op::MAKE_ARRAY: L_MAKE_ARRAY: {
+                Frame& f = frames_.back();
                 // COL-a: collection-literal builder. `arg` element values are
                 // on the operand stack, oldest-pushed deepest (so element 0 is
                 // at depth arg-1). Collect them bottom-up into a ProtoList,
@@ -1412,9 +1551,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 const proto::ProtoObject* arr =
                     makeArrayInstance(rt_, ctx, data);
                 push(f, arr ? arr : PROTO_NONE);
+                DISPATCH_DIRECT();
                 break;
             }
-            case Op::PUSH_SELF: {
+            case Op::PUSH_SELF: L_PUSH_SELF: {
+                Frame& f = frames_.back();
                 // CLO Part 1: push the current frame's `self` from the header
                 // self-slot (getSelf, baseSlot+1). pushFrame primes that slot
                 // for method frames (= the receiver) and block invocation
@@ -1424,9 +1565,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 const proto::ProtoObject* self = getSelf(f);
                 if (!self) self = PROTO_NONE;
                 push(f, self);
+                DISPATCH_DIRECT();
                 break;
             }
-            case Op::PUSH_SUPER: {
+            case Op::PUSH_SUPER: L_PUSH_SUPER: {
+                Frame& f = frames_.back();
                 // BL-1: a `super` send. `super` evaluates to the SAME object
                 // as `self`; what differs is method lookup, which must start
                 // one level above the class defining the current method.
@@ -1437,9 +1580,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 if (!self) self = PROTO_NONE;
                 push(f, self);
                 f.superPending = true;
+                DISPATCH_DIRECT();
                 break;
             }
-            case Op::DUP_RECEIVER: {
+            case Op::DUP_RECEIVER: L_DUP_RECEIVER: {
+                Frame& f = frames_.back();
                 // BL-1: duplicate the operand-stack value at depth `arg`
                 // (0 == top) and push the copy. Used to keep a receiver
                 // around for a follow-up send (cascades, multi-send
@@ -1449,21 +1594,22 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 if (f.sp <= arg)
                     throw std::runtime_error("DUP_RECEIVER depth out of range");
                 push(f, opAt(f, arg));
+                DISPATCH_DIRECT();
                 break;
             }
-            case Op::HALT:
+            case Op::HALT: L_HALT: {
+                Frame& f = frames_.back();
                 // BL-1: clean program-end terminator. Treated like an
                 // implicit RETURN_TOP: hand the current top-of-stack (or
                 // PROTO_NONE) back to the caller frame, or out to the C++
                 // caller when this is the last frame.
-                {
-                    const proto::ProtoObject* r =
-                        f.sp == 0 ? PROTO_NONE : peek(f);
-                    popFrame();
-                    if (frames_.empty()) return r;
-                    push(frames_.back(), r);
-                    continue;
-                }
+                const proto::ProtoObject* r =
+                    f.sp == 0 ? PROTO_NONE : peek(f);
+                popFrame();
+                if (frames_.empty()) return r;
+                push(frames_.back(), r);
+                DISPATCH_DIRECT();
+            }
             case Op::EXTEND:
                 // BL-2: unreachable — the decode loop above consumes every
                 // EXTEND prefix before the switch. A bare EXTEND reaching
@@ -1476,6 +1622,27 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     "ExecutionEngine: unimplemented opcode at pc=" +
                     std::to_string(f.pc - kInstrSize));
         }
+        // Threaded-goto labels — reachable only via DISPATCH_DIRECT goto
+        // from inside the case bodies. The switch's bottom is unreachable
+        // by natural flow (every case ends with DISPATCH_DIRECT or throw).
+        L_OFF_END: {
+            // Off-the-end fallthrough: synthetic RETURN_TOP with PROTO_NONE
+            // on an empty stack — matches the legacy engine's behaviour.
+            Frame& f = frames_.back();
+            const proto::ProtoObject* r =
+                f.sp == 0 ? PROTO_NONE : peek(f);
+            popFrame();
+            if (frames_.empty()) return r;
+            push(frames_.back(), r);
+            DISPATCH_DIRECT();
+        }
+        L_BAD_OP:
+            throw std::runtime_error(
+                "ExecutionEngine: unimplemented opcode (threaded dispatch)");
+        L_RUN_DONE:
+            // DISPATCH_DIRECT detected frames_.empty() — the implicit-return
+            // path that the inner while's natural exit used to take.
+            return PROTO_NONE;
     }
     // frames_ drained without hitting a RETURN at the top frame — this
     // can happen if a top-level module's bytes simply run out (the
