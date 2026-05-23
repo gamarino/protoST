@@ -29,9 +29,13 @@ static const proto::ProtoString* bcPtrKey(proto::ProtoContext* ctx) {
 const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* block,
                                        const proto::ProtoObject* const* args, int argc) {
-    const proto::ProtoString* bcKey = bcPtrKey(ctx);
-    const proto::ProtoString* capKey =
-        proto::ProtoString::createSymbol(ctx, "__captured__");
+    // F6 v5 hot-path fix (2026-05-23): the 4 createSymbol calls in this
+    // function were a major contention point — invokeBlock runs ~100 K
+    // times in mt100a (one per inner-loop iteration), each previously
+    // costing 4 SymbolTable shard-lock lookups (~400 K total). All four
+    // hot keys are now pulled from the Bootstrap cache.
+    const proto::ProtoString* bcKey  = rt.bootstrap().sym.bcPtr;
+    const proto::ProtoString* capKey = rt.bootstrap().sym.captured;
     auto* bcPtrObj = block->getAttribute(ctx, bcKey);
     if (!bcPtrObj || bcPtrObj == PROTO_NONE)
         throw std::runtime_error("block missing __bc_ptr__");
@@ -56,8 +60,7 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
     // The nested engine cannot see the home frame (it lives in the parent
     // engine's frames_), so its RETURN handler throws a NonLocalReturn which
     // bubbles past invokeBlock to the parent engine's runLoop.
-    const proto::ProtoString* homeKey =
-        proto::ProtoString::createSymbol(ctx, "__home_frame__");
+    const proto::ProtoString* homeKey = rt.bootstrap().sym.homeFrame;
     unsigned long homeFrameId = 0;
     const proto::ProtoObject* homeObj = block->getAttribute(ctx, homeKey);
     if (homeObj && homeObj != PROTO_NONE)
@@ -69,8 +72,7 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
     // PUSH_INSTVAR inside the block resolve to the enclosing method's
     // receiver. Absent for blocks not built by PUSH_BLOCK — fall back to
     // PROTO_NONE.
-    const proto::ProtoString* blkSelfKey =
-        proto::ProtoString::createSymbol(ctx, "__block_self__");
+    const proto::ProtoString* blkSelfKey = rt.bootstrap().sym.blockSelf;
     const proto::ProtoObject* blkSelf = block->getAttribute(ctx, blkSelfKey);
     if (!blkSelf || blkSelf == PROTO_NONE) blkSelf = PROTO_NONE;
 

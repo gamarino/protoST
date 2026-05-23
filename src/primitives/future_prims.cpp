@@ -131,8 +131,14 @@ void settleFuture(STRuntime& rt, proto::ProtoContext* ctx,
     if (!future) return;
     const proto::ProtoString* settlingKey =
         rt.bootstrap().sym.settling;
+    // F6 v5 hot-path fix (2026-05-23): these were createSymbol calls in every
+    // settleFuture (and every readState), forcing a SymbolTable shard-lock
+    // lookup + UTF-8 normalisation per call. Under multi-actor load that was
+    // the single biggest contention point (~9.5% of CPU in perf, the
+    // serialisation bottleneck the user asked us to find). All four hot keys
+    // are now read from the Bootstrap cache (perpetual interned symbols).
     const proto::ProtoString* stateKey =
-        proto::ProtoString::createSymbol(ctx, "__state__");
+        rt.bootstrap().sym.state;
     const proto::ProtoString* valueKey =
         rt.bootstrap().sym.value;
     const proto::ProtoString* errorKey =
@@ -142,7 +148,7 @@ void settleFuture(STRuntime& rt, proto::ProtoContext* ctx,
     const proto::ProtoString* catchCbsKey =
         rt.bootstrap().sym.catchCbs;
     const proto::ProtoString* waitersKey =
-        proto::ProtoString::createSymbol(ctx, "__waiters__");
+        rt.bootstrap().sym.waiters;
 
     // `payload` is held across every step below (each allocates) — pin it.
     TransientPin pinPayload(ctx, payload ? payload : PROTO_NONE);
@@ -203,10 +209,11 @@ void settleFuture(STRuntime& rt, proto::ProtoContext* ctx,
     }
 }
 
-// Read __state__ (0 pending / 1 resolved / 2 rejected).
-long long readState(proto::ProtoContext* ctx, const proto::ProtoObject* fut) {
-    const proto::ProtoString* stateKey =
-        proto::ProtoString::createSymbol(ctx, "__state__");
+// Read __state__ (0 pending / 1 resolved / 2 rejected). Takes `rt` so we can
+// read the cached __state__ symbol off Bootstrap instead of paying a
+// SymbolTable shard-lock + UTF-8 normalisation lookup per call.
+long long readState(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* fut) {
+    const proto::ProtoString* stateKey = rt.bootstrap().sym.state;
     auto* st = fut->getOwnAttributeDirect(ctx, stateKey);
     return (st && st != PROTO_NONE) ? st->asLong(ctx) : 0;
 }
@@ -240,7 +247,7 @@ const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* c
     // touching it from a worker thread (running an actor handler) would
     // clobber the main's outstanding wait and silently drop its wakeup.
     if (rt.currentActor() != nullptr) {
-        long long s = readState(ctx, r);
+        long long s = readState(rt, ctx, r);
         if (s == 0) {
             throw FutureYield(r);
         }
@@ -271,12 +278,12 @@ const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* c
     // issues a release. Spurious wakes from unrelated settles never
     // happen because the notify is conditional on pointer match.
     rt.markMainWaitingOn(r);
-    while (readState(ctx, r) == 0) {
+    while (readState(rt, ctx, r) == 0) {
         rt.acquireMainWait(ctx);
     }
     rt.markMainWaitingOn(nullptr);
 
-    long long s = readState(ctx, r);
+    long long s = readState(rt, ctx, r);
     if (s == 1) {
         auto* v = r->getOwnAttributeDirect(ctx, valueKey);
         return v ? v : PROTO_NONE;
@@ -326,7 +333,7 @@ const proto::ProtoObject* prim_Future_thenDo(STRuntime& rt, proto::ProtoContext*
 
     // Fast paths on an already-settled future (__state__ is published last by
     // settleFuture, so a non-zero read is authoritative).
-    long long s = readState(ctx, r);
+    long long s = readState(rt, ctx, r);
     if (s == 2) return r;  // rejected — thenDo: never fires
     if (s == 1) {
         auto* v = r->getOwnAttributeDirect(ctx, valueKey);
@@ -358,7 +365,7 @@ const proto::ProtoObject* prim_Future_catch(STRuntime& rt, proto::ProtoContext* 
         rt.bootstrap().sym.catchCbs;
     auto* block = a[0];
 
-    long long s = readState(ctx, r);
+    long long s = readState(rt, ctx, r);
     if (s == 1) return r;  // resolved — catch: never fires
     if (s == 2) {
         auto* e = r->getOwnAttributeDirect(ctx, errorKey);
@@ -398,14 +405,14 @@ const proto::ProtoObject* prim_Future_new(STRuntime& rt, proto::ProtoContext* ct
 //
 // Declared `extern` at the ExecutionEngine catch site; the linker connects
 // them.
-bool appendFutureWaiter(proto::ProtoContext* ctx,
+bool appendFutureWaiter(STRuntime& rt,
+                        proto::ProtoContext* ctx,
                         const proto::ProtoObject* fut,
                         const proto::ProtoObject* waiterActor) {
     if (!fut || !waiterActor) return false;
-    const proto::ProtoString* waitersKey =
-        proto::ProtoString::createSymbol(ctx, "__waiters__");
+    const proto::ProtoString* waitersKey = rt.bootstrap().sym.waiters;
     // Fast path: an already-settled future is never parked on.
-    if (readState(ctx, fut) != 0) {
+    if (readState(rt, ctx, fut) != 0) {
         SCHED_DIAG("appendFutureWaiter future=" << fut << " actor="
                    << waiterActor << " parked=0 (already settled)");
         return false;

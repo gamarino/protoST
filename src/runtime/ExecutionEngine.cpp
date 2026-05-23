@@ -1726,10 +1726,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             // We import the helper indirectly from future_prims.cpp; the
             // linker connects them.
             extern bool appendFutureWaiter(
+                STRuntime& rt,
                 proto::ProtoContext* ctx,
                 const proto::ProtoObject* fut,
                 const proto::ProtoObject* waiterActor);
-            bool parked = appendFutureWaiter(ctx, y.future(), actor);
+            bool parked = appendFutureWaiter(rt_, ctx, y.future(), actor);
             if (!parked) {
                 // The future settled before our append landed; the settle's
                 // waiter drain did not see this actor. Schedule it explicitly
