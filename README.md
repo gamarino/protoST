@@ -167,6 +167,107 @@ Where it does compete is **what happens when you put a thousand of those
 loops behind separate actors and run them concurrently** — see the actor
 benchmarks above.
 
+## How protoST compares
+
+protoST is **not** the fastest actor framework. BEAM (Erlang / Elixir)
+and Akka (JVM) have a decade-plus of JIT-compilation work on us; Pony
+and Caf are ground-up actor languages that hit raw throughputs an
+interpreted runtime cannot match. Honest placement:
+
+| category | representative systems | in-process throughput |
+|---|---|---:|
+| Actor languages, JIT-compiled, mature | BEAM, Akka, Orleans | 1-10 M msg/s |
+| Actor languages, ground-up | Pony, Caf | 10-100 M msg/s |
+| **protoST 0.2.0** (this runtime) | — | **72 K measured / 130-150 K projected** |
+| Python actor frameworks (GIL-bound) | Pykka, Thespian, in-process Ray | 5-30 K msg/s |
+| Network message brokers | RabbitMQ, Kafka, NATS | 50 K-1 M msg/s (with network/disk) |
+
+What protoST does that the others do not:
+
+### 1. Messages are pointers — even when they carry large state
+
+Most actor systems pay for safety the same way: copy the message at the
+send boundary. BEAM deep-copies between process heaps; Node.js worker
+threads structured-clone; even Akka recommends immutable case classes
+that the JVM still ends up tracing. The cost grows linearly with message
+size — a 10 K-node world model is megabytes of marshalling per send.
+
+protoST passes a pointer. Same address, on another core, no copy and no
+serialisation. It is safe because the *pointee* — protoCore's mutable
+object — is an atomic reference to an immutable snapshot: reading it is
+unconditionally race-free, writing it installs a NEW snapshot that
+doesn't disturb the old. **A message of N bytes costs the same as a
+message of 0 bytes.**
+
+Concrete comparison — sending a 10 K-node world graph between actors:
+
+| system  | send cost (approx) |
+|---|---:|
+| BEAM (Erlang) — deep copy across heaps | ~ 0.5-2 ms |
+| RabbitMQ — serialise + network + deserialise | ~ 1-10 ms |
+| Akka (JVM) — pointer pass, but UB unless caller-discipline | < 100 µs (with caveats) |
+| **protoST** — pointer to atomic snapshot | **~ 14 µs (the mt100a per-msg number)** |
+
+For workloads where the message IS the state (digital twins, agent-based
+simulation, data-flow pipelines), this **inverts the design space**.
+Sharing large structures stops being a problem you architect around.
+
+### 2. Trilingual in the same process, with one object model
+
+protoCore hosts three languages — Smalltalk (protoST), JavaScript
+(protoJS) and Python (protoPython) — and they share objects natively.
+A protoPython numpy array reaches a protoST actor as the same pointer,
+no marshalling. The conventional stack (MQTT + Python microservices +
+JavaScript dashboards + a database) becomes three modules in one
+address space.
+
+This is not a comparison — no other actor runtime has this property at
+all. It exists because protoCore was designed for it.
+
+### 3. No GIL, no data races, no locks — by data-model construction
+
+protoPython runs Python 3.14 without a GIL. protoST's actors run truly
+in parallel on a worker pool. And the absence of data races does NOT
+require programmer discipline — it falls out of the object model:
+every read sees an internally consistent snapshot, every write
+installs a new one, and the actor invariant (one method at a time per
+actor) is enforced by the scheduler, not by the user.
+
+### When does protoST lose?
+
+- **Millions of trivial-message actors at peak throughput.** If your
+  workload is `ping → pong` with empty bodies, BEAM and Pony will
+  outrun protoST by 10-100×. The actor message is dominated by the
+  dispatch path; a JIT helps there more than any tuning we can do
+  on an interpreter.
+- **Hard-real-time or strictly bounded latency.** protoST has GC
+  pauses (concurrent collector, no soft-/hard-RT mode); BEAM has
+  per-process GC and is widely used in soft-RT contexts.
+- **Distributed actors across multiple machines.** protoST is
+  single-process today. Distributing is a future track; for
+  inter-node messaging today you would still pair it with a
+  RabbitMQ / Kafka transport.
+
+### When does protoST win?
+
+- **Agent / twin simulations with large shared world state.** Pointer
+  messaging × snapshot safety = the entire copy-vs-race spectrum
+  collapses into a single cheap option.
+- **Mixed-language pipelines** (numpy / ML in Python, UI logic in
+  JavaScript, simulation engine in Smalltalk) where today you would
+  marshal at every language boundary. The triple removes the
+  marshalling line item entirely.
+- **Anything where the message IS the state**, and the state is
+  non-trivial. Sending a 100-element list, a 10 K-node graph, a
+  matrix slice — all O(1) in send cost.
+
+The pitch is not "the fastest actor framework" — it is "the actor
+framework where messages can be pointers to large shared state, safely,
+in three languages, in one process." If you have a digital twin or an
+agent-based simulation that today requires a microservice mesh to
+escape Python's GIL or JavaScript's structured-clone, that is the
+problem protoST is shaped to solve.
+
 ## Project status
 
 protoST is in active development and runs. Phases F1–F8 are complete — lexer,
