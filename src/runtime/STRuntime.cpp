@@ -852,6 +852,16 @@ void STRuntime::startProcessing() {
         impl_->processingPaused.store(false, std::memory_order_release);
     }
     impl_->pauseCV.notify_all();
+    // F6 v6 (2026-05-23 night): release one workerSem permit per worker
+    // to cover the case where a worker had already parked on
+    // workerSem.acquire() BEFORE stopProcessing was called (its queue
+    // was empty at the time). Schedules issued during the pause skip
+    // the release entirely (see enqueueReady) — without these makeup
+    // permits, such a worker would stay parked despite the queue now
+    // being full.
+    for (size_t i = 0; i < impl_->workers.size(); ++i) {
+        impl_->workerSem.release();
+    }
 }
 
 bool STRuntime::isProcessingPaused() const {
@@ -1110,7 +1120,17 @@ void STRuntime::enqueueReady(proto::ProtoContext* ctx,
     //    just increments the semaphore — the next worker to finish its
     //    current turn will acquire immediately and re-enter the drain
     //    loop. Event-driven: no sleep-poll, no fixed-latency floor.
-    impl_->workerSem.release();
+    //
+    // F6 v6 (2026-05-23 night): skip the release when the pool is paused.
+    // Pre-fix, a benchmark calling stopProcessing then enqueuing 16K
+    // messages would call release() 16K times — past the semaphore's
+    // 8192 LeastMaxValue, which is undefined behaviour and observed to
+    // hang the runtime. startProcessing releases a fresh batch of
+    // permits to wake any workers that parked on workerSem BEFORE the
+    // pause was set.
+    if (!impl_->processingPaused.load(std::memory_order_acquire)) {
+        impl_->workerSem.release();
+    }
 }
 
 const proto::ProtoObject* STRuntime::dequeueReady(proto::ProtoContext* ctx) {

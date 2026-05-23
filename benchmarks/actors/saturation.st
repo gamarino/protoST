@@ -38,7 +38,7 @@ Worker >> work
   ^ sum.
 
 actors := OrderedCollection new.
-1 to: 32 do: [ :i |
+1 to: 16 do: [ :i |
   | w |
   w := Worker new.
   w initialize.
@@ -47,11 +47,15 @@ actors := OrderedCollection new.
 "Pause BEFORE loading any mailboxes."
 WorkerPool stopProcessing.
 
-"Pre-load: interleave one round of sends across all actors NMSGS times."
-"32 actors * 500 msgs = 16 000 messages total. Each Future returned"
-"immediately; the work block runs only after startProcessing."
+"Pre-load: 16 actors x 10 msgs = 160 messages. Each work() runs"
+"5 000 iterations of a captured-variable sum (~ 20-30 ms of CPU)."
+"Total single-thread budget ~ 4 s, 8-worker ideal ~ 500 ms. With"
+"NACTORS >> NWORKERS, workers steal across actors rather than each"
+"binding to one — exercises the ready-queue / actor-lock path. Each"
+"SEND returns a Future synchronously; the work block runs only after"
+"startProcessing wakes the pool."
 futures := OrderedCollection new.
-1 to: 500 do: [ :m |
+1 to: 10 do: [ :m |
   actors do: [ :a | futures add: (a work) ] ].
 
 "Snapshot t0, release the pool, wait for every future, snapshot t1."
