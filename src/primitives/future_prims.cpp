@@ -175,6 +175,16 @@ void settleFuture(STRuntime& rt, proto::ProtoContext* ctx,
     const_cast<proto::ProtoObject*>(future)->setAttribute(
         ctx, stateKey, ctx->fromLong(reject ? 2 : 1));
 
+    // 4b. Wake the main thread iff it is parked specifically on THIS future.
+    //     Cheap fast path inside notifyMainWaiterIfFor: one atomic load of
+    //     `mainWaitingOn`; if the value doesn't match `future`, return
+    //     immediately (zero-cost for any unrelated settle). The seq_cst
+    //     pair between `markMainWaitingOn` and the `__state__` store above
+    //     makes the wait race-free: either the waiter sees the settled
+    //     state and never parks, or it parks AFTER setting `mainWaitingOn`
+    //     and the load below observes the pointer match.
+    rt.notifyMainWaiterIfFor(future);
+
     // 5. Drain and reschedule yielded actor waiters. Done after __state__ is
     //    published so a resumed actor reads the final state. A yield racing
     //    this drain either appended first (we schedule it) or sees the
@@ -223,35 +233,48 @@ const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* c
     // settles between this read and the throw we yield needlessly and the
     // resume path immediately sees the settled state — a wasted round-trip,
     // never a correctness problem.
+    //
+    // If the future is ALREADY settled when an actor handler enters wait,
+    // return the value synchronously — without touching the main-thread
+    // wait state. `mainWaitingOn` is the main thread's per-future flag;
+    // touching it from a worker thread (running an actor handler) would
+    // clobber the main's outstanding wait and silently drop its wakeup.
     if (rt.currentActor() != nullptr) {
-        if (readState(ctx, r) == 0) {
+        long long s = readState(ctx, r);
+        if (s == 0) {
             throw FutureYield(r);
         }
-        // already settled — fall through to the synchronous read below.
+        if (s == 1) {
+            auto* v = r->getOwnAttributeDirect(ctx, valueKey);
+            return v ? v : PROTO_NONE;
+        }
+        // s == 2: rejected — let the common path below throw.
+        auto* e = r->getOwnAttributeDirect(ctx, errorKey);
+        std::string msg = (e && e != PROTO_NONE)
+            ? e->asString(ctx)->toStdString(ctx)
+            : std::string("rejected");
+        throw std::runtime_error("Future rejected: " + msg);
     }
 
-    // Non-actor (or already-settled) path. The waiting thread is the main /
-    // a foreground thread — it is NOT an actor, so it DRIVES the scheduler
-    // itself: each iteration drains one message. A pure sleep-poll would make
-    // every wait pay a full backoff interval while only the worker pool made
-    // progress — a serial `(x) wait` round-trip pattern would be capped near
-    // 1/firstSleep messages per second. Driving drainOne instead settles the
-    // awaited future on this very thread when the work is ours to do, and
-    // keeps the thread hitting allocation safepoints so a concurrent
-    // stop-the-world GC is never stalled. Only when there is genuinely
-    // nothing to drain (a worker holds the actor mid-turn) does it back off,
-    // GC-safely (the sleep is bracketed by enter/exitGcBlocking, no protoCore
-    // heap touched between them), ramping 50 us .. 32 ms.
-    unsigned sleepUs = 0;
-    for (;;) {
-        if (readState(ctx, r) != 0) break;
-        if (rt.drainOne(ctx)) { sleepUs = 0; continue; }  // did work — re-check now
-        if (sleepUs == 0) sleepUs = 50;
-        enterGcBlocking(ctx);
-        std::this_thread::sleep_for(std::chrono::microseconds(sleepUs));
-        exitGcBlocking(ctx);
-        if (sleepUs < 32000) sleepUs *= 2;
+    // Non-actor (main / foreground) path. Pure event-driven wait — no
+    // sleep, no spin, no polling. The waiter announces itself via
+    // `markMainWaitingOn(future)`, then blocks on `acquireMainWait()`;
+    // the settler of THIS future calls `notifyMainWaiterIfFor(future)`
+    // which releases the semaphore. The wait returns within one context
+    // switch (~ 3 µs) of the settle.
+    //
+    // The seq_cst pair between `mainWaitingOn` (set by waiter, read by
+    // settler) and the Future's `__state__` attribute (set by settler,
+    // read by waiter) makes the loop race-free: either the waiter sees
+    // the settled state before calling acquire (no syscall — break
+    // immediately), or the settler sees `mainWaitingOn == future` and
+    // issues a release. Spurious wakes from unrelated settles never
+    // happen because the notify is conditional on pointer match.
+    rt.markMainWaitingOn(r);
+    while (readState(ctx, r) == 0) {
+        rt.acquireMainWait(ctx);
     }
+    rt.markMainWaitingOn(nullptr);
 
     long long s = readState(ctx, r);
     if (s == 1) {

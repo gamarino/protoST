@@ -79,6 +79,24 @@ public:
     // Returns true if notified within the timeout; false on plain timeout.
     bool waitForSchedulerProgress(unsigned millis);
 
+    // F6 v4 (2026-05-23): event-driven main-thread Future-wait primitives.
+    //
+    // Replaces the previous sleep-poll / spin in `prim_Future_wait`. The
+    // non-actor caller of Future>>wait calls (in order):
+    //   markMainWaitingOn(future);   // tell settlers which future we wait for
+    //   acquireMainWait(ctx);        // park until that future's settler releases
+    //   ... loop until state observed non-pending ...
+    //   markMainWaitingOn(nullptr);  // before returning
+    //
+    // The settler of every future calls `notifyMainWaiterIfFor(future)`
+    // after publishing the new state; the check is one atomic load, the
+    // release at most one futex syscall when the main is actually parked
+    // ON THIS future. Unrelated settles incur zero cost — they read the
+    // pointer, see it doesn't match, exit.
+    void markMainWaitingOn(const proto::ProtoObject* future);
+    void acquireMainWait(proto::ProtoContext* ctx);
+    void notifyMainWaiterIfFor(const proto::ProtoObject* future);
+
     // F6 v2 T7: how many worker threads were actually spawned by the
     // constructor. Reflects PROTOST_WORKERS / hardware_concurrency selection
     // and is used by tests to skip the wall-clock parallelism proof when

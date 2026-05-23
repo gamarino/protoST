@@ -184,6 +184,8 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     out.sym.anchored        = S("__anchored__");
     out.sym.homeFrame       = S("__home_frame__");
     out.sym.blockSelf       = S("__block_self__");
+    out.sym.live            = S("__live__");
+    out.sym.liveActors      = S("__live_actors__");
 }
 
 } // namespace protoST

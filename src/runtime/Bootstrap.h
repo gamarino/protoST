@@ -127,6 +127,13 @@ struct Bootstrap {
         const proto::ProtoString* anchored        = nullptr;  // __anchored__ (in the live registry?)
         const proto::ProtoString* homeFrame       = nullptr;  // __home_frame__ (block's home method id)
         const proto::ProtoString* blockSelf       = nullptr;  // __block_self__ (block's captured self)
+        // Ready-queue rework (2026-05-23): GC-anchor pair for the intrusive
+        // lock-free ReadyStack. `live` is the per-actor flag CAS'd from
+        // FALSE/absent to TRUE on first enqueue; the CAS winner appends the
+        // actor to the runtime-wide `liveActors` ProtoList rooted under
+        // liveRegistry. See docs/superpowers/specs/2026-05-23-ready-queue-mpmc-spec.md.
+        const proto::ProtoString* live            = nullptr;  // __live__       (per-actor anchor flag)
+        const proto::ProtoString* liveActors      = nullptr;  // __live_actors__ (anchor list on liveRegistry)
     } sym;
 };
 

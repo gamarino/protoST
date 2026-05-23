@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <semaphore>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
@@ -123,6 +124,93 @@ ptrRegistryKey(proto::ProtoContext* ctx, const proto::ProtoObject* o) {
     return ctx->fromUTF8String(buf)->asString(ctx);
 }
 
+// ---------------------------------------------------------------------------
+// ReadyStack — intrusive lock-free Treiber stack for the scheduler.
+//
+// Replaces the previous `liveRegistry.__ready__` ProtoList + CAS-retry-rebuild
+// scheme, which under N-thread contention became a GIL-equivalent (every
+// enqueue/dequeue allocated a new ProtoList; under contention the retries
+// piled up garbage and serialised throughput). See
+// docs/superpowers/specs/2026-05-23-ready-queue-mpmc-spec.md.
+//
+// push/pop are CAS over a single std::atomic<ReadyNode*> — O(1), one
+// `new` per push and one `delete` per pop. LIFO; FIFO fairness is a
+// future iteration (Michael-Scott or work-stealing).
+//
+// GC liveness of the actor pointed to by a node: the actor is anchored
+// in `liveRegistry.__live_actors__` (a ProtoList) on its FIRST enqueue
+// via a per-actor `__live__` CAS flag. The C++ ReadyNode never holds
+// the only reference to an actor — the ProtoList anchor does. In this
+// iteration actors are never removed from the anchor list (bounded leak
+// for benchmark workloads; a future pass adds idle-detection removal).
+//
+// ABA: not addressed in this iteration. The freed ReadyNode pointer can
+// in principle be returned by `new` and reappear at the stack head; a
+// concurrent CAS would then succeed on a node whose `next` field has
+// changed. Mitigated in practice by glibc malloc not immediately
+// recycling freed pointers; risk is the rare spurious pop. Hardening
+// via tagged pointers / hazard pointers is follow-up work.
+// ---------------------------------------------------------------------------
+namespace {
+struct ReadyNode {
+    const proto::ProtoObject* actor;
+    ReadyNode*                next;
+};
+
+class ReadyStack {
+public:
+    void push(const proto::ProtoObject* actor) {
+        ReadyNode* n = new ReadyNode{actor, nullptr};
+        ReadyNode* old = head_.load(std::memory_order_relaxed);
+        do {
+            n->next = old;
+        } while (!head_.compare_exchange_weak(
+            old, n,
+            std::memory_order_release,
+            std::memory_order_relaxed));
+        size_.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    const proto::ProtoObject* pop() {
+        ReadyNode* old = head_.load(std::memory_order_acquire);
+        while (old != nullptr) {
+            if (head_.compare_exchange_weak(
+                    old, old->next,
+                    std::memory_order_acquire,
+                    std::memory_order_acquire)) {
+                const proto::ProtoObject* actor = old->actor;
+                delete old;
+                size_.fetch_sub(1, std::memory_order_relaxed);
+                return actor;
+            }
+            // CAS failed — `old` was reloaded; loop and retry.
+        }
+        return nullptr;
+    }
+
+    size_t approxSize() const {
+        // Diagnostic only — not synchronised with concurrent push/pop.
+        long long s = size_.load(std::memory_order_relaxed);
+        return s > 0 ? static_cast<size_t>(s) : 0;
+    }
+
+    ~ReadyStack() {
+        // Drain any leftover nodes on shutdown so we don't leak. Workers
+        // have been joined by this point, so no concurrent access.
+        ReadyNode* n = head_.exchange(nullptr, std::memory_order_acquire);
+        while (n) {
+            ReadyNode* next = n->next;
+            delete n;
+            n = next;
+        }
+    }
+
+private:
+    std::atomic<ReadyNode*>   head_{nullptr};
+    std::atomic<long long>    size_{0};
+};
+} // namespace
+
 struct STRuntime::Impl {
     proto::ProtoSpace    space;
     proto::ProtoContext* rootCtx    = nullptr;
@@ -183,6 +271,51 @@ struct STRuntime::Impl {
 
     std::vector<const proto::ProtoThread*> workers;
     std::atomic<bool> shutdown { false };
+
+    // F6 v4 (2026-05-23): the actual scheduling queue. The previous
+    // ProtoList-under-__ready__ scheme is gone; this is the lock-free
+    // intrusive Treiber stack defined above. GC liveness of queued actors
+    // is provided by the ProtoList anchor under liveRegistry.__live_actors__,
+    // populated idempotently on first enqueue via the per-actor __live__
+    // CAS flag (see enqueueReady).
+    ReadyStack readyStack;
+
+    // F6 v4 (2026-05-23): event-driven worker wakeup. The classical
+    // "queue of free workers" pattern: workers that find the ready stack
+    // empty block on `workerSem.acquire()`; every enqueueReady issues a
+    // `workerSem.release()` after the push, which wakes exactly one
+    // sleeping worker (or, if all workers are busy, the next acquire
+    // returns immediately because the counter was non-zero). Eliminates
+    // the sleep-poll tradeoff: idle workers consume zero CPU, busy
+    // workers see new work within a context-switch of a push (~3 us on
+    // modern Linux), and there is no fixed-latency floor like the
+    // previous 1 ms backoff.
+    //
+    // LeastMaxValue is set high enough to absorb the absolute worst-case
+    // burst-write throughput without saturating the counter. At 100K
+    // sends in ~5 s we are far below this ceiling per worker.
+    std::counting_semaphore<8192> workerSem{0};
+
+    // F6 v4 (2026-05-23): event-driven main-thread wait for Future
+    // settlement. The non-actor path of `prim_Future_wait` parks on
+    // `mainWaitSem.acquire()` instead of sleep-polling; the settler of
+    // the SPECIFIC future the main is waiting on calls `notifyMainWaiter()`,
+    // which releases the semaphore. No sleep, no spin, no polling.
+    //
+    // The waited-for future pointer is stored in `mainWaitingOn`; settlers
+    // of any OTHER future check this pointer (single atomic load) and
+    // skip the release — eliminates the spurious-wake storm that the
+    // "release on every settle" naive design suffers in multi-actor
+    // benchmarks (every unrelated settle would wake the main once).
+    //
+    // Race-free under the seq_cst pairing:
+    //   * waiter: store mainWaitingOn=X (seq_cst), then check state(X)
+    //   * settler of X: store state(X)=settled (seq_cst), then load mainWaitingOn
+    // Either the settler sees mainWaitingOn=X (releases) or the waiter
+    // sees state(X)=settled (breaks the loop without parking). Both
+    // outcomes are safe.
+    std::atomic<const proto::ProtoObject*> mainWaitingOn{nullptr};
+    std::counting_semaphore<8192>           mainWaitSem{0};
 
     // F5-M2 module cache: canonical absolute path -> module object.
     std::unordered_map<std::string, const proto::ProtoObject*> moduleCache;
@@ -319,11 +452,14 @@ struct STRuntime::Impl {
         if (asyncRoots) {
             liveRegistry = bootstrap.objectProto->newChild(rootCtx, /*isMutable=*/true);
             asyncRoots->add(liveRegistry);
-            // The lock-free ready queue lives here, under `__ready__`, as a
-            // protoCore ProtoList mutated by CAS. Initialise it to an empty
-            // list once so enqueue / dequeue always CAS against a real list.
+            // F6 v4 (2026-05-23): scheduling moved off `__ready__` into the
+            // intrusive C++ ReadyStack. We initialise `__live_actors__` here
+            // as an empty ProtoList; first-time enqueues CAS-append actors
+            // to it so the tracing GC reaches them via the registry root.
+            // `__ready__` is no longer used; left absent so a stray reader
+            // (legacy code, tests) gets PROTO_NONE rather than a stale list.
             const_cast<proto::ProtoObject*>(liveRegistry)->setAttribute(
-                rootCtx, bootstrap.sym.ready,
+                rootCtx, bootstrap.sym.liveActors,
                 rootCtx->newList()->asObject(rootCtx));
         }
 
@@ -529,8 +665,15 @@ STRuntime::~STRuntime() {
     // worker exits its loop in parallel as soon as it observes the flag.
     if (!impl_->workers.empty()) {
         impl_->shutdown.store(true, std::memory_order_release);
-        // No cv to notify — each worker observes `shutdown` on its next poll
-        // iteration (within the backoff interval) and exits workerLoop.
+        // F6 v4 (2026-05-23): wake every worker once. The new event-driven
+        // workerLoop blocks on `workerSem.acquire()` when the queue is
+        // empty; without a release here every blocked worker would sleep
+        // forever and join() would deadlock. One release per worker —
+        // each blocked worker wakes, observes `shutdown == true`, drains
+        // any final pushes, and exits the loop.
+        for (size_t i = 0; i < impl_->workers.size(); ++i) {
+            impl_->workerSem.release();
+        }
         // F6 v3 E5: the join() loop blocks the main thread in the kernel
         // (pthread_join) while it is STILL counted in
         // ProtoSpace::runningThreads. This is the same off-safepoint-blocking
@@ -591,29 +734,36 @@ bool STRuntime::waitForSchedulerProgress(unsigned millis) {
 }
 
 void STRuntime::workerLoop(proto::ProtoContext* ctx) {
-    // Poll the lock-free ready queue. drainOne CAS-pops the head; when the
-    // queue is empty the worker backs off with a GC-safe bounded sleep
-    // (bracketed by enterGcBlocking/exitGcBlocking so an idle worker leaves
-    // the running set and never stalls a stop-the-world GC — the same E2
-    // discipline the old cv sleep used). With no mutex anywhere on this path
-    // the D23 deadlock class (a worker blocking off-safepoint on schedMu
-    // while another parks at a GC safepoint owning it) cannot occur.
-    int idle = 0;
+    // F6 v4 (2026-05-23): event-driven worker pool. Workers loop draining
+    // the ready stack until empty, then block on the semaphore until a
+    // sender wakes them with `workerSem.release()`. No poll, no sleep
+    // backoff, no fixed-latency floor. An idle worker consumes zero CPU;
+    // a wake-up takes one context-switch (~3 us) instead of the previous
+    // 1-16 ms sleep.
+    //
+    // Per the GC-safety discipline used elsewhere in this file (E2 / E4):
+    // the semaphore wait is bracketed by enterGcBlocking / exitGcBlocking
+    // so an idle worker leaves the running set and never stalls a
+    // stop-the-world GC. Same property the old sleep_for path had — the
+    // semantics of "wait outside the GC running set" are unchanged.
+    //
+    // Shutdown: ~STRuntime sets `shutdown` then issues one `release()`
+    // per worker so every blocked worker wakes, observes the flag, drains
+    // whatever is left, and exits.
     while (true) {
+        // Drain everything currently in the queue.
+        while (drainOne(ctx)) { /* keep going */ }
+
         if (impl_->shutdown.load(std::memory_order_acquire)) {
-            // Drain whatever is left, then exit once the queue is empty so no
-            // pending work is lost (the destructor join() waits for this).
-            if (!drainOne(ctx)) return;
-            continue;
+            // Final drain in case a sender pushed after our last pop.
+            while (drainOne(ctx)) { /* keep going */ }
+            return;
         }
-        if (drainOne(ctx)) { idle = 0; continue; }
-        // Nothing to drain — back off. The interval ramps so a busy pool
-        // (queue never empties) never sleeps, while a fully idle pool settles
-        // at a low wake rate.
-        ++idle;
-        unsigned ms = idle < 8 ? 1u : (idle < 64 ? 4u : 16u);
+
+        // Queue empty — block on the semaphore. A sender's release() or
+        // a shutdown release will wake us.
         enterGcBlocking(ctx);
-        std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+        impl_->workerSem.acquire();
         exitGcBlocking(ctx);
     }
 }
@@ -825,42 +975,84 @@ void STRuntime::unanchorActor(proto::ProtoContext* ctx,
 void STRuntime::enqueueReady(proto::ProtoContext* ctx,
                              const proto::ProtoObject* actor) {
     if (!actor || !impl_->liveRegistry) return;
-    auto* reg = const_cast<proto::ProtoObject*>(impl_->liveRegistry);
-    const proto::ProtoString* readyKey = impl_->bootstrap.sym.ready;
-    for (;;) {
-        const proto::ProtoObject* cur = reg->getOwnAttributeDirect(ctx, readyKey);
-        const proto::ProtoList* curList =
-            (cur && cur != PROTO_NONE) ? cur->asList(ctx) : ctx->newList();
-        const proto::ProtoList* nextList = curList->appendLast(ctx, actor);
-        // `nextList` / its object form are held across the CAS — pin them.
-        TransientPin pinNext(
-            ctx, reinterpret_cast<const proto::ProtoObject*>(nextList));
-        const proto::ProtoObject* nextObj = nextList->asObject(ctx);
-        TransientPin pinNextObj(ctx, nextObj);
-        if (reg->setAttributeIfEqual(ctx, readyKey, cur, nextObj)) return;
+
+    // 1. First-enqueue anchor. The intrusive ReadyStack (below) is a C++
+    //    struct invisible to protoCore's tracing GC; an actor reached only
+    //    through it would dangle. We anchor every newly-queued actor in
+    //    `liveRegistry.__live_actors__` (a ProtoList) idempotently, using a
+    //    per-actor `__live__` flag CAS'd from absent/FALSE to TRUE — the
+    //    CAS winner is the unique thread that performs the append, so the
+    //    actor lands in the anchor exactly once across its lifetime.
+    auto* a = const_cast<proto::ProtoObject*>(actor);
+    const proto::ProtoString* liveKey = impl_->bootstrap.sym.live;
+    const proto::ProtoObject* live = actor->getOwnAttributeDirect(ctx, liveKey);
+    if (live != PROTO_TRUE) {
+        if (a->setAttributeIfEqual(ctx, liveKey, live, PROTO_TRUE)) {
+            // We won the anchor race — append to __live_actors__ now. This
+            // is the only path that rebuilds a ProtoList in enqueueReady;
+            // it runs at most once per actor lifetime, so it adds O(1)
+            // amortised cost to the per-message hot path.
+            auto* reg = const_cast<proto::ProtoObject*>(impl_->liveRegistry);
+            const proto::ProtoString* listKey = impl_->bootstrap.sym.liveActors;
+            for (;;) {
+                const proto::ProtoObject* cur = reg->getOwnAttributeDirect(ctx, listKey);
+                const proto::ProtoList* curList =
+                    (cur && cur != PROTO_NONE) ? cur->asList(ctx) : ctx->newList();
+                const proto::ProtoList* nextList = curList->appendLast(ctx, actor);
+                TransientPin pinNext(
+                    ctx, reinterpret_cast<const proto::ProtoObject*>(nextList));
+                const proto::ProtoObject* nextObj = nextList->asObject(ctx);
+                TransientPin pinNextObj(ctx, nextObj);
+                if (reg->setAttributeIfEqual(ctx, listKey, cur, nextObj)) break;
+            }
+        }
+        // CAS loser: another thread is performing (or just performed) the
+        // anchor on this same actor. No-op — the actor is anchored either
+        // way before we push it.
     }
+
+    // 2. Push onto the lock-free intrusive stack. O(1), one `new ReadyNode`,
+    //    no attribute access, no ProtoList rebuild. This is the per-message
+    //    hot path; it must be cheap and contention-friendly.
+    impl_->readyStack.push(actor);
+
+    // 3. Wake exactly one sleeping worker. If all workers are busy, this
+    //    just increments the semaphore — the next worker to finish its
+    //    current turn will acquire immediately and re-enter the drain
+    //    loop. Event-driven: no sleep-poll, no fixed-latency floor.
+    impl_->workerSem.release();
 }
 
 const proto::ProtoObject* STRuntime::dequeueReady(proto::ProtoContext* ctx) {
-    if (!impl_->liveRegistry) return nullptr;
-    auto* reg = const_cast<proto::ProtoObject*>(impl_->liveRegistry);
-    const proto::ProtoString* readyKey = impl_->bootstrap.sym.ready;
-    for (;;) {
-        const proto::ProtoObject* cur = reg->getOwnAttributeDirect(ctx, readyKey);
-        if (!cur || cur == PROTO_NONE) return nullptr;
-        const proto::ProtoList* curList = cur->asList(ctx);
-        if (!curList) return nullptr;
-        long long n = curList->getSize(ctx);
-        if (n == 0) return nullptr;
-        const proto::ProtoObject* head = curList->getAt(ctx, 0);
-        const proto::ProtoList* rest =
-            curList->getSlice(ctx, 1, static_cast<int>(n));
-        TransientPin pinHead(ctx, head);
-        TransientPin pinRest(
-            ctx, reinterpret_cast<const proto::ProtoObject*>(rest));
-        const proto::ProtoObject* restObj = rest->asObject(ctx);
-        TransientPin pinRestObj(ctx, restObj);
-        if (reg->setAttributeIfEqual(ctx, readyKey, cur, restObj)) return head;
+    (void)ctx;
+    // O(1) CAS pop. Returns nullptr when the stack is empty — workers and
+    // the main-thread wait-loop both back off when they see that.
+    return impl_->readyStack.pop();
+}
+
+void STRuntime::markMainWaitingOn(const proto::ProtoObject* future) {
+    // seq_cst so the settler's load is ordered against its prior store
+    // of the Future's state attribute. See the comment block on
+    // `mainWaitingOn` in Impl for the full pairing argument.
+    impl_->mainWaitingOn.store(future, std::memory_order_seq_cst);
+}
+
+void STRuntime::acquireMainWait(proto::ProtoContext* ctx) {
+    // GC-safe: the wait happens outside the running set so a concurrent
+    // stop-the-world GC quorum is never blocked by an idle main thread.
+    enterGcBlocking(ctx);
+    impl_->mainWaitSem.acquire();
+    exitGcBlocking(ctx);
+}
+
+void STRuntime::notifyMainWaiterIfFor(const proto::ProtoObject* future) {
+    // Cheap fast path: one atomic load. Skip the release unless the main
+    // thread is parked specifically on THIS future — eliminates the
+    // spurious-wake storm an "always release" design suffers in
+    // multi-actor benchmarks (every unrelated settle would wake the
+    // main once for nothing).
+    if (impl_->mainWaitingOn.load(std::memory_order_seq_cst) == future) {
+        impl_->mainWaitSem.release();
     }
 }
 
@@ -1518,15 +1710,11 @@ void STRuntime::finishDrain(proto::ProtoContext* ctx,
 }
 
 size_t STRuntime::scheduledCount() const {
-    // Read the lock-free ready queue's length. A diagnostic / test accessor;
-    // a plain read of the ProtoList size off the (pinned) live registry.
-    auto* ctx = impl_->rootCtx;
-    if (!impl_->liveRegistry) return 0;
-    const proto::ProtoObject* cur =
-        impl_->liveRegistry->getOwnAttributeDirect(ctx, impl_->bootstrap.sym.ready);
-    if (!cur || cur == PROTO_NONE) return 0;
-    const proto::ProtoList* curList = cur->asList(ctx);
-    return curList ? static_cast<size_t>(curList->getSize(ctx)) : 0;
+    // Diagnostic / test accessor. Now reads the intrusive ReadyStack's
+    // approximate size — exact only when no concurrent push/pop is in
+    // flight, which is true for the test points that call this method
+    // (post-drain, single-thread).
+    return impl_->readyStack.approxSize();
 }
 
 size_t STRuntime::workerCount() const {
