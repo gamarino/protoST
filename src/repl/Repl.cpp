@@ -380,7 +380,7 @@ int runRepl() {
     if (interactive && !histPath.empty())
         ::read_history(histPath.c_str());
 
-    std::puts("protoST 0.1.0-pre \xe2\x80\x94 interactive REPL");
+    std::puts("protoST 0.2.0 \xe2\x80\x94 interactive REPL");
     std::puts(":help for commands, :quit or Ctrl-D to exit");
     std::fflush(stdout);
 

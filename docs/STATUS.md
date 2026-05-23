@@ -14,15 +14,18 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Baseline:** 746/746 tests passing after the D22 and D23 fixes — 742
-  carried over, plus 4 new regression cases (two conformance `.st` for D22,
-  one conformance `.st` + one `cli_actor_stress` shell test for D23). Earlier:
-  702/702 at the T5-a commit; 699/699 at T3-c; 622/622 at `MNT-c`.
-- **Last verified:** 2026-05-22 (**0.1.0 initial release** — de-locking landed
-  [lock-free actor mailbox + Future], the `Atom` optimistic-concurrency cell
-  added, and the symbol half of D2 fixed [symbols resolved fresh per call].
-  Whole `ctest` suite green, 751/751, multiple consecutive runs). Earlier:
-  2026-05-21 (D23 closed — `workerLoop` acquires `schedMu` GC-safely).
+- **Baseline:** 751/751 tests passing across all 0.2.0 changes. Earlier:
+  746/746 at the D22/D23 close; 742 carried over from 0.1.0; 702/702 at
+  the T5-a commit; 699/699 at T3-c; 622/622 at `MNT-c`.
+- **Last verified:** 2026-05-23 (**0.2.0 performance pass** — the actor
+  dispatch path optimisations and three concurrent-runtime bug fixes;
+  mt100a w=2 moves from ~ 30 K to **71.9 K msg/s**, saturation_big w=6
+  scales near-ideal 3.88× over w=1. See
+  [CHANGELOG.md](../CHANGELOG.md#020--performance-pass-2026-05-23) and
+  [`benchmarks/reports/2026-05-23-performance.md`](../benchmarks/reports/2026-05-23-performance.md)
+  for the full report). Earlier: 2026-05-22 (0.1.0 initial release —
+  de-locking landed, lock-free actor mailbox + Future, the `Atom`
+  optimistic-concurrency cell added, symbol half of D2 fixed).
 - **Open bugs:** none. Hard edges that are not language-design choices —
   one-runtime-per-process, very large ropes, no `%` formatting — are recorded
   honestly in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md).
