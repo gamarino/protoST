@@ -54,6 +54,7 @@ namespace protoST { void installObjectPrimitives(STRuntime& rt); }
 namespace protoST { void installFuturePrimitives(STRuntime& rt); }
 namespace protoST { void installAtomPrimitives(STRuntime& rt); }
 namespace protoST { void installImportGlobal(STRuntime& rt); }
+namespace protoST { void installWorkerPoolGlobal(STRuntime& rt); }
 namespace protoST { void installExceptionPrimitives(STRuntime& rt); }
 namespace protoST { void installCollectionPrimitives(STRuntime& rt); }
 
@@ -315,6 +316,17 @@ struct STRuntime::Impl {
     // burst-write throughput without saturating the counter. At 100K
     // sends in ~5 s we are far below this ceiling per worker.
     std::counting_semaphore<8192> workerSem{0};
+
+    // F6 v6 (2026-05-23 night): pool-pause gate. Set true by
+    // `STRuntime::stopProcessing`; checked at the top of every worker
+    // iteration BEFORE drainOne. When true the worker blocks on
+    // pauseCV until startProcessing flips it back and notify_all
+    // releases everyone. The workerSem wake path is untouched —
+    // enqueues during a pause accumulate normally; the gate just
+    // delays the consumer.
+    std::atomic<bool> processingPaused{false};
+    std::mutex pauseMutex;
+    std::condition_variable pauseCV;
 
     // F6 v4 (2026-05-23): event-driven main-thread wait for Future
     // settlement. The non-actor path of `prim_Future_wait` parks on
@@ -612,6 +624,7 @@ STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
     installExceptionPrimitives(*this);
     installCollectionPrimitives(*this);
     installImportGlobal(*this);
+    installWorkerPoolGlobal(*this);
 
     // F5 v2: register STModuleProvider once globally with protoCore's
     // ProviderRegistry; subsequent STRuntime instances reuse the same provider.
@@ -778,6 +791,33 @@ void STRuntime::workerLoop(proto::ProtoContext* ctx) {
     // per worker so every blocked worker wakes, observes the flag, drains
     // whatever is left, and exits.
     while (true) {
+        // F6 v6 (2026-05-23 night): pool-pause gate. When
+        // STRuntime::stopProcessing has flipped `processingPaused`, no
+        // worker should start a new drain — that is what makes the
+        // "load everything then measure pure drain" benchmark pattern
+        // possible. We park on pauseCV (NOT workerSem) so the
+        // semaphore wake path stays untouched: senders during a pause
+        // accumulate permits as usual, and startProcessing's
+        // notify_all releases everyone in one shot.
+        //
+        // The check is one relaxed-ish atomic load on the common (no
+        // pause) path, then the slow path on a hit. Bracketed by
+        // enter/exitGcBlocking so a paused worker counts as parked for
+        // any concurrent stop-the-world GC.
+        if (impl_->processingPaused.load(std::memory_order_acquire) &&
+            !impl_->shutdown.load(std::memory_order_acquire)) {
+            enterGcBlocking(ctx);
+            {
+                std::unique_lock<std::mutex> lk(impl_->pauseMutex);
+                impl_->pauseCV.wait(lk, [&]{
+                    return !impl_->processingPaused.load(
+                               std::memory_order_acquire)
+                        || impl_->shutdown.load(std::memory_order_acquire);
+                });
+            }
+            exitGcBlocking(ctx);
+        }
+
         // Drain everything currently in the queue.
         while (drainOne(ctx)) { /* keep going */ }
 
@@ -793,6 +833,29 @@ void STRuntime::workerLoop(proto::ProtoContext* ctx) {
         impl_->workerSem.acquire();
         exitGcBlocking(ctx);
     }
+}
+
+// F6 v6 (2026-05-23 night): pool-pause public API. See the header for
+// the contract and the workerLoop gate above for the consumer side.
+//
+// stopProcessing only sets the flag — workers in flight finish their
+// current drainOne. For the intended benchmark pattern that is fine:
+// the caller pauses BEFORE any work is loaded, so there is nothing to
+// drain at the moment of the flip.
+void STRuntime::stopProcessing() {
+    impl_->processingPaused.store(true, std::memory_order_release);
+}
+
+void STRuntime::startProcessing() {
+    {
+        std::unique_lock<std::mutex> lk(impl_->pauseMutex);
+        impl_->processingPaused.store(false, std::memory_order_release);
+    }
+    impl_->pauseCV.notify_all();
+}
+
+bool STRuntime::isProcessingPaused() const {
+    return impl_->processingPaused.load(std::memory_order_acquire);
 }
 
 proto::ProtoSpace*   STRuntime::space()         const { return &impl_->space; }

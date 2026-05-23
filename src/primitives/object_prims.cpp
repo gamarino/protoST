@@ -870,6 +870,61 @@ void installObjectPrimitives(STRuntime& rt) {
                   reg.registerPrim(prim_Object_ne));
 }
 
+// F6 v6 (2026-05-23 night): WorkerPool singleton — exposes the actor
+// scheduler's pool-pause API to Smalltalk. Pattern matches Import:
+// a mutable child of objectProto, primitives bound on it, registered
+// in globals so PUSH_GLOBAL resolves `WorkerPool` directly.
+//
+// Used by `benchmarks/actors/saturation.st` to isolate pool drain
+// capacity from main-thread producer rate: stopProcessing before
+// loading mailboxes, startProcessing after, time the drain in
+// between. The primitives are zero-arg, return the receiver.
+namespace {
+const proto::ProtoObject* prim_WorkerPool_stop(STRuntime& rt,
+                                                proto::ProtoContext* /*ctx*/,
+                                                const proto::ProtoObject* r,
+                                                const proto::ProtoObject* const* /*a*/,
+                                                int /*argc*/) {
+    rt.stopProcessing();
+    return r;
+}
+const proto::ProtoObject* prim_WorkerPool_start(STRuntime& rt,
+                                                 proto::ProtoContext* /*ctx*/,
+                                                 const proto::ProtoObject* r,
+                                                 const proto::ProtoObject* const* /*a*/,
+                                                 int /*argc*/) {
+    rt.startProcessing();
+    return r;
+}
+const proto::ProtoObject* prim_WorkerPool_paused(STRuntime& rt,
+                                                  proto::ProtoContext* /*ctx*/,
+                                                  const proto::ProtoObject* /*r*/,
+                                                  const proto::ProtoObject* const* /*a*/,
+                                                  int /*argc*/) {
+    return rt.isProcessingPaused() ? PROTO_TRUE : PROTO_FALSE;
+}
+} // namespace
+
+void installWorkerPoolGlobal(STRuntime& rt) {
+    auto& reg = rt.registry();
+    auto& b   = rt.bootstrap();
+    auto* ctx = rt.rootCtx();
+
+    auto* pool = const_cast<proto::ProtoObject*>(b.objectProto)
+        ->newChild(ctx, /*isMutable=*/true);
+
+    bindPrimitive(rt, pool, "stopProcessing",
+                  reg.registerPrim(prim_WorkerPool_stop));
+    bindPrimitive(rt, pool, "startProcessing",
+                  reg.registerPrim(prim_WorkerPool_start));
+    bindPrimitive(rt, pool, "isPaused",
+                  reg.registerPrim(prim_WorkerPool_paused));
+
+    auto* key = proto::ProtoString::createSymbol(ctx, "WorkerPool");
+    auto* g = rt.globals();
+    g->setAttribute(ctx, key, pool);
+}
+
 // F5-M3: Allocate the `Import` singleton (mutable child of objectProto), bind
 // `from:` on it, and register it in globals so user code can write
 // `m := Import from: 'foo'.`

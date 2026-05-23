@@ -127,6 +127,25 @@ public:
     // running on a single-core CI.
     size_t workerCount() const;
 
+    // F6 v6 (2026-05-23 night): worker-pool gate. Lets a caller pause the
+    // entire pool — workers in flight finish their current drainOne, but
+    // no NEW drains start while paused. SEND fast-paths keep enqueuing
+    // tasks normally and the workerSem still wakes parked workers; the
+    // gate gets checked at the TOP of every worker iteration, so a woken
+    // worker re-parks on a condition variable until startProcessing
+    // flips the flag.
+    //
+    // Designed for the "load everything then measure pure drain" pattern:
+    // a benchmark calls stopProcessing(), enqueues N actors-worth of
+    // pre-built mailbox content from the main thread, then calls
+    // startProcessing() and times the drain to completion. Without the
+    // gate, workers were draining concurrently with the main producer
+    // and the measurement mixed producer throughput with consumer
+    // throughput.
+    void stopProcessing();
+    void startProcessing();
+    bool isProcessingPaused() const;
+
     // F6-A4 helpers
     // Allocates a new pending Future (mutable child of futureProto) with the
     // canonical attribute layout (__state__=0, __value__=nil, __error__=nil).
