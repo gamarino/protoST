@@ -1234,36 +1234,51 @@ void STRuntime::schedule(proto::ProtoContext* ctx, const proto::ProtoObject* act
     }
 }
 
+// F6 v5 (2026-05-23): popMailboxHead — lock-free FIFO pop of an actor's
+// __mailbox__ via ProtoList CAS-retry. Returns nullptr if the mailbox is
+// empty or absent. Used by the per-turn drain loop in drainOne.
+static const proto::ProtoObject* popMailboxHead(
+        proto::ProtoContext* ctx,
+        const proto::ProtoObject* actor,
+        const proto::ProtoString* mailboxKey) {
+    for (;;) {
+        const proto::ProtoObject* mbObj =
+            actor->getOwnAttributeDirect(ctx, mailboxKey);
+        if (!mbObj || mbObj == PROTO_NONE) return nullptr;
+        auto* mailbox = mbObj->asList(ctx);
+        if (!mailbox || mailbox->getSize(ctx) == 0) return nullptr;
+        const proto::ProtoObject* head = mailbox->getAt(ctx, 0);
+        auto* remaining = mailbox->getSlice(
+            ctx, 1, static_cast<int>(mailbox->getSize(ctx)));
+        TransientPin pinRemaining(
+            ctx, reinterpret_cast<const proto::ProtoObject*>(remaining));
+        const proto::ProtoObject* newMbObj = remaining->asObject(ctx);
+        TransientPin pinNewMbObj(ctx, newMbObj);
+        if (const_cast<proto::ProtoObject*>(actor)
+                ->setAttributeIfEqual(ctx, mailboxKey, mbObj, newMbObj))
+            return head;
+        // CAS lost — a concurrent SEND raced; re-read and retry.
+    }
+}
+
 bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     // CAS-pop the head of the lock-free ready queue. If two drainers race,
     // exactly one wins the head; the loser re-reads and gets the next actor
-    // or an empty queue. The popped actor's `__sched__` flag is 1 or 2 — it
-    // stays "owned by the scheduler" for the whole turn (turn-serialisation:
-    // a SEND arriving mid-turn finds the flag non-zero and marks 1->2 rather
-    // than re-enqueueing, so no second drainer can dispatch the same actor in
-    // parallel). finishDrain (run by DrainGuard on every exit path) consumes
-    // the flag — re-queueing on a 2, or on leftover mailbox work — once the
-    // turn ends.
+    // or an empty queue.
     const proto::ProtoObject* actor = dequeueReady(ctx);
     if (!actor) return false;
     SCHED_DIAG("drainOne POP actor=" << actor);
 
     // GC-root the popped actor for the whole turn. dequeueReady removed it
-    // from the `__ready__` ProtoList, so it is no longer reachable through
-    // the queue, and a raw C++ local is not traced. TransientPin hangs it off
-    // the context's pin set — cheap (no string built, no setAttribute),
-    // unlike the per-message registryAdd this replaces. Declared before the
-    // DrainGuard, it is destroyed AFTER it (reverse order) so the pin also
-    // covers finishDrain.
+    // from the ready queue, so it is no longer reachable through the queue,
+    // and a raw C++ local is not traced. TransientPin hangs it off the
+    // context's pin set.
     TransientPin pinActor(ctx, actor);
 
-    // Turn lifecycle guard: on EVERY exit path (return or caught throw) it
-    // runs finishDrain, which drives the 3-state __sched__ flag — re-queueing
-    // the actor (a wakeup arrived, or its mailbox still holds messages) or
+    // Turn lifecycle guard: on EVERY exit path it runs finishDrain, which
+    // drives the 3-state __sched__ flag — re-queueing the actor or
     // releasing it. A FutureYield sets `suspended = true`; finishDrain then
-    // anchors the parked actor in the live registry (anchorActor) for the
-    // suspension window — a suspended actor is off the ready queue, so only
-    // the registry roots it until its awaited future reschedules it.
+    // anchors the parked actor in the live registry.
     struct DrainGuard {
         STRuntime* self;
         proto::ProtoContext* ctx;
@@ -1272,98 +1287,39 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
         ~DrainGuard() { self->finishDrain(ctx, actor, suspended); }
     } drainGuard{this, ctx, actor};
 
-    const proto::ProtoString* mailboxKey =
-        impl_->bootstrap.sym.mailbox;
-    const proto::ProtoString* wrappedKey =
-        impl_->bootstrap.sym.wrapped;
-    const proto::ProtoString* selKey =
-        impl_->bootstrap.sym.selector;
-    const proto::ProtoString* argsKey =
-        impl_->bootstrap.sym.args;
-    const proto::ProtoString* futKey =
-        impl_->bootstrap.sym.future;
-    // F6 v3 C+D: per-actor yield/resume bookkeeping.
-    //  * __suspended_frame__ : engine snapshot taken at the FutureYield site.
-    //  * __waiting_on__      : the future the actor is currently awaiting.
-    //  * __suspended_future__ : the message-level Future to resolve when the
-    //    resumed run completes (i.e. the future that drainOne would have
-    //    resolved on the synchronous-completion path).
-    //
-    // These are deliberately NOT cached in function-local statics: protoCore
-    // interns symbols per-ProtoSpace, so a static would bind to whichever
-    // runtime ran drainOne first and become a dangling pointer into a freed
-    // space for every subsequent STRuntime. The engine's FutureYield catch
-    // and the future-side waiter helpers resolve the same names; resolving
-    // fresh from the live `ctx` on every call keeps the symbol identity
-    // consistent across all three sites within a single runtime. The
-    // interning lookup is cheap relative to the surrounding getAttribute
-    // traffic.
-    const proto::ProtoString* suspKey =
-        impl_->bootstrap.sym.suspendedFrame;
-    const proto::ProtoString* waitingOnKey =
-        impl_->bootstrap.sym.waitingOn;
-    const proto::ProtoString* suspFutKey =
-        impl_->bootstrap.sym.suspendedFuture;
-    const proto::ProtoString* fValueKey =
-        impl_->bootstrap.sym.value;
-    const proto::ProtoString* fErrorKey =
-        impl_->bootstrap.sym.error;
-    const proto::ProtoString* fStateKey =
-        impl_->bootstrap.sym.state;
-    // F6 v3 E5: these six keys are freshly interned ProtoStrings (per-space
-    // interning forbids static caching) and are held in C++ locals across the
-    // ENTIRE drainOne body — which runs a full ExecutionEngine (arbitrary
-    // user-code allocation), resolveFutureFromDrain / rejectFutureFromDrain,
-    // and many getAttribute/setAttribute calls. Pin all six for the function
-    // scope. drainOne's `ctx` is a worker (or main) context; TransientPin
-    // sizes it on demand if an engine has not already.
+    const proto::ProtoString* mailboxKey   = impl_->bootstrap.sym.mailbox;
+    const proto::ProtoString* wrappedKey   = impl_->bootstrap.sym.wrapped;
+    const proto::ProtoString* selKey       = impl_->bootstrap.sym.selector;
+    const proto::ProtoString* argsKey      = impl_->bootstrap.sym.args;
+    const proto::ProtoString* futKey       = impl_->bootstrap.sym.future;
+    // F6 v3 C+D: per-actor yield/resume bookkeeping. These three are
+    // freshly interned ProtoStrings (per-space interning forbids static
+    // caching) — held across the entire drainOne body which runs a full
+    // ExecutionEngine. Pin them for the function scope.
+    const proto::ProtoString* suspKey       = impl_->bootstrap.sym.suspendedFrame;
+    const proto::ProtoString* waitingOnKey  = impl_->bootstrap.sym.waitingOn;
+    const proto::ProtoString* suspFutKey    = impl_->bootstrap.sym.suspendedFuture;
+    const proto::ProtoString* fValueKey     = impl_->bootstrap.sym.value;
+    const proto::ProtoString* fErrorKey     = impl_->bootstrap.sym.error;
+    const proto::ProtoString* fStateKey     = impl_->bootstrap.sym.state;
     TransientPin pinSuspKey(ctx, reinterpret_cast<const proto::ProtoObject*>(suspKey));
     TransientPin pinWaitKey(ctx, reinterpret_cast<const proto::ProtoObject*>(waitingOnKey));
     TransientPin pinSuspFutKey(ctx, reinterpret_cast<const proto::ProtoObject*>(suspFutKey));
     TransientPin pinFValKey(ctx, reinterpret_cast<const proto::ProtoObject*>(fValueKey));
     TransientPin pinFErrKey(ctx, reinterpret_cast<const proto::ProtoObject*>(fErrorKey));
     TransientPin pinFStKey(ctx, reinterpret_cast<const proto::ProtoObject*>(fStateKey));
-    // F6 v2 T4: future state/value/error keys are no longer referenced here;
-    // resolveFutureFromDrain / rejectFutureFromDrain in future_prims.cpp own
-    // the entire transition including the attribute writes.
-
-    // Turn serialisation — "at most one message in flight per actor" — no
-    // longer needs a per-actor lock. Two hazards used to motivate one:
-    //   1. SEND-append vs drainOne-pop racing on the mailbox itself. This is
-    //      now closed by the lock-free CAS: both the SEND fast-path and the
-    //      drainOne pop below use ProtoObject::setAttributeIfEqual in a retry
-    //      loop, so the read-modify-write is atomic without any mutex.
-    //   2. Two drainers dispatching the same actor in parallel. This is now
-    //      closed by the scheduler: the actor stays in `scheduledSet` for the
-    //      whole turn (it is not erased at pop), so a SEND arriving mid-turn
-    //      finds it already scheduled and cannot re-enqueue it; finishDrain
-    //      re-queues it once, after the turn, if its mailbox is non-empty.
-    // A drainer therefore owns the actor for the turn by construction, and
-    // per-actor instance state stays single-writer with no language-level
-    // lock and no GC-safe-lock machinery on this path.
 
     // F6 v3 C+D: check for a suspended-frame snapshot BEFORE looking at the
     // mailbox. If present, this drainOne tick is a resume of a previously
-    // yielded message rather than a fresh pop. We restore the snapshot into
-    // a fresh ExecutionEngine, push the resolved value of the awaited
-    // future onto the top frame's operand stack (matching what the
-    // original `wait` would have returned), and let runLoop continue.
+    // yielded message rather than a fresh pop.
     {
         auto* snapAttr = actor->getAttribute(ctx, suspKey);
         SCHED_DIAG("drainOne actor=" << actor << " mode="
                    << ((snapAttr && snapAttr != PROTO_NONE) ? "RESUME"
                                                             : "FRESH-POP"));
         if (snapAttr && snapAttr != PROTO_NONE) {
-            // F6 v3 E2b: this actor was suspended and is now being resumed.
-            // It has stayed in the live registry the whole time (the yield
-            // path's finishDrain(suspended) left the anchor in place), so no
-            // re-add is needed here — the registry entry already roots it.
-            // The DrainGuard for THIS drainOne tick will release it on normal
-            // completion, or a re-yield below will set drainGuard.suspended.
-            // Pull the message-level future the original drainOne would
-            // have resolved on synchronous completion. Stored on the actor
-            // at yield time so the resume path knows which future to
-            // settle on RETURN_TOP (or reject on rethrow).
+            // Resume path. Pull the message-level future the original drainOne
+            // would have resolved on synchronous completion.
             auto* msgFut = actor->getAttribute(ctx, suspFutKey);
             // Pull the awaited future and read its settled value/error.
             auto* awaited = actor->getAttribute(ctx, waitingOnKey);
@@ -1379,14 +1335,10 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                     auto* e = awaited->getAttribute(ctx, fErrorKey);
                     resumeError = e ? e : PROTO_NONE;
                 }
-                // s == 0 (still pending) shouldn't happen here — the
-                // future's transition is what scheduled us. Treat as
-                // PROTO_NONE rather than re-yielding silently.
             }
 
-            // Clear the suspended-state attributes BEFORE running so a
-            // re-yield from the resumed body installs a fresh snapshot
-            // rather than racing with the one we just consumed.
+            // Clear suspended-state attributes BEFORE running so a re-yield
+            // installs a fresh snapshot rather than racing with this one.
             const_cast<proto::ProtoObject*>(actor)->setAttribute(ctx, suspKey, PROTO_NONE);
             const_cast<proto::ProtoObject*>(actor)->setAttribute(ctx, waitingOnKey, PROTO_NONE);
             const_cast<proto::ProtoObject*>(actor)->setAttribute(ctx, suspFutKey, PROTO_NONE);
@@ -1396,46 +1348,29 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             try {
                 eng.restoreFrames(ctx, snapAttr);
                 eng.resumeWith(ctx, resumeValue, resumeError);
-                // After resumeWith pushes the value (or rethrows the error
-                // into the caller), continueRun executes the rest of the
-                // frames_ stack and returns the final value.
                 const proto::ProtoObject* result = eng.continueRun(ctx);
                 setCurrentActor(nullptr);
                 SCHED_DIAG("drainOne RESUME-COMPLETE actor=" << actor
                            << " msgFut=" << msgFut << " result=" << result);
                 if (msgFut && msgFut != PROTO_NONE) {
-                    // F6 v3 E5: `result` is the resumed run's final value —
-                    // unrooted once continueRun has unwound; held across
-                    // resolveFutureFromDrain (allocates). Pin it.
                     const proto::ProtoObject* rv =
                         result ? result : PROTO_NONE;
                     TransientPin pinResumeResult(ctx, rv);
                     resolveFutureFromDrain(*this, ctx, msgFut, rv);
                 }
+                // Resume completed (didn't re-yield). FALL THROUGH to the
+                // per-turn drain loop below — process any accumulated
+                // mailbox messages in the same turn instead of re-enqueueing.
             } catch (const FutureYield&) {
                 SCHED_DIAG("drainOne RESUME-REYIELD actor=" << actor);
-                // Re-yield: the engine has already snapshotted + recorded
-                // the new awaited future on the actor. Keep msgFut on the
-                // actor for the next resume. Whoever resolves the new awaited
-                // future will re-schedule us.
                 setCurrentActor(nullptr);
-                // Preserve __suspended_future__ so the next resume still
-                // knows which message-level future to settle on completion.
                 if (msgFut && msgFut != PROTO_NONE) {
                     const_cast<proto::ProtoObject*>(actor)->setAttribute(
                         ctx, suspFutKey, msgFut);
                 }
-                // The actor re-yielded — finishDrain(suspended) drops its
-                // scheduledSet ownership and leaves the live-registry anchor
-                // in place across the new suspension window.
                 drainGuard.suspended = true;
                 return true;
             } catch (const NonLocalReturn&) {
-                // Track 1 slice 1: a non-local return escaped the resumed
-                // engine with no live home frame — the home method already
-                // returned during or before the yield window (a dead home).
-                // Reject the message future the same way the fresh-handler
-                // path does.
                 SCHED_DIAG("drainOne RESUME DEAD-HOME actor=" << actor);
                 setCurrentActor(nullptr);
                 if (msgFut && msgFut != PROTO_NONE) {
@@ -1444,13 +1379,9 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                     TransientPin pinErr(ctx, err);
                     rejectFutureFromDrain(*this, ctx, msgFut, err);
                 }
+                // Fall through to drain loop.
             } catch (const UnwindToHandler&) {
-                // Track 1 slice 2 (EXC-a): a stray UnwindToHandler escaped the
-                // resumed engine — a balanced `on:do:` always catches its own
-                // id, so this is a bug. Reject the message future, mirroring
-                // the dead-home non-local-return path above.
-                SCHED_DIAG("drainOne RESUME STRAY exception-unwind actor="
-                           << actor);
+                SCHED_DIAG("drainOne RESUME STRAY exception-unwind actor=" << actor);
                 setCurrentActor(nullptr);
                 if (msgFut && msgFut != PROTO_NONE) {
                     auto* err = ctx->fromUTF8String(
@@ -1459,9 +1390,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                     rejectFutureFromDrain(*this, ctx, msgFut, err);
                 }
             } catch (const RetrySignal&) {
-                // EXC-b: stray `retry` — same bug class as a stray unwind.
-                SCHED_DIAG("drainOne RESUME STRAY exception-retry actor="
-                           << actor);
+                SCHED_DIAG("drainOne RESUME STRAY exception-retry actor=" << actor);
                 setCurrentActor(nullptr);
                 if (msgFut && msgFut != PROTO_NONE) {
                     auto* err = ctx->fromUTF8String(
@@ -1470,9 +1399,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                     rejectFutureFromDrain(*this, ctx, msgFut, err);
                 }
             } catch (const ResumeSignal&) {
-                // EXC-b: stray `resume:` — `signal` always consumes its own.
-                SCHED_DIAG("drainOne RESUME STRAY exception-resume actor="
-                           << actor);
+                SCHED_DIAG("drainOne RESUME STRAY exception-resume actor=" << actor);
                 setCurrentActor(nullptr);
                 if (msgFut && msgFut != PROTO_NONE) {
                     auto* err = ctx->fromUTF8String(
@@ -1481,9 +1408,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                     rejectFutureFromDrain(*this, ctx, msgFut, err);
                 }
             } catch (const PassSignal&) {
-                // EXC-b: stray `pass` — `signal` always consumes its own.
-                SCHED_DIAG("drainOne RESUME STRAY exception-pass actor="
-                           << actor);
+                SCHED_DIAG("drainOne RESUME STRAY exception-pass actor=" << actor);
                 setCurrentActor(nullptr);
                 if (msgFut && msgFut != PROTO_NONE) {
                     auto* err = ctx->fromUTF8String(
@@ -1495,266 +1420,183 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                 setCurrentActor(nullptr);
                 if (msgFut && msgFut != PROTO_NONE) {
                     auto* err = ctx->fromUTF8String(e.what());
-                    // F6 v3 E5: `err` held across rejectFutureFromDrain
-                    // (allocates) — pin it.
                     TransientPin pinErr(ctx, err);
                     rejectFutureFromDrain(*this, ctx, msgFut, err);
                 }
             }
+            // Fall through to per-turn drain loop.
+        }
+    }
 
-            // The resume turn is over. Any mailbox messages that accumulated
-            // during the yield window are handled by finishDrain (run by
-            // DrainGuard): it re-queues the actor if its mailbox is non-empty,
-            // keeping the registry anchor; otherwise it releases both.
+    // F6 v5 (2026-05-23): per-turn drain loop. Process ALL pending messages
+    // for this actor in one turn, instead of one-message-per-turn with
+    // re-enqueue churn. Per-actor FIFO is trivially preserved — we own the
+    // actor (popped from ready queue, __sched__ marked), one worker per actor
+    // at a time, and the mailbox itself is FIFO ProtoList. Only FutureYield
+    // breaks the loop (actor stays suspended); other exceptions reject the
+    // current message's future and continue to the next.
+    const proto::ProtoString* bcKey  = impl_->bootstrap.sym.bcPtr;
+    const proto::ProtoString* capKey = impl_->bootstrap.sym.captured;
+
+    for (;;) {
+        // Pop the next FIFO message; exit drain if empty.
+        const proto::ProtoObject* msg =
+            popMailboxHead(ctx, actor, mailboxKey);
+        if (!msg) break;
+
+        TransientPin pinMsg(ctx, msg);
+
+        auto* selector = msg->getAttribute(ctx, selKey);
+        auto* argsList = msg->getAttribute(ctx, argsKey);
+        auto* future   = msg->getAttribute(ctx, futKey);
+        auto* wrapped  = actor->getAttribute(ctx, wrappedKey);
+
+        auto* argsListAsList = argsList ? argsList->asList(ctx) : nullptr;
+        int argc = argsListAsList
+            ? static_cast<int>(argsListAsList->getSize(ctx)) : 0;
+        std::vector<const proto::ProtoObject*> args;
+        args.reserve(static_cast<size_t>(argc));
+        for (int i = 0; i < argc; ++i) {
+            args.push_back(argsListAsList->getAt(ctx, i));
+        }
+
+        auto* selStr = selector ? selector->asString(ctx) : nullptr;
+        if (!selStr) {
+            if (future) {
+                auto* err = ctx->fromUTF8String("invalid selector");
+                TransientPin pinErr(ctx, err);
+                rejectFutureFromDrain(*this, ctx, future, err);
+            }
+            continue;
+        }
+
+        // F6 v3 C: mark this thread as "inside an actor handler".
+        setCurrentActor(actor);
+        bool yielded = false;
+
+        try {
+            auto* method = wrapped ? wrapped->getAttribute(ctx, selStr) : nullptr;
+            const proto::ProtoObject* result = nullptr;
+
+            auto* bcPtrObj = method ? method->getAttribute(ctx, bcKey) : nullptr;
+            if (bcPtrObj && bcPtrObj != PROTO_NONE) {
+                const BytecodeModule* sub =
+                    reinterpret_cast<const BytecodeModule*>(bcPtrObj->asLong(ctx));
+                std::vector<const proto::ProtoObject*> methodArgs;
+                methodArgs.reserve(static_cast<size_t>(argc) + 1);
+                methodArgs.push_back(wrapped);
+                for (int i = 0; i < argc; ++i) methodArgs.push_back(args[i]);
+                auto* capDict = method->getAttribute(ctx, capKey);
+                if (capDict == PROTO_NONE) capDict = nullptr;
+                SCHED_DIAG("drainOne USER-METHOD ENTER actor=" << actor);
+                ExecutionEngine subEng(*this);
+                result = subEng.runWithArgs(
+                    ctx, *sub, /*self=*/wrapped,
+                    methodArgs.data(),
+                    static_cast<int>(methodArgs.size()),
+                    capDict);
+                SCHED_DIAG("drainOne USER-METHOD EXIT actor=" << actor
+                           << " result=" << result);
+            } else if (method) {
+                long long marker = method->asLong(ctx);
+                if (marker & (1LL << 62)) {
+                    int idx = static_cast<int>(marker & ((1LL << 62) - 1));
+                    auto fn = impl_->registry.at(idx);
+                    result = translateNativeException(
+                        *this, ctx,
+                        [&] { return fn(*this, ctx, wrapped, args.data(), argc); });
+                } else {
+                    throw std::runtime_error("unknown method shape");
+                }
+            } else {
+                throw std::runtime_error(
+                    std::string("doesNotUnderstand: ") +
+                    std::string(selStr->toStdString(ctx)));
+            }
+
+            if (future) {
+                auto* v = result ? result : PROTO_NONE;
+                TransientPin pinResult(ctx, v);
+                resolveFutureFromDrain(*this, ctx, future, v);
+            }
+        } catch (const FutureYield&) {
+            SCHED_DIAG("drainOne FRESH-YIELD actor=" << actor
+                       << " msgFut=" << future);
+            setCurrentActor(nullptr);
+            if (future) {
+                const_cast<proto::ProtoObject*>(actor)->setAttribute(
+                    ctx, suspFutKey, future);
+            }
+            yielded = true;
+        } catch (const NonLocalReturn&) {
+            SCHED_DIAG("drainOne DEAD-HOME non-local return actor=" << actor);
+            setCurrentActor(nullptr);
+            if (future) {
+                auto* err = ctx->fromUTF8String(
+                    "non-local return: home method has already returned");
+                TransientPin pinErr(ctx, err);
+                rejectFutureFromDrain(*this, ctx, future, err);
+            }
+        } catch (const UnwindToHandler&) {
+            SCHED_DIAG("drainOne STRAY exception-unwind actor=" << actor);
+            setCurrentActor(nullptr);
+            if (future) {
+                auto* err = ctx->fromUTF8String(
+                    "exception unwind: no matching on:do: handler activation");
+                TransientPin pinErr(ctx, err);
+                rejectFutureFromDrain(*this, ctx, future, err);
+            }
+        } catch (const RetrySignal&) {
+            SCHED_DIAG("drainOne STRAY exception-retry actor=" << actor);
+            setCurrentActor(nullptr);
+            if (future) {
+                auto* err = ctx->fromUTF8String(
+                    "exception retry: no matching on:do: handler activation");
+                TransientPin pinErr(ctx, err);
+                rejectFutureFromDrain(*this, ctx, future, err);
+            }
+        } catch (const ResumeSignal&) {
+            SCHED_DIAG("drainOne STRAY exception-resume actor=" << actor);
+            setCurrentActor(nullptr);
+            if (future) {
+                auto* err = ctx->fromUTF8String(
+                    "exception resume: no active signal to resume");
+                TransientPin pinErr(ctx, err);
+                rejectFutureFromDrain(*this, ctx, future, err);
+            }
+        } catch (const PassSignal&) {
+            SCHED_DIAG("drainOne STRAY exception-pass actor=" << actor);
+            setCurrentActor(nullptr);
+            if (future) {
+                auto* err = ctx->fromUTF8String(
+                    "exception pass: no active signal to pass");
+                TransientPin pinErr(ctx, err);
+                rejectFutureFromDrain(*this, ctx, future, err);
+            }
+        } catch (const std::exception& e) {
+            if (future) {
+                auto* err = ctx->fromUTF8String(e.what());
+                TransientPin pinErr(ctx, err);
+                rejectFutureFromDrain(*this, ctx, future, err);
+            }
+        }
+
+        setCurrentActor(nullptr);
+
+        if (yielded) {
+            // Actor parked on a future; suspended state already saved.
+            // finishDrain (via DrainGuard) will keep the registry anchor.
+            // Remaining mailbox messages (if any) stay queued — when the
+            // future settles, schedule() re-enqueues the actor and we
+            // resume + drain in the next turn.
+            drainGuard.suspended = true;
             return true;
         }
+        // Loop: try the next message in the mailbox.
     }
-
-    const proto::ProtoObject* msg = nullptr;
-    {
-        // Pop the FIFO head off the mailbox with a lock-free compare-and-swap
-        // retry — the mirror of the SEND fast-path's CAS append. A concurrent
-        // SEND appends to the tail; if it lands between our read and our
-        // write the setAttributeIfEqual fails and we re-read. Re-reading is
-        // safe: the head we want is still element 0 (a SEND only appends),
-        // and getSlice(1, newSize) keeps whatever the SEND added.
-        for (;;) {
-            const proto::ProtoObject* mbObj =
-                actor->getOwnAttributeDirect(ctx, mailboxKey);
-            if (!mbObj || mbObj == PROTO_NONE) return true;
-            auto* mailbox = mbObj->asList(ctx);
-            if (!mailbox || mailbox->getSize(ctx) == 0) return true;
-
-            msg = mailbox->getAt(ctx, 0);
-            // F6 v3 E5: `remaining` is a freshly sliced list held across
-            // asObject + the CAS. Pin it.
-            auto* remaining = mailbox->getSlice(
-                ctx, 1, static_cast<int>(mailbox->getSize(ctx)));
-            TransientPin pinRemaining(
-                ctx, reinterpret_cast<const proto::ProtoObject*>(remaining));
-            const proto::ProtoObject* newMbObj = remaining->asObject(ctx);
-            TransientPin pinNewMbObj(ctx, newMbObj);
-            if (const_cast<proto::ProtoObject*>(actor)
-                    ->setAttributeIfEqual(ctx, mailboxKey, mbObj, newMbObj))
-                break;
-        }
-    }
-    // F6 v3 E5: the setAttribute above overwrote the actor's __mailbox__
-    // slot, so `msg` is no longer reachable via actor->__mailbox__. It is
-    // held across the field-extraction getAttributes, the args-vector build,
-    // and the full user-method ExecutionEngine run — and the message's
-    // selector / args / future are reached transitively THROUGH `msg`. Pin it
-    // for the rest of drainOne so the whole message envelope stays rooted.
-    TransientPin pinMsg(ctx, msg);
-
-    // Extract message fields.
-    auto* selector = msg->getAttribute(ctx, selKey);
-    auto* argsList = msg->getAttribute(ctx, argsKey);
-    auto* future   = msg->getAttribute(ctx, futKey);
-    auto* wrapped  = actor->getAttribute(ctx, wrappedKey);
-
-    // Build args array.
-    auto* argsListAsList = argsList ? argsList->asList(ctx) : nullptr;
-    int argc = argsListAsList ? static_cast<int>(argsListAsList->getSize(ctx)) : 0;
-    std::vector<const proto::ProtoObject*> args;
-    args.reserve(static_cast<size_t>(argc));
-    for (int i = 0; i < argc; ++i) {
-        args.push_back(argsListAsList->getAt(ctx, i));
-    }
-
-    // Resolve selector to a symbol string.
-    auto* selStr = selector ? selector->asString(ctx) : nullptr;
-    if (!selStr) {
-        if (future) {
-            auto* err = ctx->fromUTF8String("invalid selector");
-            // F6 v3 E5: `err` held across rejectFutureFromDrain — pin it.
-            TransientPin pinErr(ctx, err);
-            // F6 v2 T4: atomic (write state, snapshot cbs, notify) under
-            // the future's cv mutex; catch: callbacks fire outside the
-            // mutex on the snapshot. See future_prims.cpp.
-            rejectFutureFromDrain(*this, ctx, future, err);
-        }
-        return true;
-    }
-
-    // F6 v3 C: mark this thread as "inside an actor handler" so
-    // Future>>wait throws FutureYield instead of blocking on cv. Cleared
-    // unconditionally on every exit path below.
-    setCurrentActor(actor);
-
-    try {
-        auto* method = wrapped ? wrapped->getAttribute(ctx, selStr) : nullptr;
-        const proto::ProtoObject* result = nullptr;
-
-        // Detect user method (has __bc_ptr__) vs primitive marker (tagged int).
-        const proto::ProtoString* bcKey =
-            impl_->bootstrap.sym.bcPtr;
-        auto* bcPtrObj = method ? method->getAttribute(ctx, bcKey) : nullptr;
-        if (bcPtrObj && bcPtrObj != PROTO_NONE) {
-            // User method: invoke via a sub-engine with wrapped as self.
-            const BytecodeModule* sub =
-                reinterpret_cast<const BytecodeModule*>(bcPtrObj->asLong(ctx));
-            std::vector<const proto::ProtoObject*> methodArgs;
-            methodArgs.reserve(static_cast<size_t>(argc) + 1);
-            methodArgs.push_back(wrapped);
-            for (int i = 0; i < argc; ++i) methodArgs.push_back(args[i]);
-            // Honour the method's captured-dict if any (matches Engine path).
-            const proto::ProtoString* capKey =
-                impl_->bootstrap.sym.captured;
-            auto* capDict = method->getAttribute(ctx, capKey);
-            if (capDict == PROTO_NONE) capDict = nullptr;
-            SCHED_DIAG("drainOne USER-METHOD ENTER actor=" << actor);
-            ExecutionEngine subEng(*this);
-            result = subEng.runWithArgs(
-                ctx, *sub, /*self=*/wrapped,
-                methodArgs.data(),
-                static_cast<int>(methodArgs.size()),
-                capDict);
-            SCHED_DIAG("drainOne USER-METHOD EXIT actor=" << actor
-                       << " result=" << result);
-        } else if (method) {
-            long long marker = method->asLong(ctx);
-            if (marker & (1LL << 62)) {
-                int idx = static_cast<int>(marker & ((1LL << 62) - 1));
-                auto fn = impl_->registry.at(idx);
-                // EXC-d: an actor's method dispatched as a native primitive is
-                // a native call boundary — wrap it so a C++ exception from the
-                // primitive becomes a catchable protoST Error. The wrapper
-                // re-throws the control-flow siblings (FutureYield etc.) and
-                // DebuggerHalt / UnhandledSTException untouched, so the
-                // drainOne catch clauses below see exactly what they did
-                // before for those types.
-                result = translateNativeException(
-                    *this, ctx,
-                    [&] { return fn(*this, ctx, wrapped, args.data(), argc); });
-            } else {
-                throw std::runtime_error("unknown method shape");
-            }
-        } else {
-            throw std::runtime_error(
-                std::string("doesNotUnderstand: ") +
-                std::string(selStr->toStdString(ctx)));
-        }
-
-        // Resolve future.
-        if (future) {
-            auto* v = result ? result : PROTO_NONE;
-            // F6 v3 E5: `result` is the user method's return value — a fresh
-            // object reachable from no traced root once the engine that
-            // produced it has unwound. It is held across resolveFutureFrom-
-            // Drain, which writes future state, fires thenDo: callbacks (user
-            // code) and schedules waiters — all of which allocate. Pin it.
-            TransientPin pinResult(ctx, v);
-            // F6 v2 T4: atomic (write state, snapshot cbs, notify cv)
-            // under the future's mutex; thenDo: callbacks fire outside the
-            // mutex on the snapshot. Closes the registration race where a
-            // concurrent thenDo: could land its callback into __then_cbs__
-            // AFTER drainOne had already taken its snapshot.
-            resolveFutureFromDrain(*this, ctx, future, v);
-        }
-    } catch (const FutureYield&) {
-        SCHED_DIAG("drainOne FRESH-YIELD actor=" << actor
-                   << " msgFut=" << future);
-        // F6 v3 C: the engine has already snapshotted frames_, stored the
-        // snapshot under __suspended_frame__ on the actor, recorded the
-        // awaited future under __waiting_on__, and appended us to the
-        // future's __waiters__ list. We just need to stash the
-        // message-level future so the resume path knows which future to
-        // resolve when the suspended frame eventually returns. We do NOT
-        // resolve `future` here and we do NOT re-schedule the actor; the
-        // future's resolve/reject will schedule us via __waiters__.
-        setCurrentActor(nullptr);
-        if (future) {
-            const_cast<proto::ProtoObject*>(actor)->setAttribute(
-                ctx, suspFutKey, future);
-        }
-        // The actor yielded — finishDrain(suspended) drops its scheduledSet
-        // ownership and keeps the live-registry anchor for the suspension
-        // window; without the anchor a fully-suspended chain would have no
-        // live GC root and the tracing collector would reclaim it.
-        drainGuard.suspended = true;
-        return true;
-    } catch (const NonLocalReturn&) {
-        // Track 1 slice 1: a non-local return escaped the actor handler's
-        // engine with no live home frame — the home method already returned
-        // (a "dead home"). Reject the message's Future with the dead-home
-        // error, the same way the synchronous top-level path surfaces it.
-        SCHED_DIAG("drainOne DEAD-HOME non-local return actor=" << actor);
-        setCurrentActor(nullptr);
-        if (future) {
-            auto* err = ctx->fromUTF8String(
-                "non-local return: home method has already returned");
-            TransientPin pinErr(ctx, err);
-            rejectFutureFromDrain(*this, ctx, future, err);
-        }
-        return true;
-    } catch (const UnwindToHandler&) {
-        // Track 1 slice 2 (EXC-a): an UnwindToHandler escaped the actor
-        // handler's engine with no `on:do:` to catch it. A balanced `on:do:`
-        // always catches its own id, so this is a bug; reject the message's
-        // Future with a clear error rather than letting a non-std::exception
-        // escape drainOne and call std::terminate.
-        SCHED_DIAG("drainOne STRAY exception-unwind actor=" << actor);
-        setCurrentActor(nullptr);
-        if (future) {
-            auto* err = ctx->fromUTF8String(
-                "exception unwind: no matching on:do: handler activation");
-            TransientPin pinErr(ctx, err);
-            rejectFutureFromDrain(*this, ctx, future, err);
-        }
-        return true;
-    } catch (const RetrySignal&) {
-        // EXC-b: a stray `retry` escaped the actor handler — a balanced
-        // `on:do:` always catches its own id. Reject the message Future.
-        SCHED_DIAG("drainOne STRAY exception-retry actor=" << actor);
-        setCurrentActor(nullptr);
-        if (future) {
-            auto* err = ctx->fromUTF8String(
-                "exception retry: no matching on:do: handler activation");
-            TransientPin pinErr(ctx, err);
-            rejectFutureFromDrain(*this, ctx, future, err);
-        }
-        return true;
-    } catch (const ResumeSignal&) {
-        // EXC-b: a stray `resume:` escaped its `signal` loop — a bug.
-        SCHED_DIAG("drainOne STRAY exception-resume actor=" << actor);
-        setCurrentActor(nullptr);
-        if (future) {
-            auto* err = ctx->fromUTF8String(
-                "exception resume: no active signal to resume");
-            TransientPin pinErr(ctx, err);
-            rejectFutureFromDrain(*this, ctx, future, err);
-        }
-        return true;
-    } catch (const PassSignal&) {
-        // EXC-b: a stray `pass` escaped its `signal` loop — a bug.
-        SCHED_DIAG("drainOne STRAY exception-pass actor=" << actor);
-        setCurrentActor(nullptr);
-        if (future) {
-            auto* err = ctx->fromUTF8String(
-                "exception pass: no active signal to pass");
-            TransientPin pinErr(ctx, err);
-            rejectFutureFromDrain(*this, ctx, future, err);
-        }
-        return true;
-    } catch (const std::exception& e) {
-        if (future) {
-            auto* err = ctx->fromUTF8String(e.what());
-            // F6 v3 E5: `err` held across rejectFutureFromDrain — pin it.
-            TransientPin pinErr(ctx, err);
-            // F6 v2 T4: same atomic pattern as the resolve path above.
-            rejectFutureFromDrain(*this, ctx, future, err);
-        }
-    }
-    setCurrentActor(nullptr);
-
-    // The turn is over. finishDrain (run by DrainGuard) decides under schedMu
-    // whether to re-queue the actor — if a SEND left messages in its mailbox
-    // during this turn — or to release it from scheduledSet and the live
-    // registry. No explicit reschedule here: doing it via schedule() would
-    // race the still-present scheduledSet entry.
     return true;
 }
+
 
 void STRuntime::finishDrain(proto::ProtoContext* ctx,
                             const proto::ProtoObject* actor,
