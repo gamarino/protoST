@@ -321,3 +321,93 @@ the mutator path — `posix_memalign` / glibc-arena contention
 under N-worker refills, CAS contention on scheduler state,
 or false sharing. The original suspects list above still stands;
 the GC has been definitively excluded.
+
+## Optimisations landed during this session (post-plateau hunt)
+
+Two SymbolTable / dispatch-path fixes that, together, lifted the
+saturation 8-worker scaling from regression at 1.96 → 3.83× and
+the headline throughput from 30 → 62 K msg/s on mt100a:
+
+### 1. `__class_name__` / `__class_side__` cached on Bootstrap (`ea35db9`)
+
+`perf record` on saturation w=8 showed 51 % of CPU in
+`SymbolTable::intern` + its shard mutex (futex_wait). Traced to
+two `createSymbol(ctx, "__class_…")` calls in the SEND_*
+dispatch class-side filter — both strings > 6 bytes so they
+skip the inline path and hit the same shard each time. Cached
+on `Bootstrap::Symbols`, same per-space discipline as the
+other hot keys.
+
+### 2. `newFuture` → 1 setAttribute; envelope built immutable (`5523bf8`)
+
+The next perf pass showed the new hot was `allocCell + implSetAt`
+during SEND fast-path COW. Two cuts:
+- `newFuture` only stamps `__state__` now; `__value__` and
+  `__error__` default to PROTO_NONE through the prototype
+  chain until the resolve/reject paths write them.
+- SEND envelope is now `newChild(isMutable=false)`. Each
+  setAttribute on an immutable cell allocates 2 cells (vs 3 for
+  mutable) and removes the shard-root CAS + global mutex from
+  the path entirely.
+
+mt100a w=1: 47 K → 54 K → 62 K msg/s across these two commits.
+
+## The remaining sub-linear scaling is in the dispatch path itself
+
+After both fixes, saturation 8-worker is at 0.18 s wall vs 0.69 s
+w=1 = 3.83× (ideal 8×). Confirmed root with `perf stat`:
+
+  w=1: 6.67 G instructions, IPC 2.49, L1-miss 0.49 %
+  w=8: 6.69 G instructions, IPC 1.65, L1-miss 0.93 %
+
+**Same instruction count, lower IPC, double the L1 misses** —
+classic cache-line bouncing, not CAS-retry-loops. `perf record`
+on `cache-misses` flagged `getFreeCells → atomic store on
+Cell::next` during freelist refill as the top miss site (8 % of
+sampled misses).
+
+We then ran the inverse test: saturation with the inner work
+collapsed to a single `count := count + 1` (zero captured-var
+allocations). If allocation pressure were the cause, this should
+scale much better. It DOES NOT — it plateaus at 2.69× at w=8
+(slightly WORSE than the alloc-heavy version's 3.83×).
+
+The lesson: **the residual ceiling lives in the dispatch
+infrastructure**, not in user work or in the allocator. When the
+inner work is heavy, dispatch is a small % of CPU and workers
+stay on local caches; when the inner work is light, the dispatch
+share rises and contention shows. The dispatch-side suspects, in
+order:
+
+1. **mailbox COW per SEND** — every SEND does
+   `setAttributeIfEqual(__mailbox__, old, new)` with CAS-retry on
+   the actor's mutable shard root. N senders to N different
+   actors map to N (probably distinct) shards, but the cache lines
+   for the SparseList COW result are shared.
+
+2. **`ReadyStack` head CAS** — 8 workers all competing on a
+   single Treiber-stack head pointer. Each `dequeueReady` is a
+   CAS-pop; under contention the line bounces.
+
+3. **per-actor `__sched__` 3-state flag CAS** in `finishDrain` /
+   `enqueueReady` — every actor turn touches this once.
+
+Attacking any of these is non-trivial (work-stealing per-worker
+ready queues, intrusive lock-free mailbox lists, etc.) — material
+for a separate session, not a single-commit fix.
+
+## Throughput summary at session end
+
+| benchmark | pre-session | end of session | best speedup |
+|---|---|---|---|
+| mt100k w=1 | ~ 20.6 K | **36.0 K msg/s** | 1.75× |
+| mt100a w=1 | ~ 29.6 K | **64.5 K msg/s** | **2.18×** |
+| saturation w=8 | 1.96× (regression) | **3.83×** | monotonic |
+
+mt100a NO longer regresses with workers but it does not improve
+either (49 K at w=8 due to producer cuello — single main thread
+generating the SENDs while 8 workers compete for them). Multi-
+producer benchmarks via driver actors are blocked by the
+yieldable-do: limitation documented in
+`2026-05-23-multiproducer-blocker.md` and remain the natural
+next experiment once that lift lands.
