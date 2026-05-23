@@ -130,38 +130,94 @@ the GC ceiling behind noisier ceilings.
   future code path enqueues > 8 K tasks while paused via that
   alternative entry point, bump the semaphore's LeastMaxValue.
 
-## Next experiments (in order of payoff)
+## What's NOT the bottleneck (measured)
 
-The residual ~ 2× plateau survives a 5× memory headroom, so the
-ceiling is INSIDE the runtime. The likely suspects, in order:
+### B. The captured-dict path is NOT the dominant allocation
+driver
 
-1. **GC Phase-1 STW barrier cadence**. The barrier is
-   `parkedThreads >= runningThreads` — every cycle ALL workers
-   must park before the GC marks. With 8 workers all driving the
-   same allocator under saturation, refill events are frequent
-   and STW barriers are frequent. Rebuild protoCore with
-   `-DPROTOCORE_GC_INSTRUMENT=ON` and run with
-   `PROTOCORE_GC_PROFILE=1` to get per-phase microsecond
-   accounting; that lets us see the STW share of wall time
-   directly instead of inferring it.
+Rewrote `work()` to put `sum` into an instance variable, swapping
+`STORE_CAPTURED` for `STORE_INSTVAR` (sparing the fresh-dict
+allocation per `work()` invocation and exercising the
+already-existent `_iv_sum` slot for the 5 000 inner writes). Best
+of 3 vs captured baseline:
 
-2. **`getFreeCells` global mutex contention.** The current
-   per-refill batch (`blocksPerAllocation × runningThreads × 4`,
-   capped at 65 536) is large, but every refill still serialises
-   on the recursive mutex. Under N-worker saturation the refill
-   rate is N× higher; even a fast mutex turns into a serialiser.
+| workers | captured | ivar | delta |
+|---|---|---|---|
+| 1 | 3905 ms | 4091 ms | **+5 % (worse)** |
+| 2 | 2258    | 2409    | +7 %             |
+| 4 | 2048    | 2161    | +6 %             |
+| 8 | 1989    | 2109    | +6 %             |
+| 1→8 speedup | 1.96× | 1.94× | unchanged |
 
-3. **Mutable `setAttribute` on the captured dict**. Each
-   `work()` does 5 000 captured-var writes; if the sparse-list
-   path COWs the node on each write, that's the allocation rate
-   driving (1) and (2). Compiling the bench's `work` to use
-   `STORE_INSTVAR` instead of `STORE_CAPTURED` (move `sum` into
-   an instance variable) would either flatten the plateau or
-   confirm the captured-dict path as the allocation driver.
+Hypothesis B refuted. Whatever drives the residual ceiling, it
+is shared between `STORE_CAPTURED` and `STORE_INSTVAR` — i.e.
+the dispatch / allocator / contention paths common to both,
+not the captured-dict-specific code.
 
-The plan is to attack (1) first — get the GC profile so we
-KNOW whether STW is the dominant residual cost, and only then
-decide between "shrink STW" (the deepest fix: concurrent root
-marking) and "reduce allocation rate" (the targeted fix:
-adjust `work`, or fold mutable setAttribute hot paths in the
-runtime).
+### A. The GC is NOT pausing the workers
+
+Rebuilt protoCore with `-DPROTOCORE_GC_INSTRUMENT=ON` and
+re-ran saturation with `PROTOCORE_GC_PROFILE=1`. Single run
+per worker count:
+
+| workers | drain | Phase 1 | Phase 5 (sweep) | GC cycles |
+|---|---|---|---|---|
+| 1 | 4111 ms | 3 794 513 µs (3.79 s) | 35 209 µs (35 ms) | **1** |
+| 2 | 2592 ms | 2 404 045 µs (2.40 s) | 29 471 µs (29 ms) | **1** |
+| 4 | 2719 ms | 2 548 687 µs (2.55 s) | 33 176 µs (33 ms) | **1** |
+| 8 | 2493 ms | 2 270 868 µs (2.27 s) | 30 044 µs (30 ms) | **1** |
+
+Only ONE GC cycle fires for the whole run, and the giant Phase-1
+number is **not pause time for the mutators** — it is the time
+the GC sat waiting for the workers to park. Workers never park
+during a `drainOne` (no STW safepoint in the bytecode dispatch
+loop), so the GC parks at the start (when the first refill
+exhausts the freelist) and waits until the run ends for the
+mutators to finally hit `workerSem.acquire`. The actual mark
+(P2: 0.1-0.5 ms) and sweep (P5: ~ 30 ms) cost is tiny.
+
+**This means**:
+- The mutators run uninterrupted by the GC the entire benchmark.
+- All memory is OS-allocated (posix_memalign) — the GC never
+  recycles cells during the run. Total OS allocation = MaxRSS
+  ≈ 1 GiB, stable across worker counts.
+- The plateau is NOT the STW barrier as originally hypothesised.
+
+## What IS likely the bottleneck
+
+With STW and captured-dict-path ruled out, the residual ceiling
+must be in the mutator path that scales with worker count.
+Suspects:
+
+1. **`getFreeCells` global-mutex contention.** Even though the
+   batch size is large (60 K-65 K cells per refill), every
+   refill serialises on a recursive mutex; the OS allocation is
+   outside the lock, but the bookkeeping inside is not. With N
+   workers all refilling on this benchmark's allocation rate,
+   the mutex becomes a serialiser. Test: measure refill count
+   per run and lock-acquisition wait time.
+
+2. **CAS contention on shared scheduler state** — the ready
+   stack head pointer, the actor's `__mailbox__` setAttribute,
+   the actor lock. Under N workers all competing for the next
+   actor + the next message inside that actor, cache lines
+   bounce between cores at line-rate.
+
+3. **False sharing on per-thread bookkeeping**. Atomic counters
+   (`runningThreads`, `parkedThreads`, `gcCycleCount`) that live
+   on the same cache line get rewritten on every worker
+   transition.
+
+The clean way to localise this is `perf stat -e
+context-switches,cpu-migrations,cache-misses,task-clock` on a
+single saturation run per worker count. The cache-miss /
+context-switch curves vs worker count tell us which path is the
+serialiser.
+
+## Note on the GC-cycles-per-run profile flag
+
+The instrumentation prints every cycle by default
+(`(cycles > 0)` predicate in `gcThreadLoop`). Pre-edit it
+printed every 5 cycles, which suppressed output for short
+benchmarks like ours. Revert before merging into protoCore if
+the per-cycle print floods stderr on a long-running test.
