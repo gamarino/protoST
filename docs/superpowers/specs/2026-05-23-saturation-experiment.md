@@ -65,6 +65,25 @@ in every config:
 | 4 | 2 048   | 1.91×          | tail of meaningful scaling       |
 | 8 | 1 989   | 1.96×          | plateau                          |
 
+### Ruling out the cgroup as the residual ceiling
+
+Re-ran the same sweep under `MemoryMax=32G` (5× headroom over the
+observed MaxRSS), best of 3:
+
+| workers | drain ms | MaxRSS  | comment           |
+|---|---|---|---|
+| 1 | 3 987   | 1.01 GiB | matches 12G run  |
+| 2 | 2 387   | 1.01 GiB | 1.67× (≈ 1.73× at 12G) |
+| 4 | 2 373   | 1.02 GiB | 1.68×             |
+| 8 | 2 201   | 1.02 GiB | 1.81×             |
+
+The cap never engaged — MaxRSS is identical to the 12G run, the
+sweep curve is identical within noise. **The plateau ~ 2× is real
+and is not the cgroup talking**. protoCore's GC fires on freelist
+exhaustion (not on a memory-watermark ratio), so more headroom
+does not reduce its cadence; the residual ceiling is somewhere
+else.
+
 Comparison with the older shape on the SAME hardware, same cgroup
 (no producer-rate isolation, drivers + main + workers all racing):
 
@@ -113,18 +132,36 @@ the GC ceiling behind noisier ceilings.
 
 ## Next experiments (in order of payoff)
 
-1. **GC trigger / STW cadence profile** under the saturation
-   workload. `PROTOCORE_GC_PROFILE=1` (or similar) to confirm the
-   STW share dominates wall time at w=4-8. If yes, this is the
-   highest-payoff target for protoCore-side work.
+The residual ~ 2× plateau survives a 5× memory headroom, so the
+ceiling is INSIDE the runtime. The likely suspects, in order:
 
-2. **Trim per-msg allocation rate** — rewrite `work` to use a
-   non-captured loop (e.g. accumulate into an instance variable
-   so the compiler emits STORE_INSTVAR instead of
-   STORE_CAPTURED, sparing one alloc per iter), re-run saturation,
-   see how much of the residual ceiling is captured-dict-related.
+1. **GC Phase-1 STW barrier cadence**. The barrier is
+   `parkedThreads >= runningThreads` — every cycle ALL workers
+   must park before the GC marks. With 8 workers all driving the
+   same allocator under saturation, refill events are frequent
+   and STW barriers are frequent. Rebuild protoCore with
+   `-DPROTOCORE_GC_INSTRUMENT=ON` and run with
+   `PROTOCORE_GC_PROFILE=1` to get per-phase microsecond
+   accounting; that lets us see the STW share of wall time
+   directly instead of inferring it.
 
-3. **Actor-lock contention profile** with `NACTORS >> NWORKERS`.
-   The saturation result above already uses 16 actors / 8 workers
-   so this is being exercised, but a targeted measurement would
-   isolate `acquireActorLock` cost from GC cost.
+2. **`getFreeCells` global mutex contention.** The current
+   per-refill batch (`blocksPerAllocation × runningThreads × 4`,
+   capped at 65 536) is large, but every refill still serialises
+   on the recursive mutex. Under N-worker saturation the refill
+   rate is N× higher; even a fast mutex turns into a serialiser.
+
+3. **Mutable `setAttribute` on the captured dict**. Each
+   `work()` does 5 000 captured-var writes; if the sparse-list
+   path COWs the node on each write, that's the allocation rate
+   driving (1) and (2). Compiling the bench's `work` to use
+   `STORE_INSTVAR` instead of `STORE_CAPTURED` (move `sum` into
+   an instance variable) would either flatten the plateau or
+   confirm the captured-dict path as the allocation driver.
+
+The plan is to attack (1) first — get the GC profile so we
+KNOW whether STW is the dominant residual cost, and only then
+decide between "shrink STW" (the deepest fix: concurrent root
+marking) and "reduce allocation rate" (the targeted fix:
+adjust `work`, or fold mutable setAttribute hot paths in the
+runtime).
