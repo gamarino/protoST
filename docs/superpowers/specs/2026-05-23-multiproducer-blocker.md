@@ -162,68 +162,77 @@ for the worked-out pattern.
 
 ## Scaling numbers
 
-Best of 3 runs, `cgroup MemoryMax=2G`, machine quiescent:
+The first round of measurements ran under a 2 G cgroup `MemoryMax`
+(a safety net inherited from an earlier overnight session that
+crashed the host on a memory leak). With MaxRSS naturally around
+2.25 GiB on `parallel_speedup` and 0.85-0.99 GiB on
+`multi_producer`, the cap was driving the GC at the soft-zone
+trigger threshold for the whole run — every collection cycle is a
+Phase-1 stop-the-world barrier (`gcThreadLoop` waits for
+`parkedThreads >= runningThreads`), so adding workers doubled
+barrier participation while halving each worker's mutator budget.
 
-| `PROTOST_WORKERS` | `multi_producer.st`  | `parallel_speedup.st` (CPU only) |
-|---|---|---|
-| 1 | 5.04 s  (19 K msg/s)         | 21.65 s        |
-| 2 | 3.75 s  (25.6 K, **1.34×**)  | 30.28 s  (**1.40× slower**) |
-| 4 | 4.11 s  (23.4 K, 1.23×)      | 16.95 s  (1.28×)            |
-| 8 | 7.71 s  (12.5 K, **regression**) | 23.12 s  (regression)   |
+Re-measured with NO cgroup cap (earlyoom still active as the safety
+net — see [[project-dev12-system-setup]]):
 
-(Run-to-run variance is non-trivial — see notes; the qualitative
-pattern is reliable across runs.)
+`parallel_speedup.st` (12 actors, pure CPU, no inter-actor SENDs),
+best of 3:
 
-Two observations:
+| workers | MemoryMax=2G    | NO cap      | speedup (no cap) |
+|---|---|---|---|
+| 1 | 21.65 s         | 12.21 s     | 1.00×            |
+| 2 | **30.28 s** (1.40× SLOWER) | **7.90 s**  | **1.55×**        |
+| 4 | 16.95 s         | 7.52 s      | 1.62×            |
+| 8 | 23.12 s         | 7.31 s      | 1.67×            |
 
-1. **Multi-producer relieves the producer-side bottleneck.** mt100a's
-   single-producer pattern saturated main long before workers ran
-   out; switching to 8 parallel drivers gets a measurable speedup
-   on `w=2` (1.34×) and `w=4` (best raw throughput).
+`multi_producer.st` (8 drivers × 12 sinks × 1 000 rounds, total
+96 000 messages), best of 3:
 
-2. **The bigger ceiling is in the worker pool itself.**
-   `parallel_speedup.st` has zero inter-actor SENDs — 12 actors each
-   running a pure CPU loop — and it STILL anti-scales from `w=1` to
-   `w=2`. That is a protoCore-level scaling cost, not a multi-producer
-   one. The likely suspects are listed in the next section.
+| workers | MemoryMax=2G | NO cap     | speedup (no cap) |
+|---|---|---|---|
+| 1 | 5.04 s          | 6.16 s      | 1.00×            |
+| 2 | 3.75 s          | 4.03 s      | **1.53×**        |
+| 4 | 4.11 s          | 4.41 s      | 1.40×            |
+| 8 | **7.71 s** (regression) | 4.05 s | 1.52×        |
 
-The user's "1 worker → 2 workers should be brutal" expectation cannot
-be met without addressing the worker-pool ceiling at the protoCore
-level. Multi-producer is necessary but not sufficient.
+Three findings:
 
-## Where the protoCore-level ceiling lives
+1. **The earlier "protoCore-level ceiling" diagnosis was an
+   artefact of the 2 G cgroup cap.** With realistic memory
+   available, `w=1 → w=2` is the brutal speedup the user expected
+   (1.55×); the worker pool scales monotonically to 1.67× at `w=8`
+   on pure CPU. No w=2 anti-scaling, no w=8 regression.
 
-Three candidates, in decreasing order of likelihood for explaining the
-`w=1 → w=2` regression observed even on pure CPU work:
+2. **Multi-producer still relieves the producer-side bottleneck.**
+   mt100a's single-producer pattern saturated main long before
+   workers ran out; switching to 8 parallel drivers (this benchmark)
+   gets a clean 1.53× at `w=2`.
 
-1. **Concurrent GC stop-the-world cadence.** Every workload-driven
-   collection cycle pauses ALL workers simultaneously while the
-   `gcThreadLoop` waits for `parkedThreads >= runningThreads`. With
-   `w=2` the all-stop barrier kicks in twice as often per unit work
-   as with `w=1` — and the marker overhead grows roughly linearly
-   with mutator allocation rate, not with worker count, so doubling
-   workers doubles GC frequency but does not double their useful
-   work share.
+3. **`multi_producer.st` plateaus at ~ 1.5× from `w=2` onward**
+   because main coordinates rounds: 8 SENDs + 8 waits per round
+   × 1 000 rounds = 16 K serial main ops. That ceiling is in the
+   BENCHMARK SHAPE, not the runtime — lifting it requires
+   driver-internal looping, which is blocked by the iteration-
+   primitive yieldability work documented above. `parallel_speedup`
+   (no main coordination) scales further because there is nothing
+   to plateau against.
 
-2. **Per-thread allocator refill cost.** `ProtoSpace::getFreeCells`
-   takes the global mutex on every refill; refill size scales with
-   `runningThreads × 4` (so each worker gets a fatter slab), but the
-   contention on the mutex itself + the per-refill cache-line
-   eviction adds up — particularly under the bursty allocation
-   profile of a Smalltalk-style runtime.
+## Operational guidance for benchmarking
 
-3. **Cache-line ping-pong on the ready stack.** The Treiber stack used
-   for the ready queue has a single head pointer on which every push
-   and pop CAS. With multiple workers the cache line bounces between
-   cores at line-rate, eating CPU cycles that show up as kernel time
-   in perf.
-
-Fixing the first one is design-scale work (concurrent root marking,
-or generational GC); the second is more tractable (per-thread
-arenas, larger slab sizes, NUMA-aware refill); the third is a queue
-redesign (work-stealing per-worker deques, segmented Treiber).
-
-Not in scope for tonight.
+- DO keep cgroup `MemoryMax` as a safety net when **iterating on a
+  runtime change** that might leak — a prior overnight session
+  crashed the host without it. earlyoom on its own is not enough
+  protection against the 30 GB+ leaks we have hit.
+- DO NOT use a 2 G cap for **scaling benchmarks**. Rule of thumb:
+  cap at ≥ 4× the no-cap MaxRSS, i.e. ≥ 8 G for current protoST
+  benchmarks; ≥ 16 G for any benchmark that might hold many
+  collections live. Or no cap, leaning on earlyoom.
+- The scaling-ceiling candidates listed in the previous version of
+  this note (concurrent-GC STW cadence, allocator-refill mutex,
+  ready-stack cache-line ping-pong) have NOT been measured to be
+  problems on this workload at this scale. They may matter for
+  much higher worker counts or much more allocation-heavy mixes;
+  if so, measure first before chasing.
 
 ## Open runtime work
 
