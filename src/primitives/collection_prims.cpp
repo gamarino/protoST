@@ -147,13 +147,56 @@ void setSetData(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
 //
 // protoCore's `ProtoSparseList` is keyed by `unsigned long`, so it cannot
 // store arbitrary object keys directly. A `Dictionary` keeps its `__data__`
-// as a `ProtoSparseList` keyed by `key->getHash(ctx)`; each slot holds a
+// as a `ProtoSparseList` keyed by `dictKeyHash(ctx, key)`; each slot holds a
 // *bucket* — a `ProtoList` of alternating `[key0, value0, key1, value1, …]`.
 // Multiple keys that collide on a hash coexist in one bucket, and the key
 // objects themselves are retained (needed for `keysDo:` / `keys` / equality
 // comparison). Lookup walks: hash → bucket → linear scan comparing keys by
 // protoCore object equality (`compare(...) == 0`), exactly as Set/Bag's
 // `remove:` does.
+//
+// **String key canonicalisation (2026-05-24).** protoCore's `ProtoString`
+// hash is structural for rope-built strings: a `'memb' , 'ers'` rope and a
+// `'members'` leaf are byte-equal AND `=` answers true, but their hashes
+// differ because `StringInternalNode::subtreeHash` combines child hashes
+// rather than folding bytes. A naive `key->getHash(ctx)` would therefore
+// route the two through different ProtoSparseList slots and break lookup.
+//
+// `dictKeyHash` works around this by canonicalising any non-symbol
+// ProtoString key through `ProtoString::createSymbol` first. The symbol
+// table is content-keyed (doc: "Symbols with the same content share a
+// unique pointer identity"), so two strings with identical bytes —
+// regardless of internal rope structure — collapse to the SAME canonical
+// symbol. The hash is then the symbol's pointer identity, which is stable
+// across runs of the same process. Non-string keys (Integer, Boolean,
+// arbitrary objects) fall through to `key->getHash(ctx)` unchanged.
+
+// Canonical pointer hash for any object usable as a Dictionary key. For a
+// non-symbol ProtoString it routes through the symbol table; for everything
+// else it defers to the object's own hash protocol. The returned hash is
+// stable for the lifetime of the process for any given content (because
+// canonical symbols are perpetual).
+unsigned long dictKeyHash(proto::ProtoContext* ctx,
+                          const proto::ProtoObject* key) {
+    if (!key || key == PROTO_NONE) return 0;
+    if (key->isString(ctx)) {
+        const proto::ProtoString* s = key->asString(ctx);
+        if (s && !s->isSymbol()) {
+            // Materialise once and intern. Rope strings cost an O(N) byte walk
+            // on this path, but subsequent lookups of an equal-content key hit
+            // the symbol-table cache in O(1) pointer-compare.
+            std::string utf8 = s->toStdString(ctx);
+            const proto::ProtoString* sym =
+                proto::ProtoString::createSymbol(ctx, utf8);
+            return reinterpret_cast<unsigned long>(sym);
+        }
+        if (s && s->isSymbol()) {
+            // Already canonical — use its pointer identity directly.
+            return reinterpret_cast<unsigned long>(s);
+        }
+    }
+    return key->getHash(ctx);
+}
 
 // The backing ProtoSparseList of a Dictionary instance. A nullptr or missing
 // `__data__` yields a fresh empty sparse list — defensive, like arrayData.
@@ -1308,7 +1351,7 @@ const proto::ProtoObject* dictLookup(proto::ProtoContext* ctx,
                                      const proto::ProtoObject* key, bool* found) {
     *found = false;
     if (!key) key = PROTO_NONE;
-    unsigned long h = key->getHash(ctx);
+    unsigned long h = dictKeyHash(ctx, key);
     if (!data->has(ctx, h)) return PROTO_NONE;
     const proto::ProtoObject* bucketObj = data->getAt(ctx, h);
     const proto::ProtoList* bucket = bucketObj ? bucketObj->asList(ctx) : nullptr;
@@ -1355,7 +1398,7 @@ const proto::ProtoSparseList* dictStore(proto::ProtoContext* ctx,
                                         const proto::ProtoObject* value) {
     if (!key)   key   = PROTO_NONE;
     if (!value) value = PROTO_NONE;
-    unsigned long h = key->getHash(ctx);
+    unsigned long h = dictKeyHash(ctx, key);
     const proto::ProtoList* bucket =
         data->has(ctx, h) ? data->getAt(ctx, h)->asList(ctx) : nullptr;
     if (!bucket) bucket = ctx->newList();
@@ -1431,7 +1474,7 @@ const proto::ProtoSparseList* dictRemove(proto::ProtoContext* ctx,
                                          const proto::ProtoObject** out) {
     *out = nullptr;
     if (!key) key = PROTO_NONE;
-    unsigned long h = key->getHash(ctx);
+    unsigned long h = dictKeyHash(ctx, key);
     if (!data->has(ctx, h)) return data;
     const proto::ProtoList* bucket = data->getAt(ctx, h)->asList(ctx);
     int ki = bucketIndexOfKey(ctx, bucket, key);
