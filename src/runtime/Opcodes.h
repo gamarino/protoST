@@ -55,6 +55,22 @@ enum class Op : uint8_t {
     // The dispatch loop computes f.pc = f.pc - arg * kInstrSize, taking pc
     // BACK to the loop test. Complement of JUMP (forward).
     JUMP_BACK       = 30,
+    // 2026-05-24: SmallInt binary fast-path opcodes. Each tag-checks both
+    // operands as SmallInt and, on a hit, replaces them with the result
+    // inline (no SEND dispatch, no primitive call, no method lookup). On a
+    // miss, falls through to the SEND_BINARY handler with the same `arg`
+    // (selector const index) so user-defined `+` / `<=` / etc. on
+    // non-Integer receivers keep working unchanged. The compiler emits
+    // these opcodes for every binary send whose selector is one of
+    // `+ - <= < >= > =`; the rest of receiver-type discrimination is the
+    // runtime tag check, which is one branch.
+    BIN_INT_ADD     = 31,   // +
+    BIN_INT_SUB     = 32,   // -
+    BIN_INT_LE      = 33,   // <=
+    BIN_INT_LT      = 34,   // <
+    BIN_INT_GE      = 35,   // >=
+    BIN_INT_GT      = 36,   // >
+    BIN_INT_EQ      = 37,   // =
     // Extend for >256-index args
     EXTEND          = 254,
     // Debugger primitive guard

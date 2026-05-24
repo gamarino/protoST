@@ -630,12 +630,26 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             return;
         }
         case NodeKind::BinarySend: {
-            // receiver, then arg, then SEND_BINARY
+            // receiver, then arg, then SEND_BINARY (or a SmallInt fast-path
+            // opcode that tag-checks both operands and falls back to
+            // SEND_BINARY on a miss — see Op::BIN_INT_* in Opcodes.h).
             emitExpr(m, *n.children[0]);
             if (n.children.size() < 2) { error("binary send missing argument"); return; }
             emitExpr(m, *n.children[1]);
             auto sym = m.internSymbol(n.text);
-            m.emitWide(Op::SEND_BINARY, static_cast<unsigned int>(sym), currentLine_);
+            // Pick the fast opcode for the common SmallInt selectors. The
+            // runtime fall-back rewrites `op` to SEND_BINARY and re-enters
+            // the shared SEND handler, so user-defined `+` / `<` etc. on
+            // non-Integer receivers still dispatch normally.
+            Op send = Op::SEND_BINARY;
+            if      (n.text == "+")  send = Op::BIN_INT_ADD;
+            else if (n.text == "-")  send = Op::BIN_INT_SUB;
+            else if (n.text == "<=") send = Op::BIN_INT_LE;
+            else if (n.text == "<")  send = Op::BIN_INT_LT;
+            else if (n.text == ">=") send = Op::BIN_INT_GE;
+            else if (n.text == ">")  send = Op::BIN_INT_GT;
+            else if (n.text == "=")  send = Op::BIN_INT_EQ;
+            m.emitWide(send, static_cast<unsigned int>(sym), currentLine_);
             return;
         }
         case NodeKind::KeywordSend: {
@@ -1116,7 +1130,10 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
             size_t loopTestInstrIdx = m.instrStartPc().size();
             m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotI),   currentLine_);
             m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotEnd), currentLine_);
-            m.emitWide(Op::SEND_BINARY,
+            // SmallInt fast-path `<=` — both operands are user-typed
+            // Integer expressions in `to: end`, so the hot path lands
+            // every iteration (no SEND dispatch).
+            m.emitWide(Op::BIN_INT_LE,
                        static_cast<unsigned int>(m.internSymbol("<=")), currentLine_);
             size_t jExitBytePos  = m.bytes().size();
             size_t jExitInstrIdx = m.instrStartPc().size();
@@ -1124,11 +1141,11 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
             // body (the block's children) — inlined.
             emitInlinedBlockBody(m, *blk);
             m.emit(Op::POP, 0, currentLine_);
-            // i := i + 1
+            // i := i + 1   (SmallInt fast-path `+`).
             size_t oneConstIdx = m.addInteger(1);
             m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotI), currentLine_);
             m.emitWide(Op::PUSH_CONST, static_cast<unsigned int>(oneConstIdx), currentLine_);
-            m.emitWide(Op::SEND_BINARY,
+            m.emitWide(Op::BIN_INT_ADD,
                        static_cast<unsigned int>(m.internSymbol("+")), currentLine_);
             m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slotI), currentLine_);
             // JUMP_BACK loopTest

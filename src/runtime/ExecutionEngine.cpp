@@ -464,6 +464,13 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     labels[static_cast<unsigned int>(Op::RETURN)]           = &&L_RETURN;
     labels[static_cast<unsigned int>(Op::RETURN_TOP)]       = &&L_RETURN_TOP;
     labels[static_cast<unsigned int>(Op::JUMP_BACK)]        = &&L_JUMP_BACK;
+    labels[static_cast<unsigned int>(Op::BIN_INT_ADD)]      = &&L_BIN_INT_ADD;
+    labels[static_cast<unsigned int>(Op::BIN_INT_SUB)]      = &&L_BIN_INT_SUB;
+    labels[static_cast<unsigned int>(Op::BIN_INT_LE)]       = &&L_BIN_INT_LE;
+    labels[static_cast<unsigned int>(Op::BIN_INT_LT)]       = &&L_BIN_INT_LT;
+    labels[static_cast<unsigned int>(Op::BIN_INT_GE)]       = &&L_BIN_INT_GE;
+    labels[static_cast<unsigned int>(Op::BIN_INT_GT)]       = &&L_BIN_INT_GT;
+    labels[static_cast<unsigned int>(Op::BIN_INT_EQ)]       = &&L_BIN_INT_EQ;
     labels[static_cast<unsigned int>(Op::PUSH_BLOCK)]       = &&L_PUSH_BLOCK;
     labels[static_cast<unsigned int>(Op::DUP_RECEIVER)]     = &&L_DUP_RECEIVER;
     labels[static_cast<unsigned int>(Op::PUSH_CAPTURED)]    = &&L_PUSH_CAPTURED;
@@ -773,6 +780,121 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 push(f, block);
                 DISPATCH_DIRECT();
                 break;
+            }
+            // 2026-05-24: SmallInt binary fast-path opcodes. Compiler emits
+            // these for every `+ - <= < >= > =` binary send. The hot path
+            // is two tag checks + the native op + push. The cold path
+            // re-pushes the operands, rewrites `op` to SEND_BINARY, and
+            // jumps to the shared SEND handler — so user-defined `+` on
+            // non-Integer receivers and bignum overflow still dispatch
+            // through normal `prim_*` paths. `arg` (selector const idx) is
+            // identical to the SEND_BINARY encoding so the fall-through
+            // needs no operand rewrite.
+            case Op::BIN_INT_ADD: L_BIN_INT_ADD: {
+                Frame& f = frames_.back();
+                const proto::ProtoObject* rhs = pop(f);
+                const proto::ProtoObject* lhs = pop(f);
+                if (proto::isSmallInt(lhs)
+                        && proto::isSmallInt(rhs)) {
+                    long long a = proto::asSmallInt(lhs);
+                    long long b = proto::asSmallInt(rhs);
+                    long long r;
+                    if (!__builtin_add_overflow(a, b, &r)
+                            && proto::smallIntInRange(r)) {
+                        push(f, proto::makeSmallInt(r));
+                        DISPATCH_DIRECT();
+                    }
+                }
+                push(f, lhs); push(f, rhs);
+                op = Op::SEND_BINARY; goto L_SEND_BINARY;
+            }
+            case Op::BIN_INT_SUB: L_BIN_INT_SUB: {
+                Frame& f = frames_.back();
+                const proto::ProtoObject* rhs = pop(f);
+                const proto::ProtoObject* lhs = pop(f);
+                if (proto::isSmallInt(lhs)
+                        && proto::isSmallInt(rhs)) {
+                    long long a = proto::asSmallInt(lhs);
+                    long long b = proto::asSmallInt(rhs);
+                    long long r;
+                    if (!__builtin_sub_overflow(a, b, &r)
+                            && proto::smallIntInRange(r)) {
+                        push(f, proto::makeSmallInt(r));
+                        DISPATCH_DIRECT();
+                    }
+                }
+                push(f, lhs); push(f, rhs);
+                op = Op::SEND_BINARY; goto L_SEND_BINARY;
+            }
+            case Op::BIN_INT_LE: L_BIN_INT_LE: {
+                Frame& f = frames_.back();
+                const proto::ProtoObject* rhs = pop(f);
+                const proto::ProtoObject* lhs = pop(f);
+                if (proto::isSmallInt(lhs)
+                        && proto::isSmallInt(rhs)) {
+                    long long a = proto::asSmallInt(lhs);
+                    long long b = proto::asSmallInt(rhs);
+                    push(f, (a <= b) ? PROTO_TRUE : PROTO_FALSE);
+                    DISPATCH_DIRECT();
+                }
+                push(f, lhs); push(f, rhs);
+                op = Op::SEND_BINARY; goto L_SEND_BINARY;
+            }
+            case Op::BIN_INT_LT: L_BIN_INT_LT: {
+                Frame& f = frames_.back();
+                const proto::ProtoObject* rhs = pop(f);
+                const proto::ProtoObject* lhs = pop(f);
+                if (proto::isSmallInt(lhs)
+                        && proto::isSmallInt(rhs)) {
+                    long long a = proto::asSmallInt(lhs);
+                    long long b = proto::asSmallInt(rhs);
+                    push(f, (a < b) ? PROTO_TRUE : PROTO_FALSE);
+                    DISPATCH_DIRECT();
+                }
+                push(f, lhs); push(f, rhs);
+                op = Op::SEND_BINARY; goto L_SEND_BINARY;
+            }
+            case Op::BIN_INT_GE: L_BIN_INT_GE: {
+                Frame& f = frames_.back();
+                const proto::ProtoObject* rhs = pop(f);
+                const proto::ProtoObject* lhs = pop(f);
+                if (proto::isSmallInt(lhs)
+                        && proto::isSmallInt(rhs)) {
+                    long long a = proto::asSmallInt(lhs);
+                    long long b = proto::asSmallInt(rhs);
+                    push(f, (a >= b) ? PROTO_TRUE : PROTO_FALSE);
+                    DISPATCH_DIRECT();
+                }
+                push(f, lhs); push(f, rhs);
+                op = Op::SEND_BINARY; goto L_SEND_BINARY;
+            }
+            case Op::BIN_INT_GT: L_BIN_INT_GT: {
+                Frame& f = frames_.back();
+                const proto::ProtoObject* rhs = pop(f);
+                const proto::ProtoObject* lhs = pop(f);
+                if (proto::isSmallInt(lhs)
+                        && proto::isSmallInt(rhs)) {
+                    long long a = proto::asSmallInt(lhs);
+                    long long b = proto::asSmallInt(rhs);
+                    push(f, (a > b) ? PROTO_TRUE : PROTO_FALSE);
+                    DISPATCH_DIRECT();
+                }
+                push(f, lhs); push(f, rhs);
+                op = Op::SEND_BINARY; goto L_SEND_BINARY;
+            }
+            case Op::BIN_INT_EQ: L_BIN_INT_EQ: {
+                Frame& f = frames_.back();
+                const proto::ProtoObject* rhs = pop(f);
+                const proto::ProtoObject* lhs = pop(f);
+                // SmallInt values are encoded in the tagged pointer bits,
+                // so pointer equality IS value equality for two SmallInts.
+                if (proto::isSmallInt(lhs)
+                        && proto::isSmallInt(rhs)) {
+                    push(f, (lhs == rhs) ? PROTO_TRUE : PROTO_FALSE);
+                    DISPATCH_DIRECT();
+                }
+                push(f, lhs); push(f, rhs);
+                op = Op::SEND_BINARY; goto L_SEND_BINARY;
             }
             case Op::SEND_UNARY: L_SEND_UNARY:
             case Op::SEND_BINARY: L_SEND_BINARY:
