@@ -110,6 +110,22 @@ private:
     void   emitDoYieldingLoop(BytecodeModule& m,
                               const ast::Node& receiverNode,
                               const ast::Node& blockNode);
+    // 2026-05-24 Tier-S perf: inline canonical conditional / loop sends whose
+    // arguments are literal zero-arg blocks (no locals).  Eliminates the
+    // PUSH_BLOCK + SEND_KEYWORD + prim_True_ifTrue / invokeBlock chain and,
+    // crucially for tight recursion (fib), the nested ExecutionEngine plus
+    // the NonLocalReturn C++ throw on `^expr` from inside the block. The
+    // inlined body emits into the current frame, so `^expr` becomes a plain
+    // local RETURN with no stack unwind. Returns true on inline success;
+    // false means the caller should fall through to normal SEND_KEYWORD.
+    bool   tryEmitInlinedControl(BytecodeModule& m, const ast::Node& send);
+    void   emitInlinedBlockBody(BytecodeModule& m, const ast::Node& block);
+    // Patch a forward-jump instruction (emitted with placeholder arg=0) so
+    // its arg targets the current emit position. Errors out if the distance
+    // does not fit in the 8-bit operand (we do not yet rewrite the
+    // EXTEND-prefixed form during patching). Callers should avoid inlining
+    // blocks larger than ~250 instructions.
+    void   patchJumpToHere(BytecodeModule& m, std::size_t jumpInstrPos);
     // Returns true if `name` appears in the capturedNames set of the current
     // scope or any enclosing scope (innermost-first lookup).
     bool   isCaptured(const std::string& name) const;

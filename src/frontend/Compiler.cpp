@@ -666,6 +666,11 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                 emitDoYieldingLoop(m, *n.children[0], *n.children[1]);
                 return;
             }
+            // 2026-05-24 Tier-S: inline ifTrue:/ifFalse:/ifTrue:ifFalse:/
+            // whileTrue:/whileFalse: when their block argument(s) are
+            // zero-arg block literals with no local declarations. See
+            // the helper for why.
+            if (tryEmitInlinedControl(m, n)) return;
             // receiver, then each arg in order, then SEND_KEYWORD
             emitExpr(m, *n.children[0]);
             for (size_t i = 1; i < n.children.size(); ++i) {
@@ -979,6 +984,144 @@ void Compiler::emitDoYieldingLoop(BytecodeModule& m,
 
     // ---- do:'s return value is the receiver.
     m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotColl), currentLine_);
+}
+
+// 2026-05-24 Tier-S perf: inline ifTrue:/ifFalse:/ifTrue:ifFalse: and
+// whileTrue:/whileFalse: when their argument(s) are zero-arg, no-local
+// block literals. The win is structural, not micro: each non-inlined
+// `cond ifTrue: [^expr]` runs the block through `prim_True_ifTrue` →
+// `invokeBlock` → a NESTED ExecutionEngine on the C++ stack, and an
+// `^expr` from inside that block throws NonLocalReturn to unwind the
+// nested engine back to the parent runLoop. On fib(25) that is ~75K
+// C++ throws (one per leaf call), each one walking the personality
+// routine and the unwind FDE tables — measured at ~11 % of fib CPU
+// before this inlining. Inlining the body emits its instructions into
+// the current frame so `^expr` becomes a plain local RETURN with no
+// stack unwind.
+//
+// We bail out (return false) if the block has any args or any local
+// declarations — closure-analysis decisions cannot be retraced
+// post-hoc, and captured variables would need separate plumbing. The
+// caller falls back to a normal SEND_KEYWORD when inlining declines.
+bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
+    using ast::NodeKind;
+    auto isInlineableBlock = [](const ast::Node* b) -> bool {
+        return b && b->kind == NodeKind::Block
+            && b->intValue == 0
+            && b->stringList.empty();
+    };
+
+    // cond ifTrue:  [body]  / cond ifFalse: [body]
+    if (n.children.size() == 2
+        && isInlineableBlock(n.children[1].get())
+        && (n.text == "ifTrue:" || n.text == "ifFalse:")) {
+        bool invert = (n.text == "ifFalse:");
+        emitExpr(m, *n.children[0]);
+        // Skip body if the cond doesn't match the polarity we want.
+        // JUMP_IF_FALSE skips when receiver is PROTO_FALSE (so it skips
+        // the body of ifTrue when cond is false). JUMP_IF_TRUE skips
+        // when receiver is PROTO_TRUE (mirror for ifFalse).
+        size_t jSkipBytePos  = m.bytes().size();
+        size_t jSkipInstrIdx = m.instrStartPc().size();
+        m.emit(invert ? Op::JUMP_IF_TRUE : Op::JUMP_IF_FALSE, 0, currentLine_);
+        emitInlinedBlockBody(m, *n.children[1]);
+        // The inlined body left a result on the stack. Jump past the nil
+        // we are about to emit for the not-taken branch.
+        size_t jDoneBytePos  = m.bytes().size();
+        size_t jDoneInstrIdx = m.instrStartPc().size();
+        m.emit(Op::JUMP, 0, currentLine_);
+        // Patch jSkip target = right here (PUSH_NIL is next).
+        size_t skipTargetIdx = m.instrStartPc().size();
+        size_t skipOffset    = skipTargetIdx - jSkipInstrIdx - 1;
+        if (skipOffset > 255) { error("inline if: block too large"); return false; }
+        m.patchArg(jSkipBytePos, static_cast<uint8_t>(skipOffset));
+        m.emit(Op::PUSH_NIL, 0, currentLine_);
+        // Patch jDone target = right here.
+        size_t doneTargetIdx = m.instrStartPc().size();
+        size_t doneOffset    = doneTargetIdx - jDoneInstrIdx - 1;
+        if (doneOffset > 255) { error("inline if: block too large"); return false; }
+        m.patchArg(jDoneBytePos, static_cast<uint8_t>(doneOffset));
+        return true;
+    }
+
+    // cond ifTrue: [t] ifFalse: [f]  / cond ifFalse: [f] ifTrue: [t]
+    if (n.children.size() == 3
+        && isInlineableBlock(n.children[1].get())
+        && isInlineableBlock(n.children[2].get())
+        && (n.text == "ifTrue:ifFalse:" || n.text == "ifFalse:ifTrue:")) {
+        bool ifFalseFirst = (n.text == "ifFalse:ifTrue:");
+        const ast::Node& trueBranch  = ifFalseFirst ? *n.children[2] : *n.children[1];
+        const ast::Node& falseBranch = ifFalseFirst ? *n.children[1] : *n.children[2];
+        emitExpr(m, *n.children[0]);
+        // Jump to the false branch if cond is false.
+        size_t jToFalseBytePos  = m.bytes().size();
+        size_t jToFalseInstrIdx = m.instrStartPc().size();
+        m.emit(Op::JUMP_IF_FALSE, 0, currentLine_);
+        // True branch.
+        emitInlinedBlockBody(m, trueBranch);
+        size_t jDoneBytePos  = m.bytes().size();
+        size_t jDoneInstrIdx = m.instrStartPc().size();
+        m.emit(Op::JUMP, 0, currentLine_);
+        // False branch starts here.
+        size_t falseTargetIdx = m.instrStartPc().size();
+        size_t toFalseOffset  = falseTargetIdx - jToFalseInstrIdx - 1;
+        if (toFalseOffset > 255) { error("inline if/else: block too large"); return false; }
+        m.patchArg(jToFalseBytePos, static_cast<uint8_t>(toFalseOffset));
+        emitInlinedBlockBody(m, falseBranch);
+        // Done marker.
+        size_t doneTargetIdx = m.instrStartPc().size();
+        size_t doneOffset    = doneTargetIdx - jDoneInstrIdx - 1;
+        if (doneOffset > 255) { error("inline if/else: block too large"); return false; }
+        m.patchArg(jDoneBytePos, static_cast<uint8_t>(doneOffset));
+        return true;
+    }
+
+    // [cond] whileTrue: [body]  / [cond] whileFalse: [body]
+    if (n.children.size() == 2
+        && isInlineableBlock(n.children[0].get())
+        && isInlineableBlock(n.children[1].get())
+        && (n.text == "whileTrue:" || n.text == "whileFalse:")) {
+        bool invert = (n.text == "whileFalse:");
+        // loopTest:
+        size_t loopTestInstrIdx = m.instrStartPc().size();
+        emitInlinedBlockBody(m, *n.children[0]);  // cond → top of stack
+        // Exit loop when cond does NOT match polarity.
+        size_t jExitBytePos  = m.bytes().size();
+        size_t jExitInstrIdx = m.instrStartPc().size();
+        m.emit(invert ? Op::JUMP_IF_TRUE : Op::JUMP_IF_FALSE, 0, currentLine_);
+        // body, discard its value, loop back.
+        emitInlinedBlockBody(m, *n.children[1]);
+        m.emit(Op::POP, 0, currentLine_);
+        size_t jBackInstrIdx = m.instrStartPc().size();
+        size_t backOffset    = jBackInstrIdx - loopTestInstrIdx + 1;
+        if (backOffset > 255) { error("inline while: body too large"); return false; }
+        m.emit(Op::JUMP_BACK, static_cast<uint8_t>(backOffset), currentLine_);
+        // exit target — whileTrue: returns nil.
+        size_t exitTargetIdx = m.instrStartPc().size();
+        size_t exitOffset    = exitTargetIdx - jExitInstrIdx - 1;
+        if (exitOffset > 255) { error("inline while: body too large"); return false; }
+        m.patchArg(jExitBytePos, static_cast<uint8_t>(exitOffset));
+        m.emit(Op::PUSH_NIL, 0, currentLine_);
+        return true;
+    }
+
+    return false;
+}
+
+void Compiler::emitInlinedBlockBody(BytecodeModule& m, const ast::Node& block) {
+    if (block.children.empty()) {
+        m.emit(Op::PUSH_NIL, 0, currentLine_);
+        return;
+    }
+    for (std::size_t i = 0; i < block.children.size(); ++i) {
+        emitStatement(m, *block.children[i]);
+        if (i + 1 != block.children.size()) m.emit(Op::POP, 0, currentLine_);
+    }
+}
+
+void Compiler::patchJumpToHere(BytecodeModule& m, std::size_t /*jumpInstrPos*/) {
+    // Kept for forward compatibility — the inline helpers above currently
+    // patch jumps directly via m.patchArg + m.instrStartPc() indexing.
 }
 
 void Compiler::error(const std::string& msg) { errors_.push_back(msg); }
