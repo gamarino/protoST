@@ -319,26 +319,33 @@ Driver >> readAllParallel
   ^ results.
 ```
 
-**Two limits worth knowing**:
+**One limit worth knowing**:
 
-1. **`doYielding:` only works on `SequenceableCollection`s** (Array,
-   OrderedCollection, Interval, String) — collections that answer
-   `at:` and `size`. Set, Dictionary and Bag still use the regular
-   polymorphic `do:`; iteration over those is unchanged but cannot
-   contain a `wait`.
+**`doYielding:` only works on `SequenceableCollection`s** (Array,
+OrderedCollection, Interval, String) — collections that answer
+`at:` and `size`. Set, Dictionary and Bag still use the regular
+polymorphic `do:`; iteration over those is unchanged but cannot
+contain a `wait`.
 
-2. **`1 to: N do: [...]` is the integer iteration primitive**, also
-   non-yieldable. If you need a counted loop where the body yields,
-   build the index list first:
+**Note (2026-05-24 update)**: `1 to: N do: [:i | body]` with a
+literal one-argument block is now compiler-inlined into a bytecode
+loop in the calling frame — exactly the same mechanism that makes
+`doYielding:` yieldable — so a `wait` *inside* its body now
+cooperates correctly too. The earlier requirement to pre-build an
+index list with `1 to: N do:` and then iterate it with
+`doYielding:` is no longer needed for the integer-loop shape:
 
-   ```smalltalk
-   indices := OrderedCollection new.
-   1 to: rounds do: [ :i | indices add: i ].   "no wait — safe"
-   indices doYielding: [ :i | ... do something with wait ... ].
-   ```
+```smalltalk
+"This now works directly — the inline preserves cooperative yield."
+1 to: rounds do: [ :i |
+    results add: (workers at: i) ping wait ].
+```
 
 The benchmark `benchmarks/actors/multi_producer.st` shows the full
-multi-driver fan-out / fan-in pattern using these two rules.
+multi-driver fan-out / fan-in pattern; the version written before
+the inline used the index-list workaround and still works
+(`doYielding:` is also valid for the integer-loop case, just no
+longer required for it).
 
 > **In JavaScript** the analogue is `for (const s of sensors)
 > { results.push(await s.read()) }` — the `for...of` works correctly

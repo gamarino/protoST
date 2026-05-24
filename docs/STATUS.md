@@ -257,8 +257,60 @@ follow.** Each carries a minimal repro and a severity (High = breaks documented
 behaviour or examples; Medium = surprising / blocks idiomatic code; Low =
 narrow edge case).
 
-*No open bugs. D22 and D23 — the two items the Track-6 and Track-11 slices
-surfaced — are both fixed; see Closed items below.*
+### D24 — `isCaptured` walks past method-scope boundaries (Medium)
+
+The closure-capture analysis walks ALL ancestor scopes when deciding whether
+an identifier is captured. It correctly stops at the FIRST scope that declares
+the name as a non-captured local, but a same-named declaration in the OUTER
+module scope (where script-level blocks may capture the name) leaks through
+the method scope — even though instance-variable resolution should take
+precedence.
+
+The result: any method's reference to an instance variable whose name *also*
+appears as a script-scope local *captured by a script-level block* is
+mis-compiled as `PUSH_CAPTURED` against the method's (empty) captured dict,
+and reads as `nil` at runtime.
+
+Minimal repro (fails — returns "doesNotUnderstand: size (receiver: nil)"):
+
+```smalltalk
+Object subclass: #Driver instanceVariableNames: 'sinks'.
+Driver >> setSinks: ss  sinks := ss.  ^ self.
+Driver >> count  ^ sinks size.
+
+sinks := OrderedCollection new.
+1 to: 3 do: [ :i | sinks add: i ].         "block captures script-scope `sinks`"
+d := Driver new.
+d setSinks: sinks.
+d count.                                    "BUG: nil at: size"
+```
+
+Renaming the script-scope local to anything other than `sinks` makes it work
+(returns 3); both directly and via `d asActor count`. The bug is independent
+of the actor pathway — the synchronous `d count` returns `nil`'s
+doesNotUnderstand: size too. Surfaced 2026-05-24 during the EOD correctness
+pass while spot-checking the new perf-sprint inlines for semantic regressions.
+
+The fix is in `Compiler::isCaptured` (frontend/Compiler.cpp): the walk must
+stop at a `MethodDecl` scope boundary — a captured name in an OUTER module/
+class scope is irrelevant to whether the name is captured inside a method
+body. Method scopes establish a fresh closure-resolution context; only inner
+blocks of the same method body should contribute to its captured set.
+
+The compiler analysis side (`analyseClosures`) likely needs the same
+boundary discipline so a method body does not register its inst-var reads
+as "free variables of an outer scope" in the first place. Validation must
+include: a method body that legitimately captures a method-local variable
+in a nested block (the normal case) still works; a method body that
+references an inst-var with the same name as a script-scope captured local
+correctly compiles to `PUSH_INSTVAR`.
+
+Severity Medium: only manifests when names collide AND the outer is
+captured by a script-level block. Rare in practice; trivially worked
+around by renaming the script-scope variable. No data loss, no security
+implication — surfaces immediately as a runtime
+`doesNotUnderstand: <selector> (receiver: nil)` against the method's first
+use of the shadowed inst-var.
 
 ---
 
