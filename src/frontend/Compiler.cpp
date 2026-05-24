@@ -1076,6 +1076,80 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
         return true;
     }
 
+    // start to: end do: [:i | body]
+    // The block has exactly one argument and no local declarations; its
+    // argument MUST NOT be captured by any inner block (otherwise the
+    // captured-dict plumbing would need separate setup we cannot do
+    // post-analysis). int_sum_loop's `1 to: 100000 do: [:i| total := total
+    // + i]` matches this pattern; the inlining replaces the
+    // PUSH_BLOCK + SEND_KEYWORD + prim_Integer_toDo:do: + invokeBlock
+    // chain with a direct bytecode loop using SmallInt arithmetic.
+    if (n.text == "to:do:"
+        && n.children.size() == 3
+        && n.children[2]->kind == ast::NodeKind::Block
+        && n.children[2]->intValue == 1
+        && n.children[2]->stringList.size() == 1) {
+        const ast::Node* blk = n.children[2].get();
+        auto capIt = analysis_.capturedByScope.find(blk);
+        bool argIsCaptured = (capIt != analysis_.capturedByScope.end()
+                              && capIt->second.count(blk->stringList[0]) != 0);
+        if (!argIsCaptured) {
+            // Reserve fresh internal slots — mangled with nextSlot so nested
+            // to:do: in the same scope produce distinct names.
+            auto& s = scopes_.back();
+            int baseSlot = s.nextSlot;
+            int slotI   = declareLocal("__td_i_"   + std::to_string(baseSlot));
+            int slotEnd = declareLocal("__td_end_" + std::to_string(baseSlot));
+            // Setup: i := start; end := endExpr.
+            emitExpr(m, *n.children[0]);
+            m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slotI), currentLine_);
+            emitExpr(m, *n.children[1]);
+            m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slotEnd), currentLine_);
+            // Temporarily rebind the user's iter-var name to our slot so
+            // body references resolve correctly.
+            const std::string& iterName = blk->stringList[0];
+            auto savedIt = s.slots.find(iterName);
+            int savedSlot = (savedIt != s.slots.end()) ? savedIt->second : -1;
+            bool hadBinding = (savedIt != s.slots.end());
+            s.slots[iterName] = slotI;
+            // loopTest:
+            size_t loopTestInstrIdx = m.instrStartPc().size();
+            m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotI),   currentLine_);
+            m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotEnd), currentLine_);
+            m.emitWide(Op::SEND_BINARY,
+                       static_cast<unsigned int>(m.internSymbol("<=")), currentLine_);
+            size_t jExitBytePos  = m.bytes().size();
+            size_t jExitInstrIdx = m.instrStartPc().size();
+            m.emit(Op::JUMP_IF_FALSE, 0, currentLine_);
+            // body (the block's children) — inlined.
+            emitInlinedBlockBody(m, *blk);
+            m.emit(Op::POP, 0, currentLine_);
+            // i := i + 1
+            size_t oneConstIdx = m.addInteger(1);
+            m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotI), currentLine_);
+            m.emitWide(Op::PUSH_CONST, static_cast<unsigned int>(oneConstIdx), currentLine_);
+            m.emitWide(Op::SEND_BINARY,
+                       static_cast<unsigned int>(m.internSymbol("+")), currentLine_);
+            m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slotI), currentLine_);
+            // JUMP_BACK loopTest
+            size_t jBackInstrIdx = m.instrStartPc().size();
+            size_t backOffset    = jBackInstrIdx - loopTestInstrIdx + 1;
+            if (backOffset > 255) { error("inline to:do:: body too large"); return false; }
+            m.emit(Op::JUMP_BACK, static_cast<uint8_t>(backOffset), currentLine_);
+            // exit target
+            size_t exitTargetIdx = m.instrStartPc().size();
+            size_t exitOffset    = exitTargetIdx - jExitInstrIdx - 1;
+            if (exitOffset > 255) { error("inline to:do:: body too large"); return false; }
+            m.patchArg(jExitBytePos, static_cast<uint8_t>(exitOffset));
+            // Restore the user's iter-var binding.
+            if (hadBinding) s.slots[iterName] = savedSlot;
+            else            s.slots.erase(iterName);
+            // to:do: returns the receiver (the start integer); push it.
+            emitExpr(m, *n.children[0]);
+            return true;
+        }
+    }
+
     // [cond] whileTrue: [body]  / [cond] whileFalse: [body]
     if (n.children.size() == 2
         && isInlineableBlock(n.children[0].get())
