@@ -1031,6 +1031,15 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
         && (n.text == "ifTrue:" || n.text == "ifFalse:")) {
         bool invert = (n.text == "ifFalse:");
         emitExpr(m, *n.children[0]);
+        // 2026-05-24 correctness fix: emit a non-Boolean guard before the
+        // jump. Without it, `123 ifTrue: [x]` silently runs `[x]` because
+        // JUMP_IF_FALSE only branches on PROTO_FALSE and any other
+        // non-PROTO_FALSE value (including 123) falls through to the body.
+        // ASSERT_BOOL_OR_DNU signals doesNotUnderstand:<sel> on non-Boolean
+        // receivers, matching the pre-inline SEND dispatch semantics.
+        auto selSym = m.internSymbol(n.text);
+        m.emitWide(Op::ASSERT_BOOL_OR_DNU,
+                   static_cast<unsigned int>(selSym), currentLine_);
         // Skip body if the cond doesn't match the polarity we want.
         // JUMP_IF_FALSE skips when receiver is PROTO_FALSE (so it skips
         // the body of ifTrue when cond is false). JUMP_IF_TRUE skips
@@ -1067,6 +1076,10 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
         const ast::Node& trueBranch  = ifFalseFirst ? *n.children[2] : *n.children[1];
         const ast::Node& falseBranch = ifFalseFirst ? *n.children[1] : *n.children[2];
         emitExpr(m, *n.children[0]);
+        // Non-Boolean guard (see ifTrue:/ifFalse: comment above).
+        auto selSym = m.internSymbol(n.text);
+        m.emitWide(Op::ASSERT_BOOL_OR_DNU,
+                   static_cast<unsigned int>(selSym), currentLine_);
         // Jump to the false branch if cond is false.
         size_t jToFalseBytePos  = m.bytes().size();
         size_t jToFalseInstrIdx = m.instrStartPc().size();
@@ -1173,9 +1186,15 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
         && isInlineableBlock(n.children[1].get())
         && (n.text == "whileTrue:" || n.text == "whileFalse:")) {
         bool invert = (n.text == "whileFalse:");
+        auto selSym = m.internSymbol(n.text);
         // loopTest:
         size_t loopTestInstrIdx = m.instrStartPc().size();
         emitInlinedBlockBody(m, *n.children[0]);  // cond → top of stack
+        // Guard non-Boolean cond results — same correctness fix as for
+        // ifTrue:/ifFalse: above. The cond block re-evaluates every
+        // iteration, so the guard is at loopTest:, not pre-loop.
+        m.emitWide(Op::ASSERT_BOOL_OR_DNU,
+                   static_cast<unsigned int>(selSym), currentLine_);
         // Exit loop when cond does NOT match polarity.
         size_t jExitBytePos  = m.bytes().size();
         size_t jExitInstrIdx = m.instrStartPc().size();

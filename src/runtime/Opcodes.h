@@ -71,6 +71,19 @@ enum class Op : uint8_t {
     BIN_INT_GE      = 35,   // >=
     BIN_INT_GT      = 36,   // >
     BIN_INT_EQ      = 37,   // =
+    // 2026-05-24: type guard for inlined ifTrue:/ifFalse:/whileTrue:.
+    // The standalone JUMP_IF_FALSE / JUMP_IF_TRUE opcodes silently
+    // fall through when the receiver is not PROTO_TRUE / PROTO_FALSE,
+    // which produced a Smalltalk-semantic regression: `123 ifTrue: [x]`
+    // executed the block instead of raising doesNotUnderstand:ifTrue:.
+    // ASSERT_BOOL_OR_DNU peeks the top of stack and, if it is not a
+    // Boolean, signals MessageNotUnderstood with the selector from the
+    // operand (a const-pool symbol index). On a Boolean it is a no-op
+    // and the stack is unchanged. The compiler emits it before
+    // JUMP_IF_FALSE / JUMP_IF_TRUE inside any inlined conditional, so
+    // the inlined fast path keeps the same observable semantics as the
+    // SEND_KEYWORD dispatch it replaced.
+    ASSERT_BOOL_OR_DNU = 38, // arg = selector const index
     // Extend for >256-index args
     EXTEND          = 254,
     // Debugger primitive guard
