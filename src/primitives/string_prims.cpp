@@ -120,6 +120,29 @@ const proto::ProtoObject* prim_NumAsCharacter(STRuntime&, proto::ProtoContext* c
 const proto::ProtoObject* prim_StrConcat(STRuntime&, proto::ProtoContext* ctx,
                                           const proto::ProtoObject* r,
                                           const proto::ProtoObject* const* a, int) {
+    // Legacy O(N) materialisation: decode both operands to UTF-8 buffers,
+    // concatenate, build a fresh leaf string. Makes `s := s , 'x'` over N
+    // iterations cost O(N²) — `benchmarks/comparable/str_concat.st` (N=2000)
+    // landed at 1.6 s on the 5500U for that reason.
+    //
+    // The natural fix is to delegate to protoCore's `ProtoString::appendLast`,
+    // which already builds a rope-spine `StringInternalNode` in O(log N).
+    // That direct delegation was attempted in the 2026-05-24 perf pass and
+    // gave a verified 80× speed-up on str_concat — BUT it broke
+    // `conformance/13-stdlib/json-parse-nested.st`. Root cause: in protoCore
+    // `core/ProtoString.cpp`, leaf nodes carry a true content hash
+    // (`fnv1a(bytes)`) but internal nodes compute their hash by combining
+    // child hashes (`hashCombine(subtreeHash(l), subtreeHash(r))`). A rope
+    // `'mem' , 'bers'` therefore hashes DIFFERENTLY from a freshly-built leaf
+    // `'members'` even though `=` answers true — so any rope-built key fails
+    // a Dictionary `at:` lookup against a leaf key.
+    //
+    // The proper fix lives in protoCore: make the rope hash a true content
+    // fold (e.g. polynomial hashing of the leaf-byte stream, computable from
+    // child hashes alone) so structurally distinct strings with identical
+    // content hash to the same value. That is a separate, careful change to
+    // protoCore's String hashing contract and is tracked as a follow-up; for
+    // now this primitive stays on the slow, correct path.
     std::string out = toUtf8(r, ctx) + toUtf8(a[0], ctx);
     return ctx->fromUTF8String(out.c_str());
 }
