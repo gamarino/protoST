@@ -172,6 +172,25 @@ private:
     std::vector<std::unique_ptr<BytecodeModule>> blocks_;
     int argCount_ = 0;
     std::string definingClass_;   // BL-1: class owning this method body
+
+public:
+    // 2026-05-24 perf: localCount is a static property of the bytecode
+    // (= max PUSH_LOCAL/STORE_LOCAL slot index + 1). The engine used to
+    // recompute it from a full bytecode scan on every pushFrame —
+    // measured at 3.58 % of fib CPU because fib(25) does ~150K method
+    // calls, each scanning a ~30-byte method. Lazy-cache it here on
+    // first request; bytecode is immutable after compilation so the
+    // cached value never invalidates.
+    unsigned int cachedLocalCount(unsigned int argc) const;
+
+private:
+    // Sentinel == UINT32_MAX means "not yet computed". argc is folded
+    // into the cache key because `computeLocalCount` returns max(argc,
+    // maxSlot+1) — different argc values for the same module body
+    // would yield different counts (in practice argc is always the
+    // module's declared argCount so this is just a safety check).
+    mutable unsigned int cachedLocalCount_ = 0xFFFFFFFFu;
+    mutable unsigned int cachedLocalCountArgc_ = 0;
 };
 
 } // namespace protoST

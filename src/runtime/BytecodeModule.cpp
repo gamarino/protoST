@@ -1,7 +1,45 @@
 #include "BytecodeModule.h"
 #include "protoCore.h"
+#include <algorithm>
 #include <stdexcept>
 namespace protoST {
+
+// Lazy cache. The engine's pushFrame called this on every method call;
+// fib(25) does ~150K calls, each one rescanning its ~30-byte method to
+// recompute the (static) maxSlot. Perf-traced at 3.58 % of fib CPU. The
+// bytecode is immutable post-compilation, so the answer is computed once
+// and reused. Different `argc` values would only differ in the max(argc,
+// maxSlot+1) term — the cache validates argc and rescans if it differs,
+// which in practice never fires (argc == m.argCount() always).
+unsigned int BytecodeModule::cachedLocalCount(unsigned int argc) const {
+    if (cachedLocalCount_ != 0xFFFFFFFFu && cachedLocalCountArgc_ == argc) {
+        return cachedLocalCount_;
+    }
+    unsigned int maxSlot = 0;
+    bool sawSlot = false;
+    // Decode EXTEND prefixes exactly as the engine does (BL-2).
+    for (std::size_t pc = 0; pc + 1 < bytes_.size(); ) {
+        Op op  = static_cast<Op>(bytes_[pc]);
+        unsigned int arg = bytes_[pc + 1];
+        pc += kInstrSize;
+        while (op == Op::EXTEND && pc + 1 < bytes_.size()) {
+            op  = static_cast<Op>(bytes_[pc]);
+            arg = (arg << 8) | bytes_[pc + 1];
+            pc += kInstrSize;
+        }
+        if (op == Op::PUSH_LOCAL || op == Op::STORE_LOCAL) {
+            if (!sawSlot || arg > maxSlot) { maxSlot = arg; sawSlot = true; }
+        }
+    }
+    unsigned int needed = sawSlot ? (maxSlot + 1) : 0;
+    needed = std::max(needed, argc);
+    // The engine also enforces a kMinLocals floor (kSelfSlot + 1 + a few
+    // header slots), but that constant lives in ExecutionEngine.cpp. We
+    // return the raw computed need here; the caller folds in kMinLocals.
+    cachedLocalCount_     = needed;
+    cachedLocalCountArgc_ = argc;
+    return needed;
+}
 
 const proto::ProtoString* BytecodeModule::constSym(proto::ProtoContext* ctx,
                                                    size_t i) const {

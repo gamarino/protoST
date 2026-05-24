@@ -92,30 +92,12 @@ constexpr unsigned int kFrameMaxStk  = 48;
 // the cursor as restoreFrames rebuilds the stack.
 thread_local unsigned int g_slotCursor = 0;
 
-unsigned int computeLocalCount(const BytecodeModule& m, unsigned int argc) {
-    const auto& bytes = m.bytes();
-    unsigned int maxSlot = 0;
-    bool sawSlot = false;
-    // BL-2: the scan must decode EXTEND prefixes exactly as the engine does,
-    // or a PUSH_LOCAL / STORE_LOCAL with a slot index > 255 would be read as
-    // its low byte only and the frame's slot region would be undersized.
-    for (std::size_t pc = 0; pc + 1 < bytes.size(); ) {
-        Op op = static_cast<Op>(bytes[pc]);
-        unsigned int arg = bytes[pc + 1];
-        pc += kInstrSize;
-        while (op == Op::EXTEND && pc + 1 < bytes.size()) {
-            op  = static_cast<Op>(bytes[pc]);
-            arg = (arg << 8) | bytes[pc + 1];
-            pc += kInstrSize;
-        }
-        if (op == Op::PUSH_LOCAL || op == Op::STORE_LOCAL) {
-            if (!sawSlot || arg > maxSlot) { maxSlot = arg; sawSlot = true; }
-        }
-    }
-    unsigned int needed = sawSlot ? (maxSlot + 1) : 0;
-    needed = std::max(needed, argc);
-    needed = std::max(needed, kMinLocals);
-    return needed;
+// 2026-05-24 perf: the per-call bytecode rescan moved to
+// `BytecodeModule::cachedLocalCount` (lazy memoised on the module).
+// The engine still owns the `kMinLocals` floor, so the wrapper here
+// adds it on top of the cached scan result.
+inline unsigned int computeLocalCount(const BytecodeModule& m, unsigned int argc) {
+    return std::max(m.cachedLocalCount(argc), kMinLocals);
 }
 
 } // namespace
