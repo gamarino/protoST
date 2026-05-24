@@ -270,18 +270,25 @@ ExecutionEngine::pushFrame(const BytecodeModule* m,
     if (regionEnd > kFrameRegionLimit)
         throw std::runtime_error("engine slot region exhausted");
 
-    // Initialise the whole region to PROTO_NONE (header + locals + opStack).
-    for (unsigned int s = fr.baseSlot; s < regionEnd; ++s)
-        ctx_->setAutomaticLocal(s, PROTO_NONE);
+    // 2026-05-24 perf: tight-loop init via the raw automaticLocals array.
+    // The previous version called `ctx_->setAutomaticLocal(s, PROTO_NONE)`
+    // per slot, paying its bounds check on every iteration even though
+    // the region was already validated above. For fib's ~10-slot region
+    // × 75K calls this was visible per-call overhead. The region bound
+    // (regionEnd <= kFrameRegionLimit <= automaticLocalsCount) is checked
+    // once at allocation above, so the direct write is safe.
+    const proto::ProtoObject** slots = ctx_->getAutomaticLocals();
+    std::fill_n(slots + fr.baseSlot, regionSize, PROTO_NONE);
 
-    // Header slots.
-    ctx_->setAutomaticLocal(fr.baseSlot + 0, captured ? captured : PROTO_NONE);
-    ctx_->setAutomaticLocal(fr.baseSlot + 1, self ? self : PROTO_NONE);
+    // Header slots — direct writes (region was zeroed above).
+    slots[fr.baseSlot + 0] = captured ? captured : PROTO_NONE;
+    slots[fr.baseSlot + 1] = self ? self : PROTO_NONE;
 
-    // Bind incoming args into locals 0..argc-1.
+    // Bind incoming args into locals 0..argc-1 (direct writes; region is
+    // already in-bounds).
+    const unsigned int lb = localsBase(fr);
     for (unsigned int i = 0; i < argc; ++i)
-        ctx_->setAutomaticLocal(localsBase(fr) + i,
-                                args[i] ? args[i] : PROTO_NONE);
+        slots[lb + i] = args[i] ? args[i] : PROTO_NONE;
 
     g_slotCursor += regionSize;
     frames_.push_back(fr);
