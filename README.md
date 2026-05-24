@@ -97,92 +97,143 @@ complete, runnable digital-twin demo — a pump with three sensors read
 concurrently on a worker pool — is in
 [`examples/pump_twin.st`](examples/pump_twin.st).
 
-## Performance — a 100K+ msg/s actor framework
+## Performance — 50-70K msg/s actor messaging, real parallel scaling
 
-**~ 72 K msg/s actor messaging on a 6-core notebook CPU.
-Estimated 130-150 K on modern desktops, 2 M+ with multi-producer.
-protoST sits comfortably in the 100 K+ msg/s band as a class.**
-
-The number above is `mt100a` (100 actors, 1 000 fan-out / fan-in batches,
-100 000 settled futures, full round-trip enqueue → schedule → execute →
-settle → wake) at `PROTOST_WORKERS=2`, best of 3. The benchmarks suite is
-in [`benchmarks/`](benchmarks/); the full dated report with the host
-details, scaling curves, and projections to other hardware is
-[`benchmarks/reports/2026-05-23-performance.md`](benchmarks/reports/2026-05-23-performance.md).
+**Actor messaging in the 50-70 K msg/s band on a 6-core 2020 notebook CPU.
+Single-thread workloads geomean 4.65× CPython 3.14 free-threading on the
+comparable suite (`benchmarks/comparable/`), beating CPython on
+`str_concat` and at parity vs `protopy` overall.** Numbers below are from
+the 2026-05-24 perf sprint (7 commits in protoST + 1 in protoCore that
+day); full dated reports under
+[`benchmarks/reports/`](benchmarks/reports/) — start with
+[`2026-05-24-perf-final.md`](benchmarks/reports/2026-05-24-perf-final.md)
+and [`2026-05-24-actor-messaging.md`](benchmarks/reports/2026-05-24-actor-messaging.md).
 
 ### Actor messaging throughput
 
-| benchmark | best | rate |
-|---|---:|---:|
-| `mt100a` (100 actors, drained batches) at w=2 | 1.39 s | **71.9 K msg/s** |
-| `mt100k` (1 actor, drained one-msg-per-turn) at w=1 | 2.73 s | 36.6 K msg/s |
-| `saturation_big` (CPU-bound, 32 actors) at w=6 | 2.02 s | 3.88× scaling (near-ideal 4× on 6 physical cores) |
+Three patterns measured, all on a Ryzen 5 5500U (6 physical / 12 SMT,
+4 GHz boost, 15-25 W TDP — a 2020 mobile chip chosen deliberately as the
+publishing floor):
+
+| benchmark | best | rate | optimal workers |
+|---|---:|---:|---:|
+| `message_throughput.st` (1 sink, 2000 drained round-trips) | 30 ms | **66.7 K msg/s** | w=2 |
+| `mt100a` (1 producer → 100 sinks, 1000 rounds = 100 K msgs) | 1.83 s | **54.6 K msg/s** | w=2-4 |
+| `multi_producer.st` (8 drivers × 12 sinks × 1000 rounds = 96 K msgs) | 1.61 s | **59.6 K msg/s** | w=4-6 |
+
+All three patterns land in the 50-70 K band. **Multi-producer
+empirically does NOT unlock a higher ceiling** on this hardware (each
+driver's `doYielding:` per-element resume cost cancels the saved
+single-producer-bottleneck cost) — earlier reports projecting "1.5 M
+msg/s when multi-producer lands" were over-optimistic and have been
+withdrawn. The real next architectural step is per-actor message slab
+allocation + selector-resolved-once caching; see
+`2026-05-24-actor-messaging.md` for the analysis.
 
 ### Hardware sensitivity (honest projection)
 
-The 71.9 K above was measured on an **AMD Ryzen 5 5500U** — a 2020-era
-notebook CPU with 6 physical cores and a 15-25 W TDP, chosen deliberately
-because anything that runs well on it runs well on a server. Modern
-desktops are 1.8-2.2× faster per single thread, which is exactly the
-dimension `mt100a` saturates first:
-
-| host CPU | factor vs 5500U | `mt100a` w=2 (estimated) |
+| host CPU | factor vs 5500U | est. peak msg/s |
 |---|---|---:|
-| AMD Ryzen 5 5500U (this report) | 1.00× | **71.9 K** (measured) |
-| Apple M3 / Ryzen 7 7700X        | ~ 1.9× | **~ 135 K msg/s** |
-| Ryzen 9 7900X / i9-13900K       | ~ 2.0× | **~ 145 K msg/s** |
-| Multi-producer + modern desktop (future) | — | **~ 1.5 M msg/s** |
-| Multi-producer + 64-core server (future) | — | **~ 5-8 M msg/s** |
+| AMD Ryzen 5 5500U (this report) | 1.00× | **60-70 K** (measured) |
+| Apple M3 / Ryzen 7 7700X        | ~ 1.9× | ~ 115 K |
+| Ryzen 9 7900X / i9-13900K       | ~ 2.0× × more cores | ~ 130-150 K |
+| EPYC 96c server (X3D)           | ~ 1.7× ST × 16× cores | ~ 500 K - 1 M |
 
-**100 K msg/s is reachable today on any 2023-vintage desktop.** The 5500U
-is the floor we publish, not the ceiling the runtime can hit. Multi-
-producer (each driver actor fanning-out in parallel) is the next horizon
-— blocked by one yieldable-`do:` runtime limitation documented in the
-spec — that opens the door to 1-10 M msg/s on modern hardware.
+Even at the high end, protoST stays meaningfully below BEAM
+(Erlang/Elixir's 5-10 M msg/s on the same EPYC class). Closing that
+gap is the active perf workstream, NOT a finished story — see "How
+protoST compares" below.
 
 ### Other actor benchmarks
 
-- **Parallel speedup.** 32 CPU-bound worker actors pre-loaded with work
-  and released atomically scale **3.88×** on a 6-physical-core host
-  (`PROTOST_WORKERS=6`) — near-ideal for the cores available. Extra
-  cores, no code change.
-- **Cooperative-yield scaling.** 1 000 actors each parked on a nested
-  `wait`, all hosted on just **2** worker threads. Thread-per-actor
-  blocking would need 1 000 OS threads; protoST parks the waiters and
-  reuses the two.
+- **Parallel speedup.** 12 CPU-bound worker actors saturating 6 cores:
+  **3.88× scaling** (near-ideal 4× on 6 physical cores, w=6). Extra
+  cores → real wall-clock speedup, no code change. This is the
+  architectural property that distinguishes protoST from green-thread
+  systems including Pharo / Squeak.
+- **Cooperative-yield density.** 1000 actors each parked on a nested
+  `wait`, all hosted on just **2** worker threads — completes in
+  ~2.5 s. Thread-per-actor blocking would need 1000 OS threads;
+  protoST parks the waiters and reuses the two. Same architectural
+  league as BEAM and Go's M:N scheduler.
 
-### Single-thread vs CPython 3.14
+### Single-thread vs CPython 3.14 (free-threading)
 
-protoST is a young runtime and is slower on raw arithmetic. The benchmark
-suite reports this honestly — raw single-thread speed is **not** where
-protoST competes:
+Geomean across the 7-test comparable suite: **protoST 4.65× CPython**,
+**1.02× protopy** (parity with the bytecode interpreter of our
+companion Python runtime, both measured on the same suite).
 
-| Workload | protoST | CPython | Ratio |
-|---|---:|---:|---:|
-| `int_sum_loop` (sum 1..100k) | ~569 ms | ~30 ms | ~19× slower |
-| `list_append` (10k appends) | ~107 ms | ~29 ms | ~3.7× slower |
-| `range_iterate` (iterate 100k) | ~696 ms | ~31 ms | ~23× slower |
+| Workload | protoST | CPython | Ratio | Status |
+|---|---:|---:|---:|---|
+| `str_concat` (2000 chained `,`) | 19 ms | 30 ms | **0.64× (WIN)** | beats CPython |
+| `list_append` (10K `add:`)      | 99 ms | 37 ms | 2.78× | within 3× |
+| `int_sum_loop` (sum 1..100k)    | 103 ms| 50 ms | 2.08× | within 3× |
+| `range_iterate` (iterate 100k)  | 154 ms| 37 ms | 4.17× | mid-pack |
+| `attr_lookup` (300k iv reads)   | 281 ms| 45 ms | 6.27× | mid-pack |
+| `fib` (recursive fib(25))       | ~440 ms| 56 ms| ~7.9× | OOP recursion |
+| `exception_latency` (50K signals)| 1248 ms| 39 ms| 32×   | needs on:do: inlining |
+| **Geomean**                     |       |       | **4.65×** |       |
 
-Where it does compete is **what happens when you put a thousand of those
-loops behind separate actors and run them concurrently** — see the actor
-benchmarks above.
+Day-start was 9.96× geomean; the four 2026-05-24 landings
+(ifTrue:/whileTrue: inlining, to:do: inlining, Dictionary key
+canonicalisation + rope-aware `,`, SmallInt fast opcodes) cut it to
+4.65×. The remaining 3-4× gap is concentrated on workloads bound by
+method-call dispatch (`getAttribute` MRO walk — needs an inline
+cache) and on `exception_latency` (`on:do:` handler frames not yet
+inlined). See `2026-05-24-perf-final.md` for the per-fix attribution.
 
 ## How protoST compares
 
-protoST is **not** the fastest actor framework. BEAM (Erlang / Elixir)
-and Akka (JVM) have a decade-plus of JIT-compilation work on us; Pony
-and Caf are ground-up actor languages that hit raw throughputs an
-interpreted runtime cannot match. Honest placement:
+The two comparisons that matter for protoST live in different lanes —
+single-threaded Smalltalk runtimes and parallel-actor runtimes — and
+mixing them produces confused marketing. Here they are separately and
+honestly.
 
-| category | representative systems | in-process throughput |
-|---|---|---:|
-| Actor languages, JIT-compiled, mature | BEAM, Akka, Orleans | 1-10 M msg/s |
-| Actor languages, ground-up | Pony, Caf | 10-100 M msg/s |
-| **protoST 0.2.0** (this runtime) | — | **72 K measured / 130-150 K projected** |
-| Python actor frameworks (GIL-bound) | Pykka, Thespian, in-process Ray | 5-30 K msg/s |
-| Network message brokers | RabbitMQ, Kafka, NATS | 50 K-1 M msg/s (with network/disk) |
+### vs. Pharo / Squeak (Smalltalk syntax + tooling)
 
-What protoST does that the others do not:
+Pharo and Squeak are mature single-threaded Smalltalks. Their Cog VM
+has a JIT, polymorphic inline caches, and 20+ years of tuning; on raw
+single-thread arithmetic Cog is typically ~2-4× faster than protoST
+today, and **protoST has no realistic path to closing that gap
+without a JIT**. We are not building a faster Smalltalk than Pharo;
+that comparison is not where protoST is interesting.
+
+The architectural distinction is that **Pharo's "actors" / Vats /
+Pharo-Actors are coroutines layered on green threads on one OS
+thread** — they give the actor programming model but not real
+parallelism. For any workload that needs more than one core, Pharo
+fundamentally cannot use it; protoST's worker pool maps actors to
+hardware cores 1:1 and demonstrably scales 3.88× on 6 physical cores.
+That's the real distinction, not "Smalltalk that's faster than
+Pharo".
+
+### vs. BEAM (Erlang/Elixir) / Akka / Pony — the real comparator
+
+protoST IS in the BEAM/Akka/Pony lineage technically — true parallel
+actor messaging over OS threads. The gap below is the **honest
+comparator on the actor side**:
+
+| Pattern | protoST 5500U | BEAM ballpark on similar hw | Gap |
+|---|---:|---:|---:|
+| Shallow ping (single receiver, drained) | 67 K msg/s | 200-500 K (GenServer.call) | **3-7×** slower |
+| Fan-out (1 producer → N receivers) | 55 K msg/s | 1-3 M (parallel sends) | **18-55×** slower |
+| Multi-producer pipeline (N drivers × M sinks) | 60 K msg/s | 5-10 M (BEAM is heavily tuned for this) | **80-170×** slower |
+
+So **the BEAM gap is real and significant** (3× on the narrow end,
+80-170× on the wide end). BEAM has decades of scheduler tuning and a
+per-process copying-GC design that protoST does not yet match.
+
+| category | representative systems | in-process throughput | comment |
+|---|---|---:|---|
+| Actor languages, JIT, mature | BEAM, Akka, Orleans | 1-10 M msg/s | true parallel, decades of tuning |
+| Actor languages, ground-up | Pony, Caf | 10-100 M msg/s | type-checked capability systems |
+| **protoST today** | — | **50-70 K measured / 130-200 K projected (desktop)** | true parallel; gap to BEAM is the active workstream |
+| Python actor frameworks | Pykka, Thespian, in-process Ray | 5-30 K msg/s | GIL-bound (mostly) |
+| Smalltalk pseudo-actors | Pharo Vats, Pharo-Actors | (n/a — green threads, no parallelism) | not in this comparator class |
+| Network message brokers | RabbitMQ, Kafka, NATS | 50 K-1 M msg/s | network + disk in the loop |
+
+protoST does NOT market itself as "BEAM-class actor performance" —
+the data don't support that today. What protoST IS:
 
 ### 1. Messages are pointers — even when they carry large state
 
@@ -270,16 +321,26 @@ problem protoST is shaped to solve.
 
 ## Project status
 
-protoST is in active development and runs. Phases F1–F8 are complete — lexer,
-parser, bytecode VM, closures, classes, modules, the actor model with
-cooperative yield, an interactive REPL, and a Debug Adapter Protocol debugger.
-Roadmap Tracks 1–6 are complete: non-local return and a full exception
-protocol, the collection hierarchy, the advanced object model (multiple
-inheritance, mixins, runtime behaviour composition), the standard library
-(Stream, Math, Random, JSON, Time), a defensible conformance suite, and
-cross-language UMD interop. Track 8 (the dual-audience tutorial) is also done —
-see [`docs/TUTORIAL.md`](docs/TUTORIAL.md). Tracks 7 and 9 (onboarding guides,
-the broader example set) remain. The test suite stands at ~700 tests.
+protoST is in active development and runs. **Latest tag: v0.3.0** (yieldable
+cooperative iteration via `doYielding:` — see
+[`docs/tutorial/10-actors-and-futures.md`](docs/tutorial/10-actors-and-futures.md)
+§10.8). Phases F1–F8 are complete — lexer, parser, bytecode VM, closures,
+classes, modules, the actor model with cooperative yield, an interactive
+REPL, and a Debug Adapter Protocol debugger. Roadmap Tracks 1–6 are
+complete: non-local return and a full exception protocol, the collection
+hierarchy, the advanced object model (multiple inheritance, mixins,
+runtime behaviour composition), the standard library (Stream, Math,
+Random, JSON, Time), a defensible conformance suite, and cross-language
+UMD interop. Track 8 (the dual-audience tutorial) is also done — see
+[`docs/TUTORIAL.md`](docs/TUTORIAL.md). Tracks 7 and 9 (onboarding guides,
+the broader example set) remain. The test suite stands at **753 tests
+passing** (`ctest`, post 2026-05-24 perf sprint).
+
+**Active perf workstream**: closing the BEAM messaging gap. Items
+identified, scoped, and queued (largest expected impact first):
+per-actor message slab allocator, selector-resolved-once inline cache
+for SEND, `on:do:` handler inlining. None on a critical path for any
+current user; this is "production-credible actor runtime" investment.
 
 - [`docs/LANGUAGE.md`](docs/LANGUAGE.md) — the language reference.
 - [`docs/STATUS.md`](docs/STATUS.md) — the live state: what works, intentional
