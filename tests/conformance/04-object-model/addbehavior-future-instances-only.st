@@ -1,4 +1,4 @@
-"EXPECT: old: doesNotUnderstand: mm"
+"EXPECT: old: doesNotUnderstand: mm (receiver class: G)"
 "§4: T3-c — the documented `addBehavior:` limitation. An instance created
 BEFORE the call froze its parent chain at construction; it does NOT gain the
 mixin. The semantics are `future instances only` — the class and instances

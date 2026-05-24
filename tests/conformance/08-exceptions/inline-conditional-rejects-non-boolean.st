@@ -1,4 +1,4 @@
-"EXPECT: caught: doesNotUnderstand: ifTrue:"
+"EXPECT: caught: doesNotUnderstand: ifTrue: (receiver class: SmallInteger)"
 "§ Regression test for the 2026-05-24 perf-sprint inline of
 ifTrue:/ifFalse:/ifTrue:ifFalse:/whileTrue:.  The compiler short-
 circuits these sends to JUMP_IF_FALSE / JUMP_IF_TRUE bytecode for

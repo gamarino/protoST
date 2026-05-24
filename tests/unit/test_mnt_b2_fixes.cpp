@@ -65,7 +65,11 @@ TEST_CASE("MNT-b2 D3: the caught exception carries an informative messageText",
     auto* r = runSrc(rt,
         "[ 3 fooBar ] on: Error do: [ :e | e messageText ].");
     REQUIRE(r != nullptr);
-    REQUIRE(asStr(rt, r) == "doesNotUnderstand: fooBar");
+    // 2026-05-24 ergonomics: messageText is enriched with the
+    // receiver's class name (SmallInteger for `3`). The original
+    // "doesNotUnderstand: <sel>" form remains as a prefix.
+    REQUIRE(asStr(rt, r) ==
+            "doesNotUnderstand: fooBar (receiver class: SmallInteger)");
 }
 
 TEST_CASE("MNT-b2 D3: MessageNotUnderstood is nameable and catchable by name",

@@ -149,7 +149,8 @@ TEST_CASE("T3-c: on-the-fly behaviour composition via addBehavior:",
         REQUIRE(r != nullptr);
         auto* s = r->asString(ctx);
         REQUIRE(s != nullptr);
-        REQUIRE(s->toStdString(ctx) == "doesNotUnderstand: mm");
+        // 2026-05-24 ergonomics: messageText is enriched with receiver class.
+        REQUIRE(s->toStdString(ctx) == "doesNotUnderstand: mm (receiver class: FG)");
     }
 
     SECTION("an instance created after the call IS affected (same scenario)") {

@@ -74,15 +74,31 @@ TEST_CASE("Compiler: unary send emits SEND_UNARY", "[compiler]") {
     REQUIRE(bc->constSymbol(bc->bytes()[3]) == "printNl");
 }
 
-TEST_CASE("Compiler: binary send emits SEND_BINARY", "[compiler]") {
+TEST_CASE("Compiler: binary `+` emits BIN_INT_ADD fast opcode (selector + still in operand)", "[compiler]") {
+    // 2026-05-24 perf: `+` / `-` / `<=` / `<` / `>=` / `>` / `=` between
+    // generic operands compile to the SmallInt-tagged fast opcodes that
+    // fall back to SEND_BINARY on a non-Integer receiver (see b623448).
+    // The selector const index is still in the operand so the cold path
+    // can hand off to the shared SEND handler.
     Parser P("1 + 2.");
     Compiler C; auto bc = C.compileModule(*P.parseModule());
     REQUIRE(!C.hasErrors());
-    // PUSH_CONST 0 (1), PUSH_CONST 1 (2), SEND_BINARY (sym +)
+    // PUSH_CONST 0 (1), PUSH_CONST 1 (2), BIN_INT_ADD (sym +)
     REQUIRE(static_cast<Op>(bc->bytes()[0]) == Op::PUSH_CONST);
     REQUIRE(static_cast<Op>(bc->bytes()[2]) == Op::PUSH_CONST);
-    REQUIRE(static_cast<Op>(bc->bytes()[4]) == Op::SEND_BINARY);
+    REQUIRE(static_cast<Op>(bc->bytes()[4]) == Op::BIN_INT_ADD);
     REQUIRE(bc->constSymbol(bc->bytes()[5]) == "+");
+}
+
+TEST_CASE("Compiler: non-fast binary send (`,` string concat) still emits SEND_BINARY", "[compiler]") {
+    // Selectors outside the SmallInt fast-path set still take the
+    // generic SEND_BINARY path — verifies the fast-opcode dispatch
+    // table is selective, not blanket.
+    Parser P("'a' , 'b'.");
+    Compiler C; auto bc = C.compileModule(*P.parseModule());
+    REQUIRE(!C.hasErrors());
+    REQUIRE(static_cast<Op>(bc->bytes()[4]) == Op::SEND_BINARY);
+    REQUIRE(bc->constSymbol(bc->bytes()[5]) == ",");
 }
 
 TEST_CASE("Compiler: keyword send emits SEND_KEYWORD", "[compiler]") {
@@ -117,10 +133,12 @@ TEST_CASE("Compiler: block compiles to a sub-module referenced by PUSH_BLOCK", "
     REQUIRE(bc->bytes()[1] == 0);
     REQUIRE(bc->numBlocks() == 1);
     auto& blk = bc->block(0);
-    // body should end with RETURN_TOP after PUSH_LOCAL 0, PUSH_LOCAL 1, SEND_BINARY +
+    // body should end with RETURN_TOP after PUSH_LOCAL 0, PUSH_LOCAL 1, BIN_INT_ADD
+    // (BIN_INT_ADD post-b623448 — the SmallInt fast opcode that falls back to
+    // SEND_BINARY at runtime on non-Integer operands).
     REQUIRE(static_cast<Op>(blk.bytes()[0]) == Op::PUSH_LOCAL);
     REQUIRE(static_cast<Op>(blk.bytes()[2]) == Op::PUSH_LOCAL);
-    REQUIRE(static_cast<Op>(blk.bytes()[4]) == Op::SEND_BINARY);
+    REQUIRE(static_cast<Op>(blk.bytes()[4]) == Op::BIN_INT_ADD);
 }
 
 TEST_CASE("Compiler: F2 hero expression parses and compiles", "[compiler]") {

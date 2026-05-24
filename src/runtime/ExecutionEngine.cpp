@@ -92,6 +92,39 @@ constexpr unsigned int kFrameMaxStk  = 48;
 // the cursor as restoreFrames rebuilds the stack.
 thread_local unsigned int g_slotCursor = 0;
 
+// 2026-05-24 ergonomics: build a short receiver descriptor for inclusion in
+// doesNotUnderstand error messages. Without it the user sees only the
+// selector ("doesNotUnderstand: foo") with no hint about WHAT failed; with
+// it the user sees the receiver's class name ("doesNotUnderstand: foo
+// (receiver class: Counter)"). For SmallInteger / String / Boolean / Float
+// / nil — protoCore tagged primitives without an attribute-backed class —
+// fall back to a builtin name; for everything else walk the prototype chain
+// to the entry that owns `__class_name__` (every user class stamps this).
+// Returns an empty string when the receiver is null/PROTO_NONE/unclassifiable
+// — the caller composes the bare "doesNotUnderstand: <sel>" form in that case.
+inline std::string describeReceiverForDNU(proto::ProtoContext* ctx,
+                                          const proto::ProtoObject* recv,
+                                          const proto::ProtoString* classNameSym) {
+    if (!recv || recv == PROTO_NONE) return " (receiver: nil)";
+    if (recv->isInteger(ctx))  return " (receiver class: SmallInteger)";
+    if (recv->isString(ctx))   return " (receiver class: String)";
+    if (recv->isBoolean(ctx))  return " (receiver class: Boolean)";
+    if (recv->isFloat(ctx))    return " (receiver class: Float)";
+    if (classNameSym) {
+        const proto::ProtoObject* cname = recv->getAttribute(ctx, classNameSym);
+        if (cname && cname != PROTO_NONE) {
+            const proto::ProtoString* s = cname->asString(ctx);
+            if (s) {
+                std::string out = " (receiver class: ";
+                out += s->toStdString(ctx);
+                out += ")";
+                return out;
+            }
+        }
+    }
+    return " (receiver class: unknown)";
+}
+
 // 2026-05-24 perf: the per-call bytecode rescan moved to
 // `BytecodeModule::cachedLocalCount` (lazy memoised on the module).
 // The engine still owns the `kMinLocals` floor, so the wrapper here
@@ -1363,7 +1396,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // top level / REPL. `UnwindToHandler` from a `return:`
                     // handler propagates out of runLoop untouched (the engine
                     // does not catch it) straight to the owning `on:do:`.
-                    std::string mntMsg = "doesNotUnderstand: " + selStr;
+                    std::string mntMsg = "doesNotUnderstand: " + selStr
+                        + describeReceiverForDNU(ctx, recv,
+                                                 rt_.bootstrap().sym.className);
                     auto* r = signalErrorOfClass(
                         rt_, ctx, rt_.bootstrap().messageNotUnderstoodProto,
                         mntMsg.c_str());
@@ -1518,8 +1553,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 std::string mntMsg = "doesNotUnderstand: " + selStr;
                 // Pop the bad value before we signal so the operand
                 // stack is the same shape the non-inlined SEND would
-                // have left it in.
-                pop(f);
+                // have left it in. Use it to enrich the message with
+                // the receiver class — same DX as the SEND DNU path.
+                const proto::ProtoObject* badRecv = pop(f);
+                mntMsg += describeReceiverForDNU(
+                    ctx, badRecv, rt_.bootstrap().sym.className);
                 auto* r = signalErrorOfClass(
                     rt_, ctx, rt_.bootstrap().messageNotUnderstoodProto,
                     mntMsg.c_str());
