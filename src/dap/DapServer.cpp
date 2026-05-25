@@ -10,6 +10,7 @@
 #include "protoCore.h"
 
 #include <atomic>
+#include <optional>
 #include <cctype>
 #include <condition_variable>
 #include <cstdio>
@@ -58,7 +59,21 @@ public:
 
     int run() {
         for (;;) {
-            auto msg = transport_.readMessage();
+            // 2026-05-25: the DAP main loop is the prototypical
+            // "external event source" — the IDE sends a message when
+            // it wants something, and the wait can be arbitrarily
+            // long. Without an unmanaged-region bracket the GC quorum
+            // stalls behind us, freezing the entire debuggee while we
+            // sit idle on stdin. The bracket is conditional on the
+            // runtime existing (it does not yet on the first iteration,
+            // before `launch` constructs `runtime_`).
+            std::optional<json> msg;
+            if (runtime_) {
+                proto::ProtoContext::UnmanagedScope u(runtime_->rootCtx());
+                msg = transport_.readMessage();
+            } else {
+                msg = transport_.readMessage();
+            }
             if (!msg)
                 break;                       // EOF / stream error / malformed
             const json& m = *msg;

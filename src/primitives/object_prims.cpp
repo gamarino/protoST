@@ -133,6 +133,14 @@ const proto::ProtoObject* prim_Object_sleepMs(STRuntime&,
     if (argc != 1) throw std::runtime_error("sleep: expects 1 arg (milliseconds)");
     long long ms = a[0]->asLong(ctx);
     if (ms > 0) {
+        // 2026-05-25: enter an unmanaged region for the duration of the
+        // sleep so a concurrent GC stop-the-world phase does NOT wait
+        // for this thread to reach a safepoint (it cannot — it is
+        // suspended in the kernel until the timer fires). Without
+        // this, a long `sleep:` on any worker stalls the entire GC
+        // quorum for the full sleep duration. See protoCore DESIGN.md
+        // §"Unmanaged regions" for the contract.
+        proto::ProtoContext::UnmanagedScope u(ctx);
         std::this_thread::sleep_for(std::chrono::milliseconds(ms));
     }
     return r;

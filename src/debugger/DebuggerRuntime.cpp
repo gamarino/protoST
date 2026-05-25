@@ -77,7 +77,18 @@ void DebuggerRuntime::enterSession(STRuntime& rt, DebugFrame frame, const std::s
     while (true) {
         out << "(stdbg) " << std::flush;
         std::string line;
-        if (!std::getline(in, line)) break;
+        // 2026-05-25: bracket the user-input read in an unmanaged
+        // region. The debugger is sitting at the (stdbg) prompt
+        // waiting for the user, but worker threads may still be alive
+        // (an actor pool from before the break). Without the bracket,
+        // a GC cycle triggered by another thread would stall behind
+        // this read for as long as the user thinks.
+        bool ok;
+        {
+            proto::ProtoContext::UnmanagedScope u(rt.rootCtx());
+            ok = static_cast<bool>(std::getline(in, line));
+        }
+        if (!ok) break;
         line = trim(line);
         if (line.empty()) continue;
 

@@ -85,9 +85,18 @@ bool endsWithPeriod(const std::string& src) {
 // Read one logical line. Uses readline for an interactive tty (history,
 // arrows, Ctrl-R); falls back to std::getline for piped / non-tty stdin so
 // tests are deterministic. `*eof` is set true on end-of-input.
-bool readLine(const char* prompt, bool interactive, std::string& out, bool* eof) {
+//
+// 2026-05-25: bracket the stdin-blocking call in
+// `ProtoContext::UnmanagedScope` so the GC does not stall waiting for
+// the REPL while the user is thinking at the prompt. The REPL may sit
+// at `readline` for arbitrary wall-time; without this, a worker-actor
+// triggered GC cycle would block every other thread in the process.
+// See protoCore DESIGN.md §"Unmanaged regions".
+bool readLine(proto::ProtoContext* ctx, const char* prompt, bool interactive,
+              std::string& out, bool* eof) {
     *eof = false;
     if (interactive) {
+        proto::ProtoContext::UnmanagedScope u(ctx);
         char* line = ::readline(prompt);
         if (!line) { *eof = true; return false; }
         out.assign(line);
@@ -99,12 +108,15 @@ bool readLine(const char* prompt, bool interactive, std::string& out, bool* eof)
     std::fputs(prompt, stdout);
     std::fflush(stdout);
     std::string buf;
-    int ch;
     bool any = false;
-    while ((ch = std::getc(stdin)) != EOF) {
-        any = true;
-        if (ch == '\n') { out = buf; return true; }
-        buf.push_back(static_cast<char>(ch));
+    {
+        proto::ProtoContext::UnmanagedScope u(ctx);
+        int ch;
+        while ((ch = std::getc(stdin)) != EOF) {
+            any = true;
+            if (ch == '\n') { out = buf; return true; }
+            buf.push_back(static_cast<char>(ch));
+        }
     }
     if (any) { out = buf; return true; }
     *eof = true;
@@ -256,7 +268,13 @@ void cmdLoad(Session& s, const std::string& arg) {
     std::fseek(fp, 0, SEEK_SET);
     if (n < 0) { std::fclose(fp); std::fprintf(stderr, ":load: cannot read %s\n", path.c_str()); return; }
     std::string src(static_cast<size_t>(n), '\0');
-    size_t got = std::fread(src.data(), 1, static_cast<size_t>(n), fp);
+    size_t got;
+    {
+        // 2026-05-25: REPL is running with worker threads alive; do not
+        // stall the GC quorum behind a slow filesystem read.
+        proto::ProtoContext::UnmanagedScope u(s.rt->rootCtx());
+        got = std::fread(src.data(), 1, static_cast<size_t>(n), fp);
+    }
     src.resize(got);
     std::fclose(fp);
 
@@ -396,7 +414,7 @@ int runRepl() {
         std::string line;
         bool eof = false;
         const char* prompt = inMultiline ? continuation : primary;
-        if (!readLine(prompt, interactive, line, &eof)) {
+        if (!readLine(session.rt->rootCtx(), prompt, interactive, line, &eof)) {
             if (eof) {
                 std::puts(interactive ? "\nbye" : "bye");
                 break;
