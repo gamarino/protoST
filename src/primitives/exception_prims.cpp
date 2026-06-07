@@ -44,6 +44,7 @@
 #include "protoCore.h"
 
 #include <cstdio>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -60,20 +61,47 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
 
 namespace {
 
-// Attribute keys. Resolved fresh from the live ctx each call — protoCore
-// interns symbols per-ProtoSpace, so a function-local static would bind to
-// the first runtime's space and dangle for every later STRuntime.
+// Attribute keys. Earlier this file called createSymbol on every
+// invocation, citing concern that a function-local static would
+// "dangle for every later STRuntime".  Two facts make the static
+// cache safe:
+//   (1) protoST documents one-runtime-per-process as a hard edge
+//       (KNOWN_ISSUES K1) — a second STRuntime is not a supported
+//       configuration.
+//   (2) createSymbol allocates via the perpetual path
+//       (is_strong=true) — the resulting pointer lives for the
+//       process and is never reclaimed by the GC.  Even if multiple
+//       ProtoSpaces existed simultaneously, the cached pointer would
+//       remain valid; it would just always resolve to the first
+//       space's symbol, which is fine for attribute-key identity.
+// Under exception_latency (50K iterations × signal+on:do:) the
+// uncached version showed ~4-8 createSymbol calls per iteration and
+// 2.05% of cycles in toUTF8String — exactly the WKS-string
+// canonicalisation that the JSSymbols / call_once pattern in protoJS
+// was built to avoid.
 const proto::ProtoString* msgTextKey(proto::ProtoContext* ctx) {
-    return proto::ProtoString::createSymbol(ctx, "messageText");
+    static const proto::ProtoString* s = nullptr;
+    static std::once_flag f;
+    std::call_once(f, [ctx]() { s = proto::ProtoString::createSymbol(ctx, "messageText"); });
+    return s;
 }
 const proto::ProtoString* activeHandlerKey(proto::ProtoContext* ctx) {
-    return proto::ProtoString::createSymbol(ctx, "__active_handler_id__");
+    static const proto::ProtoString* s = nullptr;
+    static std::once_flag f;
+    std::call_once(f, [ctx]() { s = proto::ProtoString::createSymbol(ctx, "__active_handler_id__"); });
+    return s;
 }
 const proto::ProtoString* classNameKey(proto::ProtoContext* ctx) {
-    return proto::ProtoString::createSymbol(ctx, "__class_name__");
+    static const proto::ProtoString* s = nullptr;
+    static std::once_flag f;
+    std::call_once(f, [ctx]() { s = proto::ProtoString::createSymbol(ctx, "__class_name__"); });
+    return s;
 }
 const proto::ProtoString* resumableKey(proto::ProtoContext* ctx) {
-    return proto::ProtoString::createSymbol(ctx, "__resumable__");
+    static const proto::ProtoString* s = nullptr;
+    static std::once_flag f;
+    std::call_once(f, [ctx]() { s = proto::ProtoString::createSymbol(ctx, "__resumable__"); });
+    return s;
 }
 
 // True when the exception instance is resumable. The `__resumable__` marker is
