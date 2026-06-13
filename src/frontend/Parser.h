@@ -50,6 +50,23 @@ private:
     ast::NodePtr parseLiteralArrayElement();
     ast::NodePtr parseClassDecl(Token classIdent);
     ast::NodePtr parseMethodDecl(Token classIdent, bool classSide);
+    // Call-form support (protoCore-style positional + named args).
+    // `selectorTok` is the Identifier that names the method; the `(` has
+    // already been consumed when this helper is called. The receiver node
+    // must be non-null. The boolean `implicitReceiver` records whether the
+    // receiver was synthesised because the call was bare at primary position.
+    ast::NodePtr parseCallSend(Token selectorTok, ast::NodePtr receiver,
+                               bool implicitReceiver);
+    ast::NodePtr parseCallMethodDecl(Token classIdent, bool classSide,
+                                     Token methodNameTok);
+    // Parse one expression value inside a call-form argument list — used for
+    // positional arg values, named arg values, and default expressions. It
+    // behaves like parseBinarySend but stops at top-level `,` and `=` so
+    // those tokens keep their call-form roles (separator and named binding
+    // respectively). Parenthesised sub-expressions are unaffected because
+    // parsePrimary recurses through parseExpression, which sees `,`/`=` as
+    // ordinary binary ops again.
+    ast::NodePtr parseCallArgExpr();
 };
 
 } // namespace protoST

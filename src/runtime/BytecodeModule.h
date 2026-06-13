@@ -12,7 +12,15 @@ namespace protoST {
 
 class BytecodeModule {
 public:
-    enum class ConstKind : uint8_t { Integer, Float, String, Symbol, Char, BlockRef, NilK, TrueK, FalseK };
+    enum class ConstKind : uint8_t {
+        Integer, Float, String, Symbol, Char, BlockRef, NilK, TrueK, FalseK,
+        // Resolves to `Bootstrap::unsetMarker` at runtime. Emitted by the
+        // call-form method prologue so the dispatcher's "unset" sentinel can
+        // be compared against named-arg slots without going through the
+        // SymbolTable. Carries no payload — the runtime substitutes the
+        // bootstrap singleton when this constant is pushed.
+        UnsetMarker,
+    };
 
     struct Const {
         ConstKind kind;
@@ -49,6 +57,10 @@ public:
     size_t  internSymbol(const std::string& s);  // de-duplicated
     size_t  addChar(const std::string& utf8);
     size_t  addBlockRef(size_t blockIndex);
+    // Push-an-unset-sentinel constant. Idempotent: adding it twice is
+    // allowed but the cache only needs a single live entry; we still
+    // append, leaving deduplication to the compiler if it cares.
+    size_t  addUnsetMarker();
 
     // accessors
     const std::vector<uint8_t>& bytes() const { return bytes_; }
@@ -89,6 +101,50 @@ public:
     // own class. Set by the compiler's MethodDecl emission.
     void setDefiningClass(const std::string& s) { definingClass_ = s; }
     const std::string& definingClass() const { return definingClass_; }
+
+    // Call-form method signature. Populated by the compiler when this module
+    // is the body of a `Class >> name(pos, named=default)` declaration. The
+    // dispatcher reads these to adapt a SEND_CALL site to the declared
+    // shape (arity-check + sentinel-fill for omitted named args).
+    //
+    //   callPosArity        -- declared positional arity (number of params
+    //                          before the named block; zero is legal).
+    //   callNamedKeys       -- declared named-arg keys, sorted alphabetically.
+    //                          Length defines the named arity.
+    //   isCallForm          -- true exactly when this module is a call-form
+    //                          method body. False for plain MethodDecl,
+    //                          block bodies, and module bodies — they keep
+    //                          today's keyword/unary dispatch.
+    void setCallFormSignature(int posArity,
+                              std::vector<std::string> sortedNamedKeys) {
+        isCallForm_     = true;
+        callPosArity_   = posArity;
+        callNamedKeys_  = std::move(sortedNamedKeys);
+    }
+    bool isCallForm()        const { return isCallForm_; }
+    int  callPosArity()      const { return callPosArity_; }
+    const std::vector<std::string>& callNamedKeys() const { return callNamedKeys_; }
+
+    // Per-const-pool-slot cache for SEND_CALL operand parsing. A SEND_CALL
+    // operand names a Symbol constant whose text follows the mangling
+    // `<name>#<nPos>[#<key1>#<key2>...]`. The runtime parses it once into
+    // (interned name, nPos, sorted-key vector) and caches the parsed form
+    // here, parallel to `symCache_`. Lazily populated by the engine on
+    // first dispatch through the slot.
+    struct CallDescriptor {
+        const proto::ProtoString* name = nullptr;
+        int nPos = 0;
+        std::vector<const proto::ProtoString*> sortedKeys;
+        // Original mangle text, used to enrich `doesNotUnderstand:` messages.
+        std::string mangled;
+        bool parsed = false;
+    };
+    CallDescriptor* callDescriptorSlot(size_t constIdx) const {
+        if (callDescCache_.size() != consts_.size()) {
+            callDescCache_.resize(consts_.size());
+        }
+        return &callDescCache_[constIdx];
+    }
 
     // F8-1 / BL-2: source-line mapping. instrLines_ holds one line entry per
     // emitted 2-byte word; instrStartPc_ holds the byte offset of each word.
@@ -168,10 +224,17 @@ private:
     // for the runtime's ProtoSpace (one runtime per process).
     mutable std::vector<const proto::ProtoString*> symCache_;
     mutable std::vector<const proto::ProtoString*> ivSymCache_;
+    // Lazy parsed-call-descriptor cache for SEND_CALL operands. Same
+    // lifetime/visibility rules as symCache_.
+    mutable std::vector<CallDescriptor> callDescCache_;
     std::unordered_map<std::string, size_t> symbolIndex_;
     std::vector<std::unique_ptr<BytecodeModule>> blocks_;
     int argCount_ = 0;
     std::string definingClass_;   // BL-1: class owning this method body
+    // Call-form signature (populated by the compiler for call-form bodies).
+    bool isCallForm_   = false;
+    int  callPosArity_ = 0;
+    std::vector<std::string> callNamedKeys_;  // sorted alphabetically
 
 public:
     // 2026-05-24 perf: localCount is a static property of the bytecode

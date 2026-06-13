@@ -48,6 +48,19 @@ void emit(std::ostringstream& os, const Node& n, int depth) {
         case NodeKind::KeywordSend:   os << "(keyword " << n.text;
                                        for (auto& c : n.children) { os << " "; emit(os, *c, depth); }
                                        os << ")"; return;
+        case NodeKind::CallSend: {
+            os << "(call " << n.text;
+            os << " npos=" << n.intValue << " nnamed=" << n.intValue2;
+            if (n.boolFlag) os << " implicit-self";
+            os << " keys=(";
+            for (size_t i = 0; i < n.stringList.size(); ++i) {
+                if (i) os << " ";
+                os << n.stringList[i];
+            }
+            os << ")";
+            emitChildren(os, n, depth);
+            os << ")"; return;
+        }
         case NodeKind::Cascade:       os << "(cascade"; emitChildren(os, n, depth); os << ")"; return;
         case NodeKind::Block: {
             os << "(block argc=" << n.intValue << " names=(";
@@ -67,6 +80,20 @@ void emit(std::ostringstream& os, const Node& n, int depth) {
             }
             os << ")";
             if (n.boolFlag) os << " class-side";
+            emitChildren(os, n, depth);
+            os << ")"; return;
+        }
+        case NodeKind::CallMethodDecl: {
+            const int nPos   = static_cast<int>(n.intValue);
+            const int nNamed = static_cast<int>(n.intValue2);
+            os << "(call-method-decl " << n.text << " " << n.stringList[0];
+            os << " npos=" << nPos << " nnamed=" << nNamed;
+            if (n.boolFlag) os << " class-side";
+            os << " (pos";
+            for (int i = 0; i < nPos; ++i) os << " " << n.stringList[1 + i];
+            os << ") (named";
+            for (int i = 0; i < nNamed; ++i) os << " " << n.stringList[1 + nPos + i];
+            os << ")";
             emitChildren(os, n, depth);
             os << ")"; return;
         }

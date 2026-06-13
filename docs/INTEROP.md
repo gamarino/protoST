@@ -229,6 +229,47 @@ one-argument method under a `name:`-style keyword selector). Establishing a
 shared selector-naming convention for published cross-language modules is
 itself part of the cross-repo follow-up (§6).
 
+### 3.5 Call-form sends and the protoCore convention
+
+The cross-language friction noted in §3.4 (Python/JS methods live under
+plain identifiers but protoST historically only fired such names via
+unary sends with no args) is gone with the call-form syntax of LANGUAGE.md
+§3.5.1. A foreign method exposed under its bare protoCore name —
+`double_it`, `get_item`, `doubleIt` — is now invoked directly with
+positional and named arguments:
+
+```smalltalk
+"Python module: def double_it(x, name='hi'): ..."
+m := Import from: 'doubler.py'.
+m double_it(7, name = 'hello')        "→ same shape as the Python call"
+```
+
+The dispatcher looks up the bare attribute (`double_it`) on the foreign
+object, recognises it as a protoCore method, and invokes it with the
+positional vector and named dict the call site assembled. No bridge-side
+selector mangling is required: the protoCore convention is the **same
+convention on both sides**.
+
+A protoST class can mirror the convention for outbound interop:
+
+```smalltalk
+Counter >> incr(by, factor = 1)
+    value := value + (by * factor).
+    ^ value.
+```
+
+Other runtimes that consume this protoST module find the method under the
+bare attribute key `incr`, invoke it with their own positional + named
+mechanism, and the protoST dispatcher does the arity/named binding. The
+keyword form `>> bar:` is still available for callers that prefer the
+Smalltalk style — call-form and keyword-form methods live as distinct
+attributes and may coexist on the same class.
+
+(Out of scope in v1: call-form sends to actor receivers; the async
+message-envelope shape will gain a positional + named variant in a
+follow-up. Smalltalk keyword sends remain the way to message an actor
+in v1.)
+
 ---
 
 ## 4. protoST as a *provider* (already done)

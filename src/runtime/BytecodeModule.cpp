@@ -120,6 +120,12 @@ size_t BytecodeModule::addBlockRef(size_t blockIndex) {
     consts_.push_back(Const{ConstKind::BlockRef, 0, 0.0, {}, blockIndex});
     return consts_.size() - 1;
 }
+size_t BytecodeModule::addUnsetMarker() {
+    // No payload — the engine substitutes Bootstrap::unsetMarker when this
+    // constant is pushed via PUSH_CONST.
+    consts_.push_back(Const{ConstKind::UnsetMarker, 0, 0.0, {}, 0});
+    return consts_.size() - 1;
+}
 size_t BytecodeModule::addBlockModule(std::unique_ptr<BytecodeModule> b) {
     // F8-1: a sub-block inherits the parent's source name. If the parent's
     // sourceName_ is set later, setSourceName re-stamps all sub-blocks too.

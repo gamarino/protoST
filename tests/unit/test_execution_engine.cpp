@@ -1238,3 +1238,111 @@ TEST_CASE("BL-3: formatValue renders a bootstrap future as 'a Future'",
     auto* fut = rt.newFuture(rt.rootCtx());
     REQUIRE(protoST::formatValue(rt, rt.rootCtx(), fut) == "a Future");
 }
+
+//
+// Call-form (protoCore-style) sends.
+//
+
+TEST_CASE("Call-form: positional-only call hits the method body",
+          "[engine][call-form]") {
+    protoST::STRuntime rt;
+    auto* r = bl1Run(rt,
+        "Object subclass: #C instanceVariableNames: ''. "
+        "C >> id(x)  ^ x. "
+        "C new id(42).");
+    REQUIRE(r->asLong(rt.rootCtx()) == 42);
+}
+
+TEST_CASE("Call-form: named arg overrides its default",
+          "[engine][call-form]") {
+    protoST::STRuntime rt;
+    auto* r = bl1Run(rt,
+        "Object subclass: #C instanceVariableNames: ''. "
+        "C >> mul(a, factor = 2)  ^ a * factor. "
+        "C new mul(5, factor = 10).");
+    REQUIRE(r->asLong(rt.rootCtx()) == 50);
+}
+
+TEST_CASE("Call-form: omitted named arg falls back to declared default",
+          "[engine][call-form]") {
+    protoST::STRuntime rt;
+    auto* r = bl1Run(rt,
+        "Object subclass: #C instanceVariableNames: ''. "
+        "C >> mul(a, factor = 2)  ^ a * factor. "
+        "C new mul(5).");
+    REQUIRE(r->asLong(rt.rootCtx()) == 10);
+}
+
+TEST_CASE("Call-form: default expression may reference earlier positionals",
+          "[engine][call-form]") {
+    protoST::STRuntime rt;
+    auto* r = bl1Run(rt,
+        "Object subclass: #C instanceVariableNames: ''. "
+        "C >> compose(n, factor = n + 1)  ^ n * factor. "
+        "C new compose(3).");
+    REQUIRE(r->asLong(rt.rootCtx()) == 12);   // 3 * (3+1)
+}
+
+TEST_CASE("Call-form: keyword and call-form coexist as distinct selectors",
+          "[engine][call-form]") {
+    protoST::STRuntime rt;
+    auto* r = bl1Run(rt,
+        "Object subclass: #D instanceVariableNames: ''. "
+        "D >> double(x)  ^ x * 2. "
+        "D >> double: x  ^ x * 100. "
+        "D >> wrap(n)  ^ self double(n) + (self double: n). "
+        "D new wrap(5).");
+    REQUIRE(r->asLong(rt.rootCtx()) == 510);  // 10 + 500
+}
+
+TEST_CASE("Call-form: bare call inside a method is a self-send",
+          "[engine][call-form]") {
+    protoST::STRuntime rt;
+    auto* r = bl1Run(rt,
+        "Object subclass: #E instanceVariableNames: ''. "
+        "E >> base()  ^ 100. "
+        "E >> total(n)  ^ n + base(). "
+        "E new total(7).");
+    REQUIRE(r->asLong(rt.rootCtx()) == 107);
+}
+
+TEST_CASE("Call-form: positional arity mismatch raises",
+          "[engine][call-form]") {
+    protoST::STRuntime rt;
+    REQUIRE_THROWS(bl1Run(rt,
+        "Object subclass: #X instanceVariableNames: ''. "
+        "X >> f(a)  ^ a. "
+        "X new f(1, 2)."));
+}
+
+TEST_CASE("Call-form: unknown named arg raises",
+          "[engine][call-form]") {
+    protoST::STRuntime rt;
+    REQUIRE_THROWS(bl1Run(rt,
+        "Object subclass: #X instanceVariableNames: ''. "
+        "X >> f(a)  ^ a. "
+        "X new f(1, bogus = 2)."));
+}
+
+TEST_CASE("Call-form: zero-arg call returns the method's value",
+          "[engine][call-form]") {
+    protoST::STRuntime rt;
+    auto* r = bl1Run(rt,
+        "Object subclass: #Z instanceVariableNames: ''. "
+        "Z >> answer()  ^ 42. "
+        "Z new answer().");
+    REQUIRE(r->asLong(rt.rootCtx()) == 42);
+}
+
+TEST_CASE("Call-form: sorted named values bind to declared sorted slots",
+          "[engine][call-form]") {
+    // Caller writes named args in non-alphabetic source order; the parser
+    // sorts them, the mangled selector matches the declaration, and each
+    // named value flows into the right slot.
+    protoST::STRuntime rt;
+    auto* r = bl1Run(rt,
+        "Object subclass: #S instanceVariableNames: ''. "
+        "S >> combine(a, b = 10, c = 100)  ^ a + b + c. "
+        "S new combine(1, c = 4, b = 2).");
+    REQUIRE(r->asLong(rt.rootCtx()) == 7);   // 1+2+4
+}

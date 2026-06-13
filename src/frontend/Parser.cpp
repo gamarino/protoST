@@ -1,5 +1,6 @@
 #include "Parser.h"
 
+#include <algorithm>
 #include <cctype>
 
 namespace protoST {
@@ -7,7 +8,8 @@ namespace protoST {
 static bool isSendKind(ast::NodeKind k) {
     return k == ast::NodeKind::UnarySend
         || k == ast::NodeKind::BinarySend
-        || k == ast::NodeKind::KeywordSend;
+        || k == ast::NodeKind::KeywordSend
+        || k == ast::NodeKind::CallSend;
 }
 
 Parser::Parser(std::string source) : lexer_(std::move(source)) {
@@ -179,6 +181,15 @@ ast::NodePtr Parser::parseUnarySend() {
         // distinguish: only an identifier that is NOT followed by ':' is a unary selector;
         // keyword selectors come tokenised as TokenKind::Keyword.
         Token sel = current_;
+        // Call-form send: `recv name(args)`. Detected by peeking past the
+        // identifier for an immediate LParen. Binds at unary precedence
+        // (tighter than binary / keyword).
+        if (lexer_.peek().kind == TokenKind::LParen) {
+            advance(); // consume identifier
+            advance(); // consume '('
+            recv = parseCallSend(sel, std::move(recv), /*implicitReceiver=*/false);
+            continue;
+        }
         advance();
         auto n = ast::makeNode(ast::NodeKind::UnarySend, sel.line, sel.column);
         n->text = sel.text;
@@ -265,6 +276,19 @@ ast::NodePtr Parser::parsePrimary() {
         case TokenKind::False:  advance(); return ast::makeNode(ast::NodeKind::FalseLit, t.line, t.column);
         case TokenKind::Nil:    advance(); return ast::makeNode(ast::NodeKind::NilLit,   t.line, t.column);
         case TokenKind::Identifier: {
+            // Bare call-form at primary position: `name(args)` desugars to
+            // `self name(args)`. Reserved identifiers (self / super /
+            // thisContext) are NOT subject to this rewrite — `self(...)`
+            // would never make sense as a self-send-on-self.
+            if (t.text != "self" && t.text != "super" && t.text != "thisContext"
+                && lexer_.peek().kind == TokenKind::LParen) {
+                advance();              // consume identifier
+                advance();              // consume '('
+                auto selfRecv = ast::makeNode(ast::NodeKind::Self, t.line, t.column);
+                selfRecv->text = "self";
+                return parseCallSend(t, std::move(selfRecv),
+                                     /*implicitReceiver=*/true);
+            }
             advance();
             ast::NodeKind k = ast::NodeKind::Identifier;
             if (t.text == "self")        k = ast::NodeKind::Self;
@@ -409,6 +433,17 @@ ast::NodePtr Parser::parseBlock() {
 }
 
 ast::NodePtr Parser::parseMethodDecl(Token classIdent, bool classSide) {
+    // Call-form decl: `Class >> name(pos, named=default)`. Detect by peeking
+    // for `Identifier LParen` and route to the dedicated helper. The bare
+    // identifier (no parens) keeps falling through to the unary path below.
+    if (current_.kind == TokenKind::Identifier
+        && lexer_.peek().kind == TokenKind::LParen) {
+        Token nameTok = current_;
+        advance(); // consume method name
+        advance(); // consume '('
+        return parseCallMethodDecl(classIdent, classSide, nameTok);
+    }
+
     auto md = ast::makeNode(ast::NodeKind::MethodDecl, classIdent.line, classIdent.column);
     md->text = classIdent.text;
     md->boolFlag = classSide;
@@ -562,6 +597,257 @@ ast::NodePtr Parser::parseClassDecl(Token classIdent) {
     // consume optional terminating '.'
     match(TokenKind::Period);
     return cd;
+}
+
+// Binary-precedence expression parser that treats top-level `,` and `=` as
+// terminators rather than binary operators. Required inside call-form arg
+// lists because the lexer tokenises `,` as a BinaryOp with text "," and `=`
+// as a BinaryOp with text "=" — left in their normal roles, parseBinarySend
+// would happily chain `f(1, factor = 7)` into a single (((1 , factor) = 7))
+// expression, which is exactly what we want to AVOID.
+//
+// Parenthesised sub-expressions still parse `,` and `=` as binary operators:
+// parsePrimary recurses through parseExpression, which uses the regular
+// parseBinarySend. So `f((a = b))` passes the comparison `a = b` as a
+// positional value, and `f((a, b))` passes the comma-binary result.
+ast::NodePtr Parser::parseCallArgExpr() {
+    auto left = parseUnarySend();
+    while (left && isBinaryOpToken(current_.kind)) {
+        if (current_.kind == TokenKind::BinaryOp
+            && (current_.text == "," || current_.text == "=")) {
+            break;
+        }
+        Token op = current_; advance();
+        std::string opText = (op.kind == TokenKind::Pipe) ? "|" : op.text;
+        auto right = parseUnarySend();
+        auto n = ast::makeNode(ast::NodeKind::BinarySend,
+                               op.line, op.column);
+        n->text = opText;
+        n->children.push_back(std::move(left));
+        if (right) n->children.push_back(std::move(right));
+        left = std::move(n);
+    }
+    return left;
+}
+
+// Parse a call-form argument list. The opening `(` has already been
+// consumed; `current_` is at the first argument (or `)` for an empty
+// list). Returns a CallSend AST node whose layout is the one documented
+// in AST.h (positional values precede named values, named values appear
+// in alphabetical key order, named keys live in stringList).
+ast::NodePtr Parser::parseCallSend(Token selectorTok, ast::NodePtr receiver,
+                                   bool implicitReceiver) {
+    auto n = ast::makeNode(ast::NodeKind::CallSend,
+                           selectorTok.line, selectorTok.column);
+    n->text = selectorTok.text;
+    n->boolFlag = implicitReceiver;
+
+    std::vector<ast::NodePtr> posArgs;
+    std::vector<std::pair<std::string, ast::NodePtr>> namedArgs;
+
+    if (current_.kind != TokenKind::RParen) {
+        bool seenNamed = false;
+        while (true) {
+            // Detect named arg: `Identifier '='` (the lexer tokenises `=` as
+            // a BinaryOp). Peek without consuming so a positional expression
+            // starting with an identifier still parses correctly.
+            bool isNamed = false;
+            if (current_.kind == TokenKind::Identifier) {
+                const Token& p = lexer_.peek();
+                if (p.kind == TokenKind::BinaryOp && p.text == "=") {
+                    isNamed = true;
+                }
+            }
+
+            if (isNamed) {
+                Token keyTok = current_;
+                advance(); // consume key Identifier
+                advance(); // consume '=' BinaryOp
+                auto val = parseCallArgExpr();
+                // Disallow duplicate names — a parse-time error so the user
+                // sees the problem at the call site.
+                for (auto& existing : namedArgs) {
+                    if (existing.first == keyTok.text) {
+                        error(keyTok,
+                              "duplicate named argument '" + keyTok.text +
+                              "' in call");
+                        break;
+                    }
+                }
+                namedArgs.emplace_back(keyTok.text,
+                                       val ? std::move(val) : nullptr);
+                seenNamed = true;
+            } else {
+                if (seenNamed) {
+                    error(current_,
+                          "positional argument after named argument in call");
+                }
+                auto val = parseCallArgExpr();
+                if (val) posArgs.push_back(std::move(val));
+            }
+
+            // Comma is lexed as a BinaryOp ","; consume it explicitly.
+            if (current_.kind == TokenKind::BinaryOp && current_.text == ",") {
+                advance();
+                continue;
+            }
+            break;
+        }
+    }
+    consume(TokenKind::RParen, "expected ')' to close call-form arguments");
+
+    // Cascades over a call-form send are reserved for a future iteration;
+    // emit an explicit error if the user wrote one in v1.
+    if (current_.kind == TokenKind::Semicolon) {
+        error(current_,
+              "';' cascades after a call-form send are not supported in v1");
+    }
+
+    // Sort named args alphabetically by key. We swap to a stable sort to
+    // keep the (already-rejected) duplicate case deterministic in tests.
+    std::stable_sort(namedArgs.begin(), namedArgs.end(),
+                     [](const auto& a, const auto& b) {
+                         return a.first < b.first;
+                     });
+
+    const int nPos   = static_cast<int>(posArgs.size());
+    const int nNamed = static_cast<int>(namedArgs.size());
+
+    n->children.push_back(std::move(receiver));
+    for (auto& a : posArgs) {
+        n->children.push_back(std::move(a));
+    }
+    for (auto& kv : namedArgs) {
+        n->stringList.push_back(kv.first);
+        n->children.push_back(std::move(kv.second));
+    }
+    n->intValue  = nPos;
+    n->intValue2 = nNamed;
+    return n;
+}
+
+// Parse a call-form method declaration: `Class >> name(pos, named = default)`
+// optionally followed by `| locals |` and the body. The `name` identifier
+// and the opening `(` have already been consumed by parseMethodDecl.
+ast::NodePtr Parser::parseCallMethodDecl(Token classIdent, bool classSide,
+                                         Token methodNameTok) {
+    auto md = ast::makeNode(ast::NodeKind::CallMethodDecl,
+                            classIdent.line, classIdent.column);
+    md->text     = classIdent.text;
+    md->boolFlag = classSide;
+
+    // Collect parameters: positional first, then named with `= default`.
+    std::vector<std::string> posParams;
+    std::vector<std::pair<std::string, ast::NodePtr>> namedParams;
+
+    if (current_.kind != TokenKind::RParen) {
+        bool seenNamed = false;
+        while (true) {
+            if (current_.kind != TokenKind::Identifier) {
+                error(current_,
+                      "expected parameter name in call-form method declaration");
+                break;
+            }
+            Token pname = current_;
+            advance(); // consume name
+
+            // Optional default: `=` followed by an expression makes this a
+            // named parameter. Otherwise it stays positional.
+            bool hasDefault = (current_.kind == TokenKind::BinaryOp
+                               && current_.text == "=");
+            if (hasDefault) {
+                advance(); // consume '='
+                auto defExpr = parseCallArgExpr();
+                // Reject duplicates.
+                for (auto& existing : namedParams) {
+                    if (existing.first == pname.text) {
+                        error(pname,
+                              "duplicate named parameter '" + pname.text + "'");
+                        break;
+                    }
+                }
+                namedParams.emplace_back(pname.text,
+                                         defExpr ? std::move(defExpr)
+                                                 : nullptr);
+                seenNamed = true;
+            } else {
+                if (seenNamed) {
+                    error(pname,
+                          "positional parameter after named parameter in "
+                          "call-form method declaration");
+                }
+                // Reject duplicate positional names.
+                for (auto& existing : posParams) {
+                    if (existing == pname.text) {
+                        error(pname,
+                              "duplicate parameter name '" + pname.text + "'");
+                        break;
+                    }
+                }
+                posParams.push_back(pname.text);
+            }
+
+            if (current_.kind == TokenKind::BinaryOp && current_.text == ",") {
+                advance();
+                continue;
+            }
+            break;
+        }
+    }
+    consume(TokenKind::RParen,
+            "expected ')' to close call-form parameter list");
+
+    // Sort named parameters alphabetically — both the names and their
+    // defaults must end up in matching sorted order so the layout invariant
+    // of CallMethodDecl holds.
+    std::stable_sort(namedParams.begin(), namedParams.end(),
+                     [](const auto& a, const auto& b) {
+                         return a.first < b.first;
+                     });
+
+    const int nPos   = static_cast<int>(posParams.size());
+    const int nNamed = static_cast<int>(namedParams.size());
+
+    // stringList: [name, ...posParams, ...sortedNamedParams, ...userLocals]
+    md->stringList.push_back(methodNameTok.text);
+    for (auto& p : posParams)     md->stringList.push_back(p);
+    for (auto& kv : namedParams)  md->stringList.push_back(kv.first);
+
+    md->intValue  = nPos;
+    md->intValue2 = nNamed;
+
+    // children: [...sortedDefaultExprs, ...bodyStatements]
+    for (auto& kv : namedParams) {
+        md->children.push_back(std::move(kv.second));
+    }
+
+    // Optional `| locals |`.
+    if (current_.kind == TokenKind::Pipe) {
+        advance();
+        while (current_.kind == TokenKind::Identifier) {
+            md->stringList.push_back(current_.text);
+            advance();
+        }
+        consume(TokenKind::Pipe, "expected '|' to close method locals");
+    }
+
+    // Body: same termination rule as parseMethodDecl — stop at the next
+    // top-level form (`Identifier '>>'`, `'class'`, `'subclass:'`) or EOF.
+    while (current_.kind != TokenKind::EndOfFile) {
+        if (current_.kind == TokenKind::Identifier) {
+            Token p = lexer_.peek();
+            if (p.kind == TokenKind::GtGt) break;
+            if (p.kind == TokenKind::Identifier && p.text == "class") break;
+            if (p.kind == TokenKind::Keyword && p.text == "subclass:") break;
+        }
+        auto stmt = parseStatement();
+        bool isReturn = stmt && stmt->kind == ast::NodeKind::Return;
+        if (stmt) md->children.push_back(std::move(stmt));
+        if (!match(TokenKind::Period)) break;
+        if (isReturn) break;
+    }
+
+    return md;
 }
 
 } // namespace protoST

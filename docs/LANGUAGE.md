@@ -343,7 +343,11 @@ module — can be subclassed too: `(lib Counter) subclass: #Fast`. The
 methodDecl ::=  Identifier ('class')? '>>' selectorPattern localVars? statement*
 selectorPattern ::=  Identifier                              "unary"
                   |  BinaryOp Identifier                     "binary"
-                  |  ( Keyword Identifier )+                  "keyword"
+                  |  ( Keyword Identifier )+                 "keyword"
+                  |  Identifier '(' paramList ')'            "call-form"
+paramList  ::=  (param (',' param)*)?
+param      ::=  Identifier                                   "positional"
+             |  Identifier '=' callValue                     "named with default"
 localVars  ::=  '|' Identifier* '|'
 ```
 
@@ -367,7 +371,25 @@ Counter class >> startingAt: n    "class-side method"
   c := self new.
   c setValue: n.
   ^ c.
+
+Counter >> incr(by, factor = 1)   "call-form: 1 positional, 1 named-with-default"
+  value := value + (by * factor).
+  ^ value.
 ```
+
+A **call-form** method declares positional parameters (no default) and
+optional named parameters (each with a default expression). Defaults
+evaluate at call time in the method's own scope — they may reference
+earlier positional parameters and `self`. Positional parameters must come
+first; named parameters are reordered alphabetically by the parser and
+the corresponding default expressions stay paired with their key.
+
+A call-form method is registered on the class under the **bare name** as
+its attribute key (no colons), matching the protoCore method convention.
+This is distinct from a `>> bar:` keyword method of the same root name,
+so the two forms coexist freely. A class cannot however host both a
+unary `>> bar` and a call `>> bar(...)`: both register under attribute
+key `bar` and the second declaration overrides the first.
 
 A method body runs until the next top-level form begins (the parser detects
 the start of another `>>` / `class` / `subclass:`). An explicit `^` return
@@ -411,9 +433,61 @@ Parentheses `( ... )` override precedence and contain a full expression.
 expression   ::=  keywordSend cascadeTail?
 keywordSend  ::=  binarySend ( Keyword binarySend )*
 binarySend   ::=  unarySend ( BinaryOp unarySend )*
-unarySend    ::=  primary Identifier*
+unarySend    ::=  primary ( Identifier | callTail )*
+callTail     ::=  Identifier '(' callArgs ')'
 primary      ::=  literal | Identifier | 'self' | 'super' | 'thisContext'
+               |  Identifier '(' callArgs ')'     "bare call-form (implicit self)"
                |  '(' expression ')' | block | arrayLit | dynArrayLit
+callArgs     ::=  (callArg (',' callArg)*)?
+callArg      ::=  Identifier '=' callValue        "named — name binds value"
+               |  callValue                        "positional"
+callValue    ::=  unarySend ( BinaryOp unarySend )*   "binary chain, no ',' / '='"
+```
+
+#### 3.5.1 Call-form messages — protoCore convention
+
+In addition to the three native Smalltalk forms, protoST accepts a **call-
+form** send that mirrors the protoCore method convention (name + positional
+vector + named dict). It binds at unary precedence, so it composes cleanly
+with binary and keyword sends:
+
+```smalltalk
+recv name(p1, p2, k1 = v1, k2 = v2)
+```
+
+Inside the parentheses, positional arguments come first, then **named
+arguments** of the form `Identifier '=' value`. The argument list is
+separated by commas. A bare `name(args)` at primary position desugars to
+`self name(args)`.
+
+**Selector identity.** A call-form method is a *distinct attribute* from
+a keyword method of the same name. A class may host both `>> bar(x)` and
+`>> bar: x` and they are independent. The call-form method is stored on
+the class under the **bare name** (no colons), matching the protoCore
+convention. A single class cannot host both a unary `>> bar` and a call
+`>> bar(...)`: both register under attribute key `bar` and the second
+declaration overrides the first.
+
+**Argument evaluation order.** Positional arguments evaluate in source
+order. **Named arguments evaluate in alphabetical-key order**, not source
+order. Side-effect-sensitive code should use explicit temps:
+
+```smalltalk
+| t1 t2 |
+t1 := expensive1.
+t2 := expensive2.
+obj op(t1, alpha = t2)        "predictable evaluation order"
+```
+
+**Equality versus named binding.** Inside a call-form argument list, an
+identifier immediately followed by `=` at the start of an argument is
+the named-binding marker. To pass an equality test *as a positional
+value*, parenthesise: `f((a = b))`.
+
+```smalltalk
+counter incr(2, factor = 3)              "positional + named override"
+counter incr(1)                          "named defaults apply"
+foreignModule doubleIt(x, name = 'hi')   "protoPython interop"
 ```
 
 ### 3.6 Assignment

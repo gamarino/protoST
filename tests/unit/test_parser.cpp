@@ -232,6 +232,92 @@ TEST_CASE("Parser: class declaration with inst vars", "[parser]") {
     REQUIRE(cd->stringList[2] == "step");
 }
 
+TEST_CASE("Parser: call-form send (positional only)", "[parser][call-form]") {
+    Parser P("obj foo(1, 2).");
+    auto m = P.parseModule();
+    REQUIRE(P.errors().empty());
+    auto& n = m->children[0];
+    REQUIRE(n->kind == NodeKind::CallSend);
+    REQUIRE(n->text == "foo");
+    REQUIRE(n->intValue  == 2);   // nPos
+    REQUIRE(n->intValue2 == 0);   // nNamed
+    REQUIRE(n->boolFlag  == false);  // explicit receiver
+    REQUIRE(n->children.size() == 3);  // receiver + 2 args
+    REQUIRE(n->children[0]->kind == NodeKind::Identifier);
+    REQUIRE(n->children[0]->text == "obj");
+}
+
+TEST_CASE("Parser: call-form send (positional + named, sorted)",
+          "[parser][call-form]") {
+    // Named keys are stored alphabetically regardless of source order.
+    Parser P("obj foo(1, beta = 2, alpha = 3).");
+    auto m = P.parseModule();
+    REQUIRE(P.errors().empty());
+    auto& n = m->children[0];
+    REQUIRE(n->kind == NodeKind::CallSend);
+    REQUIRE(n->intValue  == 1);   // nPos
+    REQUIRE(n->intValue2 == 2);   // nNamed
+    REQUIRE(n->stringList.size() == 2);
+    REQUIRE(n->stringList[0] == "alpha");
+    REQUIRE(n->stringList[1] == "beta");
+    // children[0]=recv, [1]=pos, [2]=alpha value (3), [3]=beta value (2).
+    REQUIRE(n->children.size() == 4);
+    REQUIRE(n->children[2]->intValue == 3);
+    REQUIRE(n->children[3]->intValue == 2);
+}
+
+TEST_CASE("Parser: bare call-form is implicit-self send",
+          "[parser][call-form]") {
+    // At primary position, `foo(1)` desugars to a CallSend on `self`.
+    // We exercise it inside a method body where `self` resolves cleanly.
+    Parser P("C >> bar  foo(1).");
+    auto m = P.parseModule();
+    REQUIRE(P.errors().empty());
+    auto& md = m->children[0];
+    REQUIRE(md->kind == NodeKind::MethodDecl);
+    REQUIRE(md->children.size() == 1);
+    auto& body = md->children[0];
+    REQUIRE(body->kind == NodeKind::CallSend);
+    REQUIRE(body->text == "foo");
+    REQUIRE(body->boolFlag == true);   // implicit receiver
+    REQUIRE(body->children[0]->kind == NodeKind::Self);
+}
+
+TEST_CASE("Parser: call-form method declaration", "[parser][call-form]") {
+    Parser P("Counter >> incr(by, factor = 1, label = 'x')  ^ self.");
+    auto m = P.parseModule();
+    REQUIRE(P.errors().empty());
+    auto& md = m->children[0];
+    REQUIRE(md->kind == NodeKind::CallMethodDecl);
+    REQUIRE(md->text == "Counter");
+    REQUIRE(md->intValue  == 1);   // nPos
+    REQUIRE(md->intValue2 == 2);   // nNamed
+    REQUIRE(md->stringList.size() == 4);
+    REQUIRE(md->stringList[0] == "incr");
+    REQUIRE(md->stringList[1] == "by");
+    REQUIRE(md->stringList[2] == "factor");   // sorted: factor < label
+    REQUIRE(md->stringList[3] == "label");
+    // children[0..1] = defaults (sorted: factor=1, label='x'), then body.
+    REQUIRE(md->children.size() >= 3);
+    REQUIRE(md->children[0]->kind == NodeKind::IntegerLit);   // factor=1
+    REQUIRE(md->children[0]->intValue == 1);
+    REQUIRE(md->children[1]->kind == NodeKind::StringLit);    // label='x'
+}
+
+TEST_CASE("Parser: call-form rejects positional after named",
+          "[parser][call-form]") {
+    Parser P("obj foo(a = 1, 2).");
+    P.parseModule();
+    REQUIRE(!P.errors().empty());
+}
+
+TEST_CASE("Parser: call-form rejects duplicate named key",
+          "[parser][call-form]") {
+    Parser P("obj foo(a = 1, a = 2).");
+    P.parseModule();
+    REQUIRE(!P.errors().empty());
+}
+
 TEST_CASE("Parser: counter.st fixture parses cleanly", "[parser][fixture]") {
     auto src = readFile(std::string(PROTOST_FIXTURES_DIR) + "/counter.st");
     REQUIRE(!src.empty());

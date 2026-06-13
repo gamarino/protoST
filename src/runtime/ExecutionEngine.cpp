@@ -480,6 +480,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     labels[static_cast<unsigned int>(Op::SEND_BINARY)]      = &&L_SEND_BINARY;
     labels[static_cast<unsigned int>(Op::SEND_KEYWORD)]     = &&L_SEND_KEYWORD;
     labels[static_cast<unsigned int>(Op::SEND_SUPER)]       = &&L_SEND_SUPER;
+    labels[static_cast<unsigned int>(Op::SEND_CALL)]        = &&L_SEND_CALL;
     labels[static_cast<unsigned int>(Op::JUMP)]             = &&L_JUMP;
     labels[static_cast<unsigned int>(Op::JUMP_IF_TRUE)]     = &&L_JUMP_IF_TRUE;
     labels[static_cast<unsigned int>(Op::JUMP_IF_FALSE)]    = &&L_JUMP_IF_FALSE;
@@ -1510,6 +1511,253 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     rt_, ctx,
                     [&] { return fn(rt_, ctx, recv, sendArgs, argcOp); });
                 push(f, result ? result : PROTO_NONE);
+                DISPATCH_DIRECT();
+                break;
+            }
+            case Op::SEND_CALL: L_SEND_CALL: {
+                // protoCore-style call-form send (positional + named args).
+                // The operand names a *mangled* selector symbol of the form
+                // `<name>#<nPos>[#<sortedKey1>#<sortedKey2>...]`. We parse it
+                // once per const-pool slot into a CallDescriptor and cache
+                // it on the module (descSlot below), so subsequent passes
+                // through the same send site skip the string split entirely.
+                Frame& f = frames_.back();
+                auto* descSlot = f.m->callDescriptorSlot(arg);
+                if (!descSlot->parsed) {
+                    // Parse `<name>#<nPos>[#<key1>...]`. Selectors are
+                    // never empty; the mangling always yields at least the
+                    // two-segment `<name>#0` form for a zero-arg call.
+                    const std::string& mangled = f.m->constSymbol(arg);
+                    descSlot->mangled = mangled;
+                    size_t hash1 = mangled.find('#');
+                    if (hash1 == std::string::npos) {
+                        throw std::runtime_error(
+                            "SEND_CALL: malformed call selector '" +
+                            mangled + "' (missing nPos delimiter)");
+                    }
+                    std::string namePart = mangled.substr(0, hash1);
+                    size_t hash2 = mangled.find('#', hash1 + 1);
+                    std::string nPosPart =
+                        (hash2 == std::string::npos)
+                            ? mangled.substr(hash1 + 1)
+                            : mangled.substr(hash1 + 1, hash2 - hash1 - 1);
+                    int parsedNPos = 0;
+                    try { parsedNPos = std::stoi(nPosPart); }
+                    catch (...) {
+                        throw std::runtime_error(
+                            "SEND_CALL: malformed call selector '" +
+                            mangled + "' (nPos not an integer)");
+                    }
+                    descSlot->name = proto::ProtoString::createSymbol(
+                        ctx, namePart.c_str());
+                    descSlot->nPos = parsedNPos;
+                    descSlot->sortedKeys.clear();
+                    if (hash2 != std::string::npos) {
+                        size_t pos = hash2 + 1;
+                        while (pos <= mangled.size()) {
+                            size_t next = mangled.find('#', pos);
+                            std::string key =
+                                (next == std::string::npos)
+                                    ? mangled.substr(pos)
+                                    : mangled.substr(pos, next - pos);
+                            if (!key.empty()) {
+                                descSlot->sortedKeys.push_back(
+                                    proto::ProtoString::createSymbol(
+                                        ctx, key.c_str()));
+                            }
+                            if (next == std::string::npos) break;
+                            pos = next + 1;
+                        }
+                    }
+                    descSlot->parsed = true;
+                }
+                const auto& desc = *descSlot;
+                const int callNPos    = desc.nPos;
+                const int callNNamed  = static_cast<int>(desc.sortedKeys.size());
+                const int callTotal   = callNPos + callNNamed;
+                if (callTotal > 16) {
+                    throw std::runtime_error(
+                        "SEND_CALL: more than 16 args not supported (v1 limit): "
+                        + desc.mangled);
+                }
+                if (static_cast<int>(f.sp) < callTotal + 1) {
+                    throw std::runtime_error(
+                        "SEND_CALL with insufficient stack for " +
+                        desc.mangled);
+                }
+                const proto::ProtoObject* callArgs[16];
+                for (int i = callTotal - 1; i >= 0; --i) {
+                    callArgs[i] = pop(f);
+                }
+                const proto::ProtoObject* recv = pop(f);
+
+                // Pin the bare-name symbol used as the attribute key —
+                // same rationale as selSym in the keyword path.
+                TransientPin pinName(
+                    ctx,
+                    reinterpret_cast<const proto::ProtoObject*>(desc.name));
+
+                // Refuse actor receivers in v1 — async call-form sends
+                // would need a new message-envelope shape that drainOne
+                // does not yet decode. Tracked as a v2 follow-up.
+                if (rt_.isActor(ctx, recv)) {
+                    throw std::runtime_error(
+                        "call-form send to an actor is not supported in v1: "
+                        + desc.mangled);
+                }
+
+                // Attribute lookup uses the bare name (no mangling) — this
+                // is the protoCore convention.
+                const proto::ProtoObject* attr =
+                    recv->getAttribute(ctx, desc.name);
+                if (!attr || attr == PROTO_NONE) {
+                    std::string mntMsg = "doesNotUnderstand: " + desc.mangled
+                        + describeReceiverForDNU(ctx, recv,
+                                                 rt_.bootstrap().sym.className);
+                    auto* r = signalErrorOfClass(
+                        rt_, ctx, rt_.bootstrap().messageNotUnderstoodProto,
+                        mntMsg.c_str());
+                    push(f, r ? r : PROTO_NONE);
+                    DISPATCH_DIRECT();
+                    break;
+                }
+
+                // Bytecode method? Read declared signature and bind.
+                const proto::ProtoString* bcKey  = rt_.bootstrap().sym.bcPtr;
+                const proto::ProtoString* capKey = rt_.bootstrap().sym.captured;
+                auto* bcPtrObj = attr->getAttribute(ctx, bcKey);
+                if (bcPtrObj && bcPtrObj != PROTO_NONE) {
+                    const protoST::BytecodeModule* sub =
+                        reinterpret_cast<const protoST::BytecodeModule*>(
+                            bcPtrObj->asLong(ctx));
+                    if (!sub->isCallForm()) {
+                        // The receiver has a method under this bare name,
+                        // but it was declared with Smalltalk syntax. Reject
+                        // with a clear message — call-form and Smalltalk
+                        // methods are distinct attributes by design.
+                        throw std::runtime_error(
+                            "method '" + std::string(desc.name->toStdString(ctx))
+                            + "' is not a call-form method; called as "
+                            + desc.mangled);
+                    }
+                    const int declNPos = sub->callPosArity();
+                    const auto& declKeys = sub->callNamedKeys();
+                    const int declNNamed = static_cast<int>(declKeys.size());
+                    if (callNPos != declNPos) {
+                        throw std::runtime_error(
+                            "call-form method " + std::string(
+                                desc.name->toStdString(ctx))
+                            + " expects " + std::to_string(declNPos)
+                            + " positional args, got "
+                            + std::to_string(callNPos));
+                    }
+
+                    // Bind positional values directly (locals 1..nPos), then
+                    // walk the declared named keys in sorted order, copying
+                    // the call's value when the call provides that key and
+                    // installing the unset sentinel otherwise. Reject any
+                    // call-site key not present in the declaration.
+                    const proto::ProtoObject* methodArgs[1 + 16];
+                    methodArgs[0] = recv;
+                    for (int i = 0; i < callNPos; ++i) {
+                        methodArgs[1 + i] = callArgs[i];
+                    }
+                    int callCursor = 0;   // index into desc.sortedKeys
+                    for (int i = 0; i < declNNamed; ++i) {
+                        const std::string& declKey = declKeys[i];
+                        bool matched = false;
+                        // Advance callCursor through call-site keys while
+                        // they sort BEFORE declKey — any such key is a
+                        // foreign name and triggers an error.
+                        while (callCursor < callNNamed) {
+                            const std::string callKey =
+                                desc.sortedKeys[callCursor]->toStdString(ctx);
+                            if (callKey < declKey) {
+                                throw std::runtime_error(
+                                    "call-form method " + std::string(
+                                        desc.name->toStdString(ctx))
+                                    + " does not accept named arg '"
+                                    + callKey + "'");
+                            }
+                            if (callKey == declKey) {
+                                methodArgs[1 + callNPos + i] =
+                                    callArgs[callNPos + callCursor];
+                                matched = true;
+                                ++callCursor;
+                                break;
+                            }
+                            // callKey > declKey — call did not provide
+                            // this declared key; leave matched=false.
+                            break;
+                        }
+                        if (!matched) {
+                            methodArgs[1 + callNPos + i] =
+                                rt_.bootstrap().unsetMarker;
+                        }
+                    }
+                    // Any remaining call-site keys are foreign.
+                    if (callCursor < callNNamed) {
+                        std::string foreign =
+                            desc.sortedKeys[callCursor]->toStdString(ctx);
+                        throw std::runtime_error(
+                            "call-form method " + std::string(
+                                desc.name->toStdString(ctx))
+                            + " does not accept named arg '" + foreign + "'");
+                    }
+
+                    auto* capDict = attr->getAttribute(ctx, capKey);
+                    if (capDict == PROTO_NONE) capDict = nullptr;
+
+                    const unsigned int totalArgs =
+                        static_cast<unsigned int>(1 + declNPos + declNNamed);
+                    if (sub->argCount() != static_cast<int>(totalArgs)) {
+                        throw std::runtime_error(
+                            "internal: call-form module argCount mismatch for "
+                            + std::string(desc.name->toStdString(ctx)));
+                    }
+                    pushFrame(sub, /*self=*/recv, capDict, methodArgs,
+                              totalArgs);
+                    DISPATCH_DIRECT();
+                }
+
+                // Non-method attribute. Call-form requires a callable: a
+                // 0-arg bare call falls back to member access (mirrors the
+                // unary-send behaviour for foreign-attribute lookups).
+                if (callTotal == 0) {
+                    push(f, attr);
+                    DISPATCH_DIRECT();
+                    break;
+                }
+
+                // Primitive marker? Reserve for v2 — assert no named args.
+                if (attr->isInteger(ctx)) {
+                    long long marker = attr->asLong(ctx);
+                    if (marker & (1LL << 62)) {
+                        if (callNNamed > 0) {
+                            throw std::runtime_error(
+                                "primitive method '"
+                                + std::string(desc.name->toStdString(ctx))
+                                + "' does not accept named args in v1");
+                        }
+                        int primIdx = static_cast<int>(marker & ((1LL << 62) - 1));
+                        auto fn = rt_.registry().at(primIdx);
+                        auto* result = translateNativeException(
+                            rt_, ctx,
+                            [&] { return fn(rt_, ctx, recv, callArgs, callNPos); });
+                        push(f, result ? result : PROTO_NONE);
+                        DISPATCH_DIRECT();
+                        break;
+                    }
+                }
+
+                // Non-zero args on a non-method attribute is an error.
+                std::string mntMsg = "doesNotUnderstand: " + desc.mangled
+                    + describeReceiverForDNU(ctx, recv,
+                                             rt_.bootstrap().sym.className);
+                auto* r = signalErrorOfClass(
+                    rt_, ctx, rt_.bootstrap().messageNotUnderstoodProto,
+                    mntMsg.c_str());
+                push(f, r ? r : PROTO_NONE);
                 DISPATCH_DIRECT();
                 break;
             }

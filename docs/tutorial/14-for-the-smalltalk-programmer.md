@@ -330,11 +330,53 @@ close and as compliant as reasonable to Smalltalk-80, but standard conformance
 is not the goal" — the goal is a coherent language that shows off the protoCore
 kernel. This chapter is the precise measure of that "reasonable".
 
+## 14.8b Call-form sends — a protoCore-shaped extension
+
+protoST adds a *call-form* message syntax that has no equivalent in
+Smalltalk-80:
+
+```smalltalk
+Counter >> incr(by, factor = 1)   "declaration"
+    value := value + (by * factor).
+    ^ value.
+
+c incr(2, factor = 3)              "call site"
+```
+
+It binds at unary precedence and accepts a comma-separated list of
+positional arguments followed by named arguments of the form `name =
+value`. Named parameters in declarations carry default expressions
+evaluated lazily at call time in the method's own scope.
+
+This shape exists because protoST shares the protoCore runtime kernel
+with protoPython, protoJS, and other protoCore-hosted languages. Those
+runtimes name methods with plain identifiers and pass positional + named
+arguments. The call-form syntax lets protoST consume and provide such
+methods directly, without selector-mangling at the bridge layer.
+
+Call-form methods and keyword-form methods are **distinct attributes**: a
+class may host both `>> bar(x)` and `>> bar: x` without conflict. The
+call-form method registers on the class under the bare name. Side-effect
+order: positional args evaluate in source order; **named args evaluate
+in alphabetical-key order** — explicitly different from Python, which
+guarantees left-to-right. Use explicit temps where it matters.
+
+A class cannot host *both* a unary `>> bar` and a call `>> bar(...)`
+since they share the bare-name attribute key. Pick one form per name.
+
+In v1, actor receivers reject call-form sends — the async message
+envelope does not yet decode the positional + named shape. Keyword
+sends remain the way to message an actor.
+
+For full grammar, see `LANGUAGE.md` §3.5.1 and §3.3.
+
 ## 14.9 Summary
 
 - **Added, not in Smalltalk-80:** the actor model (`asActor`), futures
   (`wait` / `thenDo:`), cooperative yield; `uses:` multiple inheritance /
-  mixins; `addBehavior:` runtime composition; file-based modules and venvs.
+  mixins; `addBehavior:` runtime composition; file-based modules and venvs;
+  **call-form sends** (`recv name(p, k = v)`) and call-form method
+  declarations (`Class >> name(p, k = default)`).
 - **Intentional deviations:** no image / persistence; no metaclass tower; `new`
   does not auto-`initialize` (D4); `outer` aliases `pass` (D7); no `main:`
   (D12); single runtime per process (D2); `addBehavior:` affects future

@@ -408,6 +408,63 @@ via `uses:`, and composing behaviour into a class at runtime with
 `addBehavior:`. Those are not bolted onto a class system — they are the
 prototype kernel showing through.
 
+## 5.8b Call-form methods — positional + named arguments
+
+protoST also accepts a *call-form* method shape that mirrors the way
+methods are written in protoPython, protoJS, and other protoCore-hosted
+runtimes. Instead of a keyword selector, you declare a name followed by a
+parenthesised parameter list, with optional defaults on named
+parameters:
+
+```smalltalk
+Object subclass: #Counter instanceVariableNames: 'value'.
+Counter >> init                  "still a normal Smalltalk method"
+    value := 0.
+Counter >> incr(by, factor = 1)  "call-form: 1 positional, 1 named-with-default"
+    value := value + (by * factor).
+    ^ value.
+```
+
+Call sites use the same shape. Named arguments use `name = value`:
+
+```smalltalk
+c := Counter new.
+c init.
+c incr(2, factor = 3) printNl.   "6 — explicit factor"
+c incr(1) printNl.                "7 — factor defaults to 1"
+```
+
+A bare `name(args)` (no explicit receiver) inside a method is a
+self-send — handy for the implicit-receiver style:
+
+```smalltalk
+Counter >> resetAndBump
+    init.            "self-sends are ordinary unary sends"
+    incr(5).         "this too — call-form, implicit self"
+    ^ value.
+```
+
+**When to use call-form versus keyword.** They coexist on the same class
+as *distinct attributes* and you can pick per method:
+
+- Keyword form (`>> at: i put: v`) reads better for code that flows like
+  English prose and is the right default for native protoST APIs.
+- Call form (`>> render(node, depth = 0)`) reads naturally for code that
+  bridges to other runtimes (the foreign side already calls methods this
+  way) and for APIs with optional parameters with defaults.
+
+One practical constraint: a single class cannot host *both* a unary
+`>> bar` (a parameterless method whose attribute is `bar`) and a
+call-form `>> bar(...)` — they would register under the same attribute
+key. Pick one form per name.
+
+Defaults are evaluated lazily at call time in the method's own scope, so
+they can read earlier positional parameters and `self`:
+
+```smalltalk
+Counter >> incrBy(n, scaled = n * 2)  ^ value + scaled.
+```
+
 ## 5.9 Summary
 
 - A class is declared by sending `subclass:instanceVariableNames:` to an

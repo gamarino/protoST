@@ -78,6 +78,13 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     out.dictionaryProto             = const_cast<proto::ProtoObject*>(out.hashedCollectionProto)->newChild(ctx, /*isMutable=*/true);
     out.associationProto            = const_cast<proto::ProtoObject*>(out.objectProto)->newChild(ctx, /*isMutable=*/true);
 
+    // Call-form unset sentinel. A unique mutable child of objectProto so the
+    // dispatcher can identify it by pointer identity (`==` in protoST is
+    // identity equality). Pinned for the runtime's lifetime via the same
+    // mechanism as the other bootstrap prototypes — it is reachable from
+    // the Bootstrap struct held by the runtime.
+    out.unsetMarker = const_cast<proto::ProtoObject*>(out.objectProto)->newChild(ctx, /*isMutable=*/true);
+
     // Bind protoCore primitive slots so values produced by fromLong/fromDouble/etc.
     // walk up through our Smalltalk prototypes.  This mirrors protoJS's
     // NumberPrototype.cpp pattern (space->smallIntegerPrototype = const_cast<...>).
@@ -141,6 +148,7 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     stamp(out.bagProto,                    "Bag");
     stamp(out.dictionaryProto,             "Dictionary");
     stamp(out.associationProto,            "Association");
+    stamp(out.unsetMarker,                 "UnsetMarker");
 
     // Track 1 slice 2 (EXC-a): the class-derived `resumable` marker. Carried
     // on the class prototypes so an instance inherits it via the chain;

@@ -998,6 +998,12 @@ STRuntime::materialize(const BytecodeModule& m, size_t i) const {
         case K::NilK:   return PROTO_NONE;
         case K::TrueK:  return PROTO_TRUE;
         case K::FalseK: return PROTO_FALSE;
+        case K::UnsetMarker:
+            // Call-form "this named arg was omitted by the caller" sentinel.
+            // The method-decl prologue emits a PUSH_CONST of this kind so it
+            // can `==`-compare each declared named slot against the marker
+            // and substitute the declared default expression.
+            return impl_->bootstrap.unsetMarker;
     }
     return PROTO_NONE;
 }

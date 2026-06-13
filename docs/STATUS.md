@@ -48,6 +48,12 @@ are noted where useful.
 - [x] Operators, the `>>` method marker, cascades `;`
 - [x] Class declarations (`subclass:` / `instanceVariableNames:`)
 - [x] Method definitions (unary / binary / keyword selector patterns)
+- [x] **Call-form method declarations** `Class >> name(p, k = default)`
+      and **call-form sends** `recv name(p, k = v)` — protoCore convention,
+      coexists with Smalltalk forms. Known restriction: a class cannot
+      host both `>> bar` (unary) and `>> bar(...)` (call) on the same
+      name. Actor receivers reject call-form sends in v1.
+      *(closed: 2026-06-13)*
 - [x] Message-precedence parsing (unary > binary > keyword)
 - [x] **Chained assignment** `a := b := 0` *(closed: C1)*
 

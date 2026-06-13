@@ -170,6 +170,37 @@ void walkNode(const Node& n, ScopeWalker& cur,
             return;
         }
 
+        case NodeKind::CallMethodDecl: {
+            // Same scope-boundary treatment as MethodDecl, with the
+            // call-form layout: stringList[0]=name, then positional params,
+            // then sorted named params, then user locals. children[0..nNamed)
+            // are default expressions; children[nNamed..] are body statements.
+            // Both default expressions and the body share the method's
+            // locals/instVars scope.
+            ScopeWalker methodScope;
+            for (size_t i = 1; i < n.stringList.size(); ++i) {
+                methodScope.declared.insert(n.stringList[i]);
+            }
+            std::unordered_set<std::string> ivarSet;
+            if (classes) {
+                auto cit = classes->find(n.text);
+                if (cit != classes->end()) {
+                    for (const auto& iv : cit->second.instVarNames) {
+                        ivarSet.insert(iv);
+                    }
+                }
+            }
+            for (size_t i = 1; i < n.stringList.size(); ++i) {
+                ivarSet.erase(n.stringList[i]);
+            }
+            methodScope.instVars = &ivarSet;
+            for (const auto& child : n.children) {
+                if (child) walkNode(*child, methodScope, out, &n, classes);
+            }
+            out.capturedByScope[&n] = capturedOf(methodScope);
+            return;
+        }
+
         default:
             // Generic compound node — recurse into children. Also walk any
             // stringList? No: stringList is structural (selector, var names),
@@ -479,6 +510,201 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         currentInstVars_.clear();
         return;
     }
+    if (n.kind == NodeKind::CallMethodDecl) {
+        // protoCore-style call-form method body. Mirrors MethodDecl's
+        // structure with two added responsibilities:
+        //  1. The bytecode module carries an explicit call-form signature
+        //     (`setCallFormSignature`) so the SEND_CALL dispatcher can
+        //     arity-check and sentinel-fill omitted named slots.
+        //  2. The body opens with a default-evaluation prologue: for each
+        //     declared named param, if its slot still holds the unset
+        //     sentinel after dispatch, the prologue evaluates the
+        //     declared default expression and stores it into the slot.
+        //
+        // AST layout (see Parser::parseCallMethodDecl):
+        //   n.text                                       = class name
+        //   n.intValue                                   = nPos
+        //   n.intValue2                                  = nNamed
+        //   n.stringList[0]                              = method name
+        //   n.stringList[1..1+nPos]                      = positional params
+        //   n.stringList[1+nPos..1+nPos+nNamed]          = named params (sorted)
+        //   n.stringList[1+nPos+nNamed..]                = user locals
+        //   n.children[0..nNamed-1]                      = default exprs
+        //                                                  (sorted-key order)
+        //   n.children[nNamed..]                         = body statements
+        //   n.boolFlag                                   = classSide
+        const int nPos   = static_cast<int>(n.intValue);
+        const int nNamed = static_cast<int>(n.intValue2);
+        const int nArgs  = nPos + nNamed;
+
+        currentMethodClass_ = n.text;
+        {
+            auto it = classes_.find(n.text);
+            if (it != classes_.end()) currentInstVars_ = it->second.instVarNames;
+            else                      currentInstVars_.clear();
+        }
+
+        auto sub = std::make_unique<BytecodeModule>();
+
+        scopes_.emplace_back();
+        {
+            auto& s = scopes_.back();
+            s.astNode = &n;
+            auto it = analysis_.capturedByScope.find(&n);
+            if (it != analysis_.capturedByScope.end()) {
+                s.capturedNames = it->second;
+            }
+        }
+        declareLocal("self");                              // slot 0
+        for (int i = 0; i < nArgs; ++i) {
+            declareLocal(n.stringList[1 + i]);             // slots 1..nArgs
+                                                           // (pos first,
+                                                           //  then named)
+        }
+        // User locals — start at index 1 + nArgs in stringList.
+        for (size_t i = static_cast<size_t>(1 + nArgs); i < n.stringList.size(); ++i) {
+            declareLocal(n.stringList[i]);
+        }
+        sub->setArgCount(nArgs + 1);
+
+        // Record the declared call-form signature on the module — the
+        // SEND_CALL dispatcher will read this to bind named values to
+        // sorted slots and to fill omitted ones with the unset sentinel.
+        std::vector<std::string> sortedNamed;
+        sortedNamed.reserve(nNamed);
+        for (int i = 0; i < nNamed; ++i) {
+            sortedNamed.push_back(n.stringList[1 + nPos + i]);
+        }
+        sub->setCallFormSignature(nPos, std::move(sortedNamed));
+
+        // Captured-arg prologue: same routine as MethodDecl. It copies
+        // any captured ARGUMENT (positional or named) into the captured
+        // dict; captured user locals/temps need no copy.
+        emitCaptureProlog(*sub, /*isMethod=*/true, n.stringList, /*nArgs=*/nArgs,
+                          /*argNameOffset=*/1);
+
+        // Default-eval prologue: for each named arg slot, compare against
+        // the unset sentinel and, on match, evaluate the declared default
+        // and store it back into the slot. The sentinel pre-fill happens
+        // in the SEND_CALL dispatcher, so every named slot is either a
+        // genuine caller value or the sentinel by the time we get here.
+        //
+        // The default expression is allowed to read earlier method
+        // locals (`self`, positional params, earlier named params with
+        // already-evaluated defaults), so we walk named slots in
+        // declared-sorted order — exactly the order the slots appear in
+        // locals[1+nPos..1+nPos+nNamed).
+        //
+        // Bytecode shape per named slot:
+        //   PUSH_LOCAL slot
+        //   PUSH_CONST <unset-marker>
+        //   SEND_BINARY ==
+        //   JUMP_IF_FALSE skip
+        //   <default expr>
+        //   STORE_LOCAL slot
+        //   POP  -- discard the DUP-style result of an assignment-like store
+        // The store sequence below uses STORE_LOCAL+POP because emitExpr on
+        // the default expression leaves the value on TOS; STORE_LOCAL pops
+        // it and writes it into the slot, no leftover value.
+        for (int i = 0; i < nNamed; ++i) {
+            const int slot = 1 + nPos + i;
+            // Load current slot value (after dispatcher pre-fill).
+            sub->emitWide(Op::PUSH_LOCAL,
+                          static_cast<unsigned int>(slot), currentLine_);
+            // Push the unset sentinel.
+            auto unsetIdx = sub->addUnsetMarker();
+            sub->emitWide(Op::PUSH_CONST,
+                          static_cast<unsigned int>(unsetIdx), currentLine_);
+            // Identity-equality: `==` is the Smalltalk identity selector.
+            auto eqSym = sub->internSymbol("==");
+            sub->emitWide(Op::SEND_BINARY,
+                          static_cast<unsigned int>(eqSym), currentLine_);
+            // If the result is not PROTO_TRUE, skip the default.
+            // JUMP_IF_FALSE branches only when the value is exactly
+            // PROTO_FALSE — so we want JUMP_IF_FALSE-style "fall through
+            // when true". Compiler convention here: emit a JUMP_IF_FALSE
+            // with placeholder, then back-patch after the default body.
+            // (The protoST opcode set offers JUMP_IF_TRUE / JUMP_IF_FALSE;
+            // we use JUMP_IF_FALSE so the JUMP fires when `==` returned
+            // false — but we want the OPPOSITE: jump-when-NOT-equal. So
+            // we use JUMP_IF_FALSE which branches on false, i.e. branches
+            // when the slot value is not the sentinel — which is the
+            // "default-not-needed" case. That is exactly the semantics
+            // we want: jump over the default eval when the value is not
+            // the sentinel.)
+            //
+            // Implementation note: JUMP_IF_FALSE's arg is a *forward
+            // offset in 2-byte instructions*. Compute it after emitting
+            // the default body and back-patch.
+            size_t jumpInstr = sub->bytes().size();
+            sub->emit(Op::JUMP_IF_FALSE, 0, currentLine_);  // arg patched below
+            // Default body: evaluate, then STORE_LOCAL pops it into slot.
+            if (n.children[i]) {
+                emitExpr(*sub, *n.children[i]);
+            } else {
+                sub->emit(Op::PUSH_NIL, 0, currentLine_);
+            }
+            sub->emitWide(Op::STORE_LOCAL,
+                          static_cast<unsigned int>(slot), currentLine_);
+            // Back-patch JUMP_IF_FALSE: forward jump to current PC, measured
+            // in instruction words (2 bytes each). The patch overwrites the
+            // 1-byte operand; emit's word is at jumpInstr, its operand at
+            // jumpInstr+1. Compute the distance to the end of the prologue
+            // section for this slot (current bytes_.size()).
+            size_t after = sub->bytes().size();
+            size_t deltaBytes = after - (jumpInstr + kInstrSize);
+            size_t deltaInstr = deltaBytes / kInstrSize;
+            // Arg byte is 1 (instructions are 2 bytes wide).
+            if (deltaInstr > 0xFF) {
+                error("call-form default prologue exceeds 255-instruction jump "
+                      "range");
+            }
+            sub->patchArg(jumpInstr, static_cast<uint8_t>(deltaInstr));
+        }
+
+        // Body statements (children[nNamed..]).
+        bool bodyEmpty = (static_cast<int>(n.children.size()) <= nNamed);
+        if (bodyEmpty) {
+            sub->emit(Op::PUSH_NIL, 0, currentLine_);
+        }
+        for (size_t i = static_cast<size_t>(nNamed); i < n.children.size(); ++i) {
+            emitStatement(*sub, *n.children[i]);
+            if (i + 1 != n.children.size()) sub->emit(Op::POP, 0, currentLine_);
+        }
+        bool endsWithReturn = !bodyEmpty
+            && n.children.back()->kind == NodeKind::Return;
+        if (!endsWithReturn) {
+            if (!bodyEmpty) sub->emit(Op::POP, 0, currentLine_);
+            sub->emit(Op::PUSH_LOCAL, 0, currentLine_);  // self
+            sub->emit(Op::RETURN, 0, currentLine_);
+        }
+
+        recordLocalNames(*sub);
+        sub->setDebugName(n.text + ">>" + n.stringList[0] + "(...)");
+        sub->setDefiningClass(n.text);
+        scopes_.pop_back();
+
+        size_t blkIdx = m.addBlockModule(std::move(sub));
+
+        // Install on the class. We reuse `__installMethod:as:` (or its
+        // class-side cousin) — they are selector-agnostic, so a bare-name
+        // selector binds the call-form method module under the bare name
+        // attribute on the class. The dispatcher recognises the module as
+        // call-form via isCallForm() at SEND_CALL time.
+        auto classIdx    = m.internSymbol(n.text);
+        auto selectorIdx = m.internSymbol(n.stringList[0]);
+        auto installIdx  = m.internSymbol(
+            n.boolFlag ? "__installClassMethod:as:" : "__installMethod:as:");
+
+        m.emitWide(Op::PUSH_GLOBAL,  static_cast<unsigned int>(classIdx), currentLine_);
+        m.emitWide(Op::PUSH_BLOCK,   static_cast<unsigned int>(blkIdx), currentLine_);
+        m.emitWide(Op::PUSH_CONST,   static_cast<unsigned int>(selectorIdx), currentLine_);
+        m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(installIdx), currentLine_);
+
+        currentMethodClass_.clear();
+        currentInstVars_.clear();
+        return;
+    }
     if (n.kind == NodeKind::Assignment) {
         // Statement-level assignment. If the name is captured-by-an-inner-block,
         // it lives in the shared captured dict; otherwise it gets a local slot.
@@ -692,6 +918,42 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             }
             auto sym = m.internSymbol(n.text);
             m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(sym), currentLine_);
+            return;
+        }
+        case NodeKind::CallSend: {
+            // Call-form send: `recv name(p1, p2, k1=v1, k2=v2)`. AST layout:
+            //   children[0]                              = receiver
+            //   children[1..1+nPos]                      = positional values
+            //                                              (source order)
+            //   children[1+nPos..1+nPos+nNamed]          = named values
+            //                                              (sorted-key order)
+            //   stringList[0..nNamed-1]                  = named keys (sorted)
+            //   intValue  = nPos, intValue2 = nNamed
+            //
+            // Stack layout we emit (top-of-stack last): receiver, then
+            // positional values, then named values — same order as in the
+            // children vector. The dispatcher in ExecutionEngine reads the
+            // mangled selector to recover nPos / sortedKeys and pops in
+            // that order. See docs/superpowers/specs/2026-06-13-protocore-call-syntax.md.
+            const int nPos   = static_cast<int>(n.intValue);
+            const int nNamed = static_cast<int>(n.intValue2);
+            // Receiver, then args in children order (positionals first,
+            // then named in sorted order — matches dispatcher expectation).
+            emitExpr(m, *n.children[0]);
+            for (int i = 0; i < nPos + nNamed; ++i) {
+                emitExpr(m, *n.children[1 + i]);
+            }
+            // Mangled selector: `<name>#<nPos>[#<sortedKey1>...]`.
+            std::string mangled = n.text;
+            mangled += '#';
+            mangled += std::to_string(nPos);
+            for (int i = 0; i < nNamed; ++i) {
+                mangled += '#';
+                mangled += n.stringList[i];
+            }
+            auto sym = m.internSymbol(mangled);
+            m.emitWide(Op::SEND_CALL, static_cast<unsigned int>(sym),
+                       currentLine_);
             return;
         }
         case NodeKind::Cascade: {

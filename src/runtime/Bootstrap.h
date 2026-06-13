@@ -94,6 +94,15 @@ struct Bootstrap {
     const proto::ProtoObject* dictionaryProto             = nullptr;
     const proto::ProtoObject* associationProto            = nullptr;
 
+    // Call-form named-arg "unset" sentinel. The SEND_CALL dispatcher writes
+    // this singleton into named-arg slots that the caller omitted; the
+    // method-decl prologue checks each slot against it and evaluates the
+    // declared default when matched. Distinct from `nil` so users can pass
+    // `nil` as an explicit named-arg value. Created once at bootstrap and
+    // perpetually pinned (child of objectProto, mirroring the pattern used
+    // for the exception-hierarchy roots).
+    const proto::ProtoObject* unsetMarker                 = nullptr;
+
     // Pre-interned hot-path attribute symbols.
     //
     // Interning is idempotent — the same content always yields the same

@@ -84,6 +84,15 @@ enum class Op : uint8_t {
     // the inlined fast path keeps the same observable semantics as the
     // SEND_KEYWORD dispatch it replaced.
     ASSERT_BOOL_OR_DNU = 38, // arg = selector const index
+    // 2026-06-13: protoCore-style call-form send (positional + named args).
+    // The single operand is a const-pool index naming a *mangled* selector
+    // of the form `<name>#<nPos>[#<sortedKey1>#<sortedKey2>...]`. The
+    // dispatcher parses the mangle to recover (name, nPos, sortedKeys),
+    // pops `1 + nPos + nNamed` values (receiver + positionals in source
+    // order + named values in alphabetical-key order), looks up the bare
+    // `<name>` attribute on the receiver, and dispatches with the protoCore
+    // method convention. See docs/superpowers/specs/2026-06-13-protocore-call-syntax.md.
+    SEND_CALL          = 39, // arg = const-pool index of mangled call selector
     // Extend for >256-index args
     EXTEND          = 254,
     // Debugger primitive guard
