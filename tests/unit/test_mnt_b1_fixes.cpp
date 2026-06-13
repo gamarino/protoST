@@ -157,14 +157,19 @@ TEST_CASE("MNT-b1 D9: whileFalse: on Block", "[mnt-b1][D9]") {
 
 // --- D15: classVariableNames: diagnostic -----------------------------------
 
-TEST_CASE("MNT-b1 D15: a non-empty classVariableNames: clause is diagnosed",
-          "[mnt-b1][D15]") {
+TEST_CASE("D19 (2026-06-13): a non-empty classVariableNames: clause now parses",
+          "[mnt-b1][D15][D19]") {
+    // Class variables are honoured (D19 closed): the clause parses cleanly
+    // and the names are installed on the class object so instance-side
+    // reads find them via the prototype-chain attribute walk. Instance-side
+    // ASSIGNMENT remains a compile-time error (covered separately under
+    // [class-vars]), so the language-level limitation the original D15
+    // diagnostic stood in for is enforced where it matters.
     protoST::Parser P("Object subclass: #Counter "
                       "instanceVariableNames: 'value' "
                       "classVariableNames: 'Total'.");
     auto ast = P.parseModule();
-    // The clause must no longer be silently discarded.
-    REQUIRE_FALSE(P.errors().empty());
+    REQUIRE(P.errors().empty());
 }
 
 TEST_CASE("MNT-b1 D15: an empty classVariableNames: clause stays silent",

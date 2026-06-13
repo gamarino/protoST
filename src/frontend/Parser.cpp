@@ -549,10 +549,16 @@ ast::NodePtr Parser::parseClassDecl(Token classIdent) {
         }
     };
 
+    // Track inst-var and class-var name lists separately so the user may write
+    // the clauses in any order. The two lists are then packed into stringList
+    // with intValue = ivCount as the boundary (see ClassDecl shape in AST.h).
+    std::vector<std::string> ivs;
+    std::vector<std::string> cvs;
+
     while (current_.kind == TokenKind::Keyword) {
         if (current_.text == "instanceVariableNames:") {
             advance();
-            parseStringList(cd->stringList);
+            parseStringList(ivs);
         } else if (current_.text == "uses:") {
             // T3-b: multiple inheritance / mixins. `uses:` takes an expression
             // — typically a `{ MixinA. MixinB }` dynamic-array literal — whose
@@ -565,34 +571,26 @@ ast::NodePtr Parser::parseClassDecl(Token classIdent) {
             if (mixins) cd->children.push_back(std::move(mixins));
             else error(current_, "expected an expression after uses:");
         } else if (current_.text == "classVariableNames:") {
-            Token kw = current_;
             advance();
-            // D15: class variables are not implemented (tracked as D19).
-            // Previously the clause was parsed and its contents silently
-            // discarded — a class declared with `classVariableNames:` would
-            // compile cleanly yet the named variables simply did not exist.
-            // Silent acceptance of a no-op clause is a bug: emit a clear
-            // diagnostic instead, so the gap is visible at compile time.
-            std::string names;
-            if (current_.kind == TokenKind::String) {
-                names = current_.text;
-                advance();
-            } else {
-                error(current_, "expected string after classVariableNames:");
-            }
-            // Trim to decide whether any names were actually requested; an
-            // empty `classVariableNames: ''` is a documented no-op and stays
-            // silent (see LANGUAGE.md §4.2).
-            bool anyNames = names.find_first_not_of(" \t\r\n") != std::string::npos;
-            if (anyNames) {
-                error(kw, "classVariableNames: is not yet supported — class "
-                          "variables are not implemented (see docs/STATUS.md D19)");
-            }
+            // D19 (2026-06-13): class-variable names are honoured by the
+            // compiler. They become attributes on the class object (mangled
+            // as `_iv_<name>`, the same key shape inst vars use), reachable
+            // from any instance via the prototype-chain attribute walk —
+            // see docs/STATUS.md D19 and docs/LANGUAGE.md §3.2 for the
+            // semantics and the documented restriction (instance-side
+            // assignment is a compile-time error; mutate from a class-side
+            // method instead).
+            parseStringList(cvs);
         } else {
             error(current_, "unknown keyword in class declaration: " + current_.text);
             break;
         }
     }
+
+    // Pack: stringList = [super, ...ivs, ...cvs], intValue = ivs.size().
+    for (auto& s : ivs) cd->stringList.push_back(std::move(s));
+    for (auto& s : cvs) cd->stringList.push_back(std::move(s));
+    cd->intValue = static_cast<long long>(ivs.size());
 
     // consume optional terminating '.'
     match(TokenKind::Period);

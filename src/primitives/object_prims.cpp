@@ -5,6 +5,7 @@
 #include "runtime/TransientPin.h"
 #include "protoCore.h"
 
+#include <cctype>
 #include <chrono>
 #include <stdexcept>
 #include <string>
@@ -192,6 +193,47 @@ const proto::ProtoObject* prim_Object_installClassMethod(STRuntime&,
     const_cast<proto::ProtoObject*>(a[0])->setAttribute(
         ctx, classSideKey, PROTO_TRUE);
     r->setAttribute(ctx, selStr, a[0]);
+    return r;
+}
+
+// class __initClassVars: namesString
+//   → for each whitespace-separated name in namesString, install `_iv_<name>`
+//     = nil on the receiver (the class object). Returns recv so the SEND
+//     leaves the class on the stack for whatever the compiler does next
+//     (STORE_GLOBAL, DUP, etc.).
+//
+// D19 (2026-06-13): emitted by the compiler's ClassDecl path when the class
+// declares `classVariableNames: '...'`. Class variables share the `_iv_<name>`
+// mangled attribute key with instance variables, so the existing PUSH_INSTVAR
+// chain walk picks them up from any instance. Mutation from instance-side
+// methods is rejected at compile time — see Compiler emitExpr / emitStatement
+// NodeKind::Assignment handlers and docs/STATUS.md D19.
+const proto::ProtoObject* prim_Object_initClassVars(STRuntime&,
+                                                    proto::ProtoContext* ctx,
+                                                    const proto::ProtoObject* r,
+                                                    const proto::ProtoObject* const* a,
+                                                    int argc) {
+    if (argc != 1) throw std::runtime_error("__initClassVars: expects 1 arg");
+    auto* namesObj = a[0] ? a[0]->asString(ctx) : nullptr;
+    if (!namesObj)
+        throw std::runtime_error(
+            "__initClassVars:: names must be a string");
+    std::string names = namesObj->toStdString(ctx);
+    auto* cls = const_cast<proto::ProtoObject*>(r);
+    std::string cur;
+    auto flush = [&]() {
+        if (cur.empty()) return;
+        std::string mangled = "_iv_" + cur;
+        const proto::ProtoString* key =
+            proto::ProtoString::createSymbol(ctx, mangled.c_str());
+        cls->setAttribute(ctx, key, PROTO_NONE);
+        cur.clear();
+    };
+    for (char ch : names) {
+        if (std::isspace(static_cast<unsigned char>(ch))) flush();
+        else cur += ch;
+    }
+    flush();
     return r;
 }
 
@@ -822,6 +864,12 @@ void installObjectPrimitives(STRuntime& rt) {
     // ClassDecl path; `printString` is the default inherited by every object.
     bindPrimitive(rt, b.objectProto, "__setClassName:",
                   reg.registerPrim(prim_Object_setClassName));
+    // D19: `__initClassVars:` is emitted by the compiler's ClassDecl path
+    // when the class declares `classVariableNames: '...'`. It installs each
+    // name as `_iv_<name>` = nil on the class object so instance-side reads
+    // via the shared `_iv_<name>` chain walk pick up the shared storage.
+    bindPrimitive(rt, b.objectProto, "__initClassVars:",
+                  reg.registerPrim(prim_Object_initClassVars));
     // T3-a: `subclass:` as a runtime message so any class object — including
     // one imported from a module — can be subclassed via an expression
     // receiver, not just the compiler's textual `Identifier subclass: …` form.

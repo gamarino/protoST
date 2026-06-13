@@ -38,6 +38,15 @@ enum class NodeKind : uint8_t {
     // children[0..nNamed-1]=default expressions (sorted-key order),
     // children[nNamed..]=method body statements.
     CallMethodDecl,
+    // Class declaration: `Super subclass: #Name instanceVariableNames: '...'
+    // classVariableNames: '...' uses: { … }`. Layout:
+    //   text                                  = class name (without #)
+    //   stringList[0]                         = superclass name
+    //   intValue                              = inst-var count
+    //   stringList[1..1+intValue]             = inst-var names (source order)
+    //   stringList[1+intValue..]              = class-var names (source order)
+    //   children[0]                           = optional mixin expression
+    //                                           (only present when `uses:`)
     ClassDecl,
     Module,
 };

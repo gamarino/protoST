@@ -1334,6 +1334,80 @@ TEST_CASE("Call-form: zero-arg call returns the method's value",
     REQUIRE(r->asLong(rt.rootCtx()) == 42);
 }
 
+//
+// Class variables (D19 — closed 2026-06-13).
+// Reads via the prototype-chain attribute walk; writes only from class-side
+// methods. Instance-side writes are a compile-time error.
+//
+
+TEST_CASE("Class vars: class-side initialise, instance-side read",
+          "[engine][class-vars]") {
+    protoST::STRuntime rt;
+    auto* r = bl1Run(rt,
+        "Object subclass: #C instanceVariableNames: '' "
+        "  classVariableNames: 'shared'. "
+        "C class >> init  shared := 42. "
+        "C >> read  ^ shared. "
+        "C init. "
+        "C new read.");
+    REQUIRE(r->asLong(rt.rootCtx()) == 42);
+}
+
+TEST_CASE("Class vars: class-side mutation is visible to all instances",
+          "[engine][class-vars]") {
+    protoST::STRuntime rt;
+    auto* r = bl1Run(rt,
+        "Object subclass: #C instanceVariableNames: '' "
+        "  classVariableNames: 'tally'. "
+        "C class >> init  tally := 0. "
+        "C class >> bump  tally := tally + 1. "
+        "C >> read  ^ tally. "
+        "C init. "
+        "C bump. C bump. C bump. "
+        "C new read.");
+    REQUIRE(r->asLong(rt.rootCtx()) == 3);
+}
+
+TEST_CASE("Class vars: subclass instance reads superclass's class var",
+          "[engine][class-vars]") {
+    protoST::STRuntime rt;
+    auto* r = bl1Run(rt,
+        "Object subclass: #Base instanceVariableNames: '' "
+        "  classVariableNames: 'count'. "
+        "Base class >> init  count := 7. "
+        "Base subclass: #Sub instanceVariableNames: ''. "
+        "Sub >> mine  ^ count. "
+        "Base init. "
+        "Sub new mine.");
+    REQUIRE(r->asLong(rt.rootCtx()) == 7);
+}
+
+TEST_CASE("Class vars: instance-side assignment is a compile-time error",
+          "[engine][class-vars]") {
+    protoST::Parser P(
+        "Object subclass: #C instanceVariableNames: '' "
+        "  classVariableNames: 'shared'. "
+        "C >> badWrite  shared := 5.");
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C;
+    C.compileModule(*ast);
+    REQUIRE(C.hasErrors());
+}
+
+TEST_CASE("Class vars: uninitialised class var reads as nil",
+          "[engine][class-vars]") {
+    // `__initClassVars:` runs at class-decl time and writes nil into each
+    // declared slot, so a read before any explicit init yields nil.
+    protoST::STRuntime rt;
+    auto* r = bl1Run(rt,
+        "Object subclass: #C instanceVariableNames: '' "
+        "  classVariableNames: 'pristine'. "
+        "C >> r  ^ pristine. "
+        "C new r.");
+    REQUIRE(r == PROTO_NONE);
+}
+
 TEST_CASE("Call-form: sorted named values bind to declared sorted slots",
           "[engine][call-form]") {
     // Caller writes named args in non-alphabetic source order; the parser

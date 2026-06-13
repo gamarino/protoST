@@ -155,6 +155,22 @@ void walkNode(const Node& n, ScopeWalker& cur,
                     for (const auto& iv : cit->second.instVarNames) {
                         ivarSet.insert(iv);
                     }
+                    // Class vars are reached through the same `_iv_<name>`
+                    // attribute key (resolved on the class via chain walk)
+                    // and so behave like inst vars for free-var analysis —
+                    // referencing one from an inner block is NOT a capture.
+                    // They inherit through the user-declared class chain.
+                    std::unordered_set<std::string> seen;
+                    std::string cur = n.text;
+                    while (!cur.empty() && !seen.count(cur)) {
+                        seen.insert(cur);
+                        auto cit2 = classes->find(cur);
+                        if (cit2 == classes->end()) break;
+                        for (const auto& cv : cit2->second.classVarNames) {
+                            ivarSet.insert(cv);
+                        }
+                        cur = cit2->second.superclassName;
+                    }
                 }
             }
             for (size_t i = 1; i < n.stringList.size(); ++i) {
@@ -187,6 +203,9 @@ void walkNode(const Node& n, ScopeWalker& cur,
                 if (cit != classes->end()) {
                     for (const auto& iv : cit->second.instVarNames) {
                         ivarSet.insert(iv);
+                    }
+                    for (const auto& cv : cit->second.classVarNames) {
+                        ivarSet.insert(cv);
                     }
                 }
             }
@@ -245,6 +264,24 @@ void Compiler::analyseClosures(const Node& mod) {
     analysis_.capturedByScope[nullptr] = analysis_.moduleCaptured;
 }
 
+std::vector<std::string>
+Compiler::resolveClassVarsFor(const std::string& className) const {
+    std::vector<std::string> out;
+    std::unordered_set<std::string> seenNames;
+    std::unordered_set<std::string> seenClasses;
+    std::string cur = className;
+    while (!cur.empty() && !seenClasses.count(cur)) {
+        seenClasses.insert(cur);
+        auto it = classes_.find(cur);
+        if (it == classes_.end()) break;
+        for (const auto& cv : it->second.classVarNames) {
+            if (seenNames.insert(cv).second) out.push_back(cv);
+        }
+        cur = it->second.superclassName;
+    }
+    return out;
+}
+
 void Compiler::collectClasses(const Node& module) {
     classes_.clear();
     if (module.kind != NodeKind::Module) return;
@@ -253,11 +290,19 @@ void Compiler::collectClasses(const Node& module) {
         const auto& cd = *topPtr;
         ClassInfo info;
         info.name = cd.text;
-        // ClassDecl AST shape (see Parser::parseClassDecl):
-        //   stringList[0] = superclass name; stringList[1..] = inst var names.
+        // ClassDecl AST shape (see Parser::parseClassDecl and AST.h):
+        //   stringList[0]                         = superclass name
+        //   intValue                              = inst-var count
+        //   stringList[1..1+intValue]             = inst-var names
+        //   stringList[1+intValue..]              = class-var names
         if (!cd.stringList.empty()) info.superclassName = cd.stringList[0];
-        for (size_t i = 1; i < cd.stringList.size(); ++i) {
+        const size_t ivCount = static_cast<size_t>(cd.intValue);
+        const size_t ivEnd   = 1 + ivCount;
+        for (size_t i = 1; i < ivEnd && i < cd.stringList.size(); ++i) {
             info.instVarNames.push_back(cd.stringList[i]);
+        }
+        for (size_t i = ivEnd; i < cd.stringList.size(); ++i) {
+            info.classVarNames.push_back(cd.stringList[i]);
         }
         classes_[info.name] = std::move(info);
     }
@@ -332,13 +377,14 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             auto nameSymIdx = m.internSymbol(n.text);
             m.emitWide(Op::PUSH_CONST,
                        static_cast<unsigned int>(nameSymIdx), currentLine_);
+            const size_t ivCount = static_cast<size_t>(n.intValue);
             std::string selector;
-            if (n.stringList.size() > 1) {
+            if (ivCount > 0) {
                 // declared instance variables → subclass:instanceVariableNames:uses:
                 std::string ivars;
-                for (size_t i = 1; i < n.stringList.size(); ++i) {
-                    if (i > 1) ivars += ' ';
-                    ivars += n.stringList[i];
+                for (size_t i = 0; i < ivCount; ++i) {
+                    if (i > 0) ivars += ' ';
+                    ivars += n.stringList[1 + i];
                 }
                 auto ivStrIdx = m.addString(ivars);
                 m.emitWide(Op::PUSH_CONST,
@@ -352,6 +398,25 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             auto selIdx = m.internSymbol(selector);
             m.emitWide(Op::SEND_KEYWORD,
                        static_cast<unsigned int>(selIdx), currentLine_);
+            // D19 (2026-06-13): install class-var initial values on the new
+            // class. Class is on the stack as the SEND's result; the primitive
+            // walks the packed name string, sets `_iv_<name>` = nil for each,
+            // and returns the class (so the stack invariant is preserved).
+            const size_t cvCount = (n.stringList.size() > 1 + ivCount)
+                ? n.stringList.size() - (1 + ivCount) : 0;
+            if (cvCount > 0) {
+                std::string cvs;
+                for (size_t i = 0; i < cvCount; ++i) {
+                    if (i > 0) cvs += ' ';
+                    cvs += n.stringList[1 + ivCount + i];
+                }
+                auto cvStrIdx = m.addString(cvs);
+                auto initCvsIdx = m.internSymbol("__initClassVars:");
+                m.emitWide(Op::PUSH_CONST,
+                           static_cast<unsigned int>(cvStrIdx), currentLine_);
+                m.emitWide(Op::SEND_KEYWORD,
+                           static_cast<unsigned int>(initCvsIdx), currentLine_);
+            }
             // The primitive already binds the class as a global under its
             // name; DUP keeps it on the stack as this statement's value and
             // STORE_GLOBAL rebinds it (idempotent), matching the plain form.
@@ -379,6 +444,26 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             m.emitWide(Op::PUSH_CONST,   static_cast<unsigned int>(nameStrIdx), currentLine_);
             m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(setNameIdx), currentLine_);
         }
+        // D19 (2026-06-13): install class-var initial values (nil) on the
+        // freshly-created class. Mirrors the mixin branch above.
+        {
+            const size_t ivCount = static_cast<size_t>(n.intValue);
+            const size_t cvCount = (n.stringList.size() > 1 + ivCount)
+                ? n.stringList.size() - (1 + ivCount) : 0;
+            if (cvCount > 0) {
+                std::string cvs;
+                for (size_t i = 0; i < cvCount; ++i) {
+                    if (i > 0) cvs += ' ';
+                    cvs += n.stringList[1 + ivCount + i];
+                }
+                auto cvStrIdx   = m.addString(cvs);
+                auto initCvsIdx = m.internSymbol("__initClassVars:");
+                m.emitWide(Op::PUSH_CONST,
+                           static_cast<unsigned int>(cvStrIdx), currentLine_);
+                m.emitWide(Op::SEND_KEYWORD,
+                           static_cast<unsigned int>(initCvsIdx), currentLine_);
+            }
+        }
         m.emit(Op::DUP,          0, currentLine_);
         m.emitWide(Op::STORE_GLOBAL, static_cast<unsigned int>(classNameIdx), currentLine_);
         return;
@@ -404,11 +489,17 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         // names BEFORE emitting the body, so that emitExpr/emitStatement
         // can resolve identifiers against this class's inst vars before
         // falling back to globals.
-        currentMethodClass_ = n.text;
+        currentMethodClass_         = n.text;
+        currentMethodIsClassSide_   = n.boolFlag;
         {
             auto it = classes_.find(n.text);
-            if (it != classes_.end()) currentInstVars_ = it->second.instVarNames;
-            else                      currentInstVars_.clear();
+            if (it != classes_.end()) {
+                currentInstVars_  = it->second.instVarNames;
+                currentClassVars_ = resolveClassVarsFor(n.text);
+            } else {
+                currentInstVars_.clear();
+                currentClassVars_.clear();
+            }
         }
 
         // Build sub-BytecodeModule for the method body.
@@ -508,6 +599,8 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         // F4-U5: clear the method-body name-resolution context.
         currentMethodClass_.clear();
         currentInstVars_.clear();
+        currentClassVars_.clear();
+        currentMethodIsClassSide_ = false;
         return;
     }
     if (n.kind == NodeKind::CallMethodDecl) {
@@ -537,11 +630,17 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         const int nNamed = static_cast<int>(n.intValue2);
         const int nArgs  = nPos + nNamed;
 
-        currentMethodClass_ = n.text;
+        currentMethodClass_       = n.text;
+        currentMethodIsClassSide_ = n.boolFlag;
         {
             auto it = classes_.find(n.text);
-            if (it != classes_.end()) currentInstVars_ = it->second.instVarNames;
-            else                      currentInstVars_.clear();
+            if (it != classes_.end()) {
+                currentInstVars_  = it->second.instVarNames;
+                currentClassVars_ = resolveClassVarsFor(n.text);
+            } else {
+                currentInstVars_.clear();
+                currentClassVars_.clear();
+            }
         }
 
         auto sub = std::make_unique<BytecodeModule>();
@@ -703,6 +802,8 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
 
         currentMethodClass_.clear();
         currentInstVars_.clear();
+        currentClassVars_.clear();
+        currentMethodIsClassSide_ = false;
         return;
     }
     if (n.kind == NodeKind::Assignment) {
@@ -721,6 +822,26 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         // F4-U5: instance variable of the current method's class.
         for (const auto& iv : currentInstVars_) {
             if (iv == n.text) {
+                emitExpr(m, *n.children[0]);
+                auto sym = m.internSymbol(n.text);
+                m.emit(Op::DUP, 0, currentLine_);
+                m.emitWide(Op::STORE_INSTVAR, static_cast<unsigned int>(sym), currentLine_);
+                return;
+            }
+        }
+        // D19 (2026-06-13): class variable of the current method's class —
+        // class-side write only; instance-side is rejected with a clear
+        // compile-time error, see the matching block in emitExpr's
+        // NodeKind::Assignment case.
+        for (const auto& cv : currentClassVars_) {
+            if (cv == n.text) {
+                if (!currentMethodIsClassSide_) {
+                    error("class variable '" + n.text +
+                          "' cannot be assigned from an instance-side "
+                          "method (would create a per-instance shadow). "
+                          "Mutate it from a class-side method instead.");
+                    return;
+                }
                 emitExpr(m, *n.children[0]);
                 auto sym = m.internSymbol(n.text);
                 m.emit(Op::DUP, 0, currentLine_);
@@ -805,6 +926,18 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                     return;
                 }
             }
+            // D19 (2026-06-13): class variable of the current method's class.
+            // The same `_iv_<name>` mangle as inst vars — PUSH_INSTVAR walks
+            // the receiver's prototype chain via getAttribute, so an instance
+            // method reading a class var finds the value installed on the
+            // class object by ClassDecl emission.
+            for (const auto& cv : currentClassVars_) {
+                if (cv == n.text) {
+                    auto sym = m.internSymbol(n.text);
+                    m.emitWide(Op::PUSH_INSTVAR, static_cast<unsigned int>(sym), currentLine_);
+                    return;
+                }
+            }
             // F4-U3: fall back to the global namespace.
             // ST-80 semantics: free identifiers in expressions resolve through
             // the scope chain, then globals. A failed runtime lookup will
@@ -828,6 +961,30 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             // F4-U5: instance variable of the current method's class.
             for (const auto& iv : currentInstVars_) {
                 if (iv == n.text) {
+                    emitExpr(m, *n.children[0]);
+                    auto sym = m.internSymbol(n.text);
+                    m.emit(Op::DUP, 0, currentLine_);
+                    m.emitWide(Op::STORE_INSTVAR, static_cast<unsigned int>(sym), currentLine_);
+                    return;
+                }
+            }
+            // D19 (2026-06-13): class variable of the current method's class.
+            // Writes go through STORE_INSTVAR (writes the `_iv_<name>` key on
+            // the receiver) ONLY when the method is class-side — there `self`
+            // IS the class object, so the write updates the shared storage.
+            // From an instance method the write would create a per-instance
+            // shadow on the receiver instead of updating the class — a
+            // foot-gun every Smalltalker has stepped on once — so it is
+            // explicitly rejected here with a compile-time error.
+            for (const auto& cv : currentClassVars_) {
+                if (cv == n.text) {
+                    if (!currentMethodIsClassSide_) {
+                        error("class variable '" + n.text +
+                              "' cannot be assigned from an instance-side "
+                              "method (would create a per-instance shadow). "
+                              "Mutate it from a class-side method instead.");
+                        return;
+                    }
                     emitExpr(m, *n.children[0]);
                     auto sym = m.internSymbol(n.text);
                     m.emit(Op::DUP, 0, currentLine_);

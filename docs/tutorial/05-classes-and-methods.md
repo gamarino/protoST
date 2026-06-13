@@ -393,6 +393,51 @@ deliberate (it is how `new` itself stays a class-only message).
 > non-auto-`initialize` rule (§5.2). The standard-library modules use exactly
 > this pattern (`ReadStream class >> on:`, `Random class >> seed:`).
 
+## 5.7b Class variables — per-class shared storage
+
+When several instances need to share a single value — a counter of all
+instances ever created, a singleton cache, a class-wide configuration —
+declare it via `classVariableNames:`:
+
+```smalltalk
+Object subclass: #Counter
+  instanceVariableNames: 'value'
+  classVariableNames:    'tally'.
+
+Counter class >> initTally  tally := 0.
+Counter class >> bump       tally := tally + 1.
+Counter >> total            ^ tally.
+```
+
+Each declared name is installed as `nil` on the class object at
+class-decl time and is visible to every instance via the prototype
+chain — including instances of subclasses (no re-declaration needed).
+Reading works exactly the same as reading an instance variable:
+
+```smalltalk
+Counter initTally.
+Counter bump. Counter bump. Counter bump.
+Counter new total printNl.    "→ 3"
+```
+
+**Mutation is restricted to class-side methods.** Writing to a class
+variable from an instance-side method is a compile-time error:
+
+```smalltalk
+Counter >> bumpFromInstance  tally := tally + 1.
+"compile error: class variable 'tally' cannot be assigned from an
+ instance-side method (would create a per-instance shadow).
+ Mutate it from a class-side method instead."
+```
+
+Why: in protoST a write inside an instance method targets `self`, which
+is the instance. Storing on the instance would silently create a
+per-instance copy that *shadows* the class-level value for that one
+object, and other instances would never see the update. Rather than
+accept that footgun, the compiler refuses the assignment and points you
+at the class-side method, where `self` is the class and the write
+reaches the shared slot.
+
 ## 5.8 Prototypes under the hood
 
 protoST's object model is, underneath, *prototype-based* — inherited from the

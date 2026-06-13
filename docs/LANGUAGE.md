@@ -322,10 +322,31 @@ Object subclass: #Counter
   classVariableNames: ''.
 ```
 
-The trailing `.` is optional. An empty `classVariableNames: ''` clause is a
-documented no-op. A *non-empty* `classVariableNames:` clause is rejected with a
-compile-time diagnostic: class variables are not yet implemented (tracked as
-D19 in `docs/STATUS.md`), so the clause is no longer silently discarded.
+The trailing `.` is optional. `classVariableNames:` takes a string of
+space-separated **class-variable names** — per-class shared storage,
+initialised to `nil` at class-decl time and visible from every instance
+(including instances of subclasses) via the same prototype-chain attribute
+walk that resolves inst vars. The clause is honoured; an empty
+`classVariableNames: ''` declares no names. Example:
+
+```smalltalk
+Object subclass: #Counter
+  instanceVariableNames: 'value'
+  classVariableNames: 'tally'.
+
+Counter class >> initTally  tally := 0.
+Counter class >> bump       tally := tally + 1.
+Counter >> total            ^ tally.
+```
+
+A class variable can be assigned **only from a class-side method**. The
+language explicitly rejects an instance-side assignment to a class var
+with a compile-time error — "would create a per-instance shadow" — because
+the natural store would target `self` (the instance) and silently produce
+a per-instance attribute rather than update the shared storage. Mutation
+from a class-side method has `self == the class`, so the store reaches
+the shared slot. This restriction is the only remaining deviation from
+the Smalltalk-80 model and is tracked as D19 in `docs/STATUS.md`.
 
 The optional `uses:` clause declares **multiple inheritance / mixins** — see
 §4.7. It takes a collection of class objects (typically a `{ … }` dynamic
@@ -1900,7 +1921,8 @@ The id scheme (`D1..D18`) is shared with `docs/STATUS.md`. Items D6, D11, D19
 and D20 are described in `docs/STATUS.md`: D6 is now closed (not reproducible),
 D11 (`Float` / mixed-mode arithmetic) and D20 (`LargeInteger` arithmetic and
 overflow promotion) are now closed (the numeric tower — see §12.2), and D19
-(class variables) is tracked there as a not-yet-implemented feature.
+is now narrower than "not implemented" — class variables ARE honoured; only
+mutation from instance-side methods is prohibited (a compile-time error).
 
 ### 14.1 Intentional deviations
 
@@ -1943,10 +1965,11 @@ examples:
 
 > **Fixed (commit `MNT-b1`).** D1 (negative numeric literals), D13 (the CLI no
 > longer advertises an unimplemented `compile` subcommand), D15
-> (`classVariableNames:` now emits a compile-time diagnostic instead of being
-> silently discarded), D16 (nested literal arrays parse) and D18 (`==`/`~~`
-> bound on `Object`; `=`/`~=` universal with value-equality overrides) are
-> resolved — see `docs/STATUS.md` *Closed items*.
+> (`classVariableNames:` was emitting a compile-time diagnostic instead of
+> being silently discarded — superseded 2026-06-13 when D19 closed and the
+> clause is now honoured), D16 (nested literal arrays parse) and D18
+> (`==`/`~~` bound on `Object`; `=`/`~=` universal with value-equality
+> overrides) are resolved — see `docs/STATUS.md` *Closed items*.
 
 > **Fixed (commit `MNT-b2`).** D3 (an unresolved selector signals a catchable
 > `MessageNotUnderstood`, a subclass of `Error`), D5 (class-side methods are
@@ -1969,8 +1992,15 @@ noted in `docs/STATUS.md`):
 - **D17 — `thisContext` is reserved but inert.** It parses to its own node but
   the reflective context protocol is not built.
   *Affects:* [§3.10](#310-thiscontext).
-- **D19 — class variables not implemented.** The runtime feature behind D15: a
-  per-class shared variable visible to all instances and class-side methods.
+- **D19 — class-variable mutation from instance-side methods is prohibited.**
+  Class variables are honoured: the `classVariableNames:` clause installs
+  each name on the class object (mangled `_iv_<name>`, the same key shape
+  inst vars use), so reads from any instance — including instances of
+  subclasses — find the shared value via the prototype-chain attribute
+  walk. The remaining deviation from Smalltalk-80 is that an instance-side
+  assignment to a class var is a compile-time error: in protoST it would
+  silently target `self` and create a per-instance shadow rather than
+  update the shared storage. Mutation must happen in a class-side method.
   *Affects:* [§3.2](#32-class-declarations).
 
 ---

@@ -40,6 +40,14 @@ public:
         std::string name;                       // e.g., "Counter"
         std::string superclassName;             // e.g., "Object"
         std::vector<std::string> instVarNames;  // e.g., {"value"}
+        // Class-variable names declared via `classVariableNames: '...'`.
+        // Stored on the class object (mangled `_iv_<name>`, same key shape
+        // as inst vars) so the prototype-chain attribute walk picks them up
+        // from any instance. Documented restriction (D19): assigning to a
+        // class var from an instance-side method is a compile-time error —
+        // the assignment must happen in a class-side method to update the
+        // shared storage rather than create a per-instance shadow.
+        std::vector<std::string> classVarNames; // e.g., {"shared"}
     };
 
     void analyseClosures(const ast::Node& module);
@@ -65,12 +73,33 @@ private:
     // F4-U2: collected by collectClasses() before emission; queried by
     // downstream passes (e.g., MethodDecl emission) to map inst-var refs.
     std::unordered_map<std::string, ClassInfo> classes_;
+
+    // Resolve the *transitive* set of class-var names visible inside
+    // methods of `className` — that is, this class's own classVarNames
+    // unioned with every ancestor's via the `superclassName` chain in
+    // `classes_`. Built at method entry so an instance method on a
+    // subclass can read a class var declared on its superclass via the
+    // same `_iv_<name>` attribute walk. Stops at the first class missing
+    // from `classes_` (Object and other built-ins live outside the
+    // user-declared graph and contribute no class vars).
+    std::vector<std::string> resolveClassVarsFor(const std::string& className) const;
     // F4-U5: name resolution context while emitting a method body. Set on
     // entry to MethodDecl emission, cleared after. Identifier/Assignment
     // emission consults currentInstVars_ to choose between PUSH_LOCAL,
     // PUSH_INSTVAR, and PUSH_GLOBAL.
     std::string currentMethodClass_;
     std::vector<std::string> currentInstVars_;
+    // Class-variable name set for the currently emitting method, mirroring
+    // currentInstVars_. Reads resolve identically to inst vars (same
+    // `_iv_<name>` mangle, same chain walk); writes are accepted on the
+    // class-side path and rejected with a compile-time diagnostic on the
+    // instance-side path. Cleared at method exit alongside the inst-var
+    // context.
+    std::vector<std::string> currentClassVars_;
+    // True while emitting a class-side method body (the `Class class >> sel`
+    // form). Class-var assignments are legal here because `self` IS the
+    // class object, so STORE_INSTVAR writes the shared storage.
+    bool currentMethodIsClassSide_ = false;
     // F7-REPL: see setReplMode(). When true and emission is at module scope
     // (scopes_.size() == 1), top-level assignments target the global
     // namespace so REPL state persists across separately-compiled inputs.
