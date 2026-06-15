@@ -162,6 +162,12 @@ struct Bootstrap {
         // every SEND reads a Bootstrap-perpetual pointer instead.
         const proto::ProtoString* className       = nullptr;  // __class_name__ (every SEND class-side filter)
         const proto::ProtoString* classSide       = nullptr;  // __class_side__ (every SEND class-side filter)
+        // 2026-06-15: actor priority bands (high/medium/low). `__priority__`
+        // is a SmallInteger 0/1/2 stored on the actor; absence means medium.
+        // The scheduler reads this on schedule() to pick which of three
+        // ReadyStacks to push onto; workers drain highest non-empty band
+        // first. See docs/superpowers/specs/2026-06-15-actor-priority-spec.md.
+        const proto::ProtoString* priority        = nullptr;  // __priority__   (on actor: 0=high, 1=medium, 2=low)
     } sym;
 };
 

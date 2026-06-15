@@ -6,6 +6,8 @@ protoST is a Smalltalk-80-inspired language runtime with a **first-class embedde
 
 protoST's distinct contribution is putting **actors at the centre of the language**: any object can be promoted to an actor with `asActor`, every message sent to it is dispatched asynchronously and returns a `Future`, and an internal invariant guarantees that exactly one method of a given actor runs at a time. Tens of thousands of actors share a small worker pool through cooperative scheduling — an actor suspends transparently when it waits on a future, freeing its worker for someone else.
 
+Three **priority bands** separate the data plane from the control plane: `asActor` is the default Medium, `asHighPriorityActor` jumps the queue for control messages (drain / reconfigure / shutdown), and `asLowPriorityActor` yields for background hygiene (telemetry, log flushes). The scheduler drains strict-priority — every High before any Medium before any Low — with the same single-method invariant in every band.
+
 ## A message is a pointer, not a copy
 
 An actor system lives or dies by its message passing, and every mainstream

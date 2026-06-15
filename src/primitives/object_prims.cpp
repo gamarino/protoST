@@ -114,6 +114,48 @@ const proto::ProtoObject* prim_Object_asActor(STRuntime& rt, proto::ProtoContext
     return actor;
 }
 
+// Shared core for the three actor-creation primitives below. `band` is the
+// scheduler priority (0=high, 1=medium, 2=low). asActor is the default
+// medium path; asHighPriorityActor / asLowPriorityActor flip the
+// `__priority__` attribute the scheduler reads at enqueueReady time.
+//
+// `actor` is returned by prim_Object_asActor with no live root from this
+// function's stack — the next allocation (ctx->fromLong) can move/GC.
+// Pin it across the SmallInt creation and the setAttribute.
+static const proto::ProtoObject* makeActorWithPriority(
+        STRuntime& rt, proto::ProtoContext* ctx,
+        const proto::ProtoObject* r, long long band) {
+    const proto::ProtoObject* actor = prim_Object_asActor(rt, ctx, r, nullptr, 0);
+    if (!actor || actor == PROTO_NONE) return actor;
+    TransientPin pinActor(ctx, actor);
+    const proto::ProtoObject* prioVal = ctx->fromLong(band);
+    TransientPin pinPrio(ctx, prioVal);
+    const_cast<proto::ProtoObject*>(actor)
+        ->setAttribute(ctx, rt.bootstrap().sym.priority, prioVal);
+    return actor;
+}
+
+// Object>>asHighPriorityActor → an Actor wrapping recv that lands in the
+// scheduler's High band. Drains before any Medium or Low actor; otherwise
+// identical to `asActor` (same single-method invariant, same lock-free
+// mailbox, same Future returns).
+const proto::ProtoObject* prim_Object_asHighPriorityActor(
+        STRuntime& rt, proto::ProtoContext* ctx,
+        const proto::ProtoObject* r,
+        const proto::ProtoObject* const*, int) {
+    return makeActorWithPriority(rt, ctx, r, /*band=High*/ 0);
+}
+
+// Object>>asLowPriorityActor → an Actor that drains AFTER any Medium or
+// High actor. Use for background hygiene work (telemetry, log flushes)
+// that should yield to the data-plane traffic.
+const proto::ProtoObject* prim_Object_asLowPriorityActor(
+        STRuntime& rt, proto::ProtoContext* ctx,
+        const proto::ProtoObject* r,
+        const proto::ProtoObject* const*, int) {
+    return makeActorWithPriority(rt, ctx, r, /*band=Low*/ 2);
+}
+
 // Object>>sleep:
 //
 // F6 v2 T6 test helper. Sleeps the current OS thread for the requested number
@@ -855,6 +897,10 @@ void installObjectPrimitives(STRuntime& rt) {
                   reg.registerPrim(prim_Object_installClassMethod));
     bindPrimitive(rt, b.objectProto, "asActor",
                   reg.registerPrim(prim_Object_asActor));
+    bindPrimitive(rt, b.objectProto, "asHighPriorityActor",
+                  reg.registerPrim(prim_Object_asHighPriorityActor));
+    bindPrimitive(rt, b.objectProto, "asLowPriorityActor",
+                  reg.registerPrim(prim_Object_asLowPriorityActor));
     // Optimistic-concurrency CAS on a single instance variable — the raw,
     // unwrapped form of protoCore's atomic attribute compare-and-swap. See
     // the Atom class for the wrapped idiom.

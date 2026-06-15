@@ -479,12 +479,67 @@ account setInstVar: #balance from: old to: new.   "answers true/false"
 > the pointer is unchanged, the value genuinely *is* the one you read, because
 > it could not have been mutated in place. The hazard simply does not arise.
 
-## 10.11 Summary
+## 10.11 Priority bands
+
+By default every actor lands in the scheduler's Medium queue. For
+control-plane messages that must drain ahead of bulk traffic, and for
+hygiene work that should yield to anything else, protoST exposes two
+extra constructors:
+
+```smalltalk
+control := dispatcher asHighPriorityActor.   "drained first"
+data    := sensor      asActor.              "default; medium"
+telem   := log         asLowPriorityActor.   "drained last"
+```
+
+There are three lock-free ready queues — High, Medium, Low — and
+workers always pick from the highest non-empty queue. So:
+
+```smalltalk
+"In low → medium → high enqueue order:"
+1 to: 5 do: [:i | telem record: i].          "5 sends to Low"
+1 to: 5 do: [:i | data  ingest: i].          "5 sends to Medium"
+1 to: 5 do: [:i | control reset].            "5 sends to High"
+
+(control state) wait printNl.                "High finishes first"
+```
+
+A few things to know:
+
+- **Priority is a property of the actor**, not of an individual send. You
+  pick the band when you create the actor; every message routed through
+  that actor inherits the band.
+- **The single-method invariant is unchanged in every band.** Priority
+  only affects which actor a worker picks up next; the body of a
+  message still sees a coherent state because no two messages of the
+  same actor run concurrently.
+- **Within an actor, mailbox order is preserved** exactly as before. The
+  five `control reset` sends above process in arrival order.
+- **No starvation guard.** A flood of `asHighPriorityActor` actors will
+  monopolise the workers; Medium and Low will not run. Use High
+  sparingly — the contract is "this is more important than everything
+  else", and the scheduler trusts you.
+- **Pre-priority code keeps working.** Actors created with the plain
+  `asActor` continue to land in Medium, exactly where they used to.
+  The band is stored on the actor as the `__priority__` attribute; its
+  absence is read as Medium.
+
+`asHighPriorityActor` is the right choice for: graceful-shutdown
+broadcasts, configuration reloads, "drain your mailbox now" signals,
+and anything that should jump the queue ahead of normal work.
+`asLowPriorityActor` is the right choice for: telemetry flushes, log
+rotation, GC hints, lazy compaction — work that genuinely should yield
+to data-plane traffic.
+
+## 10.12 Summary
 
 - An **actor** is an object with private state, a one-message-at-a-time
   mailbox, and parallel scheduling. The single-message rule is the
   synchronisation — you never write locks.
-- `anObject asActor` promotes any object to an actor proxy.
+- `anObject asActor` promotes any object to an actor proxy (Medium
+  priority). `asHighPriorityActor` and `asLowPriorityActor` create
+  actors in the High and Low scheduler bands respectively — drained
+  in strict priority order, same single-method invariant in each.
 - A message to a proxy returns a **`Future`** *immediately*; the actor runs the
   message later. `wait` blocks for the value (or re-raises a rejection);
   `thenDo:` / `catch:` register callbacks.

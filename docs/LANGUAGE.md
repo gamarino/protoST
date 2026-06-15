@@ -1451,6 +1451,28 @@ sensor initialize.
 actor := sensor asActor.
 ```
 
+There are **three priority bands**:
+
+```smalltalk
+control  := dispatcher asHighPriorityActor.   "drained first"
+data     := sensor      asActor.              "default; medium"
+telem    := log         asLowPriorityActor.   "drained last"
+```
+
+The scheduler keeps three lock-free ready queues, drained in strict order
+(High → Medium → Low). Within a band, the order in which ready actors are
+picked is unspecified; *within* one actor, mailbox order is preserved
+exactly as before. Priority affects WHICH actor a worker picks up next,
+never the within-actor sequence — the single-method invariant
+(§10.4) is unchanged. Use `asHighPriorityActor` for control-plane
+messages that must drain ahead of bulk data; `asLowPriorityActor` for
+background hygiene (telemetry flush, GC hints, log rotation) that should
+yield to anything else.
+
+Internally the priority is the actor's `__priority__` attribute
+(SmallInteger 0/1/2). Absence is read as Medium, so any code written
+before priority bands existed keeps the same scheduling behaviour.
+
 The proxy is **fully transparent**: it forwards *every* message it receives to
 the wrapped object asynchronously (see [§10.2](#102-sending-to-an-actor)) —
 there is no exception, not even for introspection selectors. Sending
@@ -1660,7 +1682,9 @@ It is a reference snapshot of the current implementation.
 | `new` / `newChild` | a fresh mutable instance |
 | `printString` | human-readable `String` |
 | `printNl` | print the receiver followed by a newline; returns the receiver |
-| `asActor` | wrap the receiver as an `Actor` |
+| `asActor` | wrap the receiver as an `Actor` (Medium-priority band) |
+| `asHighPriorityActor` | same, but the actor sits in the High-priority ready queue (drained before Medium/Low) |
+| `asLowPriorityActor` | same, but the actor sits in the Low-priority queue (drained after Medium/High) |
 | `->` | build an `Association` (`key -> value`) |
 | `==` `~~` | identity / non-identity — same object, or not |
 | `=` `~=` | equality / inequality; the default is identity, overridden to value-equality on `SmallInteger`, `String`, `Symbol`, `Boolean` and other value types |

@@ -126,6 +126,18 @@ ptrRegistryKey(proto::ProtoContext* ctx, const proto::ProtoObject* o) {
 }
 
 // ---------------------------------------------------------------------------
+// Three priority bands for the scheduler. Index 0 = high, 1 = medium,
+// 2 = low. The actor's `__priority__` attribute (a SmallInteger) selects
+// the band at enqueueReady time; workers drain the highest non-empty
+// band first. Missing/invalid priority => medium (index 1) so every
+// pre-priority code path keeps working unchanged.
+enum class ActorPriorityBand : int {
+    High   = 0,
+    Medium = 1,
+    Low    = 2,
+};
+static constexpr int kNumPriorityBands = 3;
+
 // ReadyStack — intrusive lock-free Treiber stack for the scheduler.
 //
 // Replaces the previous `liveRegistry.__ready__` ProtoList + CAS-retry-rebuild
@@ -299,7 +311,13 @@ struct STRuntime::Impl {
     // is provided by the ProtoList anchor under liveRegistry.__live_actors__,
     // populated idempotently on first enqueue via the per-actor __live__
     // CAS flag (see enqueueReady).
-    ReadyStack readyStack;
+    // One ReadyStack per priority band. The 3-band split is the only
+    // change at the scheduler level; everything else (the lock-free
+    // intrusive stack, the workerSem-based wake, the per-actor 3-state
+    // __sched__ flag, the live-actor anchor) is unchanged. Workers
+    // pop High first, then Medium, then Low — strict priority, no
+    // weighted scheduling. See 2026-06-15-actor-priority-spec.md.
+    ReadyStack readyStack[kNumPriorityBands];
 
     // F6 v4 (2026-05-23): event-driven worker wakeup. The classical
     // "queue of free workers" pattern: workers that find the ready stack
@@ -1197,10 +1215,20 @@ void STRuntime::enqueueReady(proto::ProtoContext* ctx,
         // way before we push it.
     }
 
-    // 2. Push onto the lock-free intrusive stack. O(1), one `new ReadyNode`,
-    //    no attribute access, no ProtoList rebuild. This is the per-message
-    //    hot path; it must be cheap and contention-friendly.
-    impl_->readyStack.push(actor);
+    // 2. Push onto the lock-free intrusive stack for the actor's priority
+    //    band. O(1), one `new ReadyNode`, no attribute access beyond the
+    //    one priority read below, no ProtoList rebuild. Per-message hot
+    //    path — cheap and contention-friendly. Priority absent (or out
+    //    of range) means Medium so every pre-2026-06-15 actor still
+    //    enqueues exactly where it used to.
+    int band = static_cast<int>(ActorPriorityBand::Medium);
+    const proto::ProtoObject* prio =
+        actor->getOwnAttributeDirect(ctx, impl_->bootstrap.sym.priority);
+    if (prio && prio != PROTO_NONE && prio->isInteger(ctx)) {
+        long long v = prio->asLong(ctx);
+        if (v >= 0 && v < kNumPriorityBands) band = static_cast<int>(v);
+    }
+    impl_->readyStack[band].push(actor);
 
     // 3. Wake exactly one sleeping worker. If all workers are busy, this
     //    just increments the semaphore — the next worker to finish its
@@ -1221,9 +1249,17 @@ void STRuntime::enqueueReady(proto::ProtoContext* ctx,
 
 const proto::ProtoObject* STRuntime::dequeueReady(proto::ProtoContext* ctx) {
     (void)ctx;
-    // O(1) CAS pop. Returns nullptr when the stack is empty — workers and
-    // the main-thread wait-loop both back off when they see that.
-    return impl_->readyStack.pop();
+    // Strict priority: drain High first, then Medium, then Low. Each pop
+    // is an O(1) CAS on the chosen band; the empty-band check is one
+    // relaxed load. Workers calling this on an empty all-bands scheduler
+    // see nullptr and back off (same contract as the single-stack
+    // version).
+    for (int band = 0; band < kNumPriorityBands; ++band) {
+        if (const proto::ProtoObject* a = impl_->readyStack[band].pop()) {
+            return a;
+        }
+    }
+    return nullptr;
 }
 
 void STRuntime::markMainWaitingOn(const proto::ProtoObject* future) {
@@ -1890,11 +1926,16 @@ void STRuntime::finishDrain(proto::ProtoContext* ctx,
 }
 
 size_t STRuntime::scheduledCount() const {
-    // Diagnostic / test accessor. Now reads the intrusive ReadyStack's
-    // approximate size — exact only when no concurrent push/pop is in
-    // flight, which is true for the test points that call this method
-    // (post-drain, single-thread).
-    return impl_->readyStack.approxSize();
+    // Diagnostic / test accessor. Sum of all three priority-band
+    // ReadyStack sizes — approximate only because each band's counter
+    // is relaxed-atomic, but exact when no concurrent push/pop is in
+    // flight (which is what every caller of this method assumes:
+    // post-drain, single-thread).
+    size_t n = 0;
+    for (int band = 0; band < kNumPriorityBands; ++band) {
+        n += impl_->readyStack[band].approxSize();
+    }
+    return n;
 }
 
 size_t STRuntime::workerCount() const {

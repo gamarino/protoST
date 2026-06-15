@@ -123,6 +123,13 @@ are noted where useful.
       `swap:` (the read-modify-CAS retry loop). The agent/atom pair, atom
       side. Plus `Object>>setInstVar:from:to:` — the raw CAS exposed on any
       instance variable, for callers driving their own validate-and-retry.
+- [x] **Actor priority bands (2026-06-15)** — three strict-priority queues
+      backing the existing lock-free scheduler: `asActor` is Medium (the
+      default, backward compatible), `asHighPriorityActor` lands in High,
+      `asLowPriorityActor` in Low. Workers drain High → Medium → Low.
+      Priority affects WHICH actor a worker picks up next; within-actor
+      mailbox order is unchanged and the single-method invariant holds in
+      every band. See `examples/actors/05_priority_bands.st`.
 
 ### Modules
 - [x] File-to-module mapping; `Import from:`
