@@ -5,6 +5,17 @@
 set -euo pipefail
 PROTOST="$1"
 
+# Temporary files go to $TMPDIR, or to the build tree (Testing/Temporary next
+# to the protost binary) when TMPDIR is unset — never to a hard-coded /tmp.
+# The EXIT trap removes them on every exit path; INT and TERM become an exit.
+TMP_ROOT="${TMPDIR:-$(dirname "$PROTOST")/Testing/Temporary}"
+mkdir -p "$TMP_ROOT"
+LOADFILE=""
+SCRIPTFILE=""
+trap 'rm -f "$LOADFILE" "$SCRIPTFILE"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 run() { printf '%b' "$1" | "$PROTOST" -i 2>&1; }
 
 # --- 1. banner is printed on start --------------------------------------------
@@ -70,8 +81,7 @@ echo "$out" | grep -q "=> 42" || { echo "FAIL: :time wrong result"; echo "$out";
 echo "$out" | grep -q "time:.*ms" || { echo "FAIL: :time did not report a time"; echo "$out"; exit 1; }
 
 # --- 14. :load executes a .st file into the current session -------------------
-LOADFILE=$(mktemp /tmp/protost_replXXXX.st)
-trap 'rm -f "$LOADFILE"' EXIT
+LOADFILE=$(mktemp "$TMP_ROOT/protost_replXXXXXX.st")
 printf "loadedVar := 7 * 8.\n" > "$LOADFILE"
 out=$(run ":load $LOADFILE\nloadedVar.\n:quit\n")
 echo "$out" | grep -q "loaded $LOADFILE" || { echo "FAIL: :load not confirmed"; echo "$out"; exit 1; }
@@ -82,10 +92,9 @@ echo "$out" | grep -q "cannot open" || { echo "FAIL: :load missing file not repo
 echo "$out" | grep -q "=> 4" || { echo "FAIL: session died after bad :load"; echo "$out"; exit 1; }
 
 # --- 15. regression: script execution and -e are unaffected -------------------
-SCRIPTFILE=$(mktemp /tmp/protost_scriptXXXX.st)
+SCRIPTFILE=$(mktemp "$TMP_ROOT/protost_scriptXXXXXX.st")
 printf "3 + 39.\n" > "$SCRIPTFILE"
-"$PROTOST" "$SCRIPTFILE" | grep -qx 42 || { echo "FAIL: script execution affected"; rm -f "$SCRIPTFILE"; exit 1; }
-rm -f "$SCRIPTFILE"
+"$PROTOST" "$SCRIPTFILE" | grep -qx 42 || { echo "FAIL: script execution affected"; exit 1; }
 "$PROTOST" -e "20 + 22." | grep -qx 42 || { echo "FAIL: -e affected"; exit 1; }
 # Meta-commands must not be recognised by -e (it is a plain expression path).
 "$PROTOST" -e ":vars" >/dev/null 2>&1 && { echo "FAIL: -e treated :vars as a command"; exit 1; }

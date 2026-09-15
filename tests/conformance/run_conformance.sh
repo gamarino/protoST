@@ -92,11 +92,29 @@ case "$directive" in
         ;;
 esac
 
+# --- temporary file for the program's stderr ------------------------------
+# Created with mktemp in $TMPDIR. When TMPDIR is unset the file goes to the
+# build tree (Testing/Temporary next to the protost binary, the directory
+# CTest itself uses), never to a hard-coded /tmp. The EXIT trap removes it on
+# every exit path; INT and TERM are turned into an exit so that an interrupted
+# run cleans up as well.
+tmp_root="${TMPDIR:-$(dirname "$PROTOST")/Testing/Temporary}"
+if ! mkdir -p "$tmp_root"; then
+    echo "FAIL: cannot create temporary directory: $tmp_root"
+    exit 1
+fi
+if ! err_file="$(mktemp "$tmp_root/conf_err.XXXXXX")"; then
+    echo "FAIL: cannot create a temporary file in: $tmp_root"
+    exit 1
+fi
+trap 'rm -f "$err_file"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 # --- run the program (with the test's directory as the working dir) ------
-out="$(cd "$TEST_DIR" && "$PROTOST" "$TEST_BASE" 2>/tmp/conf_err.$$)"
+out="$(cd "$TEST_DIR" && "$PROTOST" "$TEST_BASE" 2>"$err_file")"
 rc=$?
-err="$(cat /tmp/conf_err.$$ 2>/dev/null)"
-rm -f /tmp/conf_err.$$
+err="$(cat "$err_file" 2>/dev/null)"
 
 # last non-empty line of stdout (the printed program value)
 last_line="$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -n 1)"
