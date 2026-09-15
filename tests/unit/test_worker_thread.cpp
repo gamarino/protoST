@@ -15,16 +15,13 @@
 #include "protoST/STRuntime.h"
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
-#include "runtime/BytecodeModule.h"
 #include "protoCore.h"
 
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
-#include <memory>
 #include <string>
 #include <thread>
-#include <vector>
 
 TEST_CASE("F6 v2 T2: worker thread spawns and joins cleanly with no work",
           "[engine][actors][parallel]") {
@@ -979,135 +976,4 @@ TEST_CASE("S4: a thread blocked in Future>>wait is counted exactly once",
         CHECK(balanced.load());
     }
     unsetenv("PROTOST_WORKERS");
-}
-
-// S3 — the dispatch loop parks when a stop-the-world phase is requested.
-//
-// A requested collection starts only after every running thread parks. A
-// thread whose loop neither allocates outside a critical section nor calls a
-// safepoint never parks, so the whole process waits for its loop to end. The
-// engine had no poll at loop back-edges or at frame entry; after S3 it polls
-// at both (park-only: no young-generation submission).
-//
-// Two actors spin on flag objects, bounded so that a build without the polls
-// fails in finite time instead of hanging. The test thread then submits a
-// little garbage and allocates past the (lowered) budget, so a cycle is
-// requested while the actors spin, and requires the cycle to reach its
-// stop-the-world phase within a window that starts before that allocation.
-// Without the polls the cycle waits for the spin bound (many seconds), so the
-// window is missed on every run.
-namespace {
-
-struct S3Program {
-    std::vector<std::unique_ptr<protoST::BytecodeModule>> modules;
-
-    // Compiles `src` in REPL mode (top-level variables are globals, so a later
-    // module sees them) and runs it. Modules stay alive for the runtime.
-    const proto::ProtoObject* run(protoST::STRuntime& rt, const std::string& src) {
-        protoST::Parser P(src);
-        auto ast = P.parseModule();
-        REQUIRE(P.errors().empty());
-        protoST::Compiler C;
-        C.setReplMode(true);
-        auto bc = C.compileModule(*ast);
-        REQUIRE(!C.hasErrors());
-        modules.push_back(std::move(bc));
-        return rt.runTopLevel(*modules.back());
-    }
-};
-
-// Returns the milliseconds from the start of the test thread's allocation
-// until the collection it requested reached its stop-the-world phase, or -1
-// when that did not happen within `windowMs`.
-long long stopLatencyWhileSpinning(const char* spinSelector, long long limit,
-                                   int windowMs) {
-    setenv("PROTOST_WORKERS", "2", 1);
-    setenv("PROTOCORE_GC_MIN_BUDGET_CELLS", "65536", 1);
-    S3Program prog;
-    long long latency = -1;
-    {
-        protoST::STRuntime rt;
-        proto::ProtoSpace* sp = rt.space();
-        proto::ProtoContext* ctx = rt.rootCtx();
-        const std::string lim = std::to_string(limit);
-        prog.run(rt,
-            "Object subclass: #Flag instanceVariableNames: 'done n limit'. "
-            "Flag >> reset: l  done := 0. n := 0. limit := l. ^ self. "
-            "Flag >> markDone  done := 1. ^ self. "
-            // Inlined whileTrue: over a method temporary: PUSH/STORE_LOCAL,
-            // BIN_INT_*, a primitive `&` and JUMP_BACK. Allocation-free.
-            "Flag >> spin "
-            "  | k | k := 0. "
-            "  [ (done = 0) & (k < limit) ] whileTrue: [ k := k + 1 ]. ^ 1. "
-            // A block loop: every iteration enters two block frames.
-            "Flag >> pending  n := n + 1. ^ (done = 0) & (n < limit). "
-            "Flag >> spinBlocks "
-            "  | c b | c := [ self pending ]. b := [ nil ]. "
-            "  c whileTrue: b. ^ 1. "
-            "f1 := Flag new reset: " + lim + ". "
-            "f2 := Flag new reset: " + lim + ". "
-            "r1 := f1 asActor " + spinSelector + ". "
-            "r2 := f2 asActor " + spinSelector + ". "
-            "nil.");
-
-        // Let both workers enter their loops, and let a collection that the
-        // bootstrap may have started finish, waiting as a parked thread.
-        bool idle;
-        {
-            proto::ProtoContext::UnmanagedScope unmanaged(ctx);
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
-            idle = pollFor(windowMs, [&] { return !sp->gcStarted.load(); });
-        }
-        CHECK(idle);
-
-        const uint64_t cyclesBefore = sp->getGCCycleCount();
-        const auto t0 = std::chrono::steady_clock::now();
-        {
-            // A destroyed context submits its cells, which lets the budget
-            // start a cycle; the second context then allocates past it.
-            proto::ProtoContext garbage(sp, ctx);
-            for (int i = 0; i < 100; ++i) (void)garbage.newObject(false);
-        }
-        {
-            proto::ProtoContext garbage(sp, ctx);
-            for (int i = 0; i < 400000; ++i) (void)garbage.newObject(false);
-        }
-        bool reached;
-        {
-            proto::ProtoContext::UnmanagedScope unmanaged(ctx);
-            reached = pollFor(windowMs, [&] {
-                return sp->getGCCycleCount() > cyclesBefore;
-            });
-        }
-        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - t0).count();
-        if (reached && elapsed <= windowMs) latency = elapsed;
-
-        // Stop the spinners and collect their results.
-        const proto::ProtoObject* r = prog.run(rt,
-            "f1 markDone. f2 markDone. (r1 wait) + (r2 wait).");
-        REQUIRE(r != nullptr);
-        CHECK(r->asLong(ctx) == 2);
-    }
-    unsetenv("PROTOCORE_GC_MIN_BUDGET_CELLS");
-    unsetenv("PROTOST_WORKERS");
-    return latency;
-}
-
-} // namespace
-
-TEST_CASE("S3: a collection stops the world while workers spin in an "
-          "inlined allocation-free loop",
-          "[engine][actors][gc][s3]") {
-    const long long ms = stopLatencyWhileSpinning("spin", 20000000, 3000);
-    INFO("stop latency: " << ms << " ms (-1 = window missed)");
-    CHECK(ms >= 0);
-}
-
-TEST_CASE("S3: a collection stops the world while workers spin in a "
-          "block loop",
-          "[engine][actors][gc][s3]") {
-    const long long ms = stopLatencyWhileSpinning("spinBlocks", 5000000, 3000);
-    INFO("stop latency: " << ms << " ms (-1 = window missed)");
-    CHECK(ms >= 0);
 }

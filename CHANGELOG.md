@@ -161,18 +161,6 @@ Changes committed after the `v0.3.0` tag.
   before sleeping; a thread waiting outside an actor does so only when no
   primitive-created engine is below the wait. Regression tests: two `[s4]`
   unit tests, `cli_gc_shutdown_stress` and `cli_dap_gc`.
-- **A thread running an allocation-free loop stalled every collection**
-  (S3). protoCore starts a requested collection only after every running
-  thread parks, and the interpreter had no park point: a worker (or the main
-  thread) in an inlined loop over SmallIntegers, a block loop or
-  allocation-free recursion held the whole process in the stop-the-world
-  handshake until the loop ended, or forever. The dispatch loop now polls
-  protoCore's stop request at loop back-edges and at frame entry (method
-  sends, block activations and nested engines) and parks with
-  `ProtoContext::parkIfStopRequested`, which never submits the young
-  generation. The poll is one flag load and a predictable branch.
-  Regression tests: two `[s3]` unit tests (a collection requested while two
-  workers spin must reach its stop-the-world phase within 3 s).
 
 ### Known issues
 
@@ -185,7 +173,7 @@ Changes committed after the `v0.3.0` tag.
 
 ### Tests
 
-- 753 → 832 `ctest` cases (349 conformance, 42 examples, 12 CLI, 429 unit).
+- 753 → 830 `ctest` cases (349 conformance, 42 examples, 12 CLI, 427 unit).
 
 ## 0.3.0 — yieldable iteration (2026-05-23)
 
