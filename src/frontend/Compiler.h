@@ -1,6 +1,7 @@
 #pragma once
 #include "AST.h"
 #include "../runtime/BytecodeModule.h"
+#include <deque>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -67,7 +68,13 @@ private:
         const ast::Node* astNode = nullptr;
     };
 
-    std::vector<Scope> scopes_;
+    // A deque, not a vector: emission recurses while holding a reference to
+    // an enclosing scope (the inlined `to:do:` rebinds its loop variable in
+    // `scopes_.back().slots` around the body), and a block literal anywhere
+    // in that recursion pushes a scope. std::deque::emplace_back/pop_back
+    // never invalidate references to the other elements, whereas a vector
+    // reallocation left that reference dangling (D29).
+    std::deque<Scope> scopes_;
     std::vector<std::string> errors_;
     ScopeAnalysis analysis_;
     // F4-U2: collected by collectClasses() before emission; queried by

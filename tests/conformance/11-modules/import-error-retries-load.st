@@ -6,12 +6,10 @@
 "another message text, a value computed by the finally loaded module."
 Import from: '_import_probe'.
 ImportProbe failing: true.
-[ Import from: '_flaky_mod' ]
-  on: Error
-  do: [ :e | ImportProbe noteHandled: e messageText ].
-[ Import from: '_flaky_mod' ]
-  on: Error
-  do: [ :e | ImportProbe noteHandled: e messageText ].
+1 to: 2 do: [ :attempt |
+  [ Import from: '_flaky_mod' ]
+    on: Error
+    do: [ :e | ImportProbe noteHandled: e messageText ] ].
 ImportProbe failing: false.
 m := Import from: '_flaky_mod'.
 (ImportProbe runs printString, ' ', ImportProbe handled printString, ' ',

@@ -1539,9 +1539,19 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
         auto capIt = analysis_.capturedByScope.find(blk);
         bool argIsCaptured = (capIt != analysis_.capturedByScope.end()
                               && capIt->second.count(blk->stringList[0]) != 0);
-        if (!argIsCaptured) {
+        // The inlined loop variable is bound through the enclosing scope's
+        // `slots`, but isCaptured() consults a scope's capturedNames before
+        // its slots. If the enclosing scope captures a variable of the same
+        // name, body references to the loop variable would resolve to that
+        // outer captured variable instead. Keep the real block send there:
+        // its argument is then a distinct binding, as the source says.
+        bool shadowsCaptured =
+            scopes_.back().capturedNames.count(blk->stringList[0]) != 0;
+        if (!argIsCaptured && !shadowsCaptured) {
             // Reserve fresh internal slots — mangled with nextSlot so nested
             // to:do: in the same scope produce distinct names.
+            // `s` stays valid across the emission below, which may push
+            // block scopes: scopes_ is a std::deque (see Compiler.h, D29).
             auto& s = scopes_.back();
             int baseSlot = s.nextSlot;
             int slotI   = declareLocal("__td_i_"   + std::to_string(baseSlot));

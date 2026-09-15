@@ -127,19 +127,35 @@ Changes committed after the `v0.3.0` tag.
 - Inlined conditionals and loops reject non-Boolean receivers with
   `doesNotUnderstand:`, as the non-inlined sends do, through the new
   `ASSERT_BOOL_OR_DNU` opcode (commit `cf2ebc3`).
+- **The compiler crashed on block literals in inlined `to:do:` bodies**
+  (D29). A program such as `1 to: 2 do: [ :i | [ 1 ] value ]` or the nested
+  loop `1 to: 2 do: [ :i | #(1 2) do: [ :x | s := s + x ] ]`, at top level or
+  in a method, died before running (segmentation fault or floating-point
+  exception), or on some heap layouts compiled silently through freed memory.
+  The inlined loop held a reference into the compiler's scope stack while it
+  compiled the body, and the scope pushed for any block literal could move
+  that stack. The scope stack no longer moves its entries. A second defect
+  in the same inlining is fixed too: when the enclosing method or module
+  captured a variable with the same name as the loop variable, the loop body
+  read that captured variable (`i := 5. b := [ i ]. s := 0. 1 to: 3 do:
+  [ :i | s := s + i ]` summed to 15, not 6). Such a loop is now compiled as
+  a real block send. Regression tests: the `to-do-*.st` and
+  `inlined-control-nests-blocks.st` tests in `conformance/06-blocks/`, two
+  tests in `conformance/07-non-local-return/` and two `on-do-inside-to-do-*`
+  tests in `conformance/08-exceptions/`.
 
 ### Known issues
 
 - The large-rope garbage-collector issue (K2) is fixed in protoCore; see
   [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md).
-- The compiler crashes (before the program runs) on block literals in some
-  inlined `to:do:` bodies, for example `1 to: 2 do: [ :i | [ 1 ] value ]` and
-  the nested loop `1 to: 2 do: [ :i | #(1 2) do: [ :x | s := s + x ] ]`
-  (D29, open). See `docs/STATUS.md`.
+- Blocks created in different iterations of a loop share the loop variable:
+  after `1 to: 3 do: [ :i | bs add: [ i ] ]` every stored block answers 3,
+  because a method or module activation keeps one captured-variable
+  dictionary (D30, open). See `docs/STATUS.md`.
 
 ### Tests
 
-- 753 → 807 `ctest` cases (330 conformance, 42 examples, 10 CLI, 425 unit).
+- 753 → 826 `ctest` cases (349 conformance, 42 examples, 10 CLI, 425 unit).
 
 ## 0.3.0 — yieldable iteration (2026-05-23)
 
