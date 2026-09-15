@@ -850,8 +850,11 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             }
         }
         // F7-REPL: at module scope, a top-level assignment binds a persistent
-        // global so it is visible to subsequently-compiled REPL inputs.
-        if (replMode_ && atModuleScope()) {
+        // global so it is visible to subsequently-compiled REPL inputs. S10:
+        // the same holds inside a block of module-level code for a name that
+        // no enclosing scope binds — declaring a block local there shadowed
+        // the session global that reads of the name resolve to.
+        if ((replMode_ && atModuleScope()) || assignsReplGlobalInBlock(n.text)) {
             emitExpr(m, *n.children[0]);
             auto sym = m.internSymbol(n.text);
             m.emit(Op::DUP, 0, currentLine_);
@@ -992,8 +995,10 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                     return;
                 }
             }
-            // F7-REPL: module-scope assignment-expression binds a global.
-            if (replMode_ && atModuleScope()) {
+            // F7-REPL: module-scope assignment-expression binds a global, and
+            // so does one in a module-level block to a name no enclosing scope
+            // binds (S10; see emitStatement).
+            if ((replMode_ && atModuleScope()) || assignsReplGlobalInBlock(n.text)) {
                 emitExpr(m, *n.children[0]);
                 auto sym = m.internSymbol(n.text);
                 m.emit(Op::DUP, 0, currentLine_);
@@ -1218,6 +1223,16 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             m.emit(Op::PUSH_NIL, 0, currentLine_);
             return;
     }
+}
+
+bool Compiler::assignsReplGlobalInBlock(const std::string& name) const {
+    if (!replMode_ || atModuleScope()) return false;
+    for (const auto& s : scopes_) {
+        if (s.astNode && (s.astNode->kind == NodeKind::MethodDecl ||
+                          s.astNode->kind == NodeKind::CallMethodDecl))
+            return false;   // inside a method body: method temporaries apply
+    }
+    return resolveLocal(name) < 0;
 }
 
 int Compiler::declareLocal(const std::string& name) {

@@ -99,4 +99,17 @@ printf "3 + 39.\n" > "$SCRIPTFILE"
 # Meta-commands must not be recognised by -e (it is a plain expression path).
 "$PROTOST" -e ":vars" >/dev/null 2>&1 && { echo "FAIL: -e treated :vars as a command"; exit 1; }
 
+# --- S10. a block at the prompt assigns a session global ----------------------
+# A top-level assignment binds a global; a block evaluated at the prompt reads
+# it as a global, and an assignment in the block must update that same global
+# instead of declaring a block-local variable.
+out=$(run 's := 0.\n#(1 2) do: [ :x | s := s + x ].\ns.\n:quit\n')
+echo "$out" | grep -q "=> 3" || { echo "FAIL: block did not update global s"; echo "$out"; exit 1; }
+out=$(run 'g := 0.\n[ g := 7 ] value.\ng.\n:quit\n')
+echo "$out" | grep -q "=> 7" || { echo "FAIL: block assignment to global g lost"; echo "$out"; exit 1; }
+out=$(run 't := 1.\n[ [ t := t * 10 ] value ] value.\nt.\n:quit\n')
+echo "$out" | grep -q "=> 10" || { echo "FAIL: nested block did not update global t"; echo "$out"; exit 1; }
+# A block temporary of the same name still shadows the global.
+out=$(run 'u := 5.\n[ | u | u := 99 ] value.\nu.\n:quit\n')
+echo "$out" | grep -q "=> 5" || { echo "FAIL: block temporary did not shadow global u"; echo "$out"; exit 1; }
 echo OK

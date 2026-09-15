@@ -1934,7 +1934,10 @@ The runtime executable is `protost`.
 (unbalanced brackets, an unfinished multi-line method) and keeps reading at a
 continuation prompt. Each result is printed. The session is persistent:
 variables, classes and methods defined at one prompt remain available at the
-next.
+next. A variable assigned at the prompt is a global ([§4.9](#49-globals)), and a
+block evaluated at the prompt reads and assigns it as that global
+(`s := 0.` then `#(1 2) do: [ :x | s := s + x ]` leaves `s` at 3), unless the
+block declares a temporary or argument of the same name.
 
 Meta-commands begin with `:` and are recognised only at the primary prompt
 (never mid multi-line input). An unrecognised `:foo` reports `unknown command`.

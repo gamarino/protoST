@@ -121,6 +121,13 @@ private:
     // True while emitting at the outermost (module) scope.
     bool atModuleScope() const { return scopes_.size() == 1; }
 
+    // S10: true when, in REPL mode, an assignment to `name` inside a block of
+    // module-level code (no method body in the scope chain) must bind the
+    // session global — no enclosing scope binds `name` as a temporary or
+    // argument, so a read of `name` there already resolves as a global
+    // (LANGUAGE.md §4.9).
+    bool assignsReplGlobalInBlock(const std::string& name) const;
+
     void   collectClasses(const ast::Node& module);
     void   emitExpr(BytecodeModule& m, const ast::Node& n);
     void   emitStatement(BytecodeModule& m, const ast::Node& n);

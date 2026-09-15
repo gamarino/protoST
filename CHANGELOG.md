@@ -176,6 +176,17 @@ Changes committed after the `v0.3.0` tag.
   hashed membership and is not affected (see Known issues). Regression tests:
   `conformance/12-builtins/float-nan-comparison.st` and
   `conformance/09-collections/nan-elements.st`.
+- **In the REPL, a block assigning a session variable declared a new block
+  variable instead** (S10). After `s := 0.`, the input
+  `#(1 2) do: [ :x | s := s + x ]` failed with
+  `doesNotUnderstand: + (receiver: nil)` and `[ s := 7 ] value` left `s` at 0:
+  the compiler turned an assignment inside a block into a block-local
+  declaration whenever it was not at module scope, although a read of the
+  same name resolved to the session global. In REPL mode an assignment in a
+  block of module-level code to a name that no enclosing scope binds now
+  updates the global; block temporaries and arguments still shadow it, and
+  method bodies and scripts are unchanged. Regression test: new cases in
+  `tests/cli/test_cli_repl.sh`.
 
 ### Known issues
 
