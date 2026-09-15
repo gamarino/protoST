@@ -7,6 +7,7 @@
 #include "ResumeSignal.h"
 #include "RetrySignal.h"
 #include "PassSignal.h"
+#include "ReadyStack.h"
 #include "BytecodeModule.h"
 #include "Bootstrap.h"
 #include "Venv.h"
@@ -138,7 +139,8 @@ enum class ActorPriorityBand : int {
 };
 static constexpr int kNumPriorityBands = 3;
 
-// ReadyStack — intrusive lock-free Treiber stack for the scheduler.
+// Scheduler ready queue: one lock-free ReadyStack per priority band
+// (src/runtime/ReadyStack.h).
 //
 // Replaces the previous `liveRegistry.__ready__` ProtoList + CAS-retry-rebuild
 // scheme, which under N-thread contention became a GIL-equivalent (every
@@ -146,23 +148,21 @@ static constexpr int kNumPriorityBands = 3;
 // piled up garbage and serialised throughput). See
 // docs/archive/design-specs/2026-05-23-ready-queue-mpmc-spec.md.
 //
-// push/pop are CAS over a single std::atomic<ReadyNode*> — O(1), one
-// `new` per push and one `delete` per pop. LIFO; FIFO fairness is a
-// future iteration (Michael-Scott or work-stealing).
+// push/pop are O(1) compare-and-swaps with no allocation in steady state.
+// LIFO; FIFO fairness is a future iteration (Michael-Scott or work-stealing).
 //
-// GC liveness of the actor pointed to by a node: the actor is anchored
+// Memory safety under concurrent pops (D27): a Treiber stack that frees its
+// nodes has a use-after-free read and an ABA hazard, and glibc's tcache
+// recycles a freed node immediately, so neither is rare. ReadyStack never
+// frees a node while it lives (type-stable pool plus a free list) and tags
+// each head with a generation counter; see the header for the argument.
+//
+// GC liveness of the actor held by a queue entry: the actor is anchored
 // in `liveRegistry.__live_actors__` (a ProtoList) on its FIRST enqueue
-// via a per-actor `__live__` CAS flag. The C++ ReadyNode never holds
+// via a per-actor `__live__` CAS flag. The C++ queue entry never holds
 // the only reference to an actor — the ProtoList anchor does. In this
 // iteration actors are never removed from the anchor list (bounded leak
 // for benchmark workloads; a future pass adds idle-detection removal).
-//
-// ABA: not addressed in this iteration. The freed ReadyNode pointer can
-// in principle be returned by `new` and reappear at the stack head; a
-// concurrent CAS would then succeed on a node whose `next` field has
-// changed. Mitigated in practice by glibc malloc not immediately
-// recycling freed pointers; risk is the rare spurious pop. Hardening
-// via tagged pointers / hazard pointers is follow-up work.
 // ---------------------------------------------------------------------------
 namespace {
 
@@ -185,63 +185,8 @@ struct ActorLock {
     std::binary_semaphore sem{1};   // counter=1 means "currently unlocked"
 };
 
-struct ReadyNode {
-    const proto::ProtoObject* actor;
-    ReadyNode*                next;
-};
-
-class ReadyStack {
-public:
-    void push(const proto::ProtoObject* actor) {
-        ReadyNode* n = new ReadyNode{actor, nullptr};
-        ReadyNode* old = head_.load(std::memory_order_relaxed);
-        do {
-            n->next = old;
-        } while (!head_.compare_exchange_weak(
-            old, n,
-            std::memory_order_release,
-            std::memory_order_relaxed));
-        size_.fetch_add(1, std::memory_order_relaxed);
-    }
-
-    const proto::ProtoObject* pop() {
-        ReadyNode* old = head_.load(std::memory_order_acquire);
-        while (old != nullptr) {
-            if (head_.compare_exchange_weak(
-                    old, old->next,
-                    std::memory_order_acquire,
-                    std::memory_order_acquire)) {
-                const proto::ProtoObject* actor = old->actor;
-                delete old;
-                size_.fetch_sub(1, std::memory_order_relaxed);
-                return actor;
-            }
-            // CAS failed — `old` was reloaded; loop and retry.
-        }
-        return nullptr;
-    }
-
-    size_t approxSize() const {
-        // Diagnostic only — not synchronised with concurrent push/pop.
-        long long s = size_.load(std::memory_order_relaxed);
-        return s > 0 ? static_cast<size_t>(s) : 0;
-    }
-
-    ~ReadyStack() {
-        // Drain any leftover nodes on shutdown so we don't leak. Workers
-        // have been joined by this point, so no concurrent access.
-        ReadyNode* n = head_.exchange(nullptr, std::memory_order_acquire);
-        while (n) {
-            ReadyNode* next = n->next;
-            delete n;
-            n = next;
-        }
-    }
-
-private:
-    std::atomic<ReadyNode*>   head_{nullptr};
-    std::atomic<long long>    size_{0};
-};
+// The per-band ready queue. Destroyed with Impl, after the workers are joined.
+using ActorReadyStack = ReadyStack<const proto::ProtoObject*>;
 } // namespace
 
 struct STRuntime::Impl {
@@ -307,7 +252,7 @@ struct STRuntime::Impl {
 
     // F6 v4 (2026-05-23): the actual scheduling queue. The previous
     // ProtoList-under-__ready__ scheme is gone; this is the lock-free
-    // intrusive Treiber stack defined above. GC liveness of queued actors
+    // ReadyStack (src/runtime/ReadyStack.h). GC liveness of queued actors
     // is provided by the ProtoList anchor under liveRegistry.__live_actors__,
     // populated idempotently on first enqueue via the per-actor __live__
     // CAS flag (see enqueueReady).
@@ -317,7 +262,7 @@ struct STRuntime::Impl {
     // __sched__ flag, the live-actor anchor) is unchanged. Workers
     // pop High first, then Medium, then Low — strict priority, no
     // weighted scheduling. See 2026-06-15-actor-priority-spec.md.
-    ReadyStack readyStack[kNumPriorityBands];
+    ActorReadyStack readyStack[kNumPriorityBands];
 
     // F6 v4 (2026-05-23): event-driven worker wakeup. The classical
     // "queue of free workers" pattern: workers that find the ready stack
@@ -1247,7 +1192,7 @@ void STRuntime::enqueueReady(proto::ProtoContext* ctx,
     }
 
     // 2. Push onto the lock-free intrusive stack for the actor's priority
-    //    band. O(1), one `new ReadyNode`, no attribute access beyond the
+    //    band. O(1), no allocation in steady state, no attribute access beyond the
     //    one priority read below, no ProtoList rebuild. Per-message hot
     //    path — cheap and contention-friendly. Priority absent (or out
     //    of range) means Medium so every pre-2026-06-15 actor still

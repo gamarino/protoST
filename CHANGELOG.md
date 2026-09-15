@@ -78,6 +78,17 @@ Changes committed after the `v0.3.0` tag.
   caller's context through the new `runTopLevel(module, ctx)` overload.
   Regression tests: `conformance/10-actors/literal-string-in-actor-method.st`
   and `literal-float-in-actor-method.st`.
+- **Use-after-free and ABA hazard in the scheduler's lock-free ready queue**
+  (D27). `ReadyStack` freed a node on every pop, so a concurrent pop could
+  read the successor of a node another worker had already freed, and an ABA
+  interleaving (glibc's tcache hands a freed node straight back to the next
+  allocation) could install a freed node as the queue head, losing actors and
+  double-freeing memory. The old comment claiming glibc does not recycle freed
+  pointers quickly was wrong. The stack now keeps its nodes in a type-stable
+  pool with a lock-free free list and tags each head with a 32-bit generation
+  counter, so a stale compare-and-swap always fails; it also no longer calls
+  malloc/free per message. It moved to `src/runtime/ReadyStack.h`. Regression
+  tests: two `[scheduler][readystack]` unit tests.
 - `--help` and engine errors no longer show internal milestone labels such
   as "(F7)", "— F2" or "F2 limit". A send with more than 8 arguments now
   reports "send of #<selector> has <n> arguments; at most 8 are supported per
@@ -95,7 +106,7 @@ Changes committed after the `v0.3.0` tag.
 
 ### Tests
 
-- 753 → 791 `ctest` cases (316 conformance, 42 examples, 10 CLI, 423 unit).
+- 753 → 793 `ctest` cases (316 conformance, 42 examples, 10 CLI, 425 unit).
 
 ## 0.3.0 — yieldable iteration (2026-05-23)
 
