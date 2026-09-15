@@ -148,21 +148,23 @@ const proto::ProtoObject* prim_IsZero(STRuntime&, proto::ProtoContext* ctx,
 }
 
 // `min:` / `max:` — answer the smaller / larger of the receiver and argument
-// (the receiver wins a tie). `compare` gives mixed-mode ordering for free.
+// (the receiver wins a tie). `partialCompare` gives exact mixed-mode ordering;
+// when either side is a NaN no ordering holds and, as `Magnitude>>min:`
+// (`self < x ifTrue: [self] ifFalse: [x]`) defines, the argument is answered.
 const proto::ProtoObject* prim_Min(STRuntime&, proto::ProtoContext* ctx,
                                    const proto::ProtoObject* r,
                                    const proto::ProtoObject* const* a, int) {
     requireNumberArg(ctx, a[0], "min:");
-    return (r->compare(ctx, a[0]) <= 0) ? r : a[0];
+    return (r->partialCompare(ctx, a[0]) <= 0) ? r : a[0];
 }
 const proto::ProtoObject* prim_Max(STRuntime&, proto::ProtoContext* ctx,
                                    const proto::ProtoObject* r,
                                    const proto::ProtoObject* const* a, int) {
     requireNumberArg(ctx, a[0], "max:");
-    return (r->compare(ctx, a[0]) >= 0) ? r : a[0];
+    return (r->partialCompare(ctx, a[0]) >= 0) ? r : a[0];
 }
 
-// `between:and:` — inclusive range test, `low <= self <= high`.
+// `between:and:` — inclusive range test, `low <= self <= high`; false for NaN.
 const proto::ProtoObject* prim_BetweenAnd(STRuntime&, proto::ProtoContext* ctx,
                                           const proto::ProtoObject* r,
                                           const proto::ProtoObject* const* a,
@@ -170,7 +172,8 @@ const proto::ProtoObject* prim_BetweenAnd(STRuntime&, proto::ProtoContext* ctx,
     if (argc != 2) throw std::runtime_error("between:and: expects 2 args");
     requireNumberArg(ctx, a[0], "between:and:");
     requireNumberArg(ctx, a[1], "between:and:");
-    bool inside = r->compare(ctx, a[0]) >= 0 && r->compare(ctx, a[1]) <= 0;
+    bool inside = r->partialCompare(ctx, a[0]) >= 0 &&
+                  r->partialCompare(ctx, a[1]) <= 0;
     return inside ? PROTO_TRUE : PROTO_FALSE;
 }
 

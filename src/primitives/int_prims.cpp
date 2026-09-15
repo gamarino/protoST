@@ -96,12 +96,17 @@ const proto::ProtoObject* prim_NumMod(STRuntime&, proto::ProtoContext* ctx,
     return r->modulo(ctx, a[0]);
 }
 
+// Ordered comparison through protoCore's partialCompare: exact by value across
+// SmallInteger, LargeInteger and Float, and IEEE 754 for NaN — a NaN is
+// unordered with every number (itself included), so every ordering is false.
+// protoCore's `compare` is a total order that reports a NaN pair as equal; it
+// must not implement these operators.
 #define DEFCMP(NAME, COND, SELECTOR)                                              \
 const proto::ProtoObject* prim_##NAME(STRuntime&, proto::ProtoContext* ctx,        \
                                        const proto::ProtoObject* r,                \
                                        const proto::ProtoObject* const* a, int) {   \
     requireNumber(ctx, a[0], SELECTOR);                                            \
-    int c = r->compare(ctx, a[0]);                                                 \
+    const std::partial_ordering c = r->partialCompare(ctx, a[0]);                  \
     return (COND) ? PROTO_TRUE : PROTO_FALSE;                                       \
 }
 DEFCMP(NumLt, c <  0, "<")
@@ -111,18 +116,19 @@ DEFCMP(NumGe, c >= 0, ">=")
 
 // `=` / `~=` — value equality across the whole numeric tower (so `2 = 2.0`).
 // A non-numeric argument is simply unequal rather than an error, matching the
-// catch-all `Object>>=` it overrides.
+// catch-all `Object>>=` it overrides. IEEE 754: a NaN is equal to nothing,
+// itself included (`Float nan = Float nan` is false, `~=` true).
 const proto::ProtoObject* prim_NumEq(STRuntime&, proto::ProtoContext* ctx,
                                       const proto::ProtoObject* r,
                                       const proto::ProtoObject* const* a, int) {
     if (!isNumber(ctx, a[0])) return PROTO_FALSE;
-    return (r->compare(ctx, a[0]) == 0) ? PROTO_TRUE : PROTO_FALSE;
+    return (r->partialCompare(ctx, a[0]) == 0) ? PROTO_TRUE : PROTO_FALSE;
 }
 const proto::ProtoObject* prim_NumNe(STRuntime&, proto::ProtoContext* ctx,
                                       const proto::ProtoObject* r,
                                       const proto::ProtoObject* const* a, int) {
     if (!isNumber(ctx, a[0])) return PROTO_TRUE;
-    return (r->compare(ctx, a[0]) != 0) ? PROTO_TRUE : PROTO_FALSE;
+    return (r->partialCompare(ctx, a[0]) != 0) ? PROTO_TRUE : PROTO_FALSE;
 }
 
 // Unary operations — delegate to protoCore (these promote / coerce too).

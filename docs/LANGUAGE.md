@@ -1804,6 +1804,15 @@ thin wrappers over `<cmath>` (libm).
 Class-side **constants** are bound on `Float`: `Float pi`, `Float e`,
 `Float infinity`, `Float nan`.
 
+> **NaN.** Comparisons follow IEEE 754. A NaN is unordered with every number,
+> itself included: `<`, `<=`, `>`, `>=` and `=` answer `false` and `~=`
+> answers `true`, so `Float nan = Float nan` is `false`, while identity (`==`)
+> of one NaN object with itself still holds. `min:` and `max:` answer the
+> argument when either side is a NaN (no ordering holds), and `between:and:`
+> answers `false`. Collections compare elements and `Dictionary` keys the same
+> way, so a NaN element or key is found only by identity. `Float nan` answers
+> a new NaN object on every send.
+
 > **Exact exponentiation and factorial.** `raisedTo:` with a non-negative
 > integer exponent, and `factorial`, are computed by exact repeated
 > multiplication, so each intermediate product promotes to a `LargeInteger`

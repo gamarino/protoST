@@ -161,6 +161,21 @@ Changes committed after the `v0.3.0` tag.
   before sleeping; a thread waiting outside an actor does so only when no
   primitive-created engine is below the wait. Regression tests: two `[s4]`
   unit tests, `cli_gc_shutdown_stress` and `cli_dap_gc`.
+- **Comparisons with NaN answered true** (D31). The numeric comparison
+  primitives, `min:`, `max:`, `between:and:` and the element and key equality
+  of `OrderedCollection`, `Bag` and `Dictionary` used protoCore's `compare`,
+  a total order that reports a NaN as equal to every number:
+  `Float nan = Float nan`, `Float nan = 1`, `Float nan <= 1` and
+  `1 = Float nan` were true, `Float nan min: 1` answered NaN, a `Bag` holding
+  only a NaN included 7, a `Dictionary` keyed by one NaN answered its value
+  for another NaN, and `remove: 2.5` removed a NaN. They now use protoCore's
+  `partialCompare`, which follows IEEE 754: a NaN is unordered with every
+  number, so every ordering and `=` are false and `~=` is true; `min:` and
+  `max:` answer the argument; these collections find a NaN only by identity.
+  Comparisons of other numbers are unchanged. `Set` membership is protoCore's
+  hashed membership and is not affected (see Known issues). Regression tests:
+  `conformance/12-builtins/float-nan-comparison.st` and
+  `conformance/09-collections/nan-elements.st`.
 
 ### Known issues
 
@@ -175,10 +190,14 @@ Changes committed after the `v0.3.0` tag.
   garbage-collector park point, so a requested collection waits for its loop
   to end (S3, open). A fix based on protoCore's park-only safepoint was
   reverted when protoCore withdrew that API. See `docs/STATUS.md`.
+- Hashed collections do not agree on element equality (D32, open): a `Set`
+  uses protoCore's hashed membership, so `1` and `1.0` are two elements and
+  all NaNs are one; a `Dictionary` misses a key `1` looked up as `1.0`; a
+  `Bag` compares with `=`. See `docs/STATUS.md`.
 
 ### Tests
 
-- 753 → 830 `ctest` cases (349 conformance, 42 examples, 12 CLI, 427 unit).
+- 753 → 832 `ctest` cases (351 conformance, 42 examples, 12 CLI, 427 unit).
 
 ## 0.3.0 — yieldable iteration (2026-05-23)
 

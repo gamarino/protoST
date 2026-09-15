@@ -806,8 +806,9 @@ const proto::ProtoObject* prim_OC_removeLast(STRuntime&, proto::ProtoContext* ct
     return e ? e : PROTO_NONE;
 }
 
-// Locate the 0-based index of the first element equal to `value`, using
-// protoCore's object comparison (the same path `ProtoList::has` answers to).
+// Locate the 0-based index of the first element equal to `value`: identical,
+// or equal under protoCore's partialCompare (numbers by value across kinds,
+// strings by content; a NaN equals only itself, by identity).
 // Returns -1 when no element matches.
 int indexOfEqual(proto::ProtoContext* ctx, const proto::ProtoList* data,
                  const proto::ProtoObject* value) {
@@ -817,7 +818,7 @@ int indexOfEqual(proto::ProtoContext* ctx, const proto::ProtoList* data,
         const proto::ProtoObject* e = data->getAt(ctx, static_cast<int>(i));
         if (!e) e = PROTO_NONE;
         if (e == value) return static_cast<int>(i);
-        if (e->compare(ctx, value) == 0) return static_cast<int>(i);
+        if (e->partialCompare(ctx, value) == 0) return static_cast<int>(i);
     }
     return -1;
 }
@@ -1145,8 +1146,8 @@ const proto::ProtoObject* prim_Bag_removeIfAbsent(STRuntime& rt, proto::ProtoCon
     return e;
 }
 
-// Count how many slots of `data` are equal to `value`, using protoCore's
-// object comparison — the per-occurrence count.
+// Count how many slots of `data` are equal to `value` (identity or
+// partialCompare equality, as indexOfEqual) — the per-occurrence count.
 long long countEqual(proto::ProtoContext* ctx, const proto::ProtoList* data,
                      const proto::ProtoObject* value) {
     if (!value) value = PROTO_NONE;
@@ -1155,7 +1156,7 @@ long long countEqual(proto::ProtoContext* ctx, const proto::ProtoList* data,
     for (unsigned long i = 0; i < sz; ++i) {
         const proto::ProtoObject* e = data->getAt(ctx, static_cast<int>(i));
         if (!e) e = PROTO_NONE;
-        if (e == value || e->compare(ctx, value) == 0) ++n;
+        if (e == value || e->partialCompare(ctx, value) == 0) ++n;
     }
     return n;
 }
@@ -1329,8 +1330,8 @@ const proto::ProtoObject* prim_Assoc_valuePut(STRuntime&, proto::ProtoContext* c
 // equality. Every mutator swaps `__data__` for the new ProtoSparseList.
 
 // Scan a bucket for `key`; return the index of its key slot (an even index),
-// or -1 if absent. Keys are compared by protoCore object equality, with a
-// pointer-identity fast path (matches Bag's indexOfEqual).
+// or -1 if absent. Keys are compared by identity, then partialCompare
+// equality (matches Bag's indexOfEqual): a NaN key is found only by identity.
 int bucketIndexOfKey(proto::ProtoContext* ctx, const proto::ProtoList* bucket,
                      const proto::ProtoObject* key) {
     if (!bucket) return -1;
@@ -1339,7 +1340,7 @@ int bucketIndexOfKey(proto::ProtoContext* ctx, const proto::ProtoList* bucket,
     for (unsigned long i = 0; i < n; i += 2) {
         const proto::ProtoObject* k = bucket->getAt(ctx, static_cast<int>(i));
         if (!k) k = PROTO_NONE;
-        if (k == key || k->compare(ctx, key) == 0) return static_cast<int>(i);
+        if (k == key || k->partialCompare(ctx, key) == 0) return static_cast<int>(i);
     }
     return -1;
 }
@@ -1543,7 +1544,7 @@ const proto::ProtoObject* prim_Dict_includes(STRuntime& rt, proto::ProtoContext*
     const proto::ProtoObject* value = a[0] ? a[0] : PROTO_NONE;
     bool hit = false;
     forEachElement(rt, ctx, r, [&](const proto::ProtoObject* v) {
-        if (v == value || v->compare(ctx, value) == 0) { hit = true; return false; }
+        if (v == value || v->partialCompare(ctx, value) == 0) { hit = true; return false; }
         return true;
     });
     return hit ? PROTO_TRUE : PROTO_FALSE;
