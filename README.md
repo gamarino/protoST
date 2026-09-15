@@ -348,16 +348,19 @@ allocator, a selector-resolved-once inline cache for SEND, and cheaper
 
 protoST depends on [protoCore](https://github.com/numaes/protoCore), which must
 be built first. By default the build looks for a protoCore checkout next to
-protoST (`../protoCore`, library in `build/`, `build_release/` or
-`build_check/`); pass `-DPROTO_CORE_PREFIX=<prefix>` to use an installed
-protoCore instead.
+protoST (`../protoCore`) and uses the first of these directories that holds
+`libprotoCore`: `build_release/`, then `build/`, then `build_check/`. The
+choice is cached in `PROTOCORE_LIBRARY` on the first configure; pass
+`-DPROTOCORE_LIBRARY=<path to libprotoCore.so>` to pick a library explicitly
+(or remove that cache entry to search again), or
+`-DPROTO_CORE_PREFIX=<prefix>` to use an installed protoCore.
 
 ```bash
 git clone https://github.com/numaes/protoCore.git
 git clone https://github.com/gamarino/protoST.git
 
-cmake -S protoCore -B protoCore/build
-cmake --build protoCore/build --target protoCore
+cmake -S protoCore -B protoCore/build_release -DCMAKE_BUILD_TYPE=Release
+cmake --build protoCore/build_release --target protoCore
 
 cd protoST
 cmake -B build -S .

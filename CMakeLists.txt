@@ -30,13 +30,20 @@ if(DEFINED PROTO_CORE_PREFIX)
     set(PROTOCORE_INCLUDE_DIRS "${PROTO_CORE_INCLUDE_DIR}")
 else()
     set(PROTOCORE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../protoCore)
+    # Search order: build_release, then build, then build_check — the first
+    # directory holding libprotoCore wins. build_release comes first because it
+    # is the tree the ecosystem rebuilds (protoClojure uses the same order); a
+    # leftover build/ from an older checkout must not shadow it. The result is
+    # cached in PROTOCORE_LIBRARY: pass -DPROTOCORE_LIBRARY=<path> (or
+    # -DPROTO_CORE_PREFIX=<prefix>) to choose explicitly, and delete the cache
+    # entry to search again.
     find_library(PROTOCORE_LIBRARY NAMES protoCore
-        PATHS ${PROTOCORE_DIR}/build ${PROTOCORE_DIR}/build_release ${PROTOCORE_DIR}/build_check
+        PATHS ${PROTOCORE_DIR}/build_release ${PROTOCORE_DIR}/build ${PROTOCORE_DIR}/build_check
         NO_DEFAULT_PATH)
     if(NOT PROTOCORE_LIBRARY)
         message(FATAL_ERROR
             "protoCore shared library not found. Build it first:\n"
-            "  cd ${PROTOCORE_DIR} && cmake -B build -S . && cmake --build build --target protoCore")
+            "  cd ${PROTOCORE_DIR} && cmake -B build_release -S . && cmake --build build_release --target protoCore")
     endif()
     set(PROTOCORE_INCLUDE_DIRS ${PROTOCORE_DIR} ${PROTOCORE_DIR}/headers)
     get_filename_component(PROTOCORE_LIB_DIR "${PROTOCORE_LIBRARY}" DIRECTORY)

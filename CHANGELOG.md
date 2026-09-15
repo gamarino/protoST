@@ -199,6 +199,16 @@ Changes committed after the `v0.3.0` tag.
   method to finish, and the future's settlement reschedules it. Regression
   test: `conformance/10-actors/resume-waits-for-awaited-future.st`.
 
+### Build
+
+- **A fresh configure could link a stale protoCore** (S14). `CMakeLists.txt`
+  searched `../protoCore/build` before `../protoCore/build_release`, so a
+  leftover `build/` from an older checkout shadowed the library the ecosystem
+  rebuilds (here a June build was picked over the current one). The search
+  order is now `build_release`, `build`, `build_check`, as in protoClojure, and
+  the not-found message suggests `build_release`. The README documents the
+  order and how to override it.
+
 ### Known issues
 
 - The large-rope garbage-collector issue (K2) is fixed in protoCore; see
