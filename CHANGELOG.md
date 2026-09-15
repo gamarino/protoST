@@ -170,6 +170,11 @@ Changes committed after the `v0.3.0` tag.
   after `1 to: 3 do: [ :i | bs add: [ i ] ]` every stored block answers 3,
   because a method or module activation keeps one captured-variable
   dictionary (D30, open). See `docs/STATUS.md`.
+- A thread running an allocation-free loop (an inlined loop over
+  SmallIntegers, a block loop, allocation-free recursion) never reaches a
+  garbage-collector park point, so a requested collection waits for its loop
+  to end (S3, open). A fix based on protoCore's park-only safepoint was
+  reverted when protoCore withdrew that API. See `docs/STATUS.md`.
 
 ### Tests
 
