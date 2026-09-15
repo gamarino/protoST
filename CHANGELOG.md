@@ -103,6 +103,21 @@ Changes committed after the `v0.3.0` tag.
   tests: `conformance/11-modules/import-from-actor-method.st`,
   `import-concurrent-runs-once.st`, `import-cycle-errors.st` and
   `import-cycle-concurrent.st`.
+- **An error raised by an imported module's top level reached the importer's
+  handler twice** (D28). The module's top level ran through the entry point
+  meant for a script's own top level, which turns an unwind that escapes it
+  into a new error: the importer's handler ran once with the module's error
+  and again with `exception unwind: no matching on:do: handler activation`,
+  and `return:`, `retry` and `pass` in that handler misbehaved the same way.
+  A module's top level now runs without that conversion, so the unwind
+  reaches the importer's frames: the handler runs once with the original
+  error, handler actions behave as for any other error, and a nested import
+  failure crosses both modules. A failed load is still not cached. The same
+  path also freed a failed module's compiled code while classes it had
+  already declared stayed global, so calling one of their methods crashed;
+  the code is now retained whether or not the load completes. Regression
+  tests: the `import-error-*.st` and `import-warning-resume.st` tests in
+  `conformance/11-modules/`.
 - `--help` and engine errors no longer show internal milestone labels such
   as "(F7)", "— F2" or "F2 limit". A send with more than 8 arguments now
   reports "send of #<selector> has <n> arguments; at most 8 are supported per
@@ -117,14 +132,14 @@ Changes committed after the `v0.3.0` tag.
 
 - The large-rope garbage-collector issue (K2) is fixed in protoCore; see
   [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md).
-- An error raised inside an imported module's top level reaches the
-  importer's `on:do:` handler twice, the second time with the message
-  `exception unwind: no matching on:do: handler activation` (D28, open;
-  predates S6). See `docs/STATUS.md`.
+- The compiler crashes (before the program runs) on block literals in some
+  inlined `to:do:` bodies, for example `1 to: 2 do: [ :i | [ 1 ] value ]` and
+  the nested loop `1 to: 2 do: [ :i | #(1 2) do: [ :x | s := s + x ] ]`
+  (D29, open). See `docs/STATUS.md`.
 
 ### Tests
 
-- 753 → 797 `ctest` cases (320 conformance, 42 examples, 10 CLI, 425 unit).
+- 753 → 807 `ctest` cases (330 conformance, 42 examples, 10 CLI, 425 unit).
 
 ## 0.3.0 — yieldable iteration (2026-05-23)
 

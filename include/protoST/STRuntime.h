@@ -226,6 +226,14 @@ public:
     inline const char* versionTag() const { return "0.3.0"; }
 
 private:
+    // Runs a module's top level on `ctx` like runTopLevel, but lets every
+    // control-flow signal (UnwindToHandler, RetrySignal, NonLocalReturn, ...)
+    // propagate to the caller instead of converting it into an error. Used for
+    // an imported module, whose top level runs inside the importer's frames
+    // (D28); runTopLevel wraps it with the outermost-entry conversions.
+    const proto::ProtoObject* runModuleTopLevel(const BytecodeModule& m,
+                                                proto::ProtoContext* ctx);
+
     // F6 v3 E2b: live-registry GC anchoring. registryAdd makes `o` reachable
     // from the single pinned root (so it survives GC); registryRemove drops
     // it. No-ops for null / PROTO_NONE / before the registry is created.

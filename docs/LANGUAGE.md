@@ -1665,6 +1665,20 @@ not cached, so every importer sees the error. An import cycle — a module whose
 top level, directly or through other modules, imports itself — raises an
 `Error` (`cyclic module import: <path>`) instead of waiting forever.
 
+An exception signalled by a module's top level is signalled inside the
+importer's `Import from:` send, exactly as if the importer had signalled it
+there. A matching handler around the import runs once, with the exception the
+module signalled, and every handler action has its usual effect: falling off
+the end or `return:` abandons the module's top level and answers from the
+importer's `on:do:`, `retry` re-evaluates the protected block (importing the
+module again), `resume:` continues the module's top level after a resumable
+signal, and `pass` moves the search to the importer's outer handlers. The
+module's `ensure:` and `ifCurtailed:` blocks run as the unwind leaves it; an
+import nested in another module's top level propagates through both. A module
+whose top level does not complete is not cached, so the next import runs it
+again. Whatever that top level defined before the exception — classes and
+their methods — stays defined.
+
 > The cycle check sees only imports waiting for imports. A module's top level
 > must not `wait` on an actor message that itself imports the same module:
 > the importer waits for the module, the module waits for the Future, and

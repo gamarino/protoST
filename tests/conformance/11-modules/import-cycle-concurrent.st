@@ -5,9 +5,9 @@
 "module whose load the other holds (or, if one runs ahead, re-enters its own)."
 "Both imports must fail with a catchable cyclic-import Error instead of"
 "waiting forever. Which module the message names depends on the interleaving."
-"The handler records the FIRST error it sees: an error raised inside a nested"
-"module's top level currently reaches the importer's handler a second time"
-"with a different message (open bug D28 in docs/STATUS.md)."
+"The handler records the FIRST error it sees. Before D28 was fixed, an error"
+"raised inside a nested module's top level reached the importer's handler a"
+"second time with a different message."
 Object subclass: #CycleImporter
   instanceVariableNames: 'first'.
 CycleImporter >> import: aName

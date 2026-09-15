@@ -1012,11 +1012,61 @@ STRuntime::runTopLevel(const BytecodeModule& m) {
     return runTopLevel(m, impl_->rootCtx);
 }
 
+// The outermost entry point for a script, `-e` expression, REPL input or
+// debuggee: runs the module's top level, then converts any control-flow
+// signal that escapes it into a std::runtime_error. Nothing outside this run
+// can own the frame such a signal targets, so reaching here is a bug and the
+// callers report it like any other runtime fault.
+const proto::ProtoObject*
+STRuntime::runTopLevel(const BytecodeModule& m, proto::ProtoContext* ctx) {
+    // Track 1 slice 1: a NonLocalReturn that escapes the top-level engine has
+    // no live home frame anywhere — the block's home method already returned
+    // (a "dead home"). Convert it to a std::runtime_error so the REPL / `-e`
+    // / script callers render it the same way as any other runtime fault.
+    try {
+        return runModuleTopLevel(m, ctx);
+    } catch (const NonLocalReturn&) {
+        throw std::runtime_error(
+            "non-local return: home method has already returned");
+    } catch (const UnwindToHandler&) {
+        // Track 1 slice 2 (EXC-a): an UnwindToHandler reached the top level
+        // with no `on:do:` to catch it. A balanced `on:do:` always catches
+        // its own id, so this is a bug (an exception handler ran but its
+        // owning `on:do:` was already gone). Surface it as a runtime error.
+        throw std::runtime_error(
+            "exception unwind: no matching on:do: handler activation");
+    } catch (const RetrySignal&) {
+        // EXC-b: a `retry` reached the top level with no `on:do:` to re-enter
+        // — same bug class as a stray UnwindToHandler.
+        throw std::runtime_error(
+            "exception retry: no matching on:do: handler activation");
+    } catch (const ResumeSignal&) {
+        // EXC-b: a `resume:` escaped its `signal` loop — a bug; `signal`
+        // always consumes the ResumeSignal for its own id.
+        throw std::runtime_error(
+            "exception resume: no active signal to resume");
+    } catch (const PassSignal&) {
+        // EXC-b: a `pass` escaped its `signal` loop — a bug.
+        throw std::runtime_error(
+            "exception pass: no active signal to pass");
+    }
+}
+
+// Runs a module's top level with no conversion of control-flow signals, so
+// they propagate to the C++ caller. An imported module's top level runs here
+// (D28): it executes nested inside the importer's frames — the importer's
+// `on:do:` handlers are on this thread's handler stack and a handler block may
+// belong to an importer method — so an UnwindToHandler, RetrySignal or
+// NonLocalReturn thrown while it runs targets a frame outside the module and
+// must reach it untouched. Converting it here, as runTopLevel does, turned
+// the unwind into a new native error that the importer's handler then caught a
+// second time.
+//
 // `ctx` is the calling thread's context (D26): every allocation below — the
 // captured-locals dict, the live-registry entry, and every literal and object
 // the module's code creates — comes from its thread-local allocator.
 const proto::ProtoObject*
-STRuntime::runTopLevel(const BytecodeModule& m, proto::ProtoContext* ctx) {
+STRuntime::runModuleTopLevel(const BytecodeModule& m, proto::ProtoContext* ctx) {
     ExecutionEngine eng(*this);
     // F3: pre-allocate a mutable dict for module-level captured locals.
     // A mutable child of objectProto behaves as a per-name attribute store —
@@ -1055,38 +1105,8 @@ STRuntime::runTopLevel(const BytecodeModule& m, proto::ProtoContext* ctx) {
         ~CapturedAnchorGuard() { self->registryRemove(ctx, dict); }
     } capturedAnchorGuard{this, ctx, capturedDict};
 
-    // Track 1 slice 1: a NonLocalReturn that escapes the top-level engine has
-    // no live home frame anywhere — the block's home method already returned
-    // (a "dead home"). Convert it to a std::runtime_error so the REPL / `-e`
-    // / script callers render it the same way as any other runtime fault.
-    try {
-        return eng.runWithArgs(ctx, m, /*self=*/PROTO_NONE,
-                               /*args=*/nullptr, /*argc=*/0, capturedDict);
-    } catch (const NonLocalReturn&) {
-        throw std::runtime_error(
-            "non-local return: home method has already returned");
-    } catch (const UnwindToHandler&) {
-        // Track 1 slice 2 (EXC-a): an UnwindToHandler reached the top level
-        // with no `on:do:` to catch it. A balanced `on:do:` always catches
-        // its own id, so this is a bug (an exception handler ran but its
-        // owning `on:do:` was already gone). Surface it as a runtime error.
-        throw std::runtime_error(
-            "exception unwind: no matching on:do: handler activation");
-    } catch (const RetrySignal&) {
-        // EXC-b: a `retry` reached the top level with no `on:do:` to re-enter
-        // — same bug class as a stray UnwindToHandler.
-        throw std::runtime_error(
-            "exception retry: no matching on:do: handler activation");
-    } catch (const ResumeSignal&) {
-        // EXC-b: a `resume:` escaped its `signal` loop — a bug; `signal`
-        // always consumes the ResumeSignal for its own id.
-        throw std::runtime_error(
-            "exception resume: no active signal to resume");
-    } catch (const PassSignal&) {
-        // EXC-b: a `pass` escaped its `signal` loop — a bug.
-        throw std::runtime_error(
-            "exception pass: no active signal to pass");
-    }
+    return eng.runWithArgs(ctx, m, /*self=*/PROTO_NONE,
+                           /*args=*/nullptr, /*argc=*/0, capturedDict);
 }
 
 // F6 v3 E2b: anchor `o` in the live registry so the tracing GC reaches it
@@ -2138,10 +2158,33 @@ const proto::ProtoObject* STRuntime::loadModuleFromFile(
         throw std::runtime_error(msg);
     }
 
+    // F5-M3: Retain the compiled BytecodeModule for the runtime's lifetime so
+    // method __bc_ptr__ pointers into its block storage remain valid across
+    // subsequent sends. Without this the bc would be destroyed at function
+    // return and any later send on a class declared by the module would
+    // dereference freed memory.
+    //
+    // D28: retained BEFORE the top level runs. A top level that raises after
+    // declaring a class or method has already published it in the globals,
+    // and an importer that handles the error keeps running and may use it;
+    // freeing the bytecode on that path left those methods dangling. The
+    // unique_ptr moves into the list, the module itself does not, so the
+    // reference stays valid.
+    const BytecodeModule& module = *bc;
+    {
+        std::lock_guard<std::mutex> lock(impl_->modulesMu);
+        impl_->loadedModules.push_back(std::move(bc));
+    }
+
     // Execute the module's top-level (registers classes/methods in globals).
     // D26: on the caller's context, not the root context — this may run on a
     // thread other than the one that owns the runtime.
-    runTopLevel(*bc, ctx);
+    // D28: through runModuleTopLevel, not runTopLevel — an Error the module
+    // raises may be handled by the importer, and the resulting unwind (or
+    // retry, or non-local return) must reach the importer's frames unchanged.
+    // It leaves this function before the module object is built, and
+    // importModuleFile's guard then drops the loading entry uncached.
+    runModuleTopLevel(module, ctx);
 
     // Build the module wrapper: a fresh mutable child of objectProto whose
     // attributes name the classes the module declared.
@@ -2149,7 +2192,7 @@ const proto::ProtoObject* STRuntime::loadModuleFromFile(
         ->newChild(ctx, /*isMutable=*/true);
     // F6 v3 E5: `moduleObj` is held across the class-binding loop, which
     // interns a fresh symbol and runs getAttribute + setAttribute per class.
-    // Pin it. The prior runTopLevel run already sized `ctx`.
+    // Pin it. The prior runModuleTopLevel run already sized `ctx`.
     TransientPin pinModuleObj(ctx, moduleObj);
     auto* g = globals();
 
@@ -2165,16 +2208,6 @@ const proto::ProtoObject* STRuntime::loadModuleFromFile(
         if (classObj && classObj != PROTO_NONE) {
             moduleObj->setAttribute(ctx, classSym, classObj);
         }
-    }
-
-    // F5-M3: Retain the compiled BytecodeModule for the runtime's lifetime so
-    // method __bc_ptr__ pointers into its block storage remain valid across
-    // subsequent sends. Without this the bc would be destroyed at function
-    // return and any later send on a class declared by the module would
-    // dereference freed memory.
-    {
-        std::lock_guard<std::mutex> lock(impl_->modulesMu);
-        impl_->loadedModules.push_back(std::move(bc));
     }
 
     return moduleObj;
