@@ -191,7 +191,18 @@ public:
     const proto::ProtoObject* loadModuleFromFile(
         proto::ProtoContext* ctx, const std::string& filePath, const std::string& logicalName);
 
-    // Loads a module by logical path with caching. Throws if not found.
+    // S6: load the module at filePath at most once per runtime and answer the
+    // cached module object on every later call. Callable from any thread with
+    // that thread's context: a caller that arrives while another thread is
+    // running the module's top level waits (GC-safely) for it and receives the
+    // same object. A failed load is not cached. An import cycle — a module
+    // whose top level, directly or through other modules, imports itself —
+    // throws std::runtime_error instead of waiting forever.
+    const proto::ProtoObject* importModuleFile(
+        proto::ProtoContext* ctx, const std::string& filePath, const std::string& logicalName);
+
+    // Loads a module by logical path through importModuleFile (cached, run
+    // once). Throws if not found.
     const proto::ProtoObject* loadModule(proto::ProtoContext* ctx, const std::string& logicalPath);
 
     // T5-a (cross-language interop, consumer side). Appends a UMD provider

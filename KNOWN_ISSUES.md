@@ -16,9 +16,11 @@ departures from Smalltalk-80, and open bugs — see
 supported. The `protost` CLI always constructs exactly one, so this does not
 affect normal use.
 
-**Why.** Some process-global state — protoCore's UMD module provider and its
-module cache — is not isolated per `ProtoSpace`. A second runtime can
+**Why.** Some process-global state — protoCore's UMD module cache, keyed by
+logical path — is not isolated per `ProtoSpace`. A second runtime can
 mis-resolve `Import from:` against the first runtime's (already freed) space.
+(The protoST module provider itself resolves its runtime per `ProtoSpace`
+since S6.)
 
 **Bounds.** Affects only an embedder that builds multiple runtimes in one
 process. The larger half of this hazard — function-local `static` caches

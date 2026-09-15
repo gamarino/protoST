@@ -331,6 +331,17 @@ struct STRuntime::Impl {
     // cannot stall a stop-the-world collection.
     std::mutex modulesMu;
 
+    // S6: once-only module loading. `modulesLoading` maps a module (keyed like
+    // `moduleCache`) whose top level is running right now to the thread
+    // running it; `modulesWaiting` maps a thread to the module it is waiting
+    // for. Both are guarded by `modulesMu`. A second importer of a module that
+    // is still loading waits on `modulesCv` instead of running the top level
+    // again; the two maps let it detect an import cycle — which would
+    // otherwise wait forever — and fail with an error instead.
+    std::unordered_map<std::string, std::thread::id> modulesLoading;
+    std::unordered_map<std::thread::id, std::string> modulesWaiting;
+    std::condition_variable modulesCv;
+
     Impl() {
         // protoCore exposes the root context as a public field on ProtoSpace
         // (see protoCore/headers/protoCore.h:1234 and protoJS/src/JSContext.cpp:100).
@@ -605,10 +616,11 @@ STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
             std::make_unique<STModuleProvider>());
     });
 
-    // Point the (thread-local) "current runtime" pointer the provider consults
-    // at this STRuntime so tryLoad() dispatches back into our findModuleFile /
-    // loadModuleFromFile helpers.
-    setCurrentSTRuntime(this);
+    // S6: associate this runtime with its ProtoSpace so the provider's
+    // tryLoad() dispatches back into our findModuleFile / importModuleFile
+    // helpers from ANY thread running on this space. Registered before the
+    // worker pool below is started, so no import can miss it.
+    registerSTRuntime(&impl_->space, this);
 
     // Set the resolution chain on this space: protoST's source provider only.
     {
@@ -725,10 +737,10 @@ STRuntime::~STRuntime() {
         impl_->workers.clear();
     }
 
-    // F5 v2: clear the thread-local pointer if it still references us, so a
-    // late provider lookup after destruction doesn't dereference a dead
-    // runtime.
-    if (currentSTRuntime() == this) setCurrentSTRuntime(nullptr);
+    // S6: drop the space -> runtime association, so a late provider lookup
+    // after destruction does not dereference a dead runtime. Done after the
+    // workers are joined: none of them can still be importing.
+    unregisterSTRuntime(&impl_->space, this);
 
     // F6 v3 C: clear the thread-local current-actor pointer if it still
     // refers to an actor of this (now-dying) runtime. Without this a stale
@@ -2177,22 +2189,112 @@ const proto::ProtoObject* STRuntime::loadModule(proto::ProtoContext* ctx, const 
     if (path.empty()) {
         throw std::runtime_error("module not found: " + logicalPath);
     }
+    return importModuleFile(ctx, path, logicalPath);
+}
+
+// S6: the single entry point that runs a module's top level. Both `Import
+// from:` (through STModuleProvider) and loadModule come here, from any thread.
+//
+// Exactly-once: the first caller for a module records itself in
+// `modulesLoading` and runs the top level with no lock held (it executes code
+// and allocates). A caller arriving meanwhile waits on `modulesCv` until that
+// entry disappears, then re-checks: normally the module is cached by then; if
+// the load failed nothing was cached, and the waiter loads it itself (a failed
+// import is not cached, so the error is reported to every importer). The cache
+// insert and the removal of the loading entry happen in one critical section,
+// so a woken waiter never sees "neither loaded nor loading" for a module that
+// loaded successfully.
+//
+// Cycles: waiting for a module whose load is — directly or through a chain of
+// other waiting threads — held by this very thread can never finish. Before
+// waiting, the caller follows owner -> module it waits for -> that module's
+// owner; reaching itself means an import cycle, reported as an error. All
+// edges change under `modulesMu`, so the check sees a consistent graph and the
+// thread that would close a cycle is the one that detects it.
+//
+// GC safety: the wait is bracketed by enterGcBlocking / exitGcBlocking, so a
+// waiting thread never stalls a stop-the-world collection that the loading
+// thread triggers, and no protoST lock is held across exitGcBlocking. Every
+// other use of `modulesMu` covers container operations only. A cached module is
+// anchored in the live registry before it is published, so a waiter that
+// parks for a collection on its way out still receives a live object.
+const proto::ProtoObject* STRuntime::importModuleFile(
+    proto::ProtoContext* ctx,
+    const std::string& filePath,
+    const std::string& logicalName)
+{
     // Use the absolute resolved path as cache key for canonical identity.
     namespace fs = std::filesystem;
-    std::string canonical = fs::absolute(path).string();
+    const std::string canonical = fs::absolute(filePath).string();
+    const std::thread::id self = std::this_thread::get_id();
 
-    {
-        std::lock_guard<std::mutex> lock(impl_->modulesMu);
-        auto it = impl_->moduleCache.find(canonical);
-        if (it != impl_->moduleCache.end()) return it->second;
+    while (true) {
+        {
+            std::lock_guard<std::mutex> lock(impl_->modulesMu);
+            auto cached = impl_->moduleCache.find(canonical);
+            if (cached != impl_->moduleCache.end()) return cached->second;
+
+            auto loading = impl_->modulesLoading.find(canonical);
+            if (loading == impl_->modulesLoading.end()) {
+                impl_->modulesLoading.emplace(canonical, self);
+                break;  // this thread runs the top level
+            }
+
+            for (std::thread::id owner = loading->second;;) {
+                if (owner == self) {
+                    throw std::runtime_error(
+                        "cyclic module import: " + logicalName);
+                }
+                auto waiting = impl_->modulesWaiting.find(owner);
+                if (waiting == impl_->modulesWaiting.end()) break;
+                auto next = impl_->modulesLoading.find(waiting->second);
+                if (next == impl_->modulesLoading.end()) break;
+                owner = next->second;
+            }
+            impl_->modulesWaiting[self] = canonical;
+        }
+
+        enterGcBlocking(ctx);
+        {
+            std::unique_lock<std::mutex> lock(impl_->modulesMu);
+            impl_->modulesCv.wait(lock, [&] {
+                return impl_->modulesLoading.find(canonical)
+                    == impl_->modulesLoading.end();
+            });
+            impl_->modulesWaiting.erase(self);
+        }
+        exitGcBlocking(ctx);
     }
 
-    // The lock is not held while the module loads: loading executes code and
-    // allocates. If two threads load the same module at once, the first one
-    // to finish is cached and both callers get that instance.
-    auto* mod = loadModuleFromFile(ctx, path, logicalPath);
-    std::lock_guard<std::mutex> lock(impl_->modulesMu);
-    return impl_->moduleCache.emplace(canonical, mod).first->second;
+    // Releases the loading entry and wakes the waiters if the load does not
+    // complete — a parse, compile or runtime error, or any control-flow unwind
+    // (such as FutureYield) out of the module's top level.
+    struct LoadingEntryGuard {
+        Impl* impl;
+        const std::string* key;
+        bool active;
+        ~LoadingEntryGuard() {
+            if (!active) return;
+            {
+                std::lock_guard<std::mutex> lock(impl->modulesMu);
+                impl->modulesLoading.erase(*key);
+            }
+            impl->modulesCv.notify_all();
+        }
+    } guard{impl_.get(), &canonical, true};
+
+    const proto::ProtoObject* mod = loadModuleFromFile(ctx, filePath, logicalName);
+    // registryAdd allocates; hold `mod` across it.
+    TransientPin pinMod(ctx, mod);
+    registryAdd(ctx, mod);
+    {
+        std::lock_guard<std::mutex> lock(impl_->modulesMu);
+        impl_->moduleCache.emplace(canonical, mod);
+        impl_->modulesLoading.erase(canonical);
+        guard.active = false;
+    }
+    impl_->modulesCv.notify_all();
+    return mod;
 }
 
 // T5-a: consumer-side cross-language interop.

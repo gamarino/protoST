@@ -3,14 +3,58 @@
 #include "runtime/NativeExceptionBridge.h"
 #include "protoCore.h"
 
+#include <algorithm>
+#include <mutex>
+#include <vector>
+
 namespace protoST {
 
 namespace {
-    thread_local STRuntime* g_currentRt = nullptr;
+    struct RuntimeEntry {
+        const proto::ProtoSpace* space;
+        STRuntime* runtime;
+    };
+
+    // Intentionally leaked: an STRuntime may be destroyed during static
+    // destruction, after a function-local static container would be gone.
+    std::mutex& registryMutex() {
+        static auto* m = new std::mutex();
+        return *m;
+    }
+    std::vector<RuntimeEntry>& registryEntries() {
+        static auto* v = new std::vector<RuntimeEntry>();
+        return *v;
+    }
 }
 
-void setCurrentSTRuntime(STRuntime* rt) { g_currentRt = rt; }
-STRuntime* currentSTRuntime() { return g_currentRt; }
+void registerSTRuntime(const proto::ProtoSpace* space, STRuntime* rt) {
+    if (!space || !rt) return;
+    std::lock_guard<std::mutex> lock(registryMutex());
+    auto& entries = registryEntries();
+    for (auto& e : entries) {
+        if (e.space == space) { e.runtime = rt; return; }
+    }
+    entries.push_back({space, rt});
+}
+
+void unregisterSTRuntime(const proto::ProtoSpace* space, STRuntime* rt) {
+    std::lock_guard<std::mutex> lock(registryMutex());
+    auto& entries = registryEntries();
+    entries.erase(std::remove_if(entries.begin(), entries.end(),
+                                 [&](const RuntimeEntry& e) {
+                                     return e.space == space && e.runtime == rt;
+                                 }),
+                  entries.end());
+}
+
+STRuntime* stRuntimeForSpace(const proto::ProtoSpace* space) {
+    if (!space) return nullptr;
+    std::lock_guard<std::mutex> lock(registryMutex());
+    for (const auto& e : registryEntries()) {
+        if (e.space == space) return e.runtime;
+    }
+    return nullptr;
+}
 
 STModuleProvider::STModuleProvider()
     : guid_("protoST-source-v1")
@@ -19,7 +63,7 @@ STModuleProvider::STModuleProvider()
 
 const proto::ProtoObject*
 STModuleProvider::tryLoad(const std::string& logicalPath, proto::ProtoContext* ctx) {
-    auto* rt = currentSTRuntime();
+    auto* rt = ctx ? stRuntimeForSpace(ctx->space) : nullptr;
     if (!rt) return PROTO_NONE;
 
     // "Not my module" — no file resolves to this logical path. Per the
@@ -39,7 +83,9 @@ STModuleProvider::tryLoad(const std::string& logicalPath, proto::ProtoContext* c
     // back through UMD to the importing `prim_Import_from` call site. The
     // control-flow siblings (NonLocalReturn etc.) are re-thrown untouched.
     return translateNativeException(*rt, ctx, [&]() -> const proto::ProtoObject* {
-        auto* mod = rt->loadModuleFromFile(ctx, path, logicalPath);
+        // S6: importModuleFile runs the module's top level exactly once even
+        // when several threads import it at the same moment.
+        auto* mod = rt->importModuleFile(ctx, path, logicalPath);
         return mod ? mod : PROTO_NONE;
     });
 }

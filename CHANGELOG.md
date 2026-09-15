@@ -89,6 +89,20 @@ Changes committed after the `v0.3.0` tag.
   counter, so a stale compare-and-swap always fails; it also no longer calls
   malloc/free per message. It moved to `src/runtime/ReadyStack.h`. Regression
   tests: two `[scheduler][readystack]` unit tests.
+- **`Import from:` inside an actor method answered `module not found`** (S6).
+  The module provider found its runtime through a thread-local pointer set
+  only on the thread that constructed the runtime, so imports failed on every
+  worker thread (and on the DAP debuggee thread). The provider now resolves
+  the runtime from the calling context's `ProtoSpace`. Imports from several
+  threads also exposed a race: actors importing the same not-yet-loaded module
+  each ran its top level and received distinct module objects. The new
+  `STRuntime::importModuleFile` runs a module's top level once per runtime;
+  concurrent importers wait for that load and receive the same module object,
+  a failed load is not cached, and an import cycle raises
+  `cyclic module import: <path>` instead of waiting forever. Regression
+  tests: `conformance/11-modules/import-from-actor-method.st`,
+  `import-concurrent-runs-once.st`, `import-cycle-errors.st` and
+  `import-cycle-concurrent.st`.
 - `--help` and engine errors no longer show internal milestone labels such
   as "(F7)", "— F2" or "F2 limit". A send with more than 8 arguments now
   reports "send of #<selector> has <n> arguments; at most 8 are supported per
@@ -103,10 +117,14 @@ Changes committed after the `v0.3.0` tag.
 
 - The large-rope garbage-collector issue (K2) is fixed in protoCore; see
   [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md).
+- An error raised inside an imported module's top level reaches the
+  importer's `on:do:` handler twice, the second time with the message
+  `exception unwind: no matching on:do: handler activation` (D28, open;
+  predates S6). See `docs/STATUS.md`.
 
 ### Tests
 
-- 753 → 793 `ctest` cases (316 conformance, 42 examples, 10 CLI, 425 unit).
+- 753 → 797 `ctest` cases (320 conformance, 42 examples, 10 CLI, 425 unit).
 
 ## 0.3.0 — yieldable iteration (2026-05-23)
 

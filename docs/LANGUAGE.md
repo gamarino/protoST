@@ -1657,6 +1657,19 @@ the three runtimes, `Import from:` can also resolve modules served by protoJS
 or protoPython providers when they share a `ProtoSpace`. Imported modules are
 cached — importing the same path twice yields the same module object.
 
+`Import from:` works on every thread: at a script's top level and inside actor
+methods alike. A module's top level runs at most once per runtime. When several
+actors import a module that is still loading, the later importers wait for the
+first load to finish and receive the same module object. A load that fails is
+not cached, so every importer sees the error. An import cycle — a module whose
+top level, directly or through other modules, imports itself — raises an
+`Error` (`cyclic module import: <path>`) instead of waiting forever.
+
+> The cycle check sees only imports waiting for imports. A module's top level
+> must not `wait` on an actor message that itself imports the same module:
+> the importer waits for the module, the module waits for the Future, and
+> neither finishes.
+
 ### 11.3 Virtual environments (venv)
 
 protoST ships a Python-style venv mechanism for isolating projects: a `.venv/`
