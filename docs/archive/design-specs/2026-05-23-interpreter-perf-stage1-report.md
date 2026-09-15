@@ -1,7 +1,7 @@
 # Stage 1 morning report — threaded-goto dispatch
 
 **Run:** overnight autonomous session, 2026-05-22 → 23
-**Spec executed:** `docs/superpowers/specs/2026-05-23-interpreter-perf-spec.md` (Stage 1)
+**Spec executed:** `docs/archive/design-specs/2026-05-23-interpreter-perf-spec.md` (Stage 1)
 **Result:** committed locally (no push, per instructions); ctest clean.
 
 ---
@@ -193,7 +193,7 @@ round-trip in pure cell-alloc terms) compounds with it.
 | File | Change |
 |---|---|
 | `src/runtime/ExecutionEngine.cpp` | threaded-goto refactor (+231 -64) |
-| `docs/superpowers/specs/2026-05-23-interpreter-perf-stage1-report.md` | this report (new) |
+| `docs/archive/design-specs/2026-05-23-interpreter-perf-stage1-report.md` | this report (new) |
 
 Both committed locally. No push.
 

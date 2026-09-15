@@ -14,11 +14,14 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Baseline:** 753/753 tests passing across all 0.3.0 changes (+1
-  conformance test for the doYielding: actor regression). Earlier:
-  751/751 across 0.2.0; 746/746 at the D22/D23 close; 742 carried
-  over from 0.1.0; 702/702 at T5-a; 699/699 at T3-c; 622/622 at `MNT-c`.
-- **Last verified:** 2026-05-24 (**0.3.0 yieldable iteration** —
+- **Test suite:** 785 `ctest` cases (313 conformance, 42 examples, 9 CLI,
+  421 unit), counted with `ctest -N` after reconfiguring on 2026-09-15.
+  The commit that added the priority bands (`3efb31d`, 2026-06-15) reports
+  785/785 passing. Earlier: 753/753 at 0.3.0; 751/751 at 0.2.0; 746/746 at
+  the D22/D23 close; 742 carried over from 0.1.0; 702/702 at T5-a; 699/699
+  at T3-c; 622/622 at `MNT-c`.
+- **Last verified:** 2026-06-15 (actor priority bands, commit `3efb31d`;
+  785/785 per that commit). Earlier: 2026-05-24 (**0.3.0 yieldable iteration** —
   `doYielding:` compiler-recognised selector lifts the
   no-`wait`-inside-`do:` limitation; race fix in `finishDrain`
   stale-wakeup respects suspended flag; multi_producer benchmark
@@ -26,9 +29,9 @@ stable id and file it in the right bucket.
   [CHANGELOG.md](../CHANGELOG.md#030--yieldable-iteration-2026-05-24)).
   Earlier: 2026-05-23 (0.2.0 performance pass — mt100a w=2 to
   ~ 71.9 K msg/s, saturation_big w=6 to 3.88× scaling).
-- **Open bugs:** none. Hard edges that are not language-design choices —
-  one-runtime-per-process, very large ropes, no `%` formatting — are recorded
-  honestly in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md).
+- **Open bugs:** one — D24, see [Open bugs](#open-bugs).
+  Hard edges that are not language-design choices — one runtime per process,
+  no `%` formatting — are recorded in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md).
 - **Id scheme:** `D1..D18` are carried over from `LANGUAGE.md` §14 and keep
   their original meaning. New divergences get new ids (`D19+`).
 

@@ -273,7 +273,7 @@ After tonight's session:
   above).
 - New file `benchmarks/actors/multi_producer.st`.
 - This document at
-  `docs/superpowers/specs/2026-05-23-multiproducer-blocker.md`.
+  `docs/archive/design-specs/2026-05-23-multiproducer-blocker.md`.
 - ctest: 751/751.
 - No protoCore changes. Nothing pushed.
 

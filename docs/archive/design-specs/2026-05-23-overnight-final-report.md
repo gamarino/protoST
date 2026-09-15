@@ -33,7 +33,7 @@ callbacks) — that's the next thing to chase if perf matters more.
 
 ## The "what is serializing" investigation
 
-User's instruction: *"hay algo serializando todo. hacer un análisis estático profundo"*.
+User's instruction: *"something is serializing everything; do a deep static analysis"*.
 
 Method:
 1. Grep `std::mutex` / `recursive_mutex` / `shared_mutex` / `stwFlag` /

@@ -9,7 +9,7 @@
 // Every iteration test uses a block that closes over a method local or
 // argument — exercising the just-landed closure-capture path.
 //
-// See docs/superpowers/specs/2026-05-20-collections.md.
+// See docs/archive/design-specs/2026-05-20-collections.md.
 
 #include <catch2/catch_all.hpp>
 
@@ -675,7 +675,7 @@ TEST_CASE("COL-b: first / last convenience accessors", "[collections][track2]") 
 // that iterate them, and the derived iteration protocol on a hashed receiver
 // (collect:/select: yield the receiver's species, not an Array).
 //
-// See docs/superpowers/specs/2026-05-20-collections.md.
+// See docs/archive/design-specs/2026-05-20-collections.md.
 // ============================================================================
 
 TEST_CASE("COL-c: Set dedups — adding the same element twice keeps size 1",

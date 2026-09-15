@@ -135,7 +135,7 @@ private:
                              int nArgs, int argNameOffset);
     // 2026-05-24: Compile `<receiver> doYielding: [ :elem | <body> ]` to a
     // bytecode loop using `at:` and `value:` so the block may yield mid-
-    // iteration. See docs/superpowers/specs/2026-05-24-doyielding-design.md.
+    // iteration. See docs/archive/design-specs/2026-05-24-doyielding-design.md.
     void   emitDoYieldingLoop(BytecodeModule& m,
                               const ast::Node& receiverNode,
                               const ast::Node& blockNode);

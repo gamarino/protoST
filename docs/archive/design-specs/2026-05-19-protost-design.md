@@ -739,7 +739,7 @@ Because actors are cooperative, when a breakpoint hits on actor A only A is paus
 protoST/
 ├── CMakeLists.txt
 ├── CLAUDE.md
-├── DESIGN.md                                   ← root-level pointer; the canonical spec lives at docs/superpowers/specs/2026-05-19-protost-design.md
+├── DESIGN.md                                   ← root-level pointer; the canonical spec lives at docs/archive/design-specs/2026-05-19-protost-design.md
 ├── README.md
 ├── CHANGELOG.md
 ├── LICENSE

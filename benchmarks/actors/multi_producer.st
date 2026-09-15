@@ -8,7 +8,7 @@
 ""
 "With workers >= NPROD every driver gets a worker and produces at full"
 "speed; the main thread is idle from kickoff onward. This isolates"
-"worker scaling from main-thread producer rate (which is the cuello in"
+"worker scaling from main-thread producer rate (which is the bottleneck in"
 "mt100a's single-producer pattern)."
 ""
 "The driver method uses `doYielding:` (compiler-desugared yieldable"

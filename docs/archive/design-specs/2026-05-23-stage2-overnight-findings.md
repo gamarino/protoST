@@ -118,7 +118,7 @@ in restructuring the dispatch shape. Concretely:
   protoCore (`OpaqueGCRoot` with custom trace callback) — that's a
   protoCore v1.2.0 bump.
 
-These are the items in the original Stage 2 spec (`docs/superpowers/specs/
+These are the items in the original Stage 2 spec (`docs/archive/design-specs/
 2026-05-23-interpreter-perf-spec.md`) that I deferred when I went after
 the dispatch structure first. The dispatch structure is fine. **The
 allocation overhead is the real ceiling.**
@@ -126,7 +126,7 @@ allocation overhead is the real ceiling.**
 ## State left
 
 - Repo at `12ba983` (clean, 751/751 ctest, ~10s).
-- This document under `docs/superpowers/specs/`.
+- This document under `docs/archive/design-specs/`.
 - No protoCore changes.
 - No regressions.
 

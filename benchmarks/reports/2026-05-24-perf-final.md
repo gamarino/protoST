@@ -3,9 +3,9 @@
 - **Host:** AMD Ryzen 5 5500U with Radeon Graphics — 12 logical CPUs
 - **OS:** Linux 6.8.0-117-generic (x86_64)
 - **Method:** 2 warmup + 5 timed runs per benchmark, median wall-clock reported.
-- **protoST:** `/home/gamarino/Documentos/proyectos/protoST/build/protost`
+- **protoST:** `build/protost`
 - **CPython:** `/usr/local/bin/python3.14` (3.14.0)
-- **protoPython:** `/home/gamarino/Documentos/proyectos/protoPython/build_release/src/runtime/protopy`
+- **protoPython:** `protoPython/build_release/src/runtime/protopy`
 
 ## Comparable workloads
 

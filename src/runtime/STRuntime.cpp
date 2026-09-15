@@ -144,7 +144,7 @@ static constexpr int kNumPriorityBands = 3;
 // scheme, which under N-thread contention became a GIL-equivalent (every
 // enqueue/dequeue allocated a new ProtoList; under contention the retries
 // piled up garbage and serialised throughput). See
-// docs/superpowers/specs/2026-05-23-ready-queue-mpmc-spec.md.
+// docs/archive/design-specs/2026-05-23-ready-queue-mpmc-spec.md.
 //
 // push/pop are CAS over a single std::atomic<ReadyNode*> — O(1), one
 // `new` per push and one `delete` per pop. LIFO; FIFO fairness is a

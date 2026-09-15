@@ -5,8 +5,8 @@ This report supersedes
 numbers in this file were measured on a single hardware host (see
 **Host details** below) after the overnight optimisation session of
 2026-05-23. The full diagnostic trail is in
-[`docs/superpowers/specs/2026-05-23-saturation-experiment.md`](../../docs/superpowers/specs/2026-05-23-saturation-experiment.md)
-and [`2026-05-23-hardware-bound-plateau.md`](../../docs/superpowers/specs/2026-05-23-hardware-bound-plateau.md).
+[`docs/archive/design-specs/2026-05-23-saturation-experiment.md`](../../docs/archive/design-specs/2026-05-23-saturation-experiment.md)
+and [`2026-05-23-hardware-bound-plateau.md`](../../docs/archive/design-specs/2026-05-23-hardware-bound-plateau.md).
 
 ## Headline numbers
 
@@ -77,9 +77,9 @@ Projection from the measured 71.9 K:
 The 5500U is the floor, not the ceiling.
 
 ### Future ceilings (work documented in
-[`2026-05-23-multiproducer-blocker.md`](../../docs/superpowers/specs/2026-05-23-multiproducer-blocker.md))
+[`2026-05-23-multiproducer-blocker.md`](../../docs/archive/design-specs/2026-05-23-multiproducer-blocker.md))
 
-The producer cuello is the single main thread issuing SENDs. Lifting it
+The producer bottleneck is the single main thread issuing SENDs. Lifting it
 requires multi-producer benchmarks driven by driver actors — currently
 blocked by a yieldable-`do:` limitation in the runtime. When that lands:
 

@@ -5,7 +5,7 @@
 "collection and binds each element to the block argument in order."
 "Yieldability with `wait` inside the block is verified separately by the"
 "actor test suite — see KNOWN ISSUE in"
-"docs/superpowers/specs/2026-05-24-doyielding-design.md re: the"
+"docs/archive/design-specs/2026-05-24-doyielding-design.md re: the"
 "multi-worker race that surfaces when the block yields."
 
 coll := OrderedCollection new.

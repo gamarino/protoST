@@ -35,3 +35,6 @@ Testing/
 
 # Python bytecode cache produced by the benchmark scripts
 /benchmarks/__pycache__/
+
+# Local working notes (not part of the published documentation)
+/tasks/

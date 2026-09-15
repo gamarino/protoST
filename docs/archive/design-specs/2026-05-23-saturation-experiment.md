@@ -405,7 +405,7 @@ for a separate session, not a single-commit fix.
 | saturation w=8 | 1.96× (regression) | **3.83×** | monotonic |
 
 mt100a NO longer regresses with workers but it does not improve
-either (49 K at w=8 due to producer cuello — single main thread
+either (49 K at w=8 due to producer bottleneck — single main thread
 generating the SENDs while 8 workers compete for them). Multi-
 producer benchmarks via driver actors are blocked by the
 yieldable-do: limitation documented in

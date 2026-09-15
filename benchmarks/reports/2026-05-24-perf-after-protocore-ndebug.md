@@ -5,7 +5,7 @@
 - **Method:** 2 warmup + 5 timed runs per benchmark, median wall-clock reported.
 - **protoST:** `build/protost`
 - **CPython:** `/usr/local/bin/python3.14` (3.14.0)
-- **protoPython:** `/home/gamarino/Documentos/proyectos/protoPython/build_release/src/runtime/protopy`
+- **protoPython:** `protoPython/build_release/src/runtime/protopy`
 
 ## Comparable workloads
 

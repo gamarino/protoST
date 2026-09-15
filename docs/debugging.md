@@ -26,7 +26,7 @@ the extension below.
 
 ## Building `protost`
 
-The runtime depends on [protoCore](../../protoCore), which must be built first.
+The runtime depends on [protoCore](https://github.com/numaes/protoCore), which must be built first.
 
 ```bash
 cd protoST

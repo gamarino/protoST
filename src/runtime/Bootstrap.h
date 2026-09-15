@@ -140,7 +140,7 @@ struct Bootstrap {
         // lock-free ReadyStack. `live` is the per-actor flag CAS'd from
         // FALSE/absent to TRUE on first enqueue; the CAS winner appends the
         // actor to the runtime-wide `liveActors` ProtoList rooted under
-        // liveRegistry. See docs/superpowers/specs/2026-05-23-ready-queue-mpmc-spec.md.
+        // liveRegistry. See docs/archive/design-specs/2026-05-23-ready-queue-mpmc-spec.md.
         const proto::ProtoString* live            = nullptr;  // __live__       (per-actor anchor flag)
         const proto::ProtoString* liveActors      = nullptr;  // __live_actors__ (anchor list on liveRegistry)
         // F6 v5 (2026-05-23): single global task list (ProtoList of task
@@ -149,7 +149,7 @@ struct Bootstrap {
         // args (sym.args), future (sym.future). Per-actor `__lockHandle__`
         // is an ExternalPointer to a C++ ActorLock (binary_semaphore-based
         // blocking lock) — enforces single-thread-of-execution per actor.
-        // See docs/superpowers/specs/2026-05-23-task-list-spec.md (TODO).
+        // No separate design document was written for it.
         const proto::ProtoString* tasks           = nullptr;  // __tasks__ (on liveRegistry: the one task list)
         const proto::ProtoString* actor           = nullptr;  // __actor__ (on a task: which actor it targets)
         const proto::ProtoString* lockHandle      = nullptr;  // __lockHandle__ (on actor: ExtPtr to ActorLock)
@@ -166,7 +166,7 @@ struct Bootstrap {
         // is a SmallInteger 0/1/2 stored on the actor; absence means medium.
         // The scheduler reads this on schedule() to pick which of three
         // ReadyStacks to push onto; workers drain highest non-empty band
-        // first. See docs/superpowers/specs/2026-06-15-actor-priority-spec.md.
+        // first. See docs/tutorial/10-actors-and-futures.md §10.11.
         const proto::ProtoString* priority        = nullptr;  // __priority__   (on actor: 0=high, 1=medium, 2=low)
     } sym;
 };

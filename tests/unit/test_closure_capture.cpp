@@ -17,7 +17,7 @@
 // into it. Nested blocks reuse that one flat dict via PUSH_BLOCK's
 // `__captured__` stamp.
 //
-// See docs/superpowers/specs/2026-05-20-closure-capture.md.
+// See docs/archive/design-specs/2026-05-20-closure-capture.md.
 
 #include <catch2/catch_all.hpp>
 

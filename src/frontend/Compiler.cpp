@@ -1055,7 +1055,7 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             // path. Since no primitive is bound for `doYielding:`,
             // that surfaces doesNotUnderstand at runtime.
             //
-            // See docs/superpowers/specs/2026-05-24-doyielding-design.md.
+            // See docs/archive/design-specs/2026-05-24-doyielding-design.md.
             if (n.text == "doYielding:"
                 && n.children.size() == 2
                 && n.children[1]->kind == NodeKind::Block
@@ -1091,7 +1091,7 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             // positional values, then named values — same order as in the
             // children vector. The dispatcher in ExecutionEngine reads the
             // mangled selector to recover nPos / sortedKeys and pops in
-            // that order. See docs/superpowers/specs/2026-06-13-protocore-call-syntax.md.
+            // that order. See docs/archive/design-specs/2026-06-13-protocore-call-syntax.md.
             const int nPos   = static_cast<int>(n.intValue);
             const int nNamed = static_cast<int>(n.intValue2);
             // Receiver, then args in children order (positionals first,

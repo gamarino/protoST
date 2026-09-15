@@ -7,7 +7,7 @@
 // `ifCurtailed:` is EXC-c; native exception translation is EXC-d — neither is
 // covered here.
 //
-// See docs/superpowers/specs/2026-05-20-exceptions.md.
+// See docs/archive/design-specs/2026-05-20-exceptions.md.
 
 #include <catch2/catch_all.hpp>
 

@@ -2,9 +2,9 @@
 
 > **An actor-native Smalltalk for building digital twins on protoCore.**
 
-protoST is a Smalltalk-80-inspired language runtime with a **first-class embedded actor model**, built on the [protoCore](../protoCore) kernel. It is the third member of the protoCore language triple — alongside [protoJS](../protoJS) (JavaScript) and [protoPython](../protoPython) (Python) — and it closes the technical demonstration that one prototype-based kernel can host three genuinely different OO paradigms (prototypes / classes / messages) without flattening them to a common denominator.
+protoST is a Smalltalk-80-inspired language runtime with a **first-class embedded actor model**, built on the [protoCore](https://github.com/numaes/protoCore) kernel. It is one of four language runtimes on protoCore — alongside [protoJS](https://github.com/gamarino/protoJS) (JavaScript), [protoPython](https://github.com/gamarino/protoPython) (Python) and [protoClojure](https://github.com/gamarino/protoClojure) (Clojure, early stage) — and it shows that one prototype-based kernel can host genuinely different OO paradigms (prototypes / classes / messages) without flattening them to a common denominator.
 
-protoST's distinct contribution is putting **actors at the centre of the language**: any object can be promoted to an actor with `asActor`, every message sent to it is dispatched asynchronously and returns a `Future`, and an internal invariant guarantees that exactly one method of a given actor runs at a time. Tens of thousands of actors share a small worker pool through cooperative scheduling — an actor suspends transparently when it waits on a future, freeing its worker for someone else.
+protoST's distinct contribution is putting **actors at the centre of the language**: any object can be promoted to an actor with `asActor`, every message sent to it is dispatched asynchronously and returns a `Future`, and an internal invariant guarantees that exactly one method of a given actor runs at a time. Many actors share a small worker pool through cooperative scheduling — an actor suspends transparently when it waits on a future, freeing its worker for someone else.
 
 Three **priority bands** separate the data plane from the control plane: `asActor` is the default Medium, `asHighPriorityActor` jumps the queue for control messages (drain / reconfigure / shutdown), and `asLowPriorityActor` yields for background hygiene (telemetry, log flushes). The scheduler drains strict-priority — every High before any Medium before any Low — with the same single-method invariant in every band.
 
@@ -58,19 +58,19 @@ The actor formulation buys three properties that pure FSM dispatch tables do not
 2. **Composition by message passing.** Twins interact by sending messages; futures and their combinators (`&`, `|`, `whenAll:`, `whenAny:`) compose interactions without shared mutable state.
 3. **Concurrency by default.** Ten thousand twins are ten thousand actors. The cooperative scheduler runs them on a worker pool sized to the host's cores. Going from 10 twins to 10 000 needs no code change.
 
-Combined with the rest of the triple, protoST forms a coherent platform for agent-based / discrete-event simulation:
+Together with the other protoCore runtimes, protoST is designed to form a platform for agent-based / discrete-event simulation:
 
 | Need | Component |
 |---|---|
 | Many stateful concurrent agents | **protoST** (actor model on Smalltalk syntax) |
 | Lock-free shared state across agents | **protoST** (`Atom` — optimistic-concurrency CAS cell) |
-| Numerical / ML models inside twins | **protoPython** (numpy, scipy, sklearn) |
+| Numerical models written in Python | **protoPython** |
 | Operator dashboards, visualisation | **protoJS** (web tooling) |
 | Real parallelism, no GIL | **protoCore** (kernel) |
 | Immutable collections, structural sharing | **protoCore** (kernel) |
 | Cross-language interop without marshalling | **UMD** (every module is a `ProtoObject`) |
 
-Today, building this typically requires combining MQTT + Python microservices + JavaScript dashboards + a database + glue code — five runtimes, five data models, marshalling at every boundary. The triple proposes doing it **inside one process, with one object model, with true parallelism**.
+Today, building this typically requires combining MQTT + Python microservices + JavaScript dashboards + a database + glue code — five runtimes, five data models, marshalling at every boundary. The protoCore runtimes aim to do it **inside one process, with one object model, with true parallelism**. protoST's side of cross-language interop is implemented; a live process hosting several runtimes at once is follow-up work (see [`docs/INTEROP.md`](docs/INTEROP.md)).
 
 ## A flavour of the language
 
@@ -99,23 +99,27 @@ complete, runnable digital-twin demo — a pump with three sensors read
 concurrently on a worker pool — is in
 [`examples/pump_twin.st`](examples/pump_twin.st).
 
-## Performance — 50-70K msg/s actor messaging, real parallel scaling
+## Performance
 
-**Actor messaging in the 50-70 K msg/s band on a 6-core 2020 notebook CPU.
-Single-thread workloads geomean 4.65× CPython 3.14 free-threading on the
-comparable suite (`benchmarks/comparable/`), beating CPython on
-`str_concat` and at parity vs `protopy` overall.** Numbers below are from
-the 2026-05-24 perf sprint (7 commits in protoST + 1 in protoCore that
-day); full dated reports under
-[`benchmarks/reports/`](benchmarks/reports/) — start with
-[`2026-05-24-perf-final.md`](benchmarks/reports/2026-05-24-perf-final.md)
-and [`2026-05-24-actor-messaging.md`](benchmarks/reports/2026-05-24-actor-messaging.md).
+All numbers below come from dated reports in
+[`benchmarks/reports/`](benchmarks/reports/), measured on an AMD Ryzen 5 5500U
+(6 physical cores / 12 threads, a 2020 notebook CPU). They are snapshots of the
+code at the report date, not continuous measurements.
+
+- **Actor messaging:** 50–70 K msg/s across three messaging patterns
+  (2026-05-24, [`2026-05-24-actor-messaging.md`](benchmarks/reports/2026-05-24-actor-messaging.md)).
+- **Single-thread code:** geomean **2.83× CPython 3.14.0's wall-clock time** on
+  the seven-workload comparable suite (2026-05-24, after building protoCore
+  with `NDEBUG`,
+  [`2026-05-24-perf-after-protocore-ndebug.md`](benchmarks/reports/2026-05-24-perf-after-protocore-ndebug.md)).
+- **Parallel scaling:** 3.88× on 6 physical cores for the CPU-bound
+  `saturation_big` benchmark (2026-05-23,
+  [`2026-05-23-performance.md`](benchmarks/reports/2026-05-23-performance.md)).
 
 ### Actor messaging throughput
 
-Three patterns measured, all on a Ryzen 5 5500U (6 physical / 12 SMT,
-4 GHz boost, 15-25 W TDP — a 2020 mobile chip chosen deliberately as the
-publishing floor):
+From [`2026-05-24-actor-messaging.md`](benchmarks/reports/2026-05-24-actor-messaging.md)
+(best of 3 runs):
 
 | benchmark | best | rate | optimal workers |
 |---|---:|---:|---:|
@@ -123,97 +127,95 @@ publishing floor):
 | `mt100a` (1 producer → 100 sinks, 1000 rounds = 100 K msgs) | 1.83 s | **54.6 K msg/s** | w=2-4 |
 | `multi_producer.st` (8 drivers × 12 sinks × 1000 rounds = 96 K msgs) | 1.61 s | **59.6 K msg/s** | w=4-6 |
 
-All three patterns land in the 50-70 K band. **Multi-producer
-empirically does NOT unlock a higher ceiling** on this hardware (each
-driver's `doYielding:` per-element resume cost cancels the saved
-single-producer-bottleneck cost) — earlier reports projecting "1.5 M
-msg/s when multi-producer lands" were over-optimistic and have been
-withdrawn. The real next architectural step is per-actor message slab
-allocation + selector-resolved-once caching; see
-`2026-05-24-actor-messaging.md` for the analysis.
+All three patterns land in the 50-70 K band. **Multi-producer does not unlock
+a higher ceiling** on this hardware: each driver's `doYielding:` per-element
+resume cost cancels the saved single-producer bottleneck. An earlier
+projection of 1.5 M msg/s for multi-producer
+([`2026-05-23-performance.md`](benchmarks/reports/2026-05-23-performance.md))
+is withdrawn. The report identifies per-actor message slab allocation and a
+selector-resolved-once cache as the next architectural steps.
 
-### Hardware sensitivity (honest projection)
+### Hardware sensitivity (projection)
 
-| host CPU | factor vs 5500U | est. peak msg/s |
+The same report projects, without measuring, how the multi-producer peak
+would scale on other CPUs:
+
+| host CPU | factor vs 5500U | est. multi-producer peak |
 |---|---|---:|
-| AMD Ryzen 5 5500U (this report) | 1.00× | **60-70 K** (measured) |
-| Apple M3 / Ryzen 7 7700X        | ~ 1.9× | ~ 115 K |
-| Ryzen 9 7900X / i9-13900K       | ~ 2.0× × more cores | ~ 130-150 K |
-| EPYC 96c server (X3D)           | ~ 1.7× ST × 16× cores | ~ 500 K - 1 M |
+| AMD Ryzen 5 5500U | 1.00× | **60 K msg/s** (measured) |
+| Apple M3 / Ryzen 7 7700X | ~1.9× | ~115 K msg/s |
+| Ryzen 9 7950X (16-core desktop) | ~2.0× × more cores | ~200 K msg/s |
+| EPYC 96-core server | per-core +60 %, 16× cores | ~500 K–1 M msg/s |
 
-Even at the high end, protoST stays meaningfully below BEAM
-(Erlang/Elixir's 5-10 M msg/s on the same EPYC class). Closing that
-gap is the active perf workstream, NOT a finished story — see "How
-protoST compares" below.
+Even at the high end, protoST stays well below BEAM (Erlang/Elixir), which the
+report puts at 5–10 M msg/s on the same server class. Closing that gap is open
+work — see "How protoST compares" below.
 
 ### Other actor benchmarks
 
-- **Parallel speedup.** 12 CPU-bound worker actors saturating 6 cores:
-  **3.88× scaling** (near-ideal 4× on 6 physical cores, w=6). Extra
-  cores → real wall-clock speedup, no code change. This is the
-  architectural property that distinguishes protoST from green-thread
-  systems including Pharo / Squeak.
-- **Cooperative-yield density.** 1000 actors each parked on a nested
-  `wait`, all hosted on just **2** worker threads — completes in
-  ~2.5 s. Thread-per-actor blocking would need 1000 OS threads;
-  protoST parks the waiters and reuses the two. Same architectural
-  league as BEAM and Go's M:N scheduler.
+- **Parallel scaling.** `saturation_big` (32 actors × 50 messages × 5K CPU
+  iterations each) runs 3.88× faster at `PROTOST_WORKERS=6` than at 1 on the
+  6 physical cores (2026-05-23). Extra cores give real wall-clock speedup
+  with no code change — the architectural property that distinguishes
+  protoST from green-thread systems such as Pharo / Squeak. In the 2026-05-24
+  NDEBUG report, `parallel_speedup.st` (12 CPU-bound worker actors) runs in
+  359 ms with the full pool vs 665 ms with one worker (1.85×).
+- **Cooperative-yield density.** 1000 actors, each parked on a nested
+  `wait`, all hosted on **2** worker threads, complete in 1176 ms (2026-05-24
+  NDEBUG report). Thread-per-actor blocking would need 1000 OS threads;
+  protoST parks the waiters and reuses the two.
 
-### Single-thread vs CPython 3.14 (free-threading)
+### Single-thread vs CPython 3.14
 
-Geomean across the 7-test comparable suite: **protoST 4.65× CPython**,
-**1.02× protopy** (parity with the bytecode interpreter of our
-companion Python runtime, both measured on the same suite).
+From [`2026-05-24-perf-after-protocore-ndebug.md`](benchmarks/reports/2026-05-24-perf-after-protocore-ndebug.md)
+(2 warmup + 5 timed runs, median wall-clock; `Ratio` is protoST ÷ CPython,
+greater than 1 means protoST is slower):
 
-| Workload | protoST | CPython | Ratio | Status |
-|---|---:|---:|---:|---|
-| `str_concat` (2000 chained `,`) | 19 ms | 30 ms | **0.64× (WIN)** | beats CPython |
-| `list_append` (10K `add:`)      | 99 ms | 37 ms | 2.78× | within 3× |
-| `int_sum_loop` (sum 1..100k)    | 103 ms| 50 ms | 2.08× | within 3× |
-| `range_iterate` (iterate 100k)  | 154 ms| 37 ms | 4.17× | mid-pack |
-| `attr_lookup` (300k iv reads)   | 281 ms| 45 ms | 6.27× | mid-pack |
-| `fib` (recursive fib(25))       | ~440 ms| 56 ms| ~7.9× | OOP recursion |
-| `exception_latency` (50K signals)| 1248 ms| 39 ms| 32×   | needs on:do: inlining |
-| **Geomean**                     |       |       | **4.65×** |       |
+| Workload | protoST (ms) | CPython (ms) | protopy (ms) | Ratio (ST/CPy) |
+|---|---:|---:|---:|---:|
+| `int_sum_loop` | 38.7 | 39.6 | 22.4 | 0.98× |
+| `fib` | 405.4 | 41.3 | 133.1 | 9.82× |
+| `list_append` | 59.9 | 30.8 | 301.8 | 1.94× |
+| `str_concat` | 34.2 | 44.7 | 540.4 | 0.77× |
+| `attr_lookup` | 103.4 | 40.4 | 259.7 | 2.56× |
+| `range_iterate` | 49.1 | 34.6 | 223.8 | 1.42× |
+| `exception_latency` | 1280.6 | 45.4 | 702.7 | 28.18× |
+| **Geomean** | | | | **2.83×** |
 
-Day-start was 9.96× geomean; the four 2026-05-24 landings
-(ifTrue:/whileTrue: inlining, to:do: inlining, Dictionary key
-canonicalisation + rope-aware `,`, SmallInt fast opcodes) cut it to
-4.65×. The remaining 3-4× gap is concentrated on workloads bound by
-method-call dispatch (`getAttribute` MRO walk — needs an inline
-cache) and on `exception_latency` (`on:do:` handler frames not yet
-inlined). See `2026-05-24-perf-final.md` for the per-fix attribution.
+The `protopy` column is protoPython's bytecode interpreter at the time of the
+report. protoST is faster than CPython on `str_concat` and at parity on
+`int_sum_loop`; the largest gaps are recursive method dispatch (`fib`) and
+exception signalling (`exception_latency`). The earlier reports from the same
+day, including the per-fix attribution, are in `benchmarks/reports/`.
 
 ## How protoST compares
 
 The two comparisons that matter for protoST live in different lanes —
-single-threaded Smalltalk runtimes and parallel-actor runtimes — and
-mixing them produces confused marketing. Here they are separately and
-honestly.
+single-threaded Smalltalk runtimes and parallel-actor runtimes — so they are
+kept separate here.
 
 ### vs. Pharo / Squeak (Smalltalk syntax + tooling)
 
-Pharo and Squeak are mature single-threaded Smalltalks. Their Cog VM
-has a JIT, polymorphic inline caches, and 20+ years of tuning; on raw
-single-thread arithmetic Cog is typically ~2-4× faster than protoST
-today, and **protoST has no realistic path to closing that gap
-without a JIT**. We are not building a faster Smalltalk than Pharo;
-that comparison is not where protoST is interesting.
+Pharo and Squeak are mature single-threaded Smalltalks. Their Cog VM has a
+JIT, polymorphic inline caches and many years of tuning, and it is faster than
+protoST on raw single-thread code; **protoST has no realistic path to closing
+that gap without a JIT**. protoST is not trying to be a faster Smalltalk than
+Pharo.
 
 The architectural distinction is that **Pharo's "actors" / Vats /
 Pharo-Actors are coroutines layered on green threads on one OS
 thread** — they give the actor programming model but not real
 parallelism. For any workload that needs more than one core, Pharo
-fundamentally cannot use it; protoST's worker pool maps actors to
-hardware cores 1:1 and demonstrably scales 3.88× on 6 physical cores.
-That's the real distinction, not "Smalltalk that's faster than
-Pharo".
+cannot use it; protoST's worker pool runs actors on hardware cores and
+scales 3.88× on 6 physical cores in `saturation_big`.
 
-### vs. BEAM (Erlang/Elixir) / Akka / Pony — the real comparator
+### vs. BEAM (Erlang/Elixir) / Akka / Pony
 
-protoST IS in the BEAM/Akka/Pony lineage technically — true parallel
-actor messaging over OS threads. The gap below is the **honest
-comparator on the actor side**:
+protoST is in the BEAM/Akka/Pony lineage technically — true parallel
+actor messaging over OS threads. From
+[`2026-05-24-actor-messaging.md`](benchmarks/reports/2026-05-24-actor-messaging.md)
+(BEAM figures are ballpark estimates from that report, not measurements on
+this host):
 
 | Pattern | protoST 5500U | BEAM ballpark on similar hw | Gap |
 |---|---:|---:|---:|
@@ -223,63 +225,40 @@ comparator on the actor side**:
 
 So **the BEAM gap is real and significant** (3× on the narrow end,
 80-170× on the wide end). BEAM has decades of scheduler tuning and a
-per-process copying-GC design that protoST does not yet match.
-
-| category | representative systems | in-process throughput | comment |
-|---|---|---:|---|
-| Actor languages, JIT, mature | BEAM, Akka, Orleans | 1-10 M msg/s | true parallel, decades of tuning |
-| Actor languages, ground-up | Pony, Caf | 10-100 M msg/s | type-checked capability systems |
-| **protoST today** | — | **50-70 K measured / 130-200 K projected (desktop)** | true parallel; gap to BEAM is the active workstream |
-| Python actor frameworks | Pykka, Thespian, in-process Ray | 5-30 K msg/s | GIL-bound (mostly) |
-| Smalltalk pseudo-actors | Pharo Vats, Pharo-Actors | (n/a — green threads, no parallelism) | not in this comparator class |
-| Network message brokers | RabbitMQ, Kafka, NATS | 50 K-1 M msg/s | network + disk in the loop |
-
-protoST does NOT market itself as "BEAM-class actor performance" —
-the data don't support that today. What protoST IS:
+per-process copying-GC design that protoST does not match. protoST does not
+claim BEAM-class actor performance. What it offers instead:
 
 ### 1. Messages are pointers — even when they carry large state
 
 Most actor systems pay for safety the same way: copy the message at the
 send boundary. BEAM deep-copies between process heaps; Node.js worker
-threads structured-clone; even Akka recommends immutable case classes
-that the JVM still ends up tracing. The cost grows linearly with message
-size — a 10 K-node world model is megabytes of marshalling per send.
+threads structured-clone. The cost grows with message size.
 
 protoST passes a pointer. Same address, on another core, no copy and no
 serialisation. It is safe because the *pointee* — protoCore's mutable
 object — is an atomic reference to an immutable snapshot: reading it is
-unconditionally race-free, writing it installs a NEW snapshot that
-doesn't disturb the old. **A message of N bytes costs the same as a
-message of 0 bytes.**
-
-Concrete comparison — sending a 10 K-node world graph between actors:
-
-| system  | send cost (approx) |
-|---|---:|
-| BEAM (Erlang) — deep copy across heaps | ~ 0.5-2 ms |
-| RabbitMQ — serialise + network + deserialise | ~ 1-10 ms |
-| Akka (JVM) — pointer pass, but UB unless caller-discipline | < 100 µs (with caveats) |
-| **protoST** — pointer to atomic snapshot | **~ 14 µs (the mt100a per-msg number)** |
+race-free, and writing it installs a new snapshot that does not disturb the
+old one. The send itself therefore copies nothing, whatever the message size.
+The published benchmarks use small messages; a large-payload benchmark has
+not been published yet.
 
 For workloads where the message IS the state (digital twins, agent-based
-simulation, data-flow pipelines), this **inverts the design space**.
-Sharing large structures stops being a problem you architect around.
+simulation, data-flow pipelines), sharing large structures stops being a
+problem you architect around.
 
-### 2. Trilingual in the same process, with one object model
+### 2. One object model across language runtimes
 
-protoCore hosts three languages — Smalltalk (protoST), JavaScript
-(protoJS) and Python (protoPython) — and they share objects natively.
-A protoPython numpy array reaches a protoST actor as the same pointer,
-no marshalling. The conventional stack (MQTT + Python microservices +
-JavaScript dashboards + a database) becomes three modules in one
-address space.
-
-This is not a comparison — no other actor runtime has this property at
-all. It exists because protoCore was designed for it.
+Every protoCore runtime represents its values as protoCore objects built from
+the same cell, so an object produced by protoJS or protoPython is an ordinary
+object to protoST, and a message send to it follows the ordinary lookup path.
+protoST's side of this is implemented and tested (Track 5, slice T5-a:
+importing modules from a foreign UMD provider); a live process hosting
+several runtimes at once is the follow-up described in
+[`docs/INTEROP.md`](docs/INTEROP.md).
 
 ### 3. No GIL, no data races, no locks — by data-model construction
 
-protoPython runs Python 3.14 without a GIL. protoST's actors run truly
+protoPython runs Python without a GIL. protoST's actors run truly
 in parallel on a worker pool. And the absence of data races does NOT
 require programmer discipline — it falls out of the object model:
 every read sees an internally consistent snapshot, every write
@@ -288,61 +267,67 @@ actor) is enforced by the scheduler, not by the user.
 
 ### When does protoST lose?
 
-- **Millions of trivial-message actors at peak throughput.** If your
-  workload is `ping → pong` with empty bodies, BEAM and Pony will
-  outrun protoST by 10-100×. The actor message is dominated by the
-  dispatch path; a JIT helps there more than any tuning we can do
-  on an interpreter.
+- **Peak throughput of trivial messages.** If your workload is
+  `ping → pong` with empty bodies, BEAM outruns protoST by 3-170×
+  depending on the pattern (table above). The message cost is dominated
+  by the dispatch path, where a JIT helps more than interpreter tuning.
 - **Hard-real-time or strictly bounded latency.** protoST has GC
   pauses (concurrent collector, no soft-/hard-RT mode); BEAM has
   per-process GC and is widely used in soft-RT contexts.
 - **Distributed actors across multiple machines.** protoST is
-  single-process today. Distributing is a future track; for
-  inter-node messaging today you would still pair it with a
+  single-process today. Distribution is a future track; for
+  inter-node messaging you would still pair it with a
   RabbitMQ / Kafka transport.
 
 ### When does protoST win?
 
 - **Agent / twin simulations with large shared world state.** Pointer
-  messaging × snapshot safety = the entire copy-vs-race spectrum
-  collapses into a single cheap option.
-- **Mixed-language pipelines** (numpy / ML in Python, UI logic in
-  JavaScript, simulation engine in Smalltalk) where today you would
-  marshal at every language boundary. The triple removes the
-  marshalling line item entirely.
+  messaging plus snapshot safety removes the choice between copying
+  and data races.
 - **Anything where the message IS the state**, and the state is
-  non-trivial. Sending a 100-element list, a 10 K-node graph, a
-  matrix slice — all O(1) in send cost.
+  non-trivial. Sending a 100-element list, a 10 K-node graph or a
+  matrix slice copies nothing.
+- **Mixed-language pipelines**, once several protoCore runtimes share a
+  process (see [`docs/INTEROP.md`](docs/INTEROP.md)): no marshalling at
+  the language boundary.
 
-The pitch is not "the fastest actor framework" — it is "the actor
-framework where messages can be pointers to large shared state, safely,
-in three languages, in one process." If you have a digital twin or an
-agent-based simulation that today requires a microservice mesh to
-escape Python's GIL or JavaScript's structured-clone, that is the
-problem protoST is shaped to solve.
+protoST is not "the fastest actor framework"; it is an actor runtime where
+messages can be pointers to large shared state, safely, on an object model
+shared with other language runtimes. If you have a digital twin or an
+agent-based simulation that today needs a microservice mesh to escape Python's
+GIL or JavaScript's structured clone, that is the problem protoST is shaped
+to solve.
 
 ## Project status
 
-protoST is in active development and runs. **Latest tag: v0.3.0** (yieldable
+protoST is in active development. **Latest release tag: v0.3.0** (yieldable
 cooperative iteration via `doYielding:` — see
 [`docs/tutorial/10-actors-and-futures.md`](docs/tutorial/10-actors-and-futures.md)
 §10.8). Phases F1–F8 are complete — lexer, parser, bytecode VM, closures,
 classes, modules, the actor model with cooperative yield, an interactive
-REPL, and a Debug Adapter Protocol debugger. Roadmap Tracks 1–6 are
-complete: non-local return and a full exception protocol, the collection
-hierarchy, the advanced object model (multiple inheritance, mixins,
-runtime behaviour composition), the standard library (Stream, Math,
-Random, JSON, Time), a defensible conformance suite, and cross-language
-UMD interop. Track 8 (the dual-audience tutorial) is also done — see
-[`docs/TUTORIAL.md`](docs/TUTORIAL.md). Tracks 7 and 9 (onboarding guides,
-the broader example set) remain. The test suite stands at **753 tests
-passing** (`ctest`, post 2026-05-24 perf sprint).
+REPL, and a Debug Adapter Protocol debugger. Roadmap Tracks 1–11 are
+complete, each with a `trackN-complete` tag: non-local return and a full
+exception protocol, the collection hierarchy, the advanced object model
+(multiple inheritance, mixins, runtime behaviour composition), the standard
+library (Stream, Math, Random, JSON, Time), a conformance suite, cross-language
+UMD interop, onboarding, the dual-audience tutorial
+([`docs/TUTORIAL.md`](docs/TUTORIAL.md)), the example set, CPack packaging and
+the benchmark suite.
 
-**Active perf workstream**: closing the BEAM messaging gap. Items
-identified, scoped, and queued (largest expected impact first):
-per-actor message slab allocator, selector-resolved-once inline cache
-for SEND, `on:do:` handler inlining. None on a critical path for any
-current user; this is "production-credible actor runtime" investment.
+Since v0.3.0 (see [`CHANGELOG.md`](CHANGELOG.md#unreleased)): call-form sends
+and method declarations, class variables, the three actor priority bands, and
+blocking OS calls wrapped in protoCore's unmanaged scope so they do not stall
+the garbage collector.
+
+The test suite has **785 `ctest` cases** (313 conformance, 42 examples, 9 CLI,
+421 unit), counted with `ctest -N` on 2026-09-15; the commit that added the
+priority bands reports 785/785 passing. One open bug (D24) is tracked in
+[`docs/STATUS.md`](docs/STATUS.md).
+
+**Open performance work**: closing the BEAM messaging gap. The 2026-05-24
+reports identify, largest expected impact first: a per-actor message slab
+allocator, a selector-resolved-once inline cache for SEND, and cheaper
+`on:do:` handler frames.
 
 - [`docs/LANGUAGE.md`](docs/LANGUAGE.md) — the language reference.
 - [`docs/STATUS.md`](docs/STATUS.md) — the live state: what works, intentional
@@ -351,21 +336,34 @@ current user; this is "production-credible actor runtime" investment.
 
 ## Getting started
 
-protoST depends on [protoCore](../protoCore), which must be built first.
+protoST depends on [protoCore](https://github.com/numaes/protoCore), which must
+be built first. By default the build looks for a protoCore checkout next to
+protoST (`../protoCore`, library in `build/`, `build_release/` or
+`build_check/`); pass `-DPROTO_CORE_PREFIX=<prefix>` to use an installed
+protoCore instead.
 
 ```bash
+git clone https://github.com/numaes/protoCore.git
+git clone https://github.com/gamarino/protoST.git
+
+cmake -S protoCore -B protoCore/build
+cmake --build protoCore/build --target protoCore
+
 cd protoST
 cmake -B build -S .
 cmake --build build -j
 
-./build/protost script.st           # run a .st script
-./build/protost -e 'expr'           # evaluate an expression
-./build/protost -i                  # interactive REPL (history, multi-line)
-./build/protost -d script.st        # run under the CLI debugger
-./build/protost --dap               # Debug Adapter Protocol server (VS Code)
-./build/protost venv create .venv   # create an isolated environment
+./build/protost script.st [args...]   # run a .st script
+./build/protost -e 'expr'             # evaluate an expression and print the result
+./build/protost -i                    # interactive REPL (history, multi-line)
+./build/protost -d script.st          # run under the CLI debugger
+./build/protost --dap                 # Debug Adapter Protocol server (VS Code)
+./build/protost --dump-ast script.st  # parse a script and print its AST
+./build/protost venv create .venv     # create an isolated environment
+./build/protost --help                # usage (also -h)
+./build/protost --version             # print the version (also -v)
 
-ctest --test-dir build               # run the test suite
+ctest --test-dir build                # run the test suite
 ```
 
 See [`docs/debugging.md`](docs/debugging.md) for debugging `.st` scripts in
@@ -373,9 +371,10 @@ VS Code.
 
 ## Installation
 
-protoST ships native installers built with CPack. Every package depends on
-[protoCore](../protoCore) — install protoCore's package first (it provides
-`libprotoCore`).
+protoST can be packaged with CPack. No prebuilt packages are published; build
+them from source as shown below. Every package depends on
+[protoCore](https://github.com/numaes/protoCore) — install protoCore's package
+first (it provides `libprotoCore`).
 
 **Debian / Ubuntu** — install the `.deb`:
 
@@ -409,8 +408,10 @@ cpack -G DragNDrop   # .dmg (macOS)
 cpack -G NSIS        # installer .exe (Windows, needs NSIS)
 ```
 
-The generators are selected automatically per platform; `cpack` with no `-G`
-builds every generator enabled for the host OS.
+The generators are selected per platform in `CMakeLists.txt` (Linux: DEB, RPM,
+TGZ; macOS: DragNDrop; Windows: NSIS, ZIP); `cpack` with no `-G` builds every
+generator enabled for the host OS. The `.deb` and `.tar.gz` packages have been
+verified on Linux.
 
 ## Documentation
 
@@ -419,16 +420,29 @@ builds every generator enabled for the host OS.
 | [docs/TUTORIAL.md](docs/TUTORIAL.md) | The dual-audience tutorial — teaches protoST from the ground up for Python/JavaScript developers, and catalogues every departure from Smalltalk-80 for Smalltalk programmers. 14 chapters under `docs/tutorial/`. |
 | [docs/LANGUAGE.md](docs/LANGUAGE.md) | The language reference — lexical structure, grammar, semantics, the full built-in protocol. |
 | [docs/STATUS.md](docs/STATUS.md) | The living status tracker — implemented features, intentional deviations, open bugs. |
+| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Runtime hard edges that are not language design choices. |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | The roadmap — remaining tracks and how to contribute. |
-| [docs/INTEROP.md](docs/INTEROP.md) | Cross-language UMD interop strategy — how protoST consumes objects and modules from another protoCore runtime (protoJS, protoPython), the type mapping, and the tri-runtime follow-up plan. |
+| [docs/INTEROP.md](docs/INTEROP.md) | Cross-language UMD interop strategy — how protoST consumes objects and modules from another protoCore runtime (protoJS, protoPython), the type mapping, and the multi-runtime follow-up plan. |
 | [docs/debugging.md](docs/debugging.md) | Debugging `.st` scripts in VS Code via the `protost --dap` Debug Adapter Protocol adapter. |
-| [design spec](docs/superpowers/specs/2026-05-19-protost-design.md) | The original technical design specification. |
+| [CHANGELOG.md](CHANGELOG.md) | Release notes and unreleased changes. |
+| [benchmarks/README.md](benchmarks/README.md) | The benchmark suite and harness; dated reports live in `benchmarks/reports/`. |
+| [Design specifications (archive)](docs/archive/design-specs/README.md) | Historical design documents, including the original technical design; not maintained. |
 
 ## Related projects
 
-- **[protoCore](../protoCore)** — the prototype-based kernel: object model, GC, immutable collections, GIL-free concurrency, UMD module discovery.
-- **[protoJS](../protoJS)** — JavaScript runtime on protoCore. Source of the `Deferred` / `CPUThreadPool` patterns that protoST extends into a full actor model.
-- **[protoPython](../protoPython)** — Python 3.14 runtime on protoCore. Source of the bytecode-format and HPy bridging patterns that protoST reuses.
+Four language runtimes (protoJS, protoPython, protoST, protoClojure) and protoCpp's C++ examples are built on protoCore.
+
+| Project | Role | Repository |
+|---|---|---|
+| protoCore | C++20 object model and runtime kernel: immutable structures, concurrent GC, GIL-free threads | https://github.com/numaes/protoCore |
+| protoJS | JavaScript runtime on protoCore | https://github.com/gamarino/protoJS |
+| protoPython | Python 3 runtime (protopy) and ahead-of-time compiler (protopyc) on protoCore | https://github.com/gamarino/protoPython |
+| protoST | Smalltalk-inspired actor language on protoCore | https://github.com/gamarino/protoST |
+| protoClojure | Clojure dialect on protoCore (early stage) | https://github.com/gamarino/protoClojure |
+| protoCpp | Examples and benchmarks using protoCore directly from C++ | https://github.com/gamarino/protoCpp |
+
+protoST extends protoJS's `Deferred` / `CPUThreadPool` patterns into a full
+actor model and reuses protoPython's bytecode-format and HPy bridging patterns.
 
 ## Why "protoST"?
 
@@ -436,17 +450,11 @@ builds every generator enabled for the host OS.
 
 ## The Swarm of One
 
-**The Swarm of One** enables a paradigm shift in software development. protoST
-went from an approved design to a complete actor-native Smalltalk runtime —
-non-local return, a full exception protocol, a collection hierarchy, a
-cooperative-yield scheduler, an interactive REPL, and a Debug Adapter Protocol
-debugger — in record time. By orchestrating a swarm of specialized AI agents, a
-single architect has built a runtime where Smalltalk objects share the same
-64-byte cell DNA as protoCore, protoJS, and protoPython. This is the
-democratization of high-level engineering: bridging language paradigms without
-the traditional overhead of massive R&D teams.
+protoST is designed and maintained by a single architect, Gustavo Marino,
+working with AI coding agents that draft code, tests and documentation under
+human review. As of 2026-09-15 the repository has three release tags
+(v0.1.0 to v0.3.0) and 785 `ctest` cases.
 
 ## License
 
-protoST is released under the [MIT License](LICENSE) — the same licence as
-protoCore, protoJS, and protoPython.
+Copyright (c) 2023-2026 Gustavo Marino. Released under the MIT License; see [LICENSE](LICENSE).

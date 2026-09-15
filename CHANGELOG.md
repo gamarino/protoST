@@ -3,6 +3,74 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
+## [Unreleased]
+
+Changes committed after the `v0.3.0` tag.
+
+### Language
+
+- **Call-form sends and method declarations** (commit `2af8c5c`).
+  `recv name(p1, p2, k1 = v1)` sends and `Class >> name(p1, k1 = default)`
+  declarations follow the protoCore method convention (positional arguments
+  plus named arguments), so methods exposed by other protoCore runtimes are
+  callable without selector mangling. Named-argument defaults are evaluated
+  at call time. A class cannot host both a unary `>> bar` and a call-form
+  `>> bar(...)`; actor receivers do not accept call-form sends yet.
+- **Class variables** (commit `6b3cf39`). A non-empty
+  `classVariableNames:` clause is honoured: each name is installed on the
+  class and readable from instance and class methods, including in
+  subclasses. Assignment is allowed only from class-side methods; an
+  instance-side assignment is a compile-time error. Closes D19 at that scope.
+
+### Actors
+
+- **Three priority bands** (commit `3efb31d`). `asHighPriorityActor` and
+  `asLowPriorityActor` join `asActor` (Medium, the default). Workers drain
+  strictly by priority — High, then Medium, then Low — with the
+  single-method invariant unchanged in every band. There is no starvation
+  guard. See `docs/tutorial/10-actors-and-futures.md` §10.11 and
+  `examples/actors/05_priority_bands.st`.
+
+### Runtime
+
+- **Blocking OS calls run inside `ProtoContext::UnmanagedScope`** (commit
+  `481a413`): `Object>>sleep:`, REPL input and `:load` file reads, the DAP
+  server's message read and the CLI debugger prompt. A garbage-collector
+  stop-the-world phase no longer waits for a thread blocked in these calls.
+- **`doesNotUnderstand:` errors name the receiver's class** (commit
+  `0075449`), e.g. `doesNotUnderstand: fooBar (receiver class: SmallInteger)`.
+
+### Performance
+
+- The compiler inlines `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:` and
+  `whileTrue:` with literal blocks (commit `0d396ca`), and
+  `start to: end do: [:i | body]` with a literal one-argument block (commit
+  `ea5c952`).
+- SmallInteger fast-path opcodes for `+ - <= < >= > =` (commit `b623448`).
+- Dictionary key hashes are canonicalised through the symbol table, which
+  enables the rope-aware `,` concatenation fast path (commit `8dd93f2`).
+- Cheaper frame setup (commits `ac1e8b4`, `2c0ca61`), a single-guard fast
+  path for `on:do:` (commit `f6a1aa2`) and cached attribute-key symbols in
+  the exception primitives (commit `dad27b9`).
+- Dated reports for this work are in `benchmarks/reports/` (2026-05-24).
+
+### Fixes
+
+- Inlined conditionals and loops reject non-Boolean receivers with
+  `doesNotUnderstand:`, as the non-inlined sends do, through the new
+  `ASSERT_BOOL_OR_DNU` opcode (commit `cf2ebc3`).
+
+### Known issues
+
+- Open bug D24 (`Compiler::isCaptured` walks past method-scope boundaries)
+  is recorded in `docs/STATUS.md`.
+- The large-rope garbage-collector issue (K2) is fixed in protoCore; see
+  [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md).
+
+### Tests
+
+- 753 → 785 `ctest` cases (313 conformance, 42 examples, 9 CLI, 421 unit).
+
 ## 0.3.0 — yieldable iteration (2026-05-24)
 
 Adds `doYielding:` — the compiler-recognised yieldable counterpart of
@@ -165,7 +233,7 @@ companion release):
 ## 0.1.0 — Initial release (2026-05-22)
 
 The first public release of **protoST** — an actor-native Smalltalk runtime
-built on the [protoCore](../protoCore) kernel.
+built on the [protoCore](https://github.com/numaes/protoCore) kernel.
 
 ### Language
 

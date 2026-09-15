@@ -28,7 +28,9 @@ possible. The measure of success is not "does it match Smalltalk-80" but
 
 ## Where protoST stands today
 
-Phases F1–F8 are complete, plus a backlog hardening pass:
+Phases F1–F8 are complete, plus a backlog hardening pass. Tracks 1–11 below
+are also complete; each has a `trackN-complete` git tag (`track1-complete` …
+`track11-complete`). The latest release tag is `v0.3.0`.
 
 | Area | Status |
 |------|--------|
@@ -43,21 +45,23 @@ Phases F1–F8 are complete, plus a backlog hardening pass:
 | Wide bytecode operands (no 256-local ceiling) | ✅ |
 | `printString` | ✅ |
 
-What is **missing** is what this roadmap is about: a complete language core,
-a real collection hierarchy, a standard library, a defensible test suite, and
-the onboarding material to make protoST approachable.
+Tracks 1–11 (a complete language core, the collection hierarchy, a standard
+library, a conformance suite, onboarding material, packaging and benchmarks)
+are kept below as a record of what each track delivered. The open work is
+Phase 2 (Tracks 12–17) and the digital-twin layer.
 
 ## How this roadmap works
 
-The project uses a **spec → plan → implementation** flow (see
-`docs/superpowers/`): a track is first specified, then broken into a
-bite-sized plan, then implemented task-by-task with review. A contributor
-picking up a track should:
+The project uses a **spec → plan → implementation** flow: a track is first
+specified, then broken into a small plan, then implemented with review. The
+design documents written for Tracks 1–11 are kept in
+[`docs/archive/design-specs/`](archive/design-specs/README.md) as examples of
+the format. A contributor picking up a track should:
 
 1. Open an issue describing the slice they want to take.
-2. Write (or extend) the spec for it under `docs/superpowers/specs/`.
-3. Turn it into a plan under `docs/superpowers/plans/`.
-4. Implement against the plan, with tests, keeping the suite green.
+2. Write (or extend) a design note for it in the issue or pull request.
+3. Break it into small, reviewable steps.
+4. Implement them with tests, keeping the suite green.
 
 **Guiding principle — minimal decoration over protoCore.** Before building a
 mechanism in protoST, check whether protoCore already provides it (collections,
@@ -182,14 +186,22 @@ suite must be designed **independently of the implementation**:
 - Cover the actor/concurrency model, GC-rooting under pressure, and the
   non-standard extensions explicitly.
 
-**Why it matters:** "188 tests pass" currently measures regression, not
-correctness. This track is what lets the project make honest claims.
+**Why it matters:** when this track was written, the suite had 188 tests
+written alongside the code, which measured regression rather than correctness.
+The conformance suite derived from `docs/LANGUAGE.md` is what lets the project
+make defensible claims. As of 2026-09-15, `ctest -N` lists 785 cases, 313 of
+them conformance tests.
 
 **Dependencies:** runs alongside everything; the spec should start now and
 grow with each track.
 **Size:** large, ongoing.
 
-### Track 7 — Onboarding: examples & tutorials
+### Track 7 — Onboarding: examples & tutorials — ✅ done
+
+**Status:** complete (tag `track7-complete`). The onboarding goal is delivered
+by the dual-audience tutorial (Track 8) and the example set (Track 9), which
+includes two digital-twin simulations; the tagged commit also added the REPL
+meta-commands (`:load`, `:reset`, `:vars`, `:time`).
 
 **Goal:** make protoST approachable for developers coming from JavaScript or
 Python.
@@ -255,7 +267,8 @@ illustrations through genuine end-to-end programs — a recursive-descent
 calculator, an RPN interpreter, a Monte-Carlo pi estimate, a JSON data
 transform and two digital-twin simulations. Every example carries an
 `"EXPECT: …"` directive and is registered as a CTest smoke case via
-`run_conformance.sh` (`ctest -R '^examples/'`, 40/40 green).
+`run_conformance.sh` (`ctest -R '^examples/'`; 40/40 green when the track
+closed, 42 cases registered as of 2026-09-15).
 
 **Goal:** an extensive set of complete, idiomatic, runnable protoST programs,
 covering every feature: the object model, blocks and closures, collections,
@@ -490,9 +503,13 @@ runtime stays a small mechanism, the platform is modules.
 **Goal:** bring message throughput and single-thread speed toward competitive —
 "soft-real-time, better than Java" is the bar.
 
-protoST is a young runtime; today's numbers (≈7,700 round-trip messages/second,
-≈20× slower than CPython single-thread) reflect youth, not an architectural
-ceiling. The architecture has headroom — no GIL, lock-free mailbox and `Future`
+protoST is a young runtime. When this track was written it measured about
+7,700 round-trip messages/second and was about 20× slower than CPython
+single-thread. The 2026-05-24 reports measure 50–70 K msg/s actor messaging
+([`2026-05-24-actor-messaging.md`](../benchmarks/reports/2026-05-24-actor-messaging.md))
+and a geomean of 2.83× CPython on the single-thread comparable suite
+([`2026-05-24-perf-after-protocore-ndebug.md`](../benchmarks/reports/2026-05-24-perf-after-protocore-ndebug.md)).
+The architecture has headroom — no GIL, lock-free mailbox and `Future`
 paths. Continuous work: pool / inline the per-message envelope, elide the
 `Future` for fire-and-forget sends, cheapen the scheduler, and over time the
 interpreter (faster dispatch, eventually a JIT). This is a **continuous track**,
@@ -560,6 +577,10 @@ out of the language-core roadmap — it is the application layer the core
 enables.
 
 ## Suggested ordering
+
+The ordering below was the plan for Tracks 1–11; all eleven are now complete.
+It is kept for reference. The ordering for the open work is the Phase 2
+paragraph that follows.
 
 ```
         Track 1 (core: non-local return → exceptions)   ── highest priority

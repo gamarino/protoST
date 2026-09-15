@@ -12,9 +12,10 @@
 > *only* this document and know how protoST is supposed to behave, without
 > reading the implementation.
 >
-> Reference point: commit `27cfda2`, 334/334 tests passing. Phases F1–F8 plus
-> Track 1 (non-local return, exceptions) and Track 2 (collections) are
-> complete.
+> Originally written at commit `27cfda2`, when Phases F1–F8 plus Track 1
+> (non-local return, exceptions) and Track 2 (collections) were complete, and
+> extended as later features landed. For the current test count and the state
+> of each item, see `docs/STATUS.md`.
 
 ---
 

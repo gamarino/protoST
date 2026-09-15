@@ -91,7 +91,7 @@ enum class Op : uint8_t {
     // pops `1 + nPos + nNamed` values (receiver + positionals in source
     // order + named values in alphabetical-key order), looks up the bare
     // `<name>` attribute on the receiver, and dispatches with the protoCore
-    // method convention. See docs/superpowers/specs/2026-06-13-protocore-call-syntax.md.
+    // method convention. See docs/archive/design-specs/2026-06-13-protocore-call-syntax.md.
     SEND_CALL          = 39, // arg = const-pool index of mangled call selector
     // Extend for >256-index args
     EXTEND          = 254,

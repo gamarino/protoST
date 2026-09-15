@@ -8,7 +8,7 @@
 // fresh ExecutionEngine via invokeBlock — so `^` must unwind ACROSS an engine
 // boundary as a NonLocalReturn).
 //
-// See docs/superpowers/specs/2026-05-20-non-local-return.md.
+// See docs/archive/design-specs/2026-05-20-non-local-return.md.
 
 #include <catch2/catch_all.hpp>
 

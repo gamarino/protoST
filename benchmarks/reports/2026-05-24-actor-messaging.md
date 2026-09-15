@@ -30,9 +30,9 @@ the single-main-thread producer bottleneck of `mt100a`; in practice it
 **does not on this hardware** — each driver actor pays a `doYielding:`
 cooperative yield + resume cost per element that cancels the saved
 producer-bottleneck cost. The architectural promise from
-`docs/superpowers/specs/2026-05-23-multiproducer-blocker.md` of ~430 K
+`docs/archive/design-specs/2026-05-23-multiproducer-blocker.md` of ~430 K
 msg/s when multi-producer lands is **not borne out empirically**: lifting
-the producer cuello surfaced a different per-driver cost ceiling.
+the producer bottleneck surfaced a different per-driver cost ceiling.
 
 ## Multi-producer scaling sweep
 
