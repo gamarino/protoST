@@ -1,9 +1,9 @@
 # protoST Roadmap
 
-> **This is a seed.** protoST today is a working foundation, not a finished
-> language. This document lays out where it goes next and is meant to be
-> **driven by the community** — every track below is something a contributor
-> can pick up. Treat it as a living document: propose changes via pull request.
+> protoST is a working language runtime, not a finished one. This document
+> records what the completed tracks delivered and lays out the open work; every
+> open track is something a contributor can pick up. Propose changes via pull
+> request.
 
 ## What protoST is (and is not)
 
@@ -75,7 +75,11 @@ core already does is a regression, not a feature.
 Each track is independent enough to be owned by a different contributor or
 group. Dependencies are noted; respect them.
 
-### Track 1 — Language core completeness
+### Track 1 — Language core completeness — ✅ done
+
+**Status:** complete (tag `track1-complete`): non-local return and the full
+exception protocol — `signal`, `on:do:`, `return:` / `resume:` / `retry` /
+`pass`, `ensure:` / `ifCurtailed:` and UMD exception translation.
 
 **Goal:** make protoST expressive enough to write real programs.
 
@@ -93,7 +97,11 @@ single highest-priority track — it unblocks almost everything else.
 **Dependencies:** none (non-local return first, then exceptions).
 **Size:** large. Good first slice: non-local return alone.
 
-### Track 2 — The collection hierarchy
+### Track 2 — The collection hierarchy — ✅ done
+
+**Status:** complete (tag `track2-complete`): `Array`, `OrderedCollection`,
+`Set`, `Bag`, `Dictionary` and `Interval`; the `do:` / `collect:` / `select:` /
+`inject:into:` iteration protocol; the `#()` and `{}` literals.
 
 **Goal:** a real Smalltalk collection protocol, built on protoCore primitives.
 
@@ -115,7 +123,11 @@ experience. It also makes the standard library possible.
 **Dependencies:** blocks (done); benefits from exceptions (`detect:` signals).
 **Size:** large; naturally splits per collection class.
 
-### Track 3 — Advanced object model (the protoCore showcase)
+### Track 3 — Advanced object model (the protoCore showcase) — ✅ done
+
+**Status:** complete (tag `track3-complete`): extensible classes from modules,
+multiple inheritance and mixins via `uses:`, and runtime behaviour composition
+via `addBehavior:` (see D21 in [`STATUS.md`](STATUS.md) for its limit).
 
 **Goal:** expose object-model capabilities that go *beyond* standard Smalltalk
 — this is where protoST most directly demonstrates protoCore.
@@ -139,7 +151,10 @@ track — capabilities JS and Python classes do not have in the same form.
 (done).
 **Size:** medium-large.
 
-### Track 4 — Standard library ("batteries included")
+### Track 4 — Standard library ("batteries included") — ✅ done
+
+**Status:** complete (tag `track4-complete`): the `lib/` infrastructure,
+`Stream`, the math protocol, `Random`, `JSON` and `Time`.
 
 **Goal:** a Python-style standard library — the modules every program needs.
 
@@ -154,7 +169,12 @@ module is an independent, self-contained contribution.
 **Dependencies:** collections (Track 2), exceptions (Track 1), modules (done).
 **Size:** open-ended; one module = one contribution.
 
-### Track 5 — Cross-language UMD interop
+### Track 5 — Cross-language UMD interop — ✅ done
+
+**Status:** complete (tag `track5-complete`) on the consumer side: protoST
+imports modules from a foreign UMD provider, verified against a stand-in
+provider, and the strategy is documented in [`INTEROP.md`](INTEROP.md). A live
+process hosting several runtimes at once is follow-up work.
 
 **Goal:** import objects/classes defined in protoJS or protoPython into
 protoST (and vice-versa) when they share a `ProtoSpace`.
@@ -171,12 +191,18 @@ silos.
 **Dependencies:** F5 v2 (done); coordination with protoJS / protoPython.
 **Size:** medium; needs cross-project design.
 
-### Track 6 — A complete, defensible test suite
+### Track 6 — A complete, defensible test suite — ✅ done
+
+**Status:** complete (tag `track6-complete`): the language reference
+[`LANGUAGE.md`](LANGUAGE.md) and a 214-test conformance suite derived from it;
+the five discrepancies the suite uncovered were fixed. The conformance suite
+keeps growing with each feature.
 
 **Goal:** a test suite that proves protoST behaves correctly — not one that
 merely confirms "what was implemented is what was implemented".
 
-Today's tests were largely written alongside the code they test. A defensible
+When this track was written, the tests were largely written alongside the code
+they test. A defensible
 suite must be designed **independently of the implementation**:
 
 - Write a **protoST language specification** — the expected behavior of the
@@ -192,8 +218,8 @@ The conformance suite derived from `docs/LANGUAGE.md` is what lets the project
 make defensible claims. As of 2026-09-15, `ctest -N` lists 785 cases, 313 of
 them conformance tests.
 
-**Dependencies:** runs alongside everything; the spec should start now and
-grow with each track.
+**Dependencies:** runs alongside everything; the specification
+(`docs/LANGUAGE.md`) grows with each track.
 **Size:** large, ongoing.
 
 ### Track 7 — Onboarding: examples & tutorials — ✅ done
@@ -259,8 +285,8 @@ Tracks 3–5 land.
 
 ### Track 9 — A comprehensive example set — ✅ done
 
-**Status:** complete. 40 complete, idiomatic, runnable protoST programs live
-under `examples/`, grouped by theme (`basics/`, `blocks/`, `collections/`,
+**Status:** complete. The track added 40 complete, idiomatic, runnable protoST
+programs under `examples/`, grouped by theme (`basics/`, `blocks/`, `collections/`,
 `exceptions/`, `nonlocal/`, `actors/`, `stdlib/`, `modules/`, `programs/`) and
 indexed by `examples/README.md`. They span focused single-feature
 illustrations through genuine end-to-end programs — a recursive-descent
@@ -598,14 +624,13 @@ paragraph that follows.
   Track 11 (performance benchmarks)  ── needs the build + the actor model
 ```
 
-A reasonable **1.0 milestone**: language core complete (Track 1), the
-collection hierarchy (Track 2), an essential standard library (a first slice
-of Track 4), a defensible test suite (Track 6), and onboarding — the tutorial
-and example set (Tracks 7–9). The showcase tracks (3, 5) and the digital-twin
-layer can land before or after 1.0 — they are what make protoST *interesting*,
-but 1.0 is what makes it *usable*.
+The plan proposed a **1.0 milestone** of the language core (Track 1), the
+collection hierarchy (Track 2), an essential standard library (Track 4), a
+defensible test suite (Track 6) and onboarding (Tracks 7–9). Those tracks, and
+the showcase tracks (3, 5), are complete; no 1.0 release has been tagged, and
+the digital-twin layer remains open.
 
-**Phase 2 (Tracks 12–17) follows 1.0.** Tracks 1–11 make protoST a usable
+**Phase 2 (Tracks 12–17) is the open work.** Tracks 1–11 make protoST a usable
 *language*; Phase 2 makes it a serious actor *runtime*. Within Phase 2 the
 core-runtime ordering is: Track 12 (fair scheduling) and Track 15
 (non-blocking I/O) first — without them the actor model is not viable under
@@ -621,4 +646,4 @@ the spec → plan → implementation flow, and keep the suite green. Small,
 self-contained slices (one collection class, one stdlib module, one tutorial)
 are the easiest way in.
 
-This roadmap is a seed. Improve it.
+Improvements to this roadmap are welcome.

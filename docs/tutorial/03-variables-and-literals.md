@@ -125,7 +125,7 @@ $ ./build/protost -e '-5 abs'
 ```
 
 Small integers are stored inline (tagged) for speed. When a computation
-produces a result too big for the inline range — about 56 bits — it is
+produces a result too big for the inline range — about 54 bits — it is
 **transparently promoted** to a `LargeInteger`, an arbitrary-precision integer.
 You never ask for this; it just happens, and the result stays exact:
 

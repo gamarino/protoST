@@ -50,9 +50,10 @@ nodes, typically built by a long chain of `,` concatenations — could trigger a
 garbage-collector segfault or a "Non-tuple object in tuple node slot" error,
 and protoCore's two stress tests for it were disabled.
 
-This was fixed in protoCore after protoST 0.3.0 (commit `335ef608`,
-2026-05-30, concurrent mark via a per-cycle mutable-shard snapshot). The
-stress tests `SwarmTest.OneMillionConcats` and `SwarmTest.LargeRopeIndexAccess`
-are enabled in protoCore's
+Fixed in protoCore by the concurrent-mark snapshot (`335ef608`, 2026-05-30)
+and the chunked-freelist sweep series (`c3dac9de..11e287a1`); the stress tests
+were re-enabled in `0ee42acf` (2026-06-13). Those tests,
+`SwarmTest.OneMillionConcats` and `SwarmTest.LargeRopeIndexAccess`, are in
+protoCore's
 [`test/SwarmTests.cpp`](https://github.com/numaes/protoCore/blob/master/test/SwarmTests.cpp).
-Build protoST against a protoCore checkout that includes that commit.
+Build protoST against a protoCore checkout that includes those commits.

@@ -63,7 +63,7 @@ Two properties are worth dwelling on, because they make protoST arithmetic
 **Exact exponentiation and factorial.** `raisedTo:` with a non-negative integer
 exponent, and `factorial`, are computed by exact repeated multiplication. Each
 intermediate product promotes to a `LargeInteger` the moment it leaves the
-56-bit `SmallInteger` range — so the answer is *always* exact, never an
+54-bit `SmallInteger` range — so the answer is *always* exact, never an
 overflowed `double`:
 
 ```bash

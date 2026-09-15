@@ -24,7 +24,7 @@ runtime makes a hard compromise there:
 protoST does not compromise. **A message is a pointer.** When one actor hands a
 10 000-node world model to another, nothing is copied and nothing is
 serialized — the receiver, on another core, reads the very same object. And it
-is safe, with **no locks and no caveats**.
+is safe. The message path — send, mailbox and ready queue — takes no locks.
 
 That is possible because of protoCore's object model. A mutable object is not a
 block of mutable memory — it is an *atomic reference to an immutable snapshot*.
@@ -56,7 +56,7 @@ The actor formulation buys three properties that pure FSM dispatch tables do not
 
 1. **Atomicity per event.** The single-method invariant guarantees that two events on the same twin never interleave — the exact reason one writes FSMs in the first place.
 2. **Composition by message passing.** Twins interact by sending messages; futures and their combinators (`&`, `|`, `whenAll:`, `whenAny:`) compose interactions without shared mutable state.
-3. **Concurrency by default.** Ten thousand twins are ten thousand actors. The cooperative scheduler runs them on a worker pool sized to the host's cores. Going from 10 twins to 10 000 needs no code change.
+3. **Concurrency by default.** Each twin is an actor; the cooperative-yield benchmark hosts 1000 actors on two worker threads, and adding twins needs no code change.
 
 Together with the other protoCore runtimes, protoST is designed to form a platform for agent-based / discrete-event simulation:
 
@@ -127,6 +127,14 @@ From [`2026-05-24-actor-messaging.md`](benchmarks/reports/2026-05-24-actor-messa
 | `mt100a` (1 producer → 100 sinks, 1000 rounds = 100 K msgs) | 1.83 s | **54.6 K msg/s** | w=2-4 |
 | `multi_producer.st` (8 drivers × 12 sinks × 1000 rounds = 96 K msgs) | 1.61 s | **59.6 K msg/s** | w=4-6 |
 
+The `mt100a` row differs from the 71.9 K msg/s quoted for 0.2.0 in
+[`CHANGELOG.md`](CHANGELOG.md) and [`docs/STATUS.md`](docs/STATUS.md). That
+figure comes from
+[`2026-05-23-performance.md`](benchmarks/reports/2026-05-23-performance.md),
+added with the 0.2.0 release (commit `deb6b0d`); the table above was measured
+at commit `b623448` for the 2026-05-24 report, which does not analyse the
+difference.
+
 All three patterns land in the 50-70 K band. **Multi-producer does not unlock
 a higher ceiling** on this hardware: each driver's `doYielding:` per-element
 resume cost cancels the saved single-producer bottleneck. An earlier
@@ -137,8 +145,9 @@ selector-resolved-once cache as the next architectural steps.
 
 ### Hardware sensitivity (projection)
 
-The same report projects, without measuring, how the multi-producer peak
-would scale on other CPUs:
+[`2026-05-24-actor-messaging.md`](benchmarks/reports/2026-05-24-actor-messaging.md)
+projects, without measuring, how the multi-producer peak would scale on other
+CPUs:
 
 | host CPU | factor vs 5500U | est. multi-producer peak |
 |---|---|---:|
@@ -256,14 +265,16 @@ importing modules from a foreign UMD provider); a live process hosting
 several runtimes at once is the follow-up described in
 [`docs/INTEROP.md`](docs/INTEROP.md).
 
-### 3. No GIL, no data races, no locks — by data-model construction
+### 3. No GIL, no data races, no locks on the message path — by data-model construction
 
 protoPython runs Python without a GIL. protoST's actors run truly
 in parallel on a worker pool. And the absence of data races does NOT
 require programmer discipline — it falls out of the object model:
 every read sees an internally consistent snapshot, every write
 installs a new one, and the actor invariant (one method at a time per
-actor) is enforced by the scheduler, not by the user.
+actor) is enforced by the scheduler, not by the user. A read-modify-write
+on shared state still needs `Atom` (or single-actor ownership) to avoid lost
+updates.
 
 ### When does protoST lose?
 
@@ -321,8 +332,8 @@ the garbage collector.
 
 The test suite has **785 `ctest` cases** (313 conformance, 42 examples, 9 CLI,
 421 unit), counted with `ctest -N` on 2026-09-15; the commit that added the
-priority bands reports 785/785 passing. One open bug (D24) is tracked in
-[`docs/STATUS.md`](docs/STATUS.md).
+priority bands reports 785/785 passing. No open bugs are currently tracked in
+[docs/STATUS.md](docs/STATUS.md).
 
 **Open performance work**: closing the BEAM messaging gap. The 2026-05-24
 reports identify, largest expected impact first: a per-actor message slab
@@ -379,7 +390,7 @@ first (it provides `libprotoCore`).
 **Debian / Ubuntu** — install the `.deb`:
 
 ```bash
-sudo apt install ./protocore-<version>.deb     # the protoCore dependency
+sudo apt install ./protoCore-<version>-Linux.deb # the protoCore dependency
 sudo apt install ./protost-<version>-Linux.deb # protoST itself
 # or, lower-level:
 sudo dpkg -i protost-<version>-Linux.deb && sudo apt-get install -f
@@ -441,8 +452,9 @@ Four language runtimes (protoJS, protoPython, protoST, protoClojure) and protoCp
 | protoClojure | Clojure dialect on protoCore (early stage) | https://github.com/gamarino/protoClojure |
 | protoCpp | Examples and benchmarks using protoCore directly from C++ | https://github.com/gamarino/protoCpp |
 
-protoST extends protoJS's `Deferred` / `CPUThreadPool` patterns into a full
-actor model and reuses protoPython's bytecode-format and HPy bridging patterns.
+Its actor model was informed by protoJS's `Deferred` / `CPUThreadPool` design
+(see the references of the
+[original design specification](docs/archive/design-specs/2026-05-19-protost-design.md)).
 
 ## Why "protoST"?
 

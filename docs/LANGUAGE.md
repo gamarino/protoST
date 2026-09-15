@@ -1721,7 +1721,7 @@ arithmetic, which gives the tower three properties for free:
 - **Mixed-mode coercion.** An operation with one `Float` operand produces a
   `Float`: `1 + 2.5` → `3.5`, `2.5 + 1` → `3.5`, `1 / 2.0` → `0.5`.
 - **Transparent overflow promotion.** An integer result that exceeds the
-  56-bit inline `SmallInteger` range is automatically promoted to a heap
+  54-bit inline `SmallInteger` range is automatically promoted to a heap
   arbitrary-precision `LargeInteger` and stays exact — a `whileTrue:` loop
   computing `25!` yields the exact `15511210043330985984000000`, not a
   wrapped value. The boundary is invisible to the program.
@@ -1780,7 +1780,7 @@ Class-side **constants** are bound on `Float`: `Float pi`, `Float e`,
 > **Exact exponentiation and factorial.** `raisedTo:` with a non-negative
 > integer exponent, and `factorial`, are computed by exact repeated
 > multiplication, so each intermediate product promotes to a `LargeInteger`
-> the moment it leaves the 56-bit `SmallInteger` range — `2 raisedTo: 100` and
+> the moment it leaves the 54-bit `SmallInteger` range — `2 raisedTo: 100` and
 > `30 factorial` are exact arbitrary-precision integers, never an overflowed
 > `double`. A `Float` exponent (or a negative integer exponent) routes through
 > libm `pow` and answers a `Float`.
@@ -1985,10 +1985,9 @@ and (once fixed) the closing commit for each.
 **Bugs** — broken behaviour that contradicts the language's own intent or
 examples:
 
-> _No open bugs. The last open bugs — D3, D5, D8 — were fixed in `MNT-b2`
-> (see below)._
+> _No open bugs are currently tracked (see `docs/STATUS.md`)._
 
-> **Fixed (commit `MNT-b1`).** D1 (negative numeric literals), D13 (the CLI no
+> **Fixed (commit `2544a45`).** D1 (negative numeric literals), D13 (the CLI no
 > longer advertises an unimplemented `compile` subcommand), D15
 > (`classVariableNames:` was emitting a compile-time diagnostic instead of
 > being silently discarded — superseded 2026-06-13 when D19 closed and the
@@ -1996,14 +1995,14 @@ examples:
 > (`==`/`~~` bound on `Object`; `=`/`~=` universal with value-equality
 > overrides) are resolved — see `docs/STATUS.md` *Closed items*.
 
-> **Fixed (commit `MNT-b2`).** D3 (an unresolved selector signals a catchable
+> **Fixed (commit `c964f4e`).** D3 (an unresolved selector signals a catchable
 > `MessageNotUnderstood`, a subclass of `Error`), D5 (class-side methods are
 > isolated from instances — a `ClassName class >> sel` method is no longer
 > reachable from an instance) and D8 (a `^` in a block whose home method has
 > already returned signals a catchable `BlockCannotReturn`, a subclass of
 > `Error`) are resolved — see `docs/STATUS.md` *Closed items*.
 
-> **Fixed (commit `MNT-c`).** D11 (`Float` and mixed-mode arithmetic) and D20
+> **Fixed (commit `42c4dde`).** D11 (`Float` and mixed-mode arithmetic) and D20
 > (`LargeInteger` arithmetic with transparent overflow promotion) are resolved
 > — the numeric tower now works (see §12.2). The arithmetic primitives delegate
 > to protoCore's own promoting / coercing `ProtoObject` arithmetic and are

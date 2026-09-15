@@ -62,8 +62,6 @@ Changes committed after the `v0.3.0` tag.
 
 ### Known issues
 
-- Open bug D24 (`Compiler::isCaptured` walks past method-scope boundaries)
-  is recorded in `docs/STATUS.md`.
 - The large-rope garbage-collector issue (K2) is fixed in protoCore; see
   [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md).
 
@@ -71,7 +69,7 @@ Changes committed after the `v0.3.0` tag.
 
 - 753 → 785 `ctest` cases (313 conformance, 42 examples, 9 CLI, 421 unit).
 
-## 0.3.0 — yieldable iteration (2026-05-24)
+## 0.3.0 — yieldable iteration (2026-05-23)
 
 Adds `doYielding:` — the compiler-recognised yieldable counterpart of
 `do:`. Lifts the old "no `wait` inside a `do:` block of an actor
@@ -133,18 +131,18 @@ method" limitation that blocked driver-actor multi-producer patterns.
 
 ### Test count
 
-752 → 753: one new conformance test for the race fix
-(`tests/conformance/do_yielding_actor.st` — 3 sinks × driver-actor
-with `doYielding:` containing `wait`, multi-worker stable).
+751 → 753: two new conformance tests — `tests/conformance/do_yielding.st`
+for the `doYielding:` desugar, and `tests/conformance/do_yielding_actor.st`
+for the race fix (3 sinks × driver-actor with `doYielding:` containing
+`wait`, multi-worker stable).
 
 ## 0.2.0 — Performance pass (2026-05-23)
 
-A focused overnight optimisation pass on the actor dispatch path.
+An optimisation pass on the actor dispatch path.
 Headline: `mt100a` (the round-trip throughput benchmark) moves from
-**~ 30 K msg/s** to **71.9 K msg/s** on a 6-core notebook host — a
-**+143 %** improvement, putting protoST in the 100 K+ msg/s class on
-any modern desktop (projection: 130-150 K msg/s on a Ryzen 7700X /
-i9-13900K).
+**~ 30 K msg/s** to **71.9 K msg/s** on the Ryzen 5 5500U notebook — a
+**+143 %** improvement. The report projects, without measuring, about
+135–150 K msg/s on a Ryzen 7 7700X / Intel i9-13900K.
 
 Three concurrent-runtime bug fixes also landed alongside the
 optimisations — each was a real correctness improvement uncovered by
@@ -156,9 +154,9 @@ the performance investigation, not a tuning knob.
 |---|---|---|---|
 | `mt100k` w=1  | ~ 20.6 K msg/s | 36.6 K        | +78 %  |
 | `mt100a` w=1  | ~ 29.6 K       | 68.5 K        | +131 % |
-| `mt100a` w=2  | — (not optimal) | **71.9 K**    | best ever |
+| `mt100a` w=2  | — (not optimal) | **71.9 K**    | peak |
 | `mt100a` w=4  | regression       | 71.9 K (no regression) | fixed |
-| `saturation_big` w=6 scaling | regression at w=8 | **3.88×** (near-ideal 4× on 6 cores) | fixed |
+| `saturation_big` w=6 scaling | regression at w=8 | **3.88×** at w=6 | fixed |
 
 Full report and projections to other hardware:
 [`benchmarks/reports/2026-05-23-performance.md`](benchmarks/reports/2026-05-23-performance.md).
@@ -205,8 +203,7 @@ Full report and projections to other hardware:
 
 ### protoCore changes (companion)
 
-Three commits in the protoCore kernel (the kernel `0.1.0 → 0.2.0`
-companion release):
+Companion protoCore commits (`ea2c17f4`, `ed38a499`, `90aade34`):
 
 - **GC no longer triggers on freelist exhaustion when no heap cap
   is set.** Pre-fix, every freelist refill woke the GC unconditionally
