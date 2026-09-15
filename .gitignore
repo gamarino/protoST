@@ -32,3 +32,6 @@ Testing/
 *.swp
 *~
 .DS_Store
+
+# Python bytecode cache produced by the benchmark scripts
+/benchmarks/__pycache__/
