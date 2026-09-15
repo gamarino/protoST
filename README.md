@@ -330,7 +330,7 @@ and method declarations, class variables, the three actor priority bands, and
 blocking OS calls wrapped in protoCore's unmanaged scope so they do not stall
 the garbage collector.
 
-The test suite has **785 `ctest` cases** (313 conformance, 42 examples, 9 CLI,
+The test suite has **786 `ctest` cases** (314 conformance, 42 examples, 9 CLI,
 421 unit), counted with `ctest -N` on 2026-09-15; the commit that added the
 priority bands reports 785/785 passing. No open bugs are currently tracked in
 [docs/STATUS.md](docs/STATUS.md).
@@ -465,7 +465,7 @@ Its actor model was informed by protoJS's `Deferred` / `CPUThreadPool` design
 protoST is designed and maintained by a single architect, Gustavo Marino,
 working with AI coding agents that draft code, tests and documentation under
 human review. As of 2026-09-15 the repository has three release tags
-(v0.1.0 to v0.3.0) and 785 `ctest` cases.
+(v0.1.0 to v0.3.0) and 786 `ctest` cases.
 
 ## License
 

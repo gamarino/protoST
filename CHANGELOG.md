@@ -56,6 +56,12 @@ Changes committed after the `v0.3.0` tag.
 
 ### Fixes
 
+- `--help` and engine errors no longer show internal milestone labels such
+  as "(F7)", "— F2" or "F2 limit". A send with more than 8 arguments now
+  reports "send of #<selector> has <n> arguments; at most 8 are supported per
+  send", and a non-unary send to a value attribute reports "#<selector>: the
+  attribute is a value, not a method; only unary sends read value
+  attributes".
 - Inlined conditionals and loops reject non-Boolean receivers with
   `doesNotUnderstand:`, as the non-inlined sends do, through the new
   `ASSERT_BOOL_OR_DNU` opcode (commit `cf2ebc3`).
@@ -67,7 +73,7 @@ Changes committed after the `v0.3.0` tag.
 
 ### Tests
 
-- 753 → 785 `ctest` cases (313 conformance, 42 examples, 9 CLI, 421 unit).
+- 753 → 786 `ctest` cases (314 conformance, 42 examples, 9 CLI, 421 unit).
 
 ## 0.3.0 — yieldable iteration (2026-05-23)
 

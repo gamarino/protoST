@@ -215,7 +215,7 @@ suite must be designed **independently of the implementation**:
 **Why it matters:** when this track was written, the suite had 188 tests
 written alongside the code, which measured regression rather than correctness.
 The conformance suite derived from `docs/LANGUAGE.md` is what lets the project
-make defensible claims. As of 2026-09-15, `ctest -N` lists 785 cases, 313 of
+make defensible claims. As of 2026-09-15, `ctest -N` lists 786 cases, 314 of
 them conformance tests.
 
 **Dependencies:** runs alongside everything; the specification

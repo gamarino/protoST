@@ -14,7 +14,7 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Test suite:** 785 `ctest` cases (313 conformance, 42 examples, 9 CLI,
+- **Test suite:** 786 `ctest` cases (314 conformance, 42 examples, 9 CLI,
   421 unit), counted with `ctest -N` after reconfiguring on 2026-09-15.
   The commit that added the priority bands (`3efb31d`, 2026-06-15) reports
   785/785 passing. Earlier: 753/753 at 0.3.0; 751/751 at 0.2.0 and at

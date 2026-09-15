@@ -945,7 +945,10 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
 
                 if (static_cast<int>(f.sp) < argcOp + 1)
                     throw std::runtime_error("SEND with insufficient stack");
-                if (argcOp > 8) throw std::runtime_error("F2 limit: <=8 args per send");
+                if (argcOp > 8)
+                    throw std::runtime_error(
+                        "send of #" + selStr + " has " + std::to_string(argcOp) +
+                        " arguments; at most 8 are supported per send");
                 // F6 v3 E3: pop args/receiver off the operand stack. `pop`
                 // only decrements sp — the values remain physically in the
                 // frame's slot region, which the GC traces in full (the whole
@@ -1474,7 +1477,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         break;
                     }
                     throw std::runtime_error(
-                        "non-primitive method in F2 (F3 work): " + selStr);
+                        "#" + selStr + ": the attribute is a value, not a method; "
+                        "only unary sends read value attributes");
                 }
                 long long marker = attr->asLong(ctx);
                 if (!(marker & (1LL << 62))) {
@@ -1485,7 +1489,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         DISPATCH_DIRECT();
                         break;
                     }
-                    throw std::runtime_error("non-primitive method in F2 (F3 work)");
+                    throw std::runtime_error(
+                        "#" + selStr + ": the attribute is a value, not a method; "
+                        "only unary sends read value attributes");
                 }
                 int primIdx = static_cast<int>(marker & ((1LL << 62) - 1));
                 auto fn = rt_.registry().at(primIdx);
