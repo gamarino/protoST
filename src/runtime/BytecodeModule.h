@@ -1,5 +1,6 @@
 #pragma once
 #include "Opcodes.h"
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -29,6 +30,11 @@ public:
         std::string sval;
         size_t      blockIndex = 0;  // for BlockRef
     };
+
+    BytecodeModule() = default;
+    ~BytecodeModule();
+    BytecodeModule(const BytecodeModule&) = delete;
+    BytecodeModule& operator=(const BytecodeModule&) = delete;
 
     // emission
     // `line` is the 1-based source line the instruction originates from;
@@ -70,19 +76,65 @@ public:
     const std::string&  constSymbol(size_t i)  const { return consts_[i].sval; }
     ConstKind           constKind(size_t i)    const { return consts_[i].kind; }
 
+    // ---------------------------------------------------------------------
+    // Per-constant runtime caches (D25)
+    //
+    // A module is immutable once it executes, but the engine resolves some
+    // constants lazily and caches the result on the module: the interned
+    // symbol (constSym), the mangled instance-variable key (ivSymbol) and the
+    // parsed call-form descriptor (callDescriptor). Several worker threads
+    // can execute a module for the first time at the same moment, so these
+    // caches must be safe for concurrent first use:
+    //
+    //   * All three live in one table with one entry per constant, allocated
+    //     on first use at the module's constant count and published with a
+    //     compare-and-swap. A published table is never resized or freed
+    //     while the module lives, so a reader can never see a freed buffer.
+    //     (Only a hand-built module that gains constants after it first ran
+    //     needs a larger table; that table is published in front of the old
+    //     one, and the old one is kept until the module is destroyed.)
+    //   * Every entry is an atomic. Symbol entries are filled with a plain
+    //     store: racing threads store the same pointer, because interned
+    //     symbols are unique per ProtoSpace and inline symbols are
+    //     bit-identical. Symbols are perpetual (never collected), so caching
+    //     the raw pointer needs no GC root.
+    //   * A call descriptor is parsed off to the side and published with a
+    //     compare-and-swap from null; the loser drops its copy and uses the
+    //     winner's. A published descriptor is immutable.
+    //
+    // The fast paths below are one table load, a bounds check and one slot
+    // load.
+    // ---------------------------------------------------------------------
+
     // Interned symbol for constant-pool entry `i`, cached. The opcodes that
     // resolve a name — SEND_* (the selector), PUSH/STORE_GLOBAL,
     // PUSH/STORE_CAPTURED — run constantly; calling createSymbol (a SymbolTable
     // hash over a freshly parsed rope) on every execution was measured as a
     // dominant message-path cost. The symbol for a given constant never
     // changes, so it is interned once and cached.
-    const proto::ProtoString* constSym(proto::ProtoContext* ctx, size_t i) const;
+    const proto::ProtoString* constSym(proto::ProtoContext* ctx, size_t i) const {
+        if (const ConstCache* c = constCache_.load(std::memory_order_acquire);
+            c && i < c->size) {
+            if (const proto::ProtoString* s =
+                    c->entries[i].sym.load(std::memory_order_acquire))
+                return s;
+        }
+        return constSymSlow(ctx, i);
+    }
 
     // Cached interned "_iv_<name>" symbol for constant-pool entry `i` — the
     // mangled instance-variable storage key (PUSH_INSTVAR / STORE_INSTVAR).
-    // Same rationale as constSym; a separate cache because the key carries
+    // Same rationale as constSym; a separate entry because the key carries
     // the "_iv_" prefix.
-    const proto::ProtoString* ivSymbol(proto::ProtoContext* ctx, size_t i) const;
+    const proto::ProtoString* ivSymbol(proto::ProtoContext* ctx, size_t i) const {
+        if (const ConstCache* c = constCache_.load(std::memory_order_acquire);
+            c && i < c->size) {
+            if (const proto::ProtoString* s =
+                    c->entries[i].ivSym.load(std::memory_order_acquire))
+                return s;
+        }
+        return ivSymbolSlow(ctx, i);
+    }
     size_t              constBlockRef(size_t i)const { return consts_[i].blockIndex; }
 
     // sub-modules
@@ -125,26 +177,33 @@ public:
     int  callPosArity()      const { return callPosArity_; }
     const std::vector<std::string>& callNamedKeys() const { return callNamedKeys_; }
 
-    // Per-const-pool-slot cache for SEND_CALL operand parsing. A SEND_CALL
-    // operand names a Symbol constant whose text follows the mangling
-    // `<name>#<nPos>[#<key1>#<key2>...]`. The runtime parses it once into
-    // (interned name, nPos, sorted-key vector) and caches the parsed form
-    // here, parallel to `symCache_`. Lazily populated by the engine on
-    // first dispatch through the slot.
+    // Parsed form of a SEND_CALL operand. The operand names a Symbol constant
+    // whose text follows the mangling `<name>#<nPos>[#<key1>#<key2>...]`. The
+    // engine parses it once into (interned name, nPos, sorted-key vector) and
+    // publishes the result on the module (see the cache notes above), so later
+    // passes through the same send site skip the string split entirely.
+    // Immutable once published.
     struct CallDescriptor {
         const proto::ProtoString* name = nullptr;
         int nPos = 0;
         std::vector<const proto::ProtoString*> sortedKeys;
         // Original mangle text, used to enrich `doesNotUnderstand:` messages.
         std::string mangled;
-        bool parsed = false;
     };
-    CallDescriptor* callDescriptorSlot(size_t constIdx) const {
-        if (callDescCache_.size() != consts_.size()) {
-            callDescCache_.resize(consts_.size());
-        }
-        return &callDescCache_[constIdx];
+    // The published descriptor for constant `constIdx`, or nullptr when no
+    // thread has published one yet.
+    const CallDescriptor* callDescriptor(size_t constIdx) const {
+        const ConstCache* c = constCache_.load(std::memory_order_acquire);
+        return (c && constIdx < c->size)
+                   ? c->entries[constIdx].callDesc.load(std::memory_order_acquire)
+                   : nullptr;
     }
+    // Publishes `desc` for constant `constIdx` unless a descriptor is already
+    // published, and returns the published descriptor: `desc` itself, or the
+    // one that won the race (in which case `desc` is destroyed). Never null.
+    // The module owns published descriptors.
+    const CallDescriptor* publishCallDescriptor(
+        size_t constIdx, std::unique_ptr<CallDescriptor> desc) const;
 
     // F8-1 / BL-2: source-line mapping. instrLines_ holds one line entry per
     // emitted 2-byte word; instrStartPc_ holds the byte offset of each word.
@@ -212,6 +271,32 @@ public:
     }
 
 private:
+    // One entry per constant; see the cache notes above.
+    struct ConstCacheEntry {
+        std::atomic<const proto::ProtoString*> sym{nullptr};
+        std::atomic<const proto::ProtoString*> ivSym{nullptr};
+        std::atomic<const CallDescriptor*>     callDesc{nullptr};
+    };
+    // A fixed-size table of entries. Owns the descriptors published into it
+    // and the older (smaller) table it replaced, if any.
+    struct ConstCache {
+        ConstCache(size_t n, ConstCache* olderTable)
+            : size(n), entries(new ConstCacheEntry[n]), older(olderTable) {}
+        ~ConstCache();
+        ConstCache(const ConstCache&) = delete;
+        ConstCache& operator=(const ConstCache&) = delete;
+
+        const size_t                       size;
+        std::unique_ptr<ConstCacheEntry[]> entries;
+        ConstCache*                        older;
+    };
+
+    // Returns the published table, publishing one first if there is none or
+    // the published one does not cover constant `i`.
+    const ConstCache& constCacheFor(size_t i) const;
+    const proto::ProtoString* constSymSlow(proto::ProtoContext* ctx, size_t i) const;
+    const proto::ProtoString* ivSymbolSlow(proto::ProtoContext* ctx, size_t i) const;
+
     std::vector<uint8_t>                bytes_;
     std::vector<int>                    instrLines_;   // F8-1: line per word
     std::vector<size_t>                 instrStartPc_; // BL-2: byte start per word
@@ -219,14 +304,10 @@ private:
     std::vector<std::string>            localNames_;  // F8-4: name per local slot
     std::string                         debugName_;   // F8-4: human label
     std::vector<Const>                  consts_;
-    // Lazy per-constant caches of interned symbols (constSym / ivSymbol).
-    // mutable: filled on demand. Hold perennial interned ProtoStrings, valid
-    // for the runtime's ProtoSpace (one runtime per process).
-    mutable std::vector<const proto::ProtoString*> symCache_;
-    mutable std::vector<const proto::ProtoString*> ivSymCache_;
-    // Lazy parsed-call-descriptor cache for SEND_CALL operands. Same
-    // lifetime/visibility rules as symCache_.
-    mutable std::vector<CallDescriptor> callDescCache_;
+    // Per-constant runtime caches (constSym / ivSymbol / callDescriptor).
+    // Null until first use. Holds perennial interned ProtoStrings, valid for
+    // the runtime's ProtoSpace (one runtime per process).
+    mutable std::atomic<ConstCache*>    constCache_{nullptr};
     std::unordered_map<std::string, size_t> symbolIndex_;
     std::vector<std::unique_ptr<BytecodeModule>> blocks_;
     int argCount_ = 0;
@@ -247,13 +328,14 @@ public:
     unsigned int cachedLocalCount(unsigned int argc) const;
 
 private:
-    // Sentinel == UINT32_MAX means "not yet computed". argc is folded
-    // into the cache key because `computeLocalCount` returns max(argc,
-    // maxSlot+1) — different argc values for the same module body
-    // would yield different counts (in practice argc is always the
-    // module's declared argCount so this is just a safety check).
-    mutable unsigned int cachedLocalCount_ = 0xFFFFFFFFu;
-    mutable unsigned int cachedLocalCountArgc_ = 0;
+    // `(argc << 32) | localCount`, or kNoLocalCount when not yet computed.
+    // argc is folded into the cache key because `computeLocalCount` returns
+    // max(argc, maxSlot+1) — different argc values for the same module body
+    // would yield different counts (in practice argc is always the module's
+    // declared argCount so this is just a safety check). One atomic word, so
+    // a concurrent first call never reads a count paired with another argc.
+    static constexpr uint64_t kNoLocalCount = UINT64_MAX;
+    mutable std::atomic<uint64_t> localCountCache_{kNoLocalCount};
 };
 
 } // namespace protoST

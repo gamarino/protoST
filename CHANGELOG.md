@@ -56,6 +56,18 @@ Changes committed after the `v0.3.0` tag.
 
 ### Fixes
 
+- **Heap corruption when several workers ran a method for the first time at
+  the same moment** (D25). The per-module caches of interned selector
+  symbols, instance-variable keys and parsed call-form descriptors were
+  filled lazily without synchronisation; two threads could both reallocate a
+  cache and one wrote into the buffer the other had freed. It showed up as
+  intermittent `malloc(): unaligned tcache chunk detected` /
+  `tcache_thread_shutdown()` aborts (for example in
+  `examples/programs/traffic_intersection.st`), crashes, or an instance
+  variable reading as `nil`. The caches are now fixed-size tables published
+  once with a compare-and-swap and filled through atomics; call descriptors
+  are published immutably. Regression tests: `cli_concurrent_first_call`
+  and two `[bytecode][concurrency]` unit tests.
 - `--help` and engine errors no longer show internal milestone labels such
   as "(F7)", "— F2" or "F2 limit". A send with more than 8 arguments now
   reports "send of #<selector> has <n> arguments; at most 8 are supported per
@@ -73,7 +85,7 @@ Changes committed after the `v0.3.0` tag.
 
 ### Tests
 
-- 753 → 786 `ctest` cases (314 conformance, 42 examples, 9 CLI, 421 unit).
+- 753 → 789 `ctest` cases (314 conformance, 42 examples, 10 CLI, 423 unit).
 
 ## 0.3.0 — yieldable iteration (2026-05-23)
 

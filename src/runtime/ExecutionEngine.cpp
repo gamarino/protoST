@@ -1524,15 +1524,23 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // protoCore-style call-form send (positional + named args).
                 // The operand names a *mangled* selector symbol of the form
                 // `<name>#<nPos>[#<sortedKey1>#<sortedKey2>...]`. We parse it
-                // once per const-pool slot into a CallDescriptor and cache
-                // it on the module (descSlot below), so subsequent passes
-                // through the same send site skip the string split entirely.
+                // once per const-pool slot into a CallDescriptor and publish
+                // it on the module, so subsequent passes through the same
+                // send site skip the string split entirely.
                 Frame& f = frames_.back();
-                auto* descSlot = f.m->callDescriptorSlot(arg);
-                if (!descSlot->parsed) {
+                const BytecodeModule::CallDescriptor* descPtr =
+                    f.m->callDescriptor(arg);
+                if (!descPtr) {
                     // Parse `<name>#<nPos>[#<key1>...]`. Selectors are
                     // never empty; the mangling always yields at least the
                     // two-segment `<name>#0` form for a zero-arg call.
+                    //
+                    // D25: parse into a private descriptor and publish it
+                    // only when complete. Another worker may be running this
+                    // send site for the first time too; a published
+                    // descriptor is never written again.
+                    auto descSlot =
+                        std::make_unique<BytecodeModule::CallDescriptor>();
                     const std::string& mangled = f.m->constSymbol(arg);
                     descSlot->mangled = mangled;
                     size_t hash1 = mangled.find('#');
@@ -1557,7 +1565,6 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     descSlot->name = proto::ProtoString::createSymbol(
                         ctx, namePart.c_str());
                     descSlot->nPos = parsedNPos;
-                    descSlot->sortedKeys.clear();
                     if (hash2 != std::string::npos) {
                         size_t pos = hash2 + 1;
                         while (pos <= mangled.size()) {
@@ -1575,9 +1582,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                             pos = next + 1;
                         }
                     }
-                    descSlot->parsed = true;
+                    descPtr = f.m->publishCallDescriptor(arg, std::move(descSlot));
                 }
-                const auto& desc = *descSlot;
+                const auto& desc = *descPtr;
                 const int callNPos    = desc.nPos;
                 const int callNNamed  = static_cast<int>(desc.sortedKeys.size());
                 const int callTotal   = callNPos + callNNamed;

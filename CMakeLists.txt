@@ -141,6 +141,12 @@ add_test(NAME cli_dap_session
 add_test(NAME cli_actor_stress
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_actor_stress.sh $<TARGET_FILE:protost>)
 
+# D25 regression: several workers running a method for the first time at the
+# same moment must not corrupt the heap. Non-deterministic when broken, so the
+# test repeats the workload.
+add_test(NAME cli_concurrent_first_call
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_concurrent_first_call.sh $<TARGET_FILE:protost>)
+
 # --- Track 10: Installation packaging ---------------------------------------
 # Install RPATH so an installed `bin/protost` finds libprotoCore.so under
 # <prefix>/lib without LD_LIBRARY_PATH / DYLD_LIBRARY_PATH (mirrors protoPython).
