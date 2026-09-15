@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# S4 regression: a DAP debug session while collections run.
+# S4 regression: a DAP debug session while the debuggee's actors allocate.
 #
-# The debuggee runs a program whose eight actors allocate enough garbage to
-# start collections (budget floor lowered to 65,536 cells) while the debuggee
-# waits on their futures. In the `breakpoint` mode the debuggee stops while the
-# actors are still allocating, and the adapter evaluates expressions (which
-# allocate on the adapter thread) before continuing.
+# The debuggee runs a program whose eight actors allocate garbage while the
+# debuggee waits on their futures. In the `breakpoint` mode the debuggee stops
+# while the actors are still allocating, and the adapter evaluates expressions
+# (which allocate on the adapter thread) before continuing.
 #
 # Before S4 the debuggee ran on a plain std::thread that shared the adapter
 # thread's ProtoContext; the adapter's read counted that context as parked
 # while the debuggee mutated the heap through it, and a wait counted it twice.
-# The session must terminate normally, with no error output, every time.
+# The session must terminate normally, with no error output, every time. The
+# evaluate-while-stopped corruption does not need a collection to show up; the
+# test runs with the default protoCore configuration and does not force one.
 set -euo pipefail
 PROTOST="$1"
 
@@ -124,7 +125,7 @@ for e in errors:
     print("stderr:", e.strip())
 PYEOF
 
-export PROTOST_WORKERS=8 PROTOCORE_GC_MIN_BUDGET_CELLS=65536
+export PROTOST_WORKERS=8
 RUNS=5
 for i in $(seq 1 "$RUNS"); do
     out=$(timeout 90 python3 "$DRIVER" "$PROTOST" "$SCRIPT" run) || true
@@ -139,4 +140,4 @@ for i in $(seq 1 "$RUNS"); do
     esac
 done
 
-echo "OK ($RUNS run-to-completion and $RUNS breakpoint sessions under collections)"
+echo "OK ($RUNS run-to-completion and $RUNS breakpoint sessions while actors allocate)"

@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 #
-# S4 regression — collections while threads block and while the runtime shuts
-# down must neither hang nor corrupt memory.
+# S4 regression — blocking waits and the shutdown join while actors allocate
+# must neither hang nor corrupt memory.
 #
-# Eight actors allocate enough garbage to start collections (the budget floor
-# is lowered to 65,536 cells). The main thread waits on their futures from
+# Eight actors allocate garbage. The main thread waits on their futures from
 # inside a collection iteration (a wait nested under a primitive), fires a
 # second round of sends without waiting, and ends while the actors are still
 # busy, so the runtime joins its workers while they allocate. Every blocked
 # thread must leave the stop-the-world quorum exactly once: before S4 idle
 # workers and waiters lowered `runningThreads` while unmanaged regions raised
 # `parkedThreads`, and the two could count one thread twice.
+#
+# The test runs with the default protoCore configuration, so a collection runs
+# only when protoCore's own pacing starts one; it does not force collections.
 #
 # A failure is non-deterministic, so the workload is launched repeatedly and
 # the test fails on the first non-zero exit, timeout or wrong result.
@@ -40,8 +42,7 @@ EOF
 RUNS=20
 for i in $(seq 1 "$RUNS"); do
     rc=0
-    out="$(PROTOST_WORKERS=8 PROTOCORE_GC_MIN_BUDGET_CELLS=65536 \
-           timeout 20 "$PROTOST" "$SCRIPT" 2>&1)" || rc=$?
+    out="$(PROTOST_WORKERS=8 timeout 20 "$PROTOST" "$SCRIPT" 2>&1)" || rc=$?
     if [ "$rc" -ne 0 ]; then
         if [ "$rc" -eq 124 ]; then
             echo "FAIL: run $i/$RUNS timed out"
@@ -57,4 +58,4 @@ for i in $(seq 1 "$RUNS"); do
     fi
 done
 
-echo "OK ($RUNS launches: collections during waits and shutdown)"
+echo "OK ($RUNS launches: waits and shutdown while actors allocate)"
