@@ -12,8 +12,6 @@
 #include "Bootstrap.h"
 #include "Venv.h"
 #include "SchedDiag.h"
-#include "GcSafeBlocking.h"
-#include "GcSafeMutex.h"
 #include "TransientPin.h"
 #include "UnhandledSTException.h"
 #include "NativeExceptionBridge.h"
@@ -165,25 +163,6 @@ static constexpr int kNumPriorityBands = 3;
 // for benchmark workloads; a future pass adds idle-detection removal).
 // ---------------------------------------------------------------------------
 namespace {
-
-// F6 v5 (2026-05-23): per-actor blocking lock for the new task-list scheduler.
-// Replaces the per-actor __sched__ flag (which was a 3-state non-blocking
-// turn-ownership marker — workers skipped contended actors). The new model
-// is: workers POP a task from the global task list (which is FIFO), then
-// acquire the target actor's lock — blocking via a binary_semaphore if
-// another worker is currently inside the actor. The semaphore is FIFO-fair
-// on Linux (futex_wait wakes in arrival order), so two waiters for the
-// same actor are released in the order they popped their tasks from the
-// global FIFO list — preserves per-actor message ordering automatically.
-//
-// The ActorLock C++ struct is heap-allocated in asActor and attached to
-// the actor ProtoObject via an ExternalPointer attribute (__lockHandle__).
-// Lifetime: the actor holds an opaque pointer; the lock leaks when the
-// actor is GC'd (no protoCore finalizer hook). Acceptable for the
-// benchmark workloads and for typical actor populations.
-struct ActorLock {
-    std::binary_semaphore sem{1};   // counter=1 means "currently unlocked"
-};
 
 // The per-band ready queue. Destroyed with Impl, after the workers are joined.
 using ActorReadyStack = ReadyStack<const proto::ProtoObject*>;
@@ -706,34 +685,20 @@ STRuntime::~STRuntime() {
         for (size_t i = 0; i < impl_->workers.size(); ++i) {
             impl_->workerSem.release();
         }
-        // F6 v3 E5: the join() loop blocks the main thread in the kernel
-        // (pthread_join) while it is STILL counted in
-        // ProtoSpace::runningThreads. This is the same off-safepoint-blocking
-        // hazard E2/E4 closed for cv sleeps and mutex acquisition — and a
-        // genuine deadlock the deep-chain audit uncovered:
-        //
-        //   * a worker still inside drainOne hits allocCell, sees stwFlag set
-        //     and PARKS for a stop-the-world cycle (parkedThreads++);
-        //   * the GC thread's Phase-1 quorum is `parkedThreads >=
-        //     runningThreads`, but the main thread, blocked in join() and
-        //     never reaching a safepoint, keeps runningThreads above
-        //     parkedThreads forever;
-        //   * the GC never finishes, the parked worker never wakes, never
-        //     exits its loop, and join() never returns. Total deadlock.
-        //
-        // Bracketing the whole join loop in a GC-blocking region removes the
-        // main thread from the running set for its duration, so the STW
-        // quorum is computed only over threads that can actually park. No
-        // protoCore heap access happens inside the region (join() is a pure
-        // pthread wait), and no protoST lock is held across exitGcBlocking —
-        // both GcSafeBlocking rules are honoured.
-        enterGcBlocking(impl_->rootCtx);
-        for (auto* t : impl_->workers) {
-            // ProtoThread::join takes the CALLING context (main thread's
-            // root). newThread returns const ProtoThread*; join is non-const.
-            const_cast<proto::ProtoThread*>(t)->join(impl_->rootCtx);
+        // join() blocks this thread in pthread_join while a worker still
+        // draining may request a collection and park. A thread blocked in the
+        // kernel cannot reach a safepoint, so the join runs in a protoCore
+        // unmanaged region: the thread is counted as parked for its duration
+        // and the stop-the-world quorum does not wait for it (F6 v3 E5 found
+        // the deadlock an unbracketed join causes). The region touches no
+        // ProtoObject. It nests harmlessly if ProtoThread::join opens one too.
+        {
+            proto::ProtoContext::UnmanagedScope unmanaged(impl_->rootCtx);
+            for (auto* t : impl_->workers) {
+                // newThread returns const ProtoThread*; join is non-const.
+                const_cast<proto::ProtoThread*>(t)->join(impl_->rootCtx);
+            }
         }
-        exitGcBlocking(impl_->rootCtx);
         impl_->workers.clear();
     }
 
@@ -750,19 +715,6 @@ STRuntime::~STRuntime() {
     // STRuntime on the same thread); worker threads are freshly spawned
     // per runtime so their slots start clean anyway.
     if (currentActor() != nullptr) setCurrentActor(nullptr);
-}
-
-bool STRuntime::waitForSchedulerProgress(unsigned millis) {
-    // The lock-free scheduler has no condition variable to park on. A caller
-    // (a Future>>wait drive loop, a test) just needs a bounded GC-safe pause
-    // before re-polling. Bracket the sleep in a GC-blocking region so this
-    // thread leaves the running set for its duration (it must not stall the
-    // stop-the-world quorum off-safepoint).
-    auto* ctx = impl_->rootCtx;
-    enterGcBlocking(ctx);
-    std::this_thread::sleep_for(std::chrono::milliseconds(millis));
-    exitGcBlocking(ctx);
-    return false;  // no progress signal — the caller re-checks its condition
 }
 
 // F6 v6 (2026-05-23 night): per-worker stats for the scaling
@@ -808,11 +760,11 @@ void STRuntime::workerLoop(proto::ProtoContext* ctx) {
     // a wake-up takes one context-switch (~3 us) instead of the previous
     // 1-16 ms sleep.
     //
-    // Per the GC-safety discipline used elsewhere in this file (E2 / E4):
-    // the semaphore wait is bracketed by enterGcBlocking / exitGcBlocking
-    // so an idle worker leaves the running set and never stalls a
-    // stop-the-world GC. Same property the old sleep_for path had — the
-    // semantics of "wait outside the GC running set" are unchanged.
+    // GC safety: every blocking wait here (the pause gate and the idle
+    // semaphore) runs in a protoCore unmanaged region on this worker's own
+    // context, so a blocked worker counts as parked and never stalls a
+    // stop-the-world phase. The region is opened before any std::mutex is
+    // taken, so the lock is released before returnFromUnmanaged can park.
     //
     // Shutdown: ~STRuntime sets `shutdown` then issues one `release()`
     // per worker so every blocked worker wakes, observes the flag, drains
@@ -833,21 +785,18 @@ void STRuntime::workerLoop(proto::ProtoContext* ctx) {
         // notify_all releases everyone in one shot.
         //
         // The check is one relaxed-ish atomic load on the common (no
-        // pause) path, then the slow path on a hit. Bracketed by
-        // enter/exitGcBlocking so a paused worker counts as parked for
-        // any concurrent stop-the-world GC.
+        // pause) path, then the slow path on a hit. A paused worker waits in
+        // an unmanaged region, so it counts as parked for any concurrent
+        // stop-the-world phase; the predicate reads atomics only.
         if (impl_->processingPaused.load(std::memory_order_acquire) &&
             !impl_->shutdown.load(std::memory_order_acquire)) {
-            enterGcBlocking(ctx);
-            {
-                std::unique_lock<std::mutex> lk(impl_->pauseMutex);
-                impl_->pauseCV.wait(lk, [&]{
-                    return !impl_->processingPaused.load(
-                               std::memory_order_acquire)
-                        || impl_->shutdown.load(std::memory_order_acquire);
-                });
-            }
-            exitGcBlocking(ctx);
+            proto::ProtoContext::UnmanagedScope unmanaged(ctx);
+            std::unique_lock<std::mutex> lk(impl_->pauseMutex);
+            impl_->pauseCV.wait(lk, [&]{
+                return !impl_->processingPaused.load(
+                           std::memory_order_acquire)
+                    || impl_->shutdown.load(std::memory_order_acquire);
+            });
         }
 
         // Drain everything currently in the queue.
@@ -891,10 +840,19 @@ void STRuntime::workerLoop(proto::ProtoContext* ctx) {
 
         // Queue empty — block on the semaphore. A sender's release() or
         // a shutdown release will wake us.
+        //
+        // Quiescent point: no engine frame is live and no TransientPin is
+        // held on this thread, so every live cell this worker allocated is
+        // reachable from a real root. This is where a worker submits its
+        // young generation (safepoint() does so past the per-context
+        // threshold), before sleeping, so its garbage can be reclaimed while
+        // it is idle. The wait itself is an unmanaged region.
+        ctx->safepoint();
         g_parkCount[wid].fetch_add(1, std::memory_order_relaxed);
-        enterGcBlocking(ctx);
-        impl_->workerSem.acquire();
-        exitGcBlocking(ctx);
+        {
+            proto::ProtoContext::UnmanagedScope unmanaged(ctx);
+            impl_->workerSem.acquire();
+        }
     }
 }
 
@@ -1278,49 +1236,14 @@ void STRuntime::markMainWaitingOn(const proto::ProtoObject* future) {
 }
 
 void STRuntime::acquireMainWait(proto::ProtoContext* ctx) {
-    // GC-safe: the wait happens outside the running set so a concurrent
-    // stop-the-world GC quorum is never blocked by an idle main thread.
-    enterGcBlocking(ctx);
+    // The wait runs in an unmanaged region on the waiting thread's own
+    // context: the thread counts as parked, so a stop-the-world phase never
+    // waits for it. The semaphore is a futex; no ProtoObject is touched.
+    // Returning from the region parks if a phase is in progress; it never
+    // submits the young generation (see prim_Future_wait for where the
+    // waiting thread does).
+    proto::ProtoContext::UnmanagedScope unmanaged(ctx);
     impl_->mainWaitSem.acquire();
-    exitGcBlocking(ctx);
-}
-
-void STRuntime::attachActorLock(proto::ProtoContext* ctx,
-                                const proto::ProtoObject* actor) {
-    if (!actor) return;
-    // Heap-allocate an ActorLock and wrap it as an ExternalPointer attribute.
-    // The lock is owned by the actor for its lifetime; it leaks on actor GC
-    // (no protoCore finalizer). Bounded by total actor population.
-    ActorLock* lock = new ActorLock();
-    auto* extPtr = ctx->fromExternalPointer(lock, nullptr);
-    const_cast<proto::ProtoObject*>(actor)->setAttribute(
-        ctx, impl_->bootstrap.sym.lockHandle, extPtr);
-}
-
-static ActorLock* readActorLock(proto::ProtoContext* ctx,
-                                const proto::ProtoObject* actor,
-                                const proto::ProtoString* lockKey) {
-    if (!actor) return nullptr;
-    auto* extPtr = actor->getOwnAttributeDirect(ctx, lockKey);
-    if (!extPtr || extPtr == PROTO_NONE) return nullptr;
-    const void* raw = extPtr->asExternalPointer(ctx);
-    return static_cast<ActorLock*>(const_cast<void*>(raw));
-}
-
-void STRuntime::acquireActorLock(proto::ProtoContext* ctx,
-                                 const proto::ProtoObject* actor) {
-    auto* lock = readActorLock(ctx, actor, impl_->bootstrap.sym.lockHandle);
-    if (!lock) return;
-    enterGcBlocking(ctx);
-    lock->sem.acquire();
-    exitGcBlocking(ctx);
-}
-
-void STRuntime::releaseActorLock(proto::ProtoContext* ctx,
-                                 const proto::ProtoObject* actor) {
-    auto* lock = readActorLock(ctx, actor, impl_->bootstrap.sym.lockHandle);
-    if (!lock) return;
-    lock->sem.release();
 }
 
 void STRuntime::enqueueResumeTask(proto::ProtoContext* ctx,
@@ -1549,6 +1472,13 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                     resumeError = e ? e : PROTO_NONE;
                 }
             }
+
+            // Once the attributes below are cleared, the message's future and
+            // the awaited future are held only in these C++ locals (the sender
+            // may have dropped its future) until resolveFutureFromDrain, across
+            // a whole engine run that allocates and may park. Pin both.
+            TransientPin pinMsgFut(ctx, msgFut);
+            TransientPin pinAwaited(ctx, awaited);
 
             // Clear suspended-state attributes BEFORE running so a re-yield
             // installs a fresh snapshot rather than racing with this one.
@@ -2245,10 +2175,11 @@ const proto::ProtoObject* STRuntime::loadModule(proto::ProtoContext* ctx, const 
 // edges change under `modulesMu`, so the check sees a consistent graph and the
 // thread that would close a cycle is the one that detects it.
 //
-// GC safety: the wait is bracketed by enterGcBlocking / exitGcBlocking, so a
-// waiting thread never stalls a stop-the-world collection that the loading
-// thread triggers, and no protoST lock is held across exitGcBlocking. Every
-// other use of `modulesMu` covers container operations only. A cached module is
+// GC safety: the wait runs in a protoCore unmanaged region opened before
+// `modulesMu` is taken, so a waiting thread counts as parked and never stalls
+// a stop-the-world collection that the loading thread triggers, and the lock
+// is released before the region's exit can park. Every other use of
+// `modulesMu` covers container operations only. A cached module is
 // anchored in the live registry before it is published, so a waiter that
 // parks for a collection on its way out still receives a live object.
 const proto::ProtoObject* STRuntime::importModuleFile(
@@ -2287,8 +2218,8 @@ const proto::ProtoObject* STRuntime::importModuleFile(
             impl_->modulesWaiting[self] = canonical;
         }
 
-        enterGcBlocking(ctx);
         {
+            proto::ProtoContext::UnmanagedScope unmanaged(ctx);
             std::unique_lock<std::mutex> lock(impl_->modulesMu);
             impl_->modulesCv.wait(lock, [&] {
                 return impl_->modulesLoading.find(canonical)
@@ -2296,7 +2227,6 @@ const proto::ProtoObject* STRuntime::importModuleFile(
             });
             impl_->modulesWaiting.erase(self);
         }
-        exitGcBlocking(ctx);
     }
 
     // Releases the loading entry and wakes the waiters if the load does not

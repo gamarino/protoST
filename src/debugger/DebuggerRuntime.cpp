@@ -20,7 +20,8 @@ std::string trim(std::string s) {
 }
 } // anon
 
-bool DebuggerRuntime::evaluateExpression(STRuntime& rt, const std::string& expr,
+bool DebuggerRuntime::evaluateExpression(STRuntime& rt, proto::ProtoContext* ctx,
+                                         const std::string& expr,
                                          std::string& out) {
     // Append the statement terminator protoST expects; the caller passes a
     // bare expression.
@@ -38,10 +39,12 @@ bool DebuggerRuntime::evaluateExpression(STRuntime& rt, const std::string& expr,
         return false;
     }
     try {
-        auto* r = rt.runTopLevel(*bc);
+        // Run and format on the calling thread's own context: a stop inside
+        // an actor method evaluates on that worker, never on rootCtx.
+        auto* r = rt.runTopLevel(*bc, ctx);
         // BL-3: shared formatter — non-primitive objects render as
         // "a ClassName" instead of "<obj>".
-        out = protoST::formatValue(rt, rt.rootCtx(), r);
+        out = protoST::formatValue(rt, ctx, r);
         return true;
     } catch (const std::exception& e) {
         out = std::string("error: ") + e.what();
@@ -49,14 +52,15 @@ bool DebuggerRuntime::evaluateExpression(STRuntime& rt, const std::string& expr,
     }
 }
 
-void DebuggerRuntime::enterSession(STRuntime& rt, DebugFrame frame, const std::string& reason) {
+void DebuggerRuntime::enterSession(STRuntime& rt, proto::ProtoContext* ctx,
+                                   DebugFrame frame, const std::string& reason) {
     // F8-3: when a frontend is installed (e.g. the DAP adapter), route the
     // stop through it instead of the built-in text REPL. The frontend blocks
     // until the user resumes and returns the resume command; we apply the
     // command/mode it chose and return. The `-d` text path (frontend_ ==
     // nullptr) below is unchanged.
     if (frontend_) {
-        Command cmd = frontend_->onStopped(rt, frame, reason);
+        Command cmd = frontend_->onStopped(rt, ctx, frame, reason);
         setCommand(cmd);
         switch (cmd) {
             case Command::Continue: setMode(Mode::Free);        break;
@@ -82,10 +86,11 @@ void DebuggerRuntime::enterSession(STRuntime& rt, DebugFrame frame, const std::s
         // waiting for the user, but worker threads may still be alive
         // (an actor pool from before the break). Without the bracket,
         // a GC cycle triggered by another thread would stall behind
-        // this read for as long as the user thinks.
+        // this read for as long as the user thinks. The region is opened on
+        // the halted thread's own context, which may be a worker's.
         bool ok;
         {
-            proto::ProtoContext::UnmanagedScope u(rt.rootCtx());
+            proto::ProtoContext::UnmanagedScope u(ctx);
             ok = static_cast<bool>(std::getline(in, line));
         }
         if (!ok) break;
@@ -129,7 +134,7 @@ void DebuggerRuntime::enterSession(STRuntime& rt, DebugFrame frame, const std::s
             for (size_t k = 0; k < frame.locals.size(); ++k) {
                 // BL-3: shared formatter — render objects as "a ClassName".
                 out << "  [" << k << "] "
-                    << protoST::formatValue(rt, rt.rootCtx(), frame.locals[k])
+                    << protoST::formatValue(rt, ctx, frame.locals[k])
                     << "\n";
             }
             continue;
@@ -138,7 +143,7 @@ void DebuggerRuntime::enterSession(STRuntime& rt, DebugFrame frame, const std::s
             // F8-4: parse -> compile -> run -> format now lives in the shared
             // evaluateExpression helper, reused by the DAP `evaluate` request.
             std::string result;
-            evaluateExpression(rt, line.substr(line.find(' ') + 1), result);
+            evaluateExpression(rt, ctx, line.substr(line.find(' ') + 1), result);
             out << "  " << result << "\n";
             continue;
         }

@@ -147,6 +147,16 @@ add_test(NAME cli_actor_stress
 add_test(NAME cli_concurrent_first_call
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_concurrent_first_call.sh $<TARGET_FILE:protost>)
 
+# S4 regression: collections that start while threads block in waits or while
+# the runtime joins its workers must not hang or corrupt memory. Repeated.
+add_test(NAME cli_gc_shutdown_stress
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_gc_shutdown_stress.sh $<TARGET_FILE:protost>)
+
+# S4 regression: a DAP session (run to completion, and a breakpoint stop with
+# evaluations) while the debuggee's actors start collections.
+add_test(NAME cli_dap_gc
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_dap_gc.sh $<TARGET_FILE:protost>)
+
 # --- Track 10: Installation packaging ---------------------------------------
 # Install RPATH so an installed `bin/protost` finds libprotoCore.so under
 # <prefix>/lib without LD_LIBRARY_PATH / DYLD_LIBRARY_PATH (mirrors protoPython).

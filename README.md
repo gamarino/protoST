@@ -330,9 +330,9 @@ and method declarations, class variables, the three actor priority bands, and
 blocking OS calls wrapped in protoCore's unmanaged scope so they do not stall
 the garbage collector.
 
-The test suite has **793 `ctest` cases** (316 conformance, 42 examples, 10 CLI,
-425 unit), counted with `ctest -N` on 2026-09-15, all passing. No open bugs are
-currently tracked in [docs/STATUS.md](docs/STATUS.md).
+The test suite has **830 `ctest` cases** (349 conformance, 42 examples, 12 CLI,
+427 unit), counted with `ctest -N` on 2026-09-15, all passing. Open bugs are
+tracked in [docs/STATUS.md](docs/STATUS.md).
 
 **Open performance work**: closing the BEAM messaging gap. The 2026-05-24
 reports identify, largest expected impact first: a per-actor message slab

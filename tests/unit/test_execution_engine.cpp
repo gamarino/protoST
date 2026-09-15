@@ -1,7 +1,9 @@
 #include <catch2/catch_all.hpp>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <thread>
 
 #include "protoST/STRuntime.h"
 #include "runtime/ExecutionEngine.h"
@@ -447,7 +449,12 @@ TEST_CASE("STRuntime scheduler: schedule + drainOne basics", "[engine][scheduler
     // an empty queue and that drainOne returns false on that empty state.
     while (rt.drainOne(ctx)) { /* keep draining */ }
     // Wait briefly for any in-flight worker drain to complete, then confirm.
-    rt.waitForSchedulerProgress(10);
+    {
+        // A plain sleep: this thread is not blocked on a protoCore
+        // condition, so it sleeps in an unmanaged region.
+        proto::ProtoContext::UnmanagedScope unmanaged(ctx);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
     while (rt.drainOne(ctx)) { /* drain anything the worker re-queued */ }
     REQUIRE(rt.scheduledCount() == 0);
     REQUIRE_FALSE(rt.drainOne(ctx));
@@ -498,7 +505,12 @@ TEST_CASE("Engine: actor SEND returns a pending Future + drainOne resolves it",
     while (rt.drainOne(ctx)) { /* keep draining */ }
     // Allow any concurrent worker drain to settle, then drain anything
     // residual one more time.
-    rt.waitForSchedulerProgress(10);
+    {
+        // A plain sleep: this thread is not blocked on a protoCore
+        // condition, so it sleeps in an unmanaged region.
+        proto::ProtoContext::UnmanagedScope unmanaged(ctx);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
     while (rt.drainOne(ctx)) { /* keep draining */ }
     REQUIRE_FALSE(rt.drainOne(ctx));
 

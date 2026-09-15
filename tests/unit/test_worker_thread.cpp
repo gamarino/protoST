@@ -17,6 +17,7 @@
 #include "frontend/Compiler.h"
 #include "protoCore.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <string>
@@ -625,6 +626,12 @@ TEST_CASE("F6 v3 E: coordinator awaits a fan-out of worker actors on 2 workers "
 // mutex acquisition GC-safe — a would-be blocking lock first leaves the GC
 // running set. This 120-link test reliably exercises that interleaving too.
 //
+// Superseded mechanism (S4): the scheduler became lock-free, and
+// GcSafeBlocking.h / GcSafeMutex.h were removed. Every blocking wait now runs
+// in a protoCore unmanaged region (ProtoContext::UnmanagedScope), which counts
+// the blocked thread as parked instead of removing it from the running set.
+// The liveness property these chains guard is unchanged.
+//
 // BL-2: this regression was previously capped at depth 120. The chain helper
 // declares N+1 module-level variables (a0..aN-1 plus `tail`); past N==255 the
 // 256th local's slot index wrapped the 8-bit operand and the chain mis-wired.
@@ -871,4 +878,102 @@ TEST_CASE("F6 v3 E5: 255-link cooperative chain survives aggressive GC "
     setenv("PROTOCORE_GC_CONTEXT_THRESHOLD", "1", 1);
     REQUIRE(runChain(255, "4") == 255);
     unsetenv("PROTOCORE_GC_CONTEXT_THRESHOLD");
+}
+
+// S4 — stop-the-world quorum accounting.
+//
+// protoCore starts a stop-the-world phase once `parkedThreads >=
+// runningThreads`. A thread that cannot reach a safepoint (it is blocked in
+// the kernel) must leave the quorum through exactly one side: protoCore's
+// unmanaged regions raise `parkedThreads`. protoST used to lower
+// `runningThreads` instead (enterGcBlocking), while its REPL, `sleep:`, DAP and
+// debugger reads used unmanaged regions; a thread counted on both sides let
+// the collector start while a mutator was still running. After S4 every
+// blocking wait is an unmanaged region, so a blocked thread stays in
+// `runningThreads` and is counted once in `parkedThreads`.
+//
+// These tests read the counters directly. Before S4 idle workers were removed
+// from `runningThreads` and never counted as parked, so both fail on every run.
+
+namespace {
+
+// Polls `pred` every millisecond for up to `ms` milliseconds.
+template <class Pred>
+bool pollFor(int ms, Pred pred) {
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (pred()) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return pred();
+}
+
+} // namespace
+
+TEST_CASE("S4: idle workers stay in the running set and count as parked",
+          "[engine][actors][gc][s4]") {
+    setenv("PROTOST_WORKERS", "2", 1);
+    {
+        protoST::STRuntime rt;
+        proto::ProtoSpace* sp = rt.space();
+        REQUIRE(rt.rootCtx()->thread != nullptr);
+        // Main thread plus two workers are ProtoThreads of this space.
+        const bool settled = pollFor(2000, [&] {
+            return sp->parkedThreads.load() == 2;
+        });
+        INFO("parkedThreads=" << sp->parkedThreads.load()
+             << " runningThreads=" << sp->runningThreads.load());
+        CHECK(settled);
+        CHECK(sp->runningThreads.load() == 3);
+        CHECK(sp->parkedThreads.load() == 2);
+    }
+    unsetenv("PROTOST_WORKERS");
+}
+
+TEST_CASE("S4: a thread blocked in Future>>wait is counted exactly once",
+          "[engine][actors][gc][s4]") {
+    // The main thread waits on an actor whose method sleeps. While it sleeps,
+    // every ProtoThread of the space is blocked: the main thread in
+    // Future>>wait, one worker in `sleep:` and the other idle. Each must be
+    // counted once as parked and none removed from the running set, so the
+    // counters read parked == running == 3.
+    setenv("PROTOST_WORKERS", "2", 1);
+    const char* src =
+        "Object subclass: #Sleeper. "
+        "Sleeper >> nap  self sleep: 800. ^ 7. "
+        "s := Sleeper new asActor. "
+        "(s nap) wait.";
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C;
+    auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+    {
+        protoST::STRuntime rt;
+        proto::ProtoSpace* sp = rt.space();
+        std::atomic<bool> done{false};
+        std::atomic<bool> balanced{false};
+        std::atomic<int> lastParked{-1}, lastRunning{-1};
+        // A plain std::thread only reads atomics; it touches no ProtoObject.
+        std::thread observer([&] {
+            while (!done.load()) {
+                int parked = sp->parkedThreads.load();
+                int running = sp->runningThreads.load();
+                lastParked = parked;
+                lastRunning = running;
+                if (parked == 3 && running == 3) balanced = true;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        });
+        const proto::ProtoObject* r = rt.runTopLevel(*bc);
+        done = true;
+        observer.join();
+        REQUIRE(r != nullptr);
+        CHECK(r->asLong(rt.rootCtx()) == 7);
+        INFO("last sample: parkedThreads=" << lastParked.load()
+             << " runningThreads=" << lastRunning.load());
+        CHECK(balanced.load());
+    }
+    unsetenv("PROTOST_WORKERS");
 }

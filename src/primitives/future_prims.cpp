@@ -3,7 +3,7 @@
 #include "runtime/Bootstrap.h"
 #include "runtime/FutureYield.h"
 #include "runtime/SchedDiag.h"
-#include "runtime/GcSafeBlocking.h"
+#include "runtime/ExecutionEngine.h"
 #include "runtime/TransientPin.h"
 #include "protoCore.h"
 
@@ -282,6 +282,20 @@ const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* c
         rt.acquireMainWait(ctx);
     }
     rt.markMainWaitingOn(nullptr);
+
+    // Young-generation submission for the waiting (non-actor) thread. Its
+    // context lives as long as the thread, so its young cells become
+    // collectable only when submitted, and safepoint() submits them.
+    // Submission is safe only where every live cell is reachable from a real
+    // root. With exactly one engine on this thread, the C++ frames below this
+    // primitive are the engine's send handler (receiver and arguments stay in
+    // frame slots) and the top-level entry (its captured dictionary is
+    // pinned). A wait nested under a primitive (`do:`, `collect:`, an import)
+    // runs in a second engine, below C++ code that may hold cells in locals —
+    // an unpinned collection iterator, for example — so it does not submit.
+    if (ExecutionEngine::liveEnginesOnThisThread() == 1) {
+        ctx->safepoint();
+    }
 
     long long s = readState(rt, ctx, r);
     if (s == 1) {

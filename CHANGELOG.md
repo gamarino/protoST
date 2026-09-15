@@ -143,6 +143,24 @@ Changes committed after the `v0.3.0` tag.
   `inlined-control-nests-blocks.st` tests in `conformance/06-blocks/`, two
   tests in `conformance/07-non-local-return/` and two `on-do-inside-to-do-*`
   tests in `conformance/08-exceptions/`.
+- **A stop-the-world phase could start while a thread still ran** (S4).
+  protoST removed a blocked thread from protoCore's running-thread count
+  (`GcSafeBlocking.h`) while its REPL, `sleep:`, DAP and debugger reads used
+  protoCore's unmanaged regions, which count the thread as parked; a thread
+  counted both ways let the collector's quorum complete early. The DAP
+  debuggee also ran on a plain `std::thread` sharing the adapter thread's
+  context, so an `evaluate` while stopped overwrote the debuggee's frame
+  slots (`doesNotUnderstand: do: (receiver: nil)`). Every blocking wait —
+  idle and paused workers, `Future>>wait` outside actors, a concurrent
+  import's wait, the shutdown join, a debugger stop — now runs in an
+  unmanaged region on the blocked thread's own context, and the runtime no
+  longer writes protoCore's thread counters. The debuggee is a protoCore
+  thread with its own context; the CLI debugger prompt and `print` use the
+  halted thread's context. `GcSafeBlocking.h`, `GcSafeMutex.h` and the unused
+  per-actor lock were removed. An idle worker submits its young generation
+  before sleeping; a thread waiting outside an actor does so only when no
+  primitive-created engine is below the wait. Regression tests: two `[s4]`
+  unit tests, `cli_gc_shutdown_stress` and `cli_dap_gc`.
 
 ### Known issues
 
@@ -155,7 +173,7 @@ Changes committed after the `v0.3.0` tag.
 
 ### Tests
 
-- 753 → 826 `ctest` cases (349 conformance, 42 examples, 10 CLI, 425 unit).
+- 753 → 830 `ctest` cases (349 conformance, 42 examples, 12 CLI, 427 unit).
 
 ## 0.3.0 — yieldable iteration (2026-05-23)
 

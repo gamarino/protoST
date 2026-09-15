@@ -81,15 +81,6 @@ public:
     // trampoline; embedders should not invoke this directly.
     void workerLoop(proto::ProtoContext* ctx);
 
-    // F6 v2 T2: wait briefly on schedCv for a state change.
-    //
-    // Used by Future>>wait so the foreground thread doesn't busy-spin (nor
-    // throw a spurious deadlock) when the worker has stolen the only ready
-    // actor. drainOne notifies after every iteration (including future
-    // resolution), so this returns quickly whenever the worker makes progress.
-    // Returns true if notified within the timeout; false on plain timeout.
-    bool waitForSchedulerProgress(unsigned millis);
-
     // F6 v4 (2026-05-23): event-driven main-thread Future-wait primitives.
     //
     // Replaces the previous sleep-poll / spin in `prim_Future_wait`. The
@@ -104,19 +95,13 @@ public:
     // release at most one futex syscall when the main is actually parked
     // ON THIS future. Unrelated settles incur zero cost — they read the
     // pointer, see it doesn't match, exit.
+    //
+    // `acquireMainWait` blocks in a protoCore unmanaged region on `ctx`, which
+    // must be the calling thread's own context: the waiter counts as parked
+    // for the stop-the-world quorum while it waits.
     void markMainWaitingOn(const proto::ProtoObject* future);
     void acquireMainWait(proto::ProtoContext* ctx);
     void notifyMainWaiterIfFor(const proto::ProtoObject* future);
-
-    // F6 v5 (2026-05-23): per-actor blocking lock. Each actor gets a
-    // heap-allocated `ActorLock` (binary_semaphore) attached via the
-    // `__lockHandle__` ExternalPointer attribute on construction (asActor).
-    // attachActorLock is called by asActor; acquire/release are called by
-    // workers in drainOne to enforce single-thread-of-execution per actor.
-    // The acquire is GC-safe (bracketed by enter/exitGcBlocking).
-    void attachActorLock(proto::ProtoContext* ctx, const proto::ProtoObject* actor);
-    void acquireActorLock(proto::ProtoContext* ctx, const proto::ProtoObject* actor);
-    void releaseActorLock(proto::ProtoContext* ctx, const proto::ProtoObject* actor);
 
     // F6 v5 (2026-05-23): publish a task on the global task list. The task
     // is a ProtoObject carrying `__actor__`, selector, args, future, and

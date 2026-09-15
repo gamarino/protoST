@@ -146,13 +146,10 @@ struct Bootstrap {
         // F6 v5 (2026-05-23): single global task list (ProtoList of task
         // ProtoObjects) replaces the per-actor mailbox + global ready queue.
         // Each task has: __actor__, selector (sym.selector already cached),
-        // args (sym.args), future (sym.future). Per-actor `__lockHandle__`
-        // is an ExternalPointer to a C++ ActorLock (binary_semaphore-based
-        // blocking lock) — enforces single-thread-of-execution per actor.
-        // No separate design document was written for it.
+        // args (sym.args), future (sym.future). No separate design document
+        // was written for it.
         const proto::ProtoString* tasks           = nullptr;  // __tasks__ (on liveRegistry: the one task list)
         const proto::ProtoString* actor           = nullptr;  // __actor__ (on a task: which actor it targets)
-        const proto::ProtoString* lockHandle      = nullptr;  // __lockHandle__ (on actor: ExtPtr to ActorLock)
         const proto::ProtoString* resume          = nullptr;  // __resume__ (on a task: marks a resume-from-yield task)
         // 2026-05-23 night: profile of saturation under 8 workers showed
         // 51 % of CPU in SymbolTable::intern + mutex contention, traced to

@@ -45,6 +45,13 @@ public:
     // between a legitimate non-local return and a catchable `BlockCannotReturn`.
     static bool homeFrameAlive(unsigned long frameId);
 
+    // Number of engines currently live on the calling thread. 1 means the
+    // caller runs directly under a top-level engine with no primitive-created
+    // nested engine (and therefore no C++ primitive frame holding cells in
+    // locals) between them; callers use it to decide whether submitting the
+    // thread's young generation is safe.
+    static std::size_t liveEnginesOnThisThread();
+
     // Runs `m` in `ctx`; returns the value at RETURN_TOP (or method RETURN).
     const proto::ProtoObject* run(proto::ProtoContext* ctx,
                                   const BytecodeModule& m,

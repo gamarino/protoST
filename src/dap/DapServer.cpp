@@ -37,8 +37,15 @@ using nlohmann::json;
 //   * The DAP message loop (`run`) runs on the main thread and NEVER blocks on
 //     the debuggee. It must keep reading stdin even while the debuggee is
 //     stopped at a breakpoint, otherwise it could not receive `continue`.
-//   * `launch` spawns a *debuggee thread*: it waits for the configurationDone
-//     gate, then runs `rt.runTopLevel(module)`.
+//   * `launch` spawns a *debuggee thread*: a protoCore ProtoThread of the
+//     runtime's space with its own ProtoContext. It waits for the
+//     configurationDone gate, then runs `rt.runTopLevel(module, ctx)` on that
+//     context. The DAP loop thread constructed the runtime and owns `rootCtx`;
+//     the two threads never share a context (S4).
+//   * Every blocking wait (the DAP read, the configurationDone gate, a stop's
+//     resume wait, the join at shutdown) runs in a protoCore unmanaged region
+//     on the blocked thread's own context, so a stop-the-world phase never
+//     waits for it and no thread is counted in the quorum twice.
 //   * When the engine hits a breakpoint / step / entry it calls the installed
 //     DebuggerFrontend (this server). `onStopped` emits a `stopped` event,
 //     stores the DebugFrame in shared session state, and blocks the debuggee
@@ -94,8 +101,17 @@ public:
     // Called on the debuggee thread (or a worker thread for an actor stop)
     // when execution halts. Emits a `stopped` event, parks the calling thread
     // on the resume cv, and returns the resume command once it arrives.
-    DebuggerRuntime::Command onStopped(STRuntime& /*rt*/, const DebugFrame& frame,
+    DebuggerRuntime::Command onStopped(STRuntime& /*rt*/, proto::ProtoContext* ctx,
+                                       const DebugFrame& frame,
                                        const std::string& reason) override {
+        // The halted thread blocks below (on stopMu_ behind another stop and
+        // on the resume cv) for as long as the user takes. It does so in an
+        // unmanaged region on its own context, opened before any lock so the
+        // locks are released before the region's exit can park. Nothing here
+        // dereferences a ProtoObject: the frame's values are only copied as
+        // pointers and stay rooted in the stopped engine's slots.
+        proto::ProtoContext::UnmanagedScope unmanaged(ctx);
+
         // Serialize concurrent stops (e.g. an actor on a worker thread). MVP:
         // only one stop is processed at a time; a second halting thread waits
         // here until the first resumes.
@@ -232,18 +248,51 @@ private:
         // Re-resolve any breakpoints requested before the module existed.
         rearmAllBreakpoints();
 
-        // Spawn the debuggee thread.
-        debuggeeThread_ = std::thread([this]{ debuggeeMain(); });
+        // Spawn the debuggee as a ProtoThread of the runtime's space, so it
+        // runs on its own context and takes part in the stop-the-world
+        // protocol like any other thread of the space.
+        {
+            proto::ProtoContext* rctx = runtime_->rootCtx();
+            const proto::ProtoList* threadArgs = rctx->newList()->appendLast(
+                rctx, rctx->fromExternalPointer(this, nullptr));
+            debuggeeThread_ = runtime_->space()->newThread(
+                rctx,
+                proto::ProtoString::createSymbol(rctx, "protoST-dap-debuggee"),
+                &DapServer::debuggeeEntry, threadArgs, nullptr);
+        }
+        if (!debuggeeThread_) {
+            sendErrorResponse(req, "launch: cannot start the debuggee thread");
+            sendEvent("terminated", json::object());
+            return;
+        }
 
         sendResponse(req, /*success=*/true, json::object());
     }
 
-    // The debuggee thread entry point.
-    void debuggeeMain() {
+    // ProtoMethod trampoline for the debuggee ProtoThread: args[0] is an
+    // ExternalPointer to this server.
+    static const proto::ProtoObject* debuggeeEntry(
+        proto::ProtoContext* ctx,
+        const proto::ProtoObject* /*self*/,
+        const proto::ParentLink* /*parentLink*/,
+        const proto::ProtoList* args,
+        const proto::ProtoSparseList* /*kwargs*/) {
+        if (!args || args->getSize(ctx) < 1) return PROTO_NONE;
+        const proto::ProtoObject* first = args->getAt(ctx, 0);
+        const proto::ProtoExternalPointer* ep =
+            first ? first->asExternalPointer(ctx) : nullptr;
+        auto* server = ep ? static_cast<DapServer*>(ep->getPointer(ctx)) : nullptr;
+        if (server) server->debuggeeMain(ctx);
+        return PROTO_NONE;
+    }
+
+    // The debuggee thread entry point. `ctx` is the thread's own context.
+    void debuggeeMain(proto::ProtoContext* ctx) {
         // Gate: wait until `configurationDone` so breakpoints set between
         // `launch` and `configurationDone` are armed before the first
-        // instruction runs.
+        // instruction runs. The wait is an unmanaged region.
         {
+            proto::ProtoContext::UnmanagedScope unmanaged(ctx);
             std::unique_lock<std::mutex> lk(sessionMu_);
             configDoneCv_.wait(lk, [&]{ return configDone_ || shuttingDown_; });
             if (shuttingDown_)
@@ -260,7 +309,7 @@ private:
             // onStopped is called directly here (not via enterSession), so we
             // must apply the resulting command/mode ourselves — otherwise a
             // `stepIn` from the entry stop would leave the engine in Free mode.
-            DebuggerRuntime::Command cmd = onStopped(*runtime_, entryFrame, "entry");
+            DebuggerRuntime::Command cmd = onStopped(*runtime_, ctx, entryFrame, "entry");
             auto& dbg = runtime_->debugger();
             dbg.setCommand(cmd);
             switch (cmd) {
@@ -275,16 +324,22 @@ private:
         }
 
         int exitCode = 0;
+        std::string error;
         try {
-            runtime_->runTopLevel(*module_);
+            runtime_->runTopLevel(*module_, ctx);
         } catch (const std::exception& e) {
             exitCode = 1;
-            sendOutput("stderr", std::string("error: ") + e.what() + "\n");
+            error = std::string("error: ") + e.what() + "\n";
         } catch (...) {
             exitCode = 1;
-            sendOutput("stderr", "error: unknown exception\n");
+            error = "error: unknown exception\n";
         }
 
+        // Writing to the client can block on a full pipe; no ProtoObject is
+        // touched, so the writes run in an unmanaged region.
+        proto::ProtoContext::UnmanagedScope unmanaged(ctx);
+        if (!error.empty())
+            sendOutput("stderr", error);
         sendEvent("terminated", json::object());
         sendEvent("exited", { {"exitCode", exitCode} });
     }
@@ -614,7 +669,9 @@ private:
         // General path: parse -> compile -> run -> format, the same pipeline
         // the `-d` text debugger's `print` command uses (shared helper).
         std::string result;
-        bool ok = DebuggerRuntime::evaluateExpression(*runtime_, expr, result);
+        // Runs on the DAP loop thread, which owns rootCtx.
+        bool ok = DebuggerRuntime::evaluateExpression(
+            *runtime_, runtime_->rootCtx(), expr, result);
         if (!ok) {
             sendErrorResponse(req, result);
             return;
@@ -654,8 +711,13 @@ private:
         configDoneCv_.notify_all();
         resumeCv_.notify_all();
 
-        if (debuggeeThread_.joinable())
-            debuggeeThread_.join();
+        if (debuggeeThread_ && runtime_) {
+            // The join blocks this thread (which owns rootCtx) while the
+            // debuggee may still allocate and request a collection.
+            proto::ProtoContext::UnmanagedScope unmanaged(runtime_->rootCtx());
+            const_cast<proto::ProtoThread*>(debuggeeThread_)->join(runtime_->rootCtx());
+        }
+        debuggeeThread_ = nullptr;
     }
 
     // --- outgoing message helpers ------------------------------------------
@@ -709,7 +771,7 @@ private:
     // --- debug session ------------------------------------------------------
     std::unique_ptr<BytecodeModule> module_;
     std::unique_ptr<STRuntime>      runtime_;
-    std::thread                     debuggeeThread_;
+    const proto::ProtoThread*       debuggeeThread_ = nullptr;
     bool                            stopOnEntry_  = false;
     bool                            shutdownDone_ = false;
 

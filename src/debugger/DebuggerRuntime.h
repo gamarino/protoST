@@ -45,7 +45,10 @@ public:
     void attach()   { attached_.store(true,  std::memory_order_relaxed); }
     void detach()   { attached_.store(false, std::memory_order_relaxed); }
 
-    void enterSession(STRuntime& rt, DebugFrame frame, const std::string& reason);
+    // `ctx` is the halted thread's own context (the engine that stopped):
+    // the prompt blocks in an unmanaged region on it, and `print` runs on it.
+    void enterSession(STRuntime& rt, proto::ProtoContext* ctx, DebugFrame frame,
+                      const std::string& reason);
 
     enum class Command { Continue, Step, Next, Finish };
     Command lastCommand() const { return lastCommand_; }
@@ -70,8 +73,10 @@ public:
     // here, matching protoST statement syntax). On success returns true and
     // writes the formatted value to `out`. On a parse / compile / runtime
     // error returns false and writes the diagnostic message to `out`.
-    static bool evaluateExpression(STRuntime& rt, const std::string& expr,
-                                   std::string& out);
+    //
+    // `ctx` must be the calling thread's own context.
+    static bool evaluateExpression(STRuntime& rt, proto::ProtoContext* ctx,
+                                   const std::string& expr, std::string& out);
 
     // F8-3: a pluggable stop handler. When a frontend is installed, the
     // engine's stop points route through `frontend_->onStopped(...)` instead
@@ -100,7 +105,10 @@ public:
     virtual ~DebuggerFrontend() = default;
     // Called when execution stops. Must block until the user resumes, then
     // return the resume command. `frame` describes where execution halted.
+    // `ctx` is the halted thread's own context; a blocking wait must run in
+    // an unmanaged region on it.
     virtual DebuggerRuntime::Command onStopped(STRuntime& rt,
+                                               proto::ProtoContext* ctx,
                                                const DebugFrame& frame,
                                                const std::string& reason) = 0;
 };

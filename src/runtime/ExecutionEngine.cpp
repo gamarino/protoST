@@ -254,6 +254,11 @@ ExecutionEngine::~ExecutionEngine() {
     }
 }
 
+std::size_t
+ExecutionEngine::liveEnginesOnThisThread() {
+    return g_liveEngines.size();
+}
+
 bool
 ExecutionEngine::homeFrameAlive(unsigned long frameId) {
     if (frameId == 0) return false;
@@ -518,10 +523,10 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         if (rt_.debugger().attached()) {                                        \
             auto dbgMode__ = rt_.debugger().mode();                             \
             if (dbgMode__ != DebuggerRuntime::Mode::Free) {                     \
-                rt_.debugger().enterSession(rt_, makeDebugStack(), "step");     \
+                rt_.debugger().enterSession(rt_, ctx_, makeDebugStack(), "step");     \
             }                                                                   \
             if (rt_.debugger().breakpoints().isSet(f__.m, f__.pc)) {            \
-                rt_.debugger().enterSession(rt_, makeDebugStack(),              \
+                rt_.debugger().enterSession(rt_, ctx_, makeDebugStack(),              \
                                             "breakpoint");                      \
             }                                                                   \
         }                                                                       \
@@ -568,14 +573,14 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         // the cost of unwinding the C++ stack on every step.
         auto dbgMode = rt_.debugger().mode();
         if (rt_.debugger().attached() && dbgMode != DebuggerRuntime::Mode::Free) {
-            rt_.debugger().enterSession(rt_, makeDebugStack(), "step");
+            rt_.debugger().enterSession(rt_, ctx_, makeDebugStack(), "step");
             // Session may have updated mode (e.g. user typed 'c'); fall
             // through to dispatch the next instruction.
         }
 
         // F2 location breakpoint: halt BEFORE executing the instruction at pc.
         if (rt_.debugger().attached() && rt_.debugger().breakpoints().isSet(f.m, f.pc)) {
-            rt_.debugger().enterSession(rt_, makeDebugStack(),
+            rt_.debugger().enterSession(rt_, ctx_, makeDebugStack(),
                                         "breakpoint");
         }
 
@@ -2299,7 +2304,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         if (!frames_.empty()) {
             dframe = makeDebugStack();
         }
-        rt_.debugger().enterSession(rt_, std::move(dframe), h.reason());
+        rt_.debugger().enterSession(rt_, ctx_, std::move(dframe), h.reason());
         // After the session resumes (user typed c/s/n/f), fall back through
         // the outer while(true) and continue executing from the current pc.
         // The halt primitive pushes PROTO_NONE as its return value into the
