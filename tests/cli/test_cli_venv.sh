@@ -14,9 +14,10 @@ cd "$tmp"
 
 # venv info from inside the project (no STENV) should discover the venv
 out=$("$PROTOST" venv info)
-echo "$out" | grep -q "$tmp/.venv" || { echo "FAIL: venv info did not discover"; echo "$out"; exit 1; }
+grep -q "$tmp/.venv" <<< "$out" || { echo "FAIL: venv info did not discover"; echo "$out"; exit 1; }
 
 # explicit STENV overrides discovery
-STENV="$tmp/.venv" "$PROTOST" venv info | grep -q "$tmp/.venv" || { echo "FAIL: STENV override"; exit 1; }
+out=$(STENV="$tmp/.venv" "$PROTOST" venv info) || { echo "FAIL: STENV venv info exited non-zero"; exit 1; }
+grep -q "$tmp/.venv" <<< "$out" || { echo "FAIL: STENV override"; echo "$out"; exit 1; }
 
 echo OK

@@ -210,25 +210,25 @@ PYEOF
 # --- path 1: launch -> terminated (no breakpoint) ----------------------------
 out=$(python3 "$DRIVER" "$PROTOST" "$SCRIPT" nobreak)
 echo "$out"
-echo "$out" | grep -q 'RESULT: stopped=0 terminated=1 inspect=0 exit=0' \
+grep -q 'RESULT: stopped=0 terminated=1 inspect=0 exit=0' <<< "$out" \
     || { echo "FAIL: run-to-completion path"; exit 1; }
 
 # --- path 2: breakpoint -> stopped -> continue -> terminated -----------------
 out=$(python3 "$DRIVER" "$PROTOST" "$SCRIPT" breakpoint)
 echo "$out"
-echo "$out" | grep -q 'RESULT: stopped=1 terminated=1 inspect=0 exit=0' \
+grep -q 'RESULT: stopped=1 terminated=1 inspect=0 exit=0' <<< "$out" \
     || { echo "FAIL: breakpoint stop/resume path"; exit 1; }
 
 # --- path 3: F8-4 inspection (stackTrace/scopes/variables/evaluate) ----------
 out=$(python3 "$DRIVER" "$PROTOST" "$SCRIPT" inspect)
 echo "$out"
-echo "$out" | grep -q 'RESULT: stopped=1 terminated=1 inspect=1 exit=0' \
+grep -q 'RESULT: stopped=1 terminated=1 inspect=1 exit=0' <<< "$out" \
     || { echo "FAIL: inspection path"; exit 1; }
 
 # --- path 4: BL-3 — an object-valued variable shows "a Counter" --------------
 out=$(python3 "$DRIVER" "$PROTOST" "$OBJSCRIPT" objvar)
 echo "$out"
-echo "$out" | grep -q 'RESULT: stopped=1 terminated=1 inspect=1 exit=0' \
+grep -q 'RESULT: stopped=1 terminated=1 inspect=1 exit=0' <<< "$out" \
     || { echo "FAIL: BL-3 object-variable formatting path"; exit 1; }
 
 echo OK

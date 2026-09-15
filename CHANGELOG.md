@@ -208,6 +208,16 @@ Changes committed after the `v0.3.0` tag.
 
 ### Tests
 
+- **CLI tests no longer fail intermittently on SIGPIPE** (S11).
+  `tests/cli/test_cli_help.sh` failed about 4 runs in 1000 with
+  `--help missing 'Usage:'` although the text was there: under
+  `set -o pipefail`, `protost --help | grep -q …` let `grep` exit at the
+  first match and close the pipe while `protost` was still writing, so
+  `protost` died of SIGPIPE (exit 141) and the pipeline failed. Every CLI
+  test script now captures a command's output before searching it
+  (`out=$(…)` then `grep … <<< "$out"`), which also removes the latent
+  `echo "$out" | grep -q` form (46 checks in 6 scripts) that can fail the same
+  way once the output exceeds a pipe buffer.
 - 753 → 832 `ctest` cases (351 conformance, 42 examples, 12 CLI, 427 unit).
 
 ## 0.3.0 — yieldable iteration (2026-05-23)
