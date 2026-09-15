@@ -47,10 +47,21 @@ public:
     DebuggerRuntime& debugger();
 
     // Convert a BytecodeModule constant pool entry to a ProtoObject (lazy materialisation).
-    const proto::ProtoObject* materialize(const BytecodeModule& m, size_t constIdx) const;
+    // `ctx` must be the calling thread's own context: heap literals (strings
+    // longer than six bytes, Floats, large integers) are allocated on it, and
+    // a context's allocator is not thread-safe (D26).
+    const proto::ProtoObject* materialize(proto::ProtoContext* ctx,
+                                          const BytecodeModule& m,
+                                          size_t constIdx) const;
 
     // Run a module against the runtime; returns the final value (top of stack at RETURN_TOP).
+    // The one-argument form runs on the root context, so it must be called
+    // from the thread that owns the runtime (the main thread). Code running
+    // on another thread — an actor method that imports a module — passes its
+    // own context to the two-argument form.
     const proto::ProtoObject* runTopLevel(const BytecodeModule& m);
+    const proto::ProtoObject* runTopLevel(const BytecodeModule& m,
+                                          proto::ProtoContext* ctx);
 
     // F6 actor scheduler — single-thread MVP.
     // schedule() is idempotent for already-scheduled actors.

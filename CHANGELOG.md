@@ -68,6 +68,16 @@ Changes committed after the `v0.3.0` tag.
   once with a compare-and-swap and filled through atomics; call descriptors
   are published immutably. Regression tests: `cli_concurrent_first_call`
   and two `[bytecode][concurrency]` unit tests.
+- **Memory corruption when an actor method contained a string literal longer
+  than six bytes or a Float literal** (D26). Literals were allocated on the
+  main thread's context whichever thread ran the method, so worker threads
+  took cells from the main thread's unsynchronised free list; every run of
+  such a program crashed, hung or printed garbled text. Literals are now
+  allocated on the calling thread's context. `STRuntime::materialize` takes
+  that context, and a module loaded through `loadModuleFromFile` runs on the
+  caller's context through the new `runTopLevel(module, ctx)` overload.
+  Regression tests: `conformance/10-actors/literal-string-in-actor-method.st`
+  and `literal-float-in-actor-method.st`.
 - `--help` and engine errors no longer show internal milestone labels such
   as "(F7)", "— F2" or "F2 limit". A send with more than 8 arguments now
   reports "send of #<selector> has <n> arguments; at most 8 are supported per
@@ -85,7 +95,7 @@ Changes committed after the `v0.3.0` tag.
 
 ### Tests
 
-- 753 → 789 `ctest` cases (314 conformance, 42 examples, 10 CLI, 423 unit).
+- 753 → 791 `ctest` cases (316 conformance, 42 examples, 10 CLI, 423 unit).
 
 ## 0.3.0 — yieldable iteration (2026-05-23)
 

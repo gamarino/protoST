@@ -378,6 +378,14 @@ struct STRuntime::Impl {
     // segfault.
     std::vector<std::unique_ptr<BytecodeModule>> loadedModules;
 
+    // D26: guards `moduleCache` and `loadedModules`. loadModuleFromFile and
+    // loadModule take the caller's context and may be called from any thread
+    // that owns one. The lock covers only the container operations — never an
+    // allocation on the protoCore heap, a safepoint or module execution — so a
+    // thread blocked on it waits at most for one container operation and
+    // cannot stall a stop-the-world collection.
+    std::mutex modulesMu;
+
     Impl() {
         // protoCore exposes the root context as a public field on ProtoSpace
         // (see protoCore/headers/protoCore.h:1234 and protoJS/src/JSContext.cpp:100).
@@ -985,10 +993,26 @@ const proto::ProtoObject* STRuntime::currentActor() const {
     return g_currentActor;
 }
 
+// D26: `ctx` is the calling thread's context. PUSH_CONST runs on every thread
+// (main, actor workers, nested engines), and a heap literal — a string longer
+// than six bytes, a Float, a large integer — is a fresh cell taken from the
+// context's thread-local free list, which is not synchronised. Allocating on
+// the main thread's root context from a worker handed the same cell to two
+// threads and corrupted memory on every run.
+//
+// Lifetime: nothing materialised here is cached or shared by this function.
+// Every call builds a new, immutable value owned by the caller's context; the
+// engine pushes it straight onto the frame's operand stack, which the GC
+// scans as a root, so there is no allocation or safepoint between creation
+// and rooting. If the value later reaches another thread (a message argument,
+// a stored instance variable) it does so through ordinary traced heap
+// references. The shared results are all perpetual or rooted: interned
+// symbols (never collected), the tagged nil/true/false/SmallInteger values
+// (no cell) and the bootstrap unset marker (rooted by the runtime).
 const proto::ProtoObject*
-STRuntime::materialize(const BytecodeModule& m, size_t i) const {
+STRuntime::materialize(proto::ProtoContext* ctx, const BytecodeModule& m,
+                       size_t i) const {
     using K = BytecodeModule::ConstKind;
-    auto* ctx = impl_->rootCtx;
     switch (m.constKind(i)) {
         case K::Integer:
             return ctx->fromLong(m.constInteger(i));
@@ -1028,8 +1052,15 @@ STRuntime::materialize(const BytecodeModule& m, size_t i) const {
 
 const proto::ProtoObject*
 STRuntime::runTopLevel(const BytecodeModule& m) {
+    return runTopLevel(m, impl_->rootCtx);
+}
+
+// `ctx` is the calling thread's context (D26): every allocation below — the
+// captured-locals dict, the live-registry entry, and every literal and object
+// the module's code creates — comes from its thread-local allocator.
+const proto::ProtoObject*
+STRuntime::runTopLevel(const BytecodeModule& m, proto::ProtoContext* ctx) {
     ExecutionEngine eng(*this);
-    auto* ctx = impl_->rootCtx;
     // F3: pre-allocate a mutable dict for module-level captured locals.
     // A mutable child of objectProto behaves as a per-name attribute store —
     // setAttribute mutates this object directly and getAttribute reads it back.
@@ -2151,7 +2182,9 @@ const proto::ProtoObject* STRuntime::loadModuleFromFile(
     }
 
     // Execute the module's top-level (registers classes/methods in globals).
-    runTopLevel(*bc);
+    // D26: on the caller's context, not the root context — this may run on a
+    // thread other than the one that owns the runtime.
+    runTopLevel(*bc, ctx);
 
     // Build the module wrapper: a fresh mutable child of objectProto whose
     // attributes name the classes the module declared.
@@ -2182,7 +2215,10 @@ const proto::ProtoObject* STRuntime::loadModuleFromFile(
     // subsequent sends. Without this the bc would be destroyed at function
     // return and any later send on a class declared by the module would
     // dereference freed memory.
-    impl_->loadedModules.push_back(std::move(bc));
+    {
+        std::lock_guard<std::mutex> lock(impl_->modulesMu);
+        impl_->loadedModules.push_back(std::move(bc));
+    }
 
     return moduleObj;
 }
@@ -2200,12 +2236,18 @@ const proto::ProtoObject* STRuntime::loadModule(proto::ProtoContext* ctx, const 
     namespace fs = std::filesystem;
     std::string canonical = fs::absolute(path).string();
 
-    auto it = impl_->moduleCache.find(canonical);
-    if (it != impl_->moduleCache.end()) return it->second;
+    {
+        std::lock_guard<std::mutex> lock(impl_->modulesMu);
+        auto it = impl_->moduleCache.find(canonical);
+        if (it != impl_->moduleCache.end()) return it->second;
+    }
 
+    // The lock is not held while the module loads: loading executes code and
+    // allocates. If two threads load the same module at once, the first one
+    // to finish is cached and both callers get that instance.
     auto* mod = loadModuleFromFile(ctx, path, logicalPath);
-    impl_->moduleCache[canonical] = mod;
-    return mod;
+    std::lock_guard<std::mutex> lock(impl_->modulesMu);
+    return impl_->moduleCache.emplace(canonical, mod).first->second;
 }
 
 // T5-a: consumer-side cross-language interop.

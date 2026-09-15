@@ -624,7 +624,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             } break;
             case Op::PUSH_CONST: L_PUSH_CONST: {
                 Frame& f = frames_.back();
-                push(f, rt_.materialize(*f.m, arg));
+                // D26: literals are allocated on THIS thread's context.
+                push(f, rt_.materialize(ctx, *f.m, arg));
                 DISPATCH_DIRECT();
             } break;
             case Op::DUP: L_DUP: {
