@@ -187,6 +187,17 @@ Changes committed after the `v0.3.0` tag.
   updates the global; block temporaries and arguments still shadow it, and
   method bodies and scripts are unchanged. Regression test: new cases in
   `tests/cli/test_cli_repl.sh`.
+- **An actor suspended in `wait` could resume before the awaited future
+  settled** (S13). Any scheduler wakeup of a suspended actor resumed its
+  method: a message sent to it while it waited, or one that arrived during
+  the turn in which it suspended, made `wait` answer `nil`
+  (`nil + 1` → `doesNotUnderstand:`). The unit test "F6 v3 E3: cooperative
+  chain survives aggressive GC on 4 workers" failed intermittently for this
+  reason (4 runs in 300 on this tree, 12 in 300 on the build before S4). A
+  wakeup now resumes the method only when the awaited future has settled;
+  otherwise the actor stays suspended, its queued messages wait for the
+  method to finish, and the future's settlement reschedules it. Regression
+  test: `conformance/10-actors/resume-waits-for-awaited-future.st`.
 
 ### Known issues
 
@@ -218,7 +229,7 @@ Changes committed after the `v0.3.0` tag.
   (`out=$(…)` then `grep … <<< "$out"`), which also removes the latent
   `echo "$out" | grep -q` form (46 checks in 6 scripts) that can fail the same
   way once the output exceeds a pipe buffer.
-- 753 → 832 `ctest` cases (351 conformance, 42 examples, 12 CLI, 427 unit).
+- 753 → 833 `ctest` cases (352 conformance, 42 examples, 12 CLI, 427 unit).
 
 ## 0.3.0 — yieldable iteration (2026-05-23)
 

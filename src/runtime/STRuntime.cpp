@@ -1464,6 +1464,25 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             if (awaited && awaited != PROTO_NONE) {
                 auto* st = awaited->getAttribute(ctx, fStateKey);
                 long long s = st ? st->asLong(ctx) : 0;
+                if (s == 0) {
+                    // S13: the awaited future is still pending, so this pop
+                    // is not the settle's wakeup. A scheduler wakeup does not
+                    // say why it was raised: a SEND to the suspended actor, or
+                    // one that arrived during the turn that suspended it (the
+                    // drain loop already consumed that message, but
+                    // finishDrain re-queues a suspended turn whose flag is 2),
+                    // also lands here. Resuming would push nil as the value
+                    // of `wait`. Leave the actor suspended instead: the
+                    // snapshot, __waiting_on__ and the waiter registration on
+                    // the future are untouched, queued messages wait for the
+                    // suspended method to finish, and the settle's schedule()
+                    // re-queues the actor (the 3-state __sched__ flag covers a
+                    // settle racing this turn).
+                    SCHED_DIAG("drainOne RESUME-DEFERRED actor=" << actor
+                               << " awaited=" << awaited << " (pending)");
+                    drainGuard.suspended = true;
+                    return true;
+                }
                 if (s == 1) {
                     auto* v = awaited->getAttribute(ctx, fValueKey);
                     resumeValue = v ? v : PROTO_NONE;
