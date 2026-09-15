@@ -163,6 +163,30 @@ static_assert(kEngineSlotCapacity == 8192,
 // `on:do:` handlers before anyone could convert it.
 static thread_local std::vector<ExecutionEngine*> g_liveEngines;
 
+// S3: cooperative stop-the-world poll for the dispatch loop.
+//
+// protoCore starts a requested collection only once every running thread has
+// parked. Interpreted code that allocates nothing outside critical sections
+// (an inlined loop over SmallIntegers, a block loop, allocation-free
+// recursion) otherwise never reaches a park point, and the whole process
+// waits for the loop to end. The engine polls at the two places every
+// unbounded interpreter path passes through: loop back-edges (JUMP_BACK) and
+// frame entry (the end of pushFrame: method sends, block activations and
+// nested engines, so also every primitive loop that calls blocks).
+//
+// Park-only on purpose: parkIfStopRequested never submits the context's young
+// generation, so values that callers of pushFrame or a primitive further down
+// the C++ stack hold in locals stay safe while parked (the young chain is
+// scanned as roots). safepoint() would submit here, which is unsafe under
+// primitives holding unpinned cells and would change GC pacing. The fast path
+// is one load of the space pointer, one relaxed load of the flag and a branch
+// predicted not taken.
+[[gnu::always_inline]] static inline void
+pollStopTheWorld(proto::ProtoContext* ctx) {
+    if (__builtin_expect(ctx->isStopRequested(), 0))
+        ctx->parkIfStopRequested();
+}
+
 // ---------------------------------------------------------------------------
 // F6 v3 E3: slot accessors. Every ProtoObject* a frame touches is read/written
 // through the engine context's automaticLocals so the GC sees it.
@@ -330,6 +354,10 @@ ExecutionEngine::pushFrame(const BytecodeModule* m,
 
     g_slotCursor += regionSize;
     frames_.push_back(fr);
+
+    // S3: frame entry is a park point. Every slot of the new frame is written,
+    // so its arguments, receiver and captured dictionary are rooted.
+    pollStopTheWorld(ctx_);
 }
 
 // F6 v3 E3: pop the top frame and rewind the shared slot cursor by exactly
@@ -1788,6 +1816,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             case Op::JUMP_BACK: L_JUMP_BACK: {
                 Frame& f = frames_.back();
                 f.pc -= static_cast<std::size_t>(arg) * kInstrSize;
+                // S3: a loop back-edge is a park point (see pollStopTheWorld).
+                pollStopTheWorld(ctx);
                 DISPATCH_DIRECT();
             } break;
             case Op::ASSERT_BOOL_OR_DNU: L_ASSERT_BOOL_OR_DNU: {
