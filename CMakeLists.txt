@@ -18,25 +18,73 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(GNUInstallDirs)
 
-# --- protoCore: same pattern as protoJS/protoPython ---
+# --- protoCore -----------------------------------------------------------------
+# Resolution order (Phase I, decision D-I1):
+#   1. An installed protoCore CMake package: find_package(protoCore 2.0 CONFIG).
+#      This is the only mode that checks protoCore's version and ABI, so it is
+#      the only mode a distributable package may be built in. Name a prefix with
+#      -DPROTO_CORE_PREFIX=<prefix> or -DCMAKE_PREFIX_PATH=<prefix>.
+#   2. Developer fallback: the sibling source tree ../protoCore with one of its
+#      build directories already populated. Search order build_release, build,
+#      build_check - the first directory holding libprotoCore wins, and
+#      build_release comes first so a leftover build/ cannot shadow it. Used
+#      only when no installed package was found and no prefix was named;
+#      refused by -DPROTOCORE_REQUIRE_PACKAGE=ON.
+#
+# The version floor is 2.0: protoST uses no protoCore API newer than 2.0.0. The
+# ceiling is the next major, because protoCore's major version and its soname
+# move together.
+set(PROTOCORE_MIN_VERSION      "2.0")
+set(PROTOCORE_MIN_VERSION_FULL "2.0.0")
+set(PROTOCORE_NEXT_MAJOR       "3.0.0")
+set(PROTOCORE_ABI_SOVERSION    "2")
+option(PROTOCORE_REQUIRE_PACKAGE
+    "Require an installed protoCore CMake package; never fall back to ../protoCore" OFF)
+
 if(DEFINED PROTO_CORE_PREFIX)
-    find_library(PROTOCORE_LIBRARY NAMES protoCore
-        HINTS "${PROTO_CORE_PREFIX}" PATH_SUFFIXES lib lib64)
-    find_path(PROTO_CORE_INCLUDE_DIR NAMES protoCore.h
-        HINTS "${PROTO_CORE_PREFIX}" PATH_SUFFIXES include headers)
-    if(NOT (PROTOCORE_LIBRARY AND PROTO_CORE_INCLUDE_DIR))
-        message(FATAL_ERROR "PROTO_CORE_PREFIX=${PROTO_CORE_PREFIX} set but protoCore not found.")
+    list(APPEND CMAKE_PREFIX_PATH "${PROTO_CORE_PREFIX}")
+endif()
+
+find_package(protoCore ${PROTOCORE_MIN_VERSION} QUIET CONFIG)
+
+if(protoCore_FOUND)
+    if(NOT protoCore_SOVERSION STREQUAL PROTOCORE_ABI_SOVERSION)
+        message(FATAL_ERROR
+            "protoCore package at ${protoCore_DIR} declares SOVERSION "
+            "${protoCore_SOVERSION}; protoST is built against SOVERSION "
+            "${PROTOCORE_ABI_SOVERSION}. Install a matching protoCore.")
     endif()
-    set(PROTOCORE_INCLUDE_DIRS "${PROTO_CORE_INCLUDE_DIR}")
+    set(PROTOCORE_LIBRARY protoCore::protoCore)
+    set(PROTOCORE_INCLUDE_DIRS "${protoCore_INCLUDE_DIR}")
+    message(STATUS "protoST: installed protoCore ${protoCore_VERSION} "
+                   "(SOVERSION ${protoCore_SOVERSION}) from ${protoCore_DIR}")
 else()
+    set(_protoCore_where "")
+    if(DEFINED PROTO_CORE_PREFIX)
+        set(_protoCore_where " under ${PROTO_CORE_PREFIX}")
+    endif()
+    if(DEFINED PROTO_CORE_PREFIX OR PROTOCORE_REQUIRE_PACKAGE)
+        message(FATAL_ERROR
+            "No protoCore >= ${PROTOCORE_MIN_VERSION_FULL} CMake package was "
+            "found${_protoCore_where}.\n"
+            "  A prefix holding only libprotoCore and protoCore.h is no longer "
+            "accepted: without lib/cmake/protoCore/protoCoreConfig.cmake there "
+            "is no way to tell protoCore 1.x from 2.x. Install protoCore "
+            "${PROTOCORE_MIN_VERSION_FULL} or later:\n"
+            "    cmake -S ../protoCore -B ../protoCore/build_release "
+            "-DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=<prefix>\n"
+            "    cmake --build ../protoCore/build_release --target protoCore\n"
+            "    cmake --install ../protoCore/build_release --component protoCore")
+    endif()
+    unset(_protoCore_where)
+    message(WARNING
+        "protoST: no installed protoCore package found; using the developer "
+        "build in ../protoCore. This mode performs no package version check "
+        "and must not be used to produce a distributable package (configure "
+        "with -DPROTOCORE_REQUIRE_PACKAGE=ON to forbid it).")
     set(PROTOCORE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../protoCore)
-    # Search order: build_release, then build, then build_check — the first
-    # directory holding libprotoCore wins. build_release comes first because it
-    # is the tree the ecosystem rebuilds (protoClojure uses the same order); a
-    # leftover build/ from an older checkout must not shadow it. The result is
-    # cached in PROTOCORE_LIBRARY: pass -DPROTOCORE_LIBRARY=<path> (or
-    # -DPROTO_CORE_PREFIX=<prefix>) to choose explicitly, and delete the cache
-    # entry to search again.
+    # The result is cached in PROTOCORE_LIBRARY: pass -DPROTOCORE_LIBRARY=<path>
+    # to choose explicitly, and delete the cache entry to search again.
     find_library(PROTOCORE_LIBRARY NAMES protoCore
         PATHS ${PROTOCORE_DIR}/build_release ${PROTOCORE_DIR}/build ${PROTOCORE_DIR}/build_check
         NO_DEFAULT_PATH)
@@ -45,8 +93,20 @@ else()
             "protoCore shared library not found. Build it first:\n"
             "  cd ${PROTOCORE_DIR} && cmake -B build_release -S . && cmake --build build_release --target protoCore")
     endif()
-    set(PROTOCORE_INCLUDE_DIRS ${PROTOCORE_DIR} ${PROTOCORE_DIR}/headers)
     get_filename_component(PROTOCORE_LIB_DIR "${PROTOCORE_LIBRARY}" DIRECTORY)
+    if(APPLE)
+        set(_protoCore_abi_file "${PROTOCORE_LIB_DIR}/libprotoCore.${PROTOCORE_ABI_SOVERSION}.dylib")
+    else()
+        set(_protoCore_abi_file "${PROTOCORE_LIB_DIR}/libprotoCore.so.${PROTOCORE_ABI_SOVERSION}")
+    endif()
+    if(NOT EXISTS "${_protoCore_abi_file}")
+        message(FATAL_ERROR
+            "The protoCore build in ${PROTOCORE_LIB_DIR} does not provide "
+            "${_protoCore_abi_file}, so it is not SOVERSION "
+            "${PROTOCORE_ABI_SOVERSION}. Rebuild ../protoCore from clean.")
+    endif()
+    unset(_protoCore_abi_file)
+    set(PROTOCORE_INCLUDE_DIRS ${PROTOCORE_DIR} ${PROTOCORE_DIR}/headers)
     set(CMAKE_BUILD_RPATH "${PROTOCORE_LIB_DIR}")
     set(CMAKE_BUILD_RPATH_USE_LINK_PATH TRUE)
 endif()
@@ -221,21 +281,46 @@ set(CPACK_PACKAGE_INSTALL_DIRECTORY "protoST")
 
 # Platform-specific generators.
 if(APPLE)
-    # macOS drag-and-drop .dmg (unverified on a Linux build host).
+    # macOS drag-and-drop .dmg.
+    # UNVERIFIED: configured and reviewed, never built - no macOS host (D-I6).
     set(CPACK_GENERATOR "DragNDrop")
 elseif(UNIX)
-    set(CPACK_GENERATOR "DEB;RPM;TGZ")
+    # Enable only the generators whose tools are present: cpack aborts the whole
+    # run when one of them is missing, which would take the TGZ down with it.
+    # Same pattern as protoCore's own CPack block.
+    set(CPACK_GENERATOR "TGZ")
+    find_program(PROTOST_DPKG_EXECUTABLE dpkg)
+    find_program(PROTOST_RPMBUILD_EXECUTABLE rpmbuild)
+    if(PROTOST_DPKG_EXECUTABLE)
+        list(APPEND CPACK_GENERATOR "DEB")
+        message(STATUS "CPack: DEB generator enabled (dpkg found)")
+    else()
+        message(STATUS "CPack: DEB generator disabled (dpkg not found)")
+    endif()
+    if(PROTOST_RPMBUILD_EXECUTABLE)
+        list(APPEND CPACK_GENERATOR "RPM")
+        message(STATUS "CPack: RPM generator enabled (rpmbuild found)")
+    else()
+        message(STATUS "CPack: RPM generator disabled (rpmbuild not found)")
+    endif()
     # protoST links libprotoCore — the package metadata must declare it.
-    # protoCore's CPack package name is "protoCore"; the DEB generator
-    # lowercases it to "protocore", the RPM generator keeps the case.
+    # protoCore's package is named "protocore" for DEB and "protoCore" for RPM,
+    # both pinned in protoCore/CMakeLists.txt rather than inferred from each
+    # generator's default casing. Its major version and its soname move
+    # together, so the dependency is bounded on both sides.
+    set(CPACK_DEBIAN_PACKAGE_NAME "protost")
     set(CPACK_DEBIAN_PACKAGE_MAINTAINER "gamarino@gmail.com")
     set(CPACK_DEBIAN_PACKAGE_SECTION "interpreters")
-    set(CPACK_DEBIAN_PACKAGE_DEPENDS "protocore")
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS
+        "protocore (>= ${PROTOCORE_MIN_VERSION_FULL}), protocore (<< ${PROTOCORE_NEXT_MAJOR})")
+    set(CPACK_RPM_PACKAGE_NAME "protoST")
     set(CPACK_RPM_PACKAGE_LICENSE "MIT")
     set(CPACK_RPM_PACKAGE_GROUP "Development/Languages")
-    set(CPACK_RPM_PACKAGE_REQUIRES "protoCore")
+    set(CPACK_RPM_PACKAGE_REQUIRES
+        "protoCore >= ${PROTOCORE_MIN_VERSION_FULL}, protoCore < ${PROTOCORE_NEXT_MAJOR}")
 elseif(WIN32)
-    # Windows NSIS installer + plain ZIP (unverified on a Linux build host).
+    # Windows NSIS installer + plain ZIP.
+    # UNVERIFIED: configured and reviewed, never built - no Windows host (D-I6).
     set(CPACK_GENERATOR "NSIS;ZIP")
     set(CPACK_NSIS_HELP_LINK "https://github.com/gamarino/protoST")
     set(CPACK_NSIS_PACKAGE_NAME "protoST")
