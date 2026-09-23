@@ -42,6 +42,19 @@
 #include <unordered_set>
 #include <vector>
 
+// Executable self-location (see executablePath() below). protoPython does the
+// same thing in src/runtime/main.cpp; protoST needs it so an installed binary
+// can find share/protoST/lib on macOS and Windows, not only on Linux.
+#if defined(_WIN32)
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <climits>
+#include <mach-o/dyld.h>
+#else
+#include <climits>
+#include <unistd.h>
+#endif
+
 namespace protoST { void installIntPrimitives(STRuntime& rt); }
 namespace protoST { void installMathPrimitives(STRuntime& rt); }
 namespace protoST { void installTimePrimitives(STRuntime& rt); }
@@ -1948,14 +1961,45 @@ bool STRuntime::isActor(proto::ProtoContext* ctx,
 //
 // Discovery scheme (first hit wins):
 //   1. $PROTOST_LIB — an explicit override pointing straight at a `lib/` dir.
-//   2. Derived from the executable: read /proc/self/exe, then probe
-//      <dir-of-exe>/lib, <dir-of-exe>/../lib, <dir-of-exe>/../../lib and the
-//      installed layout <dir-of-exe>/../share/protoST/lib. A dev build runs
-//      `build/protost`, so `../lib` resolves the project `lib/`; an installed
-//      `bin/protost` finds `<prefix>/share/protoST/lib` (where CPack places
-//      the stdlib `.st` modules).
+//   2. Derived from the executable's own location, on Linux, macOS and Windows:
+//      probe <dir-of-exe>/lib, <dir-of-exe>/../lib, <dir-of-exe>/../../lib, and
+//      the installed layouts <dir-of-exe>/../share/protoST/lib and
+//      <dir-of-exe>/share/protoST/lib. A dev build runs `build/protost`, so
+//      `../lib` resolves the project `lib/`; an installed `bin/protost` finds
+//      `<prefix>/share/protoST/lib` (where the install rules place the stdlib
+//      `.st` modules); the last candidate covers a flat Windows install
+//      directory, which has no bin/ level.
 //   3. <cwd>/lib — convenient when running from a project checkout.
 // Returns "" if no `lib/` directory is found.
+
+// Absolute path of the running executable, or "" when it cannot be determined.
+//
+// Ported from protoPython's getExecutablePath() (protoPython/src/runtime/
+// main.cpp) with two corrections: a Linux readlink() that exactly fills the
+// buffer may have truncated the path, so that result is rejected rather than
+// returned as if it were complete; and _NSGetExecutablePath may hand back a
+// path containing "." or ".." components or an unresolved symlink, so the
+// caller normalises what it gets.
+static std::string executablePath() {
+#if defined(__linux__)
+    char buffer[PATH_MAX];
+    const ssize_t count = ::readlink("/proc/self/exe", buffer, sizeof(buffer));
+    if (count > 0 && count < static_cast<ssize_t>(sizeof(buffer)))
+        return std::string(buffer, static_cast<std::size_t>(count));
+#elif defined(_WIN32)
+    char buffer[MAX_PATH];
+    const DWORD count = ::GetModuleFileNameA(nullptr, buffer, MAX_PATH);
+    if (count > 0 && count < MAX_PATH)
+        return std::string(buffer, static_cast<std::size_t>(count));
+#elif defined(__APPLE__)
+    char buffer[PATH_MAX];
+    uint32_t size = sizeof(buffer);
+    if (::_NSGetExecutablePath(buffer, &size) == 0)
+        return std::string(buffer);
+#endif
+    return "";
+}
+
 static std::string discoverStdlibDir() {
     namespace fs = std::filesystem;
 
@@ -1968,22 +2012,36 @@ static std::string discoverStdlibDir() {
         }
     }
 
-    // 2. Derived from the executable location (/proc/self/exe on Linux).
+    // 2. Derived from the executable location (Linux, macOS and Windows).
     {
-        std::error_code ec;
-        fs::path exe = fs::read_symlink("/proc/self/exe", ec);
-        if (!ec && !exe.empty()) {
-            fs::path dir = exe.parent_path();
+        const std::string exeString = executablePath();
+        if (!exeString.empty()) {
+            std::error_code ec;
+            fs::path exe = fs::weakly_canonical(fs::path(exeString), ec);
+            if (ec) exe = fs::path(exeString);
+            const fs::path dir = exe.parent_path();
+            // The installed layouts come first, and they must: in an install
+            // <prefix>/lib is the *library* directory (it holds libprotoCore),
+            // so the generic "../lib" candidate below matches it and returns a
+            // directory with no .st module in it. `bin/protost` then failed
+            // with "module not found: stream" although the stdlib was
+            // installed two directories away.
             const fs::path candidates[] = {
-                dir / "lib",
-                dir.parent_path() / "lib",
-                dir.parent_path().parent_path() / "lib",
                 // Installed layout: <prefix>/bin/protost ->
                 // <prefix>/share/protoST/lib.
                 dir.parent_path() / "share" / "protoST" / "lib",
+                // Flat install directory (the Windows NSIS/ZIP layout).
+                dir / "share" / "protoST" / "lib",
+                // Development trees: build/protost -> ../lib is the project's.
+                dir / "lib",
+                dir.parent_path() / "lib",
+                dir.parent_path().parent_path() / "lib",
             };
+            // A fresh error_code per probe: reusing one across the loop lets a
+            // failed call leave a stale error behind for the calls after it.
             for (const auto& c : candidates) {
-                if (fs::is_directory(c, ec)) return c.string();
+                std::error_code probe;
+                if (fs::is_directory(c, probe)) return c.string();
             }
         }
     }

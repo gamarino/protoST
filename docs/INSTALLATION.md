@@ -98,15 +98,27 @@ protoCore installed into the same prefix is found with no `LD_LIBRARY_PATH`.
 `discoverStdlibDir()` (`src/runtime/STRuntime.cpp`) probes, in order:
 
 1. `$PROTOST_LIB`, as given;
-2. paths derived from the running executable's own location:
-   `<dir-of-exe>/lib`, `<dir-of-exe>/../lib`, `<dir-of-exe>/../../lib`, and the
-   installed layouts `<dir-of-exe>/../share/protoST/lib` and
-   `<dir-of-exe>/share/protoST/lib`;
+2. paths derived from the running executable's own location, in this order:
+   `<dir-of-exe>/../share/protoST/lib` (the installed layout),
+   `<dir-of-exe>/share/protoST/lib` (a flat install directory, as on Windows),
+   then `<dir-of-exe>/lib`, `<dir-of-exe>/../lib` and `<dir-of-exe>/../../lib`
+   (development trees);
 3. `<cwd>/lib`.
 
 Step 2 is what makes an installed `bin/protost` resolve
 `Import from: 'stream'` out of `share/protoST/lib` with nothing set in the
-environment, and it is what keeps the installation relocatable.
+environment, and it is what keeps the installation relocatable. The installed
+layouts are probed **before** the generic `../lib`, because in an installation
+`<prefix>/lib` is the *library* directory — it holds `libprotoCore` and no `.st`
+module at all.
+
+The executable is located with `/proc/self/exe` on Linux,
+`_NSGetExecutablePath` on macOS and `GetModuleFileNameA` on Windows. Only the
+Linux branch has been executed: the macOS and Windows branches are compiled from
+the same code but **never run here** (D-I6). On Linux the lookup is proved by a
+positive test (an installed `protost` importing `stream` with `PROTOST_LIB`
+unset) and a negative control (the same command with `share/protoST` moved away,
+which must fail).
 
 ---
 
