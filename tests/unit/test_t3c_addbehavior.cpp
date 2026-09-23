@@ -15,12 +15,14 @@
 //   * `addParent:` is a lower-level alias for `addBehavior:`;
 //   * regression — single inheritance and `uses:` are unaffected.
 //
-// THE PROTOCORE CONSTRAINT (probed directly): protoCore freezes an object's
-// parent chain into its base cell at construction. `newChild` copies that
-// frozen chain; a later `addParent`/`setParents` on the class is invisible to
-// the class's instances — even instances created AFTER the mutation.
-// `addBehavior:` therefore REBUILDS the class with the mixin baked into the
-// base chain and rebinds the global; this is exercised end to end here.
+// THE PROTOCORE CONSTRAINT (probed directly against protoCore 2.0.0):
+// protoCore captures an object's parent chain into its base cell at
+// construction and never re-reads it, so a later `addParent`/`setParents` on
+// the class is invisible to instances that ALREADY exist. (Instances created
+// AFTER the mutation do see it, since protoCore 2.0.0's `newChild` copies the
+// prototype's current chain; protoCore 1.x hid it from those too.)
+// `addBehavior:` REBUILDS the class with the mixin baked into the base chain
+// and rebinds the global; this is exercised end to end here.
 //
 // All assertions share one STRuntime: protoST is single-runtime-per-process
 // (STATUS.md D2), so the whole T3-c surface is exercised in one TEST_CASE.
@@ -34,6 +36,7 @@
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
 #include "runtime/BytecodeModule.h"
+#include "runtime/Bootstrap.h"
 #include "protoCore.h"
 
 namespace {
@@ -175,6 +178,45 @@ TEST_CASE("T3-c: on-the-fly behaviour composition via addBehavior:",
             "(AliasCls newChild) ping.");
         REQUIRE(r != nullptr);
         REQUIRE(r->asLong(ctx) == 77);
+    }
+
+    // Pins the protoCore parent-chain semantics that D21's rationale, the
+    // `addBehaviorToClass` comment and LANGUAGE.md §4.12 all cite. It talks to
+    // protoCore directly, not through protoST, because protoST binds
+    // `addParent:` to `addBehavior:` and so has no surface form for a raw
+    // parent mutation. Before protoCore 2.0.0 the third expectation below was
+    // the opposite (`newChild` copied the prototype's BIRTH-state chain, so a
+    // parent added later was invisible to future instances too) and the docs
+    // said so; if this ever changes again, those three places must change with
+    // it.
+    SECTION("protoCore: a later addParent reaches future instances only") {
+        auto* objProto = rt.bootstrap().objectProto;
+        const proto::ProtoString* sel =
+            proto::ProtoString::createSymbol(ctx, "t3cProbeSelector");
+
+        const proto::ProtoObject* cls = objProto->newChild(ctx, /*isMutable=*/true);
+        const proto::ProtoObject* mixin = objProto->newChild(ctx, /*isMutable=*/true);
+        // The value is irrelevant; only its reachability through the chain is
+        // under test, so the mixin stands in for a method object.
+        const_cast<proto::ProtoObject*>(mixin)->setAttribute(ctx, sel, mixin);
+
+        // An instance created BEFORE the mutation.
+        const proto::ProtoObject* before = cls->newChild(ctx, /*isMutable=*/true);
+
+        // Mutate the live, mutable class in place.
+        REQUIRE(cls->addParent(ctx, mixin) == cls);
+
+        // An instance created AFTER the mutation, from the same handle.
+        const proto::ProtoObject* after = cls->newChild(ctx, /*isMutable=*/true);
+
+        auto responds = [&](const proto::ProtoObject* o) {
+            const proto::ProtoObject* v = o->getAttribute(ctx, sel);
+            return v != nullptr && v != PROTO_NONE;
+        };
+        REQUIRE(responds(cls));          // the class itself sees it
+        REQUIRE_FALSE(responds(before)); // D21: pre-existing instances do not
+        REQUIRE(responds(after));        // protoCore 2.0.0: future ones do
+        REQUIRE(after->hasParent(ctx, mixin) != 0);
     }
 
     SECTION("regression: single inheritance and uses: are unaffected") {

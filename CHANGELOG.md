@@ -201,6 +201,15 @@ Changes committed after the `v0.3.0` tag.
 
 ### Build
 
+- **protoCore 2.0.0** (soname `libprotoCore.so.2`). protoST builds and passes
+  its whole suite against it unchanged — no source change was needed. The ABI
+  bump means every protoST build directory must be recreated from clean; a
+  stale object now fails to load with a missing-soname error instead of
+  linking against an incompatible layout. Of the four behaviour changes
+  2.0.0 lists for embedders, only one is observable here, and only in
+  documentation: see "Documentation" below. protoST calls no `setParents` and
+  no `isInstanceOf`; its single `hasParent` call (`HandlerStack`, exception
+  guard matching) keeps its semantics and is now allocation-free.
 - **A fresh configure could link a stale protoCore** (S14). `CMakeLists.txt`
   searched `../protoCore/build` before `../protoCore/build_release`, so a
   leftover `build/` from an older checkout shadowed the library the ecosystem
@@ -208,6 +217,23 @@ Changes committed after the `v0.3.0` tag.
   order is now `build_release`, `build`, `build_check`, as in protoClojure, and
   the not-found message suggests `build_release`. The README documents the
   order and how to override it.
+
+### Documentation
+
+- **The `addBehavior:` rationale claimed something protoCore 2.0.0 makes
+  false.** `docs/STATUS.md` D21, `docs/LANGUAGE.md` §4.12, the tutorial
+  (§11.3, §14.4), `src/primitives/object_prims.cpp` and
+  `tests/unit/test_t3c_addbehavior.cpp` all stated that a direct
+  `addParent`/`setParents` on a live class is invisible to **all** of that
+  class's instances, past *and* future — "verified by direct probing" under
+  protoCore 1.x, where `newChild` copied the prototype's birth-state chain.
+  protoCore 2.0.0 copies the prototype's *current* chain, so instances created
+  **after** such a mutation do see it; only instances that already exist do
+  not. Re-probed directly against 2.0.0 and corrected everywhere. **D21 itself
+  is unchanged** — its subject is pre-existing instances, and `addBehavior:`
+  still has "future instances only" semantics — but the rebuild is no longer
+  the only route to those semantics, which is now recorded where the rebuild
+  is justified.
 
 ### Known issues
 

@@ -170,8 +170,9 @@ protoCore ever makes the caches per-space-instance, the item closes.
 
 `aClass addBehavior: aMixin` makes the class object and every instance created
 *after* the call respond to the mixin's methods. An instance created *before*
-the call does **not** gain them — protoCore freezes an object's parent chain
-into its base cell at construction. (Methods installed directly with `>>` *are*
+the call does **not** gain them — protoCore captures an object's parent chain
+into its base cell at construction and never re-reads it. (Methods installed
+directly with `>>` *are*
 seen by pre-existing instances; only new *parents* are not.) The practical
 guidance is to call `addBehavior:` during setup, before the affected instances
 exist. ([Chapter 11](11-advanced-object-model.md) §11.3.)

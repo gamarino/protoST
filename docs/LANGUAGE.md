@@ -879,11 +879,13 @@ class's behaviour assembled incrementally at runtime from independent mixins.
 > instance created *after* the call. An instance created *before* the call
 > does **not** gain the new behaviour — it keeps the parent chain it was
 > constructed with. This is a deliberate, documented limitation
-> (`STATUS.md` D21): protoCore freezes an object's parent chain into its base
-> cell at construction, so a class can only present a new chain to *future*
-> instances. (Methods installed directly on a class with `>>` *are* seen by
-> pre-existing instances — only new *parents* are not.) Lifting this to "all
-> instances" would require a protoCore change and is out of scope today.
+> (`STATUS.md` D21): protoCore captures an object's parent chain at
+> construction and the object never re-reads it, so a class can only present a
+> new chain to *future* instances. (Methods installed directly on a class with
+> `>>` *are* seen by pre-existing instances — only new *parents* are not.)
+> Lifting this to "all instances" would require protoCore to make a
+> constructed object observe later parent mutations of its prototype, which it
+> deliberately does not do.
 
 `removeBehavior:` is **not provided**: protoCore's parent API offers no clean
 removal of a parent baked into a frozen base chain, so it is out of scope for

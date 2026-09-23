@@ -350,13 +350,13 @@ const proto::ProtoObject* makeSubclass(STRuntime& rt, proto::ProtoContext* ctx,
 // attribute/method lookup already walks the whole linearised parent chain, so
 // protoST only adds the surface syntax (`uses:`) and assembles the chain.
 //
-// A protoCore object freezes its parent chain into its base cell at
-// construction. `newChild` copies the base-cell chain of its prototype; an
-// `addParent` on a mutable class mutates only the class's *snapshot*, which a
-// child created by `newChild` never reads — so a parent added AFTER the class
-// exists is invisible to that class's instances. Therefore a multiply-
-// inheriting class must have its FULL parent chain in place before any
-// instance is created.
+// A protoCore object captures its parent chain at construction: `newChild`
+// copies the prototype's chain into the child, and the child never re-reads
+// it. So a parent added to a class AFTER an instance exists is invisible to
+// that instance. (Since protoCore 2.0.0 `newChild` copies the prototype's
+// CURRENT chain, so instances created after such a mutation DO see it —
+// but existing ones still do not.) A multiply-inheriting class therefore has
+// its FULL parent chain in place before any instance is created.
 //
 // The class is assembled as a mutable `newChild` of an immutable "shape"
 // object that carries the full linearised chain. The shape is built by
@@ -462,19 +462,22 @@ const proto::ProtoObject* makeSubclassWithMixins(
 // call the class — and every instance created AFTER the call — responds to the
 // mixin's methods.
 //
-// THE PROTOCORE CONSTRAINT (probed directly, see commit message / docs):
-// protoCore freezes an object's parent chain into its BASE CELL at
-// construction. `newChild` copies that frozen base chain; a later `addParent`
-// or `setParents` on the (mutable) class mutates only the class object's own
-// snapshot — which children created by `newChild` never read. Crucially this
-// was found to hold even for instances created AFTER the mutation: a plain
-// `aClass addParent: aMixin` is invisible to ALL of that class's instances,
-// past and future. (Method *attributes* installed directly on the class via
-// `>>` ARE seen by existing instances — lookup reaches the class object and
-// reads its current own-attributes — but new *parents* are not.)
+// THE PROTOCORE CONSTRAINT (probed directly against protoCore 2.0.0):
+// protoCore captures an object's parent chain into its BASE CELL at
+// construction, and the object never re-reads it. `newChild` copies the
+// prototype's chain at the moment of the call, so a later `addParent` or
+// `setParents` on the (mutable) class is invisible to instances that ALREADY
+// exist. Instances created AFTER the mutation do see it — protoCore 1.x
+// hid it from those too, because `newChild` copied the prototype's
+// birth-state chain rather than its current one; protoCore 2.0.0 corrected
+// that (CHANGELOG "Upgrading from 1.2.0", item 4). (Method *attributes*
+// installed directly on the class via `>>` ARE seen by existing instances —
+// lookup reaches the class object and reads its current own-attributes — but
+// new *parents* are not.)
 //
-// Therefore `addBehavior:` cannot simply mutate the class. It REBUILDS the
-// class as a fresh object whose base cell carries the mixin:
+// So no construction can give the mixin to instances that already exist, and
+// `addBehavior:` does not try. It REBUILDS the class as a fresh object whose
+// base cell carries the mixin:
 //
 //   1. Take the old class's full (flattened) parent chain via `getParents`.
 //   2. Build an immutable "shape" — `addParent` on an immutable cell bakes the
@@ -497,12 +500,20 @@ const proto::ProtoObject* makeSubclassWithMixins(
 // the `addBehavior:` call.
 //
 // DOCUMENTED LIMITATION — pre-existing instances. An instance created before
-// `addBehavior:` froze its parent chain at its own construction; it keeps the
-// old chain and does NOT gain the mixin. Lifting this would require a
-// protoCore change to make `newChild`-frozen chains observe later parent
-// mutations — out of scope for this slice. `addBehavior:` therefore has
-// "future instances" semantics: it affects the class object and instances
-// created after the call.
+// `addBehavior:` captured its parent chain at its own construction; it keeps
+// that chain and does NOT gain the mixin. Lifting this would require protoCore
+// to let a constructed object observe later parent mutations of its prototype,
+// which it deliberately does not do (a captured chain is what makes lookup
+// allocation-free and snapshot-stable) — out of scope here. `addBehavior:`
+// therefore has "future instances" semantics: it affects the class object and
+// instances created after the call.
+//
+// NOTE (protoCore 2.0.0): a plain `addParent` on the live mutable class would
+// now also give "future instances" semantics, so the rebuild is no longer the
+// only way to reach them. The rebuild is kept because it is what the shipped
+// resolution order, the `super` lookup (exactly one chain entry carries
+// `__class_name__`) and the global rebind are specified against; replacing it
+// with an in-place `addParent` is a behaviour change, not a migration.
 
 namespace {
 // Rebuild `oldCls` as a fresh class object inheriting every parent of
