@@ -114,8 +114,12 @@ hierarchy and protocol**, not new data structures:
   `Interval`) and `HashedCollection` (`Set`, `Bag`, `Dictionary`).
 - The iteration protocol: `do:`, `collect:`, `select:`, `reject:`, `detect:`,
   `detect:ifNone:`, `inject:into:`, `with:do:`, `do:separatedBy:`, etc.
-- Map each Smalltalk class onto the right protoCore primitive (`Dictionary`
-  ← `ProtoSparseList`, `Bag` ← `ProtoMultiset`, …).
+- Map each Smalltalk class onto the right protoCore primitive. As shipped:
+  `Array` / `OrderedCollection` / `Bag` ← `ProtoList`, `Set` and `Dictionary`
+  ← `ProtoMap` through protoCore's hashed-collection helper (Track S; `Bag`
+  keeps one list slot per occurrence, because `ProtoMultiset` keys on the hash
+  and does not retain the element), `Interval` computed lazily from three
+  integer attributes.
 
 **Why it matters:** the iteration protocol *is* the Smalltalk programming
 experience. It also makes the standard library possible.

@@ -124,9 +124,11 @@ are noted where useful.
 - [x] `Future`: `wait`, `thenDo:`, `catch:`, `resolve:`, `rejectWith:`
 - [x] **`Future new`** yields a usable first-class promise *(closed: C3)*
 - [x] Cooperative suspension; parallel scheduler
-- [x] **Lock-free actor mailbox + Future** — no per-actor or per-future mutex;
-      the mailbox read-modify-write and the Future state machine run on
-      protoCore's atomic attribute compare-and-swap (`setAttributeIfEqual`).
+- [x] **Lock-free actor mailbox + Future** — no per-actor or per-future mutex.
+      The mailbox is a protoCore `ProtoMPSCQueue` (Track S): a send is one
+      lock-free O(1) `push`, and a turn drains a whole batch with `takeAll`.
+      The Future state machine and the scheduler run on protoCore's atomic
+      attribute compare-and-swap (`setAttributeIfEqual`).
       A language built on protoCore carries no synchronisation locks of its
       own; only the DAP/debugger I/O locks remain (external-protocol
       coordination, outside protoCore's object model).
