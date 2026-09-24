@@ -31,11 +31,12 @@ include(GNUInstallDirs)
 #      only when no installed package was found and no prefix was named;
 #      refused by -DPROTOCORE_REQUIRE_PACKAGE=ON.
 #
-# The version floor is 2.0: protoST uses no protoCore API newer than 2.0.0. The
-# ceiling is the next major, because protoCore's major version and its soname
-# move together.
-set(PROTOCORE_MIN_VERSION      "2.0")
-set(PROTOCORE_MIN_VERSION_FULL "2.0.0")
+# The version floor is 2.1: the hashed collections are built on protoCore's
+# `ProtoMap` and the hashed-collection helper, and the actor mailboxes on
+# `ProtoMPSCQueue` -- all three added in protoCore 2.1.0. The ceiling is the
+# next major, because protoCore's major version and its soname move together.
+set(PROTOCORE_MIN_VERSION      "2.1")
+set(PROTOCORE_MIN_VERSION_FULL "2.1.0")
 set(PROTOCORE_NEXT_MAJOR       "3.0.0")
 set(PROTOCORE_ABI_SOVERSION    "2")
 option(PROTOCORE_REQUIRE_PACKAGE

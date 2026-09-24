@@ -22,9 +22,15 @@ namespace protoST {
 //     whose epoch is unspecified. Only differences are meaningful; the clock
 //     never goes backwards, so it is the right basis for `millisecondsToRun:`
 //     and any elapsed-time measurement.
+//   * `__monotonicMicros` — the same steady clock in microseconds, for
+//     measurements whose whole duration is a few milliseconds (a mailbox
+//     enqueue loop, for example): at millisecond resolution such a figure
+//     carries one significant digit and a per-operation cost derived from it
+//     is not a measurement.
 //
-// Both values comfortably fit a 56-bit SmallInteger: epoch milliseconds in
-// 2026 are ~1.8e12, far inside 2^55, so no LargeInteger promotion is needed.
+// All three values comfortably fit a 56-bit SmallInteger: epoch milliseconds
+// in 2026 are ~1.8e12 and steady-clock microseconds on a host up a year are
+// ~3e13, both far inside 2^55, so no LargeInteger promotion is needed.
 
 namespace {
 
@@ -51,6 +57,18 @@ const proto::ProtoObject* prim_MonotonicMillis(STRuntime&,
     return ctx->fromLong(static_cast<long long>(ms.count()));
 }
 
+// `__monotonicMicros` — microseconds from the steady (monotonic) clock. Same
+// clock and same unspecified epoch as `__monotonicMillis`, finer unit.
+const proto::ProtoObject* prim_MonotonicMicros(STRuntime&,
+                                               proto::ProtoContext* ctx,
+                                               const proto::ProtoObject*,
+                                               const proto::ProtoObject* const*,
+                                               int) {
+    auto now = std::chrono::steady_clock::now().time_since_epoch();
+    auto us  = std::chrono::duration_cast<std::chrono::microseconds>(now);
+    return ctx->fromLong(static_cast<long long>(us.count()));
+}
+
 } // anon
 
 void installTimePrimitives(STRuntime& rt) {
@@ -62,6 +80,8 @@ void installTimePrimitives(STRuntime& rt) {
                   reg.registerPrim(prim_CurrentMillis));
     bindPrimitive(rt, b.objectProto, "__monotonicMillis",
                   reg.registerPrim(prim_MonotonicMillis));
+    bindPrimitive(rt, b.objectProto, "__monotonicMicros",
+                  reg.registerPrim(prim_MonotonicMicros));
 }
 
 } // namespace protoST
