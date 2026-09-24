@@ -98,6 +98,44 @@ Changes committed after the `v0.3.0` tag.
 
 ### Fixes
 
+- **An actor mailbox batch could be collected in the middle of the turn that
+  was processing it** (S16). `MailboxCursor::adopt` re-pinned the batch with
+  `pin_.reset(new TransientPin(...))` on a `std::unique_ptr`, and
+  `std::unique_ptr::reset` builds the replacement before destroying what it
+  replaces — so a turn that adopted twice (a `__pending__` tail then a queue
+  batch, or two non-empty `takeAll`s) released a scratch pin slot above one
+  still in use, and the next `TransientPin` on that thread overwrote the live
+  one. The batch then had no GC root at all: a collection freed the messages
+  the turn had not reached and `next()` read a freed cell, segfaulting about
+  two runs in five. The cursor now holds one pin for its lifetime and
+  re-points it with `TransientPin::reset`. Introduced by the mailbox migration
+  and invisible until S15 was fixed — a runtime that reclaims nothing cannot
+  expose a lost root. Found by `cli_actor_payload_gc` on its first run.
+- **protoST reclaimed nothing** (S15). A collection cycle
+  never returned a cell to the heap: measured on the pre-fix build, four runs
+  of a 20,000-iteration allocating loop left 2,748,398 cells in the root
+  context's young generation, cycles ran and every one reclaimed exactly 0,
+  and the heap grew monotonically. protoCore chains every cell a context
+  allocates onto that context's young generation and treats the chain as a GC
+  root until the context submits it — which happens when the context is
+  destroyed, or from `ProtoContext::safepoint()` past a per-context
+  threshold. protoST creates no `ProtoContext` of its own (a program runs on
+  the runtime's root context, an actor turn on its worker's) and the
+  interpreter called `safepoint()` nowhere at all, so every cell a program
+  ever allocated stayed live by definition. `ExecutionEngine::gcSafepoint`
+  now calls it at the loop back-edge and at engine entry, the two points
+  where every live object is in a traced slot rather than a C++ local. After
+  the fix the same workload holds the heap flat at 1,048,576 cells and
+  reclaims about 730,000 cells per cycle, against a heap that grew to
+  3,866,624 cells and reclaimed nothing before it. The same call is also
+  protoCore's park point, so it very probably closes **S3** too — but that
+  could not be proved, because no protoST loop is actually allocation-free
+  (every shape measured allocates about three cells per iteration), so S3
+  stays open. Cost, worst case, on a 20,000,000-iteration integer loop that
+  does nothing but add: +2.7 % instructions, +4 % cycles.
+  `PROTOST_NO_GC_SAFEPOINT=1` disables the hook. Regression tests: one `[gc]`
+  unit case, `cli_gc_reclaims` (which also requires the hook-disabled run to
+  fail) and `cli_actor_payload_gc`.
 - **Heap corruption when several workers ran a method for the first time at
   the same moment** (D25). The per-module caches of interned selector
   symbols, instance-variable keys and parsed call-form descriptors were
@@ -285,11 +323,11 @@ Changes committed after the `v0.3.0` tag.
   after `1 to: 3 do: [ :i | bs add: [ i ] ]` every stored block answers 3,
   because a method or module activation keeps one captured-variable
   dictionary (D30, open). See `docs/STATUS.md`.
-- A thread running an allocation-free loop (an inlined loop over
-  SmallIntegers, a block loop, allocation-free recursion) never reaches a
-  garbage-collector park point, so a requested collection waits for its loop
-  to end (S3, open). A fix based on protoCore's park-only safepoint was
-  reverted when protoCore withdrew that API. See `docs/STATUS.md`.
+- A thread running an allocation-free loop never reaches a garbage-collector
+  park point, so a requested collection waits for its loop to end (S3, open).
+  The S15 fix adds `ProtoContext::safepoint()` at every loop back-edge, which
+  is that park point, but the close is unproved: no protoST loop allocates
+  nothing, so S3 cannot be exhibited. See `docs/STATUS.md`.
 - Hashed collections do not agree on element equality (D32, open): a `Set`
   uses protoCore's hashed membership, so `1` and `1.0` are two elements and
   all NaNs are one; a `Dictionary` misses a key `1` looked up as `1.0`; a

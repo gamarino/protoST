@@ -1454,7 +1454,12 @@ public:
     MailboxCursor(STRuntime& rt, proto::ProtoContext* ctx,
                   const proto::ProtoObject* actor)
         : rt_(rt), ctx_(ctx), actor_(actor),
-          pendingKey_(rt.bootstrap().sym.pending) {}
+          pendingKey_(rt.bootstrap().sym.pending),
+          // S16: ONE pin, claimed here for the cursor's whole lifetime and
+          // re-pointed by `adopt`. It is seeded with PROTO_NONE rather than
+          // left unclaimed because a pin built on a null object is inert, and
+          // an inert pin's `reset` does nothing.
+          pin_(ctx, PROTO_NONE) {}
 
     // The next message in FIFO order, or nullptr when the actor has none left.
     const proto::ProtoObject* next() {
@@ -1502,8 +1507,18 @@ private:
         batch_ = batch;
         index_ = 0;
         size_ = static_cast<int>(batch->getSize(ctx_));
-        pin_.reset(new TransientPin(
-            ctx_, reinterpret_cast<const proto::ProtoObject*>(batch)));
+        // S16: re-point the cursor's own pin at the new batch. This used to
+        // be `pin_.reset(new TransientPin(...))` on a `unique_ptr`, which
+        // constructs the replacement BEFORE destroying the pin it replaces —
+        // so a second adopt in one turn (a `__pending__` tail followed by a
+        // queue batch, or two non-empty `takeAll`s) released a scratch slot
+        // above one still in use. `g_scratchCursor` then pointed AT the live
+        // pin's slot, the next `TransientPin` on the thread claimed that slot
+        // and overwrote the batch, and the batch lost its only root: a
+        // collection mid-turn freed the messages the turn had not reached and
+        // `next()` read a freed cell. `TransientPin::reset` exists for exactly
+        // this and claims no new slot.
+        pin_.reset(reinterpret_cast<const proto::ProtoObject*>(batch));
     }
 
     // Park whatever the turn did not reach, and clear a stale `__pending__`.
@@ -1533,7 +1548,9 @@ private:
     int size_ = 0;
     bool pendingLoaded_ = false;
     bool pendingDirty_ = false;
-    std::unique_ptr<TransientPin> pin_;
+    // Declared last: destroyed after every pin `spill()` makes, so the
+    // scratch region is released in LIFO order.
+    TransientPin pin_;
 };
 
 } // namespace

@@ -33,6 +33,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -421,8 +422,24 @@ ExecutionEngine::makeDebugStack() const {
     return top;
 }
 
+// S15: see the contract on the declaration in ExecutionEngine.h.
+const bool ExecutionEngine::gcSafepointEnabled_ =
+    (std::getenv("PROTOST_NO_GC_SAFEPOINT") == nullptr);
+
+void ExecutionEngine::gcSafepoint(proto::ProtoContext* ctx) const {
+    if (gcSafepointEnabled_ && ctx) ctx->safepoint();
+}
+
 const proto::ProtoObject*
 ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
+    // S15: engine entry is the second safepoint. It covers the iteration that
+    // never reaches a back-edge — a `do:` / `inject:into:` / `detect:`
+    // primitive loops in C++ and invokes the block through a fresh engine per
+    // element, so without this a million-element `do:` would submit nothing.
+    // The frame this engine will run is already built and its arguments are
+    // already in traced slots, so nothing of this engine's is in flight.
+    gcSafepoint(ctx);
+
     // F6 v3 E3: locals are no longer grown lazily — every frame's region is
     // pre-sized at pushFrame time (computeLocalCount scans the module for the
     // highest slot referenced). A slot index past localCount is a compiler /
@@ -1776,6 +1793,10 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             case Op::JUMP_BACK: L_JUMP_BACK: {
                 Frame& f = frames_.back();
                 f.pc -= static_cast<std::size_t>(arg) * kInstrSize;
+                // S15: the loop back-edge is protoST's garbage-collection
+                // safepoint. See the comment on `gcSafepoint` for why the
+                // back-edge is the right place and what it fixes.
+                gcSafepoint(ctx);
                 DISPATCH_DIRECT();
             } break;
             case Op::ASSERT_BOOL_OR_DNU: L_ASSERT_BOOL_OR_DNU: {

@@ -259,6 +259,52 @@ private:
     // (the text debugger) keep working unchanged.
     DebugFrame makeDebugStack() const;
 
+    // S15: protoST's garbage-collection safepoint.
+    //
+    // protoCore reclaims nothing a context has not handed over. Every cell a
+    // context allocates is chained onto that context's *young generation*, and
+    // the collector's root scan records that chain's head as a root and marks
+    // the whole chain — so, until the chain is submitted, every cell the
+    // context ever allocated is permanently live. A context submits its chain
+    // in exactly two places: when it is destroyed, and from
+    // `ProtoContext::safepoint()` once it has crossed
+    // `maxAllocatedCellsPerContext` (10,000 cells by default).
+    //
+    // protoST creates no `ProtoContext` of its own: a whole program runs on
+    // the runtime's root context, and a whole actor turn on its worker's root
+    // context. Those contexts are destroyed only when the process ends. Before
+    // this hook the interpreter called `safepoint()` nowhere at all, so the
+    // root context's young generation was never submitted and every collection
+    // cycle reclaimed exactly zero cells — measured: 2,748,398 cells in the
+    // root context's chain after four runs of a 20,000-iteration allocating
+    // loop, a heap that only ever grew, and, under
+    // `PROTOCORE_HEAP_LIMIT_CELLS`, the abort "last cycle reclaimed 0". That
+    // is bug S15.
+    //
+    // The loop back-edge (`Op::JUMP_BACK`) and engine entry are the two points
+    // where this engine holds no half-built value in a C++ local: every live
+    // object is in a frame region or a `TransientPin` scratch slot, both of
+    // which are `ProtoContext::automaticLocals` and therefore traced. That is
+    // exactly the precondition `ProtoContext::safepoint()` documents, and it
+    // is why the submission may not be made from `allocCell` instead.
+    //
+    // `safepoint()` is also the stop-the-world park point, so a long
+    // allocation-free loop no longer stalls a collection either.
+    //
+    // Cost: the submission is threshold-gated inside protoCore, so all a
+    // back-edge normally pays is a handful of atomic loads. Worst case, on a
+    // 20,000,000-iteration loop that does nothing but add: +2.7 % instructions,
+    // +4 % cycles. `PROTOST_NO_GC_SAFEPOINT=1` disables the hook for A/B
+    // measurement, and is read once per process.
+    //
+    // Defined in ExecutionEngine.cpp, because this header only forward-declares
+    // `proto::ProtoContext`.
+    void gcSafepoint(proto::ProtoContext* ctx) const;
+
+    // Read once from PROTOST_NO_GC_SAFEPOINT at static-init time; see
+    // gcSafepoint.
+    static const bool gcSafepointEnabled_;
+
     // Single dispatch loop operating on frames_.back(). Returns when frames_
     // becomes empty (the original C++ caller's frame's RETURN_TOP popped the
     // last frame) — the returned value is whatever that final frame produced.

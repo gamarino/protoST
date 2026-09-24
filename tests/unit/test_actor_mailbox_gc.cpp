@@ -18,20 +18,18 @@
 //
 // The second test below fails if protection 2 is removed.
 //
-// The first protection CANNOT be shown red on protoST today, and the reason is
-// worth stating rather than glossing: **a forced collection never runs.**
-// Measured 2026-09-24 on this build — `ProtoSpace::triggerGC()` called eight
-// times leaves `getGCCycleCount()` at 0, with or without actors, after 20 000
-// throwaway allocations; and with `PROTOCORE_HEAP_LIMIT_CELLS` set above
-// protoST's own live set (~176 000 cells) a plain
-// `1 to: 100000 do: [ :i | Array new: 8 ]` aborts with "heap hard limit
-// reached; last cycle reclaimed 0" while `PROTOCORE_GC_PROFILE=1` prints
-// nothing. So no collection cycle completes, in either direction, and
-// "survives a forced collection" is not yet a falsifiable statement in this
-// runtime. That is recorded as bug S15 in docs/STATUS.md. The first test here
-// therefore asserts what it can — that a large backlog plus repeated collection
-// requests leaves every message intact — and will become a real GC test the
-// day S15 is fixed, with no change to its body.
+// The first protection is proved by `tests/cli/test_cli_actor_payload_gc.sh`,
+// not here. When Track S was written it could not be proved at all: protoST
+// reclaimed nothing, so "survives a collection" was not a falsifiable statement
+// in this runtime — bug S15, closed on 2026-09-24 by giving the interpreter a
+// garbage-collection safepoint at the loop back-edge and at engine entry (see
+// `ExecutionEngine::gcSafepoint`). The CLI fixture now queues 5,000 payloads
+// that only the mailbox references under a heap ceiling low enough that cycles
+// run throughout, and each handler checks its own payload; removing the
+// `TransientPin` in `MailboxCursor::adopt` segfaults it.
+//
+// The two tests here stay as they are: they cover ordering and delivery, which
+// are cheap to check in-process and do not need a collection.
 
 #include <catch2/catch_all.hpp>
 

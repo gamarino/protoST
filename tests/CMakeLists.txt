@@ -93,6 +93,9 @@ target_sources(protost_unit_tests PRIVATE
     unit/test_actor_mailbox_gc.cpp
 )
 target_sources(protost_unit_tests PRIVATE
+    unit/test_gc_cycle.cpp
+)
+target_sources(protost_unit_tests PRIVATE
     unit/test_hashed_collections.cpp
 )
 target_compile_definitions(protost_unit_tests PRIVATE

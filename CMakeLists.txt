@@ -220,6 +220,19 @@ add_test(NAME cli_concurrent_first_call
 add_test(NAME cli_gc_shutdown_stress
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_gc_shutdown_stress.sh $<TARGET_FILE:protost>)
 
+# S15 regression: a workload that allocates far more than the heap ceiling
+# allows must finish, which it can only do if collections reclaim. The fixture
+# also runs it with the interpreter's safepoint hook disabled and requires that
+# run to abort, so it cannot pass by accident.
+add_test(NAME cli_gc_reclaims
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_gc_reclaims.sh $<TARGET_FILE:protost>)
+
+# Track S: actor message payloads that only the mailbox references must survive
+# the collections that run while they are queued. Needs S15 fixed to mean
+# anything; the fixture checks that its own ceiling still forces collections.
+add_test(NAME cli_actor_payload_gc
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_actor_payload_gc.sh $<TARGET_FILE:protost>)
+
 # S4 regression: a DAP session (run to completion, and a breakpoint stop with
 # evaluations) while the debuggee's actors allocate.
 add_test(NAME cli_dap_gc
