@@ -1338,13 +1338,52 @@ bool STRuntime::casSchedState(proto::ProtoContext* ctx,
     return a->setAttributeIfEqual(ctx, k, ctx->fromLong(from), ctx->fromLong(to));
 }
 
+const proto::ProtoMPSCQueue* STRuntime::actorMailbox(
+        proto::ProtoContext* ctx, const proto::ProtoObject* actor) {
+    if (!actor) return nullptr;
+    const proto::ProtoString* k = impl_->bootstrap.sym.mailbox;
+    for (;;) {
+        const proto::ProtoObject* mb = actor->getOwnAttributeDirect(ctx, k);
+        if (mb && mb != PROTO_NONE) {
+            if (const proto::ProtoMPSCQueue* q = mb->asMPSCQueue(ctx)) return q;
+            // An attribute that is not a queue can only come from a fixture
+            // that built the actor by hand. Replace it rather than push into
+            // nothing, using the same CAS so a racing sender cannot lose a
+            // queue another thread has already installed.
+        }
+        const proto::ProtoMPSCQueue* fresh = ctx->newMPSCQueue();
+        TransientPin pinFresh(
+            ctx, reinterpret_cast<const proto::ProtoObject*>(fresh));
+        const proto::ProtoObject* freshObj = fresh->asObject(ctx);
+        TransientPin pinFreshObj(ctx, freshObj);
+        const proto::ProtoObject* expected =
+            (mb && mb != PROTO_NONE) ? mb : nullptr;
+        if (const_cast<proto::ProtoObject*>(actor)
+                ->setAttributeIfEqual(ctx, k, expected, freshObj))
+            return fresh;
+        // Lost the race: another thread installed one. Re-read and use it.
+    }
+}
+
 bool STRuntime::mailboxHasWork(proto::ProtoContext* ctx,
                                const proto::ProtoObject* actor) {
+    // The tail of a batch a previous turn did not finish counts as work, and
+    // is checked first because it is ahead of the queue in FIFO order.
+    const proto::ProtoObject* pend =
+        actor->getOwnAttributeDirect(ctx, impl_->bootstrap.sym.pending);
+    if (pend && pend != PROTO_NONE) {
+        const proto::ProtoList* tail = pend->asList(ctx);
+        if (tail && tail->getSize(ctx) > 0) return true;
+    }
     const proto::ProtoObject* mb =
         actor->getOwnAttributeDirect(ctx, impl_->bootstrap.sym.mailbox);
     if (!mb || mb == PROTO_NONE) return false;
-    const proto::ProtoList* mbList = mb->asList(ctx);
-    return mbList && mbList->getSize(ctx) > 0;
+    const proto::ProtoMPSCQueue* q = mb->asMPSCQueue(ctx);
+    // isEmpty is a snapshot that may be stale the moment it is read. That is
+    // exactly what this predicate needs: a message that arrives after the read
+    // is covered by the sender's own schedule() call, which the __sched__
+    // flag's 1->2 transition cannot lose.
+    return q && !q->isEmpty(ctx);
 }
 
 void STRuntime::schedule(proto::ProtoContext* ctx, const proto::ProtoObject* actor) {
@@ -1383,32 +1422,121 @@ void STRuntime::schedule(proto::ProtoContext* ctx, const proto::ProtoObject* act
     }
 }
 
-// F6 v5 (2026-05-23): popMailboxHead — lock-free FIFO pop of an actor's
-// __mailbox__ via ProtoList CAS-retry. Returns nullptr if the mailbox is
-// empty or absent. Used by the per-turn drain loop in drainOne.
-static const proto::ProtoObject* popMailboxHead(
-        proto::ProtoContext* ctx,
-        const proto::ProtoObject* actor,
-        const proto::ProtoString* mailboxKey) {
-    for (;;) {
-        const proto::ProtoObject* mbObj =
-            actor->getOwnAttributeDirect(ctx, mailboxKey);
-        if (!mbObj || mbObj == PROTO_NONE) return nullptr;
-        auto* mailbox = mbObj->asList(ctx);
-        if (!mailbox || mailbox->getSize(ctx) == 0) return nullptr;
-        const proto::ProtoObject* head = mailbox->getAt(ctx, 0);
-        auto* remaining = mailbox->getSlice(
-            ctx, 1, static_cast<int>(mailbox->getSize(ctx)));
-        TransientPin pinRemaining(
-            ctx, reinterpret_cast<const proto::ProtoObject*>(remaining));
-        const proto::ProtoObject* newMbObj = remaining->asObject(ctx);
-        TransientPin pinNewMbObj(ctx, newMbObj);
-        if (const_cast<proto::ProtoObject*>(actor)
-                ->setAttributeIfEqual(ctx, mailboxKey, mbObj, newMbObj))
-            return head;
-        // CAS lost — a concurrent SEND raced; re-read and retry.
+// MailboxCursor — one turn's view of an actor's mailbox.
+//
+// ProtoMPSCQueue hands over a whole batch at a time (`takeAll`), not one
+// message at a time, which is what makes a send O(1): the consumer pays for
+// the ordering once per batch instead of the producer paying for it on every
+// push. A turn, though, still processes messages one by one and can end in the
+// middle of a batch, because a FutureYield parks the actor. So the cursor owns
+// two things:
+//
+//   * the batch it is walking, pinned for the whole turn. This is the turn's
+//     ONLY reference to those messages: `takeAll` has already removed them
+//     from the queue, and the ProtoList it returns lives in a C++ local, which
+//     the collector does not trace. The turn runs arbitrary user code that
+//     allocates, so without the pin a collection mid-turn would reclaim every
+//     message still ahead of the cursor. `ProtoMPSCQueueMailboxGC` in
+//     tests/unit/test_actor_mailbox_gc.cpp fails if this pin is removed.
+//
+//   * the unprocessed tail at turn end, which it writes to the actor's
+//     `__pending__` attribute. That makes the tail reachable across turns
+//     (an attribute is traced; a C++ local is not) and keeps FIFO order: the
+//     next turn reads `__pending__` before it touches the queue again.
+//
+// Single-consumer is guaranteed by the caller: drainOne owns the actor for the
+// turn through the `__sched__` flag, so no other thread calls takeAll on this
+// queue at the same time.
+namespace {
+
+class MailboxCursor {
+public:
+    MailboxCursor(STRuntime& rt, proto::ProtoContext* ctx,
+                  const proto::ProtoObject* actor)
+        : rt_(rt), ctx_(ctx), actor_(actor),
+          pendingKey_(rt.bootstrap().sym.pending) {}
+
+    // The next message in FIFO order, or nullptr when the actor has none left.
+    const proto::ProtoObject* next() {
+        for (;;) {
+            if (batch_ && index_ < size_)
+                return batch_->getAt(ctx_, index_++);
+            if (!loadPending() && !loadQueueBatch()) return nullptr;
+        }
     }
-}
+
+    ~MailboxCursor() { spill(); }
+
+    MailboxCursor(const MailboxCursor&) = delete;
+    MailboxCursor& operator=(const MailboxCursor&) = delete;
+
+private:
+    // The tail a previous turn parked, consumed before anything in the queue.
+    bool loadPending() {
+        if (pendingLoaded_) return false;
+        pendingLoaded_ = true;
+        const proto::ProtoObject* raw =
+            actor_->getOwnAttributeDirect(ctx_, pendingKey_);
+        if (!raw || raw == PROTO_NONE) return false;
+        const proto::ProtoList* tail = raw->asList(ctx_);
+        if (!tail || tail->getSize(ctx_) == 0) return false;
+        // The attribute has to be cleared even if this turn consumes the whole
+        // tail, so record that a write is owed.
+        pendingDirty_ = true;
+        adopt(tail);
+        return true;
+    }
+
+    // One `takeAll` batch. An empty batch ends the turn: any message pushed
+    // after it is covered by that sender's own schedule() call.
+    bool loadQueueBatch() {
+        const proto::ProtoMPSCQueue* queue = rt_.actorMailbox(ctx_, actor_);
+        if (!queue) return false;
+        const proto::ProtoList* batch = queue->takeAll(ctx_);
+        if (!batch || batch->getSize(ctx_) == 0) return false;
+        adopt(batch);
+        return true;
+    }
+
+    void adopt(const proto::ProtoList* batch) {
+        batch_ = batch;
+        index_ = 0;
+        size_ = static_cast<int>(batch->getSize(ctx_));
+        pin_.reset(new TransientPin(
+            ctx_, reinterpret_cast<const proto::ProtoObject*>(batch)));
+    }
+
+    // Park whatever the turn did not reach, and clear a stale `__pending__`.
+    void spill() {
+        const bool haveTail = batch_ && index_ < size_;
+        if (!haveTail && !pendingDirty_) return;
+        if (!haveTail) {
+            const_cast<proto::ProtoObject*>(actor_)
+                ->setAttribute(ctx_, pendingKey_, PROTO_NONE);
+            return;
+        }
+        const proto::ProtoList* tail = batch_->getSlice(ctx_, index_, size_);
+        TransientPin pinTail(
+            ctx_, reinterpret_cast<const proto::ProtoObject*>(tail));
+        const proto::ProtoObject* tailObj = tail->asObject(ctx_);
+        TransientPin pinTailObj(ctx_, tailObj);
+        const_cast<proto::ProtoObject*>(actor_)
+            ->setAttribute(ctx_, pendingKey_, tailObj);
+    }
+
+    STRuntime& rt_;
+    proto::ProtoContext* ctx_;
+    const proto::ProtoObject* actor_;
+    const proto::ProtoString* pendingKey_;
+    const proto::ProtoList* batch_ = nullptr;
+    int index_ = 0;
+    int size_ = 0;
+    bool pendingLoaded_ = false;
+    bool pendingDirty_ = false;
+    std::unique_ptr<TransientPin> pin_;
+};
+
+} // namespace
 
 bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     // CAS-pop the head of the lock-free ready queue. If two drainers race,
@@ -1436,7 +1564,6 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
         ~DrainGuard() { self->finishDrain(ctx, actor, suspended); }
     } drainGuard{this, ctx, actor};
 
-    const proto::ProtoString* mailboxKey   = impl_->bootstrap.sym.mailbox;
     const proto::ProtoString* wrappedKey   = impl_->bootstrap.sym.wrapped;
     const proto::ProtoString* selKey       = impl_->bootstrap.sym.selector;
     const proto::ProtoString* argsKey      = impl_->bootstrap.sym.args;
@@ -1613,10 +1740,14 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     const proto::ProtoString* bcKey  = impl_->bootstrap.sym.bcPtr;
     const proto::ProtoString* capKey = impl_->bootstrap.sym.captured;
 
+    // Declared after `drainGuard`, so it is destroyed BEFORE finishDrain runs:
+    // the unprocessed tail reaches `__pending__` before finishDrain asks
+    // mailboxHasWork whether the actor should be re-queued.
+    MailboxCursor cursor(*this, ctx, actor);
+
     for (;;) {
-        // Pop the next FIFO message; exit drain if empty.
-        const proto::ProtoObject* msg =
-            popMailboxHead(ctx, actor, mailboxKey);
+        // The next FIFO message; exit the drain when there is none.
+        const proto::ProtoObject* msg = cursor.next();
         if (!msg) break;
 
         TransientPin pinMsg(ctx, msg);

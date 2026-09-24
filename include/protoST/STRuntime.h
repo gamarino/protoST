@@ -10,6 +10,7 @@ namespace proto {
     class ProtoObject;
     class ProtoRootSet;
     class ProtoString;
+    class ProtoMPSCQueue;
 }
 
 namespace protoST { class DebuggerRuntime; }
@@ -150,6 +151,20 @@ public:
     // a non-nil __wrapped__ attribute (set by Object>>asActor).
     bool isActor(proto::ProtoContext* ctx, const proto::ProtoObject* obj) const;
 
+    // The actor's mailbox: a protoCore ProtoMPSCQueue held under the
+    // `__mailbox__` attribute. Lock-free and O(1) on the send side, traced by
+    // the garbage collector on the queued messages, and drained one whole
+    // batch at a time by `takeAll`.
+    //
+    // An actor built by `Object>>asActor` always has one. A hand-built actor
+    // fixture (a `__wrapped__` attribute and nothing else, as some unit tests
+    // construct) does not, so a queue is installed lazily with an attribute
+    // compare-and-swap against "absent": concurrent senders therefore agree on
+    // one queue instead of each pushing into a private one. Returns nullptr
+    // only when `actor` is null.
+    const proto::ProtoMPSCQueue* actorMailbox(proto::ProtoContext* ctx,
+                                              const proto::ProtoObject* actor);
+
     // F6 v3 C: thread-local "actor currently being processed by drainOne on
     // THIS thread". Future>>wait consults this to decide between blocking on
     // the future's cv (main thread / non-actor context) and throwing
@@ -238,8 +253,7 @@ private:
     // Lock-free scheduler primitives — there is no scheduler mutex.
     //
     // The ready queue is a protoCore immutable ProtoList held under
-    // `liveRegistry.__ready__`, mutated by compare-and-swap (the same pattern
-    // as the lock-free actor mailbox). The "is this actor owned by the
+    // `liveRegistry.__ready__`, mutated by compare-and-swap. The "is this actor owned by the
     // scheduler" state is a per-actor 3-state flag in the `__sched__`
     // attribute, also CAS'd:
     //   0 = idle (not queued, not running);

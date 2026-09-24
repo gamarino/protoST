@@ -114,6 +114,14 @@ struct Bootstrap {
     // of calling createSymbol — a SymbolTable hash+lock — on every message.
     struct Symbols {
         const proto::ProtoString* mailbox         = nullptr;  // __mailbox__
+        // The unprocessed tail of the batch the current turn took out of the
+        // mailbox queue. ProtoMPSCQueue::takeAll hands over every queued
+        // message at once, but a turn can end before it has run them all (a
+        // FutureYield parks the actor); the remainder is parked here, an
+        // attribute of the actor, so that it stays reachable for the garbage
+        // collector and is consumed — in FIFO order, ahead of the queue —
+        // when the actor next runs. Absent or nil means there is none.
+        const proto::ProtoString* pending         = nullptr;  // __pending__
         const proto::ProtoString* wrapped         = nullptr;  // __wrapped__
         const proto::ProtoString* selector        = nullptr;  // __selector__
         const proto::ProtoString* args            = nullptr;  // __args__

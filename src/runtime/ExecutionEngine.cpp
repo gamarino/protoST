@@ -991,8 +991,6 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // the send. The actual method execution happens later when
                 // STRuntime::drainOne pulls a message from the mailbox.
                 if (rt_.isActor(ctx, recv)) {
-                    const proto::ProtoString* mbKey =
-                        rt_.bootstrap().sym.mailbox;
                     const proto::ProtoString* msgSelKey =
                         rt_.bootstrap().sym.selector;
                     const proto::ProtoString* msgArgsKey =
@@ -1002,9 +1000,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
 
                     // Allocate a fresh pending Future.
                     // F6 v3 E5: `fut` is held in a C++ local across newChild,
-                    // newList, the appendLast loop, three setAttribute calls
-                    // on mutable objects, the CAS-retry mailbox append and
-                    // schedule() — all of which allocate. Pin it.
+                    // newList, the argument loop, three setAttribute calls on
+                    // mutable objects, the mailbox push and schedule() — all
+                    // of which allocate. Pin it.
                     auto* fut = const_cast<proto::ProtoObject*>(rt_.newFuture(ctx));
                     TransientPin pinFut(ctx, fut);
 
@@ -1050,30 +1048,20 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     msg = msg->setAttribute(ctx, msgFutKey, fut);
                     pinMsg.reset(msg);
 
-                    // Append to the actor's mailbox with a lock-free
-                    // compare-and-swap retry. The mailbox is held under the
-                    // actor's __mailbox__ attribute; a concurrent drainOne pop
-                    // or a parallel SEND is a competing read-modify-write.
-                    for (;;) {
-                        const proto::ProtoObject* mbObj =
-                            recv->getOwnAttributeDirect(ctx, mbKey);
-                        auto* mailbox = (mbObj && mbObj != PROTO_NONE)
-                            ? mbObj->asList(ctx) : ctx->newList();
-                        TransientPin pinMailbox(
-                            ctx, reinterpret_cast<const proto::ProtoObject*>(mailbox));
-                        auto* newMailbox = mailbox->appendLast(ctx, msg);
-                        TransientPin pinNewMailbox(
-                            ctx, reinterpret_cast<const proto::ProtoObject*>(newMailbox));
-                        const proto::ProtoObject* newMbObj =
-                            newMailbox->asObject(ctx);
-                        TransientPin pinNewMbObj(ctx, newMbObj);
-                        if (const_cast<proto::ProtoObject*>(recv)
-                                ->setAttributeIfEqual(ctx, mbKey, mbObj, newMbObj))
-                            break;
-                    }
+                    // Push onto the actor's ProtoMPSCQueue mailbox: lock-free,
+                    // O(1), one cell, and safe from any number of concurrent
+                    // senders. It replaces a compare-and-swap retry loop that
+                    // rebuilt the whole mailbox list on every send and again on
+                    // every pop — quadratic in the depth of an undrained
+                    // mailbox. The collector traces the queued messages, so the
+                    // envelope needs no further root once it is pushed.
+                    rt_.actorMailbox(ctx, recv)->push(ctx, msg);
 
                     // Schedule the actor for processing and stash the Future
-                    // as the apparent result of the send.
+                    // as the apparent result of the send. The push happens
+                    // BEFORE schedule(): that mailbox-then-sched order is what
+                    // lets finishDrain decide at turn end without a lock (see
+                    // STRuntime::finishDrain).
                     rt_.schedule(ctx, recv);
                     push(f, fut);
                     DISPATCH_DIRECT();

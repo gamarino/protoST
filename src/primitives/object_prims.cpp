@@ -54,7 +54,10 @@ const proto::ProtoObject* prim_Object_newChild(STRuntime&,
 // F6-A2: Wraps any object as an Actor by creating a mutable child of
 // actorProto with three attributes:
 //   __wrapped__ : the original receiver
-//   __mailbox__ : an empty (mutable) ProtoList serving as the cons-stack mailbox
+//   __mailbox__ : a protoCore ProtoMPSCQueue — the lock-free, GC-traced
+//                 multi-producer / single-consumer mailbox
+//   __pending__ : the tail of a batch a turn took out of the queue but has not
+//                 processed yet (absent or nil while there is none)
 //   __state__   : SmallInteger(0) — 0 = idle, non-zero values reserved for
 //                 scheduler use (running / waiting) in later F6 tasks.
 const proto::ProtoObject* prim_Object_asActor(STRuntime& rt, proto::ProtoContext* ctx,
@@ -71,24 +74,23 @@ const proto::ProtoObject* prim_Object_asActor(STRuntime& rt, proto::ProtoContext
     // root. Pin it for the primitive's lifetime.
     TransientPin pinActor(ctx, actor);
 
-    // __wrapped__ = recv
-    const proto::ProtoString* wrappedKey =
-        proto::ProtoString::createSymbol(ctx, "__wrapped__");
-    actor->setAttribute(ctx, wrappedKey, r);
+    // __wrapped__ = recv. The three keys below come from the Bootstrap symbol
+    // cache rather than a fresh createSymbol: interning is a SymbolTable
+    // hash + shard lock, and these are on the actor-creation path.
+    actor->setAttribute(ctx, b.sym.wrapped, r);
 
-    // __mailbox__ = empty ProtoList (Lisp-style cons stack)
-    const proto::ProtoString* mailboxKey =
-        proto::ProtoString::createSymbol(ctx, "__mailbox__");
-    auto* emptyList = ctx->newList();
-    // `emptyList` is held across asObject + setAttribute — pin it.
-    TransientPin pinEmptyList(
-        ctx, reinterpret_cast<const proto::ProtoObject*>(emptyList));
-    actor->setAttribute(ctx, mailboxKey, emptyList->asObject(ctx));
+    // __mailbox__ = a fresh ProtoMPSCQueue. Unlike the immutable ProtoList it
+    // replaces, the queue object's identity never changes: a send pushes into
+    // it in O(1) with no compare-and-swap retry on the attribute, and the
+    // garbage collector traces the queued messages.
+    const proto::ProtoMPSCQueue* queue = ctx->newMPSCQueue();
+    // `queue` is held across asObject + setAttribute — pin it.
+    TransientPin pinQueue(
+        ctx, reinterpret_cast<const proto::ProtoObject*>(queue));
+    actor->setAttribute(ctx, b.sym.mailbox, queue->asObject(ctx));
 
     // __state__ = 0 (idle)
-    const proto::ProtoString* stateKey =
-        proto::ProtoString::createSymbol(ctx, "__state__");
-    actor->setAttribute(ctx, stateKey, ctx->fromLong(0));
+    actor->setAttribute(ctx, b.sym.state, ctx->fromLong(0));
 
     // __sched__ = 0 — the lock-free scheduler's per-actor 3-state turn-
     // ownership flag (0 idle / 1 active / 2 active+wakeup-pending). It MUST
@@ -96,12 +98,13 @@ const proto::ProtoObject* prim_Object_asActor(STRuntime& rt, proto::ProtoContext
     // 0->1 compare-and-swap has a concrete value to match against.
     actor->setAttribute(ctx, rt.bootstrap().sym.sched, ctx->fromLong(0));
 
-    // No per-actor mutex and no scheduler mutex. The mailbox read-modify-write
-    // (SEND fast-path / STRuntime::drainOne) and the scheduler itself are
-    // lock-free over ProtoObject::setAttributeIfEqual — protoCore's atomic
-    // attribute CAS. "At most one message in flight per actor" is enforced by
-    // the __sched__ flag staying non-zero for the whole turn — see
-    // STRuntime::drainOne / STRuntime::schedule / STRuntime::finishDrain.
+    // No per-actor mutex and no scheduler mutex. A send is a ProtoMPSCQueue
+    // push (lock-free, O(1), one cell) and the scheduler itself is lock-free
+    // over ProtoObject::setAttributeIfEqual — protoCore's atomic attribute
+    // CAS. ProtoMPSCQueue::takeAll admits a single consumer at a time, which
+    // "at most one turn in flight per actor" guarantees: the __sched__ flag
+    // stays non-zero for the whole turn — see STRuntime::drainOne /
+    // STRuntime::schedule / STRuntime::finishDrain.
 
     return actor;
 }

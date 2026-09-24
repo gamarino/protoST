@@ -14,9 +14,12 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Test suite:** 833 `ctest` cases (352 conformance, 42 examples, 12 CLI,
-  427 unit), counted with `ctest -N` on 2026-09-15; 833/833 pass with the
-  S13 fix (one conformance case is an expected failure pinning D30). Before
+- **Test suite:** 835 `ctest` cases (352 conformance, 42 examples, 12 CLI,
+  429 unit), counted with `ctest -N` on 2026-09-24; 835/835 pass with the
+  ProtoMPSCQueue mailbox migration, which added the two mailbox-reachability
+  unit cases (one conformance case is an expected failure pinning D30).
+  Before it: 833/833 with the
+  S13 fix. Before
   it: 832/832 with the D31 fix (the S10 fix added cases to `cli_repl`), 830/830 with the S4 fix, also with `PROTOCORE_GC_MIN_BUDGET_CELLS=4096`
   (a protoCore variable since withdrawn), 826/826 with the D29
   fix, 807/807 with the D28 fix, 797/797 with the S6 fix, 793/793 with the
@@ -34,7 +37,7 @@ stable id and file it in the right bucket.
   [CHANGELOG.md](../CHANGELOG.md#030--yieldable-iteration-2026-05-23)).
   Earlier: 2026-05-23 (0.2.0 performance pass — mt100a w=2 to
   ~ 71.9 K msg/s, saturation_big w=6 to 3.88× scaling).
-- **Open bugs:** three (D30 and S3, Medium; D32, Low).
+- **Open bugs:** four (D30, S3 and S15, Medium; D32, Low).
   Hard edges that are not language-design choices — one runtime per process,
   no `%` formatting — are recorded in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md).
 - **Id scheme:** `D1..D18` are carried over from `LANGUAGE.md` §14 and keep
@@ -287,6 +290,7 @@ idiomatic code; Low = narrow edge case).
 | Id | Bug | Severity |
 |----|-----|----------|
 | S3 | **An allocation-free loop stalls a garbage collection.** protoCore starts a requested collection only after every running thread parks, and the dispatch loop has no park point: a thread running an inlined loop over SmallIntegers, a block loop (`cond whileTrue: body` with block variables) or allocation-free recursion holds every other thread in the stop-the-world handshake until its loop ends, or forever when the loop waits on a flag that a parked thread must set. It matters only while a collection is requested (with protoCore's original pacing: a heap limit, or `triggerGC()`). A fix that polled protoCore's park-only API at loop back-edges and frame entry (`a508a51`) was reverted (`d2a873f`) when protoCore withdrew that API; how the interpreter reaches a park point is open. A related proposal to submit the main thread's young generation at top-level statement boundaries, to shorten stop-the-world root collection (S12), was cancelled: root-collection cost is a protoCore question. | Medium |
+| S15 | **A forced garbage collection never runs.** `ProtoSpace::triggerGC()` called eight times from the main thread leaves `ProtoSpace::getGCCycleCount()` at 0 — with actors, without actors, and after 20 000 throwaway allocations — so no collection cycle ever completes. Under `PROTOCORE_HEAP_LIMIT_CELLS` the same thing shows as an abort: any limit above protoST's own live set (~176 000 cells) makes a plain `1 to: 100000 do: [ :i | Array new: 8 ]` die with "heap hard limit reached; live set 389960 cells, last cycle reclaimed 0 — out of memory", while `PROTOCORE_GC_PROFILE=1` prints nothing at all. The consequence is not a leak in normal use (protoCore defers collection by design and the heap is unbounded by default) but a **testing** one: no statement of the form "X survives a collection" can be falsified in protoST today, so the garbage-collection safety of any representation — the old ProtoList mailbox as much as the new `ProtoMPSCQueue` one — rests on argument rather than on a test. Probably the same root cause as S3 (the interpreter reaches no park point, so the stop-the-world handshake never completes) plus the root context never submitting its young generation, but that is a hypothesis, not a diagnosis. Found 2026-09-24 during Track S; present before and after the mailbox migration, measured on both builds. | Medium |
 | D32 | **Hashed collections do not agree on element equality.** A `Set` stores a protoCore `ProtoSet`, whose membership is by protoCore's hash: `1` and `1.0` are two elements (a Set holding `1` does not include `1.0`, although `1 = 1.0`), and all NaNs are one element (a Set holding one NaN includes another, although `Float nan = Float nan` is false). A `Dictionary` buckets keys by protoCore's hash, so a key `1` is not found as `1.0`. A `Bag` compares with `=` and finds both. `LANGUAGE.md` §9.6–9.8 do not state which equality decides membership. Found on 2026-09-15 while fixing D31; the same on the build before S4. Aligning the collections is a representation decision (options: `=` with a numeric-aware hash, protoCore hash equality everywhere, or documenting the difference). | Low |
 | D30 | **Blocks created in different iterations of a loop share the loop variable.** `bs := OrderedCollection new. 1 to: 3 do: [ :i \| bs add: [ i ] ]` leaves three blocks that all answer `3`; §6.3 gives `1`, `2`, `3`, because a block argument belongs to one activation of its block. The same happens with `#(1 2 3) do:`, with a block temporary (`#(1 2 3) do: [ :x \| \| t \| t := x. bs add: [ t ] ]`), and inside a method. Cause: a method or module activation creates one captured-variable dictionary (`MAKE_CAPTURED`); a block reuses the dictionary stamped on it by `PUSH_BLOCK` and copies its captured arguments into it on entry, so each activation of the loop body overwrites the same entry. A fix needs a captured dictionary per block activation, chained to the enclosing one, with stores to an outer name reaching the dictionary that owns it: a runtime change to the capture model. Pinned by `conformance/06-blocks/closure-loop-iteration-binding.st` (XFAIL). Found on 2026-09-15 while testing D29; present before and after D29's fix. | Medium |
 

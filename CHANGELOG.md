@@ -24,6 +24,26 @@ Changes committed after the `v0.3.0` tag.
 
 ### Actors
 
+- **Actor mailboxes are protoCore `ProtoMPSCQueue`s** (Track S). A send used
+  to be a compare-and-swap retry loop that rebuilt the actor's whole mailbox
+  `ProtoList` and republished it under `__mailbox__`; a pop rebuilt it again.
+  The mailbox is now a lock-free multi-producer / single-consumer queue whose
+  contents the garbage collector traces, the queue object's identity never
+  changes, and a send is one `push` — O(1), one cell, no retry. A turn takes a
+  whole batch with `takeAll` and parks anything it has not processed in a new
+  `__pending__` attribute, which is read ahead of the queue on the next turn,
+  so per-actor FIFO order is unchanged and a batch interrupted by a
+  `FutureYield` is neither lost nor reordered.
+
+  The old representation was quadratic in the depth of an undrained mailbox,
+  in time and in memory. Measured on this machine (`benchmarks/reports/2026-09-24-mailbox-protompscqueue.md`): a single-producer send falls from
+  1256 ns to 788 ns (and from 63.6 us to 3.5 us with `PROTOST_WORKERS=1`,
+  where producers and sink share one thread), and the drain of a 2000-message
+  backlog from 1.585 s to 4.1 ms; 200 000 undrained messages, which the old
+  mailbox could not reach at all — 10 000 was already killed by the OOM reaper
+  at over 10 GB resident — now enqueue in 510 ms and drain in 1.75 s.
+
+  Requires protoCore 2.1.0, so protoST's version floor moves from 2.0 to 2.1.
 - **Three priority bands** (commit `3efb31d`). `asHighPriorityActor` and
   `asLowPriorityActor` join `asActor` (Medium, the default). Workers drain
   strictly by priority — High, then Medium, then Low — with the

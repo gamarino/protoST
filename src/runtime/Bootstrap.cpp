@@ -170,6 +170,7 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     // lookup. See Bootstrap::Symbols.
     auto S = [&](const char* n) { return proto::ProtoString::createSymbol(ctx, n); };
     out.sym.mailbox         = S("__mailbox__");
+    out.sym.pending         = S("__pending__");
     out.sym.wrapped         = S("__wrapped__");
     out.sym.selector        = S("__selector__");
     out.sym.args            = S("__args__");
