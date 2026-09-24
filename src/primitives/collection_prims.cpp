@@ -43,8 +43,10 @@
 #include "runtime/TransientPin.h"
 #include "protoCore.h"
 
+#include <cstring>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace protoST {
@@ -84,30 +86,233 @@ const proto::ProtoList* listData(proto::ProtoContext* ctx,
     return arrayData(ctx, coll);
 }
 
-// The backing ProtoSet of a Set instance. Stored (wrapped as a ProtoObject)
-// under `__data__`; this unwraps it. A nullptr or missing `__data__` yields a
-// fresh empty set — defensive, like arrayData.
-const proto::ProtoSet* setDataOf(proto::ProtoContext* ctx,
-                                 const proto::ProtoObject* s) {
-    const proto::ProtoObject* d =
-        s ? s->getAttribute(ctx, dataKey(ctx)) : nullptr;
-    if (!d || d == PROTO_NONE) return ctx->newSet();
-    const proto::ProtoSet* set = d->asSet(ctx);
-    return set ? set : ctx->newSet();
+// --- Hashed collections: Set and Dictionary over protoCore's ProtoMap ------
+//
+// **D32 decision (2026-09-24).** `LANGUAGE.md` §9.6-9.8 never said which
+// equality decides membership in a hashed collection, and the three hashed
+// collections disagreed: a `Bag` compared with `=`, a `Set` with protoCore's
+// hash, and a `Dictionary` bucketed by protoCore's hash and only then compared
+// with `=` inside the bucket. The decision taken is the first of the three
+// options D32 listed: **the language's `=`, with identity as a fast path,
+// decides membership everywhere, and the hash is numeric-aware so that equal
+// numbers of different kinds share a bucket.** So a `Set` holding `1` includes
+// `1.0` (because `1 = 1.0`), a `Dictionary` keyed by `1` answers for `1.0`, and
+// a `Bag` is unchanged because that is already what it did. A NaN is equal to
+// nothing, itself included (D31), so it is found only by identity: a `Set` that
+// holds one NaN does NOT include a different NaN object, which is the opposite
+// of the old hash-only behaviour and is what `Float nan = Float nan` being
+// false requires. The argument and the cost of reversing it are in
+// docs/STATUS.md, marked [agent, pending review].
+//
+// **Representation.** Both `Set` and `Dictionary` keep a protoCore `ProtoMap`
+// under `__data__` and reach it only through protoCore's hashed-collection
+// helper (`hashedPut` / `hashedGet` / `hashedRemove` / `hashedForEach`), which
+// takes the language's semantics as a `KeySemantics`. A `Set` is the
+// degenerate map that stores each element under itself. That is the "one
+// mechanism" this migration exists for: one hash, one equality, one collision
+// policy, shared with protoScala and protoClojure, instead of a ProtoSet here
+// and a hand-rolled hash-to-bucket ProtoSparseList there.
+//
+// The two kinds are told apart by PROTOTYPE, not by the shape of `__data__`,
+// because the shape is now the same for both.
+
+// The number of entries, kept in `__size__`.
+//
+// It is stored rather than counted because `ProtoMap::getSize` counts SLOTS,
+// and one slot holds every key whose hash collides. The two numbers agree
+// until they do not, and a `size` that is silently wrong only when a hash
+// collides is precisely the kind of defect a black-box test cannot see -- the
+// language cannot tell a collision from a non-collision. `test_collections.cpp`
+// therefore checks the stored count against a recount over forced collisions.
+const proto::ProtoString* sizeKey(proto::ProtoContext* ctx) {
+    return proto::ProtoString::createSymbol(ctx, "__size__");
 }
 
-// True when `obj`'s `__data__` is a ProtoSet (i.e. a `Set` instance).
-bool isSetBacked(proto::ProtoContext* ctx, const proto::ProtoObject* obj) {
+// protoST's equality for hashed membership: identity first, then the
+// language's `=`.
+//
+// Identity first is what makes a NaN findable at all: `partialCompare` reports
+// a NaN as unordered with everything including itself (IEEE 754, D31), so a
+// value-only comparison could never find a NaN that is in the collection. This
+// is the same predicate `indexOfEqual` uses for `Bag` and `OrderedCollection`,
+// which is how all four collections come to agree.
+bool stKeyEquals(proto::ProtoContext* ctx, const proto::ProtoObject* a,
+                 const proto::ProtoObject* b) {
+    if (a == b) return true;
+    if (!a) a = PROTO_NONE;
+    if (b) return a->partialCompare(ctx, b) == 0;
+    return false;
+}
+
+// A hash for numbers that agrees with stKeyEquals across the whole tower.
+//
+// `partialCompare` equates a SmallInteger, a LargeInteger and a Float of the
+// same exact value, so those three have to hash alike; every number therefore
+// hashes through its double value. Three consequences, all of them benign:
+// -0.0 is normalised to 0.0 (they are the same key); two integers so large
+// that they round to the same double share a slot, where stKeyEquals tells
+// them apart; and every integer past the double range shares the slot of
+// infinity. A NaN hashes by its own bit pattern, which is all that is needed,
+// since a NaN is only ever found by identity and one object always has the
+// same bits.
+unsigned long numberKeyHash(double d) {
+    if (d == 0.0) d = 0.0;
+    static_assert(sizeof(unsigned long) >= sizeof(double),
+                  "the numeric key hash needs a word at least as wide as a double");
+    unsigned long bits = 0;
+    std::memcpy(&bits, &d, sizeof(d));
+    // ProtoMap orders its slots by the hash and the helper masks it to 54
+    // bits; the bit patterns of small integral doubles differ only near the
+    // top of the word, so fold the high half down before it is truncated.
+    return bits ^ (bits >> 32);
+}
+
+// Canonical hash for any object used as a hashed-collection key.
+//
+// Strings route through the symbol table (2026-05-24): protoCore's ProtoString
+// hash is structural for ropes, so a `'memb' , 'ers'` rope and a `'members'`
+// leaf are byte-equal and `=`, yet hash differently. Interning collapses equal
+// content to one canonical symbol whose pointer is the hash. Numbers take the
+// numeric path above. Everything else keeps its own hash protocol, which for a
+// plain object is identity -- and identity is what `=` means for it.
+unsigned long stKeyHash(proto::ProtoContext* ctx, const proto::ProtoObject* key) {
+    if (!key || key == PROTO_NONE) return 0;
+    if (key->isString(ctx)) {
+        const proto::ProtoString* s = key->asString(ctx);
+        if (s && !s->isSymbol()) {
+            // Materialise once and intern. Rope strings cost an O(N) byte walk
+            // on this path; an equal-content key then hits the symbol-table
+            // cache in O(1) pointer-compare.
+            std::string utf8 = s->toStdString(ctx);
+            const proto::ProtoString* sym =
+                proto::ProtoString::createSymbol(ctx, utf8);
+            return reinterpret_cast<unsigned long>(sym);
+        }
+        if (s && s->isSymbol()) {
+            return reinterpret_cast<unsigned long>(s);
+        }
+    }
+    if (key->isInteger(ctx) || key->isDouble(ctx))
+        return numberKeyHash(key->asDouble(ctx));
+    return key->getHash(ctx);
+}
+
+// Every key takes the helper's value-equality path.
+//
+// Answering true for some keys would put them in a slot of their own, keyed by
+// the key object's own word, and `=` would never be consulted for them. protoST
+// has one equality for every object -- `Object>>=` is identity, and a class
+// that overrides `=` means it -- so classifying keys would only introduce a
+// second, invisible rule.
+bool stIsIdentityKey(proto::ProtoContext*, const proto::ProtoObject*) {
+    return false;
+}
+
+const proto::KeySemantics& stKeySemantics() {
+    // Function pointers only: no ProtoSpace-bound state, so a static is safe
+    // here where a cached symbol would not be (deviation D2).
+    static const proto::KeySemantics semantics{
+        stIsIdentityKey, stKeyHash, stKeyEquals};
+    return semantics;
+}
+
+// The backing ProtoMap of a Set or Dictionary instance. A missing or nil
+// `__data__` yields a fresh empty map -- defensive, like arrayData.
+const proto::ProtoMap* mapData(proto::ProtoContext* ctx,
+                               const proto::ProtoObject* coll) {
+    const proto::ProtoObject* d =
+        coll ? coll->getAttribute(ctx, dataKey(ctx)) : nullptr;
+    if (!d || d == PROTO_NONE) return ctx->newMap();
+    const proto::ProtoMap* m = d->asMap(ctx);
+    return m ? m : ctx->newMap();
+}
+
+long long hashedSize(proto::ProtoContext* ctx, const proto::ProtoObject* coll) {
+    const proto::ProtoObject* n =
+        coll ? coll->getAttribute(ctx, sizeKey(ctx)) : nullptr;
+    if (!n || n == PROTO_NONE) return 0;
+    return n->asLong(ctx);
+}
+
+// The single write point for both hashed collections: the new map and the new
+// entry count are published together, so no mutator can update one and forget
+// the other.
+void setHashedData(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
+                   const proto::ProtoMap* updated, long long size) {
+    TransientPin pinUpdated(
+        ctx, reinterpret_cast<const proto::ProtoObject*>(updated));
+    const proto::ProtoObject* sizeVal = ctx->fromLong(size);
+    TransientPin pinSize(ctx, sizeVal);
+    const_cast<proto::ProtoObject*>(coll)->setAttribute(
+        ctx, dataKey(ctx), updated->asObject(ctx));
+    const_cast<proto::ProtoObject*>(coll)->setAttribute(ctx, sizeKey(ctx), sizeVal);
+}
+
+// True when `obj` descends from `target`, stopping at protoST's Object root
+// (the protoCore prototypes above it have a self-referential root, so an
+// unbounded walk would spin -- the same bound speciesProtoOf uses).
+bool descendsFrom(proto::ProtoContext* ctx, const proto::ProtoObject* obj,
+                  const proto::ProtoObject* target,
+                  const proto::ProtoObject* objectProto) {
+    const proto::ProtoObject* prev = nullptr;
+    for (const proto::ProtoObject* p = obj; p && p != PROTO_NONE && p != prev;
+         prev = p, p = p->getPrototype(ctx)) {
+        if (p == target) return true;
+        if (p == objectProto) break;
+    }
+    return false;
+}
+
+// True when `obj` is a `Set` instance (or a Set subclass instance).
+bool isSetBacked(STRuntime& rt, proto::ProtoContext* ctx,
+                 const proto::ProtoObject* obj) {
     if (!obj) return false;
-    const proto::ProtoObject* d = obj->getAttribute(ctx, dataKey(ctx));
-    return d && d != PROTO_NONE && d->asSet(ctx) != nullptr;
+    return descendsFrom(ctx, obj, rt.bootstrap().setProto,
+                        rt.bootstrap().objectProto);
+}
+
+// True when `obj` is a `Dictionary` instance (or a Dictionary subclass one).
+bool isDictBacked(STRuntime& rt, proto::ProtoContext* ctx,
+                  const proto::ProtoObject* obj) {
+    if (!obj) return false;
+    return descendsFrom(ctx, obj, rt.bootstrap().dictionaryProto,
+                        rt.bootstrap().objectProto);
+}
+
+using HashedEntry = std::pair<const proto::ProtoObject*, const proto::ProtoObject*>;
+
+void collectHashedEntry(proto::ProtoContext*, void* self,
+                        const proto::ProtoObject* k, const proto::ProtoObject* v) {
+    static_cast<std::vector<HashedEntry>*>(self)->emplace_back(
+        k ? k : PROTO_NONE, v ? v : PROTO_NONE);
+}
+
+// A snapshot of a hashed collection's entries, in protoCore's ascending
+// slot-hash order.
+//
+// It is a snapshot, and a vector rather than a live walk, for two reasons: the
+// helper's iteration takes a C callback and cannot stop early, and the caller
+// runs user blocks that may mutate the receiver. Both the old ProtoSet and the
+// old ProtoSparseList walks iterated a captured immutable version too, so the
+// observable rule is unchanged: iteration sees the collection as it was when
+// iteration began. The map is pinned for the walk, because the caller's own
+// reference to it is a C++ local.
+void hashedEntries(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
+                   std::vector<HashedEntry>& out) {
+    const proto::ProtoMap* data = mapData(ctx, coll);
+    TransientPin pinData(
+        ctx, reinterpret_cast<const proto::ProtoObject*>(data));
+    out.reserve(static_cast<size_t>(data->getSize(ctx)));
+    proto::hashedForEach(ctx, data, &out, collectHashedEntry);
 }
 
 // True when `obj` is a list-backed collection instance — it carries `__data__`
 // reachable through the prototype chain holding a ProtoList. `Array`,
 // `OrderedCollection` and `Bag` all answer true, so forEachElement's single
-// ProtoList arm covers them. A `Set` instance also carries `__data__`, but
-// holding a ProtoSet — so this checks the backing IS a ProtoList.
+// ProtoList arm covers them. A `Set` or `Dictionary` instance also carries
+// `__data__`, but holding a ProtoMap — so this checks the backing IS a
+// ProtoList. (The two hashed kinds are told apart from each other by
+// prototype, because their backings are now the same shape.)
 //
 // `Bag` is intentionally ProtoList-backed (one slot per occurrence) rather
 // than ProtoMultiset-backed: protoCore's ProtoMultiset stores element->count
@@ -127,99 +332,6 @@ bool isListBacked(proto::ProtoContext* ctx, const proto::ProtoObject* obj) {
 // pinned across the key interning + setAttribute, both of which allocate.
 void setData(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
              const proto::ProtoList* updated) {
-    TransientPin pinUpdated(
-        ctx, reinterpret_cast<const proto::ProtoObject*>(updated));
-    const_cast<proto::ProtoObject*>(coll)->setAttribute(
-        ctx, dataKey(ctx), updated->asObject(ctx));
-}
-
-// Replace a Set instance's `__data__` with a fresh ProtoSet snapshot. Every
-// Set mutator (`add:`, `remove:`) ends here.
-void setSetData(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
-                const proto::ProtoSet* updated) {
-    TransientPin pinUpdated(
-        ctx, reinterpret_cast<const proto::ProtoObject*>(updated));
-    const_cast<proto::ProtoObject*>(coll)->setAttribute(
-        ctx, dataKey(ctx), updated->asObject(ctx));
-}
-
-// --- Dictionary backing — a hash->bucket ProtoSparseList -------------------
-//
-// protoCore's `ProtoSparseList` is keyed by `unsigned long`, so it cannot
-// store arbitrary object keys directly. A `Dictionary` keeps its `__data__`
-// as a `ProtoSparseList` keyed by `dictKeyHash(ctx, key)`; each slot holds a
-// *bucket* — a `ProtoList` of alternating `[key0, value0, key1, value1, …]`.
-// Multiple keys that collide on a hash coexist in one bucket, and the key
-// objects themselves are retained (needed for `keysDo:` / `keys` / equality
-// comparison). Lookup walks: hash → bucket → linear scan comparing keys by
-// protoCore object equality (`compare(...) == 0`), exactly as Set/Bag's
-// `remove:` does.
-//
-// **String key canonicalisation (2026-05-24).** protoCore's `ProtoString`
-// hash is structural for rope-built strings: a `'memb' , 'ers'` rope and a
-// `'members'` leaf are byte-equal AND `=` answers true, but their hashes
-// differ because `StringInternalNode::subtreeHash` combines child hashes
-// rather than folding bytes. A naive `key->getHash(ctx)` would therefore
-// route the two through different ProtoSparseList slots and break lookup.
-//
-// `dictKeyHash` works around this by canonicalising any non-symbol
-// ProtoString key through `ProtoString::createSymbol` first. The symbol
-// table is content-keyed (doc: "Symbols with the same content share a
-// unique pointer identity"), so two strings with identical bytes —
-// regardless of internal rope structure — collapse to the SAME canonical
-// symbol. The hash is then the symbol's pointer identity, which is stable
-// across runs of the same process. Non-string keys (Integer, Boolean,
-// arbitrary objects) fall through to `key->getHash(ctx)` unchanged.
-
-// Canonical pointer hash for any object usable as a Dictionary key. For a
-// non-symbol ProtoString it routes through the symbol table; for everything
-// else it defers to the object's own hash protocol. The returned hash is
-// stable for the lifetime of the process for any given content (because
-// canonical symbols are perpetual).
-unsigned long dictKeyHash(proto::ProtoContext* ctx,
-                          const proto::ProtoObject* key) {
-    if (!key || key == PROTO_NONE) return 0;
-    if (key->isString(ctx)) {
-        const proto::ProtoString* s = key->asString(ctx);
-        if (s && !s->isSymbol()) {
-            // Materialise once and intern. Rope strings cost an O(N) byte walk
-            // on this path, but subsequent lookups of an equal-content key hit
-            // the symbol-table cache in O(1) pointer-compare.
-            std::string utf8 = s->toStdString(ctx);
-            const proto::ProtoString* sym =
-                proto::ProtoString::createSymbol(ctx, utf8);
-            return reinterpret_cast<unsigned long>(sym);
-        }
-        if (s && s->isSymbol()) {
-            // Already canonical — use its pointer identity directly.
-            return reinterpret_cast<unsigned long>(s);
-        }
-    }
-    return key->getHash(ctx);
-}
-
-// The backing ProtoSparseList of a Dictionary instance. A nullptr or missing
-// `__data__` yields a fresh empty sparse list — defensive, like arrayData.
-const proto::ProtoSparseList* dictData(proto::ProtoContext* ctx,
-                                       const proto::ProtoObject* d) {
-    const proto::ProtoObject* raw =
-        d ? d->getAttribute(ctx, dataKey(ctx)) : nullptr;
-    if (!raw || raw == PROTO_NONE) return ctx->newSparseList();
-    const proto::ProtoSparseList* sl = raw->asSparseList(ctx);
-    return sl ? sl : ctx->newSparseList();
-}
-
-// True when `obj`'s `__data__` is a ProtoSparseList (i.e. a `Dictionary`).
-bool isDictBacked(proto::ProtoContext* ctx, const proto::ProtoObject* obj) {
-    if (!obj) return false;
-    const proto::ProtoObject* raw = obj->getAttribute(ctx, dataKey(ctx));
-    return raw && raw != PROTO_NONE && raw->asSparseList(ctx) != nullptr;
-}
-
-// Replace a Dictionary's `__data__` with a fresh ProtoSparseList snapshot.
-// Every Dictionary mutator (`at:put:`, `removeKey:`) ends here.
-void setDictData(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
-                 const proto::ProtoSparseList* updated) {
     TransientPin pinUpdated(
         ctx, reinterpret_cast<const proto::ProtoObject*>(updated));
     const_cast<proto::ProtoObject*>(coll)->setAttribute(
@@ -347,9 +459,9 @@ const proto::ProtoObject* makeArrayInstance(STRuntime& rt,
 // (`Array`, `OrderedCollection`, `Bag`) wrap the `ProtoList` directly — for
 // `Array` that is exactly makeArrayInstance, and a `Bag` stores one slot per
 // occurrence so the list IS its backing. A `Set` species converts: it builds a
-// fresh `ProtoSet` by `add`-ing each accumulated element (deduplicating). One
-// end-of-collection conversion — the derived primitives never change how they
-// accumulate.
+// fresh `ProtoMap` by adding each accumulated element under itself, which
+// deduplicates by the language's `=`. One end-of-collection conversion — the
+// derived primitives never change how they accumulate.
 const proto::ProtoObject* makeInstanceOfSpecies(STRuntime& rt,
                                                 proto::ProtoContext* ctx,
                                                 const proto::ProtoObject* classProto,
@@ -359,24 +471,27 @@ const proto::ProtoObject* makeInstanceOfSpecies(STRuntime& rt,
         ctx, reinterpret_cast<const proto::ProtoObject*>(data));
 
     // Set species: convert the accumulated ProtoList into a deduplicating
-    // ProtoSet, then store that under `__data__`.
+    // ProtoMap, then store that (with its entry count) under `__data__`.
     if (classProto == rt.bootstrap().setProto) {
         const proto::ProtoObject* inst =
             const_cast<proto::ProtoObject*>(classProto)
                 ->newChild(ctx, /*isMutable=*/true);
         TransientPin pinInst(ctx, inst);
         unsigned long n = data->getSize(ctx);
-        const proto::ProtoSet* set = ctx->newSet();
+        const proto::ProtoMap* set = ctx->newMap();
         TransientPin pinSet(
             ctx, reinterpret_cast<const proto::ProtoObject*>(set));
+        long long size = 0;
         for (unsigned long i = 0; i < n; ++i) {
             const proto::ProtoObject* e =
                 data->getAt(ctx, static_cast<int>(i));
-            set = set->add(ctx, e ? e : PROTO_NONE);
+            if (!e) e = PROTO_NONE;
+            if (proto::hashedGet(ctx, set, stKeySemantics(), e) != nullptr) continue;
+            set = proto::hashedPut(ctx, set, stKeySemantics(), e, e);
             pinSet.reset(reinterpret_cast<const proto::ProtoObject*>(set));
+            ++size;
         }
-        const_cast<proto::ProtoObject*>(inst)->setAttribute(
-            ctx, dataKey(ctx), set->asObject(ctx));
+        setHashedData(ctx, inst, set, size);
         return inst;
     }
 
@@ -448,7 +563,7 @@ const proto::ProtoObject* speciesProtoOf(STRuntime& rt, proto::ProtoContext* ctx
 // `OrderedCollection` (COL-b) both flow through it unchanged, because both
 // store their elements in a `__data__` ProtoList. The structure (a kind-
 // dispatch before iterating) is the extension point for COL-c..e — Set/Bag
-// iterate a ProtoSet/ProtoMultiset, Interval computes elements lazily. Adding
+// iterate a ProtoMap, Interval computes elements lazily. Adding
 // a kind there needs no change to any derived primitive: they all call
 // forEachElement.
 //
@@ -481,39 +596,25 @@ bool forEachElement(STRuntime& rt, proto::ProtoContext* ctx,
         }
         return true;
     }
-    // COL-c: a `Set` is ProtoSet-backed — iterate it via ProtoSetIterator,
-    // visiting each distinct element once.
-    if (isSetBacked(ctx, collection)) {
-        const proto::ProtoSet* data = setDataOf(ctx, collection);
-        const proto::ProtoSetIterator* it = data->getIterator(ctx);
-        while (it && it->hasNext(ctx)) {
-            const proto::ProtoObject* e = it->next(ctx);
-            if (!fn(e ? e : PROTO_NONE)) return false;
-            it = it->advance(ctx);
+    // COL-c: a `Set` is ProtoMap-backed, storing each element under itself —
+    // iterate the keys, visiting each distinct element once.
+    if (isSetBacked(rt, ctx, collection)) {
+        std::vector<HashedEntry> entries;
+        hashedEntries(ctx, collection, entries);
+        for (const HashedEntry& e : entries) {
+            if (!fn(e.first)) return false;
         }
         return true;
     }
-    // COL-d: a `Dictionary` is ProtoSparseList-backed (hash -> bucket). Iterating
-    // a Dictionary visits its VALUES — consistent with `Dictionary>>do:` and the
-    // Smalltalk convention. Walk every bucket, and within each bucket every
-    // [key, value] pair, yielding the value. After this the derived protocol
-    // (`inject:into:`, `detect:`, `collect:`, …) works on a Dictionary over its
-    // values.
-    if (isDictBacked(ctx, collection)) {
-        const proto::ProtoSparseList* data = dictData(ctx, collection);
-        const proto::ProtoSparseListIterator* it = data->getIterator(ctx);
-        while (it && it->hasNext(ctx)) {
-            const proto::ProtoObject* bucketObj = it->nextValue(ctx);
-            it = const_cast<proto::ProtoSparseListIterator*>(it)->advance(ctx);
-            const proto::ProtoList* bucket =
-                bucketObj ? bucketObj->asList(ctx) : nullptr;
-            if (!bucket) continue;
-            unsigned long bn = bucket->getSize(ctx);
-            for (unsigned long i = 1; i < bn; i += 2) {  // values at odd slots
-                const proto::ProtoObject* v =
-                    bucket->getAt(ctx, static_cast<int>(i));
-                if (!fn(v ? v : PROTO_NONE)) return false;
-            }
+    // COL-d: a `Dictionary` is ProtoMap-backed. Iterating a Dictionary visits
+    // its VALUES — consistent with `Dictionary>>do:` and the Smalltalk
+    // convention. After this the derived protocol (`inject:into:`, `detect:`,
+    // `collect:`, …) works on a Dictionary over its values.
+    if (isDictBacked(rt, ctx, collection)) {
+        std::vector<HashedEntry> entries;
+        hashedEntries(ctx, collection, entries);
+        for (const HashedEntry& e : entries) {
+            if (!fn(e.second)) return false;
         }
         return true;
     }
@@ -926,37 +1027,45 @@ const proto::ProtoObject* prim_OC_classWithAll(STRuntime& rt, proto::ProtoContex
 // A `Set` is a hashed collection of unique elements. It uses the same
 // mutable-holder representation as the sequenceable collections — a mutable
 // child of the `Set` prototype with `__data__` — but `__data__` holds an
-// immutable protoCore `ProtoSet` (wrapped via `asObject`) rather than a
-// `ProtoList`. Every mutator (`add:`, `remove:`) swaps `__data__` for the new
-// snapshot the protoCore mutator returns. Element equality / hashing for
-// membership is protoCore's own (handled inside `ProtoSet::add`/`has`/`remove`).
+// immutable protoCore `ProtoMap` storing each element under itself (wrapped via
+// `asObject`) rather than a `ProtoList`. Every mutator (`add:`, `remove:`) publishes a new `ProtoMap`
+// snapshot and the new entry count through setHashedData. Element equality and
+// hashing for membership are the language's, supplied to protoCore's
+// hashed-collection helper as stKeySemantics() — see the D32 note above.
 //
-// Because the backing store is a `ProtoSet`, `Set` flows through
-// forEachElement's ProtoSet arm, so the whole derived protocol works on it.
+// Because the backing store is a `ProtoMap`, `Set` flows through
+// forEachElement's hashed arm, so the whole derived protocol works on it.
 
-// makeSetInstance — build a fresh Set instance wrapping `data`.
+// makeSetInstance — build a fresh Set instance wrapping `data` (`size` entries).
 const proto::ProtoObject* makeSetInstance(STRuntime& rt, proto::ProtoContext* ctx,
-                                          const proto::ProtoSet* data) {
-    if (!data) data = ctx->newSet();
+                                          const proto::ProtoMap* data,
+                                          long long size) {
+    if (!data) { data = ctx->newMap(); size = 0; }
     TransientPin pinData(
         ctx, reinterpret_cast<const proto::ProtoObject*>(data));
     const proto::ProtoObject* s =
         const_cast<proto::ProtoObject*>(rt.bootstrap().setProto)
             ->newChild(ctx, /*isMutable=*/true);
     TransientPin pinS(ctx, s);
-    const_cast<proto::ProtoObject*>(s)->setAttribute(
-        ctx, dataKey(ctx), data->asObject(ctx));
+    setHashedData(ctx, s, data, size);
     return s;
 }
 
-// aSet add: anObject → add the element; return it. Adding a duplicate is a
-// no-op — ProtoSet dedups.
+// aSet add: anObject → add the element; return it. Adding an element the Set
+// already holds (by the language's `=`) is a no-op, and keeps the element
+// already stored rather than replacing it with the equal one just offered.
 const proto::ProtoObject* prim_Set_add(STRuntime&, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* r,
                                        const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw std::runtime_error("add: expects 1 arg (element)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
-    setSetData(ctx, r, setDataOf(ctx, r)->add(ctx, e));
+    const proto::ProtoMap* data = mapData(ctx, r);
+    TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
+    if (proto::hashedGet(ctx, data, stKeySemantics(), e) == nullptr) {
+        setHashedData(ctx, r,
+                      proto::hashedPut(ctx, data, stKeySemantics(), e, e),
+                      hashedSize(ctx, r) + 1);
+    }
     return e;
 }
 
@@ -967,10 +1076,13 @@ const proto::ProtoObject* prim_Set_remove(STRuntime&, proto::ProtoContext* ctx,
                                           const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw std::runtime_error("remove: expects 1 arg (element)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
-    const proto::ProtoSet* data = setDataOf(ctx, r);
-    if (data->has(ctx, e) != PROTO_TRUE)
+    const proto::ProtoMap* data = mapData(ctx, r);
+    TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
+    if (proto::hashedGet(ctx, data, stKeySemantics(), e) == nullptr)
         throw std::runtime_error("Set>>remove:: element not found");
-    setSetData(ctx, r, data->remove(ctx, e));
+    setHashedData(ctx, r,
+                  proto::hashedRemove(ctx, data, stKeySemantics(), e),
+                  hashedSize(ctx, r) - 1);
     return e;
 }
 
@@ -983,12 +1095,15 @@ const proto::ProtoObject* prim_Set_removeIfAbsent(STRuntime& rt, proto::ProtoCon
     if (argc != 2)
         throw std::runtime_error("remove:ifAbsent: expects 2 args (element, block)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
-    const proto::ProtoSet* data = setDataOf(ctx, r);
-    if (data->has(ctx, e) != PROTO_TRUE) {
+    const proto::ProtoMap* data = mapData(ctx, r);
+    TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
+    if (proto::hashedGet(ctx, data, stKeySemantics(), e) == nullptr) {
         const proto::ProtoObject* fallback = invokeBlock(rt, ctx, a[1], nullptr, 0);
         return fallback ? fallback : PROTO_NONE;
     }
-    setSetData(ctx, r, data->remove(ctx, e));
+    setHashedData(ctx, r,
+                  proto::hashedRemove(ctx, data, stKeySemantics(), e),
+                  hashedSize(ctx, r) - 1);
     return e;
 }
 
@@ -998,27 +1113,27 @@ const proto::ProtoObject* prim_Set_includes(STRuntime&, proto::ProtoContext* ctx
                                             const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw std::runtime_error("includes: expects 1 arg (element)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
-    return setDataOf(ctx, r)->has(ctx, e) == PROTO_TRUE ? PROTO_TRUE : PROTO_FALSE;
+    return proto::hashedGet(ctx, mapData(ctx, r), stKeySemantics(), e) != nullptr
+        ? PROTO_TRUE : PROTO_FALSE;
 }
 
 // aSet size → number of distinct elements.
 const proto::ProtoObject* prim_Set_size(STRuntime&, proto::ProtoContext* ctx,
                                         const proto::ProtoObject* r,
                                         const proto::ProtoObject* const*, int) {
-    return ctx->fromLong(
-        static_cast<long long>(setDataOf(ctx, r)->getSize(ctx)));
+    return ctx->fromLong(hashedSize(ctx, r));
 }
 
 const proto::ProtoObject* prim_Set_isEmpty(STRuntime&, proto::ProtoContext* ctx,
                                            const proto::ProtoObject* r,
                                            const proto::ProtoObject* const*, int) {
-    return setDataOf(ctx, r)->getSize(ctx) == 0 ? PROTO_TRUE : PROTO_FALSE;
+    return hashedSize(ctx, r) == 0 ? PROTO_TRUE : PROTO_FALSE;
 }
 
 const proto::ProtoObject* prim_Set_notEmpty(STRuntime&, proto::ProtoContext* ctx,
                                             const proto::ProtoObject* r,
                                             const proto::ProtoObject* const*, int) {
-    return setDataOf(ctx, r)->getSize(ctx) != 0 ? PROTO_TRUE : PROTO_FALSE;
+    return hashedSize(ctx, r) != 0 ? PROTO_TRUE : PROTO_FALSE;
 }
 
 // aSet do: aBlock → evaluate the one-arg block once for each distinct element.
@@ -1040,7 +1155,7 @@ const proto::ProtoObject* prim_Set_do(STRuntime& rt, proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_Set_classNew(STRuntime& rt, proto::ProtoContext* ctx,
                                             const proto::ProtoObject* /*cls*/,
                                             const proto::ProtoObject* const*, int) {
-    return makeSetInstance(rt, ctx, ctx->newSet());
+    return makeSetInstance(rt, ctx, ctx->newMap(), 0);
 }
 
 // Set withAll: aCollection → a Set of the distinct elements of the argument
@@ -1050,14 +1165,19 @@ const proto::ProtoObject* prim_Set_classWithAll(STRuntime& rt, proto::ProtoConte
                                                 const proto::ProtoObject* const* a,
                                                 int argc) {
     if (argc != 1) throw std::runtime_error("withAll: expects 1 arg (collection)");
-    const proto::ProtoSet* data = ctx->newSet();
+    const proto::ProtoMap* data = ctx->newMap();
     TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
+    long long size = 0;
     forEachElement(rt, ctx, a[0], [&](const proto::ProtoObject* e) {
-        data = data->add(ctx, e);
-        pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
+        if (!e) e = PROTO_NONE;
+        if (proto::hashedGet(ctx, data, stKeySemantics(), e) == nullptr) {
+            data = proto::hashedPut(ctx, data, stKeySemantics(), e, e);
+            pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
+            ++size;
+        }
         return true;
     });
-    return makeSetInstance(rt, ctx, data);
+    return makeSetInstance(rt, ctx, data, size);
 }
 
 // =========================  Bag base operations  ===========================
@@ -1321,97 +1441,77 @@ const proto::ProtoObject* prim_Assoc_valuePut(STRuntime&, proto::ProtoContext* c
 
 // =========================  Dictionary base operations  ====================
 //
-// A `Dictionary` is a hashed key->value map with arbitrary object keys. It
-// uses the mutable-holder representation — a mutable child of the `Dictionary`
-// prototype with `__data__` — but `__data__` holds a `ProtoSparseList` keyed
-// by `key->getHash(ctx)`, each slot a bucket `ProtoList` of alternating
-// `[key0, value0, key1, value1, …]` (see the dictData comment block above).
-// Lookup: hash → bucket → linear scan comparing keys by protoCore object
-// equality. Every mutator swaps `__data__` for the new ProtoSparseList.
-
-// Scan a bucket for `key`; return the index of its key slot (an even index),
-// or -1 if absent. Keys are compared by identity, then partialCompare
-// equality (matches Bag's indexOfEqual): a NaN key is found only by identity.
-int bucketIndexOfKey(proto::ProtoContext* ctx, const proto::ProtoList* bucket,
-                     const proto::ProtoObject* key) {
-    if (!bucket) return -1;
-    if (!key) key = PROTO_NONE;
-    unsigned long n = bucket->getSize(ctx);
-    for (unsigned long i = 0; i < n; i += 2) {
-        const proto::ProtoObject* k = bucket->getAt(ctx, static_cast<int>(i));
-        if (!k) k = PROTO_NONE;
-        if (k == key || k->partialCompare(ctx, key) == 0) return static_cast<int>(i);
-    }
-    return -1;
-}
+// A `Dictionary` is a hashed key->value map with arbitrary object keys. It uses
+// the mutable-holder representation — a mutable child of the `Dictionary`
+// prototype — and `__data__` holds a `ProtoMap` reached only through
+// protoCore's hashed-collection helper, with `__size__` carrying the entry
+// count. Which equality decides key identity is the D32 decision recorded at
+// the top of this file: the language's `=`, identity first, with a
+// numeric-aware hash.
+//
+// A key that is absent is distinguished from a key stored with a nil value by
+// the helper's nullptr return, not by comparing against PROTO_NONE, so
+// `d at: #k put: nil` leaves `d includesKey: #k` true.
 
 // Look up `key` in `data`. On a hit, returns the value and sets `*found`;
 // on a miss returns PROTO_NONE with `*found` false.
 const proto::ProtoObject* dictLookup(proto::ProtoContext* ctx,
-                                     const proto::ProtoSparseList* data,
+                                     const proto::ProtoMap* data,
                                      const proto::ProtoObject* key, bool* found) {
     *found = false;
     if (!key) key = PROTO_NONE;
-    unsigned long h = dictKeyHash(ctx, key);
-    if (!data->has(ctx, h)) return PROTO_NONE;
-    const proto::ProtoObject* bucketObj = data->getAt(ctx, h);
-    const proto::ProtoList* bucket = bucketObj ? bucketObj->asList(ctx) : nullptr;
-    int ki = bucketIndexOfKey(ctx, bucket, key);
-    if (ki < 0) return PROTO_NONE;
+    const proto::ProtoObject* v =
+        proto::hashedGet(ctx, data, stKeySemantics(), key);
+    if (!v) return PROTO_NONE;
     *found = true;
-    const proto::ProtoObject* v = bucket->getAt(ctx, ki + 1);
-    return v ? v : PROTO_NONE;
-}
-
-// Count of entries across every bucket.
-long long dictSize(proto::ProtoContext* ctx, const proto::ProtoSparseList* data) {
-    long long n = 0;
-    const proto::ProtoSparseListIterator* it = data->getIterator(ctx);
-    while (it && it->hasNext(ctx)) {
-        const proto::ProtoObject* bucketObj = it->nextValue(ctx);
-        it = const_cast<proto::ProtoSparseListIterator*>(it)->advance(ctx);
-        const proto::ProtoList* bucket =
-            bucketObj ? bucketObj->asList(ctx) : nullptr;
-        if (bucket) n += static_cast<long long>(bucket->getSize(ctx)) / 2;
-    }
-    return n;
+    return v;
 }
 
 // makeDictInstance — build a fresh Dictionary instance wrapping `data`.
 const proto::ProtoObject* makeDictInstance(STRuntime& rt, proto::ProtoContext* ctx,
-                                           const proto::ProtoSparseList* data) {
-    if (!data) data = ctx->newSparseList();
+                                          const proto::ProtoMap* data,
+                                          long long size) {
+    if (!data) { data = ctx->newMap(); size = 0; }
     TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
     const proto::ProtoObject* d =
         const_cast<proto::ProtoObject*>(rt.bootstrap().dictionaryProto)
             ->newChild(ctx, /*isMutable=*/true);
     TransientPin pinD(ctx, d);
-    const_cast<proto::ProtoObject*>(d)->setAttribute(
-        ctx, dataKey(ctx), data->asObject(ctx));
+    setHashedData(ctx, d, data, size);
     return d;
 }
 
-// Store `key -> value` into `data`, returning the updated ProtoSparseList.
-// Replaces the value if the key is already present, else appends to the bucket.
-const proto::ProtoSparseList* dictStore(proto::ProtoContext* ctx,
-                                        const proto::ProtoSparseList* data,
-                                        const proto::ProtoObject* key,
-                                        const proto::ProtoObject* value) {
+// Store `key -> value` on `coll`, replacing the value when the key is already
+// there (and keeping the key already stored, not the equal one just offered).
+void dictStore(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
+               const proto::ProtoObject* key, const proto::ProtoObject* value) {
     if (!key)   key   = PROTO_NONE;
     if (!value) value = PROTO_NONE;
-    unsigned long h = dictKeyHash(ctx, key);
-    const proto::ProtoList* bucket =
-        data->has(ctx, h) ? data->getAt(ctx, h)->asList(ctx) : nullptr;
-    if (!bucket) bucket = ctx->newList();
-    int ki = bucketIndexOfKey(ctx, bucket, key);
-    if (ki >= 0) {
-        bucket = bucket->setAt(ctx, ki + 1, value);   // overwrite the value
-    } else {
-        bucket = bucket->appendLast(ctx, key);        // append [key, value]
-        bucket = bucket->appendLast(ctx, value);
-    }
-    TransientPin pinBucket(ctx, reinterpret_cast<const proto::ProtoObject*>(bucket));
-    return data->setAt(ctx, h, bucket->asObject(ctx));
+    const proto::ProtoMap* data = mapData(ctx, coll);
+    TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
+    const bool fresh =
+        proto::hashedGet(ctx, data, stKeySemantics(), key) == nullptr;
+    setHashedData(ctx, coll,
+                  proto::hashedPut(ctx, data, stKeySemantics(), key, value),
+                  hashedSize(ctx, coll) + (fresh ? 1 : 0));
+}
+
+// Remove `key` from `coll`. On a hit returns the value it held; on a miss
+// returns nullptr and leaves `coll` untouched.
+const proto::ProtoObject* dictRemove(proto::ProtoContext* ctx,
+                                     const proto::ProtoObject* coll,
+                                     const proto::ProtoObject* key) {
+    if (!key) key = PROTO_NONE;
+    const proto::ProtoMap* data = mapData(ctx, coll);
+    TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
+    const proto::ProtoObject* v =
+        proto::hashedGet(ctx, data, stKeySemantics(), key);
+    if (!v) return nullptr;
+    TransientPin pinValue(ctx, v);
+    setHashedData(ctx, coll,
+                  proto::hashedRemove(ctx, data, stKeySemantics(), key),
+                  hashedSize(ctx, coll) - 1);
+    return v;
 }
 
 // aDictionary at: key → the value. Absent key signals an Error (catchable).
@@ -1420,7 +1520,7 @@ const proto::ProtoObject* prim_Dict_at(STRuntime&, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw std::runtime_error("at: expects 1 arg (key)");
     bool found = false;
-    const proto::ProtoObject* v = dictLookup(ctx, dictData(ctx, r), a[0], &found);
+    const proto::ProtoObject* v = dictLookup(ctx, mapData(ctx, r), a[0], &found);
     if (!found) throw std::runtime_error("Dictionary>>at:: key not found");
     return v;
 }
@@ -1432,7 +1532,7 @@ const proto::ProtoObject* prim_Dict_atIfAbsent(STRuntime& rt, proto::ProtoContex
     if (argc != 2)
         throw std::runtime_error("at:ifAbsent: expects 2 args (key, block)");
     bool found = false;
-    const proto::ProtoObject* v = dictLookup(ctx, dictData(ctx, r), a[0], &found);
+    const proto::ProtoObject* v = dictLookup(ctx, mapData(ctx, r), a[0], &found);
     if (found) return v;
     const proto::ProtoObject* fallback = invokeBlock(rt, ctx, a[1], nullptr, 0);
     return fallback ? fallback : PROTO_NONE;
@@ -1446,13 +1546,14 @@ const proto::ProtoObject* prim_Dict_atIfAbsentPut(STRuntime& rt, proto::ProtoCon
     if (argc != 2)
         throw std::runtime_error("at:ifAbsentPut: expects 2 args (key, block)");
     bool found = false;
-    const proto::ProtoSparseList* data = dictData(ctx, r);
-    const proto::ProtoObject* v = dictLookup(ctx, data, a[0], &found);
+    const proto::ProtoObject* v = dictLookup(ctx, mapData(ctx, r), a[0], &found);
     if (found) return v;
     const proto::ProtoObject* fresh = invokeBlock(rt, ctx, a[1], nullptr, 0);
     if (!fresh) fresh = PROTO_NONE;
     TransientPin pinFresh(ctx, fresh);
-    setDictData(ctx, r, dictStore(ctx, dictData(ctx, r), a[0], fresh));
+    // The map is re-read after the block ran: the block is user code and may
+    // have stored into this very dictionary.
+    dictStore(ctx, r, a[0], fresh);
     return fresh;
 }
 
@@ -1463,34 +1564,8 @@ const proto::ProtoObject* prim_Dict_atPut(STRuntime&, proto::ProtoContext* ctx,
     if (argc != 2)
         throw std::runtime_error("at:put: expects 2 args (key, value)");
     const proto::ProtoObject* value = a[1] ? a[1] : PROTO_NONE;
-    setDictData(ctx, r, dictStore(ctx, dictData(ctx, r), a[0], value));
+    dictStore(ctx, r, a[0], value);
     return value;
-}
-
-// Remove `key` from `data`. On a hit returns the value via `*out` and the
-// updated ProtoSparseList; on a miss `*out` is null and `data` is returned.
-const proto::ProtoSparseList* dictRemove(proto::ProtoContext* ctx,
-                                         const proto::ProtoSparseList* data,
-                                         const proto::ProtoObject* key,
-                                         const proto::ProtoObject** out) {
-    *out = nullptr;
-    if (!key) key = PROTO_NONE;
-    unsigned long h = dictKeyHash(ctx, key);
-    if (!data->has(ctx, h)) return data;
-    const proto::ProtoList* bucket = data->getAt(ctx, h)->asList(ctx);
-    int ki = bucketIndexOfKey(ctx, bucket, key);
-    if (ki < 0) return data;
-    const proto::ProtoObject* v = bucket->getAt(ctx, ki + 1);
-    *out = v ? v : PROTO_NONE;
-    // Drop the [key, value] pair — remove the value slot first so the key
-    // slot index stays valid.
-    bucket = bucket->removeAt(ctx, ki + 1);
-    bucket = bucket->removeAt(ctx, ki);
-    if (bucket->getSize(ctx) == 0) {
-        return data->removeAt(ctx, h);            // bucket empty — drop the slot
-    }
-    TransientPin pinBucket(ctx, reinterpret_cast<const proto::ProtoObject*>(bucket));
-    return data->setAt(ctx, h, bucket->asObject(ctx));
 }
 
 // aDictionary removeKey: key → remove the entry, return the value. Absent key
@@ -1499,11 +1574,8 @@ const proto::ProtoObject* prim_Dict_removeKey(STRuntime&, proto::ProtoContext* c
                                               const proto::ProtoObject* r,
                                               const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw std::runtime_error("removeKey: expects 1 arg (key)");
-    const proto::ProtoObject* removed = nullptr;
-    const proto::ProtoSparseList* updated =
-        dictRemove(ctx, dictData(ctx, r), a[0], &removed);
+    const proto::ProtoObject* removed = dictRemove(ctx, r, a[0]);
     if (!removed) throw std::runtime_error("Dictionary>>removeKey:: key not found");
-    setDictData(ctx, r, updated);
     return removed;
 }
 
@@ -1515,14 +1587,11 @@ const proto::ProtoObject* prim_Dict_removeKeyIfAbsent(STRuntime& rt, proto::Prot
                                                       int argc) {
     if (argc != 2)
         throw std::runtime_error("removeKey:ifAbsent: expects 2 args (key, block)");
-    const proto::ProtoObject* removed = nullptr;
-    const proto::ProtoSparseList* updated =
-        dictRemove(ctx, dictData(ctx, r), a[0], &removed);
+    const proto::ProtoObject* removed = dictRemove(ctx, r, a[0]);
     if (!removed) {
         const proto::ProtoObject* fallback = invokeBlock(rt, ctx, a[1], nullptr, 0);
         return fallback ? fallback : PROTO_NONE;
     }
-    setDictData(ctx, r, updated);
     return removed;
 }
 
@@ -1532,7 +1601,7 @@ const proto::ProtoObject* prim_Dict_includesKey(STRuntime&, proto::ProtoContext*
                                                 const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw std::runtime_error("includesKey: expects 1 arg (key)");
     bool found = false;
-    dictLookup(ctx, dictData(ctx, r), a[0], &found);
+    dictLookup(ctx, mapData(ctx, r), a[0], &found);
     return found ? PROTO_TRUE : PROTO_FALSE;
 }
 
@@ -1554,39 +1623,30 @@ const proto::ProtoObject* prim_Dict_includes(STRuntime& rt, proto::ProtoContext*
 const proto::ProtoObject* prim_Dict_size(STRuntime&, proto::ProtoContext* ctx,
                                          const proto::ProtoObject* r,
                                          const proto::ProtoObject* const*, int) {
-    return ctx->fromLong(dictSize(ctx, dictData(ctx, r)));
+    return ctx->fromLong(hashedSize(ctx, r));
 }
 
 const proto::ProtoObject* prim_Dict_isEmpty(STRuntime&, proto::ProtoContext* ctx,
                                             const proto::ProtoObject* r,
                                             const proto::ProtoObject* const*, int) {
-    return dictSize(ctx, dictData(ctx, r)) == 0 ? PROTO_TRUE : PROTO_FALSE;
+    return hashedSize(ctx, r) == 0 ? PROTO_TRUE : PROTO_FALSE;
 }
 
 const proto::ProtoObject* prim_Dict_notEmpty(STRuntime&, proto::ProtoContext* ctx,
                                              const proto::ProtoObject* r,
                                              const proto::ProtoObject* const*, int) {
-    return dictSize(ctx, dictData(ctx, r)) != 0 ? PROTO_TRUE : PROTO_FALSE;
+    return hashedSize(ctx, r) != 0 ? PROTO_TRUE : PROTO_FALSE;
 }
 
-// dictForEachEntry — the shared bucket walk for keysDo:/valuesDo:/etc. Calls
-// `fn(key, value)` for every entry; `fn` returns false to stop early.
+// dictForEachEntry — the shared entry walk for keysDo:/valuesDo:/etc. Calls
+// `fn(key, value)` for every entry; `fn` returns false to stop early. The walk
+// is over a snapshot (hashedEntries), in protoCore's ascending slot-hash order.
 template <typename Fn>
 void dictForEachEntry(proto::ProtoContext* ctx, const proto::ProtoObject* r, Fn&& fn) {
-    const proto::ProtoSparseList* data = dictData(ctx, r);
-    const proto::ProtoSparseListIterator* it = data->getIterator(ctx);
-    while (it && it->hasNext(ctx)) {
-        const proto::ProtoObject* bucketObj = it->nextValue(ctx);
-        it = const_cast<proto::ProtoSparseListIterator*>(it)->advance(ctx);
-        const proto::ProtoList* bucket =
-            bucketObj ? bucketObj->asList(ctx) : nullptr;
-        if (!bucket) continue;
-        unsigned long bn = bucket->getSize(ctx);
-        for (unsigned long i = 0; i + 1 < bn; i += 2) {
-            const proto::ProtoObject* k = bucket->getAt(ctx, static_cast<int>(i));
-            const proto::ProtoObject* v = bucket->getAt(ctx, static_cast<int>(i + 1));
-            if (!fn(k ? k : PROTO_NONE, v ? v : PROTO_NONE)) return;
-        }
+    std::vector<HashedEntry> entries;
+    hashedEntries(ctx, r, entries);
+    for (const HashedEntry& e : entries) {
+        if (!fn(e.first, e.second)) return;
     }
 }
 
@@ -1672,15 +1732,20 @@ const proto::ProtoObject* prim_Dict_associationsDo(STRuntime& rt, proto::ProtoCo
 const proto::ProtoObject* prim_Dict_keys(STRuntime& rt, proto::ProtoContext* ctx,
                                          const proto::ProtoObject* r,
                                          const proto::ProtoObject* const*, int) {
-    const proto::ProtoSet* set = ctx->newSet();
+    const proto::ProtoMap* set = ctx->newMap();
     TransientPin pinSet(ctx, reinterpret_cast<const proto::ProtoObject*>(set));
+    long long size = 0;
     dictForEachEntry(ctx, r, [&](const proto::ProtoObject* k,
                                  const proto::ProtoObject*) {
-        set = set->add(ctx, k);
+        // Distinct dictionary keys are distinct Set elements by construction —
+        // both collections decide membership with the same predicate — so the
+        // count needs no presence probe.
+        set = proto::hashedPut(ctx, set, stKeySemantics(), k, k);
         pinSet.reset(reinterpret_cast<const proto::ProtoObject*>(set));
+        ++size;
         return true;
     });
-    return makeSetInstance(rt, ctx, set);
+    return makeSetInstance(rt, ctx, set, size);
 }
 
 // aDictionary values → an Array of the values.
@@ -1718,7 +1783,7 @@ const proto::ProtoObject* prim_Dict_associations(STRuntime& rt, proto::ProtoCont
 const proto::ProtoObject* prim_Dict_classNew(STRuntime& rt, proto::ProtoContext* ctx,
                                              const proto::ProtoObject* /*cls*/,
                                              const proto::ProtoObject* const*, int) {
-    return makeDictInstance(rt, ctx, ctx->newSparseList());
+    return makeDictInstance(rt, ctx, ctx->newMap(), 0);
 }
 
 // =====================  Derived iteration protocol  ========================

@@ -1377,6 +1377,37 @@ no-op.
 | `includes:` | membership test |
 | `size`, `do:` | as expected |
 
+> **Which equality decides membership.** `=`, with `==` as a fast path. "Already
+> present" in a `Set`, "the same key" in a `Dictionary` and "the same element"
+> in a `Bag` all mean the same thing, and they mean what `=` means everywhere
+> else in the language. Two consequences are worth stating because they are the
+> ones people trip over:
+>
+> - **Numbers compare across the tower.** §12.2 says `2 = 2.0`, so a `Set`
+>   holding `1` includes `1.0`, adding both leaves one element, and
+>   `aDictionary at: 1 put: x` is read back by `at: 1.0`. Storing under an equal
+>   key of another kind replaces the value and keeps the key already stored.
+> - **A NaN is found only by identity.** §12.2 also says `Float nan = Float nan`
+>   is false, so a NaN can never be found by value. The `==` fast path means the
+>   very NaN object a collection holds is still found; a *different* NaN object
+>   is a different element. `Set new add: Float nan; add: Float nan; yourself`
+>   therefore has two elements.
+>
+> A class that overrides `=` must override `hash` to match, as in any Smalltalk:
+> the collections group elements by `hash` and only then compare with `=`, so two
+> objects that are `=` but hash differently will both be stored.
+
+> **Iteration order is unspecified.** `do:`, `keysDo:`, `valuesDo:`,
+> `keysAndValuesDo:`, `associationsDo:`, `keys`, `values`, `associations`,
+> `collect:`, `select:`, `detect:` and `asArray` visit a hashed collection in an
+> order that depends on the elements' hashes and is not the insertion order.
+> It is stable within one run for one collection, and nothing more is promised —
+> in particular it may differ between runs and between releases. `detect:`
+> answering "the first element" (§9.2) is therefore only meaningful on a
+> sequenceable receiver. Use an `OrderedCollection` when the order matters.
+> A `Bag` is the exception: it stores one slot per occurrence and `do:` visits
+> them in the order they were added.
+
 ### 9.7 `Bag`
 
 A counting hashed collection — it records how many times each element was
@@ -1390,6 +1421,10 @@ added.
 | `remove:` / `remove:ifAbsent:` | drop one occurrence |
 | `occurrencesOf:` | the count of an element |
 | `includes:`, `size`, `do:` | `size` counts occurrences; `do:` visits each occurrence |
+
+Element equality is the rule stated in §9.6. Unlike `Set` and `Dictionary`, a
+`Bag` keeps its occurrences in the order they were added, and `do:` visits them
+in that order.
 
 ### 9.8 `Dictionary`
 
@@ -1417,7 +1452,11 @@ d at: #three ifAbsent: [ 0 ] "=> 0"
 d includesKey: #two.         "=> true"
 ```
 
-Keys may be symbols, strings, integers, or other objects.
+Keys may be symbols, strings, integers, or other objects. Two keys are the same
+key when they are `=`, by the rule in §9.6 — so a key `1` is found as `1.0` —
+and the entries are visited in the unspecified order §9.6 describes. A key whose
+value is `nil` is still a key: `includesKey:` answers `true` for it and `at:`
+answers `nil` rather than signalling.
 
 ### 9.9 `Association`
 

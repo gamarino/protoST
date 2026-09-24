@@ -22,6 +22,28 @@ Changes committed after the `v0.3.0` tag.
   subclasses. Assignment is allowed only from class-side methods; an
   instance-side assignment is a compile-time error. Closes D19 at that scope.
 
+### Collections
+
+- **`Set` and `Dictionary` share one mechanism: protoCore's `ProtoMap` and its
+  hashed-collection helper** (Track S). A `Set` used to store a protoCore
+  `ProtoSet`, keyed by protoCore's hash with no collision handling; a
+  `Dictionary` used to store a hand-rolled hash-to-bucket `ProtoSparseList`.
+  Both now store a `ProtoMap` — a `Set` being the map that holds each element
+  under itself — reached only through `hashedPut` / `hashedGet` /
+  `hashedRemove` / `hashedForEach`, with protoST supplying the equality and the
+  hash. One hash, one equality, one collision policy, shared with protoScala
+  and protoClojure.
+- **Hashed collections decide membership with `=`** — closes **D32**, which had
+  been open on a language decision nobody had taken. A `Set` holding `1` now
+  includes `1.0`, a `Dictionary` keyed by `1` answers for `1.0`, and `Bag` is
+  unchanged because that is already what it did. A NaN is found only by
+  identity, which is what §12.2's `Float nan = Float nan` being false requires,
+  so a `Set` holding one NaN no longer includes a different NaN object — the
+  one behaviour change that is not a strict widening. `LANGUAGE.md` §9.6-9.8
+  now state the rule, and also state that iteration order is unspecified; the
+  decision, its argument and the cost of reversing it are in `docs/STATUS.md`,
+  marked `[agent, pending review]`.
+
 ### Actors
 
 - **Actor mailboxes are protoCore `ProtoMPSCQueue`s** (Track S). A send used
