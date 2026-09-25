@@ -81,9 +81,17 @@ namespace {
 //
 // The VALUE is the protoST object itself and is never copied — it is only
 // re-keyed. It stays reachable throughout because `importModuleFile` has
-// already published the module in protoST's module cache and its live
-// registry, both of which are protoST GC roots, and the classes it names are
-// also in protoST's globals.
+// already anchored the module with `registryAdd`, which puts it in
+// `liveRegistry` — a mutable object pinned once in the `ProtoRootSet` this
+// runtime creates on its own `ProtoSpace`, so it is a GC root for the life of
+// the runtime — and the classes it names are also in `globals`.
+//
+// `Impl::moduleCache` is NOT a root: it is a `std::map` of raw pointers, so it
+// gives a module its identity (one load per canonical path) but contributes no
+// retention. The retention is `liveRegistry` and `globals`, both per-runtime.
+// The platform rule is that a module is a process-level entity anchored from a
+// global perennial list; this is that rule implemented per runtime. See R5 in
+// protoScala's docs/STATUS.md for where the two differ.
 struct Binding {
     std::string name;
     const proto::ProtoObject* value;
