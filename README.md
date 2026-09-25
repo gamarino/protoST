@@ -70,7 +70,7 @@ Together with the other protoCore runtimes, protoST is designed to form a platfo
 | Immutable collections, structural sharing | **protoCore** (kernel) |
 | Cross-language interop without marshalling | **UMD** (every module is a `ProtoObject`) |
 
-Today, building this typically requires combining MQTT + Python microservices + JavaScript dashboards + a database + glue code — five runtimes, five data models, marshalling at every boundary. The protoCore runtimes aim to do it **inside one process, with one object model, with true parallelism**. protoST's side of cross-language interop is implemented; a live process hosting several runtimes at once is follow-up work (see [`docs/INTEROP.md`](docs/INTEROP.md)).
+Today, building this typically requires combining MQTT + Python microservices + JavaScript dashboards + a database + glue code — five runtimes, five data models, marshalling at every boundary. The protoCore runtimes aim to do it **inside one process, with one object model, with true parallelism**. protoST's side of cross-language interop is implemented in both directions, and a second runtime importing a protoST module in the same process is tested; the fuller multi-runtime process is follow-up work (see [`docs/INTEROP.md`](docs/INTEROP.md)).
 
 ## A flavour of the language
 
@@ -260,10 +260,14 @@ problem you architect around.
 Every protoCore runtime represents its values as protoCore objects built from
 the same cell, so an object produced by protoJS or protoPython is an ordinary
 object to protoST, and a message send to it follows the ordinary lookup path.
-protoST's side of this is implemented and tested (Track 5, slice T5-a:
-importing modules from a foreign UMD provider); a live process hosting
-several runtimes at once is the follow-up described in
-[`docs/INTEROP.md`](docs/INTEROP.md).
+Both directions are now implemented and tested. protoST *consumes* a foreign UMD
+provider's modules (Track 5, slice T5-a), and protoST *publishes* its own to a
+runtime living in another object space in the same process (S17): a protoScala
+program does `import st.<module>`, binds its members, and receives the protoST
+objects **themselves** — the same cell address and the same identity hash read
+from either runtime, printed by the test rather than asserted in prose. What is
+not supported is a foreign runtime *calling* a protoST method, and the rest of
+the boundary is in [`docs/INTEROP.md`](docs/INTEROP.md) §4.
 
 ### 3. No GIL, no data races, no locks on the message path — by data-model construction
 
@@ -326,12 +330,13 @@ UMD interop, onboarding, the dual-audience tutorial
 the benchmark suite.
 
 Since v0.3.0 (see [`CHANGELOG.md`](CHANGELOG.md#unreleased)): call-form sends
-and method declarations, class variables, the three actor priority bands, and
+and method declarations, class variables, the three actor priority bands,
 blocking OS calls wrapped in protoCore's unmanaged scope so they do not stall
-the garbage collector.
+the garbage collector, and a UMD provider that serves a caller in another
+runtime's object space, which is what makes a cross-runtime import work.
 
-The test suite has **851 `ctest` cases** (361 conformance, 42 examples, 14 CLI,
-434 unit), counted with `ctest -N` on 2026-09-24, all passing. Open bugs are
+The test suite has **854 `ctest` cases** (361 conformance, 42 examples, 14 CLI,
+437 unit), counted with `ctest -N` on 2026-09-24, all passing. Open bugs are
 tracked in [docs/STATUS.md](docs/STATUS.md).
 
 **Open performance work**: closing the BEAM messaging gap. The 2026-05-24
@@ -435,7 +440,7 @@ verified on Linux.
 | [docs/STATUS.md](docs/STATUS.md) | The living status tracker — implemented features, intentional deviations, open bugs. |
 | [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Runtime hard edges that are not language design choices. |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | The roadmap — remaining tracks and how to contribute. |
-| [docs/INTEROP.md](docs/INTEROP.md) | Cross-language UMD interop strategy — how protoST consumes objects and modules from another protoCore runtime (protoJS, protoPython), the type mapping, and the multi-runtime follow-up plan. |
+| [docs/INTEROP.md](docs/INTEROP.md) | Cross-language UMD interop — how protoST consumes objects and modules from another protoCore runtime, how it serves one (§4.1, including the per-`ProtoSpace` symbol rule), what the boundary does not cover (§4.2), the type mapping, and the multi-runtime follow-up plan. |
 | [docs/debugging.md](docs/debugging.md) | Debugging `.st` scripts in VS Code via the `protost --dap` Debug Adapter Protocol adapter. |
 | [CHANGELOG.md](CHANGELOG.md) | Release notes and unreleased changes. |
 | [benchmarks/README.md](benchmarks/README.md) | The benchmark suite and harness; dated reports live in `benchmarks/reports/`. |

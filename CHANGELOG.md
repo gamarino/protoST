@@ -73,6 +73,41 @@ Changes committed after the `v0.3.0` tag.
   guard. See `docs/tutorial/10-actors-and-futures.md` §10.11 and
   `examples/actors/05_priority_bands.st`.
 
+### Interop
+
+- **`provider:st` serves a caller in another runtime's `ProtoSpace`** (commit
+  `e82682b`, S17). A cross-runtime import of a protoST module now resolves:
+  protoScala's `import st.<module>` loads the module, its members bind by name,
+  and the values are the protoST objects themselves — the same cell address and
+  the same `getHash` read from either runtime, printed by
+  `tests/unit/test_cross_runtime_provider.cpp`.
+
+  `ModuleProvider::tryLoad(path, ctx)` receives the **caller's** context, and
+  `STModuleProvider` resolved its runtime from `ctx->space` — a space protoST
+  does not own when the caller is a co-resident runtime, so the lookup missed and
+  a module that was there was reported as absent. The fix is in the provider and
+  **protoCore is unchanged**: a `ModuleProvider` is an object with its own state,
+  so it takes its runtime from that state (`soleSTRuntime()`) and uses `ctx` only
+  to allocate the result in the caller's context.
+
+  Two consequences worth knowing if you write a provider. The load runs in
+  protoST's **own** space, because running a module's top level on a foreign
+  context interns its literals in the foreign symbol table and leaves protoST's
+  own later lookups missing. And the module **namespace** is rebuilt with keys
+  interned in the **caller's** space, because an attribute key is an interned
+  symbol's address and protoCore interns per `ProtoSpace`; only the mapping is
+  rebuilt, never the values. protoCore embeds a short string in the pointer word,
+  so a 5-byte member name matched across spaces by accident and a 7-byte one
+  missed silently.
+
+  `STRuntime::isOwnerThread()` is new. A cross-runtime load runs on protoST's
+  root context, which only the constructing thread may allocate on (D26), so an
+  import from any other thread is refused with a message rather than raced; a
+  process holding two `STRuntime`s is refused as ambiguous. What this does **not**
+  deliver — a foreign runtime *calling* a protoST method, imports from more than
+  one thread, more than one runtime, a namespace that changes after import — is
+  listed in [`docs/INTEROP.md`](docs/INTEROP.md) §4.2.
+
 ### Runtime
 
 - **Blocking OS calls run inside `ProtoContext::UnmanagedScope`** (commit

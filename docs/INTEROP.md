@@ -272,14 +272,91 @@ in v1.)
 
 ---
 
-## 4. protoST as a *provider* (already done)
+## 4. protoST as a *provider*
 
-The reverse direction — protoST modules consumed by protoJS or protoPython —
-already works. F5 v2 registers `STModuleProvider` (alias `st`, GUID
-`protoST-source-v1`) with the global `ProviderRegistry`. Any runtime that adds
-`provider:st` to its resolution chain can `Import` a protoST `.st` module and
-receive its exported classes as `ProtoObject`s. Nothing more is required on
-the protoST side for the publish direction.
+F5 v2 registers `STModuleProvider` (alias `st`, GUID `protoST-source-v1`) with
+the global `ProviderRegistry`, so any runtime that names `provider:st` — in its
+resolution chain, or directly through `getProviderForSpec` — can import a protoST
+`.st` module and receive its exported classes as `ProtoObject`s.
+
+### 4.1 Serving a caller in another runtime's ProtoSpace (Track Y)
+
+"Nothing more is required on the protoST side" was **wrong**, and it took a real
+second runtime in the process to find out. `ModuleProvider::tryLoad(path, ctx)`
+receives the **caller's** context, and each protoCore runtime owns its own
+`ProtoSpace`. `STModuleProvider` resolved its runtime from `ctx->space` (the S6
+registry, adopted because a `thread_local` answered "not found" on every actor
+worker) — and when the caller is another runtime that is a space protoST does not
+own, so the lookup found nothing and a module that was there was reported as
+absent. protoScala measured exactly that on 2026-09-24 and recorded it under its
+R5; `import st.counter_lib` said `provider 'st' has no module 'counter_lib'`.
+
+The cause is in the provider, not in protoCore, and nothing in protoCore changed.
+A `ModuleProvider` is an object with its own state. So:
+
+- **A caller in a space protoST owns** — an ordinary protoST import, from any of
+  its threads — is unchanged: the runtime comes from the space registry and the
+  load runs on the caller's context.
+
+- **A caller in a space protoST does not own** is a cross-runtime import. The
+  runtime comes from the provider's own state, `soleSTRuntime()`, which reads the
+  same registry rather than caching an `STRuntime*`: the provider is registered
+  once per process and outlives every runtime, so a captured pointer would dangle
+  for any host that builds a runtime per test. Two registered runtimes make the
+  choice ambiguous and are refused rather than resolved arbitrarily.
+
+Two rules follow, and both are load-bearing:
+
+1. **The load runs in protoST's own space.** protoST's prototypes, globals and
+   interned symbols live there. Running a module's top level on a foreign context
+   would intern the module's literals in the foreign symbol table and leave
+   protoST's own later lookups of those names missing — §2.3's trap again, one
+   level up.
+
+2. **The module namespace is rebuilt with keys interned in the CALLER's space.**
+   An attribute key is the address of an interned symbol and protoCore interns per
+   `ProtoSpace`, so the same name is a different pointer in each. Only the mapping
+   is rebuilt; every value is the protoST object itself, by address. The trap is
+   that protoCore embeds a short string in the pointer word, so a 5-byte member
+   name matches across spaces **by accident** while a 7-byte one misses
+   **silently** — which is why the tests use a class called `Counter`.
+
+`tests/unit/test_cross_runtime_provider.cpp` needs no sibling runtime: what makes
+a caller foreign is a ProtoSpace protoST does not own, and a bare
+`proto::ProtoSpace` is one. It asserts the import resolves, that the namespace
+reads back with keys interned in the caller's space (comparing the two symbol
+addresses, so it cannot pass by pointer-word accident), that the class the foreign
+caller reads is the same cell protoST's globals hold — same address, same
+`getHash` from either side — that "not my module" stays a plain miss, and that the
+foreign-thread case is refused. It prints both addresses:
+
+```
+NO-COPY PROOF (protoST side)
+  protoST space      = 0x...
+  foreign space      = 0x...
+  Counter via foreign = 0x743e4cf7e9c0  getHash = 127810928110016
+  Counter via protoST = 0x743e4cf7e9c0  getHash = 127810928110016
+```
+
+protoScala's `umd/protost-interop` drives the same path end to end from a real
+second runtime, including `import st.counter_lib as lib` in a protoScala program
+and a forced collection in each space.
+
+### 4.2 What the publish direction does NOT cover
+
+- **Values, not calls.** A protoST class or object crosses as a value and its
+  attributes read back. A protoST **method** is an object carrying `__bc_ptr__`
+  that protoST's `ExecutionEngine` interprets on SEND; it is not a
+  `proto::ProtoMethod`, so a foreign runtime cannot call it. Exporting callable
+  behaviour to another runtime needs a protoCore method, which is a separate piece
+  of work.
+- **One thread.** A cross-runtime load runs on protoST's root context, which only
+  the thread that constructed the runtime may allocate on (D26), and a foreign
+  caller has no context of its own in this space to chain to. An import from any
+  other thread is refused with a message rather than raced.
+- **One protoST runtime per process**, because the provider is registered once.
+- **A namespace snapshot.** protoST's module object is mutable; the namespace the
+  importer receives is taken once, at import.
 
 ---
 
@@ -383,6 +460,9 @@ libraries. At startup it must, in order:
 | Concern | Status |
 |---------|--------|
 | protoST as a UMD *provider* (publish) | Done — F5 v2 |
+| A provider serving a caller in ANOTHER runtime's ProtoSpace | Done — Track Y; §4.1 |
+| No copy at the boundary (same cell, same `getHash`, both sides) | Verified — §4.1 |
+| A foreign runtime CALLING a protoST method | Not supported — §4.2 |
 | protoST *consuming* a foreign provider's module | Done — T5-a; `addModuleProviderToChain` |
 | Per-space symbol resolution in `Import` unwrap | Fixed — T5-a |
 | Immediates / strings cross with no conversion | Verified — T5-a tests |
