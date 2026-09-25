@@ -334,6 +334,13 @@ struct STRuntime::Impl {
     std::unordered_map<std::thread::id, std::string> modulesWaiting;
     std::condition_variable modulesCv;
 
+    // Track Y: the thread that constructed this runtime, and therefore the
+    // only thread that may allocate on `rootCtx` (D26: a context's allocator
+    // is not thread-safe). A caller from ANOTHER runtime's ProtoSpace has no
+    // context of its own in this space, so the provider has to use `rootCtx`;
+    // the check makes the unsupported case a clear error instead of a race.
+    const std::thread::id ownerThread = std::this_thread::get_id();
+
     Impl() {
         // protoCore exposes the root context as a public field on ProtoSpace
         // (see protoCore/headers/protoCore.h:1234 and protoJS/src/JSContext.cpp:100).
@@ -900,6 +907,10 @@ void STRuntime::startProcessing() {
 
 bool STRuntime::isProcessingPaused() const {
     return impl_->processingPaused.load(std::memory_order_acquire);
+}
+
+bool STRuntime::isOwnerThread() const {
+    return std::this_thread::get_id() == impl_->ownerThread;
 }
 
 proto::ProtoSpace*   STRuntime::space()         const { return &impl_->space; }

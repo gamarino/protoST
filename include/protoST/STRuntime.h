@@ -31,6 +31,13 @@ public:
 
     proto::ProtoSpace*   space()         const;
     proto::ProtoContext* rootCtx()       const;
+
+    // True when the calling thread is the one that constructed this runtime,
+    // which is the only thread that may allocate on `rootCtx` (D26). Track Y:
+    // a cross-runtime import has no context of its own in this space, so
+    // STModuleProvider runs the load on `rootCtx` and uses this to refuse,
+    // with a clear message, a call from any other thread.
+    bool isOwnerThread() const;
     proto::ProtoRootSet* asyncRootSet()  const;
 
     // Mutable globals namespace (PUSH_GLOBAL / STORE_GLOBAL). Allocated at

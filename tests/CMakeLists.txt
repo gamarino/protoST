@@ -87,6 +87,9 @@ target_sources(protost_unit_tests PRIVATE
     unit/test_t5a_interop.cpp
 )
 target_sources(protost_unit_tests PRIVATE
+    unit/test_cross_runtime_provider.cpp
+)
+target_sources(protost_unit_tests PRIVATE
     unit/test_ready_stack.cpp
 )
 target_sources(protost_unit_tests PRIVATE
