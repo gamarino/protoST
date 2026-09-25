@@ -89,12 +89,25 @@ TEST_CASE("Track Y: the provider serves a caller in a ProtoSpace protoST does no
             proto::ProtoString::createSymbol(&foreignCtx, "Counter");
         REQUIRE(module->hasAttribute(&foreignCtx, counterKey) == PROTO_TRUE);
 
-        // The same name interned in protoST's space is a DIFFERENT pointer —
-        // that is the whole reason the namespace has to be rebuilt.
+        // INVERTED BY protoCore 2.2.0 (P3), not deleted: this assertion is the
+        // coverage that found the bug, so it now asserts the fix.
+        //
+        // It used to read `counterKey != counterKeyInST`, with the comment "the
+        // same name interned in protoST's space is a DIFFERENT pointer — that is
+        // the whole reason the namespace has to be rebuilt". Interning is now
+        // process-global, so "Counter" is ONE pointer in every ProtoSpace of the
+        // process and the two keys are the same object.
+        //
+        // The namespace is still rebuilt, and the facade is still required — for
+        // PROTOTYPES, which remain per space (P3 D9). A protoST object handed
+        // straight to a caller in another space would carry parent links into
+        // protoST's prototype chain; buildCallerFacade re-parents the namespace
+        // to the caller's own objectPrototype. Global interning fixed names, not
+        // prototypes.
         proto::ProtoContext stCtx(rt.space(), rt.rootCtx());
         const proto::ProtoString* counterKeyInST =
             proto::ProtoString::createSymbol(&stCtx, "Counter");
-        REQUIRE(counterKey != counterKeyInST);
+        REQUIRE(counterKey == counterKeyInST);
 
         // A name the module does not define stays absent.
         REQUIRE(module->hasAttribute(

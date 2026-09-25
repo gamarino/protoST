@@ -106,19 +106,33 @@ void collectBinding(proto::ProtoContext* stCtx, void* self,
 
 // Track Y: the module namespace, rebuilt so the CALLER can read it.
 //
-// An attribute key is the ADDRESS of an interned symbol, and protoCore interns
-// per ProtoSpace (`ctx->space->symbolTable`, ProtoString.cpp), so a name the
-// caller interns in its own space is a DIFFERENT pointer from the one protoST
-// stored the binding under — unless the name is short enough for protoCore to
-// embed it in the pointer word, in which case the two agree by accident. That
-// accident is the trap: `value` (5 bytes) would resolve and `Counter`
-// (7 bytes) would silently miss.
+// WHY THIS IS STILL NEEDED AFTER protoCore 2.2.0 (P3).
 //
-// So the namespace mapping — and only the mapping — is rebuilt with keys
-// interned in the caller's space. Every VALUE is the protoST object itself,
-// by address: no copy, no serialisation, no proxy object per member. This is
-// what `ctx` is for in `tryLoad(path, ctx)`: allocating the result in the
-// caller's context.
+// The original reason was interning. An attribute key is the ADDRESS of an
+// interned symbol, and protoCore used to intern per ProtoSpace
+// (`ctx->space->symbolTable`), so a name the caller interned in its own space
+// was a DIFFERENT pointer from the one protoST stored the binding under —
+// unless the name was short enough for protoCore to embed it in the pointer
+// word, in which case the two agreed by accident. That accident was the trap:
+// `value` (5 bytes) resolved and `Counter` (7 bytes) silently missed, because
+// getAttribute returned PROTO_NONE, which is also a legitimate value.
+//
+// protoCore 2.2.0 fixed THAT half: interning is process-global, so
+// createSymbol returns one canonical pointer per spelling per process and the
+// key rebuild below is now redundant as a key rebuild.
+//
+// The facade survives because it does a SECOND thing that P3 did not fix: it
+// re-parents the namespace object to `callerCtx->space->objectPrototype`, and
+// PROTOTYPES REMAIN PER SPACE. A protoST object handed straight to another
+// runtime still carries parent links into protoST's prototype chain. Global
+// interning fixes names, not prototypes; deleting the facade would trade a
+// silent attribute miss for a silent prototype mismatch (P3 D9).
+//
+// So the namespace mapping — and only the mapping — is rebuilt, in the
+// caller's space and against the caller's prototype. Every VALUE is the
+// protoST object itself, by address: no copy, no serialisation, no proxy
+// object per member. This is what `ctx` is for in `tryLoad(path, ctx)`:
+// allocating the result in the caller's context.
 const proto::ProtoObject* buildCallerFacade(proto::ProtoContext* callerCtx,
                                             const std::vector<Binding>& bindings) {
     // The facade and every symbol are held in C++ locals across allocations
