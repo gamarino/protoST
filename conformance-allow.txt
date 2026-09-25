@@ -1,0 +1,21 @@
+# conformance-allow.txt -- the static ratchet for protoST.
+#
+# Format: <check-id> <path>:<line> <sha1-12-of-the-line-text> :: <justification>
+# A <path>:* entry with a * hash covers every finding of that check in that file.
+#
+# Run: python3 ../protoCore/scripts/conformance/check_static.py --repo .
+# Exit 0 clean, 1 an unjustified finding, 2 a stale entry.
+#
+# NOTHING BELOW LAUNDERS A DEFECT.  A real bug is left UNCOVERED on purpose, so
+# the check keeps failing until it is fixed; only legitimate sites are justified.
+
+external_finalizer src/runtime/STRuntime.cpp:671 c08d9fc937cb :: Legitimate. The wrapper carries `this` -- the STRuntime itself -- into a worker thread's argument list. STRuntime is a C++ object with its own lifetime, owned by whoever constructed it and outliving every worker (the destructor joins the pool before returning), so protoCore must NOT free it. A null finalizer is the correct answer: the alternative would be a double free. Checklist C7. Reviewed 2026-09-25, agent, pending maintainer review.
+external_finalizer src/dap/DapServer.cpp:257 bcdcd097ab21 :: Legitimate, same shape as STRuntime.cpp:671: the wrapper carries `this` (the DapServer) into the debuggee thread's arguments. The DapServer owns itself and joins the debuggee in its own teardown, so protoCore must not free it. Checklist C7. Reviewed 2026-09-25, agent, pending maintainer review.
+# KNOWN GAP, recorded rather than papered over: src/runtime/ExecutionEngine.cpp
+# around line 2452 is a THIRD fromExternalPointer with a null finalizer, and the
+# checker does NOT see it because the call is split across physical lines and the
+# finalizer check declines to guess at a continuation rather than risk reporting a
+# finalizer argument it did not actually read.  The site is legitimate for the
+# same reason as the two above -- the wrapper carries a BytecodeModule* owned by
+# the compiler's module vector, which protoST's own tests are careful to outlive
+# the runtime -- but it is unchecked, not checked-and-cleared.
