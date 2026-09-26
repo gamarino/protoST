@@ -1,0 +1,202 @@
+name: CI
+
+# protoST had no continuous integration until this file existed.  This is the
+# runtime that reclaimed 0 cells of 2,748,398 for its entire history behind 848
+# passing tests (docs/CONFORMANCE.md, S15), so a suite that runs only when
+# somebody remembers is not a theoretical problem here.
+#
+# HOW protoCore IS OBTAINED: checked out as a SIBLING directory and built into
+# ../protoCore/build_release, the first path protoST's developer fallback
+# searches (CMakeLists.txt, decision D-I1).  No `cmake --install` is involved.
+# The installed-package mode exists to check version and ABI against a prefix
+# that may be stale; on a runner nothing is stale, because both trees are built
+# from source in the same job -- so the hazard that mode protects against cannot
+# arise here, and the configuration CI runs is the one contributors run.
+#
+# WHICH protoCore REF: pinned for push and pull_request, `master` for the
+# nightly schedule.  A pinned ref makes a red pull request unambiguous.  The
+# schedule keeps the integration signal separate, and the summary always records
+# the protoCore commit actually used.
+#
+# TWO BUGS OF THIS REPOSITORY'S OWN SHAPE THIS FILE HAS TO HANDLE:
+#
+#   S18  A debugger unit test attaches a session without setting an input stream,
+#        and DebuggerRuntime resolves an unset stream to std::cin.  Run with an
+#        open stdin, the suite hangs -- 14 minutes observed before it was killed,
+#        with no attribution.  Run with stdin at EOF the read fails at once and
+#        the suite finishes.  EVERY ctest invocation below therefore takes
+#        `< /dev/null`.  On a runner the alternative is a wasted job that reports
+#        nothing.
+#
+#   S19  cli_concurrent_first_call hangs intermittently -- 2 observations in
+#        about 13 attempts on an idle machine, and never reproduced across ~1,920
+#        A/B launches, so the trigger is not characterised (docs/STATUS.md, S19).
+#        It is NOT weakened and NOT deleted: it is quarantined out of the gating
+#        run and re-run in the `non-gating` job below, three times until it
+#        passes.  A case that needs three consecutive attempts to fail is very
+#        unlikely to be S19 and should be looked at.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # 04:27 UTC daily: the integration run against protoCore master.
+    - cron: '27 4 * * *'
+  workflow_dispatch:
+
+# The workflow reads source and runs tests; it needs nothing else.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROTOCORE_REPO: numaes/protoCore
+  # protoCore 2.5.0, SOVERSION 3 (master, 2026-09-25).  Bump deliberately.
+  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'df8406a3f44f2a7c8505251bf6887e0ad6e60809' }}
+  # The two tests excluded from the gate, both run in the `non-gating` job:
+  #   cli_concurrent_first_call   quarantined, S19 -- see the header.
+  #   F6 v2 T7: two actors ...    a wall-clock proof of parallelism: two 200 ms
+  #                               sleeps must finish inside 350 ms
+  #                               (tests/unit/test_worker_thread.cpp:152-169).
+  #                               Its own comment records loaded machines at
+  #                               230-280 ms, so the margin on a shared runner is
+  #                               tens of milliseconds.  It is a good test and a
+  #                               bad gate.
+  NON_GATING_TESTS: '^(cli_concurrent_first_call|F6 v2 T7: two actors run in parallel \(wall-clock proof\))$'
+
+jobs:
+  test:
+    name: Build and test suite
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out protoST
+        uses: actions/checkout@v4
+        with:
+          path: protoST
+
+      - name: Check out protoCore as a sibling
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PROTOCORE_REPO }}
+          ref: ${{ env.PROTOCORE_REF }}
+          path: protoCore
+
+      - name: Record what is being built
+        run: |
+          cmake --version | head -1
+          g++ --version | head -1
+          {
+            echo "protoST at \`$(git -C protoST rev-parse HEAD)\`"
+            echo "protoCore ref \`$PROTOCORE_REF\` at \`$(git -C protoCore rev-parse HEAD)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install libreadline
+        # protoST's REPL links readline; find_library(... REQUIRED) fails the
+        # configure without it.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libreadline-dev
+
+      - name: Build protoCore
+        run: |
+          cmake -S protoCore -B protoCore/build_release -DCMAKE_BUILD_TYPE=Release
+          cmake --build protoCore/build_release --target protoCore --parallel "$(nproc)"
+
+      - name: Configure protoST
+        # Catch2 is fetched at configure time (cmake/FindOrFetchCatch2.cmake), so
+        # this step needs network access.
+        working-directory: protoST
+        run: cmake -B build_release -S . -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build protoST
+        working-directory: protoST
+        run: cmake --build build_release --parallel "$(nproc)"
+
+      - name: Report the registered test count
+        # Printed, never asserted.  This family's counts moved four times in
+        # three days; a hard-coded total turns every new test into a red build.
+        working-directory: protoST
+        run: |
+          COUNT=$(ctest --test-dir build_release -N | tail -1)
+          echo "$COUNT"
+          echo "protoST ctest: $COUNT" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Test suite
+        # `< /dev/null` is S18's mitigation and is not optional -- see the header.
+        # `--timeout 300` is a hang bound, not a measurement: the whole suite
+        # finishes in well under a minute, so no honest case comes near it, and a
+        # test that does hang is reported by name instead of consuming the job.
+        # -j2 rather than -j$(nproc): the actor-stress and GC-shutdown cases spawn
+        # their own workers, and saturating a 4-vCPU runner with ctest workers is
+        # the load this family has already been burned by.
+        working-directory: protoST
+        run: ctest --test-dir build_release -j2 --timeout 300 --output-on-failure -E "$NON_GATING_TESTS" < /dev/null
+
+      - name: Static conformance ratchet
+        # The static half of the embedder conformance suite: a delta gate, not a
+        # count gate.  Measured green (exit 0) on this tree before this workflow
+        # was added.
+        #
+        # The twelve RUNTIME conformance cases are NOT run here, and that is not
+        # an omission by this workflow: protoST has no proto::conformance::Host
+        # yet, so no embedder-conformance test is registered in its ctest suite
+        # at all (docs/CONFORMANCE.md, "What is not covered").
+        working-directory: protoST
+        run: python3 ../protoCore/scripts/conformance/check_static.py --repo .
+
+  non-gating:
+    name: 'S19 and the wall-clock proof (informational, never gates)'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    # A failure here does not fail the run.  The test is kept RUNNING rather than
+    # weakened or deleted: it caught a real hang, and docs/STATUS.md records that
+    # an intermittently red case trains readers to re-run instead of to look.
+    continue-on-error: true
+    steps:
+      - name: Check out protoST
+        uses: actions/checkout@v4
+        with:
+          path: protoST
+
+      - name: Check out protoCore as a sibling
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PROTOCORE_REPO }}
+          ref: ${{ env.PROTOCORE_REF }}
+          path: protoCore
+
+      - name: Install libreadline
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libreadline-dev
+
+      - name: Build protoCore
+        run: |
+          cmake -S protoCore -B protoCore/build_release -DCMAKE_BUILD_TYPE=Release
+          cmake --build protoCore/build_release --target protoCore --parallel "$(nproc)"
+
+      - name: Build protoST
+        working-directory: protoST
+        run: |
+          cmake -B build_release -S . -DCMAKE_BUILD_TYPE=Release
+          cmake --build build_release --parallel "$(nproc)"
+
+      - name: Run the quarantined and clock-dependent cases, retrying up to three times
+        working-directory: protoST
+        run: |
+          set +e
+          ctest --test-dir build_release --output-on-failure \
+                -R "$NON_GATING_TESTS" --repeat until-pass:3 < /dev/null
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -eq 0 ]; then
+            echo "Non-gating cases: cli_concurrent_first_call and the wall-clock parallelism proof both passed" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Non-gating cases: FAILED three attempts in a row. For cli_concurrent_first_call that is unlikely to be S19 alone at ~2-in-13 (docs/STATUS.md); for the wall-clock proof it may still be runner load." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$STATUS"
