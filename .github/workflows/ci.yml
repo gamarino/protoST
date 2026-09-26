@@ -108,8 +108,10 @@ jobs:
           cmake --build protoCore/build_release --target protoCore --parallel "$(nproc)"
 
       - name: Configure protoST
-        # Catch2 is fetched at configure time (cmake/FindOrFetchCatch2.cmake), so
-        # this step needs network access.
+        # Catch2 v3.5.4 and nlohmann/json v3.11.3 are fetched at configure time
+        # (cmake/FindOrFetchCatch2.cmake, cmake/FindOrFetchNlohmannJson.cmake), so
+        # this step needs network access.  An offline runner would have to seed
+        # FETCHCONTENT_BASE_DIR with both.
         working-directory: protoST
         run: cmake -B build_release -S . -DCMAKE_BUILD_TYPE=Release
 
