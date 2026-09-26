@@ -18,9 +18,11 @@ one `Host` implementation over `STRuntime` + `Parser` + `Compiler`.
 
 That gap is worth stating loudly, because protoST is the runtime this whole phase
 came from: **S15** was protoST reclaiming 0 cells of 2,748,398 across its entire
-history with 833 tests green, and `MailboxCursor::adopt` was a second bug of the
-same class that 848 passing tests could not reach because the first was still
-present. The suite that would have caught both does not yet run here.
+history with **848** tests green — the suite size when S15 was measured
+(`docs/STATUS.md`, "Test suite"; the 833 this paragraph used to quote was the
+suite's size at the earlier S13 fix) — and `MailboxCursor::adopt` was a second bug
+of the same class that those same 848 passing tests could not reach because the
+first was still present. The suite that would have caught both does not yet run here.
 
 What IS known about protoST, by reading rather than by measurement:
 
