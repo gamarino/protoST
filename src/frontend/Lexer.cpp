@@ -4,6 +4,20 @@
 
 namespace protoST {
 
+namespace {
+// The Smalltalk-80 operator alphabet binary selectors are built from.
+bool isOperatorChar(char c) {
+    switch (c) {
+        case '+': case '*': case '/': case '\\': case '&': case ',': case '@':
+        case '=': case '~': case '<': case '>': case '%': case '?': case '!':
+        case '-':
+            return true;
+        default:
+            return false;
+    }
+}
+} // namespace
+
 Lexer::Lexer(std::string source) : source_(std::move(source)) {}
 
 void Lexer::advance() {
@@ -351,19 +365,6 @@ Token Lexer::nextImpl_() {
         case ';': return single(TokenKind::Semicolon);
         case '^': return single(TokenKind::Caret);
         case '|': return single(TokenKind::Pipe);
-        case '+': return bin1("+");
-        case '*': return bin1("*");
-        case '/':
-            // D11/D20: `//` is the integer (truncating) division operator of
-            // the numeric tower. Two slashes form one binary selector.
-            if (lookahead() == '/') {
-                Token t; t.kind = TokenKind::BinaryOp; t.text = "//";
-                t.line = startLine; t.column = startCol; advance(); advance(); return t;
-            }
-            return bin1("/");
-        case '&': return bin1("&");
-        case ',': return bin1(",");
-        case '@': return bin1("@");
         case '-':
             if (lookahead() == '>') {
                 Token t; t.kind = TokenKind::BinaryOp; t.text = "->";
@@ -382,62 +383,28 @@ Token Lexer::nextImpl_() {
                 return lexNumber(/*negative=*/true);
             }
             return bin1("-");
-        case '=':
-            if (lookahead() == '=') {
-                Token t; t.kind = TokenKind::BinaryOp; t.text = "==";
-                t.line = startLine; t.column = startCol; advance(); advance(); return t;
-            }
-            return bin1("=");
-        case '~':
-            if (lookahead() == '=') {
-                Token t; t.kind = TokenKind::BinaryOp; t.text = "~=";
-                t.line = startLine; t.column = startCol; advance(); advance(); return t;
-            }
-            // D18: `~~` is the identity-inequality binary operator (the mirror
-            // of `==`). Two characters from the operator alphabet form one
-            // binary operator (§2.10).
-            if (lookahead() == '~') {
-                Token t; t.kind = TokenKind::BinaryOp; t.text = "~~";
-                t.line = startLine; t.column = startCol; advance(); advance(); return t;
-            }
-            return makeError("unexpected '~'", startLine, startCol);
-        case '<':
-            if (lookahead() == '=') {
-                Token t; t.kind = TokenKind::BinaryOp; t.text = "<=";
-                t.line = startLine; t.column = startCol; advance(); advance(); return t;
-            }
-            // `<<` is a two-character binary operator (the Smalltalk stream
-            // append/output selector). Two characters from the operator
-            // alphabet form one binary operator (§2.10).
-            if (lookahead() == '<') {
-                Token t; t.kind = TokenKind::BinaryOp; t.text = "<<";
-                t.line = startLine; t.column = startCol; advance(); advance(); return t;
-            }
-            return bin1("<");
-        case '>':
-            if (lookahead() == '=') {
-                Token t; t.kind = TokenKind::BinaryOp; t.text = ">=";
-                t.line = startLine; t.column = startCol; advance(); advance(); return t;
-            }
-            if (lookahead() == '>') {
-                Token t; t.kind = TokenKind::GtGt; t.text = ">>";
-                t.line = startLine; t.column = startCol; advance(); advance(); return t;
-            }
-            return bin1(">");
         case ':':
             if (lookahead() == '=') {
                 Token t; t.kind = TokenKind::Assign; t.text = ":=";
                 t.line = startLine; t.column = startCol; advance(); advance(); return t;
             }
             return single(TokenKind::Colon);
-        case '\\':
-            // D11/D20: `\\` is the modulo (remainder) binary operator of the
-            // numeric tower. Two backslashes form one binary selector.
-            if (lookahead() == '\\') {
-                Token t; t.kind = TokenKind::BinaryOp; t.text = "\\\\";
-                t.line = startLine; t.column = startCol; advance(); advance(); return t;
-            }
-            return makeError("unexpected '\\'", startLine, startCol);
+    }
+
+    // A binary selector is a run of operator characters (Smalltalk-80), such
+    // as `+`, `**`, `//`, `\\`, `<=`, `==>`, `~~` or `,`. A `-` is never taken
+    // after the first character (it may be a negative literal's sign; `->`
+    // is lexed above), and `|` / `^` are tokens of their own. `>>` is the
+    // method-declaration token.
+    if (isOperatorChar(c) && c != '-') {
+        std::string op;
+        while (isOperatorChar(current()) && current() != '-') { op += current(); advance(); }
+        if (op == ">>") {
+            Token t; t.kind = TokenKind::GtGt; t.text = op; t.line = startLine; t.column = startCol; return t;
+        }
+        if (op == "\\" || op == "~")
+            return makeError("unexpected '" + op + "'", startLine, startCol);
+        Token t; t.kind = TokenKind::BinaryOp; t.text = op; t.line = startLine; t.column = startCol; return t;
     }
 
     {

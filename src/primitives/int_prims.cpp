@@ -149,20 +149,26 @@ static void floorDivMod(proto::ProtoContext* ctx, const proto::ProtoObject* r,
     if (rem) *rem = m;
 }
 
-const proto::ProtoObject* prim_NumIntDiv(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_NumIntDiv(STRuntime& rt, proto::ProtoContext* ctx,
                                           const proto::ProtoObject* r,
                                           const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw std::runtime_error("// expects 1 arg");
+    if (!isNumber(ctx, a[0]))
+        if (const proto::ProtoObject* adapted = adaptArgument(rt, ctx, r, a[0], "//"))
+            return adapted;
     checkDivisor(ctx, a[0], "//");
     const proto::ProtoObject* q = nullptr;
     floorDivMod(ctx, r, a[0], &q, nullptr);
     return q;
 }
 
-const proto::ProtoObject* prim_NumMod(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_NumMod(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* r,
                                        const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw std::runtime_error("\\\\ expects 1 arg");
+    if (!isNumber(ctx, a[0]))
+        if (const proto::ProtoObject* adapted = adaptArgument(rt, ctx, r, a[0], "\\\\"))
+            return adapted;
     checkDivisor(ctx, a[0], "\\\\");
     const proto::ProtoObject* m = nullptr;
     floorDivMod(ctx, r, a[0], nullptr, &m);
@@ -170,20 +176,26 @@ const proto::ProtoObject* prim_NumMod(STRuntime&, proto::ProtoContext* ctx,
 }
 
 // quo: / rem: truncate toward zero (protoCore's divide / modulo on integers).
-const proto::ProtoObject* prim_NumQuo(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_NumQuo(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* r,
                                        const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw std::runtime_error("quo: expects 1 arg");
+    if (!isNumber(ctx, a[0]))
+        if (const proto::ProtoObject* adapted = adaptArgument(rt, ctx, r, a[0], "quo:"))
+            return adapted;
     checkDivisor(ctx, a[0], "quo:");
     if (r->isFloat(ctx) || a[0]->isFloat(ctx))
         return ctx->fromDouble(std::trunc(r->asDouble(ctx) / a[0]->asDouble(ctx)));
     return r->divide(ctx, a[0]);
 }
 
-const proto::ProtoObject* prim_NumRem(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_NumRem(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* r,
                                        const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw std::runtime_error("rem: expects 1 arg");
+    if (!isNumber(ctx, a[0]))
+        if (const proto::ProtoObject* adapted = adaptArgument(rt, ctx, r, a[0], "rem:"))
+            return adapted;
     checkDivisor(ctx, a[0], "rem:");
     if (r->isFloat(ctx) || a[0]->isFloat(ctx))
         return ctx->fromDouble(std::fmod(r->asDouble(ctx), a[0]->asDouble(ctx)));
@@ -278,7 +290,57 @@ const proto::ProtoObject* prim_NumIsOdd(STRuntime&, proto::ProtoContext* ctx,
     return (rem->asLong(ctx) != 0) ? PROTO_TRUE : PROTO_FALSE;
 }
 
+
+// Bitwise protocol on integers (two's complement, across the SmallInteger /
+// LargeInteger tower as protoCore implements it).
+void requireInteger(proto::ProtoContext* ctx, const proto::ProtoObject* v, const char* who) {
+    if (!v || !v->isInteger(ctx))
+        throw std::runtime_error(std::string(who) + ": receiver and argument must be integers");
+}
+
+#define DEFBITS(NAME, METHOD, SELECTOR)                                           \
+const proto::ProtoObject* prim_##NAME(STRuntime&, proto::ProtoContext* ctx,        \
+                                       const proto::ProtoObject* r,                \
+                                       const proto::ProtoObject* const* a,         \
+                                       int argc) {                                 \
+    if (argc != 1) throw std::runtime_error(SELECTOR " expects 1 arg");            \
+    requireInteger(ctx, r, SELECTOR);                                              \
+    requireInteger(ctx, a[0], SELECTOR);                                           \
+    return r->METHOD(ctx, a[0]);                                                   \
+}
+
+DEFBITS(IntBitAnd, bitwiseAnd, "bitAnd:")
+DEFBITS(IntBitOr,  bitwiseOr,  "bitOr:")
+DEFBITS(IntBitXor, bitwiseXor, "bitXor:")
+
+const proto::ProtoObject* prim_IntBitInvert(STRuntime&, proto::ProtoContext* ctx,
+                                             const proto::ProtoObject* r,
+                                             const proto::ProtoObject* const*, int) {
+    requireInteger(ctx, r, "bitInvert");
+    return r->bitwiseNot(ctx);
+}
+
+// bitShift: n shifts left for positive n and right (arithmetic) for negative.
+const proto::ProtoObject* prim_IntBitShift(STRuntime&, proto::ProtoContext* ctx,
+                                            const proto::ProtoObject* r,
+                                            const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("bitShift: expects 1 arg");
+    requireInteger(ctx, r, "bitShift:");
+    requireInteger(ctx, a[0], "bitShift:");
+    const long long n = a[0]->asLong(ctx);
+    if (n > 1000000 || n < -1000000) throw std::runtime_error("bitShift: shift amount out of range");
+    return n >= 0 ? r->shiftLeft(ctx, static_cast<int>(n))
+                  : r->shiftRight(ctx, static_cast<int>(-n));
+}
 } // anon
+
+// Exported for math_prims.cpp: see adaptArgument.
+const proto::ProtoObject* adaptNumberArgument(STRuntime& rt, proto::ProtoContext* ctx,
+                                              const proto::ProtoObject* r,
+                                              const proto::ProtoObject* arg,
+                                              const char* selector) {
+    return adaptArgument(rt, ctx, r, arg, selector);
+}
 
 void installIntPrimitives(STRuntime& rt) {
     auto& reg = rt.registry();
@@ -305,6 +367,11 @@ void installIntPrimitives(STRuntime& rt) {
     bindPrimitive(rt, N, "isEven",  reg.registerPrim(prim_NumIsEven));
     bindPrimitive(rt, N, "isOdd",   reg.registerPrim(prim_NumIsOdd));
     bindPrimitive(rt, N, "printString", reg.registerPrim(prim_NumPrintString));
+    bindPrimitive(rt, N, "bitAnd:",   reg.registerPrim(prim_IntBitAnd));
+    bindPrimitive(rt, N, "bitOr:",    reg.registerPrim(prim_IntBitOr));
+    bindPrimitive(rt, N, "bitXor:",   reg.registerPrim(prim_IntBitXor));
+    bindPrimitive(rt, N, "bitInvert", reg.registerPrim(prim_IntBitInvert));
+    bindPrimitive(rt, N, "bitShift:", reg.registerPrim(prim_IntBitShift));
 }
 
 } // namespace protoST

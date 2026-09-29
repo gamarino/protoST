@@ -14,6 +14,13 @@
 
 namespace protoST {
 
+// Defined in int_prims.cpp: Pharo's adaptToNumber:andSend: double dispatch for
+// an argument that is not a native number (a Fraction). nullptr if unsupported.
+const proto::ProtoObject* adaptNumberArgument(STRuntime& rt, proto::ProtoContext* ctx,
+                                              const proto::ProtoObject* r,
+                                              const proto::ProtoObject* arg,
+                                              const char* selector);
+
 // T4-b — the mathematical protocol (Track 4, sub-slice b).
 //
 // The stdlib spec sketched `Math` as a loadable `.st` module, but the
@@ -100,11 +107,14 @@ DEF_UNARY_MATH(Exp,    std::exp)
 DEF_UNARY_MATH(Log10,  std::log10)
 
 // `log:` — logarithm in an arbitrary base. `n log: b` == ln(n) / ln(b).
-const proto::ProtoObject* prim_LogBase(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_LogBase(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* r,
                                        const proto::ProtoObject* const* a,
                                        int argc) {
     if (argc != 1) throw std::runtime_error("log: expects 1 arg (base)");
+    if (!isNumber(ctx, a[0]))
+        if (const proto::ProtoObject* adapted = adaptNumberArgument(rt, ctx, r, a[0], "log:"))
+            return adapted;
     requireNumberArg(ctx, a[0], "log:");
     return ctx->fromDouble(std::log(asDoubleVal(ctx, r)) /
                            std::log(asDoubleVal(ctx, a[0])));
@@ -257,11 +267,14 @@ const proto::ProtoObject* prim_Factorial(STRuntime&, proto::ProtoContext* ctx,
 //     overflowed double. A negative integer exponent answers a Float (the
 //     reciprocal — protoST has no Fraction type).
 //   * A Float exponent goes through libm `pow` and answers a Float.
-const proto::ProtoObject* prim_RaisedTo(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_RaisedTo(STRuntime& rt, proto::ProtoContext* ctx,
                                         const proto::ProtoObject* r,
                                         const proto::ProtoObject* const* a,
                                         int argc) {
     if (argc != 1) throw std::runtime_error("raisedTo: expects 1 arg");
+    if (!isNumber(ctx, a[0]))
+        if (const proto::ProtoObject* adapted = adaptNumberArgument(rt, ctx, r, a[0], "raisedTo:"))
+            return adapted;
     requireNumberArg(ctx, a[0], "raisedTo:");
     const proto::ProtoObject* exp = a[0];
     // Exact integer^integer path: repeated multiply, LargeInteger-safe.
@@ -284,10 +297,13 @@ const proto::ProtoObject* prim_RaisedTo(STRuntime&, proto::ProtoContext* ctx,
 // `gcd:` — greatest common divisor of two integers (Euclid). Bignum-safe: the
 // remainder steps go through protoCore `modulo`, so a LargeInteger argument
 // works. `0 gcd: 0` is undefined and raises.
-const proto::ProtoObject* prim_Gcd(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Gcd(STRuntime& rt, proto::ProtoContext* ctx,
                                    const proto::ProtoObject* r,
                                    const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw std::runtime_error("gcd: expects 1 arg");
+    if (!isNumber(ctx, a[0]))
+        if (const proto::ProtoObject* adapted = adaptNumberArgument(rt, ctx, r, a[0], "gcd:"))
+            return adapted;
     requireNumberArg(ctx, a[0], "gcd:");
     if (r->isFloat(ctx) || a[0]->isFloat(ctx)) {
         throw std::runtime_error("gcd: operands must be integers");
@@ -310,6 +326,9 @@ const proto::ProtoObject* prim_Lcm(STRuntime& rt, proto::ProtoContext* ctx,
                                    const proto::ProtoObject* r,
                                    const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw std::runtime_error("lcm: expects 1 arg");
+    if (!isNumber(ctx, a[0]))
+        if (const proto::ProtoObject* adapted = adaptNumberArgument(rt, ctx, r, a[0], "lcm:"))
+            return adapted;
     requireNumberArg(ctx, a[0], "lcm:");
     if (r->isFloat(ctx) || a[0]->isFloat(ctx)) {
         throw std::runtime_error("lcm: operands must be integers");

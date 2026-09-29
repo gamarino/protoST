@@ -137,3 +137,88 @@ Number >> isFraction
 
 Integer >> asFraction
   ^ self.
+
+"--- the rest of the Number protocol for Fractions ----------------------------
+ Fraction inherits the native number primitives through Number; each one that
+ would read the Fraction as a native number is answered here instead: exactly
+ where the result is rational, through asFloat where it is not."
+
+Fraction >> ~= aNumber
+  ^ (self = aNumber) not.
+
+Fraction >> quo: aNumber
+  ^ (self / aNumber) truncated.
+
+Fraction >> rem: aNumber
+  ^ self - ((self quo: aNumber) * aNumber).
+
+Fraction >> isZero
+  ^ numerator = 0.
+
+Fraction >> sign
+  ^ numerator sign.
+
+Fraction >> squared
+  ^ self * self.
+
+Fraction >> even
+  ^ false.
+
+Fraction >> odd
+  ^ false.
+
+Fraction >> isEven
+  ^ false.
+
+Fraction >> isOdd
+  ^ false.
+
+Fraction >> asInteger
+  ^ self truncated.
+
+Fraction >> raisedTo: exponent
+  exponent isInteger ifFalse: [^ self asFloat raisedTo: exponent asFloat].
+  exponent < 0 ifTrue: [^ (self raisedTo: exponent negated) reciprocal].
+  ^ (numerator raisedTo: exponent) / (denominator raisedTo: exponent).
+
+Fraction >> sqrt
+  ^ self asFloat sqrt.
+
+Fraction >> sin
+  ^ self asFloat sin.
+
+Fraction >> cos
+  ^ self asFloat cos.
+
+Fraction >> tan
+  ^ self asFloat tan.
+
+Fraction >> arcSin
+  ^ self asFloat arcSin.
+
+Fraction >> arcCos
+  ^ self asFloat arcCos.
+
+Fraction >> arcTan
+  ^ self asFloat arcTan.
+
+Fraction >> ln
+  ^ self asFloat ln.
+
+Fraction >> exp
+  ^ self asFloat exp.
+
+Fraction >> log
+  ^ self asFloat log.
+
+Fraction >> log: aNumber
+  ^ self asFloat log: aNumber.
+
+Fraction >> factorial
+  ^ self error: 'factorial is defined for non-negative integers only'.
+
+Fraction >> gcd: aNumber
+  ^ self error: 'gcd: is defined for integers only'.
+
+Fraction >> lcm: aNumber
+  ^ self error: 'lcm: is defined for integers only'.

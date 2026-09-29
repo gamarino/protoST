@@ -94,7 +94,9 @@ TEST_CASE("T4-b: sign / squared / reciprocal / isZero", "[t4-b][math]") {
     REQUIRE(runSrc(rt, "0 sign.")->asLong(rt.rootCtx()) == 0);
     REQUIRE(runSrc(rt, "7 sign.")->asLong(rt.rootCtx()) == 1);
     REQUIRE(runSrc(rt, "6 squared.")->asLong(rt.rootCtx()) == 36);
-    REQUIRE(runSrc(rt, "4 reciprocal.")->asDouble(rt.rootCtx())
+    // An Integer's reciprocal is the exact Fraction (Pharo); a Float's is a Float.
+    REQUIRE(runSrc(rt, "4 reciprocal * 4.")->asLong(rt.rootCtx()) == 1);
+    REQUIRE(runSrc(rt, "4.0 reciprocal.")->asDouble(rt.rootCtx())
             == Catch::Approx(0.25));
     REQUIRE(runSrc(rt, "0 isZero.") == PROTO_TRUE);
     REQUIRE(runSrc(rt, "1 isZero.") == PROTO_FALSE);

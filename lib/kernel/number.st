@@ -70,3 +70,41 @@ BlockClosure >> cull: first cull: second
   self numArgs = 0 ifTrue: [^ self value].
   self numArgs = 1 ifTrue: [^ self value: first].
   ^ self value: first value: second.
+
+"--- magnitude protocol --------------------------------------------------------
+ Built on the comparison operators, which dispatch across the numeric tower
+ (native numbers and Fractions, in either position), as Magnitude does in
+ Smalltalk-80. The tie and NaN rules follow Magnitude: min: answers the
+ receiver only when it is strictly smaller, max: only when strictly larger."
+
+Number >> min: aNumber
+  ^ self < aNumber ifTrue: [self] ifFalse: [aNumber].
+
+Number >> max: aNumber
+  ^ self > aNumber ifTrue: [self] ifFalse: [aNumber].
+
+Number >> between: min and: max
+  ^ min <= self and: [self <= max].
+
+Number >> ** exponent
+  ^ self raisedTo: exponent.
+
+Number >> roundTo: quantum
+  ^ (self / quantum) rounded * quantum.
+
+Number >> truncateTo: quantum
+  ^ (self quo: quantum) * quantum.
+
+"--- integers --------------------------------------------------------------------"
+
+Integer >> reciprocal
+  ^ 1 / self.
+
+Integer >> << shift
+  ^ self bitShift: shift.
+
+Integer >> bitAt: index
+  ^ (self bitShift: 1 - index) bitAnd: 1.
+
+Integer >> isPowerOfTwo
+  ^ self > 0 and: [(self bitAnd: self - 1) = 0].
