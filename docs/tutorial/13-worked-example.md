@@ -70,9 +70,8 @@ Pump >> ticks  ^ ticks.
 ```
 
 Everything here is [Chapter 5](05-classes-and-methods.md) material. `Pump` is
-declared with two instance variables. `initialize` sets them — and recall from
-Chapter 5 that `new` does *not* call `initialize`, so the main program will
-have to send it explicitly. `start`, `stop`, and `tick` are the FSM
+declared with two instance variables. `initialize` sets them, and `new` sends
+it to every new pump (Chapter 5). `start`, `stop`, and `tick` are the FSM
 transitions; `start` simulates 30ms of spin-up latency with `Object sleep: 30`.
 `tick` uses an `ifTrue:` conditional — a message on the boolean `state =
 'running'`, exactly as [Chapter 4](04-blocks.md) described — so it only counts
@@ -213,16 +212,16 @@ The top-level forms of the file build the twin and run it:
 ```smalltalk
 "-- MAIN PROGRAM --"
 
-pump := Pump newChild.
-pump initialize.
+"new sends initialize to each new object."
+pump := Pump new.
 pump start.
 
-temp := TempSensor newChild.  temp initialize.
-flow := FlowSensor newChild.  flow initialize.
-vib  := VibSensor newChild.   vib initialize.
+temp := TempSensor new.
+flow := FlowSensor new.
+vib  := VibSensor new.
 
 "Wrap each sensor as an actor — Controller can dispatch concurrently"
-ctrl := Controller newChild.
+ctrl := Controller new.
 ctrl initWith: pump
      temp: temp asActor
      flow: flow asActor
@@ -237,9 +236,9 @@ ctrl cycle.
 ctrl cycles.
 ```
 
-Read it top to bottom. The pump is created (`newChild`), `initialize`d — the
-explicit `initialize` send, because `new`/`newChild` does not do it for you —
-and `start`ed. The three sensors are created and initialised the same way.
+Read it top to bottom. The pump is created with `new`, which also sends it
+`initialize`, and then `start`ed. The three sensors are created the same way;
+each one's `initialize` sets its starting reading.
 
 Then the key line: the controller is initialised with the pump *and with each
 sensor wrapped by `asActor`*. The pump goes in as-is — a plain object — but
@@ -259,10 +258,10 @@ Run the twin and time it:
 $ time ./build/protost examples/pump_twin.st
 3
 
-real	0m0,223s
+real	0m0,230s
 ```
 
-About 223ms — three cycles of ~50ms each (plus the pump's 30ms `start` and
+About 230ms — three cycles of ~50ms each (plus the pump's 30ms `start` and
 runtime startup). Now force the runtime to a single worker thread, so the
 sensor reads *cannot* run in parallel, and time it again:
 
@@ -270,15 +269,15 @@ sensor reads *cannot* run in parallel, and time it again:
 $ time PROTOST_WORKERS=1 ./build/protost examples/pump_twin.st
 3
 
-real	0m0,506s
+real	0m0,525s
 ```
 
-Same program, same result `3`, but ~506ms — more than twice as long. With one
-worker the three sensor reads in each cycle are forced to run one after
-another: 150ms per cycle instead of 50ms.
+Same program, same result `3`, but about 525ms — more than twice as long.
+With one worker the three sensor reads in each cycle are forced to run one
+after another: 150ms per cycle instead of 50ms.
 
-That difference — 223ms versus 506ms — is real parallelism across operating-
-system threads. You wrote no threads, no locks, no `async` keywords. You wrote
+That difference — 230ms versus 525ms, measured on one 12-core Linux machine —
+is real parallelism across operating-system threads. You wrote no threads, no locks, no `async` keywords. You wrote
 plain objects, promoted three of them with `asActor`, and used the
 fan-out/join pattern in one method. The runtime did the rest.
 
@@ -323,11 +322,11 @@ To make the pattern yours, try extending `pump_twin.st`:
    contrast it with the asynchronous sensor reads.
 3. **Detect an alarm.** Have `cycle` compare the aggregated reading against a
    threshold and answer a symbol — `#normal` or `#alarm` — instead of the raw
-   sum. Use an `ifTrue:ifFalse:` *expression* (the robust form from
-   [Chapter 7](07-exceptions.md)).
-4. **Measure it yourself.** Wrap the three `ctrl cycle` calls in
-   `Time millisecondsToRun:` ([Chapter 9](09-standard-library.md)) and print
-   the elapsed time. Then run again under `PROTOST_WORKERS=1` and compare.
+   sum, with an `ifTrue:ifFalse:` expression or a guard clause
+   ([Chapter 7](07-exceptions.md)).
+4. **Measure it yourself.** Wrap the three `ctrl cycle` calls in a block and
+   send it `timeToRun` ([Chapter 9](09-standard-library.md)); print the
+   elapsed `Duration`. Then run again under `PROTOST_WORKERS=1` and compare.
 
 ## 13.9 Summary
 
@@ -338,7 +337,7 @@ To make the pattern yours, try extending `pump_twin.st`:
 - The controller's `cycle` method is the **fan-out / join** pattern: fire all
   the sensor reads (collecting futures), *then* `wait` on the futures. That is
   what makes the three 50ms reads run in ~50ms total instead of 150ms.
-- Measured: ~223ms parallel versus ~506ms forced-serial
+- Measured: about 230ms parallel versus about 525ms forced-serial
   (`PROTOST_WORKERS=1`) — real multi-core parallelism, with no threads or locks
   in the source.
 - The program scales by *adding actors* — which is exactly the digital-twin

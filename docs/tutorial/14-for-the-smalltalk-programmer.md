@@ -77,8 +77,8 @@ aMixin` composes a mixin into a class *at runtime*, no recompilation.
 
 [Chapter 11](11-advanced-object-model.md) covers both. Two things a Smalltalker
 should note: the object model *presents* as classes (`subclass:`, `>>`,
-`super`) but *is* prototype-chain delegation underneath — there is no metaclass
-tower (see §14.4) — and the mixin features are genuine multi-parent
+`super`) but *is* prototype-chain delegation underneath — the metaclass is
+thin (see §14.4) — and the mixin features are genuine multi-parent
 inheritance, not the method-copying "trait" simulation a single-inheritance
 Smalltalk would use.
 
@@ -297,12 +297,12 @@ Account >> withdraw: amount
       ifFalse: [ balance := balance - amount. balance ].
 ```
 
-One genuine rule still applies, and it is a deliberate parser characteristic,
-not a bug: the **first *top-level* `^` terminates the method body** (the
-`^`-terminator rule of [Chapter 5](05-classes-and-methods.md) §5.3). A `^`
-*nested in a block* — as in the guard clause above — does not terminate the
-method; only a `^` written as a top-level statement does. The safe universal
-habit remains: end every method with a single explicit top-level `^`.
+One rule of the file syntax applies here: the **first *top-level* `^`
+terminates the method body**, like a blank line does (see "Where a method body
+ends" in [Chapter 5](05-classes-and-methods.md) §5.3). A `^` *nested in a
+block* — as in the guard clause above — does not terminate the method; only a
+`^` written as a top-level statement does, so anything written after it in
+the same method is read as top-level code.
 
 ## 14.8 What is unchanged — the Smalltalk you keep
 
@@ -376,17 +376,19 @@ For full grammar, see `LANGUAGE.md` §3.5.1 and §3.3.
   mixins; `addBehavior:` runtime composition; file-based modules and venvs;
   **call-form sends** (`recv name(p, k = v)`) and call-form method
   declarations (`Class >> name(p, k = default)`).
-- **Intentional deviations:** no image / persistence; no metaclass tower; `new`
-  does not auto-`initialize` (D4); `outer` aliases `pass` (D7); no `main:`
-  (D12); single runtime per process (D2); `addBehavior:` affects future
-  instances only (D21).
-- **Smaller departures / missing pieces:** no `Character` class; no
-  `Transcript` (D10); truncating integer `/`; `thisContext` inert (D17); no
-  class variables (D19); no user `doesNotUnderstand:` hook; no top-level script
-  temporaries.
-- **Fixed and reliable:** catchable `doesNotUnderstand` and dead-home return;
-  the full numeric tower; negative literals; nested literal arrays; universal
-  `==`/`=`.
+- **Intentional deviations (§14.4):** programs are files, not an image; a
+  blank line ends a method body (D33); a script shows its last value (D12,
+  D12b); strings are immutable (D34); short symbols are represented as strings
+  (D35); a few printed forms differ (D36); a thin metaclass; an actor that
+  waits is not re-entrant (D37); bounded recursion depth (D38); `outer`
+  aliases `pass` (D7); single runtime per process (D2); `addBehavior:` affects
+  future instances only (D21).
+- **Not implemented:** `thisContext` is inert (D17).
+- **As in Pharo since 0.4.0 (§14.5):** `new` sends `initialize`; `Transcript`;
+  `Character`; exact `Fraction` division with floored `//` and `\\`; class
+  variables and class-instance variables; `doesNotUnderstand:` overrides;
+  per-activation block variables; exceptions that keep their class; top-level
+  `| temps |`.
 - **Unchanged:** the syntax, the message model, blocks and closures, non-local
   return, the exception protocol, the collection protocol, `super`, the
   object model.

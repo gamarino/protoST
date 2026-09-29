@@ -42,7 +42,6 @@ Any object becomes an actor by sending it `asActor`:
 
 ```smalltalk
 sensor := TempSensor new.
-sensor initialize.
 actor := sensor asActor.
 ```
 
@@ -72,7 +71,7 @@ Object subclass: #Calc
 Calc >> double: n
   ^ n * 2.
 
-calc := (Calc newChild) asActor.
+calc := Calc new asActor.
 f := calc double: 21.        "f is a Future — NOT 42, not yet"
 f wait.                      "block until the actor finishes; answer 42"
 ```
@@ -102,11 +101,13 @@ through:
 
 | Message | Effect |
 |---------|--------|
-| `wait` | block until settled; answer the value, or re-raise the rejection |
+| `wait` | block until settled; answer the value, or re-signal the rejection (§10.9) |
 | `thenDo:` | register a block to run with the value once resolved |
 | `catch:` | register a block to run with the cause once rejected |
 | `resolve:` | settle the future with a value (for a manually-created future) |
 | `rejectWith:` | settle the future with a rejection cause |
+| `Future whenAll: futures`, `f1 & f2` | a future of the Array of all the values |
+| `Future whenAny: futures`, `f1 \| f2` | a future of the first value to arrive |
 
 `wait` is the synchronous workhorse. `thenDo:` is the *callback* form — it
 registers code to run later, without blocking:
@@ -119,7 +120,7 @@ Object subclass: #Calc
 Calc >> square: n
   ^ n * n.
 
-calc := (Calc newChild) asActor.
+calc := Calc new asActor.
 f := calc square: 9.
 captured := nil.
 f thenDo: [ :v | captured := v ].
@@ -142,10 +143,8 @@ actor will fulfil:
 
 ```bash
 $ ./build/protost -e '| f | f := Future new. f resolve: 99. f wait'
+99
 ```
-
-(That one is multi-statement — run it as a file in practice; the point is
-`Future new` gives a first-class, settle-it-yourself promise.)
 
 ## 10.5 The payoff: real parallelism
 
@@ -163,9 +162,9 @@ Sensor >> read
   Object sleep: 100.        "simulate 100ms of I/O latency"
   ^ 7.
 
-a := (Sensor newChild) asActor.
-b := (Sensor newChild) asActor.
-c := (Sensor newChild) asActor.
+a := Sensor new asActor.
+b := Sensor new asActor.
+c := Sensor new asActor.
 
 "Fire all three reads — each returns a Future instantly."
 fa := a read.
@@ -180,23 +179,25 @@ fc := c read.
 $ time ./build/protost parallel.st
 21
 
-real	0m0,117s
+real	0m0,144s
 ```
 
-Three sensor reads, each taking 100ms, complete in ~117ms — *not* 300ms. The
-three actors ran their `read` methods in parallel on different worker threads.
-The proof: force the runtime to a single worker and the same script takes
-~316ms:
+Three sensor reads, each taking 100ms, complete in about 144ms — *not* 300ms.
+The three actors ran their `read` methods in parallel on different worker
+threads. The proof: force the runtime to a single worker and the same script
+takes about 340ms:
 
 ```bash
 $ time PROTOST_WORKERS=1 ./build/protost parallel.st
 21
 
-real	0m0,316s
+real	0m0,339s
 ```
 
-Same program, same result, ~2.7× the wall-clock time — because with one worker
-the three reads are forced to run one after another. The speedup is genuine
+Same program, same result, about 2.4× the wall-clock time — because with one
+worker the three reads are forced to run one after another. (Times measured
+on one 12-core Linux machine; the startup cost of the runtime is included, so
+yours will differ in the digits, not in the ratio's direction.) The speedup is genuine
 parallelism across OS threads, and you did not write a single thread, lock, or
 `async` keyword to get it.
 
@@ -212,17 +213,18 @@ parallelism across OS threads, and you did not write a single thread, lock, or
 When a method runs *on behalf of* an actor, `self` is the **wrapped base
 object**, not the proxy. So a self-send inside an actor method — `self
 helper` — is an ordinary synchronous dispatch: it does *not* re-enqueue on the
-mailbox and does *not* take the actor lock. The actor boundary is crossed only
-by sending a message to the *proxy*.
+mailbox. The actor boundary is crossed only by sending a message to the
+*proxy*.
 
 This matters for three rules you must honour:
 
-1. **One actor per wrapped object.** The lock-equivalent belongs to the proxy.
-   Wrapping the same object in two proxies and driving both re-introduces the
-   races `asActor` was meant to remove.
-2. **A pre-`asActor` reference bypasses the lock.** If you keep the original
-   object reference and send to *it* (not the proxy) after promotion, that send
-   runs on your thread, unsynchronised against the actor's worker.
+1. **One actor per wrapped object.** The serialisation belongs to the proxy
+   and its mailbox. Wrapping the same object in two proxies and driving both
+   re-introduces the races `asActor` was meant to remove.
+2. **A pre-`asActor` reference bypasses the mailbox.** If you keep the
+   original object reference and send to *it* (not the proxy) after
+   promotion, that send runs on your thread, unsynchronised against the
+   actor's worker.
 3. **Actors talk only through proxies.** One actor never reaches inside another
    actor's wrapped object — cross-actor communication is exclusively
    message sends to the proxy.
@@ -250,10 +252,46 @@ resumes (on some worker) and its method continues from the `wait` point with
 the resolved value.
 
 The consequence: a `wait` inside an actor does *not* tie up a worker thread.
-So you can have ten thousand actors, each waiting on each other, on a pool of
+So you can have ten thousand actors, each waiting on others, on a pool of
 eight threads — the waiting actors cost nothing while they wait. This is how
 the digital-twin pattern scales: a fleet of interdependent twins is a fleet of
 mostly-waiting actors, and mostly-waiting actors are nearly free.
+
+**The rule that comes with it: an actor that waits handles no other message.**
+While an actor's method is parked on `wait`, its mailbox is not processed —
+that is what keeps "one message at a time" true, so the actor's instance
+variables never need a lock. It also means two actors must never `wait` on
+each other. If actor A waits for a reply from B, and B, to produce it, waits
+for a reply from A, neither can proceed: A's mailbox holds B's request, and A
+is not reading it. protoST detects such a cycle when the `wait` that would
+close it is reached and signals an `Error` instead of hanging:
+
+```smalltalk
+"-- deadlock.st --"
+Object subclass: #Peer instanceVariableNames: 'other'.
+Peer >> other: aPeer  other := aPeer.
+Peer >> ping  ^ other pong wait.
+Peer >> pong  ^ other ping wait.
+
+a := Peer new asActor.
+b := Peer new asActor.
+(a other: b) wait.
+(b other: a) wait.
+[ a ping wait ] on: Error do: [ :e | e messageText copyFrom: 1 to: 9 ].
+```
+
+```bash
+$ ./build/protost deadlock.st
+deadlock:
+```
+
+The full text goes on to explain the rule. The cure is not to wait for a
+reply that may need you: inside an actor, register what should happen with the
+reply — `aFuture thenDo: [ :v | … ]`, `catch:`, or `Future whenAll:` for
+several — and return from the method, so the actor keeps reading its mailbox
+and can serve the request the other actor sends it. `wait` stays the right
+tool at the top level of a script, and inside an actor that waits only on
+actors which never call back into it.
 
 > **In Python** this is the `asyncio` event loop — an `await` yields control so
 > the loop can run other tasks. **In JavaScript** it is the same single-loop
@@ -359,33 +397,38 @@ An exception unhandled inside an actor method does not crash the program. It
 propagates to the actor's worker loop, which **rejects that message's future**
 with the exception. The actor stays alive and goes on to its next message.
 
-A `wait` on a rejected future re-raises the rejection, so you catch it with an
-ordinary handler ([Chapter 7](07-exceptions.md)):
+A `wait` on a rejected future re-signals the actor's exception in the waiter,
+with its class and its text, so you catch it with an ordinary handler
+([Chapter 7](07-exceptions.md)):
 
 ```smalltalk
 "-- actor-error.st --"
+Error subclass: #SensorFault.
+
 Object subclass: #Risky
   instanceVariableNames: ''.
 
 Risky >> attempt
-  ^ Error signal: 'the actor failed'.
+  ^ SensorFault signal: 'the actor failed'.
 
-actor := (Risky newChild) asActor.
+actor := Risky new asActor.
 f := actor attempt.
-[ f wait ] on: Error do: [ :e | 'handled: ' , e messageText ].
+[ f wait ] on: SensorFault do: [ :e | 'handled: ' , e messageText ].
 ```
 
 ```bash
 $ ./build/protost actor-error.st
-handled: Future rejected: the actor failed
+handled: the actor failed
 ```
 
-The actor's `attempt` signals an `Error`; that rejects `f`; `f wait` re-raises
-it; the `on: Error do:` handler catches it. Note the message text — `wait`
-re-raises the rejection wrapped with a `Future rejected:` prefix, so you can
-tell a re-raised actor failure from a directly-signalled one. One caveat worth
-knowing: a partial mutation an actor method performed *before* it raised is
-**not** rolled back — protoST has no transactional default.
+The actor's `attempt` signals a `SensorFault`; that rejects `f`; `f wait`
+signals the same `SensorFault` again in the main program, where the
+`on: SensorFault do:` handler catches it (`on: Error do:` would too). A future
+you reject yourself with a value that is not an exception
+(`f rejectWith: 'cause'`) is re-signalled as an `Error` with the text
+`Future rejected: cause`. One caveat worth knowing: a partial mutation an
+actor method performed *before* it raised is **not** rolled back — protoST
+has no transactional default.
 
 ## 10.10 Atoms — lock-free shared cells
 
@@ -543,14 +586,17 @@ to data-plane traffic.
   actors in the High and Low scheduler bands respectively — drained
   in strict priority order, same single-method invariant in each.
 - A message to a proxy returns a **`Future`** *immediately*; the actor runs the
-  message later. `wait` blocks for the value (or re-raises a rejection);
-  `thenDo:` / `catch:` register callbacks.
+  message later. `wait` blocks for the value (or re-signals the actor's
+  exception, with its class); `thenDo:` / `catch:` register callbacks.
 - **Fan out, then join**: fire many actor sends (collecting futures), then
   `wait` on the futures — that is what gives real, multi-core parallelism.
 - Inside an actor method, `self` is the wrapped object; a self-send is ordinary
   synchronous dispatch. Cross the actor boundary only via the proxy.
 - A `wait` *inside* an actor yields cooperatively, freeing its worker — so
   thousands of mostly-waiting actors run on a small thread pool.
+- An actor that waits handles no other message, so actors must not wait on
+  each other; such a cycle signals a "deadlock" `Error`. Chain with `thenDo:`
+  instead.
 - An exception inside an actor rejects that message's future; the actor lives
   on.
 - An **`Atom`** is a shared cell updated lock-free: `swap:` runs a pure block

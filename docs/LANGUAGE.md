@@ -905,9 +905,13 @@ class searches this same order, starting after the method's defining class.
 
 **Instance variables.** Each parent may declare its own instance variables;
 they combine as the union. A mixin declaring `instanceVariableNames:` works as
-a parent — an instance of the using class reads and writes the mixin's ivars
-exactly as it does its own (instance variables are resolved by name on `self`,
-walking the prototype chain).
+a parent: the mixin's own methods read and write its instance variables on an
+instance of the using class (instance variables are resolved by name on
+`self`, walking the prototype chain). A method written on the *using* class
+cannot name a mixin's instance variable, however — the compiler reports it as
+an undeclared variable, although it accepts an inherited instance variable of
+the primary superclass. Reach mixin state through the mixin's accessor
+methods (`self tag`).
 
 > A class assembled with `uses:` has its full parent chain baked in at
 > definition time, before any instance exists. Composing a *further*
