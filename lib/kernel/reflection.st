@@ -27,6 +27,30 @@ Object >> allSubclasses
   self subclasses do: [:each | out add: each; addAll: each allSubclasses].
   ^ out asArray.
 
+Object >> allSuperclasses
+  "The superclasses of a class, nearest first, in an OrderedCollection."
+  | out c |
+  out := OrderedCollection new.
+  c := self superclass.
+  [c notNil] whileTrue: [out add: c. c := c superclass].
+  ^ out.
+
+Object >> withAllSuperclasses
+  ^ self allSuperclasses addFirst: self; yourself.
+
+Object >> inheritsFrom: aClass
+  "Whether aClass is a superclass of the receiver, a class (not the class
+   itself)."
+  | c |
+  c := self superclass.
+  [c notNil] whileTrue: [
+    c == aClass ifTrue: [^ true].
+    c := c superclass].
+  ^ false.
+
+"allInstances is not provided: neither protoCore nor the runtime exposes an
+ enumeration of the live objects of a class."
+
 Object >> includesSelector: aSelector
   ^ self selectors includes: aSelector.
 
