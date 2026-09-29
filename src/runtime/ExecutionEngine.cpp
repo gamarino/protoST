@@ -1944,7 +1944,17 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // frame slot; `sym` is reachable from nowhere — pin it.
                 TransientPin pinSym(
                     ctx, reinterpret_cast<const proto::ProtoObject*>(sym));
-                const_cast<proto::ProtoObject*>(capD)->setAttribute(ctx, sym, val);
+                // Write to the dict that owns the name: the innermost
+                // activation up the parent chain that binds it. Each
+                // activation binds its declared captured names on entry, so
+                // the owner exists; a name bound nowhere yet lands here.
+                const proto::ProtoObject* owner = capD;
+                for (const proto::ProtoObject* d = capD;
+                     d && d != PROTO_NONE && d != rt_.bootstrap().objectProto;
+                     d = d->getFirstParent(ctx)) {
+                    if (d->hasOwnAttribute(ctx, sym) == PROTO_TRUE) { owner = d; break; }
+                }
+                const_cast<proto::ProtoObject*>(owner)->setAttribute(ctx, sym, val);
                 DISPATCH_DIRECT();
                 break;
             }
@@ -2039,21 +2049,22 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             }
             case Op::MAKE_CAPTURED: L_MAKE_CAPTURED: {
                 Frame& f = frames_.back();
-                // CLO Part 2: allocate a fresh per-method (or per-block)
-                // captured dict and install it in frame slot 0, where
-                // getCaptured / PUSH_CAPTURED / STORE_CAPTURED read it. The
-                // compiler emits this in the prologue of a method whose
-                // captured set is non-empty, before any STORE_CAPTURED. A
-                // nested block does NOT emit it — PUSH_BLOCK already stamped
-                // the block with the creating frame's captured dict.
-                auto* dict = const_cast<proto::ProtoObject*>(
-                                 rt_.bootstrap().objectProto)
+                // Install a fresh captured dict in frame slot 0, where
+                // getCaptured / PUSH_CAPTURED / STORE_CAPTURED read it.
+                //   arg 0: a method's root dict (its prologue, when inner
+                //          blocks capture anything).
+                //   arg 1: a block activation that declares captured names:
+                //          a child of the dict the block inherited through
+                //          PUSH_BLOCK, so each activation has its own
+                //          bindings and reaches enclosing ones through the
+                //          parent chain.
+                const proto::ProtoObject* parent = rt_.bootstrap().objectProto;
+                if (arg == 1) {
+                    const proto::ProtoObject* inherited = getCaptured(f);
+                    if (inherited && inherited != PROTO_NONE) parent = inherited;
+                }
+                auto* dict = const_cast<proto::ProtoObject*>(parent)
                                  ->newChild(ctx, /*isMutable=*/true);
-                // `dict` is a fresh mutable object reachable from nowhere the
-                // GC traces until setCaptured lands it in the frame's slot 0.
-                // setAutomaticLocal does not allocate, so a TransientPin is
-                // strictly needed only if anything allocated between newChild
-                // and the store — nothing does. Pin defensively anyway.
                 TransientPin pinDict(ctx, dict);
                 setCaptured(f, dict);
                 DISPATCH_DIRECT();

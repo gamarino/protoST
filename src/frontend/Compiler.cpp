@@ -1242,13 +1242,9 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             for (size_t i = 0; i < n.stringList.size(); ++i) {
                 declareLocal(n.stringList[i]);
             }
-            // CLO Part 2: a block reuses the captured dict it inherited via
-            // PUSH_BLOCK's __captured__ stamp — it emits NO MAKE_CAPTURED.
-            // But if one of this block's OWN arguments is captured by an
-            // inner block, copy that argument's incoming value into the
-            // (shared) captured dict, exactly like a method's argument
-            // copy-in. The block's stringList is all args+locals; the first
-            // nArgs entries are the arguments.
+            // A block that declares captured names opens its own captured
+            // dict (see emitCaptureProlog). The block's stringList is all
+            // args+locals; the first nArgs entries are the arguments.
             emitCaptureProlog(*sub, /*isMethod=*/false, n.stringList,
                               /*nArgs=*/nArgs, /*argNameOffset=*/0);
             // emit body statements; last value implicitly returned
@@ -1342,21 +1338,41 @@ void Compiler::emitCaptureProlog(BytecodeModule& m, bool isMethod,
                                  int nArgs, int argNameOffset) {
     const auto& s = scopes_.back();
     if (s.capturedNames.empty()) return;
-    // A method whose inner blocks capture anything needs its own captured
-    // dict in frame slot 0. Blocks reuse the dict inherited via PUSH_BLOCK.
+    // The names this scope DECLARES (arguments and temporaries) that inner
+    // blocks capture. Each activation needs its own binding for them.
+    std::vector<std::pair<std::string, bool>> declared;   // (name, isArgument)
+    for (size_t i = static_cast<size_t>(argNameOffset); i < argNames.size(); ++i) {
+        if (s.capturedNames.count(argNames[i]) == 0) continue;
+        declared.emplace_back(argNames[i],
+                              static_cast<int>(i) - argNameOffset < nArgs);
+    }
+    // A method gets a fresh root captured dict. A block that declares captured
+    // names gets a fresh dict whose parent is the dict it inherited through
+    // PUSH_BLOCK (MAKE_CAPTURED 1): each activation -- each loop iteration of
+    // `to:do:`, each call of a block factory -- then has its own binding,
+    // while names of enclosing activations are still reached through the
+    // parent chain (the scope chain is the prototype chain). A block that
+    // declares none keeps the inherited dict.
     if (isMethod) {
         m.emit(Op::MAKE_CAPTURED, 0, currentLine_);
+    } else if (!declared.empty()) {
+        m.emit(Op::MAKE_CAPTURED, 1, currentLine_);
+    } else {
+        return;
     }
-    // Copy each captured ARGUMENT's incoming value from its local slot into
-    // the captured dict. Captured locals/temps need no copy — the body
-    // assigns them through STORE_CAPTURED directly.
-    for (int i = 0; i < nArgs; ++i) {
-        const std::string& argName = argNames[static_cast<size_t>(argNameOffset + i)];
-        if (s.capturedNames.count(argName) == 0) continue;
-        int slot = resolveLocal(argName);
-        if (slot < 0) continue;  // defensive — should always resolve
-        auto sym = m.internSymbol(argName);
-        m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slot), currentLine_);
+    // Bind every declared captured name in this activation's dict: an
+    // argument with its incoming value, a temporary with nil, so a write from
+    // an inner block finds its owner here (STORE_CAPTURED writes to the dict
+    // that owns the name).
+    for (const auto& [name, isArgument] : declared) {
+        auto sym = m.internSymbol(name);
+        if (isArgument) {
+            int slot = resolveLocal(name);
+            if (slot < 0) continue;  // defensive — should always resolve
+            m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slot), currentLine_);
+        } else {
+            m.emit(Op::PUSH_NIL, 0, currentLine_);
+        }
         m.emitWide(Op::STORE_CAPTURED, static_cast<unsigned int>(sym), currentLine_);
     }
 }
