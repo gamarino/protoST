@@ -101,175 +101,171 @@ text editor and run them — the model is "a language with source files", like
 Python or a compiled language, not "a living image". The file-out *syntax*
 (`ClassName >> selector`) is familiar; the *persistence model* is not.
 
-## 14.4 Intentional deviations from Smalltalk-80
+## 14.4 Deviations from Smalltalk-80
 
-These are deliberate design decisions. protoST diverges *on purpose*; the items
-are not bugs and they stay. The canonical list is `docs/STATUS.md` §*Intentional
-deviations*; the id scheme (`D2`, `D4`, …) is shared with that file.
+Every entry below was checked against the 0.4.0 build. Each says what differs,
+why, and what to write instead. The ids (`D2`, `D33`, …) are those of
+[`docs/STATUS.md`](../STATUS.md), the live tracker.
 
-### No image, no persistence
+### Programs are files, not an image
 
-protoST is file-based (§14.3). No `ChangeSet`, no `become:`, no world snapshot,
-no image save/restore.
+protoST runs plain `.st` files (§14.3). There is no image, no browser, no
+`ChangeSet`, no `become:` and no persistence of the object world between runs.
+Classes are declared with `Superclass subclass: #Name instanceVariableNames:
+'…' classVariableNames: '…'` and methods with `Name >> selector` followed by
+the body (`Name class >> selector` for the class side).
 
-### No metaclass tower
+### A blank line ends a method body — D33
 
-Class-side methods *exist* — `ClassName class >> selector` — but there is **no
-separate `Metaclass` object** and no `Class class class` recursion. A class is
-an ordinary prototype object. Class-side and instance-side protocols are kept
-disjoint (a class-side selector sent to an instance is a
-`MessageNotUnderstood`, and vice versa is allowed), but the rich metaclass
-reflection of Smalltalk-80 is simply not there. If your code reasons about
-metaclasses, it will not port.
+Without chunk separators, the blank line is the separator. The body of a
+method ends at the next blank line or the next declaration, whether or not its
+last statement has a period, and a statement may not span a blank line
+outside parentheses, brackets or braces. Write methods without blank lines
+inside them. If a top-level statement is swallowed by the method above it,
+the compiler's "undeclared variable" message says so.
 
-### `new` does not auto-invoke `initialize` — D4
+### A script shows the value of its last statement — D12, D12b
 
-In Smalltalk-80, `Object class>>new` is conventionally `super new initialize`.
-**In protoST, `new` (and its synonym `newChild`) is the raw allocator only** —
-it returns an instance with `nil` fields and does *not* send `initialize`. The
-caller must send `initialize` explicitly, or — idiomatically — the class
-provides a class-side constructor that does both:
+A script has no entry point: its top-level forms run in order and the CLI
+prints the value of the last statement (its `displayString`), the way a
+workspace's *print it* would. A script that ends with `x printNl.` therefore
+shows `x` twice; end it with an expression, or with `nil`, if that matters.
+Top-level `| a b |` temporaries are accepted, as in a workspace.
 
-```smalltalk
-Counter class >> new
-  | c |
-  c := super new.
-  c initialize.
-  ^ c.
-```
+### Strings are immutable — D34
 
-This is the single deviation most likely to bite a Smalltalker on day one:
-`Foo new` gives you an uninitialised object. `docs/STATUS.md` notes protoST
-*may* adopt the Smalltalk-80 convention later; today the explicit two-step is
-the contract. ([Chapter 5](05-classes-and-methods.md) §5.2.)
+`'abc' copy at: 1 put: $x` signals `ModificationForbidden`. protoCore's
+collections are immutable values shared by structure, which is what makes
+passing them to actors on other threads safe without copies or locks. Build
+strings with `WriteStream on: String new` (or `String new writeStream`), `,`,
+`copyReplaceAll:with:`, `copyReplacing:with:` or `String new: 5 withAll: $x`.
 
-### `outer` is an alias of `pass` — D7
+### Short symbols are strings — D35
 
-In the exception protocol, `outer` is intended to run the enclosing handler and
-then *return to the inner* handler. protoST's `outer` is currently an **alias of
-`pass`** — it continues the handler search outward and does not round-trip
-back. True `outer` semantics need resumable handler re-entry that is not built.
-`pass` covers the common case. ([Chapter 7](07-exceptions.md) §7.4.)
+A Symbol shorter than 8 bytes is represented exactly like the equal String:
+`#foo == 'foo'` is `true` and `#at: printString` is `'at:'`. Longer symbols are
+distinct objects. Equality, hashing and dictionary keys behave as you expect
+(in Smalltalk a Symbol is equal to the equal String too); only identity tests
+and the printed form differ.
 
-### No `main:` auto-invocation — D12
+### A few names and printed forms — D36
 
-A protoST script has **no entry point**. It is simply its top-level forms run
-in source order, and the value of the **last top-level statement** is the
-program's result. There is no `main:` method that the runtime seeks out and
-calls. This is deliberate CLI semantics ([Chapter 1](01-introduction.md)).
+`aClass name` answers a String. Large integers have one class, `LargeInteger`
+(Pharo splits it by sign). `Date today printString` is ISO 8601
+(`2026-09-29`), `[…] timeToRun` answers a `Duration` printed as Pharo prints
+it (`0:00:00:01.500`).
 
-### Single `STRuntime` per process — D2
+### The metaclass is thin
 
-A protoST runtime must be the only one in its OS process; a second corrupts
-protoCore's per-`ProtoSpace` symbol-interning caches. The `protost` CLI always
-constructs exactly one, so this only matters if you *embed* protoST. ([Chapter
-12](12-tooling.md) §12.5.) STATUS.md classes this as borderline-intentional: if
-protoCore ever makes the caches per-space-instance, the item closes.
-
-### `addBehavior:` affects future instances only — D21
-
-`aClass addBehavior: aMixin` makes the class object and every instance created
-*after* the call respond to the mixin's methods. An instance created *before*
-the call does **not** gain them — protoCore captures an object's parent chain
-into its base cell at construction and never re-reads it. (Methods installed
-directly with `>>` *are*
-seen by pre-existing instances; only new *parents* are not.) The practical
-guidance is to call `addBehavior:` during setup, before the affected instances
-exist. ([Chapter 11](11-advanced-object-model.md) §11.3.)
-
-## 14.5 Smaller departures and missing pieces
-
-These are not headline design decisions, but a Smalltalker will notice them.
-
-### No `Character` class
-
-protoST has **no distinct `Character` type**. A character literal `$a`, and
-indexing into a string (`'hello' at: 1`), both produce a **one-character
-`String`**. Convert between a character and its code point with
-`Number>>asCharacter` and `String>>asInteger`. Code that relies on `Character`
-being its own class — `$a asUppercase`, `Character value: 65` — will not port
-as written. ([Chapter 3](03-variables-and-literals.md) §3.7.)
-
-### No `Transcript` — D10
-
-Smalltalk-80's standard output-stream object `Transcript` is **not provided**.
-`Transcript show:`, `Transcript cr` do not work. Use **`printNl`** — it prints
-the receiver followed by a newline and answers the receiver. (Tracked as a
-not-yet-implemented feature, owned by the standard-library track.)
-
-### Integer `/` is truncating
-
-Between two integers, `/` is **truncating integer division**: `10 / 4` is `2`,
-`1 / 3` is `0`. protoST has **no `Fraction` type** — it follows protoCore's
-integer `/`. `//` is the explicit integer-division selector. If *either*
-operand is a `Float`, `/` is float division (`1 / 2.0` is `0.5`). A
-Smalltalk-80 programmer expects `3 / 2` to be the fraction `3/2`; in protoST it
-is `1`. ([Chapter 3](03-variables-and-literals.md) §3.4.)
+`3 class class` is `SmallInteger class` and class-side methods, class
+variables and class-instance variables (`Foo class instanceVariableNames:
+'default'`) all work. There is no full `Metaclass`/`Behavior`/`ClassDescription`
+hierarchy to program against: the reflective protocol is the one listed in
+§14.6 (`instVarNames`, `selectors`, `canUnderstand:`, `subclasses`, …).
 
 ### `thisContext` is reserved but inert — D17
 
-`thisContext` parses to its own node but the reflective context protocol is
-unbuilt — using it errors with `expression kind not yet supported`. Treat it as
-reserved but not yet meaningful. (Not-yet-implemented; owned by the
-object-model / reflection track.)
+It parses, but the context protocol is not built. Use the error traces
+(`at Class>>selector (file:line)`) and the debugger ([Chapter 12](12-tooling.md)).
 
-### Class variables are not implemented — D19
+### `outer` is an alias of `pass` — D7
 
-A non-empty `classVariableNames:` clause is **rejected with a compile-time
-diagnostic** rather than honoured — per-class shared variables are not yet
-built. An empty `classVariableNames: ''` clause is a documented no-op. (Tracked
-as a not-yet-implemented feature.)
+`outer` continues the handler search outward and does not return to the inner
+handler. `pass`, `retry`, `retryUsing:`, `resume:`, `return:` and `signal`
+behave as in Pharo.
 
-### The reflective `doesNotUnderstand:` hook is absent
+### An actor that waits is not re-entrant — D37
 
-An unresolved selector signals a catchable `MessageNotUnderstood` (a subclass
-of `Error`) — see §14.6 — but the *user-overridable* `doesNotUnderstand:`
-method, the proxy/metaprogramming hook a Smalltalker reaches for, is **not
-implemented**. An unresolved send always signals `MessageNotUnderstood`
-directly; you cannot intercept it by overriding `doesNotUnderstand:`.
+While an actor's method is parked on `wait`, that actor processes no other
+message, so two actors that `wait` on each other deadlock. This is the price
+of the guarantee that makes actors simple: one message at a time, so an
+actor's state is plain instance variables with no locks. Inside actors, chain
+with `thenDo:` / `catch:` or `Future whenAll:` / `whenAny:` rather than waiting
+on an actor that may call back. ([Chapter 10](10-actors-and-futures.md).)
 
-### Scripts cannot declare top-level temporaries
+### Recursion depth is bounded — D38
 
-`| temps |` is legal inside a method or a block, but **not at the top level of
-a `.st` script**. At a script's top level you simply assign to a name and it
-becomes a global. This is a parsing rule worth knowing because several
-reference examples gloss over it. ([Chapter 3](03-variables-and-literals.md)
-§3.2.) The REPL and `-e` likewise do not accept a top-level `| temps |`
-declaration.
+A method recursion stops at about 19,000 activations, and a recursion that
+goes through native iteration (`do:`, `collect:`, …) at about 1,000 levels,
+with a catchable `Error` ("stack depth exceeded"); `ensure:` blocks still run.
 
-### Block argument arity is capped, and a single send carries at most 8 arguments
+### Arity limits
 
-Blocks of arity 0–4 are supported (`value` … `value:value:value:value:`). A
-single message send carries at most 8 arguments. Neither cap is a problem in
-practice, but both are limits a Smalltalk-80 program does not have.
+A message send carries at most 8 arguments. Blocks are called with `value`
+… `value:value:value:value:` or, for any arity, `valueWithArguments:`.
 
-## 14.6 What is *fixed* — closed deviations a Smalltalker can rely on
+### Single `STRuntime` per process — D2
 
-Several rough edges from earlier protoST builds are resolved. They are listed
-here so you do *not* worry about them — they behave correctly now.
+A protoST runtime must be the only one in its process. The `protost` CLI always
+constructs exactly one, so this matters only when you embed protoST.
 
-- **`doesNotUnderstand` is catchable.** An unresolved selector signals a
-  catchable `MessageNotUnderstood` (a subclass of `Error`), not a hard crash.
-  `[ 3 fooBar ] on: Error do: [ :e | e messageText ]` catches it. (STATUS.md
-  D3.)
-- **Dead-home non-local return is catchable.** A `^` in a block whose home
-  method has already returned signals a catchable `BlockCannotReturn` (a
-  subclass of `Error`), not a crash. ([Chapter 6](06-non-local-return.md) §6.4;
-  STATUS.md D8.)
-- **The numeric tower works.** `Float` and mixed-mode arithmetic, and
-  `LargeInteger` with transparent overflow promotion, all work — arithmetic is
-  bound once on `Number` and delegates to protoCore's promoting/coercing
-  arithmetic. `100 factorial` is exact. (STATUS.md D11, D20.)
-- **Negative numeric literals lex.** `-5`, `-3.14`, `#(-1 -2 -3)` are literals;
-  `a - 5` stays subtraction. (STATUS.md D1.)
-- **Nested literal arrays parse.** `#(1 #(2 3) 4)` is a three-element array
-  with a sub-array. (STATUS.md D16.)
-- **`==` / `~~` are universal.** Identity and non-identity are bound on
-  `Object`; `=` / `~=` default to identity, overridden to value equality on
-  `SmallInteger`, `String`, `Symbol`, `Boolean`. Symbols are interned, so
-  `#foo == #foo`. (STATUS.md D18.)
-- **Class-side methods are isolated** from instances (STATUS.md D5), and
-  **chained assignment** `a := b := 0` parses (STATUS.md C1).
+### `addBehavior:` affects future instances only — D21
+
+`aClass addBehavior: aMixin` reaches the class and the instances created after
+the call; existing instances keep their parent chain (protoCore fixes it at
+construction). Methods installed with `>>` are seen by existing instances.
+Call `addBehavior:` during setup. ([Chapter 11](11-advanced-object-model.md).)
+
+## 14.5 What was different before 0.4.0 and no longer is
+
+If you read older protoST material, these are now as in Pharo:
+
+- `new` sends `initialize`; `basicNew` is the raw allocator. Built-in
+  collection classes do the same for your subclasses (`OrderedCollection
+  subclass: #Stack`, then `Stack new` is a `Stack`).
+- `Transcript` exists (`show:`, `cr`, `print:`, `display:`, `tab`, `space`,
+  `showCr:`, `<<`) and keeps order with `printNl`.
+- `Character` exists (`$a`, `Character value: 65`, `isVowel`, `asUppercase`,
+  `asInteger`); `String at:` answers a Character.
+- `/` between integers is exact: `3 / 4` is the Fraction `(3/4)`; `//`, `\\`,
+  `quo:`, `rem:` follow Smalltalk-80 (floor and truncation). Fractions take
+  part in every arithmetic and comparison, and `ZeroDivide` (an
+  `ArithmeticError`) is resumable.
+- Class variables may be assigned from instance methods, and class-instance
+  variables exist.
+- `doesNotUnderstand:` can be overridden (it receives a `Message`), and
+  `perform:`, `respondsTo:`, `isKindOf:` work.
+- Every block activation has its own variables: blocks created in a loop
+  capture that iteration's value, and a block parameter named like an outer
+  variable is a distinct variable.
+- Errors carry their class: `SubscriptOutOfBounds`, `KeyNotFound`,
+  `NotFound`, `ZeroDivide`, `MessageNotUnderstood`; an error inside an actor
+  keeps its class when a `wait` re-signals it; an uncaught error prints its
+  class, text and a trace.
+- The compiler reports, as Pharo does: an undeclared variable in a method,
+  assignment to an argument or to `self`, a duplicated or redeclared instance
+  variable.
+
+## 14.6 Protocol you can rely on
+
+Beyond the kernel classes you know, 0.4.0 answers the everyday protocol a
+Smalltalk programmer reaches for:
+
+- **Numbers:** exact Fractions, LargeIntegers, `printString:` / `printStringRadix:`,
+  radix literals (`16rFF`), `gcd:`, `lcm:`, `factorial`, `sqrt`, `raisedTo:`,
+  `**`, `roundTo:`, `bitAnd:` / `bitOr:` / `bitXor:` / `bitShift:`, `min:` /
+  `max:` / `between:and:` across the tower.
+- **Collections:** `with:`… / `withAll:` / `new:` constructors, `collect:`,
+  `select:`, `reject:`, `detect:ifNone:`, `inject:into:`, `do:separatedBy:`,
+  `allSatisfy:` / `anySatisfy:`, `groupedBy:`, `detectMax:`, `sum` / `sum:`,
+  `asSortedCollection:`, `sort:`, `SortedCollection`, `Bag`, `Set`,
+  `Dictionary` (`at:ifAbsent:`, `at:ifPresent:`, `at:ifAbsentPut:`,
+  `keysAndValuesDo:`, `collect:` / `select:` answering Dictionaries),
+  `Interval` (`1 to: 10 by: 2`), `Association`. A `Collection` subclass that
+  defines `do:` gets all of this.
+- **Strings and streams:** `,`, `copyFrom:to:`, `indexOf:`, `occurrencesOf:`,
+  `substrings:`, `lines`, `trimBoth`, `asUppercase`, `format:`, `beginsWith:`,
+  `includesSubstring:`, `asNumber`, `asSymbol`; `ReadStream` (`next`, `peek`,
+  `upTo:`, `skipSeparators`, …), `WriteStream`, `String streamContents:`.
+- **Exceptions:** `on:do:`, `ensure:`, `ifCurtailed:`, `signal:`, `retry`,
+  `retryUsing:`, `resume:`, `return:`, `pass`, `ExceptionSet` (`Error ,
+  ZeroDivide`), user `Error` subclasses.
+- **Reflection:** `class`, `superclass`, `respondsTo:`, `perform:`…,
+  `instVarNames`, `instVarNamed:`, `instVarAt:`, `canUnderstand:`,
+  `selectors`, `subclasses`, `comment:`, `deepCopy`, `inspect`.
+- **System:** `Smalltalk at:` / `at:put:` / `version` / `allClasses`, `Time
+  now`, `Date today`, `Time millisecondsToRun:`, `timeToRun`, `Random` (`next`,
+  `nextInt:`, `seed:`), `halt` (stops in `protost debug`, reported otherwise).
 
 ## 14.7 Guard clauses and the trailing `^`
 
