@@ -96,3 +96,16 @@ String >> isString
 
 Collection >> isCollection
   ^ true.
+
+"--- instance creation ---------------------------------------------------------
+ new sends initialize, as in Smalltalk-80 implementations since Pharo/Squeak;
+ basicNew is the raw allocator."
+
+Object class >> new
+  | instance |
+  instance := self basicNew.
+  instance initialize.
+  ^ instance.
+
+Object >> initialize
+  ^ self.
