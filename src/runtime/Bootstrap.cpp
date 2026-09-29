@@ -52,7 +52,12 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     // inherit `Error`'s non-resumable marker.
     out.messageNotUnderstoodProto =
         const_cast<proto::ProtoObject*>(out.errorProto)->newChild(ctx, /*isMutable=*/true);
-    out.zeroDivideProto = const_cast<proto::ProtoObject*>(out.errorProto)->newChild(ctx, /*isMutable=*/true);
+    // ArithmeticError sits between Error and ZeroDivide and is resumable, as
+    // in Pharo: a handler may answer a value for the failed operation.
+    out.arithmeticErrorProto =
+        const_cast<proto::ProtoObject*>(out.errorProto)->newChild(ctx, /*isMutable=*/true);
+    out.zeroDivideProto =
+        const_cast<proto::ProtoObject*>(out.arithmeticErrorProto)->newChild(ctx, /*isMutable=*/true);
     out.messageProto    = const_cast<proto::ProtoObject*>(out.objectProto)->newChild(ctx, /*isMutable=*/true);
     out.blockCannotReturnProto =
         const_cast<proto::ProtoObject*>(out.errorProto)->newChild(ctx, /*isMutable=*/true);
@@ -148,6 +153,7 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     stamp(out.errorProto,        "Error");
     stamp(out.warningProto,      "Warning");
     stamp(out.messageNotUnderstoodProto, "MessageNotUnderstood");
+    stamp(out.arithmeticErrorProto,      "ArithmeticError");
     stamp(out.zeroDivideProto,           "ZeroDivide");
     stamp(out.messageProto,              "Message");
     stamp(out.blockCannotReturnProto,    "BlockCannotReturn");
@@ -180,6 +186,7 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     // As in Pharo, a MessageNotUnderstood may be resumed with a value that
     // becomes the send's result.
     markResumable(out.messageNotUnderstoodProto, true);
+    markResumable(out.arithmeticErrorProto, true);
     // Unhandled, every Error ends the activation -- a resumable one such as
     // MessageNotUnderstood included -- while an unhandled Warning or plain
     // Exception resumes with nil. The class decides, not resumability.

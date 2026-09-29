@@ -32,3 +32,20 @@ Message >> printOn: aStream
 
 "Signalled on an attempt to modify an immutable object, such as a String."
 Error subclass: #ModificationForbidden.
+
+"Signalled by indexed access outside a collection's bounds."
+Error subclass: #SubscriptOutOfBounds.
+
+"Signalled by a Dictionary lookup or removal of a key it does not hold."
+Error subclass: #KeyNotFound.
+
+"Signalled by remove: of an element the collection does not hold."
+Error subclass: #NotFound.
+
+Exception >> isResumable
+  ^ self __isResumable.
+
+"Evaluate replacementBlock in place of the protected block, as retry
+ re-evaluates the protected block."
+Exception >> retryUsing: replacementBlock
+  ^ self return: replacementBlock value.

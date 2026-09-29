@@ -38,6 +38,7 @@
 // `Error`, so `[ ... ] on: Error do: [ ... ]` guards it (Track 1).
 
 #include "protoST/STRuntime.h"
+#include "runtime/ZeroDivideSignal.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/TransientPin.h"
@@ -746,8 +747,8 @@ const proto::ProtoObject* prim_Array_at(STRuntime&, proto::ProtoContext* ctx,
     long long idx1 = a[0]->asLong(ctx);              // 1-based
     long long n    = static_cast<long long>(data->getSize(ctx));
     if (idx1 < 1 || idx1 > n) {
-        throw std::runtime_error(
-            "Array>>at:: index " + std::to_string(idx1) +
+        throw ClassedErrorSignal("SubscriptOutOfBounds",
+            "Array>>at: index " + std::to_string(idx1) +
             " out of range 1.." + std::to_string(n));
     }
     const proto::ProtoObject* e =
@@ -767,8 +768,8 @@ const proto::ProtoObject* prim_Array_atPut(STRuntime&, proto::ProtoContext* ctx,
     long long idx1 = a[0]->asLong(ctx);              // 1-based
     long long n    = static_cast<long long>(data->getSize(ctx));
     if (idx1 < 1 || idx1 > n) {
-        throw std::runtime_error(
-            "Array>>at:put:: index " + std::to_string(idx1) +
+        throw ClassedErrorSignal("SubscriptOutOfBounds",
+            "Array>>at:put: index " + std::to_string(idx1) +
             " out of range 1.." + std::to_string(n));
     }
     const proto::ProtoObject* value = a[1] ? a[1] : PROTO_NONE;
@@ -902,8 +903,8 @@ const proto::ProtoObject* prim_OC_at(STRuntime&, proto::ProtoContext* ctx,
     long long idx1 = a[0]->asLong(ctx);
     long long n    = static_cast<long long>(data->getSize(ctx));
     if (idx1 < 1 || idx1 > n) {
-        throw std::runtime_error(
-            "OrderedCollection>>at:: index " + std::to_string(idx1) +
+        throw ClassedErrorSignal("SubscriptOutOfBounds",
+            "OrderedCollection>>at: index " + std::to_string(idx1) +
             " out of range 1.." + std::to_string(n));
     }
     const proto::ProtoObject* e = data->getAt(ctx, static_cast<int>(idx1 - 1));
@@ -920,8 +921,8 @@ const proto::ProtoObject* prim_OC_atPut(STRuntime&, proto::ProtoContext* ctx,
     long long idx1 = a[0]->asLong(ctx);
     long long n    = static_cast<long long>(data->getSize(ctx));
     if (idx1 < 1 || idx1 > n) {
-        throw std::runtime_error(
-            "OrderedCollection>>at:put:: index " + std::to_string(idx1) +
+        throw ClassedErrorSignal("SubscriptOutOfBounds",
+            "OrderedCollection>>at:put: index " + std::to_string(idx1) +
             " out of range 1.." + std::to_string(n));
     }
     const proto::ProtoObject* value = a[1] ? a[1] : PROTO_NONE;
@@ -1021,7 +1022,7 @@ const proto::ProtoObject* prim_OC_remove(STRuntime&, proto::ProtoContext* ctx,
     const proto::ProtoObject* value = a[0] ? a[0] : PROTO_NONE;
     int idx = indexOfEqual(ctx, data, value);
     if (idx < 0)
-        throw std::runtime_error("OrderedCollection>>remove:: element not found");
+        throw ClassedErrorSignal("NotFound", "OrderedCollection>>remove: element not found");
     setData(ctx, r, data->removeAt(ctx, idx));
     return value;
 }
@@ -1166,7 +1167,7 @@ const proto::ProtoObject* prim_Set_remove(STRuntime&, proto::ProtoContext* ctx,
     const proto::ProtoMap* data = mapData(ctx, r);
     TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
     if (proto::hashedGet(ctx, data, stKeySemantics(), e) == nullptr)
-        throw std::runtime_error("Set>>remove:: element not found");
+        throw ClassedErrorSignal("NotFound", "Set>>remove: element not found");
     setHashedData(ctx, r,
                   proto::hashedRemove(ctx, data, stKeySemantics(), e),
                   hashedSize(ctx, r) - 1);
@@ -1308,7 +1309,7 @@ const proto::ProtoObject* prim_Bag_addWithOccurrences(STRuntime&, proto::ProtoCo
         throw std::runtime_error("add:withOccurrences: expects 2 args (element, count)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
     long long n = a[1]->asLong(ctx);
-    if (n < 0) throw std::runtime_error("Bag>>add:withOccurrences:: negative count");
+    if (n < 0) throw std::runtime_error("Bag>>add:withOccurrences: negative count");
     const proto::ProtoList* data = listData(ctx, r);
     TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
     for (long long i = 0; i < n; ++i) {
@@ -1329,7 +1330,7 @@ const proto::ProtoObject* prim_Bag_remove(STRuntime&, proto::ProtoContext* ctx,
     const proto::ProtoList* data = listData(ctx, r);
     int idx = indexOfEqual(ctx, data, e);
     if (idx < 0)
-        throw std::runtime_error("Bag>>remove:: element not found");
+        throw ClassedErrorSignal("NotFound", "Bag>>remove: element not found");
     setData(ctx, r, data->removeAt(ctx, idx));
     return e;
 }
@@ -1608,7 +1609,7 @@ const proto::ProtoObject* prim_Dict_at(STRuntime&, proto::ProtoContext* ctx,
     if (argc != 1) throw std::runtime_error("at: expects 1 arg (key)");
     bool found = false;
     const proto::ProtoObject* v = dictLookup(ctx, mapData(ctx, r), a[0], &found);
-    if (!found) throw std::runtime_error("Dictionary>>at:: key not found");
+    if (!found) throw ClassedErrorSignal("KeyNotFound", "Dictionary>>at: key not found");
     return v;
 }
 
@@ -1662,7 +1663,7 @@ const proto::ProtoObject* prim_Dict_removeKey(STRuntime&, proto::ProtoContext* c
                                               const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw std::runtime_error("removeKey: expects 1 arg (key)");
     const proto::ProtoObject* removed = dictRemove(ctx, r, a[0]);
-    if (!removed) throw std::runtime_error("Dictionary>>removeKey:: key not found");
+    if (!removed) throw ClassedErrorSignal("KeyNotFound", "Dictionary>>removeKey: key not found");
     return removed;
 }
 
@@ -2261,8 +2262,8 @@ const proto::ProtoObject* prim_Interval_at(STRuntime&, proto::ProtoContext* ctx,
     long long n     = intervalSize(start, stop, step);
     long long idx1  = a[0]->asLong(ctx);             // 1-based
     if (idx1 < 1 || idx1 > n) {
-        throw std::runtime_error(
-            "Interval>>at:: index " + std::to_string(idx1) +
+        throw ClassedErrorSignal("SubscriptOutOfBounds",
+            "Interval>>at: index " + std::to_string(idx1) +
             " out of range 1.." + std::to_string(n));
     }
     return ctx->fromLong(start + (idx1 - 1) * step);

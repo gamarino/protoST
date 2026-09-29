@@ -400,6 +400,8 @@ struct STRuntime::Impl {
         globals->setAttribute(rootCtx,
             proto::ProtoString::createSymbol(rootCtx, "ZeroDivide"), bootstrap.zeroDivideProto);
         globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "ArithmeticError"), bootstrap.arithmeticErrorProto);
+        globals->setAttribute(rootCtx,
             proto::ProtoString::createSymbol(rootCtx, "Message"), bootstrap.messageProto);
         auto* exceptionKey = proto::ProtoString::createSymbol(rootCtx, "Exception");
         globals->setAttribute(rootCtx, exceptionKey, bootstrap.exceptionProto);

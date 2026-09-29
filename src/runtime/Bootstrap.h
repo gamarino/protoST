@@ -62,7 +62,8 @@ struct Bootstrap {
     // method has already returned. Both are children of `Error`, so both are
     // caught by an ordinary `on: Error do:` guard and are non-resumable.
     const proto::ProtoObject* messageNotUnderstoodProto = nullptr;
-    const proto::ProtoObject* zeroDivideProto    = nullptr;   // ZeroDivide < Error
+    const proto::ProtoObject* arithmeticErrorProto = nullptr; // ArithmeticError < Error (resumable)
+    const proto::ProtoObject* zeroDivideProto    = nullptr;   // ZeroDivide < ArithmeticError
     const proto::ProtoObject* messageProto       = nullptr;   // Message (selector, arguments)
     const proto::ProtoObject* blockCannotReturnProto    = nullptr;
     // Track 2 slice a (COL-a): collection class hierarchy.

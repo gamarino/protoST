@@ -79,6 +79,13 @@ const proto::ProtoObject* signalNativeError(STRuntime& rt,
 // Signal a fresh ZeroDivide (defined in exception_prims.cpp).
 const proto::ProtoObject* signalZeroDivide(STRuntime& rt, proto::ProtoContext* ctx);
 
+// Signal a fresh instance of the global Error subclass named `className`
+// (a plain Error if there is none), carrying `message` (exception_prims.cpp).
+const proto::ProtoObject* signalErrorNamed(STRuntime& rt, proto::ProtoContext* ctx,
+                                           const char* className, const char* message);
+bool isExceptionClassObject(STRuntime& rt, proto::ProtoContext* ctx,
+                            const proto::ProtoObject* obj);
+
 // Build a Message (selector + arguments) and signal a resumable
 // MessageNotUnderstood carrying it and the receiver (exception_prims.cpp).
 const proto::ProtoObject* makeMessage(STRuntime& rt, proto::ProtoContext* ctx,
@@ -123,6 +130,7 @@ const proto::ProtoObject* translateNativeException(STRuntime& rt,
     catch (const InterruptSignal&)      { throw; }   // Ctrl-C in the REPL; is-a runtime_error
     catch (const UnhandledSTException&) { throw; }   // already protoST; is-a runtime_error
     catch (const ZeroDivideSignal&)     { return signalZeroDivide(rt, ctx); }
+    catch (const ClassedErrorSignal& e) { return signalErrorNamed(rt, ctx, e.className(), e.what()); }
     // --- a genuine native error: translate into a catchable protoST Error --
     catch (const std::exception& e)     { return signalNativeError(rt, ctx, e.what()); }
     catch (...)                         { return signalNativeError(rt, ctx, "native exception"); }

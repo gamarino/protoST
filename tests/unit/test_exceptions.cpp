@@ -783,11 +783,12 @@ TEST_CASE("EXC-d: a translated native Error is non-resumable — resume: errors"
           "[exceptions][track1]") {
     // A translated native exception is forced non-resumable (the native stack
     // is already gone). `e resume:` inside the handler is itself an error;
-    // with no outer handler it aborts.
+    // with no outer handler it aborts. (ZeroDivide is the exception: it is a
+    // resumable ArithmeticError, as in Pharo.)
     const char* src =
         "Object subclass: #NativeResume. "
         "NativeResume >> run "
-        "  ^ [ 1 / 0 ] on: Error do: [ :e | e resume: 7 ]. "
+        "  ^ [ #(1 2) at: 5 ] on: Error do: [ :e | e resume: 7 ]. "
         "n := NativeResume newChild. "
         "n run.";
     protoST::STRuntime rt;
