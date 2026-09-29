@@ -177,7 +177,9 @@ behave as in Pharo.
 ### An actor that waits is not re-entrant — D37
 
 While an actor's method is parked on `wait`, that actor processes no other
-message, so two actors that `wait` on each other deadlock. This is the price
+message, so two actors that `wait` on each other could never proceed; the
+`wait` that would close such a cycle signals an `Error` ("deadlock: …")
+instead of hanging. This is the price
 of the guarantee that makes actors simple: one message at a time, so an
 actor's state is plain instance variables with no locks. Inside actors, chain
 with `thenDo:` / `catch:` or `Future whenAll:` / `whenAny:` rather than waiting
