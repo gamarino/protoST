@@ -305,18 +305,28 @@ def write_report(path, cpu, ncpu, git, version, pyver, protopy, load_before, loa
     L.append("## Comparable workloads")
     L.append("")
     L.append("Same algorithm, same N and same verified result as the protoPython twin. "
-             "`Ratio` is protoST ÷ CPython (>1 means protoST is slower).")
+             "`Ratio` is protoST ÷ CPython on whole-process time (>1 means protoST is "
+             "slower). At these N the process start-up is a large share of every time, "
+             "so `Work ratio` also compares the times with each runtime's measured "
+             "start-up subtracted: the cost of the work itself.")
     L.append("")
-    L.append("| Benchmark | N | protoST ms | CPython ms | Ratio |")
-    L.append("|---|---:|---:|---:|---:|")
-    ratios = []
+    L.append("| Benchmark | N | protoST ms | CPython ms | Ratio | Work ratio |")
+    L.append("|---|---:|---:|---:|---:|---:|")
+    ratios, work_ratios = [], []
     for name, n, st, py, _pp in rows:
         ratio = (st[0] / py[0]) if (st and py) else None
+        work = None
+        if st and py and startup and py_startup:
+            st_work, py_work = st[0] - startup[0], py[0] - py_startup[0]
+            if st_work > 0 and py_work > 0.5:
+                work = st_work / py_work
         if ratio:
             ratios.append(ratio)
+        if work:
+            work_ratios.append(work)
         L.append(f"| {name} | {n} | {fmt(st)} ({spread(st)}) | {fmt(py)} ({spread(py)}) | "
-                 f"{f'{ratio:.2f}×' if ratio else '—'} |")
-    L.append(f"| **Geomean** | | | | **{geomean(ratios):.2f}×** |")
+                 f"{f'{ratio:.2f}×' if ratio else '—'} | {f'{work:.1f}×' if work else '—'} |")
+    L.append(f"| **Geomean** | | | | **{geomean(ratios):.2f}×** | **{geomean(work_ratios):.1f}×** |")
     L.append("")
     if actors:
         L.append("## Actors")
