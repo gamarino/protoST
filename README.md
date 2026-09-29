@@ -1,6 +1,10 @@
 # protoST
 
-protoST is a runtime for Smalltalk-syntax programs built on protoCore: programs are plain files, objects are actors that run on native threads, and the runtime can live next to other protoCore runtimes in one process. It is a demonstrator of protoCore and a base for digital twins, not an implementation of Smalltalk-80 and not a replacement for an image-based environment.
+protoST is a Smalltalk-syntax, actor-native runtime on protoCore: a demonstrator and a base for digital twins, not a Smalltalk-80 implementation or a replacement for an image environment.
+
+Programs are plain files. An object is an ordinary object until it is sent
+`asActor`, which makes it an actor served by a pool of native worker threads
+(see "Objects become actors" below).
 
 If you write Smalltalk, most of what you know works as you expect: classes and
 metaclass-side methods, blocks and non-local return, exceptions with `retry`,
@@ -40,10 +44,15 @@ is the file.
 
 ## Objects become actors
 
-Any object becomes an actor with `asActor`. Every message sent to an actor is
+Any object becomes an actor with `asActor`. A message sent to an actor is
 queued in its mailbox and answers a `Future` at once; the actor runs one
 message at a time, on a pool of native worker threads shared by all actors, so
-its instance variables need no locks.
+its instance variables need no locks. The exception is a message about the
+reference itself, which the proxy answers at once without queueing it:
+identity and equality (`==`, `~~`, `=`, `~=`, `hash`, `identityHash`,
+`yourself`), the nil tests (`isNil`, `notNil`, `ifNil:` and its variants),
+`isActor`, and printing (`printString`, `printOn:`, `displayString`,
+`printNl`, `displayNl`, which show `a Counter (actor)`).
 
 ```smalltalk
 Object subclass: #Counter instanceVariableNames: 'n'.
@@ -69,9 +78,13 @@ reply arrives; a cycle of actors waiting on each other is reported as an
 error.
 
 What makes passing objects between threads safe is protoCore's object model:
-a mutable object is an atomic reference to an immutable snapshot, and every
-collection is an immutable value shared by structure. A message carries a
-reference, not a copy, and what the receiver reads cannot change under it.
+a mutable object is an atomic reference to an immutable snapshot of its state,
+and the structures that hold a collection's elements are immutable and shared
+by structure. From Smalltalk code, `Array>>at:put:` and
+`OrderedCollection>>add:` still change the object: each installs a new
+snapshot. A message carries a reference, not a copy, so an object sent to an
+actor is shared with the sender; each read sees one consistent snapshot, and a
+change made on one side is seen by the other at its next read.
 
 ## Why digital twins
 
@@ -91,26 +104,35 @@ now.
 
 ## Performance
 
-Measured on 2026-09-29 on a 2020 notebook (AMD Ryzen 5 5500U, 6 cores), with
-every benchmark verifying its result
+Measured on 2026-09-29 on a notebook with an AMD Ryzen 5 5500U (6 cores),
+protoST 0.4.0 at commit `d3f7235` against CPython 3.14.0, with every benchmark
+verifying its result; medians of five runs
 ([`benchmarks/reports/2026-09-29-release-0.4.0.md`](benchmarks/reports/2026-09-29-release-0.4.0.md)):
 
-- Start-up: about 28 ms to evaluate one expression (CPython: about 31 ms).
-- Single-threaded, against CPython 3.14 on the same work and the same result:
-  from 0.9× (string concatenation) to about 10× slower (recursive method
-  dispatch) and 24× slower (exception signalling); geometric mean 3.5×.
-- Twelve CPU-bound actors: 2.1× faster with the default worker pool than
-  with one worker, and `saturation_big` 2.1× faster on four workers than on
-  one — measured with other applications loading the machine, so these are
-  lower bounds; an idle re-run is pending.
+- Start-up: 27 ms to evaluate one expression (CPython: 29 ms).
+- Single-threaded, same algorithm, same N and same verified result as the
+  CPython twin. Whole-process time is 1.0× (string concatenation) to 23.6×
+  (exception signalling) CPython's, geometric mean 3.45×; at these small N
+  start-up is a large share of every time. With each runtime's start-up
+  subtracted, the work itself takes about 6× CPython's time (integer loop),
+  36× (`fib`, recursive method dispatch) and 64× (exception signalling),
+  geometric mean 20.8× over the five workloads long enough to measure.
+- Parallel: `saturation_big` (32 actors) runs 2.06× faster on four workers
+  than on one and no faster on five or six; twelve CPU-bound actors run 2.1×
+  faster with the default pool than with one worker. An independent re-run
+  at lower load gave the same curve, so about 2.1× is the measured ceiling of
+  this build on this machine.
 
 protoST is not fast single-threaded code; what it offers is the same code on
 several cores without locks.
 
 ## Status
 
-Version 0.4.0. 977 `ctest` cases (conformance programs, unit tests, CLI tests,
-the examples and every documented example with a stated result) pass. The
+Version 0.4.0. At commit `d3f7235`, `ctest` runs 1041 cases, all passing:
+513 conformance programs, 437 unit tests, 42 examples, 28 CLI tests
+(including the benchmark-harness self-test) and 21 documentation checks
+(every example with a stated result in 20 documents, plus the checker's
+self-test). The
 known deviations from Smalltalk-80 and the open bugs are tracked in
 [`docs/STATUS.md`](docs/STATUS.md); runtime hard edges in
 [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md); what changed in
@@ -170,10 +192,11 @@ sudo apt install ./protost-<version>-Linux.deb # protoST itself
 sudo dpkg -i protost-<version>-Linux.deb && sudo apt-get install -f
 ```
 
-**macOS** — open the `.dmg` and drag `protoST` to `Applications`.
-
-**Windows** — run the NSIS installer (`protost-<version>-win64.exe`) and
-follow the wizard, or unzip the portable `.zip`.
+**macOS and Windows — not built or verified.** `CMakeLists.txt` configures a
+`.dmg` (DragNDrop) for macOS and an NSIS installer and a `.zip` for Windows,
+but neither has ever been built: there is no macOS or Windows host in this
+project. The intended use is to open the `.dmg` and drag `protoST` to
+`Applications`, or to run `protost-<version>-win64.exe`.
 
 The installed `protost` lands on your `PATH`; the standard library is installed
 to `<prefix>/share/protoST/lib`, so `Import from: 'stream'` resolves with no
@@ -189,14 +212,15 @@ cd build
 cpack -G DEB    # Debian/Ubuntu .deb (Linux)
 cpack -G RPM    # RPM (Linux, needs rpmbuild)
 cpack -G TGZ    # portable .tar.gz (Linux)
-cpack -G DragNDrop   # .dmg (macOS)
-cpack -G NSIS        # installer .exe (Windows, needs NSIS)
+cpack -G DragNDrop   # .dmg (macOS; never built)
+cpack -G NSIS        # installer .exe (Windows, needs NSIS; never built)
 ```
 
 The generators are selected per platform in `CMakeLists.txt` (Linux: DEB, RPM,
 TGZ; macOS: DragNDrop; Windows: NSIS, ZIP); `cpack` with no `-G` builds every
 generator enabled for the host OS. The `.deb` and `.tar.gz` packages have been
-verified on Linux.
+verified on Linux; the macOS and Windows generators are configured but have
+never been run.
 
 ## Documentation
 
