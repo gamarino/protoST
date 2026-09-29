@@ -228,11 +228,14 @@ sudo dpkg -i protost-<version>-Linux.deb && sudo apt-get install -f
 
 **Installing on Windows.** Native Windows is not supported: the I/O layer
 uses POSIX calls and the runtime uses GCC builtins. Use WSL2 with Ubuntu
-24.04 and the Linux packages, built as below:
+24.04 and the Linux packages attached to the GitHub releases (or built as
+below):
 
 ```bash
 wsl --install -d Ubuntu-24.04        # in PowerShell, once
 # then, in the Ubuntu shell:
+wget https://github.com/numaes/protoCore/releases/download/v2.6.1/protoCore-2.6.1-Linux.deb
+wget https://github.com/gamarino/protoST/releases/download/v0.5.0/protost-0.5.0-Linux.deb
 sudo apt install ./protoCore-2.6.1-Linux.deb ./protost-0.5.0-Linux.deb
 ```
 
