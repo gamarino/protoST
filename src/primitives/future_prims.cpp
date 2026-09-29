@@ -7,6 +7,7 @@
 #include "runtime/TransientPin.h"
 #include "runtime/NativeExceptionBridge.h"
 #include "protoCore.h"
+#include <atomic>
 #include <cstdint>
 #include <unordered_map>
 #include <mutex>
@@ -230,6 +231,37 @@ long long readState(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoO
     return (st && st != PROTO_NONE) ? st->asLong(ctx) : 0;
 }
 
+// An actor is about to park on `awaited`. If the actor that will settle it is
+// itself parked on a pending future whose settling actor is parked on ... the
+// current actor, nobody can ever proceed: an actor that waits handles no other
+// message (D37). Signal an Error in the current actor instead of hanging. Only
+// pending futures are followed, so an actor that is about to resume never
+// counts.
+//
+// Two actors can reach their waits at the same moment. Each first records what
+// it awaits and only then walks the chain (with a full fence in between), so
+// at least one of them sees the other's record and reports the cycle.
+void detectWaitCycle(STRuntime& rt, proto::ProtoContext* ctx,
+                     const proto::ProtoObject* self, const proto::ProtoObject* awaited) {
+    const auto& sym = rt.bootstrap().sym;
+    const_cast<proto::ProtoObject*>(self)->setAttribute(ctx, sym.waitingOn, awaited);
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    const proto::ProtoObject* fut = awaited;
+    for (int step = 0; step < 256 && fut && fut != PROTO_NONE; ++step) {
+        if (readState(rt, ctx, fut) != 0) return;            // settled: no cycle
+        const proto::ProtoObject* target = fut->getOwnAttributeDirect(ctx, sym.targetActor);
+        if (!target || target == PROTO_NONE) return;          // not an actor message
+        if (target == self) {
+            const_cast<proto::ProtoObject*>(self)->setAttribute(ctx, sym.waitingOn, PROTO_NONE);
+            throw std::runtime_error(
+                "deadlock: this actor waits for a reply that can only come from an actor "
+                "waiting on it (an actor that waits handles no other message; chain with "
+                "thenDo: instead of waiting)");
+        }
+        fut = target->getAttribute(ctx, sym.waitingOn);       // what that actor awaits
+    }
+}
+
 // Future>>wait
 //
 // Blocks until the future leaves the pending state, then returns __value__
@@ -262,6 +294,7 @@ const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* c
     if (rt.currentActor() != nullptr) {
         long long s = readState(rt, ctx, r);
         if (s == 0) {
+            detectWaitCycle(rt, ctx, rt.currentActor(), r);
             throw FutureYield(r);
         }
         if (s == 1) {

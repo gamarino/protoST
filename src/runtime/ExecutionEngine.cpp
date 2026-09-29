@@ -1128,6 +1128,10 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // of which allocate. Pin it.
                     auto* fut = const_cast<proto::ProtoObject*>(rt_.newFuture(ctx));
                     TransientPin pinFut(ctx, fut);
+                    // The actor that will settle this future: Future>>wait
+                    // follows it to detect a cycle of actors waiting on each
+                    // other (see detectWaitCycle in future_prims.cpp).
+                    fut->setAttribute(ctx, rt_.bootstrap().sym.targetActor, recv);
 
                     // Build the message envelope. F6 v6 (2026-05-23 night):
                     // the envelope is built IMMUTABLE. After construction

@@ -140,6 +140,7 @@ struct Bootstrap {
         const proto::ProtoString* settling        = nullptr;  // __settling__
         const proto::ProtoString* suspendedFrame  = nullptr;  // __suspended_frame__
         const proto::ProtoString* waitingOn       = nullptr;  // __waiting_on__
+        const proto::ProtoString* targetActor     = nullptr;  // __target_actor__
         const proto::ProtoString* suspendedFuture = nullptr;  // __suspended_future__
         const proto::ProtoString* bcPtr           = nullptr;  // __bc_ptr__
         const proto::ProtoString* captured        = nullptr;  // __captured__

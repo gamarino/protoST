@@ -212,6 +212,7 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     out.sym.settling        = S("__settling__");
     out.sym.suspendedFrame  = S("__suspended_frame__");
     out.sym.waitingOn       = S("__waiting_on__");
+    out.sym.targetActor     = S("__target_actor__");
     out.sym.suspendedFuture = S("__suspended_future__");
     out.sym.bcPtr           = S("__bc_ptr__");
     out.sym.captured        = S("__captured__");

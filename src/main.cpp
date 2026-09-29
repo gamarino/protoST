@@ -16,6 +16,10 @@
 #include <iterator>
 #include <string>
 #include <vector>
+#include <cstdlib>
+#if defined(__linux__)
+#include <sys/prctl.h>
+#endif
 
 namespace {
 
@@ -59,6 +63,13 @@ void printVersion() {
 } // anon
 
 int main(int argc, char** argv) {
+#if defined(__linux__) && defined(PR_SET_PTRACER)
+    // Diagnostics: PROTOST_ALLOW_PTRACE=1 lets a debugger that is not this
+    // process's ancestor attach (gdb -p) under kernel.yama.ptrace_scope=1,
+    // so a hung run can be inspected without re-running it under gdb.
+    if (const char* v = std::getenv("PROTOST_ALLOW_PTRACE"); v && v[0] == '1')
+        prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
+#endif
     if (argc < 2) { printUsage(argv[0]); return 64; }
     std::string mode = argv[1];
 
