@@ -91,7 +91,21 @@ now.
 
 ## Performance
 
-PERFORMANCE_PLACEHOLDER
+Measured on 2026-09-29 on a 2020 notebook (AMD Ryzen 5 5500U, 6 cores), with
+every benchmark verifying its result
+([`benchmarks/reports/2026-09-29-release-0.4.0.md`](benchmarks/reports/2026-09-29-release-0.4.0.md)):
+
+- Start-up: about 28 ms to evaluate one expression (CPython: about 31 ms).
+- Single-threaded, against CPython 3.14 on the same work and the same result:
+  from 0.9× (string concatenation) to about 10× slower (recursive method
+  dispatch) and 24× slower (exception signalling); geometric mean 3.5×.
+- Twelve CPU-bound actors: 2.1× faster with the default worker pool than
+  with one worker, and `saturation_big` 2.1× faster on four workers than on
+  one — measured with other applications loading the machine, so these are
+  lower bounds; an idle re-run is pending.
+
+protoST is not fast single-threaded code; what it offers is the same code on
+several cores without locks.
 
 ## Status
 
