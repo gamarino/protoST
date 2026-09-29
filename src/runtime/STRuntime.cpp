@@ -372,6 +372,13 @@ struct STRuntime::Impl {
         // Track 1 slice 2 (EXC-a): register the exception class hierarchy in
         // globals so user code can name `Exception`, `Error`, `Warning` and
         // do `Exception subclass: #MyError`.
+        // Class globals for the kernel types a Smalltalker names directly.
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "Integer"), bootstrap.integerProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "Symbol"), bootstrap.symbolProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "UndefinedObject"), bootstrap.nilProto);
         auto* exceptionKey = proto::ProtoString::createSymbol(rootCtx, "Exception");
         globals->setAttribute(rootCtx, exceptionKey, bootstrap.exceptionProto);
         auto* errorKey = proto::ProtoString::createSymbol(rootCtx, "Error");

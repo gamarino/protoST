@@ -287,15 +287,24 @@ bool Lexer::containsBlankLine(size_t from, size_t to) const {
 }
 
 Token Lexer::next() {
-    const bool fromPeek = hasPeek_;
+    if (!lookahead_.empty()) {
+        Token t = std::move(lookahead_.front());
+        lookahead_.pop_front();
+        return t;
+    }
+    return lexOne();
+}
+
+// Lex one token and record what later tokens depend on: the blank-line mark
+// and the kind of the last lexed token (D1: sign of a negative literal).
+Token Lexer::lexOne() {
     Token t = nextImpl_();
-    if (!fromPeek) t.blankLineBefore = blankBefore_;
+    t.blankLineBefore = blankBefore_;
     prevReturnedKind_ = t.kind;
     return t;
 }
 
 Token Lexer::nextImpl_() {
-    if (hasPeek_) { hasPeek_ = false; return peekTok_; }
     size_t beforeWs = pos_;
     skipWhitespace();
     // D1: did whitespace (or a comment) separate this token from the previous
@@ -439,8 +448,13 @@ Token Lexer::nextImpl_() {
 }
 
 const Token& Lexer::peek() {
-    if (!hasPeek_) { peekTok_ = next(); hasPeek_ = true; }
-    return peekTok_;
+    if (lookahead_.empty()) lookahead_.push_back(lexOne());
+    return lookahead_.front();
+}
+
+const Token& Lexer::peekSecond() {
+    while (lookahead_.size() < 2) lookahead_.push_back(lexOne());
+    return lookahead_[1];
 }
 
 std::vector<Token> Lexer::tokenize() {

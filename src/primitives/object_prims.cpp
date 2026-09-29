@@ -672,6 +672,77 @@ const proto::ProtoObject* prim_Object_subclassIvars(
     return makeSubclass(rt, ctx, r, a[0]);
 }
 
+// recv class → the receiver's class.
+//
+// Classes are prototypes that carry their name as an OWN `__class_name__`;
+// an instance's class is the nearest such prototype on its chain. Tagged and
+// primitive values map to their bootstrap prototypes (protoCore routes each
+// kind to one). A class answers its metaclass: one object per class, created
+// on first use and kept on the class, that prints as "<Name> class" and
+// answers the class as `soleInstance`.
+namespace {
+constexpr long long kSmallIntegerMax = (1LL << 55) - 1;   // 56-bit tagged range
+constexpr long long kSmallIntegerMin = -(1LL << 55);
+
+const proto::ProtoObject* metaclassOf(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* cls,
+                                      const proto::ProtoString* nameKey,
+                                      const proto::ProtoObject* className) {
+    static const proto::ProtoString* metaKey = proto::ProtoString::createSymbol(ctx, "__metaclass__");
+    static const proto::ProtoString* soleKey = proto::ProtoString::createSymbol(ctx, "__sole_instance__");
+    const proto::ProtoObject* meta = cls->getOwnAttributeDirect(ctx, metaKey);
+    if (meta && meta != PROTO_NONE) return meta;
+    std::string name = "Class";
+    if (const proto::ProtoString* ns = className->asString(ctx)) name = ns->toStdString(ctx);
+    meta = rt.bootstrap().objectProto->newChild(ctx, /*isMutable=*/true);
+    const_cast<proto::ProtoObject*>(meta)->setAttribute(
+        ctx, nameKey, ctx->fromUTF8String((name + " class").c_str()));
+    const_cast<proto::ProtoObject*>(meta)->setAttribute(ctx, soleKey, cls);
+    const_cast<proto::ProtoObject*>(cls)->setAttribute(ctx, metaKey, meta);
+    return meta;
+}
+} // namespace
+
+const proto::ProtoObject* prim_Object_class(STRuntime& rt, proto::ProtoContext* ctx,
+                                            const proto::ProtoObject* r,
+                                            const proto::ProtoObject* const*, int) {
+    const auto& b = rt.bootstrap();
+    if (!r || r == PROTO_NONE) return b.nilProto;
+    if (r == PROTO_TRUE || r == PROTO_FALSE) return b.booleanProto;
+    if (r->isFloat(ctx)) return b.floatProto;
+    if (r->isInteger(ctx)) {
+        const bool small = r->compare(ctx, ctx->fromLong(kSmallIntegerMax)) <= 0
+                        && r->compare(ctx, ctx->fromLong(kSmallIntegerMin)) >= 0;
+        return small ? b.smallIntegerProto : b.largeIntegerProto;
+    }
+    if (r->asString(ctx)) {
+        // The symbol tag lives on the value itself; asString may answer a
+        // different handle, so the tag is read from the receiver.
+        return reinterpret_cast<const proto::ProtoString*>(r)->isSymbol()
+            ? b.symbolProto : b.stringProto;
+    }
+    const proto::ProtoString* nameKey = b.sym.className;
+    const proto::ProtoObject* own = r->getOwnAttributeDirect(ctx, nameKey);
+    if (own && own != PROTO_NONE) return metaclassOf(rt, ctx, r, nameKey, own);
+    for (const proto::ProtoObject* p = r->getFirstParent(ctx); p && p != PROTO_NONE;
+         p = p->getFirstParent(ctx)) {
+        const proto::ProtoObject* name = p->getOwnAttributeDirect(ctx, nameKey);
+        if (name && name != PROTO_NONE) return p;
+    }
+    return b.objectProto;
+}
+
+// aClass name → its name as a String ("Counter", "Counter class").
+const proto::ProtoObject* prim_Object_name(STRuntime& rt, proto::ProtoContext* ctx,
+                                           const proto::ProtoObject* r,
+                                           const proto::ProtoObject* const*, int) {
+    const proto::ProtoObject* own =
+        r ? r->getOwnAttributeDirect(ctx, rt.bootstrap().sym.className) : nullptr;
+    if (!own || own == PROTO_NONE)
+        throw std::runtime_error("doesNotUnderstand: name (the receiver is not a class)");
+    return own;
+}
+
 // recv printString → human-readable ProtoString
 //
 // BL-3: default Object>>printString. Resolves the receiver's class name by
@@ -949,6 +1020,8 @@ void installObjectPrimitives(STRuntime& rt) {
     }
     bindPrimitive(rt, b.objectProto, "printString",
                   reg.registerPrim(prim_Object_printString));
+    bindPrimitive(rt, b.objectProto, "class", reg.registerPrim(prim_Object_class));
+    bindPrimitive(rt, b.objectProto, "name", reg.registerPrim(prim_Object_name));
     // F6 v2 T6: sleep primitive — test-only helper for the wall-clock
     // parallelism proof. Bound on objectProto so any object responds to it.
     bindPrimitive(rt, b.objectProto, "sleep:",

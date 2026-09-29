@@ -72,8 +72,8 @@ ast::NodePtr Parser::parseTopForm() {
             advance(); // consume >>
             return parseMethodDecl(classId, /*classSide=*/false);
         }
-        if (after.kind == TokenKind::Identifier && after.text == "class") {
-            // peek one more - need a 2-token lookahead. Pull both tokens into prev.
+        if (after.kind == TokenKind::Identifier && after.text == "class"
+            && lexer_.peekSecond().kind == TokenKind::GtGt) {
             advance(); // class id
             advance(); // 'class'
             if (current_.kind == TokenKind::GtGt) {
@@ -521,7 +521,8 @@ ast::NodePtr Parser::parseMethodDecl(Token classIdent, bool classSide) {
         if (current_.kind == TokenKind::Identifier) {
             Token p = lexer_.peek();
             if (p.kind == TokenKind::GtGt) break;
-            if (p.kind == TokenKind::Identifier && p.text == "class") break;
+            if (p.kind == TokenKind::Identifier && p.text == "class"
+                && lexer_.peekSecond().kind == TokenKind::GtGt) break;
             if (p.kind == TokenKind::Keyword && p.text == "subclass:") break;
         }
         auto stmt = parseStatement();
@@ -853,7 +854,8 @@ ast::NodePtr Parser::parseCallMethodDecl(Token classIdent, bool classSide,
         if (current_.kind == TokenKind::Identifier) {
             Token p = lexer_.peek();
             if (p.kind == TokenKind::GtGt) break;
-            if (p.kind == TokenKind::Identifier && p.text == "class") break;
+            if (p.kind == TokenKind::Identifier && p.text == "class"
+                && lexer_.peekSecond().kind == TokenKind::GtGt) break;
             if (p.kind == TokenKind::Keyword && p.text == "subclass:") break;
         }
         auto stmt = parseStatement();

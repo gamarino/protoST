@@ -17,8 +17,11 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     // setAttribute returns a new ProtoObject* and the bootstrap pointer (also
     // held in sp.smallIntegerPrototype) would be left bare.
     out.numberProto       = out.objectProto->newChild(ctx, /*isMutable=*/true);
-    out.smallIntegerProto = out.numberProto->newChild(ctx, /*isMutable=*/true);
-    out.largeIntegerProto = out.numberProto->newChild(ctx, /*isMutable=*/true);
+    // Integer sits between Number and the two concrete integer classes, as in
+    // Smalltalk-80, so `3 isKindOf: Integer` holds and Integer methods reach both.
+    out.integerProto      = out.numberProto->newChild(ctx, /*isMutable=*/true);
+    out.smallIntegerProto = out.integerProto->newChild(ctx, /*isMutable=*/true);
+    out.largeIntegerProto = out.integerProto->newChild(ctx, /*isMutable=*/true);
     out.floatProto        = out.numberProto->newChild(ctx, /*isMutable=*/true);
 
     // Booleans, strings/symbols, blocks, nil.
@@ -122,6 +125,7 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     };
     stamp(out.objectProto,       "Object");
     stamp(out.numberProto,       "Number");
+    stamp(out.integerProto,      "Integer");
     stamp(out.smallIntegerProto, "SmallInteger");
     stamp(out.largeIntegerProto, "LargeInteger");
     stamp(out.floatProto,        "Float");

@@ -2,6 +2,7 @@
 #include "Token.h"
 #include <string>
 #include <string_view>
+#include <deque>
 #include <vector>
 
 namespace protoST {
@@ -11,6 +12,9 @@ public:
     explicit Lexer(std::string source);
     Token next();
     const Token& peek();
+    // The token after peek() -- a two-token lookahead, used to tell
+    // `Name class >> sel` (a class-side method) from `name class ...`.
+    const Token& peekSecond();
     bool  atEnd() const { return pos_ >= source_.size(); }
     std::vector<Token> tokenize();
 
@@ -19,12 +23,11 @@ private:
     size_t pos_ = 0;
     int    line_ = 1;
     int    col_ = 1;
-    bool   hasPeek_ = false;
+    std::deque<Token> lookahead_;   // lexed but not yet consumed
     bool   blankBefore_ = false;
     bool   unterminatedComment_ = false;
     int    unterminatedLine_ = 0, unterminatedCol_ = 0;   // set by nextImpl_ for the token it lexes
     bool   containsBlankLine(size_t from, size_t to) const;
-    Token  peekTok_;
     // D1: kind of the last token *returned* to the consumer. Drives the
     // standard Smalltalk disambiguation of a leading `-` — it is part of a
     // negative numeric literal only when the lexer is in operand/primary
@@ -38,6 +41,7 @@ private:
     Token  lexNumber(bool negative);
     // The real tokeniser; `next()` wraps it to record `prevReturnedKind_`.
     Token  nextImpl_();
+    Token  lexOne();                 // nextImpl_ + per-token bookkeeping
     char   current() const { return pos_ < source_.size() ? source_[pos_] : '\0'; }
     char   lookahead(size_t k = 1) const {
         return (pos_ + k) < source_.size() ? source_[pos_ + k] : '\0';
