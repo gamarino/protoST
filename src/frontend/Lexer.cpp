@@ -60,40 +60,95 @@ Token Lexer::lexIdentifier() {
 // `negative == true`; `startLine`/`startCol` are captured from the `-`.
 Token Lexer::lexNumber(bool negative) {
     int startLine = line_, startCol = col_;
-    size_t start = pos_;
+    if (negative) startCol -= 1;  // the sign sits one column to the left of the digits
+    const std::string sign = negative ? "-" : "";
+    auto isDigitIn = [](char c, int base) {
+        int v = std::isdigit(static_cast<unsigned char>(c)) ? c - '0'
+              : std::isalpha(static_cast<unsigned char>(c))
+                    ? std::toupper(static_cast<unsigned char>(c)) - 'A' + 10 : 99;
+        return v < base;
+    };
+    std::string digits;
     while (pos_ < source_.size() && std::isdigit(static_cast<unsigned char>(source_[pos_]))) {
-        advance();
+        digits += source_[pos_]; advance();
     }
+    Token t;
+    t.line = startLine; t.column = startCol;
+
+    // Radix literal: <base>r<digits>, e.g. 16rFF, 2r1010 (base 2..36).
+    if (pos_ + 1 < source_.size() && source_[pos_] == 'r') {
+        int base = 0;
+        try { base = std::stoi(digits); } catch (...) { base = 0; }
+        if (base >= 2 && base <= 36 && isDigitIn(source_[pos_ + 1], base)) {
+            advance(); // r
+            std::string rd;
+            while (pos_ < source_.size() && isDigitIn(source_[pos_], base)) {
+                rd += static_cast<char>(std::toupper(static_cast<unsigned char>(source_[pos_])));
+                advance();
+            }
+            t.kind = TokenKind::Integer;
+            t.text = sign + digits + "r" + rd;
+            try {
+                std::size_t used = 0;
+                long long v = std::stoll(rd, &used, base);
+                t.intValue = negative ? -v : v;
+            } catch (const std::out_of_range&) {
+                t.large = true; t.radix = base; t.text = sign + rd;
+            }
+            return t;
+        }
+    }
+
     bool isFloat = false;
+    std::string frac;
     if (pos_ < source_.size() && source_[pos_] == '.' &&
         pos_ + 1 < source_.size() && std::isdigit(static_cast<unsigned char>(source_[pos_ + 1]))) {
         isFloat = true;
         advance(); // .
         while (pos_ < source_.size() && std::isdigit(static_cast<unsigned char>(source_[pos_]))) {
-            advance();
+            frac += source_[pos_]; advance();
         }
     }
-    Token t;
-    t.text = source_.substr(start, pos_ - start);
-    if (negative) {
-        t.text.insert(t.text.begin(), '-');
-        startCol -= 1;  // the sign sits one column to the left of the digits
+
+    // Exponent: e<digits> or e-<digits>, immediately after the mantissa.
+    std::string exponent;
+    if (pos_ + 1 < source_.size() && source_[pos_] == 'e') {
+        const bool neg = source_[pos_ + 1] == '-';
+        const size_t firstDigit = pos_ + (neg ? 2 : 1);
+        if (firstDigit < source_.size() && std::isdigit(static_cast<unsigned char>(source_[firstDigit]))) {
+            advance(); if (neg) advance();
+            exponent = neg ? "-" : "";
+            while (pos_ < source_.size() && std::isdigit(static_cast<unsigned char>(source_[pos_]))) {
+                exponent += source_[pos_]; advance();
+            }
+        }
     }
-    t.line = startLine; t.column = startCol;
-    if (isFloat) {
+
+    // An integer mantissa with a non-negative exponent stays an Integer
+    // (1e3 = 1000); a fraction or a negative exponent makes a Float.
+    if (!isFloat && !exponent.empty() && exponent[0] != '-') {
+        int e = 0;
+        try { e = std::stoi(exponent); } catch (...) { e = 400; }
+        if (e > 400) return makeError("integer literal exponent too large", startLine, startCol);
+        digits += std::string(static_cast<size_t>(e), '0');
+        exponent.clear();
+    }
+    if (isFloat || !exponent.empty()) {
+        t.kind = TokenKind::Float;
+        t.text = sign + digits + (frac.empty() ? "" : "." + frac) + (exponent.empty() ? "" : "e" + exponent);
         try {
-            t.kind = TokenKind::Float;
             t.floatValue = std::stod(t.text);
         } catch (const std::out_of_range&) {
             return makeError("float literal out of range", startLine, startCol);
         }
-    } else {
-        try {
-            t.kind = TokenKind::Integer;
-            t.intValue = std::stoll(t.text);
-        } catch (const std::out_of_range&) {
-            return makeError("integer literal out of range", startLine, startCol);
-        }
+        return t;
+    }
+    t.kind = TokenKind::Integer;
+    t.text = sign + digits;
+    try {
+        t.intValue = std::stoll(t.text);
+    } catch (const std::out_of_range&) {
+        t.large = true; t.radix = 10;   // a LargeInteger literal
     }
     return t;
 }

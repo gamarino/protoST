@@ -915,7 +915,10 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
     if (n.line > 0) currentLine_ = n.line;
     switch (n.kind) {
         case NodeKind::IntegerLit: {
-            auto idx = m.addInteger(n.intValue);
+            // A literal beyond the 64-bit range carries its digits (boolFlag,
+            // radix in intValue) and becomes a LargeInteger constant.
+            auto idx = n.boolFlag ? m.addLargeInteger(n.text, static_cast<int>(n.intValue))
+                                  : m.addInteger(n.intValue);
             // BL-2: constant-pool indices may exceed 255 — emitWide prefixes
             // EXTEND words as needed, lifting the old 256-constant ceiling.
             m.emitWide(Op::PUSH_CONST, static_cast<unsigned int>(idx), currentLine_);

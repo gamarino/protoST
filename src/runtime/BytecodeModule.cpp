@@ -151,6 +151,10 @@ size_t BytecodeModule::addInteger(long long v) {
     consts_.push_back(Const{ConstKind::Integer, v, 0.0, {}, 0});
     return consts_.size() - 1;
 }
+size_t BytecodeModule::addLargeInteger(const std::string& digits, int radix) {
+    consts_.push_back(Const{ConstKind::LargeInteger, radix, 0.0, digits, 0});
+    return consts_.size() - 1;
+}
 size_t BytecodeModule::addFloat(double v) {
     consts_.push_back(Const{ConstKind::Float, 0, v, {}, 0});
     return consts_.size() - 1;

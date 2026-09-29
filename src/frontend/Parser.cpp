@@ -249,6 +249,7 @@ ast::NodePtr Parser::parsePrimary() {
             advance();
             auto n = ast::makeNode(ast::NodeKind::IntegerLit, t.line, t.column);
             n->intValue = t.intValue; n->text = t.text;
+            if (t.large) { n->boolFlag = true; n->intValue = t.radix; }
             return n;
         }
         case TokenKind::Float: {
@@ -351,7 +352,8 @@ ast::NodePtr Parser::parseLiteralArrayElement() {
         case TokenKind::Integer:
             advance();
             { auto n = ast::makeNode(ast::NodeKind::IntegerLit, t.line, t.column);
-              n->intValue = t.intValue; n->text = t.text; return n; }
+              n->intValue = t.intValue; n->text = t.text;
+            if (t.large) { n->boolFlag = true; n->intValue = t.radix; } return n; }
         case TokenKind::Float:
             advance();
             { auto n = ast::makeNode(ast::NodeKind::FloatLit, t.line, t.column);

@@ -966,6 +966,9 @@ STRuntime::materialize(proto::ProtoContext* ctx, const BytecodeModule& m,
             return ctx->fromLong(m.constInteger(i));
         case K::Float:
             return ctx->fromDouble(m.constFloat(i));
+        case K::LargeInteger:
+            return ctx->fromString(m.constString(i).c_str(),
+                                   static_cast<int>(m.constInteger(i)));
         case K::String:
             return ctx->fromUTF8String(m.constString(i).c_str());
         case K::Symbol: {

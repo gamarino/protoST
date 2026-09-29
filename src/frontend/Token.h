@@ -46,6 +46,10 @@ struct Token {
     // True when a blank line (only whitespace) separates this token from the
     // previous one. A blank line ends a method body (see Parser::parseMethodDecl).
     bool blankLineBefore = false;
+    // Integer literal too large for intValue: `text` holds its digits in
+    // base `radix` (sign included), materialised as a LargeInteger.
+    bool large = false;
+    int  radix = 10;
 };
 
 inline const char* tokenKindName(TokenKind k) {

@@ -21,6 +21,9 @@ public:
         // SymbolTable. Carries no payload — the runtime substitutes the
         // bootstrap singleton when this constant is pushed.
         UnsetMarker,
+        // An integer literal beyond the 64-bit range: digits in `sval`, radix in
+        // `ival`; materialised with ProtoContext::fromString as a LargeInteger.
+        LargeInteger,
     };
 
     struct Const {
@@ -59,6 +62,7 @@ public:
     // constants
     size_t  addInteger(long long v);
     size_t  addFloat(double v);
+    size_t  addLargeInteger(const std::string& digits, int radix);
     size_t  addString(const std::string& s);
     size_t  internSymbol(const std::string& s);  // de-duplicated
     size_t  addChar(const std::string& utf8);
