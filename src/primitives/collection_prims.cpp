@@ -2104,7 +2104,11 @@ const proto::ProtoObject* prim_Seq_sort(STRuntime& rt, proto::ProtoContext* ctx,
                          return !mayPrecede(y, x);
                      });
     const proto::ProtoList* sorted = ctx->newList();
-    for (const auto* e : elems) sorted = sorted->appendLast(ctx, e);
+    TransientPin pinSorted(ctx, reinterpret_cast<const proto::ProtoObject*>(sorted));
+    for (const auto* e : elems) {
+        sorted = sorted->appendLast(ctx, e);
+        pinSorted.reset(reinterpret_cast<const proto::ProtoObject*>(sorted));
+    }
     const_cast<proto::ProtoObject*>(r)->setAttribute(ctx, dataKey(ctx), sorted->asObject(ctx));
     return r;
 }

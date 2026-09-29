@@ -22,8 +22,10 @@ inline void truncDivMod(proto::ProtoContext* ctx, const proto::ProtoObject* a,
                         const proto::ProtoObject* b,
                         const proto::ProtoObject** quot, const proto::ProtoObject** rem) {
     if (fitsDivisorWord(ctx, b)) {
-        if (quot) *quot = a->divide(ctx, b);
+        const proto::ProtoObject* q = quot ? a->divide(ctx, b) : nullptr;
+        TransientPin pinQ(ctx, q);
         if (rem) *rem = a->modulo(ctx, b);
+        if (quot) *quot = q;
         return;
     }
     const proto::ProtoObject* zero = ctx->fromLong(0);
@@ -49,18 +51,24 @@ inline void truncDivMod(proto::ProtoContext* ctx, const proto::ProtoObject* a,
     TransientPin pinQ(ctx, q), pinR(ctx, r);
     for (long long i = bits - 1; i >= 0; --i) {
         const proto::ProtoObject* bit = x->shiftRight(ctx, static_cast<int>(i))->bitwiseAnd(ctx, one);
-        r = r->shiftLeft(ctx, 1)->add(ctx, bit);
+        TransientPin pinBit(ctx, bit);
+        const proto::ProtoObject* shifted = r->shiftLeft(ctx, 1);
+        TransientPin pinShifted(ctx, shifted);
+        r = shifted->add(ctx, bit);
         pinR.reset(r);
         q = q->shiftLeft(ctx, 1);
+        pinQ.reset(q);
         if (r->compare(ctx, y) >= 0) {
             r = r->subtract(ctx, y);
             pinR.reset(r);
             q = q->add(ctx, one);
+            pinQ.reset(q);
         }
-        pinQ.reset(q);
     }
-    if (quot) *quot = (negA != negB) ? q->negate(ctx) : q;
+    const proto::ProtoObject* finalQ = (negA != negB) ? q->negate(ctx) : q;
+    TransientPin pinFinalQ(ctx, finalQ);
     if (rem) *rem = negA ? r->negate(ctx) : r;
+    if (quot) *quot = finalQ;
 }
 
 inline const proto::ProtoObject* integerQuotient(proto::ProtoContext* ctx, const proto::ProtoObject* a,

@@ -90,28 +90,24 @@ namespace {
 // canonicalisation that the JSSymbols / call_once pattern in protoJS
 // was built to avoid.
 const proto::ProtoString* msgTextKey(proto::ProtoContext* ctx) {
-    static const proto::ProtoString* s = nullptr;
-    static std::once_flag f;
-    std::call_once(f, [ctx]() { s = proto::ProtoString::createSymbol(ctx, "__message_text__"); });
-    return s;
+    // Resolved per call: symbols are interned per ProtoSpace, and a static
+    // would bind to the first runtime's space.
+    return proto::ProtoString::createSymbol(ctx, "__message_text__");
 }
 const proto::ProtoString* activeHandlerKey(proto::ProtoContext* ctx) {
-    static const proto::ProtoString* s = nullptr;
-    static std::once_flag f;
-    std::call_once(f, [ctx]() { s = proto::ProtoString::createSymbol(ctx, "__active_handler_id__"); });
-    return s;
+    // Resolved per call: symbols are interned per ProtoSpace, and a static
+    // would bind to the first runtime's space.
+    return proto::ProtoString::createSymbol(ctx, "__active_handler_id__");
 }
 const proto::ProtoString* classNameKey(proto::ProtoContext* ctx) {
-    static const proto::ProtoString* s = nullptr;
-    static std::once_flag f;
-    std::call_once(f, [ctx]() { s = proto::ProtoString::createSymbol(ctx, "__class_name__"); });
-    return s;
+    // Resolved per call: symbols are interned per ProtoSpace, and a static
+    // would bind to the first runtime's space.
+    return proto::ProtoString::createSymbol(ctx, "__class_name__");
 }
 const proto::ProtoString* resumableKey(proto::ProtoContext* ctx) {
-    static const proto::ProtoString* s = nullptr;
-    static std::once_flag f;
-    std::call_once(f, [ctx]() { s = proto::ProtoString::createSymbol(ctx, "__resumable__"); });
-    return s;
+    // Resolved per call: symbols are interned per ProtoSpace, and a static
+    // would bind to the first runtime's space.
+    return proto::ProtoString::createSymbol(ctx, "__resumable__");
 }
 
 // True when the exception instance is resumable. The `__resumable__` marker is
@@ -206,8 +202,16 @@ const proto::ProtoObject* defaultAction(STRuntime& rt, proto::ProtoContext* ctx,
     if (isErrorClass || !isResumable(ctx, exc)) {
         // Error (resumable or not) / non-resumable: abort the activation
         // (EXC-a behaviour, EXC-d dedicated type).
+        // Inside an actor, keep the exception on the actor itself (a GC root
+        // while its message runs) for the drain to reject the Future with.
+        bool onActor = false;
+        if (const proto::ProtoObject* actor = rt.currentActor()) {
+            const_cast<proto::ProtoObject*>(actor)->setAttribute(
+                ctx, proto::ProtoString::createSymbol(ctx, "__inflight_exception__"), exc);
+            onActor = true;
+        }
         throw UnhandledSTException(defaultActionMessage(rt, ctx, exc),
-                                   ExecutionEngine::describeActiveStack(20), exc);
+                                   ExecutionEngine::describeActiveStack(20), onActor);
     }
     // Resumable and unhandled. A Warning announces itself; the bare Exception
     // base resumes silently. The distinction is the presence of a messageText
@@ -417,10 +421,16 @@ const proto::ProtoObject* makeMessage(STRuntime& rt, proto::ProtoContext* ctx,
                                       const std::string& selector,
                                       const proto::ProtoObject* const* args, int argc) {
     const proto::ProtoList* list = ctx->newList();
-    for (int i = 0; i < argc; ++i) list = list->appendLast(ctx, args[i] ? args[i] : PROTO_NONE);
+    TransientPin pinList(ctx, reinterpret_cast<const proto::ProtoObject*>(list));
+    for (int i = 0; i < argc; ++i) {
+        list = list->appendLast(ctx, args[i] ? args[i] : PROTO_NONE);
+        pinList.reset(reinterpret_cast<const proto::ProtoObject*>(list));
+    }
     const proto::ProtoObject* arr = rt.bootstrap().arrayProto->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinArr(ctx, arr);
     arr->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__data__"), list->asObject(ctx));
     const proto::ProtoObject* msg = rt.bootstrap().messageProto->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinMsg(ctx, msg);
     msg->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__selector__"),
                       reinterpret_cast<const proto::ProtoObject*>(
                           proto::ProtoString::createSymbol(ctx, selector.c_str())));

@@ -98,8 +98,9 @@ private:
     void reportDuplicateNames(const std::vector<std::string>& names, size_t from,
                               const std::string& where);
     void emitSetInstVarNames(BytecodeModule& m, const ast::Node& classDecl);
-    // Loop variables of the to:do: loops being inlined, innermost last.
-    std::vector<std::string> inlinedLoopArgs_;
+    // Loop variables of the to:do: loops being inlined (the scope whose slots
+    // bind them, and the name), innermost last.
+    std::vector<std::pair<const Scope*, std::string>> inlinedLoopArgs_;
     std::deque<Scope> scopes_;
     std::vector<std::string> errors_;
     ScopeAnalysis analysis_;

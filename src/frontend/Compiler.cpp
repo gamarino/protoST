@@ -1412,14 +1412,18 @@ void Compiler::reportDuplicateNames(const std::vector<std::string>& names, size_
 }
 
 bool Compiler::reportArgumentAssignment(const std::string& name) {
+    // Resolve the name as a read would, then ask whether that binding is an
+    // argument: a declared one, or the loop variable of an inlined to:do:
+    // bound in that very scope.
     bool isArgument = false;
-    if (!inlinedLoopArgs_.empty() && inlinedLoopArgs_.back() == name) {
-        isArgument = true;
-    } else {
-        for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
-            if (it->slots.count(name)) { isArgument = it->args.count(name) != 0; break; }
-            if (isMethodScope(*it)) break;
+    for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
+        if (it->slots.count(name)) {
+            isArgument = it->args.count(name) != 0;
+            for (const auto& loop : inlinedLoopArgs_)
+                if (loop.first == &*it && loop.second == name) isArgument = true;
+            break;
         }
+        if (isMethodScope(*it)) break;
     }
     if (!isArgument) return false;
     error("cannot assign to the argument '" + name + "' (line "
@@ -1827,7 +1831,7 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
             int savedSlot = (savedIt != s.slots.end()) ? savedIt->second : -1;
             bool hadBinding = (savedIt != s.slots.end());
             s.slots[iterName] = slotI;
-            inlinedLoopArgs_.push_back(iterName);
+            inlinedLoopArgs_.emplace_back(&s, iterName);
             // loopTest:
             size_t loopTestInstrIdx = m.instrStartPc().size();
             m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotI),   currentLine_);

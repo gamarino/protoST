@@ -331,7 +331,13 @@ public:
     // cached value never invalidates.
     unsigned int cachedLocalCount(unsigned int argc) const;
 
+    // The largest MAKE_ARRAY operand in the module (the elements a brace
+    // array pushes before collecting them), 0 when there is none. The engine
+    // sizes each frame's operand stack from it. Lazily computed, cached.
+    unsigned int cachedMaxArrayOperand() const;
+
 private:
+    mutable std::atomic<int> maxArrayOperandCache_{-1};
     // `(argc << 32) | localCount`, or kNoLocalCount when not yet computed.
     // argc is folded into the cache key because `computeLocalCount` returns
     // max(argc, maxSlot+1) — different argc values for the same module body

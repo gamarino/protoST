@@ -576,7 +576,14 @@ ast::NodePtr Parser::parseMethodDecl(Token classIdent, bool classSide) {
         // A statement that starts at column 1 on a later line, after the
         // body's first statement, begins a new top-level form: method bodies
         // are indented, so an unindented line is the program continuing.
-        if (current_.column == 1 && current_.line > classIdent.line && !md->children.empty()) break;
+        if (current_.column == 1 && current_.line > classIdent.line && !md->children.empty()) {
+            // A return at column 1 can only belong to the method above:
+            // report it rather than run it as a top-level statement.
+            if (current_.kind == TokenKind::Caret)
+                error(current_, "unindented ^ after the method " + classIdent.text
+                      + ": indent method bodies (an unindented line starts a new top-level statement)");
+            break;
+        }
         methodHeaderLine_ = classIdent.line;
         // stop at the start of another method/class decl
         if (current_.kind == TokenKind::Identifier) {
@@ -587,10 +594,13 @@ ast::NodePtr Parser::parseMethodDecl(Token classIdent, bool classSide) {
             if (p.kind == TokenKind::Keyword && p.text == "subclass:") break;
         }
         auto stmt = parseStatement();
-        bool isReturn = stmt && stmt->kind == ast::NodeKind::Return;
+        const bool isReturn = stmt && stmt->kind == ast::NodeKind::Return;
         if (stmt) md->children.push_back(std::move(stmt));
         if (!match(TokenKind::Period)) break;
-        if (isReturn) break; // return terminates the method body
+        // After a ^, what follows on the same line is the next top-level form
+        // (one-line style: `C >> m ^ 1. C new m.`); indented lines below stay
+        // in the method as unreachable code, as in Pharo.
+        if (isReturn && current_.line == prev_.line) break;
     }
     methodHeaderLine_ = 0;
     return md;
@@ -923,7 +933,14 @@ ast::NodePtr Parser::parseCallMethodDecl(Token classIdent, bool classSide,
         // A statement that starts at column 1 on a later line, after the
         // body's first statement, begins a new top-level form: method bodies
         // are indented, so an unindented line is the program continuing.
-        if (current_.column == 1 && current_.line > classIdent.line && !md->children.empty()) break;
+        if (current_.column == 1 && current_.line > classIdent.line && !md->children.empty()) {
+            // A return at column 1 can only belong to the method above:
+            // report it rather than run it as a top-level statement.
+            if (current_.kind == TokenKind::Caret)
+                error(current_, "unindented ^ after the method " + classIdent.text
+                      + ": indent method bodies (an unindented line starts a new top-level statement)");
+            break;
+        }
         methodHeaderLine_ = classIdent.line;
         if (current_.kind == TokenKind::Identifier) {
             Token p = lexer_.peek();
@@ -933,10 +950,13 @@ ast::NodePtr Parser::parseCallMethodDecl(Token classIdent, bool classSide,
             if (p.kind == TokenKind::Keyword && p.text == "subclass:") break;
         }
         auto stmt = parseStatement();
-        bool isReturn = stmt && stmt->kind == ast::NodeKind::Return;
+        const bool isReturn = stmt && stmt->kind == ast::NodeKind::Return;
         if (stmt) md->children.push_back(std::move(stmt));
         if (!match(TokenKind::Period)) break;
-        if (isReturn) break;
+        // After a ^, what follows on the same line is the next top-level form
+        // (one-line style: `C >> m ^ 1. C new m.`); indented lines below stay
+        // in the method as unreachable code, as in Pharo.
+        if (isReturn && current_.line == prev_.line) break;
     }
     methodHeaderLine_ = 0;
     return md;

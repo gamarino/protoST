@@ -196,6 +196,13 @@ inline unsigned int computeLocalCount(const BytecodeModule& m, unsigned int argc
     return std::max(m.cachedLocalCount(argc), kMinLocals);
 }
 
+// Operand-stack capacity of a frame: the fixed bound plus the elements the
+// module's largest brace array pushes (`{…}` with 49+ elements overflowed
+// the fixed 48 slots).
+inline unsigned int computeMaxStack(const BytecodeModule& m) {
+    return kFrameMaxStk + m.cachedMaxArrayOperand();
+}
+
 } // namespace
 
 // F6 v3 E5: definition of the thread-local transient-pin scratch cursor
@@ -344,7 +351,7 @@ ExecutionEngine::pushFrame(const BytecodeModule* m,
     fr.m          = m;
     fr.pc         = 0;
     fr.localCount = computeLocalCount(*m, argc);
-    fr.maxStack   = kFrameMaxStk;
+    fr.maxStack   = computeMaxStack(*m);
     fr.sp         = 0;
     // Track 1 slice 1: assign frame identity. homeFrameId == 0 means "I am my
     // own home" — a method or top-level frame returns from itself. A non-zero
@@ -472,7 +479,7 @@ std::string ExecutionEngine::describeActiveStack(std::size_t maxFrames) {
 bool ExecutionEngine::signalIfTooDeep(proto::ProtoContext* ctx, Frame& f,
                                       const BytecodeModule* m, unsigned int argc) {
     const unsigned int regionEnd =
-        g_slotCursor + kHeaderSlots + computeLocalCount(*m, argc) + kFrameMaxStk;
+        g_slotCursor + kHeaderSlots + computeLocalCount(*m, argc) + computeMaxStack(*m);
     if (regionEnd <= kFrameRegionLimit - kOverflowReserve) return false;
     const std::string msg = "stack depth exceeded (" + std::to_string(frames_.size())
         + " frames in this activation chain)";
@@ -2800,7 +2807,7 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
             computeLocalCount(*m, 0),
             static_cast<unsigned int>(locN));
         fr.maxStack   = std::max<unsigned int>(
-            kFrameMaxStk, static_cast<unsigned int>(opN));
+            computeMaxStack(*m), static_cast<unsigned int>(opN));
         fr.sp         = static_cast<unsigned int>(opN);
         fr.baseSlot   = g_slotCursor;
         // Track 1 slice 1: restore the global ids verbatim — no renumbering,

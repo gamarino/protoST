@@ -137,16 +137,21 @@ static void floorDivMod(proto::ProtoContext* ctx, const proto::ProtoObject* r,
     if (r->isFloat(ctx) || d->isFloat(ctx)) {
         const double x = r->asDouble(ctx), y = d->asDouble(ctx);
         const double q = std::floor(x / y);
+        // Compute the remainder first: the quotient is then the last
+        // allocation and no unpinned result is held across another one.
+        if (rem) *rem = ctx->fromDouble(x - q * y);
+        TransientPin pinRem(ctx, rem ? *rem : nullptr);
         if (quot) *quot = (std::fabs(q) < 9.2e18) ? ctx->fromLong(static_cast<long long>(q))
                                                   : ctx->fromDouble(q);
-        if (rem) *rem = ctx->fromDouble(x - q * y);
         return;
     }
     const proto::ProtoObject* q = nullptr;
     const proto::ProtoObject* m = nullptr;
     truncDivMod(ctx, r, d, &q, &m);
+    TransientPin pinQ(ctx, q), pinM(ctx, m);
     if (!isZeroNumber(ctx, m) && signOfNumber(ctx, m) != signOfNumber(ctx, d)) {
         q = q->subtract(ctx, ctx->fromInteger(1));
+        pinQ.reset(q);
         m = m->add(ctx, d);
     }
     if (quot) *quot = q;
@@ -338,9 +343,14 @@ const proto::ProtoObject* wideBitOp(proto::ProtoContext* ctx, const proto::Proto
     while (!(isSign(x) && isSign(y))) {
         const proto::ProtoObject *qx = nullptr, *rx = nullptr, *qy = nullptr, *ry = nullptr;
         floorDivMod(ctx, x, base, &qx, &rx);
+        const long long lowX = rx->asLong(ctx);
+        TransientPin pinQx(ctx, qx);
         floorDivMod(ctx, y, base, &qy, &ry);
-        const long long digit = apply(rx->asLong(ctx), ry->asLong(ctx)) & 0xFFFF;
-        result = result->add(ctx, ctx->fromLong(digit)->multiply(ctx, weight));
+        const long long digit = apply(lowX, ry->asLong(ctx)) & 0xFFFF;
+        TransientPin pinQy(ctx, qy);
+        const proto::ProtoObject* term = ctx->fromLong(digit)->multiply(ctx, weight);
+        TransientPin pinTerm(ctx, term);
+        result = result->add(ctx, term);
         pinR.reset(result);
         x = qx; pinX.reset(x);
         y = qy; pinY.reset(y);

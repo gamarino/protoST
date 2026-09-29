@@ -19,8 +19,16 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace protoST {
+
+// Defined in object_prims.cpp: run a method by name, as a send does.
+const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* recv,
+                                      const proto::ProtoString* selector,
+                                      const proto::ProtoObject* const* args, int argc,
+                                      bool* understood);
 
 // Defined below with the unobserved-rejection bookkeeping.
 void markFutureObserved(proto::ProtoContext* ctx, const proto::ProtoObject* future);
@@ -254,6 +262,16 @@ long long readState(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoO
 // Two actors can reach their waits at the same moment. Each first records what
 // it awaits and only then walks the chain (with a full fence in between), so
 // at least one of them sees the other's record and reports the cycle.
+// Actors whose method is buried on this thread's stack under a message this
+// thread is running for another actor while it waits (waitHelping). A buried
+// actor cannot continue until everything above it returns.
+thread_local std::vector<const proto::ProtoObject*> t_buriedActors;
+
+bool isBuriedHere(const proto::ProtoObject* actor) {
+    for (const auto* a : t_buriedActors) if (a == actor) return true;
+    return false;
+}
+
 void detectWaitCycle(STRuntime& rt, proto::ProtoContext* ctx,
                      const proto::ProtoObject* self, const proto::ProtoObject* awaited) {
     const auto& sym = rt.bootstrap().sym;
@@ -264,7 +282,7 @@ void detectWaitCycle(STRuntime& rt, proto::ProtoContext* ctx,
         if (readState(rt, ctx, fut) != 0) return;            // settled: no cycle
         const proto::ProtoObject* target = fut->getOwnAttributeDirect(ctx, sym.targetActor);
         if (!target || target == PROTO_NONE) return;          // not an actor message
-        if (target == self) {
+        if (target == self || isBuriedHere(target)) {
             const_cast<proto::ProtoObject*>(self)->setAttribute(ctx, sym.waitingOn, PROTO_NONE);
             throw std::runtime_error(
                 "deadlock: this actor waits for a reply that can only come from an actor "
@@ -284,8 +302,27 @@ const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
                                       const proto::ProtoObject* awaited) {
     const proto::ProtoObject* self = rt.currentActor();
     TransientPin pinAwaited(ctx, awaited);
+    // This actor stays buried under whatever it helps; nested helping is
+    // capped so a chain of waiting actors cannot exhaust the engine stack.
+    constexpr std::size_t kMaxHelpingDepth = 16;
+    struct Bury {
+        const proto::ProtoObject* actor;
+        explicit Bury(const proto::ProtoObject* a) : actor(a) { t_buriedActors.push_back(a); }
+        ~Bury() { t_buriedActors.pop_back(); }
+    } bury(self);
+    struct ClearWaiting {
+        STRuntime& rt; proto::ProtoContext* ctx; const proto::ProtoObject* actor;
+        ~ClearWaiting() {
+            const_cast<proto::ProtoObject*>(actor)->setAttribute(ctx, rt.bootstrap().sym.waitingOn, PROTO_NONE);
+        }
+    } clearWaiting{rt, ctx, self};
     int idle = 0;
     while (readState(rt, ctx, awaited) == 0) {
+        if (t_buriedActors.size() > kMaxHelpingDepth) {
+            proto::ProtoContext::UnmanagedScope unmanaged(ctx);
+            std::this_thread::sleep_for(std::chrono::microseconds(200));
+            continue;
+        }
         bool helped = false;
         // The helped message belongs to another actor: this actor's exception
         // handlers, still on this thread's handler stack, must not catch its
@@ -305,7 +342,6 @@ const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
         std::this_thread::sleep_for(std::chrono::microseconds(idle < 10 ? 20 : 500));
         ++idle;
     }
-    const_cast<proto::ProtoObject*>(self)->setAttribute(ctx, rt.bootstrap().sym.waitingOn, PROTO_NONE);
     const proto::ProtoString* valueKey = rt.bootstrap().sym.value;
     const proto::ProtoString* errorKey = rt.bootstrap().sym.error;
     if (readState(rt, ctx, awaited) == 1) {
@@ -575,7 +611,15 @@ std::string describeRejection(proto::ProtoContext* ctx, const proto::ProtoObject
 // messageText; any other rejection value raises an Error carrying its text.
 const proto::ProtoObject* raiseRejection(STRuntime& rt, proto::ProtoContext* ctx,
                                          const proto::ProtoObject* error) {
-    if (isExceptionInstance(rt, ctx, error)) return resignalException(rt, ctx, error);
+    if (isExceptionInstance(rt, ctx, error)) {
+        // Every waiter signals its own copy: signal stamps handler state on
+        // the instance, and several threads may wait on the same Future.
+        bool understood = false;
+        const proto::ProtoObject* copy = sendDynamic(
+            rt, ctx, error, proto::ProtoString::createSymbol(ctx, "shallowCopy"),
+            nullptr, 0, &understood);
+        return resignalException(rt, ctx, (understood && copy) ? copy : error);
+    }
     throw std::runtime_error("Future rejected: " + describeRejection(ctx, error));
 }
 

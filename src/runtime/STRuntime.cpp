@@ -92,9 +92,20 @@ namespace {
 // What an actor's message Future is rejected with: the protoST exception that
 // went unhandled in the method, so a waiter re-signals it with its class and
 // messageText intact; a native error's text otherwise.
-const proto::ProtoObject* rejectionFor(proto::ProtoContext* ctx, const std::exception& e) {
-    if (const auto* u = dynamic_cast<const UnhandledSTException*>(&e))
-        if (u->exception()) return u->exception();
+const proto::ProtoObject* rejectionFor(proto::ProtoContext* ctx, const std::exception& e,
+                                       const proto::ProtoObject* actor) {
+    if (const auto* u = dynamic_cast<const UnhandledSTException*>(&e)) {
+        if (u->actorException() && actor) {
+            const proto::ProtoString* key =
+                proto::ProtoString::createSymbol(ctx, "__inflight_exception__");
+            const proto::ProtoObject* exc = actor->getOwnAttributeDirect(ctx, key);
+            if (exc && exc != PROTO_NONE) {
+                TransientPin pinExc(ctx, exc);
+                const_cast<proto::ProtoObject*>(actor)->setAttribute(ctx, key, PROTO_NONE);
+                return exc;
+            }
+        }
+    }
     return ctx->fromUTF8String(e.what());
 }
 } // namespace
@@ -1802,7 +1813,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             } catch (const std::exception& e) {
                 setCurrentActor(nullptr);
                 if (msgFut && msgFut != PROTO_NONE) {
-                    auto* err = rejectionFor(ctx, e);
+                    auto* err = rejectionFor(ctx, e, actor);
                     TransientPin pinErr(ctx, err);
                     rejectFutureFromDrain(*this, ctx, msgFut, err);
                 }
@@ -1968,7 +1979,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             }
         } catch (const std::exception& e) {
             if (future) {
-                auto* err = rejectionFor(ctx, e);
+                auto* err = rejectionFor(ctx, e, actor);
                 TransientPin pinErr(ctx, err);
                 rejectFutureFromDrain(*this, ctx, future, err);
             }
@@ -2441,6 +2452,10 @@ void STRuntime::loadKernel() {
             throw std::runtime_error("kernel: " + file.string() + ": " + ex.what());
         }
     }
+    // From here on, classes are declared by user code (see __subclassNamed:).
+    if (auto* g = globals())
+        g->setAttribute(rootCtx(), proto::ProtoString::createSymbol(rootCtx(), "__kernel_loaded__"),
+                        PROTO_TRUE);
 }
 
 // F5-M1: Read, parse, compile, and execute a module file. Wraps the classes

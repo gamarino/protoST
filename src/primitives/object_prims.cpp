@@ -824,6 +824,7 @@ const proto::ProtoObject* prim_Object_shallowCopy(STRuntime&, proto::ProtoContex
     const proto::ProtoObject* parent = r->getFirstParent(ctx);
     if (!parent || parent == PROTO_NONE) return r;
     const proto::ProtoObject* copy = parent->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinCopy(ctx, copy);
     struct Sink { const proto::ProtoObject* copy; };
     Sink sink{copy};
     r->processOwnAttributes(ctx, &sink,
@@ -963,6 +964,7 @@ const proto::ProtoObject* metaclassOf(STRuntime& rt, proto::ProtoContext* ctx,
     std::string name = "Class";
     if (const proto::ProtoString* ns = className->asString(ctx)) name = ns->toStdString(ctx);
     meta = rt.bootstrap().objectProto->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinMeta(ctx, meta);
     const_cast<proto::ProtoObject*>(meta)->setAttribute(
         ctx, nameKey, ctx->fromUTF8String((name + " class").c_str()));
     const_cast<proto::ProtoObject*>(meta)->setAttribute(ctx, soleKey, cls);
@@ -1036,13 +1038,23 @@ const proto::ProtoObject* prim_Object_subclassNamed(STRuntime& rt, proto::ProtoC
         const proto::ProtoObject* existing = g
             ? g->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, name->toStdString(ctx).c_str()))
             : nullptr;
-        if (existing && existing != PROTO_NONE && !existing->isInteger(ctx) && !existing->asString(ctx)) {
-            const proto::ProtoObject* own = existing->getOwnAttributeDirect(ctx, rt.bootstrap().sym.className);
-            if (own && own != PROTO_NONE && existing->getFirstParent(ctx) == r)
-                return existing;
-        }
+        // Only a class that user code declared is reused: re-declaring a
+        // kernel or built-in class name (Point, Date, ...) defines a new
+        // class instead of merging into the kernel's.
+        const proto::ProtoString* userKey = proto::ProtoString::createSymbol(ctx, "__user_class__");
+        if (existing && existing != PROTO_NONE && !existing->isInteger(ctx) && !existing->asString(ctx)
+            && existing->getOwnAttributeDirect(ctx, userKey) == PROTO_TRUE
+            && existing->getFirstParent(ctx) == r)
+            return existing;
     }
-    return const_cast<proto::ProtoObject*>(r)->newChild(ctx, /*isMutable=*/true);
+    const proto::ProtoObject* cls = const_cast<proto::ProtoObject*>(r)->newChild(ctx, /*isMutable=*/true);
+    const proto::ProtoObject* g = rt.globals();
+    if (g && g->getOwnAttributeDirect(ctx, proto::ProtoString::createSymbol(ctx, "__kernel_loaded__")) == PROTO_TRUE) {
+        TransientPin pinCls(ctx, cls);
+        const_cast<proto::ProtoObject*>(cls)->setAttribute(
+            ctx, proto::ProtoString::createSymbol(ctx, "__user_class__"), PROTO_TRUE);
+    }
+    return cls;
 }
 
 // ---------------------------------------------------------------- reflection

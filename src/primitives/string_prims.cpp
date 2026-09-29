@@ -2,6 +2,7 @@
 #include "runtime/ZeroDivideSignal.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
+#include "runtime/TransientPin.h"
 #include "runtime/ValueFormat.h"
 #include "protoCore.h"
 
@@ -387,15 +388,21 @@ const proto::ProtoObject* splitToArray(STRuntime& rt, proto::ProtoContext* ctx,
         return std::find(seps.begin(), seps.end(), c) != seps.end();
     };
     const proto::ProtoList* parts = ctx->newList();
+    TransientPin pinParts(ctx, reinterpret_cast<const proto::ProtoObject*>(parts));
     size_t start = 0;
     for (size_t i = 0; i <= cps.size(); ++i) {
         if (i == cps.size() || isSep(cps[i])) {
-            if (i > start)
-                parts = parts->appendLast(ctx, ctx->fromUTF8String(encodeAll(cps, start, i).c_str()));
+            if (i > start) {
+                const proto::ProtoObject* piece = ctx->fromUTF8String(encodeAll(cps, start, i).c_str());
+                TransientPin pinPiece(ctx, piece);
+                parts = parts->appendLast(ctx, piece);
+                pinParts.reset(reinterpret_cast<const proto::ProtoObject*>(parts));
+            }
             start = i + 1;
         }
     }
     const proto::ProtoObject* arr = rt.bootstrap().arrayProto->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinArr(ctx, arr);
     arr->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__data__"), parts->asObject(ctx));
     return arr;
 }
