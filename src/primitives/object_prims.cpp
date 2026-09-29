@@ -979,6 +979,18 @@ const proto::ProtoObject* prim_Object_name(STRuntime& rt, proto::ProtoContext* c
     return own;
 }
 
+// recv isClassObject → true when the receiver is a class (it owns the
+// `__class_name__` stamp) rather than an instance of one. Printing uses it
+// to show a class by name even when the class defines instance-side
+// printOn: / printString, which a class object would otherwise inherit.
+const proto::ProtoObject* prim_Object_isClassObject(STRuntime& rt, proto::ProtoContext* ctx,
+                                                    const proto::ProtoObject* r,
+                                                    const proto::ProtoObject* const*, int) {
+    const proto::ProtoObject* own =
+        r ? r->getOwnAttributeDirect(ctx, rt.bootstrap().sym.className) : nullptr;
+    return (own && own != PROTO_NONE) ? PROTO_TRUE : PROTO_FALSE;
+}
+
 // recv printString → human-readable ProtoString
 //
 // BL-3: default Object>>printString. Resolves the receiver's class name by
@@ -1268,6 +1280,7 @@ void installObjectPrimitives(STRuntime& rt) {
     bindPrimitive(rt, b.objectProto, "__globalAt:", reg.registerPrim(prim_Object_globalAt));
     bindPrimitive(rt, b.objectProto, "__globalAt:put:", reg.registerPrim(prim_Object_globalAtPut));
     bindPrimitive(rt, b.objectProto, "name", reg.registerPrim(prim_Object_name));
+    bindPrimitive(rt, b.objectProto, "isClassObject", reg.registerPrim(prim_Object_isClassObject));
     bindPrimitive(rt, b.objectProto, "perform:withArguments:",
                   reg.registerPrim(prim_Object_performWithArguments));
     bindPrimitive(rt, b.objectProto, "respondsTo:", reg.registerPrim(prim_Object_respondsTo));

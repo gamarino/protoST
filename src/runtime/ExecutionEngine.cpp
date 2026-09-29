@@ -122,6 +122,12 @@ inline std::string describeReceiverForDNU(proto::ProtoContext* ctx,
     if (recv->isBoolean(ctx))  return " (receiver class: Boolean)";
     if (recv->isFloat(ctx))    return " (receiver class: Float)";
     if (classNameSym) {
+        // The receiver is a class object: the message went to the class side.
+        const proto::ProtoObject* own = recv->getOwnAttributeDirect(ctx, classNameSym);
+        if (own && own != PROTO_NONE) {
+            if (const proto::ProtoString* s = own->asString(ctx))
+                return " (receiver class: " + s->toStdString(ctx) + " class)";
+        }
         const proto::ProtoObject* cname = recv->getAttribute(ctx, classNameSym);
         if (cname && cname != PROTO_NONE) {
             const proto::ProtoString* s = cname->asString(ctx);

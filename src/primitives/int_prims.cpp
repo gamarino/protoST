@@ -249,9 +249,15 @@ const proto::ProtoObject* prim_NumAbs(STRuntime&, proto::ProtoContext* ctx,
 // `printString` for the whole numeric tower. protoCore does not render a
 // number to a string, so protoST formats it (see ValueFormat::formatNumber):
 // a Float shows a fractional part, a LargeInteger shows its exact digits.
-const proto::ProtoObject* prim_NumPrintString(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_NumPrintString(STRuntime& rt, proto::ProtoContext* ctx,
                                                const proto::ProtoObject* r,
                                                const proto::ProtoObject* const*, int) {
+    // A number class (SmallInteger, Float, ...) prints as its name.
+    if (!r->isInteger(ctx) && !r->isFloat(ctx)) {
+        const proto::ProtoObject* own =
+            r->getOwnAttributeDirect(ctx, rt.bootstrap().sym.className);
+        if (own && own != PROTO_NONE) return own;
+    }
     return ctx->fromUTF8String(formatNumber(ctx, r).c_str());
 }
 

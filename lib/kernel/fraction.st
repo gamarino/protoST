@@ -109,9 +109,11 @@ Fraction >> printOn: aStream
 "Number has a native printString for native numbers; a Fraction prints
  through printOn: like any other object."
 Fraction >> printString
+  self isClassObject ifTrue: [^ self name].
   ^ String streamContents: [:s | self printOn: s].
 
 Fraction >> displayString
+  self isClassObject ifTrue: [^ self name].
   ^ numerator printString , '/' , denominator printString.
 
 "Double dispatch from the native primitives: a native number op aFraction."

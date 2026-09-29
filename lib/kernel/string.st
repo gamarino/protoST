@@ -6,6 +6,7 @@ String >> asString
   ^ self.
 
 String >> displayString
+  self isClassObject ifTrue: [^ self name].
   ^ self.
 
 String >> isSymbol
