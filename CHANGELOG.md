@@ -39,6 +39,10 @@ audit). Details of each item are in [`docs/STATUS.md`](docs/STATUS.md) and
   zero count and whose every release notifies.
 - A cycle of actors waiting on each other (`a` waits on `b`, which waits on
   `a`) signals a catchable "deadlock" `Error` instead of hanging.
+- A `wait` inside a block that a primitive evaluates (`do:`, `collect:`,
+  `inject:into:`, `ensure:`, `on:do:`) in an actor method ended the loop after
+  one element, skipped `ensure:` and escaped handlers. Such a wait now blocks
+  its worker, which runs other actors' messages meanwhile.
 - `Future whenAny:` waited forever when every future was rejected.
 - A negative integer attribute read through a unary send was taken for a
   primitive marker and aborted the interpreter.

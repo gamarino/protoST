@@ -311,18 +311,22 @@ sensors, twins, drivers — and you want each to handle a request and then
 collect the answers. The natural Smalltalk shape is `do:`:
 
 ```smalltalk
-"-- BROKEN if `wait` yields cooperatively --"
 sensors do: [ :s | results add: (s read) wait ].
 ```
 
-This **does not work safely inside an actor method**. `do:` is a
-primitive that calls the block via a recursive C++ stack frame; when the
-inner `wait` yields cooperatively, the iteration state of `do:` is lost
-with the C++ stack unwind. The block runs once and the rest of the
-sensors are skipped.
+This works inside an actor method, with one difference from a `wait`
+written directly in the method: `do:` is a primitive that evaluates the
+block from C++, and an actor cannot be suspended in the middle of a
+primitive (its position in the iteration would be lost). So a `wait`
+inside a block that a primitive evaluates — `do:`, `collect:`,
+`inject:into:`, `ensure:`, `on:do:` and the like — keeps its worker
+thread busy until the reply arrives; the worker runs other actors'
+messages while it waits, and the result is the same as anywhere else.
+(Before 0.4.0 such a `wait` silently ended the loop after one element.)
 
-The compiler-recognised selector **`doYielding:`** replaces `do:` for
-the case you need iteration with cooperative `wait`:
+When you would rather free the worker while waiting, the
+compiler-recognised selector **`doYielding:`** iterates in bytecode, so a
+`wait` inside it suspends the actor cooperatively:
 
 ```smalltalk
 "-- worked example: a Driver actor that fan-outs to its sensors --"
@@ -362,8 +366,8 @@ Driver >> readAllParallel
 **`doYielding:` only works on `SequenceableCollection`s** (Array,
 OrderedCollection, Interval, String) — collections that answer
 `at:` and `size`. Set, Dictionary and Bag still use the regular
-polymorphic `do:`; iteration over those is unchanged but cannot
-contain a `wait`.
+polymorphic `do:`, where a `wait` inside the block blocks the worker as
+described above.
 
 **Note (2026-05-24 update)**: `1 to: N do: [:i | body]` with a
 literal one-argument block is now compiler-inlined into a bytecode

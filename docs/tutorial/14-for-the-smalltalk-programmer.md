@@ -35,7 +35,9 @@ a rejection), `thenDo:` / `catch:` register callbacks, `Future new` plus
 **Cooperative yield.** A `wait` on a pending future *inside an actor method*
 suspends that actor cooperatively and releases its worker thread; the actor
 resumes when the future settles. This is what lets thousands of interdependent
-actors run on a small thread pool. A `wait` from the *main* thread (a script
+actors run on a small thread pool. (A `wait` inside a block that a primitive
+evaluates — `do:`, `collect:`, `ensure:`, … — keeps the worker instead,
+running other actors meanwhile; the results are the same.) A `wait` from the *main* thread (a script
 top level, the REPL) instead blocks that OS thread — the main thread is a
 synchronous client of the actor world.
 
