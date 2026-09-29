@@ -113,21 +113,23 @@ throughout the body.
 ### Where a method body ends
 
 A file has no browser to tell the compiler where one method stops, so protoST
-uses the layout. A method body ends at the first of:
+uses the layout. A method body ends, whether or not the last statement has
+a period, at the first of:
 
-- a **blank line** — whether or not the last statement has a period;
-- the next method declaration (`Account >> …`, `Account class >> …`), with or
-  without a period before it; a class declaration (`… subclass: …`) when the
-  statement before it ends with a period;
+- a **blank line**;
+- the next method declaration (`Account >> …`, `Account class >> …`);
 - an unindented line after the body's first statement: indent method bodies,
-  and start top-level statements at column 1;
-- the first `^` statement at the top level of the body (a `^` inside a block
-  does not end it).
+  and start top-level statements at column 1.
 
-So write each method without blank lines inside it, and leave a blank line
-between the last method and the top-level code that follows. A top-level
-statement written directly under a method, with no blank line in between,
-becomes part of that method's body and does not run at load time.
+Blank lines and indentation inside parentheses, brackets and braces do not
+count, and neither do they in the middle of an unfinished statement (after a
+binary operator, a keyword or `:=`). A `^` does not end the body: statements
+indented under it stay in the method as unreachable code.
+
+So write each method without blank lines between its statements, and start
+the top-level code that follows at column 1 (a blank line before it reads
+best). A statement written directly under a method and indented like the
+body becomes part of that method's body and does not run at load time.
 
 A method with no `^` answers `self`. Many methods in this tutorial end with
 `^ self` anyway, to make the intent visible:

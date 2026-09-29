@@ -30,7 +30,8 @@ message-passing object language.
 
 **Actor-native.** This is protoST's distinctive contribution and the part that
 is *not* standard Smalltalk. Any object can be promoted to an **actor** with a
-single message, `asActor`. Once promoted, every message sent to it runs
+single message, `asActor`. Once promoted, every message sent to it (except
+a few about the reference itself, such as `==` and `printString`) runs
 asynchronously, on a worker thread, and immediately returns a **future** — a
 placeholder for the eventual result. A cooperative scheduler runs thousands of
 actors on a small pool of OS threads. This is built into the language; it is

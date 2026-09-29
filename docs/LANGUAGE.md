@@ -441,21 +441,28 @@ so the two forms coexist freely. A class cannot however host both a
 unary `>> bar` and a call `>> bar(...)`: both register under attribute
 key `bar` and the second declaration overrides the first.
 
-A method body ends at the first of:
+Outside parentheses, brackets and braces, a method body ends, whether or not
+the last statement has a period (D33), at the first of:
 
-- a **blank line** — whether or not the last statement has a period (D33);
-- the start of the next method declaration (`Name >> …`, `Name class >> …`),
-  with or without a period before it; a class declaration (`… subclass: …`)
-  also ends it when the statement before it ends with a period;
+- a **blank line**;
+- the start of the next method declaration (`Name >> …`, `Name class >> …`);
 - an **unindented line** (a token at column 1) after the body's first
-  statement — method bodies are indented, top-level statements are not;
-- the first **top-level `^` statement**: anything after it is read as a new
-  top-level form. A `^` nested in a block does not end the body.
+  statement — method bodies are indented, top-level statements are not.
 
-A statement may not span a blank line outside parentheses, brackets or
-braces, so a method is written without blank lines inside it, and a
-top-level statement that follows a method needs a blank line before it. A
-method with no `^` returns `self`.
+These rules apply where a statement is complete. A statement that still
+needs its next part (after a binary operator, a keyword, `:=` or `^`)
+continues across blank lines and unindented lines: `^ 3 +`, a blank line,
+then `4` answers 7. A complete statement is not continued: `^ 3`, a blank
+line, then an indented `+ 4`, is a compile error, and so is an indented
+statement after a blank line. Inside parentheses, brackets and braces, blank
+lines and indentation do not matter. Statements indented under a `^` stay in
+the method as unreachable code; an unindented `^` right after a method body
+is a compile error. A whole method may be written on one line:
+`C >> m ^ 1. C new m.` defines `m` and then runs `C new m`.
+
+So a method is written without blank lines between its statements, and
+top-level code after a method starts at column 1. A method with no `^`
+returns `self`.
 
 ### 3.4 Statements
 
@@ -954,8 +961,11 @@ class's behaviour assembled incrementally at runtime from independent mixins.
 > constructed with. This is a deliberate, documented limitation
 > (`STATUS.md` D21): protoCore captures an object's parent chain at
 > construction and the object never re-reads it, so a class can only present a
-> new chain to *future* instances. (Methods installed directly on a class with
-> `>>` *are* seen by pre-existing instances — only new *parents* are not.)
+> new chain to *future* instances. `addBehavior:` rebuilds the class and
+> rebinds its name, so a pre-existing instance keeps the old class entirely:
+> it also misses methods installed or redefined with `>>` after the call, and
+> it is not `isKindOf:` the rebuilt class. (Before any `addBehavior:`, methods
+> installed with `>>` *are* seen by existing instances.)
 > Lifting this to "all instances" would require protoCore to make a
 > constructed object observe later parent mutations of its prototype, which it
 > deliberately does not do.
@@ -1320,7 +1330,7 @@ What the handler does determines whether — and how far — to unwind:
 | `ex resume` | as `resume: nil`. |
 | `ex retry` | the protected block is re-evaluated from the start. |
 | `ex pass` | the handler search resumes *outward* — the next matching enclosing handler is tried; if none, the default action runs. |
-| `ex outer` | intended: like `pass` but the search round-trips back. Currently an alias of `pass` (see [§14](#14-known-deviations)). |
+| `ex outer` | not implemented: behaves as `pass`. In Pharo, when the outer handler resumes, `outer` answers the resumption value inside the inner handler, which continues; in protoST the protected computation continues at the `signal` instead (D7, see [§14](#14-known-deviations)). |
 
 ```smalltalk
 "resume: — continue past the signal"
@@ -1820,9 +1830,9 @@ never its methods.
 ### 11.1 File-to-module mapping
 
 A `.st` file is a module. Loading a module executes its top-level forms in
-order; the resulting module object exposes the top-level names it defined
-(class names, primarily) as attributes. Names beginning with `_` are not
-exported.
+order; the resulting module object exposes the classes the file declares as
+attributes. Top-level variables are not exposed, and class names beginning
+with `_` are not exported.
 
 ### 11.2 `Import from:`
 
@@ -1955,7 +1965,8 @@ arithmetic, which gives the tower three properties for free:
   operation between an `Integer` and a `Fraction` stays exact:
   `(1/3) + (2/3)` → `1`.
 - **Transparent overflow promotion.** An integer result that exceeds the
-  54-bit inline `SmallInteger` range is automatically promoted to a heap
+  56-bit inline `SmallInteger` range (`SmallInteger maxVal` is 2^55 − 1)
+  is automatically promoted to a heap
   arbitrary-precision `LargeInteger` and stays exact — a `whileTrue:` loop
   computing `25!` yields the exact `15511210043330985984000000`, not a
   wrapped value. The boundary is invisible to the program.
@@ -2028,7 +2039,7 @@ Class-side **constants** are bound on `Float`: `Float pi`, `Float e`,
 > **Exact exponentiation and factorial.** `raisedTo:` with a non-negative
 > integer exponent, and `factorial`, are computed by exact repeated
 > multiplication, so each intermediate product promotes to a `LargeInteger`
-> the moment it leaves the 54-bit `SmallInteger` range — `2 raisedTo: 100` and
+> the moment it leaves the 56-bit `SmallInteger` range — `2 raisedTo: 100` and
 > `30 factorial` are exact arbitrary-precision integers, never an overflowed
 > `double`. A `Float` exponent (or a negative integer exponent) routes through
 > libm `pow` and answers a `Float`.
@@ -2113,7 +2124,7 @@ A shared mutable cell with optimistic-concurrency compare-and-swap — see
 | `resume`, `resume:` | handler action — resume the protected computation |
 | `retry` | handler action — re-run the protected block |
 | `retryUsing:` | handler action — replace the protected block with the argument and run it |
-| `pass`, `outer` | handler action — continue the handler search outward |
+| `pass`, `outer` | handler action — continue the handler search outward (`outer` is not implemented and behaves as `pass`, D7) |
 | `description` | the message text, or the class name when there is none |
 | `isResumable` | whether `resume:` is allowed (§8.6) |
 | `,` | an `ExceptionSet`: `on: ZeroDivide, KeyNotFound do: […]` |
@@ -2210,8 +2221,8 @@ commits. Summary as of 0.4.0:
   equal strings (D35); a few printed forms differ (D36); an actor that waits
   is not re-entrant (D37); recursion depth is bounded with a catchable error
   (D38); one runtime per process (D2); `addBehavior:` reaches future
-  instances only (D21); `outer` is an alias of `pass` (D7).
-- **Not implemented:** `thisContext` is reserved: using it is a compile error (D17); the
+  instances only (D21).
+- **Not implemented:** `outer` behaves as `pass` (D7); `thisContext` is reserved: using it is a compile error (D17); the
   metaclass hierarchy is thin (`x class class` works; there is no
   `Metaclass`/`ClassDescription` protocol beyond the reflective messages of
   §14 of the tutorial).

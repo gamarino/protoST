@@ -5,10 +5,12 @@
 ---
 
 This chapter is written for one reader: someone who already knows
-Smalltalk-80. The other thirteen chapters teach the language; this one is a
-precise, honest catalogue of every way protoST is **not** the dialect you know.
-Read it and you will know exactly what to expect — what is added, what is
-missing, what is changed, and what is currently broken.
+Smalltalk-80. The other thirteen chapters teach the language; this one
+catalogues the ways protoST is **not** the dialect you know: what is added,
+what is missing, what is changed, and what is currently broken. Every entry
+was checked against the 0.4.0 build. The catalogue covers what the 0.4.0
+audit and the probes behind this chapter found; it is not a proof that
+nothing else differs.
 
 The headline departures are the **actor model**, **futures**, and **cooperative
 yield** — protoST's reason to exist. After those come the **object-model
@@ -26,7 +28,14 @@ actor proxy. A message sent to the proxy is enqueued on a mailbox, processed
 one-at-a-time by a worker thread, and the send returns a `Future`
 *immediately* — it does not block. Different actors run in parallel on a worker
 pool. The single-message-at-a-time rule serialises access to the wrapped
-object's state, so you write no locks.
+object's state, so you write no locks. The exception is a message about the
+reference itself, which the proxy answers at once without queueing it:
+identity and equality (`==`, `~~`, `=`, `~=`, `hash`, `identityHash`,
+`yourself`), the nil tests (`isNil`, `notNil`, `ifNil:` and its variants),
+`isActor`, and printing (`printString`, `printOn:`, `displayString`,
+`printNl`, `displayNl`), which shows `a Counter (actor)` without running the
+object's own `printOn:`. Every other message, `class` included, answers a
+`Future`.
 
 **`Future` is a first-class promise.** `wait` blocks for the value (re-raising
 a rejection), `thenDo:` / `catch:` register callbacks, `Future new` plus
@@ -78,11 +87,16 @@ aMixin` composes a mixin into a class *at runtime*, no recompilation.
 `addParent:` is a lower-level alias. There is no `removeBehavior:`.
 
 [Chapter 11](11-advanced-object-model.md) covers both. Two things a Smalltalker
-should note: the object model *presents* as classes (`subclass:`, `>>`,
-`super`) but *is* prototype-chain delegation underneath — the metaclass is
-thin (see §14.4) — and the mixin features are genuine multi-parent
-inheritance, not the method-copying "trait" simulation a single-inheritance
-Smalltalk would use.
+should note. The object model *presents* as classes (`subclass:`, `>>`,
+`super`) but *is* prototype-chain delegation underneath; the metaclass is
+thin (see §14.4). And `uses:` is not Pharo's traits. A Pharo trait is a
+composition mechanism: a class composes traits with a trait expression; a
+method that two composed traits both define is marked as a conflict (calling
+it signals an error) until the class resolves it; and the expression can
+alias a method under another name (`@`) or exclude it (`-`). protoST's `uses:` adds the listed classes as further
+parents of the class: a message is looked up in them in the order given
+above, the first definition found wins, and there is no conflict report,
+aliasing or exclusion.
 
 ## 14.3 Modules and virtual environments
 
@@ -90,7 +104,8 @@ Standard Smalltalk lives in an *image* — a persistent world of objects you gro
 and snapshot. protoST has **no image**. It is strictly file-based:
 
 - A `.st` **file is a module**. Loading it runs its top-level forms; the module
-  object exposes the non-`_`-prefixed names it defined.
+  object exposes the classes the file declares (except names that begin with
+  `_`). Top-level variables of the module are not exposed.
 - **`Import from: 'name'`** loads a module (cached) and answers it; you read
   its classes with unary sends (`m Counter`).
 - A Python-style **venv** (`protost venv create` / `activate` / `info`)
@@ -119,13 +134,33 @@ the body (`Name class >> selector` for the class side).
 
 ### Layout ends a method body — D33
 
-Without chunk separators, the layout is the separator. The body of a method
-ends at the first of: a blank line; the next method declaration (`Name >>`,
-`Name class >>`); an unindented line after the body's first statement — each
-whether or not the last statement has a period. So indent method bodies
-(as a browser would), write them without blank lines inside, and start
-top-level statements at column 1. A statement may not span a blank line
-outside parentheses, brackets or braces.
+Without chunk separators, the layout is the separator. Outside parentheses,
+brackets and braces, the body of a method ends, whether or not the last
+statement has a period, at the first of:
+
+- a blank line;
+- the next method declaration (`Name >>`, `Name class >>`);
+- an unindented line (a token at column 1) after the body's first statement.
+
+So indent method bodies (as a browser would), write them without blank lines
+between statements, and start top-level statements at column 1. The details:
+
+- These rules apply where a statement is complete. A statement that still
+  needs its next part (after a binary operator, a keyword, `:=` or `^`)
+  continues across blank lines and unindented lines, as in Pharo:
+  `^ 3 +`, a blank line, then `4` answers 7. A statement that is already
+  complete is *not* continued: `^ 3`, a blank line, then an indented
+  `+ 4` or `factorial`, is a compile error rather than `^ 3 + 4`. So is an
+  indented statement after a blank line; the message says the blank line
+  ended the method.
+- Inside parentheses, brackets and braces, blank lines and indentation do
+  not matter: a block may contain blank lines and its `]` may be at
+  column 1.
+- Statements indented under a `^` stay in the method, as unreachable code
+  (as in Pharo); an unindented `^` right after a method body is a compile
+  error.
+- A whole method may be written on one line, followed by top-level code:
+  `C >> m ^ 1. C new m.` defines `m` and answers 1.
 
 ### A script shows the value of its last statement — D12, D12b
 
@@ -137,26 +172,36 @@ Top-level `| a b |` temporaries are accepted, as in a workspace.
 
 ### Strings are immutable — D34
 
-`'abc' copy at: 1 put: $x` signals `ModificationForbidden`. protoCore's
-collections are immutable values shared by structure, which is what makes
-passing them to actors on other threads safe without copies or locks. Build
-strings with `WriteStream on: String new` (or `String new writeStream`), `,`,
-`copyReplaceAll:with:`, `copyReplacing:with:` or `String new: 5 withAll: $x`.
+`'abc' copy at: 1 put: $x` signals `ModificationForbidden`. A protoST String
+is a protoCore `ProtoString` itself: a rope, a value with no in-place update
+(protoCore's `setAt` on it answers a new string). An `Array` or an
+`OrderedCollection` is different: it is a mutable object that holds an
+immutable structure, so `at:put:` and `add:` change it by installing a new
+structure. A String has no such holder, so `at:put:` has nothing to change.
+Build strings with `WriteStream on: String new` (or `String new
+writeStream`), `,`, `copyReplaceAll:with:`, `copyReplacing:with:` or
+`String new: 5 withAll: $x`.
 
 ### Short symbols are strings — D35
 
-A Symbol of 6 bytes or fewer is represented exactly like the equal String:
-`#foo == 'foo'` is `true` and `#at: printString` is `'at:'`. Longer symbols are
-distinct objects. Equality, hashing and dictionary keys behave as you expect
-(in Smalltalk a Symbol is equal to the equal String too); only identity tests
-and the printed form differ.
+A Symbol of 6 bytes or fewer is represented exactly like the equal String,
+so nothing can tell the two apart: `#foo == 'foo'` is `true`, `#foo class`
+is `String`, `#foo isSymbol` and `#foo isKindOf: Symbol` are `false`, and
+`#at: printString` is `'at:'`. Symbols of 7 bytes or more are distinct
+objects of class `Symbol` (`#foobarbaz isSymbol` is `true`).
+
+Equality also differs from Pharo. In Pharo `Symbol>>=` is identity, so
+`#foo = 'foo'` is `false` while `'foo' = #foo` is `true`. protoST answers
+`true` both ways, for short and long symbols alike. Hashing and dictionary
+keys follow protoST's `=`.
 
 ### A few names and printed forms — D36
 
 `aClass name` answers a String. Large integers have one class, `LargeInteger`
 (Pharo splits it by sign). `Date today printString` is ISO 8601
-(`2026-09-29`), `[…] timeToRun` answers a `Duration` printed as Pharo prints
-it (`0:00:00:01.500`).
+(`2026-09-29`). `[…] timeToRun` answers a `Duration`, which protoST prints
+as days, hours, minutes and seconds with milliseconds: `(Duration
+milliseconds: 1500) printString` is `'0:00:00:01.500'`.
 
 ### The metaclass is thin
 
@@ -166,16 +211,51 @@ variables and class-instance variables (`Foo class instanceVariableNames:
 hierarchy to program against: the reflective protocol is the one listed in
 §14.6 (`instVarNames`, `selectors`, `canUnderstand:`, `subclasses`, …).
 
+### Classes and syntax not present
+
+These Smalltalk-80 / Pharo names are not defined in 0.4.0 (a reference to
+one is an `undefined global` error), and these syntax forms are not
+accepted:
+
+- **Processes:** `Process`, `Processor`, `Semaphore`, `Mutex`,
+  `SharedQueue`, `Delay`, and `[ … ] fork` (`doesNotUnderstand: fork`).
+  Concurrency is actors and futures (§14.1).
+- **Collections:** `IdentityDictionary`, `IdentitySet`, `ByteArray` and the
+  byte-array literal `#[1 2 3]` (a parse error).
+- **Numbers:** `ScaledDecimal` and its literal `1.5s2` (read as `1.5 s2`, a
+  `doesNotUnderstand:`).
+- **Abstract classes:** `Magnitude`, `ArrayedCollection`, `Stream`,
+  `PositionableStream`, `ReadWriteStream`. `ReadStream` and `WriteStream`
+  exist and are subclasses of `Object`; `3 class superclass superclass` is
+  `Number`.
+- **The metaclass hierarchy:** `Metaclass`, `Class`, `ClassDescription` and
+  `Behavior` are not classes you can name.
+- **Booleans:** `True` and `False`; `true class` and `false class` are both
+  `Boolean`.
+
 ### `thisContext` is reserved — D17
 
 It is reserved: using it is a compile error. Use the error traces
 (`at Class>>selector (file:line)`) and the debugger ([Chapter 12](12-tooling.md)).
 
-### `outer` is an alias of `pass` — D7
+### `outer` is not implemented; it behaves as `pass` — D7
 
-`outer` continues the handler search outward and does not return to the inner
-handler. `pass`, `retry`, `retryUsing:`, `resume:`, `return:` and `signal`
-behave as in Pharo.
+This is a missing feature, not a design choice. In Pharo, when the outer
+handler resumes the exception, `outer` answers the resumption value *inside
+the inner handler*, which then continues. In protoST `outer` does what `pass`
+does: the resumption continues the protected block at the `signal`, and the
+rest of the inner handler never runs. For example,
+
+```smalltalk
+[[Warning signal: 'w'. 'body']
+    on: Warning do: [:e | e outer printNl. 'inner continued']]
+  on: Warning do: [:e | e resume: 5]     "protoST => 'body'"
+```
+
+in Pharo prints `5` and answers `'inner continued'`; protoST prints nothing
+and answers `'body'`. When the outer handler returns instead of resuming
+(`return:`, or falling off its end), both answer the same. `pass`, `retry`,
+`retryUsing:`, `resume:`, `return:` and `signal` behave as in Pharo.
 
 ### An actor that waits is not re-entrant — D37
 
@@ -200,7 +280,9 @@ with a catchable `Error` ("stack depth exceeded"); `ensure:` blocks still run.
   false); the collection protocol it answers is defined on `String` itself,
   so a method added to `Collection` does not reach strings.
 - Symbols dispatch to `String`: a method added to `Symbol` is never found;
-  define it on `String` and test `self isSymbol` if it matters.
+  define it on `String`. Such a method cannot tell a symbol of 6 bytes or
+  fewer from the equal string (`isSymbol` is `false` for it, D35); only
+  longer symbols answer `isSymbol` with `true`.
 - `collect:` / `select:` on a user subclass of `OrderedCollection` answer an
   `OrderedCollection`, not the subclass.
 - The deadlock check follows the futures actors answer; a cycle that goes
@@ -218,10 +300,16 @@ constructs exactly one, so this matters only when you embed protoST.
 
 ### `addBehavior:` affects future instances only — D21
 
-`aClass addBehavior: aMixin` reaches the class and the instances created after
-the call; existing instances keep their parent chain (protoCore fixes it at
-construction). Methods installed with `>>` are seen by existing instances.
-Call `addBehavior:` during setup. ([Chapter 11](11-advanced-object-model.md).)
+`aClass addBehavior: aMixin` rebuilds the class with the mixin as a further
+parent and rebinds the class name to the rebuilt class, so the name and the
+instances created after the call see the mixin. Instances that existed before
+the call keep the old class entirely (protoCore fixes an object's parent
+chain at construction): they do not get the mixin's methods, they do not see
+methods installed or redefined with `>>` after the call, and they are not
+`isKindOf:` the rebuilt class, although they still print its name. Before an
+`addBehavior:`, methods installed with `>>` do reach existing instances.
+Call `addBehavior:` during setup, before creating instances.
+([Chapter 11](11-advanced-object-model.md).)
 
 ## 14.5 What was different before 0.4.0 and no longer is
 
@@ -269,7 +357,11 @@ Smalltalk programmer reaches for:
   `Dictionary` (`at:ifAbsent:`, `at:ifPresent:`, `at:ifAbsentPut:`,
   `keysAndValuesDo:`, `collect:` / `select:` answering Dictionaries),
   `Interval` (`1 to: 10 by: 2`), `Association`. A `Collection` subclass that
-  defines `do:` gets all of this.
+  defines only `do:` gets the enumeration protocol (`inject:into:`,
+  `detect:`, `anySatisfy:`, `detectMax:`, `sum`, `includes:`, `size`,
+  `asArray`, `asSortedCollection:`); its `collect:`, `select:` and `reject:`
+  answer an `Array`. `groupedBy:` builds its groups with the receiver's
+  species, so it also needs `add:`.
 - **Strings and streams:** `,`, `copyFrom:to:`, `indexOf:`, `occurrencesOf:`,
   `substrings:`, `lines`, `trimBoth`, `asUppercase`, `format:`, `beginsWith:`,
   `includesSubstring:`, `asNumber`, `asSymbol`; `ReadStream` (`next`, `peek`,
@@ -312,12 +404,11 @@ Account >> withdraw: amount
       ifFalse: [ balance := balance - amount. balance ].
 ```
 
-One rule of the file syntax applies here: the **first *top-level* `^`
-terminates the method body**, like a blank line does (see "Where a method body
-ends" in [Chapter 5](05-classes-and-methods.md) §5.3). A `^` *nested in a
-block* — as in the guard clause above — does not terminate the method; only a
-`^` written as a top-level statement does, so anything written after it in
-the same method is read as top-level code.
+A `^` does not end the method body by itself (see "Where a method body ends"
+in [Chapter 5](05-classes-and-methods.md) §5.3 and D33 in §14.4). Statements
+indented under a top-level `^` stay in the method as unreachable code, as in
+Pharo; the body ends at the next blank line, method declaration or unindented
+line.
 
 ## 14.8 What is unchanged — the Smalltalk you keep
 
@@ -333,9 +424,11 @@ intact and faithful. You keep, unchanged:
   from any nesting depth. Standard semantics.
 - The exception protocol — `signal` / `on:do:` / `ensure:` / `ifCurtailed:`,
   and the handler actions `return:` / `retry` / `resume:` / `pass`.
-- The collection hierarchy and its uniform iteration protocol — `do:`,
-  `collect:`, `select:`, `reject:`, `detect:`, `inject:into:`, and the rest.
-- `super`, instance variables, the prototype-presented-as-class object model.
+- The collection protocol and its uniform iteration messages — `do:`,
+  `collect:`, `select:`, `reject:`, `detect:`, `inject:into:`, and the rest
+  (the class hierarchy behind it differs: see "Classes and syntax not
+  present" in §14.4).
+- `super` and instance variables.
 
 If you skim Chapters 2–9 you will recognise nearly everything. The genuinely
 new material is Chapters 10 (actors/futures) and 11 (`uses:` / `addBehavior:`),
@@ -397,18 +490,19 @@ For full grammar, see `LANGUAGE.md` §3.5.1 and §3.3.
   blank line ends a method body (D33); a script shows its last value (D12,
   D12b); strings are immutable (D34); short symbols are represented as strings
   (D35); a few printed forms differ (D36); a thin metaclass; an actor that
-  waits is not re-entrant (D37); bounded recursion depth (D38); `outer`
-  aliases `pass` (D7); single runtime per process (D2); `addBehavior:` affects
-  future instances only (D21).
-- **Not implemented:** `thisContext` is reserved (D17).
+  waits is not re-entrant (D37); bounded recursion depth (D38); single
+  runtime per process (D2); `addBehavior:` affects future instances only
+  (D21).
+- **Not implemented:** `thisContext` is reserved (D17); `outer` behaves as
+  `pass` (D7); the classes and syntax listed in "Classes and syntax not
+  present" (§14.4).
 - **As in Pharo since 0.4.0 (§14.5):** `new` sends `initialize`; `Transcript`;
   `Character`; exact `Fraction` division with floored `//` and `\\`; class
   variables and class-instance variables; `doesNotUnderstand:` overrides;
   per-activation block variables; exceptions that keep their class; top-level
   `| temps |`.
 - **Unchanged:** the syntax, the message model, blocks and closures, non-local
-  return, the exception protocol, the collection protocol, `super`, the
-  object model.
+  return, the exception protocol, the collection protocol, `super`.
 - `docs/STATUS.md` is the live, build-verified tracker — consult it when in
   doubt.
 

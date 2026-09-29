@@ -247,10 +247,12 @@ early instance: does not understand bonus || bonus granted
 The reason is in the kernel: protoCore captures an object's *parent chain*
 into the object at construction, and the object never re-reads it.
 `addBehavior:` produces a new chain, and only *future* instances copy it. This
-is recorded as intentional deviation D21 in `docs/STATUS.md`. (One subtlety:
-this limit applies only to new *parents*. A method installed directly onto a
-class with `>>` *is* seen by pre-existing instances — it is only new parents
-that pre-existing instances miss.)
+is recorded as intentional deviation D21 in `docs/STATUS.md`. More exactly,
+`addBehavior:` rebuilds the class and rebinds its name to the rebuilt class,
+and a pre-existing instance keeps the old class entirely: it also misses the
+methods installed or redefined with `>>` after the call, and it is not
+`isKindOf:` the rebuilt class. (Before any `addBehavior:`, a method installed
+with `>>` *is* seen by existing instances.)
 
 There is no `removeBehavior:` — protoCore's parent API offers no clean removal
 of a baked-in parent, so it is out of scope.
