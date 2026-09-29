@@ -37,6 +37,13 @@ namespace protoST {
 // answers the Float `0.5`. `//` is an explicit integer-division alias and
 // `\\` is the modulo (remainder). This is documented in LANGUAGE.md §12.2.
 
+// Defined in object_prims.cpp: run a method by name, as a send does.
+const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* recv,
+                                      const proto::ProtoString* selector,
+                                      const proto::ProtoObject* const* args, int argc,
+                                      bool* understood);
+
 namespace {
 
 // Reject a non-numeric argument with a clear message instead of letting
@@ -49,12 +56,35 @@ void requireNumber(proto::ProtoContext* ctx, const proto::ProtoObject* v,
     }
 }
 
+// Double dispatch for a number that is not native (a Fraction, a Point used as
+// a number): the argument is asked to adapt the native receiver and perform
+// the operation (Pharo's adaptToNumber:andSend:). Answers nullptr when the
+// argument does not understand it, so the caller reports "not a number".
+const proto::ProtoObject* adaptArgument(STRuntime& rt, proto::ProtoContext* ctx,
+                                        const proto::ProtoObject* r,
+                                        const proto::ProtoObject* arg,
+                                        const char* selector) {
+    if (!arg || arg == PROTO_NONE || arg == PROTO_TRUE || arg == PROTO_FALSE
+        || arg->asString(ctx))
+        return nullptr;
+    bool understood = false;
+    const proto::ProtoObject* args2[2] = {
+        r, reinterpret_cast<const proto::ProtoObject*>(proto::ProtoString::createSymbol(ctx, selector)) };
+    const proto::ProtoObject* res = sendDynamic(
+        rt, ctx, arg, proto::ProtoString::createSymbol(ctx, "adaptToNumber:andSend:"),
+        args2, 2, &understood);
+    return understood ? (res ? res : PROTO_NONE) : nullptr;
+}
+
 #define DEFBIN(NAME, METHOD, SELECTOR)                                            \
-const proto::ProtoObject* prim_##NAME(STRuntime&, proto::ProtoContext* ctx,        \
+const proto::ProtoObject* prim_##NAME(STRuntime& rt, proto::ProtoContext* ctx,     \
                                        const proto::ProtoObject* r,                \
                                        const proto::ProtoObject* const* a,         \
                                        int argc) {                                 \
     if (argc != 1) throw std::runtime_error(SELECTOR " expects 1 arg");            \
+    if (!isNumber(ctx, a[0]))                                                      \
+        if (const proto::ProtoObject* adapted = adaptArgument(rt, ctx, r, a[0], SELECTOR)) \
+            return adapted;                                                        \
     requireNumber(ctx, a[0], SELECTOR);                                            \
     return r->METHOD(ctx, a[0]);                                                   \
 }
@@ -82,10 +112,13 @@ static void checkDivisor(proto::ProtoContext* ctx, const proto::ProtoObject* d, 
 }
 
 // `/` delegates to protoCore `divide`.
-const proto::ProtoObject* prim_NumDiv(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_NumDiv(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* r,
                                        const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw std::runtime_error("/ expects 1 arg");
+    if (!isNumber(ctx, a[0]))
+        if (const proto::ProtoObject* adapted = adaptArgument(rt, ctx, r, a[0], "/"))
+            return adapted;
     checkDivisor(ctx, a[0], "/");
     return r->divide(ctx, a[0]);
 }
@@ -163,9 +196,12 @@ const proto::ProtoObject* prim_NumRem(STRuntime&, proto::ProtoContext* ctx,
 // protoCore's `compare` is a total order that reports a NaN pair as equal; it
 // must not implement these operators.
 #define DEFCMP(NAME, COND, SELECTOR)                                              \
-const proto::ProtoObject* prim_##NAME(STRuntime&, proto::ProtoContext* ctx,        \
+const proto::ProtoObject* prim_##NAME(STRuntime& rt, proto::ProtoContext* ctx,     \
                                        const proto::ProtoObject* r,                \
                                        const proto::ProtoObject* const* a, int) {   \
+    if (!isNumber(ctx, a[0]))                                                      \
+        if (const proto::ProtoObject* adapted = adaptArgument(rt, ctx, r, a[0], SELECTOR)) \
+            return adapted;                                                        \
     requireNumber(ctx, a[0], SELECTOR);                                            \
     const std::partial_ordering c = r->partialCompare(ctx, a[0]);                  \
     return (COND) ? PROTO_TRUE : PROTO_FALSE;                                       \
@@ -179,16 +215,22 @@ DEFCMP(NumGe, c >= 0, ">=")
 // A non-numeric argument is simply unequal rather than an error, matching the
 // catch-all `Object>>=` it overrides. IEEE 754: a NaN is equal to nothing,
 // itself included (`Float nan = Float nan` is false, `~=` true).
-const proto::ProtoObject* prim_NumEq(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_NumEq(STRuntime& rt, proto::ProtoContext* ctx,
                                       const proto::ProtoObject* r,
                                       const proto::ProtoObject* const* a, int) {
-    if (!isNumber(ctx, a[0])) return PROTO_FALSE;
+    if (!isNumber(ctx, a[0])) {
+        const proto::ProtoObject* adapted = adaptArgument(rt, ctx, r, a[0], "=");
+        return adapted == PROTO_TRUE ? PROTO_TRUE : PROTO_FALSE;
+    }
     return (r->partialCompare(ctx, a[0]) == 0) ? PROTO_TRUE : PROTO_FALSE;
 }
-const proto::ProtoObject* prim_NumNe(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_NumNe(STRuntime& rt, proto::ProtoContext* ctx,
                                       const proto::ProtoObject* r,
                                       const proto::ProtoObject* const* a, int) {
-    if (!isNumber(ctx, a[0])) return PROTO_TRUE;
+    if (!isNumber(ctx, a[0])) {
+        const proto::ProtoObject* adapted = adaptArgument(rt, ctx, r, a[0], "=");
+        return adapted == PROTO_TRUE ? PROTO_FALSE : PROTO_TRUE;
+    }
     return (r->partialCompare(ctx, a[0]) != 0) ? PROTO_TRUE : PROTO_FALSE;
 }
 

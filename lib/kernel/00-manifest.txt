@@ -2,6 +2,7 @@ object.st
 character.st
 string.st
 number.st
+fraction.st
 collection.st
 exception.st
 stream.st
