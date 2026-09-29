@@ -2030,8 +2030,7 @@ commits. Summary as of 0.4.0:
   metaclass hierarchy is thin (`x class class` works; there is no
   `Metaclass`/`ClassDescription` protocol beyond the reflective messages of
   §14 of the tutorial).
-- **Open bugs:** S19 (an intermittent hang under concurrent first calls) and
-  S3 (see `STATUS.md`).
+- **Open bugs:** S3 (see `STATUS.md`); S19 was closed in 0.4.0.
 
 Closed before 0.4.0 and now as in Smalltalk-80: `new` sends `initialize`
 (D4), `Transcript` (D10), class variables assigned from instance methods (D19),
