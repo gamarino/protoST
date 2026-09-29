@@ -43,9 +43,11 @@ The findings that block presentation are listed in §3 as work items.
 
 ## 3. Work items
 
-Priority **P0** = must be done by the Thursday gate; **P1** = should be done,
-with an explicit fallback if not; **OUT** = documented in the catalogue, not
-implemented.
+Priority **P0** = must be done by the Thursday gate; **OUT** = documented in
+the catalogue, not implemented. Direction of 2026-09-28: implement the missing
+protocol rather than declare it pending — the catalogue of pending items must be
+short, so everything in §3.1–§3.3 is P0 and OUT is kept to what is genuinely
+out of scope for a file-based runtime (§5).
 
 ### 3.1 Stage safety (P0)
 
@@ -76,7 +78,7 @@ implemented.
 | W12 | `\\` and `//` truncate (`-7 \\ 2` = −1, `-7 // 2` = −3) | Smalltalk-80 floor semantics (`-7 // 2` = −4, `-7 \\ 2` = 1); truncating `rem:` and `quo:` added |
 | W13 | Internal names leak (`true and: false` → "block missing `__bc_ptr__`"); unterminated comment accepted silently | `and:`/`or:` accept a non-block argument or report a Smalltalk-level error; unterminated comment is a syntax error |
 
-### 3.3 Everyday protocol (P1)
+### 3.3 Everyday protocol (P0)
 
 Implemented in the standard library where possible (Smalltalk source), in
 primitives only when needed. Each gets a conformance test.
@@ -102,12 +104,21 @@ primitives only when needed. Each gets a conformance test.
   `ex description`.
 - Globals: `Transcript` (`show:`, `cr`, `tab`, `space`, `print:`,
   `display:`) writing to stdout; `Smalltalk` only if trivial (else OUT).
-- `new` sends `initialize` (closes D4) — P1 with a full test sweep; fallback:
-  stays a documented deviation.
-- Fractions: minimal `Fraction` (exact `/`, arithmetic, comparison, printing,
-  `asFloat`, `numerator`/`denominator`) — P1; fallback at the Thursday gate:
-  `/` keeps truncating and heads the deviation catalogue.
-- Runtime errors report file:line and the method (`Class>>selector`) — P1.
+- `new` sends `initialize` (closes D4), with a full test sweep.
+- Fractions: `Fraction` with exact `/` on integers, arithmetic, comparison,
+  printing, `asFloat`, `numerator`/`denominator`, reduction, mixed arithmetic
+  with Integer and Float.
+- Runtime errors report file:line and the method (`Class>>selector`), and an
+  uncaught error prints the chain of active methods (a short stack trace).
+- `Object >> doesNotUnderstand:` overridable by user classes (proxies,
+  forwarding), with `aMessage selector` / `arguments`.
+- `@` and `Point` (x, y, arithmetic, printing), `Association` (`->`),
+  `Character` class (`$a isVowel`, `asUppercase`, `value`, `asCharacter`),
+  `Smalltalk at:` / `at:put:` for globals, `Symbol` protocol (`asString`,
+  `size`, comparison), `Interval printing`, `Bag` only if trivially derived
+  from Dictionary.
+- `Future` combinators documented in README (`whenAll:`, `whenAny:`, and the
+  `&` / `|` forms) implemented, since the README already promised them.
 
 ### 3.4 Evidence and documentation (P0)
 
@@ -116,6 +127,11 @@ primitives only when needed. Each gets a conformance test.
   actor-native runtime on protoCore; a demonstrator and a base for digital
   twins; explicitly *not* a Smalltalk-80 implementation or a replacement for an
   image environment.
+- **Documentation as solid as possible**: every chapter of the tutorial and
+  LANGUAGE re-run end to end (every snippet extracted and executed by a script
+  that is added to CTest, so the docs cannot drift again); README reorganised
+  around what a Smalltalker can do today; each claim linked to its test or
+  report.
 - **One deviation catalogue** (tutorial ch14, linked from README and
   LANGUAGE §14): every difference from Smalltalk-80 still present after §3.1–3.3,
   including OUT items (no image, no IDE, no metaclass tower, no `thisContext`,
@@ -175,13 +191,14 @@ Working language Spanish. Materials live in `docs/talks/2026-10-15-fas/`.
 - Builds are sequential, never `-j` (DEV12).
 - **Thursday gate**: fresh adversarial re-audit by independent agents with the
   same three briefs; any silent wrong result or stage-safety finding blocks
-  the release; P1 items not done fall back as stated.
+  the release; any §3.3 item still missing is reported to the author with the
+  reason, not silently moved to the catalogue.
 - **Saturday**: release 0.4.0 (tag, `.deb`), final re-run of every demo 20×,
   talk materials complete, handoff checklist for the author.
 
 ## 5. Out of scope
 
-Image-based development, an IDE/browser, the metaclass tower beyond `class`,
-`thisContext`, `become:`, a full Fraction/ScaledDecimal tower beyond the P1
-minimum, performance work beyond S1–S3, network/HTTP libraries not already
-present.
+Image-based development and an IDE/browser (protoST is file-based by design),
+the full metaclass tower beyond `class` / `class class`, `thisContext`,
+`become:`, ScaledDecimal, performance work beyond S1–S3, network/HTTP
+libraries not already present.
