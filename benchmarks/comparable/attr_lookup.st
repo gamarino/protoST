@@ -9,6 +9,7 @@ FastObject >> setA: x b: y c: z
   ^ self.
 
 FastObject >> runBench: n
+  | total |
   total := 0.
   1 to: n do: [ :i |
     total := total + a.

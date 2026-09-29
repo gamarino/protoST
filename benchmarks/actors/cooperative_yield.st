@@ -15,6 +15,7 @@
 Object subclass: #Producer.
 
 Producer >> compute: n
+  | total |
   total := 0.
   1 to: n do: [ :i | total := total + 1 ].
   ^ total.

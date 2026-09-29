@@ -136,6 +136,9 @@ ast::NodePtr Parser::parseExpression() {
     if (current_.kind == TokenKind::Identifier && lexer_.peek().kind == TokenKind::Assign) {
         Token id = current_; advance();   // identifier
         advance();                         // ':='
+        if (id.text == "self" || id.text == "super" || id.text == "thisContext"
+            || id.text == "true" || id.text == "false" || id.text == "nil")
+            error(id, "cannot assign to the pseudo-variable '" + id.text + "'");
         auto rhs = parseExpression();
         auto n = ast::makeNode(ast::NodeKind::Assignment, id.line, id.column);
         n->text = id.text;

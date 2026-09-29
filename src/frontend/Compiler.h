@@ -68,6 +68,9 @@ private:
         // AST node pointer for this scope (nullptr for module, Block/MethodDecl
         // ast::Node* otherwise). Used to look up capturedByScope[node].
         const ast::Node* astNode = nullptr;
+        // The scope's arguments (a subset of `slots`): read-only, as in
+        // Smalltalk.
+        std::unordered_set<std::string> args;
     };
 
     // A deque, not a vector: emission recurses while holding a reference to
@@ -77,6 +80,12 @@ private:
     // never invalidate references to the other elements, whereas a vector
     // reallocation left that reference dangling (D29).
     static bool isMethodScope(const Scope& s);
+    // Compile errors for assignments Smalltalk forbids: to a method or block
+    // argument (including an inlined to:do: loop variable). Returns true when
+    // an error was reported.
+    bool reportArgumentAssignment(const std::string& name);
+    // Loop variables of the to:do: loops being inlined, innermost last.
+    std::vector<std::string> inlinedLoopArgs_;
     std::deque<Scope> scopes_;
     std::vector<std::string> errors_;
     ScopeAnalysis analysis_;

@@ -1,5 +1,8 @@
 #include "Compiler.h"
 
+#include <algorithm>
+#include <cctype>
+
 namespace protoST {
 using namespace ast;
 
@@ -336,12 +339,33 @@ void Compiler::collectClasses(const Node& module) {
         const size_t ivCount = static_cast<size_t>(cd.intValue);
         const size_t ivEnd   = 1 + ivCount;
         for (size_t i = 1; i < ivEnd && i < cd.stringList.size(); ++i) {
-            info.instVarNames.push_back(cd.stringList[i]);
+            const std::string& iv = cd.stringList[i];
+            if (std::find(info.instVarNames.begin(), info.instVarNames.end(), iv)
+                != info.instVarNames.end())
+                error("instance variable '" + iv + "' is declared twice in " + info.name);
+            info.instVarNames.push_back(iv);
         }
         for (size_t i = ivEnd; i < cd.stringList.size(); ++i) {
             info.classVarNames.push_back(cd.stringList[i]);
         }
         classes_[info.name] = std::move(info);
+    }
+    // A subclass may not redeclare an instance variable it inherits (as in
+    // Smalltalk): both would name the same slot of the object.
+    for (const auto& [name, info] : classes_) {
+        std::unordered_set<std::string> seen;
+        std::string sup = info.superclassName;
+        while (!sup.empty() && !seen.count(sup)) {
+            seen.insert(sup);
+            auto it = classes_.find(sup);
+            if (it == classes_.end()) break;
+            for (const auto& iv : info.instVarNames)
+                if (std::find(it->second.instVarNames.begin(), it->second.instVarNames.end(), iv)
+                    != it->second.instVarNames.end())
+                    error("instance variable '" + iv + "' of " + name
+                          + " is already defined in its superclass " + sup);
+            sup = it->second.superclassName;
+        }
     }
 }
 
@@ -572,6 +596,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             // copies it into the captured dict. Declaring it unconditionally
             // keeps slot numbering stable for the copy-in PUSH_LOCAL.
             declareLocal(n.stringList[1 + i]);             // slots 1..nArgs
+            scopes_.back().args.insert(n.stringList[1 + i]);
         }
         for (size_t i = static_cast<size_t>(1 + nArgs); i < n.stringList.size(); ++i) {
             declareLocal(n.stringList[i]);                 // method locals
@@ -713,6 +738,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             declareLocal(n.stringList[1 + i]);             // slots 1..nArgs
                                                            // (pos first,
                                                            //  then named)
+            scopes_.back().args.insert(n.stringList[1 + i]);
         }
         // User locals — start at index 1 + nArgs in stringList.
         for (size_t i = static_cast<size_t>(1 + nArgs); i < n.stringList.size(); ++i) {
@@ -868,6 +894,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         // In both cases we DUP after evaluating the RHS so the assigned value
         // remains on the stack for the top-level POP separator (or RETURN_TOP,
         // when it is the last statement).
+        if (reportArgumentAssignment(n.text)) return;
         if (isCaptured(n.text)) {
             if (reportUndeclaredInMethod(n.text)) return;
             emitExpr(m, *n.children[0]);
@@ -1013,7 +1040,19 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             // F4-U3: fall back to the global namespace.
             // ST-80 semantics: free identifiers in expressions resolve through
             // the scope chain, then globals. A failed runtime lookup will
-            // throw "undefined global: X" with the actual name.
+            // throw "undefined global: X" with the actual name. Inside a method
+            // of a script, a lowercase name that nothing declares is a typo or
+            // a missing temporary (globals are capitalised; file-level
+            // variables are not visible in methods): report it now instead of
+            // failing when the method first runs. The REPL keeps the runtime
+            // lookup, since its session variables are lowercase globals.
+            if (!replMode_ && !currentMethodClass_.empty() && !n.text.empty()
+                && std::islower(static_cast<unsigned char>(n.text[0]))) {
+                error("undeclared variable '" + n.text + "' in " + currentMethodClass_
+                      + " (line " + std::to_string(currentLine_) + ")");
+                m.emit(Op::PUSH_NIL, 0, currentLine_);
+                return;
+            }
             auto symIdx = m.internSymbol(n.text);
             m.emitWide(Op::PUSH_GLOBAL, static_cast<unsigned int>(symIdx), currentLine_);
             return;
@@ -1023,6 +1062,7 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             // into the shared captured dict; otherwise use a local slot.
             // In both cases we DUP so the value is left on the stack as the
             // expression's result.
+            if (reportArgumentAssignment(n.text)) { m.emit(Op::PUSH_NIL, 0, currentLine_); return; }
             if (isCaptured(n.text)) {
                 if (reportUndeclaredInMethod(n.text)) { m.emit(Op::PUSH_NIL, 0, currentLine_); return; }
                 emitExpr(m, *n.children[0]);
@@ -1275,6 +1315,7 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             // declare args first (slots 0..nArgs-1), then locals
             for (size_t i = 0; i < n.stringList.size(); ++i) {
                 declareLocal(n.stringList[i]);
+                if (static_cast<int>(i) < nArgs) scopes_.back().args.insert(n.stringList[i]);
             }
             // A block that declares captured names opens its own captured
             // dict (see emitCaptureProlog). The block's stringList is all
@@ -1308,6 +1349,22 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
 // block parameter, instance or class variable is a compile error, as in Pharo;
 // declaring it implicitly let a typo (`cuont := count + 1`) leave the real
 // variable unchanged. Top-level scripts keep implicit globals.
+bool Compiler::reportArgumentAssignment(const std::string& name) {
+    bool isArgument = false;
+    if (!inlinedLoopArgs_.empty() && inlinedLoopArgs_.back() == name) {
+        isArgument = true;
+    } else {
+        for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
+            if (it->slots.count(name)) { isArgument = it->args.count(name) != 0; break; }
+            if (isMethodScope(*it)) break;
+        }
+    }
+    if (!isArgument) return false;
+    error("cannot assign to the argument '" + name + "' (line "
+          + std::to_string(currentLine_) + "); arguments are read-only");
+    return true;
+}
+
 bool Compiler::reportUndeclaredInMethod(const std::string& name) {
     if (currentMethodClass_.empty() || resolveLocal(name) >= 0) return false;
     error("undeclared variable '" + name + "' in " + currentMethodClass_
@@ -1707,6 +1764,7 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
             int savedSlot = (savedIt != s.slots.end()) ? savedIt->second : -1;
             bool hadBinding = (savedIt != s.slots.end());
             s.slots[iterName] = slotI;
+            inlinedLoopArgs_.push_back(iterName);
             // loopTest:
             size_t loopTestInstrIdx = m.instrStartPc().size();
             m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotI),   currentLine_);
@@ -1740,6 +1798,7 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
             if (exitOffset > 255) { error("inline to:do:: body too large"); return false; }
             m.patchArg(jExitBytePos, static_cast<uint8_t>(exitOffset));
             // Restore the user's iter-var binding.
+            inlinedLoopArgs_.pop_back();
             if (hadBinding) s.slots[iterName] = savedSlot;
             else            s.slots.erase(iterName);
             // to:do: returns the receiver (the start integer); push it.
