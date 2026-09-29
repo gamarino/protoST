@@ -324,7 +324,8 @@ bool fitsSmallInteger(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
 // time: floored division by 2^16 gives each operand's next 16-bit digit
 // (0..65535) even for negatives, and once both operands are 0 or -1 the rest
 // is their sign bits. Used when an operand is a LargeInteger, where
-// protoCore's bitwise operations answer wrong values for negative operands.
+// protoCore's bitwise operations answer wrong values for negative operands
+// (fixed in protoCore after 2.5.0; kept while protoST's floor is 2.5.0).
 const proto::ProtoObject* wideBitOp(proto::ProtoContext* ctx, const proto::ProtoObject* x,
                                     const proto::ProtoObject* y, char op) {
     auto apply = [op](long long p, long long q) {

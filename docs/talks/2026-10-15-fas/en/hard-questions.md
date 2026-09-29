@@ -56,9 +56,10 @@ are looking for people to try it with real programs.
 hierarchy, `become:`, image and browser (by design), `Process`, `Semaphore`,
 `Delay` and `fork` (concurrency is actors), classes such as
 `IdentityDictionary`, `ByteArray` or `ScaledDecimal`, and real
-interoperability with other runtimes (today a protoScala program receives a
-protoST object without a copy but cannot use it: `docs/INTEROP.md` §0,
-`KNOWN_ISSUES.md` K4). What we found, verified against 0.4.0, is in chapter 14
+interoperability with other runtimes (with protoCore 2.5.0, the one the 0.4.0
+package uses, a protoScala program receives a protoST object without a copy
+but cannot use it; protoCore's main branch already fixes this, with no release
+yet: `docs/INTEROP.md` §0, `KNOWN_ISSUES.md` K4). What we found, verified against 0.4.0, is in chapter 14
 of the tutorial and in `docs/STATUS.md`; it is not a guarantee that there are
 no other differences.
 

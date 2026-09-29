@@ -3,6 +3,13 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
+## Unreleased
+
+- K4 (another runtime in the process could not use protoST objects) is fixed
+  in protoCore after 2.5.0; the documents now say which protoCore each claim
+  needs. The integer workarounds (`IntegerDivision.h`, `wideBitOp`) stay while
+  protoST's protoCore floor is 2.5.0: protoCore fixed both defects after it.
+
 ## 0.4.0 — the Smalltalk you know, verified (2026-10-03)
 
 0.4.0 is the release prepared for a technical Smalltalk audience: an

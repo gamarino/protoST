@@ -41,7 +41,7 @@ and `String streamContents:`.
 
 **Status.** Open; not planned.
 
-## K4 — Two runtimes in one process cannot use each other's objects yet (open)
+## K4 — Two runtimes in one process cannot use each other's objects yet (fixed in protoCore, unreleased)
 
 **What.** A protoScala program in the same process can import a protoST module
 and receives the very same object (no copy, and it survives collections in
@@ -55,9 +55,16 @@ object read through the other runtime's context resolves in the wrong table
 (observed: wrong values, not an error). This is a protoCore-level constraint
 on multi-space processes.
 
-**Status.** Open; needs protoCore support for cross-space mutable-object
-access. protoST's own side of the protocol (serving and consuming UMD
-modules) is implemented and tested with a simulated provider.
+**Status.** Fixed in protoCore after 2.5.0 (merged to its `master` on
+2026-09-29, not yet in a release): the table of mutable states is
+process-global and every space's collector marks it (protoCore
+`docs/GLOBAL_MUTABLE_TABLE.md`). With that protoCore, protoScala reads a
+protoST object's state and writes to it through its own context (protoScala
+test `ProtoSTInterop.AForeignObjectsStateIsReadThroughTheCallersContext`).
+The 0.4.0 package depends on protoCore 2.5.0, where the defect remains.
+Still true either way: a foreign runtime cannot call a protoST method
+(INTEROP §4.2), and a protoST cell another runtime keeps in its own
+structures must stay reachable in protoST's space.
 
 ## K5 — Very large collections need a larger heap limit (open)
 

@@ -4,6 +4,8 @@
 // wrong values ((2 raisedTo: 140) // (2 raisedTo: 70) gave 2^65 - 1). For
 // divisors that fit in 62 bits protoCore's operations are used; otherwise a
 // binary long division on the magnitudes, O(n^2) in the bit length.
+// protoCore fixed its division after 2.5.0 (Knuth's Algorithm D, merged
+// 2026-09-29); this stays while protoST's floor is 2.5.0.
 
 #include "runtime/TransientPin.h"
 #include "protoCore.h"

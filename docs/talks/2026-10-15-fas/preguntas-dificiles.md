@@ -55,8 +55,10 @@ gente que lo pruebe con programas reales.
 de metaclases, `become:`, imagen y browser (por diseño), `Process`,
 `Semaphore`, `Delay` y `fork` (la concurrencia son actores), clases como
 `IdentityDictionary`, `ByteArray` o `ScaledDecimal`, e interoperabilidad real
-con otros runtimes (hoy un programa protoScala recibe un objeto protoST sin
-copia pero no puede usarlo: `docs/INTEROP.md` §0, `KNOWN_ISSUES.md` K4). Lo
+con otros runtimes (con protoCore 2.5.0, el que usa el paquete 0.4.0, un
+programa protoScala recibe un objeto protoST sin copia pero no puede usarlo;
+protoCore ya lo corrige en su rama principal, todavía sin versión publicada:
+`docs/INTEROP.md` §0, `KNOWN_ISSUES.md` K4). Lo
 que encontramos, verificado contra 0.4.0, está en el capítulo 14 del tutorial
 y en `docs/STATUS.md`; no es una garantía de que no haya otras diferencias.
 
