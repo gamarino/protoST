@@ -61,9 +61,11 @@ futures := OrderedCollection new.
 "Snapshot t0, release the pool, wait for every future, snapshot t1."
 t0 := Object new __monotonicMillis.
 WorkerPool startProcessing.
-futures do: [ :f | f wait ].
+result := 0.
+futures do: [ :f | result := result + f wait ].
 t1 := Object new __monotonicMillis.
 
 "Print elapsed ms (pure drain phase)."
-(t1 - t0) printNl.
-futures size.
+('ELAPSED_MS ' , (t1 - t0) printString) printNl.
+result = 2000400000 ifFalse: [Error signal: 'saturation: wrong result ' , result printString].
+'VERIFIED ' , result printString

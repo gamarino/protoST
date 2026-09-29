@@ -4,4 +4,6 @@
 
 c := OrderedCollection new.
 1 to: 10000 do: [ :i | c add: i ].
-c size.
+result := c size.
+result = 10000 ifFalse: [Error signal: 'list_append: wrong result ' , result printString].
+'VERIFIED ' , result printString

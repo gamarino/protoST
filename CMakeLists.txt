@@ -217,6 +217,10 @@ add_test(NAME cli_transcript
 add_test(NAME cli_error_location
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_error_location.sh $<TARGET_FILE:protost>)
 
+# The benchmark harness fails on a missing or wrong VERIFIED result.
+add_test(NAME bench_harness_selftest
+    COMMAND python3 ${CMAKE_SOURCE_DIR}/benchmarks/tests/test_harness.py)
+
 add_test(NAME cli_kernel
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_kernel.sh $<TARGET_FILE:protost> ${CMAKE_BINARY_DIR}/cli-scratch/kernel)
 

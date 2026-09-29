@@ -25,4 +25,6 @@ futures := OrderedCollection new.
 
 sum := 0.
 futures do: [ :f | sum := sum + f wait ].
-sum.
+result := sum.
+result = 135000900000 ifFalse: [Error signal: 'parallel_speedup: wrong result ' , result printString].
+'VERIFIED ' , result printString

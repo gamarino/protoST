@@ -57,4 +57,5 @@ t3 := Object new __monotonicMicros.
 ('DRAIN_US ' , (t3 - t2) printString) printNl.
 ('VERIFIED ' , processed printString) printNl.
 ('EXPECTED ' , sends printString) printNl.
-processed.
+processed = sends ifFalse: [Error signal: 'mailbox_send_headroom: processed ' , processed printString , ' of ' , sends printString].
+'VERIFIED ' , processed printString

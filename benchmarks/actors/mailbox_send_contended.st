@@ -88,4 +88,5 @@ t2 := Object new __monotonicMicros.
 ('TOTAL_US ' , (t2 - t0) printString) printNl.
 ('VERIFIED ' , processed printString) printNl.
 ('EXPECTED ' , sends printString) printNl.
-processed.
+processed = sends ifFalse: [Error signal: 'mailbox_send_contended: processed ' , processed printString , ' of ' , sends printString].
+'VERIFIED ' , processed printString
