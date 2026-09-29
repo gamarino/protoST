@@ -1,4 +1,5 @@
 #include "protoST/STRuntime.h"
+#include "runtime/PrimitiveMarker.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/BytecodeModule.h"
@@ -717,8 +718,8 @@ const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
     }
     if (method->isInteger(ctx)) {
         const long long marker = method->asLong(ctx);
-        if (marker & (1LL << 62)) {
-            auto fn = rt.registry().at(static_cast<int>(marker & ((1LL << 62) - 1)));
+        if (isPrimitiveMarker(marker)) {
+            auto fn = rt.registry().at(primitiveMarkerIndex(marker));
             if (understood) *understood = true;
             return fn(rt, ctx, recv ? recv : PROTO_NONE, args, argc);
         }
@@ -769,7 +770,7 @@ const proto::ProtoObject* prim_Object_respondsTo(STRuntime& rt, proto::ProtoCont
     if (!m || m == PROTO_NONE) return PROTO_FALSE;
     const proto::ProtoObject* bc = m->getAttribute(ctx, rt.bootstrap().sym.bcPtr);
     if (bc && bc != PROTO_NONE) return PROTO_TRUE;
-    if (m->isInteger(ctx) && (m->asLong(ctx) & (1LL << 62))) return PROTO_TRUE;
+    if (m->isInteger(ctx) && isPrimitiveMarker(m->asLong(ctx))) return PROTO_TRUE;
     return PROTO_FALSE;
 }
 

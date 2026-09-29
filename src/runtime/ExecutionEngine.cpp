@@ -18,6 +18,7 @@
 //   conditionals containing `wait` are not. Lifting those primitives into
 //   the engine is future work.
 #include "ExecutionEngine.h"
+#include "runtime/PrimitiveMarker.h"
 #include "BytecodeModule.h"
 #include "Bootstrap.h"
 #include "FutureYield.h"
@@ -1594,7 +1595,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         "only unary sends read value attributes");
                 }
                 long long marker = attr->asLong(ctx);
-                if (!(marker & (1LL << 62))) {
+                if (!isPrimitiveMarker(marker)) {
                     // Plain integer value stored as an attribute — same
                     // member-access rule as above.
                     if (argcOp == 0) {
@@ -1606,7 +1607,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         "#" + selStr + ": the attribute is a value, not a method; "
                         "only unary sends read value attributes");
                 }
-                int primIdx = static_cast<int>(marker & ((1LL << 62) - 1));
+                int primIdx = primitiveMarkerIndex(marker);
                 auto fn = rt_.registry().at(primIdx);
                 // F6 v3 A note: this primitive call MAY itself end up
                 // invoking invokeBlock() (e.g. ifTrue:, thenDo:, value)
@@ -1856,14 +1857,14 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // Primitive marker? Reserve for v2 — assert no named args.
                 if (attr->isInteger(ctx)) {
                     long long marker = attr->asLong(ctx);
-                    if (marker & (1LL << 62)) {
+                    if (isPrimitiveMarker(marker)) {
                         if (callNNamed > 0) {
                             throw std::runtime_error(
                                 "primitive method '"
                                 + std::string(desc.name->toStdString(ctx))
                                 + "' does not accept named args in v1");
                         }
-                        int primIdx = static_cast<int>(marker & ((1LL << 62) - 1));
+                        int primIdx = primitiveMarkerIndex(marker);
                         auto fn = rt_.registry().at(primIdx);
                         auto* result = translateNativeException(
                             rt_, ctx,

@@ -1,4 +1,5 @@
 #include "protoST/STRuntime.h"
+#include "runtime/PrimitiveMarker.h"
 #include "protoST/primitives.h"
 #include "ExecutionEngine.h"
 #include "FutureYield.h"
@@ -121,7 +122,7 @@ void bindPrimitive(STRuntime& rt, const proto::ProtoObject* proto, const char* s
     // both sides agree on the same eternal symbol.
     auto* sel = proto::ProtoString::createSymbol(ctx, selector);
     // Tag bit 62 marks "this is a primitive marker, not a real method object".
-    auto* val = ctx->fromLong(static_cast<long long>(idx) | (1LL << 62));
+    auto* val = ctx->fromLong(encodePrimitiveMarker(static_cast<int>(idx)));
     const_cast<proto::ProtoObject*>(proto)->setAttribute(ctx, sel, val);
 }
 
@@ -1874,8 +1875,8 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                            << " result=" << result);
             } else if (method && method != PROTO_NONE && method->isInteger(ctx)) {
                 long long marker = method->asLong(ctx);
-                if (marker & (1LL << 62)) {
-                    int idx = static_cast<int>(marker & ((1LL << 62) - 1));
+                if (isPrimitiveMarker(marker)) {
+                    int idx = primitiveMarkerIndex(marker);
                     auto fn = impl_->registry.at(idx);
                     result = translateNativeException(
                         *this, ctx,
