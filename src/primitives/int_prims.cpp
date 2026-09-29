@@ -4,6 +4,7 @@
 #include "runtime/ValueFormat.h"
 #include "protoCore.h"
 
+#include <cmath>
 #include <stdexcept>
 #include <string>
 
@@ -61,38 +62,98 @@ DEFBIN(NumAdd, add,      "+")
 DEFBIN(NumSub, subtract, "-")
 DEFBIN(NumMul, multiply, "*")
 
-// `/` and `//` both delegate to protoCore `divide`; `\\` to `modulo`.
+// Zero test that works across the numeric tower: asLong on a LargeInteger
+// throws ("exceeds long long range"), which made every division by a
+// LargeInteger fail before protoCore was even asked.
+static bool isZeroNumber(proto::ProtoContext* ctx, const proto::ProtoObject* n) {
+    if (n->isFloat(ctx)) return n->asDouble(ctx) == 0.0;
+    if (n->isInteger(ctx)) return n->asLong(ctx) == 0;
+    return false;   // a LargeInteger is never zero
+}
+
+static int signOfNumber(proto::ProtoContext* ctx, const proto::ProtoObject* n) {
+    const int c = n->compare(ctx, ctx->fromInteger(0));
+    return (c > 0) - (c < 0);
+}
+
+static void checkDivisor(proto::ProtoContext* ctx, const proto::ProtoObject* d, const char* sel) {
+    requireNumber(ctx, d, sel);
+    if (isZeroNumber(ctx, d)) throw std::runtime_error("ZeroDivide");
+}
+
+// `/` delegates to protoCore `divide`.
 const proto::ProtoObject* prim_NumDiv(STRuntime&, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* r,
                                        const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw std::runtime_error("/ expects 1 arg");
-    requireNumber(ctx, a[0], "/");
-    // ZeroDivide guard: an integer-zero or float-zero denominator.
-    bool zero = a[0]->isFloat(ctx) ? (a[0]->asDouble(ctx) == 0.0)
-                                   : (a[0]->asLong(ctx) == 0);
-    if (zero) throw std::runtime_error("ZeroDivide");
+    checkDivisor(ctx, a[0], "/");
     return r->divide(ctx, a[0]);
+}
+
+// Smalltalk-80 floor division: `//` rounds the quotient toward negative
+// infinity and `\\` answers the remainder with the sign of the divisor, so that
+// (a // b) * b + (a \\ b) = a. protoCore's divide/modulo truncate toward zero
+// (quo:/rem:); the floor forms correct them when the remainder and the divisor
+// have opposite signs. A Float operand floors the real quotient.
+static void floorDivMod(proto::ProtoContext* ctx, const proto::ProtoObject* r,
+                        const proto::ProtoObject* d,
+                        const proto::ProtoObject** quot, const proto::ProtoObject** rem) {
+    if (r->isFloat(ctx) || d->isFloat(ctx)) {
+        const double x = r->asDouble(ctx), y = d->asDouble(ctx);
+        const double q = std::floor(x / y);
+        if (quot) *quot = (std::fabs(q) < 9.2e18) ? ctx->fromLong(static_cast<long long>(q))
+                                                  : ctx->fromDouble(q);
+        if (rem) *rem = ctx->fromDouble(x - q * y);
+        return;
+    }
+    const proto::ProtoObject* q = r->divide(ctx, d);
+    const proto::ProtoObject* m = r->modulo(ctx, d);
+    if (!isZeroNumber(ctx, m) && signOfNumber(ctx, m) != signOfNumber(ctx, d)) {
+        q = q->subtract(ctx, ctx->fromInteger(1));
+        m = m->add(ctx, d);
+    }
+    if (quot) *quot = q;
+    if (rem) *rem = m;
 }
 
 const proto::ProtoObject* prim_NumIntDiv(STRuntime&, proto::ProtoContext* ctx,
                                           const proto::ProtoObject* r,
                                           const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw std::runtime_error("// expects 1 arg");
-    requireNumber(ctx, a[0], "//");
-    bool zero = a[0]->isFloat(ctx) ? (a[0]->asDouble(ctx) == 0.0)
-                                   : (a[0]->asLong(ctx) == 0);
-    if (zero) throw std::runtime_error("ZeroDivide");
-    return r->divide(ctx, a[0]);
+    checkDivisor(ctx, a[0], "//");
+    const proto::ProtoObject* q = nullptr;
+    floorDivMod(ctx, r, a[0], &q, nullptr);
+    return q;
 }
 
 const proto::ProtoObject* prim_NumMod(STRuntime&, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* r,
                                        const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw std::runtime_error("\\\\ expects 1 arg");
-    requireNumber(ctx, a[0], "\\\\");
-    bool zero = a[0]->isFloat(ctx) ? (a[0]->asDouble(ctx) == 0.0)
-                                   : (a[0]->asLong(ctx) == 0);
-    if (zero) throw std::runtime_error("ZeroDivide");
+    checkDivisor(ctx, a[0], "\\\\");
+    const proto::ProtoObject* m = nullptr;
+    floorDivMod(ctx, r, a[0], nullptr, &m);
+    return m;
+}
+
+// quo: / rem: truncate toward zero (protoCore's divide / modulo on integers).
+const proto::ProtoObject* prim_NumQuo(STRuntime&, proto::ProtoContext* ctx,
+                                       const proto::ProtoObject* r,
+                                       const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("quo: expects 1 arg");
+    checkDivisor(ctx, a[0], "quo:");
+    if (r->isFloat(ctx) || a[0]->isFloat(ctx))
+        return ctx->fromDouble(std::trunc(r->asDouble(ctx) / a[0]->asDouble(ctx)));
+    return r->divide(ctx, a[0]);
+}
+
+const proto::ProtoObject* prim_NumRem(STRuntime&, proto::ProtoContext* ctx,
+                                       const proto::ProtoObject* r,
+                                       const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("rem: expects 1 arg");
+    checkDivisor(ctx, a[0], "rem:");
+    if (r->isFloat(ctx) || a[0]->isFloat(ctx))
+        return ctx->fromDouble(std::fmod(r->asDouble(ctx), a[0]->asDouble(ctx)));
     return r->modulo(ctx, a[0]);
 }
 
@@ -183,6 +244,8 @@ void installIntPrimitives(STRuntime& rt) {
     bindPrimitive(rt, N, "/",  reg.registerPrim(prim_NumDiv));
     bindPrimitive(rt, N, "//", reg.registerPrim(prim_NumIntDiv));
     bindPrimitive(rt, N, "\\\\", reg.registerPrim(prim_NumMod));
+    bindPrimitive(rt, N, "quo:", reg.registerPrim(prim_NumQuo));
+    bindPrimitive(rt, N, "rem:", reg.registerPrim(prim_NumRem));
     bindPrimitive(rt, N, "<",  reg.registerPrim(prim_NumLt));
     bindPrimitive(rt, N, "<=", reg.registerPrim(prim_NumLe));
     bindPrimitive(rt, N, ">",  reg.registerPrim(prim_NumGt));
