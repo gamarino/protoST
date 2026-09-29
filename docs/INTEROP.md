@@ -38,9 +38,13 @@ protoScala into one executable.
 `ProtoSpace`. protoCore resolves a mutable object's current state through
 `context->space->mutableRoot`, keyed by the object's `mutable_ref`
 (`protoCore/core/ProtoObject.cpp`). An object read through a context of the
-other space therefore resolves in the wrong table. Symbols are not the cause:
-the symbol `add` was the same pointer in both runtimes. The two symptoms
-measured:
+other space therefore resolves in the wrong table. What the probe shows about
+symbols is narrow: the symbol `add` was the same pointer in both runtimes, but
+`add` is 3 bytes, and protoCore stores strings of up to 6 bytes inline in the
+pointer word, so that says nothing about longer keys. Longer keys are
+interned in a symbol table; protoCore's CHANGELOG (2.2.0) makes that table
+process-wide, but this probe did not compare a longer key across the two
+runtimes. The two symptoms measured:
 
 - the read finds nothing, which is the case for the protoST class read from
   protoScala;
@@ -146,9 +150,11 @@ wrapper; the next message send (`m SomeClass`) then failed with
 every call. This matters for any process that constructs more than one
 runtime — including a tri-runtime host.
 
-(Since protoCore 2.2.0 symbols are interned process-wide. In the 2026-09-29
-two-runtime probe the symbol `add` was the same pointer in protoST and
-protoScala. Resolving the key per call is still correct.)
+(protoCore's CHANGELOG states that since 2.2.0 symbols are interned
+process-wide. The 2026-09-29 two-runtime probe found the symbol `add` to be
+the same pointer in protoST and protoScala, but `add` is short enough to be
+stored inline in the pointer, so that case does not test the interning.
+Resolving the key per call is correct either way.)
 
 ### 2.4 What `Import` yields
 
