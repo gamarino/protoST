@@ -447,6 +447,8 @@ A method body ends at the first of:
 - the start of the next method declaration (`Name >> …`, `Name class >> …`),
   with or without a period before it; a class declaration (`… subclass: …`)
   also ends it when the statement before it ends with a period;
+- an **unindented line** (a token at column 1) after the body's first
+  statement — method bodies are indented, top-level statements are not;
 - the first **top-level `^` statement**: anything after it is read as a new
   top-level form. A `^` nested in a block does not end the body.
 

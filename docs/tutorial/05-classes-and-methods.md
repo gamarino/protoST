@@ -119,6 +119,8 @@ uses the layout. A method body ends at the first of:
 - the next method declaration (`Account >> …`, `Account class >> …`), with or
   without a period before it; a class declaration (`… subclass: …`) when the
   statement before it ends with a period;
+- an unindented line after the body's first statement: indent method bodies,
+  and start top-level statements at column 1;
 - the first `^` statement at the top level of the body (a `^` inside a block
   does not end it).
 

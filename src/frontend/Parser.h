@@ -37,7 +37,13 @@ private:
     // at a token preceded by a blank line. Parentheses, blocks and brace
     // arrays clear the flag, so their contents may span blank lines.
     bool   stopAtBlankLine_ = true;
-    bool   atBlankLineBoundary() const { return stopAtBlankLine_ && current_.blankLineBefore; }
+    // Line of the method declaration whose body is being parsed (0 outside a
+    // body): an unindented line after it also ends the body's statements.
+    int    methodHeaderLine_ = 0;
+    bool   atBlankLineBoundary() const {
+        return stopAtBlankLine_ && (current_.blankLineBefore
+            || (methodHeaderLine_ > 0 && current_.column == 1 && current_.line > methodHeaderLine_));
+    }
     struct NestedExpressionScope {
         Parser& p; bool saved;
         explicit NestedExpressionScope(Parser& parser) : p(parser), saved(parser.stopAtBlankLine_) { p.stopAtBlankLine_ = false; }

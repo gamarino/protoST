@@ -573,6 +573,11 @@ ast::NodePtr Parser::parseMethodDecl(Token classIdent, bool classSide) {
     // method with no top-level '^' swallowed every statement that followed.
     while (current_.kind != TokenKind::EndOfFile) {
         if (current_.blankLineBefore) { checkBlankLineContinuation(md.get()); break; }
+        // A statement that starts at column 1 on a later line, after the
+        // body's first statement, begins a new top-level form: method bodies
+        // are indented, so an unindented line is the program continuing.
+        if (current_.column == 1 && current_.line > classIdent.line && !md->children.empty()) break;
+        methodHeaderLine_ = classIdent.line;
         // stop at the start of another method/class decl
         if (current_.kind == TokenKind::Identifier) {
             Token p = lexer_.peek();
@@ -587,6 +592,7 @@ ast::NodePtr Parser::parseMethodDecl(Token classIdent, bool classSide) {
         if (!match(TokenKind::Period)) break;
         if (isReturn) break; // return terminates the method body
     }
+    methodHeaderLine_ = 0;
     return md;
 }
 
@@ -908,6 +914,11 @@ ast::NodePtr Parser::parseCallMethodDecl(Token classIdent, bool classSide,
     // top-level form (`Identifier '>>'`, `'class'`, `'subclass:'`) or EOF.
     while (current_.kind != TokenKind::EndOfFile) {
         if (current_.blankLineBefore) { checkBlankLineContinuation(md.get()); break; }
+        // A statement that starts at column 1 on a later line, after the
+        // body's first statement, begins a new top-level form: method bodies
+        // are indented, so an unindented line is the program continuing.
+        if (current_.column == 1 && current_.line > classIdent.line && !md->children.empty()) break;
+        methodHeaderLine_ = classIdent.line;
         if (current_.kind == TokenKind::Identifier) {
             Token p = lexer_.peek();
             if (p.kind == TokenKind::GtGt) break;
@@ -921,7 +932,7 @@ ast::NodePtr Parser::parseCallMethodDecl(Token classIdent, bool classSide,
         if (!match(TokenKind::Period)) break;
         if (isReturn) break;
     }
-
+    methodHeaderLine_ = 0;
     return md;
 }
 

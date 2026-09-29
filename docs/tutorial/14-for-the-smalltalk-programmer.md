@@ -117,14 +117,15 @@ Classes are declared with `Superclass subclass: #Name instanceVariableNames:
 '…' classVariableNames: '…'` and methods with `Name >> selector` followed by
 the body (`Name class >> selector` for the class side).
 
-### A blank line ends a method body — D33
+### Layout ends a method body — D33
 
-Without chunk separators, the blank line is the separator. The body of a
-method ends at the next blank line or the next declaration, whether or not its
-last statement has a period, and a statement may not span a blank line
-outside parentheses, brackets or braces. Write methods without blank lines
-inside them. If a top-level statement is swallowed by the method above it,
-the compiler's "undeclared variable" message says so.
+Without chunk separators, the layout is the separator. The body of a method
+ends at the first of: a blank line; the next method declaration (`Name >>`,
+`Name class >>`); an unindented line after the body's first statement — each
+whether or not the last statement has a period. So indent method bodies
+(as a browser would), write them without blank lines inside, and start
+top-level statements at column 1. A statement may not span a blank line
+outside parentheses, brackets or braces.
 
 ### A script shows the value of its last statement — D12, D12b
 

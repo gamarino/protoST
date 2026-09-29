@@ -20,6 +20,8 @@ audit). Details of each item are in [`docs/STATUS.md`](docs/STATUS.md) and
   outer variable; a block temporary named like an instance variable wrote the
   instance variable. Every block activation now has its own bindings.
 - A method whose last line had no period swallowed the next top-level line.
+  A method body now also ends at an unindented line or at the next method
+  declaration.
 - `(3/2) max: 1`, `(1/2) between: 0 and: 1` and other Fraction operations ran
   integer primitives on the Fraction.
 - A class-side method that assigned an instance-variable name wrote it on the
