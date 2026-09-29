@@ -688,6 +688,26 @@ bool forEachElement(STRuntime& rt, proto::ProtoContext* ctx,
     // COL-c: a `Bag` is ProtoList-backed (one slot per occurrence) — it flows
     // through the ProtoList arm above. COL-e: the `Interval` kind is handled
     // by the lazy arm at the top of this function (it has no `__data__`).
+    //
+    // Any other collection — a user subclass of Collection with no native
+    // store — iterates through its own do:, as in Smalltalk-80, where the
+    // whole derived protocol rests on do:. The kernel's
+    // Collection>>__elementsForIteration gathers what do: yields.
+    bool understood = false;
+    const proto::ProtoObject* elements = sendDynamic(
+        rt, ctx, collection,
+        proto::ProtoString::createSymbol(ctx, "__elementsForIteration"),
+        nullptr, 0, &understood);
+    if (understood && elements && isListBacked(ctx, elements)) {
+        TransientPin pinElements(ctx, elements);
+        const proto::ProtoList* data = arrayData(ctx, elements);
+        unsigned long n = data->getSize(ctx);
+        for (unsigned long i = 0; i < n; ++i) {
+            const proto::ProtoObject* e = data->getAt(ctx, static_cast<int>(i));
+            if (!fn(e ? e : PROTO_NONE)) return false;
+        }
+        return true;
+    }
     throw std::runtime_error("collection does not understand iteration");
 }
 

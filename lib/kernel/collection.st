@@ -4,6 +4,16 @@
 
 "--- any collection ----------------------------------------------------------"
 
+"The native iteration primitives read a built-in collection's store directly;
+ for any other collection (a user subclass that defines do:) they iterate
+ what this method gathers from do:, so collect:, select:, inject:into:, size
+ and the rest work on it as in Smalltalk-80."
+Collection >> __elementsForIteration
+  | out |
+  out := OrderedCollection new.
+  self do: [:each | out addLast: each].
+  ^ out.
+
 Collection >> includes: anObject
   ^ self anySatisfy: [:each | each = anObject].
 
