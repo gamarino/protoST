@@ -100,6 +100,12 @@ enum class Op : uint8_t {
     // here, so a block parameter or temporary that reuses an enclosing name
     // is a distinct variable.
     DEFINE_CAPTURED    = 40, // arg = constant pool index (symbol name)
+    // Writes a class variable: pops the value and stores it under the mangled
+    // "_iv_<name>" key on the object that declares the variable, found by
+    // walking up the prototype chain from `self` (an instance or a class).
+    // Class variables are shared by the declaring class, its subclasses and
+    // all their instances, so a write from any of them updates that storage.
+    STORE_CLASSVAR     = 41, // arg = constant pool symbol index (variable name)
     // Extend for >256-index args
     EXTEND          = 254,
     // Debugger primitive guard

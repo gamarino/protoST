@@ -921,23 +921,14 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
                 return;
             }
         }
-        // D19 (2026-06-13): class variable of the current method's class —
-        // class-side write only; instance-side is rejected with a clear
-        // compile-time error, see the matching block in emitExpr's
-        // NodeKind::Assignment case.
+        // D19: class variable of the current method's class, written from
+        // either side through STORE_CLASSVAR (see emitExpr's Assignment case).
         for (const auto& cv : currentClassVars_) {
             if (cv == n.text) {
-                if (!currentMethodIsClassSide_) {
-                    error("class variable '" + n.text +
-                          "' cannot be assigned from an instance-side "
-                          "method (would create a per-instance shadow). "
-                          "Mutate it from a class-side method instead.");
-                    return;
-                }
                 emitExpr(m, *n.children[0]);
                 auto sym = m.internSymbol(n.text);
                 m.emit(Op::DUP, 0, currentLine_);
-                m.emitWide(Op::STORE_INSTVAR, static_cast<unsigned int>(sym), currentLine_);
+                m.emitWide(Op::STORE_CLASSVAR, static_cast<unsigned int>(sym), currentLine_);
                 return;
             }
         }
@@ -1088,27 +1079,17 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                     return;
                 }
             }
-            // D19 (2026-06-13): class variable of the current method's class.
-            // Writes go through STORE_INSTVAR (writes the `_iv_<name>` key on
-            // the receiver) ONLY when the method is class-side — there `self`
-            // IS the class object, so the write updates the shared storage.
-            // From an instance method the write would create a per-instance
-            // shadow on the receiver instead of updating the class — a
-            // foot-gun every Smalltalker has stepped on once — so it is
-            // explicitly rejected here with a compile-time error.
+            // D19: class variable of the current method's class. The write
+            // goes to the declaring class — the object up the prototype chain
+            // that owns the `_iv_<name>` slot — from an instance-side or a
+            // class-side method alike (STORE_CLASSVAR), so the class, its
+            // subclasses and every instance share one variable.
             for (const auto& cv : currentClassVars_) {
                 if (cv == n.text) {
-                    if (!currentMethodIsClassSide_) {
-                        error("class variable '" + n.text +
-                              "' cannot be assigned from an instance-side "
-                              "method (would create a per-instance shadow). "
-                              "Mutate it from a class-side method instead.");
-                        return;
-                    }
                     emitExpr(m, *n.children[0]);
                     auto sym = m.internSymbol(n.text);
                     m.emit(Op::DUP, 0, currentLine_);
-                    m.emitWide(Op::STORE_INSTVAR, static_cast<unsigned int>(sym), currentLine_);
+                    m.emitWide(Op::STORE_CLASSVAR, static_cast<unsigned int>(sym), currentLine_);
                     return;
                 }
             }

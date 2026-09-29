@@ -1394,17 +1394,20 @@ TEST_CASE("Class vars: subclass instance reads superclass's class var",
     REQUIRE(r->asLong(rt.rootCtx()) == 7);
 }
 
-TEST_CASE("Class vars: instance-side assignment is a compile-time error",
+TEST_CASE("Class vars: instance-side assignment updates the shared variable",
           "[engine][class-vars]") {
-    protoST::Parser P(
+    // D19 closed: a write from an instance method goes to the declaring
+    // class (STORE_CLASSVAR), so every instance reads the new value.
+    protoST::STRuntime rt;
+    auto* r = bl1Run(rt,
         "Object subclass: #C instanceVariableNames: '' "
         "  classVariableNames: 'shared'. "
-        "C >> badWrite  shared := 5.");
-    auto ast = P.parseModule();
-    REQUIRE(P.errors().empty());
-    protoST::Compiler C;
-    C.compileModule(*ast);
-    REQUIRE(C.hasErrors());
+        "C >> write  shared := 5. "
+        "C >> read  ^ shared. "
+        "C new write. "
+        "C new read.");
+    REQUIRE(r != nullptr);
+    REQUIRE(r->asLong(rt.rootCtx()) == 5);
 }
 
 TEST_CASE("Class vars: uninitialised class var reads as nil",

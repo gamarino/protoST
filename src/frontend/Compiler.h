@@ -44,10 +44,8 @@ public:
         // Class-variable names declared via `classVariableNames: '...'`.
         // Stored on the class object (mangled `_iv_<name>`, same key shape
         // as inst vars) so the prototype-chain attribute walk picks them up
-        // from any instance. Documented restriction (D19): assigning to a
-        // class var from an instance-side method is a compile-time error —
-        // the assignment must happen in a class-side method to update the
-        // shared storage rather than create a per-instance shadow.
+        // from any instance. An assignment from either side writes the
+        // declaring class's slot (STORE_CLASSVAR).
         std::vector<std::string> classVarNames; // e.g., {"shared"}
     };
 

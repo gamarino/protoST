@@ -625,6 +625,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     labels[static_cast<unsigned int>(Op::PUSH_CAPTURED)]    = &&L_PUSH_CAPTURED;
     labels[static_cast<unsigned int>(Op::STORE_CAPTURED)]   = &&L_STORE_CAPTURED;
     labels[static_cast<unsigned int>(Op::DEFINE_CAPTURED)]  = &&L_DEFINE_CAPTURED;
+    labels[static_cast<unsigned int>(Op::STORE_CLASSVAR)]   = &&L_STORE_CLASSVAR;
     labels[static_cast<unsigned int>(Op::PUSH_GLOBAL)]      = &&L_PUSH_GLOBAL;
     labels[static_cast<unsigned int>(Op::STORE_GLOBAL)]     = &&L_STORE_GLOBAL;
     labels[static_cast<unsigned int>(Op::PUSH_INSTVAR)]     = &&L_PUSH_INSTVAR;
@@ -2094,6 +2095,30 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 if (!self || self == PROTO_NONE)
                     throw std::runtime_error("STORE_INSTVAR self is null");
                 const_cast<proto::ProtoObject*>(self)->setAttribute(ctx, sym, val);
+                DISPATCH_DIRECT();
+                break;
+            }
+            case Op::STORE_CLASSVAR: L_STORE_CLASSVAR: {
+                Frame& f = frames_.back();
+                if (f.sp == 0)
+                    throw std::runtime_error("STORE_CLASSVAR empty stack");
+                const proto::ProtoObject* val = pop(f);
+                auto* sym = f.m->ivSymbol(ctx, arg);
+                TransientPin pinSym(
+                    ctx, reinterpret_cast<const proto::ProtoObject*>(sym));
+                const proto::ProtoObject* self = getSelf(f);
+                if (!self || self == PROTO_NONE)
+                    throw std::runtime_error("STORE_CLASSVAR self is null");
+                // The declaring class owns the variable (installed as an own
+                // attribute when the class was declared).
+                const proto::ProtoObject* owner = nullptr;
+                for (const proto::ProtoObject* p = self; p && p != PROTO_NONE;
+                     p = p->getFirstParent(ctx)) {
+                    if (p->hasOwnAttribute(ctx, sym) == PROTO_TRUE) { owner = p; break; }
+                    if (p == rt_.bootstrap().objectProto) break;
+                }
+                if (!owner) owner = self;   // defensive: a class var always has an owner
+                const_cast<proto::ProtoObject*>(owner)->setAttribute(ctx, sym, val);
                 DISPATCH_DIRECT();
                 break;
             }
