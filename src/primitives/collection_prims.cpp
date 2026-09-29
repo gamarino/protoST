@@ -47,6 +47,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <algorithm>
 #include <vector>
 
 namespace protoST {
@@ -56,6 +57,12 @@ namespace protoST {
 const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* block,
                                        const proto::ProtoObject* const* args, int argc);
+// Defined in object_prims.cpp: run a method by name, as a send does.
+const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* recv,
+                                      const proto::ProtoString* selector,
+                                      const proto::ProtoObject* const* args, int argc,
+                                      bool* understood);
 
 namespace {
 
@@ -1965,6 +1972,51 @@ const proto::ProtoObject* prim_Collection_injectInto(STRuntime& rt, proto::Proto
     return acc;
 }
 
+// aSequence sort: aBlock (sort, with no argument: <=) → sorts an Array or an
+// OrderedCollection in place, stably, and answers it. aBlock answers true when
+// its first argument may precede its second (Pharo's sortBlock); the strict
+// order std::stable_sort needs is "b may not precede a". The elements stay
+// reachable through the receiver's current list until the sorted list
+// replaces it, so the comparisons (which may allocate) cannot lose them.
+const proto::ProtoObject* sendDynamicForSort(STRuntime& rt, proto::ProtoContext* ctx,
+                                             const proto::ProtoObject* recv,
+                                             const proto::ProtoObject* arg) {
+    bool understood = false;
+    const proto::ProtoObject* args1[1] = { arg };
+    const proto::ProtoObject* r = sendDynamic(
+        rt, ctx, recv, proto::ProtoString::createSymbol(ctx, "<="), args1, 1, &understood);
+    if (!understood) throw std::runtime_error("sort: elements do not understand <=");
+    return r;
+}
+
+const proto::ProtoObject* prim_Seq_sort(STRuntime& rt, proto::ProtoContext* ctx,
+                                        const proto::ProtoObject* r,
+                                        const proto::ProtoObject* const* a, int argc) {
+    if (!isListBacked(ctx, r))
+        throw std::runtime_error("sort: needs an Array or an OrderedCollection (use sorted)");
+    const proto::ProtoObject* block = (argc >= 1 && a[0] && a[0] != PROTO_NONE) ? a[0] : nullptr;
+    const proto::ProtoList* data = arrayData(ctx, r);
+    std::vector<const proto::ProtoObject*> elems;
+    elems.reserve(data->getSize(ctx));
+    for (unsigned long i = 0; i < data->getSize(ctx); ++i)
+        elems.push_back(data->getAt(ctx, static_cast<int>(i)));
+    auto mayPrecede = [&](const proto::ProtoObject* x, const proto::ProtoObject* y) {
+        if (block) {
+            const proto::ProtoObject* args2[2] = { x, y };
+            return invokeBlock(rt, ctx, block, args2, 2) == PROTO_TRUE;
+        }
+        return sendDynamicForSort(rt, ctx, x, y) == PROTO_TRUE;
+    };
+    std::stable_sort(elems.begin(), elems.end(),
+                     [&](const proto::ProtoObject* x, const proto::ProtoObject* y) {
+                         return !mayPrecede(y, x);
+                     });
+    const proto::ProtoList* sorted = ctx->newList();
+    for (const auto* e : elems) sorted = sorted->appendLast(ctx, e);
+    const_cast<proto::ProtoObject*>(r)->setAttribute(ctx, dataKey(ctx), sorted->asObject(ctx));
+    return r;
+}
+
 // aCollection do: aBlock separatedBy: sepBlock → run `aBlock` for each element;
 // run `sepBlock` (no args) between consecutive elements. Returns the receiver.
 const proto::ProtoObject* prim_Collection_doSeparatedBy(STRuntime& rt, proto::ProtoContext* ctx,
@@ -2498,7 +2550,12 @@ void installCollectionPrimitives(STRuntime& rt) {
                   reg.registerPrim(prim_Collection_allSatisfy));
     bindPrimitive(rt, b.collectionProto, ",",
                   reg.registerPrim(prim_Collection_concat));
-    bindPrimitive(rt, b.collectionProto, "asArray",
+{
+        const int sortIdx = reg.registerPrim(prim_Seq_sort);
+        bindPrimitive(rt, b.sequenceableCollectionProto, "sort:", sortIdx);
+        bindPrimitive(rt, b.sequenceableCollectionProto, "sort", sortIdx);
+    }
+        bindPrimitive(rt, b.collectionProto, "asArray",
                   reg.registerPrim(prim_Collection_asArray));
 }
 

@@ -1223,6 +1223,9 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
         }
         case NodeKind::Block: {
             auto sub = std::make_unique<BytecodeModule>();
+            // A block inside a method sends `super` on behalf of that method's
+            // class (Pharo allows super in blocks).
+            if (!currentMethodClass_.empty()) sub->setDefiningClass(currentMethodClass_);
             // open fresh scope for block
             scopes_.emplace_back();
             {

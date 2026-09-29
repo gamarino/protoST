@@ -2,5 +2,6 @@ object.st
 character.st
 string.st
 number.st
+collection.st
 stream.st
 printing.st
