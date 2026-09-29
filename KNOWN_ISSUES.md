@@ -33,13 +33,31 @@ per-runtime. See deviation D2 in `docs/STATUS.md`.
 
 ## K3 — No `%` string formatting (open)
 
-**What.** protoCore's `ProtoString` does not implement `%`-style string
-formatting, and protoST adds none.
+**What.** There is no printf-style `%` formatting.
 
-**Bounds.** Narrow. Build strings with `,` concatenation and the conversion
-selectors (`printString`, `asString`, …) instead.
+**Bounds.** Narrow. Pharo's `format:` is available (`'{1} of {2}' format:
+#(3 10)`), as are `,`, `printString`, `printString:`, `printPaddedWith:to:`
+and `String streamContents:`.
 
-**Status.** Open; a small unimplemented feature in protoCore.
+**Status.** Open; not planned.
+
+## K4 — Two runtimes in one process cannot use each other's objects yet (open)
+
+**What.** A protoScala program in the same process can import a protoST module
+and receives the very same object (no copy, and it survives collections in
+both spaces), but it cannot read that object's attributes or send it
+messages; importing a protoScala module from protoST fails. See
+[`docs/INTEROP.md`](docs/INTEROP.md) §0 for what is verified and how.
+
+**Why.** Each runtime owns a `ProtoSpace`, and protoCore resolves a mutable
+object's current state through the space of the context doing the read, so an
+object read through the other runtime's context resolves in the wrong table
+(observed: wrong values, not an error). This is a protoCore-level constraint
+on multi-space processes.
+
+**Status.** Open; needs protoCore support for cross-space mutable-object
+access. protoST's own side of the protocol (serving and consuming UMD
+modules) is implemented and tested with a simulated provider.
 
 ---
 
