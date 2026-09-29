@@ -154,9 +154,13 @@ protoScala. Resolving the key per call is still correct.)
 
 `Import from: '<logical-path>'` returns the foreign module as a plain
 `ProtoObject`. Its exported classes/objects are attributes; protoST reads them
-with ordinary unary sends:
+with ordinary unary sends. (The code blocks of §2–§3 that import
+`foreign_module` or `doubler.py` need a module served by another runtime's
+provider, which the `protost` binary cannot load (§0), so they are marked
+`no-run` for the documentation check. Where a unit test exercises the path,
+the section names it.)
 
-```smalltalk
+```smalltalk no-run
 m := Import from: 'foreign_module'.
 w := m Widget.            "unary send → reads the `Widget` attribute"
 w doubleIt: 21.           "keyword send → dispatches to a foreign method"
@@ -186,7 +190,7 @@ A foreign integer flows straight into protoST arithmetic, a foreign boolean
 drives a protoST `ifTrue:ifFalse:`, a foreign string compares equal to a
 protoST string literal — all with **no conversion step**:
 
-```smalltalk
+```smalltalk no-run
 m := Import from: 'foreign_module'.
 (m answerInt) + 1.                                   "42 + 1 = 43"
 (m answerBool) ifTrue: [ 'yes' ] ifFalse: [ 'no' ].  "foreign Boolean"
@@ -240,7 +244,7 @@ A foreign collection handed to protoST is therefore **not** a protoST
    foreign elements into a native protoST collection by walking the foreign
    protocol once:
 
-   ```smalltalk
+   ```smalltalk no-run
    bag := m Bag.                 "foreign collection wrapper"
    arr := OrderedCollection new.
    arr add: (bag item0).
@@ -289,7 +293,7 @@ unary sends with no args) is gone with the call-form syntax of LANGUAGE.md
 `double_it`, `get_item`, `doubleIt` — is now invoked directly with
 positional and named arguments:
 
-```smalltalk
+```smalltalk no-run
 "Python module: def double_it(x, name='hi'): ..."
 m := Import from: 'doubler.py'.
 m double_it(7, name = 'hello')        "→ same shape as the Python call"
