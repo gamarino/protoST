@@ -1,4 +1,6 @@
 #pragma once
+#include <string>
+#include <vector>
 
 // Set by CMake from project(VERSION); the fallback serves out-of-tree builds.
 #ifndef PROTOST_VERSION
@@ -93,6 +95,7 @@ public:
     // is requested by the destructor. Public for the C-style ProtoMethod
     // trampoline; embedders should not invoke this directly.
     void workerLoop(proto::ProtoContext* ctx);
+    bool spawnWorker(proto::ProtoContext* ctx);
 
     // F6 v4 (2026-05-23): event-driven main-thread Future-wait primitives.
     //
@@ -135,6 +138,17 @@ public:
     // and is used by tests to skip the wall-clock parallelism proof when
     // running on a single-core CI.
     size_t workerCount() const;
+
+    // Blocking I/O on a worker (lib/kernel/io.st, lib/net.st). A worker that
+    // blocks in a read, an accept or a child process still occupies its
+    // thread, so a pool of N workers with N actors waiting for replies could
+    // not run the actors that would send them. enterBlockingIO adds a worker
+    // when fewer than the configured number would remain free (up to a cap);
+    // leaveBlockingIO ends the accounting. Called with the caller's context,
+    // before its UnmanagedScope. Both are no-ops off the worker pool;
+    // enterBlockingIO answers whether leaveBlockingIO must be called.
+    bool enterBlockingIO(proto::ProtoContext* ctx);
+    void leaveBlockingIO();
 
     // F6 v6 (2026-05-23 night): worker-pool gate. Lets a caller pause the
     // entire pool — workers in flight finish their current drainOne, but
@@ -302,5 +316,10 @@ private:
 };
 
 inline const char* versionString() { return "protoST " PROTOST_VERSION; }
+
+// The program's own path and arguments, as `Smalltalk programPath` and
+// `Smalltalk arguments` answer them (process-wide; the CLI sets them before
+// running a script).
+void setProgramArguments(const std::string& programPath, const std::vector<std::string>& args);
 
 } // namespace protoST

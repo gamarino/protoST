@@ -70,6 +70,7 @@ namespace protoST { void installImportGlobal(STRuntime& rt); }
 namespace protoST { void installWorkerPoolGlobal(STRuntime& rt); }
 namespace protoST { void installExceptionPrimitives(STRuntime& rt); }
 namespace protoST { void installCollectionPrimitives(STRuntime& rt); }
+namespace protoST { void installIoPrimitives(STRuntime& rt); }
 
 // F6-A6: future transition helpers defined alongside the Future primitives.
 // resolveFutureFromDrain / rejectFutureFromDrain perform the lock-free
@@ -265,6 +266,12 @@ struct STRuntime::Impl {
 
     std::vector<const proto::ProtoThread*> workers;
     std::atomic<bool> shutdown { false };
+    // Guards `workers` once the pool can grow after construction (blocking
+    // I/O, enterBlockingIO). `baseWorkers` is the configured pool size;
+    // `blockedInIO` counts workers currently blocked in I/O.
+    std::mutex workersMutex;
+    unsigned baseWorkers = 0;
+    std::atomic<int> blockedInIO { 0 };
 
     // F6 v4 (2026-05-23): the actual scheduling queue. The previous
     // ProtoList-under-__ready__ scheme is gone; this is the lock-free
@@ -647,6 +654,7 @@ STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
     installFuturePrimitives(*this);
     installAtomPrimitives(*this);
     installExceptionPrimitives(*this);
+    installIoPrimitives(*this);
     installCollectionPrimitives(*this);
     installImportGlobal(*this);
     installWorkerPoolGlobal(*this);
@@ -714,18 +722,49 @@ STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
         }
         if (numWorkers > 8u) numWorkers = 8u;
 
-        for (unsigned i = 0; i < numWorkers; ++i) {
-            const proto::ProtoList* argsForThread = ctx->newList();
-            argsForThread = argsForThread->appendLast(
-                ctx, ctx->fromExternalPointer(this, nullptr));
-            std::string nameStr = "protoST-worker-" + std::to_string(i);
-            const proto::ProtoString* threadName =
-                proto::ProtoString::createSymbol(ctx, nameStr.c_str());
-            const proto::ProtoThread* t = impl_->space.newThread(
-                ctx, threadName, st_worker_main, argsForThread, nullptr);
-            if (t) impl_->workers.push_back(t);
-        }
+        impl_->baseWorkers = numWorkers;
+        for (unsigned i = 0; i < numWorkers; ++i) spawnWorker(ctx);
     }
+}
+
+// Starts one more pool worker. Called at construction and by
+// enterBlockingIO; the allocation runs on the caller's context. Creating a
+// thread from a worker needs protoCore 2.6.1: before it, newThread left
+// space->mainContext on its temporary context and the main program's
+// variables stopped being scanned.
+bool STRuntime::spawnWorker(proto::ProtoContext* ctx) {
+    std::lock_guard<std::mutex> lock(impl_->workersMutex);
+    if (impl_->shutdown.load(std::memory_order_acquire)) return false;
+    const proto::ProtoList* argsForThread = ctx->newList();
+    argsForThread = argsForThread->appendLast(
+        ctx, ctx->fromExternalPointer(this, nullptr));
+    std::string nameStr = "protoST-worker-" + std::to_string(impl_->workers.size());
+    const proto::ProtoString* threadName =
+        proto::ProtoString::createSymbol(ctx, nameStr.c_str());
+    const proto::ProtoThread* t = impl_->space.newThread(
+        ctx, threadName, st_worker_main, argsForThread, nullptr);
+    if (t) impl_->workers.push_back(t);
+    return t != nullptr;
+}
+
+namespace { thread_local const STRuntime* t_workerOf = nullptr; }
+
+bool STRuntime::enterBlockingIO(proto::ProtoContext* ctx) {
+    if (t_workerOf != this) return false;
+    constexpr size_t kMaxWorkers = 256;
+    const int blocked = impl_->blockedInIO.fetch_add(1, std::memory_order_acq_rel) + 1;
+    size_t total;
+    {
+        std::lock_guard<std::mutex> lock(impl_->workersMutex);
+        total = impl_->workers.size();
+    }
+    if (total < kMaxWorkers && total - static_cast<size_t>(blocked) < impl_->baseWorkers)
+        spawnWorker(ctx);
+    return true;
+}
+
+void STRuntime::leaveBlockingIO() {
+    impl_->blockedInIO.fetch_sub(1, std::memory_order_acq_rel);
 }
 // Forward-declared: defined down by workerLoop alongside the
 // per-worker stats globals.
@@ -745,15 +784,20 @@ STRuntime::~STRuntime() {
     // cv.wait predicate window. We then join each in turn on the main
     // thread's root context. join() is sequential but cheap because every
     // worker exits its loop in parallel as soon as it observes the flag.
-    if (!impl_->workers.empty()) {
+    std::vector<const proto::ProtoThread*> pool;
+    {
+        std::lock_guard<std::mutex> lock(impl_->workersMutex);
         impl_->shutdown.store(true, std::memory_order_release);
+        pool = impl_->workers;
+    }
+    if (!pool.empty()) {
         // F6 v4 (2026-05-23): wake every worker once. The new event-driven
         // workerLoop blocks on `workerSem.acquire()` when the queue is
         // empty; without a release here every blocked worker would sleep
         // forever and join() would deadlock. One release per worker —
         // each blocked worker wakes, observes `shutdown == true`, drains
         // any final pushes, and exits the loop.
-        impl_->workerSem.release(static_cast<int>(impl_->workers.size()));
+        impl_->workerSem.release(static_cast<int>(pool.size()));
         // join() blocks this thread in pthread_join while a worker still
         // draining may request a collection and park. A thread blocked in the
         // kernel cannot reach a safepoint, so the join runs in a protoCore
@@ -763,7 +807,7 @@ STRuntime::~STRuntime() {
         // ProtoObject. It nests harmlessly if ProtoThread::join opens one too.
         {
             proto::ProtoContext::UnmanagedScope unmanaged(impl_->rootCtx);
-            for (auto* t : impl_->workers) {
+            for (auto* t : pool) {
                 // newThread returns const ProtoThread*; join is non-const.
                 const_cast<proto::ProtoThread*>(t)->join(impl_->rootCtx);
             }
@@ -838,6 +882,7 @@ void STRuntime::workerLoop(proto::ProtoContext* ctx) {
     // Shutdown: ~STRuntime sets `shutdown` then issues one `release()`
     // per worker so every blocked worker wakes, observes the flag, drains
     // whatever is left, and exits.
+    t_workerOf = this;
     if (t_workerStatsId < 0) {
         t_workerStatsId = g_nextWorkerStatsId.fetch_add(
             1, std::memory_order_relaxed) % kMaxWorkerStatsSlots;
@@ -2138,9 +2183,8 @@ size_t STRuntime::scheduledCount() const {
 }
 
 size_t STRuntime::workerCount() const {
-    // No lock needed: workers is populated once at construction and only
-    // mutated by ~STRuntime; observers between those points see a stable
-    // value.
+    // The pool can grow while blocking I/O is in progress (enterBlockingIO).
+    std::lock_guard<std::mutex> lock(impl_->workersMutex);
     return impl_->workers.size();
 }
 

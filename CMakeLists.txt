@@ -35,12 +35,14 @@ include(GNUInstallDirs)
 #      only when no installed package was found and no prefix was named;
 #      refused by -DPROTOCORE_REQUIRE_PACKAGE=ON.
 #
-# The version floor is 2.1: the hashed collections are built on protoCore's
-# `ProtoMap` and the hashed-collection helper, and the actor mailboxes on
-# `ProtoMPSCQueue` -- all three added in protoCore 2.1.0. The ceiling is the
+# The version floor is 2.6.1: the worker pool grows while actors block in I/O
+# (STRuntime::enterBlockingIO), which creates threads from worker threads, and
+# before 2.6.1 protoCore's newThread detached the main program's roots when
+# called there. (2.1.0 brought ProtoMap, the hashed-collection helper and
+# ProtoMPSCQueue; 2.6.0 the process-global mutable table.) The ceiling is the
 # next major, because protoCore's major version and its soname move together.
-set(PROTOCORE_MIN_VERSION      "2.1")
-set(PROTOCORE_MIN_VERSION_FULL "2.1.0")
+set(PROTOCORE_MIN_VERSION      "2.6.1")
+set(PROTOCORE_MIN_VERSION_FULL "2.6.1")
 set(PROTOCORE_NEXT_MAJOR       "3.0.0")
 set(PROTOCORE_ABI_SOVERSION    "3")
 option(PROTOCORE_REQUIRE_PACKAGE
@@ -157,6 +159,7 @@ add_library(protost_runtime STATIC
     src/primitives/atom_prims.cpp
     src/primitives/exception_prims.cpp
     src/primitives/collection_prims.cpp
+    src/primitives/io_prims.cpp
     src/modules/STModuleProvider.cpp
     src/repl/Repl.cpp
     src/dap/DapTransport.cpp
@@ -164,6 +167,10 @@ add_library(protost_runtime STATIC
 )
 target_include_directories(protost_runtime PUBLIC src include ${PROTOCORE_INCLUDE_DIRS})
 target_link_libraries(protost_runtime PUBLIC nlohmann_json::nlohmann_json)
+
+# --- OpenSSL: TLS for sockets and https (lib/net.st, lib/http.st) ---
+find_package(OpenSSL REQUIRED)
+target_link_libraries(protost_runtime PUBLIC OpenSSL::SSL OpenSSL::Crypto)
 target_compile_definitions(protost_runtime PRIVATE
     PROTOST_TEMPLATE_DIR="${CMAKE_SOURCE_DIR}/src/venv_template")
 
@@ -196,6 +203,9 @@ add_test(NAME cli_venv
 
 add_test(NAME cli_eval
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_eval.sh $<TARGET_FILE:protost>)
+
+add_test(NAME cli_io
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_io.sh $<TARGET_FILE:protost>)
 
 add_test(NAME cli_script_output
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_script_output.sh $<TARGET_FILE:protost>)

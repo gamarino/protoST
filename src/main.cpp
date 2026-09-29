@@ -126,6 +126,7 @@ int main(int argc, char** argv) {
     if (mode == "-d") {
         if (argc < 3) { std::fprintf(stderr, "-d requires a path\n"); return 64; }
         const char* path = argv[2];
+        protoST::setProgramArguments(path, std::vector<std::string>(argv + 3, argv + argc));
         std::string src;
         if (!readWholeFile(path, src)) { std::fprintf(stderr, "file not found: %s\n", path); return 66; }
 
@@ -188,6 +189,7 @@ int main(int argc, char** argv) {
         }
         const char* path = argv[argi];
         if (path[0] == '-') { std::fprintf(stderr, "unknown option: %s\n", path); printUsage(argv[0]); return 64; }
+        protoST::setProgramArguments(path, std::vector<std::string>(argv + argi + 1, argv + argc));
         std::string src;
         if (!readWholeFile(path, src)) { std::fprintf(stderr, "file not found: %s\n", path); return 66; }
 
