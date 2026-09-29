@@ -28,6 +28,9 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     out.booleanProto      = out.objectProto->newChild(ctx, /*isMutable=*/true);
     out.stringProto       = out.objectProto->newChild(ctx, /*isMutable=*/true);
     out.symbolProto       = out.stringProto->newChild(ctx, /*isMutable=*/true);
+    // Characters are protoCore's embedded unicode-char values; their
+    // prototype is Character, so `$a class == Character`.
+    out.characterProto    = out.objectProto->newChild(ctx, /*isMutable=*/true);
     out.blockProto        = out.objectProto->newChild(ctx, /*isMutable=*/true);
     out.nilProto          = out.objectProto->newChild(ctx, /*isMutable=*/true);
 
@@ -97,6 +100,7 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     // re-point them.  For F2 the bare prototypes suffice.
     sp.smallIntegerPrototype = const_cast<proto::ProtoObject*>(out.smallIntegerProto);
     sp.largeIntegerPrototype = const_cast<proto::ProtoObject*>(out.largeIntegerProto);
+    sp.unicodeCharPrototype  = const_cast<proto::ProtoObject*>(out.characterProto);
     sp.floatPrototype        = const_cast<proto::ProtoObject*>(out.floatProto);
     sp.doublePrototype       = const_cast<proto::ProtoObject*>(out.floatProto);
     sp.stringPrototype       = const_cast<proto::ProtoObject*>(out.stringProto);
@@ -132,6 +136,7 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     stamp(out.booleanProto,      "Boolean");
     stamp(out.stringProto,       "String");
     stamp(out.symbolProto,       "Symbol");
+    stamp(out.characterProto,    "Character");
     stamp(out.blockProto,        "Block");
     stamp(out.actorProto,        "Actor");
     stamp(out.futureProto,       "Future");

@@ -31,7 +31,8 @@ namespace protoST {
 struct Bootstrap {
     const proto::ProtoObject* objectProto        = nullptr;
     const proto::ProtoObject* numberProto        = nullptr;
-    const proto::ProtoObject* integerProto       = nullptr;   // Integer: Number > Integer > Small/Large
+    const proto::ProtoObject* integerProto       = nullptr;
+    const proto::ProtoObject* characterProto     = nullptr;   // protoCore's unicode char prototype   // Integer: Number > Integer > Small/Large
     const proto::ProtoObject* smallIntegerProto  = nullptr;
     const proto::ProtoObject* largeIntegerProto  = nullptr;
     const proto::ProtoObject* floatProto         = nullptr;

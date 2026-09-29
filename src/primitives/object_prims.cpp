@@ -884,6 +884,7 @@ const proto::ProtoObject* prim_Object_class(STRuntime& rt, proto::ProtoContext* 
                         && r->compare(ctx, ctx->fromLong(kSmallIntegerMin)) >= 0;
         return small ? b.smallIntegerProto : b.largeIntegerProto;
     }
+    if (!r->isInteger(ctx) && r->getPrototype(ctx) == b.characterProto) return b.characterProto;
     if (r->asString(ctx)) {
         // The symbol tag lives on the value itself; asString may answer a
         // different handle, so the tag is read from the receiver.

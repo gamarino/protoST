@@ -32,8 +32,8 @@ whose messageText names the position and what was expected.
 The scanner (the internal `_JSONScanner` class — prefixed `_` so it stays off
 the module surface) holds the input String and a 1-based cursor; it offers
 `peek`, `next`, `atEnd` and whitespace skipping. JSON characters are compared
-through their Unicode code point (`aString asInteger`), since protoST has no
-distinct Character type — a character is a 1-character String."
+through their Unicode code point (`aCharacter asInteger`); the scanner answers
+Characters, as `String>>at:` does."
 
 "=== _JSONScanner ==========================================================="
 
@@ -84,7 +84,7 @@ _JSONScanner >> skipWhitespace
   [ self atEnd not and: [ self _isWhitespace: self peek ] ]
     whileTrue: [ position := position + 1 ].
 
-"True when aChar (a 1-char String) is JSON whitespace."
+"True when aChar (a Character) is JSON whitespace."
 _JSONScanner >> _isWhitespace: aChar
   | code |
   code := aChar asInteger.
@@ -132,12 +132,12 @@ JSON class >> parseValue: scanner
   | c code |
   c := scanner peek.
   c isNil ifTrue: [ ^ scanner signalError: 'expected a value' ].
-  c = '{' ifTrue: [ ^ self parseObject: scanner ].
-  c = '[' ifTrue: [ ^ self parseArray: scanner ].
-  c = '"' ifTrue: [ ^ self parseString: scanner ].
-  c = 't' ifTrue: [ scanner expectLiteral: 'true'.  ^ true ].
-  c = 'f' ifTrue: [ scanner expectLiteral: 'false'. ^ false ].
-  c = 'n' ifTrue: [ scanner expectLiteral: 'null'.  ^ nil ].
+  c = ${ ifTrue: [ ^ self parseObject: scanner ].
+  c = $[ ifTrue: [ ^ self parseArray: scanner ].
+  c = $" ifTrue: [ ^ self parseString: scanner ].
+  c = $t ifTrue: [ scanner expectLiteral: 'true'.  ^ true ].
+  c = $f ifTrue: [ scanner expectLiteral: 'false'. ^ false ].
+  c = $n ifTrue: [ scanner expectLiteral: 'null'.  ^ nil ].
   code := c asInteger.
   ((code = 45) or: [ self isDigitCode: code ])
     ifTrue: [ ^ self parseNumber: scanner ].
@@ -153,24 +153,24 @@ JSON class >> parseObject: scanner
   scanner next.                     "consume '{'"
   dict := Dictionary new.
   scanner skipWhitespace.
-  scanner peek = '}' ifTrue: [ scanner next. ^ dict ].
+  scanner peek = $} ifTrue: [ scanner next. ^ dict ].
   [ true ] whileTrue: [
     scanner skipWhitespace.
-    scanner peek = '"'
+    scanner peek = $"
       ifFalse: [ ^ scanner signalError: 'expected a string key' ].
     key := self parseString: scanner.
     scanner skipWhitespace.
-    scanner peek = ':'
+    scanner peek = $:
       ifFalse: [ ^ scanner signalError: 'expected '':'' after key' ].
     scanner next.
     scanner skipWhitespace.
     value := self parseValue: scanner.
     dict at: key put: value.
     scanner skipWhitespace.
-    scanner peek = ','
+    scanner peek = $,
       ifTrue: [ scanner next ]
       ifFalse: [
-        scanner peek = '}'
+        scanner peek = $}
           ifTrue: [ scanner next. ^ dict ]
           ifFalse: [ ^ scanner signalError: 'expected '','' or ''}''' ] ] ].
 
@@ -180,15 +180,15 @@ JSON class >> parseArray: scanner
   scanner next.                     "consume '['"
   items := OrderedCollection new.
   scanner skipWhitespace.
-  scanner peek = ']' ifTrue: [ scanner next. ^ items asArray ].
+  scanner peek = $] ifTrue: [ scanner next. ^ items asArray ].
   [ true ] whileTrue: [
     scanner skipWhitespace.
     items add: (self parseValue: scanner).
     scanner skipWhitespace.
-    scanner peek = ','
+    scanner peek = $,
       ifTrue: [ scanner next ]
       ifFalse: [
-        scanner peek = ']'
+        scanner peek = $]
           ifTrue: [ scanner next. ^ items asArray ]
           ifFalse: [ ^ scanner signalError: 'expected '','' or '']''' ] ] ].
 
@@ -201,14 +201,14 @@ JSON class >> parseString: scanner
   [ true ] whileTrue: [
     scanner atEnd ifTrue: [ ^ scanner signalError: 'unterminated string' ].
     c := scanner next.
-    c = '"' ifTrue: [ ^ result ].
-    c = '\'
+    c = $" ifTrue: [ ^ result ].
+    c = $\
       ifTrue: [ result := result , (self parseEscape: scanner) ]
       ifFalse: [
         code := c asInteger.
         code < 32
           ifTrue: [ ^ scanner signalError: 'control character in string' ].
-        result := result , c ] ].
+        result := result , c asString ] ].
 
 "Parse the body of a backslash escape (the backslash already consumed) and
  answer the unescaped character as a String."
@@ -216,16 +216,16 @@ JSON class >> parseEscape: scanner
   | e |
   scanner atEnd ifTrue: [ ^ scanner signalError: 'unterminated escape' ].
   e := scanner next.
-  e = '"'  ifTrue: [ ^ '"' ].
-  e = '\'  ifTrue: [ ^ '\' ].
-  e = '/'  ifTrue: [ ^ '/' ].
-  e = 'n'  ifTrue: [ ^ 10 asCharacter ].
-  e = 't'  ifTrue: [ ^ 9 asCharacter ].
-  e = 'r'  ifTrue: [ ^ 13 asCharacter ].
-  e = 'b'  ifTrue: [ ^ 8 asCharacter ].
-  e = 'f'  ifTrue: [ ^ 12 asCharacter ].
-  e = 'u'  ifTrue: [ ^ self parseUnicodeEscape: scanner ].
-  ^ scanner signalError: 'invalid escape \' , e.
+  e = $"  ifTrue: [ ^ '"' ].
+  e = $\  ifTrue: [ ^ '\' ].
+  e = $/  ifTrue: [ ^ '/' ].
+  e = $n  ifTrue: [ ^ 10 asCharacter asString ].
+  e = $t  ifTrue: [ ^ 9 asCharacter asString ].
+  e = $r  ifTrue: [ ^ 13 asCharacter asString ].
+  e = $b  ifTrue: [ ^ 8 asCharacter asString ].
+  e = $f  ifTrue: [ ^ 12 asCharacter asString ].
+  e = $u  ifTrue: [ ^ self parseUnicodeEscape: scanner ].
+  ^ scanner signalError: 'invalid escape \' , e asString.
 
 "Parse the four hex digits of a \\uXXXX escape and answer the character."
 JSON class >> parseUnicodeEscape: scanner
@@ -237,7 +237,7 @@ JSON class >> parseUnicodeEscape: scanner
     digit := self hexValue: scanner next forScanner: scanner.
     code := (code * 16) + digit.
     i := i + 1 ].
-  ^ code asCharacter.
+  ^ code asCharacter asString.
 
 "The numeric value of a single hex digit (a 1-char String); signal otherwise."
 JSON class >> hexValue: aChar forScanner: scanner
@@ -254,13 +254,13 @@ JSON class >> hexValue: aChar forScanner: scanner
 JSON class >> parseNumber: scanner
   | negative intPart isFloat fracValue fracScale expPart expNeg c code result |
   negative := false.
-  scanner peek = '-' ifTrue: [ scanner next. negative := true ].
+  scanner peek = $- ifTrue: [ scanner next. negative := true ].
   intPart := self readDigits: scanner requireOne: true.
   isFloat := false.
   fracValue := 0.
   fracScale := 1.
   "optional fraction"
-  scanner peek = '.' ifTrue: [
+  scanner peek = $. ifTrue: [
     scanner next.
     isFloat := true.
     [ scanner atEnd not and: [ self isDigitCode: scanner peek asInteger ] ]
@@ -274,12 +274,12 @@ JSON class >> parseNumber: scanner
   expPart := 0.
   expNeg := false.
   (scanner atEnd not
-    and: [ (scanner peek = 'e') or: [ scanner peek = 'E' ] ]) ifTrue: [
+    and: [ (scanner peek = $e) or: [ scanner peek = $E ] ]) ifTrue: [
     scanner next.
     isFloat := true.
-    (scanner atEnd not and: [ scanner peek = '+' ])
+    (scanner atEnd not and: [ scanner peek = $+ ])
       ifTrue: [ scanner next ].
-    (scanner atEnd not and: [ scanner peek = '-' ])
+    (scanner atEnd not and: [ scanner peek = $- ])
       ifTrue: [ scanner next. expNeg := true ].
     expPart := self readDigits: scanner requireOne: true ].
   isFloat
@@ -358,7 +358,7 @@ JSON class >> stringifyString: aString
     ifFalse: [
     code < 32
       ifTrue: [ result := result , (self unicodeEscape: code) ]
-      ifFalse: [ result := result , c ] ] ] ] ] ] ] ].
+      ifFalse: [ result := result , c asString ] ] ] ] ] ] ] ].
     i := i + 1 ].
   ^ result , '"'.
 

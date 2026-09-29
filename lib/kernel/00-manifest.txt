@@ -1,1 +1,3 @@
 object.st
+character.st
+string.st

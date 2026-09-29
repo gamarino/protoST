@@ -379,6 +379,8 @@ struct STRuntime::Impl {
             proto::ProtoString::createSymbol(rootCtx, "Symbol"), bootstrap.symbolProto);
         globals->setAttribute(rootCtx,
             proto::ProtoString::createSymbol(rootCtx, "UndefinedObject"), bootstrap.nilProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "Character"), bootstrap.characterProto);
         auto* exceptionKey = proto::ProtoString::createSymbol(rootCtx, "Exception");
         globals->setAttribute(rootCtx, exceptionKey, bootstrap.exceptionProto);
         auto* errorKey = proto::ProtoString::createSymbol(rootCtx, "Error");
@@ -964,6 +966,17 @@ const proto::ProtoObject* STRuntime::currentActor() const {
 // references. The shared results are all perpetual or rooted: interned
 // symbols (never collected), the tagged nil/true/false/SmallInteger values
 // (no cell) and the bootstrap unset marker (rooted by the runtime).
+// The first code point of a UTF-8 string (a character literal's text).
+static unsigned int decodeFirstCodepoint(const std::string& s) {
+    if (s.empty()) return 0;
+    const auto b0 = static_cast<unsigned char>(s[0]);
+    auto cont = [&](size_t i) { return i < s.size() ? (static_cast<unsigned char>(s[i]) & 0x3Fu) : 0u; };
+    if (b0 < 0x80) return b0;
+    if ((b0 & 0xE0) == 0xC0) return ((b0 & 0x1Fu) << 6) | cont(1);
+    if ((b0 & 0xF0) == 0xE0) return ((b0 & 0x0Fu) << 12) | (cont(1) << 6) | cont(2);
+    return ((b0 & 0x07u) << 18) | (cont(1) << 12) | (cont(2) << 6) | cont(3);
+}
+
 const proto::ProtoObject*
 STRuntime::materialize(proto::ProtoContext* ctx, const BytecodeModule& m,
                        size_t i) const {
@@ -990,8 +1003,9 @@ STRuntime::materialize(proto::ProtoContext* ctx, const BytecodeModule& m,
                 proto::ProtoString::createSymbol(ctx, m.constSymbol(i).c_str()));
         }
         case K::Char:
-            // F2 simplification: treat character literal as a 1-char string.
-            return ctx->fromUTF8String(m.constString(i).c_str());
+            // A character literal is a Character: protoCore's embedded
+            // unicode-char value, decoded from the literal's UTF-8 text.
+            return ctx->fromUnicodeChar(decodeFirstCodepoint(m.constString(i)));
         case K::BlockRef:
             // F2 stub: block materialisation lands in a later task.
             return PROTO_NONE;
