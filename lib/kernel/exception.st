@@ -29,3 +29,6 @@ Exception >> signalerContext
 
 Message >> printOn: aStream
   aStream nextPutAll: 'a Message('; print: self selector; nextPut: $).
+
+"Signalled on an attempt to modify an immutable object, such as a String."
+Error subclass: #ModificationForbidden.

@@ -47,6 +47,13 @@ Object >> isBlock
 Object >> isCharacter
   ^ false.
 
+Object >> isClass
+  "A class object's class is its metaclass, whose name ends in ' class'."
+  ^ self class basicPrintString endsWith: ' class'.
+
+Object >> asString
+  ^ self printString.
+
 "--- sending messages by name ------------------------------------------------"
 
 Object >> perform: aSelector

@@ -98,8 +98,8 @@ Dictionary >> printElementsOn: aStream
   aStream nextPut: $).
 
 Interval >> printOn: aStream
-  | step |
-  step := self size > 1 ifTrue: [(self at: 2) - self first] ifFalse: [1].
-  aStream nextPut: $(; print: self first; nextPutAll: ' to: '; print: self last.
-  step = 1 ifFalse: [aStream nextPutAll: ' by: '; print: step].
+  "Print the expression that built the interval, as Pharo does; an empty
+   interval prints too."
+  aStream nextPut: $(; print: self intervalStart; nextPutAll: ' to: '; print: self intervalStop.
+  self increment = 1 ifFalse: [aStream nextPutAll: ' by: '; print: self increment].
   aStream nextPut: $).
