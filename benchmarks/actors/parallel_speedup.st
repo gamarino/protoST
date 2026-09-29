@@ -14,6 +14,7 @@
 Object subclass: #CpuWorker.
 
 CpuWorker >> burn: rounds
+  | total |
   total := 0.
   1 to: rounds do: [ :i | total := total + i ].
   ^ total.

@@ -857,6 +857,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         // remains on the stack for the top-level POP separator (or RETURN_TOP,
         // when it is the last statement).
         if (isCaptured(n.text)) {
+            if (reportUndeclaredInMethod(n.text)) return;
             emitExpr(m, *n.children[0]);
             auto sym = m.internSymbol(n.text);
             m.emit(Op::DUP, 0, currentLine_);
@@ -1003,6 +1004,7 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             // In both cases we DUP so the value is left on the stack as the
             // expression's result.
             if (isCaptured(n.text)) {
+                if (reportUndeclaredInMethod(n.text)) { m.emit(Op::PUSH_NIL, 0, currentLine_); return; }
                 emitExpr(m, *n.children[0]);
                 auto sym = m.internSymbol(n.text);
                 m.emit(Op::DUP, 0, currentLine_);
@@ -1306,10 +1308,20 @@ int Compiler::declareLocal(const std::string& name) {
     return slot;
 }
 
+// A method body is a lexical boundary: its blocks close over the method's
+// temporaries and arguments, never over the file-level variables of the
+// module that declares it (as in Smalltalk, where a method cannot see a
+// workspace's temporaries). Name lookups stop at the innermost method scope.
+bool Compiler::isMethodScope(const Scope& s) {
+    return s.astNode && (s.astNode->kind == NodeKind::MethodDecl ||
+                         s.astNode->kind == NodeKind::CallMethodDecl);
+}
+
 int Compiler::resolveLocal(const std::string& name) const {
     for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
         auto f = it->slots.find(name);
         if (f != it->slots.end()) return f->second;
+        if (isMethodScope(*it)) break;
     }
     return -1;
 }
@@ -1322,6 +1334,7 @@ bool Compiler::isCaptured(const std::string& name) const {
     for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
         if (it->capturedNames.count(name) != 0) return true;
         if (it->slots.count(name) != 0) return false;
+        if (isMethodScope(*it)) break;
     }
     return false;
 }

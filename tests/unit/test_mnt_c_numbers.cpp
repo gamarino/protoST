@@ -93,11 +93,13 @@ TEST_CASE("MNT-c D11: dividing an Integer by a Float yields a Float",
     REQUIRE(r->asDouble(rt.rootCtx()) == Catch::Approx(0.5));
 }
 
-TEST_CASE("MNT-c D11: integer / integer is truncating division", "[mnt-c][D11]") {
+TEST_CASE("MNT-c D11: integer / integer is exact, // truncates toward -inf",
+          "[mnt-c][D11]") {
     protoST::STRuntime rt;
     REQUIRE(runSrc(rt, "4 / 2.")->asLong(rt.rootCtx()) == 2);
-    REQUIRE(runSrc(rt, "1 / 3.")->asLong(rt.rootCtx()) == 0);
+    REQUIRE(runSrc(rt, "(1 / 3) * 3.")->asLong(rt.rootCtx()) == 1);
     REQUIRE(runSrc(rt, "7 // 2.")->asLong(rt.rootCtx()) == 3);
+    REQUIRE(runSrc(rt, "-7 // 2.")->asLong(rt.rootCtx()) == -4);
 }
 
 TEST_CASE("MNT-c D11: the modulo operator answers the remainder",

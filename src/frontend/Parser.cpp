@@ -52,11 +52,31 @@ void Parser::synchronize() {
 ast::NodePtr Parser::parseModule() {
     auto mod = ast::makeNode(ast::NodeKind::Module, 1, 1);
     while (current_.kind != TokenKind::EndOfFile) {
+        if (current_.kind == TokenKind::Pipe) {
+            parseTopTemporaries(*mod);
+            continue;
+        }
         auto top = parseTopForm();
         if (top) mod->children.push_back(std::move(top));
         else     synchronize();
     }
     return mod;
+}
+
+// Workspace-style temporaries at top level: `| a b |`. Each name is bound to
+// nil, exactly as a declared temporary starts out in Smalltalk; the binding
+// itself follows the usual top-level rule (module local, or global in the
+// REPL).
+void Parser::parseTopTemporaries(ast::Node& mod) {
+    advance(); // opening '|'
+    while (current_.kind == TokenKind::Identifier) {
+        auto a = ast::makeNode(ast::NodeKind::Assignment, current_.line, current_.column);
+        a->text = current_.text;
+        a->children.push_back(ast::makeNode(ast::NodeKind::NilLit, current_.line, current_.column));
+        mod.children.push_back(std::move(a));
+        advance();
+    }
+    consume(TokenKind::Pipe, "expected '|' to close temporaries");
 }
 
 ast::NodePtr Parser::parseTopForm() {

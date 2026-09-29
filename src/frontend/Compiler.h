@@ -76,6 +76,7 @@ private:
     // in that recursion pushes a scope. std::deque::emplace_back/pop_back
     // never invalidate references to the other elements, whereas a vector
     // reallocation left that reference dangling (D29).
+    static bool isMethodScope(const Scope& s);
     std::deque<Scope> scopes_;
     std::vector<std::string> errors_;
     ScopeAnalysis analysis_;

@@ -98,9 +98,14 @@ TEST_CASE("BL-2: a method body with more than 256 locals runs correctly",
     // The hard case: a method sub-module. Slot 0 is self, slot 1 is the arg,
     // then 300 method temps — the last temps need wide STORE_LOCAL/PUSH_LOCAL.
     protoST::STRuntime rt;
+    std::string temps = "| ";
     std::string body;
-    for (int i = 0; i < 300; ++i)
+    for (int i = 0; i < 300; ++i) {
+        temps += "u" + std::to_string(i) + " ";
         body += "u" + std::to_string(i) + " := " + std::to_string(i) + ". ";
+    }
+    temps += "| ";
+    body = temps + body;
     std::string src =
         "Object subclass: #Big. "
         "Big >> run: n " + body + " ^ (u5 + u270) + n. "

@@ -34,6 +34,7 @@ private:
 
     // grammar entry points (added in later tasks)
     ast::NodePtr parseTopForm();
+    void parseTopTemporaries(ast::Node& mod);
     ast::NodePtr parseStatement();
     ast::NodePtr parseExpression();
     ast::NodePtr parseAssignmentRHS(ast::NodePtr target);
