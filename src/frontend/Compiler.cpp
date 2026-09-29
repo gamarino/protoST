@@ -1397,7 +1397,8 @@ bool Compiler::reportUndeclaredInMethod(const std::string& name) {
     if (currentMethodClass_.empty() || resolveLocal(name) >= 0) return false;
     error("undeclared variable '" + name + "' in " + currentMethodClass_
           + " (line " + std::to_string(currentLine_)
-          + "); declare it as a temporary: | " + name + " |");
+          + "); declare it as a temporary: | " + name + " |"
+          + " (if this line belongs to the top level, end the method before it with a blank line)");
     return true;
 }
 

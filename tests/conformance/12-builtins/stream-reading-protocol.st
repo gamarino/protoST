@@ -1,10 +1,10 @@
-"EXPECT: $h hello false world true caught nil ab $d $c true false $e true $b #(1 2) #(3) #(5) an OrderedCollection(1) 0"
-"ReadStream over Strings, Arrays and OrderedCollections: skipSeparators peek upTo: upToEnd atEnd next (an Error past the end, per the protoST spec) next: skip: peekFor: skipTo:."
+"EXPECT: $h hello false world true nil nil ab $d $c true false $e true $b #(1 2) #(3) #(5) an OrderedCollection(1) 0"
+"ReadStream over Strings, Arrays and OrderedCollections: skipSeparators peek upTo: upToEnd atEnd next (nil past the end, as in Pharo) next: skip: peekFor: skipTo:."
 rs := ReadStream on: '  hello world'.
 rs skipSeparators.
 p := rs peek.
 h := rs upTo: $ .
-t1 := p printString , ' ' , h , ' ' , rs atEnd printString , ' ' , rs upToEnd , ' ' , rs atEnd printString , ' ' , ([rs next. 'no-error'] on: Error do: [:e | 'caught']) , ' ' , rs peek printString.
+t1 := p printString , ' ' , h , ' ' , rs atEnd printString , ' ' , rs upToEnd , ' ' , rs atEnd printString , ' ' , rs next printString , ' ' , rs peek printString.
 r2 := 'abcdef' readStream.
 a := r2 next: 2.
 r2 skip: 1.

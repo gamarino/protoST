@@ -85,9 +85,8 @@ ReadStream >> atEnd
   ^ position >= collection size.
 
 ReadStream >> next
-  "Past the end this signals an Error (the protoST spec, tested in
-   13-stdlib); Pharo answers nil instead."
-  self atEnd ifTrue: [^ self error: 'ReadStream>>next: past end of stream'].
+  "Past the end this answers nil, as in Pharo; atEnd tells the two apart."
+  self atEnd ifTrue: [^ nil].
   position := position + 1.
   ^ collection at: position.
 
