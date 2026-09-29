@@ -202,6 +202,9 @@ add_test(NAME cli_oom_clean
 add_test(NAME cli_sigint
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_sigint.sh $<TARGET_FILE:protost>)
 
+add_test(NAME cli_inputs
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_inputs.sh $<TARGET_FILE:protost>)
+
 add_test(NAME cli_kernel
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_kernel.sh $<TARGET_FILE:protost> ${CMAKE_BINARY_DIR}/cli-scratch/kernel)
 

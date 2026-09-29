@@ -11,6 +11,8 @@
 #include <cstdio>
 #include <cstring>
 #include <exception>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -39,6 +41,16 @@ void printUsage(const char* prog) {
         prog, prog, prog, prog, prog, prog, prog);
 }
 
+// Reads a whole script from `path`. Uses stream reads rather than
+// fseek/ftell so a pipe, /dev/stdin or a process substitution works: those
+// are not seekable, and the size ftell reported for them was garbage.
+bool readWholeFile(const char* path, std::string& out) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return false;
+    out.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    return true;
+}
+
 void printVersion() {
     std::printf("%s\n", protoST::versionString());
 }
@@ -54,12 +66,8 @@ int main(int argc, char** argv) {
     if (mode == "--dump-ast") {
         if (argc < 3) { std::fprintf(stderr, "--dump-ast requires a path\n"); return 64; }
         const char* path = argv[2];
-        std::FILE* fp = std::fopen(path, "rb");
-        if (!fp) { std::fprintf(stderr, "cannot open %s\n", path); return 66; }
-        std::fseek(fp, 0, SEEK_END); long n = std::ftell(fp); std::fseek(fp, 0, SEEK_SET);
-        std::string src(static_cast<size_t>(n), '\0');
-        std::fread(src.data(), 1, static_cast<size_t>(n), fp);
-        std::fclose(fp);
+        std::string src;
+        if (!readWholeFile(path, src)) { std::fprintf(stderr, "file not found: %s\n", path); return 66; }
 
         protoST::Parser P(std::move(src));
         auto m = P.parseModule();
@@ -105,11 +113,8 @@ int main(int argc, char** argv) {
     if (mode == "-d") {
         if (argc < 3) { std::fprintf(stderr, "-d requires a path\n"); return 64; }
         const char* path = argv[2];
-        std::FILE* fp = std::fopen(path, "rb");
-        if (!fp) { std::fprintf(stderr, "cannot open %s\n", path); return 66; }
-        std::fseek(fp, 0, SEEK_END); long n = std::ftell(fp); std::fseek(fp, 0, SEEK_SET);
-        std::string src(static_cast<size_t>(n), '\0');
-        std::fread(src.data(), 1, static_cast<size_t>(n), fp); std::fclose(fp);
+        std::string src;
+        if (!readWholeFile(path, src)) { std::fprintf(stderr, "file not found: %s\n", path); return 66; }
 
         protoST::Parser P(std::move(src));
         auto ast = P.parseModule();
@@ -159,12 +164,9 @@ int main(int argc, char** argv) {
     // Default: treat argv[1] as a path to a .st script file and execute it.
     {
         const char* path = argv[1];
-        std::FILE* fp = std::fopen(path, "rb");
-        if (!fp) { std::fprintf(stderr, "Unknown option or mode: %s\n", path); return 64; }
-        std::fseek(fp, 0, SEEK_END); long n = std::ftell(fp); std::fseek(fp, 0, SEEK_SET);
-        std::string src(static_cast<size_t>(n), '\0');
-        std::fread(src.data(), 1, static_cast<size_t>(n), fp);
-        std::fclose(fp);
+        if (path[0] == '-') { std::fprintf(stderr, "unknown option: %s\n", path); printUsage(argv[0]); return 64; }
+        std::string src;
+        if (!readWholeFile(path, src)) { std::fprintf(stderr, "file not found: %s\n", path); return 66; }
 
         protoST::Parser P(std::move(src));
         auto ast = P.parseModule();
