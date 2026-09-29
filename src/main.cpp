@@ -14,6 +14,7 @@
 #include <exception>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <vector>
 #include <cstdlib>
@@ -104,15 +105,16 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "<expr>:%d:%d: %s\n", e.line, e.column, e.message.c_str());
         if (!P.errors().empty()) return 65;
 
-        protoST::Compiler C;
-        auto bc = C.compileModule(*ast);
-        bc->setSourceName("<expr>");
-        if (C.hasErrors()) {
-            for (auto& s : C.errors()) std::fprintf(stderr, "compile error: %s\n", s.c_str());
-            return 70;
-        }
         try {
+            std::unique_ptr<protoST::BytecodeModule> bc;  // outlives rt (see above)
             protoST::STRuntime rt;
+            protoST::Compiler C;
+            bc = C.compileModule(*ast);
+            bc->setSourceName("<expr>");
+            if (C.hasErrors()) {
+                for (auto& s : C.errors()) std::fprintf(stderr, "compile error: %s\n", s.c_str());
+                return 70;
+            }
             auto* r = rt.runTopLevel(*bc);
             // BL-3: shared formatter — non-primitive objects render as
             // "a ClassName" via the default printString logic.
@@ -137,13 +139,14 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "%s:%d:%d: %s\n", path, e.line, e.column, e.message.c_str());
             return 65;
         }
-        protoST::Compiler C; auto bc = C.compileModule(*ast);
+        std::unique_ptr<protoST::BytecodeModule> bc;  // outlives rt (see above)
+        protoST::STRuntime rt;
+        protoST::Compiler C; bc = C.compileModule(*ast);
         bc->setSourceName(path);
         if (C.hasErrors()) {
             for (auto& s : C.errors()) std::fprintf(stderr, "compile error: %s\n", s.c_str());
             return 70;
         }
-        protoST::STRuntime rt;
         rt.debugger().attach();
         try {
             auto* r = rt.runTopLevel(*bc);
@@ -199,15 +202,22 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "%s:%d:%d: %s\n", path, e.line, e.column, e.message.c_str());
         if (!P.errors().empty()) return 65;
 
-        protoST::Compiler C;
-        auto bc = C.compileModule(*ast);
-        bc->setSourceName(path);
-        if (C.hasErrors()) {
-            for (auto& s : C.errors()) std::fprintf(stderr, "compile error: %s\n", s.c_str());
-            return 70;
-        }
         try {
+            // The runtime (and with it the kernel) exists before the script is
+            // compiled, so the compiler knows the kernel classes' instance
+            // variables (a subclass of IOStream reads `fd`).
+            // `bc` is declared before `rt` so it is destroyed after it: the
+            // runtime's workers may still run this module's methods while it
+            // shuts down.
+            std::unique_ptr<protoST::BytecodeModule> bc;
             protoST::STRuntime rt;
+            protoST::Compiler C;
+            bc = C.compileModule(*ast);
+            bc->setSourceName(path);
+            if (C.hasErrors()) {
+                for (auto& s : C.errors()) std::fprintf(stderr, "compile error: %s\n", s.c_str());
+                return 70;
+            }
             auto* r = rt.runTopLevel(*bc);
             // BL-3: shared formatter.
             if (printLast) std::puts(protoST::formatValue(rt, rt.rootCtx(), r).c_str());

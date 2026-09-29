@@ -2,11 +2,24 @@
 
 #include <algorithm>
 #include <cctype>
+#include <mutex>
+#include <unordered_map>
 
 namespace protoST {
 using namespace ast;
 
 namespace {
+
+// Every class compiled in this process, by name: the kernel's, imported
+// modules' and scripts'. A module compiled later reads it, so the instance
+// variables of a superclass declared elsewhere are known (a subclass of
+// IOStream reads `fd`). Compilation can run on several threads (an import
+// from an actor), hence the mutex.
+std::mutex g_classRegistryMutex;
+std::unordered_map<std::string, Compiler::ClassInfo>& classRegistry() {
+    static std::unordered_map<std::string, Compiler::ClassInfo> registry;
+    return registry;
+}
 
 // The instance variables visible in a method of `className`: its own and every
 // superclass's declared in this module, root first. A subclass method reads and
@@ -332,8 +345,28 @@ Compiler::resolveClassVarsFor(const std::string& className) const {
     return out;
 }
 
+std::unordered_map<std::string, Compiler::ClassInfo> Compiler::sharedClassRegistrySnapshot() {
+    std::lock_guard<std::mutex> lock(g_classRegistryMutex);
+    return classRegistry();
+}
+
+void Compiler::publishToSharedClassRegistry(const Node& module) {
+    if (module.kind != NodeKind::Module) return;
+    std::lock_guard<std::mutex> lock(g_classRegistryMutex);
+    for (const auto& topPtr : module.children) {
+        if (!topPtr || topPtr->kind != NodeKind::ClassDecl) continue;
+        auto it = classes_.find(topPtr->text);
+        if (it != classes_.end()) classRegistry()[it->first] = it->second;
+    }
+}
+
 void Compiler::collectClasses(const Node& module) {
-    classes_ = knownClasses_;
+    // Classes compiled before this module -- the kernel's, modules already
+    // imported -- so a subclass of one of them sees the instance variables
+    // it inherits; then the REPL's session classes; then this module's own,
+    // which win on a name clash.
+    classes_ = sharedClassRegistrySnapshot();
+    for (const auto& [name, info] : knownClasses_) classes_[name] = info;
     if (module.kind != NodeKind::Module) return;
     for (const auto& topPtr : module.children) {
         if (!topPtr || topPtr->kind != NodeKind::ClassDecl) continue;
@@ -406,6 +439,7 @@ void Compiler::collectClasses(const Node& module) {
             sup = it->second.superclassName;
         }
     }
+    publishToSharedClassRegistry(module);
 }
 
 std::unique_ptr<BytecodeModule> Compiler::compileModule(const Node& mod) {

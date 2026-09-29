@@ -58,6 +58,10 @@ public:
 
     // REPL: classes declared by earlier inputs (their instance, class and
     // class-instance variables), so a method entered later can name them.
+    // The process-wide record of compiled classes (see Compiler.cpp).
+    static std::unordered_map<std::string, ClassInfo> sharedClassRegistrySnapshot();
+    void publishToSharedClassRegistry(const ast::Node& module);
+
     void setKnownClasses(const std::unordered_map<std::string, ClassInfo>& known) {
         knownClasses_ = known;
     }
