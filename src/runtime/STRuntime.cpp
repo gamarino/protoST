@@ -630,6 +630,11 @@ STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
         impl_->space.setResolutionChain(chain->asObject(ctx));
     }
 
+    // The protocol written in protoST itself. Loaded before the worker pool
+    // starts, so a broken kernel file fails construction with no thread left
+    // to join.
+    loadKernel();
+
     // F6 v2 T7: spawn N managed worker ProtoThreads that drain the scheduler
     // queue in parallel with the foreground (Future>>wait) drain. Each worker
     // gets its own root ProtoContext from protoCore.
@@ -2278,6 +2283,49 @@ std::string STRuntime::findModuleFile(const std::string& logicalPath) const {
     }
 
     return "";
+}
+
+// The kernel: protocol implemented in protoST source (lib/kernel/*.st), run
+// at top level so the classes and methods it defines are ordinary globals, in
+// the order listed by lib/kernel/00-manifest.txt. A runtime without a stdlib
+// directory (an embedder that ships none) runs with the primitives alone.
+void STRuntime::loadKernel() {
+    namespace fs = std::filesystem;
+    const std::string libDir = discoverStdlibDir();
+    if (libDir.empty()) return;
+    const fs::path kernelDir = fs::path(libDir) / "kernel";
+    std::ifstream manifest(kernelDir / "00-manifest.txt");
+    if (!manifest) return;
+    std::string name;
+    while (std::getline(manifest, name)) {
+        if (name.empty() || name[0] == '#') continue;
+        const fs::path file = kernelDir / name;
+        std::ifstream in(file, std::ios::binary);
+        if (!in) throw std::runtime_error("kernel: cannot open " + file.string());
+        std::stringstream ss; ss << in.rdbuf();
+        Parser P(ss.str());
+        auto ast = P.parseModule();
+        if (!P.errors().empty()) {
+            const auto& e = P.errors().front();
+            throw std::runtime_error("kernel: " + file.string() + ":" + std::to_string(e.line)
+                                     + ":" + std::to_string(e.column) + ": " + e.message);
+        }
+        Compiler C;
+        auto bc = C.compileModule(*ast);
+        bc->setSourceName(file.string());
+        if (C.hasErrors())
+            throw std::runtime_error("kernel: " + file.string() + ": " + C.errors().front());
+        const BytecodeModule& module = *bc;
+        {
+            std::lock_guard<std::mutex> lock(impl_->modulesMu);
+            impl_->loadedModules.push_back(std::move(bc));
+        }
+        try {
+            runTopLevel(module);
+        } catch (const std::exception& ex) {
+            throw std::runtime_error("kernel: " + file.string() + ": " + ex.what());
+        }
+    }
 }
 
 // F5-M1: Read, parse, compile, and execute a module file. Wraps the classes

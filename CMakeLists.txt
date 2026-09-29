@@ -192,6 +192,9 @@ add_test(NAME cli_venv
 add_test(NAME cli_eval
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_eval.sh $<TARGET_FILE:protost>)
 
+add_test(NAME cli_kernel
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_kernel.sh $<TARGET_FILE:protost> ${CMAKE_BINARY_DIR}/cli-scratch/kernel)
+
 add_test(NAME cli_debugger
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_debugger.sh $<TARGET_FILE:protost> ${CMAKE_SOURCE_DIR}/tests/fixtures)
 
@@ -263,7 +266,7 @@ install(TARGETS protost
 install(DIRECTORY lib/
     DESTINATION ${CMAKE_INSTALL_DATADIR}/protoST/lib
     COMPONENT protoST
-    FILES_MATCHING PATTERN "*.st" PATTERN "README.md")
+    FILES_MATCHING PATTERN "*.st" PATTERN "README.md" PATTERN "00-manifest.txt")
 
 # License and documentation.
 install(FILES LICENSE
