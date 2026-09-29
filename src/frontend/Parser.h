@@ -32,6 +32,18 @@ private:
     void   error(const Token& at, const std::string& msg);
     void   synchronize();
 
+    // A blank line ends a statement written directly in a method body or at
+    // top level, even without a closing period: the expression parser stops
+    // at a token preceded by a blank line. Parentheses, blocks and brace
+    // arrays clear the flag, so their contents may span blank lines.
+    bool   stopAtBlankLine_ = true;
+    bool   atBlankLineBoundary() const { return stopAtBlankLine_ && current_.blankLineBefore; }
+    struct NestedExpressionScope {
+        Parser& p; bool saved;
+        explicit NestedExpressionScope(Parser& parser) : p(parser), saved(parser.stopAtBlankLine_) { p.stopAtBlankLine_ = false; }
+        ~NestedExpressionScope() { p.stopAtBlankLine_ = saved; }
+    };
+
     // grammar entry points (added in later tasks)
     ast::NodePtr parseTopForm();
     void parseTopTemporaries(ast::Node& mod);

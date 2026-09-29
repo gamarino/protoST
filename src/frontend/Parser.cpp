@@ -143,7 +143,8 @@ ast::NodePtr Parser::parseExpression() {
         return n;
     }
     auto first = parseKeywordSend();
-    if (!first || current_.kind != TokenKind::Semicolon || !isSendKind(first->kind)) {
+    if (!first || current_.kind != TokenKind::Semicolon || atBlankLineBoundary()
+        || !isSendKind(first->kind)) {
         return first;
     }
     // Promote receiver: cascade.children[0] = first.children[0]; rest are headless sends
@@ -151,7 +152,7 @@ ast::NodePtr Parser::parseExpression() {
     cascade->children.push_back(std::move(first->children[0]));
     first->children.erase(first->children.begin());
     cascade->children.push_back(std::move(first));
-    while (match(TokenKind::Semicolon)) {
+    while (!atBlankLineBoundary() && match(TokenKind::Semicolon)) {
         // parse a single message with receiver=nullptr (we manufacture)
         Token t = current_;
         if (current_.kind == TokenKind::Identifier) {
@@ -160,7 +161,7 @@ ast::NodePtr Parser::parseExpression() {
             auto n = ast::makeNode(ast::NodeKind::UnarySend, t.line, t.column);
             n->text = t.text;
             // chain unary
-            while (current_.kind == TokenKind::Identifier) {
+            while (current_.kind == TokenKind::Identifier && !atBlankLineBoundary()) {
                 Token chained = current_; advance();
                 auto outer = ast::makeNode(ast::NodeKind::UnarySend, chained.line, chained.column);
                 outer->text = chained.text;
@@ -197,7 +198,7 @@ ast::NodePtr Parser::parseExpression() {
 
 ast::NodePtr Parser::parseUnarySend() {
     auto recv = parsePrimary();
-    while (recv && current_.kind == TokenKind::Identifier) {
+    while (recv && current_.kind == TokenKind::Identifier && !atBlankLineBoundary()) {
         // distinguish: only an identifier that is NOT followed by ':' is a unary selector;
         // keyword selectors come tokenised as TokenKind::Keyword.
         Token sel = current_;
@@ -231,7 +232,7 @@ static bool isBinaryOpToken(TokenKind k) {
 
 ast::NodePtr Parser::parseBinarySend() {
     auto left = parseUnarySend();
-    while (left && isBinaryOpToken(current_.kind)) {
+    while (left && isBinaryOpToken(current_.kind) && !atBlankLineBoundary()) {
         Token op = current_; advance();
         std::string opText = (op.kind == TokenKind::Pipe) ? "|" : op.text;
         auto right = parseUnarySend();
@@ -246,11 +247,11 @@ ast::NodePtr Parser::parseBinarySend() {
 
 ast::NodePtr Parser::parseKeywordSend() {
     auto recv = parseBinarySend();
-    if (recv && current_.kind == TokenKind::Keyword) {
+    if (recv && current_.kind == TokenKind::Keyword && !atBlankLineBoundary()) {
         auto n = ast::makeNode(ast::NodeKind::KeywordSend, current_.line, current_.column);
         n->children.push_back(std::move(recv));
         std::string selector;
-        while (current_.kind == TokenKind::Keyword) {
+        while (current_.kind == TokenKind::Keyword && !atBlankLineBoundary()) {
             selector += current_.text;            // includes trailing ':'
             advance();
             auto arg = parseBinarySend();
@@ -321,6 +322,7 @@ ast::NodePtr Parser::parsePrimary() {
         }
         case TokenKind::LParen: {
             advance();
+            NestedExpressionScope nested(*this);
             auto inner = parseExpression();
             consume(TokenKind::RParen, "expected ')'");
             return inner;
@@ -329,6 +331,7 @@ ast::NodePtr Parser::parsePrimary() {
             return parseBlock();
         case TokenKind::LBrace: {
             Token open = current_; advance();
+            NestedExpressionScope nested(*this);
             auto arr = ast::makeNode(ast::NodeKind::DynArrayLit, open.line, open.column);
             while (current_.kind != TokenKind::RBrace && current_.kind != TokenKind::EndOfFile) {
                 auto e = parseExpression();
@@ -415,6 +418,7 @@ ast::NodePtr Parser::parseLiteralArrayElement() {
 
 ast::NodePtr Parser::parseBlock() {
     Token open = current_; advance(); // consume '['
+    NestedExpressionScope nested(*this);
     auto blk = ast::makeNode(ast::NodeKind::Block, open.line, open.column);
 
     // arguments: : name : name ... (then a '|' if any arg present)
@@ -649,7 +653,7 @@ ast::NodePtr Parser::parseClassDecl(Token classIdent) {
 // positional value, and `f((a, b))` passes the comma-binary result.
 ast::NodePtr Parser::parseCallArgExpr() {
     auto left = parseUnarySend();
-    while (left && isBinaryOpToken(current_.kind)) {
+    while (left && isBinaryOpToken(current_.kind) && !atBlankLineBoundary()) {
         if (current_.kind == TokenKind::BinaryOp
             && (current_.text == "," || current_.text == "=")) {
             break;
@@ -674,6 +678,7 @@ ast::NodePtr Parser::parseCallArgExpr() {
 // in alphabetical key order, named keys live in stringList).
 ast::NodePtr Parser::parseCallSend(Token selectorTok, ast::NodePtr receiver,
                                    bool implicitReceiver) {
+    NestedExpressionScope nested(*this);
     auto n = ast::makeNode(ast::NodeKind::CallSend,
                            selectorTok.line, selectorTok.column);
     n->text = selectorTok.text;
