@@ -199,3 +199,46 @@ SortedCollection >> addFirst: anObject
 
 SortedCollection >> at: index put: anObject
   ^ self shouldNotImplement.
+
+"--- equality ----------------------------------------------------------------
+ Sequences are equal when they are of the same class and hold equal elements
+ in the same order; hashed collections when they hold equal elements. hash
+ agrees with =."
+
+Object >> ~= anObject
+  ^ (self = anObject) not.
+
+SequenceableCollection >> = other
+  self == other ifTrue: [^ true].
+  (other isKindOf: SequenceableCollection) ifFalse: [^ false].
+  self class == other class ifFalse: [^ false].
+  self size = other size ifFalse: [^ false].
+  1 to: self size do: [:i | (self at: i) = (other at: i) ifFalse: [^ false]].
+  ^ true.
+
+SequenceableCollection >> hash
+  | h |
+  h := self size.
+  1 to: (self size min: 8) do: [:i | h := (h * 31 + (self at: i) hash) \\ 1073741824].
+  ^ h.
+
+Set >> = other
+  self == other ifTrue: [^ true].
+  (other isKindOf: Set) ifFalse: [^ false].
+  self size = other size ifFalse: [^ false].
+  ^ self allSatisfy: [:each | other includes: each].
+
+Set >> hash
+  ^ self size.
+
+Dictionary >> = other
+  self == other ifTrue: [^ true].
+  (other isKindOf: Dictionary) ifFalse: [^ false].
+  self size = other size ifFalse: [^ false].
+  self keysAndValuesDo: [:k :v |
+    (other includesKey: k) ifFalse: [^ false].
+    (other at: k) = v ifFalse: [^ false]].
+  ^ true.
+
+Dictionary >> hash
+  ^ self size.

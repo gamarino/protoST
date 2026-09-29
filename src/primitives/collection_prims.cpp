@@ -41,6 +41,7 @@
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/TransientPin.h"
+#include "modules/STModuleProvider.h"
 #include "protoCore.h"
 
 #include <cstring>
@@ -143,12 +144,31 @@ const proto::ProtoString* sizeKey(proto::ProtoContext* ctx) {
 // value-only comparison could never find a NaN that is in the collection. This
 // is the same predicate `indexOfEqual` uses for `Bag` and `OrderedCollection`,
 // which is how all four collections come to agree.
+// A heap object whose class may define = and hash: anything but a number, a
+// string or symbol, a character, a Boolean or nil. For these the hashed
+// collections send = and hash, so a class's own equality decides membership
+// (it used to be identity for every object that was not a primitive value).
+STRuntime* runtimeForUserEquality(proto::ProtoContext* ctx, const proto::ProtoObject* o) {
+    if (!o || o == PROTO_NONE || o == PROTO_TRUE || o == PROTO_FALSE) return nullptr;
+    if (o->isInteger(ctx) || o->isDouble(ctx) || o->asString(ctx)) return nullptr;
+    STRuntime* rt = stRuntimeForSpace(ctx->space);
+    if (!rt || o->getPrototype(ctx) == rt->bootstrap().characterProto) return nullptr;
+    return rt;
+}
+
 bool stKeyEquals(proto::ProtoContext* ctx, const proto::ProtoObject* a,
                  const proto::ProtoObject* b) {
     if (a == b) return true;
     if (!a) a = PROTO_NONE;
-    if (b) return a->partialCompare(ctx, b) == 0;
-    return false;
+    if (!b) return false;
+    if (STRuntime* rt = runtimeForUserEquality(ctx, a)) {
+        bool understood = false;
+        const proto::ProtoObject* args1[1] = { b };
+        const proto::ProtoObject* r = sendDynamic(
+            *rt, ctx, a, proto::ProtoString::createSymbol(ctx, "="), args1, 1, &understood);
+        if (understood) return r == PROTO_TRUE;
+    }
+    return a->partialCompare(ctx, b) == 0;
 }
 
 // A hash for numbers that agrees with stKeyEquals across the whole tower.
@@ -201,6 +221,15 @@ unsigned long stKeyHash(proto::ProtoContext* ctx, const proto::ProtoObject* key)
     }
     if (key->isInteger(ctx) || key->isDouble(ctx))
         return numberKeyHash(key->asDouble(ctx));
+    if (STRuntime* rt = runtimeForUserEquality(ctx, key)) {
+        bool understood = false;
+        const proto::ProtoObject* h = sendDynamic(
+            *rt, ctx, key, proto::ProtoString::createSymbol(ctx, "hash"), nullptr, 0, &understood);
+        if (understood && h && h->isInteger(ctx))
+            return h->compare(ctx, ctx->fromLong(0)) >= 0 && h->compare(ctx, ctx->fromLong(1LL << 53)) < 0
+                ? static_cast<unsigned long>(h->asLong(ctx))
+                : numberKeyHash(0.5);   // an out-of-range hash still has to be consistent
+    }
     return key->getHash(ctx);
 }
 
