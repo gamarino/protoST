@@ -74,6 +74,37 @@ const proto::ProtoString* dataKey(proto::ProtoContext* ctx) {
     return proto::ProtoString::createSymbol(ctx, "__data__");
 }
 
+// A class-side constructor bound on a built-in collection class also serves
+// its user subclasses (`OrderedCollection subclass: #Stack`, then
+// `Stack new`). The primitive builds a built-in instance; when the receiver is
+// a user subclass, the result is re-made as a child of that class with the
+// same own attributes (the backing data), and receives `initialize`, as `new`
+// sends it for every other class.
+const proto::ProtoObject* instantiateAs(STRuntime& rt, proto::ProtoContext* ctx,
+                                        const proto::ProtoObject* cls,
+                                        const proto::ProtoObject* base,
+                                        const proto::ProtoObject* inst) {
+    if (!cls || cls == base || cls == PROTO_NONE || !inst) return inst;
+    const proto::ProtoObject* own =
+        cls->getOwnAttributeDirect(ctx, rt.bootstrap().sym.className);
+    if (!own || own == PROTO_NONE) return inst;
+    TransientPin pinInst(ctx, inst);
+    const proto::ProtoObject* out =
+        const_cast<proto::ProtoObject*>(cls)->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinOut(ctx, out);
+    struct Sink { const proto::ProtoObject* out; };
+    Sink sink{out};
+    inst->processOwnAttributes(ctx, &sink,
+        [](proto::ProtoContext* c, void* self, const proto::ProtoString* key,
+           const proto::ProtoObject* value) {
+            static_cast<Sink*>(self)->out->setAttribute(c, key, value);
+        });
+    bool understood = false;
+    sendDynamic(rt, ctx, out, proto::ProtoString::createSymbol(ctx, "initialize"),
+                nullptr, 0, &understood);
+    return out;
+}
+
 // The backing ProtoList of an Array instance. The instance stores the list
 // (wrapped as a ProtoObject) under `__data__`; this unwraps it. A nullptr or
 // missing `__data__` yields a fresh empty list — defensive, so a hand-built
@@ -756,7 +787,7 @@ const proto::ProtoObject* prim_Array_do(STRuntime& rt, proto::ProtoContext* ctx,
 
 // Array new: n → an Array of `n` nil elements.
 const proto::ProtoObject* prim_Array_classNew(STRuntime& rt, proto::ProtoContext* ctx,
-                                              const proto::ProtoObject* /*cls*/,
+                                              const proto::ProtoObject* cls,
                                               const proto::ProtoObject* const* a,
                                               int argc) {
     if (argc != 1) throw std::runtime_error("new: expects 1 arg (size)");
@@ -769,7 +800,7 @@ const proto::ProtoObject* prim_Array_classNew(STRuntime& rt, proto::ProtoContext
         data = data->appendLast(ctx, PROTO_NONE);
         pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
     }
-    return makeArrayInstance(rt, ctx, data);
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().arrayProto, makeArrayInstance(rt, ctx, data));
 }
 
 // Array withAll: aCollection → an Array of the elements of `aCollection`. The
@@ -778,7 +809,7 @@ const proto::ProtoObject* prim_Array_classNew(STRuntime& rt, proto::ProtoContext
 // constructor the literal lowering could target; MAKE_ARRAY goes straight to
 // makeArrayInstance, but `withAll:` is the script-visible equivalent.
 const proto::ProtoObject* prim_Array_classWithAll(STRuntime& rt, proto::ProtoContext* ctx,
-                                                  const proto::ProtoObject* /*cls*/,
+                                                  const proto::ProtoObject* cls,
                                                   const proto::ProtoObject* const* a,
                                                   int argc) {
     if (argc != 1) throw std::runtime_error("withAll: expects 1 arg (collection)");
@@ -790,12 +821,12 @@ const proto::ProtoObject* prim_Array_classWithAll(STRuntime& rt, proto::ProtoCon
         pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
         return true;
     });
-    return makeArrayInstance(rt, ctx, data);
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().arrayProto, makeArrayInstance(rt, ctx, data));
 }
 
 // Array with: ... — fixed-arity convenience constructors (1..4 elements).
 const proto::ProtoObject* prim_Array_classWith(STRuntime& rt, proto::ProtoContext* ctx,
-                                               const proto::ProtoObject* /*cls*/,
+                                               const proto::ProtoObject* cls,
                                                const proto::ProtoObject* const* a,
                                                int argc) {
     const proto::ProtoList* data = ctx->newList();
@@ -805,7 +836,7 @@ const proto::ProtoObject* prim_Array_classWith(STRuntime& rt, proto::ProtoContex
         data = data->appendLast(ctx, a[i] ? a[i] : PROTO_NONE);
         pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
     }
-    return makeArrayInstance(rt, ctx, data);
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().arrayProto, makeArrayInstance(rt, ctx, data));
 }
 
 // =================  OrderedCollection base operations  =====================
@@ -1035,16 +1066,16 @@ const proto::ProtoObject* prim_OC_do(STRuntime& rt, proto::ProtoContext* ctx,
 
 // OrderedCollection new → a fresh empty OrderedCollection.
 const proto::ProtoObject* prim_OC_classNew(STRuntime& rt, proto::ProtoContext* ctx,
-                                           const proto::ProtoObject* /*cls*/,
+                                           const proto::ProtoObject* cls,
                                            const proto::ProtoObject* const*, int) {
-    return makeInstanceOfSpecies(rt, ctx, rt.bootstrap().orderedCollectionProto,
-                                 ctx->newList());
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().orderedCollectionProto, makeInstanceOfSpecies(rt, ctx, rt.bootstrap().orderedCollectionProto,
+                                 ctx->newList()));
 }
 
 // OrderedCollection withAll: aCollection → an OrderedCollection of the elements
 // of the argument (any collection the iteration protocol understands).
 const proto::ProtoObject* prim_OC_classWithAll(STRuntime& rt, proto::ProtoContext* ctx,
-                                               const proto::ProtoObject* /*cls*/,
+                                               const proto::ProtoObject* cls,
                                                const proto::ProtoObject* const* a,
                                                int argc) {
     if (argc != 1) throw std::runtime_error("withAll: expects 1 arg (collection)");
@@ -1055,7 +1086,7 @@ const proto::ProtoObject* prim_OC_classWithAll(STRuntime& rt, proto::ProtoContex
         pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
         return true;
     });
-    return makeInstanceOfSpecies(rt, ctx, rt.bootstrap().orderedCollectionProto, data);
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().orderedCollectionProto, makeInstanceOfSpecies(rt, ctx, rt.bootstrap().orderedCollectionProto, data));
 }
 
 // =========================  Set base operations  ===========================
@@ -1189,15 +1220,15 @@ const proto::ProtoObject* prim_Set_do(STRuntime& rt, proto::ProtoContext* ctx,
 
 // Set new → a fresh empty Set.
 const proto::ProtoObject* prim_Set_classNew(STRuntime& rt, proto::ProtoContext* ctx,
-                                            const proto::ProtoObject* /*cls*/,
+                                            const proto::ProtoObject* cls,
                                             const proto::ProtoObject* const*, int) {
-    return makeSetInstance(rt, ctx, ctx->newMap(), 0);
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().setProto, makeSetInstance(rt, ctx, ctx->newMap(), 0));
 }
 
 // Set withAll: aCollection → a Set of the distinct elements of the argument
 // (any collection the iteration protocol understands).
 const proto::ProtoObject* prim_Set_classWithAll(STRuntime& rt, proto::ProtoContext* ctx,
-                                                const proto::ProtoObject* /*cls*/,
+                                                const proto::ProtoObject* cls,
                                                 const proto::ProtoObject* const* a,
                                                 int argc) {
     if (argc != 1) throw std::runtime_error("withAll: expects 1 arg (collection)");
@@ -1213,7 +1244,7 @@ const proto::ProtoObject* prim_Set_classWithAll(STRuntime& rt, proto::ProtoConte
         }
         return true;
     });
-    return makeSetInstance(rt, ctx, data, size);
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().setProto, makeSetInstance(rt, ctx, data, size));
 }
 
 // =========================  Bag base operations  ===========================
@@ -1373,15 +1404,15 @@ const proto::ProtoObject* prim_Bag_do(STRuntime& rt, proto::ProtoContext* ctx,
 
 // Bag new → a fresh empty Bag.
 const proto::ProtoObject* prim_Bag_classNew(STRuntime& rt, proto::ProtoContext* ctx,
-                                            const proto::ProtoObject* /*cls*/,
+                                            const proto::ProtoObject* cls,
                                             const proto::ProtoObject* const*, int) {
-    return makeBagInstance(rt, ctx, ctx->newList());
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().bagProto, makeBagInstance(rt, ctx, ctx->newList()));
 }
 
 // Bag withAll: aCollection → a Bag of every element of the argument (any
 // collection the iteration protocol understands), keeping duplicates.
 const proto::ProtoObject* prim_Bag_classWithAll(STRuntime& rt, proto::ProtoContext* ctx,
-                                                const proto::ProtoObject* /*cls*/,
+                                                const proto::ProtoObject* cls,
                                                 const proto::ProtoObject* const* a,
                                                 int argc) {
     if (argc != 1) throw std::runtime_error("withAll: expects 1 arg (collection)");
@@ -1392,7 +1423,7 @@ const proto::ProtoObject* prim_Bag_classWithAll(STRuntime& rt, proto::ProtoConte
         pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
         return true;
     });
-    return makeBagInstance(rt, ctx, data);
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().bagProto, makeBagInstance(rt, ctx, data));
 }
 
 // =========================  Association  ===================================
@@ -1817,9 +1848,9 @@ const proto::ProtoObject* prim_Dict_associations(STRuntime& rt, proto::ProtoCont
 
 // Dictionary new → a fresh empty Dictionary.
 const proto::ProtoObject* prim_Dict_classNew(STRuntime& rt, proto::ProtoContext* ctx,
-                                             const proto::ProtoObject* /*cls*/,
+                                             const proto::ProtoObject* cls,
                                              const proto::ProtoObject* const*, int) {
-    return makeDictInstance(rt, ctx, ctx->newMap(), 0);
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().dictionaryProto, makeDictInstance(rt, ctx, ctx->newMap(), 0));
 }
 
 // =====================  Derived iteration protocol  ========================
