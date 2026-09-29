@@ -269,7 +269,12 @@ struct STRuntime::Impl {
     // Guards `workers` once the pool can grow after construction (blocking
     // I/O, enterBlockingIO). `baseWorkers` is the configured pool size;
     // `blockedInIO` counts workers currently blocked in I/O.
+    // `spawning` counts workers being created: newThread runs without the
+    // mutex (it allocates, so it can park for a collection, and a thread
+    // waiting on a plain mutex cannot), and the count keeps their slots
+    // reserved meanwhile. The mutex is never held across an allocation.
     std::mutex workersMutex;
+    size_t spawning = 0;
     unsigned baseWorkers = 0;
     std::atomic<int> blockedInIO { 0 };
 
@@ -733,17 +738,27 @@ STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
 // space->mainContext on its temporary context and the main program's
 // variables stopped being scanned.
 bool STRuntime::spawnWorker(proto::ProtoContext* ctx) {
-    std::lock_guard<std::mutex> lock(impl_->workersMutex);
-    if (impl_->shutdown.load(std::memory_order_acquire)) return false;
+    size_t index;
+    {
+        std::lock_guard<std::mutex> lock(impl_->workersMutex);
+        if (impl_->shutdown.load(std::memory_order_acquire)) return false;
+        index = impl_->workers.size() + impl_->spawning++;
+    }
     const proto::ProtoList* argsForThread = ctx->newList();
     argsForThread = argsForThread->appendLast(
         ctx, ctx->fromExternalPointer(this, nullptr));
-    std::string nameStr = "protoST-worker-" + std::to_string(impl_->workers.size());
+    std::string nameStr = "protoST-worker-" + std::to_string(index);
     const proto::ProtoString* threadName =
         proto::ProtoString::createSymbol(ctx, nameStr.c_str());
     const proto::ProtoThread* t = impl_->space.newThread(
         ctx, threadName, st_worker_main, argsForThread, nullptr);
-    if (t) impl_->workers.push_back(t);
+    {
+        // Registered even when shutdown began meanwhile: the destructor
+        // waits for `spawning` to drain and joins every registered worker.
+        std::lock_guard<std::mutex> lock(impl_->workersMutex);
+        if (t) impl_->workers.push_back(t);
+        --impl_->spawning;
+    }
     return t != nullptr;
 }
 
@@ -756,7 +771,7 @@ bool STRuntime::enterBlockingIO(proto::ProtoContext* ctx) {
     size_t total;
     {
         std::lock_guard<std::mutex> lock(impl_->workersMutex);
-        total = impl_->workers.size();
+        total = impl_->workers.size() + impl_->spawning;
     }
     if (total < kMaxWorkers && total - static_cast<size_t>(blocked) < impl_->baseWorkers)
         spawnWorker(ctx);
@@ -786,9 +801,18 @@ STRuntime::~STRuntime() {
     // worker exits its loop in parallel as soon as it observes the flag.
     std::vector<const proto::ProtoThread*> pool;
     {
-        std::lock_guard<std::mutex> lock(impl_->workersMutex);
-        impl_->shutdown.store(true, std::memory_order_release);
-        pool = impl_->workers;
+        // A worker being created elsewhere (enterBlockingIO) may be parked
+        // for a collection; wait for it unmanaged, so that collection is not
+        // held up by this thread.
+        proto::ProtoContext::UnmanagedScope unmanaged(impl_->rootCtx);
+        for (;;) {
+            {
+                std::lock_guard<std::mutex> lock(impl_->workersMutex);
+                impl_->shutdown.store(true, std::memory_order_release);
+                if (impl_->spawning == 0) { pool = impl_->workers; break; }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
     }
     if (!pool.empty()) {
         // F6 v4 (2026-05-23): wake every worker once. The new event-driven

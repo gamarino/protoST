@@ -8,7 +8,7 @@
  Every blocking operation leaves the collector's quorum while it waits, so a
  program or an actor blocked on input never holds up a collection. Errors are
  classed: FileDoesNotExist, FileAlreadyExists, FileSystemError, NetworkError
- and its subclasses, OSProcessError. Text is UTF-8; binary data is an Array
+ and its subclasses, OSProcessError, LineTooLong. Text is UTF-8; binary data is an Array
  of integers from 0 to 255. See docs/superpowers/specs/2026-09-29-io-design.md."
 
 Error subclass: #FileSystemError.
@@ -18,6 +18,8 @@ Error subclass: #NetworkError.
 NetworkError subclass: #ConnectionRefused.
 NetworkError subclass: #ConnectionTimedOut.
 NetworkError subclass: #NameLookupFailure.
+NetworkError subclass: #BodyTooLarge.
+Error subclass: #LineTooLong.
 Error subclass: #OSProcessError.
 
 "-- Streams over a descriptor (standard streams, files, sockets) -----------"
@@ -40,6 +42,11 @@ IOStream >> isClosed
 
 IOStream >> nextLine
   ^ self __fdReadLine: fd.
+
+IOStream >> nextLineMax: aByteCount
+  "nextLine, for input that is not trusted: a line longer than aByteCount
+   bytes raises LineTooLong instead of growing without bound."
+  ^ self __fdReadLine: fd max: aByteCount.
 
 IOStream >> upToEnd
   ^ self __fdReadAll: fd.

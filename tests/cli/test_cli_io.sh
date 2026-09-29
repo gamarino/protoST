@@ -41,6 +41,23 @@ printf "Stdio stdin linesDo: [:l | Stdio stdout nextPutAll: l asUppercase; lf].\
 out=$(printf 'ab\ncd\n' | "$PROTOST" "$dir/upper.st" | tr -d '\n')
 [[ "$out" == "ABCD" ]] || { echo "FAIL filter: $out"; exit 1; }
 
+# Concurrent readers of one stream: every line reaches exactly one reader,
+# whole (the descriptor's buffer is shared by the actors reading it).
+cat > "$dir/readers.st" <<'ST'
+Object subclass: #Reader.
+Reader >> count
+  | n sum line |
+  n := 0. sum := 0.
+  [(line := Stdio stdin nextLine) notNil] whileTrue: [n := n + 1. sum := sum + line asNumber].
+  ^ Array with: n with: sum
+futures := (1 to: 4) collect: [:i | Reader new asActor count].
+n := 0. sum := 0.
+futures do: [:f | | r | r := f wait. n := n + (r at: 1). sum := sum + (r at: 2)].
+Transcript showCr: n printString , ' ' , sum printString.
+ST
+out=$(seq 1 20000 | timeout 60 "$PROTOST" "$dir/readers.st" 2>&1) || true
+[[ "$out" == "20000 200010000" ]] || { echo "FAIL concurrent readers: $out"; exit 1; }
+
 # Actors blocked in network reads leave the collector's quorum: collections
 # run meanwhile (small heap) and the program completes.
 cat > "$dir/gc.st" <<'ST'

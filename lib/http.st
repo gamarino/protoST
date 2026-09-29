@@ -18,14 +18,25 @@ USAGE (server)
 
 The handler answers an HTTPResponse, a String (200, text/plain), nil (204),
 or any other object (200, its JSON). Each connection is handled by its own
-actor; an error in the handler answers 500 with the error's text. A request
-answers method, path, query (a Dictionary), headers (lower-case keys), body
-and json.
+actor. An error in the handler answers a plain 500 and is reported on
+standard error (its text is not sent to the client). A request answers
+method, path, query (a Dictionary), headers (lower-case keys), body and json.
 
 http and https (TLS with certificate and host-name verification), chunked
 bodies, redirects (up to 5), `HTTPClient timeout:` (milliseconds, default
 30000). One request per connection (Connection: close); no HTTP/2, no
-WebSockets, no TLS server."
+WebSockets, no TLS server.
+
+Redirects: a relative Location resolves against the request URL; a redirect
+to another origin (scheme, host or port) drops the headers the program set,
+such as Authorization; a redirect from https to http is refused.
+
+Untrusted input is bounded: a request or header line over 8 KiB, more than
+100 header lines, a malformed Content-Length and a body over the server's
+`maxBodySize:` (default 64 MiB) are refused with 431, 400 or 413 before the
+handler runs. A method, header name, header value or URL that contains a line
+break or another control character is refused with an Error before anything
+is sent: it could forge extra headers or requests."
 
 Import from: 'net'.
 Import from: 'json'.
@@ -159,6 +170,12 @@ HTTPRequest >> printOn: aStream
 
 Object subclass: #HTTP.
 
+HTTP class >> maxLine
+  ^ 8192.
+
+HTTP class >> maxHeaderLines
+  ^ 100.
+
 HTTP class >> hexValue: aString
   | n |
   n := 0.
@@ -170,66 +187,100 @@ HTTP class >> hexValue: aString
   ^ n.
 
 HTTP class >> percentDecode: aString
-  | out i |
-  out := WriteStream on: String new.
-  i := 1.
-  [i <= aString size] whileTrue: [
-    | c |
-    c := aString at: i.
-    (c = $% and: [i + 2 <= aString size])
-      ifTrue: [out nextPut: (self hexValue: (aString copyFrom: i + 1 to: i + 2)) asCharacter. i := i + 3]
-      ifFalse: [out nextPut: (c = $+ ifTrue: [Character space] ifFalse: [c]). i := i + 1]].
-  ^ out contents.
+  "%XX sequences decoded as UTF-8 bytes; '+' is kept (see parseQuery:)."
+  ^ self __percentDecode: aString.
 
 HTTP class >> parseQuery: aString
+  "In a query string '+' is a space, so it is replaced before decoding
+   (an encoded plus, %2B, stays a plus)."
   | d |
   d := Dictionary new.
   (aString isNil or: [aString isEmpty]) ifTrue: [^ d].
   (aString substrings: '&') do: [:pair |
-    | i |
-    i := pair indexOf: $=.
+    | i p |
+    p := pair collect: [:c | c = $+ ifTrue: [Character space] ifFalse: [c]].
+    i := p indexOf: $=.
     i = 0
-      ifTrue: [d at: (self percentDecode: pair) put: '']
-      ifFalse: [d at: (self percentDecode: (pair copyFrom: 1 to: i - 1))
-                  put: (self percentDecode: (pair copyFrom: i + 1 to: pair size))]].
+      ifTrue: [d at: (self percentDecode: p) put: '']
+      ifFalse: [d at: (self percentDecode: (p copyFrom: 1 to: i - 1))
+                  put: (self percentDecode: (p copyFrom: i + 1 to: p size))]].
   ^ d.
 
+HTTP class >> check: aString as: aWhat token: isToken
+  "Refuses control characters (a tab is allowed in a value) and, in a token
+   (a method or header name), spaces and separators."
+  aString isEmpty & isToken ifTrue: [^ Error signal: 'invalid ' , aWhat , ': empty'].
+  aString do: [:c |
+    | v |
+    v := c value.
+    ((v < 32 and: [isToken or: [v ~= 9]]) or: [v = 127
+        or: [isToken and: [v = 32 or: ['()<>@,;:\"/[]?={}' includes: c]]]])
+      ifTrue: [^ Error signal: 'invalid ' , aWhat , ': ' , aString printString]].
+  ^ aString.
+
+HTTP class >> checkTarget: aString
+  "A request target: no spaces or control characters."
+  aString do: [:c |
+    (c value <= 32 or: [c value = 127])
+      ifTrue: [^ Error signal: 'invalid URL: ' , aString printString]].
+  ^ aString.
+
+HTTP class >> checkHeaders: aDictionary
+  aDictionary keysAndValuesDo: [:k :v |
+    self check: k as: 'header name' token: true.
+    self check: v displayString as: 'header value' token: false].
+  ^ aDictionary.
+
 HTTP class >> readHeadersFrom: aSocket
-  "Header lines up to the blank line: a Dictionary with lower-case names."
-  | d line |
+  "Header lines up to the blank line: a Dictionary with lower-case names.
+   A line over maxLine bytes, or more than maxHeaderLines lines, raises
+   LineTooLong."
+  | d line count |
   d := Dictionary new.
-  [(line := aSocket nextLine) notNil and: [line notEmpty]] whileTrue: [
+  count := 0.
+  [(line := aSocket nextLineMax: self maxLine) notNil and: [line notEmpty]] whileTrue: [
     | i |
+    count := count + 1.
+    count > self maxHeaderLines ifTrue: [^ LineTooLong signal: 'more than ' , self maxHeaderLines printString , ' header lines'].
     i := line indexOf: $:.
     i > 0 ifTrue: [d at: (line copyFrom: 1 to: i - 1) trimBoth asLowercase
                      put: (line copyFrom: i + 1 to: line size) trimBoth]].
   ^ d.
 
+HTTP class >> contentLengthIn: aDictionary
+  "The Content-Length, nil when absent; a value that is not a decimal
+   integer raises NetworkError."
+  | v |
+  v := aDictionary at: 'content-length' ifAbsent: [^ nil].
+  (v notEmpty and: [v size <= 18 and: [v allSatisfy: [:c | c isDigit]]])
+    ifFalse: [^ NetworkError signal: 'invalid content-length: ' , v printString].
+  ^ v asNumber.
+
 HTTP class >> readBodyFrom: aSocket headers: aDictionary
+  ^ self readBodyFrom: aSocket headers: aDictionary max: 0.
+
+HTTP class >> readBodyFrom: aSocket headers: aDictionary max: aByteCount
+  "The body the headers announce. aByteCount 0 means no limit; a larger body
+   raises BodyTooLarge."
   | te len |
   te := aDictionary at: 'transfer-encoding' ifAbsent: [''].
-  (te asLowercase includesSubstring: 'chunked') ifTrue: [^ self readChunkedFrom: aSocket].
-  len := aDictionary at: 'content-length' ifAbsent: [nil].
-  len isNil ifFalse: [
-    len := len asNumber.
-    len = 0 ifTrue: [^ ''].
-    ^ (aSocket nextByteCount: len) ifNil: ['']].
-  ^ ''.
-
-HTTP class >> readChunkedFrom: aSocket
-  | out size |
-  out := WriteStream on: String new.
-  [size := self hexValue: ((aSocket nextLine ifNil: ['0']) substrings: ';') first trimBoth.
-   size > 0] whileTrue: [
-    out nextPutAll: (aSocket nextByteCount: size).
-    aSocket nextLine].
-  [(aSocket nextLine ifNil: ['']) notEmpty] whileTrue: [].
-  ^ out contents.
+  (te asLowercase includesSubstring: 'chunked')
+    ifTrue: [^ self __httpReadChunked: aSocket descriptor max: aByteCount].
+  len := self contentLengthIn: aDictionary.
+  len isNil ifTrue: [^ ''].
+  (aByteCount > 0 and: [len > aByteCount])
+    ifTrue: [^ BodyTooLarge signal: 'a body of ' , len printString , ' bytes'].
+  len = 0 ifTrue: [^ ''].
+  ^ (aSocket nextByteCount: len) ifNil: [''].
 
 HTTP class >> write: aBody headers: aDictionary to: aSocket
+  ^ self write: aBody headers: aDictionary to: aSocket length: true.
+
+HTTP class >> write: aBody headers: aDictionary to: aSocket length: aBoolean
+  "The header lines and the body. The headers were checked (checkHeaders:)."
   aDictionary keysAndValuesDo: [:k :v |
     aSocket nextPutAll: k , ': ' , v displayString; crlf].
-  aSocket nextPutAll: 'content-length: ' , (self __byteSize: aBody) printString; crlf.
+  aBoolean ifTrue: [aSocket nextPutAll: 'content-length: ' , (self __byteSize: aBody) printString; crlf].
   aSocket nextPutAll: 'connection: close'; crlf; crlf.
   aSocket nextPutAll: aBody.
   aSocket flush.
@@ -282,86 +333,161 @@ HTTPClient class >> parseUrl: aUrl
   i = 0
     ifTrue: [hostPort := rest. path := '/']
     ifFalse: [hostPort := rest copyFrom: 1 to: i - 1. path := rest copyFrom: i to: rest size].
+  (path notEmpty and: [(path at: 1) = $?]) ifTrue: [path := '/' , path].
   i := hostPort indexOf: $:.
   i = 0
     ifTrue: [host := hostPort. port := scheme = 'https' ifTrue: [443] ifFalse: [80]]
     ifFalse: [host := hostPort copyFrom: 1 to: i - 1. port := (hostPort copyFrom: i + 1 to: hostPort size) asNumber].
+  port isNil ifTrue: [^ Error signal: 'invalid port in URL: ' , aUrl].
   ^ Array with: scheme with: host with: port with: path.
 
-HTTPClient class >> request: aMethod url: aUrl headers: aDictionaryOrNil body: aStringOrNil redirects: aCount
-  | parts socket sent statusLine words status reason headers body location response |
+HTTPClient class >> authorityOf: parts
+  "host, or host:port when the port is not the scheme's default."
+  ^ (((parts at: 1) = 'http' and: [(parts at: 3) = 80]) or: [(parts at: 1) = 'https' and: [(parts at: 3) = 443]])
+      ifTrue: [parts at: 2]
+      ifFalse: [(parts at: 2) , ':' , (parts at: 3) printString].
+
+HTTPClient class >> originOf: aUrl
+  | parts |
   parts := self parseUrl: aUrl.
+  ^ (parts at: 1) , '://' , (parts at: 2) , ':' , (parts at: 3) printString.
+
+HTTPClient class >> removeDotSegments: aPath
+  "'/a/b/../c' -> '/a/c'; a query is kept as it is."
+  | q path query out result |
+  q := aPath indexOf: $?.
+  q = 0
+    ifTrue: [path := aPath. query := '']
+    ifFalse: [path := aPath copyFrom: 1 to: q - 1. query := aPath copyFrom: q to: aPath size].
+  out := OrderedCollection new.
+  (path substrings: '/') do: [:seg |
+    seg = '..'
+      ifTrue: [out isEmpty ifFalse: [out removeLast]]
+      ifFalse: [seg = '.' ifFalse: [out add: seg]]].
+  result := WriteStream on: String new.
+  out do: [:seg | result nextPut: $/; nextPutAll: seg].
+  (out isEmpty or: [(path endsWith: '/') or: [(path endsWith: '/.') or: [path endsWith: '/..']]])
+    ifTrue: [result nextPut: $/].
+  ^ result contents , query.
+
+HTTPClient class >> lastSlashIn: aPath
+  aPath size to: 1 by: -1 do: [:i | (aPath at: i) = $/ ifTrue: [^ i]].
+  ^ 0.
+
+HTTPClient class >> redirectUrl: aLocation from: aUrl
+  "The absolute URL a Location header names, resolved against the URL that
+   answered it (RFC 3986). A redirect from https to http raises NetworkError."
+  | base target dir basePath q |
+  base := self parseUrl: aUrl.
+  target := (aLocation includesSubstring: '://')
+    ifTrue: [aLocation]
+    ifFalse: [(aLocation beginsWith: '//')
+      ifTrue: [(base at: 1) , ':' , aLocation]
+      ifFalse: [
+        basePath := base at: 4.
+        q := basePath indexOf: $?.
+        q > 0 ifTrue: [basePath := basePath copyFrom: 1 to: q - 1].
+        (base at: 1) , '://' , (self authorityOf: base) , (self removeDotSegments:
+          ((aLocation beginsWith: '/')
+            ifTrue: [aLocation]
+            ifFalse: [(aLocation beginsWith: '?')
+              ifTrue: [basePath , aLocation]
+              ifFalse: [
+                dir := basePath copyFrom: 1 to: (self lastSlashIn: basePath).
+                dir , aLocation]]))]].
+  ((base at: 1) = 'https' and: [((self parseUrl: target) at: 1) = 'http'])
+    ifTrue: [^ NetworkError signal: 'refusing a redirect from https to http: ' , target].
+  ^ target.
+
+HTTPClient class >> request: aMethod url: aUrl headers: aDictionaryOrNil body: aStringOrNil redirects: aCount
+  | parts socket sent statusLine words status reason headers body location target response |
+  parts := self parseUrl: aUrl.
+  HTTP check: aMethod as: 'method' token: true.
+  HTTP checkTarget: (parts at: 4).
+  sent := Dictionary new.
+  sent at: 'host' put: (self authorityOf: parts).
+  sent at: 'user-agent' put: 'protoST/' , (Smalltalk version substrings: ' ') last.
+  sent at: 'accept' put: '*/*'.
+  aStringOrNil isNil ifFalse: [sent at: 'content-type' put: 'text/plain; charset=utf-8'].
+  aDictionaryOrNil isNil ifFalse: [aDictionaryOrNil keysAndValuesDo: [:k :v | sent at: k asLowercase put: v]].
+  HTTP checkHeaders: sent.
   socket := Socket connectTo: (parts at: 2) port: (parts at: 3) timeout: self timeout.
-  ^ [
+  response := [
     socket timeout: self timeout.
     (parts at: 1) = 'https' ifTrue: [socket tlsHost: (parts at: 2)].
-    sent := Dictionary new.
-    sent at: 'host' put: (((parts at: 3) = 80 or: [(parts at: 3) = 443])
-                            ifTrue: [parts at: 2]
-                            ifFalse: [(parts at: 2) , ':' , (parts at: 3) printString]).
-    sent at: 'user-agent' put: 'protoST/' , Smalltalk version displayString.
-    sent at: 'accept' put: '*/*'.
-    aStringOrNil isNil ifFalse: [sent at: 'content-type' put: 'text/plain; charset=utf-8'].
-    aDictionaryOrNil isNil ifFalse: [aDictionaryOrNil keysAndValuesDo: [:k :v | sent at: k asLowercase put: v]].
     socket nextPutAll: aMethod , ' ' , (parts at: 4) , ' HTTP/1.1'; crlf.
-    HTTP write: (aStringOrNil ifNil: ['']) headers: sent to: socket.
-    statusLine := socket nextLine.
-    statusLine isNil ifTrue: [^ NetworkError signal: 'no response from ' , aUrl].
+    "A Content-Length only when there is a body, or the method carries one."
+    HTTP write: (aStringOrNil ifNil: ['']) headers: sent to: socket
+      length: (aStringOrNil notNil or: [#('POST' 'PUT' 'PATCH') includes: aMethod]).
+    statusLine := socket nextLineMax: HTTP maxLine.
+    statusLine isNil ifTrue: [NetworkError signal: 'no response from ' , aUrl].
     words := statusLine substrings: ' '.
-    status := (words at: 2) asNumber.
+    status := words size >= 2 ifTrue: [(words at: 2) asNumber] ifFalse: [nil].
+    ((words at: 1 ifAbsent: ['']) beginsWith: 'HTTP/') & status isInteger
+      ifFalse: [NetworkError signal: 'malformed status line from ' , aUrl , ': ' , statusLine printString].
     reason := words size > 2
       ifTrue: [statusLine copyFrom: (words at: 1) size + (words at: 2) size + 3 to: statusLine size]
       ifFalse: [''].
     headers := HTTP readHeadersFrom: socket.
-    body := (aMethod = 'HEAD' or: [status = 204 or: [status = 304]])
+    body := (aMethod = 'HEAD' or: [status = 204 or: [status = 304 or: [status < 200]]])
       ifTrue: ['']
       ifFalse: [((headers includesKey: 'content-length') or: [headers includesKey: 'transfer-encoding'])
         ifTrue: [HTTP readBodyFrom: socket headers: headers]
         ifFalse: [socket upToEnd]].
-    response := HTTPResponse new setStatus: status reason: reason headers: headers body: body.
-    location := headers at: 'location' ifAbsent: [nil].
-    ((#(301 302 303 307 308) includes: status) and: [location notNil and: [aCount > 0]])
-      ifTrue: [
-        (location beginsWith: '/') ifTrue: [
-          location := (parts at: 1) , '://' , (sent at: 'host') , location].
-        self request: (status = 303 ifTrue: ['GET'] ifFalse: [aMethod])
-             url: location headers: aDictionaryOrNil
-             body: (status = 303 ifTrue: [nil] ifFalse: [aStringOrNil])
-             redirects: aCount - 1]
-      ifFalse: [response]
+    HTTPResponse new setStatus: status reason: reason headers: headers body: body
   ] ensure: [socket close].
+  location := headers at: 'location' ifAbsent: [nil].
+  ((#(301 302 303 307 308) includes: status) and: [location notNil and: [aCount > 0]])
+    ifFalse: [^ response].
+  target := self redirectUrl: location from: aUrl.
+  "Another origin does not get the program's headers (Authorization, cookies)."
+  ^ self request: (status = 303 ifTrue: ['GET'] ifFalse: [aMethod])
+      url: target
+      headers: ((self originOf: target) = (self originOf: aUrl) ifTrue: [aDictionaryOrNil] ifFalse: [nil])
+      body: (status = 303 ifTrue: [nil] ifFalse: [aStringOrNil])
+      redirects: aCount - 1.
 
 "-- Server -------------------------------------------------------------------------"
 
-Object subclass: #HTTPConnection instanceVariableNames: 'socket handler'.
+Object subclass: #HTTPConnection instanceVariableNames: 'socket handler maxBody'.
 
-HTTPConnection >> setSocket: aSocket handler: aBlock
+HTTPConnection >> setSocket: aSocket handler: aBlock maxBody: aByteCount
   socket := aSocket.
   handler := aBlock.
+  maxBody := aByteCount.
   ^ self.
 
 HTTPConnection >> handle
   [self serve] ensure: [socket close].
   ^ nil.
 
+HTTPConnection >> refuse: aCode
+  ^ self send: (HTTPResponse status: aCode body: (HTTPResponse reasonFor: aCode)).
+
+HTTPConnection >> internalError: anError
+  "Reported on standard error; the client gets a plain 500."
+  Stdio stderr nextPutAll: 'HTTPServer: error in handler: ' , anError messageText displayString; lf; flush.
+  ^ HTTPResponse status: 500 body: 'Internal Server Error'.
+
 HTTPConnection >> serve
   | line words target i path query headers body request result response |
   socket timeout: 30000.
-  line := socket nextLine.
+  line := [socket nextLineMax: HTTP maxLine] on: LineTooLong do: [:e | ^ self refuse: 414].
   (line isNil or: [line isEmpty]) ifTrue: [^ nil].
   words := line substrings: ' '.
-  words size < 2 ifTrue: [^ self send: (HTTPResponse status: 400 body: 'Bad Request')].
+  words size < 2 ifTrue: [^ self refuse: 400].
   target := words at: 2.
   i := target indexOf: $?.
   i = 0
     ifTrue: [path := target. query := '']
     ifFalse: [path := target copyFrom: 1 to: i - 1. query := target copyFrom: i + 1 to: target size].
-  headers := HTTP readHeadersFrom: socket.
-  body := HTTP readBodyFrom: socket headers: headers.
+  headers := [HTTP readHeadersFrom: socket] on: LineTooLong do: [:e | ^ self refuse: 431].
+  body := [[HTTP readBodyFrom: socket headers: headers max: maxBody]
+      on: BodyTooLarge do: [:e | ^ self refuse: 413]]
+    on: NetworkError do: [:e | ^ self refuse: 400].
   request := HTTPRequest new setMethod: (words at: 1) path: (HTTP percentDecode: path)
     query: (HTTP parseQuery: query) headers: headers body: body peer: socket peerName.
-  result := [handler value: request]
-    on: Error do: [:e | HTTPResponse status: 500 body: e messageText displayString].
+  result := [handler value: request] on: Error do: [:e | self internalError: e].
   response := (result isKindOf: HTTPResponse)
     ifTrue: [result]
     ifFalse: [result isNil
@@ -369,6 +495,8 @@ HTTPConnection >> serve
       ifFalse: [result isString
         ifTrue: [HTTPResponse ok: result]
         ifFalse: [HTTPResponse json: result]]].
+  response := [HTTP checkHeaders: response headers. response]
+    on: Error do: [:e | self internalError: e].
   ^ self send: response.
 
 HTTPConnection >> send: aResponse
@@ -376,7 +504,7 @@ HTTPConnection >> send: aResponse
   HTTP write: aResponse body headers: aResponse headers to: socket.
   ^ aResponse.
 
-Object subclass: #HTTPServer instanceVariableNames: 'port handler server running loop'.
+Object subclass: #HTTPServer instanceVariableNames: 'port handler server running loop maxBody'.
 
 HTTPServer class >> on: aPort handler: aBlock
   ^ self new setPort: aPort handler: aBlock.
@@ -385,6 +513,15 @@ HTTPServer >> setPort: aPort handler: aBlock
   port := aPort.
   handler := aBlock.
   running := false.
+  maxBody := 67108864.
+  ^ self.
+
+HTTPServer >> maxBodySize
+  ^ maxBody.
+
+HTTPServer >> maxBodySize: aByteCount
+  "Requests with a larger body are refused with 413 (default 64 MiB)."
+  maxBody := aByteCount.
   ^ self.
 
 HTTPServer >> listen
@@ -410,12 +547,13 @@ HTTPServer >> startInBackground
   ^ self.
 
 HTTPServer >> serveLoop
-  [running] whileTrue: [
+  [[running] whileTrue: [
     | c |
     c := server acceptTimeout: 200.
-    c isNil ifFalse: [(HTTPConnection new setSocket: c handler: handler) asActor handle]].
-  server close.
-  server := nil.
+    c isNil ifFalse: [(HTTPConnection new setSocket: c handler: handler maxBody: maxBody) asActor handle]]]
+    ensure: [
+      running := false.
+      server isNil ifFalse: [server close. server := nil]].
   ^ self.
 
 HTTPServer >> isRunning

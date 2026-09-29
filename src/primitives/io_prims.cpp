@@ -6,6 +6,7 @@
 #include "protoCore.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
@@ -25,6 +26,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <spawn.h>
 #include <sys/socket.h>
@@ -167,17 +169,78 @@ std::string bytesOf(proto::ProtoContext* ctx, const PO* arr, const char* who) {
     throw ClassedErrorSignal("NetworkError", msg);
 }
 
+// ------------------------------------------------------------ SIGPIPE
+//
+// A write to a pipe or socket whose reader is gone raises SIGPIPE, which kills
+// the process. The program's own standard output keeps that behaviour (a
+// filter piped into `head` should stop, as every Unix filter does); every
+// other write -- a child's input, a file that is a FIFO, a TLS socket, which
+// OpenSSL writes with write(2) -- blocks the signal on the writing thread
+// instead, so the write answers EPIPE and becomes a catchable error.
+
+struct SigpipeGuard {
+    sigset_t old{};
+    bool wasPending = false;
+    SigpipeGuard() {
+        sigset_t block, pending;
+        sigemptyset(&block);
+        sigaddset(&block, SIGPIPE);
+        sigpending(&pending);
+        wasPending = sigismember(&pending, SIGPIPE);
+        pthread_sigmask(SIG_BLOCK, &block, &old);
+    }
+    ~SigpipeGuard() {
+        if (!wasPending) {
+            // Consume a SIGPIPE this thread raised while it was blocked.
+            sigset_t pending, only;
+            sigpending(&pending);
+            if (sigismember(&pending, SIGPIPE)) {
+                sigemptyset(&only);
+                sigaddset(&only, SIGPIPE);
+                const timespec zero{0, 0};
+                while (sigtimedwait(&only, nullptr, &zero) < 0 && errno == EINTR) {}
+            }
+        }
+        pthread_sigmask(SIG_SETMASK, &old, nullptr);
+    }
+};
+
 // ------------------------------------------------------------ descriptors
 //
-// One buffered reader per descriptor (files, sockets, stdin), so `nextLine`
-// can read ahead; a socket upgraded to TLS keeps its SSL object here.
+// One state per descriptor (files, sockets, stdin): the read-ahead buffer
+// `nextLine` needs and, for a socket upgraded to TLS, its SSL object.
+//
+// Several actors may use one descriptor at once -- four actors reading stdin,
+// one actor reading a socket while another writes to it. Readers serialise on
+// `readMutex` (the buffer is consumed atomically: each line goes to exactly
+// one reader), writers on `writeMutex`, and the SSL object, which OpenSSL
+// does not let two threads use at once, on `sslMutex`, held only around a
+// non-blocking SSL call: a TLS socket is non-blocking and waits in poll(2)
+// with no lock held, so a reader waiting for data never blocks a writer.
+//
+// The state owns the descriptor once it exists. `close` removes it from the
+// table and shuts a socket down, which wakes a thread blocked on it; the
+// descriptor itself is closed, and the SSL object freed, when the last user
+// lets the state go. Closing the number while another thread still waited on
+// it would let the next open() reuse it under that thread.
 
 struct FdState {
-    std::string buf;
-    bool eof = false;
-    SSL* ssl = nullptr;
-    int timeoutMs = -1;   // -1: block without limit
-    bool isSocket = false;
+    const int fd;
+    const bool isSocket;
+    std::mutex readMutex;
+    std::mutex writeMutex;
+    std::mutex sslMutex;
+    std::string buf;                      // guarded by readMutex
+    bool eof = false;                     // guarded by readMutex
+    std::atomic<SSL*> ssl{nullptr};
+    std::atomic<int> timeoutMs{-1};       // -1: block without limit
+    std::atomic<bool> closed{false};
+
+    FdState(int d, bool sock) : fd(d), isSocket(sock) {}
+    ~FdState() {
+        if (SSL* s = ssl.load()) SSL_free(s);
+        if (closed.load()) ::close(fd);
+    }
 };
 
 std::mutex g_fdMutex;
@@ -187,9 +250,8 @@ std::shared_ptr<FdState> fdState(int fd) {
     std::lock_guard<std::mutex> lock(g_fdMutex);
     auto& p = g_fds[fd];
     if (!p) {
-        p = std::make_shared<FdState>();
         struct stat st{};
-        if (::fstat(fd, &st) == 0 && S_ISSOCK(st.st_mode)) p->isSocket = true;
+        p = std::make_shared<FdState>(fd, ::fstat(fd, &st) == 0 && S_ISSOCK(st.st_mode));
     }
     return p;
 }
@@ -199,77 +261,97 @@ void forgetFd(int fd) {
     g_fds.erase(fd);
 }
 
-// Waits until `fd` is readable (or writable) within the state's timeout.
-// Called unmanaged.
+// Waits until `fd` is readable (or writable) within `timeoutMs` (-1: no
+// limit). False on timeout; true also on an error or hang-up, which the call
+// that follows reports. Called unmanaged.
 bool waitReady(int fd, short events, int timeoutMs) {
-    if (timeoutMs < 0) return true;
     pollfd p{fd, events, 0};
     for (;;) {
         const int r = ::poll(&p, 1, timeoutMs);
         if (r < 0 && errno == EINTR) continue;
-        return r > 0;
+        return r != 0;
+    }
+}
+
+// Runs one non-blocking OpenSSL call until it completes, waiting in poll with
+// no lock held. Answers the call's result (> 0), 0 at a clean end of stream,
+// or -1 with errno set. Called unmanaged.
+template <typename Op>
+int sslCall(FdState& st, Op op) {
+    for (;;) {
+        SSL* ssl = st.ssl.load();
+        if (!ssl || st.closed.load()) { errno = EBADF; return -1; }
+        int r, e;
+        {
+            std::lock_guard<std::mutex> lock(st.sslMutex);
+            ERR_clear_error();
+            r = op(ssl);
+            e = r > 0 ? SSL_ERROR_NONE : SSL_get_error(ssl, r);
+        }
+        if (r > 0) return r;
+        if (e == SSL_ERROR_ZERO_RETURN) return 0;
+        if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE) {
+            if (!waitReady(st.fd, e == SSL_ERROR_WANT_READ ? POLLIN : POLLOUT, st.timeoutMs.load())) {
+                errno = ETIMEDOUT;
+                return -1;
+            }
+            continue;
+        }
+        if (e == SSL_ERROR_SYSCALL && r == 0) return 0;  // peer closed without close_notify
+        if (e != SSL_ERROR_SYSCALL || errno == 0) errno = EIO;
+        return -1;
     }
 }
 
 // Reads up to `n` bytes into `out`; answers the count, 0 at end of stream.
-// Called unmanaged.
-ssize_t rawRead(int fd, FdState& st, char* out, size_t n) {
-    if (st.ssl) {
-        if (SSL_pending(st.ssl) == 0 && !waitReady(fd, POLLIN, st.timeoutMs)) { errno = ETIMEDOUT; return -1; }
-        for (;;) {
-            const int r = SSL_read(st.ssl, out, static_cast<int>(n));
-            if (r > 0) return r;
-            const int e = SSL_get_error(st.ssl, r);
-            if (e == SSL_ERROR_ZERO_RETURN) return 0;
-            if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE) continue;
-            if (e == SSL_ERROR_SYSCALL && r == 0) return 0;
-            errno = EIO;
-            return -1;
-        }
+// The caller holds readMutex. Called unmanaged.
+ssize_t rawRead(FdState& st, char* out, size_t n) {
+    if (st.ssl.load()) {
+        return sslCall(st, [&](SSL* ssl) { return SSL_read(ssl, out, static_cast<int>(n)); });
     }
-    if (!waitReady(fd, POLLIN, st.timeoutMs)) { errno = ETIMEDOUT; return -1; }
+    if (!waitReady(st.fd, POLLIN, st.timeoutMs.load())) { errno = ETIMEDOUT; return -1; }
     for (;;) {
-        const ssize_t r = ::read(fd, out, n);
+        const ssize_t r = ::read(st.fd, out, n);
         if (r < 0 && errno == EINTR) continue;
         return r;
     }
 }
 
-// Writes all of `data`. Called unmanaged.
-void rawWrite(int fd, FdState& st, const std::string& data) {
+// Writes all of `data`. The caller holds writeMutex. Called unmanaged.
+void rawWrite(FdState& st, const std::string& data) {
+    SigpipeGuard noSigpipe;
     size_t done = 0;
     while (done < data.size()) {
         ssize_t w;
-        if (st.ssl) {
-            const int r = SSL_write(st.ssl, data.data() + done, static_cast<int>(data.size() - done));
-            if (r <= 0) {
-                const int e = SSL_get_error(st.ssl, r);
-                if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE) continue;
-                netError(EIO, "TLS write");
-            }
+        if (st.ssl.load()) {
+            const int r = sslCall(st, [&](SSL* ssl) {
+                return SSL_write(ssl, data.data() + done, static_cast<int>(data.size() - done));
+            });
+            if (r <= 0) netError(r == 0 ? EPIPE : errno, "TLS write");
             w = r;
         } else {
-            if (!waitReady(fd, POLLOUT, st.timeoutMs)) netError(ETIMEDOUT, "write");
-            w = st.isSocket ? ::send(fd, data.data() + done, data.size() - done, MSG_NOSIGNAL)
-                            : ::write(fd, data.data() + done, data.size() - done);
+            if (!waitReady(st.fd, POLLOUT, st.timeoutMs.load())) netError(ETIMEDOUT, "write");
+            w = st.isSocket ? ::send(st.fd, data.data() + done, data.size() - done, MSG_NOSIGNAL)
+                            : ::write(st.fd, data.data() + done, data.size() - done);
             if (w < 0) {
                 if (errno == EINTR) continue;
                 if (st.isSocket) netError(errno, "write");
-                fileError("descriptor " + std::to_string(fd), errno, "cannot write to");
+                fileError("descriptor " + std::to_string(st.fd), errno, "cannot write to");
             }
         }
         done += static_cast<size_t>(w);
     }
 }
 
-// Reads more input into the buffer; false at end of stream. Unmanaged.
-bool fill(int fd, FdState& st) {
+// Reads more input into the buffer; false at end of stream. The caller holds
+// readMutex. Unmanaged.
+bool fill(FdState& st) {
     if (st.eof) return false;
     char chunk[65536];
-    const ssize_t r = rawRead(fd, st, chunk, sizeof chunk);
+    const ssize_t r = rawRead(st, chunk, sizeof chunk);
     if (r < 0) {
-        if (st.isSocket || st.ssl) netError(errno, "read");
-        fileError("descriptor " + std::to_string(fd), errno, "cannot read from");
+        if (st.isSocket || st.ssl.load()) netError(errno, "read");
+        fileError("descriptor " + std::to_string(st.fd), errno, "cannot read from");
     }
     if (r == 0) { st.eof = true; return false; }
     st.buf.append(chunk, static_cast<size_t>(r));
@@ -311,9 +393,10 @@ struct AddrList {
     ~AddrList() { if (head) ::freeaddrinfo(head); }
 };
 
-void resolve(const std::string& host, int port, int socktype, bool passive, AddrList& out) {
+void resolve(const std::string& host, int port, int socktype, bool passive, AddrList& out,
+             int family = AF_UNSPEC) {
     addrinfo hints{};
-    hints.ai_family = AF_UNSPEC;
+    hints.ai_family = family;
     hints.ai_socktype = socktype;
     if (passive) hints.ai_flags = AI_PASSIVE;
     const std::string service = std::to_string(port);
@@ -424,32 +507,62 @@ PRIM(prim_Chdir) {
 
 // ------------------------------------------------------------ descriptors
 
-PRIM(prim_FdReadLine) {
-    ARGS(1, "__fdReadLine:");
-    const int fd = static_cast<int>(num(ctx, a[0], "nextLine"));
+// The count argument of next:, nextBytes: and the like.
+size_t countArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
+    const long long n = num(ctx, v, who);
+    if (n < 0) throw std::runtime_error(std::string(who) + ": the count must not be negative");
+    return static_cast<size_t>(n);
+}
+
+// A line without its end (LF or CRLF), or false at end of stream. A line
+// longer than `max` bytes (0: no limit) raises LineTooLong, leaving the
+// stream where it was. The caller holds readMutex. Unmanaged.
+bool takeLine(FdState& st, size_t max, std::string& line) {
+    size_t pos, scanned = 0;
+    while ((pos = st.buf.find('\n', scanned)) == std::string::npos) {
+        scanned = st.buf.size();
+        if (max && scanned > max) break;
+        if (!fill(st)) break;
+    }
+    if (max && (pos == std::string::npos ? st.buf.size() : pos) > max + 1)
+        throw ClassedErrorSignal("LineTooLong", "a line longer than " + std::to_string(max) + " bytes");
+    if (pos != std::string::npos) {
+        line.assign(st.buf, 0, pos);
+        st.buf.erase(0, pos + 1);
+    } else if (!st.buf.empty()) {
+        line.swap(st.buf);
+    } else {
+        return false;
+    }
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (max && line.size() > max)
+        throw ClassedErrorSignal("LineTooLong", "a line longer than " + std::to_string(max) + " bytes");
+    return true;
+}
+
+const PO* readLine(STRuntime& rt, proto::ProtoContext* ctx, int fd, size_t max) {
     auto st = fdState(fd);
     std::string line;
-    bool got = false;
+    bool got;
     {
         BlockingIO blocking(rt, ctx);
         proto::ProtoContext::UnmanagedScope out(ctx);
-        size_t pos;
-        while ((pos = st->buf.find('\n')) == std::string::npos) {
-            if (!fill(fd, *st)) break;
-        }
-        pos = st->buf.find('\n');
-        if (pos != std::string::npos) {
-            line = st->buf.substr(0, pos);
-            st->buf.erase(0, pos + 1);
-            got = true;
-        } else if (!st->buf.empty()) {
-            line.swap(st->buf);
-            got = true;
-        }
+        std::lock_guard<std::mutex> lock(st->readMutex);
+        got = takeLine(*st, max, line);
     }
-    if (!got) return PROTO_NONE;
-    if (!line.empty() && line.back() == '\r') line.pop_back();
-    return string(ctx, line);
+    return got ? string(ctx, line) : PROTO_NONE;
+}
+
+PRIM(prim_FdReadLine) {
+    ARGS(1, "__fdReadLine:");
+    return readLine(rt, ctx, static_cast<int>(num(ctx, a[0], "nextLine")), 0);
+}
+
+// __fdReadLine: fd max: bytes — nextLine, refusing lines over `bytes`.
+PRIM(prim_FdReadLineMax) {
+    ARGS(2, "__fdReadLine:max:");
+    return readLine(rt, ctx, static_cast<int>(num(ctx, a[0], "nextLineMax:")),
+                    countArg(ctx, a[1], "nextLineMax:"));
 }
 
 PRIM(prim_FdReadAll) {
@@ -460,7 +573,8 @@ PRIM(prim_FdReadAll) {
     {
         BlockingIO blocking(rt, ctx);
         proto::ProtoContext::UnmanagedScope out(ctx);
-        while (fill(fd, *st)) {}
+        std::lock_guard<std::mutex> lock(st->readMutex);
+        while (fill(*st)) {}
         all.swap(st->buf);
     }
     return string(ctx, all);
@@ -470,15 +584,16 @@ PRIM(prim_FdReadAll) {
 PRIM(prim_FdRead) {
     ARGS(3, "__fdRead:count:binary:");
     const int fd = static_cast<int>(num(ctx, a[0], "next:"));
-    const long long n = num(ctx, a[1], "next:");
+    const size_t n = countArg(ctx, a[1], "nextBytes:");
     const bool binary = truthy(a[2]);
     auto st = fdState(fd);
     std::string got;
     {
         BlockingIO blocking(rt, ctx);
         proto::ProtoContext::UnmanagedScope out(ctx);
-        while (st->buf.size() < static_cast<size_t>(n) && fill(fd, *st)) {}
-        const size_t take = std::min(st->buf.size(), static_cast<size_t>(n));
+        std::lock_guard<std::mutex> lock(st->readMutex);
+        while (st->buf.size() < n && fill(*st)) {}
+        const size_t take = std::min(st->buf.size(), n);
         got = st->buf.substr(0, take);
         st->buf.erase(0, take);
     }
@@ -491,18 +606,19 @@ PRIM(prim_FdRead) {
 PRIM(prim_FdReadChars) {
     ARGS(2, "__fdReadChars:count:");
     const int fd = static_cast<int>(num(ctx, a[0], "next:"));
-    const long long n = num(ctx, a[1], "next:");
+    const size_t n = countArg(ctx, a[1], "next:");
     auto st = fdState(fd);
     std::string got;
     {
         BlockingIO blocking(rt, ctx);
         proto::ProtoContext::UnmanagedScope out(ctx);
+        std::lock_guard<std::mutex> lock(st->readMutex);
         // Byte length of the first `n` characters, or npos when the buffer
         // does not hold them all yet (a lead byte is any byte that is not
         // 10xxxxxx; its sequence length comes from its high bits).
         auto prefix = [&](const std::string& b) -> size_t {
             size_t i = 0;
-            for (long long c = 0; c < n; ++c) {
+            for (size_t c = 0; c < n; ++c) {
                 if (i >= b.size()) return std::string::npos;
                 const unsigned char lead = static_cast<unsigned char>(b[i]);
                 const size_t len = lead < 0x80 ? 1 : (lead >> 5) == 0x6 ? 2 : (lead >> 4) == 0xE ? 3
@@ -513,13 +629,54 @@ PRIM(prim_FdReadChars) {
             return i;
         };
         size_t take;
-        while ((take = prefix(st->buf)) == std::string::npos && fill(fd, *st)) {}
+        while ((take = prefix(st->buf)) == std::string::npos && fill(*st)) {}
         if (take == std::string::npos) take = st->buf.size();  // end of stream: what is left
         got = st->buf.substr(0, take);
         st->buf.erase(0, take);
     }
     if (got.empty() && n > 0) return PROTO_NONE;
     return string(ctx, got);
+}
+
+// __httpReadChunked: fd max: bytes — an HTTP chunked body, decoded as bytes
+// and answered as one String (a character split across two chunks arrives
+// whole). Trailers are skipped. A body over `max` bytes (0: no limit) raises
+// BodyTooLarge; a malformed chunk size raises NetworkError.
+PRIM(prim_HttpReadChunked) {
+    ARGS(2, "__httpReadChunked:max:");
+    const int fd = static_cast<int>(num(ctx, a[0], "readChunked"));
+    const size_t max = countArg(ctx, a[1], "readChunked");
+    auto st = fdState(fd);
+    std::string body;
+    {
+        BlockingIO blocking(rt, ctx);
+        proto::ProtoContext::UnmanagedScope out(ctx);
+        std::lock_guard<std::mutex> lock(st->readMutex);
+        std::string line;
+        for (;;) {
+            if (!takeLine(*st, 8192, line)) throw ClassedErrorSignal("NetworkError", "chunked body ended early");
+            const std::string hex = line.substr(0, line.find(';'));
+            size_t size = 0, digits = 0;
+            for (char c : hex) {
+                if (c == ' ' || c == '\t') continue;
+                const int d = std::isdigit(static_cast<unsigned char>(c)) ? c - '0'
+                            : (c >= 'a' && c <= 'f') ? c - 'a' + 10 : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
+                if (d < 0 || ++digits > 15) throw ClassedErrorSignal("NetworkError", "invalid chunk size: " + hex);
+                size = size * 16 + static_cast<size_t>(d);
+            }
+            if (digits == 0) throw ClassedErrorSignal("NetworkError", "invalid chunk size: " + hex);
+            if (size == 0) break;
+            if (max && body.size() + size > max)
+                throw ClassedErrorSignal("BodyTooLarge", "a body larger than " + std::to_string(max) + " bytes");
+            while (st->buf.size() < size && fill(*st)) {}
+            if (st->buf.size() < size) throw ClassedErrorSignal("NetworkError", "chunked body ended early");
+            body.append(st->buf, 0, size);
+            st->buf.erase(0, size);
+            takeLine(*st, 8192, line);  // the CRLF after the chunk
+        }
+        while (takeLine(*st, 8192, line) && !line.empty()) {}  // trailers
+    }
+    return string(ctx, body);
 }
 
 PRIM(prim_FdAtEnd) {
@@ -530,7 +687,8 @@ PRIM(prim_FdAtEnd) {
     {
         BlockingIO blocking(rt, ctx);
         proto::ProtoContext::UnmanagedScope out(ctx);
-        end = st->buf.empty() && !fill(fd, *st);
+        std::lock_guard<std::mutex> lock(st->readMutex);
+        end = st->buf.empty() && !fill(*st);
     }
     return boolean(end);
 }
@@ -555,7 +713,8 @@ PRIM(prim_FdWrite) {
     {
         BlockingIO blocking(rt, ctx);
         proto::ProtoContext::UnmanagedScope out(ctx);
-        rawWrite(fd, *st, data);
+        std::lock_guard<std::mutex> lock(st->writeMutex);
+        rawWrite(*st, data);
     }
     return r;
 }
@@ -578,17 +737,24 @@ PRIM(prim_FdClose) {
         auto it = g_fds.find(fd);
         if (it != g_fds.end()) { st = it->second; g_fds.erase(it); }
     }
-    if (st && st->ssl) {
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        SSL_shutdown(st->ssl);
-        SSL_free(st->ssl);
-        st->ssl = nullptr;
+    if (!st) {
+        // Never read from or written to through a state: nobody else holds it.
+        struct stat sst{};
+        if (::fstat(fd, &sst) == 0 && S_ISSOCK(sst.st_mode)) ::shutdown(fd, SHUT_RDWR);
+        ::close(fd);
+        return r;
     }
-    // shutdown wakes a thread blocked in accept or read on this socket,
-    // which a bare close does not; it applies to any socket, registered or not.
-    struct stat sst{};
-    if (::fstat(fd, &sst) == 0 && S_ISSOCK(sst.st_mode)) ::shutdown(fd, SHUT_RDWR);
-    ::close(fd);
+    if (st->closed.exchange(true)) return r;
+    if (SSL* ssl = st->ssl.load()) {
+        // One attempt at close_notify; the socket is non-blocking.
+        SigpipeGuard noSigpipe;
+        std::lock_guard<std::mutex> lock(st->sslMutex);
+        SSL_shutdown(ssl);
+    }
+    // shutdown wakes a thread blocked in accept, poll or read on this socket,
+    // which a bare close does not. The descriptor is closed by the state's
+    // destructor, when its last user lets it go.
+    if (st->isSocket) ::shutdown(fd, SHUT_RDWR);
     return r;
 }
 
@@ -598,10 +764,33 @@ PRIM(prim_ByteSize) {
     return ctx->fromLong(static_cast<long long>(str(ctx, a[0], "byteSize").size()));
 }
 
+// __percentDecode: aString — %XX sequences decoded as bytes, the result read
+// as UTF-8 ('%C3%A9' is one character). '+' is left alone: it means a space
+// only in a query string, which HTTP class>>parseQuery: handles.
+PRIM(prim_PercentDecode) {
+    ARGS(1, "__percentDecode:");
+    const std::string in = str(ctx, a[0], "percentDecode:");
+    auto hex = [](char c) {
+        return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10
+             : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+    };
+    std::string out;
+    out.reserve(in.size());
+    for (size_t i = 0; i < in.size(); ++i) {
+        if (in[i] == '%' && i + 2 < in.size() && hex(in[i + 1]) >= 0 && hex(in[i + 2]) >= 0) {
+            out.push_back(static_cast<char>(hex(in[i + 1]) * 16 + hex(in[i + 2])));
+            i += 2;
+        } else {
+            out.push_back(in[i]);
+        }
+    }
+    return string(ctx, out);
+}
+
 PRIM(prim_FdTimeout) {
     ARGS(2, "__fdTimeout:ms:");
     const int fd = static_cast<int>(num(ctx, a[0], "timeout:"));
-    fdState(fd)->timeoutMs = a[1] == PROTO_NONE ? -1 : static_cast<int>(num(ctx, a[1], "timeout:"));
+    fdState(fd)->timeoutMs.store(a[1] == PROTO_NONE ? -1 : static_cast<int>(num(ctx, a[1], "timeout:")));
     return r;
 }
 
@@ -783,9 +972,11 @@ PRIM(prim_DirList) {
 PRIM(prim_FileAbsolute) {
     ARGS(1, "__fileAbsolute:");
     const std::string path = str(ctx, a[0], "fullName");
+    // Lexical only: `..` and `.` are folded, symbolic links are kept, as
+    // Pharo's fullName does.
     std::error_code ec;
-    fs::path p = fs::weakly_canonical(fs::absolute(path, ec), ec);
-    if (ec) p = fs::absolute(path);
+    fs::path p = fs::absolute(path, ec);
+    if (ec) fileError(path, ec.value(), "cannot resolve");
     std::string s = p.lexically_normal().string();
     if (s.size() > 1 && s.back() == '/') s.pop_back();
     return string(ctx, s);
@@ -809,9 +1000,12 @@ int exitCodeOf(int status) {
 
 // Runs argv with the given input and collects both outputs. Unmanaged.
 ChildResult runChild(const std::vector<std::string>& argv, const std::string* input) {
-    int inP[2], outP[2], errP[2];
-    if (::pipe2(inP, O_CLOEXEC) || ::pipe2(outP, O_CLOEXEC) || ::pipe2(errP, O_CLOEXEC))
-        throw ClassedErrorSignal("OSProcessError", std::string("cannot create pipes: ") + std::strerror(errno));
+    int inP[2] = {-1, -1}, outP[2] = {-1, -1}, errP[2] = {-1, -1};
+    if (::pipe2(inP, O_CLOEXEC) || ::pipe2(outP, O_CLOEXEC) || ::pipe2(errP, O_CLOEXEC)) {
+        const int e = errno;
+        for (int f : {inP[0], inP[1], outP[0], outP[1], errP[0], errP[1]}) if (f >= 0) ::close(f);
+        throw ClassedErrorSignal("OSProcessError", std::string("cannot create pipes: ") + std::strerror(e));
+    }
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
     posix_spawn_file_actions_adddup2(&fa, inP[0], 0);
@@ -829,6 +1023,8 @@ ChildResult runChild(const std::vector<std::string>& argv, const std::string* in
         throw ClassedErrorSignal("OSProcessError", "cannot run " + argv[0] + ": " + std::strerror(rc));
     }
     ChildResult res;
+    // A child that exits without reading all its input must not kill us.
+    SigpipeGuard noSigpipe;
     size_t written = 0;
     const std::string empty;
     const std::string& in = input ? *input : empty;
@@ -842,7 +1038,13 @@ ChildResult runChild(const std::vector<std::string>& argv, const std::string* in
         if (outFd >= 0) { iOut = n; p[n++] = {outFd, POLLIN, 0}; }
         if (errFd >= 0) { iErr = n; p[n++] = {errFd, POLLIN, 0}; }
         if (inP[1] >= 0) { iIn = n; p[n++] = {inP[1], POLLOUT, 0}; }
-        if (::poll(p, n, -1) < 0) { if (errno == EINTR) continue; break; }
+        if (::poll(p, n, -1) < 0) {
+            if (errno == EINTR) continue;
+            // Cannot wait any more: stop feeding and collecting, but still
+            // reap the child below.
+            for (int* f : {&outFd, &errFd, &inP[1]}) if (*f >= 0) { ::close(*f); *f = -1; }
+            break;
+        }
         auto drain = [&](int idx, int& fd, std::string& dst) {
             if (idx < 0 || !(p[idx].revents & (POLLIN | POLLHUP | POLLERR))) return;
             const ssize_t k = ::read(fd, chunk, sizeof chunk);
@@ -939,7 +1141,7 @@ PRIM(prim_TcpConnect) {
                 pollfd p{fd, POLLOUT, 0};
                 int pr;
                 while ((pr = ::poll(&p, 1, timeoutMs)) < 0 && errno == EINTR) {}
-                if (pr == 0) { ::close(fd); fd = -1; lastErr = ETIMEDOUT; continue; }
+                if (pr <= 0) { lastErr = pr == 0 ? ETIMEDOUT : errno; ::close(fd); fd = -1; continue; }
                 int soErr = 0; socklen_t len = sizeof soErr;
                 ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &soErr, &len);
                 rc = soErr ? -1 : 0;
@@ -991,11 +1193,13 @@ PRIM(prim_TcpAccept) {
     ARGS(2, "__tcpAccept:timeout:");
     const int fd = static_cast<int>(num(ctx, a[0], "accept"));
     const int timeoutMs = a[1] == PROTO_NONE ? -1 : static_cast<int>(num(ctx, a[1], "acceptTimeout:"));
+    auto st = fdState(fd);  // held: a concurrent close cannot free the number under us
     int c = -1, err = 0;
     {
         BlockingIO blocking(rt, ctx);
         proto::ProtoContext::UnmanagedScope out(ctx);
         if (!waitReady(fd, POLLIN, timeoutMs)) return PROTO_NONE;
+        if (st->closed.load()) return PROTO_NONE;
         while ((c = ::accept4(fd, nullptr, nullptr, SOCK_CLOEXEC)) < 0 && errno == EINTR) {}
         if (c < 0) err = errno;
     }
@@ -1022,6 +1226,8 @@ PRIM(prim_SockName) {
 }
 
 // __tlsConnect: fd host: name verify: aBoolean — upgrades the socket to TLS.
+// The handshake, like every later TLS read and write, runs on the socket made
+// non-blocking and waits in poll, so the socket's timeout bounds it.
 PRIM(prim_TlsConnect) {
     ARGS(3, "__tlsConnect:host:verify:");
     const int fd = static_cast<int>(num(ctx, a[0], "tlsHost:"));
@@ -1029,23 +1235,34 @@ PRIM(prim_TlsConnect) {
     const bool verify = truthy(a[2]);
     auto st = fdState(fd);
     std::string failure;
+    int err = 0;
     {
         BlockingIO blocking(rt, ctx);
         proto::ProtoContext::UnmanagedScope out(ctx);
-        SSL* ssl = SSL_new(tlsContext(verify));
-        SSL_set_fd(ssl, fd);
-        SSL_set_tlsext_host_name(ssl, host.c_str());
-        if (verify) SSL_set1_host(ssl, host.c_str());
-        ERR_clear_error();
-        if (SSL_connect(ssl) != 1) {
-            const long v = SSL_get_verify_result(ssl);
-            failure = v != X509_V_OK ? std::string("TLS certificate: ") + X509_verify_cert_error_string(v)
-                                     : tlsErrorText();
-            SSL_free(ssl);
+        std::lock_guard<std::mutex> rlock(st->readMutex);
+        std::lock_guard<std::mutex> wlock(st->writeMutex);
+        SSL* ssl = st->ssl.load() ? nullptr : SSL_new(tlsContext(verify));
+        if (!ssl) {
+            failure = st->ssl.load() ? "the connection already uses TLS" : tlsErrorText();
         } else {
-            st->ssl = ssl;
+            SSL_set_fd(ssl, fd);
+            SSL_set_tlsext_host_name(ssl, host.c_str());
+            if (verify) SSL_set1_host(ssl, host.c_str());
+            ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL) | O_NONBLOCK);
+            st->ssl.store(ssl);
+            SigpipeGuard noSigpipe;
+            const int rc = sslCall(*st, [](SSL* s) { return SSL_connect(s); });
+            if (rc != 1) {
+                const long v = SSL_get_verify_result(ssl);
+                if (rc < 0 && errno == ETIMEDOUT) err = ETIMEDOUT;
+                else failure = v != X509_V_OK ? std::string("TLS certificate: ") + X509_verify_cert_error_string(v)
+                                              : tlsErrorText();
+                st->ssl.store(nullptr);
+                SSL_free(ssl);
+            }
         }
     }
+    if (err) netError(err, "TLS handshake with " + host);
     if (!failure.empty()) throw ClassedErrorSignal("NetworkError", failure + " (" + host + ")");
     return r;
 }
@@ -1084,11 +1301,18 @@ PRIM(prim_UdpSend) {
     const std::string host = str(ctx, a[1], "send:to:port:");
     const int port = static_cast<int>(num(ctx, a[2], "send:to:port:"));
     const std::string data = a[3] && a[3]->asString(ctx) ? str(ctx, a[3], "send:") : bytesOf(ctx, a[3], "send:");
+    auto st = fdState(fd);
     int err = 0;
     {
         proto::ProtoContext::UnmanagedScope out(ctx);
+        // Resolve to the socket's own address family: an IPv4 socket cannot
+        // send to an IPv6 address.
+        sockaddr_storage own{};
+        socklen_t ownLen = sizeof own;
+        const int family = ::getsockname(fd, reinterpret_cast<sockaddr*>(&own), &ownLen) == 0
+                               ? own.ss_family : AF_UNSPEC;
         AddrList addrs;
-        resolve(host, port, SOCK_DGRAM, false, addrs);
+        resolve(host, port, SOCK_DGRAM, false, addrs, family);
         if (::sendto(fd, data.data(), data.size(), MSG_NOSIGNAL, addrs.head->ai_addr, addrs.head->ai_addrlen) < 0)
             err = errno;
     }
@@ -1102,13 +1326,14 @@ PRIM(prim_UdpReceive) {
     const int fd = static_cast<int>(num(ctx, a[0], "receive"));
     const int timeoutMs = a[1] == PROTO_NONE ? -1 : static_cast<int>(num(ctx, a[1], "receiveTimeout:"));
     const bool binary = truthy(a[2]);
+    auto st = fdState(fd);  // held: a concurrent close cannot free the number under us
     std::string data;
     sockaddr_storage ss{};
     int err = 0;
     {
         BlockingIO blocking(rt, ctx);
         proto::ProtoContext::UnmanagedScope out(ctx);
-        if (!waitReady(fd, POLLIN, timeoutMs)) return PROTO_NONE;
+        if (!waitReady(fd, POLLIN, timeoutMs) || st->closed.load()) return PROTO_NONE;
         data.resize(65536);
         socklen_t len = sizeof ss;
         ssize_t n;
@@ -1147,12 +1372,13 @@ void installIoPrimitives(STRuntime& rt) {
         {"__osChdir:", prim_Chdir},              {"__osRun:input:", prim_Run},
         {"__osSpawn:", prim_Spawn},              {"__osWaitPid:", prim_WaitPid},
         {"__osKill:signal:", prim_Kill},
-        {"__fdReadLine:", prim_FdReadLine},      {"__fdReadAll:", prim_FdReadAll},
+        {"__fdReadLine:", prim_FdReadLine},      {"__fdReadLine:max:", prim_FdReadLineMax},
+        {"__fdReadAll:", prim_FdReadAll},        {"__httpReadChunked:max:", prim_HttpReadChunked},
         {"__fdRead:count:binary:", prim_FdRead}, {"__fdAtEnd:", prim_FdAtEnd},
         {"__fdReadChars:count:", prim_FdReadChars},
         {"__fdWrite:data:", prim_FdWrite},       {"__fdFlush:", prim_FdFlush},
         {"__fdClose:", prim_FdClose},            {"__fdTimeout:ms:", prim_FdTimeout},
-        {"__byteSize:", prim_ByteSize},
+        {"__byteSize:", prim_ByteSize},          {"__percentDecode:", prim_PercentDecode},
         {"__fileOpen:mode:", prim_FileOpen},     {"__fileRead:binary:", prim_FileRead},
         {"__fileWrite:data:append:", prim_FileWrite}, {"__fileStat:", prim_FileStat},
         {"__fileDelete:recursive:", prim_FileDelete}, {"__fileMove:to:", prim_FileMove},
