@@ -178,9 +178,11 @@ std::string defaultActionMessage(proto::ProtoContext* ctx,
 // already-protoST exception and re-throw it instead of double-translating it.
 const proto::ProtoObject* defaultAction(proto::ProtoContext* ctx,
                                         const proto::ProtoObject* exc) {
-    if (!isResumable(ctx, exc)) {
-        // Error / non-resumable: abort the activation (EXC-a behaviour, EXC-d
-        // dedicated type).
+    const bool isErrorClass = exc && exc->getAttribute(
+        ctx, proto::ProtoString::createSymbol(ctx, "__unhandled_is_error__")) == PROTO_TRUE;
+    if (isErrorClass || !isResumable(ctx, exc)) {
+        // Error (resumable or not) / non-resumable: abort the activation
+        // (EXC-a behaviour, EXC-d dedicated type).
         throw UnhandledSTException(defaultActionMessage(ctx, exc));
     }
     // Resumable and unhandled. A Warning announces itself; the bare Exception
@@ -319,6 +321,45 @@ const proto::ProtoObject* signalErrorOfClass(STRuntime& rt,
     // error of this kind is never resumable (the offending stack is gone).
     const_cast<proto::ProtoObject*>(exc)->setAttribute(
         ctx, resumableKey(ctx), PROTO_FALSE);
+    return signalInstance(rt, ctx, exc);
+}
+
+const proto::ProtoObject* signalZeroDivide(STRuntime& rt, proto::ProtoContext* ctx) {
+    return signalErrorOfClass(rt, ctx, rt.bootstrap().zeroDivideProto, "ZeroDivide");
+}
+
+// A Message: the selector and the arguments of a send, as a
+// doesNotUnderstand: override and MessageNotUnderstood>>message see it.
+const proto::ProtoObject* makeMessage(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const std::string& selector,
+                                      const proto::ProtoObject* const* args, int argc) {
+    const proto::ProtoList* list = ctx->newList();
+    for (int i = 0; i < argc; ++i) list = list->appendLast(ctx, args[i] ? args[i] : PROTO_NONE);
+    const proto::ProtoObject* arr = rt.bootstrap().arrayProto->newChild(ctx, /*isMutable=*/true);
+    arr->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__data__"), list->asObject(ctx));
+    const proto::ProtoObject* msg = rt.bootstrap().messageProto->newChild(ctx, /*isMutable=*/true);
+    msg->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__selector__"),
+                      reinterpret_cast<const proto::ProtoObject*>(
+                          proto::ProtoString::createSymbol(ctx, selector.c_str())));
+    msg->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__arguments__"), arr);
+    return msg;
+}
+
+// Signal a MessageNotUnderstood carrying the receiver and the Message. It is
+// resumable, as in Pharo: resume: answers the value for the failed send.
+const proto::ProtoObject* signalMessageNotUnderstood(STRuntime& rt, proto::ProtoContext* ctx,
+                                                     const proto::ProtoObject* receiver,
+                                                     const proto::ProtoObject* message,
+                                                     const char* text) {
+    const proto::ProtoObject* exc =
+        const_cast<proto::ProtoObject*>(rt.bootstrap().messageNotUnderstoodProto)
+            ->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinExc(ctx, exc);
+    exc->setAttribute(ctx, msgTextKey(ctx), ctx->fromUTF8String(text ? text : "doesNotUnderstand:"));
+    exc->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__receiver__"),
+                      receiver ? receiver : PROTO_NONE);
+    exc->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__message__"),
+                      message ? message : PROTO_NONE);
     return signalInstance(rt, ctx, exc);
 }
 
@@ -699,6 +740,29 @@ const proto::ProtoObject* prim_Block_ifCurtailed(STRuntime& rt, proto::ProtoCont
     }
 }
 
+// Accessors of MessageNotUnderstood and Message.
+const proto::ProtoObject* attrOrNil(proto::ProtoContext* ctx, const proto::ProtoObject* r,
+                                    const char* key) {
+    const proto::ProtoObject* v = r ? r->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, key)) : nullptr;
+    return (v && v != PROTO_NONE) ? v : PROTO_NONE;
+}
+const proto::ProtoObject* prim_MNU_receiver(STRuntime&, proto::ProtoContext* ctx,
+                                            const proto::ProtoObject* r, const proto::ProtoObject* const*, int) {
+    return attrOrNil(ctx, r, "__receiver__");
+}
+const proto::ProtoObject* prim_MNU_message(STRuntime&, proto::ProtoContext* ctx,
+                                           const proto::ProtoObject* r, const proto::ProtoObject* const*, int) {
+    return attrOrNil(ctx, r, "__message__");
+}
+const proto::ProtoObject* prim_Message_selector(STRuntime&, proto::ProtoContext* ctx,
+                                                const proto::ProtoObject* r, const proto::ProtoObject* const*, int) {
+    return attrOrNil(ctx, r, "__selector__");
+}
+const proto::ProtoObject* prim_Message_arguments(STRuntime&, proto::ProtoContext* ctx,
+                                                 const proto::ProtoObject* r, const proto::ProtoObject* const*, int) {
+    return attrOrNil(ctx, r, "__arguments__");
+}
+
 } // namespace
 
 void installExceptionPrimitives(STRuntime& rt) {
@@ -714,7 +778,11 @@ void installExceptionPrimitives(STRuntime& rt) {
     bindPrimitive(rt, b.exceptionProto, "signal:", signalTextIdx);
 
     // Accessors + the handler actions.
-    bindPrimitive(rt, b.exceptionProto, "messageText",
+bindPrimitive(rt, b.messageNotUnderstoodProto, "receiver", reg.registerPrim(prim_MNU_receiver));
+    bindPrimitive(rt, b.messageNotUnderstoodProto, "message", reg.registerPrim(prim_MNU_message));
+    bindPrimitive(rt, b.messageProto, "selector", reg.registerPrim(prim_Message_selector));
+    bindPrimitive(rt, b.messageProto, "arguments", reg.registerPrim(prim_Message_arguments));
+        bindPrimitive(rt, b.exceptionProto, "messageText",
                   reg.registerPrim(prim_Exception_messageText));
     bindPrimitive(rt, b.exceptionProto, "messageText:",
                   reg.registerPrim(prim_Exception_setMessageText));

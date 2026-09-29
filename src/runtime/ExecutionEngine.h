@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <string>
 #include <vector>
 
 namespace proto {
@@ -208,6 +209,11 @@ private:
 
     // True when a frame for `m` would pass the depth limit; the overflow has
     // then been signalled as an Error and its value pushed on `f`.
+    const proto::ProtoObject* doesNotUnderstand(proto::ProtoContext* ctx,
+                                                const proto::ProtoObject* recv,
+                                                const std::string& selector,
+                                                const proto::ProtoObject* const* args,
+                                                int argc);
     bool signalIfTooDeep(proto::ProtoContext* ctx, Frame& f,
                          const BytecodeModule* m, unsigned int argc);
 

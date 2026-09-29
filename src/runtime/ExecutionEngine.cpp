@@ -44,6 +44,13 @@
 
 namespace protoST {
 
+// Defined in object_prims.cpp: run a method by name, as a send does.
+const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* recv,
+                                      const proto::ProtoString* selector,
+                                      const proto::ProtoObject* const* args, int argc,
+                                      bool* understood);
+
 // COL-a: build a fresh Array instance wrapping the given protoCore ProtoList.
 // Defined in collection_prims.cpp; used here by the MAKE_ARRAY opcode handler.
 const proto::ProtoObject* makeArrayInstance(STRuntime& rt,
@@ -356,6 +363,33 @@ ExecutionEngine::popFrame() {
 namespace {
 constexpr std::size_t kMaxNestedEngines = 1000;
 } // namespace
+
+// A send the receiver does not understand. If the receiver's class defines
+// doesNotUnderstand: in Smalltalk (a proxy, a forwarder), that method runs
+// with a Message and answers for the send; otherwise a resumable
+// MessageNotUnderstood carrying the receiver and the Message is signalled.
+const proto::ProtoObject* ExecutionEngine::doesNotUnderstand(
+        proto::ProtoContext* ctx, const proto::ProtoObject* recv,
+        const std::string& selector, const proto::ProtoObject* const* args, int argc) {
+    const proto::ProtoObject* message = makeMessage(rt_, ctx, selector, args, argc);
+    TransientPin pinMessage(ctx, message);
+    const proto::ProtoString* dnuKey =
+        proto::ProtoString::createSymbol(ctx, "doesNotUnderstand:");
+    const proto::ProtoObject* holder =
+        (recv && recv != PROTO_NONE) ? recv : rt_.bootstrap().nilProto;
+    const proto::ProtoObject* handler = holder->getAttribute(ctx, dnuKey);
+    if (handler && handler != PROTO_NONE) {
+        const proto::ProtoObject* bc = handler->getAttribute(ctx, rt_.bootstrap().sym.bcPtr);
+        if (bc && bc != PROTO_NONE) {
+            bool understood = false;
+            const proto::ProtoObject* a1[1] = { message };
+            return sendDynamic(rt_, ctx, recv, dnuKey, a1, 1, &understood);
+        }
+    }
+    const std::string text = "doesNotUnderstand: " + selector
+        + describeReceiverForDNU(ctx, recv, rt_.bootstrap().sym.className);
+    return signalMessageNotUnderstood(rt_, ctx, recv, message, text.c_str());
+}
 
 // Stack-depth guard, checked before every frame push of a send. Frame regions
 // stop kOverflowReserve slots short of the scratch region, so the handler that
@@ -1450,12 +1484,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // top level / REPL. `UnwindToHandler` from a `return:`
                     // handler propagates out of runLoop untouched (the engine
                     // does not catch it) straight to the owning `on:do:`.
-                    std::string mntMsg = "doesNotUnderstand: " + selStr
-                        + describeReceiverForDNU(ctx, recv,
-                                                 rt_.bootstrap().sym.className);
-                    auto* r = signalErrorOfClass(
-                        rt_, ctx, rt_.bootstrap().messageNotUnderstoodProto,
-                        mntMsg.c_str());
+                    auto* r = doesNotUnderstand(ctx, recv, selStr, sendArgs,
+                                                static_cast<int>(argcOp));
                     // A resumable handler (`resume:`) would let `signalInstance`
                     // return a value here — push it as the send's result. A
                     // MessageNotUnderstood is non-resumable, so in practice the
@@ -1678,12 +1708,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 const proto::ProtoObject* attr =
                     recv->getAttribute(ctx, desc.name);
                 if (!attr || attr == PROTO_NONE) {
-                    std::string mntMsg = "doesNotUnderstand: " + desc.mangled
-                        + describeReceiverForDNU(ctx, recv,
-                                                 rt_.bootstrap().sym.className);
-                    auto* r = signalErrorOfClass(
-                        rt_, ctx, rt_.bootstrap().messageNotUnderstoodProto,
-                        mntMsg.c_str());
+                    auto* r = doesNotUnderstand(ctx, recv, desc.mangled, nullptr, 0);
                     push(f, r ? r : PROTO_NONE);
                     DISPATCH_DIRECT();
                     break;
@@ -1821,12 +1846,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 }
 
                 // Non-zero args on a non-method attribute is an error.
-                std::string mntMsg = "doesNotUnderstand: " + desc.mangled
-                    + describeReceiverForDNU(ctx, recv,
-                                             rt_.bootstrap().sym.className);
-                auto* r = signalErrorOfClass(
-                    rt_, ctx, rt_.bootstrap().messageNotUnderstoodProto,
-                    mntMsg.c_str());
+                auto* r = doesNotUnderstand(ctx, recv, desc.mangled, nullptr, 0);
                 push(f, r ? r : PROTO_NONE);
                 DISPATCH_DIRECT();
                 break;
@@ -1872,17 +1892,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // UnhandledSTException otherwise — matching the
                 // pre-inline behaviour exactly.
                 const std::string& selStr = f.m->constSymbol(arg);
-                std::string mntMsg = "doesNotUnderstand: " + selStr;
                 // Pop the bad value before we signal so the operand
                 // stack is the same shape the non-inlined SEND would
-                // have left it in. Use it to enrich the message with
-                // the receiver class — same DX as the SEND DNU path.
+                // have left it in.
                 const proto::ProtoObject* badRecv = pop(f);
-                mntMsg += describeReceiverForDNU(
-                    ctx, badRecv, rt_.bootstrap().sym.className);
-                auto* r = signalErrorOfClass(
-                    rt_, ctx, rt_.bootstrap().messageNotUnderstoodProto,
-                    mntMsg.c_str());
+                auto* r = doesNotUnderstand(ctx, badRecv, selStr, nullptr, 0);
                 // A resumed handler would push `r` as the message's
                 // apparent result; non-resumable MNU normally threw.
                 push(f, r ? r : PROTO_NONE);

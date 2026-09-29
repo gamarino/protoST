@@ -50,6 +50,23 @@ static bool matchesGuard(proto::ProtoContext* ctx,
                          const proto::ProtoObject* guardClass) {
     if (!exceptionInstance || !guardClass) return false;
     if (exceptionInstance == guardClass) return true;
+    // An ExceptionSet (`ZeroDivide, MessageNotUnderstood`, built in the kernel)
+    // matches when any of its classes does. Its classes are held in the
+    // instance variable exceptionClasses, stored as `_iv_exceptionClasses`
+    // holding an Array.
+    const proto::ProtoObject* members = guardClass->getAttribute(
+        ctx, proto::ProtoString::createSymbol(ctx, "_iv_exceptionClasses"));
+    if (members && members != PROTO_NONE) {
+        const proto::ProtoObject* data = members->getAttribute(
+            ctx, proto::ProtoString::createSymbol(ctx, "__data__"));
+        const proto::ProtoList* list = (data && data != PROTO_NONE) ? data->asList(ctx) : nullptr;
+        if (list) {
+            for (unsigned long i = 0; i < list->getSize(ctx); ++i)
+                if (matchesGuard(ctx, exceptionInstance, list->getAt(ctx, static_cast<int>(i))))
+                    return true;
+            return false;
+        }
+    }
     // hasParent walks the parent chain; non-zero means guardClass is an
     // ancestor of the instance (so the instance is `Error`, a user subclass
     // of `Error`, ... when guardClass is `Error`).

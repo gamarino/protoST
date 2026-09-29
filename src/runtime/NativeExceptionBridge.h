@@ -46,9 +46,11 @@
 #include "runtime/FutureYield.h"
 #include "runtime/UnhandledSTException.h"
 #include "runtime/Interrupt.h"
+#include "runtime/ZeroDivideSignal.h"
 #include "debugger/DebuggerRuntime.h"
 
 #include <exception>
+#include <string>
 
 namespace proto { class ProtoContext; class ProtoObject; }
 
@@ -74,6 +76,19 @@ const proto::ProtoObject* signalNativeError(STRuntime& rt,
 // by an ordinary `on: Error do:` handler. Defined in exception_prims.cpp.
 //
 // May throw the same control-flow exceptions as `signalNativeError`.
+// Signal a fresh ZeroDivide (defined in exception_prims.cpp).
+const proto::ProtoObject* signalZeroDivide(STRuntime& rt, proto::ProtoContext* ctx);
+
+// Build a Message (selector + arguments) and signal a resumable
+// MessageNotUnderstood carrying it and the receiver (exception_prims.cpp).
+const proto::ProtoObject* makeMessage(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const std::string& selector,
+                                      const proto::ProtoObject* const* args, int argc);
+const proto::ProtoObject* signalMessageNotUnderstood(STRuntime& rt, proto::ProtoContext* ctx,
+                                                     const proto::ProtoObject* receiver,
+                                                     const proto::ProtoObject* message,
+                                                     const char* text);
+
 const proto::ProtoObject* signalErrorOfClass(STRuntime& rt,
                                              proto::ProtoContext* ctx,
                                              const proto::ProtoObject* errorClass,
@@ -100,6 +115,7 @@ const proto::ProtoObject* translateNativeException(STRuntime& rt,
     catch (const DebuggerHalt&)         { throw; }   // F2 — halt; is-a runtime_error
     catch (const InterruptSignal&)      { throw; }   // Ctrl-C in the REPL; is-a runtime_error
     catch (const UnhandledSTException&) { throw; }   // already protoST; is-a runtime_error
+    catch (const ZeroDivideSignal&)     { return signalZeroDivide(rt, ctx); }
     // --- a genuine native error: translate into a catchable protoST Error --
     catch (const std::exception& e)     { return signalNativeError(rt, ctx, e.what()); }
     catch (...)                         { return signalNativeError(rt, ctx, "native exception"); }

@@ -3,5 +3,6 @@ character.st
 string.st
 number.st
 collection.st
+exception.st
 stream.st
 printing.st

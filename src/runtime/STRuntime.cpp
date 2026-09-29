@@ -385,6 +385,10 @@ struct STRuntime::Impl {
             proto::ProtoString::createSymbol(rootCtx, "BlockClosure"), bootstrap.blockProto);
         globals->setAttribute(rootCtx,
             proto::ProtoString::createSymbol(rootCtx, "Block"), bootstrap.blockProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "ZeroDivide"), bootstrap.zeroDivideProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "Message"), bootstrap.messageProto);
         auto* exceptionKey = proto::ProtoString::createSymbol(rootCtx, "Exception");
         globals->setAttribute(rootCtx, exceptionKey, bootstrap.exceptionProto);
         auto* errorKey = proto::ProtoString::createSymbol(rootCtx, "Error");
