@@ -399,6 +399,7 @@ When several instances need to share a single value — a counter of all
 instances ever created, a singleton cache, a class-wide configuration —
 declare it via `classVariableNames:`:
 
+<!-- snippet-group: class-variables -->
 ```smalltalk
 Object subclass: #Counter
   instanceVariableNames: 'value'
@@ -414,6 +415,7 @@ class-decl time and is visible to every instance via the prototype
 chain — including instances of subclasses (no re-declaration needed).
 Reading works exactly the same as reading an instance variable:
 
+<!-- snippet-group: class-variables -->
 ```smalltalk
 Counter initTally.
 Counter bump. Counter bump. Counter bump.
@@ -461,6 +463,7 @@ runtimes. Instead of a keyword selector, you declare a name followed by a
 parenthesised parameter list, with optional defaults on named
 parameters:
 
+<!-- snippet-group: call-form -->
 ```smalltalk
 Object subclass: #Counter instanceVariableNames: 'value'.
 Counter >> init                  "still a normal Smalltalk method"
@@ -472,6 +475,7 @@ Counter >> incr(by, factor = 1)  "call-form: 1 positional, 1 named-with-default"
 
 Call sites use the same shape. Named arguments use `name = value`:
 
+<!-- snippet-group: call-form -->
 ```smalltalk
 c := Counter new.
 c init.
