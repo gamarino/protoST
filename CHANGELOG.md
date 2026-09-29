@@ -7,9 +7,11 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 0.4.0 is the release prepared for a technical Smalltalk audience: an
 adversarial audit (about 400 probe programs written the way a Pharo
-programmer writes) drove every change below, and every fix carries a
-regression test. `ctest`: 977 cases, all passing (854 at the start of the
-audit). Details of each item are in [`docs/STATUS.md`](docs/STATUS.md) and
+programmer writes) drove every change below, and each fix of a wrong result,
+crash or hang carries a regression test. `ctest` at commit `d3f7235`: 1041
+cases, all passing (854 at the start of the audit): 513 conformance
+programs, 437 unit tests, 42 examples, 28 CLI tests and 21 documentation
+checks. Details of each item are in [`docs/STATUS.md`](docs/STATUS.md) and
 [tutorial chapter 14](docs/tutorial/14-for-the-smalltalk-programmer.md).
 
 ### Silent wrong results fixed
@@ -71,7 +73,8 @@ audit). Details of each item are in [`docs/STATUS.md`](docs/STATUS.md) and
   (`instVarNamed:`, `selectors`, `canUnderstand:`, `subclasses`, `deepCopy`,
   `inspect`) and system (`Time`, `Date`, `Duration`, `Random`,
   `Smalltalk version`) messages a Pharo programmer expects. A `Collection`
-  subclass that defines `do:` gets the derived protocol.
+  subclass that defines `do:` gets the derived enumeration protocol
+  (`groupedBy:` also needs `add:`).
 
 ### Tooling and honesty
 
@@ -88,10 +91,12 @@ audit). Details of each item are in [`docs/STATUS.md`](docs/STATUS.md) and
 - **Call-form sends and method declarations** (commit `2af8c5c`).
   `recv name(p1, p2, k1 = v1)` sends and `Class >> name(p1, k1 = default)`
   declarations follow the protoCore method convention (positional arguments
-  plus named arguments), so methods exposed by other protoCore runtimes are
-  callable without selector mangling. Named-argument defaults are evaluated
-  at call time. A class cannot host both a unary `>> bar` and a call-form
-  `>> bar(...)`; actor receivers do not accept call-form sends yet.
+  plus named arguments). They are designed so that methods exposed by other
+  protoCore runtimes could be called without selector mangling; that is not
+  implemented: a call-form send reaches protoST methods only
+  ([`docs/INTEROP.md`](docs/INTEROP.md) §0). Named-argument defaults are
+  evaluated at call time. A class cannot host both a unary `>> bar` and a
+  call-form `>> bar(...)`; actor receivers do not accept call-form sends yet.
 - **Class variables** (commit `6b3cf39`). A non-empty
   `classVariableNames:` clause is honoured: each name is installed on the
   class and readable from instance and class methods, including in
@@ -363,9 +368,9 @@ audit). Details of each item are in [`docs/STATUS.md`](docs/STATUS.md) and
   `partialCompare`, which follows IEEE 754: a NaN is unordered with every
   number, so every ordering and `=` are false and `~=` is true; `min:` and
   `max:` answer the argument; these collections find a NaN only by identity.
-  Comparisons of other numbers are unchanged. `Set` membership is protoCore's
-  hashed membership and is not affected (see Known issues). Regression tests:
-  `conformance/12-builtins/float-nan-comparison.st` and
+  Comparisons of other numbers are unchanged. `Set` membership was not
+  affected by this change; it was fixed separately (D32, above). Regression
+  tests: `conformance/12-builtins/float-nan-comparison.st` and
   `conformance/09-collections/nan-elements.st`.
 - **In the REPL, a block assigning a session variable declared a new block
   variable instead** (S10). After `s := 0.`, the input
@@ -430,19 +435,11 @@ audit). Details of each item are in [`docs/STATUS.md`](docs/STATUS.md) and
 
 - The large-rope garbage-collector issue (K2) is fixed in protoCore; see
   [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md).
-- Blocks created in different iterations of a loop share the loop variable:
-  after `1 to: 3 do: [ :i | bs add: [ i ] ]` every stored block answers 3,
-  because a method or module activation keeps one captured-variable
-  dictionary (D30, open). See `docs/STATUS.md`.
 - A thread running an allocation-free loop never reaches a garbage-collector
   park point, so a requested collection waits for its loop to end (S3, open).
   The S15 fix adds `ProtoContext::safepoint()` at every loop back-edge, which
   is that park point, but the close is unproved: no protoST loop allocates
   nothing, so S3 cannot be exhibited. See `docs/STATUS.md`.
-- Hashed collections do not agree on element equality (D32, open): a `Set`
-  uses protoCore's hashed membership, so `1` and `1.0` are two elements and
-  all NaNs are one; a `Dictionary` misses a key `1` looked up as `1.0`; a
-  `Bag` compares with `=`. See `docs/STATUS.md`.
 
 ### Tests
 

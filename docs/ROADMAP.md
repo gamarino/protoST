@@ -34,8 +34,8 @@ Phases F1–F8 are complete, plus a backlog hardening pass. Tracks 1–11 below
 are also complete; each has a `trackN-complete` git tag (`track1-complete` …
 `track11-complete`). The latest release tag is `v0.3.0`. Release **0.4.0**
 (see [`CHANGELOG.md`](../CHANGELOG.md), "0.4.0") is complete on its branch:
-the Smalltalk-semantics audit described below, with 977 `ctest` cases
-passing.
+the Smalltalk-semantics audit described below, with 1041 `ctest` cases
+passing at commit `d3f7235`.
 
 | Area | Status |
 |------|--------|
@@ -234,8 +234,9 @@ suite must be designed **independently of the implementation**:
 **Why it matters:** when this track was written, the suite had 188 tests
 written alongside the code, which measured regression rather than correctness.
 The conformance suite derived from `docs/LANGUAGE.md` is what lets the project
-make defensible claims. As of 2026-09-29, `ctest` runs 977 cases, all
-passing; the 0.4.0 audit added a regression test for every fix, and
+make defensible claims. As of 2026-09-29 (commit `d3f7235`), `ctest` runs
+1041 cases, all passing; the 0.4.0 audit added a regression test for each
+fix of a wrong result, crash or hang, and
 `tests/docs/run_doc_snippets.py` runs the examples of the documentation.
 
 **Dependencies:** runs alongside everything; the specification
@@ -408,7 +409,8 @@ protoST's defining feature into a measurable result rather than a claim.
 **Status:** complete on `feature/presentable-0.4.0` (see
 [`CHANGELOG.md`](../CHANGELOG.md), "0.4.0"). An adversarial audit of about 400
 probe programs written the way a Pharo programmer writes drove every change,
-and every fix carries a regression test (854 → 977 `ctest` cases).
+and each fix of a wrong result, crash or hang carries a regression test
+(854 → 1041 `ctest` cases).
 
 - **Silent wrong results fixed:** instance variables confused with captured
   file-level variables, block parameters aliasing outer variables, a method

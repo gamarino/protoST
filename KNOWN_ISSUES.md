@@ -62,14 +62,17 @@ modules) is implemented and tested with a simulated provider.
 ## K5 — Very large collections need a larger heap limit (open)
 
 **What.** By default the heap holds 10M cells (640 MB). Building a collection
-of about 600,000 elements or more (`(1 to: 1000000) asArray`) needs more,
+of about 500,000 elements or more needs more (measured on 0.4.0:
+`(1 to: 450000) asArray` succeeds, `(1 to: 480000) asArray` and
+`(1 to: 500000) asArray` run out of memory),
 because protoCore builds a large list with n log n cells; the program then
 stops with an out-of-memory message that names the current limit and the
 setting to raise it (`PROTOCORE_HEAP_LIMIT_CELLS`, 64 bytes per cell).
 
 **Why the default stays small.** protoCore's collector waits for the ceiling
-before collecting; a 32M-cell default made allocation-heavy actor code 17%
-slower.
+before collecting; a 32M-cell default made allocation-heavy actor code 19%
+slower (`saturation_big` on one worker: 3.1 s against 3.7 s, interleaved
+runs; commit `8e5274f`).
 
 **Status.** Open; a bulk list builder in protoCore would remove the n log n
 factor.
