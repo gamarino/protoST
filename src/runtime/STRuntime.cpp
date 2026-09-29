@@ -79,6 +79,7 @@ namespace protoST {
 void resolveFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
                             const proto::ProtoObject* future,
                             const proto::ProtoObject* value);
+void reportUnobservedActorErrors();
 void rejectFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
                            const proto::ProtoObject* future,
                            const proto::ProtoObject* error);
@@ -689,6 +690,8 @@ STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
 namespace { void printWorkerStatsAtExit(); }
 
 STRuntime::~STRuntime() {
+    // Errors raised by actors for sends nobody observed (see future_prims).
+    reportUnobservedActorErrors();
     // Print per-worker drain/park stats if PROTOST_WORKER_STATS=1. Done
     // BEFORE joining the workers so a runtime that destructs without ever
     // shutting cleanly still emits something useful — even an empty table
@@ -1837,7 +1840,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                     capDict);
                 SCHED_DIAG("drainOne USER-METHOD EXIT actor=" << actor
                            << " result=" << result);
-            } else if (method) {
+            } else if (method && method != PROTO_NONE && method->isInteger(ctx)) {
                 long long marker = method->asLong(ctx);
                 if (marker & (1LL << 62)) {
                     int idx = static_cast<int>(marker & ((1LL << 62) - 1));
@@ -1849,9 +1852,15 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                     throw std::runtime_error("unknown method shape");
                 }
             } else {
-                throw std::runtime_error(
-                    std::string("doesNotUnderstand: ") +
-                    std::string(selStr->toStdString(ctx)));
+                // An absent selector answers PROTO_NONE, not null: report it
+                // as the synchronous send path does.
+                std::string msg = "doesNotUnderstand: " + selStr->toStdString(ctx);
+                const proto::ProtoObject* cname = wrapped
+                    ? wrapped->getAttribute(ctx, impl_->bootstrap.sym.className) : nullptr;
+                const proto::ProtoString* cstr =
+                    (cname && cname != PROTO_NONE) ? cname->asString(ctx) : nullptr;
+                if (cstr) msg += " (receiver class: " + cstr->toStdString(ctx) + ")";
+                throw std::runtime_error(msg);
             }
 
             if (future) {

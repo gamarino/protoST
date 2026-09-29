@@ -6,6 +6,9 @@
 #include "runtime/ExecutionEngine.h"
 #include "runtime/TransientPin.h"
 #include "protoCore.h"
+#include <cstdint>
+#include <unordered_map>
+#include <mutex>
 
 #include <chrono>
 #include <stdexcept>
@@ -13,6 +16,10 @@
 #include <thread>
 
 namespace protoST {
+
+// Defined below with the unobserved-rejection bookkeeping.
+void markFutureObserved(proto::ProtoContext* ctx, const proto::ProtoObject* future);
+
 
 // Defined in block_prims.cpp — runs a BlockClosure with the given arg vector.
 extern const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
@@ -226,6 +233,7 @@ long long readState(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoO
 const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* ctx,
                                             const proto::ProtoObject* r,
                                             const proto::ProtoObject* const*, int) {
+    markFutureObserved(ctx, r);
     const proto::ProtoString* valueKey =
         rt.bootstrap().sym.value;
     const proto::ProtoString* errorKey =
@@ -338,6 +346,7 @@ const proto::ProtoObject* prim_Future_thenDo(STRuntime& rt, proto::ProtoContext*
                                               const proto::ProtoObject* r,
                                               const proto::ProtoObject* const* a,
                                               int argc) {
+    markFutureObserved(ctx, r);
     if (argc != 1) throw std::runtime_error("Future>>thenDo: expects 1 arg");
     const proto::ProtoString* valueKey =
         rt.bootstrap().sym.value;
@@ -372,6 +381,7 @@ const proto::ProtoObject* prim_Future_catch(STRuntime& rt, proto::ProtoContext* 
                                              const proto::ProtoObject* r,
                                              const proto::ProtoObject* const* a,
                                              int argc) {
+    markFutureObserved(ctx, r);
     if (argc != 1) throw std::runtime_error("Future>>catch: expects 1 arg");
     const proto::ProtoString* errorKey =
         rt.bootstrap().sym.error;
@@ -437,6 +447,49 @@ bool appendFutureWaiter(STRuntime& rt,
     return parked;
 }
 
+// Unobserved actor errors. A send to an actor answers a Future; when the
+// actor's method raises, the drain rejects it. If no one ever waits on that
+// Future or registers thenDo:/catch:, the error would vanish, so a rejection
+// from the drain is recorded -- as text, keyed by the Future's identity (a
+// mutable object keeps its address), never as an object pointer, which the GC
+// would not trace -- and reported when the runtime ends. Observing a Future
+// stamps it (a GC-managed attribute) and discards its record.
+namespace {
+std::mutex g_rejectionsMu;
+std::unordered_map<std::uintptr_t, std::string> g_unobservedRejections;
+
+const proto::ProtoString* observedKey(proto::ProtoContext* ctx) {
+    static const proto::ProtoString* key = nullptr;
+    static std::once_flag once;
+    std::call_once(once, [ctx]() { key = proto::ProtoString::createSymbol(ctx, "__observed__"); });
+    return key;
+}
+
+std::string describeRejection(proto::ProtoContext* ctx, const proto::ProtoObject* error) {
+    if (!error || error == PROTO_NONE) return "nil";
+    if (const proto::ProtoString* str = error->asString(ctx)) return str->toStdString(ctx);
+    static const proto::ProtoString* msgKey = proto::ProtoString::createSymbol(ctx, "messageText");
+    const proto::ProtoObject* m = error->getAttribute(ctx, msgKey);
+    if (m && m != PROTO_NONE)
+        if (const proto::ProtoString* ms = m->asString(ctx)) return ms->toStdString(ctx);
+    return "an error without messageText";
+}
+} // namespace
+
+void markFutureObserved(proto::ProtoContext* ctx, const proto::ProtoObject* future) {
+    if (!future || future == PROTO_NONE) return;
+    future->setAttribute(ctx, observedKey(ctx), PROTO_TRUE);
+    std::lock_guard<std::mutex> lock(g_rejectionsMu);
+    g_unobservedRejections.erase(reinterpret_cast<std::uintptr_t>(future));
+}
+
+void reportUnobservedActorErrors() {
+    std::lock_guard<std::mutex> lock(g_rejectionsMu);
+    for (const auto& entry : g_unobservedRejections)
+        std::fprintf(stderr, "warning: unhandled error in actor: %s\n", entry.second.c_str());
+    g_unobservedRejections.clear();
+}
+
 // drainOne settle entry points — identical lock-free settle as the user-facing
 // Future>>resolve: / rejectWith: primitives.
 void resolveFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
@@ -448,6 +501,12 @@ void resolveFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
 void rejectFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
                            const proto::ProtoObject* future,
                            const proto::ProtoObject* error) {
+    if (future && future != PROTO_NONE
+        && future->getAttribute(ctx, observedKey(ctx)) != PROTO_TRUE) {
+        std::lock_guard<std::mutex> lock(g_rejectionsMu);
+        g_unobservedRejections[reinterpret_cast<std::uintptr_t>(future)] =
+            describeRejection(ctx, error);
+    }
     settleFuture(rt, ctx, future, /*reject=*/true, error);
 }
 
