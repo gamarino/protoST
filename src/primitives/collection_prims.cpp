@@ -59,6 +59,8 @@ namespace protoST {
 const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* block,
                                        const proto::ProtoObject* const* args, int argc);
+// Defined in object_prims.cpp: the hash of a native number (`hash`).
+long long numericHash(proto::ProtoContext* ctx, const proto::ProtoObject* r);
 // Defined in object_prims.cpp: run a method by name, as a send does.
 const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
                                       const proto::ProtoObject* recv,
@@ -200,6 +202,15 @@ bool stKeyEquals(proto::ProtoContext* ctx, const proto::ProtoObject* a,
             *rt, ctx, a, proto::ProtoString::createSymbol(ctx, "="), args1, 1, &understood);
         if (understood) return r == PROTO_TRUE;
     }
+    // A native key against an object with its own =, such as a Float against
+    // an equal Fraction: ask that object (= is symmetric).
+    if (STRuntime* rt = runtimeForUserEquality(ctx, b)) {
+        bool understood = false;
+        const proto::ProtoObject* args1[1] = { a };
+        const proto::ProtoObject* r = sendDynamic(
+            *rt, ctx, b, proto::ProtoString::createSymbol(ctx, "="), args1, 1, &understood);
+        if (understood) return r == PROTO_TRUE;
+    }
     return a->partialCompare(ctx, b) == 0;
 }
 
@@ -252,7 +263,7 @@ unsigned long stKeyHash(proto::ProtoContext* ctx, const proto::ProtoObject* key)
         }
     }
     if (key->isInteger(ctx) || key->isDouble(ctx))
-        return numberKeyHash(key->asDouble(ctx));
+        return static_cast<unsigned long>(numericHash(ctx, key));
     if (STRuntime* rt = runtimeForUserEquality(ctx, key)) {
         bool understood = false;
         const proto::ProtoObject* h = sendDynamic(

@@ -124,6 +124,26 @@ const proto::ProtoObject* parseNumber(proto::ProtoContext* ctx, const std::strin
             return ctx->fromString(intText[0] == '+' ? intText.c_str() + 1 : intText.c_str(), 10);
         }
     }
+    // The rest must be a Smalltalk fraction part and/or exponent: `.digits`,
+    // `e[-]digits`. strtod alone would also accept hex ('0x10'), 'inf', 'nan'.
+    size_t j = i;
+    if (j < t.size() && t[j] == '.') {
+        size_t fd = 0;
+        for (++j; j < t.size() && std::isdigit(static_cast<unsigned char>(t[j])); ++j) ++fd;
+        if (fd == 0) {
+            // '3.' reads as 3 (the period ends the number, as in source).
+            if (j == t.size()) return parseNumber(ctx, t.substr(0, i), true);
+            return PROTO_NONE;
+        }
+    }
+    if (j < t.size() && (t[j] == 'e' || t[j] == 'E')) {
+        size_t ed = 0;
+        ++j;
+        if (j < t.size() && (t[j] == '-' || t[j] == '+')) ++j;
+        for (; j < t.size() && std::isdigit(static_cast<unsigned char>(t[j])); ++j) ++ed;
+        if (ed == 0) return PROTO_NONE;
+    }
+    if (j != t.size()) return PROTO_NONE;
     char* end = nullptr;
     const double d = std::strtod(t.c_str(), &end);
     if (end != t.c_str() + t.size()) return PROTO_NONE;

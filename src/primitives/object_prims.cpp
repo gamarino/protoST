@@ -830,24 +830,32 @@ const proto::ProtoObject* prim_Object_identityHash(STRuntime&, proto::ProtoConte
 
 // recv hash → consistent with =: numbers by value (1 hash = 1.0 hash), strings
 // and symbols by content, every other object by identity.
+// The hash of a native number, shared by `hash` and the hashed collections'
+// key hash, so a number that defines its own hash in terms of a native one
+// (a Fraction equal to a Float answers that Float's hash) lands in the same
+// bucket. Equal numbers of different kinds (1 and 1.0) hash alike; the value
+// is kept below 2^53.
+long long numericHashImpl(proto::ProtoContext* ctx, const proto::ProtoObject* r) {
+    constexpr long long kMask = (1LL << 53) - 1;
+    if (r->isFloat(ctx)) {
+        const double d = r->asDouble(ctx);
+        if (std::isfinite(d) && d == std::floor(d) && std::fabs(d) < 9.0e15)
+            return static_cast<long long>(d) & kMask;
+        return static_cast<long long>(std::hash<double>{}(d)) & kMask;
+    }
+    if (r->compare(ctx, ctx->fromLong(1LL << 53)) < 0 && r->compare(ctx, ctx->fromLong(-(1LL << 53))) > 0)
+        return r->asLong(ctx) & kMask;
+    const std::string digits = formatNumber(ctx, r);
+    return static_cast<long long>(std::hash<std::string>{}(digits)) & kMask;
+}
+
 const proto::ProtoObject* prim_Object_hash(STRuntime& rt, proto::ProtoContext* ctx,
                                            const proto::ProtoObject* r,
                                            const proto::ProtoObject* const* a, int argc) {
     if (!r || r == PROTO_NONE) return ctx->fromLong(0);
     if (r == PROTO_TRUE) return ctx->fromLong(1);
     if (r == PROTO_FALSE) return ctx->fromLong(2);
-    if (r->isFloat(ctx)) {
-        const double d = r->asDouble(ctx);
-        if (std::isfinite(d) && d == std::floor(d) && std::fabs(d) < 9.0e15)
-            return ctx->fromLong(static_cast<long long>(d) & ((1LL << 54) - 1));
-        return ctx->fromLong(static_cast<long long>(std::hash<double>{}(d) & ((1ULL << 54) - 1)));
-    }
-    if (r->isInteger(ctx)) {
-        if (r->compare(ctx, ctx->fromLong(1LL << 53)) < 0 && r->compare(ctx, ctx->fromLong(-(1LL << 53))) > 0)
-            return ctx->fromLong(r->asLong(ctx) & ((1LL << 54) - 1));
-        const std::string digits = formatNumber(ctx, r);
-        return ctx->fromLong(static_cast<long long>(std::hash<std::string>{}(digits) & ((1ULL << 54) - 1)));
-    }
+    if (r->isFloat(ctx) || r->isInteger(ctx)) return ctx->fromLong(numericHashImpl(ctx, r));
     if (const proto::ProtoString* s = r->asString(ctx))
         return ctx->fromLong(static_cast<long long>(
             std::hash<std::string>{}(s->toStdString(ctx)) & ((1ULL << 54) - 1)));
@@ -1615,6 +1623,11 @@ void installImportGlobal(STRuntime& rt) {
     auto* importKey = proto::ProtoString::createSymbol(ctx, "Import");
     auto* g = rt.globals();
     g->setAttribute(ctx, importKey, importObj);
+}
+
+// Exported for the hashed collections (collection_prims.cpp).
+long long numericHash(proto::ProtoContext* ctx, const proto::ProtoObject* r) {
+    return numericHashImpl(ctx, r);
 }
 
 } // namespace protoST

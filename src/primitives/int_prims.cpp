@@ -2,6 +2,7 @@
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/ValueFormat.h"
+#include "runtime/TransientPin.h"
 #include "runtime/ZeroDivideSignal.h"
 #include "protoCore.h"
 
@@ -185,7 +186,15 @@ const proto::ProtoObject* prim_NumQuo(STRuntime& rt, proto::ProtoContext* ctx,
             return adapted;
     checkDivisor(ctx, a[0], "quo:");
     if (r->isFloat(ctx) || a[0]->isFloat(ctx))
-        return ctx->fromDouble(std::trunc(r->asDouble(ctx) / a[0]->asDouble(ctx)));
+    {
+        // quo: answers an Integer, also for Float operands (as in Pharo).
+        const double q = std::trunc(r->asDouble(ctx) / a[0]->asDouble(ctx));
+        if (!std::isfinite(q)) throw std::runtime_error("quo: result is not finite");
+        if (q > -9.2e18 && q < 9.2e18) return ctx->fromLong(static_cast<long long>(q));
+        char digits[400];
+        std::snprintf(digits, sizeof(digits), "%.0f", q);
+        return ctx->fromString(digits, 10);
+    }
     return r->divide(ctx, a[0]);
 }
 
@@ -298,7 +307,48 @@ void requireInteger(proto::ProtoContext* ctx, const proto::ProtoObject* v, const
         throw std::runtime_error(std::string(who) + ": receiver and argument must be integers");
 }
 
-#define DEFBITS(NAME, METHOD, SELECTOR)                                           \
+bool fitsSmallInteger(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
+    constexpr long long kMax = (1LL << 55) - 1;
+    return v->compare(ctx, ctx->fromLong(kMax)) <= 0
+        && v->compare(ctx, ctx->fromLong(-kMax - 1)) >= 0;
+}
+
+// Bitwise and/or/xor on arbitrary integers in two's complement, 16 bits at a
+// time: floored division by 2^16 gives each operand's next 16-bit digit
+// (0..65535) even for negatives, and once both operands are 0 or -1 the rest
+// is their sign bits. Used when an operand is a LargeInteger, where
+// protoCore's bitwise operations answer wrong values for negative operands.
+const proto::ProtoObject* wideBitOp(proto::ProtoContext* ctx, const proto::ProtoObject* x,
+                                    const proto::ProtoObject* y, char op) {
+    auto apply = [op](long long p, long long q) {
+        return op == '&' ? (p & q) : op == '|' ? (p | q) : (p ^ q);
+    };
+    const proto::ProtoObject* base = ctx->fromLong(65536);
+    const proto::ProtoObject* zero = ctx->fromLong(0);
+    const proto::ProtoObject* minusOne = ctx->fromLong(-1);
+    const proto::ProtoObject* result = zero;
+    const proto::ProtoObject* weight = ctx->fromLong(1);
+    TransientPin pinX(ctx, x), pinY(ctx, y), pinR(ctx, result), pinW(ctx, weight);
+    auto isSign = [&](const proto::ProtoObject* v) {
+        return v->compare(ctx, zero) == 0 || v->compare(ctx, minusOne) == 0;
+    };
+    while (!(isSign(x) && isSign(y))) {
+        const proto::ProtoObject *qx = nullptr, *rx = nullptr, *qy = nullptr, *ry = nullptr;
+        floorDivMod(ctx, x, base, &qx, &rx);
+        floorDivMod(ctx, y, base, &qy, &ry);
+        const long long digit = apply(rx->asLong(ctx), ry->asLong(ctx)) & 0xFFFF;
+        result = result->add(ctx, ctx->fromLong(digit)->multiply(ctx, weight));
+        pinR.reset(result);
+        x = qx; pinX.reset(x);
+        y = qy; pinY.reset(y);
+        weight = weight->multiply(ctx, base);
+        pinW.reset(weight);
+    }
+    const long long sign = apply(x->asLong(ctx), y->asLong(ctx));   // 0 or -1
+    return sign == -1 ? result->subtract(ctx, weight) : result;
+}
+
+#define DEFBITS(NAME, METHOD, SELECTOR, OP)                                       \
 const proto::ProtoObject* prim_##NAME(STRuntime&, proto::ProtoContext* ctx,        \
                                        const proto::ProtoObject* r,                \
                                        const proto::ProtoObject* const* a,         \
@@ -306,12 +356,14 @@ const proto::ProtoObject* prim_##NAME(STRuntime&, proto::ProtoContext* ctx,     
     if (argc != 1) throw std::runtime_error(SELECTOR " expects 1 arg");            \
     requireInteger(ctx, r, SELECTOR);                                              \
     requireInteger(ctx, a[0], SELECTOR);                                           \
-    return r->METHOD(ctx, a[0]);                                                   \
+    if (fitsSmallInteger(ctx, r) && fitsSmallInteger(ctx, a[0]))                   \
+        return r->METHOD(ctx, a[0]);                                               \
+    return wideBitOp(ctx, r, a[0], OP);                                            \
 }
 
-DEFBITS(IntBitAnd, bitwiseAnd, "bitAnd:")
-DEFBITS(IntBitOr,  bitwiseOr,  "bitOr:")
-DEFBITS(IntBitXor, bitwiseXor, "bitXor:")
+DEFBITS(IntBitAnd, bitwiseAnd, "bitAnd:", '&')
+DEFBITS(IntBitOr,  bitwiseOr,  "bitOr:",  '|')
+DEFBITS(IntBitXor, bitwiseXor, "bitXor:", '^')
 
 const proto::ProtoObject* prim_IntBitInvert(STRuntime&, proto::ProtoContext* ctx,
                                              const proto::ProtoObject* r,

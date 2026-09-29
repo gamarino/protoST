@@ -1,4 +1,5 @@
 #include "protoST/STRuntime.h"
+#include "runtime/TransientPin.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/ValueFormat.h"
@@ -13,6 +14,13 @@
 #include <string>
 
 namespace protoST {
+
+// Defined in object_prims.cpp: run a method by name, as a send does.
+const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* recv,
+                                      const proto::ProtoString* selector,
+                                      const proto::ProtoObject* const* args, int argc,
+                                      bool* understood);
 
 // Defined in int_prims.cpp: Pharo's adaptToNumber:andSend: double dispatch for
 // an argument that is not a native number (a Fraction). nullptr if unsupported.
@@ -280,14 +288,24 @@ const proto::ProtoObject* prim_RaisedTo(STRuntime& rt, proto::ProtoContext* ctx,
     // Exact integer^integer path: repeated multiply, LargeInteger-safe.
     if (!r->isFloat(ctx) && !exp->isFloat(ctx)) {
         long long e = exp->asLong(ctx);
-        if (e >= 0) {
-            const proto::ProtoObject* acc = ctx->fromLong(1);
-            for (long long i = 0; i < e; ++i) acc = acc->multiply(ctx, r);
-            return acc;
+        // Exponentiation by squaring: O(log e) multiplications, so large
+        // powers of LargeIntegers do not build every intermediate power.
+        const proto::ProtoObject* acc = ctx->fromLong(1);
+        const proto::ProtoObject* base = r;
+        TransientPin pinAcc(ctx, acc), pinBase(ctx, base);
+        for (unsigned long long k = static_cast<unsigned long long>(e < 0 ? -e : e); k; k >>= 1) {
+            if (k & 1) { acc = acc->multiply(ctx, base); pinAcc.reset(acc); }
+            if (k > 1) { base = base->multiply(ctx, base); pinBase.reset(base); }
         }
-        // Negative integer exponent — answer a Float reciprocal.
-        return ctx->fromDouble(std::pow(asDoubleVal(ctx, r),
-                                        static_cast<double>(e)));
+        if (e >= 0) return acc;
+        // Negative integer exponent: the exact reciprocal (1 / n^k is a
+        // Fraction), as in Pharo.
+        bool understood = false;
+        const proto::ProtoObject* args[1] = { acc };
+        const proto::ProtoObject* q = sendDynamic(rt, ctx, ctx->fromLong(1),
+            proto::ProtoString::createSymbol(ctx, "/"), args, 1, &understood);
+        if (understood && q) return q;
+        return ctx->fromDouble(std::pow(asDoubleVal(ctx, r), static_cast<double>(e)));
     }
     // Any Float operand — libm pow, answer a Float.
     return ctx->fromDouble(std::pow(asDoubleVal(ctx, r),
@@ -364,6 +382,32 @@ const proto::ProtoObject* prim_Nan(STRuntime&, proto::ProtoContext* ctx,
     return ctx->fromDouble(std::nan(""));
 }
 
+// aFloat __floatParts → #(mantissa exponent), two Integers with
+// mantissa * 2^exponent exactly equal to the receiver (mantissa odd, or 0).
+// The kernel's asExactFraction builds the Integer or Fraction from them.
+const proto::ProtoObject* prim_FloatParts(STRuntime& rt, proto::ProtoContext* ctx,
+                                          const proto::ProtoObject* r,
+                                          const proto::ProtoObject* const*, int) {
+    const double d = r->asDouble(ctx);
+    if (!std::isfinite(d)) throw std::runtime_error("__floatParts: not a finite Float");
+    int e = 0;
+    const double m = std::frexp(d, &e);
+    long long mant = static_cast<long long>(std::ldexp(m, 53));
+    long long exp2 = static_cast<long long>(e) - 53;
+    if (mant == 0) exp2 = 0;
+    while (mant != 0 && (mant & 1) == 0) { mant /= 2; ++exp2; }
+    const proto::ProtoList* data = ctx->newList();
+    TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
+    data = data->appendLast(ctx, ctx->fromLong(mant));
+    pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
+    data = data->appendLast(ctx, ctx->fromLong(exp2));
+    pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
+    const proto::ProtoObject* arr = rt.bootstrap().arrayProto->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinArr(ctx, arr);
+    arr->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__data__"), data->asObject(ctx));
+    return arr;
+}
+
 } // anon
 
 void installMathPrimitives(STRuntime& rt) {
@@ -404,6 +448,7 @@ void installMathPrimitives(STRuntime& rt) {
     bindPrimitive(rt, N, "odd",         reg.registerPrim(prim_Odd));
     bindPrimitive(rt, N, "factorial",   reg.registerPrim(prim_Factorial));
     bindPrimitive(rt, N, "raisedTo:",   reg.registerPrim(prim_RaisedTo));
+    bindPrimitive(rt, N, "__floatParts", reg.registerPrim(prim_FloatParts));
     bindPrimitive(rt, N, "gcd:",        reg.registerPrim(prim_Gcd));
     bindPrimitive(rt, N, "lcm:",        reg.registerPrim(prim_Lcm));
 

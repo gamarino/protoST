@@ -84,12 +84,17 @@ Fraction >> >= aNumber
 
 Fraction >> = aNumber
   aNumber isNumber ifFalse: [^ false].
-  aNumber isFloat ifTrue: [^ self asFloat = aNumber].
+  "Exact, as in Pharo: (1/10) = 0.1 is false, (1/2) = 0.5 is true."
+  aNumber isFloat ifTrue: [^ aNumber isFinite and: [self = aNumber asExactFraction]].
   aNumber isInteger ifTrue: [^ false].
   ^ numerator = aNumber numerator and: [denominator = aNumber denominator].
 
 Fraction >> hash
-  ^ self asFloat hash.
+  "Equal to the hash of the Float it equals, when there is one."
+  | f |
+  f := self asFloat.
+  (f isFinite and: [f asExactFraction = self]) ifTrue: [^ f hash].
+  ^ numerator hash bitXor: denominator hash.
 
 Fraction >> truncated
   ^ numerator quo: denominator.
@@ -101,7 +106,8 @@ Fraction >> ceiling
   ^ (numerator + denominator - 1) // denominator.
 
 Fraction >> rounded
-  ^ (self + (1/2)) floor.
+  "Halves round away from zero, as in Pharo: (-1/2) rounded = -1."
+  ^ (self + (self sign / 2)) truncated.
 
 Fraction >> printOn: aStream
   aStream nextPut: $(; print: numerator; nextPut: $/; print: denominator; nextPut: $).
@@ -118,6 +124,11 @@ Fraction >> displayString
 
 "Double dispatch from the native primitives: a native number op aFraction."
 Fraction >> adaptToNumber: rcvr andSend: selector
+  "Comparisons with a Float are exact; arithmetic with a Float is Float."
+  (rcvr isFloat and: [#(#= #~= #< #> #<= #>=) includes: selector])
+    ifTrue: [^ rcvr isFinite
+      ifTrue: [rcvr asExactFraction perform: selector with: self]
+      ifFalse: [rcvr asFloat perform: selector with: self asFloat]].
   rcvr isFloat ifTrue: [^ rcvr perform: selector with: self asFloat].
   ^ (Fraction basicNew setNumerator: rcvr denominator: 1) perform: selector with: self.
 
@@ -222,3 +233,20 @@ Fraction >> gcd: aNumber
 
 Fraction >> lcm: aNumber
   ^ self error: 'lcm: is defined for integers only'.
+
+"--- exact conversion of Floats ------------------------------------------------"
+
+"The exact value of a finite Float: an Integer or a Fraction whose
+ denominator is a power of two (Pharo's asExactFraction)."
+Number >> asExactFraction
+  | parts mantissa exponent |
+  self isFloat ifFalse: [^ self].
+  self isFinite ifFalse: [^ self error: 'cannot convert a non-finite Float to a Fraction'].
+  parts := self __floatParts.
+  mantissa := parts at: 1.
+  exponent := parts at: 2.
+  exponent >= 0 ifTrue: [^ mantissa * (2 raisedTo: exponent)].
+  ^ mantissa / (2 raisedTo: exponent negated).
+
+Number >> isFinite
+  ^ self isFloat not or: [(self - self) = 0.0].
