@@ -3,14 +3,18 @@
 ## La noche anterior
 
 - [ ] Instalar el `.deb` de 0.4.0 en la notebook de la charla:
-      `sudo dpkg -i protost-0.4.0-Linux.deb` (protoCore ≥ 2.5.0 instalado).
+      `sudo dpkg -i protost-0.4.0-Linux.deb`. Antes, instalar protoCore:
+      el paquete depende de `protocore (>= 2.5.0)` y `protocore (<< 3.0.0)`
+      (`dpkg-deb -I protost-0.4.0-Linux.deb`); en la máquina de desarrollo
+      está instalado protoCore 2.5.0.
 - [ ] `protost --version` → `protoST 0.4.0`.
 - [ ] `cd docs/talks/2026-10-15-fas/demos && RUNS=20 ./check_all.sh` → las
       tres demos 20/20.
 - [ ] Probar las grabaciones:
       `scriptreplay --timing=../recordings/01-familiar-code.timing ../recordings/01-familiar-code.typescript`
       (y 02, 03).
-- [ ] Copia offline del deck (PDF exportado en esta carpeta) y del
+- [ ] Exportar el PDF del deck desde el artifact y guardarlo en esta
+      carpeta (todavía no está); tener copia offline de ese PDF y del
       repositorio.
 
 ## Una hora antes

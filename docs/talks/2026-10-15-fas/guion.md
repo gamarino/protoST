@@ -1,7 +1,7 @@
 # protoST — guion de la charla (FAST, 15/10/2026)
 
 Duración: núcleo de 30 minutos; módulos opcionales hasta 60. Todas las cifras
-salen de `benchmarks/reports/2026-10-0X-release-0.4.0.md`; si una cifra no
+salen de `benchmarks/reports/2026-09-29-release-0.4.0.md`; si una cifra no
 está en ese informe, no se dice.
 
 Antes de empezar: terminal con fuente grande, `cd docs/talks/2026-10-15-fas/demos`,
@@ -44,9 +44,14 @@ de intentarlo.
     es una nueva versión que comparte casi todo con la anterior;
   - hilos nativos sin lock global y un GC concurrente;
   - un objeto mutable es una referencia atómica a una instantánea inmutable:
-    lo que un hilo lee no cambia debajo de él.
+    cada lectura ve una instantánea consistente.
+- Desde Smalltalk los objetos siguen cambiando: `at:put:` en un `Array` o
+  `add:` en una `OrderedCollection` modifican el objeto instalando una
+  instantánea nueva. Los strings no: un String es un `ProtoString` de
+  protoCore (una cuerda, un valor sin modificación en el lugar).
 - Consecuencia práctica: pasar un objeto a otro hilo es pasar una referencia,
-  sin copiarlo y sin locks.
+  sin copiarlo. El objeto queda compartido: lo que un lado cambia, el otro lo
+  ve en su próxima lectura.
 
 ### 0:11 — DEMO 1: el código que ya conocen (5 min)
 
@@ -65,8 +70,10 @@ Respaldo: `scriptreplay` de `recordings/01-familiar-code`.
 ### 0:16 — Actores y paralelismo real (3 min)
 
 - Cualquier objeto se vuelve actor con `asActor`; cada mensaje devuelve un
-  `Future` enseguida; el actor procesa un mensaje por vez, así su estado son
-  variables de instancia comunes, sin locks.
+  `Future` enseguida (salvo los que preguntan por la referencia misma:
+  identidad, igualdad, `hash`, `isNil`, `isActor`, `printString`, que el
+  proxy responde en el acto); el actor procesa un mensaje por vez, así su
+  estado son variables de instancia comunes, sin locks.
 - Los actores comparten un pool de hilos nativos.
 - `wait`, `thenDo:`, `whenAll:`. Un error dentro del actor vuelve con su
   clase al que espera.
@@ -136,9 +143,17 @@ Respaldo: `recordings/03-digital-twin`.
 - Cada benchmark verifica su resultado; el harness falla si falta o no
   coincide (se mostró un bug que se veía como "mejora" en otro proyecto por
   no verificar).
-- Cifras del informe 0.4.0: arranque, tabla frente a CPython con el mismo N,
-  curva de escalado por workers. Decir dónde es más lento (despacho de
-  métodos recursivo, excepciones) sin maquillarlo.
+- Cifras del informe 0.4.0 (`benchmarks/reports/2026-09-29-release-0.4.0.md`):
+  - arranque 27 ms (CPython 29 ms);
+  - proceso completo frente a CPython con el mismo N: media geométrica 3,45×,
+    dominada por el arranque;
+  - solo el trabajo (arranque descontado): de unas 6× (bucle de enteros) a
+    36× (`fib`) y 64× (excepciones), media geométrica 20,8×;
+  - escalado de `saturation_big`: techo de unas 2,1× con cuatro workers,
+    confirmado por una segunda corrida con menos carga; doce actores, 2,1×
+    con el pool.
+- Decir dónde es más lento (despacho de métodos recursivo, excepciones) sin
+  maquillarlo.
 
 ### M4 — Hoja de ruta y preguntas abiertas (6 min)
 
