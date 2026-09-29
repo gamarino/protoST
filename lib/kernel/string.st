@@ -359,3 +359,57 @@ String >> asSortedCollection
 String >> asSortedCollection: aBlock
   ^ self asArray asSortedCollection: aBlock.
 
+
+"--- selectors as blocks (Symbol protocol) -------------------------------------
+ Symbols dispatch to String, and a Symbol shorter than about 8 bytes is
+ represented as the equal String, so these methods are defined on String and
+ therefore also answer for a String that spells a selector ('squared' value:
+ 3 answers 9, where Pharo would not understand value:)."
+
+String >> value: anObject
+  "Send the receiver, as a unary selector, to anObject: #squared value: 3."
+  ^ anObject perform: self.
+
+String >> value: anObject value: anArgument
+  "Send the receiver, as a one-argument selector, to anObject: #+ value: 3 value: 4."
+  ^ anObject perform: self with: anArgument.
+
+String >> numArgs
+  "The number of arguments the receiver takes as a selector: 1 for a binary
+   selector, otherwise the number of colons."
+  | c |
+  self isEmpty ifTrue: [^ 0].
+  c := self first.
+  (c isLetter or: [c = $_]) ifFalse: [^ 1].
+  ^ self occurrencesOf: $:.
+
+"--- sorting, comparing and searching (continued) --------------------------------"
+
+String >> sorted
+  "A String of the receiver's Characters in ascending order."
+  ^ String withAll: self asArray sort.
+
+String >> sorted: aBlock
+  ^ String withAll: (self asArray sort: aBlock).
+
+String >> sameAs: aString
+  "Equality ignoring case."
+  ^ self asLowercase = aString asLowercase.
+
+String >> indexOf: aCharacter startingAt: start
+  start to: self size do: [:i | (self at: i) = aCharacter ifTrue: [^ i]].
+  ^ 0.
+
+String >> occurrencesOfString: aString
+  "The number of non-overlapping occurrences of aString, scanning from the left."
+  | count index |
+  count := 0.
+  index := 1.
+  [(index := self findString: aString startingAt: index) > 0] whileTrue: [
+    count := count + 1.
+    index := index + aString size].
+  ^ count.
+
+String >> includesSubstring: aString caseSensitive: aBoolean
+  aBoolean ifTrue: [^ self includesSubstring: aString].
+  ^ self asLowercase includesSubstring: aString asLowercase.

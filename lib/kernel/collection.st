@@ -736,3 +736,100 @@ Fraction >> to: stop do: aBlock
 
 Fraction >> to: stop by: step do: aBlock
   self numericTo: stop by: step do: aBlock.
+
+"--- folding, flattening and set operations -----------------------------------------"
+
+Collection >> fold: aBlock
+  "Combine the elements pairwise from the left: #(1 2 3) fold: [:a :b | a + b]
+   is (1 + 2) + 3. An empty collection signals an error."
+  | result first |
+  first := true.
+  self do: [:each |
+    first
+      ifTrue: [result := each. first := false]
+      ifFalse: [result := aBlock value: result value: each]].
+  first ifTrue: [^ self error: 'this collection is empty'].
+  ^ result.
+
+Collection >> reduce: aBlock
+  ^ self fold: aBlock.
+
+Collection >> flatCollect: aBlock
+  "Concatenate the collections aBlock answers for each element into a
+   collection of the receiver's species."
+  | out |
+  out := OrderedCollection new.
+  self do: [:each | out addAll: (aBlock value: each)].
+  ^ self species withAll: out.
+
+Collection >> union: aCollection
+  "A Set of the elements of both collections (Pharo answers a Set)."
+  ^ self asSet addAll: aCollection; yourself.
+
+Collection >> intersection: aCollection
+  "The elements that are also in aCollection, without duplicates, in a
+   collection of the receiver's species (a Set for a Set)."
+  ^ self species withAll: (self asSet select: [:each | aCollection includes: each]).
+
+Collection >> difference: aCollection
+  "The elements that are not in aCollection, in a collection of the
+   receiver's species (a Set for a Set)."
+  ^ self reject: [:each | aCollection includes: each].
+
+Collection >> asDictionary
+  "A Dictionary from a collection of Associations."
+  ^ Dictionary newFrom: self.
+
+"The Pharo block forms of max: and min: answer the extreme VALUE of aBlock
+ over the elements (detectMax: and detectMin: answer the element). A Number
+ is not a Collection, so Number >> max: and min: are unaffected."
+
+Collection >> max: aBlock
+  ^ self inject: (aBlock value: self anyOne) into: [:m :each | m max: (aBlock value: each)].
+
+Collection >> min: aBlock
+  ^ self inject: (aBlock value: self anyOne) into: [:m :each | m min: (aBlock value: each)].
+
+Dictionary >> keysSortedSafely
+  "The keys, sorted in an Array. Keys that cannot be compared with each other
+   (a String and a Number, say) are ordered by their printString instead of
+   failing."
+  ^ self keys asArray sort: [:a :b |
+      [a <= b] on: Error do: [:e | e return: a printString <= b printString]].
+
+"--- sequenceable collections (continued) ---------------------------------------------"
+
+SequenceableCollection >> indexOf: anObject startingAt: start
+  start to: self size do: [:i | (self at: i) = anObject ifTrue: [^ i]].
+  ^ 0.
+
+SequenceableCollection >> at: index ifAbsent: aBlock
+  (index isInteger and: [index between: 1 and: self size]) ifFalse: [^ aBlock value].
+  ^ self at: index.
+
+SequenceableCollection >> copyReplaceAll: oldSubCollection with: newSubCollection
+  "A copy in which every non-overlapping occurrence of oldSubCollection,
+   scanning from the left, is replaced by the elements of newSubCollection."
+  | out i n |
+  n := oldSubCollection size.
+  n = 0 ifTrue: [^ self copy].
+  out := OrderedCollection new.
+  i := 1.
+  [i <= self size] whileTrue: [
+    (i + n - 1 <= self size and: [(1 to: n) allSatisfy: [:k | (self at: i + k - 1) = (oldSubCollection at: k)]])
+      ifTrue: [out addAll: newSubCollection. i := i + n]
+      ifFalse: [out add: (self at: i). i := i + 1]].
+  ^ self species withAll: out.
+
+Array class >> streamContents: aBlock
+  "An Array of what aBlock writes on the WriteStream it is given."
+  | stream |
+  stream := WriteStream on: #().
+  aBlock value: stream.
+  ^ self withAll: stream contents.
+
+OrderedCollection class >> streamContents: aBlock
+  | stream |
+  stream := WriteStream on: #().
+  aBlock value: stream.
+  ^ self withAll: stream contents.
