@@ -157,7 +157,8 @@ def find_protopy():
         cand = root / sub / "protopy"
         if cand.exists() and os.access(cand, os.X_OK):
             return cand
-    return None
+    installed = shutil.which("protopy")
+    return Path(installed) if installed else None
 
 
 def twin_cmd(interpreter, py_path, n):
