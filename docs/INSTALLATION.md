@@ -1,14 +1,14 @@
 # Installing protoST
 
-protoST 0.4.0 is a Smalltalk-syntax, actor-native runtime on protoCore. It is
+protoST 0.5.0 is a Smalltalk-syntax, actor-native runtime on protoCore. It is
 a consumer of protoCore, never a bundler of it: `bin/protost` links
 `libprotoCore.so.3`, and every package protoST produces declares a runtime
 dependency on protoCore's own package instead of shipping a copy.
 
 On a Debian or Ubuntu machine where protoCore's package is installed, the
 library is `/usr/lib/x86_64-linux-gnu/libprotoCore.so.3`, a link to
-`libprotoCore.so.2.5.0` for protoCore 2.5.0 (the version this release was
-built and tested against).
+`libprotoCore.so.2.6.1` for protoCore 2.6.1 (the version this release was
+built and tested against, and the oldest it accepts).
 
 ---
 
@@ -19,13 +19,24 @@ built and tested against).
 - **libreadline** (`libreadline-dev` on Debian/Ubuntu, `readline-devel` on
   Fedora/RHEL, `brew install readline` on macOS). It is a hard requirement:
   `find_library(READLINE_LIBRARY NAMES readline REQUIRED)`.
-- **protoCore 2.2.0 or newer, below 3.0**, installed, with its CMake package
-  configuration; 0.4.0 is tested with protoCore 2.5.0. (The version checked is
-  2.1 or newer, and the build also requires the library's `SOVERSION` to be
-  `3`, which protoCore has carried since 2.2.0.) See protoCore's
-  `docs/INSTALLATION.md`.
+- **OpenSSL** development files (`libssl-dev` on Debian/Ubuntu,
+  `openssl-devel` on Fedora/RHEL): `find_package(OpenSSL REQUIRED)`, for TLS
+  in the `net` and `http` modules.
+- **protoCore 2.6.1 or newer, below 3.0**, installed, with its CMake package
+  configuration; 0.5.0 is tested with protoCore 2.6.1. 2.6.1 is required, not
+  only tested: since 0.5.0 the actor worker pool grows while workers block in
+  I/O, which creates threads from worker threads, and before 2.6.1
+  protoCore's `newThread` called from a worker left the main program's
+  variables unscanned by the collector. The build also requires the
+  library's `SOVERSION` to be `3`. See protoCore's `docs/INSTALLATION.md`.
 - Network access on the first configuration: Catch2 and nlohmann/json are
   fetched with `FetchContent` when they are not already available.
+- **python3** only to run talk demo 4: its input generator,
+  `docs/talks/2026-10-15-fas/demos/04-connected-twin.feed`, is a Python script
+  piped into `protost`. Neither the build nor the installed `protost` needs
+  it. (The test suite also uses Python 3: the documentation checks, which
+  CMake registers only when it finds an interpreter, and the
+  benchmark-harness self-test.)
 
 ---
 
@@ -46,17 +57,18 @@ cmake --build build_release -j4
 ctest --test-dir build_release --output-on-failure
 ```
 
-The discovery is `find_package(protoCore 2.1 CONFIG)`, so the prefix must hold
+The discovery is `find_package(protoCore 2.6.1 CONFIG)`, so the prefix must hold
 `lib/cmake/protoCore/protoCoreConfig.cmake`. **A prefix holding only
 `libprotoCore` and `protoCore.h` is no longer accepted**: without the package
 configuration there is no way to tell protoCore 1.x from 2.x, and linking the
 wrong major version is silent.
 
-The version floor is `2.1` and the ceiling is the next major version: the
-hashed collections and the actor mailboxes use `ProtoMap`, the hashed-collection
-helper and `ProtoMPSCQueue`, all added in protoCore 2.1.0, and protoCore's
-major version and its soname move together. protoST additionally asserts that
-the package's `SOVERSION` is `3`, so in practice the floor is protoCore 2.2.0.
+The version floor is `2.6.1` and the ceiling is the next major version, because
+protoCore's major version and its soname move together. The floor is set by
+the worker pool's growth under blocking I/O (see Prerequisites); the hashed
+collections and the actor mailboxes need only 2.1.0 (`ProtoMap`, the
+hashed-collection helper, `ProtoMPSCQueue`). protoST additionally asserts that
+the package's `SOVERSION` is `3`.
 
 ## Building against a sibling developer tree
 
@@ -92,7 +104,7 @@ Installed layout, relative to the prefix (`<libdir>` is CMake's
 | Content | Location |
 |---------|----------|
 | `protost` | `bin/` |
-| Standard-library `.st` modules (`json`, `random`, `stream`, `time`) | `share/protoST/lib/` |
+| Standard-library `.st` modules (`http`, `json`, `net`, `random`, `stream`, `time`) | `share/protoST/lib/` |
 | Kernel classes written in protoST, loaded at start-up | `share/protoST/lib/kernel/` |
 | `LICENSE` and the Markdown documentation | `share/doc/protoST/` |
 | VS Code editor integration, when present in the source tree | `share/protoST/editor-integration/vscode/` |
@@ -100,6 +112,29 @@ Installed layout, relative to the prefix (`<libdir>` is CMake's
 protoST installs **no** copy of protoCore. `bin/protost` carries the install
 RPATH `$ORIGIN/../<libdir>` (`@executable_path/../<libdir>` on macOS), so a
 protoCore installed into the same prefix is found with no `LD_LIBRARY_PATH`.
+
+---
+
+## Installing on Windows (WSL2)
+
+Native Windows is not supported: the I/O layer uses POSIX calls (file
+descriptors, `posix_spawn`, `poll`, BSD sockets) and the runtime uses GCC
+builtins. Run protoST under WSL2 with Ubuntu 24.04, using the Linux packages:
+
+```bash
+# In PowerShell, once: install WSL2 with Ubuntu 24.04.
+wsl --install -d Ubuntu-24.04
+
+# Then, in the Ubuntu shell, from the directory that holds the two packages:
+sudo apt install ./protoCore-2.6.1-Linux.deb ./protost-0.5.0-Linux.deb
+protost --version
+```
+
+No packages are published; build the two `.deb` files on a Linux machine or
+inside WSL2 itself (§Packages below, and protoCore's own
+`docs/INSTALLATION.md`). The NSIS and ZIP generators configured for Windows
+build a native package that has never been built or run (see *Platform
+verification status*).
 
 ---
 
@@ -152,8 +187,8 @@ protoCore's own package:
 
 | Format | Relation |
 |--------|----------|
-| DEB | `Depends: protocore (>= 2.1.0), protocore (<< 3.0.0)` |
-| RPM | `Requires: protoCore >= 2.1.0, protoCore < 3.0.0` |
+| DEB | `Depends: protocore (>= 2.6.1), protocore (<< 3.0.0)` |
+| RPM | `Requires: protoCore >= 2.6.1, protoCore < 3.0.0` |
 
 `CPACK_DEBIAN_PACKAGE_SHLIBDEPS` is enabled, so `dpkg-shlibdeps` adds the
 dependencies of the system libraries `protost` links (`libc6`, `libstdc++6`,
@@ -174,10 +209,15 @@ start-up, so that is what a re-verification must check first.
 |----------|-----------|--------|
 | Linux / Debian-Ubuntu | TGZ, DEB | **VERIFIED.** Installed with `dpkg -i` as root in a throwaway `ubuntu:24.04` container and run there from `/usr/bin/protost`, outside any repository, with no `LD_LIBRARY_PATH` and no `PROTOST_LIB` set; the stdlib was found under `share/protoST/lib` through the executable's own location. |
 | Linux / Fedora-RHEL | TGZ, RPM | **VERIFIED.** `cpack -G RPM` executed in a throwaway `fedora:41` container (glibc 2.40, `rpm` 4.20.1); the RPM installed with `rpm -i` and `protost` ran correctly there. This closes the gap left by decision D-I2. |
-| macOS | DragNDrop | **UNVERIFIED.** Configured and reviewed only; there is no macOS host here. The macOS and Windows branches added to `discoverStdlibDir()` under D-I5 compile but have never run. Review is not verification. |
-| Windows | NSIS, ZIP | **UNVERIFIED.** Configured and reviewed only; there is no Windows host here. |
+| macOS | DragNDrop | **UNVERIFIED.** Configured and reviewed only; there is no macOS host here. The macOS and Windows branches added to `discoverStdlibDir()` under D-I5 compile but have never run. Review is not verification. Since 0.5.0 a macOS build is not expected to compile unchanged: `src/primitives/io_prims.cpp` uses Linux-only calls and flags (`pipe2`, `accept4`, `SOCK_CLOEXEC`, `SOCK_NONBLOCK`). |
+| Windows | NSIS, ZIP | **UNVERIFIED, and not supported since 0.5.0.** Configured and reviewed only; there is no Windows host here. The I/O layer of 0.5.0 is POSIX-only, so a native build is not expected to compile. Use WSL2 (*Installing on Windows*). |
 
-### Known defect: the DEB dependency floor does not encode the ABI
+### Former defect: the DEB dependency floor did not encode the ABI
+
+Since 0.5.0 the floor is protoCore 2.6.1, above 2.2.0, so the DEB range no
+longer admits a protoCore with the old SONAME. The account below is kept for
+the 0.4.x packages, whose floor was 2.1.0; the decoy test has not been re-run
+against the 0.5.0 package.
 
 The `Depends` field is a *version range*, and on its own that range is not an ABI
 check. `PROTOCORE_ABI_SOVERSION` went from `2` to `3` in protoCore **2.2.0**, so
@@ -202,9 +242,9 @@ Two things limit the damage, and one closes it:
   `Requires: libprotoCore.so.3()(64bit)` automatically from the linked binary, and
   that requirement is on the SONAME rather than the version. Verified: the decoy
   protoCore 2.1.0 does not satisfy it and `rpm -i` refuses.
-- Raising the DEB floor to `2.2.0`, the first protoCore that shipped SOVERSION 3,
-  would make the DEB range agree with the ABI. That is a packaging change for the
-  maintainer to take, and it is not made here.
+- Raising the DEB floor to `2.2.0` or later, the first protoCore that shipped
+  SOVERSION 3, makes the DEB range agree with the ABI. 0.5.0 raised it to
+  2.6.1, for the reason given under Prerequisites.
 
 ### Known defect: the DEB does not refresh the shared-library cache
 

@@ -26,7 +26,9 @@ from [Chapter 1](tutorial/01-introduction.md) to
 against a Python/JS analogue you already know — message sends versus method
 calls, blocks versus lambdas, `ifTrue:` versus `if`. By the end you will be
 productive. You can skip [Chapter 14](tutorial/14-for-the-smalltalk-programmer.md),
-which is written for the other audience.
+which is written for the other audience, and go on to
+[Chapter 15](tutorial/15-input-and-output.md) when your program needs files,
+the command line or the network.
 
 **If you are a Smalltalk programmer.** You can skim Chapters 2–9: they are
 standard Smalltalk-80 and you will recognise almost everything (the Python/JS
@@ -36,6 +38,8 @@ bridges are not aimed at you, and skipping them costs you nothing). Then read
 mixins, runtime composition) and especially
 [Chapter 14](tutorial/14-for-the-smalltalk-programmer.md), which is a precise,
 honest catalogue of every way protoST is *not* the dialect you know.
+[Chapter 15](tutorial/15-input-and-output.md) covers files, processes and the
+network.
 
 ## Chapters
 
@@ -55,6 +59,7 @@ honest catalogue of every way protoST is *not* the dialect you know.
 | 12 | [Tooling](tutorial/12-tooling.md) | The REPL and its meta-commands; the DAP debugger; the venv. |
 | 13 | [A worked example](tutorial/13-worked-example.md) | A digital-twin program built end to end. |
 | 14 | [For the Smalltalk programmer](tutorial/14-for-the-smalltalk-programmer.md) | Every deviation from Smalltalk-80, honestly catalogued. |
+| 15 | [Input and output](tutorial/15-input-and-output.md) | Files, standard streams and pipelines, arguments and exit status, other programs, TCP/UDP sockets, the HTTP client and server; blocking I/O and actors. |
 
 ## A note on running the examples
 

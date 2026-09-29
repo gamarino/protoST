@@ -2147,6 +2147,195 @@ protocol (`do:`, `collect:`, `select:`, `reject:`, `detect:`, `detect:ifNone:`,
 `space`, `print:` (the argument's `printString`), `display:` and `<<`. Its
 output is interleaved in order with `printNl` and `displayNl`.
 
+### 12.11 Input and output
+
+Since 0.5.0. The classes of §12.11.1–12.11.4 are kernel classes
+(`lib/kernel/io.st`), always loaded; sockets and HTTP are the modules `net`
+and `http` (§12.11.5–12.11.6). The tutorial's
+[chapter 15](tutorial/15-input-and-output.md) teaches this protocol with
+worked examples; the design record is
+`docs/superpowers/specs/2026-09-29-io-design.md`.
+
+Common rules:
+
+- Text is a UTF-8 `String`; binary data is an `Array` of integers 0–255
+  (there is no `ByteArray`).
+- Every operation that waits blocks the calling thread. While blocked, the
+  thread is outside the garbage collector's quorum, so it never delays a
+  collection. When the caller is a pool worker (an actor's method), the
+  runtime starts another worker if fewer than the configured pool size would
+  remain free, up to 256 threads in total; added workers remain until the
+  program ends. An actor blocked in I/O handles no other message until the
+  call returns (as with `wait`, D37).
+- A program does not exit while an actor is still blocked in I/O: after the
+  last top-level statement the runtime waits for running actor messages, so
+  an unclosed `accept`, a pending read or an `HTTPServer` that was never sent
+  `stop` keeps the process alive. `Smalltalk exit:` ends it regardless.
+- Failures signal subclasses of `Error`:
+
+| Class | Superclass | Signalled when |
+|-------|------------|----------------|
+| `FileSystemError` | `Error` | a file-system operation fails (permission denied, directory not empty, path is a directory, …) |
+| `FileDoesNotExist` | `FileSystemError` | the path does not exist |
+| `FileAlreadyExists` | `FileSystemError` | `createDirectory` on an existing path |
+| `NetworkError` | `Error` | a socket, TLS or HTTP failure not covered below |
+| `ConnectionRefused` | `NetworkError` | the connection is refused |
+| `ConnectionTimedOut` | `NetworkError` | a connect, read or write exceeds its timeout |
+| `NameLookupFailure` | `NetworkError` | the host name does not resolve |
+| `OSProcessError` | `Error` | a program cannot be started, or `OSProcess command:` exits non-zero |
+
+`messageText` names the operation, the path or address, and the system's
+reason (`'cannot read /tmp/a.txt: No such file or directory'`).
+
+#### 12.11.1 Streams: `IOStream` and `Stdio`
+
+`Stdio stdin`, `Stdio stdout` and `Stdio stderr` answer `IOStream`s on the
+standard descriptors. Output written through `Stdio stdout`, `Transcript`,
+`printNl` and `displayNl` appears in program order. File streams (§12.11.2)
+and sockets (§12.11.5) are `IOStream`s too.
+
+| Selector | Meaning |
+|----------|---------|
+| `nextLine` | the next line without its terminator (`LF` or `CRLF`); nil at the end |
+| `next`, `next: n` | the next character; up to `n` characters as a String (nil at the end). Whole UTF-8 characters are read, never a part of one |
+| `nextByteCount: n` | up to `n` bytes decoded as UTF-8 text, for protocols that count bytes (HTTP `Content-Length`) |
+| `nextBytes: n` | the next `n` bytes, as an Array of integers |
+| `upToEnd`, `contents` | everything up to the end |
+| `atEnd` | whether the end has been reached (may wait for input) |
+| `linesDo: aBlock`, `lines` | each remaining line; an Array of them |
+| `nextPutAll: aString`, `nextPut: aCharacter`, `nextPutBytes: anArray` | write |
+| `print: x`, `display: x`, `<< x`, `show: x`, `showCr: x` | write `printString` / `displayString` (`<<` writes a String as is) |
+| `lf`, `cr`, `nl` | write a line feed (all three) |
+| `crlf`, `space`, `tab` | write `CR LF`, a space, a tab |
+| `flush` | flush buffered output (standard output is buffered and flushed at each line end) |
+| `timeout: ms` | later reads and writes signal `ConnectionTimedOut` after `ms` milliseconds (nil: no limit) |
+| `close`, `isClosed` | close the descriptor (idempotent) |
+
+#### 12.11.2 Files: `FileReference`, `File`, `FileSystem`
+
+A `FileReference` names a path; it holds no open descriptor.
+`'path' asFileReference`, `File named: 'path'`, `FileSystem workingDirectory`,
+`FileSystem home`, `FileSystem temp` and `FileSystem root` answer one;
+`ref / 'name'` answers a child reference.
+
+```smalltalk
+'/var/log/app.log.gz' asFileReference extension                  "=> 'gz'"
+'/var/log/app.log.gz' asFileReference basenameWithoutExtension   "=> 'app.log'"
+('/var/log' asFileReference / 'app.log') pathString              "=> '/var/log/app.log'"
+```
+
+| Selector | Meaning |
+|----------|---------|
+| `exists`, `isFile`, `isDirectory`, `isReadable`, `isWritable` | tests (false when the path does not exist) |
+| `size`, `modificationTime` | size in bytes; milliseconds since the Unix epoch (`FileDoesNotExist` when missing) |
+| `pathString`, `fullName` | the path as given; the absolute path |
+| `basename`, `basenameWithoutExtension`, `extension`, `parent` | name parts (`extension` is `''` when there is none) |
+| `children`, `files`, `directories` | the entries of a directory, sorted by name |
+| `contents`, `contents: aString`, `appendContents: aString` | read the whole file; replace it; append to it |
+| `binaryContents`, `binaryContents: anArray` | the same with bytes |
+| `lines`, `linesDo: aBlock` | the file's lines |
+| `readStream`, `writeStream`, `appendStream` | an open `IOStream` (`writeStream` truncates) |
+| `readStreamDo:`, `writeStreamDo:`, `appendStreamDo:` | evaluate the block with an open stream and close it afterwards, also on error; answer the block's value |
+| `createFile`, `createDirectory`, `ensureCreateDirectory` | create (an empty file if missing; one directory; with parents, no error if present) |
+| `delete`, `ensureDelete`, `deleteAll` | delete a file or empty directory (`FileDoesNotExist` if missing); the same without the error; a whole tree |
+| `copyTo: ref`, `moveTo: ref`, `renameTo: 'name'` | copy or move a file; answer the destination |
+
+Two references are `=` when their `fullName`s are equal.
+
+#### 12.11.3 The program and its environment
+
+Sent to `Smalltalk`:
+
+| Selector | Meaning |
+|----------|---------|
+| `arguments` | the words after the script path on the command line (§13), an Array of Strings |
+| `programPath` | the script path as given on the command line |
+| `getenv: name`, `environment` | an environment variable (nil when unset); all of them as a Dictionary |
+| `setenv: name to: value` | set a variable for this process and the programs it starts |
+| `exit: n`, `quit` | flush output and end the process now with status `n` (0–255); `exit: 0` |
+| `pid`, `hostName`, `platform` | process id; host name; `'linux'` on Linux |
+| `workingDirectory`, `changeDirectory: path` | the current directory as a `FileReference`; change it |
+
+A program that ends normally exits with status 0; an unhandled error prints
+the error and its trace on standard error and exits with status 1.
+
+#### 12.11.4 Other programs: `OSProcess`
+
+```smalltalk
+OSProcess command: 'echo ready'                                           "=> 'ready'"
+(OSProcess run: 'tr' arguments: #('a-z' 'A-Z') input: 'abc') output      "=> 'ABC'"
+(OSProcess shell: 'exit 2') exitCode                                      "=> 2"
+```
+
+| Selector (class side) | Meaning |
+|-----------------------|---------|
+| `run: program`, `run:arguments:`, `run:arguments:input:` | run a program (looked up on `PATH`, no shell) to completion, feeding `input` (a String, or nil) to its standard input; answer an `OSProcessResult` |
+| `shell: commandLine`, `shell:input:` | the same through `/bin/sh -c` |
+| `command: commandLine` | the command's standard output without its final newline; `OSProcessError` on a non-zero exit |
+| `spawn: program arguments: anArray` | start a program that shares this process's standard streams; answer its pid at once |
+| `waitFor: pid` | wait for a spawned program; answer its exit status (128 + signal number when a signal ended it) |
+| `kill: pid`, `kill: pid signal: n` | send `SIGTERM`, or signal `n` |
+
+An `OSProcessResult` answers `exitCode`, `output`, `errorOutput` and
+`succeeded` (`exitCode = 0`). A program that cannot be started signals
+`OSProcessError`.
+
+#### 12.11.5 Sockets: the `net` module
+
+`Import from: 'net'` declares `Socket`, `ServerSocket` and `UDPSocket`.
+
+| Selector | Meaning |
+|----------|---------|
+| `Socket connectTo: host port: p` | a connected TCP `Socket` (an `IOStream`); gives up after 10 s |
+| `Socket connectTo:port:timeout: ms` | the same with another connect timeout |
+| `Socket connectToTLS: host port: p` | connect, then `tlsHost: host` |
+| `aSocket tlsHost: name` | start TLS on the connection, verifying the certificate against the system's trust store and that it names `name` |
+| `aSocket tlsHostUnverified: name` | start TLS without verification (test servers only) |
+| `aSocket peerName`, `peerAddress`, `localPort` | `'host:port'`; `#(host port)`; the local port |
+| `ServerSocket listenOn: port` | listen on every interface; port 0 picks a free port |
+| `ServerSocket listenOn: port host: '127.0.0.1'` | listen on one address |
+| `aServer port`, `accept`, `acceptTimeout: ms`, `close` | the port listened on; the next connection (a `Socket`); the same or nil after `ms`; stop listening |
+| `UDPSocket bindTo: port`, `bindTo:host:` | a bound UDP socket (port 0: any) |
+| `aUDPSocket send: data to: host port: p` | send a datagram (a String or an Array of bytes) |
+| `receive`, `receiveTimeout: ms`, `receiveBytesTimeout: ms` | the next datagram as `{data. host. port}`; nil after `ms`; with the data as bytes |
+
+Each write on a `Socket` is sent when it is made. There is no non-blocking
+mode and no multiplexing of several sockets on one thread: serve each
+connection from its own actor.
+
+#### 12.11.6 HTTP: the `http` module
+
+`Import from: 'http'` declares `HTTPClient`, `HTTPResponse`, `HTTPServer`
+and `HTTPRequest` (and imports `net` and `json`). HTTP/1.1, one request per
+connection.
+
+| Selector | Meaning |
+|----------|---------|
+| `HTTPClient get: url`, `delete: url` | a request without a body |
+| `HTTPClient post: url body: aString`, `put:body:` | with a text body |
+| `HTTPClient post: url json: anObject`, `put:json:` | with `JSON stringify: anObject` as an `application/json` body |
+| `HTTPClient request: method url: url headers: aDictionaryOrNil body: aStringOrNil` | any request |
+| `HTTPClient timeout: ms` | connect and read timeout for later requests (default 30000) |
+
+`http` and `https` URLs are accepted (`https` verifies as `tlsHost:` does);
+chunked response bodies are decoded; redirects (301, 302, 303, 307, 308) are
+followed up to five times. The client answers an `HTTPResponse`: `status`,
+`reason`, `headers` (lower-case names), `headerAt:`, `body`, `contents`,
+`json`, `isSuccess` (2xx), `contentType`.
+
+`HTTPServer on: port handler: aBlock` builds a server (port 0: any free port;
+`port` answers the actual one). `start` serves on the calling thread until
+`stop`; `startInBackground` serves on an actor and answers the server;
+`stop` ends serving; `isRunning`. Each connection is handled by its own actor.
+The handler receives an `HTTPRequest` (`method`, `path` percent-decoded,
+`query` a Dictionary, `headers`, `headerAt:`, `body`, `json`, `peer`) and
+answers an `HTTPResponse` (built with `ok:`, `json:`, `status:body:`,
+`notFound`, `noContent`, adjusted with `contentType:` / `headerAt:put:`), a
+String (200, `text/plain`), nil (204) or any other object (200, its JSON). An
+error the handler does not handle answers 500 with the error's text.
+
+Not provided: HTTP/2, WebSockets, keep-alive, a TLS server, proxies.
+
 ---
 
 ## 13. The CLI
@@ -2155,8 +2344,8 @@ The runtime executable is `protost`.
 
 | Invocation | Effect |
 |------------|--------|
-| `protost script.st [args...]` | Run `script.st`; only what the program prints is shown. |
-| `protost --print-last script.st [args...]` | Run `script.st`, then print the value of its last top-level statement. |
+| `protost script.st [args...]` | Run `script.st`; only what the program prints is shown. The words after the script path are the program's own arguments (`Smalltalk arguments`, §12.11.3); the process exits with the status the program sets (`Smalltalk exit:`), 1 after an unhandled error, 0 otherwise. |
+| `protost --print-last script.st [args...]` | Run `script.st`, then print the value of its last top-level statement. Options go before the script path; everything after it is passed to the program. |
 | `protost -e '<expr>'` | Evaluate the expression and print the result. |
 | `protost -i` | Start the interactive REPL. |
 | `protost -d script.st` | Run the script under the CLI debugger. |
@@ -2228,6 +2417,9 @@ commits. Summary as of 0.4.0, updated for changes merged since:
   metaclass hierarchy is thin (`x class class` works; there is no
   `Metaclass`/`ClassDescription` protocol beyond the reflective messages of
   §14 of the tutorial).
+- **Input and output (0.5.0):** blocking calls only, with no multiplexing of
+  several sockets on one thread; no HTTP/2, WebSockets, keep-alive or TLS
+  server; POSIX only, so no native Windows (§12.11).
 - **Open bugs:** S3 (see `STATUS.md`); S19 was closed in 0.4.0.
 
 Closed before 0.4.0 and now as in Smalltalk-80: `new` sends `initialize`

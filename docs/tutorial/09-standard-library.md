@@ -22,9 +22,13 @@ matters:
    `Date`, `Duration`, `Transcript`. Much of the kernel is itself written in
    protoST, in `lib/kernel/`, and loaded when the runtime starts.
 2. **Loadable modules.** Optional functionality lives in `.st` files under
-   `lib/` and is pulled in explicitly with `Import from:`. `json` is the one
-   you will use; `stream`, `random` and `time` are older modules kept for
+   `lib/` and is pulled in explicitly with `Import from:`. `json`, `net` and
+   `http` are the ones you will use; `stream`, `random` and `time` are older modules kept for
    compatibility (§9.4, §9.5, §9.7).
+
+Input and output — files, standard streams, the command line, other programs
+(all in the kernel) and the `net` and `http` modules — have a chapter of
+their own, [Chapter 15](15-input-and-output.md).
 
 > **In Python** the analogue of (1) is the *builtins* (`len`, `abs`, `+`) and
 > of (2) is `import math`, `import json`, `import random`. **In JavaScript**,
@@ -138,6 +142,8 @@ The standard modules:
 | `stream` | `Import from: 'stream'` | `ReadStream`, `WriteStream` — thin subclasses of the kernel classes |
 | `random` | `Import from: 'random'` | `Random` — a fixed-seed LCG; replaces the kernel `Random` |
 | `time` | `Import from: 'time'` | `Time`, `Timestamp`, `Duration` — replaces the kernel `Time` and `Duration` |
+| `net` | `Import from: 'net'` | `Socket`, `ServerSocket`, `UDPSocket` — TCP, TLS client, UDP ([Chapter 15](15-input-and-output.md)) |
+| `http` | `Import from: 'http'` | `HTTPClient`, `HTTPServer`, `HTTPResponse`, `HTTPRequest` ([Chapter 15](15-input-and-output.md)) |
 
 ## 9.4 Streams — cursor-based collection access
 
@@ -334,7 +340,8 @@ answer the receiver. Both write in program order.
 - `Import from: 'name'` loads a module (cached) and answers a module object;
   read its classes with unary sends (`m JSON`). The module's classes also
   become globals.
-- The standard modules: `json` (`parse:`/`stringify:`), and `stream`,
+- The standard modules: `json` (`parse:`/`stringify:`), `net` and `http`
+  (Chapter 15), and `stream`,
   `random` and `time`, kept from before the kernel had those classes
   (`random` and `time` replace the kernel's `Random`, `Time` and `Duration`
   when imported).

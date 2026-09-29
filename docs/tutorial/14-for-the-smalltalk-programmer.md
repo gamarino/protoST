@@ -1,6 +1,6 @@
 # Chapter 14 — For the Smalltalk programmer
 
-[Tutorial index](../TUTORIAL.md) · Previous: [Chapter 13](13-worked-example.md)
+[Tutorial index](../TUTORIAL.md) · Previous: [Chapter 13](13-worked-example.md) · Next: [Chapter 15 — Input and output](15-input-and-output.md)
 
 ---
 
@@ -376,6 +376,12 @@ Smalltalk programmer reaches for:
 - **System:** `Smalltalk at:` / `at:put:` / `version` / `allClasses`, `Time
   now`, `Date today`, `Time millisecondsToRun:`, `timeToRun`, `Random` (`next`,
   `nextInt:`, `seed:`), `halt` (stops under `protost -d`, reported otherwise).
+- **Input and output (0.5.0):** Pharo's names for files and the command
+  line — `'data.txt' asFileReference contents`, `writeStreamDo:`, `/`,
+  `children`, `Stdio stdin nextLine`, `Smalltalk arguments` — and
+  `OSProcess run:arguments:` for other programs (its own small protocol, not
+  Pharo's OSProcess or OSSubprocess packages). Sockets and HTTP are the `net`
+  and `http` modules. See [Chapter 15](15-input-and-output.md).
 
 ## 14.7 Guard clauses and the trailing `^`
 
@@ -509,4 +515,4 @@ For full grammar, see `LANGUAGE.md` §3.5.1 and §3.3.
 
 ---
 
-[Tutorial index](../TUTORIAL.md)
+Next: [Chapter 15 — Input and output](15-input-and-output.md) · [Tutorial index](../TUTORIAL.md)

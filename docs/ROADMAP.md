@@ -173,7 +173,9 @@ track — capabilities JS and Python classes do not have in the same form.
 `Stream`, the math protocol, `Random`, `JSON` and `Time`. In 0.4.0 streams,
 `Random`, `Time`, `Date` and `Duration` moved into the kernel (`lib/kernel/`,
 no import); the `stream`, `random` and `time` modules remain for
-compatibility.
+compatibility. 0.5.0 added input and output: files, standard streams,
+arguments, environment and processes in the kernel (`lib/kernel/io.st`), and
+the `net` (TCP, TLS client, UDP) and `http` (client and server) modules.
 
 **Goal:** a Python-style standard library — the modules every program needs.
 
@@ -268,8 +270,8 @@ example set are its concrete deliverables.
 
 ### Track 8 — A dual-audience tutorial — ✅ done
 
-**Status:** complete. The tutorial is [`docs/TUTORIAL.md`](TUTORIAL.md) plus 14
-chapters under `docs/tutorial/`. It teaches protoST from the ground up for
+**Status:** complete. The tutorial is [`docs/TUTORIAL.md`](TUTORIAL.md) plus 15
+chapters under `docs/tutorial/` (chapter 15, input and output, added in 0.5.0). It teaches protoST from the ground up for
 Python / JavaScript developers and catalogues every departure from
 Smalltalk-80 for Smalltalk programmers (Chapter 14). For 0.4.0 every example
 that states a result is run against the build by
@@ -529,6 +531,13 @@ credible — the twin of a physical device must be resilient.
 
 **Goal:** an actor that performs I/O must never block a worker thread.
 
+**Status:** not started. 0.5.0 ships blocking I/O as an interim design: a
+blocking call leaves the GC quorum, and when a worker blocks the pool starts
+another one if fewer than the configured number would remain free (at most
+256 threads, kept until the program ends). That keeps programs with one actor
+per connection correct, at the cost of a thread per blocked actor: the
+oversizing described below, limited to the workers that are blocked.
+
 A worker blocked in a syscall cannot run other actors; N blocked workers freeze
 the scheduler. Oversizing the main pool is **not** the answer — it
 oversubscribes the CPUs and destroys CPU-bound throughput. Two mechanisms:
@@ -550,8 +559,10 @@ call — becomes the same cooperative yield/resume; only the *completer* of the
 `Future` differs (a peer actor / the reactor / a dirty-pool thread). The worker
 is never what blocks.
 
-**Why it matters:** without this protoST is unusable for any actor that touches
-the outside world — which is every digital twin.
+**Why it matters:** without it every actor that waits on the outside world holds
+a thread, and every digital twin has such actors. The growing pool of 0.5.0
+keeps them correct but bounds the number of simultaneous waits (256 threads)
+and spends a thread on each.
 **Dependencies:** cooperative yield (done).
 **Size:** large.
 

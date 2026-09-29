@@ -5,8 +5,15 @@ This directory holds the protoST standard library, in two parts, both plain
 
 - **`lib/kernel/`** — the kernel classes written in protoST (streams,
   `Character`, `Fraction`, `Point`, `Random`, `Time`, `Date`, `Duration`,
-  `Transcript`, printing, reflection, …). The runtime loads them at start-up,
-  in the order of `kernel/00-manifest.txt`; programs use them with no import.
+  `Transcript`, printing, reflection, input and output, …). The runtime loads
+  them at start-up, in the order of `kernel/00-manifest.txt`; programs use
+  them with no import. `kernel/io.st` (0.5.0) holds the input and output
+  classes: `Stdio` and `IOStream`, `FileReference` / `File` / `FileSystem`,
+  the program's arguments and environment on `Smalltalk` (`arguments`,
+  `getenv:`, `exit:`, …), `OSProcess`, and the error classes
+  `FileSystemError`, `FileDoesNotExist`, `FileAlreadyExists`, `NetworkError`,
+  `ConnectionRefused`, `ConnectionTimedOut`, `NameLookupFailure` and
+  `OSProcessError`. Its primitives are in `src/primitives/io_prims.cpp`.
 - **`lib/*.st`** — the loadable modules, pulled in with
   `Import from: '<name>'`.
 
@@ -50,6 +57,12 @@ another version may fail to start or behave differently, so point
 | `stream` | `Import from: 'stream'` | `ReadStream`, `WriteStream` — thin subclasses of the kernel classes |
 | `random` | `Import from: 'random'` | `Random` (a fixed-seed 32-bit LCG) |
 | `time`   | `Import from: 'time'`   | `Time`, `Timestamp`, `Duration` (an epoch-millisecond model) |
+| `net`    | `Import from: 'net'`    | `Socket` (TCP, with `tlsHost:` for a verified TLS client), `ServerSocket`, `UDPSocket` |
+| `http`   | `Import from: 'http'`   | `HTTPClient` (http and https, JSON bodies, redirects), `HTTPResponse`, `HTTPServer` (one actor per connection), `HTTPRequest`; imports `net` and `json` |
+
+`net` and `http` are documented, with examples, in
+[tutorial chapter 15](../docs/tutorial/15-input-and-output.md); their
+conformance tests are in `tests/conformance/14-io/`.
 
 `stream`, `random` and `time` predate the kernel classes of the same names
 and are kept so that programs written against them keep working. The classes

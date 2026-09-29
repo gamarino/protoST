@@ -3,6 +3,58 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
+## 0.5.0 — input and output (2026-09-29)
+
+Until this release a protoST program could only print. Design:
+[`docs/superpowers/specs/2026-09-29-io-design.md`](docs/superpowers/specs/2026-09-29-io-design.md);
+tutorial: [chapter 15](docs/tutorial/15-input-and-output.md); reference:
+`docs/LANGUAGE.md` §12.11. `ctest`: 1058 cases, all passing (527 conformance
+programs, 437 unit tests, 42 examples, 30 CLI tests, 22 documentation
+checks).
+
+- **Input and output in the kernel** (`lib/kernel/io.st`, always loaded),
+  with Pharo's names where Pharo has them: `Stdio stdin` / `stdout` /
+  `stderr` (a program can be a Unix filter); files and directories through
+  `FileReference` (`'p' asFileReference`, `/`, `contents`, `contents:`,
+  `lines`, `writeStreamDo:`, `children`, `copyTo:`, `deleteAll`, …) and
+  `FileSystem temp` / `home` / `workingDirectory`; `Smalltalk arguments`
+  (the words after the script path), `getenv:`, `setenv:to:`, `environment`,
+  `exit:`; other programs through `OSProcess` (`run:arguments:input:`,
+  `shell:`, `command:`, `spawn:`, `waitFor:`, `kill:`). Failures are classed
+  errors: `FileDoesNotExist`, `FileAlreadyExists`, `FileSystemError`,
+  `ConnectionRefused`, `ConnectionTimedOut`, `NameLookupFailure`,
+  `NetworkError`, `OSProcessError`.
+- **The `net` module** (`Import from: 'net'`): TCP `Socket` and
+  `ServerSocket`, a TLS client with certificate and host-name verification
+  (`tlsHost:`, OpenSSL, now a build requirement), and `UDPSocket`.
+- **The `http` module** (`Import from: 'http'`): `HTTPClient` for http and
+  https, JSON bodies, chunked responses and redirects; `HTTPServer`, which
+  handles each connection on its own actor, with `start`,
+  `startInBackground` and `stop`. No HTTP/2, WebSockets, keep-alive or TLS
+  server.
+- **The worker pool grows under blocking I/O.** Every blocking call leaves
+  the garbage collector's quorum while it waits. When an actor's worker
+  enters one and fewer than the configured number of workers would remain
+  free, the runtime starts another worker (up to 256 threads; they stay
+  until the program ends), so actors that wait for replies cannot starve the
+  actors that would send them, and one actor per connection scales past the
+  core count.
+- **A subclass of a kernel class sees the instance variables it inherits**
+  (S20): `IOStream subclass: #LabelledStream` can read `fd`, a `WriteStream`
+  subclass `buffer`; before, both were `undeclared variable`. Test:
+  `04-object-model/inherited_kernel_ivars`.
+- **Requires protoCore 2.6.1.** Growing the pool creates threads from worker
+  threads, and before 2.6.1 protoCore's `newThread` called from a worker left
+  the main program's variables unscanned by the collector. The DEB and RPM
+  dependency floors are now 2.6.1, which also closes the DEB floor's gap
+  with the SONAME (see `docs/INSTALLATION.md`).
+- **Talk demo 4**, `docs/talks/2026-10-15-fas/demos/04-connected-twin.st`: a
+  twin that reads its sensor feed on standard input (from a Python script),
+  serves its state over HTTP while it runs and logs every reading to a file.
+- Native Windows is not supported (POSIX I/O, GCC builtins); use WSL2 with
+  Ubuntu 24.04 (`docs/INSTALLATION.md`). Streams read whole UTF-8
+  characters (`next`, `next:`); `nextByteCount:` counts bytes.
+
 ## 0.4.1 — a script prints once (2026-09-29)
 
 - `protost file.st` no longer prints the value of the script's last
@@ -20,7 +72,7 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 ## 0.4.0 — the Smalltalk you know, verified (2026-10-03)
 
 0.4.0 is the release prepared for a technical Smalltalk audience: an
-adversarial audit (about 400 probe programs written the way a Pharo
+adversarial audit (about 1,100 probe programs in two rounds, written the way a Pharo
 programmer writes) drove every change below, and each fix of a wrong result,
 crash or hang carries a regression test. `ctest` at commit `d3f7235`: 1041
 cases, all passing (854 at the start of the audit): 513 conformance

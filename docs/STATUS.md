@@ -14,18 +14,23 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Test suite:** 1041 `ctest` cases, 1041/1041 passing on 2026-09-29
-  (branch `feature/presentable-0.4.0`, commit `d3f7235`): 513 conformance
-  programs, 437 unit tests, 42 examples, 28 CLI tests (including the
-  benchmark-harness self-test) and 21 documentation checks (the examples
-  with a stated result in 20 documents, plus the checker's self-test). The
-  history of earlier counts is in `CHANGELOG.md`.
-- **Last verified:** 2026-09-29, after the 0.4.0 audit (see
-  [`docs/superpowers/specs/2026-09-28-presentable-protost-design.md`](superpowers/specs/2026-09-28-presentable-protost-design.md)):
-  an adversarial Smalltalk-semantics audit of about 400 probe programs; each
-  fix of a wrong result, crash or hang it found carries a regression test.
+- **Test suite:** 1058 `ctest` cases, 1058/1058 passing on 2026-09-29
+  (protoST 0.5.0, branch `feature/io` after commit `e966c8a` with the 0.5.0
+  documentation, against protoCore 2.6.1): 527 conformance programs, 437
+  unit tests, 42 examples, 30 CLI tests (including the benchmark-harness
+  self-test) and 22 documentation checks (the examples with a stated result
+  in 21 documents, plus the checker's self-test). The history of earlier
+  counts is in `CHANGELOG.md`.
+- **Last verified:** 2026-09-29, for 0.5.0 (input and output, see
+  [`docs/superpowers/specs/2026-09-29-io-design.md`](superpowers/specs/2026-09-29-io-design.md)),
+  by the test suite above. The 0.4.0 audit before it (see
+  [`docs/superpowers/specs/2026-09-28-presentable-protost-design.md`](superpowers/specs/2026-09-28-presentable-protost-design.md)
+  and the record [`docs/superpowers/specs/2026-10-01-reaudit.md`](superpowers/specs/2026-10-01-reaudit.md))
+  was an adversarial Smalltalk-semantics audit of about 1,100 probe programs
+  in two rounds; each fix of a wrong result, crash or hang it found carries a
+  regression test.
 - **Open bugs:** one, S3 (Medium, not provable on this build). S19 closed
-  on 2026-09-29. Hard edges that are not
+  on 2026-09-29, S20 and S21 in 0.5.0. Hard edges that are not
   language-design choices are in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md).
 - **Id scheme:** `D1..D18` are carried over from `LANGUAGE.md` §14 and keep
   their original meaning. New divergences get new ids (`D19+`).
@@ -115,9 +120,12 @@ are noted where useful.
       lock-free O(1) `push`, and a turn drains a whole batch with `takeAll`.
       The Future state machine and the scheduler run on protoCore's atomic
       attribute compare-and-swap (`setAttributeIfEqual`).
-      A language built on protoCore carries no synchronisation locks of its
-      own; only the DAP/debugger I/O locks remain (external-protocol
-      coordination, outside protoCore's object model).
+      The message path (send, mailbox, Future, ready queues) takes no lock.
+      Runtime bookkeeping kept outside protoCore's object model does use
+      mutexes: among others the module-provider registry, the compiler's
+      class registry, the unobserved-rejection list, the DAP/debugger I/O
+      and, since 0.5.0, the I/O descriptor table and the growth of the
+      worker pool.
 - [x] **`Atom`** — a shared mutable cell with optimistic-concurrency CAS:
       `Atom on:`, `value`, `value:ifCurrent:` (the raw compare-and-swap) and
       `swap:` (the read-modify-CAS retry loop). The agent/atom pair, atom
@@ -170,7 +178,8 @@ are noted where useful.
 
 ### Documentation
 - [x] **The dual-audience tutorial** — [`docs/TUTORIAL.md`](TUTORIAL.md) plus
-      14 chapters under `docs/tutorial/`. Teaches protoST from the ground up
+      15 chapters under `docs/tutorial/` (chapter 15, input and output, added
+      in 0.5.0). Teaches protoST from the ground up
       for Python / JavaScript developers (with a constant Python/JS bridge) and
       catalogues every departure from Smalltalk-80 for Smalltalk programmers
       (Chapter 14). Every non-trivial code snippet was executed against the
@@ -235,6 +244,45 @@ are noted where useful.
       (`__currentMillis` from `system_clock`, `__monotonicMillis` from
       `steady_clock`) bootstrapped onto Object; no timezones, no calendar
       *(track4, T4-e)*
+- [x] `lib/kernel/io.st` — input and output in the kernel, no import
+      *(0.5.0)*: `Stdio stdin` / `stdout` / `stderr` and `IOStream`
+      (`nextLine`, `upToEnd`, `linesDo:`, `nextPutAll:`, `print:`, `<<`,
+      `flush`, `timeout:`, `close`); files and directories with Pharo's names
+      (`'p' asFileReference`, `File named:`, `FileSystem temp` / `home` /
+      `workingDirectory`, `/`, `contents` / `contents:`, `appendContents:`,
+      `lines`, `binaryContents`, `readStreamDo:` / `writeStreamDo:`,
+      `children`, `copyTo:`, `moveTo:`, `delete`, `deleteAll`, …); the
+      program's arguments and environment on `Smalltalk` (`arguments`,
+      `programPath`, `getenv:`, `setenv:to:`, `environment`, `exit:`, `pid`,
+      `workingDirectory`, `changeDirectory:`); other programs through
+      `OSProcess` (`run:arguments:input:`, `shell:`, `command:`, `spawn:`,
+      `waitFor:`, `kill:`). Classed errors: `FileSystemError`,
+      `FileDoesNotExist`, `FileAlreadyExists`, `NetworkError`,
+      `ConnectionRefused`, `ConnectionTimedOut`, `NameLookupFailure`,
+      `OSProcessError`. The primitives are C++ (`src/primitives/io_prims.cpp`);
+      every blocking call leaves the GC quorum, and a pool worker entering one
+      makes the pool add a worker when fewer than the configured number would
+      remain free (at most 256 threads; added workers stay until exit). Tests:
+      `conformance/14-io/files_*`, `os_*`, `cli_io`. Binary data is an Array of
+      integers 0–255 (no `ByteArray`); `next` / `next:` read whole UTF-8 characters, `nextByteCount:` counts bytes
+- [x] `lib/net.st` — TCP and UDP sockets *(0.5.0)*: `Socket connectTo:port:`
+      (`timeout:` variant; an `IOStream`), `tlsHost:` (TLS client with
+      certificate and host-name verification, OpenSSL), `ServerSocket
+      listenOn:` / `listenOn:host:` (port 0 picks a free port), `accept`,
+      `acceptTimeout:`, `UDPSocket bindTo:`, `send:to:port:`,
+      `receiveTimeout:`. No non-blocking mode or multiplexing: one actor per
+      connection. Tests: `conformance/14-io/net_tcp`, `net_udp`, `net_errors`
+      and the GC-while-blocked case of `cli_io`
+- [x] `lib/http.st` — HTTP/1.1 client and server *(0.5.0)*: `HTTPClient
+      get:` / `post:body:` / `post:json:` / `put:body:` / `delete:` /
+      `request:url:headers:body:`, http and https, chunked bodies, redirects
+      (up to 5), `timeout:`; `HTTPResponse` (`status`, `headers`, `body`,
+      `json`, `isSuccess`); `HTTPServer on:handler:` with `start`,
+      `startInBackground`, `stop` and one actor per connection, a handler
+      answering an `HTTPResponse`, a String, nil or any object (as JSON);
+      `HTTPRequest` (`method`, `path`, `query`, `headers`, `body`, `json`).
+      One request per connection; no HTTP/2, WebSockets or TLS server.
+      Tests: `conformance/14-io/http_local`, `http_concurrent`
 
 ### Builtins / primitives
 - [x] Numeric tower: `SmallInteger`, `LargeInteger` and `Float` arithmetic &
@@ -308,6 +356,8 @@ during the 2026-05-20 audit.
 
 | Id | What | Resolution | Commit |
 |----|------|------------|--------|
+| S20 | A subclass of a kernel class could not read the instance variables it inherits: `IOStream subclass: #LabelledStream …` with a method reading `fd`, or `WriteStream subclass: #PeekStream` reading `buffer`, failed to compile with `undeclared variable`, because the compiler knew only the instance variables of classes compiled in the same module. | Every compiled class is recorded in a process-wide registry that the next compilation starts from, and the CLI builds the runtime (which compiles the kernel) before compiling the script; the compiled module is kept alive past the runtime, because workers may still run its methods during shutdown. Tests: `04-object-model/inherited_kernel_ivars` (failed before), `04-object-model/undeclared_still_rejected`. | `e966c8a` |
+| S21 | `IOStream>>next` and `next:` counted bytes, not characters, and split a multi-byte UTF-8 character (`printf 'éab'` gave `$Ã`, then `'©a'`). | They read whole UTF-8 characters (`__fdReadChars:count:`); `nextByteCount:` keeps a byte-counted read for HTTP bodies. Test: `conformance/14-io/utf8_characters` (failed before). | 0.5.0 |
 | D12b | `protost file.st` printed the value of the script's last top-level statement (its `displayString`) after the program ran, so a script whose last line was `x printNl.` showed `x` twice. Listed as an intentional deviation until 0.4.0. | Retired: a script now shows only what it prints. `protost --print-last file.st` keeps the old behaviour (the conformance runner and the documentation runner's value annotations use it); `-e` and the REPL still show the value of what they evaluate. The tutorial examples that relied on the echo now print their result with `displayNl`. | 0.4.1 |
 | S19 | `cli_concurrent_first_call` hung intermittently (about one launch in 1,000 under load). | **Evidence: a gdb capture of the live hung process** (`PROTOST_ALLOW_PTRACE=1`, `tools/s19_stack_sample.sh`). It shows `~STRuntime` joining a worker parked in `std::counting_semaphore::acquire()` with a permit available, the other workers gone — a lost wakeup in libstdc++ 13's semaphore (it notifies only when the count was 0; a waiter that slept on a stale non-zero count misses later releases). Replaced by `protoST::Semaphore` (sleeps only on 0, every release notifies), which removes the mechanism the capture shows. Supporting evidence only: 3,000 launches under background load, 0 hung, against 2 hangs in about 2,600 launches before; at a rate of about one in 1,000, a clean run of that length is not proof on its own. | `06e1009` |
 | S18 | A debugger unit test waited on the terminal when `ctest` ran with stdin open. | The test gives the session its own input stream; the full suite passes with and without `< /dev/null`. | `1d79f15` |

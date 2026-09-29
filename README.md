@@ -4,7 +4,9 @@ protoST is a Smalltalk-syntax, actor-native runtime on protoCore: a demonstrator
 
 Programs are plain files. An object is an ordinary object until it is sent
 `asActor`, which makes it an actor served by a pool of native worker threads
-(see "Objects become actors" below).
+(see "Objects become actors" below). Programs read and write files, work as
+Unix filters, take arguments and set their exit status, run other programs,
+and talk TCP, UDP and HTTP(S) (see "Input, output and the network" below).
 
 If you write Smalltalk, most of what you know works as you expect: classes and
 metaclass-side methods, blocks and non-local return, exceptions with `retry`,
@@ -88,6 +90,33 @@ snapshot. A message carries a reference, not a copy, so an object sent to an
 actor is shared with the sender; each read sees one consistent snapshot, and a
 change made on one side is seen by the other at its next read.
 
+## Input, output and the network
+
+Files, standard streams, the command line and other programs are in the
+kernel, with Pharo's names where Pharo has them (`'data.txt' asFileReference
+contents`, `writeStreamDo:`, `Stdio stdin nextLine`, `Smalltalk arguments`,
+`Smalltalk exit: 1`, `OSProcess run:arguments:`). Sockets and HTTP are
+modules: `Import from: 'net'` (TCP with a TLS client, UDP) and
+`Import from: 'http'` (an HTTP/1.1 client for http and https, and a small
+server that handles each connection on its own actor):
+
+```smalltalk
+Import from: 'http'.
+server := HTTPServer on: 0 handler: [:request |
+  Dictionary new at: 'pump' put: (request query at: 'id'); at: 'flow' put: 42; yourself].
+server startInBackground.
+reply := HTTPClient get: 'http://127.0.0.1:' , server port printString , '/state?id=p1'.
+server stop.
+reply json at: 'flow'   "=> 42"
+```
+
+Calls block the thread that makes them; concurrency comes from actors, one
+per connection, and the worker pool adds threads while workers are blocked in
+I/O (up to 256). Failures are classed errors (`FileDoesNotExist`,
+`ConnectionRefused`, …). Not provided: HTTP/2, WebSockets, a TLS server,
+non-blocking multiplexing, native Windows. The whole protocol is in
+[tutorial chapter 15](docs/tutorial/15-input-and-output.md).
+
 ## Why digital twins
 
 A digital twin mirrors a physical system — a pump, a line, a substation — as a
@@ -130,11 +159,11 @@ several cores without locks.
 
 ## Status
 
-Version 0.4.1. `ctest` runs 1042 cases, all passing:
-513 conformance programs, 437 unit tests, 42 examples, 29 CLI tests
-(including the benchmark-harness self-test) and 21 documentation checks
-(every example with a stated result in 20 documents, plus the checker's
-self-test). The
+Version 0.5.0, which requires protoCore 2.6.1 or newer. `ctest` runs 1058
+cases, all passing: 527 conformance programs, 437 unit tests, 42 examples, 30
+CLI tests (including the benchmark-harness self-test) and 22 documentation
+checks (every example with a stated result in 21 documents, plus the
+checker's self-test). The
 known deviations from Smalltalk-80 and the open bugs are tracked in
 [`docs/STATUS.md`](docs/STATUS.md); runtime hard edges in
 [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md); what changed in
@@ -142,8 +171,11 @@ known deviations from Smalltalk-80 and the open bugs are tracked in
 
 ## Getting started
 
-protoST depends on [protoCore](https://github.com/numaes/protoCore), which must
-be built first. By default the build looks for a protoCore checkout next to
+protoST depends on [protoCore](https://github.com/numaes/protoCore) 2.6.1 or
+newer (below 3.0), which must be built first, and on OpenSSL (`libssl-dev`)
+and libreadline. 2.6.1 is a hard floor: the worker pool creates threads from
+worker threads while actors block in I/O, which older protoCore releases did
+not support safely. By default the build looks for a protoCore checkout next to
 protoST (`../protoCore`) and uses the first of these directories that holds
 `libprotoCore`: `build_release/`, then `build/`, then `build_check/`. The
 choice is cached in `PROTOCORE_LIBRARY` on the first configure; pass
@@ -194,11 +226,22 @@ sudo apt install ./protost-<version>-Linux.deb # protoST itself
 sudo dpkg -i protost-<version>-Linux.deb && sudo apt-get install -f
 ```
 
-**macOS and Windows — not built or verified.** `CMakeLists.txt` configures a
-`.dmg` (DragNDrop) for macOS and an NSIS installer and a `.zip` for Windows,
-but neither has ever been built: there is no macOS or Windows host in this
-project. The intended use is to open the `.dmg` and drag `protoST` to
-`Applications`, or to run `protost-<version>-win64.exe`.
+**Installing on Windows.** Native Windows is not supported: the I/O layer
+uses POSIX calls and the runtime uses GCC builtins. Use WSL2 with Ubuntu
+24.04 and the Linux packages, built as below:
+
+```bash
+wsl --install -d Ubuntu-24.04        # in PowerShell, once
+# then, in the Ubuntu shell:
+sudo apt install ./protoCore-2.6.1-Linux.deb ./protost-0.5.0-Linux.deb
+```
+
+**macOS — not built or verified.** `CMakeLists.txt` configures a `.dmg`
+(DragNDrop) for macOS, and an NSIS installer and a `.zip` for Windows, but
+none has ever been built: there is no macOS or Windows host in this project.
+Since 0.5.0 the I/O layer uses Linux-only calls (`pipe2`, `accept4`), so a
+macOS build is not expected to compile unchanged. See
+[`docs/INSTALLATION.md`](docs/INSTALLATION.md).
 
 The installed `protost` lands on your `PATH`; the standard library is installed
 to `<prefix>/share/protoST/lib`, so `Import from: 'stream'` resolves with no
@@ -228,7 +271,7 @@ never been run.
 
 | Document | What it covers |
 |---|---|
-| [docs/TUTORIAL.md](docs/TUTORIAL.md) | The dual-audience tutorial — teaches protoST from the ground up for Python/JavaScript developers, and catalogues every departure from Smalltalk-80 for Smalltalk programmers. 14 chapters under `docs/tutorial/`. |
+| [docs/TUTORIAL.md](docs/TUTORIAL.md) | The dual-audience tutorial — teaches protoST from the ground up for Python/JavaScript developers, and catalogues every departure from Smalltalk-80 for Smalltalk programmers. 15 chapters under `docs/tutorial/`, the last on input and output. |
 | [docs/LANGUAGE.md](docs/LANGUAGE.md) | The language reference — lexical structure, grammar, semantics, the full built-in protocol. |
 | [docs/STATUS.md](docs/STATUS.md) | The living status tracker — implemented features, intentional deviations, open bugs. |
 | [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Runtime hard edges that are not language design choices. |
