@@ -32,12 +32,11 @@ namespace protoST {
 // (see installIntPrimitives), so `SmallInteger`, `LargeInteger` and `Float`
 // all inherit one arithmetic protocol.
 //
-// Division note: protoCore's `/` is integer (truncating) division when both
-// operands are integers, and float division when either operand is a Float.
-// protoST has no `Fraction` type, so `/` follows protoCore exactly: `4 / 2`
-// answers the integer `2`, `1 / 3` answers the integer `0`, and `1 / 2.0`
-// answers the Float `0.5`. `//` is an explicit integer-division alias and
-// `\\` is the modulo (remainder). This is documented in LANGUAGE.md §12.2.
+// Division note: `Integer >> /` is defined by the kernel (fraction.st) and
+// answers an exact Fraction (`1 / 3` is `(1/3)`); the native `/` below serves
+// Floats and adapts Fraction arguments. `//` and `\\` floor, `quo:` and `rem:`
+// truncate, as in Smalltalk-80; integer division by a divisor of 64 bits or
+// more goes through IntegerDivision.h (protoCore's divide is wrong there).
 
 // Defined in object_prims.cpp: run a method by name, as a send does.
 const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,

@@ -855,8 +855,14 @@ long long numericHashImpl(proto::ProtoContext* ctx, const proto::ProtoObject* r)
     constexpr long long kMask = (1LL << 53) - 1;
     if (r->isFloat(ctx)) {
         const double d = r->asDouble(ctx);
-        if (std::isfinite(d) && d == std::floor(d) && std::fabs(d) < 9.0e15)
-            return static_cast<long long>(d) & kMask;
+        if (std::isfinite(d) && d == std::floor(d)) {
+            // An integral Float hashes as the Integer it equals: by value
+            // below 2^53, by its exact decimal digits above (as LargeIntegers).
+            if (std::fabs(d) < 9007199254740992.0) return static_cast<long long>(d) & kMask;
+            char digits[400];
+            std::snprintf(digits, sizeof(digits), "%.0f", d);
+            return static_cast<long long>(std::hash<std::string>{}(std::string(digits))) & kMask;
+        }
         return static_cast<long long>(std::hash<double>{}(d)) & kMask;
     }
     if (r->compare(ctx, ctx->fromLong(1LL << 53)) < 0 && r->compare(ctx, ctx->fromLong(-(1LL << 53))) > 0)
