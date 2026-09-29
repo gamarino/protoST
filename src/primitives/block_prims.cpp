@@ -38,7 +38,7 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
     const proto::ProtoString* capKey = rt.bootstrap().sym.captured;
     auto* bcPtrObj = block->getAttribute(ctx, bcKey);
     if (!bcPtrObj || bcPtrObj == PROTO_NONE)
-        throw std::runtime_error("block missing __bc_ptr__");
+        throw std::runtime_error("a block was expected here, but the argument is not a block");
     const BytecodeModule* sub =
         reinterpret_cast<const BytecodeModule*>(bcPtrObj->asLong(ctx));
     if (sub->argCount() != argc) {

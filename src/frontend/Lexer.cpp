@@ -18,9 +18,14 @@ void Lexer::skipWhitespace() {
         char c = source_[pos_];
         if (std::isspace(static_cast<unsigned char>(c))) { advance(); continue; }
         if (c == '"') {
+            const int commentLine = line_, commentCol = col_;
             advance();
             while (pos_ < source_.size() && source_[pos_] != '"') advance();
-            if (pos_ < source_.size()) advance();
+            if (pos_ < source_.size()) { advance(); continue; }
+            // An unclosed comment used to swallow the rest of the file.
+            unterminatedComment_ = true;
+            unterminatedLine_ = commentLine;
+            unterminatedCol_ = commentCol;
             continue;
         }
         break;
@@ -298,6 +303,10 @@ Token Lexer::nextImpl_() {
     // previous token ends an operand (e.g. each `-2` element of `#(-1 -2 -3)`).
     bool spaceBefore = (pos_ != beforeWs);
     blankBefore_ = containsBlankLine(beforeWs, pos_);
+    if (unterminatedComment_) {
+        unterminatedComment_ = false;
+        return makeError("unterminated comment (opened here)", unterminatedLine_, unterminatedCol_);
+    }
     if (pos_ >= source_.size()) {
         Token t; t.kind = TokenKind::EndOfFile; t.line = line_; t.column = col_; return t;
     }

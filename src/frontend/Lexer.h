@@ -20,7 +20,9 @@ private:
     int    line_ = 1;
     int    col_ = 1;
     bool   hasPeek_ = false;
-    bool   blankBefore_ = false;   // set by nextImpl_ for the token it lexes
+    bool   blankBefore_ = false;
+    bool   unterminatedComment_ = false;
+    int    unterminatedLine_ = 0, unterminatedCol_ = 0;   // set by nextImpl_ for the token it lexes
     bool   containsBlankLine(size_t from, size_t to) const;
     Token  peekTok_;
     // D1: kind of the last token *returned* to the consumer. Drives the
