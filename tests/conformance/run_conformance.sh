@@ -112,7 +112,9 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 # --- run the program (with the test's directory as the working dir) ------
-out="$(cd "$TEST_DIR" && "$PROTOST" "$TEST_BASE" 2>"$err_file")"
+# A hung program fails instead of holding the suite (the CTest default is
+# 1500 s per test).
+out="$(cd "$TEST_DIR" && timeout "${CONFORMANCE_TIMEOUT:-60}" "$PROTOST" "$TEST_BASE" 2>"$err_file")"
 rc=$?
 err="$(cat "$err_file" 2>/dev/null)"
 
@@ -129,8 +131,12 @@ if [[ "$mode" == "value" ]]; then
         detail="expected value [$expected], got exit=$rc last-line=[$last_line] stderr=[$err]"
     fi
 else  # mode == error
-    if [[ $rc -ne 0 ]]; then
-        if [[ -z "$expected" || "$err" == *"$expected"* || "$out" == *"$expected"* ]]; then
+    # A crash (killed by a signal) or a timeout is never the expected error:
+    # the program must fail the way protost reports an error.
+    if [[ $rc -ge 124 ]]; then
+        detail="expected an error report, but the program crashed or timed out (exit=$rc) stderr=[$err]"
+    elif [[ $rc -ne 0 ]]; then
+        if [[ -z "$expected" || "$err" == *"$expected"* ]]; then
             conforms=1
         else
             detail="expected error containing [$expected], got exit=$rc stdout=[$out] stderr=[$err]"

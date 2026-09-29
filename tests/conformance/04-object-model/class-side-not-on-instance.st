@@ -1,4 +1,4 @@
-"EXPECT-ERROR"
+"EXPECT-ERROR: doesNotUnderstand: classOnly"
 "§4.7 + D5 (closed, MNT-b2): a class-side method is NOT reachable from an
 instance. Sending a class-side selector to an instance is a doesNotUnderstand.
 Class-side methods are stamped `__class_side__`; the engine's SEND dispatch

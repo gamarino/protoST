@@ -4,9 +4,13 @@
 set -u
 PROTOST="$1"
 # The mechanism under test: with a 10M-cell ceiling (640 MB of cells) the
-# collector keeps an allocating loop under 1 GB. The default ceiling is larger
-# (docs/STATUS.md, configureHeap), so the test sets its own.
-rss=$( { PROTOCORE_HEAP_LIMIT_CELLS=10000000 /usr/bin/time -f '%M' "$PROTOST" -e 's := 0. 1 to: 3000000 do: [:i | s := s + (Array new: 10) size]. s' >/dev/null; } 2>&1 | tail -1 )
+# collector keeps an allocating loop under 1 GB; the test sets the ceiling
+# itself so it does not depend on the default (configureHeap).
+out_file="$(mktemp)"; trap 'rm -f "$out_file"' EXIT
+rss=$( { PROTOCORE_HEAP_LIMIT_CELLS=10000000 /usr/bin/time -f '%M' "$PROTOST" -e 's := 0. 1 to: 3000000 do: [:i | s := s + (Array new: 10) size]. s' >"$out_file"; } 2>&1 | tail -1 )
+# The loop must also have completed with the right result: a crash is not
+# "bounded memory".
+[ "$(cat "$out_file")" = "30000000" ] || { echo "FAIL: result [$(cat "$out_file")]"; exit 1; }
 [[ "$rss" =~ ^[0-9]+$ ]] || { echo "FAIL: could not measure: $rss"; exit 1; }
 (( rss < 1048576 )) || { echo "FAIL: maxrss ${rss} KB"; exit 1; }
 echo "OK (maxrss ${rss} KB)"

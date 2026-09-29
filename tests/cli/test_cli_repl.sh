@@ -106,12 +106,12 @@ grep -qx 42 <<< "$out" || { echo "FAIL: -e affected"; echo "$out"; exit 1; }
 # it as a global, and an assignment in the block must update that same global
 # instead of declaring a block-local variable.
 out=$(run 's := 0.\n#(1 2) do: [ :x | s := s + x ].\ns.\n:quit\n')
-grep -q "=> 3" <<< "$out" || { echo "FAIL: block did not update global s"; echo "$out"; exit 1; }
+[ "$(grep -o '=> .*' <<< "$out" | tail -1)" = "=> 3" ] || { echo "FAIL: block did not update global s"; echo "$out"; exit 1; }
 out=$(run 'g := 0.\n[ g := 7 ] value.\ng.\n:quit\n')
-grep -q "=> 7" <<< "$out" || { echo "FAIL: block assignment to global g lost"; echo "$out"; exit 1; }
+[ "$(grep -o '=> .*' <<< "$out" | tail -1)" = "=> 7" ] || { echo "FAIL: block assignment to global g lost"; echo "$out"; exit 1; }
 out=$(run 't := 1.\n[ [ t := t * 10 ] value ] value.\nt.\n:quit\n')
-grep -q "=> 10" <<< "$out" || { echo "FAIL: nested block did not update global t"; echo "$out"; exit 1; }
+[ "$(grep -o '=> .*' <<< "$out" | tail -1)" = "=> 10" ] || { echo "FAIL: nested block did not update global t"; echo "$out"; exit 1; }
 # A block temporary of the same name still shadows the global.
 out=$(run 'u := 5.\n[ | u | u := 99 ] value.\nu.\n:quit\n')
-grep -q "=> 5" <<< "$out" || { echo "FAIL: block temporary did not shadow global u"; echo "$out"; exit 1; }
+[ "$(grep -o '=> .*' <<< "$out" | tail -1)" = "=> 5" ] || { echo "FAIL: block temporary did not shadow global u"; echo "$out"; exit 1; }
 echo OK

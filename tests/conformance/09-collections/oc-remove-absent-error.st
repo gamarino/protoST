@@ -1,4 +1,4 @@
-"EXPECT-ERROR"
+"EXPECT-ERROR: NotFound"
 "§9.4: OrderedCollection remove: signals an Error when the element is absent"
 oc := OrderedCollection new.
 oc add: 1.
