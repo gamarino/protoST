@@ -365,7 +365,7 @@ ast::NodePtr Parser::parseLiteralArray(int openLine, int openCol) {
         if (elem) arr->children.push_back(std::move(elem));
         else      break;  // parseLiteralArrayElement already reported the error
     }
-    consume(TokenKind::RParen, "expected ')' to close frozen array");
+    consume(TokenKind::RParen, "expected ')' to close literal array");
     return arr;
 }
 
@@ -399,10 +399,25 @@ ast::NodePtr Parser::parseLiteralArrayElement() {
         // A bare identifier inside `#( … )` is a symbol (`#(foo bar)` is two
         // symbols). Keyword tokens (`at:`) likewise form a symbol element.
         case TokenKind::Identifier:
-        case TokenKind::Keyword:
             advance();
             { auto n = ast::makeNode(ast::NodeKind::SymbolLit, t.line, t.column);
               n->text = t.text; return n; }
+        // Keyword parts written without spaces form one symbol, as in
+        // Smalltalk: `#(at:put:)` holds #at:put:, `#(at: put:)` two symbols.
+        case TokenKind::Keyword: {
+            std::string text = t.text;
+            int endColumn = t.column + static_cast<int>(t.text.size());
+            advance();
+            while (current_.kind == TokenKind::Keyword && current_.line == t.line
+                   && current_.column == endColumn) {
+                text += current_.text;
+                endColumn += static_cast<int>(current_.text.size());
+                advance();
+            }
+            auto n = ast::makeNode(ast::NodeKind::SymbolLit, t.line, t.column);
+            n->text = text;
+            return n;
+        }
         // A nested `#( … )` element, or — standard Smalltalk — a bare `( … )`
         // group, which inside a literal array is itself a nested literal array.
         case TokenKind::HashLParen:
@@ -410,7 +425,7 @@ ast::NodePtr Parser::parseLiteralArrayElement() {
             advance();
             return parseLiteralArray(t.line, t.column);
         default:
-            error(current_, "unexpected token in frozen array literal");
+            error(current_, "unexpected token in literal array literal");
             advance();
             return nullptr;
     }

@@ -768,6 +768,12 @@ const proto::ProtoObject* prim_Object_respondsTo(STRuntime& rt, proto::ProtoCont
     const proto::ProtoObject* holder = r && r != PROTO_NONE ? r : rt.bootstrap().nilProto;
     const proto::ProtoObject* m = holder->getAttribute(ctx, sel);
     if (!m || m == PROTO_NONE) return PROTO_FALSE;
+    // A class-side method answers only for the class itself, as the send
+    // dispatch does (an instance receiver does not see it).
+    if (!m->isInteger(ctx) && m->getAttribute(ctx, rt.bootstrap().sym.classSide) == PROTO_TRUE) {
+        const proto::ProtoObject* own = holder->getOwnAttributeDirect(ctx, rt.bootstrap().sym.className);
+        if (!own || own == PROTO_NONE) return PROTO_FALSE;
+    }
     const proto::ProtoObject* bc = m->getAttribute(ctx, rt.bootstrap().sym.bcPtr);
     if (bc && bc != PROTO_NONE) return PROTO_TRUE;
     if (m->isInteger(ctx) && isPrimitiveMarker(m->asLong(ctx))) return PROTO_TRUE;

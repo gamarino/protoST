@@ -3,6 +3,8 @@
  parsing are primitive; iteration and the rest are defined here."
 
 String >> asString
+  "Symbols dispatch to String; a Symbol answers the equal String."
+  self class == Symbol ifTrue: [^ self __symbolAsString].
   ^ self.
 
 String >> displayString

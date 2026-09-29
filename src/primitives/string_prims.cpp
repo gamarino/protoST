@@ -464,6 +464,7 @@ void installStringPrimitives(STRuntime& rt) {
     bindPrimitive(rt, b.stringProto, ">=",         reg.registerPrim(prim_StrGe));
     bindPrimitive(rt, b.stringProto, "asSymbol",   reg.registerPrim(prim_StrAsSymbol));
     bindPrimitive(rt, b.symbolProto, "asString",   reg.registerPrim(prim_SymAsString));
+    bindPrimitive(rt, b.stringProto, "__symbolAsString", reg.registerPrim(prim_SymAsString));
     bindPrimitive(rt, b.characterProto, "value",    reg.registerPrim(prim_CharValue));
     bindPrimitive(rt, b.characterProto, "asString", reg.registerPrim(prim_CharAsString));
     bindPrimitive(rt, b.characterProto, "asUppercase", reg.registerPrim(prim_CharAsUppercase));
