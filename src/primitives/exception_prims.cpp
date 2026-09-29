@@ -41,6 +41,7 @@
 #include "runtime/UnhandledSTException.h"
 #include "runtime/NativeExceptionBridge.h"
 #include "runtime/TransientPin.h"
+#include "runtime/ExecutionEngine.h"
 #include "protoCore.h"
 
 #include <cstdio>
@@ -183,7 +184,8 @@ const proto::ProtoObject* defaultAction(proto::ProtoContext* ctx,
     if (isErrorClass || !isResumable(ctx, exc)) {
         // Error (resumable or not) / non-resumable: abort the activation
         // (EXC-a behaviour, EXC-d dedicated type).
-        throw UnhandledSTException(defaultActionMessage(ctx, exc));
+        throw UnhandledSTException(defaultActionMessage(ctx, exc),
+                                   ExecutionEngine::describeActiveStack(20));
     }
     // Resumable and unhandled. A Warning announces itself; the bare Exception
     // base resumes silently. The distinction is the presence of a messageText

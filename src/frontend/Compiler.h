@@ -57,6 +57,7 @@ public:
     const std::unordered_map<std::string, ClassInfo>& classes() const { return classes_; }
 
 private:
+    std::string currentMethodDebugName_;   // e.g. "A>>inner", for block frame names
     bool reportUndeclaredInMethod(const std::string& name);
     struct Scope {
         std::unordered_map<std::string, int> slots; // name -> slot index

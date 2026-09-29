@@ -8,6 +8,7 @@
 #include "protoCore.h"
 
 #include "runtime/Interrupt.h"
+#include "runtime/UnhandledSTException.h"
 #include <readline/readline.h>
 #include <readline/history.h>
 
@@ -247,7 +248,7 @@ bool evaluate(Session& s, const std::string& buffer,
         std::fflush(stdout);
         return false;
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "error: %s\n", e.what());
+        std::fprintf(stderr, "%s\n", describeUncaught(e).c_str());
         return false;
     } catch (...) {
         std::fprintf(stderr, "error: unknown runtime failure\n");

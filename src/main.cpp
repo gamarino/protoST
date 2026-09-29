@@ -7,6 +7,7 @@
 #include "repl/Repl.h"
 #include "dap/DapServer.h"
 #include "runtime/ValueFormat.h"
+#include "runtime/UnhandledSTException.h"
 #include "protoCore.h"
 #include <cstdio>
 #include <cstring>
@@ -106,7 +107,7 @@ int main(int argc, char** argv) {
             std::puts(protoST::formatValue(rt, rt.rootCtx(), r).c_str());
             return 0;
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "error: %s\n", e.what());
+            std::fprintf(stderr, "%s\n", protoST::describeUncaught(e).c_str());
             return 1;
         }
     }
@@ -140,7 +141,7 @@ int main(int argc, char** argv) {
             }
             return 0;
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "error: %s\n", e.what());
+            std::fprintf(stderr, "%s\n", protoST::describeUncaught(e).c_str());
             return 1;
         }
     }
@@ -188,7 +189,7 @@ int main(int argc, char** argv) {
             std::puts(protoST::formatValue(rt, rt.rootCtx(), r).c_str());
             return 0;
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "error: %s\n", e.what());
+            std::fprintf(stderr, "%s\n", protoST::describeUncaught(e).c_str());
             return 1;
         }
     }

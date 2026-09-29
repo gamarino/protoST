@@ -214,6 +214,9 @@ add_test(NAME cli_print_nl
 add_test(NAME cli_transcript
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_transcript.sh $<TARGET_FILE:protost>)
 
+add_test(NAME cli_error_location
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_error_location.sh $<TARGET_FILE:protost>)
+
 add_test(NAME cli_kernel
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_kernel.sh $<TARGET_FILE:protost> ${CMAKE_BINARY_DIR}/cli-scratch/kernel)
 

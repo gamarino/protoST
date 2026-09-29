@@ -25,13 +25,28 @@
 
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace protoST {
 
 class UnhandledSTException : public std::runtime_error {
 public:
-    explicit UnhandledSTException(const std::string& m)
-        : std::runtime_error(m) {}
+    explicit UnhandledSTException(const std::string& m, std::string trace = std::string())
+        : std::runtime_error(m), trace_(std::move(trace)) {}
+    // The active methods when the error went unhandled, innermost first, one
+    // "  at Class>>selector (file:line)" line each; empty when unknown. Kept
+    // apart from what(), which handlers and rejected Futures see.
+    const std::string& trace() const { return trace_; }
+private:
+    std::string trace_;
 };
+
+// "error: <message>" followed by the trace of an unhandled error, if any.
+inline std::string describeUncaught(const std::exception& e) {
+    std::string out = std::string("error: ") + e.what();
+    if (const auto* u = dynamic_cast<const UnhandledSTException*>(&e))
+        if (!u->trace().empty()) out += "\n" + u->trace();
+    return out;
+}
 
 } // namespace protoST

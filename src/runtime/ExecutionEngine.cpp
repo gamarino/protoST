@@ -391,6 +391,28 @@ const proto::ProtoObject* ExecutionEngine::doesNotUnderstand(
     return signalMessageNotUnderstood(rt_, ctx, recv, message, text.c_str());
 }
 
+std::string ExecutionEngine::describeActiveStack(std::size_t maxFrames) {
+    std::string out;
+    std::size_t shown = 0, total = 0;
+    for (std::size_t e = g_liveEngines.size(); e-- > 0; ) {
+        const auto& frames = g_liveEngines[e]->frames_;
+        for (std::size_t i = frames.size(); i-- > 0; ) {
+            ++total;
+            if (shown >= maxFrames) continue;
+            const Frame& f = frames[i];
+            if (!f.m) continue;
+            std::string name = f.m->debugName().empty() ? "<unknown>" : f.m->debugName();
+            const int line = f.m->lineForPc(f.pc > 0 ? f.pc - kInstrSize : 0);
+            out += "  at " + name + " (" + (f.m->sourceName().empty() ? "?" : f.m->sourceName())
+                 + ":" + std::to_string(line) + ")\n";
+            ++shown;
+        }
+    }
+    if (total > shown) out += "  ... " + std::to_string(total - shown) + " more\n";
+    if (!out.empty()) out.pop_back();
+    return out;
+}
+
 // Stack-depth guard, checked before every frame push of a send. Frame regions
 // stop kOverflowReserve slots short of the scratch region, so the handler that
 // catches the overflow (and any ensure: block it unwinds) still has room to

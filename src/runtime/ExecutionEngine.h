@@ -31,6 +31,10 @@ struct DebugFrame;
 // unrelated to the unbounded user-method recursion this task targets.
 class ExecutionEngine {
 public:
+    // The methods active on this thread, innermost first, as
+    // "  at Class>>selector (file:line)" lines (at most maxFrames).
+    static std::string describeActiveStack(std::size_t maxFrames);
+
     explicit ExecutionEngine(STRuntime& rt);
     ~ExecutionEngine();
 

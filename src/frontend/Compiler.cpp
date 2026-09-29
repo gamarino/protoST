@@ -515,6 +515,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         // can resolve identifiers against this class's inst vars before
         // falling back to globals.
         currentMethodClass_         = n.text;
+        currentMethodDebugName_     = n.text + ">>" + (n.stringList.empty() ? std::string("<method>") : n.stringList[0]);
         currentMethodIsClassSide_   = n.boolFlag;
         {
             auto it = classes_.find(n.text);
@@ -597,6 +598,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         sub->setDebugName(n.text + ">>" +
                           (n.stringList.empty() ? std::string("<method>")
                                                 : n.stringList[0]));
+        currentMethodDebugName_ = sub->debugName();
         // BL-1: record the defining class so the engine can resolve `super`
         // sends inside this method body (lookup starts at the class's parent).
         sub->setDefiningClass(n.text);
@@ -630,6 +632,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
 
         // F4-U5: clear the method-body name-resolution context.
         currentMethodClass_.clear();
+        currentMethodDebugName_.clear();
         currentInstVars_.clear();
         currentClassVars_.clear();
         currentMethodIsClassSide_ = false;
@@ -819,6 +822,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
 
         recordLocalNames(*sub);
         sub->setDebugName(n.text + ">>" + n.stringList[0] + "(...)");
+        currentMethodDebugName_ = sub->debugName();
         sub->setDefiningClass(n.text);
         scopes_.pop_back();
 
@@ -840,6 +844,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(installIdx), currentLine_);
 
         currentMethodClass_.clear();
+        currentMethodDebugName_.clear();
         currentInstVars_.clear();
         currentClassVars_.clear();
         currentMethodIsClassSide_ = false;
@@ -1255,7 +1260,9 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             }
             sub->emit(Op::RETURN_TOP, 0, currentLine_);
             recordLocalNames(*sub);
-            sub->setDebugName("<block>");
+            sub->setDebugName(currentMethodDebugName_.empty()
+                                  ? std::string("<block>")
+                                  : "[] in " + currentMethodDebugName_);
             scopes_.pop_back();
             size_t blkIdx = m.addBlockModule(std::move(sub));
             m.emitWide(Op::PUSH_BLOCK, static_cast<unsigned int>(blkIdx), currentLine_);
