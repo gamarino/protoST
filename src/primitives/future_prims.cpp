@@ -458,17 +458,15 @@ namespace {
 std::mutex g_rejectionsMu;
 std::unordered_map<std::uintptr_t, std::string> g_unobservedRejections;
 
+// Symbols are interned per ProtoSpace: resolved per call, never cached.
 const proto::ProtoString* observedKey(proto::ProtoContext* ctx) {
-    static const proto::ProtoString* key = nullptr;
-    static std::once_flag once;
-    std::call_once(once, [ctx]() { key = proto::ProtoString::createSymbol(ctx, "__observed__"); });
-    return key;
+    return proto::ProtoString::createSymbol(ctx, "__observed__");
 }
 
 std::string describeRejection(proto::ProtoContext* ctx, const proto::ProtoObject* error) {
     if (!error || error == PROTO_NONE) return "nil";
     if (const proto::ProtoString* str = error->asString(ctx)) return str->toStdString(ctx);
-    static const proto::ProtoString* msgKey = proto::ProtoString::createSymbol(ctx, "__message_text__");
+    const proto::ProtoString* msgKey = proto::ProtoString::createSymbol(ctx, "__message_text__");
     const proto::ProtoObject* m = error->getAttribute(ctx, msgKey);
     if (m && m != PROTO_NONE)
         if (const proto::ProtoString* ms = m->asString(ctx)) return ms->toStdString(ctx);

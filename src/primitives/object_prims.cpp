@@ -3,12 +3,18 @@
 #include "runtime/Bootstrap.h"
 #include "runtime/BytecodeModule.h"
 #include "runtime/TransientPin.h"
+#include "runtime/ValueFormat.h"
+#include "runtime/ExecutionEngine.h"
 #include "protoCore.h"
 
 #include <cctype>
 #include <chrono>
 #include <stdexcept>
 #include <string>
+#include <vector>
+#include <functional>
+#include <cstdint>
+#include <cmath>
 #include <thread>
 
 namespace protoST {
@@ -672,6 +678,168 @@ const proto::ProtoObject* prim_Object_subclassIvars(
     return makeSubclass(rt, ctx, r, a[0]);
 }
 
+// --- reflection --------------------------------------------------------------
+
+// Look up `selector` on `recv` and run it with `args`: a user method (a
+// block-shaped wrapper carrying __bc_ptr__) runs in a nested engine with self
+// bound, a primitive through the registry. Answers nullptr when the receiver
+// does not understand the selector. Shared by perform: and the kernel's
+// reflective primitives.
+const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* recv,
+                                      const proto::ProtoString* selector,
+                                      const proto::ProtoObject* const* args, int argc,
+                                      bool* understood) {
+    if (understood) *understood = false;
+    const proto::ProtoObject* method = recv ? recv->getAttribute(ctx, selector)
+                                            : rt.bootstrap().nilProto->getAttribute(ctx, selector);
+    if (!method || method == PROTO_NONE) return nullptr;
+    const proto::ProtoObject* bcPtrObj = method->getAttribute(ctx, rt.bootstrap().sym.bcPtr);
+    if (bcPtrObj && bcPtrObj != PROTO_NONE && bcPtrObj->isInteger(ctx)) {
+        const BytecodeModule* sub =
+            reinterpret_cast<const BytecodeModule*>(bcPtrObj->asLong(ctx));
+        if (sub->argCount() != argc + 1)
+            throw std::runtime_error("wrong number of arguments for "
+                                     + selector->toStdString(ctx));
+        std::vector<const proto::ProtoObject*> methodArgs;
+        methodArgs.reserve(static_cast<size_t>(argc) + 1);
+        methodArgs.push_back(recv ? recv : PROTO_NONE);
+        for (int i = 0; i < argc; ++i) methodArgs.push_back(args[i]);
+        const proto::ProtoObject* capDict = method->getAttribute(ctx, rt.bootstrap().sym.captured);
+        if (capDict == PROTO_NONE) capDict = nullptr;
+        if (understood) *understood = true;
+        ExecutionEngine eng(rt);
+        return eng.runWithArgs(ctx, *sub, recv ? recv : PROTO_NONE, methodArgs.data(),
+                               argc + 1, capDict);
+    }
+    if (method->isInteger(ctx)) {
+        const long long marker = method->asLong(ctx);
+        if (marker & (1LL << 62)) {
+            auto fn = rt.registry().at(static_cast<int>(marker & ((1LL << 62) - 1)));
+            if (understood) *understood = true;
+            return fn(rt, ctx, recv ? recv : PROTO_NONE, args, argc);
+        }
+    }
+    return nullptr;
+}
+
+namespace {
+const proto::ProtoString* selectorArg(proto::ProtoContext* ctx, const proto::ProtoObject* sel) {
+    const proto::ProtoString* s = sel ? sel->asString(ctx) : nullptr;
+    if (!s) throw std::runtime_error("a selector (Symbol) was expected");
+    return proto::ProtoString::createSymbol(ctx, s->toStdString(ctx).c_str());
+}
+} // namespace
+
+// recv perform: #selector withArguments: anArray
+const proto::ProtoObject* prim_Object_performWithArguments(STRuntime& rt, proto::ProtoContext* ctx,
+                                                           const proto::ProtoObject* r,
+                                                           const proto::ProtoObject* const* a, int argc) {
+    if (argc != 2) throw std::runtime_error("perform:withArguments: expects 2 args");
+    const proto::ProtoString* sel = selectorArg(ctx, a[0]);
+    std::vector<const proto::ProtoObject*> args;
+    if (a[1] && a[1] != PROTO_NONE) {
+        const proto::ProtoString* dataKey = proto::ProtoString::createSymbol(ctx, "__data__");
+        const proto::ProtoObject* elems = a[1]->getAttribute(ctx, dataKey);
+        const proto::ProtoList* list = elems && elems != PROTO_NONE ? elems->asList(ctx) : nullptr;
+        if (!list) throw std::runtime_error("perform:withArguments: expects an Array of arguments");
+        for (unsigned long i = 0; i < list->getSize(ctx); ++i)
+            args.push_back(list->getAt(ctx, static_cast<int>(i)));
+    }
+    bool understood = false;
+    const proto::ProtoObject* res = sendDynamic(rt, ctx, r, sel, args.data(),
+                                                static_cast<int>(args.size()), &understood);
+    if (!understood)
+        throw std::runtime_error("doesNotUnderstand: " + sel->toStdString(ctx));
+    return res ? res : PROTO_NONE;
+}
+
+// recv respondsTo: #selector → true when a method answers it.
+const proto::ProtoObject* prim_Object_respondsTo(STRuntime& rt, proto::ProtoContext* ctx,
+                                                 const proto::ProtoObject* r,
+                                                 const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("respondsTo: expects 1 arg");
+    const proto::ProtoString* sel = selectorArg(ctx, a[0]);
+    const proto::ProtoObject* holder = r && r != PROTO_NONE ? r : rt.bootstrap().nilProto;
+    const proto::ProtoObject* m = holder->getAttribute(ctx, sel);
+    if (!m || m == PROTO_NONE) return PROTO_FALSE;
+    const proto::ProtoObject* bc = m->getAttribute(ctx, rt.bootstrap().sym.bcPtr);
+    if (bc && bc != PROTO_NONE) return PROTO_TRUE;
+    if (m->isInteger(ctx) && (m->asLong(ctx) & (1LL << 62))) return PROTO_TRUE;
+    return PROTO_FALSE;
+}
+
+// aClass superclass → the next class up the chain, nil for Object.
+const proto::ProtoObject* prim_Object_superclass(STRuntime& rt, proto::ProtoContext* ctx,
+                                                 const proto::ProtoObject* r,
+                                                 const proto::ProtoObject* const*, int) {
+    const proto::ProtoString* nameKey = rt.bootstrap().sym.className;
+    if (!r || r == PROTO_NONE) return PROTO_NONE;
+    for (const proto::ProtoObject* p = r->getFirstParent(ctx); p && p != PROTO_NONE;
+         p = p->getFirstParent(ctx)) {
+        const proto::ProtoObject* n = p->getOwnAttributeDirect(ctx, nameKey);
+        if (n && n != PROTO_NONE) return p;
+    }
+    return PROTO_NONE;
+}
+
+// recv shallowCopy → a new instance of the same class holding the same
+// instance-variable values. Values (numbers, strings, nil, booleans) answer
+// themselves. Collections copy their element storage attribute, which is an
+// immutable protoCore list, so the copy and the original evolve independently.
+const proto::ProtoObject* prim_Object_shallowCopy(STRuntime&, proto::ProtoContext* ctx,
+                                                  const proto::ProtoObject* r,
+                                                  const proto::ProtoObject* const*, int) {
+    if (!r || r == PROTO_NONE || r == PROTO_TRUE || r == PROTO_FALSE) return r;
+    if (r->isInteger(ctx) || r->isFloat(ctx) || r->asString(ctx)) return r;
+    const proto::ProtoObject* parent = r->getFirstParent(ctx);
+    if (!parent || parent == PROTO_NONE) return r;
+    const proto::ProtoObject* copy = parent->newChild(ctx, /*isMutable=*/true);
+    struct Sink { const proto::ProtoObject* copy; };
+    Sink sink{copy};
+    r->processOwnAttributes(ctx, &sink,
+        [](proto::ProtoContext* c, void* self, const proto::ProtoString* key,
+           const proto::ProtoObject* value) {
+            auto* s = static_cast<Sink*>(self);
+            s->copy->setAttribute(c, key, value);
+        });
+    return copy;
+}
+
+// recv identityHash → a SmallInteger fixed for the object's lifetime.
+const proto::ProtoObject* prim_Object_identityHash(STRuntime&, proto::ProtoContext* ctx,
+                                                   const proto::ProtoObject* r,
+                                                   const proto::ProtoObject* const*, int) {
+    const auto bits = reinterpret_cast<std::uintptr_t>(r);
+    return ctx->fromLong(static_cast<long long>((bits >> 4) & ((1ULL << 54) - 1)));
+}
+
+// recv hash → consistent with =: numbers by value (1 hash = 1.0 hash), strings
+// and symbols by content, every other object by identity.
+const proto::ProtoObject* prim_Object_hash(STRuntime& rt, proto::ProtoContext* ctx,
+                                           const proto::ProtoObject* r,
+                                           const proto::ProtoObject* const* a, int argc) {
+    if (!r || r == PROTO_NONE) return ctx->fromLong(0);
+    if (r == PROTO_TRUE) return ctx->fromLong(1);
+    if (r == PROTO_FALSE) return ctx->fromLong(2);
+    if (r->isFloat(ctx)) {
+        const double d = r->asDouble(ctx);
+        if (std::isfinite(d) && d == std::floor(d) && std::fabs(d) < 9.0e15)
+            return ctx->fromLong(static_cast<long long>(d) & ((1LL << 54) - 1));
+        return ctx->fromLong(static_cast<long long>(std::hash<double>{}(d) & ((1ULL << 54) - 1)));
+    }
+    if (r->isInteger(ctx)) {
+        if (r->compare(ctx, ctx->fromLong(1LL << 53)) < 0 && r->compare(ctx, ctx->fromLong(-(1LL << 53))) > 0)
+            return ctx->fromLong(r->asLong(ctx) & ((1LL << 54) - 1));
+        const std::string digits = formatNumber(ctx, r);
+        return ctx->fromLong(static_cast<long long>(std::hash<std::string>{}(digits) & ((1ULL << 54) - 1)));
+    }
+    if (const proto::ProtoString* s = r->asString(ctx))
+        return ctx->fromLong(static_cast<long long>(
+            std::hash<std::string>{}(s->toStdString(ctx)) & ((1ULL << 54) - 1)));
+    return prim_Object_identityHash(rt, ctx, r, a, argc);
+}
+
 // recv class → the receiver's class.
 //
 // Classes are prototypes that carry their name as an OWN `__class_name__`;
@@ -688,8 +856,9 @@ const proto::ProtoObject* metaclassOf(STRuntime& rt, proto::ProtoContext* ctx,
                                       const proto::ProtoObject* cls,
                                       const proto::ProtoString* nameKey,
                                       const proto::ProtoObject* className) {
-    static const proto::ProtoString* metaKey = proto::ProtoString::createSymbol(ctx, "__metaclass__");
-    static const proto::ProtoString* soleKey = proto::ProtoString::createSymbol(ctx, "__sole_instance__");
+    // Symbols are interned per ProtoSpace: never cache them in a static.
+    const proto::ProtoString* metaKey = proto::ProtoString::createSymbol(ctx, "__metaclass__");
+    const proto::ProtoString* soleKey = proto::ProtoString::createSymbol(ctx, "__sole_instance__");
     const proto::ProtoObject* meta = cls->getOwnAttributeDirect(ctx, metaKey);
     if (meta && meta != PROTO_NONE) return meta;
     std::string name = "Class";
@@ -1022,6 +1191,13 @@ void installObjectPrimitives(STRuntime& rt) {
                   reg.registerPrim(prim_Object_printString));
     bindPrimitive(rt, b.objectProto, "class", reg.registerPrim(prim_Object_class));
     bindPrimitive(rt, b.objectProto, "name", reg.registerPrim(prim_Object_name));
+    bindPrimitive(rt, b.objectProto, "perform:withArguments:",
+                  reg.registerPrim(prim_Object_performWithArguments));
+    bindPrimitive(rt, b.objectProto, "respondsTo:", reg.registerPrim(prim_Object_respondsTo));
+    bindPrimitive(rt, b.objectProto, "superclass", reg.registerPrim(prim_Object_superclass));
+    bindPrimitive(rt, b.objectProto, "shallowCopy", reg.registerPrim(prim_Object_shallowCopy));
+    bindPrimitive(rt, b.objectProto, "identityHash", reg.registerPrim(prim_Object_identityHash));
+    bindPrimitive(rt, b.objectProto, "hash", reg.registerPrim(prim_Object_hash));
     // F6 v2 T6: sleep primitive — test-only helper for the wall-clock
     // parallelism proof. Bound on objectProto so any object responds to it.
     bindPrimitive(rt, b.objectProto, "sleep:",
