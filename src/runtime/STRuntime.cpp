@@ -2347,9 +2347,12 @@ std::string STRuntime::findModuleFile(const std::string& logicalPath) const {
 // loop peaks at 0.8 GB and takes 36 s instead of 20 s -- the cost of actually
 // collecting instead of never collecting; fib, int_sum_loop, list_append,
 // str_concat, exception_latency and pump_twin show no measurable difference.
-// Raised the same day to 32M cells (2 GB), capped at a quarter of physical
-// memory: at 10M cells an Array of 600,000 elements or (1 to: 1000000)
-// asArray ran out (building a large list costs n log n cells in protoCore).
+// A 32M-cell default was tried the same day, so that an Array of 600,000
+// elements or (1 to: 1000000) asArray fit (a large list costs n log n cells
+// in protoCore): it made allocation-heavy actor code 17% slower
+// (saturation_big, one worker, 3.1 s -> 3.7 s), since the collector waits for
+// the ceiling. 10M stays the default; a program that needs more is told how
+// to raise it (reportOutOfMemory). Capped at a quarter of physical memory.
 // An explicit PROTOCORE_HEAP_LIMIT_CELLS, which
 // protoCore has already applied, takes precedence (0 disables the ceiling).
 //
@@ -2359,15 +2362,21 @@ std::string STRuntime::findModuleFile(const std::string& logicalPath) const {
 // core dump.
 namespace {
 constexpr long long kCellBytes = 64;
-constexpr long long kDefaultHardCells = 32'000'000;          // 2 GB of cells
+constexpr long long kDefaultHardCells = 10'000'000;          // 640 MB of cells
+
+int defaultHardCells();
 
 proto::ProtoObject* reportOutOfMemory(proto::ProtoContext*) {
     std::fflush(stdout);
     // protoCore calls this only after consecutive collections reclaimed
     // nothing: the live set itself fills the ceiling.
-    std::fprintf(stderr, "error: out of memory: the live objects fill the heap limit "
-                         "and the last collections reclaimed nothing; "
-                         "set PROTOCORE_HEAP_LIMIT_CELLS to raise it\n");
+    const char* env = std::getenv("PROTOCORE_HEAP_LIMIT_CELLS");
+    const long long cells = env ? std::atoll(env) : defaultHardCells();
+    std::fprintf(stderr, "error: out of memory: the live objects fill the heap limit of %lld cells "
+                         "(%lld MB) and the last collections reclaimed nothing. To allow more, set "
+                         "PROTOCORE_HEAP_LIMIT_CELLS (each cell is 64 bytes), e.g. "
+                         "PROTOCORE_HEAP_LIMIT_CELLS=%lld for %lld MB.\n",
+                 cells, cells * 64 / 1000000, cells * 4, cells * 4 * 64 / 1000000);
     std::fflush(stderr);
     std::_Exit(3);
 }

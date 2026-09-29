@@ -24,7 +24,7 @@ mostramos es que el mismo código usa varios núcleos.
 **¿Cómo es el GC?**
 El de protoCore: concurrente, con un hilo propio, que difiere la recolección
 hasta que es necesaria y hace pausas cortas de stop-the-world. protoST fija un
-techo de heap (2 GB de celdas por defecto, a lo sumo un cuarto de la RAM, configurable) y si se agota
+techo de heap (640 MB por defecto, configurable con PROTOCORE_HEAP_LIMIT_CELLS) y si se agota
 termina con un mensaje claro en lugar de tomar la máquina.
 
 **¿Por qué prototipos?**
