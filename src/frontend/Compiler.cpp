@@ -5,6 +5,31 @@ using namespace ast;
 
 namespace {
 
+// The instance variables visible in a method of `className`: its own and every
+// superclass's declared in this module, root first. A subclass method reads and
+// writes an inherited instance variable like its own (they share the object's
+// `_iv_<name>` attribute).
+static std::vector<std::string> instVarsThroughChain(
+        const std::unordered_map<std::string, Compiler::ClassInfo>& classes,
+        const std::string& className) {
+    std::vector<std::string> chain;
+    std::unordered_set<std::string> seenClasses;
+    std::vector<const Compiler::ClassInfo*> infos;
+    std::string cur = className;
+    while (!cur.empty() && !seenClasses.count(cur)) {
+        seenClasses.insert(cur);
+        auto it = classes.find(cur);
+        if (it == classes.end()) break;
+        infos.push_back(&it->second);
+        cur = it->second.superclassName;
+    }
+    std::unordered_set<std::string> seenNames;
+    for (auto i = infos.rbegin(); i != infos.rend(); ++i)
+        for (const auto& iv : (*i)->instVarNames)
+            if (seenNames.insert(iv).second) chain.push_back(iv);
+    return chain;
+}
+
 // One walker per scope (module, method, or block). Accumulates:
 //   - declared: names introduced in THIS scope (module-level assignments,
 //               method args/locals, block args/locals)
@@ -152,7 +177,7 @@ void walkNode(const Node& n, ScopeWalker& cur,
             if (classes) {
                 auto cit = classes->find(n.text);
                 if (cit != classes->end()) {
-                    for (const auto& iv : cit->second.instVarNames) {
+                    for (const auto& iv : instVarsThroughChain(*classes, n.text)) {
                         ivarSet.insert(iv);
                     }
                     // Class vars are reached through the same `_iv_<name>`
@@ -201,7 +226,7 @@ void walkNode(const Node& n, ScopeWalker& cur,
             if (classes) {
                 auto cit = classes->find(n.text);
                 if (cit != classes->end()) {
-                    for (const auto& iv : cit->second.instVarNames) {
+                    for (const auto& iv : instVarsThroughChain(*classes, n.text)) {
                         ivarSet.insert(iv);
                     }
                     for (const auto& cv : cit->second.classVarNames) {
@@ -494,13 +519,20 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         {
             auto it = classes_.find(n.text);
             if (it != classes_.end()) {
-                currentInstVars_  = it->second.instVarNames;
+                currentInstVars_  = instVarsThroughChain(classes_, n.text);
                 currentClassVars_ = resolveClassVarsFor(n.text);
             } else {
                 currentInstVars_.clear();
                 currentClassVars_.clear();
             }
         }
+        // An argument or temporary may not reuse an instance variable's name
+        // (as in Pharo): the method would silently write the object's state.
+        for (size_t i = 1; i < n.stringList.size(); ++i)
+            for (const auto& iv : currentInstVars_)
+                if (iv == n.stringList[i])
+                    error("'" + iv + "' is already defined as an instance variable of "
+                          + n.text + " (in " + n.text + ">>" + n.stringList[0] + ")");
 
         // Build sub-BytecodeModule for the method body.
         auto sub = std::make_unique<BytecodeModule>();
@@ -635,13 +667,20 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         {
             auto it = classes_.find(n.text);
             if (it != classes_.end()) {
-                currentInstVars_  = it->second.instVarNames;
+                currentInstVars_  = instVarsThroughChain(classes_, n.text);
                 currentClassVars_ = resolveClassVarsFor(n.text);
             } else {
                 currentInstVars_.clear();
                 currentClassVars_.clear();
             }
         }
+        // An argument or temporary may not reuse an instance variable's name
+        // (as in Pharo): the method would silently write the object's state.
+        for (size_t i = 1; i < n.stringList.size(); ++i)
+            for (const auto& iv : currentInstVars_)
+                if (iv == n.stringList[i])
+                    error("'" + iv + "' is already defined as an instance variable of "
+                          + n.text + " (in " + n.text + ">>" + n.stringList[0] + ")");
 
         auto sub = std::make_unique<BytecodeModule>();
 
@@ -861,6 +900,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             m.emitWide(Op::STORE_GLOBAL, static_cast<unsigned int>(sym), currentLine_);
             return;
         }
+        if (reportUndeclaredInMethod(n.text)) return;
         int slot = declareLocal(n.text);
         emitExpr(m, *n.children[0]);
         m.emit(Op::DUP, 0, currentLine_);
@@ -1005,6 +1045,7 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                 m.emitWide(Op::STORE_GLOBAL, static_cast<unsigned int>(sym), currentLine_);
                 return;
             }
+            if (reportUndeclaredInMethod(n.text)) { m.emit(Op::PUSH_NIL, 0, currentLine_); return; }
             int slot = declareLocal(n.text);
             emitExpr(m, *n.children[0]);
             m.emit(Op::DUP, 0, currentLine_);
@@ -1223,6 +1264,18 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             m.emit(Op::PUSH_NIL, 0, currentLine_);
             return;
     }
+}
+
+// Inside a method, assigning to a name that is not an argument, temporary,
+// block parameter, instance or class variable is a compile error, as in Pharo;
+// declaring it implicitly let a typo (`cuont := count + 1`) leave the real
+// variable unchanged. Top-level scripts keep implicit globals.
+bool Compiler::reportUndeclaredInMethod(const std::string& name) {
+    if (currentMethodClass_.empty() || resolveLocal(name) >= 0) return false;
+    error("undeclared variable '" + name + "' in " + currentMethodClass_
+          + " (line " + std::to_string(currentLine_)
+          + "); declare it as a temporary: | " + name + " |");
+    return true;
 }
 
 bool Compiler::assignsReplGlobalInBlock(const std::string& name) const {

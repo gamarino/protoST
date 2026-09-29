@@ -57,6 +57,7 @@ public:
     const std::unordered_map<std::string, ClassInfo>& classes() const { return classes_; }
 
 private:
+    bool reportUndeclaredInMethod(const std::string& name);
     struct Scope {
         std::unordered_map<std::string, int> slots; // name -> slot index
         int nextSlot = 0;
