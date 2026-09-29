@@ -25,7 +25,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <semaphore>
+#include "Semaphore.h"
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
@@ -283,7 +283,7 @@ struct STRuntime::Impl {
     // LeastMaxValue is set high enough to absorb the absolute worst-case
     // burst-write throughput without saturating the counter. At 100K
     // sends in ~5 s we are far below this ceiling per worker.
-    std::counting_semaphore<8192> workerSem{0};
+    Semaphore workerSem;
 
     // F6 v6 (2026-05-23 night): pool-pause gate. Set true by
     // `STRuntime::stopProcessing`; checked at the top of every worker
@@ -315,7 +315,7 @@ struct STRuntime::Impl {
     // sees state(X)=settled (breaks the loop without parking). Both
     // outcomes are safe.
     std::atomic<const proto::ProtoObject*> mainWaitingOn{nullptr};
-    std::counting_semaphore<8192>           mainWaitSem{0};
+    Semaphore                               mainWaitSem;
 
     // F5-M2 module cache: canonical absolute path -> module object.
     std::unordered_map<std::string, const proto::ProtoObject*> moduleCache;
@@ -742,9 +742,7 @@ STRuntime::~STRuntime() {
         // forever and join() would deadlock. One release per worker —
         // each blocked worker wakes, observes `shutdown == true`, drains
         // any final pushes, and exits the loop.
-        for (size_t i = 0; i < impl_->workers.size(); ++i) {
-            impl_->workerSem.release();
-        }
+        impl_->workerSem.release(static_cast<int>(impl_->workers.size()));
         // join() blocks this thread in pthread_join while a worker still
         // draining may request a collection and park. A thread blocked in the
         // kernel cannot reach a safepoint, so the join runs in a protoCore
