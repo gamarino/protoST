@@ -875,6 +875,37 @@ const proto::ProtoObject* prim_Object_stdout(STRuntime&, proto::ProtoContext* ct
     return r;
 }
 
+// The globals namespace, for Smalltalk at: / at:put: / includesKey: (kernel).
+namespace {
+const proto::ProtoString* globalKey(proto::ProtoContext* ctx, const proto::ProtoObject* k) {
+    const proto::ProtoString* s = k ? k->asString(ctx) : nullptr;
+    if (!s) throw std::runtime_error("a global name (Symbol) was expected");
+    return proto::ProtoString::createSymbol(ctx, s->toStdString(ctx).c_str());
+}
+} // namespace
+
+const proto::ProtoObject* prim_Object_globalIncludes(STRuntime& rt, proto::ProtoContext* ctx,
+                                                     const proto::ProtoObject*,
+                                                     const proto::ProtoObject* const* a, int) {
+    return rt.globals()->hasOwnAttribute(ctx, globalKey(ctx, a[0])) == PROTO_TRUE
+        ? PROTO_TRUE : PROTO_FALSE;
+}
+
+const proto::ProtoObject* prim_Object_globalAt(STRuntime& rt, proto::ProtoContext* ctx,
+                                               const proto::ProtoObject*,
+                                               const proto::ProtoObject* const* a, int) {
+    const proto::ProtoString* key = globalKey(ctx, a[0]);
+    if (rt.globals()->hasOwnAttribute(ctx, key) != PROTO_TRUE) return PROTO_NONE;
+    return rt.globals()->getAttribute(ctx, key);
+}
+
+const proto::ProtoObject* prim_Object_globalAtPut(STRuntime& rt, proto::ProtoContext* ctx,
+                                                  const proto::ProtoObject*,
+                                                  const proto::ProtoObject* const* a, int) {
+    rt.globals()->setAttribute(ctx, globalKey(ctx, a[0]), a[1]);
+    return a[1];
+}
+
 // recv class → the receiver's class.
 //
 // Classes are prototypes that carry their name as an OWN `__class_name__`;
@@ -1233,6 +1264,9 @@ void installObjectPrimitives(STRuntime& rt) {
     bindPrimitive(rt, b.objectProto, "__printExit", reg.registerPrim(prim_Object_printExit));
     bindPrimitive(rt, b.objectProto, "__stdout:", reg.registerPrim(prim_Object_stdout));
     bindPrimitive(rt, b.objectProto, "class", reg.registerPrim(prim_Object_class));
+    bindPrimitive(rt, b.objectProto, "__globalIncludes:", reg.registerPrim(prim_Object_globalIncludes));
+    bindPrimitive(rt, b.objectProto, "__globalAt:", reg.registerPrim(prim_Object_globalAt));
+    bindPrimitive(rt, b.objectProto, "__globalAt:put:", reg.registerPrim(prim_Object_globalAtPut));
     bindPrimitive(rt, b.objectProto, "name", reg.registerPrim(prim_Object_name));
     bindPrimitive(rt, b.objectProto, "perform:withArguments:",
                   reg.registerPrim(prim_Object_performWithArguments));
