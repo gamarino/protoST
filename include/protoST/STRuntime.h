@@ -1,4 +1,9 @@
 #pragma once
+
+// Set by CMake from project(VERSION); the fallback serves out-of-tree builds.
+#ifndef PROTOST_VERSION
+#define PROTOST_VERSION "0.4.0"
+#endif
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -230,7 +235,7 @@ public:
     // Idempotent: a spec already present in the chain is not added twice.
     void addModuleProviderToChain(const std::string& providerSpec);
 
-    inline const char* versionTag() const { return "0.3.0"; }
+    inline const char* versionTag() const { return PROTOST_VERSION; }
 
 private:
     // Installs protoST's default heap limits and out-of-memory report.
@@ -296,6 +301,6 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-inline const char* versionString() { return "protoST 0.3.0"; }
+inline const char* versionString() { return "protoST " PROTOST_VERSION; }
 
 } // namespace protoST

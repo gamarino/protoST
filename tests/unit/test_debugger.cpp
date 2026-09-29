@@ -5,6 +5,8 @@
 #include "frontend/Compiler.h"
 #include "protoCore.h"
 
+#include <sstream>
+
 TEST_CASE("Debugger: halt on Object is a no-op when detached", "[debugger]") {
     protoST::Parser P("nil halt.");
     protoST::Compiler C; auto bc = C.compileModule(*P.parseModule());
@@ -21,6 +23,12 @@ TEST_CASE("Debugger: halt when attached enters the session (stub) and returns ni
     protoST::Compiler C; auto bc = C.compileModule(*P.parseModule());
     protoST::STRuntime rt;
     rt.debugger().attach();
+    // The session reads its own stream (S18): with std::cin it waited for a
+    // terminal whenever ctest ran without stdin redirected.
+    std::istringstream in("cont\n");
+    std::ostringstream out;
+    rt.debugger().setInputStream(&in);
+    rt.debugger().setOutputStream(&out);
     auto* r = rt.runTopLevel(*bc);
     REQUIRE(r == PROTO_NONE);
 }

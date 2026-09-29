@@ -150,7 +150,7 @@ int main(int argc, char** argv) {
         std::string sub = argv[2];
         if (sub == "create") {
             std::string path = (argc >= 4) ? argv[3] : ".venv";
-            return protoST::venvCreate(path, "/usr/local/bin", "0.3.0");
+            return protoST::venvCreate(path, "/usr/local/bin", PROTOST_VERSION);
         }
         if (sub == "activate") {
             std::string p = (argc >= 4) ? argv[3] : protoST::venvDiscover("");

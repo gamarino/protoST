@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
-project(protoST VERSION 0.3.0 LANGUAGES CXX)
+project(protoST VERSION 0.4.0 LANGUAGES CXX)
+
+# The one place the version is written: every binary and library reads it
+# through PROTOST_VERSION (include/protoST/STRuntime.h).
+add_compile_definitions(PROTOST_VERSION="${PROJECT_VERSION}")
 
 # Default to an optimised build. Without this a plain `cmake -B build` leaves
 # CMAKE_BUILD_TYPE empty — GCC then compiles at -O0, and every casual build

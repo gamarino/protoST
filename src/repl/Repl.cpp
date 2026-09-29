@@ -405,7 +405,7 @@ int runRepl() {
     if (interactive && !histPath.empty())
         ::read_history(histPath.c_str());
 
-    std::puts("protoST 0.3.0 \xe2\x80\x94 interactive REPL");
+    std::printf("%s \xe2\x80\x94 interactive REPL\n", versionString());
     std::puts(":help for commands, :quit or Ctrl-D to exit");
     std::fflush(stdout);
 
