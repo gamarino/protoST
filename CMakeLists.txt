@@ -135,6 +135,7 @@ add_library(protost_runtime STATIC
     src/runtime/BytecodeModule.cpp
     src/runtime/STRuntime.cpp
     src/runtime/ExecutionEngine.cpp
+    src/runtime/Interrupt.cpp
     src/runtime/Bootstrap.cpp
     src/runtime/HandlerStack.cpp
     src/runtime/ValueFormat.cpp
@@ -197,6 +198,9 @@ add_test(NAME cli_memory_bounded
 
 add_test(NAME cli_oom_clean
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_oom_clean.sh $<TARGET_FILE:protost>)
+
+add_test(NAME cli_sigint
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_sigint.sh $<TARGET_FILE:protost>)
 
 add_test(NAME cli_kernel
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_kernel.sh $<TARGET_FILE:protost> ${CMAKE_BINARY_DIR}/cli-scratch/kernel)

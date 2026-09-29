@@ -45,6 +45,7 @@
 #include "runtime/PassSignal.h"
 #include "runtime/FutureYield.h"
 #include "runtime/UnhandledSTException.h"
+#include "runtime/Interrupt.h"
 #include "debugger/DebuggerRuntime.h"
 
 #include <exception>
@@ -97,6 +98,7 @@ const proto::ProtoObject* translateNativeException(STRuntime& rt,
     catch (const FutureYield&)          { throw; }   // F6 v3 — cooperative yield
     // --- std::exception-DERIVED types that must NOT be translated ----------
     catch (const DebuggerHalt&)         { throw; }   // F2 — halt; is-a runtime_error
+    catch (const InterruptSignal&)      { throw; }   // Ctrl-C in the REPL; is-a runtime_error
     catch (const UnhandledSTException&) { throw; }   // already protoST; is-a runtime_error
     // --- a genuine native error: translate into a catchable protoST Error --
     catch (const std::exception& e)     { return signalNativeError(rt, ctx, e.what()); }

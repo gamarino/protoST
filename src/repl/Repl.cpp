@@ -7,6 +7,7 @@
 #include "runtime/ValueFormat.h"
 #include "protoCore.h"
 
+#include "runtime/Interrupt.h"
 #include <readline/readline.h>
 #include <readline/history.h>
 
@@ -237,9 +238,14 @@ bool evaluate(Session& s, const std::string& buffer,
     BytecodeModule* mod = bc.get();
     s.retained.push_back(std::move(bc));
     try {
+        clearPendingInterrupt();
         auto* r = s.rt->runTopLevel(*mod);
         if (printIt) printResult(*s.rt, r);
         return true;
+    } catch (const InterruptSignal&) {
+        std::puts("Interrupted");
+        std::fflush(stdout);
+        return false;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "error: %s\n", e.what());
         return false;
@@ -403,6 +409,7 @@ int runRepl() {
     std::fflush(stdout);
 
     Session session;
+    armInterrupts(session.rt->rootCtx());
 
     const char* primary = "protoST> ";
     const char* continuation = "   ...> ";

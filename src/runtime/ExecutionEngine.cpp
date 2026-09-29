@@ -26,6 +26,7 @@
 #include "Opcodes.h"
 #include "TransientPin.h"
 #include "NativeExceptionBridge.h"
+#include "Interrupt.h"
 
 #include <cstdint>
 #include "debugger/DebuggerRuntime.h"
@@ -461,6 +462,7 @@ const bool ExecutionEngine::gcSafepointEnabled_ =
 
 void ExecutionEngine::gcSafepoint(proto::ProtoContext* ctx) const {
     if (gcSafepointEnabled_ && ctx) ctx->safepoint();
+    pollInterrupt(ctx);
 }
 
 const proto::ProtoObject*
