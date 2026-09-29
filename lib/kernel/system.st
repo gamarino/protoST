@@ -68,6 +68,12 @@ SmalltalkImage >> at: aSymbol put: anObject
 SmalltalkImage >> includesKey: aSymbol
   ^ self __globalIncludes: aSymbol.
 
+SmalltalkImage >> allClasses
+  ^ self __allClasses.
+
+SmalltalkImage >> version
+  ^ self __versionString.
+
 SmalltalkImage >> printOn: aStream
   aStream nextPutAll: 'Smalltalk'.
 

@@ -17,6 +17,9 @@
 #include <functional>
 #include <cstdint>
 #include <cmath>
+#include <algorithm>
+#include <ctime>
+#include <random>
 #include <thread>
 
 namespace protoST {
@@ -986,6 +989,207 @@ const proto::ProtoObject* prim_Object_name(STRuntime& rt, proto::ProtoContext* c
     return own;
 }
 
+// ---------------------------------------------------------------- reflection
+
+namespace {
+// An Array whose elements are `data` (the list is pinned by the caller).
+const proto::ProtoObject* makeArrayFromList(STRuntime& rt, proto::ProtoContext* ctx,
+                                            const proto::ProtoList* data) {
+    const proto::ProtoObject* arr = rt.bootstrap().arrayProto->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinArr(ctx, arr);
+    arr->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__data__"), data->asObject(ctx));
+    return arr;
+}
+
+bool isMethodValue(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* v) {
+    if (!v || v == PROTO_NONE) return false;
+    if (v->isInteger(ctx)) return isPrimitiveMarker(v->asLong(ctx));
+    if (v->asString(ctx)) return false;
+    const proto::ProtoObject* bc = v->getAttribute(ctx, rt.bootstrap().sym.bcPtr);
+    return bc && bc != PROTO_NONE;
+}
+
+const proto::ProtoString* ivarKey(proto::ProtoContext* ctx, const proto::ProtoObject* name) {
+    const proto::ProtoString* s = name ? name->asString(ctx) : nullptr;
+    if (!s) throw std::runtime_error("instVarNamed: expects a String or Symbol");
+    return proto::ProtoString::createSymbol(ctx, ("_iv_" + s->toStdString(ctx)).c_str());
+}
+} // namespace
+
+// anObject instVarNamed: aName → the value of that instance variable of the
+// receiver (nil when unset); instVarNamed:put: sets it.
+const proto::ProtoObject* prim_Object_instVarNamed(STRuntime&, proto::ProtoContext* ctx,
+                                                   const proto::ProtoObject* r,
+                                                   const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("instVarNamed: expects 1 arg");
+    const proto::ProtoString* key = ivarKey(ctx, a[0]);
+    if (!r || r == PROTO_NONE || r->isInteger(ctx) || r->asString(ctx)) return PROTO_NONE;
+    if (r->hasOwnAttribute(ctx, key) != PROTO_TRUE) return PROTO_NONE;
+    const proto::ProtoObject* v = r->getAttribute(ctx, key);
+    return v ? v : PROTO_NONE;
+}
+
+const proto::ProtoObject* prim_Object_instVarNamedPut(STRuntime&, proto::ProtoContext* ctx,
+                                                      const proto::ProtoObject* r,
+                                                      const proto::ProtoObject* const* a, int argc) {
+    if (argc != 2) throw std::runtime_error("instVarNamed:put: expects 2 args");
+    if (!r || r == PROTO_NONE || r->isInteger(ctx) || r->isFloat(ctx) || r->asString(ctx))
+        throw std::runtime_error("instVarNamed:put: the receiver has no instance variables");
+    const proto::ProtoString* key = ivarKey(ctx, a[0]);
+    TransientPin pinKey(ctx, reinterpret_cast<const proto::ProtoObject*>(key));
+    const_cast<proto::ProtoObject*>(r)->setAttribute(ctx, key, a[1]);
+    return a[1];
+}
+
+// aClass __setInstVarNames: 'a b' records the declared instance-variable
+// names on the class (compiler-emitted); __instVarNamesString answers them.
+const proto::ProtoObject* prim_Object_setInstVarNames(STRuntime&, proto::ProtoContext* ctx,
+                                                      const proto::ProtoObject* r,
+                                                      const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("__setInstVarNames: expects 1 arg");
+    const_cast<proto::ProtoObject*>(r)->setAttribute(
+        ctx, proto::ProtoString::createSymbol(ctx, "__instvar_names__"), a[0]);
+    return r;
+}
+
+const proto::ProtoObject* prim_Object_instVarNamesString(STRuntime&, proto::ProtoContext* ctx,
+                                                         const proto::ProtoObject* r,
+                                                         const proto::ProtoObject* const*, int) {
+    const proto::ProtoString* key = proto::ProtoString::createSymbol(ctx, "__instvar_names__");
+    if (!r || r == PROTO_NONE || r->isInteger(ctx) || r->asString(ctx)
+        || r->hasOwnAttribute(ctx, key) != PROTO_TRUE)
+        return ctx->fromUTF8String("");
+    return r->getAttribute(ctx, key);
+}
+
+// aClass canUnderstand: aSelector → whether its instances respond to it
+// (a class-side method does not count).
+const proto::ProtoObject* prim_Object_canUnderstand(STRuntime& rt, proto::ProtoContext* ctx,
+                                                   const proto::ProtoObject* r,
+                                                   const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("canUnderstand: expects 1 arg");
+    const proto::ProtoString* sel = a[0] ? a[0]->asString(ctx) : nullptr;
+    if (!sel || !r || r == PROTO_NONE) return PROTO_FALSE;
+    const proto::ProtoObject* m = r->getAttribute(ctx, sel);
+    if (!isMethodValue(rt, ctx, m)) return PROTO_FALSE;
+    if (!m->isInteger(ctx) && m->getAttribute(ctx, rt.bootstrap().sym.classSide) == PROTO_TRUE)
+        return PROTO_FALSE;
+    return PROTO_TRUE;
+}
+
+// aClass selectors → the selectors of the instance-side methods the class
+// itself defines, sorted (internal selectors, those starting with '__', are
+// left out).
+const proto::ProtoObject* prim_Object_selectors(STRuntime& rt, proto::ProtoContext* ctx,
+                                                const proto::ProtoObject* r,
+                                                const proto::ProtoObject* const*, int) {
+    struct Sink { STRuntime* rt; std::vector<std::string> names; };
+    Sink sink{&rt, {}};
+    if (r && r != PROTO_NONE && !r->isInteger(ctx) && !r->asString(ctx)) {
+        r->processOwnAttributes(ctx, &sink,
+            [](proto::ProtoContext* c, void* self, const proto::ProtoString* key,
+               const proto::ProtoObject* value) {
+                auto* k = static_cast<Sink*>(self);
+                std::string name = key->toStdString(c);
+                if (name.rfind("__", 0) == 0 || name.rfind("_iv_", 0) == 0) return;
+                if (!isMethodValue(*k->rt, c, value)) return;
+                if (!value->isInteger(c)
+                    && value->getAttribute(c, k->rt->bootstrap().sym.classSide) == PROTO_TRUE)
+                    return;
+                k->names.push_back(name);
+            });
+    }
+    std::sort(sink.names.begin(), sink.names.end());
+    const proto::ProtoList* data = ctx->newList();
+    TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
+    for (const auto& n : sink.names) {
+        data = data->appendLast(ctx, reinterpret_cast<const proto::ProtoObject*>(
+                                         proto::ProtoString::createSymbol(ctx, n.c_str())));
+        pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
+    }
+    return makeArrayFromList(rt, ctx, data);
+}
+
+// __allClasses → every class bound as a global, as an Array.
+const proto::ProtoObject* prim_Object_allClasses(STRuntime& rt, proto::ProtoContext* ctx,
+                                                 const proto::ProtoObject*,
+                                                 const proto::ProtoObject* const*, int) {
+    struct Sink { STRuntime* rt; std::vector<const proto::ProtoObject*> classes; };
+    Sink sink{&rt, {}};
+    if (const proto::ProtoObject* g = rt.globals()) {
+        g->processOwnAttributes(ctx, &sink,
+            [](proto::ProtoContext* c, void* self, const proto::ProtoString*,
+               const proto::ProtoObject* value) {
+                auto* k = static_cast<Sink*>(self);
+                if (!value || value == PROTO_NONE || value->isInteger(c) || value->isFloat(c)
+                    || value->asString(c))
+                    return;
+                const proto::ProtoObject* own =
+                    value->getOwnAttributeDirect(c, k->rt->bootstrap().sym.className);
+                if (own && own != PROTO_NONE) k->classes.push_back(value);
+            });
+    }
+    const proto::ProtoList* data = ctx->newList();
+    TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
+    for (const auto* c : sink.classes) {
+        data = data->appendLast(ctx, c);
+        pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
+    }
+    return makeArrayFromList(rt, ctx, data);
+}
+
+// ------------------------------------------------------------- clock, entropy
+
+// __clockMilliseconds / __clockMicroseconds → a monotonic clock reading.
+const proto::ProtoObject* prim_Object_clockMilliseconds(STRuntime&, proto::ProtoContext* ctx,
+                                                        const proto::ProtoObject*,
+                                                        const proto::ProtoObject* const*, int) {
+    using namespace std::chrono;
+    return ctx->fromLong(duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
+}
+
+const proto::ProtoObject* prim_Object_clockMicroseconds(STRuntime&, proto::ProtoContext* ctx,
+                                                        const proto::ProtoObject*,
+                                                        const proto::ProtoObject* const*, int) {
+    using namespace std::chrono;
+    return ctx->fromLong(duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count());
+}
+
+// __localTimeFields → #(year month day hour minute second dayOfWeek) for the
+// local wall-clock time now (dayOfWeek 1 = Sunday, as in Smalltalk-80).
+const proto::ProtoObject* prim_Object_localTimeFields(STRuntime& rt, proto::ProtoContext* ctx,
+                                                      const proto::ProtoObject*,
+                                                      const proto::ProtoObject* const*, int) {
+    const std::time_t now = std::time(nullptr);
+    std::tm tmv{};
+    localtime_r(&now, &tmv);
+    const long long fields[7] = { tmv.tm_year + 1900LL, tmv.tm_mon + 1LL, tmv.tm_mday,
+                                  tmv.tm_hour, tmv.tm_min, tmv.tm_sec, tmv.tm_wday + 1LL };
+    const proto::ProtoList* data = ctx->newList();
+    TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
+    for (long long f : fields) {
+        data = data->appendLast(ctx, ctx->fromLong(f));
+        pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
+    }
+    return makeArrayFromList(rt, ctx, data);
+}
+
+// __entropySeed → a seed in [1, 2^31 - 2] from the system's entropy source.
+const proto::ProtoObject* prim_Object_entropySeed(STRuntime&, proto::ProtoContext* ctx,
+                                                  const proto::ProtoObject*,
+                                                  const proto::ProtoObject* const*, int) {
+    std::random_device rd;
+    const unsigned long long v = (static_cast<unsigned long long>(rd()) << 32) ^ rd();
+    return ctx->fromLong(static_cast<long long>(v % 2147483646ULL) + 1);
+}
+
+// __versionString → the runtime's version, e.g. 'protoST 0.4.0'.
+const proto::ProtoObject* prim_Object_versionString(STRuntime&, proto::ProtoContext* ctx,
+                                                    const proto::ProtoObject*,
+                                                    const proto::ProtoObject* const*, int) {
+    return ctx->fromUTF8String(versionString());
+}
+
 // recv isClassObject → true when the receiver is a class (it owns the
 // `__class_name__` stamp) rather than an instance of one. Printing uses it
 // to show a class by name even when the class defines instance-side
@@ -1288,6 +1492,18 @@ void installObjectPrimitives(STRuntime& rt) {
     bindPrimitive(rt, b.objectProto, "__globalAt:put:", reg.registerPrim(prim_Object_globalAtPut));
     bindPrimitive(rt, b.objectProto, "name", reg.registerPrim(prim_Object_name));
     bindPrimitive(rt, b.objectProto, "isClassObject", reg.registerPrim(prim_Object_isClassObject));
+    bindPrimitive(rt, b.objectProto, "instVarNamed:", reg.registerPrim(prim_Object_instVarNamed));
+    bindPrimitive(rt, b.objectProto, "instVarNamed:put:", reg.registerPrim(prim_Object_instVarNamedPut));
+    bindPrimitive(rt, b.objectProto, "__setInstVarNames:", reg.registerPrim(prim_Object_setInstVarNames));
+    bindPrimitive(rt, b.objectProto, "__instVarNamesString", reg.registerPrim(prim_Object_instVarNamesString));
+    bindPrimitive(rt, b.objectProto, "canUnderstand:", reg.registerPrim(prim_Object_canUnderstand));
+    bindPrimitive(rt, b.objectProto, "selectors", reg.registerPrim(prim_Object_selectors));
+    bindPrimitive(rt, b.objectProto, "__allClasses", reg.registerPrim(prim_Object_allClasses));
+    bindPrimitive(rt, b.objectProto, "__clockMilliseconds", reg.registerPrim(prim_Object_clockMilliseconds));
+    bindPrimitive(rt, b.objectProto, "__clockMicroseconds", reg.registerPrim(prim_Object_clockMicroseconds));
+    bindPrimitive(rt, b.objectProto, "__localTimeFields", reg.registerPrim(prim_Object_localTimeFields));
+    bindPrimitive(rt, b.objectProto, "__entropySeed", reg.registerPrim(prim_Object_entropySeed));
+    bindPrimitive(rt, b.objectProto, "__versionString", reg.registerPrim(prim_Object_versionString));
     bindPrimitive(rt, b.objectProto, "perform:withArguments:",
                   reg.registerPrim(prim_Object_performWithArguments));
     bindPrimitive(rt, b.objectProto, "respondsTo:", reg.registerPrim(prim_Object_respondsTo));

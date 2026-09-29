@@ -9,4 +9,6 @@ stream.st
 point.st
 future.st
 system.st
+reflection.st
+time.st
 printing.st

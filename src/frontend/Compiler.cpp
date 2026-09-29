@@ -484,6 +484,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             auto selIdx = m.internSymbol(selector);
             m.emitWide(Op::SEND_KEYWORD,
                        static_cast<unsigned int>(selIdx), currentLine_);
+            emitSetInstVarNames(m, n);
             // D19 (2026-06-13): install class-var initial values on the new
             // class. Class is on the stack as the SEND's result; the primitive
             // walks the packed name string, sets `_iv_<name>` = nil for each,
@@ -530,6 +531,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             m.emitWide(Op::PUSH_CONST,   static_cast<unsigned int>(nameStrIdx), currentLine_);
             m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(setNameIdx), currentLine_);
         }
+        emitSetInstVarNames(m, n);
         // D19 (2026-06-13): install class-var initial values (nil) on the
         // freshly-created class. Mirrors the mixin branch above.
         {
@@ -1359,6 +1361,22 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
 // block parameter, instance or class variable is a compile error, as in Pharo;
 // declaring it implicitly let a typo (`cuont := count + 1`) leave the real
 // variable unchanged. Top-level scripts keep implicit globals.
+// Record a class declaration's instance-variable names on the class object on
+// top of the stack (reflection: instVarNames, instVarAt:, deepCopy).
+void Compiler::emitSetInstVarNames(BytecodeModule& m, const Node& classDecl) {
+    const size_t ivCount = static_cast<size_t>(classDecl.intValue);
+    if (ivCount == 0) return;
+    std::string names;
+    for (size_t i = 0; i < ivCount && 1 + i < classDecl.stringList.size(); ++i) {
+        if (i > 0) names += ' ';
+        names += classDecl.stringList[1 + i];
+    }
+    auto namesIdx = m.addString(names);
+    auto selIdx   = m.internSymbol("__setInstVarNames:");
+    m.emitWide(Op::PUSH_CONST,   static_cast<unsigned int>(namesIdx), currentLine_);
+    m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(selIdx), currentLine_);
+}
+
 bool Compiler::reportArgumentAssignment(const std::string& name) {
     bool isArgument = false;
     if (!inlinedLoopArgs_.empty() && inlinedLoopArgs_.back() == name) {

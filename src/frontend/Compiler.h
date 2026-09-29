@@ -86,6 +86,7 @@ private:
     // argument (including an inlined to:do: loop variable). Returns true when
     // an error was reported.
     bool reportArgumentAssignment(const std::string& name);
+    void emitSetInstVarNames(BytecodeModule& m, const ast::Node& classDecl);
     // Loop variables of the to:do: loops being inlined, innermost last.
     std::vector<std::string> inlinedLoopArgs_;
     std::deque<Scope> scopes_;
