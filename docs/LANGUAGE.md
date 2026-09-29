@@ -2010,102 +2010,31 @@ The CLI always constructs exactly one.
 
 ## 14. Known deviations
 
-This section summarises every place where the current implementation does not
-match the behaviour described in the main text, **split into deviations that
-are deliberate and deviations that are not**.
+Where protoST differs from Smalltalk-80 (and from Pharo, the dialect most
+readers know), on purpose or not yet implemented. The catalogue for a
+Smalltalk programmer, with what to write instead, is
+[Tutorial chapter 14](tutorial/14-for-the-smalltalk-programmer.md#144-deviations-from-smalltalk-80);
+[`docs/STATUS.md`](STATUS.md) is the live tracker with repros, ids and fixing
+commits. Summary as of 0.4.0:
 
-> **`docs/STATUS.md` is the live tracker.** This section is a stable summary;
-> the *current* state of each item — still open, fixed, with repro and
-> severity, and the fixing commit when closed — lives in `docs/STATUS.md`.
-> When in doubt about whether an item below is still true, consult
-> `docs/STATUS.md`, which is verified against the build and updated with every
-> change. The conformance suite is expected to have tests that fail on the
-> open deviations — that is intentional; the failures surface the bugs.
+- **Deliberate:** programs are files, not an image; a blank line ends a
+  method body (D33); a script shows the value of its last statement (D12,
+  D12b); strings are immutable (D34); short symbols are represented as the
+  equal strings (D35); a few printed forms differ (D36); an actor that waits
+  is not re-entrant (D37); recursion depth is bounded with a catchable error
+  (D38); one runtime per process (D2); `addBehavior:` reaches future
+  instances only (D21); `outer` is an alias of `pass` (D7).
+- **Not implemented:** `thisContext` is reserved but inert (D17); the
+  metaclass hierarchy is thin (`x class class` works; there is no
+  `Metaclass`/`ClassDescription` protocol beyond the reflective messages of
+  §14 of the tutorial).
+- **Open bugs:** S19 (an intermittent hang under concurrent first calls) and
+  S3 (see `STATUS.md`).
 
-The id scheme (`D1..D18`) is shared with `docs/STATUS.md`. Items D6, D11, D19
-and D20 are described in `docs/STATUS.md`: D6 is now closed (not reproducible),
-D11 (`Float` / mixed-mode arithmetic) and D20 (`LargeInteger` arithmetic and
-overflow promotion) are now closed (the numeric tower — see §12.2), and D19
-is now narrower than "not implemented" — class variables ARE honoured; only
-mutation from instance-side methods is prohibited (a compile-time error).
-
-### 14.1 Intentional deviations
-
-These are deliberate design decisions. protoST diverges from standard
-Smalltalk here *on purpose*; they are not bugs and they stay, documented with
-their rationale. See `docs/STATUS.md` § *Intentional deviations* for the
-canonical list.
-
-- **D2 — single `STRuntime` per process.** A second `STRuntime` corrupts
-  symbol interning, because protoCore's symbol caches are per-`ProtoSpace`
-  C++ statics. protoST adopts "one runtime per process" as its operating
-  contract rather than working around it; the CLI always constructs exactly
-  one. *Affects:* [§13.2](#132-single-runtime-per-process).
-- **D4 — `new` does not auto-invoke `initialize`.** `ClassName new` returns a
-  raw instance; the caller sends `initialize` explicitly. This is a deliberate
-  MVP semantics choice — `new` is the raw allocator. Standard Smalltalk-80
-  defines `new` as `super new initialize`; protoST may align later.
-  *Affects:* [§4.4](#44-creating-instances).
-- **D7 — `outer` is an alias of `pass`.** An MVP simplification of the handler
-  protocol. Strict `outer` semantics (run the enclosing handler, then return
-  to the inner one) require resumable handler re-entry that is not built;
-  `pass` is the shipped behaviour. *Affects:* [§8.4](#84-handler-actions).
-- **D12 — no `main:` auto-invocation.** A script is simply its top-level forms
-  run in order; the printed value is the last top-level statement. protoST
-  scripts deliberately have no distinguished entry point.
-  *Affects:* [§13](#13-the-cli).
-
-### 14.2 Known bugs and not-yet-implemented features
-
-These deviations are *not* deliberate: either something is broken (a bug) or a
-planned feature is simply absent (not yet implemented). `docs/STATUS.md` is the
-authoritative tracker — it carries the repro, severity, owning roadmap track,
-and (once fixed) the closing commit for each.
-
-**Bugs** — broken behaviour that contradicts the language's own intent or
-examples:
-
-> _No open bugs are currently tracked (see `docs/STATUS.md`)._
-
-> **Fixed (commit `2544a45`).** D1 (negative numeric literals), D13 (the CLI no
-> longer advertises an unimplemented `compile` subcommand), D15
-> (`classVariableNames:` was emitting a compile-time diagnostic instead of
-> being silently discarded — superseded 2026-06-13 when D19 closed and the
-> clause is now honoured), D16 (nested literal arrays parse) and D18
-> (`==`/`~~` bound on `Object`; `=`/`~=` universal with value-equality
-> overrides) are resolved — see `docs/STATUS.md` *Closed items*.
-
-> **Fixed (commit `c964f4e`).** D3 (an unresolved selector signals a catchable
-> `MessageNotUnderstood`, a subclass of `Error`), D5 (class-side methods are
-> isolated from instances — a `ClassName class >> sel` method is no longer
-> reachable from an instance) and D8 (a `^` in a block whose home method has
-> already returned signals a catchable `BlockCannotReturn`, a subclass of
-> `Error`) are resolved — see `docs/STATUS.md` *Closed items*.
-
-> **Fixed (commit `42c4dde`).** D11 (`Float` and mixed-mode arithmetic) and D20
-> (`LargeInteger` arithmetic with transparent overflow promotion) are resolved
-> — the numeric tower now works (see §12.2). The arithmetic primitives delegate
-> to protoCore's own promoting / coercing `ProtoObject` arithmetic and are
-> bound on the shared `Number` prototype — see `docs/STATUS.md` *Closed items*.
-
-**Not yet implemented** — planned features absent today (owning roadmap track
-noted in `docs/STATUS.md`):
-
-- **D10 — no `Transcript`.** The standard output-stream object is not
-  provided; use `printNl`. *Affects:* [§12.9](#129-import).
-- **D17 — `thisContext` is reserved but inert.** It parses to its own node but
-  the reflective context protocol is not built.
-  *Affects:* [§3.10](#310-thiscontext).
-- **D19 — class-variable mutation from instance-side methods is prohibited.**
-  Class variables are honoured: the `classVariableNames:` clause installs
-  each name on the class object (mangled `_iv_<name>`, the same key shape
-  inst vars use), so reads from any instance — including instances of
-  subclasses — find the shared value via the prototype-chain attribute
-  walk. The remaining deviation from Smalltalk-80 is that an instance-side
-  assignment to a class var is a compile-time error: in protoST it would
-  silently target `self` and create a per-instance shadow rather than
-  update the shared storage. Mutation must happen in a class-side method.
-  *Affects:* [§3.2](#32-class-declarations).
+Closed before 0.4.0 and now as in Smalltalk-80: `new` sends `initialize`
+(D4), `Transcript` (D10), class variables assigned from instance methods (D19),
+per-activation block variables (D30), `Character`, exact `Fraction` division,
+`doesNotUnderstand:` overrides.
 
 ---
 
