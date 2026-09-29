@@ -86,14 +86,15 @@ Controller >> cycles ^ cycles.
 
 "-- MAIN PROGRAM --"
 
-pump := Pump newChild. pump initialize. pump start.
+"new sends initialize to each new object."
+pump := Pump new. pump start.
 
-temp := TempSensor newChild. temp initialize.
-flow := FlowSensor newChild. flow initialize.
-vib  := VibSensor newChild.  vib initialize.
+temp := TempSensor new.
+flow := FlowSensor new.
+vib  := VibSensor new.
 
 "Wrap each sensor as an actor — Controller can dispatch concurrently"
-ctrl := Controller newChild.
+ctrl := Controller new.
 ctrl initWith: pump temp: temp asActor flow: flow asActor vib: vib asActor.
 
 "Run 3 cycles. Sensors run on different workers in parallel."

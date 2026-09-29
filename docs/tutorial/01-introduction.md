@@ -6,26 +6,27 @@
 
 ## 1.1 What protoST is
 
-protoST is an **actor-native Smalltalk runtime**. Three things in that phrase
+protoST is a **Smalltalk-syntax, actor-native runtime built on protoCore**. It
+is a demonstrator of that kernel and a base for digital twins. It is not a
+Smalltalk-80 implementation, and it does not replace an image environment:
+there is no image, no browser, no IDE. Three things in that description
 matter, and they are worth unpacking before you write a line of code.
 
-**Smalltalk.** protoST is a dialect of Smalltalk-80 — the language that
-invented the term "object-oriented" in the form most people now mean it. If
-you have never seen Smalltalk, the short version is: it is the most consistent
-object-oriented language ever designed. Everything — and *everything* really
-means everything: the integer `3`, the boolean `true`, a block of code, a
-class itself — is an object, and the only thing you ever do to an object is
-**send it a message**. There is no second mechanism. No operators that are not
-messages, no control-flow keywords that are not messages, no functions that
-live outside objects. One idea, applied without exception.
+**Smalltalk syntax.** protoST reads and runs Smalltalk-80 code: the same
+messages, blocks, classes and exceptions. If you have never seen Smalltalk,
+the short version is: everything — the integer `3`, the boolean `true`, a
+block of code, a class itself — is an object, and the only thing you ever do
+to an object is **send it a message**. There is no second mechanism. No
+operators that are not messages, no control-flow keywords that are not
+messages, no functions that live outside objects.
 
 **Runtime.** protoST is built on **protoCore**, a prototype-based object
-kernel written in C++. protoCore also hosts protoJS (a JavaScript runtime) and
-protoPython (a Python 3.14 runtime). The same 64-byte memory cell, the same
-garbage collector, the same immutable structural-sharing collections, the same
-GIL-free threading underlie all three. protoST is the demonstration that one
-kernel can host a *third* paradigm — message passing — without flattening it
-into the others.
+kernel written in C++. protoCore also hosts other language runtimes
+(protoPython, protoJS, protoScala, protoClojure among them). The same 64-byte
+memory cell, the same garbage collector, the same immutable
+structural-sharing collections and the same native threads without a global
+lock underlie all of them. protoST shows that the kernel can host a
+message-passing object language.
 
 **Actor-native.** This is protoST's distinctive contribution and the part that
 is *not* standard Smalltalk. Any object can be promoted to an **actor** with a
@@ -76,10 +77,14 @@ where protoST *adds* to or *departs from* the dialect:
   via `uses:`, and runtime behaviour composition via `addBehavior:`.
 - **The module/venv system** (Chapter 9, Chapter 12) — file-based modules,
   `Import from:`, Python-style virtual environments.
-- **The intentional deviations** — no image, no metaclass tower, `new` does
-  not auto-send `initialize`, no `Transcript`, no `Character` class, integer
-  `/` is truncating. [Chapter 14](14-for-the-smalltalk-programmer.md) is a
-  precise catalogue.
+- **The deviations** — programs are files, not an image; a blank line ends a
+  method body; strings are immutable; short symbols are represented as
+  strings; an actor that waits handles no other message.
+  [Chapter 14](14-for-the-smalltalk-programmer.md) is the precise catalogue,
+  with what to write instead. What you expect from Pharo is there: `new`
+  sends `initialize`, `Transcript`, `Character`, exact `Fraction` division,
+  class variables and class-instance variables, `doesNotUnderstand:`
+  overrides.
 
 Chapter 14 is written for you specifically. Read the others lightly; read that
 one carefully.
@@ -96,7 +101,9 @@ cmake --build build -j
 ```
 
 This produces the runtime executable `build/protost`. The rest of the tutorial
-assumes you run it as `./build/protost` from the project root.
+assumes you run it as `./build/protost` from the project root. To install a
+package instead of building, and for the protoCore version protoST needs, see
+[`docs/INSTALLATION.md`](../INSTALLATION.md).
 
 ## 1.4 Running protoST code
 
@@ -137,8 +144,15 @@ $ ./build/protost -e '3 + 4 * 2'
 (Why `14` and not `11`? Because protoST has no operator precedence — see
 [Chapter 2](02-objects-and-messages.md). Read on.)
 
-`-e` is for *one expression*. It does **not** accept a `| temps |` declaration,
-and multi-statement programs that need local variables belong in a file or the
+`-e` also accepts several statements separated by periods, including a
+leading `| temps |` declaration, and prints the value of the last one:
+
+```bash
+$ ./build/protost -e '| a | a := 3. a + 1'
+4
+```
+
+Anything longer, and anything that defines methods, belongs in a file or the
 REPL.
 
 ### The interactive REPL
@@ -147,7 +161,7 @@ REPL.
 
 ```bash
 $ ./build/protost -i
-protoST 0.1.0-pre — interactive REPL
+protoST 0.4.0 — interactive REPL
 :help for commands, :quit or Ctrl-D to exit
 protoST> 3 + 4
 => 7
@@ -186,7 +200,6 @@ Counter >> value
   ^ value.
 
 c := Counter new.
-c initialize.
 c increment.
 c increment.
 c value.
@@ -200,8 +213,10 @@ $ ./build/protost counter.st
 Even without knowing the details yet, you can read most of it. `Object
 subclass: #Counter …` makes a new class. `Counter >> increment …` defines a
 method. `c := Counter new` makes an instance. `c increment` sends it a
-message. `^ value` returns a result. The `"…"` text is a comment (double
-quotes — single quotes are strings). Everything after this point is teaching
+message (`new` also sends `initialize`, so the count starts at 0). `^ value`
+returns a result. The `"…"` text is a comment (double quotes — single quotes
+are strings). The blank lines matter: in a file, a blank line ends a method
+body. Everything after this point is teaching
 you to read and write that fluently.
 
 Notice one thing already, because it trips up newcomers from every other

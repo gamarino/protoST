@@ -20,6 +20,7 @@ Collection                  "abstract — defines the iteration protocol"
   SequenceableCollection     "abstract — ordered, integer-indexed"
     Array                    "fixed-size, indexed"
     OrderedCollection        "growable, indexed"
+      SortedCollection       "kept sorted by a sort block"
     Interval                 "a lazy arithmetic sequence"
   HashedCollection           "abstract"
     Set                      "deduplicating"
@@ -52,7 +53,7 @@ $ ./build/protost -e '#(10 20 30) at: 2'
 ```
 
 `at: 2` is the *second* element. An index of `0`, or one past the end, signals
-a catchable `Error`.
+a catchable `SubscriptOutOfBounds` error.
 
 > **In Python/JS** indexing is 0-based: `arr[0]` is the first element. **In
 > protoST** — as in classic Smalltalk, Lua, and mathematics — it is 1-based:
@@ -68,7 +69,7 @@ from class-side constructors:
 | Constructor | Result |
 |-------------|--------|
 | `Array new: n` | an `Array` of `n` `nil`s |
-| `Array with: a with: b …` | an `Array` of the given elements (up to four `with:`) |
+| `Array with: a with: b …` | an `Array` of the given elements |
 | `Array withAll: aCollection` | an `Array` copying another collection |
 
 ```bash
@@ -109,15 +110,14 @@ oc removeFirst.
 
 ```bash
 $ ./build/protost ordered.st
-an Array
+#(2 2 3)
 ```
 
 The script builds an `OrderedCollection`, appends three elements with a
 *cascade* (`add: 1; add: 2; add: 3` — three messages to the same receiver, see
 [Chapter 2](02-objects-and-messages.md)), removes the first, then evaluates a
-dynamic array of three facts about it. The printed `an Array` is that dynamic
-array's *class* — printing a collection shows its class name, not its contents
-(§8.9 shows how to see the contents).
+dynamic array of three facts about it: the size `2`, the first element `2`
+and the last element `3`. Printing a collection shows its elements (§8.9).
 
 The key `OrderedCollection` protocol:
 
@@ -127,7 +127,7 @@ The key `OrderedCollection` protocol:
 | `addFirst:` | prepend an element |
 | `addAll:` | append every element of another collection |
 | `removeFirst` / `removeLast` | remove and return an end element |
-| `remove:` | remove a matching element (`Error` if absent) |
+| `remove:` | remove a matching element (`NotFound` if absent) |
 | `remove:ifAbsent:` | remove, with a fallback block if absent |
 | `at:` / `at:put:` / `first` / `last` / `size` | as you would expect |
 
@@ -169,7 +169,7 @@ b add: 7.
 
 ```bash
 $ ./build/protost bag.st
-an Array
+#(3 2)
 ```
 
 Here `b size` is `3` (a `Bag` counts every occurrence) and `b occurrencesOf: 5`
@@ -194,7 +194,7 @@ d at: #two put: 2.
 
 ```bash
 $ ./build/protost dict.st
-an Array
+#(1 true 0)
 ```
 
 The three facts in the dynamic array are `1`, `true`, and `0`. The key
@@ -203,7 +203,7 @@ The three facts in the dynamic array are `1`, `true`, and `0`. The key
 | Message | Effect |
 |---------|--------|
 | `at:put:` | store a key/value |
-| `at:` | the value for a key — an *absent* key signals an `Error` |
+| `at:` | the value for a key — an *absent* key signals `KeyNotFound` |
 | `at:ifAbsent:` | the value, or the fallback block's value if absent |
 | `at:ifAbsentPut:` | the value, computing *and storing* the fallback if absent |
 | `removeKey:` / `removeKey:ifAbsent:` | remove a key |
@@ -213,10 +213,14 @@ The three facts in the dynamic array are `1`, `true`, and `0`. The key
 
 > **The absent-key trap.** In Python `d[k]` raises `KeyError` for a missing
 > key, and `d.get(k, default)` is the safe form. **In protoST** `d at: k`
-> likewise signals an `Error` for a missing key, and `d at: k ifAbsent:
+> likewise signals `KeyNotFound` for a missing key, and `d at: k ifAbsent:
 > [ default ]` is the safe form — the fallback is a *block*, evaluated only
 > when the key is absent. `at:ifAbsentPut:` is the "compute-once cache" idiom:
 > it stores the fallback so the next lookup finds it.
+
+A `Set` or a `Dictionary` visits its elements in an order that depends on
+their hashes, not on the order you added them; use an `OrderedCollection` when
+the order matters.
 
 An `Association` — a single key/value pair — is built with the `->` operator
 and answers `key` and `value`:
@@ -279,12 +283,11 @@ foundation; everything below could be built from it.
 element:
 
 ```bash
-$ ./build/protost -e '(#(1 2 3 4) collect: [ :e | e * e ]) size'
-4
+$ ./build/protost -e '#(1 2 3 4) collect: [ :e | e * e ]'
+#(1 4 9 16)
 ```
 
-`#(1 2 3 4) collect: [ :e | e * e ]` produces an array of the squares,
-`1 4 9 16`.
+`#(1 2 3 4) collect: [ :e | e * e ]` produces an array of the squares.
 
 > **In Python** `collect:` is `[e*e for e in xs]` or `map(...)`. **In
 > JavaScript** it is `xs.map(e => e*e)`. **In protoST** it is `xs collect:
@@ -297,12 +300,11 @@ $ ./build/protost -e '(#(1 2 3 4) collect: [ :e | e * e ]) size'
 those for which it answers `false`:
 
 ```bash
-$ ./build/protost -e '(#(1 2 3 4 5 6) select: [ :e | e isEven ]) size'
-3
+$ ./build/protost -e '#(1 2 3 4 5 6) select: [ :e | e isEven ]'
+#(2 4 6)
 ```
 
-The even elements `2 4 6` are kept — `size` is `3`. `reject:` of the same block
-would keep `1 3 5`.
+The even elements are kept. `reject:` of the same block would keep `1 3 5`.
 
 > **In Python** `select:` is `[e for e in xs if cond]` or `filter(...)`. **In
 > JavaScript** it is `xs.filter(...)`. `reject:` is the negation — Python and
@@ -313,7 +315,8 @@ would keep `1 3 5`.
 
 `detect:` answers the *first* element satisfying the block. If none matches it
 signals an `Error` — unless you use `detect:ifNone:`, which evaluates a fallback
-block instead:
+block instead. ("First" means first in iteration order, which for a `Set` or
+`Dictionary` is unspecified.)
 
 ```bash
 $ ./build/protost -e '(#(3 1 4 1 5 9) detect: [ :e | e > 3 ])'
@@ -371,19 +374,45 @@ $ ./build/protost -e '(#(1 2 3) , #(4 5)) size'
 5
 ```
 
+### More everyday protocol
+
+| Message | Answers |
+|---------|---------|
+| `sum`, `sum: aBlock`, `max`, `detectMax: aBlock` | totals and extremes |
+| `groupedBy: aBlock` | a `Dictionary` from each block value to the elements that gave it |
+| `asSortedCollection`, `asSortedCollection: sortBlock` | a `SortedCollection` |
+| `sort`, `sort: sortBlock` | sorts the receiver in place |
+
+```bash
+$ ./build/protost -e '#(3 1 4 1 5) asSortedCollection asArray'
+#(1 1 3 4 5)
+$ ./build/protost -e '#(3 1 4) sum'
+8
+```
+
 ### Species — what `collect:` gives back
 
 `collect:`, `select:`, and `reject:` answer a collection of the receiver's own
 *species*: an `Array` from an `Array`, an `OrderedCollection` from an
 `OrderedCollection`, a `Set` from a `Set`. The transformation does not change
-the *kind* of collection — only its contents.
+the *kind* of collection — only its contents. `collect:` and `select:` on a
+`Dictionary` answer a `Dictionary` with the same keys.
 
 ## 8.9 Inspecting a collection's contents
 
-You will have noticed that printing a collection — directly, or via
-`printString` — shows its *class* (`an Array`, `an OrderedCollection`), not its
-elements. To see the contents, build a string yourself, or iterate. A compact
-idiom is to fold the elements into a string:
+Printing a collection shows its elements, in the Smalltalk form: an `Array`
+prints as a literal array, other collections as their class followed by the
+elements.
+
+```bash
+$ ./build/protost -e '(OrderedCollection new add: 3; add: 4; yourself) printString'
+an OrderedCollection(3 4)
+$ ./build/protost -e '(1 to: 3) printString'
+(1 to: 3)
+```
+
+For a format of your own, build a string — for example by folding the
+elements:
 
 ```smalltalk
 "-- show.st --"
@@ -397,12 +426,13 @@ $ ./build/protost show.st
 3 1 4 1 5 
 ```
 
-`inject:into:` with an empty-string seed and a block that appends each element's
-`printString` gives you a readable rendering. The same pattern, with a class
-overriding `printString`, is how you make your own objects print informatively
+`inject:into:` with an empty-string seed and a block that appends each
+element's `printString` gives you a rendering of your own. (`String new
+writeStream` and `do:separatedBy:` are the other usual tools.) A class makes
+its own instances print informatively by overriding `printOn:`
 ([Chapter 5](05-classes-and-methods.md)).
 
-## 8.10 A worked example — word frequencies
+## 8.10 A worked example — readings above a threshold
 
 Putting the protocol together. Count how many numbers in a list exceed a
 threshold, two ways:
@@ -423,7 +453,7 @@ highByFold := readings inject: 0 into: [ :acc :r |
 
 ```bash
 $ ./build/protost threshold.st
-an Array
+#(4 4)
 ```
 
 Both paths compute `4` (the readings `47 91 60 77` exceed `40`). The first
@@ -443,10 +473,10 @@ conditionally. Two ways to the same answer — and a good illustration that
   (find), `inject:into:` (fold), `count:` / `anySatisfy:` / `allSatisfy:`
   (predicates). Each takes a block.
 - `collect:` / `select:` / `reject:` preserve the receiver's species.
-- A `Dictionary` lookup of an absent key signals an `Error`; `at:ifAbsent:`
-  (and `at:ifAbsentPut:`) is the safe form.
-- Printing a collection shows its class; fold with `inject:into:` to render its
-  contents.
+- A `Dictionary` lookup of an absent key signals `KeyNotFound`;
+  `at:ifAbsent:` (and `at:ifAbsentPut:`) is the safe form.
+- Printing a collection shows its elements (`#(1 2)`,
+  `an OrderedCollection(1 2)`).
 
 ---
 

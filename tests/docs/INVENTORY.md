@@ -1,5 +1,10 @@
 # Documentation example inventory — 2026-09-29
 
+> **Status (later on 2026-09-29):** every failure listed below has been fixed
+> in the documents, and every document the CTest `docs/` cases run passes
+> with the 0.4.0 binary (`README.md`, which was not edited in that pass, passed
+> as it stood). This file is kept as the record of what was found.
+
 This file lists every documentation example that `tests/docs/run_doc_snippets.py`
 found failing. A failing example is one that did not run, or did not print the
 result the document states for it. The prose is not changed here; this is the

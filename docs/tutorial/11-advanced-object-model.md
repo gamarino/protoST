@@ -77,18 +77,13 @@ b := Money new setCents: 300.
 
 ```bash
 $ ./build/protost mixin.st
-a Boolean and a Boolean
+true and false
 ```
 
 `Money` defines only `compareTo:`. It *inherits* `>` and `<` from the
 `Comparable` mixin — and those inherited methods call back into `Money`'s
 `compareTo:`. `a > b` answers `true` (500 cents exceeds 300); `a < b` answers
 `false`.
-
-(A note on the output: printing a boolean shows `a Boolean` rather than
-`true`/`false` on the current build. The booleans *are* correct — `a > b` is
-genuinely the boolean `true`. When you need a textual `'true'`/`'false'`, drive
-a conditional: `(a > b) ifTrue: [ 'true' ] ifFalse: [ 'false' ]`.)
 
 > **In Python** this is multiple inheritance: `class Money(Comparable):` — or,
 > for true mixin style, `class Money(Comparable, Printable):`. **In
@@ -115,14 +110,15 @@ wrote them". But it is deterministic, which is what you want.
 ### Mixin instance variables — use accessors
 
 A mixin may declare its own instance variables, and they combine with the using
-class's own. There is a practical caveat on the current build, and it is worth
-stating plainly:
+class's own. There is a practical limit in 0.4.0, and it is worth stating
+plainly:
 
-> A mixin's instance variable is reliably reached **through an accessor
-> method**, not by writing the bare variable name inside a method of the
-> *using* class. A `Doc` that `uses: { Tagged }`, where `Tagged` declares a
-> `tag` variable, should read it as `self tag` (an accessor `Tagged` provides),
-> not as a bare `tag`.
+> A method written on the *using* class cannot name a mixin's instance
+> variable. A `Doc` that `uses: { Tagged }`, where `Tagged` declares a `tag`
+> variable, cannot write a bare `tag` in `Doc >> describe`: the compiler
+> reports `undeclared variable 'tag' in Doc`. (An instance variable inherited
+> from the primary superclass *can* be named this way.) Read it as `self tag`,
+> through an accessor `Tagged` provides.
 
 So write your mixins to expose their state through accessor methods — which is
 good mixin discipline anyway — and the using class's methods reach that state
@@ -161,7 +157,7 @@ Q3 Report [urgent]
 ```
 
 `Doc>>describe` reads its *own* variable `title` directly, but reaches the
-mixin's `tag` through the accessor `self tag`. That is the robust pattern.
+mixin's `tag` through the accessor `self tag`.
 
 ## 11.3 Runtime composition: `addBehavior:`
 
@@ -186,7 +182,7 @@ Logging >> log: aMessage
 "Compose the Logging behaviour into Service — at runtime."
 Service addBehavior: Logging.
 
-s := Service newChild.
+s := Service new.
 s name , ' / ' , (s log: 'started').
 ```
 
@@ -235,9 +231,9 @@ Object subclass: #Bonus
 Bonus >> bonus
   ^ 'bonus granted'.
 
-earlyInstance := Thing newChild.        "created BEFORE addBehavior:"
+earlyInstance := Thing new.        "created BEFORE addBehavior:"
 Thing addBehavior: Bonus.
-lateInstance := Thing newChild.         "created AFTER addBehavior:"
+lateInstance := Thing new.         "created AFTER addBehavior:"
 
 earlyResult := [ earlyInstance bonus ]
   on: Error
@@ -296,9 +292,8 @@ case — and it is what most vividly shows off the prototype kernel.
 - Method resolution across parents is depth-first, left-to-right: primary
   superclass subtree first, then each `uses:` mixin in listed order; the
   diamond case resolves to the first match.
-- Reach a **mixin's instance variables through accessor methods** (`self tag`),
-  not by bare name in the using class — the robust pattern on the current
-  build.
+- Reach a **mixin's instance variables through accessor methods** (`self tag`):
+  a method of the using class cannot name them directly.
 - **`addBehavior:`** composes a mixin into a class **at runtime**, with no
   recompilation. It affects the class and all instances created *afterwards* —
   intentional deviation D21 — so call it during setup. There is no
