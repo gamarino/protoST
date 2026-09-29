@@ -193,7 +193,7 @@ for i in $(seq 1 "$LAUNCHES"); do
         # gdb is the parent from the start, so the stack is certain to be taken.
         backtrace_run "$(echo "$HANG_S + $CONFIRM_S" | bc)" "$log" &
     else
-        PROTOST_WORKERS=$ACTORS "$PROTOST" "$SCRIPT" > "$log" 2>&1 &
+        PROTOST_ALLOW_PTRACE=1 PROTOST_WORKERS=$ACTORS "$PROTOST" "$SCRIPT" > "$log" 2>&1 &
     fi
     pid=$!
 
@@ -212,7 +212,19 @@ for i in $(seq 1 "$LAUNCHES"); do
             snapshot "$(inferior_pid "$pid")" \
                 "$OUT/evidence/hang_${i}_proc.txt" "at ${el}s"
             cp "$log" "$OUT/evidence/hang_${i}_stdout.txt"
+            attached=0
             if [ -z "$GDB_ALWAYS" ]; then
+                # The bare launch set PROTOST_ALLOW_PTRACE=1, so gdb can attach to
+                # the very process that hung (ptrace_scope=1 otherwise refuses a
+                # non-ancestor tracer).
+                timeout 60 gdb -q -batch -p "$pid" -ex "set pagination off" \
+                    -ex "info threads" -ex "thread apply all bt 40" \
+                    > "$OUT/evidence/hang_${i}_attach.txt" 2>&1
+                grep -q "^Thread " "$OUT/evidence/hang_${i}_attach.txt" && attached=1
+                [ "$attached" -eq 1 ] && reproduced=$((reproduced+1)) && \
+                    echo "launch $i: attached; backtrace in hang_${i}_attach.txt" >&2
+            fi
+            if [ -z "$GDB_ALWAYS" ] && [ "$attached" -eq 0 ]; then
                 # The bare launch carried no debugger, so re-attempt once under gdb.
                 # For an intermittent fault this may not reproduce; say which.
                 echo "launch $i: re-attempting under gdb for a backtrace" >&2
