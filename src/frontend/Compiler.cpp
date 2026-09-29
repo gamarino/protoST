@@ -12,9 +12,12 @@ namespace {
 // superclass's declared in this module, root first. A subclass method reads and
 // writes an inherited instance variable like its own (they share the object's
 // `_iv_<name>` attribute).
+// The instance variables a method of `className` sees, inherited ones first:
+// the instance side's, or for a class-side method the class-instance
+// variables.
 static std::vector<std::string> instVarsThroughChain(
         const std::unordered_map<std::string, Compiler::ClassInfo>& classes,
-        const std::string& className) {
+        const std::string& className, bool classSide = false) {
     std::vector<std::string> chain;
     std::unordered_set<std::string> seenClasses;
     std::vector<const Compiler::ClassInfo*> infos;
@@ -28,7 +31,7 @@ static std::vector<std::string> instVarsThroughChain(
     }
     std::unordered_set<std::string> seenNames;
     for (auto i = infos.rbegin(); i != infos.rend(); ++i)
-        for (const auto& iv : (*i)->instVarNames)
+        for (const auto& iv : classSide ? (*i)->classInstVarNames : (*i)->instVarNames)
             if (seenNames.insert(iv).second) chain.push_back(iv);
     return chain;
 }
@@ -192,7 +195,7 @@ void walkNode(const Node& n, ScopeWalker& cur,
             if (classes) {
                 auto cit = classes->find(n.text);
                 if (cit != classes->end()) {
-                    for (const auto& iv : instVarsThroughChain(*classes, n.text)) {
+                    for (const auto& iv : instVarsThroughChain(*classes, n.text, n.boolFlag)) {
                         ivarSet.insert(iv);
                     }
                     // Class vars are reached through the same `_iv_<name>`
@@ -241,7 +244,7 @@ void walkNode(const Node& n, ScopeWalker& cur,
             if (classes) {
                 auto cit = classes->find(n.text);
                 if (cit != classes->end()) {
-                    for (const auto& iv : instVarsThroughChain(*classes, n.text)) {
+                    for (const auto& iv : instVarsThroughChain(*classes, n.text, n.boolFlag)) {
                         ivarSet.insert(iv);
                     }
                     for (const auto& cv : cit->second.classVarNames) {
@@ -349,6 +352,28 @@ void Compiler::collectClasses(const Node& module) {
             info.classVarNames.push_back(cd.stringList[i]);
         }
         classes_[info.name] = std::move(info);
+    }
+    // Class-instance variables: `Name class instanceVariableNames: 'a b'.`
+    for (const auto& topPtr : module.children) {
+        if (!topPtr || topPtr->kind != NodeKind::KeywordSend
+            || topPtr->text != "instanceVariableNames:" || topPtr->children.size() != 2)
+            continue;
+        const Node& recv = *topPtr->children[0];
+        const Node& names = *topPtr->children[1];
+        if (recv.kind != NodeKind::UnarySend || recv.text != "class" || recv.children.empty()
+            || recv.children[0]->kind != NodeKind::Identifier || names.kind != NodeKind::StringLit)
+            continue;
+        auto it = classes_.find(recv.children[0]->text);
+        if (it == classes_.end()) continue;
+        std::string word;
+        for (char c : names.text + " ") {
+            if (std::isspace(static_cast<unsigned char>(c))) {
+                if (!word.empty()) it->second.classInstVarNames.push_back(word);
+                word.clear();
+            } else {
+                word += c;
+            }
+        }
     }
     // A subclass may not redeclare an instance variable it inherits (as in
     // Smalltalk): both would name the same slot of the object.
@@ -556,7 +581,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         {
             auto it = classes_.find(n.text);
             if (it != classes_.end()) {
-                currentInstVars_  = instVarsThroughChain(classes_, n.text);
+                currentInstVars_  = instVarsThroughChain(classes_, n.text, n.boolFlag);
                 currentClassVars_ = resolveClassVarsFor(n.text);
             } else {
                 currentInstVars_.clear();
@@ -707,7 +732,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         {
             auto it = classes_.find(n.text);
             if (it != classes_.end()) {
-                currentInstVars_  = instVarsThroughChain(classes_, n.text);
+                currentInstVars_  = instVarsThroughChain(classes_, n.text, n.boolFlag);
                 currentClassVars_ = resolveClassVarsFor(n.text);
             } else {
                 currentInstVars_.clear();
@@ -1008,11 +1033,15 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             }
             // F4-U5: instance variable of the current method's class.
             // Only consulted while emitting a method body (currentInstVars_
-            // is populated by the MethodDecl branch in emitStatement).
+            // is populated by the MethodDecl branch in emitStatement). A
+            // class-side method's instance variables are the class object's
+            // own slots: read own-only, so a subclass does not see its
+            // superclass's value.
             for (const auto& iv : currentInstVars_) {
                 if (iv == n.text) {
                     auto sym = m.internSymbol(n.text);
-                    m.emitWide(Op::PUSH_INSTVAR, static_cast<unsigned int>(sym), currentLine_);
+                    m.emitWide(currentMethodIsClassSide_ ? Op::PUSH_OWN_INSTVAR : Op::PUSH_INSTVAR,
+                               static_cast<unsigned int>(sym), currentLine_);
                     return;
                 }
             }

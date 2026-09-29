@@ -115,3 +115,11 @@ Object class >> new
 
 Object >> initialize
   ^ self.
+
+"--- class-instance variables -----------------------------------------------------
+ `Foo class instanceVariableNames: 'default'` declares slots of the class
+ object itself; the compiler reads the declaration, and at run time the
+ statement only has to be understood by the metaclass."
+
+Object >> instanceVariableNames: aString
+  ^ self.

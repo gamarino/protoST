@@ -106,6 +106,9 @@ enum class Op : uint8_t {
     // Class variables are shared by the declaring class, its subclasses and
     // all their instances, so a write from any of them updates that storage.
     STORE_CLASSVAR     = 41, // arg = constant pool symbol index (variable name)
+    // Reads a class-side instance variable: the mangled "_iv_<name>" slot of
+    // `self` (a class object) itself, nil when unset — never a superclass's.
+    PUSH_OWN_INSTVAR   = 42, // arg = constant pool symbol index (variable name)
     // Extend for >256-index args
     EXTEND          = 254,
     // Debugger primitive guard

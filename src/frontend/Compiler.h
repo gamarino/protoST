@@ -47,6 +47,10 @@ public:
         // from any instance. An assignment from either side writes the
         // declaring class's slot (STORE_CLASSVAR).
         std::vector<std::string> classVarNames; // e.g., {"shared"}
+        // Class-side instance variables, declared by the top-level statement
+        // `Name class instanceVariableNames: '...'`: slots of the class object
+        // itself (each subclass has its own), visible to class-side methods.
+        std::vector<std::string> classInstVarNames;
     };
 
     void analyseClosures(const ast::Node& module);

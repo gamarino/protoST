@@ -626,6 +626,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     labels[static_cast<unsigned int>(Op::STORE_CAPTURED)]   = &&L_STORE_CAPTURED;
     labels[static_cast<unsigned int>(Op::DEFINE_CAPTURED)]  = &&L_DEFINE_CAPTURED;
     labels[static_cast<unsigned int>(Op::STORE_CLASSVAR)]   = &&L_STORE_CLASSVAR;
+    labels[static_cast<unsigned int>(Op::PUSH_OWN_INSTVAR)] = &&L_PUSH_OWN_INSTVAR;
     labels[static_cast<unsigned int>(Op::PUSH_GLOBAL)]      = &&L_PUSH_GLOBAL;
     labels[static_cast<unsigned int>(Op::STORE_GLOBAL)]     = &&L_STORE_GLOBAL;
     labels[static_cast<unsigned int>(Op::PUSH_INSTVAR)]     = &&L_PUSH_INSTVAR;
@@ -2095,6 +2096,17 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 if (!self || self == PROTO_NONE)
                     throw std::runtime_error("STORE_INSTVAR self is null");
                 const_cast<proto::ProtoObject*>(self)->setAttribute(ctx, sym, val);
+                DISPATCH_DIRECT();
+                break;
+            }
+            case Op::PUSH_OWN_INSTVAR: L_PUSH_OWN_INSTVAR: {
+                Frame& f = frames_.back();
+                auto* sym = f.m->ivSymbol(ctx, arg);
+                const proto::ProtoObject* self = getSelf(f);
+                const proto::ProtoObject* val = nullptr;
+                if (self && self != PROTO_NONE && self->hasOwnAttribute(ctx, sym) == PROTO_TRUE)
+                    val = self->getAttribute(ctx, sym);
+                push(f, val ? val : PROTO_NONE);
                 DISPATCH_DIRECT();
                 break;
             }
