@@ -350,8 +350,10 @@ evaluated lazily at call time in the method's own scope.
 This shape exists because protoST shares the protoCore runtime kernel
 with protoPython, protoJS, and other protoCore-hosted languages. Those
 runtimes name methods with plain identifiers and pass positional + named
-arguments. The call-form syntax lets protoST consume and provide such
-methods directly, without selector-mangling at the bridge layer.
+arguments. The call-form syntax is meant to let protoST call such methods
+without selector-mangling at the bridge layer; in 0.4.0 it reaches protoST
+methods only, and calling a foreign runtime's method this way is not
+implemented yet ([`INTEROP.md`](../INTEROP.md) §0, §3.5).
 
 Call-form methods and keyword-form methods are **distinct attributes**: a
 class may host both `>> bar(x)` and `>> bar: x` without conflict. The

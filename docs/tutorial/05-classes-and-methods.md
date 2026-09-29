@@ -510,9 +510,10 @@ as *distinct attributes* and you can pick per method:
 
 - Keyword form (`>> at: i put: v`) reads better for code that flows like
   English prose and is the right default for native protoST APIs.
-- Call form (`>> render(node, depth = 0)`) reads naturally for code that
-  bridges to other runtimes (the foreign side already calls methods this
-  way) and for APIs with optional parameters with defaults.
+- Call form (`>> render(node, depth = 0)`) reads naturally for APIs with
+  optional parameters with defaults, and matches how other protoCore runtimes
+  name methods. (Calling a *foreign* runtime's method with it is not
+  implemented yet — see [`INTEROP.md`](../INTEROP.md) §3.5.)
 
 One practical constraint: a single class cannot host *both* a unary
 `>> bar` (a parameterless method whose attribute is `bar`) and a

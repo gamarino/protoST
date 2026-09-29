@@ -277,9 +277,9 @@ With one worker the three sensor reads in each cycle are forced to run one
 after another: 150ms per cycle instead of 50ms.
 
 That difference — 230ms versus 525ms, measured on one 12-core Linux machine —
-is real parallelism across operating-system threads. You wrote no threads, no locks, no `async` keywords. You wrote
-plain objects, promoted three of them with `asActor`, and used the
-fan-out/join pattern in one method. The runtime did the rest.
+is real parallelism across operating-system threads. You wrote no threads, no
+locks, no `async` keywords. You wrote plain objects, promoted three of them
+with `asActor`, and used the fan-out/join pattern in one method. The runtime did the rest.
 
 ## 13.7 Why this is the digital-twin pattern
 

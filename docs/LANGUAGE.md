@@ -547,8 +547,11 @@ value*, parenthesise: `f((a = b))`.
 ```smalltalk
 counter incr(2, factor = 3)              "positional + named override"
 counter incr(1)                          "named defaults apply"
-foreignModule doubleIt(x, name = 'hi')   "protoPython interop"
 ```
+
+The call form is shaped for methods exported by other protoCore runtimes, but
+a call-form send to a *foreign* method is not implemented yet: it reaches only
+protoST methods and primitives ([`INTEROP.md`](INTEROP.md) §3.5).
 
 ### 3.6 Assignment
 
@@ -1846,10 +1849,13 @@ that module's classes, which have a different protocol from the kernel classes
 of the same names (see the tutorial, chapter 9).
 
 Module resolution goes through protoCore's **Unified Module Discovery (UMD)**.
-A protoST module provider resolves `.st` files; because UMD is shared across
-the three runtimes, `Import from:` can also resolve modules served by protoJS
-or protoPython providers when they share a `ProtoSpace`. Imported modules are
-cached — importing the same path twice yields the same module object.
+A protoST module provider resolves `.st` files. UMD is shared by the protoCore
+runtimes, and protoST's resolution chain can be extended with another
+runtime's provider by a program that embeds it; what that has and has not
+been shown to do with a real second runtime is recorded in
+[`INTEROP.md`](INTEROP.md) §0 (the `protost` binary itself loads only `.st`
+modules). Imported modules are cached — importing the same path twice yields
+the same module object.
 
 `Import from:` works on every thread: at a script's top level and inside actor
 methods alike. A module's top level runs at most once per runtime. When several
