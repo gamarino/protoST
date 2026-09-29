@@ -134,7 +134,8 @@ $ ./build/protost readings.st
 ```
 
 A file stream answers the same protocol as the standard streams of the next
-section: reading with `nextLine` (nil at the end), `upToEnd`, `atEnd`,
+section: reading with `nextLine` (nil at the end), `nextLineMax: bytes` (for input you
+do not trust: a longer line raises `LineTooLong`), `upToEnd`, `atEnd`,
 `linesDo:`, `lines`, `next` / `next: n` (whole UTF-8 characters) and
 `nextByteCount: n` (for protocols that count bytes); writing with `nextPutAll:`,
 `nextPut:`, `print:` (the `printString`), `display:` and `<<` (the
@@ -415,7 +416,12 @@ nil
 `request:url:headers:body:` answer an `HTTPResponse`: `status`, `reason`,
 `headers` (a Dictionary with lower-case names), `headerAt:`, `body` (a
 String), `json` (the body parsed with `JSON parse:`) and `isSuccess` (a 2xx
-status). Chunked bodies are decoded and redirects followed, up to five.
+status). Chunked bodies are decoded and redirects followed, up to five. A
+relative `Location` resolves against the request URL; a redirect to another
+host or port does not carry the headers you set (an `Authorization` stays with
+the host you gave it to), and a redirect from `https` to `http` is refused
+with a `NetworkError`. A method, URL or header that contains a line break is
+refused with an `Error` before anything is sent.
 `HTTPClient timeout: ms` sets the connect and read limit for every later
 request (default 30 seconds).
 
@@ -494,8 +500,9 @@ response:
 | nil | 204, no body |
 | any other object | 200, the object as JSON |
 
-An error the handler does not catch answers 500 with the error's text; the
-server goes on serving. `startInBackground` serves on an actor and answers at
+An error the handler does not catch answers a plain 500 (`Internal Server
+Error`: the error's text could reveal internals, so it is not sent) and is
+reported on standard error; the server goes on serving. `startInBackground` serves on an actor and answers at
 once; `start` serves on the calling thread until something sends `stop`.
 Each connection is handled by its own actor, so a slow request does not hold
 up the others.
@@ -543,6 +550,7 @@ visit wait do: [:each | each printNl].
 
 ```bash
 $ ./build/protost counter-server.st
+HTTPServer: error in handler: sensor offline
 '{"count":5}'
 '{"count":5}'
 500
@@ -567,6 +575,11 @@ $ curl 'http://localhost:8080/hello?name=Ana'
 hello, Ana
 ```
 
+The server refuses what it should not have to read before the handler runs: a
+request or header line over 8 KiB (414 or 431), more than 100 header lines
+(431), a malformed `Content-Length` (400) and a body over `maxBodySize:` (413;
+the default is 64 MiB, `server maxBodySize: 1024 * 1024` lowers it).
+
 `HTTPServer on: 8080` listens on every interface. The server speaks plain
 HTTP only; put a reverse proxy in front of it for TLS (§15.11).
 
@@ -582,7 +595,9 @@ Error
 ├── NetworkError           a socket, TLS or HTTP failure
 │   ├── ConnectionRefused  nothing listens on that port
 │   ├── ConnectionTimedOut a connect, read or write took longer than its timeout
-│   └── NameLookupFailure  the host name does not resolve
+│   ├── NameLookupFailure  the host name does not resolve
+│   └── BodyTooLarge       an HTTP body over the server's maxBodySize:
+├── LineTooLong            nextLineMax: met a longer line
 └── OSProcessError         a program could not be started, or command: failed
 ```
 

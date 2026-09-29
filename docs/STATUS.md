@@ -14,9 +14,9 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Test suite:** 1058 `ctest` cases, 1058/1058 passing on 2026-09-29
+- **Test suite:** 1068 `ctest` cases, 1068/1068 passing on 2026-09-29
   (protoST 0.5.0, branch `feature/io` after commit `e966c8a` with the 0.5.0
-  documentation, against protoCore 2.6.1): 527 conformance programs, 437
+  documentation, against protoCore 2.6.1): 537 conformance programs, 437
   unit tests, 42 examples, 30 CLI tests (including the benchmark-harness
   self-test) and 22 documentation checks (the examples with a stated result
   in 21 documents, plus the checker's self-test). The history of earlier

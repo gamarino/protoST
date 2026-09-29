@@ -159,8 +159,8 @@ several cores without locks.
 
 ## Status
 
-Version 0.5.0, which requires protoCore 2.6.1 or newer. `ctest` runs 1058
-cases, all passing: 527 conformance programs, 437 unit tests, 42 examples, 30
+Version 0.5.0, which requires protoCore 2.6.1 or newer. `ctest` runs 1068
+cases, all passing: 537 conformance programs, 437 unit tests, 42 examples, 30
 CLI tests (including the benchmark-harness self-test) and 22 documentation
 checks (every example with a stated result in 21 documents, plus the
 checker's self-test). The

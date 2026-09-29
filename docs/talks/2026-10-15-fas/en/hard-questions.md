@@ -76,7 +76,7 @@ Not natively: the I/O is POSIX. On Windows it runs under WSL2 with Ubuntu
 24.04, installing the same `.deb` packages.
 
 **Is it stable? What open bugs does it have?**
-0.5.0 passes the 1058 `ctest` cases: conformance programs,
+0.5.0 passes the 1068 `ctest` cases: conformance programs,
 unit tests, the examples, command-line tests and the documentation examples.
 While preparing this talk, an adversarial audit of about 1,100 programs, in two rounds, found
 silent wrong results and hangs; every fix for a wrong result, a crash or a

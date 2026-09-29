@@ -76,7 +76,7 @@ No en forma nativa: la entrada/salida es POSIX. En Windows funciona con WSL2
 y Ubuntu 24.04, instalando los mismos paquetes `.deb`.
 
 **¿Es estable? ¿Qué bugs abiertos tiene?**
-0.5.0 pasa los 1058 casos de `ctest`: programas de
+0.5.0 pasa los 1068 casos de `ctest`: programas de
 conformidad, tests unitarios, los ejemplos, tests de la línea de comandos y
 los ejemplos de la documentación. Durante la preparación de esta charla una
 auditoría adversarial de unos 1100 programas, en dos rondas, encontró resultados incorrectos

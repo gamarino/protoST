@@ -2182,6 +2182,8 @@ Common rules:
 | `ConnectionRefused` | `NetworkError` | the connection is refused |
 | `ConnectionTimedOut` | `NetworkError` | a connect, read or write exceeds its timeout |
 | `NameLookupFailure` | `NetworkError` | the host name does not resolve |
+| `BodyTooLarge` | `NetworkError` | an HTTP body exceeds the limit it is read with (`HTTPServer maxBodySize:`) |
+| `LineTooLong` | `Error` | `nextLineMax:` meets a longer line |
 | `OSProcessError` | `Error` | a program cannot be started, or `OSProcess command:` exits non-zero |
 
 `messageText` names the operation, the path or address, and the system's
@@ -2197,6 +2199,7 @@ and sockets (§12.11.5) are `IOStream`s too.
 | Selector | Meaning |
 |----------|---------|
 | `nextLine` | the next line without its terminator (`LF` or `CRLF`); nil at the end |
+| `nextLineMax: bytes` | `nextLine` for untrusted input: a line longer than `bytes` signals `LineTooLong` |
 | `next`, `next: n` | the next character; up to `n` characters as a String (nil at the end). Whole UTF-8 characters are read, never a part of one |
 | `nextByteCount: n` | up to `n` bytes decoded as UTF-8 text, for protocols that count bytes (HTTP `Content-Length`) |
 | `nextBytes: n` | the next `n` bytes, as an Array of integers |
@@ -2210,6 +2213,14 @@ and sockets (§12.11.5) are `IOStream`s too.
 | `flush` | flush buffered output (standard output is buffered and flushed at each line end) |
 | `timeout: ms` | later reads and writes signal `ConnectionTimedOut` after `ms` milliseconds (nil: no limit) |
 | `close`, `isClosed` | close the descriptor (idempotent) |
+
+Several actors may share one stream: reads are serialised (each line goes to
+exactly one reader) and so are writes, independently, so one actor can read a
+socket while another writes to it. `close` wakes an actor blocked on a
+socket; the descriptor itself is released when that actor returns. A write to
+a pipe or socket whose reader has gone signals an error (`NetworkError`,
+`FileSystemError`); only the program's own standard output keeps the Unix
+behaviour of ending the program, so a filter piped into `head` stops.
 
 #### 12.11.2 Files: `FileReference`, `File`, `FileSystem`
 
@@ -2228,7 +2239,7 @@ A `FileReference` names a path; it holds no open descriptor.
 |----------|---------|
 | `exists`, `isFile`, `isDirectory`, `isReadable`, `isWritable` | tests (false when the path does not exist) |
 | `size`, `modificationTime` | size in bytes; milliseconds since the Unix epoch (`FileDoesNotExist` when missing) |
-| `pathString`, `fullName` | the path as given; the absolute path |
+| `pathString`, `fullName` | the path as given; the absolute path (`.` and `..` folded lexically, symbolic links kept) |
 | `basename`, `basenameWithoutExtension`, `extension`, `parent` | name parts (`extension` is `''` when there is none) |
 | `children`, `files`, `directories` | the entries of a directory, sorted by name |
 | `contents`, `contents: aString`, `appendContents: aString` | read the whole file; replace it; append to it |
@@ -2252,7 +2263,7 @@ Sent to `Smalltalk`:
 | `programPath` | the script path as given on the command line |
 | `getenv: name`, `environment` | an environment variable (nil when unset); all of them as a Dictionary |
 | `setenv: name to: value` | set a variable for this process and the programs it starts |
-| `exit: n`, `quit` | flush output and end the process now with status `n` (0–255); `exit: 0` |
+| `exit: n`, `quit` | flush output and end the process now with status `n` (0–255); `exit: 0`. Pending `ensure:` blocks do not run and open files are not closed by the program (the operating system closes them) |
 | `pid`, `hostName`, `platform` | process id; host name; `'linux'` on Linux |
 | `workingDirectory`, `changeDirectory: path` | the current directory as a `FileReference`; change it |
 
@@ -2272,7 +2283,7 @@ OSProcess command: 'echo ready'                                           "=> 'r
 | `run: program`, `run:arguments:`, `run:arguments:input:` | run a program (looked up on `PATH`, no shell) to completion, feeding `input` (a String, or nil) to its standard input; answer an `OSProcessResult` |
 | `shell: commandLine`, `shell:input:` | the same through `/bin/sh -c` |
 | `command: commandLine` | the command's standard output without its final newline; `OSProcessError` on a non-zero exit |
-| `spawn: program arguments: anArray` | start a program that shares this process's standard streams; answer its pid at once |
+| `spawn: program arguments: anArray` | start a program that shares this process's standard streams; answer its pid at once. Send `waitFor:` to it eventually: until then a finished program remains a zombie process |
 | `waitFor: pid` | wait for a spawned program; answer its exit status (128 + signal number when a signal ended it) |
 | `kill: pid`, `kill: pid signal: n` | send `SIGTERM`, or signal `n` |
 
@@ -2318,8 +2329,15 @@ connection.
 | `HTTPClient timeout: ms` | connect and read timeout for later requests (default 30000) |
 
 `http` and `https` URLs are accepted (`https` verifies as `tlsHost:` does);
-chunked response bodies are decoded; redirects (301, 302, 303, 307, 308) are
-followed up to five times. The client answers an `HTTPResponse`: `status`,
+chunked response bodies are decoded (as bytes, so a character split between
+chunks arrives whole); redirects (301, 302, 303, 307, 308) are followed up to
+five times. A relative `Location` resolves against the request URL
+(RFC 3986); a redirect to another origin (scheme, host or port) is sent
+without the headers the program passed; a redirect from `https` to `http`
+signals `NetworkError`. A method, URL, header name or header value containing
+a line break or another control character signals `Error` before anything is
+sent. A request without a body sends no `Content-Length` (except `POST`,
+`PUT`, `PATCH`); the user agent is `protoST/<version>`. The client answers an `HTTPResponse`: `status`,
 `reason`, `headers` (lower-case names), `headerAt:`, `body`, `contents`,
 `json`, `isSuccess` (2xx), `contentType`.
 
@@ -2332,7 +2350,15 @@ The handler receives an `HTTPRequest` (`method`, `path` percent-decoded,
 answers an `HTTPResponse` (built with `ok:`, `json:`, `status:body:`,
 `notFound`, `noContent`, adjusted with `contentType:` / `headerAt:put:`), a
 String (200, `text/plain`), nil (204) or any other object (200, its JSON). An
-error the handler does not handle answers 500 with the error's text.
+error the handler does not handle, or a response header containing a line
+break, answers a plain 500 (`Internal Server Error`) and is reported on
+standard error; the error's text is not sent to the client. Percent-decoding
+reads `%XX` as UTF-8 bytes; `+` is a space only in the query.
+
+Before the handler runs, the server refuses: a request line over 8 KiB (414);
+a header line over 8 KiB or more than 100 header lines (431); a
+`Content-Length` that is not a decimal integer (400); a body larger than
+`maxBodySize` (413; `server maxBodySize: bytes`, default 64 MiB).
 
 Not provided: HTTP/2, WebSockets, keep-alive, a TLS server, proxies.
 

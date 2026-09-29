@@ -8,7 +8,7 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 Until this release a protoST program could only print. Design:
 [`docs/superpowers/specs/2026-09-29-io-design.md`](docs/superpowers/specs/2026-09-29-io-design.md);
 tutorial: [chapter 15](docs/tutorial/15-input-and-output.md); reference:
-`docs/LANGUAGE.md` §12.11. `ctest`: 1058 cases, all passing (527 conformance
+`docs/LANGUAGE.md` §12.11. `ctest`: 1068 cases, all passing (537 conformance
 programs, 437 unit tests, 42 examples, 30 CLI tests, 22 documentation
 checks).
 
@@ -32,6 +32,20 @@ checks).
   handles each connection on its own actor, with `start`,
   `startInBackground` and `stop`. No HTTP/2, WebSockets, keep-alive or TLS
   server.
+- **Hardened after a code review, before release.** Actors can share a
+  stream: reads and writes are serialised separately, and a descriptor is
+  released only when no actor is still blocked on it. A child that exits
+  without reading its input, or a peer that disappears, raises an error
+  instead of killing the process with SIGPIPE. TLS handshakes, reads and
+  writes honour the socket's timeout. The worker pool never holds its lock
+  while creating a thread. HTTP refuses control characters in methods, URLs
+  and headers; decodes chunked bodies and percent-escapes as UTF-8 bytes (`+`
+  is a space only in the query); resolves relative redirects, drops the
+  program's headers on a redirect to another origin and refuses https to
+  http; and the server bounds request lines, headers and bodies (414, 431,
+  400, 413, `maxBodySize:`) and answers handler errors with a plain 500
+  reported on standard error. New: `nextLineMax:`, `LineTooLong`,
+  `BodyTooLarge`. `fullName` no longer resolves symbolic links.
 - **The worker pool grows under blocking I/O.** Every blocking call leaves
   the garbage collector's quorum while it waits. When an actor's worker
   enters one and fewer than the configured number of workers would remain
