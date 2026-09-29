@@ -201,7 +201,15 @@ private:
 
     // Total automaticLocals capacity reserved once at engine entry. Frame
     // regions are packed into [0, kSlotCapacity). Overflow is a hard error.
-    static constexpr unsigned int kSlotCapacity = 8192;
+    static constexpr unsigned int kSlotCapacity = 1u << 20;
+    // Frame slots kept free below the scratch region so the handler of a
+    // "stack depth exceeded" error can run.
+    static constexpr unsigned int kOverflowReserve = 16384;
+
+    // True when a frame for `m` would pass the depth limit; the overflow has
+    // then been signalled as an Error and its value pushed on `f`.
+    bool signalIfTooDeep(proto::ProtoContext* ctx, Frame& f,
+                         const BytecodeModule* m, unsigned int argc);
 
     // --- per-frame region geometry -----------------------------------------
     static unsigned int frameRegionSize(const Frame& f) {

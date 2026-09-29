@@ -26,6 +26,9 @@
 #include "Opcodes.h"
 #include "TransientPin.h"
 #include "NativeExceptionBridge.h"
+
+#include <pthread.h>
+#include <cstdint>
 #include "debugger/DebuggerRuntime.h"
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
@@ -144,12 +147,12 @@ inline unsigned int computeLocalCount(const BytecodeModule& m, unsigned int argc
 thread_local unsigned int g_scratchCursor = 0;
 
 // Compile-time consistency: the scratch geometry in TransientPin.h must match
-// this engine's slot capacity (8192), or a primitive would pin into slots the
+// this engine's slot capacity, or a primitive would pin into slots the
 // engine believes are free frame storage. ExecutionEngine::kSlotCapacity is
 // asserted equal to kEngineSlotCapacity inside pushFrame (a member function
 // with access to the private constant).
-static_assert(kEngineSlotCapacity == 8192,
-              "TransientPin scratch geometry assumes an 8192-slot engine context");
+static_assert(kEngineSlotCapacity == (1u << 20),
+              "TransientPin scratch geometry assumes a 2^20-slot engine context");
 
 // D8 (MNT-b2): per-thread registry of live ExecutionEngine instances.
 //
@@ -344,6 +347,43 @@ ExecutionEngine::popFrame() {
     frames_.pop_back();
 }
 
+// Lowest stack address an engine may be entered at on this thread: the
+// thread's stack base plus a reserve for the handler of the overflow error.
+namespace {
+constexpr std::uintptr_t kNativeStackReserve = 256 * 1024;
+thread_local std::uintptr_t t_nativeStackLimit = 0;
+
+std::uintptr_t nativeStackLimit() {
+    if (t_nativeStackLimit) return t_nativeStackLimit;
+    void* base = nullptr;
+    std::size_t size = 0;
+    pthread_attr_t attr;
+    if (pthread_getattr_np(pthread_self(), &attr) == 0) {
+        pthread_attr_getstack(&attr, &base, &size);
+        pthread_attr_destroy(&attr);
+    }
+    t_nativeStackLimit = base ? reinterpret_cast<std::uintptr_t>(base) + kNativeStackReserve
+                              : 1;   // unknown bounds: never trips
+    return t_nativeStackLimit;
+}
+} // namespace
+
+// Stack-depth guard, checked before every frame push of a send. Frame regions
+// stop kOverflowReserve slots short of the scratch region, so the handler that
+// catches the overflow (and any ensure: block it unwinds) still has room to
+// run. The overflow is an ordinary Error, catchable by on:do: at any level.
+bool ExecutionEngine::signalIfTooDeep(proto::ProtoContext* ctx, Frame& f,
+                                      const BytecodeModule* m, unsigned int argc) {
+    const unsigned int regionEnd =
+        g_slotCursor + kHeaderSlots + computeLocalCount(*m, argc) + kFrameMaxStk;
+    if (regionEnd <= kFrameRegionLimit - kOverflowReserve) return false;
+    const std::string msg = "stack depth exceeded (" + std::to_string(frames_.size())
+        + " frames in this activation chain)";
+    auto* r = signalErrorOfClass(rt_, ctx, rt_.bootstrap().errorProto, msg.c_str());
+    push(f, r ? r : PROTO_NONE);
+    return true;
+}
+
 const proto::ProtoObject*
 ExecutionEngine::run(proto::ProtoContext* ctx,
                      const BytecodeModule& m,
@@ -369,6 +409,17 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
     // running (not parked at a safepoint) during the resize, so a concurrent
     // stop-the-world GC cannot proceed mid-realloc — it needs every thread
     // parked first. No new ProtoContext is ever created.
+    // Native-stack guard. Primitives such as do: run their block through a
+    // nested engine on the C++ stack (about 4.6 KB per level), so recursion
+    // through blocks exhausts the thread's native stack long before the slot
+    // region; entering an engine with less than kNativeStackReserve left is
+    // reported as the same catchable "stack depth exceeded" Error (the
+    // primitive boundary translates it), never a crash.
+    {
+        char probe = 0;
+        if (reinterpret_cast<std::uintptr_t>(&probe) < nativeStackLimit())
+            throw std::runtime_error("stack depth exceeded (native stack exhausted)");
+    }
     ctx_ = ctx;
     ctx_->resizeAutomaticLocals(kSlotCapacity);
 
@@ -1178,6 +1229,10 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                                 recv->getAttribute(ctx, recvBlkSelfKey);
                             if (!blkSelf || blkSelf == PROTO_NONE)
                                 blkSelf = PROTO_NONE;
+                            if (signalIfTooDeep(ctx, f, sub,
+                                    static_cast<unsigned int>(argcOp))) {
+                                DISPATCH_DIRECT();
+                            }
                             pushFrame(sub, /*self=*/blkSelf, capDict,
                                       sendArgs,
                                       static_cast<unsigned int>(argcOp),
@@ -1466,6 +1521,10 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     methodArgs[0] = recv;
                     for (int i = 0; i < argcOp; ++i)
                         methodArgs[i + 1] = sendArgs[i];
+                    if (signalIfTooDeep(ctx, f, sub,
+                            static_cast<unsigned int>(argcOp) + 1)) {
+                        DISPATCH_DIRECT();
+                    }
                     pushFrame(sub, /*self=*/recv, capDict, methodArgs,
                               static_cast<unsigned int>(argcOp) + 1);
                     // `f` is now invalidated by the vector growth (when it
@@ -1738,6 +1797,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         throw std::runtime_error(
                             "internal: call-form module argCount mismatch for "
                             + std::string(desc.name->toStdString(ctx)));
+                    }
+                    if (signalIfTooDeep(ctx, f, sub, totalArgs)) {
+                        DISPATCH_DIRECT();
                     }
                     pushFrame(sub, /*self=*/recv, capDict, methodArgs,
                               totalArgs);
