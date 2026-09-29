@@ -3,6 +3,9 @@
 #include "runtime/Bootstrap.h"
 #include "runtime/ValueFormat.h"
 #include "protoCore.h"
+#include <cstdlib>
+#include <cstdio>
+#include <climits>
 
 #include <cmath>
 #include <stdexcept>
@@ -43,9 +46,26 @@ namespace protoST {
 
 namespace {
 
+// A number as a double, across the whole tower: a LargeInteger does not fit
+// asLong, so it goes through its exact decimal digits and strtod (correctly
+// rounded; beyond the Float range it becomes +/-inf, as in Pharo).
 double asDoubleVal(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
-    return v->isFloat(ctx) ? v->asDouble(ctx)
-                           : static_cast<double>(v->asLong(ctx));
+    if (v->isFloat(ctx)) return v->asDouble(ctx);
+    if (v->isInteger(ctx) && v->compare(ctx, ctx->fromLong(LLONG_MAX)) <= 0
+        && v->compare(ctx, ctx->fromLong(LLONG_MIN)) >= 0)
+        return static_cast<double>(v->asLong(ctx));
+    return std::strtod(formatNumber(ctx, v).c_str(), nullptr);
+}
+
+// The integer nearest below/at `d` as a SmallInteger or, beyond 64 bits, a
+// LargeInteger (fromLong would overflow).
+const proto::ProtoObject* integerFromDouble(proto::ProtoContext* ctx, double d) {
+    if (std::isnan(d) || std::isinf(d))
+        throw std::runtime_error("cannot convert a non-finite Float to an Integer");
+    if (d > -9.2e18 && d < 9.2e18) return ctx->fromLong(static_cast<long long>(d));
+    char digits[400];
+    std::snprintf(digits, sizeof(digits), "%.0f", d);
+    return ctx->fromString(digits, 10);
 }
 
 void requireNumberArg(proto::ProtoContext* ctx, const proto::ProtoObject* v,
@@ -99,7 +119,7 @@ const proto::ProtoObject* prim_##NAME(STRuntime&, proto::ProtoContext* ctx,   \
                                       int) {                                  \
     if (!r->isFloat(ctx)) return r;                                           \
     double d = FN(r->asDouble(ctx));                                          \
-    return ctx->fromLong(static_cast<long long>(d));                          \
+    return integerFromDouble(ctx, d);                                         \
 }
 
 DEF_ROUNDING(Floor,     std::floor)
@@ -182,7 +202,7 @@ const proto::ProtoObject* prim_AsFloat(STRuntime&, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* r,
                                        const proto::ProtoObject* const*, int) {
     if (r->isFloat(ctx)) return r;
-    return ctx->fromDouble(static_cast<double>(r->asLong(ctx)));
+    return ctx->fromDouble(asDoubleVal(ctx, r));
 }
 
 // `asInteger` — the receiver as an integer (a Float is truncated toward zero).
@@ -190,7 +210,7 @@ const proto::ProtoObject* prim_AsInteger(STRuntime&, proto::ProtoContext* ctx,
                                          const proto::ProtoObject* r,
                                          const proto::ProtoObject* const*, int) {
     if (!r->isFloat(ctx)) return r;
-    return ctx->fromLong(static_cast<long long>(std::trunc(r->asDouble(ctx))));
+    return integerFromDouble(ctx, std::trunc(r->asDouble(ctx)));
 }
 
 // `even` / `odd` — integer-parity aliases. A non-integral Float is neither.

@@ -67,8 +67,7 @@ DEFBIN(NumMul, multiply, "*")
 // LargeInteger fail before protoCore was even asked.
 static bool isZeroNumber(proto::ProtoContext* ctx, const proto::ProtoObject* n) {
     if (n->isFloat(ctx)) return n->asDouble(ctx) == 0.0;
-    if (n->isInteger(ctx)) return n->asLong(ctx) == 0;
-    return false;   // a LargeInteger is never zero
+    return n->compare(ctx, ctx->fromInteger(0)) == 0;   // exact across the tower
 }
 
 static int signOfNumber(proto::ProtoContext* ctx, const proto::ProtoObject* n) {
