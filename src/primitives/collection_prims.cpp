@@ -2015,7 +2015,7 @@ const proto::ProtoObject* prim_Collection_detect(STRuntime& rt, proto::ProtoCont
         return true;
     });
     if (!found)
-        throw std::runtime_error("detect: no element satisfies the block");
+        throw ClassedErrorSignal("NotFound", "detect: no element satisfies the block");
     return found;
 }
 

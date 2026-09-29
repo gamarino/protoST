@@ -154,8 +154,17 @@ inline std::string describeReceiverForDNU(proto::ProtoContext* ctx,
                                           const proto::ProtoObject* recv,
                                           const proto::ProtoString* classNameSym) {
     if (!recv || recv == PROTO_NONE) return " (receiver: nil)";
-    if (recv->isInteger(ctx))  return " (receiver class: SmallInteger)";
-    if (recv->isString(ctx))   return " (receiver class: String)";
+    if (recv->isInteger(ctx)) {
+        constexpr long long kMax = (1LL << 55) - 1;
+        const bool small = recv->compare(ctx, ctx->fromLong(kMax)) <= 0
+                        && recv->compare(ctx, ctx->fromLong(-kMax - 1)) >= 0;
+        return small ? " (receiver class: SmallInteger)" : " (receiver class: LargeInteger)";
+    }
+    if (recv->isString(ctx)) {
+        const proto::ProtoString* s = recv->asString(ctx);
+        return (s && reinterpret_cast<const proto::ProtoString*>(recv)->isSymbol())
+            ? " (receiver class: Symbol)" : " (receiver class: String)";
+    }
     if (recv->isBoolean(ctx))  return " (receiver class: Boolean)";
     if (recv->isFloat(ctx))    return " (receiver class: Float)";
     if (classNameSym) {

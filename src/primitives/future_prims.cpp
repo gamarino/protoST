@@ -6,6 +6,8 @@
 #include "runtime/ExecutionEngine.h"
 #include "runtime/TransientPin.h"
 #include "runtime/NativeExceptionBridge.h"
+#include "runtime/UnhandledSTException.h"
+#include <cstdio>
 #include "runtime/HandlerStack.h"
 #include "protoCore.h"
 #include <atomic>
@@ -71,6 +73,15 @@ const proto::ProtoObject* raiseRejection(STRuntime& rt, proto::ProtoContext* ctx
 
 namespace {
 
+// A thenDo: / catch: callback runs when a future settles, where nobody can
+// catch its error: report it on stderr (with the trace of an unhandled
+// protoST error) instead of dropping it, and carry on with the next callback.
+void reportCallbackError(const char* what, const std::exception* e) {
+    std::string text = e ? describeUncaught(*e) : std::string("error: ") + what;
+    std::fprintf(stderr, "error in a Future callback: %s\n",
+                 text.rfind("error: ", 0) == 0 ? text.c_str() + 7 : text.c_str());
+}
+
 // Fire each callback in `list` with `arg`. Callback errors are swallowed: a
 // misbehaving thenDo:/catch: handler must not poison the resolution path or
 // starve the other callbacks.
@@ -83,7 +94,8 @@ void fireCallbackList(STRuntime& rt, proto::ProtoContext* ctx,
     for (long long i = 0; i < n; ++i) {
         auto* cb = list->getAt(ctx, static_cast<int>(i));
         try { invokeBlock(rt, ctx, cb, cargs, 1); }
-        catch (...) { /* swallow callback errors */ }
+        catch (const std::exception& e) { reportCallbackError(e.what(), &e); }
+        catch (...) { reportCallbackError("non-local exit from a callback", nullptr); }
     }
 }
 
@@ -437,7 +449,9 @@ const proto::ProtoObject* prim_Future_thenDo(STRuntime& rt, proto::ProtoContext*
     if (s == 1) {
         auto* v = r->getOwnAttributeDirect(ctx, valueKey);
         const proto::ProtoObject* args[] = { v ? v : PROTO_NONE };
-        try { invokeBlock(rt, ctx, block, args, 1); } catch (...) {}
+        try { invokeBlock(rt, ctx, block, args, 1); }
+        catch (const std::exception& e) { reportCallbackError(e.what(), &e); }
+        catch (...) { reportCallbackError("non-local exit from a callback", nullptr); }
         return r;
     }
     // Pending (or mid-settle): CAS-append, or fire now if a resolve already
@@ -446,7 +460,9 @@ const proto::ProtoObject* prim_Future_thenDo(STRuntime& rt, proto::ProtoContext*
     if (!appendOrDrained(ctx, r, thenCbsKey, block)) {
         auto* v = r->getOwnAttributeDirect(ctx, valueKey);
         const proto::ProtoObject* args[] = { v ? v : PROTO_NONE };
-        try { invokeBlock(rt, ctx, block, args, 1); } catch (...) {}
+        try { invokeBlock(rt, ctx, block, args, 1); }
+        catch (const std::exception& e) { reportCallbackError(e.what(), &e); }
+        catch (...) { reportCallbackError("non-local exit from a callback", nullptr); }
     }
     return r;
 }
@@ -470,13 +486,17 @@ const proto::ProtoObject* prim_Future_catch(STRuntime& rt, proto::ProtoContext* 
     if (s == 2) {
         auto* e = r->getOwnAttributeDirect(ctx, errorKey);
         const proto::ProtoObject* args[] = { e ? e : PROTO_NONE };
-        try { invokeBlock(rt, ctx, block, args, 1); } catch (...) {}
+        try { invokeBlock(rt, ctx, block, args, 1); }
+        catch (const std::exception& e) { reportCallbackError(e.what(), &e); }
+        catch (...) { reportCallbackError("non-local exit from a callback", nullptr); }
         return r;
     }
     if (!appendOrDrained(ctx, r, catchCbsKey, block)) {
         auto* e = r->getOwnAttributeDirect(ctx, errorKey);
         const proto::ProtoObject* args[] = { e ? e : PROTO_NONE };
-        try { invokeBlock(rt, ctx, block, args, 1); } catch (...) {}
+        try { invokeBlock(rt, ctx, block, args, 1); }
+        catch (const std::exception& e) { reportCallbackError(e.what(), &e); }
+        catch (...) { reportCallbackError("non-local exit from a callback", nullptr); }
     }
     return r;
 }

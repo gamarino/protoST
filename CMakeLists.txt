@@ -231,6 +231,9 @@ add_test(NAME cli_unhandled_exception_label
 add_test(NAME cli_repl_class_across_inputs
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_repl_class_across_inputs.sh $<TARGET_FILE:protost>)
 
+add_test(NAME cli_callback_error_reported
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_callback_error_reported.sh $<TARGET_FILE:protost>)
+
 add_test(NAME cli_kernel
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_kernel.sh $<TARGET_FILE:protost> ${CMAKE_BINARY_DIR}/cli-scratch/kernel)
 
