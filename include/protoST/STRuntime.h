@@ -233,6 +233,9 @@ public:
     inline const char* versionTag() const { return "0.3.0"; }
 
 private:
+    // Installs protoST's default heap limits and out-of-memory report.
+    static void configureHeap(proto::ProtoSpace& space);
+
     // Loads the Smalltalk-source kernel (<lib>/kernel, in the order of its
     // 00-manifest.txt) into this runtime's globals. Throws std::runtime_error
     // naming file and line when a kernel file does not parse, compile or run.

@@ -592,6 +592,7 @@ static const proto::ProtoObject* st_worker_main(
 }
 
 STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
+    configureHeap(impl_->space);
     installIntPrimitives(*this);
     installMathPrimitives(*this);
     installTimePrimitives(*this);
@@ -2283,6 +2284,54 @@ std::string STRuntime::findModuleFile(const std::string& logicalPath) const {
     }
 
     return "";
+}
+
+// Memory policy. protoCore's collector defers work until it is needed: it runs
+// in parallel and triggers as the heap approaches the configured ceiling. With
+// no ceiling it is never needed, so an allocating 3M-iteration loop grew to
+// 7-12 GB (a soft watermark alone still reached 4 GB). protoST therefore sets a
+// hard ceiling by default. Measured on 2026-09-29 with a 10M-cell ceiling: that
+// loop peaks at 0.8 GB and takes 36 s instead of 20 s -- the cost of actually
+// collecting instead of never collecting; fib, int_sum_loop, list_append,
+// str_concat, exception_latency and pump_twin show no measurable difference. An explicit PROTOCORE_HEAP_LIMIT_CELLS, which
+// protoCore has already applied, takes precedence (0 disables the ceiling).
+//
+// A live set that itself reaches the ceiling is reported by protoCore through
+// outOfMemoryCallback, after which it aborts; protoST ends the process first,
+// with a message and exit status 3, so running out of memory never leaves a
+// core dump.
+namespace {
+constexpr long long kCellBytes = 64;
+constexpr long long kDefaultHardCells = 10'000'000;          // 640 MB of cells
+
+proto::ProtoObject* reportOutOfMemory(proto::ProtoContext*) {
+    std::fflush(stdout);
+    // protoCore calls this only after consecutive collections reclaimed
+    // nothing: the live set itself fills the ceiling.
+    std::fprintf(stderr, "error: out of memory: the live objects fill the heap limit "
+                         "and the last collections reclaimed nothing; "
+                         "set PROTOCORE_HEAP_LIMIT_CELLS to raise it\n");
+    std::fflush(stderr);
+    std::_Exit(3);
+}
+
+int defaultHardCells() {
+    // The default ceiling, or half of physical memory if that is smaller.
+    long long cells = kDefaultHardCells;
+#if defined(_SC_PHYS_PAGES) && defined(_SC_PAGESIZE)
+    const long pages = ::sysconf(_SC_PHYS_PAGES);
+    const long pageSize = ::sysconf(_SC_PAGESIZE);
+    if (pages > 0 && pageSize > 0)
+        cells = std::min(cells, static_cast<long long>(pages) * pageSize / 2 / kCellBytes);
+#endif
+    return static_cast<int>(std::min<long long>(cells, INT_MAX));
+}
+} // namespace
+
+void STRuntime::configureHeap(proto::ProtoSpace& space) {
+    space.outOfMemoryCallback = reportOutOfMemory;
+    if (std::getenv("PROTOCORE_HEAP_LIMIT_CELLS")) return;
+    space.setHeapLimits(0, defaultHardCells());
 }
 
 // The kernel: protocol implemented in protoST source (lib/kernel/*.st), run
