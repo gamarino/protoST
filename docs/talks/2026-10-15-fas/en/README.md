@@ -16,7 +16,7 @@ reference; these files translate them without adding or removing content.
 The demos and the recordings are not duplicated; both versions use the same
 files:
 
-- `../demos/` — `run_demo.sh`, `check_all.sh`, the three `.st` demos and their
+- `../demos/` — `run_demo.sh`, `check_all.sh`, the four `.st` demos (demo 4 also has a Python `.feed`) and their
   expected outputs in `../demos/expected/`. The demo code, its comments and
   its output are already in English.
 - `../recordings/` — terminal recordings of each demo, replayed with

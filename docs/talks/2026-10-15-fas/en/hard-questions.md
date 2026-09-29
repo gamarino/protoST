@@ -55,18 +55,30 @@ are looking for people to try it with real programs.
 `thisContext`, `outer` (today it behaves like `pass`), the full metaclass
 hierarchy, `become:`, image and browser (by design), `Process`, `Semaphore`,
 `Delay` and `fork` (concurrency is actors), classes such as
-`IdentityDictionary`, `ByteArray` or `ScaledDecimal`, and real
-interoperability with other runtimes (with protoCore 2.5.0, the one the 0.4.0
-package uses, a protoScala program receives a protoST object without a copy
-but cannot use it; protoCore's main branch already fixes this, with no release
-yet: `docs/INTEROP.md` §0, `KNOWN_ISSUES.md` K4). What we found, verified against 0.4.0, is in chapter 14
-of the tutorial and in `docs/STATUS.md`; it is not a guarantee that there are
-no other differences.
+`IdentityDictionary`, `ByteArray` or `ScaledDecimal`, and installed runtimes
+loading each other (the core allows it since protoCore 2.6: embedded in one
+process, protoScala reads and writes protoST objects without copying them;
+`docs/INTEROP.md` §0). What we found is in chapter 14 of the tutorial and in
+`docs/STATUS.md`; it is not a guarantee that there are no other differences.
+
+**Can it talk to the outside world?**
+Since 0.5.0, yes: files and directories (`'data.csv' asFileReference`),
+standard input and output (`Stdio stdin nextLine`: a script is a Unix
+filter), arguments and environment variables, exit codes, other programs
+(`OSProcess`), TCP and UDP sockets, TLS, and HTTP client (https too) and
+server, with one actor per connection. An I/O wait inside an actor does not
+hold up the GC, and the worker pool grows while it lasts, so many actors
+waiting for replies do not starve the ones that produce them. HTTP/2,
+WebSockets and a TLS server are missing. Demo 4 shows it.
+
+**Does it run on Windows?**
+Not natively: the I/O is POSIX. On Windows it runs under WSL2 with Ubuntu
+24.04, installing the same `.deb` packages.
 
 **Is it stable? What open bugs does it have?**
-0.4.0 passes the 1041 `ctest` cases (commit `d3f7235`): conformance programs,
+0.5.0 passes the 1058 `ctest` cases: conformance programs,
 unit tests, the examples, command-line tests and the documentation examples.
-While preparing this talk, an adversarial audit of about 400 programs found
+While preparing this talk, an adversarial audit of about 1,100 programs, in two rounds, found
 silent wrong results and hangs; every fix for a wrong result, a crash or a
 hang has its regression test. The intermittent hang S19 was caught with the
 process still alive and turned out to be a lost wakeup in libstdc++ 13's

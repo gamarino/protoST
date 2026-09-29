@@ -1,0 +1,8 @@
+cycle 1  temp 64  running
+cycle 2  temp 68  running
+cycle 3  temp 72  running
+cycle 4  temp 76  stopped
+cycle 5  temp 80  stopped
+cycle 6  temp 84  stopped
+GET /state -> 200 {"state": "stopped", "cycles": 4, "temp": 84}
+log: 6 readings written

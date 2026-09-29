@@ -54,19 +54,32 @@ gente que lo pruebe con programas reales.
 `thisContext`, `outer` (hoy se comporta como `pass`), la jerarquía completa
 de metaclases, `become:`, imagen y browser (por diseño), `Process`,
 `Semaphore`, `Delay` y `fork` (la concurrencia son actores), clases como
-`IdentityDictionary`, `ByteArray` o `ScaledDecimal`, e interoperabilidad real
-con otros runtimes (con protoCore 2.5.0, el que usa el paquete 0.4.0, un
-programa protoScala recibe un objeto protoST sin copia pero no puede usarlo;
-protoCore ya lo corrige en su rama principal, todavía sin versión publicada:
-`docs/INTEROP.md` §0, `KNOWN_ISSUES.md` K4). Lo
-que encontramos, verificado contra 0.4.0, está en el capítulo 14 del tutorial
-y en `docs/STATUS.md`; no es una garantía de que no haya otras diferencias.
+`IdentityDictionary`, `ByteArray` o `ScaledDecimal`, y que los runtimes
+instalados se carguen entre sí (el núcleo ya lo permite desde protoCore 2.6:
+embebidos en un mismo proceso, protoScala lee y escribe objetos protoST sin
+copiarlos; `docs/INTEROP.md` §0). Lo que encontramos está en el capítulo 14
+del tutorial y en `docs/STATUS.md`; no es una garantía de que no haya otras
+diferencias.
+
+**¿Puede hablar con el mundo exterior?**
+Desde 0.5.0 sí: archivos y directorios (`'datos.csv' asFileReference`), la
+entrada y salida estándar (`Stdio stdin nextLine`: un script es un filtro
+Unix), argumentos y variables de entorno, código de salida, otros programas
+(`OSProcess`), sockets TCP y UDP, TLS, y HTTP cliente (también https) y
+servidor, con un actor por conexión. Una espera de entrada/salida dentro de
+un actor no frena al GC y el pool de workers crece mientras dura, así que
+muchos actores esperando respuestas no dejan sin hilos a los que las
+producen. Faltan HTTP/2, WebSockets y un servidor TLS. La demo 4 lo muestra.
+
+**¿Corre en Windows?**
+No en forma nativa: la entrada/salida es POSIX. En Windows funciona con WSL2
+y Ubuntu 24.04, instalando los mismos paquetes `.deb`.
 
 **¿Es estable? ¿Qué bugs abiertos tiene?**
-0.4.0 pasa los 1041 casos de `ctest` (commit `d3f7235`): programas de
+0.5.0 pasa los 1058 casos de `ctest`: programas de
 conformidad, tests unitarios, los ejemplos, tests de la línea de comandos y
 los ejemplos de la documentación. Durante la preparación de esta charla una
-auditoría adversarial de unos 400 programas encontró resultados incorrectos
+auditoría adversarial de unos 1100 programas, en dos rondas, encontró resultados incorrectos
 silenciosos y cuelgues; cada corrección de un resultado incorrecto, un crash o
 un cuelgue tiene su test de regresión. El cuelgue intermitente S19 se
 capturó con el proceso vivo y resultó ser un despertar perdido en

@@ -2,17 +2,18 @@
 
 ## The night before
 
-- [ ] Install the 0.4.1 `.deb` on the talk laptop:
-      `sudo dpkg -i protost-0.4.1-Linux.deb`. Install protoCore first:
-      the package depends on `protocore (>= 2.5.0)` and `protocore (<< 3.0.0)`
-      (`dpkg-deb -I protost-0.4.1-Linux.deb`); protoCore 2.5.0 is installed on
-      the development machine.
-- [ ] `protost --version` → `protoST 0.4.1`.
+- [ ] Install protoCore 2.6.1 and protoST 0.5.0 on the talk laptop. On
+      Windows, inside WSL2 with Ubuntu 24.04:
+      `sudo apt install ./protoCore-2.6.1-Linux.deb ./protost-0.5.0-Linux.deb`
+      (`apt install ./…` also installs any missing dependency). The package
+      requires `protocore (>= 2.6.1)`.
+- [ ] `protost --version` → `protoST 0.5.0`.
+- [ ] `python3 --version` answers (demo 4 uses it).
 - [ ] `cd docs/talks/2026-10-15-fas/demos && RUNS=20 ./check_all.sh` → all
-      three demos 20/20.
+      four demos 20/20.
 - [ ] Test the recordings:
       `scriptreplay --timing=../recordings/01-familiar-code.timing ../recordings/01-familiar-code.typescript`
-      (and 02, 03).
+      (and 02, 03, 04).
 - [ ] Export the deck PDF from the artifact and save it in this folder (it is
       not there yet); keep an offline copy of that PDF and of the repository.
 

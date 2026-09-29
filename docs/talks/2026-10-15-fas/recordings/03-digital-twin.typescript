@@ -1,4 +1,4 @@
-Script iniciado en 2026-09-29 04:43:32-03:00 [COMMAND="cd demos && ./run_demo.sh 03-digital-twin.st" <no ejecutado en terminal>]
+Script started on 2026-09-29 18:22:12-03:00 [COMMAND="PROTOST=/home/gamarino/Documentos/proyectos/protoST/build_release/protost ./run_demo.sh 03-digital-twin.st" <not executed on terminal>]
 cycle 1  temp 64  flow 12  vib 1  running
 cycle 2  temp 68  flow 24  vib 2  running
 cycle 3  temp 72  flow 36  vib 3  running
@@ -6,8 +6,8 @@ cycle 4  temp 76  flow 48  vib 4  running
   temperature above 75: stopped
 cycle 5  temp 80  flow 60  vib 5  stopped
   temperature above 75: stopped
-time per cycle: 52 ms (three 50 ms reads each)
+time per cycle: 53 ms (three 50 ms reads each)
 4
 -- 03-digital-twin: verified
 
-Script terminado en 2026-09-29 04:43:32-03:00 [CÓDIGO_SALIDA_ORDEN="0"]
+Script done on 2026-09-29 18:22:13-03:00 [COMMAND_EXIT_CODE="0"]

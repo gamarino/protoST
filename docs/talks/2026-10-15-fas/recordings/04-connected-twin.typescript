@@ -1,0 +1,12 @@
+Script started on 2026-09-29 18:22:13-03:00 [COMMAND="PROTOST=/home/gamarino/Documentos/proyectos/protoST/build_release/protost ./run_demo.sh 04-connected-twin.st" <not executed on terminal>]
+cycle 1  temp 64  running
+cycle 2  temp 68  running
+cycle 3  temp 72  running
+cycle 4  temp 76  stopped
+cycle 5  temp 80  stopped
+cycle 6  temp 84  stopped
+GET /state -> 200 {"state": "stopped", "cycles": 4, "temp": 84}
+log: 6 readings written
+-- 04-connected-twin: verified
+
+Script done on 2026-09-29 18:22:14-03:00 [COMMAND_EXIT_CODE="0"]

@@ -1,9 +1,9 @@
-Script iniciado en 2026-09-29 04:43:30-03:00 [COMMAND="cd demos && ./run_demo.sh 02-actors-parallelism.st" <no ejecutado en terminal>]
+Script started on 2026-09-29 18:22:10-03:00 [COMMAND="PROTOST=/home/gamarino/Documentos/proyectos/protoST/build_release/protost ./run_demo.sh 02-actors-parallelism.st" <not executed on terminal>]
 one thread: 4946 primes
-time one thread: 1331 ms
+time one thread: 1380 ms
 12 actors:  4946 primes
-time 12 actors: 547 ms
+time 12 actors: 630 ms
 true
 -- 02-actors-parallelism: verified
 
-Script terminado en 2026-09-29 04:43:32-03:00 [CÓDIGO_SALIDA_ORDEN="0"]
+Script done on 2026-09-29 18:22:12-03:00 [COMMAND_EXIT_CODE="0"]

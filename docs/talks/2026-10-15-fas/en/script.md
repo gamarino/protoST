@@ -1,11 +1,12 @@
 # protoST — talk script (FAST, 15/10/2026)
 
-Length: a 30-minute core; optional modules up to 60. Every figure comes from
-`benchmarks/reports/2026-09-29-release-0.4.0.md`; if a figure is not in that
-report, it is not said.
+Length: a 30-minute core; optional modules up to 60. Every performance figure
+comes from `benchmarks/reports/2026-09-29-release-0.4.0.md` (measured on 0.4.0;
+0.5.0 adds input and output without changing the engine); if a figure is not
+in that report, it is not said.
 
 Before starting: terminal with a large font, `cd docs/talks/2026-10-15-fas/demos`,
-`protost --version` must print `protoST 0.4.1`. The fallback recordings are in
+`protost --version` must print `protoST 0.5.0`; demo 4 needs `python3`. The fallback recordings are in
 `../recordings/` (see the checklist).
 
 ---
@@ -22,7 +23,7 @@ Before starting: terminal with a large font, `cd docs/talks/2026-10-15-fas/demos
 - It is built by one person using AI agents as tools; everything I show is in
   the repository and can be verified.
 
-### 0:02 — Questions, not answers (4 min)
+### 0:02 — Questions, not answers (3 min)
 
 Put them to the audience as questions (do not assert them on their behalf):
 
@@ -36,7 +37,7 @@ Put them to the audience as questions (do not assert them on their behalf):
 We do not say that protoST solves all of that. We say that it opens a
 different way to try.
 
-### 0:06 — Why it is possible now: protoCore (5 min)
+### 0:05 — Why it is possible now: protoCore (5 min)
 
 - protoCore: an object core in C++ on which several languages run
   (JavaScript, Python, Clojure, Scala, protoST).
@@ -54,7 +55,7 @@ different way to try.
   reference, without copying it. The object is shared: what one side changes,
   the other sees on its next read.
 
-### 0:11 — DEMO 1: the code you already know (5 min)
+### 0:10 — DEMO 1: the code you already know (5 min)
 
 `./run_demo.sh 01-familiar-code.st`
 
@@ -68,7 +69,7 @@ return in `Bank>>find:`, a custom exception with `retry`, `ZeroDivide` with
 
 Fallback: `scriptreplay` of `recordings/01-familiar-code`.
 
-### 0:16 — Actors and real parallelism (3 min)
+### 0:15 — Actors and real parallelism (3 min)
 
 - Any object becomes an actor with `asActor`; every message returns a
   `Future` at once (except those that ask about the reference itself:
@@ -79,7 +80,7 @@ Fallback: `scriptreplay` of `recordings/01-familiar-code`.
 - `wait`, `thenDo:`, `whenAll:`. An error inside the actor comes back, with
   its class, to whoever is waiting.
 
-### 0:19 — DEMO 2: the same computation on one thread and on twelve actors (3 min)
+### 0:18 — DEMO 2: the same computation on one thread and on twelve actors (3 min)
 
 `./run_demo.sh 02-actors-parallelism.st`
 
@@ -89,20 +90,37 @@ out: the code of the computation did not change; what changed is who runs it.
 
 Fallback: `recordings/02-actors-parallelism`.
 
-### 0:22 — Worlds it could open up (4 min)
+### 0:21 — Worlds it could open up, and DEMO 4 (6 min)
 
 Ideas, not promises:
 
 - **Digital twins**: one actor per physical component; each event is
   processed atomically; the components talk through messages. (If there is
   time, DEMO 3.)
-- **Services**: a process that starts in tens of milliseconds and reads
-  files, with no image to deploy.
-- **Living alongside other runtimes**: this is the direction of the project.
-  Today a protoScala program imports a protoST module and receives the same
-  object, without a copy; it cannot use it yet. Say it exactly like that.
+- **Services and connections to other systems**: a process that starts in
+  tens of milliseconds, reads files and standard input, speaks HTTP (client
+  and server, https too) and TCP/UDP, and runs other programs; no image to
+  deploy. The names are Pharo's: `'data.csv' asFileReference contents`,
+  `Stdio stdin nextLine`, `Smalltalk arguments`.
+- **Living alongside other runtimes**: protoCore 2.6 lets two runtimes
+  embedded in one process read and write each other's objects without
+  copying them (tested protoScala ↔ protoST). The installed binaries do not
+  load each other yet. Say it exactly like that.
 
-### 0:26 — What protoST is not (2 min)
+DEMO 4: `./run_demo.sh 04-connected-twin.st`
+
+A Python program emits sensor readings, one JSON object per line; the protoST
+twin reads them on standard input (it is a Unix filter:
+`python3 04-connected-twin.feed | protost 04-connected-twin.st`), the pump is
+an actor, its state is served over HTTP while it runs, and every reading is
+logged to a file. Show the code: `Stdio stdin linesDo:`, `JSON parse:`,
+`HTTPServer on:handler:`, `writeStreamDo:`. Point out: another language
+delivers the data, protoST processes it with actors and exposes it over HTTP;
+none of it needed an image.
+
+Fallback: `recordings/04-connected-twin`.
+
+### 0:27 — What protoST is not (2 min)
 
 Read the headlines of chapter 14 of the tutorial: no image or browser, a
 blank line ends a method, immutable strings, short symbols equal to strings,
@@ -110,7 +128,7 @@ thin metaclass, `thisContext` not supported, an actor that is waiting does not
 handle other messages (and a cycle of waits is reported as an error). Show
 that it is all written down and verified.
 
-### 0:28 — How to take part (2 min)
+### 0:29 — How to take part (1 min)
 
 - Repository, tutorial (chapter 14 is for you), `docs/STATUS.md` with what is
   open.
@@ -157,6 +175,7 @@ Fallback: `recordings/03-digital-twin`.
 
 ### M4 — Roadmap and open questions (6 min)
 
-Real interoperability between runtimes (requires work in protoCore),
-`thisContext`, tooling (a DAP debugger exists), message-send performance.
+Runtimes loading each other (the core allows it since protoCore 2.6),
+`thisContext`, tooling (a DAP debugger exists), message-send performance,
+WebSockets and HTTP/2.
 Ask the audience what would be useful to them first.
