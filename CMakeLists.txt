@@ -225,6 +225,9 @@ add_test(NAME cli_error_location
 add_test(NAME bench_harness_selftest
     COMMAND python3 ${CMAKE_SOURCE_DIR}/benchmarks/tests/test_harness.py)
 
+add_test(NAME cli_unhandled_exception_label
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_unhandled_exception_label.sh $<TARGET_FILE:protost>)
+
 add_test(NAME cli_kernel
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_kernel.sh $<TARGET_FILE:protost> ${CMAKE_BINARY_DIR}/cli-scratch/kernel)
 
@@ -321,7 +324,7 @@ endif()
 set(CPACK_PACKAGE_NAME "protost")
 set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
-    "protoST - a Smalltalk-flavoured language on the protoCore runtime")
+    "protoST - a runtime for Smalltalk-syntax programs, with actors, on protoCore")
 set(CPACK_PACKAGE_VENDOR "numaes")
 set(CPACK_PACKAGE_CONTACT "gamarino@gmail.com")
 set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README.md")

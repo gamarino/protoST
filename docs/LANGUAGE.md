@@ -444,10 +444,9 @@ key `bar` and the second declaration overrides the first.
 A method body ends at the first of:
 
 - a **blank line** — whether or not the last statement has a period (D33);
-- the start of the next declaration (`Name >> …`, `Name class >> …`,
-  `… subclass: …`), provided the statement before it ends with a period — a
-  declaration line that directly follows a statement without a period is a
-  parse error;
+- the start of the next method declaration (`Name >> …`, `Name class >> …`),
+  with or without a period before it; a class declaration (`… subclass: …`)
+  also ends it when the statement before it ends with a period;
 - the first **top-level `^` statement**: anything after it is read as a new
   top-level form. A `^` nested in a block does not end the body.
 
@@ -910,11 +909,8 @@ class searches this same order, starting after the method's defining class.
 they combine as the union. A mixin declaring `instanceVariableNames:` works as
 a parent: the mixin's own methods read and write its instance variables on an
 instance of the using class (instance variables are resolved by name on
-`self`, walking the prototype chain). A method written on the *using* class
-cannot name a mixin's instance variable, however — the compiler reports it as
-an undeclared variable, although it accepts an inherited instance variable of
-the primary superclass. Reach mixin state through the mixin's accessor
-methods (`self tag`).
+`self`, walking the prototype chain), and a method written on the using class
+may name them too: they are the same slots.
 
 > A class assembled with `uses:` has its full parent chain baked in at
 > definition time, before any instance exists. Composing a *further*

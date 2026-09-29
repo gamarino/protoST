@@ -57,7 +57,7 @@ are noted where useful.
 - [x] Defining a class; creating instances via `new`
 - [x] Instance variables
 - [x] `self` / `super` sends
-- [x] Class-side methods *(defined; but see D5 — not isolated)*
+- [x] Class-side methods, isolated from instances (D5 closed); class variables and class-instance variables
 - [x] `printString`
 - [x] **Extensible classes from modules** — `subclass:` is a runtime message
       on any class object, so an imported module class can be subclassed in
@@ -243,9 +243,11 @@ are noted where useful.
 - [x] `Number` predicates `isEven` / `isOdd` *(closed: C2)*
 - [x] `Number` iteration helpers (`to:`, `to:by:`, `to:do:`, `to:by:do:`)
 - [x] `Boolean` `ifTrue:`, `ifFalse:`
-- [x] `String` / `Symbol` (`,`, `size`, `=`, `~=`, `at:`, `asInteger`,
-      `printNl`); `Number>>asCharacter`. `size` and `at:` are codepoint-based
-      (UTF-8-aware) *(`at:` / `asInteger` / `asCharacter` added in T4-d)*
+- [x] `Character` (`$a`, `Character value:`, `asInteger`, `isVowel`, case
+      mapping); `String` / `Symbol` protocol (`,`, `size`, `at:` answering a
+      Character, searching, splitting, case mapping, `format:`, conversions).
+      `size` and `at:` are codepoint-based (UTF-8-aware); `'42' asInteger`
+      parses, `'abc' asInteger` is nil *(0.4.0)*
 - [x] `Block` evaluation and control-flow protocol
 
 ---
@@ -323,7 +325,6 @@ during the 2026-05-20 audit.
 | D9 | Only `ifTrue:` / `ifFalse:` were bound on `Boolean`; no nil-test protocol. | Bound on `Boolean`: `ifTrue:ifFalse:`, `ifFalse:ifTrue:`, `and:`, `or:` (lazy, block argument), `&`, `\|`, `xor:` (eager, boolean argument), `not`. Bound on `Object`: `isNil`, `notNil`, `ifNil:`, `ifNotNil:`, `ifNil:ifNotNil:` (the `ifNotNil:` block may take the receiver). Bound on `Block`: `whileFalse:`, `whileTrue`, `whileFalse`, `repeat`. `nil` answers `isNil`→true since `nilProto` descends from `objectProto`. | `2544a45` |
 | D13 | `protost compile` was advertised in the usage text but not implemented. | The `compile` line was removed from the CLI usage/help text — the advertised surface now matches reality. Bytecode serialisation remains unimplemented (a separate feature). | `2544a45` |
 | D15 | `classVariableNames:` was parsed then silently discarded. | A non-empty `classVariableNames:` clause now emits a clear compile-time diagnostic ("class variables are not yet supported — see D19"); an empty `classVariableNames: ''` stays a silent no-op. The real feature (class variables) remains tracked as D19. *(superseded 2026-06-13: D19 closed — the clause is now honoured. See the D19 row above and the entry below.)* | `2544a45` |
-| D19 | Class variables were tracked as "not implemented" — the `classVariableNames:` clause was rejected at parse time. | The clause is now honoured: each declared name is installed on the class object as an `_iv_<name>` attribute initialised to nil at class-decl time (via the new `__initClassVars:` primitive on Object). Reads from any instance method walk the prototype chain via the same PUSH_INSTVAR path that resolves inst vars, so a class var declared on `Base` is visible from an instance of any subclass without re-declaration. Mutation is restricted to class-side methods: an instance-side assignment to a class var raises a compile-time error (the natural store would target `self` and silently create a per-instance shadow rather than update the shared storage). The remaining deviation, narrower than "not implemented", stays tracked in the intentional-deviations table as "class-variable mutation from instance-side methods is prohibited". Verified by `tests/conformance/04-object-model/class-variable-shared-storage.st` and five `[class-vars]` unit tests. | `6b3cf39` |
 | D16 | Nested literal arrays (`#(1 #(2 3) 4)`) did not parse. | The `#( … )` literal-array parser was refactored to recurse: a nested `#( … )`, and per standard Smalltalk a bare `( … )` group, inside a literal array is a nested literal sub-array. Verified: `#(1 #(2 3) 4)`→3, `#(#(1 2) #(3 4))`→2. | `2544a45` |
 | D18 | `==` / `~~` were bound on no class; `=` / `~=` were not universal. | `==` (identity) and `~~` (non-identity) are bound on `Object`, so every object understands them. `Object>>=` defaults to identity and `Object>>~=` to its negation; value-equality `=`/`~=` is bound on `SmallInteger`, `String` and `Boolean` (the `~=` on `String` was newly added). Symbols are interned, so `#foo == #foo` is true. The `~~` operator token was added to the lexer. Verified: `3 == 3`, `#foo == #foo`, `3 ~~ 4`, `3 = 3`, `'a' = 'a'`. | `2544a45` |
 | D3 | `doesNotUnderstand` was a hard, uncatchable failure. | An unresolved selector now signals a catchable `MessageNotUnderstood` (a new subclass of `Error`) through the normal `signalInstance` handler-stack path. Root cause: the throw lived in the engine's own SEND dispatch, NOT inside a primitive, so it bypassed the EXC-d `translateNativeException` boundary (which wraps only the primitive call). The dispatch site now signals instead of throwing; with no handler the search still exhausts to `defaultAction` → `UnhandledSTException`, preserving the top-level/REPL abort. Verified: `[ 3 fooBar ] on: Error do: [:e| e messageText ]` → `doesNotUnderstand: fooBar`. The optional `doesNotUnderstand:` user hook was not implemented. | `c964f4e` |

@@ -213,7 +213,13 @@ const proto::ProtoObject* defaultAction(STRuntime& rt, proto::ProtoContext* ctx,
     {
         std::string m = messageTextOf(ctx, exc);
         if (!m.empty()) {
-            std::fputs("Warning: ", stderr);
+            // Labelled with the exception's class (a Warning, a user
+            // subclass, or the bare Exception), never a fixed word.
+            std::string label = "Exception";
+            const proto::ProtoObject* cn = exc->getAttribute(ctx, classNameKey(ctx));
+            if (cn && cn != PROTO_NONE)
+                if (const proto::ProtoString* ns = cn->asString(ctx)) label = ns->toStdString(ctx);
+            std::fputs((label + ": ").c_str(), stderr);
             std::fputs(m.c_str(), stderr);
             std::fputc('\n', stderr);
         }

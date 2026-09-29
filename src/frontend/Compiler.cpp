@@ -30,9 +30,16 @@ static std::vector<std::string> instVarsThroughChain(
         cur = it->second.superclassName;
     }
     std::unordered_set<std::string> seenNames;
-    for (auto i = infos.rbegin(); i != infos.rend(); ++i)
+    for (auto i = infos.rbegin(); i != infos.rend(); ++i) {
         for (const auto& iv : classSide ? (*i)->classInstVarNames : (*i)->instVarNames)
             if (seenNames.insert(iv).second) chain.push_back(iv);
+        // A mixin's instance variables live on the same object.
+        for (const auto& mixin : (*i)->mixinNames) {
+            if (mixin == className) continue;
+            for (const auto& iv : instVarsThroughChain(classes, mixin, classSide))
+                if (seenNames.insert(iv).second) chain.push_back(iv);
+        }
+    }
     return chain;
 }
 
@@ -350,6 +357,13 @@ void Compiler::collectClasses(const Node& module) {
         }
         for (size_t i = ivEnd; i < cd.stringList.size(); ++i) {
             info.classVarNames.push_back(cd.stringList[i]);
+        }
+        if (!cd.children.empty() && cd.children[0]
+            && (cd.children[0]->kind == NodeKind::DynArrayLit
+                || cd.children[0]->kind == NodeKind::ArrayLit)) {
+            for (const auto& el : cd.children[0]->children)
+                if (el && (el->kind == NodeKind::Identifier || el->kind == NodeKind::SymbolLit))
+                    info.mixinNames.push_back(el->text);
         }
         classes_[info.name] = std::move(info);
     }

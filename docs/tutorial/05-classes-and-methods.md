@@ -116,8 +116,9 @@ A file has no browser to tell the compiler where one method stops, so protoST
 uses the layout. A method body ends at the first of:
 
 - a **blank line** — whether or not the last statement has a period;
-- the next declaration (`Account >> …`, `… subclass: …`), when the statement
-  before it ends with a period;
+- the next method declaration (`Account >> …`, `Account class >> …`), with or
+  without a period before it; a class declaration (`… subclass: …`) when the
+  statement before it ends with a period;
 - the first `^` statement at the top level of the body (a `^` inside a block
   does not end it).
 

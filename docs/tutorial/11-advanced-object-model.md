@@ -107,22 +107,15 @@ defining class.
 You will rarely need to think about this; the rule is simply "the order you
 wrote them". But it is deterministic, which is what you want.
 
-### Mixin instance variables — use accessors
+### Mixin instance variables
 
 A mixin may declare its own instance variables, and they combine with the using
-class's own. There is a practical limit in 0.4.0, and it is worth stating
-plainly:
+class's own: a method of the using class names them directly, and they are
+the same slots the mixin's methods use.
 
-> A method written on the *using* class cannot name a mixin's instance
-> variable. A `Doc` that `uses: { Tagged }`, where `Tagged` declares a `tag`
-> variable, cannot write a bare `tag` in `Doc >> describe`: the compiler
-> reports `undeclared variable 'tag' in Doc`. (An instance variable inherited
-> from the primary superclass *can* be named this way.) Read it as `self tag`,
-> through an accessor `Tagged` provides.
-
-So write your mixins to expose their state through accessor methods — which is
-good mixin discipline anyway — and the using class's methods reach that state
-with a self-send:
+A `Doc` that `uses: { Tagged }`, where `Tagged` declares a `tag` variable,
+may write a bare `tag` in `Doc >> describe`. Exposing mixin state through
+accessors is still good discipline when several classes share the mixin.
 
 ```smalltalk
 "-- mixin-ivar.st --"
@@ -292,8 +285,8 @@ case — and it is what most vividly shows off the prototype kernel.
 - Method resolution across parents is depth-first, left-to-right: primary
   superclass subtree first, then each `uses:` mixin in listed order; the
   diamond case resolves to the first match.
-- Reach a **mixin's instance variables through accessor methods** (`self tag`):
-  a method of the using class cannot name them directly.
+- A **mixin's instance variables** are named directly by the using class's
+  methods, like inherited ones.
 - **`addBehavior:`** composes a mixin into a class **at runtime**, with no
   recompilation. It affects the class and all instances created *afterwards* —
   intentional deviation D21 — so call it during setup. There is no

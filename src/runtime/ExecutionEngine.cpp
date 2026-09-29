@@ -48,6 +48,18 @@ const proto::ProtoObject* raiseRejection(STRuntime& rt, proto::ProtoContext* ctx
 #include <string>
 #include <vector>
 
+namespace {
+// A user-facing runtime error raised inside the dispatch loop: signalled as a
+// protoST Error (catchable by on: Error do:, reported with a trace when not),
+// like errors raised inside primitives.
+[[noreturn]] void signalCatchable(protoST::STRuntime& rt, proto::ProtoContext* ctx,
+                                  const std::string& message) {
+    protoST::signalNativeError(rt, ctx, message.c_str());
+    throw std::runtime_error(message);   // not reached: Error is not resumable
+}
+} // namespace
+
+
 namespace protoST {
 
 // Defined in object_prims.cpp: run a method by name, as a send does.
@@ -1718,7 +1730,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 const int callNNamed  = static_cast<int>(desc.sortedKeys.size());
                 const int callTotal   = callNPos + callNNamed;
                 if (callTotal > 16) {
-                    throw std::runtime_error(
+                    signalCatchable(rt_, ctx, 
                         "SEND_CALL: more than 16 args not supported (v1 limit): "
                         + desc.mangled);
                 }
@@ -1743,7 +1755,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // would need a new message-envelope shape that drainOne
                 // does not yet decode. Tracked as a v2 follow-up.
                 if (rt_.isActor(ctx, recv)) {
-                    throw std::runtime_error(
+                    signalCatchable(rt_, ctx, 
                         "call-form send to an actor is not supported in v1: "
                         + desc.mangled);
                 }
@@ -1772,7 +1784,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         // but it was declared with Smalltalk syntax. Reject
                         // with a clear message — call-form and Smalltalk
                         // methods are distinct attributes by design.
-                        throw std::runtime_error(
+                        signalCatchable(rt_, ctx, 
                             "method '" + std::string(desc.name->toStdString(ctx))
                             + "' is not a call-form method; called as "
                             + desc.mangled);
@@ -1781,7 +1793,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     const auto& declKeys = sub->callNamedKeys();
                     const int declNNamed = static_cast<int>(declKeys.size());
                     if (callNPos != declNPos) {
-                        throw std::runtime_error(
+                        signalCatchable(rt_, ctx, 
                             "call-form method " + std::string(
                                 desc.name->toStdString(ctx))
                             + " expects " + std::to_string(declNPos)
@@ -1810,7 +1822,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                             const std::string callKey =
                                 desc.sortedKeys[callCursor]->toStdString(ctx);
                             if (callKey < declKey) {
-                                throw std::runtime_error(
+                                signalCatchable(rt_, ctx, 
                                     "call-form method " + std::string(
                                         desc.name->toStdString(ctx))
                                     + " does not accept named arg '"
@@ -1836,7 +1848,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     if (callCursor < callNNamed) {
                         std::string foreign =
                             desc.sortedKeys[callCursor]->toStdString(ctx);
-                        throw std::runtime_error(
+                        signalCatchable(rt_, ctx, 
                             "call-form method " + std::string(
                                 desc.name->toStdString(ctx))
                             + " does not accept named arg '" + foreign + "'");
@@ -1874,7 +1886,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     long long marker = attr->asLong(ctx);
                     if (isPrimitiveMarker(marker)) {
                         if (callNNamed > 0) {
-                            throw std::runtime_error(
+                            signalCatchable(rt_, ctx, 
                                 "primitive method '"
                                 + std::string(desc.name->toStdString(ctx))
                                 + "' does not accept named args in v1");

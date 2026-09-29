@@ -79,6 +79,18 @@ void Parser::parseTopTemporaries(ast::Node& mod) {
     consume(TokenKind::Pipe, "expected '|' to close temporaries");
 }
 
+// `Name >>` and `Name class >>` can only begin a method declaration (`>>` is
+// not a binary selector), so an expression never continues into one: a
+// method whose last statement has no period ends there even without a
+// blank line.
+bool Parser::atDeclarationStart() {
+    if (current_.kind != TokenKind::Identifier) return false;
+    Token p = lexer_.peek();
+    if (p.kind == TokenKind::GtGt) return true;
+    return p.kind == TokenKind::Identifier && p.text == "class"
+        && lexer_.peekSecond().kind == TokenKind::GtGt;
+}
+
 ast::NodePtr Parser::parseTopForm() {
     // class/method declarations begin with `Identifier`. Distinguish:
     //   Identifier 'subclass:' #Identifier ... .                 -> ClassDecl
@@ -201,7 +213,8 @@ ast::NodePtr Parser::parseExpression() {
 
 ast::NodePtr Parser::parseUnarySend() {
     auto recv = parsePrimary();
-    while (recv && current_.kind == TokenKind::Identifier && !atBlankLineBoundary()) {
+    while (recv && current_.kind == TokenKind::Identifier && !atBlankLineBoundary()
+           && !atDeclarationStart()) {
         // distinguish: only an identifier that is NOT followed by ':' is a unary selector;
         // keyword selectors come tokenised as TokenKind::Keyword.
         Token sel = current_;

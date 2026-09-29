@@ -46,6 +46,7 @@ private:
 
     // grammar entry points (added in later tasks)
     ast::NodePtr parseTopForm();
+    bool atDeclarationStart();
     void parseTopTemporaries(ast::Node& mod);
     ast::NodePtr parseStatement();
     ast::NodePtr parseExpression();

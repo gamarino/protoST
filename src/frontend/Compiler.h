@@ -51,6 +51,9 @@ public:
         // `Name class instanceVariableNames: '...'`: slots of the class object
         // itself (each subclass has its own), visible to class-side methods.
         std::vector<std::string> classInstVarNames;
+        // Classes mixed in with `uses: { A. B }` (identifiers only): their
+        // instance variables are the using class's too.
+        std::vector<std::string> mixinNames;
     };
 
     void analyseClosures(const ast::Node& module);
