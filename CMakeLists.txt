@@ -208,6 +208,9 @@ add_test(NAME cli_inputs
 add_test(NAME cli_actor_unobserved_error
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_actor_unobserved_error.sh $<TARGET_FILE:protost>)
 
+add_test(NAME cli_print_nl
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_print_nl.sh $<TARGET_FILE:protost>)
+
 add_test(NAME cli_kernel
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_kernel.sh $<TARGET_FILE:protost> ${CMAKE_BINARY_DIR}/cli-scratch/kernel)
 

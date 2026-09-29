@@ -9,7 +9,8 @@ String >> displayString
   ^ self.
 
 String >> isSymbol
-  ^ false.
+  "protoCore dispatches Symbol values to String; class tells them apart."
+  ^ self class == Symbol.
 
 String >> isEmpty
   ^ self size = 0.
@@ -160,10 +161,3 @@ String class >> new: size withAll: aCharacter
 String class >> new: size
   ^ String new: size withAll: Character space.
 
-"--- Symbol -------------------------------------------------------------------"
-
-Symbol >> isSymbol
-  ^ true.
-
-Symbol >> asSymbol
-  ^ self.

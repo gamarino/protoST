@@ -89,7 +89,14 @@ std::string formatNumber(proto::ProtoContext* ctx, const proto::ProtoObject* v) 
     return formatBigInteger(ctx, v);
 }
 
-std::string formatValue(STRuntime& /*rt*/, proto::ProtoContext* ctx,
+// Defined in object_prims.cpp: run a method by name, as a send does.
+const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* recv,
+                                      const proto::ProtoString* selector,
+                                      const proto::ProtoObject* const* args, int argc,
+                                      bool* understood);
+
+std::string formatValue(STRuntime& rt, proto::ProtoContext* ctx,
                         const proto::ProtoObject* v) {
     if (v == nullptr || v == PROTO_NONE) return "nil";
     if (v == PROTO_TRUE)  return "true";
@@ -113,7 +120,21 @@ std::string formatValue(STRuntime& /*rt*/, proto::ProtoContext* ctx,
         // not a string — fall through
     }
 
-    // Any other object: replicate the default Object>>printString in C++.
+    // Any other object: its displayString, so a user printOn: and the kernel's
+    // collection printing show here too. Falls back to the class-name form
+    // below when the kernel is absent or the method fails.
+    try {
+        bool understood = false;
+        const proto::ProtoObject* shown = sendDynamic(
+            rt, ctx, v, proto::ProtoString::createSymbol(ctx, "displayString"),
+            nullptr, 0, &understood);
+        if (understood && shown && shown != PROTO_NONE)
+            if (const auto* s = shown->asString(ctx)) return s->toStdString(ctx);
+    } catch (...) {
+        // fall through to the built-in form
+    }
+
+    // Built-in form: replicate the default Object>>printString in C++.
     // (object_prims.cpp prim_Object_printString — kept in sync.)
     const proto::ProtoString* nameKey =
         proto::ProtoString::createSymbol(ctx, "__class_name__");

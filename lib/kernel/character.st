@@ -16,9 +16,6 @@ Character >> asSymbol
 Character >> displayString
   ^ self asString.
 
-Character >> printString
-  ^ '$' , self asString.
-
 Character >> hash
   ^ self value.
 

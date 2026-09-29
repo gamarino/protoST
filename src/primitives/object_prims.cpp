@@ -10,6 +10,7 @@
 #include <cctype>
 #include <chrono>
 #include <stdexcept>
+#include <cstdio>
 #include <string>
 #include <vector>
 #include <functional>
@@ -680,6 +681,8 @@ const proto::ProtoObject* prim_Object_subclassIvars(
 
 // --- reflection --------------------------------------------------------------
 
+} // namespace (reopened below)
+
 // Look up `selector` on `recv` and run it with `args`: a user method (a
 // block-shaped wrapper carrying __bc_ptr__) runs in a nested engine with self
 // bound, a primitive through the registry. Answers nullptr when the receiver
@@ -723,6 +726,7 @@ const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
     return nullptr;
 }
 
+namespace {
 namespace {
 const proto::ProtoString* selectorArg(proto::ProtoContext* ctx, const proto::ProtoObject* sel) {
     const proto::ProtoString* s = sel ? sel->asString(ctx) : nullptr;
@@ -838,6 +842,37 @@ const proto::ProtoObject* prim_Object_hash(STRuntime& rt, proto::ProtoContext* c
         return ctx->fromLong(static_cast<long long>(
             std::hash<std::string>{}(s->toStdString(ctx)) & ((1ULL << 54) - 1)));
     return prim_Object_identityHash(rt, ctx, r, a, argc);
+}
+
+// Nesting depth of printOn: on this thread: a collection that contains itself
+// would otherwise recurse without end. The kernel stops at a fixed depth.
+namespace { thread_local int t_printDepth = 0; }
+
+const proto::ProtoObject* prim_Object_printEnter(STRuntime&, proto::ProtoContext* ctx,
+                                                 const proto::ProtoObject*,
+                                                 const proto::ProtoObject* const*, int) {
+    return ctx->fromLong(++t_printDepth);
+}
+
+const proto::ProtoObject* prim_Object_printExit(STRuntime&, proto::ProtoContext*,
+                                                const proto::ProtoObject* r,
+                                                const proto::ProtoObject* const*, int) {
+    if (t_printDepth > 0) --t_printDepth;
+    return r;
+}
+
+// recv __stdout: aString — write the text to standard output as is (the
+// kernel's printNl / displayNl / Transcript build on it).
+const proto::ProtoObject* prim_Object_stdout(STRuntime&, proto::ProtoContext* ctx,
+                                             const proto::ProtoObject* r,
+                                             const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("__stdout: expects 1 arg");
+    const proto::ProtoString* s = a[0] ? a[0]->asString(ctx) : nullptr;
+    if (!s) throw std::runtime_error("__stdout: expects a String");
+    const std::string text = s->toStdString(ctx);
+    std::fwrite(text.data(), 1, text.size(), stdout);
+    if (!text.empty() && text.back() == '\n') std::fflush(stdout);
+    return r;
 }
 
 // recv class → the receiver's class.
@@ -1192,6 +1227,11 @@ void installObjectPrimitives(STRuntime& rt) {
     }
     bindPrimitive(rt, b.objectProto, "printString",
                   reg.registerPrim(prim_Object_printString));
+    bindPrimitive(rt, b.objectProto, "basicPrintString",
+                  reg.registerPrim(prim_Object_printString));
+    bindPrimitive(rt, b.objectProto, "__printEnter", reg.registerPrim(prim_Object_printEnter));
+    bindPrimitive(rt, b.objectProto, "__printExit", reg.registerPrim(prim_Object_printExit));
+    bindPrimitive(rt, b.objectProto, "__stdout:", reg.registerPrim(prim_Object_stdout));
     bindPrimitive(rt, b.objectProto, "class", reg.registerPrim(prim_Object_class));
     bindPrimitive(rt, b.objectProto, "name", reg.registerPrim(prim_Object_name));
     bindPrimitive(rt, b.objectProto, "perform:withArguments:",
