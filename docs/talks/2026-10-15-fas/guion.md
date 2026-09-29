@@ -99,7 +99,7 @@ Ideas, no promesas:
 
 Leer los titulares del capítulo 14 del tutorial: no hay imagen ni browser,
 una línea en blanco cierra un método, strings inmutables, símbolos cortos
-iguales a strings, metaclase delgada, `thisContext` inerte, un actor que
+iguales a strings, metaclase delgada, `thisContext` no soportado, un actor que
 espera no atiende otros mensajes (y un ciclo de esperas se reporta como
 error). Mostrar que está todo escrito y verificado.
 

@@ -217,7 +217,7 @@ error.
 
 A symbol literal is `#` followed by either an identifier-like name or an
 operator. Symbols are interned (each distinct symbol value is a unique object).
-A symbol shorter than 8 bytes is represented exactly like the equal string,
+A symbol of 6 bytes or fewer is represented exactly like the equal string,
 so `#foo == 'foo'` is true and `#foo printString` is `'foo'`; longer symbols
 are distinct objects (D35, see §14).
 
@@ -2211,7 +2211,7 @@ commits. Summary as of 0.4.0:
   is not re-entrant (D37); recursion depth is bounded with a catchable error
   (D38); one runtime per process (D2); `addBehavior:` reaches future
   instances only (D21); `outer` is an alias of `pass` (D7).
-- **Not implemented:** `thisContext` is reserved but inert (D17); the
+- **Not implemented:** `thisContext` is reserved: using it is a compile error (D17); the
   metaclass hierarchy is thin (`x class class` works; there is no
   `Metaclass`/`ClassDescription` protocol beyond the reflective messages of
   §14 of the tutorial).

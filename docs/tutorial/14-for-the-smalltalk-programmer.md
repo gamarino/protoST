@@ -145,7 +145,7 @@ strings with `WriteStream on: String new` (or `String new writeStream`), `,`,
 
 ### Short symbols are strings — D35
 
-A Symbol shorter than 8 bytes is represented exactly like the equal String:
+A Symbol of 6 bytes or fewer is represented exactly like the equal String:
 `#foo == 'foo'` is `true` and `#at: printString` is `'at:'`. Longer symbols are
 distinct objects. Equality, hashing and dictionary keys behave as you expect
 (in Smalltalk a Symbol is equal to the equal String too); only identity tests
@@ -166,9 +166,9 @@ variables and class-instance variables (`Foo class instanceVariableNames:
 hierarchy to program against: the reflective protocol is the one listed in
 §14.6 (`instVarNames`, `selectors`, `canUnderstand:`, `subclasses`, …).
 
-### `thisContext` is reserved but inert — D17
+### `thisContext` is reserved — D17
 
-It parses, but the context protocol is not built. Use the error traces
+It is reserved: using it is a compile error. Use the error traces
 (`at Class>>selector (file:line)`) and the debugger ([Chapter 12](12-tooling.md)).
 
 ### `outer` is an alias of `pass` — D7
@@ -193,6 +193,18 @@ on an actor that may call back. ([Chapter 10](10-actors-and-futures.md).)
 A method recursion stops at about 19,000 activations, and a recursion that
 goes through native iteration (`do:`, `collect:`, …) at about 1,000 levels,
 with a catchable `Error` ("stack depth exceeded"); `ensure:` blocks still run.
+
+### Smaller differences — D39
+
+- `String` is not a subclass of `Collection` (`'ab' isKindOf: Collection` is
+  false); the collection protocol it answers is defined on `String` itself,
+  so a method added to `Collection` does not reach strings.
+- Symbols dispatch to `String`: a method added to `Symbol` is never found;
+  define it on `String` and test `self isSymbol` if it matters.
+- `collect:` / `select:` on a user subclass of `OrderedCollection` answer an
+  `OrderedCollection`, not the subclass.
+- The deadlock check follows the futures actors answer; a cycle that goes
+  through a `Future new` resolved by hand is not detected.
 
 ### Arity limits
 
@@ -388,7 +400,7 @@ For full grammar, see `LANGUAGE.md` §3.5.1 and §3.3.
   waits is not re-entrant (D37); bounded recursion depth (D38); `outer`
   aliases `pass` (D7); single runtime per process (D2); `addBehavior:` affects
   future instances only (D21).
-- **Not implemented:** `thisContext` is inert (D17).
+- **Not implemented:** `thisContext` is reserved (D17).
 - **As in Pharo since 0.4.0 (§14.5):** `new` sends `initialize`; `Transcript`;
   `Character`; exact `Fraction` division with floored `//` and `\\`; class
   variables and class-instance variables; `doesNotUnderstand:` overrides;

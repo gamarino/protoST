@@ -1371,6 +1371,10 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             m.emitWide(Op::PUSH_BLOCK, static_cast<unsigned int>(blkIdx), currentLine_);
             return;
         }
+        case NodeKind::ThisContext:
+            error("thisContext is not supported in protoST (it is reserved; see STATUS D17)");
+            m.emit(Op::PUSH_NIL, 0, currentLine_);
+            return;
         default:
             error("expression kind not yet supported");
             m.emit(Op::PUSH_NIL, 0, currentLine_);
