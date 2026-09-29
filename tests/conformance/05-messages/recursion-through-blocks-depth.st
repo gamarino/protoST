@@ -1,4 +1,4 @@
-"EXPECT: 1000"
+"EXPECT: 900"
 "Recursion through a block primitive works to a useful depth."
 Object subclass: #T.
 T >> walk: n
@@ -8,4 +8,4 @@ T >> walk: n
   #(1) do: [:x | s := s + x + (self walk: n - 1)].
   ^ s.
 
-T new walk: 1000.
+T new walk: 900.

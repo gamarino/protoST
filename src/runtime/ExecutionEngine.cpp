@@ -27,7 +27,6 @@
 #include "TransientPin.h"
 #include "NativeExceptionBridge.h"
 
-#include <pthread.h>
 #include <cstdint>
 #include "debugger/DebuggerRuntime.h"
 #include "protoST/STRuntime.h"
@@ -347,25 +346,14 @@ ExecutionEngine::popFrame() {
     frames_.pop_back();
 }
 
-// Lowest stack address an engine may be entered at on this thread: the
-// thread's stack base plus a reserve for the handler of the overflow error.
+// Nesting guard for engines. Primitives such as do: run their block through a
+// nested engine on the native stack (about 4.6 KB per level), so recursion
+// through blocks would exhaust the thread's stack long before the slot region.
+// Like protoPython's RecursionScope, the limit is a depth count, not a query of
+// the native thread: g_liveEngines already holds this thread's nested engines.
+// 1,000 levels use about 4.6 MB, within the 8 MB default stack of a ProtoThread.
 namespace {
-constexpr std::uintptr_t kNativeStackReserve = 256 * 1024;
-thread_local std::uintptr_t t_nativeStackLimit = 0;
-
-std::uintptr_t nativeStackLimit() {
-    if (t_nativeStackLimit) return t_nativeStackLimit;
-    void* base = nullptr;
-    std::size_t size = 0;
-    pthread_attr_t attr;
-    if (pthread_getattr_np(pthread_self(), &attr) == 0) {
-        pthread_attr_getstack(&attr, &base, &size);
-        pthread_attr_destroy(&attr);
-    }
-    t_nativeStackLimit = base ? reinterpret_cast<std::uintptr_t>(base) + kNativeStackReserve
-                              : 1;   // unknown bounds: never trips
-    return t_nativeStackLimit;
-}
+constexpr std::size_t kMaxNestedEngines = 1000;
 } // namespace
 
 // Stack-depth guard, checked before every frame push of a send. Frame regions
@@ -409,17 +397,11 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
     // running (not parked at a safepoint) during the resize, so a concurrent
     // stop-the-world GC cannot proceed mid-realloc — it needs every thread
     // parked first. No new ProtoContext is ever created.
-    // Native-stack guard. Primitives such as do: run their block through a
-    // nested engine on the C++ stack (about 4.6 KB per level), so recursion
-    // through blocks exhausts the thread's native stack long before the slot
-    // region; entering an engine with less than kNativeStackReserve left is
-    // reported as the same catchable "stack depth exceeded" Error (the
-    // primitive boundary translates it), never a crash.
-    {
-        char probe = 0;
-        if (reinterpret_cast<std::uintptr_t>(&probe) < nativeStackLimit())
-            throw std::runtime_error("stack depth exceeded (native stack exhausted)");
-    }
+    // Nesting guard (see kMaxNestedEngines): reported as the same catchable
+    // "stack depth exceeded" Error -- the primitive boundary translates it --
+    // never a crash. This engine is already registered, hence ">".
+    if (g_liveEngines.size() > kMaxNestedEngines)
+        throw std::runtime_error("stack depth exceeded (nested block evaluation)");
     ctx_ = ctx;
     ctx_->resizeAutomaticLocals(kSlotCapacity);
 
