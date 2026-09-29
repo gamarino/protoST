@@ -6,6 +6,7 @@
 #include "runtime/ExecutionEngine.h"
 #include "runtime/TransientPin.h"
 #include "runtime/NativeExceptionBridge.h"
+#include "runtime/HandlerStack.h"
 #include "protoCore.h"
 #include <atomic>
 #include <cstdint>
@@ -262,6 +263,46 @@ void detectWaitCycle(STRuntime& rt, proto::ProtoContext* ctx,
     }
 }
 
+// Wait for `awaited` on an actor's worker without suspending the actor: while
+// the future is pending, run other ready actors' messages on this thread
+// (helping), and back off briefly when there are none. The current actor stays
+// marked as running, so none of its own messages run meanwhile (one message
+// at a time), and its __waiting_on__ record keeps cycles detectable.
+const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* awaited) {
+    const proto::ProtoObject* self = rt.currentActor();
+    TransientPin pinAwaited(ctx, awaited);
+    int idle = 0;
+    while (readState(rt, ctx, awaited) == 0) {
+        bool helped = false;
+        // The helped message belongs to another actor: this actor's exception
+        // handlers, still on this thread's handler stack, must not catch its
+        // errors.
+        const std::vector<unsigned long> hidden = handlerStackDisableAll();
+        try {
+            helped = rt.drainOne(ctx);
+        } catch (...) {
+            handlerStackRestore(hidden);
+            rt.setCurrentActor(self);
+            throw;
+        }
+        handlerStackRestore(hidden);
+        rt.setCurrentActor(self);
+        if (helped) { idle = 0; continue; }
+        proto::ProtoContext::UnmanagedScope unmanaged(ctx);
+        std::this_thread::sleep_for(std::chrono::microseconds(idle < 10 ? 20 : 500));
+        ++idle;
+    }
+    const_cast<proto::ProtoObject*>(self)->setAttribute(ctx, rt.bootstrap().sym.waitingOn, PROTO_NONE);
+    const proto::ProtoString* valueKey = rt.bootstrap().sym.value;
+    const proto::ProtoString* errorKey = rt.bootstrap().sym.error;
+    if (readState(rt, ctx, awaited) == 1) {
+        auto* v = awaited->getOwnAttributeDirect(ctx, valueKey);
+        return v ? v : PROTO_NONE;
+    }
+    return raiseRejection(rt, ctx, awaited->getOwnAttributeDirect(ctx, errorKey));
+}
+
 // Future>>wait
 //
 // Blocks until the future leaves the pending state, then returns __value__
@@ -295,6 +336,13 @@ const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* c
         long long s = readState(rt, ctx, r);
         if (s == 0) {
             detectWaitCycle(rt, ctx, rt.currentActor(), r);
+            // Suspending the actor snapshots the engine frames, but not the
+            // state of a primitive between them (the position of a do:, the
+            // C++ frames of ensure: or on:do:), so a wait inside a block that
+            // a primitive evaluates must not suspend. It blocks this worker
+            // instead, running other actors' messages meanwhile.
+            if (ExecutionEngine::liveEnginesOnThisThread() > 1)
+                return waitHelping(rt, ctx, r);
             throw FutureYield(r);
         }
         if (s == 1) {

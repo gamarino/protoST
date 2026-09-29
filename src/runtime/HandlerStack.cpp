@@ -113,6 +113,17 @@ std::vector<unsigned long> handlerStackDisableFrom(unsigned long targetHandlerId
     return flipped;
 }
 
+std::vector<unsigned long> handlerStackDisableAll() {
+    std::vector<unsigned long> flipped;
+    for (HandlerEntry& e : g_handlerStack) {
+        if (e.enabled) {
+            e.enabled = false;
+            flipped.push_back(e.handlerId);
+        }
+    }
+    return flipped;
+}
+
 void handlerStackRestore(const std::vector<unsigned long>& disabledIds) {
     for (unsigned long id : disabledIds) {
         for (std::size_t i = g_handlerStack.size(); i-- > 0; ) {
