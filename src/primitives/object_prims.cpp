@@ -1137,6 +1137,8 @@ void installObjectPrimitives(STRuntime& rt) {
         auto newChildPrim = reg.registerPrim(prim_Object_newChild);
         bindPrimitive(rt, b.objectProto, "newChild", newChildPrim);
         bindPrimitive(rt, b.objectProto, "new", newChildPrim);
+        // basicNew: the raw allocator, kept available when a class overrides new.
+        bindPrimitive(rt, b.objectProto, "basicNew", newChildPrim);
     }
     bindPrimitive(rt, b.objectProto, "__installMethod:as:",
                   reg.registerPrim(prim_Object_installMethod));

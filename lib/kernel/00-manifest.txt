@@ -1,3 +1,4 @@
 object.st
 character.st
 string.st
+stream.st
