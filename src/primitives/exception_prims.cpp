@@ -82,7 +82,7 @@ namespace {
 const proto::ProtoString* msgTextKey(proto::ProtoContext* ctx) {
     static const proto::ProtoString* s = nullptr;
     static std::once_flag f;
-    std::call_once(f, [ctx]() { s = proto::ProtoString::createSymbol(ctx, "messageText"); });
+    std::call_once(f, [ctx]() { s = proto::ProtoString::createSymbol(ctx, "__message_text__"); });
     return s;
 }
 const proto::ProtoString* activeHandlerKey(proto::ProtoContext* ctx) {
@@ -372,12 +372,18 @@ const proto::ProtoObject* prim_Exception_signalText(STRuntime& rt, proto::ProtoC
     return signalInstance(rt, ctx, exc);
 }
 
-// anException messageText → the stored string (nil when unset)
+// anException messageText → the stored string, or the class name when unset
+// The text lives under its own key: stored under `messageText`, an exception
+// with no text found the messageText *method* marker on its prototype and
+// answered it as an integer. With no text, answer the class name, as Pharo's
+// `description` does.
 const proto::ProtoObject* prim_Exception_messageText(STRuntime&, proto::ProtoContext* ctx,
                                                       const proto::ProtoObject* r,
                                                       const proto::ProtoObject* const*, int) {
     const proto::ProtoObject* m = r ? r->getAttribute(ctx, msgTextKey(ctx)) : nullptr;
-    return (m && m != PROTO_NONE) ? m : PROTO_NONE;
+    if (m && m != PROTO_NONE) return m;
+    const proto::ProtoObject* cn = r ? r->getAttribute(ctx, classNameKey(ctx)) : nullptr;
+    return (cn && cn != PROTO_NONE) ? cn : PROTO_NONE;
 }
 
 // anException messageText: aString → store it, return the receiver

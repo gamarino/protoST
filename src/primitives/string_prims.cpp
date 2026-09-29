@@ -142,9 +142,11 @@ const proto::ProtoObject* prim_StrConcat(STRuntime&, proto::ProtoContext* ctx,
         const proto::ProtoString* concatenated = lhs->appendLast(ctx, rhs);
         if (concatenated) return concatenated->asObject(ctx);
     }
-    // Fall back to UTF-8 materialisation for receivers whose `asString`
-    // does not surface a ProtoString (e.g. a subclass overriding it to
-    // return nil, or a non-string mistakenly fed to `,`).
+    // A non-string argument is an error, as in Pharo; it used to be dropped
+    // silently ('x' , 3 answered 'x').
+    if (!rhs)
+        throw std::runtime_error("Cannot append a non-string to a String "
+                                 "(use printString or displayString to convert it)");
     std::string out = toUtf8(r, ctx) + toUtf8(a[0], ctx);
     return ctx->fromUTF8String(out.c_str());
 }

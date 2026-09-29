@@ -468,7 +468,7 @@ const proto::ProtoString* observedKey(proto::ProtoContext* ctx) {
 std::string describeRejection(proto::ProtoContext* ctx, const proto::ProtoObject* error) {
     if (!error || error == PROTO_NONE) return "nil";
     if (const proto::ProtoString* str = error->asString(ctx)) return str->toStdString(ctx);
-    static const proto::ProtoString* msgKey = proto::ProtoString::createSymbol(ctx, "messageText");
+    static const proto::ProtoString* msgKey = proto::ProtoString::createSymbol(ctx, "__message_text__");
     const proto::ProtoObject* m = error->getAttribute(ctx, msgKey);
     if (m && m != PROTO_NONE)
         if (const proto::ProtoString* ms = m->asString(ctx)) return ms->toStdString(ctx);
