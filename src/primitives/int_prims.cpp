@@ -4,6 +4,7 @@
 #include "runtime/ValueFormat.h"
 #include "runtime/TransientPin.h"
 #include "runtime/ZeroDivideSignal.h"
+#include "primitives/IntegerDivision.h"
 #include "protoCore.h"
 
 #include <cmath>
@@ -121,6 +122,7 @@ const proto::ProtoObject* prim_NumDiv(STRuntime& rt, proto::ProtoContext* ctx,
         if (const proto::ProtoObject* adapted = adaptArgument(rt, ctx, r, a[0], "/"))
             return adapted;
     checkDivisor(ctx, a[0], "/");
+    if (r->isInteger(ctx) && a[0]->isInteger(ctx)) return integerQuotient(ctx, r, a[0]);
     return r->divide(ctx, a[0]);
 }
 
@@ -140,8 +142,9 @@ static void floorDivMod(proto::ProtoContext* ctx, const proto::ProtoObject* r,
         if (rem) *rem = ctx->fromDouble(x - q * y);
         return;
     }
-    const proto::ProtoObject* q = r->divide(ctx, d);
-    const proto::ProtoObject* m = r->modulo(ctx, d);
+    const proto::ProtoObject* q = nullptr;
+    const proto::ProtoObject* m = nullptr;
+    truncDivMod(ctx, r, d, &q, &m);
     if (!isZeroNumber(ctx, m) && signOfNumber(ctx, m) != signOfNumber(ctx, d)) {
         q = q->subtract(ctx, ctx->fromInteger(1));
         m = m->add(ctx, d);
@@ -195,7 +198,7 @@ const proto::ProtoObject* prim_NumQuo(STRuntime& rt, proto::ProtoContext* ctx,
         std::snprintf(digits, sizeof(digits), "%.0f", q);
         return ctx->fromString(digits, 10);
     }
-    return r->divide(ctx, a[0]);
+    return integerQuotient(ctx, r, a[0]);
 }
 
 const proto::ProtoObject* prim_NumRem(STRuntime& rt, proto::ProtoContext* ctx,
@@ -208,7 +211,7 @@ const proto::ProtoObject* prim_NumRem(STRuntime& rt, proto::ProtoContext* ctx,
     checkDivisor(ctx, a[0], "rem:");
     if (r->isFloat(ctx) || a[0]->isFloat(ctx))
         return ctx->fromDouble(std::fmod(r->asDouble(ctx), a[0]->asDouble(ctx)));
-    return r->modulo(ctx, a[0]);
+    return integerRemainder(ctx, r, a[0]);
 }
 
 // Ordered comparison through protoCore's partialCompare: exact by value across

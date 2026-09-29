@@ -604,6 +604,8 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
                 currentClassVars_.clear();
             }
         }
+        reportDuplicateNames(n.stringList, 1,
+                             n.text + ">>" + (n.stringList.empty() ? std::string() : n.stringList[0]));
         // An argument or temporary may not reuse an instance variable's name
         // (as in Pharo): the method would silently write the object's state.
         for (size_t i = 1; i < n.stringList.size(); ++i)
@@ -755,6 +757,8 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
                 currentClassVars_.clear();
             }
         }
+        reportDuplicateNames(n.stringList, 1,
+                             n.text + ">>" + (n.stringList.empty() ? std::string() : n.stringList[0]));
         // An argument or temporary may not reuse an instance variable's name
         // (as in Pharo): the method would silently write the object's state.
         for (size_t i = 1; i < n.stringList.size(); ++i)
@@ -1336,6 +1340,7 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                     s.capturedNames = it->second;
                 }
             }
+            reportDuplicateNames(n.stringList, 0, "a block");
             int nArgs = static_cast<int>(n.intValue);
             sub->setArgCount(nArgs);
             // declare args first (slots 0..nArgs-1), then locals
@@ -1389,6 +1394,15 @@ void Compiler::emitSetInstVarNames(BytecodeModule& m, const Node& classDecl) {
     auto selIdx   = m.internSymbol("__setInstVarNames:");
     m.emitWide(Op::PUSH_CONST,   static_cast<unsigned int>(namesIdx), currentLine_);
     m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(selIdx), currentLine_);
+}
+
+// A method's or block's arguments and temporaries must have distinct names.
+void Compiler::reportDuplicateNames(const std::vector<std::string>& names, size_t from,
+                                    const std::string& where) {
+    std::unordered_set<std::string> seen;
+    for (size_t i = from; i < names.size(); ++i)
+        if (!seen.insert(names[i]).second)
+            error("'" + names[i] + "' is declared twice in " + where);
 }
 
 bool Compiler::reportArgumentAssignment(const std::string& name) {

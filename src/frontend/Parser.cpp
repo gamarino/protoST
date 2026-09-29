@@ -657,10 +657,16 @@ ast::NodePtr Parser::parseClassDecl(Token classIdent) {
             // as `_iv_<name>`, the same key shape inst vars use), reachable
             // from any instance via the prototype-chain attribute walk —
             // see docs/STATUS.md D19 and docs/LANGUAGE.md §3.2 for the
-            // semantics and the documented restriction (instance-side
-            // assignment is a compile-time error; mutate from a class-side
-            // method instead).
+            // semantics.
             parseStringList(cvs);
+        } else if (current_.text == "package:" || current_.text == "category:"
+                   || current_.text == "poolDictionaries:" || current_.text == "tag:") {
+            // Pharo's class-definition keywords with no meaning in a file
+            // (packages, categories, pools): accepted and ignored, so class
+            // definitions copied from Pharo compile. The argument is a string.
+            advance();
+            if (current_.kind == TokenKind::String || current_.kind == TokenKind::Symbol) advance();
+            else error(current_, "expected a string after " + prev_.text);
         } else {
             error(current_, "unknown keyword in class declaration: " + current_.text);
             break;

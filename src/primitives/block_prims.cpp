@@ -11,6 +11,13 @@
 
 namespace protoST {
 
+// Defined in object_prims.cpp: run a method by name, as a send does.
+const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* recv,
+                                      const proto::ProtoString* selector,
+                                      const proto::ProtoObject* const* args, int argc,
+                                      bool* understood);
+
 // The `__bc_ptr__` attribute key, resolved once and shared by every reader of
 // a block's metadata. Symbol interning is per ProtoSpace; this caches the
 // symbol of whichever ProtoSpace first asks for it, and every subsequent
@@ -38,8 +45,20 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
     const proto::ProtoString* bcKey  = rt.bootstrap().sym.bcPtr;
     const proto::ProtoString* capKey = rt.bootstrap().sym.captured;
     auto* bcPtrObj = block->getAttribute(ctx, bcKey);
-    if (!bcPtrObj || bcPtrObj == PROTO_NONE)
+    if (!bcPtrObj || bcPtrObj == PROTO_NONE) {
+        // Not a block: evaluate it the way Smalltalk does, by sending it
+        // value / value: / value:value: (so a Symbol stands for a block:
+        // #(1 2 3) collect: #squared).
+        static const char* const kValue[] = { "value", "value:", "value:value:" };
+        if (argc >= 0 && argc <= 2) {
+            bool understood = false;
+            const proto::ProtoObject* r = sendDynamic(
+                rt, ctx, block, proto::ProtoString::createSymbol(ctx, kValue[argc]),
+                args, argc, &understood);
+            if (understood) return r ? r : PROTO_NONE;
+        }
         throw std::runtime_error("a block was expected here, but the argument is not a block");
+    }
     const BytecodeModule* sub =
         reinterpret_cast<const BytecodeModule*>(bcPtrObj->asLong(ctx));
     if (sub->argCount() != argc) {

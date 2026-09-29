@@ -1,4 +1,5 @@
 #include "protoST/STRuntime.h"
+#include "primitives/IntegerDivision.h"
 #include "runtime/TransientPin.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
@@ -332,7 +333,7 @@ const proto::ProtoObject* prim_Gcd(STRuntime& rt, proto::ProtoContext* ctx,
         throw std::runtime_error("gcd: of zero and zero is undefined");
     }
     while (y->integerSign(ctx) != 0) {
-        const proto::ProtoObject* t = x->modulo(ctx, y);
+        const proto::ProtoObject* t = integerRemainder(ctx, x, y);
         x = y;
         y = t;
     }
@@ -356,7 +357,7 @@ const proto::ProtoObject* prim_Lcm(STRuntime& rt, proto::ProtoContext* ctx,
     }
     const proto::ProtoObject* g = prim_Gcd(rt, ctx, r, a, 1);
     const proto::ProtoObject* prod = r->multiply(ctx, a[0])->abs(ctx);
-    return prod->divide(ctx, g);
+    return integerQuotient(ctx, prod, g);
 }
 
 // ----------------------- class-side Float constants ------------------------

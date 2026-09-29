@@ -52,6 +52,8 @@
 
 namespace protoST {
 
+int blockArgCount(proto::ProtoContext* ctx, const proto::ProtoObject* block);
+
 // Defined in object_prims.cpp: run a method by name, as a send does.
 const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
                                       const proto::ProtoObject* recv,
@@ -274,7 +276,11 @@ const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx
         const proto::ProtoObject* handlerResult = nullptr;
         try {
             const proto::ProtoObject* a0 = exc;
-            handlerResult = invokeBlock(rt, ctx, hBlock, &a0, 1);
+            // The handler is culled, as in Pharo: a block with no argument
+            // (on: Error do: [nil]) is evaluated without the exception.
+            handlerResult = blockArgCount(ctx, hBlock) == 0
+                ? invokeBlock(rt, ctx, hBlock, nullptr, 0)
+                : invokeBlock(rt, ctx, hBlock, &a0, 1);
         } catch (const ResumeSignal& r) {
             // `resume: v` — only ours is consumed here; an inner id belongs
             // to an outer signal loop.
