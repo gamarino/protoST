@@ -267,7 +267,7 @@ Smalltalk programmer reaches for:
   `selectors`, `subclasses`, `comment:`, `deepCopy`, `inspect`.
 - **System:** `Smalltalk at:` / `at:put:` / `version` / `allClasses`, `Time
   now`, `Date today`, `Time millisecondsToRun:`, `timeToRun`, `Random` (`next`,
-  `nextInt:`, `seed:`), `halt` (stops in `protost debug`, reported otherwise).
+  `nextInt:`, `seed:`), `halt` (stops under `protost -d`, reported otherwise).
 
 ## 14.7 Guard clauses and the trailing `^`
 

@@ -16,7 +16,7 @@ const proto::ProtoObject* prim_DebuggerHalt(STRuntime& rt, proto::ProtoContext* 
     if (!rt.debugger().attached()) {
         // Without a debugger a halt cannot stop: say so, with where it
         // happened, and continue (a silent nil hid the halt entirely).
-        std::fprintf(stderr, "halt: no debugger attached (run with 'protost debug'); continuing\n%s\n",
+        std::fprintf(stderr, "halt: no debugger attached (run with protost -d); continuing\n%s\n",
                      ExecutionEngine::describeActiveStack(3).c_str());
         return PROTO_NONE;
     }
