@@ -143,9 +143,21 @@ void walkNode(const Node& n, ScopeWalker& cur,
             ScopeWalker blockScope;
             blockScope.isBlock = true;
             // D22: a block sees the enclosing method's instance variables —
-            // thread the set through unchanged so an ivar referenced inside
-            // the block is excluded from the block's free vars.
+            // thread the set through so an ivar referenced inside the block
+            // is excluded from the block's free vars. A block parameter or
+            // temporary that reuses an ivar's name hides it in this subtree.
             blockScope.instVars = cur.instVars;
+            std::unordered_set<std::string> visibleIvars;
+            if (cur.instVars) {
+                for (const auto& name : n.stringList) {
+                    if (!cur.instVars->count(name)) continue;
+                    if (blockScope.instVars == cur.instVars) {
+                        visibleIvars = *cur.instVars;
+                        blockScope.instVars = &visibleIvars;
+                    }
+                    visibleIvars.erase(name);
+                }
+            }
             // n.stringList holds: nArgs args followed by locals.
             for (const auto& name : n.stringList) {
                 blockScope.declared.insert(name);
@@ -864,6 +876,14 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             m.emitWide(Op::STORE_CAPTURED, static_cast<unsigned int>(sym), currentLine_);
             return;
         }
+        // A temporary or argument of an enclosing block or of the method
+        // itself wins over an instance variable of the same name.
+        if (int slot = resolveLocal(n.text); slot >= 0) {
+            emitExpr(m, *n.children[0]);
+            m.emit(Op::DUP, 0, currentLine_);
+            m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slot), currentLine_);
+            return;
+        }
         // F4-U5: instance variable of the current method's class.
         for (const auto& iv : currentInstVars_) {
             if (iv == n.text) {
@@ -1009,6 +1029,13 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                 auto sym = m.internSymbol(n.text);
                 m.emit(Op::DUP, 0, currentLine_);
                 m.emitWide(Op::STORE_CAPTURED, static_cast<unsigned int>(sym), currentLine_);
+                return;
+            }
+            // A temporary or argument wins over an instance variable.
+            if (int slot = resolveLocal(n.text); slot >= 0) {
+                emitExpr(m, *n.children[0]);
+                m.emit(Op::DUP, 0, currentLine_);
+                m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slot), currentLine_);
                 return;
             }
             // F4-U5: instance variable of the current method's class.
@@ -1380,10 +1407,12 @@ void Compiler::emitCaptureProlog(BytecodeModule& m, bool isMethod,
     } else {
         return;
     }
-    // Bind every declared captured name in this activation's dict: an
-    // argument with its incoming value, a temporary with nil, so a write from
-    // an inner block finds its owner here (STORE_CAPTURED writes to the dict
-    // that owns the name).
+    // Bind every declared captured name in this activation's own dict: an
+    // argument with its incoming value, a temporary with nil. DEFINE_CAPTURED
+    // creates the binding here even when an enclosing activation binds the
+    // same name (shadowing), and a later write from an inner block then finds
+    // this activation as the owner (STORE_CAPTURED writes to the dict that
+    // owns the name).
     for (const auto& [name, isArgument] : declared) {
         auto sym = m.internSymbol(name);
         if (isArgument) {
@@ -1393,7 +1422,7 @@ void Compiler::emitCaptureProlog(BytecodeModule& m, bool isMethod,
         } else {
             m.emit(Op::PUSH_NIL, 0, currentLine_);
         }
-        m.emitWide(Op::STORE_CAPTURED, static_cast<unsigned int>(sym), currentLine_);
+        m.emitWide(Op::DEFINE_CAPTURED, static_cast<unsigned int>(sym), currentLine_);
     }
 }
 

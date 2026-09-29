@@ -93,6 +93,13 @@ enum class Op : uint8_t {
     // `<name>` attribute on the receiver, and dispatches with the protoCore
     // method convention. See docs/archive/design-specs/2026-06-13-protocore-call-syntax.md.
     SEND_CALL          = 39, // arg = const-pool index of mangled call selector
+    // Binds a name in the CURRENT activation's captured dict (own attribute),
+    // popping the value. Used by the capture prolog for a scope's declared
+    // captured names: unlike STORE_CAPTURED, which writes to the dict that
+    // already owns the name up the parent chain, this creates the binding
+    // here, so a block parameter or temporary that reuses an enclosing name
+    // is a distinct variable.
+    DEFINE_CAPTURED    = 40, // arg = constant pool index (symbol name)
     // Extend for >256-index args
     EXTEND          = 254,
     // Debugger primitive guard

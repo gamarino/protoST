@@ -612,6 +612,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     labels[static_cast<unsigned int>(Op::DUP_RECEIVER)]     = &&L_DUP_RECEIVER;
     labels[static_cast<unsigned int>(Op::PUSH_CAPTURED)]    = &&L_PUSH_CAPTURED;
     labels[static_cast<unsigned int>(Op::STORE_CAPTURED)]   = &&L_STORE_CAPTURED;
+    labels[static_cast<unsigned int>(Op::DEFINE_CAPTURED)]  = &&L_DEFINE_CAPTURED;
     labels[static_cast<unsigned int>(Op::PUSH_GLOBAL)]      = &&L_PUSH_GLOBAL;
     labels[static_cast<unsigned int>(Op::STORE_GLOBAL)]     = &&L_STORE_GLOBAL;
     labels[static_cast<unsigned int>(Op::PUSH_INSTVAR)]     = &&L_PUSH_INSTVAR;
@@ -1977,6 +1978,21 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     if (d->hasOwnAttribute(ctx, sym) == PROTO_TRUE) { owner = d; break; }
                 }
                 const_cast<proto::ProtoObject*>(owner)->setAttribute(ctx, sym, val);
+                DISPATCH_DIRECT();
+                break;
+            }
+            case Op::DEFINE_CAPTURED: L_DEFINE_CAPTURED: {
+                Frame& f = frames_.back();
+                if (f.sp == 0)
+                    throw std::runtime_error("DEFINE_CAPTURED with empty stack");
+                const proto::ProtoObject* val = pop(f);
+                const proto::ProtoObject* capD = getCaptured(f);
+                if (!capD || capD == PROTO_NONE)
+                    throw std::runtime_error("DEFINE_CAPTURED without captured dict");
+                auto* sym = f.m->constSym(ctx, arg);
+                TransientPin pinSym(
+                    ctx, reinterpret_cast<const proto::ProtoObject*>(sym));
+                const_cast<proto::ProtoObject*>(capD)->setAttribute(ctx, sym, val);
                 DISPATCH_DIRECT();
                 break;
             }
