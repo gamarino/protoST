@@ -1621,6 +1621,7 @@ the *atom*. Reach for an `Atom` when many actors must update one shared value
 — a counter, a registry, a world graph — and routing every update through a
 single owner actor would be a bottleneck.
 
+<!-- snippet-group: atom -->
 ```smalltalk
 total := Atom on: 0.        "a cell holding an initial value"
 total value.               "=> 0   — read the current snapshot"
@@ -1630,6 +1631,7 @@ total value.               "=> 0   — read the current snapshot"
 only if the cell still holds the expected one (by pointer identity), and
 answers whether it did:
 
+<!-- snippet-group: atom -->
 ```smalltalk
 total value: 1 ifCurrent: 0.   "=> true  — 0 was current, cell is now 1"
 total value: 9 ifCurrent: 0.   "=> false — 0 is not current; nothing written"

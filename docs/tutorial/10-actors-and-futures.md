@@ -401,6 +401,7 @@ the **`Atom`** — a shared mutable cell updated *lock-free*, by an optimistic
 compare-and-swap. (If you know Clojure: an actor is its `agent`, an `Atom` is
 its `atom`.)
 
+<!-- snippet-group: atom -->
 ```smalltalk
 total := Atom on: 0.        "a shared cell, starting at 0"
 total value.                "=> 0"
@@ -409,6 +410,7 @@ total value.                "=> 0"
 You update it with **`swap:`** — you hand it a block that maps the current
 value to the next one:
 
+<!-- snippet-group: atom -->
 ```smalltalk
 total swap: [ :n | n + 1 ].
 total value.                "=> 1"
