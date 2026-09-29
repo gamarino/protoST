@@ -17,4 +17,4 @@ future := w square: 7.
 future thenDo: [ :result | result printNl ].
 
 "wait gives back the resolved value as the program's result."
-future wait.
+future wait displayNl.

@@ -107,7 +107,7 @@ handler block runs with the exception instance bound to `:ex`.
 result := [ Error signal: 'boom' ]
   on: Error
   do: [ :e | 'caught: ' , e messageText ].
-result.
+result displayNl.
 ```
 
 ```bash
@@ -130,7 +130,7 @@ use `on:do:on:do:`:
 r := [ Warning signal: 'low ink' ]
   on: Error   do: [ :e | 'an error: ' , e messageText ]
   on: Warning do: [ :e | 'a warning: ' , e messageText ].
-r.
+r displayNl.
 ```
 
 ```bash
@@ -175,7 +175,7 @@ behaviour you know. The other four are new tools.
 r := [ Error signal: 'parse failed'. 'never reached' ]
   on: Error
   do: [ :e | e return: 'default config' ].
-r.
+r displayNl.
 ```
 
 ```bash
@@ -208,7 +208,7 @@ Flaky >> attempt
   ^ 'succeeded on try ' , tries printString.
 
 f := Flaky new.
-[ f attempt ] on: Error do: [ :e | e retry ].
+([ f attempt ] on: Error do: [ :e | e retry ]) displayNl.
 ```
 
 ```bash
@@ -240,7 +240,7 @@ along. Only *resumable* exceptions support it (`Warning`, `Exception` and
 r := [ Warning signal: 'unusual but ok'. 'finished' ]
   on: Warning
   do: [ :e | e resume: nil ].
-r.
+r displayNl.
 ```
 
 ```bash
@@ -278,7 +278,7 @@ log := OrderedCollection new.
     ensure: [ log add: 'closed' ] ]
   on: Error
   do: [ :e | log add: 'handled' ].
-log size.
+log size displayNl.
 ```
 
 ```bash
@@ -345,7 +345,7 @@ Account >> safeWithdraw: amount
       do: [ :e | 'refused: ' , e messageText ].
 
 a := Account new.
-a safeWithdraw: 250.
+(a safeWithdraw: 250) displayNl.
 ```
 
 ```bash

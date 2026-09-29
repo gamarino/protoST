@@ -70,4 +70,4 @@ sum := 0.
 futures do: [ :f | sum := sum + f wait ].
 result := sum.
 result = 48048000 ifFalse: [Error signal: 'multi_producer: wrong result ' , result printString].
-'VERIFIED ' , result printString
+Transcript showCr: 'VERIFIED ' , result printString.

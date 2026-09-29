@@ -52,7 +52,7 @@ EXPECTED=1000
 # --- direction 1: with the safepoint hook, the run completes ----------------
 rc=0
 out="$(PROTOCORE_HEAP_LIMIT_CELLS="$LIMIT" PROTOST_WORKERS=2 \
-       timeout 300 "$PROTOST" "$SCRIPT" 2>&1)" || rc=$?
+       timeout 300 "$PROTOST" --print-last "$SCRIPT" 2>&1)" || rc=$?
 if [ "$rc" -ne 0 ]; then
     echo "FAIL: the run did not complete under a ${LIMIT}-cell ceiling (exit $rc)"
     printf '%s\n' "$out"
@@ -68,7 +68,7 @@ fi
 # --- direction 2: without it, the same run must run out of memory -----------
 rc=0
 out="$(PROTOST_NO_GC_SAFEPOINT=1 PROTOCORE_HEAP_LIMIT_CELLS="$LIMIT" \
-       PROTOST_WORKERS=2 timeout 300 "$PROTOST" "$SCRIPT" 2>&1)" || rc=$?
+       PROTOST_WORKERS=2 timeout 300 "$PROTOST" --print-last "$SCRIPT" 2>&1)" || rc=$?
 if [ "$rc" -eq 0 ]; then
     echo "FAIL: the run completed with the safepoint hook DISABLED, so this"
     echo "      fixture no longer proves the hook is what reclaims the heap."

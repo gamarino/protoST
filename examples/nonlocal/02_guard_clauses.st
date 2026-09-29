@@ -11,4 +11,4 @@ MathOps >> factorial: n
   n <= 1 ifTrue: [ ^ 1 ].
   ^ n * (self factorial: n - 1).
 
-MathOps new factorial: 5.
+(MathOps new factorial: 5) displayNl.

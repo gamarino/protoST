@@ -11,4 +11,4 @@ m := Import from: 'json'.
 doc := m JSON parse: '{"user": {"first": "Ada", "last": "Lovelace", "id": 7}}'.
 user := doc at: 'user'.
 
-(user at: 'first') , ' ' , (user at: 'last').
+((user at: 'first') , ' ' , (user at: 'last')) displayNl.

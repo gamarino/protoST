@@ -84,7 +84,7 @@ grow the array:
 "-- array-slot.st --"
 a := Array new: 3.
 a at: 1 put: 99.
-a at: 1.
+(a at: 1) displayNl.
 ```
 
 ```bash
@@ -105,7 +105,7 @@ JavaScript `Array` to do.
 oc := OrderedCollection new.
 oc add: 1; add: 2; add: 3.
 oc removeFirst.
-{ oc size. oc first. oc last }.
+{ oc size. oc first. oc last } displayNl.
 ```
 
 ```bash
@@ -115,7 +115,7 @@ $ ./build/protost ordered.st
 
 The script builds an `OrderedCollection`, appends three elements with a
 *cascade* (`add: 1; add: 2; add: 3` — three messages to the same receiver, see
-[Chapter 2](02-objects-and-messages.md)), removes the first, then evaluates a
+[Chapter 2](02-objects-and-messages.md)), removes the first, then prints a
 dynamic array of three facts about it: the size `2`, the first element `2`
 and the last element `3`. Printing a collection shows its elements (§8.9).
 
@@ -144,7 +144,7 @@ no-op:
 "-- set.st --"
 s := Set new.
 s add: 1; add: 1; add: 2; add: 2; add: 3.
-s size.
+s size displayNl.
 ```
 
 ```bash
@@ -164,7 +164,7 @@ b := Bag new.
 b add: 5.
 b add: 5.
 b add: 7.
-{ b size. b occurrencesOf: 5 }.
+{ b size. b occurrencesOf: 5 } displayNl.
 ```
 
 ```bash
@@ -189,7 +189,7 @@ integers, or any object.
 d := Dictionary new.
 d at: #one put: 1.
 d at: #two put: 2.
-{ d at: #one. d includesKey: #two. d at: #missing ifAbsent: [ 0 ] }.
+{ d at: #one. d includesKey: #two. d at: #missing ifAbsent: [ 0 ] } displayNl.
 ```
 
 ```bash
@@ -266,7 +266,7 @@ block against its elements.
 "-- sum-do.st --"
 sum := 0.
 #(10 20 30) do: [ :e | sum := sum + e ].
-sum.
+sum displayNl.
 ```
 
 ```bash
@@ -418,7 +418,7 @@ elements:
 "-- show.st --"
 nums := #(3 1 4 1 5).
 text := nums inject: '' into: [ :acc :e | acc , e printString , ' ' ].
-text.
+text displayNl.
 ```
 
 ```bash
@@ -448,7 +448,7 @@ highBySelect := (readings select: [ :r | r > 40 ]) size.
 highByFold := readings inject: 0 into: [ :acc :r |
   (r > 40) ifTrue: [ acc + 1 ] ifFalse: [ acc ] ].
 
-{ highBySelect. highByFold }.
+{ highBySelect. highByFold } displayNl.
 ```
 
 ```bash

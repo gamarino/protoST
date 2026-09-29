@@ -99,8 +99,9 @@ c increment.
 c value.        "evaluates to 2 — the value of the whole program"
 ```
 
-When run as a script, the value of the **last top-level statement** is the
-program's result.
+When run as a script, the program shows only what it prints (end it with
+`c value displayNl.` to see `2`); `protost --print-last` also prints the value
+of the **last top-level statement** after the program runs (§13).
 
 ---
 
@@ -2154,7 +2155,8 @@ The runtime executable is `protost`.
 
 | Invocation | Effect |
 |------------|--------|
-| `protost script.st [args...]` | Run `script.st`; print the value of its last top-level statement. |
+| `protost script.st [args...]` | Run `script.st`; only what the program prints is shown. |
+| `protost --print-last script.st [args...]` | Run `script.st`, then print the value of its last top-level statement. |
 | `protost -e '<expr>'` | Evaluate the expression and print the result. |
 | `protost -i` | Start the interactive REPL. |
 | `protost -d script.st` | Run the script under the CLI debugger. |
@@ -2213,12 +2215,12 @@ readers know), on purpose or not yet implemented. The catalogue for a
 Smalltalk programmer, with what to write instead, is
 [Tutorial chapter 14](tutorial/14-for-the-smalltalk-programmer.md#144-deviations-from-smalltalk-80);
 [`docs/STATUS.md`](STATUS.md) is the live tracker with repros, ids and fixing
-commits. Summary as of 0.4.0:
+commits. Summary as of 0.4.0, updated for changes merged since:
 
 - **Deliberate:** programs are files, not an image; a blank line ends a
-  method body (D33); a script shows the value of its last statement (D12,
-  D12b); strings are immutable (D34); short symbols are represented as the
-  equal strings (D35); a few printed forms differ (D36); an actor that waits
+  method body (D33); a script is its top-level forms, run in order (D12);
+  strings are immutable (D34); short symbols are represented as the equal
+  strings (D35); a few printed forms differ (D36); an actor that waits
   is not re-entrant (D37); recursion depth is bounded with a catchable error
   (D38); one runtime per process (D2); `addBehavior:` reaches future
   instances only (D21).

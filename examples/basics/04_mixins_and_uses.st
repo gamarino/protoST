@@ -39,4 +39,4 @@ Money >> typeName
 a := Money new setCents: 250.
 b := Money new setCents: 100.
 "a > b is true (250 > 100); describe comes from the Describable mixin."
-(a > b) ifTrue: [ a describe ] ifFalse: [ b describe ].
+((a > b) ifTrue: [ a describe ] ifFalse: [ b describe ]) displayNl.

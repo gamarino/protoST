@@ -7,4 +7,4 @@ s := ''.
 1 to: 2000 do: [ :i | s := s , 'x' ].
 result := s size.
 result = 2000 ifFalse: [Error signal: 'str_concat: wrong result ' , result printString].
-'VERIFIED ' , result printString
+Transcript showCr: 'VERIFIED ' , result printString.

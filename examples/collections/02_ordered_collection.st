@@ -9,4 +9,4 @@ oc := OrderedCollection new.
 oc add: 10; add: 20; add: 30; add: 40; add: 50; add: 60; add: 70.
 oc removeFirst.
 oc removeLast.
-oc size.
+oc size displayNl.

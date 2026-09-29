@@ -53,7 +53,7 @@ EXPECTED=$((METHODS * ACTORS * 3))
 for i in $(seq 1 "$RUNS"); do
     # A healthy launch takes well under a second; 30 s only catches a hang.
     set +e
-    out="$(PROTOST_WORKERS=$ACTORS timeout 30 "$PROTOST" "$SCRIPT" 2>&1)"
+    out="$(PROTOST_WORKERS=$ACTORS timeout 30 "$PROTOST" --print-last "$SCRIPT" 2>&1)"
     rc=$?
     set -e
     if [ "$rc" -ne 0 ]; then

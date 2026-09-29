@@ -22,4 +22,4 @@ futures := OrderedCollection new.
 "Fan in: collect every result by waiting on its Future."
 futures do: [ :f | results add: f wait ].
 
-results inject: 0 into: [ :acc :each | acc + each ].
+(results inject: 0 into: [ :acc :each | acc + each ]) displayNl.

@@ -48,4 +48,4 @@ t1 := Object new __monotonicMillis.
 
 ('ELAPSED_MS ' , (t1 - t0) printString) printNl.
 result = 20004000000 ifFalse: [Error signal: 'saturation_big: wrong result ' , result printString].
-'VERIFIED ' , result printString
+Transcript showCr: 'VERIFIED ' , result printString.

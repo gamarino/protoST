@@ -15,4 +15,4 @@ elapsed := m Time millisecondsToRun: [
 
 "elapsed is an integer count of milliseconds; compare against a Duration."
 budget := m Duration seconds: 60.
-(elapsed >= 0) and: [ elapsed <= budget asMilliseconds ].
+((elapsed >= 0) and: [ elapsed <= budget asMilliseconds ]) displayNl.

@@ -141,7 +141,7 @@ bump := [ count := count + 1 ].
 bump value.
 bump value.
 bump value.
-count.
+count displayNl.
 ```
 
 ```bash
@@ -176,7 +176,7 @@ a loop keeps that pass's value:
 "-- per-iteration.st --"
 blocks := OrderedCollection new.
 1 to: 3 do: [ :i | blocks add: [ i * 10 ] ].
-(blocks collect: [ :b | b value ]) asArray.
+(blocks collect: [ :b | b value ]) asArray displayNl.
 ```
 
 ```bash
@@ -266,7 +266,7 @@ condition; the argument block is the body:
 i := 0.
 sum := 0.
 [ i < 5 ] whileTrue: [ i := i + 1. sum := sum + i ].
-sum.
+sum displayNl.
 ```
 
 ```bash
@@ -293,7 +293,7 @@ Counting loops are messages on a number:
 "-- count-loop.st --"
 sum := 0.
 1 to: 5 do: [ :i | sum := sum + i ].
-sum.
+sum displayNl.
 ```
 
 ```bash
@@ -309,7 +309,7 @@ step, and a negative step counts down:
 "-- countdown.st --"
 sum := 0.
 10 to: 1 by: -2 do: [ :i | sum := sum + i ].
-sum.
+sum displayNl.
 ```
 
 ```bash
@@ -334,7 +334,7 @@ evaluates a block once per element:
 "-- sum-array.st --"
 sum := 0.
 #(10 20 30) do: [ :e | sum := sum + e ].
-sum.
+sum displayNl.
 ```
 
 ```bash
@@ -357,7 +357,7 @@ around. A dictionary of blocks is a perfectly idiomatic dispatch table:
 ops := Dictionary new.
 ops at: #double put: [ :n | n * 2 ].
 ops at: #square put: [ :n | n * n ].
-(ops at: #square) value: 9.
+((ops at: #square) value: 9) displayNl.
 ```
 
 ```bash

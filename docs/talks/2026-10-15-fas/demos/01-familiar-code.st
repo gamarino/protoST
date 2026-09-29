@@ -72,4 +72,4 @@ Transcript showCr: ([1 / 0] on: ZeroDivide do: [:e | e resume: 0]) printString.
 Transcript showCr: ((1/3) + (1/6)) printString , '  ' , (2 raisedTo: 100) printString.
 Transcript showCr: (bank find: 'Nobody') printString.
 
-bank total
+Transcript showCr: bank total printString.

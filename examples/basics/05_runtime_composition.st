@@ -24,4 +24,4 @@ Greeter addBehavior: Whispers.
 
 "The instance is created after composition, so it sees both behaviours."
 g := Greeter new.
-g shout , ' and ' , g whisper.
+(g shout , ' and ' , g whisper) displayNl.

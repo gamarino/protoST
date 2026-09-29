@@ -10,4 +10,4 @@ geometry := Import from: '_geometry'.
 
 rect := geometry Rectangle new.
 rect setWidth: 4 height: 6.
-rect area.
+rect area displayNl.

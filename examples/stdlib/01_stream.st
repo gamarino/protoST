@@ -14,4 +14,4 @@ ws := m WriteStream new.
   ws nextPut: rs next * 2 ].
 
 "contents is #(2 4 6 8 10); sum it back to a single number."
-ws contents inject: 0 into: [ :acc :n | acc + n ].
+(ws contents inject: 0 into: [ :acc :n | acc + n ]) displayNl.

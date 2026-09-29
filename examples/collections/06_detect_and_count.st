@@ -16,4 +16,4 @@ Primality >> isPrime: n
 
 checker := Primality new.
 primeCount := (2 to: 99) count: [ :n | checker isPrime: n ].
-'prime-count-' , primeCount printString.
+('prime-count-' , primeCount printString) displayNl.

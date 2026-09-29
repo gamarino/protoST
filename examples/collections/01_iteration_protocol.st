@@ -8,4 +8,4 @@
 
 evens   := #(1 2 3 4 5 6 7 8 9 10) select: [ :n | n isEven ].
 squares := evens collect: [ :n | n * n ].
-squares inject: 0 into: [ :acc :each | acc + each ].
+(squares inject: 0 into: [ :acc :each | acc + each ]) displayNl.

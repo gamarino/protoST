@@ -67,4 +67,4 @@ t3 := Object new __monotonicMicros.
 ('VERIFIED ' , processed printString) printNl.
 ('EXPECTED ' , sends printString) printNl.
 processed = sends ifFalse: [Error signal: 'mailbox_send_cost: processed ' , processed printString , ' of ' , sends printString].
-'VERIFIED ' , processed printString
+Transcript showCr: 'VERIFIED ' , processed printString.

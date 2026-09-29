@@ -21,4 +21,4 @@ obj := FastObject new.
 obj setA: 1 b: 2 c: 3.
 result := obj runBench: 100000.
 result = 600000 ifFalse: [Error signal: 'attr_lookup: wrong result ' , result printString].
-'VERIFIED ' , result printString
+Transcript showCr: 'VERIFIED ' , result printString.

@@ -34,7 +34,7 @@ Grader >> classify: score
   (score >= 80) ifTrue: [ ^ 'B' ].
   ^ 'C'.
 
-(Grader new) classify: 85.
+((Grader new) classify: 85) displayNl.
 ```
 
 ```bash
@@ -70,7 +70,7 @@ Finder >> firstEven: aCollection
     (x \\ 2 = 0) ifTrue: [ ^ x ] ].
   ^ nil.
 
-(Finder new) firstEven: #(1 3 5 8 9).
+((Finder new) firstEven: #(1 3 5 8 9)) displayNl.
 ```
 
 ```bash
@@ -119,7 +119,7 @@ Calc >> doubled: n
   result := [ n * 2 ] value.    "block has no ^ — yields n*2 to `result`"
   ^ result + 1.
 
-(Calc new) doubled: 10.
+((Calc new) doubled: 10) displayNl.
 ```
 
 ```bash
@@ -163,7 +163,7 @@ Maker >> escapedBlock
 
 blk := (Maker new) escapedBlock.   "escapedBlock has now returned — its home is dead"
 result := [ blk value ] on: Error do: [ :e | e messageText ].
-result.
+result displayNl.
 ```
 
 ```bash

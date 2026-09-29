@@ -21,4 +21,4 @@ Counter class >> startingAt: n
   c setValue: n.
   ^ c.
 
-(Counter startingAt: 10) value.
+((Counter startingAt: 10) value) displayNl.

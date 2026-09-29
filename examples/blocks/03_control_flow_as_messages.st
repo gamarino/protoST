@@ -19,4 +19,4 @@ sum := 0.
             ifFalse: [ sum := sum + n ] ] ] ].
 
 "Plain numbers in 1..30 sum to 240 once multiples of 3 and 5 are removed."
-'fizzbuzz-result-' , sum printString.
+('fizzbuzz-result-' , sum printString) displayNl.

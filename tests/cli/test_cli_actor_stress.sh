@@ -34,7 +34,7 @@ RUNS=25
 for i in $(seq 1 "$RUNS"); do
     # A healthy run completes in well under a second; 15s is a generous
     # ceiling that a genuine deadlock will always exceed.
-    if ! out="$(timeout 15 "$PROTOST" "$SCRIPT" 2>&1)"; then
+    if ! out="$(timeout 15 "$PROTOST" --print-last "$SCRIPT" 2>&1)"; then
         rc=$?
         if [ "$rc" -eq 124 ]; then
             echo "FAIL: run $i/$RUNS DEADLOCKED (timed out) — D23 regression"

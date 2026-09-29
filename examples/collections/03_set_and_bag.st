@@ -15,5 +15,6 @@ bag := Bag new.
 words do: [ :w | bag add: w ].
 
 "Set holds 3 distinct words; Bag holds 5 occurrences, 3 of them 'apple'."
-((set size = 3) and: [ bag size = 5 ])
-  and: [ (bag occurrencesOf: #apple) = 3 ].
+result := ((set size = 3) and: [ bag size = 5 ])
+    and: [ (bag occurrencesOf: #apple) = 3 ].
+result displayNl.

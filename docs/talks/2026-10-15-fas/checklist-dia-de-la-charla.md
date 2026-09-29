@@ -2,12 +2,12 @@
 
 ## La noche anterior
 
-- [ ] Instalar el `.deb` de 0.4.0 en la notebook de la charla:
-      `sudo dpkg -i protost-0.4.0-Linux.deb`. Antes, instalar protoCore:
+- [ ] Instalar el `.deb` de 0.4.1 en la notebook de la charla:
+      `sudo dpkg -i protost-0.4.1-Linux.deb`. Antes, instalar protoCore:
       el paquete depende de `protocore (>= 2.5.0)` y `protocore (<< 3.0.0)`
-      (`dpkg-deb -I protost-0.4.0-Linux.deb`); en la máquina de desarrollo
+      (`dpkg-deb -I protost-0.4.1-Linux.deb`); en la máquina de desarrollo
       está instalado protoCore 2.5.0.
-- [ ] `protost --version` → `protoST 0.4.0`.
+- [ ] `protost --version` → `protoST 0.4.1`.
 - [ ] `cd docs/talks/2026-10-15-fas/demos && RUNS=20 ./check_all.sh` → las
       tres demos 20/20.
 - [ ] Probar las grabaciones:

@@ -6,6 +6,7 @@
 "-- to sum the first hundred integers.                                      --"
 "-- Expected output: 2550  (the sum of every even number in 1..100)         --"
 
-(1 to: 100)
-  inject: 0
-  into: [ :acc :n | n isEven ifTrue: [ acc + n ] ifFalse: [ acc ] ].
+result := (1 to: 100)
+    inject: 0
+    into: [ :acc :n | n isEven ifTrue: [ acc + n ] ifFalse: [ acc ] ].
+result displayNl.

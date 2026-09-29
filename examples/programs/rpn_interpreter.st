@@ -46,4 +46,4 @@ machine := RPNMachine new.
 machine initialize.
 result := machine run: { 2. 3. #+. 4. #* }.
 
-'rpn-result-' , result printString.
+('rpn-result-' , result printString) displayNl.

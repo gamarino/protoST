@@ -14,4 +14,4 @@ Combinators >> twice: aBlock
 
 square := [ :n | n * n ].
 squareTwice := Combinators new twice: square.
-squareTwice value: 4.
+(squareTwice value: 4) displayNl.

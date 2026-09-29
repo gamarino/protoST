@@ -11,4 +11,4 @@ freq := Dictionary new.
   count := freq at: word ifAbsent: [ 0 ].
   freq at: word put: count + 1 ].
 
-freq at: #the.
+(freq at: #the) displayNl.

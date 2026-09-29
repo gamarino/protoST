@@ -25,4 +25,4 @@ ms := Time millisecondsToRun: [
 Transcript showCr: '12 actors:  ' , parallel printString , ' primes'.
 Transcript showCr: 'time 12 actors: ' , ms printString , ' ms'.
 
-serial = parallel
+Transcript showCr: (serial = parallel) printString.

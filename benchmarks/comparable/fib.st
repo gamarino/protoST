@@ -11,4 +11,4 @@ Fib >> compute: n
 f := Fib new.
 result := f compute: 25.
 result = 75025 ifFalse: [Error signal: 'fib: wrong result ' , result printString].
-'VERIFIED ' , result printString
+Transcript showCr: 'VERIFIED ' , result printString.

@@ -119,19 +119,23 @@ A `.st` file is a protoST program. Run it with:
 ```
 
 The program is a sequence of *top-level forms* — class declarations, method
-definitions, and statements — executed in order. The runtime prints the value
-of the **last top-level statement**. So a file containing just:
+definitions, and statements — executed in order. A script prints only what it
+prints explicitly. So a file containing just:
 
 ```smalltalk
-3 + 4.
+(3 + 4) displayNl.
 ```
 
-prints `7`.
+prints `7`. `displayNl` prints its receiver followed by a newline (a string
+without its quotes); `printNl` prints the receiver's source-like form
+(`'abc'` with quotes).
 
-> **In Python/JS** a script has no "value" — you `print()` explicitly.
-> **In protoST** the script's last statement *is* its value, and the CLI
-> prints it for you. It is closer to a REPL evaluating a file than to running
-> `python script.py`.
+> **In Python/JS** you `print()` explicitly, and **in protoST** you do too:
+> running a file shows only the program's own output, as with
+> `python script.py`. When you want to see the value of the last top-level
+> statement anyway, run `./build/protost --print-last script.st`, which prints
+> that value after the program finishes. `-e` and the REPL, below, always show
+> the value of what you evaluate.
 
 ### Evaluate one expression
 
@@ -162,7 +166,7 @@ REPL.
 
 ```bash
 $ ./build/protost -i
-protoST 0.4.0 — interactive REPL
+protoST 0.4.1 — interactive REPL
 :help for commands, :quit or Ctrl-D to exit
 protoST> 3 + 4
 => 7
@@ -203,7 +207,7 @@ Counter >> value
 c := Counter new.
 c increment.
 c increment.
-c value.
+c value displayNl.
 ```
 
 ```bash

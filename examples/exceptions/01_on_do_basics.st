@@ -6,6 +6,7 @@
 "-- value; the protected computation after `signal` is abandoned.           --"
 "-- Expected output: recovered: disk full                                   --"
 
-[ Error signal: 'disk full'. 'not reached' ]
-  on: Error
-  do: [ :ex | 'recovered: ' , ex messageText ].
+result := [ Error signal: 'disk full'. 'not reached' ]
+    on: Error
+    do: [ :ex | 'recovered: ' , ex messageText ].
+result displayNl.

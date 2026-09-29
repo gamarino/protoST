@@ -22,4 +22,4 @@ Counter >> value
 c := Counter new.
 c increment.
 c increment.
-c value.
+c value displayNl.

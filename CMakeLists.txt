@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(protoST VERSION 0.4.0 LANGUAGES CXX)
+project(protoST VERSION 0.4.1 LANGUAGES CXX)
 
 # The one place the version is written: every binary and library reads it
 # through PROTOST_VERSION (include/protoST/STRuntime.h).
@@ -196,6 +196,9 @@ add_test(NAME cli_venv
 
 add_test(NAME cli_eval
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_eval.sh $<TARGET_FILE:protost>)
+
+add_test(NAME cli_script_output
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_script_output.sh $<TARGET_FILE:protost>)
 
 add_test(NAME cli_memory_bounded
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_memory_bounded.sh $<TARGET_FILE:protost>)

@@ -62,7 +62,7 @@ Two ways to run protoST code appear throughout:
 
 ```bash
 ./build/protost -e '3 + 4'        # evaluate one expression, print the result
-./build/protost script.st         # run a file, print its last statement
+./build/protost script.st         # run a file; it shows only what it prints
 ```
 
 There is one practical rule worth knowing before you start, because a

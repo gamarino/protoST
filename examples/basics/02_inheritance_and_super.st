@@ -18,4 +18,4 @@ Dog subclass: #LoudDog.
 LoudDog >> describe
   ^ (super describe) , ' loudly'.
 
-LoudDog new describe.
+LoudDog new describe displayNl.

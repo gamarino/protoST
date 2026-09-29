@@ -66,4 +66,4 @@ controller := Controller new
 pump start wait.
 ms := Time millisecondsToRun: [1 to: 5 do: [:n | controller cycle: n]].
 Transcript showCr: 'time per cycle: ' , (ms // 5) printString , ' ms (three 50 ms reads each)'.
-pump cycles wait
+Transcript showCr: pump cycles wait printString.

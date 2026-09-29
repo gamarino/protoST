@@ -69,4 +69,4 @@ Calculator >> evaluate
 "-- driver: evaluate  ( 2 + 3 ) ... actually 2 + 3 * 4 = 14 --"
 calc := Calculator new.
 calc on: { 2. '+'. 3. '*'. 4 }.
-calc evaluate.
+calc evaluate displayNl.
