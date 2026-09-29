@@ -85,39 +85,59 @@ ReadStream >> atEnd
   ^ position >= collection size.
 
 ReadStream >> next
+  "Past the end this signals an Error (the protoST spec, tested in
+   13-stdlib); Pharo answers nil instead."
   self atEnd ifTrue: [^ self error: 'ReadStream>>next: past end of stream'].
   position := position + 1.
   ^ collection at: position.
 
+"next:, upTo: and upToEnd answer a copy of part of the collection, so the
+ result has the collection's kind: a String from a String, an
+ OrderedCollection from an OrderedCollection, an Array from an Array."
+
 ReadStream >> next: n
-  | out |
-  out := WriteStream on: (collection isString ifTrue: [''] ifFalse: [#()]).
-  1 to: n do: [:i | self atEnd ifFalse: [out nextPut: self next]].
-  ^ out contents.
+  "Answer the next n elements, or fewer if the stream ends first."
+  | stop result |
+  stop := (position + n) min: collection size.
+  result := collection copyFrom: position + 1 to: stop.
+  position := stop.
+  ^ result.
 
 ReadStream >> peek
   self atEnd ifTrue: [^ nil].
   ^ collection at: position + 1.
+
+ReadStream >> peekFor: anObject
+  "Consume the next element and answer true if it equals anObject; otherwise
+   leave the stream where it is and answer false."
+  (self atEnd not and: [self peek = anObject]) ifFalse: [^ false].
+  position := position + 1.
+  ^ true.
 
 ReadStream >> skip: n
   position := (position + n) max: 0.
   position := position min: collection size.
   ^ self.
 
+ReadStream >> skipSeparators
+  [self atEnd not and: [self peek isSeparator]] whileTrue: [position := position + 1].
+
+ReadStream >> skipTo: anObject
+  "Advance past the next occurrence of anObject; answer whether it was found."
+  [self atEnd] whileFalse: [self next = anObject ifTrue: [^ true]].
+  ^ false.
+
 ReadStream >> upTo: anObject
-  | out element |
-  out := WriteStream on: (collection isString ifTrue: [''] ifFalse: [#()]).
+  "Answer the elements up to, not including, anObject (or to the end), and
+   advance past anObject."
+  | start |
+  start := position.
   [self atEnd] whileFalse: [
-    element := self next.
-    element = anObject ifTrue: [^ out contents].
-    out nextPut: element].
-  ^ out contents.
+    self next = anObject ifTrue: [^ collection copyFrom: start + 1 to: position - 1]].
+  ^ collection copyFrom: start + 1 to: position.
 
 ReadStream >> upToEnd
-  | out |
-  out := WriteStream on: (collection isString ifTrue: [''] ifFalse: [#()]).
-  [self atEnd] whileFalse: [out nextPut: self next].
-  ^ out contents.
+  ^ self next: collection size - position.
 
 ReadStream >> do: aBlock
   [self atEnd] whileFalse: [aBlock value: self next].
