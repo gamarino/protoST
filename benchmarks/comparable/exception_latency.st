@@ -9,4 +9,6 @@ total := 0.
     total := total + 1 ]
   on: Error
   do: [ :e | total := total + 1 ] ].
-total.
+result := total.
+result = 50000 ifFalse: [Error signal: 'exception_latency: wrong result ' , result printString].
+'VERIFIED ' , result printString

@@ -1,4 +1,9 @@
 #pragma once
+
+// Set by CMake from project(VERSION); the fallback serves out-of-tree builds.
+#ifndef PROTOST_VERSION
+#define PROTOST_VERSION "0.4.0"
+#endif
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -230,9 +235,17 @@ public:
     // Idempotent: a spec already present in the chain is not added twice.
     void addModuleProviderToChain(const std::string& providerSpec);
 
-    inline const char* versionTag() const { return "0.3.0"; }
+    inline const char* versionTag() const { return PROTOST_VERSION; }
 
 private:
+    // Installs protoST's default heap limits and out-of-memory report.
+    static void configureHeap(proto::ProtoSpace& space);
+
+    // Loads the Smalltalk-source kernel (<lib>/kernel, in the order of its
+    // 00-manifest.txt) into this runtime's globals. Throws std::runtime_error
+    // naming file and line when a kernel file does not parse, compile or run.
+    void loadKernel();
+
     // Runs a module's top level on `ctx` like runTopLevel, but lets every
     // control-flow signal (UnwindToHandler, RetrySignal, NonLocalReturn, ...)
     // propagate to the caller instead of converting it into an error. Used for
@@ -288,6 +301,6 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-inline const char* versionString() { return "protoST 0.3.0"; }
+inline const char* versionString() { return "protoST " PROTOST_VERSION; }
 
 } // namespace protoST

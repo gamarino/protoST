@@ -16,13 +16,13 @@
 # The premise of this fixture is that the workload allocates far more than the
 # ceiling allows, so it can only finish if collections reclaim: 100,000 arrays
 # of 8 elements against a hard ceiling of 400,000 cells and a live set of about
-# 180,000. The protoCore heap-limit path aborts with "last cycle reclaimed 0 —
-# out of memory" when nothing can be reclaimed, which is exactly the S15
-# symptom.
+# 180,000. When nothing can be reclaimed the heap-limit path ends the program
+# with "the last collections reclaimed nothing" (exit 3), which is exactly the
+# S15 symptom.
 #
 # It is a two-directional test, so it cannot pass by accident: the same
 # workload is then run with `PROTOST_NO_GC_SAFEPOINT=1`, which disables the
-# interpreter's safepoint hook, and that run MUST abort. If it does not, either
+# interpreter's safepoint hook, and that run MUST run out of memory. If it does not, either
 # the hook is no longer what makes the difference or the ceiling stopped
 # biting, and this fixture is no longer testing what it claims.
 set -euo pipefail
@@ -75,11 +75,13 @@ if [ "$rc" -eq 0 ]; then
     printf '%s\n' "$out"
     exit 1
 fi
-if ! printf '%s\n' "$out" | grep -q "reclaimed 0"; then
+# protoST ends a confirmed out-of-memory with exit status 3 and a message
+# stating that the last collections reclaimed nothing (0.4.0: no abort).
+if [ "$rc" -ne 3 ] || ! printf '%s\n' "$out" | grep -q "reclaimed nothing"; then
     echo "FAIL: with the hook disabled the run failed for some other reason"
     echo "      than a cycle that reclaimed nothing (exit $rc):"
     printf '%s\n' "$out"
     exit 1
 fi
 
-echo "OK (100000 arrays under a ${LIMIT}-cell ceiling; aborts with the hook off)"
+echo "OK (100000 arrays under a ${LIMIT}-cell ceiling; out of memory with the hook off)"

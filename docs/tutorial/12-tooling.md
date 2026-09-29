@@ -17,7 +17,7 @@ invocations:
 | Invocation | Effect |
 |------------|--------|
 | `protost script.st` | run a script; print its last top-level statement |
-| `protost -e '<expr>'` | evaluate one expression; print the result |
+| `protost -e '<code>'` | evaluate an expression (or several statements); print the last value |
 | `protost -i` | start the interactive REPL |
 | `protost -d script.st` | run a script under the CLI debugger |
 | `protost --dap` | run the Debug Adapter Protocol server (for VS Code) |
@@ -34,7 +34,7 @@ debugger, and `venv`.
 
 ```
 $ ./build/protost -i
-protoST 0.1.0-pre — interactive REPL
+protoST 0.4.0 — interactive REPL
 :help for commands, :quit or Ctrl-D to exit
 protoST> 3 + 4
 => 7
@@ -102,7 +102,9 @@ protoST scripts can be debugged at source level. There are two front-ends to
 the same underlying debugger.
 
 **The CLI debugger** — `protost -d script.st` — runs a script under an
-interactive command-line debugger.
+interactive command-line debugger. A `self halt` in the code stops there when
+the script runs under `-d`; without a debugger, `halt` prints a notice and
+the program continues.
 
 **The DAP adapter** — `protost --dap` — speaks the
 [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/),
@@ -182,7 +184,7 @@ protoST runtime must be the **only** one in its operating-system process. The
 the debugger is unaffected. The constraint matters only if you *embed* protoST
 as a library — and even then it is straightforward: construct one runtime per
 process. `docs/STATUS.md` records this as intentional deviation D2; it stems
-from protoCore's per-process symbol-interning caches.
+from protoCore's module provider and module cache, which are process-wide.
 
 ## 12.6 Summary
 

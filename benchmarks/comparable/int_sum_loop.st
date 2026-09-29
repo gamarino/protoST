@@ -2,5 +2,7 @@
 "Direct counterpart of benchmarks/int_sum_loop.py (sum(range(100000)))."
 "Result: 5000050000."
 
-result := (1 to: 100000) inject: 0 into: [ :acc :each | acc + each ].
-result.
+result := (0 to: 99999) inject: 0 into: [ :acc :each | acc + each ].
+result = 4999950000 ifFalse: [Error signal: 'int_sum_loop: wrong result ' , result printString].
+'VERIFIED ' , result printString
+

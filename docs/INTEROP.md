@@ -10,6 +10,53 @@ that the protoST repo alone cannot deliver.
 
 ---
 
+## 0. What is verified, and what is not (2026-09-29)
+
+Read this section before the rest. The later sections describe the design. This
+one records what has actually been run with a **real** second runtime in the
+same process, protoScala, and what has been run only against a provider that
+the test harness simulates. The evidence is protoScala's test
+`umd/protost-interop` and the reproducer in
+[`tests/interop/`](../tests/interop/README.md), which links protoST and
+protoScala into one executable.
+
+| Claim | Status | Evidence |
+|-------|--------|----------|
+| protoST registers `provider:st`, and it is reachable with protoScala in the process | Verified with a real runtime | `umd/protost-interop`, `BothProvidersAreReachableInOneProcess` |
+| A protoScala program's `import st.counter_lib` resolves and `import st.counter_lib.Counter` binds | Verified with a real runtime | `umd/protost-interop`; the program prints the value as `<object>` |
+| The value protoScala receives is the protoST cell itself (same address, same `getHash`) | Verified with a real runtime | `umd/protost-interop` `NO-COPY PROOF`; `test_cross_runtime_provider.cpp` with a bare `ProtoSpace` |
+| The imported class survives a GC cycle in each space | Verified with a real runtime | `umd/protost-interop`, `AForeignValueSurvivesACollectionOnBothSides` |
+| protoScala can read the imported protoST object's attributes | **Works with protoCore newer than 2.5.0; does not with 2.5.0** | protoCore 2.5.0 kept one table of mutable states per space, so through protoScala's context `Counter` had no `__class_name__` (K4). protoCore's process-global table (merged after 2.5.0, not yet released) fixes it: protoScala's `ProtoSTInterop.AForeignObjectsStateIsReadThroughTheCallersContext` reads `__class_name__` and writes an attribute protoST then reads. The 0.4.0 package depends on protoCore 2.5.0. |
+| A foreign runtime calls a protoST method | **Does not work** | By design (§4.2): a protoST method is not a `proto::ProtoMethod`. |
+| protoST imports a module from a real foreign runtime | **Does not work** | `.scala` via `provider:scala`: `module not found`. That provider finds its host from `ctx->space`. `.so` via `provider:compiled`: the import resolves, then `doesNotUnderstand: add#2`. |
+| protoST calls a protoCore method (`proto::ProtoMethod`) exported by another runtime | **Does not work** | `SEND_CALL` handles only protoST bytecode methods and protoST primitive markers (§3.5). |
+| protoST consumes a foreign module: import, unary/keyword dispatch, immediates, collections, blocks | Tested with a simulated provider only | `tests/unit/test_t5a_interop.cpp`. Its "foreign" objects are built in protoST's own space, with a primitive registered in protoST's own table. |
+| The installed `protost` / `protoscala` binaries interoperate | **No** | Neither binary links the other runtime. `protoscala` answers `no provider registered for 'st'`. `protost` has no option to add a provider to its chain. |
+| protoJS, protoPython, protoClojure | Untested | They register no provider that protoST can reach. |
+
+**Why objects are not readable across runtimes.** Each runtime owns its own
+`ProtoSpace`. protoCore resolves a mutable object's current state through
+`context->space->mutableRoot`, keyed by the object's `mutable_ref`
+(`protoCore/core/ProtoObject.cpp`). An object read through a context of the
+other space therefore resolves in the wrong table. What the probe shows about
+symbols is narrow: the symbol `add` was the same pointer in both runtimes, but
+`add` is 3 bytes, and protoCore stores strings of up to 6 bytes inline in the
+pointer word, so that says nothing about longer keys. Longer keys are
+interned in a symbol table; protoCore's CHANGELOG (2.2.0) makes that table
+process-wide, but this probe did not compare a longer key across the two
+runtimes. The two symptoms measured:
+
+- the read finds nothing, which is the case for the protoST class read from
+  protoScala;
+- the read returns **another object's data without any error**. Through
+  protoST's context, a protoScala module object answered
+  `__class_name__ = 'Number'`, the name of a protoST class.
+
+The second symptom is consistent with each space numbering its `mutable_ref`s
+independently, but that explanation has not been confirmed.
+
+---
+
 ## 1. Why interop is structurally cheap
 
 Every protoCore runtime — protoCore itself, protoJS, protoPython, protoST —
@@ -29,9 +76,11 @@ Consequences, which are the whole point of the shared kernel:
   uses for every runtime. So sending a message to a foreign object is not a
   special path; it is the *ordinary* path.
 
-protoST therefore consumes a foreign object the same way it consumes one of
-its own: receive it as a `ProtoObject`, send it messages, read its attributes,
-put it in collections, close over it in blocks.
+This holds when both runtimes read an object through a context of the
+`ProtoSpace` that owns it. Each runtime owns a separate space today, and a
+mutable object's state is resolved per space. Across two real runtimes the
+ordinary path therefore does **not** reach the other runtime's objects (§0).
+The consequences listed above are the design; §0 records what is verified.
 
 ---
 
@@ -101,13 +150,23 @@ wrapper; the next message send (`m SomeClass`) then failed with
 every call. This matters for any process that constructs more than one
 runtime — including a tri-runtime host.
 
+(protoCore's CHANGELOG states that since 2.2.0 symbols are interned
+process-wide. The 2026-09-29 two-runtime probe found the symbol `add` to be
+the same pointer in protoST and protoScala, but `add` is short enough to be
+stored inline in the pointer, so that case does not test the interning.
+Resolving the key per call is correct either way.)
+
 ### 2.4 What `Import` yields
 
 `Import from: '<logical-path>'` returns the foreign module as a plain
 `ProtoObject`. Its exported classes/objects are attributes; protoST reads them
-with ordinary unary sends:
+with ordinary unary sends. (The code blocks of §2–§3 that import
+`foreign_module` or `doubler.py` need a module served by another runtime's
+provider, which the `protost` binary cannot load (§0), so they are marked
+`no-run` for the documentation check. Where a unit test exercises the path,
+the section names it.)
 
-```smalltalk
+```smalltalk no-run
 m := Import from: 'foreign_module'.
 w := m Widget.            "unary send → reads the `Widget` attribute"
 w doubleIt: 21.           "keyword send → dispatches to a foreign method"
@@ -137,14 +196,16 @@ A foreign integer flows straight into protoST arithmetic, a foreign boolean
 drives a protoST `ifTrue:ifFalse:`, a foreign string compares equal to a
 protoST string literal — all with **no conversion step**:
 
-```smalltalk
+```smalltalk no-run
 m := Import from: 'foreign_module'.
 (m answerInt) + 1.                                   "42 + 1 = 43"
 (m answerBool) ifTrue: [ 'yes' ] ifFalse: [ 'no' ].  "foreign Boolean"
 (m answerString) = 'hello'.                          "foreign String, true"
 ```
 
-This is exercised directly by `tests/unit/test_t5a_interop.cpp`.
+This is exercised by `tests/unit/test_t5a_interop.cpp` against the simulated
+provider of §5, whose values live in protoST's own space. No real foreign
+runtime has passed an immediate or a string to protoST (§0).
 
 ### 3.2 Objects and methods — transparent dispatch
 
@@ -189,7 +250,7 @@ A foreign collection handed to protoST is therefore **not** a protoST
    foreign elements into a native protoST collection by walking the foreign
    protocol once:
 
-   ```smalltalk
+   ```smalltalk no-run
    bag := m Bag.                 "foreign collection wrapper"
    arr := OrderedCollection new.
    arr add: (bag item0).
@@ -238,17 +299,18 @@ unary sends with no args) is gone with the call-form syntax of LANGUAGE.md
 `double_it`, `get_item`, `doubleIt` — is now invoked directly with
 positional and named arguments:
 
-```smalltalk
+```smalltalk no-run
 "Python module: def double_it(x, name='hi'): ..."
 m := Import from: 'doubler.py'.
 m double_it(7, name = 'hello')        "→ same shape as the Python call"
 ```
 
-The dispatcher looks up the bare attribute (`double_it`) on the foreign
-object, recognises it as a protoCore method, and invokes it with the
-positional vector and named dict the call site assembled. No bridge-side
-selector mangling is required: the protoCore convention is the **same
-convention on both sides**.
+This is the intended design, and it is **not implemented** for foreign
+methods. `SEND_CALL` (`src/runtime/ExecutionEngine.cpp`) looks up the bare
+attribute. It then handles only a protoST bytecode method (an object carrying
+`__bc_ptr__`) and a protoST primitive marker. A `proto::ProtoMethod` cell, which
+is what `protoscalac` exports, falls through to `doesNotUnderstand`. No
+protoPython module has been imported into protoST at all.
 
 A protoST class can mirror the convention for outbound interop:
 
@@ -258,11 +320,12 @@ Counter >> incr(by, factor = 1)
     ^ value.
 ```
 
-Other runtimes that consume this protoST module find the method under the
-bare attribute key `incr`, invoke it with their own positional + named
-mechanism, and the protoST dispatcher does the arity/named binding. The
-keyword form `>> bar:` is still available for callers that prefer the
-Smalltalk style — call-form and keyword-form methods live as distinct
+Inside protoST, the method is stored under the bare attribute key `incr`, and
+protoST's dispatcher does the arity and named-argument binding. Another runtime
+**cannot** invoke it: a protoST method is not a `proto::ProtoMethod` (§4.2), and
+in the 2026-09-29 probe protoScala could not even read the class's attributes
+(§0). The keyword form `>> bar:` is still available for callers that prefer
+the Smalltalk style. Call-form and keyword-form methods live as distinct
 attributes and may coexist on the same class.
 
 (Out of scope in v1: call-form sends to actor receivers; the async
@@ -313,13 +376,14 @@ Two rules follow, and both are load-bearing:
    protoST's own later lookups of those names missing — §2.3's trap again, one
    level up.
 
-2. **The module namespace is rebuilt with keys interned in the CALLER's space.**
-   An attribute key is the address of an interned symbol and protoCore interns per
-   `ProtoSpace`, so the same name is a different pointer in each. Only the mapping
-   is rebuilt; every value is the protoST object itself, by address. The trap is
-   that protoCore embeds a short string in the pointer word, so a 5-byte member
-   name matches across spaces **by accident** while a 7-byte one misses
-   **silently** — which is why the tests use a class called `Counter`.
+2. **The module namespace is rebuilt as an object in the CALLER's context.**
+   Only the mapping is rebuilt; every value is the protoST object itself, by
+   address. The original rationale was per-space symbol interning, and it no
+   longer holds: since protoCore 2.2.0 symbols are interned process-wide. The
+   rebuild is still what makes the namespace readable from the caller, because a
+   mutable object's state is resolved per space (§0). The same rule is why the
+   **values** inside the namespace, protoST's own classes, are not readable from
+   the caller's context.
 
 `tests/unit/test_cross_runtime_provider.cpp` needs no sibling runtime: what makes
 a caller foreign is a ProtoSpace protoST does not own, and a bare
@@ -338,14 +402,19 @@ NO-COPY PROOF (protoST side)
   Counter via protoST = 0x743e4cf7e9c0  getHash = 127810928110016
 ```
 
-protoScala's `umd/protost-interop` drives the same path end to end from a real
-second runtime, including `import st.counter_lib as lib` in a protoScala program
-and a forced collection in each space.
+protoScala's `umd/protost-interop` drives the same path from a real second
+runtime: `import st.counter_lib as lib` in a protoScala program, and a forced
+collection in each space. That test is in protoScala's repository and is built
+only when protoST's libraries are found beside it. protoST's own test suite does
+not run it. It proves that the reference arrives, not that it is usable: the
+Scala program prints the value as `<object>`, and it cannot read the value's
+attributes (§0).
 
 ### 4.2 What the publish direction does NOT cover
 
-- **Values, not calls.** A protoST class or object crosses as a value and its
-  attributes read back. A protoST **method** is an object carrying `__bc_ptr__`
+- **References, not readable values.** A protoST class or object crosses as a
+  reference to the same cell. Its attributes read back only through a protoST
+  context. Through the importing runtime's context they are absent (§0). A protoST **method** is an object carrying `__bc_ptr__`
   that protoST's `ExecutionEngine` interprets on SEND; it is not a
   `proto::ProtoMethod`, so a foreign runtime cannot call it. Exporting callable
   behaviour to another runtime needs a protoCore method, which is a separate piece
@@ -460,13 +529,15 @@ libraries. At startup it must, in order:
 | Concern | Status |
 |---------|--------|
 | protoST as a UMD *provider* (publish) | Done — F5 v2 |
-| A provider serving a caller in ANOTHER runtime's ProtoSpace | Done — Track Y; §4.1 |
-| No copy at the boundary (same cell, same `getHash`, both sides) | Verified — §4.1 |
+| A provider serving a caller in ANOTHER runtime's ProtoSpace | Done — Track Y; §4.1; verified with protoScala |
+| No copy at the boundary (same cell, same `getHash`, both sides) | Verified with protoScala — §4.1 |
+| The importing runtime reading a protoST object's attributes | Does not work — §0 |
 | A foreign runtime CALLING a protoST method | Not supported — §4.2 |
-| protoST *consuming* a foreign provider's module | Done — T5-a; `addModuleProviderToChain` |
+| protoST *consuming* a foreign provider's module | Tested with a simulated provider only (T5-a). Fails with protoScala — §0 |
+| protoST calling a foreign `proto::ProtoMethod` | Not implemented — §3.5 |
 | Per-space symbol resolution in `Import` unwrap | Fixed — T5-a |
-| Immediates / strings cross with no conversion | Verified — T5-a tests |
-| Foreign object message dispatch (unary + keyword) | Verified — T5-a tests |
-| Foreign object through collections and blocks | Verified — T5-a tests |
+| Immediates / strings cross with no conversion | Simulated provider only — T5-a tests |
+| Foreign object message dispatch (unary + keyword) | Simulated provider only — T5-a tests |
+| Foreign object through collections and blocks | Simulated provider only — T5-a tests |
 | Foreign collection impedance + adapter boundary | Documented — §3.3 |
 | Live tri-runtime process | Specified — §6; cross-repo follow-up |

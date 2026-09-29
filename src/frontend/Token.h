@@ -43,6 +43,13 @@ struct Token {
     double     floatValue = 0.0; // valid for TokenKind::Float
     int line = 1;
     int column = 1;
+    // True when a blank line (only whitespace) separates this token from the
+    // previous one. A blank line ends a method body (see Parser::parseMethodDecl).
+    bool blankLineBefore = false;
+    // Integer literal too large for intValue: `text` holds its digits in
+    // base `radix` (sign included), materialised as a LargeInteger.
+    bool large = false;
+    int  radix = 10;
 };
 
 inline const char* tokenKindName(TokenKind k) {

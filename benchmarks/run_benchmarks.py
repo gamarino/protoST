@@ -1,35 +1,38 @@
 #!/usr/bin/env python3
 """
-Performance benchmark harness for protoST (Track 11).
+Performance benchmark harness for protoST.
+
+Every benchmark verifies its own work: a protoST benchmark ends by printing
+`VERIFIED <value>` as its last line (and signals an Error if its result is
+wrong), and each CPython twin prints `BENCH_RESULT ... result=<value>`. The
+harness compares every run's value with the expected one and exits non-zero
+if any run is missing it or reports another value, so a crash, a hang or a
+wrong answer can never be reported as a time.
 
 Two benchmark families are measured:
 
 * **Comparable workloads** -- the protoPython core benchmark suite translated
-  to idiomatic protoST. Each `.st` file in `benchmarks/comparable/` runs the
-  same algorithm with the same parameters as its protoPython `.py` twin, so
-  results are directly comparable. For these the harness ALSO runs the
-  protoPython `.py` equivalent with CPython (`python3`) and -- if a built
-  `protopy` binary is found -- with protoPython, producing a side-by-side
-  table.
+  to protoST. Each `.st` file in `benchmarks/comparable/` computes the same
+  result with the same N as its protoPython `.py` twin; the harness runs the
+  twin with CPython (`BENCH_N` set to the same N) and, when a built `protopy`
+  is found, with protoPython.
 
 * **Actor-model benchmarks** -- protoST-specific workloads in
-  `benchmarks/actors/` that exercise the actor scheduler. protoPython has no
-  actor model, so these have no Python column; they showcase protoST's
-  distinctive feature (parallel speedup, cooperative-yield scaling, mailbox
-  throughput).
+  `benchmarks/actors/`: parallel speedup, cooperative-yield scaling, message
+  throughput and the worker-scaling curve of `saturation_big.st`.
 
-Timing discipline mirrors protoPython's harness: WARMUP_RUNS warmup runs
-(discarded) followed by N_RUNS timed runs; the median wall-clock is reported,
-and a geometric mean aggregates the comparable table.
+Each measurement is WARMUP warmup runs (discarded) plus RUNS timed runs; the
+report gives the median and the min-max spread of wall-clock time, which for
+these small N includes process start-up (measured separately and reported).
 
 Usage:
-  python3 benchmarks/run_benchmarks.py [--output benchmarks/reports/NAME.md]
+  python3 benchmarks/run_benchmarks.py [--output PATH] [--runs N] [--warmup N]
+                                       [--no-python] [--skip-actors]
 
-Optional env:
-  PROTOST_BIN   path to the protost binary    (default: ./build/protost)
-  PROTOPY_BIN   path to a protopy binary      (default: autodetected; skipped
-                                               if absent)
-  CPYTHON_BIN   python interpreter            (default: python3)
+Environment:
+  PROTOST_BIN   protost binary        (default: build_release/protost)
+  PROTOPY_BIN   protopy binary        (default: autodetected; skipped if absent)
+  CPYTHON_BIN   python interpreter    (default: python3)
 """
 
 import argparse
@@ -40,7 +43,7 @@ import shutil
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -48,24 +51,29 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 REPORTS_DIR = SCRIPT_DIR / "reports"
 COMPARABLE_DIR = SCRIPT_DIR / "comparable"
 ACTORS_DIR = SCRIPT_DIR / "actors"
-
-N_RUNS = 5
-WARMUP_RUNS = 2
-TIMEOUT = 120  # seconds per run
-
-# protoPython's benchmark directory holds the .py twins of the comparable suite.
 PROTOPYTHON_BENCH = PROJECT_ROOT.parent / "protoPython" / "benchmarks"
 
-# Comparable workloads: protoST .st file  ->  protoPython .py twin (or None).
+TIMEOUT = 300  # seconds per run
+
+# name, protoST file, CPython twin, N passed to the twin, expected result.
 COMPARABLE = [
-    ("int_sum_loop",      "int_sum_loop.st",      "int_sum_loop.py"),
-    ("fib",               "fib.st",               "call_recursion.py"),
-    ("list_append",       "list_append.st",       "list_append_loop.py"),
-    ("str_concat",        "str_concat.st",        "str_concat_loop.py"),
-    ("attr_lookup",       "attr_lookup.st",       "attr_lookup.py"),
-    ("range_iterate",     "range_iterate.st",     "range_iterate.py"),
-    ("exception_latency", "exception_latency.st", "exception_latency.py"),
+    ("int_sum_loop",      "int_sum_loop.st",      "int_sum_loop.py",       100000, 4999950000),
+    ("fib",               "fib.st",               "call_recursion.py",         25,      75025),
+    ("list_append",       "list_append.st",       "list_append_loop.py",    10000,      10000),
+    ("str_concat",        "str_concat.st",        "str_concat_loop.py",      2000,       2000),
+    ("attr_lookup",       "attr_lookup.st",       "attr_lookup.py",        100000,     600000),
+    ("range_iterate",     "range_iterate.st",     "range_iterate.py",      100000,     100000),
+    ("exception_latency", "exception_latency.st", "exception_latency.py",   50000,      50000),
 ]
+
+ACTOR_EXPECTED = {
+    "parallel_speedup": 135000900000,
+    "cooperative_yield": 1000000,
+    "message_throughput": 2000,
+    "saturation_big": 20004000000,
+}
+
+FAILURES = []
 
 
 def median(xs):
@@ -84,37 +92,60 @@ def geomean(xs):
 
 
 def run_cmd(cmd, env=None, timeout=TIMEOUT):
-    """Run a command once; return (elapsed_ms, returncode, timed_out, stdout)."""
+    """Run once; return (elapsed_ms, returncode, timed_out, stdout, stderr)."""
     full_env = {**os.environ, **(env or {})}
     start = time.perf_counter()
     try:
-        p = subprocess.run(
-            cmd, cwd=PROJECT_ROOT, env=full_env, timeout=timeout,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        )
-        elapsed = (time.perf_counter() - start) * 1000.0
-        return elapsed, p.returncode, False, p.stdout.strip()
+        p = subprocess.run(cmd, cwd=PROJECT_ROOT, env=full_env, timeout=timeout,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                           stdin=subprocess.DEVNULL)
+        return (time.perf_counter() - start) * 1000.0, p.returncode, False, p.stdout, p.stderr
     except subprocess.TimeoutExpired:
-        return (time.perf_counter() - start) * 1000.0, -1, True, ""
-    except Exception as exc:  # noqa: BLE001
-        print(f"      ERROR: {exc}")
-        return 0.0, -1, False, ""
+        return (time.perf_counter() - start) * 1000.0, -1, True, "", ""
 
 
-def timed(cmd, env=None, label=""):
-    """Warmup + timed runs; return (median_ms, ok, last_stdout). None on failure."""
-    for _ in range(WARMUP_RUNS):
-        _, rc, to, _ = run_cmd(cmd, env)
-        if rc != 0 or to:
-            return None, False, ""
-    samples, out = [], ""
-    for _ in range(N_RUNS):
-        ms, rc, to, stdout = run_cmd(cmd, env)
-        if rc != 0 or to:
-            return None, False, stdout
-        samples.append(ms)
-        out = stdout
-    return median(samples), True, out
+def verified_value(stdout):
+    """The value of a protoST run's final `VERIFIED <value>` line, or None."""
+    lines = [l.strip() for l in stdout.strip().splitlines() if l.strip()]
+    if not lines or not lines[-1].startswith("VERIFIED "):
+        return None
+    return lines[-1][len("VERIFIED "):]
+
+
+def bench_result_value(stdout):
+    """The `result=` field of a Python twin's BENCH_RESULT line, or None."""
+    for line in stdout.splitlines():
+        if line.startswith("BENCH_RESULT"):
+            for field in line.split():
+                if field.startswith("result="):
+                    return field[len("result="):]
+    return None
+
+
+def timed(label, cmd, expected, extract, runs, warmup, env=None):
+    """Warmup + timed runs, each checked against `expected` with `extract`.
+    Returns (median_ms, min_ms, max_ms) or None when any run fails."""
+    samples = []
+    for i in range(warmup + runs):
+        ms, rc, to, out, err = run_cmd(cmd, env)
+        got = extract(out)
+        if to or rc != 0 or got != str(expected):
+            why = "timed out" if to else (f"exit {rc}" if rc != 0 else
+                                          f"reported {got!r}, expected {expected}")
+            FAILURES.append(f"{label}: run {i + 1} {why}"
+                            + (f"; stderr: {err.strip()[:200]}" if err.strip() else ""))
+            return None
+        if i >= warmup:
+            samples.append(ms)
+    return median(samples), min(samples), max(samples)
+
+
+def fmt(t):
+    return "FAIL" if t is None else f"{t[0]:.1f}"
+
+
+def spread(t):
+    return "" if t is None else f"{t[1]:.1f}–{t[2]:.1f}"
 
 
 def find_protopy():
@@ -122,216 +153,213 @@ def find_protopy():
         p = Path(os.environ["PROTOPY_BIN"])
         return p if p.exists() else None
     root = PROJECT_ROOT.parent / "protoPython"
-    for sub in ("build_release", "build", "build-release"):
+    for sub in ("build_release", "build"):
         cand = root / sub / "protopy"
         if cand.exists() and os.access(cand, os.X_OK):
             return cand
-    return None
+    installed = shutil.which("protopy")
+    return Path(installed) if installed else None
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--output", default=None,
-                        help="report path (default: reports/<date>-baseline.md)")
-    parser.add_argument("--skip-throughput", action="store_true",
-                        help="skip message_throughput.st (it runs by default; "
-                             "D23 — the scheduler deadlock that once made it "
-                             "opt-in — is fixed, docs/STATUS.md)")
-    args = parser.parse_args()
+def twin_cmd(interpreter, py_path, n):
+    """exception_latency.py prints nothing and takes N on argv: call its
+    run_bench(n) and print the result in the BENCH_RESULT form."""
+    if py_path.name == "exception_latency.py":
+        code = (f"exec(open({str(py_path)!r}).read()); "
+                f"print('BENCH_RESULT name=exception_latency N={n} result=%d' % run_bench({n}))")
+        return [interpreter, "-c", code]
+    return [interpreter, str(py_path)]
 
-    protost = Path(os.environ.get("PROTOST_BIN", PROJECT_ROOT / "build" / "protost"))
-    if not protost.exists():
-        sys.exit(f"protost binary not found: {protost} -- build it first.")
-    cpython = os.environ.get("CPYTHON_BIN", "python3")
-    if not shutil.which(cpython):
-        sys.exit(f"CPython interpreter not found: {cpython}")
-    protopy = find_protopy()
 
-    REPORTS_DIR.mkdir(exist_ok=True)
-    out_path = Path(args.output) if args.output else (
-        REPORTS_DIR / f"{datetime.now():%Y-%m-%d}-baseline.md")
-
-    host_cpu = platform.processor() or platform.machine()
+def host_facts(protost, cpython):
+    cpu = platform.machine()
     try:
         for line in Path("/proc/cpuinfo").read_text().splitlines():
             if line.startswith("model name"):
-                host_cpu = line.split(":", 1)[1].strip()
+                cpu = line.split(":", 1)[1].strip()
                 break
     except OSError:
         pass
+    try:
+        git = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=PROJECT_ROOT,
+                             capture_output=True, text=True).stdout.strip()
+    except OSError:
+        git = "?"
+    version = subprocess.run([str(protost), "--version"], capture_output=True,
+                             text=True).stdout.strip()
+    pyver = subprocess.run([cpython, "--version"], capture_output=True,
+                           text=True).stdout.strip()
+    return cpu, git, version, pyver
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--output", default=None)
+    ap.add_argument("--runs", type=int, default=5)
+    ap.add_argument("--warmup", type=int, default=2)
+    ap.add_argument("--no-python", action="store_true", help="skip the CPython/protopy twins")
+    ap.add_argument("--skip-actors", action="store_true")
+    args = ap.parse_args()
+
+    protost = Path(os.environ.get("PROTOST_BIN", PROJECT_ROOT / "build_release" / "protost"))
+    if not protost.exists():
+        sys.exit(f"protost binary not found: {protost} -- build it first.")
+    cpython = os.environ.get("CPYTHON_BIN", "python3")
+    if not args.no_python and not shutil.which(cpython):
+        sys.exit(f"CPython interpreter not found: {cpython}")
+    protopy = None if args.no_python else find_protopy()
+
+    cpu, git, version, pyver = host_facts(protost, cpython)
+    load_before = os.getloadavg()
     ncpu = os.cpu_count() or 1
+    print(f"protoST benchmarks -- {datetime.now():%Y-%m-%d %H:%M}")
+    print(f"  host {cpu} ({ncpu} logical CPUs), load {load_before[0]:.2f}")
+    print(f"  {version} @ {git}; {pyver}; protopy {protopy or 'not found'}")
+    print(f"  {args.warmup} warmup + {args.runs} timed runs, median reported\n")
+    if load_before[0] > 1.0:
+        print("  WARNING: the machine is not idle (1-minute load > 1.0)\n")
 
-    print(f"protoST benchmark harness  --  {datetime.now():%Y-%m-%d %H:%M}")
-    print(f"  host:    {host_cpu}  ({ncpu} logical CPUs)")
-    print(f"  protost: {protost}")
-    print(f"  cpython: {cpython}")
-    print(f"  protopy: {protopy or '(not found -- column skipped)'}")
-    print(f"  runs:    {WARMUP_RUNS} warmup + {N_RUNS} timed, median reported\n")
+    startup = timed("startup", [str(protost), "-e", "'VERIFIED ' , 42 printString"],
+                    42, verified_value, args.runs, args.warmup)
+    py_startup = None if args.no_python else timed(
+        "cpython startup", [cpython, "-c", "print('BENCH_RESULT result=42')"],
+        42, bench_result_value, args.runs, args.warmup)
+    print(f"  startup: protoST {fmt(startup)} ms"
+          + ("" if args.no_python else f", CPython {fmt(py_startup)} ms"))
 
-    # --- Comparable workloads -------------------------------------------------
-    print("== Comparable workloads (protoST vs CPython"
-          f"{' vs protopy' if protopy else ''}) ==")
-    comp_rows = []
-    for name, st_file, py_file in COMPARABLE:
-        st_path = COMPARABLE_DIR / st_file
+    rows = []
+    for name, st_file, py_file, n, expected in COMPARABLE:
+        st = timed(name, [str(protost), str(COMPARABLE_DIR / st_file)], expected,
+                   verified_value, args.runs, args.warmup)
+        py = pp = None
         py_path = PROTOPYTHON_BENCH / py_file
-        print(f"  {name:<20}", end="", flush=True)
+        if not args.no_python and py_path.exists():
+            py = timed(f"{name} (CPython)", twin_cmd(cpython, py_path, n), expected,
+                       bench_result_value, args.runs, args.warmup, env={"BENCH_N": str(n)})
+            if protopy:
+                pp = timed(f"{name} (protopy)", twin_cmd(str(protopy), py_path, n), expected,
+                           bench_result_value, args.runs, args.warmup, env={"BENCH_N": str(n)})
+        print(f"  {name:<18} protoST {fmt(st):>8} ms   CPython {fmt(py):>8} ms"
+              + (f"   protopy {fmt(pp):>8} ms" if protopy else ""))
+        rows.append((name, n, st, py, pp))
 
-        st_ms, st_ok, _ = timed([str(protost), str(st_path)])
-        print(f" protoST={'FAIL' if not st_ok else f'{st_ms:.1f}ms'}",
-              end="", flush=True)
+    actors = {}
+    if not args.skip_actors:
+        par = ACTORS_DIR / "parallel_speedup.st"
+        actors["parallel_pool"] = timed("parallel_speedup", [str(protost), str(par)],
+                                        ACTOR_EXPECTED["parallel_speedup"], verified_value,
+                                        args.runs, args.warmup)
+        actors["parallel_one"] = timed("parallel_speedup w=1", [str(protost), str(par)],
+                                       ACTOR_EXPECTED["parallel_speedup"], verified_value,
+                                       args.runs, args.warmup, env={"PROTOST_WORKERS": "1"})
+        actors["coop"] = timed("cooperative_yield", [str(protost), str(ACTORS_DIR / "cooperative_yield.st")],
+                               ACTOR_EXPECTED["cooperative_yield"], verified_value,
+                               args.runs, args.warmup, env={"PROTOST_WORKERS": "2"})
+        actors["throughput"] = timed("message_throughput", [str(protost), str(ACTORS_DIR / "message_throughput.st")],
+                                     ACTOR_EXPECTED["message_throughput"], verified_value,
+                                     args.runs, args.warmup)
+        scaling = []
+        for w in range(1, min(6, ncpu) + 1):
+            scaling.append((w, timed(f"saturation_big w={w}",
+                                     [str(protost), str(ACTORS_DIR / "saturation_big.st")],
+                                     ACTOR_EXPECTED["saturation_big"], verified_value,
+                                     args.runs, args.warmup, env={"PROTOST_WORKERS": str(w)})))
+        actors["scaling"] = scaling
+        print(f"  parallel_speedup   pool {fmt(actors['parallel_pool'])} ms, 1 worker {fmt(actors['parallel_one'])} ms")
+        print(f"  cooperative_yield  {fmt(actors['coop'])} ms   message_throughput {fmt(actors['throughput'])} ms")
+        print("  saturation_big     " + ", ".join(f"w={w}: {fmt(t)}" for w, t in scaling))
 
-        py_ms = None
-        if py_path.exists():
-            py_ms, py_ok, _ = timed([cpython, str(py_path)])
-            print(f"  cpython={'FAIL' if not py_ok else f'{py_ms:.1f}ms'}",
-                  end="", flush=True)
-        else:
-            print("  cpython=N/A", end="", flush=True)
+    load_after = os.getloadavg()
+    if args.output:
+        write_report(Path(args.output), cpu, ncpu, git, version, pyver, protopy,
+                     load_before, load_after, args, startup, py_startup, rows, actors)
+        print(f"\nReport written: {args.output}")
 
-        pp_ms = None
-        if protopy and py_path.exists():
-            pp_ms, pp_ok, _ = timed([str(protopy), str(py_path)])
-            print(f"  protopy={'FAIL' if not pp_ok else f'{pp_ms:.1f}ms'}",
-                  end="", flush=True)
-        print()
-        comp_rows.append((name, st_ms, py_ms, pp_ms))
-
-    # --- Actor-model benchmarks ----------------------------------------------
-    print("\n== Actor-model benchmarks (protoST only) ==")
-
-    par_file = ACTORS_DIR / "parallel_speedup.st"
-    print("  parallel_speedup", end="", flush=True)
-    par_full, ok_full, _ = timed([str(protost), str(par_file)])
-    par_one, ok_one, _ = timed([str(protost), str(par_file)],
-                               env={"PROTOST_WORKERS": "1"})
-    speedup = (par_one / par_full) if (ok_full and ok_one and par_full) else None
-    print(f"  pool={par_full:.0f}ms  1-worker={par_one:.0f}ms"
-          f"  speedup={speedup:.2f}x" if speedup else "  FAIL")
-
-    coop_file = ACTORS_DIR / "cooperative_yield.st"
-    print("  cooperative_yield", end="", flush=True)
-    coop_ms, ok_coop, _ = timed([str(protost), str(coop_file)],
-                                env={"PROTOST_WORKERS": "2"})
-    print(f"  N=1000 actors on K=2 workers: {coop_ms:.0f}ms"
-          if ok_coop else "  FAIL")
-
-    # message_throughput runs by default. It was once opt-in because of D23 —
-    # a non-deterministic actor-scheduler deadlock under sustained mailbox
-    # load — which is now fixed (docs/STATUS.md D23, Closed). --skip-throughput
-    # still skips it for a faster run.
-    tp_messages = 2000  # must match the loop bound in message_throughput.st
-    tp_ms = None
-    tp_rate = None
-    if not args.skip_throughput:
-        tp_file = ACTORS_DIR / "message_throughput.st"
-        print("  message_throughput", end="", flush=True)
-        tp_ms, ok_tp, _ = timed([str(protost), str(tp_file)])
-        tp_rate = (tp_messages / (tp_ms / 1000.0)) if (ok_tp and tp_ms) else None
-        print(f"  {tp_messages} msgs: {tp_ms:.0f}ms  ({tp_rate:,.0f} msg/s)"
-              if tp_rate else "  FAIL")
-    else:
-        print("  message_throughput  skipped (--skip-throughput)")
-
-    # --- Report ---------------------------------------------------------------
-    write_report(out_path, host_cpu, ncpu, protost, cpython, protopy,
-                  comp_rows, par_full if ok_full else None,
-                  par_one if ok_one else None, speedup,
-                  coop_ms if ok_coop else None,
-                  tp_ms, tp_rate, tp_messages)
-    print(f"\nReport written: {out_path}")
+    if FAILURES:
+        print("\nVERIFICATION FAILURES:")
+        for f in FAILURES:
+            print(f"  {f}")
+        sys.exit(1)
+    print("\nAll runs verified.")
 
 
-def write_report(path, host_cpu, ncpu, protost, cpython, protopy,
-                 comp_rows, par_full, par_one, speedup,
-                 coop_ms, tp_ms, tp_rate, tp_messages):
-    has_pp = protopy is not None
-    lines = []
-    lines.append(f"# protoST performance baseline — {datetime.now():%Y-%m-%d}")
-    lines.append("")
-    lines.append(f"- **Host:** {host_cpu} — {ncpu} logical CPUs")
-    lines.append(f"- **OS:** {platform.system()} {platform.release()} "
-                 f"({platform.machine()})")
-    lines.append(f"- **Method:** {WARMUP_RUNS} warmup + {N_RUNS} timed runs per "
-                 f"benchmark, median wall-clock reported.")
-    lines.append(f"- **protoST:** `{protost}`")
-    lines.append(f"- **CPython:** `{cpython}` ({platform.python_version()})")
-    lines.append(f"- **protoPython:** "
-                 f"{'`' + str(protopy) + '`' if has_pp else '_not available — column omitted_'}")
-    lines.append("")
-    lines.append("## Comparable workloads")
-    lines.append("")
-    lines.append("The protoPython core benchmark suite translated to idiomatic "
-                 "protoST — same algorithm, same parameters (N). Times in "
-                 "milliseconds (median). `Ratio` is protoST ÷ CPython "
-                 "(>1 = protoST slower).")
-    lines.append("")
-    if has_pp:
-        lines.append("| Benchmark | protoST (ms) | CPython (ms) | protopy (ms) | Ratio (ST/CPy) |")
-        lines.append("|---|---:|---:|---:|---:|")
-    else:
-        lines.append("| Benchmark | protoST (ms) | CPython (ms) | Ratio (ST/CPy) |")
-        lines.append("|---|---:|---:|---:|")
-    ratios = []
-    for name, st_ms, py_ms, pp_ms in comp_rows:
-        st = f"{st_ms:.1f}" if st_ms else "FAIL"
-        py = f"{py_ms:.1f}" if py_ms else "N/A"
-        ratio = (st_ms / py_ms) if (st_ms and py_ms) else None
+def write_report(path, cpu, ncpu, git, version, pyver, protopy, load_before, load_after,
+                 args, startup, py_startup, rows, actors):
+    L = []
+    L.append(f"# protoST benchmarks — {datetime.now():%Y-%m-%d}")
+    L.append("")
+    L.append(f"- **Host:** {cpu}, {ncpu} logical CPUs, {platform.system()} {platform.release()}")
+    L.append(f"- **Load average (1 min):** {load_before[0]:.2f} before, {load_after[0]:.2f} after")
+    L.append(f"- **protoST:** {version} at commit `{git}`")
+    L.append(f"- **CPython:** {pyver}" + (f"; **protoPython:** `{protopy}`" if protopy else ""))
+    L.append(f"- **Method:** {args.warmup} warmup + {args.runs} timed runs per measurement; "
+             "median wall-clock, min–max in parentheses. Every run verified its result "
+             "(`VERIFIED` / `BENCH_RESULT`); a failed run fails the harness.")
+    L.append("")
+    L.append("## Start-up")
+    L.append("")
+    L.append(f"A process that evaluates one expression: protoST {fmt(startup)} ms ({spread(startup)})"
+             + ("" if py_startup is None else f", CPython {fmt(py_startup)} ms ({spread(py_startup)})")
+             + ". The comparable workloads below use small N, so start-up is part of every time.")
+    L.append("")
+    L.append("## Comparable workloads")
+    L.append("")
+    L.append("Same algorithm, same N and same verified result as the protoPython twin. "
+             "`Ratio` is protoST ÷ CPython on whole-process time (>1 means protoST is "
+             "slower). At these N the process start-up is a large share of every time, "
+             "so `Work ratio` also compares the times with each runtime's measured "
+             "start-up subtracted: the cost of the work itself.")
+    L.append("")
+    L.append("| Benchmark | N | protoST ms | CPython ms | Ratio | Work ratio |")
+    L.append("|---|---:|---:|---:|---:|---:|")
+    ratios, work_ratios = [], []
+    for name, n, st, py, _pp in rows:
+        ratio = (st[0] / py[0]) if (st and py) else None
+        work = None
+        if st and py and startup and py_startup:
+            st_work, py_work = st[0] - startup[0], py[0] - py_startup[0]
+            if st_work > 0 and py_work > 0.5:
+                work = st_work / py_work
         if ratio:
             ratios.append(ratio)
-        r = f"{ratio:.2f}×" if ratio else "—"
-        if has_pp:
-            pp = f"{pp_ms:.1f}" if pp_ms else "N/A"
-            lines.append(f"| {name} | {st} | {py} | {pp} | {r} |")
-        else:
-            lines.append(f"| {name} | {st} | {py} | {r} |")
-    gm = geomean(ratios)
-    if has_pp:
-        lines.append(f"| **Geomean** | | | | **{gm:.2f}×** |")
-    else:
-        lines.append(f"| **Geomean** | | | **{gm:.2f}×** |")
-    lines.append("")
-    lines.append(f"Geometric-mean ratio across the comparable suite: "
-                 f"**protoST is {gm:.2f}× CPython's wall-clock** on these "
-                 f"single-threaded workloads.")
-    lines.append("")
-    lines.append("## Actor-model benchmarks")
-    lines.append("")
-    lines.append("protoST-specific — protoPython has no actor model. These "
-                 "exercise the cooperative actor scheduler.")
-    lines.append("")
-    lines.append("| Benchmark | Result |")
-    lines.append("|---|---|")
-    if speedup:
-        lines.append(f"| **Parallel speedup** | 12 CPU-bound worker actors: "
-                      f"{par_full:.0f} ms with the full pool vs "
-                      f"{par_one:.0f} ms with `PROTOST_WORKERS=1` — "
-                      f"**{speedup:.2f}× speedup** |")
-    if coop_ms:
-        lines.append(f"| **Cooperative-yield scaling** | **1000** waiter actors, "
-                      f"each parked on a nested `wait`, all hosted on **K=2** "
-                      f"worker threads — completes in {coop_ms:.0f} ms. "
-                      f"Thread-per-actor blocking would need 1000 OS threads. |")
-    if tp_rate:
-        lines.append(f"| **Message throughput** | {tp_messages:,} drained "
-                      f"round-trip sends to one actor in {tp_ms:.0f} ms — "
-                      f"**{tp_rate:,.0f} messages/second**. |")
-    else:
-        lines.append("| **Message throughput** | _skipped "
-                      "(`--skip-throughput`)._ |")
-    lines.append("")
-    lines.append("### Reading these numbers")
-    lines.append("")
-    lines.append("protoST's single-thread arithmetic is slower than CPython — "
-                 "it is a young runtime and the comparable table shows that "
-                 "honestly. The actor results are the differentiator: the "
-                 "cooperative-yield benchmark hosts a thousand suspended "
-                 "actors on two OS threads, which a thread-per-actor model "
-                 "fundamentally cannot do, and the parallel benchmark turns "
-                 "extra cores into real wall-clock speedup with no code "
-                 "change.")
-    lines.append("")
-    path.write_text("\n".join(lines) + "\n")
+        if work:
+            work_ratios.append(work)
+        L.append(f"| {name} | {n} | {fmt(st)} ({spread(st)}) | {fmt(py)} ({spread(py)}) | "
+                 f"{f'{ratio:.2f}×' if ratio else '—'} | {f'{work:.1f}×' if work else '—'} |")
+    L.append(f"| **Geomean** | | | | **{geomean(ratios):.2f}×** | **{geomean(work_ratios):.1f}×** |")
+    L.append("")
+    if actors:
+        L.append("## Actors")
+        L.append("")
+        pp, p1 = actors.get("parallel_pool"), actors.get("parallel_one")
+        if pp and p1:
+            L.append(f"- **Parallel speedup** (12 CPU-bound actors): {fmt(p1)} ms with one worker, "
+                     f"{fmt(pp)} ms with the default pool: **{p1[0] / pp[0]:.2f}×**.")
+        if actors.get("coop"):
+            L.append(f"- **Cooperative yield:** 1000 actors, each parked on a `wait`, on 2 worker "
+                     f"threads: {fmt(actors['coop'])} ms.")
+        if actors.get("throughput"):
+            t = actors["throughput"][0]
+            L.append(f"- **Message throughput:** 2000 round-trip sends (send + `wait`): {t:.1f} ms, "
+                     f"about {2000 / (t / 1000):,.0f} round trips per second including start-up.")
+        if actors.get("scaling"):
+            L.append("")
+            L.append("Worker scaling of `saturation_big.st` (32 actors × 50 messages of CPU work):")
+            L.append("")
+            L.append("| Workers | ms | Speedup vs 1 |")
+            L.append("|---:|---:|---:|")
+            base = actors["scaling"][0][1]
+            for w, t in actors["scaling"]:
+                sp = f"{base[0] / t[0]:.2f}×" if (base and t) else "—"
+                L.append(f"| {w} | {fmt(t)} ({spread(t)}) | {sp} |")
+        L.append("")
+    if FAILURES:
+        L.append("## Verification failures")
+        L.append("")
+        L.extend(f"- {f}" for f in FAILURES)
+        L.append("")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(L) + "\n")
 
 
 if __name__ == "__main__":

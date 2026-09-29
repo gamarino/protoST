@@ -1235,13 +1235,13 @@ TEST_CASE("BL-3: formatValue handles primitives — nil/true/false/int/string",
     REQUIRE(protoST::formatValue(rt, ctx, ctx->fromUTF8String("hi")) == "hi");
 }
 
-TEST_CASE("BL-3: formatValue renders a bootstrap actor as 'an Actor'",
+TEST_CASE("BL-3: formatValue renders an actor as its object, marked (actor)",
           "[engine][printstring][bl3][formatvalue]") {
     protoST::STRuntime rt;
-    // An actor instance is a child of actorProto, which carries the
-    // __class_name__ "Actor". formatValue resolves it purely in C++.
+    // Printing is answered by the proxy itself, from the wrapped object's
+    // basic form, without messaging the actor.
     auto* r = bl1Run(rt, "7 asActor.");
-    REQUIRE(protoST::formatValue(rt, rt.rootCtx(), r) == "an Actor");
+    REQUIRE(protoST::formatValue(rt, rt.rootCtx(), r) == "7 (actor)");
 }
 
 TEST_CASE("BL-3: formatValue renders a bootstrap future as 'a Future'",
@@ -1394,17 +1394,20 @@ TEST_CASE("Class vars: subclass instance reads superclass's class var",
     REQUIRE(r->asLong(rt.rootCtx()) == 7);
 }
 
-TEST_CASE("Class vars: instance-side assignment is a compile-time error",
+TEST_CASE("Class vars: instance-side assignment updates the shared variable",
           "[engine][class-vars]") {
-    protoST::Parser P(
+    // D19 closed: a write from an instance method goes to the declaring
+    // class (STORE_CLASSVAR), so every instance reads the new value.
+    protoST::STRuntime rt;
+    auto* r = bl1Run(rt,
         "Object subclass: #C instanceVariableNames: '' "
         "  classVariableNames: 'shared'. "
-        "C >> badWrite  shared := 5.");
-    auto ast = P.parseModule();
-    REQUIRE(P.errors().empty());
-    protoST::Compiler C;
-    C.compileModule(*ast);
-    REQUIRE(C.hasErrors());
+        "C >> write  shared := 5. "
+        "C >> read  ^ shared. "
+        "C new write. "
+        "C new read.");
+    REQUIRE(r != nullptr);
+    REQUIRE(r->asLong(rt.rootCtx()) == 5);
 }
 
 TEST_CASE("Class vars: uninitialised class var reads as nil",

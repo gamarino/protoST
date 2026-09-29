@@ -15,6 +15,7 @@
 Object subclass: #Producer.
 
 Producer >> compute: n
+  | total |
   total := 0.
   1 to: n do: [ :i | total := total + 1 ].
   ^ total.
@@ -42,4 +43,6 @@ waiters do: [ :w | results add: (w work) ].
 
 sum := 0.
 results do: [ :f | sum := sum + f wait ].
-sum.
+result := sum.
+result = 1000000 ifFalse: [Error signal: 'cooperative_yield: wrong result ' , result printString].
+'VERIFIED ' , result printString

@@ -7,13 +7,15 @@
 
 ## What protoST is (and is not)
 
-protoST is an **actor-native Smalltalk runtime built on protoCore**. Its
-purpose is twofold:
+protoST is a **Smalltalk-syntax, actor-native runtime built on protoCore**. It
+is not a Smalltalk-80 implementation and not a replacement for an image
+environment. Its purpose is twofold:
 
 1. **A demonstrator of protoCore's potential.** protoST exists to show what
-   protoCore can sustain — a prototype-based object model, GIL-free
-   concurrency, a custom GC, structural-sharing collections — under a third,
-   very different language paradigm (after protoJS and protoPython).
+   protoCore can sustain — a prototype-based object model, native threads
+   without a global lock, a concurrent GC, structural-sharing collections —
+   under a message-passing object language, next to the other runtimes built
+   on the same kernel.
 2. **The base for digital twins.** protoST is *not itself* a digital-twin
    platform. It is the substrate: actors as independently-scheduled state
    machines, cooperative yield, a module system. A real twin = protoST +
@@ -30,7 +32,10 @@ possible. The measure of success is not "does it match Smalltalk-80" but
 
 Phases F1–F8 are complete, plus a backlog hardening pass. Tracks 1–11 below
 are also complete; each has a `trackN-complete` git tag (`track1-complete` …
-`track11-complete`). The latest release tag is `v0.3.0`.
+`track11-complete`). The latest release tag is `v0.3.0`. Release **0.4.0**
+(see [`CHANGELOG.md`](../CHANGELOG.md), "0.4.0") is complete on its branch:
+the Smalltalk-semantics audit described below, with 1041 `ctest` cases
+passing at commit `d3f7235`.
 
 | Area | Status |
 |------|--------|
@@ -43,7 +48,14 @@ are also complete; each has a `trackN-complete` git tag (`track1-complete` …
 | Interactive REPL | ✅ |
 | DAP debug adapter (VS Code) | ✅ |
 | Wide bytecode operands (no 256-local ceiling) | ✅ |
-| `printString` | ✅ |
+| `printString` / `printOn:`, literal-style printing of built-in values | ✅ (0.4.0) |
+| `new` sends `initialize`; `Character`; exact `Fraction` division | ✅ (0.4.0) |
+| Class variables from either side; class-instance variables | ✅ (0.4.0) |
+| `doesNotUnderstand:` overrides; `Transcript`; specific error classes | ✅ (0.4.0) |
+| Uncaught errors print class, text and a `Class>>selector (file:line)` trace | ✅ (0.4.0) |
+| Actor wait cycles signal a "deadlock" Error instead of hanging | ✅ (0.4.0) |
+| Heap ceiling; Ctrl-C interrupts a running program | ✅ (0.4.0) |
+| Documentation examples run against the build (`tests/docs/`) | ✅ (0.4.0) |
 
 Tracks 1–11 (a complete language core, the collection hierarchy, a standard
 library, a conformance suite, onboarding material, packaging and benchmarks)
@@ -158,7 +170,10 @@ track — capabilities JS and Python classes do not have in the same form.
 ### Track 4 — Standard library ("batteries included") — ✅ done
 
 **Status:** complete (tag `track4-complete`): the `lib/` infrastructure,
-`Stream`, the math protocol, `Random`, `JSON` and `Time`.
+`Stream`, the math protocol, `Random`, `JSON` and `Time`. In 0.4.0 streams,
+`Random`, `Time`, `Date` and `Duration` moved into the kernel (`lib/kernel/`,
+no import); the `stream`, `random` and `time` modules remain for
+compatibility.
 
 **Goal:** a Python-style standard library — the modules every program needs.
 
@@ -219,8 +234,10 @@ suite must be designed **independently of the implementation**:
 **Why it matters:** when this track was written, the suite had 188 tests
 written alongside the code, which measured regression rather than correctness.
 The conformance suite derived from `docs/LANGUAGE.md` is what lets the project
-make defensible claims. As of 2026-09-15, `ctest -N` lists 833 cases, 352 of
-them conformance tests.
+make defensible claims. As of 2026-09-29 (commit `d3f7235`), `ctest` runs
+1041 cases, all passing; the 0.4.0 audit added a regression test for each
+fix of a wrong result, crash or hang, and
+`tests/docs/run_doc_snippets.py` runs the examples of the documentation.
 
 **Dependencies:** runs alongside everything; the specification
 (`docs/LANGUAGE.md`) grows with each track.
@@ -254,8 +271,10 @@ example set are its concrete deliverables.
 **Status:** complete. The tutorial is [`docs/TUTORIAL.md`](TUTORIAL.md) plus 14
 chapters under `docs/tutorial/`. It teaches protoST from the ground up for
 Python / JavaScript developers and catalogues every departure from
-Smalltalk-80 for Smalltalk programmers (Chapter 14). Every non-trivial snippet
-was verified against the `protost` build.
+Smalltalk-80 for Smalltalk programmers (Chapter 14). For 0.4.0 every example
+that states a result is run against the build by
+`tests/docs/run_doc_snippets.py`, and Chapter 14 was rewritten after the
+Smalltalk-semantics audit.
 
 **Goal:** one extensive, complete tutorial that teaches protoST to two
 audiences at once.
@@ -298,7 +317,7 @@ calculator, an RPN interpreter, a Monte-Carlo pi estimate, a JSON data
 transform and two digital-twin simulations. Every example carries an
 `"EXPECT: …"` directive and is registered as a CTest smoke case via
 `run_conformance.sh` (`ctest -R '^examples/'`; 40/40 green when the track
-closed, 42 cases registered as of 2026-09-15).
+closed; 42 examples, all printing their expected value, on 2026-09-29).
 
 **Goal:** an extensive set of complete, idiomatic, runnable protoST programs,
 covering every feature: the object model, blocks and closures, collections,
@@ -335,9 +354,10 @@ of the box.
   `Import from: 'stream'` with no `PROTOST_LIB` set. `LICENSE` and the `docs/`
   tree are installed too.
 - The Debian package declares a dependency on protoCore
-  (`CPACK_DEBIAN_PACKAGE_DEPENDS = protocore`) and the RPM a matching
-  `Requires: protoCore` — protoST links `libprotoCore`, so the package metadata
-  must declare it. Install RPATH (`$ORIGIN/../lib`,
+  (`protocore (>= 2.1.0), protocore (<< 3.0.0)`) and the RPM a matching
+  `Requires: protoCore` range — protoST links `libprotoCore.so.3`, so the
+  package metadata must declare it (the DEB range is not an ABI check; see
+  [`INSTALLATION.md`](INSTALLATION.md)). Install RPATH (`$ORIGIN/../lib`,
   `@executable_path/../lib`) lets the installed binary find `libprotoCore`
   without `LD_LIBRARY_PATH` / `DYLD_LIBRARY_PATH`.
 
@@ -384,33 +404,62 @@ protoST's defining feature into a measurable result rather than a claim.
 **Dependencies:** a working build (Tracks 1–4) and the actor model (Phase F).
 **Size:** small; the suite grows one workload at a time.
 
+### Release 0.4.0 — the Smalltalk you know, verified — ✅ done
+
+**Status:** complete on `feature/presentable-0.4.0` (see
+[`CHANGELOG.md`](../CHANGELOG.md), "0.4.0"). An adversarial audit of about 400
+probe programs written the way a Pharo programmer writes drove every change,
+and each fix of a wrong result, crash or hang carries a regression test
+(854 → 1041 `ctest` cases).
+
+- **Silent wrong results fixed:** instance variables confused with captured
+  file-level variables, block parameters aliasing outer variables, a method
+  without a final period swallowing the next line, Fraction operations routed
+  to integer primitives, and others listed in the CHANGELOG.
+- **Hangs and crashes fixed:** `Future whenAny:` with every future rejected, a
+  negative integer attribute aborting the interpreter; a heap ceiling replaces
+  unbounded growth; Ctrl-C interrupts cleanly; a cycle of actors waiting on
+  each other signals a "deadlock" Error.
+- **Smalltalk semantics:** `new` sends `initialize`, `Character`, exact
+  `Fraction` division with floored `//` and `\`, resumable `ZeroDivide`,
+  specific error classes, `doesNotUnderstand:` overrides, class variables from
+  either side and class-instance variables, `Transcript`, `printOn:`-based
+  printing, errors that keep their class across `wait`, and uncaught errors
+  that print a trace.
+- **Protocol:** the collection, string, stream, number, exception, reflection
+  and system messages a Pharo programmer reaches for.
+- **Honesty:** self-verifying benchmarks; interop claims narrowed to what a
+  two-runtime process shows ([`INTEROP.md`](INTEROP.md) §0); the deviations
+  catalogued in tutorial chapter 14.
+
+Still open after 0.4.0: the bugs S19 and S3 in [`STATUS.md`](STATUS.md),
+`thisContext` (D17), and the packaging re-verification in
+[`INSTALLATION.md`](INSTALLATION.md).
+
 ---
 
 ## Phase 2 — From a complete language to a serious actor runtime
 
 Tracks 1–11 make protoST a **complete, usable language**. They do not yet make
-it a **serious actor runtime** — one that could be weighed against BEAM
-(Erlang/Elixir), Akka or Orleans. That step needs production-grade scheduling,
+it a **production actor runtime**. That step needs fair scheduling,
 supervision, backpressure, non-blocking I/O and observability. This phase is
 that work.
 
-**Honest positioning.** protoST's distinct asset is **zero-copy,
-data-race-free message passing on a shared heap, GIL-free, polyglot
-in-process** — genuine against BEAM (which deep-copies every message) and
-against Akka (shared heap, but safe only by unenforced convention). protoST
-does **not** try to beat BEAM at distributed, telecom-grade fault tolerance.
-Its lane is the one where its asset is decisive and the tradeoffs hurt least:
-**the highest-fidelity single-(large-)machine, polyglot agent-based /
-digital-twin simulation**, with the world state shared zero-copy and immutable.
-Phase 2 is scoped to make protoST a serious competitor *in that lane* — not a
-universal BEAM replacement.
+**Positioning.** protoST's asset is **message passing without copies and
+without data races on a shared heap**: messages are immutable values, so an
+actor can hand one to another actor on another thread without copying it or
+locking it, in one process, with other protoCore runtimes alongside. protoST
+does not aim at distributed, telecom-grade fault tolerance. Its lane is the
+one where that asset matters most: **single-machine, agent-based /
+digital-twin simulation**, with the world state shared as immutable values.
+Phase 2 is scoped to that lane.
 
 **The architecture principle.** The protoST runtime is a **microkernel of
 mechanism and hooks**; the actor *platform* features — supervision trees,
 observability UIs, persistence, distribution — are **modules** over those
 hooks. Policy is not baked into the runtime. This mirrors protoCore's
-relationship to its languages, and Erlang's own split: `link`/`monitor` are VM
-primitives, while `supervisor` is an OTP *library*. The phase is therefore in
+relationship to its languages: `link`/`monitor` are runtime primitives, while
+a supervisor is a *library* over them. The phase is therefore in
 two parts: **core-runtime tracks** (mechanism that cannot be a module) and
 **the module layer** (everything that can).
 
@@ -422,16 +471,15 @@ two parts: **core-runtime tracks** (mechanism that cannot be a module) and
 worker thread.
 
 Scheduling is cooperative-only today: a handler that never `wait`s holds its
-worker until it completes. The fix needs **no OS preemption** — it is BEAM's
-approach. BEAM is not OS-preemptive either; its VM counts *reductions* (units
-of work) and the interpreter yields the process at a reduction boundary. The
-engine counts work units per turn (loop back-edges, sends, calls); when the
+worker until it completes. The fix needs **no OS preemption**: the interpreter
+counts *reductions* (units of work) and yields the actor at a reduction
+boundary. The engine counts work units per turn (loop back-edges, sends, calls); when the
 budget is spent it forces a yield — snapshotting the frames and rescheduling
 the actor, exactly what a `Future wait` already does. The machinery largely
 exists: the engine already polls a GC safepoint in its dispatch loop, and the
 cooperative yield already snapshots and resumes frames. Residual: a
-long-running *native primitive* has no yield points (BEAM's "dirty NIF"
-problem) — that is Track 15's dirty pool.
+long-running *native primitive* has no yield points — that is Track 15's
+dirty pool.
 
 **Why it matters:** fairness is table stakes; without it protoST is not a
 serious actor runtime.
@@ -443,8 +491,9 @@ serious actor runtime.
 **Goal:** a fast producer must not grow a slow consumer's mailbox without
 bound; resource saturation must degrade gracefully, not crash.
 
-Mailboxes are unbounded lists today — a fast producer against a slow consumer
-is unbounded memory growth. Add a bounded mailbox with a policy (block the
+Mailboxes are unbounded lock-free queues (`ProtoMPSCQueue`) today — a fast
+producer against a slow consumer is unbounded memory growth, stopped only by
+the heap ceiling added in 0.4.0. Add a bounded mailbox with a policy (block the
 sender / reject / drop-oldest). Then the key unification: **memory pressure is
 backpressure on another resource.** protoCore already exposes a soft heap
 watermark; wire it so that crossing the watermark makes the runtime **refuse
@@ -468,8 +517,8 @@ An unhandled exception already rejects the message's `Future` and the actor
 lives on — that *is* failure detection — but there is no `link`/`monitor` and
 no restart. Add the primitives: `link` / `monitor` (an actor is notified when
 another terminates), exit signals, graceful stop, and restart-with-clean-state.
-This is exactly Erlang's split — these are *runtime primitives*; supervision
-*trees and strategies* are a module on top (see the module layer below).
+These are *runtime primitives*; supervision *trees and strategies* are a
+module on top (see the module layer below).
 
 **Why it matters:** for digital twins an unsupervised actor model is not
 credible — the twin of a physical device must be resilient.
@@ -530,8 +579,8 @@ runtime stays a small mechanism, the platform is modules.
 
 #### Track 17 — Performance
 
-**Goal:** bring message throughput and single-thread speed toward competitive —
-"soft-real-time, better than Java" is the bar.
+**Goal:** bring message throughput and single-thread speed to where a
+soft-real-time simulation can rely on them.
 
 protoST is a young runtime. When this track was written it measured about
 7,700 round-trip messages/second and was about 20× slower than CPython
@@ -556,7 +605,7 @@ independent contribution.
 
 - **Supervision trees and strategies** — over the Track 14 `link`/`monitor`
   primitives: supervisor actors, restart strategies (one-for-one, all-for-one),
-  restart-intensity limits. This is the OTP `supervisor` library, ported.
+  restart-intensity limits.
 - **Observability interface** — over the Track 16 event hooks: metrics export
   (e.g. Prometheus), tracing, a live actor-system inspector. The runtime emits
   events; this module defines their presentation and wire format.
@@ -577,16 +626,15 @@ So contributors do not re-propose them:
 
 - **GC pause locality is not pursued.** protoCore uses one shared heap with a
   stop-the-world tracing GC (the STW phase is the root scan only; mark and
-  sweep are concurrent). This is a *deliberate* choice, not a debt. The
-  alternatives that give per-actor pause locality buy it by spending the
-  developer's effort — Pony with its reference-capability type system, Rust
-  with manual ownership. protoST's product *is* ease of modelling and minimal
-  developer burden; paying that price would destroy the thing being sold. The
-  bar is "soft-real-time, better than Java", and keeping the STW root scan
-  short is tuning within the existing design — not a project.
-- **Hard-crash isolation is not offered.** BEAM-grade isolation — any process
-  can crash without affecting the others — requires isolated per-process heaps,
-  the exact thing protoST gave up to get zero-copy message passing. It is the
+  sweep are concurrent). This is a *deliberate* choice, not a debt. Per-actor
+  pause locality is bought with the developer's effort — a type system of
+  reference capabilities, or manual ownership. protoST's product *is* ease of
+  modelling and minimal developer burden; paying that price would undo it.
+  The bar is soft real time, and keeping the STW root scan short is tuning
+  within the existing design — not a project.
+- **Hard-crash isolation is not offered.** Isolation in which any actor can
+  crash without affecting the others requires isolated per-actor heaps, the
+  exact thing protoST gave up to pass messages without copying them. It is the
   *dual* of the zero-copy decision and is architecturally unavailable inside
   one process. protoST's resilience story is three-layered instead: logical
   faults → supervision (Track 14 + the module); resource saturation →

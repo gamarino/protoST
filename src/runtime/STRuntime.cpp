@@ -1,4 +1,5 @@
 #include "protoST/STRuntime.h"
+#include "runtime/PrimitiveMarker.h"
 #include "protoST/primitives.h"
 #include "ExecutionEngine.h"
 #include "FutureYield.h"
@@ -24,7 +25,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <semaphore>
+#include "Semaphore.h"
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
@@ -79,12 +80,35 @@ namespace protoST {
 void resolveFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
                             const proto::ProtoObject* future,
                             const proto::ProtoObject* value);
+void reportUnobservedActorErrors();
 void rejectFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
                            const proto::ProtoObject* future,
                            const proto::ProtoObject* error);
 }
 
 namespace protoST {
+
+namespace {
+// What an actor's message Future is rejected with: the protoST exception that
+// went unhandled in the method, so a waiter re-signals it with its class and
+// messageText intact; a native error's text otherwise.
+const proto::ProtoObject* rejectionFor(proto::ProtoContext* ctx, const std::exception& e,
+                                       const proto::ProtoObject* actor) {
+    if (const auto* u = dynamic_cast<const UnhandledSTException*>(&e)) {
+        if (u->actorException() && actor) {
+            const proto::ProtoString* key =
+                proto::ProtoString::createSymbol(ctx, "__inflight_exception__");
+            const proto::ProtoObject* exc = actor->getOwnAttributeDirect(ctx, key);
+            if (exc && exc != PROTO_NONE) {
+                TransientPin pinExc(ctx, exc);
+                const_cast<proto::ProtoObject*>(actor)->setAttribute(ctx, key, PROTO_NONE);
+                return exc;
+            }
+        }
+    }
+    return ctx->fromUTF8String(e.what());
+}
+} // namespace
 
 // F6 v3 C: thread-local "actor currently being processed on THIS thread".
 // drainOne writes it before invoking the user method body; Future>>wait
@@ -120,7 +144,7 @@ void bindPrimitive(STRuntime& rt, const proto::ProtoObject* proto, const char* s
     // both sides agree on the same eternal symbol.
     auto* sel = proto::ProtoString::createSymbol(ctx, selector);
     // Tag bit 62 marks "this is a primitive marker, not a real method object".
-    auto* val = ctx->fromLong(static_cast<long long>(idx) | (1LL << 62));
+    auto* val = ctx->fromLong(encodePrimitiveMarker(static_cast<int>(idx)));
     const_cast<proto::ProtoObject*>(proto)->setAttribute(ctx, sel, val);
 }
 
@@ -270,7 +294,7 @@ struct STRuntime::Impl {
     // LeastMaxValue is set high enough to absorb the absolute worst-case
     // burst-write throughput without saturating the counter. At 100K
     // sends in ~5 s we are far below this ceiling per worker.
-    std::counting_semaphore<8192> workerSem{0};
+    Semaphore workerSem;
 
     // F6 v6 (2026-05-23 night): pool-pause gate. Set true by
     // `STRuntime::stopProcessing`; checked at the top of every worker
@@ -302,7 +326,7 @@ struct STRuntime::Impl {
     // sees state(X)=settled (breaks the loop without parking). Both
     // outcomes are safe.
     std::atomic<const proto::ProtoObject*> mainWaitingOn{nullptr};
-    std::counting_semaphore<8192>           mainWaitSem{0};
+    Semaphore                               mainWaitSem;
 
     // F5-M2 module cache: canonical absolute path -> module object.
     std::unordered_map<std::string, const proto::ProtoObject*> moduleCache;
@@ -371,6 +395,25 @@ struct STRuntime::Impl {
         // Track 1 slice 2 (EXC-a): register the exception class hierarchy in
         // globals so user code can name `Exception`, `Error`, `Warning` and
         // do `Exception subclass: #MyError`.
+        // Class globals for the kernel types a Smalltalker names directly.
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "Integer"), bootstrap.integerProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "Symbol"), bootstrap.symbolProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "UndefinedObject"), bootstrap.nilProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "Character"), bootstrap.characterProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "BlockClosure"), bootstrap.blockProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "Block"), bootstrap.blockProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "ZeroDivide"), bootstrap.zeroDivideProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "ArithmeticError"), bootstrap.arithmeticErrorProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "Message"), bootstrap.messageProto);
         auto* exceptionKey = proto::ProtoString::createSymbol(rootCtx, "Exception");
         globals->setAttribute(rootCtx, exceptionKey, bootstrap.exceptionProto);
         auto* errorKey = proto::ProtoString::createSymbol(rootCtx, "Error");
@@ -592,6 +635,7 @@ static const proto::ProtoObject* st_worker_main(
 }
 
 STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
+    configureHeap(impl_->space);
     installIntPrimitives(*this);
     installMathPrimitives(*this);
     installTimePrimitives(*this);
@@ -629,6 +673,11 @@ STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
             ctx, ctx->fromUTF8String("provider:st"));
         impl_->space.setResolutionChain(chain->asObject(ctx));
     }
+
+    // The protocol written in protoST itself. Loaded before the worker pool
+    // starts, so a broken kernel file fails construction with no thread left
+    // to join.
+    loadKernel();
 
     // F6 v2 T7: spawn N managed worker ProtoThreads that drain the scheduler
     // queue in parallel with the foreground (Future>>wait) drain. Each worker
@@ -683,6 +732,8 @@ STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
 namespace { void printWorkerStatsAtExit(); }
 
 STRuntime::~STRuntime() {
+    // Errors raised by actors for sends nobody observed (see future_prims).
+    reportUnobservedActorErrors();
     // Print per-worker drain/park stats if PROTOST_WORKER_STATS=1. Done
     // BEFORE joining the workers so a runtime that destructs without ever
     // shutting cleanly still emits something useful — even an empty table
@@ -702,9 +753,7 @@ STRuntime::~STRuntime() {
         // forever and join() would deadlock. One release per worker —
         // each blocked worker wakes, observes `shutdown == true`, drains
         // any final pushes, and exits the loop.
-        for (size_t i = 0; i < impl_->workers.size(); ++i) {
-            impl_->workerSem.release();
-        }
+        impl_->workerSem.release(static_cast<int>(impl_->workers.size()));
         // join() blocks this thread in pthread_join while a worker still
         // draining may request a collection and park. A thread blocked in the
         // kernel cannot reach a safepoint, so the join runs in a protoCore
@@ -948,6 +997,17 @@ const proto::ProtoObject* STRuntime::currentActor() const {
 // references. The shared results are all perpetual or rooted: interned
 // symbols (never collected), the tagged nil/true/false/SmallInteger values
 // (no cell) and the bootstrap unset marker (rooted by the runtime).
+// The first code point of a UTF-8 string (a character literal's text).
+static unsigned int decodeFirstCodepoint(const std::string& s) {
+    if (s.empty()) return 0;
+    const auto b0 = static_cast<unsigned char>(s[0]);
+    auto cont = [&](size_t i) { return i < s.size() ? (static_cast<unsigned char>(s[i]) & 0x3Fu) : 0u; };
+    if (b0 < 0x80) return b0;
+    if ((b0 & 0xE0) == 0xC0) return ((b0 & 0x1Fu) << 6) | cont(1);
+    if ((b0 & 0xF0) == 0xE0) return ((b0 & 0x0Fu) << 12) | (cont(1) << 6) | cont(2);
+    return ((b0 & 0x07u) << 18) | (cont(1) << 12) | (cont(2) << 6) | cont(3);
+}
+
 const proto::ProtoObject*
 STRuntime::materialize(proto::ProtoContext* ctx, const BytecodeModule& m,
                        size_t i) const {
@@ -957,6 +1017,9 @@ STRuntime::materialize(proto::ProtoContext* ctx, const BytecodeModule& m,
             return ctx->fromLong(m.constInteger(i));
         case K::Float:
             return ctx->fromDouble(m.constFloat(i));
+        case K::LargeInteger:
+            return ctx->fromString(m.constString(i).c_str(),
+                                   static_cast<int>(m.constInteger(i)));
         case K::String:
             return ctx->fromUTF8String(m.constString(i).c_str());
         case K::Symbol: {
@@ -971,8 +1034,9 @@ STRuntime::materialize(proto::ProtoContext* ctx, const BytecodeModule& m,
                 proto::ProtoString::createSymbol(ctx, m.constSymbol(i).c_str()));
         }
         case K::Char:
-            // F2 simplification: treat character literal as a 1-char string.
-            return ctx->fromUTF8String(m.constString(i).c_str());
+            // A character literal is a Character: protoCore's embedded
+            // unicode-char value, decoded from the literal's UTF-8 text.
+            return ctx->fromUnicodeChar(decodeFirstCodepoint(m.constString(i)));
         case K::BlockRef:
             // F2 stub: block materialisation lands in a later task.
             return PROTO_NONE;
@@ -1749,7 +1813,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             } catch (const std::exception& e) {
                 setCurrentActor(nullptr);
                 if (msgFut && msgFut != PROTO_NONE) {
-                    auto* err = ctx->fromUTF8String(e.what());
+                    auto* err = rejectionFor(ctx, e, actor);
                     TransientPin pinErr(ctx, err);
                     rejectFutureFromDrain(*this, ctx, msgFut, err);
                 }
@@ -1831,10 +1895,10 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                     capDict);
                 SCHED_DIAG("drainOne USER-METHOD EXIT actor=" << actor
                            << " result=" << result);
-            } else if (method) {
+            } else if (method && method != PROTO_NONE && method->isInteger(ctx)) {
                 long long marker = method->asLong(ctx);
-                if (marker & (1LL << 62)) {
-                    int idx = static_cast<int>(marker & ((1LL << 62) - 1));
+                if (isPrimitiveMarker(marker)) {
+                    int idx = primitiveMarkerIndex(marker);
                     auto fn = impl_->registry.at(idx);
                     result = translateNativeException(
                         *this, ctx,
@@ -1843,9 +1907,15 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                     throw std::runtime_error("unknown method shape");
                 }
             } else {
-                throw std::runtime_error(
-                    std::string("doesNotUnderstand: ") +
-                    std::string(selStr->toStdString(ctx)));
+                // An absent selector answers PROTO_NONE, not null: report it
+                // as the synchronous send path does.
+                std::string msg = "doesNotUnderstand: " + selStr->toStdString(ctx);
+                const proto::ProtoObject* cname = wrapped
+                    ? wrapped->getAttribute(ctx, impl_->bootstrap.sym.className) : nullptr;
+                const proto::ProtoString* cstr =
+                    (cname && cname != PROTO_NONE) ? cname->asString(ctx) : nullptr;
+                if (cstr) msg += " (receiver class: " + cstr->toStdString(ctx) + ")";
+                throw std::runtime_error(msg);
             }
 
             if (future) {
@@ -1909,7 +1979,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             }
         } catch (const std::exception& e) {
             if (future) {
-                auto* err = ctx->fromUTF8String(e.what());
+                auto* err = rejectionFor(ctx, e, actor);
                 TransientPin pinErr(ctx, err);
                 rejectFutureFromDrain(*this, ctx, future, err);
             }
@@ -2278,6 +2348,114 @@ std::string STRuntime::findModuleFile(const std::string& logicalPath) const {
     }
 
     return "";
+}
+
+// Memory policy. protoCore's collector defers work until it is needed: it runs
+// in parallel and triggers as the heap approaches the configured ceiling. With
+// no ceiling it is never needed, so an allocating 3M-iteration loop grew to
+// 7-12 GB (a soft watermark alone still reached 4 GB). protoST therefore sets a
+// hard ceiling by default. Measured on 2026-09-29 with a 10M-cell ceiling: that
+// loop peaks at 0.8 GB and takes 36 s instead of 20 s -- the cost of actually
+// collecting instead of never collecting; fib, int_sum_loop, list_append,
+// str_concat, exception_latency and pump_twin show no measurable difference.
+// A 32M-cell default was tried the same day, so that an Array of 600,000
+// elements or (1 to: 1000000) asArray fit (a large list costs n log n cells
+// in protoCore): it made allocation-heavy actor code 17% slower
+// (saturation_big, one worker, 3.1 s -> 3.7 s), since the collector waits for
+// the ceiling. 10M stays the default; a program that needs more is told how
+// to raise it (reportOutOfMemory). Capped at a quarter of physical memory.
+// An explicit PROTOCORE_HEAP_LIMIT_CELLS, which
+// protoCore has already applied, takes precedence (0 disables the ceiling).
+//
+// A live set that itself reaches the ceiling is reported by protoCore through
+// outOfMemoryCallback, after which it aborts; protoST ends the process first,
+// with a message and exit status 3, so running out of memory never leaves a
+// core dump.
+namespace {
+constexpr long long kCellBytes = 64;
+constexpr long long kDefaultHardCells = 10'000'000;          // 640 MB of cells
+
+int defaultHardCells();
+
+proto::ProtoObject* reportOutOfMemory(proto::ProtoContext*) {
+    std::fflush(stdout);
+    // protoCore calls this only after consecutive collections reclaimed
+    // nothing: the live set itself fills the ceiling.
+    const char* env = std::getenv("PROTOCORE_HEAP_LIMIT_CELLS");
+    const long long cells = env ? std::atoll(env) : defaultHardCells();
+    std::fprintf(stderr, "error: out of memory: the live objects fill the heap limit of %lld cells "
+                         "(%lld MB) and the last collections reclaimed nothing. To allow more, set "
+                         "PROTOCORE_HEAP_LIMIT_CELLS (each cell is 64 bytes), e.g. "
+                         "PROTOCORE_HEAP_LIMIT_CELLS=%lld for %lld MB.\n",
+                 cells, cells * 64 / 1000000, cells * 4, cells * 4 * 64 / 1000000);
+    std::fflush(stderr);
+    std::_Exit(3);
+}
+
+int defaultHardCells() {
+    // The default ceiling, or a quarter of physical memory if that is smaller.
+    long long cells = kDefaultHardCells;
+#if defined(_SC_PHYS_PAGES) && defined(_SC_PAGESIZE)
+    const long pages = ::sysconf(_SC_PHYS_PAGES);
+    const long pageSize = ::sysconf(_SC_PAGESIZE);
+    if (pages > 0 && pageSize > 0)
+        cells = std::min(cells, static_cast<long long>(pages) * pageSize / 4 / kCellBytes);
+#endif
+    return static_cast<int>(std::min<long long>(cells, INT_MAX));
+}
+} // namespace
+
+void STRuntime::configureHeap(proto::ProtoSpace& space) {
+    space.outOfMemoryCallback = reportOutOfMemory;
+    if (std::getenv("PROTOCORE_HEAP_LIMIT_CELLS")) return;
+    space.setHeapLimits(0, defaultHardCells());
+}
+
+// The kernel: protocol implemented in protoST source (lib/kernel/*.st), run
+// at top level so the classes and methods it defines are ordinary globals, in
+// the order listed by lib/kernel/00-manifest.txt. A runtime without a stdlib
+// directory (an embedder that ships none) runs with the primitives alone.
+void STRuntime::loadKernel() {
+    namespace fs = std::filesystem;
+    const std::string libDir = discoverStdlibDir();
+    if (libDir.empty()) return;
+    const fs::path kernelDir = fs::path(libDir) / "kernel";
+    std::ifstream manifest(kernelDir / "00-manifest.txt");
+    if (!manifest) return;
+    std::string name;
+    while (std::getline(manifest, name)) {
+        if (name.empty() || name[0] == '#') continue;
+        const fs::path file = kernelDir / name;
+        std::ifstream in(file, std::ios::binary);
+        if (!in) throw std::runtime_error("kernel: cannot open " + file.string());
+        std::stringstream ss; ss << in.rdbuf();
+        Parser P(ss.str());
+        auto ast = P.parseModule();
+        if (!P.errors().empty()) {
+            const auto& e = P.errors().front();
+            throw std::runtime_error("kernel: " + file.string() + ":" + std::to_string(e.line)
+                                     + ":" + std::to_string(e.column) + ": " + e.message);
+        }
+        Compiler C;
+        auto bc = C.compileModule(*ast);
+        bc->setSourceName(file.string());
+        if (C.hasErrors())
+            throw std::runtime_error("kernel: " + file.string() + ": " + C.errors().front());
+        const BytecodeModule& module = *bc;
+        {
+            std::lock_guard<std::mutex> lock(impl_->modulesMu);
+            impl_->loadedModules.push_back(std::move(bc));
+        }
+        try {
+            runTopLevel(module);
+        } catch (const std::exception& ex) {
+            throw std::runtime_error("kernel: " + file.string() + ": " + ex.what());
+        }
+    }
+    // From here on, classes are declared by user code (see __subclassNamed:).
+    if (auto* g = globals())
+        g->setAttribute(rootCtx(), proto::ProtoString::createSymbol(rootCtx(), "__kernel_loaded__"),
+                        PROTO_TRUE);
 }
 
 // F5-M1: Read, parse, compile, and execute a module file. Wraps the classes

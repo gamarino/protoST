@@ -3,10 +3,13 @@
 #include "protoST/STRuntime.h"
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
+#include <unordered_map>
 #include "runtime/BytecodeModule.h"
 #include "runtime/ValueFormat.h"
 #include "protoCore.h"
 
+#include "runtime/Interrupt.h"
+#include "runtime/UnhandledSTException.h"
 #include <readline/readline.h>
 #include <readline/history.h>
 
@@ -26,6 +29,13 @@
 namespace protoST {
 
 namespace {
+
+// Classes declared by earlier REPL inputs, so a method entered in a later
+// input compiles against their instance variables (reset by :reset).
+std::unordered_map<std::string, Compiler::ClassInfo>& replClasses() {
+    static std::unordered_map<std::string, Compiler::ClassInfo> classes;
+    return classes;
+}
 
 // --- small helpers ----------------------------------------------------------
 
@@ -153,6 +163,7 @@ Completeness classify(const std::string& buffer) {
     if (P.errors().empty()) {
         Compiler C;
         C.setReplMode(true);
+        C.setKnownClasses(replClasses());
         auto bc = C.compileModule(*ast);
         (void)bc;
         if (!C.hasErrors()) return Completeness::Complete;
@@ -227,8 +238,10 @@ bool evaluate(Session& s, const std::string& buffer,
     }
     Compiler C;
     C.setReplMode(true);
+    C.setKnownClasses(replClasses());
     auto bc = C.compileModule(*ast);
     bc->setSourceName(sourceName);
+    if (!C.hasErrors()) replClasses() = C.classes();
     if (C.hasErrors()) {
         for (auto& str : C.errors())
             std::fprintf(stderr, "compile error: %s\n", str.c_str());
@@ -237,11 +250,16 @@ bool evaluate(Session& s, const std::string& buffer,
     BytecodeModule* mod = bc.get();
     s.retained.push_back(std::move(bc));
     try {
+        clearPendingInterrupt();
         auto* r = s.rt->runTopLevel(*mod);
         if (printIt) printResult(*s.rt, r);
         return true;
+    } catch (const InterruptSignal&) {
+        std::puts("Interrupted");
+        std::fflush(stdout);
+        return false;
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "error: %s\n", e.what());
+        std::fprintf(stderr, "%s\n", describeUncaught(e).c_str());
         return false;
     } catch (...) {
         std::fprintf(stderr, "error: unknown runtime failure\n");
@@ -289,6 +307,7 @@ void cmdLoad(Session& s, const std::string& arg) {
 // :reset — discard all session state and start a fresh STRuntime.
 void cmdReset(Session& s) {
     s.rebuild();
+    replClasses().clear();
     std::puts("session reset — all user variables, classes and methods cleared");
 }
 
@@ -398,11 +417,12 @@ int runRepl() {
     if (interactive && !histPath.empty())
         ::read_history(histPath.c_str());
 
-    std::puts("protoST 0.3.0 \xe2\x80\x94 interactive REPL");
+    std::printf("%s \xe2\x80\x94 interactive REPL\n", versionString());
     std::puts(":help for commands, :quit or Ctrl-D to exit");
     std::fflush(stdout);
 
     Session session;
+    armInterrupts(session.rt->rootCtx());
 
     const char* primary = "protoST> ";
     const char* continuation = "   ...> ";

@@ -4,6 +4,20 @@
 
 namespace protoST {
 
+namespace {
+// The Smalltalk-80 operator alphabet binary selectors are built from.
+bool isOperatorChar(char c) {
+    switch (c) {
+        case '+': case '*': case '/': case '\\': case '&': case ',': case '@':
+        case '=': case '~': case '<': case '>': case '%': case '?': case '!':
+        case '-':
+            return true;
+        default:
+            return false;
+    }
+}
+} // namespace
+
 Lexer::Lexer(std::string source) : source_(std::move(source)) {}
 
 void Lexer::advance() {
@@ -18,9 +32,14 @@ void Lexer::skipWhitespace() {
         char c = source_[pos_];
         if (std::isspace(static_cast<unsigned char>(c))) { advance(); continue; }
         if (c == '"') {
+            const int commentLine = line_, commentCol = col_;
             advance();
             while (pos_ < source_.size() && source_[pos_] != '"') advance();
-            if (pos_ < source_.size()) advance();
+            if (pos_ < source_.size()) { advance(); continue; }
+            // An unclosed comment used to swallow the rest of the file.
+            unterminatedComment_ = true;
+            unterminatedLine_ = commentLine;
+            unterminatedCol_ = commentCol;
             continue;
         }
         break;
@@ -60,40 +79,95 @@ Token Lexer::lexIdentifier() {
 // `negative == true`; `startLine`/`startCol` are captured from the `-`.
 Token Lexer::lexNumber(bool negative) {
     int startLine = line_, startCol = col_;
-    size_t start = pos_;
+    if (negative) startCol -= 1;  // the sign sits one column to the left of the digits
+    const std::string sign = negative ? "-" : "";
+    auto isDigitIn = [](char c, int base) {
+        int v = std::isdigit(static_cast<unsigned char>(c)) ? c - '0'
+              : std::isalpha(static_cast<unsigned char>(c))
+                    ? std::toupper(static_cast<unsigned char>(c)) - 'A' + 10 : 99;
+        return v < base;
+    };
+    std::string digits;
     while (pos_ < source_.size() && std::isdigit(static_cast<unsigned char>(source_[pos_]))) {
-        advance();
+        digits += source_[pos_]; advance();
     }
+    Token t;
+    t.line = startLine; t.column = startCol;
+
+    // Radix literal: <base>r<digits>, e.g. 16rFF, 2r1010 (base 2..36).
+    if (pos_ + 1 < source_.size() && source_[pos_] == 'r') {
+        int base = 0;
+        try { base = std::stoi(digits); } catch (...) { base = 0; }
+        if (base >= 2 && base <= 36 && isDigitIn(source_[pos_ + 1], base)) {
+            advance(); // r
+            std::string rd;
+            while (pos_ < source_.size() && isDigitIn(source_[pos_], base)) {
+                rd += static_cast<char>(std::toupper(static_cast<unsigned char>(source_[pos_])));
+                advance();
+            }
+            t.kind = TokenKind::Integer;
+            t.text = sign + digits + "r" + rd;
+            try {
+                std::size_t used = 0;
+                long long v = std::stoll(rd, &used, base);
+                t.intValue = negative ? -v : v;
+            } catch (const std::out_of_range&) {
+                t.large = true; t.radix = base; t.text = sign + rd;
+            }
+            return t;
+        }
+    }
+
     bool isFloat = false;
+    std::string frac;
     if (pos_ < source_.size() && source_[pos_] == '.' &&
         pos_ + 1 < source_.size() && std::isdigit(static_cast<unsigned char>(source_[pos_ + 1]))) {
         isFloat = true;
         advance(); // .
         while (pos_ < source_.size() && std::isdigit(static_cast<unsigned char>(source_[pos_]))) {
-            advance();
+            frac += source_[pos_]; advance();
         }
     }
-    Token t;
-    t.text = source_.substr(start, pos_ - start);
-    if (negative) {
-        t.text.insert(t.text.begin(), '-');
-        startCol -= 1;  // the sign sits one column to the left of the digits
+
+    // Exponent: e<digits> or e-<digits>, immediately after the mantissa.
+    std::string exponent;
+    if (pos_ + 1 < source_.size() && source_[pos_] == 'e') {
+        const bool neg = source_[pos_ + 1] == '-';
+        const size_t firstDigit = pos_ + (neg ? 2 : 1);
+        if (firstDigit < source_.size() && std::isdigit(static_cast<unsigned char>(source_[firstDigit]))) {
+            advance(); if (neg) advance();
+            exponent = neg ? "-" : "";
+            while (pos_ < source_.size() && std::isdigit(static_cast<unsigned char>(source_[pos_]))) {
+                exponent += source_[pos_]; advance();
+            }
+        }
     }
-    t.line = startLine; t.column = startCol;
-    if (isFloat) {
+
+    // An integer mantissa with a non-negative exponent stays an Integer
+    // (1e3 = 1000); a fraction or a negative exponent makes a Float.
+    if (!isFloat && !exponent.empty() && exponent[0] != '-') {
+        int e = 0;
+        try { e = std::stoi(exponent); } catch (...) { e = 400; }
+        if (e > 400) return makeError("integer literal exponent too large", startLine, startCol);
+        digits += std::string(static_cast<size_t>(e), '0');
+        exponent.clear();
+    }
+    if (isFloat || !exponent.empty()) {
+        t.kind = TokenKind::Float;
+        t.text = sign + digits + (frac.empty() ? "" : "." + frac) + (exponent.empty() ? "" : "e" + exponent);
         try {
-            t.kind = TokenKind::Float;
             t.floatValue = std::stod(t.text);
         } catch (const std::out_of_range&) {
             return makeError("float literal out of range", startLine, startCol);
         }
-    } else {
-        try {
-            t.kind = TokenKind::Integer;
-            t.intValue = std::stoll(t.text);
-        } catch (const std::out_of_range&) {
-            return makeError("integer literal out of range", startLine, startCol);
-        }
+        return t;
+    }
+    t.kind = TokenKind::Integer;
+    t.text = sign + digits;
+    try {
+        t.intValue = std::stoll(t.text);
+    } catch (const std::out_of_range&) {
+        t.large = true; t.radix = 10;   // a LargeInteger literal
     }
     return t;
 }
@@ -204,20 +278,58 @@ bool Lexer::prevEndsOperand() const {
     }
 }
 
+// True when [from, to) -- the whitespace and comments skipped before a token --
+// contains a line holding nothing but whitespace. A line whose only content is
+// a comment is not blank. The first line of the range continues the previous
+// token's line, so it never counts.
+bool Lexer::containsBlankLine(size_t from, size_t to) const {
+    bool sawNewline = false;
+    bool lineHasContent = true;
+    bool inComment = false;
+    for (size_t i = from; i < to && i < source_.size(); ++i) {
+        const char c = source_[i];
+        if (c == '"') { inComment = !inComment; lineHasContent = true; continue; }
+        if (c == '\n') {
+            if (sawNewline && !lineHasContent) return true;
+            sawNewline = true;
+            lineHasContent = inComment;
+            continue;
+        }
+        if (inComment || !std::isspace(static_cast<unsigned char>(c))) lineHasContent = true;
+    }
+    return false;
+}
+
 Token Lexer::next() {
+    if (!lookahead_.empty()) {
+        Token t = std::move(lookahead_.front());
+        lookahead_.pop_front();
+        return t;
+    }
+    return lexOne();
+}
+
+// Lex one token and record what later tokens depend on: the blank-line mark
+// and the kind of the last lexed token (D1: sign of a negative literal).
+Token Lexer::lexOne() {
     Token t = nextImpl_();
+    t.blankLineBefore = blankBefore_;
     prevReturnedKind_ = t.kind;
     return t;
 }
 
 Token Lexer::nextImpl_() {
-    if (hasPeek_) { hasPeek_ = false; return peekTok_; }
     size_t beforeWs = pos_;
     skipWhitespace();
     // D1: did whitespace (or a comment) separate this token from the previous
     // one? A `-digit` after whitespace is in primary position even when the
     // previous token ends an operand (e.g. each `-2` element of `#(-1 -2 -3)`).
     bool spaceBefore = (pos_ != beforeWs);
+    blankBefore_ = containsBlankLine(beforeWs, pos_);
+    if (unterminatedComment_) {
+        unterminatedComment_ = false;
+        return makeError("unterminated comment (opened here)", unterminatedLine_, unterminatedCol_);
+    }
     if (pos_ >= source_.size()) {
         Token t; t.kind = TokenKind::EndOfFile; t.line = line_; t.column = col_; return t;
     }
@@ -253,19 +365,6 @@ Token Lexer::nextImpl_() {
         case ';': return single(TokenKind::Semicolon);
         case '^': return single(TokenKind::Caret);
         case '|': return single(TokenKind::Pipe);
-        case '+': return bin1("+");
-        case '*': return bin1("*");
-        case '/':
-            // D11/D20: `//` is the integer (truncating) division operator of
-            // the numeric tower. Two slashes form one binary selector.
-            if (lookahead() == '/') {
-                Token t; t.kind = TokenKind::BinaryOp; t.text = "//";
-                t.line = startLine; t.column = startCol; advance(); advance(); return t;
-            }
-            return bin1("/");
-        case '&': return bin1("&");
-        case ',': return bin1(",");
-        case '@': return bin1("@");
         case '-':
             if (lookahead() == '>') {
                 Token t; t.kind = TokenKind::BinaryOp; t.text = "->";
@@ -284,62 +383,28 @@ Token Lexer::nextImpl_() {
                 return lexNumber(/*negative=*/true);
             }
             return bin1("-");
-        case '=':
-            if (lookahead() == '=') {
-                Token t; t.kind = TokenKind::BinaryOp; t.text = "==";
-                t.line = startLine; t.column = startCol; advance(); advance(); return t;
-            }
-            return bin1("=");
-        case '~':
-            if (lookahead() == '=') {
-                Token t; t.kind = TokenKind::BinaryOp; t.text = "~=";
-                t.line = startLine; t.column = startCol; advance(); advance(); return t;
-            }
-            // D18: `~~` is the identity-inequality binary operator (the mirror
-            // of `==`). Two characters from the operator alphabet form one
-            // binary operator (§2.10).
-            if (lookahead() == '~') {
-                Token t; t.kind = TokenKind::BinaryOp; t.text = "~~";
-                t.line = startLine; t.column = startCol; advance(); advance(); return t;
-            }
-            return makeError("unexpected '~'", startLine, startCol);
-        case '<':
-            if (lookahead() == '=') {
-                Token t; t.kind = TokenKind::BinaryOp; t.text = "<=";
-                t.line = startLine; t.column = startCol; advance(); advance(); return t;
-            }
-            // `<<` is a two-character binary operator (the Smalltalk stream
-            // append/output selector). Two characters from the operator
-            // alphabet form one binary operator (§2.10).
-            if (lookahead() == '<') {
-                Token t; t.kind = TokenKind::BinaryOp; t.text = "<<";
-                t.line = startLine; t.column = startCol; advance(); advance(); return t;
-            }
-            return bin1("<");
-        case '>':
-            if (lookahead() == '=') {
-                Token t; t.kind = TokenKind::BinaryOp; t.text = ">=";
-                t.line = startLine; t.column = startCol; advance(); advance(); return t;
-            }
-            if (lookahead() == '>') {
-                Token t; t.kind = TokenKind::GtGt; t.text = ">>";
-                t.line = startLine; t.column = startCol; advance(); advance(); return t;
-            }
-            return bin1(">");
         case ':':
             if (lookahead() == '=') {
                 Token t; t.kind = TokenKind::Assign; t.text = ":=";
                 t.line = startLine; t.column = startCol; advance(); advance(); return t;
             }
             return single(TokenKind::Colon);
-        case '\\':
-            // D11/D20: `\\` is the modulo (remainder) binary operator of the
-            // numeric tower. Two backslashes form one binary selector.
-            if (lookahead() == '\\') {
-                Token t; t.kind = TokenKind::BinaryOp; t.text = "\\\\";
-                t.line = startLine; t.column = startCol; advance(); advance(); return t;
-            }
-            return makeError("unexpected '\\'", startLine, startCol);
+    }
+
+    // A binary selector is a run of operator characters (Smalltalk-80), such
+    // as `+`, `**`, `//`, `\\`, `<=`, `==>`, `~~` or `,`. A `-` is never taken
+    // after the first character (it may be a negative literal's sign; `->`
+    // is lexed above), and `|` / `^` are tokens of their own. `>>` is the
+    // method-declaration token.
+    if (isOperatorChar(c) && c != '-') {
+        std::string op;
+        while (isOperatorChar(current()) && current() != '-') { op += current(); advance(); }
+        if (op == ">>") {
+            Token t; t.kind = TokenKind::GtGt; t.text = op; t.line = startLine; t.column = startCol; return t;
+        }
+        if (op == "\\" || op == "~")
+            return makeError("unexpected '" + op + "'", startLine, startCol);
+        Token t; t.kind = TokenKind::BinaryOp; t.text = op; t.line = startLine; t.column = startCol; return t;
     }
 
     {
@@ -350,8 +415,13 @@ Token Lexer::nextImpl_() {
 }
 
 const Token& Lexer::peek() {
-    if (!hasPeek_) { peekTok_ = next(); hasPeek_ = true; }
-    return peekTok_;
+    if (lookahead_.empty()) lookahead_.push_back(lexOne());
+    return lookahead_.front();
+}
+
+const Token& Lexer::peekSecond() {
+    while (lookahead_.size() < 2) lookahead_.push_back(lexOne());
+    return lookahead_[1];
 }
 
 std::vector<Token> Lexer::tokenize() {

@@ -102,10 +102,10 @@ long long storedSize(proto::ProtoContext* ctx, const proto::ProtoObject* coll) {
     return n->asLong(ctx);
 }
 
-// 2^60 and 2^60+1 are distinct integers that round to the same double, and the
-// numeric key hash folds the double, so they land in one slot.
+// Two different integers whose numeric hash is the same: the hash keeps the
+// low 53 bits, so 2^53 - 1 and -1 collide.
 const char* const kCollidingKeys =
-    "a := 1. 1 to: 60 do: [ :i | a := a * 2 ]. b := a + 1. ";
+    "a := (2 raisedTo: 53) - 1. b := -1. ";
 
 } // namespace
 

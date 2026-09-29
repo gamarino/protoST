@@ -68,4 +68,6 @@ drivers do: [ :d | futures add: (d run) ].
 
 sum := 0.
 futures do: [ :f | sum := sum + f wait ].
-sum.
+result := sum.
+result = 48048000 ifFalse: [Error signal: 'multi_producer: wrong result ' , result printString].
+'VERIFIED ' , result printString

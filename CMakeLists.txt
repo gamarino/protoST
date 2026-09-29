@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
-project(protoST VERSION 0.3.0 LANGUAGES CXX)
+project(protoST VERSION 0.4.0 LANGUAGES CXX)
+
+# The one place the version is written: every binary and library reads it
+# through PROTOST_VERSION (include/protoST/STRuntime.h).
+add_compile_definitions(PROTOST_VERSION="${PROJECT_VERSION}")
 
 # Default to an optimised build. Without this a plain `cmake -B build` leaves
 # CMAKE_BUILD_TYPE empty — GCC then compiles at -O0, and every casual build
@@ -135,6 +139,7 @@ add_library(protost_runtime STATIC
     src/runtime/BytecodeModule.cpp
     src/runtime/STRuntime.cpp
     src/runtime/ExecutionEngine.cpp
+    src/runtime/Interrupt.cpp
     src/runtime/Bootstrap.cpp
     src/runtime/HandlerStack.cpp
     src/runtime/ValueFormat.cpp
@@ -191,6 +196,49 @@ add_test(NAME cli_venv
 
 add_test(NAME cli_eval
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_eval.sh $<TARGET_FILE:protost>)
+
+add_test(NAME cli_memory_bounded
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_memory_bounded.sh $<TARGET_FILE:protost>)
+
+add_test(NAME cli_oom_clean
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_oom_clean.sh $<TARGET_FILE:protost>)
+
+add_test(NAME cli_sigint
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_sigint.sh $<TARGET_FILE:protost>)
+
+add_test(NAME cli_inputs
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_inputs.sh $<TARGET_FILE:protost>)
+
+add_test(NAME cli_actor_unobserved_error
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_actor_unobserved_error.sh $<TARGET_FILE:protost>)
+
+add_test(NAME cli_print_nl
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_print_nl.sh $<TARGET_FILE:protost>)
+
+add_test(NAME cli_transcript
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_transcript.sh $<TARGET_FILE:protost>)
+
+add_test(NAME cli_error_location
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_error_location.sh $<TARGET_FILE:protost>)
+
+# The benchmark harness fails on a missing or wrong VERIFIED result.
+add_test(NAME bench_harness_selftest
+    COMMAND python3 ${CMAKE_SOURCE_DIR}/benchmarks/tests/test_harness.py)
+
+add_test(NAME cli_unhandled_exception_label
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_unhandled_exception_label.sh $<TARGET_FILE:protost>)
+
+add_test(NAME cli_repl_class_across_inputs
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_repl_class_across_inputs.sh $<TARGET_FILE:protost>)
+
+add_test(NAME cli_callback_error_reported
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_callback_error_reported.sh $<TARGET_FILE:protost>)
+
+add_test(NAME cli_buried_actor_deadlock
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_buried_actor_deadlock.sh $<TARGET_FILE:protost>)
+
+add_test(NAME cli_kernel
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_kernel.sh $<TARGET_FILE:protost> ${CMAKE_BINARY_DIR}/cli-scratch/kernel)
 
 add_test(NAME cli_debugger
     COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_debugger.sh $<TARGET_FILE:protost> ${CMAKE_SOURCE_DIR}/tests/fixtures)
@@ -263,7 +311,7 @@ install(TARGETS protost
 install(DIRECTORY lib/
     DESTINATION ${CMAKE_INSTALL_DATADIR}/protoST/lib
     COMPONENT protoST
-    FILES_MATCHING PATTERN "*.st" PATTERN "README.md")
+    FILES_MATCHING PATTERN "*.st" PATTERN "README.md" PATTERN "00-manifest.txt")
 
 # License and documentation.
 install(FILES LICENSE
@@ -285,7 +333,7 @@ endif()
 set(CPACK_PACKAGE_NAME "protost")
 set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
-    "protoST - a Smalltalk-flavoured language on the protoCore runtime")
+    "protoST - a runtime for Smalltalk-syntax programs, with actors, on protoCore")
 set(CPACK_PACKAGE_VENDOR "numaes")
 set(CPACK_PACKAGE_CONTACT "gamarino@gmail.com")
 set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README.md")

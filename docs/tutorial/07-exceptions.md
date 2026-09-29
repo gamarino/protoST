@@ -11,13 +11,22 @@ the Smalltalk exception protocol gives you options no `try`/`except` block has.
 
 ## 7.1 The exception hierarchy
 
-Exceptions are objects, and exception *kinds* are classes. protoST gives you
-three to start from:
+Exceptions are objects, and exception *kinds* are classes. The hierarchy has
+three roots to build on, and the runtime signals some more specific
+subclasses of `Error` itself:
 
 ```
-Exception        "the root — resumable"
-  Error          "a serious fault — NOT resumable"
-  Warning        "a non-fatal condition — resumable"
+Exception                 "the root — resumable"
+  Error                   "a serious fault — NOT resumable"
+    ArithmeticError
+      ZeroDivide          "1 / 0 — resumable, as in Pharo"
+    MessageNotUnderstood  "an unknown selector"
+    SubscriptOutOfBounds  "#(1 2) at: 5"
+    KeyNotFound           "Dictionary new at: #missing"
+    NotFound              "remove: of an absent element"
+    BlockCannotReturn     "a dead-home ^ (Chapter 6)"
+    ModificationForbidden "at:put: on a String"
+  Warning                 "a non-fatal condition — resumable"
 ```
 
 - **`Error`** is the one you will use most: a genuine fault — a bad argument, a
@@ -61,7 +70,15 @@ the current computation and reports the text:
 ```bash
 $ ./build/protost -e "Error signal: 'disk is full'"
 error: disk is full
+  at <module> (<expr>:1)
 ```
+
+After the text comes a trace: one `at …` line per method that was active,
+innermost first — here only the top level of the `-e` expression. For an
+error raised inside methods of a script it reads
+`at Account>>withdraw: (bank.st:17)` (§7.7's `bank.st` with `a withdraw: 250`). A subclass of `Error` is reported with
+its class name first (`error: InsufficientFunds: insufficient funds`); a plain
+`Error` shows only its text. The exit status is 1.
 
 A `Warning` with no handler instead prints and *resumes* — the program carries
 on. That difference (abort vs. resume) is what separates a fault from a notice.
@@ -129,6 +146,9 @@ a warning: low ink
 > — and because it is just a longer keyword selector, there is no limit-of-the-
 > grammar feeling to it; it is the same construct with one more pair.
 
+To catch several classes with *one* handler, join them with `,` into an
+exception set: `[ … ] on: ZeroDivide, KeyNotFound do: [ :e | … ]`.
+
 ## 7.4 Handler actions: more than `catch`
 
 Here is where the Smalltalk protocol does something Python and JavaScript
@@ -188,7 +208,6 @@ Flaky >> attempt
   ^ 'succeeded on try ' , tries printString.
 
 f := Flaky new.
-f initialize.
 [ f attempt ] on: Error do: [ :e | e retry ].
 ```
 
@@ -205,13 +224,16 @@ loop in sight — `retry` *is* the loop.
 > `try`. **In protoST** `retry` is a handler action — the re-run is built into
 > the exception protocol.
 
+`e retryUsing: aBlock` is the variant that replaces the protected block with
+`aBlock` and runs that instead.
+
 ### `resume:` — continue past the signal
 
 `resume:` is the most un-`try`/`except`-like action. It makes the *`signal`
 call itself* return a value, so the protected block continues from exactly
 where it raised the exception, as if `signal` had been a normal expression all
-along. Only *resumable* exceptions support it (`Warning` and `Exception`, not
-`Error` — §7.6):
+along. Only *resumable* exceptions support it (`Warning`, `Exception` and
+`ZeroDivide`, not `Error` — §7.6):
 
 ```smalltalk
 "-- resume.st --"
@@ -281,7 +303,10 @@ Whether an exception can be `resume:`d is a property of its class:
 
 - `Exception` and `Warning` are **resumable** — `resume:` works.
 - `Error` is **not resumable** — calling `resume:` on a caught `Error` is
-  itself an error.
+  itself an error. `ZeroDivide` is the exception to the rule, as in Pharo:
+  `[ (1 / 0) + 1 ] on: ZeroDivide do: [ :e | e resume: 5 ]` answers `6`.
+
+`e isResumable` answers which case you are in.
 
 The reasoning: an `Error` signals that a computation reached a state it cannot
 sensibly continue from, so "continue past the signal" is meaningless. A
@@ -320,7 +345,6 @@ Account >> safeWithdraw: amount
       do: [ :e | 'refused: ' , e messageText ].
 
 a := Account new.
-a initialize.
 a safeWithdraw: 250.
 ```
 
@@ -332,26 +356,22 @@ refused: insufficient funds
 `safeWithdraw: 250` calls `withdraw:`, which signals the custom
 `InsufficientFunds` (250 exceeds the balance of 100). The
 `on: InsufficientFunds do:` handler catches it and yields the message text with
-a prefix — caught by this handler because `InsufficientFunds` is a subclass of
-`Error`'s sibling… in fact a subclass of `Error` itself, so an `on: Error do:`
-handler would catch it just as well.
+a prefix. `InsufficientFunds` is a subclass of `Error`, so an
+`on: Error do:` handler would catch it just as well.
 
-> **A parser caveat worth one paragraph.** Notice `withdraw:` is written as an
-> `ifTrue:ifFalse:` *expression* — `^ (cond) ifTrue: […] ifFalse: […]` — rather
-> than as a *guard clause* (`(cond) ifTrue: [ ^ … ].` followed by more
-> statements). On the current build, a guard clause whose `ifTrue:` block
-> contains a `^` returning a bare instance variable, followed by further
-> statements that touch that same variable, can be mis-parsed. The robust,
-> always-correct shape — and the one this tutorial uses throughout — is the
-> *expression* form: compute the whole result with `ifTrue:ifFalse:` and `^` it
-> once at the end. It reads well and side-steps the caveat entirely.
+`withdraw:` is written as one `ifTrue:ifFalse:` *expression* returned with a
+single `^`. The guard-clause style — `amount > balance ifTrue: [ ^ … ].`
+followed by the rest of the method — works equally well.
 
 ## 7.8 Summary
 
 - Exceptions form a class hierarchy: `Exception` → `Error` (non-resumable),
-  `Warning` (resumable). Subclass any of them for your own exception types.
+  `Warning` (resumable), with specific errors such as `ZeroDivide`,
+  `KeyNotFound` and `MessageNotUnderstood`. Subclass any of them for your own
+  exception types.
 - Raise with `anException signal` / `signal: 'text'`. With no handler, an
-  `Error` aborts; a `Warning` prints and resumes.
+  `Error` aborts and prints its text and a trace; a `Warning` prints and
+  resumes.
 - Catch with `[ protected ] on: ExcClass do: [ :e | handler ]` — a message
   taking two blocks. `on:do:on:do:` guards two classes at once.
 - The handler chooses the outcome: fall off its end, `return:` a value, `retry`

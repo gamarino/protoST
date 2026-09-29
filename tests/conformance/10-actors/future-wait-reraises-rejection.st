@@ -1,4 +1,4 @@
-"EXPECT-ERROR"
+"EXPECT-ERROR: actor failure"
 "§10.3 / §10.7: an exception unhandled inside an actor method rejects that
 message's Future, and `wait` is specified to 'block until settled; return the
 value, or RE-RAISE the rejection'. Waiting on a rejected Future re-raises, so

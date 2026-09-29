@@ -70,14 +70,14 @@
 namespace protoST {
 
 // Scratch-region geometry. Kept in sync with ExecutionEngine::kSlotCapacity
-// (8192). The scratch region is the top `kScratchSlots` slots; frame regions
+// (1,048,576 since 0.4.0: 10,000-deep recursion needs ~560,000 frame slots). The scratch region is the top `kScratchSlots` slots; frame regions
 // occupy `[0, kSlotCapacity - kScratchSlots)`.
 //
 // 256 transient pins is far past any real nesting depth: the deepest pinning
 // site (the actor-message SEND fast-path) pins ~6 objects, and primitives
 // pin a handful each; even a long chain of nested engines / primitives on one
 // C++ stack stays well under 256. Overflow is a hard error, never silent.
-inline constexpr unsigned int kEngineSlotCapacity = 8192;
+inline constexpr unsigned int kEngineSlotCapacity = 1u << 20;
 inline constexpr unsigned int kScratchSlots       = 256;
 inline constexpr unsigned int kScratchBase        =
     kEngineSlotCapacity - kScratchSlots;        // first scratch slot index

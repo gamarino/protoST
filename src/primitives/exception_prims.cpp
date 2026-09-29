@@ -41,6 +41,7 @@
 #include "runtime/UnhandledSTException.h"
 #include "runtime/NativeExceptionBridge.h"
 #include "runtime/TransientPin.h"
+#include "runtime/ExecutionEngine.h"
 #include "protoCore.h"
 
 #include <cstdio>
@@ -50,6 +51,15 @@
 #include <vector>
 
 namespace protoST {
+
+int blockArgCount(proto::ProtoContext* ctx, const proto::ProtoObject* block);
+
+// Defined in object_prims.cpp: run a method by name, as a send does.
+const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* recv,
+                                      const proto::ProtoString* selector,
+                                      const proto::ProtoObject* const* args, int argc,
+                                      bool* understood);
 
 // invokeBlock — defined in block_prims.cpp. Runs a BlockClosure synchronously
 // in a fresh nested ExecutionEngine. An UnwindToHandler thrown inside the
@@ -80,28 +90,24 @@ namespace {
 // canonicalisation that the JSSymbols / call_once pattern in protoJS
 // was built to avoid.
 const proto::ProtoString* msgTextKey(proto::ProtoContext* ctx) {
-    static const proto::ProtoString* s = nullptr;
-    static std::once_flag f;
-    std::call_once(f, [ctx]() { s = proto::ProtoString::createSymbol(ctx, "messageText"); });
-    return s;
+    // Resolved per call: symbols are interned per ProtoSpace, and a static
+    // would bind to the first runtime's space.
+    return proto::ProtoString::createSymbol(ctx, "__message_text__");
 }
 const proto::ProtoString* activeHandlerKey(proto::ProtoContext* ctx) {
-    static const proto::ProtoString* s = nullptr;
-    static std::once_flag f;
-    std::call_once(f, [ctx]() { s = proto::ProtoString::createSymbol(ctx, "__active_handler_id__"); });
-    return s;
+    // Resolved per call: symbols are interned per ProtoSpace, and a static
+    // would bind to the first runtime's space.
+    return proto::ProtoString::createSymbol(ctx, "__active_handler_id__");
 }
 const proto::ProtoString* classNameKey(proto::ProtoContext* ctx) {
-    static const proto::ProtoString* s = nullptr;
-    static std::once_flag f;
-    std::call_once(f, [ctx]() { s = proto::ProtoString::createSymbol(ctx, "__class_name__"); });
-    return s;
+    // Resolved per call: symbols are interned per ProtoSpace, and a static
+    // would bind to the first runtime's space.
+    return proto::ProtoString::createSymbol(ctx, "__class_name__");
 }
 const proto::ProtoString* resumableKey(proto::ProtoContext* ctx) {
-    static const proto::ProtoString* s = nullptr;
-    static std::once_flag f;
-    std::call_once(f, [ctx]() { s = proto::ProtoString::createSymbol(ctx, "__resumable__"); });
-    return s;
+    // Resolved per call: symbols are interned per ProtoSpace, and a static
+    // would bind to the first runtime's space.
+    return proto::ProtoString::createSymbol(ctx, "__resumable__");
 }
 
 // True when the exception instance is resumable. The `__resumable__` marker is
@@ -143,21 +149,34 @@ std::string messageTextOf(proto::ProtoContext* ctx, const proto::ProtoObject* ex
     return s ? s->toStdString(ctx) : std::string();
 }
 
-// A human-readable name for an unhandled exception's default-action message:
-// the messageText if present, otherwise the exception's class name.
-std::string defaultActionMessage(proto::ProtoContext* ctx,
-                                  const proto::ProtoObject* exc) {
-    std::string m = messageTextOf(ctx, exc);
-    if (!m.empty()) return m;
+// The text an unhandled exception reports: its messageText as the exception
+// answers it (so a messageText override counts), prefixed with the class name
+// when that adds information — "MyError: text", but "text" for a plain Error
+// and for MessageNotUnderstood, whose text already names the selector and the
+// receiver's class.
+std::string defaultActionMessage(STRuntime& rt, proto::ProtoContext* ctx,
+                                 const proto::ProtoObject* exc) {
+    std::string className;
     const proto::ProtoObject* cn = exc ? exc->getAttribute(ctx, classNameKey(ctx)) : nullptr;
-    if (cn && cn != PROTO_NONE) {
-        const proto::ProtoString* s = cn->asString(ctx);
-        if (s) {
-            std::string name = s->toStdString(ctx);
-            if (!name.empty()) return name;
-        }
+    if (cn && cn != PROTO_NONE)
+        if (const proto::ProtoString* s = cn->asString(ctx)) className = s->toStdString(ctx);
+    std::string text;
+    try {
+        bool understood = false;
+        const proto::ProtoObject* m = sendDynamic(
+            rt, ctx, exc, proto::ProtoString::createSymbol(ctx, "messageText"),
+            nullptr, 0, &understood);
+        if (understood && m && m != PROTO_NONE)
+            if (const proto::ProtoString* s = m->asString(ctx)) text = s->toStdString(ctx);
+    } catch (...) {
+        text.clear();   // a failing override: fall back to the stored text
     }
-    return std::string("unhandled exception");
+    if (text.empty()) text = messageTextOf(ctx, exc);
+    if (text.empty()) return className.empty() ? std::string("unhandled exception") : className;
+    if (className.empty() || className == "Error" || className == "MessageNotUnderstood"
+        || text == className || text.rfind(className + ":", 0) == 0)
+        return text;
+    return className + ": " + text;
 }
 
 // --- Default action for an unhandled exception (EXC-b refinement) ----------
@@ -176,12 +195,23 @@ std::string defaultActionMessage(proto::ProtoContext* ctx,
 // `catch (const std::exception&)` clauses keep working unchanged; the dedicated
 // type lets the EXC-d native-translation wrapper recognise an
 // already-protoST exception and re-throw it instead of double-translating it.
-const proto::ProtoObject* defaultAction(proto::ProtoContext* ctx,
+const proto::ProtoObject* defaultAction(STRuntime& rt, proto::ProtoContext* ctx,
                                         const proto::ProtoObject* exc) {
-    if (!isResumable(ctx, exc)) {
-        // Error / non-resumable: abort the activation (EXC-a behaviour, EXC-d
-        // dedicated type).
-        throw UnhandledSTException(defaultActionMessage(ctx, exc));
+    const bool isErrorClass = exc && exc->getAttribute(
+        ctx, proto::ProtoString::createSymbol(ctx, "__unhandled_is_error__")) == PROTO_TRUE;
+    if (isErrorClass || !isResumable(ctx, exc)) {
+        // Error (resumable or not) / non-resumable: abort the activation
+        // (EXC-a behaviour, EXC-d dedicated type).
+        // Inside an actor, keep the exception on the actor itself (a GC root
+        // while its message runs) for the drain to reject the Future with.
+        bool onActor = false;
+        if (const proto::ProtoObject* actor = rt.currentActor()) {
+            const_cast<proto::ProtoObject*>(actor)->setAttribute(
+                ctx, proto::ProtoString::createSymbol(ctx, "__inflight_exception__"), exc);
+            onActor = true;
+        }
+        throw UnhandledSTException(defaultActionMessage(rt, ctx, exc),
+                                   ExecutionEngine::describeActiveStack(20), onActor);
     }
     // Resumable and unhandled. A Warning announces itself; the bare Exception
     // base resumes silently. The distinction is the presence of a messageText
@@ -189,7 +219,13 @@ const proto::ProtoObject* defaultAction(proto::ProtoContext* ctx,
     {
         std::string m = messageTextOf(ctx, exc);
         if (!m.empty()) {
-            std::fputs("Warning: ", stderr);
+            // Labelled with the exception's class (a Warning, a user
+            // subclass, or the bare Exception), never a fixed word.
+            std::string label = "Exception";
+            const proto::ProtoObject* cn = exc->getAttribute(ctx, classNameKey(ctx));
+            if (cn && cn != PROTO_NONE)
+                if (const proto::ProtoString* ns = cn->asString(ctx)) label = ns->toStdString(ctx);
+            std::fputs((label + ": ").c_str(), stderr);
             std::fputs(m.c_str(), stderr);
             std::fputc('\n', stderr);
         }
@@ -224,7 +260,7 @@ const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx
             // No (further) matching handler: run the exception's default
             // action. For a resumable exception this returns a value that
             // `signal` yields; for an Error it throws.
-            return defaultAction(ctx, exc);
+            return defaultAction(rt, ctx, exc);
         }
 
         unsigned long handlerId          = entry->handlerId;
@@ -244,7 +280,11 @@ const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx
         const proto::ProtoObject* handlerResult = nullptr;
         try {
             const proto::ProtoObject* a0 = exc;
-            handlerResult = invokeBlock(rt, ctx, hBlock, &a0, 1);
+            // The handler is culled, as in Pharo: a block with no argument
+            // (on: Error do: [nil]) is evaluated without the exception.
+            handlerResult = blockArgCount(ctx, hBlock) == 0
+                ? invokeBlock(rt, ctx, hBlock, nullptr, 0)
+                : invokeBlock(rt, ctx, hBlock, &a0, 1);
         } catch (const ResumeSignal& r) {
             // `resume: v` — only ours is consumed here; an inner id belongs
             // to an outer signal loop.
@@ -277,6 +317,34 @@ const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx
 }
 
 } // namespace
+
+// anException __isResumable → whether resume: is allowed (the class-derived
+// marker, overridable per instance). Exception>>isResumable wraps it.
+const proto::ProtoObject* prim_Exception_isResumable(STRuntime&, proto::ProtoContext* ctx,
+                                                     const proto::ProtoObject* r,
+                                                     const proto::ProtoObject* const*, int) {
+    return isResumable(ctx, r) ? PROTO_TRUE : PROTO_FALSE;
+}
+
+// Re-signal an exception instance in the current context: a Future rejected
+// by an actor's unhandled exception raises that same exception in the waiter.
+const proto::ProtoObject* resignalException(STRuntime& rt, proto::ProtoContext* ctx,
+                                            const proto::ProtoObject* exc) {
+    return signalInstance(rt, ctx, exc);
+}
+
+bool isExceptionClassObject(STRuntime& rt, proto::ProtoContext* ctx,
+                            const proto::ProtoObject* obj) {
+    return obj && obj != PROTO_NONE && !obj->isInteger(ctx) && !obj->asString(ctx)
+        && (obj == rt.bootstrap().errorProto
+            || obj->hasParent(ctx, rt.bootstrap().errorProto) != 0);
+}
+
+bool isExceptionInstance(STRuntime& rt, proto::ProtoContext* ctx,
+                         const proto::ProtoObject* obj) {
+    return obj && obj != PROTO_NONE && !obj->isInteger(ctx) && !obj->asString(ctx)
+        && obj->hasParent(ctx, rt.bootstrap().exceptionProto) != 0;
+}
 
 // --- EXC-d: translate a native C++ exception into a protoST Error ----------
 //
@@ -319,6 +387,72 @@ const proto::ProtoObject* signalErrorOfClass(STRuntime& rt,
     // error of this kind is never resumable (the offending stack is gone).
     const_cast<proto::ProtoObject*>(exc)->setAttribute(
         ctx, resumableKey(ctx), PROTO_FALSE);
+    return signalInstance(rt, ctx, exc);
+}
+
+// ZeroDivide is resumable (ArithmeticError): the bridge answers the value a
+// handler passes to resume: as the failed primitive's result, so
+// [1/0] on: ZeroDivide do: [:e | e resume: 0] evaluates to 0, as in Pharo.
+const proto::ProtoObject* signalZeroDivide(STRuntime& rt, proto::ProtoContext* ctx) {
+    const proto::ProtoObject* exc =
+        const_cast<proto::ProtoObject*>(rt.bootstrap().zeroDivideProto)->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinExc(ctx, exc);
+    const_cast<proto::ProtoObject*>(exc)->setAttribute(
+        ctx, msgTextKey(ctx), ctx->fromUTF8String("ZeroDivide"));
+    return signalInstance(rt, ctx, exc);
+}
+
+// Signal a fresh instance of the global class named `className` (an Error
+// subclass defined by the kernel, such as SubscriptOutOfBounds), or a plain
+// Error when no such global exists.
+const proto::ProtoObject* signalErrorNamed(STRuntime& rt, proto::ProtoContext* ctx,
+                                           const char* className, const char* message) {
+    const proto::ProtoObject* g = rt.globals();
+    const proto::ProtoObject* cls = g
+        ? g->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, className)) : nullptr;
+    if (!cls || cls == PROTO_NONE || !isExceptionClassObject(rt, ctx, cls))
+        return signalNativeError(rt, ctx, message);
+    return signalErrorOfClass(rt, ctx, cls, message);
+}
+
+// A Message: the selector and the arguments of a send, as a
+// doesNotUnderstand: override and MessageNotUnderstood>>message see it.
+const proto::ProtoObject* makeMessage(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const std::string& selector,
+                                      const proto::ProtoObject* const* args, int argc) {
+    const proto::ProtoList* list = ctx->newList();
+    TransientPin pinList(ctx, reinterpret_cast<const proto::ProtoObject*>(list));
+    for (int i = 0; i < argc; ++i) {
+        list = list->appendLast(ctx, args[i] ? args[i] : PROTO_NONE);
+        pinList.reset(reinterpret_cast<const proto::ProtoObject*>(list));
+    }
+    const proto::ProtoObject* arr = rt.bootstrap().arrayProto->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinArr(ctx, arr);
+    arr->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__data__"), list->asObject(ctx));
+    const proto::ProtoObject* msg = rt.bootstrap().messageProto->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinMsg(ctx, msg);
+    msg->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__selector__"),
+                      reinterpret_cast<const proto::ProtoObject*>(
+                          proto::ProtoString::createSymbol(ctx, selector.c_str())));
+    msg->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__arguments__"), arr);
+    return msg;
+}
+
+// Signal a MessageNotUnderstood carrying the receiver and the Message. It is
+// resumable, as in Pharo: resume: answers the value for the failed send.
+const proto::ProtoObject* signalMessageNotUnderstood(STRuntime& rt, proto::ProtoContext* ctx,
+                                                     const proto::ProtoObject* receiver,
+                                                     const proto::ProtoObject* message,
+                                                     const char* text) {
+    const proto::ProtoObject* exc =
+        const_cast<proto::ProtoObject*>(rt.bootstrap().messageNotUnderstoodProto)
+            ->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinExc(ctx, exc);
+    exc->setAttribute(ctx, msgTextKey(ctx), ctx->fromUTF8String(text ? text : "doesNotUnderstand:"));
+    exc->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__receiver__"),
+                      receiver ? receiver : PROTO_NONE);
+    exc->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__message__"),
+                      message ? message : PROTO_NONE);
     return signalInstance(rt, ctx, exc);
 }
 
@@ -372,12 +506,18 @@ const proto::ProtoObject* prim_Exception_signalText(STRuntime& rt, proto::ProtoC
     return signalInstance(rt, ctx, exc);
 }
 
-// anException messageText → the stored string (nil when unset)
+// anException messageText → the stored string, or the class name when unset
+// The text lives under its own key: stored under `messageText`, an exception
+// with no text found the messageText *method* marker on its prototype and
+// answered it as an integer. With no text, answer the class name, as Pharo's
+// `description` does.
 const proto::ProtoObject* prim_Exception_messageText(STRuntime&, proto::ProtoContext* ctx,
                                                       const proto::ProtoObject* r,
                                                       const proto::ProtoObject* const*, int) {
     const proto::ProtoObject* m = r ? r->getAttribute(ctx, msgTextKey(ctx)) : nullptr;
-    return (m && m != PROTO_NONE) ? m : PROTO_NONE;
+    if (m && m != PROTO_NONE) return m;
+    const proto::ProtoObject* cn = r ? r->getAttribute(ctx, classNameKey(ctx)) : nullptr;
+    return (cn && cn != PROTO_NONE) ? cn : PROTO_NONE;
 }
 
 // anException messageText: aString → store it, return the receiver
@@ -693,6 +833,29 @@ const proto::ProtoObject* prim_Block_ifCurtailed(STRuntime& rt, proto::ProtoCont
     }
 }
 
+// Accessors of MessageNotUnderstood and Message.
+const proto::ProtoObject* attrOrNil(proto::ProtoContext* ctx, const proto::ProtoObject* r,
+                                    const char* key) {
+    const proto::ProtoObject* v = r ? r->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, key)) : nullptr;
+    return (v && v != PROTO_NONE) ? v : PROTO_NONE;
+}
+const proto::ProtoObject* prim_MNU_receiver(STRuntime&, proto::ProtoContext* ctx,
+                                            const proto::ProtoObject* r, const proto::ProtoObject* const*, int) {
+    return attrOrNil(ctx, r, "__receiver__");
+}
+const proto::ProtoObject* prim_MNU_message(STRuntime&, proto::ProtoContext* ctx,
+                                           const proto::ProtoObject* r, const proto::ProtoObject* const*, int) {
+    return attrOrNil(ctx, r, "__message__");
+}
+const proto::ProtoObject* prim_Message_selector(STRuntime&, proto::ProtoContext* ctx,
+                                                const proto::ProtoObject* r, const proto::ProtoObject* const*, int) {
+    return attrOrNil(ctx, r, "__selector__");
+}
+const proto::ProtoObject* prim_Message_arguments(STRuntime&, proto::ProtoContext* ctx,
+                                                 const proto::ProtoObject* r, const proto::ProtoObject* const*, int) {
+    return attrOrNil(ctx, r, "__arguments__");
+}
+
 } // namespace
 
 void installExceptionPrimitives(STRuntime& rt) {
@@ -708,12 +871,19 @@ void installExceptionPrimitives(STRuntime& rt) {
     bindPrimitive(rt, b.exceptionProto, "signal:", signalTextIdx);
 
     // Accessors + the handler actions.
-    bindPrimitive(rt, b.exceptionProto, "messageText",
+bindPrimitive(rt, b.messageNotUnderstoodProto, "receiver", reg.registerPrim(prim_MNU_receiver));
+    bindPrimitive(rt, b.messageNotUnderstoodProto, "message", reg.registerPrim(prim_MNU_message));
+    bindPrimitive(rt, b.messageProto, "selector", reg.registerPrim(prim_Message_selector));
+    bindPrimitive(rt, b.messageProto, "arguments", reg.registerPrim(prim_Message_arguments));
+        bindPrimitive(rt, b.exceptionProto, "messageText",
                   reg.registerPrim(prim_Exception_messageText));
     bindPrimitive(rt, b.exceptionProto, "messageText:",
                   reg.registerPrim(prim_Exception_setMessageText));
     bindPrimitive(rt, b.exceptionProto, "return:",
                   reg.registerPrim(prim_Exception_return));
+
+    bindPrimitive(rt, b.exceptionProto, "__isResumable",
+                  reg.registerPrim(prim_Exception_isResumable));
 
     // EXC-b handler actions: resume:/resume, retry, pass/outer.
     int resumeIdx = reg.registerPrim(prim_Exception_resume);

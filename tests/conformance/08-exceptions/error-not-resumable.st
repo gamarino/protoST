@@ -1,4 +1,4 @@
-"EXPECT-ERROR"
+"EXPECT-ERROR: cannot resume a non-resumable exception"
 "§8.6: resume: on a non-resumable Error is itself an error"
 [ Error signal: 'x' ]
   on: Error

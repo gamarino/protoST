@@ -18,6 +18,9 @@ futures := OrderedCollection new.
 
 t0 := Object new __monotonicMillis.
 WorkerPool startProcessing.
-futures do: [ :f | f wait ].
+result := 0.
+futures do: [ :f | result := result + f wait ].
 t1 := Object new __monotonicMillis.
-(t1 - t0) printNl. futures size.
+('ELAPSED_MS ' , (t1 - t0) printString) printNl.
+result = 19203840000 ifFalse: [Error signal: 'saturation_128a: wrong result ' , result printString].
+'VERIFIED ' , result printString

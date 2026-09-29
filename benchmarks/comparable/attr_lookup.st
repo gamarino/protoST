@@ -9,6 +9,7 @@ FastObject >> setA: x b: y c: z
   ^ self.
 
 FastObject >> runBench: n
+  | total |
   total := 0.
   1 to: n do: [ :i |
     total := total + a.
@@ -18,4 +19,6 @@ FastObject >> runBench: n
 
 obj := FastObject new.
 obj setA: 1 b: 2 c: 3.
-obj runBench: 100000.
+result := obj runBench: 100000.
+result = 600000 ifFalse: [Error signal: 'attr_lookup: wrong result ' , result printString].
+'VERIFIED ' , result printString

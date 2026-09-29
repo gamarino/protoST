@@ -39,39 +39,30 @@ Object subclass: #Animal.
 > container; it is an object you keep sending messages to.
 
 > **Smalltalker note.** This is the familiar `subclass:instanceVariableNames:`
-> message, and the file-out style of one declaration plus separate method
-> definitions will be second nature. What is *not* here: no `category:`, no
-> `poolDictionaries:`, and a non-empty `classVariableNames:` clause is rejected
-> with a diagnostic rather than honoured — class variables are not yet
-> implemented. [Chapter 14](14-for-the-smalltalk-programmer.md) catalogues the
-> object-model differences in full.
+> message (with an optional `classVariableNames:`), and the file-out style of
+> one declaration plus separate method definitions will be second nature.
+> There are no `category:`, `package:` or `poolDictionaries:` keywords: a
+> declaration that uses them is a parse error ("unknown keyword in class
+> declaration"), so drop them when you bring code over from Pharo.
+> [Chapter 14](14-for-the-smalltalk-programmer.md) catalogues the object-model
+> differences in full.
 
 ## 5.2 Creating instances
 
-An instance is made by sending `new` (or its exact synonym `newChild`) to the
-class:
+An instance is made by sending `new` to the class:
 
 ```smalltalk
 a := Account new.
 ```
 
-`new` returns a fresh, mutable object whose instance variables all start as
-`nil`. That is *all* `new` does.
+`new` makes a fresh object whose instance variables all start as `nil`, then
+sends it `initialize` and answers it. A class that needs starting values
+defines `initialize`; a class that does not inherits an empty one.
 
-> **`new` does not call `initialize`.** This is a deliberate and important
-> departure from most Smalltalks, and from Python's `__init__` / JavaScript's
-> `constructor`. In protoST, `Account new` gives you a raw instance with `nil`
-> fields. If the class defines an `initialize` method, **the caller must send
-> it explicitly**:
->
-> ```smalltalk
-> a := Account new.
-> a initialize.
-> ```
->
-> `docs/STATUS.md` records this as intentional deviation D4. The idiomatic
-> protoST way to hide the two-step is a *class-side constructor* (§5.7) that
-> does the `new` and the `initialize` for you.
+> **In Python** this is `__init__`, called for you by `Account()`. **In
+> JavaScript** it is the `constructor`. **In protoST**, as in Pharo, it is the
+> `initialize` method, called for you by `new`. (`basicNew` makes an instance
+> without sending `initialize`, for the rare case that needs it.)
 
 ## 5.3 Defining methods with `>>`
 
@@ -119,29 +110,35 @@ throughout the body.
 > included, and for `transfer:to:` the selector is the two keyword parts woven
 > through the argument list.
 
-### The `^`-terminator caveat
+### Where a method body ends
 
-There is one practical rule about method bodies that the language reference
-states but does not stress, and getting it wrong produces baffling errors:
+A file has no browser to tell the compiler where one method stops, so protoST
+uses the layout. A method body ends, whether or not the last statement has
+a period, at the first of:
 
-> A method body runs until the parser sees the next top-level form (`>>`,
-> `subclass:`, …) **or** the first `^` return. The first top-level `^`
-> *terminates* the method body. A method whose last statement is **not** a
-> `^` therefore risks "absorbing" the lines that follow it as part of its
-> body.
+- a **blank line**;
+- the next method declaration (`Account >> …`, `Account class >> …`);
+- an unindented line after the body's first statement: indent method bodies,
+  and start top-level statements at column 1.
 
-In practice the safe, universal habit is: **end every method with an explicit
-`^`** — `^ self` if the method has nothing else to return. Throughout this
-tutorial methods end with `^ self` or `^ someValue` for exactly this reason.
+Blank lines and indentation inside parentheses, brackets and braces do not
+count, and neither do they in the middle of an unfinished statement (after a
+binary operator, a keyword or `:=`). A `^` does not end the body: statements
+indented under it stay in the method as unreachable code.
+
+So write each method without blank lines between its statements, and start
+the top-level code that follows at column 1 (a blank line before it reads
+best). A statement written directly under a method and indented like the
+body becomes part of that method's body and does not run at load time.
+
+A method with no `^` answers `self`. Many methods in this tutorial end with
+`^ self` anyway, to make the intent visible:
 
 ```smalltalk
 Account >> deposit: amount
   balance := balance + amount.
   ^ self.
 ```
-
-`^ self` returns the receiver, which is the conventional "I have nothing
-meaningful to return" answer and also makes the method chainable.
 
 ## 5.4 Instance variables, `self`
 
@@ -200,7 +197,6 @@ Account >> balance
   ^ balance.
 
 a := Account new.
-a initialize.
 a deposit: 100.
 a deposit: 50.
 a withdraw: 30.
@@ -241,14 +237,13 @@ d := Dog new.
 
 ```bash
 $ ./build/protost inherit.st
-an Array
+#('a dog' 4)
 ```
 
 `d describe` answers `'a dog'` — `Dog` *overrides* `describe`. `d legs` answers
 `4` — `Dog` inherits `legs` unchanged from `Animal`. (The script's last
-statement builds a two-element dynamic array; printing a collection shows its
-class, `an Array` — [Chapter 8](08-collections.md) explains how to inspect
-contents.)
+statement builds a two-element dynamic array, and the CLI prints it as a
+literal array.)
 
 When an override needs to *extend* rather than replace the inherited behaviour,
 `super` is the tool. A `super`-send is sent to the same receiver as `self`, but
@@ -328,7 +323,11 @@ $ ./build/protost vector.st
 `Vec2 >> + other` defines the binary selector `+` on `Vec2`. Now `v1 + v2` —
 an ordinary binary send — adds two vectors. The example also overrides
 `printString`: every object answers `printString`, and a class is free to
-replace the default (`'a Vec2'`) with something meaningful.
+replace the default (`'a Vec2'`) with something meaningful. The Smalltalk
+convention is to override `printOn: aStream` instead
+(`aStream nextPutAll: '('; print: x; …`), which `printString`, `printNl`,
+`displayNl` and collection printing all use; overriding `printString` works
+too.
 
 > **In Python** you would define `__add__` and `__repr__`; in **JavaScript**
 > there is no operator overloading at all and you would write a `.add()`
@@ -338,9 +337,9 @@ replace the default (`'a Vec2'`) with something meaningful.
 ## 5.7 Class-side methods
 
 Sometimes you want a method on the *class itself* rather than on its instances
-— most often a constructor that builds and initialises an instance in one step,
-hiding the `new` / `initialize` two-step from callers. Such a method is defined
-with the `class` marker between the class name and `>>`:
+— most often a constructor that builds an instance and sets it up from
+arguments in one step. Such a method is defined with the `class` marker
+between the class name and `>>`:
 
 ```smalltalk
 "-- class-side.st --"
@@ -388,10 +387,8 @@ deliberate (it is how `new` itself stays a class-only message).
 > **In Python** this is a `@classmethod` or `@staticmethod`. **In JavaScript**
 > it is a `static` method. **In protoST** it is the `class` marker on the
 > method definition. The use is the same — alternative constructors and
-> class-level utilities — and the idiom is the same: a class-side constructor
-> that does `new` plus `initialize` is the standard cure for protoST's
-> non-auto-`initialize` rule (§5.2). The standard-library modules use exactly
-> this pattern (`ReadStream class >> on:`, `Random class >> seed:`).
+> class-level utilities. The kernel uses exactly this pattern
+> (`ReadStream class >> on:`, `Random class >> seed:`).
 
 ## 5.7b Class variables — per-class shared storage
 
@@ -399,6 +396,7 @@ When several instances need to share a single value — a counter of all
 instances ever created, a singleton cache, a class-wide configuration —
 declare it via `classVariableNames:`:
 
+<!-- snippet-group: class-variables -->
 ```smalltalk
 Object subclass: #Counter
   instanceVariableNames: 'value'
@@ -412,31 +410,47 @@ Counter >> total            ^ tally.
 Each declared name is installed as `nil` on the class object at
 class-decl time and is visible to every instance via the prototype
 chain — including instances of subclasses (no re-declaration needed).
-Reading works exactly the same as reading an instance variable:
+Reading and assigning work exactly like an instance variable, from class-side
+and instance-side methods alike:
 
+<!-- snippet-group: class-variables -->
 ```smalltalk
 Counter initTally.
 Counter bump. Counter bump. Counter bump.
 Counter new total printNl.    "→ 3"
 ```
 
-**Mutation is restricted to class-side methods.** Writing to a class
-variable from an instance-side method is a compile-time error:
+An instance-side method assigns the same shared variable — the typical use is
+counting instances in `initialize`:
 
+<!-- snippet-group: class-variables -->
 ```smalltalk
-Counter >> bumpFromInstance  tally := tally + 1.
-"compile error: class variable 'tally' cannot be assigned from an
- instance-side method (would create a per-instance shadow).
- Mutate it from a class-side method instead."
+Counter >> initialize
+  tally isNil ifTrue: [ tally := 0 ].
+  tally := tally + 1.
+
+Counter new. Counter new.
+Counter new total printNl.    "→ 6"
 ```
 
-Why: in protoST a write inside an instance method targets `self`, which
-is the instance. Storing on the instance would silently create a
-per-instance copy that *shadows* the class-level value for that one
-object, and other instances would never see the update. Rather than
-accept that footgun, the compiler refuses the assignment and points you
-at the class-side method, where `self` is the class and the write
-reaches the shared slot.
+(Three `bump`s, then three `new`s — the third is the one that answers
+`total`.)
+
+A **class-instance variable** is the other kind of class-level state: one slot
+per class, not shared with subclasses. It is declared on the class side and
+used from class-side methods:
+
+```smalltalk
+Object subclass: #Shape.
+Shape class instanceVariableNames: 'made'.
+Shape class >> make   made := (made ifNil: [ 0 ]) + 1. ^ self new.
+Shape class >> made   ^ made.
+
+Shape subclass: #Circle.
+Shape make. Shape make. Circle make.
+Shape made printNl.     "→ 2"
+Circle made printNl.    "→ 1"
+```
 
 ## 5.8 Prototypes under the hood
 
@@ -461,9 +475,10 @@ runtimes. Instead of a keyword selector, you declare a name followed by a
 parenthesised parameter list, with optional defaults on named
 parameters:
 
+<!-- snippet-group: call-form -->
 ```smalltalk
 Object subclass: #Counter instanceVariableNames: 'value'.
-Counter >> init                  "still a normal Smalltalk method"
+Counter >> reset                 "still a normal Smalltalk method"
     value := 0.
 Counter >> incr(by, factor = 1)  "call-form: 1 positional, 1 named-with-default"
     value := value + (by * factor).
@@ -472,21 +487,27 @@ Counter >> incr(by, factor = 1)  "call-form: 1 positional, 1 named-with-default"
 
 Call sites use the same shape. Named arguments use `name = value`:
 
+<!-- snippet-group: call-form -->
 ```smalltalk
 c := Counter new.
-c init.
+c reset.
 c incr(2, factor = 3) printNl.   "6 — explicit factor"
 c incr(1) printNl.                "7 — factor defaults to 1"
 ```
 
 A bare `name(args)` (no explicit receiver) inside a method is a
-self-send — handy for the implicit-receiver style:
+self-send — handy for the implicit-receiver style. A bare *identifier* is
+not: `reset` alone would be read as a variable, so an ordinary unary
+self-send still needs `self`:
 
+<!-- snippet-group: call-form -->
 ```smalltalk
 Counter >> resetAndBump
-    init.            "self-sends are ordinary unary sends"
-    incr(5).         "this too — call-form, implicit self"
+    self reset.      "an ordinary unary self-send"
+    incr(5).         "call-form, implicit self"
     ^ value.
+
+c resetAndBump printNl.           "5"
 ```
 
 **When to use call-form versus keyword.** They coexist on the same class
@@ -494,9 +515,10 @@ as *distinct attributes* and you can pick per method:
 
 - Keyword form (`>> at: i put: v`) reads better for code that flows like
   English prose and is the right default for native protoST APIs.
-- Call form (`>> render(node, depth = 0)`) reads naturally for code that
-  bridges to other runtimes (the foreign side already calls methods this
-  way) and for APIs with optional parameters with defaults.
+- Call form (`>> render(node, depth = 0)`) reads naturally for APIs with
+  optional parameters with defaults, and matches how other protoCore runtimes
+  name methods. (Calling a *foreign* runtime's method with it is not
+  implemented yet — see [`INTEROP.md`](../INTEROP.md) §3.5.)
 
 One practical constraint: a single class cannot host *both* a unary
 `>> bar` (a parameterless method whose attribute is `bar`) and a
@@ -506,8 +528,11 @@ key. Pick one form per name.
 Defaults are evaluated lazily at call time in the method's own scope, so
 they can read earlier positional parameters and `self`:
 
+<!-- snippet-group: call-form -->
 ```smalltalk
 Counter >> incrBy(n, scaled = n * 2)  ^ value + scaled.
+
+c incrBy(1) printNl.              "7 — 5 + 1 * 2"
 ```
 
 ## 5.9 Summary
@@ -515,12 +540,10 @@ Counter >> incrBy(n, scaled = n * 2)  ^ value + scaled.
 - A class is declared by sending `subclass:instanceVariableNames:` to an
   existing class (usually `Object`). The declaration runs at load time and
   binds the class as a global.
-- `new` (or `newChild`) makes a raw instance with `nil` fields. It does **not**
-  call `initialize` — send `initialize` yourself, or provide a class-side
-  constructor.
-- Methods are defined with `ClassName >> selectorPattern`. End every method
-  body with an explicit `^` (use `^ self`) to avoid the body absorbing the
-  lines that follow it.
+- `new` makes an instance with `nil` fields and sends it `initialize`.
+- Methods are defined with `ClassName >> selectorPattern`. A blank line ends
+  a method body, so write methods without blank lines inside them and put a
+  blank line before the top-level code that follows.
 - Instance variables are private; expose them with accessor methods. `self` is
   the (implicit) receiver; a self-send re-dispatches on it.
 - A subclass inherits, adds, and overrides. `super` runs the inherited version
@@ -528,7 +551,9 @@ Counter >> incrBy(n, scaled = n * 2)  ^ value + scaled.
 - Binary operators are ordinary methods — define `+`, `<`, `,` with `>>` like
   any other selector.
 - Class-side methods (the `class` marker) live on the class object — the home
-  of constructors and class utilities.
+  of constructors and class utilities. Class variables are shared by the
+  class, its subclasses and all instances; class-instance variables are per
+  class.
 
 ---
 

@@ -31,6 +31,8 @@ namespace protoST {
 struct Bootstrap {
     const proto::ProtoObject* objectProto        = nullptr;
     const proto::ProtoObject* numberProto        = nullptr;
+    const proto::ProtoObject* integerProto       = nullptr;
+    const proto::ProtoObject* characterProto     = nullptr;   // protoCore's unicode char prototype   // Integer: Number > Integer > Small/Large
     const proto::ProtoObject* smallIntegerProto  = nullptr;
     const proto::ProtoObject* largeIntegerProto  = nullptr;
     const proto::ProtoObject* floatProto         = nullptr;
@@ -60,6 +62,9 @@ struct Bootstrap {
     // method has already returned. Both are children of `Error`, so both are
     // caught by an ordinary `on: Error do:` guard and are non-resumable.
     const proto::ProtoObject* messageNotUnderstoodProto = nullptr;
+    const proto::ProtoObject* arithmeticErrorProto = nullptr; // ArithmeticError < Error (resumable)
+    const proto::ProtoObject* zeroDivideProto    = nullptr;   // ZeroDivide < ArithmeticError
+    const proto::ProtoObject* messageProto       = nullptr;   // Message (selector, arguments)
     const proto::ProtoObject* blockCannotReturnProto    = nullptr;
     // Track 2 slice a (COL-a): collection class hierarchy.
     //   Collection                 (abstract — shared iteration protocol)
@@ -135,6 +140,7 @@ struct Bootstrap {
         const proto::ProtoString* settling        = nullptr;  // __settling__
         const proto::ProtoString* suspendedFrame  = nullptr;  // __suspended_frame__
         const proto::ProtoString* waitingOn       = nullptr;  // __waiting_on__
+        const proto::ProtoString* targetActor     = nullptr;  // __target_actor__
         const proto::ProtoString* suspendedFuture = nullptr;  // __suspended_future__
         const proto::ProtoString* bcPtr           = nullptr;  // __bc_ptr__
         const proto::ProtoString* captured        = nullptr;  // __captured__

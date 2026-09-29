@@ -21,6 +21,9 @@ public:
         // SymbolTable. Carries no payload — the runtime substitutes the
         // bootstrap singleton when this constant is pushed.
         UnsetMarker,
+        // An integer literal beyond the 64-bit range: digits in `sval`, radix in
+        // `ival`; materialised with ProtoContext::fromString as a LargeInteger.
+        LargeInteger,
     };
 
     struct Const {
@@ -59,6 +62,7 @@ public:
     // constants
     size_t  addInteger(long long v);
     size_t  addFloat(double v);
+    size_t  addLargeInteger(const std::string& digits, int radix);
     size_t  addString(const std::string& s);
     size_t  internSymbol(const std::string& s);  // de-duplicated
     size_t  addChar(const std::string& utf8);
@@ -327,7 +331,13 @@ public:
     // cached value never invalidates.
     unsigned int cachedLocalCount(unsigned int argc) const;
 
+    // The largest MAKE_ARRAY operand in the module (the elements a brace
+    // array pushes before collecting them), 0 when there is none. The engine
+    // sizes each frame's operand stack from it. Lazily computed, cached.
+    unsigned int cachedMaxArrayOperand() const;
+
 private:
+    mutable std::atomic<int> maxArrayOperandCache_{-1};
     // `(argc << 32) | localCount`, or kNoLocalCount when not yet computed.
     // argc is folded into the cache key because `computeLocalCount` returns
     // max(argc, maxSlot+1) — different argc values for the same module body

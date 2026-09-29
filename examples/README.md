@@ -17,8 +17,10 @@ registered with CTest (see [Running](#running) below).
 
 ## Running
 
-Run any single example with the `protost` binary. Examples that `Import` a
-module must be run from their own directory so the bare module name resolves:
+Run any single example with the `protost` binary. A module name is looked up
+in the current directory (then `$STPATH`, the active venv and `lib/`), not in
+the directory of the importing file, so the examples that `Import` a sibling
+module must be run from their own directory:
 
 ```bash
 # A self-contained example — run from anywhere:
@@ -44,7 +46,7 @@ helper modules, not standalone examples, and are excluded from the smoke layer.
 
 | File | Shows |
 |------|-------|
-| `01_classes_and_instances.st` | Declaring a class with an instance variable; `new` + explicit `initialize`; sending messages. |
+| `01_classes_and_instances.st` | Declaring a class with an instance variable; `new` sending `initialize`; sending messages. |
 | `02_inheritance_and_super.st` | A two-level subclass chain; `super` reusing the inherited implementation. |
 | `03_class_side_methods.st` | A class-side method acting as a custom constructor. |
 | `04_mixins_and_uses.st` | Multiple inheritance via the `uses:` clause — assembling a class from two mixins. |
@@ -96,8 +98,15 @@ helper modules, not standalone examples, and are excluded from the smoke layer.
 | `02_future_thendo.st` | `Future` callbacks — `thenDo:` and `wait` on an actor's result. |
 | `03_fan_out_fan_in.st` | The fan-out / fan-in pattern — parallel workers, results gathered. |
 | `04_pipeline.st` | An actor pipeline — three stages, each its own actor. |
+| `05_atom_optimistic_concurrency.st` | An `Atom` — a shared cell updated lock-free with `swap:` by several actors. |
+| `05_priority_bands.st` | `asHighPriorityActor` / `asLowPriorityActor` — the three scheduler priority bands. |
 
 ### `stdlib/` — the standard library
+
+These use the modules under `lib/`. `ReadStream`, `WriteStream`, `Random`,
+`Time` and `Duration` are also kernel classes that need no import; the
+`stream`, `random` and `time` modules are older versions kept for
+compatibility (see [tutorial chapter 9](../docs/tutorial/09-standard-library.md)).
 
 | File | Shows |
 |------|-------|
@@ -124,7 +133,12 @@ helper modules, not standalone examples, and are excluded from the smoke layer.
 | `monte_carlo_pi.st` | A Monte-Carlo estimate of pi — combining `random` and the math protocol. |
 | `json_transform.st` | A JSON-driven data transform — parse, walk, aggregate an order document. |
 | `traffic_intersection.st` | A digital-twin simulation — a traffic intersection of cooperating FSM actors. |
-| `pump_twin.st` | A digital-twin simulation — an industrial pump with three parallel sensor actors. |
+
+### Top level
+
+| File | Shows |
+|------|-------|
+| `pump_twin.st` | A digital-twin simulation — an industrial pump with three parallel sensor actors; walked through line by line in [tutorial chapter 13](../docs/tutorial/13-worked-example.md). |
 
 ## The digital-twin pattern
 

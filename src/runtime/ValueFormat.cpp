@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 namespace protoST {
@@ -26,25 +27,48 @@ namespace {
 
 // Render a Float so it always shows a fractional part and round-trips:
 // `4.0` not `4`, `3.14` not `3.140000`. Smalltalk-conventional float syntax.
+// Smalltalk float notation: the shortest digit string that reads back as the
+// same double, in positional form when the decimal exponent is in [-4, 16)
+// ("150.0", "0.001") and otherwise as a mantissa with at least one fractional
+// digit and a bare exponent ("1.0e16", "2.5e-7"). Every finite result is a
+// valid protoST Float literal. Non-finite values print as the expressions
+// that produce them, as in Pharo.
 std::string formatFloat(double d) {
-    if (std::isnan(d)) return "nan";
-    if (std::isinf(d)) return d < 0 ? "-inf" : "inf";
-    // %.17g round-trips an IEEE double; try progressively shorter forms.
+    if (std::isnan(d)) return "Float nan";
+    if (std::isinf(d)) return d < 0 ? "Float infinity negated" : "Float infinity";
+    // Shortest round-tripping mantissa, from "%.{p}e" (d.ddde±XX).
     char buf[64];
-    for (int prec = 1; prec <= 17; ++prec) {
-        std::snprintf(buf, sizeof(buf), "%.*g", prec, d);
+    for (int prec = 0; prec <= 16; ++prec) {
+        std::snprintf(buf, sizeof(buf), "%.*e", prec, d);
         if (std::strtod(buf, nullptr) == d) break;
     }
-    std::string s(buf);
-    // Ensure a fractional part / decimal point is present.
-    if (s.find('.') == std::string::npos &&
-        s.find('e') == std::string::npos &&
-        s.find('E') == std::string::npos &&
-        s.find("inf") == std::string::npos &&
-        s.find("nan") == std::string::npos) {
-        s += ".0";
+    std::string e(buf);
+    const bool negative = e[0] == '-';
+    if (negative) e.erase(0, 1);
+    const size_t ePos = e.find('e');
+    const int exp10 = std::atoi(e.c_str() + ePos + 1);
+    std::string digits;
+    for (size_t i = 0; i < ePos; ++i)
+        if (e[i] != '.') digits += e[i];
+    while (digits.size() > 1 && digits.back() == '0') digits.pop_back();
+
+    std::string out = negative ? "-" : "";
+    if (exp10 >= -4 && exp10 < 16) {
+        if (exp10 < 0) {
+            out += "0." + std::string(static_cast<size_t>(-exp10 - 1), '0') + digits;
+        } else {
+            const size_t intLen = static_cast<size_t>(exp10) + 1;
+            if (digits.size() <= intLen) {
+                out += digits + std::string(intLen - digits.size(), '0') + ".0";
+            } else {
+                out += digits.substr(0, intLen) + "." + digits.substr(intLen);
+            }
+        }
+    } else {
+        out += digits.substr(0, 1) + "." + (digits.size() > 1 ? digits.substr(1) : "0");
+        out += "e" + std::to_string(exp10);
     }
-    return s;
+    return out;
 }
 
 // Render an arbitrary-precision integer exactly. protoCore does not expose a
@@ -89,7 +113,14 @@ std::string formatNumber(proto::ProtoContext* ctx, const proto::ProtoObject* v) 
     return formatBigInteger(ctx, v);
 }
 
-std::string formatValue(STRuntime& /*rt*/, proto::ProtoContext* ctx,
+// Defined in object_prims.cpp: run a method by name, as a send does.
+const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* recv,
+                                      const proto::ProtoString* selector,
+                                      const proto::ProtoObject* const* args, int argc,
+                                      bool* understood);
+
+std::string formatValue(STRuntime& rt, proto::ProtoContext* ctx,
                         const proto::ProtoObject* v) {
     if (v == nullptr || v == PROTO_NONE) return "nil";
     if (v == PROTO_TRUE)  return "true";
@@ -113,7 +144,21 @@ std::string formatValue(STRuntime& /*rt*/, proto::ProtoContext* ctx,
         // not a string — fall through
     }
 
-    // Any other object: replicate the default Object>>printString in C++.
+    // Any other object: its displayString, so a user printOn: and the kernel's
+    // collection printing show here too. Falls back to the class-name form
+    // below when the kernel is absent or the method fails.
+    try {
+        bool understood = false;
+        const proto::ProtoObject* shown = sendDynamic(
+            rt, ctx, v, proto::ProtoString::createSymbol(ctx, "displayString"),
+            nullptr, 0, &understood);
+        if (understood && shown && shown != PROTO_NONE)
+            if (const auto* s = shown->asString(ctx)) return s->toStdString(ctx);
+    } catch (...) {
+        // fall through to the built-in form
+    }
+
+    // Built-in form: replicate the default Object>>printString in C++.
     // (object_prims.cpp prim_Object_printString — kept in sync.)
     const proto::ProtoString* nameKey =
         proto::ProtoString::createSymbol(ctx, "__class_name__");

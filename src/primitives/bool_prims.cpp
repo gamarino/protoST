@@ -54,16 +54,19 @@ const proto::ProtoObject* prim_dispatch_ifFalseIfTrue(STRuntime& rt, proto::Prot
 // `or:` evaluates it only when the receiver is false. The argument is a block
 // (standard Smalltalk) and is invoked with no arguments; its value becomes the
 // result. When the result is already determined the block is NOT evaluated.
+// As in Pharo, a Boolean argument is also accepted and answers itself.
 const proto::ProtoObject* prim_dispatch_and(STRuntime& rt, proto::ProtoContext* ctx,
                                              const proto::ProtoObject* recv,
                                              const proto::ProtoObject* const* a, int) {
     if (recv != PROTO_TRUE) return PROTO_FALSE;          // short-circuit
+    if (a[0] == PROTO_TRUE || a[0] == PROTO_FALSE) return a[0];
     return invokeBlock(rt, ctx, a[0], nullptr, 0);
 }
 const proto::ProtoObject* prim_dispatch_or(STRuntime& rt, proto::ProtoContext* ctx,
                                             const proto::ProtoObject* recv,
                                             const proto::ProtoObject* const* a, int) {
     if (recv == PROTO_TRUE) return PROTO_TRUE;           // short-circuit
+    if (a[0] == PROTO_TRUE || a[0] == PROTO_FALSE) return a[0];
     return invokeBlock(rt, ctx, a[0], nullptr, 0);
 }
 

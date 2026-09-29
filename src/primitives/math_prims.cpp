@@ -1,14 +1,34 @@
 #include "protoST/STRuntime.h"
+#include "primitives/IntegerDivision.h"
+#include "runtime/TransientPin.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/ValueFormat.h"
+#include "runtime/ZeroDivideSignal.h"
 #include "protoCore.h"
+#include <cstdlib>
+#include <cstdio>
+#include <climits>
 
 #include <cmath>
 #include <stdexcept>
 #include <string>
 
 namespace protoST {
+
+// Defined in object_prims.cpp: run a method by name, as a send does.
+const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* recv,
+                                      const proto::ProtoString* selector,
+                                      const proto::ProtoObject* const* args, int argc,
+                                      bool* understood);
+
+// Defined in int_prims.cpp: Pharo's adaptToNumber:andSend: double dispatch for
+// an argument that is not a native number (a Fraction). nullptr if unsupported.
+const proto::ProtoObject* adaptNumberArgument(STRuntime& rt, proto::ProtoContext* ctx,
+                                              const proto::ProtoObject* r,
+                                              const proto::ProtoObject* arg,
+                                              const char* selector);
 
 // T4-b — the mathematical protocol (Track 4, sub-slice b).
 //
@@ -43,9 +63,26 @@ namespace protoST {
 
 namespace {
 
+// A number as a double, across the whole tower: a LargeInteger does not fit
+// asLong, so it goes through its exact decimal digits and strtod (correctly
+// rounded; beyond the Float range it becomes +/-inf, as in Pharo).
 double asDoubleVal(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
-    return v->isFloat(ctx) ? v->asDouble(ctx)
-                           : static_cast<double>(v->asLong(ctx));
+    if (v->isFloat(ctx)) return v->asDouble(ctx);
+    if (v->isInteger(ctx) && v->compare(ctx, ctx->fromLong(LLONG_MAX)) <= 0
+        && v->compare(ctx, ctx->fromLong(LLONG_MIN)) >= 0)
+        return static_cast<double>(v->asLong(ctx));
+    return std::strtod(formatNumber(ctx, v).c_str(), nullptr);
+}
+
+// The integer nearest below/at `d` as a SmallInteger or, beyond 64 bits, a
+// LargeInteger (fromLong would overflow).
+const proto::ProtoObject* integerFromDouble(proto::ProtoContext* ctx, double d) {
+    if (std::isnan(d) || std::isinf(d))
+        throw std::runtime_error("cannot convert a non-finite Float to an Integer");
+    if (d > -9.2e18 && d < 9.2e18) return ctx->fromLong(static_cast<long long>(d));
+    char digits[400];
+    std::snprintf(digits, sizeof(digits), "%.0f", d);
+    return ctx->fromString(digits, 10);
 }
 
 void requireNumberArg(proto::ProtoContext* ctx, const proto::ProtoObject* v,
@@ -79,11 +116,14 @@ DEF_UNARY_MATH(Exp,    std::exp)
 DEF_UNARY_MATH(Log10,  std::log10)
 
 // `log:` — logarithm in an arbitrary base. `n log: b` == ln(n) / ln(b).
-const proto::ProtoObject* prim_LogBase(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_LogBase(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* r,
                                        const proto::ProtoObject* const* a,
                                        int argc) {
     if (argc != 1) throw std::runtime_error("log: expects 1 arg (base)");
+    if (!isNumber(ctx, a[0]))
+        if (const proto::ProtoObject* adapted = adaptNumberArgument(rt, ctx, r, a[0], "log:"))
+            return adapted;
     requireNumberArg(ctx, a[0], "log:");
     return ctx->fromDouble(std::log(asDoubleVal(ctx, r)) /
                            std::log(asDoubleVal(ctx, a[0])));
@@ -99,7 +139,7 @@ const proto::ProtoObject* prim_##NAME(STRuntime&, proto::ProtoContext* ctx,   \
                                       int) {                                  \
     if (!r->isFloat(ctx)) return r;                                           \
     double d = FN(r->asDouble(ctx));                                          \
-    return ctx->fromLong(static_cast<long long>(d));                          \
+    return integerFromDouble(ctx, d);                                         \
 }
 
 DEF_ROUNDING(Floor,     std::floor)
@@ -134,7 +174,7 @@ const proto::ProtoObject* prim_Reciprocal(STRuntime&, proto::ProtoContext* ctx,
                                           const proto::ProtoObject* r,
                                           const proto::ProtoObject* const*, int) {
     double d = asDoubleVal(ctx, r);
-    if (d == 0.0) throw std::runtime_error("ZeroDivide");
+    if (d == 0.0) throw ZeroDivideSignal();
     return ctx->fromDouble(1.0 / d);
 }
 
@@ -182,7 +222,7 @@ const proto::ProtoObject* prim_AsFloat(STRuntime&, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* r,
                                        const proto::ProtoObject* const*, int) {
     if (r->isFloat(ctx)) return r;
-    return ctx->fromDouble(static_cast<double>(r->asLong(ctx)));
+    return ctx->fromDouble(asDoubleVal(ctx, r));
 }
 
 // `asInteger` — the receiver as an integer (a Float is truncated toward zero).
@@ -190,7 +230,7 @@ const proto::ProtoObject* prim_AsInteger(STRuntime&, proto::ProtoContext* ctx,
                                          const proto::ProtoObject* r,
                                          const proto::ProtoObject* const*, int) {
     if (!r->isFloat(ctx)) return r;
-    return ctx->fromLong(static_cast<long long>(std::trunc(r->asDouble(ctx))));
+    return integerFromDouble(ctx, std::trunc(r->asDouble(ctx)));
 }
 
 // `even` / `odd` — integer-parity aliases. A non-integral Float is neither.
@@ -236,24 +276,37 @@ const proto::ProtoObject* prim_Factorial(STRuntime&, proto::ProtoContext* ctx,
 //     overflowed double. A negative integer exponent answers a Float (the
 //     reciprocal — protoST has no Fraction type).
 //   * A Float exponent goes through libm `pow` and answers a Float.
-const proto::ProtoObject* prim_RaisedTo(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_RaisedTo(STRuntime& rt, proto::ProtoContext* ctx,
                                         const proto::ProtoObject* r,
                                         const proto::ProtoObject* const* a,
                                         int argc) {
     if (argc != 1) throw std::runtime_error("raisedTo: expects 1 arg");
+    if (!isNumber(ctx, a[0]))
+        if (const proto::ProtoObject* adapted = adaptNumberArgument(rt, ctx, r, a[0], "raisedTo:"))
+            return adapted;
     requireNumberArg(ctx, a[0], "raisedTo:");
     const proto::ProtoObject* exp = a[0];
     // Exact integer^integer path: repeated multiply, LargeInteger-safe.
     if (!r->isFloat(ctx) && !exp->isFloat(ctx)) {
         long long e = exp->asLong(ctx);
-        if (e >= 0) {
-            const proto::ProtoObject* acc = ctx->fromLong(1);
-            for (long long i = 0; i < e; ++i) acc = acc->multiply(ctx, r);
-            return acc;
+        // Exponentiation by squaring: O(log e) multiplications, so large
+        // powers of LargeIntegers do not build every intermediate power.
+        const proto::ProtoObject* acc = ctx->fromLong(1);
+        const proto::ProtoObject* base = r;
+        TransientPin pinAcc(ctx, acc), pinBase(ctx, base);
+        for (unsigned long long k = static_cast<unsigned long long>(e < 0 ? -e : e); k; k >>= 1) {
+            if (k & 1) { acc = acc->multiply(ctx, base); pinAcc.reset(acc); }
+            if (k > 1) { base = base->multiply(ctx, base); pinBase.reset(base); }
         }
-        // Negative integer exponent — answer a Float reciprocal.
-        return ctx->fromDouble(std::pow(asDoubleVal(ctx, r),
-                                        static_cast<double>(e)));
+        if (e >= 0) return acc;
+        // Negative integer exponent: the exact reciprocal (1 / n^k is a
+        // Fraction), as in Pharo.
+        bool understood = false;
+        const proto::ProtoObject* args[1] = { acc };
+        const proto::ProtoObject* q = sendDynamic(rt, ctx, ctx->fromLong(1),
+            proto::ProtoString::createSymbol(ctx, "/"), args, 1, &understood);
+        if (understood && q) return q;
+        return ctx->fromDouble(std::pow(asDoubleVal(ctx, r), static_cast<double>(e)));
     }
     // Any Float operand — libm pow, answer a Float.
     return ctx->fromDouble(std::pow(asDoubleVal(ctx, r),
@@ -263,10 +316,13 @@ const proto::ProtoObject* prim_RaisedTo(STRuntime&, proto::ProtoContext* ctx,
 // `gcd:` — greatest common divisor of two integers (Euclid). Bignum-safe: the
 // remainder steps go through protoCore `modulo`, so a LargeInteger argument
 // works. `0 gcd: 0` is undefined and raises.
-const proto::ProtoObject* prim_Gcd(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Gcd(STRuntime& rt, proto::ProtoContext* ctx,
                                    const proto::ProtoObject* r,
                                    const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw std::runtime_error("gcd: expects 1 arg");
+    if (!isNumber(ctx, a[0]))
+        if (const proto::ProtoObject* adapted = adaptNumberArgument(rt, ctx, r, a[0], "gcd:"))
+            return adapted;
     requireNumberArg(ctx, a[0], "gcd:");
     if (r->isFloat(ctx) || a[0]->isFloat(ctx)) {
         throw std::runtime_error("gcd: operands must be integers");
@@ -277,7 +333,7 @@ const proto::ProtoObject* prim_Gcd(STRuntime&, proto::ProtoContext* ctx,
         throw std::runtime_error("gcd: of zero and zero is undefined");
     }
     while (y->integerSign(ctx) != 0) {
-        const proto::ProtoObject* t = x->modulo(ctx, y);
+        const proto::ProtoObject* t = integerRemainder(ctx, x, y);
         x = y;
         y = t;
     }
@@ -289,6 +345,9 @@ const proto::ProtoObject* prim_Lcm(STRuntime& rt, proto::ProtoContext* ctx,
                                    const proto::ProtoObject* r,
                                    const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw std::runtime_error("lcm: expects 1 arg");
+    if (!isNumber(ctx, a[0]))
+        if (const proto::ProtoObject* adapted = adaptNumberArgument(rt, ctx, r, a[0], "lcm:"))
+            return adapted;
     requireNumberArg(ctx, a[0], "lcm:");
     if (r->isFloat(ctx) || a[0]->isFloat(ctx)) {
         throw std::runtime_error("lcm: operands must be integers");
@@ -298,7 +357,7 @@ const proto::ProtoObject* prim_Lcm(STRuntime& rt, proto::ProtoContext* ctx,
     }
     const proto::ProtoObject* g = prim_Gcd(rt, ctx, r, a, 1);
     const proto::ProtoObject* prod = r->multiply(ctx, a[0])->abs(ctx);
-    return prod->divide(ctx, g);
+    return integerQuotient(ctx, prod, g);
 }
 
 // ----------------------- class-side Float constants ------------------------
@@ -322,6 +381,32 @@ const proto::ProtoObject* prim_Nan(STRuntime&, proto::ProtoContext* ctx,
                                    const proto::ProtoObject*,
                                    const proto::ProtoObject* const*, int) {
     return ctx->fromDouble(std::nan(""));
+}
+
+// aFloat __floatParts → #(mantissa exponent), two Integers with
+// mantissa * 2^exponent exactly equal to the receiver (mantissa odd, or 0).
+// The kernel's asExactFraction builds the Integer or Fraction from them.
+const proto::ProtoObject* prim_FloatParts(STRuntime& rt, proto::ProtoContext* ctx,
+                                          const proto::ProtoObject* r,
+                                          const proto::ProtoObject* const*, int) {
+    const double d = r->asDouble(ctx);
+    if (!std::isfinite(d)) throw std::runtime_error("__floatParts: not a finite Float");
+    int e = 0;
+    const double m = std::frexp(d, &e);
+    long long mant = static_cast<long long>(std::ldexp(m, 53));
+    long long exp2 = static_cast<long long>(e) - 53;
+    if (mant == 0) exp2 = 0;
+    while (mant != 0 && (mant & 1) == 0) { mant /= 2; ++exp2; }
+    const proto::ProtoList* data = ctx->newList();
+    TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
+    data = data->appendLast(ctx, ctx->fromLong(mant));
+    pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
+    data = data->appendLast(ctx, ctx->fromLong(exp2));
+    pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
+    const proto::ProtoObject* arr = rt.bootstrap().arrayProto->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinArr(ctx, arr);
+    arr->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__data__"), data->asObject(ctx));
+    return arr;
 }
 
 } // anon
@@ -364,6 +449,7 @@ void installMathPrimitives(STRuntime& rt) {
     bindPrimitive(rt, N, "odd",         reg.registerPrim(prim_Odd));
     bindPrimitive(rt, N, "factorial",   reg.registerPrim(prim_Factorial));
     bindPrimitive(rt, N, "raisedTo:",   reg.registerPrim(prim_RaisedTo));
+    bindPrimitive(rt, N, "__floatParts", reg.registerPrim(prim_FloatParts));
     bindPrimitive(rt, N, "gcd:",        reg.registerPrim(prim_Gcd));
     bindPrimitive(rt, N, "lcm:",        reg.registerPrim(prim_Lcm));
 

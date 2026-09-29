@@ -1,9 +1,47 @@
 #include "Compiler.h"
 
+#include <algorithm>
+#include <cctype>
+
 namespace protoST {
 using namespace ast;
 
 namespace {
+
+// The instance variables visible in a method of `className`: its own and every
+// superclass's declared in this module, root first. A subclass method reads and
+// writes an inherited instance variable like its own (they share the object's
+// `_iv_<name>` attribute).
+// The instance variables a method of `className` sees, inherited ones first:
+// the instance side's, or for a class-side method the class-instance
+// variables.
+static std::vector<std::string> instVarsThroughChain(
+        const std::unordered_map<std::string, Compiler::ClassInfo>& classes,
+        const std::string& className, bool classSide = false) {
+    std::vector<std::string> chain;
+    std::unordered_set<std::string> seenClasses;
+    std::vector<const Compiler::ClassInfo*> infos;
+    std::string cur = className;
+    while (!cur.empty() && !seenClasses.count(cur)) {
+        seenClasses.insert(cur);
+        auto it = classes.find(cur);
+        if (it == classes.end()) break;
+        infos.push_back(&it->second);
+        cur = it->second.superclassName;
+    }
+    std::unordered_set<std::string> seenNames;
+    for (auto i = infos.rbegin(); i != infos.rend(); ++i) {
+        for (const auto& iv : classSide ? (*i)->classInstVarNames : (*i)->instVarNames)
+            if (seenNames.insert(iv).second) chain.push_back(iv);
+        // A mixin's instance variables live on the same object.
+        for (const auto& mixin : (*i)->mixinNames) {
+            if (mixin == className) continue;
+            for (const auto& iv : instVarsThroughChain(classes, mixin, classSide))
+                if (seenNames.insert(iv).second) chain.push_back(iv);
+        }
+    }
+    return chain;
+}
 
 // One walker per scope (module, method, or block). Accumulates:
 //   - declared: names introduced in THIS scope (module-level assignments,
@@ -118,9 +156,21 @@ void walkNode(const Node& n, ScopeWalker& cur,
             ScopeWalker blockScope;
             blockScope.isBlock = true;
             // D22: a block sees the enclosing method's instance variables —
-            // thread the set through unchanged so an ivar referenced inside
-            // the block is excluded from the block's free vars.
+            // thread the set through so an ivar referenced inside the block
+            // is excluded from the block's free vars. A block parameter or
+            // temporary that reuses an ivar's name hides it in this subtree.
             blockScope.instVars = cur.instVars;
+            std::unordered_set<std::string> visibleIvars;
+            if (cur.instVars) {
+                for (const auto& name : n.stringList) {
+                    if (!cur.instVars->count(name)) continue;
+                    if (blockScope.instVars == cur.instVars) {
+                        visibleIvars = *cur.instVars;
+                        blockScope.instVars = &visibleIvars;
+                    }
+                    visibleIvars.erase(name);
+                }
+            }
             // n.stringList holds: nArgs args followed by locals.
             for (const auto& name : n.stringList) {
                 blockScope.declared.insert(name);
@@ -152,7 +202,7 @@ void walkNode(const Node& n, ScopeWalker& cur,
             if (classes) {
                 auto cit = classes->find(n.text);
                 if (cit != classes->end()) {
-                    for (const auto& iv : cit->second.instVarNames) {
+                    for (const auto& iv : instVarsThroughChain(*classes, n.text, n.boolFlag)) {
                         ivarSet.insert(iv);
                     }
                     // Class vars are reached through the same `_iv_<name>`
@@ -201,7 +251,7 @@ void walkNode(const Node& n, ScopeWalker& cur,
             if (classes) {
                 auto cit = classes->find(n.text);
                 if (cit != classes->end()) {
-                    for (const auto& iv : cit->second.instVarNames) {
+                    for (const auto& iv : instVarsThroughChain(*classes, n.text, n.boolFlag)) {
                         ivarSet.insert(iv);
                     }
                     for (const auto& cv : cit->second.classVarNames) {
@@ -283,7 +333,7 @@ Compiler::resolveClassVarsFor(const std::string& className) const {
 }
 
 void Compiler::collectClasses(const Node& module) {
-    classes_.clear();
+    classes_ = knownClasses_;
     if (module.kind != NodeKind::Module) return;
     for (const auto& topPtr : module.children) {
         if (!topPtr || topPtr->kind != NodeKind::ClassDecl) continue;
@@ -299,12 +349,62 @@ void Compiler::collectClasses(const Node& module) {
         const size_t ivCount = static_cast<size_t>(cd.intValue);
         const size_t ivEnd   = 1 + ivCount;
         for (size_t i = 1; i < ivEnd && i < cd.stringList.size(); ++i) {
-            info.instVarNames.push_back(cd.stringList[i]);
+            const std::string& iv = cd.stringList[i];
+            if (std::find(info.instVarNames.begin(), info.instVarNames.end(), iv)
+                != info.instVarNames.end())
+                error("instance variable '" + iv + "' is declared twice in " + info.name);
+            info.instVarNames.push_back(iv);
         }
         for (size_t i = ivEnd; i < cd.stringList.size(); ++i) {
             info.classVarNames.push_back(cd.stringList[i]);
         }
+        if (!cd.children.empty() && cd.children[0]
+            && (cd.children[0]->kind == NodeKind::DynArrayLit
+                || cd.children[0]->kind == NodeKind::ArrayLit)) {
+            for (const auto& el : cd.children[0]->children)
+                if (el && (el->kind == NodeKind::Identifier || el->kind == NodeKind::SymbolLit))
+                    info.mixinNames.push_back(el->text);
+        }
         classes_[info.name] = std::move(info);
+    }
+    // Class-instance variables: `Name class instanceVariableNames: 'a b'.`
+    for (const auto& topPtr : module.children) {
+        if (!topPtr || topPtr->kind != NodeKind::KeywordSend
+            || topPtr->text != "instanceVariableNames:" || topPtr->children.size() != 2)
+            continue;
+        const Node& recv = *topPtr->children[0];
+        const Node& names = *topPtr->children[1];
+        if (recv.kind != NodeKind::UnarySend || recv.text != "class" || recv.children.empty()
+            || recv.children[0]->kind != NodeKind::Identifier || names.kind != NodeKind::StringLit)
+            continue;
+        auto it = classes_.find(recv.children[0]->text);
+        if (it == classes_.end()) continue;
+        std::string word;
+        for (char c : names.text + " ") {
+            if (std::isspace(static_cast<unsigned char>(c))) {
+                if (!word.empty()) it->second.classInstVarNames.push_back(word);
+                word.clear();
+            } else {
+                word += c;
+            }
+        }
+    }
+    // A subclass may not redeclare an instance variable it inherits (as in
+    // Smalltalk): both would name the same slot of the object.
+    for (const auto& [name, info] : classes_) {
+        std::unordered_set<std::string> seen;
+        std::string sup = info.superclassName;
+        while (!sup.empty() && !seen.count(sup)) {
+            seen.insert(sup);
+            auto it = classes_.find(sup);
+            if (it == classes_.end()) break;
+            for (const auto& iv : info.instVarNames)
+                if (std::find(it->second.instVarNames.begin(), it->second.instVarNames.end(), iv)
+                    != it->second.instVarNames.end())
+                    error("instance variable '" + iv + "' of " + name
+                          + " is already defined in its superclass " + sup);
+            sup = it->second.superclassName;
+        }
     }
 }
 
@@ -398,6 +498,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             auto selIdx = m.internSymbol(selector);
             m.emitWide(Op::SEND_KEYWORD,
                        static_cast<unsigned int>(selIdx), currentLine_);
+            emitSetInstVarNames(m, n);
             // D19 (2026-06-13): install class-var initial values on the new
             // class. Class is on the stack as the SEND's result; the primitive
             // walks the packed name string, sets `_iv_<name>` = nil for each,
@@ -427,11 +528,13 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         }
 
         auto superIdx     = m.internSymbol(superName);
-        auto newChildIdx  = m.internSymbol("newChild");
+        auto subclassIdx  = m.internSymbol("__subclassNamed:");
+        auto declNameIdx  = m.addString(n.text);
         // BL-2: indices may exceed 255 — emitWide prefixes EXTEND words as
         // needed, so there is no longer a 256-symbol ceiling.
         m.emitWide(Op::PUSH_GLOBAL,  static_cast<unsigned int>(superIdx), currentLine_);
-        m.emitWide(Op::SEND_UNARY,   static_cast<unsigned int>(newChildIdx), currentLine_);
+        m.emitWide(Op::PUSH_CONST,   static_cast<unsigned int>(declNameIdx), currentLine_);
+        m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(subclassIdx), currentLine_);
         // BL-3: stamp the declared class name onto the fresh class object so
         // printString can render instances as "a Counter". We send
         // `__setClassName:` (a keyword primitive on objectProto) with the name
@@ -444,6 +547,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             m.emitWide(Op::PUSH_CONST,   static_cast<unsigned int>(nameStrIdx), currentLine_);
             m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(setNameIdx), currentLine_);
         }
+        emitSetInstVarNames(m, n);
         // D19 (2026-06-13): install class-var initial values (nil) on the
         // freshly-created class. Mirrors the mixin branch above.
         {
@@ -490,17 +594,27 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         // can resolve identifiers against this class's inst vars before
         // falling back to globals.
         currentMethodClass_         = n.text;
+        currentMethodDebugName_     = n.text + ">>" + (n.stringList.empty() ? std::string("<method>") : n.stringList[0]);
         currentMethodIsClassSide_   = n.boolFlag;
         {
             auto it = classes_.find(n.text);
             if (it != classes_.end()) {
-                currentInstVars_  = it->second.instVarNames;
+                currentInstVars_  = instVarsThroughChain(classes_, n.text, n.boolFlag);
                 currentClassVars_ = resolveClassVarsFor(n.text);
             } else {
                 currentInstVars_.clear();
                 currentClassVars_.clear();
             }
         }
+        reportDuplicateNames(n.stringList, 1,
+                             n.text + ">>" + (n.stringList.empty() ? std::string() : n.stringList[0]));
+        // An argument or temporary may not reuse an instance variable's name
+        // (as in Pharo): the method would silently write the object's state.
+        for (size_t i = 1; i < n.stringList.size(); ++i)
+            for (const auto& iv : currentInstVars_)
+                if (iv == n.stringList[i])
+                    error("'" + iv + "' is already defined as an instance variable of "
+                          + n.text + " (in " + n.text + ">>" + n.stringList[0] + ")");
 
         // Build sub-BytecodeModule for the method body.
         auto sub = std::make_unique<BytecodeModule>();
@@ -527,6 +641,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             // copies it into the captured dict. Declaring it unconditionally
             // keeps slot numbering stable for the copy-in PUSH_LOCAL.
             declareLocal(n.stringList[1 + i]);             // slots 1..nArgs
+            scopes_.back().args.insert(n.stringList[1 + i]);
         }
         for (size_t i = static_cast<size_t>(1 + nArgs); i < n.stringList.size(); ++i) {
             declareLocal(n.stringList[i]);                 // method locals
@@ -565,6 +680,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         sub->setDebugName(n.text + ">>" +
                           (n.stringList.empty() ? std::string("<method>")
                                                 : n.stringList[0]));
+        currentMethodDebugName_ = sub->debugName();
         // BL-1: record the defining class so the engine can resolve `super`
         // sends inside this method body (lookup starts at the class's parent).
         sub->setDefiningClass(n.text);
@@ -598,6 +714,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
 
         // F4-U5: clear the method-body name-resolution context.
         currentMethodClass_.clear();
+        currentMethodDebugName_.clear();
         currentInstVars_.clear();
         currentClassVars_.clear();
         currentMethodIsClassSide_ = false;
@@ -635,13 +752,22 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         {
             auto it = classes_.find(n.text);
             if (it != classes_.end()) {
-                currentInstVars_  = it->second.instVarNames;
+                currentInstVars_  = instVarsThroughChain(classes_, n.text, n.boolFlag);
                 currentClassVars_ = resolveClassVarsFor(n.text);
             } else {
                 currentInstVars_.clear();
                 currentClassVars_.clear();
             }
         }
+        reportDuplicateNames(n.stringList, 1,
+                             n.text + ">>" + (n.stringList.empty() ? std::string() : n.stringList[0]));
+        // An argument or temporary may not reuse an instance variable's name
+        // (as in Pharo): the method would silently write the object's state.
+        for (size_t i = 1; i < n.stringList.size(); ++i)
+            for (const auto& iv : currentInstVars_)
+                if (iv == n.stringList[i])
+                    error("'" + iv + "' is already defined as an instance variable of "
+                          + n.text + " (in " + n.text + ">>" + n.stringList[0] + ")");
 
         auto sub = std::make_unique<BytecodeModule>();
 
@@ -659,6 +785,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             declareLocal(n.stringList[1 + i]);             // slots 1..nArgs
                                                            // (pos first,
                                                            //  then named)
+            scopes_.back().args.insert(n.stringList[1 + i]);
         }
         // User locals — start at index 1 + nArgs in stringList.
         for (size_t i = static_cast<size_t>(1 + nArgs); i < n.stringList.size(); ++i) {
@@ -780,6 +907,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
 
         recordLocalNames(*sub);
         sub->setDebugName(n.text + ">>" + n.stringList[0] + "(...)");
+        currentMethodDebugName_ = sub->debugName();
         sub->setDefiningClass(n.text);
         scopes_.pop_back();
 
@@ -801,6 +929,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(installIdx), currentLine_);
 
         currentMethodClass_.clear();
+        currentMethodDebugName_.clear();
         currentInstVars_.clear();
         currentClassVars_.clear();
         currentMethodIsClassSide_ = false;
@@ -812,11 +941,21 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         // In both cases we DUP after evaluating the RHS so the assigned value
         // remains on the stack for the top-level POP separator (or RETURN_TOP,
         // when it is the last statement).
+        if (reportArgumentAssignment(n.text)) return;
         if (isCaptured(n.text)) {
+            if (reportUndeclaredInMethod(n.text)) return;
             emitExpr(m, *n.children[0]);
             auto sym = m.internSymbol(n.text);
             m.emit(Op::DUP, 0, currentLine_);
             m.emitWide(Op::STORE_CAPTURED, static_cast<unsigned int>(sym), currentLine_);
+            return;
+        }
+        // A temporary or argument of an enclosing block or of the method
+        // itself wins over an instance variable of the same name.
+        if (int slot = resolveLocal(n.text); slot >= 0) {
+            emitExpr(m, *n.children[0]);
+            m.emit(Op::DUP, 0, currentLine_);
+            m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slot), currentLine_);
             return;
         }
         // F4-U5: instance variable of the current method's class.
@@ -829,23 +968,14 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
                 return;
             }
         }
-        // D19 (2026-06-13): class variable of the current method's class —
-        // class-side write only; instance-side is rejected with a clear
-        // compile-time error, see the matching block in emitExpr's
-        // NodeKind::Assignment case.
+        // D19: class variable of the current method's class, written from
+        // either side through STORE_CLASSVAR (see emitExpr's Assignment case).
         for (const auto& cv : currentClassVars_) {
             if (cv == n.text) {
-                if (!currentMethodIsClassSide_) {
-                    error("class variable '" + n.text +
-                          "' cannot be assigned from an instance-side "
-                          "method (would create a per-instance shadow). "
-                          "Mutate it from a class-side method instead.");
-                    return;
-                }
                 emitExpr(m, *n.children[0]);
                 auto sym = m.internSymbol(n.text);
                 m.emit(Op::DUP, 0, currentLine_);
-                m.emitWide(Op::STORE_INSTVAR, static_cast<unsigned int>(sym), currentLine_);
+                m.emitWide(Op::STORE_CLASSVAR, static_cast<unsigned int>(sym), currentLine_);
                 return;
             }
         }
@@ -861,6 +991,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             m.emitWide(Op::STORE_GLOBAL, static_cast<unsigned int>(sym), currentLine_);
             return;
         }
+        if (reportUndeclaredInMethod(n.text)) return;
         int slot = declareLocal(n.text);
         emitExpr(m, *n.children[0]);
         m.emit(Op::DUP, 0, currentLine_);
@@ -875,7 +1006,10 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
     if (n.line > 0) currentLine_ = n.line;
     switch (n.kind) {
         case NodeKind::IntegerLit: {
-            auto idx = m.addInteger(n.intValue);
+            // A literal beyond the 64-bit range carries its digits (boolFlag,
+            // radix in intValue) and becomes a LargeInteger constant.
+            auto idx = n.boolFlag ? m.addLargeInteger(n.text, static_cast<int>(n.intValue))
+                                  : m.addInteger(n.intValue);
             // BL-2: constant-pool indices may exceed 255 — emitWide prefixes
             // EXTEND words as needed, lifting the old 256-constant ceiling.
             m.emitWide(Op::PUSH_CONST, static_cast<unsigned int>(idx), currentLine_);
@@ -921,11 +1055,15 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             }
             // F4-U5: instance variable of the current method's class.
             // Only consulted while emitting a method body (currentInstVars_
-            // is populated by the MethodDecl branch in emitStatement).
+            // is populated by the MethodDecl branch in emitStatement). A
+            // class-side method's instance variables are the class object's
+            // own slots: read own-only, so a subclass does not see its
+            // superclass's value.
             for (const auto& iv : currentInstVars_) {
                 if (iv == n.text) {
                     auto sym = m.internSymbol(n.text);
-                    m.emitWide(Op::PUSH_INSTVAR, static_cast<unsigned int>(sym), currentLine_);
+                    m.emitWide(currentMethodIsClassSide_ ? Op::PUSH_OWN_INSTVAR : Op::PUSH_INSTVAR,
+                               static_cast<unsigned int>(sym), currentLine_);
                     return;
                 }
             }
@@ -944,7 +1082,19 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             // F4-U3: fall back to the global namespace.
             // ST-80 semantics: free identifiers in expressions resolve through
             // the scope chain, then globals. A failed runtime lookup will
-            // throw "undefined global: X" with the actual name.
+            // throw "undefined global: X" with the actual name. Inside a method
+            // of a script, a lowercase name that nothing declares is a typo or
+            // a missing temporary (globals are capitalised; file-level
+            // variables are not visible in methods): report it now instead of
+            // failing when the method first runs. The REPL keeps the runtime
+            // lookup, since its session variables are lowercase globals.
+            if (!replMode_ && !currentMethodClass_.empty() && !n.text.empty()
+                && std::islower(static_cast<unsigned char>(n.text[0]))) {
+                error("undeclared variable '" + n.text + "' in " + currentMethodClass_
+                      + " (line " + std::to_string(currentLine_) + ")");
+                m.emit(Op::PUSH_NIL, 0, currentLine_);
+                return;
+            }
             auto symIdx = m.internSymbol(n.text);
             m.emitWide(Op::PUSH_GLOBAL, static_cast<unsigned int>(symIdx), currentLine_);
             return;
@@ -954,11 +1104,20 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             // into the shared captured dict; otherwise use a local slot.
             // In both cases we DUP so the value is left on the stack as the
             // expression's result.
+            if (reportArgumentAssignment(n.text)) { m.emit(Op::PUSH_NIL, 0, currentLine_); return; }
             if (isCaptured(n.text)) {
+                if (reportUndeclaredInMethod(n.text)) { m.emit(Op::PUSH_NIL, 0, currentLine_); return; }
                 emitExpr(m, *n.children[0]);
                 auto sym = m.internSymbol(n.text);
                 m.emit(Op::DUP, 0, currentLine_);
                 m.emitWide(Op::STORE_CAPTURED, static_cast<unsigned int>(sym), currentLine_);
+                return;
+            }
+            // A temporary or argument wins over an instance variable.
+            if (int slot = resolveLocal(n.text); slot >= 0) {
+                emitExpr(m, *n.children[0]);
+                m.emit(Op::DUP, 0, currentLine_);
+                m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slot), currentLine_);
                 return;
             }
             // F4-U5: instance variable of the current method's class.
@@ -971,27 +1130,17 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                     return;
                 }
             }
-            // D19 (2026-06-13): class variable of the current method's class.
-            // Writes go through STORE_INSTVAR (writes the `_iv_<name>` key on
-            // the receiver) ONLY when the method is class-side — there `self`
-            // IS the class object, so the write updates the shared storage.
-            // From an instance method the write would create a per-instance
-            // shadow on the receiver instead of updating the class — a
-            // foot-gun every Smalltalker has stepped on once — so it is
-            // explicitly rejected here with a compile-time error.
+            // D19: class variable of the current method's class. The write
+            // goes to the declaring class — the object up the prototype chain
+            // that owns the `_iv_<name>` slot — from an instance-side or a
+            // class-side method alike (STORE_CLASSVAR), so the class, its
+            // subclasses and every instance share one variable.
             for (const auto& cv : currentClassVars_) {
                 if (cv == n.text) {
-                    if (!currentMethodIsClassSide_) {
-                        error("class variable '" + n.text +
-                              "' cannot be assigned from an instance-side "
-                              "method (would create a per-instance shadow). "
-                              "Mutate it from a class-side method instead.");
-                        return;
-                    }
                     emitExpr(m, *n.children[0]);
                     auto sym = m.internSymbol(n.text);
                     m.emit(Op::DUP, 0, currentLine_);
-                    m.emitWide(Op::STORE_INSTVAR, static_cast<unsigned int>(sym), currentLine_);
+                    m.emitWide(Op::STORE_CLASSVAR, static_cast<unsigned int>(sym), currentLine_);
                     return;
                 }
             }
@@ -1005,6 +1154,7 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                 m.emitWide(Op::STORE_GLOBAL, static_cast<unsigned int>(sym), currentLine_);
                 return;
             }
+            if (reportUndeclaredInMethod(n.text)) { m.emit(Op::PUSH_NIL, 0, currentLine_); return; }
             int slot = declareLocal(n.text);
             emitExpr(m, *n.children[0]);
             m.emit(Op::DUP, 0, currentLine_);
@@ -1179,6 +1329,9 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
         }
         case NodeKind::Block: {
             auto sub = std::make_unique<BytecodeModule>();
+            // A block inside a method sends `super` on behalf of that method's
+            // class (Pharo allows super in blocks).
+            if (!currentMethodClass_.empty()) sub->setDefiningClass(currentMethodClass_);
             // open fresh scope for block
             scopes_.emplace_back();
             {
@@ -1189,19 +1342,17 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                     s.capturedNames = it->second;
                 }
             }
+            reportDuplicateNames(n.stringList, 0, "a block");
             int nArgs = static_cast<int>(n.intValue);
             sub->setArgCount(nArgs);
             // declare args first (slots 0..nArgs-1), then locals
             for (size_t i = 0; i < n.stringList.size(); ++i) {
                 declareLocal(n.stringList[i]);
+                if (static_cast<int>(i) < nArgs) scopes_.back().args.insert(n.stringList[i]);
             }
-            // CLO Part 2: a block reuses the captured dict it inherited via
-            // PUSH_BLOCK's __captured__ stamp — it emits NO MAKE_CAPTURED.
-            // But if one of this block's OWN arguments is captured by an
-            // inner block, copy that argument's incoming value into the
-            // (shared) captured dict, exactly like a method's argument
-            // copy-in. The block's stringList is all args+locals; the first
-            // nArgs entries are the arguments.
+            // A block that declares captured names opens its own captured
+            // dict (see emitCaptureProlog). The block's stringList is all
+            // args+locals; the first nArgs entries are the arguments.
             emitCaptureProlog(*sub, /*isMethod=*/false, n.stringList,
                               /*nArgs=*/nArgs, /*argNameOffset=*/0);
             // emit body statements; last value implicitly returned
@@ -1212,17 +1363,81 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             }
             sub->emit(Op::RETURN_TOP, 0, currentLine_);
             recordLocalNames(*sub);
-            sub->setDebugName("<block>");
+            sub->setDebugName(currentMethodDebugName_.empty()
+                                  ? std::string("<block>")
+                                  : "[] in " + currentMethodDebugName_);
             scopes_.pop_back();
             size_t blkIdx = m.addBlockModule(std::move(sub));
             m.emitWide(Op::PUSH_BLOCK, static_cast<unsigned int>(blkIdx), currentLine_);
             return;
         }
+        case NodeKind::ThisContext:
+            error("thisContext is not supported in protoST (it is reserved; see STATUS D17)");
+            m.emit(Op::PUSH_NIL, 0, currentLine_);
+            return;
         default:
             error("expression kind not yet supported");
             m.emit(Op::PUSH_NIL, 0, currentLine_);
             return;
     }
+}
+
+// Inside a method, assigning to a name that is not an argument, temporary,
+// block parameter, instance or class variable is a compile error, as in Pharo;
+// declaring it implicitly let a typo (`cuont := count + 1`) leave the real
+// variable unchanged. Top-level scripts keep implicit globals.
+// Record a class declaration's instance-variable names on the class object on
+// top of the stack (reflection: instVarNames, instVarAt:, deepCopy).
+void Compiler::emitSetInstVarNames(BytecodeModule& m, const Node& classDecl) {
+    const size_t ivCount = static_cast<size_t>(classDecl.intValue);
+    if (ivCount == 0) return;
+    std::string names;
+    for (size_t i = 0; i < ivCount && 1 + i < classDecl.stringList.size(); ++i) {
+        if (i > 0) names += ' ';
+        names += classDecl.stringList[1 + i];
+    }
+    auto namesIdx = m.addString(names);
+    auto selIdx   = m.internSymbol("__setInstVarNames:");
+    m.emitWide(Op::PUSH_CONST,   static_cast<unsigned int>(namesIdx), currentLine_);
+    m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(selIdx), currentLine_);
+}
+
+// A method's or block's arguments and temporaries must have distinct names.
+void Compiler::reportDuplicateNames(const std::vector<std::string>& names, size_t from,
+                                    const std::string& where) {
+    std::unordered_set<std::string> seen;
+    for (size_t i = from; i < names.size(); ++i)
+        if (!seen.insert(names[i]).second)
+            error("'" + names[i] + "' is declared twice in " + where);
+}
+
+bool Compiler::reportArgumentAssignment(const std::string& name) {
+    // Resolve the name as a read would, then ask whether that binding is an
+    // argument: a declared one, or the loop variable of an inlined to:do:
+    // bound in that very scope.
+    bool isArgument = false;
+    for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
+        if (it->slots.count(name)) {
+            isArgument = it->args.count(name) != 0;
+            for (const auto& loop : inlinedLoopArgs_)
+                if (loop.first == &*it && loop.second == name) isArgument = true;
+            break;
+        }
+        if (isMethodScope(*it)) break;
+    }
+    if (!isArgument) return false;
+    error("cannot assign to the argument '" + name + "' (line "
+          + std::to_string(currentLine_) + "); arguments are read-only");
+    return true;
+}
+
+bool Compiler::reportUndeclaredInMethod(const std::string& name) {
+    if (currentMethodClass_.empty() || resolveLocal(name) >= 0) return false;
+    error("undeclared variable '" + name + "' in " + currentMethodClass_
+          + " (line " + std::to_string(currentLine_)
+          + "); declare it as a temporary: | " + name + " |"
+          + " (if this line belongs to the top level, end the method before it with a blank line)");
+    return true;
 }
 
 bool Compiler::assignsReplGlobalInBlock(const std::string& name) const {
@@ -1244,10 +1459,20 @@ int Compiler::declareLocal(const std::string& name) {
     return slot;
 }
 
+// A method body is a lexical boundary: its blocks close over the method's
+// temporaries and arguments, never over the file-level variables of the
+// module that declares it (as in Smalltalk, where a method cannot see a
+// workspace's temporaries). Name lookups stop at the innermost method scope.
+bool Compiler::isMethodScope(const Scope& s) {
+    return s.astNode && (s.astNode->kind == NodeKind::MethodDecl ||
+                         s.astNode->kind == NodeKind::CallMethodDecl);
+}
+
 int Compiler::resolveLocal(const std::string& name) const {
     for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
         auto f = it->slots.find(name);
         if (f != it->slots.end()) return f->second;
+        if (isMethodScope(*it)) break;
     }
     return -1;
 }
@@ -1260,6 +1485,7 @@ bool Compiler::isCaptured(const std::string& name) const {
     for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
         if (it->capturedNames.count(name) != 0) return true;
         if (it->slots.count(name) != 0) return false;
+        if (isMethodScope(*it)) break;
     }
     return false;
 }
@@ -1283,22 +1509,44 @@ void Compiler::emitCaptureProlog(BytecodeModule& m, bool isMethod,
                                  int nArgs, int argNameOffset) {
     const auto& s = scopes_.back();
     if (s.capturedNames.empty()) return;
-    // A method whose inner blocks capture anything needs its own captured
-    // dict in frame slot 0. Blocks reuse the dict inherited via PUSH_BLOCK.
+    // The names this scope DECLARES (arguments and temporaries) that inner
+    // blocks capture. Each activation needs its own binding for them.
+    std::vector<std::pair<std::string, bool>> declared;   // (name, isArgument)
+    for (size_t i = static_cast<size_t>(argNameOffset); i < argNames.size(); ++i) {
+        if (s.capturedNames.count(argNames[i]) == 0) continue;
+        declared.emplace_back(argNames[i],
+                              static_cast<int>(i) - argNameOffset < nArgs);
+    }
+    // A method gets a fresh root captured dict. A block that declares captured
+    // names gets a fresh dict whose parent is the dict it inherited through
+    // PUSH_BLOCK (MAKE_CAPTURED 1): each activation -- each loop iteration of
+    // `to:do:`, each call of a block factory -- then has its own binding,
+    // while names of enclosing activations are still reached through the
+    // parent chain (the scope chain is the prototype chain). A block that
+    // declares none keeps the inherited dict.
     if (isMethod) {
         m.emit(Op::MAKE_CAPTURED, 0, currentLine_);
+    } else if (!declared.empty()) {
+        m.emit(Op::MAKE_CAPTURED, 1, currentLine_);
+    } else {
+        return;
     }
-    // Copy each captured ARGUMENT's incoming value from its local slot into
-    // the captured dict. Captured locals/temps need no copy — the body
-    // assigns them through STORE_CAPTURED directly.
-    for (int i = 0; i < nArgs; ++i) {
-        const std::string& argName = argNames[static_cast<size_t>(argNameOffset + i)];
-        if (s.capturedNames.count(argName) == 0) continue;
-        int slot = resolveLocal(argName);
-        if (slot < 0) continue;  // defensive — should always resolve
-        auto sym = m.internSymbol(argName);
-        m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slot), currentLine_);
-        m.emitWide(Op::STORE_CAPTURED, static_cast<unsigned int>(sym), currentLine_);
+    // Bind every declared captured name in this activation's own dict: an
+    // argument with its incoming value, a temporary with nil. DEFINE_CAPTURED
+    // creates the binding here even when an enclosing activation binds the
+    // same name (shadowing), and a later write from an inner block then finds
+    // this activation as the owner (STORE_CAPTURED writes to the dict that
+    // owns the name).
+    for (const auto& [name, isArgument] : declared) {
+        auto sym = m.internSymbol(name);
+        if (isArgument) {
+            int slot = resolveLocal(name);
+            if (slot < 0) continue;  // defensive — should always resolve
+            m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slot), currentLine_);
+        } else {
+            m.emit(Op::PUSH_NIL, 0, currentLine_);
+        }
+        m.emitWide(Op::DEFINE_CAPTURED, static_cast<unsigned int>(sym), currentLine_);
     }
 }
 
@@ -1583,6 +1831,7 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
             int savedSlot = (savedIt != s.slots.end()) ? savedIt->second : -1;
             bool hadBinding = (savedIt != s.slots.end());
             s.slots[iterName] = slotI;
+            inlinedLoopArgs_.emplace_back(&s, iterName);
             // loopTest:
             size_t loopTestInstrIdx = m.instrStartPc().size();
             m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotI),   currentLine_);
@@ -1616,6 +1865,7 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
             if (exitOffset > 255) { error("inline to:do:: body too large"); return false; }
             m.patchArg(jExitBytePos, static_cast<uint8_t>(exitOffset));
             // Restore the user's iter-var binding.
+            inlinedLoopArgs_.pop_back();
             if (hadBinding) s.slots[iterName] = savedSlot;
             else            s.slots.erase(iterName);
             // to:do: returns the receiver (the start integer); push it.

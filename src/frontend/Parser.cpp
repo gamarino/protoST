@@ -52,11 +52,43 @@ void Parser::synchronize() {
 ast::NodePtr Parser::parseModule() {
     auto mod = ast::makeNode(ast::NodeKind::Module, 1, 1);
     while (current_.kind != TokenKind::EndOfFile) {
+        if (current_.kind == TokenKind::Pipe) {
+            parseTopTemporaries(*mod);
+            continue;
+        }
         auto top = parseTopForm();
         if (top) mod->children.push_back(std::move(top));
         else     synchronize();
     }
     return mod;
+}
+
+// Workspace-style temporaries at top level: `| a b |`. Each name is bound to
+// nil, exactly as a declared temporary starts out in Smalltalk; the binding
+// itself follows the usual top-level rule (module local, or global in the
+// REPL).
+void Parser::parseTopTemporaries(ast::Node& mod) {
+    advance(); // opening '|'
+    while (current_.kind == TokenKind::Identifier) {
+        auto a = ast::makeNode(ast::NodeKind::Assignment, current_.line, current_.column);
+        a->text = current_.text;
+        a->children.push_back(ast::makeNode(ast::NodeKind::NilLit, current_.line, current_.column));
+        mod.children.push_back(std::move(a));
+        advance();
+    }
+    consume(TokenKind::Pipe, "expected '|' to close temporaries");
+}
+
+// `Name >>` and `Name class >>` can only begin a method declaration (`>>` is
+// not a binary selector), so an expression never continues into one: a
+// method whose last statement has no period ends there even without a
+// blank line.
+bool Parser::atDeclarationStart() {
+    if (current_.kind != TokenKind::Identifier) return false;
+    Token p = lexer_.peek();
+    if (p.kind == TokenKind::GtGt) return true;
+    return p.kind == TokenKind::Identifier && p.text == "class"
+        && lexer_.peekSecond().kind == TokenKind::GtGt;
 }
 
 ast::NodePtr Parser::parseTopForm() {
@@ -72,8 +104,8 @@ ast::NodePtr Parser::parseTopForm() {
             advance(); // consume >>
             return parseMethodDecl(classId, /*classSide=*/false);
         }
-        if (after.kind == TokenKind::Identifier && after.text == "class") {
-            // peek one more - need a 2-token lookahead. Pull both tokens into prev.
+        if (after.kind == TokenKind::Identifier && after.text == "class"
+            && lexer_.peekSecond().kind == TokenKind::GtGt) {
             advance(); // class id
             advance(); // 'class'
             if (current_.kind == TokenKind::GtGt) {
@@ -116,6 +148,9 @@ ast::NodePtr Parser::parseExpression() {
     if (current_.kind == TokenKind::Identifier && lexer_.peek().kind == TokenKind::Assign) {
         Token id = current_; advance();   // identifier
         advance();                         // ':='
+        if (id.text == "self" || id.text == "super" || id.text == "thisContext"
+            || id.text == "true" || id.text == "false" || id.text == "nil")
+            error(id, "cannot assign to the pseudo-variable '" + id.text + "'");
         auto rhs = parseExpression();
         auto n = ast::makeNode(ast::NodeKind::Assignment, id.line, id.column);
         n->text = id.text;
@@ -123,7 +158,8 @@ ast::NodePtr Parser::parseExpression() {
         return n;
     }
     auto first = parseKeywordSend();
-    if (!first || current_.kind != TokenKind::Semicolon || !isSendKind(first->kind)) {
+    if (!first || current_.kind != TokenKind::Semicolon || atBlankLineBoundary()
+        || !isSendKind(first->kind)) {
         return first;
     }
     // Promote receiver: cascade.children[0] = first.children[0]; rest are headless sends
@@ -131,7 +167,7 @@ ast::NodePtr Parser::parseExpression() {
     cascade->children.push_back(std::move(first->children[0]));
     first->children.erase(first->children.begin());
     cascade->children.push_back(std::move(first));
-    while (match(TokenKind::Semicolon)) {
+    while (!atBlankLineBoundary() && match(TokenKind::Semicolon)) {
         // parse a single message with receiver=nullptr (we manufacture)
         Token t = current_;
         if (current_.kind == TokenKind::Identifier) {
@@ -140,7 +176,7 @@ ast::NodePtr Parser::parseExpression() {
             auto n = ast::makeNode(ast::NodeKind::UnarySend, t.line, t.column);
             n->text = t.text;
             // chain unary
-            while (current_.kind == TokenKind::Identifier) {
+            while (current_.kind == TokenKind::Identifier && !atBlankLineBoundary()) {
                 Token chained = current_; advance();
                 auto outer = ast::makeNode(ast::NodeKind::UnarySend, chained.line, chained.column);
                 outer->text = chained.text;
@@ -177,7 +213,8 @@ ast::NodePtr Parser::parseExpression() {
 
 ast::NodePtr Parser::parseUnarySend() {
     auto recv = parsePrimary();
-    while (recv && current_.kind == TokenKind::Identifier) {
+    while (recv && current_.kind == TokenKind::Identifier && !atBlankLineBoundary()
+           && !atDeclarationStart()) {
         // distinguish: only an identifier that is NOT followed by ':' is a unary selector;
         // keyword selectors come tokenised as TokenKind::Keyword.
         Token sel = current_;
@@ -211,7 +248,7 @@ static bool isBinaryOpToken(TokenKind k) {
 
 ast::NodePtr Parser::parseBinarySend() {
     auto left = parseUnarySend();
-    while (left && isBinaryOpToken(current_.kind)) {
+    while (left && isBinaryOpToken(current_.kind) && !atBlankLineBoundary()) {
         Token op = current_; advance();
         std::string opText = (op.kind == TokenKind::Pipe) ? "|" : op.text;
         auto right = parseUnarySend();
@@ -226,11 +263,11 @@ ast::NodePtr Parser::parseBinarySend() {
 
 ast::NodePtr Parser::parseKeywordSend() {
     auto recv = parseBinarySend();
-    if (recv && current_.kind == TokenKind::Keyword) {
+    if (recv && current_.kind == TokenKind::Keyword && !atBlankLineBoundary()) {
         auto n = ast::makeNode(ast::NodeKind::KeywordSend, current_.line, current_.column);
         n->children.push_back(std::move(recv));
         std::string selector;
-        while (current_.kind == TokenKind::Keyword) {
+        while (current_.kind == TokenKind::Keyword && !atBlankLineBoundary()) {
             selector += current_.text;            // includes trailing ':'
             advance();
             auto arg = parseBinarySend();
@@ -249,6 +286,7 @@ ast::NodePtr Parser::parsePrimary() {
             advance();
             auto n = ast::makeNode(ast::NodeKind::IntegerLit, t.line, t.column);
             n->intValue = t.intValue; n->text = t.text;
+            if (t.large) { n->boolFlag = true; n->intValue = t.radix; }
             return n;
         }
         case TokenKind::Float: {
@@ -300,6 +338,7 @@ ast::NodePtr Parser::parsePrimary() {
         }
         case TokenKind::LParen: {
             advance();
+            NestedExpressionScope nested(*this);
             auto inner = parseExpression();
             consume(TokenKind::RParen, "expected ')'");
             return inner;
@@ -308,6 +347,7 @@ ast::NodePtr Parser::parsePrimary() {
             return parseBlock();
         case TokenKind::LBrace: {
             Token open = current_; advance();
+            NestedExpressionScope nested(*this);
             auto arr = ast::makeNode(ast::NodeKind::DynArrayLit, open.line, open.column);
             while (current_.kind != TokenKind::RBrace && current_.kind != TokenKind::EndOfFile) {
                 auto e = parseExpression();
@@ -341,7 +381,7 @@ ast::NodePtr Parser::parseLiteralArray(int openLine, int openCol) {
         if (elem) arr->children.push_back(std::move(elem));
         else      break;  // parseLiteralArrayElement already reported the error
     }
-    consume(TokenKind::RParen, "expected ')' to close frozen array");
+    consume(TokenKind::RParen, "expected ')' to close literal array");
     return arr;
 }
 
@@ -351,7 +391,8 @@ ast::NodePtr Parser::parseLiteralArrayElement() {
         case TokenKind::Integer:
             advance();
             { auto n = ast::makeNode(ast::NodeKind::IntegerLit, t.line, t.column);
-              n->intValue = t.intValue; n->text = t.text; return n; }
+              n->intValue = t.intValue; n->text = t.text;
+            if (t.large) { n->boolFlag = true; n->intValue = t.radix; } return n; }
         case TokenKind::Float:
             advance();
             { auto n = ast::makeNode(ast::NodeKind::FloatLit, t.line, t.column);
@@ -374,10 +415,25 @@ ast::NodePtr Parser::parseLiteralArrayElement() {
         // A bare identifier inside `#( … )` is a symbol (`#(foo bar)` is two
         // symbols). Keyword tokens (`at:`) likewise form a symbol element.
         case TokenKind::Identifier:
-        case TokenKind::Keyword:
             advance();
             { auto n = ast::makeNode(ast::NodeKind::SymbolLit, t.line, t.column);
               n->text = t.text; return n; }
+        // Keyword parts written without spaces form one symbol, as in
+        // Smalltalk: `#(at:put:)` holds #at:put:, `#(at: put:)` two symbols.
+        case TokenKind::Keyword: {
+            std::string text = t.text;
+            int endColumn = t.column + static_cast<int>(t.text.size());
+            advance();
+            while (current_.kind == TokenKind::Keyword && current_.line == t.line
+                   && current_.column == endColumn) {
+                text += current_.text;
+                endColumn += static_cast<int>(current_.text.size());
+                advance();
+            }
+            auto n = ast::makeNode(ast::NodeKind::SymbolLit, t.line, t.column);
+            n->text = text;
+            return n;
+        }
         // A nested `#( … )` element, or — standard Smalltalk — a bare `( … )`
         // group, which inside a literal array is itself a nested literal array.
         case TokenKind::HashLParen:
@@ -385,7 +441,7 @@ ast::NodePtr Parser::parseLiteralArrayElement() {
             advance();
             return parseLiteralArray(t.line, t.column);
         default:
-            error(current_, "unexpected token in frozen array literal");
+            error(current_, "unexpected token in literal array literal");
             advance();
             return nullptr;
     }
@@ -393,6 +449,7 @@ ast::NodePtr Parser::parseLiteralArrayElement() {
 
 ast::NodePtr Parser::parseBlock() {
     Token open = current_; advance(); // consume '['
+    NestedExpressionScope nested(*this);
     auto blk = ast::makeNode(ast::NodeKind::Block, open.line, open.column);
 
     // arguments: : name : name ... (then a '|' if any arg present)
@@ -432,6 +489,19 @@ ast::NodePtr Parser::parseBlock() {
     return blk;
 }
 
+// A blank line ends a method body. Method bodies are indented and top-level
+// code starts in column 1, so an indented statement right after the blank
+// line is almost certainly meant to continue the method: report the rule
+// instead of silently running that statement at top level.
+void Parser::checkBlankLineContinuation(const ast::Node* method) {
+    if (current_.kind == TokenKind::EndOfFile || current_.column <= 1) return;
+    std::string where = method ? method->text : std::string();
+    if (method && !method->stringList.empty()) where += ">>" + method->stringList.front();
+    error(current_, "a blank line ends a method body; this indented statement "
+                    "would run at top level, outside " + where
+                    + " (remove the blank line or unindent the statement)");
+}
+
 ast::NodePtr Parser::parseMethodDecl(Token classIdent, bool classSide) {
     // Call-form decl: `Class >> name(pos, named=default)`. Detect by peeking
     // for `Identifier LParen` and route to the dedicated helper. The bare
@@ -455,8 +525,9 @@ ast::NodePtr Parser::parseMethodDecl(Token classIdent, bool classSide) {
         // unary
         selector = current_.text;
         advance();
-    } else if (current_.kind == TokenKind::BinaryOp) {
-        selector = current_.text;
+    } else if (current_.kind == TokenKind::BinaryOp || current_.kind == TokenKind::Pipe) {
+        // `|` lexes as Pipe (temporaries) but is also a binary selector.
+        selector = current_.kind == TokenKind::Pipe ? std::string("|") : current_.text;
         advance();
         if (current_.kind != TokenKind::Identifier) {
             error(current_, "expected argument name after binary selector");
@@ -498,21 +569,40 @@ ast::NodePtr Parser::parseMethodDecl(Token classIdent, bool classSide) {
     // body: statements until we see a token that can only start a top-level form
     // (another Identifier followed by '>>' / 'class' / 'subclass:', or EOF).
     // A '^' return statement also terminates the body (anything following is a
-    // new top-level form).
+    // new top-level form), and so does a blank line (0.4.0): without it, a
+    // method with no top-level '^' swallowed every statement that followed.
     while (current_.kind != TokenKind::EndOfFile) {
+        if (current_.blankLineBefore) { checkBlankLineContinuation(md.get()); break; }
+        // A statement that starts at column 1 on a later line, after the
+        // body's first statement, begins a new top-level form: method bodies
+        // are indented, so an unindented line is the program continuing.
+        if (current_.column == 1 && current_.line > classIdent.line && !md->children.empty()) {
+            // A return at column 1 can only belong to the method above:
+            // report it rather than run it as a top-level statement.
+            if (current_.kind == TokenKind::Caret)
+                error(current_, "unindented ^ after the method " + classIdent.text
+                      + ": indent method bodies (an unindented line starts a new top-level statement)");
+            break;
+        }
+        methodHeaderLine_ = classIdent.line;
         // stop at the start of another method/class decl
         if (current_.kind == TokenKind::Identifier) {
             Token p = lexer_.peek();
             if (p.kind == TokenKind::GtGt) break;
-            if (p.kind == TokenKind::Identifier && p.text == "class") break;
+            if (p.kind == TokenKind::Identifier && p.text == "class"
+                && lexer_.peekSecond().kind == TokenKind::GtGt) break;
             if (p.kind == TokenKind::Keyword && p.text == "subclass:") break;
         }
         auto stmt = parseStatement();
-        bool isReturn = stmt && stmt->kind == ast::NodeKind::Return;
+        const bool isReturn = stmt && stmt->kind == ast::NodeKind::Return;
         if (stmt) md->children.push_back(std::move(stmt));
         if (!match(TokenKind::Period)) break;
-        if (isReturn) break; // return terminates the method body
+        // After a ^, what follows on the same line is the next top-level form
+        // (one-line style: `C >> m ^ 1. C new m.`); indented lines below stay
+        // in the method as unreachable code, as in Pharo.
+        if (isReturn && current_.line == prev_.line) break;
     }
+    methodHeaderLine_ = 0;
     return md;
 }
 
@@ -577,10 +667,16 @@ ast::NodePtr Parser::parseClassDecl(Token classIdent) {
             // as `_iv_<name>`, the same key shape inst vars use), reachable
             // from any instance via the prototype-chain attribute walk —
             // see docs/STATUS.md D19 and docs/LANGUAGE.md §3.2 for the
-            // semantics and the documented restriction (instance-side
-            // assignment is a compile-time error; mutate from a class-side
-            // method instead).
+            // semantics.
             parseStringList(cvs);
+        } else if (current_.text == "package:" || current_.text == "category:"
+                   || current_.text == "poolDictionaries:" || current_.text == "tag:") {
+            // Pharo's class-definition keywords with no meaning in a file
+            // (packages, categories, pools): accepted and ignored, so class
+            // definitions copied from Pharo compile. The argument is a string.
+            advance();
+            if (current_.kind == TokenKind::String || current_.kind == TokenKind::Symbol) advance();
+            else error(current_, "expected a string after " + prev_.text);
         } else {
             error(current_, "unknown keyword in class declaration: " + current_.text);
             break;
@@ -610,7 +706,7 @@ ast::NodePtr Parser::parseClassDecl(Token classIdent) {
 // positional value, and `f((a, b))` passes the comma-binary result.
 ast::NodePtr Parser::parseCallArgExpr() {
     auto left = parseUnarySend();
-    while (left && isBinaryOpToken(current_.kind)) {
+    while (left && isBinaryOpToken(current_.kind) && !atBlankLineBoundary()) {
         if (current_.kind == TokenKind::BinaryOp
             && (current_.text == "," || current_.text == "=")) {
             break;
@@ -635,6 +731,7 @@ ast::NodePtr Parser::parseCallArgExpr() {
 // in alphabetical key order, named keys live in stringList).
 ast::NodePtr Parser::parseCallSend(Token selectorTok, ast::NodePtr receiver,
                                    bool implicitReceiver) {
+    NestedExpressionScope nested(*this);
     auto n = ast::makeNode(ast::NodeKind::CallSend,
                            selectorTok.line, selectorTok.column);
     n->text = selectorTok.text;
@@ -832,19 +929,36 @@ ast::NodePtr Parser::parseCallMethodDecl(Token classIdent, bool classSide,
     // Body: same termination rule as parseMethodDecl — stop at the next
     // top-level form (`Identifier '>>'`, `'class'`, `'subclass:'`) or EOF.
     while (current_.kind != TokenKind::EndOfFile) {
+        if (current_.blankLineBefore) { checkBlankLineContinuation(md.get()); break; }
+        // A statement that starts at column 1 on a later line, after the
+        // body's first statement, begins a new top-level form: method bodies
+        // are indented, so an unindented line is the program continuing.
+        if (current_.column == 1 && current_.line > classIdent.line && !md->children.empty()) {
+            // A return at column 1 can only belong to the method above:
+            // report it rather than run it as a top-level statement.
+            if (current_.kind == TokenKind::Caret)
+                error(current_, "unindented ^ after the method " + classIdent.text
+                      + ": indent method bodies (an unindented line starts a new top-level statement)");
+            break;
+        }
+        methodHeaderLine_ = classIdent.line;
         if (current_.kind == TokenKind::Identifier) {
             Token p = lexer_.peek();
             if (p.kind == TokenKind::GtGt) break;
-            if (p.kind == TokenKind::Identifier && p.text == "class") break;
+            if (p.kind == TokenKind::Identifier && p.text == "class"
+                && lexer_.peekSecond().kind == TokenKind::GtGt) break;
             if (p.kind == TokenKind::Keyword && p.text == "subclass:") break;
         }
         auto stmt = parseStatement();
-        bool isReturn = stmt && stmt->kind == ast::NodeKind::Return;
+        const bool isReturn = stmt && stmt->kind == ast::NodeKind::Return;
         if (stmt) md->children.push_back(std::move(stmt));
         if (!match(TokenKind::Period)) break;
-        if (isReturn) break;
+        // After a ^, what follows on the same line is the next top-level form
+        // (one-line style: `C >> m ^ 1. C new m.`); indented lines below stay
+        // in the method as unreachable code, as in Pharo.
+        if (isReturn && current_.line == prev_.line) break;
     }
-
+    methodHeaderLine_ = 0;
     return md;
 }
 

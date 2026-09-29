@@ -32,8 +32,28 @@ private:
     void   error(const Token& at, const std::string& msg);
     void   synchronize();
 
+    // A blank line ends a statement written directly in a method body or at
+    // top level, even without a closing period: the expression parser stops
+    // at a token preceded by a blank line. Parentheses, blocks and brace
+    // arrays clear the flag, so their contents may span blank lines.
+    bool   stopAtBlankLine_ = true;
+    // Line of the method declaration whose body is being parsed (0 outside a
+    // body): an unindented line after it also ends the body's statements.
+    int    methodHeaderLine_ = 0;
+    bool   atBlankLineBoundary() const {
+        return stopAtBlankLine_ && (current_.blankLineBefore
+            || (methodHeaderLine_ > 0 && current_.column == 1 && current_.line > methodHeaderLine_));
+    }
+    struct NestedExpressionScope {
+        Parser& p; bool saved;
+        explicit NestedExpressionScope(Parser& parser) : p(parser), saved(parser.stopAtBlankLine_) { p.stopAtBlankLine_ = false; }
+        ~NestedExpressionScope() { p.stopAtBlankLine_ = saved; }
+    };
+
     // grammar entry points (added in later tasks)
     ast::NodePtr parseTopForm();
+    bool atDeclarationStart();
+    void parseTopTemporaries(ast::Node& mod);
     ast::NodePtr parseStatement();
     ast::NodePtr parseExpression();
     ast::NodePtr parseAssignmentRHS(ast::NodePtr target);
@@ -49,6 +69,7 @@ private:
     ast::NodePtr parseLiteralArray(int openLine, int openCol);
     ast::NodePtr parseLiteralArrayElement();
     ast::NodePtr parseClassDecl(Token classIdent);
+    void checkBlankLineContinuation(const ast::Node* method);
     ast::NodePtr parseMethodDecl(Token classIdent, bool classSide);
     // Call-form support (protoCore-style positional + named args).
     // `selectorTok` is the Identifier that names the method; the `(` has

@@ -18,6 +18,12 @@
 //   conditionals containing `wait` are not. Lifting those primitives into
 //   the engine is future work.
 #include "ExecutionEngine.h"
+#include "runtime/PrimitiveMarker.h"
+
+namespace protoST {
+const proto::ProtoObject* raiseRejection(STRuntime& rt, proto::ProtoContext* ctx,
+                                         const proto::ProtoObject* error);
+}
 #include "BytecodeModule.h"
 #include "Bootstrap.h"
 #include "FutureYield.h"
@@ -26,6 +32,9 @@
 #include "Opcodes.h"
 #include "TransientPin.h"
 #include "NativeExceptionBridge.h"
+#include "Interrupt.h"
+
+#include <cstdint>
 #include "debugger/DebuggerRuntime.h"
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
@@ -39,7 +48,45 @@
 #include <string>
 #include <vector>
 
+namespace {
+// Messages about the actor REFERENCE, answered by the proxy itself instead of
+// being queued to the actor: identity and equality (so an actor can be found
+// in a collection), nil tests, and printing (as "a Thing (actor)", without
+// running the object's own printOn: on another thread). Everything else is
+// an asynchronous message answering a Future.
+bool isActorLocalSelector(const std::string& sel) {
+    static const char* const kLocal[] = {
+        "==", "~~", "=", "~=", "hash", "identityHash", "yourself",
+        "isNil", "notNil", "ifNil:", "ifNotNil:", "ifNil:ifNotNil:", "ifNotNil:ifNil:",
+        "printString", "printOn:", "displayString", "printNl", "displayNl",
+        "isActor", "__wrappedObject",
+    };
+    for (const char* l : kLocal) if (sel == l) return true;
+    return false;
+}
+} // namespace
+
+
+namespace {
+// A user-facing runtime error raised inside the dispatch loop: signalled as a
+// protoST Error (catchable by on: Error do:, reported with a trace when not),
+// like errors raised inside primitives.
+[[noreturn]] void signalCatchable(protoST::STRuntime& rt, proto::ProtoContext* ctx,
+                                  const std::string& message) {
+    protoST::signalNativeError(rt, ctx, message.c_str());
+    throw std::runtime_error(message);   // not reached: Error is not resumable
+}
+} // namespace
+
+
 namespace protoST {
+
+// Defined in object_prims.cpp: run a method by name, as a send does.
+const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* recv,
+                                      const proto::ProtoString* selector,
+                                      const proto::ProtoObject* const* args, int argc,
+                                      bool* understood);
 
 // COL-a: build a fresh Array instance wrapping the given protoCore ProtoList.
 // Defined in collection_prims.cpp; used here by the MAKE_ARRAY opcode handler.
@@ -107,11 +154,26 @@ inline std::string describeReceiverForDNU(proto::ProtoContext* ctx,
                                           const proto::ProtoObject* recv,
                                           const proto::ProtoString* classNameSym) {
     if (!recv || recv == PROTO_NONE) return " (receiver: nil)";
-    if (recv->isInteger(ctx))  return " (receiver class: SmallInteger)";
-    if (recv->isString(ctx))   return " (receiver class: String)";
+    if (recv->isInteger(ctx)) {
+        constexpr long long kMax = (1LL << 55) - 1;
+        const bool small = recv->compare(ctx, ctx->fromLong(kMax)) <= 0
+                        && recv->compare(ctx, ctx->fromLong(-kMax - 1)) >= 0;
+        return small ? " (receiver class: SmallInteger)" : " (receiver class: LargeInteger)";
+    }
+    if (recv->isString(ctx)) {
+        const proto::ProtoString* s = recv->asString(ctx);
+        return (s && reinterpret_cast<const proto::ProtoString*>(recv)->isSymbol())
+            ? " (receiver class: Symbol)" : " (receiver class: String)";
+    }
     if (recv->isBoolean(ctx))  return " (receiver class: Boolean)";
     if (recv->isFloat(ctx))    return " (receiver class: Float)";
     if (classNameSym) {
+        // The receiver is a class object: the message went to the class side.
+        const proto::ProtoObject* own = recv->getOwnAttributeDirect(ctx, classNameSym);
+        if (own && own != PROTO_NONE) {
+            if (const proto::ProtoString* s = own->asString(ctx))
+                return " (receiver class: " + s->toStdString(ctx) + " class)";
+        }
         const proto::ProtoObject* cname = recv->getAttribute(ctx, classNameSym);
         if (cname && cname != PROTO_NONE) {
             const proto::ProtoString* s = cname->asString(ctx);
@@ -134,6 +196,13 @@ inline unsigned int computeLocalCount(const BytecodeModule& m, unsigned int argc
     return std::max(m.cachedLocalCount(argc), kMinLocals);
 }
 
+// Operand-stack capacity of a frame: the fixed bound plus the elements the
+// module's largest brace array pushes (`{…}` with 49+ elements overflowed
+// the fixed 48 slots).
+inline unsigned int computeMaxStack(const BytecodeModule& m) {
+    return kFrameMaxStk + m.cachedMaxArrayOperand();
+}
+
 } // namespace
 
 // F6 v3 E5: definition of the thread-local transient-pin scratch cursor
@@ -144,12 +213,12 @@ inline unsigned int computeLocalCount(const BytecodeModule& m, unsigned int argc
 thread_local unsigned int g_scratchCursor = 0;
 
 // Compile-time consistency: the scratch geometry in TransientPin.h must match
-// this engine's slot capacity (8192), or a primitive would pin into slots the
+// this engine's slot capacity, or a primitive would pin into slots the
 // engine believes are free frame storage. ExecutionEngine::kSlotCapacity is
 // asserted equal to kEngineSlotCapacity inside pushFrame (a member function
 // with access to the private constant).
-static_assert(kEngineSlotCapacity == 8192,
-              "TransientPin scratch geometry assumes an 8192-slot engine context");
+static_assert(kEngineSlotCapacity == (1u << 20),
+              "TransientPin scratch geometry assumes a 2^20-slot engine context");
 
 // D8 (MNT-b2): per-thread registry of live ExecutionEngine instances.
 //
@@ -282,7 +351,7 @@ ExecutionEngine::pushFrame(const BytecodeModule* m,
     fr.m          = m;
     fr.pc         = 0;
     fr.localCount = computeLocalCount(*m, argc);
-    fr.maxStack   = kFrameMaxStk;
+    fr.maxStack   = computeMaxStack(*m);
     fr.sp         = 0;
     // Track 1 slice 1: assign frame identity. homeFrameId == 0 means "I am my
     // own home" — a method or top-level frame returns from itself. A non-zero
@@ -344,6 +413,81 @@ ExecutionEngine::popFrame() {
     frames_.pop_back();
 }
 
+// Nesting guard for engines. Primitives such as do: run their block through a
+// nested engine on the native stack (about 4.6 KB per level), so recursion
+// through blocks would exhaust the thread's stack long before the slot region.
+// Like protoPython's RecursionScope, the limit is a depth count, not a query of
+// the native thread: g_liveEngines already holds this thread's nested engines.
+// 1,000 levels use about 4.6 MB, within the 8 MB default stack of a ProtoThread.
+namespace {
+constexpr std::size_t kMaxNestedEngines = 1000;
+} // namespace
+
+// A send the receiver does not understand. If the receiver's class defines
+// doesNotUnderstand: in Smalltalk (a proxy, a forwarder), that method runs
+// with a Message and answers for the send; otherwise a resumable
+// MessageNotUnderstood carrying the receiver and the Message is signalled.
+const proto::ProtoObject* ExecutionEngine::doesNotUnderstand(
+        proto::ProtoContext* ctx, const proto::ProtoObject* recv,
+        const std::string& selector, const proto::ProtoObject* const* args, int argc) {
+    const proto::ProtoObject* message = makeMessage(rt_, ctx, selector, args, argc);
+    TransientPin pinMessage(ctx, message);
+    const proto::ProtoString* dnuKey =
+        proto::ProtoString::createSymbol(ctx, "doesNotUnderstand:");
+    const proto::ProtoObject* holder =
+        (recv && recv != PROTO_NONE) ? recv : rt_.bootstrap().nilProto;
+    const proto::ProtoObject* handler = holder->getAttribute(ctx, dnuKey);
+    if (handler && handler != PROTO_NONE) {
+        const proto::ProtoObject* bc = handler->getAttribute(ctx, rt_.bootstrap().sym.bcPtr);
+        if (bc && bc != PROTO_NONE) {
+            bool understood = false;
+            const proto::ProtoObject* a1[1] = { message };
+            return sendDynamic(rt_, ctx, recv, dnuKey, a1, 1, &understood);
+        }
+    }
+    const std::string text = "doesNotUnderstand: " + selector
+        + describeReceiverForDNU(ctx, recv, rt_.bootstrap().sym.className);
+    return signalMessageNotUnderstood(rt_, ctx, recv, message, text.c_str());
+}
+
+std::string ExecutionEngine::describeActiveStack(std::size_t maxFrames) {
+    std::string out;
+    std::size_t shown = 0, total = 0;
+    for (std::size_t e = g_liveEngines.size(); e-- > 0; ) {
+        const auto& frames = g_liveEngines[e]->frames_;
+        for (std::size_t i = frames.size(); i-- > 0; ) {
+            ++total;
+            if (shown >= maxFrames) continue;
+            const Frame& f = frames[i];
+            if (!f.m) continue;
+            std::string name = f.m->debugName().empty() ? "<unknown>" : f.m->debugName();
+            const int line = f.m->lineForPc(f.pc > 0 ? f.pc - kInstrSize : 0);
+            out += "  at " + name + " (" + (f.m->sourceName().empty() ? "?" : f.m->sourceName())
+                 + ":" + std::to_string(line) + ")\n";
+            ++shown;
+        }
+    }
+    if (total > shown) out += "  ... " + std::to_string(total - shown) + " more\n";
+    if (!out.empty()) out.pop_back();
+    return out;
+}
+
+// Stack-depth guard, checked before every frame push of a send. Frame regions
+// stop kOverflowReserve slots short of the scratch region, so the handler that
+// catches the overflow (and any ensure: block it unwinds) still has room to
+// run. The overflow is an ordinary Error, catchable by on:do: at any level.
+bool ExecutionEngine::signalIfTooDeep(proto::ProtoContext* ctx, Frame& f,
+                                      const BytecodeModule* m, unsigned int argc) {
+    const unsigned int regionEnd =
+        g_slotCursor + kHeaderSlots + computeLocalCount(*m, argc) + computeMaxStack(*m);
+    if (regionEnd <= kFrameRegionLimit - kOverflowReserve) return false;
+    const std::string msg = "stack depth exceeded (" + std::to_string(frames_.size())
+        + " frames in this activation chain)";
+    auto* r = signalErrorOfClass(rt_, ctx, rt_.bootstrap().errorProto, msg.c_str());
+    push(f, r ? r : PROTO_NONE);
+    return true;
+}
+
 const proto::ProtoObject*
 ExecutionEngine::run(proto::ProtoContext* ctx,
                      const BytecodeModule& m,
@@ -369,6 +513,11 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
     // running (not parked at a safepoint) during the resize, so a concurrent
     // stop-the-world GC cannot proceed mid-realloc — it needs every thread
     // parked first. No new ProtoContext is ever created.
+    // Nesting guard (see kMaxNestedEngines): reported as the same catchable
+    // "stack depth exceeded" Error -- the primitive boundary translates it --
+    // never a crash. This engine is already registered, hence ">".
+    if (g_liveEngines.size() > kMaxNestedEngines)
+        throw std::runtime_error("stack depth exceeded (nested block evaluation)");
     ctx_ = ctx;
     ctx_->resizeAutomaticLocals(kSlotCapacity);
 
@@ -428,6 +577,7 @@ const bool ExecutionEngine::gcSafepointEnabled_ =
 
 void ExecutionEngine::gcSafepoint(proto::ProtoContext* ctx) const {
     if (gcSafepointEnabled_ && ctx) ctx->safepoint();
+    pollInterrupt(ctx);
 }
 
 const proto::ProtoObject*
@@ -521,6 +671,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     labels[static_cast<unsigned int>(Op::DUP_RECEIVER)]     = &&L_DUP_RECEIVER;
     labels[static_cast<unsigned int>(Op::PUSH_CAPTURED)]    = &&L_PUSH_CAPTURED;
     labels[static_cast<unsigned int>(Op::STORE_CAPTURED)]   = &&L_STORE_CAPTURED;
+    labels[static_cast<unsigned int>(Op::DEFINE_CAPTURED)]  = &&L_DEFINE_CAPTURED;
+    labels[static_cast<unsigned int>(Op::STORE_CLASSVAR)]   = &&L_STORE_CLASSVAR;
+    labels[static_cast<unsigned int>(Op::PUSH_OWN_INSTVAR)] = &&L_PUSH_OWN_INSTVAR;
     labels[static_cast<unsigned int>(Op::PUSH_GLOBAL)]      = &&L_PUSH_GLOBAL;
     labels[static_cast<unsigned int>(Op::STORE_GLOBAL)]     = &&L_STORE_GLOBAL;
     labels[static_cast<unsigned int>(Op::PUSH_INSTVAR)]     = &&L_PUSH_INSTVAR;
@@ -1007,7 +1160,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // is pushed onto the operand stack as the apparent result of
                 // the send. The actual method execution happens later when
                 // STRuntime::drainOne pulls a message from the mailbox.
-                if (rt_.isActor(ctx, recv)) {
+                if (rt_.isActor(ctx, recv) && !isActorLocalSelector(selStr)) {
                     const proto::ProtoString* msgSelKey =
                         rt_.bootstrap().sym.selector;
                     const proto::ProtoString* msgArgsKey =
@@ -1022,6 +1175,10 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // of which allocate. Pin it.
                     auto* fut = const_cast<proto::ProtoObject*>(rt_.newFuture(ctx));
                     TransientPin pinFut(ctx, fut);
+                    // The actor that will settle this future: Future>>wait
+                    // follows it to detect a cycle of actors waiting on each
+                    // other (see detectWaitCycle in future_prims.cpp).
+                    fut->setAttribute(ctx, rt_.bootstrap().sym.targetActor, recv);
 
                     // Build the message envelope. F6 v6 (2026-05-23 night):
                     // the envelope is built IMMUTABLE. After construction
@@ -1142,10 +1299,14 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                                 reinterpret_cast<const protoST::BytecodeModule*>(
                                     recvBcPtr->asLong(ctx));
                             if (sub->argCount() != argcOp) {
-                                throw std::runtime_error(
+                                // A catchable Error (with the trace when
+                                // unhandled), like any other runtime error.
+                                const std::string msg =
                                     "block arg count mismatch (expected " +
                                     std::to_string(sub->argCount()) +
-                                    ", got " + std::to_string(argcOp) + ")");
+                                    ", got " + std::to_string(argcOp) + ")";
+                                signalNativeError(rt_, ctx, msg.c_str());
+                                throw std::runtime_error(msg);   // not reached: Error is not resumable
                             }
                             auto* capDict = recv->getAttribute(ctx, recvCapKey);
                             if (!capDict || capDict == PROTO_NONE) capDict = nullptr;
@@ -1178,6 +1339,10 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                                 recv->getAttribute(ctx, recvBlkSelfKey);
                             if (!blkSelf || blkSelf == PROTO_NONE)
                                 blkSelf = PROTO_NONE;
+                            if (signalIfTooDeep(ctx, f, sub,
+                                    static_cast<unsigned int>(argcOp))) {
+                                DISPATCH_DIRECT();
+                            }
                             pushFrame(sub, /*self=*/blkSelf, capDict,
                                       sendArgs,
                                       static_cast<unsigned int>(argcOp),
@@ -1411,12 +1576,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // top level / REPL. `UnwindToHandler` from a `return:`
                     // handler propagates out of runLoop untouched (the engine
                     // does not catch it) straight to the owning `on:do:`.
-                    std::string mntMsg = "doesNotUnderstand: " + selStr
-                        + describeReceiverForDNU(ctx, recv,
-                                                 rt_.bootstrap().sym.className);
-                    auto* r = signalErrorOfClass(
-                        rt_, ctx, rt_.bootstrap().messageNotUnderstoodProto,
-                        mntMsg.c_str());
+                    auto* r = doesNotUnderstand(ctx, recv, selStr, sendArgs,
+                                                static_cast<int>(argcOp));
                     // A resumable handler (`resume:`) would let `signalInstance`
                     // return a value here — push it as the send's result. A
                     // MessageNotUnderstood is non-resumable, so in practice the
@@ -1466,6 +1627,10 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     methodArgs[0] = recv;
                     for (int i = 0; i < argcOp; ++i)
                         methodArgs[i + 1] = sendArgs[i];
+                    if (signalIfTooDeep(ctx, f, sub,
+                            static_cast<unsigned int>(argcOp) + 1)) {
+                        DISPATCH_DIRECT();
+                    }
                     pushFrame(sub, /*self=*/recv, capDict, methodArgs,
                               static_cast<unsigned int>(argcOp) + 1);
                     // `f` is now invalidated by the vector growth (when it
@@ -1492,7 +1657,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         "only unary sends read value attributes");
                 }
                 long long marker = attr->asLong(ctx);
-                if (!(marker & (1LL << 62))) {
+                if (!isPrimitiveMarker(marker)) {
                     // Plain integer value stored as an attribute — same
                     // member-access rule as above.
                     if (argcOp == 0) {
@@ -1504,7 +1669,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         "#" + selStr + ": the attribute is a value, not a method; "
                         "only unary sends read value attributes");
                 }
-                int primIdx = static_cast<int>(marker & ((1LL << 62) - 1));
+                int primIdx = primitiveMarkerIndex(marker);
                 auto fn = rt_.registry().at(primIdx);
                 // F6 v3 A note: this primitive call MAY itself end up
                 // invoking invokeBlock() (e.g. ifTrue:, thenDo:, value)
@@ -1600,7 +1765,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 const int callNNamed  = static_cast<int>(desc.sortedKeys.size());
                 const int callTotal   = callNPos + callNNamed;
                 if (callTotal > 16) {
-                    throw std::runtime_error(
+                    signalCatchable(rt_, ctx, 
                         "SEND_CALL: more than 16 args not supported (v1 limit): "
                         + desc.mangled);
                 }
@@ -1625,7 +1790,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // would need a new message-envelope shape that drainOne
                 // does not yet decode. Tracked as a v2 follow-up.
                 if (rt_.isActor(ctx, recv)) {
-                    throw std::runtime_error(
+                    signalCatchable(rt_, ctx, 
                         "call-form send to an actor is not supported in v1: "
                         + desc.mangled);
                 }
@@ -1635,12 +1800,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 const proto::ProtoObject* attr =
                     recv->getAttribute(ctx, desc.name);
                 if (!attr || attr == PROTO_NONE) {
-                    std::string mntMsg = "doesNotUnderstand: " + desc.mangled
-                        + describeReceiverForDNU(ctx, recv,
-                                                 rt_.bootstrap().sym.className);
-                    auto* r = signalErrorOfClass(
-                        rt_, ctx, rt_.bootstrap().messageNotUnderstoodProto,
-                        mntMsg.c_str());
+                    auto* r = doesNotUnderstand(ctx, recv, desc.mangled, nullptr, 0);
                     push(f, r ? r : PROTO_NONE);
                     DISPATCH_DIRECT();
                     break;
@@ -1659,7 +1819,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         // but it was declared with Smalltalk syntax. Reject
                         // with a clear message — call-form and Smalltalk
                         // methods are distinct attributes by design.
-                        throw std::runtime_error(
+                        signalCatchable(rt_, ctx, 
                             "method '" + std::string(desc.name->toStdString(ctx))
                             + "' is not a call-form method; called as "
                             + desc.mangled);
@@ -1668,7 +1828,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     const auto& declKeys = sub->callNamedKeys();
                     const int declNNamed = static_cast<int>(declKeys.size());
                     if (callNPos != declNPos) {
-                        throw std::runtime_error(
+                        signalCatchable(rt_, ctx, 
                             "call-form method " + std::string(
                                 desc.name->toStdString(ctx))
                             + " expects " + std::to_string(declNPos)
@@ -1697,7 +1857,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                             const std::string callKey =
                                 desc.sortedKeys[callCursor]->toStdString(ctx);
                             if (callKey < declKey) {
-                                throw std::runtime_error(
+                                signalCatchable(rt_, ctx, 
                                     "call-form method " + std::string(
                                         desc.name->toStdString(ctx))
                                     + " does not accept named arg '"
@@ -1723,7 +1883,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     if (callCursor < callNNamed) {
                         std::string foreign =
                             desc.sortedKeys[callCursor]->toStdString(ctx);
-                        throw std::runtime_error(
+                        signalCatchable(rt_, ctx, 
                             "call-form method " + std::string(
                                 desc.name->toStdString(ctx))
                             + " does not accept named arg '" + foreign + "'");
@@ -1738,6 +1898,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         throw std::runtime_error(
                             "internal: call-form module argCount mismatch for "
                             + std::string(desc.name->toStdString(ctx)));
+                    }
+                    if (signalIfTooDeep(ctx, f, sub, totalArgs)) {
+                        DISPATCH_DIRECT();
                     }
                     pushFrame(sub, /*self=*/recv, capDict, methodArgs,
                               totalArgs);
@@ -1756,14 +1919,14 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // Primitive marker? Reserve for v2 — assert no named args.
                 if (attr->isInteger(ctx)) {
                     long long marker = attr->asLong(ctx);
-                    if (marker & (1LL << 62)) {
+                    if (isPrimitiveMarker(marker)) {
                         if (callNNamed > 0) {
-                            throw std::runtime_error(
+                            signalCatchable(rt_, ctx, 
                                 "primitive method '"
                                 + std::string(desc.name->toStdString(ctx))
                                 + "' does not accept named args in v1");
                         }
-                        int primIdx = static_cast<int>(marker & ((1LL << 62) - 1));
+                        int primIdx = primitiveMarkerIndex(marker);
                         auto fn = rt_.registry().at(primIdx);
                         auto* result = translateNativeException(
                             rt_, ctx,
@@ -1775,12 +1938,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 }
 
                 // Non-zero args on a non-method attribute is an error.
-                std::string mntMsg = "doesNotUnderstand: " + desc.mangled
-                    + describeReceiverForDNU(ctx, recv,
-                                             rt_.bootstrap().sym.className);
-                auto* r = signalErrorOfClass(
-                    rt_, ctx, rt_.bootstrap().messageNotUnderstoodProto,
-                    mntMsg.c_str());
+                auto* r = doesNotUnderstand(ctx, recv, desc.mangled, nullptr, 0);
                 push(f, r ? r : PROTO_NONE);
                 DISPATCH_DIRECT();
                 break;
@@ -1826,17 +1984,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // UnhandledSTException otherwise — matching the
                 // pre-inline behaviour exactly.
                 const std::string& selStr = f.m->constSymbol(arg);
-                std::string mntMsg = "doesNotUnderstand: " + selStr;
                 // Pop the bad value before we signal so the operand
                 // stack is the same shape the non-inlined SEND would
-                // have left it in. Use it to enrich the message with
-                // the receiver class — same DX as the SEND DNU path.
+                // have left it in.
                 const proto::ProtoObject* badRecv = pop(f);
-                mntMsg += describeReceiverForDNU(
-                    ctx, badRecv, rt_.bootstrap().sym.className);
-                auto* r = signalErrorOfClass(
-                    rt_, ctx, rt_.bootstrap().messageNotUnderstoodProto,
-                    mntMsg.c_str());
+                auto* r = doesNotUnderstand(ctx, badRecv, selStr, nullptr, 0);
                 // A resumed handler would push `r` as the message's
                 // apparent result; non-resumable MNU normally threw.
                 push(f, r ? r : PROTO_NONE);
@@ -1884,6 +2036,31 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // frame slot; `sym` is reachable from nowhere — pin it.
                 TransientPin pinSym(
                     ctx, reinterpret_cast<const proto::ProtoObject*>(sym));
+                // Write to the dict that owns the name: the innermost
+                // activation up the parent chain that binds it. Each
+                // activation binds its declared captured names on entry, so
+                // the owner exists; a name bound nowhere yet lands here.
+                const proto::ProtoObject* owner = capD;
+                for (const proto::ProtoObject* d = capD;
+                     d && d != PROTO_NONE && d != rt_.bootstrap().objectProto;
+                     d = d->getFirstParent(ctx)) {
+                    if (d->hasOwnAttribute(ctx, sym) == PROTO_TRUE) { owner = d; break; }
+                }
+                const_cast<proto::ProtoObject*>(owner)->setAttribute(ctx, sym, val);
+                DISPATCH_DIRECT();
+                break;
+            }
+            case Op::DEFINE_CAPTURED: L_DEFINE_CAPTURED: {
+                Frame& f = frames_.back();
+                if (f.sp == 0)
+                    throw std::runtime_error("DEFINE_CAPTURED with empty stack");
+                const proto::ProtoObject* val = pop(f);
+                const proto::ProtoObject* capD = getCaptured(f);
+                if (!capD || capD == PROTO_NONE)
+                    throw std::runtime_error("DEFINE_CAPTURED without captured dict");
+                auto* sym = f.m->constSym(ctx, arg);
+                TransientPin pinSym(
+                    ctx, reinterpret_cast<const proto::ProtoObject*>(sym));
                 const_cast<proto::ProtoObject*>(capD)->setAttribute(ctx, sym, val);
                 DISPATCH_DIRECT();
                 break;
@@ -1895,8 +2072,12 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 auto* sym = f.m->constSym(ctx, arg);
                 auto* g = rt_.globals();
                 auto* val = g ? g->getAttribute(ctx, sym) : nullptr;
-                if (!val || val == PROTO_NONE)
-                    throw std::runtime_error("undefined global: " + nameStr);
+                if (!val || val == PROTO_NONE) {
+                    // A catchable Error (with the trace when unhandled).
+                    const std::string msg = "undefined global: " + nameStr;
+                    signalNativeError(rt_, ctx, msg.c_str());
+                    throw std::runtime_error(msg);   // not reached: Error is not resumable
+                }
                 push(f, val);
                 DISPATCH_DIRECT();
                 break;
@@ -1977,23 +2158,59 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 DISPATCH_DIRECT();
                 break;
             }
+            case Op::PUSH_OWN_INSTVAR: L_PUSH_OWN_INSTVAR: {
+                Frame& f = frames_.back();
+                auto* sym = f.m->ivSymbol(ctx, arg);
+                const proto::ProtoObject* self = getSelf(f);
+                const proto::ProtoObject* val = nullptr;
+                if (self && self != PROTO_NONE && self->hasOwnAttribute(ctx, sym) == PROTO_TRUE)
+                    val = self->getAttribute(ctx, sym);
+                push(f, val ? val : PROTO_NONE);
+                DISPATCH_DIRECT();
+                break;
+            }
+            case Op::STORE_CLASSVAR: L_STORE_CLASSVAR: {
+                Frame& f = frames_.back();
+                if (f.sp == 0)
+                    throw std::runtime_error("STORE_CLASSVAR empty stack");
+                const proto::ProtoObject* val = pop(f);
+                auto* sym = f.m->ivSymbol(ctx, arg);
+                TransientPin pinSym(
+                    ctx, reinterpret_cast<const proto::ProtoObject*>(sym));
+                const proto::ProtoObject* self = getSelf(f);
+                if (!self || self == PROTO_NONE)
+                    throw std::runtime_error("STORE_CLASSVAR self is null");
+                // The declaring class owns the variable (installed as an own
+                // attribute when the class was declared).
+                const proto::ProtoObject* owner = nullptr;
+                for (const proto::ProtoObject* p = self; p && p != PROTO_NONE;
+                     p = p->getFirstParent(ctx)) {
+                    if (p->hasOwnAttribute(ctx, sym) == PROTO_TRUE) { owner = p; break; }
+                    if (p == rt_.bootstrap().objectProto) break;
+                }
+                if (!owner) owner = self;   // defensive: a class var always has an owner
+                const_cast<proto::ProtoObject*>(owner)->setAttribute(ctx, sym, val);
+                DISPATCH_DIRECT();
+                break;
+            }
             case Op::MAKE_CAPTURED: L_MAKE_CAPTURED: {
                 Frame& f = frames_.back();
-                // CLO Part 2: allocate a fresh per-method (or per-block)
-                // captured dict and install it in frame slot 0, where
-                // getCaptured / PUSH_CAPTURED / STORE_CAPTURED read it. The
-                // compiler emits this in the prologue of a method whose
-                // captured set is non-empty, before any STORE_CAPTURED. A
-                // nested block does NOT emit it — PUSH_BLOCK already stamped
-                // the block with the creating frame's captured dict.
-                auto* dict = const_cast<proto::ProtoObject*>(
-                                 rt_.bootstrap().objectProto)
+                // Install a fresh captured dict in frame slot 0, where
+                // getCaptured / PUSH_CAPTURED / STORE_CAPTURED read it.
+                //   arg 0: a method's root dict (its prologue, when inner
+                //          blocks capture anything).
+                //   arg 1: a block activation that declares captured names:
+                //          a child of the dict the block inherited through
+                //          PUSH_BLOCK, so each activation has its own
+                //          bindings and reaches enclosing ones through the
+                //          parent chain.
+                const proto::ProtoObject* parent = rt_.bootstrap().objectProto;
+                if (arg == 1) {
+                    const proto::ProtoObject* inherited = getCaptured(f);
+                    if (inherited && inherited != PROTO_NONE) parent = inherited;
+                }
+                auto* dict = const_cast<proto::ProtoObject*>(parent)
                                  ->newChild(ctx, /*isMutable=*/true);
-                // `dict` is a fresh mutable object reachable from nowhere the
-                // GC traces until setCaptured lands it in the frame's slot 0.
-                // setAutomaticLocal does not allocate, so a TransientPin is
-                // strictly needed only if anything allocated between newChild
-                // and the store — nothing does. Pin defensively anyway.
                 TransientPin pinDict(ctx, dict);
                 setCaptured(f, dict);
                 DISPATCH_DIRECT();
@@ -2590,7 +2807,7 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
             computeLocalCount(*m, 0),
             static_cast<unsigned int>(locN));
         fr.maxStack   = std::max<unsigned int>(
-            kFrameMaxStk, static_cast<unsigned int>(opN));
+            computeMaxStack(*m), static_cast<unsigned int>(opN));
         fr.sp         = static_cast<unsigned int>(opN);
         fr.baseSlot   = g_slotCursor;
         // Track 1 slice 1: restore the global ids verbatim — no renumbering,
@@ -2654,15 +2871,13 @@ ExecutionEngine::resumeWith(proto::ProtoContext* ctx,
                             const proto::ProtoObject* value,
                             const proto::ProtoObject* error) {
     if (error) {
-        std::string msg = "Future rejected: ";
-        // Best-effort string materialisation — error is the same object the
-        // future stored under __error__, which Future>>wait would have
-        // formatted via asString. We mirror that here so the rejection
-        // surface is identical between the synchronous-wait and resume
-        // paths.
-        auto* es = error->asString(ctx);
-        if (es) msg += es->toStdString(ctx);
-        throw std::runtime_error(msg);
+        // The same raise as a synchronous Future>>wait on a rejected future:
+        // an exception instance is re-signalled, anything else becomes an
+        // Error carrying its text.
+        const proto::ProtoObject* v = raiseRejection(rt_, ctx, error);
+        if (frames_.empty()) return;
+        push(frames_.back(), v ? v : PROTO_NONE);
+        return;
     }
     if (frames_.empty()) {
         // No frames to resume — restoreFrames must have been called with an

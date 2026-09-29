@@ -1,6 +1,8 @@
 #include "protoST/STRuntime.h"
+#include "runtime/ZeroDivideSignal.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
+#include "runtime/TransientPin.h"
 #include "runtime/ValueFormat.h"
 #include "protoCore.h"
 
@@ -8,6 +10,9 @@
 #include <cstdio>
 #include <stdexcept>
 #include <string>
+#include <cstdlib>
+#include <cctype>
+#include <algorithm>
 #include <vector>
 
 namespace protoST {
@@ -87,37 +92,89 @@ const proto::ProtoObject* prim_StrAt(STRuntime&, proto::ProtoContext* ctx,
                                       const proto::ProtoObject* r,
                                       const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw std::runtime_error("String>>at: expects 1 arg (index)");
-    std::vector<uint32_t> cps = decodeCodepoints(toUtf8(r, ctx));
-    long long idx = a[0]->asLong(ctx);
-    if (idx < 1 || idx > static_cast<long long>(cps.size())) {
-        throw std::runtime_error("String>>at: index out of bounds");
-    }
-    return ctx->fromUTF8String(encodeCodepoint(cps[idx - 1]).c_str());
+    const proto::ProtoString* str = r->asString(ctx);
+    if (!a[0]->isInteger(ctx)) throw std::runtime_error("String>>at: expects an Integer index");
+    const long long idx = a[0]->asLong(ctx);
+    const long long size = str ? static_cast<long long>(str->getSize(ctx)) : 0;
+    if (idx < 1 || idx > size)
+        throw ClassedErrorSignal("SubscriptOutOfBounds", "String>>at: index " + std::to_string(idx)
+                                 + " out of bounds (size " + std::to_string(size) + ")");
+    // protoCore answers the element as a Character (an embedded unicode char),
+    // without decoding the whole string.
+    return str->getAt(ctx, static_cast<int>(idx - 1));
 }
 
-// String>>asInteger — the Unicode code point of the first character.
-// Answers nil for the empty string.
+// String>>asInteger / asNumber — parse the text as a number (Pharo), answering
+// nil when it is not one. A long integer becomes a LargeInteger.
+const proto::ProtoObject* parseNumber(proto::ProtoContext* ctx, const std::string& raw,
+                                      bool integerOnly) {
+    size_t b = 0, e = raw.size();
+    while (b < e && std::isspace(static_cast<unsigned char>(raw[b]))) ++b;
+    while (e > b && std::isspace(static_cast<unsigned char>(raw[e - 1]))) --e;
+    const std::string t = raw.substr(b, e - b);
+    if (t.empty()) return PROTO_NONE;
+    size_t i = (t[0] == '-' || t[0] == '+') ? 1 : 0;
+    size_t digits = 0;
+    while (i < t.size() && std::isdigit(static_cast<unsigned char>(t[i]))) { ++i; ++digits; }
+    if (digits == 0) return PROTO_NONE;
+    if (i == t.size() || integerOnly) {
+        const std::string intText = t.substr(0, i);
+        try {
+            return ctx->fromLong(std::stoll(intText));
+        } catch (const std::out_of_range&) {
+            return ctx->fromString(intText[0] == '+' ? intText.c_str() + 1 : intText.c_str(), 10);
+        }
+    }
+    // The rest must be a Smalltalk fraction part and/or exponent: `.digits`,
+    // `e[-]digits`. strtod alone would also accept hex ('0x10'), 'inf', 'nan'.
+    size_t j = i;
+    if (j < t.size() && t[j] == '.') {
+        size_t fd = 0;
+        for (++j; j < t.size() && std::isdigit(static_cast<unsigned char>(t[j])); ++j) ++fd;
+        if (fd == 0) {
+            // '3.' reads as 3 (the period ends the number, as in source).
+            if (j == t.size()) return parseNumber(ctx, t.substr(0, i), true);
+            return PROTO_NONE;
+        }
+    }
+    if (j < t.size() && (t[j] == 'e' || t[j] == 'E')) {
+        size_t ed = 0;
+        ++j;
+        if (j < t.size() && (t[j] == '-' || t[j] == '+')) ++j;
+        for (; j < t.size() && std::isdigit(static_cast<unsigned char>(t[j])); ++j) ++ed;
+        if (ed == 0) return PROTO_NONE;
+    }
+    if (j != t.size()) return PROTO_NONE;
+    char* end = nullptr;
+    const double d = std::strtod(t.c_str(), &end);
+    if (end != t.c_str() + t.size()) return PROTO_NONE;
+    return ctx->fromDouble(d);
+}
+
 const proto::ProtoObject* prim_StrAsInteger(STRuntime&, proto::ProtoContext* ctx,
                                              const proto::ProtoObject* r,
                                              const proto::ProtoObject* const*, int) {
-    std::vector<uint32_t> cps = decodeCodepoints(toUtf8(r, ctx));
-    if (cps.empty()) return PROTO_NONE;
-    return ctx->fromLong(static_cast<long long>(cps[0]));
+    return parseNumber(ctx, toUtf8(r, ctx), /*integerOnly=*/true);
 }
 
-// Number>>asCharacter — the code point as a 1-character String. The inverse of
-// String>>asInteger; bound on the number prototype.
+const proto::ProtoObject* prim_StrAsNumber(STRuntime&, proto::ProtoContext* ctx,
+                                            const proto::ProtoObject* r,
+                                            const proto::ProtoObject* const*, int) {
+    return parseNumber(ctx, toUtf8(r, ctx), /*integerOnly=*/false);
+}
+
+// Integer>>asCharacter — the Character with that code point.
 const proto::ProtoObject* prim_NumAsCharacter(STRuntime&, proto::ProtoContext* ctx,
                                                const proto::ProtoObject* r,
                                                const proto::ProtoObject* const*, int) {
+    if (!r->isInteger(ctx)) throw std::runtime_error("asCharacter expects an Integer");
     long long cp = r->asLong(ctx);
-    if (cp < 0 || cp > 0x10FFFF) {
-        throw std::runtime_error("Number>>asCharacter argument out of Unicode range");
-    }
-    return ctx->fromUTF8String(encodeCodepoint(static_cast<uint32_t>(cp)).c_str());
+    if (cp < 0 || cp > 0x10FFFF)
+        throw std::runtime_error("asCharacter: " + std::to_string(cp) + " is not a Unicode code point");
+    return ctx->fromUnicodeChar(static_cast<unsigned int>(cp));
 }
 
-const proto::ProtoObject* prim_StrConcat(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_StrConcat(STRuntime& rt, proto::ProtoContext* ctx,
                                           const proto::ProtoObject* r,
                                           const proto::ProtoObject* const* a, int) {
     // Rope-aware fast path: protoCore strings carry a rope spine, and
@@ -142,9 +199,17 @@ const proto::ProtoObject* prim_StrConcat(STRuntime&, proto::ProtoContext* ctx,
         const proto::ProtoString* concatenated = lhs->appendLast(ctx, rhs);
         if (concatenated) return concatenated->asObject(ctx);
     }
-    // Fall back to UTF-8 materialisation for receivers whose `asString`
-    // does not surface a ProtoString (e.g. a subclass overriding it to
-    // return nil, or a non-string mistakenly fed to `,`).
+    // A Character argument is appended ('x' , Character cr). Any other
+    // non-string argument is an error; it used to be dropped silently
+    // ('x' , 3 answered 'x').
+    if (!rhs && !a[0]->isInteger(ctx) && a[0]->getPrototype(ctx) == rt.bootstrap().characterProto) {
+        const std::string out = toUtf8(r, ctx)
+            + encodeCodepoint(static_cast<uint32_t>(a[0]->asLong(ctx)));
+        return ctx->fromUTF8String(out.c_str());
+    }
+    if (!rhs)
+        throw std::runtime_error("Cannot append a non-string to a String "
+                                 "(use printString or displayString to convert it)");
     std::string out = toUtf8(r, ctx) + toUtf8(a[0], ctx);
     return ctx->fromUTF8String(out.c_str());
 }
@@ -186,6 +251,211 @@ const proto::ProtoObject* prim_PrintNl(STRuntime& rt, proto::ProtoContext* ctx,
     return r;
 }
 
+
+// --- Character ------------------------------------------------------------
+// A Character is protoCore's embedded unicode-char value; asLong answers its
+// code point.
+const proto::ProtoObject* prim_CharValue(STRuntime&, proto::ProtoContext* ctx,
+                                         const proto::ProtoObject* r,
+                                         const proto::ProtoObject* const*, int) {
+    return ctx->fromLong(r->asLong(ctx));
+}
+
+const proto::ProtoObject* prim_CharAsString(STRuntime&, proto::ProtoContext* ctx,
+                                            const proto::ProtoObject* r,
+                                            const proto::ProtoObject* const*, int) {
+    return ctx->fromUTF8String(encodeCodepoint(static_cast<uint32_t>(r->asLong(ctx))).c_str());
+}
+
+// --- String operations over UTF-8 code points ---------------------------------
+std::string encodeAll(const std::vector<uint32_t>& cps, size_t from, size_t to) {
+    std::string out;
+    for (size_t i = from; i < to && i < cps.size(); ++i) out += encodeCodepoint(cps[i]);
+    return out;
+}
+
+const proto::ProtoObject* prim_StrCopyFromTo(STRuntime&, proto::ProtoContext* ctx,
+                                             const proto::ProtoObject* r,
+                                             const proto::ProtoObject* const* a, int argc) {
+    if (argc != 2) throw std::runtime_error("copyFrom:to: expects 2 args");
+    const std::vector<uint32_t> cps = decodeCodepoints(toUtf8(r, ctx));
+    const long long from = a[0]->asLong(ctx), to = a[1]->asLong(ctx);
+    if (to < from) return ctx->fromUTF8String("");
+    if (from < 1 || to > static_cast<long long>(cps.size()))
+        throw ClassedErrorSignal("SubscriptOutOfBounds", "copyFrom:to: range " + std::to_string(from) + " to "
+                                 + std::to_string(to) + " out of bounds (size "
+                                 + std::to_string(cps.size()) + ")");
+    return ctx->fromUTF8String(encodeAll(cps, static_cast<size_t>(from - 1),
+                                         static_cast<size_t>(to)).c_str());
+}
+
+uint32_t caseMap(uint32_t cp, bool upper) {
+    if (cp < 0x80) return upper ? static_cast<uint32_t>(std::toupper(static_cast<int>(cp)))
+                                : static_cast<uint32_t>(std::tolower(static_cast<int>(cp)));
+    // Latin-1 letters (a-grave .. thorn), except the multiplication/division signs.
+    if (upper && cp >= 0xE0 && cp <= 0xFE && cp != 0xF7) return cp - 0x20;
+    if (!upper && cp >= 0xC0 && cp <= 0xDE && cp != 0xD7) return cp + 0x20;
+    return cp;
+}
+
+const proto::ProtoObject* mapCase(proto::ProtoContext* ctx, const proto::ProtoObject* r, bool upper) {
+    std::vector<uint32_t> cps = decodeCodepoints(toUtf8(r, ctx));
+    for (auto& cp : cps) cp = caseMap(cp, upper);
+    return ctx->fromUTF8String(encodeAll(cps, 0, cps.size()).c_str());
+}
+
+const proto::ProtoObject* prim_StrAsUppercase(STRuntime&, proto::ProtoContext* ctx,
+                                              const proto::ProtoObject* r,
+                                              const proto::ProtoObject* const*, int) {
+    return mapCase(ctx, r, true);
+}
+
+const proto::ProtoObject* prim_StrAsLowercase(STRuntime&, proto::ProtoContext* ctx,
+                                              const proto::ProtoObject* r,
+                                              const proto::ProtoObject* const*, int) {
+    return mapCase(ctx, r, false);
+}
+
+const proto::ProtoObject* prim_CharAsUppercase(STRuntime&, proto::ProtoContext* ctx,
+                                               const proto::ProtoObject* r,
+                                               const proto::ProtoObject* const*, int) {
+    return ctx->fromUnicodeChar(caseMap(static_cast<uint32_t>(r->asLong(ctx)), true));
+}
+
+const proto::ProtoObject* prim_CharAsLowercase(STRuntime&, proto::ProtoContext* ctx,
+                                               const proto::ProtoObject* r,
+                                               const proto::ProtoObject* const*, int) {
+    return ctx->fromUnicodeChar(caseMap(static_cast<uint32_t>(r->asLong(ctx)), false));
+}
+
+const proto::ProtoObject* prim_StrReversed(STRuntime&, proto::ProtoContext* ctx,
+                                           const proto::ProtoObject* r,
+                                           const proto::ProtoObject* const*, int) {
+    std::vector<uint32_t> cps = decodeCodepoints(toUtf8(r, ctx));
+    std::reverse(cps.begin(), cps.end());
+    return ctx->fromUTF8String(encodeAll(cps, 0, cps.size()).c_str());
+}
+
+std::string stringArg(proto::ProtoContext* ctx, const proto::ProtoObject* o, const char* who) {
+    const proto::ProtoString* s = o ? o->asString(ctx) : nullptr;
+    if (!s) throw std::runtime_error(std::string(who) + " expects a String argument");
+    return s->toStdString(ctx);
+}
+
+const proto::ProtoObject* prim_StrIncludesSubstring(STRuntime&, proto::ProtoContext* ctx,
+                                                    const proto::ProtoObject* r,
+                                                    const proto::ProtoObject* const* a, int) {
+    return toUtf8(r, ctx).find(stringArg(ctx, a[0], "includesSubstring:")) != std::string::npos
+        ? PROTO_TRUE : PROTO_FALSE;
+}
+
+const proto::ProtoObject* prim_StrCopyReplaceAll(STRuntime&, proto::ProtoContext* ctx,
+                                                 const proto::ProtoObject* r,
+                                                 const proto::ProtoObject* const* a, int argc) {
+    if (argc != 2) throw std::runtime_error("copyReplaceAll:with: expects 2 args");
+    std::string s = toUtf8(r, ctx);
+    const std::string from = stringArg(ctx, a[0], "copyReplaceAll:with:");
+    const std::string to = stringArg(ctx, a[1], "copyReplaceAll:with:");
+    if (from.empty()) return ctx->fromUTF8String(s.c_str());
+    std::string out;
+    size_t pos = 0, hit;
+    while ((hit = s.find(from, pos)) != std::string::npos) {
+        out.append(s, pos, hit - pos);
+        out += to;
+        pos = hit + from.size();
+    }
+    out.append(s, pos, std::string::npos);
+    return ctx->fromUTF8String(out.c_str());
+}
+
+const proto::ProtoObject* prim_StrTrimBoth(STRuntime&, proto::ProtoContext* ctx,
+                                           const proto::ProtoObject* r,
+                                           const proto::ProtoObject* const*, int) {
+    const std::string s = toUtf8(r, ctx);
+    size_t b = 0, e = s.size();
+    while (b < e && std::isspace(static_cast<unsigned char>(s[b]))) ++b;
+    while (e > b && std::isspace(static_cast<unsigned char>(s[e - 1]))) --e;
+    return ctx->fromUTF8String(s.substr(b, e - b).c_str());
+}
+
+// substrings / substrings: separators — an Array of the pieces between
+// separator characters (whitespace by default), empty pieces dropped.
+const proto::ProtoObject* splitToArray(STRuntime& rt, proto::ProtoContext* ctx,
+                                       const std::string& s, const std::vector<uint32_t>& seps) {
+    const std::vector<uint32_t> cps = decodeCodepoints(s);
+    auto isSep = [&](uint32_t c) {
+        if (seps.empty()) return c < 0x80 && std::isspace(static_cast<int>(c));
+        return std::find(seps.begin(), seps.end(), c) != seps.end();
+    };
+    const proto::ProtoList* parts = ctx->newList();
+    TransientPin pinParts(ctx, reinterpret_cast<const proto::ProtoObject*>(parts));
+    size_t start = 0;
+    for (size_t i = 0; i <= cps.size(); ++i) {
+        if (i == cps.size() || isSep(cps[i])) {
+            if (i > start) {
+                const proto::ProtoObject* piece = ctx->fromUTF8String(encodeAll(cps, start, i).c_str());
+                TransientPin pinPiece(ctx, piece);
+                parts = parts->appendLast(ctx, piece);
+                pinParts.reset(reinterpret_cast<const proto::ProtoObject*>(parts));
+            }
+            start = i + 1;
+        }
+    }
+    const proto::ProtoObject* arr = rt.bootstrap().arrayProto->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinArr(ctx, arr);
+    arr->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__data__"), parts->asObject(ctx));
+    return arr;
+}
+
+const proto::ProtoObject* prim_StrSubstrings(STRuntime& rt, proto::ProtoContext* ctx,
+                                             const proto::ProtoObject* r,
+                                             const proto::ProtoObject* const*, int) {
+    return splitToArray(rt, ctx, toUtf8(r, ctx), {});
+}
+
+const proto::ProtoObject* prim_StrSubstringsSep(STRuntime& rt, proto::ProtoContext* ctx,
+                                                const proto::ProtoObject* r,
+                                                const proto::ProtoObject* const* a, int) {
+    return splitToArray(rt, ctx, toUtf8(r, ctx),
+                        decodeCodepoints(stringArg(ctx, a[0], "substrings:")));
+}
+
+// Ordering by code points (Pharo compares case-sensitively too).
+int compareStrings(proto::ProtoContext* ctx, const proto::ProtoObject* r,
+                   const proto::ProtoObject* o) {
+    const int c = toUtf8(r, ctx).compare(stringArg(ctx, o, "String comparison"));
+    return (c > 0) - (c < 0);
+}
+const proto::ProtoObject* prim_StrLt(STRuntime&, proto::ProtoContext* ctx, const proto::ProtoObject* r,
+                                     const proto::ProtoObject* const* a, int) {
+    return compareStrings(ctx, r, a[0]) < 0 ? PROTO_TRUE : PROTO_FALSE;
+}
+const proto::ProtoObject* prim_StrLe(STRuntime&, proto::ProtoContext* ctx, const proto::ProtoObject* r,
+                                     const proto::ProtoObject* const* a, int) {
+    return compareStrings(ctx, r, a[0]) <= 0 ? PROTO_TRUE : PROTO_FALSE;
+}
+const proto::ProtoObject* prim_StrGt(STRuntime&, proto::ProtoContext* ctx, const proto::ProtoObject* r,
+                                     const proto::ProtoObject* const* a, int) {
+    return compareStrings(ctx, r, a[0]) > 0 ? PROTO_TRUE : PROTO_FALSE;
+}
+const proto::ProtoObject* prim_StrGe(STRuntime&, proto::ProtoContext* ctx, const proto::ProtoObject* r,
+                                     const proto::ProtoObject* const* a, int) {
+    return compareStrings(ctx, r, a[0]) >= 0 ? PROTO_TRUE : PROTO_FALSE;
+}
+
+const proto::ProtoObject* prim_StrAsSymbol(STRuntime&, proto::ProtoContext* ctx,
+                                           const proto::ProtoObject* r,
+                                           const proto::ProtoObject* const*, int) {
+    return reinterpret_cast<const proto::ProtoObject*>(
+        proto::ProtoString::createSymbol(ctx, toUtf8(r, ctx).c_str()));
+}
+
+const proto::ProtoObject* prim_SymAsString(STRuntime&, proto::ProtoContext* ctx,
+                                           const proto::ProtoObject* r,
+                                           const proto::ProtoObject* const*, int) {
+    return ctx->fromUTF8String(toUtf8(r, ctx).c_str());
+}
+
 } // anon
 
 void installStringPrimitives(STRuntime& rt) {
@@ -205,6 +475,27 @@ void installStringPrimitives(STRuntime& rt) {
     // The inverse, bound on the shared number prototype: codepoint -> 1-char
     // String. Lets a module render an escape (`\n`, `\uXXXX`) from a number.
     bindPrimitive(rt, b.numberProto, "asCharacter", reg.registerPrim(prim_NumAsCharacter));
+    bindPrimitive(rt, b.stringProto, "asNumber",   reg.registerPrim(prim_StrAsNumber));
+    bindPrimitive(rt, b.stringProto, "copyFrom:to:", reg.registerPrim(prim_StrCopyFromTo));
+    bindPrimitive(rt, b.stringProto, "asUppercase", reg.registerPrim(prim_StrAsUppercase));
+    bindPrimitive(rt, b.stringProto, "asLowercase", reg.registerPrim(prim_StrAsLowercase));
+    bindPrimitive(rt, b.stringProto, "reversed",   reg.registerPrim(prim_StrReversed));
+    bindPrimitive(rt, b.stringProto, "includesSubstring:", reg.registerPrim(prim_StrIncludesSubstring));
+    bindPrimitive(rt, b.stringProto, "copyReplaceAll:with:", reg.registerPrim(prim_StrCopyReplaceAll));
+    bindPrimitive(rt, b.stringProto, "trimBoth",   reg.registerPrim(prim_StrTrimBoth));
+    bindPrimitive(rt, b.stringProto, "substrings", reg.registerPrim(prim_StrSubstrings));
+    bindPrimitive(rt, b.stringProto, "substrings:", reg.registerPrim(prim_StrSubstringsSep));
+    bindPrimitive(rt, b.stringProto, "<",          reg.registerPrim(prim_StrLt));
+    bindPrimitive(rt, b.stringProto, "<=",         reg.registerPrim(prim_StrLe));
+    bindPrimitive(rt, b.stringProto, ">",          reg.registerPrim(prim_StrGt));
+    bindPrimitive(rt, b.stringProto, ">=",         reg.registerPrim(prim_StrGe));
+    bindPrimitive(rt, b.stringProto, "asSymbol",   reg.registerPrim(prim_StrAsSymbol));
+    bindPrimitive(rt, b.symbolProto, "asString",   reg.registerPrim(prim_SymAsString));
+    bindPrimitive(rt, b.stringProto, "__symbolAsString", reg.registerPrim(prim_SymAsString));
+    bindPrimitive(rt, b.characterProto, "value",    reg.registerPrim(prim_CharValue));
+    bindPrimitive(rt, b.characterProto, "asString", reg.registerPrim(prim_CharAsString));
+    bindPrimitive(rt, b.characterProto, "asUppercase", reg.registerPrim(prim_CharAsUppercase));
+    bindPrimitive(rt, b.characterProto, "asLowercase", reg.registerPrim(prim_CharAsLowercase));
     bindPrimitive(rt, b.objectProto, "printNl", reg.registerPrim(prim_PrintNl)); // fallback
 }
 

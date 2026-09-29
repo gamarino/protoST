@@ -66,6 +66,9 @@ std::vector<unsigned long> handlerStackDisableFrom(unsigned long targetHandlerId
 
 // Re-enable exactly the entries listed by a matching handlerStackDisableFrom
 // call. Entries that have since been popped are silently skipped.
+// Disable every handler on this thread's stack (another actor's message is
+// about to run here, and must not see them); handlerStackRestore undoes it.
+std::vector<unsigned long> handlerStackDisableAll();
 void handlerStackRestore(const std::vector<unsigned long>& disabledIds);
 
 } // namespace protoST

@@ -1,9 +1,14 @@
 # Installing protoST
 
-protoST is a Smalltalk-flavoured language on the protoCore runtime. It is a
-consumer of protoCore, never a bundler of it: `bin/protost` links
-`libprotoCore.so.2`, and every package protoST produces declares a runtime
+protoST 0.4.0 is a Smalltalk-syntax, actor-native runtime on protoCore. It is
+a consumer of protoCore, never a bundler of it: `bin/protost` links
+`libprotoCore.so.3`, and every package protoST produces declares a runtime
 dependency on protoCore's own package instead of shipping a copy.
+
+On a Debian or Ubuntu machine where protoCore's package is installed, the
+library is `/usr/lib/x86_64-linux-gnu/libprotoCore.so.3`, a link to
+`libprotoCore.so.2.5.0` for protoCore 2.5.0 (the version this release was
+built and tested against).
 
 ---
 
@@ -14,8 +19,11 @@ dependency on protoCore's own package instead of shipping a copy.
 - **libreadline** (`libreadline-dev` on Debian/Ubuntu, `readline-devel` on
   Fedora/RHEL, `brew install readline` on macOS). It is a hard requirement:
   `find_library(READLINE_LIBRARY NAMES readline REQUIRED)`.
-- **protoCore 2.0.0 or newer**, installed, with its CMake package
-  configuration. See protoCore's `docs/INSTALLATION.md`.
+- **protoCore 2.2.0 or newer, below 3.0**, installed, with its CMake package
+  configuration; 0.4.0 is tested with protoCore 2.5.0. (The version checked is
+  2.1 or newer, and the build also requires the library's `SOVERSION` to be
+  `3`, which protoCore has carried since 2.2.0.) See protoCore's
+  `docs/INSTALLATION.md`.
 - Network access on the first configuration: Catch2 and nlohmann/json are
   fetched with `FetchContent` when they are not already available.
 
@@ -38,16 +46,17 @@ cmake --build build_release -j4
 ctest --test-dir build_release --output-on-failure
 ```
 
-The discovery is `find_package(protoCore 2.0 CONFIG)`, so the prefix must hold
+The discovery is `find_package(protoCore 2.1 CONFIG)`, so the prefix must hold
 `lib/cmake/protoCore/protoCoreConfig.cmake`. **A prefix holding only
 `libprotoCore` and `protoCore.h` is no longer accepted**: without the package
 configuration there is no way to tell protoCore 1.x from 2.x, and linking the
 wrong major version is silent.
 
-The version floor is `2.0` and the ceiling is the next major version: protoST
-uses no protoCore API newer than 2.0.0, and protoCore's major version and its
-soname move together. protoST additionally asserts that the package's
-`SOVERSION` is `2`.
+The version floor is `2.1` and the ceiling is the next major version: the
+hashed collections and the actor mailboxes use `ProtoMap`, the hashed-collection
+helper and `ProtoMPSCQueue`, all added in protoCore 2.1.0, and protoCore's
+major version and its soname move together. protoST additionally asserts that
+the package's `SOVERSION` is `3`, so in practice the floor is protoCore 2.2.0.
 
 ## Building against a sibling developer tree
 
@@ -56,7 +65,7 @@ to the sibling source tree `../protoCore`, searching `build_release`, then
 `build`, then `build_check` — the first directory holding `libprotoCore` wins,
 and `build_release` comes first so a leftover `build/` cannot shadow it. The
 fallback prints a `WARNING`: it performs no package version check (it does check
-that the build carries `SOVERSION 2`) and must not be used to produce a
+that the build carries `SOVERSION 3`) and must not be used to produce a
 distributable package.
 
 Pass `-DPROTOCORE_REQUIRE_PACKAGE=ON` to turn the fallback into a hard error.
@@ -84,6 +93,7 @@ Installed layout, relative to the prefix (`<libdir>` is CMake's
 |---------|----------|
 | `protost` | `bin/` |
 | Standard-library `.st` modules (`json`, `random`, `stream`, `time`) | `share/protoST/lib/` |
+| Kernel classes written in protoST, loaded at start-up | `share/protoST/lib/kernel/` |
 | `LICENSE` and the Markdown documentation | `share/doc/protoST/` |
 | VS Code editor integration, when present in the source tree | `share/protoST/editor-integration/vscode/` |
 
@@ -142,17 +152,23 @@ protoCore's own package:
 
 | Format | Relation |
 |--------|----------|
-| DEB | `Depends: protocore (>= 2.0.0), protocore (<< 3.0.0)` |
-| RPM | `Requires: protoCore >= 2.0.0, protoCore < 3.0.0` |
+| DEB | `Depends: protocore (>= 2.1.0), protocore (<< 3.0.0)` |
+| RPM | `Requires: protoCore >= 2.1.0, protoCore < 3.0.0` |
 
-`libreadline` is a real runtime dependency of `protost` and is **not** declared
-in the DEB; `CPACK_DEBIAN_PACKAGE_SHLIBDEPS` is not enabled for protoST.
+`CPACK_DEBIAN_PACKAGE_SHLIBDEPS` is enabled, so `dpkg-shlibdeps` adds the
+dependencies of the system libraries `protost` links (`libc6`, `libstdc++6`,
+…). It does **not** add a dependency on `libprotoCore.so.3`: protoCore's own
+package ships no shlibs or symbols file, so `dpkg-shlibdeps` has nothing to
+emit for it (see the known defect below).
 
 ### Platform verification status
 
 Last verified 2026-09-27 against protoST 0.3.0 and protoCore 2.5.0
 (`PROTOCORE_ABI_SOVERSION 3`), built with `-DPROTOCORE_REQUIRE_PACKAGE=ON` so the
-sibling developer fallback was a hard error.
+sibling developer fallback was a hard error. The 0.4.0 packages have not yet
+been through the same container verification. Since then the installed files
+gained `share/protoST/lib/kernel/`, which an installed `protost` needs at
+start-up, so that is what a re-verification must check first.
 
 | Platform | Packaging | Status |
 |----------|-----------|--------|

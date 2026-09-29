@@ -14,6 +14,7 @@
 Object subclass: #CpuWorker.
 
 CpuWorker >> burn: rounds
+  | total |
   total := 0.
   1 to: rounds do: [ :i | total := total + i ].
   ^ total.
@@ -24,4 +25,6 @@ futures := OrderedCollection new.
 
 sum := 0.
 futures do: [ :f | sum := sum + f wait ].
-sum.
+result := sum.
+result = 135000900000 ifFalse: [Error signal: 'parallel_speedup: wrong result ' , result printString].
+'VERIFIED ' , result printString

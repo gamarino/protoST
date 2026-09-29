@@ -5,14 +5,34 @@
 #include "runtime/SchedDiag.h"
 #include "runtime/ExecutionEngine.h"
 #include "runtime/TransientPin.h"
+#include "runtime/NativeExceptionBridge.h"
+#include "runtime/UnhandledSTException.h"
+#include <cstdio>
+#include "runtime/HandlerStack.h"
 #include "protoCore.h"
+#include <atomic>
+#include <cstdint>
+#include <unordered_map>
+#include <mutex>
 
 #include <chrono>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace protoST {
+
+// Defined in object_prims.cpp: run a method by name, as a send does.
+const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* recv,
+                                      const proto::ProtoString* selector,
+                                      const proto::ProtoObject* const* args, int argc,
+                                      bool* understood);
+
+// Defined below with the unobserved-rejection bookkeeping.
+void markFutureObserved(proto::ProtoContext* ctx, const proto::ProtoObject* future);
+
 
 // Defined in block_prims.cpp — runs a BlockClosure with the given arg vector.
 extern const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
@@ -55,7 +75,20 @@ extern const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext*
 //     The actor path throws FutureYield instead of blocking.
 // ===========================================================================
 
+// Raise a rejected Future's error in the waiter (defined below).
+const proto::ProtoObject* raiseRejection(STRuntime& rt, proto::ProtoContext* ctx,
+                                         const proto::ProtoObject* error);
+
 namespace {
+
+// A thenDo: / catch: callback runs when a future settles, where nobody can
+// catch its error: report it on stderr (with the trace of an unhandled
+// protoST error) instead of dropping it, and carry on with the next callback.
+void reportCallbackError(const char* what, const std::exception* e) {
+    std::string text = e ? describeUncaught(*e) : std::string("error: ") + what;
+    std::fprintf(stderr, "error in a Future callback: %s\n",
+                 text.rfind("error: ", 0) == 0 ? text.c_str() + 7 : text.c_str());
+}
 
 // Fire each callback in `list` with `arg`. Callback errors are swallowed: a
 // misbehaving thenDo:/catch: handler must not poison the resolution path or
@@ -69,7 +102,8 @@ void fireCallbackList(STRuntime& rt, proto::ProtoContext* ctx,
     for (long long i = 0; i < n; ++i) {
         auto* cb = list->getAt(ctx, static_cast<int>(i));
         try { invokeBlock(rt, ctx, cb, cargs, 1); }
-        catch (...) { /* swallow callback errors */ }
+        catch (const std::exception& e) { reportCallbackError(e.what(), &e); }
+        catch (...) { reportCallbackError("non-local exit from a callback", nullptr); }
     }
 }
 
@@ -218,6 +252,105 @@ long long readState(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoO
     return (st && st != PROTO_NONE) ? st->asLong(ctx) : 0;
 }
 
+// An actor is about to park on `awaited`. If the actor that will settle it is
+// itself parked on a pending future whose settling actor is parked on ... the
+// current actor, nobody can ever proceed: an actor that waits handles no other
+// message (D37). Signal an Error in the current actor instead of hanging. Only
+// pending futures are followed, so an actor that is about to resume never
+// counts.
+//
+// Two actors can reach their waits at the same moment. Each first records what
+// it awaits and only then walks the chain (with a full fence in between), so
+// at least one of them sees the other's record and reports the cycle.
+// Actors whose method is buried on this thread's stack under a message this
+// thread is running for another actor while it waits (waitHelping). A buried
+// actor cannot continue until everything above it returns.
+thread_local std::vector<const proto::ProtoObject*> t_buriedActors;
+
+bool isBuriedHere(const proto::ProtoObject* actor) {
+    for (const auto* a : t_buriedActors) if (a == actor) return true;
+    return false;
+}
+
+void detectWaitCycle(STRuntime& rt, proto::ProtoContext* ctx,
+                     const proto::ProtoObject* self, const proto::ProtoObject* awaited) {
+    const auto& sym = rt.bootstrap().sym;
+    const_cast<proto::ProtoObject*>(self)->setAttribute(ctx, sym.waitingOn, awaited);
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    const proto::ProtoObject* fut = awaited;
+    for (int step = 0; step < 256 && fut && fut != PROTO_NONE; ++step) {
+        if (readState(rt, ctx, fut) != 0) return;            // settled: no cycle
+        const proto::ProtoObject* target = fut->getOwnAttributeDirect(ctx, sym.targetActor);
+        if (!target || target == PROTO_NONE) return;          // not an actor message
+        if (target == self || isBuriedHere(target)) {
+            const_cast<proto::ProtoObject*>(self)->setAttribute(ctx, sym.waitingOn, PROTO_NONE);
+            throw std::runtime_error(
+                "deadlock: this actor waits for a reply that can only come from an actor "
+                "waiting on it (an actor that waits handles no other message; chain with "
+                "thenDo: instead of waiting)");
+        }
+        fut = target->getAttribute(ctx, sym.waitingOn);       // what that actor awaits
+    }
+}
+
+// Wait for `awaited` on an actor's worker without suspending the actor: while
+// the future is pending, run other ready actors' messages on this thread
+// (helping), and back off briefly when there are none. The current actor stays
+// marked as running, so none of its own messages run meanwhile (one message
+// at a time), and its __waiting_on__ record keeps cycles detectable.
+const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* awaited) {
+    const proto::ProtoObject* self = rt.currentActor();
+    TransientPin pinAwaited(ctx, awaited);
+    // This actor stays buried under whatever it helps; nested helping is
+    // capped so a chain of waiting actors cannot exhaust the engine stack.
+    constexpr std::size_t kMaxHelpingDepth = 16;
+    struct Bury {
+        const proto::ProtoObject* actor;
+        explicit Bury(const proto::ProtoObject* a) : actor(a) { t_buriedActors.push_back(a); }
+        ~Bury() { t_buriedActors.pop_back(); }
+    } bury(self);
+    struct ClearWaiting {
+        STRuntime& rt; proto::ProtoContext* ctx; const proto::ProtoObject* actor;
+        ~ClearWaiting() {
+            const_cast<proto::ProtoObject*>(actor)->setAttribute(ctx, rt.bootstrap().sym.waitingOn, PROTO_NONE);
+        }
+    } clearWaiting{rt, ctx, self};
+    int idle = 0;
+    while (readState(rt, ctx, awaited) == 0) {
+        if (t_buriedActors.size() > kMaxHelpingDepth) {
+            proto::ProtoContext::UnmanagedScope unmanaged(ctx);
+            std::this_thread::sleep_for(std::chrono::microseconds(200));
+            continue;
+        }
+        bool helped = false;
+        // The helped message belongs to another actor: this actor's exception
+        // handlers, still on this thread's handler stack, must not catch its
+        // errors.
+        const std::vector<unsigned long> hidden = handlerStackDisableAll();
+        try {
+            helped = rt.drainOne(ctx);
+        } catch (...) {
+            handlerStackRestore(hidden);
+            rt.setCurrentActor(self);
+            throw;
+        }
+        handlerStackRestore(hidden);
+        rt.setCurrentActor(self);
+        if (helped) { idle = 0; continue; }
+        proto::ProtoContext::UnmanagedScope unmanaged(ctx);
+        std::this_thread::sleep_for(std::chrono::microseconds(idle < 10 ? 20 : 500));
+        ++idle;
+    }
+    const proto::ProtoString* valueKey = rt.bootstrap().sym.value;
+    const proto::ProtoString* errorKey = rt.bootstrap().sym.error;
+    if (readState(rt, ctx, awaited) == 1) {
+        auto* v = awaited->getOwnAttributeDirect(ctx, valueKey);
+        return v ? v : PROTO_NONE;
+    }
+    return raiseRejection(rt, ctx, awaited->getOwnAttributeDirect(ctx, errorKey));
+}
+
 // Future>>wait
 //
 // Blocks until the future leaves the pending state, then returns __value__
@@ -226,6 +359,7 @@ long long readState(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoO
 const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* ctx,
                                             const proto::ProtoObject* r,
                                             const proto::ProtoObject* const*, int) {
+    markFutureObserved(ctx, r);
     const proto::ProtoString* valueKey =
         rt.bootstrap().sym.value;
     const proto::ProtoString* errorKey =
@@ -249,18 +383,22 @@ const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* c
     if (rt.currentActor() != nullptr) {
         long long s = readState(rt, ctx, r);
         if (s == 0) {
+            detectWaitCycle(rt, ctx, rt.currentActor(), r);
+            // Suspending the actor snapshots the engine frames, but not the
+            // state of a primitive between them (the position of a do:, the
+            // C++ frames of ensure: or on:do:), so a wait inside a block that
+            // a primitive evaluates must not suspend. It blocks this worker
+            // instead, running other actors' messages meanwhile.
+            if (ExecutionEngine::liveEnginesOnThisThread() > 1)
+                return waitHelping(rt, ctx, r);
             throw FutureYield(r);
         }
         if (s == 1) {
             auto* v = r->getOwnAttributeDirect(ctx, valueKey);
             return v ? v : PROTO_NONE;
         }
-        // s == 2: rejected — let the common path below throw.
-        auto* e = r->getOwnAttributeDirect(ctx, errorKey);
-        std::string msg = (e && e != PROTO_NONE)
-            ? e->asString(ctx)->toStdString(ctx)
-            : std::string("rejected");
-        throw std::runtime_error("Future rejected: " + msg);
+        // s == 2: rejected.
+        return raiseRejection(rt, ctx, r->getOwnAttributeDirect(ctx, errorKey));
     }
 
     // Non-actor (main / foreground) path. Pure event-driven wait — no
@@ -302,13 +440,7 @@ const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* c
         auto* v = r->getOwnAttributeDirect(ctx, valueKey);
         return v ? v : PROTO_NONE;
     }
-    if (s == 2) {
-        auto* e = r->getOwnAttributeDirect(ctx, errorKey);
-        std::string msg = (e && e != PROTO_NONE)
-            ? e->asString(ctx)->toStdString(ctx)
-            : std::string("rejected");
-        throw std::runtime_error("Future rejected: " + msg);
-    }
+    if (s == 2) return raiseRejection(rt, ctx, r->getOwnAttributeDirect(ctx, errorKey));
     throw std::runtime_error("Future>>wait: unknown state");
 }
 
@@ -338,6 +470,7 @@ const proto::ProtoObject* prim_Future_thenDo(STRuntime& rt, proto::ProtoContext*
                                               const proto::ProtoObject* r,
                                               const proto::ProtoObject* const* a,
                                               int argc) {
+    markFutureObserved(ctx, r);
     if (argc != 1) throw std::runtime_error("Future>>thenDo: expects 1 arg");
     const proto::ProtoString* valueKey =
         rt.bootstrap().sym.value;
@@ -352,7 +485,9 @@ const proto::ProtoObject* prim_Future_thenDo(STRuntime& rt, proto::ProtoContext*
     if (s == 1) {
         auto* v = r->getOwnAttributeDirect(ctx, valueKey);
         const proto::ProtoObject* args[] = { v ? v : PROTO_NONE };
-        try { invokeBlock(rt, ctx, block, args, 1); } catch (...) {}
+        try { invokeBlock(rt, ctx, block, args, 1); }
+        catch (const std::exception& e) { reportCallbackError(e.what(), &e); }
+        catch (...) { reportCallbackError("non-local exit from a callback", nullptr); }
         return r;
     }
     // Pending (or mid-settle): CAS-append, or fire now if a resolve already
@@ -361,7 +496,9 @@ const proto::ProtoObject* prim_Future_thenDo(STRuntime& rt, proto::ProtoContext*
     if (!appendOrDrained(ctx, r, thenCbsKey, block)) {
         auto* v = r->getOwnAttributeDirect(ctx, valueKey);
         const proto::ProtoObject* args[] = { v ? v : PROTO_NONE };
-        try { invokeBlock(rt, ctx, block, args, 1); } catch (...) {}
+        try { invokeBlock(rt, ctx, block, args, 1); }
+        catch (const std::exception& e) { reportCallbackError(e.what(), &e); }
+        catch (...) { reportCallbackError("non-local exit from a callback", nullptr); }
     }
     return r;
 }
@@ -372,6 +509,7 @@ const proto::ProtoObject* prim_Future_catch(STRuntime& rt, proto::ProtoContext* 
                                              const proto::ProtoObject* r,
                                              const proto::ProtoObject* const* a,
                                              int argc) {
+    markFutureObserved(ctx, r);
     if (argc != 1) throw std::runtime_error("Future>>catch: expects 1 arg");
     const proto::ProtoString* errorKey =
         rt.bootstrap().sym.error;
@@ -384,13 +522,17 @@ const proto::ProtoObject* prim_Future_catch(STRuntime& rt, proto::ProtoContext* 
     if (s == 2) {
         auto* e = r->getOwnAttributeDirect(ctx, errorKey);
         const proto::ProtoObject* args[] = { e ? e : PROTO_NONE };
-        try { invokeBlock(rt, ctx, block, args, 1); } catch (...) {}
+        try { invokeBlock(rt, ctx, block, args, 1); }
+        catch (const std::exception& e) { reportCallbackError(e.what(), &e); }
+        catch (...) { reportCallbackError("non-local exit from a callback", nullptr); }
         return r;
     }
     if (!appendOrDrained(ctx, r, catchCbsKey, block)) {
         auto* e = r->getOwnAttributeDirect(ctx, errorKey);
         const proto::ProtoObject* args[] = { e ? e : PROTO_NONE };
-        try { invokeBlock(rt, ctx, block, args, 1); } catch (...) {}
+        try { invokeBlock(rt, ctx, block, args, 1); }
+        catch (const std::exception& e) { reportCallbackError(e.what(), &e); }
+        catch (...) { reportCallbackError("non-local exit from a callback", nullptr); }
     }
     return r;
 }
@@ -437,6 +579,64 @@ bool appendFutureWaiter(STRuntime& rt,
     return parked;
 }
 
+// Unobserved actor errors. A send to an actor answers a Future; when the
+// actor's method raises, the drain rejects it. If no one ever waits on that
+// Future or registers thenDo:/catch:, the error would vanish, so a rejection
+// from the drain is recorded -- as text, keyed by the Future's identity (a
+// mutable object keeps its address), never as an object pointer, which the GC
+// would not trace -- and reported when the runtime ends. Observing a Future
+// stamps it (a GC-managed attribute) and discards its record.
+namespace {
+std::mutex g_rejectionsMu;
+std::unordered_map<std::uintptr_t, std::string> g_unobservedRejections;
+
+// Symbols are interned per ProtoSpace: resolved per call, never cached.
+const proto::ProtoString* observedKey(proto::ProtoContext* ctx) {
+    return proto::ProtoString::createSymbol(ctx, "__observed__");
+}
+
+std::string describeRejection(proto::ProtoContext* ctx, const proto::ProtoObject* error) {
+    if (!error || error == PROTO_NONE) return "nil";
+    if (const proto::ProtoString* str = error->asString(ctx)) return str->toStdString(ctx);
+    const proto::ProtoString* msgKey = proto::ProtoString::createSymbol(ctx, "__message_text__");
+    const proto::ProtoObject* m = error->getAttribute(ctx, msgKey);
+    if (m && m != PROTO_NONE)
+        if (const proto::ProtoString* ms = m->asString(ctx)) return ms->toStdString(ctx);
+    return "an error without messageText";
+}
+} // namespace
+
+// A rejection that is a protoST exception (an actor method's unhandled error)
+// is re-signalled here, so the waiter's handlers see its class and
+// messageText; any other rejection value raises an Error carrying its text.
+const proto::ProtoObject* raiseRejection(STRuntime& rt, proto::ProtoContext* ctx,
+                                         const proto::ProtoObject* error) {
+    if (isExceptionInstance(rt, ctx, error)) {
+        // Every waiter signals its own copy: signal stamps handler state on
+        // the instance, and several threads may wait on the same Future.
+        bool understood = false;
+        const proto::ProtoObject* copy = sendDynamic(
+            rt, ctx, error, proto::ProtoString::createSymbol(ctx, "shallowCopy"),
+            nullptr, 0, &understood);
+        return resignalException(rt, ctx, (understood && copy) ? copy : error);
+    }
+    throw std::runtime_error("Future rejected: " + describeRejection(ctx, error));
+}
+
+void markFutureObserved(proto::ProtoContext* ctx, const proto::ProtoObject* future) {
+    if (!future || future == PROTO_NONE) return;
+    future->setAttribute(ctx, observedKey(ctx), PROTO_TRUE);
+    std::lock_guard<std::mutex> lock(g_rejectionsMu);
+    g_unobservedRejections.erase(reinterpret_cast<std::uintptr_t>(future));
+}
+
+void reportUnobservedActorErrors() {
+    std::lock_guard<std::mutex> lock(g_rejectionsMu);
+    for (const auto& entry : g_unobservedRejections)
+        std::fprintf(stderr, "warning: unhandled error in actor: %s\n", entry.second.c_str());
+    g_unobservedRejections.clear();
+}
+
 // drainOne settle entry points — identical lock-free settle as the user-facing
 // Future>>resolve: / rejectWith: primitives.
 void resolveFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
@@ -448,6 +648,12 @@ void resolveFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
 void rejectFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
                            const proto::ProtoObject* future,
                            const proto::ProtoObject* error) {
+    if (future && future != PROTO_NONE
+        && future->getAttribute(ctx, observedKey(ctx)) != PROTO_TRUE) {
+        std::lock_guard<std::mutex> lock(g_rejectionsMu);
+        g_unobservedRejections[reinterpret_cast<std::uintptr_t>(future)] =
+            describeRejection(ctx, error);
+    }
     settleFuture(rt, ctx, future, /*reject=*/true, error);
 }
 

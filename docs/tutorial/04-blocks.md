@@ -20,8 +20,9 @@ than once, possibly never. Written between square brackets:
 [ 3 + 4 ]
 ```
 
-That expression does **not** compute `7`. It produces a `Block` object — an
-instance of the class `Block` — whose body is the code `3 + 4`. The body runs
+That expression does **not** compute `7`. It produces a block object — an
+instance of `BlockClosure`, also reachable under the name `Block` — whose
+body is the code `3 + 4`. The body runs
 only when you *evaluate* the block by sending it the message `value`:
 
 ```bash
@@ -74,8 +75,9 @@ $ ./build/protost -e '[ :a :b | a + b ] value: 3 value: 4'
 ```
 
 Evaluating a block with the *wrong* number of arguments is a runtime error —
-there is no currying and no default arguments. A block of arity 0–4 is
-supported; if you need more inputs, pass a collection.
+there is no currying and no default arguments. The `value:` family goes up to
+four arguments; for more, send `valueWithArguments:` with an Array
+(`[ :a :b :c :d :e | a + e ] valueWithArguments: #(1 2 3 4 5)` is `6`).
 
 > **In JavaScript** `(a, b) => a + b` is the analogue, called as `f(3, 4)`.
 > **In protoST** the arguments are *interleaved* into the selector exactly as
@@ -100,10 +102,8 @@ $ ./build/protost -e '[ :x | | t | t := x * 2. t + 1 ] value: 10'
 21
 ```
 
-The same caveat from [Chapter 3](03-variables-and-literals.md) applies, with a
-twist worth stating: `| temps |` is legal inside a *block* and inside a
-*method*, but **not at the top level of a script**. A block written at the top
-level may declare locals, but the script's bare top-level statements may not.
+The same `| temps |` syntax declares locals in a method and, as in a
+workspace, at the top of a script ([Chapter 3](03-variables-and-literals.md)).
 
 ## 4.4 The value of a block
 
@@ -168,14 +168,30 @@ constantly from [Chapter 5](05-classes-and-methods.md) onward.
 > declaration ceremony. `[ count := count + 1 ]` just works, and the change is
 > visible to everyone else holding that variable.
 
-> **Limitation — shadowing.** A block cannot declare a local (or argument) with
-> the *same name* as a variable it captures from the enclosing method. The
-> capture mechanism uses one flat per-method table and cannot keep two
-> same-named variables apart. In practice this is never a constraint worth
-> worrying about — give the inner variable a different name — but it is a
-> documented edge of the language. (`docs/STATUS.md` records this as resolved
-> on the current build for the common cases; the safe habit is simply not to
-> shadow.)
+Each evaluation of a block gets its own arguments and temporaries. Two
+consequences follow, both as in Smalltalk-80. A block created in each pass of
+a loop keeps that pass's value:
+
+```smalltalk
+"-- per-iteration.st --"
+blocks := OrderedCollection new.
+1 to: 3 do: [ :i | blocks add: [ i * 10 ] ].
+(blocks collect: [ :b | b value ]) asArray.
+```
+
+```bash
+$ ./build/protost per-iteration.st
+#(10 20 30)
+```
+
+And a block argument or temporary with the same name as an outer variable is
+a separate variable that hides the outer one inside the block:
+
+```smalltalk
+x := 1.
+[ :x | x + 100 ] value: 5.     "=> 105"
+x.                             "=> 1"
+```
 
 ## 4.6 Control flow is blocks plus messages
 
@@ -189,9 +205,13 @@ from other languages becomes an ordinary message that takes blocks.
 passing blocks for the branches:
 
 ```bash
-$ ./build/protost -e '(10 > 3) ifTrue: [ 'bigger' ] ifFalse: [ 'smaller' ]'
+$ ./build/protost -e "(10 > 3) ifTrue: [ 'bigger' ] ifFalse: [ 'smaller' ]"
 bigger
 ```
+
+(The command is in double quotes because the expression contains single
+quotes; inside single shell quotes, the string quotes would be removed by the
+shell.)
 
 The boolean `true` has an `ifTrue:ifFalse:` method that evaluates its first
 block and ignores the second; `false` does the opposite. The branches are
@@ -297,9 +317,7 @@ $ ./build/protost countdown.st
 30
 ```
 
-The block here runs for `i` = 10, 8, 6, 4, 2, so `sum` ends at `30`. Note this
-is a *script* — multi-statement code with a top-level variable belongs in a
-file (or the REPL), never behind `-e`, which evaluates exactly one expression.
+The block here runs for `i` = 10, 8, 6, 4, 2, so `sum` ends at `30`.
 
 > **In Python** this is `for i in range(1, 6): …`. **In JavaScript**,
 > `for (let i = 1; i <= 5; i++) …`. **In protoST** `1 to: 5 do: [ :i | … ]` —
@@ -357,11 +375,13 @@ object all along.
 - A block `[ … ]` is a first-class object — deferred code as a value. It is
   protoST's lambda / arrow function / nested function.
 - `[ … ]` *builds* a block; `value` / `value:` / `value:value:` … *runs* it.
-  The `value` arity must match the block's argument count (0–4).
+  The `value` arity must match the block's argument count (0–4;
+  `valueWithArguments:` for any count).
 - A block's value is its last statement (`nil` if empty). To return from the
   enclosing *method*, use `^` — see [Chapter 6](06-non-local-return.md).
 - Blocks are closures: they capture the variables of their defining scope by
-  reference, and can read and write them.
+  reference, and can read and write them. Each evaluation has its own
+  arguments and temporaries.
 - Control flow is blocks plus messages. `ifTrue:ifFalse:` is a message on a
   `Boolean`; `whileTrue:` and `repeat` on a `Block`; `to:do:` on a `Number`;
   `do:` on a `Collection`. `and:` / `or:` short-circuit *because* their

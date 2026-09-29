@@ -3,24 +3,112 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
-## [Unreleased]
+## Unreleased
 
-Changes committed after the `v0.3.0` tag.
+- K4 (another runtime in the process could not use protoST objects) is fixed
+  in protoCore after 2.5.0; the documents now say which protoCore each claim
+  needs. The integer workarounds (`IntegerDivision.h`, `wideBitOp`) stay while
+  protoST's protoCore floor is 2.5.0: protoCore fixed both defects after it.
+
+## 0.4.0 — the Smalltalk you know, verified (2026-10-03)
+
+0.4.0 is the release prepared for a technical Smalltalk audience: an
+adversarial audit (about 400 probe programs written the way a Pharo
+programmer writes) drove every change below, and each fix of a wrong result,
+crash or hang carries a regression test. `ctest` at commit `d3f7235`: 1041
+cases, all passing (854 at the start of the audit): 513 conformance
+programs, 437 unit tests, 42 examples, 28 CLI tests and 21 documentation
+checks. Details of each item are in [`docs/STATUS.md`](docs/STATUS.md) and
+[tutorial chapter 14](docs/tutorial/14-for-the-smalltalk-programmer.md).
+
+### Silent wrong results fixed
+
+- A method's instance variable was confused with a same-named file-level
+  variable captured by a top-level block (the method wrote the file variable).
+- A block parameter or temporary that reused an enclosing name aliased the
+  outer variable; a block temporary named like an instance variable wrote the
+  instance variable. Every block activation now has its own bindings.
+- A method whose last line had no period swallowed the next top-level line.
+  A method body now also ends at an unindented line or at the next method
+  declaration.
+- `(3/2) max: 1`, `(1/2) between: 0 and: 1` and other Fraction operations ran
+  integer primitives on the Fraction.
+- A class-side method that assigned an instance-variable name wrote it on the
+  class, where every instance that had not set its own inherited it.
+- `new` on a subclass of a built-in collection answered the built-in class.
+- `(1->2) = (1->2)` was false; `#(at:put:)` held two symbols; a long Symbol's
+  `asString` answered the Symbol; `respondsTo:` answered true for class-side
+  selectors on instances.
+
+### Hangs and crashes fixed
+
+- **S19, the intermittent hang of `cli_concurrent_first_call`:** captured
+  with gdb attached to the live hung process (new `PROTOST_ALLOW_PTRACE=1`):
+  a worker asleep in `std::counting_semaphore::acquire()` with a permit
+  available while `~STRuntime` joined it — a lost wakeup in libstdc++ 13's
+  semaphore. Replaced by `protoST::Semaphore`, whose waiters sleep only on a
+  zero count and whose every release notifies.
+- A cycle of actors waiting on each other (`a` waits on `b`, which waits on
+  `a`) signals a catchable "deadlock" `Error` instead of hanging.
+- A `wait` inside a block that a primitive evaluates (`do:`, `collect:`,
+  `inject:into:`, `ensure:`, `on:do:`) in an actor method ended the loop after
+  one element, skipped `ensure:` and escaped handlers. Such a wait now blocks
+  its worker, which runs other actors' messages meanwhile.
+- `Future whenAny:` waited forever when every future was rejected.
+- A negative integer attribute read through a unary send was taken for a
+  primitive marker and aborted the interpreter.
+- A heap ceiling (10M cells, 640 MB, by default; at most a quarter of the RAM; `PROTOCORE_HEAP_LIMIT_CELLS` raises it and the out-of-memory message says how)
+  replaces the unbounded growth that could exhaust the machine; running out
+  exits with a clear message. Ctrl-C interrupts a running program cleanly.
+
+### Smalltalk semantics
+
+- `new` sends `initialize`; `Character`; exact `Fraction` division (`3/4`),
+  floored `//` and `\\`, `ArithmeticError` / resumable `ZeroDivide`;
+  `SubscriptOutOfBounds`, `KeyNotFound`, `NotFound`; `doesNotUnderstand:`
+  overrides receive a `Message`; class variables assignable from instance
+  methods; class-instance variables; `Transcript`; `printOn:`-based printing
+  everywhere; classes print as their names; floats print as Smalltalk
+  literals (`1.0e16`).
+- Errors inside an actor keep their class across `wait`; an uncaught error
+  prints its class, its text and a trace (`at Class>>selector (file:line)`).
+- The compiler reports undeclared variables in methods, assignments to
+  arguments and pseudo-variables, and duplicated or redeclared instance
+  variables. A blank line ends a method body; top-level `| temps |` work.
+- Protocol: the collection, string, stream, number (bit operations, `**`,
+  `roundTo:`), exception (`retryUsing:`, `isResumable`), reflection
+  (`instVarNamed:`, `selectors`, `canUnderstand:`, `subclasses`, `deepCopy`,
+  `inspect`) and system (`Time`, `Date`, `Duration`, `Random`,
+  `Smalltalk version`) messages a Pharo programmer expects. A `Collection`
+  subclass that defines `do:` gets the derived enumeration protocol
+  (`groupedBy:` also needs `add:`).
+
+### Tooling and honesty
+
+- Every benchmark verifies its result and the harness fails on a missing or
+  wrong value (`bench_harness_selftest`); CPython twins run the same N.
+- Interop claims narrowed to what a two-runtime process shows
+  ([`docs/INTEROP.md`](docs/INTEROP.md) §0, `KNOWN_ISSUES.md` K4).
+- The version comes from one place; `ctest` no longer needs stdin redirected.
+
+### Earlier changes in this release (after v0.3.0)
 
 ### Language
 
 - **Call-form sends and method declarations** (commit `2af8c5c`).
   `recv name(p1, p2, k1 = v1)` sends and `Class >> name(p1, k1 = default)`
   declarations follow the protoCore method convention (positional arguments
-  plus named arguments), so methods exposed by other protoCore runtimes are
-  callable without selector mangling. Named-argument defaults are evaluated
-  at call time. A class cannot host both a unary `>> bar` and a call-form
-  `>> bar(...)`; actor receivers do not accept call-form sends yet.
+  plus named arguments). They are designed so that methods exposed by other
+  protoCore runtimes could be called without selector mangling; that is not
+  implemented: a call-form send reaches protoST methods only
+  ([`docs/INTEROP.md`](docs/INTEROP.md) §0). Named-argument defaults are
+  evaluated at call time. A class cannot host both a unary `>> bar` and a
+  call-form `>> bar(...)`; actor receivers do not accept call-form sends yet.
 - **Class variables** (commit `6b3cf39`). A non-empty
   `classVariableNames:` clause is honoured: each name is installed on the
   class and readable from instance and class methods, including in
-  subclasses. Assignment is allowed only from class-side methods; an
-  instance-side assignment is a compile-time error. Closes D19 at that scope.
+  subclasses. (At that commit assignment was allowed only from class-side
+  methods; 0.4.0 lifts that restriction — see above.)
 
 ### Collections
 
@@ -287,9 +375,9 @@ Changes committed after the `v0.3.0` tag.
   `partialCompare`, which follows IEEE 754: a NaN is unordered with every
   number, so every ordering and `=` are false and `~=` is true; `min:` and
   `max:` answer the argument; these collections find a NaN only by identity.
-  Comparisons of other numbers are unchanged. `Set` membership is protoCore's
-  hashed membership and is not affected (see Known issues). Regression tests:
-  `conformance/12-builtins/float-nan-comparison.st` and
+  Comparisons of other numbers are unchanged. `Set` membership was not
+  affected by this change; it was fixed separately (D32, above). Regression
+  tests: `conformance/12-builtins/float-nan-comparison.st` and
   `conformance/09-collections/nan-elements.st`.
 - **In the REPL, a block assigning a session variable declared a new block
   variable instead** (S10). After `s := 0.`, the input
@@ -354,19 +442,11 @@ Changes committed after the `v0.3.0` tag.
 
 - The large-rope garbage-collector issue (K2) is fixed in protoCore; see
   [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md).
-- Blocks created in different iterations of a loop share the loop variable:
-  after `1 to: 3 do: [ :i | bs add: [ i ] ]` every stored block answers 3,
-  because a method or module activation keeps one captured-variable
-  dictionary (D30, open). See `docs/STATUS.md`.
 - A thread running an allocation-free loop never reaches a garbage-collector
   park point, so a requested collection waits for its loop to end (S3, open).
   The S15 fix adds `ProtoContext::safepoint()` at every loop back-edge, which
   is that park point, but the close is unproved: no protoST loop allocates
   nothing, so S3 cannot be exhibited. See `docs/STATUS.md`.
-- Hashed collections do not agree on element equality (D32, open): a `Set`
-  uses protoCore's hashed membership, so `1` and `1.0` are two elements and
-  all NaNs are one; a `Dictionary` misses a key `1` looked up as `1.0`; a
-  `Bag` compares with `=`. See `docs/STATUS.md`.
 
 ### Tests
 

@@ -1,0 +1,12 @@
+Script iniciado en 2026-09-29 04:43:30-03:00 [COMMAND="cd demos && ./run_demo.sh 01-familiar-code.st" <no ejecutado en terminal>]
+Eva $100
+richest: Luis $150
+refused: Ana has only 100
+after 2 attempts: Ana $20
+0
+(1/2)  1267650600228229401496703205376
+nil
+270
+-- 01-familiar-code: verified
+
+Script terminado en 2026-09-29 04:43:30-03:00 [CÓDIGO_SALIDA_ORDEN="0"]

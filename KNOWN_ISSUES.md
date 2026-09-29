@@ -33,13 +33,56 @@ per-runtime. See deviation D2 in `docs/STATUS.md`.
 
 ## K3 — No `%` string formatting (open)
 
-**What.** protoCore's `ProtoString` does not implement `%`-style string
-formatting, and protoST adds none.
+**What.** There is no printf-style `%` formatting.
 
-**Bounds.** Narrow. Build strings with `,` concatenation and the conversion
-selectors (`printString`, `asString`, …) instead.
+**Bounds.** Narrow. Pharo's `format:` is available (`'{1} of {2}' format:
+#(3 10)`), as are `,`, `printString`, `printString:`, `printPaddedWith:to:`
+and `String streamContents:`.
 
-**Status.** Open; a small unimplemented feature in protoCore.
+**Status.** Open; not planned.
+
+## K4 — Two runtimes in one process cannot use each other's objects yet (fixed in protoCore, unreleased)
+
+**What.** A protoScala program in the same process can import a protoST module
+and receives the very same object (no copy, and it survives collections in
+both spaces), but it cannot read that object's attributes or send it
+messages; importing a protoScala module from protoST fails. See
+[`docs/INTEROP.md`](docs/INTEROP.md) §0 for what is verified and how.
+
+**Why.** Each runtime owns a `ProtoSpace`, and protoCore resolves a mutable
+object's current state through the space of the context doing the read, so an
+object read through the other runtime's context resolves in the wrong table
+(observed: wrong values, not an error). This is a protoCore-level constraint
+on multi-space processes.
+
+**Status.** Fixed in protoCore after 2.5.0 (merged to its `master` on
+2026-09-29, not yet in a release): the table of mutable states is
+process-global and every space's collector marks it (protoCore
+`docs/GLOBAL_MUTABLE_TABLE.md`). With that protoCore, protoScala reads a
+protoST object's state and writes to it through its own context (protoScala
+test `ProtoSTInterop.AForeignObjectsStateIsReadThroughTheCallersContext`).
+The 0.4.0 package depends on protoCore 2.5.0, where the defect remains.
+Still true either way: a foreign runtime cannot call a protoST method
+(INTEROP §4.2), and a protoST cell another runtime keeps in its own
+structures must stay reachable in protoST's space.
+
+## K5 — Very large collections need a larger heap limit (open)
+
+**What.** By default the heap holds 10M cells (640 MB). Building a collection
+of about 500,000 elements or more needs more (measured on 0.4.0:
+`(1 to: 450000) asArray` succeeds, `(1 to: 480000) asArray` and
+`(1 to: 500000) asArray` run out of memory),
+because protoCore builds a large list with n log n cells; the program then
+stops with an out-of-memory message that names the current limit and the
+setting to raise it (`PROTOCORE_HEAP_LIMIT_CELLS`, 64 bytes per cell).
+
+**Why the default stays small.** protoCore's collector waits for the ceiling
+before collecting; a 32M-cell default made allocation-heavy actor code 19%
+slower (`saturation_big` on one worker: 3.1 s against 3.7 s, interleaved
+runs; commit `8e5274f`).
+
+**Status.** Open; a bulk list builder in protoCore would remove the n log n
+factor.
 
 ---
 

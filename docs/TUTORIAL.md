@@ -10,8 +10,9 @@
 > Track 8 of [`docs/ROADMAP.md`](ROADMAP.md). It is built on
 > [`docs/LANGUAGE.md`](LANGUAGE.md) (the authoritative language reference) and
 > [`docs/STATUS.md`](STATUS.md) (the live tracker of what works and what
-> deviates). Every non-trivial code snippet here has been executed against the
-> `protost` binary and shows its real result.
+> deviates). The examples that state a result are run against the `protost`
+> binary by `tests/docs/run_doc_snippets.py`, so the results shown are the
+> ones the current build prints.
 
 The tutorial is split into navigable chapters under
 [`docs/tutorial/`](tutorial/). Read it in order if protoST is new to you; jump
@@ -57,37 +58,35 @@ honest catalogue of every way protoST is *not* the dialect you know.
 
 ## A note on running the examples
 
-Every snippet in this tutorial was run against a `protost` build. Two ways to
-run protoST code appear throughout:
+Two ways to run protoST code appear throughout:
 
 ```bash
 ./build/protost -e '3 + 4'        # evaluate one expression, print the result
 ./build/protost script.st         # run a file, print its last statement
 ```
 
-There is one practical rule worth knowing before you start, because the
-language reference does not stress it and several of its examples gloss over
-it: **`| temps |` local-variable declarations are only legal inside a method
-or a block — not at the top level of a script.** At the top level you simply
-assign to a name and it becomes a global. So this *fails*:
+There is one practical rule worth knowing before you start, because a
+Smalltalk browser or workspace never shows it to you: **in a file, a blank
+line ends a method body.** A method is `ClassName >> selector` followed by its
+statements; the method ends at the next blank line, so write methods without
+blank lines inside them and leave a blank line between the last method and
+the top-level code that follows it:
 
 ```smalltalk
-"-- top-level temps are NOT supported — this is a parse error --"
-| d |
-d := Dictionary new.
+"-- a method, a blank line, then top-level code --"
+Object subclass: #Greeter.
+Greeter >> greet: name
+  ^ 'Hello, ' , name.
+
+Greeter new greet: 'Ada'.        "=> 'Hello, Ada'"
 ```
 
-and this *works*:
+At the top level you may declare temporaries with `| … |`, as in a workspace,
+or simply assign to a name:
 
 ```smalltalk
-"-- at the top level, just assign — the name becomes a global --"
+| d |
 d := Dictionary new.
 d at: #one put: 1.
 d at: #one.        "=> 1"
 ```
-
-Throughout the tutorial, multi-statement examples are shown as script files
-and top-level variables are written without a `| … |` declaration. The
-chapters point this out again where it matters.
-</content>
-</invoke>

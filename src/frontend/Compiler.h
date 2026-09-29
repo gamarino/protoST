@@ -44,12 +44,23 @@ public:
         // Class-variable names declared via `classVariableNames: '...'`.
         // Stored on the class object (mangled `_iv_<name>`, same key shape
         // as inst vars) so the prototype-chain attribute walk picks them up
-        // from any instance. Documented restriction (D19): assigning to a
-        // class var from an instance-side method is a compile-time error —
-        // the assignment must happen in a class-side method to update the
-        // shared storage rather than create a per-instance shadow.
+        // from any instance. An assignment from either side writes the
+        // declaring class's slot (STORE_CLASSVAR).
         std::vector<std::string> classVarNames; // e.g., {"shared"}
+        // Class-side instance variables, declared by the top-level statement
+        // `Name class instanceVariableNames: '...'`: slots of the class object
+        // itself (each subclass has its own), visible to class-side methods.
+        std::vector<std::string> classInstVarNames;
+        // Classes mixed in with `uses: { A. B }` (identifiers only): their
+        // instance variables are the using class's too.
+        std::vector<std::string> mixinNames;
     };
+
+    // REPL: classes declared by earlier inputs (their instance, class and
+    // class-instance variables), so a method entered later can name them.
+    void setKnownClasses(const std::unordered_map<std::string, ClassInfo>& known) {
+        knownClasses_ = known;
+    }
 
     void analyseClosures(const ast::Node& module);
     const ScopeAnalysis& analysis() const { return analysis_; }
@@ -57,6 +68,8 @@ public:
     const std::unordered_map<std::string, ClassInfo>& classes() const { return classes_; }
 
 private:
+    std::string currentMethodDebugName_;   // e.g. "A>>inner", for block frame names
+    bool reportUndeclaredInMethod(const std::string& name);
     struct Scope {
         std::unordered_map<std::string, int> slots; // name -> slot index
         int nextSlot = 0;
@@ -66,6 +79,9 @@ private:
         // AST node pointer for this scope (nullptr for module, Block/MethodDecl
         // ast::Node* otherwise). Used to look up capturedByScope[node].
         const ast::Node* astNode = nullptr;
+        // The scope's arguments (a subset of `slots`): read-only, as in
+        // Smalltalk.
+        std::unordered_set<std::string> args;
     };
 
     // A deque, not a vector: emission recurses while holding a reference to
@@ -74,12 +90,24 @@ private:
     // in that recursion pushes a scope. std::deque::emplace_back/pop_back
     // never invalidate references to the other elements, whereas a vector
     // reallocation left that reference dangling (D29).
+    static bool isMethodScope(const Scope& s);
+    // Compile errors for assignments Smalltalk forbids: to a method or block
+    // argument (including an inlined to:do: loop variable). Returns true when
+    // an error was reported.
+    bool reportArgumentAssignment(const std::string& name);
+    void reportDuplicateNames(const std::vector<std::string>& names, size_t from,
+                              const std::string& where);
+    void emitSetInstVarNames(BytecodeModule& m, const ast::Node& classDecl);
+    // Loop variables of the to:do: loops being inlined (the scope whose slots
+    // bind them, and the name), innermost last.
+    std::vector<std::pair<const Scope*, std::string>> inlinedLoopArgs_;
     std::deque<Scope> scopes_;
     std::vector<std::string> errors_;
     ScopeAnalysis analysis_;
     // F4-U2: collected by collectClasses() before emission; queried by
     // downstream passes (e.g., MethodDecl emission) to map inst-var refs.
     std::unordered_map<std::string, ClassInfo> classes_;
+    std::unordered_map<std::string, ClassInfo> knownClasses_;
 
     // Resolve the *transitive* set of class-var names visible inside
     // methods of `className` — that is, this class's own classVarNames

@@ -5,8 +5,8 @@
 > the language as it is *intended* to behave. Where the present implementation
 > deviates from that intent, [§14 Known deviations](#14-known-deviations)
 > summarises the delta and defers to the live tracker `docs/STATUS.md` for the
-> current state of each item; the conformance suite is expected to have tests
-> that fail on the open deviations, which is intentional.
+> current state of each item. The examples in this document are run against
+> the current build by `tests/docs/run_doc_snippets.py`.
 >
 > A second engineer, or a conformance-test author, should be able to read
 > *only* this document and know how protoST is supposed to behave, without
@@ -40,10 +40,11 @@
 
 ## 1. Overview
 
-protoST is an **actor-native Smalltalk runtime built on protoCore**. It is one
-of three language runtimes (alongside protoJS and protoPython) that share a
-single prototype-based kernel — protoCore — and it is the demonstration that
-that kernel can host a message-passing object paradigm without flattening it.
+protoST is a **Smalltalk-syntax, actor-native runtime built on protoCore**: a
+demonstrator of that kernel and a base for digital twins. It is not a
+Smalltalk-80 implementation and not a replacement for an image environment.
+It is one of several language runtimes (protoPython, protoJS, protoScala,
+protoClojure among them) that share the prototype-based kernel protoCore.
 
 protoST's distinguishing contribution is a **first-class embedded actor
 model**: any object can be promoted to an actor with `asActor`, message sends
@@ -54,9 +55,9 @@ real-world entities, exchanging events.
 
 ### 1.1 Design stance
 
-protoST is a **Smalltalk-80 dialect**. It is "as close and as compliant as
-reasonable" to Smalltalk-80, but **standard conformance is not the goal**: the
-goal is a coherent, complete, well-tested language that shows off protoCore.
+protoST follows Smalltalk-80 syntax and semantics "as closely as reasonable",
+but **standard conformance is not the goal**: the goal is a coherent,
+well-tested language that shows what protoCore makes possible.
 Where a non-standard feature exhibits something the core makes possible,
 protoST may add it. Consequently this reference describes protoST on its own
 terms, noting where it follows or departs from Smalltalk-80.
@@ -65,8 +66,10 @@ Notable deliberate departures from Smalltalk-80:
 
 - **No image / no persistence.** protoST is strictly file-based. There is no
   `ChangeSet`, no `become:`, no world snapshot.
-- **No classic metaclass tower.** "Class-side methods" exist but there is no
-  separate `Metaclass` object and no `Class class class` recursion.
+- **A thin metaclass.** Class-side methods, class variables and
+  class-instance variables exist, and `3 class class` answers
+  `SmallInteger class`, but there is no `Metaclass` / `ClassDescription`
+  hierarchy to program against.
 - **Prototype-based kernel.** A class is a prototype object; an instance is a
   child of that prototype. Inheritance is prototype-chain delegation.
 - **Actors and futures are built in**, not a library.
@@ -90,8 +93,7 @@ Counter >> increment
 Counter >> value
   ^ value.
 
-c := Counter new.
-c initialize.
+c := Counter new.     "new sends initialize, so value starts at 0"
 c increment.
 c increment.
 c value.        "evaluates to 2 — the value of the whole program"
@@ -152,10 +154,13 @@ identifier followed by the assignment operator.
 An integer literal is a run of decimal digits:
 
 ```
-42      0      1000000
+42      0      1000000      16r1F      2r1010      1e10
 ```
 
-There is no radix syntax (`16r1F`), no digit separators, and no exponent.
+A radix prefix `base r` gives the digits in another base (`16r1F` is 31,
+`2r1010` is 10), and an exponent suffix `e` multiplies by a power of ten
+(`1e10` is the integer 10000000000). There are no digit separators
+(`1_000` is not a number).
 
 > **Negative numeric literals.** A `-` immediately followed by a digit, in
 > operand/primary position (start of stream, or after a binary operator,
@@ -165,9 +170,9 @@ There is no radix syntax (`16r1F`), no digit separators, and no exponent.
 > identifier or closing bracket) is still the binary minus operator, so
 > `a - 5` and `3 - 5` remain subtraction sends.
 
-An integer literal that overflows a 64-bit signed range is a lexical error.
-Small integers are represented inline (tagged); larger values promote to a
-heap `LargeInteger` — the boundary is transparent to the program.
+An integer literal of any size is accepted. Small integers are represented
+inline (tagged); larger values are a heap `LargeInteger` — the boundary is
+transparent to the program.
 
 ### 2.5 Float literals
 
@@ -176,10 +181,11 @@ mandatory** — `3.14` is a float, but `3.` is the integer `3` followed by a
 statement terminator, and `.5` is not a float.
 
 ```
-3.14      0.0      100.5
+3.14      0.0      100.5      1.0e16      2.5e-3
 ```
 
-There is no exponent syntax.
+An exponent suffix `e` (optionally negative) scales the value by a power of
+ten: `2.5e-3` is `0.0025`.
 
 ### 2.6 Character literals
 
@@ -190,6 +196,7 @@ $a      $Z      $       $$
 ```
 
 `$` followed by a space is the space character; `$$` is the dollar character.
+A character literal is an instance of `Character` (§12.4).
 
 ### 2.7 String literals
 
@@ -210,6 +217,9 @@ error.
 
 A symbol literal is `#` followed by either an identifier-like name or an
 operator. Symbols are interned (each distinct symbol value is a unique object).
+A symbol of 6 bytes or fewer is represented exactly like the equal string,
+so `#foo == 'foo'` is true and `#foo printString` is `'foo'`; longer symbols
+are distinct objects (D35, see §14).
 
 ```smalltalk
 #foo            "an identifier symbol"
@@ -338,19 +348,37 @@ Object subclass: #Counter
 Counter class >> initTally  tally := 0.
 Counter class >> bump       tally := tally + 1.
 Counter >> total            ^ tally.
+Counter >> bumpFromInstance tally := tally + 1.
+
+Counter initTally.
+Counter bump.
+Counter new bumpFromInstance.
+Counter new total.          "=> 2"
 ```
 
-A class variable can be assigned **only from a class-side method**. The
-language explicitly rejects an instance-side assignment to a class var
-with a compile-time error — "would create a per-instance shadow" — because
-the natural store would target `self` (the instance) and silently produce
-a per-instance attribute rather than update the shared storage. Mutation
-from a class-side method has `self == the class`, so the store reaches
-the shared slot. This restriction is the only remaining deviation from
-the Smalltalk-80 model and is tracked as D19 in `docs/STATUS.md`.
+A class variable is read and assigned from instance-side and class-side
+methods alike, and the store always reaches the one shared slot on the class
+that declares it.
+
+**Class-instance variables** — one slot per class, not shared with
+subclasses — are declared on the class side and used from class-side
+methods:
+
+```smalltalk
+Object subclass: #Shape.
+Shape class instanceVariableNames: 'count'.
+Shape class >> noteOne   count := (count ifNil: [ 0 ]) + 1. ^ count.
+
+Shape subclass: #Circle.
+Shape noteOne.
+Shape noteOne.        "=> 2"
+Circle noteOne.       "=> 1"
+```
+
+Class-side methods do not see instance variables.
 
 The optional `uses:` clause declares **multiple inheritance / mixins** — see
-§4.7. It takes a collection of class objects (typically a `{ … }` dynamic
+§4.11. It takes a collection of class objects (typically a `{ … }` dynamic
 array) which become additional parents alongside the primary superclass.
 
 `subclass:` is also an ordinary message understood by every class object, so a
@@ -413,10 +441,28 @@ so the two forms coexist freely. A class cannot however host both a
 unary `>> bar` and a call `>> bar(...)`: both register under attribute
 key `bar` and the second declaration overrides the first.
 
-A method body runs until the next top-level form begins (the parser detects
-the start of another `>>` / `class` / `subclass:`). An explicit `^` return
-**terminates the method body**: anything after the first top-level `^` is read
-as a new top-level form. A method with no `^` returns `self` by default.
+Outside parentheses, brackets and braces, a method body ends, whether or not
+the last statement has a period (D33), at the first of:
+
+- a **blank line**;
+- the start of the next method declaration (`Name >> …`, `Name class >> …`);
+- an **unindented line** (a token at column 1) after the body's first
+  statement — method bodies are indented, top-level statements are not.
+
+These rules apply where a statement is complete. A statement that still
+needs its next part (after a binary operator, a keyword, `:=` or `^`)
+continues across blank lines and unindented lines: `^ 3 +`, a blank line,
+then `4` answers 7. A complete statement is not continued: `^ 3`, a blank
+line, then an indented `+ 4`, is a compile error, and so is an indented
+statement after a blank line. Inside parentheses, brackets and braces, blank
+lines and indentation do not matter. Statements indented under a `^` stay in
+the method as unreachable code; an unindented `^` right after a method body
+is a compile error. A whole method may be written on one line:
+`C >> m ^ 1. C new m.` defines `m` and then runs `C new m`.
+
+So a method is written without blank lines between its statements, and
+top-level code after a method starts at column 1. A method with no `^`
+returns `self`.
 
 ### 3.4 Statements
 
@@ -509,8 +555,11 @@ value*, parenthesise: `f((a = b))`.
 ```smalltalk
 counter incr(2, factor = 3)              "positional + named override"
 counter incr(1)                          "named defaults apply"
-foreignModule doubleIt(x, name = 'hi')   "protoPython interop"
 ```
+
+The call form is shaped for methods exported by other protoCore runtimes, but
+a call-form send to a *foreign* method is not implemented yet: it reaches only
+protoST methods and primitives ([`INTEROP.md`](INTEROP.md) §3.5).
 
 ### 3.6 Assignment
 
@@ -594,30 +643,38 @@ The built-in class hierarchy, bootstrapped at runtime start:
 ```
 Object
   Number
-    SmallInteger        (Integer-family — small values)
-    LargeInteger        (Integer-family — large values)
+    Integer
+      SmallInteger
+      LargeInteger
     Float
-  Boolean               (True / False)
+    Fraction
+  Character
+  Boolean               (the class of true and false)
   String
     Symbol
-  Block
+  BlockClosure          (also reachable as Block)
   UndefinedObject       (the class of nil)
   Actor
   Future
-  Exception
-    Error
-    Warning
+  Atom
+  Exception             (see §8.1 for its subclasses)
   Collection
     SequenceableCollection
       Array
       OrderedCollection
+        SortedCollection
       Interval
     HashedCollection
       Set
       Bag
       Dictionary
   Association
+  Point, ReadStream, WriteStream, Message, Date, Time, Duration, Random
 ```
+
+There are no `True`, `False` or `Magnitude` classes: `true class` and
+`false class` answer `Boolean`, and `Character` and `Number` descend directly
+from `Object`.
 
 User classes are children of `Object` (or of any other class) created with
 `subclass:`.
@@ -636,20 +693,22 @@ the class — class declarations are runtime forms.
 
 ### 4.4 Creating instances
 
-A new instance is created by sending `new` (or its synonym `newChild`) to the
-class:
+A new instance is created by sending `new` to the class:
 
 ```smalltalk
 a := Account new.
 ```
 
-`new` returns a fresh, mutable child of the class prototype. Its instance
-variables start as `nil`.
+`new` returns a fresh, mutable child of the class prototype, with its
+instance variables at `nil`, and sends it `initialize` before answering it,
+as in Pharo: `Behavior>>new` is `self basicNew initialize`. `basicNew`
+allocates without sending `initialize`. A class that defines no `initialize`
+inherits an empty one. Built-in collection classes send `initialize` to
+instances of user subclasses too (`OrderedCollection subclass: #Stack`, then
+`Stack new` is a `Stack`).
 
-> **`new` does not auto-call `initialize`.** Unlike many Smalltalks, `Account
-> new` does *not* automatically send `initialize` to the new instance. If a
-> class defines `initialize`, the caller must send it explicitly:
-> `a := Account new. a initialize.` See [§14](#14-known-deviations).
+`newChild` is the underlying prototype operation: it answers a fresh child of
+the receiver and, like `basicNew`, does not send `initialize`.
 
 ### 4.5 Instance variables
 
@@ -725,18 +784,29 @@ Counter class >> startingAt: n
 > object; class-side methods carry a marker that the send-dispatch path honours
 > when the receiver is an instance.
 
+Class-side methods do not see instance variables. They read and assign class
+variables and class-instance variables (§3.2).
+
 ### 4.8 `printString`
 
 Every object responds to `printString`, which returns a human-readable
-`String`. The default `Object>>printString`:
+`String`. As in Pharo, `printString` is built on `printOn: aStream`, and the
+default `Object>>printOn:` writes:
 
-- For a class object, returns the bare class name (`'Counter'`).
-- For an instance, returns `'a ClassName'`, or `'an ClassName'` when the class
-  name starts with a vowel (`'a Counter'`, `'an Account'`).
+- for a class object, the bare class name (`Counter`);
+- for an instance, `a ClassName`, or `an ClassName` when the class name
+  starts with a vowel (`a Counter`, `an Account`).
 
-A class may override `printString` with its own method; ordinary inheritance
-applies. `printNl` prints the receiver (its string form) followed by a newline
-and returns the receiver.
+Built-in values print as Smalltalk literals: the `printString` of the string
+`abc` is the five characters `'abc'`, quotes included; `#(1 $a 'b')` prints as
+`#(1 $a 'b')`, `3 / 4` as `(3/4)`, and other collections with their elements
+(`an OrderedCollection(1 2)`).
+
+A class customises its printed form by overriding `printOn:` (preferred) or
+`printString`; either one is used by `printNl`, `displayNl`, collection
+printing and the CLI. `printNl` writes `printString` followed by a newline and
+answers the receiver. `displayString` / `displayNl` are the same except that
+a String or Symbol is shown without quotes.
 
 ### 4.9 Globals
 
@@ -754,23 +824,25 @@ methods, and call `super` in an override to reuse the module's original
 implementation:
 
 ```smalltalk
-lib := Import from: 'counter_lib'.
+json := Import from: 'json'.
 
 "Subclass an imported class. The receiver is an expression (the module
- attribute `lib Counter`), so the message form of `subclass:` applies."
-lib Counter subclass: #FastCounter instanceVariableNames: ''.
+ attribute `json JSON`), so the message form of `subclass:` applies."
+json JSON subclass: #TaggedJSON instanceVariableNames: ''.
 
-"Override a method; `super` reaches the imported Counter's implementation."
-FastCounter >> incrementBy: n
-  super incrementBy: n.
-  super incrementBy: n.        "FastCounter doubles every increment"
-  ^ self.
+"Override a class-side method; `super` reaches the imported JSON's."
+TaggedJSON class >> stringify: anObject
+  ^ 'json:' , (super stringify: anObject).
 
-c := FastCounter newChild.
-c initialize.                   "inherited unchanged from the module's Counter"
-c incrementBy: 10.
-c value.                        "=> 20"
+TaggedJSON stringify: #(1 2).          "=> 'json:[1,2]'"
+(TaggedJSON parse: '[1, 2]') size.     "=> 2 — parse: is inherited unchanged"
 ```
+
+`examples/modules/02_subclass_imported.st` does the same with instance-side
+methods: it subclasses the `Rectangle` of `examples/modules/_geometry.st` and
+calls `super area`. A module name is resolved against the current directory
+(then `$STPATH`, the active venv and `lib/`), not against the directory of the
+importing file, so run that example from `examples/modules/`.
 
 How it works:
 
@@ -819,7 +891,14 @@ Object subclass: #Money
 
 Money >> compareTo: other  ^ cents - other cents.
 Money >> typeName         ^ 'Money'.
+Money >> cents            ^ cents.
+Money >> cents: n         cents := n.
+
 "A Money now understands >, < (from Comparable) and describe (from Printable)."
+a := Money new cents: 500.
+b := Money new cents: 250.
+a > b.                    "=> true"
+a describe.               "=> 'a Money'"
 ```
 
 `uses:` is also available in the message form, so the primary superclass may
@@ -837,9 +916,10 @@ class searches this same order, starting after the method's defining class.
 
 **Instance variables.** Each parent may declare its own instance variables;
 they combine as the union. A mixin declaring `instanceVariableNames:` works as
-a parent — an instance of the using class reads and writes the mixin's ivars
-exactly as it does its own (instance variables are resolved by name on `self`,
-walking the prototype chain).
+a parent: the mixin's own methods read and write its instance variables on an
+instance of the using class (instance variables are resolved by name on
+`self`, walking the prototype chain), and a method written on the using class
+may name them too: they are the same slots.
 
 > A class assembled with `uses:` has its full parent chain baked in at
 > definition time, before any instance exists. Composing a *further*
@@ -858,7 +938,7 @@ Object subclass: #Loud.
 Loud >> shout  ^ 'HEY!'.
 
 Greeter addBehavior: Loud.
-(Greeter newChild) shout.   "=> 'HEY!' — Greeter gained Loud's behaviour at runtime"
+Greeter new shout.          "=> 'HEY!' — Greeter gained Loud's behaviour at runtime"
 ```
 
 After `addBehavior:`, the class object **and every instance created from it
@@ -881,8 +961,11 @@ class's behaviour assembled incrementally at runtime from independent mixins.
 > constructed with. This is a deliberate, documented limitation
 > (`STATUS.md` D21): protoCore captures an object's parent chain at
 > construction and the object never re-reads it, so a class can only present a
-> new chain to *future* instances. (Methods installed directly on a class with
-> `>>` *are* seen by pre-existing instances — only new *parents* are not.)
+> new chain to *future* instances. `addBehavior:` rebuilds the class and
+> rebinds its name, so a pre-existing instance keeps the old class entirely:
+> it also misses methods installed or redefined with `>>` after the call, and
+> it is not `isKindOf:` the rebuilt class. (Before any `addBehavior:`, methods
+> installed with `>>` *are* seen by existing instances.)
 > Lifting this to "all instances" would require protoCore to make a
 > constructed object observe later parent mutations of its prototype, which it
 > deliberately does not do.
@@ -915,16 +998,26 @@ Dispatch resolves the selector against the receiver:
 Sending a selector that no prototype in the receiver's chain understands is a
 **doesNotUnderstand** condition.
 
-An unresolved selector signals a **`MessageNotUnderstood`** exception — a
-subclass of `Error` — through the normal exception machinery. An
-`on: Error do:` (or `on: MessageNotUnderstood do:`) handler catches it, and the
-caught exception's `messageText` reads `doesNotUnderstand: <selector>`. With no
-handler the run aborts (an actor rejects its `Future`; a script terminates with
-an error message).
+The runtime sends `doesNotUnderstand: aMessage` to the receiver, where
+`aMessage` is a `Message` answering `selector` and `arguments`. A class may
+override it to intercept unknown sends (a proxy, a forwarder); whatever the
+override answers is the value of the original send:
 
-> The reflective `doesNotUnderstand:` user hook — a method the runtime sends to
-> the receiver so it can intercept unknown sends — is not implemented; an
-> unresolved send always signals `MessageNotUnderstood` directly.
+```smalltalk
+Object subclass: #Echo.
+Echo >> doesNotUnderstand: aMessage
+  ^ aMessage selector.
+
+Echo new frobnicate: 1 with: 2.    "=> #frobnicate:with:"
+```
+
+The inherited `Object>>doesNotUnderstand:` signals a
+**`MessageNotUnderstood`** exception — a subclass of `Error` — through the
+normal exception machinery. An `on: Error do:` (or
+`on: MessageNotUnderstood do:`) handler catches it, and the caught exception's
+`messageText` reads `doesNotUnderstand: <selector> (receiver class: <class>)`.
+With no handler the run aborts (an actor rejects its `Future`; a script
+terminates with an error message and a trace).
 
 ### 5.3 `super` dispatch
 
@@ -1011,11 +1104,19 @@ alive (a true closure).
 `self` inside a block is the `self` of the enclosing method — a block does not
 have its own receiver. `super` is likewise inherited.
 
-> **Limitation — shadowing.** A block cannot declare a captured variable with
-> the *same name* as a captured variable of the enclosing method (two distinct
-> variables, same name, in nested scopes). The capture mechanism uses one flat
-> per-method dictionary and cannot distinguish them. See
-> [§14](#14-known-deviations).
+Every evaluation of a block has its own arguments and temporaries. A block
+created in each iteration of a loop captures that iteration's variable, and a
+block argument or temporary that reuses an enclosing name is a distinct
+variable that shadows the outer one:
+
+```smalltalk
+blocks := OrderedCollection new.
+1 to: 3 do: [ :i | blocks add: [ i ] ].
+(blocks collect: [ :b | b value ]) asArray.    "=> #(1 2 3)"
+x := 10.
+[ :x | x * 2 ] value: 3.                       "=> 6"
+x.                                             "=> 10"
+```
 
 ### 6.4 Control flow with blocks
 
@@ -1025,8 +1126,9 @@ protoST has no built-in control-flow statements. Conditionals and loops are
 **Conditionals** — sent to a boolean:
 
 ```smalltalk
-(x > 0) ifTrue: [ 'positive' ]                  "=> 'positive' or nil"
-(x > 0) ifFalse: [ 'non-positive' ]
+x := 5.
+(x > 0) ifTrue: [ 'positive' ].                 "=> 'positive'"
+(x > 0) ifFalse: [ 'non-positive' ].            "=> nil"
 ```
 
 `ifTrue:` evaluates its block argument and returns the result when the
@@ -1046,8 +1148,10 @@ argument block is evaluated. `whileTrue:` returns `nil`.
 **Numeric iteration** — `to:do:` and `to:by:do:` on a number iterate:
 
 ```smalltalk
+sum := 0.
 1 to: 5 do: [ :i | sum := sum + i ].          "i takes 1,2,3,4,5"
-10 to: 1 by: -1 do: [ :i | ... ].             "counts down"
+sum.                                          "=> 15"
+10 to: 1 by: -1 do: [ :i | i printNl ].       "counts down"
 ```
 
 **Yieldable collection iteration** — `doYielding:` is the compiler-
@@ -1064,9 +1168,10 @@ the block via a recursive engine; a cooperative yield inside the
 block loses the iteration state. `doYielding:` instead emits a
 bytecode loop using `at:` + `value:` that lives entirely inside the
 engine's dispatch, so the block may yield at any iteration without
-losing place. Receivers that do not respond to `at:` and `size`
-(Set, Dictionary, Bag) raise `doesNotUnderstand: doYielding:` at
-runtime — those keep using `do:` and may not contain `wait`. See
+losing place. A receiver that does not respond to `at:` (a non-empty
+`Set`, `Dictionary` or `Bag`) raises `doesNotUnderstand: at:` at runtime —
+iterate those with `do:`, which may not contain `wait`, or convert them
+first (`aSet asArray doYielding: […]`). See
 Chapter 10.8 of [the tutorial](TUTORIAL.md) for a worked example.
 
 **Conditional and boolean protocol on `Boolean`** — `ifTrue:`, `ifFalse:`,
@@ -1131,14 +1236,24 @@ signalling, protected blocks, and handler actions.
 ### 8.1 The exception hierarchy
 
 ```
-Exception        (root; resumable)
-  Error          (subclass; NOT resumable)
-  Warning        (subclass; resumable)
+Exception                  (root; resumable)
+  Error                    (NOT resumable)
+    ArithmeticError
+      ZeroDivide           (resumable)
+    MessageNotUnderstood
+    SubscriptOutOfBounds   (a bad index: #(1 2) at: 5)
+    KeyNotFound            (Dictionary>>at: with an absent key)
+    NotFound               (remove: of an absent element)
+    BlockCannotReturn      (§7.1)
+    ModificationForbidden  (at:put: on a String)
+  Warning                  (resumable)
 ```
 
 - **`Exception`** — the root. Resumable by default.
 - **`Error`** — a serious fault. **Not resumable** — calling `resume:` on an
-  `Error` is itself an error.
+  `Error` is itself an error. `ZeroDivide` is the exception: as in Pharo it
+  is resumable, so `[ (1 / 0) + 1 ] on: ZeroDivide do: [ :e | e resume: 5 ]`
+  answers `6`.
 - **`Warning`** — a non-fatal condition. Resumable.
 
 Users may subclass any of these: `Error subclass: #AppError.` A subclass
@@ -1159,10 +1274,22 @@ exception's class. The matching handler runs (see [§8.4]).
 
 If **no handler matches**, the exception's *default action* runs:
 
-- `Error` — aborts the current activation with its message text (an actor
-  rejects its `Future`; a script terminates with the error).
-- `Warning` — prints and resumes.
-- `Exception` — resumes with `nil`.
+- `Error` — aborts the current activation (an actor rejects its `Future`; a
+  script terminates with exit status 1). An uncaught error prints `error: `
+  and its description — `AppError: too much` for a subclass of `Error`, the
+  bare text for a plain `Error` or a `doesNotUnderstand:` — followed by one
+  `at Class>>selector (file:line)` line per active method, innermost first
+  (kernel methods included, with the path of their `lib/kernel/` file):
+
+  ```
+  error: AppError: too much
+    at Acct>>check: (bank.st:6)
+    at Acct>>withdraw: (bank.st:4)
+    at <module> (bank.st:9)
+  ```
+- `Warning` — prints `Warning: <text>` and resumes with `nil`.
+- `Exception` — the same as `Warning`: it prints its text and resumes with
+  `nil`.
 
 An exception carries at least `messageText` (set by `signal:` or via
 `messageText:`); read it with `messageText`.
@@ -1203,7 +1330,7 @@ What the handler does determines whether — and how far — to unwind:
 | `ex resume` | as `resume: nil`. |
 | `ex retry` | the protected block is re-evaluated from the start. |
 | `ex pass` | the handler search resumes *outward* — the next matching enclosing handler is tried; if none, the default action runs. |
-| `ex outer` | intended: like `pass` but the search round-trips back. Currently an alias of `pass` (see [§14](#14-known-deviations)). |
+| `ex outer` | not implemented: behaves as `pass`. In Pharo, when the outer handler resumes, `outer` answers the resumption value inside the inner handler, which continues; in protoST the protected computation continues at the `signal` instead (D7, see [§14](#14-known-deviations)). |
 
 ```smalltalk
 "resume: — continue past the signal"
@@ -1232,9 +1359,10 @@ What the handler does determines whether — and how far — to unwind:
 
 ### 8.6 Resumability
 
-Resumability is a class-derived property: `Exception` and `Warning` are
-resumable, `Error` is not. A `resume:` on a non-resumable exception is itself
-an error. An exception translated from a native C++ exception (see [§8.7]) is
+Resumability is a class-derived property, answered by `isResumable`:
+`Exception`, `Warning` and `ZeroDivide` are resumable, `Error` and its other
+subclasses are not. A `resume:` on a non-resumable exception is itself an
+error. An exception translated from a native C++ exception (see [§8.7]) is
 forced non-resumable, because the native stack between its origin and the
 catch is already gone.
 
@@ -1257,6 +1385,7 @@ Collection                    (abstract — the shared iteration protocol)
   SequenceableCollection      (abstract — ordered, integer-indexed)
     Array                     fixed-size, indexed
     OrderedCollection         growable, indexed
+      SortedCollection        kept in order by a sort block
     Interval                  lazy arithmetic sequence
   HashedCollection            (abstract)
     Set                       deduplicating
@@ -1270,8 +1399,8 @@ collection.
 ### 9.1 Indexing
 
 Sequenceable collections are **1-indexed**: `at: 1` is the first element.
-`#(10 20 30) at: 2` evaluates to `20`. An out-of-range index signals an
-`Error` catchable by `on:do:`.
+`#(10 20 30) at: 2` evaluates to `20`. An out-of-range index signals a
+`SubscriptOutOfBounds` error catchable by `on:do:`.
 
 ### 9.2 The iteration protocol
 
@@ -1298,12 +1427,14 @@ These messages are defined on `Collection` and inherited by every collection:
 
 ```smalltalk
 #(1 2 3 4) size                                  "=> 4"
-#(1 2 3) do: [ :e | sum := sum + e ].            "sum becomes 6"
-(#(1 2 3 4) collect: [ :e | e * e ])             "=> an Array 1 4 9 16"
-(#(1 2 3 4) select: [ :e | e isEven ])           "=> an Array 2 4"
+sum := 0.
+#(1 2 3) do: [ :e | sum := sum + e ].
+sum                                              "=> 6"
+(#(1 2 3 4) collect: [ :e | e * e ])             "=> #(1 4 9 16)"
+(#(1 2 3 4) select: [ :e | e isEven ])           "=> #(2 4)"
 (#(1 2 3 4) inject: 0 into: [ :a :e | a + e ])   "=> 10"
 (#(3 1 4 1) detect: [ :e | e > 2 ])              "=> 3"
-(#(1 2) , #(3 4))                                "=> an Array 1 2 3 4"
+(#(1 2) , #(3 4))                                "=> #(1 2 3 4)"
 ```
 
 `collect:`, `select:`, `reject:` produce a collection of the receiver's
@@ -1338,7 +1469,7 @@ A growable, integer-indexed collection.
 | `addFirst:` | prepend an element |
 | `addAll:` | append every element of another collection |
 | `removeFirst` / `removeLast` | remove and return an end element |
-| `remove:` | remove a matching element; signals an `Error` if absent |
+| `remove:` | remove a matching element; signals `NotFound` if absent |
 | `remove:ifAbsent:` | as `remove:`, with a fallback block |
 | `at:` / `at:put:`, `first`, `last`, `size`, `do:` | as expected |
 
@@ -1434,7 +1565,7 @@ A map from arbitrary object keys to values.
 |-----------|---------|
 | `Dictionary new` | a new empty dictionary |
 | `at:put:` | store a key/value (returns the value) |
-| `at:` | the value for a key; an absent key is an error |
+| `at:` | the value for a key; an absent key signals `KeyNotFound` |
 | `at:ifAbsent:` | the value, or the fallback block's value if absent |
 | `at:ifAbsentPut:` | the value, computing and storing the fallback if absent |
 | `removeKey:` / `removeKey:ifAbsent:` | remove a key |
@@ -1476,6 +1607,11 @@ protoCore primitive collections are immutable; a protoST collection is a
 snapshot via structural sharing — copy-on-write, no full rewrite. The wrapper
 object's identity is stable across mutations.
 
+A `String` is not wrapped this way: strings are immutable values (D34), and
+`aString at: 1 put: $x` signals `ModificationForbidden`. Build strings with
+`,`, `WriteStream on: String new`, `String new: n withAll: $c` or
+`copyReplaceAll:with:`.
+
 ---
 
 ## 10. Actors and futures
@@ -1489,7 +1625,6 @@ object is unchanged.
 
 ```smalltalk
 sensor := TempSensor new.
-sensor initialize.
 actor := sensor asActor.
 ```
 
@@ -1515,15 +1650,14 @@ Internally the priority is the actor's `__priority__` attribute
 (SmallInteger 0/1/2). Absence is read as Medium, so any code written
 before priority bands existed keeps the same scheduling behaviour.
 
-The proxy is **fully transparent**: it forwards *every* message it receives to
-the wrapped object asynchronously (see [§10.2](#102-sending-to-an-actor)) —
-there is no exception, not even for introspection selectors. Sending
-`printString` to the proxy is itself an asynchronous send: it returns a
-`Future` that resolves to the *wrapped object's* `printString`, never a
-synchronous string describing "an Actor". Because every send is forwarded,
-there is no synchronous way to observe, from the proxy, that it is an actor at
-all — that opacity is the point. To obtain the wrapped object's printable form,
-`wait` on the future: `(actor printString) wait`.
+The proxy forwards every message it receives to the wrapped object
+asynchronously (see [§10.2](#102-sending-to-an-actor)), except the messages
+about the reference itself, which it answers synchronously: `==`, `~~`, `=`,
+`~=`, `hash`, `identityHash`, `yourself`, `isNil`, `notNil`, `ifNil:`,
+`ifNotNil:` and their combinations, `isActor`, and `printString` / `printOn:`
+/ `displayString` / `printNl` / `displayNl`, which print the wrapped object's
+basic form marked `(actor)` (`'a Thing (actor)'`) without running its own
+`printOn:` on another thread.
 
 ### 10.2 Sending to an actor
 
@@ -1548,11 +1682,13 @@ exception.
 
 | Selector | Meaning |
 |----------|---------|
-| `wait` | block until settled; return the value, or re-raise the rejection |
+| `wait` | block until settled; return the value, or re-signal the rejection (see §10.7) |
 | `thenDo:` | register a block to run with the value when resolved |
 | `catch:` | register a block to run with the cause when rejected |
 | `resolve:` | resolve the future with a value (settles waiters/callbacks) |
 | `rejectWith:` | reject the future with a cause |
+| `Future whenAll: futures` / `f1 & f2` | a future of the Array of all values; rejected if any is rejected |
+| `Future whenAny: futures` / `f1 \| f2` | a future of the first value to arrive |
 
 ```smalltalk
 f := actor compute.
@@ -1573,26 +1709,26 @@ pool because a `wait` does not tie up a worker.
 
 > A `wait` only yields when invoked from Smalltalk bytecode. A `wait` from the
 > main thread (a script's top level, the REPL) instead **blocks the calling OS
-> thread** on a condition variable — intentional, the main thread acts as a
+> thread** until the future settles — intentional, the main thread acts as a
 > synchronous client of the actor world.
 
 ### 10.5 `self` inside an actor
 
 Inside a method running on behalf of an actor, `self` is the **wrapped base
 object**, not the actor proxy. A self-send is therefore an ordinary
-synchronous dispatch — it does *not* re-enqueue on the actor and does *not*
-acquire the actor lock. The actor boundary is crossed only by sending to the
-proxy.
+synchronous dispatch — it does *not* re-enqueue on the actor. The actor
+boundary is crossed only by sending to the proxy.
 
 ### 10.6 The synchronization boundary
 
-The lock-equivalent belongs to the **actor proxy**, not the wrapped object. The
-wrapped object has no implicit lock; its instance variables are plain storage.
+The serialisation belongs to the **actor proxy** and its mailbox, not to the
+wrapped object. The wrapped object has no implicit lock; its instance
+variables are plain storage.
 Three consequences the programmer must honour:
 
 1. **One actor per wrapped object.** Wrapping the same object in two proxies
    and driving both in parallel re-introduces unsynchronised access.
-2. **A reference to the object that pre-dates `asActor` bypasses the lock.**
+2. **A reference to the object that pre-dates `asActor` bypasses the mailbox.**
    Sending directly to the underlying object after promoting it runs on the
    caller's thread, unsynchronised against the actor's worker.
 3. **An actor never reaches inside another actor's wrapped object directly** —
@@ -1604,6 +1740,20 @@ An exception unhandled inside an actor method propagates to the worker loop,
 which **rejects that message's `Future`** with the exception. The actor stays
 alive and processes its next message. Partial mutations performed before the
 raise are *not* rolled back — protoST has no transactional default.
+
+`wait` on a future rejected with an exception re-signals that exception in the
+waiter, with its class and text: an `AppError` signalled inside the actor is
+caught by `on: AppError do:` around the `wait`, and a `doesNotUnderstand:` by
+`on: MessageNotUnderstood do:`. A future rejected with a value that is not an
+exception (`aFuture rejectWith: 'cause'`) is re-signalled as an `Error` whose
+text is `Future rejected: cause`.
+
+**An actor that waits handles no other message** (D37). While its method is
+parked on `wait`, the actor's mailbox is not processed, so two actors that
+`wait` on each other could never proceed. The `wait` that would close such a
+cycle signals an `Error` whose text starts with `deadlock:` instead of hanging.
+Inside actors, chain with `thenDo:` / `catch:` or `Future whenAll:` rather than
+waiting on an actor that may call back.
 
 ### 10.8 Atoms — optimistic-concurrency cells
 
@@ -1621,6 +1771,7 @@ the *atom*. Reach for an `Atom` when many actors must update one shared value
 — a counter, a registry, a world graph — and routing every update through a
 single owner actor would be a bottleneck.
 
+<!-- snippet-group: atom -->
 ```smalltalk
 total := Atom on: 0.        "a cell holding an initial value"
 total value.               "=> 0   — read the current snapshot"
@@ -1630,6 +1781,7 @@ total value.               "=> 0   — read the current snapshot"
 only if the cell still holds the expected one (by pointer identity), and
 answers whether it did:
 
+<!-- snippet-group: atom -->
 ```smalltalk
 total value: 1 ifCurrent: 0.   "=> true  — 0 was current, cell is now 1"
 total value: 9 ifCurrent: 0.   "=> false — 0 is not current; nothing written"
@@ -1678,9 +1830,9 @@ never its methods.
 ### 11.1 File-to-module mapping
 
 A `.st` file is a module. Loading a module executes its top-level forms in
-order; the resulting module object exposes the top-level names it defined
-(class names, primarily) as attributes. Names beginning with `_` are not
-exported.
+order; the resulting module object exposes the classes the file declares as
+attributes. Top-level variables are not exposed, and class names beginning
+with `_` are not exported.
 
 ### 11.2 `Import from:`
 
@@ -1688,15 +1840,29 @@ exported.
 by `aPath` and returns the module object:
 
 ```smalltalk
-m := Import from: 'counter_lib'.
-c := m Counter new.
+m := Import from: 'json'.
+(m JSON parse: '[1, 2, 3]') size.     "=> 3"
 ```
 
+A module name is looked up, in order, in the current directory, the
+directories listed in `$STPATH` (colon-separated), the active venv, and the
+standard library `lib/`; `.st` is appended when missing. The directory of the
+importing file is not searched.
+
+The classes a module declares are also bound as globals of the running
+program, as a class declaration always is (§4.3). Importing `random` or `time`
+from `lib/` therefore rebinds the globals `Random`, `Time` and `Duration` to
+that module's classes, which have a different protocol from the kernel classes
+of the same names (see the tutorial, chapter 9).
+
 Module resolution goes through protoCore's **Unified Module Discovery (UMD)**.
-A protoST module provider resolves `.st` files; because UMD is shared across
-the three runtimes, `Import from:` can also resolve modules served by protoJS
-or protoPython providers when they share a `ProtoSpace`. Imported modules are
-cached — importing the same path twice yields the same module object.
+A protoST module provider resolves `.st` files. UMD is shared by the protoCore
+runtimes, and protoST's resolution chain can be extended with another
+runtime's provider by a program that embeds it; what that has and has not
+been shown to do with a real second runtime is recorded in
+[`INTEROP.md`](INTEROP.md) §0 (the `protost` binary itself loads only `.st`
+modules). Imported modules are cached — importing the same path twice yields
+the same module object.
 
 `Import from:` works on every thread: at a script's top level and inside actor
 methods alike. A module's top level runs at most once per runtime. When several
@@ -1748,9 +1914,15 @@ It is a reference snapshot of the current implementation.
 
 | Selector | Meaning |
 |----------|---------|
-| `new` / `newChild` | a fresh mutable instance |
-| `printString` | human-readable `String` |
+| `new` | a fresh instance, sent `initialize` before it is answered |
+| `basicNew` / `newChild` | a fresh instance, without `initialize` |
+| `printString`, `printOn:` | human-readable `String` (§4.8) |
+| `displayString`, `displayNl` | as `printString` / `printNl`, strings without quotes |
 | `printNl` | print the receiver followed by a newline; returns the receiver |
+| `class`, `isKindOf:`, `respondsTo:`, `perform:` … `perform:with:with:` | reflection |
+| `error:` | signal an `Error` with the given text |
+| `doesNotUnderstand:` | sent by the runtime for an unknown selector; overridable (§5.2) |
+| `yourself` | the receiver (for cascades) |
 | `asActor` | wrap the receiver as an `Actor` (Medium-priority band) |
 | `asHighPriorityActor` | same, but the actor sits in the High-priority ready queue (drained before Medium/Low) |
 | `asLowPriorityActor` | same, but the actor sits in the Low-priority queue (drained after Medium/High) |
@@ -1759,37 +1931,42 @@ It is a reference snapshot of the current implementation.
 | `=` `~=` | equality / inequality; the default is identity, overridden to value-equality on `SmallInteger`, `String`, `Symbol`, `Boolean` and other value types |
 | `isNil` `notNil` | nil test — `false` / `true` for every object except `nil` |
 | `ifNil:` `ifNotNil:` `ifNil:ifNotNil:` | nil-conditional evaluation; an `ifNotNil:` block may take the receiver as an argument |
-| `on:do:`, `on:do:on:do:`, `ensure:`, `ifCurtailed:` | exception protocol (these are bound on `Block`; see §12.7) |
+| `on:do:`, `on:do:on:do:`, `ensure:`, `ifCurtailed:` | exception protocol (these are bound on `Block`; see §12.5) |
 | `setInstVar:from:to:` | atomic compare-and-swap on an instance variable: set it to the third argument only if it currently holds the second; answer whether it did (see §10.8) |
 | `sleep:` | sleep the current thread N ms (a test helper, not for production use) |
 
-### 12.2 `Number`, `SmallInteger`, `LargeInteger`, `Float`
+### 12.2 `Number`, `SmallInteger`, `LargeInteger`, `Fraction`, `Float`
 
-protoST has a full numeric tower. `SmallInteger`, `LargeInteger` and `Float`
-all descend from `Number`, and arithmetic, comparison and the unary numeric
+protoST has a full numeric tower. `SmallInteger` and `LargeInteger` (under
+`Integer`), `Fraction` and `Float` all descend from `Number`, and arithmetic, comparison and the unary numeric
 operations are bound **once on `Number`**, so every numeric kind understands
 the same protocol:
 
 | Selector | Meaning |
 |----------|---------|
 | `+` `-` `*` | arithmetic |
-| `/` | division; `/` by zero signals a `ZeroDivide` error |
-| `//` | integer (truncating) division |
-| `\\` | modulo — the remainder |
+| `/` | exact division: between integers it answers a `Fraction` in lowest terms (`3 / 4`), or an `Integer` when it divides evenly (`4 / 2` is `2`); `/` by zero signals `ZeroDivide` |
+| `//` | integer division, rounded toward negative infinity (`-7 // 2` is `-4`) |
+| `\\` | modulo, with the sign of the divisor (`-7 \\ 2` is `1`) |
+| `quo:` `rem:` | integer division and remainder truncated toward zero (`-7 quo: 2` is `-3`, `-7 rem: 2` is `-1`) |
 | `<` `<=` `>` `>=` | ordered comparison → a boolean |
 | `=` `~=` | equality / inequality → a boolean (value equality across the tower, so `2 = 2.0`) |
 | `negated` | the receiver with its sign flipped |
 | `abs` | the absolute value |
 | `isEven` `isOdd` | integer parity (a non-integral `Float` is neither) |
-| `printString` | the value's decimal digits — a `Float` always shows a fractional part (`4.0`), a `LargeInteger` shows its exact digits in full |
+| `printString` | a Smalltalk literal: a `Float` always shows a fractional part (`4.0`, `1.0e16`), a `LargeInteger` shows its exact digits in full, a `Fraction` prints as `(3/4)` |
+| `printString:` `printStringRadix:` | the digits in another base (`255 printString: 16` is `'FF'`, `255 printStringRadix: 16` is `'16rFF'`) |
 
 The arithmetic primitives delegate to protoCore's own `ProtoObject`
 arithmetic, which gives the tower three properties for free:
 
 - **Mixed-mode coercion.** An operation with one `Float` operand produces a
-  `Float`: `1 + 2.5` → `3.5`, `2.5 + 1` → `3.5`, `1 / 2.0` → `0.5`.
+  `Float`: `1 + 2.5` → `3.5`, `2.5 + 1` → `3.5`, `1 / 2.0` → `0.5`. An
+  operation between an `Integer` and a `Fraction` stays exact:
+  `(1/3) + (2/3)` → `1`.
 - **Transparent overflow promotion.** An integer result that exceeds the
-  54-bit inline `SmallInteger` range is automatically promoted to a heap
+  56-bit inline `SmallInteger` range (`SmallInteger maxVal` is 2^55 − 1)
+  is automatically promoted to a heap
   arbitrary-precision `LargeInteger` and stays exact — a `whileTrue:` loop
   computing `25!` yields the exact `15511210043330985984000000`, not a
   wrapped value. The boundary is invisible to the program.
@@ -1797,10 +1974,12 @@ arithmetic, which gives the tower three properties for free:
   and a `LargeInteger` answer exactly the same selectors a `SmallInteger`
   does.
 
-> **Division.** `/` between two integers is *truncating* integer division
-> (`4 / 2` → `2`, `1 / 3` → `0`) — protoST has no `Fraction` type, so it
-> follows protoCore's integer `/`. `//` is an explicit integer-division alias.
-> If either operand is a `Float`, `/` is float division (`1 / 2.0` → `0.5`).
+> **Division.** `/` between two integers is exact, as in Smalltalk-80:
+> `1 / 3` is the `Fraction` `(1/3)`, `4 / 2` is `2`. If either operand is a
+> `Float`, `/` is float division (`1 / 2.0` → `0.5`). A `Fraction` answers
+> `numerator`, `denominator` and `asFloat`, and takes part in every
+> arithmetic operation and comparison. `ZeroDivide` is a subclass of
+> `ArithmeticError` and is resumable.
 
 Iteration helpers are bound on `Number`:
 
@@ -1830,17 +2009,20 @@ thin wrappers over `<cmath>` (libm).
 | `floor` `ceiling` `rounded` `truncated` | round to an **integer** (an integer receiver answers itself) |
 | `sign` | `-1` / `0` / `1` |
 | `squared` | `self * self` (an integer square promotes to `LargeInteger` if it overflows) |
-| `reciprocal` | `1 / self`, always a `Float` |
+| `reciprocal` | `1 / self` (exact for an integer: `2 reciprocal` is `(1/2)`) |
 | `isZero` | comparison with zero → a boolean |
 | `min:` `max:` | the smaller / larger of receiver and argument |
 | `between:and:` | inclusive range test `low <= self <= high` → a boolean |
 | `asFloat` | the receiver as a `Float` |
 | `asInteger` | the receiver as an integer (a `Float` is truncated toward zero) |
-| `asCharacter` | the integer code point as a 1-character `String` (the inverse of `String>>asInteger`) |
+| `asCharacter` | the `Character` with this code point (the inverse of `Character>>asInteger`) |
 | `even` `odd` | integer parity (aliases of `isEven` / `isOdd`) |
 | `factorial` | `1 * 2 * ... * n` on a non-negative integer — exact, promotes to `LargeInteger` |
 | `raisedTo:` | exponentiation — see below |
 | `gcd:` `lcm:` | greatest common divisor / least common multiple of two integers |
+| `**` | exponentiation (`2 ** 3` is `8`) |
+| `roundTo:` | round to a multiple of the argument |
+| `bitAnd:` `bitOr:` `bitXor:` `bitShift:` | bit operations on integers |
 
 Class-side **constants** are bound on `Float`: `Float pi`, `Float e`,
 `Float infinity`, `Float nan`.
@@ -1857,7 +2039,7 @@ Class-side **constants** are bound on `Float`: `Float pi`, `Float e`,
 > **Exact exponentiation and factorial.** `raisedTo:` with a non-negative
 > integer exponent, and `factorial`, are computed by exact repeated
 > multiplication, so each intermediate product promotes to a `LargeInteger`
-> the moment it leaves the 54-bit `SmallInteger` range — `2 raisedTo: 100` and
+> the moment it leaves the 56-bit `SmallInteger` range — `2 raisedTo: 100` and
 > `30 factorial` are exact arbitrary-precision integers, never an overflowed
 > `double`. A `Float` exponent (or a negative integer exponent) routes through
 > libm `pow` and answers a `Float`.
@@ -1881,27 +2063,33 @@ Class-side **constants** are bound on `Float`: `Float pi`, `Float e`,
 | `not` | logical negation |
 | `=` | value equality (identity for the tagged boolean immediates) |
 
-### 12.4 `String` / `Symbol`
+### 12.4 `String` / `Symbol` / `Character`
 
 | Selector | Meaning |
 |----------|---------|
 | `,` | concatenation → a new `String` |
-| `size` | character count (Unicode codepoints) |
-| `at:` | the n-th character (1-based) as a 1-character `String`; an out-of-bounds index signals an `Error` |
-| `asInteger` | the Unicode code point of the first character (`nil` for the empty string) |
-| `=` `~=` | content equality / inequality |
-| `printNl` | print followed by a newline |
+| `size` | character count (Unicode code points) |
+| `at:` | the n-th `Character` (1-based); an out-of-bounds index signals `SubscriptOutOfBounds` |
+| `at:put:` | signals `ModificationForbidden`: strings are immutable (D34) |
+| `asInteger` / `asNumber` | the number the string spells (`'42' asInteger` is `42`, `'3.5' asNumber` is `3.5`), or `nil` when it spells none (`'abc' asInteger` is `nil`) |
+| `asSymbol` / `asString` | conversion between `String` and `Symbol` |
+| `=` `~=` `<` `>` | content equality and ordering |
+| `copyFrom:to:`, `indexOf:`, `occurrencesOf:`, `includesSubstring:`, `beginsWith:`, `substrings:`, `asUppercase`, `asLowercase`, `trimBoth`, `reversed` | the everyday protocol |
+| `do:`, `collect:`, `select:`, `first`, `last`, `isEmpty` | the collection protocol, over `Character`s |
+| `printNl` / `displayNl` | print followed by a newline, with / without quotes |
 
-> protoST has no distinct `Character` type — a character is a 1-character
-> `String` — so `'abc' at: 2` answers the `String` `'b'`. `Number>>asCharacter`
-> is the inverse of `String>>asInteger`: it answers the 1-character `String`
-> for a Unicode code point.
+A `Character` is written `$a` and answers `asInteger` / `value` (its code
+point), `isVowel`, `isLetter`, `isDigit`, `asUppercase`, `asLowercase`;
+`Character value: 65` and `65 asCharacter` answer `$A`. `'abc' at: 2` is `$b`.
 
 ### 12.5 `Block`
 
 | Selector | Meaning |
 |----------|---------|
 | `value` … `value:value:value:value:` | evaluate with 0–4 arguments |
+| `valueWithArguments:` | evaluate with the elements of an Array as arguments |
+| `numArgs` | the number of arguments the block takes |
+| `timeToRun` | evaluate and answer the elapsed time as a `Duration` |
 | `whileTrue:` | loop: while the receiver block is `true`, evaluate the argument |
 | `whileFalse:` | loop: while the receiver block is `false`, evaluate the argument |
 | `whileTrue` `whileFalse` | loop: re-evaluate the receiver while it stays `true` / `false` |
@@ -1911,7 +2099,8 @@ Class-side **constants** are bound on `Float`: `Float pi`, `Float e`,
 
 ### 12.6 `Future`
 
-`wait`, `thenDo:`, `catch:`, `resolve:`, `rejectWith:` — see [§10.3](#103-future).
+`wait`, `thenDo:`, `catch:`, `resolve:`, `rejectWith:`, and the combinators
+`Future whenAll:` / `&` and `Future whenAny:` / `|` — see [§10.3](#103-future).
 
 ### 12.6a `Atom`
 
@@ -1934,7 +2123,11 @@ A shared mutable cell with optimistic-concurrency compare-and-swap — see
 | `return:` | handler action — yield a value from `on:do:` |
 | `resume`, `resume:` | handler action — resume the protected computation |
 | `retry` | handler action — re-run the protected block |
-| `pass`, `outer` | handler action — continue the handler search outward |
+| `retryUsing:` | handler action — replace the protected block with the argument and run it |
+| `pass`, `outer` | handler action — continue the handler search outward (`outer` is not implemented and behaves as `pass`, D7) |
+| `description` | the message text, or the class name when there is none |
+| `isResumable` | whether `resume:` is allowed (§8.6) |
+| `,` | an `ExceptionSet`: `on: ZeroDivide, KeyNotFound do: […]` |
 
 ### 12.8 Collections
 
@@ -1947,8 +2140,11 @@ protocol (`do:`, `collect:`, `select:`, `reject:`, `detect:`, `detect:ifNone:`,
 
 `Import from: aPathString` — load and return a module (see [§11](#11-modules)).
 
-> **There is no `Transcript`.** Smalltalk-80's standard output stream object is
-> not provided. Use `printNl` to print. See [§14](#14-known-deviations).
+### 12.10 `Transcript`
+
+`Transcript` writes to standard output: `show:`, `showCr:`, `cr`, `tab`,
+`space`, `print:` (the argument's `printString`), `display:` and `<<`. Its
+output is interleaved in order with `printNl` and `displayNl`.
 
 ---
 
@@ -2002,110 +2198,40 @@ Meta-commands are a REPL feature only — they have no effect on
 
 ### 13.2 Single runtime per process
 
-A protoST runtime must be the **only** `STRuntime` in its process. Constructing
-a second `STRuntime` corrupts symbol interning (see [§14](#14-known-deviations)).
-The CLI always constructs exactly one.
+A protoST runtime must be the **only** `STRuntime` in its process: a second
+`STRuntime` in the same process can mis-resolve module imports, because
+protoCore's module provider and module cache are process-wide (D2, see
+[§14](#14-known-deviations)). The CLI always constructs exactly one, so this
+matters only to a program that embeds protoST.
 
 ---
 
 ## 14. Known deviations
 
-This section summarises every place where the current implementation does not
-match the behaviour described in the main text, **split into deviations that
-are deliberate and deviations that are not**.
+Where protoST differs from Smalltalk-80 (and from Pharo, the dialect most
+readers know), on purpose or not yet implemented. The catalogue for a
+Smalltalk programmer, with what to write instead, is
+[Tutorial chapter 14](tutorial/14-for-the-smalltalk-programmer.md#144-deviations-from-smalltalk-80);
+[`docs/STATUS.md`](STATUS.md) is the live tracker with repros, ids and fixing
+commits. Summary as of 0.4.0:
 
-> **`docs/STATUS.md` is the live tracker.** This section is a stable summary;
-> the *current* state of each item — still open, fixed, with repro and
-> severity, and the fixing commit when closed — lives in `docs/STATUS.md`.
-> When in doubt about whether an item below is still true, consult
-> `docs/STATUS.md`, which is verified against the build and updated with every
-> change. The conformance suite is expected to have tests that fail on the
-> open deviations — that is intentional; the failures surface the bugs.
+- **Deliberate:** programs are files, not an image; a blank line ends a
+  method body (D33); a script shows the value of its last statement (D12,
+  D12b); strings are immutable (D34); short symbols are represented as the
+  equal strings (D35); a few printed forms differ (D36); an actor that waits
+  is not re-entrant (D37); recursion depth is bounded with a catchable error
+  (D38); one runtime per process (D2); `addBehavior:` reaches future
+  instances only (D21).
+- **Not implemented:** `outer` behaves as `pass` (D7); `thisContext` is reserved: using it is a compile error (D17); the
+  metaclass hierarchy is thin (`x class class` works; there is no
+  `Metaclass`/`ClassDescription` protocol beyond the reflective messages of
+  §14 of the tutorial).
+- **Open bugs:** S3 (see `STATUS.md`); S19 was closed in 0.4.0.
 
-The id scheme (`D1..D18`) is shared with `docs/STATUS.md`. Items D6, D11, D19
-and D20 are described in `docs/STATUS.md`: D6 is now closed (not reproducible),
-D11 (`Float` / mixed-mode arithmetic) and D20 (`LargeInteger` arithmetic and
-overflow promotion) are now closed (the numeric tower — see §12.2), and D19
-is now narrower than "not implemented" — class variables ARE honoured; only
-mutation from instance-side methods is prohibited (a compile-time error).
-
-### 14.1 Intentional deviations
-
-These are deliberate design decisions. protoST diverges from standard
-Smalltalk here *on purpose*; they are not bugs and they stay, documented with
-their rationale. See `docs/STATUS.md` § *Intentional deviations* for the
-canonical list.
-
-- **D2 — single `STRuntime` per process.** A second `STRuntime` corrupts
-  symbol interning, because protoCore's symbol caches are per-`ProtoSpace`
-  C++ statics. protoST adopts "one runtime per process" as its operating
-  contract rather than working around it; the CLI always constructs exactly
-  one. *Affects:* [§13.2](#132-single-runtime-per-process).
-- **D4 — `new` does not auto-invoke `initialize`.** `ClassName new` returns a
-  raw instance; the caller sends `initialize` explicitly. This is a deliberate
-  MVP semantics choice — `new` is the raw allocator. Standard Smalltalk-80
-  defines `new` as `super new initialize`; protoST may align later.
-  *Affects:* [§4.4](#44-creating-instances).
-- **D7 — `outer` is an alias of `pass`.** An MVP simplification of the handler
-  protocol. Strict `outer` semantics (run the enclosing handler, then return
-  to the inner one) require resumable handler re-entry that is not built;
-  `pass` is the shipped behaviour. *Affects:* [§8.4](#84-handler-actions).
-- **D12 — no `main:` auto-invocation.** A script is simply its top-level forms
-  run in order; the printed value is the last top-level statement. protoST
-  scripts deliberately have no distinguished entry point.
-  *Affects:* [§13](#13-the-cli).
-
-### 14.2 Known bugs and not-yet-implemented features
-
-These deviations are *not* deliberate: either something is broken (a bug) or a
-planned feature is simply absent (not yet implemented). `docs/STATUS.md` is the
-authoritative tracker — it carries the repro, severity, owning roadmap track,
-and (once fixed) the closing commit for each.
-
-**Bugs** — broken behaviour that contradicts the language's own intent or
-examples:
-
-> _No open bugs are currently tracked (see `docs/STATUS.md`)._
-
-> **Fixed (commit `2544a45`).** D1 (negative numeric literals), D13 (the CLI no
-> longer advertises an unimplemented `compile` subcommand), D15
-> (`classVariableNames:` was emitting a compile-time diagnostic instead of
-> being silently discarded — superseded 2026-06-13 when D19 closed and the
-> clause is now honoured), D16 (nested literal arrays parse) and D18
-> (`==`/`~~` bound on `Object`; `=`/`~=` universal with value-equality
-> overrides) are resolved — see `docs/STATUS.md` *Closed items*.
-
-> **Fixed (commit `c964f4e`).** D3 (an unresolved selector signals a catchable
-> `MessageNotUnderstood`, a subclass of `Error`), D5 (class-side methods are
-> isolated from instances — a `ClassName class >> sel` method is no longer
-> reachable from an instance) and D8 (a `^` in a block whose home method has
-> already returned signals a catchable `BlockCannotReturn`, a subclass of
-> `Error`) are resolved — see `docs/STATUS.md` *Closed items*.
-
-> **Fixed (commit `42c4dde`).** D11 (`Float` and mixed-mode arithmetic) and D20
-> (`LargeInteger` arithmetic with transparent overflow promotion) are resolved
-> — the numeric tower now works (see §12.2). The arithmetic primitives delegate
-> to protoCore's own promoting / coercing `ProtoObject` arithmetic and are
-> bound on the shared `Number` prototype — see `docs/STATUS.md` *Closed items*.
-
-**Not yet implemented** — planned features absent today (owning roadmap track
-noted in `docs/STATUS.md`):
-
-- **D10 — no `Transcript`.** The standard output-stream object is not
-  provided; use `printNl`. *Affects:* [§12.9](#129-import).
-- **D17 — `thisContext` is reserved but inert.** It parses to its own node but
-  the reflective context protocol is not built.
-  *Affects:* [§3.10](#310-thiscontext).
-- **D19 — class-variable mutation from instance-side methods is prohibited.**
-  Class variables are honoured: the `classVariableNames:` clause installs
-  each name on the class object (mangled `_iv_<name>`, the same key shape
-  inst vars use), so reads from any instance — including instances of
-  subclasses — find the shared value via the prototype-chain attribute
-  walk. The remaining deviation from Smalltalk-80 is that an instance-side
-  assignment to a class var is a compile-time error: in protoST it would
-  silently target `self` and create a per-instance shadow rather than
-  update the shared storage. Mutation must happen in a class-side method.
-  *Affects:* [§3.2](#32-class-declarations).
+Closed before 0.4.0 and now as in Smalltalk-80: `new` sends `initialize`
+(D4), `Transcript` (D10), class variables assigned from instance methods (D19),
+per-activation block variables (D30), `Character`, exact `Fraction` division,
+`doesNotUnderstand:` overrides.
 
 ---
 

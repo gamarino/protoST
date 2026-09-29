@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <string>
 #include <vector>
 
 namespace proto {
@@ -30,6 +31,10 @@ struct DebugFrame;
 // unrelated to the unbounded user-method recursion this task targets.
 class ExecutionEngine {
 public:
+    // The methods active on this thread, innermost first, as
+    // "  at Class>>selector (file:line)" lines (at most maxFrames).
+    static std::string describeActiveStack(std::size_t maxFrames);
+
     explicit ExecutionEngine(STRuntime& rt);
     ~ExecutionEngine();
 
@@ -201,7 +206,20 @@ private:
 
     // Total automaticLocals capacity reserved once at engine entry. Frame
     // regions are packed into [0, kSlotCapacity). Overflow is a hard error.
-    static constexpr unsigned int kSlotCapacity = 8192;
+    static constexpr unsigned int kSlotCapacity = 1u << 20;
+    // Frame slots kept free below the scratch region so the handler of a
+    // "stack depth exceeded" error can run.
+    static constexpr unsigned int kOverflowReserve = 16384;
+
+    // True when a frame for `m` would pass the depth limit; the overflow has
+    // then been signalled as an Error and its value pushed on `f`.
+    const proto::ProtoObject* doesNotUnderstand(proto::ProtoContext* ctx,
+                                                const proto::ProtoObject* recv,
+                                                const std::string& selector,
+                                                const proto::ProtoObject* const* args,
+                                                int argc);
+    bool signalIfTooDeep(proto::ProtoContext* ctx, Frame& f,
+                         const BytecodeModule* m, unsigned int argc);
 
     // --- per-frame region geometry -----------------------------------------
     static unsigned int frameRegionSize(const Frame& f) {

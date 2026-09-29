@@ -25,13 +25,37 @@
 
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace protoST {
 
 class UnhandledSTException : public std::runtime_error {
 public:
-    explicit UnhandledSTException(const std::string& m)
-        : std::runtime_error(m) {}
+    explicit UnhandledSTException(const std::string& m, std::string trace = std::string(),
+                                  bool actorException = false)
+        : std::runtime_error(m), trace_(std::move(trace)), actorException_(actorException) {}
+    // The active methods when the error went unhandled, innermost first, one
+    // "  at Class>>selector (file:line)" line each; empty when unknown. Kept
+    // apart from what(), which handlers and rejected Futures see.
+    const std::string& trace() const { return trace_; }
+    // True when the unhandled protoST exception was raised inside an actor
+    // method and stored on that actor (`__inflight_exception__`, reachable by
+    // the collector), so the actor's Future can be rejected with the
+    // exception itself. Never a raw pointer: the stack that referenced the
+    // exception unwinds, and cleanup blocks may collect, before the drain
+    // catches this.
+    bool actorException() const { return actorException_; }
+private:
+    std::string trace_;
+    bool actorException_;
 };
+
+// "error: <message>" followed by the trace of an unhandled error, if any.
+inline std::string describeUncaught(const std::exception& e) {
+    std::string out = std::string("error: ") + e.what();
+    if (const auto* u = dynamic_cast<const UnhandledSTException*>(&e))
+        if (!u->trace().empty()) out += "\n" + u->trace();
+    return out;
+}
 
 } // namespace protoST

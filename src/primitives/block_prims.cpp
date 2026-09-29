@@ -6,9 +6,17 @@
 #include "protoCore.h"
 
 #include <stdexcept>
+#include <vector>
 #include <string>
 
 namespace protoST {
+
+// Defined in object_prims.cpp: run a method by name, as a send does.
+const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* recv,
+                                      const proto::ProtoString* selector,
+                                      const proto::ProtoObject* const* args, int argc,
+                                      bool* understood);
 
 // The `__bc_ptr__` attribute key, resolved once and shared by every reader of
 // a block's metadata. Symbol interning is per ProtoSpace; this caches the
@@ -37,8 +45,20 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
     const proto::ProtoString* bcKey  = rt.bootstrap().sym.bcPtr;
     const proto::ProtoString* capKey = rt.bootstrap().sym.captured;
     auto* bcPtrObj = block->getAttribute(ctx, bcKey);
-    if (!bcPtrObj || bcPtrObj == PROTO_NONE)
-        throw std::runtime_error("block missing __bc_ptr__");
+    if (!bcPtrObj || bcPtrObj == PROTO_NONE) {
+        // Not a block: evaluate it the way Smalltalk does, by sending it
+        // value / value: / value:value: (so a Symbol stands for a block:
+        // #(1 2 3) collect: #squared).
+        static const char* const kValue[] = { "value", "value:", "value:value:" };
+        if (argc >= 0 && argc <= 2) {
+            bool understood = false;
+            const proto::ProtoObject* r = sendDynamic(
+                rt, ctx, block, proto::ProtoString::createSymbol(ctx, kValue[argc]),
+                args, argc, &understood);
+            if (understood) return r ? r : PROTO_NONE;
+        }
+        throw std::runtime_error("a block was expected here, but the argument is not a block");
+    }
     const BytecodeModule* sub =
         reinterpret_cast<const BytecodeModule*>(bcPtrObj->asLong(ctx));
     if (sub->argCount() != argc) {
@@ -102,6 +122,28 @@ int blockArgCount(proto::ProtoContext* ctx, const proto::ProtoObject* block) {
 
 namespace {
 
+// aBlock numArgs → the number of arguments the block takes.
+const proto::ProtoObject* prim_Block_numArgs(STRuntime&, proto::ProtoContext* ctx,
+                                              const proto::ProtoObject* r,
+                                              const proto::ProtoObject* const*, int) {
+    return ctx->fromLong(blockArgCount(ctx, r));
+}
+
+// aBlock valueWithArguments: anArray → evaluate with the array's elements.
+const proto::ProtoObject* prim_Block_valueWithArguments(STRuntime& rt, proto::ProtoContext* ctx,
+                                                        const proto::ProtoObject* r,
+                                                        const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("valueWithArguments: expects 1 arg");
+    const proto::ProtoObject* data = a[0] && a[0] != PROTO_NONE
+        ? a[0]->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__data__")) : nullptr;
+    const proto::ProtoList* list = data && data != PROTO_NONE ? data->asList(ctx) : nullptr;
+    if (!list) throw std::runtime_error("valueWithArguments: expects an Array");
+    std::vector<const proto::ProtoObject*> args;
+    for (unsigned long i = 0; i < list->getSize(ctx); ++i)
+        args.push_back(list->getAt(ctx, static_cast<int>(i)));
+    return invokeBlock(rt, ctx, r, args.data(), static_cast<int>(args.size()));
+}
+
 const proto::ProtoObject* prim_Block_value(STRuntime& rt, proto::ProtoContext* ctx,
                                             const proto::ProtoObject* r,
                                             const proto::ProtoObject* const* a, int argc) {
@@ -162,6 +204,9 @@ void installBlockPrimitives(STRuntime& rt) {
     auto& reg = rt.registry();
     auto& b   = rt.bootstrap();
     int idx = reg.registerPrim(prim_Block_value);
+    bindPrimitive(rt, b.blockProto, "numArgs", reg.registerPrim(prim_Block_numArgs));
+    bindPrimitive(rt, b.blockProto, "valueWithArguments:",
+                  reg.registerPrim(prim_Block_valueWithArguments));
     bindPrimitive(rt, b.blockProto, "value",                    idx);
     bindPrimitive(rt, b.blockProto, "value:",                   idx);
     bindPrimitive(rt, b.blockProto, "value:value:",             idx);

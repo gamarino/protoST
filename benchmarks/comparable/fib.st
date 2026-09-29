@@ -9,4 +9,6 @@ Fib >> compute: n
   ^ (self compute: n - 1) + (self compute: n - 2).
 
 f := Fib new.
-f compute: 25.
+result := f compute: 25.
+result = 75025 ifFalse: [Error signal: 'fib: wrong result ' , result printString].
+'VERIFIED ' , result printString

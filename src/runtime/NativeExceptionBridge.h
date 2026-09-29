@@ -45,9 +45,12 @@
 #include "runtime/PassSignal.h"
 #include "runtime/FutureYield.h"
 #include "runtime/UnhandledSTException.h"
+#include "runtime/Interrupt.h"
+#include "runtime/ZeroDivideSignal.h"
 #include "debugger/DebuggerRuntime.h"
 
 #include <exception>
+#include <string>
 
 namespace proto { class ProtoContext; class ProtoObject; }
 
@@ -73,6 +76,33 @@ const proto::ProtoObject* signalNativeError(STRuntime& rt,
 // by an ordinary `on: Error do:` handler. Defined in exception_prims.cpp.
 //
 // May throw the same control-flow exceptions as `signalNativeError`.
+// Signal a fresh ZeroDivide (defined in exception_prims.cpp).
+const proto::ProtoObject* signalZeroDivide(STRuntime& rt, proto::ProtoContext* ctx);
+
+// Signal a fresh instance of the global Error subclass named `className`
+// (a plain Error if there is none), carrying `message` (exception_prims.cpp).
+const proto::ProtoObject* signalErrorNamed(STRuntime& rt, proto::ProtoContext* ctx,
+                                           const char* className, const char* message);
+bool isExceptionClassObject(STRuntime& rt, proto::ProtoContext* ctx,
+                            const proto::ProtoObject* obj);
+
+// Build a Message (selector + arguments) and signal a resumable
+// MessageNotUnderstood carrying it and the receiver (exception_prims.cpp).
+const proto::ProtoObject* makeMessage(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const std::string& selector,
+                                      const proto::ProtoObject* const* args, int argc);
+const proto::ProtoObject* signalMessageNotUnderstood(STRuntime& rt, proto::ProtoContext* ctx,
+                                                     const proto::ProtoObject* receiver,
+                                                     const proto::ProtoObject* message,
+                                                     const char* text);
+
+// Re-signal an existing exception instance in the current context, and test
+// whether an object is one (exception_prims.cpp).
+const proto::ProtoObject* resignalException(STRuntime& rt, proto::ProtoContext* ctx,
+                                            const proto::ProtoObject* exc);
+bool isExceptionInstance(STRuntime& rt, proto::ProtoContext* ctx,
+                         const proto::ProtoObject* obj);
+
 const proto::ProtoObject* signalErrorOfClass(STRuntime& rt,
                                              proto::ProtoContext* ctx,
                                              const proto::ProtoObject* errorClass,
@@ -97,7 +127,10 @@ const proto::ProtoObject* translateNativeException(STRuntime& rt,
     catch (const FutureYield&)          { throw; }   // F6 v3 — cooperative yield
     // --- std::exception-DERIVED types that must NOT be translated ----------
     catch (const DebuggerHalt&)         { throw; }   // F2 — halt; is-a runtime_error
+    catch (const InterruptSignal&)      { throw; }   // Ctrl-C in the REPL; is-a runtime_error
     catch (const UnhandledSTException&) { throw; }   // already protoST; is-a runtime_error
+    catch (const ZeroDivideSignal&)     { return signalZeroDivide(rt, ctx); }
+    catch (const ClassedErrorSignal& e) { return signalErrorNamed(rt, ctx, e.className(), e.what()); }
     // --- a genuine native error: translate into a catchable protoST Error --
     catch (const std::exception& e)     { return signalNativeError(rt, ctx, e.what()); }
     catch (...)                         { return signalNativeError(rt, ctx, "native exception"); }

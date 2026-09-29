@@ -38,15 +38,18 @@
 // `Error`, so `[ ... ] on: Error do: [ ... ]` guards it (Track 1).
 
 #include "protoST/STRuntime.h"
+#include "runtime/ZeroDivideSignal.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/TransientPin.h"
+#include "modules/STModuleProvider.h"
 #include "protoCore.h"
 
 #include <cstring>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <algorithm>
 #include <vector>
 
 namespace protoST {
@@ -56,6 +59,14 @@ namespace protoST {
 const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* block,
                                        const proto::ProtoObject* const* args, int argc);
+// Defined in object_prims.cpp: the hash of a native number (`hash`).
+long long numericHash(proto::ProtoContext* ctx, const proto::ProtoObject* r);
+// Defined in object_prims.cpp: run a method by name, as a send does.
+const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* recv,
+                                      const proto::ProtoString* selector,
+                                      const proto::ProtoObject* const* args, int argc,
+                                      bool* understood);
 
 namespace {
 
@@ -64,6 +75,37 @@ namespace {
 // the first runtime's space and dangle for every later STRuntime.
 const proto::ProtoString* dataKey(proto::ProtoContext* ctx) {
     return proto::ProtoString::createSymbol(ctx, "__data__");
+}
+
+// A class-side constructor bound on a built-in collection class also serves
+// its user subclasses (`OrderedCollection subclass: #Stack`, then
+// `Stack new`). The primitive builds a built-in instance; when the receiver is
+// a user subclass, the result is re-made as a child of that class with the
+// same own attributes (the backing data), and receives `initialize`, as `new`
+// sends it for every other class.
+const proto::ProtoObject* instantiateAs(STRuntime& rt, proto::ProtoContext* ctx,
+                                        const proto::ProtoObject* cls,
+                                        const proto::ProtoObject* base,
+                                        const proto::ProtoObject* inst) {
+    if (!cls || cls == base || cls == PROTO_NONE || !inst) return inst;
+    const proto::ProtoObject* own =
+        cls->getOwnAttributeDirect(ctx, rt.bootstrap().sym.className);
+    if (!own || own == PROTO_NONE) return inst;
+    TransientPin pinInst(ctx, inst);
+    const proto::ProtoObject* out =
+        const_cast<proto::ProtoObject*>(cls)->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinOut(ctx, out);
+    struct Sink { const proto::ProtoObject* out; };
+    Sink sink{out};
+    inst->processOwnAttributes(ctx, &sink,
+        [](proto::ProtoContext* c, void* self, const proto::ProtoString* key,
+           const proto::ProtoObject* value) {
+            static_cast<Sink*>(self)->out->setAttribute(c, key, value);
+        });
+    bool understood = false;
+    sendDynamic(rt, ctx, out, proto::ProtoString::createSymbol(ctx, "initialize"),
+                nullptr, 0, &understood);
+    return out;
 }
 
 // The backing ProtoList of an Array instance. The instance stores the list
@@ -136,12 +178,40 @@ const proto::ProtoString* sizeKey(proto::ProtoContext* ctx) {
 // value-only comparison could never find a NaN that is in the collection. This
 // is the same predicate `indexOfEqual` uses for `Bag` and `OrderedCollection`,
 // which is how all four collections come to agree.
+// A heap object whose class may define = and hash: anything but a number, a
+// string or symbol, a character, a Boolean or nil. For these the hashed
+// collections send = and hash, so a class's own equality decides membership
+// (it used to be identity for every object that was not a primitive value).
+STRuntime* runtimeForUserEquality(proto::ProtoContext* ctx, const proto::ProtoObject* o) {
+    if (!o || o == PROTO_NONE || o == PROTO_TRUE || o == PROTO_FALSE) return nullptr;
+    if (o->isInteger(ctx) || o->isDouble(ctx) || o->asString(ctx)) return nullptr;
+    STRuntime* rt = stRuntimeForSpace(ctx->space);
+    if (!rt || o->getPrototype(ctx) == rt->bootstrap().characterProto) return nullptr;
+    return rt;
+}
+
 bool stKeyEquals(proto::ProtoContext* ctx, const proto::ProtoObject* a,
                  const proto::ProtoObject* b) {
     if (a == b) return true;
     if (!a) a = PROTO_NONE;
-    if (b) return a->partialCompare(ctx, b) == 0;
-    return false;
+    if (!b) return false;
+    if (STRuntime* rt = runtimeForUserEquality(ctx, a)) {
+        bool understood = false;
+        const proto::ProtoObject* args1[1] = { b };
+        const proto::ProtoObject* r = sendDynamic(
+            *rt, ctx, a, proto::ProtoString::createSymbol(ctx, "="), args1, 1, &understood);
+        if (understood) return r == PROTO_TRUE;
+    }
+    // A native key against an object with its own =, such as a Float against
+    // an equal Fraction: ask that object (= is symmetric).
+    if (STRuntime* rt = runtimeForUserEquality(ctx, b)) {
+        bool understood = false;
+        const proto::ProtoObject* args1[1] = { a };
+        const proto::ProtoObject* r = sendDynamic(
+            *rt, ctx, b, proto::ProtoString::createSymbol(ctx, "="), args1, 1, &understood);
+        if (understood) return r == PROTO_TRUE;
+    }
+    return a->partialCompare(ctx, b) == 0;
 }
 
 // A hash for numbers that agrees with stKeyEquals across the whole tower.
@@ -193,7 +263,16 @@ unsigned long stKeyHash(proto::ProtoContext* ctx, const proto::ProtoObject* key)
         }
     }
     if (key->isInteger(ctx) || key->isDouble(ctx))
-        return numberKeyHash(key->asDouble(ctx));
+        return static_cast<unsigned long>(numericHash(ctx, key));
+    if (STRuntime* rt = runtimeForUserEquality(ctx, key)) {
+        bool understood = false;
+        const proto::ProtoObject* h = sendDynamic(
+            *rt, ctx, key, proto::ProtoString::createSymbol(ctx, "hash"), nullptr, 0, &understood);
+        if (understood && h && h->isInteger(ctx))
+            return h->compare(ctx, ctx->fromLong(0)) >= 0 && h->compare(ctx, ctx->fromLong(1LL << 53)) < 0
+                ? static_cast<unsigned long>(h->asLong(ctx))
+                : numberKeyHash(0.5);   // an out-of-range hash still has to be consistent
+    }
     return key->getHash(ctx);
 }
 
@@ -621,6 +700,26 @@ bool forEachElement(STRuntime& rt, proto::ProtoContext* ctx,
     // COL-c: a `Bag` is ProtoList-backed (one slot per occurrence) — it flows
     // through the ProtoList arm above. COL-e: the `Interval` kind is handled
     // by the lazy arm at the top of this function (it has no `__data__`).
+    //
+    // Any other collection — a user subclass of Collection with no native
+    // store — iterates through its own do:, as in Smalltalk-80, where the
+    // whole derived protocol rests on do:. The kernel's
+    // Collection>>__elementsForIteration gathers what do: yields.
+    bool understood = false;
+    const proto::ProtoObject* elements = sendDynamic(
+        rt, ctx, collection,
+        proto::ProtoString::createSymbol(ctx, "__elementsForIteration"),
+        nullptr, 0, &understood);
+    if (understood && elements && isListBacked(ctx, elements)) {
+        TransientPin pinElements(ctx, elements);
+        const proto::ProtoList* data = arrayData(ctx, elements);
+        unsigned long n = data->getSize(ctx);
+        for (unsigned long i = 0; i < n; ++i) {
+            const proto::ProtoObject* e = data->getAt(ctx, static_cast<int>(i));
+            if (!fn(e ? e : PROTO_NONE)) return false;
+        }
+        return true;
+    }
     throw std::runtime_error("collection does not understand iteration");
 }
 
@@ -659,8 +758,8 @@ const proto::ProtoObject* prim_Array_at(STRuntime&, proto::ProtoContext* ctx,
     long long idx1 = a[0]->asLong(ctx);              // 1-based
     long long n    = static_cast<long long>(data->getSize(ctx));
     if (idx1 < 1 || idx1 > n) {
-        throw std::runtime_error(
-            "Array>>at:: index " + std::to_string(idx1) +
+        throw ClassedErrorSignal("SubscriptOutOfBounds",
+            "Array>>at: index " + std::to_string(idx1) +
             " out of range 1.." + std::to_string(n));
     }
     const proto::ProtoObject* e =
@@ -680,8 +779,8 @@ const proto::ProtoObject* prim_Array_atPut(STRuntime&, proto::ProtoContext* ctx,
     long long idx1 = a[0]->asLong(ctx);              // 1-based
     long long n    = static_cast<long long>(data->getSize(ctx));
     if (idx1 < 1 || idx1 > n) {
-        throw std::runtime_error(
-            "Array>>at:put:: index " + std::to_string(idx1) +
+        throw ClassedErrorSignal("SubscriptOutOfBounds",
+            "Array>>at:put: index " + std::to_string(idx1) +
             " out of range 1.." + std::to_string(n));
     }
     const proto::ProtoObject* value = a[1] ? a[1] : PROTO_NONE;
@@ -720,7 +819,7 @@ const proto::ProtoObject* prim_Array_do(STRuntime& rt, proto::ProtoContext* ctx,
 
 // Array new: n → an Array of `n` nil elements.
 const proto::ProtoObject* prim_Array_classNew(STRuntime& rt, proto::ProtoContext* ctx,
-                                              const proto::ProtoObject* /*cls*/,
+                                              const proto::ProtoObject* cls,
                                               const proto::ProtoObject* const* a,
                                               int argc) {
     if (argc != 1) throw std::runtime_error("new: expects 1 arg (size)");
@@ -733,7 +832,7 @@ const proto::ProtoObject* prim_Array_classNew(STRuntime& rt, proto::ProtoContext
         data = data->appendLast(ctx, PROTO_NONE);
         pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
     }
-    return makeArrayInstance(rt, ctx, data);
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().arrayProto, makeArrayInstance(rt, ctx, data));
 }
 
 // Array withAll: aCollection → an Array of the elements of `aCollection`. The
@@ -742,7 +841,7 @@ const proto::ProtoObject* prim_Array_classNew(STRuntime& rt, proto::ProtoContext
 // constructor the literal lowering could target; MAKE_ARRAY goes straight to
 // makeArrayInstance, but `withAll:` is the script-visible equivalent.
 const proto::ProtoObject* prim_Array_classWithAll(STRuntime& rt, proto::ProtoContext* ctx,
-                                                  const proto::ProtoObject* /*cls*/,
+                                                  const proto::ProtoObject* cls,
                                                   const proto::ProtoObject* const* a,
                                                   int argc) {
     if (argc != 1) throw std::runtime_error("withAll: expects 1 arg (collection)");
@@ -754,12 +853,12 @@ const proto::ProtoObject* prim_Array_classWithAll(STRuntime& rt, proto::ProtoCon
         pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
         return true;
     });
-    return makeArrayInstance(rt, ctx, data);
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().arrayProto, makeArrayInstance(rt, ctx, data));
 }
 
 // Array with: ... — fixed-arity convenience constructors (1..4 elements).
 const proto::ProtoObject* prim_Array_classWith(STRuntime& rt, proto::ProtoContext* ctx,
-                                               const proto::ProtoObject* /*cls*/,
+                                               const proto::ProtoObject* cls,
                                                const proto::ProtoObject* const* a,
                                                int argc) {
     const proto::ProtoList* data = ctx->newList();
@@ -769,7 +868,7 @@ const proto::ProtoObject* prim_Array_classWith(STRuntime& rt, proto::ProtoContex
         data = data->appendLast(ctx, a[i] ? a[i] : PROTO_NONE);
         pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
     }
-    return makeArrayInstance(rt, ctx, data);
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().arrayProto, makeArrayInstance(rt, ctx, data));
 }
 
 // =================  OrderedCollection base operations  =====================
@@ -815,8 +914,8 @@ const proto::ProtoObject* prim_OC_at(STRuntime&, proto::ProtoContext* ctx,
     long long idx1 = a[0]->asLong(ctx);
     long long n    = static_cast<long long>(data->getSize(ctx));
     if (idx1 < 1 || idx1 > n) {
-        throw std::runtime_error(
-            "OrderedCollection>>at:: index " + std::to_string(idx1) +
+        throw ClassedErrorSignal("SubscriptOutOfBounds",
+            "OrderedCollection>>at: index " + std::to_string(idx1) +
             " out of range 1.." + std::to_string(n));
     }
     const proto::ProtoObject* e = data->getAt(ctx, static_cast<int>(idx1 - 1));
@@ -833,8 +932,8 @@ const proto::ProtoObject* prim_OC_atPut(STRuntime&, proto::ProtoContext* ctx,
     long long idx1 = a[0]->asLong(ctx);
     long long n    = static_cast<long long>(data->getSize(ctx));
     if (idx1 < 1 || idx1 > n) {
-        throw std::runtime_error(
-            "OrderedCollection>>at:put:: index " + std::to_string(idx1) +
+        throw ClassedErrorSignal("SubscriptOutOfBounds",
+            "OrderedCollection>>at:put: index " + std::to_string(idx1) +
             " out of range 1.." + std::to_string(n));
     }
     const proto::ProtoObject* value = a[1] ? a[1] : PROTO_NONE;
@@ -934,7 +1033,7 @@ const proto::ProtoObject* prim_OC_remove(STRuntime&, proto::ProtoContext* ctx,
     const proto::ProtoObject* value = a[0] ? a[0] : PROTO_NONE;
     int idx = indexOfEqual(ctx, data, value);
     if (idx < 0)
-        throw std::runtime_error("OrderedCollection>>remove:: element not found");
+        throw ClassedErrorSignal("NotFound", "OrderedCollection>>remove: element not found");
     setData(ctx, r, data->removeAt(ctx, idx));
     return value;
 }
@@ -999,16 +1098,16 @@ const proto::ProtoObject* prim_OC_do(STRuntime& rt, proto::ProtoContext* ctx,
 
 // OrderedCollection new → a fresh empty OrderedCollection.
 const proto::ProtoObject* prim_OC_classNew(STRuntime& rt, proto::ProtoContext* ctx,
-                                           const proto::ProtoObject* /*cls*/,
+                                           const proto::ProtoObject* cls,
                                            const proto::ProtoObject* const*, int) {
-    return makeInstanceOfSpecies(rt, ctx, rt.bootstrap().orderedCollectionProto,
-                                 ctx->newList());
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().orderedCollectionProto, makeInstanceOfSpecies(rt, ctx, rt.bootstrap().orderedCollectionProto,
+                                 ctx->newList()));
 }
 
 // OrderedCollection withAll: aCollection → an OrderedCollection of the elements
 // of the argument (any collection the iteration protocol understands).
 const proto::ProtoObject* prim_OC_classWithAll(STRuntime& rt, proto::ProtoContext* ctx,
-                                               const proto::ProtoObject* /*cls*/,
+                                               const proto::ProtoObject* cls,
                                                const proto::ProtoObject* const* a,
                                                int argc) {
     if (argc != 1) throw std::runtime_error("withAll: expects 1 arg (collection)");
@@ -1019,7 +1118,7 @@ const proto::ProtoObject* prim_OC_classWithAll(STRuntime& rt, proto::ProtoContex
         pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
         return true;
     });
-    return makeInstanceOfSpecies(rt, ctx, rt.bootstrap().orderedCollectionProto, data);
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().orderedCollectionProto, makeInstanceOfSpecies(rt, ctx, rt.bootstrap().orderedCollectionProto, data));
 }
 
 // =========================  Set base operations  ===========================
@@ -1079,7 +1178,7 @@ const proto::ProtoObject* prim_Set_remove(STRuntime&, proto::ProtoContext* ctx,
     const proto::ProtoMap* data = mapData(ctx, r);
     TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
     if (proto::hashedGet(ctx, data, stKeySemantics(), e) == nullptr)
-        throw std::runtime_error("Set>>remove:: element not found");
+        throw ClassedErrorSignal("NotFound", "Set>>remove: element not found");
     setHashedData(ctx, r,
                   proto::hashedRemove(ctx, data, stKeySemantics(), e),
                   hashedSize(ctx, r) - 1);
@@ -1153,15 +1252,15 @@ const proto::ProtoObject* prim_Set_do(STRuntime& rt, proto::ProtoContext* ctx,
 
 // Set new → a fresh empty Set.
 const proto::ProtoObject* prim_Set_classNew(STRuntime& rt, proto::ProtoContext* ctx,
-                                            const proto::ProtoObject* /*cls*/,
+                                            const proto::ProtoObject* cls,
                                             const proto::ProtoObject* const*, int) {
-    return makeSetInstance(rt, ctx, ctx->newMap(), 0);
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().setProto, makeSetInstance(rt, ctx, ctx->newMap(), 0));
 }
 
 // Set withAll: aCollection → a Set of the distinct elements of the argument
 // (any collection the iteration protocol understands).
 const proto::ProtoObject* prim_Set_classWithAll(STRuntime& rt, proto::ProtoContext* ctx,
-                                                const proto::ProtoObject* /*cls*/,
+                                                const proto::ProtoObject* cls,
                                                 const proto::ProtoObject* const* a,
                                                 int argc) {
     if (argc != 1) throw std::runtime_error("withAll: expects 1 arg (collection)");
@@ -1177,7 +1276,7 @@ const proto::ProtoObject* prim_Set_classWithAll(STRuntime& rt, proto::ProtoConte
         }
         return true;
     });
-    return makeSetInstance(rt, ctx, data, size);
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().setProto, makeSetInstance(rt, ctx, data, size));
 }
 
 // =========================  Bag base operations  ===========================
@@ -1221,7 +1320,7 @@ const proto::ProtoObject* prim_Bag_addWithOccurrences(STRuntime&, proto::ProtoCo
         throw std::runtime_error("add:withOccurrences: expects 2 args (element, count)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
     long long n = a[1]->asLong(ctx);
-    if (n < 0) throw std::runtime_error("Bag>>add:withOccurrences:: negative count");
+    if (n < 0) throw std::runtime_error("Bag>>add:withOccurrences: negative count");
     const proto::ProtoList* data = listData(ctx, r);
     TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
     for (long long i = 0; i < n; ++i) {
@@ -1242,7 +1341,7 @@ const proto::ProtoObject* prim_Bag_remove(STRuntime&, proto::ProtoContext* ctx,
     const proto::ProtoList* data = listData(ctx, r);
     int idx = indexOfEqual(ctx, data, e);
     if (idx < 0)
-        throw std::runtime_error("Bag>>remove:: element not found");
+        throw ClassedErrorSignal("NotFound", "Bag>>remove: element not found");
     setData(ctx, r, data->removeAt(ctx, idx));
     return e;
 }
@@ -1337,15 +1436,15 @@ const proto::ProtoObject* prim_Bag_do(STRuntime& rt, proto::ProtoContext* ctx,
 
 // Bag new → a fresh empty Bag.
 const proto::ProtoObject* prim_Bag_classNew(STRuntime& rt, proto::ProtoContext* ctx,
-                                            const proto::ProtoObject* /*cls*/,
+                                            const proto::ProtoObject* cls,
                                             const proto::ProtoObject* const*, int) {
-    return makeBagInstance(rt, ctx, ctx->newList());
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().bagProto, makeBagInstance(rt, ctx, ctx->newList()));
 }
 
 // Bag withAll: aCollection → a Bag of every element of the argument (any
 // collection the iteration protocol understands), keeping duplicates.
 const proto::ProtoObject* prim_Bag_classWithAll(STRuntime& rt, proto::ProtoContext* ctx,
-                                                const proto::ProtoObject* /*cls*/,
+                                                const proto::ProtoObject* cls,
                                                 const proto::ProtoObject* const* a,
                                                 int argc) {
     if (argc != 1) throw std::runtime_error("withAll: expects 1 arg (collection)");
@@ -1356,7 +1455,7 @@ const proto::ProtoObject* prim_Bag_classWithAll(STRuntime& rt, proto::ProtoConte
         pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
         return true;
     });
-    return makeBagInstance(rt, ctx, data);
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().bagProto, makeBagInstance(rt, ctx, data));
 }
 
 // =========================  Association  ===================================
@@ -1521,7 +1620,7 @@ const proto::ProtoObject* prim_Dict_at(STRuntime&, proto::ProtoContext* ctx,
     if (argc != 1) throw std::runtime_error("at: expects 1 arg (key)");
     bool found = false;
     const proto::ProtoObject* v = dictLookup(ctx, mapData(ctx, r), a[0], &found);
-    if (!found) throw std::runtime_error("Dictionary>>at:: key not found");
+    if (!found) throw ClassedErrorSignal("KeyNotFound", "Dictionary>>at: key not found");
     return v;
 }
 
@@ -1575,7 +1674,7 @@ const proto::ProtoObject* prim_Dict_removeKey(STRuntime&, proto::ProtoContext* c
                                               const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw std::runtime_error("removeKey: expects 1 arg (key)");
     const proto::ProtoObject* removed = dictRemove(ctx, r, a[0]);
-    if (!removed) throw std::runtime_error("Dictionary>>removeKey:: key not found");
+    if (!removed) throw ClassedErrorSignal("KeyNotFound", "Dictionary>>removeKey: key not found");
     return removed;
 }
 
@@ -1781,9 +1880,9 @@ const proto::ProtoObject* prim_Dict_associations(STRuntime& rt, proto::ProtoCont
 
 // Dictionary new → a fresh empty Dictionary.
 const proto::ProtoObject* prim_Dict_classNew(STRuntime& rt, proto::ProtoContext* ctx,
-                                             const proto::ProtoObject* /*cls*/,
+                                             const proto::ProtoObject* cls,
                                              const proto::ProtoObject* const*, int) {
-    return makeDictInstance(rt, ctx, ctx->newMap(), 0);
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().dictionaryProto, makeDictInstance(rt, ctx, ctx->newMap(), 0));
 }
 
 // =====================  Derived iteration protocol  ========================
@@ -1916,7 +2015,7 @@ const proto::ProtoObject* prim_Collection_detect(STRuntime& rt, proto::ProtoCont
         return true;
     });
     if (!found)
-        throw std::runtime_error("detect: no element satisfies the block");
+        throw ClassedErrorSignal("NotFound", "detect: no element satisfies the block");
     return found;
 }
 
@@ -1963,6 +2062,55 @@ const proto::ProtoObject* prim_Collection_injectInto(STRuntime& rt, proto::Proto
         return true;
     });
     return acc;
+}
+
+// aSequence sort: aBlock (sort, with no argument: <=) → sorts an Array or an
+// OrderedCollection in place, stably, and answers it. aBlock answers true when
+// its first argument may precede its second (Pharo's sortBlock); the strict
+// order std::stable_sort needs is "b may not precede a". The elements stay
+// reachable through the receiver's current list until the sorted list
+// replaces it, so the comparisons (which may allocate) cannot lose them.
+const proto::ProtoObject* sendDynamicForSort(STRuntime& rt, proto::ProtoContext* ctx,
+                                             const proto::ProtoObject* recv,
+                                             const proto::ProtoObject* arg) {
+    bool understood = false;
+    const proto::ProtoObject* args1[1] = { arg };
+    const proto::ProtoObject* r = sendDynamic(
+        rt, ctx, recv, proto::ProtoString::createSymbol(ctx, "<="), args1, 1, &understood);
+    if (!understood) throw std::runtime_error("sort: elements do not understand <=");
+    return r;
+}
+
+const proto::ProtoObject* prim_Seq_sort(STRuntime& rt, proto::ProtoContext* ctx,
+                                        const proto::ProtoObject* r,
+                                        const proto::ProtoObject* const* a, int argc) {
+    if (!isListBacked(ctx, r))
+        throw std::runtime_error("sort: needs an Array or an OrderedCollection (use sorted)");
+    const proto::ProtoObject* block = (argc >= 1 && a[0] && a[0] != PROTO_NONE) ? a[0] : nullptr;
+    const proto::ProtoList* data = arrayData(ctx, r);
+    std::vector<const proto::ProtoObject*> elems;
+    elems.reserve(data->getSize(ctx));
+    for (unsigned long i = 0; i < data->getSize(ctx); ++i)
+        elems.push_back(data->getAt(ctx, static_cast<int>(i)));
+    auto mayPrecede = [&](const proto::ProtoObject* x, const proto::ProtoObject* y) {
+        if (block) {
+            const proto::ProtoObject* args2[2] = { x, y };
+            return invokeBlock(rt, ctx, block, args2, 2) == PROTO_TRUE;
+        }
+        return sendDynamicForSort(rt, ctx, x, y) == PROTO_TRUE;
+    };
+    std::stable_sort(elems.begin(), elems.end(),
+                     [&](const proto::ProtoObject* x, const proto::ProtoObject* y) {
+                         return !mayPrecede(y, x);
+                     });
+    const proto::ProtoList* sorted = ctx->newList();
+    TransientPin pinSorted(ctx, reinterpret_cast<const proto::ProtoObject*>(sorted));
+    for (const auto* e : elems) {
+        sorted = sorted->appendLast(ctx, e);
+        pinSorted.reset(reinterpret_cast<const proto::ProtoObject*>(sorted));
+    }
+    const_cast<proto::ProtoObject*>(r)->setAttribute(ctx, dataKey(ctx), sorted->asObject(ctx));
+    return r;
 }
 
 // aCollection do: aBlock separatedBy: sepBlock → run `aBlock` for each element;
@@ -2129,8 +2277,8 @@ const proto::ProtoObject* prim_Interval_at(STRuntime&, proto::ProtoContext* ctx,
     long long n     = intervalSize(start, stop, step);
     long long idx1  = a[0]->asLong(ctx);             // 1-based
     if (idx1 < 1 || idx1 > n) {
-        throw std::runtime_error(
-            "Interval>>at:: index " + std::to_string(idx1) +
+        throw ClassedErrorSignal("SubscriptOutOfBounds",
+            "Interval>>at: index " + std::to_string(idx1) +
             " out of range 1.." + std::to_string(n));
     }
     return ctx->fromLong(start + (idx1 - 1) * step);
@@ -2498,7 +2646,12 @@ void installCollectionPrimitives(STRuntime& rt) {
                   reg.registerPrim(prim_Collection_allSatisfy));
     bindPrimitive(rt, b.collectionProto, ",",
                   reg.registerPrim(prim_Collection_concat));
-    bindPrimitive(rt, b.collectionProto, "asArray",
+{
+        const int sortIdx = reg.registerPrim(prim_Seq_sort);
+        bindPrimitive(rt, b.sequenceableCollectionProto, "sort:", sortIdx);
+        bindPrimitive(rt, b.sequenceableCollectionProto, "sort", sortIdx);
+    }
+        bindPrimitive(rt, b.collectionProto, "asArray",
                   reg.registerPrim(prim_Collection_asArray));
 }
 

@@ -77,18 +77,13 @@ b := Money new setCents: 300.
 
 ```bash
 $ ./build/protost mixin.st
-a Boolean and a Boolean
+true and false
 ```
 
 `Money` defines only `compareTo:`. It *inherits* `>` and `<` from the
 `Comparable` mixin — and those inherited methods call back into `Money`'s
 `compareTo:`. `a > b` answers `true` (500 cents exceeds 300); `a < b` answers
 `false`.
-
-(A note on the output: printing a boolean shows `a Boolean` rather than
-`true`/`false` on the current build. The booleans *are* correct — `a > b` is
-genuinely the boolean `true`. When you need a textual `'true'`/`'false'`, drive
-a conditional: `(a > b) ifTrue: [ 'true' ] ifFalse: [ 'false' ]`.)
 
 > **In Python** this is multiple inheritance: `class Money(Comparable):` — or,
 > for true mixin style, `class Money(Comparable, Printable):`. **In
@@ -112,21 +107,15 @@ defining class.
 You will rarely need to think about this; the rule is simply "the order you
 wrote them". But it is deterministic, which is what you want.
 
-### Mixin instance variables — use accessors
+### Mixin instance variables
 
 A mixin may declare its own instance variables, and they combine with the using
-class's own. There is a practical caveat on the current build, and it is worth
-stating plainly:
+class's own: a method of the using class names them directly, and they are
+the same slots the mixin's methods use.
 
-> A mixin's instance variable is reliably reached **through an accessor
-> method**, not by writing the bare variable name inside a method of the
-> *using* class. A `Doc` that `uses: { Tagged }`, where `Tagged` declares a
-> `tag` variable, should read it as `self tag` (an accessor `Tagged` provides),
-> not as a bare `tag`.
-
-So write your mixins to expose their state through accessor methods — which is
-good mixin discipline anyway — and the using class's methods reach that state
-with a self-send:
+A `Doc` that `uses: { Tagged }`, where `Tagged` declares a `tag` variable,
+may write a bare `tag` in `Doc >> describe`. Exposing mixin state through
+accessors is still good discipline when several classes share the mixin.
 
 ```smalltalk
 "-- mixin-ivar.st --"
@@ -161,7 +150,7 @@ Q3 Report [urgent]
 ```
 
 `Doc>>describe` reads its *own* variable `title` directly, but reaches the
-mixin's `tag` through the accessor `self tag`. That is the robust pattern.
+mixin's `tag` through the accessor `self tag`.
 
 ## 11.3 Runtime composition: `addBehavior:`
 
@@ -186,7 +175,7 @@ Logging >> log: aMessage
 "Compose the Logging behaviour into Service — at runtime."
 Service addBehavior: Logging.
 
-s := Service newChild.
+s := Service new.
 s name , ' / ' , (s log: 'started').
 ```
 
@@ -235,9 +224,9 @@ Object subclass: #Bonus
 Bonus >> bonus
   ^ 'bonus granted'.
 
-earlyInstance := Thing newChild.        "created BEFORE addBehavior:"
+earlyInstance := Thing new.        "created BEFORE addBehavior:"
 Thing addBehavior: Bonus.
-lateInstance := Thing newChild.         "created AFTER addBehavior:"
+lateInstance := Thing new.         "created AFTER addBehavior:"
 
 earlyResult := [ earlyInstance bonus ]
   on: Error
@@ -258,10 +247,12 @@ early instance: does not understand bonus || bonus granted
 The reason is in the kernel: protoCore captures an object's *parent chain*
 into the object at construction, and the object never re-reads it.
 `addBehavior:` produces a new chain, and only *future* instances copy it. This
-is recorded as intentional deviation D21 in `docs/STATUS.md`. (One subtlety:
-this limit applies only to new *parents*. A method installed directly onto a
-class with `>>` *is* seen by pre-existing instances — it is only new parents
-that pre-existing instances miss.)
+is recorded as intentional deviation D21 in `docs/STATUS.md`. More exactly,
+`addBehavior:` rebuilds the class and rebinds its name to the rebuilt class,
+and a pre-existing instance keeps the old class entirely: it also misses the
+methods installed or redefined with `>>` after the call, and it is not
+`isKindOf:` the rebuilt class. (Before any `addBehavior:`, a method installed
+with `>>` *is* seen by existing instances.)
 
 There is no `removeBehavior:` — protoCore's parent API offers no clean removal
 of a baked-in parent, so it is out of scope.
@@ -296,9 +287,8 @@ case — and it is what most vividly shows off the prototype kernel.
 - Method resolution across parents is depth-first, left-to-right: primary
   superclass subtree first, then each `uses:` mixin in listed order; the
   diamond case resolves to the first match.
-- Reach a **mixin's instance variables through accessor methods** (`self tag`),
-  not by bare name in the using class — the robust pattern on the current
-  build.
+- A **mixin's instance variables** are named directly by the using class's
+  methods, like inherited ones.
 - **`addBehavior:`** composes a mixin into a class **at runtime**, with no
   recompilation. It affects the class and all instances created *afterwards* —
   intentional deviation D21 — so call it during setup. There is no

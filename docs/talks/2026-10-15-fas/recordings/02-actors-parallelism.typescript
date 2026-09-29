@@ -1,0 +1,9 @@
+Script iniciado en 2026-09-29 04:43:30-03:00 [COMMAND="cd demos && ./run_demo.sh 02-actors-parallelism.st" <no ejecutado en terminal>]
+one thread: 4946 primes
+time one thread: 1331 ms
+12 actors:  4946 primes
+time 12 actors: 547 ms
+true
+-- 02-actors-parallelism: verified
+
+Script terminado en 2026-09-29 04:43:32-03:00 [CÓDIGO_SALIDA_ORDEN="0"]

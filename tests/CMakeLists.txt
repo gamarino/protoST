@@ -149,3 +149,26 @@ foreach(ex_file ${PROTOST_EXAMPLE_FILES})
                 $<TARGET_FILE:protost>
                 "${ex_file}")
 endforeach()
+
+# --- documentation examples ------------------------------------------------
+# Every example in the documents below that states its result is run and
+# checked (tests/docs/run_doc_snippets.py; conventions at the top of it).
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    set(PROTOST_DOC_FILES README.md docs/LANGUAGE.md docs/TUTORIAL.md
+        examples/README.md lib/README.md docs/INTEROP.md)
+    file(GLOB PROTOST_TUTORIAL_CHAPTERS CONFIGURE_DEPENDS
+        RELATIVE "${CMAKE_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/docs/tutorial/*.md")
+    list(APPEND PROTOST_DOC_FILES ${PROTOST_TUTORIAL_CHAPTERS})
+    foreach(doc_rel ${PROTOST_DOC_FILES})
+        add_test(NAME "docs/${doc_rel}"
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/docs/run_doc_snippets.py
+                    --root ${CMAKE_SOURCE_DIR} --lib ${CMAKE_SOURCE_DIR}/lib
+                    $<TARGET_FILE:protost> ${CMAKE_SOURCE_DIR}/${doc_rel})
+    endforeach()
+    add_test(NAME docs/selftest
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/docs/test_run_doc_snippets.py
+                $<TARGET_FILE:protost> --lib ${CMAKE_SOURCE_DIR}/lib)
+endif()

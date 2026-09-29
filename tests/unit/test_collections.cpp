@@ -113,14 +113,14 @@ TEST_CASE("COL-a: select: and reject: filter", "[collections][track2]") {
     {
         // select: even elements of #(1 2 3 4 5 6) → 2 4 6 → size 3.
         auto* r = runSrc(rt,
-            "(#(1 2 3 4 5 6) select: [ :x | (x / 2) * 2 = x ]) size.");
+            "(#(1 2 3 4 5 6) select: [ :x | (x \\\\ 2) = 0 ]) size.");
         REQUIRE(r != nullptr);
         REQUIRE(r->asLong(rt.rootCtx()) == 3);
     }
     {
         // reject: even → keeps odd 1 3 5 → sum 9.
         auto* r = runSrc(rt,
-            "(#(1 2 3 4 5 6) reject: [ :x | (x / 2) * 2 = x ]) "
+            "(#(1 2 3 4 5 6) reject: [ :x | (x \\\\ 2) = 0 ]) "
             "  inject: 0 into: [ :a :b | a + b ].");
         REQUIRE(r != nullptr);
         REQUIRE(r->asLong(rt.rootCtx()) == 9);
@@ -1452,7 +1452,7 @@ TEST_CASE("COL-e: derived protocol works on an Interval",
         // select: filters — the even numbers in 1..10 → an Array of size 5
         protoST::STRuntime rt;
         auto* r = runSrc(rt,
-            "((1 to: 10) select: [ :x | (x / 2) * 2 = x ]) size.");
+            "((1 to: 10) select: [ :x | (x \\\\ 2) = 0 ]) size.");
         REQUIRE(r != nullptr);
         REQUIRE(r->asLong(rt.rootCtx()) == 5);
     }

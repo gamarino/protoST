@@ -17,14 +17,20 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     // setAttribute returns a new ProtoObject* and the bootstrap pointer (also
     // held in sp.smallIntegerPrototype) would be left bare.
     out.numberProto       = out.objectProto->newChild(ctx, /*isMutable=*/true);
-    out.smallIntegerProto = out.numberProto->newChild(ctx, /*isMutable=*/true);
-    out.largeIntegerProto = out.numberProto->newChild(ctx, /*isMutable=*/true);
+    // Integer sits between Number and the two concrete integer classes, as in
+    // Smalltalk-80, so `3 isKindOf: Integer` holds and Integer methods reach both.
+    out.integerProto      = out.numberProto->newChild(ctx, /*isMutable=*/true);
+    out.smallIntegerProto = out.integerProto->newChild(ctx, /*isMutable=*/true);
+    out.largeIntegerProto = out.integerProto->newChild(ctx, /*isMutable=*/true);
     out.floatProto        = out.numberProto->newChild(ctx, /*isMutable=*/true);
 
     // Booleans, strings/symbols, blocks, nil.
     out.booleanProto      = out.objectProto->newChild(ctx, /*isMutable=*/true);
     out.stringProto       = out.objectProto->newChild(ctx, /*isMutable=*/true);
     out.symbolProto       = out.stringProto->newChild(ctx, /*isMutable=*/true);
+    // Characters are protoCore's embedded unicode-char values; their
+    // prototype is Character, so `$a class == Character`.
+    out.characterProto    = out.objectProto->newChild(ctx, /*isMutable=*/true);
     out.blockProto        = out.objectProto->newChild(ctx, /*isMutable=*/true);
     out.nilProto          = out.objectProto->newChild(ctx, /*isMutable=*/true);
 
@@ -46,6 +52,13 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     // inherit `Error`'s non-resumable marker.
     out.messageNotUnderstoodProto =
         const_cast<proto::ProtoObject*>(out.errorProto)->newChild(ctx, /*isMutable=*/true);
+    // ArithmeticError sits between Error and ZeroDivide and is resumable, as
+    // in Pharo: a handler may answer a value for the failed operation.
+    out.arithmeticErrorProto =
+        const_cast<proto::ProtoObject*>(out.errorProto)->newChild(ctx, /*isMutable=*/true);
+    out.zeroDivideProto =
+        const_cast<proto::ProtoObject*>(out.arithmeticErrorProto)->newChild(ctx, /*isMutable=*/true);
+    out.messageProto    = const_cast<proto::ProtoObject*>(out.objectProto)->newChild(ctx, /*isMutable=*/true);
     out.blockCannotReturnProto =
         const_cast<proto::ProtoObject*>(out.errorProto)->newChild(ctx, /*isMutable=*/true);
 
@@ -94,6 +107,7 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     // re-point them.  For F2 the bare prototypes suffice.
     sp.smallIntegerPrototype = const_cast<proto::ProtoObject*>(out.smallIntegerProto);
     sp.largeIntegerPrototype = const_cast<proto::ProtoObject*>(out.largeIntegerProto);
+    sp.unicodeCharPrototype  = const_cast<proto::ProtoObject*>(out.characterProto);
     sp.floatPrototype        = const_cast<proto::ProtoObject*>(out.floatProto);
     sp.doublePrototype       = const_cast<proto::ProtoObject*>(out.floatProto);
     sp.stringPrototype       = const_cast<proto::ProtoObject*>(out.stringProto);
@@ -122,13 +136,15 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     };
     stamp(out.objectProto,       "Object");
     stamp(out.numberProto,       "Number");
+    stamp(out.integerProto,      "Integer");
     stamp(out.smallIntegerProto, "SmallInteger");
     stamp(out.largeIntegerProto, "LargeInteger");
     stamp(out.floatProto,        "Float");
     stamp(out.booleanProto,      "Boolean");
     stamp(out.stringProto,       "String");
     stamp(out.symbolProto,       "Symbol");
-    stamp(out.blockProto,        "Block");
+    stamp(out.characterProto,    "Character");
+    stamp(out.blockProto,        "BlockClosure");
     stamp(out.actorProto,        "Actor");
     stamp(out.futureProto,       "Future");
     stamp(out.atomProto,         "Atom");
@@ -137,6 +153,9 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     stamp(out.errorProto,        "Error");
     stamp(out.warningProto,      "Warning");
     stamp(out.messageNotUnderstoodProto, "MessageNotUnderstood");
+    stamp(out.arithmeticErrorProto,      "ArithmeticError");
+    stamp(out.zeroDivideProto,           "ZeroDivide");
+    stamp(out.messageProto,              "Message");
     stamp(out.blockCannotReturnProto,    "BlockCannotReturn");
     stamp(out.collectionProto,             "Collection");
     stamp(out.sequenceableCollectionProto, "SequenceableCollection");
@@ -164,6 +183,15 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     markResumable(out.exceptionProto, true);   // Exception — resumable
     markResumable(out.errorProto,     false);  // Error — not resumable
     markResumable(out.warningProto,   true);   // Warning — resumable
+    // As in Pharo, a MessageNotUnderstood may be resumed with a value that
+    // becomes the send's result.
+    markResumable(out.messageNotUnderstoodProto, true);
+    markResumable(out.arithmeticErrorProto, true);
+    // Unhandled, every Error ends the activation -- a resumable one such as
+    // MessageNotUnderstood included -- while an unhandled Warning or plain
+    // Exception resumes with nil. The class decides, not resumability.
+    const_cast<proto::ProtoObject*>(out.errorProto)->setAttribute(
+        ctx, proto::ProtoString::createSymbol(ctx, "__unhandled_is_error__"), PROTO_TRUE);
 
     // Pre-intern the hot-path attribute vocabulary once, here, so the actor /
     // Future / Atom message paths never pay a per-operation SymbolTable
@@ -184,6 +212,7 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     out.sym.settling        = S("__settling__");
     out.sym.suspendedFrame  = S("__suspended_frame__");
     out.sym.waitingOn       = S("__waiting_on__");
+    out.sym.targetActor     = S("__target_actor__");
     out.sym.suspendedFuture = S("__suspended_future__");
     out.sym.bcPtr           = S("__bc_ptr__");
     out.sym.captured        = S("__captured__");

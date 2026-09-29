@@ -1,0 +1,14 @@
+object.st
+character.st
+string.st
+number.st
+fraction.st
+collection.st
+exception.st
+stream.st
+point.st
+future.st
+system.st
+reflection.st
+time.st
+printing.st

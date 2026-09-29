@@ -53,6 +53,25 @@ unsigned int BytecodeModule::cachedLocalCount(unsigned int argc) const {
     return needed;
 }
 
+unsigned int BytecodeModule::cachedMaxArrayOperand() const {
+    const int cached = maxArrayOperandCache_.load(std::memory_order_acquire);
+    if (cached >= 0) return static_cast<unsigned int>(cached);
+    unsigned int maxArg = 0;
+    for (std::size_t pc = 0; pc + 1 < bytes_.size(); ) {
+        Op op  = static_cast<Op>(bytes_[pc]);
+        unsigned int arg = bytes_[pc + 1];
+        pc += kInstrSize;
+        while (op == Op::EXTEND && pc + 1 < bytes_.size()) {
+            op  = static_cast<Op>(bytes_[pc]);
+            arg = (arg << 8) | bytes_[pc + 1];
+            pc += kInstrSize;
+        }
+        if (op == Op::MAKE_ARRAY && arg > maxArg) maxArg = arg;
+    }
+    maxArrayOperandCache_.store(static_cast<int>(maxArg), std::memory_order_release);
+    return maxArg;
+}
+
 const BytecodeModule::ConstCache&
 BytecodeModule::constCacheFor(size_t i) const {
     if (i >= consts_.size())
@@ -149,6 +168,10 @@ void BytecodeModule::emitWide(Op op, unsigned int arg, int line) {
 
 size_t BytecodeModule::addInteger(long long v) {
     consts_.push_back(Const{ConstKind::Integer, v, 0.0, {}, 0});
+    return consts_.size() - 1;
+}
+size_t BytecodeModule::addLargeInteger(const std::string& digits, int radix) {
+    consts_.push_back(Const{ConstKind::LargeInteger, radix, 0.0, digits, 0});
     return consts_.size() - 1;
 }
 size_t BytecodeModule::addFloat(double v) {
