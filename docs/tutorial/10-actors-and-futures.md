@@ -232,12 +232,13 @@ This matters for three rules you must honour:
 Follow these and the actor model's safety holds. Break them and you are back to
 shared-state concurrency.
 
-> The actor proxy is *fully transparent*: it forwards **every** message
-> asynchronously, with no exceptions — even `printString`. Sending
-> `printString` to a proxy returns a `Future` resolving to the *wrapped
-> object's* `printString`. There is deliberately no synchronous way to ask a
-> proxy "are you an actor?" — that opacity is the point. To get a proxy's
-> printable form, `wait` on the future: `(actor printString) wait`.
+> The actor proxy forwards every message asynchronously **except** the few
+> that are about the reference itself, which it answers at once: identity and
+> equality (`==`, `=`, `hash`, so an actor can be found in a collection), nil
+> tests (`isNil`, `ifNil:` …), `isActor`, and printing — `printString` answers
+> `'a Thing (actor)'` without running the object's own `printOn:` on another
+> thread. To get the object's own printable form, ask the actor for it with a
+> message of yours (a method that answers `self printString`) and `wait`.
 
 ## 10.7 Cooperative yield — scaling past the thread count
 

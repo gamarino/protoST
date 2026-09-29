@@ -49,6 +49,25 @@ const proto::ProtoObject* raiseRejection(STRuntime& rt, proto::ProtoContext* ctx
 #include <vector>
 
 namespace {
+// Messages about the actor REFERENCE, answered by the proxy itself instead of
+// being queued to the actor: identity and equality (so an actor can be found
+// in a collection), nil tests, and printing (as "a Thing (actor)", without
+// running the object's own printOn: on another thread). Everything else is
+// an asynchronous message answering a Future.
+bool isActorLocalSelector(const std::string& sel) {
+    static const char* const kLocal[] = {
+        "==", "~~", "=", "~=", "hash", "identityHash", "yourself",
+        "isNil", "notNil", "ifNil:", "ifNotNil:", "ifNil:ifNotNil:", "ifNotNil:ifNil:",
+        "printString", "printOn:", "displayString", "printNl", "displayNl",
+        "isActor", "__wrappedObject",
+    };
+    for (const char* l : kLocal) if (sel == l) return true;
+    return false;
+}
+} // namespace
+
+
+namespace {
 // A user-facing runtime error raised inside the dispatch loop: signalled as a
 // protoST Error (catchable by on: Error do:, reported with a trace when not),
 // like errors raised inside primitives.
@@ -1125,7 +1144,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // is pushed onto the operand stack as the apparent result of
                 // the send. The actual method execution happens later when
                 // STRuntime::drainOne pulls a message from the mailbox.
-                if (rt_.isActor(ctx, recv)) {
+                if (rt_.isActor(ctx, recv) && !isActorLocalSelector(selStr)) {
                     const proto::ProtoString* msgSelKey =
                         rt_.bootstrap().sym.selector;
                     const proto::ProtoString* msgArgsKey =

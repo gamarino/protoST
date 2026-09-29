@@ -1640,15 +1640,14 @@ Internally the priority is the actor's `__priority__` attribute
 (SmallInteger 0/1/2). Absence is read as Medium, so any code written
 before priority bands existed keeps the same scheduling behaviour.
 
-The proxy is **fully transparent**: it forwards *every* message it receives to
-the wrapped object asynchronously (see [§10.2](#102-sending-to-an-actor)) —
-there is no exception, not even for introspection selectors. Sending
-`printString` to the proxy is itself an asynchronous send: it returns a
-`Future` that resolves to the *wrapped object's* `printString`, never a
-synchronous string describing "an Actor". Because every send is forwarded,
-there is no synchronous way to observe, from the proxy, that it is an actor at
-all — that opacity is the point. To obtain the wrapped object's printable form,
-`wait` on the future: `(actor printString) wait`.
+The proxy forwards every message it receives to the wrapped object
+asynchronously (see [§10.2](#102-sending-to-an-actor)), except the messages
+about the reference itself, which it answers synchronously: `==`, `~~`, `=`,
+`~=`, `hash`, `identityHash`, `yourself`, `isNil`, `notNil`, `ifNil:`,
+`ifNotNil:` and their combinations, `isActor`, and `printString` / `printOn:`
+/ `displayString` / `printNl` / `displayNl`, which print the wrapped object's
+basic form marked `(actor)` (`'a Thing (actor)'`) without running its own
+`printOn:` on another thread.
 
 ### 10.2 Sending to an actor
 

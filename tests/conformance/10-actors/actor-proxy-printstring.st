@@ -1,7 +1,6 @@
-"EXPECT: a Thing"
-"§10.1 / §10.2: the actor proxy is fully transparent — EVERY message, even
-printString, is forwarded asynchronously and returns a Future. Waiting on it
-yields the wrapped object's printString. There is no synchronous way to observe
-'this is an Actor' from the proxy; that opacity is by design."
+"EXPECT: a Thing (actor)"
+"§10.1 / §10.2: printing is a message about the reference, answered by the
+ proxy synchronously without running the object's printOn: on another thread;
+ every other message is forwarded asynchronously and answers a Future."
 Object subclass: #Thing.
-(Thing new asActor printString) wait.
+Thing new asActor printString

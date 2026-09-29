@@ -1235,13 +1235,13 @@ TEST_CASE("BL-3: formatValue handles primitives — nil/true/false/int/string",
     REQUIRE(protoST::formatValue(rt, ctx, ctx->fromUTF8String("hi")) == "hi");
 }
 
-TEST_CASE("BL-3: formatValue renders a bootstrap actor as 'an Actor'",
+TEST_CASE("BL-3: formatValue renders an actor as its object, marked (actor)",
           "[engine][printstring][bl3][formatvalue]") {
     protoST::STRuntime rt;
-    // An actor instance is a child of actorProto, which carries the
-    // __class_name__ "Actor". formatValue resolves it purely in C++.
+    // Printing is answered by the proxy itself, from the wrapped object's
+    // basic form, without messaging the actor.
     auto* r = bl1Run(rt, "7 asActor.");
-    REQUIRE(protoST::formatValue(rt, rt.rootCtx(), r) == "an Actor");
+    REQUIRE(protoST::formatValue(rt, rt.rootCtx(), r) == "7 (actor)");
 }
 
 TEST_CASE("BL-3: formatValue renders a bootstrap future as 'a Future'",

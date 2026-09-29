@@ -997,6 +997,15 @@ const proto::ProtoObject* prim_Object_name(STRuntime& rt, proto::ProtoContext* c
     return own;
 }
 
+// anActor __wrappedObject → the object the actor proxy wraps (answered by the
+// proxy itself; used to print an actor without messaging it).
+const proto::ProtoObject* prim_Actor_wrappedObject(STRuntime& rt, proto::ProtoContext* ctx,
+                                                   const proto::ProtoObject* r,
+                                                   const proto::ProtoObject* const*, int) {
+    const proto::ProtoObject* w = r ? r->getAttribute(ctx, rt.bootstrap().sym.wrapped) : nullptr;
+    return (w && w != PROTO_NONE) ? w : r;
+}
+
 // ---------------------------------------------------------------- reflection
 
 namespace {
@@ -1500,6 +1509,7 @@ void installObjectPrimitives(STRuntime& rt) {
     bindPrimitive(rt, b.objectProto, "__globalAt:put:", reg.registerPrim(prim_Object_globalAtPut));
     bindPrimitive(rt, b.objectProto, "name", reg.registerPrim(prim_Object_name));
     bindPrimitive(rt, b.objectProto, "isClassObject", reg.registerPrim(prim_Object_isClassObject));
+    bindPrimitive(rt, b.actorProto, "__wrappedObject", reg.registerPrim(prim_Actor_wrappedObject));
     bindPrimitive(rt, b.objectProto, "instVarNamed:", reg.registerPrim(prim_Object_instVarNamed));
     bindPrimitive(rt, b.objectProto, "instVarNamed:put:", reg.registerPrim(prim_Object_instVarNamedPut));
     bindPrimitive(rt, b.objectProto, "__setInstVarNames:", reg.registerPrim(prim_Object_setInstVarNames));

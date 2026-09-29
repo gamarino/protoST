@@ -42,3 +42,41 @@ Future >> & aFuture
 
 Future >> | aFuture
   ^ Future whenAny: (Array with: self with: aFuture).
+
+"--- actor references ------------------------------------------------------------
+ An actor proxy answers messages about the reference itself (identity,
+ equality, nil tests, printing) synchronously; every other message is queued
+ to the actor and answers a Future. These methods run on the proxy and never
+ message it."
+
+Object >> isActor
+  ^ false
+
+Actor >> isActor
+  ^ true
+
+Actor >> printString
+  ^ self __wrappedObject __printStringForActor , ' (actor)'
+
+Actor >> printOn: aStream
+  aStream nextPutAll: self __wrappedObject __printStringForActor , ' (actor)'
+
+Actor >> displayString
+  ^ self __wrappedObject __printStringForActor , ' (actor)'
+
+Actor >> printNl
+  Transcript showCr: self __wrappedObject __printStringForActor , ' (actor)'
+
+Actor >> displayNl
+  Transcript showCr: self __wrappedObject __printStringForActor , ' (actor)'
+
+"How an actor's object is shown in the actor's printString: its basic form
+ ('a Thing'), or the value itself for immutable values."
+Object >> __printStringForActor
+  ^ self basicPrintString
+
+Number >> __printStringForActor
+  ^ self printString
+
+String >> __printStringForActor
+  ^ self printString
