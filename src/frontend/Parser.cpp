@@ -470,8 +470,9 @@ ast::NodePtr Parser::parseMethodDecl(Token classIdent, bool classSide) {
         // unary
         selector = current_.text;
         advance();
-    } else if (current_.kind == TokenKind::BinaryOp) {
-        selector = current_.text;
+    } else if (current_.kind == TokenKind::BinaryOp || current_.kind == TokenKind::Pipe) {
+        // `|` lexes as Pipe (temporaries) but is also a binary selector.
+        selector = current_.kind == TokenKind::Pipe ? std::string("|") : current_.text;
         advance();
         if (current_.kind != TokenKind::Identifier) {
             error(current_, "expected argument name after binary selector");

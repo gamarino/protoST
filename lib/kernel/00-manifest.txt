@@ -7,5 +7,6 @@ collection.st
 exception.st
 stream.st
 point.st
+future.st
 system.st
 printing.st
