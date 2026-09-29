@@ -137,7 +137,7 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     stamp(out.stringProto,       "String");
     stamp(out.symbolProto,       "Symbol");
     stamp(out.characterProto,    "Character");
-    stamp(out.blockProto,        "Block");
+    stamp(out.blockProto,        "BlockClosure");
     stamp(out.actorProto,        "Actor");
     stamp(out.futureProto,       "Future");
     stamp(out.atomProto,         "Atom");
