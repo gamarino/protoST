@@ -48,8 +48,7 @@ Object >> isCharacter
   ^ false.
 
 Object >> isClass
-  "A class object's class is its metaclass, whose name ends in ' class'."
-  ^ self class basicPrintString endsWith: ' class'.
+  ^ self isClassObject.
 
 Object >> asString
   ^ self printString.

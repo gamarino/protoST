@@ -1,8 +1,6 @@
-"XFAIL: EXPECT: true true true true true true"
+"EXPECT: true true true true true true"
 "Class-side creators answer an instance of the RECEIVER, so a user subclass
- gets its own class back (Pharo: self new). XFAIL until the runtime fix lands:
- today new on a subclass of a built-in collection answers the base class.
- When this XPASSes, drop the XFAIL marker."
+ gets its own class back (Pharo: self new)."
 OrderedCollection subclass: #Stack.
 Set subclass: #Tags.
 Bag subclass: #Tally.
