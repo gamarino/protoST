@@ -5,6 +5,7 @@
 #include "runtime/SchedDiag.h"
 #include "runtime/ExecutionEngine.h"
 #include "runtime/TransientPin.h"
+#include "runtime/NativeExceptionBridge.h"
 #include "protoCore.h"
 #include <cstdint>
 #include <unordered_map>
@@ -61,6 +62,10 @@ extern const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext*
 //   * Future>>wait polls __state__ with a GC-safe, backed-off bounded sleep.
 //     The actor path throws FutureYield instead of blocking.
 // ===========================================================================
+
+// Raise a rejected Future's error in the waiter (defined below).
+const proto::ProtoObject* raiseRejection(STRuntime& rt, proto::ProtoContext* ctx,
+                                         const proto::ProtoObject* error);
 
 namespace {
 
@@ -263,12 +268,8 @@ const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* c
             auto* v = r->getOwnAttributeDirect(ctx, valueKey);
             return v ? v : PROTO_NONE;
         }
-        // s == 2: rejected — let the common path below throw.
-        auto* e = r->getOwnAttributeDirect(ctx, errorKey);
-        std::string msg = (e && e != PROTO_NONE)
-            ? e->asString(ctx)->toStdString(ctx)
-            : std::string("rejected");
-        throw std::runtime_error("Future rejected: " + msg);
+        // s == 2: rejected.
+        return raiseRejection(rt, ctx, r->getOwnAttributeDirect(ctx, errorKey));
     }
 
     // Non-actor (main / foreground) path. Pure event-driven wait — no
@@ -310,13 +311,7 @@ const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* c
         auto* v = r->getOwnAttributeDirect(ctx, valueKey);
         return v ? v : PROTO_NONE;
     }
-    if (s == 2) {
-        auto* e = r->getOwnAttributeDirect(ctx, errorKey);
-        std::string msg = (e && e != PROTO_NONE)
-            ? e->asString(ctx)->toStdString(ctx)
-            : std::string("rejected");
-        throw std::runtime_error("Future rejected: " + msg);
-    }
+    if (s == 2) return raiseRejection(rt, ctx, r->getOwnAttributeDirect(ctx, errorKey));
     throw std::runtime_error("Future>>wait: unknown state");
 }
 
@@ -473,6 +468,15 @@ std::string describeRejection(proto::ProtoContext* ctx, const proto::ProtoObject
     return "an error without messageText";
 }
 } // namespace
+
+// A rejection that is a protoST exception (an actor method's unhandled error)
+// is re-signalled here, so the waiter's handlers see its class and
+// messageText; any other rejection value raises an Error carrying its text.
+const proto::ProtoObject* raiseRejection(STRuntime& rt, proto::ProtoContext* ctx,
+                                         const proto::ProtoObject* error) {
+    if (isExceptionInstance(rt, ctx, error)) return resignalException(rt, ctx, error);
+    throw std::runtime_error("Future rejected: " + describeRejection(ctx, error));
+}
 
 void markFutureObserved(proto::ProtoContext* ctx, const proto::ProtoObject* future) {
     if (!future || future == PROTO_NONE) return;

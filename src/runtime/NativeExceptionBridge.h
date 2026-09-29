@@ -89,6 +89,13 @@ const proto::ProtoObject* signalMessageNotUnderstood(STRuntime& rt, proto::Proto
                                                      const proto::ProtoObject* message,
                                                      const char* text);
 
+// Re-signal an existing exception instance in the current context, and test
+// whether an object is one (exception_prims.cpp).
+const proto::ProtoObject* resignalException(STRuntime& rt, proto::ProtoContext* ctx,
+                                            const proto::ProtoObject* exc);
+bool isExceptionInstance(STRuntime& rt, proto::ProtoContext* ctx,
+                         const proto::ProtoObject* obj);
+
 const proto::ProtoObject* signalErrorOfClass(STRuntime& rt,
                                              proto::ProtoContext* ctx,
                                              const proto::ProtoObject* errorClass,

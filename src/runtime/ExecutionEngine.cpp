@@ -19,6 +19,11 @@
 //   the engine is future work.
 #include "ExecutionEngine.h"
 #include "runtime/PrimitiveMarker.h"
+
+namespace protoST {
+const proto::ProtoObject* raiseRejection(STRuntime& rt, proto::ProtoContext* ctx,
+                                         const proto::ProtoObject* error);
+}
 #include "BytecodeModule.h"
 #include "Bootstrap.h"
 #include "FutureYield.h"
@@ -2770,15 +2775,13 @@ ExecutionEngine::resumeWith(proto::ProtoContext* ctx,
                             const proto::ProtoObject* value,
                             const proto::ProtoObject* error) {
     if (error) {
-        std::string msg = "Future rejected: ";
-        // Best-effort string materialisation — error is the same object the
-        // future stored under __error__, which Future>>wait would have
-        // formatted via asString. We mirror that here so the rejection
-        // surface is identical between the synchronous-wait and resume
-        // paths.
-        auto* es = error->asString(ctx);
-        if (es) msg += es->toStdString(ctx);
-        throw std::runtime_error(msg);
+        // The same raise as a synchronous Future>>wait on a rejected future:
+        // an exception instance is re-signalled, anything else becomes an
+        // Error carrying its text.
+        const proto::ProtoObject* v = raiseRejection(rt_, ctx, error);
+        if (frames_.empty()) return;
+        push(frames_.back(), v ? v : PROTO_NONE);
+        return;
     }
     if (frames_.empty()) {
         // No frames to resume — restoreFrames must have been called with an

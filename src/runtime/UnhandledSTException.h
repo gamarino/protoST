@@ -31,14 +31,21 @@ namespace protoST {
 
 class UnhandledSTException : public std::runtime_error {
 public:
-    explicit UnhandledSTException(const std::string& m, std::string trace = std::string())
-        : std::runtime_error(m), trace_(std::move(trace)) {}
+    explicit UnhandledSTException(const std::string& m, std::string trace = std::string(),
+                                  const proto::ProtoObject* exception = nullptr)
+        : std::runtime_error(m), trace_(std::move(trace)), exception_(exception) {}
     // The active methods when the error went unhandled, innermost first, one
     // "  at Class>>selector (file:line)" line each; empty when unknown. Kept
     // apart from what(), which handlers and rejected Futures see.
     const std::string& trace() const { return trace_; }
+    // The protoST exception instance that went unhandled, when there is one.
+    // An actor rejects its Future with it, so a waiter re-signals the same
+    // exception (same class, same messageText) in its own context. Valid
+    // while the throw propagates: the signalling frames still reference it.
+    const proto::ProtoObject* exception() const { return exception_; }
 private:
     std::string trace_;
+    const proto::ProtoObject* exception_;
 };
 
 // "error: <message>" followed by the trace of an unhandled error, if any.

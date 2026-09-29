@@ -88,6 +88,17 @@ void rejectFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
 
 namespace protoST {
 
+namespace {
+// What an actor's message Future is rejected with: the protoST exception that
+// went unhandled in the method, so a waiter re-signals it with its class and
+// messageText intact; a native error's text otherwise.
+const proto::ProtoObject* rejectionFor(proto::ProtoContext* ctx, const std::exception& e) {
+    if (const auto* u = dynamic_cast<const UnhandledSTException*>(&e))
+        if (u->exception()) return u->exception();
+    return ctx->fromUTF8String(e.what());
+}
+} // namespace
+
 // F6 v3 C: thread-local "actor currently being processed on THIS thread".
 // drainOne writes it before invoking the user method body; Future>>wait
 // reads it to decide between blocking on the future's cv (nullptr ⇒ main
@@ -1791,7 +1802,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             } catch (const std::exception& e) {
                 setCurrentActor(nullptr);
                 if (msgFut && msgFut != PROTO_NONE) {
-                    auto* err = ctx->fromUTF8String(e.what());
+                    auto* err = rejectionFor(ctx, e);
                     TransientPin pinErr(ctx, err);
                     rejectFutureFromDrain(*this, ctx, msgFut, err);
                 }
@@ -1957,7 +1968,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             }
         } catch (const std::exception& e) {
             if (future) {
-                auto* err = ctx->fromUTF8String(e.what());
+                auto* err = rejectionFor(ctx, e);
                 TransientPin pinErr(ctx, err);
                 rejectFutureFromDrain(*this, ctx, future, err);
             }

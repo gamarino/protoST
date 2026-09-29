@@ -185,7 +185,7 @@ const proto::ProtoObject* defaultAction(proto::ProtoContext* ctx,
         // Error (resumable or not) / non-resumable: abort the activation
         // (EXC-a behaviour, EXC-d dedicated type).
         throw UnhandledSTException(defaultActionMessage(ctx, exc),
-                                   ExecutionEngine::describeActiveStack(20));
+                                   ExecutionEngine::describeActiveStack(20), exc);
     }
     // Resumable and unhandled. A Warning announces itself; the bare Exception
     // base resumes silently. The distinction is the presence of a messageText
@@ -281,6 +281,19 @@ const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx
 }
 
 } // namespace
+
+// Re-signal an exception instance in the current context: a Future rejected
+// by an actor's unhandled exception raises that same exception in the waiter.
+const proto::ProtoObject* resignalException(STRuntime& rt, proto::ProtoContext* ctx,
+                                            const proto::ProtoObject* exc) {
+    return signalInstance(rt, ctx, exc);
+}
+
+bool isExceptionInstance(STRuntime& rt, proto::ProtoContext* ctx,
+                         const proto::ProtoObject* obj) {
+    return obj && obj != PROTO_NONE && !obj->isInteger(ctx) && !obj->asString(ctx)
+        && obj->hasParent(ctx, rt.bootstrap().exceptionProto) != 0;
+}
 
 // --- EXC-d: translate a native C++ exception into a protoST Error ----------
 //
