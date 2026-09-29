@@ -3,6 +3,7 @@
 #include "protoST/STRuntime.h"
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
+#include <unordered_map>
 #include "runtime/BytecodeModule.h"
 #include "runtime/ValueFormat.h"
 #include "protoCore.h"
@@ -28,6 +29,13 @@
 namespace protoST {
 
 namespace {
+
+// Classes declared by earlier REPL inputs, so a method entered in a later
+// input compiles against their instance variables (reset by :reset).
+std::unordered_map<std::string, Compiler::ClassInfo>& replClasses() {
+    static std::unordered_map<std::string, Compiler::ClassInfo> classes;
+    return classes;
+}
 
 // --- small helpers ----------------------------------------------------------
 
@@ -155,6 +163,7 @@ Completeness classify(const std::string& buffer) {
     if (P.errors().empty()) {
         Compiler C;
         C.setReplMode(true);
+        C.setKnownClasses(replClasses());
         auto bc = C.compileModule(*ast);
         (void)bc;
         if (!C.hasErrors()) return Completeness::Complete;
@@ -229,8 +238,10 @@ bool evaluate(Session& s, const std::string& buffer,
     }
     Compiler C;
     C.setReplMode(true);
+    C.setKnownClasses(replClasses());
     auto bc = C.compileModule(*ast);
     bc->setSourceName(sourceName);
+    if (!C.hasErrors()) replClasses() = C.classes();
     if (C.hasErrors()) {
         for (auto& str : C.errors())
             std::fprintf(stderr, "compile error: %s\n", str.c_str());
@@ -296,6 +307,7 @@ void cmdLoad(Session& s, const std::string& arg) {
 // :reset — discard all session state and start a fresh STRuntime.
 void cmdReset(Session& s) {
     s.rebuild();
+    replClasses().clear();
     std::puts("session reset — all user variables, classes and methods cleared");
 }
 

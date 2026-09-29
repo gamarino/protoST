@@ -265,7 +265,9 @@ TEST_CASE("Compiler: ClassDecl emits PUSH_GLOBAL/SEND/STORE_GLOBAL", "[compiler]
         Op op = static_cast<Op>(bc->bytes()[i]);
         uint8_t arg = bc->bytes()[i+1];
         if (op == Op::PUSH_GLOBAL  && bc->constSymbol(arg) == "Object")   sawPushSuper = true;
-        if (op == Op::SEND_UNARY   && bc->constSymbol(arg) == "newChild") sawSendNewChild = true;
+        // The class object comes from __subclassNamed: (a new child of the
+        // superclass, or the existing class when it is re-declared).
+        if (op == Op::SEND_KEYWORD && bc->constSymbol(arg) == "__subclassNamed:") sawSendNewChild = true;
         if (op == Op::STORE_GLOBAL && bc->constSymbol(arg) == "Counter")  sawStoreClass = true;
     }
     REQUIRE(sawPushSuper);

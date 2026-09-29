@@ -56,6 +56,12 @@ public:
         std::vector<std::string> mixinNames;
     };
 
+    // REPL: classes declared by earlier inputs (their instance, class and
+    // class-instance variables), so a method entered later can name them.
+    void setKnownClasses(const std::unordered_map<std::string, ClassInfo>& known) {
+        knownClasses_ = known;
+    }
+
     void analyseClosures(const ast::Node& module);
     const ScopeAnalysis& analysis() const { return analysis_; }
 
@@ -100,6 +106,7 @@ private:
     // F4-U2: collected by collectClasses() before emission; queried by
     // downstream passes (e.g., MethodDecl emission) to map inst-var refs.
     std::unordered_map<std::string, ClassInfo> classes_;
+    std::unordered_map<std::string, ClassInfo> knownClasses_;
 
     // Resolve the *transitive* set of class-var names visible inside
     // methods of `className` — that is, this class's own classVarNames

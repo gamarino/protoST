@@ -2346,7 +2346,11 @@ std::string STRuntime::findModuleFile(const std::string& logicalPath) const {
 // hard ceiling by default. Measured on 2026-09-29 with a 10M-cell ceiling: that
 // loop peaks at 0.8 GB and takes 36 s instead of 20 s -- the cost of actually
 // collecting instead of never collecting; fib, int_sum_loop, list_append,
-// str_concat, exception_latency and pump_twin show no measurable difference. An explicit PROTOCORE_HEAP_LIMIT_CELLS, which
+// str_concat, exception_latency and pump_twin show no measurable difference.
+// Raised the same day to 32M cells (2 GB), capped at a quarter of physical
+// memory: at 10M cells an Array of 600,000 elements or (1 to: 1000000)
+// asArray ran out (building a large list costs n log n cells in protoCore).
+// An explicit PROTOCORE_HEAP_LIMIT_CELLS, which
 // protoCore has already applied, takes precedence (0 disables the ceiling).
 //
 // A live set that itself reaches the ceiling is reported by protoCore through
@@ -2355,7 +2359,7 @@ std::string STRuntime::findModuleFile(const std::string& logicalPath) const {
 // core dump.
 namespace {
 constexpr long long kCellBytes = 64;
-constexpr long long kDefaultHardCells = 10'000'000;          // 640 MB of cells
+constexpr long long kDefaultHardCells = 32'000'000;          // 2 GB of cells
 
 proto::ProtoObject* reportOutOfMemory(proto::ProtoContext*) {
     std::fflush(stdout);
@@ -2369,13 +2373,13 @@ proto::ProtoObject* reportOutOfMemory(proto::ProtoContext*) {
 }
 
 int defaultHardCells() {
-    // The default ceiling, or half of physical memory if that is smaller.
+    // The default ceiling, or a quarter of physical memory if that is smaller.
     long long cells = kDefaultHardCells;
 #if defined(_SC_PHYS_PAGES) && defined(_SC_PAGESIZE)
     const long pages = ::sysconf(_SC_PHYS_PAGES);
     const long pageSize = ::sysconf(_SC_PAGESIZE);
     if (pages > 0 && pageSize > 0)
-        cells = std::min(cells, static_cast<long long>(pages) * pageSize / 2 / kCellBytes);
+        cells = std::min(cells, static_cast<long long>(pages) * pageSize / 4 / kCellBytes);
 #endif
     return static_cast<int>(std::min<long long>(cells, INT_MAX));
 }

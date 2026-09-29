@@ -333,7 +333,7 @@ Compiler::resolveClassVarsFor(const std::string& className) const {
 }
 
 void Compiler::collectClasses(const Node& module) {
-    classes_.clear();
+    classes_ = knownClasses_;
     if (module.kind != NodeKind::Module) return;
     for (const auto& topPtr : module.children) {
         if (!topPtr || topPtr->kind != NodeKind::ClassDecl) continue;
@@ -528,11 +528,13 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         }
 
         auto superIdx     = m.internSymbol(superName);
-        auto newChildIdx  = m.internSymbol("newChild");
+        auto subclassIdx  = m.internSymbol("__subclassNamed:");
+        auto declNameIdx  = m.addString(n.text);
         // BL-2: indices may exceed 255 — emitWide prefixes EXTEND words as
         // needed, so there is no longer a 256-symbol ceiling.
         m.emitWide(Op::PUSH_GLOBAL,  static_cast<unsigned int>(superIdx), currentLine_);
-        m.emitWide(Op::SEND_UNARY,   static_cast<unsigned int>(newChildIdx), currentLine_);
+        m.emitWide(Op::PUSH_CONST,   static_cast<unsigned int>(declNameIdx), currentLine_);
+        m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(subclassIdx), currentLine_);
         // BL-3: stamp the declared class name onto the fresh class object so
         // printString can render instances as "a Counter". We send
         // `__setClassName:` (a keyword primitive on objectProto) with the name

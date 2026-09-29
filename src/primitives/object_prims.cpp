@@ -274,7 +274,9 @@ const proto::ProtoObject* prim_Object_initClassVars(STRuntime&,
         std::string mangled = "_iv_" + cur;
         const proto::ProtoString* key =
             proto::ProtoString::createSymbol(ctx, mangled.c_str());
-        cls->setAttribute(ctx, key, PROTO_NONE);
+        // A redefined class keeps the values its class variables already have.
+        if (cls->hasOwnAttribute(ctx, key) != PROTO_TRUE)
+            cls->setAttribute(ctx, key, PROTO_NONE);
         cur.clear();
     };
     for (char ch : names) {
@@ -784,11 +786,24 @@ const proto::ProtoObject* prim_Object_respondsTo(STRuntime& rt, proto::ProtoCont
 }
 
 // aClass superclass → the next class up the chain, nil for Object.
+const proto::ProtoObject* prim_Object_class(STRuntime& rt, proto::ProtoContext* ctx,
+                                            const proto::ProtoObject* r,
+                                            const proto::ProtoObject* const*, int);
+
 const proto::ProtoObject* prim_Object_superclass(STRuntime& rt, proto::ProtoContext* ctx,
                                                  const proto::ProtoObject* r,
                                                  const proto::ProtoObject* const*, int) {
     const proto::ProtoString* nameKey = rt.bootstrap().sym.className;
     if (!r || r == PROTO_NONE) return PROTO_NONE;
+    // A metaclass's superclass is its class's superclass's metaclass
+    // (B class superclass is A class); Object class answers nil here.
+    if (const proto::ProtoObject* sole = r->isInteger(ctx) || r->asString(ctx) ? nullptr
+            : r->getOwnAttributeDirect(ctx, proto::ProtoString::createSymbol(ctx, "__sole_instance__"))) {
+        if (sole != PROTO_NONE) {
+            const proto::ProtoObject* sup = prim_Object_superclass(rt, ctx, sole, nullptr, 0);
+            return (sup && sup != PROTO_NONE) ? prim_Object_class(rt, ctx, sup, nullptr, 0) : PROTO_NONE;
+        }
+    }
     for (const proto::ProtoObject* p = r->getFirstParent(ctx); p && p != PROTO_NONE;
          p = p->getFirstParent(ctx)) {
         const proto::ProtoObject* n = p->getOwnAttributeDirect(ctx, nameKey);
@@ -1006,6 +1021,30 @@ const proto::ProtoObject* prim_Actor_wrappedObject(STRuntime& rt, proto::ProtoCo
     return (w && w != PROTO_NONE) ? w : r;
 }
 
+// aSuperclass __subclassNamed: aName → the class a plain class declaration
+// defines. When a class of that name already exists with the same superclass
+// it is answered again, so re-declaring a class (a REPL session, a file
+// loaded twice) keeps its methods, class variables and instances, as in
+// Pharo; otherwise a new child of the superclass.
+const proto::ProtoObject* prim_Object_subclassNamed(STRuntime& rt, proto::ProtoContext* ctx,
+                                                    const proto::ProtoObject* r,
+                                                    const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw std::runtime_error("__subclassNamed: expects 1 arg");
+    const proto::ProtoString* name = a[0] ? a[0]->asString(ctx) : nullptr;
+    if (name) {
+        const proto::ProtoObject* g = rt.globals();
+        const proto::ProtoObject* existing = g
+            ? g->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, name->toStdString(ctx).c_str()))
+            : nullptr;
+        if (existing && existing != PROTO_NONE && !existing->isInteger(ctx) && !existing->asString(ctx)) {
+            const proto::ProtoObject* own = existing->getOwnAttributeDirect(ctx, rt.bootstrap().sym.className);
+            if (own && own != PROTO_NONE && existing->getFirstParent(ctx) == r)
+                return existing;
+        }
+    }
+    return const_cast<proto::ProtoObject*>(r)->newChild(ctx, /*isMutable=*/true);
+}
+
 // ---------------------------------------------------------------- reflection
 
 namespace {
@@ -1032,6 +1071,15 @@ const proto::ProtoString* ivarKey(proto::ProtoContext* ctx, const proto::ProtoOb
     return proto::ProtoString::createSymbol(ctx, ("_iv_" + s->toStdString(ctx)).c_str());
 }
 } // namespace
+
+// The class a metaclass describes (`A class` answers a metaclass object that
+// records its sole instance), or nullptr when `r` is not a metaclass.
+const proto::ProtoObject* soleInstanceOf(proto::ProtoContext* ctx, const proto::ProtoObject* r) {
+    if (!r || r == PROTO_NONE || r->isInteger(ctx) || r->asString(ctx)) return nullptr;
+    const proto::ProtoObject* s =
+        r->getOwnAttributeDirect(ctx, proto::ProtoString::createSymbol(ctx, "__sole_instance__"));
+    return (s && s != PROTO_NONE) ? s : nullptr;
+}
 
 // anObject instVarNamed: aName → the value of that instance variable of the
 // receiver (nil when unset); instVarNamed:put: sets it.
@@ -1087,6 +1135,16 @@ const proto::ProtoObject* prim_Object_canUnderstand(STRuntime& rt, proto::ProtoC
     if (argc != 1) throw std::runtime_error("canUnderstand: expects 1 arg");
     const proto::ProtoString* sel = a[0] ? a[0]->asString(ctx) : nullptr;
     if (!sel || !r || r == PROTO_NONE) return PROTO_FALSE;
+    if (const proto::ProtoObject* cls = soleInstanceOf(ctx, r)) {
+        // A metaclass: what the class itself understands — its class-side
+        // methods and the protocol every class has (new, name, ...), not its
+        // instances' methods.
+        const proto::ProtoObject* m = cls->getAttribute(ctx, sel);
+        if (!isMethodValue(rt, ctx, m)) return PROTO_FALSE;
+        if (m->isInteger(ctx)) return PROTO_TRUE;
+        if (m->getAttribute(ctx, rt.bootstrap().sym.classSide) == PROTO_TRUE) return PROTO_TRUE;
+        return rt.bootstrap().objectProto->getAttribute(ctx, sel) == m ? PROTO_TRUE : PROTO_FALSE;
+    }
     const proto::ProtoObject* m = r->getAttribute(ctx, sel);
     if (!isMethodValue(rt, ctx, m)) return PROTO_FALSE;
     if (!m->isInteger(ctx) && m->getAttribute(ctx, rt.bootstrap().sym.classSide) == PROTO_TRUE)
@@ -1100,8 +1158,10 @@ const proto::ProtoObject* prim_Object_canUnderstand(STRuntime& rt, proto::ProtoC
 const proto::ProtoObject* prim_Object_selectors(STRuntime& rt, proto::ProtoContext* ctx,
                                                 const proto::ProtoObject* r,
                                                 const proto::ProtoObject* const*, int) {
-    struct Sink { STRuntime* rt; std::vector<std::string> names; };
-    Sink sink{&rt, {}};
+    struct Sink { STRuntime* rt; std::vector<std::string> names; bool classSide; };
+    const proto::ProtoObject* cls = soleInstanceOf(ctx, r);
+    Sink sink{&rt, {}, cls != nullptr};
+    if (cls) r = cls;   // a metaclass lists its class's class-side methods
     if (r && r != PROTO_NONE && !r->isInteger(ctx) && !r->asString(ctx)) {
         r->processOwnAttributes(ctx, &sink,
             [](proto::ProtoContext* c, void* self, const proto::ProtoString* key,
@@ -1110,9 +1170,9 @@ const proto::ProtoObject* prim_Object_selectors(STRuntime& rt, proto::ProtoConte
                 std::string name = key->toStdString(c);
                 if (name.rfind("__", 0) == 0 || name.rfind("_iv_", 0) == 0) return;
                 if (!isMethodValue(*k->rt, c, value)) return;
-                if (!value->isInteger(c)
-                    && value->getAttribute(c, k->rt->bootstrap().sym.classSide) == PROTO_TRUE)
-                    return;
+                const bool classSideMethod = !value->isInteger(c)
+                    && value->getAttribute(c, k->rt->bootstrap().sym.classSide) == PROTO_TRUE;
+                if (classSideMethod != k->classSide) return;
                 k->names.push_back(name);
             });
     }
@@ -1509,6 +1569,7 @@ void installObjectPrimitives(STRuntime& rt) {
     bindPrimitive(rt, b.objectProto, "__globalAt:put:", reg.registerPrim(prim_Object_globalAtPut));
     bindPrimitive(rt, b.objectProto, "name", reg.registerPrim(prim_Object_name));
     bindPrimitive(rt, b.objectProto, "isClassObject", reg.registerPrim(prim_Object_isClassObject));
+    bindPrimitive(rt, b.objectProto, "__subclassNamed:", reg.registerPrim(prim_Object_subclassNamed));
     bindPrimitive(rt, b.actorProto, "__wrappedObject", reg.registerPrim(prim_Actor_wrappedObject));
     bindPrimitive(rt, b.objectProto, "instVarNamed:", reg.registerPrim(prim_Object_instVarNamed));
     bindPrimitive(rt, b.objectProto, "instVarNamed:put:", reg.registerPrim(prim_Object_instVarNamedPut));

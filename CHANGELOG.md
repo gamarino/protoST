@@ -48,7 +48,7 @@ audit). Details of each item are in [`docs/STATUS.md`](docs/STATUS.md) and
 - `Future whenAny:` waited forever when every future was rejected.
 - A negative integer attribute read through a unary send was taken for a
   primitive marker and aborted the interpreter.
-- A heap ceiling (half the RAM by default, `PROTOCORE_HEAP_LIMIT_CELLS`)
+- A heap ceiling (2 GB of cells, at most a quarter of the RAM, by default; `PROTOCORE_HEAP_LIMIT_CELLS`)
   replaces the unbounded growth that could exhaust the machine; running out
   exits with a clear message. Ctrl-C interrupts a running program cleanly.
 
