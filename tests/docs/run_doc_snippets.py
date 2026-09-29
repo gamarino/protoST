@@ -51,9 +51,9 @@ states for it. The tool recognises the conventions the protoST documents use:
 
    Each annotated statement S is checked with its own run: the block (or
    snippet group, see below) is cut right after S, so S becomes the last
-   top-level statement and the CLI prints its value -- the documented "a
-   script prints the value of its last statement" rule, with no probe code
-   that could depend on the printing protocol under test. The value is the
+   top-level statement, and it is run with ``protost --print-last``, which
+   prints that value after the program -- no probe code that could depend on
+   the printing protocol under test. The value is the
    trailing lines of standard output (as many lines as VALUE has); output
    printed earlier by the program is ignored.
 
@@ -522,7 +522,7 @@ class DocChecker:
             for a in annos:
                 d = self.runner.scratch_dir()
                 (d / "snippet.st").write_text(cut_program(text, inserts, a), encoding="utf-8")
-                res = self.runner.run(["snippet.st"], cwd=d, merge_stderr=False)
+                res = self.runner.run(["--print-last", "snippet.st"], cwd=d, merge_stderr=False)
                 expected = normalise(a.expected)
                 note = res.status_note()
                 out = normalise(res.stdout)

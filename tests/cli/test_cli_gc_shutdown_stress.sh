@@ -42,7 +42,7 @@ EOF
 RUNS=20
 for i in $(seq 1 "$RUNS"); do
     rc=0
-    out="$(PROTOST_WORKERS=8 timeout 20 "$PROTOST" "$SCRIPT" 2>&1)" || rc=$?
+    out="$(PROTOST_WORKERS=8 timeout 20 "$PROTOST" --print-last "$SCRIPT" 2>&1)" || rc=$?
     if [ "$rc" -ne 0 ]; then
         if [ "$rc" -eq 124 ]; then
             echo "FAIL: run $i/$RUNS timed out"

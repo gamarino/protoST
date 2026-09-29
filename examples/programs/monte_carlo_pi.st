@@ -31,6 +31,7 @@ estimator := PiEstimator new withGenerator: (random Random seed: 2026).
 estimate := estimator estimateWith: 20000.
 
 "The estimate must land within 0.1 of the true pi for this seed/sample size."
-((estimate - Float pi) abs < 0.1)
-  ifTrue: [ 'pi-estimate-ok' ]
-  ifFalse: [ 'pi-estimate-off: ' , estimate printString ].
+result := ((estimate - Float pi) abs < 0.1)
+    ifTrue: [ 'pi-estimate-ok' ]
+    ifFalse: [ 'pi-estimate-off: ' , estimate printString ].
+result displayNl.

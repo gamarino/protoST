@@ -27,4 +27,4 @@ r initialize.
   on: Error
   do: [ :ex | r note: 'used' ].
 
-r trail.
+r trail displayNl.

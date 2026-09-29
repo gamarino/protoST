@@ -16,4 +16,4 @@ identical := true.
 1 to: 10 do: [ :i |
   ((a nextInt: 6) = (b nextInt: 6)) ifFalse: [ identical := false ] ].
 
-identical.
+identical displayNl.

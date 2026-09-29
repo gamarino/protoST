@@ -11,4 +11,4 @@ b := 4.
 hyp := (a squared + b squared) sqrt.
 
 "sqrt answers a Float (5.0); rounded brings it back to an integer."
-'hypotenuse-' , hyp rounded printString.
+('hypotenuse-' , hyp rounded printString) displayNl.

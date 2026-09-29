@@ -16,7 +16,8 @@ invocations:
 
 | Invocation | Effect |
 |------------|--------|
-| `protost script.st` | run a script; print its last top-level statement |
+| `protost script.st` | run a script; only what it prints is shown |
+| `protost --print-last script.st` | run a script, then print the value of its last top-level statement |
 | `protost -e '<code>'` | evaluate an expression (or several statements); print the last value |
 | `protost -i` | start the interactive REPL |
 | `protost -d script.st` | run a script under the CLI debugger |
@@ -34,7 +35,7 @@ debugger, and `venv`.
 
 ```
 $ ./build/protost -i
-protoST 0.4.0 — interactive REPL
+protoST 0.4.1 — interactive REPL
 :help for commands, :quit or Ctrl-D to exit
 protoST> 3 + 4
 => 7

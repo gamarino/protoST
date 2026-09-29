@@ -33,4 +33,4 @@ last := 0.
 1 to: 2000 do: [ :i | last := (sink ping) wait ].
 result := last.
 result = 2000 ifFalse: [Error signal: 'message_throughput: wrong result ' , result printString].
-'VERIFIED ' , result printString
+Transcript showCr: 'VERIFIED ' , result printString.

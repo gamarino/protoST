@@ -15,4 +15,4 @@ Point >> setX: anX y: aY
 Point >> printString
   ^ 'Point(' , x printString , ', ' , y printString , ')'.
 
-(Point new setX: 3 y: 4) printString.
+((Point new setX: 3 y: 4) printString) displayNl.

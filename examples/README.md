@@ -30,6 +30,11 @@ module must be run from their own directory:
 cd examples/modules && ../../build/protost 01_import_module.st
 ```
 
+Every example ends by printing the result stated on its first line
+(`"EXPECT: …"`): `./build/protost examples/basics/01_classes_and_instances.st`
+prints `2`. A script shows only what it prints; the conformance runner uses
+`--print-last`, which also prints the value of the last statement.
+
 The whole set is also registered as a CTest smoke layer (one case per file).
 Run it with:
 

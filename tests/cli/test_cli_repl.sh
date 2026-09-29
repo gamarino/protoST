@@ -91,10 +91,10 @@ out=$(run ':load /no/such/file.st\n2 + 2.\n:quit\n')
 grep -q "cannot open" <<< "$out" || { echo "FAIL: :load missing file not reported"; echo "$out"; exit 1; }
 grep -q "=> 4" <<< "$out" || { echo "FAIL: session died after bad :load"; echo "$out"; exit 1; }
 
-# --- 15. regression: script execution and -e are unaffected -------------------
+# --- 15. regression: script execution (--print-last) and -e are unaffected ----
 SCRIPTFILE=$(mktemp "$TMP_ROOT/protost_scriptXXXXXX.st")
 printf "3 + 39.\n" > "$SCRIPTFILE"
-out=$("$PROTOST" "$SCRIPTFILE") || { echo "FAIL: script execution exited non-zero"; exit 1; }
+out=$("$PROTOST" --print-last "$SCRIPTFILE") || { echo "FAIL: script execution exited non-zero"; exit 1; }
 grep -qx 42 <<< "$out" || { echo "FAIL: script execution affected"; echo "$out"; exit 1; }
 out=$("$PROTOST" -e "20 + 22.") || { echo "FAIL: -e exited non-zero"; exit 1; }
 grep -qx 42 <<< "$out" || { echo "FAIL: -e affected"; echo "$out"; exit 1; }

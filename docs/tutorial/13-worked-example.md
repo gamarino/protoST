@@ -232,8 +232,8 @@ ctrl cycle.
 ctrl cycle.
 ctrl cycle.
 
-"Final return value: number of completed cycles"
-ctrl cycles.
+"Print the number of completed cycles"
+ctrl cycles displayNl.
 ```
 
 Read it top to bottom. The pump is created with `new`, which also sends it
@@ -247,8 +247,8 @@ actors. *That* is what makes `cycle`'s fan-out parallel: because the controller
 holds actor proxies, `temp read` inside `cycle` is an asynchronous send
 returning a future.
 
-Three `cycle`s are run. The script's last statement, `ctrl cycles`, is the
-program's value — the number of completed cycles, `3`.
+Three `cycle`s are run. The last statement, `ctrl cycles displayNl`, prints
+the number of completed cycles, `3`.
 
 ## 13.6 Running it — and measuring the speedup
 

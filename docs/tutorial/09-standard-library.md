@@ -155,7 +155,7 @@ second := rs next.
 ws := WriteStream on: String new.
 ws nextPutAll: 'sum: '; print: first + second.
 
-{ first. second. rs atEnd. ws contents }.
+{ first. second. rs atEnd. ws contents } displayNl.
 ```
 
 ```bash
@@ -201,7 +201,7 @@ r := Random seed: 42.
 roll := r nextInt: 6.
 { roll between: 1 and: 6.
   (r between: 100 and: 200) between: 100 and: 200.
-  (Random seed: 7) next = (Random seed: 7) next }.
+  (Random seed: 7) next = (Random seed: 7) next } displayNl.
 ```
 
 ```bash
@@ -246,7 +246,7 @@ scores := doc at: 'scores'.
 
 back := m JSON stringify: #(1 2 3).
 
-{ name. scores size. back }.
+{ name. scores size. back } displayNl.
 ```
 
 ```bash
@@ -286,7 +286,7 @@ d := Duration seconds: 90.
 longer := d + (Duration seconds: 120).
 elapsed := [ 1 to: 100000 do: [ :i | i * i ] ] timeToRun.
 { d asSeconds. longer asSeconds. elapsed class.
-  (Date year: 2026 month: 10 day: 15) printString }.
+  (Date year: 2026 month: 10 day: 15) printString } displayNl.
 ```
 
 ```bash

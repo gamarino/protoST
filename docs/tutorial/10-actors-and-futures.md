@@ -73,7 +73,7 @@ Calc >> double: n
 
 calc := Calc new asActor.
 f := calc double: 21.        "f is a Future — NOT 42, not yet"
-f wait.                      "block until the actor finishes; answer 42"
+f wait displayNl.            "block until the actor finishes; answer 42"
 ```
 
 ```bash
@@ -125,7 +125,7 @@ f := calc square: 9.
 captured := nil.
 f thenDo: [ :v | captured := v ].
 f wait.
-captured.
+captured displayNl.
 ```
 
 ```bash
@@ -172,7 +172,7 @@ fb := b read.
 fc := c read.
 
 "Now collect — the three reads ran concurrently on different workers."
-(fa wait) + (fb wait) + (fc wait).
+((fa wait) + (fb wait) + (fc wait)) displayNl.
 ```
 
 ```bash
@@ -278,7 +278,7 @@ a := Peer new asActor.
 b := Peer new asActor.
 (a other: b) wait.
 (b other: a) wait.
-[ a ping wait ] on: Error do: [ :e | e messageText copyFrom: 1 to: 9 ].
+([ a ping wait ] on: Error do: [ :e | e messageText copyFrom: 1 to: 9 ]) displayNl.
 ```
 
 ```bash
@@ -418,7 +418,7 @@ Risky >> attempt
 
 actor := Risky new asActor.
 f := actor attempt.
-[ f wait ] on: SensorFault do: [ :e | 'handled: ' , e messageText ].
+([ f wait ] on: SensorFault do: [ :e | 'handled: ' , e messageText ]) displayNl.
 ```
 
 ```bash
@@ -490,7 +490,7 @@ f1 := m1 bump: total.  f2 := m2 bump: total.
 f3 := m3 bump: total.  f4 := m4 bump: total.
 f1 wait.  f2 wait.  f3 wait.  f4 wait.
 
-total value.
+total value displayNl.
 ```
 
 ```bash

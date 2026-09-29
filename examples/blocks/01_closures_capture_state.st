@@ -16,4 +16,4 @@ Accumulators >> makeAccumulator
 acc := Accumulators new makeAccumulator.
 acc value: 5.
 acc value: 10.
-acc value: 15.
+(acc value: 15) displayNl.

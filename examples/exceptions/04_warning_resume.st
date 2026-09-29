@@ -7,8 +7,9 @@
 "-- the value to continue with.                                             --"
 "-- Expected output: 42                                                     --"
 
-[ | base |
-  base := Warning signal: 'use a default'.
-  base * 2 ]
+result := [ | base |
+    base := Warning signal: 'use a default'.
+    base * 2 ]
   on: Warning
   do: [ :ex | ex resume: 21 ].
+result displayNl.

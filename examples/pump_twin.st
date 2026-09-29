@@ -104,5 +104,5 @@ ctrl cycle.
 ctrl cycle.
 ctrl cycle.
 
-"Final return value: number of completed cycles"
-ctrl cycles.
+"Print the number of completed cycles"
+ctrl cycles displayNl.

@@ -31,4 +31,4 @@ b := (stage2 apply: a) wait.
 c := (stage3 apply: b) wait.
 
 "Sum the intermediate trace: 10 + 11 + 121 = 142."
-a + b + c.
+(a + b + c) displayNl.

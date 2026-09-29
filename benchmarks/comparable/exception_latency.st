@@ -11,4 +11,4 @@ total := 0.
   do: [ :e | total := total + 1 ] ].
 result := total.
 result = 50000 ifFalse: [Error signal: 'exception_latency: wrong result ' , result printString].
-'VERIFIED ' , result printString
+Transcript showCr: 'VERIFIED ' , result printString.

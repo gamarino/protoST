@@ -5,7 +5,7 @@ salen de `benchmarks/reports/2026-09-29-release-0.4.0.md`; si una cifra no
 está en ese informe, no se dice.
 
 Antes de empezar: terminal con fuente grande, `cd docs/talks/2026-10-15-fas/demos`,
-`protost --version` debe decir `protoST 0.4.0`. Las grabaciones de respaldo
+`protost --version` debe decir `protoST 0.4.1`. Las grabaciones de respaldo
 están en `../recordings/` (ver la checklist).
 
 ---
@@ -63,7 +63,7 @@ no local en `Bank>>find:`, excepción propia con `retry`, `ZeroDivide` con
 
 - es un archivo de texto; una línea en blanco cierra un método;
 - `new` envía `initialize`, `printOn:` gobierna cómo se imprime todo;
-- el valor de la última expresión (270) es lo que el script "imprime".
+- la última línea imprime el total (270): un script muestra solo lo que imprime.
 
 Respaldo: `scriptreplay` de `recordings/01-familiar-code`.
 

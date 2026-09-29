@@ -16,8 +16,9 @@ Person >> age: anAge
   ^ self.
 
 "Inner handler logs and passes; outer handler produces the final message."
-[ [ Person new age: -5 ]
-    on: ValidationError
-    do: [ :ex | ex pass ] ]
-  on: Error
-  do: [ :ex | 'validation failed: ' , ex messageText ].
+result := [ [ Person new age: -5 ]
+      on: ValidationError
+      do: [ :ex | ex pass ] ]
+    on: Error
+    do: [ :ex | 'validation failed: ' , ex messageText ].
+result displayNl.

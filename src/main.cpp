@@ -28,7 +28,7 @@ void printUsage(const char* prog) {
     // implemented (bytecode serialisation is out of scope). The usage text is
     // kept honest — only the modes the binary actually supports are listed.
     std::fprintf(stderr,
-        "Usage: %s [options] <script.st> [args...]\n"
+        "Usage: %s [--print-last] <script.st> [args...]\n"
         "       %s -e '<expr>'\n"
         "       %s -i                     (interactive REPL)\n"
         "       %s -d <script.st>         (CLI debugger)\n"
@@ -36,6 +36,7 @@ void printUsage(const char* prog) {
         "       %s --dump-ast <script.st>\n"
         "       %s venv <subcommand> [args]\n"
         "\nOptions:\n"
+        "  --print-last   After the script, print the value of its last statement\n"
         "  -e '<expr>'    Evaluate expression and print result\n"
         "  -i             Start the interactive REPL\n"
         "  -d             Run the script under the CLI debugger\n"
@@ -173,9 +174,19 @@ int main(int argc, char** argv) {
         return 64;
     }
 
-    // Default: treat argv[1] as a path to a .st script file and execute it.
+    // Default: a .st script file. It prints what the program prints and
+    // nothing else; `--print-last` also prints the value of its last
+    // statement (the conformance runner checks that value). Echoing it by
+    // default (D12b) showed `x` twice for a script ending in `x printNl.`.
     {
-        const char* path = argv[1];
+        bool printLast = false;
+        int argi = 1;
+        if (mode == "--print-last") {
+            if (argc < 3) { std::fprintf(stderr, "--print-last requires a path\n"); return 64; }
+            printLast = true;
+            argi = 2;
+        }
+        const char* path = argv[argi];
         if (path[0] == '-') { std::fprintf(stderr, "unknown option: %s\n", path); printUsage(argv[0]); return 64; }
         std::string src;
         if (!readWholeFile(path, src)) { std::fprintf(stderr, "file not found: %s\n", path); return 66; }
@@ -197,7 +208,7 @@ int main(int argc, char** argv) {
             protoST::STRuntime rt;
             auto* r = rt.runTopLevel(*bc);
             // BL-3: shared formatter.
-            std::puts(protoST::formatValue(rt, rt.rootCtx(), r).c_str());
+            if (printLast) std::puts(protoST::formatValue(rt, rt.rootCtx(), r).c_str());
             return 0;
         } catch (const std::exception& e) {
             std::fprintf(stderr, "%s\n", protoST::describeUncaught(e).c_str());

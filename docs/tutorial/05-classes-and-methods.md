@@ -200,7 +200,7 @@ a := Account new.
 a deposit: 100.
 a deposit: 50.
 a withdraw: 30.
-a balance.
+a balance displayNl.
 ```
 
 ```bash
@@ -232,7 +232,7 @@ Dog >> describe
   ^ 'a dog'.
 
 d := Dog new.
-{ d describe. d legs }.
+{ d describe. d legs } displayNl.
 ```
 
 ```bash
@@ -242,7 +242,7 @@ $ ./build/protost inherit.st
 
 `d describe` answers `'a dog'` — `Dog` *overrides* `describe`. `d legs` answers
 `4` — `Dog` inherits `legs` unchanged from `Animal`. (The script's last
-statement builds a two-element dynamic array, and the CLI prints it as a
+statement builds a two-element dynamic array, and `displayNl` prints it as a
 literal array.)
 
 When an override needs to *extend* rather than replace the inherited behaviour,
@@ -264,7 +264,7 @@ Animal subclass: #Dog
 Dog >> describe
   ^ (super describe) , ' that barks'.
 
-(Dog new) describe.
+(Dog new) describe displayNl.
 ```
 
 ```bash
@@ -312,7 +312,7 @@ Vec2 >> printString
   ^ '(' , x printString , ', ' , y printString , ')'.
 
 v := (Vec2 new setX: 1 y: 2) + (Vec2 new setX: 3 y: 4).
-v printString.
+v printString displayNl.
 ```
 
 ```bash
@@ -366,7 +366,7 @@ Counter class >> startingAt: n
 
 c := Counter startingAt: 10.
 c increment.
-c value.
+c value displayNl.
 ```
 
 ```bash

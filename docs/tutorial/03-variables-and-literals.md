@@ -400,7 +400,7 @@ A small script using the literals of this chapter:
 "-- inventory.st --"
 prices := #(120 80 200 45).
 total := prices inject: 0 into: [ :sum :each | sum + each ].
-total.
+total displayNl.
 ```
 
 ```bash

@@ -162,12 +162,13 @@ between statements, and start top-level statements at column 1. The details:
 - A whole method may be written on one line, followed by top-level code:
   `C >> m ^ 1. C new m.` defines `m` and answers 1.
 
-### A script shows the value of its last statement — D12, D12b
+### A script is its top-level forms — D12
 
-A script has no entry point: its top-level forms run in order and the CLI
-prints the value of the last statement (its `displayString`), the way a
-workspace's *print it* would. A script that ends with `x printNl.` therefore
-shows `x` twice; end it with an expression, or with `nil`, if that matters.
+A script has no entry point: its top-level forms run in order, and it shows
+only what it prints (`printNl`, `displayNl`, `Transcript`).
+`protost --print-last file.st` also prints the value of the last statement
+(its `displayString`) after the program, the way a workspace's *print it*
+would; `-e` and the REPL always show the value of what they evaluate.
 Top-level `| a b |` temporaries are accepted, as in a workspace.
 
 ### Strings are immutable — D34
@@ -487,10 +488,10 @@ For full grammar, see `LANGUAGE.md` §3.5.1 and §3.3.
   **call-form sends** (`recv name(p, k = v)`) and call-form method
   declarations (`Class >> name(p, k = default)`).
 - **Intentional deviations (§14.4):** programs are files, not an image; a
-  blank line ends a method body (D33); a script shows its last value (D12,
-  D12b); strings are immutable (D34); short symbols are represented as strings
-  (D35); a few printed forms differ (D36); a thin metaclass; an actor that
-  waits is not re-entrant (D37); bounded recursion depth (D38); single
+  blank line ends a method body (D33); a script is its top-level forms, run
+  in order (D12); strings are immutable (D34); short symbols are represented
+  as strings (D35); a few printed forms differ (D36); a thin metaclass; an
+  actor that waits is not re-entrant (D37); bounded recursion depth (D38); single
   runtime per process (D2); `addBehavior:` affects future instances only
   (D21).
 - **Not implemented:** `thisContext` is reserved (D17); `outer` behaves as

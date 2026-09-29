@@ -114,7 +114,7 @@ trap 'exit 143' TERM
 # --- run the program (with the test's directory as the working dir) ------
 # A hung program fails instead of holding the suite (the CTest default is
 # 1500 s per test).
-out="$(cd "$TEST_DIR" && timeout "${CONFORMANCE_TIMEOUT:-60}" "$PROTOST" "$TEST_BASE" 2>"$err_file")"
+out="$(cd "$TEST_DIR" && timeout "${CONFORMANCE_TIMEOUT:-60}" "$PROTOST" --print-last "$TEST_BASE" 2>"$err_file")"
 rc=$?
 err="$(cat "$err_file" 2>/dev/null)"
 

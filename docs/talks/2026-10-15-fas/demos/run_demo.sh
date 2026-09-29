@@ -7,7 +7,7 @@
 #
 # Usage: run_demo.sh <demo.st> [--quiet]
 # Environment: PROTOST (default: build_release/protost of this repository, then
-# protost on PATH). The binary must report protoST 0.4.0.
+# protost on PATH). The binary must report protoST 0.4.1.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DEMO="$1"
@@ -17,8 +17,8 @@ if [ -z "${PROTOST:-}" ]; then
     if [ -x "$REPO_BIN" ]; then PROTOST="$REPO_BIN"; else PROTOST="$(command -v protost || true)"; fi
 fi
 version="$("$PROTOST" --version 2>/dev/null)"
-if [ "$version" != "protoST 0.4.0" ]; then
-    echo "DEMO: $PROTOST reports '$version', not protoST 0.4.0 — install the 0.4.0 package or set PROTOST" >&2
+if [ "$version" != "protoST 0.4.1" ]; then
+    echo "DEMO: $PROTOST reports '$version', not protoST 0.4.1 — install the 0.4.1 package or set PROTOST" >&2
     exit 1
 fi
 name="$(basename "$DEMO" .st)"

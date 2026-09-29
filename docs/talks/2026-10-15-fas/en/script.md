@@ -5,7 +5,7 @@ Length: a 30-minute core; optional modules up to 60. Every figure comes from
 report, it is not said.
 
 Before starting: terminal with a large font, `cd docs/talks/2026-10-15-fas/demos`,
-`protost --version` must print `protoST 0.4.0`. The fallback recordings are in
+`protost --version` must print `protoST 0.4.1`. The fallback recordings are in
 `../recordings/` (see the checklist).
 
 ---
@@ -64,7 +64,7 @@ return in `Bank>>find:`, a custom exception with `retry`, `ZeroDivide` with
 
 - it is a text file; a blank line ends a method;
 - `new` sends `initialize`, `printOn:` governs how everything is printed;
-- the value of the last expression (270) is what the script "prints".
+- the last line prints the total (270): a script shows only what it prints.
 
 Fallback: `scriptreplay` of `recordings/01-familiar-code`.
 

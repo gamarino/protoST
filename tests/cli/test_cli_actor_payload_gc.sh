@@ -72,7 +72,7 @@ RUNS=8
 for i in $(seq 1 "$RUNS"); do
     rc=0
     out="$(PROTOCORE_HEAP_LIMIT_CELLS="$LIMIT" PROTOST_WORKERS=4 \
-           timeout 300 "$PROTOST" "$SCRIPT" 2>&1)" || rc=$?
+           timeout 300 "$PROTOST" --print-last "$SCRIPT" 2>&1)" || rc=$?
     if [ "$rc" -ne 0 ]; then
         echo "FAIL: run $i/$RUNS exited $rc under a ${LIMIT}-cell ceiling"
         printf '%s\n' "$out"
@@ -91,7 +91,7 @@ done
 # proved nothing about garbage collection.
 rc=0
 out="$(PROTOST_NO_GC_SAFEPOINT=1 PROTOCORE_HEAP_LIMIT_CELLS="$LIMIT" \
-       PROTOST_WORKERS=4 timeout 300 "$PROTOST" "$SCRIPT" 2>&1)" || rc=$?
+       PROTOST_WORKERS=4 timeout 300 "$PROTOST" --print-last "$SCRIPT" 2>&1)" || rc=$?
 if [ "$rc" -eq 0 ]; then
     echo "FAIL: the workload fits in a ${LIMIT}-cell ceiling without reclaiming,"
     echo "      so it does not force the collections this fixture depends on."

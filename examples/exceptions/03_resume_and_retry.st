@@ -19,6 +19,7 @@ FlakyLink >> connect
 link := FlakyLink new.
 link initialize.
 
-[ link connect ]
-  on: Error
-  do: [ :ex | ex retry ].
+result := [ link connect ]
+    on: Error
+    do: [ :ex | ex retry ].
+result displayNl.

@@ -4,5 +4,4 @@
 
 result := (0 to: 99999) inject: 0 into: [ :acc :each | acc + each ].
 result = 4999950000 ifFalse: [Error signal: 'int_sum_loop: wrong result ' , result printString].
-'VERIFIED ' , result printString
-
+Transcript showCr: 'VERIFIED ' , result printString.

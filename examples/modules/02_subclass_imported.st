@@ -23,4 +23,4 @@ Square >> doubleArea
 
 sq := Square new.
 sq side: 5.
-sq doubleArea.
+sq doubleArea displayNl.

@@ -6,4 +6,4 @@ n := 0.
 1 to: 100000 do: [ :i | n := n + 1 ].
 result := n.
 result = 100000 ifFalse: [Error signal: 'range_iterate: wrong result ' , result printString].
-'VERIFIED ' , result printString
+Transcript showCr: 'VERIFIED ' , result printString.

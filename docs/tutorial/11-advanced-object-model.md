@@ -72,7 +72,7 @@ Money >> compareTo: other
 
 a := Money new setCents: 500.
 b := Money new setCents: 300.
-(a > b) printString , ' and ' , (a < b) printString.
+((a > b) printString , ' and ' , (a < b) printString) displayNl.
 ```
 
 ```bash
@@ -141,7 +141,7 @@ Doc >> describe
   ^ title , ' [' , self tag , ']'.
 
 d := (Doc new setTitle: 'Q3 Report') setTag: 'urgent'.
-d describe.
+d describe displayNl.
 ```
 
 ```bash
@@ -176,7 +176,7 @@ Logging >> log: aMessage
 Service addBehavior: Logging.
 
 s := Service new.
-s name , ' / ' , (s log: 'started').
+(s name , ' / ' , (s log: 'started')) displayNl.
 ```
 
 ```bash
@@ -232,7 +232,7 @@ earlyResult := [ earlyInstance bonus ]
   on: Error
   do: [ :e | 'early instance: does not understand bonus' ].
 
-earlyResult , ' || ' , (lateInstance bonus).
+(earlyResult , ' || ' , (lateInstance bonus)) displayNl.
 ```
 
 ```bash

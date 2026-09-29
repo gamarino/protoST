@@ -3,8 +3,15 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
-## Unreleased
+## 0.4.1 — a script prints once (2026-09-29)
 
+- `protost file.st` no longer prints the value of the script's last
+  top-level statement after the program (deviation D12b is retired): a script
+  shows only what it prints, so a script ending in `x printNl.` prints `x`
+  once. `protost --print-last file.st` keeps the old behaviour; `-e` and the
+  REPL still show values. The tutorial examples, the programs in `examples/`,
+  the benchmark scripts and the talk demos print their results explicitly
+  (their output is unchanged). Test: `cli_script_output`.
 - K4 (another runtime in the process could not use protoST objects) is fixed
   in protoCore after 2.5.0; the documents now say which protoCore each claim
   needs. The integer workarounds (`IntegerDivision.h`, `wideBitOp`) stay while

@@ -15,4 +15,4 @@ b := 1.
   next := a + b.
   a := b.
   b := next ].
-b.
+b displayNl.

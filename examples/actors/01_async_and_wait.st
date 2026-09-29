@@ -27,4 +27,4 @@ actor add: 10.
 actor add: 15.
 
 "wait on the final read — the actor has processed every queued message."
-(actor value) wait.
+((actor value) wait) displayNl.

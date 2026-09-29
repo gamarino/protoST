@@ -38,7 +38,9 @@ accounts do: [:each | each deposit: 100].
 accounts inject: 0 into: [:sum :each | sum + each balance]   "=> 200"
 ```
 
-`protost accounts.st` runs the file and prints the value of its last statement.
+`protost accounts.st` runs the file and shows only what the program prints;
+`protost --print-last accounts.st` also prints the value of its last statement
+(`200`).
 A blank line ends a method body; there is no image and no browser: the program
 is the file.
 
@@ -128,8 +130,8 @@ several cores without locks.
 
 ## Status
 
-Version 0.4.0. At commit `d3f7235`, `ctest` runs 1041 cases, all passing:
-513 conformance programs, 437 unit tests, 42 examples, 28 CLI tests
+Version 0.4.1. `ctest` runs 1042 cases, all passing:
+513 conformance programs, 437 unit tests, 42 examples, 29 CLI tests
 (including the benchmark-harness self-test) and 21 documentation checks
 (every example with a stated result in 20 documents, plus the checker's
 self-test). The

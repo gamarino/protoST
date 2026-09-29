@@ -84,4 +84,4 @@ controller initWith: ns asActor and: ew asActor.
 1 to: 12 do: [ :i | controller tick ].
 
 "Final result: the number of completed simulation ticks."
-controller ticks.
+controller ticks displayNl.

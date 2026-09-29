@@ -25,4 +25,4 @@ total := (orders at: 'items')
     acc + ((item at: 'qty') * (item at: 'price')) ].
 
 "3*25 + 2*100 + 6*30 = 75 + 200 + 180 = 455."
-'total-revenue-' , total printString.
+('total-revenue-' , total printString) displayNl.

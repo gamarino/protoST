@@ -45,4 +45,4 @@ sum := 0.
 results do: [ :f | sum := sum + f wait ].
 result := sum.
 result = 1000000 ifFalse: [Error signal: 'cooperative_yield: wrong result ' , result printString].
-'VERIFIED ' , result printString
+Transcript showCr: 'VERIFIED ' , result printString.

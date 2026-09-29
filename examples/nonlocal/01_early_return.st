@@ -14,4 +14,4 @@ Search >> firstOver: aCollection threshold: limit
   "Reached only if nothing matched — the loop did not return early."
   ^ -1.
 
-Search new firstOver: #(3 8 14 21 5) threshold: 10.
+(Search new firstOver: #(3 8 14 21 5) threshold: 10) displayNl.
