@@ -486,6 +486,42 @@ PRIM(prim_FdRead) {
     return binary ? bytesArray(rt, ctx, got) : string(ctx, got);
 }
 
+// __fdReadChars: fd count: n — up to n UTF-8 characters (never a split
+// character), nil at end.
+PRIM(prim_FdReadChars) {
+    ARGS(2, "__fdReadChars:count:");
+    const int fd = static_cast<int>(num(ctx, a[0], "next:"));
+    const long long n = num(ctx, a[1], "next:");
+    auto st = fdState(fd);
+    std::string got;
+    {
+        BlockingIO blocking(rt, ctx);
+        proto::ProtoContext::UnmanagedScope out(ctx);
+        // Byte length of the first `n` characters, or npos when the buffer
+        // does not hold them all yet (a lead byte is any byte that is not
+        // 10xxxxxx; its sequence length comes from its high bits).
+        auto prefix = [&](const std::string& b) -> size_t {
+            size_t i = 0;
+            for (long long c = 0; c < n; ++c) {
+                if (i >= b.size()) return std::string::npos;
+                const unsigned char lead = static_cast<unsigned char>(b[i]);
+                const size_t len = lead < 0x80 ? 1 : (lead >> 5) == 0x6 ? 2 : (lead >> 4) == 0xE ? 3
+                                 : (lead >> 3) == 0x1E ? 4 : 1;
+                if (i + len > b.size()) return std::string::npos;
+                i += len;
+            }
+            return i;
+        };
+        size_t take;
+        while ((take = prefix(st->buf)) == std::string::npos && fill(fd, *st)) {}
+        if (take == std::string::npos) take = st->buf.size();  // end of stream: what is left
+        got = st->buf.substr(0, take);
+        st->buf.erase(0, take);
+    }
+    if (got.empty() && n > 0) return PROTO_NONE;
+    return string(ctx, got);
+}
+
 PRIM(prim_FdAtEnd) {
     ARGS(1, "__fdAtEnd:");
     const int fd = static_cast<int>(num(ctx, a[0], "atEnd"));
@@ -1113,6 +1149,7 @@ void installIoPrimitives(STRuntime& rt) {
         {"__osKill:signal:", prim_Kill},
         {"__fdReadLine:", prim_FdReadLine},      {"__fdReadAll:", prim_FdReadAll},
         {"__fdRead:count:binary:", prim_FdRead}, {"__fdAtEnd:", prim_FdAtEnd},
+        {"__fdReadChars:count:", prim_FdReadChars},
         {"__fdWrite:data:", prim_FdWrite},       {"__fdFlush:", prim_FdFlush},
         {"__fdClose:", prim_FdClose},            {"__fdTimeout:ms:", prim_FdTimeout},
         {"__byteSize:", prim_ByteSize},

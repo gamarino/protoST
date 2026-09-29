@@ -213,7 +213,7 @@ HTTP class >> readBodyFrom: aSocket headers: aDictionary
   len isNil ifFalse: [
     len := len asNumber.
     len = 0 ifTrue: [^ ''].
-    ^ (aSocket next: len) ifNil: ['']].
+    ^ (aSocket nextByteCount: len) ifNil: ['']].
   ^ ''.
 
 HTTP class >> readChunkedFrom: aSocket
@@ -221,7 +221,7 @@ HTTP class >> readChunkedFrom: aSocket
   out := WriteStream on: String new.
   [size := self hexValue: ((aSocket nextLine ifNil: ['0']) substrings: ';') first trimBoth.
    size > 0] whileTrue: [
-    out nextPutAll: (aSocket next: size).
+    out nextPutAll: (aSocket nextByteCount: size).
     aSocket nextLine].
   [(aSocket nextLine ifNil: ['']) notEmpty] whileTrue: [].
   ^ out contents.
@@ -427,4 +427,5 @@ HTTPServer >> stop
   ^ self.
 
 HTTPServer >> printOn: aStream
-  aStream nextPutAll: 'an HTTPServer on port ' , port printString.
+  aStream nextPutAll: 'an HTTPServer on port ' ,
+    (server isNil ifTrue: [port] ifFalse: [server port]) printString.

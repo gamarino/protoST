@@ -48,11 +48,18 @@ IOStream >> contents
   ^ self upToEnd.
 
 IOStream >> next
+  "The next character (a whole UTF-8 character), or nil at the end."
   | s |
-  s := self __fdRead: fd count: 1 binary: false.
+  s := self __fdReadChars: fd count: 1.
   ^ s isNil ifTrue: [nil] ifFalse: [s at: 1].
 
 IOStream >> next: anInteger
+  "Up to anInteger characters (fewer at the end), or nil at the end."
+  ^ self __fdReadChars: fd count: anInteger.
+
+IOStream >> nextByteCount: anInteger
+  "Up to anInteger bytes decoded as UTF-8 text (for protocols that count
+   bytes, like HTTP's Content-Length)."
   ^ self __fdRead: fd count: anInteger binary: false.
 
 IOStream >> nextBytes: anInteger
@@ -280,6 +287,7 @@ FileReference >> linesDo: aBlock
   ^ self.
 
 FileReference >> readStream
+  self isDirectory ifTrue: [^ FileSystemError signal: 'is a directory: ' , path].
   ^ IOStream onDescriptor: (self __fileOpen: path mode: 'r').
 
 FileReference >> writeStream
