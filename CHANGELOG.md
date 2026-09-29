@@ -31,6 +31,14 @@ audit). Details of each item are in [`docs/STATUS.md`](docs/STATUS.md) and
 
 ### Hangs and crashes fixed
 
+- **S19, the intermittent hang of `cli_concurrent_first_call`:** captured
+  with gdb attached to the live hung process (new `PROTOST_ALLOW_PTRACE=1`):
+  a worker asleep in `std::counting_semaphore::acquire()` with a permit
+  available while `~STRuntime` joined it — a lost wakeup in libstdc++ 13's
+  semaphore. Replaced by `protoST::Semaphore`, whose waiters sleep only on a
+  zero count and whose every release notifies.
+- A cycle of actors waiting on each other (`a` waits on `b`, which waits on
+  `a`) signals a catchable "deadlock" `Error` instead of hanging.
 - `Future whenAny:` waited forever when every future was rejected.
 - A negative integer attribute read through a unary send was taken for a
   primitive marker and aborted the interpreter.
