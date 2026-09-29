@@ -148,7 +148,9 @@ $ ./build/protost -e '#(10 20 30) at: 2'
 A keyword message takes exactly as many arguments as it has keyword parts. You
 cannot omit one and you cannot pass extra. There is no `*args`, no default
 arguments, no overloading. If you want a variant, you write a differently-named
-selector.
+selector. (protoST also has a *call form*, `recv name(a, k = v)`, with named
+arguments and defaults; it exists for exchanging methods with other protoCore
+runtimes and is covered in [Chapter 5](05-classes-and-methods.md).)
 
 ## 2.4 Reading message sends
 
@@ -338,17 +340,24 @@ send fails with a **`doesNotUnderstand`** condition:
 
 ```bash
 $ ./build/protost -e '3 fooBar'
-error: doesNotUnderstand: fooBar
+error: doesNotUnderstand: fooBar (receiver class: SmallInteger)
+  at <module> (<expr>:1)
 ```
 
-This is not a crash — it signals a catchable `MessageNotUnderstood` exception,
-a subclass of `Error`. You can wrap the send in an exception handler and catch
-it ([Chapter 7](07-exceptions.md)):
+The second line is the trace: one `at …` line per active method, here only
+the top level of the `-e` expression. This is not a crash — the runtime sends
+`doesNotUnderstand:` to the receiver, and the inherited method signals a
+catchable `MessageNotUnderstood` exception, a subclass of `Error`. You can
+wrap the send in an exception handler and catch it
+([Chapter 7](07-exceptions.md)):
 
 ```bash
 $ ./build/protost -e '[ 3 fooBar ] on: Error do: [ :e | e messageText ]'
-doesNotUnderstand: fooBar
+doesNotUnderstand: fooBar (receiver class: SmallInteger)
 ```
+
+A class can also override `doesNotUnderstand:` to handle unknown messages
+itself — a proxy that forwards them, for example ([Chapter 5](05-classes-and-methods.md)).
 
 > **In Python** this is `AttributeError: 'int' object has no attribute
 > 'fooBar'`. **In JavaScript** calling `(3).fooBar()` is a `TypeError`. In
@@ -368,7 +377,8 @@ doesNotUnderstand: fooBar
   is an expression with a value.
 - There are **no control-flow keywords**. `ifTrue:` is a message on `Boolean`,
   `whileTrue:` a message on `Block`, `to:do:` a message on a number.
-- An unknown selector signals a catchable `MessageNotUnderstood`.
+- An unknown selector signals a catchable `MessageNotUnderstood`, unless the
+  receiver's class overrides `doesNotUnderstand:`.
 
 ---
 

@@ -44,43 +44,34 @@ the map.
 
 | Kind | Declared by | Scope |
 |------|-------------|-------|
-| **Global** | A top-level assignment, or a class declaration | The whole module |
+| **Global** | A top-level assignment (without a declaration), or a class declaration | The whole program |
+| **Top-level temporary** | `\| name \|` at the top of a script, as in a workspace | The script's top level |
 | **Method temporary** | `\| name \|` after a method's selector | One method activation |
 | **Block temporary** | `\| name \|` inside a block | One block activation |
 | **Instance variable** | `instanceVariableNames:` in the class declaration | One object instance |
+| **Class variable** | `classVariableNames:` in the class declaration | The class, its subclasses and all their instances |
 
-Class names (`Object`, `Counter`, `Dictionary`) are globals. Any name you
-assign at the top level of a script is a global too.
+Class names (`Object`, `Counter`, `Dictionary`) are globals. A name you
+assign at the top level of a script without declaring it is a global too.
 
-### The top-level temporaries caveat
-
-There is one rule the language reference does not stress, and it is worth
-stating loudly because several reference examples gloss over it:
-
-> **`| temps |` declarations are only legal inside a method or a block — never
-> at the top level of a script.** At the top level you just assign to a name,
-> and it becomes a global.
-
-This *fails* with a parse error:
+At the top level you may either declare temporaries, as in a Smalltalk
+workspace, or just assign:
 
 ```smalltalk
-"-- NOT valid at the top level of a script --"
 | total |
 total := 0.
+total := total + 5.
+total.                "=> 5"
 ```
-
-This is the correct way to write the same thing at the top level:
 
 ```smalltalk
-"-- valid: a top-level assignment creates a global --"
-total := 0.
-total := total + 5.
-total.
+count := 0.
+count := count + 1.
+count.                "=> 1"
 ```
 
-Inside a method or block, `| temps |` is not only legal but required for
-locals — Chapters 4 and 5 use it constantly. Just not at the script's top
-level.
+Inside a method or block, `| temps |` is required for locals — Chapters 4 and
+5 use it constantly.
 
 ## 3.3 Comments
 
@@ -101,16 +92,22 @@ quote.
 
 ## 3.4 Numbers
 
-protoST has a numeric tower: `SmallInteger`, `LargeInteger`, and `Float`, all
-descending from `Number`.
+protoST has a numeric tower: `SmallInteger` and `LargeInteger` (both
+`Integer`s), `Fraction` and `Float`, all descending from `Number`.
 
 ### Integers
 
-An integer literal is a run of decimal digits. There is no `0x` hex syntax, no
-digit separators, no exponent.
+An integer literal is a run of decimal digits. A radix prefix writes it in
+another base, and an `e` suffix multiplies it by a power of ten. There are no
+digit separators.
 
 ```smalltalk
-42      0      1000000
+42      0      1000000      16rFF      2r1010      1e6
+```
+
+```bash
+$ ./build/protost -e '16rFF'
+255
 ```
 
 A negative integer literal is a `-` glued to digits in operand position:
@@ -148,10 +145,10 @@ and no silent wraparound.
 
 A float literal is digits, a dot, more digits. **Both sides of the dot are
 mandatory.** `3.14` is a float; `3.` is the integer `3` followed by a statement
-terminator; `.5` is not a float at all. There is no exponent syntax.
+terminator; `.5` is not a float at all. An exponent is written with `e`.
 
 ```smalltalk
-3.14      0.0      100.5      -3.14
+3.14      0.0      100.5      -3.14      1.5e3      2.5e-3
 ```
 
 ```bash
@@ -160,7 +157,8 @@ $ ./build/protost -e '4.0 printString'
 ```
 
 A `Float` always prints with a fractional part — `4.0`, never `4` — so you can
-tell a float from an integer at a glance.
+tell a float from an integer at a glance. Very large and very small floats
+print with an exponent (`1.0e16`).
 
 ### Arithmetic across the tower
 
@@ -183,20 +181,35 @@ A few selectors deserve a note:
 | Selector | Meaning | Example |
 |----------|---------|---------|
 | `+ - *` | arithmetic | `6 * 7` → `42` |
-| `/` | division — see below | `10 / 4` → `2` |
-| `//` | integer (truncating) division | `7 // 2` → `3` |
-| `\\` | modulo (remainder) | `7 \\ 2` → `1` |
+| `/` | exact division — see below | `10 / 4` → `(5/2)` |
+| `//` | integer division, rounded down | `7 // 2` → `3`, `-7 // 2` → `-4` |
+| `\\` | modulo, sign of the divisor | `7 \\ 2` → `1`, `-7 \\ 2` → `1` |
+| `quo:` `rem:` | division and remainder truncated toward zero | `-7 quo: 2` → `-3`, `-7 rem: 2` → `-1` |
 | `< <= > >=` | ordered comparison | `3 < 5` → `true` |
 | `= ~=` | value equality / inequality | `2 = 2.0` → `true` |
 | `negated` `abs` | sign flip / absolute value | `-5 abs` → `5` |
 
-> **The `/` surprise.** Between two integers, `/` is **truncating integer
-> division**: `10 / 4` is `2`, `1 / 3` is `0`. protoST has no `Fraction` type,
-> so it follows protoCore's integer `/`. Use `//` when you mean integer
-> division explicitly. If *either* operand is a `Float`, `/` is float division:
-> `1 / 2.0` is `0.5`. **In Python** `/` is always float division (`10 / 4` is
-> `2.5`) and `//` is the floor-division operator — so protoST's integer `/`
-> behaves like Python's `//`, which catches Python developers off guard.
+> **`/` is exact.** Between two integers, `/` answers a **`Fraction`** in
+> lowest terms, as in every Smalltalk: `10 / 4` is `(5/2)`, `1 / 3` is
+> `(1/3)`, and `4 / 2` is the integer `2`. Fractions take part in all
+> arithmetic and comparison and stay exact: `(1/3) + (2/3)` is `1`. Send
+> `asFloat` for a decimal approximation. If *either* operand is a `Float`, `/`
+> is float division: `1 / 2.0` is `0.5`. **In Python** `/` is always float
+> division (`10 / 4` is `2.5`) and `//` is floor division — protoST's `//`
+> is the same floor division, and its `/` is closer to Python's
+> `fractions.Fraction`.
+
+```bash
+$ ./build/protost -e '10 / 4'
+5/2
+$ ./build/protost -e '(1/3) + (2/3)'
+1
+$ ./build/protost -e '(10 / 4) asFloat'
+2.5
+```
+
+(The CLI shows a result's `displayString`; `(10 / 4) printString` is
+`'(5/2)'`, with the parentheses.)
 
 The math protocol (`sqrt`, `sin`, `ln`, `raisedTo:`, `gcd:`, `min:`/`max:`,
 `between:and:`, …) is also on `Number`, always available with no import.
@@ -212,7 +225,8 @@ $ ./build/protost -e '(48 gcd: 18)'
 ## 3.5 Booleans and `nil`
 
 `true` and `false` are the two booleans — they are literal keywords, and they
-are objects (instances of `True` and `False`, subclasses of `Boolean`).
+are objects. Both are instances of `Boolean` (`true class` is `Boolean`;
+protoST has no separate `True` and `False` classes).
 
 `nil` is the literal keyword for "no object" — the sole instance of
 `UndefinedObject`. An instance variable that has never been assigned reads as
@@ -268,25 +282,37 @@ $a      $Z      $$      $
 ```
 
 `$$` is the dollar character; `$` followed by a space is the space character.
+A character is a `Character` object, and indexing into a string answers one:
 
-> **protoST has no separate `Character` class.** This is a deviation from
-> standard Smalltalk worth flagging now. A character literal `$a` and indexing
-> into a string both produce a **one-character String**, not a distinct
-> `Character` object. So `'hello' at: 1` answers the *String* `'h'`. Use
-> `Number>>asCharacter` and `String>>asInteger` to convert between a character
-> and its code point. Smalltalkers should note this in
-> [Chapter 14](14-for-the-smalltalk-programmer.md).
+```smalltalk
+('hello' at: 1) printString.     "=> '$h'"
+$a asInteger.                    "=> 97"
+97 asCharacter printString.      "=> '$a'"
+$a isVowel.                      "=> true"
+$a asUppercase printString.      "=> '$A'"
+```
 
 ```bash
 $ ./build/protost -e "'hello' at: 1"
 h
 ```
 
+The CLI shows the result's `displayString`, which for a character is the
+character itself; its `printString` is the literal `$h`.
+
+> **In Python** there is no character type — `'hello'[0]` is the string
+> `'h'`. **In protoST**, as in every Smalltalk, a string is a sequence of
+> `Character`s and `asInteger` / `asCharacter` convert to and from the code
+> point.
+
 ## 3.8 Symbols
 
 A symbol is `#` followed by an identifier-like name or an operator. Symbols are
 **interned**: every occurrence of the same symbol is the *same* object, so
-`#foo == #foo` is true (identity, not just equality).
+`#foo == #foo` is true (identity, not just equality). One protoST detail
+(D35 in [Chapter 14](14-for-the-smalltalk-programmer.md)): a symbol shorter
+than 8 bytes is represented exactly like the equal string, so `#foo == 'foo'`
+is also true and `#foo printString` is `'foo'`.
 
 ```smalltalk
 #foo            "an identifier symbol"
@@ -368,7 +394,7 @@ Both forms produce an `Array`. Chapter 8 covers the full collection family.
 
 ## 3.10 Putting it together
 
-A small script using the literals of this chapter (top-level, so no `| … |`):
+A small script using the literals of this chapter:
 
 ```smalltalk
 "-- inventory.st --"

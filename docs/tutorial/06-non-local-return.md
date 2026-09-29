@@ -100,10 +100,9 @@ Smalltalk idiom for "I found my answer, stop everything, hand it back".
 > it is `for x in coll: … return x` collapsed into one construct.
 
 > **Smalltalker note.** This is standard Smalltalk-80 non-local return
-> semantics, unchanged. protoST implements it faithfully: `^` from arbitrary
-> block-nesting depth returns from the home method activation. There is one
-> protoST-specific wrinkle worth knowing — the *dead-home* case, §6.4 — which
-> protoST turns into a catchable exception rather than a hard crash.
+> semantics, unchanged: `^` from arbitrary block-nesting depth returns from
+> the home method activation, and a `^` whose home has already returned
+> signals `BlockCannotReturn` (§6.4), as in Pharo.
 
 ## 6.3 Falling off the end of a block
 
