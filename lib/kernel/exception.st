@@ -49,3 +49,24 @@ Exception >> isResumable
  re-evaluates the protected block."
 Exception >> retryUsing: replacementBlock
   ^ self return: replacementBlock value.
+
+"A Notification is a resumable Exception whose unhandled default action
+ answers nil and reports nothing, as in Pharo. The runtime's default action
+ for an unhandled resumable exception prints the exception's stored text on
+ stderr, so a Notification keeps its text in its own instance variable
+ (answered by messageText and description) rather than in that slot."
+Exception subclass: #Notification instanceVariableNames: 'notificationText'.
+
+"protoST keeps a class's class-side and instance-side methods of the same
+ selector in one slot, so this method serves both Notification signal: 'text'
+ and aNotification signal: 'text'."
+Notification >> signal: aText
+  self isClass ifTrue: [^ self new signal: aText].
+  notificationText := aText.
+  ^ self signal.
+
+Notification >> messageText: aText
+  notificationText := aText.
+
+Notification >> messageText
+  ^ notificationText ifNil: [super messageText].
