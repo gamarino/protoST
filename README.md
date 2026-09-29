@@ -68,9 +68,9 @@ Together with the other protoCore runtimes, protoST is designed to form a platfo
 | Operator dashboards, visualisation | **protoJS** (web tooling) |
 | Real parallelism, no GIL | **protoCore** (kernel) |
 | Immutable collections, structural sharing | **protoCore** (kernel) |
-| Cross-language interop without marshalling | **UMD** (every module is a `ProtoObject`) |
+| Module exchange between runtimes | **UMD** (protoCore's module discovery) — partial today, see [`docs/INTEROP.md`](docs/INTEROP.md) |
 
-Today, building this typically requires combining MQTT + Python microservices + JavaScript dashboards + a database + glue code — five runtimes, five data models, marshalling at every boundary. The protoCore runtimes aim to do it **inside one process, with one object model, with true parallelism**. protoST's side of cross-language interop is implemented in both directions, and a second runtime importing a protoST module in the same process is tested; the fuller multi-runtime process is follow-up work (see [`docs/INTEROP.md`](docs/INTEROP.md)).
+Today, building this typically requires combining MQTT + Python microservices + JavaScript dashboards + a database + glue code — five runtimes, five data models, marshalling at every boundary. The protoCore runtimes aim to do it **inside one process, with one object model, with true parallelism**. That goal is not reached yet. As of 2026-09-29, the verified two-runtime case is one direction only: a protoScala program imports a protoST module and receives the protoST object itself, not a copy. protoScala cannot yet read that object's attributes or call its methods, and protoST cannot yet use a protoScala module (see [`docs/INTEROP.md`](docs/INTEROP.md) §0).
 
 ## A flavour of the language
 
@@ -255,19 +255,31 @@ For workloads where the message IS the state (digital twins, agent-based
 simulation, data-flow pipelines), sharing large structures stops being a
 problem you architect around.
 
-### 2. One object model across language runtimes
+### 2. Language runtimes on one object kernel (interop partially verified)
 
 Every protoCore runtime represents its values as protoCore objects built from
-the same cell, so an object produced by protoJS or protoPython is an ordinary
-object to protoST, and a message send to it follows the ordinary lookup path.
-Both directions are now implemented and tested. protoST *consumes* a foreign UMD
-provider's modules (Track 5, slice T5-a), and protoST *publishes* its own to a
-runtime living in another object space in the same process (S17): a protoScala
-program does `import st.<module>`, binds its members, and receives the protoST
-objects **themselves** — the same cell address and the same identity hash read
-from either runtime, printed by the test rather than asserted in prose. What is
-not supported is a foreign runtime *calling* a protoST method, and the rest of
-the boundary is in [`docs/INTEROP.md`](docs/INTEROP.md) §4.
+the same cell, and protoCore's UMD lets one runtime import a module that another
+runtime provides. What has been verified with two real runtimes in one process
+(2026-09-29, [`tests/interop/`](tests/interop/README.md)) is narrower than the
+design:
+
+- **Verified:** a protoScala program runs `import st.counter_lib` and
+  `import st.counter_lib.Counter`, and the bound value is the protoST class cell
+  itself, at the same address and with the same identity hash from either runtime
+  (protoScala's test `umd/protost-interop`). This needs a host executable that
+  links both runtimes. The installed `protost` and `protoscala` binaries cannot do
+  it.
+- **Not working:** protoScala cannot read that object's attributes. An object's
+  state is resolved per object space, so read through protoScala's context the
+  class has no methods and no name. protoST cannot use a protoScala module:
+  importing a `.scala` module fails with `module not found`, and importing a
+  compiled one resolves but its members cannot be read. protoST also cannot call a
+  protoCore method, which is the kind of function `protoscalac` exports.
+- **Tested only with a simulated provider:** protoST consuming a foreign module
+  (`tests/unit/test_t5a_interop.cpp`). The "foreign" objects there are built
+  inside protoST's own space.
+
+The details and the reproducer are in [`docs/INTEROP.md`](docs/INTEROP.md) §0.
 
 ### 3. No GIL, no data races, no locks on the message path — by data-model construction
 
@@ -302,9 +314,10 @@ updates.
 - **Anything where the message IS the state**, and the state is
   non-trivial. Sending a 100-element list, a 10 K-node graph or a
   matrix slice copies nothing.
-- **Mixed-language pipelines**, once several protoCore runtimes share a
-  process (see [`docs/INTEROP.md`](docs/INTEROP.md)): no marshalling at
-  the language boundary.
+- **Mixed-language pipelines** are a design goal, not a current capability:
+  two runtimes in one process can pass an object reference between them, but
+  neither can yet read the other's objects (see
+  [`docs/INTEROP.md`](docs/INTEROP.md) §0).
 
 protoST is not "the fastest actor framework"; it is an actor runtime where
 messages can be pointers to large shared state, safely, on an object model
@@ -324,8 +337,8 @@ REPL, and a Debug Adapter Protocol debugger. Roadmap Tracks 1–11 are
 complete, each with a `trackN-complete` tag: non-local return and a full
 exception protocol, the collection hierarchy, the advanced object model
 (multiple inheritance, mixins, runtime behaviour composition), the standard
-library (Stream, Math, Random, JSON, Time), a conformance suite, cross-language
-UMD interop, onboarding, the dual-audience tutorial
+library (Stream, Math, Random, JSON, Time), a conformance suite, protoST's side of
+UMD interop (tested with a simulated provider), onboarding, the dual-audience tutorial
 ([`docs/TUTORIAL.md`](docs/TUTORIAL.md)), the example set, CPack packaging and
 the benchmark suite.
 
@@ -333,7 +346,9 @@ Since v0.3.0 (see [`CHANGELOG.md`](CHANGELOG.md#unreleased)): call-form sends
 and method declarations, class variables, the three actor priority bands,
 blocking OS calls wrapped in protoCore's unmanaged scope so they do not stall
 the garbage collector, and a UMD provider that serves a caller in another
-runtime's object space, which is what makes a cross-runtime import work.
+runtime's object space, so a protoScala program's `import st.<module>` resolves
+(the imported objects are not yet readable from protoScala; see
+[`docs/INTEROP.md`](docs/INTEROP.md) §0).
 
 The test suite has **854 `ctest` cases** (361 conformance, 42 examples, 14 CLI,
 437 unit), counted with `ctest -N` on 2026-09-24, all passing. Open bugs are
@@ -440,7 +455,7 @@ verified on Linux.
 | [docs/STATUS.md](docs/STATUS.md) | The living status tracker — implemented features, intentional deviations, open bugs. |
 | [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Runtime hard edges that are not language design choices. |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | The roadmap — remaining tracks and how to contribute. |
-| [docs/INTEROP.md](docs/INTEROP.md) | Cross-language UMD interop — how protoST consumes objects and modules from another protoCore runtime, how it serves one (§4.1, including the per-`ProtoSpace` symbol rule), what the boundary does not cover (§4.2), the type mapping, and the multi-runtime follow-up plan. |
+| [docs/INTEROP.md](docs/INTEROP.md) | Cross-language UMD interop. §0 lists what is verified with a real second runtime, what is tested only with a simulated provider, and what does not work. It also covers how protoST consumes and serves modules, the type mapping and the multi-runtime follow-up plan. |
 | [docs/debugging.md](docs/debugging.md) | Debugging `.st` scripts in VS Code via the `protost --dap` Debug Adapter Protocol adapter. |
 | [CHANGELOG.md](CHANGELOG.md) | Release notes and unreleased changes. |
 | [benchmarks/README.md](benchmarks/README.md) | The benchmark suite and harness; dated reports live in `benchmarks/reports/`. |
