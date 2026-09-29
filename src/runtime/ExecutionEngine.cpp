@@ -1248,10 +1248,14 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                                 reinterpret_cast<const protoST::BytecodeModule*>(
                                     recvBcPtr->asLong(ctx));
                             if (sub->argCount() != argcOp) {
-                                throw std::runtime_error(
+                                // A catchable Error (with the trace when
+                                // unhandled), like any other runtime error.
+                                const std::string msg =
                                     "block arg count mismatch (expected " +
                                     std::to_string(sub->argCount()) +
-                                    ", got " + std::to_string(argcOp) + ")");
+                                    ", got " + std::to_string(argcOp) + ")";
+                                signalNativeError(rt_, ctx, msg.c_str());
+                                throw std::runtime_error(msg);   // not reached: Error is not resumable
                             }
                             auto* capDict = recv->getAttribute(ctx, recvCapKey);
                             if (!capDict || capDict == PROTO_NONE) capDict = nullptr;
@@ -2017,8 +2021,12 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 auto* sym = f.m->constSym(ctx, arg);
                 auto* g = rt_.globals();
                 auto* val = g ? g->getAttribute(ctx, sym) : nullptr;
-                if (!val || val == PROTO_NONE)
-                    throw std::runtime_error("undefined global: " + nameStr);
+                if (!val || val == PROTO_NONE) {
+                    // A catchable Error (with the trace when unhandled).
+                    const std::string msg = "undefined global: " + nameStr;
+                    signalNativeError(rt_, ctx, msg.c_str());
+                    throw std::runtime_error(msg);   // not reached: Error is not resumable
+                }
                 push(f, val);
                 DISPATCH_DIRECT();
                 break;
