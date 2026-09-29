@@ -3,9 +3,71 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
-## [Unreleased]
+## 0.4.0 — the Smalltalk you know, verified (2026-10-03)
 
-Changes committed after the `v0.3.0` tag.
+0.4.0 is the release prepared for a technical Smalltalk audience: an
+adversarial audit (about 400 probe programs written the way a Pharo
+programmer writes) drove every change below, and every fix carries a
+regression test. `ctest`: 977 cases, all passing (854 at the start of the
+audit). Details of each item are in [`docs/STATUS.md`](docs/STATUS.md) and
+[tutorial chapter 14](docs/tutorial/14-for-the-smalltalk-programmer.md).
+
+### Silent wrong results fixed
+
+- A method's instance variable was confused with a same-named file-level
+  variable captured by a top-level block (the method wrote the file variable).
+- A block parameter or temporary that reused an enclosing name aliased the
+  outer variable; a block temporary named like an instance variable wrote the
+  instance variable. Every block activation now has its own bindings.
+- A method whose last line had no period swallowed the next top-level line.
+- `(3/2) max: 1`, `(1/2) between: 0 and: 1` and other Fraction operations ran
+  integer primitives on the Fraction.
+- A class-side method that assigned an instance-variable name wrote it on the
+  class, where every instance that had not set its own inherited it.
+- `new` on a subclass of a built-in collection answered the built-in class.
+- `(1->2) = (1->2)` was false; `#(at:put:)` held two symbols; a long Symbol's
+  `asString` answered the Symbol; `respondsTo:` answered true for class-side
+  selectors on instances.
+
+### Hangs and crashes fixed
+
+- `Future whenAny:` waited forever when every future was rejected.
+- A negative integer attribute read through a unary send was taken for a
+  primitive marker and aborted the interpreter.
+- A heap ceiling (half the RAM by default, `PROTOCORE_HEAP_LIMIT_CELLS`)
+  replaces the unbounded growth that could exhaust the machine; running out
+  exits with a clear message. Ctrl-C interrupts a running program cleanly.
+
+### Smalltalk semantics
+
+- `new` sends `initialize`; `Character`; exact `Fraction` division (`3/4`),
+  floored `//` and `\\`, `ArithmeticError` / resumable `ZeroDivide`;
+  `SubscriptOutOfBounds`, `KeyNotFound`, `NotFound`; `doesNotUnderstand:`
+  overrides receive a `Message`; class variables assignable from instance
+  methods; class-instance variables; `Transcript`; `printOn:`-based printing
+  everywhere; classes print as their names; floats print as Smalltalk
+  literals (`1.0e16`).
+- Errors inside an actor keep their class across `wait`; an uncaught error
+  prints its class, its text and a trace (`at Class>>selector (file:line)`).
+- The compiler reports undeclared variables in methods, assignments to
+  arguments and pseudo-variables, and duplicated or redeclared instance
+  variables. A blank line ends a method body; top-level `| temps |` work.
+- Protocol: the collection, string, stream, number (bit operations, `**`,
+  `roundTo:`), exception (`retryUsing:`, `isResumable`), reflection
+  (`instVarNamed:`, `selectors`, `canUnderstand:`, `subclasses`, `deepCopy`,
+  `inspect`) and system (`Time`, `Date`, `Duration`, `Random`,
+  `Smalltalk version`) messages a Pharo programmer expects. A `Collection`
+  subclass that defines `do:` gets the derived protocol.
+
+### Tooling and honesty
+
+- Every benchmark verifies its result and the harness fails on a missing or
+  wrong value (`bench_harness_selftest`); CPython twins run the same N.
+- Interop claims narrowed to what a two-runtime process shows
+  ([`docs/INTEROP.md`](docs/INTEROP.md) §0, `KNOWN_ISSUES.md` K4).
+- The version comes from one place; `ctest` no longer needs stdin redirected.
+
+### Earlier changes in this release (after v0.3.0)
 
 ### Language
 
@@ -19,8 +81,8 @@ Changes committed after the `v0.3.0` tag.
 - **Class variables** (commit `6b3cf39`). A non-empty
   `classVariableNames:` clause is honoured: each name is installed on the
   class and readable from instance and class methods, including in
-  subclasses. Assignment is allowed only from class-side methods; an
-  instance-side assignment is a compile-time error. Closes D19 at that scope.
+  subclasses. (At that commit assignment was allowed only from class-side
+  methods; 0.4.0 lifts that restriction — see above.)
 
 ### Collections
 
