@@ -43,6 +43,9 @@ struct Token {
     double     floatValue = 0.0; // valid for TokenKind::Float
     int line = 1;
     int column = 1;
+    // True when a blank line (only whitespace) separates this token from the
+    // previous one. A blank line ends a method body (see Parser::parseMethodDecl).
+    bool blankLineBefore = false;
 };
 
 inline const char* tokenKindName(TokenKind k) {

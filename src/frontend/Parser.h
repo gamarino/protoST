@@ -49,6 +49,7 @@ private:
     ast::NodePtr parseLiteralArray(int openLine, int openCol);
     ast::NodePtr parseLiteralArrayElement();
     ast::NodePtr parseClassDecl(Token classIdent);
+    void checkBlankLineContinuation(const ast::Node* method);
     ast::NodePtr parseMethodDecl(Token classIdent, bool classSide);
     // Call-form support (protoCore-style positional + named args).
     // `selectorTok` is the Identifier that names the method; the `(` has

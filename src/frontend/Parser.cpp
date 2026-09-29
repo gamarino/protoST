@@ -432,6 +432,19 @@ ast::NodePtr Parser::parseBlock() {
     return blk;
 }
 
+// A blank line ends a method body. Method bodies are indented and top-level
+// code starts in column 1, so an indented statement right after the blank
+// line is almost certainly meant to continue the method: report the rule
+// instead of silently running that statement at top level.
+void Parser::checkBlankLineContinuation(const ast::Node* method) {
+    if (current_.kind == TokenKind::EndOfFile || current_.column <= 1) return;
+    std::string where = method ? method->text : std::string();
+    if (method && !method->stringList.empty()) where += ">>" + method->stringList.front();
+    error(current_, "a blank line ends a method body; this indented statement "
+                    "would run at top level, outside " + where
+                    + " (remove the blank line or unindent the statement)");
+}
+
 ast::NodePtr Parser::parseMethodDecl(Token classIdent, bool classSide) {
     // Call-form decl: `Class >> name(pos, named=default)`. Detect by peeking
     // for `Identifier LParen` and route to the dedicated helper. The bare
@@ -498,8 +511,10 @@ ast::NodePtr Parser::parseMethodDecl(Token classIdent, bool classSide) {
     // body: statements until we see a token that can only start a top-level form
     // (another Identifier followed by '>>' / 'class' / 'subclass:', or EOF).
     // A '^' return statement also terminates the body (anything following is a
-    // new top-level form).
+    // new top-level form), and so does a blank line (0.4.0): without it, a
+    // method with no top-level '^' swallowed every statement that followed.
     while (current_.kind != TokenKind::EndOfFile) {
+        if (current_.blankLineBefore) { checkBlankLineContinuation(md.get()); break; }
         // stop at the start of another method/class decl
         if (current_.kind == TokenKind::Identifier) {
             Token p = lexer_.peek();
@@ -832,6 +847,7 @@ ast::NodePtr Parser::parseCallMethodDecl(Token classIdent, bool classSide,
     // Body: same termination rule as parseMethodDecl — stop at the next
     // top-level form (`Identifier '>>'`, `'class'`, `'subclass:'`) or EOF.
     while (current_.kind != TokenKind::EndOfFile) {
+        if (current_.blankLineBefore) { checkBlankLineContinuation(md.get()); break; }
         if (current_.kind == TokenKind::Identifier) {
             Token p = lexer_.peek();
             if (p.kind == TokenKind::GtGt) break;

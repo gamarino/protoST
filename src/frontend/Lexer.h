@@ -20,6 +20,8 @@ private:
     int    line_ = 1;
     int    col_ = 1;
     bool   hasPeek_ = false;
+    bool   blankBefore_ = false;   // set by nextImpl_ for the token it lexes
+    bool   containsBlankLine(size_t from, size_t to) const;
     Token  peekTok_;
     // D1: kind of the last token *returned* to the consumer. Drives the
     // standard Smalltalk disambiguation of a leading `-` — it is part of a

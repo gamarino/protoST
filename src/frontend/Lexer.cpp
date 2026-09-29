@@ -204,8 +204,32 @@ bool Lexer::prevEndsOperand() const {
     }
 }
 
+// True when [from, to) -- the whitespace and comments skipped before a token --
+// contains a line holding nothing but whitespace. A line whose only content is
+// a comment is not blank. The first line of the range continues the previous
+// token's line, so it never counts.
+bool Lexer::containsBlankLine(size_t from, size_t to) const {
+    bool sawNewline = false;
+    bool lineHasContent = true;
+    bool inComment = false;
+    for (size_t i = from; i < to && i < source_.size(); ++i) {
+        const char c = source_[i];
+        if (c == '"') { inComment = !inComment; lineHasContent = true; continue; }
+        if (c == '\n') {
+            if (sawNewline && !lineHasContent) return true;
+            sawNewline = true;
+            lineHasContent = inComment;
+            continue;
+        }
+        if (inComment || !std::isspace(static_cast<unsigned char>(c))) lineHasContent = true;
+    }
+    return false;
+}
+
 Token Lexer::next() {
+    const bool fromPeek = hasPeek_;
     Token t = nextImpl_();
+    if (!fromPeek) t.blankLineBefore = blankBefore_;
     prevReturnedKind_ = t.kind;
     return t;
 }
@@ -218,6 +242,7 @@ Token Lexer::nextImpl_() {
     // one? A `-digit` after whitespace is in primary position even when the
     // previous token ends an operand (e.g. each `-2` element of `#(-1 -2 -3)`).
     bool spaceBefore = (pos_ != beforeWs);
+    blankBefore_ = containsBlankLine(beforeWs, pos_);
     if (pos_ >= source_.size()) {
         Token t; t.kind = TokenKind::EndOfFile; t.line = line_; t.column = col_; return t;
     }

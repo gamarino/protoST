@@ -259,7 +259,6 @@ JSON class >> parseNumber: scanner
   isFloat := false.
   fracValue := 0.
   fracScale := 1.
-
   "optional fraction"
   scanner peek = '.' ifTrue: [
     scanner next.
@@ -271,7 +270,6 @@ JSON class >> parseNumber: scanner
         fracScale := fracScale * 10 ].
     fracScale = 1
       ifTrue: [ ^ scanner signalError: 'expected digit after ''.''' ] ].
-
   "optional exponent"
   expPart := 0.
   expNeg := false.
@@ -284,13 +282,11 @@ JSON class >> parseNumber: scanner
     (scanner atEnd not and: [ scanner peek = '-' ])
       ifTrue: [ scanner next. expNeg := true ].
     expPart := self readDigits: scanner requireOne: true ].
-
   isFloat
     ifFalse: [
       result := intPart.
       negative ifTrue: [ result := result negated ].
       ^ result ].
-
   "Float assembly: integer part + fraction, then scale by the exponent."
   result := intPart asFloat + (fracValue asFloat / fracScale asFloat).
   expPart > 0 ifTrue: [
