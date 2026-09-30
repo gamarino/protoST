@@ -46,6 +46,40 @@ prototipo con nombre. Para el programador Smalltalk se ven como clases
 (`subclass:`, métodos de clase, variables de clase y de instancia de clase).
 Las diferencias que eso produce están en el capítulo 14.
 
+**¿Con qué se compara el ecosistema protoCore? ¿Cuáles son sus referencias?**
+Sus referencias son conceptuales, no de rendimiento, porque protoCore no
+optimiza la forma actual de trabajar: intenta cambiar la base. Es un puente
+entre la programación funcional y los lenguajes mutables.
+
+- **Rich Hickey y Clojure** son la referencia más cercana. Su modelo de
+  identidad, estado y valor dice que una identidad apunta a una sucesión de
+  valores inmutables. Clojure lo ofrece *dentro* de un lenguaje funcional, con
+  `atom` y `ref` explícitos. protoCore lo pone *debajo* de lenguajes mutables:
+  un objeto mutable de Python, JavaScript o Smalltalk es, por construcción,
+  una referencia atómica a una instantánea inmutable, sin que el programador
+  cambie su forma de escribir. El código sigue siendo imperativo; la semántica
+  de fondo es la de valores.
+- **Estructuras de datos persistentes** (Okasaki; los árboles de Bagwell):
+  hacen barato que "modificar" cree una versión nueva que comparte casi todo
+  con la anterior.
+- **Self y los prototipos de Lieberman:** un modelo de objetos sin clases
+  impuestas, que permite que lenguajes muy distintos compartan objetos.
+- **Erlang/BEAM, como contraste:** llega a la concurrencia segura por la vía
+  opuesta, sin compartir nada y copiando los mensajes. protoCore comparte todo
+  sin copiar, porque lo compartido es inmutable.
+
+Lo que resulta es código imperativo de siempre con concurrencia segura, hilos
+nativos sin lock global y objetos que cruzan de un lenguaje a otro en el mismo
+proceso, por construcción y no por disciplina.
+
+**¿Y GraalVM? ¿Y la JVM?**
+No son comparables en lo que importa. GraalVM es una plataforma de uso general
+optimizada para los lenguajes existentes, construida por completo sobre el
+modelo de objetos de la JVM. No propone otra forma de trabajar: optimiza al
+extremo la actual, y lo hace muy bien. protoCore cambia la base. Si la pregunta
+es velocidad, ganan ellos sin discusión: protoCore no tiene JIT y no compite en
+rendimiento de un solo hilo (ver la pregunta de rendimiento).
+
 **¿Quién lo usa?**
 Nadie en producción. Es un experimento y un demostrador de protoCore; buscamos
 gente que lo pruebe con programas reales.

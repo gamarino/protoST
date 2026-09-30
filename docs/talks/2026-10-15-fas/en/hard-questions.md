@@ -47,6 +47,40 @@ To the Smalltalk programmer they look like classes (`subclass:`, class
 methods, class variables and class-instance variables). The differences this
 produces are in chapter 14.
 
+**What does the protoCore ecosystem compare with? What are its references?**
+Its references are conceptual, not performance ones, because protoCore does
+not optimise the current way of working: it tries to change the foundation. It
+is a bridge between functional programming and mutable languages.
+
+- **Rich Hickey and Clojure** are the closest reference. Their model of
+  identity, state and value says that an identity points to a succession of
+  immutable values. Clojure offers it *inside* a functional language, with
+  explicit `atom`s and `ref`s. protoCore puts it *beneath* mutable languages:
+  a mutable object in Python, JavaScript or Smalltalk is, by construction, an
+  atomic reference to an immutable snapshot, and the programmer does not
+  change how they write. The code stays imperative; the semantics underneath
+  are those of values.
+- **Persistent data structures** (Okasaki; Bagwell's trees) make it cheap for
+  a "modification" to create a new version that shares almost everything with
+  the old one.
+- **Self and Lieberman's prototypes** give an object model with no imposed
+  classes, which lets very different languages share objects.
+- **Erlang/BEAM, as a contrast,** reaches safe concurrency the opposite way:
+  it shares nothing and copies messages. protoCore shares everything without
+  copying, because what is shared is immutable.
+
+The result is ordinary imperative code with safe concurrency, native threads
+without a global lock, and objects that cross from one language to another in
+the same process, by construction rather than by discipline.
+
+**What about GraalVM? And the JVM?**
+They are not comparable in what matters. GraalVM is a general-purpose platform
+optimised for existing languages and built entirely on the JVM's object model.
+It does not propose another way of working: it optimises the current one to
+the extreme, and does it very well. protoCore changes the foundation. If the
+question is speed, they win without discussion: protoCore has no JIT and does
+not compete on single-thread performance (see the performance question).
+
 **Who uses it?**
 Nobody in production. It is an experiment and a protoCore demonstrator; we
 are looking for people to try it with real programs.
