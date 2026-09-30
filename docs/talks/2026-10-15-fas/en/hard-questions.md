@@ -104,6 +104,9 @@ server, with one actor per connection. An I/O wait inside an actor does not
 hold up the GC, and the worker pool grows while it lasts, so many actors
 waiting for replies do not starve the ones that produce them. HTTP/2,
 WebSockets and a TLS server are missing. Demo 4 shows it.
+The operating-system layer is a shared library, protoIO, which protoScala and
+protoClojure use too: the same input and output exists, under each language's
+own names, in the three runtimes.
 
 **Does it run on Windows?**
 Not natively: the I/O is POSIX. On Windows it runs under WSL2 with Ubuntu

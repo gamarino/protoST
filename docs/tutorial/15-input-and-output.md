@@ -747,6 +747,9 @@ What 0.5.0 does not do:
   worker pool grows while workers are blocked, up to 256 threads.
 - Not provided: HTTP/2, WebSockets, a TLS server, non-blocking multiplexing,
   native Windows.
+- The operating-system layer is [protoIO](https://github.com/gamarino/protoIO),
+  shared with protoScala and protoClojure: the same files, processes, sockets
+  and HTTP behave the same way in the three languages.
 
 ---
 

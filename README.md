@@ -115,7 +115,9 @@ per connection, and the worker pool adds threads while workers are blocked in
 I/O (up to 256). Failures are classed errors (`FileDoesNotExist`,
 `ConnectionRefused`, …). Not provided: HTTP/2, WebSockets, a TLS server,
 non-blocking multiplexing, native Windows. The whole protocol is in
-[tutorial chapter 15](docs/tutorial/15-input-and-output.md).
+[tutorial chapter 15](docs/tutorial/15-input-and-output.md). The operating-system
+layer underneath is [protoIO](https://github.com/gamarino/protoIO), the I/O
+library protoST shares with protoScala and protoClojure.
 
 ## Why digital twins
 
@@ -301,6 +303,7 @@ Five language runtimes (protoJS, protoPython, protoClojure, protoScala and proto
 | protoClojure | Clojure dialect on protoCore (early stage) | https://github.com/gamarino/protoClojure |
 | protoScala | Scala-syntax runtime on protoCore | https://github.com/gamarino/protoScala |
 | protoCpp | Examples and benchmarks using protoCore directly from C++ | https://github.com/gamarino/protoCpp |
+| protoIO | Shared input and output for the runtimes: files, processes, TCP, UDP, TLS and HTTP/1.1 (used by protoST, protoScala and protoClojure) | https://github.com/gamarino/protoIO |
 
 Its actor model was informed by protoJS's `Deferred` / `CPUThreadPool` design
 (see the references of the

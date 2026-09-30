@@ -104,6 +104,9 @@ servidor, con un actor por conexión. Una espera de entrada/salida dentro de
 un actor no frena al GC y el pool de workers crece mientras dura, así que
 muchos actores esperando respuestas no dejan sin hilos a los que las
 producen. Faltan HTTP/2, WebSockets y un servidor TLS. La demo 4 lo muestra.
+La capa del sistema operativo es una biblioteca común, protoIO, que protoScala
+y protoClojure también usan: la misma entrada/salida existe, con los nombres
+de cada lenguaje, en los tres runtimes.
 
 **¿Corre en Windows?**
 No en forma nativa: la entrada/salida es POSIX. En Windows funciona con WSL2
