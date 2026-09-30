@@ -126,14 +126,14 @@ builtins. Run protoST under WSL2 with Ubuntu 24.04, using the Linux packages:
 wsl --install -d Ubuntu-24.04
 
 # Then, in the Ubuntu shell: the two packages of the GitHub releases.
-wget https://github.com/numaes/protoCore/releases/download/v2.6.1/protoCore-2.6.1-Linux.deb
+wget https://github.com/numaes/protoCore/releases/download/v2.6.2/protoCore-2.6.2-Linux.deb
 wget https://github.com/gamarino/protoST/releases/download/v0.5.0/protost-0.5.0-Linux.deb
-sudo apt install ./protoCore-2.6.1-Linux.deb ./protost-0.5.0-Linux.deb
+sudo apt install ./protoCore-2.6.2-Linux.deb ./protost-0.5.0-Linux.deb
 protost --version
 ```
 
 The packages are attached to the GitHub releases
-[protoCore v2.6.1](https://github.com/numaes/protoCore/releases/tag/v2.6.1)
+[protoCore v2.6.2](https://github.com/numaes/protoCore/releases/tag/v2.6.2)
 and [protoST v0.5.0](https://github.com/gamarino/protoST/releases/tag/v0.5.0)
 (built on Ubuntu 24.04, x86_64). The same commands install them on Ubuntu
 24.04 itself. To build them instead, see §Packages below and protoCore's own

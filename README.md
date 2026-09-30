@@ -234,9 +234,9 @@ below):
 ```bash
 wsl --install -d Ubuntu-24.04        # in PowerShell, once
 # then, in the Ubuntu shell:
-wget https://github.com/numaes/protoCore/releases/download/v2.6.1/protoCore-2.6.1-Linux.deb
+wget https://github.com/numaes/protoCore/releases/download/v2.6.2/protoCore-2.6.2-Linux.deb
 wget https://github.com/gamarino/protoST/releases/download/v0.5.0/protost-0.5.0-Linux.deb
-sudo apt install ./protoCore-2.6.1-Linux.deb ./protost-0.5.0-Linux.deb
+sudo apt install ./protoCore-2.6.2-Linux.deb ./protost-0.5.0-Linux.deb
 ```
 
 **macOS — not built or verified.** `CMakeLists.txt` configures a `.dmg`

@@ -2,9 +2,9 @@
 
 ## The night before
 
-- [ ] Install protoCore 2.6.1 and protoST 0.5.0 on the talk laptop. On
+- [ ] Install protoCore 2.6.2 and protoST 0.5.0 on the talk laptop. On
       Windows, inside WSL2 with Ubuntu 24.04:
-      `sudo apt install ./protoCore-2.6.1-Linux.deb ./protost-0.5.0-Linux.deb`
+      `sudo apt install ./protoCore-2.6.2-Linux.deb ./protost-0.5.0-Linux.deb`
       (`apt install ./…` also installs any missing dependency). The package
       requires `protocore (>= 2.6.1)`.
 - [ ] `protost --version` → `protoST 0.5.0`.

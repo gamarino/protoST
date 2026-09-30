@@ -2,9 +2,9 @@
 
 ## La noche anterior
 
-- [ ] Instalar protoCore 2.6.1 y protoST 0.5.0 en la notebook de la charla. En
+- [ ] Instalar protoCore 2.6.2 y protoST 0.5.0 en la notebook de la charla. En
       Windows, dentro de WSL2 con Ubuntu 24.04:
-      `sudo apt install ./protoCore-2.6.1-Linux.deb ./protost-0.5.0-Linux.deb`
+      `sudo apt install ./protoCore-2.6.2-Linux.deb ./protost-0.5.0-Linux.deb`
       (`apt install ./…` instala también las dependencias que falten). El
       paquete exige `protocore (>= 2.6.1)`.
 - [ ] `protost --version` → `protoST 0.5.0`.
