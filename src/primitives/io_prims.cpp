@@ -5,40 +5,18 @@
 #include "runtime/ZeroDivideSignal.h"
 #include "protoCore.h"
 
-#include <algorithm>
-#include <atomic>
-#include <cerrno>
-#include <chrono>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <filesystem>
-#include <memory>
-#include <mutex>
+#include <protoio/error.h>
+#include <protoio/file.h>
+#include <protoio/http.h>
+#include <protoio/net.h>
+#include <protoio/process.h>
+#include <protoio/stream.h>
+
+#include <optional>
+#include <stdexcept>
 #include <string>
-#include <system_error>
-#include <unordered_map>
+#include <utility>
 #include <vector>
-
-#include <arpa/inet.h>
-#include <fcntl.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <poll.h>
-#include <pthread.h>
-#include <signal.h>
-#include <spawn.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <unistd.h>
-
-#include <openssl/err.h>
-#include <openssl/ssl.h>
-
-extern char** environ;
 
 namespace protoST {
 
@@ -49,22 +27,24 @@ namespace protoST {
 // UDPSocket in lib/net.st; HTTPClient, HTTPServer in lib/http.st) are protoST
 // code on top of them. Streams are integers: POSIX file descriptors.
 //
-// Rules every primitive here follows:
+// The POSIX layer itself (buffered descriptors, SIGPIPE handling, TLS, child
+// processes, sockets, the chunked-body reader) lives in the protoIO library,
+// shared with the other protoCore runtimes. This file only binds it:
 //   * arguments are copied into C++ values BEFORE anything blocks;
-//   * every call that can block (read, write, accept, connect, name lookup,
-//     waiting for a child process) runs inside a ProtoContext::UnmanagedScope
-//     and touches no protoCore object there, so a thread blocked on I/O never
-//     holds up a collection (the ProtoThread convention `sleep:` follows);
+//   * every protoIO call that can block runs inside a
+//     ProtoContext::UnmanagedScope and touches no protoCore object there, so a
+//     thread blocked on I/O never holds up a collection; calls that can wait
+//     on a peer, a child or a terminal also account themselves to the worker
+//     pool (BlockingIO), which may add a worker while this one waits;
 //   * protoCore values are built only after the blocking part returns;
-//   * descriptors are opened close-on-exec, so child processes inherit only
-//     their standard streams;
-//   * failures raise classed, catchable errors (FileDoesNotExist,
-//     ConnectionRefused, ...), declared in lib/kernel/io.st.
+//   * protoio::Error becomes a classed, catchable protoST error
+//     (FileDoesNotExist, ConnectionRefused, ..., declared in lib/kernel/io.st),
+//     raised after the unmanaged scope has been left.
 
 namespace {
 
-namespace fs = std::filesystem;
 using PO = proto::ProtoObject;
+using Kind = protoio::Error::Kind;
 
 // ---------------------------------------------------------------- arguments
 
@@ -82,6 +62,20 @@ std::string str(proto::ProtoContext* ctx, const PO* v, const char* who) {
 long long num(proto::ProtoContext* ctx, const PO* v, const char* who) {
     if (!v || !v->isInteger(ctx)) throw std::runtime_error(std::string(who) + ": an Integer was expected");
     return v->asLong(ctx);
+}
+
+int fdArg(proto::ProtoContext* ctx, const PO* v, const char* who) { return static_cast<int>(num(ctx, v, who)); }
+
+// A timeout in milliseconds, nil meaning no limit (-1).
+int timeoutArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
+    return v == PROTO_NONE ? -1 : static_cast<int>(num(ctx, v, who));
+}
+
+// The count argument of next:, nextBytes: and the like.
+size_t countArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
+    const long long n = num(ctx, v, who);
+    if (n < 0) throw std::runtime_error(std::string(who) + ": the count must not be negative");
+    return static_cast<size_t>(n);
 }
 
 bool truthy(const PO* v) { return v == PROTO_TRUE; }
@@ -150,275 +144,38 @@ std::string bytesOf(proto::ProtoContext* ctx, const PO* arr, const char* who) {
     return out;
 }
 
-[[noreturn]] void fileError(const std::string& path, int err, const char* action) {
-    const std::string msg = std::string(action) + " " + path + ": " + std::strerror(err);
-    if (err == ENOENT) throw ClassedErrorSignal("FileDoesNotExist", msg);
-    if (err == EEXIST) throw ClassedErrorSignal("FileAlreadyExists", msg);
-    throw ClassedErrorSignal("FileSystemError", msg);
+// A String argument as its UTF-8 bytes, or a byte Array as its bytes.
+std::string dataArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
+    return v && v->asString(ctx) ? str(ctx, v, who) : bytesOf(ctx, v, who);
 }
 
-[[noreturn]] void fsError(const fs::filesystem_error& e, const char* action) {
-    fileError(e.path1().string(), e.code().value(), action);
+// ------------------------------------------------------------------ errors
+
+// The protoST error class of each protoio::Error kind. InvalidArgument (a
+// value the library refuses) is the generic error the primitives raise for a
+// bad argument.
+[[noreturn]] void raise(const protoio::Error& e) {
+    switch (e.kind) {
+        case Kind::FileNotFound: throw ClassedErrorSignal("FileDoesNotExist", e.what());
+        case Kind::FileExists: throw ClassedErrorSignal("FileAlreadyExists", e.what());
+        case Kind::FileSystem: throw ClassedErrorSignal("FileSystemError", e.what());
+        case Kind::ConnectionRefused: throw ClassedErrorSignal("ConnectionRefused", e.what());
+        case Kind::ConnectionTimedOut: throw ClassedErrorSignal("ConnectionTimedOut", e.what());
+        case Kind::NameLookup: throw ClassedErrorSignal("NameLookupFailure", e.what());
+        case Kind::Network: throw ClassedErrorSignal("NetworkError", e.what());
+        case Kind::Process: throw ClassedErrorSignal("OSProcessError", e.what());
+        case Kind::LineTooLong: throw ClassedErrorSignal("LineTooLong", e.what());
+        case Kind::BodyTooLarge: throw ClassedErrorSignal("BodyTooLarge", e.what());
+        case Kind::InvalidArgument: break;
+    }
+    throw std::runtime_error(e.what());
 }
 
-[[noreturn]] void netError(int err, const std::string& what) {
-    const std::string msg = what + ": " + std::strerror(err);
-    if (err == ECONNREFUSED) throw ClassedErrorSignal("ConnectionRefused", msg);
-    if (err == ETIMEDOUT || err == EAGAIN || err == EWOULDBLOCK)
-        throw ClassedErrorSignal("ConnectionTimedOut", msg);
-    throw ClassedErrorSignal("NetworkError", msg);
-}
-
-// ------------------------------------------------------------ SIGPIPE
+// ---------------------------------------------------------------- brackets
 //
-// A write to a pipe or socket whose reader is gone raises SIGPIPE, which kills
-// the process. The program's own standard output keeps that behaviour (a
-// filter piped into `head` should stop, as every Unix filter does); every
-// other write -- a child's input, a file that is a FIFO, a TLS socket, which
-// OpenSSL writes with write(2) -- blocks the signal on the writing thread
-// instead, so the write answers EPIPE and becomes a catchable error.
-
-struct SigpipeGuard {
-    sigset_t old{};
-    bool wasPending = false;
-    SigpipeGuard() {
-        sigset_t block, pending;
-        sigemptyset(&block);
-        sigaddset(&block, SIGPIPE);
-        sigpending(&pending);
-        wasPending = sigismember(&pending, SIGPIPE);
-        pthread_sigmask(SIG_BLOCK, &block, &old);
-    }
-    ~SigpipeGuard() {
-        if (!wasPending) {
-            // Consume a SIGPIPE this thread raised while it was blocked.
-            sigset_t pending, only;
-            sigpending(&pending);
-            if (sigismember(&pending, SIGPIPE)) {
-                sigemptyset(&only);
-                sigaddset(&only, SIGPIPE);
-                const timespec zero{0, 0};
-                while (sigtimedwait(&only, nullptr, &zero) < 0 && errno == EINTR) {}
-            }
-        }
-        pthread_sigmask(SIG_SETMASK, &old, nullptr);
-    }
-};
-
-// ------------------------------------------------------------ descriptors
-//
-// One state per descriptor (files, sockets, stdin): the read-ahead buffer
-// `nextLine` needs and, for a socket upgraded to TLS, its SSL object.
-//
-// Several actors may use one descriptor at once -- four actors reading stdin,
-// one actor reading a socket while another writes to it. Readers serialise on
-// `readMutex` (the buffer is consumed atomically: each line goes to exactly
-// one reader), writers on `writeMutex`, and the SSL object, which OpenSSL
-// does not let two threads use at once, on `sslMutex`, held only around a
-// non-blocking SSL call: a TLS socket is non-blocking and waits in poll(2)
-// with no lock held, so a reader waiting for data never blocks a writer.
-//
-// The state owns the descriptor once it exists. `close` removes it from the
-// table and shuts a socket down, which wakes a thread blocked on it; the
-// descriptor itself is closed, and the SSL object freed, when the last user
-// lets the state go. Closing the number while another thread still waited on
-// it would let the next open() reuse it under that thread.
-
-struct FdState {
-    const int fd;
-    const bool isSocket;
-    std::mutex readMutex;
-    std::mutex writeMutex;
-    std::mutex sslMutex;
-    std::string buf;                      // guarded by readMutex
-    bool eof = false;                     // guarded by readMutex
-    std::atomic<SSL*> ssl{nullptr};
-    std::atomic<int> timeoutMs{-1};       // -1: block without limit
-    std::atomic<bool> closed{false};
-
-    FdState(int d, bool sock) : fd(d), isSocket(sock) {}
-    ~FdState() {
-        if (SSL* s = ssl.load()) SSL_free(s);
-        if (closed.load()) ::close(fd);
-    }
-};
-
-std::mutex g_fdMutex;
-std::unordered_map<int, std::shared_ptr<FdState>> g_fds;
-
-std::shared_ptr<FdState> fdState(int fd) {
-    std::lock_guard<std::mutex> lock(g_fdMutex);
-    auto& p = g_fds[fd];
-    if (!p) {
-        struct stat st{};
-        p = std::make_shared<FdState>(fd, ::fstat(fd, &st) == 0 && S_ISSOCK(st.st_mode));
-    }
-    return p;
-}
-
-void forgetFd(int fd) {
-    std::lock_guard<std::mutex> lock(g_fdMutex);
-    g_fds.erase(fd);
-}
-
-// Waits until `fd` is readable (or writable) within `timeoutMs` (-1: no
-// limit). False on timeout; true also on an error or hang-up, which the call
-// that follows reports. Called unmanaged.
-bool waitReady(int fd, short events, int timeoutMs) {
-    pollfd p{fd, events, 0};
-    for (;;) {
-        const int r = ::poll(&p, 1, timeoutMs);
-        if (r < 0 && errno == EINTR) continue;
-        return r != 0;
-    }
-}
-
-// Runs one non-blocking OpenSSL call until it completes, waiting in poll with
-// no lock held. Answers the call's result (> 0), 0 at a clean end of stream,
-// or -1 with errno set. Called unmanaged.
-template <typename Op>
-int sslCall(FdState& st, Op op) {
-    for (;;) {
-        SSL* ssl = st.ssl.load();
-        if (!ssl || st.closed.load()) { errno = EBADF; return -1; }
-        int r, e;
-        {
-            std::lock_guard<std::mutex> lock(st.sslMutex);
-            ERR_clear_error();
-            r = op(ssl);
-            e = r > 0 ? SSL_ERROR_NONE : SSL_get_error(ssl, r);
-        }
-        if (r > 0) return r;
-        if (e == SSL_ERROR_ZERO_RETURN) return 0;
-        if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE) {
-            if (!waitReady(st.fd, e == SSL_ERROR_WANT_READ ? POLLIN : POLLOUT, st.timeoutMs.load())) {
-                errno = ETIMEDOUT;
-                return -1;
-            }
-            continue;
-        }
-        if (e == SSL_ERROR_SYSCALL && r == 0) return 0;  // peer closed without close_notify
-        if (e != SSL_ERROR_SYSCALL || errno == 0) errno = EIO;
-        return -1;
-    }
-}
-
-// Reads up to `n` bytes into `out`; answers the count, 0 at end of stream.
-// The caller holds readMutex. Called unmanaged.
-ssize_t rawRead(FdState& st, char* out, size_t n) {
-    if (st.ssl.load()) {
-        return sslCall(st, [&](SSL* ssl) { return SSL_read(ssl, out, static_cast<int>(n)); });
-    }
-    if (!waitReady(st.fd, POLLIN, st.timeoutMs.load())) { errno = ETIMEDOUT; return -1; }
-    for (;;) {
-        const ssize_t r = ::read(st.fd, out, n);
-        if (r < 0 && errno == EINTR) continue;
-        return r;
-    }
-}
-
-// Writes all of `data`. The caller holds writeMutex. Called unmanaged.
-void rawWrite(FdState& st, const std::string& data) {
-    SigpipeGuard noSigpipe;
-    size_t done = 0;
-    while (done < data.size()) {
-        ssize_t w;
-        if (st.ssl.load()) {
-            const int r = sslCall(st, [&](SSL* ssl) {
-                return SSL_write(ssl, data.data() + done, static_cast<int>(data.size() - done));
-            });
-            if (r <= 0) netError(r == 0 ? EPIPE : errno, "TLS write");
-            w = r;
-        } else {
-            if (!waitReady(st.fd, POLLOUT, st.timeoutMs.load())) netError(ETIMEDOUT, "write");
-            w = st.isSocket ? ::send(st.fd, data.data() + done, data.size() - done, MSG_NOSIGNAL)
-                            : ::write(st.fd, data.data() + done, data.size() - done);
-            if (w < 0) {
-                if (errno == EINTR) continue;
-                if (st.isSocket) netError(errno, "write");
-                fileError("descriptor " + std::to_string(st.fd), errno, "cannot write to");
-            }
-        }
-        done += static_cast<size_t>(w);
-    }
-}
-
-// Reads more input into the buffer; false at end of stream. The caller holds
-// readMutex. Unmanaged.
-bool fill(FdState& st) {
-    if (st.eof) return false;
-    char chunk[65536];
-    const ssize_t r = rawRead(st, chunk, sizeof chunk);
-    if (r < 0) {
-        if (st.isSocket || st.ssl.load()) netError(errno, "read");
-        fileError("descriptor " + std::to_string(st.fd), errno, "cannot read from");
-    }
-    if (r == 0) { st.eof = true; return false; }
-    st.buf.append(chunk, static_cast<size_t>(r));
-    return true;
-}
-
-// ------------------------------------------------------------ OpenSSL
-
-SSL_CTX* tlsContext(bool verify) {
-    static std::once_flag once;
-    static SSL_CTX* verifying = nullptr;
-    static SSL_CTX* trusting = nullptr;
-    std::call_once(once, [] {
-        OPENSSL_init_ssl(0, nullptr);
-        verifying = SSL_CTX_new(TLS_client_method());
-        SSL_CTX_set_default_verify_paths(verifying);
-        SSL_CTX_set_verify(verifying, SSL_VERIFY_PEER, nullptr);
-        SSL_CTX_set_min_proto_version(verifying, TLS1_2_VERSION);
-        trusting = SSL_CTX_new(TLS_client_method());
-        SSL_CTX_set_verify(trusting, SSL_VERIFY_NONE, nullptr);
-        SSL_CTX_set_min_proto_version(trusting, TLS1_2_VERSION);
-    });
-    return verify ? verifying : trusting;
-}
-
-std::string tlsErrorText() {
-    unsigned long e = ERR_get_error();
-    if (!e) return "TLS handshake failed";
-    char buf[256];
-    ERR_error_string_n(e, buf, sizeof buf);
-    return buf;
-}
-
-// --------------------------------------------------------------- address
-
-// Resolves host:port. Unmanaged. Throws NameLookupFailure.
-struct AddrList {
-    addrinfo* head = nullptr;
-    ~AddrList() { if (head) ::freeaddrinfo(head); }
-};
-
-void resolve(const std::string& host, int port, int socktype, bool passive, AddrList& out,
-             int family = AF_UNSPEC) {
-    addrinfo hints{};
-    hints.ai_family = family;
-    hints.ai_socktype = socktype;
-    if (passive) hints.ai_flags = AI_PASSIVE;
-    const std::string service = std::to_string(port);
-    const int r = ::getaddrinfo(host.empty() ? nullptr : host.c_str(), service.c_str(), &hints, &out.head);
-    if (r != 0) throw ClassedErrorSignal("NameLookupFailure", "cannot resolve " + host + ": " + ::gai_strerror(r));
-}
-
-std::string addrText(const sockaddr* sa, int* portOut) {
-    char host[INET6_ADDRSTRLEN] = {0};
-    int port = 0;
-    if (sa->sa_family == AF_INET) {
-        auto* in = reinterpret_cast<const sockaddr_in*>(sa);
-        ::inet_ntop(AF_INET, &in->sin_addr, host, sizeof host);
-        port = ntohs(in->sin_port);
-    } else if (sa->sa_family == AF_INET6) {
-        auto* in = reinterpret_cast<const sockaddr_in6*>(sa);
-        ::inet_ntop(AF_INET6, &in->sin6_addr, host, sizeof host);
-        port = ntohs(in->sin6_port);
-    }
-    if (portOut) *portOut = port;
-    return host;
-}
+// Each runs `f` (which calls protoIO with C++ values only) and answers its
+// result. A protoio::Error is caught after the scopes have been left, so the
+// protoST error is raised with the context managed again.
 
 // Accounts a blocking call on a pool worker, so the scheduler can add a
 // worker while this one waits (STRuntime::enterBlockingIO). Constructed
@@ -428,7 +185,44 @@ struct BlockingIO {
     bool active;
     BlockingIO(STRuntime& r, proto::ProtoContext* ctx) : rt(r), active(r.enterBlockingIO(ctx)) {}
     ~BlockingIO() { if (active) rt.leaveBlockingIO(); }
+    BlockingIO(const BlockingIO&) = delete;
+    BlockingIO& operator=(const BlockingIO&) = delete;
 };
+
+// For a call that can wait without bound: on a peer, a child process, a
+// terminal or a pipe.
+template <typename F>
+auto blocking(STRuntime& rt, proto::ProtoContext* ctx, F&& f) -> decltype(f()) {
+    try {
+        BlockingIO accounted(rt, ctx);
+        proto::ProtoContext::UnmanagedScope out(ctx);
+        return f();
+    } catch (const protoio::Error& e) {
+        raise(e);
+    }
+}
+
+// For a call that can block only briefly (the local file system, binding a
+// socket): out of the collector's quorum, without growing the worker pool.
+template <typename F>
+auto unmanaged(proto::ProtoContext* ctx, F&& f) -> decltype(f()) {
+    try {
+        proto::ProtoContext::UnmanagedScope out(ctx);
+        return f();
+    } catch (const protoio::Error& e) {
+        raise(e);
+    }
+}
+
+// For a call that does not block.
+template <typename F>
+auto immediate(F&& f) -> decltype(f()) {
+    try {
+        return f();
+    } catch (const protoio::Error& e) {
+        raise(e);
+    }
+}
 
 // ============================================================ primitives
 
@@ -444,198 +238,96 @@ PRIM(prim_ProgramPath) { ARGS(0, "__osProgramPath"); return string(ctx, g_progra
 
 PRIM(prim_Getenv) {
     ARGS(1, "__osGetenv:");
-    const char* v = std::getenv(str(ctx, a[0], "getenv:").c_str());
-    return v ? string(ctx, v) : PROTO_NONE;
+    const std::optional<std::string> v = protoio::process::getenv(str(ctx, a[0], "getenv:"));
+    return v ? string(ctx, *v) : PROTO_NONE;
 }
 
 PRIM(prim_Setenv) {
     ARGS(2, "__osSetenv:to:");
     const std::string k = str(ctx, a[0], "setenv:to:");
-    if (a[1] == PROTO_NONE) ::unsetenv(k.c_str());
-    else ::setenv(k.c_str(), str(ctx, a[1], "setenv:to:").c_str(), 1);
+    std::optional<std::string> v;
+    if (a[1] != PROTO_NONE) v = str(ctx, a[1], "setenv:to:");
+    immediate([&] { protoio::process::setenv(k, v); });
     return r;
 }
 
+// Each variable as 'NAME=value' (SmalltalkImage>>environment splits them).
 PRIM(prim_Environment) {
     ARGS(0, "__osEnvironment");
     std::vector<std::string> v;
-    for (char** e = environ; e && *e; ++e) v.emplace_back(*e);
+    for (const auto& [name, value] : protoio::process::environment()) v.push_back(name + "=" + value);
     return stringsArray(rt, ctx, v);
 }
 
 PRIM(prim_Exit) {
     ARGS(1, "__osExit:");
-    const long long code = num(ctx, a[0], "exit:");
-    std::fflush(nullptr);
-    ::_exit(static_cast<int>(code & 0xff));
+    protoio::process::exit(static_cast<int>(num(ctx, a[0], "exit:")));
 }
 
-PRIM(prim_Pid) { ARGS(0, "__osPid"); return ctx->fromLong(::getpid()); }
+PRIM(prim_Pid) { ARGS(0, "__osPid"); return ctx->fromLong(protoio::process::pid()); }
 
-PRIM(prim_HostName) {
-    ARGS(0, "__osHostName");
-    char buf[256] = {0};
-    ::gethostname(buf, sizeof buf - 1);
-    return string(ctx, buf);
-}
+PRIM(prim_HostName) { ARGS(0, "__osHostName"); return string(ctx, protoio::process::hostName()); }
 
-PRIM(prim_Platform) {
-    ARGS(0, "__osPlatform");
-#if defined(__linux__)
-    return string(ctx, "linux");
-#elif defined(__APPLE__)
-    return string(ctx, "macos");
-#else
-    return string(ctx, "unix");
-#endif
-}
+PRIM(prim_Platform) { ARGS(0, "__osPlatform"); return string(ctx, protoio::process::platform()); }
 
 PRIM(prim_Cwd) {
     ARGS(0, "__osCwd");
-    std::error_code ec;
-    const fs::path p = fs::current_path(ec);
-    if (ec) fileError(".", ec.value(), "cannot read the working directory");
-    return string(ctx, p.string());
+    return string(ctx, immediate([] { return protoio::file::cwd(); }));
 }
 
 PRIM(prim_Chdir) {
     ARGS(1, "__osChdir:");
     const std::string p = str(ctx, a[0], "changeDirectory:");
-    if (::chdir(p.c_str()) != 0) fileError(p, errno, "cannot change directory to");
+    immediate([&] { protoio::file::chdir(p); });
     return r;
 }
 
 // ------------------------------------------------------------ descriptors
 
-// The count argument of next:, nextBytes: and the like.
-size_t countArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
-    const long long n = num(ctx, v, who);
-    if (n < 0) throw std::runtime_error(std::string(who) + ": the count must not be negative");
-    return static_cast<size_t>(n);
-}
-
-// A line without its end (LF or CRLF), or false at end of stream. A line
+// A line without its end (LF or CRLF), or nil at end of stream. A line
 // longer than `max` bytes (0: no limit) raises LineTooLong, leaving the
-// stream where it was. The caller holds readMutex. Unmanaged.
-bool takeLine(FdState& st, size_t max, std::string& line) {
-    size_t pos, scanned = 0;
-    while ((pos = st.buf.find('\n', scanned)) == std::string::npos) {
-        scanned = st.buf.size();
-        if (max && scanned > max) break;
-        if (!fill(st)) break;
-    }
-    if (max && (pos == std::string::npos ? st.buf.size() : pos) > max + 1)
-        throw ClassedErrorSignal("LineTooLong", "a line longer than " + std::to_string(max) + " bytes");
-    if (pos != std::string::npos) {
-        line.assign(st.buf, 0, pos);
-        st.buf.erase(0, pos + 1);
-    } else if (!st.buf.empty()) {
-        line.swap(st.buf);
-    } else {
-        return false;
-    }
-    if (!line.empty() && line.back() == '\r') line.pop_back();
-    if (max && line.size() > max)
-        throw ClassedErrorSignal("LineTooLong", "a line longer than " + std::to_string(max) + " bytes");
-    return true;
-}
-
+// stream where it was.
 const PO* readLine(STRuntime& rt, proto::ProtoContext* ctx, int fd, size_t max) {
-    auto st = fdState(fd);
-    std::string line;
-    bool got;
-    {
-        BlockingIO blocking(rt, ctx);
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        std::lock_guard<std::mutex> lock(st->readMutex);
-        got = takeLine(*st, max, line);
-    }
-    return got ? string(ctx, line) : PROTO_NONE;
+    const std::optional<std::string> line = blocking(rt, ctx, [&] { return protoio::readLine(fd, max); });
+    return line ? string(ctx, *line) : PROTO_NONE;
 }
 
 PRIM(prim_FdReadLine) {
     ARGS(1, "__fdReadLine:");
-    return readLine(rt, ctx, static_cast<int>(num(ctx, a[0], "nextLine")), 0);
+    return readLine(rt, ctx, fdArg(ctx, a[0], "nextLine"), 0);
 }
 
 // __fdReadLine: fd max: bytes — nextLine, refusing lines over `bytes`.
 PRIM(prim_FdReadLineMax) {
     ARGS(2, "__fdReadLine:max:");
-    return readLine(rt, ctx, static_cast<int>(num(ctx, a[0], "nextLineMax:")),
-                    countArg(ctx, a[1], "nextLineMax:"));
+    return readLine(rt, ctx, fdArg(ctx, a[0], "nextLineMax:"), countArg(ctx, a[1], "nextLineMax:"));
 }
 
 PRIM(prim_FdReadAll) {
     ARGS(1, "__fdReadAll:");
-    const int fd = static_cast<int>(num(ctx, a[0], "upToEnd"));
-    auto st = fdState(fd);
-    std::string all;
-    {
-        BlockingIO blocking(rt, ctx);
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        std::lock_guard<std::mutex> lock(st->readMutex);
-        while (fill(*st)) {}
-        all.swap(st->buf);
-    }
-    return string(ctx, all);
+    const int fd = fdArg(ctx, a[0], "upToEnd");
+    return string(ctx, blocking(rt, ctx, [&] { return protoio::readAll(fd); }));
 }
 
 // __fdRead: fd count: n binary: aBoolean — up to n bytes, nil at end.
 PRIM(prim_FdRead) {
     ARGS(3, "__fdRead:count:binary:");
-    const int fd = static_cast<int>(num(ctx, a[0], "next:"));
+    const int fd = fdArg(ctx, a[0], "next:");
     const size_t n = countArg(ctx, a[1], "nextBytes:");
     const bool binary = truthy(a[2]);
-    auto st = fdState(fd);
-    std::string got;
-    {
-        BlockingIO blocking(rt, ctx);
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        std::lock_guard<std::mutex> lock(st->readMutex);
-        while (st->buf.size() < n && fill(*st)) {}
-        const size_t take = std::min(st->buf.size(), n);
-        got = st->buf.substr(0, take);
-        st->buf.erase(0, take);
-    }
-    if (got.empty() && n > 0) return PROTO_NONE;
-    return binary ? bytesArray(rt, ctx, got) : string(ctx, got);
+    const std::optional<std::string> got = blocking(rt, ctx, [&] { return protoio::readBytes(fd, n); });
+    if (!got) return PROTO_NONE;
+    return binary ? bytesArray(rt, ctx, *got) : string(ctx, *got);
 }
 
 // __fdReadChars: fd count: n — up to n UTF-8 characters (never a split
 // character), nil at end.
 PRIM(prim_FdReadChars) {
     ARGS(2, "__fdReadChars:count:");
-    const int fd = static_cast<int>(num(ctx, a[0], "next:"));
+    const int fd = fdArg(ctx, a[0], "next:");
     const size_t n = countArg(ctx, a[1], "next:");
-    auto st = fdState(fd);
-    std::string got;
-    {
-        BlockingIO blocking(rt, ctx);
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        std::lock_guard<std::mutex> lock(st->readMutex);
-        // Byte length of the first `n` characters, or npos when the buffer
-        // does not hold them all yet (a lead byte is any byte that is not
-        // 10xxxxxx; its sequence length comes from its high bits).
-        auto prefix = [&](const std::string& b) -> size_t {
-            size_t i = 0;
-            for (size_t c = 0; c < n; ++c) {
-                if (i >= b.size()) return std::string::npos;
-                const unsigned char lead = static_cast<unsigned char>(b[i]);
-                const size_t len = lead < 0x80 ? 1 : (lead >> 5) == 0x6 ? 2 : (lead >> 4) == 0xE ? 3
-                                 : (lead >> 3) == 0x1E ? 4 : 1;
-                if (i + len > b.size()) return std::string::npos;
-                i += len;
-            }
-            return i;
-        };
-        size_t take;
-        while ((take = prefix(st->buf)) == std::string::npos && fill(*st)) {}
-        if (take == std::string::npos) take = st->buf.size();  // end of stream: what is left
-        got = st->buf.substr(0, take);
-        st->buf.erase(0, take);
-    }
-    if (got.empty() && n > 0) return PROTO_NONE;
-    return string(ctx, got);
+    const std::optional<std::string> got = blocking(rt, ctx, [&] { return protoio::readChars(fd, n); });
+    return got ? string(ctx, *got) : PROTO_NONE;
 }
 
 // __httpReadChunked: fd max: bytes — an HTTP chunked body, decoded as bytes
@@ -644,117 +336,41 @@ PRIM(prim_FdReadChars) {
 // BodyTooLarge; a malformed chunk size raises NetworkError.
 PRIM(prim_HttpReadChunked) {
     ARGS(2, "__httpReadChunked:max:");
-    const int fd = static_cast<int>(num(ctx, a[0], "readChunked"));
+    const int fd = fdArg(ctx, a[0], "readChunked");
     const size_t max = countArg(ctx, a[1], "readChunked");
-    auto st = fdState(fd);
-    std::string body;
-    {
-        BlockingIO blocking(rt, ctx);
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        std::lock_guard<std::mutex> lock(st->readMutex);
-        std::string line;
-        for (;;) {
-            if (!takeLine(*st, 8192, line)) throw ClassedErrorSignal("NetworkError", "chunked body ended early");
-            const std::string hex = line.substr(0, line.find(';'));
-            size_t size = 0, digits = 0;
-            for (char c : hex) {
-                if (c == ' ' || c == '\t') continue;
-                const int d = std::isdigit(static_cast<unsigned char>(c)) ? c - '0'
-                            : (c >= 'a' && c <= 'f') ? c - 'a' + 10 : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
-                if (d < 0 || ++digits > 15) throw ClassedErrorSignal("NetworkError", "invalid chunk size: " + hex);
-                size = size * 16 + static_cast<size_t>(d);
-            }
-            if (digits == 0) throw ClassedErrorSignal("NetworkError", "invalid chunk size: " + hex);
-            if (size == 0) break;
-            if (max && body.size() + size > max)
-                throw ClassedErrorSignal("BodyTooLarge", "a body larger than " + std::to_string(max) + " bytes");
-            while (st->buf.size() < size && fill(*st)) {}
-            if (st->buf.size() < size) throw ClassedErrorSignal("NetworkError", "chunked body ended early");
-            body.append(st->buf, 0, size);
-            st->buf.erase(0, size);
-            takeLine(*st, 8192, line);  // the CRLF after the chunk
-        }
-        while (takeLine(*st, 8192, line) && !line.empty()) {}  // trailers
-    }
+    const std::string body = blocking(rt, ctx, [&] {
+        return protoio::http::readBody(fd, {{"transfer-encoding", "chunked"}}, max);
+    });
     return string(ctx, body);
 }
 
 PRIM(prim_FdAtEnd) {
     ARGS(1, "__fdAtEnd:");
-    const int fd = static_cast<int>(num(ctx, a[0], "atEnd"));
-    auto st = fdState(fd);
-    bool end;
-    {
-        BlockingIO blocking(rt, ctx);
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        std::lock_guard<std::mutex> lock(st->readMutex);
-        end = st->buf.empty() && !fill(*st);
-    }
-    return boolean(end);
+    const int fd = fdArg(ctx, a[0], "atEnd");
+    return boolean(blocking(rt, ctx, [&] { return protoio::atEnd(fd); }));
 }
 
-// __fdWrite: fd data: aStringOrByteArray
+// __fdWrite: fd data: aStringOrByteArray. Descriptors 1 and 2 go through the
+// C streams, so the order with Transcript and printNl is kept.
 PRIM(prim_FdWrite) {
     ARGS(2, "__fdWrite:data:");
-    const int fd = static_cast<int>(num(ctx, a[0], "nextPutAll:"));
-    const std::string data = a[1] && a[1]->asString(ctx) ? str(ctx, a[1], "nextPutAll:")
-                                                         : bytesOf(ctx, a[1], "nextPutAll:");
-    if (fd == 1 || fd == 2) {
-        // Through the C stream, so the order with Transcript and printNl
-        // (which write to stdout) is kept.
-        std::FILE* f = fd == 1 ? stdout : stderr;
-        BlockingIO blocking(rt, ctx);
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        std::fwrite(data.data(), 1, data.size(), f);
-        if (fd == 2 || (!data.empty() && data.back() == '\n')) std::fflush(f);
-        return r;
-    }
-    auto st = fdState(fd);
-    {
-        BlockingIO blocking(rt, ctx);
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        std::lock_guard<std::mutex> lock(st->writeMutex);
-        rawWrite(*st, data);
-    }
+    const int fd = fdArg(ctx, a[0], "nextPutAll:");
+    const std::string data = dataArg(ctx, a[1], "nextPutAll:");
+    blocking(rt, ctx, [&] { protoio::write(fd, data); });
     return r;
 }
 
 PRIM(prim_FdFlush) {
     ARGS(1, "__fdFlush:");
-    const int fd = static_cast<int>(num(ctx, a[0], "flush"));
-    if (fd == 1) std::fflush(stdout);
-    if (fd == 2) std::fflush(stderr);
+    protoio::flush(fdArg(ctx, a[0], "flush"));
     return r;
 }
 
+// Closing shuts a socket down (waking a thread blocked on it) and never
+// waits: the number is released when its last user returns.
 PRIM(prim_FdClose) {
     ARGS(1, "__fdClose:");
-    const int fd = static_cast<int>(num(ctx, a[0], "close"));
-    if (fd <= 2) { std::fflush(nullptr); return r; }
-    std::shared_ptr<FdState> st;
-    {
-        std::lock_guard<std::mutex> lock(g_fdMutex);
-        auto it = g_fds.find(fd);
-        if (it != g_fds.end()) { st = it->second; g_fds.erase(it); }
-    }
-    if (!st) {
-        // Never read from or written to through a state: nobody else holds it.
-        struct stat sst{};
-        if (::fstat(fd, &sst) == 0 && S_ISSOCK(sst.st_mode)) ::shutdown(fd, SHUT_RDWR);
-        ::close(fd);
-        return r;
-    }
-    if (st->closed.exchange(true)) return r;
-    if (SSL* ssl = st->ssl.load()) {
-        // One attempt at close_notify; the socket is non-blocking.
-        SigpipeGuard noSigpipe;
-        std::lock_guard<std::mutex> lock(st->sslMutex);
-        SSL_shutdown(ssl);
-    }
-    // shutdown wakes a thread blocked in accept, poll or read on this socket,
-    // which a bare close does not. The descriptor is closed by the state's
-    // destructor, when its last user lets it go.
-    if (st->isSocket) ::shutdown(fd, SHUT_RDWR);
+    protoio::close(fdArg(ctx, a[0], "close"));
     return r;
 }
 
@@ -769,28 +385,13 @@ PRIM(prim_ByteSize) {
 // only in a query string, which HTTP class>>parseQuery: handles.
 PRIM(prim_PercentDecode) {
     ARGS(1, "__percentDecode:");
-    const std::string in = str(ctx, a[0], "percentDecode:");
-    auto hex = [](char c) {
-        return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10
-             : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
-    };
-    std::string out;
-    out.reserve(in.size());
-    for (size_t i = 0; i < in.size(); ++i) {
-        if (in[i] == '%' && i + 2 < in.size() && hex(in[i + 1]) >= 0 && hex(in[i + 2]) >= 0) {
-            out.push_back(static_cast<char>(hex(in[i + 1]) * 16 + hex(in[i + 2])));
-            i += 2;
-        } else {
-            out.push_back(in[i]);
-        }
-    }
-    return string(ctx, out);
+    return string(ctx, protoio::http::percentDecode(str(ctx, a[0], "percentDecode:")));
 }
 
 PRIM(prim_FdTimeout) {
     ARGS(2, "__fdTimeout:ms:");
-    const int fd = static_cast<int>(num(ctx, a[0], "timeout:"));
-    fdState(fd)->timeoutMs.store(a[1] == PROTO_NONE ? -1 : static_cast<int>(num(ctx, a[1], "timeout:")));
+    const int fd = fdArg(ctx, a[0], "timeout:");
+    protoio::setTimeout(fd, timeoutArg(ctx, a[1], "timeout:"));
     return r;
 }
 
@@ -801,63 +402,21 @@ PRIM(prim_FileOpen) {
     ARGS(2, "__fileOpen:mode:");
     const std::string path = str(ctx, a[0], "open");
     const std::string mode = str(ctx, a[1], "open");
-    int flags = O_CLOEXEC;
-    if (mode == "r") flags |= O_RDONLY;
-    else if (mode == "w") flags |= O_WRONLY | O_CREAT | O_TRUNC;
-    else if (mode == "a") flags |= O_WRONLY | O_CREAT | O_APPEND;
-    else if (mode == "rw") flags |= O_RDWR | O_CREAT;
+    protoio::file::Mode m;
+    if (mode == "r") m = protoio::file::Mode::Read;
+    else if (mode == "w") m = protoio::file::Mode::Write;
+    else if (mode == "a") m = protoio::file::Mode::Append;
+    else if (mode == "rw") m = protoio::file::Mode::ReadWrite;
     else throw std::runtime_error("open: mode must be r, w, a or rw");
-    int fd;
-    {
-        BlockingIO blocking(rt, ctx);
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        fd = ::open(path.c_str(), flags, 0644);
-    }
-    if (fd < 0) fileError(path, errno, "cannot open");
-    forgetFd(fd);
-    return ctx->fromLong(fd);
-}
-
-std::string readWhole(const std::string& path) {
-    const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
-    if (fd < 0) fileError(path, errno, "cannot read");
-    struct stat st{};
-    if (::fstat(fd, &st) == 0 && S_ISDIR(st.st_mode)) { ::close(fd); fileError(path, EISDIR, "cannot read"); }
-    std::string out;
-    char chunk[65536];
-    for (;;) {
-        const ssize_t n = ::read(fd, chunk, sizeof chunk);
-        if (n < 0 && errno == EINTR) continue;
-        if (n < 0) { const int e = errno; ::close(fd); fileError(path, e, "cannot read"); }
-        if (n == 0) break;
-        out.append(chunk, static_cast<size_t>(n));
-    }
-    ::close(fd);
-    return out;
-}
-
-void writeWhole(const std::string& path, const std::string& data, bool append) {
-    const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_CLOEXEC | (append ? O_APPEND : O_TRUNC), 0644);
-    if (fd < 0) fileError(path, errno, "cannot write");
-    size_t done = 0;
-    while (done < data.size()) {
-        const ssize_t w = ::write(fd, data.data() + done, data.size() - done);
-        if (w < 0 && errno == EINTR) continue;
-        if (w < 0) { const int e = errno; ::close(fd); fileError(path, e, "cannot write"); }
-        done += static_cast<size_t>(w);
-    }
-    ::close(fd);
+    // Opening a FIFO waits for its other end.
+    return ctx->fromLong(blocking(rt, ctx, [&] { return protoio::file::open(path, m); }));
 }
 
 // __fileRead: path binary: aBoolean
 PRIM(prim_FileRead) {
     ARGS(2, "__fileRead:binary:");
     const std::string path = str(ctx, a[0], "contents");
-    std::string data;
-    {
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        data = readWhole(path);
-    }
+    const std::string data = unmanaged(ctx, [&] { return protoio::file::read(path); });
     return truthy(a[1]) ? bytesArray(rt, ctx, data) : string(ctx, data);
 }
 
@@ -865,13 +424,12 @@ PRIM(prim_FileRead) {
 PRIM(prim_FileWrite) {
     ARGS(3, "__fileWrite:data:append:");
     const std::string path = str(ctx, a[0], "contents:");
-    const std::string data = a[1] && a[1]->asString(ctx) ? str(ctx, a[1], "contents:")
-                                                         : bytesOf(ctx, a[1], "contents:");
+    const std::string data = dataArg(ctx, a[1], "contents:");
     const bool append = truthy(a[2]);
-    {
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        writeWhole(path, data, append);
-    }
+    unmanaged(ctx, [&] {
+        if (append) protoio::file::append(path, data);
+        else protoio::file::write(path, data);
+    });
     return r;
 }
 
@@ -880,19 +438,12 @@ PRIM(prim_FileWrite) {
 PRIM(prim_FileStat) {
     ARGS(1, "__fileStat:");
     const std::string path = str(ctx, a[0], "exists");
-    struct stat st{};
-    int rc, readable, writable;
-    {
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        rc = ::stat(path.c_str(), &st);
-        readable = ::access(path.c_str(), R_OK) == 0;
-        writable = ::access(path.c_str(), W_OK) == 0;
-    }
-    if (rc != 0) return PROTO_NONE;
-    const long long ms = static_cast<long long>(st.st_mtim.tv_sec) * 1000 + st.st_mtim.tv_nsec / 1000000;
-    return makeArray(rt, ctx, {boolean(S_ISREG(st.st_mode)), boolean(S_ISDIR(st.st_mode)),
-                               ctx->fromLong(static_cast<long long>(st.st_size)), ctx->fromLong(ms),
-                               boolean(readable), boolean(writable)});
+    const std::optional<protoio::file::Stat> st = unmanaged(ctx, [&] { return protoio::file::stat(path); });
+    if (!st) return PROTO_NONE;
+    return makeArray(rt, ctx, {boolean(st->isFile), boolean(st->isDirectory),
+                               ctx->fromLong(static_cast<long long>(st->size)),
+                               ctx->fromLong(static_cast<long long>(st->modifiedMs)),
+                               boolean(st->readable), boolean(st->writable)});
 }
 
 // __fileDelete: path recursive: aBoolean — answers whether something was deleted.
@@ -900,24 +451,14 @@ PRIM(prim_FileDelete) {
     ARGS(2, "__fileDelete:recursive:");
     const std::string path = str(ctx, a[0], "delete");
     const bool all = truthy(a[1]);
-    bool removed = false;
-    {
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        try {
-            removed = all ? fs::remove_all(path) > 0 : fs::remove(path);
-        } catch (const fs::filesystem_error& e) { fsError(e, "cannot delete"); }
-    }
-    return boolean(removed);
+    return boolean(unmanaged(ctx, [&] { return protoio::file::remove(path, all); }));
 }
 
 // __fileMove: from to: to
 PRIM(prim_FileMove) {
     ARGS(2, "__fileMove:to:");
     const std::string from = str(ctx, a[0], "moveTo:"), to = str(ctx, a[1], "moveTo:");
-    {
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        try { fs::rename(from, to); } catch (const fs::filesystem_error& e) { fsError(e, "cannot move"); }
-    }
+    unmanaged(ctx, [&] { protoio::file::move(from, to); });
     return r;
 }
 
@@ -925,12 +466,7 @@ PRIM(prim_FileMove) {
 PRIM(prim_FileCopy) {
     ARGS(2, "__fileCopy:to:");
     const std::string from = str(ctx, a[0], "copyTo:"), to = str(ctx, a[1], "copyTo:");
-    {
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        try {
-            fs::copy(from, to, fs::copy_options::recursive | fs::copy_options::overwrite_existing);
-        } catch (const fs::filesystem_error& e) { fsError(e, "cannot copy"); }
-    }
+    unmanaged(ctx, [&] { protoio::file::copy(from, to); });
     return r;
 }
 
@@ -939,18 +475,7 @@ PRIM(prim_DirCreate) {
     ARGS(2, "__dirCreate:parents:");
     const std::string path = str(ctx, a[0], "createDirectory");
     const bool parents = truthy(a[1]);
-    int err = 0;
-    {
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        if (parents) {
-            std::error_code ec;
-            fs::create_directories(path, ec);
-            if (ec) err = ec.value();
-        } else if (::mkdir(path.c_str(), 0755) != 0) {
-            err = errno;
-        }
-    }
-    if (err) fileError(path, err, "cannot create directory");
+    unmanaged(ctx, [&] { protoio::file::mkdir(path, parents); });
     return r;
 }
 
@@ -958,128 +483,31 @@ PRIM(prim_DirCreate) {
 PRIM(prim_DirList) {
     ARGS(1, "__dirList:");
     const std::string path = str(ctx, a[0], "children");
-    std::vector<std::string> names;
-    {
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        try {
-            for (const auto& e : fs::directory_iterator(path)) names.push_back(e.path().filename().string());
-        } catch (const fs::filesystem_error& e) { fsError(e, "cannot list"); }
-        std::sort(names.begin(), names.end());
-    }
-    return stringsArray(rt, ctx, names);
+    return stringsArray(rt, ctx, unmanaged(ctx, [&] { return protoio::file::list(path); }));
 }
 
+// Lexical only: `..` and `.` are folded, symbolic links are kept, as Pharo's
+// fullName does.
 PRIM(prim_FileAbsolute) {
     ARGS(1, "__fileAbsolute:");
     const std::string path = str(ctx, a[0], "fullName");
-    // Lexical only: `..` and `.` are folded, symbolic links are kept, as
-    // Pharo's fullName does.
-    std::error_code ec;
-    fs::path p = fs::absolute(path, ec);
-    if (ec) fileError(path, ec.value(), "cannot resolve");
-    std::string s = p.lexically_normal().string();
-    if (s.size() > 1 && s.back() == '/') s.pop_back();
-    return string(ctx, s);
+    return string(ctx, immediate([&] { return protoio::file::absolute(path); }));
 }
 
-PRIM(prim_TempDir) {
-    ARGS(0, "__fileTempDir");
-    std::error_code ec;
-    return string(ctx, fs::temp_directory_path(ec).string());
-}
+PRIM(prim_TempDir) { ARGS(0, "__fileTempDir"); return string(ctx, protoio::file::tempDir()); }
 
 // --------------------------------------------------------------- processes
-
-struct ChildResult { int status = 0; std::string out, err; };
-
-int exitCodeOf(int status) {
-    if (WIFEXITED(status)) return WEXITSTATUS(status);
-    if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
-    return -1;
-}
-
-// Runs argv with the given input and collects both outputs. Unmanaged.
-ChildResult runChild(const std::vector<std::string>& argv, const std::string* input) {
-    int inP[2] = {-1, -1}, outP[2] = {-1, -1}, errP[2] = {-1, -1};
-    if (::pipe2(inP, O_CLOEXEC) || ::pipe2(outP, O_CLOEXEC) || ::pipe2(errP, O_CLOEXEC)) {
-        const int e = errno;
-        for (int f : {inP[0], inP[1], outP[0], outP[1], errP[0], errP[1]}) if (f >= 0) ::close(f);
-        throw ClassedErrorSignal("OSProcessError", std::string("cannot create pipes: ") + std::strerror(e));
-    }
-    posix_spawn_file_actions_t fa;
-    posix_spawn_file_actions_init(&fa);
-    posix_spawn_file_actions_adddup2(&fa, inP[0], 0);
-    posix_spawn_file_actions_adddup2(&fa, outP[1], 1);
-    posix_spawn_file_actions_adddup2(&fa, errP[1], 2);
-    std::vector<char*> args;
-    for (const std::string& s : argv) args.push_back(const_cast<char*>(s.c_str()));
-    args.push_back(nullptr);
-    pid_t pid;
-    const int rc = ::posix_spawnp(&pid, args[0], &fa, nullptr, args.data(), environ);
-    posix_spawn_file_actions_destroy(&fa);
-    ::close(inP[0]); ::close(outP[1]); ::close(errP[1]);
-    if (rc != 0) {
-        ::close(inP[1]); ::close(outP[0]); ::close(errP[0]);
-        throw ClassedErrorSignal("OSProcessError", "cannot run " + argv[0] + ": " + std::strerror(rc));
-    }
-    ChildResult res;
-    // A child that exits without reading all its input must not kill us.
-    SigpipeGuard noSigpipe;
-    size_t written = 0;
-    const std::string empty;
-    const std::string& in = input ? *input : empty;
-    if (in.empty()) { ::close(inP[1]); inP[1] = -1; }
-    else ::fcntl(inP[1], F_SETFL, O_NONBLOCK);
-    int outFd = outP[0], errFd = errP[0];
-    char chunk[65536];
-    while (outFd >= 0 || errFd >= 0 || inP[1] >= 0) {
-        pollfd p[3];
-        int n = 0, iOut = -1, iErr = -1, iIn = -1;
-        if (outFd >= 0) { iOut = n; p[n++] = {outFd, POLLIN, 0}; }
-        if (errFd >= 0) { iErr = n; p[n++] = {errFd, POLLIN, 0}; }
-        if (inP[1] >= 0) { iIn = n; p[n++] = {inP[1], POLLOUT, 0}; }
-        if (::poll(p, n, -1) < 0) {
-            if (errno == EINTR) continue;
-            // Cannot wait any more: stop feeding and collecting, but still
-            // reap the child below.
-            for (int* f : {&outFd, &errFd, &inP[1]}) if (*f >= 0) { ::close(*f); *f = -1; }
-            break;
-        }
-        auto drain = [&](int idx, int& fd, std::string& dst) {
-            if (idx < 0 || !(p[idx].revents & (POLLIN | POLLHUP | POLLERR))) return;
-            const ssize_t k = ::read(fd, chunk, sizeof chunk);
-            if (k > 0) dst.append(chunk, static_cast<size_t>(k));
-            else if (k == 0 || errno != EINTR) { ::close(fd); fd = -1; }
-        };
-        drain(iOut, outFd, res.out);
-        drain(iErr, errFd, res.err);
-        if (iIn >= 0 && (p[iIn].revents & (POLLOUT | POLLERR | POLLHUP))) {
-            const ssize_t w = ::write(inP[1], in.data() + written, in.size() - written);
-            if (w > 0) written += static_cast<size_t>(w);
-            if (w < 0 && errno != EAGAIN && errno != EINTR) written = in.size();
-            if (written >= in.size()) { ::close(inP[1]); inP[1] = -1; }
-        }
-    }
-    while (::waitpid(pid, &res.status, 0) < 0 && errno == EINTR) {}
-    return res;
-}
 
 // __osRun: argvArray input: aStringOrNil — #(exitCode output errorOutput)
 PRIM(prim_Run) {
     ARGS(2, "__osRun:input:");
     const std::vector<std::string> argv = stringArray(ctx, a[0], "run:arguments:");
     if (argv.empty()) throw std::runtime_error("run:arguments: needs a command");
-    std::string input;
-    const bool hasInput = a[1] && a[1] != PROTO_NONE;
-    if (hasInput) input = str(ctx, a[1], "input:");
-    ChildResult res;
-    {
-        BlockingIO blocking(rt, ctx);
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        res = runChild(argv, hasInput ? &input : nullptr);
-    }
+    std::optional<std::string> input;
+    if (a[1] && a[1] != PROTO_NONE) input = str(ctx, a[1], "input:");
+    const protoio::process::RunResult res = blocking(rt, ctx, [&] { return protoio::process::run(argv, input); });
     proto::ProtoContext::CriticalSection cs(ctx);
-    return makeArray(rt, ctx, {ctx->fromLong(exitCodeOf(res.status)), string(ctx, res.out), string(ctx, res.err)});
+    return makeArray(rt, ctx, {ctx->fromLong(res.exitCode), string(ctx, res.out), string(ctx, res.err)});
 }
 
 // __osSpawn: argvArray — starts a child that shares our standard streams; answers its pid.
@@ -1087,34 +515,20 @@ PRIM(prim_Spawn) {
     ARGS(1, "__osSpawn:");
     const std::vector<std::string> argv = stringArray(ctx, a[0], "spawn:arguments:");
     if (argv.empty()) throw std::runtime_error("spawn:arguments: needs a command");
-    std::vector<char*> args;
-    for (const std::string& s : argv) args.push_back(const_cast<char*>(s.c_str()));
-    args.push_back(nullptr);
-    pid_t pid;
-    std::fflush(nullptr);
-    const int rc = ::posix_spawnp(&pid, args[0], nullptr, nullptr, args.data(), environ);
-    if (rc != 0) throw ClassedErrorSignal("OSProcessError", "cannot run " + argv[0] + ": " + std::strerror(rc));
-    return ctx->fromLong(pid);
+    return ctx->fromLong(immediate([&] { return protoio::process::spawn(argv); }));
 }
 
 PRIM(prim_WaitPid) {
     ARGS(1, "__osWaitPid:");
-    const pid_t pid = static_cast<pid_t>(num(ctx, a[0], "waitFor:"));
-    int status = 0, rc;
-    {
-        BlockingIO blocking(rt, ctx);
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        while ((rc = ::waitpid(pid, &status, 0)) < 0 && errno == EINTR) {}
-    }
-    if (rc < 0) throw ClassedErrorSignal("OSProcessError", std::string("waitFor: ") + std::strerror(errno));
-    return ctx->fromLong(exitCodeOf(status));
+    const int pid = static_cast<int>(num(ctx, a[0], "waitFor:"));
+    return ctx->fromLong(blocking(rt, ctx, [&] { return protoio::process::wait(pid); }));
 }
 
 PRIM(prim_Kill) {
     ARGS(2, "__osKill:signal:");
-    const pid_t pid = static_cast<pid_t>(num(ctx, a[0], "kill:"));
+    const int pid = static_cast<int>(num(ctx, a[0], "kill:"));
     const int sig = static_cast<int>(num(ctx, a[1], "kill:"));
-    if (::kill(pid, sig) != 0) throw ClassedErrorSignal("OSProcessError", std::string("kill: ") + std::strerror(errno));
+    immediate([&] { protoio::process::kill(pid, sig); });
     return r;
 }
 
@@ -1125,40 +539,8 @@ PRIM(prim_TcpConnect) {
     ARGS(3, "__tcpConnect:port:timeout:");
     const std::string host = str(ctx, a[0], "connectTo:");
     const int port = static_cast<int>(num(ctx, a[1], "connectTo:port:"));
-    const int timeoutMs = a[2] == PROTO_NONE ? -1 : static_cast<int>(num(ctx, a[2], "timeout:"));
-    int fd = -1;
-    {
-        BlockingIO blocking(rt, ctx);
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        AddrList addrs;
-        resolve(host, port, SOCK_STREAM, false, addrs);
-        int lastErr = ECONNREFUSED;
-        for (addrinfo* ai = addrs.head; ai; ai = ai->ai_next) {
-            fd = ::socket(ai->ai_family, ai->ai_socktype | SOCK_CLOEXEC | SOCK_NONBLOCK, ai->ai_protocol);
-            if (fd < 0) { lastErr = errno; continue; }
-            int rc = ::connect(fd, ai->ai_addr, ai->ai_addrlen);
-            if (rc != 0 && errno == EINPROGRESS) {
-                pollfd p{fd, POLLOUT, 0};
-                int pr;
-                while ((pr = ::poll(&p, 1, timeoutMs)) < 0 && errno == EINTR) {}
-                if (pr <= 0) { lastErr = pr == 0 ? ETIMEDOUT : errno; ::close(fd); fd = -1; continue; }
-                int soErr = 0; socklen_t len = sizeof soErr;
-                ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &soErr, &len);
-                rc = soErr ? -1 : 0;
-                if (soErr) errno = soErr;
-            }
-            if (rc == 0) break;
-            lastErr = errno;
-            ::close(fd);
-            fd = -1;
-        }
-        if (fd < 0) netError(lastErr, "cannot connect to " + host + ":" + std::to_string(port));
-        ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL) & ~O_NONBLOCK);
-        int one = 1;
-        ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
-    }
-    forgetFd(fd);
-    return ctx->fromLong(fd);
+    const int timeoutMs = timeoutArg(ctx, a[2], "timeout:");
+    return ctx->fromLong(blocking(rt, ctx, [&] { return protoio::net::tcpConnect(host, port, timeoutMs); }));
 }
 
 // __tcpListen: host port: p backlog: n — answers a descriptor.
@@ -1167,103 +549,39 @@ PRIM(prim_TcpListen) {
     const std::string host = str(ctx, a[0], "listenOn:");
     const int port = static_cast<int>(num(ctx, a[1], "listenOn:"));
     const int backlog = static_cast<int>(num(ctx, a[2], "listenOn:"));
-    int fd = -1, lastErr = EADDRNOTAVAIL;
-    {
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        AddrList addrs;
-        resolve(host, port, SOCK_STREAM, true, addrs);
-        for (addrinfo* ai = addrs.head; ai; ai = ai->ai_next) {
-            fd = ::socket(ai->ai_family, ai->ai_socktype | SOCK_CLOEXEC, ai->ai_protocol);
-            if (fd < 0) { lastErr = errno; continue; }
-            int one = 1;
-            ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-            if (::bind(fd, ai->ai_addr, ai->ai_addrlen) == 0 && ::listen(fd, backlog) == 0) break;
-            lastErr = errno;
-            ::close(fd);
-            fd = -1;
-        }
-    }
-    if (fd < 0) netError(lastErr, "cannot listen on port " + std::to_string(port));
-    forgetFd(fd);
-    return ctx->fromLong(fd);
+    return ctx->fromLong(unmanaged(ctx, [&] { return protoio::net::tcpListen(host, port, backlog); }));
 }
 
-// __tcpAccept: fd timeout: msOrNil — a connected descriptor, or nil on timeout.
+// __tcpAccept: fd timeout: msOrNil — a connected descriptor, or nil on
+// timeout or when the listener was closed meanwhile.
 PRIM(prim_TcpAccept) {
     ARGS(2, "__tcpAccept:timeout:");
-    const int fd = static_cast<int>(num(ctx, a[0], "accept"));
-    const int timeoutMs = a[1] == PROTO_NONE ? -1 : static_cast<int>(num(ctx, a[1], "acceptTimeout:"));
-    auto st = fdState(fd);  // held: a concurrent close cannot free the number under us
-    int c = -1, err = 0;
-    {
-        BlockingIO blocking(rt, ctx);
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        if (!waitReady(fd, POLLIN, timeoutMs)) return PROTO_NONE;
-        if (st->closed.load()) return PROTO_NONE;
-        while ((c = ::accept4(fd, nullptr, nullptr, SOCK_CLOEXEC)) < 0 && errno == EINTR) {}
-        if (c < 0) err = errno;
-    }
-    if (c < 0) netError(err, "accept");
-    int one = 1;
-    ::setsockopt(c, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
-    forgetFd(c);
-    return ctx->fromLong(c);
+    const int fd = fdArg(ctx, a[0], "accept");
+    const int timeoutMs = timeoutArg(ctx, a[1], "acceptTimeout:");
+    const std::optional<int> c = blocking(rt, ctx, [&] { return protoio::net::tcpAccept(fd, timeoutMs); });
+    return c ? ctx->fromLong(*c) : PROTO_NONE;
 }
 
 // __sockName: fd peer: aBoolean — #(host port)
 PRIM(prim_SockName) {
     ARGS(2, "__sockName:peer:");
-    const int fd = static_cast<int>(num(ctx, a[0], "port"));
-    sockaddr_storage ss{};
-    socklen_t len = sizeof ss;
-    const int rc = truthy(a[1]) ? ::getpeername(fd, reinterpret_cast<sockaddr*>(&ss), &len)
-                                : ::getsockname(fd, reinterpret_cast<sockaddr*>(&ss), &len);
-    if (rc != 0) netError(errno, "address of socket");
-    int port = 0;
-    const std::string host = addrText(reinterpret_cast<sockaddr*>(&ss), &port);
+    const int fd = fdArg(ctx, a[0], "port");
+    const bool peer = truthy(a[1]);
+    const protoio::net::Address addr =
+        immediate([&] { return peer ? protoio::net::peerName(fd) : protoio::net::sockName(fd); });
     proto::ProtoContext::CriticalSection cs(ctx);
-    return makeArray(rt, ctx, {string(ctx, host), ctx->fromLong(port)});
+    return makeArray(rt, ctx, {string(ctx, addr.host), ctx->fromLong(addr.port)});
 }
 
 // __tlsConnect: fd host: name verify: aBoolean — upgrades the socket to TLS.
-// The handshake, like every later TLS read and write, runs on the socket made
-// non-blocking and waits in poll, so the socket's timeout bounds it.
+// The handshake, like every later TLS read and write, waits in poll bounded
+// by the socket's timeout.
 PRIM(prim_TlsConnect) {
     ARGS(3, "__tlsConnect:host:verify:");
-    const int fd = static_cast<int>(num(ctx, a[0], "tlsHost:"));
+    const int fd = fdArg(ctx, a[0], "tlsHost:");
     const std::string host = str(ctx, a[1], "tlsHost:");
     const bool verify = truthy(a[2]);
-    auto st = fdState(fd);
-    std::string failure;
-    int err = 0;
-    {
-        BlockingIO blocking(rt, ctx);
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        std::lock_guard<std::mutex> rlock(st->readMutex);
-        std::lock_guard<std::mutex> wlock(st->writeMutex);
-        SSL* ssl = st->ssl.load() ? nullptr : SSL_new(tlsContext(verify));
-        if (!ssl) {
-            failure = st->ssl.load() ? "the connection already uses TLS" : tlsErrorText();
-        } else {
-            SSL_set_fd(ssl, fd);
-            SSL_set_tlsext_host_name(ssl, host.c_str());
-            if (verify) SSL_set1_host(ssl, host.c_str());
-            ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL) | O_NONBLOCK);
-            st->ssl.store(ssl);
-            SigpipeGuard noSigpipe;
-            const int rc = sslCall(*st, [](SSL* s) { return SSL_connect(s); });
-            if (rc != 1) {
-                const long v = SSL_get_verify_result(ssl);
-                if (rc < 0 && errno == ETIMEDOUT) err = ETIMEDOUT;
-                else failure = v != X509_V_OK ? std::string("TLS certificate: ") + X509_verify_cert_error_string(v)
-                                              : tlsErrorText();
-                st->ssl.store(nullptr);
-                SSL_free(ssl);
-            }
-        }
-    }
-    if (err) netError(err, "TLS handshake with " + host);
-    if (!failure.empty()) throw ClassedErrorSignal("NetworkError", failure + " (" + host + ")");
+    blocking(rt, ctx, [&] { protoio::net::tlsConnect(fd, host, verify); });
     return r;
 }
 
@@ -1272,81 +590,33 @@ PRIM(prim_UdpBind) {
     ARGS(2, "__udpBind:port:");
     const std::string host = str(ctx, a[0], "bindTo:");
     const int port = static_cast<int>(num(ctx, a[1], "bindTo:"));
-    int fd = -1, lastErr = EADDRNOTAVAIL;
-    {
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        AddrList addrs;
-        resolve(host.empty() ? "0.0.0.0" : host, port, SOCK_DGRAM, true, addrs);
-        for (addrinfo* ai = addrs.head; ai; ai = ai->ai_next) {
-            fd = ::socket(ai->ai_family, ai->ai_socktype | SOCK_CLOEXEC, ai->ai_protocol);
-            if (fd < 0) { lastErr = errno; continue; }
-            int one = 1;
-            ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-            ::setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &one, sizeof one);
-            if (::bind(fd, ai->ai_addr, ai->ai_addrlen) == 0) break;
-            lastErr = errno;
-            ::close(fd);
-            fd = -1;
-        }
-    }
-    if (fd < 0) netError(lastErr, "cannot bind UDP port " + std::to_string(port));
-    forgetFd(fd);
-    return ctx->fromLong(fd);
+    return ctx->fromLong(unmanaged(ctx, [&] { return protoio::net::udpBind(host, port); }));
 }
 
 // __udpSend: fd to: host port: p data: aStringOrBytes
 PRIM(prim_UdpSend) {
     ARGS(4, "__udpSend:to:port:data:");
-    const int fd = static_cast<int>(num(ctx, a[0], "send:"));
+    const int fd = fdArg(ctx, a[0], "send:");
     const std::string host = str(ctx, a[1], "send:to:port:");
     const int port = static_cast<int>(num(ctx, a[2], "send:to:port:"));
-    const std::string data = a[3] && a[3]->asString(ctx) ? str(ctx, a[3], "send:") : bytesOf(ctx, a[3], "send:");
-    auto st = fdState(fd);
-    int err = 0;
-    {
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        // Resolve to the socket's own address family: an IPv4 socket cannot
-        // send to an IPv6 address.
-        sockaddr_storage own{};
-        socklen_t ownLen = sizeof own;
-        const int family = ::getsockname(fd, reinterpret_cast<sockaddr*>(&own), &ownLen) == 0
-                               ? own.ss_family : AF_UNSPEC;
-        AddrList addrs;
-        resolve(host, port, SOCK_DGRAM, false, addrs, family);
-        if (::sendto(fd, data.data(), data.size(), MSG_NOSIGNAL, addrs.head->ai_addr, addrs.head->ai_addrlen) < 0)
-            err = errno;
-    }
-    if (err) netError(err, "send to " + host);
+    const std::string data = dataArg(ctx, a[3], "send:");
+    unmanaged(ctx, [&] { protoio::net::udpSend(fd, host, port, data); });
     return r;
 }
 
-// __udpReceive: fd timeout: msOrNil binary: aBoolean — #(data host port) or nil on timeout.
+// __udpReceive: fd timeout: msOrNil binary: aBoolean — #(data host port), or
+// nil on timeout or when the socket was closed meanwhile.
 PRIM(prim_UdpReceive) {
     ARGS(3, "__udpReceive:timeout:binary:");
-    const int fd = static_cast<int>(num(ctx, a[0], "receive"));
-    const int timeoutMs = a[1] == PROTO_NONE ? -1 : static_cast<int>(num(ctx, a[1], "receiveTimeout:"));
+    const int fd = fdArg(ctx, a[0], "receive");
+    const int timeoutMs = timeoutArg(ctx, a[1], "receiveTimeout:");
     const bool binary = truthy(a[2]);
-    auto st = fdState(fd);  // held: a concurrent close cannot free the number under us
-    std::string data;
-    sockaddr_storage ss{};
-    int err = 0;
-    {
-        BlockingIO blocking(rt, ctx);
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        if (!waitReady(fd, POLLIN, timeoutMs) || st->closed.load()) return PROTO_NONE;
-        data.resize(65536);
-        socklen_t len = sizeof ss;
-        ssize_t n;
-        while ((n = ::recvfrom(fd, data.data(), data.size(), 0, reinterpret_cast<sockaddr*>(&ss), &len)) < 0
-               && errno == EINTR) {}
-        if (n < 0) err = errno; else data.resize(static_cast<size_t>(n));
-    }
-    if (err) netError(err, "receive");
-    int port = 0;
-    const std::string host = addrText(reinterpret_cast<sockaddr*>(&ss), &port);
+    const std::optional<protoio::net::Datagram> d =
+        blocking(rt, ctx, [&] { return protoio::net::udpReceive(fd, timeoutMs); });
+    if (!d) return PROTO_NONE;
     proto::ProtoContext::CriticalSection cs(ctx);
-    return makeArray(rt, ctx, {binary ? bytesArray(rt, ctx, data) : string(ctx, data),
-                               string(ctx, host), ctx->fromLong(port)});
+    return makeArray(rt, ctx, {binary ? bytesArray(rt, ctx, d->data) : string(ctx, d->data),
+                               string(ctx, d->host), ctx->fromLong(d->port)});
 }
 
 #undef ARGS
