@@ -55,9 +55,10 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  # protoCore 2.6.1 (tag v2.6.1), SOVERSION 3: the floor of protoST 0.5.0.
+  # protoCore 2.6.2 (tag v2.6.2), SOVERSION 3. The floor of protoST 0.5.0 is
+  # 2.6.1; cli_memory_bounded needs 2.6.2 (the heap ceiling under dead mutables).
   # Bump deliberately.
-  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || '00684f171e44feda1be7a0615f40d2b0a34d9420' }}
+  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || '752bdb2064d3a2a6f8aa6bc756f107ed395bebd0' }}
   # The two tests excluded from the gate, both run in the `non-gating` job:
   #   cli_concurrent_first_call   quarantined, S19 -- see the header.
   #   F6 v2 T7: two actors ...    a wall-clock proof of parallelism: two 200 ms
