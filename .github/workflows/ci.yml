@@ -55,8 +55,9 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  # protoCore 2.5.0, SOVERSION 3 (master, 2026-09-25).  Bump deliberately.
-  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'df8406a3f44f2a7c8505251bf6887e0ad6e60809' }}
+  # protoCore 2.6.1 (tag v2.6.1), SOVERSION 3: the floor of protoST 0.5.0.
+  # Bump deliberately.
+  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || '00684f171e44feda1be7a0615f40d2b0a34d9420' }}
   # The two tests excluded from the gate, both run in the `non-gating` job:
   #   cli_concurrent_first_call   quarantined, S19 -- see the header.
   #   F6 v2 T7: two actors ...    a wall-clock proof of parallelism: two 200 ms
