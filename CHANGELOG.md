@@ -3,6 +3,28 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
+## Unreleased
+
+- **I/O now built on protoIO 0.1.0.** The POSIX layer behind the I/O
+  primitives (buffered descriptors, SIGPIPE handling, TLS, child processes,
+  sockets, the chunked-body reader, percent-decoding) moved into
+  [protoIO](https://github.com/gamarino/protoIO), a static library shared
+  with the other protoCore runtimes, so a defect in it is fixed once for all
+  of them. `src/primitives/io_prims.cpp` keeps only the bindings: argument
+  conversion, leaving the collector's quorum around each blocking call, and
+  mapping protoIO's error kinds onto protoST's error classes. No behaviour
+  change for correct programs: every primitive, error class and `.st` file is as
+  before, and the whole suite passes unchanged. protoIO is a new build
+  requirement (a sibling checkout `../protoIO` or the `protoio-dev` package);
+  the installed `protost` does not depend on it. Where protoIO is stricter
+  than the old code, in edge cases no test, demo or documented example relies
+  on: a line over `nextLineMax:`'s limit never consumes input, even when the
+  limit falls on a pending CR; `setenv:to:` with an invalid variable name
+  (empty, or containing `=`) raises an `Error` instead of silently doing
+  nothing; a port outside 0-65535 raises an `Error` instead of being taken
+  modulo 65536 (70000 used to connect to port 4464); and the messages of the
+  `OSProcessError`s raised by `waitFor:` and `kill:` now name the process.
+
 ## 0.5.0 — input and output (2026-09-29)
 
 Until this release a protoST program could only print. Design:

@@ -13,6 +13,12 @@ name: CI
 # from source in the same job -- so the hazard that mode protects against cannot
 # arise here, and the configuration CI runs is the one contributors run.
 #
+# HOW protoIO IS OBTAINED: the same way, as a sibling checkout pinned to a
+# commit.  It is built into ../protoIO/build_release (library only, no tests)
+# and protoST is configured with -DprotoIO_DIR pointing at that build tree, so
+# the job exercises protoST's find_package(protoIO) path; without it the build
+# would fall back to compiling ../protoIO as a subdirectory, which also works.
+#
 # WHICH protoCore REF: pinned for push and pull_request, `master` for the
 # nightly schedule.  A pinned ref makes a red pull request unambiguous.  The
 # schedule keeps the integration signal separate, and the summary always records
@@ -68,6 +74,10 @@ env:
   #                               230-280 ms, so the margin on a shared runner is
   #                               tens of milliseconds.  It is a good test and a
   #                               bad gate.
+  PROTOIO_REPO: gamarino/protoIO
+  # protoIO 0.1.0: the main HEAD when protoST's I/O primitives moved onto it
+  # (2026-09-30). Pinned so a red build is attributable; bump deliberately.
+  PROTOIO_REF: 503c7e79292b52b427d1c829092bfd389c9aeec2
   NON_GATING_TESTS: '^(cli_concurrent_first_call|F6 v2 T7: two actors run in parallel \(wall-clock proof\))$'
 
 jobs:
@@ -88,6 +98,13 @@ jobs:
           ref: ${{ env.PROTOCORE_REF }}
           path: protoCore
 
+      - name: Check out protoIO as a sibling
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PROTOIO_REPO }}
+          ref: ${{ env.PROTOIO_REF }}
+          path: protoIO
+
       - name: Record what is being built
         run: |
           cmake --version | head -1
@@ -95,19 +112,25 @@ jobs:
           {
             echo "protoST at \`$(git -C protoST rev-parse HEAD)\`"
             echo "protoCore ref \`$PROTOCORE_REF\` at \`$(git -C protoCore rev-parse HEAD)\`"
+            echo "protoIO ref \`$PROTOIO_REF\` at \`$(git -C protoIO rev-parse HEAD)\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Install libreadline
+      - name: Install libreadline and OpenSSL
         # protoST's REPL links readline; find_library(... REQUIRED) fails the
-        # configure without it.
+        # configure without it.  protoIO needs OpenSSL's headers (TLS).
         run: |
           sudo apt-get update
-          sudo apt-get install -y libreadline-dev
+          sudo apt-get install -y libreadline-dev libssl-dev
 
       - name: Build protoCore
         run: |
           cmake -S protoCore -B protoCore/build_release -DCMAKE_BUILD_TYPE=Release
           cmake --build protoCore/build_release --target protoCore --parallel "$(nproc)"
+
+      - name: Build protoIO
+        run: |
+          cmake -S protoIO -B protoIO/build_release -DCMAKE_BUILD_TYPE=Release -DPROTOIO_BUILD_TESTS=OFF
+          cmake --build protoIO/build_release --target protoio --parallel "$(nproc)"
 
       - name: Configure protoST
         # Catch2 v3.5.4 and nlohmann/json v3.11.3 are fetched at configure time
@@ -115,7 +138,7 @@ jobs:
         # this step needs network access.  An offline runner would have to seed
         # FETCHCONTENT_BASE_DIR with both.
         working-directory: protoST
-        run: cmake -B build_release -S . -DCMAKE_BUILD_TYPE=Release
+        run: cmake -B build_release -S . -DCMAKE_BUILD_TYPE=Release -DprotoIO_DIR="$GITHUB_WORKSPACE/protoIO/build_release"
 
       - name: Build protoST
         working-directory: protoST
@@ -174,20 +197,32 @@ jobs:
           ref: ${{ env.PROTOCORE_REF }}
           path: protoCore
 
-      - name: Install libreadline
+      - name: Check out protoIO as a sibling
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PROTOIO_REPO }}
+          ref: ${{ env.PROTOIO_REF }}
+          path: protoIO
+
+      - name: Install libreadline and OpenSSL
         run: |
           sudo apt-get update
-          sudo apt-get install -y libreadline-dev
+          sudo apt-get install -y libreadline-dev libssl-dev
 
       - name: Build protoCore
         run: |
           cmake -S protoCore -B protoCore/build_release -DCMAKE_BUILD_TYPE=Release
           cmake --build protoCore/build_release --target protoCore --parallel "$(nproc)"
 
+      - name: Build protoIO
+        run: |
+          cmake -S protoIO -B protoIO/build_release -DCMAKE_BUILD_TYPE=Release -DPROTOIO_BUILD_TESTS=OFF
+          cmake --build protoIO/build_release --target protoio --parallel "$(nproc)"
+
       - name: Build protoST
         working-directory: protoST
         run: |
-          cmake -B build_release -S . -DCMAKE_BUILD_TYPE=Release
+          cmake -B build_release -S . -DCMAKE_BUILD_TYPE=Release -DprotoIO_DIR="$GITHUB_WORKSPACE/protoIO/build_release"
           cmake --build build_release --parallel "$(nproc)"
 
       - name: Run the quarantined and clock-dependent cases, retrying up to three times

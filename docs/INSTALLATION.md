@@ -19,9 +19,15 @@ built and tested against, and the oldest it accepts).
 - **libreadline** (`libreadline-dev` on Debian/Ubuntu, `readline-devel` on
   Fedora/RHEL, `brew install readline` on macOS). It is a hard requirement:
   `find_library(READLINE_LIBRARY NAMES readline REQUIRED)`.
+- **protoIO 0.1** at build time only: the I/O library shared by the protoCore
+  runtimes (files, processes, TCP, UDP, TLS, HTTP), linked statically, so the
+  installed `protost` does not depend on it. Either install its `protoio-dev`
+  package (or pass `-DCMAKE_PREFIX_PATH=<prefix>` / `-DprotoIO_DIR=<its build
+  tree>`), or check out <https://github.com/gamarino/protoIO> next to protoST as
+  `../protoIO`, which the build then compiles as part of protoST's own tree.
 - **OpenSSL** development files (`libssl-dev` on Debian/Ubuntu,
-  `openssl-devel` on Fedora/RHEL): `find_package(OpenSSL REQUIRED)`, for TLS
-  in the `net` and `http` modules.
+  `openssl-devel` on Fedora/RHEL), required by protoIO for TLS in the `net`
+  and `http` modules. The Debian package of protoST depends on `libssl3`.
 - **protoCore 2.6.1 or newer, below 3.0**, installed, with its CMake package
   configuration; 0.5.0 is tested with protoCore 2.6.1. 2.6.1 is required, not
   only tested: since 0.5.0 the actor worker pool grows while workers block in

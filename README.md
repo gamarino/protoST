@@ -172,8 +172,10 @@ known deviations from Smalltalk-80 and the open bugs are tracked in
 ## Getting started
 
 protoST depends on [protoCore](https://github.com/numaes/protoCore) 2.6.1 or
-newer (below 3.0), which must be built first, and on OpenSSL (`libssl-dev`)
-and libreadline. 2.6.1 is a hard floor: the worker pool creates threads from
+newer (below 3.0), which must be built first, on
+[protoIO](https://github.com/gamarino/protoIO) 0.1 at build time (a sibling
+checkout `../protoIO`, or its `protoio-dev` package; it is linked statically),
+and on OpenSSL (`libssl-dev`) and libreadline. 2.6.1 is a hard floor: the worker pool creates threads from
 worker threads while actors block in I/O, which older protoCore releases did
 not support safely. By default the build looks for a protoCore checkout next to
 protoST (`../protoCore`) and uses the first of these directories that holds
@@ -185,6 +187,7 @@ choice is cached in `PROTOCORE_LIBRARY` on the first configure; pass
 
 ```bash
 git clone https://github.com/numaes/protoCore.git
+git clone https://github.com/gamarino/protoIO.git
 git clone https://github.com/gamarino/protoST.git
 
 cmake -S protoCore -B protoCore/build_release -DCMAKE_BUILD_TYPE=Release
