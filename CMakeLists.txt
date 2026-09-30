@@ -168,9 +168,28 @@ add_library(protost_runtime STATIC
 target_include_directories(protost_runtime PUBLIC src include ${PROTOCORE_INCLUDE_DIRS})
 target_link_libraries(protost_runtime PUBLIC nlohmann_json::nlohmann_json)
 
-# --- OpenSSL: TLS for sockets and https (lib/net.st, lib/http.st) ---
-find_package(OpenSSL REQUIRED)
-target_link_libraries(protost_runtime PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+# --- protoIO: files, processes, TCP, UDP, TLS and HTTP (io_prims.cpp) -------
+# The POSIX I/O layer shared by the protoCore runtimes, linked statically, so
+# the package gains no dependency on protoIO itself. Resolution order, the same
+# as for protoCore: an installed CMake package (the protoio-dev deb, or any
+# prefix given with -DCMAKE_PREFIX_PATH / a build tree given with
+# -DprotoIO_DIR), else the sibling source tree ../protoIO built as part of
+# this one. OpenSSL (TLS for sockets and https) comes with protoIO's PUBLIC
+# link interface; dpkg-shlibdeps turns it into the package's libssl
+# dependency.
+find_package(protoIO 0.1 CONFIG QUIET)
+if(protoIO_FOUND)
+    message(STATUS "protoST: installed protoIO ${protoIO_VERSION} from ${protoIO_DIR}")
+elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../protoIO/CMakeLists.txt")
+    message(STATUS "protoST: no installed protoIO package found; building the sibling ../protoIO")
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../protoIO"
+                     "${CMAKE_CURRENT_BINARY_DIR}/_protoIO" EXCLUDE_FROM_ALL)
+else()
+    message(FATAL_ERROR
+        "protoIO not found: install the protoio-dev package, or check out "
+        "https://github.com/gamarino/protoIO next to protoST (../protoIO).")
+endif()
+target_link_libraries(protost_runtime PRIVATE protoIO::protoio)
 target_compile_definitions(protost_runtime PRIVATE
     PROTOST_TEMPLATE_DIR="${CMAKE_SOURCE_DIR}/src/venv_template")
 
