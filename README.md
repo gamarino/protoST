@@ -114,7 +114,7 @@ Calls block the thread that makes them; concurrency comes from actors, one
 per connection, and the worker pool adds threads while workers are blocked in
 I/O (up to 256). Failures are classed errors (`FileDoesNotExist`,
 `ConnectionRefused`, …). Not provided: HTTP/2, WebSockets, a TLS server,
-non-blocking multiplexing, native Windows. The whole protocol is in
+non-blocking multiplexing. The whole protocol is in
 [tutorial chapter 15](docs/tutorial/15-input-and-output.md). The operating-system
 layer underneath is [protoIO](https://github.com/gamarino/protoIO), the I/O
 library protoST shares with protoScala and protoClojure.
@@ -161,7 +161,7 @@ several cores without locks.
 
 ## Status
 
-Version 0.5.0, which requires protoCore 2.6.1 or newer. `ctest` runs 1068
+Version 0.5.0; the current tree requires protoCore 2.7.0 or newer. `ctest` runs 1068
 cases, all passing: 537 conformance programs, 437 unit tests, 42 examples, 30
 CLI tests (including the benchmark-harness self-test) and 22 documentation
 checks (every example with a stated result in 21 documents, plus the
@@ -173,13 +173,15 @@ known deviations from Smalltalk-80 and the open bugs are tracked in
 
 ## Getting started
 
-protoST depends on [protoCore](https://github.com/numaes/protoCore) 2.6.1 or
+protoST depends on [protoCore](https://github.com/numaes/protoCore) 2.7.0 or
 newer (below 3.0), which must be built first, on
 [protoIO](https://github.com/gamarino/protoIO) 0.1 at build time (a sibling
 checkout `../protoIO`, or its `protoio-dev` package; it is linked statically),
-and on OpenSSL (`libssl-dev`) and libreadline. 2.6.1 is a hard floor: the worker pool creates threads from
-worker threads while actors block in I/O, which older protoCore releases did
-not support safely. By default the build looks for a protoCore checkout next to
+and on OpenSSL (`libssl-dev`) and libreadline. 2.7.0 is a hard floor: the
+sources use the portable 64-bit integer names (`proto::proto_long`) protoCore
+introduced there, and since 2.6.1 the worker pool creates threads from worker
+threads while actors block in I/O, which older protoCore releases did not
+support safely. By default the build looks for a protoCore checkout next to
 protoST (`../protoCore`) and uses the first of these directories that holds
 `libprotoCore`: `build_release/`, then `build/`, then `build_check/`. The
 choice is cached in `PROTOCORE_LIBRARY` on the first configure; pass
@@ -215,6 +217,12 @@ ctest --test-dir build                # run the test suite
 See [`docs/debugging.md`](docs/debugging.md) for debugging `.st` scripts in
 VS Code.
 
+On **Windows**, protoST builds natively with Visual Studio 2022 (MSVC) against
+an installed protoCore (`-DCMAKE_PREFIX_PATH=<its prefix>`) and an OpenSSL 3
+for Windows (`-DOPENSSL_ROOT_DIR=...`); readline is optional there. The
+commands, and what differs on Windows, are in
+[docs/INSTALLATION.md — Windows (MSVC)](docs/INSTALLATION.md#windows-msvc).
+
 ## Installation
 
 protoST can be packaged with CPack. No prebuilt packages are published; build
@@ -231,10 +239,13 @@ sudo apt install ./protost-<version>-Linux.deb # protoST itself
 sudo dpkg -i protost-<version>-Linux.deb && sudo apt-get install -f
 ```
 
-**Installing on Windows.** Native Windows is not supported: the I/O layer
-uses POSIX calls and the runtime uses GCC builtins. Use WSL2 with Ubuntu
-24.04 and the Linux packages attached to the GitHub releases (or built as
-below):
+**Installing on Windows.** protoST builds natively with Visual Studio 2022
+(MSVC) and runs scripts, `-e` and the REPL from `cmd.exe` or PowerShell; the
+steps, and what differs there (no readline, `/` in the paths the file
+primitives answer, `cmd.exe` as `OSProcess`'s shell), are in
+[docs/INSTALLATION.md — Windows (MSVC)](docs/INSTALLATION.md#windows-msvc).
+Alternatively, use WSL2 with Ubuntu 24.04 and the Linux packages attached to
+the GitHub releases (or built as below):
 
 ```bash
 wsl --install -d Ubuntu-24.04        # in PowerShell, once
@@ -245,8 +256,9 @@ sudo apt install ./protoCore-2.6.2-Linux.deb ./protost-0.5.0-Linux.deb
 ```
 
 **macOS — not built or verified.** `CMakeLists.txt` configures a `.dmg`
-(DragNDrop) for macOS, and an NSIS installer and a `.zip` for Windows, but
-none has ever been built: there is no macOS or Windows host in this project.
+(DragNDrop) for macOS, and an NSIS installer and a `.zip` for Windows; the
+`.zip` has been built on Windows, the `.dmg` and the NSIS installer never
+have: there is no macOS host (and no NSIS) in this project.
 Since 0.5.0 the I/O layer uses Linux-only calls (`pipe2`, `accept4`), so a
 macOS build is not expected to compile unchanged. See
 [`docs/INSTALLATION.md`](docs/INSTALLATION.md).
@@ -266,14 +278,15 @@ cpack -G DEB    # Debian/Ubuntu .deb (Linux)
 cpack -G RPM    # RPM (Linux, needs rpmbuild)
 cpack -G TGZ    # portable .tar.gz (Linux)
 cpack -G DragNDrop   # .dmg (macOS; never built)
+cpack -G ZIP         # .zip (Windows)
 cpack -G NSIS        # installer .exe (Windows, needs NSIS; never built)
 ```
 
 The generators are selected per platform in `CMakeLists.txt` (Linux: DEB, RPM,
 TGZ; macOS: DragNDrop; Windows: NSIS, ZIP); `cpack` with no `-G` builds every
 generator enabled for the host OS. The `.deb` and `.tar.gz` packages have been
-verified on Linux; the macOS and Windows generators are configured but have
-never been run.
+verified on Linux and the `.zip` on Windows; the macOS and NSIS generators are
+configured but have never been run.
 
 ## Documentation
 

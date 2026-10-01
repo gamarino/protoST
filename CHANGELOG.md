@@ -5,6 +5,35 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+- **Native Windows build (MSVC), 2026-10-01.** protoST builds with Visual
+  Studio 2022 against an installed protoCore and the sibling protoIO; `protost`
+  runs scripts, `-e` and the REPL from `cmd.exe` or PowerShell and installs with
+  `cmake --install` (or `cpack -G ZIP`). 1065 of the 1067 tests registered on
+  Windows 11 pass; the two left are a Git Bash harness limit (`cli_sigint`)
+  and a tutorial example written in POSIX shell syntax. What differs there by
+  design: binary standard streams and a UTF-8 console and code page, `/` in
+  the paths the file primitives answer, `cmd.exe /c` as `OSProcess`'s shell,
+  no readline, Ctrl-C ending a script with `STATUS_CONTROL_C_EXIT`. Every
+  Windows difference is behind `WIN32` / `_WIN32` / `_MSC_VER` or has the same
+  meaning everywhere; on Linux the suite passes 1068/1068 as before. See
+  `docs/INSTALLATION.md`, "Windows (MSVC)".
+- **protoCore 2.7.0 is the floor.** The sources spell protoCore's 64-bit
+  integers `proto::proto_long` / `proto::proto_ulong` (`long` / `unsigned
+  long` outside Windows, so nothing changes on Linux and macOS), which first
+  exist in 2.7.0. CI pins protoCore 2.7.0 and the protoIO that builds on
+  Windows and macOS.
+- **An unwind no longer re-throws inside a catch clause.** Exceptions that a
+  nested engine, a primitive boundary, `on:do:` or `ensure:` let through are
+  re-thrown after the catch clause (`std::rethrow_exception`). Same meaning
+  under GCC and Clang; under MSVC the old `throw;` kept every frame below each
+  catch clause alive, and a recursion through `do:` blocks that hits the
+  nesting limit crashed with a native stack overflow instead of raising its
+  catchable `Error`.
+- `.gitattributes` keeps `*.st`, `*.sh`, `*.md`, `*.out`, the kernel manifest
+  and the venv template LF on every platform: a multi-line string literal
+  keeps its line endings, so a CRLF checkout changed what programs and
+  expected outputs meant.
+
 - **I/O now built on protoIO 0.1.0.** The POSIX layer behind the I/O
   primitives (buffered descriptors, SIGPIPE handling, TLS, child processes,
   sockets, the chunked-body reader, percent-decoding) moved into
