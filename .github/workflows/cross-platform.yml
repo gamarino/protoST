@@ -1,0 +1,125 @@
+name: Cross-platform
+
+# macOS and Windows. Linux is ci.yml's; this workflow adds the two platforms
+# nobody here can run locally, against an INSTALLED protoCore package (the
+# supported mode on Windows) and the sibling protoIO source tree. Refs pinned
+# like ci.yml's.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROTOCORE_REPO: numaes/protoCore
+  PROTOCORE_REF: fc5d79db4f89f8a6eb473a52766b1908140a19d1
+  PROTOIO_REPO: gamarino/protoIO
+  PROTOIO_REF: 120c8c373db2ffd840f6c807a487afae251ff6d3
+  # As in ci.yml: a wall-clock verdict never gates.
+  NON_GATING_TESTS: '^(cli_concurrent_first_call|F6 v2 T7: two actors run in parallel \(wall-clock proof\))$'
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (Apple clang, arm64)
+            os: macos-14
+            exclude_tests: ''
+          - name: Windows (MSVC, x64)
+            os: windows-2022
+            # cli_sigint needs pgrep, kill -INT on a native process and mkfifo,
+            # which Git Bash cannot give a native program (Ctrl-C was checked by
+            # hand). The tutorial's chapter 15 runs `echo $PUMP_MODE`, POSIX
+            # shell syntax cmd.exe does not expand. docs/INSTALLATION.md,
+            # "Windows (MSVC)".
+            exclude_tests: '|^cli_sigint$|^docs/docs/tutorial/15-input-and-output\.md$'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out protoST
+        uses: actions/checkout@v4
+        with:
+          path: protoST
+
+      - name: Check out protoCore as a sibling
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PROTOCORE_REPO }}
+          ref: ${{ env.PROTOCORE_REF }}
+          path: protoCore
+
+      - name: Check out protoIO as a sibling
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PROTOIO_REPO }}
+          ref: ${{ env.PROTOIO_REF }}
+          path: protoIO
+
+      - name: Dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          for f in readline openssl@3 ninja coreutils; do brew list "$f" >/dev/null 2>&1 || brew install "$f"; done
+          echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          echo "EXTRA_PREFIX=;$(brew --prefix readline)" >> "$GITHUB_ENV"
+          # The test scripts use GNU timeout, which macOS does not ship.
+          echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
+
+      - name: Dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          for d in "C:/Program Files/OpenSSL" "C:/Program Files/OpenSSL-Win64"; do
+            if [ -f "$d/include/openssl/ssl.h" ]; then echo "OPENSSL_ROOT_DIR=$d" >> "$GITHUB_ENV"; break; fi
+          done
+          echo "PYTHON_EXE=$(cygpath -m "$(command -v python)")" >> "$GITHUB_ENV"
+
+      - name: MSVC environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Build and install protoCore
+        run: |
+          cmake -S protoCore -B protoCore/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build protoCore/build --parallel 4
+          cmake --install protoCore/build --prefix "$GITHUB_WORKSPACE/prefix"
+
+      - name: Configure protoST
+        # The build directory lives inside the checkout: that is how protost
+        # finds lib/ (as on Linux).
+        working-directory: protoST
+        run: >
+          cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DPROTOCORE_REQUIRE_PACKAGE=ON
+          "-DCMAKE_PREFIX_PATH=$GITHUB_WORKSPACE/prefix$EXTRA_PREFIX"
+          ${OPENSSL_ROOT_DIR:+"-DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR"}
+          ${PYTHON_EXE:+"-DPython3_EXECUTABLE=$PYTHON_EXE"}
+
+      - name: Build protoST
+        working-directory: protoST
+        run: cmake --build build --parallel 4
+
+      - name: Report the registered test count
+        working-directory: protoST
+        run: |
+          COUNT=$(ctest --test-dir build -N | tail -1)
+          echo "$COUNT"
+          echo "protoST ctest (${{ runner.os }}): $COUNT" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Test suite
+        working-directory: protoST
+        run: ctest --test-dir build -j2 --output-on-failure --timeout 600 -E "${NON_GATING_TESTS}${{ matrix.exclude_tests }}" < /dev/null
