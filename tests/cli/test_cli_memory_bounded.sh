@@ -7,7 +7,15 @@ PROTOST="$1"
 # collector keeps an allocating loop under 1 GB; the test sets the ceiling
 # itself so it does not depend on the default (configureHeap).
 out_file="$(mktemp)"; trap 'rm -f "$out_file"' EXIT
-rss=$( { PROTOCORE_HEAP_LIMIT_CELLS=10000000 /usr/bin/time -f '%M' "$PROTOST" -e 's := 0. 1 to: 3000000 do: [:i | s := s + (Array new: 10) size]. s' >"$out_file"; } 2>&1 | tail -1 )
+program='s := 0. 1 to: 3000000 do: [:i | s := s + (Array new: 10) size]. s'
+if command -v cygpath >/dev/null 2>&1 && [ ! -x /usr/bin/time ]; then
+    # Git for Windows has no GNU time to measure the peak: there the loop is
+    # only required to complete with the right result under the ceiling.
+    PROTOCORE_HEAP_LIMIT_CELLS=10000000 "$PROTOST" -e "$program" >"$out_file"
+    [ "$(cat "$out_file")" = "30000000" ] || { echo "FAIL: result [$(cat "$out_file")]"; exit 1; }
+    echo "OK (result only: no /usr/bin/time to measure the peak)"; exit 0
+fi
+rss=$( { PROTOCORE_HEAP_LIMIT_CELLS=10000000 /usr/bin/time -f '%M' "$PROTOST" -e "$program" >"$out_file"; } 2>&1 | tail -1 )
 # The loop must also have completed with the right result: a crash is not
 # "bounded memory".
 [ "$(cat "$out_file")" = "30000000" ] || { echo "FAIL: result [$(cat "$out_file")]"; exit 1; }

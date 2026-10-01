@@ -128,12 +128,12 @@ PYEOF
 export PROTOST_WORKERS=8
 RUNS=5
 for i in $(seq 1 "$RUNS"); do
-    out=$(timeout 90 python3 "$DRIVER" "$PROTOST" "$SCRIPT" run) || true
+    out=$(timeout 90 "${PYTHON:-python3}" "$DRIVER" "$PROTOST" "$SCRIPT" run) || true
     case "$out" in
         *"RESULT: stopped=0 evaluated=0 terminated=1 errors=0 exit=0"*) ;;
         *) echo "FAIL: run-to-completion session $i/$RUNS: $out"; exit 1 ;;
     esac
-    out=$(timeout 90 python3 "$DRIVER" "$PROTOST" "$SCRIPT" breakpoint) || true
+    out=$(timeout 90 "${PYTHON:-python3}" "$DRIVER" "$PROTOST" "$SCRIPT" breakpoint) || true
     case "$out" in
         *"RESULT: stopped=1 evaluated=5 terminated=1 errors=0 exit=0"*) ;;
         *) echo "FAIL: breakpoint session $i/$RUNS: $out"; exit 1 ;;

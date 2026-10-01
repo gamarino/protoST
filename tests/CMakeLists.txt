@@ -179,6 +179,10 @@ if(Python3_Interpreter_FOUND)
                     ${CMAKE_CURRENT_SOURCE_DIR}/docs/run_doc_snippets.py
                     --root ${CMAKE_SOURCE_DIR} --lib ${CMAKE_SOURCE_DIR}/lib
                     $<TARGET_FILE:protost> ${CMAKE_SOURCE_DIR}/${doc_rel})
+        if(WIN32)
+            set_tests_properties("docs/${doc_rel}" PROPERTIES
+                ENVIRONMENT_MODIFICATION "PATH=path_list_append:${PROTOST_POSIX_TOOLS}")
+        endif()
     endforeach()
     add_test(NAME docs/selftest
         COMMAND ${Python3_EXECUTABLE}

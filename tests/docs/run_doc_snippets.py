@@ -406,8 +406,12 @@ class Runner:
         self.timeout = timeout
         self.work = work
         self.counter = 0
-        self.stdbuf = shutil.which("stdbuf")
-        self.timeout_cmd = shutil.which("timeout")
+        # POSIX tools. On Windows the ones found are Git's MSYS builds, which
+        # cannot line-buffer a native program and get in the way of the
+        # programs it starts; subprocess.run's own timeout still applies.
+        native_windows = os.name == "nt"
+        self.stdbuf = None if native_windows else shutil.which("stdbuf")
+        self.timeout_cmd = None if native_windows else shutil.which("timeout")
 
     def scratch_dir(self) -> Path:
         self.counter += 1
@@ -429,7 +433,7 @@ class Runner:
             p = subprocess.run(cmd, cwd=cwd, env=env, input=stdin if stdin is not None else "",
                                stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
-                               text=True, errors="replace", timeout=self.timeout + 10)
+                               encoding="utf-8", errors="replace", timeout=self.timeout + 10)
         except subprocess.TimeoutExpired as e:
             out = e.stdout.decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
             return RunResult(out, 124, True)

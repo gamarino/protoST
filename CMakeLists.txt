@@ -273,8 +273,8 @@ enable_testing()
 
 # The script tests are bash scripts. Windows cannot run a script directly, so
 # there they run through the bash of Git for Windows (never System32\bash.exe,
-# which is WSL), and the Python ones through the Python found by CMake;
-# elsewhere the prefix is empty and the script is the command, as before.
+# which is WSL); elsewhere the prefix is empty and the script is the command,
+# as before.
 if(WIN32)
     find_program(PROTOST_BASH bash HINTS "C:/Program Files/Git/bin" NO_DEFAULT_PATH)
     if(NOT PROTOST_BASH)
@@ -282,11 +282,12 @@ if(WIN32)
         set(PROTOST_BASH bash)
     endif()
     set(PROTOST_SH "${PROTOST_BASH}")
+    # Git's POSIX tools (tr, wc, printf, ...), which the documentation's
+    # OSProcess examples run; the bash scripts have them on PATH already.
+    get_filename_component(PROTOST_POSIX_TOOLS "${PROTOST_BASH}/../../usr/bin" ABSOLUTE)
     find_package(Python3 COMPONENTS Interpreter)
-    set(PROTOST_PYTHON3 "${Python3_EXECUTABLE}")
 else()
     set(PROTOST_SH "")
-    set(PROTOST_PYTHON3 python3)
 endif()
 
 include(FindOrFetchCatch2)
@@ -336,9 +337,13 @@ add_test(NAME cli_transcript
 add_test(NAME cli_error_location
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_error_location.sh $<TARGET_FILE:protost>)
 
-# The benchmark harness fails on a missing or wrong VERIFIED result.
+# The benchmark harness fails on a missing or wrong VERIFIED result. The
+# harness and its self-test (fake protost binaries are /bin/sh scripts) are
+# POSIX tooling, so the self-test is not registered on Windows.
+if(NOT WIN32)
 add_test(NAME bench_harness_selftest
-    COMMAND ${PROTOST_PYTHON3} ${CMAKE_SOURCE_DIR}/benchmarks/tests/test_harness.py)
+    COMMAND python3 ${CMAKE_SOURCE_DIR}/benchmarks/tests/test_harness.py)
+endif()
 
 add_test(NAME cli_unhandled_exception_label
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_unhandled_exception_label.sh $<TARGET_FILE:protost>)
@@ -400,6 +405,13 @@ add_test(NAME cli_actor_payload_gc
 # evaluations) while the debuggee's actors allocate.
 add_test(NAME cli_dap_gc
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_dap_gc.sh $<TARGET_FILE:protost>)
+
+if(WIN32)
+    # The DAP tests drive protost from a Python client; on Windows `python3`
+    # is usually the Microsoft Store stub, so they get the Python CMake found.
+    set_tests_properties(cli_dap_session cli_dap_gc PROPERTIES
+        ENVIRONMENT "PYTHON=${Python3_EXECUTABLE}")
+endif()
 
 # --- Track 10: Installation packaging ---------------------------------------
 # Install RPATH so an installed `bin/protost` finds libprotoCore.so under
