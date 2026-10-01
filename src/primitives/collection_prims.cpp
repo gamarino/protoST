@@ -225,11 +225,11 @@ bool stKeyEquals(proto::ProtoContext* ctx, const proto::ProtoObject* a,
 // infinity. A NaN hashes by its own bit pattern, which is all that is needed,
 // since a NaN is only ever found by identity and one object always has the
 // same bits.
-unsigned long numberKeyHash(double d) {
+proto::proto_ulong numberKeyHash(double d) {
     if (d == 0.0) d = 0.0;
-    static_assert(sizeof(unsigned long) >= sizeof(double),
+    static_assert(sizeof(proto::proto_ulong) >= sizeof(double),
                   "the numeric key hash needs a word at least as wide as a double");
-    unsigned long bits = 0;
+    proto::proto_ulong bits = 0;
     std::memcpy(&bits, &d, sizeof(d));
     // ProtoMap orders its slots by the hash and the helper masks it to 54
     // bits; the bit patterns of small integral doubles differ only near the
@@ -245,7 +245,7 @@ unsigned long numberKeyHash(double d) {
 // content to one canonical symbol whose pointer is the hash. Numbers take the
 // numeric path above. Everything else keeps its own hash protocol, which for a
 // plain object is identity -- and identity is what `=` means for it.
-unsigned long stKeyHash(proto::ProtoContext* ctx, const proto::ProtoObject* key) {
+proto::proto_ulong stKeyHash(proto::ProtoContext* ctx, const proto::ProtoObject* key) {
     if (!key || key == PROTO_NONE) return 0;
     if (key->isString(ctx)) {
         const proto::ProtoString* s = key->asString(ctx);
@@ -256,21 +256,21 @@ unsigned long stKeyHash(proto::ProtoContext* ctx, const proto::ProtoObject* key)
             std::string utf8 = s->toStdString(ctx);
             const proto::ProtoString* sym =
                 proto::ProtoString::createSymbol(ctx, utf8);
-            return reinterpret_cast<unsigned long>(sym);
+            return reinterpret_cast<proto::proto_ulong>(sym);
         }
         if (s && s->isSymbol()) {
-            return reinterpret_cast<unsigned long>(s);
+            return reinterpret_cast<proto::proto_ulong>(s);
         }
     }
     if (key->isInteger(ctx) || key->isDouble(ctx))
-        return static_cast<unsigned long>(numericHash(ctx, key));
+        return static_cast<proto::proto_ulong>(numericHash(ctx, key));
     if (STRuntime* rt = runtimeForUserEquality(ctx, key)) {
         bool understood = false;
         const proto::ProtoObject* h = sendDynamic(
             *rt, ctx, key, proto::ProtoString::createSymbol(ctx, "hash"), nullptr, 0, &understood);
         if (understood && h && h->isInteger(ctx))
             return h->compare(ctx, ctx->fromLong(0)) >= 0 && h->compare(ctx, ctx->fromLong(1LL << 53)) < 0
-                ? static_cast<unsigned long>(h->asLong(ctx))
+                ? static_cast<proto::proto_ulong>(h->asLong(ctx))
                 : numberKeyHash(0.5);   // an out-of-range hash still has to be consistent
     }
     return key->getHash(ctx);
@@ -556,12 +556,12 @@ const proto::ProtoObject* makeInstanceOfSpecies(STRuntime& rt,
             const_cast<proto::ProtoObject*>(classProto)
                 ->newChild(ctx, /*isMutable=*/true);
         TransientPin pinInst(ctx, inst);
-        unsigned long n = data->getSize(ctx);
+        proto::proto_ulong n = data->getSize(ctx);
         const proto::ProtoMap* set = ctx->newMap();
         TransientPin pinSet(
             ctx, reinterpret_cast<const proto::ProtoObject*>(set));
         long long size = 0;
-        for (unsigned long i = 0; i < n; ++i) {
+        for (proto::proto_ulong i = 0; i < n; ++i) {
             const proto::ProtoObject* e =
                 data->getAt(ctx, static_cast<int>(i));
             if (!e) e = PROTO_NONE;
@@ -668,8 +668,8 @@ bool forEachElement(STRuntime& rt, proto::ProtoContext* ctx,
     }
     if (isListBacked(ctx, collection)) {
         const proto::ProtoList* data = arrayData(ctx, collection);
-        unsigned long n = data->getSize(ctx);
-        for (unsigned long i = 0; i < n; ++i) {
+        proto::proto_ulong n = data->getSize(ctx);
+        for (proto::proto_ulong i = 0; i < n; ++i) {
             const proto::ProtoObject* e = data->getAt(ctx, static_cast<int>(i));
             if (!fn(e ? e : PROTO_NONE)) return false;
         }
@@ -713,8 +713,8 @@ bool forEachElement(STRuntime& rt, proto::ProtoContext* ctx,
     if (understood && elements && isListBacked(ctx, elements)) {
         TransientPin pinElements(ctx, elements);
         const proto::ProtoList* data = arrayData(ctx, elements);
-        unsigned long n = data->getSize(ctx);
-        for (unsigned long i = 0; i < n; ++i) {
+        proto::proto_ulong n = data->getSize(ctx);
+        for (proto::proto_ulong i = 0; i < n; ++i) {
             const proto::ProtoObject* e = data->getAt(ctx, static_cast<int>(i));
             if (!fn(e ? e : PROTO_NONE)) return false;
         }
@@ -1013,8 +1013,8 @@ const proto::ProtoObject* prim_OC_removeLast(STRuntime&, proto::ProtoContext* ct
 int indexOfEqual(proto::ProtoContext* ctx, const proto::ProtoList* data,
                  const proto::ProtoObject* value) {
     if (!value) value = PROTO_NONE;
-    unsigned long n = data->getSize(ctx);
-    for (unsigned long i = 0; i < n; ++i) {
+    proto::proto_ulong n = data->getSize(ctx);
+    for (proto::proto_ulong i = 0; i < n; ++i) {
         const proto::ProtoObject* e = data->getAt(ctx, static_cast<int>(i));
         if (!e) e = PROTO_NONE;
         if (e == value) return static_cast<int>(i);
@@ -1371,8 +1371,8 @@ long long countEqual(proto::ProtoContext* ctx, const proto::ProtoList* data,
                      const proto::ProtoObject* value) {
     if (!value) value = PROTO_NONE;
     long long n = 0;
-    unsigned long sz = data->getSize(ctx);
-    for (unsigned long i = 0; i < sz; ++i) {
+    proto::proto_ulong sz = data->getSize(ctx);
+    for (proto::proto_ulong i = 0; i < sz; ++i) {
         const proto::ProtoObject* e = data->getAt(ctx, static_cast<int>(i));
         if (!e) e = PROTO_NONE;
         if (e == value || e->partialCompare(ctx, value) == 0) ++n;
@@ -2090,7 +2090,7 @@ const proto::ProtoObject* prim_Seq_sort(STRuntime& rt, proto::ProtoContext* ctx,
     const proto::ProtoList* data = arrayData(ctx, r);
     std::vector<const proto::ProtoObject*> elems;
     elems.reserve(data->getSize(ctx));
-    for (unsigned long i = 0; i < data->getSize(ctx); ++i)
+    for (proto::proto_ulong i = 0; i < data->getSize(ctx); ++i)
         elems.push_back(data->getAt(ctx, static_cast<int>(i)));
     auto mayPrecede = [&](const proto::ProtoObject* x, const proto::ProtoObject* y) {
         if (block) {

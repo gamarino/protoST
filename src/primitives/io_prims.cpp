@@ -95,9 +95,9 @@ std::vector<const PO*> elements(proto::ProtoContext* ctx, const PO* arr, const c
     if (d && d != PROTO_NONE) l = d->asList(ctx);
     if (!l && !arr->asString(ctx)) l = arr->asList(ctx);
     if (!l) throw std::runtime_error(std::string(who) + ": an Array was expected");
-    const unsigned long n = l->getSize(ctx);
+    const proto::proto_ulong n = l->getSize(ctx);
     out.reserve(n);
-    for (unsigned long i = 0; i < n; ++i) out.push_back(l->getAt(ctx, static_cast<int>(i)));
+    for (proto::proto_ulong i = 0; i < n; ++i) out.push_back(l->getAt(ctx, static_cast<int>(i)));
     return out;
 }
 

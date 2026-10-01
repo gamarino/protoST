@@ -437,7 +437,7 @@ const proto::ProtoObject* makeSubclassWithMixins(
         rt.bootstrap().objectProto->newChild(ctx, /*isMutable=*/false);
     TransientPin pinShape(ctx, shape);
     if (mixins) {
-        for (long i = static_cast<long>(mixins->getSize(ctx)) - 1; i >= 0;
+        for (proto::proto_long i = static_cast<proto::proto_long>(mixins->getSize(ctx)) - 1; i >= 0;
              --i) {
             const proto::ProtoObject* mixin =
                 mixins->getAt(ctx, static_cast<int>(i));
@@ -557,7 +557,7 @@ const proto::ProtoObject* addBehaviorToClass(STRuntime& rt,
     pinShape.reset(shape);
     const proto::ProtoList* oldParents = oldCls->getParents(ctx);
     if (oldParents) {
-        for (long i = static_cast<long>(oldParents->getSize(ctx)) - 1; i >= 0;
+        for (proto::proto_long i = static_cast<proto::proto_long>(oldParents->getSize(ctx)) - 1; i >= 0;
              --i) {
             const proto::ProtoObject* p =
                 oldParents->getAt(ctx, static_cast<int>(i));
@@ -581,7 +581,7 @@ const proto::ProtoObject* addBehaviorToClass(STRuntime& rt,
         auto* it = const_cast<proto::ProtoSparseListIterator*>(
             own->getIterator(ctx));
         while (it && it->hasNext(ctx)) {
-            unsigned long key = it->nextKey(ctx);
+            proto::proto_ulong key = it->nextKey(ctx);
             const proto::ProtoObject* val = it->nextValue(ctx);
             // The own-attribute key is an interned-symbol ProtoString whose
             // pointer is stored as the sparse-list index.
@@ -753,7 +753,7 @@ const proto::ProtoObject* prim_Object_performWithArguments(STRuntime& rt, proto:
         const proto::ProtoObject* elems = a[1]->getAttribute(ctx, dataKey);
         const proto::ProtoList* list = elems && elems != PROTO_NONE ? elems->asList(ctx) : nullptr;
         if (!list) throw std::runtime_error("perform:withArguments: expects an Array of arguments");
-        for (unsigned long i = 0; i < list->getSize(ctx); ++i)
+        for (proto::proto_ulong i = 0; i < list->getSize(ctx); ++i)
             args.push_back(list->getAt(ctx, static_cast<int>(i)));
     }
     bool understood = false;
@@ -1257,7 +1257,11 @@ const proto::ProtoObject* prim_Object_localTimeFields(STRuntime& rt, proto::Prot
                                                       const proto::ProtoObject* const*, int) {
     const std::time_t now = std::time(nullptr);
     std::tm tmv{};
+#if defined(_WIN32)
+    localtime_s(&tmv, &now);
+#else
     localtime_r(&now, &tmv);
+#endif
     const long long fields[7] = { tmv.tm_year + 1900LL, tmv.tm_mon + 1LL, tmv.tm_mday,
                                   tmv.tm_hour, tmv.tm_min, tmv.tm_sec, tmv.tm_wday + 1LL };
     const proto::ProtoList* data = ctx->newList();

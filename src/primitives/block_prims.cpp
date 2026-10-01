@@ -81,10 +81,10 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
     // engine's frames_), so its RETURN handler throws a NonLocalReturn which
     // bubbles past invokeBlock to the parent engine's runLoop.
     const proto::ProtoString* homeKey = rt.bootstrap().sym.homeFrame;
-    unsigned long homeFrameId = 0;
+    proto::proto_ulong homeFrameId = 0;
     const proto::ProtoObject* homeObj = block->getAttribute(ctx, homeKey);
     if (homeObj && homeObj != PROTO_NONE)
-        homeFrameId = static_cast<unsigned long>(homeObj->asLong(ctx));
+        homeFrameId = static_cast<proto::proto_ulong>(homeObj->asLong(ctx));
 
     // CLO Part 1: a block created inside a method inherits that method's
     // receiver as its `self`. PUSH_BLOCK stamps it onto the closure as
@@ -139,7 +139,7 @@ const proto::ProtoObject* prim_Block_valueWithArguments(STRuntime& rt, proto::Pr
     const proto::ProtoList* list = data && data != PROTO_NONE ? data->asList(ctx) : nullptr;
     if (!list) throw std::runtime_error("valueWithArguments: expects an Array");
     std::vector<const proto::ProtoObject*> args;
-    for (unsigned long i = 0; i < list->getSize(ctx); ++i)
+    for (proto::proto_ulong i = 0; i < list->getSize(ctx); ++i)
         args.push_back(list->getAt(ctx, static_cast<int>(i)));
     return invokeBlock(rt, ctx, r, args.data(), static_cast<int>(args.size()));
 }

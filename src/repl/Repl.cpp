@@ -10,8 +10,10 @@
 
 #include "runtime/Interrupt.h"
 #include "runtime/UnhandledSTException.h"
+#if !defined(PROTOST_NO_READLINE)
 #include <readline/readline.h>
 #include <readline/history.h>
+#endif
 
 #include <algorithm>
 #include <cctype>
@@ -24,7 +26,50 @@
 #include <set>
 #include <string>
 #include <vector>
+
+#if defined(PROTOST_NO_READLINE)
+// No libreadline (Windows). The console edits the line and keeps a history of
+// its own, so these stand-ins read a plain line, keep the session's lines for
+// :history and write no history file.
+#include <io.h>
+#define isatty _isatty
+#define STDIN_FILENO 0
+namespace {
+struct HIST_ENTRY { const char* line; };
+std::vector<std::string>& standInHistory() {
+    static std::vector<std::string> lines;
+    return lines;
+}
+} // namespace
+static char* readline(const char* prompt) {
+    std::fputs(prompt, stdout);
+    std::fflush(stdout);
+    std::string line;
+    int ch;
+    bool any = false;
+    while ((ch = std::getc(stdin)) != EOF && ch != '\n') { any = true; line.push_back(static_cast<char>(ch)); }
+    if (ch == EOF && !any) return nullptr;
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    char* out = static_cast<char*>(std::malloc(line.size() + 1));
+    std::memcpy(out, line.c_str(), line.size() + 1);
+    return out;
+}
+static void add_history(const char* line) { standInHistory().emplace_back(line); }
+static int read_history(const char*) { return 0; }
+static int write_history(const char*) { return 0; }
+static HIST_ENTRY** history_list() {
+    static std::vector<HIST_ENTRY> entries;
+    static std::vector<HIST_ENTRY*> list;
+    entries.clear();
+    for (const std::string& l : standInHistory()) entries.push_back(HIST_ENTRY{l.c_str()});
+    list.clear();
+    for (HIST_ENTRY& e : entries) list.push_back(&e);
+    list.push_back(nullptr);
+    return list.data();
+}
+#else
 #include <unistd.h>
+#endif
 
 namespace protoST {
 
@@ -211,7 +256,7 @@ struct Session {
         auto* it = const_cast<proto::ProtoSparseListIterator*>(
             own->getIterator(ctx));
         while (it && it->hasNext(ctx)) {
-            unsigned long key = it->nextKey(ctx);
+            proto::proto_ulong key = it->nextKey(ctx);
             auto* sym = reinterpret_cast<const proto::ProtoObject*>(key)
                             ->asString(ctx);
             if (sym) names.insert(sym->toStdString(ctx));

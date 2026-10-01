@@ -47,7 +47,11 @@
 // same thing in src/runtime/main.cpp; protoST needs it so an installed binary
 // can find share/protoST/lib on macOS and Windows, not only on Linux.
 #if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
+#include <intrin.h>
 #elif defined(__APPLE__)
 #include <climits>
 #include <mach-o/dyld.h>
@@ -967,6 +971,8 @@ void STRuntime::workerLoop(proto::ProtoContext* ctx) {
             for (int inner = 0; inner < 256; ++inner) {
 #if defined(__x86_64__) || defined(__i386__)
                 __builtin_ia32_pause();
+#elif defined(_M_X64) || defined(_M_IX86)
+                _mm_pause();
 #endif
             }
             if (drainOne(ctx)) {
@@ -2284,10 +2290,17 @@ static std::string executablePath() {
     if (count > 0 && count < static_cast<ssize_t>(sizeof(buffer)))
         return std::string(buffer, static_cast<std::size_t>(count));
 #elif defined(_WIN32)
-    char buffer[MAX_PATH];
-    const DWORD count = ::GetModuleFileNameA(nullptr, buffer, MAX_PATH);
-    if (count > 0 && count < MAX_PATH)
-        return std::string(buffer, static_cast<std::size_t>(count));
+    // The UTF-16 name, returned as UTF-8 like every other path in protoST.
+    wchar_t buffer[32768];
+    const DWORD count = ::GetModuleFileNameW(nullptr, buffer, 32768);
+    if (count > 0 && count < 32768) {
+        const int n = ::WideCharToMultiByte(CP_UTF8, 0, buffer, static_cast<int>(count),
+                                            nullptr, 0, nullptr, nullptr);
+        std::string out(static_cast<std::size_t>(n), '\0');
+        ::WideCharToMultiByte(CP_UTF8, 0, buffer, static_cast<int>(count),
+                              out.data(), n, nullptr, nullptr);
+        return out;
+    }
 #elif defined(__APPLE__)
     char buffer[PATH_MAX];
     uint32_t size = sizeof(buffer);
@@ -2468,6 +2481,11 @@ int defaultHardCells() {
     const long pageSize = ::sysconf(_SC_PAGESIZE);
     if (pages > 0 && pageSize > 0)
         cells = std::min(cells, static_cast<long long>(pages) * pageSize / 4 / kCellBytes);
+#elif defined(_WIN32)
+    MEMORYSTATUSEX status;
+    status.dwLength = sizeof(status);
+    if (::GlobalMemoryStatusEx(&status) && status.ullTotalPhys > 0)
+        cells = std::min(cells, static_cast<long long>(status.ullTotalPhys / 4 / kCellBytes));
 #endif
     return static_cast<int>(std::min<long long>(cells, INT_MAX));
 }
@@ -2765,8 +2783,8 @@ void STRuntime::addModuleProviderToChain(const std::string& providerSpec) {
         (chainObj && chainObj != PROTO_NONE) ? chainObj->asList(ctx) : nullptr;
     if (!chain) chain = ctx->newList();
 
-    unsigned long n = chain->getSize(ctx);
-    for (unsigned long i = 0; i < n; ++i) {
+    proto::proto_ulong n = chain->getSize(ctx);
+    for (proto::proto_ulong i = 0; i < n; ++i) {
         const proto::ProtoObject* e = chain->getAt(ctx, static_cast<int>(i));
         const proto::ProtoString* es = e ? e->asString(ctx) : nullptr;
         if (es && es->toStdString(ctx) == providerSpec) {

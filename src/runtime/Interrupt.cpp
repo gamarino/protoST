@@ -15,7 +15,13 @@ extern "C" void onSigint(int) {
         // The first Ctrl-C was never taken: stop the process.
         std::signal(SIGINT, SIG_DFL);
         std::raise(SIGINT);
+        return;
     }
+#if defined(_WIN32)
+    // The Windows CRT resets SIGINT to SIG_DFL before calling a handler; put
+    // this one back so the next Ctrl-C is seen as it is elsewhere.
+    std::signal(SIGINT, onSigint);
+#endif
 }
 } // namespace
 

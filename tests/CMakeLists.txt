@@ -123,7 +123,7 @@ foreach(conf_file ${PROTOST_CONFORMANCE_FILES})
     file(RELATIVE_PATH conf_rel
         "${CMAKE_CURRENT_SOURCE_DIR}/conformance" "${conf_file}")
     add_test(NAME "conformance/${conf_rel}"
-        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/conformance/run_conformance.sh
+        COMMAND ${PROTOST_SH} ${CMAKE_CURRENT_SOURCE_DIR}/conformance/run_conformance.sh
                 $<TARGET_FILE:protost>
                 "${conf_file}")
 endforeach()
@@ -145,7 +145,7 @@ foreach(ex_file ${PROTOST_EXAMPLE_FILES})
     endif()
     file(RELATIVE_PATH ex_rel "${CMAKE_SOURCE_DIR}/examples" "${ex_file}")
     add_test(NAME "examples/${ex_rel}"
-        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/conformance/run_conformance.sh
+        COMMAND ${PROTOST_SH} ${CMAKE_CURRENT_SOURCE_DIR}/conformance/run_conformance.sh
                 $<TARGET_FILE:protost>
                 "${ex_file}")
 endforeach()

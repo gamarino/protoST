@@ -1,4 +1,5 @@
 #include <catch2/catch_all.hpp>
+#include "PosixEnv.h"
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>

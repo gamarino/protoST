@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <string>
 #include <vector>
+#include "protoCore.h"  // proto::proto_ulong
 
 namespace proto {
     class ProtoContext;
@@ -48,7 +49,7 @@ public:
     // that finds no match means the home method has genuinely already returned
     // (a "dead home"). The block-frame `Op::RETURN` path uses this to decide
     // between a legitimate non-local return and a catchable `BlockCannotReturn`.
-    static bool homeFrameAlive(unsigned long frameId);
+    static bool homeFrameAlive(proto::proto_ulong frameId);
 
     // Number of engines currently live on the calling thread. 1 means the
     // caller runs directly under a top-level engine with no primitive-created
@@ -82,7 +83,7 @@ public:
                                           const proto::ProtoObject* const* args,
                                           int argc,
                                           const proto::ProtoObject* capturedDict = nullptr,
-                                          unsigned long homeFrameId = 0);
+                                          proto::proto_ulong homeFrameId = 0);
 
     // F6 v3 B: snapshot/restore round-trip for the engine's frame stack.
     //
@@ -175,8 +176,8 @@ private:
         //                  the method in which the block was textually
         //                  created. `Op::RETURN` in a block frame returns
         //                  from the frame whose frameId == homeFrameId.
-        unsigned long         frameId      = 0;
-        unsigned long         homeFrameId  = 0;
+        proto::proto_ulong         frameId      = 0;
+        proto::proto_ulong         homeFrameId  = 0;
     };
 
     // Header slots reserved at the start of every frame region.
@@ -262,7 +263,7 @@ private:
                    const proto::ProtoObject* captured,
                    const proto::ProtoObject* const* args,
                    unsigned int argc,
-                   unsigned long homeFrameId = 0);
+                   proto::proto_ulong homeFrameId = 0);
 
     // Pop the top frame, rewinding the shared thread-local slot cursor.
     void popFrame();

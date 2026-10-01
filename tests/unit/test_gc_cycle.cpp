@@ -79,7 +79,7 @@ struct GcHost {
 // Returns the largest per-cycle reclaim seen, and how many cycles ran.
 struct CycleResult {
     uint64_t      cycles    = 0;
-    unsigned long maxReclaimed = 0;
+    proto::proto_ulong maxReclaimed = 0;
 };
 
 CycleResult forceCycles(protoST::STRuntime& rt, uint64_t wanted,
@@ -99,7 +99,7 @@ CycleResult forceCycles(protoST::STRuntime& rt, uint64_t wanted,
         if (now > seen) {
             seen = now;
             out.cycles = now - start;
-            const unsigned long r =
+            const proto::proto_ulong r =
                 sp->reclaimedLastCycle.load(std::memory_order_relaxed);
             if (r > out.maxReclaimed) out.maxReclaimed = r;
         }
@@ -115,7 +115,7 @@ TEST_CASE("S15: a forced collection completes and reclaims the interpreter's gar
     proto::ProtoSpace* sp = h.rt.space();
 
     const uint64_t cyclesBefore = sp->getGCCycleCount();
-    const long     heapAfterFirstRound = [&] {
+    const proto::proto_long     heapAfterFirstRound = [&] {
         // 20,000 eight-element arrays, none of them kept. Nothing this program
         // allocates is reachable when it returns, so a cycle that reclaims
         // nothing is a cycle that is treating the interpreter's young
@@ -127,7 +127,7 @@ TEST_CASE("S15: a forced collection completes and reclaims the interpreter's gar
             "n.");
         REQUIRE(r != nullptr);
         REQUIRE(r->asLong(h.rt.rootCtx()) == 20000);
-        return static_cast<long>(sp->heapSize);
+        return static_cast<proto::proto_long>(sp->heapSize);
     }();
 
     // Four rounds of "allocate a heap's worth, then collect it". A cycle only
@@ -157,5 +157,5 @@ TEST_CASE("S15: a forced collection completes and reclaims the interpreter's gar
     // 3. And reclaiming keeps the heap bounded: four more rounds of the same
     //    garbage must not need a bigger heap than the first round did. Before
     //    the fix the heap grew by roughly the round's allocation every time.
-    REQUIRE(static_cast<long>(sp->heapSize) <= heapAfterFirstRound * 2);
+    REQUIRE(static_cast<proto::proto_long>(sp->heapSize) <= heapAfterFirstRound * 2);
 }

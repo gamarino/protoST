@@ -22,6 +22,29 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(GNUInstallDirs)
 
+# Windows (MSVC) differences, gathered here so the targets below read the same
+# on every platform. Outside Windows nothing in this block applies: the build
+# keeps the compiler defaults, flags and libraries it always used.
+if(MSVC)
+    # Sources are UTF-8; the interpreter's big translation units need /bigobj.
+    add_compile_options(/utf-8 /bigobj /W3)
+    # M_PI and M_E from <cmath>; no min/max macros from <windows.h>.
+    # getenv, fopen & co. are standard C here: no "unsafe" deprecation notes.
+    add_compile_definitions(_USE_MATH_DEFINES NOMINMAX _CRT_SECURE_NO_WARNINGS)
+    # 8 MiB stacks, the Linux default the engine's nesting limit is sized for
+    # (kMaxNestedEngines, ExecutionEngine.cpp). The executable's reserve is
+    # also what Windows gives every thread created without a size, including
+    # protoCore's worker threads; the default would be 1 MiB.
+    add_link_options(/STACK:8388608)
+endif()
+if(WIN32)
+    # Windows has no rpath: a program finds its DLLs next to itself, so every
+    # executable and DLL of the build goes to one directory.
+    if(NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+        set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    endif()
+endif()
+
 # --- protoCore -----------------------------------------------------------------
 # Resolution order (Phase I, decision D-I1):
 #   1. An installed protoCore CMake package: find_package(protoCore 2.0 CONFIG).
@@ -194,129 +217,189 @@ target_compile_definitions(protost_runtime PRIVATE
     PROTOST_TEMPLATE_DIR="${CMAKE_SOURCE_DIR}/src/venv_template")
 
 # --- libreadline: line editing + history for the interactive REPL (F7) ---
-find_library(READLINE_LIBRARY NAMES readline REQUIRED)
-find_path(READLINE_INCLUDE_DIR NAMES readline/readline.h)
+if(WIN32)
+    # Optional on Windows only: the console edits the line and keeps a history
+    # itself, so without readline the REPL reads plain lines there
+    # (src/repl/Repl.cpp, PROTOST_NO_READLINE).
+    find_library(READLINE_LIBRARY NAMES readline)
+    find_path(READLINE_INCLUDE_DIR NAMES readline/readline.h)
+    if(NOT READLINE_LIBRARY OR NOT READLINE_INCLUDE_DIR)
+        message(STATUS "protoST: no readline; the REPL uses the console's own line editing")
+        set(READLINE_LIBRARY "")
+        set(READLINE_INCLUDE_DIR "")
+        target_compile_definitions(protost_runtime PRIVATE PROTOST_NO_READLINE)
+    endif()
+else()
+    find_library(READLINE_LIBRARY NAMES readline REQUIRED)
+    find_path(READLINE_INCLUDE_DIR NAMES readline/readline.h)
+endif()
 if(READLINE_INCLUDE_DIR)
     target_include_directories(protost_runtime PRIVATE ${READLINE_INCLUDE_DIR})
 endif()
 target_link_libraries(protost_runtime PUBLIC ${READLINE_LIBRARY})
 
+# Windows finds a DLL next to the program that loads it. Copy the DLLs protoST
+# needs -- protoCore, and OpenSSL through protoIO -- into the build's bin/, so
+# protost and the tests run in place. A target the runtime library depends on,
+# not a post-build step of protost: the unit tests are run to list their cases
+# as soon as they are linked.
+if(WIN32)
+    set(PROTOST_RUNTIME_DLLS "")
+    if(TARGET ${PROTOCORE_LIBRARY})
+        list(APPEND PROTOST_RUNTIME_DLLS "$<TARGET_FILE:${PROTOCORE_LIBRARY}>")
+    endif()
+    if(OPENSSL_INCLUDE_DIR)
+        get_filename_component(PROTOST_OPENSSL_BIN "${OPENSSL_INCLUDE_DIR}/../bin" ABSOLUTE)
+        file(GLOB PROTOST_OPENSSL_DLLS
+            "${PROTOST_OPENSSL_BIN}/libcrypto*.dll" "${PROTOST_OPENSSL_BIN}/libssl*.dll")
+        list(APPEND PROTOST_RUNTIME_DLLS ${PROTOST_OPENSSL_DLLS})
+    endif()
+    add_custom_target(protost_runtime_dlls
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${PROTOST_RUNTIME_DLLS}
+                "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+        VERBATIM)
+    add_dependencies(protost_runtime protost_runtime_dlls)
+endif()
+
 add_executable(protost src/main.cpp)
+if(WIN32)
+    # UTF-8 process code page: argv, getenv and paths are UTF-8 as elsewhere.
+    target_sources(protost PRIVATE src/windows/utf8.manifest)
+endif()
 target_link_libraries(protost PRIVATE protost_frontend protost_runtime ${PROTOCORE_LIBRARY} ${READLINE_LIBRARY})
 
 enable_testing()
+
+# The script tests are bash scripts. Windows cannot run a script directly, so
+# there they run through the bash of Git for Windows (never System32\bash.exe,
+# which is WSL), and the Python ones through the Python found by CMake;
+# elsewhere the prefix is empty and the script is the command, as before.
+if(WIN32)
+    find_program(PROTOST_BASH bash HINTS "C:/Program Files/Git/bin" NO_DEFAULT_PATH)
+    if(NOT PROTOST_BASH)
+        message(WARNING "protoST: Git for Windows' bash not found; the script tests cannot run")
+        set(PROTOST_BASH bash)
+    endif()
+    set(PROTOST_SH "${PROTOST_BASH}")
+    find_package(Python3 COMPONENTS Interpreter)
+    set(PROTOST_PYTHON3 "${Python3_EXECUTABLE}")
+else()
+    set(PROTOST_SH "")
+    set(PROTOST_PYTHON3 python3)
+endif()
 
 include(FindOrFetchCatch2)
 add_subdirectory(tests)
 
 add_test(NAME cli_help
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_help.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_help.sh $<TARGET_FILE:protost>)
 
 add_test(NAME cli_dump_ast
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_dump_ast.sh
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_dump_ast.sh
             $<TARGET_FILE:protost>
             ${CMAKE_SOURCE_DIR}/tests/fixtures)
 
 add_test(NAME cli_venv
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_venv.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_venv.sh $<TARGET_FILE:protost>)
 
 add_test(NAME cli_eval
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_eval.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_eval.sh $<TARGET_FILE:protost>)
 
 add_test(NAME cli_io
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_io.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_io.sh $<TARGET_FILE:protost>)
 
 add_test(NAME cli_script_output
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_script_output.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_script_output.sh $<TARGET_FILE:protost>)
 
 add_test(NAME cli_memory_bounded
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_memory_bounded.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_memory_bounded.sh $<TARGET_FILE:protost>)
 
 add_test(NAME cli_oom_clean
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_oom_clean.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_oom_clean.sh $<TARGET_FILE:protost>)
 
 add_test(NAME cli_sigint
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_sigint.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_sigint.sh $<TARGET_FILE:protost>)
 
 add_test(NAME cli_inputs
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_inputs.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_inputs.sh $<TARGET_FILE:protost>)
 
 add_test(NAME cli_actor_unobserved_error
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_actor_unobserved_error.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_actor_unobserved_error.sh $<TARGET_FILE:protost>)
 
 add_test(NAME cli_print_nl
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_print_nl.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_print_nl.sh $<TARGET_FILE:protost>)
 
 add_test(NAME cli_transcript
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_transcript.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_transcript.sh $<TARGET_FILE:protost>)
 
 add_test(NAME cli_error_location
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_error_location.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_error_location.sh $<TARGET_FILE:protost>)
 
 # The benchmark harness fails on a missing or wrong VERIFIED result.
 add_test(NAME bench_harness_selftest
-    COMMAND python3 ${CMAKE_SOURCE_DIR}/benchmarks/tests/test_harness.py)
+    COMMAND ${PROTOST_PYTHON3} ${CMAKE_SOURCE_DIR}/benchmarks/tests/test_harness.py)
 
 add_test(NAME cli_unhandled_exception_label
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_unhandled_exception_label.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_unhandled_exception_label.sh $<TARGET_FILE:protost>)
 
 add_test(NAME cli_repl_class_across_inputs
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_repl_class_across_inputs.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_repl_class_across_inputs.sh $<TARGET_FILE:protost>)
 
 add_test(NAME cli_callback_error_reported
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_callback_error_reported.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_callback_error_reported.sh $<TARGET_FILE:protost>)
 
 add_test(NAME cli_buried_actor_deadlock
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_buried_actor_deadlock.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_buried_actor_deadlock.sh $<TARGET_FILE:protost>)
 
 add_test(NAME cli_kernel
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_kernel.sh $<TARGET_FILE:protost> ${CMAKE_BINARY_DIR}/cli-scratch/kernel)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_kernel.sh $<TARGET_FILE:protost> ${CMAKE_BINARY_DIR}/cli-scratch/kernel)
 
 add_test(NAME cli_debugger
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_debugger.sh $<TARGET_FILE:protost> ${CMAKE_SOURCE_DIR}/tests/fixtures)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_debugger.sh $<TARGET_FILE:protost> ${CMAKE_SOURCE_DIR}/tests/fixtures)
 
 add_test(NAME cli_repl
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_repl.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_repl.sh $<TARGET_FILE:protost>)
 
 add_test(NAME cli_dap
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_dap.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_dap.sh $<TARGET_FILE:protost>)
 
 add_test(NAME cli_dap_session
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_dap_session.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_dap_session.sh $<TARGET_FILE:protost>)
 
 # D23 regression: un-drained actor mailbox load must not deadlock the
 # scheduler. Non-deterministic when broken, so the test repeats the workload.
 add_test(NAME cli_actor_stress
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_actor_stress.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_actor_stress.sh $<TARGET_FILE:protost>)
 
 # D25 regression: several workers running a method for the first time at the
 # same moment must not corrupt the heap. Non-deterministic when broken, so the
 # test repeats the workload.
 add_test(NAME cli_concurrent_first_call
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_concurrent_first_call.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_concurrent_first_call.sh $<TARGET_FILE:protost>)
 
 # S4 regression: blocking waits and the shutdown join while actors allocate
 # must not hang or corrupt memory. Repeated.
 add_test(NAME cli_gc_shutdown_stress
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_gc_shutdown_stress.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_gc_shutdown_stress.sh $<TARGET_FILE:protost>)
 
 # S15 regression: a workload that allocates far more than the heap ceiling
 # allows must finish, which it can only do if collections reclaim. The fixture
 # also runs it with the interpreter's safepoint hook disabled and requires that
 # run to abort, so it cannot pass by accident.
 add_test(NAME cli_gc_reclaims
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_gc_reclaims.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_gc_reclaims.sh $<TARGET_FILE:protost>)
 
 # Track S: actor message payloads that only the mailbox references must survive
 # the collections that run while they are queued. Needs S15 fixed to mean
 # anything; the fixture checks that its own ceiling still forces collections.
 add_test(NAME cli_actor_payload_gc
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_actor_payload_gc.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_actor_payload_gc.sh $<TARGET_FILE:protost>)
 
 # S4 regression: a DAP session (run to completion, and a breakpoint stop with
 # evaluations) while the debuggee's actors allocate.
 add_test(NAME cli_dap_gc
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_dap_gc.sh $<TARGET_FILE:protost>)
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_dap_gc.sh $<TARGET_FILE:protost>)
 
 # --- Track 10: Installation packaging ---------------------------------------
 # Install RPATH so an installed `bin/protost` finds libprotoCore.so under

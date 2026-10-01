@@ -11,6 +11,7 @@
 //      keeps the GC safe and only one consumer ever pops a given actor.
 
 #include <catch2/catch_all.hpp>
+#include "PosixEnv.h"
 
 #include "protoST/STRuntime.h"
 #include "frontend/Parser.h"

@@ -1,4 +1,5 @@
 #pragma once
+#include "protoCore.h"  // proto::proto_ulong
 
 // Track 1, slice 2 (EXC-b): ResumeSignal — the C++ exception that carries a
 // handler's `resume:` decision back to the `signal` that invoked the handler.
@@ -31,15 +32,15 @@ namespace protoST {
 
 class ResumeSignal {
 public:
-    ResumeSignal(unsigned long handlerId,
+    ResumeSignal(proto::proto_ulong handlerId,
                  const proto::ProtoObject* value) noexcept
         : handlerId_(handlerId), value_(value) {}
 
-    unsigned long handlerId() const noexcept { return handlerId_; }
+    proto::proto_ulong handlerId() const noexcept { return handlerId_; }
     const proto::ProtoObject* value() const noexcept { return value_; }
 
 private:
-    unsigned long             handlerId_;
+    proto::proto_ulong             handlerId_;
     const proto::ProtoObject* value_;
 };
 

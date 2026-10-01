@@ -1,4 +1,5 @@
 #pragma once
+#include "protoCore.h"  // proto::proto_ulong
 
 // Track 1, slice 2 (EXC-b): PassSignal — the C++ exception that carries a
 // handler's `pass` (a.k.a. `outer`) decision back to `signal`'s loop.
@@ -29,13 +30,13 @@ namespace protoST {
 
 class PassSignal {
 public:
-    explicit PassSignal(unsigned long handlerId) noexcept
+    explicit PassSignal(proto::proto_ulong handlerId) noexcept
         : handlerId_(handlerId) {}
 
-    unsigned long handlerId() const noexcept { return handlerId_; }
+    proto::proto_ulong handlerId() const noexcept { return handlerId_; }
 
 private:
-    unsigned long handlerId_;
+    proto::proto_ulong handlerId_;
 };
 
 } // namespace protoST

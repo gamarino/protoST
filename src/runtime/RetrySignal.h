@@ -1,4 +1,5 @@
 #pragma once
+#include "protoCore.h"  // proto::proto_ulong
 
 // Track 1, slice 2 (EXC-b): RetrySignal — the C++ exception that carries a
 // handler's `retry` decision back to the owning `on:do:` activation.
@@ -22,13 +23,13 @@ namespace protoST {
 
 class RetrySignal {
 public:
-    explicit RetrySignal(unsigned long handlerId) noexcept
+    explicit RetrySignal(proto::proto_ulong handlerId) noexcept
         : handlerId_(handlerId) {}
 
-    unsigned long handlerId() const noexcept { return handlerId_; }
+    proto::proto_ulong handlerId() const noexcept { return handlerId_; }
 
 private:
-    unsigned long handlerId_;
+    proto::proto_ulong handlerId_;
 };
 
 } // namespace protoST

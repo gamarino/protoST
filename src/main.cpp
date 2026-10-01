@@ -21,8 +21,27 @@
 #if defined(__linux__)
 #include <sys/prctl.h>
 #endif
+#if defined(_WIN32)
+#include <fcntl.h>
+#include <io.h>
+#include <windows.h>
+#endif
 
 namespace {
+
+// Windows: the standard streams carry exactly the bytes the program writes, as
+// on Linux and macOS (no "\n" -> "\r\n" translation), and a console shows and
+// reads them as UTF-8. The process code page is UTF-8 through the manifest
+// (src/windows/utf8.manifest), so argv, getenv and paths are UTF-8 too.
+void prepareStandardStreams() {
+#if defined(_WIN32)
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+    _setmode(_fileno(stderr), _O_BINARY);
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+#endif
+}
 
 void printUsage(const char* prog) {
     // D13: `compile <script.st> -o <out.stbc>` was advertised here but never
@@ -65,6 +84,7 @@ void printVersion() {
 } // anon
 
 int main(int argc, char** argv) {
+    prepareStandardStreams();
 #if defined(__linux__) && defined(PR_SET_PTRACER)
     // Diagnostics: PROTOST_ALLOW_PTRACE=1 lets a debugger that is not this
     // process's ancestor attach (gdb -p) under kernel.yama.ptrace_scope=1,

@@ -355,8 +355,8 @@ TEST_CASE("T5-a: addModuleProviderToChain is idempotent",
     REQUIRE(chain != nullptr);
     // Count "provider:fake" occurrences — must be exactly one.
     int fakeCount = 0;
-    unsigned long n = chain->getSize(rt.rootCtx());
-    for (unsigned long i = 0; i < n; ++i) {
+    proto::proto_ulong n = chain->getSize(rt.rootCtx());
+    for (proto::proto_ulong i = 0; i < n; ++i) {
         auto* e = chain->getAt(rt.rootCtx(), static_cast<int>(i));
         auto* es = e ? e->asString(rt.rootCtx()) : nullptr;
         if (es && es->toStdString(rt.rootCtx()) == "provider:fake") ++fakeCount;

@@ -1,2 +1,14 @@
 docs/talks/**/recordings/*.typescript binary
 docs/talks/**/recordings/*.timing binary
+
+# protoST sources, test scripts, the documents whose examples are run as tests
+# and their expected outputs are LF on every platform: a multi-line string
+# literal keeps its line endings, so a CRLF checkout (Windows,
+# core.autocrlf=true) would change what programs, fixtures and expected outputs
+# mean.
+*.st text eol=lf
+*.sh text eol=lf
+*.md text eol=lf
+*.out text eol=lf
+lib/kernel/00-manifest.txt text eol=lf
+src/venv_template/* text eol=lf

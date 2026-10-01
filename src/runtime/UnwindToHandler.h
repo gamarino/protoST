@@ -1,4 +1,5 @@
 #pragma once
+#include "protoCore.h"  // proto::proto_ulong
 
 // Track 1, slice 2 (EXC-a): UnwindToHandler — the C++ exception that carries
 // the result of an exception handler back to its `on:do:` activation.
@@ -43,15 +44,15 @@ namespace protoST {
 
 class UnwindToHandler {
 public:
-    UnwindToHandler(unsigned long handlerId,
+    UnwindToHandler(proto::proto_ulong handlerId,
                     const proto::ProtoObject* value) noexcept
         : handlerId_(handlerId), value_(value) {}
 
-    unsigned long handlerId() const noexcept { return handlerId_; }
+    proto::proto_ulong handlerId() const noexcept { return handlerId_; }
     const proto::ProtoObject* value() const noexcept { return value_; }
 
 private:
-    unsigned long             handlerId_;
+    proto::proto_ulong             handlerId_;
     const proto::ProtoObject*  value_;
 };
 

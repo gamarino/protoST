@@ -34,6 +34,7 @@
 //     red.
 
 #include <catch2/catch_all.hpp>
+#include "PosixEnv.h"
 
 #include "protoST/STRuntime.h"
 #include "modules/STModuleProvider.h"
@@ -131,9 +132,9 @@ TEST_CASE("Track Y: the provider serves a caller in a ProtoSpace protoST does no
         std::printf("NO-COPY PROOF (protoST side)\n");
         std::printf("  protoST space      = %p\n", (const void*)rt.space());
         std::printf("  foreign space      = %p\n", (const void*)&foreign);
-        std::printf("  Counter via foreign = %p  getHash = %lu\n",
+        std::printf("  Counter via foreign = %p  getHash = %" PROTO_FMT_U "\n",
                     (const void*)viaForeign, viaForeign->getHash(&foreignCtx));
-        std::printf("  Counter via protoST = %p  getHash = %lu\n",
+        std::printf("  Counter via protoST = %p  getHash = %" PROTO_FMT_U "\n",
                     (const void*)viaST, viaST->getHash(&stCtx));
         std::fflush(stdout);
 

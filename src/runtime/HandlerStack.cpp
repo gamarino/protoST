@@ -10,7 +10,7 @@ namespace {
 // Process-global handler-id counter. Ids are never reused, so an
 // UnwindToHandler.handlerId targets exactly one `on:do:` activation for the
 // life of the process — even with multiple actor threads pushing handlers.
-std::atomic<unsigned long> g_nextHandlerId{1};
+std::atomic<proto::proto_ulong> g_nextHandlerId{1};
 
 // The per-OS-thread handler stack. Innermost (most recently pushed) handler is
 // at the back. Workers and the main thread each own an independent vector.
@@ -18,7 +18,7 @@ thread_local std::vector<HandlerEntry> g_handlerStack;
 
 } // namespace
 
-unsigned long handlerStackPush(const proto::ProtoObject* guardClass,
+proto::proto_ulong handlerStackPush(const proto::ProtoObject* guardClass,
                                const proto::ProtoObject* handlerBlock) {
     HandlerEntry e;
     e.guardClass   = guardClass;
@@ -29,7 +29,7 @@ unsigned long handlerStackPush(const proto::ProtoObject* guardClass,
     return e.handlerId;
 }
 
-void handlerStackPop(unsigned long handlerId) {
+void handlerStackPop(proto::proto_ulong handlerId) {
     // Idempotent removal. `on:do:` calls this on every exit path (normal,
     // UnwindToHandler-caught, foreign exception) so the entry may already be
     // gone. Search from the top — the entry being popped is usually the
@@ -61,7 +61,7 @@ static bool matchesGuard(proto::ProtoContext* ctx,
             ctx, proto::ProtoString::createSymbol(ctx, "__data__"));
         const proto::ProtoList* list = (data && data != PROTO_NONE) ? data->asList(ctx) : nullptr;
         if (list) {
-            for (unsigned long i = 0; i < list->getSize(ctx); ++i)
+            for (proto::proto_ulong i = 0; i < list->getSize(ctx); ++i)
                 if (matchesGuard(ctx, exceptionInstance, list->getAt(ctx, static_cast<int>(i))))
                     return true;
             return false;
@@ -75,7 +75,7 @@ static bool matchesGuard(proto::ProtoContext* ctx,
 
 const HandlerEntry* handlerStackFindMatch(proto::ProtoContext* ctx,
                                           const proto::ProtoObject* exceptionInstance,
-                                          unsigned long searchBelowId) {
+                                          proto::proto_ulong searchBelowId) {
     // When `searchBelowId` is set (EXC-b `pass`), locate that entry's stack
     // index and start the search strictly OUTER to it — skipping the entry
     // itself and everything inner. If the id is no longer present (already
@@ -98,8 +98,8 @@ const HandlerEntry* handlerStackFindMatch(proto::ProtoContext* ctx,
     return nullptr;
 }
 
-std::vector<unsigned long> handlerStackDisableFrom(unsigned long targetHandlerId) {
-    std::vector<unsigned long> flipped;
+std::vector<proto::proto_ulong> handlerStackDisableFrom(proto::proto_ulong targetHandlerId) {
+    std::vector<proto::proto_ulong> flipped;
     bool found = false;
     for (std::size_t i = 0; i < g_handlerStack.size(); ++i) {
         HandlerEntry& e = g_handlerStack[i];
@@ -113,8 +113,8 @@ std::vector<unsigned long> handlerStackDisableFrom(unsigned long targetHandlerId
     return flipped;
 }
 
-std::vector<unsigned long> handlerStackDisableAll() {
-    std::vector<unsigned long> flipped;
+std::vector<proto::proto_ulong> handlerStackDisableAll() {
+    std::vector<proto::proto_ulong> flipped;
     for (HandlerEntry& e : g_handlerStack) {
         if (e.enabled) {
             e.enabled = false;
@@ -124,8 +124,8 @@ std::vector<unsigned long> handlerStackDisableAll() {
     return flipped;
 }
 
-void handlerStackRestore(const std::vector<unsigned long>& disabledIds) {
-    for (unsigned long id : disabledIds) {
+void handlerStackRestore(const std::vector<proto::proto_ulong>& disabledIds) {
+    for (proto::proto_ulong id : disabledIds) {
         for (std::size_t i = g_handlerStack.size(); i-- > 0; ) {
             if (g_handlerStack[i].handlerId == id) {
                 g_handlerStack[i].enabled = true;

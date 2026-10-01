@@ -124,12 +124,12 @@ bool isResumable(proto::ProtoContext* ctx, const proto::ProtoObject* exc) {
 
 // The active handler id stamped onto `exc` by `signal`, or 0 when the
 // exception is not currently being handled.
-unsigned long activeHandlerIdOf(proto::ProtoContext* ctx,
+proto::proto_ulong activeHandlerIdOf(proto::ProtoContext* ctx,
                                 const proto::ProtoObject* exc) {
     const proto::ProtoObject* idObj =
         exc ? exc->getAttribute(ctx, activeHandlerKey(ctx)) : nullptr;
     if (!idObj || idObj == PROTO_NONE) return 0;
-    return static_cast<unsigned long>(idObj->asLong(ctx));
+    return static_cast<proto::proto_ulong>(idObj->asLong(ctx));
 }
 
 // True when `obj` is a class object (carries `__class_name__` as an OWN
@@ -253,7 +253,7 @@ const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx
     // stack walks and invokeBlock (which spins a full nested engine).
     TransientPin pinExc(ctx, exc);
 
-    unsigned long searchBelowId = 0;   // 0 == search from the top of the stack
+    proto::proto_ulong searchBelowId = 0;   // 0 == search from the top of the stack
     for (;;) {
         const HandlerEntry* entry = handlerStackFindMatch(ctx, exc, searchBelowId);
         if (!entry) {
@@ -263,7 +263,7 @@ const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx
             return defaultAction(rt, ctx, exc);
         }
 
-        unsigned long handlerId          = entry->handlerId;
+        proto::proto_ulong handlerId          = entry->handlerId;
         const proto::ProtoObject* hBlock = entry->handlerBlock;
 
         // Stamp the active handler id onto the instance so the handler
@@ -275,7 +275,7 @@ const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx
 
         // Disable this entry and every inner one, so a `signal` raised while
         // the handler block runs is caught by an OUTER handler.
-        std::vector<unsigned long> disabled = handlerStackDisableFrom(handlerId);
+        std::vector<proto::proto_ulong> disabled = handlerStackDisableFrom(handlerId);
 
         const proto::ProtoObject* handlerResult = nullptr;
         try {
@@ -544,7 +544,7 @@ const proto::ProtoObject* prim_Exception_return(STRuntime&, proto::ProtoContext*
         // `return:` on an exception that is not currently being handled.
         throw std::runtime_error("return: sent to an exception with no active handler");
     }
-    unsigned long handlerId = static_cast<unsigned long>(idObj->asLong(ctx));
+    proto::proto_ulong handlerId = static_cast<proto::proto_ulong>(idObj->asLong(ctx));
     throw UnwindToHandler{ handlerId, a[0] ? a[0] : PROTO_NONE };
 }
 
@@ -564,7 +564,7 @@ const proto::ProtoObject* prim_Exception_resume(STRuntime&, proto::ProtoContext*
         // analogue is already gone — reject it as a hard error.
         throw std::runtime_error("cannot resume a non-resumable exception");
     }
-    unsigned long handlerId = activeHandlerIdOf(ctx, r);
+    proto::proto_ulong handlerId = activeHandlerIdOf(ctx, r);
     if (handlerId == 0)
         throw std::runtime_error("resume: sent to an exception with no active handler");
     // `resume` with no argument == `resume: nil`.
@@ -580,7 +580,7 @@ const proto::ProtoObject* prim_Exception_retry(STRuntime&, proto::ProtoContext* 
                                                 const proto::ProtoObject* r,
                                                 const proto::ProtoObject* const*,
                                                 int) {
-    unsigned long handlerId = activeHandlerIdOf(ctx, r);
+    proto::proto_ulong handlerId = activeHandlerIdOf(ctx, r);
     if (handlerId == 0)
         throw std::runtime_error("retry sent to an exception with no active handler");
     throw RetrySignal{ handlerId };
@@ -595,7 +595,7 @@ const proto::ProtoObject* prim_Exception_pass(STRuntime&, proto::ProtoContext* c
                                                const proto::ProtoObject* r,
                                                const proto::ProtoObject* const*,
                                                int) {
-    unsigned long handlerId = activeHandlerIdOf(ctx, r);
+    proto::proto_ulong handlerId = activeHandlerIdOf(ctx, r);
     if (handlerId == 0)
         throw std::runtime_error("pass sent to an exception with no active handler");
     throw PassSignal{ handlerId };
@@ -626,7 +626,7 @@ const proto::ProtoObject* runProtectedSingle(
         const proto::ProtoObject* guardClass,
         const proto::ProtoObject* handlerBlock) {
     for (;;) {   // each turn is one attempt; `retry` loops back here
-        const unsigned long id = handlerStackPush(guardClass, handlerBlock);
+        const proto::proto_ulong id = handlerStackPush(guardClass, handlerBlock);
 
         try {
             const proto::ProtoObject* result =
@@ -662,7 +662,7 @@ const proto::ProtoObject* runProtected(
                                   guards[0].first, guards[0].second);
     }
     for (;;) {   // each turn is one attempt; `retry` loops back here
-        std::vector<unsigned long> ids;
+        std::vector<proto::proto_ulong> ids;
         ids.reserve(guards.size());
         for (const auto& g : guards)
             ids.push_back(handlerStackPush(g.first, g.second));
@@ -672,8 +672,8 @@ const proto::ProtoObject* runProtected(
             for (std::size_t i = ids.size(); i-- > 0; )
                 handlerStackPop(ids[i]);
         };
-        auto owns = [&](unsigned long id) {
-            for (unsigned long x : ids) if (x == id) return true;
+        auto owns = [&](proto::proto_ulong id) {
+            for (proto::proto_ulong x : ids) if (x == id) return true;
             return false;
         };
 

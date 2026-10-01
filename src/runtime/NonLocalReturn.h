@@ -1,4 +1,5 @@
 #pragma once
+#include "protoCore.h"  // proto::proto_ulong
 
 // Track 1, slice 1: NonLocalReturn — the C++ exception that carries an
 // `^expr` out of a block whose home method activation lives in an OUTER
@@ -40,15 +41,15 @@ namespace protoST {
 
 class NonLocalReturn {
 public:
-    NonLocalReturn(unsigned long homeFrameId,
+    NonLocalReturn(proto::proto_ulong homeFrameId,
                    const proto::ProtoObject* value) noexcept
         : homeFrameId_(homeFrameId), value_(value) {}
 
-    unsigned long homeFrameId() const noexcept { return homeFrameId_; }
+    proto::proto_ulong homeFrameId() const noexcept { return homeFrameId_; }
     const proto::ProtoObject* value() const noexcept { return value_; }
 
 private:
-    unsigned long             homeFrameId_;
+    proto::proto_ulong             homeFrameId_;
     const proto::ProtoObject*  value_;
 };
 

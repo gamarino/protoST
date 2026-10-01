@@ -327,7 +327,7 @@ const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
         // The helped message belongs to another actor: this actor's exception
         // handlers, still on this thread's handler stack, must not catch its
         // errors.
-        const std::vector<unsigned long> hidden = handlerStackDisableAll();
+        const std::vector<proto::proto_ulong> hidden = handlerStackDisableAll();
         try {
             helped = rt.drainOne(ctx);
         } catch (...) {

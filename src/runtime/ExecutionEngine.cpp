@@ -23,6 +23,13 @@
 namespace protoST {
 const proto::ProtoObject* raiseRejection(STRuntime& rt, proto::ProtoContext* ctx,
                                          const proto::ProtoObject* error);
+// Defined in future_prims.cpp. Declared here, at namespace scope, rather than
+// as a block-scope extern inside runLoop: MSVC puts a block-scope extern in the
+// global namespace instead of protoST, and the link then fails.
+bool appendFutureWaiter(STRuntime& rt,
+                        proto::ProtoContext* ctx,
+                        const proto::ProtoObject* fut,
+                        const proto::ProtoObject* waiterActor);
 }
 #include "BytecodeModule.h"
 #include "Bootstrap.h"
@@ -42,11 +49,49 @@ const proto::ProtoObject* raiseRejection(STRuntime& rt, proto::ProtoContext* ctx
 
 #include <algorithm>
 #include <atomic>
+#include <climits>
 #include <cstdlib>
 #include <mutex>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+// Threaded dispatch uses computed goto (`&&label`, `goto *p`), a GNU extension
+// that GCC and Clang provide and MSVC does not. Without it DISPATCH_DIRECT()
+// goes back to the top of the dispatch loop, which decodes the next
+// instruction through the switch: the same steps, one shared indirect jump.
+#if defined(__GNUC__)
+#define PROTOST_THREADED_DISPATCH 1
+#else
+#define PROTOST_THREADED_DISPATCH 0
+#endif
+#if defined(_MSC_VER)
+// The L_<op> labels are only jumped to by the threaded dispatch.
+#pragma warning(disable : 4102)  // unreferenced label
+#endif
+
+namespace {
+// Overflow-checked 64-bit add/subtract: the GCC/Clang builtins, and the same
+// result computed by hand elsewhere.
+inline bool addOverflows(long long a, long long b, long long* r) {
+#if defined(__GNUC__)
+    return __builtin_add_overflow(a, b, r);
+#else
+    if ((b > 0 && a > LLONG_MAX - b) || (b < 0 && a < LLONG_MIN - b)) return true;
+    *r = a + b;
+    return false;
+#endif
+}
+inline bool subOverflows(long long a, long long b, long long* r) {
+#if defined(__GNUC__)
+    return __builtin_sub_overflow(a, b, r);
+#else
+    if ((b < 0 && a > LLONG_MAX + b) || (b > 0 && a < LLONG_MIN + b)) return true;
+    *r = a - b;
+    return false;
+#endif
+}
+} // namespace
 
 namespace {
 // Messages about the actor REFERENCE, answered by the proxy itself instead of
@@ -102,7 +147,7 @@ namespace {
 // the counter starts at 1. Global ids let a block's homeFrameId identify its
 // home method unambiguously across engine boundaries and across the
 // snapshot/restore that backs cooperative yield.
-std::atomic<unsigned long> g_nextFrameId{1};
+std::atomic<proto::proto_ulong> g_nextFrameId{1};
 
 // F6 v3 E3: per-frame slot geometry.
 //
@@ -330,7 +375,7 @@ ExecutionEngine::liveEnginesOnThisThread() {
 }
 
 bool
-ExecutionEngine::homeFrameAlive(unsigned long frameId) {
+ExecutionEngine::homeFrameAlive(proto::proto_ulong frameId) {
     if (frameId == 0) return false;
     for (ExecutionEngine* e : g_liveEngines) {
         for (const Frame& f : e->frames_) {
@@ -346,7 +391,7 @@ ExecutionEngine::pushFrame(const BytecodeModule* m,
                            const proto::ProtoObject* captured,
                            const proto::ProtoObject* const* args,
                            unsigned int argc,
-                           unsigned long homeFrameId) {
+                           proto::proto_ulong homeFrameId) {
     Frame fr;
     fr.m          = m;
     fr.pc         = 0;
@@ -502,7 +547,7 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
                              const proto::ProtoObject* const* args,
                              int argc,
                              const proto::ProtoObject* capturedDict,
-                             unsigned long homeFrameId) {
+                             proto::proto_ulong homeFrameId) {
     // F6 v3 A: build the initial Frame and enter the single dispatch loop.
     // F6 v3 E3: the frame stack is backed by the engine context's
     // automaticLocals — a flat, GC-traced slot array. We pre-size that array
@@ -635,6 +680,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     // textual order. `&&L_BAD_OP` covers any opcode byte we do not
     // recognise. EXTEND never reaches dispatch because DISPATCH_DIRECT's
     // inner loop swallows EXTEND prefix words and accumulates `arg`.
+#if PROTOST_THREADED_DISPATCH
     void* labels[256];
     for (int i__ = 0; i__ < 256; ++i__) labels[i__] = &&L_BAD_OP;
     labels[static_cast<unsigned int>(Op::NOP)]              = &&L_NOP;
@@ -681,10 +727,12 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     labels[static_cast<unsigned int>(Op::MAKE_CAPTURED)]    = &&L_MAKE_CAPTURED;
     labels[static_cast<unsigned int>(Op::MAKE_ARRAY)]       = &&L_MAKE_ARRAY;
     labels[static_cast<unsigned int>(Op::HALT)]             = &&L_HALT;
+#endif
 
     unsigned int arg = 0;
     Op op = Op::NOP;
 
+#if PROTOST_THREADED_DISPATCH
     #define DISPATCH_DIRECT() do {                                              \
         if (frames_.empty()) goto L_RUN_DONE;                                   \
         Frame& f__ = frames_.back();                                            \
@@ -713,6 +761,12 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         }                                                                       \
         goto *labels[static_cast<unsigned int>(op)];                            \
     } while (0)
+#else
+    // Without computed goto: back to the top of the dispatch loop, which checks
+    // for an empty frame stack, the end of the code and the debugger as above,
+    // then decodes the next instruction and enters it through the switch.
+    #define DISPATCH_DIRECT() goto L_DISPATCH_NEXT
+#endif
 
     // Outer loop: lets us resume after a DebuggerHalt is caught and the
     // user steps/conts out of the session. Without this wrapper the catch
@@ -720,6 +774,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     // skipped.
     while (true) {
     try {
+#if !PROTOST_THREADED_DISPATCH
+    L_DISPATCH_NEXT:
+#endif
     while (!frames_.empty()) {
         Frame& f = frames_.back();
         const auto& bytes = f.m->bytes();
@@ -999,7 +1056,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     long long a = proto::asSmallInt(lhs);
                     long long b = proto::asSmallInt(rhs);
                     long long r;
-                    if (!__builtin_add_overflow(a, b, &r)
+                    if (!addOverflows(a, b, &r)
                             && proto::smallIntInRange(r)) {
                         push(f, proto::makeSmallInt(r));
                         DISPATCH_DIRECT();
@@ -1017,7 +1074,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     long long a = proto::asSmallInt(lhs);
                     long long b = proto::asSmallInt(rhs);
                     long long r;
-                    if (!__builtin_sub_overflow(a, b, &r)
+                    if (!subOverflows(a, b, &r)
                             && proto::smallIntInRange(r)) {
                         push(f, proto::makeSmallInt(r));
                         DISPATCH_DIRECT();
@@ -1318,11 +1375,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                             // method, not just from the block. Absent only
                             // for blocks not built by PUSH_BLOCK — fall back
                             // to 0 ("own home", a plain local return).
-                            unsigned long blkHome = 0;
+                            proto::proto_ulong blkHome = 0;
                             auto* homeObj =
                                 recv->getAttribute(ctx, recvHomeKey);
                             if (homeObj && homeObj != PROTO_NONE)
-                                blkHome = static_cast<unsigned long>(
+                                blkHome = static_cast<proto::proto_ulong>(
                                     homeObj->asLong(ctx));
 
                             // CLO Part 1: blocks bind args into locals
@@ -1447,8 +1504,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                             if (ps) {
                                 // Push parents in reverse so the depth-first
                                 // pop order is left-to-right (parent 0 first).
-                                unsigned long sz = ps->getSize(ctx);
-                                for (unsigned long k = sz; k > 0; --k)
+                                proto::proto_ulong sz = ps->getSize(ctx);
+                                for (proto::proto_ulong k = sz; k > 0; --k)
                                     stack.push_back(
                                         ps->getAt(ctx,
                                                   static_cast<int>(k - 1)));
@@ -1495,8 +1552,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         throw std::runtime_error(
                             "super: class " + defCls + " has no superclass");
                     const proto::ProtoObject* superAttr = nullptr;
-                    unsigned long pcount = parents->getSize(ctx);
-                    for (unsigned long pi = 0; pi < pcount; ++pi) {
+                    proto::proto_ulong pcount = parents->getSize(ctx);
+                    for (proto::proto_ulong pi = 0; pi < pcount; ++pi) {
                         const proto::ProtoObject* parent =
                             parents->getAt(ctx, static_cast<int>(pi));
                         if (!parent || parent == PROTO_NONE) continue;
@@ -2462,8 +2519,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             TransientPin pinResult(
                 ctx, reinterpret_cast<const proto::ProtoObject*>(result));
             if (myList) {
-                const unsigned long mn = myList->getSize(ctx);
-                for (unsigned long i = 0; i < mn; ++i) {
+                const proto::proto_ulong mn = myList->getSize(ctx);
+                for (proto::proto_ulong i = 0; i < mn; ++i) {
                     result = result->appendLast(
                         ctx, myList->getAt(ctx, static_cast<int>(i)));
                     pinResult.reset(
@@ -2471,8 +2528,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 }
             }
             if (exList) {
-                const unsigned long en = exList->getSize(ctx);
-                for (unsigned long i = 0; i < en; ++i) {
+                const proto::proto_ulong en = exList->getSize(ctx);
+                for (proto::proto_ulong i = 0; i < en; ++i) {
                     result = result->appendLast(
                         ctx, exList->getAt(ctx, static_cast<int>(i)));
                     pinResult.reset(
@@ -2496,13 +2553,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             // case we must schedule the actor ourselves so the resume path
             // runs and consumes the settled value.
             //
-            // We import the helper indirectly from future_prims.cpp; the
-            // linker connects them.
-            extern bool appendFutureWaiter(
-                STRuntime& rt,
-                proto::ProtoContext* ctx,
-                const proto::ProtoObject* fut,
-                const proto::ProtoObject* waiterActor);
+            // The helper lives in future_prims.cpp (declared at the top of
+            // this file); the linker connects them.
             bool parked = appendFutureWaiter(rt_, ctx, y.future(), actor);
             if (!parked) {
                 // The future settled before our append landed; the settle's
@@ -2738,10 +2790,10 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
     frames_.clear();
     slotBase_ = g_slotCursor;
 
-    const unsigned long n = asList->getSize(ctx);
+    const proto::proto_ulong n = asList->getSize(ctx);
     frames_.reserve(std::max<std::size_t>(64, static_cast<std::size_t>(n)));
 
-    for (unsigned long i = 0; i < n; ++i) {
+    for (proto::proto_ulong i = 0; i < n; ++i) {
         const proto::ProtoObject* frameObj =
             asList->getAt(ctx, static_cast<int>(i));
         if (!frameObj)
@@ -2759,14 +2811,14 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
         auto* opList = opStackVal ? opStackVal->asList(ctx) : nullptr;
         if (!opList)
             throw std::runtime_error("restoreFrames: missing op_stack");
-        const unsigned long opN = opList->getSize(ctx);
+        const proto::proto_ulong opN = opList->getSize(ctx);
 
         // locals
         auto* locVal = frameObj->getAttribute(ctx, localsKey);
         auto* locList = locVal ? locVal->asList(ctx) : nullptr;
         if (!locList)
             throw std::runtime_error("restoreFrames: missing locals");
-        const unsigned long locN = locList->getSize(ctx);
+        const proto::proto_ulong locN = locList->getSize(ctx);
 
         // m_ptr
         auto* mPtrVal = frameObj->getAttribute(ctx, mPtrKey);
@@ -2787,14 +2839,14 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
         // Track 1 slice 1: frame identity. Older snapshots (none exist on
         // disk, but be defensive) without these keys fall back to 0 — the
         // frame then becomes its own home, i.e. plain local returns.
-        unsigned long frameId = 0;
-        unsigned long homeId  = 0;
+        proto::proto_ulong frameId = 0;
+        proto::proto_ulong homeId  = 0;
         auto* frameIdVal = frameObj->getAttribute(ctx, frameIdKey);
         if (frameIdVal && frameIdVal != PROTO_NONE)
-            frameId = static_cast<unsigned long>(frameIdVal->asLong(ctx));
+            frameId = static_cast<proto::proto_ulong>(frameIdVal->asLong(ctx));
         auto* homeIdVal = frameObj->getAttribute(ctx, homeIdKey);
         if (homeIdVal && homeIdVal != PROTO_NONE)
-            homeId = static_cast<unsigned long>(homeIdVal->asLong(ctx));
+            homeId = static_cast<proto::proto_ulong>(homeIdVal->asLong(ctx));
 
         // F6 v3 E3: allocate this frame's slot region. localCount must be at
         // least the snapshot's locals count AND the module's own ceiling, so
@@ -2828,12 +2880,12 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
                                 capVal ? capVal : PROTO_NONE);
         ctx_->setAutomaticLocal(fr.baseSlot + 1,
                                 selfVal ? selfVal : PROTO_NONE);
-        for (unsigned long j = 0; j < locN; ++j) {
+        for (proto::proto_ulong j = 0; j < locN; ++j) {
             const proto::ProtoObject* v = locList->getAt(ctx, static_cast<int>(j));
             ctx_->setAutomaticLocal(localsBase(fr) + static_cast<unsigned int>(j),
                                     v ? v : PROTO_NONE);
         }
-        for (unsigned long j = 0; j < opN; ++j) {
+        for (proto::proto_ulong j = 0; j < opN; ++j) {
             const proto::ProtoObject* v = opList->getAt(ctx, static_cast<int>(j));
             ctx_->setAutomaticLocal(opStackBase(fr) + static_cast<unsigned int>(j),
                                     v ? v : PROTO_NONE);

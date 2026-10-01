@@ -61,9 +61,9 @@ const proto::ProtoObject* attributeOf(proto::ProtoContext* ctx,
 
 // What a walk of the backing map found.
 struct MapShape {
-    unsigned long slots = 0;        // ProtoMap::getSize — slots, not entries
-    unsigned long entries = 0;      // key/value pairs, counted through the buckets
-    unsigned long identitySlots = 0;// slots keyed by the key object itself
+    proto::proto_ulong slots = 0;        // ProtoMap::getSize — slots, not entries
+    proto::proto_ulong entries = 0;      // key/value pairs, counted through the buckets
+    proto::proto_ulong identitySlots = 0;// slots keyed by the key object itself
 };
 
 void inspectSlot(proto::ProtoContext* ctx, void* self,
@@ -76,7 +76,7 @@ void inspectSlot(proto::ProtoContext* ctx, void* self,
     if (slotKey && slotKey->isInteger(ctx)) {
         const proto::ProtoList* bucket = slotValue ? slotValue->asList(ctx) : nullptr;
         REQUIRE(bucket != nullptr);
-        shape->entries += static_cast<unsigned long>(bucket->getSize(ctx)) / 2;
+        shape->entries += static_cast<proto::proto_ulong>(bucket->getSize(ctx)) / 2;
     } else {
         ++shape->identitySlots;
         ++shape->entries;
