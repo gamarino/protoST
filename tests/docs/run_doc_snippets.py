@@ -72,7 +72,8 @@ states for it. The tool recognises the conventions the protoST documents use:
    (``shlex``), exactly as a reader pasting it would get it, and run with the
    binary under test. ``real``/``user``/``sys`` lines of ``time`` are dropped.
    Standard output and standard error are merged (the reader sees both);
-   standard output is line-buffered via ``stdbuf -oL`` to keep the order.
+   standard output is line-buffered via ``stdbuf -oL`` to keep the order
+   (on Linux: there is no working stdbuf on macOS or Windows).
 
    A script argument ``name.st`` resolves, in order, to (a) the nearest
    ``smalltalk`` block in the same document whose first line is a header
@@ -409,8 +410,11 @@ class Runner:
         # POSIX tools. On Windows the ones found are Git's MSYS builds, which
         # cannot line-buffer a native program and get in the way of the
         # programs it starts; subprocess.run's own timeout still applies.
+        # macOS has no stdbuf, and Homebrew's GNU one cannot preload its
+        # library there: every program run through it dies in dyld.
         native_windows = os.name == "nt"
-        self.stdbuf = None if native_windows else shutil.which("stdbuf")
+        no_stdbuf = native_windows or sys.platform == "darwin"
+        self.stdbuf = None if no_stdbuf else shutil.which("stdbuf")
         self.timeout_cmd = None if native_windows else shutil.which("timeout")
 
     def scratch_dir(self) -> Path:
