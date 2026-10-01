@@ -625,6 +625,10 @@ const proto::ProtoObject* runProtectedSingle(
         const proto::ProtoObject* protectedBlock,
         const proto::ProtoObject* guardClass,
         const proto::ProtoObject* handlerBlock) {
+    // An exception that is not ours is re-thrown after the catch clause
+    // (std::rethrow_exception), not with `throw;` inside it: see
+    // translateNativeException (NativeExceptionBridge.h) for why.
+    std::exception_ptr notOurs;
     for (;;) {   // each turn is one attempt; `retry` loops back here
         const proto::proto_ulong id = handlerStackPush(guardClass, handlerBlock);
 
@@ -637,15 +641,16 @@ const proto::ProtoObject* runProtectedSingle(
             handlerStackPop(id);
             if (u.handlerId() == id)
                 return u.value() ? u.value() : PROTO_NONE;
-            throw;
+            notOurs = std::current_exception();
         } catch (const RetrySignal& r) {
             handlerStackPop(id);
             if (r.handlerId() == id) continue;
-            throw;
+            notOurs = std::current_exception();
         } catch (...) {
             handlerStackPop(id);
-            throw;
+            notOurs = std::current_exception();
         }
+        std::rethrow_exception(notOurs);
     }
 }
 
@@ -677,6 +682,9 @@ const proto::ProtoObject* runProtected(
             return false;
         };
 
+        // Not ours: re-thrown after the catch clause, as in
+        // runProtectedSingle.
+        std::exception_ptr notOurs;
         try {
             const proto::ProtoObject* result =
                 invokeBlock(rt, ctx, protectedBlock, nullptr, 0);
@@ -686,18 +694,19 @@ const proto::ProtoObject* runProtected(
             popAll();
             if (owns(u.handlerId()))
                 return u.value() ? u.value() : PROTO_NONE;
-            throw;   // targets an OUTER construct
+            notOurs = std::current_exception();   // targets an OUTER construct
         } catch (const RetrySignal& r) {
             popAll();
             if (owns(r.handlerId()))
                 continue;   // re-evaluate the protected block — loop again
-            throw;          // targets an OUTER construct
+            notOurs = std::current_exception();   // targets an OUTER construct
         } catch (...) {
             // NonLocalReturn, FutureYield, ResumeSignal/PassSignal escaping a
             // bug, std::exception — all must leave the handler stack balanced.
             popAll();
-            throw;
+            notOurs = std::current_exception();
         }
+        std::rethrow_exception(notOurs);
     }
 }
 
@@ -790,6 +799,11 @@ const proto::ProtoObject* prim_Block_ensure(STRuntime& rt, proto::ProtoContext* 
     if (argc != 1)
         throw std::runtime_error("ensure: expects 1 arg (cleanup block)");
     const proto::ProtoObject* cleanupBlock = a[0];
+    // The cleanup and the re-throw run after the catch clause, once the
+    // frames below this primitive are released: see translateNativeException
+    // (NativeExceptionBridge.h) for why.
+    std::exception_ptr exit;
+    bool cleanup = false;
     try {
         const proto::ProtoObject* result =
             invokeBlock(rt, ctx, protectedBlock, nullptr, 0);
@@ -798,13 +812,15 @@ const proto::ProtoObject* prim_Block_ensure(STRuntime& rt, proto::ProtoContext* 
         return result;
     } catch (const FutureYield&) {
         // A yield is a suspension, not an exit — propagate without cleanup.
-        throw;
+        exit = std::current_exception();
     } catch (...) {
         // Abnormal exit (UnwindToHandler / RetrySignal / NonLocalReturn /
         // std::exception) → run the cleanup, then re-propagate the original.
-        invokeBlock(rt, ctx, cleanupBlock, nullptr, 0);
-        throw;
+        exit = std::current_exception();
+        cleanup = true;
     }
+    if (cleanup) invokeBlock(rt, ctx, cleanupBlock, nullptr, 0);
+    std::rethrow_exception(exit);
 }
 
 // protectedBlock ifCurtailed: cleanupBlock
@@ -818,6 +834,9 @@ const proto::ProtoObject* prim_Block_ifCurtailed(STRuntime& rt, proto::ProtoCont
     if (argc != 1)
         throw std::runtime_error("ifCurtailed: expects 1 arg (cleanup block)");
     const proto::ProtoObject* cleanupBlock = a[0];
+    // After the catch clause, as in ensure:.
+    std::exception_ptr exit;
+    bool cleanup = false;
     try {
         const proto::ProtoObject* result =
             invokeBlock(rt, ctx, protectedBlock, nullptr, 0);
@@ -825,12 +844,14 @@ const proto::ProtoObject* prim_Block_ifCurtailed(STRuntime& rt, proto::ProtoCont
         return result;
     } catch (const FutureYield&) {
         // A yield is a suspension, not a curtailment — propagate, no cleanup.
-        throw;
+        exit = std::current_exception();
     } catch (...) {
         // Abnormal exit only → run the cleanup, then re-propagate.
-        invokeBlock(rt, ctx, cleanupBlock, nullptr, 0);
-        throw;
+        exit = std::current_exception();
+        cleanup = true;
     }
+    if (cleanup) invokeBlock(rt, ctx, cleanupBlock, nullptr, 0);
+    std::rethrow_exception(exit);
 }
 
 // Accessors of MessageNotUnderstood and Message.

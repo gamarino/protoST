@@ -115,25 +115,33 @@ template <typename Call>
 const proto::ProtoObject* translateNativeException(STRuntime& rt,
                                                    proto::ProtoContext* ctx,
                                                    Call&& call) {
+    // "Re-throw untouched" below means: keep the exception and re-throw it
+    // after the try statement, not with `throw;` inside the catch clause.
+    // Same meaning under the Itanium ABI; under MSVC a catch clause runs
+    // before the frames below it are released, so a re-throw inside it, at
+    // every primitive boundary an unwind crosses (a deep recursion through
+    // do: blocks), grew the native stack until it overflowed.
+    std::exception_ptr untouched;
     try {
         return call();
     }
     // --- protoST control-flow siblings: re-throw untouched -----------------
-    catch (const NonLocalReturn&)       { throw; }   // slice 1 — ^expr
-    catch (const UnwindToHandler&)      { throw; }   // EXC — return:/fall-through
-    catch (const RetrySignal&)          { throw; }   // EXC — retry
-    catch (const ResumeSignal&)         { throw; }   // EXC — resume:
-    catch (const PassSignal&)           { throw; }   // EXC — pass/outer
-    catch (const FutureYield&)          { throw; }   // F6 v3 — cooperative yield
+    catch (const NonLocalReturn&)       { untouched = std::current_exception(); }   // slice 1 — ^expr
+    catch (const UnwindToHandler&)      { untouched = std::current_exception(); }   // EXC — return:/fall-through
+    catch (const RetrySignal&)          { untouched = std::current_exception(); }   // EXC — retry
+    catch (const ResumeSignal&)         { untouched = std::current_exception(); }   // EXC — resume:
+    catch (const PassSignal&)           { untouched = std::current_exception(); }   // EXC — pass/outer
+    catch (const FutureYield&)          { untouched = std::current_exception(); }   // F6 v3 — cooperative yield
     // --- std::exception-DERIVED types that must NOT be translated ----------
-    catch (const DebuggerHalt&)         { throw; }   // F2 — halt; is-a runtime_error
-    catch (const InterruptSignal&)      { throw; }   // Ctrl-C in the REPL; is-a runtime_error
-    catch (const UnhandledSTException&) { throw; }   // already protoST; is-a runtime_error
+    catch (const DebuggerHalt&)         { untouched = std::current_exception(); }   // F2 — halt; is-a runtime_error
+    catch (const InterruptSignal&)      { untouched = std::current_exception(); }   // Ctrl-C in the REPL; is-a runtime_error
+    catch (const UnhandledSTException&) { untouched = std::current_exception(); }   // already protoST; is-a runtime_error
     catch (const ZeroDivideSignal&)     { return signalZeroDivide(rt, ctx); }
     catch (const ClassedErrorSignal& e) { return signalErrorNamed(rt, ctx, e.className(), e.what()); }
     // --- a genuine native error: translate into a catchable protoST Error --
     catch (const std::exception& e)     { return signalNativeError(rt, ctx, e.what()); }
     catch (...)                         { return signalNativeError(rt, ctx, "native exception"); }
+    std::rethrow_exception(untouched);
 }
 
 } // namespace protoST

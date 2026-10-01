@@ -50,6 +50,7 @@ bool appendFutureWaiter(STRuntime& rt,
 #include <algorithm>
 #include <atomic>
 #include <climits>
+#include <exception>
 #include <cstdlib>
 #include <mutex>
 #include <stdexcept>
@@ -772,6 +773,14 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     // user steps/conts out of the session. Without this wrapper the catch
     // handler would return early and the remainder of the module would be
     // skipped.
+    //
+    // An exception this engine lets through (a non-local return homed in an
+    // outer engine, a cooperative yield) is re-thrown after the loop, not
+    // with `throw;` inside its catch clause. Same meaning under the Itanium
+    // ABI; under MSVC a catch clause runs before the frames below it are
+    // released, so a re-throw inside it, repeated by every nested engine the
+    // exception crosses, grew the native stack until it overflowed.
+    std::exception_ptr propagate;
     while (true) {
     try {
 #if !PROTOST_THREADED_DISPATCH
@@ -2415,7 +2424,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             // propagate. invokeBlock's nested-engine call site does NOT
             // swallow it; it bubbles to the parent engine's runLoop, which
             // repeats this check.
-            throw;
+            propagate = std::current_exception();
+            break;
         }
         // The home is ours: unwind every frame from the top down to and
         // including the home frame, then resume normally with the value
@@ -2569,7 +2579,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         // is single-shot and will not be reused. Rethrow so drainOne's
         // catch path runs.
         frames_.clear();
-        throw;
+        propagate = std::current_exception();
+        break;
     } catch (DebuggerHalt& h) {
         // F6 v3 A: enter the debugger session on the CURRENT top frame.
         // The legacy engine captured pc/stack/locals from local C++ vars;
@@ -2595,6 +2606,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         continue;
     }
     } // outer while(true)
+    std::rethrow_exception(propagate);
 }
 
 // ---------------------------------------------------------------------------
