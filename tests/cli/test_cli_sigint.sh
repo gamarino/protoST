@@ -5,6 +5,11 @@
 set -u
 trap '' PIPE
 PROTOST="$1"
+# Job control: without it bash starts background commands with SIGINT
+# ignored, and a script (which keeps SIGINT's inherited disposition) would
+# never see the signal. GNU timeout 9.4 (Ubuntu 24.04) happens to reset it
+# for the program it runs; 9.11 (Homebrew, macOS) keeps it ignored.
+set -m
 timeout 20 "$PROTOST" -e '[true] whileTrue: []' & pid=$!
 sleep 1; kill -INT "$(pgrep -P $pid)" 2>/dev/null; wait $pid; rc=$?
 [[ $rc -eq 130 ]] || { echo "FAIL: script rc=$rc"; exit 1; }
