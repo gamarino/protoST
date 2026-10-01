@@ -15,7 +15,13 @@ if command -v cygpath >/dev/null 2>&1 && [ ! -x /usr/bin/time ]; then
     [ "$(cat "$out_file")" = "30000000" ] || { echo "FAIL: result [$(cat "$out_file")]"; exit 1; }
     echo "OK (result only: no /usr/bin/time to measure the peak)"; exit 0
 fi
-rss=$( { PROTOCORE_HEAP_LIMIT_CELLS=10000000 /usr/bin/time -f '%M' "$PROTOST" -e "$program" >"$out_file"; } 2>&1 | tail -1 )
+if [ "$(uname -s)" = Darwin ]; then
+    # BSD time: -l reports "maximum resident set size" in bytes.
+    rss=$( { PROTOCORE_HEAP_LIMIT_CELLS=10000000 /usr/bin/time -l "$PROTOST" -e "$program" >"$out_file"; } 2>&1 \
+           | awk '/maximum resident set size/ { printf "%d\n", $1 / 1024 }' )
+else
+    rss=$( { PROTOCORE_HEAP_LIMIT_CELLS=10000000 /usr/bin/time -f '%M' "$PROTOST" -e "$program" >"$out_file"; } 2>&1 | tail -1 )
+fi
 # The loop must also have completed with the right result: a crash is not
 # "bounded memory".
 [ "$(cat "$out_file")" = "30000000" ] || { echo "FAIL: result [$(cat "$out_file")]"; exit 1; }
