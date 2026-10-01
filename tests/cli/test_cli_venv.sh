@@ -18,7 +18,9 @@ cd "$tmp"
 # handed the path that bash converted.
 venv="$tmp/.venv"; venv_found="$venv"
 if command -v cygpath >/dev/null 2>&1; then
-    venv="$(cygpath -m "$tmp")/.venv"; venv_found="$(cygpath -w "$tmp")\.venv"
+    # -l: the long form (C:\Users\runneradmin, not C:\Users\RUNNER~1), which
+    # is the one protost prints.
+    venv="$(cygpath -m -l "$tmp")/.venv"; venv_found="$(cygpath -w -l "$tmp")\.venv"
 fi
 
 # venv info from inside the project (no STENV) should discover the venv

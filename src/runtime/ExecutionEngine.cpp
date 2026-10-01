@@ -58,10 +58,13 @@ bool appendFutureWaiter(STRuntime& rt,
 #include <vector>
 
 // Threaded dispatch uses computed goto (`&&label`, `goto *p`), a GNU extension
-// that GCC and Clang provide and MSVC does not. Without it DISPATCH_DIRECT()
-// goes back to the top of the dispatch loop, which decodes the next
-// instruction through the switch: the same steps, one shared indirect jump.
-#if defined(__GNUC__)
+// that MSVC does not provide. Clang provides it but refuses this loop: an
+// indirect goto may reach every label, and Clang rejects one that would cross
+// the initialisation of a local (GCC accepts it), so Clang (macOS) takes the
+// switch too. Without it DISPATCH_DIRECT() goes back to the top of the
+// dispatch loop, which decodes the next instruction through the switch: the
+// same steps, one shared indirect jump.
+#if defined(__GNUC__) && !defined(__clang__)
 #define PROTOST_THREADED_DISPATCH 1
 #else
 #define PROTOST_THREADED_DISPATCH 0
