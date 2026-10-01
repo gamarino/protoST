@@ -27,8 +27,10 @@ fi
 out=$("$PROTOST" venv info)
 grep -qF "$venv_found" <<< "$out" || { echo "FAIL: venv info did not discover"; echo "$out"; exit 1; }
 
-# explicit STENV overrides discovery
-out=$(STENV="$tmp/.venv" "$PROTOST" venv info) || { echo "FAIL: STENV venv info exited non-zero"; exit 1; }
+# explicit STENV overrides discovery. It is passed in the form it is compared
+# in: protost prints STENV as given, and Git for Windows' bash would convert
+# "$tmp/.venv" to the short 8.3 form (C:/Users/RUNNER~1/...) of the temp dir.
+out=$(STENV="$venv" "$PROTOST" venv info) || { echo "FAIL: STENV venv info exited non-zero"; exit 1; }
 grep -qF "$venv" <<< "$out" || { echo "FAIL: STENV override"; echo "$out"; exit 1; }
 
 echo OK
