@@ -430,6 +430,14 @@ endif()
 install(TARGETS protost
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     COMPONENT protoST)
+# protoIO is linked in statically, but OpenSSL is a DLL on Windows: install it
+# next to protost.exe, where Windows looks for it. (protoCore is a package of
+# its own and installs its DLL into its own prefix's bin/.)
+if(WIN32 AND PROTOST_OPENSSL_DLLS)
+    install(FILES ${PROTOST_OPENSSL_DLLS}
+        DESTINATION ${CMAKE_INSTALL_BINDIR}
+        COMPONENT protoST)
+endif()
 
 # The standard-library `.st` modules. They are installed to
 # <prefix>/share/protoST/lib; the stdlib discovery in src/runtime/STRuntime.cpp
@@ -520,8 +528,9 @@ elseif(UNIX)
     set(CPACK_RPM_PACKAGE_REQUIRES
         "protoCore >= ${PROTOCORE_MIN_VERSION_FULL}, protoCore < ${PROTOCORE_NEXT_MAJOR}")
 elseif(WIN32)
-    # Windows NSIS installer + plain ZIP.
-    # UNVERIFIED: configured and reviewed, never built - no Windows host (D-I6).
+    # Windows NSIS installer + plain ZIP. The ZIP was built and checked on
+    # Windows 11 (2026-10-01); the NSIS installer has never been built (no
+    # NSIS on that host).
     set(CPACK_GENERATOR "NSIS;ZIP")
     set(CPACK_NSIS_HELP_LINK "https://github.com/gamarino/protoST")
     set(CPACK_NSIS_PACKAGE_NAME "protoST")
