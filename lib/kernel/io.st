@@ -377,7 +377,11 @@ FileSystem class >> workingDirectory
   ^ FileReference path: self __osCwd.
 
 FileSystem class >> home
-  ^ FileReference path: (Smalltalk getenv: 'HOME').
+  "HOME; on Windows, USERPROFILE when HOME is unset."
+  | h |
+  h := Smalltalk getenv: 'HOME'.
+  (h isNil and: [Smalltalk platform = 'windows']) ifTrue: [h := Smalltalk getenv: 'USERPROFILE'].
+  ^ FileReference path: h.
 
 FileSystem class >> temp
   ^ FileReference path: self __fileTempDir.
@@ -472,10 +476,13 @@ OSProcess class >> run: aCommand arguments: anArray input: aStringOrNil
   ^ OSProcessResult new setExitCode: (r at: 1) output: (r at: 2) errorOutput: (r at: 3).
 
 OSProcess class >> shell: aString
-  ^ self run: '/bin/sh' arguments: (Array with: '-c' with: aString) input: nil.
+  ^ self shell: aString input: nil.
 
 OSProcess class >> shell: aString input: input
-  ^ self run: '/bin/sh' arguments: (Array with: '-c' with: aString) input: input.
+  "The system's shell runs aString: /bin/sh -c, and cmd.exe /c on Windows."
+  ^ Smalltalk platform = 'windows'
+      ifTrue: [self run: 'cmd.exe' arguments: (Array with: '/c' with: aString) input: input]
+      ifFalse: [self run: '/bin/sh' arguments: (Array with: '-c' with: aString) input: input].
 
 OSProcess class >> command: aString
   "The output of a shell command line, without its final newline; signals
@@ -484,7 +491,10 @@ OSProcess class >> command: aString
   r := self shell: aString.
   r succeeded ifFalse: [^ OSProcessError signal: aString , ' exited with ' , r exitCode printString , ': ' , r errorOutput].
   out := r output.
-  ^ (out notEmpty and: [out last = Character lf]) ifTrue: [out copyFrom: 1 to: out size - 1] ifFalse: [out].
+  out := (out notEmpty and: [out last = Character lf]) ifTrue: [out copyFrom: 1 to: out size - 1] ifFalse: [out].
+  "On Windows the shell ends a line with CR LF."
+  ^ (Smalltalk platform = 'windows' and: [out notEmpty and: [out last = Character cr]])
+      ifTrue: [out copyFrom: 1 to: out size - 1] ifFalse: [out].
 
 OSProcess class >> spawn: aCommand arguments: anArray
   "Starts a program that shares our standard streams; answers its pid."

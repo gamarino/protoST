@@ -12,6 +12,7 @@
 #include <protoio/process.h>
 #include <protoio/stream.h>
 
+#include <algorithm>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -84,6 +85,17 @@ const PO* boolean(bool b) { return b ? PROTO_TRUE : PROTO_FALSE; }
 
 const PO* string(proto::ProtoContext* ctx, const std::string& s) {
     return ctx->fromUTF8String(s.c_str());
+}
+
+// A path the system hands to protoST code. The library (lib/kernel/io.st)
+// splits paths at '/', so on Windows, where the system answers with '\'
+// separators, they become '/', which every Windows file API accepts too.
+// Elsewhere the path is unchanged.
+std::string portablePath(std::string p) {
+#if defined(_WIN32)
+    std::replace(p.begin(), p.end(), '\\', '/');
+#endif
+    return p;
 }
 
 // The elements of an Array (its `__data__` list), or of a bare list.
@@ -272,7 +284,7 @@ PRIM(prim_Platform) { ARGS(0, "__osPlatform"); return string(ctx, protoio::proce
 
 PRIM(prim_Cwd) {
     ARGS(0, "__osCwd");
-    return string(ctx, immediate([] { return protoio::file::cwd(); }));
+    return string(ctx, portablePath(immediate([] { return protoio::file::cwd(); })));
 }
 
 PRIM(prim_Chdir) {
@@ -491,10 +503,10 @@ PRIM(prim_DirList) {
 PRIM(prim_FileAbsolute) {
     ARGS(1, "__fileAbsolute:");
     const std::string path = str(ctx, a[0], "fullName");
-    return string(ctx, immediate([&] { return protoio::file::absolute(path); }));
+    return string(ctx, portablePath(immediate([&] { return protoio::file::absolute(path); })));
 }
 
-PRIM(prim_TempDir) { ARGS(0, "__fileTempDir"); return string(ctx, protoio::file::tempDir()); }
+PRIM(prim_TempDir) { ARGS(0, "__fileTempDir"); return string(ctx, portablePath(protoio::file::tempDir())); }
 
 // --------------------------------------------------------------- processes
 
