@@ -58,14 +58,18 @@ endif()
 #      only when no installed package was found and no prefix was named;
 #      refused by -DPROTOCORE_REQUIRE_PACKAGE=ON.
 #
-# The version floor is 2.6.1: the worker pool grows while actors block in I/O
-# (STRuntime::enterBlockingIO), which creates threads from worker threads, and
-# before 2.6.1 protoCore's newThread detached the main program's roots when
-# called there. (2.1.0 brought ProtoMap, the hashed-collection helper and
-# ProtoMPSCQueue; 2.6.0 the process-global mutable table.) The ceiling is the
-# next major, because protoCore's major version and its soname move together.
-set(PROTOCORE_MIN_VERSION      "2.6.1")
-set(PROTOCORE_MIN_VERSION_FULL "2.6.1")
+# The version floor is 2.7.0: the sources spell protoCore's 64-bit integers
+# proto::proto_long / proto::proto_ulong (with PROTO_L, PROTO_UL and
+# PROTO_FMT_U), which protoCore first provides in 2.7.0 -- long and unsigned
+# long outside Windows, long long there. Before that, 2.6.1 was the floor: the
+# worker pool grows while actors block in I/O (STRuntime::enterBlockingIO),
+# which creates threads from worker threads, and before 2.6.1 protoCore's
+# newThread detached the main program's roots when called there. (2.1.0
+# brought ProtoMap, the hashed-collection helper and ProtoMPSCQueue; 2.6.0 the
+# process-global mutable table.) The ceiling is the next major, because
+# protoCore's major version and its soname move together.
+set(PROTOCORE_MIN_VERSION      "2.7.0")
+set(PROTOCORE_MIN_VERSION_FULL "2.7.0")
 set(PROTOCORE_NEXT_MAJOR       "3.0.0")
 set(PROTOCORE_ABI_SOVERSION    "3")
 option(PROTOCORE_REQUIRE_PACKAGE
@@ -86,6 +90,12 @@ if(protoCore_FOUND)
     endif()
     set(PROTOCORE_LIBRARY protoCore::protoCore)
     set(PROTOCORE_INCLUDE_DIRS "${protoCore_INCLUDE_DIR}")
+    if(APPLE)
+        # libprotoCore's install name is @rpath/libprotoCore.<N>.dylib: give
+        # the build tree's executables the package's lib directory, or dyld
+        # cannot start them (exit 127) when the prefix is not a default one.
+        list(APPEND CMAKE_BUILD_RPATH "${protoCore_LIB_DIR}")
+    endif()
     message(STATUS "protoST: installed protoCore ${protoCore_VERSION} "
                    "(SOVERSION ${protoCore_SOVERSION}) from ${protoCore_DIR}")
 else()

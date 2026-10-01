@@ -61,10 +61,10 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  # protoCore 2.6.2 (tag v2.6.2), SOVERSION 3. The floor of protoST 0.5.0 is
-  # 2.6.1; cli_memory_bounded needs 2.6.2 (the heap ceiling under dead mutables).
-  # Bump deliberately.
-  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || '752bdb2064d3a2a6f8aa6bc756f107ed395bebd0' }}
+  # protoCore 2.7.0 (tag v2.7.0), SOVERSION 3, the floor since the Windows port
+  # (proto::proto_long and friends first exist there); cli_memory_bounded needs
+  # 2.6.2 or later (the heap ceiling under dead mutables). Bump deliberately.
+  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'fc5d79db4f89f8a6eb473a52766b1908140a19d1' }}
   # The two tests excluded from the gate, both run in the `non-gating` job:
   #   cli_concurrent_first_call   quarantined, S19 -- see the header.
   #   F6 v2 T7: two actors ...    a wall-clock proof of parallelism: two 200 ms
@@ -75,9 +75,10 @@ env:
   #                               tens of milliseconds.  It is a good test and a
   #                               bad gate.
   PROTOIO_REPO: gamarino/protoIO
-  # protoIO 0.1.0: the main HEAD when protoST's I/O primitives moved onto it
-  # (2026-09-30). Pinned so a red build is attributable; bump deliberately.
-  PROTOIO_REF: 503c7e79292b52b427d1c829092bfd389c9aeec2
+  # protoIO main after its Windows and macOS ports (2026-10-01); the Windows
+  # port of protoST needs it. Pinned so a red build is attributable; bump
+  # deliberately.
+  PROTOIO_REF: 8e823a6f1e7a424737d845206c77d3c5e03b1748
   NON_GATING_TESTS: '^(cli_concurrent_first_call|F6 v2 T7: two actors run in parallel \(wall-clock proof\))$'
 
 jobs:
