@@ -1,0 +1,10 @@
+# Windows only (configured by tests/CMakeLists.txt): Catch2's test discovery
+# with the test list decoded as UTF-8. On Windows execute_process decodes a
+# program's output with the console's code page unless told otherwise, which
+# turns the em dash in several test names into mojibake; CTest then asks the
+# test executable for a test case that does not exist. A macro, so the output
+# variables land in the caller's scope.
+macro(execute_process)
+    _execute_process(${ARGV} ENCODING UTF-8)
+endmacro()
+include("@PROTOST_CATCH_ADD_TESTS_SCRIPT@")

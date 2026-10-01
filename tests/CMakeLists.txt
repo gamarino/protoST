@@ -101,9 +101,22 @@ target_sources(protost_unit_tests PRIVATE
 target_sources(protost_unit_tests PRIVATE
     unit/test_hashed_collections.cpp
 )
+if(WIN32)
+    # UTF-8 process code page: the test names CTest passes on the command line
+    # (several contain an em dash) reach Catch2 as the UTF-8 it listed.
+    target_sources(protost_unit_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/windows/utf8.manifest)
+endif()
 target_compile_definitions(protost_unit_tests PRIVATE
     PROTOST_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures"
 )
+if(WIN32)
+    # Discover the test cases with their names read as UTF-8 (see
+    # cmake/CatchAddTestsUtf8.cmake.in); elsewhere Catch2's own script runs.
+    set(PROTOST_CATCH_ADD_TESTS_SCRIPT "${_CATCH_DISCOVER_TESTS_SCRIPT}")
+    configure_file(${CMAKE_SOURCE_DIR}/cmake/CatchAddTestsUtf8.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/CatchAddTestsUtf8.cmake @ONLY)
+    set(_CATCH_DISCOVER_TESTS_SCRIPT ${CMAKE_CURRENT_BINARY_DIR}/CatchAddTestsUtf8.cmake)
+endif()
 catch_discover_tests(protost_unit_tests)
 
 # --- conformance suite (Track 6, slice 2) --------------------------------
