@@ -7,7 +7,7 @@ name: Cross-platform
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'ci/**']
   pull_request:
   workflow_dispatch:
 
@@ -75,8 +75,13 @@ jobs:
           for f in readline openssl@3 ninja coreutils; do brew list "$f" >/dev/null 2>&1 || brew install "$f"; done
           echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
           echo "EXTRA_PREFIX=;$(brew --prefix readline)" >> "$GITHUB_ENV"
-          # The test scripts use GNU timeout, which macOS does not ship.
-          echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
+          # The test scripts use GNU timeout, which macOS does not ship. Only
+          # timeout goes on PATH: coreutils' whole gnubin would also shadow
+          # the system tools with GNU ones that do not work on macOS (stdbuf
+          # cannot inject its library into a program there).
+          mkdir -p "$RUNNER_TEMP/gnu-timeout"
+          ln -sf "$(brew --prefix)/bin/gtimeout" "$RUNNER_TEMP/gnu-timeout/timeout"
+          echo "$RUNNER_TEMP/gnu-timeout" >> "$GITHUB_PATH"
 
       - name: Dependencies (Windows)
         if: runner.os == 'Windows'
