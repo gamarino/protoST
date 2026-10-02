@@ -134,9 +134,9 @@ enum class ReadResult { Line, Eof, Cancelled };
 // input arrives intact whatever the console's code page (ReadFile with code
 // page 65001 answers NULs for it on Windows 10's console host). Ctrl-C at the
 // prompt cancels the line: a keyboard Ctrl-C aborts the read
-// (ERROR_OPERATION_ABORTED, before the handler thread has run, hence the
-// short wait for its event), and a Ctrl-C that only raised the signal
-// discards the line it arrives with. A line that starts with Ctrl-Z is end of
+// (ERROR_OPERATION_ABORTED, possibly before the handler thread has run, hence
+// the wait for its event), and a Ctrl-C that only raised the signal
+// (GenerateConsoleCtrlEvent) discards the line it arrives with. A line that starts with Ctrl-Z is end of
 // input, as for the console's own programs.
 ReadResult readConsoleLine(HANDLE in, std::string& out) {
     std::wstring line;
@@ -147,9 +147,16 @@ ReadResult readConsoleLine(HANDLE in, std::string& out) {
         const BOOL ok = ::ReadConsoleW(in, buf, static_cast<DWORD>(sizeof buf / sizeof buf[0]), &n, nullptr);
         const DWORD err = ::GetLastError();
         if (n == 0 && err == ERROR_OPERATION_ABORTED) {
-            ::WaitForSingleObject(static_cast<HANDLE>(interruptWakeEvent()), 100);
-            if (takePendingInterrupt()) return ReadResult::Cancelled;
-            continue;
+            // The console has already discarded the line typed so far: the
+            // line is cancelled whatever happens next. The Ctrl-C handler
+            // runs on a thread of its own, possibly a little later; its
+            // Ctrl-C is taken here, so it does not stay pending (where the
+            // next one would end the process).
+            ::WaitForSingleObject(static_cast<HANDLE>(interruptWakeEvent()), 1000);
+            takePendingInterrupt();
+            std::fputs("\n", stdout);
+            std::fflush(stdout);
+            return ReadResult::Cancelled;
         }
         if (!ok || n == 0) return line.empty() ? ReadResult::Eof : ReadResult::Line;
         line.append(buf, n);

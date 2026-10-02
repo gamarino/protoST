@@ -8,9 +8,9 @@ macOS, a console of its own on Windows. What a pipe cannot show:
     answers 7, not 8;
   * Ctrl-C pressed again and again at an empty prompt never ends the session;
   * a second Ctrl-C while an evaluation is blocked where it cannot be
-    interrupted ends the process as the platform's default Ctrl-C would:
-    killed by SIGINT on POSIX, exit status STATUS_CONTROL_C_EXIT
-    (0xC000013A) on Windows.
+    interrupted (a wait on a Future nobody resolves) ends the process as the
+    platform's default Ctrl-C would: killed by SIGINT on POSIX, exit status
+    STATUS_CONTROL_C_EXIT (0xC000013A) on Windows.
 
 On Windows the keys are written into the console's input buffer, and Ctrl-C
 is pressed on the keyboard (keybd_event to the console window), because only
@@ -28,10 +28,14 @@ import time
 PROTOST = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else None
 TIMEOUT = 15.0
 STATUS_CONTROL_C_EXIT = 0xC000013A
-BLOCKING = "(UDPSocket bindTo: 0) receiveTimeout: 20000.\r"
+# Waiting on a Future nobody resolves: the main thread blocks on a semaphore
+# and reaches no safepoint, so a Ctrl-C cannot be taken there.
+BLOCKING = "Future new wait.\r"
 
 
-def fail(msg, transcript):
+def fail(msg, transcript, status=None):
+    if status is not None:
+        msg += " (the process had ended: status %r)" % (status,)
     sys.stdout.write("FAIL: %s\n--- transcript ---\n%s\n" % (msg, transcript))
     sys.exit(1)
 
@@ -48,7 +52,7 @@ class Session:
             if self.exited() is not None:
                 break
             time.sleep(0.05)
-        fail("waiting for %r (x%d)" % (needle, count), self.output())
+        fail("waiting for %r (x%d)" % (needle, count), self.output(), self.exited())
 
     def scenario(self):
         primary = "protoST> "
@@ -84,11 +88,8 @@ class Session:
         self.send("5 + 5.\r")
         self.expect("=> 10")
 
-        # An evaluation blocked in a network wait reaches no safepoint: the
-        # first Ctrl-C stays pending, the second ends the process.
-        self.send("Import from: 'net'.\r")
-        n = self.output().count(primary)
-        self.expect(primary, n + 1)
+        # An evaluation blocked where it reaches no safepoint: the first
+        # Ctrl-C stays pending, the second ends the process.
         self.send(BLOCKING)
         time.sleep(1.0)
         self.ctrl_c()

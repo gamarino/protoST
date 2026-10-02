@@ -47,14 +47,19 @@ grep -qF "$venv" <<< "$out" || { echo "FAIL: STENV override"; echo "$out"; exit 
 # `deactivate.bat` undoes it.
 if command -v cygpath >/dev/null 2>&1; then
     bat=$(cygpath -w "$tmp/.venv/bin")
-    out=$(MSYS_NO_PATHCONV=1 cmd.exe /d /c "call $bat\activate.bat && set STENV && path && call $bat\deactivate.bat && set STENV" 2>&1 | tr -d '\r')
+    # The last `set STENV` fails once deactivate.bat has cleared it (that is
+    # the point), so cmd's exit status is not the verdict; the output is.
+    out=$(MSYS_NO_PATHCONV=1 cmd.exe /d /c "call $bat\activate.bat && set STENV && path && call $bat\deactivate.bat && set STENV" 2>&1 | tr -d '\r' || true)
     grep -qxF "STENV=$venv_found" <<< "$out" || { echo "FAIL: activate.bat STENV"; echo "$out"; exit 1; }
     grep -qiF "PATH=$venv_found\bin;" <<< "$out" || { echo "FAIL: activate.bat PATH"; echo "$out"; exit 1; }
     [[ "$(grep -c '^STENV=' <<< "$out")" == 1 ]] || { echo "FAIL: deactivate.bat left STENV set"; echo "$out"; exit 1; }
 else
+    # The scripts name the venv by the path protost resolved, which has no
+    # symbolic links (macOS's /var is /private/var).
+    venv_real="$(pwd -P)/.venv"
     out=$(unset STENV; . .venv/bin/activate && echo "STENV=$STENV" && echo "PATH=$PATH" && deactivate && echo "after=${STENV:-unset}")
-    grep -qxF "STENV=$venv" <<< "$out" || { echo "FAIL: activate STENV"; echo "$out"; exit 1; }
-    grep -qF "PATH=$venv/bin:" <<< "$out" || { echo "FAIL: activate PATH"; echo "$out"; exit 1; }
+    grep -qxF "STENV=$venv_real" <<< "$out" || { echo "FAIL: activate STENV"; echo "$out"; exit 1; }
+    grep -qF "PATH=$venv_real/bin:" <<< "$out" || { echo "FAIL: activate PATH"; echo "$out"; exit 1; }
     grep -qxF "after=unset" <<< "$out" || { echo "FAIL: deactivate"; echo "$out"; exit 1; }
 fi
 
