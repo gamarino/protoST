@@ -175,7 +175,7 @@ known deviations from Smalltalk-80 and the open bugs are tracked in
 
 protoST depends on [protoCore](https://github.com/numaes/protoCore) 2.7.0 or
 newer (below 3.0), which must be built first, on
-[protoIO](https://github.com/gamarino/protoIO) 0.1 at build time (a sibling
+[protoIO](https://github.com/gamarino/protoIO) 0.2.2 or a later 0.2.x at build time (a sibling
 checkout `../protoIO`, or its `protoio-dev` package; it is linked statically),
 and on OpenSSL (`libssl-dev`) and libreadline. 2.7.0 is a hard floor: the
 sources use the portable 64-bit integer names (`proto::proto_long`) protoCore

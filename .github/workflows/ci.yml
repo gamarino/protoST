@@ -22,7 +22,9 @@ name: CI
 # WHICH protoCore REF: pinned for push and pull_request, `master` for the
 # nightly schedule.  A pinned ref makes a red pull request unambiguous.  The
 # schedule keeps the integration signal separate, and the summary always records
-# the protoCore commit actually used.
+# the protoCore commit actually used.  The `test` job runs twice: against the
+# pinned release (2.9.4) and against the declared minimum (2.7.0, the floor
+# entry -- this repository's only floor job; it stays on 2.7.0 on the schedule).
 #
 # TWO BUGS OF THIS REPOSITORY'S OWN SHAPE THIS FILE HAS TO HANDLE:
 #
@@ -61,10 +63,10 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  # protoCore 2.7.0 (tag v2.7.0), SOVERSION 3, the floor since the Windows port
-  # (proto::proto_long and friends first exist there); cli_memory_bounded needs
-  # 2.6.2 or later (the heap ceiling under dead mutables). Bump deliberately.
-  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'fc5d79db4f89f8a6eb473a52766b1908140a19d1' }}
+  # protoCore 2.9.4 (tag v2.9.4, 9cb0ef5), SOVERSION 3: what every push and
+  # pull request builds against, except the floor entry of the `test` job
+  # below, which builds the declared minimum. Bump deliberately.
+  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || '9cb0ef540826ee6c3162998db84ddf48464d6e2a' }}
   # The two tests excluded from the gate, both run in the `non-gating` job:
   #   cli_concurrent_first_call   quarantined, S19 -- see the header.
   #   F6 v2 T7: two actors ...    a wall-clock proof of parallelism: two 200 ms
@@ -75,17 +77,33 @@ env:
   #                               tens of milliseconds.  It is a good test and a
   #                               bad gate.
   PROTOIO_REPO: gamarino/protoIO
-  # protoIO 0.2.1 (main, 2026-10-02): process::shell, which OSProcess shell:
-  # needs, on top of 0.2.0's Windows review fixes. Pinned so a red build is
-  # attributable; bump deliberately.
-  PROTOIO_REF: c97a1ad3b3e6ef4eba31afdd8118ab0b730a954a
+  # protoIO 0.2.2 (main, 1611ff9), the floor CMakeLists.txt declares: the
+  # dual-stack listener, on top of 0.2.1's process::shell (OSProcess shell:).
+  # Pinned so a red build is attributable; bump deliberately.
+  PROTOIO_REF: 1611ff9cf8d499cdc42a6e108e42ecfc36fd8164
   NON_GATING_TESTS: '^(cli_concurrent_first_call|F6 v2 T7: two actors run in parallel \(wall-clock proof\))$'
 
 jobs:
   test:
-    name: Build and test suite
+    name: ${{ matrix.name }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Build and test suite
+            # Empty: env.PROTOCORE_REF (2.9.4, or master on the schedule).
+            protocore_ref: ''
+          # THE FLOOR JOB, the only one in this repository (cross-platform.yml
+          # builds 2.9.4 on macOS and Windows). protoCore 2.7.0 (tag v2.7.0,
+          # fc5d79d), SOVERSION 3: PROTOCORE_MIN_VERSION in CMakeLists.txt,
+          # where proto::proto_long and friends first exist (the Windows port);
+          # cli_memory_bounded needs 2.6.2 or later. Built on every event, the
+          # schedule included, so a change that needs a newer protoCore is
+          # caught before the declared minimum becomes a lie.
+          - name: Build and test suite (protoCore 2.7.0, the declared minimum)
+            protocore_ref: fc5d79db4f89f8a6eb473a52766b1908140a19d1
     steps:
       - name: Check out protoST
         uses: actions/checkout@v4
@@ -96,7 +114,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.PROTOCORE_REPO }}
-          ref: ${{ env.PROTOCORE_REF }}
+          ref: ${{ matrix.protocore_ref || env.PROTOCORE_REF }}
           path: protoCore
 
       - name: Check out protoIO as a sibling
@@ -107,6 +125,8 @@ jobs:
           path: protoIO
 
       - name: Record what is being built
+        env:
+          PROTOCORE_REF: ${{ matrix.protocore_ref || env.PROTOCORE_REF }}
         run: |
           cmake --version | head -1
           g++ --version | head -1

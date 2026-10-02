@@ -20,9 +20,12 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  PROTOCORE_REF: fc5d79db4f89f8a6eb473a52766b1908140a19d1
+  # protoCore 2.9.4 (tag v2.9.4, 9cb0ef5), as ci.yml's main job. The declared
+  # minimum (2.7.0) is built by ci.yml's floor entry only.
+  PROTOCORE_REF: 9cb0ef540826ee6c3162998db84ddf48464d6e2a
   PROTOIO_REPO: gamarino/protoIO
-  PROTOIO_REF: c97a1ad3b3e6ef4eba31afdd8118ab0b730a954a
+  # protoIO 0.2.2 (main, 1611ff9), the declared floor.
+  PROTOIO_REF: 1611ff9cf8d499cdc42a6e108e42ecfc36fd8164
   # As in ci.yml: a wall-clock verdict never gates.
   NON_GATING_TESTS: '^(cli_concurrent_first_call|F6 v2 T7: two actors run in parallel \(wall-clock proof\))$'
 

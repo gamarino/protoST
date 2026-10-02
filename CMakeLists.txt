@@ -226,13 +226,16 @@ target_link_libraries(protost_runtime PRIVATE protost_warnings)
 # link interface; dpkg-shlibdeps turns it into the package's libssl
 # dependency.
 #
-# The floor is 0.2.1: process::shell, which hands a command line to cmd.exe
-# verbatim (OSProcess shell:). 0.2.0 brought, on Windows, the refusal of
+# The floor is 0.2.2, the protoIO the other protoCore runtimes require: its
+# listener on a host-less address is dual-stack, so a client that tries ::1
+# first ("localhost" on Windows and macOS) is not refused there. 0.2.1 brought
+# process::shell, which hands a command line to cmd.exe verbatim (OSProcess
+# shell:). 0.2.0 brought, on Windows, the refusal of
 # .bat/.cmd targets, a crashed child's exit code as 128 + signal, timeouts on
 # console reads and open files that can be deleted or renamed. protoIO's
 # package is compatible within one minor version (SameMinorVersion), so 0.1
 # would refuse 0.2.x.
-set(PROTOIO_MIN_VERSION "0.2.1")
+set(PROTOIO_MIN_VERSION "0.2.2")
 find_package(protoIO ${PROTOIO_MIN_VERSION} CONFIG QUIET)
 if(protoIO_FOUND)
     message(STATUS "protoST: installed protoIO ${protoIO_VERSION} from ${protoIO_DIR}")

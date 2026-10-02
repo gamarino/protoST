@@ -5,6 +5,14 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+- **CI builds protoCore 2.9.4 and protoIO 0.2.2; protoIO 0.2.2 is the floor.**
+  Every push and pull request job (Linux, macOS, Windows) builds protoCore
+  2.9.4 (tag `v2.9.4`, `9cb0ef5`); one Linux job, the only floor job, builds
+  2.7.0 (`fc5d79d`), the minimum `CMakeLists.txt` declares. protoIO is pinned
+  to 0.2.2 (`1611ff9`), and `find_package(protoIO 0.2.2)` (also checked
+  against a sibling `../protoIO`) now requires it, as protoScala and
+  protoClojure do: its listener on a host-less address is dual-stack.
+
 - **S23: a chain of re-signalling handlers finishes at the engine nesting
   limit.** A handler block runs in a nested engine of its own; at the limit
   (1,000 nested engines) it could not start, and the limit error then

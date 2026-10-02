@@ -9,8 +9,10 @@ On a Debian or Ubuntu machine where protoCore's package is installed, the
 library is `/usr/lib/x86_64-linux-gnu/libprotoCore.so.3`, a link to
 `libprotoCore.so.<version>`. The 0.5.0 release was built and tested against
 protoCore 2.6.1; the sources since the Windows port need 2.7.0 or later
-(*Prerequisites*). CI builds against protoCore 2.7.0 on Linux, macOS and
-Windows; the suite was last run locally against an installed 2.8.0.
+(*Prerequisites*). CI builds against protoCore 2.9.4 on Linux, macOS and
+Windows, and against 2.7.0, the declared minimum, in one Linux job (the floor
+job), both with protoIO 0.2.2; the suite was last run locally against an
+installed 2.8.0.
 
 ---
 
@@ -22,8 +24,10 @@ Windows; the suite was last run locally against an installed 2.8.0.
   Fedora/RHEL, `brew install readline` on macOS). It is a hard requirement:
   `find_library(READLINE_LIBRARY NAMES readline REQUIRED)`, except on Windows,
   where the REPL uses the console's own line editing (*Windows (MSVC)*).
-- **protoIO 0.2.1 or a later 0.2.x** at build time only (0.2.1 adds
-  `process::shell`, which `OSProcess shell:` uses; protoIO's package is
+- **protoIO 0.2.2 or a later 0.2.x** at build time only (0.2.1 adds
+  `process::shell`, which `OSProcess shell:` uses; 0.2.2 makes a listener on
+  a host-less address dual-stack, so `localhost` clients that try `::1` first
+  are not refused; protoIO's package is
   compatible within one minor version, so a 0.1 or 0.3 is refused): the I/O
   library shared by the protoCore
   runtimes (files, processes, TCP, UDP, TLS, HTTP), linked statically, so the
