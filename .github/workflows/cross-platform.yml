@@ -115,6 +115,7 @@ jobs:
           ${PYTHON_EXE:+"-DPython3_EXECUTABLE=$PYTHON_EXE"}
 
       - name: Build protoST
+        id: build
         working-directory: protoST
         run: cmake --build build --parallel 4
 
@@ -134,8 +135,9 @@ jobs:
         # only the Windows directories: nothing from the build tree, the
         # protoCore prefix or the OpenSSL installation can be found, so every
         # DLL protost.exe needs must come from the ZIP. The runner has the MSVC
-        # runtime installed system-wide, so its DLLs are checked by name.
-        if: runner.os == 'Windows'
+        # runtime installed system-wide, so its DLLs are checked by name. Runs
+        # whenever the build succeeded, whatever the test suite's verdict.
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.build.outcome == 'success' }}
         working-directory: protoST/build
         run: |
           cpack -G ZIP
