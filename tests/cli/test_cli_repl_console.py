@@ -237,6 +237,11 @@ def run_windows_inner(log):
     out_path = log + ".out"
     out = open(out_path, "wb")
     home = tempfile.mkdtemp(prefix="protost-repl-")
+    # A process created in a new process group starts with Ctrl-C ignored,
+    # and its children inherit that: ctest starts tests that way. protost
+    # must see Ctrl-C as it does when a person starts it from a console, so
+    # the flag is cleared before it is started (children inherit it).
+    k32.SetConsoleCtrlHandler(None, False)
     proc = subprocess.Popen([PROTOST, "-i"], stdout=out, stderr=subprocess.STDOUT,
                             env=dict(os.environ, HOME=home, USERPROFILE=home))
     # This process ignores Ctrl-C from here on; protost, already started,
