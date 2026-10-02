@@ -205,13 +205,13 @@ private:
             sendEvent("terminated", json::object());
             return;
         }
-        std::fseek(fp, 0, SEEK_END);
-        long n = std::ftell(fp);
-        std::fseek(fp, 0, SEEK_SET);
-        std::string src(static_cast<size_t>(n > 0 ? n : 0), '\0');
-        if (n > 0) {
-            size_t got = std::fread(src.data(), 1, static_cast<size_t>(n), fp);
-            src.resize(got);
+        // Read in chunks, without asking for the size: ftell answers a long,
+        // which is 32 bits on Windows.
+        std::string src;
+        {
+            char chunk[65536];
+            size_t got;
+            while ((got = std::fread(chunk, 1, sizeof chunk, fp)) > 0) src.append(chunk, got);
         }
         std::fclose(fp);
 

@@ -422,19 +422,21 @@ void cmdLoad(Session& s, const std::string& arg) {
         std::fprintf(stderr, ":load: cannot open %s\n", path.c_str());
         return;
     }
-    std::fseek(fp, 0, SEEK_END);
-    long n = std::ftell(fp);
-    std::fseek(fp, 0, SEEK_SET);
-    if (n < 0) { std::fclose(fp); std::fprintf(stderr, ":load: cannot read %s\n", path.c_str()); return; }
-    std::string src(static_cast<size_t>(n), '\0');
-    size_t got;
+    // Read in chunks, without asking for the size: ftell answers a long,
+    // which is 32 bits on Windows, and nothing for a file that is not
+    // seekable.
+    std::string src;
+    bool failed;
     {
         // 2026-05-25: REPL is running with worker threads alive; do not
         // stall the GC quorum behind a slow filesystem read.
         proto::ProtoContext::UnmanagedScope u(s.rt->rootCtx());
-        got = std::fread(src.data(), 1, static_cast<size_t>(n), fp);
+        char chunk[65536];
+        size_t got;
+        while ((got = std::fread(chunk, 1, sizeof chunk, fp)) > 0) src.append(chunk, got);
+        failed = std::ferror(fp) != 0;
     }
-    src.resize(got);
+    if (failed) { std::fclose(fp); std::fprintf(stderr, ":load: cannot read %s\n", path.c_str()); return; }
     std::fclose(fp);
 
     // Execute against the live session — definitions and variables persist

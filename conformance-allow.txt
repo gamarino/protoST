@@ -19,5 +19,5 @@ external_finalizer src/dap/DapServer.cpp:257 bcdcd097ab21 :: Legitimate, same sh
 # same reason as the two above -- the wrapper carries a BytecodeModule* owned by
 # the compiler's module vector, which protoST's own tests are careful to outlive
 # the runtime -- but it is unchecked, not checked-and-cleared.
-symbol_key_source src/primitives/exception_prims.cpp:451 2b2704d1e79c :: False positive. The name argument is msgTextKey(ctx), an interned symbol (createSymbol); the string built on this line, fromUTF8String(text), is the attribute's VALUE, the exception's message text. Reviewed 2026-09-30.
+symbol_key_source src/primitives/exception_prims.cpp:462 2b2704d1e79c :: False positive. The name argument is msgTextKey(ctx), an interned symbol (createSymbol); the string built on this line, fromUTF8String(text), is the attribute's VALUE, the exception's message text. Reviewed 2026-09-30.
 attr_sentinel src/primitives/object_prims.cpp:1168 b962d3e15aaf :: False positive. `!` negates m->isInteger(ctx), not m; the line before returns unless isMethodValue(m), which rejects nullptr and PROTO_NONE, so m is a method here. Reviewed 2026-09-30.
