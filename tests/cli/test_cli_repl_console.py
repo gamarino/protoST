@@ -27,6 +27,7 @@ import time
 
 PROTOST = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else None
 TIMEOUT = 15.0
+PRIMARY = "protoST> "
 STATUS_CONTROL_C_EXIT = 0xC000013A
 # Waiting on a Future nobody resolves: the main thread blocks on a semaphore
 # and reaches no safepoint, so a Ctrl-C cannot be taken there.
@@ -44,56 +45,71 @@ class Session:
     """Common driver: `send` types text, `ctrl_c` presses Ctrl-C, `output`
     answers everything the REPL printed so far (decoded as UTF-8)."""
 
-    def expect(self, needle, count=1, timeout=TIMEOUT):
+    def expect_after(self, needle, start, timeout=TIMEOUT):
+        """Waits for `needle` in the output past offset `start`; answers the
+        offset just past it. Offsets, not counts: a prompt is printed after
+        a result, a little later, and a count taken in between would be
+        satisfied by that prompt instead of the one the action causes."""
         end = time.time() + timeout
         while time.time() < end:
-            if self.output().count(needle) >= count:
-                return
+            i = self.output().find(needle, start)
+            if i >= 0:
+                return i + len(needle)
             if self.exited() is not None:
                 break
             time.sleep(0.05)
-        fail("waiting for %r (x%d)" % (needle, count), self.output(), self.exited())
+        fail("waiting for %r" % (needle,), self.output(), self.exited())
+
+    def settled(self):
+        """The output's length once nothing more has arrived for a moment."""
+        size = -1
+        while True:
+            time.sleep(0.3)
+            now = len(self.output())
+            if now == size:
+                return now
+            size = now
+
+    def evaluate(self, line, result, pos):
+        """Types `line`; waits for `result` and the prompt after it."""
+        self.send(line)
+        pos = self.expect_after(result, pos)
+        return self.expect_after(PRIMARY, pos)
+
+    def cancel(self):
+        """Presses Ctrl-C at the prompt; waits for the next prompt."""
+        mark = self.settled()
+        self.ctrl_c()
+        return self.expect_after(PRIMARY, mark)
 
     def scenario(self):
-        primary = "protoST> "
-        self.expect(primary)
-        self.send("'ñandú' size.\r")
-        self.expect("=> 5")
+        pos = self.expect_after(PRIMARY, 0)
+        pos = self.evaluate("'\u00f1and\u00fa' size.\r", "=> 5", pos)
 
         # Ctrl-C cancels the line being typed.
-        n = self.output().count(primary)
         self.send("1 + ")
-        time.sleep(0.3)
-        self.ctrl_c()
-        self.expect(primary, n + 1)
-        self.send("3 + 4.\r")
-        self.expect("=> 7")
+        pos = self.cancel()
+        pos = self.evaluate("3 + 4.\r", "=> 7", pos)
         if "=> 8" in self.output():
             fail("the cancelled line was evaluated", self.output())
 
         # ... and a multi-line form being entered.
         self.send("[:x |\r")
-        self.expect("...> ")
-        n = self.output().count(primary)
-        self.ctrl_c()
-        self.expect(primary, n + 1)
-        self.send("6 * 7.\r")
-        self.expect("=> 42")
+        pos = self.expect_after("...> ", pos)
+        pos = self.cancel()
+        pos = self.evaluate("6 * 7.\r", "=> 42", pos)
 
         # Ctrl-C at an empty prompt, again and again: the session goes on.
         for _ in range(3):
-            n = self.output().count(primary)
-            self.ctrl_c()
-            self.expect(primary, n + 1)
-        self.send("5 + 5.\r")
-        self.expect("=> 10")
+            pos = self.cancel()
+        pos = self.evaluate("5 + 5.\r", "=> 10", pos)
 
         # An evaluation blocked where it reaches no safepoint: the first
         # Ctrl-C stays pending, the second ends the process.
         self.send(BLOCKING)
         time.sleep(1.0)
         self.ctrl_c()
-        time.sleep(0.3)
+        time.sleep(0.5)
         self.ctrl_c()
         end = time.time() + TIMEOUT
         while self.exited() is None and time.time() < end:
