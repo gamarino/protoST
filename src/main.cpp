@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 #include <cstdlib>
+#include <iostream>
 #if defined(__linux__)
 #include <sys/prctl.h>
 #endif
@@ -25,6 +26,9 @@
 #include <fcntl.h>
 #include <io.h>
 #include <windows.h>
+#include <psapi.h>
+#else
+#include <sys/resource.h>
 #endif
 
 namespace {
@@ -48,7 +52,7 @@ void printUsage(const char* prog) {
     // implemented (bytecode serialisation is out of scope). The usage text is
     // kept honest — only the modes the binary actually supports are listed.
     std::fprintf(stderr,
-        "Usage: %s [--print-last] <script.st> [args...]\n"
+        "Usage: %s [--print-last] <script.st> [args...]   (\"-\" reads the script from stdin)\n"
         "       %s -e '<expr>'\n"
         "       %s -i                     (interactive REPL)\n"
         "       %s -d <script.st>         (CLI debugger)\n"
@@ -67,10 +71,17 @@ void printUsage(const char* prog) {
         prog, prog, prog, prog, prog, prog, prog);
 }
 
-// Reads a whole script from `path`. Uses stream reads rather than
-// fseek/ftell so a pipe, /dev/stdin or a process substitution works: those
-// are not seekable, and the size ftell reported for them was garbage.
+// Reads a whole script from `path`; "-" names standard input. Uses stream
+// reads rather than fseek/ftell so a pipe, /dev/stdin or a process
+// substitution works: those are not seekable, and the size ftell reported for
+// them was garbage.
 bool readWholeFile(const char* path, std::string& out) {
+    if (std::strcmp(path, "-") == 0) {
+        // Binary on every platform (prepareStandardStreams), so a script read
+        // from a pipe means the same bytes as the file it came from.
+        out.assign(std::istreambuf_iterator<char>(std::cin), std::istreambuf_iterator<char>());
+        return !std::cin.bad();
+    }
     std::ifstream in(path, std::ios::binary);
     if (!in) return false;
     out.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
@@ -81,10 +92,43 @@ void printVersion() {
     std::printf("%s\n", protoST::versionString());
 }
 
+// PROTOST_REPORT_PEAK_RSS=1: when main returns, report the process's peak
+// resident memory on stderr as "protost: peak resident set size <N> KB". The
+// same figure on every platform, measured by the process itself:
+// getrusage's ru_maxrss (what GNU and BSD time print; kilobytes on Linux,
+// bytes on macOS) and the peak working set on Windows, which has no time(1).
+// tests/cli/test_cli_memory_bounded.sh bounds it.
+struct PeakMemoryReport {
+    const bool enabled = [] {
+        const char* v = std::getenv("PROTOST_REPORT_PEAK_RSS");
+        return v && v[0] == '1';
+    }();
+    ~PeakMemoryReport() {
+        if (!enabled) return;
+        unsigned long long kb = 0;
+#if defined(_WIN32)
+        PROCESS_MEMORY_COUNTERS pmc{};
+        pmc.cb = sizeof pmc;
+        if (!GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc)) return;
+        kb = static_cast<unsigned long long>(pmc.PeakWorkingSetSize) / 1024;
+#else
+        rusage ru{};
+        if (getrusage(RUSAGE_SELF, &ru) != 0) return;
+#if defined(__APPLE__)
+        kb = static_cast<unsigned long long>(ru.ru_maxrss) / 1024;
+#else
+        kb = static_cast<unsigned long long>(ru.ru_maxrss);
+#endif
+#endif
+        std::fprintf(stderr, "protost: peak resident set size %llu KB\n", kb);
+    }
+};
+
 } // anon
 
 int main(int argc, char** argv) {
     prepareStandardStreams();
+    const PeakMemoryReport peakMemoryReport;
 #if defined(__linux__) && defined(PR_SET_PTRACER)
     // Diagnostics: PROTOST_ALLOW_PTRACE=1 lets a debugger that is not this
     // process's ancestor attach (gdb -p) under kernel.yama.ptrace_scope=1,
@@ -211,15 +255,17 @@ int main(int argc, char** argv) {
             argi = 2;
         }
         const char* path = argv[argi];
-        if (path[0] == '-') { std::fprintf(stderr, "unknown option: %s\n", path); printUsage(argv[0]); return 64; }
+        if (path[0] == '-' && path[1] != '\0') { std::fprintf(stderr, "unknown option: %s\n", path); printUsage(argv[0]); return 64; }
         protoST::setProgramArguments(path, std::vector<std::string>(argv + argi + 1, argv + argc));
         std::string src;
         if (!readWholeFile(path, src)) { std::fprintf(stderr, "file not found: %s\n", path); return 66; }
 
+        // Diagnostics name a script read from standard input "<stdin>".
+        const char* sourceName = std::strcmp(path, "-") == 0 ? "<stdin>" : path;
         protoST::Parser P(std::move(src));
         auto ast = P.parseModule();
         for (auto& e : P.errors())
-            std::fprintf(stderr, "%s:%d:%d: %s\n", path, e.line, e.column, e.message.c_str());
+            std::fprintf(stderr, "%s:%d:%d: %s\n", sourceName, e.line, e.column, e.message.c_str());
         if (!P.errors().empty()) return 65;
 
         try {
@@ -233,7 +279,7 @@ int main(int argc, char** argv) {
             protoST::STRuntime rt;
             protoST::Compiler C;
             bc = C.compileModule(*ast);
-            bc->setSourceName(path);
+            bc->setSourceName(sourceName);
             if (C.hasErrors()) {
                 for (auto& s : C.errors()) std::fprintf(stderr, "compile error: %s\n", s.c_str());
                 return 70;
