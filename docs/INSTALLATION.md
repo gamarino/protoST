@@ -244,7 +244,7 @@ thing on every platform, except for these, which differ on Windows:
 | `bench_harness_selftest` | Not registered: its fake `protost` binaries are `/bin/sh` scripts. |
 | `cli_inputs` | Reads a script through `-` only: the `/dev/stdin` and process-substitution cases need POSIX files. |
 | `cli_venv` | Activates through `activate.bat` and `deactivate.bat` in `cmd.exe` instead of sourcing `activate` in `sh`. |
-| `cli_repl_console` | A console of its own instead of a pseudo-terminal: keys are written to the console's input buffer and Ctrl-C is pressed on the keyboard (`keybd_event`). |
+| `cli_repl_console` | A console of its own instead of a pseudo-terminal: keys are written to the console's input buffer and Ctrl-C is pressed on the keyboard (`keybd_event`). ctest starts each test in a new process group, which ignores Ctrl-C and passes that on to its children, so the test clears the flag before starting `protost`, as a console a person types in has it. A `protost` started with Ctrl-C ignored still cancels the line at the prompt (the console aborts the read), but cannot be interrupted or stopped with Ctrl-C. |
 | `cli_memory_bounded` | The same 1 GB bound, on the peak working set instead of the maximum resident set size. |
 | `cli_kernel` | Unchanged: on every platform it bounds what `-e '1'` costs beyond starting the process (`--version`), because under Git Bash starting a native program costs about as much as the whole budget. |
 
