@@ -113,6 +113,7 @@ jobs:
           "-DCMAKE_PREFIX_PATH=$GITHUB_WORKSPACE/prefix$EXTRA_PREFIX"
           ${OPENSSL_ROOT_DIR:+"-DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR"}
           ${PYTHON_EXE:+"-DPython3_EXECUTABLE=$PYTHON_EXE"}
+          ${{ runner.os == 'Windows' && '-DPROTOST_WARNINGS_AS_ERRORS=ON' || '' }}
 
       - name: Build protoST
         id: build
@@ -140,7 +141,13 @@ jobs:
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.build.outcome == 'success' }}
         working-directory: protoST/build
         run: |
-          cpack -G ZIP
+          # Every generator the configuration enabled: the ZIP, and the NSIS
+          # installer when makensis is on the runner.
+          cpack
+          if grep -q 'CPACK_GENERATOR "[^"]*NSIS' CPackConfig.cmake; then
+            ls protost-*-win64.exe || { echo "NSIS was enabled but built no installer"; exit 1; }
+            echo "protoST Windows installer built: $(ls protost-*-win64.exe)" >> "$GITHUB_STEP_SUMMARY"
+          fi
           zip=$(ls protost-*-win64.zip | head -1)
           unzip -l "$zip"
           for dll in vcruntime140.dll msvcp140.dll; do

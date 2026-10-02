@@ -6,6 +6,7 @@ target_include_directories(protost_unit_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
 )
 target_link_libraries(protost_unit_tests PRIVATE
+    protost_warnings
     Catch2::Catch2WithMain
     protost_frontend
     protost_runtime
