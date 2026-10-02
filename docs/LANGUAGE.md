@@ -2372,13 +2372,14 @@ The runtime executable is `protost`.
 |------------|--------|
 | `protost script.st [args...]` | Run `script.st`; only what the program prints is shown. The words after the script path are the program's own arguments (`Smalltalk arguments`, §12.11.3); the process exits with the status the program sets (`Smalltalk exit:`), 1 after an unhandled error, 0 otherwise. |
 | `protost --print-last script.st [args...]` | Run `script.st`, then print the value of its last top-level statement. Options go before the script path; everything after it is passed to the program. |
+| `protost - [args...]` | Read the script from standard input (also with `--print-last`); diagnostics call it `<stdin>`. |
 | `protost -e '<expr>'` | Evaluate the expression and print the result. |
 | `protost -i` | Start the interactive REPL. |
 | `protost -d script.st` | Run the script under the CLI debugger. |
 | `protost --dap` | Run the Debug Adapter Protocol server over stdin/stdout. |
 | `protost --dump-ast script.st` | Parse and print the AST (development aid). |
 | `protost venv create [path]` | Create a venv (default `.venv`). |
-| `protost venv activate [path]` | Print the shell snippet to source. |
+| `protost venv activate [path]` | Print the command that activates the venv: `. <venv>/bin/activate` (POSIX shells), `call <venv>\bin\activate.bat` on Windows. `venv create` writes `activate` (sh, bash, zsh), `activate.fish`, `Activate.ps1` (PowerShell), and `activate.bat` / `deactivate.bat` (cmd.exe) on every platform. |
 | `protost venv info` | Show the active venv. |
 | `protost --help` / `--version` | Usage / version. |
 
@@ -2392,6 +2393,12 @@ next. A variable assigned at the prompt is a global ([§4.9](#49-globals)), and 
 block evaluated at the prompt reads and assigns it as that global
 (`s := 0.` then `#(1 2) do: [ :x | s := s + x ]` leaves `s` at 3), unless the
 block declares a temporary or argument of the same name.
+
+Ctrl-C at the prompt cancels the line being typed, and a multi-line form being
+entered; during an evaluation it interrupts the evaluation, which reports
+`Interrupted`, and the REPL prompts again. A second Ctrl-C while the first is
+still pending (an evaluation blocked where it cannot be interrupted, such as a
+network wait) ends the process as the platform's own Ctrl-C does.
 
 Meta-commands begin with `:` and are recognised only at the primary prompt
 (never mid multi-line input). An unrecognised `:foo` reports `unknown command`.

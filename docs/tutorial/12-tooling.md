@@ -18,6 +18,7 @@ invocations:
 |------------|--------|
 | `protost script.st` | run a script; only what it prints is shown |
 | `protost --print-last script.st` | run a script, then print the value of its last top-level statement |
+| `protost -` | run a script read from standard input (`cat script.st \| protost -`) |
 | `protost -e '<code>'` | evaluate an expression (or several statements); print the last value |
 | `protost -i` | start the interactive REPL |
 | `protost -d script.st` | run a script under the CLI debugger |
@@ -154,12 +155,17 @@ $ ./build/protost venv create .venv
 ```
 
 This builds a `.venv/` directory with `bin/`, `lib/`, and `cache/`
-subdirectories and a `stenv.cfg` configuration file. The other subcommands:
+subdirectories and a `stenv.cfg` configuration file. `bin/` holds an
+activation script for each shell, on every platform: `activate` for sh, bash
+and zsh (`. .venv/bin/activate`), `activate.fish`, `Activate.ps1` for
+PowerShell, and `activate.bat` / `deactivate.bat` for Windows' `cmd.exe`.
+Activating sets `STENV` and puts the venv's `bin/` first on `PATH`;
+`deactivate` undoes both. The other subcommands:
 
 | Command | Effect |
 |---------|--------|
 | `protost venv create [path]` | create a venv (default `.venv`) |
-| `protost venv activate [path]` | print the shell snippet to `source` |
+| `protost venv activate [path]` | print the command that activates the venv in your shell |
 | `protost venv info` | show the active venv (or "no active venv") |
 
 The runtime discovers an active venv via the `STENV` environment variable, then

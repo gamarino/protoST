@@ -242,7 +242,8 @@ sudo dpkg -i protost-<version>-Linux.deb && sudo apt-get install -f
 **Installing on Windows.** protoST builds natively with Visual Studio 2022
 (MSVC) and runs scripts, `-e` and the REPL from `cmd.exe` or PowerShell; the
 steps, and what differs there (no readline, `/` in the paths the file
-primitives answer, `cmd.exe` as `OSProcess`'s shell), are in
+primitives answer, `cmd.exe` as `OSProcess`'s shell, batch files refused by
+`run:`), are in
 [docs/INSTALLATION.md — Windows (MSVC)](docs/INSTALLATION.md#windows-msvc).
 Alternatively, use WSL2 with Ubuntu 24.04 and the Linux packages attached to
 the GitHub releases (or built as below):
@@ -255,13 +256,14 @@ wget https://github.com/gamarino/protoST/releases/download/v0.5.0/protost-0.5.0-
 sudo apt install ./protoCore-2.6.2-Linux.deb ./protost-0.5.0-Linux.deb
 ```
 
-**macOS — not built or verified.** `CMakeLists.txt` configures a `.dmg`
-(DragNDrop) for macOS, and an NSIS installer and a `.zip` for Windows; the
-`.zip` has been built on Windows, the `.dmg` and the NSIS installer never
-have: there is no macOS host (and no NSIS) in this project.
-Since 0.5.0 the I/O layer uses Linux-only calls (`pipe2`, `accept4`), so a
-macOS build is not expected to compile unchanged. See
-[`docs/INSTALLATION.md`](docs/INSTALLATION.md).
+**macOS — built and tested in CI, not packaged.** The cross-platform CI job
+builds protoST on macOS (arm64, Apple clang) and runs the whole suite there;
+the `.dmg` (DragNDrop) that `CMakeLists.txt` configures has not been built.
+On Windows the `.zip` is self-contained -- `protost.exe` with protoCore's DLL,
+the OpenSSL DLLs (and OpenSSL's licence) and the MSVC runtime next to it --
+and CI unpacks it into an empty directory and runs it from there; the NSIS
+installer is built in CI too (when `makensis` is present) but has not been
+installed and run. See [`docs/INSTALLATION.md`](docs/INSTALLATION.md).
 
 The installed `protost` lands on your `PATH`; the standard library is installed
 to `<prefix>/share/protoST/lib`, so `Import from: 'stream'` resolves with no
@@ -278,15 +280,17 @@ cpack -G DEB    # Debian/Ubuntu .deb (Linux)
 cpack -G RPM    # RPM (Linux, needs rpmbuild)
 cpack -G TGZ    # portable .tar.gz (Linux)
 cpack -G DragNDrop   # .dmg (macOS; never built)
-cpack -G ZIP         # .zip (Windows)
-cpack -G NSIS        # installer .exe (Windows, needs NSIS; never built)
+cpack -G ZIP         # .zip (Windows; self-contained)
+cpack -G NSIS        # installer .exe (Windows; enabled when makensis is found)
 ```
 
 The generators are selected per platform in `CMakeLists.txt` (Linux: DEB, RPM,
-TGZ; macOS: DragNDrop; Windows: NSIS, ZIP); `cpack` with no `-G` builds every
-generator enabled for the host OS. The `.deb` and `.tar.gz` packages have been
-verified on Linux and the `.zip` on Windows; the macOS and NSIS generators are
-configured but have never been run.
+TGZ, each only when its tool is found; macOS: DragNDrop; Windows: ZIP, plus
+NSIS when `makensis` is found); `cpack` with no `-G` builds every generator
+enabled for the host OS. The `.deb` and `.tar.gz` packages have been verified
+on Linux and the `.zip` on Windows (in CI, from a clean directory); the NSIS
+installer is built in CI but has not been installed and run, and the macOS
+generator has never been run.
 
 ## Documentation
 

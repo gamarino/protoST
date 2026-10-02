@@ -14,13 +14,16 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Test suite:** 1068 `ctest` cases, 1068/1068 passing on 2026-09-29
-  (protoST 0.5.0, branch `feature/io` after commit `e966c8a` with the 0.5.0
-  documentation, against protoCore 2.6.1): 537 conformance programs, 437
-  unit tests, 42 examples, 30 CLI tests (including the benchmark-harness
-  self-test) and 22 documentation checks (the examples with a stated result
-  in 21 documents, plus the checker's self-test). The history of earlier
-  counts is in `CHANGELOG.md`.
+- **Test suite:** 1074 `ctest` cases on Linux, 1074/1074 passing on
+  2026-10-02 (branch `fix/windows-review`, against the installed protoCore
+  2.8.0 and protoIO 0.2.1): 542 conformance programs, 437 unit tests, 42
+  examples, 31 CLI tests (including the benchmark-harness self-test and the
+  terminal test `cli_repl_console`) and 22 documentation checks (the
+  examples with a stated result in 21 documents, plus the checker's
+  self-test). CI runs the same suite on Linux, macOS and Windows; Windows
+  registers 1073 (no benchmark-harness self-test) and runs all but
+  `cli_sigint` and tutorial chapter 15 (`docs/INSTALLATION.md`, "Windows
+  (MSVC)"). The history of earlier counts is in `CHANGELOG.md`.
 - **Last verified:** 2026-09-29, for 0.5.0 (input and output, see
   [`docs/superpowers/specs/2026-09-29-io-design.md`](superpowers/specs/2026-09-29-io-design.md)),
   by the test suite above. The 0.4.0 audit before it (see
@@ -29,7 +32,8 @@ stable id and file it in the right bucket.
   was an adversarial Smalltalk-semantics audit of about 1,100 probe programs
   in two rounds; each fix of a wrong result, crash or hang it found carries a
   regression test.
-- **Open bugs:** one, S3 (Medium, not provable on this build). S19 closed
+- **Open bugs:** S3 (Medium, not provable on this build), S22 (Medium, seen
+  once on CI) and S23 (Medium, found 2026-10-02). S19 closed
   on 2026-09-29, S20 and S21 in 0.5.0. Hard edges that are not
   language-design choices are in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md).
 - **Id scheme:** `D1..D18` are carried over from `LANGUAGE.md` §14 and keep
@@ -172,9 +176,11 @@ are noted where useful.
       install-relative `<exe>/../share/protoST/lib`, so an installed binary
       resolves `Import from: …` with no `PROTOST_LIB`). The Debian package
       depends on `protocore` and the RPM `Requires: protoCore`. `cpack -G DEB`
-      and `-G TGZ` verified on Linux; the macOS and Windows generators are
-      configured per CPack's documented requirements but have not been
-      verified. *(Track 10)*
+      and `-G TGZ` verified on Linux; the Windows ZIP, which carries
+      protoCore's DLL, the OpenSSL DLLs with OpenSSL's licence and the MSVC
+      runtime next to `protost.exe`, is built and run from a clean directory
+      by the cross-platform CI job (NSIS is built when `makensis` is found);
+      the macOS `.dmg` has not been built. *(Track 10)*
 
 ### Documentation
 - [x] **The dual-audience tutorial** — [`docs/TUTORIAL.md`](TUTORIAL.md) plus
@@ -333,6 +339,7 @@ idiomatic code; Low = narrow edge case).
 | Id | Bug | Severity |
 |----|-----|----------|
 | S3 | **An allocation-free loop stalls a garbage collection.** protoCore starts a requested collection only after every running thread parks, and the dispatch loop had no park point: a thread running an inlined loop over SmallIntegers, a block loop or allocation-free recursion holds every other thread in the stop-the-world handshake until its loop ends, or for ever when the loop waits on a flag a parked thread must set. It matters only while a collection is requested. An earlier fix (`a508a51`) was reverted (`d2a873f`) when protoCore withdrew the park-only API it used. **Status after the S15 fix (2026-09-24): the mechanism is addressed but the close is not proved, so this stays open.** `ExecutionEngine::gcSafepoint` calls `ProtoContext::safepoint()` at every loop back-edge and at engine entry, and `safepoint()` ends in `parkForStopTheWorld` — that is precisely the park point the interpreter lacked, and the API protoCore now documents for this purpose. What could not be done is falsify it: **no allocation-free loop could be written in protoST to test with.** Measured on this build, every loop shape allocates about three cells per iteration even when its body only adds SmallIntegers — a 1,000,000-iteration `1 to: n do: [ :i | s := s + 1 ]` over a method temporary grows the heap by 3,014,656 cells — so every such loop already parks at `allocCell`'s every-64-allocations poll and cannot exhibit S3. A test written against a loop of that shape passed against a build with both safepoints removed, which is why it was withdrawn rather than kept. Closing S3 needs either a protoST loop that genuinely allocates nothing (which is first a question about why SmallInteger arithmetic allocates at all) or a white-box test that drives the dispatch loop directly. | Medium |
+| S23 | **A handler chain that re-signals at the engine nesting limit does not finish.** A recursion that wraps each level in `on: Error do:` whose handler signals a new `Error` (`relay: n` = `[self relay: n - 1] on: Error do: [:e | Error signal: 'level']`) completes for 498 levels in 0.1 s and does not finish for 499 or more (killed after 20 s and after 2 min, Linux, protoCore 2.8.0; memory stays at about 680 MB). Each level nests a protected block and a handler block, two engines, so at 499 levels the innermost handler can no longer start: the nesting limit raises its `Error` in the handler's signal, that `Error` is caught by the next outer handler, which re-signals, and the chain apparently restarts instead of unwinding. Found while writing `08-exceptions/unwind-through-nested-handler-blocks` (2026-10-02), which therefore stops at 450 levels. Not a crash, and a program has to nest handlers about 500 deep to meet it; not characterised further yet (`gdb` on the live process is the next step). | Medium |
 | S22 | **A cross-space read answered nil once on CI.** The unit test `Track Y: the provider serves a caller in a ProtoSpace protoST does not own` failed once on the CI runner (run 36662177419, 2026-09-30, protoCore 2.6.2): in its section "the value is the same object on both sides", the module namespace read from the foreign space answered `PROTO_NONE` for `Counter`, which the other section of the same case had just found. The rerun passed, and 500 local runs (default order, CI's random seed 3168677656, four CPUs under load) passed. The same case passed in the CI runs before and after. The protoCore change of that day (bulk release of dead mutables' table entries) was checked against it: the bulk removal matches one-by-one removal on 460 random trees, including trees shaped like the table's shards. Not characterised; the next failure should be captured with the space's state, not retried. | Medium |
 
 ---

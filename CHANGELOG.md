@@ -5,6 +5,62 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+- **The Windows-port review, 2026-10-02.**
+  - *protoIO 0.2.1 is the floor* (`find_package(protoIO 0.2.1)`; a sibling
+    `../protoIO` is checked against it too). 0.2.0 refuses `.bat`/`.cmd`
+    targets in `OSProcess run:` on Windows (an `Error`; cmd.exe would
+    re-parse their arguments), answers 128 + signal for a crashed child,
+    honours timeouts on console reads and lets open files be deleted or
+    renamed; 0.2.1 adds `process::shell`. CI pins protoIO `c97a1ad`.
+  - *`OSProcess shell:` and `command:` hand the command line to the shell
+    verbatim.* On Windows they ran `cmd.exe /c` with C-runtime argument
+    quoting, which cmd does not understand (`echo "a b"` printed
+    `\"a b\"`); they now run `cmd.exe /d /s /c "<command>"`. Unchanged on
+    POSIX.
+  - *An unwind no longer re-throws inside a catch clause anywhere.* The last
+    three sites -- the signal loop's handler block, an awaiting actor's
+    helped message and a module's top level -- now re-throw after the clause,
+    like the rest since the port.
+  - *REPL: Ctrl-C at the prompt cancels the line* (and a multi-line form
+    being entered) on every platform; before, POSIX kept the line and a
+    second Ctrl-C at the prompt killed the session, and Windows ended the
+    session. On Windows the console is read with `ReadConsoleW`, so
+    non-ASCII input arrives intact (it arrived as NULs with code page 65001
+    on the Windows 10 console host). A second Ctrl-C while the first is
+    pending ends the process with `STATUS_CONTROL_C_EXIT` on Windows, as
+    documented, instead of status 3.
+  - *`protost -`* runs a script read from standard input, on every platform.
+  - *`PROTOST_REPORT_PEAK_RSS=1`* prints the process's peak resident memory
+    (peak working set on Windows) on stderr at exit; `cli_memory_bounded`
+    checks the same 1 GB bound with it everywhere, instead of only the
+    result on Windows.
+  - *venv:* `venv create` writes `activate`, `activate.fish`,
+    `Activate.ps1`, `activate.bat` and `deactivate.bat` on every platform,
+    from templates compiled into `protost` (an installed `protost` wrote
+    empty files: it read them from the source tree).
+  - *Windows packages are self-contained:* protoCore's DLL (taken from the
+    imported target, whatever its name), the OpenSSL 3 DLLs named exactly
+    (no glob) with OpenSSL's Apache-2.0 licence, and the MSVC runtime
+    (app-local, `InstallRequiredSystemLibraries`) go next to `protost.exe`;
+    NSIS is a CPack generator only when `makensis` is found. CI unpacks the
+    ZIP into an empty directory and runs it with only the Windows
+    directories on `PATH`.
+  - *MSVC:* `/W3` applies to protoST's own targets only, and the Windows CI
+    job builds them with `/WX` (`PROTOST_WARNINGS_AS_ERRORS`).
+  - `:load` and the DAP launch read files without `ftell` (32 bits on
+    Windows); `utf8.manifest` no longer says protoScala.
+  - `cli_kernel` takes the process launch off the start-up time on every
+    platform, not only under Git Bash. Every remaining Windows difference,
+    in behaviour and in the tests, is listed in `docs/INSTALLATION.md`,
+    "Windows (MSVC)".
+  - New tests: `cli_repl_console`, conformance
+    `14-io/os_process_shell_verbatim`, `14-io/os_process_batch_file_refused`,
+    `08-exceptions/unwind-through-nested-handler-blocks`,
+    `08-exceptions/nesting-limit-through-handlers-is-catchable`,
+    `07-non-local-return/nonlocal-return-through-many-handlers`.
+  - Found while testing, not fixed: S23 (`docs/STATUS.md`), a handler chain
+    that re-signals at the engine nesting limit does not finish.
+
 - **Native Windows build (MSVC), 2026-10-01.** protoST builds with Visual
   Studio 2022 against an installed protoCore and the sibling protoIO; `protost`
   runs scripts, `-e` and the REPL from `cmd.exe` or PowerShell and installs with

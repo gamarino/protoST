@@ -7,8 +7,10 @@ dependency on protoCore's own package instead of shipping a copy.
 
 On a Debian or Ubuntu machine where protoCore's package is installed, the
 library is `/usr/lib/x86_64-linux-gnu/libprotoCore.so.3`, a link to
-`libprotoCore.so.2.6.1` for protoCore 2.6.1 (the version this release was
-built and tested against, and the oldest it accepts).
+`libprotoCore.so.<version>`. The 0.5.0 release was built and tested against
+protoCore 2.6.1; the sources since the Windows port need 2.7.0 or later
+(*Prerequisites*). CI builds against protoCore 2.7.0 on Linux, macOS and
+Windows; the suite was last run locally against an installed 2.8.0.
 
 ---
 
@@ -20,7 +22,10 @@ built and tested against, and the oldest it accepts).
   Fedora/RHEL, `brew install readline` on macOS). It is a hard requirement:
   `find_library(READLINE_LIBRARY NAMES readline REQUIRED)`, except on Windows,
   where the REPL uses the console's own line editing (*Windows (MSVC)*).
-- **protoIO 0.1** at build time only: the I/O library shared by the protoCore
+- **protoIO 0.2.1 or a later 0.2.x** at build time only (0.2.1 adds
+  `process::shell`, which `OSProcess shell:` uses; protoIO's package is
+  compatible within one minor version, so a 0.1 or 0.3 is refused): the I/O
+  library shared by the protoCore
   runtimes (files, processes, TCP, UDP, TLS, HTTP), linked statically, so the
   installed `protost` does not depend on it. Either install its `protoio-dev`
   package (or pass `-DCMAKE_PREFIX_PATH=<prefix>` / `-DprotoIO_DIR=<its build
@@ -145,18 +150,30 @@ cmake --install build
 %PREFIX%\bin\protost --version
 ```
 
-Any OpenSSL 3 for Windows with headers and import libraries works as
-`OPENSSL_ROOT_DIR`; the one PostgreSQL ships (`C:/Program Files/PostgreSQL/17`)
-was used for the verification. The build copies the DLLs protoST needs
-(`protoCore.dll`, `libssl-3-x64.dll`, `libcrypto-3-x64.dll`) into `build/bin/`,
-so `protost.exe` and the tests run in place; keep the build directory inside
-the checkout, as on Linux, so that `build/bin/protost.exe` finds the checkout's
-`lib/` (*How `protost` finds its standard library*). `cmake --install` puts
-`protost.exe` and the OpenSSL DLLs in `<prefix>/bin` and the standard library
-in `<prefix>/share/protoST/lib`; protoCore's own install adds `protoCore.dll`
-to its prefix's `bin`. With those on `PATH`, `protost` runs scripts, `-e` and
-the REPL from `cmd.exe` or PowerShell. `cpack -G ZIP` produces
-`protost-<version>-win64.zip`.
+Any OpenSSL 3 for Windows with headers, import libraries and its DLLs in
+`bin/` works as `OPENSSL_ROOT_DIR` (CI uses the one preinstalled on GitHub's
+`windows-2022` runners; the one PostgreSQL ships, `C:/Program Files/PostgreSQL/17`,
+was used for the first verification). The configuration names the two DLLs of
+that OpenSSL exactly -- `libcrypto-3-x64.dll` and `libssl-3-x64.dll` -- and
+fails if either is missing, rather than picking up whatever a glob finds. The
+build copies the DLLs protoST needs (protoCore's, taken from its imported CMake
+target so its file name does not matter, and OpenSSL's) into `build/bin/`, so
+`protost.exe` and the tests run in place; keep the build directory inside the
+checkout, as on Linux, so that `build/bin/protost.exe` finds the checkout's
+`lib/` (*How `protost` finds its standard library*).
+
+`cmake --install` and the packages put everything `protost.exe` loads next to
+it in `<prefix>/bin`: protoCore's DLL, the OpenSSL DLLs, and the Microsoft C++
+runtime (`vcruntime140.dll`, `msvcp140.dll` and the rest that
+`InstallRequiredSystemLibraries` names), deployed app-local so no Visual C++
+Redistributable has to be installed first. OpenSSL's licence (Apache-2.0) is
+installed as `share/doc/protoST/LICENSE-OpenSSL.txt`, the standard library in
+`<prefix>/share/protoST/lib`. `cpack` produces `protost-<version>-win64.zip`,
+and the NSIS installer `protost-<version>-win64.exe` too when `makensis` is
+found at configure time (otherwise NSIS is left out, so the ZIP is still
+built). The ZIP is self-contained: CI unpacks it into an empty directory and
+runs `protost.exe --version`, a script that runs a shell command and
+`venv create` from there with only the Windows directories on `PATH`.
 
 How Windows differs, by design:
 
@@ -170,34 +187,66 @@ How Windows differs, by design:
   Windows file API accepts, because `basename`, `parent` and `extension` split
   a path at `/`. A path written with `\` still opens, but is not split.
 - **The shell is `cmd.exe`.** `OSProcess shell:` and `command:` run
-  `cmd.exe /c` instead of `/bin/sh -c`, so the command line uses cmd's syntax
-  (`%VAR%`, not `$VAR`); `command:` drops a final CR LF. Programs are found on
-  `PATH` as `CreateProcess` finds them. `FileSystem home` falls back to
+  `cmd.exe /d /s /c "<command>"` (`cmd.exe` from the system directory) instead
+  of `/bin/sh -c`, and the command line reaches cmd exactly as written, so it
+  uses cmd's syntax and quoting (`%VAR%`, not `$VAR`; `echo "a b"` prints
+  the quotes); `command:` drops a final CR LF. Programs run with `run:` are
+  found as `CreateProcess` finds them, except that the working directory is
+  never searched, and a batch file (`.bat`, `.cmd`) is refused with an
+  `Error` (protoIO 0.2): cmd would re-parse its arguments by rules no quoting makes
+  safe, so run `cmd.exe /c` explicitly (or `shell:`) for one. A child that
+  crashes answers 128 + the matching POSIX signal as its exit code (139 for
+  an access violation), as a shell reports a child a signal ended.
+  `kill:signal:` supports only 0, 9 and 15. `FileSystem home` falls back to
   `USERPROFILE` when `HOME` is not set. `Smalltalk platform` answers
   `'windows'`.
+- **Scripts from standard input.** `protost -` reads the script from standard
+  input, as on every platform; there is no `/dev/stdin` and no process
+  substitution (`<(...)`) for a native Windows program.
 - **No readline.** The console edits the line and keeps a history itself, so
-  the REPL reads plain lines; `:history` lists the session's lines and no
-  history file is written.
-- **Ctrl-C** interrupts an evaluation in the REPL, as on Linux. A script
-  stopped with Ctrl-C ends with Windows' own status for it,
-  `STATUS_CONTROL_C_EXIT` (`0xC000013A`), where Linux reports 130.
+  the REPL reads whole lines from it (with `ReadConsoleW`, so non-ASCII input
+  arrives intact whatever the console's code page); `:history` lists the
+  session's lines and no history file is written. Ctrl-Z at the start of a
+  line ends the session, as Ctrl-D does elsewhere.
+- **Ctrl-C** cancels the line being typed at the REPL's prompt and interrupts
+  an evaluation, as on Linux and macOS. A second Ctrl-C while the first is
+  still pending (an evaluation blocked where it cannot be interrupted, such as
+  a network wait) ends the process with Windows' own status for Ctrl-C,
+  `STATUS_CONTROL_C_EXIT` (`0xC000013A`), as does Ctrl-C in a script, where
+  Linux reports 130 (killed by SIGINT).
+- **venv.** `venv create` writes activation scripts for every shell on every
+  platform: `bin\activate.bat` and `bin\deactivate.bat` for cmd.exe,
+  `bin\Activate.ps1` for PowerShell, and the POSIX `activate` and
+  `activate.fish`; `venv activate` prints the cmd.exe command. The POSIX
+  `activate` names the venv with a Windows path, so under Git Bash or MSYS2
+  set `STENV` yourself instead.
+- **Peak memory.** `PROTOST_REPORT_PEAK_RSS=1` reports the peak working set,
+  where Linux and macOS report `getrusage`'s maximum resident set size.
 - **Stacks.** Executables reserve 8 MiB stacks, the Linux default the engine's
   nesting limit is sized for, and Windows gives the same to protoCore's worker
   threads; recursion through blocks ends in a catchable `Error`, as on Linux.
+  Every boundary an unwind crosses re-throws after its catch clause (MSVC
+  keeps the frames below a catch clause alive while it runs).
 - **Dispatch.** MSVC has no computed `goto`, so the bytecode loop dispatches
   every instruction through its `switch` there (GCC and Clang keep the
   threaded dispatch).
 
 The test suite runs the script tests through Git for Windows' `bash` and the
-documentation checks through the Python CMake finds (pass
-`-DPython3_EXECUTABLE=...` to choose one), with Git's POSIX tools (`tr`, `wc`,
-`printf`) added to their `PATH`. Of the 1067 tests registered on Windows (the
-benchmark-harness self-test, whose fake binaries are `/bin/sh` scripts, is
-not), 1065 pass. The two that do not are not defects of protoST on Windows:
-`cli_sigint` needs `pgrep`, `kill -INT` and a FIFO, which Git Bash cannot aim
-at a native program (Ctrl-C was checked by hand: the REPL prints
-`Interrupted` and goes on); and the `env.st` example of tutorial chapter 15
-runs `echo $PUMP_MODE`, POSIX shell syntax that `cmd.exe` does not expand.
+documentation checks and the terminal test through the Python CMake finds
+(pass `-DPython3_EXECUTABLE=...` to choose one), with Git's POSIX tools (`tr`,
+`wc`, `printf`) added to their `PATH`. Every test measures and checks the same
+thing on every platform, except for these, which differ on Windows:
+
+| Test | On Windows |
+|------|------------|
+| `cli_sigint` | Not run: it needs `pgrep`, `kill -INT` and a FIFO, which Git Bash cannot aim at a native program. `cli_repl_console` covers Ctrl-C there instead, in a console of its own with a keyboard Ctrl-C: cancelling a line, Ctrl-C at an empty prompt, and a second Ctrl-C while blocked. A script stopped with Ctrl-C is not tested on Windows. |
+| `docs/docs/tutorial/15-input-and-output.md` | Not run: the `env.st` example runs `echo $PUMP_MODE`, POSIX shell syntax that `cmd.exe` does not expand. |
+| `bench_harness_selftest` | Not registered: its fake `protost` binaries are `/bin/sh` scripts. |
+| `cli_inputs` | Reads a script through `-` only: the `/dev/stdin` and process-substitution cases need POSIX files. |
+| `cli_venv` | Activates through `activate.bat` and `deactivate.bat` in `cmd.exe` instead of sourcing `activate` in `sh`. |
+| `cli_repl_console` | A console of its own instead of a pseudo-terminal: keys are written to the console's input buffer and Ctrl-C is pressed on the keyboard (`keybd_event`). |
+| `cli_memory_bounded` | The same 1 GB bound, on the peak working set instead of the maximum resident set size. |
+| `cli_kernel` | Unchanged: on every platform it bounds what `-e '1'` costs beyond starting the process (`--version`), because under Git Bash starting a native program costs about as much as the whole budget. |
 
 ---
 
@@ -247,9 +296,10 @@ module at all.
 
 The executable is located with `/proc/self/exe` on Linux,
 `_NSGetExecutablePath` on macOS and `GetModuleFileNameW` on Windows (the
-UTF-16 name, converted to UTF-8). The Linux and Windows branches have been
-executed; the macOS branch is compiled from the same code but **never run
-here** (D-I6). On Linux the lookup is proved by a
+UTF-16 name, converted to UTF-8). All three branches run in CI: Linux in
+`ci.yml`, macOS (arm64) and Windows in `cross-platform.yml`, where every
+script test starts the build tree's `protost`, which finds the checkout's
+`lib/` through its own location. On Linux the lookup is proved by a
 positive test (an installed `protost` importing `stream` with `PROTOST_LIB`
 unset) and a negative control (the same command with `share/protoST` moved away,
 which must fail).
@@ -298,8 +348,8 @@ start-up, so that is what a re-verification must check first.
 |----------|-----------|--------|
 | Linux / Debian-Ubuntu | TGZ, DEB | **VERIFIED.** Installed with `dpkg -i` as root in a throwaway `ubuntu:24.04` container and run there from `/usr/bin/protost`, outside any repository, with no `LD_LIBRARY_PATH` and no `PROTOST_LIB` set; the stdlib was found under `share/protoST/lib` through the executable's own location. |
 | Linux / Fedora-RHEL | TGZ, RPM | **VERIFIED.** `cpack -G RPM` executed in a throwaway `fedora:41` container (glibc 2.40, `rpm` 4.20.1); the RPM installed with `rpm -i` and `protost` ran correctly there. This closes the gap left by decision D-I2. |
-| macOS | DragNDrop | **UNVERIFIED.** Configured and reviewed only; there is no macOS host here. The macOS branch added to `discoverStdlibDir()` under D-I5 compiles but has never run. Review is not verification. Since 0.5.0 a macOS build is not expected to compile unchanged: `src/primitives/io_prims.cpp` uses Linux-only calls and flags (`pipe2`, `accept4`, `SOCK_CLOEXEC`, `SOCK_NONBLOCK`). |
-| Windows | NSIS, ZIP | **PARTLY VERIFIED** (2026-10-01, Windows 11, MSVC 19.44, protoCore 2.6.2). Built and tested natively (see *Windows (MSVC)*); `cmake --install` into a user prefix, then `protost --version`, a script, `-e` and the REPL run from `cmd.exe` with only that prefix's `bin` and protoCore's `bin` on `PATH`, the standard library found under `share/protoST/lib` with no `PROTOST_LIB` set; `cpack -G ZIP` builds the ZIP. The NSIS installer has not been built (no NSIS on that host). |
+| macOS | DragNDrop | **BUILT AND TESTED, NOT PACKAGED.** The cross-platform CI job (`macos-14`, Apple clang, arm64) builds protoST against an installed protoCore and runs the whole suite; the `.dmg` has not been built. |
+| Windows | ZIP, NSIS | **ZIP VERIFIED IN CI.** The cross-platform CI job (`windows-2022`, MSVC) builds and tests protoST, runs `cpack`, unpacks the ZIP into an empty directory and runs `protost.exe --version`, a script that runs a shell command, and `venv create` from there with only the Windows directories on `PATH`, after checking that the ZIP holds the MSVC runtime DLLs and OpenSSL's licence. The NSIS installer is built there whenever the runner has `makensis` (see the job summary); it has not been installed and run. Before CI, the ZIP and `cmake --install` were checked by hand on Windows 11 (2026-10-01, MSVC 19.44). |
 
 ### Former defect: the DEB dependency floor did not encode the ABI
 
