@@ -175,8 +175,11 @@ def run_windows_outer():
         p.kill()
         rc = 1
     try:
-        with open(log, encoding="utf-8", errors="replace") as f:
-            sys.stdout.write(f.read())
+        # As bytes: the report is UTF-8, whatever this console's code page.
+        with open(log, "rb") as f:
+            sys.stdout.flush()
+            sys.stdout.buffer.write(f.read())
+            sys.stdout.flush()
     except OSError:
         sys.stdout.write("FAIL: the console session wrote no report\n")
         rc = rc or 1

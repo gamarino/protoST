@@ -29,9 +29,10 @@
 
 #if defined(PROTOST_NO_READLINE)
 // No libreadline (Windows). The console edits the line and keeps a history of
-// its own, so these stand-ins read a plain line, keep the session's lines for
-// :history and write no history file.
+// its own, so the REPL reads a line from it (readConsoleLine), and these
+// stand-ins keep the session's lines for :history and write no history file.
 #include <io.h>
+#include <windows.h>
 #define isatty _isatty
 #define STDIN_FILENO 0
 namespace {
@@ -41,19 +42,6 @@ std::vector<std::string>& standInHistory() {
     return lines;
 }
 } // namespace
-static char* readline(const char* prompt) {
-    std::fputs(prompt, stdout);
-    std::fflush(stdout);
-    std::string line;
-    int ch;
-    bool any = false;
-    while ((ch = std::getc(stdin)) != EOF && ch != '\n') { any = true; line.push_back(static_cast<char>(ch)); }
-    if (ch == EOF && !any) return nullptr;
-    if (!line.empty() && line.back() == '\r') line.pop_back();
-    char* out = static_cast<char*>(std::malloc(line.size() + 1));
-    std::memcpy(out, line.c_str(), line.size() + 1);
-    return out;
-}
 static void add_history(const char* line) { standInHistory().emplace_back(line); }
 static int read_history(const char*) { return 0; }
 static int write_history(const char*) { return 0; }
@@ -68,6 +56,8 @@ static HIST_ENTRY** history_list() {
     return list.data();
 }
 #else
+#include <cerrno>
+#include <poll.h>
 #include <unistd.h>
 #endif
 
@@ -137,26 +127,133 @@ bool endsWithPeriod(const std::string& src) {
     return t.back() == '.';
 }
 
-// Read one logical line. Uses readline for an interactive tty (history,
-// arrows, Ctrl-R); falls back to std::getline for piped / non-tty stdin so
-// tests are deterministic. `*eof` is set true on end-of-input.
+enum class ReadResult { Line, Eof, Cancelled };
+
+#if defined(PROTOST_NO_READLINE)
+// One line from the Windows console, as UTF-8: ReadConsoleW, so non-ASCII
+// input arrives intact whatever the console's code page (ReadFile with code
+// page 65001 answers NULs for it on Windows 10's console host). Ctrl-C at the
+// prompt cancels the line: a keyboard Ctrl-C aborts the read
+// (ERROR_OPERATION_ABORTED, before the handler thread has run, hence the
+// short wait for its event), and a Ctrl-C that only raised the signal
+// discards the line it arrives with. A line that starts with Ctrl-Z is end of
+// input, as for the console's own programs.
+ReadResult readConsoleLine(HANDLE in, std::string& out) {
+    std::wstring line;
+    for (;;) {
+        wchar_t buf[512];
+        DWORD n = 0;
+        ::SetLastError(ERROR_SUCCESS);
+        const BOOL ok = ::ReadConsoleW(in, buf, static_cast<DWORD>(sizeof buf / sizeof buf[0]), &n, nullptr);
+        const DWORD err = ::GetLastError();
+        if (n == 0 && err == ERROR_OPERATION_ABORTED) {
+            ::WaitForSingleObject(static_cast<HANDLE>(interruptWakeEvent()), 100);
+            if (takePendingInterrupt()) return ReadResult::Cancelled;
+            continue;
+        }
+        if (!ok || n == 0) return line.empty() ? ReadResult::Eof : ReadResult::Line;
+        line.append(buf, n);
+        if (line.back() == L'\n') break;
+    }
+    if (takePendingInterrupt()) return ReadResult::Cancelled;
+    if (!line.empty() && line.front() == L'\x1A') return ReadResult::Eof;
+    while (!line.empty() && (line.back() == L'\n' || line.back() == L'\r')) line.pop_back();
+    out.clear();
+    if (!line.empty()) {
+        const int len = static_cast<int>(line.size());
+        const int bytes = ::WideCharToMultiByte(CP_UTF8, 0, line.data(), len, nullptr, 0, nullptr, nullptr);
+        out.resize(static_cast<size_t>(bytes));
+        ::WideCharToMultiByte(CP_UTF8, 0, line.data(), len, out.data(), bytes, nullptr, nullptr);
+    }
+    return ReadResult::Line;
+}
+#else
+// readline's alternate (callback) interface, so the wait for a key can also
+// end on Ctrl-C: the SIGINT handler writes to a self-pipe, polled next to
+// standard input. Ctrl-C at the prompt cancels the line being typed, as in
+// bash and Python; a plain readline() call would keep the line, and leave the
+// Ctrl-C pending, where a second one would end the process.
+struct CallbackLine {
+    bool done = false;
+    bool eof = false;
+    std::string text;
+};
+CallbackLine* g_callbackLine = nullptr;
+
+extern "C" void onReadlineLine(char* line) {
+    if (!line) {
+        g_callbackLine->eof = true;
+    } else {
+        g_callbackLine->text.assign(line);
+        std::free(line);
+    }
+    g_callbackLine->done = true;
+    ::rl_callback_handler_remove();
+}
+
+ReadResult readTerminalLine(const char* prompt, std::string& out) {
+    CallbackLine line;
+    g_callbackLine = &line;
+    ::rl_callback_handler_install(prompt, onReadlineLine);
+    const int wakeFd = interruptWakeFd();
+    while (!line.done) {
+        pollfd p[2] = {{STDIN_FILENO, POLLIN, 0}, {wakeFd, POLLIN, 0}};
+        const int r = ::poll(p, wakeFd >= 0 ? 2 : 1, -1);
+        if (takePendingInterrupt()) {
+            // As CPython's readline module does on a KeyboardInterrupt.
+            ::rl_free_line_state();
+#if RL_READLINE_VERSION >= 0x0700
+            ::rl_callback_sigcleanup();
+#endif
+            ::rl_cleanup_after_signal();
+            ::rl_callback_handler_remove();
+            g_callbackLine = nullptr;
+            std::fputs("\n", stdout);
+            std::fflush(stdout);
+            return ReadResult::Cancelled;
+        }
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            ::rl_callback_handler_remove();
+            line.eof = true;
+            break;
+        }
+        if (p[0].revents & (POLLIN | POLLHUP | POLLERR)) ::rl_callback_read_char();
+    }
+    g_callbackLine = nullptr;
+    if (line.eof) return ReadResult::Eof;
+    out = std::move(line.text);
+    return ReadResult::Line;
+}
+#endif
+
+// Read one logical line. An interactive terminal gets line editing: readline
+// (history, arrows, Ctrl-R), or the Windows console's own; piped / non-tty
+// stdin is read raw so tests are deterministic.
 //
 // 2026-05-25: bracket the stdin-blocking call in
 // `ProtoContext::UnmanagedScope` so the GC does not stall waiting for
 // the REPL while the user is thinking at the prompt. The REPL may sit
-// at `readline` for arbitrary wall-time; without this, a worker-actor
+// at the prompt for arbitrary wall-time; without this, a worker-actor
 // triggered GC cycle would block every other thread in the process.
 // See protoCore DESIGN.md §"Unmanaged regions".
-bool readLine(proto::ProtoContext* ctx, const char* prompt, bool interactive,
-              std::string& out, bool* eof) {
-    *eof = false;
+ReadResult readLine(proto::ProtoContext* ctx, const char* prompt, bool interactive,
+                    std::string& out) {
     if (interactive) {
+#if defined(PROTOST_NO_READLINE)
+        HANDLE in = ::GetStdHandle(STD_INPUT_HANDLE);
+        DWORD mode = 0;
+        if (::GetConsoleMode(in, &mode)) {
+            std::fputs(prompt, stdout);
+            std::fflush(stdout);
+            proto::ProtoContext::UnmanagedScope u(ctx);
+            return readConsoleLine(in, out);
+        }
+        // A character device that is not a console (NUL): read it raw.
+#else
         proto::ProtoContext::UnmanagedScope u(ctx);
-        char* line = ::readline(prompt);
-        if (!line) { *eof = true; return false; }
-        out.assign(line);
-        std::free(line);
-        return true;
+        return readTerminalLine(prompt, out);
+#endif
     }
     // Non-tty: echo the prompt so piped sessions are still readable, then
     // read a raw line.
@@ -169,13 +266,12 @@ bool readLine(proto::ProtoContext* ctx, const char* prompt, bool interactive,
         int ch;
         while ((ch = std::getc(stdin)) != EOF) {
             any = true;
-            if (ch == '\n') { out = buf; return true; }
+            if (ch == '\n') { out = buf; return ReadResult::Line; }
             buf.push_back(static_cast<char>(ch));
         }
     }
-    if (any) { out = buf; return true; }
-    *eof = true;
-    return false;
+    if (any) { out = buf; return ReadResult::Line; }
+    return ReadResult::Eof;
 }
 
 void printResult(STRuntime& rt, const proto::ProtoObject* r) {
@@ -477,13 +573,17 @@ int runRepl() {
 
     for (;;) {
         std::string line;
-        bool eof = false;
         const char* prompt = inMultiline ? continuation : primary;
-        if (!readLine(session.rt->rootCtx(), prompt, interactive, line, &eof)) {
-            if (eof) {
-                std::puts(interactive ? "\nbye" : "bye");
-                break;
-            }
+        const ReadResult got = readLine(session.rt->rootCtx(), prompt, interactive, line);
+        if (got == ReadResult::Eof) {
+            std::puts(interactive ? "\nbye" : "bye");
+            break;
+        }
+        if (got == ReadResult::Cancelled) {
+            // Ctrl-C at the prompt: drop the line, and a multi-line form
+            // being entered, and prompt again.
+            buffer.clear();
+            inMultiline = false;
             continue;
         }
 
