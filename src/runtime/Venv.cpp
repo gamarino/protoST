@@ -1,4 +1,5 @@
 #include "Venv.h"
+#include "VenvTemplates.h"
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -25,12 +26,38 @@ std::string replaceAll(std::string s, const std::string& from, const std::string
     return s;
 }
 
-fs::path templateDir() {
-    // Resolved relative to the binary at runtime via PROTOST_TEMPLATE_DIR
-    // (set by CMakeLists.txt as a compile-time macro). The tests rely on
-    // this default; production installs override via env STENV_TEMPLATE_DIR.
-    if (const char* env = std::getenv("STENV_TEMPLATE_DIR")) return fs::path(env);
-    return fs::path(PROTOST_TEMPLATE_DIR);
+// A template: from STENV_TEMPLATE_DIR when that is set (to try out edited
+// templates without rebuilding), else the copy compiled into protost
+// (VenvTemplates.h, generated from src/venv_template), so an installed or
+// unpacked protost needs no template directory.
+std::string templateText(const std::string& name) {
+    if (const char* env = std::getenv("STENV_TEMPLATE_DIR"); env && *env)
+        return readAll(fs::path(env) / name);
+    for (const auto& f : venv_templates::kFiles)
+        if (name == f.name) return f.text;
+    return std::string();
+}
+
+// The activation scripts written into <venv>/bin, one per shell, on every
+// platform (a Windows user may use Git Bash, and pwsh runs everywhere).
+// cmd.exe reads its batch files best with CR LF line ends.
+struct Script { const char* name; bool crlf; };
+constexpr Script kScripts[] = {
+    {"activate", false},        // sh, bash, zsh
+    {"activate.fish", false},   // fish
+    {"Activate.ps1", false},    // PowerShell
+    {"activate.bat", true},     // cmd.exe
+    {"deactivate.bat", true},
+};
+
+std::string withCrlf(const std::string& text) {
+    std::string out;
+    out.reserve(text.size() + text.size() / 16);
+    for (char c : text) {
+        if (c == '\n' && (out.empty() || out.back() != '\r')) out.push_back('\r');
+        out.push_back(c);
+    }
+    return out;
 }
 
 } // anon
@@ -54,18 +81,29 @@ int venvCreate(const std::string& venvPath,
 
     // stenv.cfg
     {
-        auto tpl = readAll(templateDir() / "stenv.cfg.in");
+        auto tpl = templateText("stenv.cfg.in");
         tpl = replaceAll(tpl, "@HOME_BIN@", homeBin);
         tpl = replaceAll(tpl, "@VERSION@",  version);
-        std::ofstream f(venv / "stenv.cfg");
+        std::ofstream f(venv / "stenv.cfg", std::ios::binary);
         f << tpl;
     }
-    // activate
-    {
-        auto tpl = readAll(templateDir() / "activate");
-        tpl = replaceAll(tpl, "@VENV_PATH@", fs::absolute(venv).string());
-        std::ofstream f(venv / "bin" / "activate");
-        f << tpl;
+    // The activation scripts name the venv by its absolute path, in the
+    // platform's own form (backslashes on Windows).
+    const std::string venvAbs = fs::absolute(venv).make_preferred().string();
+    for (const Script& sc : kScripts) {
+        std::string text = templateText(sc.name);
+        if (text.empty()) {
+            std::fprintf(stderr, "venv template missing: %s\n", sc.name);
+            return 2;
+        }
+        text = replaceAll(text, "@VENV_PATH@", venvAbs);
+        if (sc.crlf) text = withCrlf(text);
+        std::ofstream f(venv / "bin" / sc.name, std::ios::binary);
+        f << text;
+        if (!f) {
+            std::fprintf(stderr, "venv: cannot write %s\n", (venv / "bin" / sc.name).string().c_str());
+            return 2;
+        }
     }
     return 0;
 }
@@ -91,9 +129,18 @@ int venvInfo(const std::string& cwd) {
 }
 
 int venvActivateSnippet(const std::string& venvPath) {
+    // The command that activates the venv in the platform's usual shell:
+    // cmd.exe on Windows (PowerShell users run bin\Activate.ps1), a POSIX
+    // shell elsewhere.
+#if defined(_WIN32)
+    auto p = fs::path(venvPath) / "bin" / "activate.bat";
+    if (!fs::exists(p)) { std::fprintf(stderr, "not a venv: %s\n", venvPath.c_str()); return 1; }
+    std::printf("call \"%s\"\n", p.make_preferred().string().c_str());
+#else
     auto p = fs::path(venvPath) / "bin" / "activate";
     if (!fs::exists(p)) { std::fprintf(stderr, "not a venv: %s\n", venvPath.c_str()); return 1; }
     std::printf(". %s\n", p.string().c_str());
+#endif
     return 0;
 }
 

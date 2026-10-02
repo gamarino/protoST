@@ -14,7 +14,8 @@ std::string venvDiscover(const std::string& cwd);
 // Prints info about the active venv to stdout. Returns 0 if active, 1 if none.
 int  venvInfo(const std::string& cwd);
 
-// Writes activate snippet for the current shell to stdout. POSIX only in F1.
+// Writes the command that activates the venv to stdout: `call ...activate.bat`
+// on Windows (cmd.exe), `. .../activate` elsewhere.
 int  venvActivateSnippet(const std::string& venvPath);
 
 } // namespace protoST

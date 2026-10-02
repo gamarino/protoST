@@ -240,8 +240,21 @@ else()
         "https://github.com/gamarino/protoIO next to protoST (../protoIO).")
 endif()
 target_link_libraries(protost_runtime PRIVATE protoIO::protoio)
-target_compile_definitions(protost_runtime PRIVATE
-    PROTOST_TEMPLATE_DIR="${CMAKE_SOURCE_DIR}/src/venv_template")
+# The venv templates are compiled into the runtime (src/runtime/Venv.cpp), so
+# `protost venv create` works the same from the build tree, an installation
+# or an unpacked ZIP.
+file(GLOB PROTOST_VENV_TEMPLATES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/venv_template/*")
+set(PROTOST_VENV_TEMPLATES_H "${CMAKE_BINARY_DIR}/generated/VenvTemplates.h")
+add_custom_command(
+    OUTPUT "${PROTOST_VENV_TEMPLATES_H}"
+    COMMAND ${CMAKE_COMMAND} -DTEMPLATE_DIR=${CMAKE_SOURCE_DIR}/src/venv_template
+            -DOUTPUT=${PROTOST_VENV_TEMPLATES_H}
+            -P ${CMAKE_SOURCE_DIR}/cmake/EmbedVenvTemplates.cmake
+    DEPENDS ${PROTOST_VENV_TEMPLATES} ${CMAKE_SOURCE_DIR}/cmake/EmbedVenvTemplates.cmake
+    COMMENT "Embedding the venv templates"
+    VERBATIM)
+target_sources(protost_runtime PRIVATE "${PROTOST_VENV_TEMPLATES_H}")
+target_include_directories(protost_runtime PRIVATE "${CMAKE_BINARY_DIR}/generated")
 
 # --- libreadline: line editing + history for the interactive REPL (F7) ---
 if(WIN32)

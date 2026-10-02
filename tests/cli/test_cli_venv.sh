@@ -16,6 +16,8 @@ cd "$tmp"
 # them as well as one run from the build tree.
 for f in activate activate.fish Activate.ps1 activate.bat deactivate.bat; do
     [ -s ".venv/bin/$f" ]            || { echo "FAIL: $f missing or empty"; exit 1; }
+done
+for f in activate activate.fish Activate.ps1 activate.bat; do
     grep -qF ".venv" ".venv/bin/$f"  || { echo "FAIL: $f does not name the venv"; cat ".venv/bin/$f"; exit 1; }
 done
 
