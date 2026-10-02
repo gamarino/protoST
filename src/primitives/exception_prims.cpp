@@ -659,6 +659,17 @@ const proto::ProtoObject* prim_Exception_pass(STRuntime&, proto::ProtoContext* c
     throw PassSignal{ handlerId };
 }
 
+// S23: run the handler with id `handlerId` (pushed by the calling `on:do:`)
+// on a fresh nesting-limit Error, after a NestingLimitUnwind brought the
+// unwind to that `on:do:`. The outcome is dispatched by signalInstance as for
+// any signal; the Error is not resumable, so this returns only if a handler
+// misbehaves.
+const proto::ProtoObject* signalNestingLimitAt(STRuntime& rt, proto::ProtoContext* ctx,
+                                               proto::proto_ulong handlerId) {
+    const proto::ProtoObject* limitError = newNestingLimitError(rt, ctx);
+    return signalInstance(rt, ctx, limitError, handlerId);
+}
+
 // --- Shared protected-block runner -----------------------------------------
 //
 // Backs both `on:do:` and `on:do:on:do:`. Pushes one HandlerEntry per
@@ -678,17 +689,6 @@ const proto::ProtoObject* prim_Exception_pass(STRuntime&, proto::ProtoContext* c
 // fires this path 50 K times; perf-traced 1.65 % in `_int_malloc`
 // before this change, almost entirely from the ids vector allocation
 // per attempt.
-// S23: run the handler with id `handlerId` (pushed by the calling `on:do:`)
-// on a fresh nesting-limit Error, after a NestingLimitUnwind brought the
-// unwind to that `on:do:`. The outcome is dispatched by signalInstance as for
-// any signal; the Error is not resumable, so this returns only if a handler
-// misbehaves.
-const proto::ProtoObject* signalNestingLimitAt(STRuntime& rt, proto::ProtoContext* ctx,
-                                               proto::proto_ulong handlerId) {
-    const proto::ProtoObject* limitError = newNestingLimitError(rt, ctx);
-    return signalInstance(rt, ctx, limitError, handlerId);
-}
-
 const proto::ProtoObject* runProtectedSingle(
         STRuntime& rt, proto::ProtoContext* ctx,
         const proto::ProtoObject* protectedBlock,
