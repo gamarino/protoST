@@ -45,6 +45,7 @@
 #include "protoCore.h"
 
 #include <cstdio>
+#include <exception>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -278,6 +279,14 @@ const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx
         std::vector<proto::proto_ulong> disabled = handlerStackDisableFrom(handlerId);
 
         const proto::ProtoObject* handlerResult = nullptr;
+        // What leaves the handler block is decided inside the catch clauses
+        // and acted on after them: an exception that is not consumed here is
+        // re-thrown with std::rethrow_exception once the clause has ended, not
+        // with `throw;` inside it -- see translateNativeException
+        // (NativeExceptionBridge.h) for why.
+        std::exception_ptr propagate;
+        const proto::ProtoObject* resumed = nullptr;
+        bool passed = false;
         try {
             const proto::ProtoObject* a0 = exc;
             // The handler is culled, as in Pharo: a block with no argument
@@ -286,31 +295,33 @@ const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx
                 ? invokeBlock(rt, ctx, hBlock, nullptr, 0)
                 : invokeBlock(rt, ctx, hBlock, &a0, 1);
         } catch (const ResumeSignal& r) {
-            // `resume: v` — only ours is consumed here; an inner id belongs
+            // `resume: v` -- only ours is consumed here; an inner id belongs
             // to an outer signal loop.
-            if (r.handlerId() != handlerId) { handlerStackRestore(disabled); throw; }
-            handlerStackRestore(disabled);
-            // `signal` returns v: the protected block (its stack never
-            // unwound) continues from the signal point.
-            return r.value() ? r.value() : PROTO_NONE;
+            if (r.handlerId() != handlerId) propagate = std::current_exception();
+            else resumed = r.value() ? r.value() : PROTO_NONE;
         } catch (const PassSignal& p) {
-            // `pass` / `outer` — search outward for the next matching handler.
-            if (p.handlerId() != handlerId) { handlerStackRestore(disabled); throw; }
-            handlerStackRestore(disabled);
-            searchBelowId = handlerId;   // resume search strictly outer to this
-            continue;
+            // `pass` / `outer` -- search outward for the next matching handler.
+            if (p.handlerId() != handlerId) propagate = std::current_exception();
+            else passed = true;
         } catch (...) {
             // UnwindToHandler (return:), RetrySignal (retry), NonLocalReturn,
-            // a cooperative yield, or another error. Re-enable what we
-            // disabled so the handler stack stays consistent for outer
-            // handlers / the owning `on:do:`, then let the throw continue.
-            handlerStackRestore(disabled);
-            throw;
+            // a cooperative yield, or another error: let it continue.
+            propagate = std::current_exception();
+        }
+        // Re-enable what we disabled, so the handler stack stays consistent
+        // for outer handlers / the owning `on:do:`, whatever happens next.
+        handlerStackRestore(disabled);
+        if (propagate) std::rethrow_exception(propagate);
+        // `signal` returns v: the protected block (its stack never unwound)
+        // continues from the signal point.
+        if (resumed) return resumed;
+        if (passed) {
+            searchBelowId = handlerId;   // resume search strictly outer to this
+            continue;
         }
 
         // The handler fell off its end without return:/resume:/retry/pass.
         // Fall-through == `return: handlerResult`.
-        handlerStackRestore(disabled);
         throw UnwindToHandler{ handlerId,
                                handlerResult ? handlerResult : PROTO_NONE };
     }
@@ -773,8 +784,9 @@ const proto::ProtoObject* prim_Block_on_do_on_do(STRuntime& rt,
 // `signal`'s own loop consumes them before control ever leaves the protected
 // block, so they never reach this primitive.
 //
-// Re-throw correctness: the `catch (...)` branch runs the cleanup and then
-// re-throws the ORIGINAL exception with a bare `throw;`, so an
+// Re-throw correctness: the `catch (...)` branch records the exception; the
+// cleanup runs after the catch clause and std::rethrow_exception re-throws the
+// ORIGINAL exception, so an
 // UnwindToHandler / RetrySignal / NonLocalReturn still reaches its real
 // target frame.
 //

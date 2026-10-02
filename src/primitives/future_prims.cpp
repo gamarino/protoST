@@ -8,6 +8,7 @@
 #include "runtime/NativeExceptionBridge.h"
 #include "runtime/UnhandledSTException.h"
 #include <cstdio>
+#include <exception>
 #include "runtime/HandlerStack.h"
 #include "protoCore.h"
 #include <atomic>
@@ -328,15 +329,17 @@ const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
         // handlers, still on this thread's handler stack, must not catch its
         // errors.
         const std::vector<proto::proto_ulong> hidden = handlerStackDisableAll();
+        // An exception is re-thrown after the catch clause, not with `throw;`
+        // inside it: see translateNativeException (NativeExceptionBridge.h).
+        std::exception_ptr failed;
         try {
             helped = rt.drainOne(ctx);
         } catch (...) {
-            handlerStackRestore(hidden);
-            rt.setCurrentActor(self);
-            throw;
+            failed = std::current_exception();
         }
         handlerStackRestore(hidden);
         rt.setCurrentActor(self);
+        if (failed) std::rethrow_exception(failed);
         if (helped) { idle = 0; continue; }
         proto::ProtoContext::UnmanagedScope unmanaged(ctx);
         std::this_thread::sleep_for(std::chrono::microseconds(idle < 10 ? 20 : 500));

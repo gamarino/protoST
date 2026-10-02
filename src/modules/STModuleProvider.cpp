@@ -4,6 +4,7 @@
 #include "protoCore.h"
 
 #include <algorithm>
+#include <exception>
 #include <mutex>
 #include <stdexcept>
 #include <vector>
@@ -185,6 +186,11 @@ STModuleProvider::loadForForeignCaller(STRuntime& rt, const std::string& logical
     if (path.empty()) return PROTO_NONE;
 
     std::vector<Binding> bindings;
+    // Decided in the catch clauses, acted on after them: an exception is
+    // re-thrown once the clause has ended, not with `throw;` inside it (see
+    // translateNativeException, NativeExceptionBridge.h).
+    std::exception_ptr failed;
+    bool controlFlowUnwind = false;
     try {
         proto::ProtoContext* stCtx = rt.rootCtx();
         const proto::ProtoObject* mod = rt.importModuleFile(stCtx, path, logicalPath);
@@ -195,7 +201,7 @@ STModuleProvider::loadForForeignCaller(STRuntime& rt, const std::string& logical
         // protoST `Error` (UnhandledSTException, itself a std::runtime_error).
         // All carry a message; the importing runtime's own boundary translates
         // them into its own exception type.
-        throw;
+        failed = std::current_exception();
     } catch (...) {
         // protoST's control-flow unwinds (NonLocalReturn, UnwindToHandler,
         // RetrySignal, ResumeSignal, PassSignal, FutureYield) are not
@@ -203,12 +209,15 @@ STModuleProvider::loadForForeignCaller(STRuntime& rt, const std::string& logical
         // protoST stack" — there is no such frame on a foreign importer's
         // stack, and letting one cross would unwind into a runtime that cannot
         // interpret it. Report it instead.
+        controlFlowUnwind = true;
+    }
+    if (failed) std::rethrow_exception(failed);
+    if (controlFlowUnwind)
         throw std::runtime_error(
             "protoST: the top level of module '" + logicalPath +
             "' left through a control-flow unwind (a non-local return, a "
             "resumption, a retry, or a Future yield), which cannot cross a "
             "runtime boundary");
-    }
 
     // Allocated in the CALLER's context, which is what `ctx` is for.
     return buildCallerFacade(callerCtx, bindings);
