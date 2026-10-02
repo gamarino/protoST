@@ -5,6 +5,7 @@
 #include "FutureYield.h"
 #include "NonLocalReturn.h"
 #include "UnwindToHandler.h"
+#include "NestingLimitUnwind.h"
 #include "ResumeSignal.h"
 #include "RetrySignal.h"
 #include "PassSignal.h"
@@ -1161,6 +1162,11 @@ STRuntime::runTopLevel(const BytecodeModule& m, proto::ProtoContext* ctx) {
         // — same bug class as a stray UnwindToHandler.
         throw std::runtime_error(
             "exception retry: no matching on:do: handler activation");
+    } catch (const NestingLimitUnwind&) {
+        // S23: the on:do: that was to run its handler on the nesting limit's
+        // Error is gone -- the same bug class as a stray UnwindToHandler.
+        throw std::runtime_error(
+            "nesting limit unwind: no matching on:do: handler activation");
     } catch (const ResumeSignal&) {
         // EXC-b: a `resume:` escaped its `signal` loop — a bug; `signal`
         // always consumes the ResumeSignal for its own id.
@@ -1867,6 +1873,15 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                     TransientPin pinErr(ctx, err);
                     rejectFutureFromDrain(*this, ctx, msgFut, err);
                 }
+            } catch (const NestingLimitUnwind&) {
+                SCHED_DIAG("drainOne RESUME STRAY nesting-limit-unwind actor=" << actor);
+                setCurrentActor(nullptr);
+                if (msgFut && msgFut != PROTO_NONE) {
+                    auto* err = ctx->fromUTF8String(
+                        "nesting limit unwind: no matching on:do: handler activation");
+                    TransientPin pinErr(ctx, err);
+                    rejectFutureFromDrain(*this, ctx, msgFut, err);
+                }
             } catch (const ResumeSignal&) {
                 SCHED_DIAG("drainOne RESUME STRAY exception-resume actor=" << actor);
                 setCurrentActor(nullptr);
@@ -2031,6 +2046,15 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             if (future) {
                 auto* err = ctx->fromUTF8String(
                     "exception retry: no matching on:do: handler activation");
+                TransientPin pinErr(ctx, err);
+                rejectFutureFromDrain(*this, ctx, future, err);
+            }
+        } catch (const NestingLimitUnwind&) {
+            SCHED_DIAG("drainOne STRAY nesting-limit-unwind actor=" << actor);
+            setCurrentActor(nullptr);
+            if (future) {
+                auto* err = ctx->fromUTF8String(
+                    "nesting limit unwind: no matching on:do: handler activation");
                 TransientPin pinErr(ctx, err);
                 rejectFutureFromDrain(*this, ctx, future, err);
             }

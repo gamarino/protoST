@@ -472,6 +472,16 @@ namespace {
 constexpr std::size_t kMaxNestedEngines = 1000;
 } // namespace
 
+const char* const ExecutionEngine::kNestingLimitMessage =
+    "stack depth exceeded (nested block evaluation)";
+
+// A new engine registers itself before runWithArgs checks the limit, so it
+// starts when fewer than kMaxNestedEngines engines are live now.
+bool
+ExecutionEngine::canStartNestedEngine() {
+    return g_liveEngines.size() < kMaxNestedEngines;
+}
+
 // A send the receiver does not understand. If the receiver's class defines
 // doesNotUnderstand: in Smalltalk (a proxy, a forwarder), that method runs
 // with a Message and answers for the send; otherwise a resumable
@@ -566,7 +576,7 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
     // "stack depth exceeded" Error -- the primitive boundary translates it --
     // never a crash. This engine is already registered, hence ">".
     if (g_liveEngines.size() > kMaxNestedEngines)
-        throw std::runtime_error("stack depth exceeded (nested block evaluation)");
+        throw std::runtime_error(kNestingLimitMessage);
     ctx_ = ctx;
     ctx_->resizeAutomaticLocals(kSlotCapacity);
 

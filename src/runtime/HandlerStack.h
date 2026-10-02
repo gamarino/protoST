@@ -57,6 +57,11 @@ const HandlerEntry* handlerStackFindMatch(proto::ProtoContext* ctx,
                                           const proto::ProtoObject* exceptionInstance,
                                           proto::proto_ulong searchBelowId = 0);
 
+// The entry with the given handlerId, or nullptr when it is not on this
+// thread's stack. Same lifetime rule as handlerStackFindMatch. Used by an
+// `on:do:` that runs its handler after a NestingLimitUnwind (S23).
+const HandlerEntry* handlerStackFindById(proto::proto_ulong handlerId);
+
 // Disable the entry with id `targetHandlerId` and every entry inner to it
 // (pushed after it), so a `signal` raised while the handler runs is caught by
 // an OUTER handler — never the handler's own `on:do:` nor anything nested

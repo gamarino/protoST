@@ -18,7 +18,8 @@
 //     on the exception's type. The catch ORDER is load-bearing:
 //
 //       1. The control-flow siblings (NonLocalReturn, UnwindToHandler,
-//          RetrySignal, ResumeSignal, PassSignal, FutureYield) are re-thrown
+//          NestingLimitUnwind, RetrySignal, ResumeSignal, PassSignal,
+//          FutureYield) are re-thrown
 //          untouched — they are legitimate protoST control flow that a
 //          primitive raises on purpose (e.g. `signal`/`return:`/`resume:`/
 //          `retry`/`pass`, `Future>>wait`). None derives from std::exception.
@@ -40,6 +41,7 @@
 
 #include "runtime/NonLocalReturn.h"
 #include "runtime/UnwindToHandler.h"
+#include "runtime/NestingLimitUnwind.h"
 #include "runtime/RetrySignal.h"
 #include "runtime/ResumeSignal.h"
 #include "runtime/PassSignal.h"
@@ -128,6 +130,7 @@ const proto::ProtoObject* translateNativeException(STRuntime& rt,
     // --- protoST control-flow siblings: re-throw untouched -----------------
     catch (const NonLocalReturn&)       { untouched = std::current_exception(); }   // slice 1 — ^expr
     catch (const UnwindToHandler&)      { untouched = std::current_exception(); }   // EXC — return:/fall-through
+    catch (const NestingLimitUnwind&)   { untouched = std::current_exception(); }   // S23 — limit Error for an on:do:
     catch (const RetrySignal&)          { untouched = std::current_exception(); }   // EXC — retry
     catch (const ResumeSignal&)         { untouched = std::current_exception(); }   // EXC — resume:
     catch (const PassSignal&)           { untouched = std::current_exception(); }   // EXC — pass/outer

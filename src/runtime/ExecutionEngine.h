@@ -58,6 +58,16 @@ public:
     // thread's young generation is safe.
     static std::size_t liveEnginesOnThisThread();
 
+    // S23: true when one more nested engine can start on the calling thread,
+    // i.e. the engine nesting limit (kMaxNestedEngines) is not yet reached.
+    // `signal` asks before it runs a handler block, which needs an engine of
+    // its own; when the answer is no, it raises kNestingLimitMessage instead
+    // (see NestingLimitUnwind.h).
+    static bool canStartNestedEngine();
+
+    // The messageText of the Error raised at the engine nesting limit.
+    static const char* const kNestingLimitMessage;
+
     // Runs `m` in `ctx`; returns the value at RETURN_TOP (or method RETURN).
     const proto::ProtoObject* run(proto::ProtoContext* ctx,
                                   const BytecodeModule& m,

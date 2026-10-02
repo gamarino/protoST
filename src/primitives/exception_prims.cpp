@@ -34,6 +34,7 @@
 #include "runtime/Bootstrap.h"
 #include "runtime/HandlerStack.h"
 #include "runtime/UnwindToHandler.h"
+#include "runtime/NestingLimitUnwind.h"
 #include "runtime/ResumeSignal.h"
 #include "runtime/RetrySignal.h"
 #include "runtime/PassSignal.h"
@@ -248,15 +249,57 @@ const proto::ProtoObject* defaultAction(STRuntime& rt, proto::ProtoContext* ctx,
 //   * PassSignal for this id → continue the loop, searching strictly outward;
 //   * RetrySignal / UnwindToHandler / anything else → propagate past `signal`
 //     (RetrySignal reaches `on:do:`; a foreign throw bubbles on).
+//
+// S23: a handler block needs a nested engine of its own. At the engine
+// nesting limit it cannot start, and the limit's Error is raised in its place
+// (raiseNestingLimitError): it unwinds to the `on:do:` whose handler catches
+// it, which then calls this function again with `firstHandlerId` set to run
+// that handler on the limit Error. 0 == search the handler stack as usual.
 const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx,
-                                          const proto::ProtoObject* exc) {
+                                          const proto::ProtoObject* exc,
+                                          proto::proto_ulong firstHandlerId = 0);
+
+// A fresh, non-resumable Error carrying the engine nesting limit's message.
+const proto::ProtoObject* newNestingLimitError(STRuntime& rt, proto::ProtoContext* ctx) {
+    const proto::ProtoObject* exc =
+        const_cast<proto::ProtoObject*>(rt.bootstrap().errorProto)->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinExc(ctx, exc);
+    const_cast<proto::ProtoObject*>(exc)->setAttribute(
+        ctx, msgTextKey(ctx), ctx->fromUTF8String(ExecutionEngine::kNestingLimitMessage));
+    const_cast<proto::ProtoObject*>(exc)->setAttribute(ctx, resumableKey(ctx), PROTO_FALSE);
+    return exc;
+}
+
+// S23: the handler `signal` found cannot start, because the engine nesting
+// limit is reached. Raise the limit's Error at this point instead: search for
+// its handler from where the current search stands (`searchBelowId`, so a
+// handler that already did `pass` is not entered again) and unwind to that
+// handler's `on:do:`, which runs it there (NestingLimitUnwind.h). It cannot
+// run here: it needs an engine as well. With no handler, the Error's default
+// action ends the activation. Never returns normally.
+const proto::ProtoObject* raiseNestingLimitError(STRuntime& rt, proto::ProtoContext* ctx,
+                                                 proto::proto_ulong searchBelowId) {
+    const proto::ProtoObject* limitError = newNestingLimitError(rt, ctx);
+    TransientPin pinLimit(ctx, limitError);
+    if (const HandlerEntry* entry = handlerStackFindMatch(ctx, limitError, searchBelowId))
+        throw NestingLimitUnwind{ entry->handlerId };
+    defaultAction(rt, ctx, limitError);   // an Error: throws UnhandledSTException
+    throw std::logic_error("the default action of an Error returned");
+}
+
+const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx,
+                                          const proto::ProtoObject* exc,
+                                          proto::proto_ulong firstHandlerId) {
     // Pin the instance for the whole primitive — it is held across handler-
     // stack walks and invokeBlock (which spins a full nested engine).
     TransientPin pinExc(ctx, exc);
 
     proto::proto_ulong searchBelowId = 0;   // 0 == search from the top of the stack
     for (;;) {
-        const HandlerEntry* entry = handlerStackFindMatch(ctx, exc, searchBelowId);
+        const HandlerEntry* entry = firstHandlerId != 0
+            ? handlerStackFindById(firstHandlerId)
+            : handlerStackFindMatch(ctx, exc, searchBelowId);
+        firstHandlerId = 0;
         if (!entry) {
             // No (further) matching handler: run the exception's default
             // action. For a resumable exception this returns a value that
@@ -266,6 +309,10 @@ const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx
 
         proto::proto_ulong handlerId          = entry->handlerId;
         const proto::ProtoObject* hBlock = entry->handlerBlock;
+
+        // S23: no engine is left for the handler block at this depth.
+        if (!ExecutionEngine::canStartNestedEngine())
+            return raiseNestingLimitError(rt, ctx, searchBelowId);
 
         // Stamp the active handler id onto the instance so the handler
         // actions (`return:`, `resume:`, `retry`, `pass`) — which only
@@ -631,6 +678,17 @@ const proto::ProtoObject* prim_Exception_pass(STRuntime&, proto::ProtoContext* c
 // fires this path 50 K times; perf-traced 1.65 % in `_int_malloc`
 // before this change, almost entirely from the ids vector allocation
 // per attempt.
+// S23: run the handler with id `handlerId` (pushed by the calling `on:do:`)
+// on a fresh nesting-limit Error, after a NestingLimitUnwind brought the
+// unwind to that `on:do:`. The outcome is dispatched by signalInstance as for
+// any signal; the Error is not resumable, so this returns only if a handler
+// misbehaves.
+const proto::ProtoObject* signalNestingLimitAt(STRuntime& rt, proto::ProtoContext* ctx,
+                                               proto::proto_ulong handlerId) {
+    const proto::ProtoObject* limitError = newNestingLimitError(rt, ctx);
+    return signalInstance(rt, ctx, limitError, handlerId);
+}
+
 const proto::ProtoObject* runProtectedSingle(
         STRuntime& rt, proto::ProtoContext* ctx,
         const proto::ProtoObject* protectedBlock,
@@ -640,12 +698,18 @@ const proto::ProtoObject* runProtectedSingle(
     // (std::rethrow_exception), not with `throw;` inside it: see
     // translateNativeException (NativeExceptionBridge.h) for why.
     std::exception_ptr notOurs;
+    proto::proto_ulong id = 0;
+    // S23: set when a NestingLimitUnwind for this construct arrived. The turn
+    // then keeps the entry pushed and runs the handler on the nesting limit's
+    // Error instead of the protected block (see NestingLimitUnwind.h).
+    bool limitPending = false;
     for (;;) {   // each turn is one attempt; `retry` loops back here
-        const proto::proto_ulong id = handlerStackPush(guardClass, handlerBlock);
+        if (!limitPending) id = handlerStackPush(guardClass, handlerBlock);
 
         try {
-            const proto::ProtoObject* result =
-                invokeBlock(rt, ctx, protectedBlock, nullptr, 0);
+            const proto::ProtoObject* result = limitPending
+                ? signalNestingLimitAt(rt, ctx, id)
+                : invokeBlock(rt, ctx, protectedBlock, nullptr, 0);
             handlerStackPop(id);
             return result;
         } catch (const UnwindToHandler& u) {
@@ -655,7 +719,11 @@ const proto::ProtoObject* runProtectedSingle(
             notOurs = std::current_exception();
         } catch (const RetrySignal& r) {
             handlerStackPop(id);
-            if (r.handlerId() == id) continue;
+            if (r.handlerId() == id) { limitPending = false; continue; }
+            notOurs = std::current_exception();
+        } catch (const NestingLimitUnwind& n) {
+            if (n.handlerId() == id && !limitPending) { limitPending = true; continue; }
+            handlerStackPop(id);
             notOurs = std::current_exception();
         } catch (...) {
             handlerStackPop(id);
@@ -677,11 +745,15 @@ const proto::ProtoObject* runProtected(
         return runProtectedSingle(rt, ctx, protectedBlock,
                                   guards[0].first, guards[0].second);
     }
+    std::vector<proto::proto_ulong> ids;
+    proto::proto_ulong limitTarget = 0;   // S23: as limitPending in runProtectedSingle
     for (;;) {   // each turn is one attempt; `retry` loops back here
-        std::vector<proto::proto_ulong> ids;
-        ids.reserve(guards.size());
-        for (const auto& g : guards)
-            ids.push_back(handlerStackPush(g.first, g.second));
+        if (limitTarget == 0) {
+            ids.clear();
+            ids.reserve(guards.size());
+            for (const auto& g : guards)
+                ids.push_back(handlerStackPush(g.first, g.second));
+        }
 
         auto popAll = [&]() {
             // Idempotent; pop newest-first so the stack stays well-formed.
@@ -697,8 +769,9 @@ const proto::ProtoObject* runProtected(
         // runProtectedSingle.
         std::exception_ptr notOurs;
         try {
-            const proto::ProtoObject* result =
-                invokeBlock(rt, ctx, protectedBlock, nullptr, 0);
+            const proto::ProtoObject* result = limitTarget != 0
+                ? signalNestingLimitAt(rt, ctx, limitTarget)
+                : invokeBlock(rt, ctx, protectedBlock, nullptr, 0);
             popAll();
             return result;
         } catch (const UnwindToHandler& u) {
@@ -708,9 +781,18 @@ const proto::ProtoObject* runProtected(
             notOurs = std::current_exception();   // targets an OUTER construct
         } catch (const RetrySignal& r) {
             popAll();
-            if (owns(r.handlerId()))
+            if (owns(r.handlerId())) {
+                limitTarget = 0;
                 continue;   // re-evaluate the protected block — loop again
+            }
             notOurs = std::current_exception();   // targets an OUTER construct
+        } catch (const NestingLimitUnwind& n) {
+            if (limitTarget == 0 && owns(n.handlerId())) {
+                limitTarget = n.handlerId();   // entries stay pushed
+                continue;
+            }
+            popAll();
+            notOurs = std::current_exception();
         } catch (...) {
             // NonLocalReturn, FutureYield, ResumeSignal/PassSignal escaping a
             // bug, std::exception — all must leave the handler stack balanced.

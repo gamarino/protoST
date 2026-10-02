@@ -98,6 +98,12 @@ const HandlerEntry* handlerStackFindMatch(proto::ProtoContext* ctx,
     return nullptr;
 }
 
+const HandlerEntry* handlerStackFindById(proto::proto_ulong handlerId) {
+    for (std::size_t i = g_handlerStack.size(); i-- > 0; )
+        if (g_handlerStack[i].handlerId == handlerId) return &g_handlerStack[i];
+    return nullptr;
+}
+
 std::vector<proto::proto_ulong> handlerStackDisableFrom(proto::proto_ulong targetHandlerId) {
     std::vector<proto::proto_ulong> flipped;
     bool found = false;
