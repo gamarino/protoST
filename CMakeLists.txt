@@ -22,12 +22,25 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(GNUInstallDirs)
 
+# protoST's own targets link this for their warning flags: /W3 under MSVC, and
+# with PROTOST_WARNINGS_AS_ERRORS (the Windows CI job) warnings are errors, so
+# a new one fails the build instead of scrolling past. Other compilers keep
+# their defaults.
+option(PROTOST_WARNINGS_AS_ERRORS "Treat compiler warnings in protoST's own sources as errors (MSVC)" OFF)
+add_library(protost_warnings INTERFACE)
+if(MSVC)
+    target_compile_options(protost_warnings INTERFACE /W3
+        $<$<BOOL:${PROTOST_WARNINGS_AS_ERRORS}>:/WX>)
+endif()
+
 # Windows (MSVC) differences, gathered here so the targets below read the same
 # on every platform. Outside Windows nothing in this block applies: the build
 # keeps the compiler defaults, flags and libraries it always used.
 if(MSVC)
     # Sources are UTF-8; the interpreter's big translation units need /bigobj.
-    add_compile_options(/utf-8 /bigobj /W3)
+    # The warning level is set per target (protost_warnings, below), so the
+    # dependencies built in this tree (protoIO, Catch2) keep their own.
+    add_compile_options(/utf-8 /bigobj)
     # M_PI and M_E from <cmath>; no min/max macros from <windows.h>.
     # getenv, fopen & co. are standard C here: no "unsafe" deprecation notes.
     add_compile_definitions(_USE_MATH_DEFINES NOMINMAX _CRT_SECURE_NO_WARNINGS)
@@ -200,6 +213,8 @@ add_library(protost_runtime STATIC
 )
 target_include_directories(protost_runtime PUBLIC src include ${PROTOCORE_INCLUDE_DIRS})
 target_link_libraries(protost_runtime PUBLIC nlohmann_json::nlohmann_json)
+target_link_libraries(protost_frontend PRIVATE protost_warnings)
+target_link_libraries(protost_runtime PRIVATE protost_warnings)
 
 # --- protoIO: files, processes, TCP, UDP, TLS and HTTP (io_prims.cpp) -------
 # The POSIX I/O layer shared by the protoCore runtimes, linked statically, so
@@ -280,20 +295,50 @@ target_link_libraries(protost_runtime PUBLIC ${READLINE_LIBRARY})
 
 # Windows finds a DLL next to the program that loads it. Copy the DLLs protoST
 # needs -- protoCore, and OpenSSL through protoIO -- into the build's bin/, so
-# protost and the tests run in place. A target the runtime library depends on,
-# not a post-build step of protost: the unit tests are run to list their cases
-# as soon as they are linked.
+# protost and the tests run in place, and install them next to protost.exe
+# (below), so an installation or the ZIP runs on its own. A target the
+# runtime library depends on, not a post-build step of protost: the unit tests
+# are run to list their cases as soon as they are linked.
 if(WIN32)
     set(PROTOST_RUNTIME_DLLS "")
     if(TARGET ${PROTOCORE_LIBRARY})
+        # The imported target's own DLL, whatever protoCore names it.
         list(APPEND PROTOST_RUNTIME_DLLS "$<TARGET_FILE:${PROTOCORE_LIBRARY}>")
     endif()
-    if(OPENSSL_INCLUDE_DIR)
-        get_filename_component(PROTOST_OPENSSL_BIN "${OPENSSL_INCLUDE_DIR}/../bin" ABSOLUTE)
-        file(GLOB PROTOST_OPENSSL_DLLS
-            "${PROTOST_OPENSSL_BIN}/libcrypto*.dll" "${PROTOST_OPENSSL_BIN}/libssl*.dll")
-        list(APPEND PROTOST_RUNTIME_DLLS ${PROTOST_OPENSSL_DLLS})
+    # OpenSSL 3, the version protoIO was configured with: its DLLs carry the
+    # major version and the architecture in their names
+    # (libcrypto-3-x64.dll), so they are named exactly, never globbed, and a
+    # missing one fails the configuration instead of shipping a package that
+    # cannot start or loads a different OpenSSL. OpenSSL 3 is Apache-2.0
+    # licensed; its licence ships with the DLLs.
+    find_package(OpenSSL 3 REQUIRED)
+    string(REGEX MATCH "^[0-9]+" PROTOST_OPENSSL_MAJOR "${OPENSSL_VERSION}")
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|arm64|aarch64")
+        set(PROTOST_OPENSSL_ARCH "-arm64")
+    elseif(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        set(PROTOST_OPENSSL_ARCH "-x64")
+    else()
+        set(PROTOST_OPENSSL_ARCH "")
     endif()
+    get_filename_component(PROTOST_OPENSSL_BIN "${OPENSSL_INCLUDE_DIR}/../bin" ABSOLUTE)
+    set(PROTOST_OPENSSL_DLLS "")
+    foreach(_lib crypto ssl)
+        set(_dll "lib${_lib}-${PROTOST_OPENSSL_MAJOR}${PROTOST_OPENSSL_ARCH}.dll")
+        unset(PROTOST_OPENSSL_${_lib}_DLL CACHE)
+        find_file(PROTOST_OPENSSL_${_lib}_DLL "${_dll}"
+            HINTS "${PROTOST_OPENSSL_BIN}" "${OPENSSL_INCLUDE_DIR}/.."
+            NO_DEFAULT_PATH)
+        if(NOT PROTOST_OPENSSL_${_lib}_DLL)
+            message(FATAL_ERROR
+                "OpenSSL ${OPENSSL_VERSION} was found (headers in ${OPENSSL_INCLUDE_DIR}), "
+                "but not its ${_dll} in ${PROTOST_OPENSSL_BIN}. Point OPENSSL_ROOT_DIR "
+                "at an OpenSSL 3 installation that has its DLLs in bin/.")
+        endif()
+        list(APPEND PROTOST_OPENSSL_DLLS "${PROTOST_OPENSSL_${_lib}_DLL}")
+    endforeach()
+    unset(_dll)
+    message(STATUS "protoST: OpenSSL ${OPENSSL_VERSION} DLLs: ${PROTOST_OPENSSL_DLLS}")
+    list(APPEND PROTOST_RUNTIME_DLLS ${PROTOST_OPENSSL_DLLS})
     add_custom_target(protost_runtime_dlls
         COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different ${PROTOST_RUNTIME_DLLS}
@@ -307,7 +352,8 @@ if(WIN32)
     # UTF-8 process code page: argv, getenv and paths are UTF-8 as elsewhere.
     target_sources(protost PRIVATE src/windows/utf8.manifest)
 endif()
-target_link_libraries(protost PRIVATE protost_frontend protost_runtime ${PROTOCORE_LIBRARY} ${READLINE_LIBRARY})
+target_link_libraries(protost PRIVATE protost_frontend protost_runtime ${PROTOCORE_LIBRARY} ${READLINE_LIBRARY}
+    protost_warnings)
 
 enable_testing()
 # Python 3 drives the DAP and terminal tests (and the documentation checks).
@@ -480,13 +526,28 @@ endif()
 install(TARGETS protost
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     COMPONENT protoST)
-# protoIO is linked in statically, but OpenSSL is a DLL on Windows: install it
-# next to protost.exe, where Windows looks for it. (protoCore is a package of
-# its own and installs its DLL into its own prefix's bin/.)
-if(WIN32 AND PROTOST_OPENSSL_DLLS)
+# Windows: everything protost.exe loads goes next to it, so an installation,
+# or the ZIP unpacked anywhere, runs with nothing else on PATH: protoCore's DLL
+# (taken from the imported target, so its name may carry a version), the
+# OpenSSL DLLs (protoIO itself is linked in statically) with OpenSSL's
+# licence, and the MSVC runtime (app-local, through
+# InstallRequiredSystemLibraries, so no Visual C++ Redistributable needs to be
+# installed first).
+if(WIN32)
+    if(TARGET ${PROTOCORE_LIBRARY})
+        install(FILES "$<TARGET_FILE:${PROTOCORE_LIBRARY}>"
+            DESTINATION ${CMAKE_INSTALL_BINDIR}
+            COMPONENT protoST)
+    endif()
     install(FILES ${PROTOST_OPENSSL_DLLS}
         DESTINATION ${CMAKE_INSTALL_BINDIR}
         COMPONENT protoST)
+    install(FILES packaging/windows/LICENSE-OpenSSL.txt
+        DESTINATION ${CMAKE_INSTALL_DOCDIR}
+        COMPONENT protoST)
+    set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION ${CMAKE_INSTALL_BINDIR})
+    set(CMAKE_INSTALL_SYSTEM_RUNTIME_COMPONENT protoST)
+    include(InstallRequiredSystemLibraries)
 endif()
 
 # The standard-library `.st` modules. They are installed to
@@ -578,10 +639,21 @@ elseif(UNIX)
     set(CPACK_RPM_PACKAGE_REQUIRES
         "protoCore >= ${PROTOCORE_MIN_VERSION_FULL}, protoCore < ${PROTOCORE_NEXT_MAJOR}")
 elseif(WIN32)
-    # Windows NSIS installer + plain ZIP. The ZIP was built and checked on
-    # Windows 11 (2026-10-01); the NSIS installer has never been built (no
-    # NSIS on that host).
-    set(CPACK_GENERATOR "NSIS;ZIP")
+    # The ZIP always; the NSIS installer only when makensis is found, because
+    # cpack aborts the whole run when a generator's tool is missing and would
+    # take the ZIP down with it. Both carry protoCore's DLL, the OpenSSL DLLs
+    # and the MSVC runtime next to protost.exe (see the install rules above).
+    set(CPACK_GENERATOR "ZIP")
+    set(_pf86 "ProgramFiles(x86)")
+    find_program(PROTOST_MAKENSIS_EXECUTABLE makensis
+        HINTS "$ENV{ProgramFiles}/NSIS" "$ENV{${_pf86}}/NSIS")
+    unset(_pf86)
+    if(PROTOST_MAKENSIS_EXECUTABLE)
+        list(APPEND CPACK_GENERATOR "NSIS")
+        message(STATUS "CPack: NSIS generator enabled (${PROTOST_MAKENSIS_EXECUTABLE})")
+    else()
+        message(STATUS "CPack: NSIS generator disabled (makensis not found)")
+    endif()
     set(CPACK_NSIS_HELP_LINK "https://github.com/gamarino/protoST")
     set(CPACK_NSIS_PACKAGE_NAME "protoST")
 endif()
