@@ -211,11 +211,13 @@ target_link_libraries(protost_runtime PUBLIC nlohmann_json::nlohmann_json)
 # link interface; dpkg-shlibdeps turns it into the package's libssl
 # dependency.
 #
-# The floor is 0.2.0: on Windows it refuses .bat/.cmd targets, maps a crashed
-# child's exit code to 128 + signal, honours timeouts on console reads and
-# lets open files be deleted or renamed. protoIO's package is compatible
-# within one minor version (SameMinorVersion), so 0.1 would refuse 0.2.x.
-set(PROTOIO_MIN_VERSION "0.2.0")
+# The floor is 0.2.1: process::shell, which hands a command line to cmd.exe
+# verbatim (OSProcess shell:). 0.2.0 brought, on Windows, the refusal of
+# .bat/.cmd targets, a crashed child's exit code as 128 + signal, timeouts on
+# console reads and open files that can be deleted or renamed. protoIO's
+# package is compatible within one minor version (SameMinorVersion), so 0.1
+# would refuse 0.2.x.
+set(PROTOIO_MIN_VERSION "0.2.1")
 find_package(protoIO ${PROTOIO_MIN_VERSION} CONFIG QUIET)
 if(protoIO_FOUND)
     message(STATUS "protoST: installed protoIO ${protoIO_VERSION} from ${protoIO_DIR}")

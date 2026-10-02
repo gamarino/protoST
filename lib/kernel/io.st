@@ -479,10 +479,12 @@ OSProcess class >> shell: aString
   ^ self shell: aString input: nil.
 
 OSProcess class >> shell: aString input: input
-  "The system's shell runs aString: /bin/sh -c, and cmd.exe /c on Windows."
-  ^ Smalltalk platform = 'windows'
-      ifTrue: [self run: 'cmd.exe' arguments: (Array with: '/c' with: aString) input: input]
-      ifFalse: [self run: '/bin/sh' arguments: (Array with: '-c' with: aString) input: input].
+  "The system's shell runs aString as written: /bin/sh -c, and on Windows
+   cmd.exe /d /s /c with the line handed to cmd verbatim, so its quotes and
+   metacharacters mean what they mean to cmd."
+  | r |
+  r := self __osShell: aString input: input.
+  ^ OSProcessResult new setExitCode: (r at: 1) output: (r at: 2) errorOutput: (r at: 3).
 
 OSProcess class >> command: aString
   "The output of a shell command line, without its final newline; signals

@@ -75,10 +75,10 @@ env:
   #                               tens of milliseconds.  It is a good test and a
   #                               bad gate.
   PROTOIO_REPO: gamarino/protoIO
-  # protoIO main after its Windows and macOS ports (2026-10-01); the Windows
-  # port of protoST needs it. Pinned so a red build is attributable; bump
-  # deliberately.
-  PROTOIO_REF: 1f30887397fb5497cf75d0784db76aa8dcad5688
+  # protoIO 0.2.1 (main, 2026-10-02): process::shell, which OSProcess shell:
+  # needs, on top of 0.2.0's Windows review fixes. Pinned so a red build is
+  # attributable; bump deliberately.
+  PROTOIO_REF: c97a1ad3b3e6ef4eba31afdd8118ab0b730a954a
   NON_GATING_TESTS: '^(cli_concurrent_first_call|F6 v2 T7: two actors run in parallel \(wall-clock proof\))$'
 
 jobs:

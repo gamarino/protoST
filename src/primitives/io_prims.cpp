@@ -522,6 +522,22 @@ PRIM(prim_Run) {
     return makeArray(rt, ctx, {ctx->fromLong(res.exitCode), string(ctx, res.out), string(ctx, res.err)});
 }
 
+// __osShell: aString input: aStringOrNil — #(exitCode output errorOutput).
+// The system's shell runs the command line exactly as written: /bin/sh -c,
+// or cmd.exe /d /s /c "<command>" on Windows, where the line reaches cmd
+// verbatim (protoio::process::shell; no C runtime quoting, which cmd does not
+// understand).
+PRIM(prim_Shell) {
+    ARGS(2, "__osShell:input:");
+    const std::string command = str(ctx, a[0], "shell:");
+    if (command.empty()) throw std::runtime_error("shell: needs a command line");
+    std::optional<std::string> input;
+    if (a[1] && a[1] != PROTO_NONE) input = str(ctx, a[1], "input:");
+    const protoio::process::RunResult res = blocking(rt, ctx, [&] { return protoio::process::shell(command, input); });
+    proto::ProtoContext::CriticalSection cs(ctx);
+    return makeArray(rt, ctx, {ctx->fromLong(res.exitCode), string(ctx, res.out), string(ctx, res.err)});
+}
+
 // __osSpawn: argvArray — starts a child that shares our standard streams; answers its pid.
 PRIM(prim_Spawn) {
     ARGS(1, "__osSpawn:");
@@ -652,6 +668,7 @@ void installIoPrimitives(STRuntime& rt) {
         {"__osPid", prim_Pid},                   {"__osHostName", prim_HostName},
         {"__osPlatform", prim_Platform},         {"__osCwd", prim_Cwd},
         {"__osChdir:", prim_Chdir},              {"__osRun:input:", prim_Run},
+        {"__osShell:input:", prim_Shell},
         {"__osSpawn:", prim_Spawn},              {"__osWaitPid:", prim_WaitPid},
         {"__osKill:signal:", prim_Kill},
         {"__fdReadLine:", prim_FdReadLine},      {"__fdReadLine:max:", prim_FdReadLineMax},
