@@ -46,9 +46,12 @@ extern "C" void onSigint(int) {
         // The first Ctrl-C was never taken: stop the process, as the
         // platform's default action for Ctrl-C would.
 #if defined(_WIN32)
-        // What Windows' default console handler does: the CRT's raise()
-        // with the default action would end the process with status 3.
-        ::ExitProcess(STATUS_CONTROL_C_EXIT);
+        // The status Windows' default console handler gives (the CRT's
+        // raise() with the default action would exit with status 3).
+        // TerminateProcess rather than ExitProcess: like a signal's default
+        // action it runs no atexit handlers or static destructors, which
+        // could wait forever on threads or locks of the blocked program.
+        ::TerminateProcess(::GetCurrentProcess(), STATUS_CONTROL_C_EXIT);
 #else
         std::signal(SIGINT, SIG_DFL);
         std::raise(SIGINT);

@@ -107,6 +107,7 @@ class Session:
         # An evaluation blocked where it reaches no safepoint: the first
         # Ctrl-C stays pending, the second ends the process.
         self.send(BLOCKING)
+        self.wait_read(BLOCKING.strip(), pos)
         time.sleep(1.0)
         self.ctrl_c()
         time.sleep(0.5)
@@ -114,13 +115,25 @@ class Session:
         end = time.time() + TIMEOUT
         while self.exited() is None and time.time() < end:
             time.sleep(0.05)
+        if self.exited() is None:
+            # Diagnosis: is the REPL still blocked, or back at its prompt?
+            self.send("1000 + 1.\r")
+            time.sleep(3.0)
         return self.exited()
+
+    def wait_read(self, line, pos):
+        """Waits until the REPL has read `line` (where its echo is visible)."""
 
 
 # ----------------------------------------------------------------- POSIX
 
 
 class PtySession(Session):
+    def wait_read(self, line, pos):
+        # readline echoes the line once it has read it; a Ctrl-C before that
+        # would make the terminal discard the line still in its input queue.
+        self.expect_after(line, pos)
+
     def __init__(self):
         import pty
         self.home = tempfile.mkdtemp(prefix="protost-repl-")
