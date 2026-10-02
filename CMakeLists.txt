@@ -295,6 +295,8 @@ endif()
 target_link_libraries(protost PRIVATE protost_frontend protost_runtime ${PROTOCORE_LIBRARY} ${READLINE_LIBRARY})
 
 enable_testing()
+# Python 3 drives the DAP and terminal tests (and the documentation checks).
+find_package(Python3 COMPONENTS Interpreter)
 
 # The script tests are bash scripts. Windows cannot run a script directly, so
 # there they run through the bash of Git for Windows (never System32\bash.exe,
@@ -310,7 +312,6 @@ if(WIN32)
     # Git's POSIX tools (tr, wc, printf, ...), which the documentation's
     # OSProcess examples run; the bash scripts have them on PATH already.
     get_filename_component(PROTOST_POSIX_TOOLS "${PROTOST_BASH}/../../usr/bin" ABSOLUTE)
-    find_package(Python3 COMPONENTS Interpreter)
 else()
     set(PROTOST_SH "")
 endif()
@@ -430,6 +431,15 @@ add_test(NAME cli_actor_payload_gc
 # evaluations) while the debuggee's actors allocate.
 add_test(NAME cli_dap_gc
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_dap_gc.sh $<TARGET_FILE:protost>)
+
+# The REPL at a real terminal: a pseudo-terminal on Linux and macOS, a console
+# of its own on Windows (UTF-8 input, Ctrl-C cancelling the line, a second
+# Ctrl-C while blocked ending the process).
+if(Python3_Interpreter_FOUND)
+    add_test(NAME cli_repl_console
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_repl_console.py
+                $<TARGET_FILE:protost>)
+endif()
 
 if(WIN32)
     # The DAP tests drive protost from a Python client; on Windows `python3`

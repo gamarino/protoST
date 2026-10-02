@@ -128,3 +128,33 @@ jobs:
       - name: Test suite
         working-directory: protoST
         run: ctest --test-dir build -j2 --output-on-failure --timeout 600 -E "${NON_GATING_TESTS}${{ matrix.exclude_tests }}" < /dev/null
+
+      - name: The ZIP runs on its own (Windows)
+        # Unpacked into a clean directory and run from there, with PATH holding
+        # only the Windows directories: nothing from the build tree, the
+        # protoCore prefix or the OpenSSL installation can be found, so every
+        # DLL protost.exe needs must come from the ZIP. The runner has the MSVC
+        # runtime installed system-wide, so its DLLs are checked by name.
+        if: runner.os == 'Windows'
+        working-directory: protoST/build
+        run: |
+          cpack -G ZIP
+          zip=$(ls protost-*-win64.zip | head -1)
+          unzip -l "$zip"
+          for dll in vcruntime140.dll msvcp140.dll; do
+            unzip -l "$zip" | grep -qi "/bin/$dll\$" || { echo "the ZIP has no bin/$dll"; exit 1; }
+          done
+          unzip -l "$zip" | grep -qi "/LICENSE-OpenSSL" || { echo "the ZIP has no OpenSSL licence"; exit 1; }
+          clean="$RUNNER_TEMP/zip-check"; rm -rf "$clean"; mkdir -p "$clean/work"
+          unzip -q "$zip" -d "$clean"
+          exe=$(ls "$clean"/*/bin/protost.exe)
+          printf "| s | s := 0. 1 to: 10 do: [:i | s := s + i]. Transcript showCr: 'sum ' , s printString.\n(OSProcess command: 'echo \"a b\"') displayNl.\n" > "$clean/work/check.st"
+          cd "$clean/work"
+          sys="$(cygpath -u "$WINDIR")/System32"
+          clean_path="$sys:$(cygpath -u "$WINDIR"):$sys/Wbem"
+          /usr/bin/env PATH="$clean_path" "$exe" --version
+          out=$(/usr/bin/env PATH="$clean_path" "$exe" check.st | tr -d '\r')
+          echo "$out"
+          [ "$out" = "$(printf 'sum 55\n"a b"')" ] || { echo "unexpected output from the unpacked protost"; exit 1; }
+          /usr/bin/env PATH="$clean_path" "$exe" venv create venv-check
+          [ -s venv-check/bin/activate.bat ] || { echo "venv create from the ZIP wrote no activate.bat"; exit 1; }

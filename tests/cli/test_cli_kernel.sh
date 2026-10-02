@@ -15,21 +15,23 @@ now_ns() {
   if [[ "$t" =~ ^[0-9]+$ ]]; then echo "$t"
   else perl -MTime::HiRes=time -e 'printf "%.0f\n", time() * 1e9'; fi
 }
-best=999999
-for i in 1 2 3 4 5; do
-  start=$(now_ns); "$PROTOST" -e '1' >/dev/null; end=$(now_ns)
-  ms=$(( (end-start)/1000000 )); (( ms < best )) && best=$ms
-done
-# Under Git for Windows' bash, starting any native program costs about as much
-# as the whole budget (about 95 ms against 45 ms from cmd.exe); there the
-# launch itself, measured with --version, which loads no kernel, is taken off.
-if command -v cygpath >/dev/null 2>&1; then
-  launch=999999
+# What is measured is what loading the kernel and evaluating `1` adds to
+# starting the process: the best of five `-e '1'` runs minus the best of five
+# `--version` runs, which start the same executable and load no kernel. The
+# launch is taken off on every platform, so the budget means the same
+# everywhere: under Git for Windows' bash, starting any native program costs
+# about as much as the whole budget (about 95 ms, against 45 ms from cmd.exe),
+# and on Linux and macOS it is a few milliseconds.
+best_of_five() {
+  local best=999999 start end ms
   for i in 1 2 3 4 5; do
-    start=$(now_ns); "$PROTOST" --version >/dev/null; end=$(now_ns)
-    ms=$(( (end-start)/1000000 )); (( ms < launch )) && launch=$ms
+    start=$(now_ns); "$PROTOST" "$@" >/dev/null; end=$(now_ns)
+    ms=$(( (end-start)/1000000 )); (( ms < best )) && best=$ms
   done
-  best=$(( best - launch ))
-fi
-[[ $best -lt 100 ]] || { echo "FAIL: startup ${best} ms >= 100"; exit 1; }
-echo "OK (startup ${best} ms)"
+  echo "$best"
+}
+run=$(best_of_five -e '1')
+launch=$(best_of_five --version)
+best=$(( run - launch ))
+[[ $best -lt 100 ]] || { echo "FAIL: startup ${best} ms >= 100 (-e '1' ${run} ms, launch ${launch} ms)"; exit 1; }
+echo "OK (startup ${best} ms: -e '1' ${run} ms, launch ${launch} ms)"
