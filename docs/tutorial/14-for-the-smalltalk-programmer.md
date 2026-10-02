@@ -274,6 +274,8 @@ on an actor that may call back. ([Chapter 10](10-actors-and-futures.md).)
 A method recursion stops at about 19,000 activations, and a recursion that
 goes through native iteration (`do:`, `collect:`, …) at about 1,000 levels,
 with a catchable `Error` ("stack depth exceeded"); `ensure:` blocks still run.
+A handler block nests an engine as well: a handler that can no longer start
+at the limit receives that `Error` after the stack has unwound to its `on:do:`.
 
 ### Smaller differences — D39
 

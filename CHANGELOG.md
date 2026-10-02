@@ -5,6 +5,23 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+- **S23: a chain of re-signalling handlers finishes at the engine nesting
+  limit.** A handler block runs in a nested engine of its own; at the limit
+  (1,000 nested engines) it could not start, and the limit error then
+  crossed every primitive boundary below as a raw C++ exception, each one
+  translating it into a new `Error` and running again the handlers the
+  unwind had already left. The handler runs doubled per level, so a chain of
+  about 500 handlers that each signal a new `Error` (or `pass`, `outer`,
+  `signal`, `signal:`) did not finish. Now `signal` checks for room before it
+  runs a handler; without room it raises the limit's documented `Error`
+  ("stack depth exceeded (nested block evaluation)"), unwinds to the
+  `on:do:` whose handler catches it (`NestingLimitUnwind`) and runs that
+  handler there. Each handler runs at most once; 499 to 10,000 levels finish
+  in about 0.1 s. Tests: `08-exceptions/nesting-limit-in-re-signalling-handler-chain`,
+  `08-exceptions/nesting-limit-in-passing-handler-chain`;
+  `08-exceptions/unwind-through-nested-handler-blocks` is back to 498 levels.
+  Suite: 1076 `ctest` cases on Linux (544 conformance programs).
+
 - **The Windows-port review, 2026-10-02.**
   - *protoIO 0.2.1 is the floor* (`find_package(protoIO 0.2.1)`; a sibling
     `../protoIO` is checked against it too). 0.2.0 refuses `.bat`/`.cmd`
