@@ -22,7 +22,7 @@ env:
   PROTOCORE_REPO: numaes/protoCore
   PROTOCORE_REF: fc5d79db4f89f8a6eb473a52766b1908140a19d1
   PROTOIO_REPO: gamarino/protoIO
-  PROTOIO_REF: 120c8c373db2ffd840f6c807a487afae251ff6d3
+  PROTOIO_REF: 1f30887397fb5497cf75d0784db76aa8dcad5688
   # As in ci.yml: a wall-clock verdict never gates.
   NON_GATING_TESTS: '^(cli_concurrent_first_call|F6 v2 T7: two actors run in parallel \(wall-clock proof\))$'
 

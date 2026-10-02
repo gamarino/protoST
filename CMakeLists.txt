@@ -210,13 +210,28 @@ target_link_libraries(protost_runtime PUBLIC nlohmann_json::nlohmann_json)
 # this one. OpenSSL (TLS for sockets and https) comes with protoIO's PUBLIC
 # link interface; dpkg-shlibdeps turns it into the package's libssl
 # dependency.
-find_package(protoIO 0.1 CONFIG QUIET)
+#
+# The floor is 0.2.0: on Windows it refuses .bat/.cmd targets, maps a crashed
+# child's exit code to 128 + signal, honours timeouts on console reads and
+# lets open files be deleted or renamed. protoIO's package is compatible
+# within one minor version (SameMinorVersion), so 0.1 would refuse 0.2.x.
+set(PROTOIO_MIN_VERSION "0.2.0")
+find_package(protoIO ${PROTOIO_MIN_VERSION} CONFIG QUIET)
 if(protoIO_FOUND)
     message(STATUS "protoST: installed protoIO ${protoIO_VERSION} from ${protoIO_DIR}")
 elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../protoIO/CMakeLists.txt")
     message(STATUS "protoST: no installed protoIO package found; building the sibling ../protoIO")
     add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../protoIO"
                      "${CMAKE_CURRENT_BINARY_DIR}/_protoIO" EXCLUDE_FROM_ALL)
+    # A source tree carries no version check of its own: compare here.
+    get_directory_property(_protoIO_version
+        DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../protoIO" DEFINITION PROJECT_VERSION)
+    if(_protoIO_version VERSION_LESS PROTOIO_MIN_VERSION)
+        message(FATAL_ERROR
+            "The sibling ../protoIO is version ${_protoIO_version}; protoST needs "
+            "${PROTOIO_MIN_VERSION} or later. Update the checkout.")
+    endif()
+    unset(_protoIO_version)
 else()
     message(FATAL_ERROR
         "protoIO not found: install the protoio-dev package, or check out "
