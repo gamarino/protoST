@@ -249,7 +249,7 @@ inline unsigned int computeLocalCount(const BytecodeModule& m, unsigned int argc
 // module's largest brace array pushes (`{…}` with 49+ elements overflowed
 // the fixed 48 slots).
 inline unsigned int computeMaxStack(const BytecodeModule& m) {
-    return kFrameMaxStk + m.cachedMaxArrayOperand();
+    return kFrameMaxStk + m.cachedExtraOperandStack();
 }
 
 } // namespace
@@ -336,6 +336,58 @@ const proto::ProtoObject*
 ExecutionEngine::opAt(const Frame& f, unsigned int depth) const {
     // depth 0 == top of stack.
     return ctx_->getAutomaticLocal(opStackBase(f) + f.sp - 1 - depth);
+}
+
+// ---------------------------------------------------------------------------
+// Instance-variable write groups
+//
+// The compiler turns a run `v1 := e1. ... vn := en.` of instance-variable
+// assignments, whose values after the first can neither run code nor observe
+// `self`, into IVAR_GROUP ... IVAR_GROUP_END (Compiler::tryEmitInstVarGroup).
+// At the first write the engine decides, once, whether to group: it declines
+// when a debugger is attached (a step or a breakpoint inside the run could
+// show `self` between the writes). When it groups, each IVAR_GROUP leaves its
+// value on the operand stack (rooted there) without writing it, and
+// IVAR_GROUP_END publishes the whole run as one new version of `self`
+// (ProtoObject::setAttributes): one snapshot and one publication instead of
+// one per variable, atomic to other threads. When it declines, every write
+// is STORE_INSTVAR's write at its own position. Both ways the run leaves the
+// same operand stack: its values until IVAR_GROUP_END, then the last one.
+//
+// The only instruction inside a run that can run code is a SmallInteger
+// fast-path operator (BIN_INT_*) that misses and sends its message; before
+// that send the pending writes are written one by one (flushInstVarGroup) and
+// the rest of the run continues per write, so the message sees what the
+// per-write path shows. A write by another thread between the first write of
+// a run and its publication is ordered before or after the whole run, as it
+// could be ordered around a single write. If the thread is terminated in the
+// middle of a run, which of its writes survive is indeterminate (none or all
+// of the pending ones).
+// ---------------------------------------------------------------------------
+
+void
+ExecutionEngine::storeInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t nameConst,
+                              const proto::ProtoObject* val) {
+    // STORE_INSTVAR's write. The interned name is perennial; `val` is rooted
+    // on the operand stack.
+    auto* sym = f.m->ivSymbol(ctx, nameConst);
+    TransientPin pinSym(ctx, reinterpret_cast<const proto::ProtoObject*>(sym));
+    const proto::ProtoObject* self = getSelf(f);
+    if (!self || self == PROTO_NONE)
+        throw std::runtime_error("STORE_INSTVAR self is null");
+    const_cast<proto::ProtoObject*>(self)->setAttribute(ctx, sym, val);
+}
+
+void
+ExecutionEngine::flushInstVarGroup(proto::ProtoContext* ctx, Frame& f) {
+    const uint16_t pending = f.ivGroupPending;
+    f.ivGroupActive = false;
+    f.ivGroupPending = 0;
+    for (uint16_t k = 0; k < pending; ++k) {
+        const auto& e = f.m->instVarGroupEntry(f.ivGroupFirst + k);
+        storeInstVar(ctx, f, e.nameConst,
+                     ctx_->getAutomaticLocal(opStackBase(f) + f.ivGroupBase + k));
+    }
 }
 
 // D8 (MNT-b2): registry-managed lifetime. Each engine joins g_liveEngines on
@@ -738,6 +790,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     labels[static_cast<unsigned int>(Op::STORE_GLOBAL)]     = &&L_STORE_GLOBAL;
     labels[static_cast<unsigned int>(Op::PUSH_INSTVAR)]     = &&L_PUSH_INSTVAR;
     labels[static_cast<unsigned int>(Op::STORE_INSTVAR)]    = &&L_STORE_INSTVAR;
+    labels[static_cast<unsigned int>(Op::IVAR_GROUP)]       = &&L_IVAR_GROUP;
+    labels[static_cast<unsigned int>(Op::IVAR_GROUP_END)]   = &&L_IVAR_GROUP_END;
     labels[static_cast<unsigned int>(Op::MAKE_CAPTURED)]    = &&L_MAKE_CAPTURED;
     labels[static_cast<unsigned int>(Op::MAKE_ARRAY)]       = &&L_MAKE_ARRAY;
     labels[static_cast<unsigned int>(Op::HALT)]             = &&L_HALT;
@@ -1085,6 +1139,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     }
                 }
                 push(f, lhs); push(f, rhs);
+                if (f.ivGroupActive) flushInstVarGroup(ctx, f);  // the send may observe self
                 op = Op::SEND_BINARY; goto L_SEND_BINARY;
             }
             case Op::BIN_INT_SUB: L_BIN_INT_SUB: {
@@ -1103,6 +1158,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     }
                 }
                 push(f, lhs); push(f, rhs);
+                if (f.ivGroupActive) flushInstVarGroup(ctx, f);  // the send may observe self
                 op = Op::SEND_BINARY; goto L_SEND_BINARY;
             }
             case Op::BIN_INT_LE: L_BIN_INT_LE: {
@@ -1117,6 +1173,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     DISPATCH_DIRECT();
                 }
                 push(f, lhs); push(f, rhs);
+                if (f.ivGroupActive) flushInstVarGroup(ctx, f);  // the send may observe self
                 op = Op::SEND_BINARY; goto L_SEND_BINARY;
             }
             case Op::BIN_INT_LT: L_BIN_INT_LT: {
@@ -1131,6 +1188,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     DISPATCH_DIRECT();
                 }
                 push(f, lhs); push(f, rhs);
+                if (f.ivGroupActive) flushInstVarGroup(ctx, f);  // the send may observe self
                 op = Op::SEND_BINARY; goto L_SEND_BINARY;
             }
             case Op::BIN_INT_GE: L_BIN_INT_GE: {
@@ -1145,6 +1203,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     DISPATCH_DIRECT();
                 }
                 push(f, lhs); push(f, rhs);
+                if (f.ivGroupActive) flushInstVarGroup(ctx, f);  // the send may observe self
                 op = Op::SEND_BINARY; goto L_SEND_BINARY;
             }
             case Op::BIN_INT_GT: L_BIN_INT_GT: {
@@ -1159,6 +1218,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     DISPATCH_DIRECT();
                 }
                 push(f, lhs); push(f, rhs);
+                if (f.ivGroupActive) flushInstVarGroup(ctx, f);  // the send may observe self
                 op = Op::SEND_BINARY; goto L_SEND_BINARY;
             }
             case Op::BIN_INT_EQ: L_BIN_INT_EQ: {
@@ -1173,6 +1233,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     DISPATCH_DIRECT();
                 }
                 push(f, lhs); push(f, rhs);
+                if (f.ivGroupActive) flushInstVarGroup(ctx, f);  // the send may observe self
                 op = Op::SEND_BINARY; goto L_SEND_BINARY;
             }
             case Op::SEND_UNARY: L_SEND_UNARY:
@@ -2234,6 +2295,67 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 if (!self || self == PROTO_NONE)
                     throw std::runtime_error("STORE_INSTVAR self is null");
                 const_cast<proto::ProtoObject*>(self)->setAttribute(ctx, sym, val);
+                DISPATCH_DIRECT();
+                break;
+            }
+            case Op::IVAR_GROUP: L_IVAR_GROUP: {
+                // A write of an instance-variable write group, not its last
+                // (see "Instance-variable write groups" above). The value
+                // stays on the operand stack either way.
+                Frame& f = frames_.back();
+                if (f.sp == 0)
+                    throw std::runtime_error("IVAR_GROUP empty stack");
+                const auto& e = f.m->instVarGroupEntry(arg);
+                if (e.position == 0) {
+                    // A null self is reported by the per-write path, at the
+                    // first write, as STORE_INSTVAR reports it.
+                    const proto::ProtoObject* self = getSelf(f);
+                    f.ivGroupActive = self && self != PROTO_NONE
+                                      && !rt_.debugger().attached();
+                    f.ivGroupPending = 0;
+                    f.ivGroupBase = f.sp - 1;
+                    f.ivGroupFirst = arg;
+                }
+                if (f.ivGroupActive) {
+                    ++f.ivGroupPending;
+                } else {
+                    storeInstVar(ctx, f, e.nameConst, peek(f));
+                }
+                DISPATCH_DIRECT();
+                break;
+            }
+            case Op::IVAR_GROUP_END: L_IVAR_GROUP_END: {
+                // The last write of a group: publish the run as one version
+                // of self, or write this one variable when the run is being
+                // written per write; then leave only the last value.
+                Frame& f = frames_.back();
+                const auto& e = f.m->instVarGroupEntry(arg);
+                if (f.sp < e.count)
+                    throw std::runtime_error("IVAR_GROUP_END stack underflow");
+                if (f.ivGroupActive) {
+                    f.ivGroupActive = false;
+                    f.ivGroupPending = 0;
+                    const std::size_t first = arg - e.position;
+                    const proto::ProtoString* names[BytecodeModule::kMaxInstVarGroup];
+                    const proto::ProtoObject* values[BytecodeModule::kMaxInstVarGroup];
+                    for (uint16_t k = 0; k < e.count; ++k) {
+                        // Interned names are perennial; the values stay
+                        // rooted in their operand-stack slots until the
+                        // stack is cut below.
+                        names[k] = f.m->ivSymbol(
+                            ctx, f.m->instVarGroupEntry(first + k).nameConst);
+                        values[k] = opAt(f, e.count - 1 - k);
+                    }
+                    const proto::ProtoObject* self = getSelf(f);
+                    if (!self || self == PROTO_NONE)
+                        throw std::runtime_error("STORE_INSTVAR self is null");
+                    self->setAttributes(ctx, e.count, names, values);
+                } else {
+                    storeInstVar(ctx, f, e.nameConst, peek(f));
+                }
+                const proto::ProtoObject* last = pop(f);
+                f.sp -= e.count - 1u;
+                push(f, last);
                 DISPATCH_DIRECT();
                 break;
             }

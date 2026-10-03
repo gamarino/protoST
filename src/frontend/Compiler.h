@@ -25,6 +25,12 @@ public:
     // module locals.
     void setReplMode(bool on) { replMode_ = on; }
 
+    // Instance-variable write groups (see tryEmitInstVarGroup). On by
+    // default; PROTOST_IVAR_GROUPS=off in the environment turns them off for
+    // every compiler, and this setter for one (the tests compare both paths).
+    void setInstVarGroups(bool on) { instVarGroups_ = on; }
+    static bool instVarGroupsDefault();
+
     // Per-scope analysis result. For F3-C1: just the captured names.
     // Computed by analyseClosures(mod) before emission.
     struct ScopeAnalysis {
@@ -143,6 +149,7 @@ private:
     // (scopes_.size() == 1), top-level assignments target the global
     // namespace so REPL state persists across separately-compiled inputs.
     bool replMode_ = false;
+    bool instVarGroups_ = instVarGroupsDefault();
 
     // F8-1: the source line currently being emitted. Updated on entry to
     // emitStatement / emitExpr from the AST node's `line` field (when valid)
@@ -163,6 +170,31 @@ private:
     void   collectClasses(const ast::Node& module);
     void   emitExpr(BytecodeModule& m, const ast::Node& n);
     void   emitStatement(BytecodeModule& m, const ast::Node& n);
+    // Emits the statements stmts[from..end) as a body does: each statement,
+    // with a POP between consecutive ones, so the last one's value stays on
+    // the stack. Runs of instance-variable assignments become write groups
+    // (tryEmitInstVarGroup).
+    void   emitStatements(BytecodeModule& m, const std::vector<ast::NodePtr>& stmts,
+                          std::size_t from, std::size_t end);
+    // Instance-variable write groups. When stmts[i] starts a run of two or
+    // more statements `v := e` that assign instance variables of `self`,
+    // where every e after the first can neither run code nor observe `self`,
+    // emits the run as IVAR_GROUP ... IVAR_GROUP_END (Opcodes.h) and answers
+    // the number of statements it consumed; otherwise emits nothing and
+    // answers 0. The run leaves the last value on the stack, as a single
+    // statement does.
+    std::size_t tryEmitInstVarGroup(BytecodeModule& m, const std::vector<ast::NodePtr>& stmts,
+                                    std::size_t i, std::size_t end);
+    // Is `n` an assignment that STORE_INSTVAR would perform?
+    bool   isInstVarAssignment(const ast::Node& n) const;
+    // Can `e` be computed inside a run without running code or reading a
+    // variable the run has already written (`written`)? Literals, `self`,
+    // temporaries, arguments, captured variables, instance and class
+    // variables not yet written, and the SmallInteger fast-path operators
+    // (+ - < <= > >= =) on such operands. A global can be undefined (an Error
+    // is signalled), so it is not one.
+    bool   isInertGroupValue(const ast::Node& e,
+                             const std::unordered_set<std::string>& written) const;
     int    declareLocal(const std::string& name);
     int    resolveLocal(const std::string& name) const;
     // F8-4: write the current (innermost) scope's slot->name mapping into `m`

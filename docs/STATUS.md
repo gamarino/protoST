@@ -67,7 +67,9 @@ are noted where useful.
 ### Object model
 - [x] Everything is an object; prototype-based model
 - [x] Defining a class; creating instances via `new`
-- [x] Instance variables
+- [x] Instance variables; a run of assignments to them is published as one
+      version of the object, so another thread sees all of it or none of it
+      (LANGUAGE.md 4.5; `tests/unit/test_instvar_groups.cpp`)
 - [x] `self` / `super` sends
 - [x] Class-side methods, isolated from instances (D5 closed); class variables and class-instance variables
 - [x] `printString`

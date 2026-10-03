@@ -16,6 +16,9 @@ target_sources(protost_unit_tests PRIVATE
     unit/test_lexer.cpp
 )
 target_sources(protost_unit_tests PRIVATE
+    unit/test_instvar_groups.cpp
+)
+target_sources(protost_unit_tests PRIVATE
     unit/test_parser.cpp
 )
 target_sources(protost_unit_tests PRIVATE

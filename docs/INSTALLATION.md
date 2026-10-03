@@ -8,11 +8,11 @@ dependency on protoCore's own package instead of shipping a copy.
 On a Debian or Ubuntu machine where protoCore's package is installed, the
 library is `/usr/lib/x86_64-linux-gnu/libprotoCore.so.3`, a link to
 `libprotoCore.so.<version>`. The 0.5.0 release was built and tested against
-protoCore 2.6.1; the sources since the Windows port need 2.7.0 or later
-(*Prerequisites*). CI builds against protoCore 2.10.2 on Linux, macOS and
-Windows, and against 2.7.0, the declared minimum, in one Linux job (the floor
-job), both with protoIO 0.2.2; the suite was last run locally (1076/1076,
-2026-10-03) against protoCore 2.10.2 installed in a private prefix.
+protoCore 2.6.1; the current sources need 2.11.0 or later (*Prerequisites*).
+CI builds against protoCore 2.12.0 on Linux, macOS and Windows, and against
+2.11.0, the declared minimum, in one Linux job (the floor job), both with
+protoIO 0.2.2; the suite was last run locally (2026-10-03) against protoCore
+2.12.0 installed in a private prefix.
 
 ---
 
@@ -38,8 +38,11 @@ job), both with protoIO 0.2.2; the suite was last run locally (1076/1076,
 - **OpenSSL** development files (`libssl-dev` on Debian/Ubuntu,
   `openssl-devel` on Fedora/RHEL), required by protoIO for TLS in the `net`
   and `http` modules. The Debian package of protoST depends on `libssl3`.
-- **protoCore 2.7.0 or newer, below 3.0**, installed, with its CMake package
-  configuration. 2.7.0 is required since the Windows port: the sources spell
+- **protoCore 2.11.0 or newer, below 3.0**, installed, with its CMake package
+  configuration. 2.11.0 is required since instance-variable write groups:
+  a run of assignments to instance variables is published as one version
+  with `ProtoObject::setAttributes`, which first exists there. Before that,
+  2.7.0 was required since the Windows port: the sources spell
   protoCore's 64-bit integers `proto::proto_long` / `proto::proto_ulong`,
   which first exist there (`long` outside Windows, `long long` on Windows).
   0.5.0 itself was tested with protoCore 2.6.1, its floor: since 0.5.0 the
@@ -76,15 +79,16 @@ cmake --build build_release -j4
 ctest --test-dir build_release --output-on-failure
 ```
 
-The discovery is `find_package(protoCore 2.7.0 CONFIG)`, so the prefix must hold
+The discovery is `find_package(protoCore 2.11.0 CONFIG)`, so the prefix must hold
 `lib/cmake/protoCore/protoCoreConfig.cmake`. **A prefix holding only
 `libprotoCore` and `protoCore.h` is no longer accepted**: without the package
 configuration there is no way to tell protoCore 1.x from 2.x, and linking the
 wrong major version is silent.
 
-The version floor is `2.7.0` and the ceiling is the next major version, because
+The version floor is `2.11.0` and the ceiling is the next major version, because
 protoCore's major version and its soname move together. The floor is set by
-the portable integer names (see Prerequisites); before them it was 2.6.1, for
+`ProtoObject::setAttributes` (see Prerequisites); before it, by the portable
+integer names of 2.7.0; before them it was 2.6.1, for
 the worker pool's growth under blocking I/O; the hashed
 collections and the actor mailboxes need only 2.1.0 (`ProtoMap`, the
 hashed-collection helper, `ProtoMPSCQueue`). protoST additionally asserts that
@@ -330,8 +334,8 @@ protoCore's own package:
 
 | Format | Relation |
 |--------|----------|
-| DEB | `Depends: protocore (>= 2.7.0), protocore (<< 3.0.0)` |
-| RPM | `Requires: protoCore >= 2.7.0, protoCore < 3.0.0` |
+| DEB | `Depends: protocore (>= 2.11.0), protocore (<< 3.0.0)` |
+| RPM | `Requires: protoCore >= 2.11.0, protoCore < 3.0.0` |
 
 `CPACK_DEBIAN_PACKAGE_SHLIBDEPS` is enabled, so `dpkg-shlibdeps` adds the
 dependencies of the system libraries `protost` links (`libc6`, `libstdc++6`,

@@ -109,6 +109,22 @@ enum class Op : uint8_t {
     // Reads a class-side instance variable: the mangled "_iv_<name>" slot of
     // `self` (a class object) itself, nil when unset — never a superclass's.
     PUSH_OWN_INSTVAR   = 42, // arg = constant pool symbol index (variable name)
+    // Instance-variable write groups (Compiler::tryEmitInstVarGroup). A run
+    // of statements `v1 := e1. v2 := e2. ... vn := en.` assigning instance
+    // variables of `self`, where e2..en cannot run code or observe `self`,
+    // compiles to
+    //     <e1> IVAR_GROUP <e2> IVAR_GROUP ... <en> IVAR_GROUP_END
+    // and is published as ONE new version of `self`
+    // (ProtoObject::setAttributes). Each value stays on the operand stack
+    // until IVAR_GROUP_END, which leaves only the last one (the value of the
+    // run as a statement). `arg` indexes the module's group-entry table
+    // (BytecodeModule::instVarGroupEntry): the variable's name constant, its
+    // position in the run and the run's length. When the engine declines the
+    // group (a debugger is attached) or must publish early (a SmallInteger
+    // operator in a later value misses its fast path and sends a message),
+    // every write takes STORE_INSTVAR's path at its own position instead.
+    IVAR_GROUP         = 43, // arg = group-entry index; leaves the value on the stack
+    IVAR_GROUP_END     = 44, // arg = group-entry index of the run's last write
     // Extend for >256-index args
     EXTEND          = 254,
     // Debugger primitive guard

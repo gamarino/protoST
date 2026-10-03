@@ -5,6 +5,50 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+- **Runs of instance-variable assignments are published as one version;
+  protoCore 2.11.0 is the floor.** Every assignment to an instance variable
+  publishes a new version of `self` into protoCore's mutable table (a new
+  snapshot plus a path copy in the table). A run of assignments in a method
+  (`x := ax. y := ay. z := 0.`) whose values after the first can neither run
+  code nor read a variable the run already assigned is now compiled as one
+  group (`IVAR_GROUP` ... `IVAR_GROUP_END`) and published once with
+  `ProtoObject::setAttributes` (protoCore 2.11.0): read the current snapshot
+  once, derive the new version, one compare-and-swap. The object model and
+  the program's meaning are unchanged; another thread now sees all of a run
+  or none of it.
+  - *What is grouped* (`Compiler::tryEmitInstVarGroup`): two to 16
+    consecutive statements assigning instance variables (instance or class
+    side); after the first, values may be literals, `self`, temporaries,
+    arguments, captured variables, instance and class variables not yet
+    assigned in the run, and `+ - < <= > >= =` on them. A send, a global (it
+    can be undefined and signal an Error), a block, a nested assignment or a
+    read of a variable the run assigned ends the run.
+  - *Guards* (`ExecutionEngine.cpp`, "Instance-variable write groups"): with
+    a debugger attached (`protost -d`, DAP) every assignment is published on
+    its own; a SmallInteger operator that misses its fast path (another kind
+    of number, an overflow) writes the run's pending assignments one by one
+    before it sends its message, and the rest of the run continues per
+    write. If a thread is terminated in the middle of a run, which of its
+    assignments survive is indeterminate. `PROTOST_IVAR_GROUPS=off` turns
+    runs off.
+  - *Measured* (`P5 new setId: i`, five assignments, 50,000 constructions,
+    no collection during the measurement; Release, protoCore 2.12.0): 72 to
+    74 cells per construction per write, 32 grouped. Statically, 69 of the
+    167 instance-variable assignments in `lib/`, `examples/` and
+    `benchmarks/` (83 files) fall in 25 runs.
+  - *Tests*: `tests/unit/test_instvar_groups.cpp` (17 cases, `[ivargroups]`):
+    which runs are formed and what ends them; each program's answer with
+    runs and with the per-write path; a `+` that misses and sends a message
+    that reads the receiver (fails if the pending writes are not published
+    first); an Error in a run's value (fails if a global is allowed in a
+    run); cells per construction; and a protoCore thread taking snapshots of
+    an object while this thread runs `a := k. b := k. c := k.` 200,000
+    times: no torn snapshot with runs, about 13 million of 19 million torn
+    per write. Suite: 1093 `ctest` cases on Linux, all passing.
+  - CI builds protoCore 2.12.0 (tag `v2.12.0`, `f969d15`); the floor job
+    builds 2.11.0 (`69b56af`). The developer fallback (`../protoCore`)
+    refuses a tree whose `protoCore.h` has no `setAttributes`.
+
 - **CI builds protoCore 2.10.2.** Every push and pull request job (Linux,
   macOS, Windows) now builds protoCore 2.10.2 (tag `v2.10.2`, `b7f6d82`)
   instead of 2.9.4; the floor job stays on 2.7.0 and protoIO on 0.2.2. No
