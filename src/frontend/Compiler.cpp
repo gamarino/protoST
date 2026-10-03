@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <mutex>
 #include <unordered_map>
 
@@ -694,10 +695,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         if (n.children.empty()) {
             sub->emit(Op::PUSH_NIL, 0, currentLine_);
         }
-        for (size_t i = 0; i < n.children.size(); ++i) {
-            emitStatement(*sub, *n.children[i]);
-            if (i + 1 != n.children.size()) sub->emit(Op::POP, 0, currentLine_);
-        }
+        emitStatements(*sub, n.children, 0, n.children.size());
         // ST-80 default return: a method returns `self` if there is no
         // explicit `^`. If the last statement is already a Return, the
         // body's RETURN was already emitted by emitStatement.
@@ -927,10 +925,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         if (bodyEmpty) {
             sub->emit(Op::PUSH_NIL, 0, currentLine_);
         }
-        for (size_t i = static_cast<size_t>(nNamed); i < n.children.size(); ++i) {
-            emitStatement(*sub, *n.children[i]);
-            if (i + 1 != n.children.size()) sub->emit(Op::POP, 0, currentLine_);
-        }
+        emitStatements(*sub, n.children, static_cast<size_t>(nNamed), n.children.size());
         bool endsWithReturn = !bodyEmpty
             && n.children.back()->kind == NodeKind::Return;
         if (!endsWithReturn) {
@@ -1391,10 +1386,7 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                               /*nArgs=*/nArgs, /*argNameOffset=*/0);
             // emit body statements; last value implicitly returned
             if (n.children.empty()) sub->emit(Op::PUSH_NIL, 0, currentLine_);
-            for (size_t i = 0; i < n.children.size(); ++i) {
-                emitStatement(*sub, *n.children[i]);
-                if (i + 1 != n.children.size()) sub->emit(Op::POP, 0, currentLine_);
-            }
+            emitStatements(*sub, n.children, 0, n.children.size());
             sub->emit(Op::RETURN_TOP, 0, currentLine_);
             recordLocalNames(*sub);
             sub->setDebugName(currentMethodDebugName_.empty()
@@ -1951,15 +1943,124 @@ void Compiler::emitInlinedBlockBody(BytecodeModule& m, const ast::Node& block) {
         m.emit(Op::PUSH_NIL, 0, currentLine_);
         return;
     }
-    for (std::size_t i = 0; i < block.children.size(); ++i) {
-        emitStatement(m, *block.children[i]);
-        if (i + 1 != block.children.size()) m.emit(Op::POP, 0, currentLine_);
+    emitStatements(m, block.children, 0, block.children.size());
+}
+
+void Compiler::emitStatements(BytecodeModule& m, const std::vector<ast::NodePtr>& stmts,
+                              std::size_t from, std::size_t end) {
+    for (std::size_t i = from; i < end; ++i) {
+        if (std::size_t run = tryEmitInstVarGroup(m, stmts, i, end); run > 0)
+            i += run - 1;
+        else
+            emitStatement(m, *stmts[i]);
+        if (i + 1 != end) m.emit(Op::POP, 0, currentLine_);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Instance-variable write groups
+//
+// Every STORE_INSTVAR publishes a new version of `self` into protoCore's
+// mutable table (a new immutable snapshot plus a path copy in the table).
+// `x := ax. y := ay. z := 0.` therefore publishes three versions, and a
+// reader on another thread can see the first write without the others. When
+// nothing between the writes can run code, nobody can observe `self` between
+// them, so the run is compiled as the immutable-style program it is
+// equivalent to: compute the values in order, derive the new version from
+// the current one, publish it once (ProtoObject::setAttributes). Other
+// threads see the whole run or none of it.
+//
+// The first statement's value runs before the run starts, so it may be any
+// expression. The values after it must be inert (isInertGroupValue). A
+// SmallInteger operator is inert only on its fast path: when it misses (an
+// operand is not a SmallInteger, or the result overflows) it sends a
+// message, and the engine first publishes the writes of the run made so far,
+// one by one, so the message sees what the per-write path would show
+// (ExecutionEngine.cpp, "Instance-variable write groups").
+//
+// Which writes of a group survive if the thread is terminated in the middle
+// of it is indeterminate: none, as for a thread terminated just before the
+// run, or all of them.
+// ---------------------------------------------------------------------------
+
+bool Compiler::isInstVarAssignment(const Node& n) const {
+    if (n.kind != NodeKind::Assignment || n.children.empty()) return false;
+    // The order of emitStatement's Assignment case: a captured name, then a
+    // temporary or argument, wins over an instance variable.
+    if (isCaptured(n.text) || resolveLocal(n.text) >= 0) return false;
+    return std::find(currentInstVars_.begin(), currentInstVars_.end(), n.text)
+           != currentInstVars_.end();
+}
+
+bool Compiler::isInertGroupValue(const Node& e,
+                                 const std::unordered_set<std::string>& written) const {
+    switch (e.kind) {
+        case NodeKind::IntegerLit: case NodeKind::FloatLit: case NodeKind::StringLit:
+        case NodeKind::SymbolLit:  case NodeKind::CharLit:
+        case NodeKind::TrueLit:    case NodeKind::FalseLit: case NodeKind::NilLit:
+        case NodeKind::Self:
+            return true;
+        case NodeKind::Identifier: {
+            if (isCaptured(e.text) || resolveLocal(e.text) >= 0) return true;
+            const bool instVar = std::find(currentInstVars_.begin(), currentInstVars_.end(),
+                                           e.text) != currentInstVars_.end();
+            const bool classVar = std::find(currentClassVars_.begin(), currentClassVars_.end(),
+                                            e.text) != currentClassVars_.end();
+            return (instVar || classVar) && written.count(e.text) == 0;
+        }
+        case NodeKind::BinarySend: {
+            static const char* const fast[] = {"+", "-", "<=", "<", ">=", ">", "="};
+            if (e.children.size() < 2) return false;
+            bool isFast = false;
+            for (const char* op : fast) if (e.text == op) isFast = true;
+            return isFast && isInertGroupValue(*e.children[0], written)
+                   && isInertGroupValue(*e.children[1], written);
+        }
+        default:
+            return false;
+    }
+}
+
+std::size_t Compiler::tryEmitInstVarGroup(BytecodeModule& m,
+                                          const std::vector<ast::NodePtr>& stmts,
+                                          std::size_t i, std::size_t end) {
+    if (!instVarGroups_ || currentInstVars_.empty()) return 0;
+    if (!isInstVarAssignment(*stmts[i])) return 0;
+    std::unordered_set<std::string> written{stmts[i]->text};
+    std::size_t j = i + 1;
+    while (j < end && j - i < BytecodeModule::kMaxInstVarGroup) {
+        const Node& s = *stmts[j];
+        if (!isInstVarAssignment(s) || !isInertGroupValue(*s.children[0], written)) break;
+        written.insert(s.text);
+        ++j;
+    }
+    const std::size_t n = j - i;
+    if (n < 2) return 0;
+    for (std::size_t k = 0; k < n; ++k) {
+        const Node& s = *stmts[i + k];
+        if (s.line > 0) currentLine_ = s.line;
+        emitExpr(m, *s.children[0]);
+        const auto sym = m.internSymbol(s.text);
+        const size_t entry = m.addInstVarGroupEntry(static_cast<uint32_t>(sym),
+                                                    static_cast<uint16_t>(k),
+                                                    static_cast<uint16_t>(n));
+        m.emitWide(k + 1 < n ? Op::IVAR_GROUP : Op::IVAR_GROUP_END,
+                   static_cast<unsigned int>(entry), currentLine_);
+    }
+    return n;
 }
 
 void Compiler::patchJumpToHere(BytecodeModule& m, std::size_t /*jumpInstrPos*/) {
     // Kept for forward compatibility — the inline helpers above currently
     // patch jumps directly via m.patchArg + m.instrStartPc() indexing.
+}
+
+bool Compiler::instVarGroupsDefault() {
+    static const bool enabled = [] {
+        const char* v = std::getenv("PROTOST_IVAR_GROUPS");
+        return !(v && std::string(v) == "off");
+    }();
+    return enabled;
 }
 
 void Compiler::error(const std::string& msg) { errors_.push_back(msg); }

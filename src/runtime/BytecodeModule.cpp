@@ -53,7 +53,7 @@ unsigned int BytecodeModule::cachedLocalCount(unsigned int argc) const {
     return needed;
 }
 
-unsigned int BytecodeModule::cachedMaxArrayOperand() const {
+unsigned int BytecodeModule::cachedExtraOperandStack() const {
     const int cached = maxArrayOperandCache_.load(std::memory_order_acquire);
     if (cached >= 0) return static_cast<unsigned int>(cached);
     unsigned int maxArg = 0;
@@ -67,6 +67,9 @@ unsigned int BytecodeModule::cachedMaxArrayOperand() const {
             pc += kInstrSize;
         }
         if (op == Op::MAKE_ARRAY && arg > maxArg) maxArg = arg;
+        if (op == Op::IVAR_GROUP_END && arg < groupEntries_.size()
+            && groupEntries_[arg].count > maxArg)
+            maxArg = groupEntries_[arg].count;
     }
     maxArrayOperandCache_.store(static_cast<int>(maxArg), std::memory_order_release);
     return maxArg;

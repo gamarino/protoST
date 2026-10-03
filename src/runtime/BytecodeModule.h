@@ -141,6 +141,26 @@ public:
     }
     size_t              constBlockRef(size_t i)const { return consts_[i].blockIndex; }
 
+    // Instance-variable write groups (Op::IVAR_GROUP / IVAR_GROUP_END). One
+    // entry per write of a run: the constant naming the variable, the
+    // write's position in the run (0 = first) and the run's length. The
+    // entries of a run are contiguous, so the run's first entry is
+    // `index - position`.
+    struct InstVarGroupEntry {
+        uint32_t nameConst = 0;
+        uint16_t position  = 0;
+        uint16_t count     = 0;
+    };
+    // The longest run the compiler forms; it bounds the extra operand-stack
+    // depth a run needs (its values stay on the stack until the last write).
+    static constexpr uint16_t kMaxInstVarGroup = 16;
+    size_t addInstVarGroupEntry(uint32_t nameConst, uint16_t position, uint16_t count) {
+        groupEntries_.push_back(InstVarGroupEntry{nameConst, position, count});
+        return groupEntries_.size() - 1;
+    }
+    const InstVarGroupEntry& instVarGroupEntry(size_t i) const { return groupEntries_.at(i); }
+    size_t numInstVarGroupEntries() const { return groupEntries_.size(); }
+
     // sub-modules
     size_t              addBlockModule(std::unique_ptr<BytecodeModule> b);
     const BytecodeModule& block(size_t i) const { return *blocks_[i]; }
@@ -308,6 +328,7 @@ private:
     std::vector<std::string>            localNames_;  // F8-4: name per local slot
     std::string                         debugName_;   // F8-4: human label
     std::vector<Const>                  consts_;
+    std::vector<InstVarGroupEntry>      groupEntries_;  // IVAR_GROUP operands
     // Per-constant runtime caches (constSym / ivSymbol / callDescriptor).
     // Null until first use. Holds perennial interned ProtoStrings, valid for
     // the runtime's ProtoSpace (one runtime per process).
@@ -331,10 +352,13 @@ public:
     // cached value never invalidates.
     unsigned int cachedLocalCount(unsigned int argc) const;
 
-    // The largest MAKE_ARRAY operand in the module (the elements a brace
-    // array pushes before collecting them), 0 when there is none. The engine
-    // sizes each frame's operand stack from it. Lazily computed, cached.
-    unsigned int cachedMaxArrayOperand() const;
+    // The operand-stack depth the module needs beyond the engine's fixed
+    // bound: the largest MAKE_ARRAY operand (the elements a brace array
+    // pushes before collecting them) or the longest instance-variable write
+    // group (its values stay on the stack until its last write), whichever
+    // is larger; 0 when there is neither. The engine sizes each frame's
+    // operand stack from it. Lazily computed, cached.
+    unsigned int cachedExtraOperandStack() const;
 
 private:
     mutable std::atomic<int> maxArrayOperandCache_{-1};

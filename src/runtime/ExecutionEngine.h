@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 #include "protoCore.h"  // proto::proto_ulong
@@ -188,6 +189,16 @@ private:
         //                  from the frame whose frameId == homeFrameId.
         proto::proto_ulong         frameId      = 0;
         proto::proto_ulong         homeFrameId  = 0;
+        // Instance-variable write group in progress (Op::IVAR_GROUP). While
+        // `ivGroupActive`, the writes of the run's first `ivGroupPending`
+        // positions are held as the operand-stack values from
+        // `ivGroupBase` up, not yet written; `ivGroupFirst` is the run's
+        // first group entry. Cleared once the run is published, or written
+        // out one by one before a send (flushInstVarGroup).
+        bool                       ivGroupActive  = false;
+        uint16_t                   ivGroupPending = 0;
+        unsigned int               ivGroupBase    = 0;
+        std::size_t                ivGroupFirst   = 0;
     };
 
     // Header slots reserved at the start of every frame region.
@@ -256,6 +267,14 @@ private:
     const proto::ProtoObject* pop(Frame& f);
     const proto::ProtoObject* peek(const Frame& f) const;
     const proto::ProtoObject* opAt(const Frame& f, unsigned int depth) const;
+
+    // Instance-variable write groups: STORE_INSTVAR's write of `val` under
+    // group entry `entry`'s name, and the write, one by one and in order, of
+    // the pending writes of an active group (before a send, which could
+    // observe `self`).
+    void storeInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t nameConst,
+                      const proto::ProtoObject* val);
+    void flushInstVarGroup(proto::ProtoContext* ctx, Frame& f);
 
     // Push a new frame for module `m`, returning a reference is unsafe across
     // the vector growth; callers re-acquire frames_.back(). Initialises the
