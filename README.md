@@ -161,8 +161,8 @@ several cores without locks.
 
 ## Status
 
-Version 0.5.0; the current tree requires protoCore 2.7.0 or newer. `ctest` runs 1068
-cases, all passing: 537 conformance programs, 437 unit tests, 42 examples, 30
+Version 0.5.0; the current tree requires protoCore 2.11.0 or newer. `ctest` runs 1093
+cases, all passing: 544 conformance programs, 454 unit tests, 42 examples, 31
 CLI tests (including the benchmark-harness self-test) and 22 documentation
 checks (every example with a stated result in 21 documents, plus the
 checker's self-test). The
@@ -173,13 +173,15 @@ known deviations from Smalltalk-80 and the open bugs are tracked in
 
 ## Getting started
 
-protoST depends on [protoCore](https://github.com/numaes/protoCore) 2.7.0 or
+protoST depends on [protoCore](https://github.com/numaes/protoCore) 2.11.0 or
 newer (below 3.0), which must be built first, on
 [protoIO](https://github.com/gamarino/protoIO) 0.2.2 or a later 0.2.x at build time (a sibling
 checkout `../protoIO`, or its `protoio-dev` package; it is linked statically),
-and on OpenSSL (`libssl-dev`) and libreadline. 2.7.0 is a hard floor: the
-sources use the portable 64-bit integer names (`proto::proto_long`) protoCore
-introduced there, and since 2.6.1 the worker pool creates threads from worker
+and on OpenSSL (`libssl-dev`) and libreadline. 2.11.0 is a hard floor: runs of
+instance-variable assignments are published as one version with
+`ProtoObject::setAttributes`, which protoCore introduced there; the sources
+also use the portable 64-bit integer names (`proto::proto_long`) of 2.7.0, and
+since 2.6.1 the worker pool creates threads from worker
 threads while actors block in I/O, which older protoCore releases did not
 support safely. By default the build looks for a protoCore checkout next to
 protoST (`../protoCore`) and uses the first of these directories that holds

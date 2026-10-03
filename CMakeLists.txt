@@ -71,7 +71,10 @@ endif()
 #      only when no installed package was found and no prefix was named;
 #      refused by -DPROTOCORE_REQUIRE_PACKAGE=ON.
 #
-# The version floor is 2.7.0: the sources spell protoCore's 64-bit integers
+# The version floor is 2.11.0: instance-variable write groups publish a run
+# of writes to `self` as one version with ProtoObject::setAttributes, which
+# protoCore first provides in 2.11.0. Before that, 2.7.0 was the floor: the
+# sources spell protoCore's 64-bit integers
 # proto::proto_long / proto::proto_ulong (with PROTO_L, PROTO_UL and
 # PROTO_FMT_U), which protoCore first provides in 2.7.0 -- long and unsigned
 # long outside Windows, long long there. Before that, 2.6.1 was the floor: the
@@ -81,8 +84,8 @@ endif()
 # brought ProtoMap, the hashed-collection helper and ProtoMPSCQueue; 2.6.0 the
 # process-global mutable table.) The ceiling is the next major, because
 # protoCore's major version and its soname move together.
-set(PROTOCORE_MIN_VERSION      "2.7.0")
-set(PROTOCORE_MIN_VERSION_FULL "2.7.0")
+set(PROTOCORE_MIN_VERSION      "2.11.0")
+set(PROTOCORE_MIN_VERSION_FULL "2.11.0")
 set(PROTOCORE_NEXT_MAJOR       "3.0.0")
 set(PROTOCORE_ABI_SOVERSION    "3")
 option(PROTOCORE_REQUIRE_PACKAGE
@@ -159,6 +162,17 @@ else()
             "${PROTOCORE_ABI_SOVERSION}. Rebuild ../protoCore from clean.")
     endif()
     unset(_protoCore_abi_file)
+    # The developer tree has no version to check; probe for the newest API the
+    # sources use instead (ProtoObject::setAttributes, protoCore 2.11.0).
+    file(STRINGS "${PROTOCORE_DIR}/headers/protoCore.h" _protoCore_setAttributes
+         REGEX "setAttributes\\(")
+    if(NOT _protoCore_setAttributes)
+        message(FATAL_ERROR
+            "The protoCore tree in ${PROTOCORE_DIR} predates "
+            "ProtoObject::setAttributes (protoCore 2.11.0); protoST needs "
+            "protoCore ${PROTOCORE_MIN_VERSION_FULL} or later. Update and rebuild it.")
+    endif()
+    unset(_protoCore_setAttributes)
     set(PROTOCORE_INCLUDE_DIRS ${PROTOCORE_DIR} ${PROTOCORE_DIR}/headers)
     set(CMAKE_BUILD_RPATH "${PROTOCORE_LIB_DIR}")
     set(CMAKE_BUILD_RPATH_USE_LINK_PATH TRUE)

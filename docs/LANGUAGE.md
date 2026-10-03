@@ -729,6 +729,37 @@ Account >> deposit: amount
 
 An instance variable that has never been assigned reads as `nil`.
 
+**Runs of assignments are published together.** Each assignment to an
+instance variable publishes a new version of the object (protoCore keeps
+objects as immutable snapshots; a mutable object is a reference to its
+current one). When a method assigns several instance variables in a row and
+the values after the first can neither run code nor read a variable the run
+has already assigned, the run is published as **one** version:
+
+```smalltalk
+Point >> setX: ax y: ay
+  x := ax. y := ay.          "one new version of self, not two"
+
+Point >> moveBy: d
+  x := x + d. y := y + d.    "one version, while + stays on SmallIntegers"
+```
+
+The first value of a run may be any expression (it is computed before the run
+starts); the later ones may be literals, `self`, temporaries, arguments,
+captured variables, instance and class variables the run has not assigned yet,
+and `+ - < <= > >= =` on such values. A message send, a global (which can be
+undefined), a block, a nested assignment, or a read of a variable the run
+already assigned ends the run, and up to 16 assignments form one run. The
+program's meaning does not change: within the method the variables have the
+same values at the same points, and a `+` that leaves the SmallInteger range
+or meets another kind of number first publishes the assignments made so far,
+so the method it sends sees them. What changes is what *another thread* can
+observe: it sees all of a run or none of it, never some of its assignments
+(10.6). Which assignments of a run survive if the thread is terminated in the
+middle of it is indeterminate. Under the debugger (`protost -d`, the DAP
+server) every assignment is published on its own, so stepping shows each one.
+`PROTOST_IVAR_GROUPS=off` in the environment turns runs off.
+
 ### 4.6 `self` and `super`
 
 `self` is the receiver of the currently executing method. A self-send
@@ -1734,6 +1765,10 @@ Three consequences the programmer must honour:
    caller's thread, unsynchronised against the actor's worker.
 3. **An actor never reaches inside another actor's wrapped object directly** —
    cross-actor communication is exclusively by message send to the proxy.
+
+A thread that reads the object directly (consequence 2) sees each run of
+instance-variable assignments (4.5) as a whole, never a part of it; a
+sequence of messages is still not atomic.
 
 ### 10.7 Errors in an actor
 
