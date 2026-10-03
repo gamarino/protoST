@@ -5,6 +5,12 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+- **CI builds protoCore 2.10.2.** Every push and pull request job (Linux,
+  macOS, Windows) now builds protoCore 2.10.2 (tag `v2.10.2`, `b7f6d82`)
+  instead of 2.9.4; the floor job stays on 2.7.0 and protoIO on 0.2.2. No
+  source change was needed: the suite passes 1076/1076 locally against
+  2.10.2. protoST does not enable protoCore's adaptive heap.
+
 - **CI builds protoCore 2.9.4 and protoIO 0.2.2; protoIO 0.2.2 is the floor.**
   Every push and pull request job (Linux, macOS, Windows) builds protoCore
   2.9.4 (tag `v2.9.4`, `9cb0ef5`); one Linux job, the only floor job, builds

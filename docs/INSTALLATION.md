@@ -9,10 +9,10 @@ On a Debian or Ubuntu machine where protoCore's package is installed, the
 library is `/usr/lib/x86_64-linux-gnu/libprotoCore.so.3`, a link to
 `libprotoCore.so.<version>`. The 0.5.0 release was built and tested against
 protoCore 2.6.1; the sources since the Windows port need 2.7.0 or later
-(*Prerequisites*). CI builds against protoCore 2.9.4 on Linux, macOS and
+(*Prerequisites*). CI builds against protoCore 2.10.2 on Linux, macOS and
 Windows, and against 2.7.0, the declared minimum, in one Linux job (the floor
-job), both with protoIO 0.2.2; the suite was last run locally against an
-installed 2.8.0.
+job), both with protoIO 0.2.2; the suite was last run locally (1076/1076,
+2026-10-03) against protoCore 2.10.2 installed in a private prefix.
 
 ---
 

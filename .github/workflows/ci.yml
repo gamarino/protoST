@@ -23,7 +23,7 @@ name: CI
 # nightly schedule.  A pinned ref makes a red pull request unambiguous.  The
 # schedule keeps the integration signal separate, and the summary always records
 # the protoCore commit actually used.  The `test` job runs twice: against the
-# pinned release (2.9.4) and against the declared minimum (2.7.0, the floor
+# pinned release (2.10.2) and against the declared minimum (2.7.0, the floor
 # entry -- this repository's only floor job; it stays on 2.7.0 on the schedule).
 #
 # TWO BUGS OF THIS REPOSITORY'S OWN SHAPE THIS FILE HAS TO HANDLE:
@@ -63,10 +63,10 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  # protoCore 2.9.4 (tag v2.9.4, 9cb0ef5), SOVERSION 3: what every push and
+  # protoCore 2.10.2 (tag v2.10.2, b7f6d82), SOVERSION 3: what every push and
   # pull request builds against, except the floor entry of the `test` job
   # below, which builds the declared minimum. Bump deliberately.
-  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || '9cb0ef540826ee6c3162998db84ddf48464d6e2a' }}
+  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'b7f6d82a3960cb74e070e053aa644ec2f79c7fc2' }}
   # The two tests excluded from the gate, both run in the `non-gating` job:
   #   cli_concurrent_first_call   quarantined, S19 -- see the header.
   #   F6 v2 T7: two actors ...    a wall-clock proof of parallelism: two 200 ms
@@ -93,10 +93,10 @@ jobs:
       matrix:
         include:
           - name: Build and test suite
-            # Empty: env.PROTOCORE_REF (2.9.4, or master on the schedule).
+            # Empty: env.PROTOCORE_REF (2.10.2, or master on the schedule).
             protocore_ref: ''
           # THE FLOOR JOB, the only one in this repository (cross-platform.yml
-          # builds 2.9.4 on macOS and Windows). protoCore 2.7.0 (tag v2.7.0,
+          # builds 2.10.2 on macOS and Windows). protoCore 2.7.0 (tag v2.7.0,
           # fc5d79d), SOVERSION 3: PROTOCORE_MIN_VERSION in CMakeLists.txt,
           # where proto::proto_long and friends first exist (the Windows port);
           # cli_memory_bounded needs 2.6.2 or later. Built on every event, the
