@@ -23,7 +23,7 @@ name: CI
 # nightly schedule.  A pinned ref makes a red pull request unambiguous.  The
 # schedule keeps the integration signal separate, and the summary always records
 # the protoCore commit actually used.  The `test` job runs twice: against the
-# pinned release (2.12.0) and against the declared minimum (2.11.0, the floor
+# pinned release (2.14.1) and against the declared minimum (2.11.0, the floor
 # entry -- this repository's only floor job; it stays on 2.11.0 on the schedule).
 #
 # TWO BUGS OF THIS REPOSITORY'S OWN SHAPE THIS FILE HAS TO HANDLE:
@@ -63,10 +63,10 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  # protoCore 2.12.0 (tag v2.12.0, f969d15), SOVERSION 3: what every push and
+  # protoCore 2.14.1 (tag v2.14.1, 9495155), SOVERSION 3: what every push and
   # pull request builds against, except the floor entry of the `test` job
   # below, which builds the declared minimum. Bump deliberately.
-  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'f969d151408e753786acffa581a9c8cfe0aa7dfa' }}
+  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || '949515598fedc17b74e48ad00163e1844de6e5d2' }}
   # The two tests excluded from the gate, both run in the `non-gating` job:
   #   cli_concurrent_first_call   quarantined, S19 -- see the header.
   #   F6 v2 T7: two actors ...    a wall-clock proof of parallelism: two 200 ms
@@ -93,10 +93,10 @@ jobs:
       matrix:
         include:
           - name: Build and test suite
-            # Empty: env.PROTOCORE_REF (2.12.0, or master on the schedule).
+            # Empty: env.PROTOCORE_REF (2.14.1, or master on the schedule).
             protocore_ref: ''
           # THE FLOOR JOB, the only one in this repository (cross-platform.yml
-          # builds 2.12.0 on macOS and Windows). protoCore 2.11.0 (tag v2.11.0,
+          # builds 2.14.1 on macOS and Windows). protoCore 2.11.0 (tag v2.11.0,
           # 69b56af), SOVERSION 3: PROTOCORE_MIN_VERSION in CMakeLists.txt,
           # where ProtoObject::setAttributes (instance-variable write groups)
           # first exists. Built on every event, the

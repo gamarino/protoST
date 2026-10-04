@@ -5,6 +5,15 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+- **CI builds protoCore 2.14.1.** Every push and pull request job (Linux,
+  macOS, Windows) now builds protoCore 2.14.1 (tag `v2.14.1`, `9495155`)
+  instead of 2.12.0: the collector's pacing and multi-cursor sweep (2.12.0),
+  its control law (2.13.0), the sweep's helper threads (2.14.0) and the
+  thread-exit quorum fix (2.14.1). The floor job stays on 2.11.0 and protoIO
+  on 0.2.2. No source change was needed: the suite passes 1093/1093 locally
+  against 2.14.1 (ldd-verified). protoST does not enable protoCore's
+  adaptive heap.
+
 - **Runs of instance-variable assignments are published as one version;
   protoCore 2.11.0 is the floor.** Every assignment to an instance variable
   publishes a new version of `self` into protoCore's mutable table (a new
