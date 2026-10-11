@@ -2,12 +2,13 @@
 
 Duración: núcleo de 30 minutos; módulos opcionales hasta 60. Todas las cifras
 de rendimiento salen de `benchmarks/reports/2026-10-11-protocore-2.14.5.md`
-(medidas el 11/10/2026 sobre `main` con protoCore 2.14.5, con la release 0.5.0
+(medidas el 11/10/2026 sobre `main` con protoCore 2.14.5 —el código de la
+release 0.6.0—, con la release 0.5.0
 sobre protoCore 2.6.2 corrida al lado; benchmarks sintéticos, en una notebook);
 si una cifra no está en ese informe, no se dice.
 
 Antes de empezar: terminal con fuente grande, `cd docs/talks/2026-10-15-fas/demos`,
-`protost --version` debe decir `protoST 0.5.0`; la demo 4 necesita `python3`. Las grabaciones de respaldo
+`protost --version` debe decir `protoST 0.6.0`; la demo 4 necesita `python3`. Las grabaciones de respaldo
 están en `../recordings/` (ver la checklist).
 
 ---

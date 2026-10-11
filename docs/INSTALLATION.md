@@ -1,14 +1,15 @@
 # Installing protoST
 
-protoST 0.5.0 is a Smalltalk-syntax, actor-native runtime on protoCore. It is
+protoST 0.6.0 is a Smalltalk-syntax, actor-native runtime on protoCore. It is
 a consumer of protoCore, never a bundler of it: `bin/protost` links
 `libprotoCore.so.3`, and every package protoST produces declares a runtime
 dependency on protoCore's own package instead of shipping a copy.
 
 On a Debian or Ubuntu machine where protoCore's package is installed, the
 library is `/usr/lib/x86_64-linux-gnu/libprotoCore.so.3`, a link to
-`libprotoCore.so.<version>`. The 0.5.0 release was built and tested against
-protoCore 2.6.1; the current sources need 2.11.0 or later (*Prerequisites*).
+`libprotoCore.so.<version>`. protoST 0.6.0 needs protoCore 2.11.0 or later
+(*Prerequisites*); its `.deb` was built and tested against protoCore 2.14.5,
+the release to install with it (0.5.0 needed 2.6.1).
 CI builds against protoCore 2.14.5 on Linux, macOS and Windows, and against
 2.11.0, the declared minimum, in one Linux job (the floor job), both with
 protoIO 0.2.2; the suite was last run locally (2026-10-11) against protoCore
@@ -268,20 +269,20 @@ using the Linux packages:
 wsl --install -d Ubuntu-24.04
 
 # Then, in the Ubuntu shell: the two packages of the GitHub releases.
-wget https://github.com/numaes/protoCore/releases/download/v2.6.2/protoCore-2.6.2-Linux.deb
-wget https://github.com/gamarino/protoST/releases/download/v0.5.0/protost-0.5.0-Linux.deb
-sudo apt install ./protoCore-2.6.2-Linux.deb ./protost-0.5.0-Linux.deb
+wget https://github.com/numaes/protoCore/releases/download/v2.14.5/protoCore-2.14.5-Linux.deb
+wget https://github.com/gamarino/protoST/releases/download/v0.6.0/protost-0.6.0-Linux.deb
+sudo apt install ./protoCore-2.14.5-Linux.deb ./protost-0.6.0-Linux.deb
 protost --version
 ```
 
 The packages are attached to the GitHub releases
-[protoCore v2.6.2](https://github.com/numaes/protoCore/releases/tag/v2.6.2)
-and [protoST v0.5.0](https://github.com/gamarino/protoST/releases/tag/v0.5.0)
+[protoCore v2.14.5](https://github.com/numaes/protoCore/releases/tag/v2.14.5)
+and [protoST v0.6.0](https://github.com/gamarino/protoST/releases/tag/v0.6.0)
 (built on Ubuntu 24.04, x86_64). The same commands install them on Ubuntu
-24.04 itself. These are the 0.5.0 release packages, whose floor is protoCore
-2.6.1; protoCore 2.6.2 is the release to install with them. Building the
-current sources (`main`, after 0.5.0) needs protoCore 2.11.0 or later, and CI
-uses 2.14.5 (*Prerequisites*). To build the packages instead, see §Packages
+24.04 itself. protoST 0.6.0's floor is protoCore 2.11.0; protoCore 2.14.5 is
+the release to install with it, and the one CI builds against
+(*Prerequisites*). A machine that still has the protoCore 2.6.2 package of
+0.5.0 must upgrade it: the same `apt install` does. To build the packages instead, see §Packages
 below and protoCore's own `docs/INSTALLATION.md`.
 
 ---
@@ -364,7 +365,7 @@ start-up, so that is what a re-verification must check first.
 
 ### Former defect: the DEB dependency floor did not encode the ABI
 
-Since 0.5.0 the floor is protoCore 2.6.1 (2.11.0 for the current sources),
+Since 0.5.0 the floor is protoCore 2.6.1 (2.11.0 since 0.6.0),
 above 2.2.0, so the DEB range no longer admits a protoCore with the old
 SONAME. The account below is kept for
 the 0.4.x packages, whose floor was 2.1.0; the decoy test has not been re-run

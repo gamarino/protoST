@@ -123,8 +123,8 @@ y protoClojure también usan: la misma entrada/salida existe, con los nombres
 de cada lenguaje, en los tres runtimes.
 
 **¿Corre en Windows?**
-El paquete publicado (0.5.0) es para Linux; en Windows funciona con WSL2 y
-Ubuntu 24.04, instalando los mismos paquetes `.deb`. Las fuentes actuales
+El paquete publicado (0.6.0) es para Linux; en Windows funciona con WSL2 y
+Ubuntu 24.04, instalando los mismos paquetes `.deb`. Las fuentes
 compilan en forma nativa con Visual Studio 2022 y la integración continua
 corre la suite completa en Windows (salvo dos tests que dependen de
 herramientas POSIX: Ctrl-C enviado con `kill` y un ejemplo con sintaxis de
@@ -132,8 +132,8 @@ herramientas POSIX: Ctrl-C enviado con `kill` y un ejemplo con sintaxis de
 no hay un paquete de Windows publicado.
 
 **¿Es estable? ¿Qué bugs abiertos tiene?**
-0.5.0 pasaba sus 1068 casos de `ctest`; las fuentes actuales (main, con
-protoCore 2.14.5) pasan 1093, en Linux, macOS y Windows: programas de
+0.5.0 pasaba sus 1068 casos de `ctest`; 0.6.0 (con protoCore 2.14.5)
+pasa 1093, en Linux, macOS y Windows: programas de
 conformidad, tests unitarios, los ejemplos, tests de la línea de comandos y
 los ejemplos de la documentación. Durante la preparación de esta charla una
 auditoría adversarial de unos 1100 programas, en dos rondas, encontró resultados incorrectos

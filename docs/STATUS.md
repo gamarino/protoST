@@ -26,8 +26,9 @@ stable id and file it in the right bucket.
   1092 (no benchmark-harness self-test) and runs all but `cli_sigint` and
   tutorial chapter 15 (`docs/INSTALLATION.md`, "Windows (MSVC)"). The
   history of earlier counts is in `CHANGELOG.md`.
-- **protoCore:** the current sources require 2.11.0 or later (instance-variable
-  write groups use `ProtoObject::setAttributes`, see *Object model*); the
+- **protoCore:** 0.6.0 requires 2.11.0 or later (instance-variable
+  write groups use `ProtoObject::setAttributes`, see *Object model*); its
+  `.deb` is built against 2.14.5, the release to install with it. The
   0.5.0 release required 2.6.1. **Memory policy:** protoST sets a fixed heap
   limit (10M cells, 640 MB, at most a quarter of physical memory;
   `PROTOCORE_HEAP_LIMIT_CELLS` overrides it) in `STRuntime::configureHeap`,
@@ -38,8 +39,9 @@ stable id and file it in the right bucket.
   futile first collection and one waited for at exit (protoCore
   `docs/reports/2026-10-04-collector-adjustments.md`, A3). To be revisited;
   details in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md) K5.
-- **Last verified:** 2026-10-11, on `main` after 0.5.0, by the test suite
-  above. The 0.5.0 release (input and output, see
+- **Last verified:** 2026-10-11, by the test suite above; release 0.6.0
+  (2026-10-11) is that tree, and its `.deb` was installed in a clean prefix
+  and passed the talk demos. The 0.5.0 release (input and output, see
   [`docs/superpowers/specs/2026-09-29-io-design.md`](superpowers/specs/2026-09-29-io-design.md))
   was verified on 2026-09-29. The 0.4.0 audit before it (see
   [`docs/superpowers/specs/2026-09-28-presentable-protost-design.md`](superpowers/specs/2026-09-28-presentable-protost-design.md)

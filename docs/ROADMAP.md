@@ -32,11 +32,13 @@ possible. The measure of success is not "does it match Smalltalk-80" but
 
 Phases F1–F8 are complete, plus a backlog hardening pass. Tracks 1–11 below
 are also complete; each has a `trackN-complete` git tag (`track1-complete` …
-`track11-complete`). The latest release tag is `v0.5.0` (2026-09-29: input
-and output, see [`CHANGELOG.md`](../CHANGELOG.md), "0.5.0"). Release **0.4.0**
+`track11-complete`). The latest release tag is `v0.6.0` (2026-10-11: the Windows
+port, instance-variable write groups and protoCore 2.11.0 as the floor, see
+[`CHANGELOG.md`](../CHANGELOG.md), "0.6.0"); `v0.5.0` (2026-09-29) added input
+and output. Release **0.4.0**
 (tags `v0.4.0` and `v0.4.1`) was the Smalltalk-semantics audit described
-below, with 1041 `ctest` cases passing at commit `d3f7235`. Since 0.5.0,
-`main` has gained the Windows (MSVC) port and instance-variable write groups
+below, with 1041 `ctest` cases passing at commit `d3f7235`. Between 0.5.0 and
+0.6.0 protoST gained the Windows (MSVC) port and instance-variable write groups
 (protoCore 2.11.0 floor); on 2026-10-11 it registers 1093 `ctest` cases on
 Linux, all passing against protoCore 2.14.5 (`docs/STATUS.md`).
 

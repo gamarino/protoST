@@ -60,7 +60,7 @@ the table of mutable states is process-global and every space's collector
 marks it (protoCore `docs/GLOBAL_MUTABLE_TABLE.md`). protoScala reads a
 protoST object's state and writes to it through its own context (protoScala
 test `ProtoSTInterop.AForeignObjectsStateIsReadThroughTheCallersContext`).
-protoST 0.5.0 requires protoCore 2.6.1 and the current sources 2.11.0, so
+protoST 0.5.0 requires protoCore 2.6.1 and 0.6.0 requires 2.11.0, so
 both include it; the 0.4.0 package depended on protoCore 2.5.0, where the
 defect remains. Still open: a foreign runtime cannot call a protoST method
 (INTEROP §4.2), and a protoST cell another runtime keeps in its own

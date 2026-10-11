@@ -3,7 +3,32 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
-## Unreleased
+## 0.6.0 — native Windows, write groups, protoCore 2.14.5 (2026-10-11)
+
+What changed since 0.5.0, in brief (the entries below give the detail, newest
+first):
+
+- **protoCore 2.11.0 is the floor** (it was 2.6.1); the Linux `.deb` is built
+  against protoCore 2.14.5, the release to install with it. A machine with
+  the protoCore 2.6.2 package of 0.5.0 must upgrade protoCore too.
+- **Native Windows build (MSVC)** and a self-contained Windows ZIP, built and
+  tested in CI; the GitHub release attaches only the Linux `.deb`.
+- **Runs of instance-variable assignments are published as one version**
+  (`setAttributes`): fewer cells per construction, and another thread sees
+  all of a run or none of it.
+- **I/O moved onto protoIO** (a build-time static library; no behaviour change
+  for correct programs, a few stricter edge cases listed below).
+- **Fixes:** S23 (a chain of re-signalling handlers at the nesting limit now
+  finishes), unwinds no longer re-throw inside a catch clause, `OSProcess
+  shell:` hands the command line to the shell verbatim, REPL Ctrl-C cancels
+  the line, `venv create` from an installed `protost` writes its activation
+  scripts; new: `protost -` and `PROTOST_REPORT_PEAK_RSS`.
+- **Performance** against 0.5.0 (report of 2026-10-11): the same instructions
+  within 1 % single-threaded, about 12 MB less peak memory on several
+  workloads; allocation-heavy actor workloads on one worker are 4-6 % slower,
+  under investigation at release time.
+- `ctest`: 1093 cases on Linux, all passing; CI green on Linux (including the
+  protoCore 2.11.0 floor job), macOS and Windows.
 
 - **Re-measured on protoCore 2.14.5** (`benchmarks/reports/2026-10-11-protocore-2.14.5.md`,
   raw data in `benchmarks/reports/data/2026-10-11/`): 0.5.0 on protoCore 2.6.2,

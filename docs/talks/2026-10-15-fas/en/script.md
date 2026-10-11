@@ -1,12 +1,12 @@
 # protoST — talk script (FAST, 15/10/2026)
 
 Length: a 30-minute core; optional modules up to 60. Every performance figure
-comes from `benchmarks/reports/2026-10-11-protocore-2.14.5.md` (measured on 11/10/2026 on `main` with protoCore 2.14.5, with
-the 0.5.0 release on protoCore 2.6.2 run alongside; synthetic benchmarks, on a
+comes from `benchmarks/reports/2026-10-11-protocore-2.14.5.md` (measured on 11/10/2026 on `main` with protoCore 2.14.5, the code of
+release 0.6.0, with the 0.5.0 release on protoCore 2.6.2 run alongside; synthetic benchmarks, on a
 laptop); if a figure is not in that report, it is not said.
 
 Before starting: terminal with a large font, `cd docs/talks/2026-10-15-fas/demos`,
-`protost --version` must print `protoST 0.5.0`; demo 4 needs `python3`. The fallback recordings are in
+`protost --version` must print `protoST 0.6.0`; demo 4 needs `python3`. The fallback recordings are in
 `../recordings/` (see the checklist).
 
 ---

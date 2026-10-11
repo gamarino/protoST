@@ -166,8 +166,8 @@ several cores without locks.
 
 ## Status
 
-Version 0.5.0; the current tree requires protoCore 2.11.0 or newer, and CI
-builds it against protoCore 2.14.5. `ctest` runs 1093 cases on Linux, all
+Version 0.6.0 (2026-10-11); it requires protoCore 2.11.0 or newer (2.14.5
+recommended), and CI builds it against protoCore 2.14.5. `ctest` runs 1093 cases on Linux, all
 passing (2026-10-11): 544 conformance programs, 454 unit tests, 42 examples, 31
 CLI tests (including the benchmark-harness self-test) and 22 documentation
 checks (every example with a stated result in 21 documents, plus the
@@ -236,9 +236,9 @@ commands, and what differs on Windows, are in
 
 ## Installation
 
-protoST can be packaged with CPack. The 0.5.0 release has a Linux `.deb`
-attached to its GitHub release (below, with protoCore 2.6.2); other packages,
-and packages of the current sources, are built from source as shown below. Every package depends on
+protoST can be packaged with CPack. The 0.6.0 release has a Linux `.deb`
+attached to its GitHub release (below, with protoCore 2.14.5); other packages
+are built from source as shown below. Every package depends on
 [protoCore](https://github.com/numaes/protoCore) — install protoCore's package
 first (it provides `libprotoCore`).
 
@@ -263,14 +263,15 @@ the GitHub releases (or built as below):
 ```bash
 wsl --install -d Ubuntu-24.04        # in PowerShell, once
 # then, in the Ubuntu shell:
-wget https://github.com/numaes/protoCore/releases/download/v2.6.2/protoCore-2.6.2-Linux.deb
-wget https://github.com/gamarino/protoST/releases/download/v0.5.0/protost-0.5.0-Linux.deb
-sudo apt install ./protoCore-2.6.2-Linux.deb ./protost-0.5.0-Linux.deb
+wget https://github.com/numaes/protoCore/releases/download/v2.14.5/protoCore-2.14.5-Linux.deb
+wget https://github.com/gamarino/protoST/releases/download/v0.6.0/protost-0.6.0-Linux.deb
+sudo apt install ./protoCore-2.14.5-Linux.deb ./protost-0.6.0-Linux.deb
 ```
 
-These are the 0.5.0 release packages. A protoST built from the current
-sources needs protoCore 2.11.0 or later (CI uses 2.14.5); see *Getting
-started*.
+These are the 0.6.0 release packages. protoST 0.6.0 needs protoCore 2.11.0
+or later; the `.deb` was built against 2.14.5, the release to install with
+it (an older protoCore package, such as the 2.6.2 that went with 0.5.0, is
+not enough: upgrade it with the command above).
 
 **macOS — built and tested in CI, not packaged.** The cross-platform CI job
 builds protoST on macOS (arm64, Apple clang) and runs the whole suite there;

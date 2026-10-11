@@ -2,20 +2,20 @@
 
 ## The night before
 
-- [ ] Install one of two combinations on the talk laptop (both pass the
-      four demos, verified on 11/10):
-      - the one the performance report measured: protoCore 2.14.5 and
-        protoST from `main` (`4876884`), local packages from
-        `build_pkg_oct11`, not published;
-      - the published release, the one the audience will install: protoCore
-        2.6.2 and protoST 0.5.0. On Windows, inside WSL2 with Ubuntu 24.04:
-        `sudo apt install ./protoCore-2.6.2-Linux.deb ./protost-0.5.0-Linux.deb`
-        (`apt install ./…` also installs any missing dependency). The
-        package requires `protocore (>= 2.6.1)`.
-      The performance figures hold for both within the noise, except
-      allocation-heavy actors on one worker, 4–6 % slower on `main` (the
-      report runs them side by side).
-- [ ] `protost --version` → `protoST 0.5.0`.
+- [ ] Install the published release on the talk laptop, the one the
+      audience will install: protoCore 2.14.5 and protoST 0.6.0 (the code
+      the performance report measured). On Windows, inside WSL2 with
+      Ubuntu 24.04:
+      ```
+      wget https://github.com/numaes/protoCore/releases/download/v2.14.5/protoCore-2.14.5-Linux.deb
+      wget https://github.com/gamarino/protoST/releases/download/v0.6.0/protost-0.6.0-Linux.deb
+      sudo apt install ./protoCore-2.14.5-Linux.deb ./protost-0.6.0-Linux.deb
+      ```
+      (`apt install ./…` also installs any missing dependency, and upgrades
+      a protoCore 2.6.2 left over from 0.5.0). protoST 0.6.0 requires
+      protoCore 2.11.0 or later; 2.14.5 is the recommended release.
+- [ ] `protost --version` → `protoST 0.6.0`;
+      `ldd $(command -v protost) | grep protoCore` → `/usr/lib/x86_64-linux-gnu/libprotoCore.so.3`.
 - [ ] `python3 --version` answers (demo 4 uses it).
 - [ ] `cd docs/talks/2026-10-15-fas/demos && RUNS=20 ./check_all.sh` → all
       four demos 20/20.
