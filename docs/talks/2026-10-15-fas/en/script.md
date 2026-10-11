@@ -1,9 +1,9 @@
 # protoST — talk script (FAST, 15/10/2026)
 
 Length: a 30-minute core; optional modules up to 60. Every performance figure
-comes from `benchmarks/reports/2026-09-29-release-0.4.0.md` (measured on 0.4.0;
-0.5.0 adds input and output without changing the engine); if a figure is not
-in that report, it is not said.
+comes from `benchmarks/reports/2026-10-11-protocore-2.14.5.md` (measured on 11/10/2026 on `main` with protoCore 2.14.5, with
+the 0.5.0 release on protoCore 2.6.2 run alongside; synthetic benchmarks, on a
+laptop); if a figure is not in that report, it is not said.
 
 Before starting: terminal with a large font, `cd docs/talks/2026-10-15-fas/demos`,
 `protost --version` must print `protoST 0.5.0`; demo 4 needs `python3`. The fallback recordings are in
@@ -143,9 +143,18 @@ that it is all written down and verified.
 ### M1 — Inside protoCore (10 min)
 
 64-byte cells, integers inline in the pointer, immutable AVL lists and ropes,
-the concurrent GC that defers collection until it is needed, `ProtoThread`
-and how protoST uses it for the workers. The atomic snapshot of a mutable
-object (drawn on the whiteboard).
+`ProtoThread` and how protoST uses it for the workers. The atomic snapshot of
+a mutable object (drawn on the whiteboard).
+
+The collector as it stands in protoCore 2.14.5: concurrent, with
+stop-the-world below 0.2 ms in protoCore's measurements; with protoST's fixed
+ceiling (640 MB) each cycle starts a little before the ceiling is reached
+(pacing), and the sweep walks several chains at once and can add helper
+threads. protoCore also offers an adaptive heap controller; protoST does not
+use it yet, because under it a short program such as `fib.st` took about
+three times as long (protoST's start-up live set sits just below the
+controller's initial limit). Present it as a measured decision, not a hidden
+defect (`KNOWN_ISSUES.md`, K5).
 
 ### M2 — The digital twin step by step (8 min)
 
@@ -161,15 +170,21 @@ Fallback: `recordings/03-digital-twin`.
 - Every benchmark verifies its result; the harness fails if the result is
   missing or does not match (a bug in another project that looked like an
   "improvement" because it was not verified was shown).
-- Figures from the 0.4.0 report (`benchmarks/reports/2026-09-29-release-0.4.0.md`):
-  - startup 27 ms (CPython 29 ms);
-  - whole process against CPython with the same N: geometric mean 3.45×,
+- Figures from the 11/10 report (`benchmarks/reports/2026-10-11-protocore-2.14.5.md`), synthetic benchmarks on a laptop
+  (Ryzen 5 5500U) shared with other work:
+  - startup 32 ms (CPython 36 ms);
+  - whole process against CPython with the same N: geometric mean 3.5×,
     dominated by startup;
-  - the work alone (startup subtracted): from about 6× (integer loop) to
-    36× (`fib`) and 64× (exceptions), geometric mean 20.8×;
-  - `saturation_big` scaling: a ceiling of about 2.1× with four workers,
-    confirmed by a second run under lighter load; twelve actors, 2.1× with
-    the pool.
+  - the work alone (startup subtracted): from about 5× (integer loop) to
+    30× (`fib`) and 80× (exceptions); the geometric mean came out between
+    16× and 27× depending on the run, because with small N the subtraction
+    is sensitive to noise; give it as a range;
+  - twelve actors, 2.5–2.8× with the pool; `saturation_big`, a ceiling of
+    about 2× with four workers;
+  - against 0.5.0 on protoCore 2.6.2: the same instructions (±1 %), the
+    same time within the noise, about 12 MB less memory on several programs,
+    and allocation-heavy actor programs on one worker 4–6 % slower, cause not
+    isolated yet. Say it that way.
 - Say where it is slower (recursive method dispatch, exceptions) without
   dressing it up.
 

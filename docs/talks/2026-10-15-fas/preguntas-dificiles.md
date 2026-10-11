@@ -17,28 +17,42 @@ debugger de línea de comandos (`protost -d`) y un adaptador DAP para VS Code
 **¿Rendimiento frente a Pharo?**
 No medimos contra Pharo y no vamos a dar una cifra que no medimos. Medimos
 contra CPython 3.14 con el mismo algoritmo, el mismo N y el mismo resultado
-verificado (`benchmarks/reports/2026-09-29-release-0.4.0.md`, en una notebook
-con un AMD Ryzen 5 5500U de 6 núcleos):
+verificado (`benchmarks/reports/2026-10-11-protocore-2.14.5.md`: benchmarks sintéticos, en una notebook con un AMD Ryzen
+5 5500U de 6 núcleos, `main` con protoCore 2.14.5):
 
-- arranque: 27 ms (CPython: 29 ms);
-- tiempo de proceso completo: de 1,0× a 23,6× el de CPython, media
-  geométrica 3,45×; con N chicos el arranque pesa mucho en cada tiempo;
-- descontando el arranque de cada runtime, el trabajo en sí tarda unas 6×
-  (bucle de enteros), 36× (`fib`, despacho recursivo de métodos) y 64×
-  (excepciones) lo que tarda CPython; media geométrica 20,8×;
-- en paralelo, el techo medido de esta versión es de unas 2,1× (cuatro
-  workers contra uno; con cinco o seis no mejora), confirmado por una segunda
-  corrida independiente con menos carga.
+- arranque: 32 ms (CPython: 36 ms);
+- tiempo de proceso completo: de 1,0× a 26× el de CPython, media geométrica
+  3,5×; con N chicos el arranque pesa mucho en cada tiempo;
+- descontando el arranque de cada runtime, el trabajo en sí tarda unas 5×
+  (bucle de enteros), 30× (`fib`, despacho recursivo de métodos) y 80×
+  (excepciones) lo que tarda CPython; la media geométrica da entre 16× y 27×
+  según la corrida (la resta es sensible al ruido con N chicos);
+- en paralelo, doce actores corren 2,5–2,8× más rápido con el pool que con un
+  worker, y `saturation_big` llega a unas 2× con cuatro workers; con cinco o
+  seis no mejora.
+
+El trabajo de octubre en el recolector de protoCore (2.10 → 2.14.5) no cambió
+estas cifras: protoST ejecuta las mismas instrucciones que 0.5.0 y sus
+programas recolectan poco con un techo de 640 MB. Los programas de actores que
+asignan mucho son 4–6 % más lentos con un worker; todavía no sabemos por qué,
+y el informe lo dice.
 
 Es decir: en un hilo protoST es bastante más lento que CPython. Lo que
 mostramos es que el mismo código usa varios núcleos, hoy con ese techo.
 
 **¿Cómo es el GC?**
-El de protoCore: concurrente, con un hilo propio, que difiere la recolección
-hasta que es necesaria. Tiene fases de stop-the-world; no medimos cuánto
-duran en protoST, así que no damos una cifra. protoST fija un
-techo de heap (640 MB por defecto, configurable con PROTOCORE_HEAP_LIMIT_CELLS) y si se agota
-termina con un mensaje claro en lugar de tomar la máquina.
+El de protoCore: concurrente, con un hilo propio. protoST fija un techo de
+heap (640 MB por defecto, configurable con `PROTOCORE_HEAP_LIMIT_CELLS`) y si
+se agota termina con un mensaje claro en lugar de tomar la máquina. Desde
+protoCore 2.12 un ciclo arranca un poco antes de llegar a ese techo (pacing)
+y el barrido, la fase más cara, recorre varias cadenas a la vez y puede sumar
+hilos auxiliares (2.14). Tiene fases de stop-the-world: protoCore las midió
+por debajo de 0,2 ms en sus propias pruebas; en protoST no las medimos, así
+que no damos una cifra propia. protoCore ofrece también un controlador
+adaptativo del tamaño del heap; protoST no lo activa, porque con él `fib.st`
+tardó unas tres veces más (el conjunto vivo de arranque de protoST queda
+justo debajo de su límite inicial). Está escrito como decisión, con la
+medición, en `KNOWN_ISSUES.md` (K5).
 
 **¿Por qué prototipos?**
 protoCore es un modelo de prototipos; las clases de protoST son objetos
@@ -109,11 +123,17 @@ y protoClojure también usan: la misma entrada/salida existe, con los nombres
 de cada lenguaje, en los tres runtimes.
 
 **¿Corre en Windows?**
-No en forma nativa: la entrada/salida es POSIX. En Windows funciona con WSL2
-y Ubuntu 24.04, instalando los mismos paquetes `.deb`.
+El paquete publicado (0.5.0) es para Linux; en Windows funciona con WSL2 y
+Ubuntu 24.04, instalando los mismos paquetes `.deb`. Las fuentes actuales
+compilan en forma nativa con Visual Studio 2022 y la integración continua
+corre la suite completa en Windows (salvo dos tests que dependen de
+herramientas POSIX: Ctrl-C enviado con `kill` y un ejemplo con sintaxis de
+`sh`; `docs/INSTALLATION.md`, "Windows (MSVC)"); todavía
+no hay un paquete de Windows publicado.
 
 **¿Es estable? ¿Qué bugs abiertos tiene?**
-0.5.0 pasa los 1068 casos de `ctest`: programas de
+0.5.0 pasaba sus 1068 casos de `ctest`; las fuentes actuales (main, con
+protoCore 2.14.5) pasan 1093, en Linux, macOS y Windows: programas de
 conformidad, tests unitarios, los ejemplos, tests de la línea de comandos y
 los ejemplos de la documentación. Durante la preparación de esta charla una
 auditoría adversarial de unos 1100 programas, en dos rondas, encontró resultados incorrectos

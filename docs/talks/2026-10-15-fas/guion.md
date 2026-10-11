@@ -1,9 +1,10 @@
 # protoST — guion de la charla (FAST, 15/10/2026)
 
 Duración: núcleo de 30 minutos; módulos opcionales hasta 60. Todas las cifras
-de rendimiento salen de `benchmarks/reports/2026-09-29-release-0.4.0.md`
-(medidas sobre 0.4.0; 0.5.0 agrega entrada/salida sin cambiar el motor); si una
-cifra no está en ese informe, no se dice.
+de rendimiento salen de `benchmarks/reports/2026-10-11-protocore-2.14.5.md`
+(medidas el 11/10/2026 sobre `main` con protoCore 2.14.5, con la release 0.5.0
+sobre protoCore 2.6.2 corrida al lado; benchmarks sintéticos, en una notebook);
+si una cifra no está en ese informe, no se dice.
 
 Antes de empezar: terminal con fuente grande, `cd docs/talks/2026-10-15-fas/demos`,
 `protost --version` debe decir `protoST 0.5.0`; la demo 4 necesita `python3`. Las grabaciones de respaldo
@@ -144,9 +145,18 @@ error). Mostrar que está todo escrito y verificado.
 ### M1 — protoCore por dentro (10 min)
 
 Celdas de 64 bytes, enteros inline en el puntero, listas AVL y cuerdas
-(ropes) inmutables, el GC concurrente que difiere la recolección hasta que es
-necesaria, `ProtoThread` y cómo protoST la usa para los workers. La
+(ropes) inmutables, `ProtoThread` y cómo protoST la usa para los workers. La
 instantánea atómica de un objeto mutable (dibujo en pizarra).
+
+El recolector, tal como está en protoCore 2.14.5: concurrente, con
+stop-the-world por debajo de 0,2 ms en las mediciones de protoCore; con el
+techo fijo de protoST (640 MB) arranca cada ciclo un poco antes de llegar al
+techo (pacing), y el barrido recorre varias cadenas a la vez y puede sumar
+hilos auxiliares. protoCore ofrece además un controlador adaptativo del heap;
+protoST no lo usa todavía, porque con él un programa corto como `fib.st`
+tardó unas tres veces más (el conjunto vivo de arranque de protoST queda
+justo debajo del límite inicial del controlador). Decirlo como decisión
+medida, no como defecto escondido (`KNOWN_ISSUES.md`, K5).
 
 ### M2 — El gemelo digital paso a paso (8 min)
 
@@ -162,15 +172,21 @@ Respaldo: `recordings/03-digital-twin`.
 - Cada benchmark verifica su resultado; el harness falla si falta o no
   coincide (se mostró un bug que se veía como "mejora" en otro proyecto por
   no verificar).
-- Cifras del informe 0.4.0 (`benchmarks/reports/2026-09-29-release-0.4.0.md`):
-  - arranque 27 ms (CPython 29 ms);
-  - proceso completo frente a CPython con el mismo N: media geométrica 3,45×,
+- Cifras del informe del 11/10 (`benchmarks/reports/2026-10-11-protocore-2.14.5.md`), benchmarks sintéticos en una
+  notebook (Ryzen 5 5500U) compartida con otro trabajo:
+  - arranque 32 ms (CPython 36 ms);
+  - proceso completo frente a CPython con el mismo N: media geométrica 3,5×,
     dominada por el arranque;
-  - solo el trabajo (arranque descontado): de unas 6× (bucle de enteros) a
-    36× (`fib`) y 64× (excepciones), media geométrica 20,8×;
-  - escalado de `saturation_big`: techo de unas 2,1× con cuatro workers,
-    confirmado por una segunda corrida con menos carga; doce actores, 2,1×
-    con el pool.
+  - solo el trabajo (arranque descontado): de unas 5× (bucle de enteros) a
+    30× (`fib`) y 80× (excepciones); la media geométrica salió entre 16× y
+    27× según la corrida, porque con N chicos la resta es sensible al ruido;
+    decirlo como rango;
+  - doce actores, 2,5–2,8× con el pool; `saturation_big`, techo de unas 2×
+    con cuatro workers;
+  - frente a 0.5.0 sobre protoCore 2.6.2: las mismas instrucciones (±1 %),
+    el mismo tiempo dentro del ruido, unos 12 MB menos de memoria en varios
+    programas, y los programas de actores que asignan mucho, con un worker,
+    4–6 % más lentos, sin causa aislada todavía. Decirlo así.
 - Decir dónde es más lento (despacho de métodos recursivo, excepciones) sin
   maquillarlo.
 
