@@ -5,6 +5,13 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+- **CI builds protoCore 2.14.5.** Every push and pull request job (Linux,
+  macOS, Windows) now builds protoCore 2.14.5 (tag `v2.14.5`, `063c6d5`)
+  instead of 2.14.2: the controller's out-of-memory rule uses the live set and
+  the collector's registries outlive static destruction (2.14.4); an embedder
+  exits LeakSanitizer-clean (2.14.5). The floor job stays on 2.11.0 and protoIO
+  on 0.2.2. No source change was needed: the suite passes 1093/1093 locally
+  against 2.14.5 (ldd-verified).
 - **CI builds protoCore 2.14.2.** Every push and pull request job (Linux,
   macOS, Windows) now builds protoCore 2.14.2 (tag `v2.14.2`, `17bc118`)
   instead of 2.14.1: the collector adjustments of 2.14.2 (the multi-cursor
