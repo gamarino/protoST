@@ -14,27 +14,42 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Test suite:** 1076 `ctest` cases on Linux, 1076/1076 passing on
-  2026-10-02 (branch `fix/s23`, against the installed protoCore
-  2.8.0 and protoIO 0.2.1): 544 conformance programs, 437 unit tests, 42
+- **Test suite:** 1093 `ctest` cases on Linux, 1093/1093 passing on
+  2026-10-11 (`main` at `4876884`, against protoCore 2.14.5 installed in a
+  private prefix, and protoIO 0.2.2): 544 conformance programs, 454 unit tests, 42
   examples, 31 CLI tests (including the benchmark-harness self-test and the
   terminal test `cli_repl_console`) and 22 documentation checks (the
   examples with a stated result in 21 documents, plus the checker's
-  self-test). CI runs the same suite on Linux, macOS and Windows; Windows
-  registers 1075 (no benchmark-harness self-test) and runs all but
-  `cli_sigint` and tutorial chapter 15 (`docs/INSTALLATION.md`, "Windows
-  (MSVC)"). The history of earlier counts is in `CHANGELOG.md`.
-- **Last verified:** 2026-09-29, for 0.5.0 (input and output, see
-  [`docs/superpowers/specs/2026-09-29-io-design.md`](superpowers/specs/2026-09-29-io-design.md)),
-  by the test suite above. The 0.4.0 audit before it (see
+  self-test). CI runs the same suite on Linux, macOS and Windows against
+  protoCore 2.14.5, and on Linux against 2.11.0, the declared minimum (CI
+  runs 38133020853 and 38133020845, green on `4876884`); Windows registers
+  1092 (no benchmark-harness self-test) and runs all but `cli_sigint` and
+  tutorial chapter 15 (`docs/INSTALLATION.md`, "Windows (MSVC)"). The
+  history of earlier counts is in `CHANGELOG.md`.
+- **protoCore:** the current sources require 2.11.0 or later (instance-variable
+  write groups use `ProtoObject::setAttributes`, see *Object model*); the
+  0.5.0 release required 2.6.1. **Memory policy:** protoST sets a fixed heap
+  limit (10M cells, 640 MB, at most a quarter of physical memory;
+  `PROTOCORE_HEAP_LIMIT_CELLS` overrides it) in `STRuntime::configureHeap`,
+  and does not enable protoCore's adaptive heap controller. Decision of
+  2026-10-04, kept with 2.14.5: under the controller `fib.st` ran about three
+  times slower, because protoST's start-up live set (about 1.7 M cells) is
+  just below the controller's initial soft limit (2 M cells), which costs a
+  futile first collection and one waited for at exit (protoCore
+  `docs/reports/2026-10-04-collector-adjustments.md`, A3). To be revisited;
+  details in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md) K5.
+- **Last verified:** 2026-10-11, on `main` after 0.5.0, by the test suite
+  above. The 0.5.0 release (input and output, see
+  [`docs/superpowers/specs/2026-09-29-io-design.md`](superpowers/specs/2026-09-29-io-design.md))
+  was verified on 2026-09-29. The 0.4.0 audit before it (see
   [`docs/superpowers/specs/2026-09-28-presentable-protost-design.md`](superpowers/specs/2026-09-28-presentable-protost-design.md)
   and the record [`docs/superpowers/specs/2026-10-01-reaudit.md`](superpowers/specs/2026-10-01-reaudit.md))
   was an adversarial Smalltalk-semantics audit of about 1,100 probe programs
   in two rounds; each fix of a wrong result, crash or hang it found carries a
   regression test.
 - **Open bugs:** S3 (Medium, not provable on this build) and S22 (Medium,
-  seen once on CI). S23 closed on 2026-10-02, S19 on 2026-09-29, S20 and
-  S21 in 0.5.0. Hard edges that are not
+  seen once on CI, on 2026-09-30). S23 closed on 2026-10-02 (`9cdc9b4`),
+  S19 on 2026-09-29, S20 and S21 in 0.5.0. Hard edges that are not
   language-design choices are in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md).
 - **Id scheme:** `D1..D18` are carried over from `LANGUAGE.md` §14 and keep
   their original meaning. New divergences get new ids (`D19+`).
@@ -69,7 +84,10 @@ are noted where useful.
 - [x] Defining a class; creating instances via `new`
 - [x] Instance variables; a run of assignments to them is published as one
       version of the object, so another thread sees all of it or none of it
-      (LANGUAGE.md 4.5; `tests/unit/test_instvar_groups.cpp`)
+      (LANGUAGE.md 4.5; `tests/unit/test_instvar_groups.cpp`). Compiled to
+      `IVAR_GROUP` ... `IVAR_GROUP_END` and published with protoCore's
+      `setAttributes`, hence the protoCore 2.11.0 floor *(`207bdeb`, after
+      0.5.0; `PROTOST_IVAR_GROUPS=off` disables it)*
 - [x] `self` / `super` sends
 - [x] Class-side methods, isolated from instances (D5 closed); class variables and class-instance variables
 - [x] `printString`
@@ -192,8 +210,8 @@ are noted where useful.
       catalogues every departure from Smalltalk-80 for Smalltalk programmers
       (Chapter 14). Every non-trivial code snippet was executed against the
       `protost` build. *(Track 8)*
-- [x] **The comprehensive example set** — 40 complete, idiomatic, runnable
-      protoST programs under `examples/` (42 registered as of 2026-09-15), grouped by theme (`basics/`,
+- [x] **The comprehensive example set** — 42 complete, idiomatic, runnable
+      protoST programs under `examples/`, grouped by theme (`basics/`,
       `blocks/`, `collections/`, `exceptions/`, `nonlocal/`, `actors/`,
       `stdlib/`, `modules/`, `programs/`). They span focused single-feature
       illustrations through genuine end-to-end programs — a recursive-descent
@@ -201,8 +219,8 @@ are noted where useful.
       transform and two digital-twin simulations (a traffic intersection and
       the pump twin). Every example carries an `"EXPECT: …"` directive and is
       registered as a CTest case via `run_conformance.sh`, so the example tree
-      is also a verified smoke layer (`ctest -R '^examples/'`, 40/40; 42
-      registered as of 2026-09-15). The
+      is also a verified smoke layer (`ctest -R '^examples/'`, 42/42 on
+      2026-10-11). The
       `examples/README.md` indexes the set. *(Track 9)*
 
 ### Benchmarks
@@ -367,12 +385,12 @@ during the 2026-05-20 audit.
 |----|------|------------|--------|
 | S23 | A chain of handlers that each re-signal (`[self relay: n - 1] on: Error do: [:e \| Error signal: 'level']`, or `pass`, `outer`, `signal`, `signal:` in the handler) did not finish once it reached the engine nesting limit: 498 levels took 0.08 s, 499 or more did not finish (killed after 20 s and after 2 min). | **Cause** (gdb on the live process, and a trace of the handlers run): a handler block needs a nested engine of its own; at the limit it could not start, and the limit's `std::runtime_error` left the handler's `signal` untranslated. Every primitive boundary it crossed on the way down translated it into a new `Error` and searched the handler stack again; a boundary inside an earlier handler found the handlers above it enabled again (the unwind had already left them) and ran them a second time, each of which hit the limit again, so the number of handler runs doubled with every level. **Fix:** `signal` checks for room before it runs a handler (`ExecutionEngine::canStartNestedEngine`); without room it raises the limit's `Error` there, finds its handler and throws `NestingLimitUnwind` to that handler's `on:do:`, which runs the handler on a fresh limit `Error` with the engines the unwind released (`src/runtime/NestingLimitUnwind.h`). Each handler runs at most once; 499, 500, 1,000 and 10,000 levels finish in 0.07-0.11 s. Tests: `08-exceptions/nesting-limit-in-re-signalling-handler-chain`, `08-exceptions/nesting-limit-in-passing-handler-chain` (both failed before: no result in 20 s); `08-exceptions/unwind-through-nested-handler-blocks` goes back to 498 levels. | `9cdc9b4` |
 | S20 | A subclass of a kernel class could not read the instance variables it inherits: `IOStream subclass: #LabelledStream …` with a method reading `fd`, or `WriteStream subclass: #PeekStream` reading `buffer`, failed to compile with `undeclared variable`, because the compiler knew only the instance variables of classes compiled in the same module. | Every compiled class is recorded in a process-wide registry that the next compilation starts from, and the CLI builds the runtime (which compiles the kernel) before compiling the script; the compiled module is kept alive past the runtime, because workers may still run its methods during shutdown. Tests: `04-object-model/inherited_kernel_ivars` (failed before), `04-object-model/undeclared_still_rejected`. | `e966c8a` |
-| S21 | `IOStream>>next` and `next:` counted bytes, not characters, and split a multi-byte UTF-8 character (`printf 'éab'` gave `$Ã`, then `'©a'`). | They read whole UTF-8 characters (`__fdReadChars:count:`); `nextByteCount:` keeps a byte-counted read for HTTP bodies. Test: `conformance/14-io/utf8_characters` (failed before). | 0.5.0 |
-| D12b | `protost file.st` printed the value of the script's last top-level statement (its `displayString`) after the program ran, so a script whose last line was `x printNl.` showed `x` twice. Listed as an intentional deviation until 0.4.0. | Retired: a script now shows only what it prints. `protost --print-last file.st` keeps the old behaviour (the conformance runner and the documentation runner's value annotations use it); `-e` and the REPL still show the value of what they evaluate. The tutorial examples that relied on the echo now print their result with `displayNl`. | 0.4.1 |
+| S21 | `IOStream>>next` and `next:` counted bytes, not characters, and split a multi-byte UTF-8 character (`printf 'éab'` gave `$Ã`, then `'©a'`). | They read whole UTF-8 characters (`__fdReadChars:count:`); `nextByteCount:` keeps a byte-counted read for HTTP bodies. Test: `conformance/14-io/utf8_characters` (failed before). | `504bf27` (0.5.0) |
+| D12b | `protost file.st` printed the value of the script's last top-level statement (its `displayString`) after the program ran, so a script whose last line was `x printNl.` showed `x` twice. Listed as an intentional deviation until 0.4.0. | Retired: a script now shows only what it prints. `protost --print-last file.st` keeps the old behaviour (the conformance runner and the documentation runner's value annotations use it); `-e` and the REPL still show the value of what they evaluate. The tutorial examples that relied on the echo now print their result with `displayNl`. | `ce66d08` (0.4.1) |
 | S19 | `cli_concurrent_first_call` hung intermittently (about one launch in 1,000 under load). | **Evidence: a gdb capture of the live hung process** (`PROTOST_ALLOW_PTRACE=1`, `tools/s19_stack_sample.sh`). It shows `~STRuntime` joining a worker parked in `std::counting_semaphore::acquire()` with a permit available, the other workers gone — a lost wakeup in libstdc++ 13's semaphore (it notifies only when the count was 0; a waiter that slept on a stale non-zero count misses later releases). Replaced by `protoST::Semaphore` (sleeps only on 0, every release notifies), which removes the mechanism the capture shows. Supporting evidence only: 3,000 launches under background load, 0 hung, against 2 hangs in about 2,600 launches before; at a rate of about one in 1,000, a clean run of that length is not proof on its own. | `06e1009` |
 | S18 | A debugger unit test waited on the terminal when `ctest` ran with stdin open. | The test gives the session its own input stream; the full suite passes with and without `< /dev/null`. | `1d79f15` |
 | D19 | Class variables could not be assigned from instance-side methods (a compile-time error), and a subclass's class side shadowed them. | `STORE_CLASSVAR` writes the variable on the class that declares it, from either side; `Count := Count + 1` in `initialize` works. Class-instance variables (`Foo class instanceVariableNames: '…'`) are supported, and class-side methods no longer see instance variables. | `e71b8c6`, `0097542` |
-| D10 | No `Transcript`. | `Transcript` (`show:`, `cr`, `print:`, `display:`, `tab`, `space`, `<<`, `showCr:`) writes to standard output in order with `printNl`. | 0.4.0 kernel |
+| D10 | No `Transcript`. | `Transcript` (`show:`, `cr`, `print:`, `display:`, `tab`, `space`, `<<`, `showCr:`) writes to standard output in order with `printNl`. | `6ed265b` (0.4.0 kernel) |
 | D4 | `new` did not send `initialize`. | `Behavior>>new` is `self basicNew initialize`, as in Pharo; `basicNew` is the raw allocator. Built-in collection constructors send it to user subclasses too. | 0.4.0 kernel, `7d1a3cb` |
 | D30 | Blocks created in different iterations of a loop shared the loop variable. | Every block activation that declares captured names gets its own captured dictionary chained to the enclosing one (`8bb8414`); a block parameter or temporary that reuses an enclosing name is a distinct variable (`DEFINE_CAPTURED`, `c4107b5`). | `8bb8414`, `c4107b5` |
 | S17 | **`provider:st` could not serve a caller in another runtime's `ProtoSpace`**, so no cross-runtime import of a protoST module resolved. `ModuleProvider::tryLoad(path, ctx)` receives the **caller's** context, and `STModuleProvider` resolved its runtime from `ctx->space` through the S6 space registry — which is a space protoST does not own when the caller is a co-resident runtime. The lookup found nothing and the provider returned `PROTO_NONE`, so a module that was there was reported as absent. Measured by protoScala on 2026-09-24 against `3fd0438`: an `STRuntime` and a protoScala `Session` in one process, both providers reachable, and `import st.counter_lib` answering `provider 'st' has no module 'counter_lib'` while the identical call from a context in protoST's own space loaded it. | **The cause is in the provider, not in protoCore, and protoCore is unchanged.** A `ModuleProvider` is an object with its own state. A caller in a space protoST owns takes the unchanged S6 path. A caller in a space protoST does not own is a cross-runtime import: the runtime comes from `soleSTRuntime()` — the registry's single entry, read rather than cached, because the provider is registered once per process and outlives every `STRuntime`, so a pointer captured at construction would dangle for any host that builds a runtime per test. Two rules follow and both were found by test, not by reasoning: the load must run in protoST's **own** space (running a module's top level on a foreign context interns its literals in the foreign symbol table and leaves protoST's own later lookups missing — D26/T5-a's trap one level up), and the module **namespace** must be rebuilt with keys interned in the **caller's** space, because an attribute key is an interned symbol's address and protoCore interns per `ProtoSpace`. Only the mapping is rebuilt; every value is the protoST object itself, by address, which is what makes "no copy at the boundary" true rather than asserted. Because protoCore embeds a short string in the pointer word, a 5-byte member name matched across spaces **by accident** and a 7-byte one missed **silently**, so the tests use a class called `Counter` and compare the two symbol addresses. A cross-runtime load runs on protoST's root context, which only the constructing thread may allocate on (D26); an import from any other thread is refused with a message (`STRuntime::isOwnerThread`), and a process with two `STRuntime`s is refused as ambiguous. **Proof:** `tests/unit/test_cross_runtime_provider.cpp`, which needs no sibling runtime — a bare `proto::ProtoSpace` is a space protoST does not own — and prints the same cell's address and `getHash` read from both spaces; and protoScala's `umd/protost-interop`, which drives it from a real second runtime and forces a collection in each space. Checked against mutations: disabling `soleSTRuntime`, and returning protoST's own module object instead of the re-keyed namespace, each turn the relevant assertions red; cloning the values turns the no-copy assertions red. **What this does NOT deliver** is in INTEROP §4.2: values cross, a **call** does not (a protoST method is `__bc_ptr__` plus protoST's engine, not a `proto::ProtoMethod`); one importing thread; one protoST runtime; a namespace snapshot. | `e82682b` |

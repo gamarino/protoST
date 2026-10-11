@@ -31,6 +31,9 @@ column; they showcase protoST's distinctive feature.
 | `parallel_speedup.st` | 12 CPU-bound worker actors — wall-clock with the full worker pool vs `PROTOST_WORKERS=1`; the harness reports the speedup. |
 | `cooperative_yield.st` | 1000 waiter actors, each parked on a nested `wait`, all hosted on K=2 worker threads — what thread-per-actor blocking cannot do. |
 | `message_throughput.st` | 2000 drained round-trip sends through one actor's mailbox; the harness reports messages/second. Runs by default; `--skip-throughput` opts out. (It was once opt-in because of D23, a scheduler deadlock under sustained mailbox load — now fixed; see `docs/STATUS.md`.) |
+| `multi_producer.st` | Driver actors each fanning out sends to their own sink actors, then waiting on the Futures: multi-producer message throughput. |
+| `saturation.st`, `saturation_big.st`, `saturation_8a.st`, `saturation_32a.st`, `saturation_128a.st` | Worker-pool drain capacity: mailboxes pre-filled while the pool is paused, then drained (`saturation.st`); `saturation_big.st` is the larger, allocation-bound variant (32 actors x 50 messages); the `_Na` variants vary the number of actors against the number of workers. |
+| `mailbox_send_cost.st`, `mailbox_send_contended.st`, `mailbox_send_headroom.st` | The cost of one mailbox send: uncontended with the pool stopped, eight producers into one sink, and a 200,000-message backlog. Run through `run_mailbox_bench.sh`, which refuses to start while another benchmark runs and verifies each program's self-reported work. |
 
 ## Running
 
@@ -49,4 +52,5 @@ Environment variables: `PROTOST_BIN` (default `./build/protost`), `CPYTHON_BIN`
 (default `python3`), `PROTOPY_BIN` (autodetected from `../protoPython/build*`;
 the protopy column is skipped if no binary is found — the run does not fail).
 
-Reports live in `reports/`; see `reports/2026-05-21-baseline.md`.
+Reports live in `reports/`, one dated file per run; the first is
+`reports/2026-05-21-baseline.md`.

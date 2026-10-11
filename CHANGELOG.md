@@ -5,6 +5,26 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+- **Decision: protoST keeps its fixed heap limit and does not enable
+  protoCore's adaptive heap controller** (2026-10-04, kept with protoCore
+  2.14.5). `STRuntime::configureHeap` still sets a hard limit of 10M cells
+  (640 MB, at most a quarter of physical memory; `PROTOCORE_HEAP_LIMIT_CELLS`
+  overrides it). Under the controller `fib.st` ran about three times slower:
+  protoST's start-up live set (about 1.7 M cells) is just below the
+  controller's initial soft limit (2 M cells), so a short program pays a
+  collection that finds almost no garbage and another waited for at exit;
+  protoCore 2.14.2's live-set floor (adjustment A3) reduced but did not
+  remove the gap (protoCore `docs/reports/2026-10-04-final-remeasurement.md`,
+  `docs/reports/2026-10-04-collector-adjustments.md`). To be revisited, for
+  example with an initial soft limit above the start-up live set. Recorded in
+  `docs/STATUS.md` and `KNOWN_ISSUES.md` (K5).
+- **Documentation brought up to date with `main`.** `docs/STATUS.md` (test
+  suite of 1093 cases, protoCore floor and memory policy, commit SHAs for
+  S21, D12b and D10), `KNOWN_ISSUES.md` (K4: the process-global mutable
+  table shipped in protoCore 2.6.0), `docs/INTEROP.md`, `docs/ROADMAP.md`,
+  `docs/CONFORMANCE.md`, `docs/INSTALLATION.md` and `README.md` (the 0.5.0
+  packages against building the current sources).
+
 - **CI builds protoCore 2.14.5.** Every push and pull request job (Linux,
   macOS, Windows) now builds protoCore 2.14.5 (tag `v2.14.5`, `063c6d5`)
   instead of 2.14.2: the controller's out-of-memory rule uses the live set and

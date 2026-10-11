@@ -1,6 +1,8 @@
 # protoST — embedder conformance
 
 The normative rule table is `protoCore/docs/EMBEDDER-CONFORMANCE.md`.
+This record dates from 2026-09-25; the source line numbers it cites refer to
+the tree of that day.
 
 - Static ratchet: `conformance-allow.txt` — **clean, exit 0**
 - Runtime adaptor: **NOT WRITTEN IN P4.** See "What is not covered" below.
@@ -19,7 +21,7 @@ one `Host` implementation over `STRuntime` + `Parser` + `Compiler`.
 That gap is worth stating loudly, because protoST is the runtime this whole phase
 came from: **S15** was protoST reclaiming 0 cells of 2,748,398 across its entire
 history with **848** tests green — the suite size when S15 was measured
-(`docs/STATUS.md`, "Test suite"; the 833 this paragraph used to quote was the
+(`docs/STATUS.md`, "Test suite", as it read then; the 833 this paragraph used to quote was the
 suite's size at the earlier S13 fix) — and `MailboxCursor::adopt` was a second bug
 of the same class that those same 848 passing tests could not reach because the
 first was still present. The suite that would have caught both does not yet run here.
@@ -68,7 +70,7 @@ read. It is unchecked, not checked-and-cleared.
 siblings supply it, so it falls through to the real `std::cin`
 (`src/debugger/DebuggerRuntime.cpp:75`) and blocks for about fourteen minutes.
 **Every conformance invocation closes stdin** (`< /dev/null`). Fixing the test is
-protoST's, not P4's — but note that a suite whose runner can hang makes rules 2,
+protoST's, not P4's (since fixed: S18, `1d79f15`, in `docs/STATUS.md`) — but note that a suite whose runner can hang makes rules 2,
 2b, 8 and 11 undiagnosable, because a hang is their signature. The closed stdin
 is not optional.
 
@@ -83,7 +85,13 @@ allocate outside protoCore — nlohmann/json in the DAP, `BytecodeModule` vector
 
 ## Informational
 
-- protoST never calls `ProtoSpace::setHeapLimits` and installs no
-  `outOfMemoryCallback`; it uses the `PROTOCORE_HEAP_LIMIT_CELLS` environment
-  variable from its CLI fixtures instead. So no collection cycle starts by itself
-  in an ordinary run, and rule 8 is unreachable as configured.
+- When this record was written (2026-09-25), protoST never called
+  `ProtoSpace::setHeapLimits` and installed no `outOfMemoryCallback`, so no
+  collection cycle started by itself in an ordinary run and rule 8 was
+  unreachable as configured. Since `d2584a3` (2026-09-28)
+  `STRuntime::configureHeap` (`src/runtime/STRuntime.cpp`) sets a fixed hard
+  limit (10M cells, at most a quarter of physical memory, unless
+  `PROTOCORE_HEAP_LIMIT_CELLS` is set) and installs an `outOfMemoryCallback`
+  that ends the process with exit status 3. Rule 8 is therefore reachable;
+  without a `Host` it remains unverified by this suite. protoST does not
+  enable protoCore's adaptive heap controller (`KNOWN_ISSUES.md`, K5).

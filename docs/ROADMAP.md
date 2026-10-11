@@ -32,10 +32,13 @@ possible. The measure of success is not "does it match Smalltalk-80" but
 
 Phases F1–F8 are complete, plus a backlog hardening pass. Tracks 1–11 below
 are also complete; each has a `trackN-complete` git tag (`track1-complete` …
-`track11-complete`). The latest release tag is `v0.3.0`. Release **0.4.0**
-(see [`CHANGELOG.md`](../CHANGELOG.md), "0.4.0") is complete on its branch:
-the Smalltalk-semantics audit described below, with 1041 `ctest` cases
-passing at commit `d3f7235`.
+`track11-complete`). The latest release tag is `v0.5.0` (2026-09-29: input
+and output, see [`CHANGELOG.md`](../CHANGELOG.md), "0.5.0"). Release **0.4.0**
+(tags `v0.4.0` and `v0.4.1`) was the Smalltalk-semantics audit described
+below, with 1041 `ctest` cases passing at commit `d3f7235`. Since 0.5.0,
+`main` has gained the Windows (MSVC) port and instance-variable write groups
+(protoCore 2.11.0 floor); on 2026-10-11 it registers 1093 `ctest` cases on
+Linux, all passing against protoCore 2.14.5 (`docs/STATUS.md`).
 
 | Area | Status |
 |------|--------|
@@ -408,7 +411,7 @@ protoST's defining feature into a measurable result rather than a claim.
 
 ### Release 0.4.0 — the Smalltalk you know, verified — ✅ done
 
-**Status:** complete on `feature/presentable-0.4.0` (see
+**Status:** released as `v0.4.0` and `v0.4.1` (see
 [`CHANGELOG.md`](../CHANGELOG.md), "0.4.0"). An adversarial audit of about 400
 probe programs written the way a Pharo programmer writes drove every change,
 and each fix of a wrong result, crash or hang carries a regression test

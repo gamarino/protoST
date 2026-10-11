@@ -26,7 +26,7 @@ protoScala into one executable.
 | A protoScala program's `import st.counter_lib` resolves and `import st.counter_lib.Counter` binds | Verified with a real runtime | `umd/protost-interop`; the program prints the value as `<object>` |
 | The value protoScala receives is the protoST cell itself (same address, same `getHash`) | Verified with a real runtime | `umd/protost-interop` `NO-COPY PROOF`; `test_cross_runtime_provider.cpp` with a bare `ProtoSpace` |
 | The imported class survives a GC cycle in each space | Verified with a real runtime | `umd/protost-interop`, `AForeignValueSurvivesACollectionOnBothSides` |
-| protoScala can read the imported protoST object's attributes | **Works with protoCore newer than 2.5.0; does not with 2.5.0** | protoCore 2.5.0 kept one table of mutable states per space, so through protoScala's context `Counter` had no `__class_name__` (K4). protoCore's process-global table (merged after 2.5.0, not yet released) fixes it: protoScala's `ProtoSTInterop.AForeignObjectsStateIsReadThroughTheCallersContext` reads `__class_name__` and writes an attribute protoST then reads. The 0.4.0 package depends on protoCore 2.5.0. |
+| protoScala can read the imported protoST object's attributes | **Works with protoCore 2.6.0 or later; did not with 2.5.0** | protoCore 2.5.0 kept one table of mutable states per space, so through protoScala's context `Counter` had no `__class_name__` (K4). protoCore 2.6.0 (2026-09-29) made that table process-global, which fixes it: protoScala's `ProtoSTInterop.AForeignObjectsStateIsReadThroughTheCallersContext` reads `__class_name__` and writes an attribute protoST then reads. The 0.4.0 package depended on protoCore 2.5.0; 0.5.0 requires 2.6.1 and the current sources 2.11.0. |
 | A foreign runtime calls a protoST method | **Does not work** | By design (§4.2): a protoST method is not a `proto::ProtoMethod`. |
 | protoST imports a module from a real foreign runtime | **Does not work** | `.scala` via `provider:scala`: `module not found`. That provider finds its host from `ctx->space`. `.so` via `provider:compiled`: the import resolves, then `doesNotUnderstand: add#2`. |
 | protoST calls a protoCore method (`proto::ProtoMethod`) exported by another runtime | **Does not work** | `SEND_CALL` handles only protoST bytecode methods and protoST primitive markers (§3.5). |
@@ -34,11 +34,12 @@ protoScala into one executable.
 | The installed `protost` / `protoscala` binaries interoperate | **No** | Neither binary links the other runtime. `protoscala` answers `no provider registered for 'st'`. `protost` has no option to add a provider to its chain. |
 | protoJS, protoPython, protoClojure | Untested | They register no provider that protoST can reach. |
 
-**Why objects are not readable across runtimes.** Each runtime owns its own
-`ProtoSpace`. protoCore resolves a mutable object's current state through
+**Why objects were not readable across runtimes (protoCore 2.5.0 and earlier).** Each runtime owns its own
+`ProtoSpace`. Up to 2.5.0, protoCore resolved a mutable object's current state through
 `context->space->mutableRoot`, keyed by the object's `mutable_ref`
 (`protoCore/core/ProtoObject.cpp`). An object read through a context of the
-other space therefore resolves in the wrong table. What the probe shows about
+other space therefore resolved in the wrong table; since protoCore 2.6.0 the
+table is process-global. What the probe shows about
 symbols is narrow: the symbol `add` was the same pointer in both runtimes, but
 `add` is 3 bytes, and protoCore stores strings of up to 6 bytes inline in the
 pointer word, so that says nothing about longer keys. Longer keys are

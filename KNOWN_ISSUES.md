@@ -41,28 +41,28 @@ and `String streamContents:`.
 
 **Status.** Open; not planned.
 
-## K4 — Two runtimes in one process cannot use each other's objects yet (fixed in protoCore, unreleased)
+## K4 — Two runtimes in one process can share objects but not call each other (partly fixed in protoCore 2.6.0)
 
 **What.** A protoScala program in the same process can import a protoST module
 and receives the very same object (no copy, and it survives collections in
-both spaces), but it cannot read that object's attributes or send it
-messages; importing a protoScala module from protoST fails. See
+both spaces). With protoCore 2.5.0 it could not read that object's attributes;
+with protoCore 2.6.0 or later it can, but it still cannot send it messages,
+and importing a protoScala module from protoST fails. See
 [`docs/INTEROP.md`](docs/INTEROP.md) §0 for what is verified and how.
 
-**Why.** Each runtime owns a `ProtoSpace`, and protoCore resolves a mutable
-object's current state through the space of the context doing the read, so an
-object read through the other runtime's context resolves in the wrong table
-(observed: wrong values, not an error). This is a protoCore-level constraint
-on multi-space processes.
+**Why.** Each runtime owns a `ProtoSpace`. Up to protoCore 2.5.0 a mutable
+object's current state was resolved through the space of the context doing
+the read, so an object read through the other runtime's context resolved in
+the wrong table (observed: wrong values, not an error).
 
-**Status.** Fixed in protoCore after 2.5.0 (merged to its `master` on
-2026-09-29, not yet in a release): the table of mutable states is
-process-global and every space's collector marks it (protoCore
-`docs/GLOBAL_MUTABLE_TABLE.md`). With that protoCore, protoScala reads a
+**Status.** The state half is fixed in protoCore 2.6.0 (released 2026-09-29):
+the table of mutable states is process-global and every space's collector
+marks it (protoCore `docs/GLOBAL_MUTABLE_TABLE.md`). protoScala reads a
 protoST object's state and writes to it through its own context (protoScala
 test `ProtoSTInterop.AForeignObjectsStateIsReadThroughTheCallersContext`).
-The 0.4.0 package depends on protoCore 2.5.0, where the defect remains.
-Still true either way: a foreign runtime cannot call a protoST method
+protoST 0.5.0 requires protoCore 2.6.1 and the current sources 2.11.0, so
+both include it; the 0.4.0 package depended on protoCore 2.5.0, where the
+defect remains. Still open: a foreign runtime cannot call a protoST method
 (INTEROP §4.2), and a protoST cell another runtime keeps in its own
 structures must stay reachable in protoST's space.
 
@@ -76,10 +76,28 @@ because protoCore builds a large list with n log n cells; the program then
 stops with an out-of-memory message that names the current limit and the
 setting to raise it (`PROTOCORE_HEAP_LIMIT_CELLS`, 64 bytes per cell).
 
-**Why the default stays small.** protoCore's collector waits for the ceiling
-before collecting; a 32M-cell default made allocation-heavy actor code 19%
+**Why the default stays small.** Under a fixed limit protoCore's collector
+starts a cycle only as the heap approaches the ceiling (since protoCore
+2.12.0, a paced cycle starts a measured runway before it), so a larger
+ceiling means fewer, later collections; a 32M-cell default made allocation-heavy actor code 19%
 slower (`saturation_big` on one worker: 3.1 s against 3.7 s, interleaved
 runs; commit `8e5274f`).
+
+**Why not protoCore's adaptive heap controller.** Since 2.10.0
+protoCore offers an opt-in controller (`ProtoSpace::enableAdaptiveHeap`)
+that sizes the heap from the live set. protoST does not enable it and keeps
+the fixed limit (decision of 2026-10-04, unchanged with protoCore 2.14.5):
+protoST's live set right after start-up, about 1.7 M cells, is just below
+the controller's initial soft limit of 2 M cells, so a short program pays a
+first collection that finds almost no garbage and a collection waited for
+at exit. `fib.st` ran about three times slower
+under the controller than under the fixed limit, also after protoCore 2.14.2
+raised the controller's floor (protoCore
+`docs/reports/2026-10-04-final-remeasurement.md` and
+`docs/reports/2026-10-04-collector-adjustments.md`, A3). To be revisited,
+for example with an initial soft limit above the start-up live set. The
+fixed limit is set in `STRuntime::configureHeap`
+(`src/runtime/STRuntime.cpp`).
 
 **Status.** Open; a bulk list builder in protoCore would remove the n log n
 factor.

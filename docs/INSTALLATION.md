@@ -278,8 +278,11 @@ The packages are attached to the GitHub releases
 [protoCore v2.6.2](https://github.com/numaes/protoCore/releases/tag/v2.6.2)
 and [protoST v0.5.0](https://github.com/gamarino/protoST/releases/tag/v0.5.0)
 (built on Ubuntu 24.04, x86_64). The same commands install them on Ubuntu
-24.04 itself. To build them instead, see §Packages below and protoCore's own
-`docs/INSTALLATION.md`.
+24.04 itself. These are the 0.5.0 release packages, whose floor is protoCore
+2.6.1; protoCore 2.6.2 is the release to install with them. Building the
+current sources (`main`, after 0.5.0) needs protoCore 2.11.0 or later, and CI
+uses 2.14.5 (*Prerequisites*). To build the packages instead, see §Packages
+below and protoCore's own `docs/INSTALLATION.md`.
 
 ---
 
@@ -361,8 +364,9 @@ start-up, so that is what a re-verification must check first.
 
 ### Former defect: the DEB dependency floor did not encode the ABI
 
-Since 0.5.0 the floor is protoCore 2.6.1, above 2.2.0, so the DEB range no
-longer admits a protoCore with the old SONAME. The account below is kept for
+Since 0.5.0 the floor is protoCore 2.6.1 (2.11.0 for the current sources),
+above 2.2.0, so the DEB range no longer admits a protoCore with the old
+SONAME. The account below is kept for
 the 0.4.x packages, whose floor was 2.1.0; the decoy test has not been re-run
 against the 0.5.0 package.
 
