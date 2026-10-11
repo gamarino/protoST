@@ -714,7 +714,7 @@ of [`docs/ROADMAP.md`](../ROADMAP.md). It is not implemented.
 
 ## 15.11 Limits
 
-What 0.5.0 does not do:
+What 0.6.0 does not do:
 
 - **HTTP:** no HTTP/2, no WebSockets, no keep-alive (one request per
   connection), no TLS in `HTTPServer` (TLS is client-side only), no proxy
@@ -724,9 +724,11 @@ What 0.5.0 does not do:
 - **Files:** no `ByteArray` (binary data is an Array of integers); no
   permission changes, file locking or recursive directory walk beyond
   `children` (walk it yourself); no file-system watching.
-- **Platforms:** Linux is the platform that is built and tested. The I/O
-  layer uses POSIX calls, so native Windows is not supported; on Windows run
-  protoST under WSL2 (see [`docs/INSTALLATION.md`](../INSTALLATION.md)).
+- **Platforms:** Linux, macOS and Windows (MSVC) are built and tested in
+  CI; the released package is a Linux `.deb`. On Windows a few things
+  differ (`cmd.exe` as the shell, batch files refused by `run:`, `/` in the
+  paths answered); see [`docs/INSTALLATION.md`](../INSTALLATION.md),
+  "Windows (MSVC)", or run protoST under WSL2.
 - **Scale:** each blocked actor holds a thread, and the pool stops at 256
   threads (§15.10). Programs with thousands of simultaneous connections are
   outside what this design serves.
