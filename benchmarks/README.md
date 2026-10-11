@@ -52,5 +52,18 @@ Environment variables: `PROTOST_BIN` (default `./build/protost`), `CPYTHON_BIN`
 (default `python3`), `PROTOPY_BIN` (autodetected from `../protoPython/build*`;
 the protopy column is skipped if no binary is found — the run does not fail).
 
+To compare builds (another protoST, or the same one against another
+protoCore), `compare_builds.py` runs the same workloads interleaved: one
+warm-up round and three measured rounds, every build once per round in a
+rotating order, each run verified as above, with the peak RSS of every run and
+a note of any compiler, test runner or protoCore runtime that was running when
+it started:
+
+```bash
+python3 benchmarks/compare_builds.py --json out.json \
+    old=/usr/bin/protost new=build_release/protost
+```
+
 Reports live in `reports/`, one dated file per run; the first is
-`reports/2026-05-21-baseline.md`.
+`reports/2026-05-21-baseline.md`, the latest
+`reports/2026-10-11-protocore-2.14.5.md` (raw data in `reports/data/`).

@@ -1,0 +1,776 @@
+{
+ "date": "2026-10-11T13:51:22",
+ "host": "DEV12",
+ "kernel": "7.0.0-34-generic",
+ "runs": 3,
+ "warmup": 1,
+ "builds": [
+  {
+   "label": "0.5.0/2.6.2",
+   "path": "$SCRATCH/st050-build/protost",
+   "version": "protoST 0.5.0",
+   "protoCore": "libprotoCore.so.3 => $SCRATCH/pc262/lib/libprotoCore.so.3 (0x00007e5b20aa5000)"
+  },
+  {
+   "label": "main",
+   "path": "$PROJECTS/protoST/build_bench/protost",
+   "version": "protoST 0.5.0",
+   "protoCore": "libprotoCore.so.3 => $PROJECTS/.agent_scratch/installers-oct2026/stage2145/usr/lib/x86_64-linux-gnu/libprotoCore.so.3 (0x0000710ae380f000)"
+  },
+  {
+   "label": "main,no-pacing",
+   "path": "$SCRATCH/main-nopacing",
+   "version": "protoST 0.5.0",
+   "protoCore": "?"
+  },
+  {
+   "label": "main,1-cursor",
+   "path": "$SCRATCH/main-1cursor",
+   "version": "protoST 0.5.0",
+   "protoCore": "?"
+  },
+  {
+   "label": "main,no-ivar-groups",
+   "path": "$SCRATCH/main-noivg",
+   "version": "protoST 0.5.0",
+   "protoCore": "?"
+  }
+ ],
+ "workloads": [
+  {
+   "name": "fib",
+   "env": {},
+   "expected": 75025,
+   "samples": {
+    "0.5.0/2.6.2": [
+     {
+      "ms": 454.62,
+      "rss_kb": 324216,
+      "load": 3.76,
+      "contenders": []
+     },
+     {
+      "ms": 459.64,
+      "rss_kb": 336480,
+      "load": 3.78,
+      "contenders": []
+     },
+     {
+      "ms": 448.4,
+      "rss_kb": 324212,
+      "load": 3.78,
+      "contenders": []
+     }
+    ],
+    "main": [
+     {
+      "ms": 447.33,
+      "rss_kb": 311868,
+      "load": 3.76,
+      "contenders": []
+     },
+     {
+      "ms": 486.77,
+      "rss_kb": 312064,
+      "load": 3.78,
+      "contenders": []
+     },
+     {
+      "ms": 465.58,
+      "rss_kb": 311984,
+      "load": 3.78,
+      "contenders": []
+     }
+    ],
+    "main,no-pacing": [
+     {
+      "ms": 469.34,
+      "rss_kb": 311892,
+      "load": 3.76,
+      "contenders": []
+     },
+     {
+      "ms": 506.18,
+      "rss_kb": 312008,
+      "load": 3.78,
+      "contenders": []
+     },
+     {
+      "ms": 467.48,
+      "rss_kb": 311772,
+      "load": 3.78,
+      "contenders": []
+     }
+    ],
+    "main,1-cursor": [
+     {
+      "ms": 513.85,
+      "rss_kb": 311780,
+      "load": 3.76,
+      "contenders": []
+     },
+     {
+      "ms": 492.17,
+      "rss_kb": 312036,
+      "load": 3.78,
+      "contenders": []
+     },
+     {
+      "ms": 477.95,
+      "rss_kb": 312204,
+      "load": 3.78,
+      "contenders": []
+     }
+    ],
+    "main,no-ivar-groups": [
+     {
+      "ms": 463.81,
+      "rss_kb": 312104,
+      "load": 3.76,
+      "contenders": []
+     },
+     {
+      "ms": 453.84,
+      "rss_kb": 312016,
+      "load": 3.78,
+      "contenders": []
+     },
+     {
+      "ms": 478.35,
+      "rss_kb": 311808,
+      "load": 3.78,
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "0.5.0/2.6.2": 454.62,
+    "main": 465.58,
+    "main,no-pacing": 469.34,
+    "main,1-cursor": 492.17,
+    "main,no-ivar-groups": 463.81
+   },
+   "median_rss_kb": {
+    "0.5.0/2.6.2": 324216,
+    "main": 311984,
+    "main,no-pacing": 311892,
+    "main,1-cursor": 312036,
+    "main,no-ivar-groups": 312016
+   }
+  },
+  {
+   "name": "parallel_speedup pool",
+   "env": {},
+   "expected": 135000900000,
+   "samples": {
+    "0.5.0/2.6.2": [
+     {
+      "ms": 366.97,
+      "rss_kb": 668080,
+      "load": 5.16,
+      "contenders": []
+     },
+     {
+      "ms": 518.36,
+      "rss_kb": 668200,
+      "load": 4.99,
+      "contenders": []
+     },
+     {
+      "ms": 427.46,
+      "rss_kb": 664084,
+      "load": 4.99,
+      "contenders": []
+     }
+    ],
+    "main": [
+     {
+      "ms": 555.35,
+      "rss_kb": 660040,
+      "load": 5.16,
+      "contenders": []
+     },
+     {
+      "ms": 503.01,
+      "rss_kb": 668164,
+      "load": 4.99,
+      "contenders": []
+     },
+     {
+      "ms": 365.93,
+      "rss_kb": 668112,
+      "load": 4.99,
+      "contenders": []
+     }
+    ],
+    "main,no-pacing": [
+     {
+      "ms": 399.53,
+      "rss_kb": 663976,
+      "load": 5.16,
+      "contenders": []
+     },
+     {
+      "ms": 366.22,
+      "rss_kb": 668148,
+      "load": 4.99,
+      "contenders": []
+     },
+     {
+      "ms": 405.56,
+      "rss_kb": 668356,
+      "load": 4.99,
+      "contenders": []
+     }
+    ],
+    "main,1-cursor": [
+     {
+      "ms": 381.78,
+      "rss_kb": 668528,
+      "load": 5.16,
+      "contenders": []
+     },
+     {
+      "ms": 369.88,
+      "rss_kb": 668384,
+      "load": 4.99,
+      "contenders": []
+     },
+     {
+      "ms": 397.81,
+      "rss_kb": 667988,
+      "load": 4.99,
+      "contenders": []
+     }
+    ],
+    "main,no-ivar-groups": [
+     {
+      "ms": 354.46,
+      "rss_kb": 664096,
+      "load": 5.16,
+      "contenders": []
+     },
+     {
+      "ms": 371.02,
+      "rss_kb": 664540,
+      "load": 4.99,
+      "contenders": []
+     },
+     {
+      "ms": 565.26,
+      "rss_kb": 660080,
+      "load": 4.99,
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "0.5.0/2.6.2": 427.46,
+    "main": 503.01,
+    "main,no-pacing": 399.53,
+    "main,1-cursor": 381.78,
+    "main,no-ivar-groups": 371.02
+   },
+   "median_rss_kb": {
+    "0.5.0/2.6.2": 668080,
+    "main": 668112,
+    "main,no-pacing": 668148,
+    "main,1-cursor": 668384,
+    "main,no-ivar-groups": 664096
+   }
+  },
+  {
+   "name": "parallel_speedup w=1",
+   "env": {
+    "PROTOST_WORKERS": "1"
+   },
+   "expected": 135000900000,
+   "samples": {
+    "0.5.0/2.6.2": [
+     {
+      "ms": 1043.87,
+      "rss_kb": 594544,
+      "load": 4.75,
+      "contenders": []
+     },
+     {
+      "ms": 1063.45,
+      "rss_kb": 594456,
+      "load": 4.61,
+      "contenders": []
+     },
+     {
+      "ms": 1003.88,
+      "rss_kb": 594220,
+      "load": 4.56,
+      "contenders": []
+     }
+    ],
+    "main": [
+     {
+      "ms": 1061.56,
+      "rss_kb": 594332,
+      "load": 4.75,
+      "contenders": []
+     },
+     {
+      "ms": 1049.59,
+      "rss_kb": 594588,
+      "load": 4.56,
+      "contenders": []
+     },
+     {
+      "ms": 1070.97,
+      "rss_kb": 594628,
+      "load": 4.56,
+      "contenders": []
+     }
+    ],
+    "main,no-pacing": [
+     {
+      "ms": 1117.03,
+      "rss_kb": 594684,
+      "load": 4.75,
+      "contenders": []
+     },
+     {
+      "ms": 1065.39,
+      "rss_kb": 594360,
+      "load": 4.61,
+      "contenders": []
+     },
+     {
+      "ms": 1059.98,
+      "rss_kb": 594672,
+      "load": 4.52,
+      "contenders": []
+     }
+    ],
+    "main,1-cursor": [
+     {
+      "ms": 1061.44,
+      "rss_kb": 594576,
+      "load": 4.75,
+      "contenders": []
+     },
+     {
+      "ms": 1045.58,
+      "rss_kb": 594636,
+      "load": 4.61,
+      "contenders": []
+     },
+     {
+      "ms": 1033.28,
+      "rss_kb": 594712,
+      "load": 4.56,
+      "contenders": []
+     }
+    ],
+    "main,no-ivar-groups": [
+     {
+      "ms": 1076.14,
+      "rss_kb": 594572,
+      "load": 4.75,
+      "contenders": []
+     },
+     {
+      "ms": 1083.55,
+      "rss_kb": 594664,
+      "load": 4.61,
+      "contenders": []
+     },
+     {
+      "ms": 1087.96,
+      "rss_kb": 594636,
+      "load": 4.56,
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "0.5.0/2.6.2": 1043.87,
+    "main": 1061.56,
+    "main,no-pacing": 1065.39,
+    "main,1-cursor": 1045.58,
+    "main,no-ivar-groups": 1083.55
+   },
+   "median_rss_kb": {
+    "0.5.0/2.6.2": 594456,
+    "main": 594588,
+    "main,no-pacing": 594672,
+    "main,1-cursor": 594636,
+    "main,no-ivar-groups": 594636
+   }
+  },
+  {
+   "name": "cooperative_yield w=2",
+   "env": {
+    "PROTOST_WORKERS": "2"
+   },
+   "expected": 1000000,
+   "samples": {
+    "0.5.0/2.6.2": [
+     {
+      "ms": 839.39,
+      "rss_kb": 520912,
+      "load": 4.79,
+      "contenders": []
+     },
+     {
+      "ms": 811.54,
+      "rss_kb": 520636,
+      "load": 4.49,
+      "contenders": []
+     },
+     {
+      "ms": 829.22,
+      "rss_kb": 524956,
+      "load": 4.29,
+      "contenders": []
+     }
+    ],
+    "main": [
+     {
+      "ms": 852.84,
+      "rss_kb": 529332,
+      "load": 4.79,
+      "contenders": []
+     },
+     {
+      "ms": 835.26,
+      "rss_kb": 525136,
+      "load": 4.49,
+      "contenders": []
+     },
+     {
+      "ms": 1009.18,
+      "rss_kb": 521076,
+      "load": 4.29,
+      "contenders": []
+     }
+    ],
+    "main,no-pacing": [
+     {
+      "ms": 843.36,
+      "rss_kb": 525184,
+      "load": 4.79,
+      "contenders": []
+     },
+     {
+      "ms": 852.57,
+      "rss_kb": 525036,
+      "load": 4.49,
+      "contenders": []
+     },
+     {
+      "ms": 861.3,
+      "rss_kb": 525080,
+      "load": 4.29,
+      "contenders": []
+     }
+    ],
+    "main,1-cursor": [
+     {
+      "ms": 931.7,
+      "rss_kb": 525128,
+      "load": 4.79,
+      "contenders": []
+     },
+     {
+      "ms": 812.42,
+      "rss_kb": 525280,
+      "load": 4.49,
+      "contenders": []
+     },
+     {
+      "ms": 879.73,
+      "rss_kb": 524848,
+      "load": 4.29,
+      "contenders": []
+     }
+    ],
+    "main,no-ivar-groups": [
+     {
+      "ms": 887.77,
+      "rss_kb": 525112,
+      "load": 4.79,
+      "contenders": []
+     },
+     {
+      "ms": 834.71,
+      "rss_kb": 520980,
+      "load": 4.49,
+      "contenders": []
+     },
+     {
+      "ms": 885.23,
+      "rss_kb": 525180,
+      "load": 4.29,
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "0.5.0/2.6.2": 829.22,
+    "main": 852.84,
+    "main,no-pacing": 852.57,
+    "main,1-cursor": 879.73,
+    "main,no-ivar-groups": 885.23
+   },
+   "median_rss_kb": {
+    "0.5.0/2.6.2": 520912,
+    "main": 525136,
+    "main,no-pacing": 525080,
+    "main,1-cursor": 525128,
+    "main,no-ivar-groups": 525112
+   }
+  },
+  {
+   "name": "saturation_big w=1",
+   "env": {
+    "PROTOST_WORKERS": "1"
+   },
+   "expected": 20004000000,
+   "samples": {
+    "0.5.0/2.6.2": [
+     {
+      "ms": 3710.11,
+      "rss_kb": 651552,
+      "load": 4.7,
+      "contenders": []
+     },
+     {
+      "ms": 3544.23,
+      "rss_kb": 651464,
+      "load": 4.33,
+      "contenders": []
+     },
+     {
+      "ms": 3416.61,
+      "rss_kb": 651392,
+      "load": 4.38,
+      "contenders": []
+     }
+    ],
+    "main": [
+     {
+      "ms": 4186.77,
+      "rss_kb": 651528,
+      "load": 5.09,
+      "contenders": []
+     },
+     {
+      "ms": 3596.95,
+      "rss_kb": 651476,
+      "load": 4.46,
+      "contenders": []
+     },
+     {
+      "ms": 3665.6,
+      "rss_kb": 651536,
+      "load": 4.38,
+      "contenders": []
+     }
+    ],
+    "main,no-pacing": [
+     {
+      "ms": 4085.86,
+      "rss_kb": 651300,
+      "load": 5.09,
+      "contenders": []
+     },
+     {
+      "ms": 3790.94,
+      "rss_kb": 651648,
+      "load": 4.56,
+      "contenders": []
+     },
+     {
+      "ms": 4046.33,
+      "rss_kb": 651396,
+      "load": 4.19,
+      "contenders": []
+     }
+    ],
+    "main,1-cursor": [
+     {
+      "ms": 3977.13,
+      "rss_kb": 651468,
+      "load": 5.0,
+      "contenders": []
+     },
+     {
+      "ms": 3795.55,
+      "rss_kb": 651348,
+      "load": 4.56,
+      "contenders": []
+     },
+     {
+      "ms": 3767.94,
+      "rss_kb": 651612,
+      "load": 4.46,
+      "contenders": []
+     }
+    ],
+    "main,no-ivar-groups": [
+     {
+      "ms": 3773.61,
+      "rss_kb": 651388,
+      "load": 4.84,
+      "contenders": []
+     },
+     {
+      "ms": 3646.53,
+      "rss_kb": 651364,
+      "load": 4.35,
+      "contenders": []
+     },
+     {
+      "ms": 3672.42,
+      "rss_kb": 651516,
+      "load": 4.5,
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "0.5.0/2.6.2": 3544.23,
+    "main": 3665.6,
+    "main,no-pacing": 4046.33,
+    "main,1-cursor": 3795.55,
+    "main,no-ivar-groups": 3672.42
+   },
+   "median_rss_kb": {
+    "0.5.0/2.6.2": 651464,
+    "main": 651528,
+    "main,no-pacing": 651396,
+    "main,1-cursor": 651468,
+    "main,no-ivar-groups": 651388
+   }
+  },
+  {
+   "name": "saturation_big w=4",
+   "env": {
+    "PROTOST_WORKERS": "4"
+   },
+   "expected": 20004000000,
+   "samples": {
+    "0.5.0/2.6.2": [
+     {
+      "ms": 2334.75,
+      "rss_kb": 681588,
+      "load": 5.25,
+      "contenders": []
+     },
+     {
+      "ms": 1967.26,
+      "rss_kb": 682544,
+      "load": 5.83,
+      "contenders": []
+     },
+     {
+      "ms": 2513.06,
+      "rss_kb": 677960,
+      "load": 6.41,
+      "contenders": []
+     }
+    ],
+    "main": [
+     {
+      "ms": 2028.9,
+      "rss_kb": 680612,
+      "load": 4.26,
+      "contenders": []
+     },
+     {
+      "ms": 2387.92,
+      "rss_kb": 677880,
+      "load": 5.83,
+      "contenders": []
+     },
+     {
+      "ms": 2472.36,
+      "rss_kb": 680792,
+      "load": 6.41,
+      "contenders": []
+     }
+    ],
+    "main,no-pacing": [
+     {
+      "ms": 1995.64,
+      "rss_kb": 678756,
+      "load": 4.26,
+      "contenders": []
+     },
+     {
+      "ms": 2660.22,
+      "rss_kb": 678404,
+      "load": 5.25,
+      "contenders": []
+     },
+     {
+      "ms": 2287.44,
+      "rss_kb": 682008,
+      "load": 7.58,
+      "contenders": []
+     }
+    ],
+    "main,1-cursor": [
+     {
+      "ms": 1880.1,
+      "rss_kb": 686656,
+      "load": 4.4,
+      "contenders": []
+     },
+     {
+      "ms": 2379.87,
+      "rss_kb": 680884,
+      "load": 5.47,
+      "contenders": []
+     },
+     {
+      "ms": 2584.24,
+      "rss_kb": 678076,
+      "load": 5.83,
+      "contenders": []
+     }
+    ],
+    "main,no-ivar-groups": [
+     {
+      "ms": 2006.75,
+      "rss_kb": 680228,
+      "load": 4.4,
+      "contenders": []
+     },
+     {
+      "ms": 2429.23,
+      "rss_kb": 676652,
+      "load": 5.47,
+      "contenders": []
+     },
+     {
+      "ms": 2858.09,
+      "rss_kb": 678504,
+      "load": 5.93,
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "0.5.0/2.6.2": 2334.75,
+    "main": 2387.92,
+    "main,no-pacing": 2287.44,
+    "main,1-cursor": 2379.87,
+    "main,no-ivar-groups": 2429.23
+   },
+   "median_rss_kb": {
+    "0.5.0/2.6.2": 681588,
+    "main": 680612,
+    "main,no-pacing": 678756,
+    "main,1-cursor": 680884,
+    "main,no-ivar-groups": 678504
+   }
+  }
+ ],
+ "failures": []
+}

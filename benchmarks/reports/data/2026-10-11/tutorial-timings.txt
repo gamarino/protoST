@@ -1,0 +1,4 @@
+parallel.st workers=default median 164 ms [160, 164, 177]
+parallel.st workers=1 median 360 ms [360, 353, 364]
+pump_twin.st workers=default median 269 ms [259, 269, 273]
+pump_twin.st workers=1 median 543 ms [538, 548, 543]

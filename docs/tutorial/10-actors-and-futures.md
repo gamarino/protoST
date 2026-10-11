@@ -179,24 +179,24 @@ fc := c read.
 $ time ./build/protost parallel.st
 21
 
-real	0m0,144s
+real	0m0,164s
 ```
 
-Three sensor reads, each taking 100ms, complete in about 144ms — *not* 300ms.
+Three sensor reads, each taking 100ms, complete in about 164ms — *not* 300ms.
 The three actors ran their `read` methods in parallel on different worker
 threads. The proof: force the runtime to a single worker and the same script
-takes about 340ms:
+takes about 360ms:
 
 ```bash
 $ time PROTOST_WORKERS=1 ./build/protost parallel.st
 21
 
-real	0m0,339s
+real	0m0,360s
 ```
 
-Same program, same result, about 2.4× the wall-clock time — because with one
+Same program, same result, about 2.2× the wall-clock time — because with one
 worker the three reads are forced to run one after another. (Times measured
-on one 12-core Linux machine; the startup cost of the runtime is included, so
+on one 12-thread Linux notebook, 2026-10-11; the startup cost of the runtime is included, so
 yours will differ in the digits, not in the ratio's direction.) The speedup is genuine
 parallelism across OS threads, and you did not write a single thread, lock, or
 `async` keyword to get it.

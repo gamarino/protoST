@@ -5,6 +5,16 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+- **Re-measured on protoCore 2.14.5** (`benchmarks/reports/2026-10-11-protocore-2.14.5.md`,
+  raw data in `benchmarks/reports/data/2026-10-11/`): 0.5.0 on protoCore 2.6.2,
+  the 2026-10-03 build on 2.10.2 and `main` on 2.14.5, interleaved, medians of
+  3, synthetic, one notebook-class machine. Single-threaded speed is unchanged
+  (the same instructions within 1 %); peak memory is about 12 MB lower on
+  several workloads; allocation-heavy actor workloads on one worker are 4-6 %
+  slower on `main`, cause not isolated. New `benchmarks/compare_builds.py`
+  runs several builds interleaved with every run verified. README
+  "Performance", the tutorial timings of chapters 10 and 13 and the FAST talk
+  materials use the new figures.
 - **Decision: protoST keeps its fixed heap limit and does not enable
   protoCore's adaptive heap controller** (2026-10-04, kept with protoCore
   2.14.5). `STRuntime::configureHeap` still sets a hard limit of 10M cells

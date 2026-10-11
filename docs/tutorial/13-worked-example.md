@@ -258,10 +258,10 @@ Run the twin and time it:
 $ time ./build/protost examples/pump_twin.st
 3
 
-real	0m0,230s
+real	0m0,269s
 ```
 
-About 230ms — three cycles of ~50ms each (plus the pump's 30ms `start` and
+About 270ms — three cycles of ~50ms each (plus the pump's 30ms `start` and
 runtime startup). Now force the runtime to a single worker thread, so the
 sensor reads *cannot* run in parallel, and time it again:
 
@@ -269,14 +269,14 @@ sensor reads *cannot* run in parallel, and time it again:
 $ time PROTOST_WORKERS=1 ./build/protost examples/pump_twin.st
 3
 
-real	0m0,525s
+real	0m0,543s
 ```
 
-Same program, same result `3`, but about 525ms — more than twice as long.
+Same program, same result `3`, but about 543ms — about twice as long.
 With one worker the three sensor reads in each cycle are forced to run one
 after another: 150ms per cycle instead of 50ms.
 
-That difference — 230ms versus 525ms, measured on one 12-core Linux machine —
+That difference — 269ms versus 543ms, measured on one 12-thread Linux notebook —
 is real parallelism across operating-system threads. You wrote no threads, no
 locks, no `async` keywords. You wrote plain objects, promoted three of them
 with `asActor`, and used the fan-out/join pattern in one method. The runtime did the rest.
@@ -337,7 +337,7 @@ To make the pattern yours, try extending `pump_twin.st`:
 - The controller's `cycle` method is the **fan-out / join** pattern: fire all
   the sensor reads (collecting futures), *then* `wait` on the futures. That is
   what makes the three 50ms reads run in ~50ms total instead of 150ms.
-- Measured: about 230ms parallel versus about 525ms forced-serial
+- Measured: about 270ms parallel versus about 543ms forced-serial
   (`PROTOST_WORKERS=1`) — real multi-core parallelism, with no threads or locks
   in the source.
 - The program scales by *adding actors* — which is exactly the digital-twin

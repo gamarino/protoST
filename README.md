@@ -137,24 +137,29 @@ now.
 
 ## Performance
 
-Measured on 2026-09-29 on a notebook with an AMD Ryzen 5 5500U (6 cores),
-protoST 0.4.0 at commit `d3f7235` against CPython 3.14.0, with every benchmark
-verifying its result; medians of five runs
-([`benchmarks/reports/2026-09-29-release-0.4.0.md`](benchmarks/reports/2026-09-29-release-0.4.0.md)):
+Measured on 2026-10-11 on a notebook with an AMD Ryzen 5 5500U (6 cores),
+`main` at `4876884` with protoCore 2.14.5 against CPython 3.14.0, with every
+benchmark verifying its result; synthetic workloads, medians of three, the
+machine shared with other work
+([`benchmarks/reports/2026-10-11-protocore-2.14.5.md`](benchmarks/reports/2026-10-11-protocore-2.14.5.md),
+which also runs the 0.5.0 release side by side):
 
-- Start-up: 27 ms to evaluate one expression (CPython: 29 ms).
+- Start-up: 32 ms to evaluate one expression (CPython: 36 ms).
 - Single-threaded, same algorithm, same N and same verified result as the
-  CPython twin. Whole-process time is 1.0× (string concatenation) to 23.6×
-  (exception signalling) CPython's, geometric mean 3.45×; at these small N
+  CPython twin. Whole-process time is 1.0× (string concatenation) to 26×
+  (exception signalling) CPython's, geometric mean 3.5×; at these small N
   start-up is a large share of every time. With each runtime's start-up
-  subtracted, the work itself takes about 6× CPython's time (integer loop),
-  36× (`fib`, recursive method dispatch) and 64× (exception signalling),
-  geometric mean 20.8× over the five workloads long enough to measure.
-- Parallel: `saturation_big` (32 actors) runs 2.06× faster on four workers
-  than on one and no faster on five or six; twelve CPU-bound actors run 2.1×
-  faster with the default pool than with one worker. An independent re-run
-  at lower load gave the same curve, so about 2.1× is the measured ceiling of
-  this build on this machine.
+  subtracted, the work itself takes from about 5× CPython's time (integer
+  loop) to about 30× (`fib`, recursive method dispatch) and 80× (exception
+  signalling), geometric mean between 16× and 27× depending on the run (the
+  subtraction is sensitive to noise at these N).
+- Parallel: twelve CPU-bound actors run 2.5-2.8× faster with the default pool
+  than with one worker; `saturation_big` (32 actors) tops out at about 2× on
+  four workers and gains nothing from five or six.
+- Against 0.5.0 on protoCore 2.6.2: the same instructions within 1 %, the
+  same wall time within the noise, about 12 MB less peak memory on several
+  workloads, and allocating actor workloads on one worker 4-6 % slower (not
+  yet explained; see the report).
 
 protoST is not fast single-threaded code; what it offers is the same code on
 several cores without locks.
