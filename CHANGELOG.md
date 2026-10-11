@@ -10,8 +10,8 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
   instead of 2.14.1: the collector adjustments of 2.14.2 (the multi-cursor
   sweep engages only when it pays; the adaptive controller's live-set floor).
   The floor job stays on 2.11.0 and protoIO on 0.2.2. No source change was
-  needed: the suite passes 1093/1093 locally against 2.14.2 (ldd-verified).
-  protoST still does not enable protoCore's adaptive heap: under the
+  needed: the suite passes 1093/1093 locally against 2.14.2 (ldd-verified), and CI on the branch is green (CI
+  38099981622, cross-platform 38099983373). protoST still does not enable protoCore's adaptive heap: under the
   controller `fib.st` remains about three times slower than under protoST's
   fixed 640 MB limit (protoCore's collector-adjustments report, A3), so the
   fixed limit stays the default.
