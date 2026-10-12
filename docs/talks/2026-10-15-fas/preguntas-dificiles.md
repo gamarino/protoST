@@ -162,7 +162,7 @@ y protoClojure también usan: la misma entrada/salida existe, con los nombres
 de cada lenguaje, en los tres runtimes.
 
 **¿Corre en Windows?**
-El paquete publicado (0.6.3) es para Linux; en Windows funciona con WSL2 y
+El paquete publicado (0.6.4) es para Linux; en Windows funciona con WSL2 y
 Ubuntu 24.04, instalando los mismos paquetes `.deb`. Las fuentes
 compilan en forma nativa con Visual Studio 2022 y la integración continua
 corre la suite en Windows: 1097 casos, todos salvo los que dependen de
@@ -171,7 +171,7 @@ herramientas POSIX (Ctrl-C enviado con `kill`, un ejemplo con sintaxis de
 (MSVC)". Todavía no hay un paquete de Windows publicado.
 
 **¿Es estable? ¿Qué bugs abiertos tiene?**
-0.5.0 pasaba sus 1068 casos de `ctest`; 0.6.3 (con protoCore 2.14.5) pasa
+0.5.0 pasaba sus 1068 casos de `ctest`; 0.6.4 (con protoCore 2.14.5) pasa
 sus 1101 casos en Linux: programas de conformidad, tests unitarios,
 los ejemplos, tests de la línea de comandos y los ejemplos de la
 documentación. La integración continua corre 1100 en Linux y en macOS

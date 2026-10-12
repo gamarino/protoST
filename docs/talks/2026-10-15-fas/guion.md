@@ -21,8 +21,8 @@ de esos informes, no se dice.
 
 Antes de empezar: terminal con fuente grande, `cd docs/talks/2026-10-15-fas/demos`
 en el repositorio (o, con el paquete instalado,
-`cd /usr/share/doc/protoST/talks/2026-10-15-fas/demos`); `protost --version`
-debe decir `protoST 0.6.3`; la demo 4 necesita `python3`. Las grabaciones de
+`cd /usr/share/protoST/talks/2026-10-15-fas/demos`); `protost --version`
+debe decir `protoST 0.6.4`; la demo 4 necesita `python3`. Las grabaciones de
 respaldo están en `../recordings/` del repositorio (ver la checklist).
 
 ---

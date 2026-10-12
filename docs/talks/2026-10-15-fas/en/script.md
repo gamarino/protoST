@@ -21,8 +21,8 @@ of those reports, it is not said.
 
 Before starting: terminal with a large font, `cd docs/talks/2026-10-15-fas/demos`
 in the repository (or, with the package installed,
-`cd /usr/share/doc/protoST/talks/2026-10-15-fas/demos`); `protost --version`
-must print `protoST 0.6.3`; demo 4 needs `python3`. The fallback recordings
+`cd /usr/share/protoST/talks/2026-10-15-fas/demos`); `protost --version`
+must print `protoST 0.6.4`; demo 4 needs `python3`. The fallback recordings
 are in the repository's `../recordings/` (see the checklist).
 
 ---

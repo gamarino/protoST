@@ -27,7 +27,7 @@ stable id and file it in the right bucket.
   but `cli_sigint` and tutorial chapter 15 (`docs/INSTALLATION.md`, "Windows
   (MSVC)"). `cli_concurrent_first_call` (S19) gates CI again since 0.6.3. The
   history of earlier counts is in `CHANGELOG.md`.
-- **protoCore:** 0.6.3 requires 2.11.0 or later (instance-variable
+- **protoCore:** 0.6.4 requires 2.11.0 or later (instance-variable
   write groups use `ProtoObject::setAttributes`, see *Object model*); its
   `.deb` is built against 2.14.5 and declares `protocore (>= 2.14.5)`. The
   0.5.0 release required 2.6.1. **Memory policy (since 0.6.2):** protoCore's adaptive heap controller,

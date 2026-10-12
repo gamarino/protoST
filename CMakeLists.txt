@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(protoST VERSION 0.6.3 LANGUAGES CXX)
+project(protoST VERSION 0.6.4 LANGUAGES CXX)
 
 # The one place the version is written: every binary and library reads it
 # through PROTOST_VERSION (include/protoST/STRuntime.h).
@@ -591,9 +591,13 @@ install(DIRECTORY docs/
 # runner scripts (.sh) and the slide PDFs. USE_SOURCE_PERMISSIONS keeps the
 # executable bit of the scripts and of the .feed programs (run_demo.sh runs a
 # .feed only when it is executable). run_demo.sh writes nothing next to
-# itself, so the read-only installed copy works.
+# itself, so the read-only installed copy works. They go to
+# <datadir>/protoST/talks, not the documentation directory: minimized Ubuntu
+# images (Docker, cloud) carry `path-exclude=/usr/share/doc/*` in dpkg's
+# configuration, and 0.6.3, which installed them there, lost them on such
+# systems.
 install(DIRECTORY docs/talks/
-    DESTINATION ${CMAKE_INSTALL_DOCDIR}/talks
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/protoST/talks
     COMPONENT protoST
     USE_SOURCE_PERMISSIONS
     FILES_MATCHING

@@ -11,14 +11,14 @@
 # Environment: PROTOST names the binary to run. Without it, the script runs
 # the protost on PATH (the installed package), and only when there is none,
 # build_release/protost of the source tree it lives in. The binary must report
-# protoST 0.6.3. The script writes nothing next to itself (its temporary file
+# protoST 0.6.4. The script writes nothing next to itself (its temporary file
 # goes to $TMPDIR), so it also runs from the read-only installed copy under
-# /usr/share/doc/protoST/talks/.
+# /usr/share/protoST/talks/.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DEMO="$1"
 QUIET="${2:-}"
-WANT="protoST 0.6.3"
+WANT="protoST 0.6.4"
 REPO_BIN="$HERE/../../../../build_release/protost"
 if [ -n "${PROTOST:-}" ]; then
     origin="the PROTOST variable"

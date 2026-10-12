@@ -3,6 +3,19 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
+## 0.6.4 — the talk demos where every installation keeps them (2026-10-12)
+
+- **The talk's runnable material moved to `/usr/share/protoST/talks/`.**
+  0.6.3 installed it under `/usr/share/doc/protoST/talks/`, and minimized
+  Ubuntu images (the `ubuntu:24.04` Docker image, cloud and minimal server
+  images) carry `path-exclude=/usr/share/doc/*` in dpkg's configuration: the
+  files were listed by `dpkg -L` but never written. The release verification
+  of 0.6.3 in a clean container found it. Standard desktop and WSL
+  installations were not affected. The Markdown talk documents stay under
+  the documentation directory. No code change: the runtime is 0.6.3's.
+- Test suite: 1101 cases on Linux, all passing; CI and package as below
+  (filled in after the runs).
+
 ## 0.6.3 — transient pins released, kernel check, demos in the package (2026-10-12)
 
 - **The threaded dispatch did not release transient pins** (found by the

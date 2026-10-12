@@ -159,7 +159,7 @@ protoClojure use too: the same input and output exists, under each language's
 own names, in the three runtimes.
 
 **Does it run on Windows?**
-The published package (0.6.3) is for Linux; on Windows it runs under WSL2
+The published package (0.6.4) is for Linux; on Windows it runs under WSL2
 with Ubuntu 24.04, installing the same `.deb` packages. The sources
 build natively with Visual Studio 2022, and continuous integration runs the
 suite on Windows: 1097 cases, all but the ones that depend on POSIX
@@ -168,7 +168,7 @@ console test; `docs/INSTALLATION.md`, "Windows (MSVC)". There is no
 published Windows package yet.
 
 **Is it stable? What open bugs does it have?**
-0.5.0 passed its 1068 `ctest` cases; 0.6.3 (with protoCore 2.14.5) passes
+0.5.0 passed its 1068 `ctest` cases; 0.6.4 (with protoCore 2.14.5) passes
 its 1101 cases on Linux: conformance programs, unit tests, the
 examples, command-line tests and the documentation examples. Continuous
 integration runs 1100 on Linux and on macOS (plus a parallelism proof measured with a clock, which does not gate on a shared runner) and
