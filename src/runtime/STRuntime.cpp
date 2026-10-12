@@ -2553,6 +2553,31 @@ void STRuntime::configureHeap(proto::ProtoSpace& space) {
     space.enableAdaptiveHeap();
 }
 
+std::string STRuntime::kernelManifestPath(std::string* problem) {
+    namespace fs = std::filesystem;
+    const std::string libDir = discoverStdlibDir();
+    if (libDir.empty()) {
+        if (problem) {
+            const std::string exe = executablePath();
+            *problem = "no standard-library directory was found (searched share/protoST/lib "
+                       "and lib next to " + (exe.empty() ? std::string("the executable") : exe)
+                       + ", then ./lib)";
+        }
+        return "";
+    }
+    const fs::path manifest = fs::path(libDir) / "kernel" / "00-manifest.txt";
+    std::error_code ec;
+    if (fs::is_regular_file(manifest, ec)) return manifest.string();
+    if (problem) {
+        const char* env = std::getenv("PROTOST_LIB");
+        const bool fromEnv = env && env[0] != '\0' && fs::path(env) == fs::path(libDir);
+        *problem = manifest.string() + " does not exist (standard-library directory "
+                   + (fromEnv ? "named by PROTOST_LIB" : "found next to the executable or in ./lib")
+                   + ")";
+    }
+    return "";
+}
+
 // The kernel: protocol implemented in protoST source (lib/kernel/*.st), run
 // at top level so the classes and methods it defines are ordinary globals, in
 // the order listed by lib/kernel/00-manifest.txt. A runtime without a stdlib

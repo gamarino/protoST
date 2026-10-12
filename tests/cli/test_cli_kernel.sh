@@ -8,6 +8,18 @@ printf 'object.st\n' > "$SCRATCH/kernel/00-manifest.txt"
 printf 'Object >> broken\n  ^ ( .\n' > "$SCRATCH/kernel/object.st"
 out=$(PROTOST_LIB="$SCRATCH" "$PROTOST" -e '1' 2>&1); rc=$?
 [[ $rc -ne 0 && "$out" == *"object.st:2"* ]] || { echo "FAIL: broken kernel not reported: rc=$rc out=$out"; exit 1; }
+# A missing kernel stops startup too, with a message that names it and a
+# nonzero exit, in every mode that runs code: before 0.6.3 protost ran with
+# the primitives alone and failed later on an undefined Transcript.
+mkdir -p "$SCRATCH/nokernel"
+printf "Transcript showCr: 'SCRIPT-RAN'.\n" > "$SCRATCH/nokernel/script.st"
+for mode in "-e 1" "$SCRATCH/nokernel/script.st"; do
+  # shellcheck disable=SC2086
+  out=$(PROTOST_LIB="$SCRATCH/nokernel" "$PROTOST" $mode 2>&1 < /dev/null); rc=$?
+  [[ $rc -ne 0 && "$out" == *"cannot find the protoST kernel"* && "$out" == *"PROTOST_LIB"* \
+     && "$out" != *"SCRIPT-RAN"* ]] \
+    || { echo "FAIL: missing kernel not reported for '$mode': rc=$rc out=$out"; exit 1; }
+done
 # Nanoseconds since the epoch. BSD date (macOS) has no %N: it prints a
 # literal N, and perl takes over there.
 now_ns() {

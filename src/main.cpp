@@ -124,6 +124,22 @@ struct PeakMemoryReport {
     }
 };
 
+// Every mode that runs protoST code needs the Smalltalk-source kernel
+// (Transcript, the collection protocol, the exceptions, ...). Without it the
+// runtime would start with the primitives alone, and a program would fail
+// later, far from the cause, on an undefined global. Exit status 72
+// (EX_OSFILE): a file the installation provides is missing.
+constexpr int kExitNoKernel = 72;
+bool kernelPresent() {
+    std::string problem;
+    if (!protoST::STRuntime::kernelManifestPath(&problem).empty()) return true;
+    std::fprintf(stderr,
+        "protost: cannot find the protoST kernel: %s.\n"
+        "Reinstall protoST, or set PROTOST_LIB to the standard-library directory "
+        "that holds kernel/00-manifest.txt.\n", problem.c_str());
+    return false;
+}
+
 } // anon
 
 int main(int argc, char** argv) {
@@ -155,9 +171,11 @@ int main(int argc, char** argv) {
         return P.errors().empty() ? 0 : 65;
     }
     if (mode == "-i") {
+        if (!kernelPresent()) return kExitNoKernel;
         return protoST::runRepl();
     }
     if (mode == "--dap") {
+        if (!kernelPresent()) return kExitNoKernel;
         return protoST::runDapServer();
     }
     if (mode == "-e") {
@@ -168,6 +186,7 @@ int main(int argc, char** argv) {
         for (auto& e : P.errors())
             std::fprintf(stderr, "<expr>:%d:%d: %s\n", e.line, e.column, e.message.c_str());
         if (!P.errors().empty()) return 65;
+        if (!kernelPresent()) return kExitNoKernel;
 
         try {
             std::unique_ptr<protoST::BytecodeModule> bc;  // outlives rt (see above)
@@ -203,6 +222,7 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "%s:%d:%d: %s\n", path, e.line, e.column, e.message.c_str());
             return 65;
         }
+        if (!kernelPresent()) return kExitNoKernel;
         std::unique_ptr<protoST::BytecodeModule> bc;  // outlives rt (see above)
         protoST::STRuntime rt;
         protoST::Compiler C; bc = C.compileModule(*ast);
@@ -267,6 +287,7 @@ int main(int argc, char** argv) {
         for (auto& e : P.errors())
             std::fprintf(stderr, "%s:%d:%d: %s\n", sourceName, e.line, e.column, e.message.c_str());
         if (!P.errors().empty()) return 65;
+        if (!kernelPresent()) return kExitNoKernel;
 
         try {
             // The runtime (and with it the kernel) exists before the script is

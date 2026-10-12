@@ -251,6 +251,14 @@ public:
 
     inline const char* versionTag() const { return PROTOST_VERSION; }
 
+    // The Smalltalk-source kernel's manifest (<lib>/kernel/00-manifest.txt) in
+    // the standard-library directory this process would load, or "" when there
+    // is none; `problem` then receives a one-line description of what was
+    // searched. The constructor runs without a kernel (an embedder may ship
+    // none); the protost executable calls this first and refuses to start
+    // without one, since its programs expect Transcript and the rest.
+    static std::string kernelManifestPath(std::string* problem = nullptr);
+
 private:
     // Installs protoST's memory policy (the adaptive heap controller unless the
     // environment asks for a fixed limit) and its out-of-memory report.
