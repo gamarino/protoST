@@ -42,15 +42,13 @@ los núcleos están ocupados (`benchmarks/reports/2026-10-11-actor-regression-bi
 Buscándolo apareció un bug real, corregido en 0.6.1: una recursión sin
 bucles (el fib de libro) nunca dejaba recolectar su basura; fib 29 se quedaba
 sin memoria. Desde 0.6.2 protoST usa el controlador adaptativo del heap de
-protoCore: frente a 0.6.1, los programas de actores van 6–26 % más rápido con
-un tercio de la memoria, pero `parallel_speedup` con el pool completo va 14 %
-más lento y la demo 2 muestra cerca de 3,6× en vez de 4,2×: cada pausa del
-recolector recorre entero el arreglo de frames de cada hilo (K6, sin
-corregir; `benchmarks/reports/2026-10-12-adaptive-heap-default.md`).
+protoCore y dimensiona bajo demanda el arreglo de frames de cada hilo (K6):
+frente a 0.6.1, los programas de actores van 16–43 % más rápido con entre un
+quinto y la mitad de la memoria, y la demo 2 muestra una mediana de 4,45× en
+vez de 4,3× (`benchmarks/reports/2026-10-12-adaptive-heap-default.md`).
 
 Es decir: en un hilo protoST es bastante más lento que CPython. Lo que
-mostramos es que el mismo código usa varios núcleos, hoy con ese techo y con
-pausas del recolector que crecen con la cantidad de hilos.
+mostramos es que el mismo código usa varios núcleos, hoy con ese techo.
 
 **¿Cómo es el GC?**
 El de protoCore: concurrente, con un hilo propio. Desde 0.6.2 protoST deja
@@ -64,10 +62,10 @@ un techo fijo y `PROTOCORE_ADAPTIVE_HEAP=0` vuelve al techo de 640 MB de
 `fib.st` tardaba tres veces más; la causa era de protoST (una recursión no
 entregaba su basura), corregida en 0.6.1. El barrido, la fase más cara,
 recorre varias cadenas a la vez y puede sumar hilos auxiliares (2.14). Las
-pausas stop-the-world que medimos en protoST no son las de 0,2 ms de las
-pruebas de protoCore: 4 ms con un hilo y 25–31 ms con doce, porque cada
-pausa recorre entero el arreglo de frames de 1 M de entradas de cada hilo
-(`KNOWN_ISSUES.md`, K6, abierto).
+pausas stop-the-world que medimos en protoST en los benchmarks no pasan de
+0,27 ms; antes de 0.6.2 llegaban a 25–31 ms con doce hilos, porque cada
+pausa recorría entero un arreglo de frames de 1 M de entradas por hilo
+(`KNOWN_ISSUES.md`, K6, resuelto).
 
 **¿Por qué prototipos?**
 protoCore es un modelo de prototipos; las clases de protoST son objetos
@@ -148,7 +146,7 @@ no hay un paquete de Windows publicado.
 
 **¿Es estable? ¿Qué bugs abiertos tiene?**
 0.5.0 pasaba sus 1068 casos de `ctest`; 0.6.2 (con protoCore 2.14.5)
-pasa 1099, en Linux, macOS y Windows: programas de
+pasa 1100, en Linux, macOS y Windows: programas de
 conformidad, tests unitarios, los ejemplos, tests de la línea de comandos y
 los ejemplos de la documentación. Durante la preparación de esta charla una
 auditoría adversarial de unos 1100 programas, en dos rondas, encontró resultados incorrectos

@@ -152,11 +152,11 @@ instantánea atómica de un objeto mutable (dibujo en pizarra).
 El recolector, tal como está en protoCore 2.14.5: concurrente; el barrido
 recorre varias cadenas a la vez y puede sumar hilos auxiliares. Desde 0.6.2
 protoST usa el controlador adaptativo del heap de protoCore (antes, un techo
-fijo de 640 MB): más rápido en los programas de actores y con un tercio de la
-memoria. El costo: las pausas stop-the-world en protoST son de 4 ms con un
-hilo y 25–31 ms con doce, porque cada pausa recorre entero el arreglo de
-frames de cada hilo; con el pool completo, `parallel_speedup` va 14 % más
-lento que en 0.6.1. Decirlo como medición, no como defecto escondido
+fijo de 640 MB): más rápido en los programas de actores, con entre un quinto y la mitad de la
+memoria. Para eso hubo que corregir algo propio: cada pausa stop-the-world
+recorría entero un arreglo de frames de 1 M de entradas por hilo (25–31 ms
+con doce hilos); desde 0.6.2 el arreglo crece bajo demanda y las pausas no
+pasan de 0,27 ms en los benchmarks. Decirlo como medición
 (`KNOWN_ISSUES.md`, K5 y K6).
 
 ### M2 — El gemelo digital paso a paso (8 min)
@@ -191,7 +191,8 @@ Respaldo: `recordings/03-digital-twin`.
     del ruido (informe de bisección del 11/10). Decirlo así, y que 0.6.1
     corrige la recolección en recursiones sin bucles (fib 29 se quedaba sin
     memoria); 0.6.2 activa el controlador adaptativo del heap (informe del
-    12/10: actores 6–26 % más rápidos, el pool completo 14 % más lento).
+    12/10: actores 16–43 % más rápidos, entre un quinto y la mitad de la
+    memoria).
 - Decir dónde es más lento (despacho de métodos recursivo, excepciones) sin
   maquillarlo.
 

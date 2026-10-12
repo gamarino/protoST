@@ -1,0 +1,391 @@
+{
+ "repeat": 5,
+ "builds": [
+  [
+   "v061",
+   "build_pkg_oct11/protost"
+  ],
+  [
+   "v062",
+   "build_062/protost"
+  ]
+ ],
+ "rows": [
+  {
+   "name": "startup",
+   "env": {},
+   "load": 2.24853515625,
+   "contenders": [],
+   "results": {
+    "v061": {
+     "cycles": 119637639.0,
+     "cycles_var_pct": "1.95",
+     "instructions": 105163693.0,
+     "instructions_var_pct": "0.09"
+    },
+    "v062": {
+     "cycles": 122746816.0,
+     "cycles_var_pct": "3.63",
+     "instructions": 105392784.0,
+     "instructions_var_pct": "0.32"
+    }
+   }
+  },
+  {
+   "name": "int_sum_loop",
+   "env": {},
+   "load": 2.24853515625,
+   "contenders": [],
+   "results": {
+    "v062": {
+     "cycles": 195058187.0,
+     "cycles_var_pct": "1.05",
+     "instructions": 300609274.0,
+     "instructions_var_pct": "0.11"
+    },
+    "v061": {
+     "cycles": 193916699.0,
+     "cycles_var_pct": "0.96",
+     "instructions": 300579722.0,
+     "instructions_var_pct": "0.10"
+    }
+   }
+  },
+  {
+   "name": "fib",
+   "env": {},
+   "load": 2.24853515625,
+   "contenders": [],
+   "results": {
+    "v061": {
+     "cycles": 1509966319.0,
+     "cycles_var_pct": "1.36",
+     "instructions": 2232395804.0,
+     "instructions_var_pct": "0.11"
+    },
+    "v062": {
+     "cycles": 1959545984.0,
+     "cycles_var_pct": "2.17",
+     "instructions": 2568587274.0,
+     "instructions_var_pct": "0.42"
+    }
+   }
+  },
+  {
+   "name": "list_append",
+   "env": {},
+   "load": 2.228515625,
+   "contenders": [],
+   "results": {
+    "v062": {
+     "cycles": 287432771.0,
+     "cycles_var_pct": "1.57",
+     "instructions": 274668345.0,
+     "instructions_var_pct": "0.09"
+    },
+    "v061": {
+     "cycles": 290061660.0,
+     "cycles_var_pct": "2.17",
+     "instructions": 273896502.0,
+     "instructions_var_pct": "0.08"
+    }
+   }
+  },
+  {
+   "name": "str_concat",
+   "env": {},
+   "load": 2.2099609375,
+   "contenders": [],
+   "results": {
+    "v061": {
+     "cycles": 130328224.0,
+     "cycles_var_pct": "0.64",
+     "instructions": 133083337.0,
+     "instructions_var_pct": "0.24"
+    },
+    "v062": {
+     "cycles": 130454559.0,
+     "cycles_var_pct": "1.17",
+     "instructions": 132843225.0,
+     "instructions_var_pct": "0.02"
+    }
+   }
+  },
+  {
+   "name": "attr_lookup",
+   "env": {},
+   "load": 2.2099609375,
+   "contenders": [],
+   "results": {
+    "v062": {
+     "cycles": 714263690.0,
+     "cycles_var_pct": "0.67",
+     "instructions": 1075966526.0,
+     "instructions_var_pct": "0.08"
+    },
+    "v061": {
+     "cycles": 648078222.0,
+     "cycles_var_pct": "0.57",
+     "instructions": 969538258.0,
+     "instructions_var_pct": "0.13"
+    }
+   }
+  },
+  {
+   "name": "range_iterate",
+   "env": {},
+   "load": 2.2099609375,
+   "contenders": [],
+   "results": {
+    "v061": {
+     "cycles": 374388972.0,
+     "cycles_var_pct": "1.11",
+     "instructions": 452480736.0,
+     "instructions_var_pct": "0.11"
+    },
+    "v062": {
+     "cycles": 385477500.0,
+     "cycles_var_pct": "0.46",
+     "instructions": 452650642.0,
+     "instructions_var_pct": "0.08"
+    }
+   }
+  },
+  {
+   "name": "exception_latency",
+   "env": {},
+   "load": 2.2099609375,
+   "contenders": [],
+   "results": {
+    "v062": {
+     "cycles": 4412250012.0,
+     "cycles_var_pct": "0.77",
+     "instructions": 6824206120.0,
+     "instructions_var_pct": "0.15"
+    },
+    "v061": {
+     "cycles": 3878830957.0,
+     "cycles_var_pct": "2.21",
+     "instructions": 6553694053.0,
+     "instructions_var_pct": "0.05"
+    }
+   }
+  },
+  {
+   "name": "parallel_speedup pool",
+   "env": {},
+   "load": 2.17138671875,
+   "contenders": [],
+   "results": {
+    "v061": {
+     "cycles": 4171993493.0,
+     "cycles_var_pct": "0.84",
+     "instructions": 5903629456.0,
+     "instructions_var_pct": "0.02"
+    },
+    "v062": {
+     "cycles": 3967076760.0,
+     "cycles_var_pct": "2.30",
+     "instructions": 6787474891.0,
+     "instructions_var_pct": "0.66"
+    }
+   }
+  },
+  {
+   "name": "parallel_speedup w=1",
+   "env": {
+    "PROTOST_WORKERS": "1"
+   },
+   "load": 2.55810546875,
+   "contenders": [],
+   "results": {
+    "v062": {
+     "cycles": 2740293330.0,
+     "cycles_var_pct": "1.83",
+     "instructions": 5964360412.0,
+     "instructions_var_pct": "0.05"
+    },
+    "v061": {
+     "cycles": 3008228407.0,
+     "cycles_var_pct": "0.92",
+     "instructions": 5772698558.0,
+     "instructions_var_pct": "0.06"
+    }
+   }
+  },
+  {
+   "name": "cooperative_yield w=2",
+   "env": {
+    "PROTOST_WORKERS": "2"
+   },
+   "load": 2.31787109375,
+   "contenders": [],
+   "results": {
+    "v061": {
+     "cycles": 3158789995.0,
+     "cycles_var_pct": "0.98",
+     "instructions": 4463502105.0,
+     "instructions_var_pct": "0.06"
+    },
+    "v062": {
+     "cycles": 3061756891.0,
+     "cycles_var_pct": "0.73",
+     "instructions": 4810994113.0,
+     "instructions_var_pct": "0.11"
+    }
+   }
+  },
+  {
+   "name": "message_throughput",
+   "env": {},
+   "load": 2.2119140625,
+   "contenders": [],
+   "results": {
+    "v062": {
+     "cycles": 939574607.0,
+     "cycles_var_pct": "0.69",
+     "instructions": 421231439.0,
+     "instructions_var_pct": "0.61"
+    },
+    "v061": {
+     "cycles": 934167966.0,
+     "cycles_var_pct": "0.43",
+     "instructions": 422804332.0,
+     "instructions_var_pct": "0.50"
+    }
+   }
+  },
+  {
+   "name": "saturation_big w=1",
+   "env": {
+    "PROTOST_WORKERS": "1"
+   },
+   "load": 2.19482421875,
+   "contenders": [],
+   "results": {
+    "v061": {
+     "cycles": 12438766479.0,
+     "cycles_var_pct": "1.45",
+     "instructions": 28022174575.0,
+     "instructions_var_pct": "0.01"
+    },
+    "v062": {
+     "cycles": 12755013362.0,
+     "cycles_var_pct": "0.91",
+     "instructions": 29138241617.0,
+     "instructions_var_pct": "0.07"
+    }
+   }
+  },
+  {
+   "name": "saturation_big w=2",
+   "env": {
+    "PROTOST_WORKERS": "2"
+   },
+   "load": 2.48583984375,
+   "contenders": [],
+   "results": {
+    "v062": {
+     "cycles": 13204563252.0,
+     "cycles_var_pct": "1.02",
+     "instructions": 29698471740.0,
+     "instructions_var_pct": "0.15"
+    },
+    "v061": {
+     "cycles": 13711087188.0,
+     "cycles_var_pct": "0.70",
+     "instructions": 27964956836.0,
+     "instructions_var_pct": "0.02"
+    }
+   }
+  },
+  {
+   "name": "saturation_big w=3",
+   "env": {
+    "PROTOST_WORKERS": "3"
+   },
+   "load": 2.84912109375,
+   "contenders": [],
+   "results": {
+    "v061": {
+     "cycles": 15523447324.0,
+     "cycles_var_pct": "1.07",
+     "instructions": 28892629907.0,
+     "instructions_var_pct": "0.08"
+    },
+    "v062": {
+     "cycles": 14275846293.0,
+     "cycles_var_pct": "0.72",
+     "instructions": 31001748043.0,
+     "instructions_var_pct": "0.26"
+    }
+   }
+  },
+  {
+   "name": "saturation_big w=4",
+   "env": {
+    "PROTOST_WORKERS": "4"
+   },
+   "load": 5.416015625,
+   "contenders": [],
+   "results": {
+    "v062": {
+     "cycles": 15476285214.0,
+     "cycles_var_pct": "1.48",
+     "instructions": 32292562960.0,
+     "instructions_var_pct": "0.34"
+    },
+    "v061": {
+     "cycles": 18003421225.0,
+     "cycles_var_pct": "0.51",
+     "instructions": 29399846497.0,
+     "instructions_var_pct": "0.06"
+    }
+   }
+  },
+  {
+   "name": "saturation_big w=5",
+   "env": {
+    "PROTOST_WORKERS": "5"
+   },
+   "load": 6.13623046875,
+   "contenders": [],
+   "results": {
+    "v061": {
+     "cycles": 20633724800.0,
+     "cycles_var_pct": "0.67",
+     "instructions": 29731178498.0,
+     "instructions_var_pct": "0.47"
+    },
+    "v062": {
+     "cycles": 16033913241.0,
+     "cycles_var_pct": "2.49",
+     "instructions": 31908665935.0,
+     "instructions_var_pct": "1.26"
+    }
+   }
+  },
+  {
+   "name": "saturation_big w=6",
+   "env": {
+    "PROTOST_WORKERS": "6"
+   },
+   "load": 6.611328125,
+   "contenders": [],
+   "results": {
+    "v062": {
+     "cycles": 16229608318.0,
+     "cycles_var_pct": "1.45",
+     "instructions": 31335334674.0,
+     "instructions_var_pct": "0.64"
+    },
+    "v061": {
+     "cycles": 23165978998.0,
+     "cycles_var_pct": "0.74",
+     "instructions": 30305856043.0,
+     "instructions_var_pct": "0.35"
+    }
+   }
+  }
+ ]
+}

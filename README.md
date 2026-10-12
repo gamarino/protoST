@@ -170,16 +170,15 @@ several cores without locks.
 ## Status
 
 Version 0.6.2 (2026-10-12); it requires protoCore 2.11.0 or newer (2.14.5
-recommended), and CI builds it against protoCore 2.14.5. `ctest` runs 1099 cases on Linux, all
-passing (2026-10-12): 544 conformance programs, 459 unit tests, 42 examples, 32
+recommended), and CI builds it against protoCore 2.14.5. `ctest` runs 1100 cases on Linux, all
+passing (2026-10-12): 544 conformance programs, 460 unit tests, 42 examples, 32
 CLI tests (including the benchmark-harness self-test) and 22 documentation
 checks (every example with a stated result in 21 documents, plus the
 checker's self-test). Since 0.6.2 protoST lets protoCore's adaptive heap
 controller size the heap (budget: 75 % of physical memory or of the process
 memory limit); `PROTOCORE_HEAP_LIMIT_CELLS` forces a fixed limit and
 `PROTOCORE_ADAPTIVE_HEAP=0` restores 0.6.1's fixed 640 MB limit (precedence
-in [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) K5; the measurements, including a
-14 % regression with the full worker pool (K6), in
+in [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) K5; measurements in
 `benchmarks/reports/2026-10-12-adaptive-heap-default.md`). The
 known deviations from Smalltalk-80 and the open bugs are tracked in
 [`docs/STATUS.md`](docs/STATUS.md); runtime hard edges in

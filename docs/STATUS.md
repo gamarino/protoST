@@ -14,9 +14,9 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Test suite:** 1099 `ctest` cases on Linux, 1099/1099 passing on
+- **Test suite:** 1100 `ctest` cases on Linux, 1100/1100 passing on
   2026-10-12 (0.6.2, against protoCore 2.14.5 installed in a
-  private prefix, and protoIO 0.2.2): 544 conformance programs, 459 unit tests, 42
+  private prefix, and protoIO 0.2.2): 544 conformance programs, 460 unit tests, 42
   examples, 32 CLI tests (including the benchmark-harness self-test and the
   terminal test `cli_repl_console`) and 22 documentation checks (the
   examples with a stated result in 21 documents, plus the checker's
@@ -41,9 +41,11 @@ stable id and file it in the right bucket.
   makes `PROTOCORE_HEAP_LIMIT_CELLS` its budget. The fixed limit had been
   kept because `fib.st` ran three times slower under the controller; S24
   (0.6.1) removed that cause. Measurements in
-  `benchmarks/reports/2026-10-12-adaptive-heap-default.md` (faster on seven
-  workloads, slower on two: the full worker pool +14 %, because each
-  collection's pause grows with the number of threads, K6); precedence and
+  `benchmarks/reports/2026-10-12-adaptive-heap-default.md` (0.6.2 is faster
+  than 0.6.1 on every workload but one, unchanged, with a fifth to a half of
+  the memory; that needed the K6 fix, engine slot arrays sized on demand, so
+  that a collection's pause no longer grows with the number of threads);
+  precedence and
   details in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md) K5.
 - **Last verified:** 2026-10-11, by the test suite above (release 0.6.1;
   the `.deb` of each of 0.6.0 and 0.6.1 was installed in a clean Ubuntu

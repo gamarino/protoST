@@ -149,12 +149,11 @@ a mutable object (drawn on the whiteboard).
 The collector as it stands in protoCore 2.14.5: concurrent; the sweep
 walks several chains at once and can add helper threads. Since 0.6.2
 protoST uses protoCore's adaptive heap controller (before, a fixed 640 MB
-ceiling): faster on the actor programs and with a third of the memory. The
-cost: stop-the-world pauses in protoST are 4 ms with one thread and
-25–31 ms with twelve, because each pause scans every thread's whole frame
-array; with the full pool, `parallel_speedup` runs 14 % slower than on
-0.6.1. Present it as a measurement, not a hidden defect
-(`KNOWN_ISSUES.md`, K5 and K6).
+ceiling): faster on the actor programs, with a fifth to a half of the memory. The
+way there needed a fix of protoST's own: each stop-the-world pause scanned
+a whole 1 M-slot frame array per thread (25–31 ms with twelve threads);
+since 0.6.2 the array grows on demand and pauses stay below 0.27 ms on the
+benchmarks. Present it as a measurement (`KNOWN_ISSUES.md`, K5 and K6).
 
 ### M2 — The digital twin step by step (8 min)
 
@@ -187,8 +186,8 @@ Fallback: `recordings/03-digital-twin`.
     busy session, within the noise on a quiet machine (bisection report of
     11/10). Say it that way, and that 0.6.1 fixes collection in recursions
     that never loop (fib 29 ran out of memory); 0.6.2 enables the adaptive
-    heap controller (report of 12/10: actors 6–26 % faster, the full pool
-    14 % slower).
+    heap controller (report of 12/10: actors 16–43 % faster, with a fifth
+    to a half of the memory).
 - Say where it is slower (recursive method dispatch, exceptions) without
   dressing it up.
 

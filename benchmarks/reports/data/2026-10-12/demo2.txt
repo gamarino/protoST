@@ -1,0 +1,20 @@
+0.6.1 (run_demo.sh's 20M-cell limit) time one thread: 1906 ms time 12 actors: 438 ms 
+0.6.2 (default policy) time one thread: 1743 ms time 12 actors: 364 ms 
+0.6.1 (run_demo.sh's 20M-cell limit) time one thread: 1777 ms time 12 actors: 422 ms 
+0.6.2 (default policy) time one thread: 1720 ms time 12 actors: 385 ms 
+0.6.1 (run_demo.sh's 20M-cell limit) time one thread: 1679 ms time 12 actors: 394 ms 
+0.6.2 (default policy) time one thread: 1643 ms time 12 actors: 330 ms 
+0.6.1 (run_demo.sh's 20M-cell limit) time one thread: 1741 ms time 12 actors: 400 ms 
+0.6.2 (default policy) time one thread: 1715 ms time 12 actors: 371 ms 
+0.6.1 (run_demo.sh's 20M-cell limit) time one thread: 1764 ms time 12 actors: 418 ms 
+0.6.2 (default policy) time one thread: 1633 ms time 12 actors: 383 ms 
+0.6.1 (run_demo.sh's 20M-cell limit) time one thread: 1718 ms time 12 actors: 396 ms 
+0.6.2 (default policy) time one thread: 1600 ms time 12 actors: 375 ms 
+0.6.1 (run_demo.sh's 20M-cell limit) time one thread: 1683 ms time 12 actors: 408 ms 
+0.6.2 (default policy) time one thread: 1704 ms time 12 actors: 400 ms 
+0.6.1 (run_demo.sh's 20M-cell limit) time one thread: 1970 ms time 12 actors: 450 ms 
+0.6.2 (default policy) time one thread: 1581 ms time 12 actors: 357 ms 
+0.6.1 (run_demo.sh's 20M-cell limit) time one thread: 1723 ms time 12 actors: 433 ms 
+0.6.2 (default policy) time one thread: 1568 ms time 12 actors: 348 ms 
+0.6.1 (run_demo.sh's 20M-cell limit) time one thread: 1941 ms time 12 actors: 408 ms 
+0.6.2 (default policy) time one thread: 1680 ms time 12 actors: 391 ms 

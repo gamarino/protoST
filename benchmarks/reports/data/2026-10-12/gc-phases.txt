@@ -1,16 +1,16 @@
 comparable/fib.st w=pool build_pkg_oct11: no cycle
-comparable/fib.st w=pool build_062: cycles=3  quorum=76us stw=13927us stw_max=5145us mut_park=14116us headroom_wait=18265us 
+comparable/fib.st w=pool build_062: cycles=3  quorum=93us stw=222us stw_max=98us mut_park=377us headroom_wait=20014us 
 comparable/attr_lookup.st w=pool build_pkg_oct11: no cycle
-comparable/attr_lookup.st w=pool build_062: cycles=1  quorum=12us stw=4161us stw_max=4161us mut_park=0us headroom_wait=0us 
+comparable/attr_lookup.st w=pool build_062: cycles=1  quorum=15us stw=108us stw_max=108us mut_park=0us headroom_wait=0us 
 comparable/exception_latency.st w=pool build_pkg_oct11: no cycle
-comparable/exception_latency.st w=pool build_062: cycles=5  quorum=189us stw=22569us stw_max=4765us mut_park=22832us headroom_wait=12180us 
+comparable/exception_latency.st w=pool build_062: cycles=5  quorum=172us stw=360us stw_max=98us mut_park=577us headroom_wait=11878us 
 actors/parallel_speedup.st w=pool build_pkg_oct11: no cycle
-actors/parallel_speedup.st w=pool build_062: cycles=7  quorum=2493us stw=174893us stw_max=30634us mut_park=1167681us headroom_wait=25308us 
+actors/parallel_speedup.st w=pool build_062: cycles=6  quorum=3798us stw=1095us stw_max=270us mut_park=30243us headroom_wait=21260us 
 actors/parallel_speedup.st w=1 build_pkg_oct11: no cycle
-actors/parallel_speedup.st w=1 build_062: cycles=5  quorum=100us stw=32850us stw_max=6961us mut_park=33122us headroom_wait=0us 
+actors/parallel_speedup.st w=1 build_062: cycles=5  quorum=121us stw=250us stw_max=58us mut_park=422us headroom_wait=0us 
 actors/cooperative_yield.st w=2 build_pkg_oct11: no cycle
-actors/cooperative_yield.st w=2 build_062: cycles=5  quorum=115us stw=41431us stw_max=8627us mut_park=41680us headroom_wait=10920us 
-actors/saturation_big.st w=1 build_pkg_oct11: cycles=5  quorum=201us stw=32258us stw_max=6841us mut_park=26710us headroom_wait=9449us 
-actors/saturation_big.st w=1 build_062: cycles=33  quorum=982us stw=235576us stw_max=9552us mut_park=239467us headroom_wait=0us 
-actors/saturation_big.st w=6 build_pkg_oct11: cycles=6  quorum=2233us stw=126158us stw_max=24900us mut_park=679210us headroom_wait=128530us 
-actors/saturation_big.st w=6 build_062: cycles=27  quorum=8178us stw=546658us stw_max=30823us mut_park=3256916us headroom_wait=43963us 
+actors/cooperative_yield.st w=2 build_062: cycles=5  quorum=95us stw=294us stw_max=65us mut_park=450us headroom_wait=2968us 
+actors/saturation_big.st w=1 build_pkg_oct11: cycles=5  quorum=230us stw=35352us stw_max=8058us mut_park=29154us headroom_wait=10226us 
+actors/saturation_big.st w=1 build_062: cycles=30  quorum=777us stw=2210us stw_max=108us mut_park=3549us headroom_wait=0us 
+actors/saturation_big.st w=6 build_pkg_oct11: cycles=6  quorum=1555us stw=112562us stw_max=19915us mut_park=586701us headroom_wait=92048us 
+actors/saturation_big.st w=6 build_062: cycles=29  quorum=5351us stw=3891us stw_max=271us mut_park=64544us headroom_wait=68822us 

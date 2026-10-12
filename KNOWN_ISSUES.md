@@ -82,13 +82,13 @@ Linux, job object on Windows); a soft limit inside it, 128 MB at start,
 triggers the collections and grows only while the program waits for the
 collector. Measured on 2026-10-12 (DEV12, 62 GB of RAM): `(1 to: 500000) asArray`
 succeeds in 1.7 s with a 0.74 GB peak, `(1 to: 1000000) asArray` in 4.3 s
-with 1.7 GB. On the benchmark suite the controller is faster on seven
-workloads (6-26 %), slower on two (`parallel_speedup` with the full pool
-+14 %, `attr_lookup` +7 %, see K6), and uses a third to a quarter of the
-memory (`benchmarks/reports/2026-10-12-adaptive-heap-default.md`). Peak
-memory is no longer capped at 640 MB: the controller grows its soft limit
-while that shortens the program's waits for the collector (an allocating
-3M-iteration loop peaked at 0.19-1.86 GB in three runs); set
+with 1.7 GB. On the benchmark suite 0.6.2 is faster than 0.6.1 on every
+workload but `attr_lookup` (unchanged), by up to 43 % on the actor
+workloads, with a fifth to a half of the memory
+(`benchmarks/reports/2026-10-12-adaptive-heap-default.md`; that includes the
+K6 fix). Peak memory is no longer capped at 640 MB: the controller grows its
+soft limit while that shortens the program's waits for the collector (an
+allocating 3M-iteration loop peaked at 0.88-3.5 GB in three runs); set
 `PROTOCORE_HEAP_LIMIT_CELLS` when a fixed footprint matters.
 
 **Why the fixed limit was kept until 0.6.1, and why that changed.** Under
@@ -119,30 +119,23 @@ remove it), and the fixed limits above keep the old bound.
 
 ---
 
-## K6 — Collection pauses grow with the number of threads (open)
-
-**What.** Every protoST thread that has run code keeps its frames in a
-`ProtoContext::automaticLocals` array pre-sized to 1,048,576 slots (8 MB,
-`ExecutionEngine::kSlotCapacity`), and protoCore's stop-the-world root scan
-visits every slot of every thread's array, used or not. Measured on
-2026-10-12 (instrumented protoCore 2.14.5): 4 ms per pause with one thread,
-25-31 ms with the twelve workers of `parallel_speedup`.
-
-**Effect.** Under the fixed limit of 0.6.1 the short benchmarks rarely
-collected, so the cost stayed hidden. Under the adaptive controller (the
-default since 0.6.2) they collect several times, and `parallel_speedup`
-with the full pool runs 14 % slower than on 0.6.1 (the talk's demo 2 shows
-about 3.6x instead of 4.2x); see
-`benchmarks/reports/2026-10-12-adaptive-heap-default.md`.
-
-**Ways out (not taken yet).** Size the array on demand in protoST (the
-interpreter keeps raw pointers into it, so growing it while frames are live
-must re-establish them), or let the embedder declare the used prefix that
-protoCore scans (a protoCore API change).
-
----
-
 ## Resolved
+
+### K6 — Collection pauses grew with the number of threads (resolved in 0.6.2)
+
+Every protoST thread that had run code kept its frames in a
+`ProtoContext::automaticLocals` array pre-sized to 1,048,576 slots (8 MB),
+and protoCore's stop-the-world root scan visits every slot of every thread's
+array, used or not: 4 ms per pause with one thread, 25-31 ms with the twelve
+workers of `parallel_speedup`. Under the fixed limit of 0.6.1 the short
+benchmarks rarely collected, so the cost stayed hidden; under the adaptive
+controller it made `parallel_speedup` with the full pool 14 % slower than on
+0.6.1. Since 0.6.2 the array starts at 4,096 slots and doubles when a frame
+region needs more, up to the same maximum (`ensureEngineSlots`,
+`src/runtime/TransientPin.h`); the longest pause measured on the benchmark
+suite is 0.27 ms, and the full pool runs 27 % faster than on 0.6.1
+(`benchmarks/reports/2026-10-12-adaptive-heap-default.md`). Test:
+`EngineSlots` (`tests/unit/test_heap_policy.cpp`).
 
 ### K2 — Very large strings / ropes (resolved)
 

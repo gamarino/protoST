@@ -19,28 +19,40 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
   in `KNOWN_ISSUES.md` K5 and `docs/INSTALLATION.md` ("Memory").
   Tests: `HeapPolicy` (five unit cases; the default one failed before) and
   `cli_oom_clean`, which now also runs under the controller.
+- **K6: engine slot arrays sized on demand.** protoCore's stop-the-world
+  root scan visits every slot of every thread's `automaticLocals`, and protoST
+  pre-sized that array to 1 M slots (8 MB) for every thread that ran code, so
+  each pause cost 4 ms with one thread and 25-31 ms with twelve workers. The
+  fixed limit hid it by rarely collecting; with the controller alone,
+  `parallel_speedup` with the full pool ran 14 % slower than on 0.6.1. The
+  array now starts at 4,096 slots and doubles on demand up to the same
+  maximum (the recursion depth limit is unchanged; the transient-pin scratch
+  region moved to the bottom of the array). Longest pause on the benchmark
+  suite: 0.27 ms. No protoCore change. Test: `EngineSlots`.
 - **Measured** (`benchmarks/reports/2026-10-12-adaptive-heap-default.md`,
   0.6.1 against 0.6.2, same compiler and protoCore, medians of 7
-  interleaved runs with A/A pairs, plus `perf stat` cycles and instructions):
-  faster on seven workloads (`parallel_speedup` on one worker -26 %,
-  `cooperative_yield` -22 %, `saturation_big` -6 to -18 %, `fib` -7 %) with
-  a third to a quarter of the memory; unchanged on the single-threaded
-  workloads that allocate little; **slower on two**: `parallel_speedup` with
-  the full pool +14 % (the talk's demo 2 shows about 3.6x instead of 4.2x)
-  and `attr_lookup` +7 %. Cause: every collection's stop-the-world pause
-  scans each thread's 1 M-slot frame array in full (2-4 ms per thread), a
-  cost the fixed limit hid by rarely collecting; recorded as K6, not fixed.
-  Peak memory is no longer capped at 640 MB (an allocating 3M-iteration loop:
-  0.19-1.86 GB, against 677 MB), and `(1 to: 500000) asArray`, which ran out
-  of memory under the fixed limit, now succeeds (K5).
-- **A test hung under the controller and was fixed**: the IvarGroups
-  atomicity test's C++ reader thread spun without reaching a safepoint, so
-  the first stop-the-world could never start. It now calls
-  `ProtoContext::safepoint()`. The runtime itself was not affected.
+  interleaved runs with A/A pairs, `perf stat` cycles and instructions, and
+  collector pauses): faster on every workload but `attr_lookup` (unchanged):
+  `parallel_speedup` -27 % with the full pool and -28 % on one worker,
+  `message_throughput` -41 %, `saturation_big` -16 % (one worker) to -43 %
+  (six), start-up -16 %; a fifth to a half of the memory. The talk's demo 2
+  shows a median 4.45x instead of 4.3x. Costs: the collector now runs on
+  `fib` and `exception_latency` (+18 % and +8 % CPU, still faster in wall
+  time), and peak memory is no longer capped at 640 MB (an allocating
+  3M-iteration loop: 0.88-3.5 GB, against 677 MB). `(1 to: 500000) asArray`,
+  which ran out of memory under the fixed limit, now succeeds (K5).
+- **Three tests fixed that the controller exposed** (none a runtime defect):
+  the IvarGroups atomicity test's C++ reader thread spun without reaching a
+  safepoint, so the first stop-the-world could never start (it now calls
+  `ProtoContext::safepoint()`); the S15 test missed cycles that ran during a
+  program and failed once on CI (it now observes every cycle and prints them
+  on failure; the CI failure could not be reproduced locally);
+  `cli_buried_actor_deadlock` assumed the single worker had started within a
+  fixed 100 ms (it now waits for a flag).
 - `benchmarks/compare_builds.py` also records user and system CPU time.
 - The talk demos run under the default policy (`run_demo.sh` no longer sets
   a 20M-cell limit); the decks state the current test count.
-- Test suite: 1099 cases on Linux, all passing.
+- Test suite: 1100 cases on Linux, all passing.
 
 ## 0.6.1 — a recursion's garbage is reclaimed (2026-10-11)
 

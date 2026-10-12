@@ -42,16 +42,15 @@ CPU on another core, which shows only when every core is busy
 (`benchmarks/reports/2026-10-11-actor-regression-bisection.md`). Looking for
 it turned up a real bug, fixed in 0.6.1: a recursion that never loops (the
 textbook fib) never had its garbage reclaimed; fib 29 ran out of memory.
-Since 0.6.2 protoST uses protoCore's adaptive heap controller: against
-0.6.1, actor programs run 6–26 % faster with a third of the memory, but
-`parallel_speedup` with the full pool runs 14 % slower and demo 2 shows
-about 3.6× instead of 4.2×: every collector pause scans each thread's whole
-frame array (K6, not fixed;
-`benchmarks/reports/2026-10-12-adaptive-heap-default.md`).
+Since 0.6.2 protoST uses protoCore's adaptive heap controller and sizes
+each thread's frame array on demand (K6): against 0.6.1, actor programs run
+16–43 % faster with a fifth to a half of the memory, and demo 2 shows a
+median of 4.45× instead of 4.3×
+(`benchmarks/reports/2026-10-12-adaptive-heap-default.md`).
 
 In other words: on one thread protoST is considerably slower than CPython.
 What we show is that the same code uses several cores, today with that
-ceiling and with collector pauses that grow with the number of threads.
+ceiling.
 
 **What is the GC like?**
 protoCore's: concurrent, with its own thread. Since 0.6.2 protoST lets
@@ -65,10 +64,10 @@ machine. `PROTOCORE_HEAP_LIMIT_CELLS` sets a fixed ceiling and
 `fib.st` took three times as long; the cause was protoST's (a recursion did
 not hand over its garbage), fixed in 0.6.1. The sweep, the most expensive
 phase, walks several chains at once and can add helper threads (2.14). The
-stop-the-world pauses we measured in protoST are not the 0.2 ms of
-protoCore's own tests: 4 ms with one thread and 25–31 ms with twelve,
-because each pause scans every thread's whole 1 M-slot frame array
-(`KNOWN_ISSUES.md`, K6, open).
+stop-the-world pauses we measured in protoST on the benchmarks stay below
+0.27 ms; before 0.6.2 they reached 25–31 ms with twelve threads, because
+each pause scanned a whole 1 M-slot frame array per thread
+(`KNOWN_ISSUES.md`, K6, resolved).
 
 **Why prototypes?**
 protoCore is a prototype model; protoST classes are named prototype objects.
@@ -147,7 +146,7 @@ Windows package yet.
 
 **Is it stable? What open bugs does it have?**
 0.5.0 passed its 1068 `ctest` cases; 0.6.2 (with protoCore 2.14.5)
-passes 1099, on Linux, macOS and Windows: conformance programs,
+passes 1100, on Linux, macOS and Windows: conformance programs,
 unit tests, the examples, command-line tests and the documentation examples.
 While preparing this talk, an adversarial audit of about 1,100 programs, in two rounds, found
 silent wrong results and hangs; every fix for a wrong result, a crash or a
