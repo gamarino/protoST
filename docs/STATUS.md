@@ -22,9 +22,9 @@ stable id and file it in the right bucket.
   examples with a stated result in 21 documents, plus the checker's
   self-test). CI runs the same suite on Linux, macOS and Windows against
   protoCore 2.14.5, and on Linux against 2.11.0, the declared minimum (CI
-  38196116178 and cross-platform 38196118083, green on 0.6.1: Linux runs
-  1092 of them in its suite job (two run in a separate informational job),
-  macOS 1092, Windows 1089); Windows runs all but `cli_sigint` and
+  38259886339 and cross-platform 38259890608, green on 0.6.2: Linux runs
+  1098 of them in its suite job (two run in a separate informational job),
+  macOS 1098, Windows 1095); Windows runs all but `cli_sigint` and
   tutorial chapter 15 (`docs/INSTALLATION.md`, "Windows (MSVC)"). The
   history of earlier counts is in `CHANGELOG.md`.
 - **protoCore:** 0.6.0 requires 2.11.0 or later (instance-variable
@@ -47,9 +47,11 @@ stable id and file it in the right bucket.
   that a collection's pause no longer grows with the number of threads);
   precedence and
   details in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md) K5.
-- **Last verified:** 2026-10-11, by the test suite above (release 0.6.1;
-  the `.deb` of each of 0.6.0 and 0.6.1 was installed in a clean Ubuntu
-  24.04 container and passed the talk demos). The 0.5.0 release (input and output, see
+- **Last verified:** 2026-10-12, by the test suite above (release 0.6.2;
+  its `.deb` was built in a clean Ubuntu 24.04 container with GCC 13, where
+  the suite passed 1100/1100, and installed as an upgrade from 0.6.1 in
+  another, where it passed the talk demos 20/20; the same was done for 0.6.0
+  and 0.6.1). The 0.5.0 release (input and output, see
   [`docs/superpowers/specs/2026-09-29-io-design.md`](superpowers/specs/2026-09-29-io-design.md))
   was verified on 2026-09-29. The 0.4.0 audit before it (see
   [`docs/superpowers/specs/2026-09-28-presentable-protost-design.md`](superpowers/specs/2026-09-28-presentable-protost-design.md)

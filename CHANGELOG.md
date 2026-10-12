@@ -52,7 +52,9 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 - `benchmarks/compare_builds.py` also records user and system CPU time.
 - The talk demos run under the default policy (`run_demo.sh` no longer sets
   a 20M-cell limit); the decks state the current test count.
-- Test suite: 1100 cases on Linux, all passing.
+- Test suite: 1100 cases on Linux, all passing; CI green on Linux (also
+  against protoCore 2.11.0), macOS and Windows (CI 38259886339,
+  cross-platform 38259890608).
 
 ## 0.6.1 — a recursion's garbage is reclaimed (2026-10-11)
 
