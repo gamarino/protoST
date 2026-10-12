@@ -1,0 +1,19 @@
+protoST benchmarks -- 2026-10-12 18:41
+  host AMD Ryzen 5 5500U with Radeon Graphics (12 logical CPUs), load 4.33
+  protoST 0.6.4 @ 8e59b08; Python 3.14.0; protopy not found
+  1 warmup + 7 timed runs, median reported
+
+  WARNING: the machine is not idle (1-minute load > 1.0)
+
+  startup: protoST 26.4 ms, CPython 31.9 ms
+  int_sum_loop       protoST     52.2 ms   CPython     39.1 ms
+  fib                protoST    396.2 ms   CPython     44.5 ms
+  list_append        protoST     53.2 ms   CPython     33.2 ms
+  str_concat         protoST     29.9 ms   CPython     32.5 ms
+  attr_lookup        protoST    185.0 ms   CPython     45.3 ms
+  range_iterate      protoST     82.6 ms   CPython     36.8 ms
+  exception_latency  protoST   1100.1 ms   CPython     51.5 ms
+
+Report written: benchmarks/reports/data/2026-10-12-2146/results/cpython-2.14.6.md
+
+All runs verified.

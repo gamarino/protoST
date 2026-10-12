@@ -40,7 +40,7 @@ and output. Release **0.4.0**
 below, with 1041 `ctest` cases passing at commit `d3f7235`. Between 0.5.0 and
 0.6.0 protoST gained the Windows (MSVC) port and instance-variable write groups
 (protoCore 2.11.0 floor); on 2026-10-11 it registers 1093 `ctest` cases on
-Linux, all passing against protoCore 2.14.5 (`docs/STATUS.md`).
+Linux, all passing against protoCore 2.14.6 (`docs/STATUS.md`).
 
 | Area | Status |
 |------|--------|

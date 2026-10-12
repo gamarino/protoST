@@ -1,0 +1,5186 @@
+{
+ "date": "2026-10-12T18:29:49",
+ "host": "DEV12",
+ "kernel": "7.0.0-38-generic",
+ "runs": 7,
+ "warmup": 1,
+ "builds": [
+  {
+   "label": "2145a",
+   "path": "/usr/bin/protost",
+   "version": "protoST 0.6.4",
+   "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+   "libdir": "/home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145"
+  },
+  {
+   "label": "2146a",
+   "path": "/usr/bin/protost",
+   "version": "protoST 0.6.4",
+   "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+   "libdir": "/home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146"
+  },
+  {
+   "label": "2145b",
+   "path": "/usr/bin/protost",
+   "version": "protoST 0.6.4",
+   "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+   "libdir": "/home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145"
+  },
+  {
+   "label": "2146b",
+   "path": "/usr/bin/protost",
+   "version": "protoST 0.6.4",
+   "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+   "libdir": "/home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146"
+  }
+ ],
+ "workloads": [
+  {
+   "name": "startup",
+   "env": {},
+   "expected": 42,
+   "samples": {
+    "2145a": [
+     {
+      "ms": 23.34,
+      "rss_kb": 26972,
+      "user_ms": 11.21,
+      "sys_ms": 14.26,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 25.81,
+      "rss_kb": 26872,
+      "user_ms": 13.96,
+      "sys_ms": 13.96,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 25.06,
+      "rss_kb": 26920,
+      "user_ms": 13.37,
+      "sys_ms": 14.48,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 26.6,
+      "rss_kb": 26820,
+      "user_ms": 15.97,
+      "sys_ms": 12.97,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 54.6,
+      "rss_kb": 26804,
+      "user_ms": 31.36,
+      "sys_ms": 26.13,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 24.7,
+      "rss_kb": 26980,
+      "user_ms": 10.0,
+      "sys_ms": 16.99,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 24.92,
+      "rss_kb": 27028,
+      "user_ms": 10.95,
+      "sys_ms": 16.42,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146a": [
+     {
+      "ms": 27.28,
+      "rss_kb": 26724,
+      "user_ms": 13.84,
+      "sys_ms": 15.97,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 25.11,
+      "rss_kb": 26640,
+      "user_ms": 11.6,
+      "sys_ms": 15.81,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 26.06,
+      "rss_kb": 26804,
+      "user_ms": 16.37,
+      "sys_ms": 12.28,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 24.65,
+      "rss_kb": 26872,
+      "user_ms": 15.04,
+      "sys_ms": 12.38,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 38.61,
+      "rss_kb": 26956,
+      "user_ms": 29.18,
+      "sys_ms": 12.51,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 23.14,
+      "rss_kb": 26896,
+      "user_ms": 10.43,
+      "sys_ms": 15.65,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 25.52,
+      "rss_kb": 27012,
+      "user_ms": 13.96,
+      "sys_ms": 13.96,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2145b": [
+     {
+      "ms": 25.22,
+      "rss_kb": 26808,
+      "user_ms": 15.92,
+      "sys_ms": 11.67,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 25.03,
+      "rss_kb": 26696,
+      "user_ms": 11.82,
+      "sys_ms": 16.12,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 39.19,
+      "rss_kb": 27032,
+      "user_ms": 15.77,
+      "sys_ms": 25.24,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 45.82,
+      "rss_kb": 26956,
+      "user_ms": 15.95,
+      "sys_ms": 28.71,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 23.73,
+      "rss_kb": 26872,
+      "user_ms": 11.38,
+      "sys_ms": 14.48,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 23.82,
+      "rss_kb": 26848,
+      "user_ms": 12.7,
+      "sys_ms": 13.76,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 24.98,
+      "rss_kb": 26896,
+      "user_ms": 12.54,
+      "sys_ms": 14.63,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146b": [
+     {
+      "ms": 24.63,
+      "rss_kb": 26748,
+      "user_ms": 13.58,
+      "sys_ms": 13.58,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 23.49,
+      "rss_kb": 26596,
+      "user_ms": 8.68,
+      "sys_ms": 17.36,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 41.32,
+      "rss_kb": 26900,
+      "user_ms": 26.53,
+      "sys_ms": 16.98,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 41.51,
+      "rss_kb": 26820,
+      "user_ms": 16.74,
+      "sys_ms": 26.16,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 24.31,
+      "rss_kb": 26708,
+      "user_ms": 12.07,
+      "sys_ms": 14.08,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 24.22,
+      "rss_kb": 26980,
+      "user_ms": 14.66,
+      "sys_ms": 11.52,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 23.84,
+      "rss_kb": 26644,
+      "user_ms": 13.13,
+      "sys_ms": 14.23,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "2145a": 25.06,
+    "2146a": 25.52,
+    "2145b": 25.03,
+    "2146b": 24.31
+   },
+   "median_rss_kb": {
+    "2145a": 26920,
+    "2146a": 26872,
+    "2145b": 26872,
+    "2146b": 26748
+   },
+   "median_cpu_ms": {
+    "2145a": 27.85,
+    "2146a": 27.92,
+    "2145b": 27.59,
+    "2146b": 27.16
+   }
+  },
+  {
+   "name": "int_sum_loop",
+   "env": {},
+   "expected": 4999950000,
+   "samples": {
+    "2145a": [
+     {
+      "ms": 43.82,
+      "rss_kb": 26852,
+      "user_ms": 32.17,
+      "sys_ms": 14.53,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 62.12,
+      "rss_kb": 27088,
+      "user_ms": 40.97,
+      "sys_ms": 17.99,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 62.61,
+      "rss_kb": 26868,
+      "user_ms": 44.21,
+      "sys_ms": 20.1,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 46.39,
+      "rss_kb": 26772,
+      "user_ms": 33.76,
+      "sys_ms": 15.34,
+      "load": 2.76,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 46.3,
+      "rss_kb": 26868,
+      "user_ms": 29.3,
+      "sys_ms": 19.19,
+      "load": 2.76,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 61.78,
+      "rss_kb": 26996,
+      "user_ms": 45.25,
+      "sys_ms": 19.99,
+      "load": 2.76,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 78.51,
+      "rss_kb": 26964,
+      "user_ms": 48.63,
+      "sys_ms": 32.42,
+      "load": 2.76,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146a": [
+     {
+      "ms": 45.64,
+      "rss_kb": 27112,
+      "user_ms": 29.31,
+      "sys_ms": 19.23,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 44.56,
+      "rss_kb": 26768,
+      "user_ms": 36.74,
+      "sys_ms": 10.5,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 44.1,
+      "rss_kb": 26852,
+      "user_ms": 30.17,
+      "sys_ms": 15.61,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 46.82,
+      "rss_kb": 27112,
+      "user_ms": 34.49,
+      "sys_ms": 15.22,
+      "load": 2.76,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 60.73,
+      "rss_kb": 27140,
+      "user_ms": 39.76,
+      "sys_ms": 23.12,
+      "load": 2.76,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 42.55,
+      "rss_kb": 26648,
+      "user_ms": 33.82,
+      "sys_ms": 11.63,
+      "load": 2.76,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 57.32,
+      "rss_kb": 26676,
+      "user_ms": 34.6,
+      "sys_ms": 25.16,
+      "load": 2.76,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2145b": [
+     {
+      "ms": 44.62,
+      "rss_kb": 26836,
+      "user_ms": 32.93,
+      "sys_ms": 13.38,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 47.3,
+      "rss_kb": 26796,
+      "user_ms": 31.75,
+      "sys_ms": 18.43,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 42.39,
+      "rss_kb": 26880,
+      "user_ms": 28.17,
+      "sys_ms": 16.1,
+      "load": 2.76,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 59.57,
+      "rss_kb": 26792,
+      "user_ms": 43.97,
+      "sys_ms": 17.38,
+      "load": 2.76,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 48.08,
+      "rss_kb": 26816,
+      "user_ms": 32.7,
+      "sys_ms": 17.26,
+      "load": 2.76,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 63.81,
+      "rss_kb": 26896,
+      "user_ms": 46.78,
+      "sys_ms": 17.29,
+      "load": 2.76,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 77.36,
+      "rss_kb": 26876,
+      "user_ms": 52.02,
+      "sys_ms": 27.48,
+      "load": 2.76,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146b": [
+     {
+      "ms": 42.88,
+      "rss_kb": 27000,
+      "user_ms": 33.59,
+      "sys_ms": 11.55,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 80.39,
+      "rss_kb": 26788,
+      "user_ms": 63.02,
+      "sys_ms": 22.65,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 57.88,
+      "rss_kb": 26976,
+      "user_ms": 35.81,
+      "sys_ms": 24.22,
+      "load": 2.83,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 75.6,
+      "rss_kb": 27004,
+      "user_ms": 49.62,
+      "sys_ms": 28.08,
+      "load": 2.76,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 60.22,
+      "rss_kb": 26560,
+      "user_ms": 43.63,
+      "sys_ms": 19.73,
+      "load": 2.76,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 61.68,
+      "rss_kb": 27000,
+      "user_ms": 35.19,
+      "sys_ms": 29.49,
+      "load": 2.76,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 49.26,
+      "rss_kb": 26772,
+      "user_ms": 33.1,
+      "sys_ms": 18.39,
+      "load": 2.76,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "2145a": 61.78,
+    "2146a": 45.64,
+    "2145b": 48.08,
+    "2146b": 60.22
+   },
+   "median_rss_kb": {
+    "2145a": 26868,
+    "2146a": 26852,
+    "2145b": 26836,
+    "2146b": 26976
+   },
+   "median_cpu_ms": {
+    "2145a": 58.959999999999994,
+    "2146a": 48.54,
+    "2145b": 50.18,
+    "2146b": 63.36
+   }
+  },
+  {
+   "name": "fib",
+   "env": {},
+   "expected": 75025,
+   "samples": {
+    "2145a": [
+     {
+      "ms": 383.54,
+      "rss_kb": 151336,
+      "user_ms": 427.42,
+      "sys_ms": 88.29,
+      "load": 3.26,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 440.25,
+      "rss_kb": 151888,
+      "user_ms": 482.29,
+      "sys_ms": 99.65,
+      "load": 3.26,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 457.78,
+      "rss_kb": 151644,
+      "user_ms": 471.32,
+      "sys_ms": 115.82,
+      "load": 3.26,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 386.65,
+      "rss_kb": 151596,
+      "user_ms": 435.42,
+      "sys_ms": 97.32,
+      "load": 3.26,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 377.14,
+      "rss_kb": 151700,
+      "user_ms": 417.21,
+      "sys_ms": 98.05,
+      "load": 3.24,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 508.58,
+      "rss_kb": 151580,
+      "user_ms": 574.14,
+      "sys_ms": 93.18,
+      "load": 3.24,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 393.14,
+      "rss_kb": 151436,
+      "user_ms": 417.74,
+      "sys_ms": 109.46,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146a": [
+     {
+      "ms": 371.16,
+      "rss_kb": 150740,
+      "user_ms": 412.43,
+      "sys_ms": 93.32,
+      "load": 2.76,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 416.03,
+      "rss_kb": 150432,
+      "user_ms": 453.29,
+      "sys_ms": 107.59,
+      "load": 3.26,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 386.46,
+      "rss_kb": 150652,
+      "user_ms": 420.16,
+      "sys_ms": 101.77,
+      "load": 3.26,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 391.45,
+      "rss_kb": 150676,
+      "user_ms": 432.94,
+      "sys_ms": 91.99,
+      "load": 3.26,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 413.28,
+      "rss_kb": 150728,
+      "user_ms": 454.18,
+      "sys_ms": 99.82,
+      "load": 3.24,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 380.82,
+      "rss_kb": 150524,
+      "user_ms": 433.29,
+      "sys_ms": 87.65,
+      "load": 3.24,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 391.38,
+      "rss_kb": 150588,
+      "user_ms": 430.84,
+      "sys_ms": 91.97,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2145b": [
+     {
+      "ms": 433.31,
+      "rss_kb": 152160,
+      "user_ms": 468.59,
+      "sys_ms": 107.36,
+      "load": 2.76,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 379.26,
+      "rss_kb": 151504,
+      "user_ms": 409.89,
+      "sys_ms": 97.21,
+      "load": 3.26,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 399.05,
+      "rss_kb": 151536,
+      "user_ms": 440.17,
+      "sys_ms": 106.28,
+      "load": 3.26,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 412.32,
+      "rss_kb": 151632,
+      "user_ms": 430.73,
+      "sys_ms": 110.42,
+      "load": 3.24,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 464.84,
+      "rss_kb": 153164,
+      "user_ms": 487.22,
+      "sys_ms": 107.39,
+      "load": 3.24,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 382.08,
+      "rss_kb": 151536,
+      "user_ms": 418.01,
+      "sys_ms": 100.76,
+      "load": 3.24,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 381.67,
+      "rss_kb": 151476,
+      "user_ms": 423.01,
+      "sys_ms": 94.55,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146b": [
+     {
+      "ms": 470.96,
+      "rss_kb": 150572,
+      "user_ms": 504.39,
+      "sys_ms": 113.19,
+      "load": 2.76,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 443.16,
+      "rss_kb": 150856,
+      "user_ms": 498.5,
+      "sys_ms": 88.44,
+      "load": 3.26,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 421.98,
+      "rss_kb": 150688,
+      "user_ms": 484.29,
+      "sys_ms": 104.84,
+      "load": 3.26,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 434.3,
+      "rss_kb": 150804,
+      "user_ms": 453.06,
+      "sys_ms": 108.01,
+      "load": 3.24,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 382.74,
+      "rss_kb": 150592,
+      "user_ms": 427.59,
+      "sys_ms": 92.13,
+      "load": 3.24,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 456.07,
+      "rss_kb": 150628,
+      "user_ms": 537.2,
+      "sys_ms": 107.04,
+      "load": 3.24,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 395.47,
+      "rss_kb": 150744,
+      "user_ms": 480.27,
+      "sys_ms": 91.86,
+      "load": 3.24,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "2145a": 393.14,
+    "2146a": 391.38,
+    "2145b": 399.05,
+    "2146b": 434.3
+   },
+   "median_rss_kb": {
+    "2145a": 151596,
+    "2146a": 150652,
+    "2145b": 151536,
+    "2146b": 150688
+   },
+   "median_cpu_ms": {
+    "2145a": 532.74,
+    "2146a": 522.81,
+    "2145b": 541.15,
+    "2146b": 586.94
+   }
+  },
+  {
+   "name": "list_append",
+   "env": {},
+   "expected": 10000,
+   "samples": {
+    "2145a": [
+     {
+      "ms": 67.63,
+      "rss_kb": 59368,
+      "user_ms": 40.94,
+      "sys_ms": 56.91,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 52.78,
+      "rss_kb": 59660,
+      "user_ms": 44.29,
+      "sys_ms": 40.35,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 45.11,
+      "rss_kb": 59712,
+      "user_ms": 40.07,
+      "sys_ms": 34.79,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 65.06,
+      "rss_kb": 59744,
+      "user_ms": 34.86,
+      "sys_ms": 60.75,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 54.22,
+      "rss_kb": 59568,
+      "user_ms": 33.08,
+      "sys_ms": 51.05,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 42.23,
+      "rss_kb": 59596,
+      "user_ms": 38.2,
+      "sys_ms": 36.19,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 44.45,
+      "rss_kb": 59412,
+      "user_ms": 35.67,
+      "sys_ms": 37.65,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146a": [
+     {
+      "ms": 64.34,
+      "rss_kb": 59428,
+      "user_ms": 36.54,
+      "sys_ms": 53.34,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 65.91,
+      "rss_kb": 59368,
+      "user_ms": 47.54,
+      "sys_ms": 48.53,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 63.04,
+      "rss_kb": 59648,
+      "user_ms": 38.01,
+      "sys_ms": 79.92,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 57.74,
+      "rss_kb": 59704,
+      "user_ms": 44.03,
+      "sys_ms": 45.9,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 50.17,
+      "rss_kb": 59508,
+      "user_ms": 30.81,
+      "sys_ms": 40.74,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 49.02,
+      "rss_kb": 59596,
+      "user_ms": 34.18,
+      "sys_ms": 48.26,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 49.97,
+      "rss_kb": 59548,
+      "user_ms": 36.55,
+      "sys_ms": 47.72,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2145b": [
+     {
+      "ms": 54.24,
+      "rss_kb": 59492,
+      "user_ms": 36.64,
+      "sys_ms": 90.13,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 47.81,
+      "rss_kb": 59752,
+      "user_ms": 32.26,
+      "sys_ms": 42.03,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 45.05,
+      "rss_kb": 59644,
+      "user_ms": 39.06,
+      "sys_ms": 39.06,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 44.32,
+      "rss_kb": 59448,
+      "user_ms": 33.3,
+      "sys_ms": 41.62,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 63.01,
+      "rss_kb": 59612,
+      "user_ms": 44.62,
+      "sys_ms": 54.77,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 58.15,
+      "rss_kb": 59756,
+      "user_ms": 39.98,
+      "sys_ms": 42.09,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 54.63,
+      "rss_kb": 59332,
+      "user_ms": 39.81,
+      "sys_ms": 39.81,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146b": [
+     {
+      "ms": 44.61,
+      "rss_kb": 59688,
+      "user_ms": 37.23,
+      "sys_ms": 36.2,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 51.91,
+      "rss_kb": 59472,
+      "user_ms": 34.64,
+      "sys_ms": 47.51,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 42.98,
+      "rss_kb": 59504,
+      "user_ms": 32.18,
+      "sys_ms": 46.26,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 43.3,
+      "rss_kb": 59428,
+      "user_ms": 33.64,
+      "sys_ms": 43.84,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 64.67,
+      "rss_kb": 59316,
+      "user_ms": 40.36,
+      "sys_ms": 56.5,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 42.24,
+      "rss_kb": 59664,
+      "user_ms": 36.76,
+      "sys_ms": 37.81,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 51.34,
+      "rss_kb": 59332,
+      "user_ms": 37.29,
+      "sys_ms": 44.35,
+      "load": 3.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "2145a": 52.78,
+    "2146a": 57.74,
+    "2145b": 54.24,
+    "2146b": 44.61
+   },
+   "median_rss_kb": {
+    "2145a": 59596,
+    "2146a": 59548,
+    "2145b": 59612,
+    "2146b": 59472
+   },
+   "median_cpu_ms": {
+    "2145a": 84.13,
+    "2146a": 89.88,
+    "2145b": 79.62,
+    "2146b": 78.44
+   }
+  },
+  {
+   "name": "str_concat",
+   "env": {},
+   "expected": 2000,
+   "samples": {
+    "2145a": [
+     {
+      "ms": 28.49,
+      "rss_kb": 27080,
+      "user_ms": 24.25,
+      "sys_ms": 7.38,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 29.91,
+      "rss_kb": 26864,
+      "user_ms": 17.38,
+      "sys_ms": 15.55,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 30.26,
+      "rss_kb": 26832,
+      "user_ms": 17.55,
+      "sys_ms": 14.04,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 29.83,
+      "rss_kb": 26872,
+      "user_ms": 15.34,
+      "sys_ms": 18.04,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 30.07,
+      "rss_kb": 27024,
+      "user_ms": 19.31,
+      "sys_ms": 13.94,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 46.19,
+      "rss_kb": 26884,
+      "user_ms": 23.66,
+      "sys_ms": 25.48,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 29.33,
+      "rss_kb": 26936,
+      "user_ms": 16.4,
+      "sys_ms": 14.35,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146a": [
+     {
+      "ms": 28.79,
+      "rss_kb": 26916,
+      "user_ms": 14.27,
+      "sys_ms": 17.56,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 27.22,
+      "rss_kb": 26928,
+      "user_ms": 14.67,
+      "sys_ms": 15.71,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 29.24,
+      "rss_kb": 26620,
+      "user_ms": 16.02,
+      "sys_ms": 15.02,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 28.86,
+      "rss_kb": 26848,
+      "user_ms": 17.35,
+      "sys_ms": 13.88,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 43.09,
+      "rss_kb": 26908,
+      "user_ms": 18.54,
+      "sys_ms": 26.78,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 30.2,
+      "rss_kb": 26848,
+      "user_ms": 19.63,
+      "sys_ms": 11.45,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 31.4,
+      "rss_kb": 26820,
+      "user_ms": 21.05,
+      "sys_ms": 12.63,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2145b": [
+     {
+      "ms": 40.69,
+      "rss_kb": 26980,
+      "user_ms": 17.09,
+      "sys_ms": 25.63,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 29.4,
+      "rss_kb": 26880,
+      "user_ms": 16.75,
+      "sys_ms": 14.98,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 43.94,
+      "rss_kb": 26688,
+      "user_ms": 15.76,
+      "sys_ms": 29.55,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 28.04,
+      "rss_kb": 26824,
+      "user_ms": 16.27,
+      "sys_ms": 14.24,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 46.07,
+      "rss_kb": 26692,
+      "user_ms": 29.75,
+      "sys_ms": 19.12,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 27.1,
+      "rss_kb": 26844,
+      "user_ms": 15.8,
+      "sys_ms": 14.74,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 46.02,
+      "rss_kb": 26852,
+      "user_ms": 35.36,
+      "sys_ms": 12.12,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146b": [
+     {
+      "ms": 27.73,
+      "rss_kb": 26880,
+      "user_ms": 21.96,
+      "sys_ms": 8.45,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 28.68,
+      "rss_kb": 26944,
+      "user_ms": 15.81,
+      "sys_ms": 14.75,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 27.65,
+      "rss_kb": 26756,
+      "user_ms": 14.81,
+      "sys_ms": 15.86,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 27.15,
+      "rss_kb": 26776,
+      "user_ms": 16.79,
+      "sys_ms": 13.64,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 27.88,
+      "rss_kb": 26872,
+      "user_ms": 14.53,
+      "sys_ms": 14.53,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 28.28,
+      "rss_kb": 26860,
+      "user_ms": 19.47,
+      "sys_ms": 11.46,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 29.01,
+      "rss_kb": 26848,
+      "user_ms": 18.4,
+      "sys_ms": 13.15,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "2145a": 29.91,
+    "2146a": 29.24,
+    "2145b": 40.69,
+    "2146b": 27.88
+   },
+   "median_rss_kb": {
+    "2145a": 26884,
+    "2146a": 26848,
+    "2145b": 26844,
+    "2146b": 26860
+   },
+   "median_cpu_ms": {
+    "2145a": 32.93,
+    "2146a": 31.230000000000004,
+    "2145b": 42.72,
+    "2146b": 30.560000000000002
+   }
+  },
+  {
+   "name": "attr_lookup",
+   "env": {},
+   "expected": 600000,
+   "samples": {
+    "2145a": [
+     {
+      "ms": 182.69,
+      "rss_kb": 141572,
+      "user_ms": 112.33,
+      "sys_ms": 97.42,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 182.16,
+      "rss_kb": 141936,
+      "user_ms": 119.93,
+      "sys_ms": 97.76,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 223.97,
+      "rss_kb": 141808,
+      "user_ms": 156.6,
+      "sys_ms": 94.36,
+      "load": 3.04,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 179.26,
+      "rss_kb": 142124,
+      "user_ms": 113.17,
+      "sys_ms": 99.39,
+      "load": 3.04,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 254.56,
+      "rss_kb": 141848,
+      "user_ms": 180.36,
+      "sys_ms": 97.74,
+      "load": 3.04,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 171.15,
+      "rss_kb": 141832,
+      "user_ms": 113.08,
+      "sys_ms": 91.88,
+      "load": 3.04,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 170.29,
+      "rss_kb": 142080,
+      "user_ms": 114.1,
+      "sys_ms": 89.65,
+      "load": 3.04,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146a": [
+     {
+      "ms": 170.15,
+      "rss_kb": 141736,
+      "user_ms": 110.47,
+      "sys_ms": 95.54,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 220.63,
+      "rss_kb": 141476,
+      "user_ms": 148.97,
+      "sys_ms": 101.66,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 189.99,
+      "rss_kb": 141580,
+      "user_ms": 115.51,
+      "sys_ms": 104.36,
+      "load": 3.04,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 215.34,
+      "rss_kb": 141824,
+      "user_ms": 130.43,
+      "sys_ms": 109.36,
+      "load": 3.04,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 212.52,
+      "rss_kb": 141840,
+      "user_ms": 118.52,
+      "sys_ms": 117.51,
+      "load": 3.04,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 184.52,
+      "rss_kb": 141668,
+      "user_ms": 124.75,
+      "sys_ms": 87.52,
+      "load": 3.04,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 175.4,
+      "rss_kb": 141776,
+      "user_ms": 109.61,
+      "sys_ms": 100.73,
+      "load": 3.04,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2145b": [
+     {
+      "ms": 192.73,
+      "rss_kb": 141956,
+      "user_ms": 123.0,
+      "sys_ms": 101.17,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 182.88,
+      "rss_kb": 141880,
+      "user_ms": 109.81,
+      "sys_ms": 94.7,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 209.22,
+      "rss_kb": 141688,
+      "user_ms": 131.13,
+      "sys_ms": 103.31,
+      "load": 3.04,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 210.72,
+      "rss_kb": 141692,
+      "user_ms": 132.75,
+      "sys_ms": 105.6,
+      "load": 3.04,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 204.39,
+      "rss_kb": 142304,
+      "user_ms": 124.07,
+      "sys_ms": 107.06,
+      "load": 3.04,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 177.16,
+      "rss_kb": 141748,
+      "user_ms": 121.38,
+      "sys_ms": 91.77,
+      "load": 3.04,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 166.4,
+      "rss_kb": 142012,
+      "user_ms": 102.72,
+      "sys_ms": 93.83,
+      "load": 3.04,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146b": [
+     {
+      "ms": 186.37,
+      "rss_kb": 141784,
+      "user_ms": 119.27,
+      "sys_ms": 103.23,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 175.84,
+      "rss_kb": 141788,
+      "user_ms": 116.32,
+      "sys_ms": 95.92,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 189.08,
+      "rss_kb": 141392,
+      "user_ms": 130.79,
+      "sys_ms": 89.22,
+      "load": 3.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 214.0,
+      "rss_kb": 141720,
+      "user_ms": 134.28,
+      "sys_ms": 112.91,
+      "load": 3.04,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 203.24,
+      "rss_kb": 141656,
+      "user_ms": 132.49,
+      "sys_ms": 101.92,
+      "load": 3.04,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 179.98,
+      "rss_kb": 141372,
+      "user_ms": 120.8,
+      "sys_ms": 93.39,
+      "load": 3.04,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 172.01,
+      "rss_kb": 141924,
+      "user_ms": 113.68,
+      "sys_ms": 94.73,
+      "load": 3.04,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "2145a": 182.16,
+    "2146a": 189.99,
+    "2145b": 192.73,
+    "2146b": 186.37
+   },
+   "median_rss_kb": {
+    "2145a": 141848,
+    "2146a": 141736,
+    "2145b": 141880,
+    "2146b": 141720
+   },
+   "median_cpu_ms": {
+    "2145a": 212.56,
+    "2146a": 219.87,
+    "2145b": 224.17000000000002,
+    "2146b": 220.01
+   }
+  },
+  {
+   "name": "range_iterate",
+   "env": {},
+   "expected": 100000,
+   "samples": {
+    "2145a": [
+     {
+      "ms": 75.2,
+      "rss_kb": 80080,
+      "user_ms": 50.58,
+      "sys_ms": 55.74,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 75.7,
+      "rss_kb": 80148,
+      "user_ms": 47.02,
+      "sys_ms": 63.03,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 80.76,
+      "rss_kb": 80124,
+      "user_ms": 53.77,
+      "sys_ms": 59.74,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 81.66,
+      "rss_kb": 79760,
+      "user_ms": 60.24,
+      "sys_ms": 59.21,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 81.53,
+      "rss_kb": 79852,
+      "user_ms": 50.9,
+      "sys_ms": 54.89,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 82.62,
+      "rss_kb": 80248,
+      "user_ms": 63.03,
+      "sys_ms": 54.03,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 75.95,
+      "rss_kb": 80316,
+      "user_ms": 56.84,
+      "sys_ms": 52.92,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146a": [
+     {
+      "ms": 76.54,
+      "rss_kb": 80100,
+      "user_ms": 50.83,
+      "sys_ms": 61.21,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 87.36,
+      "rss_kb": 79752,
+      "user_ms": 54.38,
+      "sys_ms": 60.42,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 95.6,
+      "rss_kb": 80056,
+      "user_ms": 62.98,
+      "sys_ms": 61.96,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 80.86,
+      "rss_kb": 79888,
+      "user_ms": 50.66,
+      "sys_ms": 55.72,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 77.21,
+      "rss_kb": 80032,
+      "user_ms": 52.08,
+      "sys_ms": 60.09,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 76.33,
+      "rss_kb": 80104,
+      "user_ms": 54.6,
+      "sys_ms": 55.65,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 74.75,
+      "rss_kb": 79808,
+      "user_ms": 48.71,
+      "sys_ms": 57.66,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2145b": [
+     {
+      "ms": 82.42,
+      "rss_kb": 80152,
+      "user_ms": 57.42,
+      "sys_ms": 57.42,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 79.27,
+      "rss_kb": 79828,
+      "user_ms": 51.59,
+      "sys_ms": 59.52,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 93.08,
+      "rss_kb": 79672,
+      "user_ms": 61.39,
+      "sys_ms": 54.23,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 79.97,
+      "rss_kb": 79768,
+      "user_ms": 51.57,
+      "sys_ms": 50.54,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 76.67,
+      "rss_kb": 80132,
+      "user_ms": 54.66,
+      "sys_ms": 54.66,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 77.16,
+      "rss_kb": 80316,
+      "user_ms": 49.62,
+      "sys_ms": 59.54,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 81.33,
+      "rss_kb": 79772,
+      "user_ms": 50.15,
+      "sys_ms": 59.0,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146b": [
+     {
+      "ms": 77.57,
+      "rss_kb": 80328,
+      "user_ms": 47.55,
+      "sys_ms": 63.06,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 79.92,
+      "rss_kb": 80104,
+      "user_ms": 49.36,
+      "sys_ms": 63.18,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 93.33,
+      "rss_kb": 79920,
+      "user_ms": 52.71,
+      "sys_ms": 61.83,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 95.62,
+      "rss_kb": 80064,
+      "user_ms": 55.08,
+      "sys_ms": 63.24,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 86.22,
+      "rss_kb": 79508,
+      "user_ms": 47.64,
+      "sys_ms": 65.51,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 78.11,
+      "rss_kb": 79956,
+      "user_ms": 49.37,
+      "sys_ms": 58.86,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 77.63,
+      "rss_kb": 80224,
+      "user_ms": 47.71,
+      "sys_ms": 56.65,
+      "load": 2.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "2145a": 80.76,
+    "2146a": 77.21,
+    "2145b": 79.97,
+    "2146b": 79.92
+   },
+   "median_rss_kb": {
+    "2145a": 80124,
+    "2146a": 80032,
+    "2145b": 79828,
+    "2146b": 80064
+   },
+   "median_cpu_ms": {
+    "2145a": 110.05000000000001,
+    "2146a": 112.03999999999999,
+    "2145b": 109.32,
+    "2146b": 112.53999999999999
+   }
+  },
+  {
+   "name": "exception_latency",
+   "env": {},
+   "expected": 50000,
+   "samples": {
+    "2145a": [
+     {
+      "ms": 1026.36,
+      "rss_kb": 152832,
+      "user_ms": 1149.93,
+      "sys_ms": 97.91,
+      "load": 2.73,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1005.99,
+      "rss_kb": 153080,
+      "user_ms": 1117.83,
+      "sys_ms": 104.26,
+      "load": 2.73,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1235.26,
+      "rss_kb": 152896,
+      "user_ms": 1394.1,
+      "sys_ms": 105.23,
+      "load": 2.75,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1085.01,
+      "rss_kb": 152760,
+      "user_ms": 1209.46,
+      "sys_ms": 106.69,
+      "load": 2.77,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1082.83,
+      "rss_kb": 152928,
+      "user_ms": 1225.51,
+      "sys_ms": 100.71,
+      "load": 2.87,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1121.13,
+      "rss_kb": 152892,
+      "user_ms": 1254.24,
+      "sys_ms": 103.85,
+      "load": 3.04,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1162.11,
+      "rss_kb": 153040,
+      "user_ms": 1306.52,
+      "sys_ms": 104.88,
+      "load": 3.28,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146a": [
+     {
+      "ms": 966.43,
+      "rss_kb": 149172,
+      "user_ms": 1091.98,
+      "sys_ms": 96.91,
+      "load": 2.8,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1053.0,
+      "rss_kb": 148968,
+      "user_ms": 1215.46,
+      "sys_ms": 100.12,
+      "load": 2.75,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1068.03,
+      "rss_kb": 149124,
+      "user_ms": 1178.23,
+      "sys_ms": 111.12,
+      "load": 2.75,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 997.79,
+      "rss_kb": 149100,
+      "user_ms": 1130.68,
+      "sys_ms": 89.81,
+      "load": 2.77,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1020.3,
+      "rss_kb": 148980,
+      "user_ms": 1150.74,
+      "sys_ms": 98.63,
+      "load": 2.87,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 997.36,
+      "rss_kb": 149368,
+      "user_ms": 1127.13,
+      "sys_ms": 95.01,
+      "load": 3.04,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1006.67,
+      "rss_kb": 149160,
+      "user_ms": 1124.87,
+      "sys_ms": 102.9,
+      "load": 3.28,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2145b": [
+     {
+      "ms": 1045.1,
+      "rss_kb": 152788,
+      "user_ms": 1177.49,
+      "sys_ms": 99.29,
+      "load": 2.8,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1126.63,
+      "rss_kb": 152836,
+      "user_ms": 1253.61,
+      "sys_ms": 108.71,
+      "load": 2.73,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1152.71,
+      "rss_kb": 153072,
+      "user_ms": 1269.53,
+      "sys_ms": 115.41,
+      "load": 2.75,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1064.18,
+      "rss_kb": 152996,
+      "user_ms": 1181.42,
+      "sys_ms": 105.21,
+      "load": 2.77,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1060.4,
+      "rss_kb": 152844,
+      "user_ms": 1180.67,
+      "sys_ms": 105.15,
+      "load": 2.87,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1028.72,
+      "rss_kb": 152748,
+      "user_ms": 1147.1,
+      "sys_ms": 101.1,
+      "load": 2.87,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1094.82,
+      "rss_kb": 152816,
+      "user_ms": 1221.5,
+      "sys_ms": 107.22,
+      "load": 3.28,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146b": [
+     {
+      "ms": 993.9,
+      "rss_kb": 149204,
+      "user_ms": 1111.23,
+      "sys_ms": 100.75,
+      "load": 2.8,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1022.37,
+      "rss_kb": 149340,
+      "user_ms": 1163.99,
+      "sys_ms": 92.6,
+      "load": 2.73,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1005.99,
+      "rss_kb": 149128,
+      "user_ms": 1135.41,
+      "sys_ms": 92.11,
+      "load": 2.75,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1099.98,
+      "rss_kb": 149116,
+      "user_ms": 1236.87,
+      "sys_ms": 98.91,
+      "load": 2.77,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1005.01,
+      "rss_kb": 149020,
+      "user_ms": 1141.84,
+      "sys_ms": 91.67,
+      "load": 2.87,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1011.46,
+      "rss_kb": 148896,
+      "user_ms": 1136.03,
+      "sys_ms": 97.17,
+      "load": 3.04,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1063.28,
+      "rss_kb": 149252,
+      "user_ms": 1201.12,
+      "sys_ms": 97.76,
+      "load": 3.04,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "2145a": 1085.01,
+    "2146a": 1006.67,
+    "2145b": 1064.18,
+    "2146b": 1011.46
+   },
+   "median_rss_kb": {
+    "2145a": 152896,
+    "2146a": 149124,
+    "2145b": 152836,
+    "2146b": 149128
+   },
+   "median_cpu_ms": {
+    "2145a": 1326.22,
+    "2146a": 1227.77,
+    "2145b": 1286.63,
+    "2146b": 1233.51
+   }
+  },
+  {
+   "name": "parallel_speedup pool",
+   "env": {},
+   "expected": 135000900000,
+   "samples": {
+    "2145a": [
+     {
+      "ms": 305.72,
+      "rss_kb": 147336,
+      "user_ms": 1798.85,
+      "sys_ms": 193.37,
+      "load": 3.98,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 220.07,
+      "rss_kb": 164476,
+      "user_ms": 1067.66,
+      "sys_ms": 134.33,
+      "load": 3.98,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 259.06,
+      "rss_kb": 172056,
+      "user_ms": 1076.61,
+      "sys_ms": 154.09,
+      "load": 3.98,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 397.29,
+      "rss_kb": 151904,
+      "user_ms": 1841.98,
+      "sys_ms": 193.89,
+      "load": 3.98,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 249.4,
+      "rss_kb": 151444,
+      "user_ms": 1141.1,
+      "sys_ms": 122.33,
+      "load": 3.82,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 263.28,
+      "rss_kb": 168760,
+      "user_ms": 1149.72,
+      "sys_ms": 142.47,
+      "load": 3.82,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 257.61,
+      "rss_kb": 147412,
+      "user_ms": 1241.16,
+      "sys_ms": 128.91,
+      "load": 3.82,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146a": [
+     {
+      "ms": 206.65,
+      "rss_kb": 150248,
+      "user_ms": 1082.87,
+      "sys_ms": 120.76,
+      "load": 3.28,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 240.5,
+      "rss_kb": 145900,
+      "user_ms": 1167.13,
+      "sys_ms": 143.63,
+      "load": 3.98,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 261.42,
+      "rss_kb": 158512,
+      "user_ms": 1143.28,
+      "sys_ms": 143.03,
+      "load": 3.98,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 422.61,
+      "rss_kb": 195308,
+      "user_ms": 1200.57,
+      "sys_ms": 166.52,
+      "load": 3.98,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 230.01,
+      "rss_kb": 154340,
+      "user_ms": 1077.32,
+      "sys_ms": 141.39,
+      "load": 3.82,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 241.75,
+      "rss_kb": 162260,
+      "user_ms": 1122.97,
+      "sys_ms": 142.24,
+      "load": 3.82,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 234.42,
+      "rss_kb": 150144,
+      "user_ms": 1125.38,
+      "sys_ms": 129.78,
+      "load": 3.82,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2145b": [
+     {
+      "ms": 311.11,
+      "rss_kb": 151564,
+      "user_ms": 1788.84,
+      "sys_ms": 140.65,
+      "load": 3.98,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 267.94,
+      "rss_kb": 159572,
+      "user_ms": 1050.07,
+      "sys_ms": 147.34,
+      "load": 3.98,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 241.06,
+      "rss_kb": 168300,
+      "user_ms": 1144.77,
+      "sys_ms": 156.74,
+      "load": 3.98,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 240.73,
+      "rss_kb": 155808,
+      "user_ms": 1068.05,
+      "sys_ms": 124.19,
+      "load": 3.98,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 348.47,
+      "rss_kb": 176176,
+      "user_ms": 1741.63,
+      "sys_ms": 206.06,
+      "load": 3.82,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 404.69,
+      "rss_kb": 163744,
+      "user_ms": 1827.21,
+      "sys_ms": 214.2,
+      "load": 3.82,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 246.41,
+      "rss_kb": 159312,
+      "user_ms": 1268.39,
+      "sys_ms": 136.82,
+      "load": 3.82,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146b": [
+     {
+      "ms": 331.85,
+      "rss_kb": 158212,
+      "user_ms": 1663.4,
+      "sys_ms": 205.71,
+      "load": 3.98,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 219.88,
+      "rss_kb": 153996,
+      "user_ms": 1041.06,
+      "sys_ms": 119.78,
+      "load": 3.98,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 239.54,
+      "rss_kb": 170704,
+      "user_ms": 1140.36,
+      "sys_ms": 144.54,
+      "load": 3.98,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 321.94,
+      "rss_kb": 154284,
+      "user_ms": 1780.7,
+      "sys_ms": 186.97,
+      "load": 3.98,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 239.08,
+      "rss_kb": 150272,
+      "user_ms": 1124.02,
+      "sys_ms": 141.5,
+      "load": 3.82,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 266.95,
+      "rss_kb": 153916,
+      "user_ms": 1140.55,
+      "sys_ms": 125.41,
+      "load": 3.82,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 250.98,
+      "rss_kb": 158532,
+      "user_ms": 1118.38,
+      "sys_ms": 142.64,
+      "load": 3.82,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "2145a": 259.06,
+    "2146a": 240.5,
+    "2145b": 267.94,
+    "2146b": 250.98
+   },
+   "median_rss_kb": {
+    "2145a": 151904,
+    "2146a": 154340,
+    "2145b": 159572,
+    "2146b": 154284
+   },
+   "median_cpu_ms": {
+    "2145a": 1292.19,
+    "2146a": 1265.21,
+    "2145b": 1405.21,
+    "2146b": 1265.96
+   }
+  },
+  {
+   "name": "parallel_speedup w=1",
+   "env": {
+    "PROTOST_WORKERS": "1"
+   },
+   "expected": 135000900000,
+   "samples": {
+    "2145a": [
+     {
+      "ms": 685.9,
+      "rss_kb": 141484,
+      "user_ms": 696.75,
+      "sys_ms": 81.97,
+      "load": 3.67,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 768.07,
+      "rss_kb": 141508,
+      "user_ms": 758.6,
+      "sys_ms": 97.08,
+      "load": 3.7,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 676.28,
+      "rss_kb": 141728,
+      "user_ms": 670.67,
+      "sys_ms": 90.09,
+      "load": 3.7,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 676.04,
+      "rss_kb": 141700,
+      "user_ms": 667.07,
+      "sys_ms": 94.87,
+      "load": 3.64,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 735.06,
+      "rss_kb": 141560,
+      "user_ms": 731.88,
+      "sys_ms": 97.85,
+      "load": 3.67,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 660.81,
+      "rss_kb": 141644,
+      "user_ms": 652.73,
+      "sys_ms": 89.96,
+      "load": 3.67,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 653.21,
+      "rss_kb": 141500,
+      "user_ms": 654.24,
+      "sys_ms": 82.28,
+      "load": 3.54,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146a": [
+     {
+      "ms": 813.93,
+      "rss_kb": 141380,
+      "user_ms": 841.26,
+      "sys_ms": 98.03,
+      "load": 3.67,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 673.72,
+      "rss_kb": 141472,
+      "user_ms": 683.96,
+      "sys_ms": 91.99,
+      "load": 3.7,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 687.06,
+      "rss_kb": 141604,
+      "user_ms": 697.65,
+      "sys_ms": 94.95,
+      "load": 3.7,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 664.03,
+      "rss_kb": 141440,
+      "user_ms": 647.02,
+      "sys_ms": 119.19,
+      "load": 3.64,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 668.77,
+      "rss_kb": 141400,
+      "user_ms": 684.81,
+      "sys_ms": 85.22,
+      "load": 3.64,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 649.03,
+      "rss_kb": 141296,
+      "user_ms": 664.0,
+      "sys_ms": 89.13,
+      "load": 3.67,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 649.26,
+      "rss_kb": 141212,
+      "user_ms": 657.27,
+      "sys_ms": 91.76,
+      "load": 3.54,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2145b": [
+     {
+      "ms": 663.39,
+      "rss_kb": 141676,
+      "user_ms": 667.4,
+      "sys_ms": 83.17,
+      "load": 3.67,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 661.79,
+      "rss_kb": 141536,
+      "user_ms": 661.4,
+      "sys_ms": 90.64,
+      "load": 3.67,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 696.42,
+      "rss_kb": 141760,
+      "user_ms": 685.41,
+      "sys_ms": 86.55,
+      "load": 3.7,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 743.93,
+      "rss_kb": 141840,
+      "user_ms": 745.86,
+      "sys_ms": 91.74,
+      "load": 3.64,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 690.59,
+      "rss_kb": 141640,
+      "user_ms": 685.63,
+      "sys_ms": 88.82,
+      "load": 3.64,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 673.82,
+      "rss_kb": 141452,
+      "user_ms": 668.72,
+      "sys_ms": 94.68,
+      "load": 3.67,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 687.53,
+      "rss_kb": 141352,
+      "user_ms": 688.76,
+      "sys_ms": 82.85,
+      "load": 3.54,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146b": [
+     {
+      "ms": 670.84,
+      "rss_kb": 141376,
+      "user_ms": 691.72,
+      "sys_ms": 80.85,
+      "load": 3.67,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 667.14,
+      "rss_kb": 141296,
+      "user_ms": 686.47,
+      "sys_ms": 82.81,
+      "load": 3.7,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 682.92,
+      "rss_kb": 141488,
+      "user_ms": 696.42,
+      "sys_ms": 94.06,
+      "load": 3.7,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 741.02,
+      "rss_kb": 141496,
+      "user_ms": 747.84,
+      "sys_ms": 93.98,
+      "load": 3.64,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 660.73,
+      "rss_kb": 141512,
+      "user_ms": 675.52,
+      "sys_ms": 87.94,
+      "load": 3.67,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 664.71,
+      "rss_kb": 141244,
+      "user_ms": 676.76,
+      "sys_ms": 91.24,
+      "load": 3.67,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 673.46,
+      "rss_kb": 141516,
+      "user_ms": 687.88,
+      "sys_ms": 86.86,
+      "load": 3.67,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "2145a": 676.28,
+    "2146a": 668.77,
+    "2145b": 687.53,
+    "2146b": 670.84
+   },
+   "median_rss_kb": {
+    "2145a": 141560,
+    "2146a": 141400,
+    "2145b": 141640,
+    "2146b": 141488
+   },
+   "median_cpu_ms": {
+    "2145a": 761.94,
+    "2146a": 770.03,
+    "2145b": 771.61,
+    "2146b": 772.57
+   }
+  },
+  {
+   "name": "cooperative_yield w=2",
+   "env": {
+    "PROTOST_WORKERS": "2"
+   },
+   "expected": 1000000,
+   "samples": {
+    "2145a": [
+     {
+      "ms": 533.64,
+      "rss_kb": 149924,
+      "user_ms": 758.75,
+      "sys_ms": 123.75,
+      "load": 3.74,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 521.48,
+      "rss_kb": 147860,
+      "user_ms": 746.36,
+      "sys_ms": 126.09,
+      "load": 3.74,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 512.7,
+      "rss_kb": 149324,
+      "user_ms": 755.52,
+      "sys_ms": 135.97,
+      "load": 3.74,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 519.83,
+      "rss_kb": 148088,
+      "user_ms": 737.91,
+      "sys_ms": 123.67,
+      "load": 3.68,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 525.37,
+      "rss_kb": 147880,
+      "user_ms": 720.47,
+      "sys_ms": 126.96,
+      "load": 3.7,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 510.47,
+      "rss_kb": 148408,
+      "user_ms": 739.6,
+      "sys_ms": 126.85,
+      "load": 3.7,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 533.37,
+      "rss_kb": 148092,
+      "user_ms": 749.05,
+      "sys_ms": 144.32,
+      "load": 3.7,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146a": [
+     {
+      "ms": 577.97,
+      "rss_kb": 146488,
+      "user_ms": 799.64,
+      "sys_ms": 142.58,
+      "load": 3.54,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 544.22,
+      "rss_kb": 146696,
+      "user_ms": 766.49,
+      "sys_ms": 123.86,
+      "load": 3.74,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 547.01,
+      "rss_kb": 146768,
+      "user_ms": 791.06,
+      "sys_ms": 116.75,
+      "load": 3.68,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 560.91,
+      "rss_kb": 147048,
+      "user_ms": 770.11,
+      "sys_ms": 136.32,
+      "load": 3.68,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 550.04,
+      "rss_kb": 147016,
+      "user_ms": 761.41,
+      "sys_ms": 127.91,
+      "load": 3.68,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 529.58,
+      "rss_kb": 146368,
+      "user_ms": 752.86,
+      "sys_ms": 127.5,
+      "load": 3.7,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 525.08,
+      "rss_kb": 146808,
+      "user_ms": 720.96,
+      "sys_ms": 140.95,
+      "load": 3.7,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2145b": [
+     {
+      "ms": 528.72,
+      "rss_kb": 148060,
+      "user_ms": 765.53,
+      "sys_ms": 119.74,
+      "load": 3.74,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 525.23,
+      "rss_kb": 148076,
+      "user_ms": 736.35,
+      "sys_ms": 117.65,
+      "load": 3.74,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 556.28,
+      "rss_kb": 148320,
+      "user_ms": 773.88,
+      "sys_ms": 132.38,
+      "load": 3.68,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 540.35,
+      "rss_kb": 148160,
+      "user_ms": 749.19,
+      "sys_ms": 137.88,
+      "load": 3.68,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 536.02,
+      "rss_kb": 148080,
+      "user_ms": 771.48,
+      "sys_ms": 133.5,
+      "load": 3.68,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 533.38,
+      "rss_kb": 147884,
+      "user_ms": 744.73,
+      "sys_ms": 122.76,
+      "load": 3.7,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 558.07,
+      "rss_kb": 147928,
+      "user_ms": 800.97,
+      "sys_ms": 125.66,
+      "load": 3.7,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146b": [
+     {
+      "ms": 519.8,
+      "rss_kb": 146536,
+      "user_ms": 720.38,
+      "sys_ms": 121.9,
+      "load": 3.74,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 549.82,
+      "rss_kb": 146924,
+      "user_ms": 806.56,
+      "sys_ms": 116.25,
+      "load": 3.74,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 533.42,
+      "rss_kb": 146636,
+      "user_ms": 759.87,
+      "sys_ms": 123.77,
+      "load": 3.74,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 511.49,
+      "rss_kb": 146980,
+      "user_ms": 735.11,
+      "sys_ms": 119.31,
+      "load": 3.68,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 553.34,
+      "rss_kb": 146976,
+      "user_ms": 778.58,
+      "sys_ms": 127.57,
+      "load": 3.68,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 519.25,
+      "rss_kb": 146676,
+      "user_ms": 740.75,
+      "sys_ms": 120.75,
+      "load": 3.7,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 530.72,
+      "rss_kb": 146672,
+      "user_ms": 753.6,
+      "sys_ms": 129.27,
+      "load": 3.7,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "2145a": 521.48,
+    "2146a": 547.01,
+    "2145b": 536.02,
+    "2146b": 530.72
+   },
+   "median_rss_kb": {
+    "2145a": 148092,
+    "2146a": 146768,
+    "2145b": 148076,
+    "2146b": 146676
+   },
+   "median_cpu_ms": {
+    "2145a": 872.45,
+    "2146a": 890.35,
+    "2145b": 887.07,
+    "2146b": 882.87
+   }
+  },
+  {
+   "name": "message_throughput",
+   "env": {},
+   "expected": 2000,
+   "samples": {
+    "2145a": [
+     {
+      "ms": 76.65,
+      "rss_kb": 55684,
+      "user_ms": 163.59,
+      "sys_ms": 61.35,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 85.32,
+      "rss_kb": 55616,
+      "user_ms": 203.01,
+      "sys_ms": 85.13,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 70.93,
+      "rss_kb": 51552,
+      "user_ms": 145.86,
+      "sys_ms": 63.13,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 76.96,
+      "rss_kb": 51564,
+      "user_ms": 158.5,
+      "sys_ms": 64.61,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 71.46,
+      "rss_kb": 55692,
+      "user_ms": 157.71,
+      "sys_ms": 67.0,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 82.37,
+      "rss_kb": 55472,
+      "user_ms": 162.68,
+      "sys_ms": 67.87,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 69.74,
+      "rss_kb": 51504,
+      "user_ms": 168.73,
+      "sys_ms": 47.13,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146a": [
+     {
+      "ms": 73.24,
+      "rss_kb": 55660,
+      "user_ms": 155.3,
+      "sys_ms": 65.16,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 73.27,
+      "rss_kb": 55688,
+      "user_ms": 166.11,
+      "sys_ms": 51.36,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 64.65,
+      "rss_kb": 47276,
+      "user_ms": 147.95,
+      "sys_ms": 57.3,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 77.86,
+      "rss_kb": 59612,
+      "user_ms": 167.93,
+      "sys_ms": 59.62,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 91.88,
+      "rss_kb": 55732,
+      "user_ms": 175.47,
+      "sys_ms": 60.94,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 89.02,
+      "rss_kb": 59632,
+      "user_ms": 169.67,
+      "sys_ms": 79.5,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 83.53,
+      "rss_kb": 55792,
+      "user_ms": 206.73,
+      "sys_ms": 74.87,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2145b": [
+     {
+      "ms": 66.76,
+      "rss_kb": 51428,
+      "user_ms": 149.91,
+      "sys_ms": 59.96,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 76.98,
+      "rss_kb": 59620,
+      "user_ms": 157.17,
+      "sys_ms": 61.41,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 72.55,
+      "rss_kb": 51884,
+      "user_ms": 153.91,
+      "sys_ms": 61.14,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 69.75,
+      "rss_kb": 51356,
+      "user_ms": 157.01,
+      "sys_ms": 63.21,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 63.75,
+      "rss_kb": 47288,
+      "user_ms": 154.52,
+      "sys_ms": 55.4,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 71.29,
+      "rss_kb": 55644,
+      "user_ms": 157.58,
+      "sys_ms": 60.13,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 68.52,
+      "rss_kb": 51292,
+      "user_ms": 153.51,
+      "sys_ms": 60.11,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146b": [
+     {
+      "ms": 66.71,
+      "rss_kb": 51472,
+      "user_ms": 144.17,
+      "sys_ms": 61.32,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 74.87,
+      "rss_kb": 59736,
+      "user_ms": 156.18,
+      "sys_ms": 67.24,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 78.52,
+      "rss_kb": 51252,
+      "user_ms": 174.36,
+      "sys_ms": 51.23,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 109.63,
+      "rss_kb": 59724,
+      "user_ms": 154.99,
+      "sys_ms": 73.99,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 64.7,
+      "rss_kb": 47236,
+      "user_ms": 155.49,
+      "sys_ms": 48.9,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 71.49,
+      "rss_kb": 55628,
+      "user_ms": 161.9,
+      "sys_ms": 49.27,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 70.37,
+      "rss_kb": 47516,
+      "user_ms": 152.98,
+      "sys_ms": 54.56,
+      "load": 3.57,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "2145a": 76.65,
+    "2146a": 77.86,
+    "2145b": 69.75,
+    "2146b": 71.49
+   },
+   "median_rss_kb": {
+    "2145a": 55472,
+    "2146a": 55732,
+    "2145b": 51428,
+    "2146b": 51472
+   },
+   "median_cpu_ms": {
+    "2145a": 224.71,
+    "2146a": 227.55,
+    "2145b": 215.05,
+    "2146b": 211.17000000000002
+   }
+  },
+  {
+   "name": "saturation_big w=1",
+   "env": {
+    "PROTOST_WORKERS": "1"
+   },
+   "expected": 20004000000,
+   "samples": {
+    "2145a": [
+     {
+      "ms": 2785.17,
+      "rss_kb": 142064,
+      "user_ms": 3418.27,
+      "sys_ms": 110.14,
+      "load": 4.92,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 2995.49,
+      "rss_kb": 142232,
+      "user_ms": 3643.0,
+      "sys_ms": 121.1,
+      "load": 4.69,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 2912.42,
+      "rss_kb": 146480,
+      "user_ms": 3522.5,
+      "sys_ms": 131.02,
+      "load": 4.27,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 2775.56,
+      "rss_kb": 142480,
+      "user_ms": 3394.15,
+      "sys_ms": 124.0,
+      "load": 4.23,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 3048.9,
+      "rss_kb": 142116,
+      "user_ms": 3722.08,
+      "sys_ms": 126.83,
+      "load": 4.01,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 2967.04,
+      "rss_kb": 146284,
+      "user_ms": 3600.97,
+      "sys_ms": 115.81,
+      "load": 3.69,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 2797.25,
+      "rss_kb": 142176,
+      "user_ms": 3410.39,
+      "sys_ms": 121.94,
+      "load": 3.64,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146a": [
+     {
+      "ms": 2965.98,
+      "rss_kb": 141368,
+      "user_ms": 3608.67,
+      "sys_ms": 100.05,
+      "load": 4.33,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 2891.73,
+      "rss_kb": 141584,
+      "user_ms": 3524.87,
+      "sys_ms": 101.08,
+      "load": 4.47,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 2914.71,
+      "rss_kb": 141844,
+      "user_ms": 3549.68,
+      "sys_ms": 96.83,
+      "load": 4.33,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 2973.32,
+      "rss_kb": 141592,
+      "user_ms": 3634.88,
+      "sys_ms": 92.07,
+      "load": 4.23,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 2872.13,
+      "rss_kb": 141628,
+      "user_ms": 3497.23,
+      "sys_ms": 99.61,
+      "load": 4.1,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 2796.74,
+      "rss_kb": 141508,
+      "user_ms": 3423.62,
+      "sys_ms": 91.2,
+      "load": 3.69,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 2998.19,
+      "rss_kb": 141452,
+      "user_ms": 3639.88,
+      "sys_ms": 100.94,
+      "load": 3.58,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2145b": [
+     {
+      "ms": 2938.95,
+      "rss_kb": 142308,
+      "user_ms": 3573.36,
+      "sys_ms": 121.05,
+      "load": 4.33,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 2801.91,
+      "rss_kb": 146312,
+      "user_ms": 3415.06,
+      "sys_ms": 118.76,
+      "load": 4.92,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 2981.92,
+      "rss_kb": 146484,
+      "user_ms": 3645.99,
+      "sys_ms": 130.82,
+      "load": 4.33,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 3007.64,
+      "rss_kb": 142044,
+      "user_ms": 3666.2,
+      "sys_ms": 124.01,
+      "load": 4.29,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 2825.96,
+      "rss_kb": 146392,
+      "user_ms": 3454.02,
+      "sys_ms": 122.68,
+      "load": 4.1,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 2964.65,
+      "rss_kb": 142248,
+      "user_ms": 3591.12,
+      "sys_ms": 137.0,
+      "load": 3.93,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 2846.96,
+      "rss_kb": 146292,
+      "user_ms": 3463.27,
+      "sys_ms": 124.04,
+      "load": 3.46,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146b": [
+     {
+      "ms": 2800.37,
+      "rss_kb": 145556,
+      "user_ms": 3412.9,
+      "sys_ms": 95.11,
+      "load": 5.26,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 2784.22,
+      "rss_kb": 141844,
+      "user_ms": 3397.6,
+      "sys_ms": 100.02,
+      "load": 4.69,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 2873.11,
+      "rss_kb": 141456,
+      "user_ms": 3517.61,
+      "sys_ms": 94.02,
+      "load": 4.47,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 2991.36,
+      "rss_kb": 141364,
+      "user_ms": 3652.28,
+      "sys_ms": 96.72,
+      "load": 4.1,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 2868.21,
+      "rss_kb": 141684,
+      "user_ms": 3517.15,
+      "sys_ms": 104.85,
+      "load": 4.1,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 2967.51,
+      "rss_kb": 141732,
+      "user_ms": 3594.84,
+      "sys_ms": 104.85,
+      "load": 3.93,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 2803.94,
+      "rss_kb": 141536,
+      "user_ms": 3418.19,
+      "sys_ms": 102.8,
+      "load": 3.64,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "2145a": 2912.42,
+    "2146a": 2914.71,
+    "2145b": 2938.95,
+    "2146b": 2868.21
+   },
+   "median_rss_kb": {
+    "2145a": 142232,
+    "2146a": 141584,
+    "2145b": 146292,
+    "2146b": 141684
+   },
+   "median_cpu_ms": {
+    "2145a": 3653.52,
+    "2146a": 3646.5099999999998,
+    "2145b": 3694.4100000000003,
+    "2146b": 3611.63
+   }
+  },
+  {
+   "name": "saturation_big w=2",
+   "env": {
+    "PROTOST_WORKERS": "2"
+   },
+   "expected": 20004000000,
+   "samples": {
+    "2145a": [
+     {
+      "ms": 1649.12,
+      "rss_kb": 146788,
+      "user_ms": 3688.44,
+      "sys_ms": 125.05,
+      "load": 3.46,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1749.2,
+      "rss_kb": 150716,
+      "user_ms": 3864.91,
+      "sys_ms": 156.91,
+      "load": 3.58,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 2037.59,
+      "rss_kb": 147404,
+      "user_ms": 4375.17,
+      "sys_ms": 109.98,
+      "load": 3.69,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1656.92,
+      "rss_kb": 146388,
+      "user_ms": 3701.15,
+      "sys_ms": 141.97,
+      "load": 3.56,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1813.12,
+      "rss_kb": 146560,
+      "user_ms": 4024.75,
+      "sys_ms": 144.77,
+      "load": 3.91,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1666.82,
+      "rss_kb": 146580,
+      "user_ms": 3698.03,
+      "sys_ms": 149.24,
+      "load": 3.92,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1693.28,
+      "rss_kb": 146548,
+      "user_ms": 3754.79,
+      "sys_ms": 149.23,
+      "load": 3.93,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146a": [
+     {
+      "ms": 1680.53,
+      "rss_kb": 145648,
+      "user_ms": 3715.02,
+      "sys_ms": 122.74,
+      "load": 3.32,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1596.73,
+      "rss_kb": 145508,
+      "user_ms": 3595.33,
+      "sys_ms": 100.01,
+      "load": 3.58,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1776.58,
+      "rss_kb": 150136,
+      "user_ms": 3977.06,
+      "sys_ms": 116.03,
+      "load": 3.69,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1729.97,
+      "rss_kb": 145832,
+      "user_ms": 3875.4,
+      "sys_ms": 104.9,
+      "load": 3.56,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1866.24,
+      "rss_kb": 145476,
+      "user_ms": 4135.85,
+      "sys_ms": 107.58,
+      "load": 3.99,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1732.44,
+      "rss_kb": 141924,
+      "user_ms": 3850.34,
+      "sys_ms": 111.89,
+      "load": 3.93,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1689.5,
+      "rss_kb": 145820,
+      "user_ms": 3764.96,
+      "sys_ms": 116.06,
+      "load": 4.41,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2145b": [
+     {
+      "ms": 1558.84,
+      "rss_kb": 146684,
+      "user_ms": 3438.15,
+      "sys_ms": 143.05,
+      "load": 3.32,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1782.68,
+      "rss_kb": 146980,
+      "user_ms": 3884.22,
+      "sys_ms": 151.05,
+      "load": 3.46,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1695.29,
+      "rss_kb": 146564,
+      "user_ms": 3784.23,
+      "sys_ms": 142.16,
+      "load": 3.69,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1823.75,
+      "rss_kb": 146756,
+      "user_ms": 4040.43,
+      "sys_ms": 152.98,
+      "load": 3.56,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1744.02,
+      "rss_kb": 146820,
+      "user_ms": 3887.57,
+      "sys_ms": 99.81,
+      "load": 3.91,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1720.41,
+      "rss_kb": 146500,
+      "user_ms": 3799.07,
+      "sys_ms": 152.84,
+      "load": 3.92,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1691.05,
+      "rss_kb": 146532,
+      "user_ms": 3777.73,
+      "sys_ms": 134.13,
+      "load": 4.41,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146b": [
+     {
+      "ms": 1626.48,
+      "rss_kb": 145572,
+      "user_ms": 3664.65,
+      "sys_ms": 98.96,
+      "load": 3.32,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1806.0,
+      "rss_kb": 145440,
+      "user_ms": 4003.13,
+      "sys_ms": 112.14,
+      "load": 3.46,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1680.76,
+      "rss_kb": 145612,
+      "user_ms": 3761.57,
+      "sys_ms": 109.02,
+      "load": 3.58,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1815.71,
+      "rss_kb": 141352,
+      "user_ms": 4022.38,
+      "sys_ms": 108.96,
+      "load": 3.99,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1732.3,
+      "rss_kb": 145704,
+      "user_ms": 3845.98,
+      "sys_ms": 106.94,
+      "load": 3.91,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1776.24,
+      "rss_kb": 145668,
+      "user_ms": 4018.48,
+      "sys_ms": 109.98,
+      "load": 3.92,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1753.29,
+      "rss_kb": 141604,
+      "user_ms": 3963.43,
+      "sys_ms": 101.11,
+      "load": 3.93,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "2145a": 1693.28,
+    "2146a": 1729.97,
+    "2145b": 1720.41,
+    "2146b": 1753.29
+   },
+   "median_rss_kb": {
+    "2145a": 146580,
+    "2146a": 145648,
+    "2145b": 146684,
+    "2146b": 145572
+   },
+   "median_cpu_ms": {
+    "2145a": 3904.02,
+    "2146a": 3962.23,
+    "2145b": 3951.9100000000003,
+    "2146b": 4064.54
+   }
+  },
+  {
+   "name": "saturation_big w=3",
+   "env": {
+    "PROTOST_WORKERS": "3"
+   },
+   "expected": 20004000000,
+   "samples": {
+    "2145a": [
+     {
+      "ms": 1381.74,
+      "rss_kb": 155192,
+      "user_ms": 4336.72,
+      "sys_ms": 155.99,
+      "load": 4.81,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1257.17,
+      "rss_kb": 150756,
+      "user_ms": 4179.19,
+      "sys_ms": 153.56,
+      "load": 5.06,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1245.11,
+      "rss_kb": 154872,
+      "user_ms": 3957.39,
+      "sys_ms": 165.06,
+      "load": 5.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1465.45,
+      "rss_kb": 146740,
+      "user_ms": 4725.37,
+      "sys_ms": 123.56,
+      "load": 5.45,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1302.16,
+      "rss_kb": 155404,
+      "user_ms": 4246.39,
+      "sys_ms": 165.29,
+      "load": 5.62,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1402.0,
+      "rss_kb": 147044,
+      "user_ms": 4407.79,
+      "sys_ms": 134.63,
+      "load": 5.73,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1444.01,
+      "rss_kb": 146556,
+      "user_ms": 4528.81,
+      "sys_ms": 163.46,
+      "load": 5.73,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146a": [
+     {
+      "ms": 1316.38,
+      "rss_kb": 153660,
+      "user_ms": 4255.59,
+      "sys_ms": 109.83,
+      "load": 4.81,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1263.26,
+      "rss_kb": 145572,
+      "user_ms": 4201.02,
+      "sys_ms": 116.05,
+      "load": 5.06,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1230.5,
+      "rss_kb": 153840,
+      "user_ms": 3992.47,
+      "sys_ms": 124.86,
+      "load": 5.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1581.49,
+      "rss_kb": 149908,
+      "user_ms": 4969.14,
+      "sys_ms": 134.22,
+      "load": 5.45,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1321.94,
+      "rss_kb": 145708,
+      "user_ms": 4300.48,
+      "sys_ms": 108.88,
+      "load": 5.41,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1238.89,
+      "rss_kb": 150024,
+      "user_ms": 4110.9,
+      "sys_ms": 121.53,
+      "load": 5.73,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1331.16,
+      "rss_kb": 149804,
+      "user_ms": 4419.8,
+      "sys_ms": 121.97,
+      "load": 6.31,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2145b": [
+     {
+      "ms": 1255.76,
+      "rss_kb": 150936,
+      "user_ms": 4020.06,
+      "sys_ms": 164.12,
+      "load": 4.81,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1258.77,
+      "rss_kb": 154844,
+      "user_ms": 4051.65,
+      "sys_ms": 166.15,
+      "load": 5.06,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1320.37,
+      "rss_kb": 154780,
+      "user_ms": 4352.33,
+      "sys_ms": 178.09,
+      "load": 5.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1398.07,
+      "rss_kb": 154944,
+      "user_ms": 4447.58,
+      "sys_ms": 174.59,
+      "load": 5.45,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1361.17,
+      "rss_kb": 154696,
+      "user_ms": 4443.95,
+      "sys_ms": 170.69,
+      "load": 5.41,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1242.61,
+      "rss_kb": 146992,
+      "user_ms": 4069.7,
+      "sys_ms": 125.93,
+      "load": 5.62,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1308.74,
+      "rss_kb": 155216,
+      "user_ms": 4155.2,
+      "sys_ms": 154.9,
+      "load": 6.31,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146b": [
+     {
+      "ms": 1214.56,
+      "rss_kb": 153840,
+      "user_ms": 3924.71,
+      "sys_ms": 122.33,
+      "load": 4.81,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1195.22,
+      "rss_kb": 149796,
+      "user_ms": 3866.2,
+      "sys_ms": 114.95,
+      "load": 5.06,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1321.49,
+      "rss_kb": 149796,
+      "user_ms": 4344.37,
+      "sys_ms": 116.85,
+      "load": 5.14,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1414.48,
+      "rss_kb": 149824,
+      "user_ms": 4682.2,
+      "sys_ms": 121.61,
+      "load": 5.41,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1420.61,
+      "rss_kb": 149596,
+      "user_ms": 4551.43,
+      "sys_ms": 136.33,
+      "load": 5.41,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1277.33,
+      "rss_kb": 149788,
+      "user_ms": 4274.14,
+      "sys_ms": 124.83,
+      "load": 5.62,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1421.93,
+      "rss_kb": 149712,
+      "user_ms": 4502.99,
+      "sys_ms": 118.52,
+      "load": 5.73,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "2145a": 1381.74,
+    "2146a": 1316.38,
+    "2145b": 1308.74,
+    "2146b": 1321.49
+   },
+   "median_rss_kb": {
+    "2145a": 150756,
+    "2146a": 149908,
+    "2145b": 154780,
+    "2146b": 149796
+   },
+   "median_cpu_ms": {
+    "2145a": 4492.71,
+    "2146a": 4365.42,
+    "2145b": 4310.099999999999,
+    "2146b": 4461.22
+   }
+  },
+  {
+   "name": "saturation_big w=4",
+   "env": {
+    "PROTOST_WORKERS": "4"
+   },
+   "expected": 20004000000,
+   "samples": {
+    "2145a": [
+     {
+      "ms": 1133.2,
+      "rss_kb": 147340,
+      "user_ms": 4819.77,
+      "sys_ms": 133.05,
+      "load": 7.69,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1108.04,
+      "rss_kb": 147344,
+      "user_ms": 4637.26,
+      "sys_ms": 151.56,
+      "load": 7.55,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1130.19,
+      "rss_kb": 147136,
+      "user_ms": 4836.17,
+      "sys_ms": 161.91,
+      "load": 7.55,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1147.65,
+      "rss_kb": 147224,
+      "user_ms": 4860.31,
+      "sys_ms": 137.47,
+      "load": 7.19,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1154.25,
+      "rss_kb": 147536,
+      "user_ms": 4794.93,
+      "sys_ms": 142.73,
+      "load": 6.92,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1135.61,
+      "rss_kb": 147064,
+      "user_ms": 4897.87,
+      "sys_ms": 132.7,
+      "load": 6.92,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1184.06,
+      "rss_kb": 151340,
+      "user_ms": 4887.81,
+      "sys_ms": 135.47,
+      "load": 6.77,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146a": [
+     {
+      "ms": 1152.1,
+      "rss_kb": 145708,
+      "user_ms": 4911.41,
+      "sys_ms": 109.94,
+      "load": 6.53,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1163.79,
+      "rss_kb": 145752,
+      "user_ms": 4988.87,
+      "sys_ms": 125.9,
+      "load": 7.55,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1137.81,
+      "rss_kb": 145868,
+      "user_ms": 4772.92,
+      "sys_ms": 128.35,
+      "load": 7.19,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1211.12,
+      "rss_kb": 145796,
+      "user_ms": 5266.36,
+      "sys_ms": 122.77,
+      "load": 7.19,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1203.5,
+      "rss_kb": 145604,
+      "user_ms": 5233.0,
+      "sys_ms": 121.3,
+      "load": 7.09,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1142.16,
+      "rss_kb": 145832,
+      "user_ms": 4903.57,
+      "sys_ms": 120.94,
+      "load": 6.77,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1203.82,
+      "rss_kb": 154192,
+      "user_ms": 5047.73,
+      "sys_ms": 147.49,
+      "load": 6.77,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2145b": [
+     {
+      "ms": 1110.24,
+      "rss_kb": 155316,
+      "user_ms": 4649.22,
+      "sys_ms": 155.64,
+      "load": 6.53,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1108.53,
+      "rss_kb": 147444,
+      "user_ms": 4696.5,
+      "sys_ms": 163.39,
+      "load": 7.69,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1173.39,
+      "rss_kb": 151604,
+      "user_ms": 4948.94,
+      "sys_ms": 148.39,
+      "load": 7.19,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1085.6,
+      "rss_kb": 155604,
+      "user_ms": 4591.15,
+      "sys_ms": 156.72,
+      "load": 7.19,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1125.17,
+      "rss_kb": 147320,
+      "user_ms": 4769.62,
+      "sys_ms": 151.89,
+      "load": 7.09,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1052.98,
+      "rss_kb": 147312,
+      "user_ms": 4597.11,
+      "sys_ms": 140.4,
+      "load": 6.92,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1170.14,
+      "rss_kb": 155620,
+      "user_ms": 4838.41,
+      "sys_ms": 133.68,
+      "load": 6.95,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146b": [
+     {
+      "ms": 1115.16,
+      "rss_kb": 145960,
+      "user_ms": 4718.4,
+      "sys_ms": 123.22,
+      "load": 7.69,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1119.05,
+      "rss_kb": 145668,
+      "user_ms": 4882.31,
+      "sys_ms": 158.85,
+      "load": 7.69,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1110.92,
+      "rss_kb": 149924,
+      "user_ms": 4695.51,
+      "sys_ms": 122.78,
+      "load": 7.55,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1285.82,
+      "rss_kb": 145564,
+      "user_ms": 5287.23,
+      "sys_ms": 120.59,
+      "load": 7.09,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1144.96,
+      "rss_kb": 153892,
+      "user_ms": 4780.27,
+      "sys_ms": 139.63,
+      "load": 7.09,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1016.54,
+      "rss_kb": 145852,
+      "user_ms": 4388.23,
+      "sys_ms": 126.09,
+      "load": 6.92,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1122.5,
+      "rss_kb": 149928,
+      "user_ms": 4753.8,
+      "sys_ms": 120.82,
+      "load": 6.77,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "2145a": 1135.61,
+    "2146a": 1163.79,
+    "2145b": 1110.24,
+    "2146b": 1119.05
+   },
+   "median_rss_kb": {
+    "2145a": 147340,
+    "2146a": 145796,
+    "2145b": 151604,
+    "2146b": 145960
+   },
+   "median_cpu_ms": {
+    "2145a": 4997.780000000001,
+    "2146a": 5114.7699999999995,
+    "2145b": 4859.89,
+    "2146b": 4874.62
+   }
+  },
+  {
+   "name": "saturation_big w=5",
+   "env": {
+    "PROTOST_WORKERS": "5"
+   },
+   "expected": 20004000000,
+   "samples": {
+    "2145a": [
+     {
+      "ms": 1092.86,
+      "rss_kb": 163716,
+      "user_ms": 5574.51,
+      "sys_ms": 158.04,
+      "load": 6.87,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1029.44,
+      "rss_kb": 171952,
+      "user_ms": 5197.4,
+      "sys_ms": 159.09,
+      "load": 7.12,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 981.53,
+      "rss_kb": 240916,
+      "user_ms": 4785.89,
+      "sys_ms": 239.79,
+      "load": 7.11,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1052.21,
+      "rss_kb": 208604,
+      "user_ms": 5120.88,
+      "sys_ms": 200.37,
+      "load": 7.11,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 991.13,
+      "rss_kb": 155792,
+      "user_ms": 5179.9,
+      "sys_ms": 146.8,
+      "load": 7.18,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1077.62,
+      "rss_kb": 164004,
+      "user_ms": 5350.5,
+      "sys_ms": 173.27,
+      "load": 7.09,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1125.59,
+      "rss_kb": 147464,
+      "user_ms": 5633.46,
+      "sys_ms": 174.89,
+      "load": 7.09,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146a": [
+     {
+      "ms": 956.64,
+      "rss_kb": 146092,
+      "user_ms": 4852.57,
+      "sys_ms": 129.38,
+      "load": 6.87,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1144.25,
+      "rss_kb": 146032,
+      "user_ms": 5860.31,
+      "sys_ms": 145.18,
+      "load": 7.12,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1071.24,
+      "rss_kb": 146088,
+      "user_ms": 5489.95,
+      "sys_ms": 138.92,
+      "load": 7.11,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1103.9,
+      "rss_kb": 153952,
+      "user_ms": 5588.94,
+      "sys_ms": 149.49,
+      "load": 7.02,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1051.54,
+      "rss_kb": 158004,
+      "user_ms": 5277.65,
+      "sys_ms": 144.62,
+      "load": 7.02,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1174.44,
+      "rss_kb": 166432,
+      "user_ms": 5627.64,
+      "sys_ms": 171.59,
+      "load": 7.09,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1010.55,
+      "rss_kb": 154008,
+      "user_ms": 5117.54,
+      "sys_ms": 131.83,
+      "load": 7.4,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2145b": [
+     {
+      "ms": 1164.53,
+      "rss_kb": 159580,
+      "user_ms": 5579.48,
+      "sys_ms": 142.0,
+      "load": 6.87,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1154.51,
+      "rss_kb": 163712,
+      "user_ms": 5677.41,
+      "sys_ms": 160.28,
+      "load": 7.12,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1432.15,
+      "rss_kb": 217444,
+      "user_ms": 6191.99,
+      "sys_ms": 224.69,
+      "load": 7.11,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1069.89,
+      "rss_kb": 180152,
+      "user_ms": 5324.8,
+      "sys_ms": 174.55,
+      "load": 7.02,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1104.01,
+      "rss_kb": 167768,
+      "user_ms": 5583.43,
+      "sys_ms": 166.19,
+      "load": 7.18,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1031.27,
+      "rss_kb": 192184,
+      "user_ms": 5020.16,
+      "sys_ms": 178.51,
+      "load": 7.18,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1013.6,
+      "rss_kb": 225364,
+      "user_ms": 4987.44,
+      "sys_ms": 216.93,
+      "load": 7.4,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146b": [
+     {
+      "ms": 1143.87,
+      "rss_kb": 149856,
+      "user_ms": 5762.07,
+      "sys_ms": 132.95,
+      "load": 6.87,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1091.35,
+      "rss_kb": 174616,
+      "user_ms": 5398.01,
+      "sys_ms": 159.85,
+      "load": 7.12,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1115.96,
+      "rss_kb": 150084,
+      "user_ms": 5521.6,
+      "sys_ms": 153.85,
+      "load": 7.11,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1172.37,
+      "rss_kb": 146080,
+      "user_ms": 5846.79,
+      "sys_ms": 118.59,
+      "load": 7.02,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1024.11,
+      "rss_kb": 170396,
+      "user_ms": 5174.43,
+      "sys_ms": 143.96,
+      "load": 7.18,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1074.86,
+      "rss_kb": 158232,
+      "user_ms": 5415.49,
+      "sys_ms": 158.66,
+      "load": 7.18,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1100.15,
+      "rss_kb": 158108,
+      "user_ms": 5358.97,
+      "sys_ms": 189.68,
+      "load": 7.09,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "2145a": 1052.21,
+    "2146a": 1071.24,
+    "2145b": 1104.01,
+    "2146b": 1100.15
+   },
+   "median_rss_kb": {
+    "2145a": 164004,
+    "2146a": 153952,
+    "2145b": 180152,
+    "2146b": 158108
+   },
+   "median_cpu_ms": {
+    "2145a": 5356.49,
+    "2146a": 5628.87,
+    "2145b": 5721.48,
+    "2146b": 5574.15
+   }
+  },
+  {
+   "name": "saturation_big w=6",
+   "env": {
+    "PROTOST_WORKERS": "6"
+   },
+   "expected": 20004000000,
+   "samples": {
+    "2145a": [
+     {
+      "ms": 1160.98,
+      "rss_kb": 180828,
+      "user_ms": 6550.89,
+      "sys_ms": 204.19,
+      "load": 7.6,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1029.83,
+      "rss_kb": 233928,
+      "user_ms": 5694.26,
+      "sys_ms": 257.33,
+      "load": 7.6,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 970.19,
+      "rss_kb": 274756,
+      "user_ms": 5363.45,
+      "sys_ms": 288.99,
+      "load": 8.11,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 965.15,
+      "rss_kb": 201008,
+      "user_ms": 5588.38,
+      "sys_ms": 225.92,
+      "load": 7.54,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1028.11,
+      "rss_kb": 192828,
+      "user_ms": 5722.3,
+      "sys_ms": 211.53,
+      "load": 7.58,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 923.29,
+      "rss_kb": 205264,
+      "user_ms": 5425.47,
+      "sys_ms": 209.17,
+      "load": 7.53,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1002.69,
+      "rss_kb": 254032,
+      "user_ms": 5518.11,
+      "sys_ms": 265.18,
+      "load": 7.53,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146a": [
+     {
+      "ms": 1069.44,
+      "rss_kb": 589044,
+      "user_ms": 5543.95,
+      "sys_ms": 522.3,
+      "load": 7.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1057.14,
+      "rss_kb": 215736,
+      "user_ms": 5936.95,
+      "sys_ms": 226.69,
+      "load": 7.6,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 982.53,
+      "rss_kb": 232036,
+      "user_ms": 5436.44,
+      "sys_ms": 223.07,
+      "load": 8.11,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 941.54,
+      "rss_kb": 240656,
+      "user_ms": 5267.59,
+      "sys_ms": 232.47,
+      "load": 7.54,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1061.23,
+      "rss_kb": 256864,
+      "user_ms": 5755.94,
+      "sys_ms": 252.08,
+      "load": 7.54,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 956.78,
+      "rss_kb": 203484,
+      "user_ms": 5397.61,
+      "sys_ms": 194.34,
+      "load": 7.53,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1146.82,
+      "rss_kb": 232048,
+      "user_ms": 5820.72,
+      "sys_ms": 218.75,
+      "load": 7.53,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2145b": [
+     {
+      "ms": 1061.85,
+      "rss_kb": 249940,
+      "user_ms": 5925.05,
+      "sys_ms": 271.49,
+      "load": 7.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1023.72,
+      "rss_kb": 225276,
+      "user_ms": 5751.2,
+      "sys_ms": 245.6,
+      "load": 7.6,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 999.42,
+      "rss_kb": 209260,
+      "user_ms": 5679.17,
+      "sys_ms": 226.13,
+      "load": 8.11,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 999.11,
+      "rss_kb": 192528,
+      "user_ms": 5689.89,
+      "sys_ms": 224.15,
+      "load": 7.54,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 997.07,
+      "rss_kb": 192912,
+      "user_ms": 5695.5,
+      "sys_ms": 215.53,
+      "load": 7.58,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1227.41,
+      "rss_kb": 1594188,
+      "user_ms": 4731.67,
+      "sys_ms": 1343.49,
+      "load": 7.58,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 1028.51,
+      "rss_kb": 213292,
+      "user_ms": 6001.09,
+      "sys_ms": 230.43,
+      "load": 8.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3",
+      "contenders": []
+     }
+    ],
+    "2146b": [
+     {
+      "ms": 1023.83,
+      "rss_kb": 178864,
+      "user_ms": 5902.2,
+      "sys_ms": 158.09,
+      "load": 7.13,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 989.78,
+      "rss_kb": 190916,
+      "user_ms": 5789.88,
+      "sys_ms": 185.19,
+      "load": 7.6,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 994.03,
+      "rss_kb": 187092,
+      "user_ms": 5711.81,
+      "sys_ms": 172.72,
+      "load": 8.11,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 944.75,
+      "rss_kb": 203160,
+      "user_ms": 5418.88,
+      "sys_ms": 187.72,
+      "load": 7.54,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 913.56,
+      "rss_kb": 248284,
+      "user_ms": 5272.28,
+      "sys_ms": 241.24,
+      "load": 7.58,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 976.57,
+      "rss_kb": 264640,
+      "user_ms": 5487.79,
+      "sys_ms": 260.7,
+      "load": 7.58,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     },
+     {
+      "ms": 976.57,
+      "rss_kb": 149804,
+      "user_ms": 5822.38,
+      "sys_ms": 135.5,
+      "load": 7.53,
+      "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "2145a": 1002.69,
+    "2146a": 1057.14,
+    "2145b": 1023.72,
+    "2146b": 976.57
+   },
+   "median_rss_kb": {
+    "2145a": 205264,
+    "2146a": 232048,
+    "2145b": 213292,
+    "2146b": 190916
+   },
+   "median_cpu_ms": {
+    "2145a": 5814.3,
+    "2146a": 6008.0199999999995,
+    "2145b": 5996.8,
+    "2146b": 5884.530000000001
+   }
+  }
+ ],
+ "failures": []
+}

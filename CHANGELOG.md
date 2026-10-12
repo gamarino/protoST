@@ -3,6 +3,35 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
+## 0.6.5 — on protoCore 2.14.6 (2026-10-12)
+
+- **The `.deb` requires protoCore 2.14.6** (`protocore (>= 2.14.6)`), so a
+  fresh install gets its faster integer arithmetic and its bounded mark work
+  list; CI and the cross-platform workflow build against 2.14.6 (tag
+  `v2.14.6`, `a6400cd`). Built from source the floor stays at 2.11.0. No
+  code change in protoST: the version string and the documents only.
+- **Measured** (`benchmarks/reports/2026-10-12-protocore-2.14.6.md`: the
+  0.6.4 release binary on the two protoCore release libraries, 14
+  interleaved runs each with A/A pairs, `perf stat`, CPython 3.14 alongside):
+  the talk's demo 2 runs its one-thread half 45 % faster and its twelve
+  actors 35 % faster, so the speedup it prints falls from a median of 4.4×
+  to 3.8×; `exception_latency` is 7 % faster and
+  `parallel_speedup` with the pool 8 %; the other workloads are unchanged
+  within the noise, with 1-3.5 % fewer instructions. Under the fixed 640 MB
+  limit, `(1 to: 500000) asArray` peaks at 690 MB of RSS instead of
+  1,165 MB (`KNOWN_ISSUES.md` K5).
+- **Talk materials and figures** (README "Performance", `docs/STATUS.md`,
+  the FAST talk's scripts, notes, hard questions, decks and PDFs) quote that
+  report; the hard questions explain why demo 2's ratio is lower. The demo 2
+  fallback recording was made again on 0.6.5 and 2.14.6.
+  `benchmarks/compare_builds.py` gained `--libdir LABEL=DIR` (one binary,
+  several protoCore libraries, `ldd` checked before every run).
+- Test suite: 1101 cases on Linux, all passing against protoCore 2.14.6 (the
+  `.deb`'s build in a clean Ubuntu 24.04 container with GCC 13, no
+  warnings); CI green on the release branch on Linux (1100 gating cases,
+  also against protoCore 2.11.0), macOS (1100) and Windows (1097)
+  (CI 38306148733, cross-platform 38306152297).
+
 ## 0.6.4 — the talk demos where every installation keeps them (2026-10-12)
 
 - **The talk's runnable material moved to `/usr/share/protoST/talks/`.**

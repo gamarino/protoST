@@ -115,15 +115,21 @@ status 3 and a message that names the limit in force and how to raise it.
 
 **The limits count cells, not the process's memory.** protoCore never takes
 more cells from the system than the limit allows, but the process also holds
-memory that is not cells. The largest part, when the heap is big, is the
-collector's mark work list: a `std::vector` in protoCore's collector thread
-that grows by doubling and holds the old buffer while it copies. Measured on
-0.6.3 with `PROTOCORE_ADAPTIVE_HEAP=0`: `(1 to: 500000) asArray` stops at the
-640 MB cell limit with a peak RSS of 1.19 GB, and the large allocations
-besides the cell blocks are that vector's 32, 64, 128, 256 and 512 MB
-buffers (`benchmarks/reports/2026-10-12-pre-talk-063.md`, section 3). Set a
-cell limit with that margin in mind; bounding the work list is a protoCore
-matter.
+memory that is not cells. Up to protoCore 2.14.5 the largest part, when the
+heap was big, was the collector's mark work list: a `std::vector` that grew
+by doubling and held the old buffer while it copied. Measured on 0.6.3 with
+`PROTOCORE_ADAPTIVE_HEAP=0`: `(1 to: 500000) asArray` stopped at the 640 MB
+cell limit with a peak RSS of 1.19 GB, the large allocations besides the
+cell blocks being that vector's 32 to 512 MB buffers
+(`benchmarks/reports/2026-10-12-pre-talk-063.md`, section 3). protoCore
+2.14.6 bounds the work list (a fixed 8 MiB stack with overflow rescan): the
+same program now peaks at 690 MB instead of 1,165 MB (1,192,800 kB, the
+1.19 GB above) and reaches the
+out-of-memory exit in 3.0 s instead of 5.9 s
+(`benchmarks/reports/2026-10-12-protocore-2.14.6.md`, 5 runs each). The
+remaining excess over the cells is the collector's marked list (8 bytes per
+live cell) and the rest of the process; leave some margin above a cell
+limit.
 
 **Status.** The default no longer runs out of memory on collections of this
 size; the n log n cost remains (a bulk list builder in protoCore would

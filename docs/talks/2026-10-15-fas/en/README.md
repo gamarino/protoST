@@ -28,11 +28,12 @@ Paths in `script.md` and `talk-day-checklist.md` (for example
 shared folders, exactly as in the Spanish version.
 
 The figures come from three reports, named where each is used:
+`benchmarks/reports/2026-10-12-protocore-2.14.6.md` (protoCore 2.14.6
+against 2.14.5 with the same protoST binary, and CPython: startup, the
+CPython comparisons, actors, demo 2, K5's memory),
 `benchmarks/reports/2026-10-12-adaptive-heap-default.md` (0.6.2 against
-0.6.1: startup, actors, memory, demo 2),
-`benchmarks/reports/2026-10-11-protocore-2.14.5.md` (the CPython
-comparisons, measured on the 0.6.0 code) and
+0.6.1: the adaptive heap controller) and
 `benchmarks/reports/2026-10-11-actor-regression-bisection.md` (the noise
 floor). They are copied as they appear there. Decimal commas in the Spanish
-text are written as decimal points here (for example 4,45× becomes 4.45×); no
+text are written as decimal points here (for example 3,8× becomes 3.8×); no
 value was changed.

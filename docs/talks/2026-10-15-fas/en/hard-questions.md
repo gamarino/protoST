@@ -17,54 +17,61 @@ VS Code (`protost --dap`, `docs/debugging.md`). There is no class browser.
 **Performance compared with Pharo?**
 We did not measure against Pharo and we will not give a figure we did not
 measure. We measured against CPython 3.14 with the same algorithm, the same N
-and the same verified result (`benchmarks/reports/2026-10-11-protocore-2.14.5.md`:
-synthetic benchmarks, on a laptop with a 6-core AMD Ryzen 5 5500U, on the
-0.6.0 code with protoCore 2.14.5; 0.6.2 is as fast or faster on every one of
-those programs, according to the report of 12/10):
+and the same verified result (`benchmarks/reports/2026-10-12-protocore-2.14.6.md`:
+synthetic benchmarks, on a laptop with a 6-core AMD Ryzen 5 5500U, with the
+published protoST binary on protoCore 2.14.6 and on 2.14.5):
 
-- startup: 32 ms in that session (CPython: 36 ms); 0.6.2 starts in 24 ms
-  (report of 12/10);
-- whole-process time: from 1.0× to 26× that of CPython, geometric mean 3.5×;
-  with small N, startup weighs heavily in each time;
-- subtracting each runtime's startup, the work itself takes about 5×
-  (integer loop), 30× (`fib`, recursive method dispatch) and 80×
-  (exceptions) as long as in CPython; the geometric mean is between 16× and
-  27× depending on the run (with small N the subtraction is sensitive to
+- startup: 25 ms (CPython: 32–35 ms);
+- whole-process time: from 0.9× to 21–22× that of CPython, geometric mean
+  3.2–3.3× in two runs; with small N, startup weighs heavily in each time;
+- subtracting each runtime's startup, the work itself takes about 4–7×
+  (integer loop), 30–35× (`fib`, recursive method dispatch) and 55–64×
+  (exceptions) as long as in CPython; the geometric mean is between 14× and
+  20× depending on the run (with small N the subtraction is sensitive to
   noise);
-- in parallel (0.6.2, report of 12/10), twelve actors run about 2.7× faster
-  with the pool than with one worker (2.3–2.8× between the two copies of the
-  build), and `saturation_big` reaches 2.6× with four workers and 2.8× with
-  six, no ceiling up to six (with 0.6.1 it stayed at about 2× with four).
+- in parallel, twelve actors run 2.8× faster with the pool than with one
+  worker, and `saturation_big` reaches 2.5× with four workers and 2.9× with
+  six, no ceiling up to six.
 
-protoCore's October collector work (2.10 → 2.14.5) did not change these
-single-thread figures: protoST executed the same instructions as 0.5.0, and
-its programs collected little under the fixed 640 MB ceiling protoST used
-until 0.6.1. Allocation-heavy actor programs measured 4–6 % slower on one
-worker on a busy machine; on a quiet machine, with every build made by the
-same compiler, the difference is within the measurement's noise (1–4 %): protoCore 2.12+ spends a little more collector
-CPU on another core, which shows only when every core is busy
-(`benchmarks/reports/2026-10-11-actor-regression-bisection.md`). Looking for
-it turned up a real bug, fixed in 0.6.1: a recursion that never loops (the
-textbook fib) never had its garbage reclaimed; fib 29 ran out of memory.
-Since 0.6.2 protoST uses protoCore's adaptive heap controller and sizes
-each thread's frame array on demand (K6): against 0.6.1, actor programs run
-16–43 % faster with a fifth to a half of the memory, and demo 2 showed a
-median of 4.45× instead of 4.3× on the talk laptop
-(`benchmarks/reports/2026-10-12-adaptive-heap-default.md`). That figure
-depends on the machine: typically between 3× and 5×. In the pre-talk audit,
-the same package inside an Ubuntu 24.04 container, on the same hardware, gave
-a median of about 2.5×. Investigated afterwards
-(`benchmarks/reports/2026-10-12-pre-talk-063.md`): the container is not
-slower. The twelve actors take the same time; what changes is the
-one-thread half, 10 % faster with Ubuntu 24.04's glibc 2.39 than with the
-laptop's 2.43 (a cheaper malloc for the temporaries protoCore creates when
-it compares integers), so the ratio drops (medians of 3.9–4.2× against
-4.4–4.5× in alternating runs). The compiler makes no difference. That 2.5×
-median most likely also included the machine's load at the time: with the
-machine busy, every configuration dropped to 2–3×.
+Since 0.6.2 protoST uses protoCore's adaptive heap controller and sizes each
+thread's frame array on demand (K6): against 0.6.1, actor programs run
+16–43 % faster with a fifth to a half of the memory
+(`benchmarks/reports/2026-10-12-adaptive-heap-default.md`). Looking for a
+small actor regression turned up a real bug, fixed in 0.6.1: a recursion
+that never loops (the textbook fib) never had its garbage reclaimed; fib 29
+ran out of memory
+(`benchmarks/reports/2026-10-11-actor-regression-bisection.md`).
 
 In other words: on one thread protoST is considerably slower than CPython.
 What we show is that the same code uses several cores.
+
+**Why does demo 2 show less speedup than before?**
+Because the single-thread code got faster. protoCore 2.14.6 stopped creating
+temporaries when it compares, divides or takes the modulo of small integers,
+and demo 2 is exactly that (`isPrime` in a loop). Measured with the same
+binary on both protoCore versions, 15 alternating rounds (report of 12/10 on
+2.14.6):
+
+| | protoCore 2.14.5 | protoCore 2.14.6 | change |
+|---|---:|---:|---:|
+| one thread | 1681 ms | 925 ms | 45 % faster |
+| twelve actors | 377 ms | 245 ms | 35 % faster |
+| speedup shown | 4.4× | 3.8× | |
+
+Both times improve; the one-thread time improves more, so the ratio drops.
+Parallelism did not get worse: the twelve actors finish sooner than ever.
+On the rest of the benchmarks 2.14.6 changes nothing beyond the noise except
+exceptions (7 % faster) and `parallel_speedup` with the pool (8 %). The
+protoCore report measured the same in another session, with the machine
+busier (one thread 33 % and twelve actors 26 % faster, ratio 2.99× →
+2.66×); the talk's figures are those of our report.
+
+Before 2.14.6 those temporaries made the demo depend on glibc: in the
+pre-talk audit the one-thread half ran 10 % faster with Ubuntu 24.04's
+glibc 2.39 than with the laptop's 2.43
+(`benchmarks/reports/2026-10-12-pre-talk-063.md`); with 2.14.6 they no
+longer allocate. And with the machine busy every configuration dropped to
+2–3×: the figure on screen depends on the machine and its load.
 
 **What is the GC like?**
 protoCore's: concurrent, with its own thread. Since 0.6.2 protoST lets
@@ -78,11 +85,13 @@ is no longer capped at 640 MB: a loop that keeps allocating reached
 is 640 MB of cells), and `PROTOCORE_ADAPTIVE_HEAP=0` restores 0.6.1's 640 MB
 ceiling (`KNOWN_ISSUES.md`, K5). Note that this ceiling counts cells, not the
 process's memory. With `PROTOCORE_ADAPTIVE_HEAP=0`,
-`(1 to: 500000) asArray` runs out of memory with a 1.19 GB peak RSS: the
-difference is the collector's mark work list, a vector that doubles outside
-the cell heap (up to 512 MB, plus the previous block while it is copied),
-besides the rest of the memory that is not cells. Measured with gdb on
-0.6.3; it is a protoCore matter, not protoST's. It was not used up to 0.6.1 because under it
+`(1 to: 500000) asArray` runs out of memory; with protoCore 2.14.5 its peak
+RSS reached 1,165 MB (the audit's 1.19 GB: 1,192,800 kB), because the
+collector's mark work list was a vector that doubled outside the cell heap
+(up to 512 MB). protoCore 2.14.6 bounds it to a fixed 8 MiB stack: the same
+program peaks at 690 MB and exits in 3.0 s instead of 5.9 s (report of
+12/10 on 2.14.6, five runs). What remains above the cells is now the list of
+marked cells and the rest of the process. It was not used up to 0.6.1 because under it
 `fib.st` took three times as long; the cause was protoST's (a recursion did
 not hand over its garbage), fixed in 0.6.1. The sweep, the most expensive
 phase, walks several chains at once and can add helper threads (2.14). The
@@ -159,7 +168,7 @@ protoClojure use too: the same input and output exists, under each language's
 own names, in the three runtimes.
 
 **Does it run on Windows?**
-The published package (0.6.4) is for Linux; on Windows it runs under WSL2
+The published package (0.6.5) is for Linux; on Windows it runs under WSL2
 with Ubuntu 24.04, installing the same `.deb` packages. The sources
 build natively with Visual Studio 2022, and continuous integration runs the
 suite on Windows: 1097 cases, all but the ones that depend on POSIX
@@ -168,7 +177,7 @@ console test; `docs/INSTALLATION.md`, "Windows (MSVC)". There is no
 published Windows package yet.
 
 **Is it stable? What open bugs does it have?**
-0.5.0 passed its 1068 `ctest` cases; 0.6.4 (with protoCore 2.14.5) passes
+0.5.0 passed its 1068 `ctest` cases; 0.6.5 (with protoCore 2.14.6) passes
 its 1101 cases on Linux: conformance programs, unit tests, the
 examples, command-line tests and the documentation examples. Continuous
 integration runs 1100 on Linux and on macOS (plus a parallelism proof measured with a clock, which does not gate on a shared runner) and

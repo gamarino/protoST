@@ -64,6 +64,14 @@ python3 benchmarks/compare_builds.py --json out.json \
     old=/usr/bin/protost new=build_release/protost
 ```
 
+To compare one binary against two protoCore libraries, list it twice and
+give each label its library directory; `ldd` is checked before every run:
+
+```bash
+python3 benchmarks/compare_builds.py --json out.json \
+    old=/usr/bin/protost new=/usr/bin/protost --libdir new=/path/to/protoCore/lib
+```
+
 Reports live in `reports/`, one dated file per run; the first is
 `reports/2026-05-21-baseline.md`, the latest
-`reports/2026-10-11-protocore-2.14.5.md` (raw data in `reports/data/`).
+`reports/2026-10-12-protocore-2.14.6.md` (raw data in `reports/data/`).

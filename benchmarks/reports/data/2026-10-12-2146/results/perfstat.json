@@ -1,0 +1,434 @@
+{
+ "repeat": 5,
+ "builds": [
+  [
+   "2.14.5",
+   "/usr/bin/protost",
+   {
+    "LD_LIBRARY_PATH": "/home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145"
+   }
+  ],
+  [
+   "2.14.6",
+   "/usr/bin/protost",
+   {
+    "LD_LIBRARY_PATH": "/home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146"
+   }
+  ]
+ ],
+ "rows": [
+  {
+   "name": "startup",
+   "env": {},
+   "load": 6.7099609375,
+   "contenders": [],
+   "results": {
+    "2.14.5": {
+     "cycles": 96775774.0,
+     "cycles_var_pct": "1.43",
+     "instructions": 91868500.0,
+     "instructions_var_pct": "0.19",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3"
+    },
+    "2.14.6": {
+     "cycles": 96407971.0,
+     "cycles_var_pct": "1.16",
+     "instructions": 91172298.0,
+     "instructions_var_pct": "0.12",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3"
+    }
+   }
+  },
+  {
+   "name": "int_sum_loop",
+   "env": {},
+   "load": 6.7099609375,
+   "contenders": [],
+   "results": {
+    "2.14.6": {
+     "cycles": 166749986.0,
+     "cycles_var_pct": "0.57",
+     "instructions": 288868531.0,
+     "instructions_var_pct": "0.04",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3"
+    },
+    "2.14.5": {
+     "cycles": 175651958.0,
+     "cycles_var_pct": "2.54",
+     "instructions": 287747684.0,
+     "instructions_var_pct": "0.05",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3"
+    }
+   }
+  },
+  {
+   "name": "fib",
+   "env": {},
+   "load": 6.57275390625,
+   "contenders": [],
+   "results": {
+    "2.14.5": {
+     "cycles": 1716749648.0,
+     "cycles_var_pct": "0.84",
+     "instructions": 2467319240.0,
+     "instructions_var_pct": "0.19",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3"
+    },
+    "2.14.6": {
+     "cycles": 1707739748.0,
+     "cycles_var_pct": "1.12",
+     "instructions": 2423491076.0,
+     "instructions_var_pct": "0.40",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3"
+    }
+   }
+  },
+  {
+   "name": "list_append",
+   "env": {},
+   "load": 6.57275390625,
+   "contenders": [],
+   "results": {
+    "2.14.6": {
+     "cycles": 260199171.0,
+     "cycles_var_pct": "1.08",
+     "instructions": 257809953.0,
+     "instructions_var_pct": "0.11",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3"
+    },
+    "2.14.5": {
+     "cycles": 252815717.0,
+     "cycles_var_pct": "1.05",
+     "instructions": 261656111.0,
+     "instructions_var_pct": "0.16",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3"
+    }
+   }
+  },
+  {
+   "name": "str_concat",
+   "env": {},
+   "load": 6.57275390625,
+   "contenders": [],
+   "results": {
+    "2.14.5": {
+     "cycles": 107022842.0,
+     "cycles_var_pct": "0.77",
+     "instructions": 120085944.0,
+     "instructions_var_pct": "0.13",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3"
+    },
+    "2.14.6": {
+     "cycles": 110108476.0,
+     "cycles_var_pct": "1.51",
+     "instructions": 119586077.0,
+     "instructions_var_pct": "0.15",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3"
+    }
+   }
+  },
+  {
+   "name": "attr_lookup",
+   "env": {},
+   "load": 6.12646484375,
+   "contenders": [],
+   "results": {
+    "2.14.6": {
+     "cycles": 664206614.0,
+     "cycles_var_pct": "0.68",
+     "instructions": 1018721306.0,
+     "instructions_var_pct": "0.09",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3"
+    },
+    "2.14.5": {
+     "cycles": 666557565.0,
+     "cycles_var_pct": "0.68",
+     "instructions": 1040536355.0,
+     "instructions_var_pct": "0.09",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3"
+    }
+   }
+  },
+  {
+   "name": "range_iterate",
+   "env": {},
+   "load": 6.12646484375,
+   "contenders": [],
+   "results": {
+    "2.14.5": {
+     "cycles": 351716932.0,
+     "cycles_var_pct": "1.23",
+     "instructions": 443936974.0,
+     "instructions_var_pct": "0.10",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3"
+    },
+    "2.14.6": {
+     "cycles": 344275518.0,
+     "cycles_var_pct": "1.07",
+     "instructions": 435554222.0,
+     "instructions_var_pct": "0.12",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3"
+    }
+   }
+  },
+  {
+   "name": "exception_latency",
+   "env": {},
+   "load": 6.12646484375,
+   "contenders": [],
+   "results": {
+    "2.14.6": {
+     "cycles": 4208088190.0,
+     "cycles_var_pct": "0.95",
+     "instructions": 8039376235.0,
+     "instructions_var_pct": "0.04",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3"
+    },
+    "2.14.5": {
+     "cycles": 4694949131.0,
+     "cycles_var_pct": "2.33",
+     "instructions": 8628061074.0,
+     "instructions_var_pct": "0.27",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3"
+    }
+   }
+  },
+  {
+   "name": "parallel_speedup pool",
+   "env": {},
+   "load": 5.4853515625,
+   "contenders": [],
+   "results": {
+    "2.14.5": {
+     "cycles": 3426007941.0,
+     "cycles_var_pct": "1.08",
+     "instructions": 5757629160.0,
+     "instructions_var_pct": "0.24",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3"
+    },
+    "2.14.6": {
+     "cycles": 3365205259.0,
+     "cycles_var_pct": "0.89",
+     "instructions": 5629470510.0,
+     "instructions_var_pct": "0.16",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3"
+    }
+   }
+  },
+  {
+   "name": "parallel_speedup w=1",
+   "env": {
+    "PROTOST_WORKERS": "1"
+   },
+   "load": 5.76708984375,
+   "contenders": [],
+   "results": {
+    "2.14.6": {
+     "cycles": 2477971104.0,
+     "cycles_var_pct": "0.40",
+     "instructions": 5578035115.0,
+     "instructions_var_pct": "0.02",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3"
+    },
+    "2.14.5": {
+     "cycles": 2426748669.0,
+     "cycles_var_pct": "0.21",
+     "instructions": 5766067388.0,
+     "instructions_var_pct": "0.03",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3"
+    }
+   }
+  },
+  {
+   "name": "cooperative_yield w=2",
+   "env": {
+    "PROTOST_WORKERS": "2"
+   },
+   "load": 5.54541015625,
+   "contenders": [],
+   "results": {
+    "2.14.5": {
+     "cycles": 2835999405.0,
+     "cycles_var_pct": "0.91",
+     "instructions": 4501837018.0,
+     "instructions_var_pct": "0.40",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3"
+    },
+    "2.14.6": {
+     "cycles": 2782988941.0,
+     "cycles_var_pct": "1.04",
+     "instructions": 4360122457.0,
+     "instructions_var_pct": "0.46",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3"
+    }
+   }
+  },
+  {
+   "name": "message_throughput",
+   "env": {},
+   "load": 5.7080078125,
+   "contenders": [],
+   "results": {
+    "2.14.6": {
+     "cycles": 754411358.0,
+     "cycles_var_pct": "1.56",
+     "instructions": 293162455.0,
+     "instructions_var_pct": "1.11",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3"
+    },
+    "2.14.5": {
+     "cycles": 751589950.0,
+     "cycles_var_pct": "1.27",
+     "instructions": 293380810.0,
+     "instructions_var_pct": "1.46",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3"
+    }
+   }
+  },
+  {
+   "name": "saturation_big w=1",
+   "env": {
+    "PROTOST_WORKERS": "1"
+   },
+   "load": 5.7080078125,
+   "contenders": [],
+   "results": {
+    "2.14.5": {
+     "cycles": 11602067893.0,
+     "cycles_var_pct": "0.58",
+     "instructions": 27687029356.0,
+     "instructions_var_pct": "0.01",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3"
+    },
+    "2.14.6": {
+     "cycles": 11611104966.0,
+     "cycles_var_pct": "0.38",
+     "instructions": 26724745056.0,
+     "instructions_var_pct": "0.02",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3"
+    }
+   }
+  },
+  {
+   "name": "saturation_big w=2",
+   "env": {
+    "PROTOST_WORKERS": "2"
+   },
+   "load": 4.0927734375,
+   "contenders": [],
+   "results": {
+    "2.14.6": {
+     "cycles": 11523073553.0,
+     "cycles_var_pct": "0.93",
+     "instructions": 26616096157.0,
+     "instructions_var_pct": "0.03",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3"
+    },
+    "2.14.5": {
+     "cycles": 11333527606.0,
+     "cycles_var_pct": "0.79",
+     "instructions": 27329996852.0,
+     "instructions_var_pct": "0.05",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3"
+    }
+   }
+  },
+  {
+   "name": "saturation_big w=3",
+   "env": {
+    "PROTOST_WORKERS": "3"
+   },
+   "load": 4.2939453125,
+   "contenders": [],
+   "results": {
+    "2.14.5": {
+     "cycles": 12452519784.0,
+     "cycles_var_pct": "3.37",
+     "instructions": 27455355448.0,
+     "instructions_var_pct": "0.06",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3"
+    },
+    "2.14.6": {
+     "cycles": 12267321569.0,
+     "cycles_var_pct": "0.74",
+     "instructions": 26767513548.0,
+     "instructions_var_pct": "0.06",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3"
+    }
+   }
+  },
+  {
+   "name": "saturation_big w=4",
+   "env": {
+    "PROTOST_WORKERS": "4"
+   },
+   "load": 5.38720703125,
+   "contenders": [],
+   "results": {
+    "2.14.6": {
+     "cycles": 12693381858.0,
+     "cycles_var_pct": "1.50",
+     "instructions": 26978672072.0,
+     "instructions_var_pct": "0.09",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3"
+    },
+    "2.14.5": {
+     "cycles": 12650053771.0,
+     "cycles_var_pct": "1.26",
+     "instructions": 27595155695.0,
+     "instructions_var_pct": "0.08",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3"
+    }
+   }
+  },
+  {
+   "name": "saturation_big w=5",
+   "env": {
+    "PROTOST_WORKERS": "5"
+   },
+   "load": 6.4833984375,
+   "contenders": [],
+   "results": {
+    "2.14.5": {
+     "cycles": 14033267639.0,
+     "cycles_var_pct": "0.93",
+     "instructions": 27574090696.0,
+     "instructions_var_pct": "0.11",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3"
+    },
+    "2.14.6": {
+     "cycles": 13298518541.0,
+     "cycles_var_pct": "1.80",
+     "instructions": 26878710126.0,
+     "instructions_var_pct": "0.03",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3"
+    }
+   }
+  },
+  {
+   "name": "saturation_big w=6",
+   "env": {
+    "PROTOST_WORKERS": "6"
+   },
+   "load": 8.248046875,
+   "contenders": [],
+   "results": {
+    "2.14.6": {
+     "cycles": 15047018920.0,
+     "cycles_var_pct": "1.98",
+     "instructions": 26993967951.0,
+     "instructions_var_pct": "0.41",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2146/libprotoCore.so.3"
+    },
+    "2.14.5": {
+     "cycles": 14738362483.0,
+     "cycles_var_pct": "2.61",
+     "instructions": 27660100252.0,
+     "instructions_var_pct": "0.40",
+     "protoCore": "libprotoCore.so.3 => /home/gamarino/Documentos/proyectos/.agent_scratch/protost-2146/lib2145/libprotoCore.so.3"
+    }
+   }
+  }
+ ],
+ "errors": []
+}

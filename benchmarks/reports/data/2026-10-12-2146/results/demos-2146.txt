@@ -1,0 +1,4 @@
+01-familiar-code: 10/10
+02-actors-parallelism: 10/10
+03-digital-twin: 10/10
+04-connected-twin: 10/10

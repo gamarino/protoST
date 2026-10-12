@@ -1,0 +1,20 @@
+startup                  2145a     25.1 ms  2146a     25.5 ms  2145b     25.0 ms  2146b     24.3 ms
+int_sum_loop             2145a     61.8 ms  2146a     45.6 ms  2145b     48.1 ms  2146b     60.2 ms
+fib                      2145a    393.1 ms  2146a    391.4 ms  2145b    399.1 ms  2146b    434.3 ms
+list_append              2145a     52.8 ms  2146a     57.7 ms  2145b     54.2 ms  2146b     44.6 ms
+str_concat               2145a     29.9 ms  2146a     29.2 ms  2145b     40.7 ms  2146b     27.9 ms
+attr_lookup              2145a    182.2 ms  2146a    190.0 ms  2145b    192.7 ms  2146b    186.4 ms
+range_iterate            2145a     80.8 ms  2146a     77.2 ms  2145b     80.0 ms  2146b     79.9 ms
+exception_latency        2145a   1085.0 ms  2146a   1006.7 ms  2145b   1064.2 ms  2146b   1011.5 ms
+parallel_speedup pool    2145a    259.1 ms  2146a    240.5 ms  2145b    267.9 ms  2146b    251.0 ms
+parallel_speedup w=1     2145a    676.3 ms  2146a    668.8 ms  2145b    687.5 ms  2146b    670.8 ms
+cooperative_yield w=2    2145a    521.5 ms  2146a    547.0 ms  2145b    536.0 ms  2146b    530.7 ms
+message_throughput       2145a     76.7 ms  2146a     77.9 ms  2145b     69.8 ms  2146b     71.5 ms
+saturation_big w=1       2145a   2912.4 ms  2146a   2914.7 ms  2145b   2938.9 ms  2146b   2868.2 ms
+saturation_big w=2       2145a   1693.3 ms  2146a   1730.0 ms  2145b   1720.4 ms  2146b   1753.3 ms
+saturation_big w=3       2145a   1381.7 ms  2146a   1316.4 ms  2145b   1308.7 ms  2146b   1321.5 ms
+saturation_big w=4       2145a   1135.6 ms  2146a   1163.8 ms  2145b   1110.2 ms  2146b   1119.0 ms
+saturation_big w=5       2145a   1052.2 ms  2146a   1071.2 ms  2145b   1104.0 ms  2146b   1100.2 ms
+saturation_big w=6       2145a   1002.7 ms  2146a   1057.1 ms  2145b   1023.7 ms  2146b    976.6 ms
+
+All runs verified.

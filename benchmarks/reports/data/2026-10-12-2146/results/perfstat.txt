@@ -1,0 +1,18 @@
+startup                  2.14.5: 97 Mcyc 92 Minstr  2.14.6: 96 Mcyc 91 Minstr  load 6.7
+int_sum_loop             2.14.6: 167 Mcyc 289 Minstr  2.14.5: 176 Mcyc 288 Minstr  load 6.7
+fib                      2.14.5: 1717 Mcyc 2467 Minstr  2.14.6: 1708 Mcyc 2423 Minstr  load 6.6
+list_append              2.14.6: 260 Mcyc 258 Minstr  2.14.5: 253 Mcyc 262 Minstr  load 6.6
+str_concat               2.14.5: 107 Mcyc 120 Minstr  2.14.6: 110 Mcyc 120 Minstr  load 6.6
+attr_lookup              2.14.6: 664 Mcyc 1019 Minstr  2.14.5: 667 Mcyc 1041 Minstr  load 6.1
+range_iterate            2.14.5: 352 Mcyc 444 Minstr  2.14.6: 344 Mcyc 436 Minstr  load 6.1
+exception_latency        2.14.6: 4208 Mcyc 8039 Minstr  2.14.5: 4695 Mcyc 8628 Minstr  load 6.1
+parallel_speedup pool    2.14.5: 3426 Mcyc 5758 Minstr  2.14.6: 3365 Mcyc 5629 Minstr  load 5.5
+parallel_speedup w=1     2.14.6: 2478 Mcyc 5578 Minstr  2.14.5: 2427 Mcyc 5766 Minstr  load 5.8
+cooperative_yield w=2    2.14.5: 2836 Mcyc 4502 Minstr  2.14.6: 2783 Mcyc 4360 Minstr  load 5.5
+message_throughput       2.14.6: 754 Mcyc 293 Minstr  2.14.5: 752 Mcyc 293 Minstr  load 5.7
+saturation_big w=1       2.14.5: 11602 Mcyc 27687 Minstr  2.14.6: 11611 Mcyc 26725 Minstr  load 5.7
+saturation_big w=2       2.14.6: 11523 Mcyc 26616 Minstr  2.14.5: 11334 Mcyc 27330 Minstr  load 4.1
+saturation_big w=3       2.14.5: 12453 Mcyc 27455 Minstr  2.14.6: 12267 Mcyc 26768 Minstr  load 4.3
+saturation_big w=4       2.14.6: 12693 Mcyc 26979 Minstr  2.14.5: 12650 Mcyc 27595 Minstr  load 5.4
+saturation_big w=5       2.14.5: 14033 Mcyc 27574 Minstr  2.14.6: 13299 Mcyc 26879 Minstr  load 6.5
+saturation_big w=6       2.14.6: 15047 Mcyc 26994 Minstr  2.14.5: 14738 Mcyc 27660 Minstr  load 8.2
