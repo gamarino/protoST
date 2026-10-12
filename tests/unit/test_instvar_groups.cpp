@@ -374,10 +374,20 @@ std::atomic<long> gMidway{0};
 
 // Takes one snapshot of the shared object's own attributes at a time and
 // checks that its three variables carry the same round number.
+//
+// The loop allocates nothing, so it must reach a safepoint itself: a thread
+// that never does starves a stop-the-world (protoCore,
+// ProtoContext::safepoint), and the writer, parked for that stop, never
+// finishes. Under the fixed heap limit no collection ran during this test;
+// under the adaptive controller, protoST's default since 0.6.2, one does, and
+// without this call the test hung (main thread in parkForAnyStop, this one
+// spinning). At the top of an iteration the previous snapshot is dead and the
+// shared object is a global, so the precondition of safepoint() holds.
 const proto::ProtoObject* snapshotReader(proto::ProtoContext* c, const proto::ProtoObject*,
                                          const proto::ParentLink*, const proto::ProtoList*,
                                          const proto::ProtoSparseList*) {
     while (!gWriterDone.load(std::memory_order_acquire)) {
+        c->safepoint();
         const proto::ProtoSparseList* snap = gShared->getOwnAttributes(c);
         const proto::ProtoObject* v[3];
         for (int i = 0; i < 3; ++i)

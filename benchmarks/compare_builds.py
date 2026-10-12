@@ -10,7 +10,7 @@ run_benchmarks.py: the program's last line must be `VERIFIED <expected>`, the
 exit status must be 0, and any failure makes the script exit non-zero.
 
 For each run it records the wall-clock time, the peak resident set size of
-the child (wait4), the 1-minute load average and whether a process from a
+the child (wait4), its user and system CPU time (wait4), the 1-minute load average and whether a process from a
 list of known competitors (compilers, build tools, test runners, protoCore
 runtimes) was
 running when the run started.
@@ -104,6 +104,7 @@ def run_once(binary, tail, env):
     out = b"".join(chunks_out).decode(errors="replace")
     err = b"".join(chunks_err).decode(errors="replace")
     return {"ok": p.returncode == 0, "rc": p.returncode, "ms": ms, "rss_kb": ru.ru_maxrss,
+            "user_ms": ru.ru_utime * 1000.0, "sys_ms": ru.ru_stime * 1000.0,
             "out": out, "err": err, "load": load, "contenders": contenders}
 
 
@@ -152,12 +153,17 @@ def main():
                     continue
                 if rnd >= args.warmup:
                     samples[b["label"]].append({"ms": round(r["ms"], 2), "rss_kb": r["rss_kb"],
+                                                "user_ms": round(r["user_ms"], 2),
+                                                "sys_ms": round(r["sys_ms"], 2),
                                                 "load": round(r["load"], 2),
                                                 "contenders": r["contenders"]})
         row = {"name": name, "env": env, "expected": expected, "samples": samples,
                "median_ms": {l: (median([s["ms"] for s in v]) if len(v) == args.runs else None)
                              for l, v in samples.items()},
                "median_rss_kb": {l: (median([s["rss_kb"] for s in v]) if len(v) == args.runs else None)
+                                 for l, v in samples.items()},
+               "median_cpu_ms": {l: (median([s["user_ms"] + s["sys_ms"] for s in v])
+                                     if len(v) == args.runs else None)
                                  for l, v in samples.items()}}
         results["workloads"].append(row)
         cells = "  ".join(f"{l} {('%.1f' % m) if m else 'FAIL':>8} ms" for l, m in row["median_ms"].items())

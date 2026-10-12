@@ -29,6 +29,7 @@
 #include "Semaphore.h"
 #include <condition_variable>
 #include <cstdint>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -2455,51 +2456,73 @@ std::string STRuntime::findModuleFile(const std::string& logicalPath) const {
     return "";
 }
 
-// Memory policy. protoCore's collector defers work until it is needed: it runs
-// in parallel and triggers as the heap approaches the configured ceiling. With
-// no ceiling it is never needed, so an allocating 3M-iteration loop grew to
-// 7-12 GB (a soft watermark alone still reached 4 GB). protoST therefore sets a
-// hard ceiling by default. Measured on 2026-09-29 with a 10M-cell ceiling: that
-// loop peaks at 0.8 GB and takes 36 s instead of 20 s -- the cost of actually
-// collecting instead of never collecting; fib, int_sum_loop, list_append,
-// str_concat, exception_latency and pump_twin show no measurable difference.
-// A 32M-cell default was tried the same day, so that an Array of 600,000
-// elements or (1 to: 1000000) asArray fit (a large list costs n log n cells
-// in protoCore): it made allocation-heavy actor code 17% slower
-// (saturation_big, one worker, 3.1 s -> 3.7 s), since the collector waits for
-// the ceiling. 10M stays the default; a program that needs more is told how
-// to raise it (reportOutOfMemory). Capped at a quarter of physical memory.
-// An explicit PROTOCORE_HEAP_LIMIT_CELLS, which
-// protoCore has already applied, takes precedence (0 disables the ceiling).
+// Memory policy (since 0.6.2): protoCore's adaptive heap controller
+// (protoCore docs/GarbageCollector.md, "Adaptive heap controller"), as in
+// protoPython, protoScala and protoClojure. The heap budget is 75 % of the
+// smaller of physical memory and the process memory limit (cgroup on Linux,
+// job object on Windows); a soft limit inside it, 128 MB at start, triggers
+// the collections and grows only while the program waits for the collector.
+// Memory is never returned to the operating system. Measured on 2026-10-11
+// and 2026-10-12 (benchmarks/reports/): against the fixed limit below, the
+// actor workloads run 10-27 % faster with about a third of the memory, and
+// fib.st is unchanged -- once call entry became a safepoint (0.6.1), so that
+// a program that only recurses hands its garbage to the collector at all.
 //
-// A live set that itself reaches the ceiling is reported by protoCore through
-// outOfMemoryCallback, after which it aborts; protoST ends the process first,
-// with a message and exit status 3, so running out of memory never leaves a
-// core dump.
+// Precedence, highest first (tests/unit/test_heap_policy.cpp):
+//   1. PROTOCORE_ADAPTIVE_HEAP=1: the controller, which protoCore enables at
+//      the space's creation; PROTOCORE_HEAP_LIMIT_CELLS, when set, is its
+//      budget.
+//   2. PROTOCORE_HEAP_LIMIT_CELLS=<hard> or <soft>,<hard>: a fixed limit of
+//      that many cells, which protoCore has already applied (0: no limit).
+//   3. PROTOCORE_ADAPTIVE_HEAP=0: the fixed limit that was protoST's default
+//      up to 0.6.1, 10M cells (640 MB), capped at a quarter of physical
+//      memory. Measured on 2026-09-29: an allocating 3M-iteration loop peaks
+//      at 0.8 GB under it; a 32M-cell ceiling made saturation_big 17 % slower,
+//      since a fixed limit collects only near the ceiling.
+//   4. Otherwise: the controller with its automatic budget.
+//
+// A live set that itself fills the budget or the limit is reported by
+// protoCore through outOfMemoryCallback, after which it aborts; protoST ends
+// the process first, with a message and exit status 3, so running out of
+// memory never leaves a core dump.
 namespace {
 constexpr long long kCellBytes = 64;
-constexpr long long kDefaultHardCells = 10'000'000;          // 640 MB of cells
+constexpr long long kFixedHardCells = 10'000'000;            // 640 MB of cells
 
-int defaultHardCells();
+bool envEquals(const char* name, const char* value) {
+    const char* v = std::getenv(name);
+    return v && std::strcmp(v, value) == 0;
+}
 
-proto::ProtoObject* reportOutOfMemory(proto::ProtoContext*) {
-    std::fflush(stdout);
-    // protoCore calls this only after consecutive collections reclaimed
-    // nothing: the live set itself fills the ceiling.
+// The limit the out-of-memory report names: the controller's budget, or the
+// fixed limit in force.
+long long heapCeilingCells(const proto::ProtoContext* ctx) {
+    if (ctx && ctx->space) {
+        const proto::AdaptiveHeapStats stats = ctx->space->adaptiveHeapStats();
+        if (stats.enabled) return static_cast<long long>(stats.hardCells);
+        if (ctx->space->maxHeapSize > 0) return ctx->space->maxHeapSize;
+    }
     const char* env = std::getenv("PROTOCORE_HEAP_LIMIT_CELLS");
-    const long long cells = env ? std::atoll(env) : defaultHardCells();
+    return env ? std::atoll(env) : kFixedHardCells;
+}
+
+proto::ProtoObject* reportOutOfMemory(proto::ProtoContext* ctx) {
+    std::fflush(stdout);
+    // protoCore calls this only when the live set itself does not fit: the
+    // last collections reclaimed nothing.
+    const long long cells = heapCeilingCells(ctx);
     std::fprintf(stderr, "error: out of memory: the live objects fill the heap limit of %lld cells "
                          "(%lld MB) and the last collections reclaimed nothing. To allow more, set "
                          "PROTOCORE_HEAP_LIMIT_CELLS (each cell is 64 bytes), e.g. "
                          "PROTOCORE_HEAP_LIMIT_CELLS=%lld for %lld MB.\n",
-                 cells, cells * 64 / 1000000, cells * 4, cells * 4 * 64 / 1000000);
+                 cells, cells * kCellBytes / 1000000, cells * 4, cells * 4 * kCellBytes / 1000000);
     std::fflush(stderr);
     std::_Exit(3);
 }
 
-int defaultHardCells() {
-    // The default ceiling, or a quarter of physical memory if that is smaller.
-    long long cells = kDefaultHardCells;
+int fixedHardCells() {
+    // The fixed ceiling, or a quarter of physical memory if that is smaller.
+    long long cells = kFixedHardCells;
 #if defined(_SC_PHYS_PAGES) && defined(_SC_PAGESIZE)
     const long pages = ::sysconf(_SC_PHYS_PAGES);
     const long pageSize = ::sysconf(_SC_PAGESIZE);
@@ -2517,8 +2540,17 @@ int defaultHardCells() {
 
 void STRuntime::configureHeap(proto::ProtoSpace& space) {
     space.outOfMemoryCallback = reportOutOfMemory;
+    // 1. protoCore enabled the controller at the space's creation.
+    if (envEquals("PROTOCORE_ADAPTIVE_HEAP", "1")) return;
+    // 2. protoCore applied the explicit fixed limit at the space's creation.
     if (std::getenv("PROTOCORE_HEAP_LIMIT_CELLS")) return;
-    space.setHeapLimits(0, defaultHardCells());
+    // 3. The pre-0.6.2 fixed limit.
+    if (envEquals("PROTOCORE_ADAPTIVE_HEAP", "0")) {
+        space.setHeapLimits(0, fixedHardCells());
+        return;
+    }
+    // 4. The default.
+    space.enableAdaptiveHeap();
 }
 
 // The kernel: protocol implemented in protoST source (lib/kernel/*.st), run

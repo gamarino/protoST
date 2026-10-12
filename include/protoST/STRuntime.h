@@ -252,7 +252,8 @@ public:
     inline const char* versionTag() const { return PROTOST_VERSION; }
 
 private:
-    // Installs protoST's default heap limits and out-of-memory report.
+    // Installs protoST's memory policy (the adaptive heap controller unless the
+    // environment asks for a fixed limit) and its out-of-memory report.
     static void configureHeap(proto::ProtoSpace& space);
 
     // Loads the Smalltalk-source kernel (<lib>/kernel, in the order of its
