@@ -76,35 +76,58 @@ struct GcHost {
 // a mutable object, so a single cycle over a heap of dead arrays can
 // legitimately reclaim nothing.
 //
-// Returns the largest per-cycle reclaim seen, and how many cycles ran.
-struct CycleResult {
-    uint64_t      cycles    = 0;
+// Every cycle is observed, wherever it ran: a cycle can also start while a
+// program runs (under the adaptive heap controller, protoST's default since
+// 0.6.2, pacing starts one when the allocation rate calls for it), and its
+// reclaim is published in `reclaimedLastCycle` only until the next cycle ends.
+// The observer is therefore consulted after every program as well as while
+// waiting, and keeps the largest per-cycle reclaim it saw and a log of every
+// observation for the failure message. (Before 0.6.2 the observation was reset
+// at each wait, so a cycle that ran during a program was never counted; under
+// the controller on a CI runner that made the test fail with "best cycle
+// reclaimed 0" although the heap had been collected.)
+struct CycleObserver {
+    proto::ProtoSpace* sp;
+    uint64_t           seen;
     proto::proto_ulong maxReclaimed = 0;
+    std::string        log;
+
+    explicit CycleObserver(proto::ProtoSpace* s) : sp(s), seen(s->getGCCycleCount()) {}
+
+    // Answers how many cycles completed since the last observation.
+    uint64_t observe(const char* where) {
+        const uint64_t now = sp->getGCCycleCount();
+        if (now == seen) return 0;
+        const uint64_t ran = now - seen;
+        seen = now;
+        const proto::proto_ulong r = sp->reclaimedLastCycle.load(std::memory_order_relaxed);
+        if (r > maxReclaimed) maxReclaimed = r;
+        const proto::AdaptiveHeapStats a = sp->adaptiveHeapStats();
+        log += std::string("\n  ") + where + ": cycle " + std::to_string(now)
+             + (ran > 1 ? " (" + std::to_string(ran) + " since last look)" : std::string())
+             + ", reclaimed " + std::to_string(r)
+             + ", live " + std::to_string(sp->liveCellsLastCycle.load(std::memory_order_relaxed))
+             + ", heap " + std::to_string(sp->heapSize)
+             + ", free " + std::to_string(sp->freeCellsCount)
+             + (a.enabled ? ", soft limit " + std::to_string(a.softCells) : std::string(", fixed limit"));
+        return ran;
+    }
 };
 
-CycleResult forceCycles(protoST::STRuntime& rt, uint64_t wanted,
-                        std::chrono::seconds budget) {
+// Ask for one more collection and wait for it, with this thread parked.
+// Answers whether a cycle completed within the budget.
+bool forceCycle(protoST::STRuntime& rt, CycleObserver& obs, std::chrono::seconds budget) {
     proto::ProtoSpace* sp = rt.space();
-    const uint64_t start = sp->getGCCycleCount();
-    CycleResult out;
-    uint64_t seen = start;
     const auto deadline = std::chrono::steady_clock::now() + budget;
-    while (out.cycles < wanted && std::chrono::steady_clock::now() < deadline) {
+    while (std::chrono::steady_clock::now() < deadline) {
         sp->triggerGC();
         {
             proto::ProtoContext::UnmanagedScope parked(rt.rootCtx());
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
-        const uint64_t now = sp->getGCCycleCount();
-        if (now > seen) {
-            seen = now;
-            out.cycles = now - start;
-            const proto::proto_ulong r =
-                sp->reclaimedLastCycle.load(std::memory_order_relaxed);
-            if (r > out.maxReclaimed) out.maxReclaimed = r;
-        }
+        if (obs.observe("waiting") > 0) return true;
     }
-    return out;
+    return false;
 }
 
 } // namespace
@@ -115,6 +138,7 @@ TEST_CASE("S15: a forced collection completes and reclaims the interpreter's gar
     proto::ProtoSpace* sp = h.rt.space();
 
     const uint64_t cyclesBefore = sp->getGCCycleCount();
+    CycleObserver obs(sp);
     const proto::proto_long     heapAfterFirstRound = [&] {
         // 20,000 eight-element arrays, none of them kept. Nothing this program
         // allocates is reachable when it returns, so a cycle that reclaims
@@ -127,33 +151,32 @@ TEST_CASE("S15: a forced collection completes and reclaims the interpreter's gar
             "n.");
         REQUIRE(r != nullptr);
         REQUIRE(r->asLong(h.rt.rootCtx()) == 20000);
+        obs.observe("first program");
         return static_cast<proto::proto_long>(sp->heapSize);
     }();
 
-    // Four rounds of "allocate a heap's worth, then collect it". A cycle only
-    // starts when the heap is short of free cells, so each round re-creates
-    // the pressure; an idle process has, by protoCore's design, no reason to
-    // collect at all.
-    CycleResult res = forceCycles(h.rt, 1, std::chrono::seconds(20));
+    // Four rounds of "allocate a heap's worth, then collect it". triggerGC
+    // starts a cycle only when the heap is short of free cells, so each round
+    // re-creates the pressure; an idle process has, by protoCore's design, no
+    // reason to collect at all.
+    forceCycle(h.rt, obs, std::chrono::seconds(20));
     for (int round = 0; round < 4; ++round) {
         h.run("1 to: 20000 do: [ :i | Array new: 8 ]. 0.");
-        const CycleResult more = forceCycles(h.rt, 1, std::chrono::seconds(20));
-        res.cycles += more.cycles;
-        if (more.maxReclaimed > res.maxReclaimed)
-            res.maxReclaimed = more.maxReclaimed;
+        obs.observe("after a program");
+        forceCycle(h.rt, obs, std::chrono::seconds(20));
     }
 
     const uint64_t cyclesAfter = sp->getGCCycleCount();
 
     INFO("cycles " << cyclesBefore << " -> " << cyclesAfter
-         << ", best cycle reclaimed " << res.maxReclaimed << " cells, heap "
-         << heapAfterFirstRound << " -> " << sp->heapSize << " cells");
+         << ", best cycle reclaimed " << obs.maxReclaimed << " cells, heap "
+         << heapAfterFirstRound << " -> " << sp->heapSize << " cells; observed:" << obs.log);
 
     // 1. A cycle completes.
     REQUIRE(cyclesAfter > cyclesBefore);
     // 2. It reclaims. This is the half that was zero before the fix, in every
     //    cycle, however many ran.
-    REQUIRE(res.maxReclaimed > 0);
+    REQUIRE(obs.maxReclaimed > 0);
     // 3. And reclaiming keeps the heap bounded: four more rounds of the same
     //    garbage must not need a bigger heap than the first round did. Before
     //    the fix the heap grew by roughly the round's allocation every time.
