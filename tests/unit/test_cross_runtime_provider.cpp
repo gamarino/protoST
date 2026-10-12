@@ -45,26 +45,60 @@
 #include <fstream>
 #include <string>
 #include <thread>
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace {
 
 // A module whose only exported name is too long for protoCore to embed in a
 // pointer word, which is the case that decides whether the namespace was
 // re-keyed in the caller's space.
-void writeCounterModule(const std::string& path) {
-    std::ofstream f(path, std::ios::binary);
-    f << "\"-- cross_runtime_lib.st --\"\n"
-      << "Object subclass: #Counter instanceVariableNames: 'value'.\n"
-      << "Counter >> initialize value := 0.\n"
-      << "Counter >> increment value := value + 1.\n"
-      << "Counter >> value ^ value.\n";
-}
+//
+// Each process writes its own file. ctest runs every TEST_CASE as a separate
+// process in the same working directory, and two of these cases used to write
+// one shared `cross_runtime_lib.st`: one process truncated it while the other
+// loaded it, the module came back without `Counter`, and the test failed on
+// PROTO_NONE. That was S22 (seen on CI on 2026-09-30 and 2026-10-12; about
+// 3 % of runs with six copies of the case in parallel). The file stays in the
+// working directory, which the module search tries first, so no STPATH entry
+// (colon-separated, unusable for a Windows drive path) is needed.
+class CounterModule {
+public:
+    CounterModule() {
+        static int serial = 0;
+        name_ = "cross_runtime_lib_" + std::to_string(currentProcessId()) + "_" +
+                std::to_string(++serial);
+        std::ofstream f(name_ + ".st", std::ios::binary);
+        f << "\"-- " << name_ << ".st --\"\n"
+          << "Object subclass: #Counter instanceVariableNames: 'value'.\n"
+          << "Counter >> initialize value := 0.\n"
+          << "Counter >> increment value := value + 1.\n"
+          << "Counter >> value ^ value.\n";
+    }
+    ~CounterModule() { std::remove((name_ + ".st").c_str()); }
+    CounterModule(const CounterModule&) = delete;
+    CounterModule& operator=(const CounterModule&) = delete;
+    const std::string& name() const { return name_; }
+
+private:
+    static long currentProcessId() {
+#if defined(_WIN32)
+        return static_cast<long>(_getpid());
+#else
+        return static_cast<long>(::getpid());
+#endif
+    }
+    std::string name_;
+};
 
 }  // namespace
 
 TEST_CASE("Track Y: the provider serves a caller in a ProtoSpace protoST does not own",
           "[umd][interop]") {
-    writeCounterModule("cross_runtime_lib.st");
+    const CounterModule lib;
     ::setenv("STPATH", ".", 1);
 
     protoST::STRuntime rt;
@@ -81,7 +115,7 @@ TEST_CASE("Track Y: the provider serves a caller in a ProtoSpace protoST does no
     proto::ProtoContext foreignCtx(&foreign, nullptr);
 
     const proto::ProtoObject* module =
-        provider->tryLoad("cross_runtime_lib", &foreignCtx);
+        provider->tryLoad(lib.name(), &foreignCtx);
     REQUIRE(module != nullptr);
     REQUIRE(module != PROTO_NONE);
 
@@ -170,7 +204,7 @@ TEST_CASE("Track Y: a module a foreign caller asks for and protoST does not have
 
 TEST_CASE("Track Y: a cross-runtime import from another thread is refused, not raced",
           "[umd][interop]") {
-    writeCounterModule("cross_runtime_lib.st");
+    const CounterModule lib;
     ::setenv("STPATH", ".", 1);
 
     protoST::STRuntime rt;
@@ -188,7 +222,7 @@ TEST_CASE("Track Y: a cross-runtime import from another thread is refused, not r
         proto::ProtoSpace foreign;
         proto::ProtoContext foreignCtx(&foreign, nullptr);
         try {
-            provider->tryLoad("cross_runtime_lib", &foreignCtx);
+            provider->tryLoad(lib.name(), &foreignCtx);
         } catch (const std::exception& e) {
             threw = true;
             message = e.what();
