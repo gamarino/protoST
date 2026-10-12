@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(protoST VERSION 0.6.2 LANGUAGES CXX)
+project(protoST VERSION 0.6.3 LANGUAGES CXX)
 
 # The one place the version is written: every binary and library reads it
 # through PROTOST_VERSION (include/protoST/STRuntime.h).
@@ -586,6 +586,20 @@ install(DIRECTORY docs/
     DESTINATION ${CMAKE_INSTALL_DOCDIR}
     COMPONENT protoST
     FILES_MATCHING PATTERN "*.md")
+# The talks' runnable material, so the demos run from an installed package:
+# the programs and their inputs (.st, .feed), the expected outputs (.out), the
+# runner scripts (.sh) and the slide PDFs. USE_SOURCE_PERMISSIONS keeps the
+# executable bit of the scripts and of the .feed programs (run_demo.sh runs a
+# .feed only when it is executable). run_demo.sh writes nothing next to
+# itself, so the read-only installed copy works.
+install(DIRECTORY docs/talks/
+    DESTINATION ${CMAKE_INSTALL_DOCDIR}/talks
+    COMPONENT protoST
+    USE_SOURCE_PERMISSIONS
+    FILES_MATCHING
+        PATTERN "*.st" PATTERN "*.feed" PATTERN "*.out" PATTERN "*.sh"
+        PATTERN "*.pdf"
+        PATTERN "recordings" EXCLUDE)
 
 # VS Code editor integration (DAP debugger glue), if present.
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/editor-integration/vscode")

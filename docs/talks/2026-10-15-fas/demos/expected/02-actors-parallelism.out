@@ -3,3 +3,4 @@ time one thread: 1602 ms
 12 actors:  4946 primes
 time 12 actors: 442 ms
 true
+time speedup: 3.6x

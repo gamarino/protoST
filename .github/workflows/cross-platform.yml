@@ -27,7 +27,7 @@ env:
   # protoIO 0.2.2 (main, 1611ff9), the declared floor.
   PROTOIO_REF: 1611ff9cf8d499cdc42a6e108e42ecfc36fd8164
   # As in ci.yml: a wall-clock verdict never gates.
-  NON_GATING_TESTS: '^(cli_concurrent_first_call|F6 v2 T7: two actors run in parallel \(wall-clock proof\))$'
+  NON_GATING_TESTS: '^(F6 v2 T7: two actors run in parallel \(wall-clock proof\))$'
 
 jobs:
   test:

@@ -36,13 +36,13 @@ name: CI
 #        `< /dev/null`.  On a runner the alternative is a wasted job that reports
 #        nothing.
 #
-#   S19  cli_concurrent_first_call hangs intermittently -- 2 observations in
-#        about 13 attempts on an idle machine, and never reproduced across ~1,920
-#        A/B launches, so the trigger is not characterised (docs/STATUS.md, S19).
-#        It is NOT weakened and NOT deleted: it is quarantined out of the gating
-#        run and re-run in the `non-gating` job below, three times until it
-#        passes.  A case that needs three consecutive attempts to fail is very
-#        unlikely to be S19 and should be looked at.
+#   S19  cli_concurrent_first_call used to hang intermittently.  The cause, a
+#        lost wakeup in libstdc++ 13's std::counting_semaphore, was captured
+#        live and removed in 06e1009 (docs/STATUS.md, S19).  The test was kept
+#        out of the gate while evidence accumulated: it then passed on the first
+#        attempt in every one of 59 CI runs (2026-09-29 to 2026-10-12, 40
+#        launches each) and in a local stress run, so since 0.6.3 it gates
+#        again.
 
 on:
   push:
@@ -67,8 +67,7 @@ env:
   # pull request builds against, except the floor entry of the `test` job
   # below, which builds the declared minimum. Bump deliberately.
   PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || '063c6d55e11fd4439758578d664c869aaa3a596a' }}
-  # The two tests excluded from the gate, both run in the `non-gating` job:
-  #   cli_concurrent_first_call   quarantined, S19 -- see the header.
+  # The test excluded from the gate, run in the `non-gating` job:
   #   F6 v2 T7: two actors ...    a wall-clock proof of parallelism: two 200 ms
   #                               sleeps must finish inside 350 ms
   #                               (tests/unit/test_worker_thread.cpp:152-169).
@@ -81,7 +80,7 @@ env:
   # dual-stack listener, on top of 0.2.1's process::shell (OSProcess shell:).
   # Pinned so a red build is attributable; bump deliberately.
   PROTOIO_REF: 1611ff9cf8d499cdc42a6e108e42ecfc36fd8164
-  NON_GATING_TESTS: '^(cli_concurrent_first_call|F6 v2 T7: two actors run in parallel \(wall-clock proof\))$'
+  NON_GATING_TESTS: '^(F6 v2 T7: two actors run in parallel \(wall-clock proof\))$'
 
 jobs:
   test:
@@ -198,12 +197,13 @@ jobs:
         run: python3 ../protoCore/scripts/conformance/check_static.py --repo .
 
   non-gating:
-    name: 'S19 and the wall-clock proof (informational, never gates)'
+    name: 'The wall-clock proof (informational, never gates)'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     # A failure here does not fail the run.  The test is kept RUNNING rather than
-    # weakened or deleted: it caught a real hang, and docs/STATUS.md records that
-    # an intermittently red case trains readers to re-run instead of to look.
+    # weakened or deleted: it is a good test and a bad gate (see NON_GATING_TESTS
+    # above), and an intermittently red gate trains readers to re-run instead
+    # of to look.
     continue-on-error: true
     steps:
       - name: Check out protoST
@@ -246,7 +246,7 @@ jobs:
           cmake -B build_release -S . -DCMAKE_BUILD_TYPE=Release -DprotoIO_DIR="$GITHUB_WORKSPACE/protoIO/build_release"
           cmake --build build_release --parallel "$(nproc)"
 
-      - name: Run the quarantined and clock-dependent cases, retrying up to three times
+      - name: Run the clock-dependent case, retrying up to three times
         working-directory: protoST
         run: |
           set +e
@@ -255,8 +255,8 @@ jobs:
           STATUS=$?
           set -e
           if [ "$STATUS" -eq 0 ]; then
-            echo "Non-gating cases: cli_concurrent_first_call and the wall-clock parallelism proof both passed" >> "$GITHUB_STEP_SUMMARY"
+            echo "Non-gating case: the wall-clock parallelism proof passed" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "Non-gating cases: FAILED three attempts in a row. For cli_concurrent_first_call that is unlikely to be S19 alone at ~2-in-13 (docs/STATUS.md); for the wall-clock proof it may still be runner load." >> "$GITHUB_STEP_SUMMARY"
+            echo "Non-gating case: the wall-clock parallelism proof FAILED three attempts in a row; it may still be runner load." >> "$GITHUB_STEP_SUMMARY"
           fi
           exit "$STATUS"
