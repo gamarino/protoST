@@ -17,54 +17,80 @@ debugger de línea de comandos (`protost -d`) y un adaptador DAP para VS Code
 **¿Rendimiento frente a Pharo?**
 No medimos contra Pharo y no vamos a dar una cifra que no medimos. Medimos
 contra CPython 3.14 con el mismo algoritmo, el mismo N y el mismo resultado
-verificado (`benchmarks/reports/2026-10-11-protocore-2.14.5.md`: benchmarks sintéticos, en una notebook con un AMD Ryzen
-5 5500U de 6 núcleos, `main` con protoCore 2.14.5):
+verificado (`benchmarks/reports/2026-10-11-protocore-2.14.5.md`: benchmarks
+sintéticos, en una notebook con un AMD Ryzen 5 5500U de 6 núcleos, sobre el
+código de 0.6.0 con protoCore 2.14.5; 0.6.2 es igual o más rápido en todos
+esos programas, según el informe del 12/10):
 
-- arranque: 32 ms (CPython: 36 ms);
+- arranque: 32 ms en esa sesión (CPython: 36 ms); 0.6.2 arranca en 24 ms
+  (informe del 12/10);
 - tiempo de proceso completo: de 1,0× a 26× el de CPython, media geométrica
   3,5×; con N chicos el arranque pesa mucho en cada tiempo;
 - descontando el arranque de cada runtime, el trabajo en sí tarda unas 5×
   (bucle de enteros), 30× (`fib`, despacho recursivo de métodos) y 80×
   (excepciones) lo que tarda CPython; la media geométrica da entre 16× y 27×
   según la corrida (la resta es sensible al ruido con N chicos);
-- en paralelo, doce actores corren 2,5–2,8× más rápido con el pool que con un
-  worker, y `saturation_big` llega a unas 2× con cuatro workers; con cinco o
-  seis no mejora.
+- en paralelo (0.6.2, informe del 12/10), doce actores corren unas 2,7× más
+  rápido con el pool que con un worker (2,3–2,8× entre las dos copias del
+  build), y `saturation_big` llega a 2,6× con cuatro workers y 2,8× con seis,
+  sin techo hasta seis (con 0.6.1 se quedaba en unas 2× con cuatro).
 
 El trabajo de octubre en el recolector de protoCore (2.10 → 2.14.5) no cambió
-estas cifras: protoST ejecuta las mismas instrucciones que 0.5.0 y sus
-programas recolectan poco con un techo de 640 MB. Los programas de actores que
-asignan mucho midieron 4–6 % más lentos con un worker en una máquina
-cargada; con la máquina quieta y todo compilado con el mismo compilador la
-diferencia no supera el ruido de la medición (2–4 %): protoCore 2.12+ gasta
-algo más de CPU del recolector en otro núcleo, que se nota sólo cuando todos
-los núcleos están ocupados (`benchmarks/reports/2026-10-11-actor-regression-bisection.md`).
+las cifras de un hilo: protoST ejecutaba las mismas instrucciones que 0.5.0,
+y sus programas recolectaban poco bajo el techo fijo de 640 MB que protoST
+usó hasta 0.6.1. Los programas de actores que asignan mucho midieron 4–6 %
+más lentos con un worker en una máquina cargada; con la máquina quieta y todo
+compilado con el mismo compilador la diferencia no supera el ruido de la
+medición (1–4 %): protoCore 2.12+ gasta algo más de CPU del recolector en
+otro núcleo, que se nota solo cuando todos los núcleos están ocupados (`benchmarks/reports/2026-10-11-actor-regression-bisection.md`).
 Buscándolo apareció un bug real, corregido en 0.6.1: una recursión sin
 bucles (el fib de libro) nunca dejaba recolectar su basura; fib 29 se quedaba
 sin memoria. Desde 0.6.2 protoST usa el controlador adaptativo del heap de
 protoCore y dimensiona bajo demanda el arreglo de frames de cada hilo (K6):
 frente a 0.6.1, los programas de actores van 16–43 % más rápido con entre un
-quinto y la mitad de la memoria, y la demo 2 muestra una mediana de 4,45× en
-vez de 4,3× (`benchmarks/reports/2026-10-12-adaptive-heap-default.md`).
+quinto y la mitad de la memoria, y la demo 2 mostró en la notebook de la
+charla una mediana de 4,45× en vez de 4,3×
+(`benchmarks/reports/2026-10-12-adaptive-heap-default.md`). Esa cifra depende
+de la máquina: típicamente entre 3× y 5×. En la auditoría previa a la
+charla, el mismo paquete dentro de un contenedor Ubuntu 24.04, en el mismo
+hardware, dio una mediana de unas 2,5×. Investigado después
+(`benchmarks/reports/2026-10-12-pre-talk-063.md`): el contenedor no es más
+lento. Los doce actores tardan lo mismo; lo que cambia es la parte de un
+hilo, un 10 % más rápida con la glibc 2.39 de Ubuntu 24.04 que con la 2.43
+de la notebook (malloc más barato para los temporales que protoCore crea al
+comparar enteros), así que la razón baja (medianas de 3,9–4,2× contra
+4,4–4,5× en corridas alternadas). El compilador no influye. Esa mediana de
+2,5× incluyó además, muy probablemente, la carga de la máquina en ese
+momento: con la máquina ocupada todas las variantes bajaron a 2–3×.
 
 Es decir: en un hilo protoST es bastante más lento que CPython. Lo que
-mostramos es que el mismo código usa varios núcleos, hoy con ese techo.
+mostramos es que el mismo código usa varios núcleos.
 
 **¿Cómo es el GC?**
 El de protoCore: concurrente, con un hilo propio. Desde 0.6.2 protoST deja
 que el controlador adaptativo de protoCore dimensione el heap: un
 presupuesto del 75 % de la memoria física (o del límite del proceso) y,
-dentro, un límite blando que arranca en 128 MB y sólo crece mientras el
-programa espera al recolector. Si la memoria viva no entra, termina con un
-mensaje claro en lugar de tomar la máquina. `PROTOCORE_HEAP_LIMIT_CELLS` fija
-un techo fijo y `PROTOCORE_ADAPTIVE_HEAP=0` vuelve al techo de 640 MB de
-0.6.1 (`KNOWN_ISSUES.md`, K5). Hasta 0.6.1 no se usaba porque con él
+dentro, un límite blando que arranca en 128 MB y solo crece mientras el
+programa espera al recolector. Si la memoria viva no entra en el
+presupuesto, termina con un mensaje claro. Pero el pico ya no está acotado a
+640 MB: un bucle que asigna sin parar llegó a 0,88–3,5 GB en tres corridas
+(informe del 12/10). Si importa un tamaño fijo,
+`PROTOCORE_HEAP_LIMIT_CELLS=<celdas>` fija un techo (celdas de 64 bytes:
+10000000 son 640 MB de celdas), y `PROTOCORE_ADAPTIVE_HEAP=0` vuelve al
+techo de 640 MB de 0.6.1 (`KNOWN_ISSUES.md`, K5). Ojo: ese techo cuenta
+celdas, no la memoria del proceso. Con `PROTOCORE_ADAPTIVE_HEAP=0`,
+`(1 to: 500000) asArray` se queda sin memoria con un pico de RSS de 1,19 GB:
+la diferencia es la lista de trabajo del marcado del recolector, un vector
+que se duplica fuera del heap de celdas (hasta 512 MB, más el bloque
+anterior mientras se copia), además del resto de la memoria que no son
+celdas. Medido con gdb sobre 0.6.3; es un punto de protoCore, no de
+protoST. Hasta 0.6.1 no se usaba porque con él
 `fib.st` tardaba tres veces más; la causa era de protoST (una recursión no
 entregaba su basura), corregida en 0.6.1. El barrido, la fase más cara,
 recorre varias cadenas a la vez y puede sumar hilos auxiliares (2.14). Las
 pausas stop-the-world que medimos en protoST en los benchmarks no pasan de
-0,27 ms; antes de 0.6.2 llegaban a 25–31 ms con doce hilos, porque cada
-pausa recorría entero un arreglo de frames de 1 M de entradas por hilo
+0,27 ms; antes de 0.6.2 llegaban a 20–31 ms con seis a doce workers, porque
+cada pausa recorría entero un arreglo de frames de 1 M de entradas por hilo
 (`KNOWN_ISSUES.md`, K6, resuelto).
 
 **¿Por qué prototipos?**
@@ -136,25 +162,34 @@ y protoClojure también usan: la misma entrada/salida existe, con los nombres
 de cada lenguaje, en los tres runtimes.
 
 **¿Corre en Windows?**
-El paquete publicado (0.6.2) es para Linux; en Windows funciona con WSL2 y
+El paquete publicado (0.6.3) es para Linux; en Windows funciona con WSL2 y
 Ubuntu 24.04, instalando los mismos paquetes `.deb`. Las fuentes
 compilan en forma nativa con Visual Studio 2022 y la integración continua
-corre la suite completa en Windows (salvo dos tests que dependen de
-herramientas POSIX: Ctrl-C enviado con `kill` y un ejemplo con sintaxis de
-`sh`; `docs/INSTALLATION.md`, "Windows (MSVC)"); todavía
-no hay un paquete de Windows publicado.
+corre la suite en Windows: 1097 casos, todos salvo los que dependen de
+herramientas POSIX (Ctrl-C enviado con `kill`, un ejemplo con sintaxis de
+`sh`) y el test de la consola de terminal; `docs/INSTALLATION.md`, "Windows
+(MSVC)". Todavía no hay un paquete de Windows publicado.
 
 **¿Es estable? ¿Qué bugs abiertos tiene?**
-0.5.0 pasaba sus 1068 casos de `ctest`; 0.6.2 (con protoCore 2.14.5)
-pasa 1100, en Linux, macOS y Windows: programas de
-conformidad, tests unitarios, los ejemplos, tests de la línea de comandos y
-los ejemplos de la documentación. Durante la preparación de esta charla una
-auditoría adversarial de unos 1100 programas, en dos rondas, encontró resultados incorrectos
+0.5.0 pasaba sus 1068 casos de `ctest`; 0.6.3 (con protoCore 2.14.5) pasa
+sus 1101 casos en Linux: programas de conformidad, tests unitarios,
+los ejemplos, tests de la línea de comandos y los ejemplos de la
+documentación. La integración continua corre 1100 en Linux y en macOS
+(más una prueba de paralelismo medida con reloj, que en un runner compartido no bloquea) y 1097 en Windows. Son tests, no los programas de la
+auditoría: durante la preparación de esta charla una auditoría adversarial
+de unos 1100 programas, en dos rondas, encontró resultados incorrectos
 silenciosos y cuelgues; cada corrección de un resultado incorrecto, un crash o
 un cuelgue tiene su test de regresión. El cuelgue intermitente S19 se
 capturó con el proceso vivo y resultó ser un despertar perdido en
-`std::counting_semaphore` de libstdc++ 13; se reemplazó. Lo abierto está en
-`docs/STATUS.md`.
+`std::counting_semaphore` de libstdc++ 13; se reemplazó. Su test quedó fuera del gate de la CI mientras se acumulaba
+evidencia: pasó al primer intento en las 59 corridas de CI desde la
+corrección y 150 veces seguidas en local, y desde 0.6.3 vuelve a bloquear la
+CI. Y en
+0.6.3 apareció, gracias a una advertencia del compilador, un defecto latente:
+el despacho con goto computado no liberaba los pins transitorios del
+recolector, y en los builds de Linux con GCC esos pins dejaban de proteger
+objetos después de cargar el kernel; está corregido, con su test. Lo abierto
+está en `docs/STATUS.md`.
 
 **¿Los actores pueden bloquearse entre sí?**
 Un actor que hace `wait` dentro de un método no atiende otros mensajes hasta

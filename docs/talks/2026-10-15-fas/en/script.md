@@ -1,13 +1,29 @@
 # protoST — talk script (FAST, 15/10/2026)
 
-Length: a 30-minute core; optional modules up to 60. Every performance figure
-comes from `benchmarks/reports/2026-10-11-protocore-2.14.5.md` (measured on 11/10/2026 on `main` with protoCore 2.14.5, the code of
-release 0.6.0, with the 0.5.0 release on protoCore 2.6.2 run alongside; synthetic benchmarks, on a
-laptop); if a figure is not in that report, it is not said.
+Length: a 30-minute core; optional modules up to 60. The performance figures
+come from three reports, all of synthetic benchmarks on one laptop (Ryzen 5
+5500U):
 
-Before starting: terminal with a large font, `cd docs/talks/2026-10-15-fas/demos`,
-`protost --version` must print `protoST 0.6.2`; demo 4 needs `python3`. The fallback recordings are in
-`../recordings/` (see the checklist).
+- `benchmarks/reports/2026-10-12-adaptive-heap-default.md` (12/10): 0.6.2
+  against 0.6.1, same compiler and protoCore 2.14.5. Startup, the actors,
+  memory and demo 2 come from it;
+- `benchmarks/reports/2026-10-11-protocore-2.14.5.md` (11/10): the
+  comparisons with CPython, measured on the 0.6.0 code (0.6.2 is as fast or
+  faster on every one of those programs), with 0.5.0 on protoCore 2.6.2
+  alongside;
+- `benchmarks/reports/2026-10-11-actor-regression-bisection.md` (11/10): the
+  measurement noise and the 4–6 % difference with 0.5.0.
+
+0.6.3 fixes the release of the collector's pins in the dispatch loop: on
+those benchmarks it only makes exceptions dearer (about 13 %;
+`benchmarks/reports/2026-10-12-pre-talk-063.md`). If a figure is not in one
+of those reports, it is not said.
+
+Before starting: terminal with a large font, `cd docs/talks/2026-10-15-fas/demos`
+in the repository (or, with the package installed,
+`cd /usr/share/doc/protoST/talks/2026-10-15-fas/demos`); `protost --version`
+must print `protoST 0.6.3`; demo 4 needs `python3`. The fallback recordings
+are in the repository's `../recordings/` (see the checklist).
 
 ---
 
@@ -85,7 +101,9 @@ Fallback: `scriptreplay` of `recordings/01-familiar-code`.
 `./run_demo.sh 02-actors-parallelism.st`
 
 Both results agree (4946 primes) and the times measured at that moment are
-shown. State the speedup that appears on screen, not one from memory. Point
+shown; the last line (`time speedup: …x`) is the speedup. State the one that
+appears on screen, not one from memory: it depends on the machine (typically
+between 3× and 5×; on the talk laptop, a median of 4.45×). Point
 out: the code of the computation did not change; what changed is who runs it.
 
 Fallback: `recordings/02-actors-parallelism`.
@@ -102,10 +120,12 @@ Ideas, not promises:
   and server, https too) and TCP/UDP, and runs other programs; no image to
   deploy. The names are Pharo's: `'data.csv' asFileReference contents`,
   `Stdio stdin nextLine`, `Smalltalk arguments`.
-- **Living alongside other runtimes**: protoCore 2.6 lets two runtimes
-  embedded in one process read and write each other's objects without
-  copying them (tested protoScala ↔ protoST). The installed binaries do not
-  load each other yet. Say it exactly like that.
+- **Living alongside other runtimes**: since protoCore 2.6, a runtime
+  embedded in a process can read and write another runtime's objects without
+  copying them. What is tested is one direction: protoScala reads and writes
+  protoST objects; the reverse (protoST using another runtime's objects or
+  modules) does not work yet (`docs/INTEROP.md` §0). The installed binaries
+  do not load each other yet. Say it exactly like that.
 
 DEMO 4: `./run_demo.sh 04-connected-twin.st`
 
@@ -148,12 +168,15 @@ a mutable object (drawn on the whiteboard).
 
 The collector as it stands in protoCore 2.14.5: concurrent; the sweep
 walks several chains at once and can add helper threads. Since 0.6.2
-protoST uses protoCore's adaptive heap controller (before, a fixed 640 MB
-ceiling): faster on the actor programs, with a fifth to a half of the memory. The
-way there needed a fix of protoST's own: each stop-the-world pause scanned
-a whole 1 M-slot frame array per thread (25–31 ms with twelve threads);
-since 0.6.2 the array grows on demand and pauses stay below 0.27 ms on the
-benchmarks. Present it as a measurement (`KNOWN_ISSUES.md`, K5 and K6).
+protoST uses protoCore's adaptive heap controller (up to 0.6.1, a fixed
+640 MB ceiling): faster on the actor programs, with a fifth to a half of the
+memory. The price: peak memory is no longer capped (a loop that keeps
+allocating reached 0.88–3.5 GB); `PROTOCORE_HEAP_LIMIT_CELLS` fixes it. The
+way there needed a fix of protoST's own: each stop-the-world pause scanned a
+whole 1 M-slot frame array per thread (pauses of up to 20–31 ms with six to
+twelve workers); since 0.6.2 the array grows on demand and pauses stay below
+0.27 ms on the benchmarks. Present it as a measurement (`KNOWN_ISSUES.md`,
+K5 and K6).
 
 ### M2 — The digital twin step by step (8 min)
 
@@ -169,17 +192,19 @@ Fallback: `recordings/03-digital-twin`.
 - Every benchmark verifies its result; the harness fails if the result is
   missing or does not match (a bug in another project that looked like an
   "improvement" because it was not verified was shown).
-- Figures from the 11/10 report (`benchmarks/reports/2026-10-11-protocore-2.14.5.md`), synthetic benchmarks on a laptop
-  (Ryzen 5 5500U) shared with other work:
-  - startup 32 ms (CPython 36 ms);
-  - whole process against CPython with the same N: geometric mean 3.5×,
-    dominated by startup;
+- Synthetic benchmarks on a laptop (Ryzen 5 5500U):
+  - startup 24 ms (report of 12/10, 0.6.2; 0.6.1 took 29 ms);
+  - against CPython (report of 11/10, the 0.6.0 code; 0.6.2 is as fast or
+    faster): startup 32 ms against 36 ms in that session; whole process with
+    the same N, geometric mean 3.5×, dominated by startup;
   - the work alone (startup subtracted): from about 5× (integer loop) to
     30× (`fib`) and 80× (exceptions); the geometric mean came out between
     16× and 27× depending on the run, because with small N the subtraction
     is sensitive to noise; give it as a range;
-  - twelve actors, 2.5–2.8× with the pool; `saturation_big`, a ceiling of
-    about 2× with four workers;
+  - twelve actors (report of 12/10): about 2.7× with the pool against one
+    worker (2.3–2.8× between the two copies of the build); `saturation_big`,
+    2.6× with four workers and 2.8× with six, no ceiling up to six (0.6.1
+    stayed at about 2× with four);
   - against 0.5.0 on protoCore 2.6.2: the same instructions (±1 %), the
     same time within the noise, about 12 MB less memory on several programs,
     and allocation-heavy actor programs on one worker 4–6 % slower in that
@@ -187,7 +212,7 @@ Fallback: `recordings/03-digital-twin`.
     11/10). Say it that way, and that 0.6.1 fixes collection in recursions
     that never loop (fib 29 ran out of memory); 0.6.2 enables the adaptive
     heap controller (report of 12/10: actors 16–43 % faster, with a fifth
-    to a half of the memory).
+    to a half of the memory, and the peak no longer capped).
 - Say where it is slower (recursive method dispatch, exceptions) without
   dressing it up.
 

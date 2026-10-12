@@ -1,15 +1,29 @@
 # protoST — guion de la charla (FAST, 15/10/2026)
 
-Duración: núcleo de 30 minutos; módulos opcionales hasta 60. Todas las cifras
-de rendimiento salen de `benchmarks/reports/2026-10-11-protocore-2.14.5.md`
-(medidas el 11/10/2026 sobre `main` con protoCore 2.14.5 —el código de la
-release 0.6.0—, con la release 0.5.0
-sobre protoCore 2.6.2 corrida al lado; benchmarks sintéticos, en una notebook);
-si una cifra no está en ese informe, no se dice.
+Duración: núcleo de 30 minutos; módulos opcionales hasta 60. Las cifras de
+rendimiento salen de tres informes, todos de benchmarks sintéticos en una
+notebook (Ryzen 5 5500U):
 
-Antes de empezar: terminal con fuente grande, `cd docs/talks/2026-10-15-fas/demos`,
-`protost --version` debe decir `protoST 0.6.2`; la demo 4 necesita `python3`. Las grabaciones de respaldo
-están en `../recordings/` (ver la checklist).
+- `benchmarks/reports/2026-10-12-adaptive-heap-default.md` (12/10): 0.6.2
+  contra 0.6.1, mismo compilador y protoCore 2.14.5. De ahí salen el
+  arranque, los actores, la memoria y la demo 2;
+- `benchmarks/reports/2026-10-11-protocore-2.14.5.md` (11/10): las
+  comparaciones con CPython, medidas sobre el código de 0.6.0 (0.6.2 es igual
+  o más rápido en todos esos programas), con 0.5.0 sobre protoCore 2.6.2 al
+  lado;
+- `benchmarks/reports/2026-10-11-actor-regression-bisection.md` (11/10): el
+  ruido de la medición y la diferencia de 4–6 % con 0.5.0.
+
+0.6.3 corrige la liberación de los pins del recolector en el despacho: en esos
+benchmarks solo encarece las excepciones (unos 13 %;
+`benchmarks/reports/2026-10-12-pre-talk-063.md`). Si una cifra no está en uno
+de esos informes, no se dice.
+
+Antes de empezar: terminal con fuente grande, `cd docs/talks/2026-10-15-fas/demos`
+en el repositorio (o, con el paquete instalado,
+`cd /usr/share/doc/protoST/talks/2026-10-15-fas/demos`); `protost --version`
+debe decir `protoST 0.6.3`; la demo 4 necesita `python3`. Las grabaciones de
+respaldo están en `../recordings/` del repositorio (ver la checklist).
 
 ---
 
@@ -86,8 +100,10 @@ Respaldo: `scriptreplay` de `recordings/01-familiar-code`.
 `./run_demo.sh 02-actors-parallelism.st`
 
 Los dos resultados coinciden (4946 primos) y se muestran los tiempos
-medidos en ese momento. Decir la aceleración que aparezca en pantalla, no
-una de memoria. Remarcar: el código del cálculo no cambió; cambió quién lo
+medidos en ese momento; la última línea (`time speedup: …x`) es la
+aceleración. Decir la que aparezca en pantalla, no una de memoria: depende de
+la máquina (típicamente entre 3× y 5×; en la notebook de la charla, mediana
+4,45×). Remarcar: el código del cálculo no cambió; cambió quién lo
 ejecuta.
 
 Respaldo: `recordings/02-actors-parallelism`.
@@ -105,10 +121,12 @@ Ideas, no promesas:
   sin imagen que desplegar. Los nombres son los de Pharo:
   `'datos.csv' asFileReference contents`, `Stdio stdin nextLine`,
   `Smalltalk arguments`.
-- **Convivir con otros runtimes**: protoCore 2.6 ya permite que dos runtimes
-  embebidos en un mismo proceso lean y escriban los objetos del otro sin
-  copiarlos (probado protoScala ↔ protoST). Los binarios instalados todavía no
-  se cargan entre sí. Decirlo así.
+- **Convivir con otros runtimes**: desde protoCore 2.6, un runtime embebido
+  en un proceso puede leer y escribir los objetos de otro sin copiarlos. Lo
+  probado es una dirección: protoScala lee y escribe objetos de protoST; la
+  inversa (protoST usando objetos o módulos de otro runtime) todavía no
+  funciona (`docs/INTEROP.md` §0). Los binarios instalados todavía no se
+  cargan entre sí. Decirlo así.
 
 DEMO 4: `./run_demo.sh 04-connected-twin.st`
 
@@ -151,13 +169,15 @@ instantánea atómica de un objeto mutable (dibujo en pizarra).
 
 El recolector, tal como está en protoCore 2.14.5: concurrente; el barrido
 recorre varias cadenas a la vez y puede sumar hilos auxiliares. Desde 0.6.2
-protoST usa el controlador adaptativo del heap de protoCore (antes, un techo
-fijo de 640 MB): más rápido en los programas de actores, con entre un quinto y la mitad de la
-memoria. Para eso hubo que corregir algo propio: cada pausa stop-the-world
-recorría entero un arreglo de frames de 1 M de entradas por hilo (25–31 ms
-con doce hilos); desde 0.6.2 el arreglo crece bajo demanda y las pausas no
-pasan de 0,27 ms en los benchmarks. Decirlo como medición
-(`KNOWN_ISSUES.md`, K5 y K6).
+protoST usa el controlador adaptativo del heap de protoCore (hasta 0.6.1, un
+techo fijo de 640 MB): más rápido en los programas de actores, con entre un
+quinto y la mitad de la memoria. El precio: el pico de memoria ya no está
+acotado (un bucle que asigna sin parar llegó a 0,88–3,5 GB);
+`PROTOCORE_HEAP_LIMIT_CELLS` lo fija. Para eso hubo que corregir algo propio:
+cada pausa stop-the-world recorría entero un arreglo de frames de 1 M de
+entradas por hilo (pausas de hasta 20–31 ms con seis a doce workers); desde
+0.6.2 el arreglo crece bajo demanda y las pausas no pasan de 0,27 ms en los
+benchmarks. Decirlo como medición (`KNOWN_ISSUES.md`, K5 y K6).
 
 ### M2 — El gemelo digital paso a paso (8 min)
 
@@ -173,17 +193,19 @@ Respaldo: `recordings/03-digital-twin`.
 - Cada benchmark verifica su resultado; el harness falla si falta o no
   coincide (se mostró un bug que se veía como "mejora" en otro proyecto por
   no verificar).
-- Cifras del informe del 11/10 (`benchmarks/reports/2026-10-11-protocore-2.14.5.md`), benchmarks sintéticos en una
-  notebook (Ryzen 5 5500U) compartida con otro trabajo:
-  - arranque 32 ms (CPython 36 ms);
-  - proceso completo frente a CPython con el mismo N: media geométrica 3,5×,
-    dominada por el arranque;
+- Benchmarks sintéticos en una notebook (Ryzen 5 5500U):
+  - arranque 24 ms (informe del 12/10, 0.6.2; 0.6.1 tardaba 29 ms);
+  - frente a CPython (informe del 11/10, código de 0.6.0; 0.6.2 es igual o
+    más rápido): arranque 32 ms contra 36 ms en esa sesión; proceso completo
+    con el mismo N, media geométrica 3,5×, dominada por el arranque;
   - solo el trabajo (arranque descontado): de unas 5× (bucle de enteros) a
     30× (`fib`) y 80× (excepciones); la media geométrica salió entre 16× y
     27× según la corrida, porque con N chicos la resta es sensible al ruido;
     decirlo como rango;
-  - doce actores, 2,5–2,8× con el pool; `saturation_big`, techo de unas 2×
-    con cuatro workers;
+  - doce actores (informe del 12/10): unas 2,7× con el pool contra un worker
+    (2,3–2,8× entre las dos copias del build); `saturation_big`, 2,6× con
+    cuatro workers y 2,8× con seis, sin techo hasta seis (0.6.1 se quedaba en
+    unas 2× con cuatro);
   - frente a 0.5.0 sobre protoCore 2.6.2: las mismas instrucciones (±1 %),
     el mismo tiempo dentro del ruido, unos 12 MB menos de memoria en varios
     programas, y los programas de actores que asignan mucho, con un worker,
@@ -192,7 +214,7 @@ Respaldo: `recordings/03-digital-twin`.
     corrige la recolección en recursiones sin bucles (fib 29 se quedaba sin
     memoria); 0.6.2 activa el controlador adaptativo del heap (informe del
     12/10: actores 16–43 % más rápidos, entre un quinto y la mitad de la
-    memoria).
+    memoria, y el pico ya no acotado).
 - Decir dónde es más lento (despacho de métodos recursivo, excepciones) sin
   maquillarlo.
 

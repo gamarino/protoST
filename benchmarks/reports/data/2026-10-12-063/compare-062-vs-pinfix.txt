@@ -1,0 +1,12 @@
+startup                  v062     24.5 ms  v062b     25.4 ms  fix     23.9 ms  fixb     24.4 ms
+int_sum_loop             v062     47.3 ms  v062b     46.8 ms  fix     47.7 ms  fixb     46.8 ms
+fib                      v062    370.4 ms  v062b    375.2 ms  fix    381.3 ms  fixb    381.8 ms
+attr_lookup              v062    174.0 ms  v062b    175.2 ms  fix    178.9 ms  fixb    186.1 ms
+exception_latency        v062    937.2 ms  v062b    991.5 ms  fix   1090.8 ms  fixb   1072.3 ms
+parallel_speedup pool    v062    252.5 ms  v062b    233.0 ms  fix    251.5 ms  fixb    310.1 ms
+parallel_speedup w=1     v062    685.3 ms  v062b    699.6 ms  fix    704.1 ms  fixb    680.5 ms
+message_throughput       v062     76.3 ms  v062b     76.6 ms  fix     72.8 ms  fixb     78.5 ms
+saturation_big w=1       v062   2827.0 ms  v062b   2844.9 ms  fix   2740.0 ms  fixb   2817.4 ms
+saturation_big w=6       v062    987.9 ms  v062b    911.1 ms  fix    941.2 ms  fixb    942.4 ms
+
+All runs verified.

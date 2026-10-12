@@ -1,5 +1,8 @@
 # protoST
 
+[![CI](https://github.com/gamarino/protoST/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gamarino/protoST/actions/workflows/ci.yml)
+[![Cross-platform](https://github.com/gamarino/protoST/actions/workflows/cross-platform.yml/badge.svg?branch=main)](https://github.com/gamarino/protoST/actions/workflows/cross-platform.yml)
+
 protoST is a Smalltalk-syntax, actor-native runtime on protoCore: a demonstrator and a base for digital twins, not a Smalltalk-80 implementation or a replacement for an image environment.
 
 Programs are plain files. An object is an ordinary object until it is sent
@@ -137,31 +140,52 @@ now.
 
 ## Performance
 
-Measured on 2026-10-11 on a notebook with an AMD Ryzen 5 5500U (6 cores),
-`main` at `4876884` with protoCore 2.14.5 against CPython 3.14.0, with every
-benchmark verifying its result; synthetic workloads, medians of three, the
-machine shared with other work
-([`benchmarks/reports/2026-10-11-protocore-2.14.5.md`](benchmarks/reports/2026-10-11-protocore-2.14.5.md),
-which also runs the 0.5.0 release side by side):
+Synthetic workloads on one notebook (AMD Ryzen 5 5500U, 6 cores / 12
+threads), every benchmark verifying its result. The figures for the current
+code come from
+[`benchmarks/reports/2026-10-12-adaptive-heap-default.md`](benchmarks/reports/2026-10-12-adaptive-heap-default.md):
+0.6.2 against 0.6.1, both built by the same compiler against protoCore
+2.14.5, medians of 7 interleaved runs with A/A pairs for the noise floor.
+The comparison with CPython 3.14.0 comes from
+[`benchmarks/reports/2026-10-11-protocore-2.14.5.md`](benchmarks/reports/2026-10-11-protocore-2.14.5.md),
+measured on the 0.6.0 code (medians of three, the machine shared with other
+work); 0.6.2 is as fast or faster on every one of those workloads. 0.6.3
+releases the transient pins the dispatch loop used to leave claimed (S25):
+on these benchmarks that costs `exception_latency` 13 % of wall time (6 % of
+cycles) and leaves the other workloads unchanged within the noise in cycles
+([`benchmarks/reports/2026-10-12-pre-talk-063.md`](benchmarks/reports/2026-10-12-pre-talk-063.md)).
 
-- Start-up: 32 ms to evaluate one expression (CPython: 36 ms).
-- Single-threaded, same algorithm, same N and same verified result as the
-  CPython twin. Whole-process time is 1.0× (string concatenation) to 26×
-  (exception signalling) CPython's, geometric mean 3.5×; at these small N
-  start-up is a large share of every time. With each runtime's start-up
-  subtracted, the work itself takes from about 5× CPython's time (integer
-  loop) to about 30× (`fib`, recursive method dispatch) and 80× (exception
-  signalling), geometric mean between 16× and 27× depending on the run (the
-  subtraction is sensitive to noise at these N).
-- Parallel: twelve CPU-bound actors run 2.5-2.8× faster with the default pool
-  than with one worker; `saturation_big` (32 actors) tops out at about 2× on
-  four workers and gains nothing from five or six.
-- Against 0.5.0 on protoCore 2.6.2: the same instructions within 1 %, the
-  same wall time within the noise, about 12 MB less peak memory on several
-  workloads. Allocating actor workloads on one worker measured 4-6 % slower
-  in that report; a bisection on a quiet machine with every build made by the
-  same compiler found no wall-time difference beyond the noise floor
-  (2-4 %), only more collector CPU since protoCore 2.12.0
+- Start-up: 24 ms to evaluate one expression (0.6.1: 29 ms). In the
+  2026-10-11 session the 0.6.0 code took 32 ms and CPython 36 ms.
+- Single-threaded against CPython (2026-10-11, 0.6.0 code), same algorithm,
+  same N and same verified result. Whole-process time is 1.0× (string
+  concatenation) to 26× (exception signalling) CPython's, geometric mean
+  3.5×; at these small N start-up is a large share of every time. With each
+  runtime's start-up subtracted, the work itself takes from about 5×
+  CPython's time (integer loop) to about 30× (`fib`, recursive method
+  dispatch) and 80× (exception signalling), geometric mean between 16× and
+  27× depending on the run (the subtraction is sensitive to noise at these N).
+- Parallel (0.6.2): twelve CPU-bound actors (`parallel_speedup`) run about
+  2.7× faster with the default pool than on one worker (2.3-2.8× between the
+  two copies of the build, 2.0-3.3× run by run). `saturation_big` (32 actors)
+  runs 2.6× faster on four workers than on one and 2.8× on six, with no
+  ceiling up to six (0.6.1 stopped at about 2× on four). The talk's demo 2
+  showed a median of 4.45× (4.26-4.98) on the same machine.
+- 0.6.2 against 0.6.1: faster on every workload but `attr_lookup`
+  (unchanged within the noise); the actor workloads by 16-43 %; a fifth to
+  a half of the peak memory; the longest stop-the-world pause 0.27 ms. The
+  costs: more collector CPU on recursion- and exception-heavy programs
+  (`fib` +18 % CPU, `exception_latency` +8 %, both still faster in wall
+  time), and **peak memory is no longer capped**: an allocation-bound loop
+  peaked at 0.88-3.5 GB, where 0.6.1's fixed limit held it at 677 MB. Set
+  `PROTOCORE_HEAP_LIMIT_CELLS` when a process must stay within a fixed size
+  (see "Status" below and `KNOWN_ISSUES.md` K5).
+- Against 0.5.0 on protoCore 2.6.2 (2026-10-11): the same instructions
+  within 1 %, the same wall time within the noise, about 12 MB less peak
+  memory on several workloads. Allocating actor workloads on one worker
+  measured 4-6 % slower in that report; a bisection on a quiet machine with
+  every build made by the same compiler found no wall-time difference beyond
+  the noise floor (1-4 %), only more collector CPU since protoCore 2.12.0
   ([`benchmarks/reports/2026-10-11-actor-regression-bisection.md`](benchmarks/reports/2026-10-11-actor-regression-bisection.md)).
 
 protoST is not fast single-threaded code; what it offers is the same code on
@@ -169,12 +193,12 @@ several cores without locks.
 
 ## Status
 
-Version 0.6.2 (2026-10-12); it requires protoCore 2.11.0 or newer (2.14.5
-recommended), and CI builds it against protoCore 2.14.5. `ctest` runs 1100 cases on Linux, all
-passing (2026-10-12): 544 conformance programs, 460 unit tests, 42 examples, 32
-CLI tests (including the benchmark-harness self-test) and 22 documentation
-checks (every example with a stated result in 21 documents, plus the
-checker's self-test). Since 0.6.2 protoST lets protoCore's adaptive heap
+Version 0.6.3 (2026-10-12); built from source it requires protoCore 2.11.0
+or newer, its `.deb` requires 2.14.5, and CI builds it against protoCore
+2.14.5. `ctest` runs 1101 cases on Linux, all passing (2026-10-12): 544
+conformance programs, 461 unit tests, 42 examples, 32 CLI tests (including
+the benchmark-harness self-test) and 22 documentation checks (every example
+with a stated result in 21 documents, plus the checker's self-test). Since 0.6.2 protoST lets protoCore's adaptive heap
 controller size the heap (budget: 75 % of physical memory or of the process
 memory limit); `PROTOCORE_HEAP_LIMIT_CELLS` forces a fixed limit and
 `PROTOCORE_ADAPTIVE_HEAP=0` restores 0.6.1's fixed 640 MB limit (precedence
@@ -241,7 +265,7 @@ commands, and what differs on Windows, are in
 
 ## Installation
 
-protoST can be packaged with CPack. The 0.6.2 release has a Linux `.deb`
+protoST can be packaged with CPack. The 0.6.3 release has a Linux `.deb`
 attached to its GitHub release (below, with protoCore 2.14.5); other packages
 are built from source as shown below. Every package depends on
 [protoCore](https://github.com/numaes/protoCore) — install protoCore's package
@@ -269,13 +293,13 @@ the GitHub releases (or built as below):
 wsl --install -d Ubuntu-24.04        # in PowerShell, once
 # then, in the Ubuntu shell:
 wget https://github.com/numaes/protoCore/releases/download/v2.14.5/protoCore-2.14.5-Linux.deb
-wget https://github.com/gamarino/protoST/releases/download/v0.6.2/protost-0.6.2-Linux.deb
-sudo apt install ./protoCore-2.14.5-Linux.deb ./protost-0.6.2-Linux.deb
+wget https://github.com/gamarino/protoST/releases/download/v0.6.3/protost-0.6.3-Linux.deb
+sudo apt install ./protoCore-2.14.5-Linux.deb ./protost-0.6.3-Linux.deb
 ```
 
-These are the 0.6.2 release packages. protoST 0.6.2 needs protoCore 2.11.0
-or later; the `.deb` was built against 2.14.5, the release to install with
-it, and declares `protocore (>= 2.14.5)` (an older protoCore package, such as the 2.6.2 that went with 0.5.0, is
+These are the 0.6.3 release packages. Built from source, protoST 0.6.3 needs
+protoCore 2.11.0 or later; the `.deb` was built against 2.14.5, the release
+to install with it, and declares `protocore (>= 2.14.5)` (an older protoCore package, such as the 2.6.2 that went with 0.5.0, is
 not enough: upgrade it with the command above).
 
 **macOS — built and tested in CI, not packaged.** The cross-platform CI job

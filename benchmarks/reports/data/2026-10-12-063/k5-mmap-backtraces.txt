@@ -1,0 +1,332 @@
+
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <https://debuginfod.ubuntu.com>
+Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+Punto de interrupción temporal 1 at 0x46c2e
+[Depuración de hilo usando libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+Temporary breakpoint 1, 0x000055555559ac2e in main ()
+Punto de interrupción 2 at 0x7ffff728ff80: mmap. (2 locations)
+[Cambiando a Thread 0x7ffff603c6c0 (LWP 3723338)]
+MMAP 134217728
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=134217728, prot=prot@entry=0, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e2e7 in alloc_new_heap (size=135168, top_pad=<optimized out>, pagesize=pagesize@entry=4096, mmap_flags=mmap_flags@entry=0) at ./malloc/arena.c:405
+#2  0x00007ffff720e775 in new_heap (size=<optimized out>, top_pad=<optimized out>) at ./malloc/arena.c:464
+#3  _int_new_arena (size=<optimized out>) at ./malloc/arena.c:637
+#4  arena_get2 (avoid_arena=<optimized out>, size=<optimized out>) at ./malloc/arena.c:856
+#5  arena_get2 (size=<optimized out>, avoid_arena=<optimized out>) at ./malloc/arena.c:817
+#6  0x00007ffff72110ca in __libc_calloc2 (sz=sz@entry=32) at ./malloc/malloc.c:3655
+#7  0x00007ffff7212d7e in __libc_calloc (n=n@entry=1, elem_size=elem_size@entry=32) at ./malloc/malloc.c:3780
+[Cambiando a Thread 0x7ffff583b6c0 (LWP 3723340)]
+MMAP 134217728
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=134217728, prot=prot@entry=0, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e2e7 in alloc_new_heap (size=135168, top_pad=<optimized out>, pagesize=pagesize@entry=4096, mmap_flags=mmap_flags@entry=0) at ./malloc/arena.c:405
+#2  0x00007ffff720e775 in new_heap (size=<optimized out>, top_pad=<optimized out>) at ./malloc/arena.c:464
+#3  _int_new_arena (size=<optimized out>) at ./malloc/arena.c:637
+#4  arena_get2 (avoid_arena=<optimized out>, size=<optimized out>) at ./malloc/arena.c:856
+#5  arena_get2 (size=<optimized out>, avoid_arena=<optimized out>) at ./malloc/arena.c:817
+#6  0x00007ffff72110ca in __libc_calloc2 (sz=sz@entry=32) at ./malloc/malloc.c:3655
+#7  0x00007ffff7212d7e in __libc_calloc (n=n@entry=1, elem_size=elem_size@entry=32) at ./malloc/malloc.c:3780
+[Cambiando a Thread 0x7ffff603c6c0 (LWP 3723338)]
+MMAP 33558528
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=33558528, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=33554448, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=33554448, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=33554432) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=33554432) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f35b7e in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*)::{lambda(proto::ProtoContext*, void*, proto::Cell const*)#1}::_FUN(proto::ProtoContext*, void*, proto::Cell const*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff7f387ee in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+MMAP 67112960
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=67112960, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=67108880, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=67108880, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=67108864) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=67108864) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f35b7e in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*)::{lambda(proto::ProtoContext*, void*, proto::Cell const*)#1}::_FUN(proto::ProtoContext*, void*, proto::Cell const*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff7f387ee in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+MMAP 134221824
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=134221824, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=134217744, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=134217744, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=134217728) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=134217728) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f35b7e in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*)::{lambda(proto::ProtoContext*, void*, proto::Cell const*)#1}::_FUN(proto::ProtoContext*, void*, proto::Cell const*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff7f22a9c in proto::ProtoListImplementation::processReferences(proto::ProtoContext*, void*, void (*)(proto::ProtoContext*, void*, proto::Cell const*)) const () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+MMAP 268439552
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=268439552, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=268435472, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=268435472, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=268435456) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=268435456) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f35b7e in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*)::{lambda(proto::ProtoContext*, void*, proto::Cell const*)#1}::_FUN(proto::ProtoContext*, void*, proto::Cell const*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff7f387ee in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+MMAP 536875008
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=536875008, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=536870928, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=536870928, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=536870912) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=536870912) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f35b7e in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*)::{lambda(proto::ProtoContext*, void*, proto::Cell const*)#1}::_FUN(proto::ProtoContext*, void*, proto::Cell const*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff7f387ee in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+MMAP 33558528
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=33558528, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=33554448, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=33554448, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=33554432) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=33554432) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f394d2 in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff75c9ef9 in ?? () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+MMAP 67112960
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=67112960, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=67108880, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=67108880, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=67108864) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=67108864) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f394d2 in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff75c9ef9 in ?? () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+MMAP 134221824
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=134221824, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=134217744, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=134217744, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=134217728) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=134217728) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f394d2 in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff75c9ef9 in ?? () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+MMAP 33558528
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=33558528, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=33554448, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=33554448, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=33554432) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=33554432) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f35b7e in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*)::{lambda(proto::ProtoContext*, void*, proto::Cell const*)#1}::_FUN(proto::ProtoContext*, void*, proto::Cell const*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff7f387ee in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+MMAP 67112960
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=67112960, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=67108880, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=67108880, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=67108864) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=67108864) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f35b7e in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*)::{lambda(proto::ProtoContext*, void*, proto::Cell const*)#1}::_FUN(proto::ProtoContext*, void*, proto::Cell const*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff7f387ee in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+MMAP 134221824
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=134221824, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=134217744, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=134217744, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=134217728) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=134217728) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f35b7e in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*)::{lambda(proto::ProtoContext*, void*, proto::Cell const*)#1}::_FUN(proto::ProtoContext*, void*, proto::Cell const*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff7f387ee in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+MMAP 268439552
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=268439552, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=268435472, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=268435472, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=268435456) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=268435456) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f35b7e in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*)::{lambda(proto::ProtoContext*, void*, proto::Cell const*)#1}::_FUN(proto::ProtoContext*, void*, proto::Cell const*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff7f387ee in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+MMAP 536875008
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=536875008, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=536870928, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=536870928, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=536870912) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=536870912) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f35b7e in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*)::{lambda(proto::ProtoContext*, void*, proto::Cell const*)#1}::_FUN(proto::ProtoContext*, void*, proto::Cell const*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff7f387ee in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+MMAP 33558528
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=33558528, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=33554448, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=33554448, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=33554432) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=33554432) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f394d2 in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff75c9ef9 in ?? () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+MMAP 67112960
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=67112960, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=67108880, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=67108880, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=67108864) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=67108864) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f394d2 in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff75c9ef9 in ?? () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+MMAP 134221824
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=134221824, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=134217744, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=134217744, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=134217728) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=134217728) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f394d2 in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff75c9ef9 in ?? () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+MMAP 33558528
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=33558528, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=33554448, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=33554448, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=33554432) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=33554432) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f35b7e in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*)::{lambda(proto::ProtoContext*, void*, proto::Cell const*)#1}::_FUN(proto::ProtoContext*, void*, proto::Cell const*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff7f387ee in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+MMAP 67112960
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=67112960, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=67108880, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=67108880, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=67108864) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=67108864) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f35b7e in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*)::{lambda(proto::ProtoContext*, void*, proto::Cell const*)#1}::_FUN(proto::ProtoContext*, void*, proto::Cell const*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff7f387ee in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+MMAP 134221824
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=134221824, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=134217744, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=134217744, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=134217728) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=134217728) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f35b7e in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*)::{lambda(proto::ProtoContext*, void*, proto::Cell const*)#1}::_FUN(proto::ProtoContext*, void*, proto::Cell const*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff7f387ee in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+MMAP 268439552
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=268439552, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=268435472, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=268435472, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=268435456) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=268435456) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f35b7e in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*)::{lambda(proto::ProtoContext*, void*, proto::Cell const*)#1}::_FUN(proto::ProtoContext*, void*, proto::Cell const*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff7f387ee in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+MMAP 536875008
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=536875008, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=536870928, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=536870928, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=536870912) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=536870912) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f35b7e in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*)::{lambda(proto::ProtoContext*, void*, proto::Cell const*)#1}::_FUN(proto::ProtoContext*, void*, proto::Cell const*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff7f387ee in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+MMAP 33558528
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=33558528, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=33554448, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=33554448, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=33554432) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=33554432) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f394d2 in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff75c9ef9 in ?? () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+MMAP 67112960
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=67112960, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=67108880, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=67108880, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=67108864) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=67108864) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f394d2 in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff75c9ef9 in ?? () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+MMAP 134221824
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=134221824, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=134217744, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=134217744, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=134217728) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=134217728) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f394d2 in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff75c9ef9 in ?? () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+MMAP 33558528
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=33558528, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=33554448, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=33554448, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=33554432) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=33554432) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f35b7e in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*)::{lambda(proto::ProtoContext*, void*, proto::Cell const*)#1}::_FUN(proto::ProtoContext*, void*, proto::Cell const*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff7f387ee in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+MMAP 67112960
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=67112960, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=67108880, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=67108880, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=67108864) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=67108864) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f35b7e in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*)::{lambda(proto::ProtoContext*, void*, proto::Cell const*)#1}::_FUN(proto::ProtoContext*, void*, proto::Cell const*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff7f387ee in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+MMAP 134221824
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=134221824, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=134217744, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=134217744, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=134217728) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=134217728) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f35b7e in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*)::{lambda(proto::ProtoContext*, void*, proto::Cell const*)#1}::_FUN(proto::ProtoContext*, void*, proto::Cell const*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff7f387ee in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+MMAP 268439552
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=268439552, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=268435472, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=268435472, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=268435456) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=268435456) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f35b7e in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*)::{lambda(proto::ProtoContext*, void*, proto::Cell const*)#1}::_FUN(proto::ProtoContext*, void*, proto::Cell const*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff7f387ee in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+MMAP 536875008
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=536875008, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=536870928, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=536870928, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=536870912) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=536870912) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f35b7e in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*)::{lambda(proto::ProtoContext*, void*, proto::Cell const*)#1}::_FUN(proto::ProtoContext*, void*, proto::Cell const*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff7f387ee in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+MMAP 33558528
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=33558528, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=33554448, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=33554448, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=33554432) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=33554432) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f394d2 in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff75c9ef9 in ?? () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+MMAP 67112960
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=67112960, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=67108880, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=67108880, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=67108864) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=67108864) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f394d2 in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff75c9ef9 in ?? () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+MMAP 134221824
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=134221824, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=134217744, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=134217744, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=134217728) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=134217728) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f394d2 in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff75c9ef9 in ?? () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+MMAP 33558528
+#0  __GI___mmap64 (addr=addr@entry=0x0, len=len@entry=33558528, prot=prot@entry=3, flags=flags@entry=34, fd=fd@entry=-1, offset=offset@entry=0) at ../sysdeps/unix/sysv/linux/mmap64.c:47
+#1  0x00007ffff720e078 in sysmalloc_mmap (nb=nb@entry=33554448, pagesize=pagesize@entry=4096, extra_flags=extra_flags@entry=0) at ./malloc/malloc.c:2248
+#2  0x00007ffff7210097 in sysmalloc (nb=33554448, av=<optimized out>) at ./malloc/malloc.c:2348
+#3  _int_malloc (av=av@entry=0x7ffff0000030, bytes=bytes@entry=33554432) at ./malloc/malloc.c:4334
+#4  0x00007ffff7210ced in __libc_malloc2 (bytes=33554432) at ./malloc/malloc.c:3261
+#5  0x00007ffff7597e44 in operator new(unsigned long) () from /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ffff7f35b7e in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*)::{lambda(proto::ProtoContext*, void*, proto::Cell const*)#1}::_FUN(proto::ProtoContext*, void*, proto::Cell const*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+#7  0x00007ffff7f387ee in proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) () from /usr/lib/x86_64-linux-gnu/libprotoCore.so.3
+error: out of memory: the live objects fill the heap limit of 10000000 cells (640 MB) and the last collections reclaimed nothing. To allow more, set PROTOCORE_HEAP_LIMIT_CELLS (each cell is 64 bytes), e.g. PROTOCORE_HEAP_LIMIT_CELLS=40000000 for 2560 MB.
+[Inferior 1 (process 3723299) exited with code 03]

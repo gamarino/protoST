@@ -1,4 +1,4 @@
-Script started on 2026-09-29 18:22:10-03:00 [COMMAND="PROTOST=/home/gamarino/Documentos/proyectos/protoST/build_release/protost ./run_demo.sh 01-familiar-code.st" <not executed on terminal>]
+Script started on 2026-10-12 13:06:14-03:00 [COMMAND="PROTOST=/home/gamarino/Documentos/proyectos/protoST/build_release/protost ./run_demo.sh 01-familiar-code.st" <not executed on terminal>]
 Eva $100
 richest: Luis $150
 refused: Ana has only 100
@@ -9,4 +9,4 @@ nil
 270
 -- 01-familiar-code: verified
 
-Script done on 2026-09-29 18:22:10-03:00 [COMMAND_EXIT_CODE="0"]
+Script done on 2026-10-12 13:06:14-03:00 [COMMAND_EXIT_CODE="0"]

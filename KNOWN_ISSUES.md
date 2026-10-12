@@ -113,6 +113,18 @@ safepoint (`benchmarks/reports/2026-10-11-fib-under-adaptive-controller.md`);
 A program whose live objects fill the budget or the limit stops with exit
 status 3 and a message that names the limit in force and how to raise it.
 
+**The limits count cells, not the process's memory.** protoCore never takes
+more cells from the system than the limit allows, but the process also holds
+memory that is not cells. The largest part, when the heap is big, is the
+collector's mark work list: a `std::vector` in protoCore's collector thread
+that grows by doubling and holds the old buffer while it copies. Measured on
+0.6.3 with `PROTOCORE_ADAPTIVE_HEAP=0`: `(1 to: 500000) asArray` stops at the
+640 MB cell limit with a peak RSS of 1.19 GB, and the large allocations
+besides the cell blocks are that vector's 32, 64, 128, 256 and 512 MB
+buffers (`benchmarks/reports/2026-10-12-pre-talk-063.md`, section 3). Set a
+cell limit with that margin in mind; bounding the work list is a protoCore
+matter.
+
 **Status.** The default no longer runs out of memory on collections of this
 size; the n log n cost remains (a bulk list builder in protoCore would
 remove it), and the fixed limits above keep the old bound.
