@@ -170,3 +170,56 @@ TEST_CASE("EngineSlots: a context's slot array grows only as deep as its frames 
     CHECK(grown > protoST::kInitialEngineSlots);
     CHECK(grown < protoST::kEngineSlotCapacity);
 }
+
+// ---------------------------------------------------------------------------
+// Every instruction releases its transient pins (0.6.3)
+// ---------------------------------------------------------------------------
+//
+// The threaded dispatch leaves an instruction with a computed goto, and GCC
+// runs no destructor on a computed goto (GCC 15 says so: "jump to label ...
+// does not destroy"). Up to 0.6.2, 23 dispatch points left a TransientPin
+// alive that way, among them every SEND and every PUSH_BLOCK, so the
+// scratch cursor never came back down: the 256 scratch slots were used up
+// while the kernel loaded, and from then on a Release build's TransientPin
+// pinned nothing (the overflow check is an assert). The cursor must be where
+// it started after the runtime is built and after a program that reaches
+// those instructions.
+
+TEST_CASE("TransientPin: every instruction releases its pins",
+          "[heap][pins]") {
+    const unsigned int before = protoST::g_scratchCursor;
+    protoST::STRuntime rt;
+    std::vector<std::unique_ptr<protoST::BytecodeModule>> keep;
+    CHECK(protoST::g_scratchCursor == before);
+
+    const proto::ProtoObject* r = runSource(rt, keep,
+        "Object subclass: #Acc instanceVariableNames: 'n'.\n"
+        "Acc class instanceVariableNames: 'made'.\n"
+        "Acc class >> make\n"
+        "  made := (made ifNil: [0]) + 1.\n"
+        "  ^ self new setN: 0\n"
+        "\n"
+        "Acc >> setN: k\n"
+        "  n := k\n"
+        "\n"
+        "Acc >> add: k\n"
+        "  n := n + k.\n"
+        "  ^ n\n"
+        "\n"
+        "Acc >> n\n"
+        "  ^ n\n"
+        "\n"
+        "Smalltalk at: #Total put: 0.\n"
+        "| a b d s |\n"
+        "a := Acc make.\n"
+        "1 to: 300 do: [:i | a add: ([:x | x * 2] value: i)].\n"
+        "b := Acc make asActor.\n"
+        "1 to: 50 do: [:i | b add: i].\n"
+        "d := Dictionary new.\n"
+        "d at: #k put: (b n wait).\n"
+        "s := 'x' , 'y' , (d at: #k) printString.\n"
+        "Total := a n + (d at: #k) + s size.\n"
+        "Total\n");
+    REQUIRE(r->asLong(rt.rootCtx()) == 90300 + 1275 + 6);
+    CHECK(protoST::g_scratchCursor == before);
+}

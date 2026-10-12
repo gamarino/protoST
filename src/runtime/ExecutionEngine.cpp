@@ -838,6 +838,18 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     // then decodes the next instruction and enters it through the switch.
     #define DISPATCH_DIRECT() goto L_DISPATCH_NEXT
 #endif
+    // The next instruction, for a dispatch point where a local with a
+    // destructor is still alive (a TransientPin, in practice). A computed goto
+    // runs no destructor: GCC leaves the object undestroyed and says so
+    // ("jump to label ... does not destroy"). Up to 0.6.2 23 such points
+    // (every SEND, PUSH_BLOCK, the global and class-variable accesses) left
+    // their pins claimed, the thread's 256 scratch slots ran out while the
+    // kernel loaded, and from then on TransientPin pinned nothing in a
+    // Release build. An ordinary goto leaves the scopes properly, destroying
+    // their locals, and the loop head then dispatches as the switch build
+    // does. Every DISPATCH_DIRECT that remains is in a scope with no such
+    // local, which GCC checks: a new one brings the warning back.
+    #define DISPATCH_SCOPED() goto L_DISPATCH_NEXT
 
     // Outer loop: lets us resume after a DebuggerHalt is caught and the
     // user steps/conts out of the session. Without this wrapper the catch
@@ -853,9 +865,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     std::exception_ptr propagate;
     while (true) {
     try {
-#if !PROTOST_THREADED_DISPATCH
     L_DISPATCH_NEXT:
-#endif
     while (!frames_.empty()) {
         Frame& f = frames_.back();
         const auto& bytes = f.m->bytes();
@@ -1114,7 +1124,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 TransientPin pinBlkSelf(ctx, creatorSelf);
                 block->setAttribute(ctx, blkSelfKey, creatorSelf);
                 push(f, block);
-                DISPATCH_DIRECT();
+                DISPATCH_SCOPED();
                 break;
             }
             // 2026-05-24: SmallInt binary fast-path opcodes. Compiler emits
@@ -1381,7 +1391,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // STRuntime::finishDrain).
                     rt_.schedule(ctx, recv);
                     push(f, fut);
-                    DISPATCH_DIRECT();
+                    DISPATCH_SCOPED();
                     break;
                 }
 
@@ -1484,7 +1494,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                                 blkSelf = PROTO_NONE;
                             if (signalIfTooDeep(ctx, f, sub,
                                     static_cast<unsigned int>(argcOp))) {
-                                DISPATCH_DIRECT();
+                                DISPATCH_SCOPED();
                             }
                             pushFrame(sub, /*self=*/blkSelf, capDict,
                                       sendArgs,
@@ -1496,7 +1506,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                             // its backing storage. DISPATCH_DIRECT
                             // re-reads frames_.back() and dispatches the
                             // block from its pc=0.
-                            DISPATCH_DIRECT();
+                            DISPATCH_SCOPED();
                         }
                     }
                 }
@@ -1729,7 +1739,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // line above either threw or this pushes nil; handling it
                     // keeps the send well-formed regardless.
                     push(f, r ? r : PROTO_NONE);
-                    DISPATCH_DIRECT();
+                    DISPATCH_SCOPED();
                     break;
                 }
                 // F4-U4: detect user method (Block-shaped wrapper carrying
@@ -1774,7 +1784,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         methodArgs[i + 1] = sendArgs[i];
                     if (signalIfTooDeep(ctx, f, sub,
                             static_cast<unsigned int>(argcOp) + 1)) {
-                        DISPATCH_DIRECT();
+                        DISPATCH_SCOPED();
                     }
                     pushFrame(sub, /*self=*/recv, capDict, methodArgs,
                               static_cast<unsigned int>(argcOp) + 1);
@@ -1784,7 +1794,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // `f` is now invalidated by the vector growth (when it
                     // reallocates). DISPATCH_DIRECT re-reads frames_.back()
                     // and dispatches the callee from its pc=0.
-                    DISPATCH_DIRECT();
+                    DISPATCH_SCOPED();
                 }
                 // F5-M3: member-access semantics. If the attribute is not a
                 // method (no __bc_ptr__) and is not a primitive marker (a
@@ -1797,7 +1807,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 if (!attr->isInteger(ctx)) {
                     if (argcOp == 0) {
                         push(f, attr);
-                        DISPATCH_DIRECT();
+                        DISPATCH_SCOPED();
                         break;
                     }
                     throw std::runtime_error(
@@ -1810,7 +1820,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // member-access rule as above.
                     if (argcOp == 0) {
                         push(f, attr);
-                        DISPATCH_DIRECT();
+                        DISPATCH_SCOPED();
                         break;
                     }
                     throw std::runtime_error(
@@ -1841,7 +1851,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     rt_, ctx,
                     [&] { return fn(rt_, ctx, recv, sendArgs, argcOp); });
                 push(f, result ? result : PROTO_NONE);
-                DISPATCH_DIRECT();
+                DISPATCH_SCOPED();
                 break;
             }
             case Op::SEND_CALL: L_SEND_CALL: {
@@ -1950,7 +1960,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 if (!attr || attr == PROTO_NONE) {
                     auto* r = doesNotUnderstand(ctx, recv, desc.mangled, nullptr, 0);
                     push(f, r ? r : PROTO_NONE);
-                    DISPATCH_DIRECT();
+                    DISPATCH_SCOPED();
                     break;
                 }
 
@@ -2048,12 +2058,12 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                             + std::string(desc.name->toStdString(ctx)));
                     }
                     if (signalIfTooDeep(ctx, f, sub, totalArgs)) {
-                        DISPATCH_DIRECT();
+                        DISPATCH_SCOPED();
                     }
                     pushFrame(sub, /*self=*/recv, capDict, methodArgs,
                               totalArgs);
                     gcSafepoint(ctx);  // call entry (see gcSafepoint)
-                    DISPATCH_DIRECT();
+                    DISPATCH_SCOPED();
                 }
 
                 // Non-method attribute. Call-form requires a callable: a
@@ -2061,7 +2071,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // unary-send behaviour for foreign-attribute lookups).
                 if (callTotal == 0) {
                     push(f, attr);
-                    DISPATCH_DIRECT();
+                    DISPATCH_SCOPED();
                     break;
                 }
 
@@ -2081,7 +2091,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                             rt_, ctx,
                             [&] { return fn(rt_, ctx, recv, callArgs, callNPos); });
                         push(f, result ? result : PROTO_NONE);
-                        DISPATCH_DIRECT();
+                        DISPATCH_SCOPED();
                         break;
                     }
                 }
@@ -2089,7 +2099,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // Non-zero args on a non-method attribute is an error.
                 auto* r = doesNotUnderstand(ctx, recv, desc.mangled, nullptr, 0);
                 push(f, r ? r : PROTO_NONE);
-                DISPATCH_DIRECT();
+                DISPATCH_SCOPED();
                 break;
             }
             case Op::JUMP: L_JUMP: {
@@ -2196,7 +2206,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     if (d->hasOwnAttribute(ctx, sym) == PROTO_TRUE) { owner = d; break; }
                 }
                 const_cast<proto::ProtoObject*>(owner)->setAttribute(ctx, sym, val);
-                DISPATCH_DIRECT();
+                DISPATCH_SCOPED();
                 break;
             }
             case Op::DEFINE_CAPTURED: L_DEFINE_CAPTURED: {
@@ -2211,7 +2221,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 TransientPin pinSym(
                     ctx, reinterpret_cast<const proto::ProtoObject*>(sym));
                 const_cast<proto::ProtoObject*>(capD)->setAttribute(ctx, sym, val);
-                DISPATCH_DIRECT();
+                DISPATCH_SCOPED();
                 break;
             }
             case Op::PUSH_GLOBAL: L_PUSH_GLOBAL: {
@@ -2244,7 +2254,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 auto* g = rt_.globals();
                 if (!g) throw std::runtime_error("globals not initialized");
                 g->setAttribute(ctx, sym, val);
-                DISPATCH_DIRECT();
+                DISPATCH_SCOPED();
                 break;
             }
             case Op::PUSH_INSTVAR: L_PUSH_INSTVAR: {
@@ -2304,7 +2314,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 if (!self || self == PROTO_NONE)
                     throw std::runtime_error("STORE_INSTVAR self is null");
                 const_cast<proto::ProtoObject*>(self)->setAttribute(ctx, sym, val);
-                DISPATCH_DIRECT();
+                DISPATCH_SCOPED();
                 break;
             }
             case Op::IVAR_GROUP: L_IVAR_GROUP: {
@@ -2400,7 +2410,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 }
                 if (!owner) owner = self;   // defensive: a class var always has an owner
                 const_cast<proto::ProtoObject*>(owner)->setAttribute(ctx, sym, val);
-                DISPATCH_DIRECT();
+                DISPATCH_SCOPED();
                 break;
             }
             case Op::MAKE_CAPTURED: L_MAKE_CAPTURED: {
@@ -2423,7 +2433,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                                  ->newChild(ctx, /*isMutable=*/true);
                 TransientPin pinDict(ctx, dict);
                 setCaptured(f, dict);
-                DISPATCH_DIRECT();
+                DISPATCH_SCOPED();
                 break;
             }
             case Op::MAKE_ARRAY: L_MAKE_ARRAY: {
@@ -2452,7 +2462,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 const proto::ProtoObject* arr =
                     makeArrayInstance(rt_, ctx, data);
                 push(f, arr ? arr : PROTO_NONE);
-                DISPATCH_DIRECT();
+                DISPATCH_SCOPED();
                 break;
             }
             case Op::PUSH_SELF: L_PUSH_SELF: {
