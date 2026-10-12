@@ -3,6 +3,72 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
+## 0.6.3 — transient pins released, kernel check, demos in the package (2026-10-12)
+
+- **The threaded dispatch did not release transient pins** (found by the
+  pre-talk audit through GCC 15's 1081 "jump to label ... does not destroy"
+  warnings on `ExecutionEngine.cpp`). A computed goto runs no destructor, and
+  23 dispatch points (every SEND, PUSH_BLOCK, the global and class-variable
+  accesses) left a `TransientPin` alive that way, so the thread's scratch
+  cursor never came back down: the 256 scratch slots were used up while the
+  kernel loaded, and from then on `TransientPin` pinned nothing in a Release
+  build (its overflow check is an `assert`). It affected the GCC builds, that
+  is the Linux packages and Linux CI; Clang and MSVC use the switch dispatch,
+  whose `goto` runs destructors. No crash has been traced to it. Those points
+  now leave through an ordinary `goto` to the dispatch loop's head
+  (`DISPATCH_SCOPED`); the build has no warnings left, so a new instance would
+  show. Test: `TransientPin: every instruction releases its pins` (read 255
+  against 0 before). Cost: `exception_latency` +13 % wall (+6 % cycles: the
+  C++ unwinder searches `runLoop`'s call-site table further; the same
+  exceptions are thrown); the other workloads are unchanged within the noise
+  in cycles (`benchmarks/reports/2026-10-12-pre-talk-063.md`).
+- **protost refuses to start without its kernel.** When the standard
+  library directory has no `kernel/00-manifest.txt` (a copied binary, a wrong
+  `PROTOST_LIB`), every mode that runs code (`script`, `-e`, `-d`, `-i`,
+  `--dap`) now stops with "cannot find the protoST kernel", what was
+  searched, and exit status 72; before, it ran with the primitives alone and
+  failed later on an undefined `Transcript`. `STRuntime::kernelManifestPath`
+  answers the question for embedders, whose runtime still starts without a
+  kernel. Test: `cli_kernel` (fails on 0.6.2).
+- **The talk demos are in the package**, under
+  `/usr/share/doc/protoST/talks/2026-10-15-fas/`: the programs, the demo-4
+  feed, the expected outputs, `run_demo.sh` and `check_all.sh` (executable)
+  and the slide PDFs. `run_demo.sh` now runs the `protost` on `PATH` first
+  and the source tree's `build_release` only when there is none (it picked a
+  stale build before), names the binary it picked when the version does not
+  match and how to choose another (`PROTOST=`), and writes nothing next to
+  itself, so it runs from the read-only installed copy. Demo 2 prints its own
+  speedup (`time speedup: N.Nx`).
+- **S22 was a test race, now fixed.** Two Track Y unit tests wrote the same
+  module file in the shared working directory; when ctest ran them at once,
+  one truncated the file while the other loaded it, and the module came back
+  without `Counter` (seen on CI on 2026-09-30 and again on 2026-10-12, on the
+  protoCore 2.11.0 floor job). Reproduced locally at about 3 % with six
+  copies in parallel (0.6.2 and 0.6.3 alike); each process now writes its own
+  file, 0/600 after.
+- **S19's test gates CI again.** `cli_concurrent_first_call` had been kept
+  out of the gate since S19 (fixed in `06e1009`); it passed on the first
+  attempt in all 59 CI runs since, and 150 times in a row locally (6,000
+  launches, three runs at a time).
+- **Measured and documented** (`benchmarks/reports/2026-10-12-pre-talk-063.md`):
+  demo 2's lower speedup in an Ubuntu 24.04 container is not the container:
+  the one-thread half runs about 10 % faster with glibc 2.39 than with the
+  host's 2.43 (malloc, for the temporaries protoCore's integer comparison
+  allocates), and the twelve actors take the same time. Under the old fixed
+  limit (`PROTOCORE_ADAPTIVE_HEAP=0`) a process peaked at 1.19 GB resident
+  with 640 MB of cells: the rest is the collector's mark work list, a vector
+  outside the cell heap (K5).
+- Docs: README "Performance" rewritten from the 2026-10-12 report (and a CI
+  badge); the talk materials (es/en) corrected after the audit: figures and
+  their sources, interoperability stated in the one direction that is
+  proven, past tense for the 640 MB limit, uncapped peak memory and how to
+  cap it, test counts per platform, decks (Spanish source committed as
+  `deck.html`) and speaker notes extracted per language.
+- Test suite: 1101 cases on Linux, all passing; CI green on Linux (1100 gating cases, also against protoCore 2.11.0), macOS
+  (1100) and Windows (1097) (CI 38276967742, cross-platform 38276967598).
+  The `.deb` was built in a clean Ubuntu 24.04 container with GCC 13 (no
+  warnings; 1101/1101 there).
+
 ## 0.6.2 — the adaptive heap controller is the default (2026-10-12)
 
 - **Memory policy: protoCore's adaptive heap controller by default**,

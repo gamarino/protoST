@@ -14,22 +14,22 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Test suite:** 1100 `ctest` cases on Linux, 1100/1100 passing on
-  2026-10-12 (0.6.2, against protoCore 2.14.5 installed in a
-  private prefix, and protoIO 0.2.2): 544 conformance programs, 460 unit tests, 42
-  examples, 32 CLI tests (including the benchmark-harness self-test and the
-  terminal test `cli_repl_console`) and 22 documentation checks (the
-  examples with a stated result in 21 documents, plus the checker's
-  self-test). CI runs the same suite on Linux, macOS and Windows against
-  protoCore 2.14.5, and on Linux against 2.11.0, the declared minimum (CI
-  38259886339 and cross-platform 38259890608, green on 0.6.2: Linux runs
-  1098 of them in its suite job (two run in a separate informational job),
-  macOS 1098, Windows 1095); Windows runs all but `cli_sigint` and
-  tutorial chapter 15 (`docs/INSTALLATION.md`, "Windows (MSVC)"). The
+- **Test suite:** 1101 `ctest` cases on Linux, 1101/1101 passing on
+  2026-10-12 (0.6.3, against protoCore 2.14.5 and protoIO 0.2.2): 544
+  conformance programs, 461 unit tests, 42 examples, 32 CLI tests (including
+  the benchmark-harness self-test and the terminal test `cli_repl_console`)
+  and 22 documentation checks (the examples with a stated result in 21
+  documents, plus the checker's self-test). CI runs the same suite on Linux,
+  macOS and Windows against protoCore 2.14.5, and on Linux against 2.11.0,
+  the declared minimum (CI 38276967742 and cross-platform 38276967598, green on 0.6.3): Linux runs 1100 of
+  them in its suite job (the wall-clock parallelism proof runs in a separate
+  informational job), macOS 1100, Windows 1097; Windows runs all
+  but `cli_sigint` and tutorial chapter 15 (`docs/INSTALLATION.md`, "Windows
+  (MSVC)"). `cli_concurrent_first_call` (S19) gates CI again since 0.6.3. The
   history of earlier counts is in `CHANGELOG.md`.
-- **protoCore:** 0.6.0 requires 2.11.0 or later (instance-variable
+- **protoCore:** 0.6.3 requires 2.11.0 or later (instance-variable
   write groups use `ProtoObject::setAttributes`, see *Object model*); its
-  `.deb` is built against 2.14.5, the release to install with it. The
+  `.deb` is built against 2.14.5 and declares `protocore (>= 2.14.5)`. The
   0.5.0 release required 2.6.1. **Memory policy (since 0.6.2):** protoCore's adaptive heap controller,
   enabled in `STRuntime::configureHeap` as in protoPython, protoScala and
   protoClojure: the budget is 75 % of physical memory or of the process
@@ -47,11 +47,8 @@ stable id and file it in the right bucket.
   that a collection's pause no longer grows with the number of threads);
   precedence and
   details in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md) K5.
-- **Last verified:** 2026-10-12, by the test suite above (release 0.6.2;
-  its `.deb` was built in a clean Ubuntu 24.04 container with GCC 13, where
-  the suite passed 1100/1100, and installed as an upgrade from 0.6.1 in
-  another, where it passed the talk demos 20/20; the same was done for 0.6.0
-  and 0.6.1). The 0.5.0 release (input and output, see
+- **Last verified:** 2026-10-12, by the test suite above (release 0.6.3;
+  its `.deb` was built in a clean Ubuntu 24.04 container with GCC 13 from `57c89fb`, with no compiler warning and the suite passing 1101/1101 there; installation checks in `CHANGELOG.md`; the same was done for 0.6.0, 0.6.1 and 0.6.2). The 0.5.0 release (input and output, see
   [`docs/superpowers/specs/2026-09-29-io-design.md`](superpowers/specs/2026-09-29-io-design.md))
   was verified on 2026-09-29. The 0.4.0 audit before it (see
   [`docs/superpowers/specs/2026-09-28-presentable-protost-design.md`](superpowers/specs/2026-09-28-presentable-protost-design.md)
@@ -59,8 +56,8 @@ stable id and file it in the right bucket.
   was an adversarial Smalltalk-semantics audit of about 1,100 probe programs
   in two rounds; each fix of a wrong result, crash or hang it found carries a
   regression test.
-- **Open bugs:** S3 (Medium, not provable on this build) and S22 (Medium,
-  seen once on CI, on 2026-09-30). S23 closed on 2026-10-02 (`9cdc9b4`),
+- **Open bugs:** S3 (Medium, not provable on this build). S22 (a test
+  race), S25 and S26 closed in 0.6.3, S24 in 0.6.1, S23 on 2026-10-02 (`9cdc9b4`),
   S19 on 2026-09-29, S20 and S21 in 0.5.0. Hard edges that are not
   language-design choices are in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md).
 - **Id scheme:** `D1..D18` are carried over from `LANGUAGE.md` §14 and keep
@@ -371,7 +368,6 @@ idiomatic code; Low = narrow edge case).
 | Id | Bug | Severity |
 |----|-----|----------|
 | S3 | **An allocation-free loop stalls a garbage collection.** protoCore starts a requested collection only after every running thread parks, and the dispatch loop had no park point: a thread running an inlined loop over SmallIntegers, a block loop or allocation-free recursion holds every other thread in the stop-the-world handshake until its loop ends, or for ever when the loop waits on a flag a parked thread must set. It matters only while a collection is requested. An earlier fix (`a508a51`) was reverted (`d2a873f`) when protoCore withdrew the park-only API it used. **Status after the S15 fix (2026-09-24): the mechanism is addressed but the close is not proved, so this stays open.** `ExecutionEngine::gcSafepoint` calls `ProtoContext::safepoint()` at every loop back-edge and at engine entry, and `safepoint()` ends in `parkForStopTheWorld` — that is precisely the park point the interpreter lacked, and the API protoCore now documents for this purpose. What could not be done is falsify it: **no allocation-free loop could be written in protoST to test with.** Measured on this build, every loop shape allocates about three cells per iteration even when its body only adds SmallIntegers — a 1,000,000-iteration `1 to: n do: [ :i | s := s + 1 ]` over a method temporary grows the heap by 3,014,656 cells — so every such loop already parks at `allocCell`'s every-64-allocations poll and cannot exhibit S3. A test written against a loop of that shape passed against a build with both safepoints removed, which is why it was withdrawn rather than kept. Closing S3 needs either a protoST loop that genuinely allocates nothing (which is first a question about why SmallInteger arithmetic allocates at all) or a white-box test that drives the dispatch loop directly. | Medium |
-| S22 | **A cross-space read answered nil once on CI.** The unit test `Track Y: the provider serves a caller in a ProtoSpace protoST does not own` failed once on the CI runner (run 36662177419, 2026-09-30, protoCore 2.6.2): in its section "the value is the same object on both sides", the module namespace read from the foreign space answered `PROTO_NONE` for `Counter`, which the other section of the same case had just found. The rerun passed, and 500 local runs (default order, CI's random seed 3168677656, four CPUs under load) passed. The same case passed in the CI runs before and after. The protoCore change of that day (bulk release of dead mutables' table entries) was checked against it: the bulk removal matches one-by-one removal on 460 random trees, including trees shaped like the table's shards. Not characterised; the next failure should be captured with the space's state, not retried. | Medium |
 
 ---
 
@@ -395,6 +391,9 @@ during the 2026-05-20 audit.
 
 | Id | What | Resolution | Commit |
 |----|------|------------|--------|
+| S22 | A cross-space read answered nil on CI (runs 36662177419, 2026-09-30, and 38275006837, 2026-10-12, on the protoCore 2.11.0 floor job): `Track Y: the provider serves a caller in a ProtoSpace protoST does not own` found no `Counter` in the module a foreign caller loaded. | **Cause: the test, not the runtime.** ctest runs each TEST_CASE as its own process in one working directory, and two Track Y cases wrote the same `cross_runtime_lib.st` there: one truncated it while the other loaded it, so the module came back without `Counter`. Reproduced locally by running six copies of the case at once: 18/600 failures on 0.6.2, 16/600 on 0.6.3 before the fix. **Fix:** each process writes and removes its own module file (`CounterModule` in `tests/unit/test_cross_runtime_provider.cpp`); 0/600 after. | 0.6.3 |
+| S25 | **The threaded dispatch did not release transient pins.** 23 dispatch points (every SEND, PUSH_BLOCK, the global and class-variable accesses) left a `TransientPin` alive across the computed goto that dispatches the next instruction; the thread's 256 scratch slots ran out while the kernel loaded (gdb: `g_scratchCursor` 255 at exit after a one-expression script), and from then on a Release build's `TransientPin` pinned nothing. GCC builds only (Linux packages and CI); Clang and MSVC use the switch dispatch. GCC 15 reported it as 1081 "jump to label ... does not destroy" warnings. No crash traced to it. | **Cause:** a computed goto runs no destructor. **Fix:** those points leave through an ordinary `goto` to the loop head (`DISPATCH_SCOPED`), which destroys the scopes' locals; no warning remains, so a new instance shows in the build. Cost: `exception_latency` +13 % wall, the rest within the noise (`benchmarks/reports/2026-10-12-pre-talk-063.md`). Test: `TransientPin: every instruction releases its pins` (255 against 0 before). | 0.6.3 |
+| S26 | A `protost` that found no kernel (`kernel/00-manifest.txt` missing from its standard-library directory: a copied binary, a wrong `PROTOST_LIB`) ran with the primitives alone and failed later on an undefined `Transcript`. | Every mode that runs code checks `STRuntime::kernelManifestPath` first and stops with "cannot find the protoST kernel", what it searched, and exit status 72. Test: `cli_kernel` (failed before). | 0.6.3 |
 | S24 | **A recursion that never loops never had its garbage reclaimed.** The textbook `fib` (`(self compute: n - 1) + (self compute: n - 2)`) ran out of memory with `fib 29` under the default 640 MB limit ("the last collections reclaimed nothing", exit 3; 0.5.0, 0.6.0), `fib 25` under a 3 M-cell limit, and under protoCore's adaptive controller `fib.st` took three times as long, every cycle futile. | **Cause:** S15's safepoint (`ExecutionEngine::gcSafepoint`, which submits the root context's young generation to the collector) ran only at a loop back-edge and at engine entry; a send or block call within the same engine is neither, so a program that only recurses submitted nothing after start-up and protoCore had to treat everything it allocated as live. **Fix:** call entry is a safepoint too: right after a send or block call has pushed the callee's frame, every live value is in a traced frame slot, the precondition `ProtoContext::safepoint()` documents. Cost on `fib.st` under the fixed limit: within the A/A noise (-1.1 % against +2.5 / +2.8 %). Under the controller `fib.st` now takes 0.40 s instead of 1.19 s, 155 MB instead of 593 MB (`benchmarks/reports/2026-10-11-fib-under-adaptive-controller.md`). Test: `cli_gc_recursion_reclaims` (fib 25 under a 2.7 M-cell ceiling; failed before with exit 3; must still fail with `PROTOST_NO_GC_SAFEPOINT=1`). | 0.6.1 |
 | S23 | A chain of handlers that each re-signal (`[self relay: n - 1] on: Error do: [:e \| Error signal: 'level']`, or `pass`, `outer`, `signal`, `signal:` in the handler) did not finish once it reached the engine nesting limit: 498 levels took 0.08 s, 499 or more did not finish (killed after 20 s and after 2 min). | **Cause** (gdb on the live process, and a trace of the handlers run): a handler block needs a nested engine of its own; at the limit it could not start, and the limit's `std::runtime_error` left the handler's `signal` untranslated. Every primitive boundary it crossed on the way down translated it into a new `Error` and searched the handler stack again; a boundary inside an earlier handler found the handlers above it enabled again (the unwind had already left them) and ran them a second time, each of which hit the limit again, so the number of handler runs doubled with every level. **Fix:** `signal` checks for room before it runs a handler (`ExecutionEngine::canStartNestedEngine`); without room it raises the limit's `Error` there, finds its handler and throws `NestingLimitUnwind` to that handler's `on:do:`, which runs the handler on a fresh limit `Error` with the engines the unwind released (`src/runtime/NestingLimitUnwind.h`). Each handler runs at most once; 499, 500, 1,000 and 10,000 levels finish in 0.07-0.11 s. Tests: `08-exceptions/nesting-limit-in-re-signalling-handler-chain`, `08-exceptions/nesting-limit-in-passing-handler-chain` (both failed before: no result in 20 s); `08-exceptions/unwind-through-nested-handler-blocks` goes back to 498 levels. | `9cdc9b4` |
 | S20 | A subclass of a kernel class could not read the instance variables it inherits: `IOStream subclass: #LabelledStream …` with a method reading `fd`, or `WriteStream subclass: #PeekStream` reading `buffer`, failed to compile with `undeclared variable`, because the compiler knew only the instance variables of classes compiled in the same module. | Every compiled class is recorded in a process-wide registry that the next compilation starts from, and the CLI builds the runtime (which compiles the kernel) before compiling the script; the compiled module is kept alive past the runtime, because workers may still run its methods during shutdown. Tests: `04-object-model/inherited_kernel_ivars` (failed before), `04-object-model/undeclared_still_rejected`. | `e966c8a` |
