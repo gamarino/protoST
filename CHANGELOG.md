@@ -22,8 +22,7 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
   1,165 MB (`KNOWN_ISSUES.md` K5).
 - **Talk materials and figures** (README "Performance", `docs/STATUS.md`,
   the FAST talk's scripts, notes, hard questions, decks and PDFs) quote that
-  report; the hard questions explain why demo 2's ratio is lower. The demo 2
-  fallback recording was made again on 0.6.5 and 2.14.6.
+  report; the hard questions explain why demo 2's ratio is lower.
   `benchmarks/compare_builds.py` gained `--libdir LABEL=DIR` (one binary,
   several protoCore libraries, `ldd` checked before every run).
 - Test suite: 1101 cases on Linux, all passing against protoCore 2.14.6 (the
