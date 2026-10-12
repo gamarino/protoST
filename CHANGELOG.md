@@ -13,8 +13,11 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
   of 0.6.3 in a clean container found it. Standard desktop and WSL
   installations were not affected. The Markdown talk documents stay under
   the documentation directory. No code change: the runtime is 0.6.3's.
-- Test suite: 1101 cases on Linux, all passing; CI and package as below
-  (filled in after the runs).
+- Test suite: 1101 cases on Linux, all passing; CI green on Linux (1100
+  gating cases, also against protoCore 2.11.0), macOS (1100) and Windows
+  (1097) (CI 38280026970, cross-platform 38280027024). The `.deb` was built
+  in a clean Ubuntu 24.04 container with GCC 13 from `eee2708` (no warnings;
+  1101/1101 there).
 
 ## 0.6.3 — transient pins released, kernel check, demos in the package (2026-10-12)
 

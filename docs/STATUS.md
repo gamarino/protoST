@@ -15,13 +15,13 @@ relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
 - **Test suite:** 1101 `ctest` cases on Linux, 1101/1101 passing on
-  2026-10-12 (0.6.3, against protoCore 2.14.5 and protoIO 0.2.2): 544
+  2026-10-12 (0.6.4, against protoCore 2.14.5 and protoIO 0.2.2): 544
   conformance programs, 461 unit tests, 42 examples, 32 CLI tests (including
   the benchmark-harness self-test and the terminal test `cli_repl_console`)
   and 22 documentation checks (the examples with a stated result in 21
   documents, plus the checker's self-test). CI runs the same suite on Linux,
   macOS and Windows against protoCore 2.14.5, and on Linux against 2.11.0,
-  the declared minimum (CI 38276967742 and cross-platform 38276967598, green on 0.6.3): Linux runs 1100 of
+  the declared minimum (CI 38280026970 and cross-platform 38280027024, green on 0.6.4): Linux runs 1100 of
   them in its suite job (the wall-clock parallelism proof runs in a separate
   informational job), macOS 1100, Windows 1097; Windows runs all
   but `cli_sigint` and tutorial chapter 15 (`docs/INSTALLATION.md`, "Windows
@@ -47,8 +47,10 @@ stable id and file it in the right bucket.
   that a collection's pause no longer grows with the number of threads);
   precedence and
   details in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md) K5.
-- **Last verified:** 2026-10-12, by the test suite above (release 0.6.3;
-  its `.deb` was built in a clean Ubuntu 24.04 container with GCC 13 from `57c89fb`, with no compiler warning and the suite passing 1101/1101 there; installation checks in `CHANGELOG.md`; the same was done for 0.6.0, 0.6.1 and 0.6.2). The 0.5.0 release (input and output, see
+- **Last verified:** 2026-10-12, by the test suite above (release 0.6.4;
+  its `.deb` was built in a clean Ubuntu 24.04 container with GCC 13 from
+  `eee2708`, with no compiler warning and the suite passing 1101/1101 there;
+  installation checks in `CHANGELOG.md`; the same was done for 0.6.0, 0.6.1 and 0.6.2). The 0.5.0 release (input and output, see
   [`docs/superpowers/specs/2026-09-29-io-design.md`](superpowers/specs/2026-09-29-io-design.md))
   was verified on 2026-09-29. The 0.4.0 audit before it (see
   [`docs/superpowers/specs/2026-09-28-presentable-protost-design.md`](superpowers/specs/2026-09-28-presentable-protost-design.md)
