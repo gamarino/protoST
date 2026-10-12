@@ -9,7 +9,7 @@ On a Debian or Ubuntu machine where protoCore's package is installed, the
 library is `/usr/lib/x86_64-linux-gnu/libprotoCore.so.3`, a link to
 `libprotoCore.so.<version>`. protoST 0.6.1 needs protoCore 2.11.0 or later
 (*Prerequisites*); its `.deb` was built and tested against protoCore 2.14.5,
-the release to install with it (0.5.0 needed 2.6.1).
+the release to install with it, and declares `protocore (>= 2.14.5)` (0.5.0 needed 2.6.1).
 CI builds against protoCore 2.14.5 on Linux, macOS and Windows, and against
 2.11.0, the declared minimum, in one Linux job (the floor job), both with
 protoIO 0.2.2; the suite was last run locally (2026-10-11) against protoCore

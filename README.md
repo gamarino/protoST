@@ -273,7 +273,7 @@ sudo apt install ./protoCore-2.14.5-Linux.deb ./protost-0.6.1-Linux.deb
 
 These are the 0.6.1 release packages. protoST 0.6.1 needs protoCore 2.11.0
 or later; the `.deb` was built against 2.14.5, the release to install with
-it (an older protoCore package, such as the 2.6.2 that went with 0.5.0, is
+it, and declares `protocore (>= 2.14.5)` (an older protoCore package, such as the 2.6.2 that went with 0.5.0, is
 not enough: upgrade it with the command above).
 
 **macOS — built and tested in CI, not packaged.** The cross-platform CI job

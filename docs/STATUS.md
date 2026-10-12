@@ -22,8 +22,9 @@ stable id and file it in the right bucket.
   examples with a stated result in 21 documents, plus the checker's
   self-test). CI runs the same suite on Linux, macOS and Windows against
   protoCore 2.14.5, and on Linux against 2.11.0, the declared minimum (CI
-  runs 38133020853 and 38133020845, green on `4876884`); Windows registers
-  1092 (no benchmark-harness self-test) and runs all but `cli_sigint` and
+  38196116178 and cross-platform 38196118083, green on 0.6.1: Linux runs
+  1092 of them in its suite job (two run in a separate informational job),
+  macOS 1092, Windows 1089); Windows runs all but `cli_sigint` and
   tutorial chapter 15 (`docs/INSTALLATION.md`, "Windows (MSVC)"). The
   history of earlier counts is in `CHANGELOG.md`.
 - **protoCore:** 0.6.0 requires 2.11.0 or later (instance-variable
