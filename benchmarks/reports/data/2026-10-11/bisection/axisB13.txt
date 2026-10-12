@@ -1,0 +1,18 @@
+== par1
+          oct03@2145: wall    891 ( +0.0%) elapsed    891 ( +0.0%) user    537 ( +0.0%) sys   350 vcsw     18 ivcsw    15 minflt  147537 rss  581MB | load<= 3.0 notquiet 0/7 comp []
+           main@2145: wall    906 ( +1.7%) elapsed    906 ( +1.7%) user    550 ( +2.5%) sys   367 vcsw     19 ivcsw     8 minflt  147555 rss  581MB | load<= 3.1 notquiet 0/7 comp []
+     main-noivg@2145: wall    901 ( +1.1%) elapsed    901 ( +1.1%) user    538 ( +0.1%) sys   363 vcsw     15 ivcsw    11 minflt  147554 rss  581MB | load<= 3.0 notquiet 0/7 comp []
+       oct03@2145-AA: wall    885 ( -0.7%) elapsed    885 ( -0.7%) user    536 ( -0.2%) sys   351 vcsw     18 ivcsw     8 minflt  147538 rss  581MB | load<= 3.0 notquiet 0/7 comp []
+        main@2145-AA: wall    922 ( +3.5%) elapsed    922 ( +3.5%) user    557 ( +3.7%) sys   365 vcsw     14 ivcsw    16 minflt  147555 rss  581MB | load<= 3.0 notquiet 0/7 comp []
+== sat1
+          oct03@2145: wall   4463 ( +0.0%) elapsed   4291 ( +0.0%) user   4504 ( +0.0%) sys   506 vcsw    329 ivcsw   104 minflt  162735 rss  637MB | load<= 9.0 notquiet 6/7 comp ['cc1plus', 'gmake', 'ld']
+           main@2145: wall   4268 ( -4.4%) elapsed   4130 ( -3.8%) user   4319 ( -4.1%) sys   516 vcsw    328 ivcsw   116 minflt  162716 rss  636MB | load<= 6.2 notquiet 5/7 comp ['cc1plus', 'gmake']
+     main-noivg@2145: wall   4613 ( +3.4%) elapsed   4463 ( +4.0%) user   4684 ( +4.0%) sys   516 vcsw    312 ivcsw    94 minflt  162723 rss  637MB | load<= 12.3 notquiet 6/7 comp ['cc1plus', 'gmake']
+       oct03@2145-AA: wall   4281 ( -4.1%) elapsed   4130 ( -3.8%) user   4319 ( -4.1%) sys   514 vcsw    305 ivcsw    73 minflt  162744 rss  636MB | load<= 12.2 notquiet 6/7 comp ['cc1plus', 'gmake']
+        main@2145-AA: wall   4365 ( -2.2%) elapsed   4228 ( -1.5%) user   4445 ( -1.3%) sys   522 vcsw    308 ivcsw    91 minflt  162717 rss  636MB | load<= 9.9 notquiet 6/7 comp ['cc1plus', 'gmake']
+== coop2
+          oct03@2145: wall    813 ( +0.0%) elapsed    813 ( +0.0%) user    676 ( +0.0%) sys   392 vcsw   4885 ivcsw    43 minflt  129169 rss  509MB | load<= 5.1 notquiet 2/7 comp ['cc1plus', 'gmake', 'protopy']
+           main@2145: wall    846 ( +4.0%) elapsed    846 ( +4.0%) user    720 ( +6.5%) sys   394 vcsw   4702 ivcsw    52 minflt  130207 rss  513MB | load<= 4.2 notquiet 1/7 comp []
+     main-noivg@2145: wall    777 ( -4.4%) elapsed    777 ( -4.4%) user    657 ( -2.9%) sys   370 vcsw   4777 ivcsw    74 minflt  129183 rss  509MB | load<= 3.9 notquiet 1/7 comp ['cc1plus', 'gmake']
+       oct03@2145-AA: wall    791 ( -2.7%) elapsed    791 ( -2.7%) user    680 ( +0.5%) sys   378 vcsw   4840 ivcsw    21 minflt  129168 rss  509MB | load<= 3.9 notquiet 0/7 comp []
+        main@2145-AA: wall    793 ( -2.5%) elapsed    793 ( -2.5%) user    676 ( -0.0%) sys   382 vcsw   4756 ivcsw    57 minflt  130208 rss  513MB | load<= 3.9 notquiet 0/7 comp []

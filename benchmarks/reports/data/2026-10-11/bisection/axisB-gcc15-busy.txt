@@ -1,0 +1,5 @@
+== sat1
+           st5badd33: wall   3470 ( +0.0%) elapsed   3355 ( +0.0%) user   3556 ( +0.0%) sys   434 vcsw    336 ivcsw   199 minflt  162737 rss  637MB | load<= 8.1 notquiet 4/5 comp ['ctest', 'protojs', 'protopy']
+           st207bdeb: wall   3319 ( -4.4%) elapsed   3203 ( -4.5%) user   3392 ( -4.6%) sys   424 vcsw    328 ivcsw    53 minflt  162726 rss  637MB | load<= 7.9 notquiet 3/5 comp ['ctest', 'protojs', 'protopy']
+           st4876884: wall   3982 (+14.8%) elapsed   3848 (+14.7%) user   4041 (+13.6%) sys   496 vcsw    314 ivcsw    79 minflt  162726 rss  637MB | load<= 8.4 notquiet 3/5 comp ['cc1plus', 'ctest', 'make', 'protojs', 'protopy']
+     st4876884-noivg: wall   3553 ( +2.4%) elapsed   3432 ( +2.3%) user   3615 ( +1.7%) sys   441 vcsw    356 ivcsw    62 minflt  162724 rss  637MB | load<= 7.4 notquiet 4/5 comp ['ctest', 'protojs', 'protopy']

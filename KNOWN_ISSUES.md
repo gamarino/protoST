@@ -94,10 +94,20 @@ at exit. `fib.st` ran about three times slower
 under the controller than under the fixed limit, also after protoCore 2.14.2
 raised the controller's floor (protoCore
 `docs/reports/2026-10-04-final-remeasurement.md` and
-`docs/reports/2026-10-04-collector-adjustments.md`, A3). To be revisited,
-for example with an initial soft limit above the start-up live set. The
-fixed limit is set in `STRuntime::configureHeap`
-(`src/runtime/STRuntime.cpp`).
+`docs/reports/2026-10-04-collector-adjustments.md`, A3). The fixed limit is
+set in `STRuntime::configureHeap` (`src/runtime/STRuntime.cpp`).
+
+**That reason is gone in 0.6.1.** The cause of `fib.st`'s slowness was
+protoST's, not the controller's (S24 in `docs/STATUS.md`): a recursion that
+never loops reached no garbage-collection safepoint, so nothing it allocated
+could be reclaimed and every cycle was futile; the "1.7 M-cell start-up live
+set" was mostly that unsubmitted garbage (the real one is about 0.5 M). With
+call entry as a safepoint, `fib.st` takes the same time under the controller
+as under the fixed limit, with half the memory, and the actor workloads run
+10-27 % faster under it with about a third of the memory
+(`benchmarks/reports/2026-10-11-fib-under-adaptive-controller.md`). Enabling
+the controller by default is the maintainer's decision and has not been
+made; the fixed limit stays the default in 0.6.1.
 
 **Status.** Open; a bulk list builder in protoCore would remove the n log n
 factor.

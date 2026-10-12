@@ -158,16 +158,19 @@ which also runs the 0.5.0 release side by side):
   four workers and gains nothing from five or six.
 - Against 0.5.0 on protoCore 2.6.2: the same instructions within 1 %, the
   same wall time within the noise, about 12 MB less peak memory on several
-  workloads, and allocating actor workloads on one worker 4-6 % slower (not
-  yet explained; see the report).
+  workloads. Allocating actor workloads on one worker measured 4-6 % slower
+  in that report; a bisection on a quiet machine with every build made by the
+  same compiler found no wall-time difference beyond the noise floor
+  (2-4 %), only more collector CPU since protoCore 2.12.0
+  ([`benchmarks/reports/2026-10-11-actor-regression-bisection.md`](benchmarks/reports/2026-10-11-actor-regression-bisection.md)).
 
 protoST is not fast single-threaded code; what it offers is the same code on
 several cores without locks.
 
 ## Status
 
-Version 0.6.0 (2026-10-11); it requires protoCore 2.11.0 or newer (2.14.5
-recommended), and CI builds it against protoCore 2.14.5. `ctest` runs 1093 cases on Linux, all
+Version 0.6.1 (2026-10-11); it requires protoCore 2.11.0 or newer (2.14.5
+recommended), and CI builds it against protoCore 2.14.5. `ctest` runs 1094 cases on Linux, all
 passing (2026-10-11): 544 conformance programs, 454 unit tests, 42 examples, 31
 CLI tests (including the benchmark-harness self-test) and 22 documentation
 checks (every example with a stated result in 21 documents, plus the
@@ -236,7 +239,7 @@ commands, and what differs on Windows, are in
 
 ## Installation
 
-protoST can be packaged with CPack. The 0.6.0 release has a Linux `.deb`
+protoST can be packaged with CPack. The 0.6.1 release has a Linux `.deb`
 attached to its GitHub release (below, with protoCore 2.14.5); other packages
 are built from source as shown below. Every package depends on
 [protoCore](https://github.com/numaes/protoCore) — install protoCore's package
@@ -264,11 +267,11 @@ the GitHub releases (or built as below):
 wsl --install -d Ubuntu-24.04        # in PowerShell, once
 # then, in the Ubuntu shell:
 wget https://github.com/numaes/protoCore/releases/download/v2.14.5/protoCore-2.14.5-Linux.deb
-wget https://github.com/gamarino/protoST/releases/download/v0.6.0/protost-0.6.0-Linux.deb
-sudo apt install ./protoCore-2.14.5-Linux.deb ./protost-0.6.0-Linux.deb
+wget https://github.com/gamarino/protoST/releases/download/v0.6.1/protost-0.6.1-Linux.deb
+sudo apt install ./protoCore-2.14.5-Linux.deb ./protost-0.6.1-Linux.deb
 ```
 
-These are the 0.6.0 release packages. protoST 0.6.0 needs protoCore 2.11.0
+These are the 0.6.1 release packages. protoST 0.6.1 needs protoCore 2.11.0
 or later; the `.deb` was built against 2.14.5, the release to install with
 it (an older protoCore package, such as the 2.6.2 that went with 0.5.0, is
 not enough: upgrade it with the command above).

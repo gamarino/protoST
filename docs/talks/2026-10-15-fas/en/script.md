@@ -6,7 +6,7 @@ release 0.6.0, with the 0.5.0 release on protoCore 2.6.2 run alongside; syntheti
 laptop); if a figure is not in that report, it is not said.
 
 Before starting: terminal with a large font, `cd docs/talks/2026-10-15-fas/demos`,
-`protost --version` must print `protoST 0.6.0`; demo 4 needs `python3`. The fallback recordings are in
+`protost --version` must print `protoST 0.6.1`; demo 4 needs `python3`. The fallback recordings are in
 `../recordings/` (see the checklist).
 
 ---
@@ -183,8 +183,10 @@ Fallback: `recordings/03-digital-twin`.
     about 2× with four workers;
   - against 0.5.0 on protoCore 2.6.2: the same instructions (±1 %), the
     same time within the noise, about 12 MB less memory on several programs,
-    and allocation-heavy actor programs on one worker 4–6 % slower, cause not
-    isolated yet. Say it that way.
+    and allocation-heavy actor programs on one worker 4–6 % slower in that
+    busy session, within the noise on a quiet machine (bisection report of
+    11/10). Say it that way, and that 0.6.1 fixes collection in recursions
+    that never loop (fib 29 ran out of memory).
 - Say where it is slower (recursive method dispatch, exceptions) without
   dressing it up.
 

@@ -14,10 +14,10 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Test suite:** 1093 `ctest` cases on Linux, 1093/1093 passing on
-  2026-10-11 (`main` at `4876884`, against protoCore 2.14.5 installed in a
+- **Test suite:** 1094 `ctest` cases on Linux, 1094/1094 passing on
+  2026-10-11 (0.6.1, against protoCore 2.14.5 installed in a
   private prefix, and protoIO 0.2.2): 544 conformance programs, 454 unit tests, 42
-  examples, 31 CLI tests (including the benchmark-harness self-test and the
+  examples, 32 CLI tests (including the benchmark-harness self-test and the
   terminal test `cli_repl_console`) and 22 documentation checks (the
   examples with a stated result in 21 documents, plus the checker's
   self-test). CI runs the same suite on Linux, macOS and Windows against
@@ -39,9 +39,9 @@ stable id and file it in the right bucket.
   futile first collection and one waited for at exit (protoCore
   `docs/reports/2026-10-04-collector-adjustments.md`, A3). To be revisited;
   details in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md) K5.
-- **Last verified:** 2026-10-11, by the test suite above; release 0.6.0
-  (2026-10-11) is that tree, and its `.deb` was installed in a clean prefix
-  and passed the talk demos. The 0.5.0 release (input and output, see
+- **Last verified:** 2026-10-11, by the test suite above (release 0.6.1;
+  the `.deb` of each of 0.6.0 and 0.6.1 was installed in a clean Ubuntu
+  24.04 container and passed the talk demos). The 0.5.0 release (input and output, see
   [`docs/superpowers/specs/2026-09-29-io-design.md`](superpowers/specs/2026-09-29-io-design.md))
   was verified on 2026-09-29. The 0.4.0 audit before it (see
   [`docs/superpowers/specs/2026-09-28-presentable-protost-design.md`](superpowers/specs/2026-09-28-presentable-protost-design.md)
@@ -385,6 +385,7 @@ during the 2026-05-20 audit.
 
 | Id | What | Resolution | Commit |
 |----|------|------------|--------|
+| S24 | **A recursion that never loops never had its garbage reclaimed.** The textbook `fib` (`(self compute: n - 1) + (self compute: n - 2)`) ran out of memory with `fib 29` under the default 640 MB limit ("the last collections reclaimed nothing", exit 3; 0.5.0, 0.6.0), `fib 25` under a 3 M-cell limit, and under protoCore's adaptive controller `fib.st` took three times as long, every cycle futile. | **Cause:** S15's safepoint (`ExecutionEngine::gcSafepoint`, which submits the root context's young generation to the collector) ran only at a loop back-edge and at engine entry; a send or block call within the same engine is neither, so a program that only recurses submitted nothing after start-up and protoCore had to treat everything it allocated as live. **Fix:** call entry is a safepoint too: right after a send or block call has pushed the callee's frame, every live value is in a traced frame slot, the precondition `ProtoContext::safepoint()` documents. Cost on `fib.st` under the fixed limit: within the A/A noise (-1.1 % against +2.5 / +2.8 %). Under the controller `fib.st` now takes 0.40 s instead of 1.19 s, 155 MB instead of 593 MB (`benchmarks/reports/2026-10-11-fib-under-adaptive-controller.md`). Test: `cli_gc_recursion_reclaims` (fib 25 under a 2.7 M-cell ceiling; failed before with exit 3; must still fail with `PROTOST_NO_GC_SAFEPOINT=1`). | 0.6.1 |
 | S23 | A chain of handlers that each re-signal (`[self relay: n - 1] on: Error do: [:e \| Error signal: 'level']`, or `pass`, `outer`, `signal`, `signal:` in the handler) did not finish once it reached the engine nesting limit: 498 levels took 0.08 s, 499 or more did not finish (killed after 20 s and after 2 min). | **Cause** (gdb on the live process, and a trace of the handlers run): a handler block needs a nested engine of its own; at the limit it could not start, and the limit's `std::runtime_error` left the handler's `signal` untranslated. Every primitive boundary it crossed on the way down translated it into a new `Error` and searched the handler stack again; a boundary inside an earlier handler found the handlers above it enabled again (the unwind had already left them) and ran them a second time, each of which hit the limit again, so the number of handler runs doubled with every level. **Fix:** `signal` checks for room before it runs a handler (`ExecutionEngine::canStartNestedEngine`); without room it raises the limit's `Error` there, finds its handler and throws `NestingLimitUnwind` to that handler's `on:do:`, which runs the handler on a fresh limit `Error` with the engines the unwind released (`src/runtime/NestingLimitUnwind.h`). Each handler runs at most once; 499, 500, 1,000 and 10,000 levels finish in 0.07-0.11 s. Tests: `08-exceptions/nesting-limit-in-re-signalling-handler-chain`, `08-exceptions/nesting-limit-in-passing-handler-chain` (both failed before: no result in 20 s); `08-exceptions/unwind-through-nested-handler-blocks` goes back to 498 levels. | `9cdc9b4` |
 | S20 | A subclass of a kernel class could not read the instance variables it inherits: `IOStream subclass: #LabelledStream …` with a method reading `fd`, or `WriteStream subclass: #PeekStream` reading `buffer`, failed to compile with `undeclared variable`, because the compiler knew only the instance variables of classes compiled in the same module. | Every compiled class is recorded in a process-wide registry that the next compilation starts from, and the CLI builds the runtime (which compiles the kernel) before compiling the script; the compiled module is kept alive past the runtime, because workers may still run its methods during shutdown. Tests: `04-object-model/inherited_kernel_ivars` (failed before), `04-object-model/undeclared_still_rejected`. | `e966c8a` |
 | S21 | `IOStream>>next` and `next:` counted bytes, not characters, and split a multi-byte UTF-8 character (`printf 'éab'` gave `$Ã`, then `'©a'`). | They read whole UTF-8 characters (`__fdReadChars:count:`); `nextByteCount:` keeps a byte-counted read for HTTP bodies. Test: `conformance/14-io/utf8_characters` (failed before). | `504bf27` (0.5.0) |

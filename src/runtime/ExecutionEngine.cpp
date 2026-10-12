@@ -1487,6 +1487,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                                       sendArgs,
                                       static_cast<unsigned int>(argcOp),
                                       blkHome);
+                            // Call entry is a safepoint (see gcSafepoint).
+                            gcSafepoint(ctx);
                             // `f` is now invalidated when frames_ grows
                             // its backing storage. DISPATCH_DIRECT
                             // re-reads frames_.back() and dispatches the
@@ -1773,6 +1775,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     }
                     pushFrame(sub, /*self=*/recv, capDict, methodArgs,
                               static_cast<unsigned int>(argcOp) + 1);
+                    // Call entry is a safepoint (see gcSafepoint): a
+                    // recursion that never loops reaches no back-edge.
+                    gcSafepoint(ctx);
                     // `f` is now invalidated by the vector growth (when it
                     // reallocates). DISPATCH_DIRECT re-reads frames_.back()
                     // and dispatches the callee from its pc=0.
@@ -2044,6 +2049,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     }
                     pushFrame(sub, /*self=*/recv, capDict, methodArgs,
                               totalArgs);
+                    gcSafepoint(ctx);  // call entry (see gcSafepoint)
                     DISPATCH_DIRECT();
                 }
 

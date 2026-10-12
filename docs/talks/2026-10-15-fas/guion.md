@@ -8,7 +8,7 @@ sobre protoCore 2.6.2 corrida al lado; benchmarks sintéticos, en una notebook);
 si una cifra no está en ese informe, no se dice.
 
 Antes de empezar: terminal con fuente grande, `cd docs/talks/2026-10-15-fas/demos`,
-`protost --version` debe decir `protoST 0.6.0`; la demo 4 necesita `python3`. Las grabaciones de respaldo
+`protost --version` debe decir `protoST 0.6.1`; la demo 4 necesita `python3`. Las grabaciones de respaldo
 están en `../recordings/` (ver la checklist).
 
 ---
@@ -187,7 +187,10 @@ Respaldo: `recordings/03-digital-twin`.
   - frente a 0.5.0 sobre protoCore 2.6.2: las mismas instrucciones (±1 %),
     el mismo tiempo dentro del ruido, unos 12 MB menos de memoria en varios
     programas, y los programas de actores que asignan mucho, con un worker,
-    4–6 % más lentos, sin causa aislada todavía. Decirlo así.
+    4–6 % más lentos en aquella sesión cargada; con la máquina quieta, dentro
+    del ruido (informe de bisección del 11/10). Decirlo así, y que 0.6.1
+    corrige la recolección en recursiones sin bucles (fib 29 se quedaba sin
+    memoria).
 - Decir dónde es más lento (despacho de métodos recursivo, excepciones) sin
   maquillarlo.
 

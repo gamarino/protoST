@@ -329,12 +329,19 @@ private:
     // `PROTOCORE_HEAP_LIMIT_CELLS`, the abort "last cycle reclaimed 0". That
     // is bug S15.
     //
-    // The loop back-edge (`Op::JUMP_BACK`) and engine entry are the two points
-    // where this engine holds no half-built value in a C++ local: every live
-    // object is in a frame region or a `TransientPin` scratch slot, both of
-    // which are `ProtoContext::automaticLocals` and therefore traced. That is
-    // exactly the precondition `ProtoContext::safepoint()` documents, and it
+    // The loop back-edge (`Op::JUMP_BACK`), engine entry and call entry (right
+    // after a send or a block call has pushed the callee's frame) are the
+    // points where this engine holds no half-built value in a C++ local: every
+    // live object is in a frame region or a `TransientPin` scratch slot, both
+    // of which are `ProtoContext::automaticLocals` and therefore traced. That
+    // is exactly the precondition `ProtoContext::safepoint()` documents, and it
     // is why the submission may not be made from `allocCell` instead.
+    //
+    // Call entry was added in 0.6.1: a program that only recurses (the
+    // textbook fib) reaches neither a back-edge nor a new engine, so before
+    // it nothing was submitted, fib 29 ran out of memory under the default
+    // 640 MB limit and every cycle under protoCore's adaptive controller was
+    // futile (`tests/cli/test_cli_gc_recursion_reclaims.sh`).
     //
     // `safepoint()` is also the stop-the-world park point, so a long
     // allocation-free loop no longer stalls a collection either.

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(protoST VERSION 0.6.0 LANGUAGES CXX)
+project(protoST VERSION 0.6.1 LANGUAGES CXX)
 
 # The one place the version is written: every binary and library reads it
 # through PROTOST_VERSION (include/protoST/STRuntime.h).
@@ -498,6 +498,8 @@ add_test(NAME cli_gc_shutdown_stress
 # run to abort, so it cannot pass by accident.
 add_test(NAME cli_gc_reclaims
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_gc_reclaims.sh $<TARGET_FILE:protost>)
+add_test(NAME cli_gc_recursion_reclaims
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_gc_recursion_reclaims.sh $<TARGET_FILE:protost>)
 
 # Track S: actor message payloads that only the mailbox references must survive
 # the collections that run while they are queued. Needs S15 fixed to mean

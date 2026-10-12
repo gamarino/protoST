@@ -1,0 +1,7 @@
+== sat1
+               u2142: wall   3604 ( +0.0%) elapsed   3484 ( +0.0%) user   3656 ( +0.0%) sys   456 vcsw    342 ivcsw    62 minflt  162730 rss  636MB | load<= 6.9 notquiet 5/9 comp ['cc1plus', 'ctest', 'gmake', 'protopy']
+               u2143: wall   3312 ( -8.1%) elapsed   3193 ( -8.4%) user   3413 ( -6.7%) sys   451 vcsw    316 ivcsw    42 minflt  162730 rss  637MB | load<= 7.3 notquiet 4/9 comp ['ctest', 'protopy']
+               u2144: wall   3554 ( -1.4%) elapsed   3430 ( -1.5%) user   3602 ( -1.5%) sys   446 vcsw    305 ivcsw    52 minflt  162728 rss  637MB | load<= 8.9 notquiet 5/9 comp ['cc1plus', 'ctest', 'protopy']
+               u2145: wall   3477 ( -3.5%) elapsed   3362 ( -3.5%) user   3508 ( -4.0%) sys   464 vcsw    323 ivcsw    62 minflt  162705 rss  637MB | load<= 7.8 notquiet 5/9 comp ['cc1plus', 'ctest', 'gmake', 'protopy']
+               u2102: wall   3581 ( -0.6%) elapsed   3466 ( -0.5%) user   3405 ( -6.9%) sys   451 vcsw    242 ivcsw    51 minflt  162515 rss  636MB | load<= 7.1 notquiet 3/9 comp ['cc1plus', 'gmake', 'protopy']
+            u2145-AA: wall   3544 ( -1.7%) elapsed   3415 ( -2.0%) user   3570 ( -2.3%) sys   470 vcsw    328 ivcsw    56 minflt  162702 rss  636MB | load<= 7.0 notquiet 4/9 comp ['cc1plus', 'ctest', 'gmake', 'protopy']

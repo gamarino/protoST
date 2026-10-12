@@ -34,8 +34,14 @@ a 6-core AMD Ryzen 5 5500U, `main` with protoCore 2.14.5):
 
 protoCore's October collector work (2.10 → 2.14.5) did not change these
 figures: protoST executes the same instructions as 0.5.0, and its programs
-collect little under a 640 MB ceiling. Allocation-heavy actor programs are
-4–6 % slower on one worker; we do not know why yet, and the report says so.
+collect little under a 640 MB ceiling. Allocation-heavy actor programs
+measured 4–6 % slower on one worker on a busy machine; on a quiet machine,
+with every build made by the same compiler, the difference is within the
+measurement's noise (2–4 %): protoCore 2.12+ spends a little more collector
+CPU on another core, which shows only when every core is busy
+(`benchmarks/reports/2026-10-11-actor-regression-bisection.md`). Looking for
+it turned up a real bug, fixed in 0.6.1: a recursion that never loops (the
+textbook fib) never had its garbage reclaimed; fib 29 ran out of memory.
 
 In other words: on one thread protoST is considerably slower than CPython.
 What we show is that the same code uses several cores, today with that
@@ -123,7 +129,7 @@ protoClojure use too: the same input and output exists, under each language's
 own names, in the three runtimes.
 
 **Does it run on Windows?**
-The published package (0.6.0) is for Linux; on Windows it runs under WSL2
+The published package (0.6.1) is for Linux; on Windows it runs under WSL2
 with Ubuntu 24.04, installing the same `.deb` packages. The sources
 build natively with Visual Studio 2022, and continuous integration runs the
 whole suite on Windows (except two tests that depend on POSIX tools: Ctrl-C
@@ -131,8 +137,8 @@ sent with `kill` and an example in `sh` syntax; `docs/INSTALLATION.md`, "Windows
 Windows package yet.
 
 **Is it stable? What open bugs does it have?**
-0.5.0 passed its 1068 `ctest` cases; 0.6.0 (with protoCore 2.14.5)
-passes 1093, on Linux, macOS and Windows: conformance programs,
+0.5.0 passed its 1068 `ctest` cases; 0.6.1 (with protoCore 2.14.5)
+passes 1094, on Linux, macOS and Windows: conformance programs,
 unit tests, the examples, command-line tests and the documentation examples.
 While preparing this talk, an adversarial audit of about 1,100 programs, in two rounds, found
 silent wrong results and hangs; every fix for a wrong result, a crash or a

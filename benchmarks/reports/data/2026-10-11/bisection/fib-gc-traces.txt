@@ -1,0 +1,42 @@
+== before PROTOCORE_ADAPTIVE_HEAP=1
+[GC-PROFILE] cycles=1  P1=5151us  P2=4786us  P4=228524us  P5=640us  REL=61us  P6=15455us  marked=1680434  swept_segs=3
+[GC-PHASES] cycles=1 busy=254615us token=5us quorum=5144us stw=4786us stw_max=4786us roots=689 young=166776us young_cells=4110392 trace=61744us marked=1680434 sweep=640us swept_cells=33777 freed_cells=25364 rel=61us unmark=15451us p6_7=15455us mut_park=0us parks=0 headroom_wait=233917us headroom_waits=5 cpu_busy=249500us cpu_mark=228478us cpu_sweep=643us refill_fresh=2228224 refill_recycled=90837 helper_runs=0 wide_segments=3 narrow_segments=0
+protoCore heap: space=0x5f2053a94b80 cycle=1 L=1680434 w=0.0558 r=5864649 T=99574 rho=58.897 S=2097152->5228799 H=782393424 heap=2228224 retained=2228224 Tc=254.725ms C=254.805ms runway=1867931 probes=0 stopped=0 stw=4.786ms
+VERIFIED 75025
+[GC-PROFILE] cycles=2  P1=62841us  P2=8849us  P4=666366us  P5=836us  REL=37088us  P6=40297us  marked=5074458  swept_segs=7
+[GC-PHASES] cycles=2 busy=816276us token=7us quorum=62830us stw=8849us stw_max=4786us roots=1348 young=497501us young_cells=12333750 trace=168860us marked=5074458 sweep=836us swept_cells=42198 freed_cells=25365 rel=37088us unmark=40288us p6_7=40297us mut_park=4138us parks=1 headroom_wait=247652us headroom_waits=6 cpu_busy=753283us cpu_mark=666040us cpu_sweep=836us refill_fresh=4718592 refill_recycled=90837 helper_runs=0 wide_segments=7 narrow_segments=0
+protoCore heap: space=0x5f2053a94b80 cycle=2 L=3394024 w=0.0206 r=5864649 T=2 rho=3294604.523 S=5228799->10907125 H=782393424 heap=4718592 retained=4194354 Tc=561.774ms C=561.886ms runway=4119077 probes=1 stopped=0 stw=4.063ms
+wall=1.15 user=0.64 sys=0.56 maxrss=607392KB minflt=234508
+== before PROTOCORE_ADAPTIVE_HEAP=1 PROTOCORE_GC_PACING=0
+[GC-PROFILE] cycles=1  P1=4936us  P2=4612us  P4=225952us  P5=486us  REL=11us  P6=13571us  marked=1680420  swept_segs=3
+[GC-PHASES] cycles=1 busy=249567us token=3us quorum=4931us stw=4611us stw_max=4611us roots=687 young=163796us young_cells=4110360 trace=62153us marked=1680420 sweep=486us swept_cells=33793 freed_cells=25381 rel=11us unmark=13567us p6_7=13571us mut_park=0us parks=0 headroom_wait=200513us headroom_waits=4 cpu_busy=244533us cpu_mark=225759us cpu_sweep=482us refill_fresh=2162688 refill_recycled=74223 helper_runs=0 wide_segments=3 narrow_segments=0
+protoCore heap: space=0x562252891b80 cycle=1 L=1680420 w=0.0480 r=5619819 T=101654 rho=55.284 S=2097152->5115080 H=782393424 heap=2162688 retained=2146057 Tc=249.681ms C=249.722ms runway=1754240 probes=0 stopped=0 stw=4.612ms
+VERIFIED 75025
+wall=0.63 user=0.35 sys=0.30 maxrss=342144KB minflt=134340
+== before X=fixed
+VERIFIED 75025
+wall=0.39 user=0.23 sys=0.19 maxrss=312368KB minflt=76935
+== after PROTOCORE_ADAPTIVE_HEAP=1
+[GC-PROFILE] cycles=1  P1=40us  P2=4029us  P4=23592us  P5=13192us  REL=19238us  P6=5112us  marked=509927  swept_segs=201
+[GC-PHASES] cycles=1 busy=65201us token=4us quorum=34us stw=4028us stw_max=4028us roots=685 young=652us young_cells=15470 trace=22938us marked=509927 sweep=13192us swept_cells=2016228 freed_cells=1512986 rel=19238us unmark=5108us p6_7=5112us mut_park=4100us parks=1 headroom_wait=17930us headroom_waits=1 cpu_busy=65244us cpu_mark=23594us cpu_sweep=13192us refill_fresh=2162688 refill_recycled=737997 helper_runs=0 wide_segments=201 narrow_segments=0
+protoCore heap: space=0x6154a2c60b80 cycle=1 L=509927 w=0.0082 r=12092400 T=23166498 rho=0.522 S=2097152->2097152 H=782393424 heap=2162688 retained=1322226 Tc=65.309ms C=65.378ms runway=774926 probes=0 stopped=0 stw=4.028ms
+[GC-PROFILE] cycles=2  P1=73us  P2=7946us  P4=35200us  P5=35092us  REL=26653us  P6=7235us  marked=724083  swept_segs=490
+[GC-PHASES] cycles=2 busy=112199us token=6us quorum=63us stw=7945us stw_max=4028us roots=1372 young=704us young_cells=18414 trace=34491us marked=724083 sweep=35092us swept_cells=3393627 freed_cells=2677571 rel=26653us unmark=7228us p6_7=7235us mut_park=8093us parks=2 headroom_wait=17930us headroom_waits=1 cpu_busy=112295us cpu_mark=35194us cpu_sweep=35093us refill_fresh=2162688 refill_recycled=1598053 helper_runs=0 wide_segments=335 narrow_segments=155
+protoCore heap: space=0x6154a2c60b80 cycle=2 L=214156 w=0.0000 r=16837920 T=23166498 rho=0.727 S=2097152->2097152 H=782393424 heap=2162688 retained=1017697 Tc=47.101ms C=47.157ms runway=1079455 probes=0 stopped=0 stw=3.917ms
+VERIFIED 75025
+[GC-PROFILE] cycles=3  P1=110us  P2=11658us  P4=46920us  P5=57041us  REL=41484us  P6=9323us  marked=941714  swept_segs=672
+[GC-PHASES] cycles=3 busy=166535us token=9us quorum=95us stw=11656us stw_max=4028us roots=2051 young=853us young_cells=25326 trace=46060us marked=941714 sweep=57041us swept_cells=4471052 freed_cells=3540445 rel=41484us unmark=9312us p6_7=9323us mut_park=12230us parks=3 headroom_wait=17930us headroom_waits=1 cpu_busy=166658us cpu_mark=46913us cpu_sweep=57022us refill_fresh=2162688 refill_recycled=2051582 helper_runs=0 wide_segments=459 narrow_segments=213
+protoCore heap: space=0x6154a2c60b80 cycle=3 L=217631 w=0.0000 r=16837920 T=15847531 rho=1.062 S=2097152->2097152 H=782393424 heap=2162688 retained=509044 Tc=54.448ms C=54.519ms runway=1147483 probes=0 stopped=0 stw=3.711ms
+wall=0.38 user=0.40 sys=0.09 maxrss=159180KB minflt=40331
+== after PROTOCORE_ADAPTIVE_HEAP=1 PROTOCORE_GC_PACING=0
+[GC-PROFILE] cycles=1  P1=46us  P2=3753us  P4=22002us  P5=15981us  REL=19685us  P6=5336us  marked=509941  swept_segs=201
+[GC-PHASES] cycles=1 busy=66801us token=4us quorum=39us stw=3753us stw_max=3753us roots=681 young=602us young_cells=15504 trace=21398us marked=509941 sweep=15981us swept_cells=2016215 freed_cells=1512973 rel=19685us unmark=5333us p6_7=5336us mut_park=3806us parks=1 headroom_wait=50107us headroom_waits=1 cpu_busy=60782us cpu_mark=21986us cpu_sweep=9937us refill_fresh=2162688 refill_recycled=73801 helper_runs=3 wide_segments=201 narrow_segments=0
+protoCore heap: space=0x587c43dc0b80 cycle=1 L=509941 w=0.0212 r=9667561 T=22614156 rho=0.428 S=2097152->2097152 H=782393424 heap=2162688 retained=658043 Tc=66.904ms C=66.978ms runway=809393 probes=0 stopped=0 stw=3.753ms
+[GC-PROFILE] cycles=2  P1=67us  P2=7342us  P4=42339us  P5=37311us  REL=35411us  P6=8722us  marked=929402  swept_segs=567
+[GC-PHASES] cycles=2 busy=131192us token=6us quorum=58us stw=7341us stw_max=3753us roots=1366 young=632us young_cells=17476 trace=41704us marked=929402 sweep=37311us swept_cells=4163147 freed_cells=3241367 rel=35411us unmark=8716us p6_7=8722us mut_park=7482us parks=2 headroom_wait=108192us headroom_waits=3 cpu_busy=108827us cpu_mark=42329us cpu_sweep=14872us refill_fresh=2293760 refill_recycled=1578446 helper_runs=6 wide_segments=567 narrow_segments=0
+protoCore heap: space=0x587c43dc0b80 cycle=2 L=419461 w=0.0389 r=11392838 T=26795909 rho=0.425 S=2097152->2097152 H=782393424 heap=2293760 retained=565366 Tc=64.502ms C=64.543ms runway=953838 probes=0 stopped=0 stw=3.589ms
+VERIFIED 75025
+wall=0.43 user=0.34 sys=0.11 maxrss=173048KB minflt=44039
+== after X=fixed
+VERIFIED 75025
+wall=0.39 user=0.23 sys=0.19 maxrss=312712KB minflt=76935

@@ -3,18 +3,18 @@
 ## The night before
 
 - [ ] Install the published release on the talk laptop, the one the
-      audience will install: protoCore 2.14.5 and protoST 0.6.0 (the code
-      the performance report measured). On Windows, inside WSL2 with
+      audience will install: protoCore 2.14.5 and protoST 0.6.1 (the code
+      the performance report measured plus the S24 fix). On Windows, inside WSL2 with
       Ubuntu 24.04:
       ```
       wget https://github.com/numaes/protoCore/releases/download/v2.14.5/protoCore-2.14.5-Linux.deb
-      wget https://github.com/gamarino/protoST/releases/download/v0.6.0/protost-0.6.0-Linux.deb
-      sudo apt install ./protoCore-2.14.5-Linux.deb ./protost-0.6.0-Linux.deb
+      wget https://github.com/gamarino/protoST/releases/download/v0.6.1/protost-0.6.1-Linux.deb
+      sudo apt install ./protoCore-2.14.5-Linux.deb ./protost-0.6.1-Linux.deb
       ```
       (`apt install ./…` also installs any missing dependency, and upgrades
-      a protoCore 2.6.2 left over from 0.5.0). protoST 0.6.0 requires
+      a protoCore 2.6.2 left over from 0.5.0). protoST 0.6.1 requires
       protoCore 2.11.0 or later; 2.14.5 is the recommended release.
-- [ ] `protost --version` → `protoST 0.6.0`;
+- [ ] `protost --version` → `protoST 0.6.1`;
       `ldd $(command -v protost) | grep protoCore` → `/usr/lib/x86_64-linux-gnu/libprotoCore.so.3`.
 - [ ] `python3 --version` answers (demo 4 uses it).
 - [ ] `cd docs/talks/2026-10-15-fas/demos && RUNS=20 ./check_all.sh` → all

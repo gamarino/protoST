@@ -3,6 +3,35 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
+## 0.6.1 — a recursion's garbage is reclaimed (2026-10-11)
+
+- **S24: a program that only recurses never had its garbage reclaimed.**
+  protoST hands a context's young generation to protoCore's collector at a
+  safepoint (S15), which ran only at a loop back-edge and at engine entry. A
+  send or block call within the same engine is neither, so the textbook
+  `fib` (sends and an inlined `ifTrue:`, no loop) submitted nothing after
+  start-up: `fib 29` ran out of memory under the default 640 MB limit ("the
+  last collections reclaimed nothing", exit 3, also on 0.5.0 and 0.6.0), and
+  under protoCore's adaptive controller `fib.st` took three times as long,
+  every cycle walking millions of pinned cells and reclaiming none. Call
+  entry is now a safepoint too (right after the callee's frame is pushed,
+  every live value is in a traced slot). Cost on `fib.st` under the fixed
+  limit: within the A/A noise. Under the controller `fib.st` takes 0.40 s
+  instead of 1.19 s and 155 MB instead of 593 MB. Test:
+  `cli_gc_recursion_reclaims` (failed before). Report:
+  `benchmarks/reports/2026-10-11-fib-under-adaptive-controller.md`. The
+  fixed heap limit stays the default (K5); the measurement says the reason
+  given for it no longer holds.
+- **The 4-6 % actor "regression" of 0.6.0's notes, bisected**
+  (`benchmarks/reports/2026-10-11-actor-regression-bisection.md`): on a quiet
+  machine, with every compared build made by one compiler, no wall-time
+  difference beyond the noise floor (A/A pairs differ by 1-4 %). protoCore
+  2.12.0 and later run one more (paced) collection on `saturation_big`, about
+  4 % more CPU on the collector's core, which competes with the mutator only
+  when every core is busy, as in the original sessions; plausible, not
+  proven. No change made.
+- `ctest`: 1094 cases on Linux, all passing.
+
 ## 0.6.0 — native Windows, write groups, protoCore 2.14.5 (2026-10-11)
 
 What changed since 0.5.0, in brief (the entries below give the detail, newest
@@ -25,8 +54,8 @@ first):
   scripts; new: `protost -` and `PROTOST_REPORT_PEAK_RSS`.
 - **Performance** against 0.5.0 (report of 2026-10-11): the same instructions
   within 1 % single-threaded, about 12 MB less peak memory on several
-  workloads; allocation-heavy actor workloads on one worker are 4-6 % slower,
-  under investigation at release time.
+  workloads; allocation-heavy actor workloads on one worker were measured
+  4-6 % slower, under investigation at release time (see 0.6.1).
 - `ctest`: 1093 cases on Linux, all passing; CI green on Linux (including the
   protoCore 2.11.0 floor job), macOS and Windows.
 
