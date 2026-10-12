@@ -15,9 +15,17 @@ list of known competitors (compilers, build tools, test runners, protoCore
 runtimes) was
 running when the run started.
 
+A build can also be one binary run against another protoCore library:
+`--libdir LABEL=DIR` sets LD_LIBRARY_PATH=DIR for that build's runs. Before
+every run of such a build the script runs `ldd` with the same environment and
+records the libprotoCore it resolves; a run that would load a library outside
+DIR is a failure, so a mislinked run can never be reported as a time.
+
 Usage:
   python3 benchmarks/compare_builds.py --json OUT.json \
       old=/usr/bin/protost new=build_release/protost [--runs 3] [--warmup 1]
+  python3 benchmarks/compare_builds.py --json OUT.json \
+      a=/usr/bin/protost b=/usr/bin/protost --libdir b=/opt/protoCore-next/lib
 """
 
 import argparse
@@ -65,6 +73,19 @@ def workloads():
         w.append((f"saturation_big w={k}", [str(ACTORS_DIR / "saturation_big.st")],
                   {"PROTOST_WORKERS": str(k)}, ACTOR_EXPECTED["saturation_big"]))
     return w
+
+
+def resolved_core(binary, env):
+    """The libprotoCore line ldd prints for `binary` under `env`."""
+    ldd = subprocess.run(["ldd", binary], capture_output=True, text=True, env=env).stdout
+    line = next((l.strip() for l in ldd.splitlines() if "libprotoCore" in l), "?")
+    return line.split(" (0x")[0]  # without the load address, which ASLR varies
+
+
+def build_env(build):
+    if not build.get("libdir"):
+        return {}
+    return {"LD_LIBRARY_PATH": build["libdir"]}
 
 
 def run_once(binary, tail, env):
@@ -115,17 +136,27 @@ def main():
     ap.add_argument("--warmup", type=int, default=1)
     ap.add_argument("--json", required=True)
     ap.add_argument("--only", default=None, help="comma-separated workload names")
+    ap.add_argument("--libdir", action="append", default=[],
+                    help="LABEL=DIR: run that build with LD_LIBRARY_PATH=DIR (checked with ldd per run)")
     args = ap.parse_args()
+    libdirs = dict(l.split("=", 1) for l in args.libdir)
 
     builds = []
     for b in args.builds:
         label, _, path = b.partition("=")
         if not path or not Path(path).exists():
             sys.exit(f"bad build spec or missing binary: {b}")
-        version = subprocess.run([path, "--version"], capture_output=True, text=True).stdout.strip()
-        ldd = subprocess.run(["ldd", path], capture_output=True, text=True).stdout
-        core = next((l.strip() for l in ldd.splitlines() if "libprotoCore" in l), "?")
-        builds.append({"label": label, "path": path, "version": version, "protoCore": core})
+        libdir = libdirs.get(label)
+        if libdir:
+            libdir = str(Path(libdir).resolve())
+        b_env = {**os.environ, **({"LD_LIBRARY_PATH": libdir} if libdir else {})}
+        version = subprocess.run([path, "--version"], capture_output=True, text=True,
+                                 env=b_env).stdout.strip()
+        core = resolved_core(path, b_env)
+        if libdir and libdir not in core:
+            sys.exit(f"{label}: ldd resolves {core!r}, not a library in {libdir}")
+        builds.append({"label": label, "path": path, "version": version, "protoCore": core,
+                       "libdir": libdir})
 
     wl = workloads()
     if args.only:
@@ -143,7 +174,13 @@ def main():
             k = rnd % len(builds)
             order = builds[k:] + builds[:k]
             for b in order:
-                r = run_once(b["path"], tail, env)
+                run_env = {**env, **build_env(b)}
+                core = resolved_core(b["path"], {**os.environ, **run_env})
+                if core != b["protoCore"]:
+                    failures.append(f"{name} [{b['label']}] round {rnd + 1}: ldd resolves "
+                                    f"{core!r}, expected {b['protoCore']!r}")
+                    continue
+                r = run_once(b["path"], tail, run_env)
                 got = verified_value(r.get("out", ""))
                 if not r["ok"] or got != str(expected):
                     why = r.get("why") or (f"exit {r.get('rc')}" if not r["ok"]
@@ -156,6 +193,7 @@ def main():
                                                 "user_ms": round(r["user_ms"], 2),
                                                 "sys_ms": round(r["sys_ms"], 2),
                                                 "load": round(r["load"], 2),
+                                                "protoCore": core,
                                                 "contenders": r["contenders"]})
         row = {"name": name, "env": env, "expected": expected, "samples": samples,
                "median_ms": {l: (median([s["ms"] for s in v]) if len(v) == args.runs else None)
