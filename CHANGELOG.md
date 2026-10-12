@@ -18,6 +18,16 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
   (1097) (CI 38280026970, cross-platform 38280027024). The `.deb` was built
   in a clean Ubuntu 24.04 container with GCC 13 from `eee2708` (no warnings;
   1101/1101 there).
+- Verified in clean `ubuntu:24.04` containers (minimized images, the case
+  that broke 0.6.3): a fresh install from the GitHub URLs exactly as the talk
+  checklist gives them, and an upgrade from 0.6.2; `ldd` resolves
+  `libprotoCore.so.3` to the installed protoCore 2.14.5; then, with
+  `--network none`, a read-only root filesystem and an unprivileged user, all
+  four talk demos 10/10 from `/usr/share/protoST/talks/2026-10-15-fas/demos`
+  in both, the version-mismatch message of `run_demo.sh` and the
+  missing-kernel exit 72. Release:
+  https://github.com/gamarino/protoST/releases/tag/v0.6.4 (0.6.3 and 0.6.2
+  marked superseded).
 
 ## 0.6.3 — transient pins released, kernel check, demos in the package (2026-10-12)
 
