@@ -3,6 +3,45 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
+## 0.6.2 — the adaptive heap controller is the default (2026-10-12)
+
+- **Memory policy: protoCore's adaptive heap controller by default**,
+  replacing the fixed limit of 10M cells (640 MB). `STRuntime::configureHeap`
+  calls `ProtoSpace::enableAdaptiveHeap()`, as protoPython, protoScala and
+  protoClojure do: the budget is 75 % of physical memory or of the process
+  memory limit, and a soft limit inside it (128 MB at start) grows only while
+  the program waits for the collector. The environment still chooses a fixed
+  limit; precedence: `PROTOCORE_ADAPTIVE_HEAP=1` (controller, with
+  `PROTOCORE_HEAP_LIMIT_CELLS` as its budget), then
+  `PROTOCORE_HEAP_LIMIT_CELLS` (a fixed limit of that size, `0` for none),
+  then `PROTOCORE_ADAPTIVE_HEAP=0` (0.6.1's fixed 10M-cell limit), then the
+  controller. The out-of-memory message names the limit in force. Documented
+  in `KNOWN_ISSUES.md` K5 and `docs/INSTALLATION.md` ("Memory").
+  Tests: `HeapPolicy` (five unit cases; the default one failed before) and
+  `cli_oom_clean`, which now also runs under the controller.
+- **Measured** (`benchmarks/reports/2026-10-12-adaptive-heap-default.md`,
+  0.6.1 against 0.6.2, same compiler and protoCore, medians of 7
+  interleaved runs with A/A pairs, plus `perf stat` cycles and instructions):
+  faster on seven workloads (`parallel_speedup` on one worker -26 %,
+  `cooperative_yield` -22 %, `saturation_big` -6 to -18 %, `fib` -7 %) with
+  a third to a quarter of the memory; unchanged on the single-threaded
+  workloads that allocate little; **slower on two**: `parallel_speedup` with
+  the full pool +14 % (the talk's demo 2 shows about 3.6x instead of 4.2x)
+  and `attr_lookup` +7 %. Cause: every collection's stop-the-world pause
+  scans each thread's 1 M-slot frame array in full (2-4 ms per thread), a
+  cost the fixed limit hid by rarely collecting; recorded as K6, not fixed.
+  Peak memory is no longer capped at 640 MB (an allocating 3M-iteration loop:
+  0.19-1.86 GB, against 677 MB), and `(1 to: 500000) asArray`, which ran out
+  of memory under the fixed limit, now succeeds (K5).
+- **A test hung under the controller and was fixed**: the IvarGroups
+  atomicity test's C++ reader thread spun without reaching a safepoint, so
+  the first stop-the-world could never start. It now calls
+  `ProtoContext::safepoint()`. The runtime itself was not affected.
+- `benchmarks/compare_builds.py` also records user and system CPU time.
+- The talk demos run under the default policy (`run_demo.sh` no longer sets
+  a 20M-cell limit); the decks state the current test count.
+- Test suite: 1099 cases on Linux, all passing.
+
 ## 0.6.1 — a recursion's garbage is reclaimed (2026-10-11)
 
 - **S24: a program that only recurses never had its garbage reclaimed.**

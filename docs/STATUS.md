@@ -14,9 +14,9 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Test suite:** 1094 `ctest` cases on Linux, 1094/1094 passing on
-  2026-10-11 (0.6.1, against protoCore 2.14.5 installed in a
-  private prefix, and protoIO 0.2.2): 544 conformance programs, 454 unit tests, 42
+- **Test suite:** 1099 `ctest` cases on Linux, 1099/1099 passing on
+  2026-10-12 (0.6.2, against protoCore 2.14.5 installed in a
+  private prefix, and protoIO 0.2.2): 544 conformance programs, 459 unit tests, 42
   examples, 32 CLI tests (including the benchmark-harness self-test and the
   terminal test `cli_repl_console`) and 22 documentation checks (the
   examples with a stated result in 21 documents, plus the checker's
@@ -30,15 +30,20 @@ stable id and file it in the right bucket.
 - **protoCore:** 0.6.0 requires 2.11.0 or later (instance-variable
   write groups use `ProtoObject::setAttributes`, see *Object model*); its
   `.deb` is built against 2.14.5, the release to install with it. The
-  0.5.0 release required 2.6.1. **Memory policy:** protoST sets a fixed heap
-  limit (10M cells, 640 MB, at most a quarter of physical memory;
-  `PROTOCORE_HEAP_LIMIT_CELLS` overrides it) in `STRuntime::configureHeap`,
-  and does not enable protoCore's adaptive heap controller. Decision of
-  2026-10-04, kept with 2.14.5: under the controller `fib.st` ran about three
-  times slower, because protoST's start-up live set (about 1.7 M cells) is
-  just below the controller's initial soft limit (2 M cells), which costs a
-  futile first collection and one waited for at exit (protoCore
-  `docs/reports/2026-10-04-collector-adjustments.md`, A3). To be revisited;
+  0.5.0 release required 2.6.1. **Memory policy (since 0.6.2):** protoCore's adaptive heap controller,
+  enabled in `STRuntime::configureHeap` as in protoPython, protoScala and
+  protoClojure: the budget is 75 % of physical memory or of the process
+  memory limit, and a soft limit inside it (128 MB at start) grows only while
+  the program waits for the collector. `PROTOCORE_HEAP_LIMIT_CELLS` forces a
+  fixed limit of that size, and `PROTOCORE_ADAPTIVE_HEAP=0` restores the
+  fixed limit of 0.6.1 and earlier (10M cells, 640 MB, at most a quarter of
+  physical memory); `PROTOCORE_ADAPTIVE_HEAP=1` keeps the controller and
+  makes `PROTOCORE_HEAP_LIMIT_CELLS` its budget. The fixed limit had been
+  kept because `fib.st` ran three times slower under the controller; S24
+  (0.6.1) removed that cause. Measurements in
+  `benchmarks/reports/2026-10-12-adaptive-heap-default.md` (faster on seven
+  workloads, slower on two: the full worker pool +14 %, because each
+  collection's pause grows with the number of threads, K6); precedence and
   details in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md) K5.
 - **Last verified:** 2026-10-11, by the test suite above (release 0.6.1;
   the `.deb` of each of 0.6.0 and 0.6.1 was installed in a clean Ubuntu

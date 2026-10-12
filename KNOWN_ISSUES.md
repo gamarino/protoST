@@ -66,51 +66,79 @@ defect remains. Still open: a foreign runtime cannot call a protoST method
 (INTEROP §4.2), and a protoST cell another runtime keeps in its own
 structures must stay reachable in protoST's space.
 
-## K5 — Very large collections need a larger heap limit (open)
+## K5 — Very large collections cost n log n cells (partly resolved in 0.6.2)
 
-**What.** By default the heap holds 10M cells (640 MB). Building a collection
-of about 500,000 elements or more needs more (measured on 0.4.0:
-`(1 to: 450000) asArray` succeeds, `(1 to: 480000) asArray` and
-`(1 to: 500000) asArray` run out of memory),
-because protoCore builds a large list with n log n cells; the program then
-stops with an out-of-memory message that names the current limit and the
-setting to raise it (`PROTOCORE_HEAP_LIMIT_CELLS`, 64 bytes per cell).
+**What.** protoCore builds a large list with n log n cells, so a collection
+of hundreds of thousands of elements needs far more heap than its elements.
+Up to 0.6.1 protoST ran under a fixed heap limit of 10M cells (640 MB), and
+a collection of about 500,000 elements or more ran out of memory (measured
+on 0.4.0: `(1 to: 450000) asArray` succeeds, `(1 to: 500000) asArray` stops
+with the out-of-memory message; 0.6.1 still stops at 500,000, 2026-10-12).
 
-**Why the default stays small.** Under a fixed limit protoCore's collector
-starts a cycle only as the heap approaches the ceiling (since protoCore
-2.12.0, a paced cycle starts a measured runway before it), so a larger
-ceiling means fewer, later collections; a 32M-cell default made allocation-heavy actor code 19%
-slower (`saturation_big` on one worker: 3.1 s against 3.7 s, interleaved
-runs; commit `8e5274f`).
+**Since 0.6.2** the default memory policy is protoCore's adaptive heap
+controller (`STRuntime::configureHeap`, `src/runtime/STRuntime.cpp`), whose
+budget is 75 % of physical memory or of the process memory limit (cgroup on
+Linux, job object on Windows); a soft limit inside it, 128 MB at start,
+triggers the collections and grows only while the program waits for the
+collector. Measured on 2026-10-12 (DEV12, 62 GB of RAM): `(1 to: 500000) asArray`
+succeeds in 1.7 s with a 0.74 GB peak, `(1 to: 1000000) asArray` in 4.3 s
+with 1.7 GB. On the benchmark suite the controller is faster on seven
+workloads (6-26 %), slower on two (`parallel_speedup` with the full pool
++14 %, `attr_lookup` +7 %, see K6), and uses a third to a quarter of the
+memory (`benchmarks/reports/2026-10-12-adaptive-heap-default.md`). Peak
+memory is no longer capped at 640 MB: the controller grows its soft limit
+while that shortens the program's waits for the collector (an allocating
+3M-iteration loop peaked at 0.19-1.86 GB in three runs); set
+`PROTOCORE_HEAP_LIMIT_CELLS` when a fixed footprint matters.
 
-**Why not protoCore's adaptive heap controller.** Since 2.10.0
-protoCore offers an opt-in controller (`ProtoSpace::enableAdaptiveHeap`)
-that sizes the heap from the live set. protoST does not enable it and keeps
-the fixed limit (decision of 2026-10-04, unchanged with protoCore 2.14.5):
-protoST's live set right after start-up, about 1.7 M cells, is just below
-the controller's initial soft limit of 2 M cells, so a short program pays a
-first collection that finds almost no garbage and a collection waited for
-at exit. `fib.st` ran about three times slower
-under the controller than under the fixed limit, also after protoCore 2.14.2
-raised the controller's floor (protoCore
-`docs/reports/2026-10-04-final-remeasurement.md` and
-`docs/reports/2026-10-04-collector-adjustments.md`, A3). The fixed limit is
-set in `STRuntime::configureHeap` (`src/runtime/STRuntime.cpp`).
-
-**That reason is gone in 0.6.1.** The cause of `fib.st`'s slowness was
+**Why the fixed limit was kept until 0.6.1, and why that changed.** Under
+the controller `fib.st` ran about three times slower than under the fixed
+limit (decision of 2026-10-04, protoCore
+`docs/reports/2026-10-04-collector-adjustments.md`, A3). The cause was
 protoST's, not the controller's (S24 in `docs/STATUS.md`): a recursion that
 never loops reached no garbage-collection safepoint, so nothing it allocated
-could be reclaimed and every cycle was futile; the "1.7 M-cell start-up live
-set" was mostly that unsubmitted garbage (the real one is about 0.5 M). With
-call entry as a safepoint, `fib.st` takes the same time under the controller
-as under the fixed limit, with half the memory, and the actor workloads run
-10-27 % faster under it with about a third of the memory
-(`benchmarks/reports/2026-10-11-fib-under-adaptive-controller.md`). Enabling
-the controller by default is the maintainer's decision and has not been
-made; the fixed limit stays the default in 0.6.1.
+could be reclaimed and every cycle was futile. 0.6.1 made call entry a
+safepoint (`benchmarks/reports/2026-10-11-fib-under-adaptive-controller.md`);
+0.6.2 then made the controller the default.
 
-**Status.** Open; a bulk list builder in protoCore would remove the n log n
-factor.
+**Choosing the policy.** In order of precedence:
+
+| Environment | Policy |
+|---|---|
+| `PROTOCORE_ADAPTIVE_HEAP=1` | the controller; `PROTOCORE_HEAP_LIMIT_CELLS`, when set, is its budget |
+| `PROTOCORE_HEAP_LIMIT_CELLS=<hard>` or `<soft>,<hard>` | a fixed limit of that many cells (64 bytes each); `0` means no limit |
+| `PROTOCORE_ADAPTIVE_HEAP=0` | the fixed limit of 0.6.1 and earlier: 10M cells (640 MB), at most a quarter of physical memory |
+| none of them | the controller, with its automatic budget (the default) |
+
+A program whose live objects fill the budget or the limit stops with exit
+status 3 and a message that names the limit in force and how to raise it.
+
+**Status.** The default no longer runs out of memory on collections of this
+size; the n log n cost remains (a bulk list builder in protoCore would
+remove it), and the fixed limits above keep the old bound.
+
+---
+
+## K6 — Collection pauses grow with the number of threads (open)
+
+**What.** Every protoST thread that has run code keeps its frames in a
+`ProtoContext::automaticLocals` array pre-sized to 1,048,576 slots (8 MB,
+`ExecutionEngine::kSlotCapacity`), and protoCore's stop-the-world root scan
+visits every slot of every thread's array, used or not. Measured on
+2026-10-12 (instrumented protoCore 2.14.5): 4 ms per pause with one thread,
+25-31 ms with the twelve workers of `parallel_speedup`.
+
+**Effect.** Under the fixed limit of 0.6.1 the short benchmarks rarely
+collected, so the cost stayed hidden. Under the adaptive controller (the
+default since 0.6.2) they collect several times, and `parallel_speedup`
+with the full pool runs 14 % slower than on 0.6.1 (the talk's demo 2 shows
+about 3.6x instead of 4.2x); see
+`benchmarks/reports/2026-10-12-adaptive-heap-default.md`.
+
+**Ways out (not taken yet).** Size the array on demand in protoST (the
+interpreter keeps raw pointers into it, so growing it while frames are live
+must re-establish them), or let the embedder declare the used prefix that
+protoCore scans (a protoCore API change).
 
 ---
 

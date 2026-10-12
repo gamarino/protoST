@@ -6,7 +6,7 @@ release 0.6.0, with the 0.5.0 release on protoCore 2.6.2 run alongside; syntheti
 laptop); if a figure is not in that report, it is not said.
 
 Before starting: terminal with a large font, `cd docs/talks/2026-10-15-fas/demos`,
-`protost --version` must print `protoST 0.6.1`; demo 4 needs `python3`. The fallback recordings are in
+`protost --version` must print `protoST 0.6.2`; demo 4 needs `python3`. The fallback recordings are in
 `../recordings/` (see the checklist).
 
 ---
@@ -146,15 +146,15 @@ that it is all written down and verified.
 `ProtoThread` and how protoST uses it for the workers. The atomic snapshot of
 a mutable object (drawn on the whiteboard).
 
-The collector as it stands in protoCore 2.14.5: concurrent, with
-stop-the-world below 0.2 ms in protoCore's measurements; with protoST's fixed
-ceiling (640 MB) each cycle starts a little before the ceiling is reached
-(pacing), and the sweep walks several chains at once and can add helper
-threads. protoCore also offers an adaptive heap controller; protoST does not
-use it yet, because under it a short program such as `fib.st` took about
-three times as long (protoST's start-up live set sits just below the
-controller's initial limit). Present it as a measured decision, not a hidden
-defect (`KNOWN_ISSUES.md`, K5).
+The collector as it stands in protoCore 2.14.5: concurrent; the sweep
+walks several chains at once and can add helper threads. Since 0.6.2
+protoST uses protoCore's adaptive heap controller (before, a fixed 640 MB
+ceiling): faster on the actor programs and with a third of the memory. The
+cost: stop-the-world pauses in protoST are 4 ms with one thread and
+25–31 ms with twelve, because each pause scans every thread's whole frame
+array; with the full pool, `parallel_speedup` runs 14 % slower than on
+0.6.1. Present it as a measurement, not a hidden defect
+(`KNOWN_ISSUES.md`, K5 and K6).
 
 ### M2 — The digital twin step by step (8 min)
 
@@ -186,7 +186,9 @@ Fallback: `recordings/03-digital-twin`.
     and allocation-heavy actor programs on one worker 4–6 % slower in that
     busy session, within the noise on a quiet machine (bisection report of
     11/10). Say it that way, and that 0.6.1 fixes collection in recursions
-    that never loop (fib 29 ran out of memory).
+    that never loop (fib 29 ran out of memory); 0.6.2 enables the adaptive
+    heap controller (report of 12/10: actors 6–26 % faster, the full pool
+    14 % slower).
 - Say where it is slower (recursive method dispatch, exceptions) without
   dressing it up.
 

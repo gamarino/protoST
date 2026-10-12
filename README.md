@@ -169,15 +169,18 @@ several cores without locks.
 
 ## Status
 
-Version 0.6.1 (2026-10-11); it requires protoCore 2.11.0 or newer (2.14.5
-recommended), and CI builds it against protoCore 2.14.5. `ctest` runs 1094 cases on Linux, all
-passing (2026-10-11): 544 conformance programs, 454 unit tests, 42 examples, 31
+Version 0.6.2 (2026-10-12); it requires protoCore 2.11.0 or newer (2.14.5
+recommended), and CI builds it against protoCore 2.14.5. `ctest` runs 1099 cases on Linux, all
+passing (2026-10-12): 544 conformance programs, 459 unit tests, 42 examples, 32
 CLI tests (including the benchmark-harness self-test) and 22 documentation
 checks (every example with a stated result in 21 documents, plus the
-checker's self-test). protoST runs with a fixed heap limit (10M cells,
-640 MB by default; `PROTOCORE_HEAP_LIMIT_CELLS` changes it) and does not
-enable protoCore's adaptive heap controller; the reason is in
-[`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) K5. The
+checker's self-test). Since 0.6.2 protoST lets protoCore's adaptive heap
+controller size the heap (budget: 75 % of physical memory or of the process
+memory limit); `PROTOCORE_HEAP_LIMIT_CELLS` forces a fixed limit and
+`PROTOCORE_ADAPTIVE_HEAP=0` restores 0.6.1's fixed 640 MB limit (precedence
+in [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) K5; the measurements, including a
+14 % regression with the full worker pool (K6), in
+`benchmarks/reports/2026-10-12-adaptive-heap-default.md`). The
 known deviations from Smalltalk-80 and the open bugs are tracked in
 [`docs/STATUS.md`](docs/STATUS.md); runtime hard edges in
 [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md); what changed in
@@ -239,7 +242,7 @@ commands, and what differs on Windows, are in
 
 ## Installation
 
-protoST can be packaged with CPack. The 0.6.1 release has a Linux `.deb`
+protoST can be packaged with CPack. The 0.6.2 release has a Linux `.deb`
 attached to its GitHub release (below, with protoCore 2.14.5); other packages
 are built from source as shown below. Every package depends on
 [protoCore](https://github.com/numaes/protoCore) — install protoCore's package
@@ -267,11 +270,11 @@ the GitHub releases (or built as below):
 wsl --install -d Ubuntu-24.04        # in PowerShell, once
 # then, in the Ubuntu shell:
 wget https://github.com/numaes/protoCore/releases/download/v2.14.5/protoCore-2.14.5-Linux.deb
-wget https://github.com/gamarino/protoST/releases/download/v0.6.1/protost-0.6.1-Linux.deb
-sudo apt install ./protoCore-2.14.5-Linux.deb ./protost-0.6.1-Linux.deb
+wget https://github.com/gamarino/protoST/releases/download/v0.6.2/protost-0.6.2-Linux.deb
+sudo apt install ./protoCore-2.14.5-Linux.deb ./protost-0.6.2-Linux.deb
 ```
 
-These are the 0.6.1 release packages. protoST 0.6.1 needs protoCore 2.11.0
+These are the 0.6.2 release packages. protoST 0.6.2 needs protoCore 2.11.0
 or later; the `.deb` was built against 2.14.5, the release to install with
 it, and declares `protocore (>= 2.14.5)` (an older protoCore package, such as the 2.6.2 that went with 0.5.0, is
 not enough: upgrade it with the command above).

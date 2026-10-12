@@ -89,9 +89,10 @@ allocate outside protoCore — nlohmann/json in the DAP, `BytecodeModule` vector
   `ProtoSpace::setHeapLimits` and installed no `outOfMemoryCallback`, so no
   collection cycle started by itself in an ordinary run and rule 8 was
   unreachable as configured. Since `d2584a3` (2026-09-28)
-  `STRuntime::configureHeap` (`src/runtime/STRuntime.cpp`) sets a fixed hard
-  limit (10M cells, at most a quarter of physical memory, unless
-  `PROTOCORE_HEAP_LIMIT_CELLS` is set) and installs an `outOfMemoryCallback`
-  that ends the process with exit status 3. Rule 8 is therefore reachable;
-  without a `Host` it remains unverified by this suite. protoST does not
-  enable protoCore's adaptive heap controller (`KNOWN_ISSUES.md`, K5).
+  `STRuntime::configureHeap` (`src/runtime/STRuntime.cpp`) sets a heap
+  limit and installs an `outOfMemoryCallback` that ends the process with exit
+  status 3. Up to 0.6.1 the limit was a fixed 10M cells (at most a quarter of
+  physical memory, unless `PROTOCORE_HEAP_LIMIT_CELLS` was set); since 0.6.2
+  it is protoCore's adaptive heap controller unless the environment asks for
+  a fixed limit (`KNOWN_ISSUES.md`, K5). Rule 8 is therefore reachable;
+  without a `Host` it remains unverified by this suite.

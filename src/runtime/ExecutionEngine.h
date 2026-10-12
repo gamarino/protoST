@@ -339,7 +339,7 @@ private:
     //
     // Call entry was added in 0.6.1: a program that only recurses (the
     // textbook fib) reaches neither a back-edge nor a new engine, so before
-    // it nothing was submitted, fib 29 ran out of memory under the default
+    // it nothing was submitted, fib 29 ran out of memory under the then-default
     // 640 MB limit and every cycle under protoCore's adaptive controller was
     // futile (`tests/cli/test_cli_gc_recursion_reclaims.sh`).
     //

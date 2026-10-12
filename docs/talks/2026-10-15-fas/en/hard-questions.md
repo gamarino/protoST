@@ -42,24 +42,33 @@ CPU on another core, which shows only when every core is busy
 (`benchmarks/reports/2026-10-11-actor-regression-bisection.md`). Looking for
 it turned up a real bug, fixed in 0.6.1: a recursion that never loops (the
 textbook fib) never had its garbage reclaimed; fib 29 ran out of memory.
+Since 0.6.2 protoST uses protoCore's adaptive heap controller: against
+0.6.1, actor programs run 6–26 % faster with a third of the memory, but
+`parallel_speedup` with the full pool runs 14 % slower and demo 2 shows
+about 3.6× instead of 4.2×: every collector pause scans each thread's whole
+frame array (K6, not fixed;
+`benchmarks/reports/2026-10-12-adaptive-heap-default.md`).
 
 In other words: on one thread protoST is considerably slower than CPython.
 What we show is that the same code uses several cores, today with that
-ceiling.
+ceiling and with collector pauses that grow with the number of threads.
 
 **What is the GC like?**
-protoCore's: concurrent, with its own thread. protoST sets a heap ceiling
-(640 MB by default, configurable with `PROTOCORE_HEAP_LIMIT_CELLS`) and, if it
-is exhausted, exits with a clear message instead of taking over the machine.
-Since protoCore 2.12 a cycle starts a little before that ceiling is reached
-(pacing), and the sweep, the most expensive phase, walks several chains at
-once and can add helper threads (2.14). It has stop-the-world phases:
-protoCore measured them below 0.2 ms in its own tests; we have not measured
-them in protoST, so we give no figure of our own. protoCore also offers an
-adaptive heap-size controller; protoST does not enable it, because under it
-`fib.st` took about three times as long (protoST's start-up live set sits
-just below its initial limit). It is written down as a decision, with the
-measurement, in `KNOWN_ISSUES.md` (K5).
+protoCore's: concurrent, with its own thread. Since 0.6.2 protoST lets
+protoCore's adaptive controller size the heap: a budget of 75 % of physical
+memory (or of the process limit) and, inside it, a soft limit that starts at
+128 MB and grows only while the program waits for the collector. If the live
+data does not fit, it exits with a clear message instead of taking over the
+machine. `PROTOCORE_HEAP_LIMIT_CELLS` sets a fixed ceiling and
+`PROTOCORE_ADAPTIVE_HEAP=0` restores 0.6.1's 640 MB ceiling
+(`KNOWN_ISSUES.md`, K5). It was not used up to 0.6.1 because under it
+`fib.st` took three times as long; the cause was protoST's (a recursion did
+not hand over its garbage), fixed in 0.6.1. The sweep, the most expensive
+phase, walks several chains at once and can add helper threads (2.14). The
+stop-the-world pauses we measured in protoST are not the 0.2 ms of
+protoCore's own tests: 4 ms with one thread and 25–31 ms with twelve,
+because each pause scans every thread's whole 1 M-slot frame array
+(`KNOWN_ISSUES.md`, K6, open).
 
 **Why prototypes?**
 protoCore is a prototype model; protoST classes are named prototype objects.
@@ -129,7 +138,7 @@ protoClojure use too: the same input and output exists, under each language's
 own names, in the three runtimes.
 
 **Does it run on Windows?**
-The published package (0.6.1) is for Linux; on Windows it runs under WSL2
+The published package (0.6.2) is for Linux; on Windows it runs under WSL2
 with Ubuntu 24.04, installing the same `.deb` packages. The sources
 build natively with Visual Studio 2022, and continuous integration runs the
 whole suite on Windows (except two tests that depend on POSIX tools: Ctrl-C
@@ -137,8 +146,8 @@ sent with `kill` and an example in `sh` syntax; `docs/INSTALLATION.md`, "Windows
 Windows package yet.
 
 **Is it stable? What open bugs does it have?**
-0.5.0 passed its 1068 `ctest` cases; 0.6.1 (with protoCore 2.14.5)
-passes 1094, on Linux, macOS and Windows: conformance programs,
+0.5.0 passed its 1068 `ctest` cases; 0.6.2 (with protoCore 2.14.5)
+passes 1099, on Linux, macOS and Windows: conformance programs,
 unit tests, the examples, command-line tests and the documentation examples.
 While preparing this talk, an adversarial audit of about 1,100 programs, in two rounds, found
 silent wrong results and hangs; every fix for a wrong result, a crash or a

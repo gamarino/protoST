@@ -9,7 +9,7 @@
 # A demo with a <demo>.feed next to it reads that program's output on its
 # standard input (demo 4: python3 04-connected-twin.feed | protost ...).
 # Environment: PROTOST (default: build_release/protost of this repository, then
-# protost on PATH). The binary must report protoST 0.6.1.
+# protost on PATH). The binary must report protoST 0.6.2.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DEMO="$1"
@@ -19,17 +19,19 @@ if [ -z "${PROTOST:-}" ]; then
     if [ -x "$REPO_BIN" ]; then PROTOST="$REPO_BIN"; else PROTOST="$(command -v protost || true)"; fi
 fi
 version="$("$PROTOST" --version 2>/dev/null)"
-if [ "$version" != "protoST 0.6.1" ]; then
-    echo "DEMO: $PROTOST reports '$version', not protoST 0.6.1 — install the 0.6.1 package or set PROTOST" >&2
+if [ "$version" != "protoST 0.6.2" ]; then
+    echo "DEMO: $PROTOST reports '$version', not protoST 0.6.2 — install the 0.6.2 package or set PROTOST" >&2
     exit 1
 fi
 name="$(basename "$DEMO" .st)"
 expected="$HERE/expected/$name.out"
 out_file="$(mktemp)"
 trap 'rm -f "$out_file"' EXIT
-# A heap ceiling keeps a runaway demo from taking the machine; the worker pool
-# uses every core unless PROTOST_WORKERS says otherwise.
-export PROTOCORE_HEAP_LIMIT_CELLS="${PROTOCORE_HEAP_LIMIT_CELLS:-20000000}"
+# The demos run under protoST's default memory policy, the adaptive heap
+# controller (0.6.2), as the audience's installation will; the 30-second
+# timeout below bounds a runaway demo. PROTOCORE_HEAP_LIMIT_CELLS, when set in
+# the environment, still imposes a fixed limit. The worker pool uses every
+# core unless PROTOST_WORKERS says otherwise.
 feed="$HERE/$name.feed"
 run() {
     if [ -x "$feed" ]; then

@@ -8,7 +8,7 @@ sobre protoCore 2.6.2 corrida al lado; benchmarks sintéticos, en una notebook);
 si una cifra no está en ese informe, no se dice.
 
 Antes de empezar: terminal con fuente grande, `cd docs/talks/2026-10-15-fas/demos`,
-`protost --version` debe decir `protoST 0.6.1`; la demo 4 necesita `python3`. Las grabaciones de respaldo
+`protost --version` debe decir `protoST 0.6.2`; la demo 4 necesita `python3`. Las grabaciones de respaldo
 están en `../recordings/` (ver la checklist).
 
 ---
@@ -149,15 +149,15 @@ Celdas de 64 bytes, enteros inline en el puntero, listas AVL y cuerdas
 (ropes) inmutables, `ProtoThread` y cómo protoST la usa para los workers. La
 instantánea atómica de un objeto mutable (dibujo en pizarra).
 
-El recolector, tal como está en protoCore 2.14.5: concurrente, con
-stop-the-world por debajo de 0,2 ms en las mediciones de protoCore; con el
-techo fijo de protoST (640 MB) arranca cada ciclo un poco antes de llegar al
-techo (pacing), y el barrido recorre varias cadenas a la vez y puede sumar
-hilos auxiliares. protoCore ofrece además un controlador adaptativo del heap;
-protoST no lo usa todavía, porque con él un programa corto como `fib.st`
-tardó unas tres veces más (el conjunto vivo de arranque de protoST queda
-justo debajo del límite inicial del controlador). Decirlo como decisión
-medida, no como defecto escondido (`KNOWN_ISSUES.md`, K5).
+El recolector, tal como está en protoCore 2.14.5: concurrente; el barrido
+recorre varias cadenas a la vez y puede sumar hilos auxiliares. Desde 0.6.2
+protoST usa el controlador adaptativo del heap de protoCore (antes, un techo
+fijo de 640 MB): más rápido en los programas de actores y con un tercio de la
+memoria. El costo: las pausas stop-the-world en protoST son de 4 ms con un
+hilo y 25–31 ms con doce, porque cada pausa recorre entero el arreglo de
+frames de cada hilo; con el pool completo, `parallel_speedup` va 14 % más
+lento que en 0.6.1. Decirlo como medición, no como defecto escondido
+(`KNOWN_ISSUES.md`, K5 y K6).
 
 ### M2 — El gemelo digital paso a paso (8 min)
 
@@ -190,7 +190,8 @@ Respaldo: `recordings/03-digital-twin`.
     4–6 % más lentos en aquella sesión cargada; con la máquina quieta, dentro
     del ruido (informe de bisección del 11/10). Decirlo así, y que 0.6.1
     corrige la recolección en recursiones sin bucles (fib 29 se quedaba sin
-    memoria).
+    memoria); 0.6.2 activa el controlador adaptativo del heap (informe del
+    12/10: actores 6–26 % más rápidos, el pool completo 14 % más lento).
 - Decir dónde es más lento (despacho de métodos recursivo, excepciones) sin
   maquillarlo.
 

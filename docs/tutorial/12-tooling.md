@@ -36,7 +36,7 @@ debugger, and `venv`.
 
 ```
 $ ./build/protost -i
-protoST 0.6.1 — interactive REPL
+protoST 0.6.2 — interactive REPL
 :help for commands, :quit or Ctrl-D to exit
 protoST> 3 + 4
 => 7

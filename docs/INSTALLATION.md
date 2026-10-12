@@ -1,13 +1,13 @@
 # Installing protoST
 
-protoST 0.6.1 is a Smalltalk-syntax, actor-native runtime on protoCore. It is
+protoST 0.6.2 is a Smalltalk-syntax, actor-native runtime on protoCore. It is
 a consumer of protoCore, never a bundler of it: `bin/protost` links
 `libprotoCore.so.3`, and every package protoST produces declares a runtime
 dependency on protoCore's own package instead of shipping a copy.
 
 On a Debian or Ubuntu machine where protoCore's package is installed, the
 library is `/usr/lib/x86_64-linux-gnu/libprotoCore.so.3`, a link to
-`libprotoCore.so.<version>`. protoST 0.6.1 needs protoCore 2.11.0 or later
+`libprotoCore.so.<version>`. protoST 0.6.2 needs protoCore 2.11.0 or later
 (*Prerequisites*); its `.deb` was built and tested against protoCore 2.14.5,
 the release to install with it, and declares `protocore (>= 2.14.5)` (0.5.0 needed 2.6.1).
 CI builds against protoCore 2.14.5 on Linux, macOS and Windows, and against
@@ -270,16 +270,16 @@ wsl --install -d Ubuntu-24.04
 
 # Then, in the Ubuntu shell: the two packages of the GitHub releases.
 wget https://github.com/numaes/protoCore/releases/download/v2.14.5/protoCore-2.14.5-Linux.deb
-wget https://github.com/gamarino/protoST/releases/download/v0.6.1/protost-0.6.1-Linux.deb
-sudo apt install ./protoCore-2.14.5-Linux.deb ./protost-0.6.1-Linux.deb
+wget https://github.com/gamarino/protoST/releases/download/v0.6.2/protost-0.6.2-Linux.deb
+sudo apt install ./protoCore-2.14.5-Linux.deb ./protost-0.6.2-Linux.deb
 protost --version
 ```
 
 The packages are attached to the GitHub releases
 [protoCore v2.14.5](https://github.com/numaes/protoCore/releases/tag/v2.14.5)
-and [protoST v0.6.1](https://github.com/gamarino/protoST/releases/tag/v0.6.1)
+and [protoST v0.6.2](https://github.com/gamarino/protoST/releases/tag/v0.6.2)
 (built on Ubuntu 24.04, x86_64). The same commands install them on Ubuntu
-24.04 itself. protoST 0.6.1's floor is protoCore 2.11.0; protoCore 2.14.5 is
+24.04 itself. protoST 0.6.2's floor is protoCore 2.11.0; protoCore 2.14.5 is
 the release to install with it, and the one CI builds against
 (*Prerequisites*). A machine that still has the protoCore 2.6.2 package of
 0.5.0 must upgrade it: the same `apt install` does. To build the packages instead, see §Packages
@@ -317,6 +317,26 @@ unset) and a negative control (the same command with `share/protoST` moved away,
 which must fail).
 
 ---
+
+## Memory
+
+Since 0.6.2 `protost` lets protoCore's adaptive heap controller size its
+heap: the budget is 75 % of physical memory or of the process memory limit
+(cgroup on Linux, job object on Windows), and the heap grows inside it only
+while the program waits for the collector. Memory is not returned to the
+operating system before the process ends. The environment can choose
+another policy; in order of precedence:
+
+| Environment | Policy |
+|---|---|
+| `PROTOCORE_ADAPTIVE_HEAP=1` | the controller; `PROTOCORE_HEAP_LIMIT_CELLS`, when set, is its budget |
+| `PROTOCORE_HEAP_LIMIT_CELLS=<cells>` | a fixed limit of that many 64-byte cells (`0`: no limit) |
+| `PROTOCORE_ADAPTIVE_HEAP=0` | the fixed limit of 0.6.1 and earlier: 10M cells (640 MB), at most a quarter of physical memory |
+| none | the controller (the default) |
+
+A program whose live objects fill the limit stops with exit status 3 and a
+message that names the limit and how to raise it. `KNOWN_ISSUES.md` K5 has
+the background and the measurements.
 
 ## Packages (CPack)
 
