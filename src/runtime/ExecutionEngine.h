@@ -226,10 +226,11 @@ private:
     // (yield / completion).
     unsigned int          slotBase_ = 0;
 
-    // Total automaticLocals capacity reserved once at engine entry. Frame
-    // regions are packed into [0, kSlotCapacity). Overflow is a hard error.
+    // The most automaticLocals grows to (kEngineSlotCapacity). Frame regions
+    // are packed into [kFrameRegionBase, kSlotCapacity); the array grows on
+    // demand (TransientPin.h). Overflow is a hard error.
     static constexpr unsigned int kSlotCapacity = 1u << 20;
-    // Frame slots kept free below the scratch region so the handler of a
+    // Frame slots kept free below kFrameRegionLimit so the handler of a
     // "stack depth exceeded" error can run.
     static constexpr unsigned int kOverflowReserve = 16384;
 

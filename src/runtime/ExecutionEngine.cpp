@@ -157,7 +157,8 @@ std::atomic<proto::proto_ulong> g_nextFrameId{1};
 //
 // The frame stack is backed by the engine context's automaticLocals (a flat,
 // GC-traced array). Each frame needs a FIXED region size decided at push
-// time, since automaticLocals is pre-sized once and never grown afterwards.
+// time; the region must fit in automaticLocals, which grows on demand
+// (ensureEngineSlots, TransientPin.h).
 //
 // localCount: scan the module's bytecode for the highest local-slot index
 //   referenced by PUSH_LOCAL / STORE_LOCAL, take +1, and floor it at the
@@ -187,7 +188,7 @@ constexpr unsigned int kFrameMaxStk  = 48;
 // Cooperative yield clears frames_ and rewinds the cursor by the engine's
 // own consumed span (cursor - slotBase_); a resumed engine re-allocates from
 // the cursor as restoreFrames rebuilds the stack.
-thread_local unsigned int g_slotCursor = 0;
+thread_local unsigned int g_slotCursor = kFrameRegionBase;
 
 // 2026-05-24 ergonomics: build a short receiver descriptor for inclusion in
 // doesNotUnderstand error messages. Without it the user sees only the
@@ -256,9 +257,10 @@ inline unsigned int computeMaxStack(const BytecodeModule& m) {
 
 // F6 v3 E5: definition of the thread-local transient-pin scratch cursor
 // declared `extern` in TransientPin.h. Counts CONSUMED scratch slots; the
-// scratch region fills the top kScratchSlots slots of automaticLocals from
-// the top downward, while frame regions fill from slot 0 upward. The two
-// cursors grow toward each other; pushFrame asserts they never collide.
+// scratch region is the bottom kScratchSlots slots of automaticLocals,
+// filled from its top downward, and frame regions start above it at
+// kFrameRegionBase (0.6.2; before, the scratch region was the top of a
+// pre-sized 1 M-slot array).
 thread_local unsigned int g_scratchCursor = 0;
 
 // Compile-time consistency: the scratch geometry in TransientPin.h must match
@@ -472,20 +474,21 @@ ExecutionEngine::pushFrame(const BytecodeModule* m,
     fr.baseSlot = g_slotCursor;
     const unsigned int regionSize = frameRegionSize(fr);
     const unsigned int regionEnd  = fr.baseSlot + regionSize;
-    // F6 v3 E5: frame regions must not grow into the transient-pin scratch
-    // region at the top of automaticLocals. The previous bound was
-    // kSlotCapacity; it is now kFrameRegionLimit (== kSlotCapacity -
-    // kScratchSlots) so the scratch slots are never aliased by frame storage.
+    // Frame regions start at kFrameRegionBase, above the transient-pin
+    // scratch region, and end at kFrameRegionLimit, the array's maximum.
     if (regionEnd > kFrameRegionLimit)
         throw std::runtime_error("engine slot region exhausted");
+    // Grow the array if this region does not fit yet (one compare on the
+    // common path). Growing reallocates it, so the raw pointer is read after.
+    ensureEngineSlots(ctx_, regionEnd);
 
     // 2026-05-24 perf: tight-loop init via the raw automaticLocals array.
     // The previous version called `ctx_->setAutomaticLocal(s, PROTO_NONE)`
     // per slot, paying its bounds check on every iteration even though
     // the region was already validated above. For fib's ~10-slot region
-    // × 75K calls this was visible per-call overhead. The region bound
-    // (regionEnd <= kFrameRegionLimit <= automaticLocalsCount) is checked
-    // once at allocation above, so the direct write is safe.
+    // × 75K calls this was visible per-call overhead. The array holds at
+    // least regionEnd slots (ensured just above), so the direct write is
+    // safe.
     const proto::ProtoObject** slots = ctx_->getAutomaticLocals();
     std::fill_n(slots + fr.baseSlot, regionSize, PROTO_NONE);
 
@@ -584,7 +587,7 @@ std::string ExecutionEngine::describeActiveStack(std::size_t maxFrames) {
 }
 
 // Stack-depth guard, checked before every frame push of a send. Frame regions
-// stop kOverflowReserve slots short of the scratch region, so the handler that
+// stop kOverflowReserve slots short of kFrameRegionLimit, so the handler that
 // catches the overflow (and any ensure: block it unwinds) still has room to
 // run. The overflow is an ordinary Error, catchable by on:do: at any level.
 bool ExecutionEngine::signalIfTooDeep(proto::ProtoContext* ctx, Frame& f,
@@ -616,21 +619,21 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
                              proto::proto_ulong homeFrameId) {
     // F6 v3 A: build the initial Frame and enter the single dispatch loop.
     // F6 v3 E3: the frame stack is backed by the engine context's
-    // automaticLocals — a flat, GC-traced slot array. We pre-size that array
-    // ONCE here, before any opcode runs and before any allocation that could
-    // trigger a GC cycle. resizeAutomaticLocals is grow-only and idempotent,
-    // so a worker context reused across many drainOne ticks pays the
-    // reallocation cost at most once. Crucially, this thread is actively
-    // running (not parked at a safepoint) during the resize, so a concurrent
-    // stop-the-world GC cannot proceed mid-realloc — it needs every thread
-    // parked first. No new ProtoContext is ever created.
+    // automaticLocals — a flat, GC-traced slot array. Make sure it has its
+    // initial size here, before any opcode runs; pushFrame grows it further
+    // when a frame region needs more (ensureEngineSlots, TransientPin.h).
+    // Growing is grow-only, so a worker context reused across many drainOne
+    // ticks pays each doubling at most once. Crucially, this thread is
+    // actively running (not parked at a safepoint) during a resize, so a
+    // concurrent stop-the-world GC cannot proceed mid-realloc — it needs
+    // every thread parked first. No new ProtoContext is ever created.
     // Nesting guard (see kMaxNestedEngines): reported as the same catchable
     // "stack depth exceeded" Error -- the primitive boundary translates it --
     // never a crash. This engine is already registered, hence ">".
     if (g_liveEngines.size() > kMaxNestedEngines)
         throw std::runtime_error(kNestingLimitMessage);
     ctx_ = ctx;
-    ctx_->resizeAutomaticLocals(kSlotCapacity);
+    ensureEngineSlots(ctx_, kInitialEngineSlots);
 
     frames_.clear();
     frames_.reserve(64);
@@ -2898,16 +2901,12 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
     // F6 v3 E3: restoreFrames is the engine's entry point on the resume path
     // (drainOne calls it before resumeWith + continueRun). Establish the same
     // engine-context state runWithArgs would: bind ctx_, ensure the GC-traced
-    // slot array is pre-sized, and anchor this engine's frame regions at the
-    // current thread-local cursor so a nested engine cannot overlap them.
-    //
-    // F6 v3 E5: the resize MUST happen before any TransientPin is claimed —
-    // the pin writes into the scratch region of automaticLocals, which only
-    // exists once the array is sized to kSlotCapacity. The worker context on
-    // a resume may be a fresh per-thread context never previously sized by a
-    // runWithArgs, so this resize is load-bearing for the pins below.
+    // slot array has its initial size, and anchor this engine's frame regions
+    // at the current thread-local cursor so a nested engine cannot overlap
+    // them. (TransientPin also sizes the context for its scratch region, and
+    // each frame region below grows the array as needed.)
     ctx_ = ctx;
-    ctx_->resizeAutomaticLocals(kSlotCapacity);
+    ensureEngineSlots(ctx_, kInitialEngineSlots);
 
     // Resolve fresh from the live ctx — see snapshotFrames for the
     // per-space interning rationale.
@@ -3022,9 +3021,9 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
 
         const unsigned int regionSize = frameRegionSize(fr);
         const unsigned int regionEnd  = fr.baseSlot + regionSize;
-        // F6 v3 E5: keep frame regions out of the transient-pin scratch region.
         if (regionEnd > kFrameRegionLimit)
             throw std::runtime_error("engine slot region exhausted");
+        ensureEngineSlots(ctx_, regionEnd);
 
         // Initialise the region, then write self/captured/locals/opStack.
         for (unsigned int s = fr.baseSlot; s < regionEnd; ++s)

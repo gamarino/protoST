@@ -107,3 +107,66 @@ TEST_CASE("HeapPolicy: PROTOCORE_ADAPTIVE_HEAP=1 with a limit gives the controll
     CHECK(stats.enabled);
     CHECK(stats.hardCells == 3'000'000);
 }
+
+// ---------------------------------------------------------------------------
+// Engine slot arrays are sized on demand (0.6.2)
+// ---------------------------------------------------------------------------
+//
+// protoCore's stop-the-world root scan visits every slot of every thread's
+// automaticLocals. Up to 0.6.1 each engine context was pre-sized to 1 M slots,
+// so every pause scanned 1 M slots per thread (25-31 ms with twelve workers,
+// benchmarks/reports/2026-10-12-adaptive-heap-default.md). The array now
+// starts small and grows only as deep as the frames go.
+
+#include "frontend/Parser.h"
+#include "frontend/Compiler.h"
+#include "runtime/BytecodeModule.h"
+#include "runtime/TransientPin.h"
+
+#include <memory>
+#include <vector>
+
+namespace {
+
+const proto::ProtoObject* runSource(protoST::STRuntime& rt,
+                                    std::vector<std::unique_ptr<protoST::BytecodeModule>>& keep,
+                                    const char* src) {
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C;
+    auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+    const proto::ProtoObject* r = rt.runTopLevel(*bc);
+    keep.push_back(std::move(bc));
+    return r;
+}
+
+} // namespace
+
+TEST_CASE("EngineSlots: a context's slot array grows only as deep as its frames go",
+          "[heap][slots]") {
+    protoST::STRuntime rt;
+    std::vector<std::unique_ptr<protoST::BytecodeModule>> keep;
+    proto::ProtoContext* ctx = rt.rootCtx();
+
+    const proto::ProtoObject* r = runSource(rt, keep, "| s | s := 0. 1 to: 1000 do: [:i | s := s + i]. s");
+    REQUIRE(r->asLong(ctx) == 500500);
+    // A shallow program: the array keeps its initial size, far below the
+    // 1 M slots of 0.6.1.
+    CHECK(ctx->getAutomaticLocalsCount() <= protoST::kInitialEngineSlots);
+
+    // A 2,000-deep recursion needs more slots: the array grows, and the
+    // program still computes the right result.
+    r = runSource(rt, keep,
+        "Object subclass: #Deep.\n"
+        "Deep >> down: n\n"
+        "  n = 0 ifTrue: [^ 0].\n"
+        "  ^ 1 + (self down: n - 1)\n"
+        "\n"
+        "Deep new down: 2000\n");
+    REQUIRE(r->asLong(ctx) == 2000);
+    const unsigned int grown = ctx->getAutomaticLocalsCount();
+    CHECK(grown > protoST::kInitialEngineSlots);
+    CHECK(grown < protoST::kEngineSlotCapacity);
+}
