@@ -21,7 +21,7 @@ stable id and file it in the right bucket.
   and 22 documentation checks (the examples with a stated result in 21
   documents, plus the checker's self-test). CI runs the same suite on Linux,
   macOS and Windows against protoCore 2.14.6, and on Linux against 2.11.0,
-  the declared minimum (CI 38306148733 and cross-platform 38306152297, green on 0.6.5): Linux runs 1100 of
+  the declared minimum (CI 38318673607 and cross-platform 38318673623, green on 0.6.5): Linux runs 1100 of
   them in its suite job (the wall-clock parallelism proof runs in a separate
   informational job), macOS 1100, Windows 1097; Windows runs all
   but `cli_sigint` and tutorial chapter 15 (`docs/INSTALLATION.md`, "Windows

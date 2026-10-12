@@ -41,7 +41,9 @@
 ## One hour before
 
 - [ ] Close everything that uses CPU (browser with heavy tabs, builds,
-      indexers). Demo 2 shows times measured on the spot.
+      indexers). Demo 2 shows times measured on the spot: with the machine
+      busy the speedup falls (1.6–3.2× measured on 12/10 with an editor's
+      indexer using the CPU, instead of about 3.8×).
 - [ ] Terminal: large font (≥ 20 pt), light or dark background depending on
       the projector, full-screen window.
 - [ ] `cd` to the demos folder; have `less 01-familiar-code.st` ready to show

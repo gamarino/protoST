@@ -1,0 +1,44 @@
+== fresh (network none, read-only rootfs, user tester)
+protoST 0.6.5
+tester
+01-familiar-code: 10/10
+02-actors-parallelism: 10/10
+03-digital-twin: 10/10
+04-connected-twin: 10/10
+check_all exit 0
+time one thread: 1543 ms
+time 12 actors: 684 ms
+time speedup: 2.2x
+time one thread: 1532 ms
+time 12 actors: 739 ms
+time speedup: 2.0x
+time one thread: 1538 ms
+time 12 actors: 690 ms
+time speedup: 2.2x
+DEMO: picked /bin/true (from the PROTOST variable), which reports 'true (GNU coreutils) 9.4
+mismatch exit 1
+protost: cannot find the protoST kernel: /tmp/kernel/00-manifest.txt does not exist (standard-library directory named by PROTOST_LIB).
+Reinstall protoST, or set PROTOST_LIB to the standard-library directory that holds kernel/00-manifest.txt.
+nokernel exit 72
+== upgrade (network none, read-only rootfs, user tester)
+protoST 0.6.5
+tester
+01-familiar-code: 10/10
+02-actors-parallelism: 10/10
+03-digital-twin: 10/10
+04-connected-twin: 10/10
+check_all exit 0
+time one thread: 1588 ms
+time 12 actors: 495 ms
+time speedup: 3.2x
+time one thread: 1499 ms
+time 12 actors: 888 ms
+time speedup: 1.6x
+time one thread: 1488 ms
+time 12 actors: 820 ms
+time speedup: 1.8x
+DEMO: picked /bin/true (from the PROTOST variable), which reports 'true (GNU coreutils) 9.4
+mismatch exit 1
+protost: cannot find the protoST kernel: /tmp/kernel/00-manifest.txt does not exist (standard-library directory named by PROTOST_LIB).
+Reinstall protoST, or set PROTOST_LIB to the standard-library directory that holds kernel/00-manifest.txt.
+nokernel exit 72

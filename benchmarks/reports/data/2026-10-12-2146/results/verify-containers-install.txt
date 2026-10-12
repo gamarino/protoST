@@ -1,0 +1,28 @@
+== fresh
+  9350K .......... .......... .......... .......... .......... 99% 11.5M 0s
+  9400K .......... .......... .......... ......               100% 17.4M=1.5s
+
+2026-10-12 22:59:07 (6.17 MB/s) - 'protost-0.6.5-Linux.deb' saved [9663068/9663068]
+
+16b5420d6941ab51c8f728fbd2c2e5464d68fd95c2ab9afc21163acbbd43987a  protoCore-2.14.6-Linux.deb
+44296e3630deca83ff4f6c06e5555e1d4504a585a49ea809cc0587a96be54ade  protost-0.6.5-Linux.deb
+Setting up protocore (2.14.6) ...
+Setting up protost (0.6.5) ...
+protoST 0.6.5
+Version: 2.14.6
+	libprotoCore.so.3 => /usr/bin/../lib/x86_64-linux-gnu/libprotoCore.so.3 (0x00007c6257fa1000)
+== upgrade
+Setting up protocore (2.14.5) ...
+Setting up protost (0.6.4) ...
+protoST 0.6.4
+Version: 2.14.5
+Unpacking protocore (2.14.6) over (2.14.5) ...
+Unpacking protost (0.6.5) over (0.6.4) ...
+Setting up protocore (2.14.6) ...
+Setting up protost (0.6.5) ...
+protoST 0.6.5
+Version: 2.14.6
+	libprotoCore.so.3 => /usr/bin/../lib/x86_64-linux-gnu/libprotoCore.so.3 (0x00007e3cb2891000)
+dpkg: dependency problems prevent configuration of protost:
+ protost depends on libreadline8t64 (>= 7.0~beta); however:
+ protost depends on protocore (>= 2.14.6); however:

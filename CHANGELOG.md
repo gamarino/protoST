@@ -29,7 +29,19 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
   `.deb`'s build in a clean Ubuntu 24.04 container with GCC 13, no
   warnings); CI green on the release branch on Linux (1100 gating cases,
   also against protoCore 2.11.0), macOS (1100) and Windows (1097)
-  (CI 38306148733, cross-platform 38306152297).
+  (CI 38306148733, cross-platform 38306152297; on `main` at the tag, CI
+  38318673607 and cross-platform 38318673623).
+- Verified in clean, minimized `ubuntu:24.04` containers: a fresh install
+  with the talk checklist's exact commands (GitHub URLs of protoCore 2.14.6
+  and protoST 0.6.5) and an upgrade from 0.6.4 with protoCore 2.14.5; `ldd`
+  resolves `libprotoCore.so.3` to the installed 2.14.6 in both. Then, with
+  `--network none`, a read-only root filesystem and an unprivileged user,
+  all four talk demos 10/10 from `/usr/share/protoST/talks/2026-10-15-fas/demos`
+  in both, `run_demo.sh`'s version-mismatch message and the missing-kernel
+  exit 72. Offered alone on top of protoCore 2.14.5, `dpkg` refuses the
+  package (`protost depends on protocore (>= 2.14.6)`). Release:
+  https://github.com/gamarino/protoST/releases/tag/v0.6.5 (0.6.4 marked
+  superseded).
 
 ## 0.6.4 — the talk demos where every installation keeps them (2026-10-12)
 

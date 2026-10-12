@@ -43,7 +43,9 @@
 ## Una hora antes
 
 - [ ] Cerrar todo lo que use CPU (navegador con pestañas pesadas, builds,
-      indexadores). La demo 2 muestra tiempos medidos en el momento.
+      indexadores). La demo 2 muestra tiempos medidos en el momento: con la
+      máquina cargada la aceleración cae (1,6–3,2× medido el 12/10 con un
+      indexador del editor ocupando la CPU, en vez de unas 3,8×).
 - [ ] Terminal: fuente grande (≥ 20 pt), fondo claro u oscuro según el
       proyector, ventana a pantalla completa.
 - [ ] `cd` a la carpeta de demos; tener `less 01-familiar-code.st` listo para
