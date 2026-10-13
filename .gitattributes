@@ -10,5 +10,8 @@ docs/talks/**/recordings/*.timing binary
 *.sh text eol=lf
 *.md text eol=lf
 *.out text eol=lf
+# The talk's feed programs run as executables (`#!/usr/bin/env python3`): in a
+# CRLF checkout the kernel looks for an interpreter named `python3\r`.
+*.feed text eol=lf
 lib/kernel/00-manifest.txt text eol=lf
 src/venv_template/* text eol=lf
