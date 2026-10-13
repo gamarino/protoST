@@ -8,6 +8,10 @@ Recorder >> headersOf: srv
   c := srv accept.
   c nextLine.
   h := HTTP readHeadersFrom: c.
+  "Read the body before replying: closing a socket with unread input makes
+   Windows reset the connection, and the client would see that reset."
+  (h includesKey: 'content-length') ifTrue: [
+    c nextByteCount: (h at: 'content-length') asNumber].
   c nextPutAll: 'HTTP/1.1 204 No Content'; crlf; nextPutAll: 'connection: close'; crlf; crlf; flush; close.
   ^ h.
 srv := ServerSocket listenOn: 0 host: '127.0.0.1'.
