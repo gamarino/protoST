@@ -44,14 +44,11 @@
 
 - [ ] Cerrar todo lo que use CPU (navegador con pestañas pesadas, builds,
       indexadores). La demo 2 muestra tiempos medidos en el momento: con la
-      máquina cargada la aceleración cae (1,6–3,2× medido el 12/10 con un
-      indexador del editor ocupando la CPU, en vez de unas 3,8×).
-- [ ] Equipo enchufado y en modo de energía de rendimiento, no de batería
-      (Configuración → Energía; con TLP, `sudo tlp ac`; verificar con
-      `tlp-stat -s` o `cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor`).
-      Con el perfil de batería la mitad de 12 actores queda limitada: el 12/10
-      en DEV12, con la máquina quieta y TLP aplicando su perfil de batería, la
-      demo 2 mostró 1,9–3,7× (mediana ≈2,4×) en vez de unas 3,8×.
+      máquina quieta da unas 2,4× (2,1–2,6×, 12/10 en DEV12); con carga el
+      resultado es impredecible (1,6–3,2× el 12/10 con un indexador del
+      editor ocupando la CPU).
+- [ ] Equipo enchufado y en modo de energía de rendimiento (Configuración →
+      Energía; con TLP, `sudo tlp ac` y verificar con `tlp-stat -s`).
 - [ ] Terminal: fuente grande (≥ 20 pt), fondo claro u oscuro según el
       proyector, ventana a pantalla completa.
 - [ ] `cd` a la carpeta de demos; tener `less 01-familiar-code.st` listo para

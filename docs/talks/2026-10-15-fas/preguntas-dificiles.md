@@ -50,22 +50,26 @@ mostramos es que el mismo código usa varios núcleos.
 Porque el código de un hilo se hizo más rápido. protoCore 2.14.6 dejó de
 crear temporales al comparar, dividir y sacar el módulo de enteros chicos, y
 la demo 2 es exactamente eso (`isPrime` en un bucle). Medido con el mismo
-binario sobre las dos versiones de protoCore, 15 rondas alternadas
-(informe del 12/10 sobre 2.14.6):
+binario sobre las dos versiones de protoCore, 10 rondas alternadas con la
+máquina quieta y en modo AC (12/10; medianas):
 
 | | protoCore 2.14.5 | protoCore 2.14.6 | cambio |
 |---|---:|---:|---:|
-| un hilo | 1681 ms | 925 ms | 45 % más rápido |
-| doce actores | 377 ms | 245 ms | 35 % más rápido |
-| aceleración mostrada | 4,4× | 3,8× | |
+| un hilo | 1358 ms | 716 ms | 47 % más rápido |
+| doce actores | 476 ms | 293 ms | 38 % más rápido |
+| aceleración mostrada | 2,8× | 2,4× | |
+
+(Las cifras anteriores de 4,4× y 3,8× se midieron con la máquina cargada:
+la carga frena más la mitad de un hilo, que no puede repartirse, y infla la
+razón.)
 
 Los dos tiempos mejoran; el de un hilo mejora más, y la razón baja. El
 paralelismo no empeoró: los doce actores terminan antes que nunca. En el
 resto de los benchmarks 2.14.6 no cambia nada fuera del ruido salvo las
 excepciones (7 % más rápidas) y `parallel_speedup` con el pool (8 %).
-El informe de protoCore midió lo mismo en otra sesión, con la máquina más
-cargada (un hilo 33 % y doce actores 26 % más rápidos, razón 2,99× → 2,66×);
-las cifras de la charla son las de nuestro informe.
+El informe de protoCore midió lo mismo en otra sesión (un hilo 33 % y doce
+actores 26 % más rápidos, razón 2,99× → 2,66×); las cifras de la charla son
+las de la máquina quieta, arriba.
 
 Antes de 2.14.6 esos temporales hacían depender la demo de la glibc: en la
 auditoría previa a la charla, la mitad de un hilo iba un 10 % más rápido con

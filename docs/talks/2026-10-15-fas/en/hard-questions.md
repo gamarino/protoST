@@ -49,22 +49,25 @@ What we show is that the same code uses several cores.
 Because the single-thread code got faster. protoCore 2.14.6 stopped creating
 temporaries when it compares, divides or takes the modulo of small integers,
 and demo 2 is exactly that (`isPrime` in a loop). Measured with the same
-binary on both protoCore versions, 15 alternating rounds (report of 12/10 on
-2.14.6):
+binary on both protoCore versions, 10 alternating rounds on an idle machine in
+AC mode (12/10; medians):
 
 | | protoCore 2.14.5 | protoCore 2.14.6 | change |
 |---|---:|---:|---:|
-| one thread | 1681 ms | 925 ms | 45 % faster |
-| twelve actors | 377 ms | 245 ms | 35 % faster |
-| speedup shown | 4.4× | 3.8× | |
+| one thread | 1358 ms | 716 ms | 47 % faster |
+| twelve actors | 476 ms | 293 ms | 38 % faster |
+| speedup shown | 2.8× | 2.4× | |
+
+(The earlier 4.4× and 3.8× figures were measured on a busy machine: load
+slows the one-thread half, which cannot spread out, and inflates the ratio.)
 
 Both times improve; the one-thread time improves more, so the ratio drops.
 Parallelism did not get worse: the twelve actors finish sooner than ever.
 On the rest of the benchmarks 2.14.6 changes nothing beyond the noise except
 exceptions (7 % faster) and `parallel_speedup` with the pool (8 %). The
-protoCore report measured the same in another session, with the machine
-busier (one thread 33 % and twelve actors 26 % faster, ratio 2.99× →
-2.66×); the talk's figures are those of our report.
+protoCore report measured the same in another session (one thread 33 % and
+twelve actors 26 % faster, ratio 2.99× → 2.66×); the talk's figures are the
+idle ones above.
 
 Before 2.14.6 those temporaries made the demo depend on glibc: in the
 pre-talk audit the one-thread half ran 10 % faster with Ubuntu 24.04's

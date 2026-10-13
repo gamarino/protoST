@@ -163,11 +163,13 @@ and CPython 3.14.0 on the same machine. Earlier reports in
 - Parallel: twelve CPU-bound actors (`parallel_speedup`) run 2.8× faster
   with the default pool than on one worker. `saturation_big` (32 actors)
   runs 2.5× faster on four workers than on one and 2.9× on six, with no
-  ceiling up to six. The talk's demo 2 prints a median of 3.8× (3.3-4.2):
-  its one-thread half takes about 0.93 s, its twelve actors about 0.25 s.
-- protoCore 2.14.6 against 2.14.5: demo 2's one-thread half 45 % faster and
-  its twelve actors 35 % faster (integer comparison and modulo no longer
-  allocate), so the ratio it prints *falls* from 4.4× to 3.8×;
+  ceiling up to six. The talk's demo 2, on an idle machine, prints a median of 2.4× (2.1-2.6):
+  its one-thread half takes about 0.72 s, its twelve actors about 0.29 s.
+- protoCore 2.14.6 against 2.14.5 (idle machine, 2026-10-12, late evening): demo 2's
+  one-thread half 47 % faster and its twelve actors 38 % faster (integer
+  comparison and modulo no longer allocate), so the ratio it prints *falls*
+  from 2.8× to 2.4× (the earlier 4.4× and 3.8× figures came from a busy
+  machine, which slows the one-thread half more);
   `exception_latency` 7 % faster and `parallel_speedup` with the pool 8 %;
   everything else unchanged within the noise, with 1-3.5 % fewer
   instructions. Under a fixed 640 MB cell limit, `(1 to: 500000) asArray`

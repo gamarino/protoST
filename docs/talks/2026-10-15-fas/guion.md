@@ -99,10 +99,10 @@ Respaldo: `scriptreplay` de `recordings/01-familiar-code`.
 Los dos resultados coinciden (4946 primos) y se muestran los tiempos
 medidos en ese momento; la última línea (`time speedup: …x`) es la
 aceleración. Decir la que aparezca en pantalla, no una de memoria: depende de
-la máquina y de su carga. En la notebook de la charla, con protoCore 2.14.6:
-mediana 3,8× (3,3–4,2×), con un hilo en unos 925 ms y los doce
-actores en unos 245 ms. Remarcar: el código del cálculo no cambió;
-cambió quién lo ejecuta. Si preguntan por qué es menos que las 4,4× de
+la máquina y de su carga. En la máquina de la charla, quieta y en modo AC,
+con protoCore 2.14.6: mediana 2,4× (2,1–2,6×), con un hilo en unos 715 ms y
+los doce actores en unos 295 ms. Remarcar: el código del cálculo no cambió;
+cambió quién lo ejecuta. Si preguntan por qué es menos que las 2,8× de
 antes: protoCore 2.14.6 hizo más rápido el código de un hilo (ver
 preguntas-dificiles.md).
 

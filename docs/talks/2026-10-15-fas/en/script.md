@@ -99,10 +99,10 @@ Fallback: `scriptreplay` of `recordings/01-familiar-code`.
 Both results agree (4946 primes) and the times measured at that moment are
 shown; the last line (`time speedup: …x`) is the speedup. State the one that
 appears on screen, not one from memory: it depends on the machine and its
-load. On the talk laptop, with protoCore 2.14.6: a median of 3.8×
-(3.3–4.2×), with one thread at about 925 ms and the twelve actors at
-about 245 ms. Point out: the code of the computation did not change;
-what changed is who runs it. If someone asks why it is less than the 4.4× of
+load. On the talk machine, idle and in AC mode, with protoCore 2.14.6: a
+median of 2.4× (2.1–2.6×), with one thread at about 715 ms and the twelve
+actors at about 295 ms. Point out: the code of the computation did not change;
+what changed is who runs it. If someone asks why it is less than the 2.8× of
 before: protoCore 2.14.6 made the single-thread code faster (see
 hard-questions.md).
 
