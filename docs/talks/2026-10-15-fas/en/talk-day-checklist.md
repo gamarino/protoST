@@ -44,6 +44,11 @@
       indexers). Demo 2 shows times measured on the spot: with the machine
       busy the speedup falls (1.6–3.2× measured on 12/10 with an editor's
       indexer using the CPU, instead of about 3.8×).
+- [ ] Laptop plugged in and the power profile set to performance
+      (`powerprofilesctl set performance`). On battery with the balanced
+      profile the 12-actor half is power-limited: on 12/10 on DEV12, with the
+      machine idle, demo 2 showed 1.9–3.7× (median ≈2.4×) instead of about
+      3.8×. Check with `cat /sys/class/power_supply/*/online` (1 = plugged in).
 - [ ] Terminal: large font (≥ 20 pt), light or dark background depending on
       the projector, full-screen window.
 - [ ] `cd` to the demos folder; have `less 01-familiar-code.st` ready to show
