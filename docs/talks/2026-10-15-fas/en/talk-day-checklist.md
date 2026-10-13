@@ -44,12 +44,12 @@
       indexers). Demo 2 shows times measured on the spot: with the machine
       busy the speedup falls (1.6–3.2× measured on 12/10 with an editor's
       indexer using the CPU, instead of about 3.8×).
-- [ ] Laptop plugged in and the power profile set to performance
-      (Settings → Power, or `powerprofilesctl set performance` where it is
-      installed). On battery with the balanced
-      profile the 12-actor half is power-limited: on 12/10 on DEV12, with the
-      machine idle, demo 2 showed 1.9–3.7× (median ≈2.4×) instead of about
-      3.8×. Check with `cat /sys/class/power_supply/*/online` (1 = plugged in).
+- [ ] Machine on AC power with the performance power mode, not the battery one
+      (Settings → Power; with TLP, `sudo tlp ac`; check with `tlp-stat -s` or
+      `cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor`). Under the
+      battery profile the 12-actor half is limited: on 12/10 on DEV12, idle
+      but with TLP applying its battery profile, demo 2 showed 1.9–3.7×
+      (median ≈2.4×) instead of about 3.8×.
 - [ ] Terminal: large font (≥ 20 pt), light or dark background depending on
       the projector, full-screen window.
 - [ ] `cd` to the demos folder; have `less 01-familiar-code.st` ready to show
