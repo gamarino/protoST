@@ -34,6 +34,8 @@ Tests are organised by language-reference section:
 
 The directive **must be the first line** of the `.st` file, written as a
 protoST comment (double-quoted). The runner reads it and strips the quotes.
+In an executable script whose first line is a `#!` interpreter line, the
+directive is the second line. The program runs with an empty standard input.
 
 | Directive | Meaning |
 |-----------|---------|

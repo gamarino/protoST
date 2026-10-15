@@ -8,7 +8,8 @@ exceptions, non-local return, actors and futures, modules, the standard
 library, and digital-twin patterns.
 
 Every example is **executed and verified**. Each carries an
-`"EXPECT: <text>"` directive on its first line — the same directive the
+`"EXPECT: <text>"` directive on its first line (the second in an
+executable script, after its `#!` line) — the same directive the
 conformance suite uses — so the whole tree doubles as a smoke layer and is
 registered with CTest (see [Running](#running) below).
 
@@ -128,6 +129,18 @@ compatibility (see [tutorial chapter 9](../docs/tutorial/09-standard-library.md)
 | `01_import_module.st` | `Import from:` — loading a `.st` file as a module, reaching its classes. |
 | `02_subclass_imported.st` | Subclassing an imported class; `super` reaching the module's implementation. |
 | `_geometry.st` | *(helper module — imported by the two examples above, not run standalone.)* |
+
+### `unix/` — scripts as commands
+
+Each file starts with `#!/usr/bin/env protost`, so once it is executable
+(`chmod +x`) it runs as a command and chains with other commands in a
+pipeline. The smoke layer runs them with an empty standard input;
+`tests/cli/test_cli_shebang.sh` runs them as commands in real pipelines.
+
+| File | Shows |
+|------|-------|
+| `column.st` | A filter: the N-th whitespace-separated field of each line of standard input (`./column.st 2`); a usage message on standard error and exit status 2 without N. |
+| `sum.st` | A filter: the total of the numbers on standard input; exit status 1 on a line that is not a number. `printf 'pump-1 12\npump-2 30\n' \| ./column.st 2 \| ./sum.st` prints 42. |
 
 ### `programs/` — complete small programs
 

@@ -170,3 +170,22 @@ TEST_CASE("Lexer::tokenize returns full sequence ending in EOF", "[lexer]") {
     REQUIRE(tokens[3].kind == TokenKind::Period);
     REQUIRE(tokens[4].kind == TokenKind::EndOfFile);
 }
+
+TEST_CASE("lexer skips a leading shebang line and keeps line numbers", "[lexer]") {
+    Lexer L("#!/usr/bin/env protost\nfoo #bar");
+    auto t1 = L.next();
+    REQUIRE(t1.kind == TokenKind::Identifier);
+    REQUIRE(t1.text == "foo");
+    REQUIRE(t1.line == 2);
+    REQUIRE(t1.column == 1);
+    auto t2 = L.next();
+    REQUIRE(t2.kind == TokenKind::Symbol);
+    REQUIRE(t2.text == "bar");
+    REQUIRE(L.next().kind == TokenKind::EndOfFile);
+
+    // A script that is only a shebang line is empty.
+    REQUIRE(Lexer("#!/usr/bin/env protost").next().kind == TokenKind::EndOfFile);
+
+    // Only the very first two bytes count: `#!` later is not a shebang.
+    REQUIRE(Lexer(" #!x").next().kind != TokenKind::EndOfFile);
+}

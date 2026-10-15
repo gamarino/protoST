@@ -207,7 +207,32 @@ leaves standard output alone. Reading standard input blocks until a line (or
 the end of input) arrives; `nextLine` answers nil at the end, which is what
 ends `linesDo:`.
 
-## 15.4 Arguments, environment and exit status
+### Scripts as commands
+
+A script whose first line is `#!/usr/bin/env protost` is an ordinary command
+once it is executable: the system starts `protost` on it, and protoST skips
+that line. Two such filters are in `examples/unix/`: `column.st N` prints the
+N-th field of each line, and `sum.st` adds the numbers it reads and prints the
+total. Each does one thing, so the shell composes them, with each other and
+with the standard tools:
+
+```console no-run
+$ cd examples/unix && chmod +x column.st sum.st
+$ printf 'pump-1 12\npump-2 30\n' | ./column.st 2 | ./sum.st
+42
+$ seq 1 100 | ./sum.st
+5050
+$ printf 'p1 4\np2 x\n' | ./column.st 2 | ./sum.st && echo done
+sum.st: line 2 is not a number: x
+```
+
+The last pipeline shows the exit status at work: `sum.st` reports the bad
+line on standard error and exits with status 1, so `&& echo done` does not
+run. A filter also stops when the program reading its output exits, so
+`./column.st 2 < big.log | head` ends as soon as `head` has its lines.
+`/usr/bin/env` looks `protost` up on `PATH`, so a script runs with whichever
+`protost` comes first there: an activated venv's, or the system one.
+
 
 `Smalltalk arguments` answers the words after the script's path on the
 command line, as an Array of Strings; `Smalltalk programPath` answers the

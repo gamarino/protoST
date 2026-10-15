@@ -18,7 +18,16 @@ bool isOperatorChar(char c) {
 }
 } // namespace
 
-Lexer::Lexer(std::string source) : source_(std::move(source)) {}
+Lexer::Lexer(std::string source) : source_(std::move(source)) {
+    // A Unix interpreter line (`#!/usr/bin/env protost`) makes a script
+    // directly executable. `#!` is never valid protoST at the start of a
+    // source, so the line is skipped. Its newline is left in place so every
+    // later token keeps its real line number in diagnostics.
+    if (source_.compare(0, 2, "#!") == 0) {
+        pos_ = source_.find('\n');
+        if (pos_ == std::string::npos) pos_ = source_.size();
+    }
+}
 
 void Lexer::advance() {
     if (pos_ >= source_.size()) return;

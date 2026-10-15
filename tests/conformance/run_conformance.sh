@@ -9,7 +9,8 @@
 # Usage:
 #   run_conformance.sh <path-to-protost> <test-file.st>
 #
-# Directive format (the directive MUST be the first line of the file, a
+# Directive format (the directive MUST be the first line of the file, or the
+# second when the first is a `#!` interpreter line; a
 # protoST comment beginning immediately after the opening double-quote):
 #
 #   "EXPECT: <text>"        the program must succeed (exit 0) and the last
@@ -54,7 +55,12 @@ TEST_DIR="$(cd "$(dirname "$FILE")" && pwd)"
 TEST_BASE="$(basename "$FILE")"
 
 # --- read the directive (first line) -------------------------------------
+# An executable script starts with an interpreter line (`#!/usr/bin/env
+# protost`); its directive is then on the second line.
 directive_line="$(head -n 1 "$FILE")"
+if [[ "$directive_line" == '#!'* ]]; then
+    directive_line="$(sed -n 2p "$FILE")"
+fi
 # strip a leading/trailing double-quote and surrounding whitespace
 directive="${directive_line#\"}"
 directive="${directive%\"}"
@@ -86,7 +92,7 @@ case "$directive" in
         expected="${expected#"${expected%%[![:space:]]*}"}"
         ;;
     *)
-        echo "FAIL: $FILE has no valid directive on its first line"
+        echo "FAIL: $FILE has no valid directive on its first line (second after #!)"
         echo "  first line was: $directive_line"
         exit 1
         ;;
@@ -113,8 +119,9 @@ trap 'exit 143' TERM
 
 # --- run the program (with the test's directory as the working dir) ------
 # A hung program fails instead of holding the suite (the CTest default is
-# 1500 s per test).
-out="$(cd "$TEST_DIR" && timeout "${CONFORMANCE_TIMEOUT:-60}" "$PROTOST" --print-last "$TEST_BASE" 2>"$err_file")"
+# 1500 s per test). Standard input is empty, so a filter that reads it ends
+# instead of waiting on the terminal.
+out="$(cd "$TEST_DIR" && timeout "${CONFORMANCE_TIMEOUT:-60}" "$PROTOST" --print-last "$TEST_BASE" </dev/null 2>"$err_file")"
 rc=$?
 err="$(cat "$err_file" 2>/dev/null)"
 

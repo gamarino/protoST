@@ -429,6 +429,9 @@ add_test(NAME cli_sigint
 add_test(NAME cli_inputs
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_inputs.sh $<TARGET_FILE:protost>)
 
+add_test(NAME cli_shebang
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_shebang.sh $<TARGET_FILE:protost>)
+
 add_test(NAME cli_actor_unobserved_error
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_actor_unobserved_error.sh $<TARGET_FILE:protost>)
 

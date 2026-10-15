@@ -98,7 +98,9 @@ change made on one side is seen by the other at its next read.
 Files, standard streams, the command line and other programs are in the
 kernel, with Pharo's names where Pharo has them (`'data.txt' asFileReference
 contents`, `writeStreamDo:`, `Stdio stdin nextLine`, `Smalltalk arguments`,
-`Smalltalk exit: 1`, `OSProcess run:arguments:`). Sockets and HTTP are
+`Smalltalk exit: 1`, `OSProcess run:arguments:`). A script whose first line
+is `#!/usr/bin/env protost` runs as a command and chains in pipelines
+([`examples/unix/`](examples/unix/)). Sockets and HTTP are
 modules: `Import from: 'net'` (TCP with a TLS client, UDP) and
 `Import from: 'http'` (an HTTP/1.1 client for http and https, and a small
 server that handles each connection on its own actor):

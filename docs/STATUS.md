@@ -79,6 +79,9 @@ are noted where useful.
 
 ### Lexer / parser
 - [x] Comments, identifiers, keyword tokens
+- [x] A leading `#!` interpreter line is skipped, so a script with
+      `#!/usr/bin/env protost` runs as a command; later line numbers are
+      unchanged *(unreleased)*
 - [x] Integer literals, float literals, character literals, string literals,
       symbol literals *(f1-complete)*
 - [x] Flat array-literal syntax `#( … )`

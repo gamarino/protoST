@@ -2408,6 +2408,7 @@ The runtime executable is `protost`.
 | `protost script.st [args...]` | Run `script.st`; only what the program prints is shown. The words after the script path are the program's own arguments (`Smalltalk arguments`, §12.11.3); the process exits with the status the program sets (`Smalltalk exit:`), 1 after an unhandled error, 0 otherwise. |
 | `protost --print-last script.st [args...]` | Run `script.st`, then print the value of its last top-level statement. Options go before the script path; everything after it is passed to the program. |
 | `protost - [args...]` | Read the script from standard input (also with `--print-last`); diagnostics call it `<stdin>`. |
+| `./script.st [args...]` | Run an executable script whose first line is `#!/usr/bin/env protost` ([§13.3](#133-scripts-as-commands)). |
 | `protost -e '<expr>'` | Evaluate the expression and print the result. |
 | `protost -i` | Start the interactive REPL. |
 | `protost -d script.st` | Run the script under the CLI debugger. |
@@ -2462,6 +2463,30 @@ A protoST runtime must be the **only** `STRuntime` in its process: a second
 protoCore's module provider and module cache are process-wide (D2, see
 [§14](#14-known-deviations)). The CLI always constructs exactly one, so this
 matters only to a program that embeds protoST.
+
+### 13.3 Scripts as commands
+
+When the first two bytes of a source file are `#!`, its first line is a Unix
+interpreter line and protoST skips it. A script that starts with
+
+```console no-run
+#!/usr/bin/env protost
+```
+
+and has execute permission (`chmod +x`) runs as a command, takes its
+arguments from `Smalltalk arguments`, and reports its result through its exit
+status (`Smalltalk exit:`, §12.11.3). Such scripts read `Stdio stdin` and
+write `Stdio stdout` (§12.11.1), so they chain in pipelines with each other
+and with the Unix tools. The line is skipped wherever source is read
+(`protost script.st`, `protost -`, `-d`, `--dump-ast`, imported modules), and
+the lines after it keep their numbers in diagnostics. `#!` anywhere other
+than the first two bytes is not special.
+
+On Linux the interpreter line passes at most one argument to `env`, so an
+interpreter option needs `env -S`: `#!/usr/bin/env -S protost --print-last`.
+Windows has no interpreter lines; there the script runs as
+`protost script.st`, and its first line is still skipped.
+`examples/unix/` holds two such filters.
 
 ---
 

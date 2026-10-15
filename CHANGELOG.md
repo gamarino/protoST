@@ -3,6 +3,23 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
+## Unreleased
+
+- **Scripts as commands.** A leading `#!` interpreter line is skipped, so a
+  script starting with `#!/usr/bin/env protost` and made executable runs as
+  a command and chains in pipelines with other commands (`LANGUAGE.md`
+  §13.3, tutorial §15.3). The lexer skips the line wherever source is read,
+  and keeps its newline, so diagnostics name the file's real line numbers.
+  Before, such a file failed to parse (`malformed symbol literal`).
+- **Examples:** `examples/unix/column.st` and `sum.st`, two executable
+  filters (`printf 'pump-1 12\npump-2 30\n' | ./column.st 2 | ./sum.st`
+  prints 42).
+- **Tests:** a lexer unit case, and `tests/cli/test_cli_shebang.sh`, which
+  runs the two examples as commands in real pipelines (exit statuses, an
+  early `head`). The conformance runner reads the directive from the second
+  line when the first is `#!`, and runs every program with an empty standard
+  input, so a filter never waits on the terminal.
+
 ## 0.6.5 — on protoCore 2.14.6 (2026-10-12)
 
 - **The `.deb` requires protoCore 2.14.6** (`protocore (>= 2.14.6)`), so a
