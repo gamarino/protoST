@@ -188,10 +188,10 @@ several cores without locks.
 
 ## Status
 
-Version 0.6.5 (2026-10-12); built from source it requires protoCore 2.11.0
+Version 0.6.6 (2026-10-17); built from source it requires protoCore 2.11.0
 or newer, its `.deb` requires 2.14.6, and CI builds it against protoCore
-2.14.6. `ctest` runs 1101 cases on Linux, all passing (2026-10-12): 544
-conformance programs, 461 unit tests, 42 examples, 32 CLI tests (including
+2.14.6. `ctest` runs 1105 cases on Linux, all passing (2026-10-17): 544
+conformance programs, 462 unit tests, 44 examples, 33 CLI tests (including
 the benchmark-harness self-test) and 22 documentation checks (every example
 with a stated result in 21 documents, plus the checker's self-test). Since 0.6.2 protoST lets protoCore's adaptive heap
 controller size the heap (budget: 75 % of physical memory or of the process
@@ -260,7 +260,7 @@ commands, and what differs on Windows, are in
 
 ## Installation
 
-protoST can be packaged with CPack. The 0.6.5 release has a Linux `.deb`
+protoST can be packaged with CPack. The 0.6.6 release has a Linux `.deb`
 attached to its GitHub release (below, with protoCore 2.14.6); other packages
 are built from source as shown below. Every package depends on
 [protoCore](https://github.com/numaes/protoCore) — install protoCore's package
@@ -288,11 +288,11 @@ the GitHub releases (or built as below):
 wsl --install -d Ubuntu-24.04        # in PowerShell, once
 # then, in the Ubuntu shell:
 wget https://github.com/numaes/protoCore/releases/download/v2.14.6/protoCore-2.14.6-Linux.deb
-wget https://github.com/gamarino/protoST/releases/download/v0.6.5/protost-0.6.5-Linux.deb
-sudo apt install ./protoCore-2.14.6-Linux.deb ./protost-0.6.5-Linux.deb
+wget https://github.com/gamarino/protoST/releases/download/v0.6.6/protost-0.6.6-Linux.deb
+sudo apt install ./protoCore-2.14.6-Linux.deb ./protost-0.6.6-Linux.deb
 ```
 
-These are the 0.6.5 release packages. Built from source, protoST 0.6.5 needs
+These are the 0.6.6 release packages. Built from source, protoST 0.6.6 needs
 protoCore 2.11.0 or later; the `.deb` was built against 2.14.6, the release
 to install with it, and declares `protocore (>= 2.14.6)` (an older protoCore package, such as the 2.6.2 that went with 0.5.0, is
 not enough: upgrade it with the command above).

@@ -14,9 +14,9 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Test suite:** 1101 `ctest` cases on Linux, 1101/1101 passing on
-  2026-10-12 (0.6.5, against protoCore 2.14.6 and protoIO 0.2.2): 544
-  conformance programs, 461 unit tests, 42 examples, 32 CLI tests (including
+- **Test suite:** 1105 `ctest` cases on Linux, 1105/1105 passing on
+  2026-10-17 (0.6.6, against protoCore 2.14.6 and protoIO 0.2.2): 544
+  conformance programs, 462 unit tests, 44 examples, 33 CLI tests (including
   the benchmark-harness self-test and the terminal test `cli_repl_console`)
   and 22 documentation checks (the examples with a stated result in 21
   documents, plus the checker's self-test). CI runs the same suite on Linux,
@@ -27,7 +27,7 @@ stable id and file it in the right bucket.
   but `cli_sigint` and tutorial chapter 15 (`docs/INSTALLATION.md`, "Windows
   (MSVC)"). `cli_concurrent_first_call` (S19) gates CI again since 0.6.3. The
   history of earlier counts is in `CHANGELOG.md`.
-- **protoCore:** 0.6.5 requires 2.11.0 or later (instance-variable
+- **protoCore:** 0.6.6 requires 2.11.0 or later (instance-variable
   write groups use `ProtoObject::setAttributes`, see *Object model*); its
   `.deb` is built against 2.14.6 and declares `protocore (>= 2.14.6)`, whose
   integer comparison, division and modulo no longer allocate and whose
@@ -51,11 +51,11 @@ stable id and file it in the right bucket.
   that a collection's pause no longer grows with the number of threads);
   precedence and
   details in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md) K5.
-- **Last verified:** 2026-10-12, by the test suite above (release 0.6.5;
+- **Last verified:** 2026-10-17, by the test suite above (release 0.6.6;
   its `.deb` was built in a clean Ubuntu 24.04 container with GCC 13 against
-  protoCore 2.14.6, with no compiler warning and the suite passing 1101/1101
+  protoCore 2.14.6, with no compiler warning and the suite passing 1105/1105
   there; installation checks in `CHANGELOG.md`; the same was done for 0.6.0
-  to 0.6.4). The 0.5.0 release (input and output, see
+  to 0.6.5). The 0.5.0 release (input and output, see
   [`docs/superpowers/specs/2026-09-29-io-design.md`](superpowers/specs/2026-09-29-io-design.md))
   was verified on 2026-09-29. The 0.4.0 audit before it (see
   [`docs/superpowers/specs/2026-09-28-presentable-protost-design.md`](superpowers/specs/2026-09-28-presentable-protost-design.md)
@@ -81,7 +81,7 @@ are noted where useful.
 - [x] Comments, identifiers, keyword tokens
 - [x] A leading `#!` interpreter line is skipped, so a script with
       `#!/usr/bin/env protost` runs as a command; later line numbers are
-      unchanged *(unreleased)*
+      unchanged *(0.6.6)*
 - [x] Integer literals, float literals, character literals, string literals,
       symbol literals *(f1-complete)*
 - [x] Flat array-literal syntax `#( … )`

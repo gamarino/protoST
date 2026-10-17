@@ -3,8 +3,13 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
-## Unreleased
+## 0.6.6 — scripts as commands (2026-10-17)
 
+- **Package:** the `.deb` is built in a clean Ubuntu 24.04 container with
+  GCC 13 against protoCore 2.14.6 and protoIO 0.2.2, and declares
+  `protocore (>= 2.14.6)`, as 0.6.5 did. `ctest`: 1105 cases (544
+  conformance programs, 462 unit tests, 44 examples, 33 CLI tests, 22
+  documentation checks), all passing there.
 - **Scripts as commands.** A leading `#!` interpreter line is skipped, so a
   script starting with `#!/usr/bin/env protost` and made executable runs as
   a command and chains in pipelines with other commands (`LANGUAGE.md`

@@ -739,7 +739,7 @@ of [`docs/ROADMAP.md`](../ROADMAP.md). It is not implemented.
 
 ## 15.11 Limits
 
-What 0.6.5 does not do:
+What 0.6.6 does not do:
 
 - **HTTP:** no HTTP/2, no WebSockets, no keep-alive (one request per
   connection), no TLS in `HTTPServer` (TLS is client-side only), no proxy
