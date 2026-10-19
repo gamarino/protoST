@@ -44,7 +44,7 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
     // hot keys are now pulled from the Bootstrap cache.
     const proto::ProtoString* bcKey  = rt.bootstrap().sym.bcPtr;
     const proto::ProtoString* capKey = rt.bootstrap().sym.captured;
-    auto* bcPtrObj = block->getAttribute(ctx, bcKey);
+    auto* bcPtrObj = block->getOwnAttributeDirect(ctx, bcKey);
     if (!bcPtrObj || bcPtrObj == PROTO_NONE) {
         // Not a block: evaluate it the way Smalltalk does, by sending it
         // value / value: / value:value: (so a Symbol stands for a block:
@@ -70,7 +70,7 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
     // F3: thread the captured dict through. PUSH_BLOCK in F3-C5 will install
     // it on the closure under "__captured__"; until then this read may return
     // nil/nullptr and the block runs with no captured environment.
-    const proto::ProtoObject* capDict = block->getAttribute(ctx, capKey);
+    const proto::ProtoObject* capDict = block->getOwnAttributeDirect(ctx, capKey);
     if (capDict == PROTO_NONE) capDict = nullptr;
 
     // Track 1 slice 1: thread the block's home method activation through to
@@ -82,7 +82,7 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
     // bubbles past invokeBlock to the parent engine's runLoop.
     const proto::ProtoString* homeKey = rt.bootstrap().sym.homeFrame;
     proto::proto_ulong homeFrameId = 0;
-    const proto::ProtoObject* homeObj = block->getAttribute(ctx, homeKey);
+    const proto::ProtoObject* homeObj = block->getOwnAttributeDirect(ctx, homeKey);
     if (homeObj && homeObj != PROTO_NONE)
         homeFrameId = static_cast<proto::proto_ulong>(homeObj->asLong(ctx));
 
@@ -93,7 +93,7 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
     // receiver. Absent for blocks not built by PUSH_BLOCK — fall back to
     // PROTO_NONE.
     const proto::ProtoString* blkSelfKey = rt.bootstrap().sym.blockSelf;
-    const proto::ProtoObject* blkSelf = block->getAttribute(ctx, blkSelfKey);
+    const proto::ProtoObject* blkSelf = block->getOwnAttributeDirect(ctx, blkSelfKey);
     if (!blkSelf || blkSelf == PROTO_NONE) blkSelf = PROTO_NONE;
 
     ExecutionEngine eng(rt);
@@ -113,7 +113,7 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
 int blockArgCount(proto::ProtoContext* ctx, const proto::ProtoObject* block) {
     if (!block || block == PROTO_NONE) return -1;
     const proto::ProtoString* bcKey = bcPtrKey(ctx);
-    const proto::ProtoObject* bcPtrObj = block->getAttribute(ctx, bcKey);
+    const proto::ProtoObject* bcPtrObj = block->getOwnAttributeDirect(ctx, bcKey);
     if (!bcPtrObj || bcPtrObj == PROTO_NONE) return -1;
     const BytecodeModule* sub =
         reinterpret_cast<const BytecodeModule*>(bcPtrObj->asLong(ctx));

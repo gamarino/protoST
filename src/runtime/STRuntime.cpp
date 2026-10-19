@@ -1107,8 +1107,9 @@ STRuntime::materialize(proto::ProtoContext* ctx, const BytecodeModule& m,
             // the selector argument of `__installMethod:as:`); an ordinary
             // heap ProtoString key would be reachable from no GC root once it
             // left the operand stack and could be reclaimed mid-program.
-            return reinterpret_cast<const proto::ProtoObject*>(
-                proto::ProtoString::createSymbol(ctx, m.constSymbol(i).c_str()));
+            // The module caches the interned symbol (constSym), so a literal
+            // in a loop does not take the SymbolTable shard lock each time.
+            return reinterpret_cast<const proto::ProtoObject*>(m.constSym(ctx, i));
         }
         case K::Char:
             // A character literal is a Character: protoCore's embedded
@@ -1938,7 +1939,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
         auto* selector = msg->getAttribute(ctx, selKey);
         auto* argsList = msg->getAttribute(ctx, argsKey);
         auto* future   = msg->getAttribute(ctx, futKey);
-        auto* wrapped  = actor->getAttribute(ctx, wrappedKey);
+        auto* wrapped  = actor->getOwnAttributeDirect(ctx, wrappedKey);
 
         auto* argsListAsList = argsList ? argsList->asList(ctx) : nullptr;
         int argc = argsListAsList
@@ -1967,7 +1968,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             auto* method = wrapped ? wrapped->getAttribute(ctx, selStr) : nullptr;
             const proto::ProtoObject* result = nullptr;
 
-            auto* bcPtrObj = method ? method->getAttribute(ctx, bcKey) : nullptr;
+            auto* bcPtrObj = method ? method->getOwnAttributeDirect(ctx, bcKey) : nullptr;
             if (bcPtrObj && bcPtrObj != PROTO_NONE) {
                 const BytecodeModule* sub =
                     reinterpret_cast<const BytecodeModule*>(bcPtrObj->asLong(ctx));
@@ -1975,7 +1976,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                 methodArgs.reserve(static_cast<size_t>(argc) + 1);
                 methodArgs.push_back(wrapped);
                 for (int i = 0; i < argc; ++i) methodArgs.push_back(args[i]);
-                auto* capDict = method->getAttribute(ctx, capKey);
+                auto* capDict = method->getOwnAttributeDirect(ctx, capKey);
                 if (capDict == PROTO_NONE) capDict = nullptr;
                 SCHED_DIAG("drainOne USER-METHOD ENTER actor=" << actor);
                 ExecutionEngine subEng(*this);
@@ -2280,7 +2281,7 @@ bool STRuntime::isActor(proto::ProtoContext* ctx,
     if (!obj || obj == PROTO_NONE) return false;
     const proto::ProtoString* wrappedKey =
         impl_->bootstrap.sym.wrapped;
-    auto* w = obj->getAttribute(ctx, wrappedKey);
+    auto* w = obj->getOwnAttributeDirect(ctx, wrappedKey);
     return (w != nullptr && w != PROTO_NONE);
 }
 
