@@ -167,6 +167,11 @@ and CPython 3.14.0 on the same machine. Earlier reports in
   runs 2.5× faster on four workers than on one and 2.9× on six, with no
   ceiling up to six. The talk's demo 2, on an idle machine, prints a median of 2.4× (2.1-2.6):
   its one-thread half takes about 0.72 s, its twelve actors about 0.29 s.
+- protoCore 2.14.7 against 2.14.6 (2026-10-19, the same binary on a fresh copy of
+  each library per run, three rounds; the write path changed): the comparable
+  suite's ratios to CPython move by -1.3 % (geomean of 7), all within the A/A
+  spread; an instance-variable write costs 852 cycles against 935 (-9 %, A/A
+  5 %).  Details: [protoCore's report](https://github.com/numaes/protoCore/blob/master/docs/reports/2026-10-18-write-path.md).
 - protoCore 2.14.6 against 2.14.5 (idle machine, 2026-10-12, late evening): demo 2's
   one-thread half 47 % faster and its twelve actors 38 % faster (integer
   comparison and modulo no longer allocate), so the ratio it prints *falls*
