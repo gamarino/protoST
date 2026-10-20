@@ -23,8 +23,8 @@ name: CI
 # nightly schedule.  A pinned ref makes a red pull request unambiguous.  The
 # schedule keeps the integration signal separate, and the summary always records
 # the protoCore commit actually used.  The `test` job runs twice: against the
-# pinned release (2.14.6) and against the declared minimum (2.11.0, the floor
-# entry -- this repository's only floor job; it stays on 2.11.0 on the schedule).
+# pinned release (3.0.0) and against the declared minimum (3.0.0, the floor
+# entry -- this repository's only floor job; it stays on 3.0.0 on the schedule).
 #
 # TWO BUGS OF THIS REPOSITORY'S OWN SHAPE THIS FILE HAS TO HANDLE:
 #
@@ -63,10 +63,11 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  # protoCore 2.14.6 (tag v2.14.6, a6400cd), SOVERSION 3: what every push and
-  # pull request builds against, except the floor entry of the `test` job
-  # below, which builds the declared minimum. Bump deliberately.
-  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'a6400cdc4947551a22056f07f6347ce9bb0abb23' }}
+  # protoCore 3.0.0 (branch feature/args-calling-convention, cf52f9f),
+  # SOVERSION 4: what every push and pull request builds against; it is also
+  # the declared minimum, which the floor entry of the `test` job builds.
+  # Bump deliberately.
+  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'cf52f9f5056919bb07326afc7159d5b3d78c03a3' }}
   # The test excluded from the gate, run in the `non-gating` job:
   #   F6 v2 T7: two actors ...    a wall-clock proof of parallelism: two 200 ms
   #                               sleeps must finish inside 350 ms
@@ -92,17 +93,16 @@ jobs:
       matrix:
         include:
           - name: Build and test suite
-            # Empty: env.PROTOCORE_REF (2.14.6, or master on the schedule).
+            # Empty: env.PROTOCORE_REF (3.0.0, or master on the schedule).
             protocore_ref: ''
           # THE FLOOR JOB, the only one in this repository (cross-platform.yml
-          # builds 2.14.6 on macOS and Windows). protoCore 2.11.0 (tag v2.11.0,
-          # 69b56af), SOVERSION 3: PROTOCORE_MIN_VERSION in CMakeLists.txt,
-          # where ProtoObject::setAttributes (instance-variable write groups)
-          # first exists. Built on every event, the
+          # builds 3.0.0 on macOS and Windows). protoCore 3.0.0 (cf52f9f),
+          # SOVERSION 4: PROTOCORE_MIN_VERSION in CMakeLists.txt (a thread's
+          # method receives ProtoArguments). Built on every event, the
           # schedule included, so a change that needs a newer protoCore is
           # caught before the declared minimum becomes a lie.
-          - name: Build and test suite (protoCore 2.11.0, the declared minimum)
-            protocore_ref: 69b56afeee00d843d74f8e67d3add317bc1ce5d3
+          - name: Build and test suite (protoCore 3.0.0, the declared minimum)
+            protocore_ref: cf52f9f5056919bb07326afc7159d5b3d78c03a3
     steps:
       - name: Check out protoST
         uses: actions/checkout@v4

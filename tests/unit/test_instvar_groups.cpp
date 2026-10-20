@@ -384,8 +384,8 @@ std::atomic<long> gMidway{0};
 // spinning). At the top of an iteration the previous snapshot is dead and the
 // shared object is a global, so the precondition of safepoint() holds.
 const proto::ProtoObject* snapshotReader(proto::ProtoContext* c, const proto::ProtoObject*,
-                                         const proto::ParentLink*, const proto::ProtoList*,
-                                         const proto::ProtoSparseList*) {
+                                         const proto::ParentLink*, const proto::ProtoArguments*,
+                                         const proto::ProtoKeywordArguments*) {
     while (!gWriterDone.load(std::memory_order_acquire)) {
         c->safepoint();
         const proto::ProtoSparseList* snap = gShared->getOwnAttributes(c);

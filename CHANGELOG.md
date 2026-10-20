@@ -5,6 +5,14 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+- **Built against protoCore 3.0.0** (SOVERSION 4), now the declared minimum:
+  protoCore's methods receive their arguments as `ProtoArguments` /
+  `ProtoKeywordArguments` descriptors (protoCore
+  `docs/CALLING_CONVENTION.md`).  protoST's primitives have their own calling
+  convention, so only the three thread entry points (`STRuntime`'s workers,
+  the DAP server's thread, a unit test) change signature.  CI pins protoCore
+  3.0.0 on every job.
+
 - **Performance: inlined blocks do not capture.** The bodies of `ifTrue:`,
   `whileTrue:` and `to:do:` that the compiler inlines no longer count as
   capture scopes, so the temporaries they use stay in the frame instead of

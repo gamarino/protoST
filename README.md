@@ -225,11 +225,13 @@ known deviations from Smalltalk-80 and the open bugs are tracked in
 
 ## Getting started
 
-protoST depends on [protoCore](https://github.com/numaes/protoCore) 2.11.0 or
-newer (below 3.0), which must be built first, on
+protoST depends on [protoCore](https://github.com/numaes/protoCore) 3.0.0 or
+newer (below 4.0), which must be built first, on
 [protoIO](https://github.com/gamarino/protoIO) 0.2.2 or a later 0.2.x at build time (a sibling
 checkout `../protoIO`, or its `protoio-dev` package; it is linked statically),
-and on OpenSSL (`libssl-dev`) and libreadline. 2.11.0 is a hard floor: runs of
+and on OpenSSL (`libssl-dev`) and libreadline. 3.0.0 is a hard floor (a
+thread's method receives its arguments as `ProtoArguments`); 2.11.0 already was
+one before it: runs of
 instance-variable assignments are published as one version with
 `ProtoObject::setAttributes`, which protoCore introduced there; the sources
 also use the portable 64-bit integer names (`proto::proto_long`) of 2.7.0, and

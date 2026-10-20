@@ -39,8 +39,10 @@ locally (2026-10-12) against protoCore 2.14.6.
 - **OpenSSL** development files (`libssl-dev` on Debian/Ubuntu,
   `openssl-devel` on Fedora/RHEL), required by protoIO for TLS in the `net`
   and `http` modules. The Debian package of protoST depends on `libssl3`.
-- **protoCore 2.11.0 or newer, below 3.0**, installed, with its CMake package
-  configuration. 2.11.0 is required since instance-variable write groups:
+- **protoCore 3.0.0 or newer, below 4.0**, installed, with its CMake package
+  configuration. 3.0.0 is required since a thread's method receives its
+  arguments as `ProtoArguments` (protoCore's descriptor calling convention);
+  2.11.0 was already required since instance-variable write groups:
   a run of assignments to instance variables is published as one version
   with `ProtoObject::setAttributes`, which first exists there. Before that,
   2.7.0 was required since the Windows port: the sources spell

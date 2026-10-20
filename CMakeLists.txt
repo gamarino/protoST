@@ -84,10 +84,12 @@ endif()
 # brought ProtoMap, the hashed-collection helper and ProtoMPSCQueue; 2.6.0 the
 # process-global mutable table.) The ceiling is the next major, because
 # protoCore's major version and its soname move together.
-set(PROTOCORE_MIN_VERSION      "2.11.0")
-set(PROTOCORE_MIN_VERSION_FULL "2.11.0")
-set(PROTOCORE_NEXT_MAJOR       "3.0.0")
-set(PROTOCORE_ABI_SOVERSION    "3")
+# 3.0.0: methods receive their arguments as ProtoArguments /
+# ProtoKeywordArguments descriptors (protoCore docs/CALLING_CONVENTION.md).
+set(PROTOCORE_MIN_VERSION      "3.0.0")
+set(PROTOCORE_MIN_VERSION_FULL "3.0.0")
+set(PROTOCORE_NEXT_MAJOR       "4.0.0")
+set(PROTOCORE_ABI_SOVERSION    "4")
 option(PROTOCORE_REQUIRE_PACKAGE
     "Require an installed protoCore CMake package; never fall back to ../protoCore" OFF)
 

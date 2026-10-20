@@ -275,8 +275,8 @@ private:
         proto::ProtoContext* ctx,
         const proto::ProtoObject* /*self*/,
         const proto::ParentLink* /*parentLink*/,
-        const proto::ProtoList* args,
-        const proto::ProtoSparseList* /*kwargs*/) {
+        const proto::ProtoArguments* args,
+        const proto::ProtoKeywordArguments* /*kwargs*/) {
         if (!args || args->getSize(ctx) < 1) return PROTO_NONE;
         const proto::ProtoObject* first = args->getAt(ctx, 0);
         const proto::ProtoExternalPointer* ep =
