@@ -3,6 +3,23 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
+## Unreleased
+
+- **Performance: inlined blocks do not capture.** The bodies of `ifTrue:`,
+  `whileTrue:` and `to:do:` that the compiler inlines no longer count as
+  capture scopes, so the temporaries they use stay in the frame instead of
+  the method's mutable captured dictionary. A `to:do:` whose loop variable
+  shadows a captured temporary hides it for the body only. Two conformance
+  programs pin the semantics; `test_cli_gc_recursion_reclaims` now
+  allocates an Array per call, since `fib` itself no longer allocates.
+- **Performance: the send path.** Engine markers are read as own
+  attributes, interned symbols are not pinned, frame ids come from a
+  per-thread block, the bootstrap and debugger are engine members.
+- **Measured** (`benchmarks/reports/2026-10-20-send-path-inline-captures.md`,
+  protoCore 2.14.8, against 0.6.6 on 2.14.7): geomean ratio to CPython
+  3.25× -> 1.92×; `fib` 8.9× -> 2.15×, `attr_lookup` 4.2× -> 1.28×,
+  `range_iterate` 2.2× -> 1.03×; `parallel_speedup` 2.05× -> 2.63×.
+
 ## 0.6.6 — scripts as commands (2026-10-17)
 
 - **Package:** the `.deb` is built in a clean Ubuntu 24.04 container with

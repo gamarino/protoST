@@ -145,28 +145,41 @@ now.
 Synthetic workloads on one notebook (AMD Ryzen 5 5500U, 6 cores / 12
 threads), every benchmark verifying its result. The current figures come
 from
-[`benchmarks/reports/2026-10-12-protocore-2.14.6.md`](benchmarks/reports/2026-10-12-protocore-2.14.6.md):
-the protoST release binary on protoCore 2.14.6 against the same binary on
-2.14.5, medians of 14 interleaved runs with A/A pairs for the noise floor,
-and CPython 3.14.0 on the same machine. Earlier reports in
-`benchmarks/reports/` give the history (0.6.2's adaptive heap controller:
-[`2026-10-12-adaptive-heap-default.md`](benchmarks/reports/2026-10-12-adaptive-heap-default.md)).
+[`benchmarks/reports/2026-10-20-send-path-inline-captures.md`](benchmarks/reports/2026-10-20-send-path-inline-captures.md):
+`main` after the send-path and inlined-block changes, Release, on protoCore
+2.14.8, three rounds of `benchmarks/run_benchmarks.py` on a fresh copy of the
+library each, against CPython 3.14.0 on the same machine; the baseline is
+0.6.6 on protoCore 2.14.7 (2026-10-18). Earlier reports in
+`benchmarks/reports/` give the history.
 
-- Start-up: 25 ms to evaluate one expression; CPython 32-35 ms.
+- Start-up: 25 ms to evaluate one expression; CPython 31 ms.
 - Single-threaded against CPython, same algorithm, same N and same verified
-  result. Whole-process time is 0.9× (string concatenation) to 21-22×
-  (exception signalling) CPython's, geometric mean 3.2-3.3× in two runs; at
-  these small N start-up is a large share of every time. With each
-  runtime's start-up subtracted, the work itself takes from about 4-7×
-  CPython's time (integer loop) to about 30-35× (`fib`, recursive method
-  dispatch) and 55-64× (exception signalling), geometric mean between 14×
-  and 20× depending on the run (the subtraction is sensitive to noise at
-  these N).
-- Parallel: twelve CPU-bound actors (`parallel_speedup`) run 2.8× faster
-  with the default pool than on one worker. `saturation_big` (32 actors)
-  runs 2.5× faster on four workers than on one and 2.9× on six, with no
-  ceiling up to six. The talk's demo 2, on an idle machine, prints a median of 2.4× (2.1-2.6):
-  its one-thread half takes about 0.72 s, its twelve actors about 0.29 s.
+  result, whole-process time (ratio > 1: protoST is slower):
+
+  | Benchmark | protoST ms | CPython ms | Ratio | 0.6.6 / 2.14.7 |
+  |---|---:|---:|---:|---:|
+  | `int_sum_loop` | 47.7 | 33.7 | 1.41× | 1.41× |
+  | `fib` | 89.9 | 41.9 | 2.15× | 8.91× |
+  | `list_append` | 47.1 | 32.0 | 1.51× | 1.66× |
+  | `str_concat` | 28.1 | 30.6 | 0.92× | 0.95× |
+  | `attr_lookup` | 54.9 | 42.6 | 1.28× | 4.16× |
+  | `range_iterate` | 35.8 | 34.4 | 1.03× | 2.24× |
+  | `exception_latency` | 863.5 | 49.6 | 17.29× | 20.65× |
+  | **Geomean** | | | **1.92×** | **3.25×** |
+
+  The gains come from the compiler: the bodies of `ifTrue:`, `whileTrue:`
+  and `to:do:` that it inlines no longer box the temporaries they use in
+  the method's mutable captured dictionary, so `fib` runs 4× faster,
+  `attr_lookup` 2.9× and `range_iterate` 2×. At these small N start-up is
+  a large share of every time; with each runtime's start-up subtracted the
+  work itself takes 2.3× (`attr_lookup`, `range_iterate`, `str_concat`) to
+  4.7-4.9× (`int_sum_loop`, `fib`) and 12× (`list_append`) CPython's time,
+  and 42× for exception signalling (C++ unwinding, by design).
+- Parallel: twelve CPU-bound actors (`parallel_speedup`) run 2.6× faster
+  with the default pool than on one worker (2.05× before). `saturation_big`
+  (32 actors) runs 3.2× faster on four workers than on one and 3.5× on
+  five (2.7× and 2.8× before); six workers measured 3.3× on a desktop with
+  other work running, so the peak is not settled.
 - protoCore 2.14.7 against 2.14.6 (2026-10-19, the same binary on a fresh copy of
   each library per run, three rounds; the write path changed): the comparable
   suite's ratios to CPython move by -1.3 % (geomean of 7), all within the A/A
@@ -182,7 +195,8 @@ and CPython 3.14.0 on the same machine. Earlier reports in
   instructions. Under a fixed 640 MB cell limit, `(1 to: 500000) asArray`
   now peaks at 690 MB of RSS instead of 1,165 MB (`KNOWN_ISSUES.md` K5).
 - Since 0.6.2 protoST lets protoCore's adaptive controller size the heap:
-  against 0.6.1's fixed limit (the 0.6.2 report above), actor workloads ran 16-43 % faster with a
+  against 0.6.1's fixed limit
+  ([`2026-10-12-adaptive-heap-default.md`](benchmarks/reports/2026-10-12-adaptive-heap-default.md)), actor workloads ran 16-43 % faster with a
   fifth to a half of the peak memory and pauses of at most 0.27 ms, but
   **peak memory is no longer capped** (an allocation-bound loop peaked at
   0.88-3.5 GB). Set `PROTOCORE_HEAP_LIMIT_CELLS` when a process must stay
