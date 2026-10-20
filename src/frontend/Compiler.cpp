@@ -118,6 +118,14 @@ std::unordered_set<std::string> freeVarsOf(const ScopeWalker& sw) {
     return out;
 }
 
+// The free variables of an inlined block, split by who needs them. A name
+// the body uses directly belongs to the enclosing scope as if written there;
+// a name a real block nested in the body needs still has to be captured.
+struct InlinedFree {
+    std::unordered_set<std::string> direct;
+    std::unordered_set<std::string> inner;
+};
+
 // Compute the captured set of a scope:
 //   declared ∩ innerNeeds. These are this scope's bindings that some inner
 //   block referenced and that therefore must live in the captured dict.
@@ -127,6 +135,50 @@ std::unordered_set<std::string> capturedOf(const ScopeWalker& sw) {
         if (sw.innerNeeds.count(n) != 0) out.insert(n);
     }
     return out;
+}
+
+// Walk a Block node as a scope of its own and record its captured set.
+// Returns the block's free variables; with `split`, also reports them split
+// into the ones its body uses directly and the ones nested blocks need (for
+// a block the compiler inlines, see the KeywordSend case of walkNode).
+std::unordered_set<std::string> walkBlockScope(const Node& n, const ScopeWalker& cur,
+                                               Compiler::ScopeAnalysis& out,
+                                               const ClassMap* classes,
+                                               InlinedFree* split = nullptr) {
+    ScopeWalker blockScope;
+    blockScope.isBlock = true;
+    // D22: a block sees the enclosing method's instance variables —
+    // thread the set through so an ivar referenced inside the block
+    // is excluded from the block's free vars. A block parameter or
+    // temporary that reuses an ivar's name hides it in this subtree.
+    blockScope.instVars = cur.instVars;
+    std::unordered_set<std::string> visibleIvars;
+    if (cur.instVars) {
+        for (const auto& name : n.stringList) {
+            if (!cur.instVars->count(name)) continue;
+            if (blockScope.instVars == cur.instVars) {
+                visibleIvars = *cur.instVars;
+                blockScope.instVars = &visibleIvars;
+            }
+            visibleIvars.erase(name);
+        }
+    }
+    // n.stringList holds: nArgs args followed by locals.
+    for (const auto& name : n.stringList) {
+        blockScope.declared.insert(name);
+    }
+    walkBlockBody(n, blockScope, out, classes);
+    // Record this block's captured set under its node pointer.
+    out.capturedByScope[&n] = capturedOf(blockScope);
+    if (split) {
+        auto free = [&](const std::string& r) {
+            return blockScope.declared.count(r) == 0
+                && !(blockScope.instVars && blockScope.instVars->count(r) != 0);
+        };
+        for (const auto& r : blockScope.directRefs) if (free(r)) split->direct.insert(r);
+        for (const auto& r : blockScope.innerNeeds) if (free(r)) split->inner.insert(r);
+    }
+    return freeVarsOf(blockScope);
 }
 
 // Walk a single AST node, updating the current scope walker. When a nested
@@ -166,35 +218,63 @@ void walkNode(const Node& n, ScopeWalker& cur,
         }
 
         case NodeKind::Block: {
-            // Open a fresh scope for the block.
-            ScopeWalker blockScope;
-            blockScope.isBlock = true;
-            // D22: a block sees the enclosing method's instance variables —
-            // thread the set through so an ivar referenced inside the block
-            // is excluded from the block's free vars. A block parameter or
-            // temporary that reuses an ivar's name hides it in this subtree.
-            blockScope.instVars = cur.instVars;
-            std::unordered_set<std::string> visibleIvars;
-            if (cur.instVars) {
-                for (const auto& name : n.stringList) {
-                    if (!cur.instVars->count(name)) continue;
-                    if (blockScope.instVars == cur.instVars) {
-                        visibleIvars = *cur.instVars;
-                        blockScope.instVars = &visibleIvars;
-                    }
-                    visibleIvars.erase(name);
+            // Bubble the block's free vars up to the enclosing scope's innerNeeds.
+            for (const auto& f : walkBlockScope(n, cur, out, classes))
+                cur.innerNeeds.insert(f);
+            return;
+        }
+
+        case NodeKind::KeywordSend: {
+            // A control send the compiler inlines: its block arguments are
+            // not closures, their bodies run in the enclosing scope.
+            const Compiler::InlineShape shape = Compiler::inlineShapeOf(n);
+            if (shape == Compiler::InlineShape::None) {
+                for (const auto& child : n.children)
+                    if (child) walkNode(*child, cur, out, nullptr, classes);
+                return;
+            }
+            const bool isToDo = shape == Compiler::InlineShape::ToDo;
+            std::vector<InlinedFree> blocks;
+            for (const auto& child : n.children) {
+                if (child->kind != NodeKind::Block) {
+                    walkNode(*child, cur, out, nullptr, classes);
+                    continue;
+                }
+                InlinedFree f;
+                walkBlockScope(*child, cur, out, classes, &f);
+                blocks.push_back(std::move(f));
+            }
+            // to:do: keeps the real block when an inner block captures its
+            // argument (the argument then needs a binding per iteration).
+            bool inlined = true;
+            if (isToDo) {
+                const Node& blk = *n.children[2];
+                const auto& cap = out.capturedByScope[&blk];
+                inlined = cap.count(blk.stringList[0]) == 0;
+            }
+            for (auto& f : blocks) {
+                if (inlined) {
+                    cur.directRefs.insert(f.direct.begin(), f.direct.end());
+                    cur.innerNeeds.insert(f.inner.begin(), f.inner.end());
+                } else {
+                    cur.innerNeeds.insert(f.direct.begin(), f.direct.end());
+                    cur.innerNeeds.insert(f.inner.begin(), f.inner.end());
                 }
             }
-            // n.stringList holds: nArgs args followed by locals.
-            for (const auto& name : n.stringList) {
-                blockScope.declared.insert(name);
+            if (inlined) out.inlinedSends.insert(&n);
+            return;
+        }
+
+        case NodeKind::Cascade: {
+            // A cascade's partial sends are emitted as plain sends (no
+            // inlining), so their block arguments are real blocks.
+            if (!n.children.empty() && n.children[0])
+                walkNode(*n.children[0], cur, out, nullptr, classes);
+            for (size_t i = 1; i < n.children.size(); ++i) {
+                if (!n.children[i]) continue;
+                for (const auto& arg : n.children[i]->children)
+                    if (arg) walkNode(*arg, cur, out, nullptr, classes);
             }
-            walkBlockBody(n, blockScope, out, classes);
-            // Record this block's captured set under its node pointer.
-            out.capturedByScope[&n] = capturedOf(blockScope);
-            // Bubble the block's free vars up to the enclosing scope's innerNeeds.
-            auto freeVars = freeVarsOf(blockScope);
-            for (const auto& f : freeVars) cur.innerNeeds.insert(f);
             return;
         }
 
@@ -1725,8 +1805,39 @@ void Compiler::emitDoYieldingLoop(BytecodeModule& m,
 // declarations — closure-analysis decisions cannot be retraced
 // post-hoc, and captured variables would need separate plumbing. The
 // caller falls back to a normal SEND_KEYWORD when inlining declines.
+Compiler::InlineShape Compiler::inlineShapeOf(const ast::Node& n) {
+    using ast::NodeKind;
+    if (n.kind != NodeKind::KeywordSend) return InlineShape::None;
+    auto isInlineableBlock = [](const ast::Node* b) -> bool {
+        return b && b->kind == NodeKind::Block
+            && b->intValue == 0
+            && b->stringList.empty();
+    };
+    if (n.children.size() == 2 && isInlineableBlock(n.children[1].get())
+        && (n.text == "ifTrue:" || n.text == "ifFalse:"))
+        return InlineShape::IfTrue;
+    if (n.children.size() == 3 && isInlineableBlock(n.children[1].get())
+        && isInlineableBlock(n.children[2].get())
+        && (n.text == "ifTrue:ifFalse:" || n.text == "ifFalse:ifTrue:"))
+        return InlineShape::IfTrueIfFalse;
+    if (n.text == "to:do:" && n.children.size() == 3
+        && n.children[2]->kind == NodeKind::Block
+        && n.children[2]->intValue == 1
+        && n.children[2]->stringList.size() == 1)
+        return InlineShape::ToDo;
+    if (n.children.size() == 2 && isInlineableBlock(n.children[0].get())
+        && isInlineableBlock(n.children[1].get())
+        && (n.text == "whileTrue:" || n.text == "whileFalse:"))
+        return InlineShape::WhileTrue;
+    return InlineShape::None;
+}
+
 bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
     using ast::NodeKind;
+    // Inline exactly the sends the closure analysis treated as inlined: it
+    // left the variables their blocks use out of the captured sets, so a
+    // send emitted as a real block here would find them uncaptured.
+    if (analysis_.inlinedSends.count(&n) == 0) return false;
     auto isInlineableBlock = [](const ast::Node* b) -> bool {
         return b && b->kind == NodeKind::Block
             && b->intValue == 0
@@ -1824,19 +1935,10 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
         && n.children[2]->kind == ast::NodeKind::Block
         && n.children[2]->intValue == 1
         && n.children[2]->stringList.size() == 1) {
+        // The analysis inlined this loop only if no inner block captures its
+        // argument (inlinedSends, checked above).
         const ast::Node* blk = n.children[2].get();
-        auto capIt = analysis_.capturedByScope.find(blk);
-        bool argIsCaptured = (capIt != analysis_.capturedByScope.end()
-                              && capIt->second.count(blk->stringList[0]) != 0);
-        // The inlined loop variable is bound through the enclosing scope's
-        // `slots`, but isCaptured() consults a scope's capturedNames before
-        // its slots. If the enclosing scope captures a variable of the same
-        // name, body references to the loop variable would resolve to that
-        // outer captured variable instead. Keep the real block send there:
-        // its argument is then a distinct binding, as the source says.
-        bool shadowsCaptured =
-            scopes_.back().capturedNames.count(blk->stringList[0]) != 0;
-        if (!argIsCaptured && !shadowsCaptured) {
+        {
             // Reserve fresh internal slots — mangled with nextSlot so nested
             // to:do: in the same scope produce distinct names.
             // `s` stays valid across the emission below, which may push
@@ -1857,6 +1959,12 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
             int savedSlot = (savedIt != s.slots.end()) ? savedIt->second : -1;
             bool hadBinding = (savedIt != s.slots.end());
             s.slots[iterName] = slotI;
+            // isCaptured() reads a scope's capturedNames before its slots, so
+            // a captured variable of the enclosing scope with the loop
+            // variable's name would win over the slot. In the body the name
+            // means the loop variable (no inner block captures it, or the
+            // loop would not be inlined): hide the outer one meanwhile.
+            const bool hidesCaptured = s.capturedNames.erase(iterName) != 0;
             inlinedLoopArgs_.emplace_back(&s, iterName);
             // loopTest:
             size_t loopTestInstrIdx = m.instrStartPc().size();
@@ -1892,6 +2000,7 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
             m.patchArg(jExitBytePos, static_cast<uint8_t>(exitOffset));
             // Restore the user's iter-var binding.
             inlinedLoopArgs_.pop_back();
+            if (hidesCaptured) s.capturedNames.insert(iterName);
             if (hadBinding) s.slots[iterName] = savedSlot;
             else            s.slots.erase(iterName);
             // to:do: returns the receiver (the start integer); push it.

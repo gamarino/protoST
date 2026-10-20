@@ -39,7 +39,17 @@ public:
         std::unordered_map<const ast::Node*, std::unordered_set<std::string>> capturedByScope;
         // Top-level captured names (module scope) — keyed by nullptr.
         std::unordered_set<std::string> moduleCaptured;
+        // The control sends (ifTrue:, whileTrue:, to:do:, ...) whose block
+        // arguments the analysis treated as inlined: their bodies belong to
+        // the enclosing scope, so a variable they use is not captured unless
+        // a real block nested in them needs it. Emission inlines exactly
+        // these sends (tryEmitInlinedControl), so the two cannot disagree.
+        std::unordered_set<const ast::Node*> inlinedSends;
     };
+
+    // The control-send shape the compiler inlines, decided from the AST alone.
+    enum class InlineShape { None, IfTrue, IfTrueIfFalse, WhileTrue, ToDo };
+    static InlineShape inlineShapeOf(const ast::Node& send);
 
     // F4-U2: per-class metadata gathered by a pre-pass over the module's
     // top-level forms. Populated by collectClasses(mod) before emission.
