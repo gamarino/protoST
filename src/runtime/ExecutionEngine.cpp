@@ -153,6 +153,22 @@ namespace {
 // snapshot/restore that backs cooperative yield.
 std::atomic<proto::proto_ulong> g_nextFrameId{1};
 
+// Each thread takes ids from the global counter a block at a time, so a call
+// pays a thread-local increment instead of a read-modify-write on a cache
+// line shared by every worker thread. Ids stay process-globally unique; only
+// their order across threads changes, and nothing compares ids by order.
+constexpr proto::proto_ulong kFrameIdBlock = 4096;
+thread_local proto::proto_ulong t_nextFrameId  = 0;
+thread_local proto::proto_ulong t_frameIdLimit = 0;
+
+inline proto::proto_ulong nextFrameId() {
+    if (t_nextFrameId == t_frameIdLimit) {
+        t_nextFrameId  = g_nextFrameId.fetch_add(kFrameIdBlock, std::memory_order_relaxed);
+        t_frameIdLimit = t_nextFrameId + kFrameIdBlock;
+    }
+    return t_nextFrameId++;
+}
+
 // F6 v3 E3: per-frame slot geometry.
 //
 // The frame stack is backed by the engine context's automaticLocals (a flat,
@@ -373,7 +389,6 @@ ExecutionEngine::storeInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t
     // STORE_INSTVAR's write. The interned name is perennial; `val` is rooted
     // on the operand stack.
     auto* sym = f.m->ivSymbol(ctx, nameConst);
-    TransientPin pinSym(ctx, reinterpret_cast<const proto::ProtoObject*>(sym));
     const proto::ProtoObject* self = getSelf(f);
     if (!self || self == PROTO_NONE)
         throw std::runtime_error("STORE_INSTVAR self is null");
@@ -400,7 +415,8 @@ ExecutionEngine::flushInstVarGroup(proto::ProtoContext* ctx, Frame& f) {
 thread_local std::vector<std::vector<ExecutionEngine::Frame>>
     ExecutionEngine::framePool_;
 
-ExecutionEngine::ExecutionEngine(STRuntime& rt) : rt_(rt) {
+ExecutionEngine::ExecutionEngine(STRuntime& rt)
+    : rt_(rt), bs_(rt.bootstrap()), dbg_(rt.debugger()) {
     g_liveEngines.push_back(this);
     // Borrow a frame-stack buffer from the per-thread pool. The borrowed
     // vector keeps the capacity a previous engine grew it to, so
@@ -460,7 +476,7 @@ ExecutionEngine::pushFrame(const BytecodeModule* m,
     // own home" — a method or top-level frame returns from itself. A non-zero
     // homeFrameId is a block frame inheriting its creating method's home, so
     // an `^` inside it returns from that method.
-    fr.frameId     = g_nextFrameId.fetch_add(1, std::memory_order_relaxed);
+    fr.frameId     = nextFrameId();
     fr.homeFrameId = (homeFrameId == 0) ? fr.frameId : homeFrameId;
     // F6 v3 E5: the engine's slot capacity and the TransientPin scratch
     // geometry must agree — pushFrame is a member function so it can see the
@@ -549,10 +565,10 @@ const proto::ProtoObject* ExecutionEngine::doesNotUnderstand(
     const proto::ProtoString* dnuKey =
         proto::ProtoString::createSymbol(ctx, "doesNotUnderstand:");
     const proto::ProtoObject* holder =
-        (recv && recv != PROTO_NONE) ? recv : rt_.bootstrap().nilProto;
+        (recv && recv != PROTO_NONE) ? recv : bs_.nilProto;
     const proto::ProtoObject* handler = holder->getAttribute(ctx, dnuKey);
     if (handler && handler != PROTO_NONE) {
-        const proto::ProtoObject* bc = handler->getAttribute(ctx, rt_.bootstrap().sym.bcPtr);
+        const proto::ProtoObject* bc = handler->getOwnAttributeDirect(ctx, bs_.sym.bcPtr);
         if (bc && bc != PROTO_NONE) {
             bool understood = false;
             const proto::ProtoObject* a1[1] = { message };
@@ -560,7 +576,7 @@ const proto::ProtoObject* ExecutionEngine::doesNotUnderstand(
         }
     }
     const std::string text = "doesNotUnderstand: " + selector
-        + describeReceiverForDNU(ctx, recv, rt_.bootstrap().sym.className);
+        + describeReceiverForDNU(ctx, recv, bs_.sym.className);
     return signalMessageNotUnderstood(rt_, ctx, recv, message, text.c_str());
 }
 
@@ -597,7 +613,7 @@ bool ExecutionEngine::signalIfTooDeep(proto::ProtoContext* ctx, Frame& f,
     if (regionEnd <= kFrameRegionLimit - kOverflowReserve) return false;
     const std::string msg = "stack depth exceeded (" + std::to_string(frames_.size())
         + " frames in this activation chain)";
-    auto* r = signalErrorOfClass(rt_, ctx, rt_.bootstrap().errorProto, msg.c_str());
+    auto* r = signalErrorOfClass(rt_, ctx, bs_.errorProto, msg.c_str());
     push(f, r ? r : PROTO_NONE);
     return true;
 }
@@ -809,13 +825,13 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         Frame& f__ = frames_.back();                                            \
         const auto& bytes__ = f__.m->bytes();                                   \
         if (f__.pc + 1 >= bytes__.size()) goto L_OFF_END;                       \
-        if (rt_.debugger().attached()) {                                        \
-            auto dbgMode__ = rt_.debugger().mode();                             \
+        if (dbg_.attached()) {                                        \
+            auto dbgMode__ = dbg_.mode();                             \
             if (dbgMode__ != DebuggerRuntime::Mode::Free) {                     \
-                rt_.debugger().enterSession(rt_, ctx_, makeDebugStack(), "step");     \
+                dbg_.enterSession(rt_, ctx_, makeDebugStack(), "step");     \
             }                                                                   \
-            if (rt_.debugger().breakpoints().isSet(f__.m, f__.pc)) {            \
-                rt_.debugger().enterSession(rt_, ctx_, makeDebugStack(),              \
+            if (dbg_.breakpoints().isSet(f__.m, f__.pc)) {            \
+                dbg_.enterSession(rt_, ctx_, makeDebugStack(),              \
                                             "breakpoint");                      \
             }                                                                   \
         }                                                                       \
@@ -887,16 +903,16 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         // which case subsequent instructions run at full speed.
         // Calling enterSession directly (rather than throwing Halt) avoids
         // the cost of unwinding the C++ stack on every step.
-        auto dbgMode = rt_.debugger().mode();
-        if (rt_.debugger().attached() && dbgMode != DebuggerRuntime::Mode::Free) {
-            rt_.debugger().enterSession(rt_, ctx_, makeDebugStack(), "step");
+        auto dbgMode = dbg_.mode();
+        if (dbg_.attached() && dbgMode != DebuggerRuntime::Mode::Free) {
+            dbg_.enterSession(rt_, ctx_, makeDebugStack(), "step");
             // Session may have updated mode (e.g. user typed 'c'); fall
             // through to dispatch the next instruction.
         }
 
         // F2 location breakpoint: halt BEFORE executing the instruction at pc.
-        if (rt_.debugger().attached() && rt_.debugger().breakpoints().isSet(f.m, f.pc)) {
-            rt_.debugger().enterSession(rt_, ctx_, makeDebugStack(),
+        if (dbg_.attached() && dbg_.breakpoints().isSet(f.m, f.pc)) {
+            dbg_.enterSession(rt_, ctx_, makeDebugStack(),
                                         "breakpoint");
         }
 
@@ -1049,7 +1065,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 //    guards) up to the engine that owns the home frame.
                 if (!homeFrameAlive(f.homeFrameId)) {
                     auto* res = signalErrorOfClass(
-                        rt_, ctx, rt_.bootstrap().blockCannotReturnProto,
+                        rt_, ctx, bs_.blockCannotReturnProto,
                         "non-local return: home method has already returned");
                     // BlockCannotReturn is non-resumable, so signalErrorOfClass
                     // normally threw (UnwindToHandler to a catching `on:do:`,
@@ -1067,7 +1083,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // BlockClosure (a mutable child of the Block prototype) that
                 // carries an opaque pointer to the sub-module under
                 // attribute "__bc_ptr__".
-                auto* blkProto = rt_.bootstrap().blockProto;
+                auto* blkProto = bs_.blockProto;
                 auto* block = blkProto->newChild(ctx, /*isMutable=*/true);
                 // F6 v3 E5: `block` is a fresh mutable object held in a C++
                 // local across the fromUTF8String key interning (first call
@@ -1077,13 +1093,13 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // slot it is reachable from nowhere the collector traces.
                 TransientPin pinBlock(ctx, block);
                 const proto::ProtoString* bcKey =
-                    rt_.bootstrap().sym.bcPtr;
+                    bs_.sym.bcPtr;
                 const proto::ProtoString* capKey =
-                    rt_.bootstrap().sym.captured;
+                    bs_.sym.captured;
                 const proto::ProtoString* homeKey =
-                    rt_.bootstrap().sym.homeFrame;
+                    bs_.sym.homeFrame;
                 const proto::ProtoString* blkSelfKey =
-                    rt_.bootstrap().sym.blockSelf;
+                    bs_.sym.blockSelf;
                 auto* bcPtrObj = ctx->fromLong(
                     reinterpret_cast<long long>(&f.m->block(arg)));
                 // `bcPtrObj` is held across the setAttribute below — pin it.
@@ -1292,18 +1308,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // Selector symbol — interned once and cached on the module
                 // (constSym), not re-interned on every send.
                 auto* selSym = f.m->constSym(ctx, arg);
-                // `selSym` is an interned (perennial) ProtoString held in
-                // a bare C++ local for the ENTIRE remainder of this handler —
-                // across getAttribute walks, the actor-path allocations
-                // (newFuture / newChild / newList / appendLast / setAttribute),
-                // primitive dispatch, and pushFrame. None of those root it
-                // (the receiver and popped args stay rooted via their frame
-                // slots, but `selSym` is brand new and reachable from nowhere
-                // the GC traces). A GC cycle between here and the last use
-                // would reclaim it → use-after-free, observed as the deep-
-                // chain `doesNotUnderstand` (the known #5 bug). Pin it.
-                TransientPin pinSelSym(
-                    ctx, reinterpret_cast<const proto::ProtoObject*>(selSym));
+                // `selSym` needs no pin across the allocations below: an
+                // interned symbol is perennial (protoCore builds it outside
+                // every freelist, so no cycle can reclaim it). The pin this
+                // used to take dates from when the selector was a fresh,
+                // collectable string (the known #5 bug).
 
                 // F6-A4: actor fast-path. If the receiver is an actor (i.e.
                 // carries a __wrapped__ attribute installed by Object>>asActor),
@@ -1315,11 +1324,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // STRuntime::drainOne pulls a message from the mailbox.
                 if (rt_.isActor(ctx, recv) && !isActorLocalSelector(selStr)) {
                     const proto::ProtoString* msgSelKey =
-                        rt_.bootstrap().sym.selector;
+                        bs_.sym.selector;
                     const proto::ProtoString* msgArgsKey =
-                        rt_.bootstrap().sym.args;
+                        bs_.sym.args;
                     const proto::ProtoString* msgFutKey =
-                        rt_.bootstrap().sym.future;
+                        bs_.sym.future;
 
                     // Allocate a fresh pending Future.
                     // F6 v3 E5: `fut` is held in a C++ local across newChild,
@@ -1331,7 +1340,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // The actor that will settle this future: Future>>wait
                     // follows it to detect a cycle of actors waiting on each
                     // other (see detectWaitCycle in future_prims.cpp).
-                    fut->setAttribute(ctx, rt_.bootstrap().sym.targetActor, recv);
+                    fut->setAttribute(ctx, bs_.sym.targetActor, recv);
 
                     // Build the message envelope. F6 v6 (2026-05-23 night):
                     // the envelope is built IMMUTABLE. After construction
@@ -1345,7 +1354,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // and removes the mutable shard contention entirely;
                     // with 100K SENDs that is ~ 300K cells.
                     const proto::ProtoObject* msg =
-                        rt_.bootstrap().objectProto->newChild(
+                        bs_.objectProto->newChild(
                             ctx, /*isMutable=*/false);
                     TransientPin pinMsg(ctx, msg);
 
@@ -1417,18 +1426,18 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // of this file.
                 {
                     const proto::ProtoString* recvBcKey =
-                        rt_.bootstrap().sym.bcPtr;
+                        bs_.sym.bcPtr;
                     const proto::ProtoString* recvCapKey =
-                        rt_.bootstrap().sym.captured;
+                        bs_.sym.captured;
                     const proto::ProtoString* recvHomeKey =
-                        rt_.bootstrap().sym.homeFrame;
+                        bs_.sym.homeFrame;
                     const proto::ProtoString* recvBlkSelfKey =
-                        rt_.bootstrap().sym.blockSelf;
+                        bs_.sym.blockSelf;
                     // getAttribute walks the receiver first then the proto
                     // chain. `__bc_ptr__` is set only on BlockClosures (by
                     // PUSH_BLOCK), never on `blockProto` itself, so a hit
                     // here is unambiguous evidence that `recv` is a block.
-                    auto* recvBcPtr = recv->getAttribute(ctx, recvBcKey);
+                    auto* recvBcPtr = recv->getOwnAttributeDirect(ctx, recvBcKey);
                     if (recvBcPtr && recvBcPtr != PROTO_NONE) {
                         // Validate selector matches the value/value:/...
                         // pattern for argcOp formal parameters. argcOp is
@@ -1461,7 +1470,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                                 signalNativeError(rt_, ctx, msg.c_str());
                                 throw std::runtime_error(msg);   // not reached: Error is not resumable
                             }
-                            auto* capDict = recv->getAttribute(ctx, recvCapKey);
+                            auto* capDict = recv->getOwnAttributeDirect(ctx, recvCapKey);
                             if (!capDict || capDict == PROTO_NONE) capDict = nullptr;
 
                             // Track 1 slice 1: read the block's home method
@@ -1473,7 +1482,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                             // to 0 ("own home", a plain local return).
                             proto::proto_ulong blkHome = 0;
                             auto* homeObj =
-                                recv->getAttribute(ctx, recvHomeKey);
+                                recv->getOwnAttributeDirect(ctx, recvHomeKey);
                             if (homeObj && homeObj != PROTO_NONE)
                                 blkHome = static_cast<proto::proto_ulong>(
                                     homeObj->asLong(ctx));
@@ -1489,7 +1498,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                             // Absent only for blocks not built by PUSH_BLOCK
                             // — fall back to PROTO_NONE.
                             const proto::ProtoObject* blkSelf =
-                                recv->getAttribute(ctx, recvBlkSelfKey);
+                                recv->getOwnAttributeDirect(ctx, recvBlkSelfKey);
                             if (!blkSelf || blkSelf == PROTO_NONE)
                                 blkSelf = PROTO_NONE;
                             if (signalIfTooDeep(ctx, f, sub,
@@ -1570,7 +1579,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // Cached on Bootstrap (see Bootstrap.h) — same per-space
                     // discipline as the inline createSymbol call but read once
                     // at construction instead of on every super send.
-                    const proto::ProtoString* classNameSym = rt_.bootstrap().sym.className;
+                    const proto::ProtoString* classNameSym = bs_.sym.className;
                     const proto::ProtoObject* defClsObj = nullptr;
                     {
                         // T3-b: bounded depth-first, left-to-right walk over
@@ -1704,10 +1713,10 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // saturation), read the pointers cached on the Bootstrap
                     // at runtime construction. Same per-space discipline,
                     // amortised once.
-                    const proto::ProtoString* classSideKey = rt_.bootstrap().sym.classSide;
-                    const proto::ProtoString* classNameKey = rt_.bootstrap().sym.className;
+                    const proto::ProtoString* classSideKey = bs_.sym.classSide;
+                    const proto::ProtoString* classNameKey = bs_.sym.className;
                     const proto::ProtoObject* csMark =
-                        attr->getAttribute(ctx, classSideKey);
+                        attr->getOwnAttributeDirect(ctx, classSideKey);
                     if (csMark == PROTO_TRUE) {
                         const proto::ProtoObject* ownName =
                             recv->getOwnAttributeDirect(ctx, classNameKey);
@@ -1749,10 +1758,10 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // the legacy primitive-marker (tagged SmallInteger with bit
                 // 62 set) dispatch.
                 const proto::ProtoString* bcKey =
-                    rt_.bootstrap().sym.bcPtr;
+                    bs_.sym.bcPtr;
                 const proto::ProtoString* capKey =
-                    rt_.bootstrap().sym.captured;
-                auto* bcPtrObj = attr->getAttribute(ctx, bcKey);
+                    bs_.sym.captured;
+                auto* bcPtrObj = attr->getOwnAttributeDirect(ctx, bcKey);
                 if (bcPtrObj && bcPtrObj != PROTO_NONE) {
                     // User method: F6 v3 A previously recursed via
                     //   ExecutionEngine subEng(rt_);
@@ -1772,7 +1781,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                             std::to_string(sub->argCount() - 1) +
                             " args, got " + std::to_string(argcOp));
                     }
-                    auto* capDict = attr->getAttribute(ctx, capKey);
+                    auto* capDict = attr->getOwnAttributeDirect(ctx, capKey);
                     if (capDict == PROTO_NONE) capDict = nullptr;
 
                     // F6 v3 E3: local 0 = recv (self), locals 1..argcOp =
@@ -1938,11 +1947,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 }
                 const proto::ProtoObject* recv = pop(f);
 
-                // Pin the bare-name symbol used as the attribute key —
-                // same rationale as selSym in the keyword path.
-                TransientPin pinName(
-                    ctx,
-                    reinterpret_cast<const proto::ProtoObject*>(desc.name));
+                // The bare-name key is interned (perennial): no pin, as for
+                // selSym in the keyword path.
 
                 // Refuse actor receivers in v1 — async call-form sends
                 // would need a new message-envelope shape that drainOne
@@ -1965,9 +1971,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 }
 
                 // Bytecode method? Read declared signature and bind.
-                const proto::ProtoString* bcKey  = rt_.bootstrap().sym.bcPtr;
-                const proto::ProtoString* capKey = rt_.bootstrap().sym.captured;
-                auto* bcPtrObj = attr->getAttribute(ctx, bcKey);
+                const proto::ProtoString* bcKey  = bs_.sym.bcPtr;
+                const proto::ProtoString* capKey = bs_.sym.captured;
+                auto* bcPtrObj = attr->getOwnAttributeDirect(ctx, bcKey);
                 if (bcPtrObj && bcPtrObj != PROTO_NONE) {
                     const protoST::BytecodeModule* sub =
                         reinterpret_cast<const protoST::BytecodeModule*>(
@@ -2034,7 +2040,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         }
                         if (!matched) {
                             methodArgs[1 + callNPos + i] =
-                                rt_.bootstrap().unsetMarker;
+                                bs_.unsetMarker;
                         }
                     }
                     // Any remaining call-site keys are foreign.
@@ -2047,7 +2053,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                             + " does not accept named arg '" + foreign + "'");
                     }
 
-                    auto* capDict = attr->getAttribute(ctx, capKey);
+                    auto* capDict = attr->getOwnAttributeDirect(ctx, capKey);
                     if (capDict == PROTO_NONE) capDict = nullptr;
 
                     const unsigned int totalArgs =
@@ -2189,19 +2195,16 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 if (!capD || capD == PROTO_NONE)
                     throw std::runtime_error("STORE_CAPTURED without captured dict");
                 auto* sym = f.m->constSym(ctx, arg);
-                // `sym` is an interned (perennial) ProtoString held across
-                // setAttribute on the mutable captured dict, which allocates a
-                // sparse-list node. `val` was popped but stays rooted in its
-                // frame slot; `sym` is reachable from nowhere — pin it.
-                TransientPin pinSym(
-                    ctx, reinterpret_cast<const proto::ProtoObject*>(sym));
+                // `sym` is interned (perennial), so it needs no pin across
+                // the allocating setAttribute; `val` stays rooted in its
+                // frame slot.
                 // Write to the dict that owns the name: the innermost
                 // activation up the parent chain that binds it. Each
                 // activation binds its declared captured names on entry, so
                 // the owner exists; a name bound nowhere yet lands here.
                 const proto::ProtoObject* owner = capD;
                 for (const proto::ProtoObject* d = capD;
-                     d && d != PROTO_NONE && d != rt_.bootstrap().objectProto;
+                     d && d != PROTO_NONE && d != bs_.objectProto;
                      d = d->getFirstParent(ctx)) {
                     if (d->hasOwnAttribute(ctx, sym) == PROTO_TRUE) { owner = d; break; }
                 }
@@ -2218,8 +2221,6 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 if (!capD || capD == PROTO_NONE)
                     throw std::runtime_error("DEFINE_CAPTURED without captured dict");
                 auto* sym = f.m->constSym(ctx, arg);
-                TransientPin pinSym(
-                    ctx, reinterpret_cast<const proto::ProtoObject*>(sym));
                 const_cast<proto::ProtoObject*>(capD)->setAttribute(ctx, sym, val);
                 DISPATCH_SCOPED();
                 break;
@@ -2247,10 +2248,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     throw std::runtime_error("STORE_GLOBAL with empty stack");
                 const proto::ProtoObject* val = pop(f);
                 auto* sym = f.m->constSym(ctx, arg);
-                // `sym` is interned (perennial); held across setAttribute on
-                // the mutable globals object (allocates) — pin it.
-                TransientPin pinSym(
-                    ctx, reinterpret_cast<const proto::ProtoObject*>(sym));
+                // `sym` is interned (perennial): no pin needed across the
+                // allocating setAttribute on the globals object.
                 auto* g = rt_.globals();
                 if (!g) throw std::runtime_error("globals not initialized");
                 g->setAttribute(ctx, sym, val);
@@ -2302,11 +2301,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // std::string and re-interned on every instance-variable
                 // access, which the profile measured as the dominant cost.
                 auto* sym = f.m->ivSymbol(ctx, arg);
-                // F6 v3 E5: `sym` held across setAttribute on `self` (a
-                // mutable object — allocates a sparse-list node). `val` and
-                // `self` stay rooted via their frame slots; `sym` does not.
-                TransientPin pinSym(
-                    ctx, reinterpret_cast<const proto::ProtoObject*>(sym));
+                // `sym` is interned (perennial) and `val` and `self` stay
+                // rooted via their frame slots, so nothing needs a pin across
+                // the allocating setAttribute.
                 // CLO Part 1: write to `self` from the frame's header
                 // self-slot (baseSlot+1) — correct for both method and block
                 // frames (see PUSH_INSTVAR rationale).
@@ -2330,7 +2327,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // first write, as STORE_INSTVAR reports it.
                     const proto::ProtoObject* self = getSelf(f);
                     f.ivGroupActive = self && self != PROTO_NONE
-                                      && !rt_.debugger().attached();
+                                      && !dbg_.attached();
                     f.ivGroupPending = 0;
                     f.ivGroupBase = f.sp - 1;
                     f.ivGroupFirst = arg;
@@ -2383,8 +2380,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 auto* sym = f.m->ivSymbol(ctx, arg);
                 const proto::ProtoObject* self = getSelf(f);
                 const proto::ProtoObject* val = nullptr;
-                if (self && self != PROTO_NONE && self->hasOwnAttribute(ctx, sym) == PROTO_TRUE)
-                    val = self->getAttribute(ctx, sym);
+                if (self && self != PROTO_NONE)
+                    val = self->getOwnAttributeDirect(ctx, sym);
                 push(f, val ? val : PROTO_NONE);
                 DISPATCH_DIRECT();
                 break;
@@ -2395,8 +2392,6 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     throw std::runtime_error("STORE_CLASSVAR empty stack");
                 const proto::ProtoObject* val = pop(f);
                 auto* sym = f.m->ivSymbol(ctx, arg);
-                TransientPin pinSym(
-                    ctx, reinterpret_cast<const proto::ProtoObject*>(sym));
                 const proto::ProtoObject* self = getSelf(f);
                 if (!self || self == PROTO_NONE)
                     throw std::runtime_error("STORE_CLASSVAR self is null");
@@ -2406,7 +2401,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 for (const proto::ProtoObject* p = self; p && p != PROTO_NONE;
                      p = p->getFirstParent(ctx)) {
                     if (p->hasOwnAttribute(ctx, sym) == PROTO_TRUE) { owner = p; break; }
-                    if (p == rt_.bootstrap().objectProto) break;
+                    if (p == bs_.objectProto) break;
                 }
                 if (!owner) owner = self;   // defensive: a class var always has an owner
                 const_cast<proto::ProtoObject*>(owner)->setAttribute(ctx, sym, val);
@@ -2424,7 +2419,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 //          PUSH_BLOCK, so each activation has its own
                 //          bindings and reaches enclosing ones through the
                 //          parent chain.
-                const proto::ProtoObject* parent = rt_.bootstrap().objectProto;
+                const proto::ProtoObject* parent = bs_.objectProto;
                 if (arg == 1) {
                     const proto::ProtoObject* inherited = getCaptured(f);
                     if (inherited && inherited != PROTO_NONE) parent = inherited;
@@ -2620,9 +2615,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         // way; consistency across both sites is what makes the suspended-
         // frame handoff observable.
         const proto::ProtoString* suspKey =
-            rt_.bootstrap().sym.suspendedFrame;
+            bs_.sym.suspendedFrame;
         const proto::ProtoString* waitingOnKey =
-            rt_.bootstrap().sym.waitingOn;
+            bs_.sym.waitingOn;
         // F6 v3 E5: `suspKey` / `waitingOnKey` are freshly interned strings
         // held across snapshotFrames (which allocates a ProtoList plus one
         // mutable object and several lists per frame — heavy GC pressure) and
@@ -2747,7 +2742,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         if (!frames_.empty()) {
             dframe = makeDebugStack();
         }
-        rt_.debugger().enterSession(rt_, ctx_, std::move(dframe), h.reason());
+        dbg_.enterSession(rt_, ctx_, std::move(dframe), h.reason());
         // After the session resumes (user typed c/s/n/f), fall back through
         // the outer while(true) and continue executing from the current pc.
         // The halt primitive pushes PROTO_NONE as its return value into the
@@ -2822,7 +2817,7 @@ ExecutionEngine::snapshotFrames(proto::ProtoContext* ctx) const {
         // SEND fast-path builds message envelopes — see the
         // `bootstrap.objectProto->newChild(ctx, /*isMutable=*/true)` pattern
         // elsewhere in this file.
-        auto* frameObj = const_cast<proto::ProtoObject*>(rt_.bootstrap().objectProto)
+        auto* frameObj = const_cast<proto::ProtoObject*>(bs_.objectProto)
             ->newChild(ctx, /*isMutable=*/true);
         // F6 v3 E5: `frameObj` is held across every setAttribute, the two
         // inner appendLast loops, fromLong / fromExternalPointer, and the

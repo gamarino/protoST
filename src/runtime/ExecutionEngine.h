@@ -15,6 +15,8 @@ namespace protoST {
 
 class STRuntime;
 class BytecodeModule;
+class DebuggerRuntime;
+struct Bootstrap;
 struct DebugFrame;
 
 // F6 v3 A: ExecutionEngine is now non-recursive. Each user-method SEND no
@@ -179,7 +181,7 @@ private:
         bool                  superPending = false;
         // Track 1 slice 1: non-local return identity.
         //   frameId      — process-globally unique id for this activation,
-        //                  assigned from g_nextFrameId at pushFrame time.
+        //                  assigned by nextFrameId() at pushFrame time.
         //   homeFrameId  — id of the home method activation. For a method or
         //                  top-level frame homeFrameId == frameId (it is its
         //                  own home). For a block frame it is the home id
@@ -206,6 +208,12 @@ private:
     static constexpr unsigned int kHeaderSlots = 2;
 
     STRuntime&            rt_;
+    // The runtime's bootstrap and debugger, read once per engine. Their
+    // accessors live in another translation unit, so calling them on every
+    // instruction (the debugger check) and several times per send (the
+    // bootstrap symbols) cost an out-of-line call each time.
+    const Bootstrap&      bs_;
+    DebuggerRuntime&      dbg_;
     std::vector<Frame>    frames_;
     proto::ProtoContext*  ctx_ = nullptr;   // the engine context (GC-traced)
 

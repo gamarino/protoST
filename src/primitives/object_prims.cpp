@@ -703,7 +703,7 @@ const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
     const proto::ProtoObject* method = recv ? recv->getAttribute(ctx, selector)
                                             : rt.bootstrap().nilProto->getAttribute(ctx, selector);
     if (!method || method == PROTO_NONE) return nullptr;
-    const proto::ProtoObject* bcPtrObj = method->getAttribute(ctx, rt.bootstrap().sym.bcPtr);
+    const proto::ProtoObject* bcPtrObj = method->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr);
     if (bcPtrObj && bcPtrObj != PROTO_NONE && bcPtrObj->isInteger(ctx)) {
         const BytecodeModule* sub =
             reinterpret_cast<const BytecodeModule*>(bcPtrObj->asLong(ctx));
@@ -714,7 +714,7 @@ const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
         methodArgs.reserve(static_cast<size_t>(argc) + 1);
         methodArgs.push_back(recv ? recv : PROTO_NONE);
         for (int i = 0; i < argc; ++i) methodArgs.push_back(args[i]);
-        const proto::ProtoObject* capDict = method->getAttribute(ctx, rt.bootstrap().sym.captured);
+        const proto::ProtoObject* capDict = method->getOwnAttributeDirect(ctx, rt.bootstrap().sym.captured);
         if (capDict == PROTO_NONE) capDict = nullptr;
         if (understood) *understood = true;
         ExecutionEngine eng(rt);
@@ -775,11 +775,11 @@ const proto::ProtoObject* prim_Object_respondsTo(STRuntime& rt, proto::ProtoCont
     if (!m || m == PROTO_NONE) return PROTO_FALSE;
     // A class-side method answers only for the class itself, as the send
     // dispatch does (an instance receiver does not see it).
-    if (!m->isInteger(ctx) && m->getAttribute(ctx, rt.bootstrap().sym.classSide) == PROTO_TRUE) {
+    if (!m->isInteger(ctx) && m->getOwnAttributeDirect(ctx, rt.bootstrap().sym.classSide) == PROTO_TRUE) {
         const proto::ProtoObject* own = holder->getOwnAttributeDirect(ctx, rt.bootstrap().sym.className);
         if (!own || own == PROTO_NONE) return PROTO_FALSE;
     }
-    const proto::ProtoObject* bc = m->getAttribute(ctx, rt.bootstrap().sym.bcPtr);
+    const proto::ProtoObject* bc = m->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr);
     if (bc && bc != PROTO_NONE) return PROTO_TRUE;
     if (m->isInteger(ctx) && isPrimitiveMarker(m->asLong(ctx))) return PROTO_TRUE;
     return PROTO_FALSE;
@@ -1025,7 +1025,7 @@ const proto::ProtoObject* prim_Object_name(STRuntime& rt, proto::ProtoContext* c
 const proto::ProtoObject* prim_Actor_wrappedObject(STRuntime& rt, proto::ProtoContext* ctx,
                                                    const proto::ProtoObject* r,
                                                    const proto::ProtoObject* const*, int) {
-    const proto::ProtoObject* w = r ? r->getAttribute(ctx, rt.bootstrap().sym.wrapped) : nullptr;
+    const proto::ProtoObject* w = r ? r->getOwnAttributeDirect(ctx, rt.bootstrap().sym.wrapped) : nullptr;
     return (w && w != PROTO_NONE) ? w : r;
 }
 
@@ -1079,7 +1079,7 @@ bool isMethodValue(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoOb
     if (!v || v == PROTO_NONE) return false;
     if (v->isInteger(ctx)) return isPrimitiveMarker(v->asLong(ctx));
     if (v->asString(ctx)) return false;
-    const proto::ProtoObject* bc = v->getAttribute(ctx, rt.bootstrap().sym.bcPtr);
+    const proto::ProtoObject* bc = v->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr);
     return bc && bc != PROTO_NONE;
 }
 
@@ -1160,12 +1160,12 @@ const proto::ProtoObject* prim_Object_canUnderstand(STRuntime& rt, proto::ProtoC
         const proto::ProtoObject* m = cls->getAttribute(ctx, sel);
         if (!isMethodValue(rt, ctx, m)) return PROTO_FALSE;
         if (m->isInteger(ctx)) return PROTO_TRUE;
-        if (m->getAttribute(ctx, rt.bootstrap().sym.classSide) == PROTO_TRUE) return PROTO_TRUE;
+        if (m->getOwnAttributeDirect(ctx, rt.bootstrap().sym.classSide) == PROTO_TRUE) return PROTO_TRUE;
         return rt.bootstrap().objectProto->getAttribute(ctx, sel) == m ? PROTO_TRUE : PROTO_FALSE;
     }
     const proto::ProtoObject* m = r->getAttribute(ctx, sel);
     if (!isMethodValue(rt, ctx, m)) return PROTO_FALSE;
-    if (!m->isInteger(ctx) && m->getAttribute(ctx, rt.bootstrap().sym.classSide) == PROTO_TRUE)
+    if (!m->isInteger(ctx) && m->getOwnAttributeDirect(ctx, rt.bootstrap().sym.classSide) == PROTO_TRUE)
         return PROTO_FALSE;
     return PROTO_TRUE;
 }
@@ -1189,7 +1189,7 @@ const proto::ProtoObject* prim_Object_selectors(STRuntime& rt, proto::ProtoConte
                 if (name.rfind("__", 0) == 0 || name.rfind("_iv_", 0) == 0) return;
                 if (!isMethodValue(*k->rt, c, value)) return;
                 const bool classSideMethod = !value->isInteger(c)
-                    && value->getAttribute(c, k->rt->bootstrap().sym.classSide) == PROTO_TRUE;
+                    && value->getOwnAttributeDirect(c, k->rt->bootstrap().sym.classSide) == PROTO_TRUE;
                 if (classSideMethod != k->classSide) return;
                 k->names.push_back(name);
             });
