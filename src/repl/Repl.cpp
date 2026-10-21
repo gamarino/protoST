@@ -406,6 +406,10 @@ bool evaluate(Session& s, const std::string& buffer,
         std::puts("Interrupted");
         std::fflush(stdout);
         return false;
+    } catch (const proto::ProtoException& e) {
+        // An unhandled Error, a module's error, another language's exception.
+        std::fprintf(stderr, "%s\n", describeUncaught(s.rt->rootCtx(), e).c_str());
+        return false;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "%s\n", describeUncaught(e).c_str());
         return false;

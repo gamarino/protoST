@@ -694,14 +694,34 @@ const proto::ProtoObject* prim_Object_subclassIvars(
 // bound, a primitive through the registry. Answers nullptr when the receiver
 // does not understand the selector. Shared by perform: and the kernel's
 // reflective primitives.
+const proto::ProtoObject* sendDynamicFrom(STRuntime& rt, proto::ProtoContext* ctx,
+                                          const proto::ProtoObject* recv,
+                                          const proto::ProtoObject* lookupRoot,
+                                          const proto::ProtoString* selector,
+                                          const proto::ProtoObject* const* args, int argc,
+                                          bool* understood);
+
 const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
                                       const proto::ProtoObject* recv,
                                       const proto::ProtoString* selector,
                                       const proto::ProtoObject* const* args, int argc,
                                       bool* understood) {
+    return sendDynamicFrom(rt, ctx, recv, recv ? recv : rt.bootstrap().nilProto,
+                           selector, args, argc, understood);
+}
+
+// sendDynamic with the method looked up on `lookupRoot` rather than on the
+// receiver: the Exception protocol answering for a foreign exception
+// (exception_prims.cpp) runs Error's methods on a value that does not inherit
+// them.
+const proto::ProtoObject* sendDynamicFrom(STRuntime& rt, proto::ProtoContext* ctx,
+                                          const proto::ProtoObject* recv,
+                                          const proto::ProtoObject* lookupRoot,
+                                          const proto::ProtoString* selector,
+                                          const proto::ProtoObject* const* args, int argc,
+                                          bool* understood) {
     if (understood) *understood = false;
-    const proto::ProtoObject* method = recv ? recv->getAttribute(ctx, selector)
-                                            : rt.bootstrap().nilProto->getAttribute(ctx, selector);
+    const proto::ProtoObject* method = lookupRoot ? lookupRoot->getAttribute(ctx, selector) : nullptr;
     if (!method || method == PROTO_NONE) return nullptr;
     const proto::ProtoObject* bcPtrObj = method->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr);
     if (bcPtrObj && bcPtrObj != PROTO_NONE && bcPtrObj->isInteger(ctx)) {

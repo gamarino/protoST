@@ -96,6 +96,10 @@ The cases show four things.
    happens earlier, at the attribute read (point 2), but this path would fail even if
    the read succeeded.
 
+   Since the protoCore 3.0.0 port (2026-10-21) `SEND_CALL` calls a
+   `proto::ProtoMethod` (docs/INTEROP.md §3.5), exercised with a C++ module
+   in `tests/umd/`. This probe has not been re-run against protoScala.
+
 ## Files
 
 | File | Purpose |

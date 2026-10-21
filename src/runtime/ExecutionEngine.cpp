@@ -560,6 +560,19 @@ ExecutionEngine::canStartNestedEngine() {
 const proto::ProtoObject* ExecutionEngine::doesNotUnderstand(
         proto::ProtoContext* ctx, const proto::ProtoObject* recv,
         const std::string& selector, const proto::ProtoObject* const* args, int argc) {
+    // A foreign exception (a module's error, another language's exception)
+    // understands the Exception protocol while its handler runs: Error's
+    // method runs with the foreign value as the receiver. It is a native
+    // boundary like a primitive send, so an error it raises (resume: on a
+    // non-resumable exception) is signalled here, inside the handler.
+    {
+        const proto::ProtoString* selSym =
+            proto::ProtoString::createSymbol(ctx, selector.c_str());
+        if (canSendToForeignException(rt_, ctx, recv, selSym))
+            return translateNativeException(rt_, ctx, [&] {
+                return sendToForeignException(rt_, ctx, recv, selSym, args, argc);
+            });
+    }
     const proto::ProtoObject* message = makeMessage(rt_, ctx, selector, args, argc);
     TransientPin pinMessage(ctx, message);
     const proto::ProtoString* dnuKey =
@@ -1075,7 +1088,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     push(f, res ? res : PROTO_NONE);
                     DISPATCH_DIRECT();
                 }
-                throw NonLocalReturn(f.homeFrameId, r);
+                throw NonLocalReturn(ctx, f.homeFrameId, r);
             }
             case Op::PUSH_BLOCK: L_PUSH_BLOCK: {
                 Frame& f = frames_.back();
@@ -2070,6 +2083,31 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                               totalArgs);
                     gcSafepoint(ctx);  // call entry (see gcSafepoint)
                     DISPATCH_SCOPED();
+                }
+
+                // A protoCore method: what a module written in C++ or in
+                // another language exports (proto::ProtoMethod). Called with
+                // the receiver as `self`, the positional arguments and the
+                // named ones (interned names), through protoCore's array call
+                // form. It is a native boundary: a ProtoException it raises
+                // (the module's own error type, protoCore's error) is
+                // signalled as a Smalltalk exception with its value
+                // unchanged, and a C++ exception becomes an Error
+                // (translateNativeException).
+                if (attr->isMethod(ctx)) {
+                    proto::ProtoKeywordArgument keywords[16];
+                    for (int i = 0; i < callNNamed; ++i)
+                        keywords[i] = proto::ProtoKeywordArgument{
+                            desc.sortedKeys[i], callArgs[callNPos + i]};
+                    auto* result = translateNativeException(rt_, ctx, [&] {
+                        return recv->call(ctx, nullptr, desc.name, recv,
+                                          callArgs, static_cast<unsigned>(callNPos),
+                                          callNNamed > 0 ? keywords : nullptr,
+                                          static_cast<unsigned>(callNNamed));
+                    });
+                    push(f, result ? result : PROTO_NONE);
+                    DISPATCH_SCOPED();
+                    break;
                 }
 
                 // Non-method attribute. Call-form requires a callable: a

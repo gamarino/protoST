@@ -144,6 +144,11 @@ are noted where useful.
 - [x] Handler actions `return:`, `resume`, `resume:`, `retry`, `pass`
 - [x] `ensure:`, `ifCurtailed:`
 - [x] Native-exception translation (`ZeroDivide`, …)
+- [x] protoCore 3.0.0 unified exceptions: a module's or another language's
+      error type caught by name (prototype chain), protoCore's errors built as
+      protoST classes by the error factory, an unhandled `Error` leaves as a
+      `proto::ProtoException` (LANGUAGE.md §8.7)
+- [x] Call-form sends to a protoCore method exported by a module
 
 ### Collections
 - [x] `Array`, `OrderedCollection`, `Interval`, `Set`, `Bag`, `Dictionary`,

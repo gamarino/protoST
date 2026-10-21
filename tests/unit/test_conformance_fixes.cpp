@@ -16,6 +16,7 @@
 #include <stdexcept>
 
 #include "protoST/STRuntime.h"
+#include "runtime/UnhandledSTException.h"
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
 #include "runtime/Bootstrap.h"
@@ -117,7 +118,7 @@ TEST_CASE("conformance #4: wait on a directly-rejected Future re-raises",
     // than silently returning the cause.
     REQUIRE_THROWS_AS(
         runSrc(rt, "f := Future new. f rejectWith: 'boom'. f wait."),
-        std::exception);
+        protoST::UnhandledSTException);
 }
 
 TEST_CASE("conformance #4: wait re-raises a rejection from an actor method",
@@ -134,7 +135,7 @@ TEST_CASE("conformance #4: wait re-raises a rejection from an actor method",
         "  ^ self. "
         "a := Faulty new asActor. "
         "(a boom) wait.";
-    REQUIRE_THROWS_AS(runSrc(rt, src), std::exception);
+    REQUIRE_THROWS_AS(runSrc(rt, src), protoST::UnhandledSTException);
 }
 
 TEST_CASE("conformance #4: a wait on a resolved actor Future returns the value",

@@ -1,5 +1,6 @@
 #pragma once
 #include "protoCore.h"  // proto::proto_ulong
+#include "runtime/PinnedValue.h"
 
 // Track 1, slice 2 (EXC-b): ResumeSignal — the C++ exception that carries a
 // handler's `resume:` decision back to the `signal` that invoked the handler.
@@ -22,26 +23,25 @@
 //   STRuntime::drainOne / runTopLevel — never allowed to call std::terminate.
 //
 //   Sibling of UnwindToHandler / RetrySignal / PassSignal / NonLocalReturn /
-//   FutureYield — none derive from std::exception.
-
-namespace proto {
-    class ProtoObject;
-}
+//   FutureYield — none derive from std::exception or proto::ProtoException
+//   (see PinnedValue.h).
 
 namespace protoST {
 
 class ResumeSignal {
 public:
-    ResumeSignal(proto::proto_ulong handlerId,
-                 const proto::ProtoObject* value) noexcept
-        : handlerId_(handlerId), value_(value) {}
+    // The value is pinned while the signal is in flight back to the signal
+    // loop (PinnedValue.h).
+    ResumeSignal(proto::ProtoContext* ctx, proto::proto_ulong handlerId,
+                 const proto::ProtoObject* value)
+        : handlerId_(handlerId), value_(ctx, value) {}
 
     proto::proto_ulong handlerId() const noexcept { return handlerId_; }
-    const proto::ProtoObject* value() const noexcept { return value_; }
+    const proto::ProtoObject* value() const noexcept { return value_.get(); }
 
 private:
-    proto::proto_ulong             handlerId_;
-    const proto::ProtoObject* value_;
+    proto::proto_ulong handlerId_;
+    PinnedValue        value_;
 };
 
 } // namespace protoST

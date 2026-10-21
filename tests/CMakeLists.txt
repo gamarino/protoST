@@ -61,6 +61,9 @@ target_sources(protost_unit_tests PRIVATE
     unit/test_exceptions.cpp
 )
 target_sources(protost_unit_tests PRIVATE
+    unit/test_unified_exceptions.cpp
+)
+target_sources(protost_unit_tests PRIVATE
     unit/test_closure_capture.cpp
 )
 target_sources(protost_unit_tests PRIVATE
@@ -195,4 +198,44 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/docs/test_run_doc_snippets.py
                 $<TARGET_FILE:protost> --lib ${CMAKE_SOURCE_DIR}/lib)
+endif()
+
+# --- native UMD modules (protoCore 3.0.0 unified exceptions) ----------------
+# tests/umd/*.st import protoCore's example geometry module, a ModuleProvider
+# in its own shared library (protoCore/examples/exceptions/), and catch the
+# error types it defines. The protost binary has no plug-in loader, so they run
+# through protost_umd_host (tests/umd/umd_host.cpp), which links the library,
+# registers the provider and adds it to the resolution chain. The library is
+# looked for in the protoCore build protoST links against; name it with
+# -DPROTOCORE_EXAMPLE_GEOMETRY_LIBRARY=<path> and
+# -DPROTOCORE_EXAMPLE_GEOMETRY_INCLUDE_DIR=<dir holding geometry_module/>.
+set(_protoCore_tree "${CMAKE_SOURCE_DIR}/../protoCore")
+find_library(PROTOCORE_EXAMPLE_GEOMETRY_LIBRARY NAMES protocore_example_geometry
+    PATHS "${PROTOCORE_LIB_DIR}/examples/exceptions"
+          "${_protoCore_tree}/build_release/examples/exceptions"
+    NO_DEFAULT_PATH)
+find_path(PROTOCORE_EXAMPLE_GEOMETRY_INCLUDE_DIR geometry_module/GeometryModule.h
+    PATHS "${_protoCore_tree}/examples/exceptions" NO_DEFAULT_PATH)
+unset(_protoCore_tree)
+if(PROTOCORE_EXAMPLE_GEOMETRY_LIBRARY AND PROTOCORE_EXAMPLE_GEOMETRY_INCLUDE_DIR)
+    add_executable(protost_umd_host umd/umd_host.cpp)
+    target_include_directories(protost_umd_host PRIVATE
+        ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src
+        ${PROTOCORE_EXAMPLE_GEOMETRY_INCLUDE_DIR})
+    target_link_libraries(protost_umd_host PRIVATE
+        protost_warnings protost_frontend protost_runtime ${PROTOCORE_LIBRARY}
+        ${PROTOCORE_EXAMPLE_GEOMETRY_LIBRARY})
+    get_filename_component(_geometry_dir "${PROTOCORE_EXAMPLE_GEOMETRY_LIBRARY}" DIRECTORY)
+    set_target_properties(protost_umd_host PROPERTIES BUILD_RPATH "${_geometry_dir};${PROTOCORE_LIB_DIR}")
+    unset(_geometry_dir)
+    file(GLOB PROTOST_UMD_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/umd/*.st")
+    foreach(umd_file ${PROTOST_UMD_FILES})
+        get_filename_component(umd_name "${umd_file}" NAME)
+        add_test(NAME "umd/${umd_name}"
+            COMMAND ${PROTOST_SH} ${CMAKE_CURRENT_SOURCE_DIR}/conformance/run_conformance.sh
+                    $<TARGET_FILE:protost_umd_host> "${umd_file}")
+    endforeach()
+else()
+    message(STATUS "protoST: protoCore's example geometry module was not found; "
+                   "the umd/ tests (foreign error types) are not built")
 endif()

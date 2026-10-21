@@ -196,11 +196,18 @@ STModuleProvider::loadForForeignCaller(STRuntime& rt, const std::string& logical
         const proto::ProtoObject* mod = rt.importModuleFile(stCtx, path, logicalPath);
         if (!mod || mod == PROTO_NONE) return PROTO_NONE;
         mod->processOwnAttributes(stCtx, &bindings, collectBinding);
+    } catch (const UnhandledSTException& u) {
+        // An uncaught protoST exception, or an error a module the top level
+        // used raised (its original ProtoException): a language value, which
+        // leaves to the importing runtime unchanged -- its handlers select it
+        // by the value's prototype chain, as for any protoCore language.
+        failed = u.original() ? u.original() : std::current_exception();
+    } catch (const proto::ProtoException&) {
+        failed = std::current_exception();
     } catch (const std::exception&) {
-        // A parse error, a compile error, an import cycle, or an uncaught
-        // protoST `Error` (UnhandledSTException, itself a std::runtime_error).
-        // All carry a message; the importing runtime's own boundary translates
-        // them into its own exception type.
+        // A parse error, a compile error, an import cycle. All carry a
+        // message; the importing runtime's own boundary translates them into
+        // its own exception type.
         failed = std::current_exception();
     } catch (...) {
         // protoST's control-flow unwinds (NonLocalReturn, UnwindToHandler,
@@ -263,7 +270,8 @@ STModuleProvider::tryLoad(const std::string& logicalPath, proto::ProtoContext* c
     // with no handler it raises UnhandledSTException. Both are non-
     // std::exception-or-runtime_error control flow that propagate cleanly
     // back through UMD to the importing `prim_Import_from` call site. The
-    // control-flow siblings (NonLocalReturn etc.) are re-thrown untouched.
+    // control-flow siblings (NonLocalReturn etc.) are re-thrown untouched, as
+    // is an UnhandledSTException (a ProtoException carrying the Error).
     return translateNativeException(*rt, ctx, [&]() -> const proto::ProtoObject* {
         // S6: importModuleFile runs the module's top level exactly once even
         // when several threads import it at the same moment.

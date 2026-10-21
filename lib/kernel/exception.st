@@ -42,6 +42,11 @@ Error subclass: #KeyNotFound.
 "Signalled by remove: of an element the collection does not hold."
 Error subclass: #NotFound.
 
+"Signalled by protoCore for a malformed argument (an unparsable integer
+ literal, a radix outside 2..36, a negative shift) or an operand of the wrong
+ type for an integer operation; the runtime's error factory builds it."
+Error subclass: #InvalidArgument.
+
 Exception >> isResumable
   ^ self __isResumable.
 

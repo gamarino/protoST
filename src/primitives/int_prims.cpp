@@ -3,7 +3,6 @@
 #include "runtime/Bootstrap.h"
 #include "runtime/ValueFormat.h"
 #include "runtime/TransientPin.h"
-#include "runtime/ZeroDivideSignal.h"
 #include "primitives/IntegerDivision.h"
 #include "protoCore.h"
 
@@ -109,7 +108,7 @@ static int signOfNumber(proto::ProtoContext* ctx, const proto::ProtoObject* n) {
 
 static void checkDivisor(proto::ProtoContext* ctx, const proto::ProtoObject* d, const char* sel) {
     requireNumber(ctx, d, sel);
-    if (isZeroNumber(ctx, d)) throw ZeroDivideSignal();
+    if (isZeroNumber(ctx, d)) ctx->raiseError(proto::ProtoErrorKind::DivisionByZero, "ZeroDivide");
 }
 
 // `/` delegates to protoCore `divide`.

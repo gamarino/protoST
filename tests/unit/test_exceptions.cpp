@@ -743,9 +743,9 @@ TEST_CASE("EXC-d: an UNCAUGHT native primitive exception still aborts",
           "[exceptions][track1]") {
     // With no handler, the translated Error's default action runs: it is
     // non-resumable, so it aborts the activation. The abort surfaces as
-    // UnhandledSTException — which is-a std::exception, so REQUIRE_THROWS_WITH
-    // still sees a throw carrying the native message. No behaviour change
-    // from before EXC-d for the uncaught case.
+    // UnhandledSTException — a proto::ProtoException carrying the ZeroDivide,
+    // whose message REQUIRE_THROWS_WITH reads through the Catch2 translator in
+    // test_unified_exceptions.cpp.
     const char* src =
         "Object subclass: #NativeAbort. "
         "NativeAbort >> run "

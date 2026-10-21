@@ -1,5 +1,6 @@
 #pragma once
 #include "protoCore.h"  // proto::proto_ulong
+#include "runtime/PinnedValue.h"
 
 // Track 1, slice 2 (EXC-a): UnwindToHandler — the C++ exception that carries
 // the result of an exception handler back to its `on:do:` activation.
@@ -16,11 +17,12 @@
 //   2. The two EXC-a unwind triggers are:
 //        * the handler block falls off its end  → value = its last value;
 //        * the handler does `anException return: v` → value = v.
-//      Both throw UnwindToHandler carrying the handlerId stamped onto the
-//      exception instance at signal time, so the throw targets exactly the
-//      `on:do:` whose guard matched.
+//      Both throw UnwindToHandler carrying the handlerId `signal` recorded
+//      for the exception (the active-signal stack, exception_prims.cpp), so
+//      the throw targets exactly the `on:do:` whose guard matched.
 //
-//   3. UnwindToHandler is intentionally NOT a std::exception subclass — like
+//   3. UnwindToHandler is intentionally NOT a std::exception subclass, nor a
+//      proto::ProtoException (see PinnedValue.h) — like
 //      its siblings NonLocalReturn (slice 1) and FutureYield (F6 v3). The
 //      nested-engine call sites (invokeBlock, primitives) and STRuntime paths
 //      catch `const std::exception&` for ordinary error handling; an
@@ -36,24 +38,22 @@
 //      run is a bug — it is converted to a clear error rather than allowed to
 //      call std::terminate.
 
-namespace proto {
-    class ProtoObject;
-}
-
 namespace protoST {
 
 class UnwindToHandler {
 public:
-    UnwindToHandler(proto::proto_ulong handlerId,
-                    const proto::ProtoObject* value) noexcept
-        : handlerId_(handlerId), value_(value) {}
+    // The value is pinned while the unwind is in flight: it runs ensure:
+    // blocks on the way to the on:do:, which may collect (PinnedValue.h).
+    UnwindToHandler(proto::ProtoContext* ctx, proto::proto_ulong handlerId,
+                    const proto::ProtoObject* value)
+        : handlerId_(handlerId), value_(ctx, value) {}
 
     proto::proto_ulong handlerId() const noexcept { return handlerId_; }
-    const proto::ProtoObject* value() const noexcept { return value_; }
+    const proto::ProtoObject* value() const noexcept { return value_.get(); }
 
 private:
-    proto::proto_ulong             handlerId_;
-    const proto::ProtoObject*  value_;
+    proto::proto_ulong handlerId_;
+    PinnedValue        value_;
 };
 
 } // namespace protoST

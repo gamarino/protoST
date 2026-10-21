@@ -7,6 +7,7 @@
 #include <thread>
 
 #include "protoST/STRuntime.h"
+#include "runtime/UnhandledSTException.h"
 #include "runtime/ExecutionEngine.h"
 #include "runtime/BytecodeModule.h"
 #include "runtime/Opcodes.h"
@@ -939,7 +940,7 @@ TEST_CASE("F6 v3 B: mid-execution snapshot + restore preserves BytecodeModule po
             snap = eng.snapshotFrames(ctx);
             throw;
         }
-    }(), std::runtime_error);
+    }(), protoST::UnhandledSTException);
     REQUIRE(snap != nullptr);
 
     // The snapshot must encode exactly one frame.

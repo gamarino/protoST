@@ -5,6 +5,53 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+- **protoCore 3.0.0 unified exceptions** (LANGUAGE.md §8.7). Every language
+  on protoCore raises `proto::ProtoException` carrying the thrown value and
+  selects handlers by the value's prototype chain; protoST now takes part:
+  - A `ProtoException` reaching a native boundary (a primitive, a module
+    method, a module load) is **signalled with its value unchanged**. A
+    module's error type is caught by naming it, `[geo circleArea(-1)] on:
+    geo NegativeRadius do: [...]`, and the handler receives the raised
+    value. Such a foreign exception is not an `Error` (`on: Error do:` does
+    not select it), is never resumable, answers the Exception protocol
+    (`messageText`, `return:`, `retry`, `pass`, ...) while its handler runs,
+    and, unhandled, leaves the runtime as the very `ProtoException` raised.
+    Before, any `ProtoException` became a plain `Error` with the text
+    `native exception`.
+  - **protoCore's own errors arrive as protoST classes**, through the error
+    factory protoST installs: `DivisionByZero` -> `ZeroDivide`, `Overflow`
+    -> `ArithmeticError`, `InvalidArgument` and `TypeMismatch` -> the new
+    kernel class `InvalidArgument` (an `Error`), `ArityMismatch` -> `Error`.
+    protoST's numeric primitives raise their division by zero the same way
+    (`ZeroDivideSignal` is gone).
+  - **An unhandled `Error` leaves as a `ProtoException`** carrying the
+    exception object: `UnhandledSTException` derives from
+    `proto::ProtoException` (it keeps its message, trace and actor flag) and
+    is no longer a `std::runtime_error`. Embedders catch
+    `const proto::ProtoException&`; `describeUncaught(ctx, e)` formats it.
+    The actor `__inflight_exception__` attribute is gone (protoCore pins an
+    exception's value while it is in flight).
+  - A C++ `std::exception` from a primitive or a module method is still a
+    plain `Error` with `what()` as its text.
+  - The control-flow carriers `NonLocalReturn`, `UnwindToHandler` and
+    `ResumeSignal` pin the value they carry across the unwinding
+    (`src/runtime/PinnedValue.h`); `ensure:` blocks that collect can no
+    longer reclaim it. They are deliberately not `ProtoException`s.
+  - Top levels report any exception instead of terminating: the worker
+    loop, the actor drain (`catch (...)` added), Future callbacks, the
+    REPL, the debugger, the DAP server, `-e`, `-d` and scripts. A script's
+    uncaught exception is reported while the runtime still exists.
+- **Call-form sends to protoCore methods.** `geo circleArea(2)` calls a
+  `proto::ProtoMethod` a module exports (positional and named arguments)
+  through protoCore's array call form; before, it answered
+  `doesNotUnderstand`.
+- **Tests:** `tests/unit/test_unified_exceptions.cpp` (the rule-14 contract
+  from C++, the factory, a module error raised inside its own handler), and
+  `tests/umd/`, Smalltalk programs that import protoCore's example geometry
+  module through `protost_umd_host` (`tests/umd/umd_host.cpp`, which links
+  the module's shared library and registers its provider). Built when the
+  protoCore build provides `libprotocore_example_geometry`.
+
 - **Built against protoCore 3.0.0** (SOVERSION 4), now the declared minimum:
   protoCore's methods receive their arguments as `ProtoArguments` /
   `ProtoKeywordArguments` descriptors (protoCore

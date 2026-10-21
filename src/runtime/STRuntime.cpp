@@ -96,24 +96,38 @@ void rejectFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
 namespace protoST {
 
 namespace {
-// What an actor's message Future is rejected with: the protoST exception that
-// went unhandled in the method, so a waiter re-signals it with its class and
-// messageText intact; a native error's text otherwise.
-const proto::ProtoObject* rejectionFor(proto::ProtoContext* ctx, const std::exception& e,
-                                       const proto::ProtoObject* actor) {
-    if (const auto* u = dynamic_cast<const UnhandledSTException*>(&e)) {
-        if (u->actorException() && actor) {
-            const proto::ProtoString* key =
-                proto::ProtoString::createSymbol(ctx, "__inflight_exception__");
-            const proto::ProtoObject* exc = actor->getOwnAttributeDirect(ctx, key);
-            if (exc && exc != PROTO_NONE) {
-                TransientPin pinExc(ctx, exc);
-                const_cast<proto::ProtoObject*>(actor)->setAttribute(ctx, key, PROTO_NONE);
-                return exc;
-            }
-        }
-    }
+// What an actor's message Future is rejected with. For a ProtoException that
+// left the method -- a protoST exception that went unhandled in it, a module's
+// error, another language's exception -- the exception's value itself, so a
+// waiter re-signals it with its class and messageText intact (the
+// ProtoException keeps the value pinned until the Future holds it). For a C++
+// failure, its text.
+const proto::ProtoObject* rejectionFor(proto::ProtoContext* ctx, const proto::ProtoException& e) {
+    if (const auto* u = dynamic_cast<const UnhandledSTException*>(&e))
+        if (!u->actorException()) return ctx->fromUTF8String(u->what());
+    return e.value();
+}
+const proto::ProtoObject* rejectionFor(proto::ProtoContext* ctx, const std::exception& e) {
     return ctx->fromUTF8String(e.what());
+}
+
+// One drainOne turn on a worker thread. Whatever escapes it -- it has no
+// caller that could handle it, the message's own errors already rejected its
+// Future -- is reported on stderr instead of reaching std::terminate, and the
+// worker goes on draining.
+bool drainOneReporting(STRuntime& rt, proto::ProtoContext* ctx) {
+    try {
+        return rt.drainOne(ctx);
+    } catch (const proto::ProtoException& e) {
+        std::fprintf(stderr, "%s (escaped an actor drain on a worker thread)\n",
+                     describeUncaught(ctx, e).c_str());
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "%s (escaped an actor drain on a worker thread)\n",
+                     describeUncaught(e).c_str());
+    } catch (...) {
+        std::fprintf(stderr, "error: an unknown exception escaped an actor drain on a worker thread\n");
+    }
+    return true;   // a message was taken; look for the next one
 }
 } // namespace
 
@@ -944,13 +958,13 @@ void STRuntime::workerLoop(proto::ProtoContext* ctx) {
         }
 
         // Drain everything currently in the queue.
-        while (drainOne(ctx)) {
+        while (drainOneReporting(*this, ctx)) {
             g_drainHits[wid].fetch_add(1, std::memory_order_relaxed);
         }
 
         if (impl_->shutdown.load(std::memory_order_acquire)) {
             // Final drain in case a sender pushed after our last pop.
-            while (drainOne(ctx)) {
+            while (drainOneReporting(*this, ctx)) {
                 g_drainHits[wid].fetch_add(1, std::memory_order_relaxed);
             }
             return;
@@ -977,7 +991,7 @@ void STRuntime::workerLoop(proto::ProtoContext* ctx) {
                 _mm_pause();
 #endif
             }
-            if (drainOne(ctx)) {
+            if (drainOneReporting(*this, ctx)) {
                 g_drainHits[wid].fetch_add(1, std::memory_order_relaxed);
                 gotWork = true;
             }
@@ -1147,8 +1161,15 @@ STRuntime::runTopLevel(const BytecodeModule& m, proto::ProtoContext* ctx) {
     // no live home frame anywhere — the block's home method already returned
     // (a "dead home"). Convert it to a std::runtime_error so the REPL / `-e`
     // / script callers render it the same way as any other runtime fault.
+    // A foreign exception no handler took leaves as the ProtoException the
+    // module raised (UnhandledSTException::original), re-thrown after the
+    // catch clause.
+    std::exception_ptr foreignOriginal;
     try {
         return runModuleTopLevel(m, ctx);
+    } catch (const UnhandledSTException& u) {
+        if (!u.original()) throw;
+        foreignOriginal = u.original();
     } catch (const NonLocalReturn&) {
         throw std::runtime_error(
             "non-local return: home method has already returned");
@@ -1179,6 +1200,7 @@ STRuntime::runTopLevel(const BytecodeModule& m, proto::ProtoContext* ctx) {
         throw std::runtime_error(
             "exception pass: no active signal to pass");
     }
+    std::rethrow_exception(foreignOriginal);
 }
 
 // Runs a module's top level with no conversion of control-flow signals, so
@@ -1902,10 +1924,26 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                     TransientPin pinErr(ctx, err);
                     rejectFutureFromDrain(*this, ctx, msgFut, err);
                 }
+            } catch (const proto::ProtoException& e) {
+                // An unhandled protoST exception, a module's error, another
+                // language's exception: the Future is rejected with its value.
+                setCurrentActor(nullptr);
+                if (msgFut && msgFut != PROTO_NONE) {
+                    auto* err = rejectionFor(ctx, e);
+                    TransientPin pinErr(ctx, err);
+                    rejectFutureFromDrain(*this, ctx, msgFut, err);
+                }
             } catch (const std::exception& e) {
                 setCurrentActor(nullptr);
                 if (msgFut && msgFut != PROTO_NONE) {
-                    auto* err = rejectionFor(ctx, e, actor);
+                    auto* err = rejectionFor(ctx, e);
+                    TransientPin pinErr(ctx, err);
+                    rejectFutureFromDrain(*this, ctx, msgFut, err);
+                }
+            } catch (...) {
+                setCurrentActor(nullptr);
+                if (msgFut && msgFut != PROTO_NONE) {
+                    auto* err = ctx->fromUTF8String("an unknown exception left the actor method");
                     TransientPin pinErr(ctx, err);
                     rejectFutureFromDrain(*this, ctx, msgFut, err);
                 }
@@ -2078,9 +2116,23 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                 TransientPin pinErr(ctx, err);
                 rejectFutureFromDrain(*this, ctx, future, err);
             }
+        } catch (const proto::ProtoException& e) {
+            // An unhandled protoST exception, a module's error, another
+            // language's exception: the Future is rejected with its value.
+            if (future) {
+                auto* err = rejectionFor(ctx, e);
+                TransientPin pinErr(ctx, err);
+                rejectFutureFromDrain(*this, ctx, future, err);
+            }
         } catch (const std::exception& e) {
             if (future) {
-                auto* err = rejectionFor(ctx, e, actor);
+                auto* err = rejectionFor(ctx, e);
+                TransientPin pinErr(ctx, err);
+                rejectFutureFromDrain(*this, ctx, future, err);
+            }
+        } catch (...) {
+            if (future) {
+                auto* err = ctx->fromUTF8String("an unknown exception left the actor method");
                 TransientPin pinErr(ctx, err);
                 rejectFutureFromDrain(*this, ctx, future, err);
             }
@@ -2616,6 +2668,9 @@ void STRuntime::loadKernel() {
         }
         try {
             runTopLevel(module);
+        } catch (const proto::ProtoException& ex) {
+            throw std::runtime_error("kernel: " + file.string() + ": "
+                                     + describeProtoException(rootCtx(), ex));
         } catch (const std::exception& ex) {
             throw std::runtime_error("kernel: " + file.string() + ": " + ex.what());
         }

@@ -1,5 +1,5 @@
 #include "protoST/STRuntime.h"
-#include "runtime/ZeroDivideSignal.h"
+#include "runtime/ClassedErrorSignal.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/TransientPin.h"

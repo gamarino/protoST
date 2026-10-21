@@ -1,4 +1,5 @@
 #include "DebuggerRuntime.h"
+#include "runtime/UnhandledSTException.h"
 #include "protoST/STRuntime.h"
 #include "../runtime/BytecodeModule.h"
 #include "../runtime/ValueFormat.h"
@@ -46,6 +47,9 @@ bool DebuggerRuntime::evaluateExpression(STRuntime& rt, proto::ProtoContext* ctx
         // "a ClassName" instead of "<obj>".
         out = protoST::formatValue(rt, ctx, r);
         return true;
+    } catch (const proto::ProtoException& e) {
+        out = describeUncaught(ctx, e);
+        return false;
     } catch (const std::exception& e) {
         out = std::string("error: ") + e.what();
         return false;

@@ -558,9 +558,12 @@ counter incr(2, factor = 3)              "positional + named override"
 counter incr(1)                          "named defaults apply"
 ```
 
-The call form is shaped for methods exported by other protoCore runtimes, but
-a call-form send to a *foreign* method is not implemented yet: it reaches only
-protoST methods and primitives ([`INTEROP.md`](INTEROP.md) §3.5).
+The call form is shaped for methods exported by other protoCore runtimes and
+by modules written in C++: a call-form send whose selector names a protoCore
+method (`proto::ProtoMethod`) calls it with the receiver as `self`, the
+positional arguments and the named ones (`geo circleArea(2)`; see
+[`INTEROP.md`](INTEROP.md) §3.5). An error it raises is signalled as described
+in §8.7.
 
 ### 3.6 Assignment
 
@@ -1278,6 +1281,7 @@ Exception                  (root; resumable)
     NotFound               (remove: of an absent element)
     BlockCannotReturn      (§7.1)
     ModificationForbidden  (at:put: on a String)
+    InvalidArgument        (protoCore: a malformed argument, a wrong-typed operand; §8.7)
   Warning                  (resumable)
 ```
 
@@ -1396,14 +1400,79 @@ Resumability is a class-derived property, answered by `isResumable`:
 subclasses are not. A `resume:` on a non-resumable exception is itself an
 error. An exception translated from a native C++ exception (see [§8.7]) is
 forced non-resumable, because the native stack between its origin and the
-catch is already gone.
+catch is already gone, and so is a foreign exception (a module's error type,
+another language's exception). An error protoCore raises keeps its class's
+resumability: `resume: v` on a `ZeroDivide` answers `v` as the result of the
+native call that failed — the primitive, or the whole module method.
 
-### 8.7 Native exception translation
+### 8.7 Errors from protoCore, from modules and from other languages
 
-Code reached through native primitives or UMD-loaded modules may raise C++
-exceptions. The runtime catches these at the native boundary and translates
-them into non-resumable protoST `Error`s, so a UMD/native fault can be caught
-by an ordinary `on: Error do:` handler.
+Every language on protoCore raises the same C++ exception,
+`proto::ProtoException`, carrying the thrown value, and every handler selects
+by the value's **prototype chain** (protoCore `docs/EXCEPTIONS.md`). For
+protoST that means:
+
+**A module's error type is caught by naming it.** A module written in C++ or
+in another language defines its error types as protoCore objects and raises
+instances of them. Import the module and name the type in `on:do:`; the
+handler matches when the type is on the raised value's prototype chain, as for
+a protoST class, and receives the very value that was raised:
+
+```smalltalk no-run
+geo := Import from: 'example/geometry'.
+[geo circleArea(-1)] on: geo NegativeRadius do: [:e | e messageText].
+    "=> 'circleArea: the radius -1.000000 is negative'"
+[geo circleArea(-1)] on: geo GeometryError do: [:e | e name].   "the base type"
+    "=> 'NegativeRadius'"
+[geo triangleArea(1, 2, 10)] on: ZeroDivide, geo GeometryError do: [:e | 'set'].
+```
+
+Such a *foreign* exception is not a subclass of `Error`: `on: Error do:` and
+`on: Exception do:` do not select it, and a handler for an unrelated type lets
+it pass. While its handler runs, it answers the Exception protocol —
+`messageText` (its `message` attribute), `description`, `return:`, `retry`,
+`pass`, `outer`, `signal` — and its own attributes as unary sends (`e name`,
+`e message`). It is never resumable: `resume:` signals an `Error`. No handler
+taking it, it **leaves the program unchanged**: the C++ embedder, or the
+language that called protoST, receives the same `ProtoException`, and the
+`protost` command prints its `name` and `message`
+(`error: NegativeRadius: circleArea: the radius -1.000000 is negative`) and
+exits with status 1.
+
+**protoCore's own errors arrive as protoST classes.** protoCore raises its
+failures through the error factory protoST installs in its space, so they are
+caught by protoST's names wherever they happen — in a primitive or inside a
+module's method:
+
+| protoCore error (`ProtoErrorKind`) | protoST class | Resumable |
+|---|---|---|
+| `DivisionByZero` — integer division or modulo by zero | `ZeroDivide` | yes |
+| `Overflow` — an integer that does not fit the representation asked for | `ArithmeticError` | yes |
+| `InvalidArgument` — an unparsable integer literal, a radix outside 2..36, a negative shift | `InvalidArgument` | no |
+| `TypeMismatch` — an integer operation on a value that is not an integer | `InvalidArgument` | no |
+| `ArityMismatch` — more positional arguments than the method's parameters | `Error` | no |
+
+The instance carries protoCore's message as its `messageText`. protoST's own
+numeric primitives raise their division by zero the same way, so
+`[10 // 0] on: ZeroDivide do: [...]` and a division by zero inside a module
+are the same `ZeroDivide`.
+
+**A C++ exception is a module defect.** A `std::exception` (or anything else
+that is not a `ProtoException`) thrown by a primitive or a module method is
+translated at the native boundary into a non-resumable `Error` whose
+`messageText` is the exception's `what()`, so it can still be caught by
+`on: Error do:`.
+
+**An unhandled protoST error leaves as a `ProtoException`.** An `Error` no
+handler takes ends the activation (§8.2); to a C++ embedder, or to another
+language that loaded a protoST module, it arrives as a `proto::ProtoException`
+whose value is the exception object itself, selected there by its prototype
+chain (`isInstanceOf(context, Error)`).
+
+The top levels — the `protost` command, the REPL, `-e`, the debugger, an
+actor's worker thread and a `Future` callback — report an uncaught exception
+of any kind (with its `at` trace when protoST raised it) instead of
+terminating the process.
 
 ---
 
@@ -1782,7 +1851,9 @@ waiter, with its class and text: an `AppError` signalled inside the actor is
 caught by `on: AppError do:` around the `wait`, and a `doesNotUnderstand:` by
 `on: MessageNotUnderstood do:`. A future rejected with a value that is not an
 exception (`aFuture rejectWith: 'cause'`) is re-signalled as an `Error` whose
-text is `Future rejected: cause`.
+text is `Future rejected: cause`. A module's error that an actor method lets
+through (§8.7) rejects the future with the same value, and `wait` re-signals it,
+so `on:do:` naming the module's type around the `wait` catches it.
 
 **An actor that waits handles no other message** (D37). While its method is
 parked on `wait`, the actor's mailbox is not processed, so two actors that

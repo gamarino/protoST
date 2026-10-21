@@ -85,10 +85,18 @@ namespace {
 // A thenDo: / catch: callback runs when a future settles, where nobody can
 // catch its error: report it on stderr (with the trace of an unhandled
 // protoST error) instead of dropping it, and carry on with the next callback.
-void reportCallbackError(const char* what, const std::exception* e) {
-    std::string text = e ? describeUncaught(*e) : std::string("error: ") + what;
+void reportCallbackError(const std::string& text) {
     std::fprintf(stderr, "error in a Future callback: %s\n",
                  text.rfind("error: ", 0) == 0 ? text.c_str() + 7 : text.c_str());
+}
+
+// Run one thenDo: / catch: callback, reporting whatever escapes it.
+void invokeCallback(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* block,
+                    const proto::ProtoObject* const* args, int argc) {
+    try { invokeBlock(rt, ctx, block, args, argc); }
+    catch (const proto::ProtoException& e) { reportCallbackError(describeUncaught(ctx, e)); }
+    catch (const std::exception& e) { reportCallbackError(describeUncaught(e)); }
+    catch (...) { reportCallbackError("non-local exit from a callback"); }
 }
 
 // Fire each callback in `list` with `arg`. Callback errors are swallowed: a
@@ -102,9 +110,7 @@ void fireCallbackList(STRuntime& rt, proto::ProtoContext* ctx,
     const proto::ProtoObject* cargs[] = { arg ? arg : PROTO_NONE };
     for (long long i = 0; i < n; ++i) {
         auto* cb = list->getAt(ctx, static_cast<int>(i));
-        try { invokeBlock(rt, ctx, cb, cargs, 1); }
-        catch (const std::exception& e) { reportCallbackError(e.what(), &e); }
-        catch (...) { reportCallbackError("non-local exit from a callback", nullptr); }
+        invokeCallback(rt, ctx, cb, cargs, 1);
     }
 }
 
@@ -488,9 +494,7 @@ const proto::ProtoObject* prim_Future_thenDo(STRuntime& rt, proto::ProtoContext*
     if (s == 1) {
         auto* v = r->getOwnAttributeDirect(ctx, valueKey);
         const proto::ProtoObject* args[] = { v ? v : PROTO_NONE };
-        try { invokeBlock(rt, ctx, block, args, 1); }
-        catch (const std::exception& e) { reportCallbackError(e.what(), &e); }
-        catch (...) { reportCallbackError("non-local exit from a callback", nullptr); }
+        invokeCallback(rt, ctx, block, args, 1);
         return r;
     }
     // Pending (or mid-settle): CAS-append, or fire now if a resolve already
@@ -499,9 +503,7 @@ const proto::ProtoObject* prim_Future_thenDo(STRuntime& rt, proto::ProtoContext*
     if (!appendOrDrained(ctx, r, thenCbsKey, block)) {
         auto* v = r->getOwnAttributeDirect(ctx, valueKey);
         const proto::ProtoObject* args[] = { v ? v : PROTO_NONE };
-        try { invokeBlock(rt, ctx, block, args, 1); }
-        catch (const std::exception& e) { reportCallbackError(e.what(), &e); }
-        catch (...) { reportCallbackError("non-local exit from a callback", nullptr); }
+        invokeCallback(rt, ctx, block, args, 1);
     }
     return r;
 }
@@ -525,17 +527,13 @@ const proto::ProtoObject* prim_Future_catch(STRuntime& rt, proto::ProtoContext* 
     if (s == 2) {
         auto* e = r->getOwnAttributeDirect(ctx, errorKey);
         const proto::ProtoObject* args[] = { e ? e : PROTO_NONE };
-        try { invokeBlock(rt, ctx, block, args, 1); }
-        catch (const std::exception& e) { reportCallbackError(e.what(), &e); }
-        catch (...) { reportCallbackError("non-local exit from a callback", nullptr); }
+        invokeCallback(rt, ctx, block, args, 1);
         return r;
     }
     if (!appendOrDrained(ctx, r, catchCbsKey, block)) {
         auto* e = r->getOwnAttributeDirect(ctx, errorKey);
         const proto::ProtoObject* args[] = { e ? e : PROTO_NONE };
-        try { invokeBlock(rt, ctx, block, args, 1); }
-        catch (const std::exception& e) { reportCallbackError(e.what(), &e); }
-        catch (...) { reportCallbackError("non-local exit from a callback", nullptr); }
+        invokeCallback(rt, ctx, block, args, 1);
     }
     return r;
 }
@@ -601,11 +599,10 @@ const proto::ProtoString* observedKey(proto::ProtoContext* ctx) {
 std::string describeRejection(proto::ProtoContext* ctx, const proto::ProtoObject* error) {
     if (!error || error == PROTO_NONE) return "nil";
     if (const proto::ProtoString* str = error->asString(ctx)) return str->toStdString(ctx);
-    const proto::ProtoString* msgKey = proto::ProtoString::createSymbol(ctx, "__message_text__");
-    const proto::ProtoObject* m = error->getAttribute(ctx, msgKey);
-    if (m && m != PROTO_NONE)
-        if (const proto::ProtoString* ms = m->asString(ctx)) return ms->toStdString(ctx);
-    return "an error without messageText";
+    if (!error->isCell(ctx)) return "an error without messageText";
+    // A protoST exception's messageText, or a foreign one's name and message.
+    const std::string text = describeExceptionValue(ctx, error);
+    return text.empty() ? std::string("an error without messageText") : text;
 }
 } // namespace
 
@@ -615,14 +612,20 @@ std::string describeRejection(proto::ProtoContext* ctx, const proto::ProtoObject
 const proto::ProtoObject* raiseRejection(STRuntime& rt, proto::ProtoContext* ctx,
                                          const proto::ProtoObject* error) {
     if (isExceptionInstance(rt, ctx, error)) {
-        // Every waiter signals its own copy: signal stamps handler state on
-        // the instance, and several threads may wait on the same Future.
+        // Every waiter signals its own copy: several threads may wait on the
+        // same Future, and a handler may modify the instance it receives.
         bool understood = false;
         const proto::ProtoObject* copy = sendDynamic(
             rt, ctx, error, proto::ProtoString::createSymbol(ctx, "shallowCopy"),
             nullptr, 0, &understood);
         return resignalException(rt, ctx, (understood && copy) ? copy : error);
     }
+    // A foreign exception (a module's error an actor method let through):
+    // re-signalled as the same value, so the waiter's handler for its type
+    // catches it; unhandled, it leaves as a ProtoException carrying it.
+    if (error && error != PROTO_NONE && error->isCell(ctx) && !error->asString(ctx)
+        && error->hasParent(ctx, rt.bootstrap().objectProto) == 0)
+        return resignalException(rt, ctx, error);
     throw std::runtime_error("Future rejected: " + describeRejection(ctx, error));
 }
 

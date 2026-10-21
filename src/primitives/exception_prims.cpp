@@ -15,9 +15,9 @@
 //     re-evaluates the protected block from scratch.
 //
 //   * `signal` runs a LOOP over the thread-local handler stack. Each turn it
-//     finds the newest enabled matching entry, stamps the handler id onto the
-//     instance, disables that entry plus every inner one, and runs the handler
-//     block IN PLACE. The handler outcome is then dispatched:
+//     finds the newest enabled matching entry, records the handler id on the
+//     thread's active-signal stack, disables that entry plus every inner one,
+//     and runs the handler block IN PLACE. The handler outcome is then dispatched:
 //       - fall-through / `return:` → throw UnwindToHandler (unwind the
 //         protected block, the `on:do:` yields the value);
 //       - `resume:` (ResumeSignal) → caught here; `signal` RETURNS the value,
@@ -27,7 +27,19 @@
 //       - `retry` (RetrySignal) → NOT caught here; propagates to `on:do:`.
 //     With NO matching handler the exception's default action runs (EXC-b
 //     refinement: a resumable Exception/Warning resumes with nil; an Error /
-//     non-resumable one aborts via std::runtime_error).
+//     non-resumable one aborts by throwing UnhandledSTException, a
+//     proto::ProtoException carrying the exception).
+//
+//   * protoCore 3.0.0 (unified exceptions): a proto::ProtoException that
+//     reaches a native boundary is signalled through the same loop with its
+//     value unchanged (signalProtoException). A value that is not a protoST
+//     exception -- an error type defined by a module, or another language's
+//     exception -- is a FOREIGN exception: it is matched by its prototype
+//     chain like any other, it is never resumable, the Exception protocol
+//     (messageText, return:, retry, pass, ...) answers for it while its
+//     handler runs, and when no handler takes it the original ProtoException
+//     continues outward. protoCore's own errors arrive already built as
+//     protoST exceptions by the space's error factory (stErrorFactory).
 
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
@@ -43,6 +55,7 @@
 #include "runtime/NativeExceptionBridge.h"
 #include "runtime/TransientPin.h"
 #include "runtime/ExecutionEngine.h"
+#include "modules/STModuleProvider.h"
 #include "protoCore.h"
 
 #include <cstdio>
@@ -62,6 +75,13 @@ const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
                                       const proto::ProtoString* selector,
                                       const proto::ProtoObject* const* args, int argc,
                                       bool* understood);
+// The same, with the method looked up on `lookupRoot` instead of the receiver.
+const proto::ProtoObject* sendDynamicFrom(STRuntime& rt, proto::ProtoContext* ctx,
+                                          const proto::ProtoObject* recv,
+                                          const proto::ProtoObject* lookupRoot,
+                                          const proto::ProtoString* selector,
+                                          const proto::ProtoObject* const* args, int argc,
+                                          bool* understood);
 
 // invokeBlock — defined in block_prims.cpp. Runs a BlockClosure synchronously
 // in a fresh nested ExecutionEngine. An UnwindToHandler thrown inside the
@@ -96,11 +116,6 @@ const proto::ProtoString* msgTextKey(proto::ProtoContext* ctx) {
     // would bind to the first runtime's space.
     return proto::ProtoString::createSymbol(ctx, "__message_text__");
 }
-const proto::ProtoString* activeHandlerKey(proto::ProtoContext* ctx) {
-    // Resolved per call: symbols are interned per ProtoSpace, and a static
-    // would bind to the first runtime's space.
-    return proto::ProtoString::createSymbol(ctx, "__active_handler_id__");
-}
 const proto::ProtoString* classNameKey(proto::ProtoContext* ctx) {
     // Resolved per call: symbols are interned per ProtoSpace, and a static
     // would bind to the first runtime's space.
@@ -112,26 +127,75 @@ const proto::ProtoString* resumableKey(proto::ProtoContext* ctx) {
     return proto::ProtoString::createSymbol(ctx, "__resumable__");
 }
 
+// --- The active-signal stack ----------------------------------------------
+//
+// One entry per handler block currently running on this thread, innermost
+// last: the exception it handles, the id of its handler entry, and whether the
+// exception is foreign (a value raised by a module or another language, not a
+// protoST exception instance). The handler actions (`return:`, `resume:`,
+// `retry`, `pass`), which only receive the exception as their receiver, find
+// their handler here by the exception's identity.
+//
+// Earlier versions stamped the id onto the instance as an attribute. That
+// cannot work for a foreign exception: its value is not protoST's to modify,
+// and an immutable one cannot be modified at all. The stack also restores the
+// outer id when a handler re-signals the same instance, which the stamp
+// overwrote. Thread-local, as the handler stack is: a handler runs on the
+// thread that signalled. The exception is pinned by the signalInstance that
+// pushed the entry.
+struct ActiveSignal {
+    const proto::ProtoObject* exception;
+    proto::proto_ulong handlerId;
+    bool foreign;
+};
+thread_local std::vector<ActiveSignal> g_activeSignals;
+
+struct ActiveSignalScope {
+    ActiveSignalScope(const proto::ProtoObject* exc, proto::proto_ulong id, bool foreign) {
+        g_activeSignals.push_back(ActiveSignal{exc, id, foreign});
+    }
+    ~ActiveSignalScope() { g_activeSignals.pop_back(); }
+    ActiveSignalScope(const ActiveSignalScope&) = delete;
+    ActiveSignalScope& operator=(const ActiveSignalScope&) = delete;
+};
+
+const ActiveSignal* findActiveSignal(const proto::ProtoObject* exc) {
+    for (std::size_t i = g_activeSignals.size(); i-- > 0; )
+        if (g_activeSignals[i].exception == exc) return &g_activeSignals[i];
+    return nullptr;
+}
+
 // True when the exception instance is resumable. The `__resumable__` marker is
 // installed class-side at bootstrap (`Exception`/`Warning` true, `Error`
 // false) and inherited by instances and user subclasses; an instance may
 // override it. Absent marker is treated as resumable (the `Exception` root
-// default) — only `Error` and its descendants stamp `false`.
+// default) — only `Error` and its descendants stamp `false`. A foreign
+// exception is never resumable: the native frames between its origin and the
+// boundary that signalled it are gone.
 bool isResumable(proto::ProtoContext* ctx, const proto::ProtoObject* exc) {
     if (!exc) return false;
+    if (const ActiveSignal* active = findActiveSignal(exc))
+        if (active->foreign) return false;
     const proto::ProtoObject* m = exc->getAttribute(ctx, resumableKey(ctx));
     if (!m || m == PROTO_NONE) return true;
     return m == PROTO_TRUE;
 }
 
-// The active handler id stamped onto `exc` by `signal`, or 0 when the
-// exception is not currently being handled.
-proto::proto_ulong activeHandlerIdOf(proto::ProtoContext* ctx,
-                                const proto::ProtoObject* exc) {
-    const proto::ProtoObject* idObj =
-        exc ? exc->getAttribute(ctx, activeHandlerKey(ctx)) : nullptr;
-    if (!idObj || idObj == PROTO_NONE) return 0;
-    return static_cast<proto::proto_ulong>(idObj->asLong(ctx));
+// The id of the handler currently running for `exc`, or 0 when the exception
+// is not currently being handled on this thread.
+proto::proto_ulong activeHandlerIdOf(proto::ProtoContext*, const proto::ProtoObject* exc) {
+    const ActiveSignal* active = exc ? findActiveSignal(exc) : nullptr;
+    return active ? active->handlerId : 0;
+}
+
+// A string attribute of `v`, or "" when absent or not a string.
+std::string stringAttribute(proto::ProtoContext* ctx, const proto::ProtoObject* v,
+                            const char* name) {
+    if (!v || v == PROTO_NONE || !v->isCell(ctx) || v->asString(ctx)) return std::string();
+    const proto::ProtoObject* a = v->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, name));
+    if (!a || a == PROTO_NONE || !a->isString(ctx)) return std::string();
+    const proto::ProtoString* s = a->asString(ctx);
+    return s ? s->toStdString(ctx) : std::string();
 }
 
 // True when `obj` is a class object (carries `__class_name__` as an OWN
@@ -192,27 +256,22 @@ std::string defaultActionMessage(STRuntime& rt, proto::ProtoContext* ctx,
 //     throwing UnhandledSTException — an actor rejects its Future, the REPL/-e
 //     prints it. This function does not return in that case.
 //
-// EXC-d: the abort throw is UnhandledSTException, NOT a bare std::runtime_error.
-// It derives from std::runtime_error so the `drainOne` / `runTopLevel`
-// `catch (const std::exception&)` clauses keep working unchanged; the dedicated
-// type lets the EXC-d native-translation wrapper recognise an
-// already-protoST exception and re-throw it instead of double-translating it.
+// EXC-d: the abort throw is UnhandledSTException, a proto::ProtoException
+// carrying the exception (protoCore 3.0.0): it leaves the runtime as the
+// exception type every protoCore language catches, and the dedicated type lets
+// the native boundary recognise an exception every handler was already offered
+// and re-throw it instead of signalling it again (UnhandledSTException.h).
 const proto::ProtoObject* defaultAction(STRuntime& rt, proto::ProtoContext* ctx,
                                         const proto::ProtoObject* exc) {
     const bool isErrorClass = exc && exc->getAttribute(
         ctx, proto::ProtoString::createSymbol(ctx, "__unhandled_is_error__")) == PROTO_TRUE;
     if (isErrorClass || !isResumable(ctx, exc)) {
-        // Error (resumable or not) / non-resumable: abort the activation
-        // (EXC-a behaviour, EXC-d dedicated type).
-        // Inside an actor, keep the exception on the actor itself (a GC root
-        // while its message runs) for the drain to reject the Future with.
-        bool onActor = false;
-        if (const proto::ProtoObject* actor = rt.currentActor()) {
-            const_cast<proto::ProtoObject*>(actor)->setAttribute(
-                ctx, proto::ProtoString::createSymbol(ctx, "__inflight_exception__"), exc);
-            onActor = true;
-        }
-        throw UnhandledSTException(defaultActionMessage(rt, ctx, exc),
+        // Error (resumable or not) / non-resumable: abort the activation by
+        // throwing the exception itself, as a ProtoException (protoCore pins
+        // it while it is in flight). Inside an actor the drain rejects the
+        // message's Future with it.
+        const bool onActor = rt.currentActor() != nullptr;
+        throw UnhandledSTException(ctx, exc, defaultActionMessage(rt, ctx, exc),
                                    ExecutionEngine::describeActiveStack(20), onActor);
     }
     // Resumable and unhandled. A Warning announces itself; the bare Exception
@@ -255,9 +314,41 @@ const proto::ProtoObject* defaultAction(STRuntime& rt, proto::ProtoContext* ctx,
 // (raiseNestingLimitError): it unwinds to the `on:do:` whose handler catches
 // it, which then calls this function again with `firstHandlerId` set to run
 // that handler on the limit Error. 0 == search the handler stack as usual.
+//
+// `origin` is set when `exc` is the value of a ProtoException caught at a
+// native boundary (signalProtoException): a foreign exception no handler
+// takes then re-throws that very exception.
 const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx,
                                           const proto::ProtoObject* exc,
-                                          proto::proto_ulong firstHandlerId = 0);
+                                          proto::proto_ulong firstHandlerId = 0,
+                                          const std::exception_ptr* origin = nullptr);
+
+// The text a foreign exception reports: "<name>: <message>" from its `name`
+// and `message` attributes, the convention protoCore's own error values and
+// its example modules follow.
+std::string describeForeignValue(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
+    const std::string name = stringAttribute(ctx, v, "name");
+    const std::string message = stringAttribute(ctx, v, "message");
+    if (!name.empty() && !message.empty()) return name + ": " + message;
+    if (!message.empty()) return message;
+    if (!name.empty()) return name;
+    return "a foreign exception";
+}
+
+// The default action of a foreign exception no handler took: it continues
+// outward with its value unchanged, as an UnhandledSTException, so no outer
+// native boundary offers it to the handlers again. It carries the
+// ProtoException it arrived in, when there is one, which is what leaves the
+// runtime (UnhandledSTException::original); a re-signalled value (`e signal`,
+// a rejected Future) leaves as the UnhandledSTException itself.
+[[noreturn]] void foreignDefaultAction(STRuntime& rt, proto::ProtoContext* ctx,
+                                       const proto::ProtoObject* exc,
+                                       const std::exception_ptr* origin) {
+    throw UnhandledSTException(ctx, exc, describeForeignValue(ctx, exc),
+                               ExecutionEngine::describeActiveStack(20),
+                               rt.currentActor() != nullptr,
+                               origin ? *origin : std::exception_ptr());
+}
 
 // A fresh, non-resumable Error carrying the engine nesting limit's message.
 const proto::ProtoObject* newNestingLimitError(STRuntime& rt, proto::ProtoContext* ctx) {
@@ -289,10 +380,12 @@ const proto::ProtoObject* raiseNestingLimitError(STRuntime& rt, proto::ProtoCont
 
 const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx,
                                           const proto::ProtoObject* exc,
-                                          proto::proto_ulong firstHandlerId) {
+                                          proto::proto_ulong firstHandlerId,
+                                          const std::exception_ptr* origin) {
     // Pin the instance for the whole primitive — it is held across handler-
     // stack walks and invokeBlock (which spins a full nested engine).
     TransientPin pinExc(ctx, exc);
+    const bool foreign = !isExceptionInstance(rt, ctx, exc);
 
     proto::proto_ulong searchBelowId = 0;   // 0 == search from the top of the stack
     for (;;) {
@@ -303,7 +396,9 @@ const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx
         if (!entry) {
             // No (further) matching handler: run the exception's default
             // action. For a resumable exception this returns a value that
-            // `signal` yields; for an Error it throws.
+            // `signal` yields; for an Error it throws; a foreign exception
+            // continues outward.
+            if (foreign) foreignDefaultAction(rt, ctx, exc, origin);
             return defaultAction(rt, ctx, exc);
         }
 
@@ -313,13 +408,6 @@ const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx
         // S23: no engine is left for the handler block at this depth.
         if (!ExecutionEngine::canStartNestedEngine())
             return raiseNestingLimitError(rt, ctx, searchBelowId);
-
-        // Stamp the active handler id onto the instance so the handler
-        // actions (`return:`, `resume:`, `retry`, `pass`) — which only
-        // receive the exception as their receiver — can reach this entry.
-        const_cast<proto::ProtoObject*>(exc)->setAttribute(
-            ctx, activeHandlerKey(ctx),
-            ctx->fromLong(static_cast<long long>(handlerId)));
 
         // Disable this entry and every inner one, so a `signal` raised while
         // the handler block runs is caught by an OUTER handler.
@@ -335,6 +423,10 @@ const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx
         const proto::ProtoObject* resumed = nullptr;
         bool passed = false;
         try {
+            // The handler actions (`return:`, `resume:`, `retry`, `pass`) —
+            // which only receive the exception as their receiver — find this
+            // entry through the active-signal stack while the handler runs.
+            ActiveSignalScope active(exc, handlerId, foreign);
             const proto::ProtoObject* a0 = exc;
             // The handler is culled, as in Pharo: a block with no argument
             // (on: Error do: [nil]) is evaluated without the exception.
@@ -369,8 +461,8 @@ const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx
 
         // The handler fell off its end without return:/resume:/retry/pass.
         // Fall-through == `return: handlerResult`.
-        throw UnwindToHandler{ handlerId,
-                               handlerResult ? handlerResult : PROTO_NONE };
+        throw UnwindToHandler(ctx, handlerId,
+                              handlerResult ? handlerResult : PROTO_NONE);
     }
 }
 
@@ -448,18 +540,6 @@ const proto::ProtoObject* signalErrorOfClass(STRuntime& rt,
     return signalInstance(rt, ctx, exc);
 }
 
-// ZeroDivide is resumable (ArithmeticError): the bridge answers the value a
-// handler passes to resume: as the failed primitive's result, so
-// [1/0] on: ZeroDivide do: [:e | e resume: 0] evaluates to 0, as in Pharo.
-const proto::ProtoObject* signalZeroDivide(STRuntime& rt, proto::ProtoContext* ctx) {
-    const proto::ProtoObject* exc =
-        const_cast<proto::ProtoObject*>(rt.bootstrap().zeroDivideProto)->newChild(ctx, /*isMutable=*/true);
-    TransientPin pinExc(ctx, exc);
-    const_cast<proto::ProtoObject*>(exc)->setAttribute(
-        ctx, msgTextKey(ctx), ctx->fromUTF8String("ZeroDivide"));
-    return signalInstance(rt, ctx, exc);
-}
-
 // Signal a fresh instance of the global class named `className` (an Error
 // subclass defined by the kernel, such as SubscriptOutOfBounds), or a plain
 // Error when no such global exists.
@@ -521,6 +601,160 @@ const proto::ProtoObject* signalNativeError(STRuntime& rt,
                               message ? message : "native exception");
 }
 
+// --- protoCore 3.0.0: a ProtoException at a native boundary ----------------
+//
+// Declared in NativeExceptionBridge.h; called by translateNativeException
+// after its try statement, with the caught exception kept alive in `caught`
+// (which keeps `value` pinned). The value is signalled unchanged, so the
+// handler receives the very object that was raised:
+//   * a protoST exception instance -- protoCore's own error, which the error
+//     factory built as a ZeroDivide / InvalidArgument / ..., or a protoST
+//     exception that crossed another runtime -- is signalled like `signal`:
+//     it keeps its class's resumability and, unhandled, goes to its default
+//     action;
+//   * any other value is a foreign exception: matched by its prototype chain,
+//     non-resumable, and re-thrown as `caught` itself when no handler takes it.
+const proto::ProtoObject* signalProtoException(STRuntime& rt, proto::ProtoContext* ctx,
+                                               const proto::ProtoObject* value,
+                                               std::exception_ptr caught) {
+    if (isExceptionInstance(rt, ctx, value)) return signalInstance(rt, ctx, value);
+    return signalInstance(rt, ctx, value, 0, &caught);
+}
+
+// The Exception protocol for a foreign exception while its handler runs: the
+// selector is looked up on Error, and the method runs with the foreign value
+// as its receiver (messageText, description, return:, retry, pass, outer,
+// signal, isResumable, ...). Answers false, without running anything, when
+// `recv` is not a foreign exception being handled on this thread or Error has
+// no such method -- the send is then not understood, as before.
+bool canSendToForeignException(STRuntime& rt, proto::ProtoContext* ctx,
+                               const proto::ProtoObject* recv,
+                               const proto::ProtoString* selector) {
+    const ActiveSignal* active = recv ? findActiveSignal(recv) : nullptr;
+    if (!active || !active->foreign) return false;
+    const proto::ProtoObject* m = rt.bootstrap().errorProto->getAttribute(ctx, selector);
+    return m && m != PROTO_NONE;
+}
+
+const proto::ProtoObject* sendToForeignException(STRuntime& rt, proto::ProtoContext* ctx,
+                                                 const proto::ProtoObject* recv,
+                                                 const proto::ProtoString* selector,
+                                                 const proto::ProtoObject* const* args, int argc) {
+    bool understood = false;
+    const proto::ProtoObject* r = sendDynamicFrom(rt, ctx, recv, rt.bootstrap().errorProto,
+                                                  selector, args, argc, &understood);
+    if (!understood)
+        throw std::runtime_error("doesNotUnderstand: " + selector->toStdString(ctx));
+    return r ? r : PROTO_NONE;
+}
+
+// --- Describing an uncaught exception -------------------------------------
+
+std::string describeUncaught(const std::exception& e) {
+    return std::string("error: ") + e.what();
+}
+
+std::string describeProtoException(proto::ProtoContext* ctx, const proto::ProtoException& e) {
+    if (const auto* u = dynamic_cast<const UnhandledSTException*>(&e)) return u->message();
+    const proto::ProtoObject* v = e.value();
+    // A protoST exception that did not go through this runtime's default
+    // action (raised by another runtime with a protoST value).
+    const std::string text = messageTextOf(ctx, v);
+    std::string className = stringAttribute(ctx, v, "__class_name__");
+    if (!text.empty() || !className.empty()) {
+        if (className.empty() || className == "Error" || text.empty()) return text.empty() ? className : text;
+        return className + ": " + text;
+    }
+    return describeForeignValue(ctx, v);
+}
+
+std::string describeUncaught(proto::ProtoContext* ctx, const proto::ProtoException& e) {
+    std::string out = "error: " + describeProtoException(ctx, e);
+    if (const auto* u = dynamic_cast<const UnhandledSTException*>(&e))
+        if (!u->trace().empty()) out += "\n" + u->trace();
+    return out;
+}
+
+// The description of a value used as an exception -- a protoST exception, a
+// module's error, protoCore's own error value -- for messages such as a
+// rejected Future's.
+std::string describeExceptionValue(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
+    const std::string text = messageTextOf(ctx, v);
+    if (!text.empty()) return text;
+    return describeForeignValue(ctx, v);
+}
+
+// --- protoCore's errors as protoST exceptions (the error factory) ---------
+//
+// protoCore raises its own failures -- a division by zero, a malformed
+// integer literal, an integer read out of range, an operand of the wrong
+// type, a call with too many arguments -- as ProtoExceptions whose value the
+// space's error factory builds. This factory builds them as instances of
+// protoST's own classes, the way `aClass new messageText: text` would, so
+// `on: ZeroDivide do:` and `on: Error do:` catch them wherever they happen,
+// in a primitive or inside a module:
+//
+//   ProtoErrorKind     protoST class       resumable
+//   DivisionByZero     ZeroDivide          yes (ArithmeticError, as in Pharo)
+//   Overflow           ArithmeticError     yes
+//   InvalidArgument    InvalidArgument     no  (kernel exception.st)
+//   TypeMismatch       InvalidArgument     no
+//   ArityMismatch      Error               no
+//
+// The classes are reached through the runtime registered for the space
+// (stRuntimeForSpace): the bootstrap prototypes and the kernel globals, all
+// pinned for the runtime's lifetime. Before the kernel defines
+// InvalidArgument it is a plain Error; with no runtime registered (a space
+// being torn down) the value is protoCore's default one. The factory never
+// throws: on any failure it answers protoCore's default value, or nil.
+namespace {
+const proto::ProtoObject* protoCoreDefaultError(proto::ProtoContext* ctx, proto::ProtoErrorKind kind,
+                                                const char* message) {
+    proto::ProtoContext::CriticalSection cs(ctx);
+    const proto::ProtoObject* text = ctx->fromUTF8String(message ? message : "error");
+    return ctx->space->getErrorPrototype(ctx, kind)->newChild(ctx)->setAttribute(
+        ctx, proto::ProtoString::createSymbol(ctx, "message"), text);
+}
+
+const proto::ProtoObject* stErrorFactory(proto::ProtoContext* ctx, proto::ProtoErrorKind kind,
+                                         const char* message) {
+    try {
+        STRuntime* rt = ctx && ctx->space ? stRuntimeForSpace(ctx->space) : nullptr;
+        if (!rt) return protoCoreDefaultError(ctx, kind, message);
+        const Bootstrap& b = rt->bootstrap();
+        const proto::ProtoObject* cls = b.errorProto;
+        switch (kind) {
+            case proto::ProtoErrorKind::DivisionByZero: cls = b.zeroDivideProto; break;
+            case proto::ProtoErrorKind::Overflow:       cls = b.arithmeticErrorProto; break;
+            case proto::ProtoErrorKind::InvalidArgument:
+            case proto::ProtoErrorKind::TypeMismatch: {
+                const proto::ProtoObject* g = rt->globals();
+                const proto::ProtoObject* named = g
+                    ? g->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, "InvalidArgument"))
+                    : nullptr;
+                if (named && named != PROTO_NONE && isExceptionClassObject(*rt, ctx, named))
+                    cls = named;
+                break;
+            }
+            case proto::ProtoErrorKind::ArityMismatch:  cls = b.errorProto; break;
+        }
+        // No collection between the allocations: the text and the instance
+        // are held only in C++ locals until protoCore pins the value.
+        proto::ProtoContext::CriticalSection cs(ctx);
+        const proto::ProtoObject* text = ctx->fromUTF8String(message ? message : "error");
+        const proto::ProtoObject* exc = cls->newChild(ctx, /*isMutable=*/true);
+        exc->setAttribute(ctx, msgTextKey(ctx), text);
+        return exc;
+    } catch (...) {
+        try { return protoCoreDefaultError(ctx, kind, message); } catch (...) { return PROTO_NONE; }
+    }
+}
+} // namespace
+
+void installErrorFactory(STRuntime& rt) {
+    rt.space()->setErrorFactory(&stErrorFactory);
+}
+
 namespace {
 
 // --- Build an instance from a class object ---------------------------------
@@ -569,11 +803,18 @@ const proto::ProtoObject* prim_Exception_signalText(STRuntime& rt, proto::ProtoC
 // with no text found the messageText *method* marker on its prototype and
 // answered it as an integer. With no text, answer the class name, as Pharo's
 // `description` does.
-const proto::ProtoObject* prim_Exception_messageText(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Exception_messageText(STRuntime& rt, proto::ProtoContext* ctx,
                                                       const proto::ProtoObject* r,
                                                       const proto::ProtoObject* const*, int) {
     const proto::ProtoObject* m = r ? r->getAttribute(ctx, msgTextKey(ctx)) : nullptr;
     if (m && m != PROTO_NONE) return m;
+    // A foreign exception (a module's error, protoCore's own error value)
+    // carries its text in a `message` attribute.
+    if (!isExceptionInstance(rt, ctx, r)) {
+        const proto::ProtoObject* fm = (r && r != PROTO_NONE && r->isCell(ctx) && !r->asString(ctx))
+            ? r->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, "message")) : nullptr;
+        if (fm && fm != PROTO_NONE && fm->isString(ctx)) return fm;
+    }
     const proto::ProtoObject* cn = r ? r->getAttribute(ctx, classNameKey(ctx)) : nullptr;
     return (cn && cn != PROTO_NONE) ? cn : PROTO_NONE;
 }
@@ -591,19 +832,19 @@ const proto::ProtoObject* prim_Exception_setMessageText(STRuntime&, proto::Proto
 // anException return: v
 //
 // Handler action: unwind to the matching `on:do:` and make it yield `v`. The
-// target handler id was stamped onto the instance by `signal`.
+// target handler id is the one `signal` recorded for this instance on the
+// active-signal stack.
 const proto::ProtoObject* prim_Exception_return(STRuntime&, proto::ProtoContext* ctx,
                                                  const proto::ProtoObject* r,
                                                  const proto::ProtoObject* const* a,
                                                  int argc) {
     if (argc != 1) throw std::runtime_error("return: expects 1 arg (value)");
-    const proto::ProtoObject* idObj = r ? r->getAttribute(ctx, activeHandlerKey(ctx)) : nullptr;
-    if (!idObj || idObj == PROTO_NONE) {
+    const proto::proto_ulong handlerId = activeHandlerIdOf(ctx, r);
+    if (handlerId == 0) {
         // `return:` on an exception that is not currently being handled.
         throw std::runtime_error("return: sent to an exception with no active handler");
     }
-    proto::proto_ulong handlerId = static_cast<proto::proto_ulong>(idObj->asLong(ctx));
-    throw UnwindToHandler{ handlerId, a[0] ? a[0] : PROTO_NONE };
+    throw UnwindToHandler(ctx, handlerId, a[0] ? a[0] : PROTO_NONE);
 }
 
 // anException resume: v  /  anException resume
@@ -627,7 +868,7 @@ const proto::ProtoObject* prim_Exception_resume(STRuntime&, proto::ProtoContext*
         throw std::runtime_error("resume: sent to an exception with no active handler");
     // `resume` with no argument == `resume: nil`.
     const proto::ProtoObject* v = (argc == 1 && a[0]) ? a[0] : PROTO_NONE;
-    throw ResumeSignal{ handlerId, v };
+    throw ResumeSignal(ctx, handlerId, v);
 }
 
 // anException retry
@@ -976,6 +1217,9 @@ const proto::ProtoObject* prim_Message_arguments(STRuntime&, proto::ProtoContext
 void installExceptionPrimitives(STRuntime& rt) {
     auto& reg = rt.registry();
     auto& b   = rt.bootstrap();
+
+    // protoCore's own errors arrive as protoST exceptions (stErrorFactory).
+    installErrorFactory(rt);
 
     // signal / signal: — bound on Exception, inherited by Error / Warning and
     // by user subclasses. Works both class-side (`Error signal: 'x'`) and

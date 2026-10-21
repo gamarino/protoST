@@ -29,7 +29,7 @@ protoScala into one executable.
 | protoScala can read the imported protoST object's attributes | **Works with protoCore 2.6.0 or later; did not with 2.5.0** | protoCore 2.5.0 kept one table of mutable states per space, so through protoScala's context `Counter` had no `__class_name__` (K4). protoCore 2.6.0 (2026-09-29) made that table process-global, which fixes it: protoScala's `ProtoSTInterop.AForeignObjectsStateIsReadThroughTheCallersContext` reads `__class_name__` and writes an attribute protoST then reads. The 0.4.0 package depended on protoCore 2.5.0; 0.5.0 requires 2.6.1 and the current sources 2.11.0. |
 | A foreign runtime calls a protoST method | **Does not work** | By design (§4.2): a protoST method is not a `proto::ProtoMethod`. |
 | protoST imports a module from a real foreign runtime | **Does not work** | `.scala` via `provider:scala`: `module not found`. That provider finds its host from `ctx->space`. `.so` via `provider:compiled`: the import resolves, then `doesNotUnderstand: add#2`. |
-| protoST calls a protoCore method (`proto::ProtoMethod`) exported by another runtime | **Does not work** | `SEND_CALL` handles only protoST bytecode methods and protoST primitive markers (§3.5). |
+| protoST calls a protoCore method (`proto::ProtoMethod`) exported by a module | Verified with a C++ module (2026-10-21); not with another runtime | A call-form send calls it (§3.5). `tests/umd/` imports protoCore's example geometry module, a provider in its own shared library, and catches the error types it defines by name. |
 | protoST consumes a foreign module: import, unary/keyword dispatch, immediates, collections, blocks | Tested with a simulated provider only | `tests/unit/test_t5a_interop.cpp`. Its "foreign" objects are built in protoST's own space, with a primitive registered in protoST's own table. |
 | The installed `protost` / `protoscala` binaries interoperate | **No** | Neither binary links the other runtime. `protoscala` answers `no provider registered for 'st'`. `protost` has no option to add a provider to its chain. |
 | protoJS, protoPython, protoClojure | Untested | They register no provider that protoST can reach. |
@@ -306,12 +306,21 @@ m := Import from: 'doubler.py'.
 m double_it(7, name = 'hello')        "→ same shape as the Python call"
 ```
 
-This is the intended design, and it is **not implemented** for foreign
-methods. `SEND_CALL` (`src/runtime/ExecutionEngine.cpp`) looks up the bare
-attribute. It then handles only a protoST bytecode method (an object carrying
-`__bc_ptr__`) and a protoST primitive marker. A `proto::ProtoMethod` cell, which
-is what `protoscalac` exports, falls through to `doesNotUnderstand`. No
-protoPython module has been imported into protoST at all.
+`SEND_CALL` (`src/runtime/ExecutionEngine.cpp`) looks up the bare attribute
+and handles a protoST bytecode method (an object carrying `__bc_ptr__`), a
+protoST primitive marker, and, since the protoCore 3.0.0 port, a
+`proto::ProtoMethod` cell: what a C++ module and `protoscalac` export. The
+method is called through protoCore's array call form with the receiver as
+`self`, the positional arguments, and the named arguments under their interned
+names. The call is a native boundary: a `proto::ProtoException` the method
+raises is signalled as a Smalltalk exception with its value unchanged, so
+`on:do:` naming the module's own error type catches it (LANGUAGE.md §8.7), and
+a C++ `std::exception` becomes a plain `Error`. This is exercised with
+protoCore's example geometry module, a C++ provider in its own shared library
+(`tests/umd/`, run through `tests/umd/umd_host.cpp`, which registers the
+provider: the `protost` binary itself has no plug-in loader for native
+providers). It has not been exercised with a protoScala or protoPython module;
+the cross-space read problem of §0 still applies to their mutable objects.
 
 A protoST class can mirror the convention for outbound interop:
 
@@ -427,6 +436,10 @@ attributes (§0).
 - **One protoST runtime per process**, because the provider is registered once.
 - **A namespace snapshot.** protoST's module object is mutable; the namespace the
   importer receives is taken once, at import.
+- **Errors cross unchanged.** An error the module's top level does not handle
+  reaches the importing runtime as a `proto::ProtoException` whose value is the
+  protoST exception object (or, for a module error it let through, the
+  original exception), never as a string (LANGUAGE.md §8.7).
 
 ---
 

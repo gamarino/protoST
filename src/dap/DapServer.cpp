@@ -1,4 +1,5 @@
 #include "dap/DapServer.h"
+#include "runtime/UnhandledSTException.h"
 #include "dap/DapTransport.h"
 
 #include "protoST/STRuntime.h"
@@ -327,6 +328,9 @@ private:
         std::string error;
         try {
             runtime_->runTopLevel(*module_, ctx);
+        } catch (const proto::ProtoException& e) {
+            exitCode = 1;
+            error = describeUncaught(ctx, e) + "\n";
         } catch (const std::exception& e) {
             exitCode = 1;
             error = std::string("error: ") + e.what() + "\n";

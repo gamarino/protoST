@@ -33,6 +33,28 @@
 
 namespace {
 
+// Runs a module's top level and reports what escapes it. An uncaught
+// exception is reported HERE, while the runtime is alive: a ProtoException's
+// value lives in the runtime's space, which also holds its pin, so the report
+// must read it -- and the exception must be released -- before the runtime is
+// destroyed. Answers the process exit status, and the value of the last
+// statement in `*result`.
+int runReporting(protoST::STRuntime& rt, const protoST::BytecodeModule& bc,
+                 const proto::ProtoObject** result) {
+    try {
+        *result = rt.runTopLevel(bc);
+        return 0;
+    } catch (const proto::ProtoException& e) {
+        // An unhandled Error, a module's error, another language's exception.
+        std::fprintf(stderr, "%s\n", protoST::describeUncaught(rt.rootCtx(), e).c_str());
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "%s\n", protoST::describeUncaught(e).c_str());
+    } catch (...) {
+        std::fprintf(stderr, "error: an unknown exception reached the top level\n");
+    }
+    return 1;
+}
+
 // Windows: the standard streams carry exactly the bytes the program writes, as
 // on Linux and macOS (no "\n" -> "\r\n" translation), and a console shows and
 // reads them as UTF-8. The process code page is UTF-8 through the manifest
@@ -198,7 +220,8 @@ int main(int argc, char** argv) {
                 for (auto& s : C.errors()) std::fprintf(stderr, "compile error: %s\n", s.c_str());
                 return 70;
             }
-            auto* r = rt.runTopLevel(*bc);
+            const proto::ProtoObject* r = nullptr;
+            if (int status = runReporting(rt, *bc, &r)) return status;
             // BL-3: shared formatter — non-primitive objects render as
             // "a ClassName" via the default printString logic.
             std::puts(protoST::formatValue(rt, rt.rootCtx(), r).c_str());
@@ -232,18 +255,14 @@ int main(int argc, char** argv) {
             return 70;
         }
         rt.debugger().attach();
-        try {
-            auto* r = rt.runTopLevel(*bc);
-            if (r && r != PROTO_NONE) {
-                // BL-3: shared formatter.
-                std::printf("=> %s\n",
-                    protoST::formatValue(rt, rt.rootCtx(), r).c_str());
-            }
-            return 0;
-        } catch (const std::exception& e) {
-            std::fprintf(stderr, "%s\n", protoST::describeUncaught(e).c_str());
-            return 1;
+        const proto::ProtoObject* r = nullptr;
+        if (int status = runReporting(rt, *bc, &r)) return status;
+        if (r && r != PROTO_NONE) {
+            // BL-3: shared formatter.
+            std::printf("=> %s\n",
+                protoST::formatValue(rt, rt.rootCtx(), r).c_str());
         }
+        return 0;
     }
     if (mode == "venv") {
         if (argc < 3) { std::fprintf(stderr, "venv requires a subcommand: create|activate|info\n"); return 64; }
@@ -305,7 +324,8 @@ int main(int argc, char** argv) {
                 for (auto& s : C.errors()) std::fprintf(stderr, "compile error: %s\n", s.c_str());
                 return 70;
             }
-            auto* r = rt.runTopLevel(*bc);
+            const proto::ProtoObject* r = nullptr;
+            if (int status = runReporting(rt, *bc, &r)) return status;
             // BL-3: shared formatter.
             if (printLast) std::puts(protoST::formatValue(rt, rt.rootCtx(), r).c_str());
             return 0;

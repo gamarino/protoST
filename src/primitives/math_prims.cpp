@@ -4,7 +4,6 @@
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/ValueFormat.h"
-#include "runtime/ZeroDivideSignal.h"
 #include "protoCore.h"
 #include <cstdlib>
 #include <cstdio>
@@ -174,7 +173,7 @@ const proto::ProtoObject* prim_Reciprocal(STRuntime&, proto::ProtoContext* ctx,
                                           const proto::ProtoObject* r,
                                           const proto::ProtoObject* const*, int) {
     double d = asDoubleVal(ctx, r);
-    if (d == 0.0) throw ZeroDivideSignal();
+    if (d == 0.0) ctx->raiseError(proto::ProtoErrorKind::DivisionByZero, "ZeroDivide");
     return ctx->fromDouble(1.0 / d);
 }
 
