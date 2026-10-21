@@ -1427,9 +1427,27 @@ geo := Import from: 'example/geometry'.
 [geo triangleArea(1, 2, 10)] on: ZeroDivide, geo GeometryError do: [:e | 'set'].
 ```
 
-Such a *foreign* exception is not a subclass of `Error`: `on: Error do:` and
-`on: Exception do:` do not select it, and a handler for an unrelated type lets
-it pass. While its handler runs, it answers the Exception protocol —
+Such a *foreign* exception is not a subclass of `Error`: `on: Error do:` does
+not select it, and a handler for an unrelated type lets it pass.
+
+**`on: Exception do:` is the catch-all.** `Exception` is the root of the signal
+hierarchy, and a handler for it catches *every* signalled value: a protoST
+exception, a module's error type, another language's exception, and a value
+that is not an exception at all (a module or another language may raise a
+SmallInteger or a plain object):
+
+```smalltalk no-run
+[geo circleArea(-1)] on: Exception do: [:e | e messageText].
+    "=> 'circleArea: the radius -1.000000 is negative'"
+[raising raiseInteger()] on: Exception do: [:e | e].     "=> 42"
+[[geo circleArea(-1)] on: Error do: [:e | 'Error']]
+    on: Exception do: [:e | 'only Exception catches it'].
+```
+
+`on: Error do:` catches protoST's errors and protoCore's own errors (below),
+which are `Error`s; it is the form for "a fault of this program", and
+`on: Exception do:` the form for "anything at all". It is also a member of an
+exception set (`ZeroDivide, Exception`). While its handler runs, it answers the Exception protocol —
 `messageText` (its `message` attribute), `description`, `return:`, `retry`,
 `pass`, `outer`, `signal` — and its own attributes as unary sends (`e name`,
 `e message`). It is never resumable: `resume:` signals an `Error`. No handler

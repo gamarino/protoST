@@ -16,6 +16,11 @@
 // The geometry module raises its own error types (GeometryError,
 // NegativeRadius, DegenerateTriangle) as proto::ProtoExceptions from a
 // different shared library; tests/umd/*.st catch them by name.
+//
+// The host also registers a small provider of its own, "test/raising"
+// (alias host_raising), whose methods raise values that are not exceptions
+// at all -- a SmallInteger, a plain object -- the way any protoCore language
+// may `throw 42`; tests/umd/catch_all.st catches them with `on: Exception do:`.
 
 #include "protoST/STRuntime.h"
 #include "frontend/Parser.h"
@@ -28,12 +33,50 @@
 #include "geometry_module/GeometryModule.h"
 
 #include <cstdio>
+#include <memory>
 #include <cstring>
 #include <exception>
 #include <fstream>
 #include <iterator>
 #include <memory>
 #include <string>
+
+namespace {
+
+const proto::ProtoObject* raiseInteger(proto::ProtoContext* ctx, const proto::ProtoObject*,
+                                       const proto::ParentLink*, const proto::ProtoArguments*,
+                                       const proto::ProtoKeywordArguments*) {
+    ctx->raise(ctx->fromInteger(42));
+}
+
+const proto::ProtoObject* raiseObject(proto::ProtoContext* ctx, const proto::ProtoObject*,
+                                      const proto::ParentLink*, const proto::ProtoArguments*,
+                                      const proto::ProtoKeywordArguments*) {
+    ctx->raise(ctx->newObject(false)->setAttribute(
+        ctx, proto::ProtoString::createSymbol(ctx, "message"),
+        ctx->fromUTF8String("a plain object")));
+}
+
+class RaisingProvider final : public proto::ModuleProvider {
+public:
+    const proto::ProtoObject* tryLoad(const std::string& logicalPath, proto::ProtoContext* ctx) override {
+        if (logicalPath != "test/raising") return PROTO_NONE;
+        const proto::ProtoObject* m = ctx->newObject(false);
+        m = m->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "raiseInteger"),
+                            ctx->fromMethod(nullptr, &raiseInteger));
+        m = m->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "raiseObject"),
+                            ctx->fromMethod(nullptr, &raiseObject));
+        return m;
+    }
+    const std::string& getGUID() const override { return guid_; }
+    const std::string& getAlias() const override { return alias_; }
+
+private:
+    std::string guid_ = "protoST.test.raising.1";
+    std::string alias_ = "host_raising";
+};
+
+} // namespace
 
 int main(int argc, char** argv) {
     bool printLast = false;
@@ -59,10 +102,12 @@ int main(int argc, char** argv) {
 
     // The provider is process-global; the chain entry belongs to the space.
     example::registerGeometryProvider();
+    proto::ProviderRegistry::instance().registerProvider(std::make_unique<RaisingProvider>());
     try {
         std::unique_ptr<protoST::BytecodeModule> bc;   // outlives rt (see main.cpp)
         protoST::STRuntime rt;
         rt.addModuleProviderToChain("provider:example_geometry");
+        rt.addModuleProviderToChain("provider:host_raising");
         protoST::Compiler compiler;
         bc = compiler.compileModule(*ast);
         bc->setSourceName(path);

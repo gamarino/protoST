@@ -28,7 +28,11 @@
 #include "runtime/UnhandledSTException.h"
 #include "protoCore.h"
 
+#include <chrono>
+#include <cstdint>
 #include <memory>
+#include <mutex>
+#include <thread>
 #include <string>
 #include <vector>
 
@@ -195,4 +199,127 @@ TEST_CASE("unified exceptions: a module error raised in a handler is not offered
         h.run("[#(1) do: [:x | Module raise()]] on: ModuleError do: [:e | Module raise()]."),
         proto::ProtoException);
     REQUIRE(g_raises == 2);
+}
+
+// --- Values carried across an unwinding that collects ----------------------
+//
+// NonLocalReturn, UnwindToHandler and ResumeSignal carry a value across C++
+// unwinding, and a foreign ProtoException carries its own. An ensure: block
+// on the way runs Smalltalk code that allocates and may reach a collection;
+// by then no frame holds the value. These cases make the ensure: block
+// allocate (so the engine's safepoints submit the young generation that holds
+// the value) and then run collections with the thread parked, and check the
+// value afterwards. With the pin removed (PinnedValue holding a raw pointer)
+// the first three fail.
+
+namespace {
+
+std::uint64_t g_cyclesRun = 0;
+
+// Gc collect(): run two collection cycles (a dead mutable object is freed one
+// cycle after the one that found it unreachable), with this thread parked.
+const proto::ProtoObject* gcCollect(proto::ProtoContext* ctx, const proto::ProtoObject*,
+                                    const proto::ParentLink*, const proto::ProtoArguments*,
+                                    const proto::ProtoKeywordArguments*) {
+    proto::ProtoSpace* sp = ctx->space;
+    ctx->safepoint();
+    const std::uint64_t start = sp->getGCCycleCount();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (sp->getGCCycleCount() < start + 2 && std::chrono::steady_clock::now() < deadline) {
+        sp->triggerGC();
+        {
+            proto::ProtoContext::UnmanagedScope parked(ctx);
+            sp->gcStarted = true;
+            sp->gcCV.notify_all();
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+    g_cyclesRun += sp->getGCCycleCount() - start;
+    return PROTO_NONE;
+}
+
+const proto::ProtoObject* raiseFresh(proto::ProtoContext* ctx, const proto::ProtoObject*,
+                                     const proto::ParentLink*, const proto::ProtoArguments*,
+                                     const proto::ProtoKeywordArguments*) {
+    ctx->raise(ctx->newObject(false)->setAttribute(
+        ctx, proto::ProtoString::createSymbol(ctx, "message"),
+        ctx->fromUTF8String("payload carried by a foreign exception")));
+}
+
+void defineGc(Host& h) {
+    proto::ProtoContext* ctx = h.ctx();
+    const proto::ProtoObject* gc = ctx->newObject(false)
+        ->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "collect"),
+                       ctx->fromMethod(nullptr, &gcCollect))
+        ->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "raiseFresh"),
+                       ctx->fromMethod(nullptr, &raiseFresh));
+    h.defineGlobal("Gc", gc);
+    g_cyclesRun = 0;
+}
+
+// The cleanup every case runs inside ensure:, and the check of the value.
+const char* kChurn =
+    "churn := [1 to: 30000 do: [:i | Array new: 8]. Gc collect(). "
+    "          1 to: 30000 do: [:i | Array new: 8]]. "
+    "ok := [:r | (r isKindOf: Array) and: [(r first = 'payload') and: [r last = 42]]]. ";
+
+std::string program(const char* body) { return std::string(kChurn) + body; }
+
+} // namespace
+
+TEST_CASE("unified exceptions: UnwindToHandler's value survives collections in ensure:",
+          "[exceptions][unified][gc]") {
+    Host h;
+    defineGc(h);
+    const std::string src = program(
+        "r := [[Error signal: 'x'] ensure: [churn value]] "
+        "        on: Error do: [:e | {'pay', 'load'. 6 * 7}]. "
+        "ok value: r.");
+    REQUIRE(h.run(src.c_str()) == PROTO_TRUE);
+    REQUIRE(g_cyclesRun >= 2);
+}
+
+TEST_CASE("unified exceptions: NonLocalReturn's value survives collections in ensure:",
+          "[exceptions][unified][gc]") {
+    Host h;
+    defineGc(h);
+    const std::string src = program(
+        "Object subclass: #Finder. "
+        "Finder >> find: cleanup "
+        "  #(1) do: [:x | [^ {'pay', 'load'. 6 * 7}] ensure: [cleanup value]]. "
+        "  ^ nil. "
+        "ok value: (Finder new find: churn).");
+    REQUIRE(h.run(src.c_str()) == PROTO_TRUE);
+    REQUIRE(g_cyclesRun >= 2);
+}
+
+TEST_CASE("unified exceptions: ResumeSignal's value survives collections in ensure:",
+          "[exceptions][unified][gc]") {
+    Host h;
+    defineGc(h);
+    const std::string src = program(
+        "r := [Warning signal: 'w'] "
+        "        on: Warning do: [:e | [e resume: {'pay', 'load'. 6 * 7}] ensure: [churn value]]. "
+        "ok value: r.");
+    REQUIRE(h.run(src.c_str()) == PROTO_TRUE);
+    REQUIRE(g_cyclesRun >= 2);
+}
+
+TEST_CASE("unified exceptions: a foreign ProtoException's value survives collections in ensure:",
+          "[exceptions][unified][gc]") {
+    Host h;
+    defineGc(h);
+    const std::string src = program("[Gc raiseFresh()] ensure: [churn value].");
+    bool escaped = false;
+    try {
+        h.run(src.c_str());
+    } catch (const proto::ProtoException& e) {
+        escaped = true;
+        const proto::ProtoObject* m = e.value()->getAttribute(
+            h.ctx(), proto::ProtoString::createSymbol(h.ctx(), "message"));
+        REQUIRE(m->asString(h.ctx()) != nullptr);
+        REQUIRE(m->asString(h.ctx())->toStdString(h.ctx()) == "payload carried by a foreign exception");
+    }
+    REQUIRE(escaped);
+    REQUIRE(g_cyclesRun >= 2);
 }

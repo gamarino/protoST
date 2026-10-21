@@ -35,7 +35,8 @@
 //     value unchanged (signalProtoException). A value that is not a protoST
 //     exception -- an error type defined by a module, or another language's
 //     exception -- is a FOREIGN exception: it is matched by its prototype
-//     chain like any other, it is never resumable, the Exception protocol
+//     chain like any other, and by `on: Exception do:` (the one catch-all
+//     form; `on: Error do:` does not select it), it is never resumable, the Exception protocol
 //     (messageText, return:, retry, pass, ...) answers for it while its
 //     handler runs, and when no handler takes it the original ProtoException
 //     continues outward. protoCore's own errors arrive already built as
@@ -391,7 +392,9 @@ const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx
     for (;;) {
         const HandlerEntry* entry = firstHandlerId != 0
             ? handlerStackFindById(firstHandlerId)
-            : handlerStackFindMatch(ctx, exc, searchBelowId);
+            : handlerStackFindMatch(ctx, exc, searchBelowId,
+                                    // `on: Exception do:` catches every value
+                                    foreign ? rt.bootstrap().exceptionProto : nullptr);
         firstHandlerId = 0;
         if (!entry) {
             // No (further) matching handler: run the exception's default

@@ -53,9 +53,16 @@ void handlerStackPop(proto::proto_ulong handlerId);
 // The returned pointer is into the thread-local vector; it is valid only until
 // the next push/pop on this thread. Callers (signal) read handlerId / block
 // from it immediately.
+//
+// `catchAllGuard`, when set, is a guard that matches ANY value: the runtime
+// passes the `Exception` class for a foreign exception (a module's error, a
+// value raised by another language, a raised non-exception value), so
+// `on: Exception do:` is the one handler form that catches every signalled
+// value (LANGUAGE.md §8.7). It also counts as a member of an ExceptionSet.
 const HandlerEntry* handlerStackFindMatch(proto::ProtoContext* ctx,
                                           const proto::ProtoObject* exceptionInstance,
-                                          proto::proto_ulong searchBelowId = 0);
+                                          proto::proto_ulong searchBelowId = 0,
+                                          const proto::ProtoObject* catchAllGuard = nullptr);
 
 // The entry with the given handlerId, or nullptr when it is not on this
 // thread's stack. Same lifetime rule as handlerStackFindMatch. Used by an

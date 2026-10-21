@@ -47,9 +47,11 @@ void handlerStackPop(proto::proto_ulong handlerId) {
 // prototype-chain descendant of) `guardClass`.
 static bool matchesGuard(proto::ProtoContext* ctx,
                          const proto::ProtoObject* exceptionInstance,
-                         const proto::ProtoObject* guardClass) {
+                         const proto::ProtoObject* guardClass,
+                         const proto::ProtoObject* catchAllGuard) {
     if (!exceptionInstance || !guardClass) return false;
     if (exceptionInstance == guardClass) return true;
+    if (catchAllGuard && guardClass == catchAllGuard) return true;
     // An ExceptionSet (`ZeroDivide, MessageNotUnderstood`, built in the kernel)
     // matches when any of its classes does. Its classes are held in the
     // instance variable exceptionClasses, stored as `_iv_exceptionClasses`
@@ -62,7 +64,8 @@ static bool matchesGuard(proto::ProtoContext* ctx,
         const proto::ProtoList* list = (data && data != PROTO_NONE) ? data->asList(ctx) : nullptr;
         if (list) {
             for (proto::proto_ulong i = 0; i < list->getSize(ctx); ++i)
-                if (matchesGuard(ctx, exceptionInstance, list->getAt(ctx, static_cast<int>(i))))
+                if (matchesGuard(ctx, exceptionInstance, list->getAt(ctx, static_cast<int>(i)),
+                                 catchAllGuard))
                     return true;
             return false;
         }
@@ -75,7 +78,8 @@ static bool matchesGuard(proto::ProtoContext* ctx,
 
 const HandlerEntry* handlerStackFindMatch(proto::ProtoContext* ctx,
                                           const proto::ProtoObject* exceptionInstance,
-                                          proto::proto_ulong searchBelowId) {
+                                          proto::proto_ulong searchBelowId,
+                                          const proto::ProtoObject* catchAllGuard) {
     // When `searchBelowId` is set (EXC-b `pass`), locate that entry's stack
     // index and start the search strictly OUTER to it — skipping the entry
     // itself and everything inner. If the id is no longer present (already
@@ -92,7 +96,7 @@ const HandlerEntry* handlerStackFindMatch(proto::ProtoContext* ctx,
     for (std::size_t i = startIdx; i-- > 0; ) {
         const HandlerEntry& e = g_handlerStack[i];
         if (!e.enabled) continue;
-        if (matchesGuard(ctx, exceptionInstance, e.guardClass))
+        if (matchesGuard(ctx, exceptionInstance, e.guardClass, catchAllGuard))
             return &g_handlerStack[i];
     }
     return nullptr;

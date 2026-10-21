@@ -13,7 +13,9 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
     module's error type is caught by naming it, `[geo circleArea(-1)] on:
     geo NegativeRadius do: [...]`, and the handler receives the raised
     value. Such a foreign exception is not an `Error` (`on: Error do:` does
-    not select it), is never resumable, answers the Exception protocol
+    not select it); `on: Exception do:` is the one catch-all form and
+    catches every signalled value, including a raised non-exception value
+    such as a SmallInteger. A foreign exception is never resumable, answers the Exception protocol
     (`messageText`, `return:`, `retry`, `pass`, ...) while its handler runs,
     and, unhandled, leaves the runtime as the very `ProtoException` raised.
     Before, any `ProtoException` became a plain `Error` with the text
@@ -46,7 +48,10 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
   through protoCore's array call form; before, it answered
   `doesNotUnderstand`.
 - **Tests:** `tests/unit/test_unified_exceptions.cpp` (the rule-14 contract
-  from C++, the factory, a module error raised inside its own handler), and
+  from C++, the factory, a module error raised inside its own handler, and
+  collections run inside `ensure:` while a `NonLocalReturn`,
+  `UnwindToHandler`, `ResumeSignal` or foreign exception is in flight; the
+  first three fail with the pin removed), and
   `tests/umd/`, Smalltalk programs that import protoCore's example geometry
   module through `protost_umd_host` (`tests/umd/umd_host.cpp`, which links
   the module's shared library and registers its provider). Built when the
