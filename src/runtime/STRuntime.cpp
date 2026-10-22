@@ -21,6 +21,7 @@
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
 #include "modules/STModuleProvider.h"
+#include "modules/STForeignSend.h"
 #include "protoCore.h"
 
 #include <algorithm>
@@ -683,6 +684,9 @@ STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
     installCollectionPrimitives(*this);
     installImportGlobal(*this);
     installWorkerPoolGlobal(*this);
+    // The entry another runtime sends Smalltalk messages through
+    // (modules/STForeignSend.h): a protoCore method on Object.
+    installForeignSendEntry(*this);
 
     // F5 v2: register STModuleProvider once globally with protoCore's
     // ProviderRegistry; subsequent STRuntime instances reuse the same provider.

@@ -223,6 +223,7 @@ add_library(protost_runtime STATIC
     src/primitives/collection_prims.cpp
     src/primitives/io_prims.cpp
     src/modules/STModuleProvider.cpp
+    src/modules/STForeignSend.cpp
     src/repl/Repl.cpp
     src/dap/DapTransport.cpp
     src/dap/DapServer.cpp

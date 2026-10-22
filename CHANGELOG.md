@@ -5,6 +5,17 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+- **Another runtime can send protoST messages** (INTEROP.md §4.3). `STRuntime`
+  installs one protoCore method on `Object`, `__st_send__`: `self` is the
+  receiver, the first positional argument is the selector, the rest are the
+  message's arguments, and the message runs as a SEND (class-side isolation,
+  `doesNotUnderstand:`, primitives). A caller in another `ProtoSpace` runs it on
+  protoST's current context, from the thread that constructed the runtime only;
+  the handlers of protoST code above the send are hidden while it runs, and an
+  Error it does not handle leaves as a `proto::ProtoException` carrying the Error.
+  protoScala uses it to call protoST objects from Scala. Tests:
+  `tests/unit/test_cross_runtime_send.cpp`.
+
 - **protoCore 3.0.0 unified exceptions** (LANGUAGE.md §8.7). Every language
   on protoCore raises `proto::ProtoException` carrying the thrown value and
   selects handlers by the value's prototype chain; protoST now takes part:

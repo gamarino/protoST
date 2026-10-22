@@ -426,9 +426,9 @@ attributes (§0).
   reference to the same cell. Its attributes read back only through a protoST
   context. Through the importing runtime's context they are absent (§0). A protoST **method** is an object carrying `__bc_ptr__`
   that protoST's `ExecutionEngine` interprets on SEND; it is not a
-  `proto::ProtoMethod`, so a foreign runtime cannot call it. Exporting callable
-  behaviour to another runtime needs a protoCore method, which is a separate piece
-  of work.
+  `proto::ProtoMethod`, so a foreign runtime cannot call it directly. It sends
+  the message through the one protoCore method protoST exports for that,
+  `__st_send__` (§4.3).
 - **One thread.** A cross-runtime load runs on protoST's root context, which only
   the thread that constructed the runtime may allocate on (D26), and a foreign
   caller has no context of its own in this space to chain to. An import from any
@@ -440,6 +440,47 @@ attributes (§0).
   reaches the importing runtime as a `proto::ProtoException` whose value is the
   protoST exception object (or, for a module error it let through, the
   original exception), never as a string (LANGUAGE.md §8.7).
+
+### 4.3 Sending a message from another runtime: `__st_send__`
+
+`STRuntime` installs one `proto::ProtoMethod` on the root `Object` prototype,
+under `__st_send__` (`src/modules/STForeignSend.h`), so every protoST class and
+instance answers it. A caller needs protoCore alone:
+
+```cpp
+const ProtoObject* args[] = {createSymbol(ctx, "at:put:"), key, value};
+obj->call(ctx, nullptr, createSymbol(ctx, "__st_send__"), obj, args, 3);
+```
+
+- `self` is the receiver; positional argument 0 is the exact Smalltalk selector
+  (a String or Symbol); the rest are the message's arguments. Mapping a caller's
+  own names onto selectors is the caller's concern (protoScala maps
+  `d.at_put(k, v)` to `at:put:`). Named arguments are refused.
+- The message is sent as a SEND does: class-side methods answer a class only, an
+  unknown selector runs `doesNotUnderstand:` or signals `MessageNotUnderstood`, a
+  primitive's C++ failure is signalled as an `Error`. A protoST call-form method
+  (`>> incr(by, factor = 1)`) is not reached by a keyword selector, and a send to
+  an actor is refused (its messages are asynchronous).
+- For a caller in a space protoST does not own, the message runs on protoST's
+  current context on the thread that constructed the runtime (D26); a call from
+  any other thread is refused with a message, as an import is.
+- **The handlers of protoST code above the send are hidden while it runs**
+  (`handlerStackDisableAll`), because the caller's frames lie between them and the
+  send. An Error nothing inside the send handles leaves as the
+  `UnhandledSTException` carrying it — or, when the barrier hid handlers, as a
+  plain `proto::ProtoException` with the same value, so the boundary where the
+  caller returns into protoST signals it again and the outer `on:do:` still takes
+  it. A foreign exception that crossed protoST unhandled leaves as the very
+  exception that arrived (E3). A non-local return, `retry`, `resume:` or a Future
+  yield that would leave the send is reported as an error.
+- Values cross unchanged. A protoST object a send creates and only the caller
+  holds is not reachable in protoST's space, and protoCore does not trace one
+  space's roots from another (protoCore `docs/GLOBAL_MUTABLE_TABLE.md`,
+  "Limitations"): a caller that keeps one must keep it reachable in protoST too.
+
+Tests: `tests/unit/test_cross_runtime_send.cpp` (from a bare foreign
+`ProtoSpace`), and protoScala's `umd/protost-interop`, which calls protoST from
+Scala programs and protoST back into Scala functions.
 
 ---
 
