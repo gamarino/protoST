@@ -27,9 +27,9 @@ stable id and file it in the right bucket.
   but `cli_sigint` and tutorial chapter 15 (`docs/INSTALLATION.md`, "Windows
   (MSVC)"). `cli_concurrent_first_call` (S19) gates CI again since 0.6.3. The
   history of earlier counts is in `CHANGELOG.md`.
-- **protoCore:** 0.6.6 requires 2.11.0 or later (instance-variable
-  write groups use `ProtoObject::setAttributes`, see *Object model*); its
-  `.deb` is built against 2.14.6 and declares `protocore (>= 2.14.6)`, whose
+- **protoCore:** 0.7.0 requires 3.0.0 or later (the descriptor calling
+  convention and the unified exception model); its
+  `.deb` is built against 3.0.0 and declares `protocore (>= 3.0.0)`, whose
   integer comparison, division and modulo no longer allocate and whose
   collector's mark work list is bounded (`benchmarks/reports/2026-10-12-protocore-2.14.6.md`:
   demo 2's one-thread half 45 % faster, K5's peak RSS under the fixed limit
