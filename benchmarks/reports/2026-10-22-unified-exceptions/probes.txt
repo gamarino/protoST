@@ -1,0 +1,12 @@
+empty_loop before 882298652 331 | CHECK 2000000
+empty_loop after 832703261 315 | CHECK 2000000
+startup before 116269241 46 | CHECK 0
+startup after 113930469 44 | CHECK 0
+throw_across5 before 11362498597 4395 | CHECK 100000
+throw_across5 after 11761189076 4436 | CHECK 100000
+throw_catch before 28048260154 10687 | CHECK 200000
+throw_catch after 27745250604 10879 | CHECK 200000
+try_no_throw before 12137410231 4688 | CHECK 200000
+try_no_throw after 12103059570 4593 | CHECK 200000
+zerodiv before 29900904508 11597 | CHECK 200000
+zerodiv after 29124805079 11108 | CHECK 200000

@@ -142,6 +142,29 @@ now.
 
 ## Performance
 
+**protoCore's unified exception model (measured 2026-10-22).**
+- Branch `feature/protocore-3-calling-convention` at `b8b71b3`, against
+  `c0ba168` (protoCore `cf52f9f5`). Both Release builds, interleaved, three rounds. The machine had 2-4 busy CPUs, so only the ratios count, not the milliseconds.
+- A Smalltalk exception is now a `proto::ProtoException` selected by
+  prototype. `on: Exception do:` catches every value, including errors that a
+  C++ module or another language defines.
+
+| | AFTER / BEFORE |
+|---|---:|
+| geomean, all 17 benchmarks | 0.998 (comparables 1.049; actor cells 0.964) |
+| worst cells, `str_concat` 1.14 / `list_append` 1.12 (wall time) | 0.99-1.02 in a second pass counting CPU cycles: noise |
+| `on:do:` entered, nothing signalled | 1.00 |
+| signal and catch in the same method | 0.99 |
+| signal caught 5 frames up | 1.04 |
+| `1 / 0` caught | 0.97 |
+
+- The port is neutral.
+- A finding the port did not cause: entering `on:do:` costs about 60,000
+  cycles even when nothing is signalled, 150 times an empty loop iteration.
+  That is the next target for the exception path.
+- No Pharo was available, so CPython 3.14 is the only comparable.
+- Raw results: [`benchmarks/reports/2026-10-22-unified-exceptions/`](benchmarks/reports/2026-10-22-unified-exceptions/).
+
 Synthetic workloads on one notebook (AMD Ryzen 5 5500U, 6 cores / 12
 threads), every benchmark verifying its result. The current figures come
 from

@@ -1,0 +1,16 @@
+pass1 list_append before 271047202 97 | VERIFIED 10000
+pass1 list_append after 244126085 85 | VERIFIED 10000
+pass1 str_concat before 116610163 40 | VERIFIED 2000
+pass1 str_concat after 117165576 43 | VERIFIED 2000
+pass1 int_sum_loop before 176585465 65 | VERIFIED 4999950000
+pass1 int_sum_loop after 177643840 63 | VERIFIED 4999950000
+pass1 range_iterate before 146573050 50 | VERIFIED 100000
+pass1 range_iterate after 148273057 46 | VERIFIED 100000
+pass2 list_append after 248910948 96 | VERIFIED 10000
+pass2 list_append before 245101764 85 | VERIFIED 10000
+pass2 str_concat after 113245042 46 | VERIFIED 2000
+pass2 str_concat before 114082728 39 | VERIFIED 2000
+pass2 int_sum_loop after 180100306 65 | VERIFIED 4999950000
+pass2 int_sum_loop before 177632903 70 | VERIFIED 4999950000
+pass2 range_iterate after 144308277 55 | VERIFIED 100000
+pass2 range_iterate before 147946560 46 | VERIFIED 100000

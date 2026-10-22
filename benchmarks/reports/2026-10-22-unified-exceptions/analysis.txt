@@ -1,0 +1,47 @@
+All 6 harness runs verified: True
+| Workload | CPython | BEFORE | AFTER | A/B | BEFORE rounds | AFTER rounds |
+|---|---:|---:|---:|---:|---|---|
+| `startup` | 47.5 | 37.9 | 36.8 | 0.971 | 33/39/38 | 36/37/37 |
+| `int_sum_loop` | 54.4 | 65.2 | 67.3 | 1.032 | 65/65/70 | 67/66/72 |
+| `fib` | 63.4 | 117.0 | 116.1 | 0.992 | 116/117/118 | 116/128/114 |
+| `list_append` | 48.7 | 67.2 | 75.5 | 1.124 | 67/66/68 | 68/89/76 |
+| `str_concat` | 52.0 | 41.3 | 47.2 | 1.143 | 43/39/41 | 49/47/41 |
+| `attr_lookup` | 65.2 | 74.5 | 75.6 | 1.015 | 74/73/115 | 75/79/76 |
+| `range_iterate` | 53.1 | 54.2 | 57.0 | 1.052 | 54/56/52 | 57/61/50 |
+| `exception_latency` | 71.3 | 1240.4 | 1238.2 | 0.998 | 1240/1226/1281 | 1210/1277/1238 |
+| `parallel_speedup (pool)` | — | 140.8 | 128.9 | 0.915 | 146/141/132 | 133/122/129 |
+| `parallel_speedup (1 worker)` | — | 306.0 | 290.1 | 0.948 | 306/299/334 | 309/290/272 |
+| `cooperative_yield` | — | 254.3 | 268.1 | 1.054 | 253/254/258 | 326/268/256 |
+| `message_throughput` | — | 101.9 | 113.9 | 1.118 | 98/102/118 | 139/102/114 |
+| `saturation_big w=1` | — | 1219.8 | 1133.3 | 0.929 | 1167/1220/1227 | 1133/1243/1131 |
+| `saturation_big w=2` | — | 698.4 | 663.3 | 0.950 | 680/705/698 | 663/666/657 |
+| `saturation_big w=3` | — | 521.5 | 512.5 | 0.983 | 522/660/520 | 500/579/512 |
+| `saturation_big w=4` | — | 465.6 | 479.4 | 1.030 | 429/645/466 | 479/554/426 |
+| `saturation_big w=5` | — | 478.5 | 407.2 | 0.851 | 478/457/513 | 407/554/387 |
+| `saturation_big w=6` | — | 474.7 | 423.8 | 0.893 | 446/542/475 | 412/466/424 |
+
+geomean A/B comparables (7, startup excluded): 1.049
+geomean A/B actor cells (10): 0.964
+geomean A/B all (17): 0.998
+geomean before / CPython 3.14 (7 comparables, whole process): 1.74x
+geomean after / CPython 3.14 (7 comparables, whole process): 1.83x
+
+| Probe | iters | before | after | after/before |
+|---|---:|---:|---:|---:|
+| `empty_loop` | 2,000,000 | 383 | 359 | 0.94x |
+| `try_no_throw` | 200,000 | 60,106 | 59,946 | 1.00x |
+| `throw_catch` | 200,000 | 139,660 | 138,157 | 0.99x |
+| `throw_across5` | 100,000 | 112,462 | 116,473 | 1.04x |
+| `zerodiv` | 200,000 | 148,923 | 145,054 | 0.97x |
+startup cycles: before 116,269,241, after 113,930,469
+
+empty_loop before cycles=882298652.0 task_ms=331.0 check='CHECK 2000000'
+empty_loop after cycles=832703261.0 task_ms=315.0 check='CHECK 2000000'
+try_no_throw before cycles=12137410231.0 task_ms=4688.0 check='CHECK 200000'
+try_no_throw after cycles=12103059570.0 task_ms=4593.0 check='CHECK 200000'
+throw_catch before cycles=28048260154.0 task_ms=10687.0 check='CHECK 200000'
+throw_catch after cycles=27745250604.0 task_ms=10879.0 check='CHECK 200000'
+throw_across5 before cycles=11362498597.0 task_ms=4395.0 check='CHECK 100000'
+throw_across5 after cycles=11761189076.0 task_ms=4436.0 check='CHECK 100000'
+zerodiv before cycles=29900904508.0 task_ms=11597.0 check='CHECK 200000'
+zerodiv after cycles=29124805079.0 task_ms=11108.0 check='CHECK 200000'
