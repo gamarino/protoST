@@ -230,9 +230,9 @@ several cores without locks.
 
 ## Status
 
-Version 0.6.6 (2026-10-17); built from source it requires protoCore 2.11.0
-or newer, its `.deb` requires 2.14.6, and CI builds it against protoCore
-2.14.6. `ctest` runs 1105 cases on Linux, all passing (2026-10-17): 544
+Version 0.7.0 (2026-10-22); built from source or as a `.deb` it requires
+protoCore 3.0.0 or newer, and CI builds it against protoCore 3.0.0 (tag
+`v3.0.0`). On 0.6.6 (2026-10-17), `ctest` ran 1105 cases on Linux, all passing: 544
 conformance programs, 462 unit tests, 44 examples, 33 CLI tests (including
 the benchmark-harness self-test) and 22 documentation checks (every example
 with a stated result in 21 documents, plus the checker's self-test). Since 0.6.2 protoST lets protoCore's adaptive heap
@@ -304,8 +304,8 @@ commands, and what differs on Windows, are in
 
 ## Installation
 
-protoST can be packaged with CPack. The 0.6.6 release has a Linux `.deb`
-attached to its GitHub release (below, with protoCore 2.14.6); other packages
+protoST can be packaged with CPack. The 0.7.0 release has a Linux `.deb`
+attached to its GitHub release (below, with protoCore 3.0.0); other packages
 are built from source as shown below. Every package depends on
 [protoCore](https://github.com/numaes/protoCore) — install protoCore's package
 first (it provides `libprotoCore`).
@@ -331,14 +331,14 @@ the GitHub releases (or built as below):
 ```bash
 wsl --install -d Ubuntu-24.04        # in PowerShell, once
 # then, in the Ubuntu shell:
-wget https://github.com/numaes/protoCore/releases/download/v2.14.6/protoCore-2.14.6-Linux.deb
-wget https://github.com/gamarino/protoST/releases/download/v0.6.6/protost-0.6.6-Linux.deb
-sudo apt install ./protoCore-2.14.6-Linux.deb ./protost-0.6.6-Linux.deb
+wget https://github.com/numaes/protoCore/releases/download/v3.0.0/protoCore-3.0.0-Linux.deb
+wget https://github.com/gamarino/protoST/releases/download/v0.7.0/protost-0.7.0-Linux.deb
+sudo apt install ./protoCore-3.0.0-Linux.deb ./protost-0.7.0-Linux.deb
 ```
 
-These are the 0.6.6 release packages. Built from source, protoST 0.6.6 needs
-protoCore 2.11.0 or later; the `.deb` was built against 2.14.6, the release
-to install with it, and declares `protocore (>= 2.14.6)` (an older protoCore package, such as the 2.6.2 that went with 0.5.0, is
+These are the 0.7.0 release packages. Built from source, protoST 0.7.0 needs
+protoCore 3.0.0 or later; the `.deb` was built against 3.0.0, the release
+to install with it, and declares `protocore (>= 3.0.0)` (an older protoCore package, such as the 2.14.6 that went with 0.6.6, is
 not enough: upgrade it with the command above).
 
 **macOS — built and tested in CI, not packaged.** The cross-platform CI job

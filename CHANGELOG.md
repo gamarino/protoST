@@ -5,6 +5,10 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+## 0.7.0 — on protoCore 3.0.0 (2026-10-22)
+
+**Requires protoCore 3.0.0** (SOVERSION 4), the declared minimum for a build from source; the `.deb` depends on `protocore (>= 3.0.0)`. CI pins protoCore tag `v3.0.0` on every job.
+
 - **Another runtime can send protoST messages** (INTEROP.md §4.3). `STRuntime`
   installs one protoCore method on `Object`, `__st_send__`: `self` is the
   receiver, the first positional argument is the selector, the rest are the

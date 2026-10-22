@@ -20,9 +20,9 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  # protoCore 3.0.0 (cf52f9f), as ci.yml's main job. The declared minimum
+  # protoCore 3.0.0 (tag v3.0.0, ce00a4a2), as ci.yml's main job. The declared minimum
   # (3.0.0) is built by ci.yml's floor entry only.
-  PROTOCORE_REF: cf52f9f5056919bb07326afc7159d5b3d78c03a3
+  PROTOCORE_REF: ce00a4a26b6583ea8a58e776eee2ea91c743469e
   PROTOIO_REPO: gamarino/protoIO
   # protoIO 0.2.2 (main, 1611ff9), the declared floor.
   PROTOIO_REF: 1611ff9cf8d499cdc42a6e108e42ecfc36fd8164
