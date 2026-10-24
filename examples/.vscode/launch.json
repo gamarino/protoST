@@ -1,0 +1,26 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "protost",
+      "request": "launch",
+      "name": "Debug current protoST script",
+      "program": "${file}",
+      "stopOnEntry": false
+    },
+    {
+      "type": "protost",
+      "request": "launch",
+      "name": "Debug current protoST script (stop on entry)",
+      "program": "${file}",
+      "stopOnEntry": true
+    },
+    {
+      "type": "protost",
+      "request": "launch",
+      "name": "Debug pump_twin.st",
+      "program": "${workspaceFolder}/pump_twin.st",
+      "stopOnEntry": false
+    }
+  ]
+}

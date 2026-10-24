@@ -47,23 +47,27 @@ protost --version
 
 VS Code cannot launch an arbitrary debug adapter without an extension that
 registers the debug `type`. protoST ships a minimal extension (no TypeScript,
-no build step) under `editor-integration/vscode/`.
-
-Install it by symlinking it into your VS Code extensions directory:
+no build step) under `editor-integration/vscode/`; it also gives `.st` files
+syntax highlighting. Package and install it:
 
 ```bash
-ln -s "$(pwd)/editor-integration/vscode" ~/.vscode/extensions/protost-debug-0.1.0
+cd editor-integration/vscode
+npx @vscode/vsce package --skip-license
+code --install-extension protost-debug-0.2.0.vsix
 ```
 
-Then run `Developer: Reload Window` in VS Code. See
-`editor-integration/vscode/README.md` for the copy / `.vsix` alternatives.
+See `editor-integration/vscode/README.md` for the symlink alternative.
 
-If `protost` is not on your `PATH`, set its absolute path in VS Code Settings
-under **Extensions → protoST → Protost: Path**.
+The extension uses the `protost` named in VS Code Settings under
+**Extensions → protoST → Protost: Path**; if that is empty, the one in the
+default install location (`%LOCALAPPDATA%\Programs\proto\bin\protost.exe` on
+Windows, `~/.local/bin/protost` elsewhere); else `protost` from your `PATH`.
 
 ## Setting up `launch.json` and starting a session
 
-A ready-to-use configuration lives at `examples/.vscode/launch.json`. To create
+Without a `launch.json`, **F5** on an open `.st` file debugs that file. Ready-to-use
+configurations live in `examples/.vscode/launch.json` (open the `examples/`
+folder in VS Code to pick them up). To create
 your own, open the Run and Debug panel, click **Add Configuration…**, and
 choose **protoST**. A launch configuration looks like:
 
@@ -111,8 +115,11 @@ Execution runs until it hits a breakpoint (or the entry point, if
 - **Watch / evaluate** — the `evaluate` request powers the Watch panel and the
   Debug Console; it evaluates expressions in the selected frame's scope
   (arithmetic and in-scope variables work).
-- **Debug Console** — adapter `output` events are surfaced; you can type
-  expressions to evaluate.
+- **Debug Console** — what the script prints (stdout and stderr) appears
+  here as adapter `output` events; you can type expressions to evaluate. The
+  adapter's own stdout is the protocol channel, so the debuggee's stdout and
+  stderr are captured and forwarded, and its stdin reads end of file (a script
+  that reads stdin sees no input under the debugger).
 
 ## Known limitations (MVP)
 
@@ -128,8 +135,10 @@ This is a minimum-viable adapter. Honest limitations as of F8:
   same-engine user-method `SEND`s. Block bodies run in nested engines (an F6
   v3 A scope limitation) and class-side methods hit a separate pre-existing
   `unimplemented opcode` bug — so most stops show a single frame.
-- **Flat variables panel.** Objects are shown as `<obj>` and are not
-  expandable; only scalar locals/arguments render their value.
+- **Flat variables panel.** Objects are shown by their print string
+  (`a Counter`) and are not expandable. A temporary captured by a block, and
+  the locals of a class-side method (whose stop also reports the `<module>`
+  frame), show as `slot N` with value `nil`.
 
 These are scope boundaries of the MVP adapter, not regressions — the underlying
 DAP exchange is verified by the `cli_dap_session` integration test.

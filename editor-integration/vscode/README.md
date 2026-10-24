@@ -1,51 +1,52 @@
-# protoST Debugger — VS Code extension
+# protoST — VS Code extension
 
-A minimal VS Code extension that lets you debug protoST (`.st`) scripts using
-the protoST DAP debug adapter. The adapter is the `protost` binary itself,
-invoked as `protost --dap`, which speaks the
-[Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/)
-over stdin/stdout.
+A minimal VS Code extension for protoST (`.st`) scripts:
 
-This extension is intentionally minimal: it only registers the `protost` debug
-`type` and tells VS Code how to spawn the adapter. There is no TypeScript build
-step, no bundler, and no marketplace packaging.
+- **Language support** — syntax highlighting (a TextMate grammar), `"…"`
+  comments, bracket matching and auto-closing for `[ ]`, `( )`, `{ }`, `' '`.
+- **Debugging** — breakpoints, stepping, call stack, variables and the Debug
+  Console, through the protoST DAP debug adapter. The adapter is the `protost`
+  binary itself, invoked as `protost --dap`, which speaks the
+  [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/)
+  over stdin/stdout. What the script prints shows up in the Debug Console.
+
+There is no TypeScript build step and no bundler.
 
 ## Requirements
 
-- `protost` must be built (see `docs/debugging.md` in the repository root).
-- `protost` must be on your `PATH`, or set its absolute path in the
-  `protost.path` setting (Settings → Extensions → protoST).
+`protost` must be installed or built (see `docs/debugging.md` in the repository
+root). The extension looks for it in this order:
+
+1. the `protost.path` setting (Settings → Extensions → protoST), if set;
+2. the default install location — `%LOCALAPPDATA%\Programs\proto\bin\protost.exe`
+   on Windows, `~/.local/bin/protost` elsewhere — if it exists;
+3. `protost` on your `PATH`.
 
 ## Install
 
-The extension is a plain folder — install it by copying or symlinking it into
-your VS Code extensions directory:
+Package it with `vsce` and install the `.vsix` (works the same on every
+platform):
 
 ```bash
-# Symlink (recommended — picks up updates automatically)
-ln -s "$(pwd)/editor-integration/vscode" ~/.vscode/extensions/protost-debug-0.1.0
-
-# ...or copy
-cp -r editor-integration/vscode ~/.vscode/extensions/protost-debug-0.1.0
+cd editor-integration/vscode
+npx @vscode/vsce package --skip-license
+code --install-extension protost-debug-0.2.0.vsix
 ```
 
-Then reload VS Code (`Developer: Reload Window`).
-
-Alternatively, package it with `vsce` and install the `.vsix`:
+Or, on Linux and macOS, symlink the folder (picks up edits after a
+`Developer: Reload Window`):
 
 ```bash
-npm install -g @vscode/vsce
-cd editor-integration/vscode && vsce package
-code --install-extension protost-debug-0.1.0.vsix
+ln -s "$(pwd)/editor-integration/vscode" ~/.vscode/extensions/protost-debug-0.2.0
 ```
 
 ## Use
 
-1. Open a folder containing `.st` scripts.
+1. Open a folder containing `.st` scripts (for example `examples/`).
 2. Open a `.st` file and click in the gutter to set breakpoints.
-3. Open the Run and Debug panel, choose **Add Configuration…** → **protoST**,
-   or use the ready-made `examples/.vscode/launch.json`.
-4. Press F5.
+3. Press **F5**. Without a `launch.json` the extension debugs the active
+   `.st` file; `examples/.vscode/launch.json` has ready-made configurations,
+   and **Add Configuration…** → **protoST** writes one for you.
 
 A launch configuration looks like:
 
@@ -54,7 +55,7 @@ A launch configuration looks like:
   "type": "protost",
   "request": "launch",
   "name": "Debug current protoST script",
-  "program": "${workspaceFolder}/examples/pump_twin.st",
+  "program": "${file}",
   "stopOnEntry": false
 }
 ```

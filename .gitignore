@@ -27,6 +27,7 @@ Testing/
 
 # Editor / IDE
 .vscode/
+!examples/.vscode/
 .idea/
 .vs/
 *.swp

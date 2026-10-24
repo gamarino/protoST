@@ -1,18 +1,22 @@
 {
   "name": "protost-debug",
-  "displayName": "protoST Debugger",
-  "description": "Debug protoST (.st) scripts via the protost --dap Debug Adapter Protocol adapter.",
-  "version": "0.1.0",
+  "displayName": "protoST",
+  "description": "protoST (.st) language support: syntax highlighting and debugging via the protost --dap Debug Adapter Protocol adapter.",
+  "version": "0.2.0",
   "publisher": "protost-placeholder",
   "engines": {
     "vscode": "^1.66.0"
   },
   "categories": [
+    "Programming Languages",
     "Debuggers"
   ],
   "main": "./extension.js",
   "activationEvents": [
-    "onDebug"
+    "onDebug",
+    "onDebugResolve:protost",
+    "onDebugDynamicConfigurations:protost",
+    "onLanguage:smalltalk"
   ],
   "contributes": {
     "configuration": {
@@ -34,7 +38,9 @@
         ],
         "extensions": [
           ".st"
-        ]
+        ],
+        "configuration": "./language-configuration.json",
+        "firstLine": "^#!.*\bprotost\b"
       }
     ],
     "breakpoints": [
@@ -58,7 +64,7 @@
               "program": {
                 "type": "string",
                 "description": "Absolute path to the protoST (.st) script to debug.",
-                "default": "${workspaceFolder}/${file}"
+                "default": "${file}"
               },
               "stopOnEntry": {
                 "type": "boolean",
@@ -91,6 +97,18 @@
           }
         ]
       }
+    ],
+    "grammars": [
+      {
+        "language": "smalltalk",
+        "scopeName": "source.smalltalk",
+        "path": "./syntaxes/smalltalk.tmLanguage.json"
+      }
     ]
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gamarino/protoST"
+  },
+  "license": "MIT"
 }
