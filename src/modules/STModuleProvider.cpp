@@ -175,7 +175,12 @@ const proto::ProtoObject* buildCallerFacade(proto::ProtoContext* callerCtx,
 const proto::ProtoObject*
 STModuleProvider::loadForForeignCaller(STRuntime& rt, const std::string& logicalPath,
                                        proto::ProtoContext* callerCtx) {
-    if (!rt.isOwnerThread()) {
+    // A guest in the caller's space (STRuntime(proto::ProtoSpace&)): the
+    // caller's context is a context of protoST's space, so the load runs on
+    // it, from any thread, and the module object itself is the answer -- no
+    // facade is needed when both runtimes share the space's prototypes.
+    const bool sharedSpace = rt.space() == callerCtx->space;
+    if (!sharedSpace && !rt.isOwnerThread()) {
         throw std::runtime_error(
             "protoST: a cross-runtime import of '" + logicalPath +
             "' must run on the thread that constructed the protoST runtime");
@@ -191,11 +196,13 @@ STModuleProvider::loadForForeignCaller(STRuntime& rt, const std::string& logical
     // translateNativeException, NativeExceptionBridge.h).
     std::exception_ptr failed;
     bool controlFlowUnwind = false;
+    const proto::ProtoObject* sharedModule = nullptr;
     try {
-        proto::ProtoContext* stCtx = rt.rootCtx();
+        proto::ProtoContext* stCtx = sharedSpace ? callerCtx : rt.rootCtx();
         const proto::ProtoObject* mod = rt.importModuleFile(stCtx, path, logicalPath);
         if (!mod || mod == PROTO_NONE) return PROTO_NONE;
-        mod->processOwnAttributes(stCtx, &bindings, collectBinding);
+        if (sharedSpace) sharedModule = mod;
+        else mod->processOwnAttributes(stCtx, &bindings, collectBinding);
     } catch (const UnhandledSTException& u) {
         // An uncaught protoST exception, or an error a module the top level
         // used raised (its original ProtoException): a language value, which
@@ -226,6 +233,7 @@ STModuleProvider::loadForForeignCaller(STRuntime& rt, const std::string& logical
             "resumption, a retry, or a Future yield), which cannot cross a "
             "runtime boundary");
 
+    if (sharedSpace) return sharedModule;
     // Allocated in the CALLER's context, which is what `ctx` is for.
     return buildCallerFacade(callerCtx, bindings);
 }
@@ -235,6 +243,9 @@ STModuleProvider::tryLoad(const std::string& logicalPath, proto::ProtoContext* c
     if (!ctx || !ctx->space) return PROTO_NONE;
 
     auto* rt = stRuntimeForSpace(ctx->space);
+    // A guest runtime in the caller's space: the caller is the host runtime's
+    // code, so the import crosses the runtime boundary as a foreign one does.
+    if (rt && !rt->ownsSpace()) return loadForForeignCaller(*rt, logicalPath, ctx);
     if (!rt) {
         // Track Y: the caller's ProtoSpace is not one protoST owns, so this is
         // a cross-runtime import and the runtime comes from the provider's own

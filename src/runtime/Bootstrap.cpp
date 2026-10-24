@@ -1,9 +1,12 @@
 #include "Bootstrap.h"
 #include "protoCore.h"
 
+#include <cstdint>
+
 namespace protoST {
 
-void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootstrap& out) {
+void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootstrap& out,
+                         bool bindSpaceSlots) {
     // Root of the protoST class tree is a *mutable* child of protoCore's
     // objectPrototype.  Using a mutable proxy is required so that
     // `bindPrimitive` (which calls `setAttribute` and discards the result)
@@ -105,17 +108,21 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     // Booleans (PROTO_TRUE/PROTO_FALSE) and PROTO_NONE remain bound to the
     // protoCore-built-in prototypes; once we attach our own primitives we will
     // re-point them.  For F2 the bare prototypes suffice.
-    sp.smallIntegerPrototype = const_cast<proto::ProtoObject*>(out.smallIntegerProto);
-    sp.largeIntegerPrototype = const_cast<proto::ProtoObject*>(out.largeIntegerProto);
-    sp.unicodeCharPrototype  = const_cast<proto::ProtoObject*>(out.characterProto);
-    sp.floatPrototype        = const_cast<proto::ProtoObject*>(out.floatProto);
-    sp.doublePrototype       = const_cast<proto::ProtoObject*>(out.floatProto);
-    sp.stringPrototype       = const_cast<proto::ProtoObject*>(out.stringProto);
-    sp.booleanPrototype      = const_cast<proto::ProtoObject*>(out.booleanProto);
-    // Route nil (PROTO_NONE) through our nilProto so that selectors defined
-    // on objectProto (e.g. Object>>halt, Object>>printNl) are reachable from
-    // the nil receiver. nilProto's parent is objectProto so the walk succeeds.
-    sp.nonePrototype         = const_cast<proto::ProtoObject*>(out.nilProto);
+    // Only in a space protoST owns: another runtime's space keeps its owner's
+    // slots, and protoST's sends resolve through methodHolder instead.
+    if (bindSpaceSlots) {
+        sp.smallIntegerPrototype = const_cast<proto::ProtoObject*>(out.smallIntegerProto);
+        sp.largeIntegerPrototype = const_cast<proto::ProtoObject*>(out.largeIntegerProto);
+        sp.unicodeCharPrototype  = const_cast<proto::ProtoObject*>(out.characterProto);
+        sp.floatPrototype        = const_cast<proto::ProtoObject*>(out.floatProto);
+        sp.doublePrototype       = const_cast<proto::ProtoObject*>(out.floatProto);
+        sp.stringPrototype       = const_cast<proto::ProtoObject*>(out.stringProto);
+        sp.booleanPrototype      = const_cast<proto::ProtoObject*>(out.booleanProto);
+        // Route nil (PROTO_NONE) through our nilProto so that selectors defined
+        // on objectProto (e.g. Object>>halt, Object>>printNl) are reachable from
+        // the nil receiver. nilProto's parent is objectProto so the walk succeeds.
+        sp.nonePrototype         = const_cast<proto::ProtoObject*>(out.nilProto);
+    }
 
     // BL-3: stamp each bootstrap prototype with its class name under the
     // perpetual `__class_name__` symbol key. printString (object_prims.cpp)
@@ -233,4 +240,27 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     out.sym.priority        = S("__priority__");
 }
 
+bool isCharacterValue(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
+    // A unicode char is an embedded value whose prototype is the space's
+    // unicode char slot (protoCore resolves it from the value's tag).
+    if (!v || v == PROTO_NONE || v == PROTO_TRUE || v == PROTO_FALSE) return false;
+    if (v->isInteger(ctx) || v->isFloat(ctx)) return false;
+    return v->getPrototype(ctx) == ctx->space->unicodeCharPrototype;
+}
+
+const proto::ProtoObject* methodHolder(const Bootstrap& b, proto::ProtoContext* ctx,
+                                       const proto::ProtoObject* recv) {
+    if (!recv || recv == PROTO_NONE) return b.nilProto;
+    if (recv == PROTO_TRUE || recv == PROTO_FALSE) return b.booleanProto;
+    if (proto::isSmallInt(recv)) return b.smallIntegerProto;
+    // An object cell (tag 0) is its own holder; only tagged values remain.
+    if ((reinterpret_cast<uintptr_t>(recv) & 0x3F) == 0) return recv;
+    if (recv->isInteger(ctx)) return b.largeIntegerProto;
+    if (recv->isFloat(ctx)) return b.floatProto;
+    if (recv->asString(ctx)) return b.stringProto;
+    if (isCharacterValue(ctx, recv)) return b.characterProto;
+    return recv;
+}
+
 } // namespace protoST
+

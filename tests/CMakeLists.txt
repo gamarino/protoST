@@ -95,6 +95,7 @@ target_sources(protost_unit_tests PRIVATE
 )
 target_sources(protost_unit_tests PRIVATE
     unit/test_cross_runtime_provider.cpp
+    unit/test_guest_runtime.cpp
 )
 target_sources(protost_unit_tests PRIVATE
     unit/test_cross_runtime_send.cpp

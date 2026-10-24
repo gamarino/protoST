@@ -32,7 +32,23 @@ struct PrimitiveRegistry;
 class STRuntime {
 public:
     STRuntime();
+
+    // A runtime that runs in another runtime's ProtoSpace instead of creating
+    // its own: one ProtoSpace per process, protoCore's recommended model.  Use
+    // it when protoST is loaded as a guest of a host runtime (a protoScala
+    // program importing protoST modules, for example): values of both
+    // runtimes are cells of one heap, collected by one collector.  The host's
+    // heap policy, out-of-memory callback, primitive prototype slots and
+    // resolution chain are left alone (protoST resolves its own sends to
+    // primitive values through its own prototypes, Bootstrap.h methodHolder,
+    // and adds `provider:st` to the chain).  Construct it on the host's main
+    // thread after the host, and destroy it before the host's space.
+    explicit STRuntime(proto::ProtoSpace& hostSpace);
     ~STRuntime();
+
+    // True when this runtime created its ProtoSpace, false when it runs in a
+    // host's (STRuntime(proto::ProtoSpace&)).
+    bool ownsSpace() const;
     STRuntime(const STRuntime&) = delete;
     STRuntime& operator=(const STRuntime&) = delete;
 
@@ -263,6 +279,8 @@ private:
     // Installs protoST's memory policy (the adaptive heap controller unless the
     // environment asks for a fixed limit) and its out-of-memory report.
     static void configureHeap(proto::ProtoSpace& space);
+    // The part of construction shared by both constructors.
+    void construct();
 
     // Loads the Smalltalk-source kernel (<lib>/kernel, in the order of its
     // 00-manifest.txt) into this runtime's globals. Throws std::runtime_error

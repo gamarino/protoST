@@ -182,9 +182,25 @@ struct Bootstrap {
     } sym;
 };
 
-// Build the prototype tree on top of `sp.objectPrototype` and bind the result
-// into the relevant protoCore primitive slots so that literals dispatch
-// through the Smalltalk chain.
-void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootstrap& out);
+// Build the prototype tree on top of `sp.objectPrototype`.  When
+// `bindSpaceSlots` (protoST owns the space) the result is also bound into
+// the space's primitive prototype slots, so that literals dispatch through the
+// Smalltalk chain for any code of the space.  A runtime that runs in another
+// runtime's space (STRuntime(proto::ProtoSpace&)) leaves the slots to their
+// owner and resolves its own sends through methodHolder.
+void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootstrap& out,
+                         bool bindSpaceSlots = true);
+
+// Where a protoST send to `recv` starts its method lookup: protoST's own
+// prototype for a primitive value (nil, a Boolean, an Integer, a Float, a
+// Character, a String or Symbol) and `recv` itself for anything else.  In a
+// space protoST owns this is exactly what protoCore's lookup through the
+// space's primitive slots finds; in another runtime's space, whose slots hold
+// that runtime's prototypes, it keeps protoST's semantics for protoST code.
+const proto::ProtoObject* methodHolder(const Bootstrap& b, proto::ProtoContext* ctx,
+                                       const proto::ProtoObject* recv);
+
+// True when `v` is a Character (a protoCore unicode char).
+bool isCharacterValue(proto::ProtoContext* ctx, const proto::ProtoObject* v);
 
 } // namespace protoST

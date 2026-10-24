@@ -755,7 +755,11 @@ const proto::ProtoObject* stErrorFactory(proto::ProtoContext* ctx, proto::ProtoE
 } // namespace
 
 void installErrorFactory(STRuntime& rt) {
-    rt.space()->setErrorFactory(&stErrorFactory);
+    // The factory is one per space: in a host's space (STRuntime(ProtoSpace&))
+    // the host's stays, and protoCore's own errors are the host's values,
+    // which a protoST handler selects by their prototype like any foreign
+    // exception.
+    if (rt.ownsSpace()) rt.space()->setErrorFactory(&stErrorFactory);
 }
 
 namespace {

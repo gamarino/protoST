@@ -706,7 +706,7 @@ const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
                                       const proto::ProtoString* selector,
                                       const proto::ProtoObject* const* args, int argc,
                                       bool* understood) {
-    return sendDynamicFrom(rt, ctx, recv, recv ? recv : rt.bootstrap().nilProto,
+    return sendDynamicFrom(rt, ctx, recv, methodHolder(rt.bootstrap(), ctx, recv),
                            selector, args, argc, understood);
 }
 
@@ -790,7 +790,7 @@ const proto::ProtoObject* prim_Object_respondsTo(STRuntime& rt, proto::ProtoCont
                                                  const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw std::runtime_error("respondsTo: expects 1 arg");
     const proto::ProtoString* sel = selectorArg(ctx, a[0]);
-    const proto::ProtoObject* holder = r && r != PROTO_NONE ? r : rt.bootstrap().nilProto;
+    const proto::ProtoObject* holder = methodHolder(rt.bootstrap(), ctx, r);
     const proto::ProtoObject* m = holder->getAttribute(ctx, sel);
     if (!m || m == PROTO_NONE) return PROTO_FALSE;
     // A class-side method answers only for the class itself, as the send
@@ -1011,7 +1011,7 @@ const proto::ProtoObject* prim_Object_class(STRuntime& rt, proto::ProtoContext* 
                         && r->compare(ctx, ctx->fromLong(kSmallIntegerMin)) >= 0;
         return small ? b.smallIntegerProto : b.largeIntegerProto;
     }
-    if (!r->isInteger(ctx) && r->getPrototype(ctx) == b.characterProto) return b.characterProto;
+    if (isCharacterValue(ctx, r)) return b.characterProto;
     if (r->asString(ctx)) {
         // The symbol tag lives on the value itself; asString may answer a
         // different handle, so the tag is read from the receiver.
@@ -1183,7 +1183,7 @@ const proto::ProtoObject* prim_Object_canUnderstand(STRuntime& rt, proto::ProtoC
         if (m->getOwnAttributeDirect(ctx, rt.bootstrap().sym.classSide) == PROTO_TRUE) return PROTO_TRUE;
         return rt.bootstrap().objectProto->getAttribute(ctx, sel) == m ? PROTO_TRUE : PROTO_FALSE;
     }
-    const proto::ProtoObject* m = r->getAttribute(ctx, sel);
+    const proto::ProtoObject* m = methodHolder(rt.bootstrap(), ctx, r)->getAttribute(ctx, sel);
     if (!isMethodValue(rt, ctx, m)) return PROTO_FALSE;
     if (!m->isInteger(ctx) && m->getOwnAttributeDirect(ctx, rt.bootstrap().sym.classSide) == PROTO_TRUE)
         return PROTO_FALSE;
@@ -1333,7 +1333,7 @@ const proto::ProtoObject* prim_Object_isClassObject(STRuntime& rt, proto::ProtoC
 // If the receiver IS a class object (it carries `__class_name__` as an OWN
 // attribute), the bare class name is returned ("Counter") rather than
 // "a Counter" — nicer for printing the class itself.
-const proto::ProtoObject* prim_Object_printString(STRuntime&,
+const proto::ProtoObject* prim_Object_printString(STRuntime& rt,
                                                    proto::ProtoContext* ctx,
                                                    const proto::ProtoObject* r,
                                                    const proto::ProtoObject* const*,
@@ -1351,7 +1351,7 @@ const proto::ProtoObject* prim_Object_printString(STRuntime&,
 
     // Otherwise walk the prototype chain for the class name.
     const proto::ProtoObject* nameObj =
-        r ? r->getAttribute(ctx, nameKey) : nullptr;
+        r ? methodHolder(rt.bootstrap(), ctx, r)->getAttribute(ctx, nameKey) : nullptr;
     std::string name;
     if (nameObj && nameObj != PROTO_NONE) {
         auto* s = nameObj->asString(ctx);

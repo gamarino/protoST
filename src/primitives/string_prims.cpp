@@ -202,7 +202,7 @@ const proto::ProtoObject* prim_StrConcat(STRuntime& rt, proto::ProtoContext* ctx
     // A Character argument is appended ('x' , Character cr). Any other
     // non-string argument is an error; it used to be dropped silently
     // ('x' , 3 answered 'x').
-    if (!rhs && !a[0]->isInteger(ctx) && a[0]->getPrototype(ctx) == rt.bootstrap().characterProto) {
+    if (!rhs && isCharacterValue(ctx, a[0])) {
         const std::string out = toUtf8(r, ctx)
             + encodeCodepoint(static_cast<uint32_t>(a[0]->asLong(ctx)));
         return ctx->fromUTF8String(out.c_str());

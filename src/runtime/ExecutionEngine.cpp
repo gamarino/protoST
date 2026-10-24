@@ -577,8 +577,7 @@ const proto::ProtoObject* ExecutionEngine::doesNotUnderstand(
     TransientPin pinMessage(ctx, message);
     const proto::ProtoString* dnuKey =
         proto::ProtoString::createSymbol(ctx, "doesNotUnderstand:");
-    const proto::ProtoObject* holder =
-        (recv && recv != PROTO_NONE) ? recv : bs_.nilProto;
+    const proto::ProtoObject* holder = methodHolder(bs_, ctx, recv);
     const proto::ProtoObject* handler = holder->getAttribute(ctx, dnuKey);
     if (handler && handler != PROTO_NONE) {
         const proto::ProtoObject* bc = handler->getOwnAttributeDirect(ctx, bs_.sym.bcPtr);
@@ -1558,7 +1557,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // from there. This correctly skips an override on the
                 // receiver's own class while still finding the inherited
                 // implementation.
-                const proto::ProtoObject* lookupFrom = recv;
+                const proto::ProtoObject* lookupFrom = methodHolder(bs_, ctx, recv);
                 // T3-b: when a `super` send resolves the inherited method by
                 // a multi-parent depth-first walk, the resolved attribute is
                 // captured here so the shared lookup below uses it directly
@@ -1975,7 +1974,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // Attribute lookup uses the bare name (no mangling) — this
                 // is the protoCore convention.
                 const proto::ProtoObject* attr =
-                    recv->getAttribute(ctx, desc.name);
+                    methodHolder(bs_, ctx, recv)->getAttribute(ctx, desc.name);
                 if (!attr || attr == PROTO_NONE) {
                     auto* r = doesNotUnderstand(ctx, recv, desc.mangled, nullptr, 0);
                     push(f, r ? r : PROTO_NONE);

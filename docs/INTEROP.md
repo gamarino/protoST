@@ -352,6 +352,37 @@ the global `ProviderRegistry`, so any runtime that names `provider:st` — in it
 resolution chain, or directly through `getProviderForSpec` — can import a protoST
 `.st` module and receive its exported classes as `ProtoObject`s.
 
+### 4.0 A guest in the host's ProtoSpace — the recommended shape (2026-10-24)
+
+protoCore recommends one `ProtoSpace` per process (protoCore
+`docs/GLOBAL_MUTABLE_TABLE.md`, "Recommended model"). A host runtime that loads
+protoST constructs it in its own space: `protoST::STRuntime st(host.space())`,
+on the host's main thread, after the host and destroyed before it. Then:
+
+- **One heap, one collector.** Values of both runtimes are cells of one space;
+  nothing is copied, and the module a host context imports is protoST's own
+  object (no facade). `ProtoSpace::liveSpaceCount()` stays 1.
+- **What is one per space stays the host's**: its primitive prototype slots
+  (`smallIntegerPrototype`, `stringPrototype`, ...), its error factory, its heap
+  policy and out-of-memory callback, its resolution chain (protoST appends
+  `provider:st`). protoST resolves its own sends to primitive values -- nil,
+  Booleans, Integers, Floats, Characters, Strings and Symbols -- through its own
+  prototypes (`methodHolder`, `src/runtime/Bootstrap.h`), so `3 printString`
+  is protoST's in protoST code and the host's in host code: a primitive value
+  is interpreted by the language that operates on it. protoCore's own errors
+  raised in protoST code are the host's error values, which a protoST handler
+  selects by prototype like any foreign exception.
+- **The boundary is unchanged in meaning.** An import (`tryLoad`) and a send
+  (`__st_send__`) from host code cross the runtime boundary as a foreign one
+  does (protoST's handlers are not offered a host error; a protoST error no
+  handler takes leaves unchanged) -- but on the caller's own context, which
+  belongs to the shared space, so a call from any protoCore thread of the space
+  is served (the one-thread restriction of §4.1 is for a caller in another
+  space).
+
+The sections below describe the shape where each runtime keeps its own space,
+which protoCore still supports but no longer recommends.
+
 ### 4.1 Serving a caller in another runtime's ProtoSpace (Track Y)
 
 "Nothing more is required on the protoST side" was **wrong**, and it took a real

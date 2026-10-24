@@ -63,11 +63,12 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  # protoCore 3.0.0 (tag v3.0.0, commit ce00a4a2),
-  # SOVERSION 4: what every push and pull request builds against; it is also
-  # the declared minimum, which the floor entry of the `test` job builds.
+  # protoCore 3.1.0 (untagged master, commit 267b9fc9: one space per process,
+  # ProtoSpace::liveSpaceCount, which the guest-runtime test asserts with),
+  # SOVERSION 4: what every push and pull request builds against. The declared
+  # minimum stays 3.0.0, which the floor entry of the `test` job builds.
   # Bump deliberately.
-  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'ce00a4a26b6583ea8a58e776eee2ea91c743469e' }}
+  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || '267b9fc93a189fb3552dd7d52c7d519b0d9166b4' }}
   # The test excluded from the gate, run in the `non-gating` job:
   #   F6 v2 T7: two actors ...    a wall-clock proof of parallelism: two 200 ms
   #                               sleeps must finish inside 350 ms
@@ -96,7 +97,7 @@ jobs:
             # Empty: env.PROTOCORE_REF (3.0.0, or master on the schedule).
             protocore_ref: ''
           # THE FLOOR JOB, the only one in this repository (cross-platform.yml
-          # builds 3.0.0 on macOS and Windows). protoCore 3.0.0 (tag v3.0.0, ce00a4a2),
+          # builds 3.1.0 on macOS and Windows). protoCore 3.0.0 (tag v3.0.0, ce00a4a2),
           # SOVERSION 4: PROTOCORE_MIN_VERSION in CMakeLists.txt (a thread's
           # method receives ProtoArguments). Built on every event, the
           # schedule included, so a change that needs a newer protoCore is
