@@ -382,7 +382,8 @@ The repository ships a VS Code extension in
 for `.st` files, and debugging through the `protost --dap` adapter built into
 `protost` itself — line breakpoints, stepping (over, into, out of a method or
 a block), call stack, locals, Watch and the Debug Console (the script's output
-appears there), exception breakpoints (Raised / Uncaught), and the actor
+appears there), conditional, hit-count and log breakpoints, exception
+breakpoints (Raised / Uncaught, each with an optional condition on `ex`), and the actor
 threads: each worker thread is a thread in VS Code, and a thread that stops
 stops alone while the others keep running.
 
@@ -392,7 +393,7 @@ stops alone while the others keep running.
    ```bash
    cd editor-integration/vscode
    npx @vscode/vsce@3.2.1 package --skip-license
-   code --install-extension protost-debug-0.3.0.vsix
+   code --install-extension protost-debug-0.4.0.vsix
    ```
 
    Then run **Developer: Reload Window** in VS Code.
@@ -414,7 +415,8 @@ limitations:
   listed as running, and Pause stops it only once it runs script code again;
 - Raised Exceptions also stops where kernel code signals and handles an
   exception itself;
-- launch only: no attach, restart, conditional or data breakpoints.
+- breakpoint and filter conditions cannot use `self` or instance variables;
+- launch only: no attach, restart, function or data breakpoints.
 
 ## Documentation
 

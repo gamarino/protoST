@@ -2,7 +2,7 @@
   "name": "protost-debug",
   "displayName": "protoST",
   "description": "protoST (.st) language support: syntax highlighting and debugging via the protost --dap Debug Adapter Protocol adapter.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "protost-placeholder",
   "engines": {
     "vscode": "^1.66.0"

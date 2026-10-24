@@ -16,7 +16,8 @@ protost --dap
 
 starts protoST as a DAP adapter: it reads `Content-Length`-framed DAP messages
 from stdin and writes them to stdout. It implements the requests `initialize`,
-`launch`, `setBreakpoints`, `setExceptionBreakpoints`, `configurationDone`,
+`launch`, `setBreakpoints` (with `condition`, `hitCondition` and
+`logMessage`), `setExceptionBreakpoints` (with conditional `filterOptions`), `configurationDone`,
 `continue`, `next`, `stepIn`, `stepOut`, `pause`, `threads`, `stackTrace`,
 `scopes`, `variables`, `evaluate`, `exceptionInfo`, `disconnect` and
 `terminate`, and emits the events `initialized`, `stopped`, `thread`,
@@ -54,7 +55,7 @@ syntax highlighting. Package and install it:
 ```bash
 cd editor-integration/vscode
 npx @vscode/vsce@3.2.1 package --skip-license
-code --install-extension protost-debug-0.3.0.vsix
+code --install-extension protost-debug-0.4.0.vsix
 ```
 
 See `editor-integration/vscode/README.md` for the symlink alternative.
@@ -195,6 +196,63 @@ Execution runs until it hits a breakpoint (or the entry point, if
   stderr are captured and forwarded, and its stdin reads end of file (a script
   that reads stdin sees no input under the debugger).
 
+## Conditions, hit counts and logpoints
+
+Every expression below is Smalltalk, evaluated the way the Debug Console
+evaluates: on the thread that reached the breakpoint, in its frame (the frame's
+variables in scope by value, globals and classes as usual). While it runs the
+debugger stops nowhere on that thread -- a breakpoint in a method the
+expression calls, an exception it raises, a step in progress -- and the
+program's own `on:do:` handlers are hidden from it, so an error in the
+expression never unwinds the program.
+
+**Exception filter conditions.** Each filter in the Breakpoints panel takes a
+condition (right-click → Edit Condition). The exception is bound as `ex`
+(shadowing a frame variable named `ex`):
+
+```smalltalk
+ex isKindOf: ZeroDivide
+ex messageText = 'too big 4'
+(ex isKindOf: SubscriptOutOfBounds) and: [ index > 10 ]
+```
+
+The filter stops only when the condition answers `true`.
+
+**Line breakpoints** (right-click a breakpoint → Edit Breakpoint):
+
+- **Condition** — stops when the expression answers `true` (`i = 4`,
+  `total > 100`).
+- **Hit count** — counts the hits whose condition passed, and stops on:
+
+  | Hit count | Stops on                    |
+  |-----------|-----------------------------|
+  | `3` or `== 3` | the 3rd hit only        |
+  | `>= 5`    | the 5th hit and every later one |
+  | `> 5`     | the 6th and later           |
+  | `< 3`     | the 1st and 2nd             |
+  | `<= 3`    | the 1st to the 3rd          |
+  | `% 2`     | every 2nd (2nd, 4th, …)     |
+
+  Anything else is rejected: the breakpoint shows as unverified, with the
+  reason, and does not stop. Hits are counted from the last time the file's
+  breakpoints were set.
+- **Log message** — a logpoint does not stop: it writes the message to the
+  Debug Console, with each `{expression}` replaced by its value in the frame (a
+  string by its characters, anything else as it prints); `{{` and `}}` are
+  literal braces. An expression that fails reads `<error: message>`. With a
+  condition or a hit count it logs only when they pass.
+
+**When a condition fails** — a syntax error, an exception, or a result that is
+not a Boolean (`nil`, a number) — the breakpoint (or the filter) STOPS, and
+says why: the stop's description reads ``breakpoint condition `i fooBar`
+failed: doesNotUnderstand: fooBar …`` (``exception breakpoint condition …`` for
+a filter), and the same line goes to the Debug Console. A condition that does
+not compile is also reported when it is set.
+
+Limitation: the expression cannot use `self` or the instance variables of the
+frame's receiver (it is compiled outside the method); pass through a variable
+of the frame instead.
+
 ## Known limitations
 
 - **Values are flat.** Objects are shown by their print string (`a Counter`)
@@ -210,12 +268,13 @@ Execution runs until it hits a breakpoint (or the entry point, if
 - **Raised Exceptions also stops in kernel code** that signals and handles an
   exception itself (for instance `sort` falling back to comparing print
   strings when two elements cannot be compared).
-- **One program per session**: no `attach`, no restart, no conditional or
-  function breakpoints, no data breakpoints.
+- **Conditions cannot use `self`** or the receiver's instance variables.
+- **One program per session**: no `attach`, no restart, no function
+  breakpoints, no data breakpoints.
 
 The DAP exchange is verified by the integration tests `cli_dap_session`,
-`cli_dap_output`, `cli_dap_gc`, `cli_dap_exceptions`, `cli_dap_stepping` and
-`cli_dap_threads`.
+`cli_dap_output`, `cli_dap_gc`, `cli_dap_exceptions`, `cli_dap_stepping`,
+`cli_dap_threads` and `cli_dap_conditions`.
 
 ## Verifying the adapter without VS Code
 

@@ -5,6 +5,21 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+- **DAP: conditions, hit counts and logpoints** (docs/debugging.md).
+  The exception filters take a condition (`supportsExceptionFilterOptions`),
+  a Smalltalk expression with the exception bound as `ex`
+  (`ex isKindOf: ZeroDivide`); line breakpoints take a `condition`, a
+  `hitCondition` (`N`, `== N`, `>= N`, `> N`, `< N`, `<= N`, `% N`; anything
+  else is unverified) and a `logMessage` with `{expr}` interpolation. They are
+  evaluated on the thread that reached the breakpoint, in its frame, with
+  every stop suppressed and the program's handlers hidden; a condition that
+  fails stops and says why (stop description and Debug Console).
+- **DAP: an evaluation no longer reaches the program's handlers.** An error in
+  a Watch / Debug Console expression evaluated on a thread stopped inside an
+  `on:do:` was caught by that handler, which unwound the program's frames from
+  inside the debugger; the thread's handlers are now hidden while it runs. An
+  inlined `to:do:`'s counter shows under its block argument's name (`i`), not
+  as a hidden compiler slot.
 - **DAP: exception breakpoints** (docs/debugging.md). `initialize` advertises
   two `exceptionBreakpointFilters`: `raised` (off by default) stops when an
   exception is signalled, `uncaught` (on by default) when no `on:do:` handler
@@ -34,7 +49,7 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 - **Breakpoints inside methods and multi-line blocks** stop there: the
   instructions that install a method, and the code around a block literal,
   were tagged with the body's last line and took the breakpoint first.
-- VS Code extension 0.3.0 (documentation only).
+- VS Code extension 0.4.0 (documentation only).
 
 - **A guest in the host's ProtoSpace** (INTEROP.md §4.0). New constructor
   `STRuntime(proto::ProtoSpace& hostSpace)` runs protoST in a space another
