@@ -688,6 +688,10 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         return;
     }
     if (n.kind == NodeKind::MethodDecl) {
+        // The install instructions belong to the header line: at the body's
+        // last line they took a breakpoint meant for the method's last
+        // statement.
+        const int headerLine = currentLine_;
         // F4-U3: compile the method body as a sub-BytecodeModule and emit
         // module-level bytecode that, at runtime, installs the resulting
         // method wrapper on the target class.
@@ -819,6 +823,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         auto installIdx  = m.internSymbol(
             n.boolFlag ? "__installClassMethod:as:" : "__installMethod:as:");
 
+        currentLine_ = headerLine;
         m.emitWide(Op::PUSH_GLOBAL,  static_cast<unsigned int>(classIdx), currentLine_);    // class
         m.emitWide(Op::PUSH_BLOCK,   static_cast<unsigned int>(blkIdx), currentLine_);      // method wrapper
         m.emitWide(Op::PUSH_CONST,   static_cast<unsigned int>(selectorIdx), currentLine_); // selector symbol
@@ -833,6 +838,10 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         return;
     }
     if (n.kind == NodeKind::CallMethodDecl) {
+        // The install instructions belong to the header line: at the body's
+        // last line they took a breakpoint meant for the method's last
+        // statement.
+        const int headerLine = currentLine_;
         // protoCore-style call-form method body. Mirrors MethodDecl's
         // structure with two added responsibilities:
         //  1. The bytecode module carries an explicit call-form signature
@@ -1032,6 +1041,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         auto installIdx  = m.internSymbol(
             n.boolFlag ? "__installClassMethod:as:" : "__installMethod:as:");
 
+        currentLine_ = headerLine;
         m.emitWide(Op::PUSH_GLOBAL,  static_cast<unsigned int>(classIdx), currentLine_);
         m.emitWide(Op::PUSH_BLOCK,   static_cast<unsigned int>(blkIdx), currentLine_);
         m.emitWide(Op::PUSH_CONST,   static_cast<unsigned int>(selectorIdx), currentLine_);
@@ -1437,6 +1447,10 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             return;
         }
         case NodeKind::Block: {
+            // The outer code around a block literal stays on the line the
+            // block starts on: at the body's last line it took a breakpoint
+            // meant for the body's last statement.
+            const int blockLine = currentLine_;
             auto sub = std::make_unique<BytecodeModule>();
             // A block inside a method sends `super` on behalf of that method's
             // class (Pharo allows super in blocks).
@@ -1474,6 +1488,7 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                                   : "[] in " + currentMethodDebugName_);
             scopes_.pop_back();
             size_t blkIdx = m.addBlockModule(std::move(sub));
+            currentLine_ = blockLine;
             m.emitWide(Op::PUSH_BLOCK, static_cast<unsigned int>(blkIdx), currentLine_);
             return;
         }
