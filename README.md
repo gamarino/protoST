@@ -293,8 +293,6 @@ cmake --build build -j
 ctest --test-dir build                # run the test suite
 ```
 
-See [`docs/debugging.md`](docs/debugging.md) for debugging `.st` scripts in
-VS Code.
 
 On **Windows**, protoST builds natively with Visual Studio 2022 (MSVC) against
 an installed protoCore (`-DCMAKE_PREFIX_PATH=<its prefix>`) and an OpenSSL 3
@@ -376,6 +374,35 @@ enabled for the host OS. The `.deb` and `.tar.gz` packages have been verified
 on Linux and the `.zip` on Windows (in CI, from a clean directory); the NSIS
 installer is built in CI but has not been installed and run, and the macOS
 generator has never been run.
+
+## Debugging in VS Code
+
+The repository ships a VS Code extension in
+[`editor-integration/vscode/`](editor-integration/vscode/): syntax highlighting
+for `.st` files, and debugging through the `protost --dap` adapter built into
+`protost` itself — line breakpoints, stepping, call stack, locals, Watch and
+the Debug Console (the script's output appears there).
+
+1. Install protoST (above) so `protost` is on your `PATH`, or note where it is.
+2. Package and install the extension (needs Node.js for `npx`):
+
+   ```bash
+   cd editor-integration/vscode
+   npx @vscode/vsce@3.2.1 package --skip-license
+   code --install-extension protost-debug-0.2.0.vsix
+   ```
+
+   Then run **Developer: Reload Window** in VS Code.
+3. Open a folder with `.st` scripts (for instance `examples/`, which has a
+   ready-made `.vscode/launch.json`), click in the gutter to set a breakpoint
+   and press **F5**. Without a `launch.json`, F5 debugs the active `.st` file.
+
+The extension runs the `protost` named in **Settings → Extensions → protoST →
+Protost: Path**; if that is empty, the one in the default install location
+(`%LOCALAPPDATA%\Programs\proto\bin\protost.exe` on Windows,
+`~/.local/bin/protost` elsewhere); otherwise `protost` from `PATH`. See
+[`docs/debugging.md`](docs/debugging.md) for what works and the current
+limitations.
 
 ## Documentation
 
