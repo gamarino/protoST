@@ -4,8 +4,10 @@ A minimal VS Code extension for protoST (`.st`) scripts:
 
 - **Language support** — syntax highlighting (a TextMate grammar), `"…"`
   comments, bracket matching and auto-closing for `[ ]`, `( )`, `{ }`, `' '`.
-- **Debugging** — breakpoints, stepping, call stack, variables and the Debug
-  Console, through the protoST DAP debug adapter. The adapter is the `protost`
+- **Debugging** — breakpoints, stepping, call stack, variables, the Debug
+  Console, exception breakpoints (Raised / Uncaught, in the Breakpoints panel)
+  and one thread per actor worker (a thread that stops stops alone), through
+  the protoST DAP debug adapter. The adapter is the `protost`
   binary itself, invoked as `protost --dap`, which speaks the
   [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/)
   over stdin/stdout. What the script prints shows up in the Debug Console.
@@ -29,15 +31,15 @@ platform):
 
 ```bash
 cd editor-integration/vscode
-npx @vscode/vsce package --skip-license
-code --install-extension protost-debug-0.2.0.vsix
+npx @vscode/vsce@3.2.1 package --skip-license
+code --install-extension protost-debug-0.3.0.vsix
 ```
 
 Or, on Linux and macOS, symlink the folder (picks up edits after a
 `Developer: Reload Window`):
 
 ```bash
-ln -s "$(pwd)/editor-integration/vscode" ~/.vscode/extensions/protost-debug-0.2.0
+ln -s "$(pwd)/editor-integration/vscode" ~/.vscode/extensions/protost-debug-0.3.0
 ```
 
 ## Use

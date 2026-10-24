@@ -16,10 +16,11 @@ protost --dap
 
 starts protoST as a DAP adapter: it reads `Content-Length`-framed DAP messages
 from stdin and writes them to stdout. It implements the requests `initialize`,
-`launch`, `setBreakpoints`, `configurationDone`, `continue`, `next`, `stepIn`,
-`stepOut`, `threads`, `stackTrace`, `scopes`, `variables`, `evaluate`, and
-`disconnect`, and emits the events `initialized`, `stopped`, `terminated`,
-`exited`, and `output`.
+`launch`, `setBreakpoints`, `setExceptionBreakpoints`, `configurationDone`,
+`continue`, `next`, `stepIn`, `stepOut`, `pause`, `threads`, `stackTrace`,
+`scopes`, `variables`, `evaluate`, `exceptionInfo`, `disconnect` and
+`terminate`, and emits the events `initialized`, `stopped`, `thread`,
+`terminated`, `exited`, and `output`.
 
 You do not normally run `protost --dap` by hand — VS Code spawns it for you via
 the extension below.
@@ -52,8 +53,8 @@ syntax highlighting. Package and install it:
 
 ```bash
 cd editor-integration/vscode
-npx @vscode/vsce package --skip-license
-code --install-extension protost-debug-0.2.0.vsix
+npx @vscode/vsce@3.2.1 package --skip-license
+code --install-extension protost-debug-0.3.0.vsix
 ```
 
 See `editor-integration/vscode/README.md` for the symlink alternative.
@@ -106,42 +107,115 @@ Execution runs until it hits a breakpoint (or the entry point, if
 ## What works
 
 - **Breakpoints by line** — set/clear in the gutter of `.st` files; the adapter
-  resolves them via the bytecode pc-to-source-line map (F8-1).
-- **Stepping** — step in, step over, step out, and continue.
-- **Call stack** — the `stackTrace` request returns named frames with source
-  file and line.
-- **Variables** — the variables panel shows locals and arguments with their
-  real names and current values.
+  resolves them via the bytecode pc-to-source-line map (F8-1). A breakpoint on
+  a line inside a method or a multi-line block stops there, not where the
+  method or the block is defined.
+- **Stepping** — by source line and call depth, per thread:
+  - **Step Over** (`next`) runs to the next line of the same frame (or of its
+    caller, when the frame returns). A method call, and a block a primitive
+    runs (`do:`, `collect:`, `inject:into:` …), are stepped over whole.
+  - **Step Into** (`stepIn`) stops at the next line, or at the first line of a
+    method or a block the current line calls.
+  - **Step Out** (`stepOut`) runs until the current frame returns and stops in
+    the caller.
+  - A breakpoint met on the way stops first.
+- **Call stack** — the `stackTrace` request returns every frame of the
+  stopped thread, innermost first, with source file and line: methods, and
+  the blocks that primitives run in engines of their own (`[] in Calc>>sumOf:`
+  above `Calc>>sumOf:` above `<module>`). A caller frame shows the line of the
+  send in progress.
+- **Variables** — the Locals scope shows `self`, the arguments and the
+  temporaries of the selected frame with their real names and printed values.
+  A temporary shared with a block shows its current value, and a block frame
+  also shows the enclosing temporaries it uses. Compiler temporaries are not
+  shown. Values are flat (objects print as `a Counter` and are not
+  expandable).
 - **Watch / evaluate** — the `evaluate` request powers the Watch panel and the
-  Debug Console; it evaluates expressions in the selected frame's scope
-  (arithmetic and in-scope variables work).
+  Debug Console. The expression runs on the stopped thread, in the selected
+  frame: its variables are in scope by value (`doubled + n`, `box at: 1`; an
+  assignment to one does not reach the frame). Breakpoints and exception
+  filters do not stop an evaluation.
+- **Exception breakpoints** — the Breakpoints panel lists two filters:
+  - **Raised Exceptions** (`raised`, off by default) stops when any exception
+    is signalled — `signal`, `signal:`, an error a primitive raises (an index
+    out of bounds, a missing key), protoCore's own errors (`ZeroDivide`), a
+    `doesNotUnderstand:` — before any handler runs, so the stack, the locals
+    and `evaluate` are exactly as at the signal.
+  - **Uncaught Exceptions** (`uncaught`, on by default) stops only when no
+    `on:do:` handler on the thread will take the exception and its default
+    action ends the activation (an `Error`, or any non-resumable exception).
+    Smalltalk looks for the handler before it unwinds anything, so this stop
+    too has the stack intact. An unhandled `Warning` resumes with nil and does
+    not count.
+
+  The stop's reason is `exception`; its description, and the `exceptionInfo`
+  request (the exception widget), give the class and the message text, the
+  break mode (`always` for raised, `unhandled` for uncaught) and the stack as
+  text. An error raised inside a primitive stops at the frame that sent the
+  message, and the description says so ("raised by a primitive"). An error
+  raised inside kernel Smalltalk code (`1 / 0` signals from
+  `Fraction>>numerator:denominator:`) stops in that kernel method, with the
+  caller frames below it.
+
+  What never stops: protoST's internal control flow, which is C++ unwinding and
+  not a signal — the non-local return `^` from a block (`NonLocalReturn`), the
+  unwinding to an `on:do:` after its handler (`UnwindToHandler`), `resume:`
+  (`ResumeSignal`), `retry` (`RetrySignal`), `pass` / `outer` (`PassSignal`),
+  the nesting-limit unwinding (`NestingLimitUnwind`), an actor's cooperative
+  yield in `wait` (`FutureYield`), `halt` (`DebuggerHalt`, which has its own
+  stop) and Ctrl-C in the REPL (`InterruptSignal`). An exception that already
+  went through every handler and continues outward (`UnhandledSTException`) is
+  not reported a second time. `pass` / `outer` and a handler re-entered after
+  the nesting limit are the same signal, not a new one.
+- **Threads** — every thread that runs script code is a thread in VS Code's
+  Call Stack view:
+  - `main` (thread 1) runs the script. While it waits on a Future it may run
+    actor messages itself; a stop then shows the actor in its name.
+  - `worker N` — the actor worker pool. A worker stopped inside an actor's
+    method is named after the actor: `worker 2: actor Counter#1` (the actor's
+    class and a number the debugger gives each actor it sees).
+
+  A thread appears (a `thread` started event) the first time it runs an
+  instruction, and disappears when it ends. Workers that never ran script
+  code are not listed.
+- **One-thread stop** — a thread that stops (breakpoint, step, pause,
+  exception) stops alone: the other threads keep running, and several threads
+  can be stopped at the same time, each inspected on its own. Continue, the
+  steps and Pause act on the thread they are sent for. A breakpoint applies to
+  every thread; stepping one thread never makes another stop. Collections go on
+  while threads are stopped: a stopped thread waits outside protoCore's
+  stop-the-world quorum, and its frames stay roots.
+- **Pause** — pauses the selected thread at its next instruction. A thread
+  blocked in native code (waiting on a Future, on I/O, on an idle worker's
+  queue) pauses when it is back in the interpreter: the request answers at
+  once, the stop arrives then.
 - **Debug Console** — what the script prints (stdout and stderr) appears
   here as adapter `output` events; you can type expressions to evaluate. The
   adapter's own stdout is the protocol channel, so the debuggee's stdout and
   stderr are captured and forwarded, and its stdin reads end of file (a script
   that reads stdin sees no input under the debugger).
 
-## Known limitations (MVP)
+## Known limitations
 
-This is a minimum-viable adapter. Honest limitations as of F8:
+- **Values are flat.** Objects are shown by their print string (`a Counter`)
+  and cannot be expanded into their instance variables.
+- **`evaluate` binds the frame's variables by value.** An assignment in the
+  Debug Console does not change the frame's variable (sending a message that
+  mutates the object it names does).
+- **Threads blocked in native code are not shown as such.** A worker waiting
+  for work, or a thread blocked in a Future's `wait` or in I/O, is listed as
+  running; Pause stops it only once it runs script code again.
+- **A stop on the main thread while it drains actors** shows the actor's frames
+  above the frames of the `wait` that ran them, all as thread `main`.
+- **Raised Exceptions also stops in kernel code** that signals and handles an
+  exception itself (for instance `sort` falling back to comparing print
+  strings when two elements cannot be compared).
+- **One program per session**: no `attach`, no restart, no conditional or
+  function breakpoints, no data breakpoints.
 
-- **Single logical thread.** The adapter reports one thread (`threadId 1`).
-  Debugging concurrent multi-actor-thread execution is beyond the MVP — actor
-  worker threads are not individually surfaced.
-- **`next` is aliased to `step`.** There is no frame-depth-aware step-over yet;
-  `next` currently behaves like `stepIn`.
-- **Call stacks are usually a single frame in practice.** Multi-level stacks
-  display correctly when produced, but today they are only produced by
-  same-engine user-method `SEND`s. Block bodies run in nested engines (an F6
-  v3 A scope limitation) and class-side methods hit a separate pre-existing
-  `unimplemented opcode` bug — so most stops show a single frame.
-- **Flat variables panel.** Objects are shown by their print string
-  (`a Counter`) and are not expandable. A temporary captured by a block, and
-  the locals of a class-side method (whose stop also reports the `<module>`
-  frame), show as `slot N` with value `nil`.
-
-These are scope boundaries of the MVP adapter, not regressions — the underlying
-DAP exchange is verified by the `cli_dap_session` integration test.
+The DAP exchange is verified by the integration tests `cli_dap_session`,
+`cli_dap_output`, `cli_dap_gc`, `cli_dap_exceptions`, `cli_dap_stepping` and
+`cli_dap_threads`.
 
 ## Verifying the adapter without VS Code
 
@@ -153,3 +227,7 @@ You can drive a full session from a script. The integration test
 ```bash
 bash tests/cli/test_cli_dap_session.sh ./build/protost
 ```
+
+`tests/cli/dap_client.py` is a small reusable client (a reader thread, waits
+with deadlines) that the exception, stepping and thread tests are written
+with; `test_cli_dap_threads.sh` shows a two-thread session step by step.

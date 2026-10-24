@@ -380,8 +380,11 @@ generator has never been run.
 The repository ships a VS Code extension in
 [`editor-integration/vscode/`](editor-integration/vscode/): syntax highlighting
 for `.st` files, and debugging through the `protost --dap` adapter built into
-`protost` itself — line breakpoints, stepping, call stack, locals, Watch and
-the Debug Console (the script's output appears there).
+`protost` itself — line breakpoints, stepping (over, into, out of a method or
+a block), call stack, locals, Watch and the Debug Console (the script's output
+appears there), exception breakpoints (Raised / Uncaught), and the actor
+threads: each worker thread is a thread in VS Code, and a thread that stops
+stops alone while the others keep running.
 
 1. Install protoST (above) so `protost` is on your `PATH`, or note where it is.
 2. Package and install the extension (needs Node.js for `npx`):
@@ -389,7 +392,7 @@ the Debug Console (the script's output appears there).
    ```bash
    cd editor-integration/vscode
    npx @vscode/vsce@3.2.1 package --skip-license
-   code --install-extension protost-debug-0.2.0.vsix
+   code --install-extension protost-debug-0.3.0.vsix
    ```
 
    Then run **Developer: Reload Window** in VS Code.
@@ -401,8 +404,17 @@ The extension runs the `protost` named in **Settings → Extensions → protoST 
 Protost: Path**; if that is empty, the one in the default install location
 (`%LOCALAPPDATA%\Programs\proto\bin\protost.exe` on Windows,
 `~/.local/bin/protost` elsewhere); otherwise `protost` from `PATH`. See
-[`docs/debugging.md`](docs/debugging.md) for what works and the current
-limitations.
+[`docs/debugging.md`](docs/debugging.md) for what works in detail. Current
+limitations:
+
+- values are flat: an object prints as `a Counter` and is not expandable;
+- an expression in the Debug Console sees the frame's variables by value (an
+  assignment to one does not reach the frame);
+- a thread blocked in native code (a Future's `wait`, I/O, an idle worker) is
+  listed as running, and Pause stops it only once it runs script code again;
+- Raised Exceptions also stops where kernel code signals and handles an
+  exception itself;
+- launch only: no attach, restart, conditional or data breakpoints.
 
 ## Documentation
 

@@ -120,17 +120,22 @@ What the debugger gives you:
 
 - **Breakpoints by line** — set and clear them in the gutter; the adapter maps
   them to source lines via the bytecode's pc-to-line table.
-- **Stepping** — step in, step over, step out, continue.
-- **A call stack** — named frames with source file and line.
-- **A variables panel** — locals and arguments with their real names and
-  current values.
+- **Stepping** — step over, step into, step out (by source line and call
+  depth), continue.
+- **A call stack** — every frame of the stopped thread, blocks included, with
+  source file and line.
+- **A variables panel** — `self`, the arguments and the temporaries with their
+  real names and current values.
 - **Watch / evaluate** — type an expression in the Debug Console or Watch
-  panel; it is evaluated in the selected frame's scope.
+  panel; it runs on the stopped thread with the selected frame's variables in
+  scope.
+- **Exception breakpoints** — stop where an exception is signalled (Raised),
+  or only where no handler will take it (Uncaught), with the stack intact.
+- **Threads** — each actor worker thread is a thread of its own; a thread that
+  stops stops alone, the others keep running.
 
-The debugger is a minimum-viable adapter, and `docs/debugging.md` is candid
-about its current limits: it surfaces a single logical thread (concurrent
-multi-actor debugging is beyond the MVP), `next` currently behaves like
-`stepIn`, and most stops show a single stack frame in practice. For the full
+Values are flat (an object prints as `a Counter`), and `docs/debugging.md`
+lists the other current limits. For the full
 setup walkthrough — building `protost`, installing the VS Code extension,
 writing `launch.json` — see [`docs/debugging.md`](../debugging.md). A
 ready-to-use configuration is in `examples/.vscode/launch.json`.

@@ -5,6 +5,37 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+- **DAP: exception breakpoints** (docs/debugging.md). `initialize` advertises
+  two `exceptionBreakpointFilters`: `raised` (off by default) stops when an
+  exception is signalled, `uncaught` (on by default) when no `on:do:` handler
+  on the thread will take it -- both before any handler runs or anything
+  unwinds, so the stack, the locals and `evaluate` are intact. The hook is in
+  `signal` (`signalInstance`), the one funnel of user signals, primitive
+  errors, protoCore's errors and `doesNotUnderstand:`; protoST's control flow
+  (block `^`, `on:do:` unwinding, `resume:` / `retry` / `pass`, cooperative
+  yields, `halt`) is C++ unwinding and never stops. New requests
+  `setExceptionBreakpoints` and `exceptionInfo`.
+- **DAP: threads, one-thread stop.** Every thread that runs script code is a
+  DAP thread (`main`, `worker N`, named after the actor it is running when it
+  stops: `worker 2: actor Counter#1`), with `thread` started / exited events.
+  A thread that stops stops alone (`allThreadsStopped: false`); several can be
+  stopped at once; `continue` / `next` / `stepIn` / `stepOut` / `pause` act on
+  the request's thread. Stepping state is per thread (the debugger's global
+  mode is gone), the breakpoint table is safe to rewrite while threads run,
+  and `variables` / `evaluate` run on the stopped thread that owns the values.
+  New request `pause`.
+- **DAP: real step over / step out**, by source line and call depth across
+  every engine of the thread; the call stack now includes the frames of the
+  blocks primitives run (`[] in Calc>>sumOf:`), and a caller frame shows the
+  line of its send. `evaluate` sees the frame's variables (`doubled + n`).
+  Locals show `self`, and a temporary shared with a block shows its value
+  (it was `nil`) -- a block frame also shows the enclosing temporaries it
+  uses; compiler temporaries and unnamed slots are hidden.
+- **Breakpoints inside methods and multi-line blocks** stop there: the
+  instructions that install a method, and the code around a block literal,
+  were tagged with the body's last line and took the breakpoint first.
+- VS Code extension 0.3.0 (documentation only).
+
 - **A guest in the host's ProtoSpace** (INTEROP.md §4.0). New constructor
   `STRuntime(proto::ProtoSpace& hostSpace)` runs protoST in a space another
   runtime created -- one ProtoSpace per process, protoCore's recommended model
