@@ -2442,6 +2442,18 @@ static std::string executablePath() {
     return "";
 }
 
+static std::string discoverStdlibDir();
+
+std::vector<const BytecodeModule*> STRuntime::loadedModules() const {
+    std::lock_guard<std::mutex> lock(impl_->modulesMu);
+    std::vector<const BytecodeModule*> out;
+    out.reserve(impl_->loadedModules.size());
+    for (const auto& m : impl_->loadedModules) out.push_back(m.get());
+    return out;
+}
+
+std::string STRuntime::stdlibDirectory() const { return discoverStdlibDir(); }
+
 static std::string discoverStdlibDir() {
     namespace fs = std::filesystem;
 
@@ -2720,6 +2732,7 @@ void STRuntime::loadKernel() {
             std::lock_guard<std::mutex> lock(impl_->modulesMu);
             impl_->loadedModules.push_back(std::move(bc));
         }
+        if (impl_->debugger.attached()) impl_->debugger.onModuleLoaded(rootCtx(), &module);
         try {
             runTopLevel(module);
         } catch (const proto::ProtoException& ex) {
@@ -2796,6 +2809,8 @@ const proto::ProtoObject* STRuntime::loadModuleFromFile(
         std::lock_guard<std::mutex> lock(impl_->modulesMu);
         impl_->loadedModules.push_back(std::move(bc));
     }
+    // The debugger arms the module's breakpoints before its top level runs.
+    if (impl_->debugger.attached()) impl_->debugger.onModuleLoaded(ctx, &module);
 
     // Execute the module's top-level (registers classes/methods in globals).
     // D26: on the caller's context, not the root context — this may run on a

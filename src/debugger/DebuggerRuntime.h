@@ -208,6 +208,11 @@ public:
     void               setFrontend(DebuggerFrontend* f);
     DebuggerFrontend*  frontend() const { return frontend_; }
 
+    // A source module was compiled and is about to run (an import, a kernel
+    // file): the frontend lists it and arms its breakpoints. `ctx` is the
+    // loading thread's context.
+    void onModuleLoaded(proto::ProtoContext* ctx, const BytecodeModule* m);
+
     // Called by a thread's exit (DebugThreadState's owner).
     void threadExited(DebugThreadState* ts);
 
@@ -262,6 +267,9 @@ public:
     // thread's exit, with no protoCore context. Default: ignore.
     // Text for the client's console (a logpoint, a failing condition),
     // written from a script thread. Default: ignore.
+    // A source module was loaded (see DebuggerRuntime::onModuleLoaded); on
+    // the loading thread, in an unmanaged region. Default: ignore.
+    virtual void onModuleLoaded(const BytecodeModule* /*m*/) {}
     virtual void onOutput(const std::string& /*category*/, const std::string& /*text*/) {}
     virtual void onThreadEvent(int /*threadId*/, const std::string& /*name*/,
                                bool /*started*/) {}

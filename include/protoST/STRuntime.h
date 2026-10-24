@@ -61,6 +61,13 @@ public:
     // STModuleProvider runs the load on `rootCtx` and uses this to refuse,
     // with a clear message, a call from any other thread.
     bool isOwnerThread() const;
+
+    // The source modules loaded so far (the kernel files, imported modules),
+    // in load order. They live as long as the runtime. For the debugger.
+    std::vector<const BytecodeModule*> loadedModules() const;
+    // The stdlib directory this runtime loads its kernel and library modules
+    // from ("" when there is none).
+    std::string stdlibDirectory() const;
     proto::ProtoRootSet* asyncRootSet()  const;
 
     // Mutable globals namespace (PUSH_GLOBAL / STORE_GLOBAL). Allocated at

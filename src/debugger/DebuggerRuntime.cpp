@@ -234,6 +234,13 @@ void DebuggerRuntime::emitOutput(proto::ProtoContext* ctx, const std::string& ca
     fe->onOutput(category, text);
 }
 
+void DebuggerRuntime::onModuleLoaded(proto::ProtoContext* ctx, const BytecodeModule* m) {
+    DebuggerFrontend* fe = frontend_.load();
+    if (!fe || !m) return;
+    proto::ProtoContext::UnmanagedScope u(ctx);
+    fe->onModuleLoaded(m);
+}
+
 void DebuggerRuntime::onInstruction(STRuntime& rt, proto::ProtoContext* ctx,
                                     const BytecodeModule* m, size_t pc) {
     DebugThreadState* ts = currentThread(ctx);

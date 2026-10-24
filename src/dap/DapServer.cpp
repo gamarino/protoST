@@ -18,7 +18,9 @@
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <deque>
+#include <filesystem>
 #include <exception>
 #include <functional>
 #include <iostream>
@@ -35,6 +37,82 @@ namespace protoST {
 namespace {
 
 using nlohmann::json;
+
+// --- paths ------------------------------------------------------------------
+//
+// "Client" paths are the debugger UI's (VS Code on Windows, say); "adapter"
+// paths are where protost runs (a Linux host over ssh). launch.pathMappings
+// relates the two; without it they are the same.
+
+std::string forwardSlashes(std::string p) {
+    for (char& c : p) if (c == '\\') c = '/';
+    return p;
+}
+
+// A Windows-looking path: a drive letter, or a UNC share.
+bool looksWindows(const std::string& p) {
+    return (p.size() >= 2 && std::isalpha(static_cast<unsigned char>(p[0])) && p[1] == ':')
+        || p.rfind("\\\\", 0) == 0;
+}
+
+std::string lowered(std::string p) {
+    for (char& c : p) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return p;
+}
+
+// The part of `path` below `root` ("" for the root itself, else starting with
+// '/'), or nullopt when `path` is not under it. Separators are compared as
+// '/'; case-insensitively when `caseless`.
+std::optional<std::string> underRoot(const std::string& path, const std::string& root, bool caseless) {
+    std::string p = forwardSlashes(path), r = forwardSlashes(root);
+    while (r.size() > 1 && r.back() == '/') r.pop_back();
+    if (p.size() < r.size()) return std::nullopt;
+    const std::string head = p.substr(0, r.size());
+    if (caseless ? lowered(head) != lowered(r) : head != r) return std::nullopt;
+    if (p.size() == r.size()) return std::string();
+    if (r.back() == '/') return "/" + p.substr(r.size());
+    if (p[r.size()] != '/') return std::nullopt;
+    return p.substr(r.size());
+}
+
+// `root` + `rest` (rest from underRoot), with the root's separator style.
+std::string joinRoot(const std::string& root, const std::string& rest) {
+    std::string r = root;
+    while (r.size() > 1 && (r.back() == '/' || r.back() == '\\')) r.pop_back();
+    const bool backslash = looksWindows(root) && root.find('/') == std::string::npos;
+    std::string tail = rest;
+    if (backslash) for (char& c : tail) if (c == '/') c = '\\';
+    return r + tail;
+}
+
+// The identity of an adapter-side file, for comparing two spellings of it.
+std::string fileKey(const std::string& path) {
+    namespace fs = std::filesystem;
+    if (path.empty() || path[0] == '<') return path;
+    std::error_code ec;
+    fs::path canon = fs::weakly_canonical(fs::path(path), ec);
+    std::string k = ec ? forwardSlashes(path) : canon.generic_string();
+#ifdef _WIN32
+    k = lowered(k);
+#endif
+    return k;
+}
+
+std::string basenameOf(const std::string& path) {
+    size_t p = path.find_last_of("/\\");
+    return p == std::string::npos ? path : path.substr(p + 1);
+}
+
+bool readWholeFile(const std::string& path, std::string& out) {
+    std::FILE* fp = std::fopen(path.c_str(), "rb");
+    if (!fp) return false;
+    char chunk[65536];
+    size_t got;
+    out.clear();
+    while ((got = std::fread(chunk, 1, sizeof chunk, fp)) > 0) out.append(chunk, got);
+    std::fclose(fp);
+    return true;
+}
 
 // ---------------------------------------------------------------------------
 // The DAP server (F8-2 lifecycle skeleton + F8-3 launch / breakpoints /
@@ -65,6 +143,23 @@ using nlohmann::json;
 //   * A resume request (`continue`/`next`/`stepIn`/`stepOut`) names a thread:
 //     it records that thread's command and wakes only that thread.
 class DapServer : public DebuggerFrontend {
+    // Breakpoints as the client requested them, and the path mappings.
+    struct RequestedBreakpoint {
+        int                             id = 0;
+        int                             line = 0;
+        bool                            valid = true;   // its hitCondition parsed
+        bool                            verified = false;
+        std::string                     message;
+        std::shared_ptr<BreakpointSpec> spec;
+    };
+    struct RequestedSource {
+        std::string                      adapterPath;
+        json                             clientSource;   // echoed back
+        std::vector<RequestedBreakpoint> bps;
+    };
+    struct PathMapping {
+        std::string localRoot, remoteRoot;
+    };
 public:
     DapServer() : transport_(stdio_.protocolIn(), stdio_.protocolOut()) {}
     ~DapServer() override {
@@ -302,6 +397,8 @@ private:
         if (command == "variables")     { handleVariables(req);     return false; }
         if (command == "evaluate")      { handleEvaluate(req);      return false; }
         if (command == "exceptionInfo") { handleExceptionInfo(req); return false; }
+        if (command == "source")        { handleSource(req);        return false; }
+        if (command == "loadedSources") { handleLoadedSources(req); return false; }
 
         std::cerr << "[dap] unhandled command: " << command << '\n';
         sendResponse(req, /*success=*/true, json::object());
@@ -316,6 +413,7 @@ private:
             {"supportsConditionalBreakpoints",   true},
             {"supportsHitConditionalBreakpoints", true},
             {"supportsLogPoints",                true},
+            {"supportsLoadedSourcesRequest",     true},
             {"exceptionBreakpointFilters", json::array({
                 json{{"filter", "raised"},
                      {"label", "Raised Exceptions"},
@@ -374,12 +472,43 @@ private:
     // --- launch -------------------------------------------------------------
     void handleLaunch(const json& req) {
         const json& args = req.value("arguments", json::object());
-        std::string program = args.value("program", "");
         bool stopOnEntry    = args.value("stopOnEntry", false);
 
+        // pathMappings: [{localRoot, remoteRoot}] -- "local" is the client's
+        // side, "remote" this adapter's.
+        if (args.contains("pathMappings")) {
+            const json& pm = args["pathMappings"];
+            if (!pm.is_array()) {
+                sendErrorResponse(req, "launch: 'pathMappings' must be an array of {localRoot, remoteRoot}");
+                return;
+            }
+            for (const auto& m : pm) {
+                const std::string local  = m.is_object() ? m.value("localRoot", "") : "";
+                const std::string remote = m.is_object() ? m.value("remoteRoot", "") : "";
+                if (local.empty() || remote.empty()) {
+                    sendErrorResponse(req, "launch: every pathMappings entry needs a non-empty "
+                                           "'localRoot' (the client's path) and 'remoteRoot' "
+                                           "(the path where protost runs)");
+                    return;
+                }
+                mappings_.push_back({local, remote});
+            }
+        }
+
+        std::string program = toAdapterPath(args.value("program", ""));
         if (program.empty()) {
             sendErrorResponse(req, "launch: missing 'program'");
             return;
+        }
+        // cwd: the directory `Import from:` resolves relative module names in.
+        const std::string cwd = toAdapterPath(args.value("cwd", ""));
+        if (!cwd.empty()) {
+            std::error_code ec;
+            std::filesystem::current_path(std::filesystem::path(cwd), ec);
+            if (ec) {
+                sendErrorResponse(req, "launch: cannot change to cwd '" + cwd + "': " + ec.message());
+                return;
+            }
         }
 
         // Read the script file.
@@ -432,6 +561,15 @@ private:
         runtime_->debugger().setExceptionFilters(exceptionFilters_);
         runtime_->debugger().attach();
 
+        // The modules known so far: the program and the kernel the runtime
+        // loaded on construction. Imports are added as they load
+        // (onModuleLoaded).
+        {
+            std::lock_guard<std::mutex> lk(bpMu_);
+            modules_.push_back(module_.get());
+            for (const BytecodeModule* m : runtime_->loadedModules()) modules_.push_back(m);
+            stdlibKey_ = fileKey(runtime_->stdlibDirectory());
+        }
         // Re-resolve any breakpoints requested before the module existed.
         rearmAllBreakpoints();
 
@@ -535,13 +673,29 @@ private:
     }
 
     // --- setBreakpoints -----------------------------------------------------
+    // The source is named by its client path (translated by pathMappings) or
+    // by a sourceReference this adapter handed out. Its breakpoints resolve in
+    // every loaded module compiled from that file -- the program, a kernel
+    // file, an import -- and those of a module not loaded yet are armed when
+    // it loads (a `breakpoint` changed event then marks them verified).
     void handleSetBreakpoints(const json& req) {
         const json& args = req.value("arguments", json::object());
-        std::string path = args.value("source", json::object()).value("path", "");
+        const json source = args.value("source", json::object());
+        std::string adapterPath;
+        const int ref = source.value("sourceReference", 0);
+        if (ref > 0) {
+            std::lock_guard<std::mutex> lk(bpMu_);
+            auto it = refPath_.find(ref);
+            if (it != refPath_.end()) adapterPath = it->second;
+        } else {
+            adapterPath = toAdapterPath(source.value("path", ""));
+        }
 
         // Each breakpoint's condition / hitCondition / logMessage; one whose
         // hitCondition does not parse is reported unverified and not armed.
-        std::vector<RequestedBreakpoint> bps;
+        RequestedSource rs;
+        rs.adapterPath  = adapterPath;
+        rs.clientSource = source;
         std::vector<std::string> problems;
         if (args.contains("breakpoints")) {
             for (const auto& bp : args["breakpoints"]) {
@@ -561,64 +715,77 @@ private:
                     problem = "condition: " + err;
                     sendOutput("stderr", "breakpoint condition `" + spec->condition + "` failed: " + err + "\n");
                 }
-                r.spec = spec;
-                bps.push_back(r);
+                r.spec    = spec;
+                r.message = problem;
+                rs.bps.push_back(r);
                 problems.push_back(problem);
             }
         }
 
-        // setBreakpoints REPLACES all breakpoints for this source.
-        requestedBreakpoints_[path] = bps;
-
-        // (Re)resolve against the module if it already exists. Before launch
-        // (VS Code may send setBreakpoints first) they are unverified for
-        // now and armed in launch.
         json result = json::array();
-        for (size_t k = 0; k < bps.size(); ++k) {
-            size_t pc = SIZE_MAX;
-            bool verified = module_ && runtime_ && bps[k].valid &&
-                            resolveLineToModule(bps[k].line, pc) != nullptr;
-            json r = { {"verified", verified}, {"line", bps[k].line} };
-            if (!problems[k].empty()) r["message"] = problems[k];
-            result.push_back(r);
+        {
+            std::lock_guard<std::mutex> lk(bpMu_);
+            for (auto& bp : rs.bps) bp.id = nextBreakpointId_++;
+            // setBreakpoints REPLACES all breakpoints for this source.
+            const std::string key = fileKey(adapterPath);
+            requested_[key] = rs;
+            // Before launch (VS Code may send setBreakpoints first) nothing
+            // resolves yet: unverified for now, armed in launch.
+            rearmLocked();
+            for (const auto& bp : requested_[key].bps)
+                result.push_back(breakpointJson(requested_[key], bp));
         }
-        if (module_ && runtime_) {
-            // Rebuild the whole breakpoint table from all sources, since
-            // BreakpointTable has no per-source clear.
-            rearmAllBreakpoints();
-        }
-
         sendResponse(req, /*success=*/true, { {"breakpoints", result} });
+    }
+
+    // Requires bpMu_. The DAP form of a breakpoint.
+    json breakpointJson(const RequestedSource& rs, const RequestedBreakpoint& bp) const {
+        json r = { {"id", bp.id}, {"verified", bp.verified}, {"line", bp.line},
+                   {"source", rs.clientSource} };
+        if (!bp.message.empty()) r["message"] = bp.message;
+        return r;
     }
 
     // Rebuilds the BreakpointTable from every requested source's lines, in
     // one step: running threads never see it half built.
     void rearmAllBreakpoints() {
-        if (!module_ || !runtime_)
-            return;
-        std::vector<BreakpointTable::Location> entries;
-        for (const auto& [path, bps] : requestedBreakpoints_) {
-            (void)path;
-            for (const RequestedBreakpoint& bp : bps) {
-                if (!bp.valid) continue;
-                size_t pc = SIZE_MAX;
-                const BytecodeModule* m = resolveLineToModule(bp.line, pc);
-                if (m)
-                    entries.push_back({m, pc, bp.spec});
-            }
-        }
-        runtime_->debugger().breakpoints().assign(entries);
+        std::lock_guard<std::mutex> lk(bpMu_);
+        rearmLocked();
     }
 
-    // Resolves a source line to the (sub-)module that owns an instruction on
-    // that line and writes its pc. Returns nullptr when no instruction maps to
-    // the line. A breakpoint line may be inside a method/block sub-module, so
-    // the search descends into sub-blocks.
-    const BytecodeModule* resolveLineToModule(int line, size_t& outPc) {
-        outPc = SIZE_MAX;
-        if (!module_)
-            return nullptr;
-        return searchModuleForLine(module_.get(), line, outPc);
+    // Requires bpMu_. Answers the breakpoints whose `verified` changed.
+    std::vector<std::pair<std::string, int>> rearmLocked() {
+        std::vector<std::pair<std::string, int>> changed;   // (source key, index)
+        std::vector<BreakpointTable::Location> entries;
+        for (auto& [key, rs] : requested_) {
+            for (size_t k = 0; k < rs.bps.size(); ++k) {
+                RequestedBreakpoint& bp = rs.bps[k];
+                bool verified = false;
+                if (bp.valid) {
+                    for (const BytecodeModule* top : modules_) {
+                        if (moduleKey(top) != key) continue;
+                        size_t pc = SIZE_MAX;
+                        if (const BytecodeModule* m = searchModuleForLine(top, bp.line, pc)) {
+                            entries.push_back({m, pc, bp.spec});
+                            verified = true;
+                        }
+                    }
+                }
+                if (verified != bp.verified) changed.emplace_back(key, static_cast<int>(k));
+                bp.verified = verified;
+            }
+        }
+        if (runtime_)
+            runtime_->debugger().breakpoints().assign(entries);
+        return changed;
+    }
+
+    // Requires bpMu_. The file identity of a loaded module (cached).
+    const std::string& moduleKey(const BytecodeModule* m) {
+        auto it = moduleKeys_.find(m);
+        if (it == moduleKeys_.end())
+            it = moduleKeys_.emplace(m, fileKey(m->sourceName())).first;
+        return it->second;
     }
 
     // Depth-first search of a module and its sub-blocks for the first
@@ -640,6 +807,152 @@ private:
                 return found;
         }
         return nullptr;
+    }
+
+    // --- loaded modules -----------------------------------------------------
+    // On the loading thread, before the module's top level runs: list it,
+    // arm its breakpoints, tell the client.
+    void onModuleLoaded(const BytecodeModule* m) override {
+        json source;
+        std::vector<json> changedBps;
+        {
+            std::lock_guard<std::mutex> lk(bpMu_);
+            modules_.push_back(m);
+            for (const auto& [key, k] : rearmLocked()) {
+                const RequestedSource& rs = requested_[key];
+                changedBps.push_back(breakpointJson(rs, rs.bps[static_cast<size_t>(k)]));
+            }
+            source = sourceJsonLocked(m->sourceName());
+        }
+        sendEvent("loadedSource", { {"reason", "new"}, {"source", source} });
+        for (const json& b : changedBps)
+            sendEvent("breakpoint", { {"reason", "changed"}, {"breakpoint", b} });
+    }
+
+    // --- sources ------------------------------------------------------------
+    //
+    // A source the client can open itself goes by `path` (the client's path
+    // under pathMappings). Anything else goes by a `sourceReference` whose
+    // text the `source` request serves: a file under no mapping (the kernel
+    // and stdlib of a remote protost, typically), and code that has no file
+    // (a "<...>" source name). Kernel and stdlib files are deemphasized.
+
+    // client -> adapter
+    std::string toAdapterPath(const std::string& clientPath) const {
+        if (mappings_.empty() || clientPath.empty()) return clientPath;
+        const PathMapping* best = nullptr;
+        std::string bestRest;
+        for (const auto& m : mappings_) {
+            auto rest = underRoot(clientPath, m.localRoot, looksWindows(m.localRoot));
+            if (rest && (!best || m.localRoot.size() > best->localRoot.size())) {
+                best = &m;
+                bestRest = *rest;
+            }
+        }
+        return best ? joinRoot(best->remoteRoot, bestRest) : clientPath;
+    }
+
+    // adapter -> client; nullopt when no mapping covers it.
+    std::optional<std::string> toClientPath(const std::string& adapterPath) const {
+        const PathMapping* best = nullptr;
+        std::string bestRest;
+        for (const auto& m : mappings_) {
+            auto rest = underRoot(adapterPath, m.remoteRoot, looksWindows(m.remoteRoot));
+            if (rest && (!best || m.remoteRoot.size() > best->remoteRoot.size())) {
+                best = &m;
+                bestRest = *rest;
+            }
+        }
+        if (!best) return std::nullopt;
+        return joinRoot(best->localRoot, bestRest);
+    }
+
+    // Requires bpMu_.
+    int sourceRefLocked(const std::string& adapterPath) {
+        auto it = pathRef_.find(adapterPath);
+        if (it != pathRef_.end()) return it->second;
+        const int ref = nextSourceRef_++;
+        pathRef_[adapterPath] = ref;
+        refPath_[ref] = adapterPath;
+        return ref;
+    }
+
+    // Requires bpMu_. The DAP `source` of code compiled from `adapterPath`.
+    json sourceJsonLocked(const std::string& adapterPath) {
+        const bool noFile = adapterPath.empty() || adapterPath[0] == '<';
+        const bool library = !noFile && !stdlibKey_.empty() &&
+            underRoot(fileKey(adapterPath), stdlibKey_, false).has_value();
+        json src;
+        if (noFile) {
+            src = { {"name", adapterPath.empty() ? std::string("<unknown>") : adapterPath},
+                    {"sourceReference", sourceRefLocked(adapterPath)},
+                    {"origin", "code without a source file"},
+                    {"presentationHint", "deemphasize"} };
+            return src;
+        }
+        if (mappings_.empty()) {
+            src = { {"name", basenameOf(adapterPath)}, {"path", adapterPath} };
+        } else if (auto client = toClientPath(adapterPath)) {
+            src = { {"name", basenameOf(adapterPath)}, {"path", *client} };
+        } else {
+            // The client cannot open a path on this side: serve the text.
+            src = { {"name", basenameOf(adapterPath)},
+                    {"sourceReference", sourceRefLocked(adapterPath)},
+                    {"origin", adapterPath} };
+        }
+        if (library) {
+            src["presentationHint"] = "deemphasize";
+            if (!src.contains("origin")) src["origin"] = "protoST library";
+        }
+        return src;
+    }
+
+    json sourceJson(const std::string& adapterPath) {
+        std::lock_guard<std::mutex> lk(bpMu_);
+        return sourceJsonLocked(adapterPath);
+    }
+
+    // `source`: the text of a sourceReference, or of a path the adapter can
+    // read (a client that cannot see this file system asks this way).
+    void handleSource(const json& req) {
+        const json& args = req.value("arguments", json::object());
+        int ref = args.value("sourceReference", 0);
+        const json source = args.value("source", json::object());
+        if (ref <= 0) ref = source.value("sourceReference", 0);
+        std::string path;
+        if (ref > 0) {
+            std::lock_guard<std::mutex> lk(bpMu_);
+            auto it = refPath_.find(ref);
+            if (it == refPath_.end()) {
+                sendErrorResponse(req, "source: unknown sourceReference " + std::to_string(ref));
+                return;
+            }
+            path = it->second;
+        } else {
+            path = toAdapterPath(source.value("path", ""));
+        }
+        std::string content;
+        if (path.empty() || path[0] == '<' || !readWholeFile(path, content)) {
+            sendErrorResponse(req, "source: the text of '" + path + "' is not available");
+            return;
+        }
+        sendResponse(req, /*success=*/true, { {"content", content}, {"mimeType", "text/x-smalltalk"} });
+    }
+
+    // `loadedSources`: the program, the kernel files and the imports.
+    void handleLoadedSources(const json& req) {
+        json list = json::array();
+        {
+            std::lock_guard<std::mutex> lk(bpMu_);
+            std::vector<std::string> seen;
+            for (const BytecodeModule* m : modules_) {
+                const std::string& key = moduleKey(m);
+                if (std::find(seen.begin(), seen.end(), key) != seen.end()) continue;
+                seen.push_back(key);
+                list.push_back(sourceJsonLocked(m->sourceName()));
+            }
+        }
+        sendResponse(req, /*success=*/true, { {"sources", list} });
     }
 
     // --- configurationDone --------------------------------------------------
@@ -757,7 +1070,6 @@ private:
             frameTable_[frameId] = FrameRef{threadId, df};
 
             const BytecodeModule* mod = df.module;
-            std::string srcPath = mod ? mod->sourceName() : std::string();
             std::string name = (mod && !mod->debugName().empty())
                 ? mod->debugName()
                 : ("frame " + std::to_string(i));
@@ -768,11 +1080,10 @@ private:
                 {"line",   df.line},
                 {"column", 1},
             };
-            if (!srcPath.empty()) {
-                frame["source"] = {
-                    {"name", basename(srcPath)},
-                    {"path", srcPath},
-                };
+            if (mod) {
+                frame["source"] = sourceJson(mod->sourceName());
+                if (frame["source"].contains("presentationHint"))
+                    frame["presentationHint"] = "subtle";
             }
             frames.push_back(std::move(frame));
         }
@@ -1100,12 +1411,19 @@ private:
 
     // Breakpoints requested by the client, keyed by source path. setBreakpoints
     // replaces a source's list; the whole BreakpointTable is rebuilt from this.
-    struct RequestedBreakpoint {
-        int                             line = 0;
-        bool                            valid = true;   // its hitCondition parsed
-        std::shared_ptr<BreakpointSpec> spec;
-    };
-    std::unordered_map<std::string, std::vector<RequestedBreakpoint>> requestedBreakpoints_;
+    std::vector<PathMapping> mappings_;     // set by launch, then read-only
+
+    // Guarded by bpMu_ (the adapter thread, and a script thread that loads a
+    // module).
+    std::mutex                                          bpMu_;
+    std::map<std::string, RequestedSource>              requested_;    // by fileKey
+    std::vector<const BytecodeModule*>                  modules_;      // loaded, top level
+    std::unordered_map<const BytecodeModule*, std::string> moduleKeys_;
+    std::string                                         stdlibKey_;
+    std::unordered_map<std::string, int>                pathRef_;      // adapter path -> ref
+    std::map<int, std::string>                          refPath_;
+    int                                                 nextSourceRef_ = 1;
+    int                                                 nextBreakpointId_ = 1;
 
     // Whether `cond` parses and compiles as a condition (the body of a block,
     // taking `param` when given). Checked when it is set; it is evaluated in
