@@ -1983,6 +1983,7 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
             inlinedLoopArgs_.emplace_back(&s, iterName);
             // loopTest:
             size_t loopTestInstrIdx = m.instrStartPc().size();
+            const size_t loopFromPc = m.bytes().size();
             m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotI),   currentLine_);
             m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotEnd), currentLine_);
             // SmallInt fast-path `<=` — both operands are user-typed
@@ -2013,6 +2014,8 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
             size_t exitOffset    = exitTargetIdx - jExitInstrIdx - 1;
             if (exitOffset > 255) { error("inline to:do:: body too large"); return false; }
             m.patchArg(jExitBytePos, static_cast<uint8_t>(exitOffset));
+            // The debugger shows the counter slot as the block's argument.
+            m.addScopedLocal(static_cast<size_t>(slotI), iterName, loopFromPc, m.bytes().size());
             // Restore the user's iter-var binding.
             inlinedLoopArgs_.pop_back();
             if (hidesCaptured) s.capturedNames.insert(iterName);

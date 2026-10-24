@@ -153,7 +153,7 @@ public:
             {"threadId",          info.threadId},
             {"allThreadsStopped", false},
         };
-        if (info.isException) {
+        if (!info.description.empty()) {
             body["description"] = info.description;
             body["text"]        = info.description;
         }
@@ -181,6 +181,10 @@ public:
         if (--inStop_ == 0)
             stopsDrainedCv_.notify_all();
         return cmd;
+    }
+
+    void onOutput(const std::string& category, const std::string& text) override {
+        sendOutput(category, text);
     }
 
     void onThreadEvent(int threadId, const std::string& name, bool started) override {
@@ -308,15 +312,23 @@ private:
         json caps = {
             {"supportsConfigurationDoneRequest", true},
             {"supportsExceptionInfoRequest",     true},
+            {"supportsExceptionFilterOptions",   true},
+            {"supportsConditionalBreakpoints",   true},
+            {"supportsHitConditionalBreakpoints", true},
+            {"supportsLogPoints",                true},
             {"exceptionBreakpointFilters", json::array({
                 json{{"filter", "raised"},
                      {"label", "Raised Exceptions"},
                      {"description", "Stop when an exception is signalled, before any handler runs."},
-                     {"default", false}},
+                     {"default", false},
+                     {"supportsCondition", true},
+                     {"conditionDescription", "A Smalltalk expression; the exception is ex, e.g. ex isKindOf: ZeroDivide"}},
                 json{{"filter", "uncaught"},
                      {"label", "Uncaught Exceptions"},
                      {"description", "Stop when an exception that no on:do: handler will catch is signalled, with the stack intact."},
-                     {"default", true}},
+                     {"default", true},
+                     {"supportsCondition", true},
+                     {"conditionDescription", "A Smalltalk expression; the exception is ex, e.g. ex isKindOf: ZeroDivide"}},
             })},
         };
         sendResponse(req, /*success=*/true, caps);
@@ -327,21 +339,35 @@ private:
     void handleSetExceptionBreakpoints(const json& req) {
         const json& args = req.value("arguments", json::object());
         unsigned bits = 0;
+        std::string raisedCond, uncaughtCond;
         json verified = json::array();
-        auto add = [&](const std::string& f) {
-            if (f == "raised")        bits |= DebuggerRuntime::kFilterRaised;
-            else if (f == "uncaught") bits |= DebuggerRuntime::kFilterUncaught;
-            verified.push_back({ {"verified", f == "raised" || f == "uncaught"} });
+        auto add = [&](const std::string& f, const std::string& cond) {
+            const bool known = f == "raised" || f == "uncaught";
+            if (f == "raised")        { bits |= DebuggerRuntime::kFilterRaised;   raisedCond = cond; }
+            else if (f == "uncaught") { bits |= DebuggerRuntime::kFilterUncaught; uncaughtCond = cond; }
+            json v = { {"verified", known} };
+            std::string err;
+            if (known && !cond.empty() && !conditionCompiles(cond, "ex", err)) {
+                // Reported now; the condition still stops (with the error)
+                // when its exception is raised.
+                sendOutput("stderr", "exception breakpoint condition `" + cond + "` failed: " + err + "\n");
+                v["message"] = err;
+            }
+            verified.push_back(v);
         };
         if (args.contains("filters") && args["filters"].is_array())
             for (const auto& f : args["filters"])
-                if (f.is_string()) add(f.get<std::string>());
+                if (f.is_string()) add(f.get<std::string>(), "");
         if (args.contains("filterOptions") && args["filterOptions"].is_array())
             for (const auto& o : args["filterOptions"])
-                add(o.value("filterId", ""));
-        exceptionFilters_ = bits;
-        if (runtime_)
+                add(o.value("filterId", ""), o.value("condition", ""));
+        exceptionFilters_  = bits;
+        raisedCondition_   = raisedCond;
+        uncaughtCondition_ = uncaughtCond;
+        if (runtime_) {
+            runtime_->debugger().setExceptionConditions(raisedCond, uncaughtCond);
             runtime_->debugger().setExceptionFilters(bits);
+        }
         sendResponse(req, /*success=*/true, { {"breakpoints", verified} });
     }
 
@@ -402,6 +428,7 @@ private:
         runtime_     = std::make_unique<STRuntime>();
         stopOnEntry_ = stopOnEntry;
         runtime_->debugger().setFrontend(this);
+        runtime_->debugger().setExceptionConditions(raisedCondition_, uncaughtCondition_);
         runtime_->debugger().setExceptionFilters(exceptionFilters_);
         runtime_->debugger().attach();
 
@@ -512,31 +539,53 @@ private:
         const json& args = req.value("arguments", json::object());
         std::string path = args.value("source", json::object()).value("path", "");
 
-        std::vector<int> lines;
+        // Each breakpoint's condition / hitCondition / logMessage; one whose
+        // hitCondition does not parse is reported unverified and not armed.
+        std::vector<RequestedBreakpoint> bps;
+        std::vector<std::string> problems;
         if (args.contains("breakpoints")) {
-            for (const auto& bp : args["breakpoints"])
-                lines.push_back(bp.value("line", 0));
+            for (const auto& bp : args["breakpoints"]) {
+                RequestedBreakpoint r;
+                r.line = bp.value("line", 0);
+                auto spec = std::make_shared<BreakpointSpec>();
+                spec->condition = bp.value("condition", "");
+                std::string problem;
+                if (!spec->parseHitCondition(bp.value("hitCondition", ""), problem))
+                    r.valid = false;
+                if (bp.contains("logMessage") && bp["logMessage"].is_string()) {
+                    spec->isLogpoint = true;
+                    spec->logMessage = bp["logMessage"].get<std::string>();
+                }
+                std::string err;
+                if (r.valid && !spec->condition.empty() && !conditionCompiles(spec->condition, "", err)) {
+                    problem = "condition: " + err;
+                    sendOutput("stderr", "breakpoint condition `" + spec->condition + "` failed: " + err + "\n");
+                }
+                r.spec = spec;
+                bps.push_back(r);
+                problems.push_back(problem);
+            }
         }
 
         // setBreakpoints REPLACES all breakpoints for this source.
-        requestedBreakpoints_[path] = lines;
+        requestedBreakpoints_[path] = bps;
 
-        // (Re)resolve against the module if it already exists.
+        // (Re)resolve against the module if it already exists. Before launch
+        // (VS Code may send setBreakpoints first) they are unverified for
+        // now and armed in launch.
         json result = json::array();
+        for (size_t k = 0; k < bps.size(); ++k) {
+            size_t pc = SIZE_MAX;
+            bool verified = module_ && runtime_ && bps[k].valid &&
+                            resolveLineToModule(bps[k].line, pc) != nullptr;
+            json r = { {"verified", verified}, {"line", bps[k].line} };
+            if (!problems[k].empty()) r["message"] = problems[k];
+            result.push_back(r);
+        }
         if (module_ && runtime_) {
             // Rebuild the whole breakpoint table from all sources, since
             // BreakpointTable has no per-source clear.
             rearmAllBreakpoints();
-            for (int line : lines) {
-                size_t pc = SIZE_MAX;
-                bool verified = (resolveLineToModule(line, pc) != nullptr);
-                result.push_back({ {"verified", verified}, {"line", line} });
-            }
-        } else {
-            // Module not compiled yet (VS Code may send setBreakpoints before
-            // launch). Report unverified for now; they are armed in launch.
-            for (int line : lines)
-                result.push_back({ {"verified", false}, {"line", line} });
         }
 
         sendResponse(req, /*success=*/true, { {"breakpoints", result} });
@@ -547,14 +596,15 @@ private:
     void rearmAllBreakpoints() {
         if (!module_ || !runtime_)
             return;
-        std::vector<std::pair<const BytecodeModule*, size_t>> entries;
-        for (const auto& [path, lines] : requestedBreakpoints_) {
+        std::vector<BreakpointTable::Location> entries;
+        for (const auto& [path, bps] : requestedBreakpoints_) {
             (void)path;
-            for (int line : lines) {
+            for (const RequestedBreakpoint& bp : bps) {
+                if (!bp.valid) continue;
                 size_t pc = SIZE_MAX;
-                const BytecodeModule* m = resolveLineToModule(line, pc);
+                const BytecodeModule* m = resolveLineToModule(bp.line, pc);
                 if (m)
-                    entries.emplace_back(m, pc);
+                    entries.push_back({m, pc, bp.spec});
             }
         }
         runtime_->debugger().breakpoints().assign(entries);
@@ -1046,10 +1096,37 @@ private:
     bool                            stopOnEntry_  = false;
     bool                            shutdownDone_ = false;
     unsigned                        exceptionFilters_ = 0;   // until launch
+    std::string                     raisedCondition_, uncaughtCondition_;
 
     // Breakpoints requested by the client, keyed by source path. setBreakpoints
     // replaces a source's list; the whole BreakpointTable is rebuilt from this.
-    std::unordered_map<std::string, std::vector<int>> requestedBreakpoints_;
+    struct RequestedBreakpoint {
+        int                             line = 0;
+        bool                            valid = true;   // its hitCondition parsed
+        std::shared_ptr<BreakpointSpec> spec;
+    };
+    std::unordered_map<std::string, std::vector<RequestedBreakpoint>> requestedBreakpoints_;
+
+    // Whether `cond` parses and compiles as a condition (the body of a block,
+    // taking `param` when given). Checked when it is set; it is evaluated in
+    // the frame each time.
+    static bool conditionCompiles(const std::string& cond, const std::string& param,
+                                  std::string& error) {
+        std::string src = param.empty() ? "[ " + cond + "\n]." : "[ :" + param + " | " + cond + "\n].";
+        Parser parser(src);
+        auto ast = parser.parseModule();
+        if (!parser.errors().empty()) {
+            error = "parse error: " + parser.errors().front().message;
+            return false;
+        }
+        Compiler compiler;
+        auto bc = compiler.compileModule(*ast);
+        if (compiler.hasErrors()) {
+            error = "compile error: " + compiler.errors().front();
+            return false;
+        }
+        return true;
+    }
 
     // Shared state between the DAP loop thread and the script threads.
     std::mutex                 sessionMu_;

@@ -420,7 +420,7 @@ void debuggerExceptionStop(STRuntime& rt, proto::ProtoContext* ctx,
             ctx, proto::ProtoString::createSymbol(ctx, "__unhandled_is_error__")) == PROTO_TRUE;
         uncaught = !handled && (foreign || isErrorClass || !isResumable(ctx, exc));
     }
-    dbg.onException(rt, ctx, cls, msg, uncaught, fromPrimitive);
+    dbg.onException(rt, ctx, exc, cls, msg, uncaught, fromPrimitive);
 }
 
 const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx,

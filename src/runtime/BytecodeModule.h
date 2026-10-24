@@ -278,6 +278,19 @@ public:
         return (slot < localNames_.size()) ? localNames_[slot] : kEmpty;
     }
     const std::vector<std::string>& localNames() const { return localNames_; }
+    // A slot that holds a user's variable under a compiler name over a pc
+    // range only: the counter of an inlined `to:do:` is the block argument
+    // `i` from the loop test to the loop exit. The debugger shows it by that
+    // name there.
+    struct ScopedLocal {
+        size_t      slot;
+        std::string name;
+        size_t      fromPc, toPc;     // [fromPc, toPc)
+    };
+    void addScopedLocal(size_t slot, std::string name, size_t fromPc, size_t toPc) {
+        scopedLocals_.push_back({slot, std::move(name), fromPc, toPc});
+    }
+    const std::vector<ScopedLocal>& scopedLocals() const { return scopedLocals_; }
 
     // F8-4: an optional human label for this module (method selector, block,
     // or "<module>"). Used as the stack-frame name in the DAP call stack.
@@ -326,6 +339,7 @@ private:
     std::vector<size_t>                 instrStartPc_; // BL-2: byte start per word
     std::string                         sourceName_;  // F8-1: source file path
     std::vector<std::string>            localNames_;  // F8-4: name per local slot
+    std::vector<ScopedLocal>            scopedLocals_;
     std::string                         debugName_;   // F8-4: human label
     std::vector<Const>                  consts_;
     std::vector<InstVarGroupEntry>      groupEntries_;  // IVAR_GROUP operands

@@ -4,11 +4,13 @@
 #include "../runtime/BytecodeModule.h"
 #include "../runtime/Bootstrap.h"
 #include "../runtime/ExecutionEngine.h"
+#include "../runtime/HandlerStack.h"
 #include "../runtime/ValueFormat.h"
 #include "../runtime/Opcodes.h"
 #include "../frontend/Parser.h"
 #include "../frontend/Compiler.h"
 #include "protoCore.h"
+#include <algorithm>
 #include <iostream>
 #include <sstream>
 #include <cctype>
@@ -223,14 +225,49 @@ bool DebuggerRuntime::stepShouldStop(DebugThreadState& ts, const BytecodeModule*
     return m != ts.stepModule || line != ts.stepLine;   // the next line
 }
 
+void DebuggerRuntime::emitOutput(proto::ProtoContext* ctx, const std::string& category,
+                                 const std::string& text) {
+    DebuggerFrontend* fe = frontend_.load();
+    if (!fe) return;
+    // Written to the client, which can block on a full pipe.
+    proto::ProtoContext::UnmanagedScope u(ctx);
+    fe->onOutput(category, text);
+}
+
 void DebuggerRuntime::onInstruction(STRuntime& rt, proto::ProtoContext* ctx,
                                     const BytecodeModule* m, size_t pc) {
     DebugThreadState* ts = currentThread(ctx);
     if (ts->suppress) return;
     if (!ts->registered) registerThread(ts, ctx);
-    const bool bp = breakpoints_.isSet(m, pc);
+    const std::shared_ptr<BreakpointSpec> spec = breakpoints_.find(m, pc);
     const bool pause = ts->pauseRequested.load(std::memory_order_relaxed);
     const Mode md = static_cast<Mode>(ts->mode.load(std::memory_order_relaxed));
+    if (!spec && !pause && md == Mode::Free) return;
+
+    // A breakpoint with a condition, a hit condition or a log message decides
+    // here, on this thread, with stops suppressed while its expressions run.
+    bool bp = false;
+    std::string bpError;
+    if (spec) {
+        if (spec->plain()) {
+            bp = true;
+        } else {
+            const DebugFrame snap = ExecutionEngine::snapshotThreadStack(rt, /*innermostAtInstruction=*/true);
+            bool pass = true;
+            if (!spec->condition.empty())
+                pass = evaluateCondition(rt, ctx, spec->condition, snap, {}, bpError);
+            if (!bpError.empty()) {
+                bpError = "breakpoint " + bpError;
+                emitOutput(ctx, "stderr", bpError + "\n");
+                bp = true;                       // a failing condition stops
+            } else if (pass && spec->countHit()) {
+                if (spec->isLogpoint)
+                    emitOutput(ctx, "console", interpolateLogMessage(rt, ctx, spec->logMessage, snap) + "\n");
+                else
+                    bp = true;
+            }
+        }
+    }
     if (!bp && !pause && md == Mode::Free) return;
 
     const char* reason;
@@ -245,19 +282,52 @@ void DebuggerRuntime::onInstruction(STRuntime& rt, proto::ProtoContext* ctx,
         reason = "step";
     }
     ts->pauseRequested.store(false, std::memory_order_relaxed);
+    StopInfo si;
+    si.reason      = reason;
+    si.description = bpError;
     enterSession(rt, ctx, ExecutionEngine::snapshotThreadStack(rt, /*innermostAtInstruction=*/true),
-                 reason);
+                 reason, &si);
+}
+
+void DebuggerRuntime::setExceptionConditions(const std::string& raised, const std::string& uncaught) {
+    std::lock_guard<std::mutex> lk(conditionsMu_);
+    raisedCondition_   = raised;
+    uncaughtCondition_ = uncaught;
 }
 
 void DebuggerRuntime::onException(STRuntime& rt, proto::ProtoContext* ctx,
+                                  const proto::ProtoObject* exc,
                                   const std::string& className, const std::string& message,
                                   bool uncaught, bool fromPrimitive) {
     DebugThreadState* ts = currentThread(ctx);
     if (ts->suppress) return;
     const unsigned f = exceptionFilters();
-    const bool byUncaught = (f & kFilterUncaught) && uncaught;
-    if (!(f & kFilterRaised) && !byUncaught) return;
+    bool byRaised   = (f & kFilterRaised) != 0;
+    bool byUncaught = (f & kFilterUncaught) && uncaught;
+    if (!byRaised && !byUncaught) return;
     if (!ts->registered) registerThread(ts, ctx);
+
+    // The filters' conditions, evaluated in the signalling frame with the
+    // exception bound as `ex`. A condition that fails to evaluate stops.
+    std::string raisedCond, uncaughtCond;
+    {
+        std::lock_guard<std::mutex> lk(conditionsMu_);
+        raisedCond   = raisedCondition_;
+        uncaughtCond = uncaughtCondition_;
+    }
+    DebugFrame snap = ExecutionEngine::snapshotThreadStack(rt, /*innermostAtInstruction=*/false);
+    std::string condError;
+    auto passes = [&](const std::string& cond) {
+        if (cond.empty()) return true;
+        std::string err;
+        const bool r = evaluateCondition(rt, ctx, cond, snap, {FrameVariable{"ex", exc}}, err);
+        if (!err.empty() && condError.empty()) condError = "exception breakpoint " + err;
+        return r;
+    };
+    if (byRaised)   byRaised   = passes(raisedCond);
+    if (byUncaught) byUncaught = passes(uncaughtCond);
+    if (!byRaised && !byUncaught) return;
+    if (!condError.empty()) emitOutput(ctx, "stderr", condError + "\n");
 
     StopInfo si;
     si.reason           = "exception";
@@ -269,7 +339,9 @@ void DebuggerRuntime::onException(STRuntime& rt, proto::ProtoContext* ctx,
     if (!message.empty() && message != si.exceptionClass) si.description += ": " + message;
     if (byUncaught) si.description += " (no handler will catch it)";
     if (fromPrimitive) si.description += " -- raised by a primitive; stopped at the calling frame";
+    if (!condError.empty()) si.description += " [" + condError + "]";
     si.stackText = ExecutionEngine::describeActiveStack(20);
+    // The conditions ran code; snapshot again.
     enterSession(rt, ctx, ExecutionEngine::snapshotThreadStack(rt, /*innermostAtInstruction=*/false),
                  "exception", &si);
 }
@@ -336,9 +408,23 @@ std::vector<FrameVariable> DebuggerRuntime::frameVariables(STRuntime& rt, proto:
     };
     auto shown = [](const std::string& n) { return !n.empty() && n.rfind("__", 0) != 0; };
 
+    // Slot names, with an inlined loop's counter named after the loop's
+    // block argument where the frame is inside that loop.
+    // Such a counter goes first: it shadows a variable of the same name.
+    std::vector<std::string> slotNames(f.locals.size());
+    std::vector<size_t> order;
+    for (size_t i = 0; i < slotNames.size(); ++i) slotNames[i] = m->localName(i);
+    for (const auto& sl : m->scopedLocals())
+        if (sl.slot < slotNames.size() && f.pc >= sl.fromPc && f.pc < sl.toPc) {
+            slotNames[sl.slot] = sl.name;
+            order.push_back(sl.slot);
+        }
+    for (size_t i = 0; i < slotNames.size(); ++i)
+        if (std::find(order.begin(), order.end(), i) == order.end()) order.push_back(i);
+
     std::unordered_set<std::string> seen;
-    for (size_t i = 0; i < f.locals.size(); ++i) {
-        const std::string& n = m->localName(i);
+    for (size_t i : order) {
+        const std::string& n = slotNames[i];
         if (!shown(n) || !seen.insert(n).second) continue;
         const proto::ProtoObject* v = f.locals[i];
         // A temporary a block shares lives in the captured dict; its slot
@@ -372,22 +458,37 @@ std::vector<FrameVariable> DebuggerRuntime::frameVariables(STRuntime& rt, proto:
     return out;
 }
 
-bool DebuggerRuntime::evaluateExpression(STRuntime& rt, proto::ProtoContext* ctx,
-                                         const std::string& expr,
-                                         std::string& out,
-                                         const DebugFrame* frame) {
+bool DebuggerRuntime::evaluateValue(STRuntime& rt, proto::ProtoContext* ctx,
+                                    const std::string& expr, const DebugFrame* frame,
+                                    const std::vector<FrameVariable>& extra,
+                                    const proto::ProtoObject*& result, std::string& error) {
     // Stops are off while the expression runs: a breakpoint or an exception
     // filter met by the expression would stop the thread that is evaluating
     // it -- the stopped thread itself, or the adapter's.
     SuppressStops quiet(rt.debugger());
+    // The handlers of the stopped program are hidden while it runs: an
+    // exception the expression raises must not be caught by an on:do: of the
+    // program, which would unwind the program's own frames from inside the
+    // debugger. Restored on every exit.
+    struct HideHandlers {
+        std::vector<proto::proto_ulong> ids = handlerStackDisableAll();
+        ~HideHandlers() { handlerStackRestore(ids); }
+    } hidden;
 
-    // The frame's named locals, bound by value as the parameters of a block
+    // The frame's named variables (and the extra bindings, which shadow a
+    // variable of the same name), bound by value as the parameters of a block
     // that the expression is the body of.
     std::vector<std::string> names;
     std::vector<const proto::ProtoObject*> values;
+    std::unordered_set<std::string> taken;
+    for (const FrameVariable& v : extra) {
+        if (!isIdentifier(v.name) || !taken.insert(v.name).second) continue;
+        names.push_back(v.name);
+        values.push_back(v.value ? v.value : PROTO_NONE);
+    }
     if (frame && frame->module) {
         for (const FrameVariable& v : frameVariables(rt, ctx, *frame)) {
-            if (!isIdentifier(v.name) || names.size() >= 64) continue;
+            if (!isIdentifier(v.name) || names.size() >= 64 || !taken.insert(v.name).second) continue;
             names.push_back(v.name);
             values.push_back(v.value ? v.value : PROTO_NONE);
         }
@@ -400,9 +501,8 @@ bool DebuggerRuntime::evaluateExpression(STRuntime& rt, proto::ProtoContext* ctx
             src += " | " + expr + "\n].";
             if (auto bc = compileSource(src, err)) {
                 const proto::ProtoObject* block = rt.runTopLevel(*bc, ctx);
-                const proto::ProtoObject* r =
-                    invokeBlock(rt, ctx, block, values.data(), static_cast<int>(values.size()));
-                out = protoST::formatValue(rt, ctx, r);
+                result = invokeBlock(rt, ctx, block, values.data(), static_cast<int>(values.size()));
+                if (!result) result = PROTO_NONE;
                 return true;
             }
             // Not valid as a block body: evaluate it on its own below.
@@ -411,23 +511,90 @@ bool DebuggerRuntime::evaluateExpression(STRuntime& rt, proto::ProtoContext* ctx
         // a bare expression.
         auto bc = compileSource(expr + ".", err);
         if (!bc) {
-            out = err;
+            error = err;
             return false;
         }
-        // Run and format on the calling thread's own context: a stop inside
-        // an actor method evaluates on that worker, never on rootCtx.
-        auto* r = rt.runTopLevel(*bc, ctx);
-        // BL-3: shared formatter â€” non-primitive objects render as
-        // "a ClassName" instead of "<obj>".
-        out = protoST::formatValue(rt, ctx, r);
+        // Run on the calling thread's own context: a stop inside an actor
+        // method evaluates on that worker, never on rootCtx.
+        result = rt.runTopLevel(*bc, ctx);
+        if (!result) result = PROTO_NONE;
         return true;
     } catch (const proto::ProtoException& e) {
-        out = describeUncaught(ctx, e);
+        // The message alone: no "error: " prefix, no stack of the evaluation.
+        error = describeUncaught(ctx, e);
+        error = error.substr(0, error.find('\n'));
+        if (error.rfind("error: ", 0) == 0) error.erase(0, 7);
         return false;
     } catch (const std::exception& e) {
-        out = std::string("error: ") + e.what();
+        error = e.what();
+        return false;
+    } catch (...) {
+        // A non-local return (`^`) or another unwinding carrier: nothing of
+        // the program's is on its way, the expression simply has no value.
+        error = "the expression returned non-locally";
         return false;
     }
+}
+
+bool DebuggerRuntime::evaluateExpression(STRuntime& rt, proto::ProtoContext* ctx,
+                                         const std::string& expr,
+                                         std::string& out,
+                                         const DebugFrame* frame) {
+    const proto::ProtoObject* r = nullptr;
+    std::string err;
+    if (!evaluateValue(rt, ctx, expr, frame, {}, r, err)) {
+        out = err;
+        return false;
+    }
+    SuppressStops quiet(rt.debugger());
+    // BL-3: shared formatter -- non-primitive objects render as
+    // "a ClassName" instead of "<obj>".
+    out = protoST::formatValue(rt, ctx, r);
+    return true;
+}
+
+bool DebuggerRuntime::evaluateCondition(STRuntime& rt, proto::ProtoContext* ctx,
+                                        const std::string& condition, const DebugFrame& frame,
+                                        const std::vector<FrameVariable>& extra,
+                                        std::string& error) {
+    const proto::ProtoObject* r = nullptr;
+    if (!evaluateValue(rt, ctx, condition, &frame, extra, r, error)) {
+        error = "condition `" + condition + "` failed: " + error;
+        return true;
+    }
+    if (r == PROTO_TRUE) return true;
+    if (r == PROTO_FALSE) return false;
+    SuppressStops quiet(rt.debugger());
+    error = "condition `" + condition + "` failed: it answered " +
+            protoST::formatValue(rt, ctx, r) + ", not a Boolean";
+    return true;
+}
+
+std::string DebuggerRuntime::interpolateLogMessage(STRuntime& rt, proto::ProtoContext* ctx,
+                                                   const std::string& message,
+                                                   const DebugFrame& frame) {
+    std::string out;
+    for (size_t i = 0; i < message.size(); ) {
+        const char c = message[i];
+        if (c == '{' && i + 1 < message.size() && message[i + 1] == '{') { out += '{'; i += 2; continue; }
+        if (c == '}' && i + 1 < message.size() && message[i + 1] == '}') { out += '}'; i += 2; continue; }
+        if (c != '{') { out += c; ++i; continue; }
+        const size_t close = message.find('}', i + 1);
+        if (close == std::string::npos) { out += message.substr(i); break; }
+        const std::string expr = message.substr(i + 1, close - i - 1);
+        i = close + 1;
+        const proto::ProtoObject* r = nullptr;
+        std::string err;
+        if (!evaluateValue(rt, ctx, expr, &frame, {}, r, err)) {
+            out += "<error: " + err + ">";
+            continue;
+        }
+        SuppressStops quiet(rt.debugger());
+        // A string interpolates as its characters, anything else as it prints.
+        const proto::ProtoString* s = (r && r != PROTO_NONE && r->isString(ctx)) ? r->asString(ctx) : nullptr;
+        out += s ? s->toStdString(ctx) : protoST::formatValue(rt, ctx, r);
+    }
+    return out;
 }
 
 void DebuggerRuntime::enterSession(STRuntime& rt, proto::ProtoContext* ctx,

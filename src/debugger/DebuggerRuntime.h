@@ -119,9 +119,13 @@ public:
     // handler runs and before anything unwinds. `uncaught` is true when no
     // handler on the thread will take it and its default action ends the
     // activation. Stops when a filter selects it.
-    void onException(STRuntime& rt, proto::ProtoContext* ctx,
+    // `exc` is the exception (pinned by the caller); a filter's condition
+    // sees it as `ex`.
+    void onException(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* exc,
                      const std::string& className, const std::string& message,
                      bool uncaught, bool fromPrimitive);
+    // The filters' conditions (Smalltalk expressions; empty: unconditional).
+    void setExceptionConditions(const std::string& raised, const std::string& uncaught);
 
     // Threads. Every thread that runs script code while a debugger is
     // attached gets a stable id (1, 2, ...) the first time it does.
@@ -174,6 +178,24 @@ public:
     static std::vector<FrameVariable> frameVariables(STRuntime& rt, proto::ProtoContext* ctx,
                                                      const DebugFrame& frame);
 
+    // The value of `expr` in `frame` (nullable), with `extra` bound too (it
+    // shadows a frame variable of the same name). Stops are suppressed on
+    // the calling thread while it runs. False and `error` on a parse,
+    // compile or runtime error.
+    static bool evaluateValue(STRuntime& rt, proto::ProtoContext* ctx, const std::string& expr,
+                              const DebugFrame* frame, const std::vector<FrameVariable>& extra,
+                              const proto::ProtoObject*& result, std::string& error);
+    // A breakpoint condition: true when it answers true, false when false.
+    // Anything else -- an error, a non-Boolean -- answers true (stop) and
+    // sets `error`.
+    static bool evaluateCondition(STRuntime& rt, proto::ProtoContext* ctx,
+                                  const std::string& condition, const DebugFrame& frame,
+                                  const std::vector<FrameVariable>& extra, std::string& error);
+    // A log message with each `{expr}` replaced by its value in `frame`
+    // (`{{` and `}}` are literal braces; an error reads `<error: ...>`).
+    static std::string interpolateLogMessage(STRuntime& rt, proto::ProtoContext* ctx,
+                                             const std::string& message, const DebugFrame& frame);
+
     static bool evaluateExpression(STRuntime& rt, proto::ProtoContext* ctx,
                                    const std::string& expr, std::string& out,
                                    const DebugFrame* frame = nullptr);
@@ -192,6 +214,7 @@ public:
 private:
     DebugThreadState* currentThread(proto::ProtoContext* ctx);
     DebugThreadState* registerThread(DebugThreadState* ts, proto::ProtoContext* ctx);
+    void emitOutput(proto::ProtoContext* ctx, const std::string& category, const std::string& text);
     bool stepShouldStop(DebugThreadState& ts, const BytecodeModule* m, size_t pc, int depth);
     void applyCommand(DebugThreadState& ts, Command cmd, const DebugFrame& frame);
     std::string threadDisplayName(STRuntime& rt, proto::ProtoContext* ctx,
@@ -203,6 +226,9 @@ private:
     std::istream* inStream_  = nullptr; // nullptr → use std::cin
     std::ostream* outStream_ = nullptr; // nullptr → use std::cout
     BreakpointTable   breakpoints_;
+    std::mutex        conditionsMu_;
+    std::string       raisedCondition_;
+    std::string       uncaughtCondition_;
     std::atomic<DebuggerFrontend*> frontend_{nullptr};  // F8-3: nullptr → text REPL
 
     // Registered threads by id. Guarded by threadsMu_.
@@ -234,6 +260,9 @@ public:
     // A thread that runs script code was registered (started) or ended.
     // `started` is called on that thread; `exited` may be called from a
     // thread's exit, with no protoCore context. Default: ignore.
+    // Text for the client's console (a logpoint, a failing condition),
+    // written from a script thread. Default: ignore.
+    virtual void onOutput(const std::string& /*category*/, const std::string& /*text*/) {}
     virtual void onThreadEvent(int /*threadId*/, const std::string& /*name*/,
                                bool /*started*/) {}
 };
