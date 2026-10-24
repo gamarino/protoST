@@ -2,7 +2,7 @@
   "name": "protost-debug",
   "displayName": "protoST",
   "description": "protoST (.st) language support: syntax highlighting and debugging via the protost --dap Debug Adapter Protocol adapter.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "publisher": "protost-placeholder",
   "engines": {
     "vscode": "^1.66.0"
@@ -12,6 +12,9 @@
     "Debuggers"
   ],
   "main": "./extension.js",
+  "extensionKind": [
+    "workspace"
+  ],
   "activationEvents": [
     "onDebug",
     "onDebugResolve:protost",
@@ -63,13 +66,65 @@
             "properties": {
               "program": {
                 "type": "string",
-                "description": "Absolute path to the protoST (.st) script to debug.",
+                "description": "Path to the protoST (.st) script to debug (the client's path when pathMappings is set).",
                 "default": "${file}"
               },
               "stopOnEntry": {
                 "type": "boolean",
                 "description": "Stop once on entry before executing the first statement.",
                 "default": false
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working directory of the program: where `Import from:` finds modules. Translated by pathMappings.",
+                "default": "${fileDirname}"
+              },
+              "pathMappings": {
+                "type": "array",
+                "description": "Relate this machine's paths (localRoot) to the paths where protost runs (remoteRoot), for a remote or WSL session. Longest prefix wins; files under no mapping (such as the remote protoST library) are shown read-only, served by the adapter.",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "localRoot",
+                    "remoteRoot"
+                  ],
+                  "properties": {
+                    "localRoot": {
+                      "type": "string",
+                      "default": "${workspaceFolder}"
+                    },
+                    "remoteRoot": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "default": [
+                  {
+                    "localRoot": "${workspaceFolder}",
+                    "remoteRoot": ""
+                  }
+                ]
+              },
+              "remote": {
+                "type": "object",
+                "description": "Run the adapter on another machine: `command` is the argv prefix (ssh, wsl, docker exec ...), `path` the protost executable there. Requires pathMappings.",
+                "required": [
+                  "command"
+                ],
+                "properties": {
+                  "command": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "For example [\"ssh\", \"-T\", \"-o\", \"BatchMode=yes\", \"user@host\"] or [\"wsl\", \"-d\", \"Ubuntu-24.04\", \"--\"]."
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "The protost executable on the remote side.",
+                    "default": "protost"
+                  }
+                }
               }
             }
           }
@@ -93,6 +148,59 @@
               "name": "Debug current protoST script",
               "program": "^\"\\${file}\"",
               "stopOnEntry": false
+            }
+          },
+          {
+            "label": "protoST: Launch over SSH",
+            "description": "Run protost --dap on a remote host over ssh; the workspace is mapped to the remote checkout.",
+            "body": {
+              "type": "protost",
+              "request": "launch",
+              "name": "protoST over SSH",
+              "program": "^\"\\${file}\"",
+              "cwd": "^\"\\${fileDirname}\"",
+              "remote": {
+                "command": [
+                  "ssh",
+                  "-T",
+                  "-o",
+                  "BatchMode=yes",
+                  "user@host"
+                ],
+                "path": "/home/user/.local/bin/protost"
+              },
+              "pathMappings": [
+                {
+                  "localRoot": "^\"\\${workspaceFolder}\"",
+                  "remoteRoot": "/home/user/project"
+                }
+              ]
+            }
+          },
+          {
+            "label": "protoST: Launch in WSL",
+            "description": "Run protost --dap inside a WSL distribution; the workspace is mapped to the Linux checkout.",
+            "body": {
+              "type": "protost",
+              "request": "launch",
+              "name": "protoST in WSL",
+              "program": "^\"\\${file}\"",
+              "cwd": "^\"\\${fileDirname}\"",
+              "remote": {
+                "command": [
+                  "wsl",
+                  "-d",
+                  "Ubuntu-24.04",
+                  "--"
+                ],
+                "path": "/home/user/.local/bin/protost"
+              },
+              "pathMappings": [
+                {
+                  "localRoot": "^\"\\${workspaceFolder}\"",
+                  "remoteRoot": "/home/user/project"
+                }
+              ]
             }
           }
         ]

@@ -34,14 +34,14 @@ platform):
 ```bash
 cd editor-integration/vscode
 npx @vscode/vsce@3.2.1 package --skip-license
-code --install-extension protost-debug-0.4.0.vsix
+code --install-extension protost-debug-0.5.0.vsix
 ```
 
 Or, on Linux and macOS, symlink the folder (picks up edits after a
 `Developer: Reload Window`):
 
 ```bash
-ln -s "$(pwd)/editor-integration/vscode" ~/.vscode/extensions/protost-debug-0.4.0
+ln -s "$(pwd)/editor-integration/vscode" ~/.vscode/extensions/protost-debug-0.5.0
 ```
 
 ## Use
@@ -68,5 +68,21 @@ A launch configuration looks like:
 |---------------|---------|----------|----------------------------------------------------|
 | `program`     | string  | yes      | Path to the `.st` script to debug.                 |
 | `stopOnEntry` | boolean | no       | Stop once before the first statement (default off).|
+| `cwd`         | string  | no       | Working directory (where `Import from:` looks).    |
+| `pathMappings`| array   | no       | `[{localRoot, remoteRoot}]`: your paths ↔ protost's. |
+| `remote`      | object  | no       | `{command: [...], path}`: run protost elsewhere.   |
+
+## Remote launch
+
+With `remote`, the extension starts `command[0] command[1..] path --dap`
+instead of the local `protost --dap` — `["ssh", "-T", "-o", "BatchMode=yes",
+"user@host"]`, `["wsl", "-d", "Ubuntu-24.04", "--"]`, `["docker", "exec", "-i",
+"ctr"]` — and `pathMappings` (required with `remote`) tells the adapter how your
+paths map to the remote ones. **Add Configuration…** offers "protoST: Launch
+over SSH" and "protoST: Launch in WSL". The remote shell must not print
+anything on a non-interactive start (it would corrupt the protocol), and ssh
+must not prompt (use key authentication). The extension is a workspace
+extension, so with Remote - SSH / WSL / Dev Containers you can instead install
+it on the remote side and debug as if local.
 
 See `docs/debugging.md` for the full debugging guide and known limitations.

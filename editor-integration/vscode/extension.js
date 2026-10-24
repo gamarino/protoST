@@ -7,6 +7,11 @@
 //
 // `protost` is taken from the `protost.path` setting if set, else from the
 // default install location (when present), else from PATH.
+//
+// Remote launch: a configuration with `remote: {command: [...], path}` runs
+// `command... path --dap` instead (ssh, wsl, docker exec ...). The adapter
+// does every path translation itself (`pathMappings`); this extension only
+// picks the command.
 const vscode = require("vscode");
 const fs = require("fs");
 const path = require("path");
@@ -45,13 +50,35 @@ const configurationProvider = {
         .showInformationMessage("protoST: open a .st file or set 'program' in launch.json.")
         .then(() => undefined);
     }
+    if (config.remote) {
+      const cmd = config.remote.command;
+      if (!Array.isArray(cmd) || cmd.length === 0 || cmd.some((a) => typeof a !== "string")) {
+        return vscode.window
+          .showErrorMessage("protoST: 'remote.command' must be a non-empty array of strings, " +
+                            "e.g. [\"ssh\", \"-T\", \"user@host\"] or [\"wsl\", \"-d\", \"Ubuntu-24.04\", \"--\"].")
+          .then(() => undefined);
+      }
+      if (!Array.isArray(config.pathMappings) || config.pathMappings.length === 0) {
+        return vscode.window
+          .showErrorMessage("protoST: a 'remote' launch needs 'pathMappings': " +
+                            "[{\"localRoot\": \"${workspaceFolder}\", \"remoteRoot\": \"<the same folder on the remote side>\"}]. " +
+                            "protost runs on the other machine and opens 'program' and the breakpoints' files there.")
+          .then(() => undefined);
+      }
+    }
     return config;
   },
 };
 
 function activate(context) {
   const factory = {
-    createDebugAdapterDescriptor(/* session */) {
+    createDebugAdapterDescriptor(session) {
+      const remote = session.configuration && session.configuration.remote;
+      if (remote && Array.isArray(remote.command) && remote.command.length > 0) {
+        const remotePath = remote.path || "protost";
+        return new vscode.DebugAdapterExecutable(
+          remote.command[0], [...remote.command.slice(1), remotePath, "--dap"]);
+      }
       return new vscode.DebugAdapterExecutable(protostCommand(), ["--dap"]);
     },
   };

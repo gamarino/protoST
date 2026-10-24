@@ -17,10 +17,11 @@ protost --dap
 starts protoST as a DAP adapter: it reads `Content-Length`-framed DAP messages
 from stdin and writes them to stdout. It implements the requests `initialize`,
 `launch`, `setBreakpoints` (with `condition`, `hitCondition` and
-`logMessage`), `setExceptionBreakpoints` (with conditional `filterOptions`), `configurationDone`,
+`logMessage`), `setExceptionBreakpoints` (with conditional `filterOptions`), `source`,
+`loadedSources`, `configurationDone`,
 `continue`, `next`, `stepIn`, `stepOut`, `pause`, `threads`, `stackTrace`,
 `scopes`, `variables`, `evaluate`, `exceptionInfo`, `disconnect` and
-`terminate`, and emits the events `initialized`, `stopped`, `thread`,
+`terminate`, and emits the events `initialized`, `stopped`, `thread`, `breakpoint`, `loadedSource`,
 `terminated`, `exited`, and `output`.
 
 You do not normally run `protost --dap` by hand — VS Code spawns it for you via
@@ -55,7 +56,7 @@ syntax highlighting. Package and install it:
 ```bash
 cd editor-integration/vscode
 npx @vscode/vsce@3.2.1 package --skip-license
-code --install-extension protost-debug-0.4.0.vsix
+code --install-extension protost-debug-0.5.0.vsix
 ```
 
 See `editor-integration/vscode/README.md` for the symlink alternative.
@@ -88,13 +89,15 @@ choose **protoST**. A launch configuration looks like:
 }
 ```
 
-The `launch` request accepts exactly two attributes (confirmed against
-`src/dap/DapServer.cpp`):
+The `launch` request accepts these attributes (confirmed against
+`src/dap/DapServer.cpp`; the extension adds `remote`, see Remote debugging):
 
 | Attribute     | Type    | Required | Meaning                                              |
 |---------------|---------|----------|------------------------------------------------------|
 | `program`     | string  | yes      | Path to the `.st` script to run under the debugger.  |
 | `stopOnEntry` | boolean | no       | If true, stop once with reason `entry` before the first statement. Default `false`. |
+| `cwd`         | string  | no       | Working directory: where `Import from:` finds modules. |
+| `pathMappings`| array   | no       | `[{localRoot, remoteRoot}]` for a remote session (see Remote debugging). |
 
 To start a session:
 
@@ -253,6 +256,131 @@ Limitation: the expression cannot use `self` or the instance variables of the
 frame's receiver (it is compiled outside the method); pass through a variable
 of the frame instead.
 
+## Sources without a file on your side
+
+A stack frame, a breakpoint or a Loaded Scripts entry names its source by
+`path` when you can open that file yourself. Otherwise the adapter hands out a
+`sourceReference` and serves the text through the `source` request, and VS Code
+opens it read-only. This happens for:
+
+- **The protoST library** when protost runs elsewhere (over ssh, in WSL, in a
+  container): the kernel and stdlib `.st` files live under the remote
+  `share/protoST/lib`, which no path mapping covers. You can still step into
+  `Object>>displayNl` or `Integer>>to:`, read the code and set breakpoints in
+  it.
+- Any other file under no mapping, and code without a file (a `<...>` source).
+  Expressions you evaluate never show up here: stops are suppressed while they
+  run.
+
+Kernel and stdlib frames are deemphasized (greyed out in the call stack) both
+ways. **Loaded Scripts** (the Run and Debug view's "Loaded Scripts" section,
+from the `loadedSources` request and `loadedSource` events) lists the program,
+every kernel file and every module the program imports, as it loads.
+
+Breakpoints work in every loaded file, not only the program: in an imported
+module (set it before the import runs: it shows unverified until the module
+loads, then turns verified) and in a kernel or stdlib file, by path or by its
+sourceReference.
+
+## Remote debugging
+
+The debuggee runs on another machine (a Linux server, WSL, a container) while
+you edit and debug in VS Code on yours.
+
+**Option 1 — VS Code's remote extensions (Remote - SSH, WSL, Dev
+Containers).** Install protoST and the protoST extension (the `.vsix`) on the
+remote side, open the remote folder, press F5. The extension declares
+`"extensionKind": ["workspace"]`, so VS Code runs it next to the files and
+protost: nothing else to configure.
+
+**Option 2 — `remote.command` + `pathMappings`.** Keep VS Code and the
+extension local and let the extension start `protost --dap` through a command
+prefix. The adapter translates every path itself:
+
+```json
+{
+  "type": "protost",
+  "request": "launch",
+  "name": "protoST over SSH",
+  "program": "${file}",
+  "cwd": "${fileDirname}",
+  "remote": {
+    "command": ["ssh", "-T", "-o", "BatchMode=yes", "user@host"],
+    "path": "/home/user/.local/bin/protost"
+  },
+  "pathMappings": [
+    { "localRoot": "${workspaceFolder}", "remoteRoot": "/home/user/project" }
+  ]
+}
+```
+
+In WSL the prefix is `["wsl", "-d", "Ubuntu-24.04", "--"]` and `remoteRoot` the
+Linux checkout (`/home/user/project`, or `/mnt/c/Users/me/project` to use the
+Windows files themselves); in a container, `["docker", "exec", "-i",
+"<container>"]`. The extension runs `command[0]` with the rest of `command`,
+then `remote.path` (default `protost`) and `--dap`. A `remote` launch without
+`pathMappings` is refused with an explanation.
+
+- `pathMappings` is a list of `{localRoot, remoteRoot}`: `localRoot` is your
+  side, `remoteRoot` the side protost runs on. The longest matching root wins;
+  `\` and `/` are accepted either way, and a Windows root (`c:\...`) matches
+  in any letter case. `program`, `cwd` and breakpoint paths go from local to
+  remote, every path in the stack, breakpoints and Loaded Scripts from remote
+  to local; a file under no mapping is served by `sourceReference` (above).
+  An entry without `localRoot` or `remoteRoot` fails the launch.
+- **The remote shell must be quiet.** The protocol runs over the command's
+  stdin/stdout: anything a login script prints on a non-interactive start
+  (a motd, an `echo` in `.bashrc`) corrupts it and the session drops at once.
+  Use `ssh -T -o BatchMode=yes` (no terminal, no password prompt: set up key
+  authentication), and guard any output in the shell's startup files with
+  `[[ $- == *i* ]]`. If protost needs `LD_LIBRARY_PATH` there, put it in the
+  prefix: `["ssh", "-T", "user@host", "env", "LD_LIBRARY_PATH=/opt/proto/lib"]`.
+
+`pathMappings` is the adapter's, so any DAP client can use it, not only this
+extension.
+
+## JetBrains IDEs (IntelliJ IDEA, PyCharm, CLion, …)
+
+JetBrains IDEs have no protoST plugin, but the
+[LSP4IJ](https://github.com/redhat-developer/lsp4ij) plugin (Red Hat, from the
+JetBrains Marketplace) adds a **Debug Adapter Protocol** run/debug
+configuration that can drive `protost --dap`:
+
+1. Install LSP4IJ (Settings → Plugins → Marketplace).
+2. Run → Edit Configurations… → + → **Debug Adapter Protocol**.
+3. **Server** tab: the command `protost --dap` (the full path to `protost` if
+   it is not on the IDE's PATH), or the remote form, e.g.
+   `ssh -T -o BatchMode=yes user@host /home/user/.local/bin/protost --dap`.
+4. **Mappings** tab: map the `*.st` file pattern (or the `smalltalk`
+   language) to this server, so you can set breakpoints in `.st` files.
+5. **Configuration** tab: the working directory, the file to debug, launch
+   mode, and the launch parameters as JSON — the same attributes as a VS Code
+   `launch.json`:
+
+   ```json
+   {
+     "request": "launch",
+     "program": "${file}",
+     "cwd": "${workspaceFolder}",
+     "stopOnEntry": false,
+     "pathMappings": [{ "localRoot": "/path/on/this/machine", "remoteRoot": "/path/where/protost/runs" }]
+   }
+   ```
+
+Everything the adapter does — conditions, logpoints, exception filters,
+threads, `sourceReference` sources — comes from the adapter, so it is the same
+as in VS Code. LSP4IJ variable names (`${file}` and the like) may differ from
+VS Code's; use plain paths if they are not substituted.
+
+**Syntax highlighting**: IntelliJ does not know `.st` files. Import the
+TextMate grammar shipped with the VS Code extension: Settings → Editor →
+TextMate Bundles → + → choose the `editor-integration/vscode` folder (or the
+installed `share/protoST/editor-integration/vscode`).
+
+This section was written from LSP4IJ's documentation and the adapter's
+protocol behaviour; it has **not** been clicked through in a JetBrains IDE, and
+the menu and field names may differ between plugin versions.
+
 ## Known limitations
 
 - **Values are flat.** Objects are shown by their print string (`a Counter`)
@@ -271,10 +399,12 @@ of the frame instead.
 - **Conditions cannot use `self`** or the receiver's instance variables.
 - **One program per session**: no `attach`, no restart, no function
   breakpoints, no data breakpoints.
+- **Remote sessions need key-based ssh** (or another prompt-free command) and
+  a quiet remote shell; the extension cannot answer a password prompt.
 
 The DAP exchange is verified by the integration tests `cli_dap_session`,
 `cli_dap_output`, `cli_dap_gc`, `cli_dap_exceptions`, `cli_dap_stepping`,
-`cli_dap_threads` and `cli_dap_conditions`.
+`cli_dap_threads`, `cli_dap_conditions` and `cli_dap_sources`.
 
 ## Verifying the adapter without VS Code
 

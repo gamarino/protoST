@@ -5,6 +5,23 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+- **DAP: remote debugging and sources without a local file**
+  (docs/debugging.md "Remote debugging", "Sources without a file").
+  `launch` takes `pathMappings` ([{localRoot, remoteRoot}], longest prefix,
+  either separator, any drive-letter case) and `cwd`; the adapter translates
+  every path both ways. A file under no mapping -- the protoST library of a
+  remote protost -- comes back as a `sourceReference` served by the new
+  `source` request, and breakpoints on it work. Breakpoints now resolve by
+  file in every loaded module (kernel, imports; a later import arms them and
+  sends a `breakpoint` event) -- before, every source's lines were looked up
+  in the program. New `loadedSources` request and `loadedSource` events;
+  kernel frames are deemphasized. Test: cli_dap_sources; tried end to end from
+  Windows into WSL.
+- **VS Code extension 0.5.0**: `remote: {command, path}` launches protost
+  through ssh / wsl / docker exec (with `pathMappings`, required);
+  configuration snippets "Launch over SSH" and "Launch in WSL";
+  `extensionKind: ["workspace"]` for Remote - SSH / WSL / Dev Containers.
+  docs/debugging.md also covers JetBrains IDEs through LSP4IJ.
 - **DAP: conditions, hit counts and logpoints** (docs/debugging.md).
   The exception filters take a condition (`supportsExceptionFilterOptions`),
   a Smalltalk expression with the exception bound as `ex`

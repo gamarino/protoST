@@ -393,7 +393,7 @@ stops alone while the others keep running.
    ```bash
    cd editor-integration/vscode
    npx @vscode/vsce@3.2.1 package --skip-license
-   code --install-extension protost-debug-0.4.0.vsix
+   code --install-extension protost-debug-0.5.0.vsix
    ```
 
    Then run **Developer: Reload Window** in VS Code.
@@ -405,8 +405,21 @@ The extension runs the `protost` named in **Settings → Extensions → protoST 
 Protost: Path**; if that is empty, the one in the default install location
 (`%LOCALAPPDATA%\Programs\proto\bin\protost.exe` on Windows,
 `~/.local/bin/protost` elsewhere); otherwise `protost` from `PATH`. See
-[`docs/debugging.md`](docs/debugging.md) for what works in detail. Current
-limitations:
+[`docs/debugging.md`](docs/debugging.md) for what works in detail.
+
+**Remote debugging**: either use VS Code's Remote - SSH / WSL / Dev Containers
+(install protoST and the `.vsix` on the remote side; the extension runs there),
+or keep VS Code local and add to the launch configuration
+`"remote": {"command": ["ssh", "-T", "-o", "BatchMode=yes", "user@host"], "path": "/home/user/.local/bin/protost"}`
+(or `["wsl", "-d", "Ubuntu-24.04", "--"]`) and `"pathMappings": [{"localRoot": "${workspaceFolder}", "remoteRoot": "/home/user/project"}]`.
+The adapter translates every path; the remote protoST library, which no mapping
+covers, opens read-only and is still steppable and breakable. The remote shell
+must print nothing on a non-interactive start. **JetBrains IDEs**: run
+`protost --dap` through the LSP4IJ plugin's Debug Adapter Protocol
+configuration and import `editor-integration/vscode` as a TextMate bundle
+(described in docs/debugging.md; not yet tried in a JetBrains IDE).
+
+Current limitations:
 
 - values are flat: an object prints as `a Counter` and is not expandable;
 - an expression in the Debug Console sees the frame's variables by value (an
