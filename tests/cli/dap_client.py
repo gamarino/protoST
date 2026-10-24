@@ -17,7 +17,10 @@ class DapError(Exception):
 
 class DapClient:
     def __init__(self, protost, env=None):
-        self.p = subprocess.Popen([protost, "--dap"], stdin=subprocess.PIPE,
+        # `protost` is the executable, or an argv prefix that runs it
+        # elsewhere (["wsl", "-d", "Ubuntu-24.04", "--", "/path/protost"]).
+        argv = list(protost) if isinstance(protost, (list, tuple)) else [protost]
+        self.p = subprocess.Popen(argv + ["--dap"], stdin=subprocess.PIPE,
                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                   env=env)
         self.seq = 1
