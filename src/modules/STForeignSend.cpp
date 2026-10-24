@@ -53,7 +53,7 @@ const proto::ProtoObject* sendMessage(STRuntime& rt, proto::ProtoContext* ctx,
         throw std::runtime_error("protoST: #" + selText +
                                  " was sent to an actor from another runtime, which is not "
                                  "supported: an actor's messages are asynchronous");
-    const proto::ProtoObject* holder = (recv && recv != PROTO_NONE) ? recv : bs.nilProto;
+    const proto::ProtoObject* holder = methodHolder(bs, ctx, recv);
     const proto::ProtoObject* attr = holder->getAttribute(ctx, selector);
     if (attr && attr != PROTO_NONE && !attr->isInteger(ctx) &&
         attr->getOwnAttributeDirect(ctx, bs.sym.classSide) == PROTO_TRUE) {
@@ -157,7 +157,11 @@ const proto::ProtoObject* foreignSendEntry(proto::ProtoContext* callerCtx,
     const int argc = static_cast<int>(args.size());
     const proto::ProtoObject* recv = self ? self : PROTO_NONE;
 
-    if (!foreign) return sendMessage(*rt, ctx, recv, selector, args.data(), argc);
+    // A guest in another runtime's space (STRuntime(proto::ProtoSpace&)): the
+    // caller shares protoST's space but is the host runtime's code, so the send
+    // crosses the runtime boundary as a foreign one does -- on the caller's own
+    // context, which belongs to protoST's space, from any thread of it.
+    if (!foreign && rt->ownsSpace()) return sendMessage(*rt, ctx, recv, selector, args.data(), argc);
 
     // The foreign boundary. The send is a native call boundary like a
     // primitive's: a C++ failure becomes a signalled Error, and with protoST's

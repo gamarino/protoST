@@ -186,7 +186,7 @@ STRuntime* runtimeForUserEquality(proto::ProtoContext* ctx, const proto::ProtoOb
     if (!o || o == PROTO_NONE || o == PROTO_TRUE || o == PROTO_FALSE) return nullptr;
     if (o->isInteger(ctx) || o->isDouble(ctx) || o->asString(ctx)) return nullptr;
     STRuntime* rt = stRuntimeForSpace(ctx->space);
-    if (!rt || o->getPrototype(ctx) == rt->bootstrap().characterProto) return nullptr;
+    if (!rt || isCharacterValue(ctx, o)) return nullptr;
     return rt;
 }
 

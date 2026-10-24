@@ -5,6 +5,19 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+- **A guest in the host's ProtoSpace** (INTEROP.md §4.0). New constructor
+  `STRuntime(proto::ProtoSpace& hostSpace)` runs protoST in a space another
+  runtime created -- one ProtoSpace per process, protoCore's recommended model
+  -- instead of building its own. The host keeps its primitive prototype slots,
+  error factory, heap policy and resolution chain (protoST appends
+  `provider:st`); protoST resolves its own sends to primitive values through its
+  own prototypes (`methodHolder`), and an import or a send from host code
+  crosses the boundary as a foreign one, on the caller's own context, from any
+  thread of the space. `STRuntime::ownsSpace()` tells the two shapes apart.
+  New test: `Guest: a protoST runtime runs in its host's ProtoSpace`. protoScala's
+  interop tests now host protoST this way (one space in the process). CI builds
+  against protoCore 3.1.0 (master, 267b9fc9); the declared minimum stays 3.0.0.
+
 ## 0.7.0 — on protoCore 3.0.0 (2026-10-22)
 
 **Requires protoCore 3.0.0** (SOVERSION 4), the declared minimum for a build from source; the `.deb` depends on `protocore (>= 3.0.0)`. CI pins protoCore tag `v3.0.0` on every job.

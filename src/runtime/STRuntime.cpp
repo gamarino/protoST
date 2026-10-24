@@ -228,7 +228,14 @@ using ActorReadyStack = ReadyStack<const proto::ProtoObject*>;
 } // namespace
 
 struct STRuntime::Impl {
-    proto::ProtoSpace    space;
+    // The space protoST runs in: its own (ownedSpace), or the space of the
+    // runtime that hosts it (STRuntime(proto::ProtoSpace&); one ProtoSpace per
+    // process, protoCore docs/GLOBAL_MUTABLE_TABLE.md).
+    std::unique_ptr<proto::ProtoSpace> ownedSpace;
+    proto::ProtoSpace&   space;
+    // In a host's space, protoST's own root context (the host keeps the
+    // space's), deleted with the runtime.
+    std::unique_ptr<proto::ProtoContext> ownRootCtx;
     proto::ProtoContext* rootCtx    = nullptr;
     proto::ProtoRootSet* asyncRoots = nullptr;
     Bootstrap            bootstrap;
@@ -398,12 +405,36 @@ struct STRuntime::Impl {
     // the check makes the unsupported case a clear error instead of a race.
     const std::thread::id ownerThread = std::this_thread::get_id();
 
-    Impl() {
+    // The context a guest's root context is chained onto: the calling thread's
+    // current context when it is the space's main thread (protoPython's
+    // rootContextParent, PythonEnvironment.cpp), so the context the host had
+    // current stays on the chain the collector walks.
+    static proto::ProtoContext* hostContextParent(proto::ProtoSpace& sp) {
+        if (sp.rootContext && sp.rootContext->thread
+                && sp.mainThreadId == std::this_thread::get_id())
+            return sp.rootContext->thread->getCurrentContext();
+        return nullptr;
+    }
+
+    Impl() : ownedSpace(std::make_unique<proto::ProtoSpace>()), space(*ownedSpace) {
         // protoCore exposes the root context as a public field on ProtoSpace
         // (see protoCore/headers/protoCore.h:1234 and protoJS/src/JSContext.cpp:100).
-        rootCtx    = space.rootContext;
+        rootCtx = space.rootContext;
+        init(/*ownsSpace=*/true);
+    }
+
+    explicit Impl(proto::ProtoSpace& host)
+        : space(host),
+          ownRootCtx(std::make_unique<proto::ProtoContext>(&host, hostContextParent(host))) {
+        rootCtx = ownRootCtx.get();
+        init(/*ownsSpace=*/false);
+    }
+
+    bool ownsSpace() const { return ownedSpace != nullptr; }
+
+    void init(bool ownsSpace) {
         asyncRoots = space.createRootSet("protoST-async");
-        bootstrapPrototypes(space, rootCtx, bootstrap);
+        bootstrapPrototypes(space, rootCtx, bootstrap, /*bindSpaceSlots=*/ownsSpace);
 
         // Allocate the globals namespace as a mutable child of objectProto so
         // setAttribute updates it in place. Pre-register "Object" so that
@@ -669,6 +700,19 @@ static const proto::ProtoObject* st_worker_main(
 
 STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
     configureHeap(impl_->space);
+    construct();
+}
+
+// A runtime in the host's space (see STRuntime.h): the host's heap policy,
+// its out-of-memory callback, its primitive prototype slots and its resolution
+// chain stay; protoST adds its provider to the chain.
+STRuntime::STRuntime(proto::ProtoSpace& hostSpace) : impl_(std::make_unique<Impl>(hostSpace)) {
+    construct();
+}
+
+bool STRuntime::ownsSpace() const { return impl_->ownsSpace(); }
+
+void STRuntime::construct() {
     installIntPrimitives(*this);
     installMathPrimitives(*this);
     installTimePrimitives(*this);
@@ -703,7 +747,11 @@ STRuntime::STRuntime() : impl_(std::make_unique<Impl>()) {
     registerSTRuntime(&impl_->space, this);
 
     // Set the resolution chain on this space: protoST's source provider only.
-    {
+    // In a host's space the host's chain stays, and protoST's provider is
+    // added to it.
+    if (!impl_->ownsSpace()) {
+        addModuleProviderToChain("provider:st");
+    } else {
         auto* ctx = impl_->rootCtx;
         auto* chain = ctx->newList();
         chain = chain->appendLast(
