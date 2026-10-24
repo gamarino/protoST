@@ -1,5 +1,6 @@
 #include "dap/DapServer.h"
 #include "runtime/UnhandledSTException.h"
+#include "dap/DapStdio.h"
 #include "dap/DapTransport.h"
 
 #include "protoST/STRuntime.h"
@@ -62,10 +63,20 @@ using nlohmann::json;
 // is beyond this MVP.
 class DapServer : public DebuggerFrontend {
 public:
-    DapServer() : transport_(std::cin, std::cout) {}
-    ~DapServer() override { shutdownDebuggee(); }
+    DapServer() : transport_(stdio_.protocolIn(), stdio_.protocolOut()) {}
+    ~DapServer() override {
+        shutdownDebuggee();
+        // Its threads write to transport_. The debuggee is joined: only this
+        // thread can still be registered.
+        stdio_.finish(runtime_ ? runtime_->rootCtx() : nullptr);
+    }
 
     int run() {
+        // What the debuggee prints reaches the client's Debug Console as
+        // `output` events instead of corrupting the protocol stream.
+        stdio_.startForwarding([this](const char* category, const std::string& text) {
+            sendOutput(category, text);
+        });
         for (;;) {
             // 2026-05-25: the DAP main loop is the prototypical
             // "external event source" — the IDE sends a message when
@@ -112,6 +123,9 @@ public:
         // dereferences a ProtoObject: the frame's values are only copied as
         // pointers and stay rooted in the stopped engine's slots.
         proto::ProtoContext::UnmanagedScope unmanaged(ctx);
+
+        // A line printed without a newline is still in stdio's buffer.
+        std::fflush(stdout);
 
         // Serialize concurrent stops (e.g. an actor on a worker thread). MVP:
         // only one stop is processed at a time; a second halting thread waits
@@ -342,6 +356,7 @@ private:
         // Writing to the client can block on a full pipe; no ProtoObject is
         // touched, so the writes run in an unmanaged region.
         proto::ProtoContext::UnmanagedScope unmanaged(ctx);
+        stdio_.finish(ctx);                  // the script's output goes first
         if (!error.empty())
             sendOutput("stderr", error);
         sendEvent("terminated", json::object());
@@ -768,6 +783,7 @@ private:
     int nextSeq() { return seq_.fetch_add(1); }
 
     // --- transport / sequencing --------------------------------------------
+    DapStdio         stdio_;                 // before transport_: it owns the streams
     DapTransport     transport_;
     std::atomic<int> seq_{1};
     int              exitCode_{0};

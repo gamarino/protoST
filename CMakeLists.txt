@@ -225,6 +225,7 @@ add_library(protost_runtime STATIC
     src/modules/STModuleProvider.cpp
     src/modules/STForeignSend.cpp
     src/repl/Repl.cpp
+    src/dap/DapStdio.cpp
     src/dap/DapTransport.cpp
     src/dap/DapServer.cpp
 )
@@ -482,6 +483,11 @@ add_test(NAME cli_dap
 add_test(NAME cli_dap_session
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_dap_session.sh $<TARGET_FILE:protost>)
 
+# The debuggee's prints reach the client as `output` events, not as raw bytes
+# on the protocol channel; its stdin reads end of file.
+add_test(NAME cli_dap_output
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_dap_output.sh $<TARGET_FILE:protost>)
+
 # D23 regression: un-drained actor mailbox load must not deadlock the
 # scheduler. Non-deterministic when broken, so the test repeats the workload.
 add_test(NAME cli_actor_stress
@@ -530,7 +536,7 @@ endif()
 if(WIN32)
     # The DAP tests drive protost from a Python client; on Windows `python3`
     # is usually the Microsoft Store stub, so they get the Python CMake found.
-    set_tests_properties(cli_dap_session cli_dap_gc PROPERTIES
+    set_tests_properties(cli_dap_session cli_dap_gc cli_dap_output PROPERTIES
         ENVIRONMENT "PYTHON=${Python3_EXECUTABLE}")
 endif()
 

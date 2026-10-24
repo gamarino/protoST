@@ -93,7 +93,9 @@ std::optional<nlohmann::json> DapTransport::readMessage() {
 }
 
 void DapTransport::writeMessage(const nlohmann::json& msg) {
-    std::string body = msg.dump();
+    // A script may print bytes that are not UTF-8; replace them rather than
+    // throw from dump() and lose the message.
+    std::string body = msg.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     std::lock_guard<std::mutex> lock(writeMu_);
     out_ << "Content-Length: " << body.size() << "\r\n\r\n" << body;
     out_.flush();
