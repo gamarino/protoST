@@ -488,6 +488,21 @@ add_test(NAME cli_dap_session
 add_test(NAME cli_dap_output
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_dap_output.sh $<TARGET_FILE:protost>)
 
+# Exception breakpoints: the raised and uncaught filters, and the internal
+# control flow (non-local returns, ensure:, loops) that must never stop.
+add_test(NAME cli_dap_exceptions
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_dap_exceptions.sh $<TARGET_FILE:protost>)
+
+# Stepping by line and call depth: next / stepIn / stepOut across methods and
+# the engines blocks run in.
+add_test(NAME cli_dap_stepping
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_dap_stepping.sh $<TARGET_FILE:protost>)
+
+# One-thread stop: two actor threads at one breakpoint, stepping one while the
+# other stays stopped, pause of a busy thread, collections while stopped.
+add_test(NAME cli_dap_threads
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_dap_threads.sh $<TARGET_FILE:protost>)
+
 # D23 regression: un-drained actor mailbox load must not deadlock the
 # scheduler. Non-deterministic when broken, so the test repeats the workload.
 add_test(NAME cli_actor_stress
@@ -536,7 +551,8 @@ endif()
 if(WIN32)
     # The DAP tests drive protost from a Python client; on Windows `python3`
     # is usually the Microsoft Store stub, so they get the Python CMake found.
-    set_tests_properties(cli_dap_session cli_dap_gc cli_dap_output PROPERTIES
+    set_tests_properties(cli_dap_session cli_dap_gc cli_dap_output
+                         cli_dap_exceptions cli_dap_stepping cli_dap_threads PROPERTIES
         ENVIRONMENT "PYTHON=${Python3_EXECUTABLE}")
 endif()
 

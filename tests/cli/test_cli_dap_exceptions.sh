@@ -89,6 +89,7 @@ EOF
 
 cat > "$WORK/driver.py" <<'PYEOF'
 import sys
+sys.dont_write_bytecode = True   # no __pycache__ in the source tree
 sys.path.insert(0, sys.argv[1])
 from dap_client import DapClient
 

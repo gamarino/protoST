@@ -57,6 +57,7 @@
 #include "runtime/TransientPin.h"
 #include "runtime/ExecutionEngine.h"
 #include "modules/STModuleProvider.h"
+#include "debugger/DebuggerRuntime.h"
 #include "protoCore.h"
 
 #include <cstdio>
@@ -379,6 +380,49 @@ const proto::ProtoObject* raiseNestingLimitError(STRuntime& rt, proto::ProtoCont
     throw std::logic_error("the default action of an Error returned");
 }
 
+// Set by the native paths (a primitive's error, a ProtoException at a native
+// boundary) just before they signal, and taken by the next signalInstance: the
+// debugger then says the exception came from a primitive.
+thread_local bool t_signalFromPrimitive = false;
+
+// The debugger's exception breakpoints. Runs when a debugger with an exception
+// filter is attached, as `signal` starts and before any handler runs or
+// anything unwinds, so the stop shows the signalling stack intact. Only what
+// `signal` sees reaches it: the C++ carriers of protoST's control flow
+// (NonLocalReturn, UnwindToHandler, ResumeSignal, RetrySignal, PassSignal,
+// NestingLimitUnwind, FutureYield, DebuggerHalt, InterruptSignal) are thrown
+// and caught without signalling, and an UnhandledSTException continuing
+// outward was already signalled once. Reads attributes only: no Smalltalk runs
+// here (a messageText override is not consulted).
+void debuggerExceptionStop(STRuntime& rt, proto::ProtoContext* ctx,
+                           const proto::ProtoObject* exc, bool foreign, bool fromPrimitive) {
+    DebuggerRuntime& dbg = rt.debugger();
+    std::string cls, msg;
+    if (foreign) {
+        cls = stringAttribute(ctx, exc, "name");
+        msg = stringAttribute(ctx, exc, "message");
+        if (cls.empty()) cls = "foreign exception";
+    } else {
+        const proto::ProtoObject* cn = exc->getAttribute(ctx, classNameKey(ctx));
+        if (cn && cn != PROTO_NONE)
+            if (const proto::ProtoString* s = cn->asString(ctx)) cls = s->toStdString(ctx);
+        msg = messageTextOf(ctx, exc);
+    }
+    bool uncaught = false;
+    if (dbg.exceptionFilters() & DebuggerRuntime::kFilterUncaught) {
+        // Smalltalk finds the handler before unwinding: whether one will take
+        // this exception is known now. Unhandled, an Error (or a foreign
+        // exception, or any non-resumable one) ends the activation; a
+        // resumable one resumes with nil, which is not "uncaught".
+        const bool handled = handlerStackFindMatch(
+            ctx, exc, 0, foreign ? rt.bootstrap().exceptionProto : nullptr) != nullptr;
+        const bool isErrorClass = !foreign && exc->getAttribute(
+            ctx, proto::ProtoString::createSymbol(ctx, "__unhandled_is_error__")) == PROTO_TRUE;
+        uncaught = !handled && (foreign || isErrorClass || !isResumable(ctx, exc));
+    }
+    dbg.onException(rt, ctx, cls, msg, uncaught, fromPrimitive);
+}
+
 const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx,
                                           const proto::ProtoObject* exc,
                                           proto::proto_ulong firstHandlerId,
@@ -387,6 +431,12 @@ const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx
     // stack walks and invokeBlock (which spins a full nested engine).
     TransientPin pinExc(ctx, exc);
     const bool foreign = !isExceptionInstance(rt, ctx, exc);
+    const bool fromPrimitive = t_signalFromPrimitive;
+    t_signalFromPrimitive = false;
+    // A new signal (not a handler re-entered after the nesting limit): the
+    // debugger's exception breakpoints. One relaxed load when detached.
+    if (firstHandlerId == 0 && rt.debugger().attached() && rt.debugger().exceptionFilters() != 0)
+        debuggerExceptionStop(rt, ctx, exc, foreign, fromPrimitive);
 
     proto::proto_ulong searchBelowId = 0;   // 0 == search from the top of the stack
     for (;;) {
@@ -553,6 +603,7 @@ const proto::ProtoObject* signalErrorNamed(STRuntime& rt, proto::ProtoContext* c
         ? g->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, className)) : nullptr;
     if (!cls || cls == PROTO_NONE || !isExceptionClassObject(rt, ctx, cls))
         return signalNativeError(rt, ctx, message);
+    t_signalFromPrimitive = true;
     return signalErrorOfClass(rt, ctx, cls, message);
 }
 
@@ -600,6 +651,7 @@ const proto::ProtoObject* signalMessageNotUnderstood(STRuntime& rt, proto::Proto
 const proto::ProtoObject* signalNativeError(STRuntime& rt,
                                             proto::ProtoContext* ctx,
                                             const char* message) {
+    t_signalFromPrimitive = true;
     return signalErrorOfClass(rt, ctx, rt.bootstrap().errorProto,
                               message ? message : "native exception");
 }
@@ -620,6 +672,7 @@ const proto::ProtoObject* signalNativeError(STRuntime& rt,
 const proto::ProtoObject* signalProtoException(STRuntime& rt, proto::ProtoContext* ctx,
                                                const proto::ProtoObject* value,
                                                std::exception_ptr caught) {
+    t_signalFromPrimitive = true;
     if (isExceptionInstance(rt, ctx, value)) return signalInstance(rt, ctx, value);
     return signalInstance(rt, ctx, value, 0, &caught);
 }

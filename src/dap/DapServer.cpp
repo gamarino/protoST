@@ -12,12 +12,17 @@
 #include "protoCore.h"
 
 #include <atomic>
+#include <chrono>
 #include <optional>
 #include <cctype>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
+#include <deque>
 #include <exception>
+#include <functional>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -33,42 +38,45 @@ using nlohmann::json;
 
 // ---------------------------------------------------------------------------
 // The DAP server (F8-2 lifecycle skeleton + F8-3 launch / breakpoints /
-// stop-resume handshake / stepping).
+// stop-resume handshake / stepping, exception breakpoints, threads).
 //
 // Threading model:
 //   * The DAP message loop (`run`) runs on the main thread and NEVER blocks on
-//     the debuggee. It must keep reading stdin even while the debuggee is
-//     stopped at a breakpoint, otherwise it could not receive `continue`.
-//   * `launch` spawns a *debuggee thread*: a protoCore ProtoThread of the
-//     runtime's space with its own ProtoContext. It waits for the
-//     configurationDone gate, then runs `rt.runTopLevel(module, ctx)` on that
-//     context. The DAP loop thread constructed the runtime and owns `rootCtx`;
-//     the two threads never share a context (S4).
-//   * Every blocking wait (the DAP read, the configurationDone gate, a stop's
-//     resume wait, the join at shutdown) runs in a protoCore unmanaged region
-//     on the blocked thread's own context, so a stop-the-world phase never
-//     waits for it and no thread is counted in the quorum twice.
-//   * When the engine hits a breakpoint / step / entry it calls the installed
-//     DebuggerFrontend (this server). `onStopped` emits a `stopped` event,
-//     stores the DebugFrame in shared session state, and blocks the debuggee
-//     thread on a condition variable until a resume request arrives.
-//   * A resume request handler (`continue`/`next`/`stepIn`/`stepOut`), running
-//     on the DAP loop thread, records the pending resume command and signals
-//     the cv; the debuggee thread wakes and returns the command to the engine.
-//
-// MVP scope: a single logical thread (threadId 1). protoST has worker threads
-// (F6 v2); a breakpoint hit inside an actor handler runs `onStopped` on a
-// worker thread. We serialize stops with `stopMu_` so only one stop is live at
-// a time. True multi-thread debugging (separate threadIds, thread list events)
-// is beyond this MVP.
+//     a stopped thread. It must keep reading stdin while threads are stopped,
+//     otherwise it could not receive `continue`.
+//   * `launch` spawns the *debuggee thread* ("main", DAP thread 1): a protoCore
+//     ProtoThread of the runtime's space with its own ProtoContext. It waits
+//     for the configurationDone gate, then runs `rt.runTopLevel(module, ctx)`
+//     on that context. The DAP loop thread constructed the runtime and owns
+//     `rootCtx`; the two threads never share a context (S4).
+//   * Every other thread that runs script code -- the actor worker pool, and
+//     the main thread itself while it drains actors in `wait` -- is a DAP
+//     thread too: the debugger registers it the first time it runs an
+//     instruction (a `thread` started event) and reports its exit.
+//   * One-thread stop: a thread that stops (breakpoint, step, pause,
+//     exception) stops alone (`allThreadsStopped: false`); the others keep
+//     running. Each stopped thread parks in `onStopped` on its own condition
+//     variable, inside an unmanaged region on its own context, so collections
+//     go on while it waits. Several threads may be stopped at once.
+//   * Inspection runs ON the stopped thread that owns the values: `variables`
+//     and `evaluate` queue a task to that thread, which runs it on its own
+//     context (managed again for the duration) and hands the result back. The
+//     DAP thread waits for it in an unmanaged region, with a timeout.
+//   * A resume request (`continue`/`next`/`stepIn`/`stepOut`) names a thread:
+//     it records that thread's command and wakes only that thread.
 class DapServer : public DebuggerFrontend {
 public:
     DapServer() : transport_(stdio_.protocolIn(), stdio_.protocolOut()) {}
     ~DapServer() override {
         shutdownDebuggee();
-        // Its threads write to transport_. The debuggee is joined: only this
-        // thread can still be registered.
+        // Its threads write to transport_. The debuggee is joined and no
+        // thread is inside onStopped: only this thread can still be
+        // registered.
         stdio_.finish(runtime_ ? runtime_->rootCtx() : nullptr);
+        // The runtime joins its workers; none of them reaches this server any
+        // more (the frontend is uninstalled), but destroy it while every
+        // member is still alive.
+        runtime_.reset();
     }
 
     int run() {
@@ -110,58 +118,157 @@ public:
     }
 
     // --- DebuggerFrontend ---------------------------------------------------
-    // Called on the debuggee thread (or a worker thread for an actor stop)
-    // when execution halts. Emits a `stopped` event, parks the calling thread
-    // on the resume cv, and returns the resume command once it arrives.
+    // Called on the thread that stopped. Emits a `stopped` event for that
+    // thread alone, then parks it -- running the inspection tasks queued to
+    // it meanwhile -- until a resume request for it (or the shutdown) arrives.
     DebuggerRuntime::Command onStopped(STRuntime& /*rt*/, proto::ProtoContext* ctx,
                                        const DebugFrame& frame,
-                                       const std::string& reason) override {
-        // The halted thread blocks below (on stopMu_ behind another stop and
-        // on the resume cv) for as long as the user takes. It does so in an
+                                       const StopInfo& info) override {
+        // The thread blocks below for as long as the user takes, in an
         // unmanaged region on its own context, opened before any lock so the
-        // locks are released before the region's exit can park. Nothing here
+        // locks are released before the region's exit can park. It leaves the
+        // region only to run an inspection task. Nothing else here
         // dereferences a ProtoObject: the frame's values are only copied as
-        // pointers and stay rooted in the stopped engine's slots.
-        proto::ProtoContext::UnmanagedScope unmanaged(ctx);
+        // pointers and stay rooted in the stopped engines' slots.
+        std::optional<proto::ProtoContext::UnmanagedScope> unmanaged;
+        unmanaged.emplace(ctx);
 
         // A line printed without a newline is still in stdio's buffer.
         std::fflush(stdout);
 
-        // Serialize concurrent stops (e.g. an actor on a worker thread). MVP:
-        // only one stop is processed at a time; a second halting thread waits
-        // here until the first resumes.
-        std::unique_lock<std::mutex> stopLk(stopMu_);
+        std::unique_lock<std::mutex> lk(sessionMu_);
+        if (shuttingDown_)
+            return DebuggerRuntime::Command::Continue;
+        ThreadRec& r = threadRec(info.threadId);
+        r.name        = info.threadName;
+        r.stopped     = true;
+        r.frame       = frame;
+        r.info        = info;
+        r.resumeReady = false;
+        ++inStop_;
+        lk.unlock();
 
+        json body = {
+            {"reason",            info.reason},
+            {"threadId",          info.threadId},
+            {"allThreadsStopped", false},
+        };
+        if (info.isException) {
+            body["description"] = info.description;
+            body["text"]        = info.description;
+        }
+        sendEvent("stopped", body);
+
+        lk.lock();
+        for (;;) {
+            r.cv.wait(lk, [&]{ return r.resumeReady || !r.tasks.empty(); });
+            if (r.resumeReady)
+                break;
+            // An inspection task: run it on this thread's own context, managed.
+            auto task = std::move(r.tasks.front());
+            r.tasks.pop_front();
+            lk.unlock();
+            unmanaged.reset();
+            task(ctx);
+            unmanaged.emplace(ctx);
+            lk.lock();
+        }
+        DebuggerRuntime::Command cmd = r.cmd;
+        r.stopped = false;
+        r.name    = r.baseName;
+        r.tasks.clear();
+        dropHandlesOf(r.id);
+        if (--inStop_ == 0)
+            stopsDrainedCv_.notify_all();
+        return cmd;
+    }
+
+    void onThreadEvent(int threadId, const std::string& name, bool started) override {
         {
             std::lock_guard<std::mutex> lk(sessionMu_);
-            stoppedFrame_  = frame;
-            haveFrame_     = true;
-            stopped_       = true;
-            resumeReady_   = false;
-            // F8-4: a new stop invalidates every handle from the previous
-            // one. Reset the frameId / variablesReference maps; they are
-            // repopulated lazily as stackTrace / scopes are requested.
-            frameTable_.clear();
-            varRefTable_.clear();
-            nextFrameId_  = 1;
-            nextVarRef_   = 1;
+            if (started) {
+                ThreadRec& r = threadRec(threadId);
+                r.baseName = name;
+                if (!r.stopped) r.name = name;
+            } else {
+                auto it = threads_.find(threadId);
+                if (it != threads_.end() && !it->second->stopped)
+                    threads_.erase(it);
+            }
+            if (terminatedSent_)
+                return;
         }
-        sendEvent("stopped", {
-            {"reason",            reason},
-            {"threadId",          1},
-            {"allThreadsStopped", true},
-        });
-
-        // Block until a resume request (continue/next/stepIn/stepOut) or
-        // disconnect signals us.
-        std::unique_lock<std::mutex> lk(sessionMu_);
-        resumeCv_.wait(lk, [&]{ return resumeReady_; });
-        stopped_   = false;
-        haveFrame_ = false;
-        return resumeCommand_;
+        sendEvent("thread", { {"reason", started ? "started" : "exited"},
+                              {"threadId", threadId} });
     }
 
 private:
+    // One thread of the debuggee, as the client sees it. Guarded by
+    // sessionMu_; owned by threads_ (stable address).
+    struct ThreadRec {
+        int                     id = 0;
+        std::string             baseName;
+        std::string             name;
+        bool                    stopped = false;
+        DebugFrame              frame;          // the stop's frame (valid while stopped)
+        StopInfo                info;           // why it stopped
+        bool                    resumeReady = false;
+        DebuggerRuntime::Command cmd = DebuggerRuntime::Command::Continue;
+        std::deque<std::function<void(proto::ProtoContext*)>> tasks;
+        std::condition_variable cv;
+    };
+
+    // Requires sessionMu_.
+    ThreadRec& threadRec(int id) {
+        auto& p = threads_[id];
+        if (!p) {
+            p = std::make_unique<ThreadRec>();
+            p->id = id;
+            p->baseName = p->name = (id == 1 ? "main" : "thread " + std::to_string(id));
+        }
+        return *p;
+    }
+
+    // Requires sessionMu_: forget the frame / variables handles of a thread
+    // that resumes.
+    void dropHandlesOf(int threadId) {
+        for (auto it = frameTable_.begin(); it != frameTable_.end(); )
+            it = (it->second.threadId == threadId) ? frameTable_.erase(it) : std::next(it);
+        for (auto it = varRefTable_.begin(); it != varRefTable_.end(); )
+            it = (it->second.threadId == threadId) ? varRefTable_.erase(it) : std::next(it);
+    }
+
+    // Runs `fn(ctx)` on stopped thread `threadId`, on its own context, and
+    // waits for it. False when that thread is not stopped, or when the task
+    // did not finish in time (it then still runs; its result is dropped).
+    bool runOnStoppedThread(int threadId, std::function<void(proto::ProtoContext*)> fn) {
+        struct Done {
+            std::mutex m;
+            std::condition_variable cv;
+            bool done = false;
+        };
+        auto done = std::make_shared<Done>();
+        {
+            std::lock_guard<std::mutex> lk(sessionMu_);
+            auto it = threads_.find(threadId);
+            if (it == threads_.end() || !it->second->stopped || it->second->resumeReady)
+                return false;
+            it->second->tasks.push_back([done, fn = std::move(fn)](proto::ProtoContext* ctx) {
+                try { fn(ctx); } catch (...) {}
+                {
+                    std::lock_guard<std::mutex> l(done->m);
+                    done->done = true;
+                }
+                done->cv.notify_all();
+            });
+            it->second->cv.notify_all();
+        }
+        // The wait blocks this thread, which owns rootCtx.
+        proto::ProtoContext::UnmanagedScope unmanaged(runtime_->rootCtx());
+        std::unique_lock<std::mutex> l(done->m);
+        return done->cv.wait_for(l, std::chrono::seconds(30), [&]{ return done->done; });
+    }
+
     // ----------------------------------------------------------------------
     // Returns true when the message loop should terminate.
     bool handleRequest(const json& req) {
@@ -169,11 +276,13 @@ private:
 
         // ---- F8-2: lifecycle skeleton -------------------------------------
         if (command == "initialize")       { handleInitialize(req);       return false; }
-        if (command == "disconnect")       { handleDisconnect(req);       return true;  }
+        if (command == "disconnect" || command == "terminate")
+                                           { handleDisconnect(req);       return true;  }
 
         // ---- F8-3: launch / breakpoints / session / stepping --------------
         if (command == "launch")           { handleLaunch(req);           return false; }
         if (command == "setBreakpoints")   { handleSetBreakpoints(req);   return false; }
+        if (command == "setExceptionBreakpoints") { handleSetExceptionBreakpoints(req); return false; }
         if (command == "configurationDone"){ handleConfigurationDone(req);return false; }
         if (command == "threads")          { handleThreads(req);          return false; }
         if (command == "continue" || command == "next" ||
@@ -181,12 +290,14 @@ private:
             handleResume(req, command);
             return false;
         }
+        if (command == "pause")            { handlePause(req);            return false; }
 
         // ---- F8-4: stackTrace, scopes, variables, evaluate ----------------
-        if (command == "stackTrace") { handleStackTrace(req); return false; }
-        if (command == "scopes")     { handleScopes(req);     return false; }
-        if (command == "variables")  { handleVariables(req);  return false; }
-        if (command == "evaluate")   { handleEvaluate(req);   return false; }
+        if (command == "stackTrace")    { handleStackTrace(req);    return false; }
+        if (command == "scopes")        { handleScopes(req);        return false; }
+        if (command == "variables")     { handleVariables(req);     return false; }
+        if (command == "evaluate")      { handleEvaluate(req);      return false; }
+        if (command == "exceptionInfo") { handleExceptionInfo(req); return false; }
 
         std::cerr << "[dap] unhandled command: " << command << '\n';
         sendResponse(req, /*success=*/true, json::object());
@@ -196,9 +307,42 @@ private:
     void handleInitialize(const json& req) {
         json caps = {
             {"supportsConfigurationDoneRequest", true},
+            {"supportsExceptionInfoRequest",     true},
+            {"exceptionBreakpointFilters", json::array({
+                json{{"filter", "raised"},
+                     {"label", "Raised Exceptions"},
+                     {"description", "Stop when an exception is signalled, before any handler runs."},
+                     {"default", false}},
+                json{{"filter", "uncaught"},
+                     {"label", "Uncaught Exceptions"},
+                     {"description", "Stop when an exception that no on:do: handler will catch is signalled, with the stack intact."},
+                     {"default", true}},
+            })},
         };
         sendResponse(req, /*success=*/true, caps);
         sendEvent("initialized", json::object());
+    }
+
+    // --- setExceptionBreakpoints --------------------------------------------
+    void handleSetExceptionBreakpoints(const json& req) {
+        const json& args = req.value("arguments", json::object());
+        unsigned bits = 0;
+        json verified = json::array();
+        auto add = [&](const std::string& f) {
+            if (f == "raised")        bits |= DebuggerRuntime::kFilterRaised;
+            else if (f == "uncaught") bits |= DebuggerRuntime::kFilterUncaught;
+            verified.push_back({ {"verified", f == "raised" || f == "uncaught"} });
+        };
+        if (args.contains("filters") && args["filters"].is_array())
+            for (const auto& f : args["filters"])
+                if (f.is_string()) add(f.get<std::string>());
+        if (args.contains("filterOptions") && args["filterOptions"].is_array())
+            for (const auto& o : args["filterOptions"])
+                add(o.value("filterId", ""));
+        exceptionFilters_ = bits;
+        if (runtime_)
+            runtime_->debugger().setExceptionFilters(bits);
+        sendResponse(req, /*success=*/true, { {"breakpoints", verified} });
     }
 
     // --- launch -------------------------------------------------------------
@@ -217,7 +361,7 @@ private:
         if (!fp) {
             sendOutput("stderr", "cannot open " + program + "\n");
             sendErrorResponse(req, "launch: cannot open program");
-            sendEvent("terminated", json::object());
+            sendTerminated();
             return;
         }
         // Read in chunks, without asking for the size: ftell answers a long,
@@ -239,7 +383,7 @@ private:
                                      std::to_string(e.column) + ": " + e.message + "\n");
             }
             sendErrorResponse(req, "launch: parse error");
-            sendEvent("terminated", json::object());
+            sendTerminated();
             return;
         }
         Compiler compiler;
@@ -248,7 +392,7 @@ private:
             for (const auto& s : compiler.errors())
                 sendOutput("stderr", "compile error: " + s + "\n");
             sendErrorResponse(req, "launch: compile error");
-            sendEvent("terminated", json::object());
+            sendTerminated();
             return;
         }
         module->setSourceName(program);
@@ -257,8 +401,9 @@ private:
         module_      = std::move(module);
         runtime_     = std::make_unique<STRuntime>();
         stopOnEntry_ = stopOnEntry;
-        runtime_->debugger().attach();
         runtime_->debugger().setFrontend(this);
+        runtime_->debugger().setExceptionFilters(exceptionFilters_);
+        runtime_->debugger().attach();
 
         // Re-resolve any breakpoints requested before the module existed.
         rearmAllBreakpoints();
@@ -277,7 +422,7 @@ private:
         }
         if (!debuggeeThread_) {
             sendErrorResponse(req, "launch: cannot start the debuggee thread");
-            sendEvent("terminated", json::object());
+            sendTerminated();
             return;
         }
 
@@ -303,6 +448,10 @@ private:
 
     // The debuggee thread entry point. `ctx` is the thread's own context.
     void debuggeeMain(proto::ProtoContext* ctx) {
+        // The script's own thread is DAP thread 1, "main": registered before
+        // any other thread can run script code.
+        runtime_->debugger().nameCurrentThread("main", ctx);
+
         // Gate: wait until `configurationDone` so breakpoints set between
         // `launch` and `configurationDone` are armed before the first
         // instruction runs. The wait is an unmanaged region.
@@ -310,32 +459,22 @@ private:
             proto::ProtoContext::UnmanagedScope unmanaged(ctx);
             std::unique_lock<std::mutex> lk(sessionMu_);
             configDoneCv_.wait(lk, [&]{ return configDone_ || shuttingDown_; });
-            if (shuttingDown_)
+            if (shuttingDown_) {
+                debuggeeDone_ = true;
+                debuggeeDoneCv_.notify_all();
                 return;
+            }
         }
 
         // stopOnEntry: stop once with reason "entry" before the first real
-        // instruction. We call the frontend directly with a synthetic frame
-        // at pc 0 of the top module.
+        // instruction, on a synthetic frame at pc 0 of the top module. Through
+        // the debugger, which applies the resume command to this thread.
         if (stopOnEntry_ && runtime_->debugger().attached()) {
             DebugFrame entryFrame;
             entryFrame.module = module_.get();
             entryFrame.pc     = 0;
-            // onStopped is called directly here (not via enterSession), so we
-            // must apply the resulting command/mode ourselves — otherwise a
-            // `stepIn` from the entry stop would leave the engine in Free mode.
-            DebuggerRuntime::Command cmd = onStopped(*runtime_, ctx, entryFrame, "entry");
-            auto& dbg = runtime_->debugger();
-            dbg.setCommand(cmd);
-            switch (cmd) {
-                case DebuggerRuntime::Command::Continue:
-                    dbg.setMode(DebuggerRuntime::Mode::Free);        break;
-                case DebuggerRuntime::Command::Step:
-                case DebuggerRuntime::Command::Next:
-                    dbg.setMode(DebuggerRuntime::Mode::SingleStep);  break;
-                case DebuggerRuntime::Command::Finish:
-                    dbg.setMode(DebuggerRuntime::Mode::RunToReturn); break;
-            }
+            entryFrame.line   = module_->lineForPc(0);
+            runtime_->debugger().enterSession(*runtime_, ctx, entryFrame, "entry");
         }
 
         int exitCode = 0;
@@ -359,8 +498,13 @@ private:
         stdio_.finish(ctx);                  // the script's output goes first
         if (!error.empty())
             sendOutput("stderr", error);
-        sendEvent("terminated", json::object());
+        sendTerminated();
         sendEvent("exited", { {"exitCode", exitCode} });
+        {
+            std::lock_guard<std::mutex> lk(sessionMu_);
+            debuggeeDone_ = true;
+        }
+        debuggeeDoneCv_.notify_all();
     }
 
     // --- setBreakpoints -----------------------------------------------------
@@ -398,21 +542,22 @@ private:
         sendResponse(req, /*success=*/true, { {"breakpoints", result} });
     }
 
-    // Rebuilds the BreakpointTable from every requested source's lines.
+    // Rebuilds the BreakpointTable from every requested source's lines, in
+    // one step: running threads never see it half built.
     void rearmAllBreakpoints() {
         if (!module_ || !runtime_)
             return;
-        auto& table = runtime_->debugger().breakpoints();
-        table.clear();
+        std::vector<std::pair<const BytecodeModule*, size_t>> entries;
         for (const auto& [path, lines] : requestedBreakpoints_) {
             (void)path;
             for (int line : lines) {
                 size_t pc = SIZE_MAX;
                 const BytecodeModule* m = resolveLineToModule(line, pc);
                 if (m)
-                    table.add(m, pc);
+                    entries.emplace_back(m, pc);
             }
         }
+        runtime_->debugger().breakpoints().assign(entries);
     }
 
     // Resolves a source line to the (sub-)module that owns an instruction on
@@ -459,15 +604,24 @@ private:
 
     // --- threads ------------------------------------------------------------
     void handleThreads(const json& req) {
-        // MVP: a single logical thread. protoST has worker threads, but the
-        // debugger models the top-level script flow as one logical thread.
-        sendResponse(req, /*success=*/true, {
-            {"threads", json::array({ json{{"id", 1}, {"name", "main"}} })},
-        });
+        json list = json::array();
+        {
+            std::lock_guard<std::mutex> lk(sessionMu_);
+            for (const auto& [id, r] : threads_)
+                list.push_back({ {"id", id}, {"name", r->name} });
+        }
+        // Before the script's thread is registered, show it anyway.
+        if (list.empty())
+            list.push_back({ {"id", 1}, {"name", "main"} });
+        sendResponse(req, /*success=*/true, { {"threads", list} });
     }
 
     // --- continue / next / stepIn / stepOut --------------------------------
+    // Acts on the request's thread only; the other stopped threads stay
+    // stopped.
     void handleResume(const json& req, const std::string& command) {
+        const json& args = req.value("arguments", json::object());
+        int threadId = args.value("threadId", 0);
         DebuggerRuntime::Command cmd = DebuggerRuntime::Command::Continue;
         if (command == "continue")      cmd = DebuggerRuntime::Command::Continue;
         else if (command == "next")     cmd = DebuggerRuntime::Command::Next;
@@ -476,26 +630,43 @@ private:
 
         {
             std::lock_guard<std::mutex> lk(sessionMu_);
-            resumeCommand_ = cmd;
-            resumeReady_   = true;
+            auto it = threads_.find(threadId);
+            if (it != threads_.end() && it->second->stopped) {
+                it->second->cmd         = cmd;
+                it->second->resumeReady = true;
+                it->second->cv.notify_all();
+            }
         }
-        resumeCv_.notify_all();
 
         if (command == "continue")
-            sendResponse(req, /*success=*/true, { {"allThreadsContinued", true} });
+            sendResponse(req, /*success=*/true, { {"allThreadsContinued", false} });
         else
             sendResponse(req, /*success=*/true, json::object());
     }
 
+    // --- pause --------------------------------------------------------------
+    // The thread stops at its next instruction. One blocked in native code
+    // (a wait, I/O) stops when it is back in the interpreter: the `stopped`
+    // event comes then.
+    void handlePause(const json& req) {
+        const json& args = req.value("arguments", json::object());
+        int threadId = args.value("threadId", 0);
+        if (runtime_)
+            runtime_->debugger().requestPause(threadId);
+        sendResponse(req, /*success=*/true, json::object());
+    }
+
     // --- F8-4: inspection ---------------------------------------------------
     //
-    // Handle scheme. Each stop assigns fresh integer handles:
-    //   * frameId  — identifies one DebugFrame in the snapshotted call stack;
-    //                used as `frameId` by scopes / evaluate.
-    //   * variablesReference — identifies an expandable "thing". MVP exposes
-    //                one kind: the Locals of a frame. 0 means not expandable.
-    // Both maps are cleared in onStopped; stale handles from a prior stop
-    // resolve to nothing and yield an empty response (VS Code tolerates it).
+    // Handle scheme. Every stackTrace / scopes call hands out fresh integer
+    // handles from counters shared by all threads, so a handle names one
+    // thread's frame unambiguously:
+    //   * frameId  — one DebugFrame of a stopped thread's call stack; used as
+    //                `frameId` by scopes / evaluate.
+    //   * variablesReference — the Locals of such a frame. 0 means not
+    //                expandable.
+    // A thread's handles are dropped when it resumes; a stale handle resolves
+    // to nothing and yields an empty response (VS Code tolerates it).
 
     // Basename of a path (last component after '/' or '\\').
     static std::string basename(const std::string& path) {
@@ -503,57 +674,40 @@ private:
         return p == std::string::npos ? path : path.substr(p + 1);
     }
 
-    // Standard ProtoObject -> display string, matching the -e / REPL / text
-    // debugger convention. BL-3: delegates to the shared protoST::formatValue
-    // helper so non-primitive objects render as "a ClassName" instead of
-    // "<obj>". The C++-only resolution path is safe to call while the engine
-    // is stopped (no bytecode runs, so no re-entrancy).
-    std::string formatValue(const proto::ProtoObject* obj) {
-        if (!runtime_) {
-            if (obj == nullptr || obj == PROTO_NONE) return "nil";
-            if (obj == PROTO_TRUE)  return "true";
-            if (obj == PROTO_FALSE) return "false";
-            return "an object";
-        }
-        return protoST::formatValue(*runtime_, runtime_->rootCtx(), obj);
-    }
-
     // --- stackTrace ---------------------------------------------------------
+    // Built from the stop's snapshot alone (no ProtoObject is touched), on
+    // this thread.
     void handleStackTrace(const json& req) {
         const json& args = req.value("arguments", json::object());
+        int threadId   = args.value("threadId", 0);
         int startFrame = args.value("startFrame", 0);
         int levels     = args.value("levels", 0);   // 0 == all
 
+        std::lock_guard<std::mutex> lk(sessionMu_);
         std::vector<DebugFrame> stack;
-        {
-            std::lock_guard<std::mutex> lk(sessionMu_);
-            if (haveFrame_) {
-                if (!stoppedFrame_.callStack.empty())
-                    stack = stoppedFrame_.callStack;       // oldest-first
-                else
-                    stack.push_back(stoppedFrame_);        // single-frame
-            }
+        auto it = threads_.find(threadId);
+        if (it != threads_.end() && it->second->stopped) {
+            const DebugFrame& top = it->second->frame;
+            if (!top.callStack.empty())
+                stack = top.callStack;             // oldest-first
+            else
+                stack.push_back(top);              // single-frame
         }
 
-        // DAP convention: frame 0 is the innermost (current) frame. The
-        // engine snapshot is oldest-first, so reverse it.
-        std::vector<const DebugFrame*> ordered;
-        for (auto it = stack.rbegin(); it != stack.rend(); ++it)
-            ordered.push_back(&*it);
-
         json frames = json::array();
-        int total = static_cast<int>(ordered.size());
+        int total = static_cast<int>(stack.size());
+        // DAP convention: frame 0 is the innermost (current) frame. The
+        // snapshot is oldest-first, so walk it backwards.
         for (int i = startFrame; i < total; ++i) {
             if (levels > 0 && static_cast<int>(frames.size()) >= levels)
                 break;
-            const DebugFrame& df = *ordered[static_cast<size_t>(i)];
+            const DebugFrame& df = stack[static_cast<size_t>(total - 1 - i)];
 
-            int frameId = nextFrameId_++;
-            frameTable_[frameId] = df;
+            int frameId = nextHandle_++;
+            frameTable_[frameId] = FrameRef{threadId, df};
 
             const BytecodeModule* mod = df.module;
             std::string srcPath = mod ? mod->sourceName() : std::string();
-            int line = mod ? mod->lineForPc(df.pc) : 0;
             std::string name = (mod && !mod->debugName().empty())
                 ? mod->debugName()
                 : ("frame " + std::to_string(i));
@@ -561,7 +715,7 @@ private:
             json frame = {
                 {"id",     frameId},
                 {"name",   name},
-                {"line",   line},
+                {"line",   df.line},
                 {"column", 1},
             };
             if (!srcPath.empty()) {
@@ -588,8 +742,8 @@ private:
         std::lock_guard<std::mutex> lk(sessionMu_);
         auto it = frameTable_.find(frameId);
         if (it != frameTable_.end()) {
-            int localsRef = nextVarRef_++;
-            varRefTable_[localsRef] = VarRef{VarRef::Locals, frameId};
+            int localsRef = nextHandle_++;
+            varRefTable_[localsRef] = VarRef{it->second.threadId, frameId};
             scopes.push_back({
                 {"name",               "Locals"},
                 {"variablesReference", localsRef},
@@ -600,37 +754,39 @@ private:
     }
 
     // --- variables ----------------------------------------------------------
+    // The values are formatted on the stopped thread that owns them.
     void handleVariables(const json& req) {
         const json& args = req.value("arguments", json::object());
         int ref = args.value("variablesReference", 0);
 
-        json vars = json::array();
+        int threadId = 0;
+        DebugFrame df;
         {
             std::lock_guard<std::mutex> lk(sessionMu_);
             auto rit = varRefTable_.find(ref);
-            if (rit != varRefTable_.end() && rit->second.kind == VarRef::Locals) {
+            if (rit != varRefTable_.end()) {
                 auto fit = frameTable_.find(rit->second.frameId);
                 if (fit != frameTable_.end()) {
-                    const DebugFrame& df = fit->second;
-                    const BytecodeModule* mod = df.module;
-                    for (size_t i = 0; i < df.locals.size(); ++i) {
-                        std::string name;
-                        if (mod && !mod->localName(i).empty())
-                            name = mod->localName(i);
-                        else if (i == 0)
-                            name = "self";       // method frame slot 0
-                        else
-                            name = "slot " + std::to_string(i);
-                        vars.push_back({
-                            {"name",               name},
-                            {"value",              formatValue(df.locals[i])},
-                            {"variablesReference", 0},
-                        });
-                    }
+                    threadId = fit->second.threadId;
+                    df       = fit->second.frame;
                 }
             }
         }
-        sendResponse(req, /*success=*/true, { {"variables", vars} });
+        auto vars = std::make_shared<json>(json::array());
+        if (threadId != 0) {
+            runOnStoppedThread(threadId, [this, vars, df](proto::ProtoContext* ctx) {
+                json out = json::array();
+                for (const FrameVariable& v : DebuggerRuntime::frameVariables(*runtime_, ctx, df)) {
+                    out.push_back({
+                        {"name",               v.name},
+                        {"value",              protoST::formatValue(*runtime_, ctx, v.value)},
+                        {"variablesReference", 0},
+                    });
+                }
+                *vars = std::move(out);
+            });
+        }
+        sendResponse(req, /*success=*/true, { {"variables", *vars} });
     }
 
     // True if `s` is a single bare identifier (letters/digits/underscore,
@@ -648,6 +804,9 @@ private:
     }
 
     // --- evaluate -----------------------------------------------------------
+    // Runs on the stopped thread that owns the frame (with the frame's named
+    // locals in scope); without a frame, on the first stopped thread at its
+    // innermost frame; with no thread stopped, on this thread.
     void handleEvaluate(const json& req) {
         const json& args = req.value("arguments", json::object());
         std::string expr = args.value("expression", "");
@@ -658,48 +817,100 @@ private:
             return;
         }
 
-        // Frame-aware fast path: a bare identifier that names a local slot of
-        // the requested frame resolves directly against that frame's snapshot.
-        // An expression compiled on the fly runs as its own module and cannot
-        // reach another module's slot-addressed locals, so without this a
-        // watch on an in-scope variable would fail. Bounded to the common
-        // watch/hover case (a single variable); compound expressions fall
-        // through to the general compile+run path.
-        if (isBareIdentifier(expr)) {
+        int threadId = 0;
+        DebugFrame df;
+        bool haveFrame = false;
+        {
             std::lock_guard<std::mutex> lk(sessionMu_);
             auto fit = frameTable_.find(frameId);
             if (fit != frameTable_.end()) {
-                const DebugFrame& df = fit->second;
-                const BytecodeModule* mod = df.module;
-                if (mod) {
-                    for (size_t i = 0; i < df.locals.size(); ++i) {
-                        if (mod->localName(i) == expr) {
-                            sendResponse(req, /*success=*/true, {
-                                {"result",             formatValue(df.locals[i])},
-                                {"variablesReference", 0},
-                            });
-                            return;
+                threadId  = fit->second.threadId;
+                df        = fit->second.frame;
+                haveFrame = true;
+            } else {
+                for (const auto& [id, r] : threads_) {
+                    if (r->stopped) {
+                        threadId = id;
+                        df = r->frame;
+                        if (!df.callStack.empty()) {
+                            DebugFrame inner = df.callStack.back();
+                            df = std::move(inner);
                         }
+                        haveFrame = df.module != nullptr;
+                        break;
                     }
                 }
             }
         }
 
-        // General path: parse -> compile -> run -> format, the same pipeline
-        // the `-d` text debugger's `print` command uses (shared helper).
-        std::string result;
-        // Runs on the DAP loop thread, which owns rootCtx.
-        bool ok = DebuggerRuntime::evaluateExpression(
-            *runtime_, runtime_->rootCtx(), expr, result);
-        if (!ok) {
-            sendErrorResponse(req, result);
+        struct Result { bool ok = false; std::string text = "evaluate: the thread did not answer"; };
+        auto result = std::make_shared<Result>();
+        auto evaluate = [this, result, expr, df, haveFrame](proto::ProtoContext* ctx) {
+            // A bare identifier naming a variable of the frame resolves
+            // directly against the frame (`self` included).
+            if (haveFrame && isBareIdentifier(expr) && df.module) {
+                for (const FrameVariable& v : DebuggerRuntime::frameVariables(*runtime_, ctx, df)) {
+                    if (v.name == expr) {
+                        result->text = protoST::formatValue(*runtime_, ctx, v.value);
+                        result->ok = true;
+                        return;
+                    }
+                }
+            }
+            std::string out;
+            result->ok = DebuggerRuntime::evaluateExpression(
+                *runtime_, ctx, expr, out, haveFrame ? &df : nullptr);
+            result->text = out;
+        };
+        if (threadId == 0 || !runOnStoppedThread(threadId, evaluate)) {
+            if (threadId != 0) {
+                sendErrorResponse(req, "evaluate: the thread is not stopped or did not answer");
+                return;
+            }
+            // No thread stopped: run on this thread, which owns rootCtx.
+            evaluate(runtime_->rootCtx());
+        }
+        if (!result->ok) {
+            sendErrorResponse(req, result->text);
             return;
         }
         // sendResponse already wraps the argument in the message's `body`;
         // pass the evaluate body fields directly (no extra nesting).
         sendResponse(req, /*success=*/true, {
-            {"result",             result},
+            {"result",             result->text},
             {"variablesReference", 0},
+        });
+    }
+
+    // --- exceptionInfo ------------------------------------------------------
+    void handleExceptionInfo(const json& req) {
+        const json& args = req.value("arguments", json::object());
+        int threadId = args.value("threadId", 0);
+        StopInfo info;
+        bool found = false;
+        {
+            std::lock_guard<std::mutex> lk(sessionMu_);
+            auto it = threads_.find(threadId);
+            if (it != threads_.end() && it->second->stopped && it->second->info.isException) {
+                info  = it->second->info;
+                found = true;
+            }
+        }
+        if (!found) {
+            sendErrorResponse(req, "exceptionInfo: the thread is not stopped on an exception");
+            return;
+        }
+        json details = {
+            {"typeName", info.exceptionClass},
+            {"message",  info.exceptionMessage},
+        };
+        if (!info.stackText.empty())
+            details["stackTrace"] = info.stackText;
+        sendResponse(req, /*success=*/true, {
+            {"exceptionId", info.exceptionClass},
+            {"description", info.description},
+            {"breakMode",   info.breakMode},
+            {"details",     details},
         });
     }
 
@@ -707,28 +918,60 @@ private:
     void handleDisconnect(const json& req) {
         sendResponse(req, /*success=*/true, json::object());
         exitCode_ = 0;
-        shutdownDebuggee();
+        shutdownDebuggee(/*endStuckProgram=*/true);
     }
 
-    // Detach the debugger, release any parked debuggee thread, and join it.
-    void shutdownDebuggee() {
+    // Detach the debugger, release every stopped thread, and join the
+    // debuggee. With `endStuckProgram` (a disconnect: the launched program
+    // ends with the session) a program still running a few seconds after its
+    // threads were released -- an endless loop -- ends with the adapter's
+    // process instead of hanging it.
+    void shutdownDebuggee(bool endStuckProgram = false) {
         if (shutdownDone_)
             return;
         shutdownDone_ = true;
 
-        if (runtime_)
+        if (runtime_) {
             runtime_->debugger().detach();   // run free to completion
+            // No thread event, no new stop reaches this server any more.
+            runtime_->debugger().setFrontend(nullptr);
+        }
 
         {
             std::lock_guard<std::mutex> lk(sessionMu_);
             shuttingDown_ = true;
             configDone_   = true;            // open the gate if still closed
-            // If the debuggee is parked in onStopped, release it to continue.
-            resumeCommand_ = DebuggerRuntime::Command::Continue;
-            resumeReady_   = true;
+            // Release every thread parked in onStopped.
+            for (auto& [id, r] : threads_) {
+                (void)id;
+                r->cmd         = DebuggerRuntime::Command::Continue;
+                r->resumeReady = true;
+                r->cv.notify_all();
+            }
         }
         configDoneCv_.notify_all();
-        resumeCv_.notify_all();
+
+        if (runtime_) {
+            // Wait (bounded) until the released threads are out of
+            // onStopped: they still touch this server's state on the way.
+            proto::ProtoContext::UnmanagedScope unmanaged(runtime_->rootCtx());
+            std::unique_lock<std::mutex> lk(sessionMu_);
+            stopsDrainedCv_.wait_for(lk, std::chrono::seconds(10), [&]{ return inStop_ == 0; });
+        }
+
+        if (endStuckProgram && debuggeeThread_ && runtime_) {
+            bool done;
+            {
+                proto::ProtoContext::UnmanagedScope unmanaged(runtime_->rootCtx());
+                std::unique_lock<std::mutex> lk(sessionMu_);
+                done = debuggeeDoneCv_.wait_for(lk, std::chrono::seconds(3),
+                                                [&]{ return debuggeeDone_; });
+            }
+            if (!done) {
+                std::fflush(nullptr);
+                std::_Exit(0);
+            }
+        }
 
         if (debuggeeThread_ && runtime_) {
             // The join blocks this thread (which owns rootCtx) while the
@@ -776,6 +1019,14 @@ private:
         transport_.writeMessage(ev);
     }
 
+    void sendTerminated() {
+        {
+            std::lock_guard<std::mutex> lk(sessionMu_);
+            terminatedSent_ = true;
+        }
+        sendEvent("terminated", json::object());
+    }
+
     void sendOutput(const std::string& category, const std::string& text) {
         sendEvent("output", { {"category", category}, {"output", text} });
     }
@@ -794,34 +1045,37 @@ private:
     const proto::ProtoThread*       debuggeeThread_ = nullptr;
     bool                            stopOnEntry_  = false;
     bool                            shutdownDone_ = false;
+    unsigned                        exceptionFilters_ = 0;   // until launch
 
     // Breakpoints requested by the client, keyed by source path. setBreakpoints
     // replaces a source's list; the whole BreakpointTable is rebuilt from this.
     std::unordered_map<std::string, std::vector<int>> requestedBreakpoints_;
 
-    // Shared state between the DAP loop thread and the debuggee thread.
+    // Shared state between the DAP loop thread and the script threads.
     std::mutex                 sessionMu_;
     std::condition_variable    configDoneCv_;   // configurationDone gate
-    std::condition_variable    resumeCv_;       // resume handshake
-    std::mutex                 stopMu_;         // serialize concurrent stops
-    bool                       configDone_   = false;
-    bool                       shuttingDown_ = false;
-    bool                       stopped_      = false;
-    bool                       resumeReady_  = false;
-    bool                       haveFrame_    = false;
-    DebuggerRuntime::Command   resumeCommand_ = DebuggerRuntime::Command::Continue;
-    DebugFrame                 stoppedFrame_;   // F8-4 reads this for inspection
+    std::condition_variable    stopsDrainedCv_; // inStop_ reached 0
+    std::condition_variable    debuggeeDoneCv_; // debuggeeDone_ set
+    bool                       debuggeeDone_   = false;
+    bool                       configDone_     = false;
+    bool                       shuttingDown_   = false;
+    bool                       terminatedSent_ = false;
+    int                        inStop_         = 0;   // threads inside onStopped
+    std::map<int, std::unique_ptr<ThreadRec>> threads_;   // by DAP thread id
 
     // --- F8-4: inspection handle maps --------------------------------------
-    // Rebuilt every stop (cleared in onStopped). Guarded by sessionMu_.
-    struct VarRef {
-        enum Kind { Locals } kind;
-        int                  frameId;   // which frame's locals
+    // Guarded by sessionMu_. Entries of a thread are dropped when it resumes.
+    struct FrameRef {
+        int        threadId = 0;
+        DebugFrame frame;
     };
-    std::unordered_map<int, DebugFrame> frameTable_;    // frameId  -> frame
-    std::unordered_map<int, VarRef>     varRefTable_;   // varRef   -> thing
-    int                                 nextFrameId_ = 1;
-    int                                 nextVarRef_  = 1;
+    struct VarRef {
+        int threadId = 0;
+        int frameId  = 0;    // whose locals
+    };
+    std::unordered_map<int, FrameRef> frameTable_;    // frameId -> frame
+    std::unordered_map<int, VarRef>   varRefTable_;   // varRef  -> locals
+    int                               nextHandle_ = 1;
 };
 
 } // namespace

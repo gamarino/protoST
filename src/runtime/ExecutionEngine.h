@@ -39,6 +39,18 @@ public:
     // "  at Class>>selector (file:line)" lines (at most maxFrames).
     static std::string describeActiveStack(std::size_t maxFrames);
 
+    // The debugger's view of the calling thread: every frame of every live
+    // engine of runtime `rt` on this thread, oldest first, as one DebugFrame
+    // whose callStack holds them all and whose own fields mirror the innermost
+    // frame. `innermostAtInstruction` is true for a stop before an instruction
+    // (breakpoint, step): the innermost frame's line is the line of its pc.
+    // Every other frame -- and the innermost one for a stop inside a send (an
+    // exception, a halt) -- is past the send in progress, whose line it shows.
+    static DebugFrame snapshotThreadStack(const STRuntime& rt, bool innermostAtInstruction);
+    // The number of frames of `rt`'s engines on this thread: the call depth the
+    // debugger's step over / step out compare.
+    static int threadFrameDepth(const STRuntime& rt);
+
     explicit ExecutionEngine(STRuntime& rt);
     ~ExecutionEngine();
 

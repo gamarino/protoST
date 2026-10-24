@@ -684,6 +684,9 @@ ExecutionEngine::makeDebugFrame(const Frame& f) const {
     DebugFrame d;
     d.module = f.m;
     d.pc     = f.pc;
+    d.line   = f.m ? f.m->lineForPc(f.pc) : 0;
+    d.self   = getSelf(f);
+    d.captured = getCaptured(f);
     d.stack.reserve(f.sp);
     for (unsigned int i = 0; i < f.sp; ++i)
         d.stack.push_back(ctx_->getAutomaticLocal(opStackBase(f) + i));
@@ -693,24 +696,42 @@ ExecutionEngine::makeDebugFrame(const Frame& f) const {
     return d;
 }
 
-// F8-4: snapshot the whole `frames_` stack. The top-level DebugFrame mirrors
-// the innermost frame (so single-frame consumers are unaffected); its
-// `callStack` carries every frame oldest-first, current frame last, each with
-// its own frameDepth set to its index in the stack.
+// F8-4: the stack at a halt. The debugger's stops all use
+// snapshotThreadStack, which also sees the engines a block runs in.
 DebugFrame
 ExecutionEngine::makeDebugStack() const {
-    DebugFrame top;
-    if (frames_.empty())
-        return top;
-    top = makeDebugFrame(frames_.back());
-    top.callStack.reserve(frames_.size());
-    for (size_t i = 0; i < frames_.size(); ++i) {
-        DebugFrame d = makeDebugFrame(frames_[i]);
-        d.frameDepth = static_cast<int>(i);
-        top.callStack.push_back(std::move(d));
+    return snapshotThreadStack(rt_, /*innermostAtInstruction=*/false);
+}
+
+DebugFrame
+ExecutionEngine::snapshotThreadStack(const STRuntime& rt, bool innermostAtInstruction) {
+    std::vector<DebugFrame> all;
+    for (ExecutionEngine* e : g_liveEngines) {
+        if (&e->rt_ != &rt) continue;
+        for (const Frame& f : e->frames_) {
+            DebugFrame d = e->makeDebugFrame(f);
+            // A frame below the innermost is past the send it is in.
+            if (f.m && f.pc >= kInstrSize) d.line = f.m->lineForPc(f.pc - kInstrSize);
+            d.frameDepth = static_cast<int>(all.size());
+            all.push_back(std::move(d));
+        }
     }
-    top.frameDepth = static_cast<int>(frames_.size()) - 1;
+    if (all.empty())
+        return DebugFrame{};
+    DebugFrame& inner = all.back();
+    if (innermostAtInstruction && inner.module)
+        inner.line = inner.module->lineForPc(inner.pc);
+    DebugFrame top = inner;           // the top-level fields mirror the innermost
+    top.callStack = std::move(all);
     return top;
+}
+
+int
+ExecutionEngine::threadFrameDepth(const STRuntime& rt) {
+    int n = 0;
+    for (ExecutionEngine* e : g_liveEngines)
+        if (&e->rt_ == &rt) n += static_cast<int>(e->frames_.size());
+    return n;
 }
 
 // S15: see the contract on the declaration in ExecutionEngine.h.
@@ -837,16 +858,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         Frame& f__ = frames_.back();                                            \
         const auto& bytes__ = f__.m->bytes();                                   \
         if (f__.pc + 1 >= bytes__.size()) goto L_OFF_END;                       \
-        if (dbg_.attached()) {                                        \
-            auto dbgMode__ = dbg_.mode();                             \
-            if (dbgMode__ != DebuggerRuntime::Mode::Free) {                     \
-                dbg_.enterSession(rt_, ctx_, makeDebugStack(), "step");     \
-            }                                                                   \
-            if (dbg_.breakpoints().isSet(f__.m, f__.pc)) {            \
-                dbg_.enterSession(rt_, ctx_, makeDebugStack(),              \
-                                            "breakpoint");                      \
-            }                                                                   \
-        }                                                                       \
+        if (dbg_.attached())                                                    \
+            dbg_.onInstruction(rt_, ctx_, f__.m, f__.pc);                       \
         op  = static_cast<Op>(bytes__[f__.pc]);                                 \
         arg = bytes__[f__.pc + 1];                                              \
         f__.pc += kInstrSize;                                                   \
@@ -909,24 +922,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             continue;
         }
 
-        // F2 single-step support: if the debugger is attached and in a
-        // non-Free mode, enter the session BEFORE each instruction. The
-        // session may flip mode back to Free (e.g. user typed 'c'), in
-        // which case subsequent instructions run at full speed.
-        // Calling enterSession directly (rather than throwing Halt) avoids
-        // the cost of unwinding the C++ stack on every step.
-        auto dbgMode = dbg_.mode();
-        if (dbg_.attached() && dbgMode != DebuggerRuntime::Mode::Free) {
-            dbg_.enterSession(rt_, ctx_, makeDebugStack(), "step");
-            // Session may have updated mode (e.g. user typed 'c'); fall
-            // through to dispatch the next instruction.
-        }
-
-        // F2 location breakpoint: halt BEFORE executing the instruction at pc.
-        if (dbg_.attached() && dbg_.breakpoints().isSet(f.m, f.pc)) {
-            dbg_.enterSession(rt_, ctx_, makeDebugStack(),
-                                        "breakpoint");
-        }
+        // F2: the debugger's per-instruction hook -- a breakpoint, a step or
+        // a pause of this thread stops here, BEFORE the instruction at pc
+        // runs. One relaxed load when no debugger is attached.
+        if (dbg_.attached())
+            dbg_.onInstruction(rt_, ctx_, f.m, f.pc);
 
         // BL-2: wide-operand decode. An instruction is one or more EXTEND
         // prefix words followed by the real opcode word. Each EXTEND carries

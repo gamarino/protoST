@@ -8,7 +8,9 @@
 #      stopped where it was; each is continued; the program completes.
 #   2. pause: `pause` of the busy main thread stops it inside its loop; an
 #      evaluate on it changes the loop's condition; continue ends the loop.
-#   3. gc: a worker stays stopped while the main thread allocates far past a
+#   3. disconnect: a disconnect while a thread is stopped and the program
+#      loops forever ends the session.
+#   4. gc: a worker stays stopped while the main thread allocates far past a
 #      hard heap ceiling (so it can only finish if collections run while the
 #      worker is stopped); afterwards the stopped worker's locals are intact.
 set -euo pipefail
@@ -76,6 +78,7 @@ EOF
 
 cat > "$WORK/driver.py" <<'PYEOF'
 import sys, time
+sys.dont_write_bytecode = True   # no __pycache__ in the source tree
 sys.path.insert(0, sys.argv[1])
 from dap_client import DapClient
 
@@ -164,6 +167,22 @@ try:
         rc = c.finish(timeout=60)
         check("stopped spinning" in c.output_text(), "loop ended")
         check(rc == 0, "exit %r" % rc)
+    elif case == "disconnect":
+        # A disconnect while the program loops forever and a thread is
+        # stopped: the session ends anyway.
+        prog = path("pause.st")
+        c.start(prog)
+        check(wait_for(lambda: "spinning" in c.output_text()), "the loop started")
+        n_events = len(c.events)
+        c.request("pause", {"threadId": 1})
+        c.stopped(timeout=30, start=n_events)
+        c.request("disconnect", {"terminateDebuggee": True})
+        t0 = time.time()
+        try:
+            c.p.wait(timeout=30)
+        except Exception:
+            check(False, "the adapter did not end after disconnect")
+        check(time.time() - t0 < 30, "ended")
     elif case == "gc":
         prog = path("gc.st")
         c.start(prog, breakpoints=[7])
@@ -192,5 +211,6 @@ PYEOF
 export PROTOST_WORKERS=4
 "${PYTHON:-python3}" "$WORK/driver.py" "$HERE" "$PROTOST" "$WORK" two
 "${PYTHON:-python3}" "$WORK/driver.py" "$HERE" "$PROTOST" "$WORK" pause
+"${PYTHON:-python3}" "$WORK/driver.py" "$HERE" "$PROTOST" "$WORK" disconnect
 PROTOCORE_HEAP_LIMIT_CELLS=400000 "${PYTHON:-python3}" "$WORK/driver.py" "$HERE" "$PROTOST" "$WORK" gc
 echo OK

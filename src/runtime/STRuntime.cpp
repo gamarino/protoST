@@ -984,6 +984,8 @@ void STRuntime::workerLoop(proto::ProtoContext* ctx) {
             1, std::memory_order_relaxed) % kMaxWorkerStatsSlots;
     }
     const int wid = t_workerStatsId;
+    // The name the debugger shows for this thread, when it runs script code.
+    DebuggerRuntime::setThreadBaseName("worker " + std::to_string(wid + 1));
     while (true) {
         // F6 v6 (2026-05-23 night): pool-pause gate. When
         // STRuntime::stopProcessing has flipped `processingPaused`, no
