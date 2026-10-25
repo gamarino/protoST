@@ -56,7 +56,7 @@ syntax highlighting. Package and install it:
 ```bash
 cd editor-integration/vscode
 npx @vscode/vsce@3.2.1 package --skip-license
-code --install-extension protost-debug-0.5.0.vsix
+code --install-extension protost-debug-0.5.1.vsix
 ```
 
 See `editor-integration/vscode/README.md` for the symlink alternative.

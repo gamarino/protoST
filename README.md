@@ -393,7 +393,7 @@ stops alone while the others keep running.
    ```bash
    cd editor-integration/vscode
    npx @vscode/vsce@3.2.1 package --skip-license
-   code --install-extension protost-debug-0.5.0.vsix
+   code --install-extension protost-debug-0.5.1.vsix
    ```
 
    Then run **Developer: Reload Window** in VS Code.

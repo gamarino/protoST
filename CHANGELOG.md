@@ -5,6 +5,21 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+- **VS Code extension 0.5.1: integration tests, and two launch fixes they
+  found.** `editor-integration/vscode/test/` runs the extension in a real VS
+  Code Extension Development Host (`npm install && npm test`; the extension
+  README's "Testing the extension"): a local launch with a breakpoint, stack,
+  a local and stdout; F5 without a launch.json; the executable lookup; a
+  remote launch through WSL with pathMappings; the refusal without them; the
+  `raised` exception filter; the launch schema and snippets. CI runs the
+  local ones on Linux under xvfb. Fixed: a refused launch (no `program`, a
+  bad `remote`, `remote` without `pathMappings`) waited for the user to close
+  the error notification, so the launch stayed pending as long as it was not
+  dismissed; it now ends at once. A `protost.path` naming a file that does
+  not exist is refused with a message naming the setting, instead of a bare
+  spawn error. The language's `firstLine` pattern (`^#!.*\bprotost\b`) was
+  written with JSON `\b` escapes, which are backspace characters, so a
+  `#!...protost` first line never selected the language; it is `\\b` now.
 - **Windows: the REPL can be interrupted when it was started with Ctrl-C
   ignored.** A process started in a new process group (ctest, a background
   start, some IDE terminals) inherits "ignore Ctrl-C", and no handler then sees

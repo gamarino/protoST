@@ -39,3 +39,8 @@ Testing/
 
 # Local working notes (not part of the published documentation)
 /tasks/
+
+# VS Code extension tests (editor-integration/vscode: npm install, npm test)
+editor-integration/vscode/node_modules/
+editor-integration/vscode/.vscode-test/
+editor-integration/vscode/*.vsix

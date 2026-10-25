@@ -25,8 +25,31 @@ function defaultInstallPath() {
   return path.join(os.homedir(), ".local", "bin", "protost");
 }
 
+function configuredPath() {
+  return vscode.workspace.getConfiguration("protost").get("path");
+}
+
+// What is wrong with the `protost.path` setting, or null: it names a file
+// (not a bare command looked up in PATH) that does not exist. Checked before
+// the launch, so the user reads which setting is wrong instead of a spawn
+// error.
+function configuredPathProblem() {
+  const configured = configuredPath();
+  if (!configured || !/[\\/]/.test(configured) || fs.existsSync(configured)) return null;
+  return `protoST: the protost.path setting is "${configured}", which does not exist. ` +
+    "Fix it, or clear it to use the default install location or protost from PATH.";
+}
+
+// Shows a message and aborts the launch, without waiting for the user to
+// close the message: a launch that waited would stay pending for as long as
+// the notification is not dismissed.
+function refuse(kind, message) {
+  vscode.window[kind](message);
+  return undefined;
+}
+
 function protostCommand() {
-  const configured = vscode.workspace.getConfiguration("protost").get("path");
+  const configured = configuredPath();
   if (configured) return configured;
   const installed = defaultInstallPath();
   return fs.existsSync(installed) ? installed : "protost";
@@ -46,25 +69,24 @@ const configurationProvider = {
       }
     }
     if (!config.program) {
-      return vscode.window
-        .showInformationMessage("protoST: open a .st file or set 'program' in launch.json.")
-        .then(() => undefined);
+      return refuse("showInformationMessage", "protoST: open a .st file or set 'program' in launch.json.");
     }
     if (config.remote) {
       const cmd = config.remote.command;
       if (!Array.isArray(cmd) || cmd.length === 0 || cmd.some((a) => typeof a !== "string")) {
-        return vscode.window
-          .showErrorMessage("protoST: 'remote.command' must be a non-empty array of strings, " +
-                            "e.g. [\"ssh\", \"-T\", \"user@host\"] or [\"wsl\", \"-d\", \"Ubuntu-24.04\", \"--\"].")
-          .then(() => undefined);
+        return refuse("showErrorMessage",
+          "protoST: 'remote.command' must be a non-empty array of strings, " +
+          "e.g. [\"ssh\", \"-T\", \"user@host\"] or [\"wsl\", \"-d\", \"Ubuntu-24.04\", \"--\"].");
       }
       if (!Array.isArray(config.pathMappings) || config.pathMappings.length === 0) {
-        return vscode.window
-          .showErrorMessage("protoST: a 'remote' launch needs 'pathMappings': " +
-                            "[{\"localRoot\": \"${workspaceFolder}\", \"remoteRoot\": \"<the same folder on the remote side>\"}]. " +
-                            "protost runs on the other machine and opens 'program' and the breakpoints' files there.")
-          .then(() => undefined);
+        return refuse("showErrorMessage",
+          "protoST: a 'remote' launch needs 'pathMappings': " +
+          "[{\"localRoot\": \"${workspaceFolder}\", \"remoteRoot\": \"<the same folder on the remote side>\"}]. " +
+          "protost runs on the other machine and opens 'program' and the breakpoints' files there.");
       }
+    } else {
+      const problem = configuredPathProblem();
+      if (problem) return refuse("showErrorMessage", problem);
     }
     return config;
   },

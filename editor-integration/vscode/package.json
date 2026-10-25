@@ -2,7 +2,7 @@
   "name": "protost-debug",
   "displayName": "protoST",
   "description": "protoST (.st) language support: syntax highlighting and debugging via the protost --dap Debug Adapter Protocol adapter.",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "publisher": "protost-placeholder",
   "engines": {
     "vscode": "^1.66.0"
@@ -43,7 +43,7 @@
           ".st"
         ],
         "configuration": "./language-configuration.json",
-        "firstLine": "^#!.*\bprotost\b"
+        "firstLine": "^#!.*\\bprotost\\b"
       }
     ],
     "breakpoints": [
@@ -218,5 +218,12 @@
     "type": "git",
     "url": "https://github.com/gamarino/protoST"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "scripts": {
+    "test": "node ./test/runTest.js"
+  },
+  "devDependencies": {
+    "@vscode/test-electron": "2.5.2",
+    "mocha": "10.8.2"
+  }
 }
