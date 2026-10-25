@@ -126,12 +126,11 @@ namespace {
 }
 // Kept out of line so that `push`, on every instruction's path, stays small.
 #if defined(_MSC_VER)
-__declspec(noinline)
+[[noreturn]] __declspec(noinline) void signalStackOverflow(
 #else
-__attribute__((noinline, cold))
+[[noreturn]] __attribute__((noinline, cold)) void signalStackOverflow(
 #endif
-[[noreturn]] void signalStackOverflow(protoST::STRuntime& rt, proto::ProtoContext* ctx,
-                         unsigned int slots) {
+        protoST::STRuntime& rt, proto::ProtoContext* ctx, unsigned int slots) {
     signalCatchable(rt, ctx, "operand stack overflow (" + std::to_string(slots) + " slots)");
 }
 } // namespace
