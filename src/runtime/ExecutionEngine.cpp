@@ -5,18 +5,17 @@
 //   SEND is non-recursive (F6 v3 A2: handled inline in this engine by
 //   pushing a Frame) and therefore yieldable from inside the block body.
 //
-//   Block invocation via primitives that take the block as an argument
-//   and evaluate it internally — `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:`,
-//   `whileTrue:`, `thenDo:`, `catch:` — currently goes through
-//   block_prims.cpp::invokeBlock, which spins up a fresh recursive
-//   ExecutionEngine on the C++ stack. A `Future>>wait` inside such a
-//   primitive-evaluated block will block its worker thread the F6 v2 way
+//   The compiler inlines `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:`,
+//   `whileTrue:`, `whileFalse:` and `to:do:` when their arguments are
+//   literal blocks (Compiler::tryEmitInlinedControl), and compiles
+//   `doYielding:` to a loop of `value:` sends: those bodies run in this
+//   engine's frames and are yieldable. The other forms -- the same
+//   selectors with a block in a variable, `do:`, `thenDo:`, `catch:` and
+//   every other primitive that takes a block and evaluates it internally --
+//   go through block_prims.cpp::invokeBlock, which spins up a fresh
+//   recursive ExecutionEngine on the C++ stack. A `Future>>wait` inside
+//   such a primitive-evaluated block blocks its worker thread the F6 v2 way
 //   and is NOT cooperatively yieldable.
-//
-//   The common digital-twin patterns (sequential statements with `wait`
-//   and a direct `[ ... ] value`) are fully cooperative; loops and
-//   conditionals containing `wait` are not. Lifting those primitives into
-//   the engine is future work.
 #include "ExecutionEngine.h"
 #include "runtime/PrimitiveMarker.h"
 
@@ -180,11 +179,10 @@ inline proto::proto_ulong nextFrameId() {
 //   referenced by PUSH_LOCAL / STORE_LOCAL, take +1, and floor it at the
 //   module's declared argCount and a small minimum. The legacy engine grew
 //   `locals` lazily via ensureLocal; this pre-computes the same ceiling.
-// maxStack: a fixed conservative bound. Smalltalk method/block bodies in
-//   this language are small; 48 operand slots is far past any real depth
-//   (the legacy engine merely `reserve`d 64 and grew on demand).
+// maxStack: the deepest point of the module's code, from the stack effect of
+//   each instruction, floored at 48 slots
+//   (BytecodeModule::operandStackCapacity).
 constexpr unsigned int kMinLocals    = 4;
-constexpr unsigned int kFrameMaxStk  = 48;
 
 // F6 v3 E3: thread-local high-water mark into the engine context's
 // automaticLocals. A ProtoContext is per-thread, but several ExecutionEngines
@@ -262,11 +260,11 @@ inline unsigned int computeLocalCount(const BytecodeModule& m, unsigned int argc
     return std::max(m.cachedLocalCount(argc), kMinLocals);
 }
 
-// Operand-stack capacity of a frame: the fixed bound plus the elements the
-// module's largest brace array pushes (`{…}` with 49+ elements overflowed
-// the fixed 48 slots).
+// Operand-stack capacity of a frame: the module's deepest point, floored at
+// 48 slots. A brace array of 49+ elements and an expression nested 49+ levels
+// deep both overflowed the fixed 48 slots frames had before.
 inline unsigned int computeMaxStack(const BytecodeModule& m) {
-    return kFrameMaxStk + m.cachedExtraOperandStack();
+    return m.operandStackCapacity();
 }
 
 } // namespace
@@ -332,8 +330,12 @@ ExecutionEngine::setCaptured(const Frame& f, const proto::ProtoObject* v) {
 }
 void
 ExecutionEngine::push(Frame& f, const proto::ProtoObject* v) {
+    // The compiler's code never gets here: frames are sized from the deepest
+    // point of their module. A hand-built module can, and then it is an
+    // ordinary catchable Error, not a C++ exception past every handler.
     if (f.sp >= f.maxStack)
-        throw std::runtime_error("engine operand stack overflow");
+        signalCatchable(rt_, ctx_, "operand stack overflow (" +
+                        std::to_string(f.maxStack) + " slots)");
     ctx_->setAutomaticLocal(opStackBase(f) + f.sp, v);
     ++f.sp;
 }
@@ -758,7 +760,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     // highest slot referenced). A slot index past localCount is a compiler /
     // sizing bug; reject it rather than silently aliasing another frame's
     // region.
-    auto checkLocal = [](const Frame& f, uint8_t slot) {
+    auto checkLocal = [](const Frame& f, unsigned int slot) {
         if (slot >= f.localCount)
             throw std::runtime_error("engine local slot out of range");
     };
@@ -801,14 +803,12 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
 #if PROTOST_THREADED_DISPATCH
     void* labels[256];
     for (int i__ = 0; i__ < 256; ++i__) labels[i__] = &&L_BAD_OP;
-    labels[static_cast<unsigned int>(Op::NOP)]              = &&L_NOP;
     labels[static_cast<unsigned int>(Op::PUSH_CONST)]       = &&L_PUSH_CONST;
     labels[static_cast<unsigned int>(Op::PUSH_LOCAL)]       = &&L_PUSH_LOCAL;
     labels[static_cast<unsigned int>(Op::STORE_LOCAL)]      = &&L_STORE_LOCAL;
     labels[static_cast<unsigned int>(Op::DUP)]              = &&L_DUP;
     labels[static_cast<unsigned int>(Op::POP)]              = &&L_POP;
     labels[static_cast<unsigned int>(Op::PUSH_SELF)]        = &&L_PUSH_SELF;
-    labels[static_cast<unsigned int>(Op::PUSH_SUPER)]       = &&L_PUSH_SUPER;
     labels[static_cast<unsigned int>(Op::PUSH_NIL)]         = &&L_PUSH_NIL;
     labels[static_cast<unsigned int>(Op::PUSH_TRUE)]        = &&L_PUSH_TRUE;
     labels[static_cast<unsigned int>(Op::PUSH_FALSE)]       = &&L_PUSH_FALSE;
@@ -832,7 +832,6 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     labels[static_cast<unsigned int>(Op::BIN_INT_EQ)]       = &&L_BIN_INT_EQ;
     labels[static_cast<unsigned int>(Op::ASSERT_BOOL_OR_DNU)] = &&L_ASSERT_BOOL_OR_DNU;
     labels[static_cast<unsigned int>(Op::PUSH_BLOCK)]       = &&L_PUSH_BLOCK;
-    labels[static_cast<unsigned int>(Op::DUP_RECEIVER)]     = &&L_DUP_RECEIVER;
     labels[static_cast<unsigned int>(Op::PUSH_CAPTURED)]    = &&L_PUSH_CAPTURED;
     labels[static_cast<unsigned int>(Op::STORE_CAPTURED)]   = &&L_STORE_CAPTURED;
     labels[static_cast<unsigned int>(Op::DEFINE_CAPTURED)]  = &&L_DEFINE_CAPTURED;
@@ -846,11 +845,10 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     labels[static_cast<unsigned int>(Op::IVAR_GROUP_END)]   = &&L_IVAR_GROUP_END;
     labels[static_cast<unsigned int>(Op::MAKE_CAPTURED)]    = &&L_MAKE_CAPTURED;
     labels[static_cast<unsigned int>(Op::MAKE_ARRAY)]       = &&L_MAKE_ARRAY;
-    labels[static_cast<unsigned int>(Op::HALT)]             = &&L_HALT;
 #endif
 
     unsigned int arg = 0;
-    Op op = Op::NOP;
+    Op op{};
 
 #if PROTOST_THREADED_DISPATCH
     #define DISPATCH_DIRECT() do {                                              \
@@ -953,9 +951,6 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         }
 
         switch (op) {
-            case Op::NOP: L_NOP:
-                DISPATCH_DIRECT();
-                break;
             case Op::PUSH_NIL: L_PUSH_NIL: {
                 Frame& f = frames_.back();
                 push(f, PROTO_NONE);
@@ -1286,33 +1281,38 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // for keyword / super)
                 int argcOp = (op == Op::SEND_UNARY)  ? 0
                            : (op == Op::SEND_BINARY) ? 1
-                           : /* keyword / super */ 0;
+                           : /* keyword */ 0;
                 const std::string& selStr = f.m->constSymbol(arg);
-                if (op == Op::SEND_KEYWORD || op == Op::SEND_SUPER)
+                if (op == Op::SEND_KEYWORD)
                     for (char c : selStr) if (c == ':') ++argcOp;
-                // BL-1: SEND_SUPER is an explicit super-send opcode (the
-                // current compiler routes `super foo` through PUSH_SUPER +
-                // SEND_*, but honour the dedicated opcode too).
-                if (op == Op::SEND_SUPER) f.superPending = true;
-                // BL-1: capture & clear the super flag for this send. It is
-                // armed by PUSH_SUPER (or SEND_SUPER above) and applies to
-                // exactly one send.
-                const bool isSuperSend = f.superPending;
-                f.superPending = false;
+                // BL-1: a `super` send is its own instruction: the compiler
+                // pushes self and the arguments, then SEND_SUPER, so only
+                // this send looks up above the defining class -- not a send
+                // in its arguments (`super foo: self bar`), which a flag
+                // armed by the receiver and consumed by the next send got
+                // wrong.
+                const bool isSuperSend = (op == Op::SEND_SUPER);
+                if (isSuperSend)
+                    argcOp = static_cast<int>(BytecodeModule::sendArgCount(op, selStr));
 
                 if (static_cast<int>(f.sp) < argcOp + 1)
                     throw std::runtime_error("SEND with insufficient stack");
-                if (argcOp > 8)
-                    throw std::runtime_error(
-                        "send of #" + selStr + " has " + std::to_string(argcOp) +
-                        " arguments; at most 8 are supported per send");
                 // F6 v3 E3: pop args/receiver off the operand stack. `pop`
                 // only decrements sp — the values remain physically in the
                 // frame's slot region, which the GC traces in full (the whole
                 // automaticLocals array is scanned, not just [0, sp)). So the
                 // popped objects stay rooted while we build the send below,
-                // even though `sendArgs` is a plain C++ array.
-                const proto::ProtoObject* sendArgs[8];
+                // even though `sendArgs` is a plain C++ array. A send of more
+                // than kInlineSendArgs arguments (a keyword message may have
+                // any number of parts) takes its array from the heap.
+                constexpr int kInlineSendArgs = 8;
+                const proto::ProtoObject* inlineArgs[kInlineSendArgs];
+                std::vector<const proto::ProtoObject*> heapArgs;
+                const proto::ProtoObject** sendArgs = inlineArgs;
+                if (argcOp > kInlineSendArgs) {
+                    heapArgs.resize(static_cast<std::size_t>(argcOp));
+                    sendArgs = heapArgs.data();
+                }
                 for (int i = argcOp - 1; i >= 0; --i)
                     sendArgs[i] = pop(f);
                 const proto::ProtoObject* recv = pop(f);
@@ -1567,7 +1567,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 if (isSuperSend) {
                     const std::string& defCls = f.m->definingClass();
                     if (defCls.empty())
-                        throw std::runtime_error(
+                        signalCatchable(rt_, ctx,
                             "super send outside a method body");
                     // T3-a: resolve the defining class by IDENTITY, not by
                     // re-resolving its name through the global namespace.
@@ -1645,7 +1645,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         defClsObj = g ? g->getAttribute(ctx, clsSym) : nullptr;
                     }
                     if (!defClsObj || defClsObj == PROTO_NONE)
-                        throw std::runtime_error(
+                        signalCatchable(rt_, ctx,
                             "super: cannot resolve defining class " + defCls);
                     // T3-b: `super` across multiple parents. Single
                     // inheritance has one parent; the defining class then has
@@ -1668,7 +1668,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // taking the first non-nil hit yields exactly that order.
                     auto* parents = defClsObj->getParents(ctx);
                     if (!parents || parents->getSize(ctx) == 0)
-                        throw std::runtime_error(
+                        signalCatchable(rt_, ctx,
                             "super: class " + defCls + " has no superclass");
                     const proto::ProtoObject* superAttr = nullptr;
                     proto::proto_ulong pcount = parents->getSize(ctx);
@@ -1788,7 +1788,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         reinterpret_cast<const protoST::BytecodeModule*>(
                             bcPtrObj->asLong(ctx));
                     if (sub->argCount() != argcOp + 1) {
-                        throw std::runtime_error(
+                        signalCatchable(rt_, ctx,
                             "method " + selStr + " expects " +
                             std::to_string(sub->argCount() - 1) +
                             " args, got " + std::to_string(argcOp));
@@ -1799,10 +1799,20 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // F6 v3 E3: local 0 = recv (self), locals 1..argcOp =
                     // call args. pushFrame packs them into the callee's
                     // region inside the GC-traced automaticLocals.
-                    const proto::ProtoObject* methodArgs[9];
-                    methodArgs[0] = recv;
-                    for (int i = 0; i < argcOp; ++i)
-                        methodArgs[i + 1] = sendArgs[i];
+                    // Receiver and arguments, contiguous. The receiver goes
+                    // into the slot below the first argument -- where it
+                    // was on the operand stack -- when the arguments are on
+                    // the heap, so that no second array is needed.
+                    const proto::ProtoObject* inlineMethodArgs[kInlineSendArgs + 1];
+                    const proto::ProtoObject** methodArgs = inlineMethodArgs;
+                    if (argcOp > kInlineSendArgs) {
+                        heapArgs.insert(heapArgs.begin(), recv);
+                        methodArgs = heapArgs.data();
+                    } else {
+                        methodArgs[0] = recv;
+                        for (int i = 0; i < argcOp; ++i)
+                            methodArgs[i + 1] = sendArgs[i];
+                    }
                     if (signalIfTooDeep(ctx, f, sub,
                             static_cast<unsigned int>(argcOp) + 1)) {
                         DISPATCH_SCOPED();
@@ -1831,7 +1841,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         DISPATCH_SCOPED();
                         break;
                     }
-                    throw std::runtime_error(
+                    signalCatchable(rt_, ctx,
                         "#" + selStr + ": the attribute is a value, not a method; "
                         "only unary sends read value attributes");
                 }
@@ -1844,7 +1854,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         DISPATCH_SCOPED();
                         break;
                     }
-                    throw std::runtime_error(
+                    signalCatchable(rt_, ctx,
                         "#" + selStr + ": the attribute is a value, not a method; "
                         "only unary sends read value attributes");
                 }
@@ -2510,48 +2520,6 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 push(f, self);
                 DISPATCH_DIRECT();
                 break;
-            }
-            case Op::PUSH_SUPER: L_PUSH_SUPER: {
-                Frame& f = frames_.back();
-                // BL-1: a `super` send. `super` evaluates to the SAME object
-                // as `self`; what differs is method lookup, which must start
-                // one level above the class defining the current method.
-                // We push `self` (so the receiver is correct) and arm
-                // f.superPending so the next SEND_* redirects its lookup.
-                // CLO Part 1: read from the header self-slot (see PUSH_SELF).
-                const proto::ProtoObject* self = getSelf(f);
-                if (!self) self = PROTO_NONE;
-                push(f, self);
-                f.superPending = true;
-                DISPATCH_DIRECT();
-                break;
-            }
-            case Op::DUP_RECEIVER: L_DUP_RECEIVER: {
-                Frame& f = frames_.back();
-                // BL-1: duplicate the operand-stack value at depth `arg`
-                // (0 == top) and push the copy. Used to keep a receiver
-                // around for a follow-up send (cascades, multi-send
-                // patterns). The current compiler emits plain DUP for
-                // cascades, so this is reached only by hand-written or
-                // future bytecode; implement it faithfully regardless.
-                if (f.sp <= arg)
-                    throw std::runtime_error("DUP_RECEIVER depth out of range");
-                push(f, opAt(f, arg));
-                DISPATCH_DIRECT();
-                break;
-            }
-            case Op::HALT: L_HALT: {
-                Frame& f = frames_.back();
-                // BL-1: clean program-end terminator. Treated like an
-                // implicit RETURN_TOP: hand the current top-of-stack (or
-                // PROTO_NONE) back to the caller frame, or out to the C++
-                // caller when this is the last frame.
-                const proto::ProtoObject* r =
-                    f.sp == 0 ? PROTO_NONE : peek(f);
-                popFrame();
-                if (frames_.empty()) return r;
-                push(frames_.back(), r);
-                DISPATCH_DIRECT();
             }
             case Op::EXTEND:
                 // BL-2: unreachable — the decode loop above consumes every

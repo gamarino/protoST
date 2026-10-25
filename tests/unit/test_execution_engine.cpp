@@ -993,7 +993,7 @@ TEST_CASE("F6 v3 B: mid-execution snapshot + restore preserves BytecodeModule po
 }
 
 // ---------------------------------------------------------------------------
-// BL-1: PUSH_SELF / PUSH_SUPER / SEND_SUPER / DUP_RECEIVER / HALT — self-sends,
+// BL-1: PUSH_SELF / SEND_SUPER — self-sends,
 // super-sends and class-side methods.
 // ---------------------------------------------------------------------------
 
@@ -1114,56 +1114,79 @@ TEST_CASE("BL-1: counter.st fixture runs clean end-to-end",
     (void)ctx;
 }
 
-TEST_CASE("BL-1: HALT opcode terminates a module cleanly",
-          "[engine][halt][bl1]") {
-    protoST::STRuntime rt;
-    protoST::BytecodeModule m;
-    m.addInteger(99);   // const 0
-    m.emit(protoST::Op::PUSH_CONST, 0);
-    m.emit(protoST::Op::HALT, 0);
-    // Trailing instructions are unreachable: HALT hands back top-of-stack.
-    m.emit(protoST::Op::PUSH_NIL, 0);
-    m.emit(protoST::Op::RETURN_TOP, 0);
-    auto* r = rt.runTopLevel(m);
-    REQUIRE(r != nullptr);
-    REQUIRE(r->asLong(rt.rootCtx()) == 99);
-}
-
-TEST_CASE("BL-1: DUP_RECEIVER duplicates the stack value at the given depth",
-          "[engine][dup_receiver][bl1]") {
-    protoST::STRuntime rt;
-    // Build: push 3, push 4; DUP_RECEIVER 1 copies the value at depth 1 (=3)
-    // to the top → stack [3,4,3]; add the two top values (4+3=7) then add 3.
-    protoST::BytecodeModule m;
-    m.addInteger(3);             // const 0
-    m.addInteger(4);             // const 1
-    m.internSymbol("+");         // const 2
-    m.emit(protoST::Op::PUSH_CONST, 0);   // [3]
-    m.emit(protoST::Op::PUSH_CONST, 1);   // [3,4]
-    m.emit(protoST::Op::DUP_RECEIVER, 1); // [3,4,3]  (depth 1 == the 3)
-    m.emit(protoST::Op::SEND_BINARY, 2);  // 4 + 3 = 7 → [3,7]
-    m.emit(protoST::Op::SEND_BINARY, 2);  // 3 + 7 = 10 → [10]
-    m.emit(protoST::Op::RETURN_TOP, 0);
-    auto* r = rt.runTopLevel(m);
-    REQUIRE(r->asLong(rt.rootCtx()) == 10);
-}
-
-TEST_CASE("BL-1: SEND_SUPER opcode dispatches to the parent implementation",
+TEST_CASE("BL-1: a super send compiles to SEND_SUPER; super alone is PUSH_SELF",
           "[engine][super][send_super][bl1]") {
-    // The current compiler routes `super foo` through PUSH_SUPER + SEND_UNARY,
-    // so exercise the dedicated SEND_SUPER opcode by hand-patching a method
-    // module's bytecode: replace the SEND_UNARY after a PUSH_SUPER with
-    // SEND_SUPER and confirm it still resolves to the inherited method.
+    // The super send is its own instruction (the flag that PUSH_SUPER armed
+    // for "the next send" picked the wrong send when the arguments held one).
+    protoST::Parser P("Object subclass: #Base. Base >> tag ^ 11. "
+                      "Base subclass: #Sub. Sub >> tag ^ super tag. "
+                      "Sub >> me ^ super. Sub newChild tag.");
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C;
+    auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+    // Find the method bodies by debug name.
+    std::vector<const protoST::BytecodeModule*> all{bc.get()};
+    for (std::size_t k = 0; k < all.size(); ++k)
+        for (std::size_t b = 0; b < all[k]->numBlocks(); ++b) all.push_back(&all[k]->block(b));
+    auto opsOf = [&](const std::string& name) {
+        std::vector<protoST::Op> ops;
+        for (auto* m : all)
+            if (m->debugName() == name)
+                for (std::size_t pc = 0; pc + 1 < m->bytes().size(); pc += protoST::kInstrSize)
+                    ops.push_back(static_cast<protoST::Op>(m->bytes()[pc]));
+        return ops;
+    };
+    auto tag = opsOf("Sub>>tag");
+    REQUIRE(tag.size() >= 2);
+    CHECK(tag[0] == protoST::Op::PUSH_SELF);
+    CHECK(tag[1] == protoST::Op::SEND_SUPER);
+    auto me = opsOf("Sub>>me");
+    REQUIRE(!me.empty());
+    CHECK(me[0] == protoST::Op::PUSH_SELF);
     protoST::STRuntime rt;
-    auto* r = bl1Run(rt,
-        "Object subclass: #Base. "
-        "Base >> tag ^ 11. "
-        "Base subclass: #Sub. "
-        "Sub >> tag ^ super tag. "
-        "Sub newChild tag.");
-    // PUSH_SUPER + SEND_UNARY already covers the super path; SEND_SUPER shares
-    // the same handler branch (superPending), so this asserts the shared code.
-    REQUIRE(r->asLong(rt.rootCtx()) == 11);
+    REQUIRE(rt.runTopLevel(*bc)->asLong(rt.rootCtx()) == 11);
+}
+
+TEST_CASE("Engine: a frame's operand stack is sized from its deepest point",
+          "[engine][stack]") {
+    // (1 + (1 + (... 200 levels ...))) needs ~200 operand slots, far past the
+    // 48-slot floor.
+    std::string src;
+    for (int i = 0; i < 200; ++i) src += "(1 + ";
+    src += "1";
+    for (int i = 0; i < 200; ++i) src += ")";
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C;
+    auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+    CHECK(bc->cachedMaxOperandDepth() >= 200);
+    CHECK(bc->operandStackCapacity() == bc->cachedMaxOperandDepth());
+    protoST::STRuntime rt;
+    REQUIRE(rt.runTopLevel(*bc)->asLong(rt.rootCtx()) == 201);
+}
+
+TEST_CASE("Engine: an operand stack overflow in a hand-built module is a Smalltalk Error",
+          "[engine][stack]") {
+    // A loop that pushes without popping defeats the depth computation (it
+    // is not code the compiler emits). The overflow must take the Smalltalk
+    // signal path -- catchable by on:do:, an UnhandledSTException at top
+    // level -- not escape as a bare C++ runtime_error.
+    protoST::STRuntime rt;
+    protoST::BytecodeModule m;
+    m.emit(protoST::Op::PUSH_NIL, 0);
+    m.emit(protoST::Op::JUMP_BACK, 2);   // back to the PUSH_NIL
+    bool signalled = false;
+    try {
+        rt.runTopLevel(m);
+    } catch (const protoST::UnhandledSTException& e) {
+        signalled = std::string(e.what()).find("operand stack overflow") != std::string::npos;
+        if (!signalled) INFO(e.what());
+    }
+    REQUIRE(signalled);
 }
 
 // ---------------------------------------------------------------------------

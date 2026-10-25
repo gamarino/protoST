@@ -13,14 +13,12 @@ namespace {
 
 const char* opName(Op op) {
     switch (op) {
-        case Op::NOP:                return "NOP";
         case Op::PUSH_CONST:         return "PUSH_CONST";
         case Op::PUSH_LOCAL:         return "PUSH_LOCAL";
         case Op::STORE_LOCAL:        return "STORE_LOCAL";
         case Op::DUP:                return "DUP";
         case Op::POP:                return "POP";
         case Op::PUSH_SELF:          return "PUSH_SELF";
-        case Op::PUSH_SUPER:         return "PUSH_SUPER";
         case Op::PUSH_NIL:           return "PUSH_NIL";
         case Op::PUSH_TRUE:          return "PUSH_TRUE";
         case Op::PUSH_FALSE:         return "PUSH_FALSE";
@@ -34,7 +32,6 @@ const char* opName(Op op) {
         case Op::RETURN:             return "RETURN";
         case Op::RETURN_TOP:         return "RETURN_TOP";
         case Op::PUSH_BLOCK:         return "PUSH_BLOCK";
-        case Op::DUP_RECEIVER:       return "DUP_RECEIVER";
         case Op::PUSH_CAPTURED:      return "PUSH_CAPTURED";
         case Op::STORE_CAPTURED:     return "STORE_CAPTURED";
         case Op::PUSH_GLOBAL:        return "PUSH_GLOBAL";
@@ -59,7 +56,6 @@ const char* opName(Op op) {
         case Op::IVAR_GROUP:         return "IVAR_GROUP";
         case Op::IVAR_GROUP_END:     return "IVAR_GROUP_END";
         case Op::EXTEND:             return "EXTEND";
-        case Op::HALT:               return "HALT";
     }
     return nullptr;
 }
@@ -92,10 +88,6 @@ std::string constText(const BytecodeModule& m, size_t i) {
         case K::String:      return quoted(m.constString(i));
         case K::Symbol:      return "#" + m.constSymbol(i);
         case K::Char:        return "$" + m.constString(i);
-        case K::BlockRef:    return "block " + std::to_string(m.constBlockRef(i));
-        case K::NilK:        return "nil";
-        case K::TrueK:       return "true";
-        case K::FalseK:      return "false";
         case K::UnsetMarker: return "<unset>";
     }
     return "?";
@@ -110,10 +102,6 @@ const char* constKindName(BytecodeModule::ConstKind k) {
         case K::String:       return "string";
         case K::Symbol:       return "symbol";
         case K::Char:         return "char";
-        case K::BlockRef:     return "blockref";
-        case K::NilK:         return "nil";
-        case K::TrueK:        return "true";
-        case K::FalseK:       return "false";
         case K::UnsetMarker:  return "unset";
     }
     return "?";
@@ -131,12 +119,6 @@ std::string nameAt(const BytecodeModule& m, unsigned int i) {
 std::string slotText(const BytecodeModule& m, unsigned int slot) {
     const std::string& n = m.localName(slot);
     return n.empty() ? "slot " + std::to_string(slot) : n;
-}
-
-int keywordArity(const std::string& selector) {
-    int n = 0;
-    for (char c : selector) if (c == ':') ++n;
-    return n;
 }
 
 // One decoded instruction: the word it starts at, its word count (EXTEND
@@ -172,8 +154,8 @@ void listModule(const BytecodeModule& m, const std::string& path, std::string& o
          + (m.debugName().empty() ? std::string("<unnamed>") : m.debugName()) + "\n";
 
     // Frame layout. The engine floors the local count at 4 (kMinLocals in
-    // ExecutionEngine.cpp) and gives the operand stack 48 slots plus the
-    // module's extra need (cachedExtraOperandStack).
+    // ExecutionEngine.cpp) and sizes the operand stack from the module's
+    // deepest point, floored at 48 (operandStackCapacity).
     const int argc = m.argCount();
     const unsigned int locals = m.cachedLocalCount(static_cast<unsigned int>(argc));
     out += "  args " + std::to_string(argc) + ", locals " + std::to_string(locals);
@@ -185,9 +167,8 @@ void listModule(const BytecodeModule& m, const std::string& path, std::string& o
         }
         out += ")";
     }
-    out += ", stack 48";
-    if (unsigned int extra = m.cachedExtraOperandStack()) out += " + " + std::to_string(extra);
-    out += "\n";
+    out += ", stack " + std::to_string(m.operandStackCapacity())
+         + " (deepest " + std::to_string(m.cachedMaxOperandDepth()) + ")\n";
     if (!m.definingClass().empty())
         out += "  defining class " + m.definingClass() + "\n";
     if (m.isCallForm()) {
@@ -252,7 +233,7 @@ void listModule(const BytecodeModule& m, const std::string& path, std::string& o
             case Op::SEND_KEYWORD:
             case Op::SEND_SUPER: {
                 const std::string sel = nameAt(m, in.arg);
-                const int n = keywordArity(sel);
+                const unsigned int n = BytecodeModule::sendArgCount(in.op, sel);
                 withOperand("#" + sel + ", " + std::to_string(n) + (n == 1 ? " arg" : " args"));
                 break;
             }
@@ -289,9 +270,6 @@ void listModule(const BytecodeModule& m, const std::string& path, std::string& o
                 break;
             case Op::MAKE_CAPTURED:
                 withOperand(in.arg == 1 ? "child of the inherited dict" : "method root dict");
-                break;
-            case Op::DUP_RECEIVER:
-                withOperand("depth " + std::to_string(in.arg));
                 break;
             case Op::IVAR_GROUP:
             case Op::IVAR_GROUP_END:

@@ -237,12 +237,22 @@ private:
     // false means the caller should fall through to normal SEND_KEYWORD.
     bool   tryEmitInlinedControl(BytecodeModule& m, const ast::Node& send);
     void   emitInlinedBlockBody(BytecodeModule& m, const ast::Node& block);
-    // Patch a forward-jump instruction (emitted with placeholder arg=0) so
-    // its arg targets the current emit position. Errors out if the distance
-    // does not fit in the 8-bit operand (we do not yet rewrite the
-    // EXTEND-prefixed form during patching). Callers should avoid inlining
-    // blocks larger than ~250 instructions.
-    void   patchJumpToHere(BytecodeModule& m, std::size_t jumpInstrPos);
+    // Jumps of any length. A forward jump is emitted as one word with a
+    // placeholder operand (emitForwardJump answers its byte position); once
+    // its target is known, resolveForwardJumps writes the operand, widening
+    // the jump with EXTEND prefixes when the distance does not fit in a
+    // byte. A construct resolves its own forward jumps together, at its end,
+    // so that widening one moves the targets of the others correctly.
+    // Inner constructs are resolved before, and widening an outer jump never
+    // crosses a jump already emitted, except a loop's own back edge: a loop
+    // calls closeLoop, which widens its exit jump before it emits the
+    // JUMP_BACK.
+    struct ForwardJump { std::size_t pos; std::size_t target; };
+    std::size_t emitForwardJump(BytecodeModule& m, Op op);
+    void   resolveForwardJumps(BytecodeModule& m, std::vector<ForwardJump> jumps);
+    // Emits the JUMP_BACK to `loopStart` and points the exit jump at
+    // `exitPos` just past it.
+    void   closeLoop(BytecodeModule& m, std::size_t loopStart, std::size_t exitPos);
     // Returns true if `name` appears in the capturedNames set of the current
     // scope or any enclosing scope (innermost-first lookup).
     bool   isCaptured(const std::string& name) const;

@@ -1,6 +1,9 @@
 #include "BytecodeModule.h"
 #include "protoCore.h"
 #include <algorithm>
+#include <cctype>
+#include <climits>
+#include <cstdlib>
 #include <stdexcept>
 namespace protoST {
 
@@ -53,11 +56,47 @@ unsigned int BytecodeModule::cachedLocalCount(unsigned int argc) const {
     return needed;
 }
 
-unsigned int BytecodeModule::cachedExtraOperandStack() const {
-    const int cached = maxArrayOperandCache_.load(std::memory_order_acquire);
+unsigned int BytecodeModule::sendArgCount(Op op, const std::string& sel) {
+    if (op == Op::SEND_UNARY) return 0;
+    if (op == Op::SEND_BINARY) return 1;
+    if (op == Op::SEND_CALL) {
+        const std::size_t h1 = sel.find('#');
+        if (h1 == std::string::npos) return 0;
+        unsigned int n = static_cast<unsigned int>(std::strtoul(sel.c_str() + h1 + 1, nullptr, 10));
+        for (std::size_t i = sel.find('#', h1 + 1); i != std::string::npos;
+             i = sel.find('#', i + 1))
+            ++n;
+        return n;
+    }
+    unsigned int colons = 0;
+    for (char c : sel) if (c == ':') ++colons;
+    if (op == Op::SEND_SUPER && colons == 0 && !sel.empty()) {
+        const unsigned char c0 = static_cast<unsigned char>(sel[0]);
+        if (!std::isalpha(c0) && c0 != '_') return 1;   // binary
+    }
+    return colons;
+}
+
+unsigned int BytecodeModule::cachedMaxOperandDepth() const {
+    const int cached = maxOperandDepthCache_.load(std::memory_order_acquire);
     if (cached >= 0) return static_cast<unsigned int>(cached);
-    unsigned int maxArg = 0;
+    // One pass in code order. The compiler emits structured code: every jump
+    // into a point comes either from before it (a forward jump, which
+    // records its depth here) or is a loop's back edge (whose target was
+    // already visited with the same depth). After an unconditional transfer
+    // the next instruction is reached only by a forward jump, so its depth is
+    // the recorded one; code no jump reaches (after a `^` in an inlined
+    // block) keeps the last depth, an overestimate at worst.
+    std::unordered_map<std::size_t, long> atTarget;
+    long depth = 0, maxDepth = 0;
+    bool reachable = true;
+    auto pushes = [&](long n) {
+        depth += n;
+        if (depth < 0) depth = 0;   // a hand-built module may underflow
+        if (depth > maxDepth) maxDepth = depth;
+    };
     for (std::size_t pc = 0; pc + 1 < bytes_.size(); ) {
+        const std::size_t start = pc;
         Op op  = static_cast<Op>(bytes_[pc]);
         unsigned int arg = bytes_[pc + 1];
         pc += kInstrSize;
@@ -66,13 +105,100 @@ unsigned int BytecodeModule::cachedExtraOperandStack() const {
             arg = (arg << 8) | bytes_[pc + 1];
             pc += kInstrSize;
         }
-        if (op == Op::MAKE_ARRAY && arg > maxArg) maxArg = arg;
-        if (op == Op::IVAR_GROUP_END && arg < groupEntries_.size()
-            && groupEntries_[arg].count > maxArg)
-            maxArg = groupEntries_[arg].count;
+        if (auto it = atTarget.find(start); it != atTarget.end()) {
+            depth = reachable ? std::max(depth, it->second) : it->second;
+            reachable = true;
+        }
+        auto jumpTo = [&](std::size_t target, long d) {
+            long& t = atTarget[target];
+            if (d > t) t = d;
+        };
+        switch (op) {
+            case Op::PUSH_CONST: case Op::PUSH_LOCAL: case Op::DUP:
+            case Op::PUSH_SELF: case Op::PUSH_NIL: case Op::PUSH_TRUE:
+            case Op::PUSH_FALSE: case Op::PUSH_BLOCK: case Op::PUSH_CAPTURED:
+            case Op::PUSH_GLOBAL: case Op::PUSH_INSTVAR: case Op::PUSH_OWN_INSTVAR:
+                pushes(1);
+                break;
+            case Op::STORE_LOCAL: case Op::POP: case Op::STORE_CAPTURED:
+            case Op::STORE_GLOBAL: case Op::STORE_INSTVAR: case Op::STORE_CLASSVAR:
+            case Op::DEFINE_CAPTURED:
+                pushes(-1);
+                break;
+            case Op::SEND_UNARY: case Op::SEND_BINARY: case Op::SEND_KEYWORD:
+            case Op::SEND_SUPER: case Op::SEND_CALL:
+                if (arg < consts_.size())
+                    pushes(-static_cast<long>(sendArgCount(op, consts_[arg].sval)));
+                break;
+            case Op::BIN_INT_ADD: case Op::BIN_INT_SUB: case Op::BIN_INT_LE:
+            case Op::BIN_INT_LT: case Op::BIN_INT_GE: case Op::BIN_INT_GT:
+            case Op::BIN_INT_EQ:
+                pushes(-1);
+                break;
+            case Op::MAKE_ARRAY:
+                pushes(1 - static_cast<long>(arg));
+                break;
+            case Op::IVAR_GROUP_END:
+                if (arg < groupEntries_.size() && groupEntries_[arg].count > 0)
+                    pushes(1 - static_cast<long>(groupEntries_[arg].count));
+                break;
+            case Op::JUMP_IF_TRUE: case Op::JUMP_IF_FALSE:
+                pushes(-1);
+                jumpTo(pc + static_cast<std::size_t>(arg) * kInstrSize, depth);
+                break;
+            case Op::JUMP:
+                jumpTo(pc + static_cast<std::size_t>(arg) * kInstrSize, depth);
+                reachable = false;
+                break;
+            case Op::JUMP_BACK: case Op::RETURN: case Op::RETURN_TOP:
+                reachable = false;
+                break;
+            default:   // ASSERT_BOOL_OR_DNU, MAKE_CAPTURED, IVAR_GROUP: no change
+                break;
+        }
     }
-    maxArrayOperandCache_.store(static_cast<int>(maxArg), std::memory_order_release);
-    return maxArg;
+    const int result = static_cast<int>(std::min<long>(maxDepth, INT32_MAX));
+    maxOperandDepthCache_.store(result, std::memory_order_release);
+    return static_cast<unsigned int>(result);
+}
+
+void BytecodeModule::insertExtendPrefixes(size_t bytePos, unsigned int count) {
+    if (count == 0) return;
+    if (bytePos >= bytes_.size() || bytePos % kInstrSize != 0)
+        throw std::logic_error("insertExtendPrefixes: not an instruction start");
+    const size_t added = static_cast<size_t>(count) * kInstrSize;
+    std::vector<uint8_t> prefix;
+    for (unsigned int i = 0; i < count; ++i) {
+        prefix.push_back(static_cast<uint8_t>(Op::EXTEND));
+        prefix.push_back(0);
+    }
+    bytes_.insert(bytes_.begin() + static_cast<std::ptrdiff_t>(bytePos),
+                  prefix.begin(), prefix.end());
+    // Word tables: one entry per word, word i at byte 2*i (every word is
+    // two bytes, so the index of the word at bytePos is bytePos / 2).
+    const size_t word = bytePos / kInstrSize;
+    const int line = word < instrLines_.size() ? instrLines_[word] : 0;
+    instrLines_.insert(instrLines_.begin() + static_cast<std::ptrdiff_t>(word), count, line);
+    for (size_t& start : instrStartPc_)
+        if (start >= bytePos) start += added;
+    std::vector<size_t> newStarts;
+    for (unsigned int i = 0; i < count; ++i) newStarts.push_back(bytePos + i * kInstrSize);
+    instrStartPc_.insert(instrStartPc_.begin() + static_cast<std::ptrdiff_t>(word),
+                         newStarts.begin(), newStarts.end());
+    for (ScopedLocal& s : scopedLocals_) {
+        if (s.fromPc > bytePos) s.fromPc += added;
+        if (s.toPc   > bytePos) s.toPc   += added;
+    }
+}
+
+void BytecodeModule::patchWideArg(size_t bytePos, unsigned int prefixes, unsigned int arg) {
+    if (extendPrefixesFor(arg) > prefixes)
+        throw std::logic_error("patchWideArg: operand does not fit");
+    for (unsigned int i = 0; i < prefixes; ++i) {
+        const unsigned int shift = 8u * (prefixes - i);
+        bytes_[bytePos + i * kInstrSize + 1] = static_cast<uint8_t>((arg >> shift) & 0xFF);
+    }
+    bytes_[bytePos + prefixes * kInstrSize + 1] = static_cast<uint8_t>(arg & 0xFF);
 }
 
 const BytecodeModule::ConstCache&
@@ -170,41 +296,37 @@ void BytecodeModule::emitWide(Op op, unsigned int arg, int line) {
 }
 
 size_t BytecodeModule::addInteger(long long v) {
-    consts_.push_back(Const{ConstKind::Integer, v, 0.0, {}, 0});
+    consts_.push_back(Const{ConstKind::Integer, v, 0.0, {}});
     return consts_.size() - 1;
 }
 size_t BytecodeModule::addLargeInteger(const std::string& digits, int radix) {
-    consts_.push_back(Const{ConstKind::LargeInteger, radix, 0.0, digits, 0});
+    consts_.push_back(Const{ConstKind::LargeInteger, radix, 0.0, digits});
     return consts_.size() - 1;
 }
 size_t BytecodeModule::addFloat(double v) {
-    consts_.push_back(Const{ConstKind::Float, 0, v, {}, 0});
+    consts_.push_back(Const{ConstKind::Float, 0, v, {}});
     return consts_.size() - 1;
 }
 size_t BytecodeModule::addString(const std::string& s) {
-    consts_.push_back(Const{ConstKind::String, 0, 0.0, s, 0});
+    consts_.push_back(Const{ConstKind::String, 0, 0.0, s});
     return consts_.size() - 1;
 }
 size_t BytecodeModule::internSymbol(const std::string& s) {
     auto it = symbolIndex_.find(s);
     if (it != symbolIndex_.end()) return it->second;
-    consts_.push_back(Const{ConstKind::Symbol, 0, 0.0, s, 0});
+    consts_.push_back(Const{ConstKind::Symbol, 0, 0.0, s});
     size_t idx = consts_.size() - 1;
     symbolIndex_[s] = idx;
     return idx;
 }
 size_t BytecodeModule::addChar(const std::string& utf8) {
-    consts_.push_back(Const{ConstKind::Char, 0, 0.0, utf8, 0});
-    return consts_.size() - 1;
-}
-size_t BytecodeModule::addBlockRef(size_t blockIndex) {
-    consts_.push_back(Const{ConstKind::BlockRef, 0, 0.0, {}, blockIndex});
+    consts_.push_back(Const{ConstKind::Char, 0, 0.0, utf8});
     return consts_.size() - 1;
 }
 size_t BytecodeModule::addUnsetMarker() {
     // No payload — the engine substitutes Bootstrap::unsetMarker when this
     // constant is pushed via PUSH_CONST.
-    consts_.push_back(Const{ConstKind::UnsetMarker, 0, 0.0, {}, 0});
+    consts_.push_back(Const{ConstKind::UnsetMarker, 0, 0.0, {}});
     return consts_.size() - 1;
 }
 size_t BytecodeModule::addBlockModule(std::unique_ptr<BytecodeModule> b) {

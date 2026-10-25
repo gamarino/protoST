@@ -5,7 +5,7 @@
 namespace protoST {
 
 enum class Op : uint8_t {
-    NOP             = 0,
+    // 0 is reserved (it was NOP, which the compiler never emitted).
     // Stack and constants
     PUSH_CONST      = 1,    // arg = constant pool index
     PUSH_LOCAL      = 2,    // arg = slot index
@@ -14,7 +14,8 @@ enum class Op : uint8_t {
     POP             = 5,
     // Values
     PUSH_SELF       = 6,
-    PUSH_SUPER      = 7,
+    // 7 is reserved (it was PUSH_SUPER, which pushed self and made the next
+    // send in the frame a super send; see SEND_SUPER).
     PUSH_NIL        = 8,
     PUSH_TRUE       = 9,
     PUSH_FALSE      = 10,
@@ -22,7 +23,11 @@ enum class Op : uint8_t {
     SEND_UNARY      = 11,   // arg = selector const index
     SEND_BINARY     = 12,   // arg = selector const index; 1 arg on stack
     SEND_KEYWORD    = 13,   // arg = selector const index; argc encoded in selector
-    SEND_SUPER      = 14,
+    // A send whose receiver is `super`: the compiler pushes self, then the
+    // arguments, and the lookup starts above the class that defines the
+    // running method. Argument count: one per colon of the selector, or one
+    // for a binary selector (BytecodeModule::sendArgCount).
+    SEND_SUPER      = 14,   // arg = selector const index
     // Control flow
     JUMP            = 15,   // arg = forward offset in instructions (i.e. multiple of 2 bytes)
     JUMP_IF_TRUE    = 16,
@@ -32,15 +37,14 @@ enum class Op : uint8_t {
     RETURN_TOP      = 19,   // pops top, returns
     // Blocks
     PUSH_BLOCK      = 20,   // arg = bytecode-module-table index
-    // Cascade helper
-    DUP_RECEIVER    = 21,   // dup the value at depth = arg
+    // 21 is reserved (it was DUP_RECEIVER, never emitted: cascades use DUP).
     // Closures (F3)
     PUSH_CAPTURED   = 22,   // arg = constant pool index (symbol name)
     STORE_CAPTURED  = 23,   // arg = constant pool index (symbol name)
     // User classes (F4)
     PUSH_GLOBAL     = 24,   // arg = constant pool symbol index (name of global)
     STORE_GLOBAL    = 25,   // arg = constant pool symbol index
-    PUSH_INSTVAR    = 26,   // arg = constant pool symbol index (name of inst var, accessed on self/slot 0)
+    PUSH_INSTVAR    = 26,   // arg = constant pool symbol index (name of inst var, read on the frame's self)
     STORE_INSTVAR   = 27,   // arg = constant pool symbol index
     // Closure capture in methods (CLO): allocate a fresh per-method captured
     // dict and install it in frame slot 0 (no operand; pass 0).
@@ -125,10 +129,10 @@ enum class Op : uint8_t {
     // every write takes STORE_INSTVAR's path at its own position instead.
     IVAR_GROUP         = 43, // arg = group-entry index; leaves the value on the stack
     IVAR_GROUP_END     = 44, // arg = group-entry index of the run's last write
-    // Extend for >256-index args
+    // Prefix carrying the next-higher byte of the following instruction's
+    // operand, for operands above 255 (constant indices, slots, jumps).
     EXTEND          = 254,
-    // Debugger primitive guard
-    HALT            = 255,
+    // 255 is reserved (it was HALT, never emitted: `halt` is a primitive).
 };
 
 inline constexpr size_t kInstrSize = 2;

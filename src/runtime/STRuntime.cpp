@@ -1183,12 +1183,6 @@ STRuntime::materialize(proto::ProtoContext* ctx, const BytecodeModule& m,
             // A character literal is a Character: protoCore's embedded
             // unicode-char value, decoded from the literal's UTF-8 text.
             return ctx->fromUnicodeChar(decodeFirstCodepoint(m.constString(i)));
-        case K::BlockRef:
-            // F2 stub: block materialisation lands in a later task.
-            return PROTO_NONE;
-        case K::NilK:   return PROTO_NONE;
-        case K::TrueK:  return PROTO_TRUE;
-        case K::FalseK: return PROTO_FALSE;
         case K::UnsetMarker:
             // Call-form "this named arg was omitted by the caller" sentinel.
             // The method-decl prologue emits a PUSH_CONST of this kind so it

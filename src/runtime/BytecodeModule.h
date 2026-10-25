@@ -14,7 +14,9 @@ namespace protoST {
 class BytecodeModule {
 public:
     enum class ConstKind : uint8_t {
-        Integer, Float, String, Symbol, Char, BlockRef, NilK, TrueK, FalseK,
+        // nil, true and false have their own opcodes (PUSH_NIL, PUSH_TRUE,
+        // PUSH_FALSE) and a block its PUSH_BLOCK, so none is a constant.
+        Integer, Float, String, Symbol, Char,
         // Resolves to `Bootstrap::unsetMarker` at runtime. Emitted by the
         // call-form method prologue so the dispatcher's "unset" sentinel can
         // be compared against named-arg slots without going through the
@@ -31,7 +33,6 @@ public:
         long long ival = 0;
         double    fval = 0.0;
         std::string sval;
-        size_t      blockIndex = 0;  // for BlockRef
     };
 
     BytecodeModule() = default;
@@ -59,6 +60,25 @@ public:
     size_t  pos() const { return bytes_.size(); }
     void    patchArg(size_t bytePos, uint8_t arg) { bytes_[bytePos + 1] = arg; }
 
+    // Wide forward jumps. A forward jump is emitted as one word before its
+    // target is known. When its operand turns out not to fit in a byte, the
+    // compiler widens it in place: insertExtendPrefixes inserts `count`
+    // EXTEND words in front of the word at `bytePos`, shifting everything
+    // after it, together with the line map, the word-start table and the
+    // scoped-local ranges. The distance from the jump word to its target is
+    // unchanged, since both move by the same amount; a jump already emitted
+    // whose span crosses `bytePos` is NOT adjusted, so the caller widens a
+    // jump before emitting any backward jump over it.
+    void    insertExtendPrefixes(size_t bytePos, unsigned int count);
+    // Writes `arg` into the instruction at `bytePos` that carries `prefixes`
+    // EXTEND words in front of its opcode word: the high bytes into the
+    // prefixes, the low byte into the opcode word. `arg` must fit.
+    void    patchWideArg(size_t bytePos, unsigned int prefixes, unsigned int arg);
+    // The EXTEND words an operand needs (0, 1 or 2).
+    static unsigned int extendPrefixesFor(unsigned int arg) {
+        return arg > 0xFFFFu ? 2u : arg > 0xFFu ? 1u : 0u;
+    }
+
     // constants
     size_t  addInteger(long long v);
     size_t  addFloat(double v);
@@ -66,7 +86,6 @@ public:
     size_t  addString(const std::string& s);
     size_t  internSymbol(const std::string& s);  // de-duplicated
     size_t  addChar(const std::string& utf8);
-    size_t  addBlockRef(size_t blockIndex);
     // Push-an-unset-sentinel constant. Idempotent: adding it twice is
     // allowed but the cache only needs a single live entry; we still
     // append, leaving deduplication to the compiler if it cares.
@@ -140,7 +159,6 @@ public:
         }
         return ivSymbolSlow(ctx, i);
     }
-    size_t              constBlockRef(size_t i)const { return consts_[i].blockIndex; }
 
     // Instance-variable write groups (Op::IVAR_GROUP / IVAR_GROUP_END). One
     // entry per write of a run: the constant naming the variable, the
@@ -367,16 +385,33 @@ public:
     // cached value never invalidates.
     unsigned int cachedLocalCount(unsigned int argc) const;
 
-    // The operand-stack depth the module needs beyond the engine's fixed
-    // bound: the largest MAKE_ARRAY operand (the elements a brace array
-    // pushes before collecting them) or the longest instance-variable write
-    // group (its values stay on the stack until its last write), whichever
-    // is larger; 0 when there is neither. The engine sizes each frame's
-    // operand stack from it. Lazily computed, cached.
-    unsigned int cachedExtraOperandStack() const;
+    // The deepest the operand stack gets while the module's code runs, from
+    // the stack effect of each instruction: a send pops its receiver and
+    // arguments and pushes one result, MAKE_ARRAY n pops n values, a write
+    // group keeps its values until IVAR_GROUP_END, and a forward jump
+    // carries its depth to its target. The engine sizes each frame's operand
+    // stack from it, so an expression may nest as deeply as the source
+    // writes it. Lazily computed, cached.
+    unsigned int cachedMaxOperandDepth() const;
+
+    // The operand-stack capacity of a frame running this module: the depth
+    // above, floored at kMinOperandStack slots, the fixed size frames had
+    // before the depth was computed (a floor, so that no code that ran then
+    // has less room now).
+    static constexpr unsigned int kMinOperandStack = 48;
+    unsigned int operandStackCapacity() const {
+        const unsigned int d = cachedMaxOperandDepth();
+        return d > kMinOperandStack ? d : kMinOperandStack;
+    }
+
+    // The arguments a send instruction pops besides its receiver: none for
+    // SEND_UNARY, one for SEND_BINARY, one per colon for SEND_KEYWORD, the
+    // positional plus named count of a SEND_CALL's mangled selector, and for
+    // SEND_SUPER one per colon or one for a binary selector (`super + x`).
+    static unsigned int sendArgCount(Op op, const std::string& selector);
 
 private:
-    mutable std::atomic<int> maxArrayOperandCache_{-1};
+    mutable std::atomic<int> maxOperandDepthCache_{-1};
     // `(argc << 32) | localCount`, or kNoLocalCount when not yet computed.
     // argc is folded into the cache key because `computeLocalCount` returns
     // max(argc, maxSlot+1) — different argc values for the same module body

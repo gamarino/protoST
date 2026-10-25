@@ -11,6 +11,11 @@ using namespace ast;
 
 namespace {
 
+// Is `n` a send (or cascade) whose receiver is `super`?
+bool isSuperReceiver(const Node& n) {
+    return !n.children.empty() && n.children[0] && n.children[0]->kind == NodeKind::Super;
+}
+
 // Every class compiled in this process, by name: the kernel's, imported
 // modules' and scripts'. A module compiled later reads it, so the instance
 // variables of a superclass declared elsewhere are known (a subclass of
@@ -949,10 +954,8 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         //   JUMP_IF_FALSE skip
         //   <default expr>
         //   STORE_LOCAL slot
-        //   POP  -- discard the DUP-style result of an assignment-like store
-        // The store sequence below uses STORE_LOCAL+POP because emitExpr on
-        // the default expression leaves the value on TOS; STORE_LOCAL pops
-        // it and writes it into the slot, no leftover value.
+        // emitExpr on the default expression leaves the value on TOS;
+        // STORE_LOCAL pops it into the slot, so no POP follows.
         for (int i = 0; i < nNamed; ++i) {
             const int slot = 1 + nPos + i;
             // Load current slot value (after dispatcher pre-fill).
@@ -983,8 +986,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             // Implementation note: JUMP_IF_FALSE's arg is a *forward
             // offset in 2-byte instructions*. Compute it after emitting
             // the default body and back-patch.
-            size_t jumpInstr = sub->bytes().size();
-            sub->emit(Op::JUMP_IF_FALSE, 0, currentLine_);  // arg patched below
+            const size_t jumpInstr = emitForwardJump(*sub, Op::JUMP_IF_FALSE);  // resolved below
             // Default body: evaluate, then STORE_LOCAL pops it into slot.
             if (n.children[i]) {
                 emitExpr(*sub, *n.children[i]);
@@ -993,20 +995,8 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             }
             sub->emitWide(Op::STORE_LOCAL,
                           static_cast<unsigned int>(slot), currentLine_);
-            // Back-patch JUMP_IF_FALSE: forward jump to current PC, measured
-            // in instruction words (2 bytes each). The patch overwrites the
-            // 1-byte operand; emit's word is at jumpInstr, its operand at
-            // jumpInstr+1. Compute the distance to the end of the prologue
-            // section for this slot (current bytes_.size()).
-            size_t after = sub->bytes().size();
-            size_t deltaBytes = after - (jumpInstr + kInstrSize);
-            size_t deltaInstr = deltaBytes / kInstrSize;
-            // Arg byte is 1 (instructions are 2 bytes wide).
-            if (deltaInstr > 0xFF) {
-                error("call-form default prologue exceeds 255-instruction jump "
-                      "range");
-            }
-            sub->patchArg(jumpInstr, static_cast<uint8_t>(deltaInstr));
+            // JUMP_IF_FALSE lands at the end of this slot's section.
+            resolveForwardJumps(*sub, {{jumpInstr, sub->pos()}});
         }
 
         // Body statements (children[nNamed..]).
@@ -1158,7 +1148,9 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
         case NodeKind::FalseLit: m.emit(Op::PUSH_FALSE, 0, currentLine_); return;
         case NodeKind::NilLit:   m.emit(Op::PUSH_NIL, 0, currentLine_); return;
         case NodeKind::Self:     m.emit(Op::PUSH_SELF, 0, currentLine_); return;
-        case NodeKind::Super:    m.emit(Op::PUSH_SUPER, 0, currentLine_); return;
+        // `super` as a value is self; as the receiver of a send it makes
+        // that one send a SEND_SUPER (the send cases below).
+        case NodeKind::Super:    m.emit(Op::PUSH_SELF, 0, currentLine_); return;
         case NodeKind::Identifier: {
             // Captured-dict path: any ancestor scope marked this name as
             // captured by an inner block.
@@ -1283,7 +1275,8 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
         case NodeKind::UnarySend: {
             emitExpr(m, *n.children[0]);
             auto sym = m.internSymbol(n.text);
-            m.emitWide(Op::SEND_UNARY, static_cast<unsigned int>(sym), currentLine_);
+            m.emitWide(isSuperReceiver(n) ? Op::SEND_SUPER : Op::SEND_UNARY,
+                       static_cast<unsigned int>(sym), currentLine_);
             return;
         }
         case NodeKind::BinarySend: {
@@ -1299,7 +1292,8 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             // the shared SEND handler, so user-defined `+` / `<` etc. on
             // non-Integer receivers still dispatch normally.
             Op send = Op::SEND_BINARY;
-            if      (n.text == "+")  send = Op::BIN_INT_ADD;
+            if (isSuperReceiver(n))  send = Op::SEND_SUPER;
+            else if (n.text == "+")  send = Op::BIN_INT_ADD;
             else if (n.text == "-")  send = Op::BIN_INT_SUB;
             else if (n.text == "<=") send = Op::BIN_INT_LE;
             else if (n.text == "<")  send = Op::BIN_INT_LT;
@@ -1330,7 +1324,7 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             // that surfaces doesNotUnderstand at runtime.
             //
             // See docs/archive/design-specs/2026-05-24-doyielding-design.md.
-            if (n.text == "doYielding:"
+            if (n.text == "doYielding:" && !isSuperReceiver(n)
                 && n.children.size() == 2
                 && n.children[1]->kind == NodeKind::Block
                 && n.children[1]->intValue == 1) {
@@ -1348,7 +1342,8 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                 emitExpr(m, *n.children[i]);
             }
             auto sym = m.internSymbol(n.text);
-            m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(sym), currentLine_);
+            m.emitWide(isSuperReceiver(n) ? Op::SEND_SUPER : Op::SEND_KEYWORD,
+                       static_cast<unsigned int>(sym), currentLine_);
             return;
         }
         case NodeKind::CallSend: {
@@ -1368,6 +1363,14 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             // that order. See docs/archive/design-specs/2026-06-13-protocore-call-syntax.md.
             const int nPos   = static_cast<int>(n.intValue);
             const int nNamed = static_cast<int>(n.intValue2);
+            if (isSuperReceiver(n)) {
+                // SEND_CALL has no super form; sending to self instead would
+                // run the override the programmer meant to skip.
+                error("a call-form send cannot have super as its receiver: super "
+                      + n.text + "(...) (line " + std::to_string(currentLine_) + ")");
+                m.emit(Op::PUSH_NIL, 0, currentLine_);
+                return;
+            }
             // Receiver, then args in children order (positionals first,
             // then named in sorted order — matches dispatcher expectation).
             emitExpr(m, *n.children[0]);
@@ -1389,6 +1392,8 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
         }
         case NodeKind::Cascade: {
             // children[0] is the receiver; children[1..] are partial sends.
+            // Every message of a cascade to super is a super send.
+            const bool toSuper = isSuperReceiver(n);
             emitExpr(m, *n.children[0]);
             int tmp = declareLocal("__cascade_tmp_" + std::to_string(scopes_.back().nextSlot));
             for (size_t i = 1; i < n.children.size(); ++i) {
@@ -1400,16 +1405,19 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                 // emit args; receiver is already on stack just below the args
                 if (msg.kind == NodeKind::UnarySend) {
                     auto sym = m.internSymbol(msg.text);
-                    m.emitWide(Op::SEND_UNARY, static_cast<unsigned int>(sym), currentLine_);
+                    m.emitWide(toSuper ? Op::SEND_SUPER : Op::SEND_UNARY,
+                               static_cast<unsigned int>(sym), currentLine_);
                 } else if (msg.kind == NodeKind::BinarySend) {
                     if (msg.children.empty()) { error("cascade binary missing arg"); }
                     else emitExpr(m, *msg.children[0]);
                     auto sym = m.internSymbol(msg.text);
-                    m.emitWide(Op::SEND_BINARY, static_cast<unsigned int>(sym), currentLine_);
+                    m.emitWide(toSuper ? Op::SEND_SUPER : Op::SEND_BINARY,
+                               static_cast<unsigned int>(sym), currentLine_);
                 } else if (msg.kind == NodeKind::KeywordSend) {
                     for (auto& a : msg.children) emitExpr(m, *a);
                     auto sym = m.internSymbol(msg.text);
-                    m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(sym), currentLine_);
+                    m.emitWide(toSuper ? Op::SEND_SUPER : Op::SEND_KEYWORD,
+                               static_cast<unsigned int>(sym), currentLine_);
                 } else {
                     error("unexpected node in cascade");
                 }
@@ -1725,11 +1733,6 @@ void Compiler::emitDoYieldingLoop(BytecodeModule& m,
     // The interned `1` constant — reused for the i++ at loop tail.
     size_t oneConstIdx = m.addInteger(1);
 
-    // Helper: current instruction index (count of words already emitted).
-    auto curInstrIdx = [&]() -> size_t {
-        return m.instrStartPc().size();
-    };
-
     // ---- Setup: coll := receiver; blk := the block (hoisted, 1 PUSH_BLOCK
     // for the whole loop instead of one per iter); n := coll size; i := 1.
     emitExpr(m, receiverNode);
@@ -1743,18 +1746,15 @@ void Compiler::emitDoYieldingLoop(BytecodeModule& m,
     m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slotI),    currentLine_);
 
     // ---- LOOP_TEST:
-    size_t loopTestInstrIdx = curInstrIdx();
+    const size_t loopTest = m.pos();
 
     m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotI), currentLine_);
     m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotN), currentLine_);
     m.emitWide(Op::SEND_BINARY,
                static_cast<unsigned int>(m.internSymbol("<=")), currentLine_);
 
-    // JUMP_IF_FALSE — placeholder, patched below. emit() (not emitWide()) so
-    // this is exactly one 2-byte word and the arg byte sits at bytes()[N+1].
-    size_t jumpFalseInstrIdx = curInstrIdx();
-    size_t jumpFalseBytePos  = m.bytes().size();
-    m.emit(Op::JUMP_IF_FALSE, 0, currentLine_);
+    // JUMP_IF_FALSE to LOOP_END, resolved by closeLoop.
+    const size_t jumpFalse = emitForwardJump(m, Op::JUMP_IF_FALSE);
 
     // ---- Body:  blk value: (coll at: i)
     // Stack discipline: SEND_KEYWORD `value:` pops 1 arg then receiver from
@@ -1775,29 +1775,8 @@ void Compiler::emitDoYieldingLoop(BytecodeModule& m,
                static_cast<unsigned int>(m.internSymbol("+")), currentLine_);
     m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slotI), currentLine_);
 
-    // ---- JUMP_BACK to LOOP_TEST.
-    // The handler does f.pc -= arg * kInstrSize AFTER pc has already been
-    // advanced past this JUMP_BACK word. So the arg = number of full
-    // instructions from LOOP_TEST up to and INCLUDING this JUMP_BACK.
-    size_t jumpBackInstrIdx = curInstrIdx();
-    size_t backOffset = jumpBackInstrIdx - loopTestInstrIdx + 1;
-    if (backOffset > 255) {
-        error("doYielding: loop body too large for 8-bit JUMP_BACK offset");
-        return;
-    }
-    m.emit(Op::JUMP_BACK, static_cast<uint8_t>(backOffset), currentLine_);
-
-    // ---- LOOP_END: patch the JUMP_IF_FALSE forward offset.
-    // JUMP_IF_FALSE's pc advance happens BEFORE the arg shift; arg = number
-    // of instructions to skip forward from the slot RIGHT AFTER
-    // JUMP_IF_FALSE.
-    size_t loopEndInstrIdx = curInstrIdx();
-    size_t fwdOffset = loopEndInstrIdx - jumpFalseInstrIdx - 1;
-    if (fwdOffset > 255) {
-        error("doYielding: loop body too large for 8-bit JUMP_IF_FALSE offset");
-        return;
-    }
-    m.patchArg(jumpFalseBytePos, static_cast<uint8_t>(fwdOffset));
+    // ---- JUMP_BACK to LOOP_TEST; LOOP_END follows it.
+    closeLoop(m, loopTest, jumpFalse);
 
     // ---- do:'s return value is the receiver.
     m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotColl), currentLine_);
@@ -1823,6 +1802,8 @@ void Compiler::emitDoYieldingLoop(BytecodeModule& m,
 Compiler::InlineShape Compiler::inlineShapeOf(const ast::Node& n) {
     using ast::NodeKind;
     if (n.kind != NodeKind::KeywordSend) return InlineShape::None;
+    // `super ifTrue: [...]` is a super send of ifTrue:, not a conditional.
+    if (isSuperReceiver(n)) return InlineShape::None;
     auto isInlineableBlock = [](const ast::Node* b) -> bool {
         return b && b->kind == NodeKind::Block
             && b->intValue == 0
@@ -1878,26 +1859,14 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
         // JUMP_IF_FALSE skips when receiver is PROTO_FALSE (so it skips
         // the body of ifTrue when cond is false). JUMP_IF_TRUE skips
         // when receiver is PROTO_TRUE (mirror for ifFalse).
-        size_t jSkipBytePos  = m.bytes().size();
-        size_t jSkipInstrIdx = m.instrStartPc().size();
-        m.emit(invert ? Op::JUMP_IF_TRUE : Op::JUMP_IF_FALSE, 0, currentLine_);
+        const size_t jSkip = emitForwardJump(m, invert ? Op::JUMP_IF_TRUE : Op::JUMP_IF_FALSE);
         emitInlinedBlockBody(m, *n.children[1]);
         // The inlined body left a result on the stack. Jump past the nil
         // we are about to emit for the not-taken branch.
-        size_t jDoneBytePos  = m.bytes().size();
-        size_t jDoneInstrIdx = m.instrStartPc().size();
-        m.emit(Op::JUMP, 0, currentLine_);
-        // Patch jSkip target = right here (PUSH_NIL is next).
-        size_t skipTargetIdx = m.instrStartPc().size();
-        size_t skipOffset    = skipTargetIdx - jSkipInstrIdx - 1;
-        if (skipOffset > 255) { error("inline if: block too large"); return false; }
-        m.patchArg(jSkipBytePos, static_cast<uint8_t>(skipOffset));
+        const size_t jDone = emitForwardJump(m, Op::JUMP);
+        const size_t skipTarget = m.pos();   // PUSH_NIL
         m.emit(Op::PUSH_NIL, 0, currentLine_);
-        // Patch jDone target = right here.
-        size_t doneTargetIdx = m.instrStartPc().size();
-        size_t doneOffset    = doneTargetIdx - jDoneInstrIdx - 1;
-        if (doneOffset > 255) { error("inline if: block too large"); return false; }
-        m.patchArg(jDoneBytePos, static_cast<uint8_t>(doneOffset));
+        resolveForwardJumps(m, {{jSkip, skipTarget}, {jDone, m.pos()}});
         return true;
     }
 
@@ -1915,25 +1884,14 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
         m.emitWide(Op::ASSERT_BOOL_OR_DNU,
                    static_cast<unsigned int>(selSym), currentLine_);
         // Jump to the false branch if cond is false.
-        size_t jToFalseBytePos  = m.bytes().size();
-        size_t jToFalseInstrIdx = m.instrStartPc().size();
-        m.emit(Op::JUMP_IF_FALSE, 0, currentLine_);
+        const size_t jToFalse = emitForwardJump(m, Op::JUMP_IF_FALSE);
         // True branch.
         emitInlinedBlockBody(m, trueBranch);
-        size_t jDoneBytePos  = m.bytes().size();
-        size_t jDoneInstrIdx = m.instrStartPc().size();
-        m.emit(Op::JUMP, 0, currentLine_);
+        const size_t jDone = emitForwardJump(m, Op::JUMP);
         // False branch starts here.
-        size_t falseTargetIdx = m.instrStartPc().size();
-        size_t toFalseOffset  = falseTargetIdx - jToFalseInstrIdx - 1;
-        if (toFalseOffset > 255) { error("inline if/else: block too large"); return false; }
-        m.patchArg(jToFalseBytePos, static_cast<uint8_t>(toFalseOffset));
+        const size_t falseTarget = m.pos();
         emitInlinedBlockBody(m, falseBranch);
-        // Done marker.
-        size_t doneTargetIdx = m.instrStartPc().size();
-        size_t doneOffset    = doneTargetIdx - jDoneInstrIdx - 1;
-        if (doneOffset > 255) { error("inline if/else: block too large"); return false; }
-        m.patchArg(jDoneBytePos, static_cast<uint8_t>(doneOffset));
+        resolveForwardJumps(m, {{jToFalse, falseTarget}, {jDone, m.pos()}});
         return true;
     }
 
@@ -1962,8 +1920,11 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
             int baseSlot = s.nextSlot;
             int slotI   = declareLocal("__td_i_"   + std::to_string(baseSlot));
             int slotEnd = declareLocal("__td_end_" + std::to_string(baseSlot));
-            // Setup: i := start; end := endExpr.
+            // Setup: i := start; end := endExpr. The receiver is evaluated
+            // once: a copy stays on the operand stack under the loop as the
+            // value of the whole expression (to:do: answers its receiver).
             emitExpr(m, *n.children[0]);
+            m.emit(Op::DUP, 0, currentLine_);
             m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slotI), currentLine_);
             emitExpr(m, *n.children[1]);
             m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slotEnd), currentLine_);
@@ -1982,7 +1943,6 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
             const bool hidesCaptured = s.capturedNames.erase(iterName) != 0;
             inlinedLoopArgs_.emplace_back(&s, iterName);
             // loopTest:
-            size_t loopTestInstrIdx = m.instrStartPc().size();
             const size_t loopFromPc = m.bytes().size();
             m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotI),   currentLine_);
             m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotEnd), currentLine_);
@@ -1991,9 +1951,7 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
             // every iteration (no SEND dispatch).
             m.emitWide(Op::BIN_INT_LE,
                        static_cast<unsigned int>(m.internSymbol("<=")), currentLine_);
-            size_t jExitBytePos  = m.bytes().size();
-            size_t jExitInstrIdx = m.instrStartPc().size();
-            m.emit(Op::JUMP_IF_FALSE, 0, currentLine_);
+            const size_t jExit = emitForwardJump(m, Op::JUMP_IF_FALSE);
             // body (the block's children) — inlined.
             emitInlinedBlockBody(m, *blk);
             m.emit(Op::POP, 0, currentLine_);
@@ -2004,16 +1962,8 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
             m.emitWide(Op::BIN_INT_ADD,
                        static_cast<unsigned int>(m.internSymbol("+")), currentLine_);
             m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slotI), currentLine_);
-            // JUMP_BACK loopTest
-            size_t jBackInstrIdx = m.instrStartPc().size();
-            size_t backOffset    = jBackInstrIdx - loopTestInstrIdx + 1;
-            if (backOffset > 255) { error("inline to:do:: body too large"); return false; }
-            m.emit(Op::JUMP_BACK, static_cast<uint8_t>(backOffset), currentLine_);
-            // exit target
-            size_t exitTargetIdx = m.instrStartPc().size();
-            size_t exitOffset    = exitTargetIdx - jExitInstrIdx - 1;
-            if (exitOffset > 255) { error("inline to:do:: body too large"); return false; }
-            m.patchArg(jExitBytePos, static_cast<uint8_t>(exitOffset));
+            // JUMP_BACK loopTest; the exit lands after it.
+            closeLoop(m, loopFromPc, jExit);
             // The debugger shows the counter slot as the block's argument.
             m.addScopedLocal(static_cast<size_t>(slotI), iterName, loopFromPc, m.bytes().size());
             // Restore the user's iter-var binding.
@@ -2021,8 +1971,7 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
             if (hidesCaptured) s.capturedNames.insert(iterName);
             if (hadBinding) s.slots[iterName] = savedSlot;
             else            s.slots.erase(iterName);
-            // to:do: returns the receiver (the start integer); push it.
-            emitExpr(m, *n.children[0]);
+            // The receiver's copy, pushed before the loop, is the value.
             return true;
         }
     }
@@ -2035,7 +1984,7 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
         bool invert = (n.text == "whileFalse:");
         auto selSym = m.internSymbol(n.text);
         // loopTest:
-        size_t loopTestInstrIdx = m.instrStartPc().size();
+        const size_t loopTest = m.pos();
         emitInlinedBlockBody(m, *n.children[0]);  // cond → top of stack
         // Guard non-Boolean cond results — same correctness fix as for
         // ifTrue:/ifFalse: above. The cond block re-evaluates every
@@ -2043,21 +1992,12 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
         m.emitWide(Op::ASSERT_BOOL_OR_DNU,
                    static_cast<unsigned int>(selSym), currentLine_);
         // Exit loop when cond does NOT match polarity.
-        size_t jExitBytePos  = m.bytes().size();
-        size_t jExitInstrIdx = m.instrStartPc().size();
-        m.emit(invert ? Op::JUMP_IF_TRUE : Op::JUMP_IF_FALSE, 0, currentLine_);
+        const size_t jExit = emitForwardJump(m, invert ? Op::JUMP_IF_TRUE : Op::JUMP_IF_FALSE);
         // body, discard its value, loop back.
         emitInlinedBlockBody(m, *n.children[1]);
         m.emit(Op::POP, 0, currentLine_);
-        size_t jBackInstrIdx = m.instrStartPc().size();
-        size_t backOffset    = jBackInstrIdx - loopTestInstrIdx + 1;
-        if (backOffset > 255) { error("inline while: body too large"); return false; }
-        m.emit(Op::JUMP_BACK, static_cast<uint8_t>(backOffset), currentLine_);
+        closeLoop(m, loopTest, jExit);
         // exit target — whileTrue: returns nil.
-        size_t exitTargetIdx = m.instrStartPc().size();
-        size_t exitOffset    = exitTargetIdx - jExitInstrIdx - 1;
-        if (exitOffset > 255) { error("inline while: body too large"); return false; }
-        m.patchArg(jExitBytePos, static_cast<uint8_t>(exitOffset));
         m.emit(Op::PUSH_NIL, 0, currentLine_);
         return true;
     }
@@ -2177,9 +2117,51 @@ std::size_t Compiler::tryEmitInstVarGroup(BytecodeModule& m,
     return n;
 }
 
-void Compiler::patchJumpToHere(BytecodeModule& m, std::size_t /*jumpInstrPos*/) {
-    // Kept for forward compatibility — the inline helpers above currently
-    // patch jumps directly via m.patchArg + m.instrStartPc() indexing.
+std::size_t Compiler::emitForwardJump(BytecodeModule& m, Op op) {
+    const std::size_t pos = m.pos();
+    m.emit(op, 0, currentLine_);
+    return pos;
+}
+
+void Compiler::resolveForwardJumps(BytecodeModule& m, std::vector<ForwardJump> jumps) {
+    // Last jump first: widening a jump inserts words at its position, which
+    // moves every later position but none before it, so the jumps still to
+    // be resolved (all before it) keep their positions and only a target past
+    // the insertion moves.
+    std::sort(jumps.begin(), jumps.end(),
+              [](const ForwardJump& a, const ForwardJump& b) { return a.pos > b.pos; });
+    for (std::size_t i = 0; i < jumps.size(); ++i) {
+        const ForwardJump& j = jumps[i];
+        // The operand counts words from the one after the jump word; EXTEND
+        // words inserted in front of the jump do not change it.
+        const auto offset = static_cast<unsigned int>((j.target - (j.pos + kInstrSize)) / kInstrSize);
+        const unsigned int prefixes = BytecodeModule::extendPrefixesFor(offset);
+        m.insertExtendPrefixes(j.pos, prefixes);
+        m.patchWideArg(j.pos, prefixes, offset);
+        for (std::size_t k = i + 1; k < jumps.size(); ++k)
+            if (jumps[k].target > j.pos) jumps[k].target += prefixes * kInstrSize;
+    }
+}
+
+void Compiler::closeLoop(BytecodeModule& m, std::size_t loopStart, std::size_t exitPos) {
+    // The exit jump lands just past the JUMP_BACK, whose own width (one to
+    // three words) depends on the distance back. Widen the exit jump first,
+    // assuming the widest JUMP_BACK: a widening after the JUMP_BACK exists
+    // would lengthen the loop under it. An EXTEND carrying 0 is harmless.
+    const auto bodyWords = static_cast<unsigned int>((m.pos() - (exitPos + kInstrSize)) / kInstrSize);
+    const unsigned int prefixes = BytecodeModule::extendPrefixesFor(bodyWords + 3);
+    m.insertExtendPrefixes(exitPos, prefixes);
+    // JUMP_BACK subtracts its operand, in words, from the pc after it: the
+    // words from the loop start up to and including the JUMP_BACK and its
+    // own EXTEND prefixes.
+    const auto span = static_cast<unsigned int>((m.pos() - loopStart) / kInstrSize);
+    unsigned int back = span + 1;
+    while (back != span + 1 + BytecodeModule::extendPrefixesFor(back))
+        back = span + 1 + BytecodeModule::extendPrefixesFor(back);
+    m.emitWide(Op::JUMP_BACK, back, currentLine_);
+    const std::size_t jumpWord = exitPos + prefixes * kInstrSize;
+    m.patchWideArg(exitPos, prefixes,
+                   static_cast<unsigned int>((m.pos() - (jumpWord + kInstrSize)) / kInstrSize));
 }
 
 bool Compiler::instVarGroupsDefault() {
