@@ -1,0 +1,73 @@
+module main: <module>
+  args 0, locals 1 (0 r), stack 48
+  constants:
+    #0   symbol    #Error
+    #1   symbol    #on:do:
+    #2   symbol    #printNl
+    #3   symbol    #ensure:
+  code:
+      0  PUSH_NIL
+      1  DUP
+      2  STORE_LOCAL        0     ; r
+      3  POP
+      4  PUSH_BLOCK         0     ; main.0 (<block>)
+      5  PUSH_GLOBAL        0     ; Error
+      6  PUSH_BLOCK         1     ; main.1 (<block>)
+      7  SEND_KEYWORD       1     ; #on:do:, 2 args
+      8  DUP
+      9  STORE_LOCAL        0     ; r
+     10  POP
+     11  PUSH_LOCAL         0     ; r
+     12  SEND_UNARY         2     ; #printNl
+     13  POP
+     14  PUSH_BLOCK         2     ; main.2 (<block>)
+     15  PUSH_BLOCK         3     ; main.3 (<block>)
+     16  SEND_KEYWORD       3     ; #ensure:, 1 arg
+     17  RETURN_TOP
+
+module main.0: <block>
+  args 0, locals 0, stack 48
+  constants:
+    #0   symbol    #Error
+    #1   string    'boom'
+    #2   symbol    #signal:
+    #3   string    'not reached'
+  code:
+      0  PUSH_GLOBAL        0     ; Error
+      1  PUSH_CONST         1     ; 'boom'
+      2  SEND_KEYWORD       2     ; #signal:, 1 arg
+      3  POP
+      4  PUSH_CONST         3     ; 'not reached'
+      5  RETURN_TOP
+
+module main.1: <block>
+  args 1, locals 1 (0 e), stack 48
+  constants:
+    #0   symbol    #messageText
+  code:
+      0  PUSH_LOCAL         0     ; e
+      1  SEND_UNARY         0     ; #messageText
+      2  RETURN_TOP
+
+module main.2: <block>
+  args 0, locals 0, stack 48
+  constants:
+    #0   string    'body'
+    #1   symbol    #printNl
+  code:
+      0  PUSH_CONST         0     ; 'body'
+      1  SEND_UNARY         1     ; #printNl
+      2  RETURN_TOP
+
+module main.3: <block>
+  args 0, locals 0, stack 48
+  constants:
+    #0   string    'cleanup'
+    #1   symbol    #printNl
+  code:
+      0  PUSH_CONST         0     ; 'cleanup'
+      1  SEND_UNARY         1     ; #printNl
+      2  RETURN_TOP
+'boom'
+'body'
+'cleanup'

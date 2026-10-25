@@ -198,6 +198,14 @@ if(Python3_Interpreter_FOUND)
                 ENVIRONMENT_MODIFICATION "PATH=path_list_append:${PROTOST_POSIX_TOOLS}")
         endif()
     endforeach()
+    # The bytecode listings of docs/VM.md are real `protost --disasm` output:
+    # each docs/vm-examples/*.st is disassembled and compared with its golden
+    # .txt file and with VM.md's copy (docs/vm-examples/disasm_examples.py).
+    add_test(NAME docs/vm-examples
+        COMMAND ${Python3_EXECUTABLE} -I
+                ${CMAKE_SOURCE_DIR}/docs/vm-examples/disasm_examples.py
+                $<TARGET_FILE:protost> --check)
+    set_tests_properties(docs/vm-examples PROPERTIES TIMEOUT 300)
     add_test(NAME docs/selftest
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/docs/test_run_doc_snippets.py

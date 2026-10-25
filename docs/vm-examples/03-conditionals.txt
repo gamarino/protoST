@@ -1,0 +1,43 @@
+module main: <module>
+  args 0, locals 1 (0 n), stack 48
+  constants:
+    #0   integer   7
+    #1   integer   5
+    #2   symbol    #>
+    #3   symbol    #ifTrue:ifFalse:
+    #4   string    'big'
+    #5   string    'small'
+    #6   symbol    #printNl
+    #7   symbol    #odd
+    #8   symbol    #ifTrue:
+    #9   string    'odd'
+  code:
+      0  PUSH_NIL
+      1  DUP
+      2  STORE_LOCAL        0     ; n
+      3  POP
+      4  PUSH_CONST         0     ; 7
+      5  DUP
+      6  STORE_LOCAL        0     ; n
+      7  POP
+      8  PUSH_LOCAL         0     ; n
+      9  PUSH_CONST         1     ; 5
+     10  BIN_INT_GT         2     ; #>
+     11  ASSERT_BOOL_OR_DNU 3     ; #ifTrue:ifFalse:
+     12  JUMP_IF_FALSE      2     ; -> 15
+     13  PUSH_CONST         4     ; 'big'
+     14  JUMP               1     ; -> 16
+     15  PUSH_CONST         5     ; 'small'
+     16  SEND_UNARY         6     ; #printNl
+     17  POP
+     18  PUSH_LOCAL         0     ; n
+     19  SEND_UNARY         7     ; #odd
+     20  ASSERT_BOOL_OR_DNU 8     ; #ifTrue:
+     21  JUMP_IF_FALSE      3     ; -> 25
+     22  PUSH_CONST         9     ; 'odd'
+     23  SEND_UNARY         6     ; #printNl
+     24  JUMP               1     ; -> 26
+     25  PUSH_NIL
+     26  RETURN_TOP
+'big'
+'odd'

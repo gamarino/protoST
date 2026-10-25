@@ -1,0 +1,87 @@
+module main: <module>
+  args 0, locals 0, stack 48
+  constants:
+    #0   symbol    #Point3
+    #1   symbol    #Object
+    #2   symbol    #__subclassNamed:
+    #3   string    'Point3'
+    #4   symbol    #__setClassName:
+    #5   string    'Point3'
+    #6   string    'x y z'
+    #7   symbol    #__setInstVarNames:
+    #8   symbol    #setX:y:
+    #9   symbol    #__installMethod:as:
+    #10  symbol    #sum
+    #11  symbol    #new
+    #12  integer   1
+    #13  integer   2
+    #14  symbol    #printNl
+  code:
+      0  PUSH_GLOBAL        1     ; Object
+      1  PUSH_CONST         3     ; 'Point3'
+      2  SEND_KEYWORD       2     ; #__subclassNamed:, 1 arg
+      3  PUSH_CONST         5     ; 'Point3'
+      4  SEND_KEYWORD       4     ; #__setClassName:, 1 arg
+      5  PUSH_CONST         6     ; 'x y z'
+      6  SEND_KEYWORD       7     ; #__setInstVarNames:, 1 arg
+      7  DUP
+      8  STORE_GLOBAL       0     ; Point3
+      9  POP
+     10  PUSH_GLOBAL        0     ; Point3
+     11  PUSH_BLOCK         0     ; main.0 (Point3>>setX:y:)
+     12  PUSH_CONST         8     ; #setX:y:
+     13  SEND_KEYWORD       9     ; #__installMethod:as:, 2 args
+     14  POP
+     15  PUSH_GLOBAL        0     ; Point3
+     16  PUSH_BLOCK         1     ; main.1 (Point3>>sum)
+     17  PUSH_CONST         10    ; #sum
+     18  SEND_KEYWORD       9     ; #__installMethod:as:, 2 args
+     19  POP
+     20  PUSH_GLOBAL        0     ; Point3
+     21  SEND_UNARY         11    ; #new
+     22  PUSH_CONST         12    ; 1
+     23  PUSH_CONST         13    ; 2
+     24  SEND_KEYWORD       8     ; #setX:y:, 2 args
+     25  SEND_UNARY         10    ; #sum
+     26  SEND_UNARY         14    ; #printNl
+     27  RETURN_TOP
+
+module main.0: Point3>>setX:y:
+  args 3, locals 3 (0 self, 1 ax, 2 ay), stack 48 + 3
+  defining class Point3
+  write groups:
+    @0   x, write 1 of 3
+    @1   y, write 2 of 3
+    @2   z, write 3 of 3
+  constants:
+    #0   symbol    #x
+    #1   symbol    #y
+    #2   integer   0
+    #3   symbol    #z
+  code:
+      0  PUSH_LOCAL         1     ; ax
+      1  IVAR_GROUP         0     ; x, write 1 of 3
+      2  PUSH_LOCAL         2     ; ay
+      3  IVAR_GROUP         1     ; y, write 2 of 3
+      4  PUSH_CONST         2     ; 0
+      5  IVAR_GROUP_END     2     ; z, write 3 of 3
+      6  POP
+      7  PUSH_LOCAL         0     ; self
+      8  RETURN
+
+module main.1: Point3>>sum
+  args 1, locals 1 (0 self), stack 48
+  defining class Point3
+  constants:
+    #0   symbol    #x
+    #1   symbol    #y
+    #2   symbol    #+
+    #3   symbol    #z
+  code:
+      0  PUSH_INSTVAR       0     ; x
+      1  PUSH_INSTVAR       1     ; y
+      2  BIN_INT_ADD        2     ; #+
+      3  PUSH_INSTVAR       3     ; z
+      4  BIN_INT_ADD        2     ; #+
+      5  RETURN
+3

@@ -1,0 +1,48 @@
+module main: <module>
+  args 0, locals 1 (0 d), stack 48
+  constants:
+    #0   symbol    #Dictionary
+    #1   symbol    #new
+    #2   symbol    #k
+    #3   integer   42
+    #4   symbol    #at:put:
+    #5   symbol    #at:
+    #6   symbol    #printNl
+    #7   symbol    #missing
+    #8   symbol    #at:ifAbsent:
+  code:
+      0  PUSH_NIL
+      1  DUP
+      2  STORE_LOCAL        0     ; d
+      3  POP
+      4  PUSH_GLOBAL        0     ; Dictionary
+      5  SEND_UNARY         1     ; #new
+      6  DUP
+      7  STORE_LOCAL        0     ; d
+      8  POP
+      9  PUSH_LOCAL         0     ; d
+     10  PUSH_CONST         2     ; #k
+     11  PUSH_CONST         3     ; 42
+     12  SEND_KEYWORD       4     ; #at:put:, 2 args
+     13  POP
+     14  PUSH_LOCAL         0     ; d
+     15  PUSH_CONST         2     ; #k
+     16  SEND_KEYWORD       5     ; #at:, 1 arg
+     17  SEND_UNARY         6     ; #printNl
+     18  POP
+     19  PUSH_LOCAL         0     ; d
+     20  PUSH_CONST         7     ; #missing
+     21  PUSH_BLOCK         0     ; main.0 (<block>)
+     22  SEND_KEYWORD       8     ; #at:ifAbsent:, 2 args
+     23  SEND_UNARY         6     ; #printNl
+     24  RETURN_TOP
+
+module main.0: <block>
+  args 0, locals 0, stack 48
+  constants:
+    #0   integer   0
+  code:
+      0  PUSH_CONST         0     ; 0
+      1  RETURN_TOP
+42
+0

@@ -73,7 +73,8 @@ The project uses a **spec → plan → implementation** flow: a track is first
 specified, then broken into a small plan, then implemented with review. The
 design documents written for Tracks 1–11 are kept in
 [`docs/archive/design-specs/`](archive/design-specs/README.md) as examples of
-the format. A contributor picking up a track should:
+the format. [`VM.md`](VM.md) is the guided tour of the compiler, the bytecode
+and the interpreter. A contributor picking up a track should:
 
 1. Open an issue describing the slice they want to take.
 2. Write (or extend) a design note for it in the issue or pull request.

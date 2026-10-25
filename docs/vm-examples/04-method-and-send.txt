@@ -1,0 +1,72 @@
+module main: <module>
+  args 0, locals 0, stack 48
+  constants:
+    #0   symbol    #Greeter
+    #1   symbol    #Object
+    #2   symbol    #__subclassNamed:
+    #3   string    'Greeter'
+    #4   symbol    #__setClassName:
+    #5   string    'Greeter'
+    #6   string    'name'
+    #7   symbol    #__setInstVarNames:
+    #8   symbol    #name:
+    #9   symbol    #__installMethod:as:
+    #10  symbol    #greeting
+    #11  symbol    #new
+    #12  string    'Ada'
+    #13  symbol    #printNl
+  code:
+      0  PUSH_GLOBAL        1     ; Object
+      1  PUSH_CONST         3     ; 'Greeter'
+      2  SEND_KEYWORD       2     ; #__subclassNamed:, 1 arg
+      3  PUSH_CONST         5     ; 'Greeter'
+      4  SEND_KEYWORD       4     ; #__setClassName:, 1 arg
+      5  PUSH_CONST         6     ; 'name'
+      6  SEND_KEYWORD       7     ; #__setInstVarNames:, 1 arg
+      7  DUP
+      8  STORE_GLOBAL       0     ; Greeter
+      9  POP
+     10  PUSH_GLOBAL        0     ; Greeter
+     11  PUSH_BLOCK         0     ; main.0 (Greeter>>name:)
+     12  PUSH_CONST         8     ; #name:
+     13  SEND_KEYWORD       9     ; #__installMethod:as:, 2 args
+     14  POP
+     15  PUSH_GLOBAL        0     ; Greeter
+     16  PUSH_BLOCK         1     ; main.1 (Greeter>>greeting)
+     17  PUSH_CONST         10    ; #greeting
+     18  SEND_KEYWORD       9     ; #__installMethod:as:, 2 args
+     19  POP
+     20  PUSH_GLOBAL        0     ; Greeter
+     21  SEND_UNARY         11    ; #new
+     22  PUSH_CONST         12    ; 'Ada'
+     23  SEND_KEYWORD       8     ; #name:, 1 arg
+     24  SEND_UNARY         10    ; #greeting
+     25  SEND_UNARY         13    ; #printNl
+     26  RETURN_TOP
+
+module main.0: Greeter>>name:
+  args 2, locals 2 (0 self, 1 aString), stack 48
+  defining class Greeter
+  constants:
+    #0   symbol    #name
+  code:
+      0  PUSH_LOCAL         1     ; aString
+      1  DUP
+      2  STORE_INSTVAR      0     ; name
+      3  POP
+      4  PUSH_LOCAL         0     ; self
+      5  RETURN
+
+module main.1: Greeter>>greeting
+  args 1, locals 1 (0 self), stack 48
+  defining class Greeter
+  constants:
+    #0   string    'Hello, '
+    #1   symbol    #name
+    #2   symbol    #,
+  code:
+      0  PUSH_CONST         0     ; 'Hello, '
+      1  PUSH_INSTVAR       1     ; name
+      2  SEND_BINARY        2     ; #,
+      3  RETURN
+'Hello, Ada'

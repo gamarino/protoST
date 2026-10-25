@@ -1,0 +1,169 @@
+module main: <module>
+  args 0, locals 0, stack 48
+  constants:
+    #0   symbol    #Box
+    #1   symbol    #Object
+    #2   symbol    #__subclassNamed:
+    #3   string    'Box'
+    #4   symbol    #__setClassName:
+    #5   string    'Box'
+    #6   string    'w h'
+    #7   symbol    #__setInstVarNames:
+    #8   symbol    #w:
+    #9   symbol    #__installMethod:as:
+    #10  symbol    #w:h:
+    #11  symbol    #area
+    #12  symbol    #scaled
+    #13  symbol    #new
+    #14  integer   3
+    #15  symbol    #printNl
+    #16  integer   3
+    #17  integer   4
+    #18  integer   2
+    #19  integer   10
+    #20  symbol    #scaled#1
+    #21  integer   2
+    #22  integer   10
+    #23  integer   1
+    #24  symbol    #scaled#1#offset
+  code:
+      0  PUSH_GLOBAL        1     ; Object
+      1  PUSH_CONST         3     ; 'Box'
+      2  SEND_KEYWORD       2     ; #__subclassNamed:, 1 arg
+      3  PUSH_CONST         5     ; 'Box'
+      4  SEND_KEYWORD       4     ; #__setClassName:, 1 arg
+      5  PUSH_CONST         6     ; 'w h'
+      6  SEND_KEYWORD       7     ; #__setInstVarNames:, 1 arg
+      7  DUP
+      8  STORE_GLOBAL       0     ; Box
+      9  POP
+     10  PUSH_GLOBAL        0     ; Box
+     11  PUSH_BLOCK         0     ; main.0 (Box>>w:)
+     12  PUSH_CONST         8     ; #w:
+     13  SEND_KEYWORD       9     ; #__installMethod:as:, 2 args
+     14  POP
+     15  PUSH_GLOBAL        0     ; Box
+     16  PUSH_BLOCK         1     ; main.1 (Box>>w:h:)
+     17  PUSH_CONST         10    ; #w:h:
+     18  SEND_KEYWORD       9     ; #__installMethod:as:, 2 args
+     19  POP
+     20  PUSH_GLOBAL        0     ; Box
+     21  PUSH_BLOCK         2     ; main.2 (Box>>area)
+     22  PUSH_CONST         11    ; #area
+     23  SEND_KEYWORD       9     ; #__installMethod:as:, 2 args
+     24  POP
+     25  PUSH_GLOBAL        0     ; Box
+     26  PUSH_BLOCK         3     ; main.3 (Box>>scaled(...))
+     27  PUSH_CONST         12    ; #scaled
+     28  SEND_KEYWORD       9     ; #__installMethod:as:, 2 args
+     29  POP
+     30  PUSH_GLOBAL        0     ; Box
+     31  SEND_UNARY         13    ; #new
+     32  PUSH_CONST         14    ; 3
+     33  SEND_KEYWORD       8     ; #w:, 1 arg
+     34  SEND_UNARY         11    ; #area
+     35  SEND_UNARY         15    ; #printNl
+     36  POP
+     37  PUSH_GLOBAL        0     ; Box
+     38  SEND_UNARY         13    ; #new
+     39  PUSH_CONST         16    ; 3
+     40  PUSH_CONST         17    ; 4
+     41  SEND_KEYWORD       10    ; #w:h:, 2 args
+     42  SEND_UNARY         11    ; #area
+     43  SEND_UNARY         15    ; #printNl
+     44  POP
+     45  PUSH_GLOBAL        0     ; Box
+     46  SEND_UNARY         13    ; #new
+     47  PUSH_CONST         18    ; 2
+     48  SEND_KEYWORD       8     ; #w:, 1 arg
+     49  PUSH_CONST         19    ; 10
+     50  SEND_CALL          20    ; call scaled#1
+     51  SEND_UNARY         15    ; #printNl
+     52  POP
+     53  PUSH_GLOBAL        0     ; Box
+     54  SEND_UNARY         13    ; #new
+     55  PUSH_CONST         21    ; 2
+     56  SEND_KEYWORD       8     ; #w:, 1 arg
+     57  PUSH_CONST         22    ; 10
+     58  PUSH_CONST         23    ; 1
+     59  SEND_CALL          24    ; call scaled#1#offset
+     60  SEND_UNARY         15    ; #printNl
+     61  RETURN_TOP
+
+module main.0: Box>>w:
+  args 2, locals 2 (0 self, 1 aW), stack 48 + 2
+  defining class Box
+  write groups:
+    @0   w, write 1 of 2
+    @1   h, write 2 of 2
+  constants:
+    #0   symbol    #w
+    #1   symbol    #h
+  code:
+      0  PUSH_LOCAL         1     ; aW
+      1  IVAR_GROUP         0     ; w, write 1 of 2
+      2  PUSH_LOCAL         1     ; aW
+      3  IVAR_GROUP_END     1     ; h, write 2 of 2
+      4  POP
+      5  PUSH_LOCAL         0     ; self
+      6  RETURN
+
+module main.1: Box>>w:h:
+  args 3, locals 3 (0 self, 1 aW, 2 aH), stack 48 + 2
+  defining class Box
+  write groups:
+    @0   w, write 1 of 2
+    @1   h, write 2 of 2
+  constants:
+    #0   symbol    #w
+    #1   symbol    #h
+  code:
+      0  PUSH_LOCAL         1     ; aW
+      1  IVAR_GROUP         0     ; w, write 1 of 2
+      2  PUSH_LOCAL         2     ; aH
+      3  IVAR_GROUP_END     1     ; h, write 2 of 2
+      4  POP
+      5  PUSH_LOCAL         0     ; self
+      6  RETURN
+
+module main.2: Box>>area
+  args 1, locals 1 (0 self), stack 48
+  defining class Box
+  constants:
+    #0   symbol    #w
+    #1   symbol    #h
+    #2   symbol    #*
+  code:
+      0  PUSH_INSTVAR       0     ; w
+      1  PUSH_INSTVAR       1     ; h
+      2  SEND_BINARY        2     ; #*
+      3  RETURN
+
+module main.3: Box>>scaled(...)
+  args 3, locals 3 (0 self, 1 factor, 2 offset), stack 48
+  defining class Box
+  call form: 1 positional, offset=
+  constants:
+    #0   unset     <unset>
+    #1   symbol    #==
+    #2   integer   0
+    #3   symbol    #w
+    #4   symbol    #*
+    #5   symbol    #+
+  code:
+      0  PUSH_LOCAL         2     ; offset
+      1  PUSH_CONST         0     ; <unset>
+      2  SEND_BINARY        1     ; #==
+      3  JUMP_IF_FALSE      2     ; -> 6
+      4  PUSH_CONST         2     ; 0
+      5  STORE_LOCAL        2     ; offset
+      6  PUSH_INSTVAR       3     ; w
+      7  PUSH_LOCAL         1     ; factor
+      8  SEND_BINARY        4     ; #*
+      9  PUSH_LOCAL         2     ; offset
+     10  BIN_INT_ADD        5     ; #+
+     11  RETURN
+9
+12
+20
+21

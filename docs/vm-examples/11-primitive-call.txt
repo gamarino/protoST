@@ -1,0 +1,33 @@
+module main: <module>
+  args 0, locals 1 (0 xs), stack 48 + 3
+  constants:
+    #0   integer   10
+    #1   integer   20
+    #2   integer   30
+    #3   symbol    #size
+    #4   symbol    #printNl
+    #5   integer   2
+    #6   symbol    #at:
+  code:
+      0  PUSH_NIL
+      1  DUP
+      2  STORE_LOCAL        0     ; xs
+      3  POP
+      4  PUSH_CONST         0     ; 10
+      5  PUSH_CONST         1     ; 20
+      6  PUSH_CONST         2     ; 30
+      7  MAKE_ARRAY         3     ; 3 elements
+      8  DUP
+      9  STORE_LOCAL        0     ; xs
+     10  POP
+     11  PUSH_LOCAL         0     ; xs
+     12  SEND_UNARY         3     ; #size
+     13  SEND_UNARY         4     ; #printNl
+     14  POP
+     15  PUSH_LOCAL         0     ; xs
+     16  PUSH_CONST         5     ; 2
+     17  SEND_KEYWORD       6     ; #at:, 1 arg
+     18  SEND_UNARY         4     ; #printNl
+     19  RETURN_TOP
+3
+20

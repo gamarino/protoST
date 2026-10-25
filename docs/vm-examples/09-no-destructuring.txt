@@ -1,0 +1,72 @@
+module main: <module>
+  args 0, locals 3 (0 pair, 1 a, 2 b), stack 48 + 5
+  constants:
+    #0   integer   3
+    #1   integer   4
+    #2   symbol    #+
+    #3   string    'seven'
+    #4   integer   1
+    #5   symbol    #at:
+    #6   integer   2
+    #7   integer   1
+    #8   char      $a
+    #9   string    'str'
+    #10  symbol    #sym
+    #11  float     2.5
+    #12  symbol    #size
+    #13  symbol    #printNl
+    #14  symbol    #printString
+    #15  string    ' '
+    #16  symbol    #,
+  code:
+      0  PUSH_NIL
+      1  DUP
+      2  STORE_LOCAL        0     ; pair
+      3  POP
+      4  PUSH_NIL
+      5  DUP
+      6  STORE_LOCAL        1     ; a
+      7  POP
+      8  PUSH_NIL
+      9  DUP
+     10  STORE_LOCAL        2     ; b
+     11  POP
+     12  PUSH_CONST         0     ; 3
+     13  PUSH_CONST         1     ; 4
+     14  BIN_INT_ADD        2     ; #+
+     15  PUSH_CONST         3     ; 'seven'
+     16  MAKE_ARRAY         2     ; 2 elements
+     17  DUP
+     18  STORE_LOCAL        0     ; pair
+     19  POP
+     20  PUSH_LOCAL         0     ; pair
+     21  PUSH_CONST         4     ; 1
+     22  SEND_KEYWORD       5     ; #at:, 1 arg
+     23  DUP
+     24  STORE_LOCAL        1     ; a
+     25  POP
+     26  PUSH_LOCAL         0     ; pair
+     27  PUSH_CONST         6     ; 2
+     28  SEND_KEYWORD       5     ; #at:, 1 arg
+     29  DUP
+     30  STORE_LOCAL        2     ; b
+     31  POP
+     32  PUSH_CONST         7     ; 1
+     33  PUSH_CONST         8     ; $a
+     34  PUSH_CONST         9     ; 'str'
+     35  PUSH_CONST         10    ; #sym
+     36  PUSH_CONST         11    ; 2.5
+     37  MAKE_ARRAY         5     ; 5 elements
+     38  SEND_UNARY         12    ; #size
+     39  SEND_UNARY         13    ; #printNl
+     40  POP
+     41  PUSH_LOCAL         1     ; a
+     42  SEND_UNARY         14    ; #printString
+     43  PUSH_CONST         15    ; ' '
+     44  SEND_BINARY        16    ; #,
+     45  PUSH_LOCAL         2     ; b
+     46  SEND_BINARY        16    ; #,
+     47  SEND_UNARY         13    ; #printNl
+     48  RETURN_TOP
+5
+'7 seven'

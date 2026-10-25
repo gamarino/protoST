@@ -286,6 +286,7 @@ cmake --build build -j
 ./build/protost -d script.st          # run under the CLI debugger
 ./build/protost --dap                 # Debug Adapter Protocol server (VS Code)
 ./build/protost --dump-ast script.st  # parse a script and print its AST
+./build/protost --disasm script.st    # print the bytecode, then run (docs/VM.md)
 ./build/protost venv create .venv     # create an isolated environment
 ./build/protost --help                # usage (also -h)
 ./build/protost --version             # print the version (also -v)
@@ -441,6 +442,7 @@ Current limitations:
 | [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Runtime hard edges that are not language design choices. |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | The roadmap — remaining tracks and how to contribute. |
 | [docs/INTEROP.md](docs/INTEROP.md) | Cross-language UMD interop. §0 lists what is verified with a real second runtime, what is tested only with a simulated provider, and what does not work. It also covers how protoST consumes and serves modules, the type mapping and the multi-runtime follow-up plan. |
+| [docs/VM.md](docs/VM.md) | The bytecode virtual machine, for new contributors: a reading order through the source, every opcode, annotated `protost --disasm` listings of common constructs, and how to add an opcode or a primitive. |
 | [docs/debugging.md](docs/debugging.md) | Debugging `.st` scripts in VS Code via the `protost --dap` Debug Adapter Protocol adapter. |
 | [CHANGELOG.md](CHANGELOG.md) | Release notes and unreleased changes. |
 | [benchmarks/README.md](benchmarks/README.md) | The benchmark suite and harness; dated reports live in `benchmarks/reports/`. |

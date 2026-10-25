@@ -7,6 +7,7 @@
 #include "repl/Repl.h"
 #include "dap/DapServer.h"
 #include "runtime/ValueFormat.h"
+#include "runtime/Disassembler.h"
 #include "runtime/UnhandledSTException.h"
 #include "protoCore.h"
 #include <cstdio>
@@ -74,7 +75,7 @@ void printUsage(const char* prog) {
     // implemented (bytecode serialisation is out of scope). The usage text is
     // kept honest — only the modes the binary actually supports are listed.
     std::fprintf(stderr,
-        "Usage: %s [--print-last] <script.st> [args...]   (\"-\" reads the script from stdin)\n"
+        "Usage: %s [--print-last | --disasm] <script.st> [args...]   (\"-\" reads the script from stdin)\n"
         "       %s -e '<expr>'\n"
         "       %s -i                     (interactive REPL)\n"
         "       %s -d <script.st>         (CLI debugger)\n"
@@ -83,6 +84,7 @@ void printUsage(const char* prog) {
         "       %s venv <subcommand> [args]\n"
         "\nOptions:\n"
         "  --print-last   After the script, print the value of its last statement\n"
+        "  --disasm       Before the script runs, print the bytecode it compiled to (docs/VM.md)\n"
         "  -e '<expr>'    Evaluate expression and print result\n"
         "  -i             Start the interactive REPL\n"
         "  -d             Run the script under the CLI debugger\n"
@@ -287,10 +289,12 @@ int main(int argc, char** argv) {
     // default (D12b) showed `x` twice for a script ending in `x printNl.`.
     {
         bool printLast = false;
+        bool disasm = false;
         int argi = 1;
-        if (mode == "--print-last") {
-            if (argc < 3) { std::fprintf(stderr, "--print-last requires a path\n"); return 64; }
-            printLast = true;
+        if (mode == "--print-last" || mode == "--disasm") {
+            if (argc < 3) { std::fprintf(stderr, "%s requires a path\n", mode.c_str()); return 64; }
+            printLast = mode == "--print-last";
+            disasm = mode == "--disasm";
             argi = 2;
         }
         const char* path = argv[argi];
@@ -323,6 +327,12 @@ int main(int argc, char** argv) {
             if (C.hasErrors()) {
                 for (auto& s : C.errors()) std::fprintf(stderr, "compile error: %s\n", s.c_str());
                 return 70;
+            }
+            if (disasm) {
+                // The script's own module and every block and method body it
+                // holds; the kernel is compiled separately and not listed.
+                std::fputs(protoST::disassemble(*bc).c_str(), stdout);
+                std::fflush(stdout);
             }
             const proto::ProtoObject* r = nullptr;
             if (int status = runReporting(rt, *bc, &r)) return status;

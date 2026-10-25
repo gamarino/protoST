@@ -1,0 +1,32 @@
+module main: <module>
+  args 0, locals 0, stack 48 + 4
+  constants:
+    #0   integer   1
+    #1   integer   2
+    #2   integer   3
+    #3   integer   4
+    #4   integer   0
+    #5   symbol    #inject:into:
+    #6   symbol    #printNl
+  code:
+      0  PUSH_CONST         0     ; 1
+      1  PUSH_CONST         1     ; 2
+      2  PUSH_CONST         2     ; 3
+      3  PUSH_CONST         3     ; 4
+      4  MAKE_ARRAY         4     ; 4 elements
+      5  PUSH_CONST         4     ; 0
+      6  PUSH_BLOCK         0     ; main.0 (<block>)
+      7  SEND_KEYWORD       5     ; #inject:into:, 2 args
+      8  SEND_UNARY         6     ; #printNl
+      9  RETURN_TOP
+
+module main.0: <block>
+  args 2, locals 2 (0 acc, 1 x), stack 48
+  constants:
+    #0   symbol    #+
+  code:
+      0  PUSH_LOCAL         0     ; acc
+      1  PUSH_LOCAL         1     ; x
+      2  BIN_INT_ADD        0     ; #+
+      3  RETURN_TOP
+10

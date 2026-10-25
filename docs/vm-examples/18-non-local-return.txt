@@ -1,0 +1,80 @@
+module main: <module>
+  args 0, locals 0, stack 48 + 4
+  constants:
+    #0   symbol    #Finder
+    #1   symbol    #Object
+    #2   symbol    #__subclassNamed:
+    #3   string    'Finder'
+    #4   symbol    #__setClassName:
+    #5   string    'Finder'
+    #6   symbol    #firstOver:in:
+    #7   symbol    #__installMethod:as:
+    #8   symbol    #new
+    #9   integer   3
+    #10  integer   1
+    #11  integer   2
+    #12  integer   4
+    #13  integer   8
+    #14  symbol    #printNl
+  code:
+      0  PUSH_GLOBAL        1     ; Object
+      1  PUSH_CONST         3     ; 'Finder'
+      2  SEND_KEYWORD       2     ; #__subclassNamed:, 1 arg
+      3  PUSH_CONST         5     ; 'Finder'
+      4  SEND_KEYWORD       4     ; #__setClassName:, 1 arg
+      5  DUP
+      6  STORE_GLOBAL       0     ; Finder
+      7  POP
+      8  PUSH_GLOBAL        0     ; Finder
+      9  PUSH_BLOCK         0     ; main.0 (Finder>>firstOver:in:)
+     10  PUSH_CONST         6     ; #firstOver:in:
+     11  SEND_KEYWORD       7     ; #__installMethod:as:, 2 args
+     12  POP
+     13  PUSH_GLOBAL        0     ; Finder
+     14  SEND_UNARY         8     ; #new
+     15  PUSH_CONST         9     ; 3
+     16  PUSH_CONST         10    ; 1
+     17  PUSH_CONST         11    ; 2
+     18  PUSH_CONST         12    ; 4
+     19  PUSH_CONST         13    ; 8
+     20  MAKE_ARRAY         4     ; 4 elements
+     21  SEND_KEYWORD       6     ; #firstOver:in:, 2 args
+     22  SEND_UNARY         14    ; #printNl
+     23  RETURN_TOP
+
+module main.0: Finder>>firstOver:in:
+  args 3, locals 3 (0 self, 1 limit, 2 aColl), stack 48
+  defining class Finder
+  constants:
+    #0   symbol    #limit
+    #1   symbol    #do:
+  code:
+      0  MAKE_CAPTURED      0     ; method root dict
+      1  PUSH_LOCAL         1     ; limit
+      2  DEFINE_CAPTURED    0     ; limit
+      3  PUSH_LOCAL         2     ; aColl
+      4  PUSH_BLOCK         0     ; main.0.0 ([] in Finder>>firstOver:in:)
+      5  SEND_KEYWORD       1     ; #do:, 1 arg
+      6  POP
+      7  PUSH_NIL
+      8  RETURN
+
+module main.0.0: [] in Finder>>firstOver:in:
+  args 1, locals 1 (0 x), stack 48
+  defining class Finder
+  constants:
+    #0   symbol    #limit
+    #1   symbol    #>
+    #2   symbol    #ifTrue:
+  code:
+      0  PUSH_LOCAL         0     ; x
+      1  PUSH_CAPTURED      0     ; limit
+      2  BIN_INT_GT         1     ; #>
+      3  ASSERT_BOOL_OR_DNU 2     ; #ifTrue:
+      4  JUMP_IF_FALSE      3     ; -> 8
+      5  PUSH_LOCAL         0     ; x
+      6  RETURN
+      7  JUMP               1     ; -> 9
+      8  PUSH_NIL
+      9  RETURN_TOP
+4

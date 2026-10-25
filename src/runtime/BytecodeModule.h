@@ -79,6 +79,7 @@ public:
     const std::string&  constString(size_t i)  const { return consts_[i].sval; }
     const std::string&  constSymbol(size_t i)  const { return consts_[i].sval; }
     ConstKind           constKind(size_t i)    const { return consts_[i].kind; }
+    size_t              numConsts()            const { return consts_.size(); }
 
     // ---------------------------------------------------------------------
     // Per-constant runtime caches (D25)

@@ -1,0 +1,51 @@
+module main: <module>
+  args 0, locals 2 (0 cond, 1 blk), stack 48
+  constants:
+    #0   integer   3
+    #1   integer   2
+    #2   symbol    #>
+    #3   symbol    #ifTrue:
+    #4   string    'inlined'
+    #5   symbol    #printNl
+  code:
+      0  PUSH_NIL
+      1  DUP
+      2  STORE_LOCAL        0     ; cond
+      3  POP
+      4  PUSH_NIL
+      5  DUP
+      6  STORE_LOCAL        1     ; blk
+      7  POP
+      8  PUSH_CONST         0     ; 3
+      9  PUSH_CONST         1     ; 2
+     10  BIN_INT_GT         2     ; #>
+     11  DUP
+     12  STORE_LOCAL        0     ; cond
+     13  POP
+     14  PUSH_LOCAL         0     ; cond
+     15  ASSERT_BOOL_OR_DNU 3     ; #ifTrue:
+     16  JUMP_IF_FALSE      2     ; -> 19
+     17  PUSH_CONST         4     ; 'inlined'
+     18  JUMP               1     ; -> 20
+     19  PUSH_NIL
+     20  SEND_UNARY         5     ; #printNl
+     21  POP
+     22  PUSH_BLOCK         0     ; main.0 (<block>)
+     23  DUP
+     24  STORE_LOCAL        1     ; blk
+     25  POP
+     26  PUSH_LOCAL         0     ; cond
+     27  PUSH_LOCAL         1     ; blk
+     28  SEND_KEYWORD       3     ; #ifTrue:, 1 arg
+     29  SEND_UNARY         5     ; #printNl
+     30  RETURN_TOP
+
+module main.0: <block>
+  args 0, locals 0, stack 48
+  constants:
+    #0   string    'sent'
+  code:
+      0  PUSH_CONST         0     ; 'sent'
+      1  RETURN_TOP
+'inlined'
+'sent'

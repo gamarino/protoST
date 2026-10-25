@@ -5,6 +5,26 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+- **`docs/VM.md`: the virtual machine, documented for contributors, and
+  `protost --disasm`.** A reading order through the source (parser,
+  compiler, bytecode module, engine, primitives); the instruction encoding,
+  the frame layout, closures and captured variables, the calling
+  conventions, safepoints, exceptions and contexts; all 47 opcodes (43
+  emitted, 4 never: `NOP`, `SEND_SUPER`, `DUP_RECEIVER`, `HALT`) with
+  operand, stack effect, semantics and the construct that emits them; 18
+  worked examples; how to add an opcode and a primitive; and the oddities
+  found on the way. `protost --disasm script.st` prints the bytecode of the
+  script and of every block and method body, then runs it
+  (`src/runtime/Disassembler.cpp`). Every listing in VM.md is real output:
+  the sources and golden listings live in `docs/vm-examples/`, and the ctest
+  `docs/vm-examples` fails when a listing, or VM.md's copy of it, drifts.
+  Five bugs found while writing it are listed in VM.md §6 and not fixed
+  here: `super foo: self bar` sends `bar` to the superclass and `foo:`
+  normally; an inlined `to:do:` evaluates its receiver twice; an inlined
+  body over 255 words is a compile error; expressions nested deeper than the
+  48-slot operand stack, and sends of more than 8 arguments, fail with an
+  error `on:do:` cannot catch.
+
 - **VS Code extension 0.5.1: integration tests, and two launch fixes they
   found.** `editor-integration/vscode/test/` runs the extension in a real VS
   Code Extension Development Host (`npm install && npm test`; the extension

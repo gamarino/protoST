@@ -1,0 +1,14 @@
+module main: <module>
+  args 0, locals 0, stack 48
+  constants:
+    #0   integer   1
+    #1   integer   2
+    #2   symbol    #+
+    #3   symbol    #printNl
+  code:
+      0  PUSH_CONST         0     ; 1
+      1  PUSH_CONST         1     ; 2
+      2  BIN_INT_ADD        2     ; #+
+      3  SEND_UNARY         3     ; #printNl
+      4  RETURN_TOP
+3

@@ -1,0 +1,107 @@
+module main: <module>
+  args 0, locals 2 (0 oc, 1 __cascade_tmp_1), stack 48
+  constants:
+    #0   symbol    #Animal
+    #1   symbol    #Object
+    #2   symbol    #__subclassNamed:
+    #3   string    'Animal'
+    #4   symbol    #__setClassName:
+    #5   string    'Animal'
+    #6   symbol    #describe
+    #7   symbol    #__installMethod:as:
+    #8   symbol    #Dog
+    #9   string    'Dog'
+    #10  string    'Dog'
+    #11  symbol    #OrderedCollection
+    #12  symbol    #new
+    #13  integer   1
+    #14  symbol    #add:
+    #15  integer   2
+    #16  symbol    #yourself
+    #17  symbol    #size
+    #18  symbol    #printNl
+  code:
+      0  PUSH_GLOBAL        1     ; Object
+      1  PUSH_CONST         3     ; 'Animal'
+      2  SEND_KEYWORD       2     ; #__subclassNamed:, 1 arg
+      3  PUSH_CONST         5     ; 'Animal'
+      4  SEND_KEYWORD       4     ; #__setClassName:, 1 arg
+      5  DUP
+      6  STORE_GLOBAL       0     ; Animal
+      7  POP
+      8  PUSH_GLOBAL        0     ; Animal
+      9  PUSH_BLOCK         0     ; main.0 (Animal>>describe)
+     10  PUSH_CONST         6     ; #describe
+     11  SEND_KEYWORD       7     ; #__installMethod:as:, 2 args
+     12  POP
+     13  PUSH_GLOBAL        0     ; Animal
+     14  PUSH_CONST         9     ; 'Dog'
+     15  SEND_KEYWORD       2     ; #__subclassNamed:, 1 arg
+     16  PUSH_CONST         10    ; 'Dog'
+     17  SEND_KEYWORD       4     ; #__setClassName:, 1 arg
+     18  DUP
+     19  STORE_GLOBAL       8     ; Dog
+     20  POP
+     21  PUSH_GLOBAL        8     ; Dog
+     22  PUSH_BLOCK         1     ; main.1 (Dog>>describe)
+     23  PUSH_CONST         6     ; #describe
+     24  SEND_KEYWORD       7     ; #__installMethod:as:, 2 args
+     25  POP
+     26  PUSH_NIL
+     27  DUP
+     28  STORE_LOCAL        0     ; oc
+     29  POP
+     30  PUSH_GLOBAL        11    ; OrderedCollection
+     31  SEND_UNARY         12    ; #new
+     32  DUP
+     33  STORE_LOCAL        0     ; oc
+     34  POP
+     35  PUSH_LOCAL         0     ; oc
+     36  DUP
+     37  PUSH_CONST         13    ; 1
+     38  SEND_KEYWORD       14    ; #add:, 1 arg
+     39  POP
+     40  DUP
+     41  PUSH_CONST         15    ; 2
+     42  SEND_KEYWORD       14    ; #add:, 1 arg
+     43  POP
+     44  DUP
+     45  SEND_UNARY         16    ; #yourself
+     46  STORE_LOCAL        1     ; __cascade_tmp_1
+     47  POP
+     48  PUSH_LOCAL         1     ; __cascade_tmp_1
+     49  POP
+     50  PUSH_LOCAL         0     ; oc
+     51  SEND_UNARY         17    ; #size
+     52  SEND_UNARY         18    ; #printNl
+     53  POP
+     54  PUSH_GLOBAL        8     ; Dog
+     55  SEND_UNARY         12    ; #new
+     56  SEND_UNARY         6     ; #describe
+     57  SEND_UNARY         18    ; #printNl
+     58  RETURN_TOP
+
+module main.0: Animal>>describe
+  args 1, locals 1 (0 self), stack 48
+  defining class Animal
+  constants:
+    #0   string    'an animal'
+  code:
+      0  PUSH_CONST         0     ; 'an animal'
+      1  RETURN
+
+module main.1: Dog>>describe
+  args 1, locals 1 (0 self), stack 48
+  defining class Dog
+  constants:
+    #0   symbol    #describe
+    #1   string    ' that barks'
+    #2   symbol    #,
+  code:
+      0  PUSH_SUPER
+      1  SEND_UNARY         0     ; #describe
+      2  PUSH_CONST         1     ; ' that barks'
+      3  SEND_BINARY        2     ; #,
+      4  RETURN
+2
+'an animal that barks'

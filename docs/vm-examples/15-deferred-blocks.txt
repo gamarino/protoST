@@ -1,0 +1,77 @@
+module main: <module>
+  args 0, locals 5 (0 later, 1 __dy_coll_1, 2 __dy_blk_1, 3 __dy_n_1, 4 __dy_i_1), stack 48 + 3
+  constants:
+    #0   symbol    #value
+    #1   symbol    #printNl
+    #2   integer   1
+    #3   integer   1
+    #4   integer   2
+    #5   integer   3
+    #6   symbol    #size
+    #7   symbol    #<=
+    #8   symbol    #at:
+    #9   symbol    #value:
+    #10  symbol    #+
+  code:
+      0  PUSH_NIL
+      1  DUP
+      2  STORE_LOCAL        0     ; later
+      3  POP
+      4  PUSH_BLOCK         0     ; main.0 (<block>)
+      5  DUP
+      6  STORE_LOCAL        0     ; later
+      7  POP
+      8  PUSH_LOCAL         0     ; later
+      9  SEND_UNARY         0     ; #value
+     10  SEND_UNARY         1     ; #printNl
+     11  POP
+     12  PUSH_CONST         3     ; 1
+     13  PUSH_CONST         4     ; 2
+     14  PUSH_CONST         5     ; 3
+     15  MAKE_ARRAY         3     ; 3 elements
+     16  STORE_LOCAL        1     ; __dy_coll_1
+     17  PUSH_BLOCK         1     ; main.1 (<block>)
+     18  STORE_LOCAL        2     ; __dy_blk_1
+     19  PUSH_LOCAL         1     ; __dy_coll_1
+     20  SEND_UNARY         6     ; #size
+     21  STORE_LOCAL        3     ; __dy_n_1
+     22  PUSH_CONST         2     ; 1
+     23  STORE_LOCAL        4     ; __dy_i_1
+     24  PUSH_LOCAL         4     ; __dy_i_1
+     25  PUSH_LOCAL         3     ; __dy_n_1
+     26  SEND_BINARY        7     ; #<=
+     27  JUMP_IF_FALSE      11    ; -> 39
+     28  PUSH_LOCAL         2     ; __dy_blk_1
+     29  PUSH_LOCAL         1     ; __dy_coll_1
+     30  PUSH_LOCAL         4     ; __dy_i_1
+     31  SEND_KEYWORD       8     ; #at:, 1 arg
+     32  SEND_KEYWORD       9     ; #value:, 1 arg
+     33  POP
+     34  PUSH_LOCAL         4     ; __dy_i_1
+     35  PUSH_CONST         2     ; 1
+     36  SEND_BINARY        10    ; #+
+     37  STORE_LOCAL        4     ; __dy_i_1
+     38  JUMP_BACK          15    ; -> 24
+     39  PUSH_LOCAL         1     ; __dy_coll_1
+     40  RETURN_TOP
+
+module main.0: <block>
+  args 0, locals 0, stack 48
+  constants:
+    #0   string    'computed on demand'
+  code:
+      0  PUSH_CONST         0     ; 'computed on demand'
+      1  RETURN_TOP
+
+module main.1: <block>
+  args 1, locals 1 (0 x), stack 48
+  constants:
+    #0   symbol    #printNl
+  code:
+      0  PUSH_LOCAL         0     ; x
+      1  SEND_UNARY         0     ; #printNl
+      2  RETURN_TOP
+'computed on demand'
+1
+2
+3

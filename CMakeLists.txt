@@ -201,6 +201,7 @@ target_include_directories(protost_frontend PUBLIC
 add_library(protost_runtime STATIC
     src/runtime/Venv.cpp
     src/runtime/BytecodeModule.cpp
+    src/runtime/Disassembler.cpp
     src/runtime/STRuntime.cpp
     src/runtime/ExecutionEngine.cpp
     src/runtime/Interrupt.cpp

@@ -1,0 +1,71 @@
+module main: <module>
+  args 0, locals 1 (0 add5), stack 48
+  constants:
+    #0   symbol    #Adders
+    #1   symbol    #Object
+    #2   symbol    #__subclassNamed:
+    #3   string    'Adders'
+    #4   symbol    #__setClassName:
+    #5   string    'Adders'
+    #6   symbol    #adderFor:
+    #7   symbol    #__installMethod:as:
+    #8   symbol    #new
+    #9   integer   5
+    #10  integer   10
+    #11  symbol    #value:
+    #12  symbol    #printNl
+  code:
+      0  PUSH_GLOBAL        1     ; Object
+      1  PUSH_CONST         3     ; 'Adders'
+      2  SEND_KEYWORD       2     ; #__subclassNamed:, 1 arg
+      3  PUSH_CONST         5     ; 'Adders'
+      4  SEND_KEYWORD       4     ; #__setClassName:, 1 arg
+      5  DUP
+      6  STORE_GLOBAL       0     ; Adders
+      7  POP
+      8  PUSH_GLOBAL        0     ; Adders
+      9  PUSH_BLOCK         0     ; main.0 (Adders>>adderFor:)
+     10  PUSH_CONST         6     ; #adderFor:
+     11  SEND_KEYWORD       7     ; #__installMethod:as:, 2 args
+     12  POP
+     13  PUSH_NIL
+     14  DUP
+     15  STORE_LOCAL        0     ; add5
+     16  POP
+     17  PUSH_GLOBAL        0     ; Adders
+     18  SEND_UNARY         8     ; #new
+     19  PUSH_CONST         9     ; 5
+     20  SEND_KEYWORD       6     ; #adderFor:, 1 arg
+     21  DUP
+     22  STORE_LOCAL        0     ; add5
+     23  POP
+     24  PUSH_LOCAL         0     ; add5
+     25  PUSH_CONST         10    ; 10
+     26  SEND_KEYWORD       11    ; #value:, 1 arg
+     27  SEND_UNARY         12    ; #printNl
+     28  RETURN_TOP
+
+module main.0: Adders>>adderFor:
+  args 2, locals 2 (0 self, 1 n), stack 48
+  defining class Adders
+  constants:
+    #0   symbol    #n
+  code:
+      0  MAKE_CAPTURED      0     ; method root dict
+      1  PUSH_LOCAL         1     ; n
+      2  DEFINE_CAPTURED    0     ; n
+      3  PUSH_BLOCK         0     ; main.0.0 ([] in Adders>>adderFor:)
+      4  RETURN
+
+module main.0.0: [] in Adders>>adderFor:
+  args 1, locals 1 (0 x), stack 48
+  defining class Adders
+  constants:
+    #0   symbol    #n
+    #1   symbol    #+
+  code:
+      0  PUSH_LOCAL         0     ; x
+      1  PUSH_CAPTURED      0     ; n
+      2  BIN_INT_ADD        1     ; #+
+      3  RETURN_TOP
+15
