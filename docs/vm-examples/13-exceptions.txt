@@ -1,5 +1,5 @@
 module main: <module>
-  args 0, locals 1 (0 r), stack 48
+  args 0, locals 1 (0 r), stack 48 (deepest 3)
   constants:
     #0   symbol    #Error
     #1   symbol    #on:do:
@@ -26,7 +26,7 @@ module main: <module>
      17  RETURN_TOP
 
 module main.0: <block>
-  args 0, locals 0, stack 48
+  args 0, locals 0, stack 48 (deepest 2)
   constants:
     #0   symbol    #Error
     #1   string    'boom'
@@ -41,7 +41,7 @@ module main.0: <block>
       5  RETURN_TOP
 
 module main.1: <block>
-  args 1, locals 1 (0 e), stack 48
+  args 1, locals 1 (0 e), stack 48 (deepest 1)
   constants:
     #0   symbol    #messageText
   code:
@@ -50,7 +50,7 @@ module main.1: <block>
       2  RETURN_TOP
 
 module main.2: <block>
-  args 0, locals 0, stack 48
+  args 0, locals 0, stack 48 (deepest 1)
   constants:
     #0   string    'body'
     #1   symbol    #printNl
@@ -60,7 +60,7 @@ module main.2: <block>
       2  RETURN_TOP
 
 module main.3: <block>
-  args 0, locals 0, stack 48
+  args 0, locals 0, stack 48 (deepest 1)
   constants:
     #0   string    'cleanup'
     #1   symbol    #printNl

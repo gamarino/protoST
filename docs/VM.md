@@ -61,9 +61,9 @@ How to read a listing:
   `main` builds a closure, or a method wrapper, over `main.3`.
 - The second line is the frame layout: `args` (for a method, `self` plus its
   arguments; for a block, its arguments), `locals` (every slot the code
-  addresses, arguments included, with their names), and `stack 48 + N`: the
-  operand stack has 48 slots plus what the module's largest brace array or
-  instance-variable write group needs (1.3).
+  addresses, arguments included, with their names), and `stack N (deepest
+  D)`: D is the deepest the operand stack gets in the module's code, and N,
+  the frame's operand-stack capacity, is D floored at 48 (1.3).
 - `defining class C` marks a method body, or a block inside one (the class
   `super` sends start above). `call form:` gives a call-form method's
   signature. `slot N is 'k' in words a..b` names the hidden counter of an
@@ -130,10 +130,13 @@ way: `arg = (arg << 8) | next byte` for each word.
 
 - **Positions and jumps** count words. A jump's operand is relative to the
   word **after** the jump: `JUMP`, `JUMP_IF_TRUE` and `JUMP_IF_FALSE` go to
-  `next + operand`, `JUMP_BACK` to `next - operand`. The compiler emits every
-  jump as a one-word instruction and back-patches its 8-bit operand
-  (`patchArg`), so a jump spans at most 255 words: a longer inlined body is a
-  compile error (section 6).
+  `next + operand`, `JUMP_BACK` to `next - operand`. The compiler emits a
+  forward jump as one word with a placeholder operand; when the target is
+  known and the distance does not fit in a byte, it inserts `EXTEND` prefixes
+  in front of the jump (`insertExtendPrefixes`, `Compiler::resolveForwardJumps`),
+  which does not change the distance from the jump word. A loop widens its
+  exit jump before it emits its `JUMP_BACK` (`Compiler::closeLoop`). An
+  inlined body may therefore be of any length.
 - **Constant pool** (`BytecodeModule::Const`): kinds `Integer`, `Float`,
   `LargeInteger` (decimal or radix digits, rebuilt by every `PUSH_CONST`),
   `String` (a fresh string per `PUSH_CONST`), `Symbol`, `Char` and
@@ -142,8 +145,8 @@ way: `arg = (arg << 8) | next byte` for each word.
   serve as symbol literals, as selectors and as variable names; the module
   caches each one's interned `ProtoString` on first use (`constSym`,
   `ivSymbol` for the `_iv_<name>` instance-variable key), so a send does not
-  re-intern its selector. Three more kinds exist in the enum and are never
-  created (`BlockRef`, `NilK`, `TrueK`, `FalseK`; section 6).
+  re-intern its selector. `nil`, `true`, `false` and blocks are not
+  constants: they have opcodes.
 - **Nested modules:** every block literal and every method body is a module
   of its own, owned by the module that contains it (`addBlockModule`).
   `PUSH_BLOCK`'s operand is its index.
@@ -174,7 +177,7 @@ baseSlot + 1                     self
 baseSlot + 2 ..                  locals: for a method, slot 0 = self, then the
                                  arguments, then temporaries; for a block, its
                                  arguments, then temporaries
-baseSlot + 2 + localCount ..     operand stack, 48 slots + the module's extra need
+baseSlot + 2 + localCount ..     operand stack, operandStackCapacity slots
 ```
 
 Frame regions are packed one above the other from a thread-local cursor
@@ -184,10 +187,12 @@ outer engine's frames on the same array. The array grows on demand up to
 2^20 slots; a send that would leave fewer than 16,384 free slots signals the
 catchable `Error` "stack depth exceeded" (`signalIfTooDeep`).
 
-The operand stack has a fixed 48 slots plus the module's largest `MAKE_ARRAY`
-operand or write-group length (`cachedExtraOperandStack`). The compiler
-computes no maximum depth, and `push` throws `engine operand stack overflow`
-past the capacity (section 6).
+The operand stack holds `BytecodeModule::operandStackCapacity` slots: the
+deepest point of the module's code (`cachedMaxOperandDepth`, one pass over
+the code with each instruction's stack effect; a forward jump carries its
+depth to its target), floored at 48. So an expression may nest as deeply as
+the source writes it. Compiled code cannot overflow it; a hand-built module
+that does signals the catchable `Error` `operand stack overflow (N slots)`.
 
 A method frame is its own *home*; a block frame inherits the home of the
 method its closure was created in (`homeFrameId`, stamped on the closure by
@@ -245,7 +250,9 @@ block is a real closure.
 **Sends.** `SEND_UNARY`, `SEND_BINARY` and `SEND_KEYWORD` expect
 `[receiver, arg1 .. argn]` on the operand stack (receiver deepest) and
 replace them with the result. The argument count is 0, 1, or the number of
-colons in the selector; at most 8 (section 6). The dispatch (the `SEND_*`
+colons in the selector, with no limit (an array of 8 on the C++ stack, a
+heap array for more). `SEND_SUPER` is the same with the lookup moved (step
+3). The dispatch (the `SEND_*`
 case of `runLoop`) tries, in order:
 
 1. **Actor.** A receiver that is an actor proxy, for a selector other than
@@ -259,7 +266,7 @@ case of `runLoop`) tries, in order:
    be suspended by a `Future>>wait` inside the block (cooperative yield).
 3. **Lookup.** `methodHolder(receiver)` (protoST's prototype for a primitive
    value, the receiver itself otherwise), then `getAttribute(selector)` up
-   the prototype chain. After `PUSH_SUPER`, the lookup starts above the
+   the prototype chain. For `SEND_SUPER`, the lookup starts above the
    class that defines the running method instead (found on the receiver's
    chain by name, `definingClass`). A method installed by
    `__installClassMethod:as:` is hidden from a receiver that is not a class.
@@ -351,8 +358,11 @@ There are **no exception opcodes**. `on:do:`, `on:do:on:do:`, `ensure:` and
   non-local returns.
 - Errors the engine itself raises (`doesNotUnderstand:`, an undefined
   global, a block called with the wrong argument count, the non-Boolean
-  guard) are signalled the same way and are catchable. A few internal checks
-  throw a plain C++ exception instead and are not catchable (section 6).
+  guard, a method's arity, a value attribute sent a keyword message, an
+  unresolvable `super`, an operand-stack overflow) are signalled the same
+  way and are catchable. Only checks that compiled code cannot fail (a stack
+  underflow, a slot out of range, a malformed instruction) throw a plain C++
+  exception.
 
 **Non-local return.** `^ expr` compiles to `RETURN`. In a method frame it is
 an ordinary return. In a block frame the engine looks for the home method's
@@ -377,20 +387,21 @@ another runtime's `ProtoSpace` (`STRuntime`'s `ownRootCtx`).
 
 ## 2. Opcode reference
 
-`Op` (`src/runtime/Opcodes.h`) has **47 values**: 0 to 44, `EXTEND` (254)
-and `HALT` (255). The dispatch in `ExecutionEngine::runLoop` has a `case` for
-all 47 and a threaded-dispatch label for the 46 that execute (`EXTEND` is a
-prefix, consumed while decoding; a stray one raises `stray EXTEND prefix`).
-The compiler emits **43** of them. **Four are never emitted**: `NOP`,
-`SEND_SUPER`, `DUP_RECEIVER` and `HALT`; they are implemented in the engine
-and exercised only by hand-built modules in `tests/unit/test_execution_engine.cpp`
-(section 6). `EXTEND` is emitted only as a prefix, by `emitWide`.
+`Op` (`src/runtime/Opcodes.h`) has **43 values**: 1 to 44 except 7 and 21,
+and `EXTEND` (254). The values 0, 7, 21 and 255 are reserved: they were
+`NOP`, `PUSH_SUPER`, `DUP_RECEIVER` and `HALT`, removed because the compiler
+no longer emitted them (`PUSH_SUPER` since `super` sends became `SEND_SUPER`)
+and only hand-built unit tests ran them; a reserved value is an unimplemented
+opcode. The dispatch in `ExecutionEngine::runLoop` has a `case` for all 43
+and a threaded-dispatch label for the 42 that execute (`EXTEND` is a prefix,
+consumed while decoding; a stray one raises `stray EXTEND prefix`). The
+compiler emits all of them; `EXTEND` only as a prefix, by `emitWide` and when
+it widens a jump.
 
 Notation: the stack effect is `before -> after`, top of stack on the right;
 `v` is any value. Operands not listed are emitted as 0 and ignored. "Errors"
 lists what the instruction itself raises; a message in `code` font without a
-class is a C++ `std::runtime_error`, impossible in compiler output unless
-section 6 says otherwise.
+class is a C++ `std::runtime_error`, impossible in compiler output.
 
 ### 2.1 Constants and literals
 
@@ -411,8 +422,6 @@ section 6 says otherwise.
 | `STORE_LOCAL` | 3 | slot (wide) | `v ->` | Pops into the slot. Errors: `STORE_LOCAL with empty stack`. | assignment to a temporary (after `DUP`); the hidden locals of `to:do:`, `doYielding:` and cascades; the call-form default prologue |
 | `DUP` | 4 | — | `v -> v v` | | every assignment (the assigned value is the expression's value); each part of a cascade; a class declaration |
 | `POP` | 5 | — | `v ->` | | between statements; after a cascade part; after an inlined loop body |
-| `DUP_RECEIVER` | 21 | depth | `... -> ... v` | Pushes a copy of the value at `depth` (0 = top). Errors: `DUP_RECEIVER depth out of range`. | **never** (cascades use `DUP`) |
-| `NOP` | 0 | — | `->` | Does nothing. | **never** |
 
 ### 2.3 Globals, instance and class variables
 
@@ -457,13 +466,11 @@ the attribute `_iv_v` of the class that declares it.
 |---|---|---|---|---|---|
 | `SEND_UNARY` | 11 | selector constant (wide) | `r -> v` | Sends with no argument (1.5). | unary messages |
 | `SEND_BINARY` | 12 | selector constant (wide) | `r a -> v` | Sends with one argument. Also the slow path of every `BIN_INT_*`. | binary messages other than `+ - < <= > >= =` (`*`, `,`, `==`, `//`, ...); `==` in the call-form prologue; `<=` and `+` in the `doYielding:` loop |
-| `SEND_KEYWORD` | 13 | selector constant (wide) | `r a1..an -> v` | Sends with n = number of colons (at most 8). Errors: `send of #sel has 9 arguments; at most 8 are supported per send` (not catchable; section 6). | keyword messages not inlined; class declarations and method installs (`__subclassNamed:`, `__installMethod:as:`, ...) |
-| `SEND_SUPER` | 14 | selector constant | `r a1..an -> v` | A keyword-style send (argument count from the colons) whose lookup starts above the defining class. | **never**: `super` compiles to `PUSH_SUPER` + an ordinary send |
-| `PUSH_SUPER` | 7 | — | `-> self` | Pushes `self` and arms the frame's `superPending` flag: the **next send executed in this frame** looks up from the superclass of the defining class. Errors at that send: `super send outside a method body`, `super: cannot resolve defining class C`. | `super` (example 17; see section 6 for a bug) |
+| `SEND_KEYWORD` | 13 | selector constant (wide) | `r a1..an -> v` | Sends with n = number of colons, any number. | keyword messages not inlined; class declarations and method installs (`__subclassNamed:`, `__installMethod:as:`, ...) |
+| `SEND_SUPER` | 14 | selector constant (wide) | `self a1..an -> v` | A send whose lookup starts above the class that defines the running method (1.5, step 3); n is the number of colons, or 1 for a binary selector. Only this send is affected: a send in its arguments is ordinary. Errors (catchable): `super send outside a method body`, `super: cannot resolve defining class C`, `super: class C has no superclass`. | a unary, binary or keyword message, or every part of a cascade, whose receiver is `super`, after `PUSH_SELF` (example 17). `super` as a value is `PUSH_SELF`; `super name(...)` is a compile error |
 | `SEND_CALL` | 39 | mangled call selector constant (wide) | `r p1..pn k1..km -> v` | Call-form send (1.5). Errors (catchable): more than 16 values; actor receiver; not a call-form method; wrong positional count; an unknown named argument; named arguments to a primitive. | `recv name(...)` (example 08) |
 | `RETURN` | 18 | — | `v ->` | Returns the top of the stack (nil if empty) from the frame's home: a local return in a method or top-level frame, a non-local return in a block frame (1.7). | `^ expr`; the implicit `^ self` at the end of a method body |
 | `RETURN_TOP` | 19 | — | `v ->` | Returns the top of the stack (nil if empty) from this frame only. Falling off the end of the code does the same. | the end of every block body and of the top-level module |
-| `HALT` | 255 | — | `v ->` | As `RETURN_TOP`. | **never** (the `halt` message is a primitive, not this opcode) |
 
 ### 2.7 SmallInteger fast paths
 
@@ -543,7 +550,7 @@ compiler change, and review the notes.
 
 ```text
 module main: <module>
-  args 0, locals 0, stack 48
+  args 0, locals 0, stack 48 (deepest 2)
   constants:
     #0   integer   1
     #1   integer   2
@@ -577,7 +584,7 @@ y := x * 2.
 
 ```text
 module main: <module>
-  args 0, locals 2 (0 x, 1 y), stack 48
+  args 0, locals 2 (0 x, 1 y), stack 48 (deepest 2)
   constants:
     #0   integer   10
     #1   integer   2
@@ -630,7 +637,7 @@ n odd ifTrue: ['odd' printNl].
 
 ```text
 module main: <module>
-  args 0, locals 1 (0 n), stack 48
+  args 0, locals 1 (0 n), stack 48 (deepest 2)
   constants:
     #0   integer   7
     #1   integer   5
@@ -701,7 +708,7 @@ Greeter >> greeting
 
 ```text
 module main: <module>
-  args 0, locals 0, stack 48
+  args 0, locals 0, stack 48 (deepest 3)
   constants:
     #0   symbol    #Greeter
     #1   symbol    #Object
@@ -747,7 +754,7 @@ module main: <module>
      26  RETURN_TOP
 
 module main.0: Greeter>>name:
-  args 2, locals 2 (0 self, 1 aString), stack 48
+  args 2, locals 2 (0 self, 1 aString), stack 48 (deepest 2)
   defining class Greeter
   constants:
     #0   symbol    #name
@@ -760,7 +767,7 @@ module main.0: Greeter>>name:
       5  RETURN
 
 module main.1: Greeter>>greeting
-  args 1, locals 1 (0 self), stack 48
+  args 1, locals 1 (0 self), stack 48 (deepest 2)
   defining class Greeter
   constants:
     #0   string    'Hello, '
@@ -801,7 +808,7 @@ Math >> fib: n
 
 ```text
 module main: <module>
-  args 0, locals 0, stack 48
+  args 0, locals 0, stack 48 (deepest 3)
   constants:
     #0   symbol    #Math
     #1   symbol    #Object
@@ -836,7 +843,7 @@ module main: <module>
      18  RETURN_TOP
 
 module main.0: Math>>fib:
-  args 2, locals 2 (0 self, 1 n), stack 48
+  args 2, locals 2 (0 self, 1 n), stack 48 (deepest 4)
   defining class Math
   constants:
     #0   integer   2
@@ -896,8 +903,8 @@ i := 0.
 
 ```text
 module main: <module>
-  args 0, locals 4 (0 sum, 1 i, 2 __td_i_2, 3 __td_end_2), stack 48
-  slot 2 is 'k' in words 16..31
+  args 0, locals 4 (0 sum, 1 i, 2 __td_i_2, 3 __td_end_2), stack 48 (deepest 3)
+  slot 2 is 'k' in words 17..32
   constants:
     #0   integer   0
     #1   integer   1
@@ -905,13 +912,12 @@ module main: <module>
     #3   symbol    #<=
     #4   symbol    #+
     #5   integer   1
-    #6   integer   1
-    #7   integer   0
-    #8   symbol    #whileTrue:
-    #9   integer   3
-    #10  symbol    #<
-    #11  integer   1
-    #12  symbol    #printNl
+    #6   integer   0
+    #7   symbol    #whileTrue:
+    #8   integer   3
+    #9   symbol    #<
+    #10  integer   1
+    #11  symbol    #printNl
   code:
       0  PUSH_NIL
       1  DUP
@@ -926,37 +932,37 @@ module main: <module>
      10  STORE_LOCAL        0     ; sum
      11  POP
      12  PUSH_CONST         1     ; 1
-     13  STORE_LOCAL        2     ; __td_i_2
-     14  PUSH_CONST         2     ; 10
-     15  STORE_LOCAL        3     ; __td_end_2
-     16  PUSH_LOCAL         2     ; __td_i_2
-     17  PUSH_LOCAL         3     ; __td_end_2
-     18  BIN_INT_LE         3     ; #<=
-     19  JUMP_IF_FALSE      11    ; -> 31
-     20  PUSH_LOCAL         0     ; sum
-     21  PUSH_LOCAL         2     ; __td_i_2
-     22  BIN_INT_ADD        4     ; #+
-     23  DUP
-     24  STORE_LOCAL        0     ; sum
-     25  POP
-     26  PUSH_LOCAL         2     ; __td_i_2
-     27  PUSH_CONST         5     ; 1
-     28  BIN_INT_ADD        4     ; #+
-     29  STORE_LOCAL        2     ; __td_i_2
-     30  JUMP_BACK          15    ; -> 16
-     31  PUSH_CONST         6     ; 1
+     13  DUP
+     14  STORE_LOCAL        2     ; __td_i_2
+     15  PUSH_CONST         2     ; 10
+     16  STORE_LOCAL        3     ; __td_end_2
+     17  PUSH_LOCAL         2     ; __td_i_2
+     18  PUSH_LOCAL         3     ; __td_end_2
+     19  BIN_INT_LE         3     ; #<=
+     20  JUMP_IF_FALSE      11    ; -> 32
+     21  PUSH_LOCAL         0     ; sum
+     22  PUSH_LOCAL         2     ; __td_i_2
+     23  BIN_INT_ADD        4     ; #+
+     24  DUP
+     25  STORE_LOCAL        0     ; sum
+     26  POP
+     27  PUSH_LOCAL         2     ; __td_i_2
+     28  PUSH_CONST         5     ; 1
+     29  BIN_INT_ADD        4     ; #+
+     30  STORE_LOCAL        2     ; __td_i_2
+     31  JUMP_BACK          15    ; -> 17
      32  POP
-     33  PUSH_CONST         7     ; 0
+     33  PUSH_CONST         6     ; 0
      34  DUP
      35  STORE_LOCAL        1     ; i
      36  POP
      37  PUSH_LOCAL         1     ; i
-     38  PUSH_CONST         9     ; 3
-     39  BIN_INT_LT         10    ; #<
-     40  ASSERT_BOOL_OR_DNU 8     ; #whileTrue:
+     38  PUSH_CONST         8     ; 3
+     39  BIN_INT_LT         9     ; #<
+     40  ASSERT_BOOL_OR_DNU 7     ; #whileTrue:
      41  JUMP_IF_FALSE      7     ; -> 49
      42  PUSH_LOCAL         1     ; i
-     43  PUSH_CONST         11    ; 1
+     43  PUSH_CONST         10    ; 1
      44  BIN_INT_ADD        4     ; #+
      45  DUP
      46  STORE_LOCAL        1     ; i
@@ -967,23 +973,21 @@ module main: <module>
      51  PUSH_LOCAL         0     ; sum
      52  PUSH_LOCAL         1     ; i
      53  BIN_INT_ADD        4     ; #+
-     54  SEND_UNARY         12    ; #printNl
+     54  SEND_UNARY         11    ; #printNl
      55  RETURN_TOP
 58
 ```
 
-- `12`-`15`: `to:do:` is inlined. The counter and the limit get hidden slots
-  (`__td_i_2`, `__td_end_2`); the header line `slot 2 is 'k' in words 16..31`
-  tells the debugger to show slot 2 as `k` inside the loop. The limit is
-  evaluated once.
-- `16`-`19`: the loop test, `BIN_INT_LE` then `JUMP_IF_FALSE` to the exit at
-  `31`. No `ASSERT_BOOL_OR_DNU` here: the test is generated by the compiler.
-- `26`-`30`: `k := k + 1` with `BIN_INT_ADD`, then `JUMP_BACK 15` to `16`; the
+- `12`-`16`: `to:do:` is inlined. The counter and the limit get hidden slots
+  (`__td_i_2`, `__td_end_2`); the header line `slot 2 is 'k' in words 17..32`
+  tells the debugger to show slot 2 as `k` inside the loop. The receiver and
+  the limit are each evaluated once: `13 DUP` keeps a copy of the receiver
+  under the loop as the value of the `to:do:` expression (popped at `32`,
+  since the statement's value is unused).
+- `17`-`20`: the loop test, `BIN_INT_LE` then `JUMP_IF_FALSE` to the exit at
+  `32`. No `ASSERT_BOOL_OR_DNU` here: the test is generated by the compiler.
+- `27`-`31`: `k := k + 1` with `BIN_INT_ADD`, then `JUMP_BACK 15` to `17`; the
   back edge polls the GC safepoint.
-- `31 PUSH_CONST 6`: the value of the `to:do:` expression is its receiver,
-  and the compiler evaluates the receiver expression **a second time** to
-  produce it. With a literal `1` that is harmless; with a receiver that has
-  side effects it is a bug (section 6).
 - `37`-`49`: `whileTrue:` is inlined the same way, with the guard on the
   condition at every iteration, and answers nil (`49 PUSH_NIL`).
 
@@ -1003,7 +1007,7 @@ add5 := Adders new adderFor: 5.
 
 ```text
 module main: <module>
-  args 0, locals 1 (0 add5), stack 48
+  args 0, locals 1 (0 add5), stack 48 (deepest 3)
   constants:
     #0   symbol    #Adders
     #1   symbol    #Object
@@ -1050,7 +1054,7 @@ module main: <module>
      28  RETURN_TOP
 
 module main.0: Adders>>adderFor:
-  args 2, locals 2 (0 self, 1 n), stack 48
+  args 2, locals 2 (0 self, 1 n), stack 48 (deepest 1)
   defining class Adders
   constants:
     #0   symbol    #n
@@ -1062,7 +1066,7 @@ module main.0: Adders>>adderFor:
       4  RETURN
 
 module main.0.0: [] in Adders>>adderFor:
-  args 1, locals 1 (0 x), stack 48
+  args 1, locals 1 (0 x), stack 48 (deepest 2)
   defining class Adders
   constants:
     #0   symbol    #n
@@ -1114,7 +1118,7 @@ Box >> scaled(factor, offset = 0)
 
 ```text
 module main: <module>
-  args 0, locals 0, stack 48
+  args 0, locals 0, stack 48 (deepest 3)
   constants:
     #0   symbol    #Box
     #1   symbol    #Object
@@ -1206,7 +1210,7 @@ module main: <module>
      61  RETURN_TOP
 
 module main.0: Box>>w:
-  args 2, locals 2 (0 self, 1 aW), stack 48 + 2
+  args 2, locals 2 (0 self, 1 aW), stack 48 (deepest 2)
   defining class Box
   write groups:
     @0   w, write 1 of 2
@@ -1224,7 +1228,7 @@ module main.0: Box>>w:
       6  RETURN
 
 module main.1: Box>>w:h:
-  args 3, locals 3 (0 self, 1 aW, 2 aH), stack 48 + 2
+  args 3, locals 3 (0 self, 1 aW, 2 aH), stack 48 (deepest 2)
   defining class Box
   write groups:
     @0   w, write 1 of 2
@@ -1242,7 +1246,7 @@ module main.1: Box>>w:h:
       6  RETURN
 
 module main.2: Box>>area
-  args 1, locals 1 (0 self), stack 48
+  args 1, locals 1 (0 self), stack 48 (deepest 2)
   defining class Box
   constants:
     #0   symbol    #w
@@ -1255,7 +1259,7 @@ module main.2: Box>>area
       3  RETURN
 
 module main.3: Box>>scaled(...)
-  args 3, locals 3 (0 self, 1 factor, 2 offset), stack 48
+  args 3, locals 3 (0 self, 1 factor, 2 offset), stack 48 (deepest 2)
   defining class Box
   call form: 1 positional, offset=
   constants:
@@ -1316,7 +1320,7 @@ b := pair at: 2.
 
 ```text
 module main: <module>
-  args 0, locals 3 (0 pair, 1 a, 2 b), stack 48 + 5
+  args 0, locals 3 (0 pair, 1 a, 2 b), stack 48 (deepest 5)
   constants:
     #0   integer   3
     #1   integer   4
@@ -1390,8 +1394,8 @@ module main: <module>
 ```
 
 - `12`-`16`: a brace array evaluates its elements (`3 + 4` with the fast
-  path) and `MAKE_ARRAY 2` collects them. The header's `stack 48 + 5` is the
-  largest array in the module.
+  path) and `MAKE_ARRAY 2` collects them. The header's `deepest 5` is the
+  largest array in the module, whose five elements are on the stack at once.
 - `32`-`37`: a literal array `#(...)` compiles the same way, from constants;
   it is a fresh array on every evaluation, not a shared literal.
 - `22`, `28`: `at:` is an ordinary keyword send to a primitive.
@@ -1409,7 +1413,7 @@ d at: #k put: 42.
 
 ```text
 module main: <module>
-  args 0, locals 1 (0 d), stack 48
+  args 0, locals 1 (0 d), stack 48 (deepest 3)
   constants:
     #0   symbol    #Dictionary
     #1   symbol    #new
@@ -1448,7 +1452,7 @@ module main: <module>
      24  RETURN_TOP
 
 module main.0: <block>
-  args 0, locals 0, stack 48
+  args 0, locals 0, stack 48 (deepest 1)
   constants:
     #0   integer   0
   code:
@@ -1475,7 +1479,7 @@ xs size printNl.
 
 ```text
 module main: <module>
-  args 0, locals 1 (0 xs), stack 48 + 3
+  args 0, locals 1 (0 xs), stack 48 (deepest 3)
   constants:
     #0   integer   10
     #1   integer   20
@@ -1522,7 +1526,7 @@ module main: <module>
 
 ```text
 module main: <module>
-  args 0, locals 0, stack 48 + 4
+  args 0, locals 0, stack 48 (deepest 4)
   constants:
     #0   integer   1
     #1   integer   2
@@ -1544,7 +1548,7 @@ module main: <module>
       9  RETURN_TOP
 
 module main.0: <block>
-  args 2, locals 2 (0 acc, 1 x), stack 48
+  args 2, locals 2 (0 acc, 1 x), stack 48 (deepest 2)
   constants:
     #0   symbol    #+
   code:
@@ -1574,7 +1578,7 @@ r printNl.
 
 ```text
 module main: <module>
-  args 0, locals 1 (0 r), stack 48
+  args 0, locals 1 (0 r), stack 48 (deepest 3)
   constants:
     #0   symbol    #Error
     #1   symbol    #on:do:
@@ -1601,7 +1605,7 @@ module main: <module>
      17  RETURN_TOP
 
 module main.0: <block>
-  args 0, locals 0, stack 48
+  args 0, locals 0, stack 48 (deepest 2)
   constants:
     #0   symbol    #Error
     #1   string    'boom'
@@ -1616,7 +1620,7 @@ module main.0: <block>
       5  RETURN_TOP
 
 module main.1: <block>
-  args 1, locals 1 (0 e), stack 48
+  args 1, locals 1 (0 e), stack 48 (deepest 1)
   constants:
     #0   symbol    #messageText
   code:
@@ -1625,7 +1629,7 @@ module main.1: <block>
       2  RETURN_TOP
 
 module main.2: <block>
-  args 0, locals 0, stack 48
+  args 0, locals 0, stack 48 (deepest 1)
   constants:
     #0   string    'body'
     #1   symbol    #printNl
@@ -1635,7 +1639,7 @@ module main.2: <block>
       2  RETURN_TOP
 
 module main.3: <block>
-  args 0, locals 0, stack 48
+  args 0, locals 0, stack 48 (deepest 1)
   constants:
     #0   string    'cleanup'
     #1   symbol    #printNl
@@ -1676,7 +1680,7 @@ blk := [ 'sent' ].
 
 ```text
 module main: <module>
-  args 0, locals 2 (0 cond, 1 blk), stack 48
+  args 0, locals 2 (0 cond, 1 blk), stack 48 (deepest 2)
   constants:
     #0   integer   3
     #1   integer   2
@@ -1718,7 +1722,7 @@ module main: <module>
      30  RETURN_TOP
 
 module main.0: <block>
-  args 0, locals 0, stack 48
+  args 0, locals 0, stack 48 (deepest 1)
   constants:
     #0   string    'sent'
   code:
@@ -1750,7 +1754,7 @@ later value printNl.
 
 ```text
 module main: <module>
-  args 0, locals 5 (0 later, 1 __dy_coll_1, 2 __dy_blk_1, 3 __dy_n_1, 4 __dy_i_1), stack 48 + 3
+  args 0, locals 5 (0 later, 1 __dy_coll_1, 2 __dy_blk_1, 3 __dy_n_1, 4 __dy_i_1), stack 48 (deepest 3)
   constants:
     #0   symbol    #value
     #1   symbol    #printNl
@@ -1807,7 +1811,7 @@ module main: <module>
      40  RETURN_TOP
 
 module main.0: <block>
-  args 0, locals 0, stack 48
+  args 0, locals 0, stack 48 (deepest 1)
   constants:
     #0   string    'computed on demand'
   code:
@@ -1815,7 +1819,7 @@ module main.0: <block>
       1  RETURN_TOP
 
 module main.1: <block>
-  args 1, locals 1 (0 x), stack 48
+  args 1, locals 1 (0 x), stack 48 (deepest 1)
   constants:
     #0   symbol    #printNl
   code:
@@ -1858,7 +1862,7 @@ Point3 >> sum
 
 ```text
 module main: <module>
-  args 0, locals 0, stack 48
+  args 0, locals 0, stack 48 (deepest 3)
   constants:
     #0   symbol    #Point3
     #1   symbol    #Object
@@ -1906,7 +1910,7 @@ module main: <module>
      27  RETURN_TOP
 
 module main.0: Point3>>setX:y:
-  args 3, locals 3 (0 self, 1 ax, 2 ay), stack 48 + 3
+  args 3, locals 3 (0 self, 1 ax, 2 ay), stack 48 (deepest 3)
   defining class Point3
   write groups:
     @0   x, write 1 of 3
@@ -1929,7 +1933,7 @@ module main.0: Point3>>setX:y:
       8  RETURN
 
 module main.1: Point3>>sum
-  args 1, locals 1 (0 self), stack 48
+  args 1, locals 1 (0 self), stack 48 (deepest 2)
   defining class Point3
   constants:
     #0   symbol    #x
@@ -1947,7 +1951,7 @@ module main.1: Point3>>sum
 ```
 
 - `main.0`: `x := ax. y := ay. z := 0.` is one write group. The values stay
-  on the operand stack (`stack 48 + 3`) and `IVAR_GROUP_END` publishes the
+  on the operand stack (`deepest 3`) and `IVAR_GROUP_END` publishes the
   three variables as a single new version of the object: another thread
   sees all three writes or none.
 - `main.1`: each instance-variable read is `PUSH_INSTVAR`.
@@ -1973,7 +1977,7 @@ Dog new describe printNl.
 
 ```text
 module main: <module>
-  args 0, locals 2 (0 oc, 1 __cascade_tmp_1), stack 48
+  args 0, locals 2 (0 oc, 1 __cascade_tmp_1), stack 48 (deepest 3)
   constants:
     #0   symbol    #Animal
     #1   symbol    #Object
@@ -2056,7 +2060,7 @@ module main: <module>
      58  RETURN_TOP
 
 module main.0: Animal>>describe
-  args 1, locals 1 (0 self), stack 48
+  args 1, locals 1 (0 self), stack 48 (deepest 1)
   defining class Animal
   constants:
     #0   string    'an animal'
@@ -2065,15 +2069,15 @@ module main.0: Animal>>describe
       1  RETURN
 
 module main.1: Dog>>describe
-  args 1, locals 1 (0 self), stack 48
+  args 1, locals 1 (0 self), stack 48 (deepest 2)
   defining class Dog
   constants:
     #0   symbol    #describe
     #1   string    ' that barks'
     #2   symbol    #,
   code:
-      0  PUSH_SUPER
-      1  SEND_UNARY         0     ; #describe
+      0  PUSH_SELF
+      1  SEND_SUPER         0     ; #describe, 0 args
       2  PUSH_CONST         1     ; ' that barks'
       3  SEND_BINARY        2     ; #,
       4  RETURN
@@ -2085,9 +2089,11 @@ module main.1: Dog>>describe
   part, `POP` after it. The last part's result goes to the hidden slot
   `__cascade_tmp_1`, the receiver is popped, and the result is pushed back
   as the cascade's value.
-- `main.1` `0 PUSH_SUPER`: pushes `self` and arms the super flag;
-  `1 SEND_UNARY #describe` then looks the method up from `Animal`, the
-  superclass of the defining class `Dog`.
+- `main.1` `0 PUSH_SELF`, `1 SEND_SUPER #describe`: the receiver of a super
+  send is `self`; `SEND_SUPER` looks the method up from `Animal`, the
+  superclass of the defining class `Dog`. Only that send is a super send: in
+  `super foo: self bar`, `self bar` is an ordinary `SEND_UNARY` among the
+  arguments. Every part of a cascade to `super` is a `SEND_SUPER`.
 
 ### Example 18: a non-local return from a block
 
@@ -2104,7 +2110,7 @@ Finder >> firstOver: limit in: aColl
 
 ```text
 module main: <module>
-  args 0, locals 0, stack 48 + 4
+  args 0, locals 0, stack 48 (deepest 6)
   constants:
     #0   symbol    #Finder
     #1   symbol    #Object
@@ -2148,7 +2154,7 @@ module main: <module>
      23  RETURN_TOP
 
 module main.0: Finder>>firstOver:in:
-  args 3, locals 3 (0 self, 1 limit, 2 aColl), stack 48
+  args 3, locals 3 (0 self, 1 limit, 2 aColl), stack 48 (deepest 2)
   defining class Finder
   constants:
     #0   symbol    #limit
@@ -2165,7 +2171,7 @@ module main.0: Finder>>firstOver:in:
       8  RETURN
 
 module main.0.0: [] in Finder>>firstOver:in:
-  args 1, locals 1 (0 x), stack 48
+  args 1, locals 1 (0 x), stack 48 (deepest 2)
   defining class Finder
   constants:
     #0   symbol    #limit
@@ -2331,75 +2337,17 @@ blocks are frames inside one context per thread (1.3, 1.8).
 ## 6. Known oddities
 
 Found while writing this document, from the code on `main` at `e2e930f`.
-Each bug below was reproduced with the program shown; none is fixed here.
+The five bugs found then (a `super` send with a send in its arguments, an
+inlined `to:do:` evaluating its receiver twice, inlined bodies over 255
+words, the fixed 48-slot operand stack, sends of more than 8 arguments) and
+the dead code listed with them (four opcodes and four constant kinds never
+emitted, the empty `Compiler::patchJumpToHere`, the engine's local-slot check
+on the operand's low byte only) were fixed on branch `fix/vm-known-issues`
+(`CHANGELOG.md`). What remains:
 
-**Verified bugs**
-
-- **`super` with a send in its arguments goes wrong.** `PUSH_SUPER` arms a
-  per-frame flag that the next send executed in the frame consumes. In
-  `super foo: self bar`, that send is `self bar`: `bar` is looked up from the
-  superclass and `foo:` is sent normally, so the override runs instead of
-  the inherited method. With `A >> foo: x ^ 'A foo with ', x`,
-  `A >> bar ^ 'A bar'`, a subclass `B` overriding both, and
-  `B >> test ^ super foo: self bar`, `B new test` answers
-  `'B foo with A bar'` instead of `'A foo with B bar'`. `super foo: 'lit'`
-  is correct. `superPending` is also not saved by `snapshotFrames`.
-- **An inlined `to:do:` evaluates its receiver twice.** The receiver
-  expression is compiled once as the loop start and again, after the loop,
-  as the expression's value (`tryEmitInlinedControl`, example 06 word 31).
-  `| c | c := 0. (c := c + 1) to: 3 do: [ :i | ]. c printNl.` prints `2`;
-  Smalltalk evaluates the receiver once (`1`).
-- **An inlined body longer than 255 words is a compile error.** Jumps are
-  emitted as one word and back-patched with an 8-bit operand, although the
-  `EXTEND` prefix exists for wide operands. `true ifTrue: [ x := x + 1. ... ]`
-  with 70 statements fails with `compile error: inline if: block too large`;
-  the same for `to:do:` (`inline to:do:: body too large`) and `whileTrue:`.
-  The compiler does not fall back to a real send.
-- **Deep expressions overflow the operand stack.** The operand stack has a
-  fixed 48 slots (plus brace arrays and write groups); the compiler computes
-  no maximum depth. `(1 + (1 + ( ... 60 levels ... 1)))` fails at run time
-  with `engine operand stack overflow`, which `on: Error do:` does not catch.
-- **A send with more than 8 arguments fails uncatchably.** A 9-keyword
-  method compiles, but sending it raises `send of #a:b:c:d:e:f:g:h:i: has 9
-  arguments; at most 8 are supported per send` as a C++ exception that
-  `on: Error do:` does not catch. The limit itself is documented
-  (LANGUAGE.md §5.4); neither the compile-time silence nor the
-  uncatchability is. Other `std::runtime_error`s thrown inside `runLoop`
-  (a method arity mismatch, `the attribute is a value, not a method`) take
-  the same path; they were not reproduced separately.
-
-**Dead or unclear code**
-
-- **Four opcodes are never emitted:** `NOP`, `SEND_SUPER` (the compiler uses
-  `PUSH_SUPER` + an ordinary send), `DUP_RECEIVER` (cascades use `DUP`) and
-  `HALT`. Each is implemented in `runLoop` and has a unit test that builds a
-  module by hand.
-- **Four constant kinds are never created:** `BlockRef` (`materialize`
-  answers nil for it, commented "F2 stub"), `NilK`, `TrueK` and `FalseK` (no
-  `add` function exists for them; `nil`, `true` and `false` have opcodes).
-- **`Compiler::patchJumpToHere`** is empty and never called; its comment in
-  `Compiler.h` says it "errors out if the distance does not fit".
-- **`checkLocal` in `runLoop` takes a `uint8_t` slot**, so for a wide slot
-  operand (above 255) it checks the low byte only. Harmless today: frames
-  are sized from the same scan of the code, so a compiled slot is always in
-  range.
 - **Constants are not de-duplicated** except symbols: a class declaration
   holds its name string twice (`__subclassNamed:` and `__setClassName:`),
   and example 06 holds `1` three times.
 - **Unreachable code after `^` in an inlined block:** the `JUMP` that
   completes the inlined conditional is emitted after the `RETURN`
   (example 05, word 7). Harmless.
-
-**Stale comments**
-
-- `Opcodes.h`: `PUSH_INSTVAR` "accessed on self/slot 0": the engine reads the
-  frame's header `self` slot, which differs from local 0 in a block frame.
-  `SEND_SUPER` has no comment and is never emitted.
-- `Compiler.cpp`, the call-form default prologue: the comment shows a `POP`
-  after `STORE_LOCAL` that is not emitted (the code is right: `STORE_LOCAL`
-  pops).
-- `ExecutionEngine.cpp`, the file header: "`ifTrue:` ... `whileTrue:` ... go
-  through invokeBlock" is true only of the forms the compiler does not
-  inline.
-- `ExecutionEngine.cpp`, above `kFrameMaxStk`: "48 operand slots is far
-  past any real depth": see the operand-stack bug above.

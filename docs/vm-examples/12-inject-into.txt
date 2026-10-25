@@ -1,5 +1,5 @@
 module main: <module>
-  args 0, locals 0, stack 48 + 4
+  args 0, locals 0, stack 48 (deepest 4)
   constants:
     #0   integer   1
     #1   integer   2
@@ -21,7 +21,7 @@ module main: <module>
       9  RETURN_TOP
 
 module main.0: <block>
-  args 2, locals 2 (0 acc, 1 x), stack 48
+  args 2, locals 2 (0 acc, 1 x), stack 48 (deepest 2)
   constants:
     #0   symbol    #+
   code:

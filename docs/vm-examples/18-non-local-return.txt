@@ -1,5 +1,5 @@
 module main: <module>
-  args 0, locals 0, stack 48 + 4
+  args 0, locals 0, stack 48 (deepest 6)
   constants:
     #0   symbol    #Finder
     #1   symbol    #Object
@@ -43,7 +43,7 @@ module main: <module>
      23  RETURN_TOP
 
 module main.0: Finder>>firstOver:in:
-  args 3, locals 3 (0 self, 1 limit, 2 aColl), stack 48
+  args 3, locals 3 (0 self, 1 limit, 2 aColl), stack 48 (deepest 2)
   defining class Finder
   constants:
     #0   symbol    #limit
@@ -60,7 +60,7 @@ module main.0: Finder>>firstOver:in:
       8  RETURN
 
 module main.0.0: [] in Finder>>firstOver:in:
-  args 1, locals 1 (0 x), stack 48
+  args 1, locals 1 (0 x), stack 48 (deepest 2)
   defining class Finder
   constants:
     #0   symbol    #limit

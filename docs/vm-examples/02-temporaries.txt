@@ -1,5 +1,5 @@
 module main: <module>
-  args 0, locals 2 (0 x, 1 y), stack 48
+  args 0, locals 2 (0 x, 1 y), stack 48 (deepest 2)
   constants:
     #0   integer   10
     #1   integer   2

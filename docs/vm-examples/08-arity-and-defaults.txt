@@ -1,5 +1,5 @@
 module main: <module>
-  args 0, locals 0, stack 48
+  args 0, locals 0, stack 48 (deepest 3)
   constants:
     #0   symbol    #Box
     #1   symbol    #Object
@@ -91,7 +91,7 @@ module main: <module>
      61  RETURN_TOP
 
 module main.0: Box>>w:
-  args 2, locals 2 (0 self, 1 aW), stack 48 + 2
+  args 2, locals 2 (0 self, 1 aW), stack 48 (deepest 2)
   defining class Box
   write groups:
     @0   w, write 1 of 2
@@ -109,7 +109,7 @@ module main.0: Box>>w:
       6  RETURN
 
 module main.1: Box>>w:h:
-  args 3, locals 3 (0 self, 1 aW, 2 aH), stack 48 + 2
+  args 3, locals 3 (0 self, 1 aW, 2 aH), stack 48 (deepest 2)
   defining class Box
   write groups:
     @0   w, write 1 of 2
@@ -127,7 +127,7 @@ module main.1: Box>>w:h:
       6  RETURN
 
 module main.2: Box>>area
-  args 1, locals 1 (0 self), stack 48
+  args 1, locals 1 (0 self), stack 48 (deepest 2)
   defining class Box
   constants:
     #0   symbol    #w
@@ -140,7 +140,7 @@ module main.2: Box>>area
       3  RETURN
 
 module main.3: Box>>scaled(...)
-  args 3, locals 3 (0 self, 1 factor, 2 offset), stack 48
+  args 3, locals 3 (0 self, 1 factor, 2 offset), stack 48 (deepest 2)
   defining class Box
   call form: 1 positional, offset=
   constants:

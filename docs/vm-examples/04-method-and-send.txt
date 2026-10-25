@@ -1,5 +1,5 @@
 module main: <module>
-  args 0, locals 0, stack 48
+  args 0, locals 0, stack 48 (deepest 3)
   constants:
     #0   symbol    #Greeter
     #1   symbol    #Object
@@ -45,7 +45,7 @@ module main: <module>
      26  RETURN_TOP
 
 module main.0: Greeter>>name:
-  args 2, locals 2 (0 self, 1 aString), stack 48
+  args 2, locals 2 (0 self, 1 aString), stack 48 (deepest 2)
   defining class Greeter
   constants:
     #0   symbol    #name
@@ -58,7 +58,7 @@ module main.0: Greeter>>name:
       5  RETURN
 
 module main.1: Greeter>>greeting
-  args 1, locals 1 (0 self), stack 48
+  args 1, locals 1 (0 self), stack 48 (deepest 2)
   defining class Greeter
   constants:
     #0   string    'Hello, '

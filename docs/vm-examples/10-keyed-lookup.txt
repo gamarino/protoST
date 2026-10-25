@@ -1,5 +1,5 @@
 module main: <module>
-  args 0, locals 1 (0 d), stack 48
+  args 0, locals 1 (0 d), stack 48 (deepest 3)
   constants:
     #0   symbol    #Dictionary
     #1   symbol    #new
@@ -38,7 +38,7 @@ module main: <module>
      24  RETURN_TOP
 
 module main.0: <block>
-  args 0, locals 0, stack 48
+  args 0, locals 0, stack 48 (deepest 1)
   constants:
     #0   integer   0
   code:

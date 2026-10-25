@@ -293,7 +293,7 @@ at the limit receives that `Error` after the stack has unwound to its `on:do:`.
 
 ### Arity limits
 
-A message send carries at most 8 arguments. Blocks are called with `value`
+A keyword message may have any number of parts. Blocks are called with `value`
 … `value:value:value:value:` or, for any arity, `valueWithArguments:`.
 
 ### Single `STRuntime` per process — D2

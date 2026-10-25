@@ -1,5 +1,5 @@
 module main: <module>
-  args 0, locals 2 (0 cond, 1 blk), stack 48
+  args 0, locals 2 (0 cond, 1 blk), stack 48 (deepest 2)
   constants:
     #0   integer   3
     #1   integer   2
@@ -41,7 +41,7 @@ module main: <module>
      30  RETURN_TOP
 
 module main.0: <block>
-  args 0, locals 0, stack 48
+  args 0, locals 0, stack 48 (deepest 1)
   constants:
     #0   string    'sent'
   code:

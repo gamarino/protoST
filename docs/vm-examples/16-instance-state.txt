@@ -1,5 +1,5 @@
 module main: <module>
-  args 0, locals 0, stack 48
+  args 0, locals 0, stack 48 (deepest 3)
   constants:
     #0   symbol    #Point3
     #1   symbol    #Object
@@ -47,7 +47,7 @@ module main: <module>
      27  RETURN_TOP
 
 module main.0: Point3>>setX:y:
-  args 3, locals 3 (0 self, 1 ax, 2 ay), stack 48 + 3
+  args 3, locals 3 (0 self, 1 ax, 2 ay), stack 48 (deepest 3)
   defining class Point3
   write groups:
     @0   x, write 1 of 3
@@ -70,7 +70,7 @@ module main.0: Point3>>setX:y:
       8  RETURN
 
 module main.1: Point3>>sum
-  args 1, locals 1 (0 self), stack 48
+  args 1, locals 1 (0 self), stack 48 (deepest 2)
   defining class Point3
   constants:
     #0   symbol    #x

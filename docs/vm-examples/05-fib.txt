@@ -1,5 +1,5 @@
 module main: <module>
-  args 0, locals 0, stack 48
+  args 0, locals 0, stack 48 (deepest 3)
   constants:
     #0   symbol    #Math
     #1   symbol    #Object
@@ -34,7 +34,7 @@ module main: <module>
      18  RETURN_TOP
 
 module main.0: Math>>fib:
-  args 2, locals 2 (0 self, 1 n), stack 48
+  args 2, locals 2 (0 self, 1 n), stack 48 (deepest 4)
   defining class Math
   constants:
     #0   integer   2

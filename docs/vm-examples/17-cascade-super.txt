@@ -1,5 +1,5 @@
 module main: <module>
-  args 0, locals 2 (0 oc, 1 __cascade_tmp_1), stack 48
+  args 0, locals 2 (0 oc, 1 __cascade_tmp_1), stack 48 (deepest 3)
   constants:
     #0   symbol    #Animal
     #1   symbol    #Object
@@ -82,7 +82,7 @@ module main: <module>
      58  RETURN_TOP
 
 module main.0: Animal>>describe
-  args 1, locals 1 (0 self), stack 48
+  args 1, locals 1 (0 self), stack 48 (deepest 1)
   defining class Animal
   constants:
     #0   string    'an animal'
@@ -91,15 +91,15 @@ module main.0: Animal>>describe
       1  RETURN
 
 module main.1: Dog>>describe
-  args 1, locals 1 (0 self), stack 48
+  args 1, locals 1 (0 self), stack 48 (deepest 2)
   defining class Dog
   constants:
     #0   symbol    #describe
     #1   string    ' that barks'
     #2   symbol    #,
   code:
-      0  PUSH_SUPER
-      1  SEND_UNARY         0     ; #describe
+      0  PUSH_SELF
+      1  SEND_SUPER         0     ; #describe, 0 args
       2  PUSH_CONST         1     ; ' that barks'
       3  SEND_BINARY        2     ; #,
       4  RETURN

@@ -5,6 +5,36 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+- **The five VM bugs found while writing `docs/VM.md`, fixed.** (1) A `super`
+  send is now its own instruction: the compiler pushes `self`, the arguments,
+  then `SEND_SUPER`, so `super foo: self bar` runs the inherited `foo:` with
+  the override's `bar` (it ran the override of `foo:` with the inherited
+  `bar`), and every part of a cascade to `super` is a super send (only the
+  first was). `PUSH_SUPER` and the frame flag it armed are gone; `super` as a
+  value is `PUSH_SELF`, and `super name(...)` is a compile error instead of a
+  send to `self`. (2) An inlined `to:do:` evaluates its receiver once (it
+  evaluated it again for the value of the expression). (3) An inlined
+  `ifTrue:`, `ifTrue:ifFalse:`, `whileTrue:` or `to:do:` body, and a
+  call-form default, may be of any length: a jump whose distance does not
+  fit in a byte is widened with `EXTEND` prefixes (it was a compile error
+  past 255 words). (4) A frame's operand stack is sized from the deepest
+  point of its code, floored at the former 48 slots, so expressions nest as
+  deeply as written (60 levels failed); an overflow in a hand-built module
+  is a catchable `Error`. (5) A keyword message may have any number of
+  parts (9 or more failed at run time, past every `on:do:`). Errors the
+  engine raised as bare C++ exceptions during a send (a method's arity, a
+  value attribute sent a keyword message, an unresolvable `super`) are
+  catchable `Error`s now. Removed as dead: the opcodes `NOP`, `PUSH_SUPER`,
+  `DUP_RECEIVER` and `HALT` (their numbers stay reserved), the constant
+  kinds `BlockRef`, `NilK`, `TrueK`, `FalseK`, and the empty
+  `Compiler::patchJumpToHere`; the engine's local-slot check reads the whole
+  wide operand. `protost --disasm` prints `stack N (deepest D)`. New
+  conformance programs: `05-messages/super-send-argument-is-a-self-send`,
+  `super-cascade`, `send-with-many-arguments`,
+  `send-many-arguments-not-understood-is-catchable` (replacing
+  `send-more-than-8-args-error`), `06-blocks/to-do-receiver-evaluated-once`,
+  `inlined-bodies-longer-than-255-words`, `03-grammar/deep-expression-nesting`.
+
 - **`docs/VM.md`: the virtual machine, documented for contributors, and
   `protost --disasm`.** A reading order through the source (parser,
   compiler, bytecode module, engine, primitives); the instruction encoding,

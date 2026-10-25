@@ -1,5 +1,5 @@
 module main: <module>
-  args 0, locals 1 (0 add5), stack 48
+  args 0, locals 1 (0 add5), stack 48 (deepest 3)
   constants:
     #0   symbol    #Adders
     #1   symbol    #Object
@@ -46,7 +46,7 @@ module main: <module>
      28  RETURN_TOP
 
 module main.0: Adders>>adderFor:
-  args 2, locals 2 (0 self, 1 n), stack 48
+  args 2, locals 2 (0 self, 1 n), stack 48 (deepest 1)
   defining class Adders
   constants:
     #0   symbol    #n
@@ -58,7 +58,7 @@ module main.0: Adders>>adderFor:
       4  RETURN
 
 module main.0.0: [] in Adders>>adderFor:
-  args 1, locals 1 (0 x), stack 48
+  args 1, locals 1 (0 x), stack 48 (deepest 2)
   defining class Adders
   constants:
     #0   symbol    #n

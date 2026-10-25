@@ -1077,8 +1077,8 @@ imported module and then subclassed locally (see [§4.10]).
 ### 5.4 Argument count
 
 A send carries a fixed number of arguments determined by the selector form:
-unary = 0, binary = 1, keyword = the number of keyword parts. The current
-engine limits a single send to at most 8 arguments.
+unary = 0, binary = 1, keyword = the number of keyword parts. There is no
+limit on the number of keyword parts.
 
 ---
 
