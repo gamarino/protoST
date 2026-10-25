@@ -77,9 +77,7 @@ unsigned int BytecodeModule::sendArgCount(Op op, const std::string& sel) {
     return colons;
 }
 
-unsigned int BytecodeModule::cachedMaxOperandDepth() const {
-    const int cached = maxOperandDepthCache_.load(std::memory_order_acquire);
-    if (cached >= 0) return static_cast<unsigned int>(cached);
+unsigned int BytecodeModule::computeMaxOperandDepth() const {
     // One pass in code order. The compiler emits structured code: every jump
     // into a point comes either from before it (a forward jump, which
     // records its depth here) or is a loop's back edge (whose target was

@@ -392,7 +392,10 @@ public:
     // carries its depth to its target. The engine sizes each frame's operand
     // stack from it, so an expression may nest as deeply as the source
     // writes it. Lazily computed, cached.
-    unsigned int cachedMaxOperandDepth() const;
+    unsigned int cachedMaxOperandDepth() const {
+        const int cached = maxOperandDepthCache_.load(std::memory_order_acquire);
+        return cached >= 0 ? static_cast<unsigned int>(cached) : computeMaxOperandDepth();
+    }
 
     // The operand-stack capacity of a frame running this module: the depth
     // above, floored at kMinOperandStack slots, the fixed size frames had
@@ -412,6 +415,7 @@ public:
 
 private:
     mutable std::atomic<int> maxOperandDepthCache_{-1};
+    unsigned int computeMaxOperandDepth() const;   // fills the cache
     // `(argc << 32) | localCount`, or kNoLocalCount when not yet computed.
     // argc is folded into the cache key because `computeLocalCount` returns
     // max(argc, maxSlot+1) — different argc values for the same module body

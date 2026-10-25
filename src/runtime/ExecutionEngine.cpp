@@ -124,6 +124,16 @@ namespace {
     protoST::signalNativeError(rt, ctx, message.c_str());
     throw std::runtime_error(message);   // not reached: Error is not resumable
 }
+// Kept out of line so that `push`, on every instruction's path, stays small.
+#if defined(_MSC_VER)
+__declspec(noinline)
+#else
+__attribute__((noinline, cold))
+#endif
+[[noreturn]] void signalStackOverflow(protoST::STRuntime& rt, proto::ProtoContext* ctx,
+                         unsigned int slots) {
+    signalCatchable(rt, ctx, "operand stack overflow (" + std::to_string(slots) + " slots)");
+}
 } // namespace
 
 
@@ -333,9 +343,8 @@ ExecutionEngine::push(Frame& f, const proto::ProtoObject* v) {
     // The compiler's code never gets here: frames are sized from the deepest
     // point of their module. A hand-built module can, and then it is an
     // ordinary catchable Error, not a C++ exception past every handler.
-    if (f.sp >= f.maxStack)
-        signalCatchable(rt_, ctx_, "operand stack overflow (" +
-                        std::to_string(f.maxStack) + " slots)");
+    if (f.sp >= f.maxStack) [[unlikely]]
+        signalStackOverflow(rt_, ctx_, f.maxStack);
     ctx_->setAutomaticLocal(opStackBase(f) + f.sp, v);
     ++f.sp;
 }
@@ -1302,20 +1311,25 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // frame's slot region, which the GC traces in full (the whole
                 // automaticLocals array is scanned, not just [0, sp)). So the
                 // popped objects stay rooted while we build the send below,
-                // even though `sendArgs` is a plain C++ array. A send of more
-                // than kInlineSendArgs arguments (a keyword message may have
-                // any number of parts) takes its array from the heap.
+                // even though `sendArgs` is a plain C++ array.
+                //
+                // callArgs is [receiver, arg1 .. argn], the layout a method
+                // frame takes, so a method call needs no second array;
+                // sendArgs is its tail. A send of more than kInlineSendArgs
+                // arguments (a keyword message may have any number of parts)
+                // uses the engine's wideCallArgs_ instead (ExecutionEngine.h).
                 constexpr int kInlineSendArgs = 8;
-                const proto::ProtoObject* inlineArgs[kInlineSendArgs];
-                std::vector<const proto::ProtoObject*> heapArgs;
-                const proto::ProtoObject** sendArgs = inlineArgs;
-                if (argcOp > kInlineSendArgs) {
-                    heapArgs.resize(static_cast<std::size_t>(argcOp));
-                    sendArgs = heapArgs.data();
+                const proto::ProtoObject* inlineCallArgs[kInlineSendArgs + 1];
+                const proto::ProtoObject** callArgs = inlineCallArgs;
+                if (argcOp > kInlineSendArgs) [[unlikely]] {
+                    wideCallArgs_.resize(static_cast<std::size_t>(argcOp) + 1);
+                    callArgs = wideCallArgs_.data();
                 }
+                const proto::ProtoObject** sendArgs = callArgs + 1;
                 for (int i = argcOp - 1; i >= 0; --i)
                     sendArgs[i] = pop(f);
                 const proto::ProtoObject* recv = pop(f);
+                callArgs[0] = recv;
 
                 // Selector symbol — interned once and cached on the module
                 // (constSym), not re-interned on every send.
@@ -1799,20 +1813,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // F6 v3 E3: local 0 = recv (self), locals 1..argcOp =
                     // call args. pushFrame packs them into the callee's
                     // region inside the GC-traced automaticLocals.
-                    // Receiver and arguments, contiguous. The receiver goes
-                    // into the slot below the first argument -- where it
-                    // was on the operand stack -- when the arguments are on
-                    // the heap, so that no second array is needed.
-                    const proto::ProtoObject* inlineMethodArgs[kInlineSendArgs + 1];
-                    const proto::ProtoObject** methodArgs = inlineMethodArgs;
-                    if (argcOp > kInlineSendArgs) {
-                        heapArgs.insert(heapArgs.begin(), recv);
-                        methodArgs = heapArgs.data();
-                    } else {
-                        methodArgs[0] = recv;
-                        for (int i = 0; i < argcOp; ++i)
-                            methodArgs[i + 1] = sendArgs[i];
-                    }
+                    // Receiver and arguments, contiguous (callArgs above).
+                    const proto::ProtoObject* const* methodArgs = callArgs;
                     if (signalIfTooDeep(ctx, f, sub,
                             static_cast<unsigned int>(argcOp) + 1)) {
                         DISPATCH_SCOPED();

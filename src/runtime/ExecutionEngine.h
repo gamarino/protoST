@@ -233,6 +233,15 @@ private:
     // one thread (mirrors g_liveEngines / g_slotCursor).
     static thread_local std::vector<std::vector<Frame>> framePool_;
 
+    // [receiver, arg1 .. argn] of a send with more than 8 arguments (the
+    // SEND_* handler keeps up to 8 in an array on the C++ stack). One buffer
+    // per engine is enough: a send is done with it once the callee's frame
+    // holds the arguments or the primitive it called has returned, and any
+    // send made meanwhile by a primitive runs in a nested engine of its own.
+    // The values stay rooted in the operand-stack slots they were popped
+    // from; a stale pointer left here is never read again.
+    std::vector<const proto::ProtoObject*> wideCallArgs_;
+
     // F6 v3 E3: the automaticLocals slot index where THIS engine's frame
     // regions begin. Captured from the shared thread-local slot cursor at
     // engine entry; nested engines (invoked by primitives) pack their regions
