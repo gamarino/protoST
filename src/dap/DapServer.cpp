@@ -159,6 +159,9 @@ class DapServer : public DebuggerFrontend {
     };
     struct PathMapping {
         std::string localRoot, remoteRoot;
+        // remoteRoot with its symbolic links resolved, when it exists here
+        // (macOS: /var/folders is /private/var/folders); "" otherwise.
+        std::string remoteCanonical;
     };
 public:
     DapServer() : transport_(stdio_.protocolIn(), stdio_.protocolOut()) {}
@@ -491,7 +494,11 @@ private:
                                            "(the path where protost runs)");
                     return;
                 }
-                mappings_.push_back({local, remote});
+                std::error_code ec;
+                std::string canon;
+                auto c = std::filesystem::weakly_canonical(std::filesystem::path(remote), ec);
+                if (!ec) canon = c.generic_string();
+                mappings_.push_back({local, remote, canon == forwardSlashes(remote) ? std::string() : canon});
             }
         }
 
@@ -856,11 +863,25 @@ private:
     std::optional<std::string> toClientPath(const std::string& adapterPath) const {
         const PathMapping* best = nullptr;
         std::string bestRest;
+        // The path as spelled, and with its symbolic links resolved: a module
+        // found through the working directory carries the resolved spelling.
+        std::string canonical;
+        {
+            std::error_code ec;
+            auto c = std::filesystem::weakly_canonical(std::filesystem::path(adapterPath), ec);
+            if (!ec) canonical = c.generic_string();
+        }
         for (const auto& m : mappings_) {
-            auto rest = underRoot(adapterPath, m.remoteRoot, looksWindows(m.remoteRoot));
-            if (rest && (!best || m.remoteRoot.size() > best->remoteRoot.size())) {
-                best = &m;
-                bestRest = *rest;
+            for (const std::string* root : std::initializer_list<const std::string*>{&m.remoteRoot, &m.remoteCanonical}) {
+                if (root->empty()) continue;
+                for (const std::string* path : std::initializer_list<const std::string*>{&adapterPath, &canonical}) {
+                    if (path->empty()) continue;
+                    auto rest = underRoot(*path, *root, looksWindows(*root));
+                    if (rest && (!best || m.remoteRoot.size() > best->remoteRoot.size())) {
+                        best = &m;
+                        bestRest = *rest;
+                    }
+                }
             }
         }
         if (!best) return std::nullopt;
