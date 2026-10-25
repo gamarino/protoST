@@ -250,12 +250,11 @@ thing on every platform, except for these, which differ on Windows:
 
 | Test | On Windows |
 |------|------------|
-| `cli_sigint` | Not run: it needs `pgrep`, `kill -INT` and a FIFO, which Git Bash cannot aim at a native program. `cli_repl_console` covers Ctrl-C there instead, in a console of its own with a keyboard Ctrl-C: cancelling a line, Ctrl-C at an empty prompt, and a second Ctrl-C while blocked. A script stopped with Ctrl-C is not tested on Windows. |
-| `docs/docs/tutorial/15-input-and-output.md` | Not run: the `env.st` example runs `echo $PUMP_MODE`, POSIX shell syntax that `cmd.exe` does not expand. |
+| `cli_sigint` | `tests/cli/test_cli_sigint_windows.py` instead of the `sh` script, whose `pgrep`, `kill -INT` and FIFO Git Bash cannot aim at a native program: in a console of its own, a Ctrl-C raised with `GenerateConsoleCtrlEvent` ends a script with `STATUS_CONTROL_C_EXIT` (POSIX: killed by SIGINT, status 130), and interrupts an evaluation in the REPL, which goes on -- with the REPL started with Ctrl-C ignored, as ctest starts it. |
 | `bench_harness_selftest` | Not registered: its fake `protost` binaries are `/bin/sh` scripts. |
 | `cli_inputs` | Reads a script through `-` only: the `/dev/stdin` and process-substitution cases need POSIX files. |
 | `cli_venv` | Activates through `activate.bat` and `deactivate.bat` in `cmd.exe` instead of sourcing `activate` in `sh`. |
-| `cli_repl_console` | A console of its own instead of a pseudo-terminal: keys are written to the console's input buffer and Ctrl-C is pressed on the keyboard (`keybd_event`). ctest starts each test in a new process group, which ignores Ctrl-C and passes that on to its children, so the test clears the flag before starting `protost`, as a console a person types in has it. A `protost` started with Ctrl-C ignored still cancels the line at the prompt (the console aborts the read), but cannot be interrupted or stopped with Ctrl-C. |
+| `cli_repl_console` | A console of its own instead of a pseudo-terminal: keys are written to the console's input buffer and Ctrl-C is pressed on the keyboard (`keybd_event`). ctest starts each test in a new process group, which ignores Ctrl-C and passes that on to its children, so the test clears the flag before starting `protost`, as a console a person types in has it. (The REPL takes Ctrl-C back itself: a REPL started with Ctrl-C ignored can still be interrupted, as `cli_sigint` checks.) |
 | `cli_memory_bounded` | The same 1 GB bound, on the peak working set instead of the maximum resident set size. |
 | `cli_kernel` | Unchanged: on every platform it bounds what `-e '1'` costs beyond starting the process (`--version`), because under Git Bash starting a native program costs about as much as the whole budget. |
 

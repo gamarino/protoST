@@ -71,6 +71,13 @@ void armInterrupts(proto::ProtoContext* ctx) {
     g_armedThread.store(ctx ? ctx->thread : nullptr, std::memory_order_relaxed);
 #if defined(_WIN32)
     if (!g_wakeEvent) g_wakeEvent = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    // A process started in a new process group (ctest, a program started in
+    // the background, some IDE terminals) inherits "ignore Ctrl-C", and then
+    // no handler sees it: the REPL could never be interrupted. On POSIX the
+    // handler installed below replaces an inherited SIG_IGN; do the same here
+    // by taking Ctrl-C back for this process. A script, which arms nothing,
+    // keeps the inherited disposition on both platforms.
+    ::SetConsoleCtrlHandler(nullptr, FALSE);
 #else
     if (g_wakePipe[0] < 0 && ::pipe(g_wakePipe) == 0) {
         for (int fd : g_wakePipe) {

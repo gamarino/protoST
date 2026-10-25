@@ -427,8 +427,18 @@ add_test(NAME cli_memory_bounded
 add_test(NAME cli_oom_clean
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_oom_clean.sh $<TARGET_FILE:protost>)
 
-add_test(NAME cli_sigint
-    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_sigint.sh $<TARGET_FILE:protost>)
+if(WIN32)
+    # Ctrl-C is a console control event on Windows, which Git Bash cannot send
+    # to a native program: the Windows variant runs in a console of its own.
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME cli_sigint
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_sigint_windows.py
+                    $<TARGET_FILE:protost>)
+    endif()
+else()
+    add_test(NAME cli_sigint
+        COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_sigint.sh $<TARGET_FILE:protost>)
+endif()
 
 add_test(NAME cli_inputs
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_inputs.sh $<TARGET_FILE:protost>)

@@ -43,12 +43,9 @@ jobs:
             exclude_tests: ''
           - name: Windows (MSVC, x64)
             os: windows-2022
-            # cli_sigint needs pgrep, kill -INT on a native process and mkfifo,
-            # which Git Bash cannot give a native program (Ctrl-C was checked by
-            # hand). The tutorial's chapter 15 runs `echo $PUMP_MODE`, POSIX
-            # shell syntax cmd.exe does not expand. docs/INSTALLATION.md,
-            # "Windows (MSVC)".
-            exclude_tests: '|^cli_sigint$|^docs/docs/tutorial/15-input-and-output\.md$'
+            # Every test runs (cli_sigint as its Windows variant,
+            # docs/INSTALLATION.md, "Windows (MSVC)").
+            exclude_tests: ''
     defaults:
       run:
         shell: bash

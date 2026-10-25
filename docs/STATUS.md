@@ -23,9 +23,9 @@ stable id and file it in the right bucket.
   macOS and Windows against protoCore 2.14.6, and on Linux against 2.11.0,
   the declared minimum (CI 38318673607 and cross-platform 38318673623, green on 0.6.5): Linux runs 1100 of
   them in its suite job (the wall-clock parallelism proof runs in a separate
-  informational job), macOS 1100, Windows 1097; Windows runs all
-  but `cli_sigint` and tutorial chapter 15 (`docs/INSTALLATION.md`, "Windows
-  (MSVC)"). `cli_concurrent_first_call` (S19) gates CI again since 0.6.3. The
+  informational job), macOS 1100, Windows 1097 (at 0.6.5; since then
+  Windows runs `cli_sigint` in a Windows variant and tutorial chapter 15 as
+  well, `docs/INSTALLATION.md`, "Windows (MSVC)"). `cli_concurrent_first_call` (S19) gates CI again since 0.6.3. The
   history of earlier counts is in `CHANGELOG.md`.
 - **protoCore:** 0.7.0 requires 3.0.0 or later (the descriptor calling
   convention and the unified exception model); its

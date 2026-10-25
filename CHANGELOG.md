@@ -5,6 +5,17 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+- **Windows: the REPL can be interrupted when it was started with Ctrl-C
+  ignored.** A process started in a new process group (ctest, a background
+  start, some IDE terminals) inherits "ignore Ctrl-C", and no handler then sees
+  it: an endless evaluation in the REPL could not be stopped. The REPL now
+  takes Ctrl-C back (`SetConsoleCtrlHandler(nullptr, FALSE)`), as on POSIX its
+  SIGINT handler replaces an inherited SIG_IGN; a script keeps the inherited
+  disposition on both. `cli_sigint` runs on Windows as
+  `test_cli_sigint_windows.py` (a console of its own, GenerateConsoleCtrlEvent:
+  a script ends with STATUS_CONTROL_C_EXIT, the REPL is interrupted and goes
+  on), and tutorial chapter 15's `env.st` asks the platform's shell in its own
+  syntax (`%PUMP_MODE%` in cmd.exe): Windows CI excludes no test.
 - **DAP: remote debugging and sources without a local file**
   (docs/debugging.md "Remote debugging", "Sources without a file").
   `launch` takes `pathMappings` ([{localRoot, remoteRoot}], longest prefix,

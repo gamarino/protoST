@@ -261,7 +261,11 @@ changed for this process and the programs it starts with
 (Smalltalk getenv: 'NO_SUCH_VARIABLE_HERE') printNl.
 (Smalltalk environment includesKey: 'PUMP_ID') printNl.
 Smalltalk setenv: 'PUMP_MODE' to: 'test'.
-(OSProcess command: 'echo $PUMP_MODE') printNl.
+"The system's shell expands the variable: /bin/sh on Linux and macOS,
+ cmd.exe on Windows, each with its own syntax."
+(OSProcess command: (Smalltalk platform = 'windows'
+    ifTrue: ['echo %PUMP_MODE%']
+    ifFalse: ['echo $PUMP_MODE'])) printNl.
 ```
 
 ```bash
