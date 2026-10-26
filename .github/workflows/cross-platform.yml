@@ -24,8 +24,8 @@ env:
   # (3.0.0) is built by ci.yml's floor entry only.
   PROTOCORE_REF: 267b9fc93a189fb3552dd7d52c7d519b0d9166b4
   PROTOIO_REPO: gamarino/protoIO
-  # protoIO 0.2.2 (main, 1611ff9), the declared floor.
-  PROTOIO_REF: 1611ff9cf8d499cdc42a6e108e42ecfc36fd8164
+  # protoIO 0.2.3 (main, 7920332), as in ci.yml; the declared floor is 0.2.2.
+  PROTOIO_REF: 792033281f77d4a771e4e417a7173a0e6d0a42fa
   # As in ci.yml: a wall-clock verdict never gates.
   NON_GATING_TESTS: '^(F6 v2 T7: two actors run in parallel \(wall-clock proof\))$'
 

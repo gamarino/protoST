@@ -5,6 +5,11 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+- **CI builds against protoIO 0.2.3** (`7920332`): reading a line no longer
+  moves the rest of protoIO's 64 KiB read buffer to its front, which
+  `readLine` / `nextLine` paid once per line. No protoST code changed; the
+  declared floor stays 0.2.2. Full suite: 1,132 of 1,132 tests pass against
+  it (protoCore 3.3.0, Linux).
 - **The five VM bugs found while writing `docs/VM.md`, fixed.** (1) A `super`
   send is now its own instruction: the compiler pushes `self`, the arguments,
   then `SEND_SUPER`, so `super foo: self bar` runs the inherited `foo:` with

@@ -78,10 +78,12 @@ env:
   #                               tens of milliseconds.  It is a good test and a
   #                               bad gate.
   PROTOIO_REPO: gamarino/protoIO
-  # protoIO 0.2.2 (main, 1611ff9), the floor CMakeLists.txt declares: the
-  # dual-stack listener, on top of 0.2.1's process::shell (OSProcess shell:).
-  # Pinned so a red build is attributable; bump deliberately.
-  PROTOIO_REF: 1611ff9cf8d499cdc42a6e108e42ecfc36fd8164
+  # protoIO 0.2.3 (main, 7920332): line reading keeps an offset into its read
+  # buffer instead of moving the rest of it for every line. The floor
+  # CMakeLists.txt declares stays 0.2.2 (the dual-stack listener, on top of
+  # 0.2.1's process::shell for OSProcess shell:). Pinned so a red build is
+  # attributable; bump deliberately.
+  PROTOIO_REF: 792033281f77d4a771e4e417a7173a0e6d0a42fa
   NON_GATING_TESTS: '^(F6 v2 T7: two actors run in parallel \(wall-clock proof\))$'
 
 jobs:
