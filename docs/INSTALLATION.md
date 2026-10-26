@@ -25,10 +25,12 @@ locally (2026-10-12) against protoCore 2.14.6.
   Fedora/RHEL, `brew install readline` on macOS). It is a hard requirement:
   `find_library(READLINE_LIBRARY NAMES readline REQUIRED)`, except on Windows,
   where the REPL uses the console's own line editing (*Windows (MSVC)*).
-- **protoIO 0.2.2 or a later 0.2.x** at build time only (0.2.1 adds
+- **protoIO 0.2.3 or a later 0.2.x** at build time only (0.2.1 adds
   `process::shell`, which `OSProcess shell:` uses; 0.2.2 makes a listener on
   a host-less address dual-stack, so `localhost` clients that try `::1` first
-  are not refused; protoIO's package is
+  are not refused; 0.2.3 adds `readBufferedLine`, with which `nextLine` takes
+  a line already in protoIO's read buffer without leaving the collector's
+  quorum; protoIO's package is
   compatible within one minor version, so a 0.1 or 0.3 is refused): the I/O
   library shared by the protoCore
   runtimes (files, processes, TCP, UDP, TLS, HTTP), linked statically, so the

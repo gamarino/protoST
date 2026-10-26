@@ -299,9 +299,21 @@ PRIM(prim_Chdir) {
 // A line without its end (LF or CRLF), or nil at end of stream. A line
 // longer than `max` bytes (0: no limit) raises LineTooLong, leaving the
 // stream where it was.
+//
+// A line protoIO already holds in its read-ahead buffer is taken without
+// leaving the collector's quorum: readBufferedLine never reads and never
+// waits, and one 64 KiB read holds hundreds of lines, so only a line that
+// needs a read pays for blocking() (the worker-pool accounting and the
+// UnmanagedScope). Both calls take lines off the same buffer, so nextLine,
+// next:, upToEnd and concurrent readers of one descriptor still see each
+// byte once, in order.
 const PO* readLine(STRuntime& rt, proto::ProtoContext* ctx, int fd, size_t max) {
-    const std::optional<std::string> line = blocking(rt, ctx, [&] { return protoio::readLine(fd, max); });
-    return line ? string(ctx, *line) : PROTO_NONE;
+    std::optional<std::string> line = immediate([&] { return protoio::readBufferedLine(fd, max); });
+    if (!line) {
+        line = blocking(rt, ctx, [&] { return protoio::readLine(fd, max); });
+        if (!line) return PROTO_NONE;
+    }
+    return string(ctx, *line);
 }
 
 PRIM(prim_FdReadLine) {

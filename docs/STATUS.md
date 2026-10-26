@@ -310,7 +310,9 @@ are noted where useful.
       `FileDoesNotExist`, `FileAlreadyExists`, `NetworkError`,
       `ConnectionRefused`, `ConnectionTimedOut`, `NameLookupFailure`,
       `OSProcessError`. The primitives are C++ (`src/primitives/io_prims.cpp`);
-      every blocking call leaves the GC quorum, and a pool worker entering one
+      every blocking call leaves the GC quorum (a line `nextLine` finds already
+      in protoIO's read buffer is taken without a read and without leaving
+      it, through `readBufferedLine`, protoIO 0.2.3), and a pool worker entering one
       makes the pool add a worker when fewer than the configured number would
       remain free (at most 256 threads; added workers stay until exit). Tests:
       `conformance/14-io/files_*`, `os_*`, `cli_io`. Binary data is an Array of

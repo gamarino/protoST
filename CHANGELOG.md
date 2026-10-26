@@ -5,11 +5,34 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+- **`nextLine` takes a buffered line without leaving the collector's
+  quorum.** `__fdReadLine:` (and so `nextLine`, `nextLineMax:`, `linesDo:`,
+  `lines` and `Stdio stdin nextLine`) first asks protoIO's
+  `readBufferedLine`, which answers only from the read-ahead buffer and never
+  reads or waits, and enters `blocking()` (the worker-pool accounting and the
+  `UnmanagedScope`) only when a read is needed, as protoClojure's `line-seq`
+  does (its M49). Semantics are unchanged: both calls take lines off the same
+  buffer. protoIO's floor rises to **0.2.3** (CMakeLists.txt, INSTALLATION.md).
+  Measured on a 115 MB, 1,446,319-line log with a grep-shaped script
+  (counts verified on every run): `UnmanagedScope` entries per 25,078 lines
+  fell from 25,097 to 51 (gdb hit count), but wall time did not move —
+  medians of 5 interleaved rounds, stdin 6.25 -> 6.17 s, file 6.56 -> 6.83 s,
+  within the rounds' spread — and `perf stat -r 3` shows -1.2 % instructions,
+  -0.2 % cycles: protoCore 3.3.1 already made the scope's entry cheap. The
+  benchmark suite (`compare_builds.py`, 5 runs) shows no regression. New
+  tests: `conformance/14-io/files_lines_buffered.st` (lines across many
+  refills with LF and CRLF, a line longer than the buffer, a last line
+  without a newline, `nextLine` mixed with `next:`, `atEnd` and `upToEnd`,
+  `nextLineMax:` refusing a buffered line) and three stdin cases in
+  `cli_io`. 1,134 of 1,134 tests pass, also with
+  `PROTOCORE_GC_CONTEXT_THRESHOLD=200`.
+- **CI builds against protoCore 3.3.1** (tag `v3.3.1`, `5a8cd7c7`) on
+  Linux, macOS and Windows; the floor job stays on 3.0.0.
 - **CI builds against protoIO 0.2.3** (`7920332`): reading a line no longer
   moves the rest of protoIO's 64 KiB read buffer to its front, which
-  `readLine` / `nextLine` paid once per line. No protoST code changed; the
-  declared floor stays 0.2.2. Full suite: 1,132 of 1,132 tests pass against
-  it (protoCore 3.3.0, Linux).
+  `readLine` / `nextLine` paid once per line. No protoST code changed in
+  that step. Full suite: 1,132 of 1,132 tests pass against it (protoCore
+  3.3.0, Linux).
 - **The five VM bugs found while writing `docs/VM.md`, fixed.** (1) A `super`
   send is now its own instruction: the compiler pushes `self`, the arguments,
   then `SEND_SUPER`, so `super foo: self bar` runs the inherited `foo:` with

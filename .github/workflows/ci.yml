@@ -23,7 +23,7 @@ name: CI
 # nightly schedule.  A pinned ref makes a red pull request unambiguous.  The
 # schedule keeps the integration signal separate, and the summary always records
 # the protoCore commit actually used.  The `test` job runs twice: against the
-# pinned release (3.0.0) and against the declared minimum (3.0.0, the floor
+# pinned release (3.3.1) and against the declared minimum (3.0.0, the floor
 # entry -- this repository's only floor job; it stays on 3.0.0 on the schedule).
 #
 # TWO BUGS OF THIS REPOSITORY'S OWN SHAPE THIS FILE HAS TO HANDLE:
@@ -63,12 +63,13 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  # protoCore 3.1.0 (untagged master, commit 267b9fc9: one space per process,
+  # protoCore 3.3.1 (tag v3.3.1, commit 5a8cd7c7: the cheap UnmanagedScope
+  # entry; it keeps 3.1.0's one space per process and
   # ProtoSpace::liveSpaceCount, which the guest-runtime test asserts with),
   # SOVERSION 4: what every push and pull request builds against. The declared
   # minimum stays 3.0.0, which the floor entry of the `test` job builds.
   # Bump deliberately.
-  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || '267b9fc93a189fb3552dd7d52c7d519b0d9166b4' }}
+  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || '5a8cd7c7aae68edbb34720445736b14685efae6f' }}
   # The test excluded from the gate, run in the `non-gating` job:
   #   F6 v2 T7: two actors ...    a wall-clock proof of parallelism: two 200 ms
   #                               sleeps must finish inside 350 ms
@@ -79,10 +80,10 @@ env:
   #                               bad gate.
   PROTOIO_REPO: gamarino/protoIO
   # protoIO 0.2.3 (main, 7920332): line reading keeps an offset into its read
-  # buffer instead of moving the rest of it for every line. The floor
-  # CMakeLists.txt declares stays 0.2.2 (the dual-stack listener, on top of
-  # 0.2.1's process::shell for OSProcess shell:). Pinned so a red build is
-  # attributable; bump deliberately.
+  # buffer instead of moving the rest of it for every line, and
+  # readBufferedLine, which nextLine uses, so 0.2.3 is also the floor
+  # CMakeLists.txt declares. Pinned so a red build is attributable; bump
+  # deliberately.
   PROTOIO_REF: 792033281f77d4a771e4e417a7173a0e6d0a42fa
   NON_GATING_TESTS: '^(F6 v2 T7: two actors run in parallel \(wall-clock proof\))$'
 
@@ -96,10 +97,10 @@ jobs:
       matrix:
         include:
           - name: Build and test suite
-            # Empty: env.PROTOCORE_REF (3.0.0, or master on the schedule).
+            # Empty: env.PROTOCORE_REF (3.3.1, or master on the schedule).
             protocore_ref: ''
           # THE FLOOR JOB, the only one in this repository (cross-platform.yml
-          # builds 3.1.0 on macOS and Windows). protoCore 3.0.0 (tag v3.0.0, ce00a4a2),
+          # builds 3.3.1 on macOS and Windows). protoCore 3.0.0 (tag v3.0.0, ce00a4a2),
           # SOVERSION 4: PROTOCORE_MIN_VERSION in CMakeLists.txt (a thread's
           # method receives ProtoArguments). Built on every event, the
           # schedule included, so a change that needs a newer protoCore is

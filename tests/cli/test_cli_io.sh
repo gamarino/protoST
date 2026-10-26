@@ -77,4 +77,24 @@ ST
 out=$(PROTOCORE_HEAP_LIMIT_CELLS=300000 timeout 60 "$PROTOST" "$dir/gc.st")
 [[ "$out" == "4" ]] || { echo "FAIL gc while blocked: $out"; exit 1; }
 
+
+# Lines protoIO already holds are taken without a read; the ones that need a
+# read wait for it. Many lines over many pipe reads, CRLF and a last line
+# without a newline, and nextLine interleaved with next: and upToEnd on stdin.
+out=$(seq 1 200000 | "$PROTOST" "$dir/stdin.st")
+[[ "$out" == "200000 20000100000" ]] || { echo "FAIL stdin many lines: $out"; exit 1; }
+cat > "$dir/endings.st" <<'ST'
+parts := OrderedCollection new.
+[(line := Stdio stdin nextLine) notNil] whileTrue: [parts add: line , '=' , line size printString].
+Transcript showCr: (parts inject: '' into: [:acc :each | acc , each , ';']).
+ST
+out=$(printf 'a\r\nbb\n\r\nlast' | "$PROTOST" "$dir/endings.st")
+[[ "$out" == "a=1;bb=2;=0;last=4;" ]] || { echo "FAIL stdin line endings: $out"; exit 1; }
+cat > "$dir/mixed.st" <<'ST'
+in := Stdio stdin.
+Transcript showCr: in nextLine , ' ' , (in next: 2) , ' ' , in nextLine , ' ' , in upToEnd size printString , ' ' , in nextLine printString.
+ST
+out=$( { printf 'one\nxytwo\n'; seq 1 30000; } | "$PROTOST" "$dir/mixed.st")
+[[ "$out" == "one xy two 168894 nil" ]] || { echo "FAIL stdin interleaved reads: $out"; exit 1; }
+
 echo OK

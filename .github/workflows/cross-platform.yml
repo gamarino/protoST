@@ -20,11 +20,11 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  # protoCore 3.1.0 (master, 267b9fc9), as ci.yml's main job. The declared minimum
+  # protoCore 3.3.1 (tag v3.3.1, 5a8cd7c7), as ci.yml's main job. The declared minimum
   # (3.0.0) is built by ci.yml's floor entry only.
-  PROTOCORE_REF: 267b9fc93a189fb3552dd7d52c7d519b0d9166b4
+  PROTOCORE_REF: 5a8cd7c7aae68edbb34720445736b14685efae6f
   PROTOIO_REPO: gamarino/protoIO
-  # protoIO 0.2.3 (main, 7920332), as in ci.yml; the declared floor is 0.2.2.
+  # protoIO 0.2.3 (main, 7920332), as in ci.yml, and the declared floor.
   PROTOIO_REF: 792033281f77d4a771e4e417a7173a0e6d0a42fa
   # As in ci.yml: a wall-clock verdict never gates.
   NON_GATING_TESTS: '^(F6 v2 T7: two actors run in parallel \(wall-clock proof\))$'
