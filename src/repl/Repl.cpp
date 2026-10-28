@@ -354,17 +354,15 @@ struct Session {
         proto::ProtoObject* g = rt->globals();
         if (!g) return names;
         proto::ProtoContext* ctx = rt->rootCtx();
-        const proto::ProtoSparseList* own = g->getOwnAttributes(ctx);
-        if (!own) return names;
-        auto* it = const_cast<proto::ProtoSparseListIterator*>(
-            own->getIterator(ctx));
-        while (it && it->hasNext(ctx)) {
-            proto::proto_ulong key = it->nextKey(ctx);
-            auto* sym = reinterpret_cast<const proto::ProtoObject*>(key)
-                            ->asString(ctx);
-            if (sym) names.insert(sym->toStdString(ctx));
-            it = const_cast<proto::ProtoSparseListIterator*>(it->advance(ctx));
-        }
+        // processOwnAttributes hands over each own attribute's canonical
+        // name without materialising the attribute table as a sparse list.
+        g->processOwnAttributes(ctx, &names,
+            [](proto::ProtoContext* c, void* self, const proto::ProtoString* name,
+               const proto::ProtoObject*) {
+                if (name)
+                    static_cast<std::set<std::string>*>(self)->insert(
+                        name->toStdString(c));
+            });
         return names;
     }
 };
