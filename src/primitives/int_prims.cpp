@@ -314,9 +314,8 @@ void requireInteger(proto::ProtoContext* ctx, const proto::ProtoObject* v, const
 }
 
 bool fitsSmallInteger(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
-    constexpr long long kMax = (1LL << 55) - 1;
-    return v->compare(ctx, ctx->fromLong(kMax)) <= 0
-        && v->compare(ctx, ctx->fromLong(-kMax - 1)) >= 0;
+    (void)ctx;
+    return proto::isSmallInt(v);
 }
 
 // Bitwise and/or/xor on arbitrary integers in two's complement, 16 bits at a

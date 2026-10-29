@@ -527,7 +527,10 @@ recv name(p1, p2, k1 = v1, k2 = v2)
 Inside the parentheses, positional arguments come first, then **named
 arguments** of the form `Identifier '=' value`. The argument list is
 separated by commas. A bare `name(args)` at primary position desugars to
-`self name(args)`.
+`self name(args)`. The `(` must follow the name with no space, on the same
+line, as a keyword's colon does: `name (x)` is the unary send `name` followed
+by a parenthesised expression, and a `(` starting the next statement is never
+taken as arguments.
 
 **Selector identity.** A call-form method is a *distinct attribute* from
 a keyword method of the same name. A class may host both `>> bar(x)` and
@@ -788,7 +791,10 @@ d describe.        "evaluates to 'an animal that barks'"
 resolved by **object identity**, not by re-resolving its name through the
 global namespace: a `super`-send walks the receiver's actual prototype chain
 to find the class object that owns the running method, then continues at that
-class's superclass. This makes `super` correct even when the defining class is
+class's superclass. The class is recognised by its `__class_id__`, a
+process-unique integer stamped on it and on the method's bytecode when the
+method is installed, so two classes with the same name on one chain (an
+imported class subclassed under its own name) stay distinct. This makes `super` correct even when the defining class is
 not a top-level global — notably a class defined inside an imported module
 (see [§4.10]).
 
@@ -1258,8 +1264,14 @@ condition.
 This signals a catchable **`BlockCannotReturn`** exception — a subclass of
 `Error` — through the normal exception machinery, so an `on: Error do:` (or
 `on: BlockCannotReturn do:`) handler catches it; the caught exception's
-`messageText` reads `non-local return: home method has already returned`. With
-no handler the run aborts; inside an actor it rejects that actor's `Future`.
+`messageText` reads `non-local return: the block's home method is not active on
+this thread (it has returned, or the block runs in another actor or thread)`.
+With no handler the run aborts; inside an actor it rejects that actor's `Future`.
+
+Whether the home is alive is asked of the engines of the current thread, so a
+`^` does not cross threads: a block with a `^` sent to another actor signals
+`BlockCannotReturn` there even while its home method is still running, waiting
+for the reply. The text names both cases for that reason.
 
 ---
 
@@ -2090,7 +2102,7 @@ arithmetic, which gives the tower three properties for free:
   operation between an `Integer` and a `Fraction` stays exact:
   `(1/3) + (2/3)` → `1`.
 - **Transparent overflow promotion.** An integer result that exceeds the
-  56-bit inline `SmallInteger` range (`SmallInteger maxVal` is 2^55 − 1)
+  inline `SmallInteger` range, protoCore's 54-bit immediate (`SmallInteger maxVal` is 2^53 − 1)
   is automatically promoted to a heap
   arbitrary-precision `LargeInteger` and stays exact — a `whileTrue:` loop
   computing `25!` yields the exact `15511210043330985984000000`, not a
@@ -2164,7 +2176,7 @@ Class-side **constants** are bound on `Float`: `Float pi`, `Float e`,
 > **Exact exponentiation and factorial.** `raisedTo:` with a non-negative
 > integer exponent, and `factorial`, are computed by exact repeated
 > multiplication, so each intermediate product promotes to a `LargeInteger`
-> the moment it leaves the 56-bit `SmallInteger` range — `2 raisedTo: 100` and
+> the moment it leaves the 54-bit `SmallInteger` range — `2 raisedTo: 100` and
 > `30 factorial` are exact arbitrary-precision integers, never an overflowed
 > `double`. A `Float` exponent (or a negative integer exponent) routes through
 > libm `pow` and answers a `Float`.

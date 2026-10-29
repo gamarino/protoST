@@ -44,6 +44,14 @@ private:
         return stopAtBlankLine_ && (current_.blankLineBefore
             || (methodHeaderLine_ > 0 && current_.column == 1 && current_.line > methodHeaderLine_));
     }
+    // A call-form `name(` needs its `(` right after the name, as a keyword
+    // needs its colon: `name (x)`, or a `(` on a later line (the next
+    // statement after a method body ending in `^ name`), is not a call.
+    bool   callParenFollows(const Token& name) {
+        const Token& next = lexer_.peek();
+        return next.kind == TokenKind::LParen && next.line == name.line
+            && next.column == name.column + static_cast<int>(name.text.size());
+    }
     struct NestedExpressionScope {
         Parser& p; bool saved;
         explicit NestedExpressionScope(Parser& parser) : p(parser), saved(parser.stopAtBlankLine_) { p.stopAtBlankLine_ = false; }

@@ -1219,8 +1219,7 @@ STRuntime::runTopLevel(const BytecodeModule& m, proto::ProtoContext* ctx) {
         if (!u.original()) throw;
         foreignOriginal = u.original();
     } catch (const NonLocalReturn&) {
-        throw std::runtime_error(
-            "non-local return: home method has already returned");
+        throw std::runtime_error(kBlockCannotReturnText);
     } catch (const UnwindToHandler&) {
         // Track 1 slice 2 (EXC-a): an UnwindToHandler reached the top level
         // with no `on:do:` to catch it. A balanced `on:do:` always catches
@@ -1922,7 +1921,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                 setCurrentActor(nullptr);
                 if (msgFut && msgFut != PROTO_NONE) {
                     auto* err = ctx->fromUTF8String(
-                        "non-local return: home method has already returned");
+                        kBlockCannotReturnText);
                     TransientPin pinErr(ctx, err);
                     rejectFutureFromDrain(*this, ctx, msgFut, err);
                 }
@@ -2115,7 +2114,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             setCurrentActor(nullptr);
             if (future) {
                 auto* err = ctx->fromUTF8String(
-                    "non-local return: home method has already returned");
+                    kBlockCannotReturnText);
                 TransientPin pinErr(ctx, err);
                 rejectFutureFromDrain(*this, ctx, future, err);
             }

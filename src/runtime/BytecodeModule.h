@@ -197,6 +197,19 @@ public:
     void setDefiningClass(const std::string& s) { definingClass_ = s; }
     const std::string& definingClass() const { return definingClass_; }
 
+    // The identity of that class: the `__class_id__` the class object carries,
+    // stamped on this module and its blocks when the method is installed
+    // (`__installMethod:as:`). 0 until then. `super` finds the defining class
+    // on the receiver's chain by this id, so two classes that share a name
+    // (a subclass of an imported class, given the same name) stay distinct.
+    void setDefiningClassId(std::int64_t id) const {
+        definingClassId_.store(id, std::memory_order_release);
+        for (auto& b : blocks_) b->setDefiningClassId(id);
+    }
+    std::int64_t definingClassId() const {
+        return definingClassId_.load(std::memory_order_acquire);
+    }
+
     // Call-form method signature. Populated by the compiler when this module
     // is the body of a `Class >> name(pos, named=default)` declaration. The
     // dispatcher reads these to adapt a SEND_CALL site to the declared
@@ -370,6 +383,7 @@ private:
     std::vector<std::unique_ptr<BytecodeModule>> blocks_;
     int argCount_ = 0;
     std::string definingClass_;   // BL-1: class owning this method body
+    mutable std::atomic<std::int64_t> definingClassId_{0};  // its __class_id__
     // Call-form signature (populated by the compiler for call-form bodies).
     bool isCallForm_   = false;
     int  callPosArity_ = 0;

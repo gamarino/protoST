@@ -237,7 +237,7 @@ TEST_CASE("NLR: dead home — invoking a block whose home method already "
     protoST::STRuntime rt;
     REQUIRE_THROWS_WITH(
         runSrc(rt, src),
-        Catch::Matchers::ContainsSubstring("home method has already returned"));
+        Catch::Matchers::ContainsSubstring("home method is not active on this thread"));
 }
 
 TEST_CASE("NLR: dead home inside an actor handler rejects the handler's "
@@ -263,7 +263,7 @@ TEST_CASE("NLR: dead home inside an actor handler rejects the handler's "
     protoST::STRuntime rt;
     REQUIRE_THROWS_WITH(
         runSrc(rt, src),
-        Catch::Matchers::ContainsSubstring("home method has already returned"));
+        Catch::Matchers::ContainsSubstring("home method is not active on this thread"));
 }
 
 TEST_CASE("NLR: non-local return survives a cooperative yield",

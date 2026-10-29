@@ -221,7 +221,7 @@ ast::NodePtr Parser::parseUnarySend() {
         // Call-form send: `recv name(args)`. Detected by peeking past the
         // identifier for an immediate LParen. Binds at unary precedence
         // (tighter than binary / keyword).
-        if (lexer_.peek().kind == TokenKind::LParen) {
+        if (callParenFollows(sel)) {
             advance(); // consume identifier
             advance(); // consume '('
             recv = parseCallSend(sel, std::move(recv), /*implicitReceiver=*/false);
@@ -319,7 +319,7 @@ ast::NodePtr Parser::parsePrimary() {
             // thisContext) are NOT subject to this rewrite — `self(...)`
             // would never make sense as a self-send-on-self.
             if (t.text != "self" && t.text != "super" && t.text != "thisContext"
-                && lexer_.peek().kind == TokenKind::LParen) {
+                && callParenFollows(t)) {
                 advance();              // consume identifier
                 advance();              // consume '('
                 auto selfRecv = ast::makeNode(ast::NodeKind::Self, t.line, t.column);
@@ -506,8 +506,7 @@ ast::NodePtr Parser::parseMethodDecl(Token classIdent, bool classSide) {
     // Call-form decl: `Class >> name(pos, named=default)`. Detect by peeking
     // for `Identifier LParen` and route to the dedicated helper. The bare
     // identifier (no parens) keeps falling through to the unary path below.
-    if (current_.kind == TokenKind::Identifier
-        && lexer_.peek().kind == TokenKind::LParen) {
+    if (current_.kind == TokenKind::Identifier && callParenFollows(current_)) {
         Token nameTok = current_;
         advance(); // consume method name
         advance(); // consume '('

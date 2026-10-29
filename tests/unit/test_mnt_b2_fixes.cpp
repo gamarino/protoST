@@ -180,7 +180,8 @@ TEST_CASE("MNT-b2 D8: the caught BlockCannotReturn carries an informative "
     auto* r = runSrc(rt, src);
     REQUIRE(r != nullptr);
     REQUIRE(asStr(rt, r) ==
-            "non-local return: home method has already returned");
+            "non-local return: the block's home method is not active on this thread "
+            "(it has returned, or the block runs in another actor or thread)");
 }
 
 TEST_CASE("MNT-b2 D8: BlockCannotReturn is nameable and catchable by name",

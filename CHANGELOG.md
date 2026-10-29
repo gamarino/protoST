@@ -5,6 +5,25 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+- **Four defects found while preparing the FAST workshop, fixed** (STATUS S32-S35).
+  (1) A call-form `name(` needs its `(` right after the name: a method ending in
+  `^ y` followed, after a blank line, by a statement starting with `(` took that
+  statement as `y(...)`'s arguments inside the method, silently; a unary method
+  whose body began with `(` on the next line parsed as a call-form declaration.
+  (2) `super` finds the defining class by identity (a `__class_id__` stamped at
+  `__installMethod:as:`), not by name: `m Figure subclass: #Figure` made the
+  imported `Figure`'s `super` recurse until the stack depth was exceeded.
+  (3) `SmallInteger` is protoCore's 54-bit immediate: `maxVal` is 2^53 - 1 (it
+  said 2^55 - 1) and `class` reads the tag, so a heap integer between 2^53 and
+  2^55 no longer claims to be a `SmallInteger`. (4) `BlockCannotReturn` no
+  longer says the home method has returned when the block was sent to another
+  actor and its home is waiting: the text names both cases. New conformance
+  programs `03-grammar/call-form-paren-must-touch-name`,
+  `11-modules/super-resolves-by-identity-not-name`,
+  `10-actors/nonlocal-return-to-another-actor`; `integer-bounds-bits-roots`
+  updated. The first three fail on 0.7.0. 1,136 of 1,136 tests pass (Windows,
+  MSVC).
+
 - **`nextLine` takes a buffered line without leaving the collector's
   quorum.** `__fdReadLine:` (and so `nextLine`, `nextLineMax:`, `linesDo:`,
   `lines` and `Stdio stdin nextLine`) first asks protoIO's

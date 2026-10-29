@@ -110,14 +110,15 @@ Integer >> isPowerOfTwo
   ^ self > 0 and: [(self bitAnd: self - 1) = 0].
 
 "--- SmallInteger range ------------------------------------------------------------
- A SmallInteger is a tagged 56-bit signed integer, so it spans -2^55 .. 2^55 - 1;
- arithmetic beyond that answers a LargeInteger."
+ A SmallInteger is protoCore's immediate integer, 54 bits with sign in the tagged
+ word, so it spans -2^53 .. 2^53 - 1 (PROTO_SMALL_INT_MIN/MAX); arithmetic beyond
+ that answers a LargeInteger."
 
 SmallInteger class >> maxVal
-  ^ 36028797018963967.
+  ^ 9007199254740991.
 
 SmallInteger class >> minVal
-  ^ -36028797018963968.
+  ^ -9007199254740992.
 
 "--- integer bits and roots ---------------------------------------------------------"
 

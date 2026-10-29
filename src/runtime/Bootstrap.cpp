@@ -236,6 +236,7 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     out.sym.resume          = S("__resume__");
     // 2026-05-23 night: SEND-path class-side filter hot keys. See header.
     out.sym.className       = S("__class_name__");
+    out.sym.classId         = S("__class_id__");
     out.sym.classSide       = S("__class_side__");
     out.sym.priority        = S("__priority__");
 }

@@ -168,7 +168,7 @@ result displayNl.
 
 ```bash
 $ ./build/protost dead-home.st
-non-local return: home method has already returned
+non-local return: the block's home method is not active on this thread (it has returned, or the block runs in another actor or thread)
 ```
 
 `escapedBlock` returns the block `[ ^ 42 ]` and *then ends*. Later, evaluating

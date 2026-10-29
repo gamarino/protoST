@@ -8,6 +8,7 @@
 #include "runtime/ExecutionEngine.h"
 #include "protoCore.h"
 
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <stdexcept>
@@ -195,13 +196,41 @@ const proto::ProtoObject* prim_Object_sleepMs(STRuntime&,
     return r;
 }
 
+namespace {
+// Stamp the method's body (and its blocks) with the identity of the class it
+// is installed on, for `super` (BytecodeModule::definingClassId). The class
+// gets its `__class_id__`, a process-unique integer, on its first install;
+// `addBehavior:` copies it to the rebuilt class, which stands for the same
+// class. A method object without bytecode (a primitive) is left alone.
+void stampDefiningClass(STRuntime& rt, proto::ProtoContext* ctx,
+                        const proto::ProtoObject* cls,
+                        const proto::ProtoObject* methodObj) {
+    const proto::ProtoObject* bcPtrObj =
+        methodObj->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr);
+    if (!bcPtrObj || bcPtrObj == PROTO_NONE || !bcPtrObj->isInteger(ctx))
+        return;
+    static std::atomic<std::int64_t> nextClassId{1};
+    const proto::ProtoString* idKey = rt.bootstrap().sym.classId;
+    std::int64_t id = 0;
+    const proto::ProtoObject* idObj = cls->getOwnAttributeDirect(ctx, idKey);
+    if (idObj && idObj != PROTO_NONE && idObj->isInteger(ctx)) {
+        id = idObj->asLong(ctx);
+    } else {
+        id = nextClassId.fetch_add(1, std::memory_order_relaxed);
+        cls->setAttribute(ctx, idKey, ctx->fromLong(id));
+    }
+    reinterpret_cast<const BytecodeModule*>(bcPtrObj->asLong(ctx))
+        ->setDefiningClassId(id);
+}
+} // namespace
+
 // class __installMethod: methodObj as: selectorSym
 //   → setAttribute(class, selectorSym, methodObj)
 //   → returns class (recv)
 //
 // Used by MethodDecl compilation (F4-U3) to attach a compiled method wrapper
 // (a BlockClosure-shaped object) to a class proto under its selector symbol.
-const proto::ProtoObject* prim_Object_installMethod(STRuntime&,
+const proto::ProtoObject* prim_Object_installMethod(STRuntime& rt,
                                                      proto::ProtoContext* ctx,
                                                      const proto::ProtoObject* r,
                                                      const proto::ProtoObject* const* a,
@@ -211,6 +240,7 @@ const proto::ProtoObject* prim_Object_installMethod(STRuntime&,
     // a[1] = selector symbol (ProtoString tagged as symbol)
     auto* selStr = a[1]->asString(ctx);
     if (!selStr) throw std::runtime_error("__installMethod:as: selector must be a symbol");
+    stampDefiningClass(rt, ctx, r, a[0]);
     r->setAttribute(ctx, selStr, a[0]);
     return r;
 }
@@ -225,7 +255,7 @@ const proto::ProtoObject* prim_Object_installMethod(STRuntime&,
 // wrapper lets the engine's SEND dispatch refuse it when the receiver is an
 // instance — so `ClassName class >> sel` is reachable from the class object and
 // NOT from its instances.
-const proto::ProtoObject* prim_Object_installClassMethod(STRuntime&,
+const proto::ProtoObject* prim_Object_installClassMethod(STRuntime& rt,
                                                          proto::ProtoContext* ctx,
                                                          const proto::ProtoObject* r,
                                                          const proto::ProtoObject* const* a,
@@ -240,6 +270,7 @@ const proto::ProtoObject* prim_Object_installClassMethod(STRuntime&,
         proto::ProtoString::createSymbol(ctx, "__class_side__");
     const_cast<proto::ProtoObject*>(a[0])->setAttribute(
         ctx, classSideKey, PROTO_TRUE);
+    stampDefiningClass(rt, ctx, r, a[0]);
     r->setAttribute(ctx, selStr, a[0]);
     return r;
 }
@@ -969,8 +1000,6 @@ const proto::ProtoObject* prim_Object_globalAtPut(STRuntime& rt, proto::ProtoCon
 // on first use and kept on the class, that prints as "<Name> class" and
 // answers the class as `soleInstance`.
 namespace {
-constexpr long long kSmallIntegerMax = (1LL << 55) - 1;   // 56-bit tagged range
-constexpr long long kSmallIntegerMin = -(1LL << 55);
 
 const proto::ProtoObject* metaclassOf(STRuntime& rt, proto::ProtoContext* ctx,
                                       const proto::ProtoObject* cls,
@@ -1001,9 +1030,9 @@ const proto::ProtoObject* prim_Object_class(STRuntime& rt, proto::ProtoContext* 
     if (r == PROTO_TRUE || r == PROTO_FALSE) return b.booleanProto;
     if (r->isFloat(ctx)) return b.floatProto;
     if (r->isInteger(ctx)) {
-        const bool small = r->compare(ctx, ctx->fromLong(kSmallIntegerMax)) <= 0
-                        && r->compare(ctx, ctx->fromLong(kSmallIntegerMin)) >= 0;
-        return small ? b.smallIntegerProto : b.largeIntegerProto;
+        // The tag decides, as it does for dispatch (Bootstrap methodHolder):
+        // a SmallInteger is protoCore's immediate, 54 bits with sign.
+        return proto::isSmallInt(r) ? b.smallIntegerProto : b.largeIntegerProto;
     }
     if (isCharacterValue(ctx, r)) return b.characterProto;
     if (r->asString(ctx)) {

@@ -228,10 +228,7 @@ inline std::string describeReceiverForDNU(proto::ProtoContext* ctx,
                                           const proto::ProtoString* classNameSym) {
     if (!recv || recv == PROTO_NONE) return " (receiver: nil)";
     if (recv->isInteger(ctx)) {
-        constexpr long long kMax = (1LL << 55) - 1;
-        const bool small = recv->compare(ctx, ctx->fromLong(kMax)) <= 0
-                        && recv->compare(ctx, ctx->fromLong(-kMax - 1)) >= 0;
-        return small ? " (receiver class: SmallInteger)" : " (receiver class: LargeInteger)";
+        return proto::isSmallInt(recv) ? " (receiver class: SmallInteger)" : " (receiver class: LargeInteger)";
     }
     if (recv->isString(ctx)) {
         const proto::ProtoString* s = recv->asString(ctx);
@@ -1081,7 +1078,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 if (!homeFrameAlive(f.homeFrameId)) {
                     auto* res = signalErrorOfClass(
                         rt_, ctx, bs_.blockCannotReturnProto,
-                        "non-local return: home method has already returned");
+                        kBlockCannotReturnText);
                     // BlockCannotReturn is non-resumable, so signalErrorOfClass
                     // normally threw (UnwindToHandler to a catching `on:do:`,
                     // or UnhandledSTException at top level). If a handler did
@@ -1605,6 +1602,13 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // discipline as the inline createSymbol call but read once
                     // at construction instead of on every super send.
                     const proto::ProtoString* classNameSym = bs_.sym.className;
+                    // By identity when the method was installed with
+                    // __installMethod:as: (its class's __class_id__), by name
+                    // otherwise. A name match took the first class of that
+                    // name on the chain: with `m Figura subclass: #Figura` the
+                    // imported Figura's `super` found the local Figura and
+                    // recursed.
+                    const std::int64_t defClsId = f.m->definingClassId();
                     const proto::ProtoObject* defClsObj = nullptr;
                     {
                         // T3-b: bounded depth-first, left-to-right walk over
@@ -1622,14 +1626,24 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                             const proto::ProtoObject* node = stack.back();
                             stack.pop_back();
                             if (!node || node == PROTO_NONE) continue;
-                            auto* own =
-                                node->getOwnAttributeDirect(ctx, classNameSym);
-                            if (own && own != PROTO_NONE) {
-                                auto* nameStr = own->asString(ctx);
-                                if (nameStr &&
-                                    defCls == nameStr->toStdString(ctx)) {
+                            if (defClsId != 0) {
+                                auto* own =
+                                    node->getOwnAttributeDirect(ctx, bs_.sym.classId);
+                                if (own && own != PROTO_NONE && own->isInteger(ctx)
+                                    && own->asLong(ctx) == defClsId) {
                                     defClsObj = node;
                                     break;
+                                }
+                            } else {
+                                auto* own =
+                                    node->getOwnAttributeDirect(ctx, classNameSym);
+                                if (own && own != PROTO_NONE) {
+                                    auto* nameStr = own->asString(ctx);
+                                    if (nameStr &&
+                                        defCls == nameStr->toStdString(ctx)) {
+                                        defClsObj = node;
+                                        break;
+                                    }
                                 }
                             }
                             auto* ps = node->getParents(ctx);

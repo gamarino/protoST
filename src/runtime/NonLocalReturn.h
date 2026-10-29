@@ -33,9 +33,17 @@
 //      the home (the home method already returned — a "dead home"). The
 //      outermost C++ entry points (STRuntime::runTopLevel, STRuntime's
 //      actor drain) convert it to a std::runtime_error carrying
-//      "non-local return: home method has already returned".
+//      kBlockCannotReturnText.
 
 namespace protoST {
+
+// The text of BlockCannotReturn. Whether the home is alive is asked of this
+// thread's engines only, so a home method still running on another thread (a
+// block sent to another actor) cannot be told from one that has returned; the
+// text names both cases rather than claim the first.
+inline constexpr const char* kBlockCannotReturnText =
+    "non-local return: the block's home method is not active on this thread "
+    "(it has returned, or the block runs in another actor or thread)";
 
 class NonLocalReturn {
 public:
