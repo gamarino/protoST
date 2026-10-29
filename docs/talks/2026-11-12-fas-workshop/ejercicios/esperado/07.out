@@ -1,0 +1,14 @@
+'antes'
+'handler'
+'resumido'
+'después'
+'fin'
+'reintento 1'
+'reintento 2'
+3
+'handler ZeroDivide'
+'curtailed'
+'ensure'
+-1
+42
+'cuerpo'

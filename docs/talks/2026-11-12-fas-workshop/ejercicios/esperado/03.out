@@ -1,0 +1,9 @@
+vieja entiende #doble: true
+nueva entiende #describir: true
+vieja entiende #describir: false
+vieja isKindOf: Punto: false
+nueva entiende #triple: true
+vieja entiende #triple: false
+la celda vieja entiende #b: true
+y su b vale: nil
+misma clase: true

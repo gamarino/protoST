@@ -1,0 +1,6 @@
+1. a Par (actor) / isNil: false / saldo: Future
+2. deadlock:
+3. 43
+4. a Future
+5. Error: demasiado
+6. saldo después del error: 30

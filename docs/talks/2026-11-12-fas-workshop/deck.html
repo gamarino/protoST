@@ -1,0 +1,918 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>protoST por dentro — FAST 12/11/2026</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap">
+</head>
+<body>
+<section id="cover" data-section="Apertura: una apuesta, y por qué discutirla con ustedes" data-transition="fade" style="background:#14213D;color:#F7F5F0;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px;display:flex;flex-direction:column;justify-content:space-between">
+<p style="font-size:28px;letter-spacing:3px;text-transform:uppercase;color:#F2B45A;font-weight:600">Fundación Argentina de Smalltalk · 12 de noviembre de 2026</p>
+<div style="display:flex;flex-direction:column;gap:32px">
+<h1 style="font-size:120px;font-weight:700;line-height:1.05;color:#F7F5F0">protoST por dentro</h1>
+<p style="font-size:44px;line-height:1.3;color:#C9D6E8;width:1400px">Inmutabilidad, un GC concurrente sin write barrier, una VM sin contextos y actores sobre hilos nativos. Charla y laboratorio.</p>
+</div>
+<div style="display:flex;justify-content:space-between;align-items:end">
+<p style="font-size:30px;color:#C9D6E8">protoST 0.7.0 · protoCore 3.x</p>
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:26px;color:#C9D6E8">github.com/gamarino/protoST</p>
+</div>
+<aside>Tres horas: dos partes de teoría, cada una seguida de un laboratorio en sus máquinas. La premisa: convencer con razones técnicas, mostrando también lo que cuesta cada decisión y lo que todavía no funciona. Todo lo que muestro está en el repositorio y se puede verificar; las cifras salen de informes con fecha.</aside>
+</section>
+<section id="agenda" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Las tres horas</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">Plantear, discutir, probar en sus máquinas</h2>
+<table style="font-size:28px;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif">
+<tr><th style="width:12%">Hora</th><th style="width:30%">Bloque</th><th style="width:58%">Qué se ve</th></tr>
+<tr><td>0:00</td><td>Apertura</td><td>protoST hoy, la tesis</td></tr>
+<tr style="background:#ECE8DF"><td>0:10</td><td>Parte I — el modelo</td><td>Identidad y valor, estructuras, GC, decisiones, módulos</td></tr>
+<tr><td>0:55</td><td>Laboratorio 1</td><td>Ejercicios 1 a 4 en sus máquinas</td></tr>
+<tr><td>1:15</td><td>Corte</td><td>10 minutos</td></tr>
+<tr style="background:#ECE8DF"><td>1:25</td><td>Parte II — la VM</td><td>Bytecode, envíos, retorno no local, excepciones, interoperación, actores</td></tr>
+<tr><td>2:15</td><td>Laboratorio 2</td><td>Ejercicios 5 a 10</td></tr>
+<tr><td>2:50</td><td>Cierre</td><td>Desafíos abiertos y preguntas</td></tr>
+</table>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">protoST por dentro · FAST · 12/11/2026 · 2</p>
+<aside>La guía de trabajo tiene la misma agenda y los diez ejercicios. Pedirles que anoten la predicción antes de correr cada programa: la gracia está en equivocarse antes de mirar.</aside>
+</section>
+<section id="tesis" data-transition="fade" style="background:#B45309;color:#F7F5F0;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px;display:flex;flex-direction:column;justify-content:center;gap:48px">
+<p style="font-size:28px;letter-spacing:3px;text-transform:uppercase;color:#F7F5F0;font-weight:600">Una apuesta, no una conclusión</p>
+<h2 style="font-size:76px;font-weight:700;line-height:1.12;color:#F7F5F0;width:1600px">Si todo valor es inmutable, el estado compartido deja de romperse y el paralelismo real se vuelve barato de razonar.</h2>
+<p style="font-size:36px;line-height:1.4;color:#FDE7C8;width:1500px">Les muestro qué compra esa decisión, cuánto cuesta y qué deja afuera. Hasta dónde llega, no lo sé: para eso vine.</p>
+<aside>Idea de Rich Hickey (identidad, estado, valor) puesta debajo de un lenguaje imperativo en lugar de dentro de uno funcional. Clojure la ofrece con atom y ref explícitos; protoCore la hace la semántica por defecto de cualquier objeto mutable de Smalltalk, Python o JavaScript. No es un Smalltalk mejor ni compite con el entorno vivo: es otra cosa, y la charla trata de qué cosa.</aside>
+</section>
+<section id="porustedes" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Por qué con ustedes</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">No vengo a enseñarles una VM: vengo a mostrarles una apuesta y a pedirles criterio</h2>
+<div style="display:flex;gap:40px">
+<div style="flex:1;background:#FFFFFF;border:1px solid #D9D4C7;border-radius:16px;padding:36px;display:flex;flex-direction:column;gap:16px">
+<h3 style="font-size:34px;font-weight:600;color:#2F6F9F">Lo que traigo</h3>
+<ul style="font-size:28px;line-height:1.5;color:#14213D">
+<li>un núcleo de objetos inmutables con hilos nativos</li>
+<li>un Smalltalk que corre encima, con sus costos medidos</li>
+<li>bugs encontrados y arreglados, cada uno con su test</li>
+<li>muchas preguntas que no sé contestar</li>
+</ul>
+</div>
+<div style="flex:1;background:#FDF3E3;border:1px solid #EBC48A;border-radius:16px;padding:36px;display:flex;flex-direction:column;gap:16px">
+<h3 style="font-size:34px;font-weight:600;color:#B45309">Lo que tienen ustedes</h3>
+<ul style="font-size:28px;line-height:1.5;color:#14213D">
+<li>años construyendo y manteniendo VMs de Smalltalk</li>
+<li>contextos, become:, imagen y depuración viva resueltos de verdad</li>
+<li>el criterio para saber qué de esto vale la pena</li>
+</ul>
+</div>
+</div>
+<p style="font-size:30px;line-height:1.4;color:#4A5568">Cada parte termina con preguntas abiertas. Las respuestas que me importan son las suyas.</p>
+<aside>Decirlo así, en serio: la charla no busca convencerlos de que esto está bien hecho, sino de que vale la pena investigarlo. Hay cosas que ellos saben mucho mejor (contextos, become:, el entorno vivo, JIT). El objetivo de las tres horas es salir con dos o tres personas interesadas en una línea concreta.</aside>
+</section>
+<section id="novedades" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Desde la charla del 15/10</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">protoST 0.7.0 sobre protoCore 3.x</h2>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:28px">
+<div style="background:#FFFFFF;border:1px solid #D9D4C7;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:52px;font-weight:700;color:#B45309">8,9× → 2,15×</h3>
+<p style="font-size:26px;line-height:1.35;color:#4A5568">fib frente a CPython 3.14: el camino de envío y los bloques inlineados que ya no capturan</p>
+</div>
+<div style="background:#FFFFFF;border:1px solid #D9D4C7;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:52px;font-weight:700;color:#B45309">__st_send__</h3>
+<p style="font-size:26px;line-height:1.35;color:#4A5568">otro runtime le manda mensajes Smalltalk a un objeto protoST, como un envío real</p>
+</div>
+<div style="background:#FFFFFF;border:1px solid #D9D4C7;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:52px;font-weight:700;color:#B45309">1 excepción</h3>
+<p style="font-size:26px;line-height:1.35;color:#4A5568">todos los lenguajes de protoCore lanzan ProtoException; el handler elige por la cadena de prototipos</p>
+</div>
+<div style="background:#FFFFFF;border:1px solid #D9D4C7;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:52px;font-weight:700;color:#B45309">VM.md</h3>
+<p style="font-size:26px;line-height:1.35;color:#4A5568">la VM documentada, 43 opcodes, --disasm, y cinco bugs encontrados al escribirla, corregidos</p>
+</div>
+<div style="background:#FFFFFF;border:1px solid #D9D4C7;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:52px;font-weight:700;color:#B45309">DAP</h3>
+<p style="font-size:26px;line-height:1.35;color:#4A5568">depuración en VS Code: breakpoints de excepción, varios hilos, logpoints, depuración remota</p>
+</div>
+<div style="background:#FFFFFF;border:1px solid #D9D4C7;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:52px;font-weight:700;color:#B45309">1134 tests</h3>
+<p style="font-size:26px;line-height:1.35;color:#4A5568">en Linux, macOS y Windows; programas de conformidad propios, no la suite ANSI</p>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">Fuentes: CHANGELOG.md (0.7.0 y Unreleased) · benchmarks/reports/2026-10-20-send-path-inline-captures.md · 5</p>
+<aside>fib pasó de 8,9 a 2,15 veces el tiempo de CPython (informe del 20/10, Ryzen 5 5500U, medianas de 3 rondas). Sigue siendo más lento que CPython en un hilo; la media geométrica de la suite es 1,92 veces CPython. --disasm, VM.md y el depurador remoto están en main y todavía no en una release publicada. Los tests son propios: no hay suite ANSI, y conviene decirlo antes de que lo pregunten.</aside>
+</section>
+<section id="p1" data-section="Parte I: inmutabilidad, estructuras persistentes, GC concurrente, decisiones y módulos" data-transition="fade" style="background:#14213D;color:#F7F5F0;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px;display:flex;flex-direction:column;justify-content:center;gap:32px">
+<p style="font-size:28px;letter-spacing:3px;text-transform:uppercase;color:#F2B45A;font-weight:600">Parte I · 45 minutos</p>
+<h2 style="font-size:104px;font-weight:700;line-height:1.05;color:#F7F5F0">El modelo</h2>
+<p style="font-size:36px;line-height:1.4;color:#C9D6E8;width:1400px">Identidad y valor · escribir es publicar · estructuras persistentes · un GC concurrente sin write barrier · las decisiones que esto obliga · módulos</p>
+<aside>Todo lo de esta parte vive en protoCore, el núcleo en C++ que comparten protoST, protoJS, protoPython, ProtoClojure y protoScala. protoST es un cliente: entender el núcleo es entender qué puede y qué no puede hacer Smalltalk encima.</aside>
+</section>
+<section id="valor" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Identidad, estado, valor</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">Un objeto mutable es una identidad que apunta a una instantánea inmutable</h2>
+<div style="display:flex;align-items:center;gap:24px">
+<div style="flex:1;background:#FFFFFF;border:2px solid #14213D;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:36px;font-weight:600;color:#14213D">Identidad</h3>
+<p style="font-size:26px;line-height:1.35;color:#4A5568">la celda handle, con un mutable_ref que no cambia nunca</p>
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;color:#2F6F9F">ref = 17</p>
+</div>
+<x-shape kind="arrow-right" style="width:72px;height:36px;background:#B45309"></x-shape>
+<div style="flex:1;background:#FFFFFF;border:2px solid #14213D;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:36px;font-weight:600;color:#14213D">Tabla global</h3>
+<p style="font-size:26px;line-height:1.35;color:#4A5568">256 shards; cada raíz es un atomic a una lista persistente ref → estado</p>
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;color:#2F6F9F">shard = ref % 256</p>
+</div>
+<x-shape kind="arrow-right" style="width:72px;height:36px;background:#B45309"></x-shape>
+<div style="flex:1;background:#FFFFFF;border:2px solid #14213D;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:36px;font-weight:600;color:#14213D">Valor</h3>
+<p style="font-size:26px;line-height:1.35;color:#4A5568">el estado actual: un objeto inmutable con sus atributos en un AVL</p>
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;color:#2F6F9F">v1 → v2 → v3</p>
+</div>
+</div>
+<p style="font-size:30px;line-height:1.4;color:#4A5568">Leer resuelve una instantánea: todos los atributos de ese objeto son consistentes entre sí. Escribir publica una instantánea nueva con un compare-and-swap.</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">protoCore: headers/protoCore.h (globalMutableShards) · docs/MemoryModel.md · 7</p>
+<aside>Precisión para expertos: no es "un atomic por objeto". El estado vive en una tabla de proceso de 256 shards, cada uno un std::atomic a la raíz de una lista persistente que mapea ref a estado. La celda handle tiene un mutable_ref distinto de cero; el estado es un ProtoObjectCell común con mutable_ref en cero. newObject(true) no publica nada: la primera escritura crea la entrada. Consecuencia: la identidad es estable (el GC no mueve celdas y el identityHash es la dirección), el valor no.</aside>
+</section>
+<section id="celda" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">La unidad de memoria</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">Todo es una celda de 64 bytes o una palabra con tag</h2>
+<div style="display:flex;gap:48px">
+<div style="flex:1;display:flex;flex-direction:column;gap:16px">
+<h3 style="font-size:36px;font-weight:600;color:#14213D">La celda</h3>
+<div style="display:flex;flex-direction:column">
+<div style="background:#2F6F9F;padding:16px 24px;border-radius:12px 12px 0 0"><p style="font-size:26px;color:#F7F5F0"><b>8 B</b> · puntero a vtable de C++</p></div>
+<div style="background:#3E82B5;padding:16px 24px"><p style="font-size:26px;color:#F7F5F0"><b>8 B</b> · next_and_flags: bit de marca + enlace</p></div>
+<div style="background:#DCE7F0;padding:24px;border-radius:0 0 12px 12px"><p style="font-size:26px;line-height:1.35;color:#14213D"><b>48 B</b> · carga útil. Un objeto: padres, atributos (AVL), mutable_ref</p></div>
+</div>
+<p style="font-size:26px;line-height:1.35;color:#4A5568">Sin clases de tamaño ni objetos de tamaño variable: todo es un árbol de celdas. Los bytes crudos viven fuera, en buffers externos.</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:16px">
+<h3 style="font-size:36px;font-weight:600;color:#14213D">La palabra</h3>
+<p style="font-size:26px;line-height:1.35;color:#4A5568">Los 6 bits bajos son el tag (las celdas están alineadas a 64). En el tag 1 viven los inmediatos:</p>
+<ul style="font-size:26px;line-height:1.5;color:#14213D">
+<li>SmallInteger de 54 bits con signo</li>
+<li>Character, Boolean, nil</li>
+<li>Strings de hasta 6 bytes, en la palabra misma</li>
+</ul>
+<p style="font-size:26px;line-height:1.35;color:#4A5568">Los Float van en una celda: no hay NaN-boxing.</p>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">protoCore: headers/proto_internal.h (BigCell, ProtoObjectPointer) · 8</p>
+<aside>Lo que un implementador va a señalar: 16 bytes de encabezado con vtable en cada celda de 64, 64 bytes por elemento de lista, Floats en celda. El string inline de hasta 6 bytes es la forma canónica de esa escritura: igualdad de puntero es igualdad de contenido. De ahí sale una rareza de protoST que veremos: los símbolos cortos son strings. Una anécdota útil: protoST 0.7.0 respondía SmallInteger maxVal = 2^55−1, y entre 2^53 y 2^55 class decía SmallInteger aunque el valor ya era una celda ((2 raisedTo: 54) == (2 raisedTo: 54) daba false). Apareció preparando esta charla y está corregido (S34): class lee el tag de protoCore.</aside>
+</section>
+<section id="escribir" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">El camino de escritura</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">Escribir una variable de instancia es publicar una versión</h2>
+<div style="display:flex;gap:48px">
+<ol style="flex:1;font-size:30px;line-height:1.55;color:#14213D">
+<li>Resolver el estado actual (caché por hilo o AVL)</li>
+<li>Copiar el camino del AVL de atributos</li>
+<li>Una celda nueva para el estado</li>
+<li>Copiar el camino de la raíz del shard</li>
+<li>compare_exchange sobre esa raíz; si falla, reintentar desde 1</li>
+</ol>
+<div style="width:620px;display:flex;flex-direction:column;gap:20px">
+<div style="background:#14213D;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;color:#C9D6E8">costo por escritura</p>
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:28px;line-height:1.5;color:#F7F5F0">log₂(atributos)<br>+ log₂(mutables / 256)<br>+ 1 celdas de 64 B<br>+ 1 CAS</p>
+</div>
+<p style="font-size:26px;line-height:1.4;color:#4A5568">Cada versión superada es basura. El reintento no tiene tope: un tope anterior perdía escrituras.</p>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">protoCore: core/ProtoObject.cpp (camino de escritura, setAttributes) · docs/GarbageCollector.md · 9</p>
+<aside>Todo dentro de una CriticalSection: un árbol a medio construir que solo existe en variables de C++ no puede ser visto por el GC, así que ese hilo no se estaciona ahí. Dos escrituras concurrentes a atributos distintos del mismo objeto sobreviven las dos, porque cada reintento relee el estado. Al mismo atributo, gana el último CAS. Costo honesto: escritores sobre objetos no relacionados que caen en el mismo shard compiten por el mismo CAS (1 en 256). El remedio que existe: setAttributes publica N atributos en una sola versión, y el compilador de protoST lo usa (IVAR_GROUP).</aside>
+</section>
+<section id="garantias" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Qué garantiza y qué no</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">Ninguna escritura se rompe, pero un incremento se puede perder</h2>
+<div style="display:flex;gap:40px">
+<div style="flex:1;display:flex;flex-direction:column;gap:16px">
+<h3 style="font-size:36px;font-weight:600;color:#2F6F9F">Garantiza</h3>
+<ul style="font-size:28px;line-height:1.5;color:#14213D">
+<li>cada lectura ve un estado entero del objeto</li>
+<li>una racha de asignaciones se publica junta (IVAR_GROUP)</li>
+<li>pasar un objeto a otro hilo es pasar un puntero</li>
+</ul>
+<h3 style="font-size:36px;font-weight:600;color:#B45309">No garantiza</h3>
+<ul style="font-size:28px;line-height:1.5;color:#14213D">
+<li>leer-modificar-escribir atómico: n := n + 1</li>
+<li>consistencia entre dos objetos</li>
+</ul>
+</div>
+<div style="width:640px;background:#14213D;border-radius:16px;padding:40px;display:flex;flex-direction:column;gap:20px">
+<p style="font-size:24px;color:#C9D6E8">Ejercicio 2 · 8 actores × 100 000 incr</p>
+<p style="font-size:30px;color:#F7F5F0">objeto compartido</p>
+<p style="font-size:72px;font-weight:700;line-height:1;color:#F2B45A">140 634</p>
+<p style="font-size:26px;color:#C9D6E8">de 800 000, en una corrida</p>
+<p style="font-size:30px;color:#F7F5F0">actor · Atom</p>
+<p style="font-size:44px;font-weight:700;line-height:1;color:#7FC4A4">exacto, siempre</p>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">docs/LANGUAGE.md §4.5 y §10.6 · ejercicios/02-actualizaciones-perdidas.st · 10</p>
+<aside>Con Process en Smalltalk-80 el mismo n := n + 1 pierde incrementos si el scheduler cambia de proceso entre la lectura y la escritura, y un store de un slot tampoco se rompe allí. Lo distinto: paralelismo real, y la unidad atómica es la instantánea del objeto entero. Para lo demás hay tres herramientas (valor inmutable, actor, Atom), que vemos al final. setInstVar:from:to: hace un CAS sobre una variable de instancia.</aside>
+</section>
+<section id="estructuras" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Estructuras persistentes</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">Copiar es O(1); modificar copia un camino</h2>
+<table style="font-size:26px;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif">
+<tr><th style="width:20%">Estructura</th><th style="width:40%">Forma</th><th style="width:40%">En protoST</th></tr>
+<tr><td>ProtoList</td><td>AVL, un elemento por celda; inline hasta 5</td><td>el contenido de Array y OrderedCollection</td></tr>
+<tr style="background:#ECE8DF"><td>ProtoSparseList</td><td>AVL por clave entera; inline hasta 3 pares</td><td>atributos, variables de instancia, la tabla de mutables</td></tr>
+<tr><td>ProtoString</td><td>inline ≤ 6 bytes · símbolo perenne · cuerda AVL</td><td>String inmutable; Symbol</td></tr>
+<tr style="background:#ECE8DF"><td>ProtoTuple</td><td>cuerda de nodos de 4, internada, perenne</td><td>constantes y claves</td></tr>
+<tr><td>ProtoMap</td><td>hash con buckets y semántica de claves del lenguaje</td><td>Dictionary, Set</td></tr>
+</table>
+<div style="display:flex;gap:40px">
+<p style="flex:1;font-size:28px;line-height:1.4;color:#4A5568"><b>Ejercicio 1:</b> copy de un Array de 1 M elementos, 0 ms; cada at:put: sobre la copia, unos 1,4 µs.</p>
+<p style="flex:1;font-size:28px;line-height:1.4;color:#4A5568"><b>El precio:</b> 64 B por elemento y unas n·log n celdas transitorias al construir en masa (19:1 con 100 k).</p>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">protoCore: DESIGN.md, docs/MemoryModel.md · protoST: KNOWN_ISSUES.md K5 · 11</p>
+<aside>Las tuplas internadas y los símbolos son perennes: la tabla es raíz y nunca se recolectan, por eso son para constantes y claves. El hash de contenido de un string recorre las hojas en orden y es O(N); la deduplicación por contenido de strings no-símbolo se abandonó porque volvía cuadráticos los bucles s := s , 'x'. Que un implementador pregunte por WriteStream: crece por cuerdas, no por copia. K5: (1 to: 500000) asArray se quedaba sin memoria con el techo fijo de 640 MB anterior a 0.6.2.</aside>
+</section>
+<section id="gcciclo" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">El recolector</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">Mark-sweep que no mueve: la pausa solo toma raíces</h2>
+<div style="display:flex;gap:8px;align-items:stretch">
+<div style="width:300px;background:#B45309;border-radius:12px;padding:24px;display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;font-weight:600;color:#FFF8F0">Pausa</p>
+<p style="font-size:24px;line-height:1.3;color:#FFF8F0">quórum de hilos estacionados; raíces precisas; copia de las 256 raíces de mutables</p>
+</div>
+<div style="flex:2;background:#2F6F9F;border-radius:12px;padding:24px;display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;font-weight:600;color:#F7F5F0">Marcado</p>
+<p style="font-size:24px;line-height:1.3;color:#F7F5F0">concurrente, un hilo, pila acotada de 8 MiB con re-escaneo por desborde</p>
+</div>
+<div style="flex:3;background:#3E82B5;border-radius:12px;padding:24px;display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;font-weight:600;color:#F7F5F0">Barrido</p>
+<p style="font-size:24px;line-height:1.3;color:#F7F5F0">concurrente, 8 cursores en paralelo, hilos auxiliares mientras rinden</p>
+</div>
+<div style="flex:1;background:#7AA9CC;border-radius:12px;padding:24px;display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;font-weight:600;color:#14213D">Limpieza</p>
+<p style="font-size:24px;line-height:1.3;color:#14213D">mutables muertos; desmarcar</p>
+</div>
+</div>
+<div style="display:flex;gap:40px">
+<div style="flex:1;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:32px;font-weight:600;color:#14213D">Generación implícita por contexto</h3>
+<p style="font-size:26px;line-height:1.4;color:#4A5568">Lo que asigna un contexto queda en su cadena joven y no es candidato hasta que el contexto muere o pasa 10 000 asignaciones. No hay generación vieja: cada ciclo vuelve a marcar todo lo vivo.</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:32px;font-weight:600;color:#14213D">Raíces precisas, sin escanear el stack de C</h3>
+<p style="font-size:26px;line-height:1.4;color:#4A5568">Los frames de protoST son slots en un arreglo por hilo que el GC recorre. Ningún objeto puede vivir solo en una variable de C++ a través de una asignación.</p>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">protoCore: core/ProtoSpace.cpp (gcThreadLoop) · docs/GarbageCollector.md · 12</p>
+<aside>El heap nunca se achica ni devuelve memoria al sistema: el RSS es el pico computable. Los hilos se estacionan en safepoints: la ruta rápida de asignación mira una bandera cada 64 asignaciones, y protoST además en la entrada de cada llamada y en JUMP_BACK. Como protoST corre todo un programa sobre un contexto por hilo, sin esos safepoints no se recolectaría nunca nada (fue el bug de fib 29 de 0.6.1).</aside>
+</section>
+<section id="sinbarrera" data-transition="fade" style="background:#14213D;color:#F7F5F0;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#F2B45A;font-weight:600">La pieza que compra la inmutabilidad</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#F7F5F0">Marcado concurrente sin write barrier: SATB por instantánea, no por barrera</h2>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:28px">
+<div style="background:#1D2B4A;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:32px;font-weight:600;color:#F2B45A">Campos const</h3>
+<p style="font-size:26px;line-height:1.4;color:#E8EEF7">Cada processReferences lee solo campos fijados al construir la celda. Un objeto ya visto no cambia por debajo del marcador.</p>
+</div>
+<div style="background:#1D2B4A;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:32px;font-weight:600;color:#F2B45A">2 KB de mutabilidad</h3>
+<p style="font-size:26px;line-height:1.4;color:#E8EEF7">Toda la mutabilidad del proceso son 256 raíces atómicas. La pausa las copia: esa copia es el snapshot-at-the-beginning.</p>
+</div>
+<div style="background:#1D2B4A;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:32px;font-weight:600;color:#F2B45A">Lo nuevo es joven</h3>
+<p style="font-size:26px;line-height:1.4;color:#E8EEF7">Lo asignado después de la pausa no es candidato. La basura flotante dura a lo sumo un ciclo.</p>
+</div>
+</div>
+<p style="font-size:30px;line-height:1.4;color:#C9D6E8">Desde protoCore 3.1.0 los estados no son raíces: un estado se marca solo a través de su handle, así que un ciclo de mutables inalcanzables se libera en un ciclo.</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#C9D6E8">protoCore: docs/GarbageCollector.md (sin write barrier; excepciones probadas: cola MPSC y objetos lazy) · 13</p>
+<aside>Para quien implementó un Cog o una VM de VAST: el costo por store de la barrera desaparece entero. Lo que se paga en cambio es que cada store aloca (slide 8). Hay dos excepciones sancionadas al "todo campo es const", cada una con su argumento de corrección: la cola MPSC de los buzones de actores (orden retener-antes-de-desenganchar) y los objetos lazy (época). Con varios ProtoSpaces vivos en un proceso, los estados vuelven a ser raíces; por eso la recomendación de 3.1.0 es un solo espacio por proceso.</aside>
+</section>
+<section id="gcnumeros" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Medido</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">La pausa no es el costo</h2>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:28px">
+<div style="display:flex;flex-direction:column;gap:12px;border-top:4px solid #2F6F9F;padding:24px 0 0 0">
+<p style="font-size:84px;font-weight:700;line-height:1;color:#2F6F9F">≤ 0,23 ms</p>
+<p style="font-size:26px;line-height:1.4;color:#4A5568">stop-the-world por ciclo, 41 corridas con hasta 12 hilos asignando</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:12px;border-top:4px solid #B45309;padding:24px 0 0 0">
+<p style="font-size:84px;font-weight:700;line-height:1;color:#B45309">21–270 ms</p>
+<p style="font-size:26px;line-height:1.4;color:#4A5568">espera del quórum antes de la pausa, por corrida: techo fijo / controlador adaptativo</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:12px;border-top:4px solid #B45309;padding:24px 0 0 0">
+<p style="font-size:84px;font-weight:700;line-height:1;color:#B45309">41–99 %</p>
+<p style="font-size:26px;line-height:1.4;color:#4A5568">del tiempo del recolector se va en el barrido; con 12 hilos, un marcador es el cuello</p>
+</div>
+</div>
+<div style="display:flex;gap:40px">
+<p style="flex:1;font-size:28px;line-height:1.4;color:#4A5568"><b>En protoST:</b> pausas de hasta 0,27 ms en los benchmarks; antes de 0.6.2, 20–31 ms porque cada pausa recorría un arreglo de frames de 1 M entradas por hilo (K6).</p>
+<p style="flex:1;font-size:28px;line-height:1.4;color:#4A5568"><b>No publicado todavía:</b> una distribución de pausas (p99, p999). Todo se midió en una notebook Ryzen 5 5500U.</p>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">protoCore: docs/GarbageCollector.md, informe 2026-10-03-gc-phase-breakdown · protoST: KNOWN_ISSUES.md K6 · 14</p>
+<aside>Esta es la slide para ser honesto: la pausa es corta porque todo término proporcional al heap salió de ella, pero los mutadores igual esperan, y la espera del quórum puede ser cien veces la pausa. En el ejercicio 4 miden ambas cosas: stw en la traza y el tiempo total con cuatro actores asignando, que no baja a un cuarto. Las cifras de 0,23 ms y del quórum son de corridas de protoJS, protoScala, protoClojure y protoCore (informe del 3/10), no de protoST.</aside>
+</section>
+<section id="heap" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Cuándo recolectar</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">Un controlador adaptativo decide el tamaño del heap</h2>
+<div style="display:flex;gap:48px">
+<div style="flex:1;display:flex;flex-direction:column;gap:16px">
+<ul style="font-size:28px;line-height:1.5;color:#14213D">
+<li><b>H</b>, el presupuesto: 75 % de la memoria física o del límite del proceso</li>
+<li><b>S</b>, el límite blando: arranca en 128 MiB y solo crece mientras el programa espera al recolector</li>
+<li>arranca cada ciclo antes del techo, según la tasa de asignación medida</li>
+<li>sin límite y sin controlador, ningún ciclo arranca solo</li>
+</ul>
+</div>
+<div style="width:700px;background:#14213D;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:12px">
+<p style="font-size:24px;color:#C9D6E8">para el laboratorio</p>
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;line-height:1.6;color:#F7F5F0">PROTOCORE_HEAP_TRACE=1<br><span style="color:#C9D6E8">  una línea por ciclo: L, S, H, C, stw</span><br>PROTOCORE_HEAP_LIMIT_CELLS=2000000<br><span style="color:#C9D6E8">  techo fijo: 2 M celdas = 128 MB</span><br>PROTOCORE_ADAPTIVE_HEAP=0<br><span style="color:#C9D6E8">  el techo de 640 MB de 0.6.1</span></p>
+</div>
+</div>
+<p style="font-size:28px;line-height:1.4;color:#4A5568">Desde 0.6.2 es el default de protoST: actores 16–43 % más rápidos con entre un quinto y la mitad de la memoria. El precio: el pico ya no está acotado (un bucle que asigna sin parar llegó a 0,88–3,5 GB).</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">protoCore: core/AdaptiveHeap.cpp · benchmarks/reports/2026-10-12-adaptive-heap-default.md · 15</p>
+<aside>Ejercicio 4: con PROTOCORE_HEAP_LIMIT_CELLS=2000000 el mismo programa hace 105 ciclos en lugar de 27, y los cuatro actores tardan más del doble. La ley de control usa rho = r/T (tasa de asignación sobre rendimiento del recolector); si la memoria viva no entra en el presupuesto, termina con un mensaje claro en lugar de que el sistema operativo lo mate.</aside>
+</section>
+<section id="hilos" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Hilos</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">Hilos nativos sin lock global; el GC necesita que todos lleguen</h2>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:28px">
+<div style="background:#FFFFFF;border:1px solid #D9D4C7;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:32px;font-weight:600;color:#14213D">Asignar no toma locks</h3>
+<p style="font-size:26px;line-height:1.4;color:#4A5568">Cada ProtoThread tiene su lista libre privada; recargarla sí pasa por un mutex global.</p>
+</div>
+<div style="background:#FFFFFF;border:1px solid #D9D4C7;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:32px;font-weight:600;color:#14213D">Safepoints cooperativos</h3>
+<p style="font-size:26px;line-height:1.4;color:#4A5568">Una bandera relajada cada 64 asignaciones; protoST también en cada llamada y en cada salto hacia atrás.</p>
+</div>
+<div style="background:#FFFFFF;border:1px solid #D9D4C7;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:32px;font-weight:600;color:#14213D">E/S bloqueante: salir del mundo</h3>
+<p style="font-size:26px;line-height:1.4;color:#4A5568">UnmanagedScope cuenta al hilo como estacionado mientras dura la llamada: 51–70 ns en protoCore 3.3.1.</p>
+</div>
+<div style="background:#FDF3E3;border:1px solid #EBC48A;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:32px;font-weight:600;color:#B45309">El contrato que muerde</h3>
+<p style="font-size:26px;line-height:1.4;color:#4A5568">Una llamada bloqueante sin ese paréntesis deja al quórum esperando para siempre: el GC se cuelga.</p>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">protoCore: core/Thread.cpp, core/ProtoContext.cpp, DESIGN.md · CHANGELOG 3.3.1 · 16</p>
+<aside>El contrato de raíces para quien embebe: ningún ProtoObject* puede quedar solo en una variable local de C++ a través de una asignación o un safepoint. Se usan slots automáticos, ProtoRootSet o asignación perenne. ThreadSanitizer sigue encontrando carreras en la entrada y salida del quórum (CHANGELOG de protoCore, sección Unreleased). En protoST, cada lectura de archivo, socket o proceso entra en UnmanagedScope; desde protoIO 0.2.3 nextLine sirve las líneas ya leídas sin salir del quórum.</aside>
+</section>
+<section id="decisiones" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Lo que el núcleo le impone a Smalltalk</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">Cinco decisiones, cada una con su causa</h2>
+<table style="font-size:24px;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif">
+<tr><th style="width:26%">En protoST</th><th style="width:38%">Por qué</th><th style="width:36%">Lo que cuesta</th></tr>
+<tr><td>Clases = prototipos con nombre</td><td>protoCore es de prototipos con varios padres</td><td>metaclase delgada; uses: sin resolución de conflictos</td></tr>
+<tr style="background:#ECE8DF"><td>Strings inmutables (D34)</td><td>un String es una cuerda de protoCore, sin identidad mutable</td><td>at:put: da ModificationForbidden</td></tr>
+<tr><td>#foo == 'foo' (D35)</td><td>≤ 6 bytes van en la palabra; no queda lugar para el tag de símbolo</td><td>#foo class es String; isSymbol false</td></tr>
+<tr style="background:#ECE8DF"><td>Cadena de padres fija (D21)</td><td>búsqueda sin asignar y estable por instantánea</td><td>addBehavior: solo alcanza a instancias nuevas</td></tr>
+<tr><td>Actores, no Process</td><td>hilos nativos sin lock global</td><td>sin Semaphore, Delay ni fork</td></tr>
+</table>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">docs/STATUS.md (D21, D34, D35) · docs/tutorial/14-for-the-smalltalk-programmer.md · 17</p>
+<aside>Este es el punto para invitar al debate: ¿cuáles de estas son esenciales a la idea y cuáles son accidentes de la implementación? D35 es claramente un accidente de la codificación inline de 6 bytes. D21 es una elección de rendimiento. La inmutabilidad de String es consecuencia directa del modelo. En Pharo Symbol>>= es identidad, así que #foo = 'foo' es false; en protoST es true en los dos sentidos, y hash y Dictionary siguen esa igualdad.</aside>
+</section>
+<section id="umd" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Módulos sin imagen</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">UMD: una sola forma de encontrar módulos para todos los lenguajes</h2>
+<div style="display:flex;align-items:center;gap:20px">
+<div style="flex:1;background:#FFFFFF;border:2px solid #14213D;border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:8px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;color:#2F6F9F">Import from: 'json'</p>
+<p style="font-size:24px;line-height:1.35;color:#4A5568">el pedido, desde cualquier lenguaje</p>
+</div>
+<x-shape kind="arrow-right" style="width:64px;height:32px;background:#B45309"></x-shape>
+<div style="flex:1;background:#FFFFFF;border:2px solid #14213D;border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:8px">
+<h3 style="font-size:30px;font-weight:600;color:#14213D">Cadena de resolución</h3>
+<p style="font-size:24px;line-height:1.35;color:#4A5568">rutas y proveedores por espacio; gana el primero que responde</p>
+</div>
+<x-shape kind="arrow-right" style="width:64px;height:32px;background:#B45309"></x-shape>
+<div style="flex:1;background:#FFFFFF;border:2px solid #14213D;border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:8px">
+<h3 style="font-size:30px;font-weight:600;color:#14213D">Proveedor</h3>
+<p style="font-size:24px;line-height:1.35;color:#4A5568">provider:st carga un .st; un .so de C++ registra el suyo</p>
+</div>
+<x-shape kind="arrow-right" style="width:64px;height:32px;background:#B45309"></x-shape>
+<div style="flex:1;background:#FFFFFF;border:2px solid #14213D;border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:8px">
+<h3 style="font-size:30px;font-weight:600;color:#14213D">Caché y raíz</h3>
+<p style="font-size:24px;line-height:1.35;color:#4A5568">por (proveedor, ruta, versión); raíz global del GC; nunca se descargan</p>
+</div>
+</div>
+<div style="display:flex;gap:40px">
+<p style="flex:1;font-size:28px;line-height:1.4;color:#4A5568"><b>En protoST</b> un .st es un módulo: corre una vez, exporta sus clases salvo las que empiezan con _, y se busca en el directorio actual, $STPATH, el venv y lib/.</p>
+<p style="flex:1;font-size:28px;line-height:1.4;color:#4A5568"><b>Hoy</b> el protost instalado solo tiene provider:st: cargar un módulo de otro lenguaje necesita un host que registre su proveedor.</p>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">protoCore: docs/MODULE_DISCOVERY.md · protoST: src/modules/STModuleProvider.cpp, tests/umd/ · 18</p>
+<aside>UMD es Unified Module Discovery. ProviderRegistry es un singleton de proceso; cada ModuleProvider tiene GUID y alias, y tryLoad devuelve PROTO_NONE si no es suyo. protoST se registra con alias st y GUID protoST-source-v1. Los imports se cachean, son seguros desde actores, y un ciclo de imports da un error claro. Ejercicio 9 lo muestra; tests/umd muestra un módulo C++ de protoCore usado desde Smalltalk con su propio tipo de error.</aside>
+</section>
+<section id="debate1" data-transition="fade" style="background:#14213D;color:#F7F5F0;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;justify-content:center;gap:48px">
+<p style="font-size:28px;letter-spacing:3px;text-transform:uppercase;color:#F2B45A;font-weight:600">Para discutir · el modelo</p>
+<ol style="font-size:44px;line-height:1.4;color:#F7F5F0">
+<li>¿Vale pagar una asignación en cada store a cambio de no tener write barrier ni locks?</li>
+<li>¿Qué idioms de Smalltalk dependen de una identidad mutable que este modelo rompe?</li>
+<li>¿Cómo harían una generación vieja sin barrera de escritura?</li>
+<li>¿Qué tendría que medir este GC para que lo tomen en serio?</li>
+</ol>
+<p style="font-size:28px;line-height:1.4;color:#C9D6E8">No tengo respuesta cerrada para ninguna. Después, el laboratorio 1 pone a prueba la 1 y la 3.</p>
+<aside>Dejar correr la discusión unos minutos antes del laboratorio; si se alarga, recortar el laboratorio, no la conversación. Anotar las respuestas: son el material más valioso de la jornada. Para la 2: become:, strings mutables, símbolos como identidad, literales compartidos. Para la 4: percentiles de pausa, máquinas de muchos núcleos, programas reales en lugar de benchmarks.</aside>
+</section>
+<section id="lab1" data-transition="fade" style="background:#B45309;color:#F7F5F0;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<p style="font-size:28px;letter-spacing:3px;text-transform:uppercase;color:#F7F5F0;font-weight:600">Laboratorio 1 · 20 minutos</p>
+<h2 style="font-size:72px;font-weight:700;line-height:1.1;color:#F7F5F0">Predigan, corran, discutan</h2>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">
+<div style="background:#F7F5F0;border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:8px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;color:#B45309">01-copiar-es-gratis.st</p>
+<p style="font-size:26px;line-height:1.35;color:#14213D">copy O(1), at:put: O(log n), alias, String</p>
+</div>
+<div style="background:#F7F5F0;border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:8px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;color:#B45309">02-actualizaciones-perdidas.st</p>
+<p style="font-size:26px;line-height:1.35;color:#14213D">objeto compartido, actor, Atom</p>
+</div>
+<div style="background:#F7F5F0;border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:8px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;color:#B45309">03-forma-de-clase.st</p>
+<p style="font-size:26px;line-height:1.35;color:#14213D">instancias viejas frente a >>, addBehavior: y redeclarar</p>
+</div>
+<div style="background:#F7F5F0;border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:8px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;color:#B45309">04-gc-en-vivo.st</p>
+<p style="font-size:26px;line-height:1.35;color:#14213D">PROTOCORE_HEAP_TRACE=1: ciclos, pausas, cuatro actores</p>
+</div>
+</div>
+<p style="font-size:30px;line-height:1.4;color:#FDE7C8">docs/talks/2026-11-12-fas-workshop/ejercicios · ./verificar.sh compara con la salida esperada</p>
+<aside>Anoten la predicción antes de correr. Las líneas que empiezan con ~ son mediciones y varían. Recorrer la sala: el ejercicio 2 suele generar la mejor discusión; el 4 es el que muestra la cara menos linda (asignar en paralelo no escala).</aside>
+</section>
+<section id="p2" data-section="Parte II: la VM y los problemas propios de Smalltalk" data-transition="fade" style="background:#14213D;color:#F7F5F0;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px;display:flex;flex-direction:column;justify-content:center;gap:32px">
+<p style="font-size:28px;letter-spacing:3px;text-transform:uppercase;color:#F2B45A;font-weight:600">Parte II · 50 minutos</p>
+<h2 style="font-size:104px;font-weight:700;line-height:1.05;color:#F7F5F0">La VM</h2>
+<p style="font-size:36px;line-height:1.4;color:#C9D6E8;width:1400px">Bytecode y frames · bloques sobre objetos inmutables · el envío · retorno no local · excepciones · lo que falta · interoperación · actores</p>
+<aside>Referencia para toda esta parte: docs/VM.md, escrito para contribuidores. Todos los listados que muestro son salida real de protost --disasm; los de VM.md están verificados por un test que falla si se desactualizan.</aside>
+</section>
+<section id="pipeline" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">De archivo a ejecución</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">Un archivo es una unidad de compilación; declarar es enviar</h2>
+<div style="display:flex;align-items:center;gap:16px">
+<div style="flex:1;background:#FFFFFF;border:2px solid #14213D;border-radius:14px;padding:24px"><p style="font-size:28px;font-weight:600;color:#14213D">Parser</p><p style="font-size:24px;color:#4A5568">→ AST</p></div>
+<x-shape kind="arrow-right" style="width:56px;height:28px;background:#B45309"></x-shape>
+<div style="flex:2;background:#FFFFFF;border:2px solid #14213D;border-radius:14px;padding:24px"><p style="font-size:28px;font-weight:600;color:#14213D">Compilador</p><p style="font-size:24px;color:#4A5568">clases, análisis de capturas, inlining al emitir</p></div>
+<x-shape kind="arrow-right" style="width:56px;height:28px;background:#B45309"></x-shape>
+<div style="flex:1;background:#FFFFFF;border:2px solid #14213D;border-radius:14px;padding:24px"><p style="font-size:28px;font-weight:600;color:#14213D">BytecodeModule</p><p style="font-size:24px;color:#4A5568">uno por método y bloque</p></div>
+<x-shape kind="arrow-right" style="width:56px;height:28px;background:#B45309"></x-shape>
+<div style="flex:1;background:#FFFFFF;border:2px solid #14213D;border-radius:14px;padding:24px"><p style="font-size:28px;font-weight:600;color:#14213D">Engine</p><p style="font-size:24px;color:#4A5568">goto computado</p></div>
+</div>
+<div style="display:flex;gap:40px">
+<div style="flex:1;background:#14213D;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;color:#C9D6E8">Adders >> adderFor: n   compila a</p>
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;line-height:1.5;color:#F7F5F0">PUSH_GLOBAL&#160;&#160;&#160;&#160;Adders<br>PUSH_BLOCK&#160;&#160;&#160;&#160;&#160;main.0<br>PUSH_CONST&#160;&#160;&#160;&#160;&#160;#adderFor:<br>SEND_KEYWORD&#160;&#160;&#160;#__installMethod:as:</p>
+</div>
+<p style="flex:1;font-size:28px;line-height:1.45;color:#4A5568">Una clase es <b>__subclassNamed:</b> + <b>STORE_GLOBAL</b>; un método, una clausura sobre su propio módulo, instalada con un envío. El kernel (lib/kernel/*.st) se carga igual antes del script.</p>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">docs/VM.md §1.1 · docs/vm-examples/07-closure.txt · 22</p>
+<aside>No hay imagen que cargar: el arranque compila el kernel desde fuentes cada vez y aún así tarda unos 25 ms. Todas las sentencias de primer nivel de un archivo van a un solo módulo, separadas por POP y terminadas en RETURN_TOP. Dos pasadas antes de emitir: collectClasses (variables de instancia y de clase) y analyseClosures (qué capturan los bloques). No hay pasada de desugaring: el inlining de ifTrue: y compañía se hace al emitir.</aside>
+</section>
+<section id="codificacion" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Bytecode</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">43 opcodes en palabras de 2 bytes</h2>
+<table style="font-size:24px;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif">
+<tr><th style="width:24%">Grupo</th><th style="width:76%">Opcodes</th></tr>
+<tr><td>Valores y pila</td><td>PUSH_CONST · PUSH_NIL/TRUE/FALSE · PUSH_SELF · MAKE_ARRAY · PUSH/STORE_LOCAL · DUP · POP</td></tr>
+<tr style="background:#ECE8DF"><td>Variables</td><td>PUSH/STORE_GLOBAL · PUSH/STORE_INSTVAR · PUSH_OWN_INSTVAR · STORE_CLASSVAR · IVAR_GROUP(_END)</td></tr>
+<tr><td>Capturadas</td><td>MAKE_CAPTURED · DEFINE_CAPTURED · PUSH_CAPTURED · STORE_CAPTURED</td></tr>
+<tr style="background:#ECE8DF"><td>Control</td><td>JUMP · JUMP_IF_TRUE/FALSE · JUMP_BACK · ASSERT_BOOL_OR_DNU</td></tr>
+<tr><td>Envíos</td><td>SEND_UNARY/BINARY/KEYWORD · SEND_SUPER · SEND_CALL · RETURN · RETURN_TOP · PUSH_BLOCK</td></tr>
+<tr style="background:#ECE8DF"><td>Atajos enteros</td><td>BIN_INT_ADD/SUB/LE/LT/GE/GT/EQ; si no son SmallInteger o desborda, sigue como SEND_BINARY</td></tr>
+</table>
+<p style="font-size:28px;line-height:1.4;color:#4A5568">Opcode + operando de 8 bits; hasta dos prefijos EXTEND llevan el operando a 24 bits. No hay opcodes de excepciones ni de colecciones, salvo MAKE_ARRAY.</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">docs/VM.md §1.2 y §2 · src/runtime/Opcodes.h · 23</p>
+<aside>Lo que va a llamar la atención: no hay atajo para *, // ni \\. Solo los símbolos se deduplican en el pool de constantes: un Float, un String o un LargeInteger literal se crean en cada PUSH_CONST, y un literal #( ) arma un Array nuevo en cada evaluación. Eso elimina la clase de bugs del literal mutado, a cambio de asignar. La información de depuración siempre se compila: una línea por palabra, sin opcode de línea.</aside>
+</section>
+<section id="frame" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Activaciones</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">Un frame no es un objeto: es un rango de slots</h2>
+<div style="display:flex;gap:56px">
+<div style="width:560px;display:flex;flex-direction:column">
+<p style="font-size:24px;color:#5B6576">arreglo de slots del hilo (lo recorre el GC)</p>
+<div style="background:#DCE7F0;border:1px solid #9FB8CC;padding:14px 24px"><p style="font-size:24px;color:#14213D">… frame siguiente</p></div>
+<div style="background:#B45309;padding:14px 24px"><p style="font-size:24px;color:#FFF8F0">pila de operandos</p></div>
+<div style="background:#3E82B5;padding:14px 24px"><p style="font-size:24px;color:#F7F5F0">locales y argumentos</p></div>
+<div style="background:#2F6F9F;padding:14px 24px"><p style="font-size:24px;color:#F7F5F0">self</p></div>
+<div style="background:#14213D;padding:14px 24px"><p style="font-size:24px;color:#F7F5F0">diccionario de capturadas</p></div>
+<div style="background:#DCE7F0;border:1px solid #9FB8CC;padding:14px 24px"><p style="font-size:24px;color:#14213D">frame anterior …</p></div>
+</div>
+<ul style="flex:1;font-size:28px;line-height:1.5;color:#14213D">
+<li>el engine no es recursivo: un vector de frames que solo guardan enteros</li>
+<li>un solo ProtoContext por hilo, ninguno por activación</li>
+<li>lo que se desapila sigue en el arreglo y queda enraizado</li>
+<li>hasta 2^20 slots: unas 19 000 activaciones, con un Error capturable al pasarse</li>
+<li>una primitiva que corre un bloque (do:, ensure:) anida otro engine: hasta 1000</li>
+</ul>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">docs/VM.md §1.3 y §1.8 · src/runtime/ExecutionEngine.h · STATUS D38 · 24</p>
+<aside>Esto explica casi todo lo que sigue. No hay contexto que reificar, por eso thisContext está reservado (D17). Retorno no local y desenrollado de excepciones a través de engines anidados viajan como excepciones de C++. La pila de operandos se dimensiona por la profundidad máxima del código, con piso de 48 slots (uno de los cinco bugs arreglados al escribir VM.md: 60 niveles de anidamiento fallaban). El bug K6: cada pausa recorría entero el arreglo de 1 M entradas por hilo; ahora crece bajo demanda.</aside>
+</section>
+<section id="listadoloop" data-transition="fade" style="background:#14213D;color:#F7F5F0;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:32px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#F2B45A;font-weight:600">Ejercicio 5 · protost --disasm</p>
+<h2 style="font-size:56px;font-weight:600;line-height:1.1;color:#F7F5F0">El mismo bucle, inlineado y como bloque</h2>
+<div style="display:flex;gap:40px">
+<div style="flex:1;display:flex;flex-direction:column;gap:12px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;color:#F2B45A">1 to: n do: [:i | s := s + i]</p>
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:22px;line-height:1.45;color:#E8EEF7"> 9&#160;&#160;PUSH_LOCAL&#160;&#160;&#160;&#160;&#160;3&#160;&#160;; i<br>10&#160;&#160;PUSH_LOCAL&#160;&#160;&#160;&#160;&#160;4&#160;&#160;; end<br>11&#160;&#160;BIN_INT_LE&#160;&#160;&#160;&#160;&#160;2&#160;&#160;; #&lt;=<br>12&#160;&#160;JUMP_IF_FALSE&#160;&#160;11 ; -&gt; 24<br>13&#160;&#160;PUSH_LOCAL&#160;&#160;&#160;&#160;&#160;2&#160;&#160;; s<br>14&#160;&#160;PUSH_LOCAL&#160;&#160;&#160;&#160;&#160;3&#160;&#160;; i<br>15&#160;&#160;BIN_INT_ADD&#160;&#160;&#160;&#160;3&#160;&#160;; #+<br>16&#160;&#160;DUP<br>17&#160;&#160;STORE_LOCAL&#160;&#160;&#160;&#160;2&#160;&#160;; s<br>…<br>23&#160;&#160;JUMP_BACK&#160;&#160;&#160;&#160;&#160;&#160;15 ; -&gt; 9</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:12px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;color:#F2B45A">(1 to: n) do: [:i | s := s + i]</p>
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:22px;line-height:1.45;color:#E8EEF7"> 0&#160;&#160;MAKE_CAPTURED&#160;&#160;0&#160;&#160;; root dict<br> 2&#160;&#160;DEFINE_CAPTURED 0&#160;&#160;; s<br> 9&#160;&#160;SEND_KEYWORD&#160;&#160;&#160;3&#160;&#160;; #to:<br>10&#160;&#160;PUSH_BLOCK&#160;&#160;&#160;&#160;&#160;0<br>11&#160;&#160;SEND_KEYWORD&#160;&#160;&#160;4&#160;&#160;; #do:<br><br><span style="color:#C9D6E8">[] in sumaConBloque:</span><br> 0&#160;&#160;PUSH_CAPTURED&#160;&#160;0&#160;&#160;; s<br> 1&#160;&#160;PUSH_LOCAL&#160;&#160;&#160;&#160;&#160;0&#160;&#160;; i<br> 2&#160;&#160;BIN_INT_ADD&#160;&#160;&#160;&#160;1&#160;&#160;; #+<br> 4&#160;&#160;STORE_CAPTURED 0&#160;&#160;; s</p>
+</div>
+</div>
+<p style="font-size:28px;line-height:1.4;color:#C9D6E8">Inlineado: s vive en el frame y el bucle no envía nada. Como bloque: s pasa a un diccionario de capturadas y cada vuelta publica una versión.</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#C9D6E8">ejercicios/05-bytecode.st (listado abreviado) · 25</p>
+<aside>Desde 0.7.0 los cuerpos inlineados no son ámbitos de captura; antes, cualquier temporal que tocaran vivía en el diccionario, y arreglarlo hizo a fib unas 4 veces más rápido (informe del 20/10). Se inlinean ifTrue:, ifFalse: y combinaciones, whileTrue:/whileFalse: con bloques literales sin temporales, y to:do: con un bloque de un argumento que ningún bloque interno captura. and:, or:, timesRepeat: y to:by:do: no se inlinean.</aside>
+</section>
+<section id="capturas" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Clausuras sobre objetos inmutables</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">La cadena de ámbitos es una cadena de prototipos</h2>
+<div style="display:flex;gap:40px">
+<div style="flex:1;background:#14213D;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:10px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:22px;line-height:1.45;color:#F2B45A">contadores<br>&#160;&#160;^ (1 to: 3) collect: [:i | | c |<br>&#160;&#160;&#160;&#160;&#160;&#160;c := i * 10. [ c := c + 1 ] ]</p>
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:22px;line-height:1.45;color:#E8EEF7">0&#160;&#160;MAKE_CAPTURED&#160;&#160;&#160;1 ; child of the<br>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;inherited dict<br>2&#160;&#160;DEFINE_CAPTURED 0 ; c<br>5&#160;&#160;SEND_BINARY&#160;&#160;&#160;&#160;&#160;2 ; #*<br>7&#160;&#160;STORE_CAPTURED&#160;&#160;0 ; c<br>9&#160;&#160;PUSH_BLOCK&#160;&#160;&#160;&#160;&#160;&#160;0</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:16px">
+<ul style="font-size:28px;line-height:1.5;color:#14213D">
+<li>las variables capturadas son atributos de un objeto <b>mutable</b></li>
+<li>cada activación de bloque abre un hijo del diccionario de afuera</li>
+<li>buscar una variable es buscar un atributo por la cadena</li>
+<li>una clausura: __bc_ptr__, __captured__, __home_frame__, __block_self__</li>
+</ul>
+<p style="font-size:28px;line-height:1.4;color:#4A5568">Los tres bloques dan 13, 21 y 31: cada uno tiene su c.</p>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">docs/VM.md §1.4 · ejercicios/05-bytecode.st · 26</p>
+<aside>La pregunta obvia de esta audiencia: ¿y las variables de instancia en un bloque? No se capturan: el bloque llega a ellas por __block_self__. El costo: cada lectura capturada es una búsqueda de atributo en un objeto mutable, y cada escritura publica una instantánea. Que cada vuelta de un bucle tenga sus propias variables fue el bug D30, cerrado. Ojo también: * no tiene atajo entero, va como SEND_BINARY.</aside>
+</section>
+<section id="envio" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">El envío</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">Sin inline caches: la caché es de protoCore y se invalida sola</h2>
+<div style="display:flex;gap:48px">
+<ol style="flex:1;font-size:27px;line-height:1.5;color:#14213D">
+<li>¿Proxy de actor? Encolar y devolver un Future</li>
+<li>¿Bloque y value… con la aridad justa? Frame en el mismo engine</li>
+<li>Buscar el selector por la cadena de prototipos</li>
+<li>No está: doesNotUnderstand:</li>
+<li>Método: apilar frame y safepoint</li>
+<li>Atributo valor: un unario lo devuelve (así se leen los módulos)</li>
+<li>Primitiva: índice en un registro, con traducción de excepciones</li>
+</ol>
+<div style="width:600px;background:#14213D;border-radius:16px;padding:36px;display:flex;flex-direction:column;gap:16px">
+<p style="font-size:24px;color:#C9D6E8">caché por hilo, 1024 entradas</p>
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:26px;line-height:1.5;color:#F7F5F0">(instantánea, símbolo)<br>&#160;&#160;→ ¿es atributo propio?</p>
+<p style="font-size:26px;line-height:1.4;color:#E8EEF7">Hechos positivos y negativos por eslabón de la cadena. Cambiar una clase publica otra instantánea: las entradas viejas ya no coinciden. Se vacía en cada pausa del GC.</p>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">src/runtime/ExecutionEngine.cpp (runLoop, SEND_*) · protoCore: core/ProtoObject.cpp · 27</p>
+<aside>No es una caché (clase, selector) → método ni un PIC en el sitio de envío, y no hay JIT. La invalidación sale gratis de la inmutabilidad: no hay que vaciar nada al instalar un método. Costos visibles en el código: el camino rápido de bloques arma un std::string "value:"×n y lo compara en cada envío, y cada envío de keyword cuenta los dos puntos del selector. Un método de clase encontrado desde una instancia se oculta; al revés no: un método de instancia enviado a una clase corre, porque las clases built-in hacen de clase y de contenedor de comportamiento a la vez.</aside>
+</section>
+<section id="ivargroup" data-transition="fade" style="background:#14213D;color:#F7F5F0;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#F2B45A;font-weight:600">Una garantía que Smalltalk-80 no da</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#F7F5F0">Una racha de asignaciones se publica de una sola vez</h2>
+<div style="display:flex;gap:48px;align-items:start">
+<div style="flex:1;display:flex;flex-direction:column;gap:12px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;line-height:1.5;color:#F2B45A">x: ax y: ay<br>&#160;&#160;x := ax.<br>&#160;&#160;y := ay.<br>&#160;&#160;z := 0</p>
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;line-height:1.5;color:#E8EEF7">0&#160;&#160;PUSH_LOCAL&#160;&#160;&#160;&#160;&#160;&#160;1 ; ax<br>1&#160;&#160;IVAR_GROUP&#160;&#160;&#160;&#160;&#160;&#160;0 ; x, write 1 of 3<br>2&#160;&#160;PUSH_LOCAL&#160;&#160;&#160;&#160;&#160;&#160;2 ; ay<br>3&#160;&#160;IVAR_GROUP&#160;&#160;&#160;&#160;&#160;&#160;1 ; y, write 2 of 3<br>4&#160;&#160;PUSH_CONST&#160;&#160;&#160;&#160;&#160;&#160;2 ; 0<br>5&#160;&#160;IVAR_GROUP_END&#160;&#160;2 ; z, write 3 of 3</p>
+</div>
+<ul style="width:640px;font-size:28px;line-height:1.5;color:#E8EEF7">
+<li>de 2 a 16 asignaciones seguidas cuyos valores no pueden correr código</li>
+<li>una sola llamada a setAttributes: otro hilo ve las tres o ninguna</li>
+<li>un fallo del atajo entero en medio publica lo escrito hasta ahí</li>
+<li>el depurador las apaga; PROTOST_IVAR_GROUPS=off también</li>
+</ul>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#C9D6E8">docs/LANGUAGE.md §4.5 · docs/VM.md ejemplo 16 · ejercicios/05-bytecode.st · 28</p>
+<aside>Nació como optimización (menos versiones intermedias que son basura) y quedó como semántica: inicializar un objeto desde varios hilos no deja estados a medio escribir visibles. Para esta audiencia: en una VM clásica con green threads, el scheduler no cambia de proceso en medio de tres stores consecutivos en la práctica, pero nadie lo garantiza; acá es una garantía con hilos nativos en paralelo.</aside>
+</section>
+<section id="superpor" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Clases sobre prototipos</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">super, la metaclase y la herencia múltiple</h2>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:28px">
+<div style="background:#FFFFFF;border:1px solid #D9D4C7;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:32px;font-weight:600;color:#14213D">super por identidad</h3>
+<p style="font-size:26px;line-height:1.4;color:#4A5568">Al instalar un método, su bytecode recibe el __class_id__ de la clase. En ejecución se recorre la cadena del receptor buscando ese id y se sigue por sus padres.</p>
+</div>
+<div style="background:#FFFFFF;border:1px solid #D9D4C7;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:32px;font-weight:600;color:#14213D">Metaclase delgada</h3>
+<p style="font-size:26px;line-height:1.4;color:#4A5568">Los métodos de clase viven en el objeto clase con una marca. 3 class class es SmallInteger class, pero Metaclass, Behavior y ClassDescription no existen.</p>
+</div>
+<div style="background:#FFFFFF;border:1px solid #D9D4C7;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:32px;font-weight:600;color:#14213D">uses:</h3>
+<p style="font-size:26px;line-height:1.4;color:#4A5568">Más padres, en profundidad y de izquierda a derecha; gana el primero. No son traits de Pharo: sin conflictos, alias ni exclusiones.</p>
+</div>
+</div>
+<p style="font-size:28px;line-height:1.4;color:#4A5568">Hasta 0.7.0 comparaba nombres: con m Figura subclass: #Figura, el super del módulo encontraba la Figura local y recursaba hasta "stack depth exceeded". Apareció preparando esta charla (S33).</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">src/runtime/ExecutionEngine.cpp (SEND_SUPER) · docs/LANGUAGE.md §4.6–4.7 · tutorial cap. 14 · 29</p>
+<aside>La razón de resolver super por nombre: las clases definidas en módulos no son globales, y la cadena se fija al construir cada instancia. El recorrido tiene un tope de 4096 saltos. Una de las cinco correcciones de la VM (sin release todavía): super foo: self bar ejecutaba el foo: redefinido con el bar heredado; ahora SEND_SUPER es su propia instrucción y cada parte de una cascada a super es un envío a super.</aside>
+</section>
+<section id="nlr" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Retorno no local sin contextos</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">Un ^ en un bloque: tres casos y uno que sorprende</h2>
+<table style="font-size:26px;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif">
+<tr><th style="width:34%">Dónde está el home</th><th style="width:66%">Qué hace el engine</th></tr>
+<tr><td>en el mismo engine</td><td>desapila frames hasta el home, inclusive</td></tr>
+<tr style="background:#ECE8DF"><td>en un engine exterior (do:)</td><td>lanza NonLocalReturn de C++; los ensure: corren al desenrollar</td></tr>
+<tr><td>ya retornó</td><td>BlockCannotReturn, capturable</td></tr>
+<tr style="background:#FDF3E3"><td>vivo, pero en otro hilo</td><td>BlockCannotReturn también: el ^ no cruza hilos</td></tr>
+</table>
+<p style="font-size:28px;line-height:1.45;color:#4A5568">¿El home está vivo? Se pregunta a un registro thread-local de engines. Un bloque con ^ mandado a otro actor no encuentra su home aunque el método esté esperando la respuesta. ¿Debería cruzar?</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">src/runtime/ExecutionEngine.cpp (RETURN en frame de bloque) · STATUS D8 · ejercicios/06-retorno-no-local.st · 30</p>
+<aside>Lo verifica el ejercicio 6, caso 4. Decidir la semántica correcta es una buena discusión: si el ^ cruzara, el actor que corre el bloque abandonaría su mensaje en la mitad, y la garantía de un mensaje por vez se debilita. Hasta esta charla el error decía que el home ya había retornado, lo que era falso; ahora el texto nombra los dos casos (S35). La semántica queda abierta. Dentro de los métodos propios de un actor, ^ funciona normal.</aside>
+</section>
+<section id="excepciones" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Excepciones</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">Buscar el handler sin desenrollar, desenrollar con C++</h2>
+<div style="display:flex;gap:48px">
+<div style="flex:1;display:flex;flex-direction:column;gap:16px">
+<ul style="font-size:28px;line-height:1.5;color:#14213D">
+<li>on:do: es una primitiva: apila una entrada en una pila de handlers por hilo y corre el bloque en un engine anidado</li>
+<li>signal busca la entrada más nueva que coincide y corre el handler <b>encima</b> de los frames que señalaron</li>
+<li>resume: vuelve desde signal; return:, retry y caer al final desenrollan con excepciones de C++</li>
+</ul>
+</div>
+<div style="width:560px;display:flex;flex-direction:column;gap:24px">
+<div style="border-top:4px solid #B45309;padding:20px 0 0 0;display:flex;flex-direction:column;gap:8px">
+<p style="font-size:72px;font-weight:700;line-height:1;color:#B45309">17,3×</p>
+<p style="font-size:26px;line-height:1.4;color:#4A5568">lo que tarda CPython en el benchmark de latencia de excepciones: el precio del desenrollado de C++</p>
+</div>
+<div style="border-top:4px solid #2F6F9F;padding:20px 0 0 0;display:flex;flex-direction:column;gap:8px">
+<p style="font-size:30px;font-weight:600;color:#2F6F9F">El premio</p>
+<p style="font-size:26px;line-height:1.4;color:#4A5568">el depurador se detiene en el signal antes de que corra cualquier handler</p>
+</div>
+</div>
+</div>
+<p style="font-size:28px;line-height:1.4;color:#4A5568">Lo que falta: outer se comporta como pass (D7). Las excepciones de otros lenguajes llegan con su valor y no son reanudables.</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">src/primitives/exception_prims.cpp · benchmarks/reports/2026-10-20-send-path-inline-captures.md · 31</p>
+<aside>Ejercicio 7: el handler de ZeroDivide imprime antes que ifCurtailed: y ensure:, como en Pharo. Al señalar, se deshabilitan la entrada elegida y todas las internas, así una señal dentro del handler va hacia afuera. Sin handler, una excepción reanudable sigue con nil; un Error sale como UnhandledSTException, que es una ProtoException. Desde 0.7.0 el valor de una excepción de otro lenguaje se atrapa nombrando su tipo: on: geo NegativeRadius do:. on: Error do: no la atrapa; on: Exception do: atrapa todo, incluso un entero lanzado.</aside>
+</section>
+<section id="faltantes" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Lo que no hay, y por qué</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">Algunas faltas son del modelo; otras, solo trabajo pendiente</h2>
+<div style="display:flex;gap:40px">
+<div style="flex:1;background:#FFFFFF;border:1px solid #D9D4C7;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:32px;font-weight:600;color:#2F6F9F">Por el modelo</h3>
+<ul style="font-size:26px;line-height:1.5;color:#14213D">
+<li><b>become:</b> la identidad es una entrada en la tabla, y un objeto inmutable no se puede cambiar por otro</li>
+<li><b>thisContext:</b> los frames son enteros sobre slots; no hay contexto que reificar</li>
+<li><b>Process, Semaphore, fork:</b> la concurrencia son actores sobre hilos nativos</li>
+<li><b>imagen:</b> el programa es el archivo</li>
+</ul>
+</div>
+<div style="flex:1;background:#FFFFFF;border:1px solid #D9D4C7;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:32px;font-weight:600;color:#B45309">Pendiente</h3>
+<ul style="font-size:26px;line-height:1.5;color:#14213D">
+<li><b>outer</b> se comporta como pass (D7)</li>
+<li>IdentityDictionary, IdentitySet, ByteArray y #[ ]</li>
+<li>ScaledDecimal</li>
+<li>Metaclass, Behavior, True y False como clases</li>
+<li>preempción, buzones acotados y supervisión de actores</li>
+</ul>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">docs/tutorial/14-for-the-smalltalk-programmer.md §14.4 · docs/STATUS.md · docs/ROADMAP.md · 32</p>
+<aside>La línea entre las dos columnas es discutible y conviene abrirla. become: de un objeto mutable podría hacerse cambiando la entrada de la tabla (la identidad es el ref, no la instantánea); lo que es imposible es el become: de un valor. thisContext necesitaría, como mínimo, materializar frames bajo demanda: el yield cooperativo de los actores ya serializa el vector de frames a objetos (snapshotFrames), así que hay un precedente. Pedirles opinión: ¿cuál de la columna derecha les impide usarlo?</aside>
+</section>
+<section id="rendimiento" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:32px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Rendimiento en un hilo</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">Más lento que CPython en un hilo, y sin JIT</h2>
+<table style="font-size:26px;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif">
+<tr><th style="width:34%">Benchmark</th><th style="width:22%;text-align:right">Proceso completo</th><th style="width:22%;text-align:right">Solo el trabajo</th><th style="width:22%;text-align:right">Proceso, antes</th></tr>
+<tr><td>str_concat</td><td style="text-align:right">0,92×</td><td style="text-align:right">2,4×</td><td style="text-align:right">0,95×</td></tr>
+<tr style="background:#ECE8DF"><td>range_iterate</td><td style="text-align:right">1,03×</td><td style="text-align:right">2,3×</td><td style="text-align:right">2,24×</td></tr>
+<tr><td>attr_lookup</td><td style="text-align:right">1,28×</td><td style="text-align:right">2,3×</td><td style="text-align:right">4,16×</td></tr>
+<tr style="background:#ECE8DF"><td>int_sum_loop</td><td style="text-align:right">1,41×</td><td style="text-align:right">4,7×</td><td style="text-align:right">1,41×</td></tr>
+<tr><td>list_append</td><td style="text-align:right">1,51×</td><td style="text-align:right">12,3×</td><td style="text-align:right">1,66×</td></tr>
+<tr style="background:#ECE8DF"><td>fib</td><td style="text-align:right">2,15×</td><td style="text-align:right">4,9×</td><td style="text-align:right">8,91×</td></tr>
+<tr><td>exception_latency</td><td style="text-align:right">17,29×</td><td style="text-align:right">42,5×</td><td style="text-align:right">20,65×</td></tr>
+</table>
+<p style="font-size:26px;line-height:1.4;color:#4A5568">Tiempo de protoST ÷ tiempo de CPython 3.14 (más de 1: protoST más lento). Media geométrica de proceso completo: 1,92× (antes 3,25×). Arranque: 25 ms frente a 31 ms. No hay columna de Pharo, Cuis ni VAST: no lo medimos.</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">benchmarks/reports/2026-10-20-send-path-inline-captures.md · Ryzen 5 5500U, medianas de 3 rondas · 33</p>
+<aside>Decirlo sin maquillar: con N chicos el arranque pesa mucho en el proceso completo, por eso la columna "solo el trabajo" es la que importa para comparar el intérprete. "Antes" es 0.6.6 sobre protoCore 2.14.7. La propuesta no es velocidad en un hilo: es que el mismo código use varios núcleos sin locks. Invitarlos a traer el número de Cuis o VAST en sus máquinas con los mismos programas (benchmarks/comparable/): sería el primer punto de comparación con una VM de Smalltalk.</aside>
+</section>
+<section id="debate2" data-transition="fade" style="background:#14213D;color:#F7F5F0;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;justify-content:center;gap:48px">
+<p style="font-size:28px;letter-spacing:3px;text-transform:uppercase;color:#F2B45A;font-weight:600">Para discutir · la VM</p>
+<ol style="font-size:44px;line-height:1.4;color:#F7F5F0">
+<li>¿Qué mínimo de thisContext necesita un depurador Smalltalk de verdad? ¿Alcanza con materializar frames bajo demanda?</li>
+<li>¿Dónde pondrían un inline cache si cada escritura publica una instantánea nueva?</li>
+<li>¿Desenrollar con excepciones de C++, o un mecanismo propio?</li>
+<li>Sin imagen, ¿qué parte del entorno vivo se puede recuperar?</li>
+</ol>
+<aside>Para la 1: el yield de los actores ya serializa el vector de frames a objetos (snapshotFrames); es un precedente concreto. Para la 2: la caché de protoCore se invalida sola porque está indexada por instantánea; un inline cache en el sitio de envío podría guardar la instantánea de la clase como guarda. Para la 4: el REPL, el depurador DAP y la recarga de un archivo (que reusa la clase si coincide la superclase) son los pedazos que existen hoy.</aside>
+</section>
+<section id="p3" data-section="Otros lenguajes y actores" data-transition="fade" style="background:#14213D;color:#F7F5F0;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px;display:flex;flex-direction:column;justify-content:center;gap:32px">
+<p style="font-size:28px;letter-spacing:3px;text-transform:uppercase;color:#F2B45A;font-weight:600">Parte II · continuación</p>
+<h2 style="font-size:104px;font-weight:700;line-height:1.05;color:#F7F5F0">Otros lenguajes y actores</h2>
+<p style="font-size:36px;line-height:1.4;color:#C9D6E8;width:1400px">Un objeto, dos lenguajes, ninguna copia · qué funciona hoy · actores, futures y la espera cooperativa · tres herramientas de concurrencia · cuánto escala</p>
+<aside>Las dos razones por las que protoST existe: compartir objetos con otros lenguajes en el mismo proceso, y usar varios núcleos sin locks. Las dos tienen un "todavía no" honesto.</aside>
+</section>
+<section id="interop" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Interoperación</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">Dos lenguajes ven la misma celda: no hay copia ni serialización</h2>
+<div style="display:flex;gap:24px;align-items:stretch">
+<div style="flex:1;background:#FFFFFF;border:2px solid #2F6F9F;border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:10px">
+<h3 style="font-size:30px;font-weight:600;color:#2F6F9F">Scala → Smalltalk</h3>
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:22px;line-height:1.45;color:#14213D">import st.bank.Account<br>val a = Account.`new`()<br>a.transfer_to(30, b)</p>
+<p style="font-size:24px;line-height:1.35;color:#4A5568">llega como transfer:to: por __st_send__: un envío real, con doesNotUnderstand: y primitivas</p>
+</div>
+<div style="flex:1;background:#FFFFFF;border:2px solid #B45309;border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:10px">
+<h3 style="font-size:30px;font-weight:600;color:#B45309">Smalltalk → otro lenguaje</h3>
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:22px;line-height:1.45;color:#14213D">aFunction apply(balance)<br>geo circleArea(2)</p>
+<p style="font-size:24px;line-height:1.35;color:#4A5568">envío call-form: nombre llano y argumentos posicionales y con nombre, como los métodos de protoCore</p>
+</div>
+<div style="flex:1;background:#FFFFFF;border:2px solid #14213D;border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:10px">
+<h3 style="font-size:30px;font-weight:600;color:#14213D">Excepciones</h3>
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:22px;line-height:1.45;color:#14213D">[ geo circleArea(-1) ]<br>&#160;&#160;on: geo NegativeRadius<br>&#160;&#160;do: [:e | ... ]</p>
+<p style="font-size:24px;line-height:1.35;color:#4A5568">una sola ProtoException; el handler elige por la cadena de prototipos del valor</p>
+</div>
+</div>
+<p style="font-size:28px;line-height:1.4;color:#4A5568">Enteros, Floats, strings, booleanos y nil son los mismos bits en todos los lenguajes. Las colecciones no: cada runtime tiene su envoltorio, y se usa el protocolo del otro o se copia explícitamente.</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">docs/INTEROP.md §3 y §4.3 · src/modules/STForeignSend.h · protoScala: tests/conformance/tutorial/15-modules-calling-smalltalk.scala · 36</p>
+<aside>El test de protoScala que prueba que no hay copia compara la dirección y el getHash del mismo objeto en los dos lados. __st_send__ es un método de protoCore que STRuntime instala en Object: self es el receptor, el primer argumento posicional el selector, el resto los argumentos. Restricciones: sin argumentos con nombre, no llega a métodos call-form de protoST, y no se le puede mandar a un actor. Desde el 24/10, protoST puede correr como invitado en el ProtoSpace de otro runtime, que es el modelo recomendado por protoCore 3.1: un espacio por proceso.</aside>
+</section>
+<section id="interopestado" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Qué funciona hoy</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">Funciona dentro de un host de prueba; los binarios instalados todavía no se cargan entre sí</h2>
+<table style="font-size:25px;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif">
+<tr><th style="width:22%">Con</th><th style="width:40%">Estado</th><th style="width:38%">Dónde verlo</th></tr>
+<tr><td>protoScala</td><td>los dos sentidos, clausuras y excepciones, en un mismo ProtoSpace</td><td>protoScala: tests/unit/protost_interop.cpp</td></tr>
+<tr style="background:#ECE8DF"><td>Módulo C++</td><td>call-form y sus tipos de error, con un host que registra el proveedor</td><td>tests/umd/, protost_umd_host</td></tr>
+<tr><td>protoJS, protoPython</td><td>sin proveedor alcanzable ni tests</td><td>—</td></tr>
+<tr style="background:#ECE8DF"><td>ProtoClojure</td><td>"todavía no", dicho en su README</td><td>ProtoClojure/README.md</td></tr>
+<tr><td>protost instalado</td><td>solo provider:st; Import from: 'x.scala' da module not found</td><td>probado con 0.7.0</td></tr>
+</table>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">docs/INTEROP.md (§0 es del 29/9 y está desactualizado; §4.0 y §4.3 están al día) · 37</p>
+<aside>Decirlo antes de que pregunten: la interoperación existe y está probada, pero hoy no se puede usar desde los binarios instalados. Lo que falta es un cargador de proveedores en el CLI (o un host común), no un cambio de modelo. D2 / K1: un solo STRuntime por proceso.</aside>
+</section>
+<section id="actores" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Actores</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">Cualquier objeto se vuelve actor con asActor</h2>
+<div style="display:flex;align-items:center;gap:20px">
+<div style="flex:1;background:#FFFFFF;border:2px solid #14213D;border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:8px">
+<h3 style="font-size:30px;font-weight:600;color:#14213D">Proxy</h3>
+<p style="font-size:24px;line-height:1.35;color:#4A5568">identidad, =, hash, isNil, isActor e impresión se contestan ya; lo demás, un Future</p>
+</div>
+<x-shape kind="arrow-right" style="width:64px;height:32px;background:#B45309"></x-shape>
+<div style="flex:1;background:#FFFFFF;border:2px solid #14213D;border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:8px">
+<h3 style="font-size:30px;font-weight:600;color:#14213D">Buzón MPSC</h3>
+<p style="font-size:24px;line-height:1.35;color:#4A5568">sobres inmutables {selector, args, future}; argumentos por referencia</p>
+</div>
+<x-shape kind="arrow-right" style="width:64px;height:32px;background:#B45309"></x-shape>
+<div style="flex:1;background:#FFFFFF;border:2px solid #14213D;border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:8px">
+<h3 style="font-size:30px;font-weight:600;color:#14213D">Pool de workers</h3>
+<p style="font-size:24px;line-height:1.35;color:#4A5568">ProtoThreads: uno por núcleo, hasta 8; crece hasta 256 mientras hay E/S</p>
+</div>
+</div>
+<div style="display:flex;gap:40px">
+<p style="flex:1;font-size:28px;line-height:1.4;color:#4A5568"><b>Un mensaje por vez.</b> Adentro, self es el objeto común: el estado son variables de instancia sin locks. Tres bandas de prioridad.</p>
+<p style="flex:1;font-size:28px;line-height:1.4;color:#4A5568"><b>El lock es del proxy, no del objeto.</b> Dos proxies sobre el mismo objeto, o una referencia anterior a asActor, se saltean el buzón.</p>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">docs/LANGUAGE.md §10 · src/runtime/STRuntime.cpp (pool) · src/runtime/ExecutionEngine.cpp · 38</p>
+<aside>El modelo se parece a Erlang o Akka, con una vuelta: el actor es un proxy transparente sobre un objeto común, que no necesita estar escrito como actor. Erlang llega a la concurrencia segura sin compartir y copiando mensajes; acá se comparte todo sin copiar porque lo compartido es inmutable, y lo que es mutable tiene instantáneas consistentes. No hay preempción por reducciones: un handler que calcula sin parar se queda con su worker hasta terminar (ROADMAP, track 12).</aside>
+</section>
+<section id="wait" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Esperar un Future</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">wait tiene tres caminos según quién espera</h2>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:28px">
+<div style="background:#FFFFFF;border:1px solid #D9D4C7;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:32px;font-weight:600;color:#14213D">Hilo principal</h3>
+<p style="font-size:26px;line-height:1.4;color:#4A5568">El script o el REPL bloquean el hilo del sistema en un semáforo por future, sin girar. Son clientes síncronos del mundo de actores.</p>
+</div>
+<div style="background:#FFFFFF;border:2px solid #2F6F9F;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:32px;font-weight:600;color:#2F6F9F">Actor, desde bytecode</h3>
+<p style="font-size:26px;line-height:1.4;color:#4A5568">El engine guarda su vector de frames como objetos (pc, pila, locales, capturadas) y libera el worker. Al resolverse, el actor sigue en cualquier worker.</p>
+</div>
+<div style="background:#FFFFFF;border:1px solid #D9D4C7;border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:32px;font-weight:600;color:#14213D">Actor, bajo una primitiva</h3>
+<p style="font-size:26px;line-height:1.4;color:#4A5568">Dentro de do: o ensure: hay frames de C++ que no se pueden guardar: el worker ayuda, corriendo mensajes de otros actores mientras espera (hasta 16 niveles).</p>
+</div>
+</div>
+<p style="font-size:28px;line-height:1.4;color:#4A5568">El segundo camino es una continuación de un disparo: mil actores esperando corren sobre dos hilos (benchmarks/actors/cooperative_yield.st con PROTOST_WORKERS=2).</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">src/primitives/future_prims.cpp (prim_Future_wait) · src/runtime/FutureYield.h · ExecutionEngine.h (snapshotFrames) · 39</p>
+<aside>Para la discusión de thisContext: acá ya hay una reificación de frames, aunque solo del engine exterior y solo para suspender. thenDo: y catch: corren el callback en el hilo que resuelve el future, en general el worker del actor que respondió, concurrente con quien lo registró; por eso Future whenAll: está escrito en Smalltalk con Atoms.</aside>
+</section>
+<section id="deadlock" data-transition="fade" style="background:#14213D;color:#F7F5F0;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#F2B45A;font-weight:600">Ejercicio 8</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#F7F5F0">Un actor que espera no atiende a nadie</h2>
+<div style="display:flex;gap:48px">
+<div style="flex:1;display:flex;flex-direction:column;gap:12px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;line-height:1.5;color:#E8EEF7">Par >> ping&#160;&#160;^ otro pong wait<br>Par >> pong&#160;&#160;^ otro valor wait<br><br>a ping wait</p>
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;line-height:1.5;color:#F2B45A">deadlock: this actor waits for a reply<br>that can only come from an actor<br>waiting on it …</p>
+</div>
+<ul style="width:720px;font-size:28px;line-height:1.5;color:#E8EEF7">
+<li>antes de estacionarse, wait sigue la cadena future → actor → lo que ese actor espera, hasta 256 pasos</li>
+<li>si vuelve a sí mismo: Error capturable, no un cuelgue</li>
+<li>una barrera seq_cst asegura que de dos actores que cierran el ciclo a la vez, al menos uno lo vea</li>
+<li>un ciclo que pasa por un Future new resuelto a mano no se detecta</li>
+</ul>
+</div>
+<p style="font-size:28px;line-height:1.4;color:#C9D6E8">Es el precio del estado sin locks (D37). Adentro de actores: thenDo:, whenAll:, whenAny:.</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#C9D6E8">src/primitives/future_prims.cpp (detectWaitCycle) · docs/STATUS.md D37 · ejercicios/08-actores.st · 40</p>
+<aside>Otros dos casos del ejercicio 8 dan para discutir. Un actor que devuelve el Future de otro actor no se aplana: wait da otro Future (JavaScript aplana las promesas). Y un error dentro del actor rechaza el future y llega con su clase a quien espera, pero no hay rollback: la resta hecha antes del error queda.</aside>
+</section>
+<section id="herramientas" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Concurrencia</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">Tres herramientas en lugar de Process y Semaphore</h2>
+<table style="font-size:27px;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif">
+<tr><th style="width:20%">Herramienta</th><th style="width:40%">Para qué</th><th style="width:40%">Cómo</th></tr>
+<tr><td>Valor inmutable</td><td>compartir sin coordinar</td><td>se pasa el puntero; no puede cambiar</td></tr>
+<tr style="background:#ECE8DF"><td>Actor</td><td>serializar lógica arbitraria sobre un estado</td><td>asActor; un mensaje por vez</td></tr>
+<tr><td>Atom</td><td>una celda que muchos actualizan sin cuello de botella</td><td>value:ifCurrent: (CAS) y swap: con reintento</td></tr>
+</table>
+<div style="display:flex;gap:40px">
+<div style="flex:1;background:#14213D;border-radius:16px;padding:32px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;line-height:1.5;color:#F7F5F0">total := Atom on: 0.<br>total swap: [:v | v + 1].</p>
+</div>
+<p style="flex:1;font-size:28px;line-height:1.4;color:#4A5568">El CAS compara identidad de instantáneas inmutables: sin ABA. El bloque de swap: tiene que ser puro, porque puede correr más de una vez.</p>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">docs/LANGUAGE.md §10.6–10.8 · examples/actors/05_atom_optimistic_concurrency.st · 41</p>
+<aside>Ejercicio 2 compara las tres sobre el mismo contador. Hay una cuarta, de bajo nivel: setInstVar:from:to:, un CAS sobre una variable de instancia. La pregunta para la sala: con estas tres herramientas, ¿qué programa concurrente de los que escriben hoy con Semaphore no pueden expresar?</aside>
+</section>
+<section id="escala" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Ejercicio 10 · cuánto escala</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">El mismo cálculo en 12 actores: 4,2× con 8 workers</h2>
+<div style="display:flex;gap:64px;align-items:end">
+<div style="flex:1;display:flex;gap:40px;align-items:end;height:460px;border-bottom:2px solid #14213D">
+<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:8px"><p style="font-size:30px;font-weight:600;color:#14213D">0,9×</p><div style="width:120px;height:81px;background:#7AA9CC"></div></div>
+<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:8px"><p style="font-size:30px;font-weight:600;color:#14213D">1,9×</p><div style="width:120px;height:171px;background:#5592BF"></div></div>
+<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:8px"><p style="font-size:30px;font-weight:600;color:#14213D">2,9×</p><div style="width:120px;height:261px;background:#3E82B5"></div></div>
+<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:8px"><p style="font-size:30px;font-weight:600;color:#14213D">4,2×</p><div style="width:120px;height:378px;background:#2F6F9F"></div></div>
+</div>
+<div style="width:560px;display:flex;flex-direction:column;gap:20px">
+<p style="font-size:26px;line-height:1.4;color:#4A5568">Primos hasta 120 000, un hilo contra 12 actores, con 1, 2, 4 y 8 workers (PROTOST_WORKERS).</p>
+<p style="font-size:26px;line-height:1.4;color:#4A5568">Sin lock global, el techo viene de otro lado: cada escritura publica una instantánea, el GC tiene un solo marcador y el pool no pasa de 8.</p>
+<p style="font-size:26px;line-height:1.4;color:#4A5568">Si el cálculo asigna (ejercicio 4), cuatro actores rinden 1,8×.</p>
+</div>
+</div>
+<div style="display:flex;gap:40px;width:1040px">
+<p style="flex:1;font-size:24px;color:#4A5568;text-align:center">1 worker</p>
+<p style="flex:1;font-size:24px;color:#4A5568;text-align:center">2</p>
+<p style="flex:1;font-size:24px;color:#4A5568;text-align:center">4</p>
+<p style="flex:1;font-size:24px;color:#4A5568;text-align:center">8</p>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#5B6576">Medido el 29/10 con protoST 0.7.0 en Windows 11, Intel Core Ultra 7 155U (12 núcleos híbridos), una corrida por punto · 42</p>
+<aside>Una corrida por punto en una notebook con núcleos híbridos (dos de rendimiento, el resto de eficiencia): es un orden de magnitud, no una curva. En la Ryzen de los informes, saturation_big llegó a 3,53× con 5 workers y bajó con 6 (informe del 20/10). Para comparar: una VM con green threads o con un lock global no pasa de 1×. Pedirles que corran el ejercicio en sus máquinas y comparen.</aside>
+</section>
+<section id="debate3" data-transition="fade" style="background:#14213D;color:#F7F5F0;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;justify-content:center;gap:48px">
+<p style="font-size:28px;letter-spacing:3px;text-transform:uppercase;color:#F2B45A;font-weight:600">Para discutir · actores y otros lenguajes</p>
+<ol style="font-size:44px;line-height:1.4;color:#F7F5F0">
+<li>¿Alcanzan los actores como proxies, o Smalltalk necesita Process?</li>
+<li>¿Debería un ^ cruzar actores? ¿Debería aplanarse un Future de un Future?</li>
+<li>¿Qué gana y qué pierde Smalltalk al compartir objetos sin copia con Python o JavaScript?</li>
+<li>¿Qué programa suyo les gustaría ver corriendo en ocho núcleos?</li>
+</ol>
+<aside>La 4 es la más importante: un programa real de ellos vale más que cualquier benchmark. Para la 1: con Process, el estado compartido vuelve a necesitar locks; con actores, el precio es D37 (un actor que espera no atiende). Para la 2: los dos son decisiones abiertas, no bugs; el texto del error del ^ ya dice la verdad.</aside>
+</section>
+<section id="lab2" data-section="Laboratorio 2, lo que no sé y dónde meterse" data-transition="fade" style="background:#B45309;color:#F7F5F0;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<p style="font-size:28px;letter-spacing:3px;text-transform:uppercase;color:#F7F5F0;font-weight:600">Laboratorio 2 · 35 minutos</p>
+<h2 style="font-size:72px;font-weight:700;line-height:1.1;color:#F7F5F0">La VM, los actores y los módulos</h2>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:24px">
+<div style="background:#F7F5F0;border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:8px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;color:#B45309">05-bytecode.st</p>
+<p style="font-size:26px;line-height:1.35;color:#14213D">capturas, inlining, IVAR_GROUP con --disasm</p>
+</div>
+<div style="background:#F7F5F0;border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:8px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;color:#B45309">06-retorno-no-local.st</p>
+<p style="font-size:26px;line-height:1.35;color:#14213D">^ por do:, home muerto, ensure:, otro actor</p>
+</div>
+<div style="background:#F7F5F0;border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:8px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;color:#B45309">07-excepciones.st</p>
+<p style="font-size:26px;line-height:1.35;color:#14213D">resume:, retry, ifCurtailed:, outer</p>
+</div>
+<div style="background:#F7F5F0;border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:8px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;color:#B45309">08-actores.st</p>
+<p style="font-size:26px;line-height:1.35;color:#14213D">proxy, deadlock, thenDo:, futures anidados, errores</p>
+</div>
+<div style="background:#F7F5F0;border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:8px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;color:#B45309">09-modulos.st</p>
+<p style="font-size:26px;line-height:1.35;color:#14213D">Import from:, caché, privadas; lectura guiada de interop</p>
+</div>
+<div style="background:#F7F5F0;border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:8px">
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:24px;color:#B45309">10-escalar.st</p>
+<p style="font-size:26px;line-height:1.35;color:#14213D">PROTOST_WORKERS = 1, 2, 4, 8</p>
+</div>
+</div>
+<p style="font-size:30px;line-height:1.4;color:#FDE7C8">Si terminan: las líneas abiertas de la guía (outer, el ^ entre actores, un inline cache, futures anidados).</p>
+<aside>Si falta tiempo, priorizar 5, 8 y 10. El 9 incluye una lectura guiada del código de interoperación con protoScala, porque desde los binarios instalados no se puede correr.</aside>
+</section>
+<section id="nose" data-transition="fade" style="background:#F7F5F0;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#B45309;font-weight:600">Lo que no sé</p>
+<h2 style="font-size:60px;font-weight:600;line-height:1.1;color:#14213D">No sé hasta dónde puede llegar esto</h2>
+<ul style="font-size:32px;line-height:1.55;color:#14213D">
+<li>si escala más allá de ocho núcleos, en máquinas grandes</li>
+<li>cómo se compara con Cuis o VAST en un hilo: nunca lo medimos</li>
+<li>si el costo de memoria (64 bytes por elemento, sin compactar) aguanta programas reales</li>
+<li>cuáles de las faltas son esenciales al modelo y cuáles son trabajo pendiente</li>
+<li>qué pasa con programas grandes, escritos por gente que no lo diseñó</li>
+</ul>
+<p style="font-size:30px;line-height:1.4;color:#4A5568">Cada una de estas es una investigación, y ninguna la puedo hacer bien solo.</p>
+<aside>Esta slide es la tesis honesta de la charla: no se sabe el alcance. Lo que sí se sabe es que el modelo es coherente, que hay mediciones reproducibles y que los bugs que aparecen se pueden arreglar con un test. Pasar directo a la siguiente: dónde podrían meterse.</aside>
+</section>
+<section id="cierre" data-transition="fade" style="background:#14213D;color:#F7F5F0;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#F2B45A;font-weight:600">Dónde podrían meterse</p>
+<h2 style="font-size:60px;font-weight:700;line-height:1.1;color:#F7F5F0">Líneas abiertas, cada una con un punto de partida</h2>
+<table style="font-size:26px;color:#F7F5F0;font-family:'IBM Plex Sans', Arial, sans-serif">
+<tr><th style="width:30%">Línea</th><th style="width:70%">Por dónde empezar</th></tr>
+<tr><td>Contextos y depuración</td><td>materializar frames bajo demanda; snapshotFrames de los actores como precedente</td></tr>
+<tr style="background:#1D2B4A"><td>Envío más rápido</td><td>inline caches guardados por instantánea; benchmarks/compare_builds.py para medir</td></tr>
+<tr><td>GC</td><td>generación vieja sin barrera; percentiles de pausa con PROTOCORE_HEAP_TRACE</td></tr>
+<tr style="background:#1D2B4A"><td>Semántica</td><td>outer, become: de identidades mutables, futures anidados</td></tr>
+<tr><td>Comparación</td><td>los mismos benchmarks en Cuis y VAST, en sus máquinas</td></tr>
+<tr style="background:#1D2B4A"><td>Programas reales</td><td>uno suyo, en ocho núcleos, y un issue con lo que sorprenda</td></tr>
+</table>
+<p style="font-family:'JetBrains Mono', 'Courier New', monospace;font-size:28px;color:#C9D6E8">github.com/gamarino/protoST · MIT · la guía de trabajo está en el repositorio</p>
+<aside>Cerrar con el método como invitación: cuatro bugs reales salieron de escribir los ejercicios de esta charla (el call-form que cruzaba la línea en blanco, super resuelto por nombre con clases homónimas, el rango de SmallInteger y el mensaje del ^ entre actores); los cuatro están arreglados, cada uno con su test. Así se trabaja acá: se mide, se escribe el test, se arregla. Pedir a cada uno que elija una línea, o que traiga un programa propio.</aside>
+</section>
+</body>
+</html>
