@@ -573,24 +573,18 @@ const proto::ProtoObject* addBehaviorToClass(STRuntime& rt,
     TransientPin pinNew(ctx, newCls);
 
     // Copy every OWN attribute of the old class onto the rebuilt class — its
-    // methods, `__class_name__`, class-side markers. getOwnAttributes does NOT
-    // walk the parent chain, so only the class's own behaviour is copied; the
-    // inherited behaviour comes from the shape's parent chain.
-    const proto::ProtoSparseList* own = oldCls->getOwnAttributes(ctx);
-    if (own) {
-        auto* it = const_cast<proto::ProtoSparseListIterator*>(
-            own->getIterator(ctx));
-        while (it && it->hasNext(ctx)) {
-            proto::proto_ulong key = it->nextKey(ctx);
-            const proto::ProtoObject* val = it->nextValue(ctx);
-            // The own-attribute key is an interned-symbol ProtoString whose
-            // pointer is stored as the sparse-list index.
-            auto* sym = reinterpret_cast<const proto::ProtoObject*>(key)
-                            ->asString(ctx);
-            if (sym) newCls->setAttribute(ctx, sym, val);
-            it = const_cast<proto::ProtoSparseListIterator*>(it->advance(ctx));
-        }
-    }
+    // methods, `__class_name__`, class-side markers. processOwnAttributes does
+    // NOT walk the parent chain, so only the class's own behaviour is copied;
+    // the inherited behaviour comes from the shape's parent chain. The name it
+    // reports is the canonical symbol the attribute was set with, and newCls
+    // is pinned above, so the allocations setAttribute makes in the callback
+    // cannot orphan it.
+    oldCls->processOwnAttributes(ctx, const_cast<proto::ProtoObject*>(newCls),
+        [](proto::ProtoContext* c, void* self, const proto::ProtoString* name,
+           const proto::ProtoObject* val) {
+            if (name)
+                static_cast<const proto::ProtoObject*>(self)->setAttribute(c, name, val);
+        });
 
     // Rebind the class's global name to the rebuilt object so subsequent
     // `ClassName` PUSH_GLOBALs and `ClassName >> sel` installs see it.
