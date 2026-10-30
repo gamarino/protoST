@@ -9,7 +9,7 @@
 # NOTHING BELOW LAUNDERS A DEFECT.  A real bug is left UNCOVERED on purpose, so
 # the check keeps failing until it is fixed; only legitimate sites are justified.
 
-external_finalizer src/runtime/STRuntime.cpp:821 c08d9fc937cb :: Legitimate. The wrapper carries `this` -- the STRuntime itself -- into a worker thread's argument list. STRuntime is a C++ object with its own lifetime, owned by whoever constructed it and outliving every worker (the destructor joins the pool before returning), so protoCore must NOT free it. A null finalizer is the correct answer: the alternative would be a double free. Checklist C7. Reviewed 2026-09-25, agent, pending maintainer review.
+external_finalizer src/runtime/STRuntime.cpp:827 c08d9fc937cb :: Legitimate. The wrapper carries `this` -- the STRuntime itself -- into a worker thread's argument list. STRuntime is a C++ object with its own lifetime, owned by whoever constructed it and outliving every worker (the destructor joins the pool before returning), so protoCore must NOT free it. A null finalizer is the correct answer: the alternative would be a double free. Checklist C7. Reviewed 2026-09-25, agent, pending maintainer review.
 external_finalizer src/dap/DapServer.cpp:589 bcdcd097ab21 :: Legitimate, same shape as the STRuntime.cpp entry: the wrapper carries `this` (the DapServer) into the debuggee thread's arguments. The DapServer owns itself and joins the debuggee in its own teardown, so protoCore must not free it. Checklist C7. Reviewed 2026-09-25, agent, pending maintainer review.
 # KNOWN GAP, recorded rather than papered over: src/runtime/ExecutionEngine.cpp
 # around line 2452 is a THIRD fromExternalPointer with a null finalizer, and the
@@ -20,5 +20,5 @@ external_finalizer src/dap/DapServer.cpp:589 bcdcd097ab21 :: Legitimate, same sh
 # the compiler's module vector, which protoST's own tests are careful to outlive
 # the runtime -- but it is unchecked, not checked-and-cleared.
 symbol_key_source src/primitives/exception_prims.cpp:643 2b2704d1e79c :: False positive. The name argument is msgTextKey(ctx), an interned symbol (createSymbol); the string built on this line, fromUTF8String(text), is the attribute's VALUE, the exception's message text. Reviewed 2026-09-30.
-attr_sentinel src/primitives/object_prims.cpp:1182 2bf495b8a509 :: False positive. `!` negates m->isInteger(ctx), not m; the line before returns unless isMethodValue(m), which rejects nullptr and PROTO_NONE, so m is a method here. Reviewed 2026-09-30.
+attr_sentinel src/primitives/object_prims.cpp:1211 2bf495b8a509 :: False positive. `!` negates m->isInteger(ctx), not m; the line before returns unless isMethodValue(m), which rejects nullptr and PROTO_NONE, so m is a method here. Reviewed 2026-09-30.
 symbol_key_source src/primitives/exception_prims.cpp:802 cc7eaf0e2b83 :: False positive, same shape as exception_prims.cpp:643: the name argument is msgTextKey(ctx), an interned symbol; `text`, built by fromUTF8String two lines above, is the attribute's VALUE, the exception's message text. Reviewed 2026-10-22, agent, pending maintainer review.
