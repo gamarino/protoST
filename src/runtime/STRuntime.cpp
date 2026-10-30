@@ -170,17 +170,23 @@ void bindPrimitive(STRuntime& rt, const proto::ProtoObject* proto, const char* s
     const_cast<proto::ProtoObject*>(proto)->setAttribute(ctx, sel, val);
 }
 
-// F6 v3 E2b: derive a unique ProtoString attribute key from an object
-// pointer. The live registry (a mutable ProtoObject) stores each anchored
-// object under such a key so the entry can later be removed by pointer
-// identity. Pointer identity is stable for a live object — exactly what is
-// needed since the object is kept alive precisely while the entry exists.
+// F6 v3 E2b: derive a unique attribute key from an object pointer. The live
+// registry (a mutable ProtoObject) stores each anchored object under such a
+// key so the entry can later be removed by pointer identity. Pointer identity
+// is stable for a live object — exactly what is needed since the object is
+// kept alive precisely while the entry exists.
+//
+// The key is an interned symbol.  setAttribute / removeAttribute intern a
+// heap-string name on every call anyway (protoCore keys attributes by
+// symbol), so building a heap string first only added an allocation and the
+// interning slow path (protoCore's nonInternedNameCounts counted ~97k such
+// calls in the test suite).  A symbol is perennial: it needs no GC pin.
 const proto::ProtoString*
 ptrRegistryKey(proto::ProtoContext* ctx, const proto::ProtoObject* o) {
     char buf[32];
     std::snprintf(buf, sizeof(buf), "p%llx",
                   static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(o)));
-    return ctx->fromUTF8String(buf)->asString(ctx);
+    return proto::ProtoString::createSymbol(ctx, buf);
 }
 
 // ---------------------------------------------------------------------------
@@ -1317,13 +1323,11 @@ void STRuntime::registryAdd(proto::ProtoContext* ctx, const proto::ProtoObject* 
     // No lock: setAttribute on a mutable object is internally atomic
     // (protoCore's per-attribute shard CAS), so concurrent registryAdd /
     // registryRemove / enqueueReady calls on liveRegistry never corrupt it.
-    // F6 v3 E5: ptrRegistryKey allocates a fresh ProtoString; holding it in a
-    // C++ temporary across setAttribute (which allocates a sparse-list node on
-    // the mutable liveRegistry) is a transient-across-allocation gap. Pin the
-    // key. `o` is the object being anchored — it is the caller's already-live
-    // value and gets permanently rooted by the setAttribute itself.
+    // The key is a perennial symbol (ptrRegistryKey), so holding it across
+    // setAttribute's allocation needs no pin. `o` is the object being
+    // anchored — it is the caller's already-live value and gets permanently
+    // rooted by the setAttribute itself.
     auto* key = ptrRegistryKey(ctx, o);
-    TransientPin pinKey(ctx, reinterpret_cast<const proto::ProtoObject*>(key));
     const_cast<proto::ProtoObject*>(impl_->liveRegistry)
         ->setAttribute(ctx, key, o);
 }
@@ -1334,11 +1338,9 @@ void STRuntime::registryAdd(proto::ProtoContext* ctx, const proto::ProtoObject* 
 void STRuntime::registryRemove(proto::ProtoContext* ctx, const proto::ProtoObject* o) {
     if (!o || o == PROTO_NONE || !impl_->liveRegistry) return;
     // No lock — see registryAdd (per-attribute CAS makes this atomic).
-    // F6 v3 E5: same transient-key gap as registryAdd — removeAttribute on a
-    // mutable object also allocates (a new sparse-list node for the smaller
-    // tree). Pin the key across the call.
+    // removeAttribute allocates too (a new sparse-list node for the smaller
+    // tree); the key is a perennial symbol, so it needs no pin.
     auto* key = ptrRegistryKey(ctx, o);
-    TransientPin pinKey(ctx, reinterpret_cast<const proto::ProtoObject*>(key));
     const_cast<proto::ProtoObject*>(impl_->liveRegistry)
         ->removeAttribute(ctx, key);
 }
