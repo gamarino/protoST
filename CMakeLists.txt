@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(protoST VERSION 0.7.0 LANGUAGES CXX)
+project(protoST VERSION 0.8.0 LANGUAGES CXX)
 
 # The one place the version is written: every binary and library reads it
 # through PROTOST_VERSION (include/protoST/STRuntime.h).
@@ -86,10 +86,12 @@ endif()
 # protoCore's major version and its soname move together.
 # 3.0.0: methods receive their arguments as ProtoArguments /
 # ProtoKeywordArguments descriptors (protoCore docs/CALLING_CONVENTION.md).
-set(PROTOCORE_MIN_VERSION      "3.0.0")
-set(PROTOCORE_MIN_VERSION_FULL "3.0.0")
+# 3.4.0: SOVERSION 5, ProtoContext::pendingRoot removed (ProtoContext's layout
+# changed; protoST needs a rebuild, no source change).
+set(PROTOCORE_MIN_VERSION      "3.4.0")
+set(PROTOCORE_MIN_VERSION_FULL "3.4.0")
 set(PROTOCORE_NEXT_MAJOR       "4.0.0")
-set(PROTOCORE_ABI_SOVERSION    "4")
+set(PROTOCORE_ABI_SOVERSION    "5")
 option(PROTOCORE_REQUIRE_PACKAGE
     "Require an installed protoCore CMake package; never fall back to ../protoCore" OFF)
 

@@ -230,9 +230,9 @@ several cores without locks.
 
 ## Status
 
-Version 0.7.0 (2026-10-22); built from source or as a `.deb` it requires
-protoCore 3.0.0 or newer, and CI builds it against protoCore 3.0.0 (tag
-`v3.0.0`). On 0.6.6 (2026-10-17), `ctest` ran 1105 cases on Linux, all passing: 544
+Version 0.8.0 (2026-10-31); built from source or as a `.deb` it requires
+protoCore 3.4.0 or newer (SOVERSION 5), and CI builds it against protoCore
+3.4.0 (tag `v3.4.0`). On 0.6.6 (2026-10-17), `ctest` ran 1105 cases on Linux, all passing: 544
 conformance programs, 462 unit tests, 44 examples, 33 CLI tests (including
 the benchmark-harness self-test) and 22 documentation checks (every example
 with a stated result in 21 documents, plus the checker's self-test). Since 0.6.2 protoST lets protoCore's adaptive heap
@@ -248,11 +248,13 @@ known deviations from Smalltalk-80 and the open bugs are tracked in
 
 ## Getting started
 
-protoST depends on [protoCore](https://github.com/numaes/protoCore) 3.0.0 or
+protoST depends on [protoCore](https://github.com/numaes/protoCore) 3.4.0 or
 newer (below 4.0), which must be built first, on
-[protoIO](https://github.com/gamarino/protoIO) 0.2.2 or a later 0.2.x at build time (a sibling
+[protoIO](https://github.com/gamarino/protoIO) 0.2.3 or a later 0.2.x at build time (a sibling
 checkout `../protoIO`, or its `protoio-dev` package; it is linked statically),
-and on OpenSSL (`libssl-dev`) and libreadline. 3.0.0 is a hard floor (a
+and on OpenSSL (`libssl-dev`) and libreadline. 3.4.0 is a hard floor (it
+changed `ProtoContext`'s layout, SOVERSION 5, so an older `libprotoCore` does
+not load); 3.0.0 was one before it (a
 thread's method receives its arguments as `ProtoArguments`); 2.11.0 already was
 one before it: runs of
 instance-variable assignments are published as one version with
@@ -303,8 +305,8 @@ commands, and what differs on Windows, are in
 
 ## Installation
 
-protoST can be packaged with CPack. The 0.7.0 release has a Linux `.deb`
-attached to its GitHub release (below, with protoCore 3.0.0); other packages
+protoST can be packaged with CPack. The 0.8.0 release has a Linux `.deb`
+attached to its GitHub release (below, with protoCore 3.4.0); other packages
 are built from source as shown below. Every package depends on
 [protoCore](https://github.com/numaes/protoCore) — install protoCore's package
 first (it provides `libprotoCore`).
@@ -330,14 +332,14 @@ the GitHub releases (or built as below):
 ```bash
 wsl --install -d Ubuntu-24.04        # in PowerShell, once
 # then, in the Ubuntu shell:
-wget https://github.com/numaes/protoCore/releases/download/v3.0.0/protoCore-3.0.0-Linux.deb
-wget https://github.com/gamarino/protoST/releases/download/v0.7.0/protost-0.7.0-Linux.deb
-sudo apt install ./protoCore-3.0.0-Linux.deb ./protost-0.7.0-Linux.deb
+wget https://github.com/numaes/protoCore/releases/download/v3.4.0/protoCore-3.4.0-Linux.deb
+wget https://github.com/gamarino/protoST/releases/download/v0.8.0/protost-0.8.0-Linux.deb
+sudo apt install ./protoCore-3.4.0-Linux.deb ./protost-0.8.0-Linux.deb
 ```
 
-These are the 0.7.0 release packages. Built from source, protoST 0.7.0 needs
-protoCore 3.0.0 or later; the `.deb` was built against 3.0.0, the release
-to install with it, and declares `protocore (>= 3.0.0)` (an older protoCore package, such as the 2.14.6 that went with 0.6.6, is
+These are the 0.8.0 release packages. Built from source, protoST 0.8.0 needs
+protoCore 3.4.0 or later; the `.deb` was built against 3.4.0, the release
+to install with it, and declares `protocore (>= 3.4.0)` (an older protoCore package, such as the 3.0.0 that went with 0.7.0, is
 not enough: upgrade it with the command above).
 
 **macOS — built and tested in CI, not packaged.** The cross-platform CI job

@@ -5,6 +5,26 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+## 0.8.0 — on protoCore 3.4.0 (2026-10-31)
+
+**Requires protoCore 3.4.0** (SOVERSION 5), the declared minimum for a build from source; the `.deb` depends on `protocore (>= 3.4.0)`. protoCore 3.4.0 removed `ProtoContext::pendingRoot`, which changed `ProtoContext`'s layout and so the library's SOVERSION: a protoST built against 3.4.0 does not load an older `libprotoCore`, nor the reverse. protoST needed a rebuild, no source change, for it. CI pins protoCore tag `v3.4.0` on every job; the floor job builds the same commit for now (no older protoCore satisfies SOVERSION 5) and stays on 3.4.0 when the pin moves on. protoIO's floor is 0.2.3.
+
+This release brings a guest mode in another runtime's ProtoSpace, the Debug Adapter Protocol server grown into a usable debugger (exception, conditional, hit-count and log breakpoints, per-thread stops, stepping by call depth, remote launch and path mappings) with VS Code extension 0.5.1, `docs/VM.md` with `protost --disasm`, fixes to five VM bugs and to four defects found while preparing the FAST workshop, `nextLine` reading buffered lines without leaving the collector's quorum, and fewer allocations on the registry and class-rebuild paths.
+
+- **Live registry entries are keyed by an interned symbol.** The pointer key
+  of every `registryAdd`, `registryRemove` and startup pin was built as a
+  heap string, which protoCore then interned on its slow path (97,508 such
+  calls in the test suite); `createSymbol` gives the same key directly, and
+  the transient pins around the key are gone.
+- **Own attributes are enumerated with `processOwnAttributes`.** `addBehavior:`
+  (copying the old class's own attributes onto the rebuilt class) and the
+  REPL's snapshot of global names no longer walk `getOwnAttributes` with a
+  sparse-list iterator; no iterator cells are allocated.
+- **CI: the macOS job runs on `macos-15`** (arm64), since GitHub retires the
+  macOS 14 images on 2026-11-02.
+- **FAST workshop material** (2026-11-12): slides, guide and exercises under
+  `docs/talks/2026-11-12-fas-workshop/` (Spanish).
+
 - **Four defects found while preparing the FAST workshop, fixed** (STATUS S32-S35).
   (1) A call-form `name(` needs its `(` right after the name: a method ending in
   `^ y` followed, after a blank line, by a statement starting with `(` took that
