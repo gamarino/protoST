@@ -1,19 +1,20 @@
 # Installing protoST
 
-protoST 0.7.0 is a Smalltalk-syntax, actor-native runtime on protoCore. It is
+protoST 0.8.0 is a Smalltalk-syntax, actor-native runtime on protoCore. It is
 a consumer of protoCore, never a bundler of it: `bin/protost` links
-`libprotoCore.so.4`, and every package protoST produces declares a runtime
+`libprotoCore.so.5`, and every package protoST produces declares a runtime
 dependency on protoCore's own package instead of shipping a copy.
 
 On a Debian or Ubuntu machine where protoCore's package is installed, the
-library is `/usr/lib/x86_64-linux-gnu/libprotoCore.so.4`, a link to
-`libprotoCore.so.<version>`. protoST 0.7.0 needs protoCore 3.0.0 or later
-(*Prerequisites*); its `.deb` was built and tested against protoCore 3.0.0,
-the release to install with it, and declares `protocore (>= 3.0.0)` (0.5.0
-needed 2.6.1). CI builds against protoCore 2.14.6 on
-Linux, macOS and Windows, and against 2.11.0, the declared minimum, in one
-Linux job (the floor job), both with protoIO 0.2.2; the suite was last run
-locally (2026-10-12) against protoCore 2.14.6.
+library is `/usr/lib/x86_64-linux-gnu/libprotoCore.so.5`, a link to
+`libprotoCore.so.<version>`. protoST 0.8.0 needs protoCore 3.4.0 or later
+(*Prerequisites*); its `.deb` was built and tested against protoCore 3.4.0,
+the release to install with it, and declares `protocore (>= 3.4.0)` (0.7.0
+needed 3.0.0). CI builds against protoCore 3.4.0 on
+Linux, macOS and Windows, and against 3.4.0, the declared minimum, in one
+Linux job (the floor job; today it builds the same commit, because 3.4.0
+changed the ABI), both with protoIO 0.2.3; the suite was last run
+locally (2026-10-31) against protoCore 3.4.0.
 
 ---
 
@@ -41,8 +42,11 @@ locally (2026-10-12) against protoCore 2.14.6.
 - **OpenSSL** development files (`libssl-dev` on Debian/Ubuntu,
   `openssl-devel` on Fedora/RHEL), required by protoIO for TLS in the `net`
   and `http` modules. The Debian package of protoST depends on `libssl3`.
-- **protoCore 3.0.0 or newer, below 4.0**, installed, with its CMake package
-  configuration. 3.0.0 is required since a thread's method receives its
+- **protoCore 3.4.0 or newer, below 4.0**, installed, with its CMake package
+  configuration. 3.4.0 is required because it changed `ProtoContext`'s
+  layout (`ProtoContext::pendingRoot` was removed) and so the library's
+  `SOVERSION` (5): a protoST built against it does not load an older
+  `libprotoCore`, nor the reverse. 3.0.0 was required since a thread's method receives its
   arguments as `ProtoArguments` (protoCore's descriptor calling convention);
   2.11.0 was already required since instance-variable write groups:
   a run of assignments to instance variables is published as one version
@@ -55,7 +59,7 @@ locally (2026-10-12) against protoCore 2.14.6.
   from worker threads, and before 2.6.1
   protoCore's `newThread` called from a worker left the main program's
   variables unscanned by the collector. The build also requires the
-  library's `SOVERSION` to be `3`. See protoCore's `docs/INSTALLATION.md`.
+  library's `SOVERSION` to be `5`. See protoCore's `docs/INSTALLATION.md`.
 - Network access on the first configuration: Catch2 and nlohmann/json are
   fetched with `FetchContent` when they are not already available.
 - **python3** only to run talk demo 4: its input generator,
@@ -84,20 +88,22 @@ cmake --build build_release -j4
 ctest --test-dir build_release --output-on-failure
 ```
 
-The discovery is `find_package(protoCore 2.11.0 CONFIG)`, so the prefix must hold
+The discovery is `find_package(protoCore 3.4.0 CONFIG)`, so the prefix must hold
 `lib/cmake/protoCore/protoCoreConfig.cmake`. **A prefix holding only
 `libprotoCore` and `protoCore.h` is no longer accepted**: without the package
 configuration there is no way to tell protoCore 1.x from 2.x, and linking the
 wrong major version is silent.
 
-The version floor is `2.11.0` and the ceiling is the next major version, because
+The version floor is `3.4.0` and the ceiling is the next major version, because
 protoCore's major version and its soname move together. The floor is set by
-`ProtoObject::setAttributes` (see Prerequisites); before it, by the portable
+3.4.0's ABI change (SOVERSION 5, see Prerequisites); before it, by the
+descriptor calling convention of 3.0.0, by `ProtoObject::setAttributes` of
+2.11.0, and by the portable
 integer names of 2.7.0; before them it was 2.6.1, for
 the worker pool's growth under blocking I/O; the hashed
 collections and the actor mailboxes need only 2.1.0 (`ProtoMap`, the
 hashed-collection helper, `ProtoMPSCQueue`). protoST additionally asserts that
-the package's `SOVERSION` is `3`.
+the package's `SOVERSION` is `5`.
 
 ## Building against a sibling developer tree
 
@@ -106,7 +112,7 @@ to the sibling source tree `../protoCore`, searching `build_release`, then
 `build`, then `build_check` — the first directory holding `libprotoCore` wins,
 and `build_release` comes first so a leftover `build/` cannot shadow it. The
 fallback prints a `WARNING`: it performs no package version check (it does check
-that the build carries `SOVERSION 3`) and must not be used to produce a
+that the build carries `SOVERSION 5`) and must not be used to produce a
 distributable package.
 
 Pass `-DPROTOCORE_REQUIRE_PACKAGE=ON` to turn the fallback into a hard error.
@@ -272,22 +278,22 @@ using the Linux packages:
 wsl --install -d Ubuntu-24.04
 
 # Then, in the Ubuntu shell: the two packages of the GitHub releases.
-wget https://github.com/numaes/protoCore/releases/download/v3.0.0/protoCore-3.0.0-Linux.deb
-wget https://github.com/gamarino/protoST/releases/download/v0.7.0/protost-0.7.0-Linux.deb
-sudo apt install ./protoCore-3.0.0-Linux.deb ./protost-0.7.0-Linux.deb
+wget https://github.com/numaes/protoCore/releases/download/v3.4.0/protoCore-3.4.0-Linux.deb
+wget https://github.com/gamarino/protoST/releases/download/v0.8.0/protost-0.8.0-Linux.deb
+sudo apt install ./protoCore-3.4.0-Linux.deb ./protost-0.8.0-Linux.deb
 protost --version
 ```
 
 The packages are attached to the GitHub releases
-[protoCore v3.0.0](https://github.com/numaes/protoCore/releases/tag/v3.0.0)
-and [protoST v0.7.0](https://github.com/gamarino/protoST/releases/tag/v0.7.0)
+[protoCore v3.4.0](https://github.com/numaes/protoCore/releases/tag/v3.4.0)
+and [protoST v0.8.0](https://github.com/gamarino/protoST/releases/tag/v0.8.0)
 (built on Ubuntu 24.04, x86_64). The same commands install them on Ubuntu
-24.04 itself. Built from source, protoST 0.7.0's floor is protoCore 3.0.0;
-the `.deb` declares `protocore (>= 3.0.0)`, the release CI builds against
+24.04 itself. Built from source, protoST 0.8.0's floor is protoCore 3.4.0;
+the `.deb` declares `protocore (>= 3.4.0)`, the release CI builds against
 (*Prerequisites*). The package also installs the FAST talk's demos, ready to
 run: `cd /usr/share/protoST/talks/2026-10-15-fas/demos && ./check_all.sh`
 (demo 4 needs `python3`). A machine that still has an older protoCore package (the
-2.14.6 of 0.6.6, or any release before 3.0.0) must upgrade it: the same `apt install` does. To build the packages instead, see §Packages
+3.0.0 of 0.7.0, or any release before 3.4.0) must upgrade it: the same `apt install` does. To build the packages instead, see §Packages
 below and protoCore's own `docs/INSTALLATION.md`.
 
 ---
@@ -368,8 +374,8 @@ protoCore's own package:
 
 | Format | Relation |
 |--------|----------|
-| DEB | `Depends: protocore (>= 2.11.0), protocore (<< 3.0.0)` |
-| RPM | `Requires: protoCore >= 2.11.0, protoCore < 3.0.0` |
+| DEB | `Depends: protocore (>= 3.4.0), protocore (<< 4.0.0)` |
+| RPM | `Requires: protoCore >= 3.4.0, protoCore < 4.0.0` |
 
 `CPACK_DEBIAN_PACKAGE_SHLIBDEPS` is enabled, so `dpkg-shlibdeps` adds the
 dependencies of the system libraries `protost` links (`libc6`, `libstdc++6`,
