@@ -1,4 +1,4 @@
-"EXPECT: false true protoST/0.7.0"
+"EXPECT: false true protoST/0.8.0"
 "A GET without a body sends no Content-Length; a POST does; the user agent
  names the version."
 Import from: 'http'.

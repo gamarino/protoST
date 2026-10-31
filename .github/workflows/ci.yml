@@ -23,8 +23,12 @@ name: CI
 # nightly schedule.  A pinned ref makes a red pull request unambiguous.  The
 # schedule keeps the integration signal separate, and the summary always records
 # the protoCore commit actually used.  The `test` job runs twice: against the
-# pinned release (3.3.1) and against the declared minimum (3.0.0, the floor
-# entry -- this repository's only floor job; it stays on 3.0.0 on the schedule).
+# pinned release (3.4.0) and against the declared minimum (3.4.0, the floor
+# entry -- this repository's only floor job; it stays on 3.4.0 on the schedule).
+# The two coincide for now because protoCore 3.4.0 changed the ABI (SOVERSION
+# 5), so no older protoCore can satisfy the build; when the pin moves to a
+# newer 3.4.x or 3.5.x, the floor entry stays on 3.4.0, which is what keeps it
+# meaningful.
 #
 # TWO BUGS OF THIS REPOSITORY'S OWN SHAPE THIS FILE HAS TO HANDLE:
 #
@@ -63,13 +67,11 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  # protoCore 3.3.1 (tag v3.3.1, commit 5a8cd7c7: the cheap UnmanagedScope
-  # entry; it keeps 3.1.0's one space per process and
-  # ProtoSpace::liveSpaceCount, which the guest-runtime test asserts with),
-  # SOVERSION 4: what every push and pull request builds against. The declared
-  # minimum stays 3.0.0, which the floor entry of the `test` job builds.
-  # Bump deliberately.
-  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || '5a8cd7c7aae68edbb34720445736b14685efae6f' }}
+  # protoCore 3.4.0 (tag v3.4.0, commit f63adc08: ProtoContext::pendingRoot
+  # removed, so ProtoContext's layout changed), SOVERSION 5: what every push
+  # and pull request builds against. It is also the declared minimum, which the
+  # floor entry of the `test` job builds. Bump deliberately.
+  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'f63adc0881eb00547cc42c1c1cf18c7c4941b978' }}
   # The test excluded from the gate, run in the `non-gating` job:
   #   F6 v2 T7: two actors ...    a wall-clock proof of parallelism: two 200 ms
   #                               sleeps must finish inside 350 ms
@@ -97,16 +99,18 @@ jobs:
       matrix:
         include:
           - name: Build and test suite
-            # Empty: env.PROTOCORE_REF (3.3.1, or master on the schedule).
+            # Empty: env.PROTOCORE_REF (3.4.0, or master on the schedule).
             protocore_ref: ''
           # THE FLOOR JOB, the only one in this repository (cross-platform.yml
-          # builds 3.3.1 on macOS and Windows). protoCore 3.0.0 (tag v3.0.0, ce00a4a2),
-          # SOVERSION 4: PROTOCORE_MIN_VERSION in CMakeLists.txt (a thread's
-          # method receives ProtoArguments). Built on every event, the
-          # schedule included, so a change that needs a newer protoCore is
-          # caught before the declared minimum becomes a lie.
-          - name: Build and test suite (protoCore 3.0.0, the declared minimum)
-            protocore_ref: ce00a4a26b6583ea8a58e776eee2ea91c743469e
+          # builds the pin on macOS and Windows). protoCore 3.4.0 (tag v3.4.0,
+          # f63adc08), SOVERSION 5: PROTOCORE_MIN_VERSION in CMakeLists.txt.
+          # Today it is the same commit as the pin: 3.4.0 changed
+          # ProtoContext's layout, so no older protoCore links. It stays on
+          # 3.4.0 when the pin moves on. Built on every event, the schedule
+          # included, so a change that needs a newer protoCore is caught
+          # before the declared minimum becomes a lie.
+          - name: Build and test suite (protoCore 3.4.0 floor)
+            protocore_ref: f63adc0881eb00547cc42c1c1cf18c7c4941b978
     steps:
       - name: Check out protoST
         uses: actions/checkout@v4
