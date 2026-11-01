@@ -20,9 +20,9 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  # protoCore 3.4.0 (tag v3.4.0, f63adc08), SOVERSION 5, as ci.yml's main
+  # protoCore 3.5.0 (tag v3.5.0, 64ca282e), SOVERSION 5, as ci.yml's main
   # job. The declared minimum (3.4.0) is built by ci.yml's floor entry only.
-  PROTOCORE_REF: f63adc0881eb00547cc42c1c1cf18c7c4941b978
+  PROTOCORE_REF: 64ca282e2ec7d2de31255dc7c3a16b06b3cc5e00
   PROTOIO_REPO: gamarino/protoIO
   # protoIO 0.2.3 (main, 7920332), as in ci.yml, and the declared floor.
   PROTOIO_REF: 792033281f77d4a771e4e417a7173a0e6d0a42fa

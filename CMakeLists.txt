@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(protoST VERSION 0.8.0 LANGUAGES CXX)
+project(protoST VERSION 0.8.1 LANGUAGES CXX)
 
 # The one place the version is written: every binary and library reads it
 # through PROTOST_VERSION (include/protoST/STRuntime.h).
@@ -88,6 +88,8 @@ endif()
 # ProtoKeywordArguments descriptors (protoCore docs/CALLING_CONVENTION.md).
 # 3.4.0: SOVERSION 5, ProtoContext::pendingRoot removed (ProtoContext's layout
 # changed; protoST needs a rebuild, no source change).
+# 3.5.0 keeps SOVERSION 5; protoST uses neither ProtoSet nor ProtoMultiset,
+# whose equality 3.5.0 changed, so the floor stays 3.4.0.
 set(PROTOCORE_MIN_VERSION      "3.4.0")
 set(PROTOCORE_MIN_VERSION_FULL "3.4.0")
 set(PROTOCORE_NEXT_MAJOR       "4.0.0")
