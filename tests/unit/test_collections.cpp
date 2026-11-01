@@ -670,8 +670,8 @@ TEST_CASE("COL-b: first / last convenience accessors", "[collections][track2]") 
 // ============================================================================
 // Track 2, slice c (COL-c) — Set and Bag.
 //
-// Exercises the `Set` (ProtoSet-backed, deduplicating) and `Bag`
-// (ProtoMultiset-backed, counting) base operations, the forEachElement arms
+// Exercises the `Set` (ProtoMap-backed, deduplicating) and `Bag`
+// (ProtoList-backed, counting) base operations, the forEachElement arms
 // that iterate them, and the derived iteration protocol on a hashed receiver
 // (collect:/select: yield the receiver's species, not an Array).
 //

@@ -135,8 +135,8 @@ hierarchy and protocol**, not new data structures:
 - Map each Smalltalk class onto the right protoCore primitive. As shipped:
   `Array` / `OrderedCollection` / `Bag` ← `ProtoList`, `Set` and `Dictionary`
   ← `ProtoMap` through protoCore's hashed-collection helper (Track S; `Bag`
-  keeps one list slot per occurrence, because `ProtoMultiset` keys on the hash
-  and does not retain the element), `Interval` computed lazily from three
+  keeps one list slot per occurrence, because `ProtoMultiset` counts
+  occurrences of one pointer, not of objects equal under `=`), `Interval` computed lazily from three
   integer attributes.
 
 **Why it matters:** the iteration protocol *is* the Smalltalk programming

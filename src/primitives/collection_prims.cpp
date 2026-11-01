@@ -394,11 +394,12 @@ void hashedEntries(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
 // prototype, because their backings are now the same shape.)
 //
 // `Bag` is intentionally ProtoList-backed (one slot per occurrence) rather
-// than ProtoMultiset-backed: protoCore's ProtoMultiset stores element->count
-// keyed by the element HASH and never retains the element object itself, so a
-// ProtoMultiset cannot be iterated to recover its elements. A ProtoList of
-// occurrences gives correct `do:` / `occurrencesOf:` / derived-protocol
-// behaviour. `species` still resolves `Bag` by prototype identity, so a Bag's
+// than ProtoMultiset-backed: protoCore's ProtoMultiset counts occurrences of a
+// POINTER (since protoCore 3.5.0 it keeps the elements and its iterator returns
+// them; through 3.4.0 it kept only element->count keyed by the hash), while a
+// Bag counts objects that are equal under Smalltalk's `=`. A ProtoList of
+// occurrences, compared with `indexOfEqual`, gives correct `do:` /
+// `occurrencesOf:` / derived-protocol behaviour. `species` still resolves `Bag` by prototype identity, so a Bag's
 // `collect:`/`select:` still yields a Bag.
 bool isListBacked(proto::ProtoContext* ctx, const proto::ProtoObject* obj) {
     if (!obj) return false;
@@ -1284,10 +1285,11 @@ const proto::ProtoObject* prim_Set_classWithAll(STRuntime& rt, proto::ProtoConte
 // A `Bag` is a hashed collection that counts occurrences. It uses the same
 // mutable-holder representation, but — unlike `Set` — `__data__` holds a
 // `ProtoList` with ONE slot per occurrence (an element added three times
-// occupies three slots). protoCore's `ProtoMultiset` cannot back a `Bag`: it
-// stores element->count keyed by the element's HASH and never retains the
-// element object, so a ProtoMultiset cannot be iterated to recover elements.
-// A ProtoList of occurrences gives correct `do:` / `occurrencesOf:` and lets
+// occupies three slots). protoCore's `ProtoMultiset` does not back a `Bag`:
+// it counts occurrences of one pointer (it keeps its elements and iterates them
+// since protoCore 3.5.0), whereas a Bag counts occurrences of objects equal
+// under `=`, e.g. two distinct Strings with the same characters, or a user
+// class with its own `=` and `hash`. A ProtoList of occurrences gives correct `do:` / `occurrencesOf:` and lets
 // the whole derived protocol work — `Bag` flows through forEachElement's
 // ProtoList arm. Element equality for `remove:` / `occurrencesOf:` uses
 // protoCore's object comparison via `indexOfEqual` (declared above).

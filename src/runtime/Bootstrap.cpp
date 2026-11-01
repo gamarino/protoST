@@ -82,9 +82,11 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     // Unlike `Array`/`OrderedCollection` it has no `__data__`; an instance
     // carries `start`/`stop`/`step` and computes its elements on demand.
     out.intervalProto               = const_cast<proto::ProtoObject*>(out.sequenceableCollectionProto)->newChild(ctx, /*isMutable=*/true);
-    // Track 2 slice c (COL-c): `Set` and `Bag` — hashed collections. `Set` is
-    // ProtoSet-backed (deduplicating), `Bag` is ProtoMultiset-backed (counting
-    // duplicates). Both share the mutable-holder `__data__` representation.
+    // Track 2 slice c (COL-c): `Set` and `Bag` — hashed collections. `Set`
+    // (deduplicating) keeps a ProtoMap through protoCore's hashed-collection
+    // helper; `Bag` (counting duplicates) keeps a ProtoList with one slot per
+    // occurrence (see collection_prims.cpp). Both share the mutable-holder
+    // `__data__` representation.
     out.setProto                    = const_cast<proto::ProtoObject*>(out.hashedCollectionProto)->newChild(ctx, /*isMutable=*/true);
     out.bagProto                    = const_cast<proto::ProtoObject*>(out.hashedCollectionProto)->newChild(ctx, /*isMutable=*/true);
     // Track 2 slice d (COL-d): `Dictionary` — a key->value map with arbitrary
