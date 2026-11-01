@@ -87,8 +87,8 @@ struct Bootstrap {
     const proto::ProtoObject* intervalProto               = nullptr;
     // Track 2 slice c (COL-c): hashed collections.
     //   HashedCollection
-    //     |-- Set                    (concrete — ProtoSet backing)
-    //     `-- Bag                    (concrete — ProtoMultiset backing)
+    //     |-- Set                    (concrete — ProtoMap via the hashed-collection helper)
+    //     `-- Bag                    (concrete — ProtoList, one slot per occurrence)
     const proto::ProtoObject* setProto                    = nullptr;
     const proto::ProtoObject* bagProto                    = nullptr;
     // Track 2 slice d (COL-d): the key->value map.
