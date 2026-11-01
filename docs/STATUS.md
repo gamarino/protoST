@@ -27,11 +27,12 @@ stable id and file it in the right bucket.
   Windows runs `cli_sigint` in a Windows variant and tutorial chapter 15 as
   well, `docs/INSTALLATION.md`, "Windows (MSVC)"). `cli_concurrent_first_call` (S19) gates CI again since 0.6.3. The
   history of earlier counts is in `CHANGELOG.md`.
-- **protoCore:** 0.8.0 requires 3.4.0 or later (SOVERSION 5: 3.4.0 removed
+- **protoCore:** 0.8.1 requires 3.4.0 or later built from source, and its
+  `.deb` 3.5.0 (SOVERSION 5 in both; 0.8.0 required 3.4.0, which removed
   `ProtoContext::pendingRoot`, so `ProtoContext`'s layout changed; 0.7.0
   required 3.0.0, for the descriptor calling convention and the unified
   exception model); its
-  `.deb` is built against 3.4.0 and declares `protocore (>= 3.4.0)`. Since
+  `.deb` is built against 3.5.0 and depends on `protocore (>= 3.5.0)`. Since
   2.14.6 protoCore's
   integer comparison, division and modulo no longer allocate and its
   collector's mark work list is bounded (`benchmarks/reports/2026-10-12-protocore-2.14.6.md`:

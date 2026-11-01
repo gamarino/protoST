@@ -5,6 +5,17 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+## 0.8.1 — on protoCore 3.5.0 (2026-10-31)
+
+**Built and tested against protoCore 3.5.0** (SOVERSION 5, unchanged from 3.4.0). The declared minimum for a build from source stays **protoCore 3.4.0**, which CI's floor entry still builds; the `.deb` is built against the 3.5.0 package, so it depends on `protocore (>= 3.5.0)` through protoCore's shlibs file, besides the declared `protocore (>= 3.4.0), protocore (<< 4.0.0)`. CI pins protoCore tag `v3.5.0` on Linux, macOS and Windows.
+
+protoCore 3.5.0 changed `ProtoSet` and `ProtoMultiset` (collision buckets, pointer-identity equality, a multiset iterator that returns elements). protoST uses neither: `Set` and `Dictionary` keep a `ProtoMap` through protoCore's hashed-collection helper with Smalltalk's `=` and `hash`, and `Bag` a `ProtoList` with one slot per occurrence. No source change was needed.
+
+### Changed
+
+- Comments and docs no longer claim that a `ProtoMultiset` cannot be iterated to recover its elements, which is false from protoCore 3.5.0; they give the reason that still holds (`ProtoMultiset` and `ProtoSet` compare by pointer, a `Bag` and a `Set` by `=`), and no longer describe `Set` as ProtoSet-backed or `Bag` as ProtoMultiset-backed (#9).
+- Version 0.8.1 in the REPL banner, the HTTP client's `User-Agent` and the install guide.
+
 ## 0.8.0 — on protoCore 3.4.0 (2026-10-31)
 
 **Requires protoCore 3.4.0** (SOVERSION 5), the declared minimum for a build from source; the `.deb` depends on `protocore (>= 3.4.0)`. protoCore 3.4.0 removed `ProtoContext::pendingRoot`, which changed `ProtoContext`'s layout and so the library's SOVERSION: a protoST built against 3.4.0 does not load an older `libprotoCore`, nor the reverse. protoST needed a rebuild, no source change, for it. CI pins protoCore tag `v3.4.0` on every job; the floor job builds the same commit for now (no older protoCore satisfies SOVERSION 5) and stays on 3.4.0 when the pin moves on. protoIO's floor is 0.2.3.
