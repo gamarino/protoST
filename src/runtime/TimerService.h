@@ -43,10 +43,11 @@
 // finds no rooted Future.
 //
 // A failed hand-over. If building or enqueueing the task fails (a protoCore
-// allocation failure), the entry stays rooted and is retried after
-// kRetryDelay, with a report on stderr: the Future settles as soon as memory
-// allows, never on the timer thread (that would run its callbacks there), and
-// never silently not at all.
+// allocation failure), the entry stays rooted -- it is unrooted only after
+// the enqueue succeeded -- and is retried every kRetryDelay, with a
+// rate-limited report on stderr: the Future settles as soon as memory allows,
+// never on the timer thread (that would run its callbacks there), and never
+// silently not at all. No exception leaves the timer thread.
 //
 // Shutdown
 // --------
@@ -143,12 +144,16 @@ private:
     // The rooting sparse list: add or remove one entry by compare-and-swap.
     void rootEntry(proto::ProtoContext* ctx, std::uint64_t id, const proto::ProtoObject* future);
     void unrootEntry(proto::ProtoContext* ctx, std::uint64_t id);
-    // Hand one due entry to the worker pool (on the timer thread). Answers
-    // false when the hand-over failed and the entry must be retried.
-    bool fire(proto::ProtoContext* ctx, const Entry& e);
-    // Build the settle task for `future` (rooted by entry e) and enqueue it.
-    // Throws when an allocation fails; the entry is then still rooted.
+    // Hand one due entry to the worker pool (on the timer thread), or drop it
+    // when its Future settled or was cancelled. Throws when an allocation
+    // fails; the entry is then still rooted and run() retries it.
+    void fire(proto::ProtoContext* ctx, const Entry& e);
+    // Build the settle task for `future` (rooted by entry e) and enqueue it;
+    // the entry is unrooted only after the enqueue succeeded.
     void handOver(proto::ProtoContext* ctx, const Entry& e, const proto::ProtoObject* future);
+    // One stderr line for a failed hand-over: the first at once, then at most
+    // one per second with the count of those suppressed. Timer thread only.
+    void reportHandOverFailure(const char* detail) noexcept;
     void startThread(proto::ProtoContext* ctx);
 
     STRuntime&                 rt_;
@@ -163,6 +168,10 @@ private:
     bool                       stopping_ = false;
     const proto::ProtoThread*  thread_  = nullptr;
     std::uint64_t              nextId_  = 1;     // guarded by mutex_
+    // reportHandOverFailure's rate limit (timer thread only).
+    bool                       reportedOnce_      = false;
+    TimePoint                  lastReport_{};
+    std::uint64_t              suppressedReports_ = 0;
 };
 
 } // namespace protoST

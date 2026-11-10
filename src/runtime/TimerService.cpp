@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstddef>
 #include <cstdio>
 #include <exception>
 #include <stdexcept>
@@ -195,38 +196,50 @@ void TimerService::stop(proto::ProtoContext* ctx) {
     }
 }
 
-bool TimerService::fire(proto::ProtoContext* ctx, const Entry& e) {
+void TimerService::reportHandOverFailure(const char* detail) noexcept {
+    // First failure at once; then at most one line per second, saying how
+    // many were folded into it. No allocation: this runs when memory is short.
+    const TimePoint now = Clock::now();
+    if (reportedOnce_ && now - lastReport_ < std::chrono::seconds(1)) {
+        ++suppressedReports_;
+        return;
+    }
+    if (suppressedReports_ > 0)
+        std::fprintf(stderr, "error: a timer could not be handed to the workers (%s); retrying "
+                             "(%llu similar messages suppressed)\n",
+                     detail, static_cast<unsigned long long>(suppressedReports_));
+    else
+        std::fprintf(stderr, "error: a timer could not be handed to the workers (%s); retrying\n",
+                     detail);
+    reportedOnce_      = true;
+    lastReport_        = now;
+    suppressedReports_ = 0;
+}
+
+void TimerService::fire(proto::ProtoContext* ctx, const Entry& e) {
     const Bootstrap& b = rt_.bootstrap();
-    // The Future is rooted by the sparse list until unrootEntry below; reading
-    // the list and the Future's state allocates nothing.
+    // The Future is rooted by the sparse list until the entry is unrooted;
+    // reading the list and the Future's state allocates nothing.
     const proto::ProtoSparseList* list = sparseListOf(ctx, anchor_->getOwnAttributeDirect(ctx, key_));
-    if (!list || !list->has(ctx, e.id)) return true;   // cancelled: skipped
+    if (!list || !list->has(ctx, e.id)) return;   // cancelled: skipped
     const proto::ProtoObject* future = list->getAt(ctx, e.id);
-    if (!future || future == PROTO_NONE) return true;
+    if (!future || future == PROTO_NONE) return;
     if (future->getOwnAttributeDirect(ctx, b.sym.settling) == PROTO_TRUE) {
         // Settled (or being settled) first; its cancel may still be on its
-        // way. Nothing to hand over; the entry stops rooting it now.
+        // way. Nothing to hand over; the entry stops rooting it now (if this
+        // throws, run() retries and the entry is looked at again).
         unrootEntry(ctx, e.id);
-        return true;
+        return;
     }
-    try {
-        handOver(ctx, e, future);
-    } catch (const std::exception& ex) {
-        std::fprintf(stderr, "error: a timer could not be handed to the workers (%s); "
-                             "retrying\n", ex.what());
-        return false;
-    } catch (...) {
-        std::fprintf(stderr, "error: a timer could not be handed to the workers; retrying\n");
-        return false;
-    }
-    return true;
+    handOver(ctx, e, future);
 }
 
 void TimerService::handOver(proto::ProtoContext* ctx, const Entry& e,
                             const proto::ProtoObject* future) {
     const Bootstrap& b = rt_.bootstrap();
-    // The task roots the Future from here on: pinned on this thread while it
-    // is built, then in the runtime's task list once enqueued.
+    // The entry keeps rooting the Future until the enqueue has succeeded; the
+    // task is pinned on this thread while it is built. Any failure up to the
+    // enqueue leaves the entry exactly as it was, for the retry.
     const proto::ProtoObject* task =
         const_cast<proto::ProtoObject*>(b.objectProto)->newChild(ctx, /*isMutable=*/true);
     TransientPin pinTask(ctx, task);
@@ -234,23 +247,28 @@ void TimerService::handOver(proto::ProtoContext* ctx, const Entry& e,
     t->setAttribute(ctx, b.sym.future, future);
     t->setAttribute(ctx, b.sym.timeout, e.reject ? PROTO_TRUE : PROTO_FALSE);
     t->setAttribute(ctx, b.sym.ms, ctx->fromLong(e.ms));
-    // Removed before the task is enqueued, so a waiter woken by the settle
-    // never sees the entry still counted as pending. If the enqueue fails,
-    // the entry is rooted again (the pinned task keeps the Future alive
-    // meanwhile) so that the retry finds it.
-    unrootEntry(ctx, e.id);
+    // enqueueTask allocates only before its compare-and-swap publishes the
+    // task; once it returns, the task is queued and roots the Future.
+    rt_.enqueueTask(ctx, task);
+    // Queued. The settle unroots the entry as well (settleFuture cancels the
+    // Future's __timer_id__, before it publishes the state, so no waiter
+    // woken by it sees the entry pending); this unroot only makes it prompt.
+    // It must not fail the hand-over: a retry would enqueue a second task.
     try {
-        rt_.enqueueTask(ctx, task);
+        unrootEntry(ctx, e.id);
     } catch (...) {
-        rootEntry(ctx, e.id, future);
-        throw;
+        // Left to the settle's cancel.
     }
 }
 
 void TimerService::run(proto::ProtoContext* ctx) {
+    // `due` holds the entries of the current round. An entry whose hand-over
+    // failed stays in it (compacted in place: shrinking allocates nothing)
+    // and is retried at `retryAt`; it is never put back on the heap, whose
+    // push could itself fail.
     std::vector<Entry> due;
+    TimePoint retryAt = TimePoint::max();
     for (;;) {
-        due.clear();
         {
             // Waiting is unmanaged: this thread counts as parked for any
             // stop-the-world phase. The region is opened before the mutex is
@@ -261,30 +279,46 @@ void TimerService::run(proto::ProtoContext* ctx) {
             for (;;) {
                 if (stopping_) return;
                 const TimePoint now = Clock::now();
-                while (!heap_.empty() && heap_.top().deadline <= now) {
-                    due.push_back(heap_.top());
-                    heap_.pop();
+                bool collected = false;
+                try {
+                    // Copied before it is popped: if the copy cannot grow
+                    // `due`, the entry stays on the heap.
+                    while (!heap_.empty() && heap_.top().deadline <= now) {
+                        due.push_back(heap_.top());
+                        heap_.pop();
+                        collected = true;
+                    }
+                } catch (...) {
+                    // Out of memory for `due`: handle what was collected.
                 }
-                if (!due.empty()) break;
-                if (heap_.empty()) {
+                if (collected || (!due.empty() && retryAt <= now)) break;
+                TimePoint until = retryAt;
+                if (!heap_.empty() && heap_.top().deadline < until) until = heap_.top().deadline;
+                if (until == TimePoint::max()) {
                     wake_.wait(lock);
                 } else {
                     // A far deadline is never converted whole (kMaxWait).
-                    const TimePoint top = heap_.top().deadline;
-                    wake_.wait_until(lock, (top - now > kMaxWait) ? now + kMaxWait : top);
+                    wake_.wait_until(lock, (until - now > kMaxWait) ? now + kMaxWait : until);
                 }
             }
         }
-        // Managed again, without the mutex: build and enqueue the tasks. An
-        // entry whose hand-over failed stays rooted and comes back later.
-        std::vector<Entry> retry;
-        for (const Entry& e : due)
-            if (!fire(ctx, e)) retry.push_back(e);
-        if (!retry.empty()) {
-            const TimePoint later = Clock::now() + kRetryDelay;
-            std::lock_guard<std::mutex> lock(mutex_);
-            for (Entry e : retry) { e.deadline = later; heap_.push(e); }
+        // Managed again, without the mutex: build and enqueue the tasks.
+        // Nothing escapes this thread: a failed entry is kept for the retry.
+        std::size_t kept = 0;
+        for (std::size_t i = 0; i < due.size(); ++i) {
+            bool done = false;
+            try {
+                fire(ctx, due[i]);
+                done = true;
+            } catch (const std::exception& ex) {
+                reportHandOverFailure(ex.what());
+            } catch (...) {
+                reportHandOverFailure("an allocation failed");
+            }
+            if (!done) due[kept++] = due[i];
         }
+        due.resize(kept);
+        retryAt = kept ? Clock::now() + kRetryDelay : TimePoint::max();
         // Quiescent point: no pin is held, so this thread's young cells can
         // be submitted to the collector before it waits again.
         ctx->safepoint();
