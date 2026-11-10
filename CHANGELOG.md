@@ -103,9 +103,7 @@ end guard and what it cannot see (and the protoIO 0.3.1 follow-up), timers
 and exit, what the tests do not prove (no ThreadSanitizer build; `InternalError`
 cannot be forced; the macOS and Windows behaviour of the visible skip is
 unconfirmed until CI runs), and protoCore's missing structural list split.
-CI's protoIO pin (`PROTOIO_REF` in `.github/workflows/ci.yml` and
-`cross-platform.yml`) still names the 0.2.3 commit and must move to a 0.3.0
-commit before the workflows can pass.
+CI pins protoIO 0.3.0 (`PROTOIO_REF`, main `002ab8a`) in both workflows.
 
 ## 0.8.1 — on protoCore 3.5.0 (2026-10-31)
 

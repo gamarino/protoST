@@ -79,12 +79,11 @@ env:
   #                               tens of milliseconds.  It is a good test and a
   #                               bad gate.
   PROTOIO_REPO: gamarino/protoIO
-  # protoIO 0.2.3 (main, 7920332): line reading keeps an offset into its read
-  # buffer instead of moving the rest of it for every line, and
-  # readBufferedLine, which nextLine uses, so 0.2.3 is also the floor
-  # CMakeLists.txt declares. Pinned so a red build is attributable; bump
-  # deliberately.
-  PROTOIO_REF: 792033281f77d4a771e4e417a7173a0e6d0a42fa
+  # protoIO 0.3.0 (main, 002ab8a): positioned binary files, the
+  # ProtoBase-compatible owner lock, packing, CRC32/BLAKE2b/SHA-256/HMAC,
+  # base64 and MessagePack, so 0.3.0 is also the floor CMakeLists.txt
+  # declares. Pinned so a red build is attributable; bump deliberately.
+  PROTOIO_REF: 002ab8adce25166650ae73901cc2271ba819cbc7
   NON_GATING_TESTS: '^(F6 v2 T7: two actors run in parallel \(wall-clock proof\))$'
 
 jobs:

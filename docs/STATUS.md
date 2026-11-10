@@ -25,10 +25,9 @@ stable id and file it in the right bucket.
   `tests/conformance/15-binary` are new in 0.9.0. A conformance program that
   cannot verify its subject on a platform ends with `SKIP: <reason>` and CTest
   reports it as *Skipped* (`tests/conformance/README.md`); on Linux with
-  `python3` and `msgpack` none is skipped. CI (Linux, macOS and Windows) has
-  not run 0.9.0 yet: its protoIO pin still names the 0.2.3 commit, and the
-  macOS and Windows behaviour of the skip is unconfirmed until it does
-  (`KNOWN_ISSUES.md` K10). Earlier: 1105/1105 on 2026-10-17 (0.6.6, protoCore 2.14.6, protoIO 0.2.2):
+  `python3` and `msgpack` none is skipped. CI (Linux, macOS and Windows) pins
+  protoIO 0.3.0; the macOS and Windows behaviour of the skip is confirmed
+  only by that CI (`KNOWN_ISSUES.md` K10). Earlier: 1105/1105 on 2026-10-17 (0.6.6, protoCore 2.14.6, protoIO 0.2.2):
   544 conformance programs, 462 unit tests, 44 examples, 33 CLI tests and 22
   documentation checks; CI ran the same suite on Linux, macOS and Windows
   against protoCore 2.14.6, and on Linux against 2.11.0, the declared minimum
