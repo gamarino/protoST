@@ -3,9 +3,10 @@
 //
 // What these cases pin:
 //   1. The timer thread never runs Smalltalk code. A thenDo: callback fired by
-//      a timer runs on a pool worker, so a callback that blocks for 500 ms
-//      does not hold up a second timer due 50 ms later (it settles well
-//      before the block ends: under 450 ms).
+//      a timer runs on a pool worker, so a callback that blocks its worker
+//      does not hold up a second timer: the callback is released only after
+//      that timer has fired, so the case completes only if the timer fired
+//      while the callback was still blocking (otherwise it never ends).
 //      Needs at least two workers (PROTOST_WORKERS is raised to 2 when lower).
 //   2. A settled timer leaves nothing rooted: the pending-entry count returns
 //      to zero once the timer has fired.
@@ -14,10 +15,10 @@
 //   4. Pending timers never keep the runtime alive: a runtime destroyed with
 //      timers due in an hour is destroyed promptly, and the timers are dropped.
 //
-// Timing: case 1 asserts a lower bound (the timer cannot fire early) and a
-// generous upper bound (under 450 ms, before the 500 ms block ends); case 4 bounds the
-// destruction at 5 s against an hour. No case uses a sleep to synchronise:
-// every wait is on a Future.
+// Timing: case 1 asserts a lower bound (the timer cannot fire early) and its
+// order (ruling S14: no pass condition depends on scheduling); case 4 bounds
+// the destruction at 5 s against an hour. No case uses a sleep to
+// synchronise: every wait is on a Future or an Atom set by the program.
 
 #include <catch2/catch_all.hpp>
 #include "PosixEnv.h"
@@ -61,16 +62,27 @@ TEST_CASE("TimerService: a blocking callback does not delay a later timer",
           "[timers][actors][parallel]") {
     requireTwoWorkers();
     // `blocker`'s callback announces that it started (resolving `started`)
-    // and then blocks its worker for 500 ms. Only once it is known to be
-    // blocking does the program start a 50 ms timer and wait for it.
+    // and then blocks its worker until `release` is set (polling with
+    // sleep:, which blocks the worker and helps no other work). Only once it
+    // is known to be blocking does the program start a 50 ms timer and wait
+    // for it; only after that wait returns does it set `release`. So the
+    // program ends only if the timer fired while the callback was blocking:
+    // a timer that waited for the callback would never fire.
     auto bc = compile(
-        "| started blocker | "
+        "| started finished release blocker elapsed | "
         "started := Future new. "
+        "finished := Future new. "
+        "release := Atom on: false. "
         "blocker := Future new. "
-        "blocker thenDo: [:x | started resolve: true. Object sleep: 500]. "
+        "blocker thenDo: [:x | started resolve: true. "
+        "  [release value] whileFalse: [Object sleep: 1]. "
+        "  finished resolve: true]. "
         "blocker __resolveNilAfter: 0. "
         "started wait. "
-        "Time millisecondsToRun: [(Future after: 50) wait].");
+        "elapsed := Time millisecondsToRun: [(Future after: 50) wait]. "
+        "release swap: [:old | true]. "
+        "finished wait. "
+        "elapsed");
     protoST::STRuntime rt;
     REQUIRE(rt.workerCount() >= 2);
     const proto::ProtoObject* r = rt.runTopLevel(*bc);
@@ -78,9 +90,9 @@ TEST_CASE("TimerService: a blocking callback does not delay a later timer",
     REQUIRE(r->isInteger(rt.rootCtx()));
     const long long elapsed = r->asLong(rt.rootCtx());
     INFO("the 50 ms timer settled after " << elapsed << " ms");
+    // Reaching here is the property: the timer fired while the callback still
+    // blocked its worker (the callback was released only afterwards).
     CHECK(elapsed >= 50);
-    // Only the property: it did not wait out the 500 ms block.
-    CHECK(elapsed < 450);
 }
 
 TEST_CASE("TimerService: a fired timer leaves no pending entry",
