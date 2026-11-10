@@ -239,9 +239,9 @@ several cores without locks.
 ## Status
 
 Version 0.9.0 (2026-11-10); built from source it requires protoCore 3.4.0 or
-newer (SOVERSION 5) and protoIO 0.4.0 or a later 0.4.x; the last published `.deb` is
-0.8.1 (below), which requires 3.5.0. CI builds against
-protoCore 3.5.0 (tag `v3.5.0`) and the 3.4.0 floor. On 0.9.0 (2026-11-10), `ctest` ran 1291 cases on Linux, all passing: 685
+newer (SOVERSION 5) and protoIO 0.4.0 (tag `v0.4.0`) or a later 0.4.x; its `.deb`
+(below) requires protoCore 3.5.2. CI builds against
+protoCore 3.5.2 (tag `v3.5.2`) and the 3.4.0 floor. On 0.9.0 (2026-11-10), `ctest` ran 1291 cases on Linux, all passing: 685
 conformance programs, 494 unit tests, 44 examples, 42 CLI tests, 23
 documentation checks (every example with a stated result in the documents,
 plus the checker's self-test) and 3 UMD host cases. Since 0.6.2 protoST lets
@@ -314,8 +314,8 @@ commands, and what differs on Windows, are in
 
 ## Installation
 
-protoST can be packaged with CPack. The 0.8.1 release has a Linux `.deb`
-attached to its GitHub release (below, with protoCore 3.5.0); other packages
+protoST can be packaged with CPack. The 0.9.0 release has a Linux `.deb`
+attached to its GitHub release (below, with protoCore 3.5.2); other packages
 are built from source as shown below. Every package depends on
 [protoCore](https://github.com/numaes/protoCore) — install protoCore's package
 first (it provides `libprotoCore`).
@@ -341,14 +341,14 @@ the GitHub releases (or built as below):
 ```bash
 wsl --install -d Ubuntu-24.04        # in PowerShell, once
 # then, in the Ubuntu shell:
-wget https://github.com/numaes/protoCore/releases/download/v3.5.0/protoCore-3.5.0-Linux.deb
-wget https://github.com/gamarino/protoST/releases/download/v0.8.1/protost-0.8.1-Linux.deb
-sudo apt install ./protoCore-3.5.0-Linux.deb ./protost-0.8.1-Linux.deb
+wget https://github.com/numaes/protoCore/releases/download/v3.5.2/protoCore-3.5.2-Linux.deb
+wget https://github.com/gamarino/protoST/releases/download/v0.9.0/protost-0.9.0-Linux.deb
+sudo apt install ./protoCore-3.5.2-Linux.deb ./protost-0.9.0-Linux.deb
 ```
 
-These are the 0.8.1 release packages. Built from source, protoST 0.8.1 needs
-protoCore 3.4.0 or later; the `.deb` was built against 3.5.0, the release
-to install with it, and depends on `protocore (>= 3.5.0)` through protoCore's
+These are the 0.9.0 release packages. Built from source, protoST 0.9.0 needs
+protoCore 3.4.0 or later; the `.deb` was built against 3.5.2, the release
+to install with it, and depends on `protocore (>= 3.5.2)` through protoCore's
 shlibs file (an older protoCore package is not enough: upgrade it with the
 command above).
 

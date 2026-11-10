@@ -7,10 +7,19 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## 0.9.0 — bytes, binary files, encodings, MessagePack and timers (2026-11-10)
 
-**Requires protoIO 0.4.0** (the declared minimum for a build from source,
-`PROTOIO_MIN_VERSION`; a 0.3.x checkout is refused at configure time): the
-`BinaryFile` end guard is protoIO's `file::EndGuard`. The
-protoCore floor stays 3.4.0 (SOVERSION 5). Design record:
+Released 2026-11-10.
+
+**Requires protoIO 0.4.0** (tag `v0.4.0`; the declared minimum for a build
+from source, `PROTOIO_MIN_VERSION`; a 0.3.x checkout is refused at configure
+time): the `BinaryFile` end guard is protoIO's `file::EndGuard`. **Built and
+tested against protoCore 3.5.2** (SOVERSION 5), which fixes a race in
+`ProtoSpace::newThread` that protoST reaches by starting workers from worker
+threads (`KNOWN_ISSUES.md` K10). The declared protoCore minimum for a build
+from source stays 3.4.0, which CI's floor entry builds; the `.deb` is built
+against the 3.5.2 package, so it depends on `protocore (>= 3.5.2)` through
+protoCore's shlibs file, besides the declared `protocore (>= 3.4.0),
+protocore (<< 4.0.0)`. CI pins protoCore `v3.5.2` and protoIO `v0.4.0` on
+Linux, macOS and Windows. Design record:
 `docs/superpowers/specs/2026-11-09-bytes-files-timers-design.md`; the language
 reference is `docs/LANGUAGE.md` §12.12, the tutorial is chapter 15 (§15.11)
 and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
@@ -35,8 +44,26 @@ and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
   enclosing handler; in 0.8.1 the other pair could take it. Pharo has no
   `on:do:on:do:`; this is protoST's extension, now with the order of
   `try`/`except` (LANGUAGE.md §8.3).
+- **Indices** (details under *Fixed*):
+  - an Integer index out of range signals `SubscriptOutOfBounds` everywhere,
+    however large: the indexing methods written in Smalltalk (`Interval`,
+    `OrderedCollection>>removeAt:` and `add:beforeIndex:`,
+    `ByteArray>>copyReplaceFrom:to:with:`) signalled a plain `Error`, and an
+    index of 2^63 or more `ArithmeticError`;
+  - a non-Integer index signals `Error` "... the index: an Integer was
+    expected": a Float index raised protoCore's `InvalidArgument` (so a
+    handler for `InvalidArgument` no longer catches it), and
+    `NumericInterval>>at:` accepted one;
+  - a `Character` index is refused, as in Pharo; it was read as its code
+    point (`#(10 20 30) at: (Character value: 2)` answered `20`).
+- **`BinaryFile`**: `truncateTo:` is refused while any `writeAt:bytes:` runs
+  on the same object (the end guard covers in-file writes too), and `append:`
+  on a file that is not a regular file (a FIFO, a pipe, a device) signals
+  `FileSystemError` and writes nothing (details under *Changed*).
 - `NUL` is kept in strings now (see below), so a program that relied on text
-  being cut at a NUL sees the whole text.
+  being cut at a NUL sees the whole text; diagnostics (the uncaught error, an
+  unhandled `Warning`, an unobserved actor error, parse and compile errors)
+  print it whole too.
 - **A string handed to the OS that contains NUL signals `Error`** ("... must
   not contain NUL", as CPython's `ValueError`): a path, an argv element, a
   shell command line, an environment name or value, a host name, a module
@@ -200,15 +227,14 @@ and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
 
 K8 to K11 in `KNOWN_ISSUES.md`: what the `BinaryFile` end guard cannot see
 (another `BinaryFile` object, another process), timers and exit, what the
-tests do not prove (ThreadSanitizer finds one race, in protoCore's
-`newThread`, so its CI job does not gate yet; `InternalError` cannot be
-forced from a program, so its mapping is tested from C++; the macOS and
-Windows behaviour of the visible skip is unconfirmed until CI runs),
-protoCore's missing structural list split, and K13, a mailbox batch of more
-than 2^31 - 1 messages, which no program can reach and which would be lost.
-K12 (protoIO did not refuse a NUL
-in an OS string) is resolved by protoIO 0.4.0. CI pins protoIO 0.4.0
-(`PROTOIO_REF`, main `41a5db0`, not yet tagged) in both workflows.
+tests do not prove (a clean ThreadSanitizer run covers the interleavings it
+saw, not all of them; `InternalError` cannot be forced from a program, so its
+mapping is tested from C++; the macOS and Windows behaviour of the visible
+skip is confirmed only by CI), protoCore's missing structural list split, and
+K13, a mailbox batch of more than 2^31 - 1 messages, which no program can
+reach and which would be lost. K12 (protoIO did not refuse a NUL in an OS
+string) is resolved by protoIO 0.4.0. The `Array` argument deprecation ends
+in 0.10.0 (D45).
 
 ## 0.8.1 — on protoCore 3.5.0 (2026-10-31)
 

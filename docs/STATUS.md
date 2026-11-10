@@ -18,7 +18,7 @@ stable id and file it in the right bucket.
   2026-11-10 (0.9.0 after the pending fixes: NUL-safe native error text,
   checked list indices, one index rule, the protoIO error mapping and
   the unmanaged digest path tested, the end guard from protoIO 0.4.0; against
-  protoCore 3.5.0 and the protoIO 0.4.0 tree, main `41a5db0`), none
+  protoCore 3.5.2 and protoIO 0.4.0, tag `v0.4.0`), none
   skipped: 685 conformance
   programs, 494 unit tests, 44 examples, 42 CLI tests (including
   `cli_binary_lock`, `cli_binary_lock_protobase` and `cli_binary_interop`),
@@ -29,7 +29,7 @@ stable id and file it in the right bucket.
   cannot verify its subject on a platform ends with `SKIP: <reason>` and CTest
   reports it as *Skipped* (`tests/conformance/README.md`); on Linux with
   Python 3 and `msgpack` none is skipped. CI (Linux, macOS and Windows) pins
-  protoIO 0.4.0 and installs `msgpack`; the macOS and Windows behaviour of the skip is confirmed
+  protoIO 0.4.0 (tag `v0.4.0`) and protoCore 3.5.2 and installs `msgpack`; the macOS and Windows behaviour of the skip is confirmed
   only by that CI (`KNOWN_ISSUES.md` K10). Earlier: 1105/1105 on 2026-10-17 (0.6.6, protoCore 2.14.6, protoIO 0.2.2):
   544 conformance programs, 462 unit tests, 44 examples, 33 CLI tests and 22
   documentation checks; CI ran the same suite on Linux, macOS and Windows
@@ -43,11 +43,14 @@ stable id and file it in the right bucket.
   `CHANGELOG.md`.
 - **protoCore, protoIO:** 0.9.0 requires protoIO 0.4.0 or a later 0.4.x (a
   0.3.x checkout is refused at configure time). 0.9.0 and 0.8.1 require protoCore
-  3.4.0 or later built from source, and 0.8.1's `.deb` 3.5.0 (SOVERSION 5 in both; 0.8.0 required 3.4.0, which removed
+  3.4.0 or later built from source; 0.9.0's `.deb` requires 3.5.2 and 0.8.1's
+  3.5.0 (SOVERSION 5 in all; 0.8.0 required 3.4.0, which removed
   `ProtoContext::pendingRoot`, so `ProtoContext`'s layout changed; 0.7.0
   required 3.0.0, for the descriptor calling convention and the unified
   exception model); its
-  `.deb` is built against 3.5.0 and depends on `protocore (>= 3.5.0)`. Since
+  `.deb` is built against 3.5.2 and depends on `protocore (>= 3.5.2)`; 3.5.2
+  fixes a race in `ProtoSpace::newThread` that the ThreadSanitizer job found
+  (`KNOWN_ISSUES.md` K10). Since
   2.14.6 protoCore's
   integer comparison, division and modulo no longer allocate and its
   collector's mark work list is bounded (`benchmarks/reports/2026-10-12-protocore-2.14.6.md`:

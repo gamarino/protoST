@@ -8,15 +8,13 @@ dependency on protoCore's own package instead of shipping a copy.
 On a Debian or Ubuntu machine where protoCore's package is installed, the
 library is `/usr/lib/x86_64-linux-gnu/libprotoCore.so.5`, a link to
 `libprotoCore.so.<version>`. protoST 0.9.0 needs protoCore 3.4.0 or later
-(*Prerequisites*), as 0.8.1 and 0.8.0 did (0.7.0 needed 3.0.0). No `.deb`
-has been built for 0.9.0 yet: the last published one is 0.8.1's, built and
-tested against protoCore 3.5.0, the release to install with it, which depends
-on `protocore (>= 3.5.0)` through protoCore's shlibs file. CI builds against
-protoCore 3.5.0 on Linux, macOS and Windows, and against 3.4.0, the declared
-minimum, in one Linux job (the floor job); it pins protoIO 0.4.0 (main
-`41a5db0`, not yet tagged), which 0.9.0 requires (see *Prerequisites*). The
-suite was last run locally (2026-11-10) against protoCore 3.5.0 and the
-protoIO 0.4.0 tree.
+(*Prerequisites*), as 0.8.1 and 0.8.0 did (0.7.0 needed 3.0.0). Its `.deb`
+is built and tested against protoCore 3.5.2, the release to install with it,
+and depends on `protocore (>= 3.5.2)` through protoCore's shlibs file. CI
+builds against protoCore 3.5.2 on Linux, macOS and Windows, and against
+3.4.0, the declared minimum, in one Linux job (the floor job); it pins protoIO
+0.4.0 (tag `v0.4.0`), which 0.9.0 requires (see *Prerequisites*). The suite
+was last run locally (2026-11-10) against protoCore 3.5.2 and protoIO 0.4.0.
 
 ---
 
@@ -344,18 +342,18 @@ using the Linux packages:
 wsl --install -d Ubuntu-24.04
 
 # Then, in the Ubuntu shell: the two packages of the GitHub releases.
-wget https://github.com/numaes/protoCore/releases/download/v3.5.0/protoCore-3.5.0-Linux.deb
-wget https://github.com/gamarino/protoST/releases/download/v0.8.1/protost-0.8.1-Linux.deb
-sudo apt install ./protoCore-3.5.0-Linux.deb ./protost-0.8.1-Linux.deb
+wget https://github.com/numaes/protoCore/releases/download/v3.5.2/protoCore-3.5.2-Linux.deb
+wget https://github.com/gamarino/protoST/releases/download/v0.9.0/protost-0.9.0-Linux.deb
+sudo apt install ./protoCore-3.5.2-Linux.deb ./protost-0.9.0-Linux.deb
 protost --version
 ```
 
 The packages are attached to the GitHub releases
-[protoCore v3.5.0](https://github.com/numaes/protoCore/releases/tag/v3.5.0)
-and [protoST v0.8.1](https://github.com/gamarino/protoST/releases/tag/v0.8.1)
+[protoCore v3.5.2](https://github.com/numaes/protoCore/releases/tag/v3.5.2)
+and [protoST v0.9.0](https://github.com/gamarino/protoST/releases/tag/v0.9.0)
 (built on Ubuntu 24.04, x86_64). The same commands install them on Ubuntu
-24.04 itself. Built from source, protoST 0.8.1's floor is protoCore 3.4.0;
-the `.deb` depends on `protocore (>= 3.5.0)`, the release CI builds against
+24.04 itself. Built from source, protoST 0.9.0's floor is protoCore 3.4.0;
+the `.deb` depends on `protocore (>= 3.5.2)`, the release CI builds against
 (*Prerequisites*). The package also installs the FAST talk's demos, ready to
 run: `cd /usr/share/protoST/talks/2026-10-15-fas/demos && ./check_all.sh`
 (demo 4 needs `python3`). A machine that still has an older protoCore package (the

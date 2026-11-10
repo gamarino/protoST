@@ -189,7 +189,11 @@ overflows the native stack.
 
 ## K10 — What the 0.9.0 tests do not prove (open)
 
-- **ThreadSanitizer finds one race, in protoCore.** `-DPROTOST_TSAN=ON` and
+- **ThreadSanitizer: clean against protoCore 3.5.2, but a clean run is not
+  proof.** Against a TSan build of protoCore 3.5.2 and protoIO 0.4.0 the
+  label ran 580/580 on 2026-11-10 with no report, including the three
+  programs below that used to report protoCore's race. History:
+  `-DPROTOST_TSAN=ON` and
   the `tsan` label (580 tests: every unit case, the actor, Future, Atom,
   timer and `BinaryFile` programs, the concurrency and debugger CLI tests;
   `docs/INSTALLATION.md`) ran on 2026-11-10 against a TSan build of
@@ -207,6 +211,8 @@ overflows the native stack.
   (`14-io/http_concurrent`, `14-io/net_pool_growth`,
   `15-binary/binfile_lock_actors`; two or three of them per run). protoCore
   3.5.2 fixes it; the CI job that runs the label builds 3.5.2 and gates.
+  What stays open is what any TSan run leaves open: it sees only the
+  interleavings that happened.
 - **`InternalError` cannot be forced from a program.** protoIO raises it only
   for OpenSSL failures that are practically unreachable, and the runtime ships
   no test-only primitive. The mapping (`src/primitives/ProtoioErrors.h`) is
