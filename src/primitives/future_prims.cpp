@@ -166,11 +166,12 @@ bool appendOrDrained(proto::ProtoContext* ctx,
 // The core lock-free settle. `reject == false` resolves with `payload` as the
 // value; `reject == true` rejects with `payload` as the error. Idempotent:
 // the first caller to win the __settling__ CAS settles the future; every
-// later call (and a concurrent loser) is a silent no-op.
-void settleFuture(STRuntime& rt, proto::ProtoContext* ctx,
+// later call (and a concurrent loser) is a silent no-op. Answers whether this
+// call settled the future.
+bool settleFuture(STRuntime& rt, proto::ProtoContext* ctx,
                   const proto::ProtoObject* future,
                   bool reject, const proto::ProtoObject* payload) {
-    if (!future) return;
+    if (!future) return false;
     const proto::ProtoString* settlingKey =
         rt.bootstrap().sym.settling;
     // F6 v5 hot-path fix (2026-05-23): these were createSymbol calls in every
@@ -199,7 +200,7 @@ void settleFuture(STRuntime& rt, proto::ProtoContext* ctx,
     //    one caller; everyone else loses and returns.
     if (!const_cast<proto::ProtoObject*>(future)
             ->setAttributeIfEqual(ctx, settlingKey, nullptr, PROTO_TRUE)) {
-        return;  // already settled / being settled
+        return false;  // already settled / being settled
     }
 
     // 1b. A pending timer for this future (Future after:, within:) stops
@@ -257,6 +258,7 @@ void settleFuture(STRuntime& rt, proto::ProtoContext* ctx,
             if (w && w != PROTO_NONE) rt.schedule(ctx, w);
         }
     }
+    return true;
 }
 
 // Read __state__ (0 pending / 1 resolved / 2 rejected). Takes `rt` so we can
@@ -499,29 +501,25 @@ const proto::ProtoObject* prim_Future_rejectWith(STRuntime& rt, proto::ProtoCont
     return r;
 }
 
-// Future>>thenDo: aBlock — register a callback fired with the resolved value.
-// Already resolved: fires now. Already rejected: no-op (catch: covers that).
-const proto::ProtoObject* prim_Future_thenDo(STRuntime& rt, proto::ProtoContext* ctx,
-                                              const proto::ProtoObject* r,
-                                              const proto::ProtoObject* const* a,
-                                              int argc) {
-    markFutureObserved(ctx, r);
-    if (argc != 1) throw std::runtime_error("Future>>thenDo: expects 1 arg");
+// Register `block` to run with the resolved value of `r`. Already resolved:
+// fires now. Already rejected: no-op (catch: covers that). Whether this counts
+// as observing `r` is the caller's decision (prim_Future_thenDo).
+void registerThen(STRuntime& rt, proto::ProtoContext* ctx,
+                  const proto::ProtoObject* r, const proto::ProtoObject* block) {
     const proto::ProtoString* valueKey =
         rt.bootstrap().sym.value;
     const proto::ProtoString* thenCbsKey =
         rt.bootstrap().sym.thenCbs;
-    auto* block = a[0];
 
     // Fast paths on an already-settled future (__state__ is published last by
     // settleFuture, so a non-zero read is authoritative).
     long long s = readState(rt, ctx, r);
-    if (s == 2) return r;  // rejected — thenDo: never fires
+    if (s == 2) return;  // rejected — thenDo: never fires
     if (s == 1) {
         auto* v = r->getOwnAttributeDirect(ctx, valueKey);
         const proto::ProtoObject* args[] = { v ? v : PROTO_NONE };
         invokeCallback(rt, ctx, block, args, 1);
-        return r;
+        return;
     }
     // Pending (or mid-settle): CAS-append, or fire now if a resolve already
     // drained __then_cbs__. appendOrDrained == false only when a *resolve*
@@ -531,36 +529,96 @@ const proto::ProtoObject* prim_Future_thenDo(STRuntime& rt, proto::ProtoContext*
         const proto::ProtoObject* args[] = { v ? v : PROTO_NONE };
         invokeCallback(rt, ctx, block, args, 1);
     }
-    return r;
 }
 
-// Future>>catch: aBlock — register a callback fired with the rejection error.
-// Already rejected: fires now. Already resolved: no-op.
-const proto::ProtoObject* prim_Future_catch(STRuntime& rt, proto::ProtoContext* ctx,
-                                             const proto::ProtoObject* r,
-                                             const proto::ProtoObject* const* a,
-                                             int argc) {
-    markFutureObserved(ctx, r);
-    if (argc != 1) throw std::runtime_error("Future>>catch: expects 1 arg");
+// Register `block` to run with the rejection error of `r`. Already rejected:
+// fires now. Already resolved: no-op.
+void registerCatch(STRuntime& rt, proto::ProtoContext* ctx,
+                   const proto::ProtoObject* r, const proto::ProtoObject* block) {
     const proto::ProtoString* errorKey =
         rt.bootstrap().sym.error;
     const proto::ProtoString* catchCbsKey =
         rt.bootstrap().sym.catchCbs;
-    auto* block = a[0];
 
     long long s = readState(rt, ctx, r);
-    if (s == 1) return r;  // resolved — catch: never fires
+    if (s == 1) return;  // resolved — catch: never fires
     if (s == 2) {
         auto* e = r->getOwnAttributeDirect(ctx, errorKey);
         const proto::ProtoObject* args[] = { e ? e : PROTO_NONE };
         invokeCallback(rt, ctx, block, args, 1);
-        return r;
+        return;
     }
     if (!appendOrDrained(ctx, r, catchCbsKey, block)) {
         auto* e = r->getOwnAttributeDirect(ctx, errorKey);
         const proto::ProtoObject* args[] = { e ? e : PROTO_NONE };
         invokeCallback(rt, ctx, block, args, 1);
     }
+}
+
+// Future>>thenDo: aBlock — register a callback fired with the resolved value.
+// Registering observes the Future: an actor error it receives is not reported
+// as unobserved (see markFutureObserved).
+const proto::ProtoObject* prim_Future_thenDo(STRuntime& rt, proto::ProtoContext* ctx,
+                                              const proto::ProtoObject* r,
+                                              const proto::ProtoObject* const* a,
+                                              int argc) {
+    markFutureObserved(ctx, r);
+    if (argc != 1) throw std::runtime_error("Future>>thenDo: expects 1 arg");
+    registerThen(rt, ctx, r, a[0]);
+    return r;
+}
+
+// Future>>catch: aBlock — register a callback fired with the rejection error.
+// Registering observes the Future, as thenDo: does.
+const proto::ProtoObject* prim_Future_catch(STRuntime& rt, proto::ProtoContext* ctx,
+                                             const proto::ProtoObject* r,
+                                             const proto::ProtoObject* const* a,
+                                             int argc) {
+    markFutureObserved(ctx, r);
+    if (argc != 1) throw std::runtime_error("Future>>catch: expects 1 arg");
+    registerCatch(rt, ctx, r, a[0]);
+    return r;
+}
+
+// The private half of within: (lib/kernel/future.st). within: passes the
+// receiver's result on to the Future it answers; that is not observing the
+// receiver, because the answer may already have settled (its deadline passed)
+// when the receiver settles, and the receiver's error then reaches nobody.
+//
+//   aFuture __thenDoUnobserved: aBlock     thenDo:, without observing aFuture
+//   aFuture __catchUnobserved: aBlock      catch:, without observing aFuture
+//   aFuture __passError: error to: other   rejects `other` with `error` if it
+//       is still pending. If it was, the error has been handed on, and aFuture
+//       counts as observed from now on; if `other` had already settled, the
+//       error stays recorded against aFuture and is reported as an unhandled
+//       actor error at exit unless something else observes aFuture.
+const proto::ProtoObject* prim_Future_thenDoUnobserved(STRuntime& rt, proto::ProtoContext* ctx,
+                                                        const proto::ProtoObject* r,
+                                                        const proto::ProtoObject* const* a,
+                                                        int argc) {
+    if (argc != 1) throw std::runtime_error("Future>>__thenDoUnobserved: expects 1 arg");
+    registerThen(rt, ctx, r, a[0]);
+    return r;
+}
+
+const proto::ProtoObject* prim_Future_catchUnobserved(STRuntime& rt, proto::ProtoContext* ctx,
+                                                       const proto::ProtoObject* r,
+                                                       const proto::ProtoObject* const* a,
+                                                       int argc) {
+    if (argc != 1) throw std::runtime_error("Future>>__catchUnobserved: expects 1 arg");
+    registerCatch(rt, ctx, r, a[0]);
+    return r;
+}
+
+const proto::ProtoObject* prim_Future_passErrorTo(STRuntime& rt, proto::ProtoContext* ctx,
+                                                   const proto::ProtoObject* r,
+                                                   const proto::ProtoObject* const* a,
+                                                   int argc) {
+    if (argc != 2) throw std::runtime_error("Future>>__passError:to: expects 2 args");
+    const proto::ProtoObject* other = a[1];
+    if (!other || other == PROTO_NONE || other->hasParent(ctx, rt.bootstrap().futureProto) == 0)
+        throw std::runtime_error("Future>>__passError:to: a Future was expected");
+    if (settleFuture(rt, ctx, other, /*reject=*/true, a[0])) markFutureObserved(ctx, r);
     return r;
 }
 
@@ -702,6 +760,12 @@ void installFuturePrimitives(STRuntime& rt) {
                   reg.registerPrim(prim_Future_thenDo));
     bindPrimitive(rt, b.futureProto, "catch:",
                   reg.registerPrim(prim_Future_catch));
+    bindPrimitive(rt, b.futureProto, "__thenDoUnobserved:",
+                  reg.registerPrim(prim_Future_thenDoUnobserved));
+    bindPrimitive(rt, b.futureProto, "__catchUnobserved:",
+                  reg.registerPrim(prim_Future_catchUnobserved));
+    bindPrimitive(rt, b.futureProto, "__passError:to:",
+                  reg.registerPrim(prim_Future_passErrorTo));
     // `Future new` — a first-class, manually-resolvable promise. Overrides the
     // inherited Object>>new so the result carries the full future machinery.
     bindPrimitive(rt, b.futureProto, "new",

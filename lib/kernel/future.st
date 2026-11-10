@@ -54,12 +54,18 @@ Future class >> after: ms
  milliseconds, and is otherwise rejected with a TimeoutError. The receiver is
  not cancelled: it may still settle later, and that result is then ignored by
  the answer (a Future settles once). An already settled receiver gives an
- answer settled the same way at once."
+ answer settled the same way at once.
+ Passing the result on does not observe the receiver: an actor error that
+ arrives after the deadline, when the answer has already settled, reaches
+ nobody, and is reported as an unhandled actor error unless something else
+ observes the receiver (src/primitives/future_prims.cpp, __passError:to:).
+ Each within: adds one pair of callbacks to the receiver, kept until the
+ receiver settles."
 Future >> within: ms
   | result |
   result := Future new.
-  self thenDo: [:value | result resolve: value].
-  self catch: [:error | result rejectWith: error].
+  self __thenDoUnobserved: [:value | result resolve: value].
+  self __catchUnobserved: [:error | self __passError: error to: result].
   ^ result __rejectTimeoutAfter: ms.
 
 "(self within: ms) wait: the receiver's value, or a TimeoutError signalled when
