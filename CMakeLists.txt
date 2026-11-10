@@ -251,7 +251,7 @@ target_link_libraries(protost_runtime PRIVATE protost_warnings)
 # dependency.
 #
 # The floor is 0.3.0: Error::Kind::Internal, a failure inside a library
-# protoIO relies on (io_prims.cpp maps it to InternalError), with the binary
+# protoIO relies on (ProtoioErrors.h maps it to InternalError), with the binary
 # encodings, digests and durable files the bytes work builds on. 0.2.3 brought
 # readBufferedLine, which nextLine uses to take a line
 # already in protoIO's read-ahead buffer without leaving the collector's

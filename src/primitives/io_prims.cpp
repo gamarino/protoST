@@ -1,6 +1,7 @@
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
 #include "primitives/BytesSupport.h"
+#include "primitives/ProtoioErrors.h"
 #include "primitives/StringSupport.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/TransientPin.h"
@@ -181,29 +182,6 @@ std::string dataArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
 
 // ------------------------------------------------------------------ errors
 
-// The protoST error class of each protoio::Error kind. InvalidArgument (a
-// value the library refuses) is the generic error the primitives raise for a
-// bad argument. Internal (a failure inside a library protoIO relies on, such
-// as OpenSSL, caused neither by the program nor by its environment) is an
-// InternalError.
-[[noreturn]] void raise(const protoio::Error& e) {
-    switch (e.kind) {
-        case Kind::FileNotFound: throw ClassedErrorSignal("FileDoesNotExist", e.what());
-        case Kind::FileExists: throw ClassedErrorSignal("FileAlreadyExists", e.what());
-        case Kind::FileSystem: throw ClassedErrorSignal("FileSystemError", e.what());
-        case Kind::ConnectionRefused: throw ClassedErrorSignal("ConnectionRefused", e.what());
-        case Kind::ConnectionTimedOut: throw ClassedErrorSignal("ConnectionTimedOut", e.what());
-        case Kind::NameLookup: throw ClassedErrorSignal("NameLookupFailure", e.what());
-        case Kind::Network: throw ClassedErrorSignal("NetworkError", e.what());
-        case Kind::Process: throw ClassedErrorSignal("OSProcessError", e.what());
-        case Kind::LineTooLong: throw ClassedErrorSignal("LineTooLong", e.what());
-        case Kind::BodyTooLarge: throw ClassedErrorSignal("BodyTooLarge", e.what());
-        case Kind::Internal: throw ClassedErrorSignal("InternalError", e.what());
-        case Kind::InvalidArgument: break;
-    }
-    throw std::runtime_error(e.what());
-}
-
 // ---------------------------------------------------------------- brackets
 //
 // Each runs `f` (which calls protoIO with C++ values only) and answers its
@@ -231,7 +209,7 @@ auto blocking(STRuntime& rt, proto::ProtoContext* ctx, F&& f) -> decltype(f()) {
         proto::ProtoContext::UnmanagedScope out(ctx);
         return f();
     } catch (const protoio::Error& e) {
-        raise(e);
+        raiseProtoioError(e);
     }
 }
 
@@ -243,7 +221,7 @@ auto unmanaged(proto::ProtoContext* ctx, F&& f) -> decltype(f()) {
         proto::ProtoContext::UnmanagedScope out(ctx);
         return f();
     } catch (const protoio::Error& e) {
-        raise(e);
+        raiseProtoioError(e);
     }
 }
 
@@ -253,7 +231,7 @@ auto immediate(F&& f) -> decltype(f()) {
     try {
         return f();
     } catch (const protoio::Error& e) {
-        raise(e);
+        raiseProtoioError(e);
     }
 }
 

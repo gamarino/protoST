@@ -1,6 +1,7 @@
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
 #include "primitives/BytesSupport.h"
+#include "primitives/ProtoioErrors.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/ClassedErrorSignal.h"
 #include "protoCore.h"
@@ -327,13 +328,13 @@ int widthArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
     return static_cast<int>(w);
 }
 
-// Runs a protoio call, answering its failure as an Error with the primitive's name.
+// Runs a protoio call; its failure becomes the protoST error for its kind (ProtoioErrors.h), prefixed with the operation.
 template <class F>
 auto packing(const char* who, F&& f) -> decltype(f()) {
     try {
         return f();
     } catch (const protoio::Error& e) {
-        throw std::runtime_error(std::string(who) + ": " + e.what());
+        raiseProtoioError(e, who);
     }
 }
 
@@ -468,8 +469,9 @@ std::string_view bytesArg(proto::ProtoContext* ctx, const PO* v, const char* who
 
 // A non-negative Integer not above `max` (read exactly, so a LargeInteger is
 // range-checked rather than rejected as a type error).
-std::uint64_t unsignedArg(proto::ProtoContext* ctx, const PO* v, std::uint64_t max,
+std::uint64_t unsignedArg(proto::ProtoContext* ctx, const PO* v, int bits,
                           const char* what, const char* who) {
+    const std::uint64_t max = bits == 64 ? ~std::uint64_t{0} : (std::uint64_t{1} << bits) - 1;
     const std::string text = integerDigits(ctx, v, who);
     if (text[0] == '-')
         throw std::runtime_error(std::string(who) + ": " + what + " " + text
@@ -478,14 +480,14 @@ std::uint64_t unsignedArg(proto::ProtoContext* ctx, const PO* v, std::uint64_t m
     const std::uint64_t u = std::strtoull(text.c_str(), nullptr, 10);
     if (errno == ERANGE || u > max)
         throw std::runtime_error(std::string(who) + ": " + what + " " + text
-                                 + " does not fit in " + (max == 0xFFFFFFFFull ? "32 bits" : "64 bits"));
+                                 + " does not fit in " + std::to_string(bits) + " bits");
     return u;
 }
 
 // aByteArray __crc32Continuing: crc -> zlib.crc32(self, crc).
 PRIM(prim_Crc32) {
     ARGS(1, "__crc32Continuing:");
-    const std::uint64_t crc = unsignedArg(ctx, a[0], 0xFFFFFFFFull, "the running crc", "ByteArray crc32Continuing:");
+    const std::uint64_t crc = unsignedArg(ctx, a[0], 32, "the running crc", "ByteArray crc32Continuing:");
     return ctx->fromLong(static_cast<long long>(
         protoio::digest::crc32(bytesView(ctx, r), static_cast<std::uint32_t>(crc))));
 }
@@ -494,9 +496,9 @@ PRIM(prim_Crc32) {
 PRIM(prim_Crc32Combine) {
     ARGS(3, "__crc32Combine:with:length:");
     const char* who = "CRC32 combine:with:length:";
-    const std::uint64_t ca = unsignedArg(ctx, a[0], 0xFFFFFFFFull, "the crc", who);
-    const std::uint64_t cb = unsignedArg(ctx, a[1], 0xFFFFFFFFull, "the crc", who);
-    const std::uint64_t n = unsignedArg(ctx, a[2], ~std::uint64_t{0}, "the length", who);
+    const std::uint64_t ca = unsignedArg(ctx, a[0], 32, "the crc", who);
+    const std::uint64_t cb = unsignedArg(ctx, a[1], 32, "the crc", who);
+    const std::uint64_t n = unsignedArg(ctx, a[2], 64, "the length", who);
     return ctx->fromLong(static_cast<long long>(protoio::digest::crc32Combine(
         static_cast<std::uint32_t>(ca), static_cast<std::uint32_t>(cb), n)));
 }

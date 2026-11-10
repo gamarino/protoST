@@ -30,9 +30,9 @@ blake VectorsBlake2b all do: [:e |
   d := (e at: 2) isEmpty
     ifTrue: [(e at: 1) blake2b: (e at: 3)]
     ifFalse: [(e at: 1) blake2b: (e at: 3) key: (e at: 2)].
-  (d = (e at: 4) and: [(e at: 2) isEmpty not or: [
-     ((e at: 1) blake2b: (e at: 3) key: (e at: 2)) = (e at: 4)]])
-    ifFalse: [failed := failed + 1]].
+  d = (e at: 4) ifFalse: [failed := failed + 1].
+  "The same digest through blake2b:key: (an empty key is no key)."
+  ((e at: 1) blake2b: (e at: 3) key: (e at: 2)) = (e at: 4) ifFalse: [failed := failed + 1]].
 report nextPutAll: ', blake2b ', failed printString, ' failed of ', count printString.
 
 failed := 0. count := 0.
