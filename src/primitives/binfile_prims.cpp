@@ -278,8 +278,12 @@ PRIM(prim_BinFileWriteAt) {
     const std::string data = bytesArg(ctx, a[2], who);
     auto file = openFile(ctx, a[0], who);
     // A write that extends the file moves its end like an append does, so it
-    // takes the same claim. A write inside the file cannot move the end (the
-    // size only grows meanwhile), so overwrites stay concurrent.
+    // takes the same claim. A write judged inside the file takes none, so
+    // overwrites stay concurrent. The size is read before any claim: a
+    // concurrent truncateTo: can shrink the file after that read, and the
+    // write then extends it unclaimed. That is the caller's race (truncating
+    // a region another actor is writing into); append offsets stay correct,
+    // because appendData answers where its bytes landed.
     unmanaged(ctx, [&] {
         const std::shared_ptr<OpenFile> held = std::move(file);
         const bool extends = offset + static_cast<long long>(data.size()) > protoio::file::size(held->fd);

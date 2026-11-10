@@ -20,7 +20,10 @@
      own bytes at its own offset). The call that finds the guard in a
      conflicting mode signals an Error naming what collided and does
      nothing. A writeAt:bytes: inside the file takes no claim; two writes
-     over the same bytes are the caller's race, as in any file API.
+     over the same bytes are the caller's race, as in any file API. So is a
+     writeAt:bytes: running while truncateTo: shrinks the file: the write
+     may then extend the file without the guard and overwrite bytes a later
+     append: puts there (the offsets append: answers stay correct).
    - What cannot be detected: appenders or writers in other processes, or
      through another BinaryFile object opened on the same file.
      (A protoBaseST segment has a single writer actor.)
