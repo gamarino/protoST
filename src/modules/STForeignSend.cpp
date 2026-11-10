@@ -1,3 +1,4 @@
+#include "runtime/ClassedErrorSignal.h"
 #include "STForeignSend.h"
 #include "STModuleProvider.h"
 #include "protoST/STRuntime.h"
@@ -50,7 +51,7 @@ const proto::ProtoObject* sendMessage(STRuntime& rt, proto::ProtoContext* ctx,
     const Bootstrap& bs = rt.bootstrap();
     const std::string selText = selector->toStdString(ctx);
     if (rt.isActor(ctx, recv))
-        throw std::runtime_error("protoST: #" + selText +
+        throw ClassedErrorSignal("Error", "protoST: #" + selText +
                                  " was sent to an actor from another runtime, which is not "
                                  "supported: an actor's messages are asynchronous");
     const proto::ProtoObject* holder = methodHolder(bs, ctx, recv);
@@ -91,7 +92,7 @@ const proto::ProtoObject* sendMessage(STRuntime& rt, proto::ProtoContext* ctx,
         return r ? r : PROTO_NONE;
     }
     if (argc == 0) return attr;  // a value attribute, read by a unary send
-    throw std::runtime_error("#" + selText +
+    throw ClassedErrorSignal("Error", "#" + selText +
                              ": the attribute is a value, not a method; only unary sends "
                              "read value attributes");
 }

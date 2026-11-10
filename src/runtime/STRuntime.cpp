@@ -1,3 +1,4 @@
+#include "runtime/ClassedErrorSignal.h"
 #include "protoST/STRuntime.h"
 #include "runtime/PrimitiveMarker.h"
 #include "protoST/primitives.h"
@@ -112,6 +113,9 @@ const proto::ProtoObject* rejectionFor(proto::ProtoContext* ctx, const proto::Pr
     return e.value();
 }
 const proto::ProtoObject* rejectionFor(proto::ProtoContext* ctx, const std::exception& e) {
+    // A ClassedErrorSignal carries its full text; what() would end at a NUL.
+    if (const auto* c = dynamic_cast<const ClassedErrorSignal*>(&e))
+        return makeString(ctx, c->message());
     return makeString(ctx, e.what());
 }
 
@@ -2108,7 +2112,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                 const proto::ProtoString* cstr =
                     (cname && cname != PROTO_NONE) ? cname->asString(ctx) : nullptr;
                 if (cstr) msg += " (receiver class: " + cstr->toStdString(ctx) + ")";
-                throw std::runtime_error(msg);
+                throw ClassedErrorSignal("Error", msg);
             }
 
             if (future) {
