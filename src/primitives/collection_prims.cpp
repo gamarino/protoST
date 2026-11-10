@@ -682,7 +682,7 @@ bool forEachElement(STRuntime& rt, proto::ProtoContext* ctx,
         TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
         proto::proto_ulong n = data->getSize(ctx);
         for (proto::proto_ulong i = 0; i < n; ++i) {
-            const proto::ProtoObject* e = data->getAt(ctx, static_cast<int>(i));
+            const proto::ProtoObject* e = data->getAt(ctx, listIndex(i));
             if (!fn(e ? e : PROTO_NONE)) return false;
         }
         return true;
@@ -728,7 +728,7 @@ bool forEachElement(STRuntime& rt, proto::ProtoContext* ctx,
         TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
         proto::proto_ulong n = data->getSize(ctx);
         for (proto::proto_ulong i = 0; i < n; ++i) {
-            const proto::ProtoObject* e = data->getAt(ctx, static_cast<int>(i));
+            const proto::ProtoObject* e = data->getAt(ctx, listIndex(i));
             if (!fn(e ? e : PROTO_NONE)) return false;
         }
         return true;

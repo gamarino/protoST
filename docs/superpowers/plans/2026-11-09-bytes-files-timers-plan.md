@@ -350,7 +350,7 @@ the Task 2 review found that pre-existing String primitives build results throug
   - `MessagePackExt class >> type:data:`, with `type` and `data`.
 - Mapping: the table in spec §4.5. Symbols encode as str. An integer outside
   [−2^63, 2^64−1] signals `Error`. An unsupported class signals `Error` with
-  the text `MessagePack cannot encode a <ClassName>`.
+  the text `MessagePack cannot encode an instance of <ClassName>`.
 - Encode walks the graph in C++, with an identity set of the containers in
   the current path: meeting one again signals `Error` with the text
   `MessagePack: cyclic structure`.

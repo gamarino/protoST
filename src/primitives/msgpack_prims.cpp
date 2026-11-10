@@ -54,12 +54,6 @@ using PO = proto::ProtoObject;
 // encoder refuses what the decoder would refuse.
 const size_t kMaxDepth = protoio::msgpack::Limits{}.maxDepth;
 
-// protoCore lists are indexed by int: a size beyond it cannot be addressed.
-int listIndex(size_t i) {
-    if (i > static_cast<size_t>(INT_MAX))
-        throw std::runtime_error("MessagePack: a container of more than 2^31 - 1 elements");
-    return static_cast<int>(i);
-}
 
 bool booleanArg(const PO* v, const char* who) {
     if (v == PROTO_TRUE) return true;
@@ -93,9 +87,19 @@ std::string classNameOf(STRuntime& rt, proto::ProtoContext* ctx, const PO* v) {
 // being written and the items still to write. `path` holds the containers of
 // the frames now open: meeting one of them again is a cycle (a container that
 // appears twice without being inside itself is shared, not cyclic, and encodes
-// twice). Nothing is allocated in the protoCore heap while walking except by
-// the sends for the class name of an unsupported value, and every object read
-// is reachable from the root the caller holds.
+// twice).
+//
+// Rooting contract. The walk allocates (LargeInteger digits, sends, the lists
+// below), and the items of a frame are raw pointers read from a snapshot (the
+// container's immutable list or map) that another actor may replace at any
+// moment, dropping the snapshot's last reference. So the encoder owns ONE
+// rooted structure, `roots_`, a ProtoList held by a single TransientPin: when
+// a frame opens, the snapshot its items point into is appended to it, and when
+// the frame closes it is removed (frames are strictly LIFO). A
+// MessagePackMap's flattened key/value items are not stored anywhere in the
+// graph, and an Association's key may be replaced by another actor, so they
+// are first copied into a fresh list and that list is rooted instead. The
+// root passed in by the caller is reachable through the primitive's argument.
 class Encoder {
 public:
     Encoder(STRuntime& rt, proto::ProtoContext* ctx, const PO* mapClass, const PO* extClass)
