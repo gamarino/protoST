@@ -82,6 +82,7 @@ namespace protoST { void installExceptionPrimitives(STRuntime& rt); }
 namespace protoST { void installCollectionPrimitives(STRuntime& rt); }
 namespace protoST { void installIoPrimitives(STRuntime& rt); }
 namespace protoST { void installBytesPrimitives(STRuntime& rt); }
+namespace protoST { void installBinaryFilePrimitives(STRuntime& rt); }
 
 // F6-A6: future transition helpers defined alongside the Future primitives.
 // resolveFutureFromDrain / rejectFutureFromDrain perform the lock-free
@@ -744,6 +745,7 @@ void STRuntime::construct() {
     installExceptionPrimitives(*this);
     installIoPrimitives(*this);
     installBytesPrimitives(*this);
+    installBinaryFilePrimitives(*this);
     installCollectionPrimitives(*this);
     installImportGlobal(*this);
     installWorkerPoolGlobal(*this);

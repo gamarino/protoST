@@ -1,6 +1,7 @@
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
 #include "primitives/BytesSupport.h"
+#include "primitives/IoBrackets.h"
 #include "primitives/ProtoioErrors.h"
 #include "primitives/StringSupport.h"
 #include "runtime/Bootstrap.h"
@@ -178,61 +179,6 @@ std::string dataArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
         std::fputs("protoST: warning: Array arguments are deprecated and will be refused in protoST 0.10.0;"
                    " pass a ByteArray (ByteArray withAll: anArray)\n", stderr);
     return out;
-}
-
-// ------------------------------------------------------------------ errors
-
-// ---------------------------------------------------------------- brackets
-//
-// Each runs `f` (which calls protoIO with C++ values only) and answers its
-// result. A protoio::Error is caught after the scopes have been left, so the
-// protoST error is raised with the context managed again.
-
-// Accounts a blocking call on a pool worker, so the scheduler can add a
-// worker while this one waits (STRuntime::enterBlockingIO). Constructed
-// before the UnmanagedScope: adding a worker allocates.
-struct BlockingIO {
-    STRuntime& rt;
-    bool active;
-    BlockingIO(STRuntime& r, proto::ProtoContext* ctx) : rt(r), active(r.enterBlockingIO(ctx)) {}
-    ~BlockingIO() { if (active) rt.leaveBlockingIO(); }
-    BlockingIO(const BlockingIO&) = delete;
-    BlockingIO& operator=(const BlockingIO&) = delete;
-};
-
-// For a call that can wait without bound: on a peer, a child process, a
-// terminal or a pipe.
-template <typename F>
-auto blocking(STRuntime& rt, proto::ProtoContext* ctx, F&& f) -> decltype(f()) {
-    try {
-        BlockingIO accounted(rt, ctx);
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        return f();
-    } catch (const protoio::Error& e) {
-        raiseProtoioError(e);
-    }
-}
-
-// For a call that can block only briefly (the local file system, binding a
-// socket): out of the collector's quorum, without growing the worker pool.
-template <typename F>
-auto unmanaged(proto::ProtoContext* ctx, F&& f) -> decltype(f()) {
-    try {
-        proto::ProtoContext::UnmanagedScope out(ctx);
-        return f();
-    } catch (const protoio::Error& e) {
-        raiseProtoioError(e);
-    }
-}
-
-// For a call that does not block.
-template <typename F>
-auto immediate(F&& f) -> decltype(f()) {
-    try {
-        return f();
-    } catch (const protoio::Error& e) {
-        raiseProtoioError(e);
-    }
 }
 
 // ============================================================ primitives
@@ -485,6 +431,25 @@ PRIM(prim_FileMove) {
     return r;
 }
 
+// __fileReplace: from with: to — renames `from` to `to`, replacing an
+// existing `to` atomically (CPython's os.replace: rename(2) on POSIX).
+PRIM(prim_FileReplace) {
+    ARGS(2, "__fileReplace:with:");
+    const std::string from = str(ctx, a[0], "replace:with:"), to = str(ctx, a[1], "replace:with:");
+    unmanaged(ctx, [&] { protoio::file::replace(from, to); });
+    return r;
+}
+
+// __fileSyncDirectory: path — makes the directory's entries (created, renamed
+// or removed names) durable: fsync of the directory on POSIX, a no-op on
+// Windows. It waits for the storage device, without bound: blocking().
+PRIM(prim_FileSyncDirectory) {
+    ARGS(1, "__fileSyncDirectory:");
+    const std::string path = str(ctx, a[0], "syncDirectory:");
+    blocking(rt, ctx, [&] { protoio::file::syncDirectory(path); });
+    return r;
+}
+
 // __fileCopy: from to: to — files and whole directory trees.
 PRIM(prim_FileCopy) {
     ARGS(2, "__fileCopy:to:");
@@ -692,6 +657,7 @@ void installIoPrimitives(STRuntime& rt) {
         {"__fileOpen:mode:", prim_FileOpen},     {"__fileRead:binary:", prim_FileRead},
         {"__fileWrite:data:append:", prim_FileWrite}, {"__fileStat:", prim_FileStat},
         {"__fileDelete:recursive:", prim_FileDelete}, {"__fileMove:to:", prim_FileMove},
+        {"__fileReplace:with:", prim_FileReplace}, {"__fileSyncDirectory:", prim_FileSyncDirectory},
         {"__fileCopy:to:", prim_FileCopy},       {"__dirCreate:parents:", prim_DirCreate},
         {"__dirList:", prim_DirList},            {"__fileAbsolute:", prim_FileAbsolute},
         {"__fileTempDir", prim_TempDir},

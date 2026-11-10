@@ -396,6 +396,24 @@ FileSystem class >> temp
 FileSystem class >> root
   ^ FileReference path: '/'.
 
+FileSystem class >> replace: fromPath with: toPath
+  "Renames fromPath to toPath (Strings or FileReferences), replacing an
+   existing toPath atomically: CPython's os.replace semantics (rename(2) on
+   POSIX), so a reader sees the old file or the new one, never a mix. Both
+   must be on the same file system. Make the new name durable with
+   syncDirectory: on its directory."
+  self __fileReplace: fromPath asFileReference pathString with: toPath asFileReference pathString.
+  ^ self.
+
+FileSystem class >> syncDirectory: aPath
+  "Makes the entries of the directory at aPath (a String or a FileReference)
+   durable: names created, renamed or removed in it survive a crash (fsync of
+   the directory). On Windows, where a directory cannot be synced, it does
+   nothing, as ProtoBase's fsync_dir; elsewhere a missing directory signals
+   FileDoesNotExist."
+  self __fileSyncDirectory: aPath asFileReference pathString.
+  ^ self.
+
 "-- The program and its environment -----------------------------------------"
 
 SmalltalkImage >> arguments

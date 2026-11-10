@@ -228,6 +228,7 @@ add_library(protost_runtime STATIC
     src/primitives/collection_prims.cpp
     src/primitives/io_prims.cpp
     src/primitives/bytes_prims.cpp
+    src/primitives/binfile_prims.cpp
     src/modules/STModuleProvider.cpp
     src/modules/STForeignSend.cpp
     src/repl/Repl.cpp
@@ -428,6 +429,16 @@ add_test(NAME cli_eval
 
 add_test(NAME cli_io
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_io.sh $<TARGET_FILE:protost>)
+
+# BinaryFile's lock across processes: a second protoST process, and ProtoBase's
+# owner lock through protoIO's peer script (run with python3). The ProtoBase
+# case exits 77 with a SKIP line when python3 or the peer script is missing.
+add_test(NAME cli_binary_lock
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_binary_lock.sh $<TARGET_FILE:protost> protost)
+add_test(NAME cli_binary_lock_protobase
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_binary_lock.sh $<TARGET_FILE:protost> protobase
+            ${CMAKE_SOURCE_DIR}/../protoIO/tests/ownerlock_peer.py)
+set_tests_properties(cli_binary_lock_protobase PROPERTIES SKIP_RETURN_CODE 77)
 
 add_test(NAME cli_script_output
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_script_output.sh $<TARGET_FILE:protost>)
