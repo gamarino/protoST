@@ -196,6 +196,26 @@ Equality also differs from Pharo. In Pharo `Symbol>>=` is identity, so
 `true` both ways, for short and long symbols alike. Hashing and dictionary
 keys follow protoST's `=`.
 
+### Bytes, binary files and deadlines — D41 to D48
+
+Since 0.9.0 binary data is a `ByteArray` (`#[1 2 255]`), and it is not Pharo's:
+it is **immutable** (`at:put:` signals `ModificationForbidden`, as for a
+String, D34), it is a direct subclass of `Object` rather than of
+`ArrayedCollection`, `collect:` answers an `Array`, and there is **no
+`asString`**: Pharo's would decode as Latin-1, so you write `utf8Decoded` and
+`utf8Encoded` and say which encoding you mean. `WriteStream on: ByteArray new`
+builds a new array on every `contents` instead of writing into the one you
+pass (D41, D42). The selectors for numbers in bytes keep Pharo's names where
+Pharo has them (`unsignedShortAt:bigEndian:`) and refuse a value that does not
+fit instead of truncating it (D43). Digests (`crc32`, `sha256`, `blake2b:`) and
+`base64Encoded` are one-shot and take their names from Python (D44).
+
+`BinaryFile` is not Pharo's `File`: it has **no position**, every read and
+write names its offset, and nothing closes it but you (D46). `MessagePack`
+encodes a Symbol as a str, so `#foo` comes back as `'foo'` (D47). `Future
+within:` and `waitWithin:` are protoST's own (D48). Chapter 15 (§15.11) and
+chapter 10 (§10.12) show them at work.
+
 ### A few names and printed forms — D36
 
 `aClass name` answers a String. Large integers have one class, `LargeInteger`
@@ -498,7 +518,8 @@ For full grammar, see `LANGUAGE.md` §3.5.1 and §3.3.
 - **Intentional deviations (§14.4):** programs are files, not an image; a
   blank line ends a method body (D33); a script is its top-level forms, run
   in order (D12); strings are immutable (D34); short symbols are represented
-  as strings (D35); a few printed forms differ (D36); a thin metaclass; an
+  as strings (D35); a few printed forms differ (D36); a `ByteArray` is
+  immutable and has no `asString`, a `BinaryFile` has no position (D41-D48); a thin metaclass; an
   actor that waits is not re-entrant (D37); bounded recursion depth (D38); single
   runtime per process (D2); `addBehavior:` affects future instances only
   (D21).

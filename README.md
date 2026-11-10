@@ -124,6 +124,14 @@ non-blocking multiplexing. The whole protocol is in
 layer underneath is [protoIO](https://github.com/gamarino/protoIO), the I/O
 library protoST shares with protoScala and protoClojure.
 
+Binary data is a `ByteArray` (immutable, literal `#[1 2 255]`, with UTF-8
+conversion, byte-order readers and writers, CRC-32, BLAKE2b, SHA-256, HMAC and
+base64). A `BinaryFile` is read and written at explicit offsets, with `append:`,
+`sync` and a lock that excludes a Python ProtoBase process, and `MessagePack`
+reads and writes the format other languages know. Waits can have a deadline:
+`aFuture waitWithin: 500` signals `TimeoutError` if the future has not settled
+(see [`docs/LANGUAGE.md`](docs/LANGUAGE.md) §12.12 and §10.3).
+
 ## Why digital twins
 
 A digital twin mirrors a physical system — a pump, a line, a substation — as a
@@ -230,8 +238,28 @@ several cores without locks.
 
 ## Status
 
-Version 0.8.1 (2026-10-31); built from source it requires protoCore 3.4.0 or
-newer (SOVERSION 5), its `.deb` requires 3.5.0, and CI builds it against
+Version 0.9.0 (2026-11-10); built from source it requires protoCore 3.4.0 or
+newer (SOVERSION 5) and protoIO 0.3.0 or newer; the last published `.deb` is
+0.8.1 (below), which requires 3.5.0. CI builds against
+protoCore 3.5.0 (tag `v3.5.0`) and the 3.4.0 floor. On 0.9.0 (2026-11-10), `ctest` ran 1264 cases on Linux, all passing: 672
+conformance programs, 481 unit tests, 44 examples, 41 CLI tests, 23
+documentation checks (every example with a stated result in the documents,
+plus the checker's self-test) and 3 UMD host cases. Since 0.6.2 protoST lets protoCore's adaptive controller size the heap:
+  against 0.6.1's fixed limit
+  ([`2026-10-12-adaptive-heap-default.md`](benchmarks/reports/2026-10-12-adaptive-heap-default.md)), actor workloads ran 16-43 % faster with a
+  fifth to a half of the peak memory and pauses of at most 0.27 ms, but
+  **peak memory is no longer capped** (an allocation-bound loop peaked at
+  0.88-3.5 GB). Set `PROTOCORE_HEAP_LIMIT_CELLS` when a process must stay
+  within a fixed size (see "Status" below and `KNOWN_ISSUES.md` K5).
+
+protoST is not fast single-threaded code; what it offers is the same code on
+several cores without locks.
+
+## Status
+
+Version 0.9.0 (2026-11-10); built from source it requires protoCore 3.4.0 or
+newer (SOVERSION 5) and protoIO 0.3.0 or newer; the last published `.deb` is
+0.8.1 (below), which requires 3.5.0. CI builds against
 protoCore 3.5.0 (tag `v3.5.0`) and the 3.4.0 floor. On 0.6.6 (2026-10-17), `ctest` ran 1105 cases on Linux, all passing: 544
 conformance programs, 462 unit tests, 44 examples, 33 CLI tests (including
 the benchmark-harness self-test) and 22 documentation checks (every example
@@ -250,7 +278,7 @@ known deviations from Smalltalk-80 and the open bugs are tracked in
 
 protoST depends on [protoCore](https://github.com/numaes/protoCore) 3.4.0 or
 newer (below 4.0), which must be built first, on
-[protoIO](https://github.com/gamarino/protoIO) 0.2.3 or a later 0.2.x at build time (a sibling
+[protoIO](https://github.com/gamarino/protoIO) 0.3.0 or a later 0.3.x at build time (a sibling
 checkout `../protoIO`, or its `protoio-dev` package; it is linked statically),
 and on OpenSSL (`libssl-dev`) and libreadline. 3.4.0 is a hard floor (it
 changed `ProtoContext`'s layout, SOVERSION 5, so an older `libprotoCore` does

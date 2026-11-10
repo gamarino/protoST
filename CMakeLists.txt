@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(protoST VERSION 0.8.1 LANGUAGES CXX)
+project(protoST VERSION 0.9.0 LANGUAGES CXX)
 
 # The one place the version is written: every binary and library reads it
 # through PROTOST_VERSION (include/protoST/STRuntime.h).

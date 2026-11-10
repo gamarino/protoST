@@ -14,21 +14,34 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Test suite:** 1105 `ctest` cases on Linux, 1105/1105 passing on
-  2026-10-17 (0.6.6, against protoCore 2.14.6 and protoIO 0.2.2): 544
-  conformance programs, 462 unit tests, 44 examples, 33 CLI tests (including
-  the benchmark-harness self-test and the terminal test `cli_repl_console`)
-  and 22 documentation checks (the examples with a stated result in 21
-  documents, plus the checker's self-test). CI runs the same suite on Linux,
-  macOS and Windows against protoCore 2.14.6, and on Linux against 2.11.0,
-  the declared minimum (CI 38318673607 and cross-platform 38318673623, green on 0.6.5): Linux runs 1100 of
-  them in its suite job (the wall-clock parallelism proof runs in a separate
-  informational job), macOS 1100, Windows 1097 (at 0.6.5; since then
+- **Test suite:** 1264 `ctest` cases on Linux, 1264/1264 passing on
+  2026-11-10 (0.9.0, against protoCore 3.5.0 and the protoIO 0.3.0
+  development tree), in two consecutive runs, none skipped: 672 conformance
+  programs, 481 unit tests, 44 examples, 41 CLI tests (including
+  `cli_binary_lock`, `cli_binary_lock_protobase` and `cli_binary_interop`),
+  23 documentation checks (the examples with a stated result in the
+  documents, the bytecode listings of `docs/VM.md` and the checker's
+  self-test) and 3 UMD host cases. The programs under
+  `tests/conformance/15-binary` are new in 0.9.0. A conformance program that
+  cannot verify its subject on a platform ends with `SKIP: <reason>` and CTest
+  reports it as *Skipped* (`tests/conformance/README.md`); on Linux with
+  `python3` and `msgpack` none is skipped. CI (Linux, macOS and Windows) has
+  not run 0.9.0 yet: its protoIO pin still names the 0.2.3 commit, and the
+  macOS and Windows behaviour of the skip is unconfirmed until it does
+  (`KNOWN_ISSUES.md` K10). Earlier: 1105/1105 on 2026-10-17 (0.6.6, protoCore 2.14.6, protoIO 0.2.2):
+  544 conformance programs, 462 unit tests, 44 examples, 33 CLI tests and 22
+  documentation checks; CI ran the same suite on Linux, macOS and Windows
+  against protoCore 2.14.6, and on Linux against 2.11.0, the declared minimum
+  (CI 38318673607 and cross-platform 38318673623, green on 0.6.5); Linux ran
+  1100 of them in its suite job (the wall-clock parallelism proof runs in a
+  separate informational job), macOS 1100, Windows 1097 (at 0.6.5; since then
   Windows runs `cli_sigint` in a Windows variant and tutorial chapter 15 as
-  well, `docs/INSTALLATION.md`, "Windows (MSVC)"). `cli_concurrent_first_call` (S19) gates CI again since 0.6.3. The
-  history of earlier counts is in `CHANGELOG.md`.
-- **protoCore:** 0.8.1 requires 3.4.0 or later built from source, and its
-  `.deb` 3.5.0 (SOVERSION 5 in both; 0.8.0 required 3.4.0, which removed
+  well, `docs/INSTALLATION.md`, "Windows (MSVC)"). `cli_concurrent_first_call`
+  (S19) gates CI again since 0.6.3. The history of earlier counts is in
+  `CHANGELOG.md`.
+- **protoCore, protoIO:** 0.9.0 requires protoIO 0.3.0 or later (a 0.2.x
+  checkout is refused at configure time). 0.9.0 and 0.8.1 require protoCore
+  3.4.0 or later built from source, and 0.8.1's `.deb` 3.5.0 (SOVERSION 5 in both; 0.8.0 required 3.4.0, which removed
   `ProtoContext::pendingRoot`, so `ProtoContext`'s layout changed; 0.7.0
   required 3.0.0, for the descriptor calling convention and the unified
   exception model); its
@@ -55,7 +68,9 @@ stable id and file it in the right bucket.
   that a collection's pause no longer grows with the number of threads);
   precedence and
   details in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md) K5.
-- **Last verified:** 2026-10-17, by the test suite above (release 0.6.6;
+- **Last verified:** 2026-11-10, by the test suite above (0.9.0, on the branch
+  `feature/binary-storage` before its merge; no `.deb` has been built for it).
+  Before that, 2026-10-17 (release 0.6.6;
   its `.deb` was built in a clean Ubuntu 24.04 container with GCC 13 against
   protoCore 2.14.6, with no compiler warning and the suite passing 1105/1105
   there; installation checks in `CHANGELOG.md`; the same was done for 0.6.0
@@ -67,7 +82,10 @@ stable id and file it in the right bucket.
   was an adversarial Smalltalk-semantics audit of about 1,100 probe programs
   in two rounds; each fix of a wrong result, crash or hang it found carries a
   regression test.
-- **Open bugs:** S3 (Medium, not provable on this build). S22 (a test
+- **Open bugs:** S3 (Medium, not provable on this build). Known limitations of
+  0.9.0 that are not defects (diagnostic text cut at a NUL, the `BinaryFile`
+  end guard, timers and exit, what the tests do not prove, protoCore's missing
+  list split) are K7-K11 in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md). S22 (a test
   race), S25 and S26 closed in 0.6.3, S24 in 0.6.1, S23 on 2026-10-02 (`9cdc9b4`),
   S19 on 2026-09-29, S20 and S21 in 0.5.0. Hard edges that are not
   language-design choices are in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md).
@@ -319,8 +337,55 @@ are noted where useful.
       it, through `readBufferedLine`, protoIO 0.2.3), and a pool worker entering one
       makes the pool add a worker when fewer than the configured number would
       remain free (at most 256 threads; added workers stay until exit). Tests:
-      `conformance/14-io/files_*`, `os_*`, `cli_io`. Binary data is an Array of
-      integers 0–255 (no `ByteArray`); `next` / `next:` read whole UTF-8 characters, `nextByteCount:` counts bytes
+      `conformance/14-io/files_*`, `os_*`, `cli_io`. Binary data was an Array of
+      integers 0–255 up to 0.8.1; since 0.9.0 it is a `ByteArray` (the next
+      entries); `next` / `next:` read whole UTF-8 characters, `nextByteCount:` counts bytes
+- [x] `ByteArray`, `#[...]` literal, byte streams and encodings *(0.9.0)*:
+      an immutable value over protoCore's `ProtoByteBuffer`
+      (`lib/kernel/bytes.st`, `src/primitives/bytes_prims.cpp`): `new:`,
+      `withAll:`, `fromHex:`, `size`, `at:`, `,`, `copyFrom:to:`,
+      `copyReplaceFrom:to:with:`, `=`, `hash`, `hex`, `readStream`,
+      `writeStream`, `WriteStream on: ByteArray new`, `String >> utf8Encoded`,
+      `ByteArray >> utf8Decoded` (strict); `binaryContents`, `nextBytes:` and
+      the UDP `receiveBytesTimeout:` answer a `ByteArray`. Tests:
+      `conformance/15-binary/bytes_*`, `conformance/14-io/files_bytes*`.
+      Spec: `docs/superpowers/specs/2026-11-09-bytes-files-timers-design.md`.
+- [x] Numbers in bytes *(0.9.0)*: `unsignedByteAt:` … `signedLong64At:bigEndian:`,
+      `float32At:bigEndian:`, `float64At:bigEndian:` and the byte-stream
+      writers `nextPutUnsigned:width:bigEndian:`, `nextPutSigned:…`,
+      `nextPutFloat32:bigEndian:`, `nextPutFloat64:bigEndian:`, over protoIO's
+      `encoding` functions. Tests: `15-binary/packing_*`, including the 168
+      vectors of `protoIO/tests/vectors/packing.json` (generated by
+      `tests/conformance/15-binary/gen_vectors.py`).
+- [x] Checksums, digests, HMAC and base64 *(0.9.0)*: `crc32`,
+      `crc32Continuing:`, `CRC32 combine:with:length:`, `blake2b:`,
+      `blake2b:key:`, `sha256`, `HMAC sha256Key:message:`, `base64Encoded`,
+      `base64Decoded`, over protoIO; every vector of protoIO's
+      `crc32`, `blake2b`, `sha256_hmac` and `base64` files passes
+      (`15-binary/digest_vectors`, `base64`).
+- [x] `BinaryFile`, `FileSystem replace:with:` and `syncDirectory:` *(0.9.0)*
+      (`lib/kernel/binfile.st`, `src/primitives/binfile_prims.cpp`): positioned
+      reads and writes, `append:`, `truncateTo:`, `sync`, `dataSync`, the lock
+      ProtoBase's `OwnerLock` takes (`tryLock`, `lock`, `unlock`). Tests:
+      `15-binary/binfile_*` (including a 16,000-read stress against an
+      appender, and guard tests for concurrent appends) and the CLI tests
+      `cli_binary_lock` (two protoST processes), `cli_binary_lock_protobase`
+      (against a Python ProtoBase-style peer) and `cli_binary_interop`
+      (CPython `msgpack`, `struct`, `zlib` and `hashlib` in both directions);
+      the last two print `SKIP` and are reported as skipped when `python3`
+      (or its `msgpack` module) is missing.
+- [x] `MessagePack`, `MessagePackMap`, `MessagePackExt` *(0.9.0)*
+      (`lib/kernel/msgpack.st`, `src/primitives/msgpack_prims.cpp`): `encode:`,
+      `decode:`, `decode:strictKeys:`, `decodeFirst:`, `decodeOrdered:`,
+      over protoIO's codec; all 70 vectors of `msgpack.json` pass, with exact
+      bytes through `MessagePackMap`. Tests: `15-binary/msgpack_*`.
+- [x] Future deadlines *(0.9.0)* (`lib/kernel/future.st`,
+      `src/runtime/TimerService.{h,cpp}`): `Future after:`, `within:`,
+      `waitWithin:` and `TimeoutError`, on one timer thread per runtime.
+      Tests: `10-actors/future_after`, `future_within*`,
+      `future_wait_in_timer_callback`, and the unit cases of
+      `tests/unit/test_timer_service.cpp`. This also gave `enqueueTask` the
+      consumer it lacked (`STRuntime::runOneTask`).
 - [x] `lib/net.st` — TCP and UDP sockets *(0.5.0)*: `Socket connectTo:port:`
       (`timeout:` variant; an `IOStream`), `tlsHost:` (TLS client with
       certificate and host-name verification, OpenSSL), `ServerSocket
@@ -366,6 +431,14 @@ decisions, not defects; they stay, documented with their rationale.
 
 | Id | Deviation | Rationale |
 |----|-----------|-----------|
+| D48 | **Deadlines are protoST's own.** `TimeoutError`, `Future after:`, `within:` and `waitWithin:` have no Pharo meaning to keep. `ms` must be a non-negative `SmallInteger` (no `Float`, no `Duration`). `within:` does not cancel the receiver. Timers still pending at exit are dropped: their futures never settle and no callback runs. A deadline fires only when a worker is free to run its settle (one blocked in I/O or `sleep:` does not count). `waitWithin:` at the top of an actor method suspends the actor; nested in a block it blocks the worker, which helps other actors meanwhile (D37). A wait with no current actor on a pool worker (inside a `thenDo:` callback) blocks that worker the same way. | The timer thread never runs Smalltalk code, so a slow callback delays no other deadline; a Future that cannot be cancelled keeps its meaning for the other waiters. |
+| D47 | **MessagePack: protoST's classes, with fixed choices.** `MessagePackMap`, `MessagePackExt`, `decodeOrdered:`, `decodeOrdered:strictKeys:` (an addition to the spec's list) and `decodeFirst:` are protoST names (Pharo has no MessagePack in the image). A `Symbol` encodes as `str` and decodes as `String` (D35: `#foo = 'foo'` is true here, false in Pharo). The encoding order of a `Dictionary` is unspecified (protoCore's attribute order is not API), so its bytes can differ between runs; `MessagePackMap` gives exact bytes. Ext type -1 (the timestamp) decodes to a plain `MessagePackExt`, where msgpack-python returns a `datetime`. An Integer outside -2^63 .. 2^64 - 1 signals `Error` (it never wraps or becomes a Float); a structure nested deeper than 512 levels or containing itself signals `Error` on encode; `Character`, `Set`, `Bag`, `Association`, `Fraction` and other classes are not encodable. Map keys must be `str` or `bin` unless `strictKeys: false`. | The bytes follow msgpack-python as ProtoBase uses it (`use_bin_type=True`, `raw=False`), so the two read each other's files. A deterministic `Dictionary` order would constrain protoCore for one codec. |
+| D46 | **`BinaryFile` has no position and no stream protocol.** It is a new class, not Pharo's `File` / `BinaryFileStream`. Every read and write names its offset (from 0); `append:` answers the offset where the bytes start. `readAt:size:`, `writeAt:bytes:`, `truncateTo:`, `dataSync`, `tryLock`, `lock` and `unlock` are protoST names with no Pharo meaning to keep. The options are an Array of Symbols (`#(#read #write #create)`), not option objects. Writes take a `ByteArray` only. `writeAt:bytes:`, `truncateTo:`, `sync`, `dataSync`, `lock`, `unlock` and `close` answer the receiver. An unclosed `BinaryFile` is never closed by the collector (Pharo's file streams are finalised): it stays open, with its lock, until `close` or the end of the program; use after `close` signals `Error`, a second `close` does nothing. `FileSystem replace:with:` and `syncDirectory:` are class-side (Pharo's `FileSystem` is an instance, `FileSystem disk`). One appender at a time per file: a concurrent `append:`, or a `truncateTo:` or extending `writeAt:bytes:` that collides with one, signals `Error` instead of corrupting offsets (`KNOWN_ISSUES.md` K8 for what cannot be detected). | A hidden cursor is shared state, and a file shared by several actors must not have one. Closing by finalisation would release a lock at a time the program cannot predict. |
+| D45 | **Binary input and output answer `ByteArray`.** `binaryContents`, `IOStream >> nextBytes:` and UDP `receiveBytesTimeout:` answered an `Array` of Integers up to 0.8.1. An `Array` of Integers 0-255 is still accepted as an *argument* (`binaryContents:`, `nextPutBytes:`, UDP `send:`) in 0.9.0, with one line on stderr per process, and is refused from 0.10.0. Anything else (`nil`, `42`, a non-byte) signals `Error`: `binaryContents: nil` used to write an empty file. | The change is breaking for a program that compares a result with an Array; the deprecation window is for the programs that only pass one. |
+| D44 | **Digests and base64: one-shot, strict, protoST names.** `crc32`, `crc32Continuing:`, `blake2b:`, `blake2b:key:`, `sha256`, `HMAC sha256Key:message:`, `CRC32 combine:with:length:`, `base64Encoded`, `base64Decoded` follow the vocabulary of Python's `hashlib` and `zlib` (Pharo has `Base64MimeConverter` and no such selectors on `ByteArray`). There are no incremental objects (`update:`): chain a CRC with `crc32Continuing:`; hash a large input in one call. A digest is a raw `ByteArray`, not a hex `String`. `base64Decoded` accepts only the standard alphabet with correct padding and canonical trailing bits (`'abd='` and `'ab=='` are refused, where CPython's `b64decode` accepts them), skips no whitespace and has no URL-safe variant. | Strictness is protoIO's (R7): two encodings of the same bytes would make a digest of the text depend on who wrote it. One-shot functions leave nothing mutable to alias an answered value. |
+| D43 | **Numbers in bytes: names and checks.** `unsignedShortAt:bigEndian:`, `signedLong64At:bigEndian:` and the others take Pharo's names; `float32At:bigEndian:`, `float64At:bigEndian:` and the stream writers `nextPutUnsigned:width:bigEndian:`, `nextPutSigned:width:bigEndian:`, `nextPutFloat32:bigEndian:`, `nextPutFloat64:bigEndian:` are protoST's (Pharo names them `floatAt:bigEndian:` / `doubleAt:` and has no writers of this shape). `signedByteAt:` is an addition. Pharo's `unsignedLongAt:` without `bigEndian:` is not provided; there is no `at:put:`-style writer. All indices are 1-based and checked (`SubscriptOutOfBounds` past the end). A value that does not fit signals `Error`, where Pharo may truncate; `nextPutFloat32:` also refuses a finite value beyond the single range (as CPython's `struct`). | The byte order is always explicit; a write that wraps silently corrupts a file format. The widths and bit patterns are protoIO's `encoding` (shared with protoScala and protoClojure), not reimplemented. |
+| D42 | **Byte streams are built privately.** `WriteStream on: ByteArray new` does not write into the `ByteArray` it is given, and `contents` answers a new `ByteArray` on every call; `aByteArray writeStream` ignores the receiver and answers an empty stream (Pharo's `writeStream` writes into the collection). A byte stream refuses a `String` and any non-byte with `Error`: no implicit Latin-1 or UTF-8. `utf8Decoded` is strict (any ill-formed sequence signals `Error`; Pharo's is lenient with some inputs). | The receiver is immutable, so there is nothing to write into. Conversions between text and bytes are visible in the program (`utf8Encoded`). |
+| D41 | **`ByteArray` is an immutable value, not a collection, and not text.** `at:put:` signals `ModificationForbidden`; every operation that would change one answers a new `ByteArray`. It has no `asString` (Pharo's is Latin-1 and would mislead: use `utf8Decoded`). It is a direct subclass of `Object`, not of `ArrayedCollection`, so `isKindOf: SequenceableCollection` is false and only the protocol of `lib/kernel/bytes.st` is understood. `collect:` answers an `Array`, because the block may answer values that are not bytes. `ByteArray withAll: aByteArray` answers its argument (Pharo copies). | A protoST `ByteArray` is a protoCore `ProtoByteBuffer` filled once at creation (protoST never calls `setAt`), the same decision as for `String` (D34): the model is values, and a mutable buffer shared among actors would need locks. `asString` is refused instead of guessed. |
 | D40 | **`super name(...)` is a compile error.** A call-form send cannot have `super` as its receiver. *(Decision [agent, pending review], 2026-10-25.)* | `SEND_CALL` has no super form. Before `477e793` such a send went to `self` (running the override it was written to skip) and left a stray super flag for the next send; refusing it is the least-surprising choice short of adding a super variant of the call-form dispatch. |
 | D2 | **Single `STRuntime` per process.** A second `STRuntime` in the same process can mis-resolve module imports. | The larger half of this — function-local `static` caches holding per-`ProtoSpace` interned symbols, which dangled into a freed space for every later runtime — is **fixed** (commit `8bf5b9c`, 0.1.0): symbols are now resolved fresh per call. The residual is process-global UMD state — protoCore's module provider and module cache outlive a `ProtoSpace`. The CLI always constructs exactly one runtime, so this never affects normal use. Tracked in `KNOWN_ISSUES.md` (K1). *(Classified intentional because protoST lives within the one-runtime-per-process contract; the residual closes when the UMD provider/cache become per-runtime.)* |
 | D12 | **No `main:` auto-invocation.** A script is simply its top-level forms run in order; it shows only what it prints (`protost --print-last` also prints the value of the last top-level statement). | Deliberate CLI semantics: protoST scripts are sequences of top-level forms, not programs with an entry point. Documented in §13. |

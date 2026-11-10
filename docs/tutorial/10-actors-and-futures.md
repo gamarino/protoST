@@ -581,7 +581,87 @@ and anything that should jump the queue ahead of normal work.
 rotation, GC hints, lazy compaction — work that genuinely should yield
 to data-plane traffic.
 
-## 10.12 Summary
+## 10.12 Deadlines: `after:`, `within:` and `waitWithin:`
+
+A `Future` that never settles makes `wait` wait for ever. Since 0.9.0 a program
+can bound the wait. The deadlines are measured in milliseconds on a monotonic
+clock, so they do not move when the system clock is set.
+
+| Message | Effect |
+|---------|--------|
+| `Future after: ms` | a new `Future`, resolved with `nil` once `ms` milliseconds have passed |
+| `aFuture within: ms` | a new `Future` that settles as `aFuture` does if that happens within `ms` milliseconds, and is otherwise rejected with a `TimeoutError` |
+| `aFuture waitWithin: ms` | `(aFuture within: ms) wait`: the value, or a `TimeoutError` signalled to the caller |
+
+`TimeoutError` is a subclass of `Error`, so `on:do:` catches it like any other
+error ([Chapter 7](07-exceptions.md)), and `ms` must be a non-negative integer.
+
+```smalltalk
+"-- deadlines.st --"
+| gate answer timeout |
+(Future after: 20) wait printNl.
+gate := Future new.
+answer := [gate waitWithin: 30] on: TimeoutError do: [:e | e messageText].
+answer printNl.
+timeout := (Future new) within: 30.
+[timeout wait] on: Error do: [:e | e class printNl].
+gate resolve: 42.
+(gate waitWithin: 1000) printNl.
+```
+
+```bash
+$ ./build/protost deadlines.st
+nil
+'the Future did not settle within 30 ms'
+TimeoutError
+42
+```
+
+Three properties matter:
+
+- **`within:` does not cancel anything.** The original future keeps running, and
+  if it settles after the deadline, that result is ignored by the future
+  `within:` answered (a future settles only once), while the original still
+  settles for its own waiters and callbacks.
+- **A deadline fires on a worker.** The runtime keeps the pending deadlines in
+  one timer thread that never runs your code; when a deadline passes it hands the
+  settling to the worker pool, so the callbacks of `thenDo:` and `catch:` run
+  on a worker like any other callback. A deadline therefore needs a free
+  worker: if every worker is blocked in a long I/O call, it waits for one.
+- **Pending timers do not keep the program alive.** When the program ends, the
+  timers still pending are dropped, and their futures never settle.
+
+Inside an actor's method, `waitWithin:` yields like `wait` does (§10.7): the
+actor gives its worker back and resumes when the future settles or the
+deadline passes. Many actors can wait with a deadline on a small pool:
+
+```smalltalk
+"-- deadline-actor.st --"
+Object subclass: #Waiter instanceVariableNames: ''.
+
+Waiter >> await: aFuture
+  ^ [aFuture waitWithin: 40] on: TimeoutError do: [:e | 'late'].
+
+| gate waiter answers |
+gate := Future new.
+waiter := Waiter new asActor.
+answers := (1 to: 3) collect: [:i | waiter await: (i = 2 ifTrue: [gate resolve: i. gate] ifFalse: [Future new])].
+answers := answers collect: [:each | each wait].
+answers printNl.
+```
+
+```bash
+$ ./build/protost deadline-actor.st
+#('late' 2 'late')
+```
+
+An actor that waits handles no other message meanwhile, so the three
+`await:` calls above run one after the other; the first and the last give up after
+40 ms, the second finds its future settled. Block-nested waits (`waitWithin:`
+inside the block of an `ensure:`, for example) cannot suspend the actor: they
+block the worker while it helps run other actors, as `wait` does there.
+
+## 10.13 Summary
 
 - An **actor** is an object with private state, a one-message-at-a-time
   mailbox, and parallel scheduling. The single-message rule is the
@@ -604,6 +684,10 @@ to data-plane traffic.
   instead.
 - An exception inside an actor rejects that message's future; the actor lives
   on.
+- A wait can have a deadline: `Future after: ms` resolves with `nil` later,
+  `aFuture within: ms` is rejected with a `TimeoutError` if `aFuture` does not
+  settle in time, and `aFuture waitWithin: ms` waits for either. `within:`
+  cancels nothing, and pending timers do not keep the program alive.
 - An **`Atom`** is a shared cell updated lock-free: `swap:` runs a pure block
   in a compare-and-swap retry loop; `value:ifCurrent:` is the raw CAS for your
   own retry policy. Use it when many actors update one shared value and an

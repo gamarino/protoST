@@ -182,6 +182,10 @@ no import); the `stream`, `random` and `time` modules remain for
 compatibility. 0.5.0 added input and output: files, standard streams,
 arguments, environment and processes in the kernel (`lib/kernel/io.st`), and
 the `net` (TCP, TLS client, UDP) and `http` (client and server) modules.
+0.9.0 added binary data to the kernel: `ByteArray`, `BinaryFile` (positioned,
+durable, lockable files), the byte-order readers and writers, checksums and
+digests, `MessagePack`, and `Future` deadlines (`after:`, `within:`,
+`waitWithin:`).
 
 **Goal:** a Python-style standard library — the modules every program needs.
 
@@ -537,7 +541,8 @@ credible — the twin of a physical device must be resilient.
 
 **Goal:** an actor that performs I/O must never block a worker thread.
 
-**Status:** not started. 0.5.0 ships blocking I/O as an interim design: a
+**Status:** not started. 0.9.0 adds `Future` deadlines on a timer thread, which
+bound a wait but do not make a blocking call yield. 0.5.0 ships blocking I/O as an interim design: a
 blocking call leaves the GC quorum, and when a worker blocks the pool starts
 another one if fewer than the configured number would remain free (at most
 256 threads, kept until the program ends). That keeps programs with one actor

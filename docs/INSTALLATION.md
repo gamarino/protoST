@@ -1,20 +1,21 @@
 # Installing protoST
 
-protoST 0.8.1 is a Smalltalk-syntax, actor-native runtime on protoCore. It is
+protoST 0.9.0 is a Smalltalk-syntax, actor-native runtime on protoCore. It is
 a consumer of protoCore, never a bundler of it: `bin/protost` links
 `libprotoCore.so.5`, and every package protoST produces declares a runtime
 dependency on protoCore's own package instead of shipping a copy.
 
 On a Debian or Ubuntu machine where protoCore's package is installed, the
 library is `/usr/lib/x86_64-linux-gnu/libprotoCore.so.5`, a link to
-`libprotoCore.so.<version>`. protoST 0.8.1 needs protoCore 3.4.0 or later
+`libprotoCore.so.<version>`. protoST 0.9.0 needs protoCore 3.4.0 or later
 (*Prerequisites*); its `.deb` was built and tested against protoCore 3.5.0,
 the release to install with it, and depends on `protocore (>= 3.5.0)` through
-protoCore's shlibs file (0.8.0 needed 3.4.0, 0.7.0 needed 3.0.0). CI builds
+protoCore's shlibs file (0.9.0, 0.8.1 and 0.8.0 need 3.4.0 as the floor; 0.7.0 needed 3.0.0). CI builds
 against protoCore 3.5.0 on
 Linux, macOS and Windows, and against 3.4.0, the declared minimum, in one
-Linux job (the floor job), both with protoIO 0.2.3; the suite was last run
-locally (2026-10-31) against protoCore 3.5.0 (master fe4107d4).
+Linux job (the floor job); CI's protoIO pin must move to a 0.3.0 commit, which
+0.9.0 requires (see *Prerequisites*). The suite was last run locally
+(2026-11-10) against protoCore 3.5.0 and the protoIO 0.3.0 development tree.
 
 ---
 
@@ -26,13 +27,15 @@ locally (2026-10-31) against protoCore 3.5.0 (master fe4107d4).
   Fedora/RHEL, `brew install readline` on macOS). It is a hard requirement:
   `find_library(READLINE_LIBRARY NAMES readline REQUIRED)`, except on Windows,
   where the REPL uses the console's own line editing (*Windows (MSVC)*).
-- **protoIO 0.2.3 or a later 0.2.x** at build time only (0.2.1 adds
-  `process::shell`, which `OSProcess shell:` uses; 0.2.2 makes a listener on
-  a host-less address dual-stack, so `localhost` clients that try `::1` first
-  are not refused; 0.2.3 adds `readBufferedLine`, with which `nextLine` takes
-  a line already in protoIO's read buffer without leaving the collector's
-  quorum; protoIO's package is
-  compatible within one minor version, so a 0.1 or 0.3 is refused): the I/O
+- **protoIO 0.3.0 or a later 0.3.x** at build time only (0.3.0 adds the
+  byte-level functions behind `ByteArray`, `BinaryFile` and `MessagePack`:
+  `encoding`, `digest`, `msgpack`, positioned file reads and writes,
+  `appendData`, `truncate`, `sync`, the file lock and `replace`; earlier
+  releases added `process::shell` (0.2.1, `OSProcess shell:`), a dual-stack
+  listener on a host-less address (0.2.2) and `readBufferedLine` (0.2.3, with
+  which `nextLine` takes a line already in protoIO's read buffer without
+  leaving the collector's quorum); protoIO's package is compatible within one
+  minor version, so a 0.2 or 0.4 is refused): the I/O
   library shared by the protoCore
   runtimes (files, processes, TCP, UDP, TLS, HTTP), linked statically, so the
   installed `protost` does not depend on it. Either install its `protoio-dev`

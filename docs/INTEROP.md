@@ -627,3 +627,31 @@ libraries. At startup it must, in order:
 | Foreign object through collections and blocks | Simulated provider only — T5-a tests |
 | Foreign collection impedance + adapter boundary | Documented — §3.3 |
 | Live tri-runtime process | Specified — §6; cross-repo follow-up |
+| Bytes and files exchanged with other languages | Verified with CPython for MessagePack, `struct`, `zlib`, `hashlib` and the owner lock — §8 |
+
+---
+
+## 8. Interop through files and bytes (0.9.0)
+
+The sections above are about objects shared inside one process. Since 0.9.0
+protoST also exchanges **bytes** with other languages, and that needs no shared
+`ProtoSpace`: a document, a record or a lock on a file is the same for every
+reader. What was run, with a real second implementation:
+
+| Claim | Status | Evidence |
+|-------|--------|----------|
+| protoST and a Python ProtoBase-style process exclude each other on the owner lock of a file | Verified, when `python3` is installed | `cli_binary_lock_protobase` runs protoIO's `tests/ownerlock_peer.py` (`fcntl.flock`, as ProtoBase's `OwnerLock`) in both directions: the peer holds and protoST's `tryLock` answers `false`; protoST holds and the peer finds it busy. Skipped, visibly, without `python3` or the peer script |
+| A MessagePack document written by CPython (`packb(use_bin_type=True)`) is read by protoST and re-encoded byte for byte | Verified, when `python3` and `msgpack` are installed | `cli_binary_interop`: `decodeOrdered:` then `encode:` give the original bytes (a 12-key map with every integer width, floats, str, bin, ext, nesting) |
+| A document built by protoST (`MessagePackMap`) is read by CPython and equals `packb` of the same value, byte for byte | Verified, same conditions | `cli_binary_interop` |
+| Integers, floats, CRC-32, BLAKE2b (plain and keyed) and SHA-256 written with `struct`, `zlib` and `hashlib` are read and recomputed by protoST, and protoST's own files equal CPython's | Verified, same conditions | `cli_binary_interop` (`facts_py.bin`, `facts_st.bin`) |
+| Records framed as payload length, CRC-32 and payload by CPython are verified by protoST through `BinaryFile`, and protoST's `append:` produces the file CPython parses | Verified, same conditions | `cli_binary_interop` (`records_py.bin`, `records_st.bin`); the framing is a simplified one, not ProtoBase's record format |
+| The vectors of protoIO (`packing`, `base64`, `crc32`, `blake2b`, `sha256_hmac`, `msgpack`: 440 entries) | Verified on every run | `15-binary/packing_vectors`, `digest_vectors`, `base64`, `msgpack_vectors`, generated from `protoIO/tests/vectors/*.json` by `tests/conformance/15-binary/gen_vectors.py` |
+| protoST reads or writes a ProtoBase **storage** file (segments, root pointer, record layout) | **Not done** | Nothing in protoST knows ProtoBase's layout. `BinaryFile` provides what such a reader needs (positioned reads, append, `truncateTo:`, `sync`, `replace:with:`, `syncDirectory:`, the owner lock) and the codecs above provide the encodings; the format itself is not implemented |
+| protoScala and protoClojure | Same protoIO library; not run from protoST | They use the same protoIO library; no test here exchanges data with them |
+
+Two cautions for anyone building on this. A `Dictionary` has no defined order,
+so its MessagePack bytes can differ between runs; a format that must be
+reproducible uses `MessagePackMap`. And the lock belongs to the open file, not
+to the process: two `BinaryFile`s on one path conflict even inside one
+process, and on Windows the locked byte cannot be read through another
+descriptor, so a lock file should be dedicated.

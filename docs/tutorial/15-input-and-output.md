@@ -7,7 +7,8 @@
 Until 0.5.0 a protoST program could only print. This chapter covers what it
 can do now: read and write files, take part in a Unix pipeline, read its
 arguments and environment, set its exit status, run other programs, talk TCP
-and UDP, and act as an HTTP client or a small HTTP server. The names follow
+and UDP, act as an HTTP client or a small HTTP server, and keep binary data:
+bytes, files read and written at explicit offsets, and MessagePack. The names follow
 Pharo where Pharo has them (`'data.txt' asFileReference contents`,
 `Stdio stdin`, `Smalltalk arguments`), so a Smalltalk programmer can guess
 most of them.
@@ -21,7 +22,7 @@ they appear.
 
 | Part | Loaded | Provides |
 |------|--------|----------|
-| Kernel (`lib/kernel/io.st`) | always | `Stdio`, `IOStream`, `FileReference`, `File`, `FileSystem`, the program's arguments and environment on `Smalltalk`, `OSProcess`, and the error classes |
+| Kernel (`lib/kernel/io.st`) | always | `Stdio`, `IOStream`, `FileReference`, `File`, `FileSystem`, the program's arguments and environment on `Smalltalk`, `OSProcess`, and the error classes; since 0.9.0 also `ByteArray`, `BinaryFile`, `MessagePack` and the digests (§15.11) |
 | `net` (`lib/net.st`) | `Import from: 'net'` | `Socket` (TCP, optionally TLS), `ServerSocket`, `UDPSocket` |
 | `http` (`lib/http.st`) | `Import from: 'http'` | `HTTPClient`, `HTTPResponse`, `HTTPServer`, `HTTPRequest` (it imports `net` and `json` itself) |
 
@@ -611,7 +612,7 @@ request or header line over 8 KiB (414 or 431), more than 100 header lines
 the default is 64 MiB, `server maxBodySize: 1024 * 1024` lowers it).
 
 `HTTPServer on: 8080` listens on every interface. The server speaks plain
-HTTP only; put a reverse proxy in front of it for TLS (§15.11).
+HTTP only; put a reverse proxy in front of it for TLS (§15.12).
 
 ## 15.9 When things go wrong
 
@@ -742,9 +743,220 @@ The design this replaces in the long run — a reactor that turns a blocking
 call into a yield of the actor, so that no thread waits at all — is Track 15
 of [`docs/ROADMAP.md`](../ROADMAP.md). It is not implemented.
 
-## 15.11 Limits
+## 15.11 Bytes, binary files and MessagePack
 
-What 0.6.6 does not do:
+Since 0.9.0 binary data has a type of its own. A `ByteArray` is an immutable
+sequence of integers from 0 to 255; `#[0 127 255]` is its literal. It is a
+value, like a `String`: `at:put:` signals `ModificationForbidden`, and every
+operation that would change one answers a new `ByteArray`. A `ByteArray` is
+not text: it has no `asString`, and the way between the two is explicit,
+through UTF-8.
+
+```smalltalk
+"-- bytes-demo.st --"
+| bytes out in |
+bytes := 'héllo' utf8Encoded.
+bytes printNl.
+bytes utf8Decoded printNl.
+(bytes copyFrom: 1 to: 2) printNl.
+(bytes , #[0 255]) hex printNl.
+(ByteArray fromHex: 'cafe') printNl.
+out := WriteStream on: ByteArray new.
+out nextPutUnsigned: 258 width: 2 bigEndian: true.
+out nextPutSigned: -2 width: 4 bigEndian: false.
+out nextPutFloat64: 1.5 bigEndian: true.
+in := out contents.
+in printNl.
+(in unsignedShortAt: 1 bigEndian: true) printNl.
+(in signedLongAt: 3 bigEndian: false) printNl.
+(in float64At: 7 bigEndian: true) printNl.
+```
+
+```bash
+$ ./build/protost bytes-demo.st
+#[104 195 169 108 108 111]
+'héllo'
+#[104 195]
+'68c3a96c6c6f00ff'
+#[202 254]
+#[1 2 254 255 255 255 63 248 0 0 0 0 0 0]
+258
+-2
+1.5
+```
+
+`utf8Decoded` is strict: a byte sequence that is not valid UTF-8 signals an
+`Error` naming the byte and its position, and never produces a replacement
+character. Indices are 1-based and checked, and a number that does not fit its
+width is an error, never a wrapped value: `out nextPutUnsigned: 256 width: 1
+bigEndian: true` signals. Floats are written and read through their bit
+patterns, so `-0.0`, infinities and NaN survive a round trip.
+
+The same byte arrays feed the checksums and digests, which are one-shot
+functions (there are no incremental objects):
+
+| To | Send |
+|----|------|
+| CRC-32 (an Integer) | `crc32`, `crc32Continuing: aCrc`, `CRC32 combine: a with: b length: n` |
+| BLAKE2b (a `ByteArray`) | `blake2b: size`, `blake2b: size key: aKey` |
+| SHA-256, HMAC-SHA-256 (a `ByteArray`) | `sha256`, `HMAC sha256Key: aKey message: aByteArray` |
+| Base64 | `base64Encoded` (a `String`), `aString base64Decoded` (a `ByteArray`) |
+
+```smalltalk
+"-- digest-demo.st --"
+| data |
+data := 'hello' utf8Encoded.
+data crc32 printNl.
+data sha256 hex printNl.
+(data blake2b: 16) hex printNl.
+data base64Encoded printNl.
+'aGVsbG8=' base64Decoded utf8Decoded printNl.
+```
+
+```bash
+$ ./build/protost digest-demo.st
+907060870
+'2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'
+'46fb7408d4f285228f4af516ea25851b'
+'aGVsbG8='
+'hello'
+```
+
+Base64 decoding is strict: it accepts only the standard alphabet with correct
+padding and canonical trailing bits, so `'abd='` is refused where some
+libraries accept it.
+
+### Files with offsets: `BinaryFile`
+
+`FileReference` reads and writes whole files. A program that keeps data in a
+file (a log, a store) needs to name the offset of every read and write, to
+append, to force the data to disk and to lock the file against other
+processes. `BinaryFile` does exactly that and nothing else: it has no current
+position and no stream protocol.
+
+```smalltalk
+"-- binfile-demo.st --"
+| dir file second |
+dir := FileSystem temp / ('binfile-demo-' , Smalltalk pid printString).
+dir ensureCreateDirectory.
+[file := BinaryFile open: dir / 'log.bin' options: #(#read #write #create).
+ (file append: #[1 2 3 4]) printNl.
+ (file append: #[5 6]) printNl.
+ (file readAt: 2 size: 3) printNl.
+ file writeAt: 0 bytes: #[9].
+ (file readAt: 0 size: 100) printNl.
+ file size printNl.
+ file truncateTo: 2.
+ file size printNl.
+ file sync.
+ file tryLock printNl.
+ second := BinaryFile open: dir / 'log.bin' options: #(#read).
+ second tryLock printNl.
+ file unlock.
+ second tryLock printNl.
+ second close.
+ file close.
+ file isClosed printNl]
+  ensure: [dir deleteAll].
+```
+
+```bash
+$ ./build/protost binfile-demo.st
+0
+4
+#[3 4 5]
+#[9 2 3 4 5 6]
+6
+2
+true
+false
+true
+true
+```
+
+Offsets start at 0, as in the operating system. `append:` answers the offset
+where the bytes start. `readAt:size:` answers fewer bytes only at the end of
+the file, and an empty `ByteArray` past it. `sync` flushes data and metadata,
+`dataSync` only what is needed to read the data back. The options are a list
+of symbols (`#read #write #create #exclusive #truncate #append`); an unknown
+one signals an `Error` before anything is opened.
+
+`tryLock` and `lock` take an exclusive advisory lock on the file (`flock` on
+Unix). Two descriptors on the same file conflict, also within one process, as
+the example shows. The lock is released by `unlock`, by `close` or when the
+process exits. `FileSystem replace: from with: to` renames a file over
+another atomically, and `FileSystem syncDirectory: aPath` makes such a rename
+durable. The usual way to replace a file is: write a temporary file next to it,
+`sync` it, `replace:with:` and `syncDirectory:`.
+
+A `BinaryFile` is not closed when it is garbage: it stays open, with its lock,
+until you `close` it or the program ends. Using it after `close` signals an
+`Error`; closing twice does nothing. Keep to this rule: **one appender at a
+time per file**. `append:` answers the end of the file just before it writes,
+so two concurrent appenders could receive the same offset. protoST refuses the
+second concurrent `append:` on the same `BinaryFile` with an `Error` instead
+of letting the records overlap, and the same holds for `truncateTo:` and for a
+`writeAt:bytes:` that extends the file. It cannot detect appenders in other
+processes, or on a second `BinaryFile` over the same path: use `lock` for them.
+
+### MessagePack
+
+`MessagePack` converts between a tree of values and the
+[MessagePack](https://msgpack.org) format, which other languages read as well.
+
+| protoST | MessagePack |
+|---------|-------------|
+| `nil`, `true`, `false` | nil, bool |
+| an Integer from -2^63 to 2^64-1 | the smallest int or uint (outside the range: `Error`) |
+| a `Float` | float 64 |
+| a `String` (a `Symbol` too) | str |
+| a `ByteArray` | bin |
+| an `Array`, an `OrderedCollection` | array |
+| a `Dictionary` | map |
+| `MessagePackMap` | map, in the order it holds |
+| `MessagePackExt` | ext (`type:data:`) |
+
+Anything else (a `Character`, a `Set`, a `Fraction`, an object of your own
+class) signals an `Error`, as does a structure that contains itself. A
+`Dictionary` has no defined order, so the bytes of a document with several keys
+can differ from run to run; use a `MessagePackMap` (`withAll:` an Array of
+`Associations`) when the bytes must be exact, and `decodeOrdered:` to read a
+document into one.
+
+```smalltalk
+"-- msgpack-demo.st --"
+| doc bytes map |
+doc := Array with: 1 with: 'a' with: nil with: 2.5 with: #[7].
+bytes := MessagePack encode: doc.
+bytes printNl.
+(MessagePack decode: bytes) printNl.
+map := MessagePackMap withAll: (Array with: 'x' -> 1 with: 'y' -> 2).
+(MessagePack encode: map) printNl.
+(MessagePack decodeOrdered: (MessagePack encode: map)) printNl.
+(MessagePack decode: (MessagePack encode: (Dictionary new at: 'k' put: 3; yourself))) printNl.
+[MessagePack decode: #[1 2]] on: Error do: [:e | e messageText printNl].
+```
+
+```bash
+$ ./build/protost msgpack-demo.st
+#[149 1 161 97 192 203 64 4 0 0 0 0 0 0 196 1 7]
+#(1 'a' nil 2.5 #[7])
+#[130 161 120 1 161 121 2]
+a MessagePackMap#('x'->1 'y'->2)
+a Dictionary('k'->3)
+'MessagePack decode: 1 trailing byte(s) after the first object (use decodeFirst: to allow them)'
+```
+
+Decoding is strict about what it reads: a truncated document, a trailing
+byte, invalid UTF-8 in a `str`, nesting deeper than 512 levels and a map key
+that is not a `str` or a `bin` are errors (`decode:strictKeys: false`
+relaxes the key rule). `decodeFirst:` answers an Association from the first
+object to the number of bytes it used, for a stream of documents. The ext type
+-1 (MessagePack's timestamp) is decoded as a plain `MessagePackExt`.
+
+## 15.12 Limits
+
+What 0.9.0 does not do:
 
 - **HTTP:** no HTTP/2, no WebSockets, no keep-alive (one request per
   connection), no TLS in `HTTPServer` (TLS is client-side only), no proxy
@@ -752,9 +964,14 @@ What 0.6.6 does not do:
 - **Sockets:** no non-blocking mode and no `select`/`poll` over several
   sockets — use one actor per connection; no Unix-domain sockets.
 - **Files:** a `ByteArray` cannot be changed in place (build a new one, or use a
-  byte `WriteStream`); no
-  permission changes, file locking or recursive directory walk beyond
-  `children` (walk it yourself); no file-system watching.
+  byte `WriteStream`); locking is for `BinaryFile` only (§15.11), and it is
+  advisory; no permission changes or recursive directory walk beyond
+  `children` (walk it yourself); no file-system watching. A `BinaryFile`
+  has no position and no stream protocol, and it cannot tell that another
+  process appends to the same file.
+- **MessagePack:** one-shot `encode:` and `decode:`, no incremental reader;
+  no timestamp type (ext -1 is a plain `MessagePackExt`); the bytes of a
+  `Dictionary` with several keys depend on its internal order.
 - **Platforms:** Linux, macOS and Windows (MSVC) are built and tested in
   CI; the released package is a Linux `.deb`. On Windows a few things
   differ (`cmd.exe` as the shell, batch files refused by `run:`, `/` in the
@@ -764,7 +981,7 @@ What 0.6.6 does not do:
   threads (§15.10). Programs with thousands of simultaneous connections are
   outside what this design serves.
 
-## 15.12 Summary
+## 15.13 Summary
 
 - The kernel reads and writes files (`FileReference`: `contents`, `lines`,
   `writeStreamDo:`, `children`, `copyTo:`, `deleteAll`, …), the standard
@@ -778,6 +995,11 @@ What 0.6.6 does not do:
   `NameLookupFailure`, `NetworkError`, `OSProcessError`.
 - Calls block; concurrency comes from actors — one per connection — and the
   worker pool grows while workers are blocked, up to 256 threads.
+- `ByteArray` is binary data (`#[1 2 255]`, immutable, with `utf8Encoded` and
+  `utf8Decoded` for text, byte-order readers and writers, CRC-32, BLAKE2b,
+  SHA-256, HMAC and base64); `BinaryFile` is a file read and written at
+  explicit offsets, with `sync` and a lock; `MessagePack` reads and writes the
+  MessagePack format (§15.11).
 - Not provided: HTTP/2, WebSockets, a TLS server, non-blocking multiplexing,
   native Windows.
 - The operating-system layer is [protoIO](https://github.com/gamarino/protoIO),

@@ -54,12 +54,12 @@ network.
 | 7 | [Exceptions](tutorial/07-exceptions.md) | `Error`/`Warning`, `signal`, `on:do:`, `ensure:`, `resume:`/`retry`/`pass`. |
 | 8 | [Collections](tutorial/08-collections.md) | `Array`, `OrderedCollection`, `Set`, `Dictionary`, `Bag`, `Interval`; the iteration protocol. |
 | 9 | [The standard library](tutorial/09-standard-library.md) | `Stream`, the math protocol, `Random`, `JSON`, `Time`; `Import from:`. |
-| 10 | [Actors and futures](tutorial/10-actors-and-futures.md) | `asActor`, asynchronous sends, `Future`/`wait`, cooperative yield. |
+| 10 | [Actors and futures](tutorial/10-actors-and-futures.md) | `asActor`, asynchronous sends, `Future`/`wait`, cooperative yield, deadlines (`within:`, `waitWithin:`). |
 | 11 | [The advanced object model](tutorial/11-advanced-object-model.md) | `uses:` multiple inheritance and mixins; `addBehavior:` runtime composition. |
 | 12 | [Tooling](tutorial/12-tooling.md) | The REPL and its meta-commands; the DAP debugger; the venv. |
 | 13 | [A worked example](tutorial/13-worked-example.md) | A digital-twin program built end to end. |
 | 14 | [For the Smalltalk programmer](tutorial/14-for-the-smalltalk-programmer.md) | Every deviation from Smalltalk-80, honestly catalogued. |
-| 15 | [Input and output](tutorial/15-input-and-output.md) | Files, standard streams and pipelines, arguments and exit status, other programs, TCP/UDP sockets, the HTTP client and server; blocking I/O and actors. |
+| 15 | [Input and output](tutorial/15-input-and-output.md) | Files, standard streams and pipelines, arguments and exit status, other programs, TCP/UDP sockets, the HTTP client and server; bytes, binary files and MessagePack; blocking I/O and actors. |
 
 ## A note on running the examples
 

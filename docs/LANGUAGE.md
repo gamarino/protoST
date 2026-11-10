@@ -1292,7 +1292,8 @@ Exception                  (root; resumable)
     KeyNotFound            (Dictionary>>at: with an absent key)
     NotFound               (remove: of an absent element)
     BlockCannotReturn      (§7.1)
-    ModificationForbidden  (at:put: on a String)
+    ModificationForbidden  (at:put: on a String or a ByteArray)
+    TimeoutError           (a Future did not settle before its deadline; §10.3)
     InvalidArgument        (protoCore: a malformed argument, a wrong-typed operand; §8.7)
   Warning                  (resumable)
 ```
@@ -1820,12 +1821,40 @@ exception.
 | `rejectWith:` | reject the future with a cause |
 | `Future whenAll: futures` / `f1 & f2` | a future of the Array of all values; rejected if any is rejected |
 | `Future whenAny: futures` / `f1 \| f2` | a future of the first value to arrive |
+| `Future after: ms` | a new future, resolved with `nil` once `ms` milliseconds have passed |
+| `within: ms` | a new future that settles as the receiver does if that happens within `ms` milliseconds, and is otherwise rejected with a `TimeoutError` |
+| `waitWithin: ms` | `(self within: ms) wait` |
 
 ```smalltalk
 f := actor compute.
 f thenDo: [ :result | Transcript show: result printString ].
 v := f wait.                 "v is the resolved value"
 ```
+
+Deadlines (`after:`, `within:`, `waitWithin:`) are measured in milliseconds on
+the monotonic clock; `ms` is a non-negative `SmallInteger`, anything else
+signals `Error`. `TimeoutError` is a subclass of `Error`, and its
+`messageText` states the deadline (`'the Future did not settle within 50
+ms'`).
+
+```smalltalk
+(Future after: 10) wait.                                              "=> nil"
+[Future new waitWithin: 20] on: TimeoutError do: [ :e | e class ].    "=> TimeoutError"
+```
+
+- `within:` does not cancel the receiver. If it settles after the deadline,
+  the answer ignores that result (a future settles once); the receiver still
+  settles for its own waiters. An already settled receiver gives an answer
+  settled the same way at once.
+- Timers are kept by one timer thread per runtime, which never runs Smalltalk
+  code. When a deadline passes, a pool worker settles the future, so the
+  callbacks (`thenDo:`, `catch:`) run on a worker. If every worker is blocked
+  (in I/O, in `sleep:`), the settle waits for one.
+- `waitWithin:` in an actor's method suspends the actor like `wait`
+  (§10.4); nested in a block it blocks the worker, which helps other actors
+  meanwhile, as `wait` does there.
+- Timers still pending when the program ends are dropped: their futures never
+  settle and no callback runs. They never keep the program alive.
 
 ### 10.4 Cooperative suspension
 
@@ -2322,6 +2351,7 @@ Common rules:
 | `BodyTooLarge` | `NetworkError` | an HTTP body exceeds the limit it is read with (`HTTPServer maxBodySize:`) |
 | `LineTooLong` | `Error` | `nextLineMax:` meets a longer line |
 | `OSProcessError` | `Error` | a program cannot be started, or `OSProcess command:` exits non-zero |
+| `InternalError` | `Error` | a library protoIO relies on fails for a reason that is neither the program's nor its environment's (in practice an OpenSSL failure) |
 
 `messageText` names the operation, the path or address, and the system's
 reason (`'cannot read /tmp/a.txt: No such file or directory'`).
@@ -2389,6 +2419,9 @@ A `FileReference` names a path; it holds no open descriptor.
 | `copyTo: ref`, `moveTo: ref`, `renameTo: 'name'` | copy or move a file; answer the destination |
 
 Two references are `=` when their `fullName`s are equal.
+
+For a file read and written at explicit offsets, with `sync` and a lock, see
+`BinaryFile` in [§12.12.2](#12122-binaryfile).
 
 #### 12.11.3 The program and its environment
 
@@ -2499,6 +2532,157 @@ a header line over 8 KiB or more than 100 header lines (431); a
 `maxBodySize` (413; `server maxBodySize: bytes`, default 64 MiB).
 
 Not provided: HTTP/2, WebSockets, keep-alive, a TLS server, proxies.
+
+### 12.12 Bytes, binary files and encodings
+
+Since 0.9.0. The tutorial's [chapter 15](tutorial/15-input-and-output.md)
+(§15.11) teaches this with worked examples; the design record is
+`docs/superpowers/specs/2026-11-09-bytes-files-timers-design.md`. Classes:
+`ByteArray`, `BinaryFile`, `MessagePack`, `MessagePackMap`, `MessagePackExt`,
+`CRC32` and `HMAC`, all kernel classes (no import). The codecs, digests and
+file operations are protoIO's (0.3.0 or later).
+
+#### 12.12.1 `ByteArray`
+
+An immutable sequence of integers from 0 to 255, written `#[1 2 255]` (also
+inside a literal array: `#(#[1 2] 3)`). Like `String` it is a value, a direct
+subclass of `Object`, not a collection: `isKindOf: SequenceableCollection` is
+false, and it understands only the protocol below. Two byte arrays are `=`
+when their contents are equal, and they work as `Set` elements and
+`Dictionary` keys.
+
+| Selector | Meaning |
+|----------|---------|
+| `ByteArray new`, `new: n`, `withAll: aCollection`, `fromHex: aString` | the empty one; `n` zero bytes; from a collection of integers 0-255 (a `ByteArray` answers itself); from hexadecimal digits (either case; an odd length or another character signals `Error`) |
+| `size`, `isEmpty`, `notEmpty`, `at:` | `at:` answers an Integer 0-255 (1-based); an index outside 1..size signals `SubscriptOutOfBounds` |
+| `at:put:` | signals `ModificationForbidden` (D41) |
+| `do:`, `inject:into:`, `asArray` | iteration, as over an Array |
+| `collect:` | answers an `Array`, because the block may answer anything (D41) |
+| `,`, `copyFrom:to:`, `copyReplaceFrom:to:with:` | new byte arrays; the replacement is a `ByteArray` or a collection of integers 0-255; bounds as `String` (`SubscriptOutOfBounds`) |
+| `hex` | the lowercase hexadecimal `String` (`#[1 255] hex` is `'01ff'`) |
+| `printString` | the literal form, `#[1 2 255]` |
+| `readStream`, `writeStream` | a `ReadStream` over the bytes; an empty byte `WriteStream` (it ignores the receiver) |
+| `utf8Decoded` / `String >> utf8Encoded` | text from bytes (strict UTF-8: no overlong forms, no surrogates, nothing above U+10FFFF, no truncation; an invalid sequence signals `Error` naming the byte and its position) / bytes from text |
+
+```smalltalk
+#[1 2 255] hex                        "=> '0102ff'"
+(#[1 2 3] copyFrom: 2 to: 3)            "=> #[2 3]"
+'héllo' utf8Encoded size                "=> 6"
+#[104 195 169] utf8Decoded              "=> 'hé'"
+```
+
+A byte stream is `WriteStream on: ByteArray new`: `nextPut: anInteger`
+(0-255), `nextPutAll: aByteArray`, `<<`, `contents` (a new `ByteArray` on every
+call), `size`; and `ReadStream on: aByteArray` with `next`, `next: n` (a
+`ByteArray`), `peek`, `atEnd`, `position`, `position:`, `skip:`, `upTo:`,
+`upToEnd`. A byte stream refuses a `String` and any non-byte with an `Error`
+(there is no implicit conversion, neither Latin-1 nor UTF-8).
+
+**Numbers in bytes.** Indices are 1-based and checked: a read past the end
+signals `SubscriptOutOfBounds`. `bigEndian:` takes `true` or `false`.
+
+| Read (on a `ByteArray`) | Write (on a byte `WriteStream`; each answers its argument) |
+|---|---|
+| `unsignedByteAt:`, `signedByteAt:` | `nextPutUnsigned: n width: w bigEndian: b`, `nextPutSigned: n width: w bigEndian: b` with `w` 1, 2, 4 or 8 |
+| `unsignedShortAt:bigEndian:`, `signedShortAt:bigEndian:` | |
+| `unsignedLongAt:bigEndian:`, `signedLongAt:bigEndian:` (4 bytes) | |
+| `unsignedLong64At:bigEndian:`, `signedLong64At:bigEndian:` (8 bytes) | (64-bit values above 2^53 - 1 are `LargeInteger`) |
+| `float32At:bigEndian:`, `float64At:bigEndian:` | `nextPutFloat32:bigEndian:`, `nextPutFloat64:bigEndian:` |
+
+A value that does not fit its width signals `Error`; it never wraps.
+`nextPutFloat32:` rounds a finite `Float` to single precision and refuses one
+beyond the single range. Floats travel as bit patterns, so `-0.0`, infinities
+and NaN payloads survive.
+
+**Checksums, digests and base64.** One-shot functions; there are no
+incremental objects. A digest is a new `ByteArray` (raw bytes; `hex` prints it).
+
+| Selector | Answers |
+|----------|---------|
+| `crc32`, `crc32Continuing: anInteger` | CRC-32 (zlib's) as an Integer in [0, 2^32) |
+| `CRC32 combine: crcA with: crcB length: n` | the CRC of `a , b` from the two CRCs and the length of `b` |
+| `blake2b: size`, `blake2b: size key: aKey` | BLAKE2b, `size` 1-64, key at most 64 bytes |
+| `sha256`, `HMAC sha256Key: aKey message: aByteArray` | SHA-256; HMAC-SHA-256 |
+| `base64Encoded` / `aString base64Decoded` | a `String` / a `ByteArray` |
+
+```smalltalk
+'hello' utf8Encoded crc32                "=> 907060870"
+'hello' utf8Encoded base64Encoded        "=> 'aGVsbG8='"
+```
+
+`base64Decoded` is strict: the standard alphabet, correct padding, and
+canonical trailing bits (`'abd='` and `'ab=='` are refused). It has no
+URL-safe variant and skips no whitespace.
+
+#### 12.12.2 `BinaryFile`
+
+A handle to an open file with no position: every read and write names its
+offset (from 0). It is created with `BinaryFile open: aPath options: anArray`
+(a `String` or `FileReference`; the options are symbols from `#read #write
+#create #exclusive #truncate #append`; at least one of `#read`, `#write`,
+`#append` is required; an unknown option signals `Error` before anything is
+opened).
+
+| Selector | Meaning |
+|----------|---------|
+| `append: aByteArray` | write at the end; answers the offset where the bytes start |
+| `readAt: offset size: n` | up to `n` bytes as a `ByteArray`: fewer only at the end of the file, none past it |
+| `writeAt: offset bytes: aByteArray` | overwrite, extending the file as needed; answers the receiver. A file opened with `#append` refuses it |
+| `size`, `truncateTo: n` | the size; cut the file, or extend it with zero bytes |
+| `sync`, `dataSync` | data and metadata durable; data (with what is needed to read it) durable |
+| `tryLock`, `lock`, `unlock` | an exclusive advisory lock on the open file: `tryLock` answers a Boolean, `lock` waits |
+| `close`, `isClosed`, `path` | `close` releases the descriptor and the lock and is idempotent; any other use after `close` signals `Error` |
+| `FileSystem replace: from with: to` | rename over an existing file atomically |
+| `FileSystem syncDirectory: aPath` | make the entries of a directory durable |
+
+The lock is the one ProtoBase's `OwnerLock` takes (`flock` on POSIX,
+`LockFileEx` on Windows), so a protoST process and a Python ProtoBase process
+exclude each other. It belongs to the open file, not to the process: a second
+`BinaryFile` on the same path conflicts with the first. Writes take a
+`ByteArray` only; a `String` is refused. The contract, in full, is the class
+comment of `lib/kernel/binfile.st`:
+
+- one appender at a time per file. In one process, on one `BinaryFile` object,
+  a second concurrent `append:`, a `truncateTo:` during an `append:`, and a
+  `writeAt:bytes:` that extends the file during an `append:` or `truncateTo:`
+  signal `Error` and do nothing; appenders in other processes, or through
+  another `BinaryFile` over the same file, cannot be detected;
+- two `writeAt:bytes:` over the same bytes, or a `writeAt:bytes:` racing a
+  `truncateTo:`, are the caller's race, as in any file API;
+- an unclosed `BinaryFile` stays open, with its lock, until `close` or the end
+  of the program; the collector never closes it.
+
+#### 12.12.3 `MessagePack`
+
+| Selector | Meaning |
+|----------|---------|
+| `MessagePack encode: anObject` | the bytes (a `ByteArray`) |
+| `decode: aByteArray`, `decode:strictKeys:` | the object; bytes after it signal `Error`; map keys must be `str` or `bin` unless `strictKeys:` is `false` |
+| `decodeFirst: aByteArray` | an `Association`: the first object -> the number of bytes it took; trailing bytes allowed |
+| `decodeOrdered:`, `decodeOrdered:strictKeys:` | as `decode:`, but each map is a `MessagePackMap` holding its `Association`s in wire order |
+| `MessagePackMap withAll: anArray` | an ordered map from an Array of `Association`s; `associations`, `size`, `at:ifAbsent:` (the last entry for a key) |
+| `MessagePackExt type: n data: aByteArray` | an ext value (`n` from -128 to 127); `type`, `data` |
+
+| protoST | MessagePack | Decoded as |
+|---------|-------------|------------|
+| `nil`, `true`, `false` | nil, bool | the same |
+| an Integer, -2^63 to 2^64 - 1 | the smallest int / uint | an Integer |
+| a `Float` | float 64 | a `Float` (a float 32 widens) |
+| a `String`, a `Symbol` | str (UTF-8) | a `String` |
+| a `ByteArray` | bin | a `ByteArray` |
+| an `Array`, an `OrderedCollection` | array | an `Array` |
+| a `Dictionary` | map, entries in no specified order | a `Dictionary` |
+| a `MessagePackMap` | map, in the order it holds | a `MessagePackMap` (`decodeOrdered:` only) |
+| a `MessagePackExt` | ext | a `MessagePackExt` (ext -1, the timestamp, too) |
+
+Anything else signals `Error` ("MessagePack cannot encode an instance of
+...") and so does an Integer outside the range, a cyclic structure and a
+structure nested deeper than 512 levels. Decoding refuses truncated input,
+invalid UTF-8 in a `str` and, by default, a map key that is not `str` or
+`bin`. The bytes are those of msgpack-python as ProtoBase uses it
+(`use_bin_type=True`, `raw=False`): `tests/cli/test_cli_binary_interop.sh`
+exchanges documents with CPython in both directions when `python3` and
+`msgpack` are installed.
 
 ---
 
@@ -2613,6 +2797,10 @@ commits. Summary as of 0.4.0, updated for changes merged since:
   metaclass hierarchy is thin (`x class class` works; there is no
   `Metaclass`/`ClassDescription` protocol beyond the reflective messages of
   §14 of the tutorial).
+- **Bytes and timers (0.9.0):** a `ByteArray` is immutable and has no
+  `asString`, it is not a collection (D41); a `BinaryFile` has no position
+  (D46); MessagePack encodes a Symbol as `str` (D47); `Future` deadlines are
+  protoST's own (D48).
 - **Input and output (0.5.0):** blocking calls only, with no multiplexing of
   several sockets on one thread; no HTTP/2, WebSockets, keep-alive or TLS
   server; POSIX only, so no native Windows (§12.11).

@@ -5,6 +5,108 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+## 0.9.0 — bytes, binary files, encodings, MessagePack and timers (2026-11-10)
+
+**Requires protoIO 0.3.0** (the declared minimum for a build from source,
+`PROTOIO_MIN_VERSION`; a 0.2.x checkout is refused at configure time). The
+protoCore floor stays 3.4.0 (SOVERSION 5). Design record:
+`docs/superpowers/specs/2026-11-09-bytes-files-timers-design.md`; the language
+reference is `docs/LANGUAGE.md` §12.12, the tutorial is chapter 15 (§15.11)
+and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
+
+### Breaking changes
+
+- **`binaryContents`, `IOStream >> nextBytes:` and UDP `receiveBytesTimeout:`
+  answer a `ByteArray`, not an `Array` of Integers.** A program that compares
+  the result with `#(0 1 255)` must compare with `#[0 1 255]`, or call
+  `asArray`. `printString` of the result is `#[0 1 255]`.
+- **An `Array` of Integers as a binary *argument* is deprecated** (`binaryContents:`,
+  `nextPutBytes:`, UDP `send:`): it still works in 0.9.0 and prints one line on
+  stderr per process; it is refused from **0.10.0**.
+- **`binaryContents: nil` and `binaryContents: 42` now fail** with
+  "a String or a ByteArray was expected". They used to write an empty file
+  without a word. A non-byte in an Array fails as before.
+- `NUL` is kept in strings now (see below), so a program that relied on text
+  being cut at a NUL sees the whole text.
+
+### Added
+
+- **`ByteArray`**: an immutable value with the literal `#[1 2 255]` (also
+  nested in `#(...)`), `new:`, `withAll:`, `fromHex:`, `hex`, `,`,
+  `copyFrom:to:`, `copyReplaceFrom:to:with:`, `=`, `hash` (usable in `Set` and
+  as `Dictionary` key), `readStream`, `writeStream` and `WriteStream on:
+  ByteArray new` (`nextPut:`, `nextPutAll:`, `<<`, `contents`);
+  `String >> utf8Encoded` and strict `ByteArray >> utf8Decoded`. Deviations
+  from Pharo: D41, D42.
+- **Numbers in bytes**: `unsignedByteAt:`, `unsignedShortAt:bigEndian:`,
+  `unsignedLongAt:bigEndian:`, `unsignedLong64At:bigEndian:`, the signed
+  versions (with `signedByteAt:`), `float32At:bigEndian:`,
+  `float64At:bigEndian:`, and on a byte stream `nextPutUnsigned:width:bigEndian:`,
+  `nextPutSigned:width:bigEndian:`, `nextPutFloat32:bigEndian:`,
+  `nextPutFloat64:bigEndian:`. A value that does not fit signals `Error`
+  (D43). All 168 vectors of `protoIO/tests/vectors/packing.json` pass.
+- **Checksums and digests**: `crc32`, `crc32Continuing:`, `CRC32 combine:with:length:`,
+  `blake2b:`, `blake2b:key:`, `sha256`, `HMAC sha256Key:message:`,
+  `base64Encoded`, `base64Decoded` (strict, D44). The vector files of protoIO
+  pass in full; the generator is `tests/conformance/15-binary/gen_vectors.py`.
+- **`BinaryFile`**: a positionless file with `open:options:`, `append:`,
+  `readAt:size:`, `writeAt:bytes:`, `size`, `truncateTo:`, `sync`, `dataSync`,
+  `tryLock`, `lock`, `unlock`, `close`; `FileSystem replace:with:` and
+  `syncDirectory:`; the new `InternalError`. The lock is the one ProtoBase's
+  `OwnerLock` takes. One appender at a time per file: a concurrent `append:`
+  signals `Error` (D46, `KNOWN_ISSUES.md` K8).
+- **`MessagePack`**, `MessagePackMap`, `MessagePackExt`: `encode:`, `decode:`,
+  `decodeFirst:`, `decodeOrdered:`; all 70 vectors pass, and documents are
+  exchanged with CPython's `msgpack` in both directions (D47).
+- **Future deadlines**: `Future after:`, `within:`, `waitWithin:` and
+  `TimeoutError`, on one timer thread per runtime that never runs Smalltalk
+  code (D48).
+- **A conformance test can be skipped visibly**: a program whose last value
+  starts with `SKIP: ` makes the runner exit 77 and CTest report *Skipped*
+  (`tests/conformance/README.md`).
+- New CLI tests `cli_binary_lock`, `cli_binary_lock_protobase` and
+  `cli_binary_interop` (the last two skip visibly without `python3`).
+
+### Fixed
+
+- **Strings keep NUL**: text read from a file or a stream, `Character asString`
+  (`(Character value: 0) asString` used to be empty), `,`, `copyFrom:to:`,
+  `asUppercase`, `reversed`, `substrings`, `trimBoth`, `copyReplaceAll:with:`,
+  `asSymbol`, `perform:` and a string literal that contains a NUL were all
+  cut at the first NUL through `c_str()`. They are built with an explicit
+  length now. Diagnostic text built by `std::runtime_error` can still be cut
+  (`KNOWN_ISSUES.md` K7).
+- **`STRuntime::enqueueTask` had no consumer**: a task put on the live
+  registry's list was never run and the list grew for ever. `drainOne` now runs
+  queued tasks first (`runOneTask`); the timer service uses it.
+- **A worker at the helping cap no longer starves timers**: a `waitWithin:`
+  nested in a block of 200 actors waited for ever, because every worker had
+  reached the cap of buried actors and nobody ran the settles. A worker past
+  the cap still runs queued tasks.
+- **A wait inside a `thenDo:` callback** (no current actor, on a pool worker)
+  no longer uses the main thread's single wait slot: it helps other work like
+  a nested wait does.
+- Iterating a collection while a block replaces its storage kept raw pointers
+  across allocation in `forEachElement`, `dictForEachEntry` and
+  `dictionaryEntries`; the snapshot is rooted now.
+
+### Changed
+
+- `lib/kernel/io.st`'s binary selectors and docs speak of `ByteArray`;
+  `docs/STATUS.md:323` ("Binary data is an Array of integers") is corrected.
+- Version 0.9.0 in the REPL banner and the HTTP client's `User-Agent`.
+
+### Known limitations (not defects of this release)
+
+K7 to K11 in `KNOWN_ISSUES.md`: diagnostic text cut at a NUL, the `BinaryFile`
+end guard and what it cannot see (and the protoIO 0.3.1 follow-up), timers
+and exit, what the tests do not prove (no ThreadSanitizer build; `InternalError`
+cannot be forced; the macOS and Windows behaviour of the visible skip is
+unconfirmed until CI runs), and protoCore's missing structural list split.
+CI's protoIO pin (`PROTOIO_REF` in `.github/workflows/ci.yml` and
+`cross-platform.yml`) still names the 0.2.3 commit and must move to a 0.3.0
+commit before the workflows can pass.
+
 ## 0.8.1 — on protoCore 3.5.0 (2026-10-31)
 
 **Built and tested against protoCore 3.5.0** (SOVERSION 5, unchanged from 3.4.0). The declared minimum for a build from source stays **protoCore 3.4.0**, which CI's floor entry still builds; the `.deb` is built against the 3.5.0 package, so it depends on `protocore (>= 3.5.0)` through protoCore's shlibs file, besides the declared `protocore (>= 3.4.0), protocore (<< 4.0.0)`. CI pins protoCore tag `v3.5.0` on Linux, macOS and Windows.

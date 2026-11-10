@@ -166,7 +166,7 @@ REPL.
 
 ```bash
 $ ./build/protost -i
-protoST 0.8.1 — interactive REPL
+protoST 0.9.0 — interactive REPL
 :help for commands, :quit or Ctrl-D to exit
 protoST> 3 + 4
 => 7
