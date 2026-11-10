@@ -444,6 +444,14 @@ add_test(NAME cli_binary_lock_protobase
 set_tests_properties(cli_binary_lock PROPERTIES TIMEOUT 60)
 set_tests_properties(cli_binary_lock_protobase PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
 
+# CPython round trip: msgpack, packed numbers, digests and CRC-framed records,
+# written by one side and verified byte for byte by the other. Exits 77 (a
+# visible skip) when python3 or its msgpack module is missing.
+add_test(NAME cli_binary_interop
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_binary_interop.sh $<TARGET_FILE:protost>
+            ${CMAKE_SOURCE_DIR}/tests/cli/interop_peer.py)
+set_tests_properties(cli_binary_interop PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
+
 add_test(NAME cli_script_output
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_script_output.sh $<TARGET_FILE:protost>)
 
