@@ -4,6 +4,7 @@
 #include "protoST/primitives.h"
 #include "primitives/ArgSupport.h"
 #include "primitives/BytesSupport.h"
+#include "primitives/DigestRunner.h"
 #include "primitives/IoBrackets.h"
 #include "primitives/StringSupport.h"
 #include "primitives/ProtoioErrors.h"
@@ -444,23 +445,8 @@ PRIM(prim_PackFloat) {
 // also refuses a trailing group whose unused bits are not zero (ruling R7),
 // which CPython accepts.
 
-// Where a digest runs. Below kUnmanagedDigestBytes of input it
-// runs inline: hashing a few KiB costs less than leaving and re-entering the
-// collector's quorum. From there on it runs inside unmanaged(), so a hash
-// over a large input never holds up a stop-the-world collection while it
-// runs. That is safe because the bracketed call touches no
-// protoCore object: it reads only views taken before the bracket into
-// ByteArrays the caller keeps reachable (the receiver and the arguments of
-// this primitive), which are immutable (makeBytes fills a buffer once) and
-// never moved (protoCore's collector does not move objects), or C++ copies.
-// The result value is built after the bracket, with the context managed again.
-constexpr size_t kUnmanagedDigestBytes = 64 * 1024;
-
-template <class F>
-auto digesting(proto::ProtoContext* ctx, size_t inputBytes, const char* who, F&& f) -> decltype(f()) {
-    if (inputBytes >= kUnmanagedDigestBytes) return unmanaged(ctx, std::forward<F>(f), who);
-    return immediate(std::forward<F>(f), who);
-}
+// Where each digest runs (inline, or unmanaged from 64 KiB of input) is
+// runDigest's decision (DigestRunner.h).
 
 // A non-negative Integer not above `max` (read exactly, so a LargeInteger is
 // range-checked rather than rejected as a type error).
@@ -485,7 +471,7 @@ PRIM(prim_Crc32) {
     const char* who = "ByteArray crc32Continuing:";
     const std::uint64_t crc = unsignedArg(ctx, a[0], 32, "the running crc", who);
     const std::string_view data = bytesView(ctx, r);
-    return ctx->fromLong(static_cast<long long>(digesting(ctx, data.size(), who, [&] {
+    return ctx->fromLong(static_cast<long long>(runDigest(ctx, data.size(), who, [&] {
         return protoio::digest::crc32(data, static_cast<std::uint32_t>(crc));
     })));
 }
@@ -514,7 +500,7 @@ PRIM(prim_Blake2b) {
         throw NativeError(errorPrefix(who) + "a key is at most 64 bytes, not "
                                  + std::to_string(key.size()));
     const std::string_view data = bytesView(ctx, r);
-    return makeBytes(ctx, digesting(ctx, data.size(), who, [&] {
+    return makeBytes(ctx, runDigest(ctx, data.size(), who, [&] {
         return protoio::digest::blake2b(data, static_cast<int>(n), key);
     }));
 }
@@ -522,7 +508,7 @@ PRIM(prim_Blake2b) {
 PRIM(prim_Sha256) {
     ARGS(0, "__sha256");
     const std::string_view data = bytesView(ctx, r);
-    return makeBytes(ctx, digesting(ctx, data.size(), "ByteArray sha256", [&] {
+    return makeBytes(ctx, runDigest(ctx, data.size(), "ByteArray sha256", [&] {
         return protoio::digest::sha256(data);
     }));
 }
@@ -533,7 +519,7 @@ PRIM(prim_HmacSha256) {
     const char* who = "HMAC sha256Key:message:";
     const std::string_view key = bytesArg(ctx, a[0], who);
     const std::string_view data = bytesArg(ctx, a[1], who);
-    return makeBytes(ctx, digesting(ctx, key.size() + data.size(), who, [&] {
+    return makeBytes(ctx, runDigest(ctx, key.size() + data.size(), who, [&] {
         return protoio::digest::hmacSha256(key, data);
     }));
 }
@@ -541,7 +527,7 @@ PRIM(prim_HmacSha256) {
 PRIM(prim_Base64Encode) {
     ARGS(0, "__base64Encode");
     const std::string_view data = bytesView(ctx, r);
-    const std::string text = digesting(ctx, data.size(), "base64Encoded", [&] {
+    const std::string text = runDigest(ctx, data.size(), "base64Encoded", [&] {
         return protoio::encoding::base64Encode(data);
     });
     return makeString(ctx, text);
@@ -554,7 +540,7 @@ PRIM(prim_Base64Decode) {
         (a[0] && a[0] != PROTO_NONE) ? a[0]->asString(ctx) : nullptr;
     if (!s) throw NativeError("base64Decoded: a String was expected");
     const std::string text = s->toStdString(ctx);
-    return makeBytes(ctx, digesting(ctx, text.size(), "base64Decoded", [&] {
+    return makeBytes(ctx, runDigest(ctx, text.size(), "base64Decoded", [&] {
         return protoio::encoding::base64Decode(text);
     }));
 }
