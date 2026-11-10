@@ -192,8 +192,9 @@ and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
   and the sibling protoIO, with `-fsanitize=thread`; `ctest -L tsan` runs the
   580 tests that exercise more than one thread, with TSan's reports written
   to files and checked by a fixture at the end (`docs/INSTALLATION.md`,
-  "Running the tests under ThreadSanitizer"). CI runs it in a `tsan` job,
-  informational until protoCore's `newThread` race is fixed (K10).
+  "Running the tests under ThreadSanitizer"). CI runs it in a `tsan` job
+  that gates, against a TSan build of protoCore 3.5.2 (3.5.0 has a race in
+  `newThread`, K10).
 
 ### Known limitations (not defects of this release)
 

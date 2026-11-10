@@ -205,9 +205,8 @@ overflows the native stack.
   starts workers from worker threads (`STRuntime::enterBlockingIO`), so
   programs that block several actors in I/O at once report it
   (`14-io/http_concurrent`, `14-io/net_pool_growth`,
-  `15-binary/binfile_lock_actors`; two or three of them per run). It is not
-  suppressed, so the CI job that runs the label does not gate until protoCore
-  fixes it.
+  `15-binary/binfile_lock_actors`; two or three of them per run). protoCore
+  3.5.2 fixes it; the CI job that runs the label builds 3.5.2 and gates.
 - **`InternalError` cannot be forced from a program.** protoIO raises it only
   for OpenSSL failures that are practically unreachable, and the runtime ships
   no test-only primitive. The mapping (`src/primitives/ProtoioErrors.h`) is

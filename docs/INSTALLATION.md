@@ -180,9 +180,9 @@ in protoST is fixed.
 
 Measured on 2026-11-10 (6 cores): protoCore's library builds in about 3
 minutes, protoST in about 4, and the 580 tests of the label run in 7 to 8
-minutes with `-j3`. The run is clean in protoST and protoIO; the one race it
-reports is in protoCore 3.5.0 (`KNOWN_ISSUES.md` K10), which is why the CI
-job does not gate yet.
+minutes with `-j3`. Against protoCore 3.5.2 the run is clean; protoCore 3.5.0
+reports a race in `ProtoSpace::newThread` (`KNOWN_ISSUES.md` K10), so use
+3.5.2 or later. The CI job builds protoCore 3.5.2 with TSan and gates.
 
 On a kernel with 32 bits of mmap randomisation (`vm.mmap_rnd_bits`), older
 TSan runtimes stop with "unexpected memory mapping"; `sudo sysctl
