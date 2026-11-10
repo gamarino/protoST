@@ -291,9 +291,7 @@ const proto::ProtoObject* defaultAction(STRuntime& rt, proto::ProtoContext* ctx,
             const proto::ProtoObject* cn = exc->getAttribute(ctx, classNameKey(ctx));
             if (cn && cn != PROTO_NONE)
                 if (const proto::ProtoString* ns = cn->asString(ctx)) label = ns->toStdString(ctx);
-            std::fputs((label + ": ").c_str(), stderr);
-            std::fputs(m.c_str(), stderr);
-            std::fputc('\n', stderr);
+            writeWholeLine(stderr, label + ": " + m);
         }
     }
     // Resume with nil: `signal` returns nil, the computation continues.

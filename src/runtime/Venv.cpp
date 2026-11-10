@@ -1,5 +1,6 @@
 #include "Venv.h"
 #include "VenvTemplates.h"
+#include "NativeError.h"
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -124,7 +125,7 @@ int venvInfo(const std::string& cwd) {
     std::printf("venv: %s\n", v.c_str());
     std::ifstream f(fs::path(v) / "stenv.cfg");
     std::string line;
-    while (std::getline(f, line)) std::printf("  %s\n", line.c_str());
+    while (std::getline(f, line)) writeWholeLine(stdout, "  " + line);
     return 0;
 }
 

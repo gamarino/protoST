@@ -428,7 +428,7 @@ void cmdLoad(Session& s, const std::string& arg) {
     }
     std::FILE* fp = std::fopen(path.c_str(), "rb");
     if (!fp) {
-        std::fprintf(stderr, ":load: cannot open %s\n", path.c_str());
+        writeWholeLine(stderr, ":load: cannot open " + path);
         return;
     }
     // Read in chunks, without asking for the size: ftell answers a long,
@@ -445,7 +445,7 @@ void cmdLoad(Session& s, const std::string& arg) {
         while ((got = std::fread(chunk, 1, sizeof chunk, fp)) > 0) src.append(chunk, got);
         failed = std::ferror(fp) != 0;
     }
-    if (failed) { std::fclose(fp); std::fprintf(stderr, ":load: cannot read %s\n", path.c_str()); return; }
+    if (failed) { std::fclose(fp); writeWholeLine(stderr, ":load: cannot read " + path); return; }
     std::fclose(fp);
 
     // Execute against the live session — definitions and variables persist
@@ -453,7 +453,7 @@ void cmdLoad(Session& s, const std::string& arg) {
     // value is not echoed (a file is a sequence of statements, not one
     // expression); a clean run is confirmed instead.
     if (evaluate(s, src, path.c_str(), /*printIt=*/false))
-        std::printf("loaded %s\n", path.c_str());
+        writeWholeLine(stdout, "loaded " + path);
 }
 
 // :reset — discard all session state and start a fresh STRuntime.
@@ -556,7 +556,7 @@ bool dispatchMeta(Session& s, const std::string& trimmed) {
         std::fflush(stdout);
         return false;
     }
-    std::fprintf(stderr, "unknown command: %s\n", cmd.c_str());
+    writeWholeLine(stderr, "unknown command: " + cmd);
     return false;
 }
 

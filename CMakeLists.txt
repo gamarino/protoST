@@ -497,6 +497,9 @@ add_test(NAME cli_shebang
 add_test(NAME cli_actor_unobserved_error
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_actor_unobserved_error.sh $<TARGET_FILE:protost>)
 
+add_test(NAME cli_diagnostics_nul
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_diagnostics_nul.sh $<TARGET_FILE:protost>)
+
 add_test(NAME cli_print_nl
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_print_nl.sh $<TARGET_FILE:protost>)
 

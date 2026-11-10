@@ -191,7 +191,8 @@ int main(int argc, char** argv) {
         auto m = P.parseModule();
         for (auto& e : P.errors())
             protoST::writeWholeLine(stderr, std::string(path) + ":" + std::to_string(e.line) + ":" + std::to_string(e.column) + ": " + e.message);
-        std::fputs(protoST::astToString(*m).c_str(), stdout);
+        const std::string ast = protoST::astToString(*m);
+        std::fwrite(ast.data(), 1, ast.size(), stdout);
         return P.errors().empty() ? 0 : 65;
     }
     if (mode == "-i") {
@@ -330,7 +331,8 @@ int main(int argc, char** argv) {
             if (disasm) {
                 // The script's own module and every block and method body it
                 // holds; the kernel is compiled separately and not listed.
-                std::fputs(protoST::disassemble(*bc).c_str(), stdout);
+                const std::string listing = protoST::disassemble(*bc);
+                std::fwrite(listing.data(), 1, listing.size(), stdout);
                 std::fflush(stdout);
             }
             const proto::ProtoObject* r = nullptr;
