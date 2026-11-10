@@ -179,7 +179,7 @@ an error exit, or in a child process a CLI test starts. A suppression in
 in protoST is fixed.
 
 Measured on 2026-11-10 (6 cores): protoCore's library builds in about 3
-minutes, protoST in about 4, and the 571 tests of the label run in 7 to 8
+minutes, protoST in about 4, and the 580 tests of the label run in 7 to 8
 minutes with `-j3`. The run is clean in protoST and protoIO; the one race it
 reports is in protoCore 3.5.0 (`KNOWN_ISSUES.md` K10), which is why the CI
 job does not gate yet.

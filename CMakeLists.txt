@@ -697,11 +697,17 @@ endif()
 
 # The concurrency CLI tests carry the `tsan` label (see above): actors and
 # their stress runs, the GC thread against running and exiting actors, the
-# owner lock across actors, signals and the DAP server's threads.
+# owner lock across actors, signals, and every debugger test. The debugger
+# stops worker threads and talks to them from its own thread (the DAP reader,
+# or the text prompt), so each DAP session is a concurrency test.
 set_tests_properties(cli_actor_unobserved_error cli_callback_error_reported
                      cli_buried_actor_deadlock cli_actor_stress cli_concurrent_first_call
                      cli_gc_shutdown_stress cli_gc_reclaims cli_gc_recursion_reclaims
-                     cli_actor_payload_gc cli_binary_lock cli_sigint cli_dap_threads cli_dap_gc
+                     cli_actor_payload_gc cli_binary_lock cli_sigint
+                     cli_debugger cli_repl
+                     cli_dap cli_dap_session cli_dap_output cli_dap_exceptions
+                     cli_dap_stepping cli_dap_threads cli_dap_conditions
+                     cli_dap_sources cli_dap_gc
                      PROPERTIES ${PROTOST_TSAN_TEST_PROPERTIES})
 
 # --- Track 10: Installation packaging ---------------------------------------

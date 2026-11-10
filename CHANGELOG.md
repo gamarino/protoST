@@ -157,6 +157,12 @@ and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
 - Iterating a collection while a block replaces its storage kept raw pointers
   across allocation in `forEachElement`, `dictForEachEntry` and
   `dictionaryEntries`; the snapshot is rooted now.
+- **A data race in the debugger**, found by the ThreadSanitizer job: two
+  threads resuming from a DAP stop at once both wrote the debugger's
+  `lastCommand_`, a single debugger-wide copy of the resume command that
+  nothing read. The command is applied to the resuming thread's own stepping
+  state, so the shared field is gone. Every debugger test (`cli_debugger`,
+  `cli_repl` and all `cli_dap*`) now carries the `tsan` label.
 
 ### Changed
 
@@ -184,7 +190,7 @@ and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
 
 - **ThreadSanitizer build and label.** `-DPROTOST_TSAN=ON` builds protoST,
   and the sibling protoIO, with `-fsanitize=thread`; `ctest -L tsan` runs the
-  571 tests that exercise more than one thread, with TSan's reports written
+  580 tests that exercise more than one thread, with TSan's reports written
   to files and checked by a fixture at the end (`docs/INSTALLATION.md`,
   "Running the tests under ThreadSanitizer"). CI runs it in a `tsan` job,
   informational until protoCore's `newThread` race is fixed (K10).
