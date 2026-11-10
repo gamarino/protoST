@@ -96,17 +96,16 @@ WriteStream >> putByte: anInteger
   buffer size >= 4096 ifTrue: [self flushBytes].
   ^ anInteger.
 
-WriteStream >> putBytes: aCollection
-  "Append a ByteArray, or an Array of Integers from 0 to 255; anything else
-   (a String, nil, another collection) signals Error."
-  aCollection class == ByteArray ifTrue: [
-    self flushBytes.
-    chunks add: aCollection.
-    ^ aCollection].
-  aCollection class == Array ifFalse: [
-    ^ Error new signal: 'A byte stream takes a ByteArray or an Array of bytes, not ' , aCollection printString , ' (text goes in through utf8Encoded)'].
-  aCollection do: [:each | self putByte: each].
-  ^ aCollection.
+WriteStream >> putBytes: aByteArray
+  "Append aByteArray. Anything else (an Array of Integers, a String, nil)
+   signals Error: an Array of bytes goes in through ByteArray withAll:, text
+   through utf8Encoded, so a conversion is always visible (ruling S15)."
+  aByteArray class == ByteArray ifFalse: [
+    ^ Error new signal: 'WriteStream: a byte stream takes a ByteArray, not ' , aByteArray printString ,
+      ' (an Array of bytes goes in through ByteArray withAll:, text through utf8Encoded)'].
+  self flushBytes.
+  chunks add: aByteArray.
+  ^ aByteArray.
 
 WriteStream >> nextPutUnsigned: anInteger width: aWidth bigEndian: aBoolean
   "Append anInteger as aWidth (1, 2, 4 or 8) bytes; a negative value, or one

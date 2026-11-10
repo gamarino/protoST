@@ -2572,11 +2572,13 @@ when their contents are equal, and they work as `Set` elements and
 ```
 
 A byte stream is `WriteStream on: ByteArray new`: `nextPut: anInteger`
-(0-255), `nextPutAll: aByteArray`, `<<`, `contents` (a new `ByteArray` on every
-call), `size`; and `ReadStream on: aByteArray` with `next`, `next: n` (a
-`ByteArray`), `peek`, `atEnd`, `position`, `position:`, `skip:`, `upTo:`,
-`upToEnd`. A byte stream refuses a `String` and any non-byte with an `Error`
-(there is no implicit conversion, neither Latin-1 nor UTF-8).
+(0-255), `nextPutAll: aByteArray`, `<<` (an Integer or a `ByteArray`),
+`contents` (a new `ByteArray` on every call), `size`; and `ReadStream on:
+aByteArray` with `next`, `next: n` (a `ByteArray`), `peek`, `atEnd`,
+`position`, `position:`, `skip:`, `upTo:`, `upToEnd`. `nextPutAll:` and `<<`
+take a `ByteArray` only: an `Array` of Integers goes in through `ByteArray
+withAll:`, text through `utf8Encoded`. Anything else, and any non-byte, signals
+`Error` (there is no implicit conversion, neither Latin-1 nor UTF-8).
 
 **Numbers in bytes.** Indices are 1-based and checked: a read past the end
 signals `SubscriptOutOfBounds`. `bigEndian:` takes `true` or `false`.

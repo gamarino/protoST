@@ -205,7 +205,8 @@ String, D34), it is a direct subclass of `Object` rather than of
 `asString`**: Pharo's would decode as Latin-1, so you write `utf8Decoded` and
 `utf8Encoded` and say which encoding you mean. `WriteStream on: ByteArray new`
 builds a new array on every `contents` instead of writing into the one you
-pass (D41, D42). The selectors for numbers in bytes keep Pharo's names where
+pass, and its `nextPutAll:` takes a `ByteArray` only (`ByteArray withAll:
+#(1 2 3)` converts an Array; D41, D42). The selectors for numbers in bytes keep Pharo's names where
 Pharo has them (`unsignedShortAt:bigEndian:`) and refuse a value that does not
 fit instead of truncating it (D43). Digests (`crc32`, `sha256`, `blake2b:`) and
 `base64Encoded` are one-shot and take their names from Python (D44).
