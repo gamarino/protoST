@@ -28,7 +28,11 @@
 #include "runtime/Opcodes.h"
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
+#include "runtime/NativeError.h"
 #include "protoCore.h"
+
+#include <exception>
+#include <string>
 
 namespace {
 
@@ -50,7 +54,18 @@ long long runBoth(const char* src) {
     for (int g = 0; g < 2; ++g) {
         auto bc = compileSrc(src, g == 1);
         protoST::STRuntime rt;
-        const proto::ProtoObject* r = rt.runTopLevel(*bc);
+        // An error is caught while `rt` is alive: the exception pins its value
+        // in rt's space, so letting it outlive the runtime would read freed
+        // memory when it is destroyed (ThreadSanitizer reported exactly that
+        // when the kernel could not be found).
+        const proto::ProtoObject* r = nullptr;
+        std::string error;
+        try {
+            r = rt.runTopLevel(*bc);
+        } catch (const std::exception& e) {
+            error = protoST::nativeErrorText(e);
+        }
+        if (!error.empty()) FAIL("runTopLevel failed: " << error);
         REQUIRE(r != nullptr);
         REQUIRE(r->isInteger(rt.rootCtx()));
         results[g] = r->asLong(rt.rootCtx());
