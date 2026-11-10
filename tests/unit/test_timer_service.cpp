@@ -16,7 +16,7 @@
 //      timers due in an hour is destroyed promptly, and the timers are dropped.
 //
 // Timing: case 1 asserts a lower bound (the timer cannot fire early) and its
-// order (ruling S14: no pass condition depends on scheduling); case 4 bounds
+// order (no pass condition may depend on how threads are scheduled); case 4 bounds
 // the destruction at 5 s against an hour. No case uses a sleep to
 // synchronise: every wait is on a Future or an Atom set by the program.
 

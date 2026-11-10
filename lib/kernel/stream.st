@@ -99,7 +99,8 @@ WriteStream >> putByte: anInteger
 WriteStream >> putBytes: aByteArray
   "Append aByteArray. Anything else (an Array of Integers, a String, nil)
    signals Error: an Array of bytes goes in through ByteArray withAll:, text
-   through utf8Encoded, so a conversion is always visible (ruling S15)."
+   through utf8Encoded, so a conversion is always visible; byte streams are
+   new in 0.9.0, so there is no older behaviour to keep."
   aByteArray class == ByteArray ifFalse: [
     ^ Error new signal: 'WriteStream: a byte stream takes a ByteArray, not ' , aByteArray printString ,
       ' (an Array of bytes goes in through ByteArray withAll:, text through utf8Encoded)'].

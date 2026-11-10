@@ -442,7 +442,7 @@ PRIM(prim_PackFloat) {
 // also refuses a trailing group whose unused bits are not zero (ruling R7),
 // which CPython accepts.
 
-// Where a digest runs (ruling S16). Below kUnmanagedDigestBytes of input it
+// Where a digest runs. Below kUnmanagedDigestBytes of input it
 // runs inline: hashing a few KiB costs less than leaving and re-entering the
 // collector's quorum. From there on it runs inside unmanaged(), so a hash
 // over a large input never holds up a stop-the-world collection while it

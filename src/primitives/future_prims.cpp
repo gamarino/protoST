@@ -168,9 +168,19 @@ bool appendOrDrained(proto::ProtoContext* ctx,
 // the first caller to win the __settling__ CAS settles the future; every
 // later call (and a concurrent loser) is a silent no-op. Answers whether this
 // call settled the future.
+//
+// `observeOnWin`, when given, is marked observed (markFutureObserved) by the
+// caller that wins the claim, right after the claim and before anything is
+// published: before the callbacks run, before __state__ is written and before
+// any waiter is woken. Doing it after settleFuture returned would leave a
+// window in which a woken main thread finishes the program and
+// ~STRuntime reports unobserved actor errors (it does so before joining the
+// workers) while the error is still recorded against `observeOnWin`: a
+// spurious "unhandled error in actor". Used by __passError:to: (within:).
 bool settleFuture(STRuntime& rt, proto::ProtoContext* ctx,
                   const proto::ProtoObject* future,
-                  bool reject, const proto::ProtoObject* payload) {
+                  bool reject, const proto::ProtoObject* payload,
+                  const proto::ProtoObject* observeOnWin = nullptr) {
     if (!future) return false;
     const proto::ProtoString* settlingKey =
         rt.bootstrap().sym.settling;
@@ -202,6 +212,10 @@ bool settleFuture(STRuntime& rt, proto::ProtoContext* ctx,
             ->setAttributeIfEqual(ctx, settlingKey, nullptr, PROTO_TRUE)) {
         return false;  // already settled / being settled
     }
+
+    // 1a. The winner hands an error on (see observeOnWin above): the source
+    //     counts as observed before any waiter of `future` can run.
+    if (observeOnWin) markFutureObserved(ctx, observeOnWin);
 
     // 1b. A pending timer for this future (Future after:, within:) stops
     //     rooting it: whoever settles first cancels it (TimerService::cancel;
@@ -618,7 +632,9 @@ const proto::ProtoObject* prim_Future_passErrorTo(STRuntime& rt, proto::ProtoCon
     const proto::ProtoObject* other = a[1];
     if (!other || other == PROTO_NONE || other->hasParent(ctx, rt.bootstrap().futureProto) == 0)
         throw std::runtime_error("Future>>__passError:to: a Future was expected");
-    if (settleFuture(rt, ctx, other, /*reject=*/true, a[0])) markFutureObserved(ctx, r);
+    // r is marked observed inside settleFuture, by the winner of the claim and
+    // before `other`'s waiters are woken (see settleFuture, observeOnWin).
+    settleFuture(rt, ctx, other, /*reject=*/true, a[0], /*observeOnWin=*/r);
     return r;
 }
 

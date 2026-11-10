@@ -1,6 +1,6 @@
 "EXPECT: 3 of 3 inputs agree with CPython"
 "Digests, CRC-32, HMAC and base64 just below and at the 64 KiB threshold from
- which they run outside the collector's quorum (bytes_prims.cpp, ruling S16),
+ which they run outside the collector's quorum (bytes_prims.cpp, digesting),
  and above it, give CPython's results (hashlib, zlib, hmac, base64; the
  expected values were computed with CPython 3)."
 | inputs expected agree |
