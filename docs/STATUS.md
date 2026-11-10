@@ -89,9 +89,10 @@ stable id and file it in the right bucket.
   regression test.
 - **Open bugs:** S3 (Medium, not provable on this build). Known limitations of
   0.9.0 that are not defects (what the `BinaryFile` end guard cannot see,
-  timers and exit, what the tests do not prove, protoCore's missing list
-  split, a mailbox batch beyond an `int`) are K8-K11 and K13 in
-  [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md); K7
+  timers and exit, what the tests do not prove, a mailbox batch beyond an
+  `int`) are K8-K10 and K13 in
+  [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md); K11 (no structural list split)
+  is resolved by protoCore 3.5.1; K7
   (diagnostic text cut at a NUL) and K12 (the NUL check for OS strings that
   protoIO did not make) were resolved before the release. S22 (a test
   race), S25 and S26 closed in 0.6.3, S24 in 0.6.1, S23 on 2026-10-02 (`9cdc9b4`),
