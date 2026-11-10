@@ -8,36 +8,60 @@
 // test itself holds a claim (protoio::file::EndGuard::Claim, the RAII claim
 // the guarded calls take) on the guard it passes to the very calls the
 // primitives make, wrapped in refusingAs as they are, so each verdict is
-// deterministic. That each BinaryFile routes those three calls through its
-// own one guard is what binfile_prims.cpp does (OpenFile::guard); protoIO's
-// own tests check the guard's matrix itself.
+// deterministic. The last case runs the primitives themselves, from
+// Smalltalk, while the test holds each use of the BinaryFile's own guard
+// (binFileGuardOf): so it shows which use each primitive takes, and that it
+// takes the guard of that BinaryFile. protoIO's own tests check the guard's
+// matrix itself.
 
 #include <catch2/catch_all.hpp>
 
 #include "primitives/BinFileGuard.h"
 #include "runtime/NativeError.h"
+#include "protoST/STRuntime.h"
+#include "frontend/Parser.h"
+#include "frontend/Compiler.h"
+#include "runtime/BytecodeModule.h"
+#include "protoCore.h"
 
 #include <protoio/file.h>
 #include <protoio/stream.h>
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
+#include <vector>
+
+#ifdef _WIN32
+#include <process.h>
+#define PROTOST_TEST_PID _getpid()
+#else
+#include <unistd.h>
+#define PROTOST_TEST_PID getpid()
+#endif
 
 namespace {
 
 using protoio::file::EndGuard;
 using protoST::BinFileOp;
 
+// A path no other test process uses: CTest runs each case as its own process,
+// several at once, and two of them can place an object at the same address.
+std::string tempPath(const void* owner) {
+    return (std::filesystem::temp_directory_path()
+            / ("protost-binfile-guard-" + std::to_string(PROTOST_TEST_PID) + "-"
+               + std::to_string(reinterpret_cast<std::uintptr_t>(owner))))
+        .string();
+}
+
 // A fresh 16-byte file, removed with its descriptor.
 struct TempFile {
     std::string path;
     int fd;
     TempFile() {
-        path = (std::filesystem::temp_directory_path()
-                / ("protost-binfile-guard-" + std::to_string(reinterpret_cast<std::uintptr_t>(this))))
-                   .string();
+        path = tempPath(this);
         protoio::file::OpenOptions o;
         o.read = o.write = o.create = o.truncate = true;
         fd = protoio::file::open(path, o);
@@ -155,4 +179,90 @@ TEST_CASE("BinaryFile guard: the refusal texts name the selector", "[io][binfile
               "BinaryFile>>writeAt:bytes: a truncateTo: is in progress", 0) == 0);
     CHECK(protoST::binFileRefusalText(BinFileOp::Truncate).rfind(
               "BinaryFile>>truncateTo: another append:, writeAt:bytes: or truncateTo: is in progress", 0) == 0);
+}
+
+namespace {
+
+// A runtime with one BinaryFile, the global F, over a 16-byte file.
+struct BinaryFileHost {
+    std::vector<std::unique_ptr<protoST::BytecodeModule>> kept;
+    protoST::STRuntime rt;
+    std::string path = tempPath(this);
+    std::shared_ptr<EndGuard> guard;
+
+    BinaryFileHost() {
+        std::filesystem::remove(path);
+        run("Smalltalk at: #F put: (BinaryFile open: '" + path + "' options: #(#read #write #create)). "
+            "F writeAt: 0 bytes: (ByteArray new: 16). 'ok'");
+        const std::string handle = run("(F instVarNamed: 'handle') printString");
+        guard = protoST::binFileGuardOf(std::stoll(handle));
+        REQUIRE(guard != nullptr);
+    }
+    ~BinaryFileHost() {
+        guard.reset();
+        run("F close. 'ok'");
+        std::filesystem::remove(path);
+    }
+
+    std::string run(const std::string& src) {
+        protoST::Parser P(src);
+        auto ast = P.parseModule();
+        REQUIRE(P.errors().empty());
+        protoST::Compiler C;
+        auto bc = C.compileModule(*ast);
+        REQUIRE(!C.hasErrors());
+        kept.push_back(std::move(bc));
+        const proto::ProtoObject* r = rt.runTopLevel(*kept.back());
+        REQUIRE(r != nullptr);
+        const proto::ProtoString* s = r->asString(rt.rootCtx());
+        REQUIRE(s != nullptr);
+        return s->toStdString(rt.rootCtx());
+    }
+
+    // Runs `call` on F and answers 'ok' or the Error text it signalled.
+    std::string attempt(const std::string& call) {
+        return run("[" + call + ". 'ok'] on: Error do: [:e | e messageText]");
+    }
+};
+
+} // namespace
+
+TEST_CASE("BinaryFile guard: each primitive takes its own use of its file's guard",
+          "[io][binfile]") {
+    // While the test holds one use of F's guard, the primitives that conflict
+    // with it are refused and the others run. A primitive that took the wrong
+    // use (or another guard) would answer a different row: the four rows
+    // tell append:, an inside and an extending writeAt:bytes:, and
+    // truncateTo: apart.
+    BinaryFileHost h;
+    const std::string append = "F append: #[1 2]";
+    const std::string inside = "F writeAt: 0 bytes: #[3 4]";
+    const std::string extending = "F writeAt: 100000 bytes: #[5 6]";
+    const std::string truncate = "F truncateTo: 16";
+    const std::string ok = "ok";
+    const auto refusal = [](BinFileOp op) { return protoST::binFileRefusalText(op); };
+
+    struct Row {
+        EndGuard::Use held;
+        bool appendRefused, insideRefused, extendingRefused, truncateRefused;
+    };
+    const Row rows[] = {
+        {EndGuard::Use::Append, true, false, true, true},
+        {EndGuard::Use::Truncate, true, true, true, true},
+        {EndGuard::Use::Extend, true, false, false, true},
+        {EndGuard::Use::Inside, false, false, false, true},
+    };
+    for (const Row& row : rows) {
+        INFO("held use " << static_cast<int>(row.held));
+        {
+            EndGuard::Claim claim(*h.guard, row.held, "test");
+            CHECK(h.attempt(append) == (row.appendRefused ? refusal(BinFileOp::Append) : ok));
+            CHECK(h.attempt(inside) == (row.insideRefused ? refusal(BinFileOp::WriteAt) : ok));
+            CHECK(h.attempt(extending) == (row.extendingRefused ? refusal(BinFileOp::WriteAt) : ok));
+            CHECK(h.attempt(truncate) == (row.truncateRefused ? refusal(BinFileOp::Truncate) : ok));
+        }
+        CHECK(h.guard->state().idle());
+        // Back to 16 bytes, so the next row's inside write is inside again.
+        CHECK(h.attempt(truncate) == ok);
+    }
 }

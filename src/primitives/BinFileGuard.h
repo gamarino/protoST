@@ -22,7 +22,9 @@
 #include "primitives/ArgSupport.h"
 
 #include <protoio/error.h>
+#include <protoio/file.h>
 
+#include <memory>
 #include <string>
 
 namespace protoST {
@@ -72,5 +74,11 @@ auto refusingAs(BinFileOp op, F&& f) -> decltype(f()) {
         throw NativeError(binFileRefusalText(op));
     }
 }
+
+// The end guard of the open BinaryFile `handle` (the handle instance variable
+// of a BinaryFile), or nullptr when it is closed. The pointer keeps the file,
+// and so its guard, alive. For tests: holding an EndGuard::Claim on it shows
+// which use of the guard each primitive takes (test_binfile_guard.cpp).
+std::shared_ptr<protoio::file::EndGuard> binFileGuardOf(long long handle);
 
 } // namespace protoST

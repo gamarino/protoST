@@ -106,6 +106,19 @@ std::shared_ptr<OpenFile> openFile(proto::ProtoContext* ctx, const PO* h, const 
     throw NativeError(errorPrefix(who) + "BinaryFile is closed");
 }
 
+} // namespace
+
+std::shared_ptr<protoio::file::EndGuard> binFileGuardOf(long long handle) {
+    Registry& reg = registry();
+    std::lock_guard<std::mutex> lock(reg.mutex);
+    auto it = reg.files.find(handle);
+    if (it == reg.files.end()) return nullptr;
+    // Aliasing constructor: shares ownership of the OpenFile.
+    return std::shared_ptr<protoio::file::EndGuard>(it->second, &it->second->guard);
+}
+
+namespace {
+
 // Whether the handle is still open. Touches no protoCore object, so it may
 // run inside a bracket.
 bool isRegistered(long long handle) {
