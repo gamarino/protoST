@@ -79,11 +79,13 @@ env:
   #                               tens of milliseconds.  It is a good test and a
   #                               bad gate.
   PROTOIO_REPO: gamarino/protoIO
-  # protoIO 0.3.0 (main, 002ab8a): positioned binary files, the
-  # ProtoBase-compatible owner lock, packing, CRC32/BLAKE2b/SHA-256/HMAC,
-  # base64 and MessagePack, so 0.3.0 is also the floor CMakeLists.txt
-  # declares. Pinned so a red build is attributable; bump deliberately.
-  PROTOIO_REF: 002ab8adce25166650ae73901cc2271ba819cbc7
+  # protoIO 0.4.0 (main, 41a5db0, not yet tagged): file::EndGuard and
+  # Error::Kind::Conflict (the BinaryFile end guard), on top of 0.3.0's
+  # positioned binary files, the ProtoBase-compatible owner lock, packing,
+  # CRC32/BLAKE2b/SHA-256/HMAC, base64 and MessagePack, so 0.4.0 is also the
+  # floor CMakeLists.txt declares. Pinned so a red build is attributable;
+  # bump deliberately (to the v0.4.0 tag once it exists).
+  PROTOIO_REF: 41a5db00ebe897155275a662d1e8342060a49aea
   NON_GATING_TESTS: '^(F6 v2 T7: two actors run in parallel \(wall-clock proof\))$'
 
 jobs:

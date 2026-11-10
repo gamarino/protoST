@@ -1,5 +1,5 @@
 "EXPECT: appender + truncator: every call succeeded or got the named Error, 0 other, 0 torn records"
-"BinaryFile: truncateTo: and append: both need the end guard alone. One actor appends CRC-framed records of about 2 MiB while another repeatedly truncates the file back to a 128-byte header. Each call succeeds or signals the named Error. Because the two never overlap in time, a truncate cuts between whole appends: the final file is the header followed by whole, valid frames up to its exact end The truncator runs for as long as the appender does and every append holds the guard through a multi-millisecond write, so on a multi-worker pool it is refused many times. The number of refused calls is deliberately not asserted: it depends on the worker count and timing (it is zero on a single worker), and the guard's effectiveness is shown by mutation runs recorded in the task report. (A truncate landing between an append's seek and write would leave a zero-filled hole that breaks the frame walk)."
+"BinaryFile: truncateTo: needs the file alone and append: the end of it. One actor appends CRC-framed records of about 2 MiB while another repeatedly truncates the file back to a 128-byte header. Each call succeeds or signals the named Error. Because the two never overlap in time, a truncate cuts between whole appends: the final file is the header followed by whole, valid frames up to its exact end The truncator runs for as long as the appender does and every append holds the guard through a multi-millisecond write, so on a multi-worker pool it is refused many times. The number of refused calls is deliberately not asserted: it depends on the worker count and timing (it is zero on a single worker), and the guard's effectiveness is shown by mutation runs recorded in the task report. (A truncate landing between an append's seek and write would leave a zero-filled hole that breaks the frame walk)."
 Object subclass: #Tail.
 Tail >> run: aCount file: aFile
   | out w payload body unit |
@@ -43,7 +43,7 @@ dir ensureCreateDirectory.
  results addAll: tail wait.
  done value: true ifCurrent: false.
  results addAll: cutter wait.
- named := results select: [:x | x isString and: [x includesSubstring: 'moves the end of the file is in progress']].
+ named := results select: [:x | x isString and: [(x includesSubstring: 'BinaryFile>>append: another operation that moves the end of the file is in progress on this BinaryFile') or: [x includesSubstring: 'BinaryFile>>truncateTo: another append:, writeAt:bytes: or truncateTo: is in progress on this BinaryFile']]].
  other := results size - (results select: [:x | x == true]) size - named size.
  torn := 0.
  size := f size.

@@ -254,7 +254,9 @@ target_link_libraries(protost_runtime PRIVATE protost_warnings)
 # link interface; dpkg-shlibdeps turns it into the package's libssl
 # dependency.
 #
-# The floor is 0.3.0: Error::Kind::Internal, a failure inside a library
+# The floor is 0.4.0: file::EndGuard, the end guard of BinaryFile (append:,
+# writeAt:bytes:, truncateTo:), and Error::Kind::Conflict, its refusal
+# (ProtoioErrors.h maps it to Error). 0.3.0 brought Error::Kind::Internal, a failure inside a library
 # protoIO relies on (ProtoioErrors.h maps it to InternalError), with the binary
 # encodings, digests and durable files the bytes work builds on. 0.2.3 brought
 # readBufferedLine, which nextLine uses to take a line
@@ -268,7 +270,7 @@ target_link_libraries(protost_runtime PRIVATE protost_warnings)
 # console reads and open files that can be deleted or renamed. protoIO's
 # package is compatible within one minor version (SameMinorVersion), so 0.1
 # would refuse 0.2.x.
-set(PROTOIO_MIN_VERSION "0.3.0")
+set(PROTOIO_MIN_VERSION "0.4.0")
 find_package(protoIO ${PROTOIO_MIN_VERSION} CONFIG QUIET)
 if(protoIO_FOUND)
     message(STATUS "protoST: installed protoIO ${protoIO_VERSION} from ${protoIO_DIR}")

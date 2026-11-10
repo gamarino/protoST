@@ -17,8 +17,11 @@ namespace protoST {
 // operation, "" for none). InvalidArgument (a value the library refuses) is the
 // generic Error the primitives raise for a bad argument. Internal (a failure
 // inside a library protoIO relies on, such as OpenSSL, caused neither by the
-// program nor by its environment) is an InternalError. The other kinds keep
-// their own classes.
+// program nor by its environment) is an InternalError. Conflict (an operation
+// refused because a conflicting one is in progress on the same object: the
+// BinaryFile end guard) is a generic Error too; binfile_prims.cpp gives it
+// protoST's own wording, naming the selector, before it reaches here. The
+// other kinds keep their own classes.
 [[noreturn]] inline void raiseProtoioError(const protoio::Error& e, const std::string& who = {}) {
     using Kind = protoio::Error::Kind;
     // protoio::Error has only what(). Its text is protoIO's own, and a path in
@@ -39,6 +42,7 @@ namespace protoST {
         case Kind::BodyTooLarge: throw ClassedErrorSignal("BodyTooLarge", text);
         case Kind::Internal: throw ClassedErrorSignal("InternalError", text);
         case Kind::InvalidArgument: break;
+        case Kind::Conflict: break;
     }
     throw NativeError(text);
 }
