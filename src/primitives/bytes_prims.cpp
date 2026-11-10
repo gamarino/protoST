@@ -5,6 +5,7 @@
 #include "primitives/ArgSupport.h"
 #include "primitives/BytesSupport.h"
 #include "primitives/DigestRunner.h"
+#include "primitives/IndexArg.h"
 #include "primitives/IoBrackets.h"
 #include "primitives/StringSupport.h"
 #include "primitives/ProtoioErrors.h"
@@ -133,9 +134,10 @@ PRIM(prim_BytesSize) {
 PRIM(prim_BytesAt) {
     ARGS(1, "__bytesAt:");
     const std::string_view v = bytesView(ctx, r);
-    const long long i = smallIntegerArg(ctx, a[0], "ByteArray at:", "the index");
+    const IndexArg index = indexArg(ctx, a[0], "ByteArray>>at:");
+    const long long i = index.value;
     if (i < 1 || i > static_cast<long long>(v.size()))
-        throw ClassedErrorSignal("SubscriptOutOfBounds", "ByteArray>>at: index " + std::to_string(i)
+        throw ClassedErrorSignal("SubscriptOutOfBounds", "ByteArray>>at: index " + index.text
                                  + " out of bounds 1.." + std::to_string(v.size()));
     return ctx->fromLong(static_cast<unsigned char>(v[static_cast<size_t>(i - 1)]));
 }
@@ -145,12 +147,13 @@ PRIM(prim_BytesAt) {
 PRIM(prim_BytesCopyFromTo) {
     ARGS(2, "__bytesCopyFrom:to:");
     const std::string_view v = bytesView(ctx, r);
-    const long long from = smallIntegerArg(ctx, a[0], "ByteArray copyFrom:to:", "the start");
-    const long long to = smallIntegerArg(ctx, a[1], "ByteArray copyFrom:to:", "the stop");
+    const IndexArg fromArg = indexArg(ctx, a[0], "ByteArray>>copyFrom:to:");
+    const IndexArg toArg = indexArg(ctx, a[1], "ByteArray>>copyFrom:to:");
+    const long long from = fromArg.value, to = toArg.value;
     if (to < from) return makeBytes(ctx, {});
     if (from < 1 || to > static_cast<long long>(v.size()))
         throw ClassedErrorSignal("SubscriptOutOfBounds", "ByteArray>>copyFrom:to: range "
-                                 + std::to_string(from) + " to " + std::to_string(to)
+                                 + fromArg.text + " to " + toArg.text
                                  + " out of bounds (size " + std::to_string(v.size()) + ")");
     return makeBytes(ctx, v.substr(static_cast<size_t>(from - 1), static_cast<size_t>(to - from + 1)));
 }
@@ -325,13 +328,14 @@ int widthArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
 
 // The 0-based offset of the 1-based `index`, checked so that `width` bytes
 // are there; reading past the end signals SubscriptOutOfBounds.
-size_t offsetOf(proto::ProtoContext* ctx, const PO* indexArg, int width, size_t size,
+size_t offsetOf(proto::ProtoContext* ctx, const PO* indexValue, int width, size_t size,
                 const char* who) {
-    const long long i = smallIntegerArg(ctx, indexArg, who, "the index");
+    const IndexArg index = protoST::indexArg(ctx, indexValue, who);
+    const long long i = index.value;
     if (i < 1 || static_cast<unsigned long long>(i) > size
         || size - static_cast<size_t>(i - 1) < static_cast<size_t>(width))
         throw ClassedErrorSignal("SubscriptOutOfBounds", errorPrefix(who) + "reading "
-                                 + std::to_string(width) + " byte(s) at index " + std::to_string(i)
+                                 + std::to_string(width) + " byte(s) at index " + index.text
                                  + " is out of bounds (size " + std::to_string(size) + ")");
     return static_cast<size_t>(i - 1);
 }

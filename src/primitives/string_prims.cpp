@@ -4,6 +4,7 @@
 #include "runtime/ClassedErrorSignal.h"
 #include "protoST/primitives.h"
 #include "primitives/StringSupport.h"
+#include "primitives/IndexArg.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/TransientPin.h"
 #include "runtime/ValueFormat.h"
@@ -122,11 +123,11 @@ const proto::ProtoObject* prim_StrAt(STRuntime&, proto::ProtoContext* ctx,
                                       const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("String>>at: expects 1 arg (index)");
     const proto::ProtoString* str = r->asString(ctx);
-    if (!a[0]->isInteger(ctx)) throw NativeError("String>>at: expects an Integer index");
-    const long long idx = a[0]->asLong(ctx);
+    const IndexArg index = indexArg(ctx, a[0], "String>>at:");
+    const long long idx = index.value;
     const long long size = str ? static_cast<long long>(str->getSize(ctx)) : 0;
     if (idx < 1 || idx > size)
-        throw ClassedErrorSignal("SubscriptOutOfBounds", "String>>at: index " + std::to_string(idx)
+        throw ClassedErrorSignal("SubscriptOutOfBounds", "String>>at: index " + index.text
                                  + " out of bounds (size " + std::to_string(size) + ")");
     // protoCore answers the element as a Character (an embedded unicode char),
     // without decoding the whole string.
@@ -308,11 +309,13 @@ const proto::ProtoObject* prim_StrCopyFromTo(STRuntime&, proto::ProtoContext* ct
                                              const proto::ProtoObject* const* a, int argc) {
     if (argc != 2) throw NativeError("copyFrom:to: expects 2 args");
     const std::vector<uint32_t> cps = decodeCodepoints(toUtf8(r, ctx));
-    const long long from = a[0]->asLong(ctx), to = a[1]->asLong(ctx);
+    const IndexArg fromArg = indexArg(ctx, a[0], "String>>copyFrom:to:");
+    const IndexArg toArg = indexArg(ctx, a[1], "String>>copyFrom:to:");
+    const long long from = fromArg.value, to = toArg.value;
     if (to < from) return ctx->fromUTF8String("");
     if (from < 1 || to > static_cast<long long>(cps.size()))
-        throw ClassedErrorSignal("SubscriptOutOfBounds", "copyFrom:to: range " + std::to_string(from) + " to "
-                                 + std::to_string(to) + " out of bounds (size "
+        throw ClassedErrorSignal("SubscriptOutOfBounds", "copyFrom:to: range " + fromArg.text + " to "
+                                 + toArg.text + " out of bounds (size "
                                  + std::to_string(cps.size()) + ")");
     return makeString(ctx, encodeAll(cps, static_cast<size_t>(from - 1),
                                      static_cast<size_t>(to)));

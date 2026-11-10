@@ -42,6 +42,7 @@
 #include "runtime/ClassedErrorSignal.h"
 #include "protoST/primitives.h"
 #include "primitives/CollectionSupport.h"
+#include "primitives/IndexArg.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/TransientPin.h"
 #include "modules/STModuleProvider.h"
@@ -769,11 +770,12 @@ const proto::ProtoObject* prim_Array_at(STRuntime&, proto::ProtoContext* ctx,
                                         int argc) {
     if (argc != 1) throw NativeError("at: expects 1 arg (index)");
     const proto::ProtoList* data = arrayData(ctx, r);
-    long long idx1 = a[0]->asLong(ctx);              // 1-based
+    const IndexArg index = indexArg(ctx, a[0], "Array>>at:");
+    long long idx1 = index.value;                    // 1-based
     long long n    = static_cast<long long>(data->getSize(ctx));
     if (idx1 < 1 || idx1 > n) {
         throw ClassedErrorSignal("SubscriptOutOfBounds",
-            "Array>>at: index " + std::to_string(idx1) +
+            "Array>>at: index " + index.text +
             " out of range 1.." + std::to_string(n));
     }
     const proto::ProtoObject* e =
@@ -790,11 +792,12 @@ const proto::ProtoObject* prim_Array_atPut(STRuntime&, proto::ProtoContext* ctx,
                                            int argc) {
     if (argc != 2) throw NativeError("at:put: expects 2 args (index, value)");
     const proto::ProtoList* data = arrayData(ctx, r);
-    long long idx1 = a[0]->asLong(ctx);              // 1-based
+    const IndexArg index = indexArg(ctx, a[0], "Array>>at:put:");
+    long long idx1 = index.value;                    // 1-based
     long long n    = static_cast<long long>(data->getSize(ctx));
     if (idx1 < 1 || idx1 > n) {
         throw ClassedErrorSignal("SubscriptOutOfBounds",
-            "Array>>at:put: index " + std::to_string(idx1) +
+            "Array>>at:put: index " + index.text +
             " out of range 1.." + std::to_string(n));
     }
     const proto::ProtoObject* value = a[1] ? a[1] : PROTO_NONE;
@@ -925,11 +928,12 @@ const proto::ProtoObject* prim_OC_at(STRuntime&, proto::ProtoContext* ctx,
                                      const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("at: expects 1 arg (index)");
     const proto::ProtoList* data = listData(ctx, r);
-    long long idx1 = a[0]->asLong(ctx);
+    const IndexArg index = indexArg(ctx, a[0], "OrderedCollection>>at:");
+    long long idx1 = index.value;
     long long n    = static_cast<long long>(data->getSize(ctx));
     if (idx1 < 1 || idx1 > n) {
         throw ClassedErrorSignal("SubscriptOutOfBounds",
-            "OrderedCollection>>at: index " + std::to_string(idx1) +
+            "OrderedCollection>>at: index " + index.text +
             " out of range 1.." + std::to_string(n));
     }
     const proto::ProtoObject* e = data->getAt(ctx, listIndex(idx1 - 1));
@@ -943,11 +947,12 @@ const proto::ProtoObject* prim_OC_atPut(STRuntime&, proto::ProtoContext* ctx,
                                         const proto::ProtoObject* const* a, int argc) {
     if (argc != 2) throw NativeError("at:put: expects 2 args (index, value)");
     const proto::ProtoList* data = listData(ctx, r);
-    long long idx1 = a[0]->asLong(ctx);
+    const IndexArg index = indexArg(ctx, a[0], "OrderedCollection>>at:put:");
+    long long idx1 = index.value;
     long long n    = static_cast<long long>(data->getSize(ctx));
     if (idx1 < 1 || idx1 > n) {
         throw ClassedErrorSignal("SubscriptOutOfBounds",
-            "OrderedCollection>>at:put: index " + std::to_string(idx1) +
+            "OrderedCollection>>at:put: index " + index.text +
             " out of range 1.." + std::to_string(n));
     }
     const proto::ProtoObject* value = a[1] ? a[1] : PROTO_NONE;
@@ -2290,10 +2295,11 @@ const proto::ProtoObject* prim_Interval_at(STRuntime&, proto::ProtoContext* ctx,
     long long stop  = intervalAttr(ctx, r, intervalStopKey(ctx), 0);
     long long step  = intervalAttr(ctx, r, intervalStepKey(ctx), 1);
     long long n     = intervalSize(start, stop, step);
-    long long idx1  = a[0]->asLong(ctx);             // 1-based
+    const IndexArg index = indexArg(ctx, a[0], "Interval>>at:");
+    long long idx1  = index.value;                   // 1-based
     if (idx1 < 1 || idx1 > n) {
         throw ClassedErrorSignal("SubscriptOutOfBounds",
-            "Interval>>at: index " + std::to_string(idx1) +
+            "Interval>>at: index " + index.text +
             " out of range 1.." + std::to_string(n));
     }
     return ctx->fromLong(start + (idx1 - 1) * step);
