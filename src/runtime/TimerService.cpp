@@ -280,6 +280,7 @@ void TimerService::run(proto::ProtoContext* ctx) {
                 if (stopping_) return;
                 const TimePoint now = Clock::now();
                 bool collected = false;
+                bool collectFailed = false;
                 try {
                     // Copied before it is popped: if the copy cannot grow
                     // `due`, the entry stays on the heap.
@@ -290,10 +291,20 @@ void TimerService::run(proto::ProtoContext* ctx) {
                     }
                 } catch (...) {
                     // Out of memory for `due`: handle what was collected.
+                    collectFailed = true;
                 }
                 if (collected || (!due.empty() && retryAt <= now)) break;
                 TimePoint until = retryAt;
-                if (!heap_.empty() && heap_.top().deadline < until) until = heap_.top().deadline;
+                if (collectFailed) {
+                    // The heap's top is already due but could not be taken:
+                    // waiting for its deadline would return at once and spin.
+                    // Report (rate-limited, allocation-free) and try again
+                    // after kRetryDelay.
+                    reportHandOverFailure("no memory to take a due timer");
+                    if (now + kRetryDelay < until) until = now + kRetryDelay;
+                } else if (!heap_.empty() && heap_.top().deadline < until) {
+                    until = heap_.top().deadline;
+                }
                 if (until == TimePoint::max()) {
                     wake_.wait(lock);
                 } else {
