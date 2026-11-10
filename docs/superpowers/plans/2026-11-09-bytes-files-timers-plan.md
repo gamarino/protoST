@@ -168,6 +168,47 @@ folder with `tests/conformance/run_conformance.sh build_release/protost tests/co
 - [ ] **Step 5:** commit with the message
   `ByteArray streams and UTF-8; binary file APIs answer ByteArray`.
 
+### Task 2b: NUL-safe String construction everywhere (added by ruling S6)
+
+**Why:** the spec's anti-goal forbids bytes or text that truncate at a NUL, and
+the Task 2 review found that pre-existing String primitives build results through
+`ctx->fromUTF8String(x.c_str())`, which stops at the first NUL. Examples:
+- `(Character value: 0) asString` answers `''`;
+- `,` with a Character, `copyFrom:to:` and `asUppercase`/`asLowercase` lose
+  everything after a NUL;
+- the `string()` helper in `io_prims.cpp:89-91` feeds text `contents`,
+  `nextLine`, `nextByteCount:` and UDP text receive.
+
+**Files:**
+- Create: `src/primitives/StringSupport.h`, with one length-aware helper used by
+  every primitive.
+- Modify: every `fromUTF8String(... .c_str())` and `fromUTF8String(std::string)`
+  site in `src/primitives/*.cpp` and `src/runtime/*.cpp` that can carry runtime
+  data. Literal C strings with no NUL may stay.
+- Test: `tests/conformance/12-builtins/string_nul_safe.st`, plus one file per
+  site class in `tests/conformance/14-io/text_nul_safe.st`.
+
+**Interfaces:**
+- Produces: `const proto::ProtoString* makeString(proto::ProtoContext*, std::string_view utf8)`.
+  It builds through the length-aware protoCore constructor (`fromUTF8Buffer(data, size)`
+  or its equivalent; check `protoCore/headers/protoCore.h`).
+
+- [ ] **Step 1: failing tests.** Each test prints the size of the result and
+  the code point after the NUL:
+  - `(Character value: 0) asString size = 1`;
+  - `('a', (String with: (Character value: 0)), 'b') size = 3`;
+  - `(s copyFrom: 1 to: 3)` keeps the NUL;
+  - `asUppercase` keeps the NUL;
+  - a file whose text contains a NUL reads back with `contents` at full size;
+  - `nextLine` on a line containing a NUL keeps it.
+- [ ] **Step 2:** run the tests. Expected: they FAIL with truncated sizes.
+- [ ] **Step 3:** add `makeString` and replace every runtime-data site. List
+  every site changed in the report: `grep -n "fromUTF8String" src` before and
+  after.
+- [ ] **Step 4:** run the new tests and the full suite. Expected: PASS.
+- [ ] **Step 5:** commit with the message
+  `Strings: build every runtime string from its length, so NUL survives`.
+
 ### Task 3: Numbers in bytes
 
 **Files:**
