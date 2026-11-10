@@ -28,7 +28,7 @@
 // see it. The top-level entry points catch `const proto::ProtoException&`
 // and report it with describeUncaught.
 
-#include "runtime/NativeError.h"   // writeDiagnosticLine, for describeUncaught's text
+#include "runtime/NativeError.h"   // writeWholeLine, for describeUncaught's text
 #include "protoCore.h"
 
 #include <exception>

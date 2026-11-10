@@ -175,11 +175,14 @@ try:
             check(info["exceptionId"] == "SubscriptOutOfBounds", "exceptionId %r" % info)
             check("primitive" in b.get("text", ""), "primitive note %r" % b)
             check(frames[0]["line"] == 10, "frame %r" % frames[0])
-        # The caught exception before it did not stop.
-        check("caught" in c.output_text(), "caught first")
         c.request("continue", {"threadId": tid})
         rc = c.finish()
+        # The caught exception before it did not stop (one stop), and the
+        # program ran it (its output). The output is read only after the
+        # session ended: a pump thread forwards the debuggee's stdout, so at
+        # the moment of the stop its last line may still be in the pipe.
         check(len(exception_stops(c)) == 1, "one stop")
+        check("caught" in c.output_text(), "caught first")
         check("not reached" not in c.output_text(), "ran past the error")
         exited = [e for e in c.events if e.get("event") == "exited"]
         check(exited and exited[0]["body"]["exitCode"] == 1, "exited %r" % exited)

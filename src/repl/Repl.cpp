@@ -283,7 +283,7 @@ ReadResult readLine(proto::ProtoContext* ctx, const char* prompt, bool interacti
 
 void printResult(STRuntime& rt, const proto::ProtoObject* r) {
     // BL-3: shared formatter — non-primitive objects render as "a ClassName".
-    std::printf("=> %s\n", protoST::formatValue(rt, rt.rootCtx(), r).c_str());
+    writeWholeLine(stdout, "=> " + protoST::formatValue(rt, rt.rootCtx(), r));
 }
 
 void printHelp() {
@@ -378,8 +378,8 @@ bool evaluate(Session& s, const std::string& buffer,
     auto ast = P.parseModule();
     if (!P.errors().empty()) {
         for (auto& e : P.errors())
-            std::fprintf(stderr, "%s:%d:%d: %s\n",
-                         sourceName, e.line, e.column, e.message.c_str());
+            writeWholeLine(stderr, std::string(sourceName) + ":" + std::to_string(e.line) + ":"
+                                   + std::to_string(e.column) + ": " + e.message);
         return false;
     }
     Compiler C;
@@ -390,7 +390,7 @@ bool evaluate(Session& s, const std::string& buffer,
     if (!C.hasErrors()) replClasses() = C.classes();
     if (C.hasErrors()) {
         for (auto& str : C.errors())
-            std::fprintf(stderr, "compile error: %s\n", str.c_str());
+            writeWholeLine(stderr, "compile error: " + str);
         return false;
     }
     BytecodeModule* mod = bc.get();
@@ -406,10 +406,10 @@ bool evaluate(Session& s, const std::string& buffer,
         return false;
     } catch (const proto::ProtoException& e) {
         // An unhandled Error, a module's error, another language's exception.
-        writeDiagnosticLine(stderr, describeUncaught(s.rt->rootCtx(), e));
+        writeWholeLine(stderr, describeUncaught(s.rt->rootCtx(), e));
         return false;
     } catch (const std::exception& e) {
-        writeDiagnosticLine(stderr, describeUncaught(e));
+        writeWholeLine(stderr, describeUncaught(e));
         return false;
     } catch (...) {
         std::fprintf(stderr, "error: unknown runtime failure\n");
@@ -480,7 +480,7 @@ void cmdVars(Session& s) {
         auto* key = proto::ProtoString::createSymbol(ctx, name.c_str());
         const proto::ProtoObject* val = g->getOwnAttributeDirect(ctx, key);
         std::string rendered = protoST::formatValue(*s.rt, ctx, val);
-        std::printf("  %s = %s\n", name.c_str(), rendered.c_str());
+        writeWholeLine(stdout, "  " + name + " = " + rendered);
     }
 }
 

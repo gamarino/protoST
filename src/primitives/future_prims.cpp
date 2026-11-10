@@ -91,7 +91,7 @@ namespace {
 void reportCallbackError(const std::string& text) {
     const std::string_view message = text.rfind("error: ", 0) == 0
         ? std::string_view(text).substr(7) : std::string_view(text);
-    writeDiagnosticLine(stderr, "error in a Future callback: " + std::string(message));
+    writeWholeLine(stderr, "error in a Future callback: " + std::string(message));
 }
 
 // Run one thenDo: / catch: callback, reporting whatever escapes it.
@@ -742,7 +742,7 @@ void markFutureObserved(proto::ProtoContext* ctx, const proto::ProtoObject* futu
 void reportUnobservedActorErrors() {
     std::lock_guard<std::mutex> lock(g_rejectionsMu);
     for (const auto& entry : g_unobservedRejections)
-        std::fprintf(stderr, "warning: unhandled error in actor: %s\n", entry.second.c_str());
+        writeWholeLine(stderr, "warning: unhandled error in actor: " + entry.second);
     g_unobservedRejections.clear();
 }
 

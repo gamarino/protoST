@@ -134,10 +134,10 @@ bool drainOneReporting(STRuntime& rt, proto::ProtoContext* ctx) {
     try {
         return rt.drainOne(ctx);
     } catch (const proto::ProtoException& e) {
-        writeDiagnosticLine(stderr, describeUncaught(ctx, e)
+        writeWholeLine(stderr, describeUncaught(ctx, e)
                                     + " (escaped an actor drain on a worker thread)");
     } catch (const std::exception& e) {
-        writeDiagnosticLine(stderr, describeUncaught(e)
+        writeWholeLine(stderr, describeUncaught(e)
                                     + " (escaped an actor drain on a worker thread)");
     } catch (...) {
         std::fprintf(stderr, "error: an unknown exception escaped an actor drain on a worker thread\n");
@@ -1844,9 +1844,12 @@ private:
     }
 
     void adopt(const proto::ProtoList* batch) {
+        // Counted before the cursor changes: a batch no int can index throws
+        // here and leaves the cursor (and its pin) on the previous batch.
+        const int size = listIndex(batch->getSize(ctx_));
         batch_ = batch;
         index_ = 0;
-        size_ = listIndex(batch->getSize(ctx_));
+        size_ = size;
         // S16: re-point the cursor's own pin at the new batch. This used to
         // be `pin_.reset(new TransientPin(...))` on a `unique_ptr`, which
         // constructs the replacement BEFORE destroying the pin it replaces —
@@ -2144,12 +2147,24 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
         auto* wrapped  = actor->getOwnAttributeDirect(ctx, wrappedKey);
 
         auto* argsListAsList = argsList ? argsList->asList(ctx) : nullptr;
-        int argc = argsListAsList
-            ? listIndex(argsListAsList->getSize(ctx)) : 0;
+        // Collecting the arguments can fail (an argument list no int can
+        // count, an allocation): that message's Future is rejected with the
+        // failure and the drain goes on, as for a failure inside the method.
+        int argc = 0;
         std::vector<const proto::ProtoObject*> args;
-        args.reserve(static_cast<size_t>(argc));
-        for (int i = 0; i < argc; ++i) {
-            args.push_back(argsListAsList->getAt(ctx, i));
+        try {
+            argc = argsListAsList ? listIndex(argsListAsList->getSize(ctx)) : 0;
+            args.reserve(static_cast<size_t>(argc));
+            for (int i = 0; i < argc; ++i) {
+                args.push_back(argsListAsList->getAt(ctx, i));
+            }
+        } catch (const std::exception& e) {
+            if (future) {
+                auto* err = rejectionFor(ctx, e);
+                TransientPin pinErr(ctx, err);
+                rejectFutureFromDrain(*this, ctx, future, err);
+            }
+            continue;
         }
 
         auto* selStr = selector ? selector->asString(ctx) : nullptr;

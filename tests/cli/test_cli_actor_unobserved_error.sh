@@ -46,4 +46,11 @@ gate resolve: nil.
 [f wait] on: Error do: [:e | e messageText].'
 out=$("$PROTOST" -e "$prog5" 2>&1)
 [[ "$out" == "#timedOut"$'\n'"late failure" ]] || { echo "FAIL observed late error reported: $out"; exit 1; }
+
+# The report keeps the whole error text, NUL included (KNOWN_ISSUES.md K7): the
+# offending pair '0', NUL of fromHex: is followed by the rest of the message.
+# A shell variable cannot hold NUL, so the bytes are dropped explicitly.
+prog6="Object subclass: #W. W >> bad ^ ByteArray fromHex: '0', (String with: (Character value: 0)), 'zz'. W >> ok ^ 1. a := W new asActor. a bad. (a ok) wait."
+out=$("$PROTOST" -e "$prog6" 2>&1 | tr -d '\000')
+[[ "$out" == *"unhandled error in actor"*"' at position 1 is not a pair of hexadecimal digits"* ]] || { echo "FAIL NUL cut the actor warning: $out"; exit 1; }
 echo OK
