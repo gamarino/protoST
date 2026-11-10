@@ -12,11 +12,15 @@
      well defined while a single actor appends: neither POSIX nor Windows
      says atomically where an append landed. Concurrent appenders on one
      BinaryFile, or another process appending to the same file, are not
-     supported. Two appends overlapping in time on the same BinaryFile
-     object in this process are detected: the second signals an Error
-     saying another append is in progress (one appender at a time) and
-     writes nothing. Appenders in other processes, or on another
-     BinaryFile object opened on the same file, CANNOT be detected.
+     supported.
+   - What is detected: in this process, on one BinaryFile object, an
+     append: overlapping another append: in time, or overlapping a
+     writeAt:bytes: that extends the file (it moves the end like an append).
+     The later call signals an Error saying another append is in progress
+     (one appender at a time) and writes nothing. A writeAt:bytes: inside
+     the file never moves the end and is not restricted.
+   - What cannot be detected: appenders in other processes, or through
+     another BinaryFile object opened on the same file.
      (A protoBaseST segment has a single writer actor.)
    - writeAt:bytes: overwrites bytes at an offset, extending the file as
      needed. A file opened with #append refuses it on every platform.

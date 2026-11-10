@@ -66,16 +66,19 @@ facts := read value: 'facts_py.bin'.
 facts size = 150 ifFalse: [fails add: 'facts size ' , facts size printString].
 
 "C. framed records written by CPython"
-frames := read value: 'records_py.bin'.
+frames := BinaryFile open: dir , '/records_py.bin' options: #(#read).
 p := 0.
-0 to: 49 do: [:i | | len crc payload |
-  len := frames unsignedLongAt: p + 1 bigEndian: false.
-  crc := frames unsignedLongAt: p + 5 bigEndian: false.
-  payload := frames copyFrom: p + 9 to: p + 8 + len.
+0 to: 49 do: [:i | | header len crc payload |
+  header := frames readAt: p size: 8.
+  header size = 8 ifFalse: [fails add: 'record ' , i printString , ': short header'].
+  len := header unsignedLongAt: 1 bigEndian: false.
+  crc := header unsignedLongAt: 5 bigEndian: false.
+  payload := frames readAt: p + 8 size: len.
   (len = (i * 6) and: [crc = payload crc32 and: [payload size = len]])
     ifFalse: [fails add: 'record ' , i printString].
   p := p + 8 + len].
 p = frames size ifFalse: [fails add: 'trailing bytes after the records'].
+frames close.
 
 "D. protoST writes a document with the same content, in the same key order"
 sample := MessagePackMap withAll: {
@@ -137,5 +140,6 @@ ST
 python3 "$PEER" write "$dir"
 "$PROTOST" "$dir/side.st" "$dir" > "$dir/side.out" 2>&1 || { echo "FAIL: protoST side failed:"; cat "$dir/side.out"; exit 1; }
 grep -qx 'ST-OK' "$dir/side.out" || { echo "FAIL: protoST side:"; cat "$dir/side.out"; exit 1; }
-python3 "$PEER" check "$dir" || exit 1
+python3 "$PEER" check "$dir" > "$dir/check.out" 2>&1 || { cat "$dir/check.out"; exit 1; }
+grep -qx 'PY-OK' "$dir/check.out" || { echo "FAIL: the CPython check did not report PY-OK:"; cat "$dir/check.out"; exit 1; }
 echo "PASS: CPython and protoST exchange msgpack, packed numbers, digests and CRC-framed records byte for byte"

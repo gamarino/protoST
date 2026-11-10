@@ -20,22 +20,24 @@ Appender >> run: anId count: aCount file: aFile
   ^ out asArray
 Object subclass: #Reader.
 Reader >> run: aSeed count: aCount file: aFile prefix: aPrefix
-  | r bad off n got |
+  | r bad off n got seen |
   r := (Import from: 'random') Random seed: aSeed.
   bad := 0.
+  seen := OrderedCollection new.
   aCount timesRepeat: [
     off := r nextInt: aPrefix + 20000.
     n := 1 + (r nextInt: 128).
     got := aFile readAt: off - 1 size: n.
+    seen add: (off - 1) -> got.
     (got size <= n) ifFalse: [bad := bad + 1].
     ((off - 1 + n) <= aPrefix and: [got size ~= n]) ifTrue: [bad := bad + 1].
     (off - 1 < aPrefix) ifTrue: [
       1 to: (got size min: aPrefix - (off - 1)) do: [:k |
         (got at: k) = ((off - 1 + k - 1) \\ 251) ifFalse: [bad := bad + 1]]]].
-  ^ bad
+  ^ Array with: bad with: seen asArray
 dir := FileSystem temp / ('protost-binfile-stress-' , Smalltalk pid printString).
 dir ensureCreateDirectory.
-[| path f pattern prefix appender readers spans sorted expect bad recs ok readBad rec len crc payload start total |
+[| path f pattern prefix appender readers spans sorted expect bad recs readBad readCount rec len crc payload total results idx |
  path := (dir / 'stress.bin') pathString.
  f := BinaryFile open: path options: #(#read #write #create #exclusive).
  prefix := 65536.
@@ -46,21 +48,33 @@ dir ensureCreateDirectory.
  readers := (1 to: 16) collect: [:s | Reader new asActor run: s count: 1000 file: f prefix: prefix].
  spans := OrderedCollection new.
  spans addAll: appender wait.
- readBad := (readers collect: [:each | each wait]) inject: 0 into: [:a :b | a + b].
+ results := readers collect: [:each | each wait].
+ readBad := 0.
+ readCount := 0.
  sorted := (spans asSortedCollection: [:a :b | a key <= b key]) asArray.
  expect := prefix.
  bad := 0.
  sorted do: [:s | s key = expect ifFalse: [bad := bad + 1]. expect := s key + s value].
  (f size = expect) ifFalse: [bad := bad + 1].
  recs := 0.
+ idx := 0.
  sorted do: [:s |
+   idx := idx + 1.
    rec := f readAt: s key size: s value.
    len := rec unsignedLongAt: 1 bigEndian: false.
    crc := rec unsignedLongAt: 5 bigEndian: false.
    payload := rec copyFrom: 9 to: rec size.
-   ((rec size = s value) and: [len = payload size and: [crc = payload crc32]])
+   ((rec size = s value) and: [len = payload size and: [crc = payload crc32 and: [
+     (rec unsignedLongAt: 9 bigEndian: true) = 1 and: [(rec unsignedLongAt: 13 bigEndian: true) = idx]]]])
      ifTrue: [recs := recs + 1] ifFalse: [bad := bad + 1]].
  total := f size.
+ "Every read, checked again on the final file: the bytes it saw are the bytes that are there, and it never went past the end."
+ results do: [:pair |
+   readBad := readBad + pair first.
+   pair last do: [:each |
+     readCount := readCount + 1.
+     ((each value = (f readAt: each key size: each value size)) and: [each key + each value size <= total])
+       ifFalse: [readBad := readBad + 1]]].
  f close.
- 'records ', recs printString, ' verified, tiled ', prefix printString, ' + ', (total - prefix) printString, ' bytes, reads 16000 ok, ', (bad + readBad) printString, ' failures']
+ 'records ', recs printString, ' verified, tiled ', prefix printString, ' + ', (total - prefix) printString, ' bytes, reads ', readCount printString, ' ok, ', (bad + readBad) printString, ' failures']
   ensure: [dir deleteAll].

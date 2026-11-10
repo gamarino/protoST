@@ -78,11 +78,11 @@ struct OpenFile {
 // Claims OpenFile::appending by CAS and releases it on every exit path.
 class AppendClaim {
 public:
-    explicit AppendClaim(OpenFile& f) : file_(f) {
+    // `refusal` is the Error text when the claim is already taken.
+    AppendClaim(OpenFile& f, const char* refusal) : file_(f) {
         bool expected = false;
         if (!file_.appending.compare_exchange_strong(expected, true, std::memory_order_acquire))
-            throw std::runtime_error("BinaryFile>>append: another append is in progress on this BinaryFile "
-                                     "(one appender at a time)");
+            throw std::runtime_error(refusal);
     }
     ~AppendClaim() { file_.appending.store(false, std::memory_order_release); }
     AppendClaim(const AppendClaim&) = delete;
@@ -227,7 +227,8 @@ PRIM(prim_BinFileAppend) {
     // released first, then the reference (and a pending close) is dropped.
     const std::int64_t at = unmanaged(ctx, [&] {
         const std::shared_ptr<OpenFile> held = std::move(file);
-        AppendClaim claim(*held);
+        AppendClaim claim(*held, "BinaryFile>>append: another append is in progress on this BinaryFile "
+                                 "(one appender at a time)");
         return protoio::file::appendData(held->fd, data);
     });
     return ctx->fromLong(static_cast<long long>(at));
@@ -254,8 +255,20 @@ PRIM(prim_BinFileWriteAt) {
     const long long offset = smallIntegerArg(ctx, a[1], who, "the offset");
     const std::string data = bytesArg(ctx, a[2], who);
     auto file = openFile(ctx, a[0], who);
-    onFileUnmanaged(ctx, std::move(file),
-        [&](int fd) { protoio::file::writeAt(fd, offset, data); });
+    // A write that extends the file moves its end like an append does, so it
+    // takes the same claim. A write inside the file cannot move the end (the
+    // size only grows meanwhile), so overwrites stay concurrent.
+    unmanaged(ctx, [&] {
+        const std::shared_ptr<OpenFile> held = std::move(file);
+        const bool extends = offset + static_cast<long long>(data.size()) > protoio::file::size(held->fd);
+        if (extends) {
+            AppendClaim claim(*held, "BinaryFile>>writeAt:bytes: a write that extends the file cannot run while "
+                                     "another append is in progress on this BinaryFile (one appender at a time)");
+            protoio::file::writeAt(held->fd, offset, data);
+        } else {
+            protoio::file::writeAt(held->fd, offset, data);
+        }
+    });
     return r;
 }
 

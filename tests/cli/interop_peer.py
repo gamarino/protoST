@@ -103,9 +103,10 @@ def main():
     d = sys.argv[2]
     if sys.argv[1] == "write":
         data = pack(sample())
-        open(d + "/data.msgpack", "wb").write(data)
-        open(d + "/facts_py.bin", "wb").write(facts(data))
-        open(d + "/records_py.bin", "wb").write(records())
+        for name, content in (("data.msgpack", data), ("facts_py.bin", facts(data)),
+                              ("records_py.bin", records())):
+            with open(d + "/" + name, "wb") as f:
+                f.write(content)
         return
     original = read(d + "/data.msgpack")
     back = read(d + "/back.msgpack")
