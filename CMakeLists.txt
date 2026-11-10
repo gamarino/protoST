@@ -278,15 +278,24 @@ elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../protoIO/CMakeLists.txt")
     message(STATUS "protoST: no installed protoIO package found; building the sibling ../protoIO")
     add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../protoIO"
                      "${CMAKE_CURRENT_BINARY_DIR}/_protoIO" EXCLUDE_FROM_ALL)
-    # A source tree carries no version check of its own: compare here.
+    # A source tree carries no version check of its own: compare here, with
+    # the package's rule (SameMinorVersion): the same major.minor as the
+    # floor, and a patch level at least the floor's. So 0.4.x is accepted from
+    # 0.4.0 on, and 0.3.x and 0.5.x are refused, as an installed package is.
     get_directory_property(_protoIO_version
         DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../protoIO" DEFINITION PROJECT_VERSION)
-    if(_protoIO_version VERSION_LESS PROTOIO_MIN_VERSION)
+    string(REGEX MATCH "^[0-9]+\\.[0-9]+" _protoIO_minor "${_protoIO_version}")
+    string(REGEX MATCH "^[0-9]+\\.[0-9]+" _protoIO_floor_minor "${PROTOIO_MIN_VERSION}")
+    if(NOT _protoIO_minor STREQUAL _protoIO_floor_minor
+       OR _protoIO_version VERSION_LESS PROTOIO_MIN_VERSION)
         message(FATAL_ERROR
             "The sibling ../protoIO is version ${_protoIO_version}; protoST needs "
-            "${PROTOIO_MIN_VERSION} or later. Update the checkout.")
+            "${PROTOIO_MIN_VERSION} or a later ${_protoIO_floor_minor}.x. Check out a "
+            "matching protoIO.")
     endif()
     unset(_protoIO_version)
+    unset(_protoIO_minor)
+    unset(_protoIO_floor_minor)
 else()
     message(FATAL_ERROR
         "protoIO not found: install the protoio-dev package, or check out "
