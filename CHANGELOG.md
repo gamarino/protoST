@@ -27,6 +27,14 @@ and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
 - **`binaryContents: nil` and `binaryContents: 42` now fail** with
   "a String or a ByteArray was expected". They used to write an empty file
   without a word. A non-byte in an Array fails as before.
+- **`on:do:on:do:` searches its pairs in written order**, the first pair
+  first, as the clauses of a try/catch: `[1/0] on: ZeroDivide do: [:e | 1]
+  on: Error do: [:e | 2]` answers `1`; 0.8.1 answered `2` (it searched the
+  second pair first). And the two pairs of one construct no longer catch each
+  other: an exception signalled, or passed, by one pair's handler goes to an
+  enclosing handler; in 0.8.1 the other pair could take it. Pharo has no
+  `on:do:on:do:`; this is protoST's extension, now with the order of
+  `try`/`except` (LANGUAGE.md §8.3).
 - `NUL` is kept in strings now (see below), so a program that relied on text
   being cut at a NUL sees the whole text.
 - **A string handed to the OS that contains NUL signals `Error`** ("... must

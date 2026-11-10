@@ -1360,7 +1360,15 @@ An exception carries at least `messageText` (set by `signal:` or via
   decides (see [§8.4]).
 - A non-matching exception propagates outward to the next enclosing handler.
 - `on:do:on:do:` registers two guard/handler pairs in one construct:
-  `[ ... ] on: E1 do: [ ... ] on: E2 do: [ ... ]`.
+  `[ ... ] on: E1 do: [ ... ] on: E2 do: [ ... ]`. It is a protoST extension
+  (Pharo has no `on:do:on:do:`). The pairs are searched in written order,
+  `E1` first, as the clauses of a try/catch: `[1/0] on: ZeroDivide do: [:e |
+  1] on: Error do: [:e | 2]` answers `1`, with the pairs swapped `2`, and an
+  exception the first guard does not match goes to the second. As in a
+  try/catch, the pairs of one construct do not catch each other: what one
+  handler signals, or passes with `pass` / `outer`, goes past both pairs to
+  an enclosing handler. (Until 0.9.0 the second pair was searched first, and
+  a handler's signal was caught by its sibling.)
 
 While a handler block runs, its own handler entry (and any inner ones) are
 disabled — a `signal` inside a handler is caught by an *outer* handler, never

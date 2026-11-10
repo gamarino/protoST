@@ -144,7 +144,9 @@ a warning: low ink
 > handler. The exception arrives as the handler block's argument, which is why
 > the handler block declares `:e`. `on:do:on:do:` is protoST's multi-`except`
 > — and because it is just a longer keyword selector, there is no limit-of-the-
-> grammar feeling to it; it is the same construct with one more pair.
+> grammar feeling to it; it is the same construct with one more pair. Like
+> `except` clauses, the pairs are tried in the order you write them, and an
+> exception raised inside one handler is not caught by the other pair.
 
 To catch several classes with *one* handler, join them with `,` into an
 exception set: `[ … ] on: ZeroDivide, KeyNotFound do: [ :e | … ]`.

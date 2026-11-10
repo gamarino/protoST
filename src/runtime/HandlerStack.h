@@ -21,20 +21,34 @@ namespace proto { class ProtoContext; class ProtoObject; }
 namespace protoST {
 
 // One active handler. Created by `on:do:` (push) and removed on every exit
-// path (pop). While the handler block runs, the entry — and every inner one —
-// is disabled so a `signal` inside the handler escapes to an OUTER handler.
+// path (pop). While the handler block runs, the entries of its construct —
+// and every inner one — are disabled so a `signal` inside the handler escapes
+// to an OUTER handler.
+//
+// A construct with several guard/handler pairs (`on:do:on:do:`) pushes one
+// entry per pair, the LAST pair first, so the first pair written is the
+// innermost and is searched first, as the clauses of a try/catch are. Its
+// entries share `constructId`, the id of its outermost entry (for a single
+// `on:do:`, the entry's own id): while one of its handlers runs, and when one
+// does `pass`, the search skips every pair of the construct, as a catch
+// clause never catches what a sibling clause raised.
 struct HandlerEntry {
     const proto::ProtoObject* guardClass   = nullptr; // Error / Warning / user
     const proto::ProtoObject* handlerBlock = nullptr; // a BlockClosure
     proto::proto_ulong             handlerId    = 0;       // unique, process-global
+    proto::proto_ulong             constructId  = 0;       // the construct's outermost entry
     bool                      enabled      = true;
 };
 
 // Push a new handler entry; returns its unique handlerId. The id is drawn from
 // a process-global atomic counter so ids are never reused, even across
 // threads — that makes an UnwindToHandler.handlerId an unambiguous target.
+//
+// `constructId` is the id of an entry of the same construct pushed before
+// this one (its outermost); 0 makes this entry its construct's outermost.
 proto::proto_ulong handlerStackPush(const proto::ProtoObject* guardClass,
-                               const proto::ProtoObject* handlerBlock);
+                               const proto::ProtoObject* handlerBlock,
+                               proto::proto_ulong constructId = 0);
 
 // Remove the entry with the given handlerId. Idempotent: a no-op if the entry
 // is no longer present (so `on:do:` may call it on multiple exit paths).

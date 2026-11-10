@@ -457,15 +457,18 @@ const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx
         }
 
         proto::proto_ulong handlerId          = entry->handlerId;
+        // The construct's outermost entry: every pair of an on:do:on:do: is
+        // skipped while this handler runs and when it passes (HandlerStack.h).
+        const proto::proto_ulong constructId = entry->constructId;
         const proto::ProtoObject* hBlock = entry->handlerBlock;
 
         // S23: no engine is left for the handler block at this depth.
         if (!ExecutionEngine::canStartNestedEngine())
             return raiseNestingLimitError(rt, ctx, searchBelowId);
 
-        // Disable this entry and every inner one, so a `signal` raised while
-        // the handler block runs is caught by an OUTER handler.
-        std::vector<proto::proto_ulong> disabled = handlerStackDisableFrom(handlerId);
+        // Disable this construct's entries and every inner one, so a `signal`
+        // raised while the handler block runs is caught by an OUTER handler.
+        std::vector<proto::proto_ulong> disabled = handlerStackDisableFrom(constructId);
 
         const proto::ProtoObject* handlerResult = nullptr;
         // What leaves the handler block is decided inside the catch clauses
@@ -509,7 +512,7 @@ const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx
         // continues from the signal point.
         if (resumed) return resumed;
         if (passed) {
-            searchBelowId = handlerId;   // resume search strictly outer to this
+            searchBelowId = constructId;   // resume strictly outer to this construct
             continue;
         }
 
@@ -975,11 +978,9 @@ const proto::ProtoObject* signalNestingLimitAt(STRuntime& rt, proto::ProtoContex
 //
 // Backs both `on:do:` and `on:do:on:do:`. Pushes one HandlerEntry per
 // (guard, handler) pair, runs the protected block, and pops every entry on
-// EVERY exit path. The pairs arrive innermost-LAST (matching single `on:do:`
-// where the sole guard is the innermost); they are pushed in order so the
-// LAST pair is the innermost / first-searched entry — but since the search
-// order among sibling guards on one block is by stack recency, the caller
-// passes them so the intended priority holds. An UnwindToHandler /
+// EVERY exit path. The pairs arrive in written order and are pushed last to
+// first, so the FIRST pair is the innermost / first-searched entry, and they
+// share the construct id of the first push (HandlerStack.h). An UnwindToHandler /
 // RetrySignal carrying ANY of this construct's ids is for this construct;
 // retry re-evaluates the protected block with a fresh set of handler ids.
 // 2026-05-24 perf: single-guard fast path. The original (multi-guard)
@@ -1052,8 +1053,11 @@ const proto::ProtoObject* runProtected(
         if (limitTarget == 0) {
             ids.clear();
             ids.reserve(guards.size());
-            for (const auto& g : guards)
-                ids.push_back(handlerStackPush(g.first, g.second));
+            // The last pair first: the first pair written ends up innermost
+            // and is searched first. The first push is the construct's
+            // outermost entry, whose id the others carry (HandlerStack.h).
+            for (auto g = guards.rbegin(); g != guards.rend(); ++g)
+                ids.push_back(handlerStackPush(g->first, g->second, ids.empty() ? 0 : ids.front()));
         }
 
         auto popAll = [&]() {
@@ -1121,9 +1125,11 @@ const proto::ProtoObject* prim_Block_on_do(STRuntime& rt, proto::ProtoContext* c
 
 // protectedBlock on: G1 do: H1 on: G2 do: H2
 //
-// Two guards on one protected block. Both entries are pushed (G1 first, then
-// G2 — so G2 is the innermost / searched first when both would match); the
-// protected block runs once; an unwind / retry carrying either id is honoured.
+// Two guards on one protected block, searched in written order: G1 first, as
+// the clauses of a try/catch (runProtected pushes G2, then G1, so G1 is the
+// innermost entry). A signal inside either handler, or a pass, goes past both
+// pairs to an outer handler. The protected block runs once; an unwind / retry
+// carrying either id is honoured.
 const proto::ProtoObject* prim_Block_on_do_on_do(STRuntime& rt,
                                                   proto::ProtoContext* ctx,
                                                   const proto::ProtoObject* protectedBlock,

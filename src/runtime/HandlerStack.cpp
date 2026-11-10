@@ -20,11 +20,13 @@ thread_local std::vector<HandlerEntry> g_handlerStack;
 } // namespace
 
 proto::proto_ulong handlerStackPush(const proto::ProtoObject* guardClass,
-                               const proto::ProtoObject* handlerBlock) {
+                               const proto::ProtoObject* handlerBlock,
+                               proto::proto_ulong constructId) {
     HandlerEntry e;
     e.guardClass   = guardClass;
     e.handlerBlock = handlerBlock;
     e.handlerId    = g_nextHandlerId.fetch_add(1, std::memory_order_relaxed);
+    e.constructId  = constructId != 0 ? constructId : e.handlerId;
     e.enabled      = true;
     g_handlerStack.push_back(e);
     return e.handlerId;
