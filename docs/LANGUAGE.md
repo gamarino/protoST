@@ -2338,11 +2338,11 @@ and sockets (§12.11.5) are `IOStream`s too.
 | `nextLineMax: bytes` | `nextLine` for untrusted input: a line longer than `bytes` signals `LineTooLong` |
 | `next`, `next: n` | the next character; up to `n` characters as a String (nil at the end). Whole UTF-8 characters are read, never a part of one |
 | `nextByteCount: n` | up to `n` bytes decoded as UTF-8 text, for protocols that count bytes (HTTP `Content-Length`) |
-| `nextBytes: n` | the next `n` bytes, as an Array of integers |
+| `nextBytes: n` | the next `n` bytes, as a `ByteArray` |
 | `upToEnd`, `contents` | everything up to the end |
 | `atEnd` | whether the end has been reached (may wait for input) |
 | `linesDo: aBlock`, `lines` | each remaining line; an Array of them |
-| `nextPutAll: aString`, `nextPut: aCharacter`, `nextPutBytes: anArray` | write |
+| `nextPutAll: aString`, `nextPut: aCharacter`, `nextPutBytes: aByteArray` | write |
 | `print: x`, `display: x`, `<< x`, `show: x`, `showCr: x` | write `printString` / `displayString` (`<<` writes a String as is) |
 | `lf`, `cr`, `nl` | write a line feed (all three) |
 | `crlf`, `space`, `tab` | write `CR LF`, a space, a tab |
@@ -2379,7 +2379,7 @@ A `FileReference` names a path; it holds no open descriptor.
 | `basename`, `basenameWithoutExtension`, `extension`, `parent` | name parts (`extension` is `''` when there is none) |
 | `children`, `files`, `directories` | the entries of a directory, sorted by name |
 | `contents`, `contents: aString`, `appendContents: aString` | read the whole file; replace it; append to it |
-| `binaryContents`, `binaryContents: anArray` | the same with bytes |
+| `binaryContents`, `binaryContents: aByteArray` | the same with bytes, as a `ByteArray` (an Array of 0-255 is still accepted for one release, with a warning on stderr) |
 | `lines`, `linesDo: aBlock` | the file's lines |
 | `readStream`, `writeStream`, `appendStream` | an open `IOStream` (`writeStream` truncates) |
 | `readStreamDo:`, `writeStreamDo:`, `appendStreamDo:` | evaluate the block with an open stream and close it afterwards, also on error; answer the block's value |

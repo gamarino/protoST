@@ -1,4 +1,4 @@
-"EXPECT: 42 second 3 #(0 1 255 128)"
+"EXPECT: 42 second 3 #[0 1 255 128]"
 "File streams: writeStreamDo:, readStreamDo:, linesDo:, binary contents."
 dir := FileSystem temp / ('protost-io-streams-' , Smalltalk pid printString).
 dir ensureCreateDirectory.
@@ -9,7 +9,7 @@ f readStreamDo: [:s | first := s nextLine. second := s nextLine].
 count := 0.
 f linesDo: [:line | count := count + 1].
 b := dir / 'bytes.bin'.
-b binaryContents: #(0 1 255 128).
+b binaryContents: #[0 1 255 128].
 bytes := b binaryContents.
 dir deleteAll.
 first , ' ' , second , ' ' , count printString , ' ' , bytes printString.

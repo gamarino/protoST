@@ -1,5 +1,6 @@
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
+#include "primitives/BytesSupport.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/TransientPin.h"
 #include "runtime/ClassedErrorSignal.h"
@@ -13,6 +14,8 @@
 #include <protoio/stream.h>
 
 #include <algorithm>
+#include <cstdio>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -138,27 +141,27 @@ const PO* stringsArray(STRuntime& rt, proto::ProtoContext* ctx, const std::vecto
     return makeArray(rt, ctx, items);
 }
 
-const PO* bytesArray(STRuntime& rt, proto::ProtoContext* ctx, const std::string& bytes) {
-    proto::ProtoContext::CriticalSection cs(ctx);
-    std::vector<const PO*> items;
-    items.reserve(bytes.size());
-    for (unsigned char c : bytes) items.push_back(ctx->fromLong(c));
-    return makeArray(rt, ctx, items);
-}
-
-std::string bytesOf(proto::ProtoContext* ctx, const PO* arr, const char* who) {
+// The bytes an I/O primitive writes: a String (its UTF-8 bytes), a ByteArray,
+// or, deprecated for one release, an Array of Integers from 0 to 255.
+std::string dataArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
+    if (v && v != PROTO_NONE) {
+        if (v->asString(ctx)) return str(ctx, v, who);
+        if (v->isByteBuffer(ctx)) return std::string(bytesView(ctx, v));
+    }
+    // Once per process, whichever thread gets here first.
+    static std::once_flag warned;
+    std::call_once(warned, [] {
+        std::fputs("protoST: warning: passing an Array of bytes to an I/O selector is deprecated"
+                   " and will be removed in the next release; pass a ByteArray (ByteArray withAll: anArray)\n",
+                   stderr);
+    });
     std::string out;
-    for (const PO* e : elements(ctx, arr, who)) {
+    for (const PO* e : elements(ctx, v, who)) {
         const long long b = num(ctx, e, who);
         if (b < 0 || b > 255) throw std::runtime_error(std::string(who) + ": bytes are integers from 0 to 255");
         out.push_back(static_cast<char>(b));
     }
     return out;
-}
-
-// A String argument as its UTF-8 bytes, or a byte Array as its bytes.
-std::string dataArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
-    return v && v->asString(ctx) ? str(ctx, v, who) : bytesOf(ctx, v, who);
 }
 
 // ------------------------------------------------------------------ errors
@@ -344,7 +347,7 @@ PRIM(prim_FdRead) {
     const bool binary = truthy(a[2]);
     const std::optional<std::string> got = blocking(rt, ctx, [&] { return protoio::readBytes(fd, n); });
     if (!got) return PROTO_NONE;
-    return binary ? bytesArray(rt, ctx, *got) : string(ctx, *got);
+    return binary ? makeBytes(ctx, *got) : string(ctx, *got);
 }
 
 // __fdReadChars: fd count: n — up to n UTF-8 characters (never a split
@@ -444,7 +447,7 @@ PRIM(prim_FileRead) {
     ARGS(2, "__fileRead:binary:");
     const std::string path = str(ctx, a[0], "contents");
     const std::string data = unmanaged(ctx, [&] { return protoio::file::read(path); });
-    return truthy(a[1]) ? bytesArray(rt, ctx, data) : string(ctx, data);
+    return truthy(a[1]) ? makeBytes(ctx, data) : string(ctx, data);
 }
 
 // __fileWrite: path data: aStringOrBytes append: aBoolean
@@ -658,7 +661,7 @@ PRIM(prim_UdpReceive) {
         blocking(rt, ctx, [&] { return protoio::net::udpReceive(fd, timeoutMs); });
     if (!d) return PROTO_NONE;
     proto::ProtoContext::CriticalSection cs(ctx);
-    return makeArray(rt, ctx, {binary ? bytesArray(rt, ctx, d->data) : string(ctx, d->data),
+    return makeArray(rt, ctx, {binary ? makeBytes(ctx, d->data) : string(ctx, d->data),
                                string(ctx, d->host), ctx->fromLong(d->port)});
 }
 

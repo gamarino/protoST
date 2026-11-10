@@ -121,3 +121,26 @@ ByteArray >> printOn: aStream
     i > 1 ifTrue: [aStream nextPut: Character space].
     aStream print: (self at: i)].
   aStream nextPut: $].
+
+"--- streams ----------------------------------------------------------------------"
+
+ByteArray >> readStream
+  "A ReadStream over the bytes: next answers a byte, next: n a ByteArray."
+  ^ ReadStream on: self.
+
+ByteArray >> writeStream
+  "A WriteStream that starts empty and builds a new ByteArray; this one is
+   not changed (use it as ByteArray new writeStream)."
+  ^ WriteStream on: ByteArray new.
+
+"--- UTF-8 ------------------------------------------------------------------------"
+
+String >> utf8Encoded
+  "The UTF-8 bytes of the String, as a ByteArray (an embedded NUL is kept)."
+  ^ ByteArray __utf8Encode: self.
+
+ByteArray >> utf8Decoded
+  "The String these bytes spell in UTF-8. Strict: bytes that are not well-formed
+   UTF-8 (overlong forms, surrogates, truncated or out-of-range sequences)
+   signal Error; nothing is replaced silently."
+  ^ self __utf8Decode.

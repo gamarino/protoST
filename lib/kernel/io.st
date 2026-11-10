@@ -9,7 +9,7 @@
  program or an actor blocked on input never holds up a collection. Errors are
  classed: FileDoesNotExist, FileAlreadyExists, FileSystemError, NetworkError
  and its subclasses, OSProcessError, LineTooLong, InternalError. Text is
- UTF-8; binary data is an Array of integers from 0 to 255. See
+ UTF-8; binary data is a ByteArray. See
  docs/superpowers/specs/2026-09-29-io-design.md."
 
 Error subclass: #FileSystemError.
@@ -94,9 +94,9 @@ IOStream >> nextPutAll: aString
   self __fdWrite: fd data: aString.
   ^ aString.
 
-IOStream >> nextPutBytes: anArray
-  self __fdWrite: fd data: anArray.
-  ^ anArray.
+IOStream >> nextPutBytes: aByteArray
+  self __fdWrite: fd data: aByteArray.
+  ^ aByteArray.
 
 IOStream >> nextPut: aCharacter
   self __fdWrite: fd data: aCharacter asString.
@@ -286,8 +286,10 @@ FileReference >> appendContents: aString
 FileReference >> binaryContents
   ^ self __fileRead: path binary: true.
 
-FileReference >> binaryContents: anArray
-  self __fileWrite: path data: anArray append: false.
+FileReference >> binaryContents: aByteArray
+  "Write aByteArray. An Array of Integers from 0 to 255 is still accepted for
+   one release (deprecated: a warning goes to stderr, once per process)."
+  self __fileWrite: path data: aByteArray append: false.
   ^ self.
 
 FileReference >> lines

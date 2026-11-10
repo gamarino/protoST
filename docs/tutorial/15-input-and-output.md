@@ -27,7 +27,7 @@ they appear.
 
 Three rules hold everywhere:
 
-- **Text is a UTF-8 `String`; binary data is an `Array` of integers 0–255.**
+- **Text is a UTF-8 `String`; binary data is a `ByteArray`.**
   protoST has no `ByteArray`.
 - **Every call that waits blocks the thread that makes it.** A file read, a
   socket read, an `accept` or a child process waits where it is called, as in
@@ -66,7 +66,7 @@ dir ensureCreateDirectory.
  (dir / 'old') createDirectory.
  (dir children collect: [:each | each basename]) printNl.
  (dir files collect: [:each | each basename]) printNl.
- (dir / 'data.bin') binaryContents: #(0 127 255).
+ (dir / 'data.bin') binaryContents: #[0 127 255].
  (dir / 'data.bin') binaryContents printNl]
   ensure: [dir deleteAll].
 dir exists printNl.
@@ -79,7 +79,7 @@ $ ./build/protost files-demo.st
 #('notes.txt' 'notes' 'txt')
 #('copy.txt' 'notes.txt' 'old')
 #('copy.txt' 'notes.txt')
-#(0 127 255)
+#[0 127 255]
 false
 ```
 
@@ -92,7 +92,7 @@ fails. The protocol it uses:
 |----|------|
 | Read / replace / append text | `contents`, `contents:`, `appendContents:` |
 | Read lines | `lines` (an Array), `linesDo: aBlock` |
-| Binary data | `binaryContents`, `binaryContents:` (Arrays of 0–255) |
+| Binary data | `binaryContents`, `binaryContents:` (a `ByteArray`) |
 | Ask | `exists`, `isFile`, `isDirectory`, `size` (bytes), `modificationTime` (milliseconds since the Unix epoch), `isReadable`, `isWritable` |
 | Names | `basename`, `basenameWithoutExtension`, `extension`, `parent`, `fullName` (absolute), `pathString` (as given) |
 | List a directory | `children`, `files`, `directories` (sorted by name) |

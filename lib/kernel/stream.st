@@ -1,8 +1,14 @@
-"Kernel: WriteStream and ReadStream over Strings and sequenceable
+"Kernel: WriteStream and ReadStream over Strings, ByteArrays and sequenceable
  collections, available without an import. On a String they read and build
- Strings; on other collections they read elements and build an Array."
+ Strings; on a ByteArray they read and build ByteArrays (bytes are Integers
+ from 0 to 255); on other collections they read elements and build an Array.
 
-Object subclass: #WriteStream instanceVariableNames: 'buffer onString'.
+ A byte WriteStream (WriteStream on: ByteArray new) keeps its bytes in
+ private state: pending single bytes in an OrderedCollection and written
+ ByteArrays in a list of chunks. contents joins them into a new ByteArray each
+ time, so a ByteArray it answered is never touched by later writes."
+
+Object subclass: #WriteStream instanceVariableNames: 'buffer onString onBytes chunks'.
 
 WriteStream class >> new
   ^ self basicNew setOn: #().
@@ -15,22 +21,29 @@ WriteStream class >> with: aCollection
 
 WriteStream >> setOn: aCollection
   onString := aCollection isString.
+  onBytes := aCollection class == ByteArray.
+  onBytes ifTrue: [chunks := OrderedCollection new].
   buffer := onString ifTrue: [''] ifFalse: [OrderedCollection new].
   ^ self.
 
 WriteStream >> nextPut: anElement
+  onBytes ifTrue: [^ self putByte: anElement].
   onString
     ifTrue: [buffer := buffer , anElement asString]
     ifFalse: [buffer add: anElement].
   ^ anElement.
 
 WriteStream >> nextPutAll: aCollection
+  onBytes ifTrue: [^ self putBytes: aCollection].
   (onString and: [aCollection isString])
     ifTrue: [buffer := buffer , aCollection]
     ifFalse: [aCollection do: [:each | self nextPut: each]].
   ^ aCollection.
 
 WriteStream >> << anObject
+  onBytes ifTrue: [
+    anObject class == ByteArray ifTrue: [self nextPutAll: anObject] ifFalse: [self nextPut: anObject].
+    ^ self].
   onString
     ifTrue: [self nextPutAll: (anObject isString ifTrue: [anObject] ifFalse: [anObject displayString])]
     ifFalse: [anObject isCollection
@@ -63,13 +76,45 @@ WriteStream >> lf
   ^ self.
 
 WriteStream >> contents
+  "A String, a new ByteArray (on bytes) or an Array of what was written."
+  onBytes ifTrue: [^ self bytesContents].
   ^ onString ifTrue: [buffer] ifFalse: [buffer asArray].
 
 WriteStream >> size
+  onBytes ifTrue: [^ chunks inject: buffer size into: [:sum :each | sum + each size]].
   ^ buffer size.
 
 WriteStream >> isEmpty
-  ^ buffer size = 0.
+  ^ self size = 0.
+
+"--- bytes ------------------------------------------------------------------"
+
+WriteStream >> putByte: anInteger
+  (anInteger isInteger and: [anInteger between: 0 and: 255]) ifFalse: [
+    ^ Error new signal: anInteger printString , ' is not a byte: a byte stream takes Integers from 0 to 255 (text goes in through utf8Encoded)'].
+  buffer add: anInteger.
+  buffer size >= 4096 ifTrue: [self flushBytes].
+  ^ anInteger.
+
+WriteStream >> putBytes: aCollection
+  aCollection class == ByteArray ifFalse: [
+    aCollection isString ifTrue: [
+      ^ Error new signal: 'A byte stream takes a ByteArray, not a String: write aString utf8Encoded'].
+    aCollection do: [:each | self putByte: each].
+    ^ aCollection].
+  self flushBytes.
+  chunks add: aCollection.
+  ^ aCollection.
+
+WriteStream >> flushBytes
+  "Move the pending single bytes into a chunk, keeping the order."
+  buffer isEmpty ifTrue: [^ self].
+  chunks add: (ByteArray withAll: buffer).
+  buffer := OrderedCollection new.
+
+WriteStream >> bytesContents
+  self flushBytes.
+  ^ ByteArray __bytesJoin: chunks asArray.
 
 Object subclass: #ReadStream instanceVariableNames: 'collection position'.
 

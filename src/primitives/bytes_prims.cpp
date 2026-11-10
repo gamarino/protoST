@@ -202,6 +202,80 @@ PRIM(prim_BytesFromHex) {
     return makeBytes(ctx, out);
 }
 
+// The length of the well-formed UTF-8 sequence at the start of `v` (RFC 3629
+// as Unicode defines it: no overlong forms, no surrogates, nothing above
+// U+10FFFF), or 0 when the bytes there are not one.
+size_t utf8SequenceLength(std::string_view v) {
+    const auto at = [&](size_t i) { return static_cast<unsigned char>(v[i]); };
+    const unsigned char b0 = at(0);
+    if (b0 < 0x80) return 1;
+    size_t len;
+    unsigned char lo = 0x80, hi = 0xBF;  // the permitted range of the second byte
+    if (b0 >= 0xC2 && b0 <= 0xDF) len = 2;
+    else if (b0 >= 0xE0 && b0 <= 0xEF) {
+        len = 3;
+        if (b0 == 0xE0) lo = 0xA0;       // else overlong
+        if (b0 == 0xED) hi = 0x9F;       // else a surrogate
+    } else if (b0 >= 0xF0 && b0 <= 0xF4) {
+        len = 4;
+        if (b0 == 0xF0) lo = 0x90;       // else overlong
+        if (b0 == 0xF4) hi = 0x8F;       // else above U+10FFFF
+    } else return 0;                      // a continuation byte, 0xC0, 0xC1, 0xF5..0xFF
+    if (v.size() < len || at(1) < lo || at(1) > hi) return 0;
+    for (size_t i = 2; i < len; ++i)
+        if ((at(i) & 0xC0) != 0x80) return 0;
+    return len;
+}
+
+// ByteArray __utf8Encode: aString -> the UTF-8 bytes of aString. Built from
+// the whole String (data and length), so an embedded NUL survives.
+PRIM(prim_Utf8Encode) {
+    ARGS(1, "__utf8Encode:");
+    const proto::ProtoString* s =
+        (a[0] && a[0] != PROTO_NONE) ? a[0]->asString(ctx) : nullptr;
+    if (!s) throw std::runtime_error("utf8Encoded: a String was expected");
+    return makeBytes(ctx, s->toStdString(ctx));
+}
+
+// aByteArray __utf8Decode -> the String the bytes spell. Strict: the first
+// ill-formed sequence signals Error, naming its 1-based position.
+PRIM(prim_Utf8Decode) {
+    ARGS(0, "__utf8Decode");
+    const std::string_view v = bytesView(ctx, r);
+    for (size_t i = 0; i < v.size();) {
+        const size_t n = utf8SequenceLength(v.substr(i));
+        if (n == 0)
+            throw std::runtime_error("utf8Decoded: the bytes are not valid UTF-8 (byte "
+                                     + std::to_string(static_cast<unsigned>(static_cast<unsigned char>(v[i])))
+                                     + " at position " + std::to_string(i + 1) + ")");
+        i += n;
+    }
+    // fromUTF8Buffer takes an explicit length, so a NUL does not end the text.
+    std::uint8_t remainder[4];
+    std::uint8_t remainderCount = 0;
+    return proto::ProtoString::fromUTF8Buffer(
+               ctx, reinterpret_cast<const std::uint8_t*>(v.data()), v.size(),
+               nullptr, 0, remainder, &remainderCount)
+        ->asObject(ctx);
+}
+
+// ByteArray __bytesJoin: anArray -> one new value holding the contents of
+// each ByteArray of anArray in order. WriteStream's contents uses it.
+PRIM(prim_BytesJoin) {
+    ARGS(1, "__bytesJoin:");
+    const PO* data = (a[0] && a[0] != PROTO_NONE)
+        ? a[0]->getAttribute(ctx, rt.bootstrap().sym.data)
+        : nullptr;
+    const proto::ProtoList* list =
+        (data && data != PROTO_NONE) ? data->asList(ctx) : nullptr;
+    if (!list) throw std::runtime_error("ByteArray join: an Array was expected");
+    const proto::proto_ulong n = list->getSize(ctx);
+    std::string out;
+    for (proto::proto_ulong i = 0; i < n; ++i)
+        out.append(bytesView(ctx, list->getAt(ctx, static_cast<int>(i))));
+    return makeBytes(ctx, out);
+}
+
 #undef ARGS
 #undef PRIM
 
@@ -217,6 +291,8 @@ void installBytesPrimitives(STRuntime& rt) {
         {"__bytesCopyFrom:to:", prim_BytesCopyFromTo}, {"__bytesConcat:", prim_BytesConcat},
         {"__bytesEquals:", prim_BytesEquals},     {"__bytesHash", prim_BytesHash},
         {"__bytesHex", prim_BytesHex},            {"__fromHex:", prim_BytesFromHex},
+        {"__utf8Encode:", prim_Utf8Encode},       {"__utf8Decode", prim_Utf8Decode},
+        {"__bytesJoin:", prim_BytesJoin},
     };
     for (const Entry& e : entries) bindPrimitive(rt, p, e.sel, reg.registerPrim(e.fn));
 }
