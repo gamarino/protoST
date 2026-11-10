@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <exception>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -166,23 +167,31 @@ PRIM(prim_BinFileOpen) {
     o.truncate = flags & kTruncate;
     o.append = flags & kAppend;
     const int fd = blocking(rt, ctx, [&] { return protoio::file::open(path, o); });
-    // From here the descriptor is owned: by this guard until the OpenFile
-    // exists, then by the OpenFile. The map receives a copy of the reference,
-    // so if emplace throws, the last reference is this local one and the
-    // descriptor is closed after the mutex is released, never under it.
+    // From here the descriptor is owned: by the catch below until the
+    // OpenFile exists, then by the OpenFile. The map receives a copy of the
+    // reference, so if emplace throws, the last reference is the local one.
+    // On either failure the descriptor is closed after the registry mutex is
+    // released and inside unmanaged(), like every other close.
     std::shared_ptr<OpenFile> file;
     try {
         file = std::make_shared<OpenFile>(fd);
     } catch (...) {
-        try { protoio::close(fd); } catch (...) {}
+        unmanaged(ctx, [&] { try { protoio::close(fd); } catch (...) {} });
         throw;
     }
     Registry& reg = registry();
-    long long handle;
-    {
+    long long handle = 0;
+    std::exception_ptr failed;
+    try {
         std::lock_guard<std::mutex> lock(reg.mutex);
         handle = reg.next++;
         reg.files.emplace(handle, file);
+    } catch (...) {
+        failed = std::current_exception();  // the guard has already released the mutex
+    }
+    if (failed) {
+        unmanaged(ctx, [&] { file.reset(); });
+        std::rethrow_exception(failed);
     }
     return ctx->fromLong(handle);
 }

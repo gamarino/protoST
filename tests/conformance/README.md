@@ -44,6 +44,12 @@ directive is the second line. The program runs with an empty standard input.
 | `"EXPECT-ERROR: <text>"` | As above, and the error output must contain `<text>`. |
 | `"XFAIL: <inner-directive>"` | A test **expected to fail today**. The text after `XFAIL:` is itself an `EXPECT:`/`EXPECT-ERROR` directive describing the **spec-correct** behaviour. The runner inverts the verdict: the test "passes" when the program does **not** match the spec-correct expectation, and **fails loudly** if it unexpectedly matches (a signal the deviation was fixed — remove the `XFAIL:` marker). |
 
+**Visible skips.** A test that cannot verify its subject on the current
+platform (for example, a handshake that needs Linux's `/proc/locks`) ends
+with a value whose text starts with `SKIP: ` and gives the reason. When the
+program succeeds and its last line is such a value, the runner prints it and
+exits 77, which CTest reports as *Skipped*: a skip is never a silent pass.
+
 protoST prints the value of a script's last top-level statement: integers as
 digits, `nil`/`true`/`false` literally, strings as their text, and any other
 object as its `printString` (e.g. `a Counter`, `an Array`).

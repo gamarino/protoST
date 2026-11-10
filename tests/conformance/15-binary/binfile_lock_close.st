@@ -1,6 +1,6 @@
 "EXPECT: true true true"
 "BinaryFile: a close while another actor waits in lock never lets that lock answer success. The waiter keeps waiting until the holder releases (flock cannot be interrupted), then signals Error and leaves the lock free.
- Answers: the waiter got Error 'BinaryFile is closed'; nobody holds the lock afterwards; the close came while the waiter was inside flock, so the message says the lock was released (proved on Linux through /proc/locks; elsewhere there is no such handshake and either close path is correct, so this one is true)."
+ Answers: the waiter got Error 'BinaryFile is closed'; nobody holds the lock afterwards; the close came while the waiter was inside flock, so the message says the lock was released. The handshake that proves the waiter is inside flock reads Linux's /proc/locks; elsewhere the test reports SKIP (see README.md) instead of passing without exercising the fix."
 Object subclass: #Waiter.
 Waiter >> take: aFile started: anAtom
   anAtom value: true ifCurrent: false.
@@ -33,6 +33,8 @@ dir ensureCreateDirectory.
  free := probe tryLock.
  probe close.
  holder close.
- (answer includesSubstring: 'BinaryFile is closed') printString , ' ' , free printString , ' ' ,
-   (linux ifTrue: [blocked and: [answer = 'BinaryFile>>lock: BinaryFile is closed (the lock was released)']] ifFalse: [true]) printString]
+ linux
+   ifTrue: [(answer includesSubstring: 'BinaryFile is closed') printString , ' ' , free printString , ' ' ,
+     (blocked and: [answer = 'BinaryFile>>lock: BinaryFile is closed (the lock was released)']) printString]
+   ifFalse: ['SKIP: no /proc/locks on ' , Smalltalk platform , ', so a close while lock waits is NOT verified']]
   ensure: [dir deleteAll].

@@ -162,6 +162,8 @@ foreach(conf_file ${PROTOST_CONFORMANCE_FILES})
         COMMAND ${PROTOST_SH} ${CMAKE_CURRENT_SOURCE_DIR}/conformance/run_conformance.sh
                 $<TARGET_FILE:protost>
                 "${conf_file}")
+    # run_conformance.sh exits 77 for a program that reports "SKIP: <reason>".
+    set_tests_properties("conformance/${conf_rel}" PROPERTIES SKIP_RETURN_CODE 77)
 endforeach()
 
 # --- examples smoke layer (Track 9) --------------------------------------

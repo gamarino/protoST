@@ -20,6 +20,11 @@
 #   "EXPECT-ERROR: <text>"  raises an uncaught error. With a <text> argument
 #                           the error output must contain <text>.
 #
+#   A program that succeeds and whose last line starts with "SKIP: " could
+#   not verify what it tests on this platform (or in this environment): the
+#   runner prints that line and exits 77, which CTest reports as skipped.
+#   Never a silent pass.
+#
 #   "XFAIL: <text>"         a test that is EXPECTED TO FAIL today (a known
 #   "XFAIL-ERROR..."        deviation, or a newly-found discrepancy). The body
 #                           after `XFAIL:` is itself an EXPECT:/EXPECT-ERROR
@@ -127,6 +132,13 @@ err="$(cat "$err_file" 2>/dev/null)"
 
 # last non-empty line of stdout (the printed program value)
 last_line="$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -n 1)"
+
+# --- a visible skip -------------------------------------------------------
+if [[ $xfail -eq 0 && $rc -eq 0 && "$last_line" == "SKIP: "* ]]; then
+    echo "$last_line"
+    echo "  ($FILE)"
+    exit 77
+fi
 
 # --- evaluate: did the program match the (spec-correct) expectation? ------
 conforms=0
