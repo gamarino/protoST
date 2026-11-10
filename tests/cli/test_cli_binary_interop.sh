@@ -2,7 +2,9 @@
 # Byte-exact round trip with CPython (docs/superpowers/specs/
 # 2026-11-09-bytes-files-timers-design.md, sections 4.7 and 4.8).
 #
-# Usage: test_cli_binary_interop.sh <protost> <interop_peer.py>
+# Usage: test_cli_binary_interop.sh <protost> <python> <interop_peer.py>
+#
+# <python> is the interpreter CMake found (Python3_EXECUTABLE), or `none`.
 #
 # 1. CPython writes data.msgpack (msgpack.packb(use_bin_type=True), a nested
 #    value with every type), facts_py.bin (struct, crc32, blake2b, sha256) and
@@ -14,16 +16,17 @@
 #    MessagePackMap, facts_st.bin, records_st.bin) and CPython verifies them,
 #    comparing bytes, not only decoded values.
 #
-# Without python3 or msgpack it prints a SKIP line and exits 77, which CTest
+# Without Python or msgpack it prints a SKIP line and exits 77, which CTest
 # reports as skipped.
 set -euo pipefail
 PROTOST="$1"
-PEER="$2"
-if ! command -v python3 > /dev/null 2>&1; then
-    echo "SKIP: python3 not found, CPython interop NOT verified"
+PYTHON="$2"
+PEER="$3"
+if [[ -z "$PYTHON" || "$PYTHON" == none ]] || ! "$PYTHON" -c "import sys" > /dev/null 2>&1; then
+    echo "SKIP: no usable Python 3 interpreter from CMake (${PYTHON:-none given}), CPython interop NOT verified"
     exit 77
 fi
-if ! python3 -c "import msgpack" > /dev/null 2>&1; then
+if ! "$PYTHON" -c "import msgpack" > /dev/null 2>&1; then
     echo "SKIP: the Python msgpack module is missing, CPython interop NOT verified"
     exit 77
 fi
@@ -137,9 +140,9 @@ fails isEmpty
   ifFalse: [fails do: [:each | Transcript showCr: 'FAIL: ' , each]. Smalltalk exit: 1].
 ST
 
-python3 "$PEER" write "$dir"
+"$PYTHON" "$PEER" write "$dir"
 "$PROTOST" "$dir/side.st" "$dir" > "$dir/side.out" 2>&1 || { echo "FAIL: protoST side failed:"; cat "$dir/side.out"; exit 1; }
 grep -qx 'ST-OK' "$dir/side.out" || { echo "FAIL: protoST side:"; cat "$dir/side.out"; exit 1; }
-python3 "$PEER" check "$dir" > "$dir/check.out" 2>&1 || { cat "$dir/check.out"; exit 1; }
+"$PYTHON" "$PEER" check "$dir" > "$dir/check.out" 2>&1 || { cat "$dir/check.out"; exit 1; }
 grep -qx 'PY-OK' "$dir/check.out" || { echo "FAIL: the CPython check did not report PY-OK:"; cat "$dir/check.out"; exit 1; }
 echo "PASS: CPython and protoST exchange msgpack, packed numbers, digests and CRC-framed records byte for byte"

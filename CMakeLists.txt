@@ -433,23 +433,35 @@ add_test(NAME cli_eval
 add_test(NAME cli_io
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_io.sh $<TARGET_FILE:protost>)
 
+# The Python interpreter the binary interop tests run, the one CMake found
+# (never whatever `python3` is first on PATH, which on Windows can be the
+# Microsoft Store stub). `none` when none was found (an empty argument
+# would be dropped by older CMake): the tests then exit 77 with a SKIP line,
+# a visible skip.
+if(Python3_Interpreter_FOUND)
+    set(PROTOST_TEST_PYTHON "${Python3_EXECUTABLE}")
+else()
+    set(PROTOST_TEST_PYTHON "none")
+endif()
+
 # BinaryFile's lock across processes: a second protoST process, and ProtoBase's
-# owner lock through protoIO's peer script (run with python3). The ProtoBase
-# case exits 77 with a SKIP line when python3 or the peer script is missing.
+# owner lock through protoIO's peer script. The ProtoBase case exits 77 with a
+# SKIP line when Python or the peer script is missing.
 add_test(NAME cli_binary_lock
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_binary_lock.sh $<TARGET_FILE:protost> protost)
 add_test(NAME cli_binary_lock_protobase
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_binary_lock.sh $<TARGET_FILE:protost> protobase
-            ${CMAKE_SOURCE_DIR}/../protoIO/tests/ownerlock_peer.py)
+            "${PROTOST_TEST_PYTHON}" ${CMAKE_SOURCE_DIR}/../protoIO/tests/ownerlock_peer.py)
 set_tests_properties(cli_binary_lock PROPERTIES TIMEOUT 60)
 set_tests_properties(cli_binary_lock_protobase PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
 
 # CPython round trip: msgpack, packed numbers, digests and CRC-framed records,
 # written by one side and verified byte for byte by the other. Exits 77 (a
-# visible skip) when python3 or its msgpack module is missing.
+# visible skip) when Python or its msgpack module is missing; CI installs
+# msgpack, so there it runs.
 add_test(NAME cli_binary_interop
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_binary_interop.sh $<TARGET_FILE:protost>
-            ${CMAKE_SOURCE_DIR}/tests/cli/interop_peer.py)
+            "${PROTOST_TEST_PYTHON}" ${CMAKE_SOURCE_DIR}/tests/cli/interop_peer.py)
 set_tests_properties(cli_binary_interop PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
 
 add_test(NAME cli_script_output

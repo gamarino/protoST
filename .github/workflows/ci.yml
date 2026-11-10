@@ -139,12 +139,17 @@ jobs:
             echo "protoIO ref \`$PROTOIO_REF\` at \`$(git -C protoIO rev-parse HEAD)\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Install libreadline and OpenSSL
+      - name: Install libreadline, OpenSSL and Python's msgpack
         # protoST's REPL links readline; find_library(... REQUIRED) fails the
         # configure without it.  protoIO needs OpenSSL's headers (TLS).
+        # cli_binary_interop compares bytes with CPython's msgpack module; it
+        # is installed for the interpreter the tests run (/usr/bin/python3,
+        # passed to CMake below), and checked, so the test runs instead of
+        # skipping.
         run: |
           sudo apt-get update
-          sudo apt-get install -y libreadline-dev libssl-dev
+          sudo apt-get install -y libreadline-dev libssl-dev python3-msgpack
+          /usr/bin/python3 -c "import msgpack; print('msgpack', msgpack.version)"
 
       - name: Build protoCore
         run: |
@@ -162,7 +167,7 @@ jobs:
         # this step needs network access.  An offline runner would have to seed
         # FETCHCONTENT_BASE_DIR with both.
         working-directory: protoST
-        run: cmake -B build_release -S . -DCMAKE_BUILD_TYPE=Release -DprotoIO_DIR="$GITHUB_WORKSPACE/protoIO/build_release"
+        run: cmake -B build_release -S . -DCMAKE_BUILD_TYPE=Release -DprotoIO_DIR="$GITHUB_WORKSPACE/protoIO/build_release" -DPython3_EXECUTABLE=/usr/bin/python3
 
       - name: Build protoST
         working-directory: protoST

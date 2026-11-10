@@ -209,7 +209,8 @@ has no allocation-failure hook, so those paths are verified by reading only.
   "Visible skips"). That the skip, and the test on macOS and Windows, behave as
   intended is confirmed only by those platforms' CI runs.
   `cli_binary_lock_protobase` and `cli_binary_interop` are skipped, visibly,
-  without `python3` (and the `msgpack` module, for the second).
+  without the Python 3 interpreter CMake finds (and its `msgpack` module, for
+  the second); CI installs `msgpack`, so there they run.
 - **`BinaryFile` and ProtoBase files.** The lock is verified against a Python
   peer that takes ProtoBase's `OwnerLock` the same way, and MessagePack,
   `struct`, CRC-32 and BLAKE2b bytes against CPython; no ProtoBase storage

@@ -82,6 +82,13 @@ jobs:
           mkdir -p "$RUNNER_TEMP/gnu-timeout"
           ln -sf "$(brew --prefix)/bin/gtimeout" "$RUNNER_TEMP/gnu-timeout/timeout"
           echo "$RUNNER_TEMP/gnu-timeout" >> "$GITHUB_PATH"
+          # The Python the tests run (passed to CMake), with the msgpack module
+          # cli_binary_interop compares bytes with; checked, so the test runs
+          # instead of skipping.
+          PY="$(command -v python3)"
+          "$PY" -m pip install --disable-pip-version-check --break-system-packages msgpack
+          "$PY" -c "import msgpack; print('msgpack', msgpack.version)"
+          echo "PYTHON_EXE=$PY" >> "$GITHUB_ENV"
 
       - name: Dependencies (Windows)
         if: runner.os == 'Windows'
@@ -89,7 +96,12 @@ jobs:
           for d in "C:/Program Files/OpenSSL" "C:/Program Files/OpenSSL-Win64"; do
             if [ -f "$d/include/openssl/ssl.h" ]; then echo "OPENSSL_ROOT_DIR=$d" >> "$GITHUB_ENV"; break; fi
           done
-          echo "PYTHON_EXE=$(cygpath -m "$(command -v python)")" >> "$GITHUB_ENV"
+          PY="$(cygpath -m "$(command -v python)")"
+          # msgpack for cli_binary_interop, installed for the interpreter
+          # passed to CMake, and checked, so the test runs instead of skipping.
+          "$PY" -m pip install --disable-pip-version-check msgpack
+          "$PY" -c "import msgpack; print('msgpack', msgpack.version)"
+          echo "PYTHON_EXE=$PY" >> "$GITHUB_ENV"
 
       - name: MSVC environment
         if: runner.os == 'Windows'
