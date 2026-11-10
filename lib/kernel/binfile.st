@@ -13,14 +13,16 @@
      says atomically where an append landed. Concurrent appenders on one
      BinaryFile, or another process appending to the same file, are not
      supported.
-   - What is detected: in this process, on one BinaryFile object, an
-     append: overlapping another append: in time, or overlapping a
-     writeAt:bytes: that extends the file (it moves the end like an append).
-     The later call signals an Error saying another append is in progress
-     (one appender at a time) and writes nothing. A writeAt:bytes: inside
-     the file never moves the end and is not restricted.
-   - What cannot be detected: appenders in other processes, or through
-     another BinaryFile object opened on the same file.
+   - What is guarded, in this process, on one BinaryFile object: an end
+     guard for the operations that move the end of the file. append: and
+     truncateTo: need it ALONE (exclusive); a writeAt:bytes: that extends
+     the file holds it SHARED with other extending writes (each writes its
+     own bytes at its own offset). The call that finds the guard in a
+     conflicting mode signals an Error naming what collided and does
+     nothing. A writeAt:bytes: inside the file takes no claim; two writes
+     over the same bytes are the caller's race, as in any file API.
+   - What cannot be detected: appenders or writers in other processes, or
+     through another BinaryFile object opened on the same file.
      (A protoBaseST segment has a single writer actor.)
    - writeAt:bytes: overwrites bytes at an offset, extending the file as
      needed. A file opened with #append refuses it on every platform.

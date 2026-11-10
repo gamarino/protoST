@@ -63,10 +63,10 @@ using PO = proto::ProtoObject;
 // One open descriptor. It is closed when the last user lets it go.
 struct OpenFile {
     const int fd;
-    // Set while an append: runs on this file. The one-appender contract is
-    // enforced in process: a second concurrent append: fails loudly instead
-    // of corrupting the offsets. Another process cannot be detected.
-    std::atomic<bool> appending{false};
+    // The end guard (see EndClaim): operations that move the end of the file
+    // announce themselves here, so a conflicting pair fails loudly instead of
+    // corrupting offsets. Another BinaryFile object or process cannot be seen.
+    std::atomic<int> endGuard{0};
     explicit OpenFile(int d) : fd(d) {}
     ~OpenFile() {
         try { protoio::close(fd); } catch (...) {}
@@ -75,21 +75,44 @@ struct OpenFile {
     OpenFile& operator=(const OpenFile&) = delete;
 };
 
-// Claims OpenFile::appending by CAS and releases it on every exit path.
-class AppendClaim {
+// The end guard of one open file, one atomic counter, CAS only (no lock):
+//   0     nobody moves the end;
+//   n > 0 n writeAt:bytes: calls that extend the file (SHARED: each writes
+//         its own bytes at its own offset and none relies on where the end is);
+//   -1    one append: or truncateTo: (EXCLUSIVE: they read or move the end
+//         and need it alone).
+// The claim is released by the destructor on every exit path. `refusal` is
+// the Error text when the mode is not available.
+class EndClaim {
 public:
-    // `refusal` is the Error text when the claim is already taken.
-    AppendClaim(OpenFile& f, const char* refusal) : file_(f) {
-        bool expected = false;
-        if (!file_.appending.compare_exchange_strong(expected, true, std::memory_order_acquire))
-            throw std::runtime_error(refusal);
+    enum Mode { Exclusive, Shared };
+    EndClaim(OpenFile& f, Mode mode, const char* refusal) : file_(f), mode_(mode) {
+        int cur = file_.endGuard.load(std::memory_order_relaxed);
+        for (;;) {
+            const bool ok = (mode == Exclusive) ? cur == 0 : cur >= 0;
+            if (!ok) throw std::runtime_error(refusal);
+            if (file_.endGuard.compare_exchange_weak(cur, mode == Exclusive ? -1 : cur + 1,
+                                                     std::memory_order_acquire, std::memory_order_relaxed))
+                return;
+        }
     }
-    ~AppendClaim() { file_.appending.store(false, std::memory_order_release); }
-    AppendClaim(const AppendClaim&) = delete;
-    AppendClaim& operator=(const AppendClaim&) = delete;
+    ~EndClaim() {
+        if (mode_ == Exclusive) file_.endGuard.store(0, std::memory_order_release);
+        else file_.endGuard.fetch_sub(1, std::memory_order_release);
+    }
+    EndClaim(const EndClaim&) = delete;
+    EndClaim& operator=(const EndClaim&) = delete;
 private:
     OpenFile& file_;
+    Mode mode_;
 };
+
+constexpr const char* kAppendRefusal =
+    "BinaryFile>>append: another operation that moves the end of the file is in progress "
+    "(append: and truncateTo: need it alone)";
+constexpr const char* kTruncateRefusal =
+    "BinaryFile>>truncateTo: another operation that moves the end of the file is in progress "
+    "(append: and truncateTo: need it alone)";
 
 struct Registry {
     std::mutex mutex;
@@ -227,8 +250,7 @@ PRIM(prim_BinFileAppend) {
     // released first, then the reference (and a pending close) is dropped.
     const std::int64_t at = unmanaged(ctx, [&] {
         const std::shared_ptr<OpenFile> held = std::move(file);
-        AppendClaim claim(*held, "BinaryFile>>append: another append is in progress on this BinaryFile "
-                                 "(one appender at a time)");
+        EndClaim claim(*held, EndClaim::Exclusive, kAppendRefusal);
         return protoio::file::appendData(held->fd, data);
     });
     return ctx->fromLong(static_cast<long long>(at));
@@ -262,8 +284,7 @@ PRIM(prim_BinFileWriteAt) {
         const std::shared_ptr<OpenFile> held = std::move(file);
         const bool extends = offset + static_cast<long long>(data.size()) > protoio::file::size(held->fd);
         if (extends) {
-            AppendClaim claim(*held, "BinaryFile>>writeAt:bytes: a write that extends the file cannot run while "
-                                     "another append is in progress on this BinaryFile (one appender at a time)");
+            EndClaim claim(*held, EndClaim::Shared, "BinaryFile>>writeAt:bytes: an append: or truncateTo: is in progress");
             protoio::file::writeAt(held->fd, offset, data);
         } else {
             protoio::file::writeAt(held->fd, offset, data);
@@ -286,8 +307,11 @@ PRIM(prim_BinFileTruncate) {
     const char* who = "BinaryFile>>truncateTo:";
     const long long n = smallIntegerArg(ctx, a[1], who, "the size");
     auto file = openFile(ctx, a[0], who);
-    onFileUnmanaged(ctx, std::move(file),
-        [&](int fd) { protoio::file::truncate(fd, n); });
+    unmanaged(ctx, [&] {
+        const std::shared_ptr<OpenFile> held = std::move(file);
+        EndClaim claim(*held, EndClaim::Exclusive, kTruncateRefusal);
+        protoio::file::truncate(held->fd, n);
+    });
     return r;
 }
 

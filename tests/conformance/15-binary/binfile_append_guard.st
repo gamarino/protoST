@@ -1,5 +1,5 @@
 "EXPECT: 64 actors: every append succeeded or got the named Error, 0 other, offsets unique and tiled, 0 bad records"
-"BinaryFile: the one-appender contract is enforced in process. Many actors append to one BinaryFile at once; each append either succeeds or signals exactly the 'another append is in progress' Error. The successful offsets are unique, offsets plus sizes tile the file with no gap or overlap, and every record reads back with a valid CRC32 (the file is never corrupted). How many appends collide depends on scheduling, so only the invariants are asserted."
+"BinaryFile: the one-appender contract is enforced in process. Many actors append to one BinaryFile at once; each append either succeeds or signals exactly the named end-of-file guard Error. The successful offsets are unique, offsets plus sizes tile the file with no gap or overlap, and every record reads back with a valid CRC32 (the file is never corrupted). How many appends collide depends on scheduling, so only the invariants are asserted."
 Object subclass: #Appender.
 Appender >> run: anId count: aCount file: aFile
   | out w filler body |
@@ -28,7 +28,7 @@ dir ensureCreateDirectory.
  results := OrderedCollection new.
  actors do: [:a | results addAll: a wait].
  oks := results select: [:x | x isString not].
- named := results select: [:x | x isString and: [x includesSubstring: 'another append is in progress']].
+ named := results select: [:x | x isString and: [x includesSubstring: 'another operation that moves the end of the file is in progress']].
  other := results size - oks size - named size.
  sorted := (oks asSortedCollection: [:a :b | a key <= b key]) asArray.
  expect := 0.
