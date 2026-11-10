@@ -14,3 +14,4 @@ reflection.st
 time.st
 printing.st
 io.st
+digest.st

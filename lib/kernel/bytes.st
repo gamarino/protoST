@@ -186,3 +186,44 @@ ByteArray >> float32At: anIndex bigEndian: aBoolean
 ByteArray >> float64At: anIndex bigEndian: aBoolean
   "The IEEE 754 double precision float at anIndex."
   ^ self __unpackFloatAt: anIndex width: 8 bigEndian: aBoolean.
+
+"--- digests and base64 ---------------------------------------------------------------
+
+ Checksums and hashes over the bytes, by protoIO, byte-compatible with
+ CPython's zlib and hashlib: a digest computed here is the one ProtoBase
+ computes over the same bytes. They are one-shot functions of the value; a
+ digest is a new ByteArray (the raw bytes, not hex: use hex to print one).
+ CRC32 and HMAC (digest.st) hold the class-side forms."
+
+ByteArray >> crc32
+  "The CRC-32 (zlib's, as an unsigned Integer below 2^32) of the bytes."
+  ^ self __crc32Continuing: 0.
+
+ByteArray >> crc32Continuing: anInteger
+  "The CRC-32 of the bytes, continuing from anInteger, the crc of the bytes that
+   came before (zlib.crc32(data, crc)): (a , b) crc32 = (b crc32Continuing: a crc32).
+   anInteger must be an Integer from 0 to 2^32 - 1."
+  ^ self __crc32Continuing: anInteger.
+
+ByteArray >> blake2b: aSize
+  "The BLAKE2b digest of the bytes, aSize bytes long (1 to 64; 64 is hashlib's default)."
+  ^ self __blake2bSize: aSize key: ByteArray new.
+
+ByteArray >> blake2b: aSize key: aKey
+  "The keyed BLAKE2b digest, aSize bytes long (1 to 64). aKey is a ByteArray of at
+   most 64 bytes; an empty key is the same as none."
+  ^ self __blake2bSize: aSize key: aKey.
+
+ByteArray >> sha256
+  "The 32-byte SHA-256 digest of the bytes."
+  ^ self __sha256.
+
+ByteArray >> base64Encoded
+  "The standard base64 text (RFC 4648, with padding, no line breaks) as a String."
+  ^ self __base64Encode.
+
+String >> base64Decoded
+  "The ByteArray this base64 text spells (standard alphabet, padded). Text that is
+   not valid base64 signals Error. Stricter than CPython's: a final group whose
+   unused bits are not zero ('abd=', 'ab==') is refused."
+  ^ ByteArray __base64Decode: self.

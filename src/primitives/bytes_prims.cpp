@@ -5,6 +5,7 @@
 #include "runtime/ClassedErrorSignal.h"
 #include "protoCore.h"
 
+#include <protoio/digest.h>
 #include <protoio/encoding.h>
 #include <protoio/error.h>
 
@@ -447,6 +448,107 @@ PRIM(prim_PackFloat) {
     return makeBytes(ctx, out);
 }
 
+// ---- digests and base64 (section 4.1) ----------------------------------------
+//
+// Checksums, hashes and base64 are protoIO's (byte-compatible with CPython's
+// zlib, hashlib, hmac and base64), so that a digest computed here is the one
+// ProtoBase computes over the same bytes. Every function is one-shot and
+// answers a new value: a digest is a new frozen ByteArray, a CRC an Integer.
+// The primitives only check the arguments and turn protoio::Error into an
+// Error that names the operation. base64 decoding is protoIO's strict one: it
+// also refuses a trailing group whose unused bits are not zero (ruling R7),
+// which CPython accepts.
+
+// The ByteArray `v` as bytes; anything else signals Error.
+std::string_view bytesArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
+    if (!v || v == PROTO_NONE || !v->isByteBuffer(ctx))
+        throw std::runtime_error(std::string(who) + ": a ByteArray was expected");
+    return bytesView(ctx, v);
+}
+
+// A non-negative Integer not above `max` (read exactly, so a LargeInteger is
+// range-checked rather than rejected as a type error).
+std::uint64_t unsignedArg(proto::ProtoContext* ctx, const PO* v, std::uint64_t max,
+                          const char* what, const char* who) {
+    const std::string text = integerDigits(ctx, v, who);
+    if (text[0] == '-')
+        throw std::runtime_error(std::string(who) + ": " + what + " " + text
+                                 + " does not fit: it must not be negative");
+    errno = 0;
+    const std::uint64_t u = std::strtoull(text.c_str(), nullptr, 10);
+    if (errno == ERANGE || u > max)
+        throw std::runtime_error(std::string(who) + ": " + what + " " + text
+                                 + " does not fit in " + (max == 0xFFFFFFFFull ? "32 bits" : "64 bits"));
+    return u;
+}
+
+// aByteArray __crc32Continuing: crc -> zlib.crc32(self, crc).
+PRIM(prim_Crc32) {
+    ARGS(1, "__crc32Continuing:");
+    const std::uint64_t crc = unsignedArg(ctx, a[0], 0xFFFFFFFFull, "the running crc", "ByteArray crc32Continuing:");
+    return ctx->fromLong(static_cast<long long>(
+        protoio::digest::crc32(bytesView(ctx, r), static_cast<std::uint32_t>(crc))));
+}
+
+// ByteArray __crc32Combine: crcA with: crcB length: lengthOfB.
+PRIM(prim_Crc32Combine) {
+    ARGS(3, "__crc32Combine:with:length:");
+    const char* who = "CRC32 combine:with:length:";
+    const std::uint64_t ca = unsignedArg(ctx, a[0], 0xFFFFFFFFull, "the crc", who);
+    const std::uint64_t cb = unsignedArg(ctx, a[1], 0xFFFFFFFFull, "the crc", who);
+    const std::uint64_t n = unsignedArg(ctx, a[2], ~std::uint64_t{0}, "the length", who);
+    return ctx->fromLong(static_cast<long long>(protoio::digest::crc32Combine(
+        static_cast<std::uint32_t>(ca), static_cast<std::uint32_t>(cb), n)));
+}
+
+// aByteArray __blake2bSize: n key: aByteArray -> the n-byte BLAKE2b digest.
+PRIM(prim_Blake2b) {
+    ARGS(2, "__blake2bSize:key:");
+    const char* who = "ByteArray blake2b:key:";
+    const long long n = integerArg(ctx, a[0], who);
+    if (n < 1 || n > 64)
+        throw std::runtime_error(std::string(who) + ": the digest size must be from 1 to 64, not "
+                                 + std::to_string(n));
+    const std::string_view key = bytesArg(ctx, a[1], who);
+    if (key.size() > 64)
+        throw std::runtime_error(std::string(who) + ": a key is at most 64 bytes, not "
+                                 + std::to_string(key.size()));
+    return makeBytes(ctx, packing(who, [&] {
+        return protoio::digest::blake2b(bytesView(ctx, r), static_cast<int>(n), key);
+    }));
+}
+
+PRIM(prim_Sha256) {
+    ARGS(0, "__sha256");
+    return makeBytes(ctx, packing("ByteArray sha256", [&] {
+        return protoio::digest::sha256(bytesView(ctx, r));
+    }));
+}
+
+// ByteArray __hmacSha256Key: key message: data.
+PRIM(prim_HmacSha256) {
+    ARGS(2, "__hmacSha256Key:message:");
+    const char* who = "HMAC sha256Key:message:";
+    const std::string_view key = bytesArg(ctx, a[0], who);
+    const std::string_view data = bytesArg(ctx, a[1], who);
+    return makeBytes(ctx, packing(who, [&] { return protoio::digest::hmacSha256(key, data); }));
+}
+
+PRIM(prim_Base64Encode) {
+    ARGS(0, "__base64Encode");
+    return ctx->fromUTF8String(protoio::encoding::base64Encode(bytesView(ctx, r)).c_str());
+}
+
+// ByteArray __base64Decode: aString -> the bytes the text spells.
+PRIM(prim_Base64Decode) {
+    ARGS(1, "__base64Decode:");
+    const proto::ProtoString* s =
+        (a[0] && a[0] != PROTO_NONE) ? a[0]->asString(ctx) : nullptr;
+    if (!s) throw std::runtime_error("base64Decoded: a String was expected");
+    const std::string text = s->toStdString(ctx);
+    return makeBytes(ctx, packing("base64Decoded", [&] { return protoio::encoding::base64Decode(text); }));
+}
+
 #undef ARGS
 #undef PRIM
 
@@ -470,6 +572,10 @@ void installBytesPrimitives(STRuntime& rt) {
         {"__packUnsigned:width:bigEndian:", prim_PackUnsigned},
         {"__packSigned:width:bigEndian:", prim_PackSigned},
         {"__packFloat:width:bigEndian:", prim_PackFloat},
+        {"__crc32Continuing:", prim_Crc32},       {"__crc32Combine:with:length:", prim_Crc32Combine},
+        {"__blake2bSize:key:", prim_Blake2b},     {"__sha256", prim_Sha256},
+        {"__hmacSha256Key:message:", prim_HmacSha256},
+        {"__base64Encode", prim_Base64Encode},    {"__base64Decode:", prim_Base64Decode},
     };
     for (const Entry& e : entries) bindPrimitive(rt, p, e.sel, reg.registerPrim(e.fn));
 }
