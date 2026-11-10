@@ -28,7 +28,8 @@ they appear.
 Three rules hold everywhere:
 
 - **Text is a UTF-8 `String`; binary data is a `ByteArray`.**
-  protoST has no `ByteArray`.
+  A `ByteArray` is an immutable value (`#[0 127 255]`); convert text with
+  `utf8Encoded` and `utf8Decoded`.
 - **Every call that waits blocks the thread that makes it.** A file read, a
   socket read, an `accept` or a child process waits where it is called, as in
   Python or plain C. While it waits it does not hold up the garbage
@@ -750,7 +751,8 @@ What 0.6.6 does not do:
   support; the client verifies certificates and cannot be told not to.
 - **Sockets:** no non-blocking mode and no `select`/`poll` over several
   sockets — use one actor per connection; no Unix-domain sockets.
-- **Files:** no `ByteArray` (binary data is an Array of integers); no
+- **Files:** a `ByteArray` cannot be changed in place (build a new one, or use a
+  byte `WriteStream`); no
   permission changes, file locking or recursive directory walk beyond
   `children` (walk it yourself); no file-system watching.
 - **Platforms:** Linux, macOS and Windows (MSVC) are built and tested in

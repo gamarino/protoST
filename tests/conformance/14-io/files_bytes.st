@@ -1,4 +1,4 @@
-"EXPECT: #[0 1 2 0] true #[0 1 255 128] #[1 2] true"
+"EXPECT: #[0 1 2 0] true #[0 1 255 128] #[1 2] true #[0 1 0 5]"
 "binaryContents: takes a ByteArray; binaryContents and nextBytes: answer one."
 dir := FileSystem temp / ('protost-io-bytes-' , Smalltalk pid printString).
 dir ensureCreateDirectory.
@@ -10,6 +10,9 @@ second := f binaryContents.
 f binaryContents: #[1 2].
 head := nil.
 f readStreamDo: [:s | head := s nextBytes: 10].
+g := dir / 'c.bin'.
+g writeStreamDo: [:s | s nextPutBytes: #[0 1 0]. s nextPutBytes: #[5]].
+viaStream := g binaryContents.
 dir deleteAll.
 back printString, ' ', (back = #[0 1 2 0]) printString, ' ', second printString, ' ',
-  head printString, ' ', (head class == ByteArray) printString.
+  head printString, ' ', (head class == ByteArray) printString, ' ', viaStream printString.

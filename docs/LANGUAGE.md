@@ -2294,8 +2294,9 @@ worked examples; the design record is
 
 Common rules:
 
-- Text is a UTF-8 `String`; binary data is an `Array` of integers 0–255
-  (there is no `ByteArray`).
+- Text is a UTF-8 `String`; binary data is a `ByteArray`
+  (an immutable value, `#[0 127 255]`; `utf8Encoded` and `utf8Decoded` convert
+  text).
 - Every operation that waits blocks the calling thread. While blocked, the
   thread is outside the garbage collector's quorum, so it never delays a
   collection. When the caller is a pool worker (an actor's method), the
@@ -2379,7 +2380,7 @@ A `FileReference` names a path; it holds no open descriptor.
 | `basename`, `basenameWithoutExtension`, `extension`, `parent` | name parts (`extension` is `''` when there is none) |
 | `children`, `files`, `directories` | the entries of a directory, sorted by name |
 | `contents`, `contents: aString`, `appendContents: aString` | read the whole file; replace it; append to it |
-| `binaryContents`, `binaryContents: aByteArray` | the same with bytes, as a `ByteArray` (an Array of 0-255 is still accepted for one release, with a warning on stderr) |
+| `binaryContents`, `binaryContents: aByteArray` | the same with bytes, as a `ByteArray` (an Array of 0-255 is deprecated: it is refused from protoST 0.10.0, and until then prints a warning on stderr once per process) |
 | `lines`, `linesDo: aBlock` | the file's lines |
 | `readStream`, `writeStream`, `appendStream` | an open `IOStream` (`writeStream` truncates) |
 | `readStreamDo:`, `writeStreamDo:`, `appendStreamDo:` | evaluate the block with an open stream and close it afterwards, also on error; answer the block's value |
@@ -2443,8 +2444,9 @@ An `OSProcessResult` answers `exitCode`, `output`, `errorOutput` and
 | `ServerSocket listenOn: port host: '127.0.0.1'` | listen on one address |
 | `aServer port`, `accept`, `acceptTimeout: ms`, `close` | the port listened on; the next connection (a `Socket`); the same or nil after `ms`; stop listening |
 | `UDPSocket bindTo: port`, `bindTo:host:` | a bound UDP socket (port 0: any) |
-| `aUDPSocket send: data to: host port: p` | send a datagram (a String or an Array of bytes) |
-| `receive`, `receiveTimeout: ms`, `receiveBytesTimeout: ms` | the next datagram as `{data. host. port}`; nil after `ms`; with the data as bytes |
+| `aUDPSocket send: data to: host port: p` | send a datagram (a String or a `ByteArray`; an Array of 0-255 is deprecated) |
+| `receive`, `receiveTimeout: ms` | the next datagram as `{data. host. port}` with the data as a String; nil after `ms` |
+| `receiveBytesTimeout: ms` | the same, with the data as a `ByteArray` |
 
 Each write on a `Socket` is sent when it is made. There is no non-blocking
 mode and no multiplexing of several sockets on one thread: serve each

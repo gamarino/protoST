@@ -42,7 +42,7 @@ WriteStream >> nextPutAll: aCollection
 
 WriteStream >> << anObject
   onBytes ifTrue: [
-    anObject class == ByteArray ifTrue: [self nextPutAll: anObject] ifFalse: [self nextPut: anObject].
+    (anObject isInteger) ifTrue: [self nextPut: anObject] ifFalse: [self nextPutAll: anObject].
     ^ self].
   onString
     ifTrue: [self nextPutAll: (anObject isString ifTrue: [anObject] ifFalse: [anObject displayString])]
@@ -97,13 +97,15 @@ WriteStream >> putByte: anInteger
   ^ anInteger.
 
 WriteStream >> putBytes: aCollection
-  aCollection class == ByteArray ifFalse: [
-    aCollection isString ifTrue: [
-      ^ Error new signal: 'A byte stream takes a ByteArray, not a String: write aString utf8Encoded'].
-    aCollection do: [:each | self putByte: each].
+  "Append a ByteArray, or an Array of Integers from 0 to 255; anything else
+   (a String, nil, another collection) signals Error."
+  aCollection class == ByteArray ifTrue: [
+    self flushBytes.
+    chunks add: aCollection.
     ^ aCollection].
-  self flushBytes.
-  chunks add: aCollection.
+  aCollection class == Array ifFalse: [
+    ^ Error new signal: 'A byte stream takes a ByteArray or an Array of bytes, not ' , aCollection printString , ' (text goes in through utf8Encoded)'].
+  aCollection do: [:each | self putByte: each].
   ^ aCollection.
 
 WriteStream >> flushBytes

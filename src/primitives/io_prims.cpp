@@ -14,8 +14,8 @@
 #include <protoio/stream.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
-#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -142,25 +142,31 @@ const PO* stringsArray(STRuntime& rt, proto::ProtoContext* ctx, const std::vecto
 }
 
 // The bytes an I/O primitive writes: a String (its UTF-8 bytes), a ByteArray,
-// or, deprecated for one release, an Array of Integers from 0 to 255.
+// or, deprecated until protoST 0.10.0, an Array of Integers from 0 to 255.
+// The deprecation warning is printed only once the argument is known to be
+// such an Array, so a wrong argument fails without it.
 std::string dataArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
     if (v && v != PROTO_NONE) {
         if (v->asString(ctx)) return str(ctx, v, who);
         if (v->isByteBuffer(ctx)) return std::string(bytesView(ctx, v));
     }
-    // Once per process, whichever thread gets here first.
-    static std::once_flag warned;
-    std::call_once(warned, [] {
-        std::fputs("protoST: warning: passing an Array of bytes to an I/O selector is deprecated"
-                   " and will be removed in the next release; pass a ByteArray (ByteArray withAll: anArray)\n",
-                   stderr);
-    });
+    const PO* d = (v && v != PROTO_NONE)
+        ? v->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__data__")) : nullptr;
+    const proto::ProtoList* l = (d && d != PROTO_NONE) ? d->asList(ctx) : nullptr;
+    if (!l) throw std::runtime_error(std::string(who) + ": a String or a ByteArray was expected");
     std::string out;
-    for (const PO* e : elements(ctx, v, who)) {
-        const long long b = num(ctx, e, who);
+    const proto::proto_ulong n = l->getSize(ctx);
+    out.reserve(n);
+    for (proto::proto_ulong i = 0; i < n; ++i) {
+        const long long b = num(ctx, l->getAt(ctx, static_cast<int>(i)), who);
         if (b < 0 || b > 255) throw std::runtime_error(std::string(who) + ": bytes are integers from 0 to 255");
         out.push_back(static_cast<char>(b));
     }
+    // Once per process, whichever thread gets here first.
+    static std::atomic<bool> warned{false};
+    if (!warned.exchange(true))
+        std::fputs("protoST: warning: Array arguments are deprecated and will be refused in protoST 0.10.0;"
+                   " pass a ByteArray (ByteArray withAll: anArray)\n", stderr);
     return out;
 }
 
