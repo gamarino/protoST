@@ -84,7 +84,8 @@ stable id and file it in the right bucket.
 - **Open bugs:** S3 (Medium, not provable on this build). Known limitations of
   0.9.0 that are not defects (diagnostic text cut at a NUL, the `BinaryFile`
   end guard, timers and exit, what the tests do not prove, protoCore's missing
-  list split) are K7-K11 in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md). S22 (a test
+  list split, the NUL check for OS strings that protoIO itself does not make)
+  are K7-K12 in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md). S22 (a test
   race), S25 and S26 closed in 0.6.3, S24 in 0.6.1, S23 on 2026-10-02 (`9cdc9b4`),
   S19 on 2026-09-29, S20 and S21 in 0.5.0. Hard edges that are not
   language-design choices are in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md).

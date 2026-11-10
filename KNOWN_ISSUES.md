@@ -223,6 +223,20 @@ it where it can (it removes from the end of its work list, and slices once when
 the children are fewer than the stack), but code that wants a constant-time
 split cannot have it until protoCore offers one.
 
+## K12 — A NUL in a string for the OS is refused by protoST, not by protoIO (open, follow-up in protoIO)
+
+The operating system reads a path, an argv element, a shell command line, an
+environment name or value and a host name only up to its first NUL, and a
+protoST `String` may contain one. Since 0.9.0 protoST refuses such a string
+before it reaches the OS, as CPython does with `ValueError`: every primitive
+that hands one to protoIO (files, directories, `BinaryFile`, `OSProcess`,
+`Smalltalk getenv:`/`setenv:to:`/`changeDirectory:`, sockets, TLS host
+names, `Import from:`) signals `Error` "... must not contain NUL"
+(`src/primitives/ArgSupport.h`, `osStringArg`). protoIO itself does not check:
+another runtime that calls it with such a string still has the name cut at
+the NUL. **Follow-up in protoIO (0.3.1):** the same check in protoIO, for
+every runtime.
+
 ---
 
 ## Resolved

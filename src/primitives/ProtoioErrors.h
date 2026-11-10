@@ -2,6 +2,7 @@
 // The one mapping from a protoio::Error to the protoST error it becomes, shared
 // by every primitive file that calls protoIO (io_prims.cpp, bytes_prims.cpp).
 
+#include "primitives/ArgSupport.h"
 #include "runtime/ClassedErrorSignal.h"
 
 #include <protoio/error.h>
@@ -19,7 +20,7 @@ namespace protoST {
 // their own classes.
 [[noreturn]] inline void raiseProtoioError(const protoio::Error& e, const std::string& who = {}) {
     using Kind = protoio::Error::Kind;
-    const std::string text = who.empty() ? std::string(e.what()) : who + ": " + e.what();
+    const std::string text = who.empty() ? std::string(e.what()) : errorPrefix(who) + e.what();
     switch (e.kind) {
         case Kind::FileNotFound: throw ClassedErrorSignal("FileDoesNotExist", text);
         case Kind::FileExists: throw ClassedErrorSignal("FileAlreadyExists", text);

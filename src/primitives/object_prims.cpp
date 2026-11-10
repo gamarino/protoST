@@ -2,6 +2,7 @@
 #include "protoST/STRuntime.h"
 #include "runtime/PrimitiveMarker.h"
 #include "protoST/primitives.h"
+#include "primitives/ArgSupport.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/BytecodeModule.h"
 #include "runtime/TransientPin.h"
@@ -1408,9 +1409,9 @@ const proto::ProtoObject* prim_Import_from(STRuntime& rt, proto::ProtoContext* c
     if (argc != 1) throw std::runtime_error("Import>>from: expects 1 arg (logical path string)");
     auto* arg = a[0];
     if (!arg) throw std::runtime_error("Import>>from: arg is null");
-    auto* str = arg->asString(ctx);
-    if (!str) throw std::runtime_error("Import>>from: arg must be a string");
-    std::string logical = str->toStdString(ctx);
+    if (!arg->asString(ctx)) throw std::runtime_error("Import>>from: arg must be a string");
+    // The name becomes a file path: one with a NUL would name another module.
+    const std::string logical = osStringArg(ctx, arg, "Import from:", "the module name");
 
     auto* wrapper = rt.space()->getImportModule(ctx, logical.c_str(), "exports");
     if (!wrapper || wrapper == PROTO_NONE) {

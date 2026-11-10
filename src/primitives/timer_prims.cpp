@@ -16,11 +16,12 @@
 // The deadline is kept by the runtime's TimerService; when it passes, the
 // timer thread hands a task to the worker pool, and a worker calls
 // runTimerTask. The timer thread itself never runs Smalltalk code, so the
-// TimeoutError is built here, on the worker, by the kernel's __timedOutAfter:: the
-// class and the text are the kernel's, and C++ looks no global up by name.
+// TimeoutError is built here, on the worker, by the kernel's __timedOutAfter:
+// (the class and the text are the kernel's, and C++ looks no global up by name).
 
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
+#include "primitives/ArgSupport.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/TimerService.h"
 #include "protoCore.h"
@@ -53,15 +54,12 @@ bool isSettled(STRuntime& rt, proto::ProtoContext* ctx, const PO* future) {
 }
 
 // The deadline `ms` milliseconds from now on the monotonic clock. `who` is the
-// public selector, for the error text.
-// `n` receives the milliseconds.
+// public selector, for the error text; `n` receives the milliseconds.
 TimerService::TimePoint deadlineAfter(proto::ProtoContext* ctx, const PO* ms, const char* who,
                                       long long& n) {
-    if (!ms || ms == PROTO_NONE || !ms->isInteger(ctx) || !proto::isSmallInt(ms))
-        throw std::runtime_error(std::string(who) + ": the milliseconds must be an Integer");
-    n = ms->asLong(ctx);
+    n = smallIntegerArg(ctx, ms, who, "the milliseconds");
     if (n < 0)
-        throw std::runtime_error(std::string(who) + ": the milliseconds must not be negative, not "
+        throw std::runtime_error(errorPrefix(who) + "the milliseconds must not be negative, not "
                                  + std::to_string(n));
     const TimerService::TimePoint now = TimerService::Clock::now();
     const auto room = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -82,7 +80,7 @@ const PO* scheduleOn(STRuntime& rt, proto::ProtoContext* ctx, const PO* r,
 // Future>>__resolveNilAfter: ms (Future class >> after:).
 const PO* prim_Future_resolveNilAfter(STRuntime& rt, proto::ProtoContext* ctx, const PO* r,
                                       const PO* const* a, int argc) {
-    return scheduleOn(rt, ctx, r, a, argc, /*reject=*/false, "Future after:");
+    return scheduleOn(rt, ctx, r, a, argc, /*reject=*/false, "Future class>>after:");
 }
 
 // Future>>__rejectTimeoutAfter: ms (Future >> within:).

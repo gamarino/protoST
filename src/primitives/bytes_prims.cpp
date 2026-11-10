@@ -1,6 +1,9 @@
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
+#include "primitives/ArgSupport.h"
 #include "primitives/BytesSupport.h"
+#include "primitives/IoBrackets.h"
+#include "primitives/StringSupport.h"
 #include "primitives/ProtoioErrors.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/ClassedErrorSignal.h"
@@ -18,6 +21,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace protoST {
 
@@ -61,12 +65,6 @@ using PO = proto::ProtoObject;
 #define ARGS(N, SEL) if (argc != (N)) throw std::runtime_error(SEL " expects " #N " argument(s)"); \
                      (void) rt; (void) r; (void) a
 
-long long integerArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
-    if (!v || v == PROTO_NONE || !v->isInteger(ctx) || !proto::isSmallInt(v))
-        throw std::runtime_error(std::string(who) + ": an Integer was expected");
-    return v->asLong(ctx);
-}
-
 // The byte an element of `withAll:` stands for: an Integer from 0 to 255.
 char byteOf(proto::ProtoContext* ctx, const PO* v) {
     if (!v || v == PROTO_NONE || !v->isInteger(ctx) || !proto::isSmallInt(v))
@@ -101,7 +99,7 @@ int hexDigit(char c) {
 // ByteArray __bytesNew: n -> n zero bytes.
 PRIM(prim_BytesNew) {
     ARGS(1, "__bytesNew:");
-    const long long n = integerArg(ctx, a[0], "ByteArray new:");
+    const long long n = smallIntegerArg(ctx, a[0], "ByteArray new:", "the size");
     if (n < 0) throw std::runtime_error("ByteArray new: the size must not be negative");
     return makeBytes(ctx, std::string(static_cast<size_t>(n), '\0'));
 }
@@ -132,7 +130,7 @@ PRIM(prim_BytesSize) {
 PRIM(prim_BytesAt) {
     ARGS(1, "__bytesAt:");
     const std::string_view v = bytesView(ctx, r);
-    const long long i = integerArg(ctx, a[0], "ByteArray at:");
+    const long long i = smallIntegerArg(ctx, a[0], "ByteArray at:", "the index");
     if (i < 1 || i > static_cast<long long>(v.size()))
         throw ClassedErrorSignal("SubscriptOutOfBounds", "ByteArray>>at: index " + std::to_string(i)
                                  + " out of bounds 1.." + std::to_string(v.size()));
@@ -144,8 +142,8 @@ PRIM(prim_BytesAt) {
 PRIM(prim_BytesCopyFromTo) {
     ARGS(2, "__bytesCopyFrom:to:");
     const std::string_view v = bytesView(ctx, r);
-    const long long from = integerArg(ctx, a[0], "ByteArray copyFrom:to:");
-    const long long to = integerArg(ctx, a[1], "ByteArray copyFrom:to:");
+    const long long from = smallIntegerArg(ctx, a[0], "ByteArray copyFrom:to:", "the start");
+    const long long to = smallIntegerArg(ctx, a[1], "ByteArray copyFrom:to:", "the stop");
     if (to < from) return makeBytes(ctx, {});
     if (from < 1 || to > static_cast<long long>(v.size()))
         throw ClassedErrorSignal("SubscriptOutOfBounds", "ByteArray>>copyFrom:to: range "
@@ -304,7 +302,7 @@ PRIM(prim_BytesJoin) {
 // The exact decimal text of an Integer (sign included); throws unless `v` is an Integer.
 std::string integerDigits(proto::ProtoContext* ctx, const PO* v, const char* who) {
     if (!v || v == PROTO_NONE || !v->isInteger(ctx))
-        throw std::runtime_error(std::string(who) + ": an Integer was expected");
+        throw std::runtime_error(errorPrefix(who) + "an Integer was expected");
     return v->asIntegerString(ctx, 10)->toStdString(ctx);
 }
 
@@ -314,38 +312,22 @@ const PO* fromUnsigned64(proto::ProtoContext* ctx, std::uint64_t u) {
     return ctx->fromString(std::to_string(u).c_str(), 10);
 }
 
-bool booleanArg(const PO* v, const char* who) {
-    if (v == PROTO_TRUE) return true;
-    if (v == PROTO_FALSE) return false;
-    throw std::runtime_error(std::string(who) + ": bigEndian must be true or false");
-}
-
 int widthArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
-    const long long w = integerArg(ctx, v, who);
+    const long long w = smallIntegerArg(ctx, v, who, "the width");
     if (w != 1 && w != 2 && w != 4 && w != 8)
-        throw std::runtime_error(std::string(who) + ": the width must be 1, 2, 4 or 8, not "
+        throw std::runtime_error(errorPrefix(who) + "the width must be 1, 2, 4 or 8, not "
                                  + std::to_string(w));
     return static_cast<int>(w);
-}
-
-// Runs a protoio call; its failure becomes the protoST error for its kind (ProtoioErrors.h), prefixed with the operation.
-template <class F>
-auto packing(const char* who, F&& f) -> decltype(f()) {
-    try {
-        return f();
-    } catch (const protoio::Error& e) {
-        raiseProtoioError(e, who);
-    }
 }
 
 // The 0-based offset of the 1-based `index`, checked so that `width` bytes
 // are there; reading past the end signals SubscriptOutOfBounds.
 size_t offsetOf(proto::ProtoContext* ctx, const PO* indexArg, int width, size_t size,
                 const char* who) {
-    const long long i = integerArg(ctx, indexArg, who);
+    const long long i = smallIntegerArg(ctx, indexArg, who, "the index");
     if (i < 1 || static_cast<unsigned long long>(i) > size
         || size - static_cast<size_t>(i - 1) < static_cast<size_t>(width))
-        throw ClassedErrorSignal("SubscriptOutOfBounds", std::string(who) + ": reading "
+        throw ClassedErrorSignal("SubscriptOutOfBounds", errorPrefix(who) + "reading "
                                  + std::to_string(width) + " byte(s) at index " + std::to_string(i)
                                  + " is out of bounds (size " + std::to_string(size) + ")");
     return static_cast<size_t>(i - 1);
@@ -357,9 +339,9 @@ PRIM(prim_UnpackUnsigned) {
     const std::string_view v = bytesView(ctx, r);
     const int w = widthArg(ctx, a[1], "ByteArray unsigned read");
     const size_t off = offsetOf(ctx, a[0], w, v.size(), "ByteArray unsigned read");
-    const bool big = booleanArg(a[2], "ByteArray unsigned read");
-    return fromUnsigned64(ctx, packing("ByteArray unsigned read",
-                                       [&] { return protoio::encoding::getUint(v, off, w, big); }));
+    const bool big = booleanArg(a[2], "ByteArray unsigned read", "bigEndian");
+    return fromUnsigned64(ctx, immediate([&] { return protoio::encoding::getUint(v, off, w, big); },
+                                         "ByteArray unsigned read"));
 }
 
 PRIM(prim_UnpackSigned) {
@@ -367,9 +349,9 @@ PRIM(prim_UnpackSigned) {
     const std::string_view v = bytesView(ctx, r);
     const int w = widthArg(ctx, a[1], "ByteArray signed read");
     const size_t off = offsetOf(ctx, a[0], w, v.size(), "ByteArray signed read");
-    const bool big = booleanArg(a[2], "ByteArray signed read");
-    return ctx->fromLong(packing("ByteArray signed read",
-                                 [&] { return protoio::encoding::getInt(v, off, w, big); }));
+    const bool big = booleanArg(a[2], "ByteArray signed read", "bigEndian");
+    return ctx->fromLong(immediate([&] { return protoio::encoding::getInt(v, off, w, big); },
+                                   "ByteArray signed read"));
 }
 
 // aByteArray __unpackFloatAt: i width: 4|8 bigEndian: b -> a Float.
@@ -379,11 +361,11 @@ PRIM(prim_UnpackFloat) {
     const int w = widthArg(ctx, a[1], "ByteArray float read");
     if (w != 4 && w != 8) throw std::runtime_error("ByteArray float read: the width must be 4 or 8");
     const size_t off = offsetOf(ctx, a[0], w, v.size(), "ByteArray float read");
-    const bool big = booleanArg(a[2], "ByteArray float read");
-    return ctx->fromDouble(packing("ByteArray float read", [&] {
+    const bool big = booleanArg(a[2], "ByteArray float read", "bigEndian");
+    return ctx->fromDouble(immediate([&] {
         return w == 4 ? static_cast<double>(protoio::encoding::getFloat32(v, off, big))
                       : protoio::encoding::getFloat64(v, off, big);
-    }));
+    }, "ByteArray float read"));
 }
 
 // ByteArray __packUnsigned: n width: w bigEndian: b -> the w bytes of n.
@@ -391,7 +373,7 @@ PRIM(prim_PackUnsigned) {
     ARGS(3, "__packUnsigned:width:bigEndian:");
     const std::string text = integerDigits(ctx, a[0], "ByteArray unsigned write");
     const int w = widthArg(ctx, a[1], "ByteArray unsigned write");
-    const bool big = booleanArg(a[2], "ByteArray unsigned write");
+    const bool big = booleanArg(a[2], "ByteArray unsigned write", "bigEndian");
     errno = 0;
     char* end = nullptr;
     const std::uint64_t u = text[0] == '-' ? 0 : std::strtoull(text.c_str(), &end, 10);
@@ -399,7 +381,7 @@ PRIM(prim_PackUnsigned) {
         throw std::runtime_error("ByteArray unsigned write: " + text + " does not fit in "
                                  + std::to_string(w) + " unsigned byte(s)");
     std::string out;
-    packing("ByteArray unsigned write", [&] { protoio::encoding::putUint(out, u, w, big); return 0; });
+    immediate([&] { protoio::encoding::putUint(out, u, w, big); return 0; }, "ByteArray unsigned write");
     return makeBytes(ctx, out);
 }
 
@@ -407,7 +389,7 @@ PRIM(prim_PackSigned) {
     ARGS(3, "__packSigned:width:bigEndian:");
     const std::string text = integerDigits(ctx, a[0], "ByteArray signed write");
     const int w = widthArg(ctx, a[1], "ByteArray signed write");
-    const bool big = booleanArg(a[2], "ByteArray signed write");
+    const bool big = booleanArg(a[2], "ByteArray signed write", "bigEndian");
     errno = 0;
     char* end = nullptr;
     const long long n = std::strtoll(text.c_str(), &end, 10);
@@ -415,7 +397,7 @@ PRIM(prim_PackSigned) {
         throw std::runtime_error("ByteArray signed write: " + text + " does not fit in "
                                  + std::to_string(w) + " signed byte(s)");
     std::string out;
-    packing("ByteArray signed write", [&] { protoio::encoding::putInt(out, n, w, big); return 0; });
+    immediate([&] { protoio::encoding::putInt(out, n, w, big); return 0; }, "ByteArray signed write");
     return makeBytes(ctx, out);
 }
 
@@ -435,16 +417,16 @@ PRIM(prim_PackFloat) {
     else throw std::runtime_error("ByteArray float write: a Float or an Integer was expected");
     const int w = widthArg(ctx, a[1], "ByteArray float write");
     if (w != 4 && w != 8) throw std::runtime_error("ByteArray float write: the width must be 4 or 8");
-    const bool big = booleanArg(a[2], "ByteArray float write");
+    const bool big = booleanArg(a[2], "ByteArray float write", "bigEndian");
     std::string out;
     if (w == 8) {
-        packing("ByteArray float write", [&] { protoio::encoding::putFloat64(out, d, big); return 0; });
+        immediate([&] { protoio::encoding::putFloat64(out, d, big); return 0; }, "ByteArray float write");
     } else {
         const float f = static_cast<float>(d);
         if (std::isinf(f) && !std::isinf(d))
             throw std::runtime_error("ByteArray float write: " + std::to_string(d)
                                      + " does not fit in a 32-bit float");
-        packing("ByteArray float write", [&] { protoio::encoding::putFloat32(out, f, big); return 0; });
+        immediate([&] { protoio::encoding::putFloat32(out, f, big); return 0; }, "ByteArray float write");
     }
     return makeBytes(ctx, out);
 }
@@ -460,11 +442,22 @@ PRIM(prim_PackFloat) {
 // also refuses a trailing group whose unused bits are not zero (ruling R7),
 // which CPython accepts.
 
-// The ByteArray `v` as bytes; anything else signals Error.
-std::string_view bytesArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
-    if (!v || v == PROTO_NONE || !v->isByteBuffer(ctx))
-        throw std::runtime_error(std::string(who) + ": a ByteArray was expected");
-    return bytesView(ctx, v);
+// Where a digest runs (ruling S16). Below kUnmanagedDigestBytes of input it
+// runs inline: hashing a few KiB costs less than leaving and re-entering the
+// collector's quorum. From there on it runs inside unmanaged(), so a hash
+// over a large input never holds up a stop-the-world collection while it
+// runs. That is safe because the bracketed call touches no
+// protoCore object: it reads only views taken before the bracket into
+// ByteArrays the caller keeps reachable (the receiver and the arguments of
+// this primitive), which are immutable (makeBytes fills a buffer once) and
+// never moved (protoCore's collector does not move objects), or C++ copies.
+// The result value is built after the bracket, with the context managed again.
+constexpr size_t kUnmanagedDigestBytes = 64 * 1024;
+
+template <class F>
+auto digesting(proto::ProtoContext* ctx, size_t inputBytes, const char* who, F&& f) -> decltype(f()) {
+    if (inputBytes >= kUnmanagedDigestBytes) return unmanaged(ctx, std::forward<F>(f), who);
+    return immediate(std::forward<F>(f), who);
 }
 
 // A non-negative Integer not above `max` (read exactly, so a LargeInteger is
@@ -474,12 +467,12 @@ std::uint64_t unsignedArg(proto::ProtoContext* ctx, const PO* v, int bits,
     const std::uint64_t max = bits == 64 ? ~std::uint64_t{0} : (std::uint64_t{1} << bits) - 1;
     const std::string text = integerDigits(ctx, v, who);
     if (text[0] == '-')
-        throw std::runtime_error(std::string(who) + ": " + what + " " + text
+        throw std::runtime_error(errorPrefix(who) + what + " " + text
                                  + " does not fit: it must not be negative");
     errno = 0;
     const std::uint64_t u = std::strtoull(text.c_str(), nullptr, 10);
     if (errno == ERANGE || u > max)
-        throw std::runtime_error(std::string(who) + ": " + what + " " + text
+        throw std::runtime_error(errorPrefix(who) + what + " " + text
                                  + " does not fit in " + std::to_string(bits) + " bits");
     return u;
 }
@@ -487,9 +480,12 @@ std::uint64_t unsignedArg(proto::ProtoContext* ctx, const PO* v, int bits,
 // aByteArray __crc32Continuing: crc -> zlib.crc32(self, crc).
 PRIM(prim_Crc32) {
     ARGS(1, "__crc32Continuing:");
-    const std::uint64_t crc = unsignedArg(ctx, a[0], 32, "the running crc", "ByteArray crc32Continuing:");
-    return ctx->fromLong(static_cast<long long>(
-        protoio::digest::crc32(bytesView(ctx, r), static_cast<std::uint32_t>(crc))));
+    const char* who = "ByteArray crc32Continuing:";
+    const std::uint64_t crc = unsignedArg(ctx, a[0], 32, "the running crc", who);
+    const std::string_view data = bytesView(ctx, r);
+    return ctx->fromLong(static_cast<long long>(digesting(ctx, data.size(), who, [&] {
+        return protoio::digest::crc32(data, static_cast<std::uint32_t>(crc));
+    })));
 }
 
 // ByteArray __crc32Combine: crcA with: crcB length: lengthOfB.
@@ -507,23 +503,25 @@ PRIM(prim_Crc32Combine) {
 PRIM(prim_Blake2b) {
     ARGS(2, "__blake2bSize:key:");
     const char* who = "ByteArray blake2b:key:";
-    const long long n = integerArg(ctx, a[0], who);
+    const long long n = smallIntegerArg(ctx, a[0], who, "the digest size");
     if (n < 1 || n > 64)
-        throw std::runtime_error(std::string(who) + ": the digest size must be from 1 to 64, not "
+        throw std::runtime_error(errorPrefix(who) + "the digest size must be from 1 to 64, not "
                                  + std::to_string(n));
     const std::string_view key = bytesArg(ctx, a[1], who);
     if (key.size() > 64)
-        throw std::runtime_error(std::string(who) + ": a key is at most 64 bytes, not "
+        throw std::runtime_error(errorPrefix(who) + "a key is at most 64 bytes, not "
                                  + std::to_string(key.size()));
-    return makeBytes(ctx, packing(who, [&] {
-        return protoio::digest::blake2b(bytesView(ctx, r), static_cast<int>(n), key);
+    const std::string_view data = bytesView(ctx, r);
+    return makeBytes(ctx, digesting(ctx, data.size(), who, [&] {
+        return protoio::digest::blake2b(data, static_cast<int>(n), key);
     }));
 }
 
 PRIM(prim_Sha256) {
     ARGS(0, "__sha256");
-    return makeBytes(ctx, packing("ByteArray sha256", [&] {
-        return protoio::digest::sha256(bytesView(ctx, r));
+    const std::string_view data = bytesView(ctx, r);
+    return makeBytes(ctx, digesting(ctx, data.size(), "ByteArray sha256", [&] {
+        return protoio::digest::sha256(data);
     }));
 }
 
@@ -533,12 +531,18 @@ PRIM(prim_HmacSha256) {
     const char* who = "HMAC sha256Key:message:";
     const std::string_view key = bytesArg(ctx, a[0], who);
     const std::string_view data = bytesArg(ctx, a[1], who);
-    return makeBytes(ctx, packing(who, [&] { return protoio::digest::hmacSha256(key, data); }));
+    return makeBytes(ctx, digesting(ctx, key.size() + data.size(), who, [&] {
+        return protoio::digest::hmacSha256(key, data);
+    }));
 }
 
 PRIM(prim_Base64Encode) {
     ARGS(0, "__base64Encode");
-    return ctx->fromUTF8String(protoio::encoding::base64Encode(bytesView(ctx, r)).c_str());
+    const std::string_view data = bytesView(ctx, r);
+    const std::string text = digesting(ctx, data.size(), "base64Encoded", [&] {
+        return protoio::encoding::base64Encode(data);
+    });
+    return makeString(ctx, text);
 }
 
 // ByteArray __base64Decode: aString -> the bytes the text spells.
@@ -548,7 +552,9 @@ PRIM(prim_Base64Decode) {
         (a[0] && a[0] != PROTO_NONE) ? a[0]->asString(ctx) : nullptr;
     if (!s) throw std::runtime_error("base64Decoded: a String was expected");
     const std::string text = s->toStdString(ctx);
-    return makeBytes(ctx, packing("base64Decoded", [&] { return protoio::encoding::base64Decode(text); }));
+    return makeBytes(ctx, digesting(ctx, text.size(), "base64Decoded", [&] {
+        return protoio::encoding::base64Decode(text);
+    }));
 }
 
 #undef ARGS

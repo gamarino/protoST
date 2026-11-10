@@ -55,12 +55,6 @@ using PO = proto::ProtoObject;
 const size_t kMaxDepth = protoio::msgpack::Limits{}.maxDepth;
 
 
-bool booleanArg(const PO* v, const char* who) {
-    if (v == PROTO_TRUE) return true;
-    if (v == PROTO_FALSE) return false;
-    throw std::runtime_error(std::string(who) + ": a Boolean was expected");
-}
-
 // The answer to a unary accessor of one of our own kernel classes. These answer
 // an instance variable, which the receiver keeps reachable.
 const PO* accessor(STRuntime& rt, proto::ProtoContext* ctx, const PO* recv, const char* selector) {
@@ -401,9 +395,9 @@ private:
 PRIM(prim_MsgpackDecode) {
     ARGS(6, "__msgpackDecode:strict:ordered:map:ext:first:");
     const std::string_view input = bytesView(ctx, a[0]);
-    const bool strict = booleanArg(a[1], "MessagePack decode");
-    const bool ordered = booleanArg(a[2], "MessagePack decode");
-    const bool first = booleanArg(a[5], "MessagePack decode");
+    const bool strict = booleanArg(a[1], "MessagePack decode", "strict");
+    const bool ordered = booleanArg(a[2], "MessagePack decode", "ordered");
+    const bool first = booleanArg(a[5], "MessagePack decode", "first");
     protoio::msgpack::Limits limits;
     limits.strictMapKeys = strict;
     size_t used = 0;

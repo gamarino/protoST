@@ -1,5 +1,6 @@
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
+#include "primitives/ArgSupport.h"
 #include "primitives/BytesSupport.h"
 #include "primitives/IoBrackets.h"
 #include "runtime/Bootstrap.h"
@@ -126,14 +127,6 @@ Registry& registry() {
     return *r;
 }
 
-long long smallIntegerArg(proto::ProtoContext* ctx, const PO* v, const char* who, const char* what) {
-    if (!v || v == PROTO_NONE || !v->isInteger(ctx))
-        throw std::runtime_error(std::string(who) + ": " + what + ": an Integer was expected");
-    if (!proto::isSmallInt(v))
-        throw std::runtime_error(std::string(who) + ": " + what + " is out of range");
-    return v->asLong(ctx);
-}
-
 long long handleArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
     return smallIntegerArg(ctx, v, who, "the handle");
 }
@@ -147,7 +140,7 @@ std::shared_ptr<OpenFile> openFile(proto::ProtoContext* ctx, const PO* h, const 
         auto it = reg.files.find(handle);
         if (it != reg.files.end()) return it->second;
     }
-    throw std::runtime_error(std::string(who) + ": BinaryFile is closed");
+    throw std::runtime_error(errorPrefix(who) + "BinaryFile is closed");
 }
 
 // Whether the handle is still open. Touches no protoCore object, so it may
@@ -156,14 +149,6 @@ bool isRegistered(long long handle) {
     Registry& reg = registry();
     std::lock_guard<std::mutex> lock(reg.mutex);
     return reg.files.count(handle) != 0;
-}
-
-// The bytes a write takes, copied before the call leaves the collector's
-// quorum (an unmanaged thread touches no protoCore object).
-std::string bytesArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
-    if (!v || v == PROTO_NONE || !v->isByteBuffer(ctx))
-        throw std::runtime_error(std::string(who) + ": a ByteArray was expected");
-    return std::string(bytesView(ctx, v));
 }
 
 // Run op(fd) on the file in the named bracket. The file's reference is
@@ -199,9 +184,7 @@ enum : long long { kRead = 1, kWrite = 2, kCreate = 4, kExclusive = 8, kTruncate
 // __binFileOpen: path flags: anInteger — answers a new handle.
 PRIM(prim_BinFileOpen) {
     ARGS(2, "__binFileOpen:flags:");
-    const proto::ProtoString* s = a[0] ? a[0]->asString(ctx) : nullptr;
-    if (!s) throw std::runtime_error("BinaryFile class>>open:options: a path String was expected");
-    const std::string path = s->toStdString(ctx);
+    const std::string path = osStringArg(ctx, a[0], "BinaryFile class>>open:options:", "the path");
     const long long flags = smallIntegerArg(ctx, a[1], "BinaryFile class>>open:options:", "the flags");
     protoio::file::OpenOptions o;
     o.read = flags & kRead;
@@ -244,7 +227,9 @@ PRIM(prim_BinFileOpen) {
 PRIM(prim_BinFileAppend) {
     ARGS(2, "__binFileAppend:data:");
     const char* who = "BinaryFile>>append:";
-    const std::string data = bytesArg(ctx, a[1], who);
+    // Copied before the call leaves the collector's quorum: an unmanaged
+    // thread touches no protoCore object.
+    const std::string data(bytesArg(ctx, a[1], who));
     auto file = openFile(ctx, a[0], who);
     // The claim lives inside the bracket, before the held reference: it is
     // released first, then the reference (and a pending close) is dropped.
@@ -263,7 +248,7 @@ PRIM(prim_BinFileReadAt) {
     const char* who = "BinaryFile>>readAt:size:";
     const long long offset = smallIntegerArg(ctx, a[1], who, "the offset");
     const long long count = smallIntegerArg(ctx, a[2], who, "the size");
-    if (count < 0) throw std::runtime_error(std::string(who) + ": the size must not be negative");
+    if (count < 0) throw std::runtime_error(errorPrefix(who) + "the size must not be negative");
     auto file = openFile(ctx, a[0], who);
     const std::string got = onFileUnmanaged(ctx, std::move(file),
         [&](int fd) { return protoio::file::readAt(fd, offset, static_cast<std::size_t>(count)); });
@@ -275,7 +260,7 @@ PRIM(prim_BinFileWriteAt) {
     ARGS(3, "__binFileWriteAt:offset:data:");
     const char* who = "BinaryFile>>writeAt:bytes:";
     const long long offset = smallIntegerArg(ctx, a[1], who, "the offset");
-    const std::string data = bytesArg(ctx, a[2], who);
+    const std::string data(bytesArg(ctx, a[2], who));  // copied, as in append
     auto file = openFile(ctx, a[0], who);
     // A write that extends the file moves its end like an append does, so it
     // takes the same claim. A write judged inside the file takes none, so

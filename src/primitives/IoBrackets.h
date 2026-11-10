@@ -1,6 +1,6 @@
 #pragma once
 // The three brackets every primitive that calls protoIO runs its call in,
-// shared by io_prims.cpp and binfile_prims.cpp
+// shared by io_prims.cpp, binfile_prims.cpp and bytes_prims.cpp
 // (docs/superpowers/specs/2026-11-09-bytes-files-timers-design.md, section 3).
 //
 // Each runs `f`, which calls protoIO with C++ values only and touches no
@@ -42,24 +42,26 @@ auto blocking(STRuntime& rt, proto::ProtoContext* ctx, F&& f) -> decltype(f()) {
 }
 
 // For a call that can block only briefly (the local file system, binding a
-// socket): out of the collector's quorum, without growing the worker pool.
+// socket), or that computes for long over memory it does not allocate (a
+// digest of a large ByteArray): out of the collector's quorum, without
+// growing the worker pool. `who`, when given, prefixes the error text.
 template <typename F>
-auto unmanaged(proto::ProtoContext* ctx, F&& f) -> decltype(f()) {
+auto unmanaged(proto::ProtoContext* ctx, F&& f, const char* who = nullptr) -> decltype(f()) {
     try {
         proto::ProtoContext::UnmanagedScope out(ctx);
         return f();
     } catch (const protoio::Error& e) {
-        raiseProtoioError(e);
+        raiseProtoioError(e, who ? who : "");
     }
 }
 
-// For a call that does not block.
+// For a call that does not block. `who`, when given, prefixes the error text.
 template <typename F>
-auto immediate(F&& f) -> decltype(f()) {
+auto immediate(F&& f, const char* who = nullptr) -> decltype(f()) {
     try {
         return f();
     } catch (const protoio::Error& e) {
-        raiseProtoioError(e);
+        raiseProtoioError(e, who ? who : "");
     }
 }
 

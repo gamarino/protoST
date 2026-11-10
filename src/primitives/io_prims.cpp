@@ -1,5 +1,6 @@
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
+#include "primitives/ArgSupport.h"
 #include "primitives/BytesSupport.h"
 #include "primitives/IoBrackets.h"
 #include "primitives/ProtoioErrors.h"
@@ -59,29 +60,31 @@ std::string g_programPath;
 std::vector<std::string> g_programArgs;
 
 // ------------------------------------------------------------------ helpers
+//
+// Every string handed to the OS (a path, an argv element, a shell command
+// line, an environment name or value, a host name) is read with osStringArg
+// (ArgSupport.h), which refuses one containing NUL; `str` is only for text
+// protoIO treats as data (an input, a mode, text to decode or measure).
 
 std::string str(proto::ProtoContext* ctx, const PO* v, const char* who) {
     const proto::ProtoString* s = v ? v->asString(ctx) : nullptr;
-    if (!s) throw std::runtime_error(std::string(who) + ": a String was expected");
+    if (!s) throw std::runtime_error(errorPrefix(who) + "a String was expected");
     return s->toStdString(ctx);
 }
 
-long long num(proto::ProtoContext* ctx, const PO* v, const char* who) {
-    if (!v || !v->isInteger(ctx)) throw std::runtime_error(std::string(who) + ": an Integer was expected");
-    return v->asLong(ctx);
+int fdArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
+    return intArg(ctx, v, who, "the descriptor");
 }
-
-int fdArg(proto::ProtoContext* ctx, const PO* v, const char* who) { return static_cast<int>(num(ctx, v, who)); }
 
 // A timeout in milliseconds, nil meaning no limit (-1).
 int timeoutArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
-    return v == PROTO_NONE ? -1 : static_cast<int>(num(ctx, v, who));
+    return v == PROTO_NONE ? -1 : intArg(ctx, v, who, "the timeout");
 }
 
 // The count argument of next:, nextBytes: and the like.
 size_t countArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
-    const long long n = num(ctx, v, who);
-    if (n < 0) throw std::runtime_error(std::string(who) + ": the count must not be negative");
+    const long long n = smallIntegerArg(ctx, v, who, "the count");
+    if (n < 0) throw std::runtime_error(errorPrefix(who) + "the count must not be negative");
     return static_cast<size_t>(n);
 }
 
@@ -113,23 +116,24 @@ std::string portablePath(std::string p) {
 }
 
 // The elements of an Array (its `__data__` list), or of a bare list.
-std::vector<const PO*> elements(proto::ProtoContext* ctx, const PO* arr, const char* who) {
+std::vector<const PO*> elements(STRuntime& rt, proto::ProtoContext* ctx, const PO* arr, const char* who) {
     std::vector<const PO*> out;
     if (!arr || arr == PROTO_NONE) return out;
     const proto::ProtoList* l = nullptr;
-    const PO* d = arr->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__data__"));
+    const PO* d = arr->getAttribute(ctx, rt.bootstrap().sym.data);
     if (d && d != PROTO_NONE) l = d->asList(ctx);
     if (!l && !arr->asString(ctx)) l = arr->asList(ctx);
-    if (!l) throw std::runtime_error(std::string(who) + ": an Array was expected");
+    if (!l) throw std::runtime_error(errorPrefix(who) + "an Array was expected");
     const proto::proto_ulong n = l->getSize(ctx);
     out.reserve(n);
     for (proto::proto_ulong i = 0; i < n; ++i) out.push_back(l->getAt(ctx, static_cast<int>(i)));
     return out;
 }
 
-std::vector<std::string> stringArray(proto::ProtoContext* ctx, const PO* arr, const char* who) {
+// An argv: each element is handed to the OS.
+std::vector<std::string> argvArg(STRuntime& rt, proto::ProtoContext* ctx, const PO* arr, const char* who) {
     std::vector<std::string> out;
-    for (const PO* e : elements(ctx, arr, who)) out.push_back(str(ctx, e, who));
+    for (const PO* e : elements(rt, ctx, arr, who)) out.push_back(osStringArg(ctx, e, who, "an argument"));
     return out;
 }
 
@@ -140,7 +144,7 @@ const PO* makeArray(STRuntime& rt, proto::ProtoContext* ctx, const std::vector<c
     const proto::ProtoList* l = ctx->newList();
     for (const PO* e : items) l = l->appendLast(ctx, e);
     const PO* arr = rt.bootstrap().arrayProto->newChild(ctx, /*isMutable=*/true);
-    arr->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__data__"), l->asObject(ctx));
+    arr->setAttribute(ctx, rt.bootstrap().sym.data, l->asObject(ctx));
     return arr;
 }
 
@@ -156,21 +160,21 @@ const PO* stringsArray(STRuntime& rt, proto::ProtoContext* ctx, const std::vecto
 // or, deprecated until protoST 0.10.0, an Array of Integers from 0 to 255.
 // The deprecation warning is printed only once the argument is known to be
 // such an Array, so a wrong argument fails without it.
-std::string dataArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
+std::string dataArg(STRuntime& rt, proto::ProtoContext* ctx, const PO* v, const char* who) {
     if (v && v != PROTO_NONE) {
         if (v->asString(ctx)) return str(ctx, v, who);
         if (v->isByteBuffer(ctx)) return std::string(bytesView(ctx, v));
     }
     const PO* d = (v && v != PROTO_NONE)
-        ? v->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__data__")) : nullptr;
+        ? v->getAttribute(ctx, rt.bootstrap().sym.data) : nullptr;
     const proto::ProtoList* l = (d && d != PROTO_NONE) ? d->asList(ctx) : nullptr;
-    if (!l) throw std::runtime_error(std::string(who) + ": a String or a ByteArray was expected");
+    if (!l) throw std::runtime_error(errorPrefix(who) + "a String or a ByteArray was expected");
     std::string out;
     const proto::proto_ulong n = l->getSize(ctx);
     out.reserve(n);
     for (proto::proto_ulong i = 0; i < n; ++i) {
-        const long long b = num(ctx, l->getAt(ctx, static_cast<int>(i)), who);
-        if (b < 0 || b > 255) throw std::runtime_error(std::string(who) + ": bytes are integers from 0 to 255");
+        const long long b = smallIntegerArg(ctx, l->getAt(ctx, static_cast<int>(i)), who, "a byte");
+        if (b < 0 || b > 255) throw std::runtime_error(errorPrefix(who) + "bytes are integers from 0 to 255");
         out.push_back(static_cast<char>(b));
     }
     // Once per process, whichever thread gets here first.
@@ -195,15 +199,15 @@ PRIM(prim_ProgramPath) { ARGS(0, "__osProgramPath"); return string(ctx, g_progra
 
 PRIM(prim_Getenv) {
     ARGS(1, "__osGetenv:");
-    const std::optional<std::string> v = protoio::process::getenv(str(ctx, a[0], "getenv:"));
+    const std::optional<std::string> v = protoio::process::getenv(osStringArg(ctx, a[0], "getenv:", "the name"));
     return v ? string(ctx, *v) : PROTO_NONE;
 }
 
 PRIM(prim_Setenv) {
     ARGS(2, "__osSetenv:to:");
-    const std::string k = str(ctx, a[0], "setenv:to:");
+    const std::string k = osStringArg(ctx, a[0], "setenv:to:", "the name");
     std::optional<std::string> v;
-    if (a[1] != PROTO_NONE) v = str(ctx, a[1], "setenv:to:");
+    if (a[1] != PROTO_NONE) v = osStringArg(ctx, a[1], "setenv:to:", "the value");
     immediate([&] { protoio::process::setenv(k, v); });
     return r;
 }
@@ -218,7 +222,7 @@ PRIM(prim_Environment) {
 
 PRIM(prim_Exit) {
     ARGS(1, "__osExit:");
-    protoio::process::exit(static_cast<int>(num(ctx, a[0], "exit:")));
+    protoio::process::exit(intArg(ctx, a[0], "exit:", "the exit code"));
 }
 
 PRIM(prim_Pid) { ARGS(0, "__osPid"); return ctx->fromLong(protoio::process::pid()); }
@@ -234,7 +238,7 @@ PRIM(prim_Cwd) {
 
 PRIM(prim_Chdir) {
     ARGS(1, "__osChdir:");
-    const std::string p = str(ctx, a[0], "changeDirectory:");
+    const std::string p = osStringArg(ctx, a[0], "changeDirectory:", "the path");
     immediate([&] { protoio::file::chdir(p); });
     return r;
 }
@@ -324,7 +328,7 @@ PRIM(prim_FdAtEnd) {
 PRIM(prim_FdWrite) {
     ARGS(2, "__fdWrite:data:");
     const int fd = fdArg(ctx, a[0], "nextPutAll:");
-    const std::string data = dataArg(ctx, a[1], "nextPutAll:");
+    const std::string data = dataArg(rt, ctx, a[1], "nextPutAll:");
     blocking(rt, ctx, [&] { protoio::write(fd, data); });
     return r;
 }
@@ -369,7 +373,7 @@ PRIM(prim_FdTimeout) {
 // __fileOpen: path mode: 'r' | 'w' | 'a' | 'rw'
 PRIM(prim_FileOpen) {
     ARGS(2, "__fileOpen:mode:");
-    const std::string path = str(ctx, a[0], "open");
+    const std::string path = osStringArg(ctx, a[0], "open", "the path");
     const std::string mode = str(ctx, a[1], "open");
     protoio::file::Mode m;
     if (mode == "r") m = protoio::file::Mode::Read;
@@ -384,7 +388,7 @@ PRIM(prim_FileOpen) {
 // __fileRead: path binary: aBoolean
 PRIM(prim_FileRead) {
     ARGS(2, "__fileRead:binary:");
-    const std::string path = str(ctx, a[0], "contents");
+    const std::string path = osStringArg(ctx, a[0], "contents", "the path");
     const std::string data = unmanaged(ctx, [&] { return protoio::file::read(path); });
     return truthy(a[1]) ? makeBytes(ctx, data) : string(ctx, data);
 }
@@ -392,8 +396,8 @@ PRIM(prim_FileRead) {
 // __fileWrite: path data: aStringOrBytes append: aBoolean
 PRIM(prim_FileWrite) {
     ARGS(3, "__fileWrite:data:append:");
-    const std::string path = str(ctx, a[0], "contents:");
-    const std::string data = dataArg(ctx, a[1], "contents:");
+    const std::string path = osStringArg(ctx, a[0], "contents:", "the path");
+    const std::string data = dataArg(rt, ctx, a[1], "contents:");
     const bool append = truthy(a[2]);
     unmanaged(ctx, [&] {
         if (append) protoio::file::append(path, data);
@@ -406,7 +410,7 @@ PRIM(prim_FileWrite) {
 // #(isFile isDirectory size modificationMillis readable writable)
 PRIM(prim_FileStat) {
     ARGS(1, "__fileStat:");
-    const std::string path = str(ctx, a[0], "exists");
+    const std::string path = osStringArg(ctx, a[0], "exists", "the path");
     const std::optional<protoio::file::Stat> st = unmanaged(ctx, [&] { return protoio::file::stat(path); });
     if (!st) return PROTO_NONE;
     return makeArray(rt, ctx, {boolean(st->isFile), boolean(st->isDirectory),
@@ -418,7 +422,7 @@ PRIM(prim_FileStat) {
 // __fileDelete: path recursive: aBoolean — answers whether something was deleted.
 PRIM(prim_FileDelete) {
     ARGS(2, "__fileDelete:recursive:");
-    const std::string path = str(ctx, a[0], "delete");
+    const std::string path = osStringArg(ctx, a[0], "delete", "the path");
     const bool all = truthy(a[1]);
     return boolean(unmanaged(ctx, [&] { return protoio::file::remove(path, all); }));
 }
@@ -426,7 +430,8 @@ PRIM(prim_FileDelete) {
 // __fileMove: from to: to
 PRIM(prim_FileMove) {
     ARGS(2, "__fileMove:to:");
-    const std::string from = str(ctx, a[0], "moveTo:"), to = str(ctx, a[1], "moveTo:");
+    const std::string from = osStringArg(ctx, a[0], "moveTo:", "the path"),
+                      to = osStringArg(ctx, a[1], "moveTo:", "the destination");
     unmanaged(ctx, [&] { protoio::file::move(from, to); });
     return r;
 }
@@ -435,7 +440,8 @@ PRIM(prim_FileMove) {
 // existing `to` atomically (CPython's os.replace: rename(2) on POSIX).
 PRIM(prim_FileReplace) {
     ARGS(2, "__fileReplace:with:");
-    const std::string from = str(ctx, a[0], "replace:with:"), to = str(ctx, a[1], "replace:with:");
+    const std::string from = osStringArg(ctx, a[0], "replace:with:", "the path"),
+                      to = osStringArg(ctx, a[1], "replace:with:", "the destination");
     unmanaged(ctx, [&] { protoio::file::replace(from, to); });
     return r;
 }
@@ -445,7 +451,7 @@ PRIM(prim_FileReplace) {
 // Windows. It waits for the storage device, without bound: blocking().
 PRIM(prim_FileSyncDirectory) {
     ARGS(1, "__fileSyncDirectory:");
-    const std::string path = str(ctx, a[0], "syncDirectory:");
+    const std::string path = osStringArg(ctx, a[0], "syncDirectory:", "the path");
     blocking(rt, ctx, [&] { protoio::file::syncDirectory(path); });
     return r;
 }
@@ -453,7 +459,8 @@ PRIM(prim_FileSyncDirectory) {
 // __fileCopy: from to: to — files and whole directory trees.
 PRIM(prim_FileCopy) {
     ARGS(2, "__fileCopy:to:");
-    const std::string from = str(ctx, a[0], "copyTo:"), to = str(ctx, a[1], "copyTo:");
+    const std::string from = osStringArg(ctx, a[0], "copyTo:", "the path"),
+                      to = osStringArg(ctx, a[1], "copyTo:", "the destination");
     unmanaged(ctx, [&] { protoio::file::copy(from, to); });
     return r;
 }
@@ -461,7 +468,7 @@ PRIM(prim_FileCopy) {
 // __dirCreate: path parents: aBoolean
 PRIM(prim_DirCreate) {
     ARGS(2, "__dirCreate:parents:");
-    const std::string path = str(ctx, a[0], "createDirectory");
+    const std::string path = osStringArg(ctx, a[0], "createDirectory", "the path");
     const bool parents = truthy(a[1]);
     unmanaged(ctx, [&] { protoio::file::mkdir(path, parents); });
     return r;
@@ -470,7 +477,7 @@ PRIM(prim_DirCreate) {
 // __dirList: path — the entry names, sorted.
 PRIM(prim_DirList) {
     ARGS(1, "__dirList:");
-    const std::string path = str(ctx, a[0], "children");
+    const std::string path = osStringArg(ctx, a[0], "children", "the path");
     return stringsArray(rt, ctx, unmanaged(ctx, [&] { return protoio::file::list(path); }));
 }
 
@@ -478,7 +485,7 @@ PRIM(prim_DirList) {
 // fullName does.
 PRIM(prim_FileAbsolute) {
     ARGS(1, "__fileAbsolute:");
-    const std::string path = str(ctx, a[0], "fullName");
+    const std::string path = osStringArg(ctx, a[0], "fullName", "the path");
     return string(ctx, portablePath(immediate([&] { return protoio::file::absolute(path); })));
 }
 
@@ -489,7 +496,7 @@ PRIM(prim_TempDir) { ARGS(0, "__fileTempDir"); return string(ctx, portablePath(p
 // __osRun: argvArray input: aStringOrNil — #(exitCode output errorOutput)
 PRIM(prim_Run) {
     ARGS(2, "__osRun:input:");
-    const std::vector<std::string> argv = stringArray(ctx, a[0], "run:arguments:");
+    const std::vector<std::string> argv = argvArg(rt, ctx, a[0], "run:arguments:");
     if (argv.empty()) throw std::runtime_error("run:arguments: needs a command");
     std::optional<std::string> input;
     if (a[1] && a[1] != PROTO_NONE) input = str(ctx, a[1], "input:");
@@ -505,7 +512,7 @@ PRIM(prim_Run) {
 // understand).
 PRIM(prim_Shell) {
     ARGS(2, "__osShell:input:");
-    const std::string command = str(ctx, a[0], "shell:");
+    const std::string command = osStringArg(ctx, a[0], "shell:", "the command line");
     if (command.empty()) throw std::runtime_error("shell: needs a command line");
     std::optional<std::string> input;
     if (a[1] && a[1] != PROTO_NONE) input = str(ctx, a[1], "input:");
@@ -517,21 +524,21 @@ PRIM(prim_Shell) {
 // __osSpawn: argvArray — starts a child that shares our standard streams; answers its pid.
 PRIM(prim_Spawn) {
     ARGS(1, "__osSpawn:");
-    const std::vector<std::string> argv = stringArray(ctx, a[0], "spawn:arguments:");
+    const std::vector<std::string> argv = argvArg(rt, ctx, a[0], "spawn:arguments:");
     if (argv.empty()) throw std::runtime_error("spawn:arguments: needs a command");
     return ctx->fromLong(immediate([&] { return protoio::process::spawn(argv); }));
 }
 
 PRIM(prim_WaitPid) {
     ARGS(1, "__osWaitPid:");
-    const int pid = static_cast<int>(num(ctx, a[0], "waitFor:"));
+    const int pid = intArg(ctx, a[0], "waitFor:", "the pid");
     return ctx->fromLong(blocking(rt, ctx, [&] { return protoio::process::wait(pid); }));
 }
 
 PRIM(prim_Kill) {
     ARGS(2, "__osKill:signal:");
-    const int pid = static_cast<int>(num(ctx, a[0], "kill:"));
-    const int sig = static_cast<int>(num(ctx, a[1], "kill:"));
+    const int pid = intArg(ctx, a[0], "kill:", "the pid");
+    const int sig = intArg(ctx, a[1], "kill:", "the signal");
     immediate([&] { protoio::process::kill(pid, sig); });
     return r;
 }
@@ -541,8 +548,8 @@ PRIM(prim_Kill) {
 // __tcpConnect: host port: p timeout: msOrNil — answers a descriptor.
 PRIM(prim_TcpConnect) {
     ARGS(3, "__tcpConnect:port:timeout:");
-    const std::string host = str(ctx, a[0], "connectTo:");
-    const int port = static_cast<int>(num(ctx, a[1], "connectTo:port:"));
+    const std::string host = osStringArg(ctx, a[0], "connectTo:", "the host name");
+    const int port = intArg(ctx, a[1], "connectTo:port:", "the port");
     const int timeoutMs = timeoutArg(ctx, a[2], "timeout:");
     return ctx->fromLong(blocking(rt, ctx, [&] { return protoio::net::tcpConnect(host, port, timeoutMs); }));
 }
@@ -550,9 +557,9 @@ PRIM(prim_TcpConnect) {
 // __tcpListen: host port: p backlog: n — answers a descriptor.
 PRIM(prim_TcpListen) {
     ARGS(3, "__tcpListen:port:backlog:");
-    const std::string host = str(ctx, a[0], "listenOn:");
-    const int port = static_cast<int>(num(ctx, a[1], "listenOn:"));
-    const int backlog = static_cast<int>(num(ctx, a[2], "listenOn:"));
+    const std::string host = osStringArg(ctx, a[0], "listenOn:", "the host name");
+    const int port = intArg(ctx, a[1], "listenOn:", "the port");
+    const int backlog = intArg(ctx, a[2], "listenOn:", "the backlog");
     return ctx->fromLong(unmanaged(ctx, [&] { return protoio::net::tcpListen(host, port, backlog); }));
 }
 
@@ -583,7 +590,7 @@ PRIM(prim_SockName) {
 PRIM(prim_TlsConnect) {
     ARGS(3, "__tlsConnect:host:verify:");
     const int fd = fdArg(ctx, a[0], "tlsHost:");
-    const std::string host = str(ctx, a[1], "tlsHost:");
+    const std::string host = osStringArg(ctx, a[1], "tlsHost:", "the host name");
     const bool verify = truthy(a[2]);
     blocking(rt, ctx, [&] { protoio::net::tlsConnect(fd, host, verify); });
     return r;
@@ -592,8 +599,8 @@ PRIM(prim_TlsConnect) {
 // __udpBind: host port: p — answers a descriptor.
 PRIM(prim_UdpBind) {
     ARGS(2, "__udpBind:port:");
-    const std::string host = str(ctx, a[0], "bindTo:");
-    const int port = static_cast<int>(num(ctx, a[1], "bindTo:"));
+    const std::string host = osStringArg(ctx, a[0], "bindTo:", "the host name");
+    const int port = intArg(ctx, a[1], "bindTo:", "the port");
     return ctx->fromLong(unmanaged(ctx, [&] { return protoio::net::udpBind(host, port); }));
 }
 
@@ -601,9 +608,9 @@ PRIM(prim_UdpBind) {
 PRIM(prim_UdpSend) {
     ARGS(4, "__udpSend:to:port:data:");
     const int fd = fdArg(ctx, a[0], "send:");
-    const std::string host = str(ctx, a[1], "send:to:port:");
-    const int port = static_cast<int>(num(ctx, a[2], "send:to:port:"));
-    const std::string data = dataArg(ctx, a[3], "send:");
+    const std::string host = osStringArg(ctx, a[1], "send:to:port:", "the host name");
+    const int port = intArg(ctx, a[2], "send:to:port:", "the port");
+    const std::string data = dataArg(rt, ctx, a[3], "send:");
     unmanaged(ctx, [&] { protoio::net::udpSend(fd, host, port, data); });
     return r;
 }
