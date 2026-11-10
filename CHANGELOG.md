@@ -225,15 +225,15 @@ and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
 
 ### Known limitations (not defects of this release)
 
-K8 to K11 in `KNOWN_ISSUES.md`: what the `BinaryFile` end guard cannot see
+K8 to K10 in `KNOWN_ISSUES.md`: what the `BinaryFile` end guard cannot see
 (another `BinaryFile` object, another process), timers and exit, what the
 tests do not prove (a clean ThreadSanitizer run covers the interleavings it
 saw, not all of them; `InternalError` cannot be forced from a program, so its
 mapping is tested from C++; the macOS and Windows behaviour of the visible
-skip is confirmed only by CI), protoCore's missing structural list split, and
-K13, a mailbox batch of more than 2^31 - 1 messages, which no program can
+skip is confirmed only by CI), and K13, a mailbox batch of more than 2^31 - 1 messages, which no program can
 reach and which would be lost. K12 (protoIO did not refuse a NUL in an OS
-string) is resolved by protoIO 0.4.0. The `Array` argument deprecation ends
+string) is resolved by protoIO 0.4.0, and K11 (no structural list split) by
+protoCore 3.5.1. The `Array` argument deprecation ends
 in 0.10.0 (D45).
 
 ## 0.8.1 — on protoCore 3.5.0 (2026-10-31)
