@@ -1,4 +1,5 @@
 #include "HandlerStack.h"
+#include "runtime/ListIndex.h"
 #include "protoCore.h"
 
 #include <atomic>
@@ -64,7 +65,7 @@ static bool matchesGuard(proto::ProtoContext* ctx,
         const proto::ProtoList* list = (data && data != PROTO_NONE) ? data->asList(ctx) : nullptr;
         if (list) {
             for (proto::proto_ulong i = 0; i < list->getSize(ctx); ++i)
-                if (matchesGuard(ctx, exceptionInstance, list->getAt(ctx, static_cast<int>(i)),
+                if (matchesGuard(ctx, exceptionInstance, list->getAt(ctx, listIndex(i)),
                                  catchAllGuard))
                     return true;
             return false;

@@ -1,5 +1,6 @@
 #include "protoST/STRuntime.h"
 #include "runtime/NativeError.h"
+#include "runtime/ListIndex.h"
 #include "protoST/primitives.h"
 #include "primitives/ArgSupport.h"
 #include "primitives/BytesSupport.h"
@@ -118,7 +119,7 @@ PRIM(prim_BytesWithAll) {
     std::string out;
     out.reserve(static_cast<size_t>(n));
     for (proto::proto_ulong i = 0; i < n; ++i)
-        out.push_back(byteOf(ctx, list->getAt(ctx, static_cast<int>(i))));
+        out.push_back(byteOf(ctx, list->getAt(ctx, listIndex(i))));
     return makeBytes(ctx, out);
 }
 
@@ -280,7 +281,7 @@ PRIM(prim_BytesJoin) {
     const proto::proto_ulong n = list->getSize(ctx);
     std::string out;
     for (proto::proto_ulong i = 0; i < n; ++i)
-        out.append(bytesView(ctx, list->getAt(ctx, static_cast<int>(i))));
+        out.append(bytesView(ctx, list->getAt(ctx, listIndex(i))));
     return makeBytes(ctx, out);
 }
 

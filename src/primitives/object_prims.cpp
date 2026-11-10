@@ -1,5 +1,6 @@
 #include "runtime/ClassedErrorSignal.h"
 #include "runtime/NativeError.h"
+#include "runtime/ListIndex.h"
 #include "protoST/STRuntime.h"
 #include "runtime/PrimitiveMarker.h"
 #include "protoST/primitives.h"
@@ -474,7 +475,7 @@ const proto::ProtoObject* makeSubclassWithMixins(
         for (proto::proto_long i = static_cast<proto::proto_long>(mixins->getSize(ctx)) - 1; i >= 0;
              --i) {
             const proto::ProtoObject* mixin =
-                mixins->getAt(ctx, static_cast<int>(i));
+                mixins->getAt(ctx, listIndex(i));
             if (!mixin || mixin == PROTO_NONE)
                 throw NativeError("uses:: a mixin is nil");
             // addParent on an immutable cell returns a fresh immutable cell
@@ -594,7 +595,7 @@ const proto::ProtoObject* addBehaviorToClass(STRuntime& rt,
         for (proto::proto_long i = static_cast<proto::proto_long>(oldParents->getSize(ctx)) - 1; i >= 0;
              --i) {
             const proto::ProtoObject* p =
-                oldParents->getAt(ctx, static_cast<int>(i));
+                oldParents->getAt(ctx, listIndex(i));
             if (!p || p == PROTO_NONE) continue;
             shape = shape->addParent(ctx, p);
             pinShape.reset(shape);
@@ -802,7 +803,7 @@ const proto::ProtoObject* prim_Object_performWithArguments(STRuntime& rt, proto:
         const proto::ProtoList* list = elems && elems != PROTO_NONE ? elems->asList(ctx) : nullptr;
         if (!list) throw NativeError("perform:withArguments: expects an Array of arguments");
         for (proto::proto_ulong i = 0; i < list->getSize(ctx); ++i)
-            args.push_back(list->getAt(ctx, static_cast<int>(i)));
+            args.push_back(list->getAt(ctx, listIndex(i)));
     }
     bool understood = false;
     const proto::ProtoObject* res = sendDynamic(rt, ctx, r, sel, args.data(),

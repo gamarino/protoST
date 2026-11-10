@@ -1,5 +1,6 @@
 #include "protoST/STRuntime.h"
 #include "runtime/NativeError.h"
+#include "runtime/ListIndex.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/FutureYield.h"
@@ -112,7 +113,7 @@ void fireCallbackList(STRuntime& rt, proto::ProtoContext* ctx,
     long long n = list->getSize(ctx);
     const proto::ProtoObject* cargs[] = { arg ? arg : PROTO_NONE };
     for (long long i = 0; i < n; ++i) {
-        auto* cb = list->getAt(ctx, static_cast<int>(i));
+        auto* cb = list->getAt(ctx, listIndex(i));
         invokeCallback(rt, ctx, cb, cargs, 1);
     }
 }
@@ -270,7 +271,7 @@ bool settleFuture(STRuntime& rt, proto::ProtoContext* ctx,
         SCHED_DIAG("settleFuture future=" << future << " reject=" << reject
                    << " waiters=" << n);
         for (long long i = 0; i < n; ++i) {
-            auto* w = waiters->getAt(ctx, static_cast<int>(i));
+            auto* w = waiters->getAt(ctx, listIndex(i));
             if (w && w != PROTO_NONE) rt.schedule(ctx, w);
         }
     }

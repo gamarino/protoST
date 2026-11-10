@@ -1,5 +1,6 @@
 #include "protoST/STRuntime.h"
 #include "runtime/NativeError.h"
+#include "runtime/ListIndex.h"
 #include "protoST/primitives.h"
 #include "primitives/ArgSupport.h"
 #include "primitives/BytesSupport.h"
@@ -127,7 +128,7 @@ std::vector<const PO*> elements(STRuntime& rt, proto::ProtoContext* ctx, const P
     if (!l) throw NativeError(errorPrefix(who) + "an Array was expected");
     const proto::proto_ulong n = l->getSize(ctx);
     out.reserve(n);
-    for (proto::proto_ulong i = 0; i < n; ++i) out.push_back(l->getAt(ctx, static_cast<int>(i)));
+    for (proto::proto_ulong i = 0; i < n; ++i) out.push_back(l->getAt(ctx, listIndex(i)));
     return out;
 }
 
@@ -174,8 +175,8 @@ std::string dataArg(STRuntime& rt, proto::ProtoContext* ctx, const PO* v, const 
     const proto::proto_ulong n = l->getSize(ctx);
     out.reserve(n);
     for (proto::proto_ulong i = 0; i < n; ++i) {
-        const long long b = smallIntegerArg(ctx, l->getAt(ctx, static_cast<int>(i)), who, "a byte");
-        if (b < 0 || b > 255) throw std::runtime_error(errorPrefix(who) + "bytes are integers from 0 to 255");
+        const long long b = smallIntegerArg(ctx, l->getAt(ctx, listIndex(i)), who, "a byte");
+        if (b < 0 || b > 255) throw NativeError(errorPrefix(who) + "bytes are integers from 0 to 255");
         out.push_back(static_cast<char>(b));
     }
     // Once per process, whichever thread gets here first.

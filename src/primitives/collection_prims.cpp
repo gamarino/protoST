@@ -573,7 +573,7 @@ const proto::ProtoObject* makeInstanceOfSpecies(STRuntime& rt,
         long long size = 0;
         for (proto::proto_ulong i = 0; i < n; ++i) {
             const proto::ProtoObject* e =
-                data->getAt(ctx, static_cast<int>(i));
+                data->getAt(ctx, listIndex(i));
             if (!e) e = PROTO_NONE;
             if (proto::hashedGet(ctx, set, stKeySemantics(), e) != nullptr) continue;
             set = proto::hashedPut(ctx, set, stKeySemantics(), e, e);
@@ -777,7 +777,7 @@ const proto::ProtoObject* prim_Array_at(STRuntime&, proto::ProtoContext* ctx,
             " out of range 1.." + std::to_string(n));
     }
     const proto::ProtoObject* e =
-        data->getAt(ctx, static_cast<int>(idx1 - 1));  // → 0-based
+        data->getAt(ctx, listIndex(idx1 - 1));  // → 0-based
     return e ? e : PROTO_NONE;
 }
 
@@ -799,7 +799,7 @@ const proto::ProtoObject* prim_Array_atPut(STRuntime&, proto::ProtoContext* ctx,
     }
     const proto::ProtoObject* value = a[1] ? a[1] : PROTO_NONE;
     const proto::ProtoList* updated =
-        data->setAt(ctx, static_cast<int>(idx1 - 1), value);
+        data->setAt(ctx, listIndex(idx1 - 1), value);
     // `updated` is a fresh list held across the key interning + setAttribute.
     TransientPin pinUpdated(
         ctx, reinterpret_cast<const proto::ProtoObject*>(updated));
@@ -932,7 +932,7 @@ const proto::ProtoObject* prim_OC_at(STRuntime&, proto::ProtoContext* ctx,
             "OrderedCollection>>at: index " + std::to_string(idx1) +
             " out of range 1.." + std::to_string(n));
     }
-    const proto::ProtoObject* e = data->getAt(ctx, static_cast<int>(idx1 - 1));
+    const proto::ProtoObject* e = data->getAt(ctx, listIndex(idx1 - 1));
     return e ? e : PROTO_NONE;
 }
 
@@ -951,7 +951,7 @@ const proto::ProtoObject* prim_OC_atPut(STRuntime&, proto::ProtoContext* ctx,
             " out of range 1.." + std::to_string(n));
     }
     const proto::ProtoObject* value = a[1] ? a[1] : PROTO_NONE;
-    setData(ctx, r, data->setAt(ctx, static_cast<int>(idx1 - 1), value));
+    setData(ctx, r, data->setAt(ctx, listIndex(idx1 - 1), value));
     return value;
 }
 
@@ -1029,10 +1029,10 @@ int indexOfEqual(proto::ProtoContext* ctx, const proto::ProtoList* data,
     if (!value) value = PROTO_NONE;
     proto::proto_ulong n = data->getSize(ctx);
     for (proto::proto_ulong i = 0; i < n; ++i) {
-        const proto::ProtoObject* e = data->getAt(ctx, static_cast<int>(i));
+        const proto::ProtoObject* e = data->getAt(ctx, listIndex(i));
         if (!e) e = PROTO_NONE;
-        if (e == value) return static_cast<int>(i);
-        if (e->partialCompare(ctx, value) == 0) return static_cast<int>(i);
+        if (e == value) return listIndex(i);
+        if (e->partialCompare(ctx, value) == 0) return listIndex(i);
     }
     return -1;
 }
@@ -1388,7 +1388,7 @@ long long countEqual(proto::ProtoContext* ctx, const proto::ProtoList* data,
     long long n = 0;
     proto::proto_ulong sz = data->getSize(ctx);
     for (proto::proto_ulong i = 0; i < sz; ++i) {
-        const proto::ProtoObject* e = data->getAt(ctx, static_cast<int>(i));
+        const proto::ProtoObject* e = data->getAt(ctx, listIndex(i));
         if (!e) e = PROTO_NONE;
         if (e == value || e->partialCompare(ctx, value) == 0) ++n;
     }
@@ -2106,7 +2106,7 @@ const proto::ProtoObject* prim_Seq_sort(STRuntime& rt, proto::ProtoContext* ctx,
     std::vector<const proto::ProtoObject*> elems;
     elems.reserve(data->getSize(ctx));
     for (proto::proto_ulong i = 0; i < data->getSize(ctx); ++i)
-        elems.push_back(data->getAt(ctx, static_cast<int>(i)));
+        elems.push_back(data->getAt(ctx, listIndex(i)));
     auto mayPrecede = [&](const proto::ProtoObject* x, const proto::ProtoObject* y) {
         if (block) {
             const proto::ProtoObject* args2[2] = { x, y };

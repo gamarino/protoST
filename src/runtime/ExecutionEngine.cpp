@@ -18,6 +18,7 @@
 //   and is NOT cooperatively yieldable.
 #include "primitives/StringSupport.h"
 #include "runtime/NativeError.h"
+#include "runtime/ListIndex.h"
 #include "ExecutionEngine.h"
 #include "runtime/PrimitiveMarker.h"
 
@@ -1656,8 +1657,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                                 proto::proto_ulong sz = ps->getSize(ctx);
                                 for (proto::proto_ulong k = sz; k > 0; --k)
                                     stack.push_back(
-                                        ps->getAt(ctx,
-                                                  static_cast<int>(k - 1)));
+                                        ps->getAt(ctx, listIndex(k - 1)));
                             }
                         }
                     }
@@ -1704,7 +1704,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     proto::proto_ulong pcount = parents->getSize(ctx);
                     for (proto::proto_ulong pi = 0; pi < pcount; ++pi) {
                         const proto::ProtoObject* parent =
-                            parents->getAt(ctx, static_cast<int>(pi));
+                            parents->getAt(ctx, listIndex(pi));
                         if (!parent || parent == PROTO_NONE) continue;
                         const proto::ProtoObject* hit =
                             parent->getAttribute(ctx, selSym);
@@ -2704,7 +2704,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 const proto::proto_ulong mn = myList->getSize(ctx);
                 for (proto::proto_ulong i = 0; i < mn; ++i) {
                     result = result->appendLast(
-                        ctx, myList->getAt(ctx, static_cast<int>(i)));
+                        ctx, myList->getAt(ctx, listIndex(i)));
                     pinResult.reset(
                         reinterpret_cast<const proto::ProtoObject*>(result));
                 }
@@ -2713,7 +2713,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 const proto::proto_ulong en = exList->getSize(ctx);
                 for (proto::proto_ulong i = 0; i < en; ++i) {
                     result = result->appendLast(
-                        ctx, exList->getAt(ctx, static_cast<int>(i)));
+                        ctx, exList->getAt(ctx, listIndex(i)));
                     pinResult.reset(
                         reinterpret_cast<const proto::ProtoObject*>(result));
                 }
@@ -2975,7 +2975,7 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
 
     for (proto::proto_ulong i = 0; i < n; ++i) {
         const proto::ProtoObject* frameObj =
-            asList->getAt(ctx, static_cast<int>(i));
+            asList->getAt(ctx, listIndex(i));
         if (!frameObj)
             throw NativeError("restoreFrames: null frame entry");
 
@@ -3061,12 +3061,12 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
         ctx_->setAutomaticLocal(fr.baseSlot + 1,
                                 selfVal ? selfVal : PROTO_NONE);
         for (proto::proto_ulong j = 0; j < locN; ++j) {
-            const proto::ProtoObject* v = locList->getAt(ctx, static_cast<int>(j));
+            const proto::ProtoObject* v = locList->getAt(ctx, listIndex(j));
             ctx_->setAutomaticLocal(localsBase(fr) + static_cast<unsigned int>(j),
                                     v ? v : PROTO_NONE);
         }
         for (proto::proto_ulong j = 0; j < opN; ++j) {
-            const proto::ProtoObject* v = opList->getAt(ctx, static_cast<int>(j));
+            const proto::ProtoObject* v = opList->getAt(ctx, listIndex(j));
             ctx_->setAutomaticLocal(opStackBase(fr) + static_cast<unsigned int>(j),
                                     v ? v : PROTO_NONE);
         }

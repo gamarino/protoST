@@ -1,5 +1,6 @@
 #include "runtime/ClassedErrorSignal.h"
 #include "runtime/NativeError.h"
+#include "runtime/ListIndex.h"
 #include "STForeignSend.h"
 #include "STModuleProvider.h"
 #include "protoST/STRuntime.h"
@@ -153,7 +154,7 @@ const proto::ProtoObject* foreignSendEntry(proto::ProtoContext* callerCtx,
     std::vector<const proto::ProtoObject*> args;
     args.reserve(static_cast<size_t>(n - 1));
     for (proto::proto_ulong i = 1; i < n; ++i) {
-        const proto::ProtoObject* a = positional->getAt(callerCtx, static_cast<int>(i));
+        const proto::ProtoObject* a = positional->getAt(callerCtx, listIndex(i));
         args.push_back(a ? a : PROTO_NONE);
     }
     const int argc = static_cast<int>(args.size());

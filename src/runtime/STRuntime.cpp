@@ -1,5 +1,6 @@
 #include "runtime/ClassedErrorSignal.h"
 #include "runtime/NativeError.h"
+#include "runtime/ListIndex.h"
 #include "protoST/STRuntime.h"
 #include "runtime/PrimitiveMarker.h"
 #include "protoST/primitives.h"
@@ -1845,7 +1846,7 @@ private:
     void adopt(const proto::ProtoList* batch) {
         batch_ = batch;
         index_ = 0;
-        size_ = static_cast<int>(batch->getSize(ctx_));
+        size_ = listIndex(batch->getSize(ctx_));
         // S16: re-point the cursor's own pin at the new batch. This used to
         // be `pin_.reset(new TransientPin(...))` on a `unique_ptr`, which
         // constructs the replacement BEFORE destroying the pin it replaces —
@@ -2144,7 +2145,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
 
         auto* argsListAsList = argsList ? argsList->asList(ctx) : nullptr;
         int argc = argsListAsList
-            ? static_cast<int>(argsListAsList->getSize(ctx)) : 0;
+            ? listIndex(argsListAsList->getSize(ctx)) : 0;
         std::vector<const proto::ProtoObject*> args;
         args.reserve(static_cast<size_t>(argc));
         for (int i = 0; i < argc; ++i) {
@@ -3100,7 +3101,7 @@ void STRuntime::addModuleProviderToChain(const std::string& providerSpec) {
 
     proto::proto_ulong n = chain->getSize(ctx);
     for (proto::proto_ulong i = 0; i < n; ++i) {
-        const proto::ProtoObject* e = chain->getAt(ctx, static_cast<int>(i));
+        const proto::ProtoObject* e = chain->getAt(ctx, listIndex(i));
         const proto::ProtoString* es = e ? e->asString(ctx) : nullptr;
         if (es && es->toStdString(ctx) == providerSpec) {
             return;  // already present — nothing to do

@@ -1,5 +1,6 @@
 #include "protoST/STRuntime.h"
 #include "runtime/NativeError.h"
+#include "runtime/ListIndex.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/BytecodeModule.h"
@@ -141,7 +142,7 @@ const proto::ProtoObject* prim_Block_valueWithArguments(STRuntime& rt, proto::Pr
     if (!list) throw NativeError("valueWithArguments: expects an Array");
     std::vector<const proto::ProtoObject*> args;
     for (proto::proto_ulong i = 0; i < list->getSize(ctx); ++i)
-        args.push_back(list->getAt(ctx, static_cast<int>(i)));
+        args.push_back(list->getAt(ctx, listIndex(i)));
     return invokeBlock(rt, ctx, r, args.data(), static_cast<int>(args.size()));
 }
 

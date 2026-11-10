@@ -1,5 +1,6 @@
 #include "protoST/STRuntime.h"
 #include "runtime/NativeError.h"
+#include "runtime/ListIndex.h"
 #include "runtime/ClassedErrorSignal.h"
 #include "protoST/primitives.h"
 #include "primitives/StringSupport.h"
@@ -129,7 +130,7 @@ const proto::ProtoObject* prim_StrAt(STRuntime&, proto::ProtoContext* ctx,
                                  + " out of bounds (size " + std::to_string(size) + ")");
     // protoCore answers the element as a Character (an embedded unicode char),
     // without decoding the whole string.
-    return str->getAt(ctx, static_cast<int>(idx - 1));
+    return str->getAt(ctx, listIndex(idx - 1));
 }
 
 // String>>asInteger / asNumber — parse the text as a number (Pharo), answering

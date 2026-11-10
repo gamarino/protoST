@@ -118,6 +118,9 @@ target_sources(protost_unit_tests PRIVATE
 target_sources(protost_unit_tests PRIVATE
     unit/test_timer_service.cpp
 )
+target_sources(protost_unit_tests PRIVATE
+    unit/test_list_index.cpp
+)
 if(WIN32)
     # UTF-8 process code page: the test names CTest passes on the command line
     # (several contain an em dash) reach Catch2 as the UTF-8 it listed.
