@@ -19,10 +19,14 @@ namespace protoST {
 class ClassedErrorSignal : public std::runtime_error {
 public:
     ClassedErrorSignal(const char* className, const std::string& message)
-        : std::runtime_error(message), className_(className) {}
+        : std::runtime_error(message), className_(className), message_(message) {}
     const char* className() const { return className_; }
+    // The full message. what() is a C string and ends at a NUL; a message
+    // built from user text may hold one, so the bridge reads this instead.
+    const std::string& message() const noexcept { return message_; }
 private:
     const char* className_;
+    std::string message_;
 };
 
 } // namespace protoST

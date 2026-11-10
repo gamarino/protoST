@@ -11,12 +11,17 @@
 
 #include <string_view>
 
-namespace proto { class ProtoContext; class ProtoObject; }
+namespace proto { class ProtoContext; class ProtoObject; class ProtoString; }
 
 namespace protoST {
 
 // A new String holding `utf8`, NUL included. Malformed UTF-8 is tolerated as
 // by fromUTF8String: a truncated trailing sequence degrades to its lead byte.
 const proto::ProtoObject* makeString(proto::ProtoContext* ctx, std::string_view utf8);
+
+// The Symbol whose name is `utf8`, NUL included. Use it where the name is
+// runtime data (a selector computed by perform:); createSymbol(const char*)
+// stays for identifiers and fixed names.
+const proto::ProtoString* internName(proto::ProtoContext* ctx, std::string_view utf8);
 
 } // namespace protoST

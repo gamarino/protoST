@@ -56,6 +56,7 @@
 
 #include <exception>
 #include <string>
+#include <string_view>
 
 namespace proto { class ProtoContext; class ProtoObject; }
 
@@ -71,7 +72,7 @@ class STRuntime;
 // through), `RetrySignal` (`retry`), or `UnhandledSTException` (no handler).
 const proto::ProtoObject* signalNativeError(STRuntime& rt,
                                             proto::ProtoContext* ctx,
-                                            const char* message);
+                                            std::string_view message);
 
 // MNT-b2 (D3 / D8): signal a fresh, non-resumable instance of `errorClass`
 // (`Error` or a subclass) carrying `message` as `messageText`, through the
@@ -109,7 +110,7 @@ std::string describeExceptionValue(proto::ProtoContext* ctx, const proto::ProtoO
 // Signal a fresh instance of the global Error subclass named `className`
 // (a plain Error if there is none), carrying `message` (exception_prims.cpp).
 const proto::ProtoObject* signalErrorNamed(STRuntime& rt, proto::ProtoContext* ctx,
-                                           const char* className, const char* message);
+                                           const char* className, std::string_view message);
 bool isExceptionClassObject(STRuntime& rt, proto::ProtoContext* ctx,
                             const proto::ProtoObject* obj);
 
@@ -121,7 +122,7 @@ const proto::ProtoObject* makeMessage(STRuntime& rt, proto::ProtoContext* ctx,
 const proto::ProtoObject* signalMessageNotUnderstood(STRuntime& rt, proto::ProtoContext* ctx,
                                                      const proto::ProtoObject* receiver,
                                                      const proto::ProtoObject* message,
-                                                     const char* text);
+                                                     std::string_view text);
 
 // Re-signal an existing exception instance in the current context, and test
 // whether an object is one (exception_prims.cpp).
@@ -133,7 +134,7 @@ bool isExceptionInstance(STRuntime& rt, proto::ProtoContext* ctx,
 const proto::ProtoObject* signalErrorOfClass(STRuntime& rt,
                                              proto::ProtoContext* ctx,
                                              const proto::ProtoObject* errorClass,
-                                             const char* message);
+                                             std::string_view message);
 
 // Run `call` (a native / primitive / UMD invocation) and translate any C++
 // exception it throws per the contract above. `Call` must be invocable with no
@@ -173,7 +174,7 @@ const proto::ProtoObject* translateNativeException(STRuntime& rt,
         signalled = std::current_exception();
     }
     // --- a genuine native error: translate into a catchable protoST Error --
-    catch (const ClassedErrorSignal& e) { return signalErrorNamed(rt, ctx, e.className(), e.what()); }
+    catch (const ClassedErrorSignal& e) { return signalErrorNamed(rt, ctx, e.className(), e.message()); }
     catch (const std::exception& e)     { return signalNativeError(rt, ctx, e.what()); }
     catch (...)                         { return signalNativeError(rt, ctx, "native exception"); }
     if (signalled) return signalProtoException(rt, ctx, signalledValue, std::move(signalled));

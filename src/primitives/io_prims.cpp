@@ -87,6 +87,14 @@ bool truthy(const PO* v) { return v == PROTO_TRUE; }
 
 const PO* boolean(bool b) { return b ? PROTO_TRUE : PROTO_FALSE; }
 
+// Text read from a descriptor as a String, NUL included (makeString).
+//
+// Limitation: each call decodes the bytes it is given on their own. A
+// multi-byte character split across two reads (nextByteCount:, or the end of
+// one chunk and the start of the next) is not rejoined: its first half
+// degrades to its lead byte and the second half to stray continuation
+// bytes. Whole-character reads (next, next:, nextLine, contents) are not
+// affected, because they cut only at character or line boundaries.
 const PO* string(proto::ProtoContext* ctx, const std::string& s) {
     return makeString(ctx, s);
 }

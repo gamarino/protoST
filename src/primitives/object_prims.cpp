@@ -1,3 +1,4 @@
+#include "runtime/ClassedErrorSignal.h"
 #include "protoST/STRuntime.h"
 #include "runtime/PrimitiveMarker.h"
 #include "protoST/primitives.h"
@@ -782,7 +783,7 @@ namespace {
 const proto::ProtoString* selectorArg(proto::ProtoContext* ctx, const proto::ProtoObject* sel) {
     const proto::ProtoString* s = sel ? sel->asString(ctx) : nullptr;
     if (!s) throw std::runtime_error("a selector (Symbol) was expected");
-    return proto::ProtoString::createSymbol(ctx, s->toStdString(ctx).c_str());
+    return s->intern(ctx);
 }
 } // namespace
 
@@ -805,7 +806,7 @@ const proto::ProtoObject* prim_Object_performWithArguments(STRuntime& rt, proto:
     const proto::ProtoObject* res = sendDynamic(rt, ctx, r, sel, args.data(),
                                                 static_cast<int>(args.size()), &understood);
     if (!understood)
-        throw std::runtime_error("doesNotUnderstand: " + sel->toStdString(ctx));
+        throw ClassedErrorSignal("Error", "doesNotUnderstand: " + sel->toStdString(ctx));
     return res ? res : PROTO_NONE;
 }
 
@@ -965,7 +966,7 @@ namespace {
 const proto::ProtoString* globalKey(proto::ProtoContext* ctx, const proto::ProtoObject* k) {
     const proto::ProtoString* s = k ? k->asString(ctx) : nullptr;
     if (!s) throw std::runtime_error("a global name (Symbol) was expected");
-    return proto::ProtoString::createSymbol(ctx, s->toStdString(ctx).c_str());
+    return s->intern(ctx);
 }
 } // namespace
 

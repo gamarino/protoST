@@ -77,7 +77,7 @@ const proto::ProtoObject* sendMessage(STRuntime& rt, proto::ProtoContext* ctx,
             }
         }
         const std::string text = "doesNotUnderstand: " + selText;
-        return signalMessageNotUnderstood(rt, ctx, recv, message, text.c_str());
+        return signalMessageNotUnderstood(rt, ctx, recv, message, text);
     }
     if (attr->isMethod(ctx))
         return recv->call(ctx, nullptr, selector, recv, args, static_cast<unsigned>(argc));

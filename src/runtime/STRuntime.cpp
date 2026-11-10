@@ -108,11 +108,11 @@ namespace {
 // failure, its text.
 const proto::ProtoObject* rejectionFor(proto::ProtoContext* ctx, const proto::ProtoException& e) {
     if (const auto* u = dynamic_cast<const UnhandledSTException*>(&e))
-        if (!u->actorException()) return ctx->fromUTF8String(u->what());
+        if (!u->actorException()) return makeString(ctx, u->message());
     return e.value();
 }
 const proto::ProtoObject* rejectionFor(proto::ProtoContext* ctx, const std::exception& e) {
-    return ctx->fromUTF8String(e.what());
+    return makeString(ctx, e.what());
 }
 
 // One drainOne turn on a worker thread. Whatever escapes it -- it has no

@@ -16,6 +16,7 @@
 //   recursive ExecutionEngine on the C++ stack. A `Future>>wait` inside
 //   such a primitive-evaluated block blocks its worker thread the F6 v2 way
 //   and is NOT cooperatively yieldable.
+#include "primitives/StringSupport.h"
 #include "ExecutionEngine.h"
 #include "runtime/PrimitiveMarker.h"
 
@@ -121,7 +122,7 @@ namespace {
 // like errors raised inside primitives.
 [[noreturn]] void signalCatchable(protoST::STRuntime& rt, proto::ProtoContext* ctx,
                                   const std::string& message) {
-    protoST::signalNativeError(rt, ctx, message.c_str());
+    protoST::signalNativeError(rt, ctx, message);
     throw std::runtime_error(message);   // not reached: Error is not resumable
 }
 // Kept out of line so that `push`, on every instruction's path, stays small.
@@ -575,7 +576,7 @@ const proto::ProtoObject* ExecutionEngine::doesNotUnderstand(
     // non-resumable exception) is signalled here, inside the handler.
     {
         const proto::ProtoString* selSym =
-            proto::ProtoString::createSymbol(ctx, selector.c_str());
+            internName(ctx, selector);
         if (canSendToForeignException(rt_, ctx, recv, selSym))
             return translateNativeException(rt_, ctx, [&] {
                 return sendToForeignException(rt_, ctx, recv, selSym, args, argc);
@@ -597,7 +598,7 @@ const proto::ProtoObject* ExecutionEngine::doesNotUnderstand(
     }
     const std::string text = "doesNotUnderstand: " + selector
         + describeReceiverForDNU(ctx, recv, bs_.sym.className);
-    return signalMessageNotUnderstood(rt_, ctx, recv, message, text.c_str());
+    return signalMessageNotUnderstood(rt_, ctx, recv, message, text);
 }
 
 std::string ExecutionEngine::describeActiveStack(std::size_t maxFrames) {
@@ -633,7 +634,7 @@ bool ExecutionEngine::signalIfTooDeep(proto::ProtoContext* ctx, Frame& f,
     if (regionEnd <= kFrameRegionLimit - kOverflowReserve) return false;
     const std::string msg = "stack depth exceeded (" + std::to_string(frames_.size())
         + " frames in this activation chain)";
-    auto* r = signalErrorOfClass(rt_, ctx, bs_.errorProto, msg.c_str());
+    auto* r = signalErrorOfClass(rt_, ctx, bs_.errorProto, msg);
     push(f, r ? r : PROTO_NONE);
     return true;
 }
@@ -1490,7 +1491,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                                     "block arg count mismatch (expected " +
                                     std::to_string(sub->argCount()) +
                                     ", got " + std::to_string(argcOp) + ")";
-                                signalNativeError(rt_, ctx, msg.c_str());
+                                signalNativeError(rt_, ctx, msg);
                                 throw std::runtime_error(msg);   // not reached: Error is not resumable
                             }
                             auto* capDict = recv->getOwnAttributeDirect(ctx, recvCapKey);
@@ -2298,7 +2299,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 if (!val || val == PROTO_NONE) {
                     // A catchable Error (with the trace when unhandled).
                     const std::string msg = "undefined global: " + nameStr;
-                    signalNativeError(rt_, ctx, msg.c_str());
+                    signalNativeError(rt_, ctx, msg);
                     throw std::runtime_error(msg);   // not reached: Error is not resumable
                 }
                 push(f, val);

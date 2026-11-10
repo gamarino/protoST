@@ -42,6 +42,7 @@
 //     continues outward. protoCore's own errors arrive already built as
 //     protoST exceptions by the space's error factory (stErrorFactory).
 
+#include "runtime/ClassedErrorSignal.h"
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
@@ -55,6 +56,7 @@
 #include "runtime/UnhandledSTException.h"
 #include "runtime/NativeExceptionBridge.h"
 #include "runtime/TransientPin.h"
+#include "primitives/StringSupport.h"
 #include "runtime/ExecutionEngine.h"
 #include "modules/STModuleProvider.h"
 #include "debugger/DebuggerRuntime.h"
@@ -576,14 +578,14 @@ bool isExceptionInstance(STRuntime& rt, proto::ProtoContext* ctx,
 const proto::ProtoObject* signalErrorOfClass(STRuntime& rt,
                                              proto::ProtoContext* ctx,
                                              const proto::ProtoObject* errorClass,
-                                             const char* message) {
+                                             std::string_view message) {
     // Fresh mutable child of the error class — inherits the non-resumable
     // marker from Error and a chain to objectProto.
     const proto::ProtoObject* exc =
         const_cast<proto::ProtoObject*>(errorClass)->newChild(ctx, /*isMutable=*/true);
     TransientPin pinExc(ctx, exc);
     const proto::ProtoObject* text =
-        ctx->fromUTF8String(message ? message : "error");
+        makeString(ctx, message);
     const_cast<proto::ProtoObject*>(exc)->setAttribute(
         ctx, msgTextKey(ctx), text);
     // Force non-resumable on the instance too, defensively — a runtime-raised
@@ -597,7 +599,7 @@ const proto::ProtoObject* signalErrorOfClass(STRuntime& rt,
 // subclass defined by the kernel, such as SubscriptOutOfBounds), or a plain
 // Error when no such global exists.
 const proto::ProtoObject* signalErrorNamed(STRuntime& rt, proto::ProtoContext* ctx,
-                                           const char* className, const char* message) {
+                                           const char* className, std::string_view message) {
     const proto::ProtoObject* g = rt.globals();
     const proto::ProtoObject* cls = g
         ? g->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, className)) : nullptr;
@@ -625,7 +627,7 @@ const proto::ProtoObject* makeMessage(STRuntime& rt, proto::ProtoContext* ctx,
     TransientPin pinMsg(ctx, msg);
     msg->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__selector__"),
                       reinterpret_cast<const proto::ProtoObject*>(
-                          proto::ProtoString::createSymbol(ctx, selector.c_str())));
+                          internName(ctx, selector)));
     msg->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__arguments__"), arr);
     return msg;
 }
@@ -635,12 +637,12 @@ const proto::ProtoObject* makeMessage(STRuntime& rt, proto::ProtoContext* ctx,
 const proto::ProtoObject* signalMessageNotUnderstood(STRuntime& rt, proto::ProtoContext* ctx,
                                                      const proto::ProtoObject* receiver,
                                                      const proto::ProtoObject* message,
-                                                     const char* text) {
+                                                     std::string_view text) {
     const proto::ProtoObject* exc =
         const_cast<proto::ProtoObject*>(rt.bootstrap().messageNotUnderstoodProto)
             ->newChild(ctx, /*isMutable=*/true);
     TransientPin pinExc(ctx, exc);
-    exc->setAttribute(ctx, msgTextKey(ctx), ctx->fromUTF8String(text ? text : "doesNotUnderstand:"));
+    exc->setAttribute(ctx, msgTextKey(ctx), makeString(ctx, text));
     exc->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__receiver__"),
                       receiver ? receiver : PROTO_NONE);
     exc->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__message__"),
@@ -650,10 +652,9 @@ const proto::ProtoObject* signalMessageNotUnderstood(STRuntime& rt, proto::Proto
 
 const proto::ProtoObject* signalNativeError(STRuntime& rt,
                                             proto::ProtoContext* ctx,
-                                            const char* message) {
+                                            std::string_view message) {
     t_signalFromPrimitive = true;
-    return signalErrorOfClass(rt, ctx, rt.bootstrap().errorProto,
-                              message ? message : "native exception");
+    return signalErrorOfClass(rt, ctx, rt.bootstrap().errorProto, message);
 }
 
 // --- protoCore 3.0.0: a ProtoException at a native boundary ----------------
@@ -700,7 +701,7 @@ const proto::ProtoObject* sendToForeignException(STRuntime& rt, proto::ProtoCont
     const proto::ProtoObject* r = sendDynamicFrom(rt, ctx, recv, rt.bootstrap().errorProto,
                                                   selector, args, argc, &understood);
     if (!understood)
-        throw std::runtime_error("doesNotUnderstand: " + selector->toStdString(ctx));
+        throw ClassedErrorSignal("Error", "doesNotUnderstand: " + selector->toStdString(ctx));
     return r ? r : PROTO_NONE;
 }
 

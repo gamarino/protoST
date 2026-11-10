@@ -38,6 +38,12 @@ const proto::ProtoObject* makeString(proto::ProtoContext* ctx, std::string_view 
     return whole->asObject(ctx);
 }
 
+const proto::ProtoString* internName(proto::ProtoContext* ctx, std::string_view utf8) {
+    // The fresh string is held only in a C++ local until intern returns.
+    proto::ProtoContext::CriticalSection cs(ctx);
+    return makeString(ctx, utf8)->asString(ctx)->intern(ctx);
+}
+
 namespace {
 
 // protoCore exposes UTF-8 conversion via ProtoObject::asString(ctx)->toStdString(ctx).
@@ -467,8 +473,9 @@ const proto::ProtoObject* prim_StrGe(STRuntime&, proto::ProtoContext* ctx, const
 const proto::ProtoObject* prim_StrAsSymbol(STRuntime&, proto::ProtoContext* ctx,
                                            const proto::ProtoObject* r,
                                            const proto::ProtoObject* const*, int) {
-    return reinterpret_cast<const proto::ProtoObject*>(
-        proto::ProtoString::createSymbol(ctx, toUtf8(r, ctx).c_str()));
+    // intern works on the string's content, so a NUL does not end the name
+    // (createSymbol would read a C string).
+    return reinterpret_cast<const proto::ProtoObject*>(r->asString(ctx)->intern(ctx));
 }
 
 const proto::ProtoObject* prim_SymAsString(STRuntime&, proto::ProtoContext* ctx,
