@@ -233,13 +233,15 @@ overflows the native stack.
   `struct`, CRC-32 and BLAKE2b bytes against CPython; no ProtoBase storage
   file has been read or written by protoST.
 
-## K11 — protoCore has no structural list split (open, in protoCore)
+## K11 — protoCore had no structural list split (resolved in protoCore 3.5.1)
 
-`ProtoList::getSlice` and `splitFirst` rebuild the list by appending, so
-taking the tail of a large list costs O(size). The MessagePack decoder avoids
-it where it can (it removes from the end of its work list, and slices once when
-the children are fewer than the stack), but code that wants a constant-time
-split cannot have it until protoCore offers one.
+Through protoCore 3.5.0, `ProtoList::getSlice` and `splitFirst` rebuilt the
+list by appending, so taking the tail of a large list cost O(size).
+protoCore 3.5.1 slices, splits and concatenates by persistent-AVL join/split
+in O(log n), and protoST 0.9.0 is released against 3.5.2. Built from source
+against the 3.4.0 floor, the old cost remains; the MessagePack decoder still
+removes from the end of its work list and slices once when the children are
+fewer than the stack, which is cheap on either.
 
 ## K13 — A mailbox batch of more than 2^31 - 1 messages is refused, and lost (open, in protoCore)
 
