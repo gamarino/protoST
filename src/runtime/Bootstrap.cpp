@@ -249,6 +249,7 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     out.sym.classId         = S("__class_id__");
     out.sym.classSide       = S("__class_side__");
     out.sym.priority        = S("__priority__");
+    out.sym.data            = S("__data__");
 }
 
 bool isCharacterValue(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
@@ -269,8 +270,8 @@ const proto::ProtoObject* methodHolder(const Bootstrap& b, proto::ProtoContext* 
     if (recv->isInteger(ctx)) return b.largeIntegerProto;
     if (recv->isFloat(ctx)) return b.floatProto;
     if (recv->asString(ctx)) return b.stringProto;
-    if (recv->isByteBuffer(ctx)) return b.byteArrayProto;
     if (isCharacterValue(ctx, recv)) return b.characterProto;
+    if (recv->isByteBuffer(ctx)) return b.byteArrayProto;
     return recv;
 }
 

@@ -6,9 +6,18 @@
  ByteArray can be shared between actors and used as a Dictionary key without
  a lock; at:put: signals ModificationForbidden. = and hash go by contents.
 
- The literal is Pharo's: #[1 2 255]. Two deliberate differences from Pharo,
- recorded in docs/STATUS.md: a ByteArray cannot be changed in place, and it
- has no asString (Pharo's is Latin-1; text goes through UTF-8 explicitly).
+ The literal is Pharo's: #[1 2 255]. Deliberate differences from Pharo,
+ recorded in docs/STATUS.md:
+ - a ByteArray cannot be changed in place: at:put: signals
+   ModificationForbidden;
+ - it has no asString (Pharo's is Latin-1; text goes through UTF-8
+   explicitly);
+ - like String, it is a direct subclass of Object, not of ArrayedCollection:
+   isCollection and isKindOf: SequenceableCollection are false, and only the
+   protocol defined here is understood;
+ - collect: answers an Array, since a block may answer non-bytes;
+ - ByteArray withAll: aByteArray answers the argument itself (a value needs
+   no copy), so the result is == to it.
  The primitives are in src/primitives/bytes_prims.cpp; the design is section
  4.1 of docs/superpowers/specs/2026-11-09-bytes-files-timers-design.md."
 
@@ -84,6 +93,10 @@ ByteArray >> copyReplaceFrom: start to: stop with: replacement
   "The receiver with the bytes from start to stop replaced by the bytes of
    replacement (a ByteArray, or a collection of Integers from 0 to 255). With
    stop = start - 1 the bytes are inserted before start."
+  (start between: 1 and: self size + 1) & (stop between: start - 1 and: self size)
+    ifFalse: [^ SubscriptOutOfBounds new signal: 'ByteArray>>copyReplaceFrom:to:with: range '
+      , start printString , ' to ' , stop printString , ' out of bounds (size '
+      , self size printString , ')'].
   ^ (self copyFrom: 1 to: start - 1) , (ByteArray withAll: replacement)
       , (self copyFrom: stop + 1 to: self size).
 

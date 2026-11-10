@@ -186,6 +186,8 @@ struct Bootstrap {
         // ReadyStacks to push onto; workers drain highest non-empty band
         // first. See docs/tutorial/10-actors-and-futures.md §10.11.
         const proto::ProtoString* priority        = nullptr;  // __priority__   (on actor: 0=high, 1=medium, 2=low)
+        // The backing ProtoList of an Array (read by ByteArray withAll:).
+        const proto::ProtoString* data            = nullptr;  // __data__
     } sym;
 };
 

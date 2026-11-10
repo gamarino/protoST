@@ -101,7 +101,7 @@ PRIM(prim_BytesNew) {
 PRIM(prim_BytesWithAll) {
     ARGS(1, "__bytesWithAll:");
     const PO* data = (a[0] && a[0] != PROTO_NONE)
-        ? a[0]->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__data__"))
+        ? a[0]->getAttribute(ctx, rt.bootstrap().sym.data)
         : nullptr;
     const proto::ProtoList* list =
         (data && data != PROTO_NONE) ? data->asList(ctx) : nullptr;
@@ -194,7 +194,9 @@ PRIM(prim_BytesFromHex) {
     for (size_t i = 0; i < hex.size(); i += 2) {
         const int hi = hexDigit(hex[i]), lo = hexDigit(hex[i + 1]);
         if (hi < 0 || lo < 0)
-            throw std::runtime_error("ByteArray fromHex: '" + hex + "' is not hexadecimal");
+            throw std::runtime_error("ByteArray fromHex: '" + hex.substr(i, 2)
+                                     + "' at position " + std::to_string(i + 1)
+                                     + " is not a pair of hexadecimal digits");
         out.push_back(static_cast<char>((hi << 4) | lo));
     }
     return makeBytes(ctx, out);
