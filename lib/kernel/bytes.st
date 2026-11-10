@@ -144,3 +144,45 @@ ByteArray >> utf8Decoded
    UTF-8 (overlong forms, surrogates, truncated or out-of-range sequences)
    signal Error; nothing is replaced silently."
   ^ self __utf8Decode.
+
+"--- numbers in bytes ---------------------------------------------------------------
+
+ Fixed-width integers and IEEE 754 floats, read at 1-based indices and
+ written through a byte WriteStream. Widths are 1, 2, 4 and 8 bytes; bigEndian
+ true is network order. A read past the end signals SubscriptOutOfBounds; a
+ write of a value that does not fit signals Error (nothing wraps). 64-bit
+ fields above 2^55 are LargeIntegers. Floats go through their bit patterns,
+ so NaN payloads and -0.0 survive. Packing is done by protoIO and is
+ byte-compatible with CPython's struct module."
+
+ByteArray >> unsignedByteAt: anIndex
+  ^ self __unpackUnsignedAt: anIndex width: 1 bigEndian: true.
+
+ByteArray >> unsignedShortAt: anIndex bigEndian: aBoolean
+  ^ self __unpackUnsignedAt: anIndex width: 2 bigEndian: aBoolean.
+
+ByteArray >> unsignedLongAt: anIndex bigEndian: aBoolean
+  ^ self __unpackUnsignedAt: anIndex width: 4 bigEndian: aBoolean.
+
+ByteArray >> unsignedLong64At: anIndex bigEndian: aBoolean
+  ^ self __unpackUnsignedAt: anIndex width: 8 bigEndian: aBoolean.
+
+ByteArray >> signedByteAt: anIndex
+  ^ self __unpackSignedAt: anIndex width: 1 bigEndian: true.
+
+ByteArray >> signedShortAt: anIndex bigEndian: aBoolean
+  ^ self __unpackSignedAt: anIndex width: 2 bigEndian: aBoolean.
+
+ByteArray >> signedLongAt: anIndex bigEndian: aBoolean
+  ^ self __unpackSignedAt: anIndex width: 4 bigEndian: aBoolean.
+
+ByteArray >> signedLong64At: anIndex bigEndian: aBoolean
+  ^ self __unpackSignedAt: anIndex width: 8 bigEndian: aBoolean.
+
+ByteArray >> float32At: anIndex bigEndian: aBoolean
+  "The IEEE 754 single precision float at anIndex, as a Float."
+  ^ self __unpackFloatAt: anIndex width: 4 bigEndian: aBoolean.
+
+ByteArray >> float64At: anIndex bigEndian: aBoolean
+  "The IEEE 754 double precision float at anIndex."
+  ^ self __unpackFloatAt: anIndex width: 8 bigEndian: aBoolean.

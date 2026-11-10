@@ -108,6 +108,32 @@ WriteStream >> putBytes: aCollection
   aCollection do: [:each | self putByte: each].
   ^ aCollection.
 
+WriteStream >> nextPutUnsigned: anInteger width: aWidth bigEndian: aBoolean
+  "Append anInteger as aWidth (1, 2, 4 or 8) bytes; a negative value, or one
+   that does not fit, signals Error. Byte streams only."
+  onBytes ifFalse: [^ Error new signal: 'nextPutUnsigned:width:bigEndian: needs a byte stream (WriteStream on: ByteArray new)'].
+  self putBytes: (ByteArray __packUnsigned: anInteger width: aWidth bigEndian: aBoolean).
+  ^ anInteger.
+
+WriteStream >> nextPutSigned: anInteger width: aWidth bigEndian: aBoolean
+  "Append anInteger in two's complement as aWidth bytes; a value that does
+   not fit signals Error. Byte streams only."
+  onBytes ifFalse: [^ Error new signal: 'nextPutSigned:width:bigEndian: needs a byte stream (WriteStream on: ByteArray new)'].
+  self putBytes: (ByteArray __packSigned: anInteger width: aWidth bigEndian: aBoolean).
+  ^ anInteger.
+
+WriteStream >> nextPutFloat32: aNumber bigEndian: aBoolean
+  "Append aNumber rounded to IEEE 754 single precision (4 bytes)."
+  onBytes ifFalse: [^ Error new signal: 'nextPutFloat32:bigEndian: needs a byte stream (WriteStream on: ByteArray new)'].
+  self putBytes: (ByteArray __packFloat: aNumber width: 4 bigEndian: aBoolean).
+  ^ aNumber.
+
+WriteStream >> nextPutFloat64: aNumber bigEndian: aBoolean
+  "Append aNumber as IEEE 754 double precision (8 bytes)."
+  onBytes ifFalse: [^ Error new signal: 'nextPutFloat64:bigEndian: needs a byte stream (WriteStream on: ByteArray new)'].
+  self putBytes: (ByteArray __packFloat: aNumber width: 8 bigEndian: aBoolean).
+  ^ aNumber.
+
 WriteStream >> flushBytes
   "Move the pending single bytes into a chunk, keeping the order."
   buffer isEmpty ifTrue: [^ self].
