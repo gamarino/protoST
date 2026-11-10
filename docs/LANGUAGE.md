@@ -1845,14 +1845,23 @@ ms'`).
 - `within:` does not cancel the receiver. If it settles after the deadline,
   the answer ignores that result (a future settles once); the receiver still
   settles for its own waiters. An already settled receiver gives an answer
-  settled the same way at once.
+  settled the same way at once. An actor error the receiver gets after the
+  deadline reaches nobody through the answer, so, unless something else
+  observes the receiver, it is reported on stderr as an unhandled actor error.
+- Each `within:` adds one pair of callbacks to its receiver, kept until the
+  receiver settles: repeated `within:` (or `waitWithin:`) on one long-lived
+  future that never settles accumulates them.
 - Timers are kept by one timer thread per runtime, which never runs Smalltalk
   code. When a deadline passes, a pool worker settles the future, so the
   callbacks (`thenDo:`, `catch:`) run on a worker. If every worker is blocked
   (in I/O, in `sleep:`), the settle waits for one.
-- `waitWithin:` in an actor's method suspends the actor like `wait`
-  (§10.4); nested in a block it blocks the worker, which helps other actors
-  meanwhile, as `wait` does there.
+- `waitWithin:` at the top level of an actor's method suspends the actor
+  like `wait` (§10.4); nested in a block it blocks the worker, which helps
+  other actors meanwhile, as `wait` does there. Catching its `TimeoutError`
+  with `on:do:` nests it in a block (`[f waitWithin: 50] on: TimeoutError
+  do: [...]`), so such a wait blocks its worker for up to the deadline; to
+  keep the actor suspendable, react with `catch:` or let the caller handle the
+  error.
 - Timers still pending when the program ends are dropped: their futures never
   settle and no callback runs. They never keep the program alive.
 

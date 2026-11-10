@@ -241,33 +241,14 @@ several cores without locks.
 Version 0.9.0 (2026-11-10); built from source it requires protoCore 3.4.0 or
 newer (SOVERSION 5) and protoIO 0.3.0 or newer; the last published `.deb` is
 0.8.1 (below), which requires 3.5.0. CI builds against
-protoCore 3.5.0 (tag `v3.5.0`) and the 3.4.0 floor. On 0.9.0 (2026-11-10), `ctest` ran 1264 cases on Linux, all passing: 672
+protoCore 3.5.0 (tag `v3.5.0`) and the 3.4.0 floor. On 0.9.0 (2026-11-10), `ctest` ran 1270 cases on Linux, all passing: 678
 conformance programs, 481 unit tests, 44 examples, 41 CLI tests, 23
 documentation checks (every example with a stated result in the documents,
-plus the checker's self-test) and 3 UMD host cases. Since 0.6.2 protoST lets protoCore's adaptive controller size the heap:
-  against 0.6.1's fixed limit
-  ([`2026-10-12-adaptive-heap-default.md`](benchmarks/reports/2026-10-12-adaptive-heap-default.md)), actor workloads ran 16-43 % faster with a
-  fifth to a half of the peak memory and pauses of at most 0.27 ms, but
-  **peak memory is no longer capped** (an allocation-bound loop peaked at
-  0.88-3.5 GB). Set `PROTOCORE_HEAP_LIMIT_CELLS` when a process must stay
-  within a fixed size (see "Status" below and `KNOWN_ISSUES.md` K5).
-
-protoST is not fast single-threaded code; what it offers is the same code on
-several cores without locks.
-
-## Status
-
-Version 0.9.0 (2026-11-10); built from source it requires protoCore 3.4.0 or
-newer (SOVERSION 5) and protoIO 0.3.0 or newer; the last published `.deb` is
-0.8.1 (below), which requires 3.5.0. CI builds against
-protoCore 3.5.0 (tag `v3.5.0`) and the 3.4.0 floor. On 0.6.6 (2026-10-17), `ctest` ran 1105 cases on Linux, all passing: 544
-conformance programs, 462 unit tests, 44 examples, 33 CLI tests (including
-the benchmark-harness self-test) and 22 documentation checks (every example
-with a stated result in 21 documents, plus the checker's self-test). Since 0.6.2 protoST lets protoCore's adaptive heap
-controller size the heap (budget: 75 % of physical memory or of the process
-memory limit); `PROTOCORE_HEAP_LIMIT_CELLS` forces a fixed limit and
-`PROTOCORE_ADAPTIVE_HEAP=0` restores 0.6.1's fixed 640 MB limit (precedence
-in [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) K5; measurements in
+plus the checker's self-test) and 3 UMD host cases. Since 0.6.2 protoST lets
+protoCore's adaptive heap controller size the heap (budget: 75 % of physical
+memory or of the process memory limit); `PROTOCORE_HEAP_LIMIT_CELLS` forces a
+fixed limit and `PROTOCORE_ADAPTIVE_HEAP=0` restores 0.6.1's fixed 640 MB
+limit (precedence in [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) K5; measurements in
 `benchmarks/reports/2026-10-12-adaptive-heap-default.md`). The
 known deviations from Smalltalk-80 and the open bugs are tracked in
 [`docs/STATUS.md`](docs/STATUS.md); runtime hard edges in

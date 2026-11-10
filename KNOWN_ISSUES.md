@@ -193,6 +193,17 @@ queueing a due timer fails for lack of memory, the timer is retried every 10
 ms and the failure is reported on stderr at most once per second; protoCore
 has no allocation-failure hook, so those paths are verified by reading only.
 
+A worker whose nested waits have reached the helping cap (16 buried turns,
+`kMaxHelpingDepth` in `src/primitives/future_prims.cpp`) runs no further actor
+turn, but it still runs queued timer settles, so that a deadline can end its
+wait. A `thenDo:` or `catch:` callback such a settle runs may itself wait,
+and that wait helps the same way, so timer callbacks that wait can nest past
+the helping cap. That nesting is bounded by the engine nesting limit
+(`kMaxNestedEngines`, 1000 levels in `src/runtime/ExecutionEngine.cpp`):
+past it the callback fails with the catchable Error "stack depth exceeded
+(nested block evaluation)", reported like any callback error; it never
+overflows the native stack.
+
 ## K10 — What the 0.9.0 tests do not prove (open)
 
 - **No ThreadSanitizer build of protoST exists.** The timer service, the

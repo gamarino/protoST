@@ -8,14 +8,14 @@ dependency on protoCore's own package instead of shipping a copy.
 On a Debian or Ubuntu machine where protoCore's package is installed, the
 library is `/usr/lib/x86_64-linux-gnu/libprotoCore.so.5`, a link to
 `libprotoCore.so.<version>`. protoST 0.9.0 needs protoCore 3.4.0 or later
-(*Prerequisites*); its `.deb` was built and tested against protoCore 3.5.0,
-the release to install with it, and depends on `protocore (>= 3.5.0)` through
-protoCore's shlibs file (0.9.0, 0.8.1 and 0.8.0 need 3.4.0 as the floor; 0.7.0 needed 3.0.0). CI builds
-against protoCore 3.5.0 on
-Linux, macOS and Windows, and against 3.4.0, the declared minimum, in one
-Linux job (the floor job); CI's protoIO pin must move to a 0.3.0 commit, which
-0.9.0 requires (see *Prerequisites*). The suite was last run locally
-(2026-11-10) against protoCore 3.5.0 and the protoIO 0.3.0 development tree.
+(*Prerequisites*), as 0.8.1 and 0.8.0 did (0.7.0 needed 3.0.0). No `.deb`
+has been built for 0.9.0 yet: the last published one is 0.8.1's, built and
+tested against protoCore 3.5.0, the release to install with it, which depends
+on `protocore (>= 3.5.0)` through protoCore's shlibs file. CI builds against
+protoCore 3.5.0 on Linux, macOS and Windows, and against 3.4.0, the declared
+minimum, in one Linux job (the floor job); it pins protoIO 0.3.0 (main
+`002ab8a`), which 0.9.0 requires (see *Prerequisites*). The suite was last run
+locally (2026-11-10) against protoCore 3.5.0 and the protoIO 0.3.0 tree.
 
 ---
 

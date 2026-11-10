@@ -28,6 +28,11 @@ and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
   without a word. A non-byte in an Array fails as before.
 - `NUL` is kept in strings now (see below), so a program that relied on text
   being cut at a NUL sees the whole text.
+- **A string handed to the OS that contains NUL signals `Error`** ("... must
+  not contain NUL", as CPython's `ValueError`): a path, an argv element, a
+  shell command line, an environment name or value, a host name, a module
+  name. The OS reads such a string only up to the NUL, so `BinaryFile open:
+  'victim', NUL, '.evil'` used to create `victim` (`KNOWN_ISSUES.md` K12).
 
 ### Added
 
@@ -35,7 +40,8 @@ and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
   nested in `#(...)`), `new:`, `withAll:`, `fromHex:`, `hex`, `,`,
   `copyFrom:to:`, `copyReplaceFrom:to:with:`, `=`, `hash` (usable in `Set` and
   as `Dictionary` key), `readStream`, `writeStream` and `WriteStream on:
-  ByteArray new` (`nextPut:`, `nextPutAll:`, `<<`, `contents`);
+  ByteArray new` (`nextPut:`, `nextPutAll:` and `<<` taking a `ByteArray`
+  only, `contents`);
   `String >> utf8Encoded` and strict `ByteArray >> utf8Decoded`. Deviations
   from Pharo: D41, D42.
 - **Numbers in bytes**: `unsignedByteAt:`, `unsignedShortAt:bigEndian:`,
@@ -86,6 +92,14 @@ and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
 - **A wait inside a `thenDo:` callback** (no current actor, on a pool worker)
   no longer uses the main thread's single wait slot: it helps other work like
   a nested wait does.
+- **An actor error that arrives after a `within:` deadline is reported**:
+  `within:` observed its receiver, so such an error reached nobody and was
+  never reported as unhandled.
+- Argument errors name the selector once ("`Future class>>after: the
+  milliseconds is out of range`", not "`Future after:: ...`"), and a
+  `LargeInteger` where a `SmallInteger` is needed is "out of range", not "an
+  Integer was expected". A descriptor, port, pid or signal beyond a C `int` is
+  refused instead of being narrowed silently.
 - Iterating a collection while a block replaces its storage kept raw pointers
   across allocation in `forEachElement`, `dictForEachEntry` and
   `dictionaryEntries`; the snapshot is rooted now.
@@ -95,14 +109,17 @@ and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
 - `lib/kernel/io.st`'s binary selectors and docs speak of `ByteArray`;
   `docs/STATUS.md:323` ("Binary data is an Array of integers") is corrected.
 - Version 0.9.0 in the REPL banner and the HTTP client's `User-Agent`.
+- Digests, CRC-32 and base64 over 64 KiB or more run outside the collector's
+  quorum, so they never hold up a collection.
 
 ### Known limitations (not defects of this release)
 
-K7 to K11 in `KNOWN_ISSUES.md`: diagnostic text cut at a NUL, the `BinaryFile`
+K7 to K12 in `KNOWN_ISSUES.md`: diagnostic text cut at a NUL, the `BinaryFile`
 end guard and what it cannot see (and the protoIO 0.3.1 follow-up), timers
 and exit, what the tests do not prove (no ThreadSanitizer build; `InternalError`
 cannot be forced; the macOS and Windows behaviour of the visible skip is
-unconfirmed until CI runs), and protoCore's missing structural list split.
+unconfirmed until CI runs), protoCore's missing structural list split, and
+the NUL check for OS strings that protoIO itself does not make yet (0.3.1).
 CI pins protoIO 0.3.0 (`PROTOIO_REF`, main `002ab8a`) in both workflows.
 
 ## 0.8.1 — on protoCore 3.5.0 (2026-10-31)

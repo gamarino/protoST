@@ -631,9 +631,13 @@ Three properties matter:
 - **Pending timers do not keep the program alive.** When the program ends, the
   timers still pending are dropped, and their futures never settle.
 
-Inside an actor's method, `waitWithin:` yields like `wait` does (§10.7): the
-actor gives its worker back and resumes when the future settles or the
-deadline passes. Many actors can wait with a deadline on a small pool:
+Inside an actor's method, a `waitWithin:` written at the method's top level
+yields like `wait` does (§10.7): the actor gives its worker back and resumes
+when the future settles or the deadline passes. A `waitWithin:` inside a block
+cannot suspend the actor, and catching its `TimeoutError` with `on:do:` puts
+it inside one, as in the example below: there the wait **blocks the worker**
+for up to the deadline (the worker helps run other actors meanwhile, as `wait`
+does in a block), so many such waits at once tie up the pool:
 
 ```smalltalk
 "-- deadline-actor.st --"
@@ -657,9 +661,11 @@ $ ./build/protost deadline-actor.st
 
 An actor that waits handles no other message meanwhile, so the three
 `await:` calls above run one after the other; the first and the last give up after
-40 ms, the second finds its future settled. Block-nested waits (`waitWithin:`
-inside the block of an `ensure:`, for example) cannot suspend the actor: they
-block the worker while it helps run other actors, as `wait` does there.
+40 ms, the second finds its future settled. Each of those waits blocked a
+worker. To let the actor itself yield, keep the wait out of any block: answer
+`aFuture within: 40` and let the caller handle the `TimeoutError`, or react to
+it with `catch:` instead of `on:do:`. The same holds for any block-nested wait
+(`waitWithin:` inside the block of an `ensure:`, for example).
 
 ## 10.13 Summary
 
