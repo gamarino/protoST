@@ -14,10 +14,12 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Test suite:** 1270 `ctest` cases on Linux, 1270/1270 passing on
-  2026-11-10 (0.9.0 after the final review fixes, against protoCore 3.5.0 and
-  the protoIO 0.3.0 tree), none skipped: 678 conformance
-  programs, 481 unit tests, 44 examples, 41 CLI tests (including
+- **Test suite:** 1280 `ctest` cases on Linux, 1280/1280 passing on
+  2026-11-10 (0.9.0 after the pending fixes: NUL-safe native error text,
+  checked list indices, the protoIO error mapping and the unmanaged digest
+  path tested; against protoCore 3.5.0 and the protoIO 0.3.0 tree), none
+  skipped: 681 conformance
+  programs, 488 unit tests, 44 examples, 41 CLI tests (including
   `cli_binary_lock`, `cli_binary_lock_protobase` and `cli_binary_interop`),
   23 documentation checks (the examples with a stated result in the
   documents, the bytecode listings of `docs/VM.md` and the checker's
@@ -82,10 +84,11 @@ stable id and file it in the right bucket.
   in two rounds; each fix of a wrong result, crash or hang it found carries a
   regression test.
 - **Open bugs:** S3 (Medium, not provable on this build). Known limitations of
-  0.9.0 that are not defects (diagnostic text cut at a NUL, the `BinaryFile`
+  0.9.0 that are not defects (the `BinaryFile`
   end guard, timers and exit, what the tests do not prove, protoCore's missing
   list split, the NUL check for OS strings that protoIO itself does not make)
-  are K7-K12 in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md). S22 (a test
+  are K8-K12 in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md); K7 (diagnostic
+  text cut at a NUL) was resolved before the release. S22 (a test
   race), S25 and S26 closed in 0.6.3, S24 in 0.6.1, S23 on 2026-10-02 (`9cdc9b4`),
   S19 on 2026-09-29, S20 and S21 in 0.5.0. Hard edges that are not
   language-design choices are in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md).

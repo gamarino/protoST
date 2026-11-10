@@ -80,8 +80,17 @@ and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
   `asUppercase`, `reversed`, `substrings`, `trimBoth`, `copyReplaceAll:with:`,
   `asSymbol`, `perform:` and a string literal that contains a NUL were all
   cut at the first NUL through `c_str()`. They are built with an explicit
-  length now. Diagnostic text built by `std::runtime_error` can still be cut
-  (`KNOWN_ISSUES.md` K7).
+  length now. So are the texts of native errors: protoST throws `NativeError`,
+  which keeps the whole message, and every site that turns one into a
+  Smalltalk error or prints it reads it whole (`nativeErrorText`), so
+  `ByteArray fromHex: '0', NUL, 'zz'` no longer reports `ByteArray fromHex:
+  '0` (`KNOWN_ISSUES.md` K7, resolved).
+- **Every index handed to a protoCore list goes through `listIndex`**, which
+  refuses an index past `INT_MAX` with an `Error`; about 30 sites narrowed it
+  with `static_cast<int>`, which would have read or replaced the wrong
+  element of a list with more than 2^31 - 1 elements. An index past the int
+  range on a small collection (`#(1 2 3) at: (2 raisedTo: 32) + 1`) was
+  already refused by the bounds check and still is.
 - **`STRuntime::enqueueTask` had no consumer**: a task put on the live
   registry's list was never run and the list grew for ever. `drainOne` now runs
   queued tasks first (`runOneTask`); the timer service uses it.
@@ -110,14 +119,16 @@ and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
   `docs/STATUS.md:323` ("Binary data is an Array of integers") is corrected.
 - Version 0.9.0 in the REPL banner and the HTTP client's `User-Agent`.
 - Digests, CRC-32 and base64 over 64 KiB or more run outside the collector's
-  quorum, so they never hold up a collection.
+  quorum, so they never hold up a collection. The decision is one function
+  (`runDigest`, `src/primitives/DigestRunner.h`), and a unit test observes
+  the unmanaged state from inside a digest on both sides of the threshold.
 
 ### Known limitations (not defects of this release)
 
-K7 to K12 in `KNOWN_ISSUES.md`: diagnostic text cut at a NUL, the `BinaryFile`
+K8 to K12 in `KNOWN_ISSUES.md`: the `BinaryFile`
 end guard and what it cannot see (and the protoIO 0.3.1 follow-up), timers
 and exit, what the tests do not prove (no ThreadSanitizer build; `InternalError`
-cannot be forced; the macOS and Windows behaviour of the visible skip is
+cannot be forced from a program, so its mapping is tested from C++; the macOS and Windows behaviour of the visible skip is
 unconfirmed until CI runs), protoCore's missing structural list split, and
 the NUL check for OS strings that protoIO itself does not make yet (0.3.1).
 CI pins protoIO 0.3.0 (`PROTOIO_REF`, main `002ab8a`) in both workflows.

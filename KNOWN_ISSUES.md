@@ -135,28 +135,6 @@ limit.
 size; the n log n cost remains (a bulk list builder in protoCore would
 remove it), and the fixed limits above keep the old bound.
 
-## K7 — Diagnostic text can be cut at a NUL (open, bounded)
-
-A `String` holds NUL characters everywhere data travels (file contents, text
-read from a stream, `utf8Decoded`, symbols, error messages built from user
-text). The remaining places that report a problem by throwing
-`std::runtime_error` (about 270 in `src/`, such as "expects a String
-argument") hand the text to Smalltalk through `what()`, a `const char*`, so a
-NUL inside user text embedded in such a message shortens the **message**. It
-never shortens data: no data path goes through them. The messages of the
-runtime's own signalling (`signalErrorOfClass`, `signalNativeError`,
-`ClassedErrorSignal`, the engine's undefined-global and doesNotUnderstand
-texts) are length-aware. Another bound is protoCore's error factory, which takes a
-`const char*`, so a message created there ends at a NUL. Converting the
-remaining throws is a mechanical refactor with a review of its own, not done
-in 0.9.0.
-
-Two protoCore facts sit under this, to be raised there:
-`ProtoString::createSymbol(ctx, const std::string&)` calls `c_str()`
-(`ProtoString.cpp`, around line 1307), so a NUL-bearing `std::string` is
-truncated silently (protoST uses `ProtoString::intern`, which is
-length-aware, for `asSymbol`); and `fromStdString` truncates the same way.
-
 ## K8 — `BinaryFile`: what the end guard cannot see (open, by design)
 
 `append:` and `truncateTo:` need the end of the file alone; an extending
@@ -210,10 +188,13 @@ overflows the native stack.
   actor tests and the `BinaryFile` guards were never run under TSan; their
   evidence is the repeated runs (20 of 20 for the timer cases), the mutation
   checks recorded in the task reports and the review of the lock-free code.
-- **`InternalError` cannot be forced.** protoIO raises it only for OpenSSL
-  failures that are practically unreachable, and a test-only primitive was not
-  wanted. The mapping is one switch (`src/primitives/ProtoioErrors.h`),
-  covered by the build and by reading.
+- **`InternalError` cannot be forced from a program.** protoIO raises it only
+  for OpenSSL failures that are practically unreachable, and the runtime ships
+  no test-only primitive. The mapping (`src/primitives/ProtoioErrors.h`) is
+  tested from C++ instead: `tests/unit/test_protoio_errors.cpp` registers a
+  primitive in its own runtime that raises a synthesized `protoio::Error` of
+  each kind, and a Smalltalk handler checks the class (`InternalError` for
+  `Internal`) and the `messageText`.
 - **Tests that depend on the platform say so.** `binfile_lock_close.st`
   needs Linux's `/proc/locks` for its handshake; elsewhere it ends with a
   `SKIP:` line and CTest reports it as *Skipped* (`tests/conformance/README.md`,
@@ -252,6 +233,36 @@ every runtime.
 ---
 
 ## Resolved
+
+### K7 — Diagnostic text could be cut at a NUL (resolved in 0.9.0)
+
+A `String` holds NUL characters everywhere data travels, and many error texts
+embed user data (a selector, a key, the offending part of an argument). The
+places that reported a problem by throwing `std::runtime_error` (about 320 in
+`src/`) handed the text to Smalltalk through `what()`, a `const char*`, so a
+NUL inside the user text shortened the **message** (never data): `ByteArray
+fromHex: '0', NUL, 'zz'` reported `ByteArray fromHex: '0`, in `messageText`
+and in the uncaught-error report alike.
+
+Since 0.9.0 protoST throws `NativeError` (`src/runtime/NativeError.h`), a
+`std::runtime_error` that keeps the full `std::string`; `ClassedErrorSignal`
+derives from it. Every site that turns a C++ exception into a Smalltalk error
+or a printed diagnostic reads the text through `nativeErrorText` (the
+native-exception bridge, an actor message's rejection, the uncaught-error
+report, the debugger's and the DAP server's evaluation errors), builds the
+Smalltalk string with the length-aware `makeString`, and prints with
+`writeDiagnosticLine`, not `%s`. Tests: `12-builtins/native_error_nul_message`
+and `12-builtins/native_error_nul_uncaught` (both failed on the build before
+the change: the text ended at the NUL).
+
+What remains is outside protoST's errors: a `protoio::Error` has only
+`what()` (its text is protoIO's own, and protoST refuses a NUL in any string
+it hands to protoIO, K12), and protoCore's error factory takes a `const
+char*`, so a message created there ends at a NUL. Two protoCore facts, to be
+raised there: `ProtoString::createSymbol(ctx, const std::string&)` calls
+`c_str()` (`ProtoString.cpp`, around line 1307), so a NUL-bearing
+`std::string` is truncated silently (protoST uses `ProtoString::intern`, which
+is length-aware, for `asSymbol`); and `fromStdString` truncates the same way.
 
 ### K6 — Collection pauses grew with the number of threads (resolved in 0.6.2)
 
