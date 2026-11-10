@@ -299,7 +299,7 @@ PRIM(prim_BytesJoin) {
 // payload and -0.0 survive; a Float32 field rounds a finite Float to the
 // nearest single precision value and refuses one beyond its range.
 
-// The 64-bit magnitude and sign of an Integer; throws unless `v` is an Integer.
+// The exact decimal text of an Integer (sign included); throws unless `v` is an Integer.
 std::string integerDigits(proto::ProtoContext* ctx, const PO* v, const char* who) {
     if (!v || v == PROTO_NONE || !v->isInteger(ctx))
         throw std::runtime_error(std::string(who) + ": an Integer was expected");
@@ -423,7 +423,13 @@ PRIM(prim_PackFloat) {
     const PO* x = a[0];
     double d;
     if (x && x != PROTO_NONE && x->isFloat(ctx)) d = x->asDouble(ctx);
-    else if (x && x != PROTO_NONE && x->isInteger(ctx)) d = std::strtod(integerDigits(ctx, x, "ByteArray float write").c_str(), nullptr);
+    else if (x && x != PROTO_NONE && x->isInteger(ctx)) {
+        const std::string text = integerDigits(ctx, x, "ByteArray float write");
+        d = std::strtod(text.c_str(), nullptr);
+        if (std::isinf(d))
+            throw std::runtime_error("ByteArray float write: the Integer " + text.substr(0, 20)
+                                     + (text.size() > 20 ? "... " : " ") + "does not fit in a Float");
+    }
     else throw std::runtime_error("ByteArray float write: a Float or an Integer was expected");
     const int w = widthArg(ctx, a[1], "ByteArray float write");
     if (w != 4 && w != 8) throw std::runtime_error("ByteArray float write: the width must be 4 or 8");
