@@ -47,11 +47,18 @@
 
  Lifetime: close releases the descriptor and the lock. A second close does
  nothing; any other use after close signals Error with the text 'BinaryFile
- is closed'. A close while another actor is still inside an operation on the
- same file lets that operation finish on the same file; the descriptor is
- released when it returns. Nothing is closed when the collector frees an
- unreachable BinaryFile: an unclosed file stays open, and keeps its lock,
- until the process exits.
+ is closed'. close itself never waits: the handle is closed at once for
+ every later use. But while another actor is still inside an operation on
+ the same file (waiting in lock for another holder, or in a long sync), that
+ operation finishes on the same descriptor, and the close takes effect, the
+ descriptor and its lock being released, only when it returns. A lock or
+ tryLock that gets the lock after such a close never answers success: it
+ releases the lock at once and signals Error 'BinaryFile is closed (the lock
+ was released)', so no actor believes it holds a lock that the close has
+ dropped. (A lock waiting for another holder is not cut short by the close:
+ it waits until that holder releases.) Nothing is closed when the collector
+ frees an unreachable BinaryFile: an unclosed file stays open, and keeps its
+ lock, until the process exits.
 
  Bytes are ByteArrays: append: and writeAt:bytes: take one, readAt:size:
  answers one. Errors: FileDoesNotExist, FileAlreadyExists and FileSystemError

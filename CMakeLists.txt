@@ -438,7 +438,8 @@ add_test(NAME cli_binary_lock
 add_test(NAME cli_binary_lock_protobase
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_binary_lock.sh $<TARGET_FILE:protost> protobase
             ${CMAKE_SOURCE_DIR}/../protoIO/tests/ownerlock_peer.py)
-set_tests_properties(cli_binary_lock_protobase PROPERTIES SKIP_RETURN_CODE 77)
+set_tests_properties(cli_binary_lock PROPERTIES TIMEOUT 60)
+set_tests_properties(cli_binary_lock_protobase PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
 
 add_test(NAME cli_script_output
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_script_output.sh $<TARGET_FILE:protost>)

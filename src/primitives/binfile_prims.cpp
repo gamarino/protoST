@@ -33,9 +33,11 @@ namespace protoST {
 //     handle signals Error "BinaryFile is closed", and a second close is a
 //     no-op;
 //   * the descriptor itself is closed when the last reference goes. A close
-//     while another thread is still inside readAt, append or lock on the
-//     same file therefore never lets the number be reused under that call:
-//     it completes on the old file and only then is the descriptor closed.
+//     while another thread is still inside readAt, append, sync or lock on
+//     the same file therefore never lets the number be reused under that
+//     call: it completes on the old file and only then is the descriptor
+//     closed. lock and tryLock re-check the handle before answering success
+//     (see prim_BinFileTryLock).
 //   * the registry's mutex guards only the map: it is never held across a
 //     protoCore allocation, nor across a protoIO call.
 //
@@ -103,6 +105,14 @@ std::shared_ptr<OpenFile> openFile(proto::ProtoContext* ctx, const PO* h, const 
     throw std::runtime_error(std::string(who) + ": BinaryFile is closed");
 }
 
+// Whether the handle is still open. Touches no protoCore object, so it may
+// run inside a bracket.
+bool isRegistered(long long handle) {
+    Registry& reg = registry();
+    std::lock_guard<std::mutex> lock(reg.mutex);
+    return reg.files.count(handle) != 0;
+}
+
 // The bytes a write takes, copied before the call leaves the collector's
 // quorum (an unmanaged thread touches no protoCore object).
 std::string bytesArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
@@ -156,13 +166,23 @@ PRIM(prim_BinFileOpen) {
     o.truncate = flags & kTruncate;
     o.append = flags & kAppend;
     const int fd = blocking(rt, ctx, [&] { return protoio::file::open(path, o); });
-    auto file = std::make_shared<OpenFile>(fd);
+    // From here the descriptor is owned: by this guard until the OpenFile
+    // exists, then by the OpenFile. The map receives a copy of the reference,
+    // so if emplace throws, the last reference is this local one and the
+    // descriptor is closed after the mutex is released, never under it.
+    std::shared_ptr<OpenFile> file;
+    try {
+        file = std::make_shared<OpenFile>(fd);
+    } catch (...) {
+        try { protoio::close(fd); } catch (...) {}
+        throw;
+    }
     Registry& reg = registry();
     long long handle;
     {
         std::lock_guard<std::mutex> lock(reg.mutex);
         handle = reg.next++;
-        reg.files.emplace(handle, std::move(file));
+        reg.files.emplace(handle, file);
     }
     return ctx->fromLong(handle);
 }
@@ -239,19 +259,44 @@ PRIM(prim_BinFileDataSync) {
     return r;
 }
 
+// tryLock and lock answer success only while the handle is still open. A
+// close that came while the call was inside flock (lock waits without bound
+// for the other holder) leaves this call holding the last reference: the
+// descriptor would close, and the lock with it, right after a success was
+// answered, and the caller would believe it owned a lock nobody holds (for
+// protoBaseST, ProtoBase's OwnerLock). So, still holding the reference, the
+// call re-checks the registry once flock returns; if the handle was closed
+// meanwhile, it releases the lock itself and signals Error. A close after
+// that check is an ordinary close of a locked file, ordered after the lock.
+// The wait itself is not cut short: flock cannot be portably interrupted.
 PRIM(prim_BinFileTryLock) {
     ARGS(1, "__binFileTryLock:");
+    const long long handle = handleArg(ctx, a[0], "BinaryFile>>tryLock");
     auto file = openFile(ctx, a[0], "BinaryFile>>tryLock");
-    const bool got = onFileUnmanaged(ctx, std::move(file),
-        [](int fd) { return protoio::file::tryLock(fd); });
+    bool closedMeanwhile = false;
+    const bool got = onFileUnmanaged(ctx, std::move(file), [&](int fd) {
+        if (!protoio::file::tryLock(fd)) return false;
+        if (isRegistered(handle)) return true;
+        closedMeanwhile = true;
+        protoio::file::unlock(fd);
+        return false;
+    });
+    if (closedMeanwhile)
+        throw std::runtime_error("BinaryFile>>tryLock: BinaryFile is closed (the lock was released)");
     return got ? PROTO_TRUE : PROTO_FALSE;
 }
 
 PRIM(prim_BinFileLock) {
     ARGS(1, "__binFileLock:");
+    const long long handle = handleArg(ctx, a[0], "BinaryFile>>lock");
     auto file = openFile(ctx, a[0], "BinaryFile>>lock");
-    onFileBlocking(rt, ctx, std::move(file),
-        [](int fd) { protoio::file::lock(fd); });
+    const bool held = onFileBlocking(rt, ctx, std::move(file), [&](int fd) {
+        protoio::file::lock(fd);
+        if (isRegistered(handle)) return true;
+        protoio::file::unlock(fd);
+        return false;
+    });
+    if (!held) throw std::runtime_error("BinaryFile>>lock: BinaryFile is closed (the lock was released)");
     return r;
 }
 
@@ -284,13 +329,7 @@ PRIM(prim_BinFileClose) {
 PRIM(prim_BinFileIsOpen) {
     ARGS(1, "__binFileIsOpen:");
     const long long handle = handleArg(ctx, a[0], "BinaryFile>>isClosed");
-    Registry& reg = registry();
-    bool open;
-    {
-        std::lock_guard<std::mutex> lock(reg.mutex);
-        open = reg.files.count(handle) != 0;
-    }
-    return open ? PROTO_TRUE : PROTO_FALSE;
+    return isRegistered(handle) ? PROTO_TRUE : PROTO_FALSE;
 }
 
 #undef ARGS

@@ -103,7 +103,12 @@ ST
     "$PROTOST" "$dir/waiter.st" "$lock" "$dir/waiting" "$dir/releasing" > "$dir/waiter.out" 2>&1 &
     waiter=$!
     await "$dir/waiting" "the waiter did not start"
-    sleep 0.3  # the waiter is now inside lock (or wrongly past it)
+    # The sleep only strengthens the check and never decides the result: a
+    # correct lock prints true however long the waiter takes to reach flock
+    # (the holder creates <releasing> before it unlocks), and a lock that
+    # did not wait would print false whenever it got past flock before the
+    # release; the pause just makes that early pass very likely to happen.
+    sleep 0.3
     : > "$dir/stop"
     wait "$waiter" || { echo "FAIL: the waiter failed: $(cat "$dir/waiter.out")"; exit 1; }
     out=$(cat "$dir/waiter.out")
