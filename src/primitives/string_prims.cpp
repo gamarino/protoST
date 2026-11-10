@@ -1,6 +1,7 @@
 #include "protoST/STRuntime.h"
 #include "runtime/ClassedErrorSignal.h"
 #include "protoST/primitives.h"
+#include "primitives/StringSupport.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/TransientPin.h"
 #include "runtime/ValueFormat.h"
@@ -10,12 +11,32 @@
 #include <cstdio>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <cstdlib>
 #include <cctype>
 #include <algorithm>
 #include <vector>
 
 namespace protoST {
+
+const proto::ProtoObject* makeString(proto::ProtoContext* ctx, std::string_view utf8) {
+    // fromUTF8Buffer takes an explicit length, so a NUL does not end the text.
+    std::uint8_t remainder[4];
+    std::uint8_t remainderCount = 0;
+    const proto::ProtoString* whole = proto::ProtoString::fromUTF8Buffer(
+        ctx, reinterpret_cast<const std::uint8_t*>(utf8.data()), utf8.size(),
+        nullptr, 0, remainder, &remainderCount);
+    // A sequence cut off at the end is held back as a remainder. A String is
+    // not a stream, so nothing will complete it: keep it the way
+    // fromUTF8String does, degraded to its lead byte. A remainder holds no NUL
+    // (a lead byte is never 0), so the zero-terminated call is exact here.
+    if (remainderCount > 0) {
+        const std::string tail(reinterpret_cast<const char*>(remainder), remainderCount);
+        TransientPin pinWhole(ctx, whole->asObject(ctx));
+        whole = whole->appendLast(ctx, ctx->fromUTF8String(tail.c_str())->asString(ctx));
+    }
+    return whole->asObject(ctx);
+}
 
 namespace {
 
@@ -205,13 +226,13 @@ const proto::ProtoObject* prim_StrConcat(STRuntime& rt, proto::ProtoContext* ctx
     if (!rhs && isCharacterValue(ctx, a[0])) {
         const std::string out = toUtf8(r, ctx)
             + encodeCodepoint(static_cast<uint32_t>(a[0]->asLong(ctx)));
-        return ctx->fromUTF8String(out.c_str());
+        return makeString(ctx, out);
     }
     if (!rhs)
         throw std::runtime_error("Cannot append a non-string to a String "
                                  "(use printString or displayString to convert it)");
     std::string out = toUtf8(r, ctx) + toUtf8(a[0], ctx);
-    return ctx->fromUTF8String(out.c_str());
+    return makeString(ctx, out);
 }
 
 const proto::ProtoObject* prim_StrSize(STRuntime&, proto::ProtoContext* ctx,
@@ -264,7 +285,7 @@ const proto::ProtoObject* prim_CharValue(STRuntime&, proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_CharAsString(STRuntime&, proto::ProtoContext* ctx,
                                             const proto::ProtoObject* r,
                                             const proto::ProtoObject* const*, int) {
-    return ctx->fromUTF8String(encodeCodepoint(static_cast<uint32_t>(r->asLong(ctx))).c_str());
+    return makeString(ctx, encodeCodepoint(static_cast<uint32_t>(r->asLong(ctx))));
 }
 
 // --- String operations over UTF-8 code points ---------------------------------
@@ -285,8 +306,8 @@ const proto::ProtoObject* prim_StrCopyFromTo(STRuntime&, proto::ProtoContext* ct
         throw ClassedErrorSignal("SubscriptOutOfBounds", "copyFrom:to: range " + std::to_string(from) + " to "
                                  + std::to_string(to) + " out of bounds (size "
                                  + std::to_string(cps.size()) + ")");
-    return ctx->fromUTF8String(encodeAll(cps, static_cast<size_t>(from - 1),
-                                         static_cast<size_t>(to)).c_str());
+    return makeString(ctx, encodeAll(cps, static_cast<size_t>(from - 1),
+                                     static_cast<size_t>(to)));
 }
 
 uint32_t caseMap(uint32_t cp, bool upper) {
@@ -301,7 +322,7 @@ uint32_t caseMap(uint32_t cp, bool upper) {
 const proto::ProtoObject* mapCase(proto::ProtoContext* ctx, const proto::ProtoObject* r, bool upper) {
     std::vector<uint32_t> cps = decodeCodepoints(toUtf8(r, ctx));
     for (auto& cp : cps) cp = caseMap(cp, upper);
-    return ctx->fromUTF8String(encodeAll(cps, 0, cps.size()).c_str());
+    return makeString(ctx, encodeAll(cps, 0, cps.size()));
 }
 
 const proto::ProtoObject* prim_StrAsUppercase(STRuntime&, proto::ProtoContext* ctx,
@@ -333,7 +354,7 @@ const proto::ProtoObject* prim_StrReversed(STRuntime&, proto::ProtoContext* ctx,
                                            const proto::ProtoObject* const*, int) {
     std::vector<uint32_t> cps = decodeCodepoints(toUtf8(r, ctx));
     std::reverse(cps.begin(), cps.end());
-    return ctx->fromUTF8String(encodeAll(cps, 0, cps.size()).c_str());
+    return makeString(ctx, encodeAll(cps, 0, cps.size()));
 }
 
 std::string stringArg(proto::ProtoContext* ctx, const proto::ProtoObject* o, const char* who) {
@@ -356,7 +377,7 @@ const proto::ProtoObject* prim_StrCopyReplaceAll(STRuntime&, proto::ProtoContext
     std::string s = toUtf8(r, ctx);
     const std::string from = stringArg(ctx, a[0], "copyReplaceAll:with:");
     const std::string to = stringArg(ctx, a[1], "copyReplaceAll:with:");
-    if (from.empty()) return ctx->fromUTF8String(s.c_str());
+    if (from.empty()) return makeString(ctx, s);
     std::string out;
     size_t pos = 0, hit;
     while ((hit = s.find(from, pos)) != std::string::npos) {
@@ -365,7 +386,7 @@ const proto::ProtoObject* prim_StrCopyReplaceAll(STRuntime&, proto::ProtoContext
         pos = hit + from.size();
     }
     out.append(s, pos, std::string::npos);
-    return ctx->fromUTF8String(out.c_str());
+    return makeString(ctx, out);
 }
 
 const proto::ProtoObject* prim_StrTrimBoth(STRuntime&, proto::ProtoContext* ctx,
@@ -375,7 +396,7 @@ const proto::ProtoObject* prim_StrTrimBoth(STRuntime&, proto::ProtoContext* ctx,
     size_t b = 0, e = s.size();
     while (b < e && std::isspace(static_cast<unsigned char>(s[b]))) ++b;
     while (e > b && std::isspace(static_cast<unsigned char>(s[e - 1]))) --e;
-    return ctx->fromUTF8String(s.substr(b, e - b).c_str());
+    return makeString(ctx, std::string_view(s).substr(b, e - b));
 }
 
 // substrings / substrings: separators — an Array of the pieces between
@@ -393,7 +414,7 @@ const proto::ProtoObject* splitToArray(STRuntime& rt, proto::ProtoContext* ctx,
     for (size_t i = 0; i <= cps.size(); ++i) {
         if (i == cps.size() || isSep(cps[i])) {
             if (i > start) {
-                const proto::ProtoObject* piece = ctx->fromUTF8String(encodeAll(cps, start, i).c_str());
+                const proto::ProtoObject* piece = makeString(ctx, encodeAll(cps, start, i));
                 TransientPin pinPiece(ctx, piece);
                 parts = parts->appendLast(ctx, piece);
                 pinParts.reset(reinterpret_cast<const proto::ProtoObject*>(parts));
@@ -453,7 +474,7 @@ const proto::ProtoObject* prim_StrAsSymbol(STRuntime&, proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_SymAsString(STRuntime&, proto::ProtoContext* ctx,
                                            const proto::ProtoObject* r,
                                            const proto::ProtoObject* const*, int) {
-    return ctx->fromUTF8String(toUtf8(r, ctx).c_str());
+    return makeString(ctx, toUtf8(r, ctx));
 }
 
 } // anon

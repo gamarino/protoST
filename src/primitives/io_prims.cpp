@@ -1,6 +1,7 @@
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
 #include "primitives/BytesSupport.h"
+#include "primitives/StringSupport.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/TransientPin.h"
 #include "runtime/ClassedErrorSignal.h"
@@ -87,7 +88,7 @@ bool truthy(const PO* v) { return v == PROTO_TRUE; }
 const PO* boolean(bool b) { return b ? PROTO_TRUE : PROTO_FALSE; }
 
 const PO* string(proto::ProtoContext* ctx, const std::string& s) {
-    return ctx->fromUTF8String(s.c_str());
+    return makeString(ctx, s);
 }
 
 // A path the system hands to protoST code. The library (lib/kernel/io.st)

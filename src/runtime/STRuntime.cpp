@@ -23,6 +23,7 @@
 #include "modules/STModuleProvider.h"
 #include "modules/STForeignSend.h"
 #include "primitives/BytesSupport.h"
+#include "primitives/StringSupport.h"
 #include "protoCore.h"
 
 #include <algorithm>
@@ -1180,7 +1181,7 @@ STRuntime::materialize(proto::ProtoContext* ctx, const BytecodeModule& m,
             return ctx->fromString(m.constString(i).c_str(),
                                    static_cast<int>(m.constInteger(i)));
         case K::String:
-            return ctx->fromUTF8String(m.constString(i).c_str());
+            return makeString(ctx, m.constString(i));
         case K::Symbol: {
             // F6 v3 E5: a Smalltalk symbol literal (`#foo`) is interned as a
             // STRONG SYMBOL via createSymbol — eternal, recorded in the
