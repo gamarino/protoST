@@ -1,4 +1,5 @@
 #include "BytecodeModule.h"
+#include "runtime/NativeError.h"
 #include "protoCore.h"
 #include <algorithm>
 #include <cctype>
@@ -283,7 +284,7 @@ void BytecodeModule::emitWide(Op op, unsigned int arg, int line) {
     // significant byte; the engine latches it and shifts on each EXTEND seen.
     // The real opcode word always carries the low 8 bits.
     if (arg > 0x00FFFFFFu)
-        throw std::runtime_error("bytecode operand exceeds 24-bit limit");
+        throw NativeError("bytecode operand exceeds 24-bit limit");
     if (arg > 0xFFFFu) {
         emit(Op::EXTEND, static_cast<uint8_t>((arg >> 16) & 0xFF), line);
         emit(Op::EXTEND, static_cast<uint8_t>((arg >>  8) & 0xFF), line);

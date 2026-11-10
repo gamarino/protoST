@@ -30,9 +30,10 @@
 //          protoST exception value goes to its default action, and a foreign
 //          value leaves as the very same ProtoException.
 //       5. `ClassedErrorSignal` (a kernel Error subclass by name) and any
-//          other `std::exception` -- a C++ library failure, a module defect --
-//          are translated into a non-resumable protoST Error whose
-//          messageText is `what()`.
+//          other `std::exception` -- protoST's own NativeError, a C++ library
+//          failure, a module defect -- are translated into a non-resumable
+//          protoST Error whose messageText is `nativeErrorText(e)`: the full
+//          message of a NativeError (NUL included), `what()` otherwise.
 //       6. Anything else becomes a generic native Error.
 //
 // The signal paths can themselves throw (`UnwindToHandler` when a handler did
@@ -51,6 +52,7 @@
 #include "runtime/UnhandledSTException.h"
 #include "runtime/Interrupt.h"
 #include "runtime/ClassedErrorSignal.h"
+#include "runtime/NativeError.h"
 #include "debugger/DebuggerRuntime.h"
 #include "protoCore.h"
 
@@ -175,7 +177,7 @@ const proto::ProtoObject* translateNativeException(STRuntime& rt,
     }
     // --- a genuine native error: translate into a catchable protoST Error --
     catch (const ClassedErrorSignal& e) { return signalErrorNamed(rt, ctx, e.className(), e.message()); }
-    catch (const std::exception& e)     { return signalNativeError(rt, ctx, e.what()); }
+    catch (const std::exception& e)     { return signalNativeError(rt, ctx, nativeErrorText(e)); }
     catch (...)                         { return signalNativeError(rt, ctx, "native exception"); }
     if (signalled) return signalProtoException(rt, ctx, signalledValue, std::move(signalled));
     std::rethrow_exception(untouched);

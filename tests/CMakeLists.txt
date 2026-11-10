@@ -118,6 +118,15 @@ target_sources(protost_unit_tests PRIVATE
 target_sources(protost_unit_tests PRIVATE
     unit/test_timer_service.cpp
 )
+target_sources(protost_unit_tests PRIVATE
+    unit/test_list_index.cpp
+    unit/test_digest_runner.cpp
+    unit/test_protoio_errors.cpp
+    unit/test_binfile_guard.cpp
+)
+# The protoIO error cases synthesize protoio::Error values; the digest and
+# BinaryFile guard cases call protoio::digest and protoio::file.
+target_link_libraries(protost_unit_tests PRIVATE protoIO::protoio)
 if(WIN32)
     # UTF-8 process code page: the test names CTest passes on the command line
     # (several contain an em dash) reach Catch2 as the UTF-8 it listed.
@@ -143,7 +152,11 @@ endif()
 # the T3-c case keeps a runtime alive in a static for the rest of the process
 # (the Track Y and __st_send__ cases then find two runtimes and refuse the
 # import as ambiguous). Run cases singly: `protost_unit_tests "<name>"`.
-catch_discover_tests(protost_unit_tests)
+# Every unit case carries the `tsan` label (PROTOST_TSAN_TEST_PROPERTIES,
+# defined in the top-level CMakeLists.txt): the runtime's threads, the
+# scheduler, the GC root discipline and the BinaryFile guard are exercised
+# there.
+catch_discover_tests(protost_unit_tests PROPERTIES ${PROTOST_TSAN_TEST_PROPERTIES})
 
 # --- conformance suite (Track 6, slice 2) --------------------------------
 # A defensible suite derived from docs/LANGUAGE.md. Every tests/conformance/
@@ -167,7 +180,20 @@ foreach(conf_file ${PROTOST_CONFORMANCE_FILES})
                 "${conf_file}")
     # run_conformance.sh exits 77 for a program that reports "SKIP: <reason>".
     set_tests_properties("conformance/${conf_rel}" PROPERTIES SKIP_RETURN_CODE 77)
+    # The `tsan` label: every actor program, every BinaryFile program, and
+    # any other program that starts work on another thread (an actor, a
+    # Future, an Atom, a timer).
+    file(READ "${conf_file}" conf_text)
+    if(conf_rel MATCHES "^10-actors/" OR conf_name MATCHES "^binfile_"
+       OR conf_text MATCHES "asActor|asHighPriorityActor|Future|Atom|after:|within:|waitWithin:")
+        set_tests_properties("conformance/${conf_rel}" PROPERTIES ${PROTOST_TSAN_TEST_PROPERTIES})
+        if(PROTOST_TSAN)
+            set_tests_properties("conformance/${conf_rel}" PROPERTIES
+                ENVIRONMENT_MODIFICATION "${PROTOST_TSAN_CONFORMANCE_ENV}")
+        endif()
+    endif()
 endforeach()
+unset(conf_text)
 
 # --- examples smoke layer (Track 9) --------------------------------------
 # The examples/ tree (docs(examples): comprehensive runnable example set) is

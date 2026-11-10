@@ -28,7 +28,7 @@ dir ensureCreateDirectory.
  results := OrderedCollection new.
  actors do: [:a | results addAll: a wait].
  oks := results select: [:x | x isString not].
- named := results select: [:x | x isString and: [x includesSubstring: 'another operation that moves the end of the file is in progress']].
+ named := results select: [:x | x isString and: [x includesSubstring: 'BinaryFile>>append: another operation that moves the end of the file is in progress on this BinaryFile']].
  other := results size - oks size - named size.
  sorted := (oks asSortedCollection: [:a :b | a key <= b key]) asArray.
  expect := 0.

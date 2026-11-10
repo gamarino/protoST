@@ -13,20 +13,28 @@
      says atomically where an append landed. Concurrent appenders on one
      BinaryFile, or another process appending to the same file, are not
      supported.
-   - What is guarded, in this process, on one BinaryFile object: an end
-     guard for the operations that move the end of the file. append: and
-     truncateTo: need it ALONE (exclusive); a writeAt:bytes: that extends
-     the file holds it SHARED with other extending writes (each writes its
-     own bytes at its own offset). The call that finds the guard in a
-     conflicting mode signals an Error naming what collided and does
-     nothing. A writeAt:bytes: inside the file takes no claim; two writes
-     over the same bytes are the caller's race, as in any file API. So is a
-     writeAt:bytes: running while truncateTo: shrinks the file: the write
-     may then extend the file without the guard and overwrite bytes a later
-     append: puts there (the offsets append: answers stay correct).
+   - What is guarded, in this process, on one BinaryFile object: the end
+     guard (protoIO's file::EndGuard). The call that finds a conflicting
+     call in progress signals an Error naming its selector and does nothing:
+       append:          refused while an append:, a truncateTo: or a
+                        writeAt:bytes: that extends the file is in progress;
+       writeAt:bytes:   refused while a truncateTo: is in progress, and, when
+                        it extends the file, while an append: is;
+       truncateTo:      refused while any append:, writeAt:bytes: or
+                        truncateTo: is in progress (it needs the file alone).
+     Writes run together with each other, and with appends while they stay
+     inside the file. So, on one BinaryFile: the bytes of an append: land at
+     the offset it answers, nothing else moves the end of the file while it
+     writes them, and no write lands past the end of a file truncateTo: cut
+     meanwhile (a write judged inside the file stays inside). An appended
+     record is overwritten only by a writeAt:bytes: whose range its caller
+     chose to overlap it; two writes over the same bytes are never ordered,
+     as in any file API.
    - What cannot be detected: appenders or writers in other processes, or
-     through another BinaryFile object opened on the same file.
-     (A protoBaseST segment has a single writer actor.)
+     through another BinaryFile object opened on the same file (take lock
+     around them). (A protoBaseST segment has a single writer actor.)
+   - append: needs a regular file: on a pipe, a FIFO, a socket or a device it
+     signals FileSystemError and writes nothing.
    - writeAt:bytes: overwrites bytes at an offset, extending the file as
      needed. A file opened with #append refuses it on every platform.
 

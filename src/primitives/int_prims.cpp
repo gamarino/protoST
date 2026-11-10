@@ -1,4 +1,5 @@
 #include "protoST/STRuntime.h"
+#include "runtime/NativeError.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/ValueFormat.h"
@@ -51,7 +52,7 @@ namespace {
 void requireNumber(proto::ProtoContext* ctx, const proto::ProtoObject* v,
                    const char* who) {
     if (!isNumber(ctx, v)) {
-        throw std::runtime_error(std::string(who) +
+        throw NativeError(std::string(who) +
                                  ": argument is not a number");
     }
 }
@@ -81,7 +82,7 @@ const proto::ProtoObject* prim_##NAME(STRuntime& rt, proto::ProtoContext* ctx,  
                                        const proto::ProtoObject* r,                \
                                        const proto::ProtoObject* const* a,         \
                                        int argc) {                                 \
-    if (argc != 1) throw std::runtime_error(SELECTOR " expects 1 arg");            \
+    if (argc != 1) throw NativeError(SELECTOR " expects 1 arg");            \
     if (!isNumber(ctx, a[0]))                                                      \
         if (const proto::ProtoObject* adapted = adaptArgument(rt, ctx, r, a[0], SELECTOR)) \
             return adapted;                                                        \
@@ -115,7 +116,7 @@ static void checkDivisor(proto::ProtoContext* ctx, const proto::ProtoObject* d, 
 const proto::ProtoObject* prim_NumDiv(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* r,
                                        const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("/ expects 1 arg");
+    if (argc != 1) throw NativeError("/ expects 1 arg");
     if (!isNumber(ctx, a[0]))
         if (const proto::ProtoObject* adapted = adaptArgument(rt, ctx, r, a[0], "/"))
             return adapted;
@@ -159,7 +160,7 @@ static void floorDivMod(proto::ProtoContext* ctx, const proto::ProtoObject* r,
 const proto::ProtoObject* prim_NumIntDiv(STRuntime& rt, proto::ProtoContext* ctx,
                                           const proto::ProtoObject* r,
                                           const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("// expects 1 arg");
+    if (argc != 1) throw NativeError("// expects 1 arg");
     if (!isNumber(ctx, a[0]))
         if (const proto::ProtoObject* adapted = adaptArgument(rt, ctx, r, a[0], "//"))
             return adapted;
@@ -172,7 +173,7 @@ const proto::ProtoObject* prim_NumIntDiv(STRuntime& rt, proto::ProtoContext* ctx
 const proto::ProtoObject* prim_NumMod(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* r,
                                        const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("\\\\ expects 1 arg");
+    if (argc != 1) throw NativeError("\\\\ expects 1 arg");
     if (!isNumber(ctx, a[0]))
         if (const proto::ProtoObject* adapted = adaptArgument(rt, ctx, r, a[0], "\\\\"))
             return adapted;
@@ -186,7 +187,7 @@ const proto::ProtoObject* prim_NumMod(STRuntime& rt, proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_NumQuo(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* r,
                                        const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("quo: expects 1 arg");
+    if (argc != 1) throw NativeError("quo: expects 1 arg");
     if (!isNumber(ctx, a[0]))
         if (const proto::ProtoObject* adapted = adaptArgument(rt, ctx, r, a[0], "quo:"))
             return adapted;
@@ -195,7 +196,7 @@ const proto::ProtoObject* prim_NumQuo(STRuntime& rt, proto::ProtoContext* ctx,
     {
         // quo: answers an Integer, also for Float operands (as in Pharo).
         const double q = std::trunc(r->asDouble(ctx) / a[0]->asDouble(ctx));
-        if (!std::isfinite(q)) throw std::runtime_error("quo: result is not finite");
+        if (!std::isfinite(q)) throw NativeError("quo: result is not finite");
         if (q > -9.2e18 && q < 9.2e18) return ctx->fromLong(static_cast<long long>(q));
         char digits[400];
         std::snprintf(digits, sizeof(digits), "%.0f", q);
@@ -207,7 +208,7 @@ const proto::ProtoObject* prim_NumQuo(STRuntime& rt, proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_NumRem(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* r,
                                        const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("rem: expects 1 arg");
+    if (argc != 1) throw NativeError("rem: expects 1 arg");
     if (!isNumber(ctx, a[0]))
         if (const proto::ProtoObject* adapted = adaptArgument(rt, ctx, r, a[0], "rem:"))
             return adapted;
@@ -310,7 +311,7 @@ const proto::ProtoObject* prim_NumIsOdd(STRuntime&, proto::ProtoContext* ctx,
 // LargeInteger tower as protoCore implements it).
 void requireInteger(proto::ProtoContext* ctx, const proto::ProtoObject* v, const char* who) {
     if (!v || !v->isInteger(ctx))
-        throw std::runtime_error(std::string(who) + ": receiver and argument must be integers");
+        throw NativeError(std::string(who) + ": receiver and argument must be integers");
 }
 
 bool fitsSmallInteger(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
@@ -364,7 +365,7 @@ const proto::ProtoObject* prim_##NAME(STRuntime&, proto::ProtoContext* ctx,     
                                        const proto::ProtoObject* r,                \
                                        const proto::ProtoObject* const* a,         \
                                        int argc) {                                 \
-    if (argc != 1) throw std::runtime_error(SELECTOR " expects 1 arg");            \
+    if (argc != 1) throw NativeError(SELECTOR " expects 1 arg");            \
     requireInteger(ctx, r, SELECTOR);                                              \
     requireInteger(ctx, a[0], SELECTOR);                                           \
     if (fitsSmallInteger(ctx, r) && fitsSmallInteger(ctx, a[0]))                   \
@@ -387,11 +388,11 @@ const proto::ProtoObject* prim_IntBitInvert(STRuntime&, proto::ProtoContext* ctx
 const proto::ProtoObject* prim_IntBitShift(STRuntime&, proto::ProtoContext* ctx,
                                             const proto::ProtoObject* r,
                                             const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("bitShift: expects 1 arg");
+    if (argc != 1) throw NativeError("bitShift: expects 1 arg");
     requireInteger(ctx, r, "bitShift:");
     requireInteger(ctx, a[0], "bitShift:");
     const long long n = a[0]->asLong(ctx);
-    if (n > 1000000 || n < -1000000) throw std::runtime_error("bitShift: shift amount out of range");
+    if (n > 1000000 || n < -1000000) throw NativeError("bitShift: shift amount out of range");
     return n >= 0 ? r->shiftLeft(ctx, static_cast<int>(n))
                   : r->shiftRight(ctx, static_cast<int>(-n));
 }

@@ -2294,9 +2294,10 @@ blocks are frames inside one context per thread (1.3, 1.8).
                                     int argc);
    ```
    `argc` is the selector's argument count, `args[0..argc-1]` the arguments.
-   A wrong argument is reported by throwing `std::runtime_error` (the
-   engine's `translateNativeException` turns it into a catchable `Error`
-   whose `messageText` is the message), or by signalling a specific class
+   A wrong argument is reported by throwing `NativeError`
+   (`src/runtime/NativeError.h`, a `std::runtime_error` that keeps the whole
+   message, NUL included; the engine's `translateNativeException` turns it
+   into a catchable `Error` whose `messageText` is the message), or by signalling a specific class
    (`signalErrorOfClass`). Model: the arithmetic primitives of
    `src/primitives/int_prims.cpp` (`DEFBIN`, `requireNumber`).
 2. **Register and bind it** in the file's `install*Primitives` function:

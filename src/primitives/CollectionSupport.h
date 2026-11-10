@@ -6,24 +6,14 @@
 // is one place that knows it.
 
 #include "protoST/STRuntime.h"
+#include "runtime/ListIndex.h"   // listIndex: every index handed to a ProtoList
 #include "protoCore.h"
 
-#include <climits>
 #include <cstddef>
-#include <stdexcept>
 #include <utility>
 #include <vector>
 
 namespace protoST {
-
-// protoCore lists are indexed by int: an index beyond it cannot be addressed,
-// and a silent truncation would read the wrong element. Throws (an Error in
-// protoST) instead.
-inline int listIndex(size_t i) {
-    if (i > static_cast<size_t>(INT_MAX))
-        throw std::runtime_error("a collection of more than 2^31 - 1 elements cannot be indexed");
-    return static_cast<int>(i);
-}
 
 // True when `obj` has `target` in its prototype chain (the walk stops at the
 // protoST Object root, as the collection primitives do).

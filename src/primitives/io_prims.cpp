@@ -1,4 +1,6 @@
 #include "protoST/STRuntime.h"
+#include "runtime/NativeError.h"
+#include "runtime/ListIndex.h"
 #include "protoST/primitives.h"
 #include "primitives/ArgSupport.h"
 #include "primitives/BytesSupport.h"
@@ -68,7 +70,7 @@ std::vector<std::string> g_programArgs;
 
 std::string str(proto::ProtoContext* ctx, const PO* v, const char* who) {
     const proto::ProtoString* s = v ? v->asString(ctx) : nullptr;
-    if (!s) throw std::runtime_error(errorPrefix(who) + "a String was expected");
+    if (!s) throw NativeError(errorPrefix(who) + "a String was expected");
     return s->toStdString(ctx);
 }
 
@@ -84,7 +86,7 @@ int timeoutArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
 // The count argument of next:, nextBytes: and the like.
 size_t countArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
     const long long n = smallIntegerArg(ctx, v, who, "the count");
-    if (n < 0) throw std::runtime_error(errorPrefix(who) + "the count must not be negative");
+    if (n < 0) throw NativeError(errorPrefix(who) + "the count must not be negative");
     return static_cast<size_t>(n);
 }
 
@@ -123,10 +125,10 @@ std::vector<const PO*> elements(STRuntime& rt, proto::ProtoContext* ctx, const P
     const PO* d = arr->getAttribute(ctx, rt.bootstrap().sym.data);
     if (d && d != PROTO_NONE) l = d->asList(ctx);
     if (!l && !arr->asString(ctx)) l = arr->asList(ctx);
-    if (!l) throw std::runtime_error(errorPrefix(who) + "an Array was expected");
+    if (!l) throw NativeError(errorPrefix(who) + "an Array was expected");
     const proto::proto_ulong n = l->getSize(ctx);
     out.reserve(n);
-    for (proto::proto_ulong i = 0; i < n; ++i) out.push_back(l->getAt(ctx, static_cast<int>(i)));
+    for (proto::proto_ulong i = 0; i < n; ++i) out.push_back(l->getAt(ctx, listIndex(i)));
     return out;
 }
 
@@ -168,13 +170,13 @@ std::string dataArg(STRuntime& rt, proto::ProtoContext* ctx, const PO* v, const 
     const PO* d = (v && v != PROTO_NONE)
         ? v->getAttribute(ctx, rt.bootstrap().sym.data) : nullptr;
     const proto::ProtoList* l = (d && d != PROTO_NONE) ? d->asList(ctx) : nullptr;
-    if (!l) throw std::runtime_error(errorPrefix(who) + "a String or a ByteArray was expected");
+    if (!l) throw NativeError(errorPrefix(who) + "a String or a ByteArray was expected");
     std::string out;
     const proto::proto_ulong n = l->getSize(ctx);
     out.reserve(n);
     for (proto::proto_ulong i = 0; i < n; ++i) {
-        const long long b = smallIntegerArg(ctx, l->getAt(ctx, static_cast<int>(i)), who, "a byte");
-        if (b < 0 || b > 255) throw std::runtime_error(errorPrefix(who) + "bytes are integers from 0 to 255");
+        const long long b = smallIntegerArg(ctx, l->getAt(ctx, listIndex(i)), who, "a byte");
+        if (b < 0 || b > 255) throw NativeError(errorPrefix(who) + "bytes are integers from 0 to 255");
         out.push_back(static_cast<char>(b));
     }
     // Once per process, whichever thread gets here first.
@@ -189,7 +191,7 @@ std::string dataArg(STRuntime& rt, proto::ProtoContext* ctx, const PO* v, const 
 
 #define PRIM(NAME) const PO* NAME(STRuntime& rt, proto::ProtoContext* ctx, const PO* r, \
                                    const PO* const* a, int argc)
-#define ARGS(N, SEL) if (argc != (N)) throw std::runtime_error(SEL " expects " #N " argument(s)"); \
+#define ARGS(N, SEL) if (argc != (N)) throw NativeError(SEL " expects " #N " argument(s)"); \
                      (void) rt; (void) r; (void) a
 
 // ---------------------------------------------------------------- system
@@ -380,7 +382,7 @@ PRIM(prim_FileOpen) {
     else if (mode == "w") m = protoio::file::Mode::Write;
     else if (mode == "a") m = protoio::file::Mode::Append;
     else if (mode == "rw") m = protoio::file::Mode::ReadWrite;
-    else throw std::runtime_error("open: mode must be r, w, a or rw");
+    else throw NativeError("open: mode must be r, w, a or rw");
     // Opening a FIFO waits for its other end.
     return ctx->fromLong(blocking(rt, ctx, [&] { return protoio::file::open(path, m); }));
 }
@@ -497,7 +499,7 @@ PRIM(prim_TempDir) { ARGS(0, "__fileTempDir"); return string(ctx, portablePath(p
 PRIM(prim_Run) {
     ARGS(2, "__osRun:input:");
     const std::vector<std::string> argv = argvArg(rt, ctx, a[0], "run:arguments:");
-    if (argv.empty()) throw std::runtime_error("run:arguments: needs a command");
+    if (argv.empty()) throw NativeError("run:arguments: needs a command");
     std::optional<std::string> input;
     if (a[1] && a[1] != PROTO_NONE) input = str(ctx, a[1], "input:");
     const protoio::process::RunResult res = blocking(rt, ctx, [&] { return protoio::process::run(argv, input); });
@@ -513,7 +515,7 @@ PRIM(prim_Run) {
 PRIM(prim_Shell) {
     ARGS(2, "__osShell:input:");
     const std::string command = osStringArg(ctx, a[0], "shell:", "the command line");
-    if (command.empty()) throw std::runtime_error("shell: needs a command line");
+    if (command.empty()) throw NativeError("shell: needs a command line");
     std::optional<std::string> input;
     if (a[1] && a[1] != PROTO_NONE) input = str(ctx, a[1], "input:");
     const protoio::process::RunResult res = blocking(rt, ctx, [&] { return protoio::process::shell(command, input); });
@@ -525,7 +527,7 @@ PRIM(prim_Shell) {
 PRIM(prim_Spawn) {
     ARGS(1, "__osSpawn:");
     const std::vector<std::string> argv = argvArg(rt, ctx, a[0], "spawn:arguments:");
-    if (argv.empty()) throw std::runtime_error("spawn:arguments: needs a command");
+    if (argv.empty()) throw NativeError("spawn:arguments: needs a command");
     return ctx->fromLong(immediate([&] { return protoio::process::spawn(argv); }));
 }
 

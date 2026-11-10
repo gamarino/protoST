@@ -128,7 +128,10 @@ trap 'exit 143' TERM
 # instead of waiting on the terminal.
 out="$(cd "$TEST_DIR" && timeout "${CONFORMANCE_TIMEOUT:-60}" "$PROTOST" --print-last "$TEST_BASE" </dev/null 2>"$err_file")"
 rc=$?
-err="$(cat "$err_file" 2>/dev/null)"
+# A shell variable cannot hold a NUL byte: an error text that contains one
+# (native_error_nul_uncaught.st) is compared without it, dropped here
+# explicitly rather than by the shell with a warning.
+err="$(tr -d '\000' < "$err_file" 2>/dev/null)"
 
 # last non-empty line of stdout (the printed program value)
 last_line="$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -n 1)"

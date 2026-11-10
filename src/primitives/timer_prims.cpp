@@ -20,6 +20,7 @@
 // (the class and the text are the kernel's, and C++ looks no global up by name).
 
 #include "protoST/STRuntime.h"
+#include "runtime/NativeError.h"
 #include "protoST/primitives.h"
 #include "primitives/ArgSupport.h"
 #include "runtime/Bootstrap.h"
@@ -59,7 +60,7 @@ TimerService::TimePoint deadlineAfter(proto::ProtoContext* ctx, const PO* ms, co
                                       long long& n) {
     n = smallIntegerArg(ctx, ms, who, "the milliseconds");
     if (n < 0)
-        throw std::runtime_error(errorPrefix(who) + "the milliseconds must not be negative, not "
+        throw NativeError(errorPrefix(who) + "the milliseconds must not be negative, not "
                                  + std::to_string(n));
     const TimerService::TimePoint now = TimerService::Clock::now();
     const auto room = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -70,7 +71,7 @@ TimerService::TimePoint deadlineAfter(proto::ProtoContext* ctx, const PO* ms, co
 
 const PO* scheduleOn(STRuntime& rt, proto::ProtoContext* ctx, const PO* r,
                      const PO* const* a, int argc, bool reject, const char* who) {
-    if (argc != 1) throw std::runtime_error(std::string(who) + " expects 1 argument");
+    if (argc != 1) throw NativeError(std::string(who) + " expects 1 argument");
     long long ms = 0;
     const TimerService::TimePoint deadline = deadlineAfter(ctx, a[0], who, ms);
     if (!isSettled(rt, ctx, r)) rt.timerService().schedule(ctx, deadline, r, reject, ms);
@@ -108,7 +109,7 @@ void runTimerTask(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObj
     bool understood = false;
     sendDynamic(rt, ctx, future, b.sym.timedOutAfter, args, 1, &understood);
     if (!understood)
-        throw std::runtime_error("Future: a deadline passed, but Future does not understand "
+        throw NativeError("Future: a deadline passed, but Future does not understand "
                                  "__timedOutAfter: (lib/kernel/future.st is not loaded)");
 }
 

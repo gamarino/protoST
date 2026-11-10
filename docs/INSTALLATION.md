@@ -8,14 +8,13 @@ dependency on protoCore's own package instead of shipping a copy.
 On a Debian or Ubuntu machine where protoCore's package is installed, the
 library is `/usr/lib/x86_64-linux-gnu/libprotoCore.so.5`, a link to
 `libprotoCore.so.<version>`. protoST 0.9.0 needs protoCore 3.4.0 or later
-(*Prerequisites*), as 0.8.1 and 0.8.0 did (0.7.0 needed 3.0.0). No `.deb`
-has been built for 0.9.0 yet: the last published one is 0.8.1's, built and
-tested against protoCore 3.5.0, the release to install with it, which depends
-on `protocore (>= 3.5.0)` through protoCore's shlibs file. CI builds against
-protoCore 3.5.0 on Linux, macOS and Windows, and against 3.4.0, the declared
-minimum, in one Linux job (the floor job); it pins protoIO 0.3.0 (main
-`002ab8a`), which 0.9.0 requires (see *Prerequisites*). The suite was last run
-locally (2026-11-10) against protoCore 3.5.0 and the protoIO 0.3.0 tree.
+(*Prerequisites*), as 0.8.1 and 0.8.0 did (0.7.0 needed 3.0.0). Its `.deb`
+is built and tested against protoCore 3.5.2, the release to install with it,
+and depends on `protocore (>= 3.5.2)` through protoCore's shlibs file. CI
+builds against protoCore 3.5.2 on Linux, macOS and Windows, and against
+3.4.0, the declared minimum, in one Linux job (the floor job); it pins protoIO
+0.4.0 (tag `v0.4.0`), which 0.9.0 requires (see *Prerequisites*). The suite
+was last run locally (2026-11-10) against protoCore 3.5.2 and protoIO 0.4.0.
 
 ---
 
@@ -27,7 +26,9 @@ locally (2026-11-10) against protoCore 3.5.0 and the protoIO 0.3.0 tree.
   Fedora/RHEL, `brew install readline` on macOS). It is a hard requirement:
   `find_library(READLINE_LIBRARY NAMES readline REQUIRED)`, except on Windows,
   where the REPL uses the console's own line editing (*Windows (MSVC)*).
-- **protoIO 0.3.0 or a later 0.3.x** at build time only (0.3.0 adds the
+- **protoIO 0.4.0 or a later 0.4.x** at build time only (0.4.0 adds
+  `file::EndGuard`, the end guard `BinaryFile` uses, and the `Conflict`
+  error kind; 0.3.0 added the
   byte-level functions behind `ByteArray`, `BinaryFile` and `MessagePack`:
   `encoding`, `digest`, `msgpack`, positioned file reads and writes,
   `appendData`, `truncate`, `sync`, the file lock and `replace`; earlier
@@ -35,7 +36,7 @@ locally (2026-11-10) against protoCore 3.5.0 and the protoIO 0.3.0 tree.
   listener on a host-less address (0.2.2) and `readBufferedLine` (0.2.3, with
   which `nextLine` takes a line already in protoIO's read buffer without
   leaving the collector's quorum); protoIO's package is compatible within one
-  minor version, so a 0.2 or 0.4 is refused): the I/O
+  minor version, so a 0.3 or 0.5 is refused): the I/O
   library shared by the protoCore
   runtimes (files, processes, TCP, UDP, TLS, HTTP), linked statically, so the
   installed `protost` does not depend on it. Either install its `protoio-dev`
@@ -124,6 +125,66 @@ Pass `-DPROTOCORE_REQUIRE_PACKAGE=ON` to turn the fallback into a hard error.
 Switching a build directory between the two modes leaves a stale
 `PROTOCORE_LIBRARY` cache entry; delete the build directory rather than
 reconfiguring in place.
+
+---
+
+## Running the tests under ThreadSanitizer
+
+`-DPROTOST_TSAN=ON` builds protoST with `-fsanitize=thread` (GCC or Clang),
+with the flags protoIO's `PROTOIO_TSAN` uses. TSan finds a race only in code
+it instruments and reports false positives around code it cannot see, so the
+whole stack must be instrumented:
+
+- **protoIO** is always the sibling `../protoIO`, compiled inside protoST's
+  build with the same flags (an installed protoIO package is ignored under
+  `PROTOST_TSAN`).
+- **protoCore** must be a TSan build of its own, installed in a prefix of its
+  own. protoCore has no sanitizer option; the flags are given directly. Its
+  package exports the library and two conformance targets, which the install
+  needs:
+
+```bash
+F="-fsanitize=thread -g -O1 -fno-omit-frame-pointer"
+cmake -S protoCore -B protoCore/build_tsan -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      -DCMAKE_C_FLAGS="$F" -DCMAKE_CXX_FLAGS="$F" \
+      -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=thread \
+      -DCMAKE_INSTALL_PREFIX="$HOME/tsan-prefix"
+cmake --build protoCore/build_tsan -j4 \
+      --target protoCore protoCoreConformance protocore-conformance-isolate
+cmake --install protoCore/build_tsan
+
+cd protoST
+cmake -B build_tsan -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPROTOST_TSAN=ON \
+      -DPROTO_CORE_PREFIX="$HOME/tsan-prefix" -DPROTOCORE_REQUIRE_PACKAGE=ON
+cmake --build build_tsan -j4
+ctest --test-dir build_tsan -L tsan -j3 --timeout 900 < /dev/null
+```
+
+`PROTOCORE_REQUIRE_PACKAGE=ON` keeps the build from falling back to an
+uninstrumented `../protoCore/build_release`; `ldd build_tsan/protost` shows
+which `libprotoCore` it runs with.
+
+The `tsan` label selects the tests that exercise more than one thread: every
+unit case, the conformance programs that use actors, Futures, Atoms, timers or
+`BinaryFile`, and the concurrency CLI tests (`ctest -L tsan -N` lists them).
+In a `PROTOST_TSAN` build, each runs with `TSAN_OPTIONS` that write TSan's
+reports to `build_tsan/tsan-reports/report.<pid>` and read the suppressions in
+`tsan.supp`. Two fixture tests frame the run: `tsan_reports_clear` empties
+that directory first, and `tsan_reports_check` fails, printing every report,
+if any process wrote one. So a race fails the run even in a test that expects
+an error exit, or in a child process a CLI test starts. A suppression in
+`tsan.supp` is only for a race that is not a defect, with its reason; a race
+in protoST is fixed.
+
+Measured on 2026-11-10 (6 cores): protoCore's library builds in about 3
+minutes, protoST in about 4, and the 580 tests of the label run in 7 to 8
+minutes with `-j3`. Against protoCore 3.5.2 the run is clean; protoCore 3.5.0
+reports a race in `ProtoSpace::newThread` (`KNOWN_ISSUES.md` K10), so use
+3.5.2 or later. The CI job builds protoCore 3.5.2 with TSan and gates.
+
+On a kernel with 32 bits of mmap randomisation (`vm.mmap_rnd_bits`), older
+TSan runtimes stop with "unexpected memory mapping"; `sudo sysctl
+vm.mmap_rnd_bits=28` works around it (the CI job does this).
 
 ---
 
@@ -281,18 +342,18 @@ using the Linux packages:
 wsl --install -d Ubuntu-24.04
 
 # Then, in the Ubuntu shell: the two packages of the GitHub releases.
-wget https://github.com/numaes/protoCore/releases/download/v3.5.0/protoCore-3.5.0-Linux.deb
-wget https://github.com/gamarino/protoST/releases/download/v0.8.1/protost-0.8.1-Linux.deb
-sudo apt install ./protoCore-3.5.0-Linux.deb ./protost-0.8.1-Linux.deb
+wget https://github.com/numaes/protoCore/releases/download/v3.5.2/protoCore-3.5.2-Linux.deb
+wget https://github.com/gamarino/protoST/releases/download/v0.9.0/protost-0.9.0-Linux.deb
+sudo apt install ./protoCore-3.5.2-Linux.deb ./protost-0.9.0-Linux.deb
 protost --version
 ```
 
 The packages are attached to the GitHub releases
-[protoCore v3.5.0](https://github.com/numaes/protoCore/releases/tag/v3.5.0)
-and [protoST v0.8.1](https://github.com/gamarino/protoST/releases/tag/v0.8.1)
+[protoCore v3.5.2](https://github.com/numaes/protoCore/releases/tag/v3.5.2)
+and [protoST v0.9.0](https://github.com/gamarino/protoST/releases/tag/v0.9.0)
 (built on Ubuntu 24.04, x86_64). The same commands install them on Ubuntu
-24.04 itself. Built from source, protoST 0.8.1's floor is protoCore 3.4.0;
-the `.deb` depends on `protocore (>= 3.5.0)`, the release CI builds against
+24.04 itself. Built from source, protoST 0.9.0's floor is protoCore 3.4.0;
+the `.deb` depends on `protocore (>= 3.5.2)`, the release CI builds against
 (*Prerequisites*). The package also installs the FAST talk's demos, ready to
 run: `cd /usr/share/protoST/talks/2026-10-15-fas/demos && ./check_all.sh`
 (demo 4 needs `python3`). A machine that still has an older protoCore package (the

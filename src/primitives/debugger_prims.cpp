@@ -3,6 +3,7 @@
 #include "debugger/DebuggerRuntime.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/ExecutionEngine.h"
+#include "runtime/NativeError.h"
 #include <cstdio>
 #include "protoCore.h"
 
@@ -16,8 +17,8 @@ const proto::ProtoObject* prim_DebuggerHalt(STRuntime& rt, proto::ProtoContext* 
     if (!rt.debugger().attached()) {
         // Without a debugger a halt cannot stop: say so, with where it
         // happened, and continue (a silent nil hid the halt entirely).
-        std::fprintf(stderr, "halt: no debugger attached (run with protost -d); continuing\n%s\n",
-                     ExecutionEngine::describeActiveStack(3).c_str());
+        std::fputs("halt: no debugger attached (run with protost -d); continuing\n", stderr);
+        writeWholeLine(stderr, ExecutionEngine::describeActiveStack(3));
         return PROTO_NONE;
     }
     std::string reason = "user halt";

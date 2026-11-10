@@ -1,5 +1,6 @@
 // TimerService.cpp -- see TimerService.h for the design.
 #include "runtime/TimerService.h"
+#include "runtime/NativeError.h"
 
 #include "protoST/STRuntime.h"
 #include "runtime/Bootstrap.h"
@@ -166,7 +167,7 @@ void TimerService::startThread(proto::ProtoContext* ctx) {
     if (failed) std::rethrow_exception(failed);
     // The entry just scheduled stays queued: the next schedule() tries to
     // start the thread again, and stop() drops it at exit.
-    if (!t) throw std::runtime_error("Future: the timer thread could not be started");
+    if (!t) throw NativeError("Future: the timer thread could not be started");
 }
 
 void TimerService::stop(proto::ProtoContext* ctx) {
@@ -322,6 +323,9 @@ void TimerService::run(proto::ProtoContext* ctx) {
                 fire(ctx, due[i]);
                 done = true;
             } catch (const std::exception& ex) {
+                // what(), not nativeErrorText: this path runs when memory is
+                // short and must not copy the text. A hand-over failure is
+                // the runtime's own (an allocation), never user text.
                 reportHandOverFailure(ex.what());
             } catch (...) {
                 reportHandOverFailure("an allocation failed");

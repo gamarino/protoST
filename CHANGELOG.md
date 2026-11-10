@@ -7,9 +7,19 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## 0.9.0 — bytes, binary files, encodings, MessagePack and timers (2026-11-10)
 
-**Requires protoIO 0.3.0** (the declared minimum for a build from source,
-`PROTOIO_MIN_VERSION`; a 0.2.x checkout is refused at configure time). The
-protoCore floor stays 3.4.0 (SOVERSION 5). Design record:
+Released 2026-11-10.
+
+**Requires protoIO 0.4.0** (tag `v0.4.0`; the declared minimum for a build
+from source, `PROTOIO_MIN_VERSION`; a 0.3.x checkout is refused at configure
+time): the `BinaryFile` end guard is protoIO's `file::EndGuard`. **Built and
+tested against protoCore 3.5.2** (SOVERSION 5), which fixes a race in
+`ProtoSpace::newThread` that protoST reaches by starting workers from worker
+threads (`KNOWN_ISSUES.md` K10). The declared protoCore minimum for a build
+from source stays 3.4.0, which CI's floor entry builds; the `.deb` is built
+against the 3.5.2 package, so it depends on `protocore (>= 3.5.2)` through
+protoCore's shlibs file, besides the declared `protocore (>= 3.4.0),
+protocore (<< 4.0.0)`. CI pins protoCore `v3.5.2` and protoIO `v0.4.0` on
+Linux, macOS and Windows. Design record:
 `docs/superpowers/specs/2026-11-09-bytes-files-timers-design.md`; the language
 reference is `docs/LANGUAGE.md` §12.12, the tutorial is chapter 15 (§15.11)
 and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
@@ -26,8 +36,34 @@ and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
 - **`binaryContents: nil` and `binaryContents: 42` now fail** with
   "a String or a ByteArray was expected". They used to write an empty file
   without a word. A non-byte in an Array fails as before.
+- **`on:do:on:do:` searches its pairs in written order**, the first pair
+  first, as the clauses of a try/catch: `[1/0] on: ZeroDivide do: [:e | 1]
+  on: Error do: [:e | 2]` answers `1`; 0.8.1 answered `2` (it searched the
+  second pair first). And the two pairs of one construct no longer catch each
+  other: an exception signalled, or passed, by one pair's handler goes to an
+  enclosing handler; in 0.8.1 the other pair could take it. Pharo has no
+  `on:do:on:do:`; this is protoST's extension, now with the order of
+  `try`/`except` (LANGUAGE.md §8.3).
+- **Indices** (details under *Fixed*):
+  - an Integer index out of range signals `SubscriptOutOfBounds` everywhere,
+    however large: the indexing methods written in Smalltalk (`Interval`,
+    `OrderedCollection>>removeAt:` and `add:beforeIndex:`,
+    `ByteArray>>copyReplaceFrom:to:with:`) signalled a plain `Error`, and an
+    index of 2^63 or more `ArithmeticError`;
+  - a non-Integer index signals `Error` "... the index: an Integer was
+    expected": a Float index raised protoCore's `InvalidArgument` (so a
+    handler for `InvalidArgument` no longer catches it), and
+    `NumericInterval>>at:` accepted one;
+  - a `Character` index is refused, as in Pharo; it was read as its code
+    point (`#(10 20 30) at: (Character value: 2)` answered `20`).
+- **`BinaryFile`**: `truncateTo:` is refused while any `writeAt:bytes:` runs
+  on the same object (the end guard covers in-file writes too), and `append:`
+  on a file that is not a regular file (a FIFO, a pipe, a device) signals
+  `FileSystemError` and writes nothing (details under *Changed*).
 - `NUL` is kept in strings now (see below), so a program that relied on text
-  being cut at a NUL sees the whole text.
+  being cut at a NUL sees the whole text; diagnostics (the uncaught error, an
+  unhandled `Warning`, an unobserved actor error, parse and compile errors)
+  print it whole too.
 - **A string handed to the OS that contains NUL signals `Error`** ("... must
   not contain NUL", as CPython's `ValueError`): a path, an argv element, a
   shell command line, an environment name or value, a host name, a module
@@ -80,8 +116,53 @@ and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
   `asUppercase`, `reversed`, `substrings`, `trimBoth`, `copyReplaceAll:with:`,
   `asSymbol`, `perform:` and a string literal that contains a NUL were all
   cut at the first NUL through `c_str()`. They are built with an explicit
-  length now. Diagnostic text built by `std::runtime_error` can still be cut
-  (`KNOWN_ISSUES.md` K7).
+  length now. So are the texts of native errors: protoST throws `NativeError`,
+  which keeps the whole message, and every site that turns one into a
+  Smalltalk error reads it whole (`nativeErrorText`), so `ByteArray fromHex:
+  '0', NUL, 'zz'` no longer reports `ByteArray fromHex: '0`. The command line
+  and the REPL print diagnostics (the uncaught error, an unhandled
+  `Warning`'s text, the unobserved actor error, parse and compile errors,
+  REPL commands) and printed values whole as well
+  (`KNOWN_ISSUES.md` K7, resolved).
+- **Every index handed to a protoCore list goes through `listIndex`**, which
+  refuses an index past `INT_MAX` with an `Error`; about 30 sites narrowed it
+  with `static_cast<int>`, which would have read or replaced the wrong
+  element of a list with more than 2^31 - 1 elements. An index past the int
+  range on a small collection (`#(1 2 3) at: (2 raisedTo: 32) + 1`) was
+  already refused by the bounds check and still is.
+- **One rule for every index: an Integer out of range, however large,
+  signals `SubscriptOutOfBounds`; anything else signals `Error`** "... the
+  index: an Integer was expected".
+  - An index of 2^63 or more (or a negative `LargeInteger`) signals
+    `SubscriptOutOfBounds`, with its exact digits; it raised `ArithmeticError`
+    ("LargeInteger value exceeds long long range").
+  - The primitives read their index through one reader
+    (`src/primitives/IndexArg.h`): `at:` of `Array`, `OrderedCollection`,
+    `Interval` (the native one, with SmallInteger bounds and an exact
+    stride) and `String`; `at:put:` of `Array` and `OrderedCollection`;
+    `copyFrom:to:` of `String` and `ByteArray`; `ByteArray at:`; and the
+    packed reads of `ByteArray` (`unsignedByteAt:`, `signedByteAt:`, and
+    `unsignedShortAt:bigEndian:`, `signedShortAt:bigEndian:`,
+    `unsignedLongAt:bigEndian:`, `signedLongAt:bigEndian:`,
+    `unsignedLong64At:bigEndian:`, `signedLong64At:bigEndian:`,
+    `float32At:bigEndian:`, `float64At:bigEndian:`).
+  - The indexing methods written in Smalltalk follow the same rule
+    (`Object>>__checkIndex:between:and:for:`): `at:` of every other
+    `Interval` (a `NumericInterval`: empty or single-element, an inexact
+    stride, Float, Fraction or LargeInteger bounds; and so its `first` and
+    `last`), `OrderedCollection>>removeAt:` and `add:beforeIndex:`, and
+    `ByteArray>>copyReplaceFrom:to:with:`. They signalled a plain `Error`
+    for an index out of range (`(1 to: 0) at: 1` reported "Interval>>at::
+    index 1 out of range 1..0", with a doubled colon), and
+    `NumericInterval>>at:` accepted a Float index (`(1 to: 5 by: 0.5) at:
+    1.0` answered `1.0`). `copyFrom:to:` of `Array`, `OrderedCollection` and
+    `Interval` reads its elements with `at:`, so it follows the rule too.
+  - **A Character index is refused**, as in Pharo: `asLong` read it as its
+    code point, so `#(10 20 30) at: (Character value: 2)` answered `20` and
+    `'abcdef' copyFrom: (Character value: 2) to: 3` answered `'bc'`. A
+    Float index, refused before by protoCore's `InvalidArgument`, is now
+    the same `Error`, so a handler for `InvalidArgument` no longer catches
+    a non-Integer index.
 - **`STRuntime::enqueueTask` had no consumer**: a task put on the live
   registry's list was never run and the list grew for ever. `drainOne` now runs
   queued tasks first (`runOneTask`); the timer service uses it.
@@ -103,6 +184,12 @@ and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
 - Iterating a collection while a block replaces its storage kept raw pointers
   across allocation in `forEachElement`, `dictForEachEntry` and
   `dictionaryEntries`; the snapshot is rooted now.
+- **A data race in the debugger**, found by the ThreadSanitizer job: two
+  threads resuming from a DAP stop at once both wrote the debugger's
+  `lastCommand_`, a single debugger-wide copy of the resume command that
+  nothing read. The command is applied to the resuming thread's own stepping
+  state, so the shared field is gone. Every debugger test (`cli_debugger`,
+  `cli_repl` and all `cli_dap*`) now carries the `tsan` label.
 
 ### Changed
 
@@ -110,17 +197,44 @@ and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
   `docs/STATUS.md:323` ("Binary data is an Array of integers") is corrected.
 - Version 0.9.0 in the REPL banner and the HTTP client's `User-Agent`.
 - Digests, CRC-32 and base64 over 64 KiB or more run outside the collector's
-  quorum, so they never hold up a collection.
+  quorum, so they never hold up a collection. The decision is one function
+  (`runDigest`, `src/primitives/DigestRunner.h`) that every digest primitive
+  calls. A unit test calls `runDigest` directly and observes the unmanaged
+  state from inside the digest on both sides of the threshold; that each
+  primitive calls it, with its input's size, is shown by the code, not by a
+  test.
+- **The `BinaryFile` end guard is protoIO's** (`file::EndGuard`, protoIO
+  0.4.0), and it now covers in-file writes too: `truncateTo:` is refused while
+  any `writeAt:bytes:` runs, so a write judged inside the file can no longer
+  land past the end of a file a concurrent `truncateTo:` cut (that race was
+  the caller's before). The refusals name their selector
+  (`BinaryFile>>append:`, `writeAt:bytes:`, `truncateTo:`). A unit test
+  holds each use of a `BinaryFile`'s own guard and runs the three primitives
+  from Smalltalk, so it shows which use each takes and every refusal text.
+  `append:` on a file that is not a
+  regular file (a FIFO, a pipe, a device) signals `FileSystemError` and
+  writes nothing.
+
+- **ThreadSanitizer build and label.** `-DPROTOST_TSAN=ON` builds protoST,
+  and the sibling protoIO, with `-fsanitize=thread`; `ctest -L tsan` runs the
+  580 tests that exercise more than one thread, with TSan's reports written
+  to files and checked by a fixture at the end (`docs/INSTALLATION.md`,
+  "Running the tests under ThreadSanitizer"). CI runs it in a `tsan` job
+  that gates, against a TSan build of protoCore 3.5.2 (3.5.0 has a race in
+  `newThread`, K10).
 
 ### Known limitations (not defects of this release)
 
-K7 to K12 in `KNOWN_ISSUES.md`: diagnostic text cut at a NUL, the `BinaryFile`
-end guard and what it cannot see (and the protoIO 0.3.1 follow-up), timers
-and exit, what the tests do not prove (no ThreadSanitizer build; `InternalError`
-cannot be forced; the macOS and Windows behaviour of the visible skip is
-unconfirmed until CI runs), protoCore's missing structural list split, and
-the NUL check for OS strings that protoIO itself does not make yet (0.3.1).
-CI pins protoIO 0.3.0 (`PROTOIO_REF`, main `002ab8a`) in both workflows.
+K8 to K11 in `KNOWN_ISSUES.md`: what the `BinaryFile` end guard cannot see
+(another `BinaryFile` object, another process), timers and exit, what the
+tests do not prove (a clean ThreadSanitizer run covers the interleavings it
+saw, not all of them; `InternalError` cannot be forced from a program, so its
+mapping is tested from C++; the macOS and Windows behaviour of the visible
+skip is confirmed only by CI), protoCore's missing structural list split, and
+K13, a mailbox batch of more than 2^31 - 1 messages, which no program can
+reach and which would be lost. K12 (protoIO did not refuse a NUL in an OS
+string) is resolved by protoIO 0.4.0. The `Array` argument deprecation ends
+in 0.10.0 (D45).
 
 ## 0.8.1 — on protoCore 3.5.0 (2026-10-31)
 

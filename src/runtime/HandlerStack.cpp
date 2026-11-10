@@ -1,4 +1,5 @@
 #include "HandlerStack.h"
+#include "runtime/ListIndex.h"
 #include "protoCore.h"
 
 #include <atomic>
@@ -19,11 +20,13 @@ thread_local std::vector<HandlerEntry> g_handlerStack;
 } // namespace
 
 proto::proto_ulong handlerStackPush(const proto::ProtoObject* guardClass,
-                               const proto::ProtoObject* handlerBlock) {
+                               const proto::ProtoObject* handlerBlock,
+                               proto::proto_ulong constructId) {
     HandlerEntry e;
     e.guardClass   = guardClass;
     e.handlerBlock = handlerBlock;
     e.handlerId    = g_nextHandlerId.fetch_add(1, std::memory_order_relaxed);
+    e.constructId  = constructId != 0 ? constructId : e.handlerId;
     e.enabled      = true;
     g_handlerStack.push_back(e);
     return e.handlerId;
@@ -64,7 +67,7 @@ static bool matchesGuard(proto::ProtoContext* ctx,
         const proto::ProtoList* list = (data && data != PROTO_NONE) ? data->asList(ctx) : nullptr;
         if (list) {
             for (proto::proto_ulong i = 0; i < list->getSize(ctx); ++i)
-                if (matchesGuard(ctx, exceptionInstance, list->getAt(ctx, static_cast<int>(i)),
+                if (matchesGuard(ctx, exceptionInstance, list->getAt(ctx, listIndex(i)),
                                  catchAllGuard))
                     return true;
             return false;

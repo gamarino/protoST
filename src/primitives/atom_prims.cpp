@@ -1,4 +1,5 @@
 #include "protoST/STRuntime.h"
+#include "runtime/NativeError.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/TransientPin.h"
@@ -40,7 +41,7 @@ const proto::ProtoString* atomValueKey(proto::ProtoContext* ctx) {
 const proto::ProtoObject* prim_Atom_on(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject*,
                                        const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("Atom on: expects 1 argument");
+    if (argc != 1) throw NativeError("Atom on: expects 1 argument");
     auto* atom = const_cast<proto::ProtoObject*>(rt.bootstrap().atomProto)
         ->newChild(ctx, /*isMutable=*/true);
     TransientPin pinAtom(ctx, atom);
@@ -65,7 +66,7 @@ const proto::ProtoObject* prim_Atom_cas(STRuntime&, proto::ProtoContext* ctx,
                                         const proto::ProtoObject* r,
                                         const proto::ProtoObject* const* a, int argc) {
     if (argc != 2)
-        throw std::runtime_error("Atom value:ifCurrent: expects 2 arguments");
+        throw NativeError("Atom value:ifCurrent: expects 2 arguments");
     const proto::ProtoObject* newValue = a[0] ? a[0] : PROTO_NONE;
     const proto::ProtoObject* expected = a[1] ? a[1] : PROTO_NONE;
     bool ok = const_cast<proto::ProtoObject*>(r)
@@ -82,7 +83,7 @@ const proto::ProtoObject* prim_Atom_cas(STRuntime&, proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_Atom_swap(STRuntime& rt, proto::ProtoContext* ctx,
                                          const proto::ProtoObject* r,
                                          const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("Atom swap: expects 1 argument");
+    if (argc != 1) throw NativeError("Atom swap: expects 1 argument");
     const proto::ProtoObject* block = a[0];
     const proto::ProtoString* key = atomValueKey(ctx);
     for (;;) {

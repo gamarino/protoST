@@ -1,5 +1,5 @@
 "EXPECT: 16 writers + 1 appender: every call succeeded or got the named Error, 0 other, 0 bad bytes"
-"BinaryFile: an extending writeAt:bytes: (shared) and append: (exclusive) exclude each other. Sixteen actors write 16-byte records at disjoint slots at ever-growing offsets while one actor appends 16-byte records. Each call succeeds or signals the named Error. A write and an append can land on the same bytes, because append: writes at the end and the writers' slots lie ahead of it; that overwrite is the caller's race and not what is under test. So the bytes of a successful call are verified only when no successful call of the other kind touched them: a slot overlapped by an appended record, and the record overlapping it, are skipped. Which calls collide depends on scheduling, so only invariants are asserted. The number of refused calls is deliberately not asserted: it depends on the worker count and timing (it is zero on a single worker), and the guard's effectiveness is shown by mutation runs recorded in the task report: no unnamed error, appended offsets unique, every non-overlapped write and append reads back exactly."
+"BinaryFile: an extending writeAt:bytes: (shared among writes) and append: (alone at the end) exclude each other. Sixteen actors write 16-byte records at disjoint slots at ever-growing offsets while one actor appends 16-byte records. Each call succeeds or signals the named Error. A write and an append can land on the same bytes, because append: writes at the end and the writers' slots lie ahead of it; that overwrite is the caller's race and not what is under test. So the bytes of a successful call are verified only when no successful call of the other kind touched them: a slot overlapped by an appended record, and the record overlapping it, are skipped. Which calls collide depends on scheduling, so only invariants are asserted. The number of refused calls is deliberately not asserted: it depends on the worker count and timing (it is zero on a single worker), and the guard's effectiveness is shown by mutation runs recorded in the task report: no unnamed error, appended offsets unique, every non-overlapped write and append reads back exactly."
 Object subclass: #Writer.
 Writer >> run: anId count: aCount file: aFile tickets: aTicketAtom
   | out off rec n |
@@ -32,7 +32,7 @@ dir ensureCreateDirectory.
  wOk := wres reject: [:x | x isString].
  aOk := ares reject: [:x | x isString].
  named := (wres , ares) select: [:x | x isString and: [x includesSubstring: 'moves the end of the file is in progress' ]].
- named := named , ((wres , ares) select: [:x | x isString and: [x includesSubstring: 'an append: or truncateTo: is in progress']]).
+ named := named , ((wres , ares) select: [:x | x isString and: [x includesSubstring: 'a truncateTo: is in progress on this BinaryFile, or this write extends the file while an append: is']]).
  other := (wres size + ares size) - wOk size - aOk size - named size.
  bad := 0.
  "Slot numbers of the successful writes, and of those an appended record overlaps."

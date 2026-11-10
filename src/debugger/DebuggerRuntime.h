@@ -89,9 +89,10 @@ public:
     void enterSession(STRuntime& rt, proto::ProtoContext* ctx, DebugFrame frame,
                       const std::string& reason, const StopInfo* info = nullptr);
 
+    // How a stopped thread resumes. It is applied to that thread's own
+    // stepping mode (see applyCommand); the debugger keeps no shared copy,
+    // since several threads can stop and resume at once.
     enum class Command { Continue, Step, Next, Finish };
-    Command lastCommand() const { return lastCommand_; }
-    void    setCommand(Command c) { lastCommand_ = c; }
 
     // Stepping is per thread: every mode below belongs to the calling thread
     // and never makes another thread stop.
@@ -226,7 +227,6 @@ private:
                                   const DebugThreadState& ts);
 
     std::atomic<bool> attached_{false};
-    Command           lastCommand_ = Command::Continue;
     std::atomic<unsigned> excFilters_{0};
     std::istream* inStream_  = nullptr; // nullptr → use std::cin
     std::ostream* outStream_ = nullptr; // nullptr → use std::cout

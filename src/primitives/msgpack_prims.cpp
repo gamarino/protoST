@@ -1,4 +1,5 @@
 #include "protoST/STRuntime.h"
+#include "runtime/NativeError.h"
 #include "protoST/primitives.h"
 #include "primitives/BytesSupport.h"
 #include "primitives/CollectionSupport.h"
@@ -47,7 +48,7 @@ using PO = proto::ProtoObject;
 
 #define PRIM(NAME) const PO* NAME(STRuntime& rt, proto::ProtoContext* ctx, const PO* r, \
                                    const PO* const* a, int argc)
-#define ARGS(N, SEL) if (argc != (N)) throw std::runtime_error(SEL " expects " #N " argument(s)"); \
+#define ARGS(N, SEL) if (argc != (N)) throw NativeError(SEL " expects " #N " argument(s)"); \
                      (void) rt; (void) r; (void) a
 
 // The depth the decoder accepts (protoIO's Limits::maxDepth default). The
@@ -61,7 +62,7 @@ const PO* accessor(STRuntime& rt, proto::ProtoContext* ctx, const PO* recv, cons
     bool understood = false;
     const PO* v = sendDynamic(rt, ctx, recv, proto::ProtoString::createSymbol(ctx, selector),
                               nullptr, 0, &understood);
-    if (!understood) throw std::runtime_error(std::string("MessagePack: the object does not understand ") + selector);
+    if (!understood) throw NativeError(std::string("MessagePack: the object does not understand ") + selector);
     return v ? v : PROTO_NONE;
 }
 
@@ -127,13 +128,13 @@ private:
     // Opens a frame. `snapshot` is the list or map the items point into (or the
     // list the items were copied to); it stays rooted until the frame closes.
     void open(const PO* container, const PO* snapshot, std::vector<const PO*>&& items, bool map) {
-        if (path_.count(container)) throw std::runtime_error("MessagePack: cyclic structure");
+        if (path_.count(container)) throw NativeError("MessagePack: cyclic structure");
         if (frames_.size() >= kMaxDepth)
-            throw std::runtime_error("MessagePack: nesting deeper than " + std::to_string(kMaxDepth)
+            throw NativeError("MessagePack: nesting deeper than " + std::to_string(kMaxDepth)
                                      + " levels");
         const size_t entries = map ? items.size() / 2 : items.size();
         if (entries > 0xFFFFFFFFull)
-            throw std::runtime_error("MessagePack: a container of more than 2^32 - 1 elements");
+            throw NativeError("MessagePack: a container of more than 2^32 - 1 elements");
         if (map) w_.beginMap(static_cast<uint32_t>(entries));
         else w_.beginArray(static_cast<uint32_t>(entries));
         TransientPin pinSnapshot(ctx_, snapshot);
@@ -159,7 +160,7 @@ private:
                 return;
             }
         }
-        throw std::runtime_error("MessagePack cannot encode the Integer " + digits
+        throw NativeError("MessagePack cannot encode the Integer " + digits
                                  + ": it is outside -2^63 .. 2^64 - 1");
     }
 
@@ -168,7 +169,7 @@ private:
     std::vector<const PO*> pairsOf(const PO* m, const PO*& rooted) {
         const PO* list = accessor(rt_, ctx_, m, "associations");
         if (!list || list == PROTO_NONE || !isArrayOrOrdered(rt_, ctx_, list))
-            throw std::runtime_error("MessagePackMap: its associations must be an Array");
+            throw NativeError("MessagePackMap: its associations must be an Array");
         const proto::ProtoList* l = arrayOrOrderedElements(ctx_, list);
         TransientPin pinList(ctx_, asRootable(l));
         const size_t n = static_cast<size_t>(l->getSize(ctx_));
@@ -177,7 +178,7 @@ private:
         for (size_t i = 0; i < n; ++i) {
             const PO* assoc = l->getAt(ctx_, listIndex(i));
             if (!isAssociation(rt_, ctx_, assoc))
-                throw std::runtime_error("MessagePackMap: every element must be an Association");
+                throw NativeError("MessagePackMap: every element must be an Association");
             out.push_back(associationKey(ctx_, assoc));
             out.push_back(associationValue(ctx_, assoc));
         }
@@ -191,7 +192,7 @@ private:
         const PO* t = accessor(rt_, ctx_, e, "type");
         const PO* d = accessor(rt_, ctx_, e, "data");
         if (!t || t == PROTO_NONE || !proto::isSmallInt(t) || t->asLong(ctx_) < -128 || t->asLong(ctx_) > 127)
-            throw std::runtime_error("MessagePackExt: the ext type must be an Integer from -128 to 127");
+            throw NativeError("MessagePackExt: the ext type must be an Integer from -128 to 127");
         w_.ext(static_cast<int8_t>(t->asLong(ctx_)), bytesView(ctx_, d));
     }
 
@@ -234,7 +235,7 @@ private:
     }
 
     [[noreturn]] void unsupported(const PO* v) {
-        throw std::runtime_error("MessagePack cannot encode an instance of " + classNameOf(rt_, ctx_, v));
+        throw NativeError("MessagePack cannot encode an instance of " + classNameOf(rt_, ctx_, v));
     }
 
     STRuntime& rt_;
@@ -276,7 +277,7 @@ public:
           pin_(ctx, reinterpret_cast<const PO*>(stack_)) {}
 
     const PO* result() const {
-        if (stack_->getSize(ctx_) != 1) throw std::runtime_error("MessagePack: internal error: no single result");
+        if (stack_->getSize(ctx_) != 1) throw NativeError("MessagePack: internal error: no single result");
         return stack_->getAt(ctx_, 0);
     }
 
@@ -300,7 +301,7 @@ public:
         bool understood = false;
         const PO* e = sendDynamic(rt_, ctx_, extClass_,
                                   proto::ProtoString::createSymbol(ctx_, "type:data:"), args, 2, &understood);
-        if (!understood) throw std::runtime_error("MessagePackExt class does not understand type:data:");
+        if (!understood) throw NativeError("MessagePackExt class does not understand type:data:");
         push(e);
     }
 
@@ -376,7 +377,7 @@ private:
         const PO* m = sendDynamic(rt_, ctx_, mapClass_,
                                   proto::ProtoString::createSymbol(ctx_, "__fromAssociations:"), &array, 1,
                                   &understood);
-        if (!understood) throw std::runtime_error("MessagePackMap class does not understand __fromAssociations:");
+        if (!understood) throw NativeError("MessagePackMap class does not understand __fromAssociations:");
         return m;
     }
 
@@ -408,7 +409,7 @@ PRIM(prim_MsgpackDecode) {
         raiseProtoioError(e, "MessagePack decode");
     }
     if (!first && used != input.size())
-        throw std::runtime_error("MessagePack decode: " + std::to_string(input.size() - used)
+        throw NativeError("MessagePack decode: " + std::to_string(input.size() - used)
                                  + " trailing byte(s) after the first object (use decodeFirst: to allow them)");
     const PO* value = dec.result();
     if (!first) return value;

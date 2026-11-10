@@ -3,6 +3,7 @@
 // by every primitive file that calls protoIO (io_prims.cpp, bytes_prims.cpp).
 
 #include "primitives/ArgSupport.h"
+#include "runtime/NativeError.h"
 #include "runtime/ClassedErrorSignal.h"
 
 #include <protoio/error.h>
@@ -16,10 +17,17 @@ namespace protoST {
 // operation, "" for none). InvalidArgument (a value the library refuses) is the
 // generic Error the primitives raise for a bad argument. Internal (a failure
 // inside a library protoIO relies on, such as OpenSSL, caused neither by the
-// program nor by its environment) is an InternalError. The other kinds keep
-// their own classes.
+// program nor by its environment) is an InternalError. Conflict (an operation
+// refused because a conflicting one is in progress on the same object: the
+// BinaryFile end guard) is a generic Error too; binfile_prims.cpp gives it
+// protoST's own wording, naming the selector, before it reaches here. The
+// other kinds keep their own classes.
 [[noreturn]] inline void raiseProtoioError(const protoio::Error& e, const std::string& who = {}) {
     using Kind = protoio::Error::Kind;
+    // protoio::Error has only what(). Its text is protoIO's own, and a path in
+    // it never holds a NUL (protoST refuses one in any string it hands to
+    // protoIO, osStringArg). The result is a NativeError, so nothing after
+    // this point cuts the text.
     const std::string text = who.empty() ? std::string(e.what()) : errorPrefix(who) + e.what();
     switch (e.kind) {
         case Kind::FileNotFound: throw ClassedErrorSignal("FileDoesNotExist", text);
@@ -34,8 +42,9 @@ namespace protoST {
         case Kind::BodyTooLarge: throw ClassedErrorSignal("BodyTooLarge", text);
         case Kind::Internal: throw ClassedErrorSignal("InternalError", text);
         case Kind::InvalidArgument: break;
+        case Kind::Conflict: break;
     }
-    throw std::runtime_error(text);
+    throw NativeError(text);
 }
 
 } // namespace protoST

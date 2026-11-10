@@ -23,10 +23,10 @@ name: CI
 # nightly schedule.  A pinned ref makes a red pull request unambiguous.  The
 # schedule keeps the integration signal separate, and the summary always records
 # the protoCore commit actually used.  The `test` job runs twice: against the
-# pinned release (3.5.0) and against the declared minimum (3.4.0, the floor
+# pinned release (3.5.2) and against the declared minimum (3.4.0, the floor
 # entry -- this repository's only floor job; it stays on 3.4.0 on the schedule).
 # protoCore 3.4.0 changed the ABI (SOVERSION 5), so no older protoCore can
-# satisfy the build; 3.5.0 kept SOVERSION 5.
+# satisfy the build; 3.5.0, 3.5.1 and 3.5.2 kept SOVERSION 5.
 #
 # TWO BUGS OF THIS REPOSITORY'S OWN SHAPE THIS FILE HAS TO HANDLE:
 #
@@ -65,11 +65,11 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  # protoCore 3.5.0 (tag v3.5.0, commit 64ca282e), SOVERSION 5: what every
+  # protoCore 3.5.2 (tag v3.5.2), SOVERSION 5: what every
   # push and pull request builds against. The declared minimum, 3.4.0 (the
   # first SOVERSION 5 release), is what the floor entry of the `test` job
   # builds. Bump deliberately.
-  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || '64ca282e2ec7d2de31255dc7c3a16b06b3cc5e00' }}
+  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'v3.5.2' }}
   # The test excluded from the gate, run in the `non-gating` job:
   #   F6 v2 T7: two actors ...    a wall-clock proof of parallelism: two 200 ms
   #                               sleeps must finish inside 350 ms
@@ -79,11 +79,13 @@ env:
   #                               tens of milliseconds.  It is a good test and a
   #                               bad gate.
   PROTOIO_REPO: gamarino/protoIO
-  # protoIO 0.3.0 (main, 002ab8a): positioned binary files, the
-  # ProtoBase-compatible owner lock, packing, CRC32/BLAKE2b/SHA-256/HMAC,
-  # base64 and MessagePack, so 0.3.0 is also the floor CMakeLists.txt
-  # declares. Pinned so a red build is attributable; bump deliberately.
-  PROTOIO_REF: 002ab8adce25166650ae73901cc2271ba819cbc7
+  # protoIO 0.4.0 (tag v0.4.0): file::EndGuard and
+  # Error::Kind::Conflict (the BinaryFile end guard), on top of 0.3.0's
+  # positioned binary files, the ProtoBase-compatible owner lock, packing,
+  # CRC32/BLAKE2b/SHA-256/HMAC, base64 and MessagePack, so 0.4.0 is also the
+  # floor CMakeLists.txt declares. Pinned so a red build is attributable;
+  # bump deliberately.
+  PROTOIO_REF: v0.4.0
   NON_GATING_TESTS: '^(F6 v2 T7: two actors run in parallel \(wall-clock proof\))$'
 
 jobs:
@@ -96,12 +98,12 @@ jobs:
       matrix:
         include:
           - name: Build and test suite
-            # Empty: env.PROTOCORE_REF (3.5.0, or master on the schedule).
+            # Empty: env.PROTOCORE_REF (3.5.2, or master on the schedule).
             protocore_ref: ''
           # THE FLOOR JOB, the only one in this repository (cross-platform.yml
           # builds the pin on macOS and Windows). protoCore 3.4.0 (tag v3.4.0,
           # f63adc08), SOVERSION 5: PROTOCORE_MIN_VERSION in CMakeLists.txt,
-          # one release behind the 3.5.0 pin. 3.4.0 changed ProtoContext's
+          # behind the 3.5.2 pin. 3.4.0 changed ProtoContext's
           # layout, so no older protoCore links. Built on every event, the schedule
           # included, so a change that needs a newer protoCore is caught
           # before the declared minimum becomes a lie.
@@ -222,6 +224,78 @@ jobs:
           sudo apt-get install -y xvfb libnss3 libgbm1 libasound2t64 libgtk-3-0t64 libxss1 libsecret-1-0
           npm ci --no-audit --no-fund
           xvfb-run -a npm test < /dev/null
+
+  tsan:
+    name: 'ThreadSanitizer, the tsan label'
+    runs-on: ubuntu-24.04
+    # Measured locally (6 cores, 4 build jobs, ctest -j3): protoCore's library
+    # about 3 minutes, protoST about 4, the 580 tests of the label 7.
+    timeout-minutes: 45
+    # Gates. The one race the label used to report, in protoCore 3.5.1's
+    # ProtoSpace::newThread (KNOWN_ISSUES.md K10), is fixed in 3.5.2, the
+    # pinned env.PROTOCORE_REF (master on the schedule).
+    steps:
+      - name: Check out protoST
+        uses: actions/checkout@v4
+        with:
+          path: protoST
+
+      - name: Check out protoCore as a sibling
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PROTOCORE_REPO }}
+          ref: ${{ env.PROTOCORE_REF }}
+          path: protoCore
+
+      - name: Check out protoIO as a sibling
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PROTOIO_REPO }}
+          ref: ${{ env.PROTOIO_REF }}
+          path: protoIO
+
+      - name: Install libreadline, OpenSSL and Python's msgpack
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libreadline-dev libssl-dev python3-msgpack
+
+      - name: Allow TSan's memory layout
+        # Ubuntu 24.04's kernel randomises 32 bits of mmap addresses, and the
+        # runner's TSan runtime then stops with "unexpected memory mapping".
+        run: sudo sysctl vm.mmap_rnd_bits=28
+
+      - name: Build protoCore with ThreadSanitizer
+        # protoCore has no sanitizer option: the flags are given directly, as
+        # protoCore's own ASan job does. Its package exports the library and
+        # two conformance targets, so the install needs all three. Installed in
+        # a prefix of its own, so protoST cannot pick up an uninstrumented
+        # build (-DPROTOCORE_REQUIRE_PACKAGE=ON below).
+        run: |
+          F="-fsanitize=thread -g -O1 -fno-omit-frame-pointer"
+          cmake -S protoCore -B protoCore/build_tsan -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS="$F" -DCMAKE_CXX_FLAGS="$F" \
+            -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=thread \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/tsan-prefix"
+          cmake --build protoCore/build_tsan --parallel "$(nproc)" \
+            --target protoCore protoCoreConformance protocore-conformance-isolate
+          cmake --install protoCore/build_tsan
+
+      - name: Configure and build protoST with ThreadSanitizer
+        # PROTOST_TSAN compiles the sibling ../protoIO with the same flags.
+        working-directory: protoST
+        run: |
+          cmake -B build_tsan -S . -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPROTOST_TSAN=ON \
+            -DPROTO_CORE_PREFIX="$RUNNER_TEMP/tsan-prefix" -DPROTOCORE_REQUIRE_PACKAGE=ON \
+            -DPython3_EXECUTABLE=/usr/bin/python3
+          cmake --build build_tsan --parallel "$(nproc)"
+          ldd build_tsan/protost | grep -E "libprotoCore|libtsan"
+
+      - name: The tsan label under ThreadSanitizer
+        # `< /dev/null`: S18 (see the header). tsan_reports_check, the last
+        # test, fails the step if any process wrote a TSan report, and prints
+        # every report.
+        working-directory: protoST
+        run: ctest --test-dir build_tsan -L tsan -j2 --timeout 900 --output-on-failure < /dev/null
 
   non-gating:
     name: 'The wall-clock proof (informational, never gates)'

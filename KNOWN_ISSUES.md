@@ -135,50 +135,33 @@ limit.
 size; the n log n cost remains (a bulk list builder in protoCore would
 remove it), and the fixed limits above keep the old bound.
 
-## K7 — Diagnostic text can be cut at a NUL (open, bounded)
-
-A `String` holds NUL characters everywhere data travels (file contents, text
-read from a stream, `utf8Decoded`, symbols, error messages built from user
-text). The remaining places that report a problem by throwing
-`std::runtime_error` (about 270 in `src/`, such as "expects a String
-argument") hand the text to Smalltalk through `what()`, a `const char*`, so a
-NUL inside user text embedded in such a message shortens the **message**. It
-never shortens data: no data path goes through them. The messages of the
-runtime's own signalling (`signalErrorOfClass`, `signalNativeError`,
-`ClassedErrorSignal`, the engine's undefined-global and doesNotUnderstand
-texts) are length-aware. Another bound is protoCore's error factory, which takes a
-`const char*`, so a message created there ends at a NUL. Converting the
-remaining throws is a mechanical refactor with a review of its own, not done
-in 0.9.0.
-
-Two protoCore facts sit under this, to be raised there:
-`ProtoString::createSymbol(ctx, const std::string&)` calls `c_str()`
-(`ProtoString.cpp`, around line 1307), so a NUL-bearing `std::string` is
-truncated silently (protoST uses `ProtoString::intern`, which is
-length-aware, for `asSymbol`); and `fromStdString` truncates the same way.
-
 ## K8 — `BinaryFile`: what the end guard cannot see (open, by design)
 
-`append:` and `truncateTo:` need the end of the file alone; an extending
-`writeAt:bytes:` shares it with other extending writes. protoST enforces this
-in one process on one `BinaryFile` object and signals `Error` when two such
-calls collide. It cannot detect:
+Every `BinaryFile` routes `append:`, `writeAt:bytes:` and `truncateTo:`
+through one `protoio::file::EndGuard` (protoIO 0.4.0). `append:` needs the end
+of the file alone; `truncateTo:` needs the whole file alone, in-file writes
+included; a `writeAt:bytes:` that extends the file needs the end shared only
+with other writes. A call that conflicts with one in progress signals `Error`
+naming its selector and does nothing. On one `BinaryFile` object, the bytes of
+an `append:` therefore land at the offset it answers, and no write lands past
+the end of a file a `truncateTo:` cut meanwhile. Since protoIO 0.4.0 the latter
+holds too: before, a `writeAt:bytes:` judged inside the file before a
+concurrent `truncateTo:` shrank it could extend the file unguarded. The guard
+cannot detect:
 
 - appenders or writers in **other processes**, or through **another
   `BinaryFile` object** opened on the same file (take `lock` around them);
-- a `writeAt:bytes:` running while `truncateTo:` shrinks the file: the write
-  may extend the file without the guard and overwrite bytes a later `append:`
-  puts there. The offsets `append:` answers stay correct. This race is the
-  caller's, as any two writes over the same bytes are.
+- two writes over the same bytes, which are never ordered (the callers' own
+  concern, as in any file API).
 
 The lock is advisory and belongs to the open file, not the process. On
 Windows the locked byte cannot be read or written through another descriptor:
 lock a dedicated file. An unclosed `BinaryFile` keeps its descriptor and lock
 until the program ends.
 
-**Follow-up in protoIO (0.3.1).** The guard lives in protoST. A runtime that
-calls protoIO's `appendData` directly has none, and the same guard could move
-into protoIO for every runtime.
+**Done in protoIO 0.4.0.** The guard moved from protoST into protoIO
+(`file::EndGuard` and the guarded `appendData`, `writeAt` and `truncate`), so
+every runtime can use it; protoST's own copy is gone.
 
 ## K9 — Timers: one thread per runtime, and exit can wait (open, by design)
 
@@ -206,14 +189,37 @@ overflows the native stack.
 
 ## K10 — What the 0.9.0 tests do not prove (open)
 
-- **No ThreadSanitizer build of protoST exists.** The timer service, the
-  actor tests and the `BinaryFile` guards were never run under TSan; their
-  evidence is the repeated runs (20 of 20 for the timer cases), the mutation
-  checks recorded in the task reports and the review of the lock-free code.
-- **`InternalError` cannot be forced.** protoIO raises it only for OpenSSL
-  failures that are practically unreachable, and a test-only primitive was not
-  wanted. The mapping is one switch (`src/primitives/ProtoioErrors.h`),
-  covered by the build and by reading.
+- **ThreadSanitizer: clean against protoCore 3.5.2, but a clean run is not
+  proof.** Against a TSan build of protoCore 3.5.2 and protoIO 0.4.0 the
+  label ran 580/580 on 2026-11-10 with no report, including the three
+  programs below that used to report protoCore's race. History:
+  `-DPROTOST_TSAN=ON` and
+  the `tsan` label (580 tests: every unit case, the actor, Future, Atom,
+  timer and `BinaryFile` programs, the concurrency and debugger CLI tests;
+  `docs/INSTALLATION.md`) ran on 2026-11-10 against a TSan build of
+  protoCore 3.5.0 and protoIO 0.4.0. Two local runs reported no race in
+  protoST; the first CI run found one, in the debugger (two threads resuming
+  from a DAP stop wrote one shared field), which is fixed. A clean run is
+  evidence about the interleavings it happened to see, not proof. TSan
+  reported no race in protoIO. It reported one in protoCore: `ProtoSpace::newThread` called from
+  two threads at once reads and writes `ProtoSpace::mainContext` without
+  synchronisation (`core/Thread.cpp:494` and `:506`, around
+  `core/ProtoContext.cpp:198`), and an interleaving can leave `mainContext`
+  on a worker's root context, which dangles once that worker exits. protoST
+  starts workers from worker threads (`STRuntime::enterBlockingIO`), so
+  programs that block several actors in I/O at once report it
+  (`14-io/http_concurrent`, `14-io/net_pool_growth`,
+  `15-binary/binfile_lock_actors`; two or three of them per run). protoCore
+  3.5.2 fixes it; the CI job that runs the label builds 3.5.2 and gates.
+  What stays open is what any TSan run leaves open: it sees only the
+  interleavings that happened.
+- **`InternalError` cannot be forced from a program.** protoIO raises it only
+  for OpenSSL failures that are practically unreachable, and the runtime ships
+  no test-only primitive. The mapping (`src/primitives/ProtoioErrors.h`) is
+  tested from C++ instead: `tests/unit/test_protoio_errors.cpp` registers a
+  primitive in its own runtime that raises a synthesized `protoio::Error` of
+  each kind, and a Smalltalk handler checks the class (`InternalError` for
+  `Internal`) and the `messageText`.
 - **Tests that depend on the platform say so.** `binfile_lock_close.st`
   needs Linux's `/proc/locks` for its handshake; elsewhere it ends with a
   `SKIP:` line and CTest reports it as *Skipped* (`tests/conformance/README.md`,
@@ -235,7 +241,27 @@ it where it can (it removes from the end of its work list, and slices once when
 the children are fewer than the stack), but code that wants a constant-time
 split cannot have it until protoCore offers one.
 
-## K12 — A NUL in a string for the OS is refused by protoST, not by protoIO (open, follow-up in protoIO)
+## K13 — A mailbox batch of more than 2^31 - 1 messages is refused, and lost (open, in protoCore)
+
+An actor's turn takes its mailbox in batches (`ProtoMPSCQueue::takeAll`) and
+walks each batch by index. protoCore indexes a list with an `int`
+(`getAt`, `getSlice`), so `MailboxCursor::adopt` (`src/runtime/STRuntime.cpp`)
+counts a batch through `listIndex` and refuses one of more than `INT_MAX`
+messages with an `Error` before it touches the cursor. By then `takeAll` has
+already removed those messages from the queue, and nothing in protoST can
+reach the elements past `INT_MAX` to park them (`__pending__` is written with
+`getSlice`, which is `int`-indexed too), so the batch is lost; the error
+leaves the turn (a worker thread reports it on stderr). No protoST program can reach this: such a batch
+holds more than 2^31 messages that no turn has consumed, over 128 GB of
+message cells. It is recorded because the loss is silent to the senders
+(their Futures never settle). A fix needs protoCore to index a list beyond an
+`int`, or a `takeAll` that hands over at most a given count.
+
+---
+
+## Resolved
+
+### K12 — A NUL in a string for the OS was refused by protoST only (resolved in protoIO 0.4.0)
 
 The operating system reads a path, an argv element, a shell command line, an
 environment name or value and a host name only up to its first NUL, and a
@@ -244,14 +270,57 @@ before it reaches the OS, as CPython does with `ValueError`: every primitive
 that hands one to protoIO (files, directories, `BinaryFile`, `OSProcess`,
 `Smalltalk getenv:`/`setenv:to:`/`changeDirectory:`, sockets, TLS host
 names, `Import from:`) signals `Error` "... must not contain NUL"
-(`src/primitives/ArgSupport.h`, `osStringArg`). protoIO itself does not check:
-another runtime that calls it with such a string still has the name cut at
-the NUL. **Follow-up in protoIO (0.3.1):** the same check in protoIO, for
-every runtime.
+(`src/primitives/ArgSupport.h`, `osStringArg`). protoIO did not check, so
+another runtime calling it with such a string had the name cut at the NUL.
+protoIO 0.4.0, which protoST 0.9.0 requires, refuses it too
+(`InvalidArgument`, before any system call), for every runtime; protoST keeps
+its own check, which names the selector.
 
----
+### K7 — Diagnostic text could be cut at a NUL (resolved in 0.9.0)
 
-## Resolved
+A `String` holds NUL characters everywhere data travels, and many error texts
+embed user data (a selector, a key, the offending part of an argument). The
+places that reported a problem by throwing `std::runtime_error` (about 320 in
+`src/`) handed the text to Smalltalk through `what()`, a `const char*`, so a
+NUL inside the user text shortened the **message** (never data): `ByteArray
+fromHex: '0', NUL, 'zz'` reported `ByteArray fromHex: '0`, in `messageText`
+and in the uncaught-error report alike.
+
+Since 0.9.0 protoST throws `NativeError` (`src/runtime/NativeError.h`), a
+`std::runtime_error` that keeps the full `std::string`; `ClassedErrorSignal`
+derives from it. Every site that turns a C++ exception into a Smalltalk error
+reads the text through `nativeErrorText` (the native-exception bridge, an
+actor message's rejection, the uncaught-error report, the debugger's and the
+DAP server's evaluation errors) and builds the Smalltalk string with the
+length-aware `makeString`. Every printer of text that can hold user data
+writes it with `writeWholeLine` (or `fwrite`), not `%s`, `fputs` or `puts`:
+the uncaught error, an unhandled `Warning` (or other resumable exception)
+with its `messageText`, the warning for an actor error nobody observed,
+parse and compile errors, printed values, the REPL's `:load` and "unknown
+command" messages, `halt` without a debugger, `--dump-ast` and `--disasm`
+listings (which quote string literals), and `venv info`. The debugger and the
+DAP server write `std::string`s to streams and JSON, which keep every byte.
+Tests: `12-builtins/native_error_nul_message`,
+`12-builtins/native_error_nul_uncaught` (both failed on the build before the
+change: the text ended at the NUL), the last case of
+`cli_actor_unobserved_error`, and `cli_diagnostics_nul` (the Warning, the
+REPL's unknown command and a printed value; its Warning case fails on
+main). One printer keeps `what()` on
+purpose: the timer thread's report of a failed hand-over, which runs when
+memory is short and must not copy, and whose text is never user data.
+
+What remains is outside protoST's errors: a `protoio::Error` has only
+`what()` (its text is protoIO's own, and protoST refuses a NUL in any string
+it hands to protoIO, K12); protoCore's error factory takes a `const char*`,
+so a message created there ends at a NUL; and a protoST `NativeError` that
+leaves protoST into another runtime (a protoPython or protoJS program calling
+a protoST module, `STForeignSend.cpp` and `STModuleProvider.cpp`, which
+re-throw it unchanged) is read there through `what()`, so that runtime sees
+its text cut at a NUL. Two protoCore facts, to be
+raised there: `ProtoString::createSymbol(ctx, const std::string&)` calls
+`c_str()` (`ProtoString.cpp`, around line 1307), so a NUL-bearing
+`std::string` is truncated silently (protoST uses `ProtoString::intern`, which
+is length-aware, for `asSymbol`); and `fromStdString` truncates the same way.
 
 ### K6 — Collection pauses grew with the number of threads (resolved in 0.6.2)
 

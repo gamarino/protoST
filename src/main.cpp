@@ -47,9 +47,9 @@ int runReporting(protoST::STRuntime& rt, const protoST::BytecodeModule& bc,
         return 0;
     } catch (const proto::ProtoException& e) {
         // An unhandled Error, a module's error, another language's exception.
-        std::fprintf(stderr, "%s\n", protoST::describeUncaught(rt.rootCtx(), e).c_str());
+        protoST::writeWholeLine(stderr, protoST::describeUncaught(rt.rootCtx(), e));
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "%s\n", protoST::describeUncaught(e).c_str());
+        protoST::writeWholeLine(stderr, protoST::describeUncaught(e));
     } catch (...) {
         std::fprintf(stderr, "error: an unknown exception reached the top level\n");
     }
@@ -190,8 +190,9 @@ int main(int argc, char** argv) {
         protoST::Parser P(std::move(src));
         auto m = P.parseModule();
         for (auto& e : P.errors())
-            std::fprintf(stderr, "%s:%d:%d: %s\n", path, e.line, e.column, e.message.c_str());
-        std::fputs(protoST::astToString(*m).c_str(), stdout);
+            protoST::writeWholeLine(stderr, std::string(path) + ":" + std::to_string(e.line) + ":" + std::to_string(e.column) + ": " + e.message);
+        const std::string ast = protoST::astToString(*m);
+        std::fwrite(ast.data(), 1, ast.size(), stdout);
         return P.errors().empty() ? 0 : 65;
     }
     if (mode == "-i") {
@@ -208,7 +209,7 @@ int main(int argc, char** argv) {
         protoST::Parser P(std::move(src));
         auto ast = P.parseModule();
         for (auto& e : P.errors())
-            std::fprintf(stderr, "<expr>:%d:%d: %s\n", e.line, e.column, e.message.c_str());
+            protoST::writeWholeLine(stderr, "<expr>:" + std::to_string(e.line) + ":" + std::to_string(e.column) + ": " + e.message);
         if (!P.errors().empty()) return 65;
         if (!kernelPresent()) return kExitNoKernel;
 
@@ -219,17 +220,17 @@ int main(int argc, char** argv) {
             bc = C.compileModule(*ast);
             bc->setSourceName("<expr>");
             if (C.hasErrors()) {
-                for (auto& s : C.errors()) std::fprintf(stderr, "compile error: %s\n", s.c_str());
+                for (auto& s : C.errors()) protoST::writeWholeLine(stderr, "compile error: " + s);
                 return 70;
             }
             const proto::ProtoObject* r = nullptr;
             if (int status = runReporting(rt, *bc, &r)) return status;
             // BL-3: shared formatter — non-primitive objects render as
             // "a ClassName" via the default printString logic.
-            std::puts(protoST::formatValue(rt, rt.rootCtx(), r).c_str());
+            protoST::writeWholeLine(stdout, protoST::formatValue(rt, rt.rootCtx(), r));
             return 0;
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "%s\n", protoST::describeUncaught(e).c_str());
+            protoST::writeWholeLine(stderr, protoST::describeUncaught(e));
             return 1;
         }
     }
@@ -244,7 +245,7 @@ int main(int argc, char** argv) {
         auto ast = P.parseModule();
         if (!P.errors().empty()) {
             for (auto& e : P.errors())
-                std::fprintf(stderr, "%s:%d:%d: %s\n", path, e.line, e.column, e.message.c_str());
+                protoST::writeWholeLine(stderr, std::string(path) + ":" + std::to_string(e.line) + ":" + std::to_string(e.column) + ": " + e.message);
             return 65;
         }
         if (!kernelPresent()) return kExitNoKernel;
@@ -253,7 +254,7 @@ int main(int argc, char** argv) {
         protoST::Compiler C; bc = C.compileModule(*ast);
         bc->setSourceName(path);
         if (C.hasErrors()) {
-            for (auto& s : C.errors()) std::fprintf(stderr, "compile error: %s\n", s.c_str());
+            for (auto& s : C.errors()) protoST::writeWholeLine(stderr, "compile error: " + s);
             return 70;
         }
         rt.debugger().attach();
@@ -261,8 +262,7 @@ int main(int argc, char** argv) {
         if (int status = runReporting(rt, *bc, &r)) return status;
         if (r && r != PROTO_NONE) {
             // BL-3: shared formatter.
-            std::printf("=> %s\n",
-                protoST::formatValue(rt, rt.rootCtx(), r).c_str());
+            protoST::writeWholeLine(stdout, "=> " + protoST::formatValue(rt, rt.rootCtx(), r));
         }
         return 0;
     }
@@ -308,7 +308,7 @@ int main(int argc, char** argv) {
         protoST::Parser P(std::move(src));
         auto ast = P.parseModule();
         for (auto& e : P.errors())
-            std::fprintf(stderr, "%s:%d:%d: %s\n", sourceName, e.line, e.column, e.message.c_str());
+            protoST::writeWholeLine(stderr, std::string(sourceName) + ":" + std::to_string(e.line) + ":" + std::to_string(e.column) + ": " + e.message);
         if (!P.errors().empty()) return 65;
         if (!kernelPresent()) return kExitNoKernel;
 
@@ -325,22 +325,23 @@ int main(int argc, char** argv) {
             bc = C.compileModule(*ast);
             bc->setSourceName(sourceName);
             if (C.hasErrors()) {
-                for (auto& s : C.errors()) std::fprintf(stderr, "compile error: %s\n", s.c_str());
+                for (auto& s : C.errors()) protoST::writeWholeLine(stderr, "compile error: " + s);
                 return 70;
             }
             if (disasm) {
                 // The script's own module and every block and method body it
                 // holds; the kernel is compiled separately and not listed.
-                std::fputs(protoST::disassemble(*bc).c_str(), stdout);
+                const std::string listing = protoST::disassemble(*bc);
+                std::fwrite(listing.data(), 1, listing.size(), stdout);
                 std::fflush(stdout);
             }
             const proto::ProtoObject* r = nullptr;
             if (int status = runReporting(rt, *bc, &r)) return status;
             // BL-3: shared formatter.
-            if (printLast) std::puts(protoST::formatValue(rt, rt.rootCtx(), r).c_str());
+            if (printLast) protoST::writeWholeLine(stdout, protoST::formatValue(rt, rt.rootCtx(), r));
             return 0;
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "%s\n", protoST::describeUncaught(e).c_str());
+            protoST::writeWholeLine(stderr, protoST::describeUncaught(e));
             return 1;
         }
     }

@@ -14,10 +14,13 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Test suite:** 1270 `ctest` cases on Linux, 1270/1270 passing on
-  2026-11-10 (0.9.0 after the final review fixes, against protoCore 3.5.0 and
-  the protoIO 0.3.0 tree), none skipped: 678 conformance
-  programs, 481 unit tests, 44 examples, 41 CLI tests (including
+- **Test suite:** 1291 `ctest` cases on Linux, 1291/1291 passing on
+  2026-11-10 (0.9.0 after the pending fixes: NUL-safe native error text,
+  checked list indices, one index rule, the protoIO error mapping and
+  the unmanaged digest path tested, the end guard from protoIO 0.4.0; against
+  protoCore 3.5.2 and protoIO 0.4.0, tag `v0.4.0`), none
+  skipped: 685 conformance
+  programs, 494 unit tests, 44 examples, 42 CLI tests (including
   `cli_binary_lock`, `cli_binary_lock_protobase` and `cli_binary_interop`),
   23 documentation checks (the examples with a stated result in the
   documents, the bytecode listings of `docs/VM.md` and the checker's
@@ -26,7 +29,7 @@ stable id and file it in the right bucket.
   cannot verify its subject on a platform ends with `SKIP: <reason>` and CTest
   reports it as *Skipped* (`tests/conformance/README.md`); on Linux with
   Python 3 and `msgpack` none is skipped. CI (Linux, macOS and Windows) pins
-  protoIO 0.3.0 and installs `msgpack`; the macOS and Windows behaviour of the skip is confirmed
+  protoIO 0.4.0 (tag `v0.4.0`) and protoCore 3.5.2 and installs `msgpack`; the macOS and Windows behaviour of the skip is confirmed
   only by that CI (`KNOWN_ISSUES.md` K10). Earlier: 1105/1105 on 2026-10-17 (0.6.6, protoCore 2.14.6, protoIO 0.2.2):
   544 conformance programs, 462 unit tests, 44 examples, 33 CLI tests and 22
   documentation checks; CI ran the same suite on Linux, macOS and Windows
@@ -38,13 +41,16 @@ stable id and file it in the right bucket.
   well, `docs/INSTALLATION.md`, "Windows (MSVC)"). `cli_concurrent_first_call`
   (S19) gates CI again since 0.6.3. The history of earlier counts is in
   `CHANGELOG.md`.
-- **protoCore, protoIO:** 0.9.0 requires protoIO 0.3.0 or later (a 0.2.x
-  checkout is refused at configure time). 0.9.0 and 0.8.1 require protoCore
-  3.4.0 or later built from source, and 0.8.1's `.deb` 3.5.0 (SOVERSION 5 in both; 0.8.0 required 3.4.0, which removed
+- **protoCore, protoIO:** 0.9.0 requires protoIO 0.4.0 or a later 0.4.x (a
+  0.3.x checkout is refused at configure time). 0.9.0 and 0.8.1 require protoCore
+  3.4.0 or later built from source; 0.9.0's `.deb` requires 3.5.2 and 0.8.1's
+  3.5.0 (SOVERSION 5 in all; 0.8.0 required 3.4.0, which removed
   `ProtoContext::pendingRoot`, so `ProtoContext`'s layout changed; 0.7.0
   required 3.0.0, for the descriptor calling convention and the unified
   exception model); its
-  `.deb` is built against 3.5.0 and depends on `protocore (>= 3.5.0)`. Since
+  `.deb` is built against 3.5.2 and depends on `protocore (>= 3.5.2)`; 3.5.2
+  fixes a race in `ProtoSpace::newThread` that the ThreadSanitizer job found
+  (`KNOWN_ISSUES.md` K10). Since
   2.14.6 protoCore's
   integer comparison, division and modulo no longer allocate and its
   collector's mark work list is bounded (`benchmarks/reports/2026-10-12-protocore-2.14.6.md`:
@@ -82,10 +88,12 @@ stable id and file it in the right bucket.
   in two rounds; each fix of a wrong result, crash or hang it found carries a
   regression test.
 - **Open bugs:** S3 (Medium, not provable on this build). Known limitations of
-  0.9.0 that are not defects (diagnostic text cut at a NUL, the `BinaryFile`
-  end guard, timers and exit, what the tests do not prove, protoCore's missing
-  list split, the NUL check for OS strings that protoIO itself does not make)
-  are K7-K12 in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md). S22 (a test
+  0.9.0 that are not defects (what the `BinaryFile` end guard cannot see,
+  timers and exit, what the tests do not prove, protoCore's missing list
+  split, a mailbox batch beyond an `int`) are K8-K11 and K13 in
+  [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md); K7
+  (diagnostic text cut at a NUL) and K12 (the NUL check for OS strings that
+  protoIO did not make) were resolved before the release. S22 (a test
   race), S25 and S26 closed in 0.6.3, S24 in 0.6.1, S23 on 2026-10-02 (`9cdc9b4`),
   S19 on 2026-09-29, S20 and S21 in 0.5.0. Hard edges that are not
   language-design choices are in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md).
@@ -433,7 +441,7 @@ decisions, not defects; they stay, documented with their rationale.
 |----|-----------|-----------|
 | D48 | **Deadlines are protoST's own.** `TimeoutError`, `Future after:`, `within:` and `waitWithin:` have no Pharo meaning to keep. `ms` must be a non-negative `SmallInteger` (no `Float`, no `Duration`). `within:` does not cancel the receiver. Timers still pending at exit are dropped: their futures never settle and no callback runs. A deadline fires only when a worker is free to run its settle (one blocked in I/O or `sleep:` does not count). `waitWithin:` at the top of an actor method suspends the actor; nested in a block it blocks the worker, which helps other actors meanwhile (D37), and that includes every `waitWithin:` whose `TimeoutError` is caught with `on:do:` (`[f waitWithin: 50] on: TimeoutError do: [...]`), which blocks its worker for up to the deadline. Each `within:` adds a pair of callbacks to its receiver until the receiver settles, so repeated `within:` on one long-lived Future that never settles accumulates them. An actor error that reaches the receiver after the deadline is reported as unhandled unless something else observes the receiver. A wait with no current actor on a pool worker (inside a `thenDo:` callback) blocks that worker the same way. | The timer thread never runs Smalltalk code, so a slow callback delays no other deadline; a Future that cannot be cancelled keeps its meaning for the other waiters. |
 | D47 | **MessagePack: protoST's classes, with fixed choices.** `MessagePackMap`, `MessagePackExt`, `decodeOrdered:`, `decodeOrdered:strictKeys:` (an addition to the spec's list) and `decodeFirst:` are protoST names (Pharo has no MessagePack in the image). A `Symbol` encodes as `str` and decodes as `String` (D35: `#foo = 'foo'` is true here, false in Pharo). The encoding order of a `Dictionary` is unspecified (protoCore's attribute order is not API), so its bytes can differ between runs; `MessagePackMap` gives exact bytes. Ext type -1 (the timestamp) decodes to a plain `MessagePackExt`, where msgpack-python returns a `datetime`. An Integer outside -2^63 .. 2^64 - 1 signals `Error` (it never wraps or becomes a Float); a structure nested deeper than 512 levels or containing itself signals `Error` on encode; `Character`, `Set`, `Bag`, `Association`, `Fraction` and other classes are not encodable. Map keys must be `str` or `bin` unless `strictKeys: false`. | The bytes follow msgpack-python as ProtoBase uses it (`use_bin_type=True`, `raw=False`), so the two read each other's files. A deterministic `Dictionary` order would constrain protoCore for one codec. |
-| D46 | **`BinaryFile` has no position and no stream protocol.** It is a new class, not Pharo's `File` / `BinaryFileStream`. Every read and write names its offset (from 0); `append:` answers the offset where the bytes start. `readAt:size:`, `writeAt:bytes:`, `truncateTo:`, `dataSync`, `tryLock`, `lock` and `unlock` are protoST names with no Pharo meaning to keep. The options are an Array of Symbols (`#(#read #write #create)`), not option objects. Writes take a `ByteArray` only. `writeAt:bytes:`, `truncateTo:`, `sync`, `dataSync`, `lock`, `unlock` and `close` answer the receiver. An unclosed `BinaryFile` is never closed by the collector (Pharo's file streams are finalised): it stays open, with its lock, until `close` or the end of the program; use after `close` signals `Error`, a second `close` does nothing. `FileSystem replace:with:` and `syncDirectory:` are class-side (Pharo's `FileSystem` is an instance, `FileSystem disk`). One appender at a time per file: a concurrent `append:`, or a `truncateTo:` or extending `writeAt:bytes:` that collides with one, signals `Error` instead of corrupting offsets (`KNOWN_ISSUES.md` K8 for what cannot be detected). | A hidden cursor is shared state, and a file shared by several actors must not have one. Closing by finalisation would release a lock at a time the program cannot predict. |
+| D46 | **`BinaryFile` has no position and no stream protocol.** It is a new class, not Pharo's `File` / `BinaryFileStream`. Every read and write names its offset (from 0); `append:` answers the offset where the bytes start. `readAt:size:`, `writeAt:bytes:`, `truncateTo:`, `dataSync`, `tryLock`, `lock` and `unlock` are protoST names with no Pharo meaning to keep. The options are an Array of Symbols (`#(#read #write #create)`), not option objects. Writes take a `ByteArray` only. `writeAt:bytes:`, `truncateTo:`, `sync`, `dataSync`, `lock`, `unlock` and `close` answer the receiver. An unclosed `BinaryFile` is never closed by the collector (Pharo's file streams are finalised): it stays open, with its lock, until `close` or the end of the program; use after `close` signals `Error`, a second `close` does nothing. `FileSystem replace:with:` and `syncDirectory:` are class-side (Pharo's `FileSystem` is an instance, `FileSystem disk`). One appender at a time per file: the end guard (protoIO's `file::EndGuard`) refuses an `append:` while an `append:`, a `truncateTo:` or an extending `writeAt:bytes:` runs, a `writeAt:bytes:` while a `truncateTo:` runs (or, when it extends the file, an `append:`), and a `truncateTo:` while any of them runs, with `Error` instead of corrupting offsets or bytes (`KNOWN_ISSUES.md` K8 for what cannot be detected). `append:` on a file that is not a regular file signals `FileSystemError`. | A hidden cursor is shared state, and a file shared by several actors must not have one. Closing by finalisation would release a lock at a time the program cannot predict. |
 | D45 | **Binary input and output answer `ByteArray`.** `binaryContents`, `IOStream >> nextBytes:` and UDP `receiveBytesTimeout:` answered an `Array` of Integers up to 0.8.1. An `Array` of Integers 0-255 is still accepted as an *argument* (`binaryContents:`, `nextPutBytes:`, UDP `send:`) in 0.9.0, with one line on stderr per process, and is refused from 0.10.0. Anything else (`nil`, `42`, a non-byte) signals `Error`: `binaryContents: nil` used to write an empty file. | The change is breaking for a program that compares a result with an Array; the deprecation window is for the programs that only pass one. |
 | D44 | **Digests and base64: one-shot, strict, protoST names.** `crc32`, `crc32Continuing:`, `blake2b:`, `blake2b:key:`, `sha256`, `HMAC sha256Key:message:`, `CRC32 combine:with:length:`, `base64Encoded`, `base64Decoded` follow the vocabulary of Python's `hashlib` and `zlib` (Pharo has `Base64MimeConverter` and no such selectors on `ByteArray`). There are no incremental objects (`update:`): chain a CRC with `crc32Continuing:`; hash a large input in one call. A digest is a raw `ByteArray`, not a hex `String`. `base64Decoded` accepts only the standard alphabet with correct padding and canonical trailing bits (`'abd='` and `'ab=='` are refused, where CPython's `b64decode` accepts them), skips no whitespace and has no URL-safe variant. | Strictness is protoIO's (R7): two encodings of the same bytes would make a digest of the text depend on who wrote it. One-shot functions leave nothing mutable to alias an answered value. |
 | D43 | **Numbers in bytes: names and checks.** `unsignedShortAt:bigEndian:`, `signedLong64At:bigEndian:` and the others take Pharo's names; `float32At:bigEndian:`, `float64At:bigEndian:` and the stream writers `nextPutUnsigned:width:bigEndian:`, `nextPutSigned:width:bigEndian:`, `nextPutFloat32:bigEndian:`, `nextPutFloat64:bigEndian:` are protoST's (Pharo names them `floatAt:bigEndian:` / `doubleAt:` and has no writers of this shape). `signedByteAt:` is an addition. Pharo's `unsignedLongAt:` without `bigEndian:` is not provided; there is no `at:put:`-style writer. All indices are 1-based and checked (`SubscriptOutOfBounds` past the end). A value that does not fit signals `Error`, where Pharo may truncate; `nextPutFloat32:` also refuses a finite value beyond the single range (as CPython's `struct`). | The byte order is always explicit; a write that wraps silently corrupts a file format. The widths and bit patterns are protoIO's `encoding` (shared with protoScala and protoClojure), not reimplemented. |

@@ -1,4 +1,5 @@
 #include "STModuleProvider.h"
+#include "runtime/NativeError.h"
 #include "protoST/STRuntime.h"
 #include "runtime/NativeExceptionBridge.h"
 #include "protoCore.h"
@@ -181,7 +182,7 @@ STModuleProvider::loadForForeignCaller(STRuntime& rt, const std::string& logical
     // facade is needed when both runtimes share the space's prototypes.
     const bool sharedSpace = rt.space() == callerCtx->space;
     if (!sharedSpace && !rt.isOwnerThread()) {
-        throw std::runtime_error(
+        throw NativeError(
             "protoST: a cross-runtime import of '" + logicalPath +
             "' must run on the thread that constructed the protoST runtime");
     }
@@ -227,7 +228,7 @@ STModuleProvider::loadForForeignCaller(STRuntime& rt, const std::string& logical
     }
     if (failed) std::rethrow_exception(failed);
     if (controlFlowUnwind)
-        throw std::runtime_error(
+        throw NativeError(
             "protoST: the top level of module '" + logicalPath +
             "' left through a control-flow unwind (a non-local return, a "
             "resumption, a retry, or a Future yield), which cannot cross a "
@@ -255,7 +256,7 @@ STModuleProvider::tryLoad(const std::string& logicalPath, proto::ProtoContext* c
         STRuntime* own = soleSTRuntime();
         if (!own) {
             if (registeredSTRuntimeCount() > 1) {
-                throw std::runtime_error(
+                throw NativeError(
                     "protoST: a cross-runtime import of '" + logicalPath +
                     "' is ambiguous — this process holds more than one protoST "
                     "runtime and the UMD provider is registered once per "

@@ -93,6 +93,8 @@ ByteArray >> copyReplaceFrom: start to: stop with: replacement
   "The receiver with the bytes from start to stop replaced by the bytes of
    replacement (a ByteArray, or a collection of Integers from 0 to 255). With
    stop = start - 1 the bytes are inserted before start."
+  (start isInteger and: [stop isInteger]) ifFalse: [
+    ^ Error new signal: 'ByteArray>>copyReplaceFrom:to:with: the index: an Integer was expected'].
   (start between: 1 and: self size + 1) & (stop between: start - 1 and: self size)
     ifFalse: [^ SubscriptOutOfBounds new signal: 'ByteArray>>copyReplaceFrom:to:with: range '
       , start printString , ' to ' , stop printString , ' out of bounds (size '
