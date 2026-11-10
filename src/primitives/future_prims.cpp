@@ -5,6 +5,7 @@
 #include "runtime/SchedDiag.h"
 #include "runtime/ExecutionEngine.h"
 #include "runtime/TransientPin.h"
+#include "runtime/TimerService.h"
 #include "runtime/NativeExceptionBridge.h"
 #include "runtime/UnhandledSTException.h"
 #include <cstdio>
@@ -201,6 +202,14 @@ void settleFuture(STRuntime& rt, proto::ProtoContext* ctx,
         return;  // already settled / being settled
     }
 
+    // 1b. A pending timer for this future (Future after:, within:) stops
+    //     rooting it: whoever settles first cancels it (TimerService::cancel;
+    //     a no-op when the settle is the timer's own).
+    const proto::ProtoObject* timerId =
+        future->getOwnAttributeDirect(ctx, rt.bootstrap().sym.timerId);
+    if (timerId && timerId != PROTO_NONE && timerId->isInteger(ctx))
+        rt.timerService().cancel(ctx, static_cast<std::uint64_t>(timerId->asLong(ctx)));
+
     // 2. Write the result BEFORE publishing __state__, so any reader that
     //    later observes a settled state always sees a consistent value/error.
     const_cast<proto::ProtoObject*>(future)->setAttribute(
@@ -300,11 +309,19 @@ void detectWaitCycle(STRuntime& rt, proto::ProtoContext* ctx,
     }
 }
 
-// Wait for `awaited` on an actor's worker without suspending the actor: while
-// the future is pending, run other ready actors' messages on this thread
-// (helping), and back off briefly when there are none. The current actor stays
-// marked as running, so none of its own messages run meanwhile (one message
-// at a time), and its __waiting_on__ record keeps cycles detectable.
+// Wait for `awaited` on a pool worker without suspending anything: while the
+// future is pending, run other ready actors' messages and queued tasks on this
+// thread (helping), and back off briefly when there are none. Two callers:
+//  * an actor method whose wait cannot suspend (nested in a block). The
+//    current actor stays marked as running, so none of its own messages run
+//    meanwhile (one message at a time), and its __waiting_on__ record keeps
+//    cycles detectable;
+//  * code with no current actor on a worker: a thenDo: / catch: callback run
+//    by a settle on a worker (a timer's, an actor reply's). It must not take
+//    the main thread's wait (mainWaitingOn is one slot, owned by the thread
+//    that constructed the runtime; a second user would overwrite it and the
+//    main thread would lose its wakeup). There is no actor to record or bury;
+//    the nesting still counts toward the helping cap.
 const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
                                       const proto::ProtoObject* awaited) {
     const proto::ProtoObject* self = rt.currentActor();
@@ -320,7 +337,8 @@ const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
     struct ClearWaiting {
         STRuntime& rt; proto::ProtoContext* ctx; const proto::ProtoObject* actor;
         ~ClearWaiting() {
-            const_cast<proto::ProtoObject*>(actor)->setAttribute(ctx, rt.bootstrap().sym.waitingOn, PROTO_NONE);
+            if (actor)
+                const_cast<proto::ProtoObject*>(actor)->setAttribute(ctx, rt.bootstrap().sym.waitingOn, PROTO_NONE);
         }
     } clearWaiting{rt, ctx, self};
     int idle = 0;
@@ -410,6 +428,13 @@ const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* c
         // s == 2: rejected.
         return raiseRejection(rt, ctx, r->getOwnAttributeDirect(ctx, errorKey));
     }
+
+    // No current actor, on a pool worker (running a settle's callback): help
+    // instead of taking the main thread's single wait slot (see waitHelping).
+    // The program's thread is not always the one that built the runtime (the
+    // debugger runs the program on a thread of its own), so the test is "a
+    // worker of this runtime", not "not the owner".
+    if (rt.isWorkerThread()) return waitHelping(rt, ctx, r);
 
     // Non-actor (main / foreground) path. Pure event-driven wait — no
     // sleep, no spin, no polling. The waiter announces itself via

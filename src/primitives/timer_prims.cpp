@@ -4,8 +4,9 @@
 //
 //   aFuture __resolveNilAfter: ms     resolve aFuture with nil in ms milliseconds
 //   aFuture __rejectTimeoutAfter: ms  in ms milliseconds, unless aFuture settled
-//                                     first, send it __timedOut (future.st),
-//                                     which rejects it with a TimeoutError
+//                                     first, send it __timedOutAfter: ms
+//                                     (future.st), which rejects it with a
+//                                     TimeoutError
 //
 // Both answer the receiver. A receiver that is already settled schedules
 // nothing. `ms` is a non-negative SmallInteger, measured on the monotonic
@@ -15,7 +16,7 @@
 // The deadline is kept by the runtime's TimerService; when it passes, the
 // timer thread hands a task to the worker pool, and a worker calls
 // runTimerTask. The timer thread itself never runs Smalltalk code, so the
-// TimeoutError is built here, on the worker, by the kernel's __timedOut: the
+// TimeoutError is built here, on the worker, by the kernel's __timedOutAfter:: the
 // class and the text are the kernel's, and C++ looks no global up by name.
 
 #include "protoST/STRuntime.h"
@@ -53,10 +54,12 @@ bool isSettled(STRuntime& rt, proto::ProtoContext* ctx, const PO* future) {
 
 // The deadline `ms` milliseconds from now on the monotonic clock. `who` is the
 // public selector, for the error text.
-TimerService::TimePoint deadlineAfter(proto::ProtoContext* ctx, const PO* ms, const char* who) {
+// `n` receives the milliseconds.
+TimerService::TimePoint deadlineAfter(proto::ProtoContext* ctx, const PO* ms, const char* who,
+                                      long long& n) {
     if (!ms || ms == PROTO_NONE || !ms->isInteger(ctx) || !proto::isSmallInt(ms))
         throw std::runtime_error(std::string(who) + ": the milliseconds must be an Integer");
-    const long long n = ms->asLong(ctx);
+    n = ms->asLong(ctx);
     if (n < 0)
         throw std::runtime_error(std::string(who) + ": the milliseconds must not be negative, not "
                                  + std::to_string(n));
@@ -70,8 +73,9 @@ TimerService::TimePoint deadlineAfter(proto::ProtoContext* ctx, const PO* ms, co
 const PO* scheduleOn(STRuntime& rt, proto::ProtoContext* ctx, const PO* r,
                      const PO* const* a, int argc, bool reject, const char* who) {
     if (argc != 1) throw std::runtime_error(std::string(who) + " expects 1 argument");
-    const TimerService::TimePoint deadline = deadlineAfter(ctx, a[0], who);
-    if (!isSettled(rt, ctx, r)) rt.timerService().schedule(ctx, deadline, r, reject);
+    long long ms = 0;
+    const TimerService::TimePoint deadline = deadlineAfter(ctx, a[0], who, ms);
+    if (!isSettled(rt, ctx, r)) rt.timerService().schedule(ctx, deadline, r, reject, ms);
     return r;
 }
 
@@ -101,12 +105,13 @@ void runTimerTask(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObj
     }
     // A Future that settled meanwhile keeps its result: nothing to build.
     if (isSettled(rt, ctx, future)) return;
+    const PO* ms = task->getOwnAttributeDirect(ctx, b.sym.ms);
+    const PO* args[] = { (ms && ms != PROTO_NONE) ? ms : ctx->fromLong(0) };
     bool understood = false;
-    sendDynamic(rt, ctx, future, proto::ProtoString::createSymbol(ctx, "__timedOut"),
-                nullptr, 0, &understood);
+    sendDynamic(rt, ctx, future, b.sym.timedOutAfter, args, 1, &understood);
     if (!understood)
         throw std::runtime_error("Future: a deadline passed, but Future does not understand "
-                                 "__timedOut (lib/kernel/future.st is not loaded)");
+                                 "__timedOutAfter: (lib/kernel/future.st is not loaded)");
 }
 
 void installTimerPrimitives(STRuntime& rt) {

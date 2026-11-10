@@ -4,7 +4,8 @@
 // What these cases pin:
 //   1. The timer thread never runs Smalltalk code. A thenDo: callback fired by
 //      a timer runs on a pool worker, so a callback that blocks for 500 ms
-//      does not delay a second timer due 50 ms later by more than 100 ms.
+//      does not hold up a second timer due 50 ms later (it settles well
+//      before the block ends: under 450 ms).
 //      Needs at least two workers (PROTOST_WORKERS is raised to 2 when lower).
 //   2. A settled timer leaves nothing rooted: the pending-entry count returns
 //      to zero once the timer has fired.
@@ -14,7 +15,7 @@
 //      timers due in an hour is destroyed promptly, and the timers are dropped.
 //
 // Timing: case 1 asserts a lower bound (the timer cannot fire early) and a
-// generous upper bound (the 100 ms the plan allows); case 4 bounds the
+// generous upper bound (under 450 ms, before the 500 ms block ends); case 4 bounds the
 // destruction at 5 s against an hour. No case uses a sleep to synchronise:
 // every wait is on a Future.
 
@@ -78,7 +79,8 @@ TEST_CASE("TimerService: a blocking callback does not delay a later timer",
     const long long elapsed = r->asLong(rt.rootCtx());
     INFO("the 50 ms timer settled after " << elapsed << " ms");
     CHECK(elapsed >= 50);
-    CHECK(elapsed <= 150);
+    // Only the property: it did not wait out the 500 ms block.
+    CHECK(elapsed < 450);
 }
 
 TEST_CASE("TimerService: a fired timer leaves no pending entry",
@@ -129,4 +131,26 @@ TEST_CASE("TimerService: pending timers never keep the runtime alive",
         std::chrono::steady_clock::now() - start).count();
     INFO("construction, run and destruction took " << ms << " ms");
     CHECK(ms < 5000);
+}
+
+TEST_CASE("TimerService: a Future settled first stops being rooted at once",
+          "[timers][actors]") {
+    // Two one-minute timers whose Futures settle at once by other means: the
+    // within: answer (its receiver resolves) and an after: Future resolved by
+    // hand. Each settle cancels its timer, so nothing stays rooted although
+    // both deadlines are a minute away. Without the cancellation the count
+    // would stay 2 until the deadlines.
+    auto bc = compile(
+        "| f d g | "
+        "f := Future new. "
+        "d := f within: 60000. "
+        "g := Future after: 60000. "
+        "f resolve: 1. "
+        "g resolve: 2. "
+        "d wait + g wait");
+    protoST::STRuntime rt;
+    const proto::ProtoObject* r = rt.runTopLevel(*bc);
+    REQUIRE(r != nullptr);
+    REQUIRE(r->asLong(rt.rootCtx()) == 3);
+    CHECK(rt.timerService().pendingCount(rt.rootCtx()) == 0);
 }

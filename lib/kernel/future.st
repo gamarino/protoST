@@ -70,8 +70,9 @@ Future >> waitWithin: ms
 
 "Sent on a worker by the timer service when a within: deadline passes before
  the receiver settled (src/primitives/timer_prims.cpp). Private."
-Future >> __timedOut
-  self rejectWith: (TimeoutError new messageText: 'the Future did not settle before its deadline').
+Future >> __timedOutAfter: ms
+  self rejectWith: (TimeoutError new
+    messageText: 'the Future did not settle within ' , ms printString , ' ms').
 
 Future >> & aFuture
   ^ Future whenAll: (Array with: self with: aFuture).

@@ -21,6 +21,10 @@ namespace {
 // conversion of a far deadline to the platform's wait can overflow.
 constexpr auto kMaxWait = std::chrono::hours(1);
 
+// How long a timer whose hand-over to the workers failed waits before the
+// next attempt.
+constexpr auto kRetryDelay = std::chrono::milliseconds(10);
+
 // Entry of the timer ProtoThread: args[0] is an ExternalPointer to the
 // service.
 const proto::ProtoObject* timerThreadMain(proto::ProtoContext* ctx,
@@ -91,8 +95,12 @@ unsigned long TimerService::pendingCount(proto::ProtoContext* ctx) const {
     return list ? static_cast<unsigned long>(list->getSize(ctx)) : 0;
 }
 
+void TimerService::cancel(proto::ProtoContext* ctx, std::uint64_t id) {
+    unrootEntry(ctx, id);
+}
+
 void TimerService::schedule(proto::ProtoContext* ctx, TimePoint deadline,
-                            const proto::ProtoObject* future, bool reject) {
+                            const proto::ProtoObject* future, bool reject, long long ms) {
     if (!future || future == PROTO_NONE) return;
     std::uint64_t id;
     {
@@ -100,9 +108,20 @@ void TimerService::schedule(proto::ProtoContext* ctx, TimePoint deadline,
         if (stopping_) return;
         id = nextId_++;
     }
-    // Rooted before the heap can name it, so the timer thread always finds
-    // the Future of an entry it pops. The allocation runs without the mutex.
+    const Bootstrap& b = rt_.bootstrap();
+    TransientPin pinFuture(ctx, future);
+    // The id first, so a settler that wins the claim from here on finds it
+    // and cancels; then the root, so the timer thread always finds the
+    // Future of an entry it pops; then a look at the claim: a settle that
+    // came before the root (whose cancel found nothing to remove) is caught
+    // here. Every step runs without the mutex.
+    const_cast<proto::ProtoObject*>(future)->setAttribute(
+        ctx, b.sym.timerId, ctx->fromLong(static_cast<long long>(id)));
     rootEntry(ctx, id, future);
+    if (future->getOwnAttributeDirect(ctx, b.sym.settling) == PROTO_TRUE) {
+        unrootEntry(ctx, id);
+        return;
+    }
 
     bool dropped = false, earliest = false, start = false;
     {
@@ -110,7 +129,7 @@ void TimerService::schedule(proto::ProtoContext* ctx, TimePoint deadline,
         if (stopping_) {
             dropped = true;
         } else {
-            heap_.push(Entry{deadline, id, reject});
+            heap_.push(Entry{deadline, id, reject, ms});
             earliest = heap_.top().id == id;
             if (state_ == State::Idle) { state_ = State::Starting; start = true; }
         }
@@ -176,20 +195,36 @@ void TimerService::stop(proto::ProtoContext* ctx) {
     }
 }
 
-void TimerService::fire(proto::ProtoContext* ctx, const Entry& e) {
+bool TimerService::fire(proto::ProtoContext* ctx, const Entry& e) {
     const Bootstrap& b = rt_.bootstrap();
     // The Future is rooted by the sparse list until unrootEntry below; reading
     // the list and the Future's state allocates nothing.
     const proto::ProtoSparseList* list = sparseListOf(ctx, anchor_->getOwnAttributeDirect(ctx, key_));
-    const proto::ProtoObject* future = list ? list->getAt(ctx, e.id) : nullptr;
-    if (!future || future == PROTO_NONE) return;
-    const proto::ProtoObject* state = future->getOwnAttributeDirect(ctx, b.sym.state);
-    if (state && state != PROTO_NONE && state->asLong(ctx) != 0) {
-        // Settled first (within: on a Future that answered in time): there is
-        // nothing to do, and the entry stops rooting it now.
+    if (!list || !list->has(ctx, e.id)) return true;   // cancelled: skipped
+    const proto::ProtoObject* future = list->getAt(ctx, e.id);
+    if (!future || future == PROTO_NONE) return true;
+    if (future->getOwnAttributeDirect(ctx, b.sym.settling) == PROTO_TRUE) {
+        // Settled (or being settled) first; its cancel may still be on its
+        // way. Nothing to hand over; the entry stops rooting it now.
         unrootEntry(ctx, e.id);
-        return;
+        return true;
     }
+    try {
+        handOver(ctx, e, future);
+    } catch (const std::exception& ex) {
+        std::fprintf(stderr, "error: a timer could not be handed to the workers (%s); "
+                             "retrying\n", ex.what());
+        return false;
+    } catch (...) {
+        std::fprintf(stderr, "error: a timer could not be handed to the workers; retrying\n");
+        return false;
+    }
+    return true;
+}
+
+void TimerService::handOver(proto::ProtoContext* ctx, const Entry& e,
+                            const proto::ProtoObject* future) {
+    const Bootstrap& b = rt_.bootstrap();
     // The task roots the Future from here on: pinned on this thread while it
     // is built, then in the runtime's task list once enqueued.
     const proto::ProtoObject* task =
@@ -198,10 +233,18 @@ void TimerService::fire(proto::ProtoContext* ctx, const Entry& e) {
     auto* t = const_cast<proto::ProtoObject*>(task);
     t->setAttribute(ctx, b.sym.future, future);
     t->setAttribute(ctx, b.sym.timeout, e.reject ? PROTO_TRUE : PROTO_FALSE);
+    t->setAttribute(ctx, b.sym.ms, ctx->fromLong(e.ms));
     // Removed before the task is enqueued, so a waiter woken by the settle
-    // never sees the entry still counted as pending.
+    // never sees the entry still counted as pending. If the enqueue fails,
+    // the entry is rooted again (the pinned task keeps the Future alive
+    // meanwhile) so that the retry finds it.
     unrootEntry(ctx, e.id);
-    rt_.enqueueTask(ctx, task);
+    try {
+        rt_.enqueueTask(ctx, task);
+    } catch (...) {
+        rootEntry(ctx, e.id, future);
+        throw;
+    }
 }
 
 void TimerService::run(proto::ProtoContext* ctx) {
@@ -232,16 +275,15 @@ void TimerService::run(proto::ProtoContext* ctx) {
                 }
             }
         }
-        // Managed again, without the mutex: build and enqueue the tasks.
-        for (const Entry& e : due) {
-            try {
-                fire(ctx, e);
-            } catch (const std::exception& ex) {
-                std::fprintf(stderr, "error: a timer could not be handed to the workers: %s\n",
-                             ex.what());
-            } catch (...) {
-                std::fprintf(stderr, "error: a timer could not be handed to the workers\n");
-            }
+        // Managed again, without the mutex: build and enqueue the tasks. An
+        // entry whose hand-over failed stays rooted and comes back later.
+        std::vector<Entry> retry;
+        for (const Entry& e : due)
+            if (!fire(ctx, e)) retry.push_back(e);
+        if (!retry.empty()) {
+            const TimePoint later = Clock::now() + kRetryDelay;
+            std::lock_guard<std::mutex> lock(mutex_);
+            for (Entry e : retry) { e.deadline = later; heap_.push(e); }
         }
         // Quiescent point: no pin is held, so this thread's young cells can
         // be submitted to the collector before it waits again.

@@ -63,6 +63,12 @@ public:
     // with a clear message, a call from any other thread.
     bool isOwnerThread() const;
 
+    // True on a thread of this runtime's worker pool. A wait there with no
+    // current actor (in a callback a settle runs on the worker) must not use
+    // the main-thread wait (markMainWaitingOn), whose one slot belongs to the
+    // thread running the program.
+    bool isWorkerThread() const;
+
     // The source modules loaded so far (the kernel files, imported modules),
     // in load order. They live as long as the runtime. For the debugger.
     std::vector<const BytecodeModule*> loadedModules() const;
@@ -152,7 +158,8 @@ public:
     //     scheduled (its suspended turn resumes);
     //   * timer settle: `__timeout__` (true or false) and `__future__` -- the
     //     Future is rejected with a new TimeoutError (true: the kernel's
-    //     Future>>__timedOut builds it, on the worker) or resolved with nil
+    //     Future>>__timedOutAfter: builds it, on the worker, from the task's
+    //     `__ms__`) or resolved with nil
     //     (false), unless it settled first. Built by TimerService.
     // A task of any other shape is an internal error, reported by the worker.
     // `ctx` is the calling thread's own context. O(log N_tasks) per append.

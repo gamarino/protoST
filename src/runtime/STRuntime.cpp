@@ -899,6 +899,8 @@ bool STRuntime::enterBlockingIO(proto::ProtoContext* ctx) {
     return true;
 }
 
+bool STRuntime::isWorkerThread() const { return t_workerOf == this; }
+
 void STRuntime::leaveBlockingIO() {
     impl_->blockedInIO.fetch_sub(1, std::memory_order_acq_rel);
 }
@@ -1593,8 +1595,11 @@ bool STRuntime::runOneTask(proto::ProtoContext* ctx) {
         return false;
     auto* reg = const_cast<proto::ProtoObject*>(impl_->liveRegistry);
     const proto::ProtoString* tasksKey = impl_->bootstrap.sym.tasks;
-    // CAS-take the head of the FIFO task list.
+    // CAS-take the head of the FIFO task list. The candidate head is pinned
+    // before the compare-and-swap that removes it from the list, so it is
+    // rooted at every point.
     const proto::ProtoObject* task = nullptr;
+    TransientPin pinTask(ctx, PROTO_NONE);
     for (;;) {
         const proto::ProtoObject* cur = reg->getOwnAttributeDirect(ctx, tasksKey);
         const proto::ProtoList* curList =
@@ -1602,14 +1607,13 @@ bool STRuntime::runOneTask(proto::ProtoContext* ctx) {
         if (!curList || curList->getSize(ctx) == 0) return false;
         TransientPin pinCur(ctx, cur);
         const proto::ProtoObject* head = curList->getAt(ctx, 0);
+        pinTask.reset(head);
         const proto::ProtoList* rest = curList->removeFirst(ctx);
         TransientPin pinRest(ctx, reinterpret_cast<const proto::ProtoObject*>(rest));
         const proto::ProtoObject* restObj = rest->asObject(ctx);
         TransientPin pinRestObj(ctx, restObj);
         if (reg->setAttributeIfEqual(ctx, tasksKey, cur, restObj)) { task = head; break; }
     }
-    // Nothing allocates between the take and this pin.
-    TransientPin pinTask(ctx, task);
     impl_->queuedTasks.fetch_sub(1, std::memory_order_acq_rel);
     if (!task || task == PROTO_NONE) return true;
 

@@ -177,6 +177,9 @@ struct Bootstrap {
         // its __future__ with a TimeoutError, FALSE to resolve it with nil.
         const proto::ProtoString* timers          = nullptr;  // __timers__ (on liveRegistry: pending timers)
         const proto::ProtoString* timeout         = nullptr;  // __timeout__ (on a task: marks a timer settle)
+        const proto::ProtoString* ms              = nullptr;  // __ms__ (on a timer task: the delay asked for)
+        const proto::ProtoString* timerId         = nullptr;  // __timer_id__ (on a Future: its pending timer entry)
+        const proto::ProtoString* timedOutAfter   = nullptr;  // __timedOutAfter: (kernel selector sent on a timeout)
         // 2026-05-23 night: profile of saturation under 8 workers showed
         // 51 % of CPU in SymbolTable::intern + mutex contention, traced to
         // two createSymbol calls per SEND_* dispatch (one for __class_name__,

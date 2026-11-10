@@ -36,12 +36,31 @@
 // on the timer thread's context) before the entry is removed, and enqueued
 // after; the task list then roots the Future until a worker settles it.
 //
+// Cancellation. schedule() stamps the entry id on the Future (`__timer_id__`);
+// whoever else settles the Future first calls cancel(), from settleFuture, and
+// the Future stops being rooted by the service at once. The heap entry (an id
+// and a deadline) is not searched for: it is skipped when it comes due and
+// finds no rooted Future.
+//
+// A failed hand-over. If building or enqueueing the task fails (a protoCore
+// allocation failure), the entry stays rooted and is retried after
+// kRetryDelay, with a report on stderr: the Future settles as soon as memory
+// allows, never on the timer thread (that would run its callbacks there), and
+// never silently not at all.
+//
 // Shutdown
 // --------
 // stop() is called by ~STRuntime after the worker pool is joined. Timers still
-// pending are dropped: their Futures never settle, and nothing waits for their
-// deadlines, so the service never keeps the process alive. A schedule() after
-// stop() is dropped too.
+// pending are dropped: their Futures never settle, and the timer thread waits
+// for no deadline, so the service itself never keeps the process alive. A
+// schedule() after stop() is dropped too. One caveat comes from the joins
+// before it, not from the service: a worker blocked in a nested wait
+// (waitHelping, e.g. waitWithin: inside a block of an actor method) is joined
+// only once that wait ends, so ~STRuntime can be delayed up to that deadline.
+//
+// One service, and so one timer thread, per STRuntime. A process normally has
+// one runtime; a guest runtime in a host's space (STRuntime(ProtoSpace&)) has
+// its own service.
 #ifndef PROTOST_TIMER_SERVICE_H
 #define PROTOST_TIMER_SERVICE_H
 
@@ -78,13 +97,19 @@ public:
     TimerService& operator=(const TimerService&) = delete;
 
     // Settle `future` at `deadline`: resolve it with nil, or reject it with a
-    // TimeoutError when `reject` is true. `ctx` is the calling thread's own
+    // TimeoutError when `reject` is true; `ms` is the delay asked for, which
+    // the TimeoutError's text states. `ctx` is the calling thread's own
     // context (the entry is rooted with an allocation on it). A deadline in
-    // the past fires at once. Starts the timer thread on first use; throws
-    // std::runtime_error when the thread cannot be created. After stop() it
-    // does nothing.
+    // the past fires at once; a Future already settled is not scheduled.
+    // Starts the timer thread on first use; throws std::runtime_error when
+    // the thread cannot be created. After stop() it does nothing.
     void schedule(proto::ProtoContext* ctx, TimePoint deadline,
-                  const proto::ProtoObject* future, bool reject);
+                  const proto::ProtoObject* future, bool reject, long long ms);
+
+    // The Future of entry `id` settled by other means: stop rooting it.
+    // Idempotent; a no-op for an entry that already fired. Called by
+    // settleFuture with the id the Future carries (`__timer_id__`).
+    void cancel(proto::ProtoContext* ctx, std::uint64_t id);
 
     // Ends the timer thread and joins it, dropping every pending timer.
     // Called once, by ~STRuntime, on the runtime's root context, after the
@@ -104,6 +129,7 @@ private:
         TimePoint     deadline;
         std::uint64_t id;       // key in the rooting sparse list; also FIFO order
         bool          reject;
+        long long     ms;       // the delay asked for, for the TimeoutError text
     };
     // Earliest deadline on top; equal deadlines in scheduling order.
     struct Later {
@@ -117,8 +143,12 @@ private:
     // The rooting sparse list: add or remove one entry by compare-and-swap.
     void rootEntry(proto::ProtoContext* ctx, std::uint64_t id, const proto::ProtoObject* future);
     void unrootEntry(proto::ProtoContext* ctx, std::uint64_t id);
-    // Hand one due entry to the worker pool (on the timer thread).
-    void fire(proto::ProtoContext* ctx, const Entry& e);
+    // Hand one due entry to the worker pool (on the timer thread). Answers
+    // false when the hand-over failed and the entry must be retried.
+    bool fire(proto::ProtoContext* ctx, const Entry& e);
+    // Build the settle task for `future` (rooted by entry e) and enqueue it.
+    // Throws when an allocation fails; the entry is then still rooted.
+    void handOver(proto::ProtoContext* ctx, const Entry& e, const proto::ProtoObject* future);
     void startThread(proto::ProtoContext* ctx);
 
     STRuntime&                 rt_;
