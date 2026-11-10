@@ -89,6 +89,14 @@ std::string constText(const BytecodeModule& m, size_t i) {
         case K::Symbol:      return "#" + m.constSymbol(i);
         case K::Char:        return "$" + m.constString(i);
         case K::UnsetMarker: return "<unset>";
+        case K::Bytes: {
+            std::string out = "#[";
+            for (unsigned char c : m.constString(i)) {
+                if (out.size() > 2) out += ' ';
+                out += std::to_string(c);
+            }
+            return out + "]";
+        }
     }
     return "?";
 }
@@ -103,6 +111,7 @@ const char* constKindName(BytecodeModule::ConstKind k) {
         case K::Symbol:       return "symbol";
         case K::Char:         return "char";
         case K::UnsetMarker:  return "unset";
+        case K::Bytes:        return "bytes";
     }
     return "?";
 }

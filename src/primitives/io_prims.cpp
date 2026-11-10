@@ -165,7 +165,9 @@ std::string dataArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
 
 // The protoST error class of each protoio::Error kind. InvalidArgument (a
 // value the library refuses) is the generic error the primitives raise for a
-// bad argument.
+// bad argument. Internal (a failure inside a library protoIO relies on, such
+// as OpenSSL, caused neither by the program nor by its environment) is an
+// InternalError.
 [[noreturn]] void raise(const protoio::Error& e) {
     switch (e.kind) {
         case Kind::FileNotFound: throw ClassedErrorSignal("FileDoesNotExist", e.what());
@@ -178,6 +180,7 @@ std::string dataArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
         case Kind::Process: throw ClassedErrorSignal("OSProcessError", e.what());
         case Kind::LineTooLong: throw ClassedErrorSignal("LineTooLong", e.what());
         case Kind::BodyTooLarge: throw ClassedErrorSignal("BodyTooLarge", e.what());
+        case Kind::Internal: throw ClassedErrorSignal("InternalError", e.what());
         case Kind::InvalidArgument: break;
     }
     throw std::runtime_error(e.what());

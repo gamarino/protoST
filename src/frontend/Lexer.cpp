@@ -350,6 +350,10 @@ Token Lexer::nextImpl_() {
             Token t; t.kind = TokenKind::HashLParen; t.text = "#(";
             t.line = line_; t.column = col_; advance(); advance(); return t;
         }
+        if (lookahead() == '[') {
+            Token t; t.kind = TokenKind::HashLBracket; t.text = "#[";
+            t.line = line_; t.column = col_; advance(); advance(); return t;
+        }
         return lexSymbol();
     }
     if (c == '\'') return lexString();

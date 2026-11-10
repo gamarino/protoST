@@ -22,6 +22,7 @@
 #include "frontend/Compiler.h"
 #include "modules/STModuleProvider.h"
 #include "modules/STForeignSend.h"
+#include "primitives/BytesSupport.h"
 #include "protoCore.h"
 
 #include <algorithm>
@@ -78,6 +79,7 @@ namespace protoST { void installWorkerPoolGlobal(STRuntime& rt); }
 namespace protoST { void installExceptionPrimitives(STRuntime& rt); }
 namespace protoST { void installCollectionPrimitives(STRuntime& rt); }
 namespace protoST { void installIoPrimitives(STRuntime& rt); }
+namespace protoST { void installBytesPrimitives(STRuntime& rt); }
 
 // F6-A6: future transition helpers defined alongside the Future primitives.
 // resolveFutureFromDrain / rejectFutureFromDrain perform the lock-free
@@ -566,6 +568,10 @@ struct STRuntime::Impl {
         globals->setAttribute(rootCtx,
             proto::ProtoString::createSymbol(rootCtx, "Boolean"),
             bootstrap.booleanProto);
+        // ByteArray: the class of protoCore ProtoByteBuffer values.
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "ByteArray"),
+            bootstrap.byteArrayProto);
 
         // F6 v3 E2b: create the single live-registry GC root and pin it.
         //
@@ -635,6 +641,7 @@ struct STRuntime::Impl {
             pinPermanent(bootstrap.booleanProto);
             pinPermanent(bootstrap.stringProto);
             pinPermanent(bootstrap.symbolProto);
+            pinPermanent(bootstrap.byteArrayProto);
             pinPermanent(bootstrap.blockProto);
             pinPermanent(bootstrap.actorProto);
             pinPermanent(bootstrap.futureProto);
@@ -731,6 +738,7 @@ void STRuntime::construct() {
     installAtomPrimitives(*this);
     installExceptionPrimitives(*this);
     installIoPrimitives(*this);
+    installBytesPrimitives(*this);
     installCollectionPrimitives(*this);
     installImportGlobal(*this);
     installWorkerPoolGlobal(*this);
@@ -1189,6 +1197,11 @@ STRuntime::materialize(proto::ProtoContext* ctx, const BytecodeModule& m,
             // A character literal is a Character: protoCore's embedded
             // unicode-char value, decoded from the literal's UTF-8 text.
             return ctx->fromUnicodeChar(decodeFirstCodepoint(m.constString(i)));
+        case K::Bytes:
+            // A `#[...]` literal: a fresh ByteArray each time, as a string
+            // literal is a fresh String. A ByteArray is immutable, so the
+            // difference is visible only to ==.
+            return makeBytes(ctx, m.constString(i));
         case K::UnsetMarker:
             // Call-form "this named arg was omitted by the caller" sentinel.
             // The method-decl prologue emits a PUSH_CONST of this kind so it

@@ -31,6 +31,9 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     out.booleanProto      = out.objectProto->newChild(ctx, /*isMutable=*/true);
     out.stringProto       = out.objectProto->newChild(ctx, /*isMutable=*/true);
     out.symbolProto       = out.stringProto->newChild(ctx, /*isMutable=*/true);
+    // ByteArray values are protoCore ProtoByteBuffers; like strings, they are
+    // immutable values and their class sits directly under Object.
+    out.byteArrayProto    = out.objectProto->newChild(ctx, /*isMutable=*/true);
     // Characters are protoCore's embedded unicode-char values; their
     // prototype is Character, so `$a class == Character`.
     out.characterProto    = out.objectProto->newChild(ctx, /*isMutable=*/true);
@@ -119,6 +122,10 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
         sp.floatPrototype        = const_cast<proto::ProtoObject*>(out.floatProto);
         sp.doublePrototype       = const_cast<proto::ProtoObject*>(out.floatProto);
         sp.stringPrototype       = const_cast<proto::ProtoObject*>(out.stringProto);
+        // protoCore resolves every ProtoByteBuffer's prototype through this
+        // slot (it is used for byte buffers only), so `#[1 2] class` is
+        // ByteArray.
+        sp.bufferPrototype       = const_cast<proto::ProtoObject*>(out.byteArrayProto);
         sp.booleanPrototype      = const_cast<proto::ProtoObject*>(out.booleanProto);
         // Route nil (PROTO_NONE) through our nilProto so that selectors defined
         // on objectProto (e.g. Object>>halt, Object>>printNl) are reachable from
@@ -152,6 +159,7 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     stamp(out.booleanProto,      "Boolean");
     stamp(out.stringProto,       "String");
     stamp(out.symbolProto,       "Symbol");
+    stamp(out.byteArrayProto,    "ByteArray");
     stamp(out.characterProto,    "Character");
     stamp(out.blockProto,        "BlockClosure");
     stamp(out.actorProto,        "Actor");
@@ -261,6 +269,7 @@ const proto::ProtoObject* methodHolder(const Bootstrap& b, proto::ProtoContext* 
     if (recv->isInteger(ctx)) return b.largeIntegerProto;
     if (recv->isFloat(ctx)) return b.floatProto;
     if (recv->asString(ctx)) return b.stringProto;
+    if (recv->isByteBuffer(ctx)) return b.byteArrayProto;
     if (isCharacterValue(ctx, recv)) return b.characterProto;
     return recv;
 }

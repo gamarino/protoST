@@ -1144,6 +1144,11 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             m.emitWide(Op::PUSH_CONST, static_cast<unsigned int>(idx), currentLine_);
             return;
         }
+        case NodeKind::ByteArrayLit: {
+            auto idx = m.addBytes(n.text);
+            m.emitWide(Op::PUSH_CONST, static_cast<unsigned int>(idx), currentLine_);
+            return;
+        }
         case NodeKind::TrueLit:  m.emit(Op::PUSH_TRUE, 0, currentLine_); return;
         case NodeKind::FalseLit: m.emit(Op::PUSH_FALSE, 0, currentLine_); return;
         case NodeKind::NilLit:   m.emit(Op::PUSH_NIL, 0, currentLine_); return;
@@ -2063,7 +2068,7 @@ bool Compiler::isInertGroupValue(const Node& e,
                                  const std::unordered_set<std::string>& written) const {
     switch (e.kind) {
         case NodeKind::IntegerLit: case NodeKind::FloatLit: case NodeKind::StringLit:
-        case NodeKind::SymbolLit:  case NodeKind::CharLit:
+        case NodeKind::SymbolLit:  case NodeKind::CharLit:  case NodeKind::ByteArrayLit:
         case NodeKind::TrueLit:    case NodeKind::FalseLit: case NodeKind::NilLit:
         case NodeKind::Self:
             return true;

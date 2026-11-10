@@ -23,6 +23,7 @@ enum class TokenKind : uint8_t {
     LBracket, RBracket, // [ ]
     LBrace, RBrace,     // { }
     HashLParen,         // #(   array literal
+    HashLBracket,       // #[   byte array literal
     Pipe,               // |    locals separator and binary op (disambiguated by parser)
     Period,             // .    statement terminator
     Semicolon,          // ;    cascade
@@ -72,6 +73,7 @@ inline const char* tokenKindName(TokenKind k) {
         case TokenKind::LBrace:     return "LBrace";
         case TokenKind::RBrace:     return "RBrace";
         case TokenKind::HashLParen: return "HashLParen";
+        case TokenKind::HashLBracket: return "HashLBracket";
         case TokenKind::Pipe:       return "Pipe";
         case TokenKind::Period:     return "Period";
         case TokenKind::Semicolon:  return "Semicolon";

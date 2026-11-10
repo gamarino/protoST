@@ -236,6 +236,7 @@ inline std::string describeReceiverForDNU(proto::ProtoContext* ctx,
             ? " (receiver class: Symbol)" : " (receiver class: String)";
     }
     if (recv->isBoolean(ctx))  return " (receiver class: Boolean)";
+    if (recv->isByteBuffer(ctx)) return " (receiver class: ByteArray)";
     if (recv->isFloat(ctx))    return " (receiver class: Float)";
     if (classNameSym) {
         // The receiver is a class object: the message went to the class side.

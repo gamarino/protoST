@@ -321,6 +321,10 @@ size_t BytecodeModule::addChar(const std::string& utf8) {
     consts_.push_back(Const{ConstKind::Char, 0, 0.0, utf8});
     return consts_.size() - 1;
 }
+size_t BytecodeModule::addBytes(const std::string& bytes) {
+    consts_.push_back(Const{ConstKind::Bytes, 0, 0.0, bytes});
+    return consts_.size() - 1;
+}
 size_t BytecodeModule::addUnsetMarker() {
     // No payload — the engine substitutes Bootstrap::unsetMarker when this
     // constant is pushed via PUSH_CONST.

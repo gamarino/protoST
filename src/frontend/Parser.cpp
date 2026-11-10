@@ -361,6 +361,10 @@ ast::NodePtr Parser::parsePrimary() {
             Token open = current_; advance();
             return parseLiteralArray(open.line, open.column);
         }
+        case TokenKind::HashLBracket: {
+            Token open = current_; advance();
+            return parseByteArrayLiteral(open.line, open.column);
+        }
         default:
             error(current_, std::string("expected primary expression, got ") + tokenKindName(current_.kind));
             advance();
@@ -440,11 +444,38 @@ ast::NodePtr Parser::parseLiteralArrayElement() {
         case TokenKind::LParen:
             advance();
             return parseLiteralArray(t.line, t.column);
+        // A byte array inside a literal array, as in Pharo: `#(#[1 2] 3)`.
+        case TokenKind::HashLBracket:
+            advance();
+            return parseByteArrayLiteral(t.line, t.column);
         default:
             error(current_, "unexpected token in literal array literal");
             advance();
             return nullptr;
     }
+}
+
+// A `#[ … ]` byte array literal (Pharo syntax). The opening `#[` has already
+// been consumed. Each element is an integer literal from 0 to 255; anything
+// else is a compile error, so the bytes are known and checked here and the
+// node carries them in `text`.
+ast::NodePtr Parser::parseByteArrayLiteral(int openLine, int openCol) {
+    auto bytes = ast::makeNode(ast::NodeKind::ByteArrayLit, openLine, openCol);
+    while (current_.kind != TokenKind::RBracket &&
+           current_.kind != TokenKind::EndOfFile) {
+        const Token t = current_;
+        if (t.kind != TokenKind::Integer || t.large || t.intValue < 0 || t.intValue > 255) {
+            error(t, "a byte array literal holds integers from 0 to 255, got '" + t.text + "'");
+            // Skip to the closing bracket so one bad element is one error.
+            while (current_.kind != TokenKind::RBracket &&
+                   current_.kind != TokenKind::EndOfFile) advance();
+            break;
+        }
+        bytes->text.push_back(static_cast<char>(t.intValue));
+        advance();
+    }
+    consume(TokenKind::RBracket, "expected ']' to close byte array literal");
+    return bytes;
 }
 
 ast::NodePtr Parser::parseBlock() {

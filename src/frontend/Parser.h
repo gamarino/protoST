@@ -76,6 +76,7 @@ private:
     // the current array (always RParen) — passed for recursion clarity.
     ast::NodePtr parseLiteralArray(int openLine, int openCol);
     ast::NodePtr parseLiteralArrayElement();
+    ast::NodePtr parseByteArrayLiteral(int openLine, int openCol);
     ast::NodePtr parseClassDecl(Token classIdent);
     void checkBlankLineContinuation(const ast::Node* method);
     ast::NodePtr parseMethodDecl(Token classIdent, bool classSide);

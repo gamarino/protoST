@@ -39,6 +39,12 @@ struct Bootstrap {
     const proto::ProtoObject* booleanProto       = nullptr;
     const proto::ProtoObject* stringProto        = nullptr;
     const proto::ProtoObject* symbolProto        = nullptr;
+    // ByteArray: an immutable value over protoCore's ProtoByteBuffer
+    // (lib/kernel/bytes.st, src/primitives/bytes_prims.cpp). Like String it
+    // is a direct child of Object, and a ProtoByteBuffer value dispatches to
+    // it: through the space's bufferPrototype slot in a space protoST owns,
+    // through methodHolder otherwise.
+    const proto::ProtoObject* byteArrayProto     = nullptr;
     const proto::ProtoObject* blockProto         = nullptr;
     // F6: actor model — mutable so methods can later be bound on them.
     const proto::ProtoObject* actorProto         = nullptr;

@@ -26,6 +26,9 @@ public:
         // An integer literal beyond the 64-bit range: digits in `sval`, radix in
         // `ival`; materialised with ProtoContext::fromString as a LargeInteger.
         LargeInteger,
+        // A `#[...]` byte array literal: the raw bytes in `sval`;
+        // materialised as a ByteArray (BytesSupport.h makeBytes).
+        Bytes,
     };
 
     struct Const {
@@ -86,6 +89,7 @@ public:
     size_t  addString(const std::string& s);
     size_t  internSymbol(const std::string& s);  // de-duplicated
     size_t  addChar(const std::string& utf8);
+    size_t  addBytes(const std::string& bytes);
     // Push-an-unset-sentinel constant. Idempotent: adding it twice is
     // allowed but the cache only needs a single live entry; we still
     // append, leaving deduplication to the compiler if it cares.

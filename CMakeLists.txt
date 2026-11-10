@@ -227,6 +227,7 @@ add_library(protost_runtime STATIC
     src/primitives/exception_prims.cpp
     src/primitives/collection_prims.cpp
     src/primitives/io_prims.cpp
+    src/primitives/bytes_prims.cpp
     src/modules/STModuleProvider.cpp
     src/modules/STForeignSend.cpp
     src/repl/Repl.cpp
@@ -249,7 +250,10 @@ target_link_libraries(protost_runtime PRIVATE protost_warnings)
 # link interface; dpkg-shlibdeps turns it into the package's libssl
 # dependency.
 #
-# The floor is 0.2.3: readBufferedLine, which nextLine uses to take a line
+# The floor is 0.3.0: Error::Kind::Internal, a failure inside a library
+# protoIO relies on (io_prims.cpp maps it to InternalError), with the binary
+# encodings, digests and durable files the bytes work builds on. 0.2.3 brought
+# readBufferedLine, which nextLine uses to take a line
 # already in protoIO's read-ahead buffer without leaving the collector's
 # quorum (io_prims.cpp). 0.2.2 made the listener on a host-less address
 # dual-stack, so a client that tries ::1 first ("localhost" on Windows and
@@ -260,7 +264,7 @@ target_link_libraries(protost_runtime PRIVATE protost_warnings)
 # console reads and open files that can be deleted or renamed. protoIO's
 # package is compatible within one minor version (SameMinorVersion), so 0.1
 # would refuse 0.2.x.
-set(PROTOIO_MIN_VERSION "0.2.3")
+set(PROTOIO_MIN_VERSION "0.3.0")
 find_package(protoIO ${PROTOIO_MIN_VERSION} CONFIG QUIET)
 if(protoIO_FOUND)
     message(STATUS "protoST: installed protoIO ${protoIO_VERSION} from ${protoIO_DIR}")

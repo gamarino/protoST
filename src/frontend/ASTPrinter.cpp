@@ -35,6 +35,12 @@ void emit(std::ostringstream& os, const Node& n, int depth) {
         case NodeKind::ThisContext:   os << "(this-context)"; return;
         case NodeKind::Identifier:    os << "(id " << n.text << ")"; return;
         case NodeKind::ArrayLit:      os << "(array";       emitChildren(os, n, depth); os << ")"; return;
+        case NodeKind::ByteArrayLit: {
+            os << "(bytes";
+            for (unsigned char c : n.text) os << ' ' << static_cast<int>(c);
+            os << ")";
+            return;
+        }
         case NodeKind::DynArrayLit:   os << "(dyn-array";   emitChildren(os, n, depth); os << ")"; return;
         case NodeKind::Assignment:    os << "(assign " << n.text;
                                        if (!n.children.empty()) { os << " "; emit(os, *n.children[0], depth); }

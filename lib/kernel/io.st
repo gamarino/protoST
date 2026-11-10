@@ -8,8 +8,9 @@
  Every blocking operation leaves the collector's quorum while it waits, so a
  program or an actor blocked on input never holds up a collection. Errors are
  classed: FileDoesNotExist, FileAlreadyExists, FileSystemError, NetworkError
- and its subclasses, OSProcessError, LineTooLong. Text is UTF-8; binary data is an Array
- of integers from 0 to 255. See docs/superpowers/specs/2026-09-29-io-design.md."
+ and its subclasses, OSProcessError, LineTooLong, InternalError. Text is
+ UTF-8; binary data is an Array of integers from 0 to 255. See
+ docs/superpowers/specs/2026-09-29-io-design.md."
 
 Error subclass: #FileSystemError.
 FileSystemError subclass: #FileDoesNotExist.
@@ -21,6 +22,9 @@ NetworkError subclass: #NameLookupFailure.
 NetworkError subclass: #BodyTooLarge.
 Error subclass: #LineTooLong.
 Error subclass: #OSProcessError.
+"Signalled when a library the I/O layer relies on (such as OpenSSL) fails
+ internally: neither the program nor its environment caused it."
+Error subclass: #InternalError.
 
 "-- Streams over a descriptor (standard streams, files, sockets) -----------"
 

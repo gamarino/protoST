@@ -1,6 +1,7 @@
 object.st
 character.st
 string.st
+bytes.st
 number.st
 fraction.st
 collection.st

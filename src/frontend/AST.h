@@ -12,6 +12,7 @@ enum class NodeKind : uint8_t {
     IntegerLit, FloatLit, StringLit, SymbolLit, CharLit,
     TrueLit, FalseLit, NilLit,
     ArrayLit,        // #(...)
+    ByteArrayLit,    // #[...]: the bytes, already checked, in `text`
     DynArrayLit,     // {...}
     Identifier,
     Self, Super, ThisContext,
