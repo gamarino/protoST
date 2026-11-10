@@ -377,13 +377,20 @@ void collectHashedEntry(proto::ProtoContext*, void* self,
 // observable rule is unchanged: iteration sees the collection as it was when
 // iteration began. The map is pinned for the walk, because the caller's own
 // reference to it is a C++ local.
-void hashedEntries(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
+//
+// The ENTRIES, however, outlive this call: they are raw pointers into the
+// snapshot map, which stays alive only while something references it, and a
+// block that replaces the receiver's `__data__` drops the last reference. So
+// the function answers the snapshot map, and the caller keeps it pinned
+// (TransientPin) for as long as it uses `out`.
+const proto::ProtoObject* hashedEntries(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
                    std::vector<HashedEntry>& out) {
     const proto::ProtoMap* data = mapData(ctx, coll);
     TransientPin pinData(
         ctx, reinterpret_cast<const proto::ProtoObject*>(data));
     out.reserve(static_cast<size_t>(data->getSize(ctx)));
     proto::hashedForEach(ctx, data, &out, collectHashedEntry);
+    return reinterpret_cast<const proto::ProtoObject*>(data);
 }
 
 // True when `obj` is a list-backed collection instance — it carries `__data__`
@@ -670,6 +677,9 @@ bool forEachElement(STRuntime& rt, proto::ProtoContext* ctx,
     }
     if (isListBacked(ctx, collection)) {
         const proto::ProtoList* data = arrayData(ctx, collection);
+        // `fn` may run user code that replaces the receiver's `__data__`; the
+        // snapshot being walked must not be freed under us.
+        TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
         proto::proto_ulong n = data->getSize(ctx);
         for (proto::proto_ulong i = 0; i < n; ++i) {
             const proto::ProtoObject* e = data->getAt(ctx, static_cast<int>(i));
@@ -681,7 +691,7 @@ bool forEachElement(STRuntime& rt, proto::ProtoContext* ctx,
     // iterate the keys, visiting each distinct element once.
     if (isSetBacked(rt, ctx, collection)) {
         std::vector<HashedEntry> entries;
-        hashedEntries(ctx, collection, entries);
+        TransientPin pinSnapshot(ctx, hashedEntries(ctx, collection, entries));
         for (const HashedEntry& e : entries) {
             if (!fn(e.first)) return false;
         }
@@ -693,7 +703,7 @@ bool forEachElement(STRuntime& rt, proto::ProtoContext* ctx,
     // `collect:`, …) works on a Dictionary over its values.
     if (isDictBacked(rt, ctx, collection)) {
         std::vector<HashedEntry> entries;
-        hashedEntries(ctx, collection, entries);
+        TransientPin pinSnapshot(ctx, hashedEntries(ctx, collection, entries));
         for (const HashedEntry& e : entries) {
             if (!fn(e.second)) return false;
         }
@@ -715,6 +725,7 @@ bool forEachElement(STRuntime& rt, proto::ProtoContext* ctx,
     if (understood && elements && isListBacked(ctx, elements)) {
         TransientPin pinElements(ctx, elements);
         const proto::ProtoList* data = arrayData(ctx, elements);
+        TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
         proto::proto_ulong n = data->getSize(ctx);
         for (proto::proto_ulong i = 0; i < n; ++i) {
             const proto::ProtoObject* e = data->getAt(ctx, static_cast<int>(i));
@@ -1746,7 +1757,7 @@ const proto::ProtoObject* prim_Dict_notEmpty(STRuntime&, proto::ProtoContext* ct
 template <typename Fn>
 void dictForEachEntry(proto::ProtoContext* ctx, const proto::ProtoObject* r, Fn&& fn) {
     std::vector<HashedEntry> entries;
-    hashedEntries(ctx, r, entries);
+    TransientPin pinSnapshot(ctx, hashedEntries(ctx, r, entries));
     for (const HashedEntry& e : entries) {
         if (!fn(e.first, e.second)) return;
     }
@@ -2685,13 +2696,17 @@ const proto::ProtoList* arrayOrOrderedElements(proto::ProtoContext* ctx, const p
     return listData(ctx, o);
 }
 
+const proto::ProtoObject* asRootable(const proto::ProtoList* list) {
+    return reinterpret_cast<const proto::ProtoObject*>(list);
+}
+
 bool isDictionary(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* o) {
     return o && o != PROTO_NONE && isDictBacked(rt, ctx, o);
 }
 
-void dictionaryEntries(proto::ProtoContext* ctx, const proto::ProtoObject* dict,
+const proto::ProtoObject* dictionaryEntries(proto::ProtoContext* ctx, const proto::ProtoObject* dict,
                        std::vector<std::pair<const proto::ProtoObject*, const proto::ProtoObject*>>& out) {
-    hashedEntries(ctx, dict, out);
+    return hashedEntries(ctx, dict, out);
 }
 
 const proto::ProtoObject* makeAssociationValue(STRuntime& rt, proto::ProtoContext* ctx,

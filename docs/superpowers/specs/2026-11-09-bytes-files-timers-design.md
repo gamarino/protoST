@@ -223,7 +223,7 @@ example ProtoBase's `@map`) asks for it explicitly.
 | `Array`, `OrderedCollection` | array | Array |
 | `Dictionary` | map | Dictionary |
 | `MessagePackExt type: n data: bytes` | ext | MessagePackExt |
-| anything else | signals `Error` naming the class | — |
+| anything else | signals `Error`: `MessagePack cannot encode an instance of <ClassName>` | — |
 
 Encoding walks the object graph in C++ and feeds protoIO's `Writer`, so there
 are no per-element bytecodes. Decoding builds objects from protoIO reader

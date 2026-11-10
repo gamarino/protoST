@@ -16,7 +16,7 @@
    Dictionary                       map, in no specified order   Dictionary
    MessagePackMap                   map, in the order it holds   MessagePackMap (decodeOrdered: only)
    MessagePackExt                   ext                          MessagePackExt
-   anything else                    signals Error naming its class
+   anything else                    signals Error 'MessagePack cannot encode an instance of <Class>'
  A Symbol decodes as a String: a Symbol of up to six bytes already is a String
  here (D35), so no other rule could tell #foo from #foobarbaz.
 
@@ -72,9 +72,9 @@ MessagePackMap class >> withAll: anArrayOfAssociations
 
 MessagePackMap class >> __fromAssociations: anArray
   "Unchecked: the decoder builds the Array itself."
-  ^ self basicNew setAssociations: anArray.
+  ^ self basicNew __setAssociations: anArray.
 
-MessagePackMap >> setAssociations: anArray
+MessagePackMap >> __setAssociations: anArray
   associations := anArray.
   ^ self.
 
@@ -86,15 +86,26 @@ MessagePackMap >> size
   ^ associations size.
 
 MessagePackMap >> at: aKey ifAbsent: aBlock
-  "The value of the first entry whose key = aKey."
-  associations do: [:each | each key = aKey ifTrue: [^ each value]].
+  "The value of the LAST entry whose key = aKey: a map with a repeated key keeps
+   the last one, as msgpack-python's unpackb and decode: do. (The entries
+   themselves all stay in associations, in wire order.)"
+  associations size to: 1 by: -1 do: [:i |
+    | each |
+    each := associations at: i.
+    each key = aKey ifTrue: [^ each value]].
   ^ aBlock value.
 
 MessagePackMap >> = other
   ^ (other isKindOf: MessagePackMap) and: [associations = other associations].
 
 MessagePackMap >> hash
-  ^ associations size.
+  "The size and the keys of the first three entries: equal maps (= compares the
+   Associations in order) have equal keys there, so equal hashes."
+  | h |
+  h := associations size.
+  1 to: (associations size min: 3) do: [:i |
+    h := (h * 31 + (associations at: i) key hash) \\ 1073741824].
+  ^ h.
 
 MessagePackMap >> printOn: aStream
   aStream nextPutAll: 'a MessagePackMap'; print: associations.
@@ -107,9 +118,9 @@ MessagePackExt class >> type: anInteger data: aByteArray
     ifFalse: [^ self error: 'MessagePackExt: the ext type must be an Integer from -128 to 127'].
   (aByteArray isKindOf: ByteArray)
     ifFalse: [^ self error: 'MessagePackExt: a ByteArray was expected for the data'].
-  ^ self basicNew setType: anInteger data: aByteArray.
+  ^ self basicNew __setType: anInteger data: aByteArray.
 
-MessagePackExt >> setType: anInteger data: aByteArray
+MessagePackExt >> __setType: anInteger data: aByteArray
   type := anInteger.
   data := aByteArray.
   ^ self.

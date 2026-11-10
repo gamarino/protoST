@@ -12,6 +12,7 @@
 #include <protoio/msgpack.h>
 
 #include <cerrno>
+#include <climits>
 #include <cstdint>
 #include <cstdlib>
 #include <stdexcept>
@@ -49,9 +50,16 @@ using PO = proto::ProtoObject;
 #define ARGS(N, SEL) if (argc != (N)) throw std::runtime_error(SEL " expects " #N " argument(s)"); \
                      (void) rt; (void) r; (void) a
 
-// protoIO's default depth limit (Limits::maxDepth). The encoder refuses what
-// the decoder would refuse.
-constexpr size_t kMaxDepth = 512;
+// The depth the decoder accepts (protoIO's Limits::maxDepth default). The
+// encoder refuses what the decoder would refuse.
+const size_t kMaxDepth = protoio::msgpack::Limits{}.maxDepth;
+
+// protoCore lists are indexed by int: a size beyond it cannot be addressed.
+int listIndex(size_t i) {
+    if (i > static_cast<size_t>(INT_MAX))
+        throw std::runtime_error("MessagePack: a container of more than 2^31 - 1 elements");
+    return static_cast<int>(i);
+}
 
 bool booleanArg(const PO* v, const char* who) {
     if (v == PROTO_TRUE) return true;
@@ -91,7 +99,8 @@ std::string classNameOf(STRuntime& rt, proto::ProtoContext* ctx, const PO* v) {
 class Encoder {
 public:
     Encoder(STRuntime& rt, proto::ProtoContext* ctx, const PO* mapClass, const PO* extClass)
-        : rt_(rt), ctx_(ctx), mapClass_(mapClass), extClass_(extClass) {}
+        : rt_(rt), ctx_(ctx), mapClass_(mapClass), extClass_(extClass),
+          roots_(ctx->newList()), pin_(ctx, reinterpret_cast<const PO*>(roots_)) {}
 
     std::string run(const PO* root) {
         emit(root);
@@ -100,6 +109,8 @@ public:
             if (f.next == f.items.size()) {
                 path_.erase(f.container);
                 frames_.pop_back();
+                roots_ = roots_->removeLast(ctx_);
+                pin_.reset(reinterpret_cast<const PO*>(roots_));
                 continue;
             }
             const PO* item = f.items[f.next++];
@@ -115,7 +126,9 @@ private:
         size_t next = 0;
     };
 
-    void open(const PO* container, std::vector<const PO*>&& items, bool map) {
+    // Opens a frame. `snapshot` is the list or map the items point into (or the
+    // list the items were copied to); it stays rooted until the frame closes.
+    void open(const PO* container, const PO* snapshot, std::vector<const PO*>&& items, bool map) {
         if (path_.count(container)) throw std::runtime_error("MessagePack: cyclic structure");
         if (frames_.size() >= kMaxDepth)
             throw std::runtime_error("MessagePack: nesting deeper than " + std::to_string(kMaxDepth)
@@ -125,6 +138,9 @@ private:
             throw std::runtime_error("MessagePack: a container of more than 2^32 - 1 elements");
         if (map) w_.beginMap(static_cast<uint32_t>(entries));
         else w_.beginArray(static_cast<uint32_t>(entries));
+        TransientPin pinSnapshot(ctx_, snapshot);
+        roots_ = roots_->appendLast(ctx_, snapshot);
+        pin_.reset(reinterpret_cast<const PO*>(roots_));
         path_.insert(container);
         frames_.push_back(Frame{container, std::move(items), 0});
     }
@@ -149,22 +165,27 @@ private:
                                  + ": it is outside -2^63 .. 2^64 - 1");
     }
 
-    // The Associations of a MessagePackMap, flattened to key, value, ...
-    std::vector<const PO*> pairsOf(const PO* m) {
+    // The Associations of a MessagePackMap, flattened to key, value, ... and
+    // copied into a fresh list (answered through `rooted`) that the caller roots.
+    std::vector<const PO*> pairsOf(const PO* m, const PO*& rooted) {
         const PO* list = accessor(rt_, ctx_, m, "associations");
         if (!list || list == PROTO_NONE || !isArrayOrOrdered(rt_, ctx_, list))
             throw std::runtime_error("MessagePackMap: its associations must be an Array");
         const proto::ProtoList* l = arrayOrOrderedElements(ctx_, list);
-        const proto::proto_ulong n = l->getSize(ctx_);
+        TransientPin pinList(ctx_, asRootable(l));
+        const size_t n = static_cast<size_t>(l->getSize(ctx_));
         std::vector<const PO*> out;
-        out.reserve(static_cast<size_t>(n) * 2);
-        for (proto::proto_ulong i = 0; i < n; ++i) {
-            const PO* assoc = l->getAt(ctx_, static_cast<int>(i));
+        out.reserve(n * 2);
+        for (size_t i = 0; i < n; ++i) {
+            const PO* assoc = l->getAt(ctx_, listIndex(i));
             if (!isAssociation(rt_, ctx_, assoc))
                 throw std::runtime_error("MessagePackMap: every element must be an Association");
             out.push_back(associationKey(ctx_, assoc));
             out.push_back(associationValue(ctx_, assoc));
         }
+        const proto::ProtoList* flat = out.empty() ? ctx_->newList()
+            : ctx_->newList(static_cast<unsigned>(out.size()), out.data());
+        rooted = asRootable(flat);
         return out;
     }
 
@@ -186,31 +207,36 @@ private:
         if (v->isByteBuffer(ctx_)) { w_.bin(bytesView(ctx_, v)); return; }
         if (const proto::ProtoString* s = v->asString(ctx_)) { w_.str(s->toStdString(ctx_)); return; }
         const PO* objectProto = rt_.bootstrap().objectProto;
-        if (inheritsFromProto(ctx_, v, mapClass_, objectProto)) { open(v, pairsOf(v), true); return; }
+        if (inheritsFromProto(ctx_, v, mapClass_, objectProto)) {
+            const PO* rooted = nullptr;
+            std::vector<const PO*> items = pairsOf(v, rooted);
+            open(v, rooted, std::move(items), true);
+            return;
+        }
         if (inheritsFromProto(ctx_, v, extClass_, objectProto)) { emitExt(v); return; }
         if (isDictionary(rt_, ctx_, v)) {
             std::vector<std::pair<const PO*, const PO*>> entries;
-            dictionaryEntries(ctx_, v, entries);
+            const PO* snapshot = dictionaryEntries(ctx_, v, entries);
             std::vector<const PO*> flat;
             flat.reserve(entries.size() * 2);
             for (const auto& e : entries) { flat.push_back(e.first); flat.push_back(e.second); }
-            open(v, std::move(flat), true);
+            open(v, snapshot, std::move(flat), true);
             return;
         }
         if (isArrayOrOrdered(rt_, ctx_, v)) {
             const proto::ProtoList* l = arrayOrOrderedElements(ctx_, v);
-            const proto::proto_ulong n = l->getSize(ctx_);
+            const size_t n = static_cast<size_t>(l->getSize(ctx_));
             std::vector<const PO*> items;
-            items.reserve(static_cast<size_t>(n));
-            for (proto::proto_ulong i = 0; i < n; ++i) items.push_back(l->getAt(ctx_, static_cast<int>(i)));
-            open(v, std::move(items), false);
+            items.reserve(n);
+            for (size_t i = 0; i < n; ++i) items.push_back(l->getAt(ctx_, listIndex(i)));
+            open(v, asRootable(l), std::move(items), false);
             return;
         }
         unsupported(v);
     }
 
     [[noreturn]] void unsupported(const PO* v) {
-        throw std::runtime_error("MessagePack cannot encode a " + classNameOf(rt_, ctx_, v));
+        throw std::runtime_error("MessagePack cannot encode an instance of " + classNameOf(rt_, ctx_, v));
     }
 
     STRuntime& rt_;
@@ -220,6 +246,8 @@ private:
     protoio::msgpack::Writer w_;
     std::vector<Frame> frames_;
     std::unordered_set<const PO*> path_;
+    const proto::ProtoList* roots_;   // the snapshots of the open frames, in order
+    TransientPin pin_;                // roots_'s single root
 };
 
 // aClass __msgpackEncode: anObject map: MessagePackMap ext: MessagePackExt -> a ByteArray.
@@ -310,7 +338,11 @@ private:
             open_.pop_back();
             const PO* built = build(o);
             TransientPin pinBuilt(ctx_, built);
-            for (size_t i = 0; i < o.want; ++i) stack_ = stack_->removeLast(ctx_);
+            // Take the children off the top. Rebuilding the part below them is
+            // one pass over `base` elements and dropping them one by one is
+            // `want` passes of O(log n); take the cheaper.
+            if (o.base < o.want) stack_ = stack_->getSlice(ctx_, 0, listIndex(o.base));
+            else for (size_t i = 0; i < o.want; ++i) stack_ = stack_->removeLast(ctx_);
             pin_.reset(reinterpret_cast<const PO*>(stack_));
             append(built);
         }
@@ -319,7 +351,7 @@ private:
     // The container whose children are the top `o.want` slots of the stack.
     const PO* build(const Open& o) {
         std::vector<const PO*> items(o.want);
-        for (size_t i = 0; i < o.want; ++i) items[i] = stack_->getAt(ctx_, static_cast<int>(o.base + i));
+        for (size_t i = 0; i < o.want; ++i) items[i] = stack_->getAt(ctx_, listIndex(o.base + i));
         if (!o.map) {
             const proto::ProtoList* l = items.empty()
                 ? ctx_->newList() : ctx_->newList(static_cast<unsigned>(items.size()), items.data());

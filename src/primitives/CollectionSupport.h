@@ -31,11 +31,16 @@ void dictionaryPut(proto::ProtoContext* ctx, const proto::ProtoObject* dict,
 bool isArrayOrOrdered(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* o);
 // The elements of such an instance, as the immutable list it holds.
 const proto::ProtoList* arrayOrOrderedElements(proto::ProtoContext* ctx, const proto::ProtoObject* o);
+// A list (or map snapshot) as a value the collector can be told to keep: the
+// same pointer protoCore uses for it, typed as an object.
+const proto::ProtoObject* asRootable(const proto::ProtoList* list);
 
 // True for a Dictionary (or subclass) instance; its entries in protoCore's
 // order, which is unspecified.
 bool isDictionary(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* o);
-void dictionaryEntries(proto::ProtoContext* ctx, const proto::ProtoObject* dict,
+// Answers the snapshot map the entries point into: the caller keeps it
+// reachable (pinned or rooted) for as long as it uses `out`.
+const proto::ProtoObject* dictionaryEntries(proto::ProtoContext* ctx, const proto::ProtoObject* dict,
                        std::vector<std::pair<const proto::ProtoObject*, const proto::ProtoObject*>>& out);
 
 // Associations.
