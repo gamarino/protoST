@@ -221,6 +221,22 @@ it where it can (it removes from the end of its work list, and slices once when
 the children are fewer than the stack), but code that wants a constant-time
 split cannot have it until protoCore offers one.
 
+## K13 — A mailbox batch of more than 2^31 - 1 messages is refused, and lost (open, in protoCore)
+
+An actor's turn takes its mailbox in batches (`ProtoMPSCQueue::takeAll`) and
+walks each batch by index. protoCore indexes a list with an `int`
+(`getAt`, `getSlice`), so `MailboxCursor::adopt` (`src/runtime/STRuntime.cpp`)
+counts a batch through `listIndex` and refuses one of more than `INT_MAX`
+messages with an `Error` before it touches the cursor. By then `takeAll` has
+already removed those messages from the queue, and nothing in protoST can
+reach the elements past `INT_MAX` to park them (`__pending__` is written with
+`getSlice`, which is `int`-indexed too), so the batch is lost; the error
+leaves the turn (a worker thread reports it on stderr). No protoST program can reach this: such a batch
+holds more than 2^31 messages that no turn has consumed, over 128 GB of
+message cells. It is recorded because the loss is silent to the senders
+(their Futures never settle). A fix needs protoCore to index a list beyond an
+`int`, or a `takeAll` that hands over at most a given count.
+
 ---
 
 ## Resolved
@@ -256,12 +272,20 @@ derives from it. Every site that turns a C++ exception into a Smalltalk error
 reads the text through `nativeErrorText` (the native-exception bridge, an
 actor message's rejection, the uncaught-error report, the debugger's and the
 DAP server's evaluation errors) and builds the Smalltalk string with the
-length-aware `makeString`. The command line and the REPL print the uncaught
-error, the warning for an actor error nobody observed, parse and compile
-errors, and printed values with `writeWholeLine`, not `%s` or `puts`. Tests:
-`12-builtins/native_error_nul_message`, `12-builtins/native_error_nul_uncaught`
-(both failed on the build before the change: the text ended at the NUL) and
-the last case of `cli_actor_unobserved_error`. One printer keeps `what()` on
+length-aware `makeString`. Every printer of text that can hold user data
+writes it with `writeWholeLine` (or `fwrite`), not `%s`, `fputs` or `puts`:
+the uncaught error, an unhandled `Warning` (or other resumable exception)
+with its `messageText`, the warning for an actor error nobody observed,
+parse and compile errors, printed values, the REPL's `:load` and "unknown
+command" messages, `halt` without a debugger, `--dump-ast` and `--disasm`
+listings (which quote string literals), and `venv info`. The debugger and the
+DAP server write `std::string`s to streams and JSON, which keep every byte.
+Tests: `12-builtins/native_error_nul_message`,
+`12-builtins/native_error_nul_uncaught` (both failed on the build before the
+change: the text ended at the NUL), the last case of
+`cli_actor_unobserved_error`, and `cli_diagnostics_nul` (the Warning, the
+REPL's unknown command and a printed value; its Warning case fails on
+main). One printer keeps `what()` on
 purpose: the timer thread's report of a failed hand-over, which runs when
 memory is short and must not copy, and whose text is never user data.
 

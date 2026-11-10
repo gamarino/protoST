@@ -85,8 +85,9 @@ and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
   which keeps the whole message, and every site that turns one into a
   Smalltalk error reads it whole (`nativeErrorText`), so `ByteArray fromHex:
   '0', NUL, 'zz'` no longer reports `ByteArray fromHex: '0`. The command line
-  and the REPL print diagnostics (the uncaught error, the unobserved actor
-  error, parse and compile errors) and printed values whole as well
+  and the REPL print diagnostics (the uncaught error, an unhandled
+  `Warning`'s text, the unobserved actor error, parse and compile errors,
+  REPL commands) and printed values whole as well
   (`KNOWN_ISSUES.md` K7, resolved).
 - **Every index handed to a protoCore list goes through `listIndex`**, which
   refuses an index past `INT_MAX` with an `Error`; about 30 sites narrowed it
@@ -94,15 +95,39 @@ and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
   element of a list with more than 2^31 - 1 elements. An index past the int
   range on a small collection (`#(1 2 3) at: (2 raisedTo: 32) + 1`) was
   already refused by the bounds check and still is.
-- **An index of 2^63 or more (or a negative `LargeInteger`) signals
-  `SubscriptOutOfBounds`**, with its exact digits, like any other index out of
-  range; it raised `ArithmeticError` ("LargeInteger value exceeds long long
-  range"). Every indexing primitive (`at:` and `at:put:` of `Array`,
-  `OrderedCollection`, `Interval` and `String`, `copyFrom:to:` of `String`
-  and `ByteArray`, `ByteArray at:` and the packed reads) reads its index
-  through one reader (`src/primitives/IndexArg.h`). An index that is not an
-  Integer signals `Error` "... the index: an Integer was expected" in all of
-  them (it was `InvalidArgument` in some).
+- **One rule for every index: an Integer out of range, however large,
+  signals `SubscriptOutOfBounds`; anything else signals `Error`** "... the
+  index: an Integer was expected".
+  - An index of 2^63 or more (or a negative `LargeInteger`) signals
+    `SubscriptOutOfBounds`, with its exact digits; it raised `ArithmeticError`
+    ("LargeInteger value exceeds long long range").
+  - The primitives read their index through one reader
+    (`src/primitives/IndexArg.h`): `at:` of `Array`, `OrderedCollection`,
+    `Interval` (the native one, with SmallInteger bounds and an exact
+    stride) and `String`; `at:put:` of `Array` and `OrderedCollection`;
+    `copyFrom:to:` of `String` and `ByteArray`; `ByteArray at:`; and the
+    packed reads of `ByteArray` (`unsignedByteAt:`, `signedByteAt:`, and
+    `unsignedShortAt:bigEndian:`, `signedShortAt:bigEndian:`,
+    `unsignedLongAt:bigEndian:`, `signedLongAt:bigEndian:`,
+    `unsignedLong64At:bigEndian:`, `signedLong64At:bigEndian:`,
+    `float32At:bigEndian:`, `float64At:bigEndian:`).
+  - The indexing methods written in Smalltalk follow the same rule
+    (`Object>>__checkIndex:between:and:for:`): `at:` of every other
+    `Interval` (a `NumericInterval`: empty or single-element, an inexact
+    stride, Float, Fraction or LargeInteger bounds; and so its `first` and
+    `last`), `OrderedCollection>>removeAt:` and `add:beforeIndex:`, and
+    `ByteArray>>copyReplaceFrom:to:with:`. They signalled a plain `Error`
+    for an index out of range (`(1 to: 0) at: 1` reported "Interval>>at::
+    index 1 out of range 1..0", with a doubled colon), and
+    `NumericInterval>>at:` accepted a Float index (`(1 to: 5 by: 0.5) at:
+    1.0` answered `1.0`). `copyFrom:to:` of `Array`, `OrderedCollection` and
+    `Interval` reads its elements with `at:`, so it follows the rule too.
+  - **A Character index is refused**, as in Pharo: `asLong` read it as its
+    code point, so `#(10 20 30) at: (Character value: 2)` answered `20` and
+    `'abcdef' copyFrom: (Character value: 2) to: 3` answered `'bc'`. A
+    Float index, refused before by protoCore's `InvalidArgument`, is now
+    the same `Error`, so a handler for `InvalidArgument` no longer catches
+    a non-Integer index.
 - **`STRuntime::enqueueTask` had no consumer**: a task put on the live
   registry's list was never run and the list grew for ever. `drainOne` now runs
   queued tasks first (`runOneTask`); the timer service uses it.
@@ -142,8 +167,10 @@ and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
   any `writeAt:bytes:` runs, so a write judged inside the file can no longer
   land past the end of a file a concurrent `truncateTo:` cut (that race was
   the caller's before). The refusals name their selector
-  (`BinaryFile>>append:`, `writeAt:bytes:`, `truncateTo:`); a unit test holds
-  the guard and checks every refusal. `append:` on a file that is not a
+  (`BinaryFile>>append:`, `writeAt:bytes:`, `truncateTo:`). A unit test
+  holds each use of a `BinaryFile`'s own guard and runs the three primitives
+  from Smalltalk, so it shows which use each takes and every refusal text.
+  `append:` on a file that is not a
   regular file (a FIFO, a pipe, a device) signals `FileSystemError` and
   writes nothing.
 
@@ -153,8 +180,10 @@ K8 to K11 in `KNOWN_ISSUES.md`: what the `BinaryFile` end guard cannot see
 (another `BinaryFile` object, another process), timers and exit, what the
 tests do not prove (no ThreadSanitizer build; `InternalError` cannot be
 forced from a program, so its mapping is tested from C++; the macOS and
-Windows behaviour of the visible skip is unconfirmed until CI runs), and
-protoCore's missing structural list split. K12 (protoIO did not refuse a NUL
+Windows behaviour of the visible skip is unconfirmed until CI runs),
+protoCore's missing structural list split, and K13, a mailbox batch of more
+than 2^31 - 1 messages, which no program can reach and which would be lost.
+K12 (protoIO did not refuse a NUL
 in an OS string) is resolved by protoIO 0.4.0. CI pins protoIO 0.4.0
 (`PROTOIO_REF`, main `41a5db0`, not yet tagged) in both workflows.
 

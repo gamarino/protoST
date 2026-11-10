@@ -14,13 +14,13 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Test suite:** 1287 `ctest` cases on Linux, 1287/1287 passing on
+- **Test suite:** 1290 `ctest` cases on Linux, 1290/1290 passing on
   2026-11-10 (0.9.0 after the pending fixes: NUL-safe native error text,
-  checked list indices, LargeInteger indices, the protoIO error mapping and
+  checked list indices, one index rule, the protoIO error mapping and
   the unmanaged digest path tested, the end guard from protoIO 0.4.0; against
   protoCore 3.5.0 and the protoIO 0.4.0 tree, main `41a5db0`), none
-  skipped: 683 conformance
-  programs, 493 unit tests, 44 examples, 41 CLI tests (including
+  skipped: 684 conformance
+  programs, 494 unit tests, 44 examples, 42 CLI tests (including
   `cli_binary_lock`, `cli_binary_lock_protobase` and `cli_binary_interop`),
   23 documentation checks (the examples with a stated result in the
   documents, the bytecode listings of `docs/VM.md` and the checker's
@@ -87,7 +87,8 @@ stable id and file it in the right bucket.
 - **Open bugs:** S3 (Medium, not provable on this build). Known limitations of
   0.9.0 that are not defects (what the `BinaryFile` end guard cannot see,
   timers and exit, what the tests do not prove, protoCore's missing list
-  split) are K8-K11 in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md); K7
+  split, a mailbox batch beyond an `int`) are K8-K11 and K13 in
+  [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md); K7
   (diagnostic text cut at a NUL) and K12 (the NUL check for OS strings that
   protoIO did not make) were resolved before the release. S22 (a test
   race), S25 and S26 closed in 0.6.3, S24 in 0.6.1, S23 on 2026-10-02 (`9cdc9b4`),
