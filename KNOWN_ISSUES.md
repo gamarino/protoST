@@ -190,11 +190,14 @@ overflows the native stack.
 ## K10 — What the 0.9.0 tests do not prove (open)
 
 - **ThreadSanitizer finds one race, in protoCore.** `-DPROTOST_TSAN=ON` and
-  the `tsan` label (571 tests: every unit case, the actor, Future, Atom,
-  timer and `BinaryFile` programs, the concurrency CLI tests;
-  `docs/INSTALLATION.md`) ran twice on 2026-11-10 against a TSan build of
-  protoCore 3.5.0 and protoIO 0.4.0. TSan reported no race in protoST or
-  protoIO. It reported one in protoCore: `ProtoSpace::newThread` called from
+  the `tsan` label (580 tests: every unit case, the actor, Future, Atom,
+  timer and `BinaryFile` programs, the concurrency and debugger CLI tests;
+  `docs/INSTALLATION.md`) ran on 2026-11-10 against a TSan build of
+  protoCore 3.5.0 and protoIO 0.4.0. Two local runs reported no race in
+  protoST; the first CI run found one, in the debugger (two threads resuming
+  from a DAP stop wrote one shared field), which is fixed. A clean run is
+  evidence about the interleavings it happened to see, not proof. TSan
+  reported no race in protoIO. It reported one in protoCore: `ProtoSpace::newThread` called from
   two threads at once reads and writes `ProtoSpace::mainContext` without
   synchronisation (`core/Thread.cpp:494` and `:506`, around
   `core/ProtoContext.cpp:198`), and an interleaving can leave `mainContext`
