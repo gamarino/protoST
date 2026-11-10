@@ -533,7 +533,7 @@ bool DebuggerRuntime::evaluateValue(STRuntime& rt, proto::ProtoContext* ctx,
         if (error.rfind("error: ", 0) == 0) error.erase(0, 7);
         return false;
     } catch (const std::exception& e) {
-        error = e.what();
+        error = nativeErrorText(e);
         return false;
     } catch (...) {
         // A non-local return (`^`) or another unwinding carrier: nothing of

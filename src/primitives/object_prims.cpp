@@ -1,4 +1,5 @@
 #include "runtime/ClassedErrorSignal.h"
+#include "runtime/NativeError.h"
 #include "protoST/STRuntime.h"
 #include "runtime/PrimitiveMarker.h"
 #include "protoST/primitives.h"
@@ -182,7 +183,7 @@ const proto::ProtoObject* prim_Object_sleepMs(STRuntime&,
                                                const proto::ProtoObject* r,
                                                const proto::ProtoObject* const* a,
                                                int argc) {
-    if (argc != 1) throw std::runtime_error("sleep: expects 1 arg (milliseconds)");
+    if (argc != 1) throw NativeError("sleep: expects 1 arg (milliseconds)");
     long long ms = a[0]->asLong(ctx);
     if (ms > 0) {
         // 2026-05-25: enter an unmanaged region for the duration of the
@@ -237,11 +238,11 @@ const proto::ProtoObject* prim_Object_installMethod(STRuntime& rt,
                                                      const proto::ProtoObject* r,
                                                      const proto::ProtoObject* const* a,
                                                      int argc) {
-    if (argc != 2) throw std::runtime_error("__installMethod:as: expects 2 args");
+    if (argc != 2) throw NativeError("__installMethod:as: expects 2 args");
     // a[0] = methodObj (BlockClosure-shaped)
     // a[1] = selector symbol (ProtoString tagged as symbol)
     auto* selStr = a[1]->asString(ctx);
-    if (!selStr) throw std::runtime_error("__installMethod:as: selector must be a symbol");
+    if (!selStr) throw NativeError("__installMethod:as: selector must be a symbol");
     stampDefiningClass(rt, ctx, r, a[0]);
     r->setAttribute(ctx, selStr, a[0]);
     return r;
@@ -263,10 +264,10 @@ const proto::ProtoObject* prim_Object_installClassMethod(STRuntime& rt,
                                                          const proto::ProtoObject* const* a,
                                                          int argc) {
     if (argc != 2)
-        throw std::runtime_error("__installClassMethod:as: expects 2 args");
+        throw NativeError("__installClassMethod:as: expects 2 args");
     auto* selStr = a[1]->asString(ctx);
     if (!selStr)
-        throw std::runtime_error(
+        throw NativeError(
             "__installClassMethod:as: selector must be a symbol");
     const proto::ProtoString* classSideKey =
         proto::ProtoString::createSymbol(ctx, "__class_side__");
@@ -294,10 +295,10 @@ const proto::ProtoObject* prim_Object_initClassVars(STRuntime&,
                                                     const proto::ProtoObject* r,
                                                     const proto::ProtoObject* const* a,
                                                     int argc) {
-    if (argc != 1) throw std::runtime_error("__initClassVars: expects 1 arg");
+    if (argc != 1) throw NativeError("__initClassVars: expects 1 arg");
     auto* namesObj = a[0] ? a[0]->asString(ctx) : nullptr;
     if (!namesObj)
-        throw std::runtime_error(
+        throw NativeError(
             "__initClassVars:: names must be a string");
     std::string names = namesObj->toStdString(ctx);
     auto* cls = const_cast<proto::ProtoObject*>(r);
@@ -332,7 +333,7 @@ const proto::ProtoObject* prim_Object_setClassName(STRuntime&,
                                                     const proto::ProtoObject* r,
                                                     const proto::ProtoObject* const* a,
                                                     int argc) {
-    if (argc != 1) throw std::runtime_error("__setClassName: expects 1 arg");
+    if (argc != 1) throw NativeError("__setClassName: expects 1 arg");
     // Resolve the symbol fresh from the live ctx — symbols are interned
     // per-ProtoSpace, so a function-local `static` would stamp later runtimes'
     // classes under a stale key from the first runtime's space. The D5
@@ -371,10 +372,10 @@ const proto::ProtoObject* makeSubclass(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* superCls,
                                        const proto::ProtoObject* nameArg) {
     if (!superCls || superCls == PROTO_NONE)
-        throw std::runtime_error("subclass:: superclass is nil");
+        throw NativeError("subclass:: superclass is nil");
     auto* nameStr = nameArg ? nameArg->asString(ctx) : nullptr;
     if (!nameStr)
-        throw std::runtime_error(
+        throw NativeError(
             "subclass:: class name must be a symbol or string");
     auto* sub = superCls->newChild(ctx, /*isMutable=*/true);
     TransientPin pinSub(ctx, sub);
@@ -436,7 +437,7 @@ const proto::ProtoList* mixinList(proto::ProtoContext* ctx,
         (dataObj && dataObj != PROTO_NONE) ? dataObj->asList(ctx)
                                            : mixinColl->asList(ctx);
     if (!list)
-        throw std::runtime_error(
+        throw NativeError(
             "uses:: argument must be a collection of classes");
     return list;
 }
@@ -449,10 +450,10 @@ const proto::ProtoObject* makeSubclassWithMixins(
     STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* superCls,
     const proto::ProtoObject* nameArg, const proto::ProtoObject* mixinColl) {
     if (!superCls || superCls == PROTO_NONE)
-        throw std::runtime_error("subclass:uses:: superclass is nil");
+        throw NativeError("subclass:uses:: superclass is nil");
     auto* nameStr = nameArg ? nameArg->asString(ctx) : nullptr;
     if (!nameStr)
-        throw std::runtime_error(
+        throw NativeError(
             "subclass:uses:: class name must be a symbol or string");
     const proto::ProtoList* mixins = mixinList(ctx, mixinColl);
 
@@ -475,7 +476,7 @@ const proto::ProtoObject* makeSubclassWithMixins(
             const proto::ProtoObject* mixin =
                 mixins->getAt(ctx, static_cast<int>(i));
             if (!mixin || mixin == PROTO_NONE)
-                throw std::runtime_error("uses:: a mixin is nil");
+                throw NativeError("uses:: a mixin is nil");
             // addParent on an immutable cell returns a fresh immutable cell
             // with the parent baked into the base chain.
             shape = shape->addParent(ctx, mixin);
@@ -574,9 +575,9 @@ const proto::ProtoObject* addBehaviorToClass(STRuntime& rt,
                                              const proto::ProtoObject* oldCls,
                                              const proto::ProtoObject* mixin) {
     if (!oldCls || oldCls == PROTO_NONE)
-        throw std::runtime_error("addBehavior:: receiver is nil");
+        throw NativeError("addBehavior:: receiver is nil");
     if (!mixin || mixin == PROTO_NONE)
-        throw std::runtime_error("addBehavior:: behaviour (mixin) is nil");
+        throw NativeError("addBehavior:: behaviour (mixin) is nil");
 
     // Build the immutable shape carrying [old parents…, mixin]. `addParent`
     // PREPENDS at the chain head, so to leave the head-first walk order
@@ -649,7 +650,7 @@ const proto::ProtoObject* prim_Object_addBehavior(STRuntime& rt,
                                                   const proto::ProtoObject* const* a,
                                                   int argc) {
     if (argc != 1)
-        throw std::runtime_error("addBehavior: expects 1 arg (a mixin class)");
+        throw NativeError("addBehavior: expects 1 arg (a mixin class)");
     return addBehaviorToClass(rt, ctx, r, a[0]);
 }
 
@@ -662,7 +663,7 @@ const proto::ProtoObject* prim_Object_subclassUses(
     STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* r,
     const proto::ProtoObject* const* a, int argc) {
     if (argc != 2)
-        throw std::runtime_error("subclass:uses: expects 2 args");
+        throw NativeError("subclass:uses: expects 2 args");
     return makeSubclassWithMixins(rt, ctx, r, a[0], a[1]);
 }
 
@@ -672,10 +673,10 @@ const proto::ProtoObject* prim_Object_subclassIvarsUses(
     STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* r,
     const proto::ProtoObject* const* a, int argc) {
     if (argc != 3)
-        throw std::runtime_error(
+        throw NativeError(
             "subclass:instanceVariableNames:uses: expects 3 args");
     if (a[1] && a[1] != PROTO_NONE && !a[1]->asString(ctx))
-        throw std::runtime_error(
+        throw NativeError(
             "subclass:instanceVariableNames:uses:: ivar names must be a string");
     return makeSubclassWithMixins(rt, ctx, r, a[0], a[2]);
 }
@@ -687,7 +688,7 @@ const proto::ProtoObject* prim_Object_subclass(STRuntime& rt,
                                                const proto::ProtoObject* r,
                                                const proto::ProtoObject* const* a,
                                                int argc) {
-    if (argc != 1) throw std::runtime_error("subclass: expects 1 arg");
+    if (argc != 1) throw NativeError("subclass: expects 1 arg");
     return makeSubclass(rt, ctx, r, a[0]);
 }
 
@@ -703,11 +704,11 @@ const proto::ProtoObject* prim_Object_subclassIvars(
     STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* r,
     const proto::ProtoObject* const* a, int argc) {
     if (argc != 2)
-        throw std::runtime_error(
+        throw NativeError(
             "subclass:instanceVariableNames: expects 2 args");
     // a[1] is the instance-variable-names string; accept any string (incl. '').
     if (a[1] && a[1] != PROTO_NONE && !a[1]->asString(ctx))
-        throw std::runtime_error(
+        throw NativeError(
             "subclass:instanceVariableNames:: ivar names must be a string");
     return makeSubclass(rt, ctx, r, a[0]);
 }
@@ -755,7 +756,7 @@ const proto::ProtoObject* sendDynamicFrom(STRuntime& rt, proto::ProtoContext* ct
         const BytecodeModule* sub =
             reinterpret_cast<const BytecodeModule*>(bcPtrObj->asLong(ctx));
         if (sub->argCount() != argc + 1)
-            throw std::runtime_error("wrong number of arguments for "
+            throw NativeError("wrong number of arguments for "
                                      + selector->toStdString(ctx));
         std::vector<const proto::ProtoObject*> methodArgs;
         methodArgs.reserve(static_cast<size_t>(argc) + 1);
@@ -783,7 +784,7 @@ namespace {
 namespace {
 const proto::ProtoString* selectorArg(proto::ProtoContext* ctx, const proto::ProtoObject* sel) {
     const proto::ProtoString* s = sel ? sel->asString(ctx) : nullptr;
-    if (!s) throw std::runtime_error("a selector (Symbol) was expected");
+    if (!s) throw NativeError("a selector (Symbol) was expected");
     return s->intern(ctx);
 }
 } // namespace
@@ -792,14 +793,14 @@ const proto::ProtoString* selectorArg(proto::ProtoContext* ctx, const proto::Pro
 const proto::ProtoObject* prim_Object_performWithArguments(STRuntime& rt, proto::ProtoContext* ctx,
                                                            const proto::ProtoObject* r,
                                                            const proto::ProtoObject* const* a, int argc) {
-    if (argc != 2) throw std::runtime_error("perform:withArguments: expects 2 args");
+    if (argc != 2) throw NativeError("perform:withArguments: expects 2 args");
     const proto::ProtoString* sel = selectorArg(ctx, a[0]);
     std::vector<const proto::ProtoObject*> args;
     if (a[1] && a[1] != PROTO_NONE) {
         const proto::ProtoString* dataKey = proto::ProtoString::createSymbol(ctx, "__data__");
         const proto::ProtoObject* elems = a[1]->getAttribute(ctx, dataKey);
         const proto::ProtoList* list = elems && elems != PROTO_NONE ? elems->asList(ctx) : nullptr;
-        if (!list) throw std::runtime_error("perform:withArguments: expects an Array of arguments");
+        if (!list) throw NativeError("perform:withArguments: expects an Array of arguments");
         for (proto::proto_ulong i = 0; i < list->getSize(ctx); ++i)
             args.push_back(list->getAt(ctx, static_cast<int>(i)));
     }
@@ -815,7 +816,7 @@ const proto::ProtoObject* prim_Object_performWithArguments(STRuntime& rt, proto:
 const proto::ProtoObject* prim_Object_respondsTo(STRuntime& rt, proto::ProtoContext* ctx,
                                                  const proto::ProtoObject* r,
                                                  const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("respondsTo: expects 1 arg");
+    if (argc != 1) throw NativeError("respondsTo: expects 1 arg");
     const proto::ProtoString* sel = selectorArg(ctx, a[0]);
     const proto::ProtoObject* holder = methodHolder(rt.bootstrap(), ctx, r);
     const proto::ProtoObject* m = holder->getAttribute(ctx, sel);
@@ -953,9 +954,9 @@ const proto::ProtoObject* prim_Object_printExit(STRuntime&, proto::ProtoContext*
 const proto::ProtoObject* prim_Object_stdout(STRuntime&, proto::ProtoContext* ctx,
                                              const proto::ProtoObject* r,
                                              const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("__stdout: expects 1 arg");
+    if (argc != 1) throw NativeError("__stdout: expects 1 arg");
     const proto::ProtoString* s = a[0] ? a[0]->asString(ctx) : nullptr;
-    if (!s) throw std::runtime_error("__stdout: expects a String");
+    if (!s) throw NativeError("__stdout: expects a String");
     const std::string text = s->toStdString(ctx);
     std::fwrite(text.data(), 1, text.size(), stdout);
     if (!text.empty() && text.back() == '\n') std::fflush(stdout);
@@ -966,7 +967,7 @@ const proto::ProtoObject* prim_Object_stdout(STRuntime&, proto::ProtoContext* ct
 namespace {
 const proto::ProtoString* globalKey(proto::ProtoContext* ctx, const proto::ProtoObject* k) {
     const proto::ProtoString* s = k ? k->asString(ctx) : nullptr;
-    if (!s) throw std::runtime_error("a global name (Symbol) was expected");
+    if (!s) throw NativeError("a global name (Symbol) was expected");
     return s->intern(ctx);
 }
 } // namespace
@@ -1064,7 +1065,7 @@ const proto::ProtoObject* prim_Object_name(STRuntime& rt, proto::ProtoContext* c
     const proto::ProtoObject* own =
         r ? r->getOwnAttributeDirect(ctx, rt.bootstrap().sym.className) : nullptr;
     if (!own || own == PROTO_NONE)
-        throw std::runtime_error("doesNotUnderstand: name (the receiver is not a class)");
+        throw NativeError("doesNotUnderstand: name (the receiver is not a class)");
     return own;
 }
 
@@ -1085,7 +1086,7 @@ const proto::ProtoObject* prim_Actor_wrappedObject(STRuntime& rt, proto::ProtoCo
 const proto::ProtoObject* prim_Object_subclassNamed(STRuntime& rt, proto::ProtoContext* ctx,
                                                     const proto::ProtoObject* r,
                                                     const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("__subclassNamed: expects 1 arg");
+    if (argc != 1) throw NativeError("__subclassNamed: expects 1 arg");
     const proto::ProtoString* name = a[0] ? a[0]->asString(ctx) : nullptr;
     if (name) {
         const proto::ProtoObject* g = rt.globals();
@@ -1133,7 +1134,7 @@ bool isMethodValue(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoOb
 
 const proto::ProtoString* ivarKey(proto::ProtoContext* ctx, const proto::ProtoObject* name) {
     const proto::ProtoString* s = name ? name->asString(ctx) : nullptr;
-    if (!s) throw std::runtime_error("instVarNamed: expects a String or Symbol");
+    if (!s) throw NativeError("instVarNamed: expects a String or Symbol");
     return proto::ProtoString::createSymbol(ctx, ("_iv_" + s->toStdString(ctx)).c_str());
 }
 } // namespace
@@ -1152,7 +1153,7 @@ const proto::ProtoObject* soleInstanceOf(proto::ProtoContext* ctx, const proto::
 const proto::ProtoObject* prim_Object_instVarNamed(STRuntime&, proto::ProtoContext* ctx,
                                                    const proto::ProtoObject* r,
                                                    const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("instVarNamed: expects 1 arg");
+    if (argc != 1) throw NativeError("instVarNamed: expects 1 arg");
     const proto::ProtoString* key = ivarKey(ctx, a[0]);
     if (!r || r == PROTO_NONE || r->isInteger(ctx) || r->asString(ctx)) return PROTO_NONE;
     if (r->hasOwnAttribute(ctx, key) != PROTO_TRUE) return PROTO_NONE;
@@ -1163,9 +1164,9 @@ const proto::ProtoObject* prim_Object_instVarNamed(STRuntime&, proto::ProtoConte
 const proto::ProtoObject* prim_Object_instVarNamedPut(STRuntime&, proto::ProtoContext* ctx,
                                                       const proto::ProtoObject* r,
                                                       const proto::ProtoObject* const* a, int argc) {
-    if (argc != 2) throw std::runtime_error("instVarNamed:put: expects 2 args");
+    if (argc != 2) throw NativeError("instVarNamed:put: expects 2 args");
     if (!r || r == PROTO_NONE || r->isInteger(ctx) || r->isFloat(ctx) || r->asString(ctx))
-        throw std::runtime_error("instVarNamed:put: the receiver has no instance variables");
+        throw NativeError("instVarNamed:put: the receiver has no instance variables");
     const proto::ProtoString* key = ivarKey(ctx, a[0]);
     TransientPin pinKey(ctx, reinterpret_cast<const proto::ProtoObject*>(key));
     const_cast<proto::ProtoObject*>(r)->setAttribute(ctx, key, a[1]);
@@ -1177,7 +1178,7 @@ const proto::ProtoObject* prim_Object_instVarNamedPut(STRuntime&, proto::ProtoCo
 const proto::ProtoObject* prim_Object_setInstVarNames(STRuntime&, proto::ProtoContext* ctx,
                                                       const proto::ProtoObject* r,
                                                       const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("__setInstVarNames: expects 1 arg");
+    if (argc != 1) throw NativeError("__setInstVarNames: expects 1 arg");
     const_cast<proto::ProtoObject*>(r)->setAttribute(
         ctx, proto::ProtoString::createSymbol(ctx, "__instvar_names__"), a[0]);
     return r;
@@ -1198,7 +1199,7 @@ const proto::ProtoObject* prim_Object_instVarNamesString(STRuntime&, proto::Prot
 const proto::ProtoObject* prim_Object_canUnderstand(STRuntime& rt, proto::ProtoContext* ctx,
                                                    const proto::ProtoObject* r,
                                                    const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("canUnderstand: expects 1 arg");
+    if (argc != 1) throw NativeError("canUnderstand: expects 1 arg");
     const proto::ProtoString* sel = a[0] ? a[0]->asString(ctx) : nullptr;
     if (!sel || !r || r == PROTO_NONE) return PROTO_FALSE;
     if (const proto::ProtoObject* cls = soleInstanceOf(ctx, r)) {
@@ -1406,16 +1407,16 @@ const proto::ProtoObject* prim_Object_printString(STRuntime& rt,
 const proto::ProtoObject* prim_Import_from(STRuntime& rt, proto::ProtoContext* ctx,
                                             const proto::ProtoObject* /*recv*/,
                                             const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("Import>>from: expects 1 arg (logical path string)");
+    if (argc != 1) throw NativeError("Import>>from: expects 1 arg (logical path string)");
     auto* arg = a[0];
-    if (!arg) throw std::runtime_error("Import>>from: arg is null");
-    if (!arg->asString(ctx)) throw std::runtime_error("Import>>from: arg must be a string");
+    if (!arg) throw NativeError("Import>>from: arg is null");
+    if (!arg->asString(ctx)) throw NativeError("Import>>from: arg must be a string");
     // The name becomes a file path: one with a NUL would name another module.
     const std::string logical = osStringArg(ctx, arg, "Import from:", "the module name");
 
     auto* wrapper = rt.space()->getImportModule(ctx, logical.c_str(), "exports");
     if (!wrapper || wrapper == PROTO_NONE) {
-        throw std::runtime_error("module not found: " + logical);
+        throw NativeError("module not found: " + logical);
     }
     // F6 v3 E5: `wrapper` is a fresh object held across the `exportsKey`
     // interning and the getAttribute walk. Pin it.
@@ -1536,10 +1537,10 @@ const proto::ProtoObject* prim_Object_setInstVarFromTo(
         const proto::ProtoObject* r,
         const proto::ProtoObject* const* a, int argc) {
     if (argc != 3)
-        throw std::runtime_error("setInstVar:from:to: expects 3 arguments");
+        throw NativeError("setInstVar:from:to: expects 3 arguments");
     auto* nameStr = a[0] ? a[0]->asString(ctx) : nullptr;
     if (!nameStr)
-        throw std::runtime_error(
+        throw NativeError(
             "setInstVar:from:to: — the variable name must be a symbol or string");
     std::string mangled = "_iv_";
     mangled += nameStr->toStdString(ctx);

@@ -17,6 +17,7 @@
 //   such a primitive-evaluated block blocks its worker thread the F6 v2 way
 //   and is NOT cooperatively yieldable.
 #include "primitives/StringSupport.h"
+#include "runtime/NativeError.h"
 #include "ExecutionEngine.h"
 #include "runtime/PrimitiveMarker.h"
 
@@ -123,7 +124,7 @@ namespace {
 [[noreturn]] void signalCatchable(protoST::STRuntime& rt, proto::ProtoContext* ctx,
                                   const std::string& message) {
     protoST::signalNativeError(rt, ctx, message);
-    throw std::runtime_error(message);   // not reached: Error is not resumable
+    throw protoST::NativeError(message);   // not reached: Error is not resumable
 }
 // Kept out of line so that `push`, on every instruction's path, stays small.
 #if defined(_MSC_VER)
@@ -349,14 +350,14 @@ ExecutionEngine::push(Frame& f, const proto::ProtoObject* v) {
 const proto::ProtoObject*
 ExecutionEngine::pop(Frame& f) {
     if (f.sp == 0)
-        throw std::runtime_error("engine operand stack underflow");
+        throw NativeError("engine operand stack underflow");
     --f.sp;
     return ctx_->getAutomaticLocal(opStackBase(f) + f.sp);
 }
 const proto::ProtoObject*
 ExecutionEngine::peek(const Frame& f) const {
     if (f.sp == 0)
-        throw std::runtime_error("engine operand stack peek on empty");
+        throw NativeError("engine operand stack peek on empty");
     return ctx_->getAutomaticLocal(opStackBase(f) + f.sp - 1);
 }
 const proto::ProtoObject*
@@ -400,7 +401,7 @@ ExecutionEngine::storeInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t
     auto* sym = f.m->ivSymbol(ctx, nameConst);
     const proto::ProtoObject* self = getSelf(f);
     if (!self || self == PROTO_NONE)
-        throw std::runtime_error("STORE_INSTVAR self is null");
+        throw NativeError("STORE_INSTVAR self is null");
     const_cast<proto::ProtoObject*>(self)->setAttribute(ctx, sym, val);
 }
 
@@ -502,7 +503,7 @@ ExecutionEngine::pushFrame(const BytecodeModule* m,
     // Frame regions start at kFrameRegionBase, above the transient-pin
     // scratch region, and end at kFrameRegionLimit, the array's maximum.
     if (regionEnd > kFrameRegionLimit)
-        throw std::runtime_error("engine slot region exhausted");
+        throw NativeError("engine slot region exhausted");
     // Grow the array if this region does not fit yet (one compare on the
     // common path). Growing reallocates it, so the raw pointer is read after.
     ensureEngineSlots(ctx_, regionEnd);
@@ -668,7 +669,7 @@ ExecutionEngine::runWithArgs(proto::ProtoContext* ctx,
     // "stack depth exceeded" Error -- the primitive boundary translates it --
     // never a crash. This engine is already registered, hence ">".
     if (g_liveEngines.size() > kMaxNestedEngines)
-        throw std::runtime_error(kNestingLimitMessage);
+        throw NativeError(kNestingLimitMessage);
     ctx_ = ctx;
     ensureEngineSlots(ctx_, kInitialEngineSlots);
 
@@ -769,7 +770,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     // region.
     auto checkLocal = [](const Frame& f, unsigned int slot) {
         if (slot >= f.localCount)
-            throw std::runtime_error("engine local slot out of range");
+            throw NativeError("engine local slot out of range");
     };
 
     // F6 v3 E3: whatever happens (normal return, cooperative yield rethrow,
@@ -870,7 +871,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         f__.pc += kInstrSize;                                                   \
         while (op == Op::EXTEND) {                                              \
             if (f__.pc + 1 >= bytes__.size())                                   \
-                throw std::runtime_error(                                       \
+                throw NativeError(                                       \
                     "ExecutionEngine: truncated EXTEND prefix");                \
             op  = static_cast<Op>(bytes__[f__.pc]);                             \
             arg = (arg << 8) | bytes__[f__.pc + 1];                             \
@@ -950,7 +951,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         f.pc += kInstrSize;
         while (op == Op::EXTEND) {
             if (f.pc + 1 >= bytes.size())
-                throw std::runtime_error(
+                throw NativeError(
                     "ExecutionEngine: truncated EXTEND prefix");
             op  = static_cast<Op>(bytes[f.pc]);
             arg = (arg << 8) | bytes[f.pc + 1];
@@ -999,7 +1000,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 Frame& f = frames_.back();
                 checkLocal(f, arg);
                 if (f.sp == 0)
-                    throw std::runtime_error("STORE_LOCAL with empty stack");
+                    throw NativeError("STORE_LOCAL with empty stack");
                 setLocal(f, arg, pop(f));
                 DISPATCH_DIRECT();
                 break;
@@ -1303,7 +1304,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     argcOp = static_cast<int>(BytecodeModule::sendArgCount(op, selStr));
 
                 if (static_cast<int>(f.sp) < argcOp + 1)
-                    throw std::runtime_error("SEND with insufficient stack");
+                    throw NativeError("SEND with insufficient stack");
                 // F6 v3 E3: pop args/receiver off the operand stack. `pop`
                 // only decrements sp — the values remain physically in the
                 // frame's slot region, which the GC traces in full (the whole
@@ -1492,7 +1493,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                                     std::to_string(sub->argCount()) +
                                     ", got " + std::to_string(argcOp) + ")";
                                 signalNativeError(rt_, ctx, msg);
-                                throw std::runtime_error(msg);   // not reached: Error is not resumable
+                                throw NativeError(msg);   // not reached: Error is not resumable
                             }
                             auto* capDict = recv->getOwnAttributeDirect(ctx, recvCapKey);
                             if (!capDict || capDict == PROTO_NONE) capDict = nullptr;
@@ -1927,7 +1928,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     descSlot->mangled = mangled;
                     size_t hash1 = mangled.find('#');
                     if (hash1 == std::string::npos) {
-                        throw std::runtime_error(
+                        throw NativeError(
                             "SEND_CALL: malformed call selector '" +
                             mangled + "' (missing nPos delimiter)");
                     }
@@ -1940,7 +1941,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     int parsedNPos = 0;
                     try { parsedNPos = std::stoi(nPosPart); }
                     catch (...) {
-                        throw std::runtime_error(
+                        throw NativeError(
                             "SEND_CALL: malformed call selector '" +
                             mangled + "' (nPos not an integer)");
                     }
@@ -1976,7 +1977,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         + desc.mangled);
                 }
                 if (static_cast<int>(f.sp) < callTotal + 1) {
-                    throw std::runtime_error(
+                    throw NativeError(
                         "SEND_CALL with insufficient stack for " +
                         desc.mangled);
                 }
@@ -2098,7 +2099,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     const unsigned int totalArgs =
                         static_cast<unsigned int>(1 + declNPos + declNNamed);
                     if (sub->argCount() != static_cast<int>(totalArgs)) {
-                        throw std::runtime_error(
+                        throw NativeError(
                             "internal: call-form module argCount mismatch for "
                             + std::string(desc.name->toStdString(ctx)));
                     }
@@ -2253,11 +2254,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             case Op::STORE_CAPTURED: L_STORE_CAPTURED: {
                 Frame& f = frames_.back();
                 if (f.sp == 0)
-                    throw std::runtime_error("STORE_CAPTURED with empty stack");
+                    throw NativeError("STORE_CAPTURED with empty stack");
                 const proto::ProtoObject* val = pop(f);
                 const proto::ProtoObject* capD = getCaptured(f);
                 if (!capD || capD == PROTO_NONE)
-                    throw std::runtime_error("STORE_CAPTURED without captured dict");
+                    throw NativeError("STORE_CAPTURED without captured dict");
                 auto* sym = f.m->constSym(ctx, arg);
                 // `sym` is interned (perennial), so it needs no pin across
                 // the allocating setAttribute; `val` stays rooted in its
@@ -2279,11 +2280,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             case Op::DEFINE_CAPTURED: L_DEFINE_CAPTURED: {
                 Frame& f = frames_.back();
                 if (f.sp == 0)
-                    throw std::runtime_error("DEFINE_CAPTURED with empty stack");
+                    throw NativeError("DEFINE_CAPTURED with empty stack");
                 const proto::ProtoObject* val = pop(f);
                 const proto::ProtoObject* capD = getCaptured(f);
                 if (!capD || capD == PROTO_NONE)
-                    throw std::runtime_error("DEFINE_CAPTURED without captured dict");
+                    throw NativeError("DEFINE_CAPTURED without captured dict");
                 auto* sym = f.m->constSym(ctx, arg);
                 const_cast<proto::ProtoObject*>(capD)->setAttribute(ctx, sym, val);
                 DISPATCH_SCOPED();
@@ -2300,7 +2301,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // A catchable Error (with the trace when unhandled).
                     const std::string msg = "undefined global: " + nameStr;
                     signalNativeError(rt_, ctx, msg);
-                    throw std::runtime_error(msg);   // not reached: Error is not resumable
+                    throw NativeError(msg);   // not reached: Error is not resumable
                 }
                 push(f, val);
                 DISPATCH_DIRECT();
@@ -2309,13 +2310,13 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             case Op::STORE_GLOBAL: L_STORE_GLOBAL: {
                 Frame& f = frames_.back();
                 if (f.sp == 0)
-                    throw std::runtime_error("STORE_GLOBAL with empty stack");
+                    throw NativeError("STORE_GLOBAL with empty stack");
                 const proto::ProtoObject* val = pop(f);
                 auto* sym = f.m->constSym(ctx, arg);
                 // `sym` is interned (perennial): no pin needed across the
                 // allocating setAttribute on the globals object.
                 auto* g = rt_.globals();
-                if (!g) throw std::runtime_error("globals not initialized");
+                if (!g) throw NativeError("globals not initialized");
                 g->setAttribute(ctx, sym, val);
                 DISPATCH_SCOPED();
                 break;
@@ -2358,7 +2359,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // stack and setAttribute's it under the mangled "_iv_<name>"
                 // key on local-0 self. See PUSH_INSTVAR for rationale.
                 if (f.sp == 0)
-                    throw std::runtime_error("STORE_INSTVAR empty stack");
+                    throw NativeError("STORE_INSTVAR empty stack");
                 const proto::ProtoObject* val = pop(f);
                 // Mangled "_iv_<name>" key, interned once and cached on the
                 // module (BytecodeModule::ivSymbol) — NOT rebuilt as a
@@ -2373,7 +2374,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // frames (see PUSH_INSTVAR rationale).
                 const proto::ProtoObject* self = getSelf(f);
                 if (!self || self == PROTO_NONE)
-                    throw std::runtime_error("STORE_INSTVAR self is null");
+                    throw NativeError("STORE_INSTVAR self is null");
                 const_cast<proto::ProtoObject*>(self)->setAttribute(ctx, sym, val);
                 DISPATCH_SCOPED();
                 break;
@@ -2384,7 +2385,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // stays on the operand stack either way.
                 Frame& f = frames_.back();
                 if (f.sp == 0)
-                    throw std::runtime_error("IVAR_GROUP empty stack");
+                    throw NativeError("IVAR_GROUP empty stack");
                 const auto& e = f.m->instVarGroupEntry(arg);
                 if (e.position == 0) {
                     // A null self is reported by the per-write path, at the
@@ -2411,7 +2412,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 Frame& f = frames_.back();
                 const auto& e = f.m->instVarGroupEntry(arg);
                 if (f.sp < e.count)
-                    throw std::runtime_error("IVAR_GROUP_END stack underflow");
+                    throw NativeError("IVAR_GROUP_END stack underflow");
                 if (f.ivGroupActive) {
                     f.ivGroupActive = false;
                     f.ivGroupPending = 0;
@@ -2428,7 +2429,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     }
                     const proto::ProtoObject* self = getSelf(f);
                     if (!self || self == PROTO_NONE)
-                        throw std::runtime_error("STORE_INSTVAR self is null");
+                        throw NativeError("STORE_INSTVAR self is null");
                     self->setAttributes(ctx, e.count, names, values);
                 } else {
                     storeInstVar(ctx, f, e.nameConst, peek(f));
@@ -2453,12 +2454,12 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             case Op::STORE_CLASSVAR: L_STORE_CLASSVAR: {
                 Frame& f = frames_.back();
                 if (f.sp == 0)
-                    throw std::runtime_error("STORE_CLASSVAR empty stack");
+                    throw NativeError("STORE_CLASSVAR empty stack");
                 const proto::ProtoObject* val = pop(f);
                 auto* sym = f.m->ivSymbol(ctx, arg);
                 const proto::ProtoObject* self = getSelf(f);
                 if (!self || self == PROTO_NONE)
-                    throw std::runtime_error("STORE_CLASSVAR self is null");
+                    throw NativeError("STORE_CLASSVAR self is null");
                 // The declaring class owns the variable (installed as an own
                 // attribute when the class was declared).
                 const proto::ProtoObject* owner = nullptr;
@@ -2502,7 +2503,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // at depth arg-1). Collect them bottom-up into a ProtoList,
                 // pop them, wrap the list as a fresh Array instance and push.
                 if (f.sp < arg)
-                    throw std::runtime_error("MAKE_ARRAY with insufficient stack");
+                    throw NativeError("MAKE_ARRAY with insufficient stack");
                 const proto::ProtoList* data = ctx->newList();
                 // `data` is a transient reachable from nowhere the GC traces;
                 // it is rebuilt by appendLast each turn (structural-sharing
@@ -2542,11 +2543,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // BL-2: unreachable — the decode loop above consumes every
                 // EXTEND prefix before the switch. A bare EXTEND reaching
                 // here would mean a malformed instruction stream.
-                throw std::runtime_error(
+                throw NativeError(
                     "ExecutionEngine: stray EXTEND prefix at pc=" +
                     std::to_string(f.pc - kInstrSize));
             default:
-                throw std::runtime_error(
+                throw NativeError(
                     "ExecutionEngine: unimplemented opcode at pc=" +
                     std::to_string(f.pc - kInstrSize));
         }
@@ -2565,7 +2566,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             DISPATCH_DIRECT();
         }
         L_BAD_OP:
-            throw std::runtime_error(
+            throw NativeError(
                 "ExecutionEngine: unimplemented opcode (threaded dispatch)");
         L_RUN_DONE:
             // DISPATCH_DIRECT detected frames_.empty() — the implicit-return
@@ -2627,7 +2628,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             // letting an unmatched exception escape. Future>>wait only
             // throws when currentActor() != nullptr, so reaching here
             // would indicate a primitive misuse.
-            throw std::runtime_error("FutureYield outside of actor handler");
+            throw NativeError("FutureYield outside of actor handler");
         }
 
         // Symbols resolved fresh from the live ctx (not cached in statics):
@@ -2961,10 +2962,10 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
     TransientPin pinHidKey(ctx, reinterpret_cast<const proto::ProtoObject*>(homeIdKey));
 
     if (!snapshot)
-        throw std::runtime_error("restoreFrames: snapshot is null");
+        throw NativeError("restoreFrames: snapshot is null");
     auto* asList = snapshot->asList(ctx);
     if (!asList)
-        throw std::runtime_error("restoreFrames: snapshot is not a list");
+        throw NativeError("restoreFrames: snapshot is not a list");
 
     frames_.clear();
     slotBase_ = g_slotCursor;
@@ -2976,12 +2977,12 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
         const proto::ProtoObject* frameObj =
             asList->getAt(ctx, static_cast<int>(i));
         if (!frameObj)
-            throw std::runtime_error("restoreFrames: null frame entry");
+            throw NativeError("restoreFrames: null frame entry");
 
         // pc
         auto* pcVal = frameObj->getAttribute(ctx, pcKey);
         if (!pcVal || pcVal == PROTO_NONE)
-            throw std::runtime_error("restoreFrames: missing pc");
+            throw NativeError("restoreFrames: missing pc");
         const std::size_t pc =
             static_cast<std::size_t>(pcVal->asLong(ctx));
 
@@ -2989,27 +2990,27 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
         auto* opStackVal = frameObj->getAttribute(ctx, opStackKey);
         auto* opList = opStackVal ? opStackVal->asList(ctx) : nullptr;
         if (!opList)
-            throw std::runtime_error("restoreFrames: missing op_stack");
+            throw NativeError("restoreFrames: missing op_stack");
         const proto::proto_ulong opN = opList->getSize(ctx);
 
         // locals
         auto* locVal = frameObj->getAttribute(ctx, localsKey);
         auto* locList = locVal ? locVal->asList(ctx) : nullptr;
         if (!locList)
-            throw std::runtime_error("restoreFrames: missing locals");
+            throw NativeError("restoreFrames: missing locals");
         const proto::proto_ulong locN = locList->getSize(ctx);
 
         // m_ptr
         auto* mPtrVal = frameObj->getAttribute(ctx, mPtrKey);
         if (!mPtrVal || mPtrVal == PROTO_NONE)
-            throw std::runtime_error("restoreFrames: missing m_ptr");
+            throw NativeError("restoreFrames: missing m_ptr");
         auto* ep = mPtrVal->asExternalPointer(ctx);
         if (!ep)
-            throw std::runtime_error("restoreFrames: m_ptr is not an ExternalPointer");
+            throw NativeError("restoreFrames: m_ptr is not an ExternalPointer");
         const BytecodeModule* m =
             static_cast<const BytecodeModule*>(ep->getPointer(ctx));
         if (!m)
-            throw std::runtime_error("restoreFrames: m_ptr decoded to nullptr");
+            throw NativeError("restoreFrames: m_ptr decoded to nullptr");
 
         // self_obj / captured_dict — PROTO_NONE sentinel kept as-is in slots.
         auto* selfVal = frameObj->getAttribute(ctx, selfKey);
@@ -3049,7 +3050,7 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
         const unsigned int regionSize = frameRegionSize(fr);
         const unsigned int regionEnd  = fr.baseSlot + regionSize;
         if (regionEnd > kFrameRegionLimit)
-            throw std::runtime_error("engine slot region exhausted");
+            throw NativeError("engine slot region exhausted");
         ensureEngineSlots(ctx_, regionEnd);
 
         // Initialise the region, then write self/captured/locals/opStack.

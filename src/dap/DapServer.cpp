@@ -658,7 +658,7 @@ private:
             error = describeUncaught(ctx, e) + "\n";
         } catch (const std::exception& e) {
             exitCode = 1;
-            error = std::string("error: ") + e.what() + "\n";
+            error = "error: " + nativeErrorText(e) + "\n";
         } catch (...) {
             exitCode = 1;
             error = "error: unknown exception\n";

@@ -1,4 +1,5 @@
 #include "protoST/STRuntime.h"
+#include "runtime/NativeError.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/FutureYield.h"
@@ -87,8 +88,9 @@ namespace {
 // catch its error: report it on stderr (with the trace of an unhandled
 // protoST error) instead of dropping it, and carry on with the next callback.
 void reportCallbackError(const std::string& text) {
-    std::fprintf(stderr, "error in a Future callback: %s\n",
-                 text.rfind("error: ", 0) == 0 ? text.c_str() + 7 : text.c_str());
+    const std::string_view message = text.rfind("error: ", 0) == 0
+        ? std::string_view(text).substr(7) : std::string_view(text);
+    writeDiagnosticLine(stderr, "error in a Future callback: " + std::string(message));
 }
 
 // Run one thenDo: / catch: callback, reporting whatever escapes it.
@@ -316,7 +318,7 @@ void detectWaitCycle(STRuntime& rt, proto::ProtoContext* ctx,
         if (!target || target == PROTO_NONE) return;          // not an actor message
         if (target == self || isBuriedHere(target)) {
             const_cast<proto::ProtoObject*>(self)->setAttribute(ctx, sym.waitingOn, PROTO_NONE);
-            throw std::runtime_error(
+            throw NativeError(
                 "deadlock: this actor waits for a reply that can only come from an actor "
                 "waiting on it (an actor that waits handles no other message; chain with "
                 "thenDo: instead of waiting)");
@@ -492,7 +494,7 @@ const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* c
         return v ? v : PROTO_NONE;
     }
     if (s == 2) return raiseRejection(rt, ctx, r->getOwnAttributeDirect(ctx, errorKey));
-    throw std::runtime_error("Future>>wait: unknown state");
+    throw NativeError("Future>>wait: unknown state");
 }
 
 // Future>>resolve: value — settle a pending future as resolved. Idempotent.
@@ -500,7 +502,7 @@ const proto::ProtoObject* prim_Future_resolve(STRuntime& rt, proto::ProtoContext
                                                const proto::ProtoObject* r,
                                                const proto::ProtoObject* const* a,
                                                int argc) {
-    if (argc != 1) throw std::runtime_error("Future>>resolve: expects 1 arg");
+    if (argc != 1) throw NativeError("Future>>resolve: expects 1 arg");
     settleFuture(rt, ctx, r, /*reject=*/false, a[0]);
     return r;
 }
@@ -510,7 +512,7 @@ const proto::ProtoObject* prim_Future_rejectWith(STRuntime& rt, proto::ProtoCont
                                                   const proto::ProtoObject* r,
                                                   const proto::ProtoObject* const* a,
                                                   int argc) {
-    if (argc != 1) throw std::runtime_error("Future>>rejectWith: expects 1 arg");
+    if (argc != 1) throw NativeError("Future>>rejectWith: expects 1 arg");
     settleFuture(rt, ctx, r, /*reject=*/true, a[0]);
     return r;
 }
@@ -577,7 +579,7 @@ const proto::ProtoObject* prim_Future_thenDo(STRuntime& rt, proto::ProtoContext*
                                               const proto::ProtoObject* const* a,
                                               int argc) {
     markFutureObserved(ctx, r);
-    if (argc != 1) throw std::runtime_error("Future>>thenDo: expects 1 arg");
+    if (argc != 1) throw NativeError("Future>>thenDo: expects 1 arg");
     registerThen(rt, ctx, r, a[0]);
     return r;
 }
@@ -589,7 +591,7 @@ const proto::ProtoObject* prim_Future_catch(STRuntime& rt, proto::ProtoContext* 
                                              const proto::ProtoObject* const* a,
                                              int argc) {
     markFutureObserved(ctx, r);
-    if (argc != 1) throw std::runtime_error("Future>>catch: expects 1 arg");
+    if (argc != 1) throw NativeError("Future>>catch: expects 1 arg");
     registerCatch(rt, ctx, r, a[0]);
     return r;
 }
@@ -610,7 +612,7 @@ const proto::ProtoObject* prim_Future_thenDoUnobserved(STRuntime& rt, proto::Pro
                                                         const proto::ProtoObject* r,
                                                         const proto::ProtoObject* const* a,
                                                         int argc) {
-    if (argc != 1) throw std::runtime_error("Future>>__thenDoUnobserved: expects 1 arg");
+    if (argc != 1) throw NativeError("Future>>__thenDoUnobserved: expects 1 arg");
     registerThen(rt, ctx, r, a[0]);
     return r;
 }
@@ -619,7 +621,7 @@ const proto::ProtoObject* prim_Future_catchUnobserved(STRuntime& rt, proto::Prot
                                                        const proto::ProtoObject* r,
                                                        const proto::ProtoObject* const* a,
                                                        int argc) {
-    if (argc != 1) throw std::runtime_error("Future>>__catchUnobserved: expects 1 arg");
+    if (argc != 1) throw NativeError("Future>>__catchUnobserved: expects 1 arg");
     registerCatch(rt, ctx, r, a[0]);
     return r;
 }
@@ -628,10 +630,10 @@ const proto::ProtoObject* prim_Future_passErrorTo(STRuntime& rt, proto::ProtoCon
                                                    const proto::ProtoObject* r,
                                                    const proto::ProtoObject* const* a,
                                                    int argc) {
-    if (argc != 2) throw std::runtime_error("Future>>__passError:to: expects 2 args");
+    if (argc != 2) throw NativeError("Future>>__passError:to: expects 2 args");
     const proto::ProtoObject* other = a[1];
     if (!other || other == PROTO_NONE || other->hasParent(ctx, rt.bootstrap().futureProto) == 0)
-        throw std::runtime_error("Future>>__passError:to: a Future was expected");
+        throw NativeError("Future>>__passError:to: a Future was expected");
     // r is marked observed inside settleFuture, by the winner of the claim and
     // before `other`'s waiters are woken (see settleFuture, observeOnWin).
     settleFuture(rt, ctx, other, /*reject=*/true, a[0], /*observeOnWin=*/r);
@@ -726,7 +728,7 @@ const proto::ProtoObject* raiseRejection(STRuntime& rt, proto::ProtoContext* ctx
     if (error && error != PROTO_NONE && error->isCell(ctx) && !error->asString(ctx)
         && error->hasParent(ctx, rt.bootstrap().objectProto) == 0)
         return resignalException(rt, ctx, error);
-    throw std::runtime_error("Future rejected: " + describeRejection(ctx, error));
+    throw NativeError("Future rejected: " + describeRejection(ctx, error));
 }
 
 void markFutureObserved(proto::ProtoContext* ctx, const proto::ProtoObject* future) {

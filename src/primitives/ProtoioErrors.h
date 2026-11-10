@@ -3,6 +3,7 @@
 // by every primitive file that calls protoIO (io_prims.cpp, bytes_prims.cpp).
 
 #include "primitives/ArgSupport.h"
+#include "runtime/NativeError.h"
 #include "runtime/ClassedErrorSignal.h"
 
 #include <protoio/error.h>
@@ -20,6 +21,10 @@ namespace protoST {
 // their own classes.
 [[noreturn]] inline void raiseProtoioError(const protoio::Error& e, const std::string& who = {}) {
     using Kind = protoio::Error::Kind;
+    // protoio::Error has only what(). Its text is protoIO's own, and a path in
+    // it never holds a NUL (protoST refuses one in any string it hands to
+    // protoIO, osStringArg). The result is a NativeError, so nothing after
+    // this point cuts the text.
     const std::string text = who.empty() ? std::string(e.what()) : errorPrefix(who) + e.what();
     switch (e.kind) {
         case Kind::FileNotFound: throw ClassedErrorSignal("FileDoesNotExist", text);
@@ -35,7 +40,7 @@ namespace protoST {
         case Kind::Internal: throw ClassedErrorSignal("InternalError", text);
         case Kind::InvalidArgument: break;
     }
-    throw std::runtime_error(text);
+    throw NativeError(text);
 }
 
 } // namespace protoST

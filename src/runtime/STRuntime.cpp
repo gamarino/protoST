@@ -1,4 +1,5 @@
 #include "runtime/ClassedErrorSignal.h"
+#include "runtime/NativeError.h"
 #include "protoST/STRuntime.h"
 #include "runtime/PrimitiveMarker.h"
 #include "protoST/primitives.h"
@@ -120,10 +121,8 @@ const proto::ProtoObject* rejectionFor(proto::ProtoContext* ctx, const proto::Pr
     return e.value();
 }
 const proto::ProtoObject* rejectionFor(proto::ProtoContext* ctx, const std::exception& e) {
-    // A ClassedErrorSignal carries its full text; what() would end at a NUL.
-    if (const auto* c = dynamic_cast<const ClassedErrorSignal*>(&e))
-        return makeString(ctx, c->message());
-    return makeString(ctx, e.what());
+    // A NativeError carries its full text; what() would end at a NUL.
+    return makeString(ctx, nativeErrorText(e));
 }
 
 // One drainOne turn on a worker thread. Whatever escapes it -- it has no
@@ -134,11 +133,11 @@ bool drainOneReporting(STRuntime& rt, proto::ProtoContext* ctx) {
     try {
         return rt.drainOne(ctx);
     } catch (const proto::ProtoException& e) {
-        std::fprintf(stderr, "%s (escaped an actor drain on a worker thread)\n",
-                     describeUncaught(ctx, e).c_str());
+        writeDiagnosticLine(stderr, describeUncaught(ctx, e)
+                                    + " (escaped an actor drain on a worker thread)");
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "%s (escaped an actor drain on a worker thread)\n",
-                     describeUncaught(e).c_str());
+        writeDiagnosticLine(stderr, describeUncaught(e)
+                                    + " (escaped an actor drain on a worker thread)");
     } catch (...) {
         std::fprintf(stderr, "error: an unknown exception escaped an actor drain on a worker thread\n");
     }
@@ -1282,32 +1281,32 @@ STRuntime::runTopLevel(const BytecodeModule& m, proto::ProtoContext* ctx) {
         if (!u.original()) throw;
         foreignOriginal = u.original();
     } catch (const NonLocalReturn&) {
-        throw std::runtime_error(kBlockCannotReturnText);
+        throw NativeError(kBlockCannotReturnText);
     } catch (const UnwindToHandler&) {
         // Track 1 slice 2 (EXC-a): an UnwindToHandler reached the top level
         // with no `on:do:` to catch it. A balanced `on:do:` always catches
         // its own id, so this is a bug (an exception handler ran but its
         // owning `on:do:` was already gone). Surface it as a runtime error.
-        throw std::runtime_error(
+        throw NativeError(
             "exception unwind: no matching on:do: handler activation");
     } catch (const RetrySignal&) {
         // EXC-b: a `retry` reached the top level with no `on:do:` to re-enter
         // — same bug class as a stray UnwindToHandler.
-        throw std::runtime_error(
+        throw NativeError(
             "exception retry: no matching on:do: handler activation");
     } catch (const NestingLimitUnwind&) {
         // S23: the on:do: that was to run its handler on the nesting limit's
         // Error is gone -- the same bug class as a stray UnwindToHandler.
-        throw std::runtime_error(
+        throw NativeError(
             "nesting limit unwind: no matching on:do: handler activation");
     } catch (const ResumeSignal&) {
         // EXC-b: a `resume:` escaped its `signal` loop — a bug; `signal`
         // always consumes the ResumeSignal for its own id.
-        throw std::runtime_error(
+        throw NativeError(
             "exception resume: no active signal to resume");
     } catch (const PassSignal&) {
         // EXC-b: a `pass` escaped its `signal` loop — a bug.
-        throw std::runtime_error(
+        throw NativeError(
             "exception pass: no active signal to pass");
     }
     std::rethrow_exception(foreignOriginal);
@@ -1638,7 +1637,7 @@ bool STRuntime::runOneTask(proto::ProtoContext* ctx) {
         runTimerTask(*this, ctx, task);
         return true;
     }
-    throw std::runtime_error("internal error: a worker task of no known kind was dropped");
+    throw NativeError("internal error: a worker task of no known kind was dropped");
 }
 
 void STRuntime::notifyMainWaiterIfFor(const proto::ProtoObject* future) {
@@ -2198,7 +2197,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                         *this, ctx,
                         [&] { return fn(*this, ctx, wrapped, args.data(), argc); });
                 } else {
-                    throw std::runtime_error("unknown method shape");
+                    throw NativeError("unknown method shape");
                 }
             } else {
                 // An absent selector answers PROTO_NONE, not null: report it
@@ -2823,20 +2822,20 @@ void STRuntime::loadKernel() {
         if (name.empty() || name[0] == '#') continue;
         const fs::path file = kernelDir / name;
         std::ifstream in(file, std::ios::binary);
-        if (!in) throw std::runtime_error("kernel: cannot open " + file.string());
+        if (!in) throw NativeError("kernel: cannot open " + file.string());
         std::stringstream ss; ss << in.rdbuf();
         Parser P(ss.str());
         auto ast = P.parseModule();
         if (!P.errors().empty()) {
             const auto& e = P.errors().front();
-            throw std::runtime_error("kernel: " + file.string() + ":" + std::to_string(e.line)
+            throw NativeError("kernel: " + file.string() + ":" + std::to_string(e.line)
                                      + ":" + std::to_string(e.column) + ": " + e.message);
         }
         Compiler C;
         auto bc = C.compileModule(*ast);
         bc->setSourceName(file.string());
         if (C.hasErrors())
-            throw std::runtime_error("kernel: " + file.string() + ": " + C.errors().front());
+            throw NativeError("kernel: " + file.string() + ": " + C.errors().front());
         const BytecodeModule& module = *bc;
         {
             std::lock_guard<std::mutex> lock(impl_->modulesMu);
@@ -2846,10 +2845,10 @@ void STRuntime::loadKernel() {
         try {
             runTopLevel(module);
         } catch (const proto::ProtoException& ex) {
-            throw std::runtime_error("kernel: " + file.string() + ": "
+            throw NativeError("kernel: " + file.string() + ": "
                                      + describeProtoException(rootCtx(), ex));
         } catch (const std::exception& ex) {
-            throw std::runtime_error("kernel: " + file.string() + ": " + ex.what());
+            throw NativeError("kernel: " + file.string() + ": " + nativeErrorText(ex));
         }
     }
     // From here on, classes are declared by user code (see __subclassNamed:).
@@ -2867,13 +2866,13 @@ const proto::ProtoObject* STRuntime::loadModuleFromFile(
 {
     namespace fs = std::filesystem;
     if (!fs::exists(filePath)) {
-        throw std::runtime_error("module file not found: " + filePath);
+        throw NativeError("module file not found: " + filePath);
     }
 
     // Read the file.
     std::ifstream f(filePath, std::ios::binary);
     if (!f) {
-        throw std::runtime_error("module open failed: " + filePath);
+        throw NativeError("module open failed: " + filePath);
     }
     std::stringstream ss; ss << f.rdbuf();
     std::string src = ss.str();
@@ -2887,7 +2886,7 @@ const proto::ProtoObject* STRuntime::loadModuleFromFile(
             msg += "\n  " + std::to_string(e.line) + ":"
                  + std::to_string(e.column) + " " + e.message;
         }
-        throw std::runtime_error(msg);
+        throw NativeError(msg);
     }
 
     // Compile.
@@ -2899,7 +2898,7 @@ const proto::ProtoObject* STRuntime::loadModuleFromFile(
     if (C.hasErrors()) {
         std::string msg = "module compile errors in " + logicalName + ":";
         for (auto& s : C.errors()) msg += "\n  " + s;
-        throw std::runtime_error(msg);
+        throw NativeError(msg);
     }
 
     // F5-M3: Retain the compiled BytecodeModule for the runtime's lifetime so
@@ -2966,7 +2965,7 @@ const proto::ProtoObject* STRuntime::loadModuleFromFile(
 const proto::ProtoObject* STRuntime::loadModule(proto::ProtoContext* ctx, const std::string& logicalPath) {
     auto path = findModuleFile(logicalPath);
     if (path.empty()) {
-        throw std::runtime_error("module not found: " + logicalPath);
+        throw NativeError("module not found: " + logicalPath);
     }
     return importModuleFile(ctx, path, logicalPath);
 }
@@ -3022,7 +3021,7 @@ const proto::ProtoObject* STRuntime::importModuleFile(
 
             for (std::thread::id owner = loading->second;;) {
                 if (owner == self) {
-                    throw std::runtime_error(
+                    throw NativeError(
                         "cyclic module import: " + logicalName);
                 }
                 auto waiting = impl_->modulesWaiting.find(owner);

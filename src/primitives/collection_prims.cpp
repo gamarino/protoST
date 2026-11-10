@@ -38,6 +38,7 @@
 // `Error`, so `[ ... ] on: Error do: [ ... ]` guards it (Track 1).
 
 #include "protoST/STRuntime.h"
+#include "runtime/NativeError.h"
 #include "runtime/ClassedErrorSignal.h"
 #include "protoST/primitives.h"
 #include "primitives/CollectionSupport.h"
@@ -733,7 +734,7 @@ bool forEachElement(STRuntime& rt, proto::ProtoContext* ctx,
         }
         return true;
     }
-    throw std::runtime_error("collection does not understand iteration");
+    throw NativeError("collection does not understand iteration");
 }
 
 // =====================  Array base operations  ============================
@@ -766,7 +767,7 @@ const proto::ProtoObject* prim_Array_at(STRuntime&, proto::ProtoContext* ctx,
                                         const proto::ProtoObject* r,
                                         const proto::ProtoObject* const* a,
                                         int argc) {
-    if (argc != 1) throw std::runtime_error("at: expects 1 arg (index)");
+    if (argc != 1) throw NativeError("at: expects 1 arg (index)");
     const proto::ProtoList* data = arrayData(ctx, r);
     long long idx1 = a[0]->asLong(ctx);              // 1-based
     long long n    = static_cast<long long>(data->getSize(ctx));
@@ -787,7 +788,7 @@ const proto::ProtoObject* prim_Array_atPut(STRuntime&, proto::ProtoContext* ctx,
                                            const proto::ProtoObject* r,
                                            const proto::ProtoObject* const* a,
                                            int argc) {
-    if (argc != 2) throw std::runtime_error("at:put: expects 2 args (index, value)");
+    if (argc != 2) throw NativeError("at:put: expects 2 args (index, value)");
     const proto::ProtoList* data = arrayData(ctx, r);
     long long idx1 = a[0]->asLong(ctx);              // 1-based
     long long n    = static_cast<long long>(data->getSize(ctx));
@@ -813,7 +814,7 @@ const proto::ProtoObject* prim_Array_do(STRuntime& rt, proto::ProtoContext* ctx,
                                         const proto::ProtoObject* r,
                                         const proto::ProtoObject* const* a,
                                         int argc) {
-    if (argc != 1) throw std::runtime_error("do: expects 1 arg (block)");
+    if (argc != 1) throw NativeError("do: expects 1 arg (block)");
     const proto::ProtoObject* block = a[0];
     TransientPin pinRecv(ctx, r);
     forEachElement(rt, ctx, r, [&](const proto::ProtoObject* e) {
@@ -835,9 +836,9 @@ const proto::ProtoObject* prim_Array_classNew(STRuntime& rt, proto::ProtoContext
                                               const proto::ProtoObject* cls,
                                               const proto::ProtoObject* const* a,
                                               int argc) {
-    if (argc != 1) throw std::runtime_error("new: expects 1 arg (size)");
+    if (argc != 1) throw NativeError("new: expects 1 arg (size)");
     long long n = a[0]->asLong(ctx);
-    if (n < 0) throw std::runtime_error("Array new: negative size");
+    if (n < 0) throw NativeError("Array new: negative size");
     const proto::ProtoList* data = ctx->newList();
     TransientPin pinData(
         ctx, reinterpret_cast<const proto::ProtoObject*>(data));
@@ -857,7 +858,7 @@ const proto::ProtoObject* prim_Array_classWithAll(STRuntime& rt, proto::ProtoCon
                                                   const proto::ProtoObject* cls,
                                                   const proto::ProtoObject* const* a,
                                                   int argc) {
-    if (argc != 1) throw std::runtime_error("withAll: expects 1 arg (collection)");
+    if (argc != 1) throw NativeError("withAll: expects 1 arg (collection)");
     const proto::ProtoList* data = ctx->newList();
     TransientPin pinData(
         ctx, reinterpret_cast<const proto::ProtoObject*>(data));
@@ -922,7 +923,7 @@ const proto::ProtoObject* prim_OC_notEmpty(STRuntime&, proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_OC_at(STRuntime&, proto::ProtoContext* ctx,
                                      const proto::ProtoObject* r,
                                      const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("at: expects 1 arg (index)");
+    if (argc != 1) throw NativeError("at: expects 1 arg (index)");
     const proto::ProtoList* data = listData(ctx, r);
     long long idx1 = a[0]->asLong(ctx);
     long long n    = static_cast<long long>(data->getSize(ctx));
@@ -940,7 +941,7 @@ const proto::ProtoObject* prim_OC_at(STRuntime&, proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_OC_atPut(STRuntime&, proto::ProtoContext* ctx,
                                         const proto::ProtoObject* r,
                                         const proto::ProtoObject* const* a, int argc) {
-    if (argc != 2) throw std::runtime_error("at:put: expects 2 args (index, value)");
+    if (argc != 2) throw NativeError("at:put: expects 2 args (index, value)");
     const proto::ProtoList* data = listData(ctx, r);
     long long idx1 = a[0]->asLong(ctx);
     long long n    = static_cast<long long>(data->getSize(ctx));
@@ -959,7 +960,7 @@ const proto::ProtoObject* prim_OC_atPut(STRuntime&, proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_OC_add(STRuntime&, proto::ProtoContext* ctx,
                                       const proto::ProtoObject* r,
                                       const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("add: expects 1 arg (element)");
+    if (argc != 1) throw NativeError("add: expects 1 arg (element)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
     setData(ctx, r, listData(ctx, r)->appendLast(ctx, e));
     return e;
@@ -969,7 +970,7 @@ const proto::ProtoObject* prim_OC_add(STRuntime&, proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_OC_addFirst(STRuntime&, proto::ProtoContext* ctx,
                                            const proto::ProtoObject* r,
                                            const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("addFirst: expects 1 arg (element)");
+    if (argc != 1) throw NativeError("addFirst: expects 1 arg (element)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
     setData(ctx, r, listData(ctx, r)->appendFirst(ctx, e));
     return e;
@@ -981,7 +982,7 @@ const proto::ProtoObject* prim_OC_addFirst(STRuntime&, proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_OC_addAll(STRuntime& rt, proto::ProtoContext* ctx,
                                          const proto::ProtoObject* r,
                                          const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("addAll: expects 1 arg (collection)");
+    if (argc != 1) throw NativeError("addAll: expects 1 arg (collection)");
     const proto::ProtoList* data = listData(ctx, r);
     TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
     forEachElement(rt, ctx, a[0], [&](const proto::ProtoObject* e) {
@@ -1000,7 +1001,7 @@ const proto::ProtoObject* prim_OC_removeFirst(STRuntime&, proto::ProtoContext* c
                                               const proto::ProtoObject* const*, int) {
     const proto::ProtoList* data = listData(ctx, r);
     if (data->getSize(ctx) == 0)
-        throw std::runtime_error("OrderedCollection>>removeFirst: collection is empty");
+        throw NativeError("OrderedCollection>>removeFirst: collection is empty");
     const proto::ProtoObject* e = data->getFirst(ctx);
     setData(ctx, r, data->removeFirst(ctx));
     return e ? e : PROTO_NONE;
@@ -1013,7 +1014,7 @@ const proto::ProtoObject* prim_OC_removeLast(STRuntime&, proto::ProtoContext* ct
                                              const proto::ProtoObject* const*, int) {
     const proto::ProtoList* data = listData(ctx, r);
     if (data->getSize(ctx) == 0)
-        throw std::runtime_error("OrderedCollection>>removeLast: collection is empty");
+        throw NativeError("OrderedCollection>>removeLast: collection is empty");
     const proto::ProtoObject* e = data->getLast(ctx);
     setData(ctx, r, data->removeLast(ctx));
     return e ? e : PROTO_NONE;
@@ -1041,7 +1042,7 @@ int indexOfEqual(proto::ProtoContext* ctx, const proto::ProtoList* data,
 const proto::ProtoObject* prim_OC_remove(STRuntime&, proto::ProtoContext* ctx,
                                          const proto::ProtoObject* r,
                                          const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("remove: expects 1 arg (element)");
+    if (argc != 1) throw NativeError("remove: expects 1 arg (element)");
     const proto::ProtoList* data = listData(ctx, r);
     const proto::ProtoObject* value = a[0] ? a[0] : PROTO_NONE;
     int idx = indexOfEqual(ctx, data, value);
@@ -1058,7 +1059,7 @@ const proto::ProtoObject* prim_OC_removeIfAbsent(STRuntime& rt, proto::ProtoCont
                                                  const proto::ProtoObject* const* a,
                                                  int argc) {
     if (argc != 2)
-        throw std::runtime_error("remove:ifAbsent: expects 2 args (element, block)");
+        throw NativeError("remove:ifAbsent: expects 2 args (element, block)");
     const proto::ProtoList* data = listData(ctx, r);
     const proto::ProtoObject* value = a[0] ? a[0] : PROTO_NONE;
     int idx = indexOfEqual(ctx, data, value);
@@ -1076,7 +1077,7 @@ const proto::ProtoObject* prim_OC_first(STRuntime&, proto::ProtoContext* ctx,
                                         const proto::ProtoObject* const*, int) {
     const proto::ProtoList* data = listData(ctx, r);
     if (data->getSize(ctx) == 0)
-        throw std::runtime_error("OrderedCollection>>first: collection is empty");
+        throw NativeError("OrderedCollection>>first: collection is empty");
     const proto::ProtoObject* e = data->getFirst(ctx);
     return e ? e : PROTO_NONE;
 }
@@ -1086,7 +1087,7 @@ const proto::ProtoObject* prim_OC_last(STRuntime&, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* const*, int) {
     const proto::ProtoList* data = listData(ctx, r);
     if (data->getSize(ctx) == 0)
-        throw std::runtime_error("OrderedCollection>>last: collection is empty");
+        throw NativeError("OrderedCollection>>last: collection is empty");
     const proto::ProtoObject* e = data->getLast(ctx);
     return e ? e : PROTO_NONE;
 }
@@ -1096,7 +1097,7 @@ const proto::ProtoObject* prim_OC_last(STRuntime&, proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_OC_do(STRuntime& rt, proto::ProtoContext* ctx,
                                      const proto::ProtoObject* r,
                                      const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("do: expects 1 arg (block)");
+    if (argc != 1) throw NativeError("do: expects 1 arg (block)");
     const proto::ProtoObject* block = a[0];
     TransientPin pinRecv(ctx, r);
     forEachElement(rt, ctx, r, [&](const proto::ProtoObject* e) {
@@ -1123,7 +1124,7 @@ const proto::ProtoObject* prim_OC_classWithAll(STRuntime& rt, proto::ProtoContex
                                                const proto::ProtoObject* cls,
                                                const proto::ProtoObject* const* a,
                                                int argc) {
-    if (argc != 1) throw std::runtime_error("withAll: expects 1 arg (collection)");
+    if (argc != 1) throw NativeError("withAll: expects 1 arg (collection)");
     const proto::ProtoList* data = ctx->newList();
     TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
     forEachElement(rt, ctx, a[0], [&](const proto::ProtoObject* e) {
@@ -1169,7 +1170,7 @@ const proto::ProtoObject* makeSetInstance(STRuntime& rt, proto::ProtoContext* ct
 const proto::ProtoObject* prim_Set_add(STRuntime&, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* r,
                                        const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("add: expects 1 arg (element)");
+    if (argc != 1) throw NativeError("add: expects 1 arg (element)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
     const proto::ProtoMap* data = mapData(ctx, r);
     TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
@@ -1186,7 +1187,7 @@ const proto::ProtoObject* prim_Set_add(STRuntime&, proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_Set_remove(STRuntime&, proto::ProtoContext* ctx,
                                           const proto::ProtoObject* r,
                                           const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("remove: expects 1 arg (element)");
+    if (argc != 1) throw NativeError("remove: expects 1 arg (element)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
     const proto::ProtoMap* data = mapData(ctx, r);
     TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
@@ -1205,7 +1206,7 @@ const proto::ProtoObject* prim_Set_removeIfAbsent(STRuntime& rt, proto::ProtoCon
                                                   const proto::ProtoObject* const* a,
                                                   int argc) {
     if (argc != 2)
-        throw std::runtime_error("remove:ifAbsent: expects 2 args (element, block)");
+        throw NativeError("remove:ifAbsent: expects 2 args (element, block)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
     const proto::ProtoMap* data = mapData(ctx, r);
     TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
@@ -1223,7 +1224,7 @@ const proto::ProtoObject* prim_Set_removeIfAbsent(STRuntime& rt, proto::ProtoCon
 const proto::ProtoObject* prim_Set_includes(STRuntime&, proto::ProtoContext* ctx,
                                             const proto::ProtoObject* r,
                                             const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("includes: expects 1 arg (element)");
+    if (argc != 1) throw NativeError("includes: expects 1 arg (element)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
     return proto::hashedGet(ctx, mapData(ctx, r), stKeySemantics(), e) != nullptr
         ? PROTO_TRUE : PROTO_FALSE;
@@ -1252,7 +1253,7 @@ const proto::ProtoObject* prim_Set_notEmpty(STRuntime&, proto::ProtoContext* ctx
 const proto::ProtoObject* prim_Set_do(STRuntime& rt, proto::ProtoContext* ctx,
                                       const proto::ProtoObject* r,
                                       const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("do: expects 1 arg (block)");
+    if (argc != 1) throw NativeError("do: expects 1 arg (block)");
     const proto::ProtoObject* block = a[0];
     TransientPin pinRecv(ctx, r);
     forEachElement(rt, ctx, r, [&](const proto::ProtoObject* e) {
@@ -1276,7 +1277,7 @@ const proto::ProtoObject* prim_Set_classWithAll(STRuntime& rt, proto::ProtoConte
                                                 const proto::ProtoObject* cls,
                                                 const proto::ProtoObject* const* a,
                                                 int argc) {
-    if (argc != 1) throw std::runtime_error("withAll: expects 1 arg (collection)");
+    if (argc != 1) throw NativeError("withAll: expects 1 arg (collection)");
     const proto::ProtoMap* data = ctx->newMap();
     TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
     long long size = 0;
@@ -1319,7 +1320,7 @@ const proto::ProtoObject* makeBagInstance(STRuntime& rt, proto::ProtoContext* ct
 const proto::ProtoObject* prim_Bag_add(STRuntime&, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* r,
                                        const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("add: expects 1 arg (element)");
+    if (argc != 1) throw NativeError("add: expects 1 arg (element)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
     setData(ctx, r, listData(ctx, r)->appendLast(ctx, e));
     return e;
@@ -1331,10 +1332,10 @@ const proto::ProtoObject* prim_Bag_addWithOccurrences(STRuntime&, proto::ProtoCo
                                                       const proto::ProtoObject* const* a,
                                                       int argc) {
     if (argc != 2)
-        throw std::runtime_error("add:withOccurrences: expects 2 args (element, count)");
+        throw NativeError("add:withOccurrences: expects 2 args (element, count)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
     long long n = a[1]->asLong(ctx);
-    if (n < 0) throw std::runtime_error("Bag>>add:withOccurrences: negative count");
+    if (n < 0) throw NativeError("Bag>>add:withOccurrences: negative count");
     const proto::ProtoList* data = listData(ctx, r);
     TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
     for (long long i = 0; i < n; ++i) {
@@ -1350,7 +1351,7 @@ const proto::ProtoObject* prim_Bag_addWithOccurrences(STRuntime&, proto::ProtoCo
 const proto::ProtoObject* prim_Bag_remove(STRuntime&, proto::ProtoContext* ctx,
                                           const proto::ProtoObject* r,
                                           const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("remove: expects 1 arg (element)");
+    if (argc != 1) throw NativeError("remove: expects 1 arg (element)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
     const proto::ProtoList* data = listData(ctx, r);
     int idx = indexOfEqual(ctx, data, e);
@@ -1367,7 +1368,7 @@ const proto::ProtoObject* prim_Bag_removeIfAbsent(STRuntime& rt, proto::ProtoCon
                                                   const proto::ProtoObject* const* a,
                                                   int argc) {
     if (argc != 2)
-        throw std::runtime_error("remove:ifAbsent: expects 2 args (element, block)");
+        throw NativeError("remove:ifAbsent: expects 2 args (element, block)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
     const proto::ProtoList* data = listData(ctx, r);
     int idx = indexOfEqual(ctx, data, e);
@@ -1398,7 +1399,7 @@ long long countEqual(proto::ProtoContext* ctx, const proto::ProtoList* data,
 const proto::ProtoObject* prim_Bag_includes(STRuntime&, proto::ProtoContext* ctx,
                                             const proto::ProtoObject* r,
                                             const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("includes: expects 1 arg (element)");
+    if (argc != 1) throw NativeError("includes: expects 1 arg (element)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
     return indexOfEqual(ctx, listData(ctx, r), e) >= 0 ? PROTO_TRUE : PROTO_FALSE;
 }
@@ -1408,7 +1409,7 @@ const proto::ProtoObject* prim_Bag_occurrencesOf(STRuntime&, proto::ProtoContext
                                                  const proto::ProtoObject* r,
                                                  const proto::ProtoObject* const* a,
                                                  int argc) {
-    if (argc != 1) throw std::runtime_error("occurrencesOf: expects 1 arg (element)");
+    if (argc != 1) throw NativeError("occurrencesOf: expects 1 arg (element)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
     return ctx->fromLong(countEqual(ctx, listData(ctx, r), e));
 }
@@ -1437,7 +1438,7 @@ const proto::ProtoObject* prim_Bag_notEmpty(STRuntime&, proto::ProtoContext* ctx
 const proto::ProtoObject* prim_Bag_do(STRuntime& rt, proto::ProtoContext* ctx,
                                       const proto::ProtoObject* r,
                                       const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("do: expects 1 arg (block)");
+    if (argc != 1) throw NativeError("do: expects 1 arg (block)");
     const proto::ProtoObject* block = a[0];
     TransientPin pinRecv(ctx, r);
     forEachElement(rt, ctx, r, [&](const proto::ProtoObject* e) {
@@ -1461,7 +1462,7 @@ const proto::ProtoObject* prim_Bag_classWithAll(STRuntime& rt, proto::ProtoConte
                                                 const proto::ProtoObject* cls,
                                                 const proto::ProtoObject* const* a,
                                                 int argc) {
-    if (argc != 1) throw std::runtime_error("withAll: expects 1 arg (collection)");
+    if (argc != 1) throw NativeError("withAll: expects 1 arg (collection)");
     const proto::ProtoList* data = ctx->newList();
     TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
     forEachElement(rt, ctx, a[0], [&](const proto::ProtoObject* e) {
@@ -1512,7 +1513,7 @@ const proto::ProtoObject* prim_Object_arrow(STRuntime& rt, proto::ProtoContext* 
                                             const proto::ProtoObject* r,
                                             const proto::ProtoObject* const* a,
                                             int argc) {
-    if (argc != 1) throw std::runtime_error("-> expects 1 arg (value)");
+    if (argc != 1) throw NativeError("-> expects 1 arg (value)");
     return makeAssociation(rt, ctx, r, a[0]);
 }
 
@@ -1536,7 +1537,7 @@ const proto::ProtoObject* prim_Assoc_value(STRuntime&, proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_Assoc_keyPut(STRuntime&, proto::ProtoContext* ctx,
                                             const proto::ProtoObject* r,
                                             const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("key: expects 1 arg");
+    if (argc != 1) throw NativeError("key: expects 1 arg");
     const_cast<proto::ProtoObject*>(r)->setAttribute(
         ctx, assocKeyKey(ctx), a[0] ? a[0] : PROTO_NONE);
     return r;
@@ -1546,7 +1547,7 @@ const proto::ProtoObject* prim_Assoc_keyPut(STRuntime&, proto::ProtoContext* ctx
 const proto::ProtoObject* prim_Assoc_valuePut(STRuntime&, proto::ProtoContext* ctx,
                                               const proto::ProtoObject* r,
                                               const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("value: expects 1 arg");
+    if (argc != 1) throw NativeError("value: expects 1 arg");
     const_cast<proto::ProtoObject*>(r)->setAttribute(
         ctx, assocValueKey(ctx), a[0] ? a[0] : PROTO_NONE);
     return r;
@@ -1631,7 +1632,7 @@ const proto::ProtoObject* dictRemove(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_Dict_at(STRuntime&, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* r,
                                        const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("at: expects 1 arg (key)");
+    if (argc != 1) throw NativeError("at: expects 1 arg (key)");
     bool found = false;
     const proto::ProtoObject* v = dictLookup(ctx, mapData(ctx, r), a[0], &found);
     if (!found) throw ClassedErrorSignal("KeyNotFound", "Dictionary>>at: key not found");
@@ -1643,7 +1644,7 @@ const proto::ProtoObject* prim_Dict_atIfAbsent(STRuntime& rt, proto::ProtoContex
                                                const proto::ProtoObject* r,
                                                const proto::ProtoObject* const* a, int argc) {
     if (argc != 2)
-        throw std::runtime_error("at:ifAbsent: expects 2 args (key, block)");
+        throw NativeError("at:ifAbsent: expects 2 args (key, block)");
     bool found = false;
     const proto::ProtoObject* v = dictLookup(ctx, mapData(ctx, r), a[0], &found);
     if (found) return v;
@@ -1657,7 +1658,7 @@ const proto::ProtoObject* prim_Dict_atIfAbsentPut(STRuntime& rt, proto::ProtoCon
                                                   const proto::ProtoObject* r,
                                                   const proto::ProtoObject* const* a, int argc) {
     if (argc != 2)
-        throw std::runtime_error("at:ifAbsentPut: expects 2 args (key, block)");
+        throw NativeError("at:ifAbsentPut: expects 2 args (key, block)");
     bool found = false;
     const proto::ProtoObject* v = dictLookup(ctx, mapData(ctx, r), a[0], &found);
     if (found) return v;
@@ -1675,7 +1676,7 @@ const proto::ProtoObject* prim_Dict_atPut(STRuntime&, proto::ProtoContext* ctx,
                                           const proto::ProtoObject* r,
                                           const proto::ProtoObject* const* a, int argc) {
     if (argc != 2)
-        throw std::runtime_error("at:put: expects 2 args (key, value)");
+        throw NativeError("at:put: expects 2 args (key, value)");
     const proto::ProtoObject* value = a[1] ? a[1] : PROTO_NONE;
     dictStore(ctx, r, a[0], value);
     return value;
@@ -1686,7 +1687,7 @@ const proto::ProtoObject* prim_Dict_atPut(STRuntime&, proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_Dict_removeKey(STRuntime&, proto::ProtoContext* ctx,
                                               const proto::ProtoObject* r,
                                               const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("removeKey: expects 1 arg (key)");
+    if (argc != 1) throw NativeError("removeKey: expects 1 arg (key)");
     const proto::ProtoObject* removed = dictRemove(ctx, r, a[0]);
     if (!removed) throw ClassedErrorSignal("KeyNotFound", "Dictionary>>removeKey: key not found");
     return removed;
@@ -1699,7 +1700,7 @@ const proto::ProtoObject* prim_Dict_removeKeyIfAbsent(STRuntime& rt, proto::Prot
                                                       const proto::ProtoObject* const* a,
                                                       int argc) {
     if (argc != 2)
-        throw std::runtime_error("removeKey:ifAbsent: expects 2 args (key, block)");
+        throw NativeError("removeKey:ifAbsent: expects 2 args (key, block)");
     const proto::ProtoObject* removed = dictRemove(ctx, r, a[0]);
     if (!removed) {
         const proto::ProtoObject* fallback = invokeBlock(rt, ctx, a[1], nullptr, 0);
@@ -1712,7 +1713,7 @@ const proto::ProtoObject* prim_Dict_removeKeyIfAbsent(STRuntime& rt, proto::Prot
 const proto::ProtoObject* prim_Dict_includesKey(STRuntime&, proto::ProtoContext* ctx,
                                                 const proto::ProtoObject* r,
                                                 const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("includesKey: expects 1 arg (key)");
+    if (argc != 1) throw NativeError("includesKey: expects 1 arg (key)");
     bool found = false;
     dictLookup(ctx, mapData(ctx, r), a[0], &found);
     return found ? PROTO_TRUE : PROTO_FALSE;
@@ -1722,7 +1723,7 @@ const proto::ProtoObject* prim_Dict_includesKey(STRuntime&, proto::ProtoContext*
 const proto::ProtoObject* prim_Dict_includes(STRuntime& rt, proto::ProtoContext* ctx,
                                              const proto::ProtoObject* r,
                                              const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("includes: expects 1 arg (value)");
+    if (argc != 1) throw NativeError("includes: expects 1 arg (value)");
     const proto::ProtoObject* value = a[0] ? a[0] : PROTO_NONE;
     bool hit = false;
     forEachElement(rt, ctx, r, [&](const proto::ProtoObject* v) {
@@ -1767,7 +1768,7 @@ void dictForEachEntry(proto::ProtoContext* ctx, const proto::ProtoObject* r, Fn&
 const proto::ProtoObject* prim_Dict_keysDo(STRuntime& rt, proto::ProtoContext* ctx,
                                            const proto::ProtoObject* r,
                                            const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("keysDo: expects 1 arg (block)");
+    if (argc != 1) throw NativeError("keysDo: expects 1 arg (block)");
     const proto::ProtoObject* block = a[0];
     TransientPin pinRecv(ctx, r);
     dictForEachEntry(ctx, r, [&](const proto::ProtoObject* k,
@@ -1783,7 +1784,7 @@ const proto::ProtoObject* prim_Dict_keysDo(STRuntime& rt, proto::ProtoContext* c
 const proto::ProtoObject* prim_Dict_valuesDo(STRuntime& rt, proto::ProtoContext* ctx,
                                              const proto::ProtoObject* r,
                                              const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("valuesDo: expects 1 arg (block)");
+    if (argc != 1) throw NativeError("valuesDo: expects 1 arg (block)");
     const proto::ProtoObject* block = a[0];
     TransientPin pinRecv(ctx, r);
     dictForEachEntry(ctx, r, [&](const proto::ProtoObject*,
@@ -1809,7 +1810,7 @@ const proto::ProtoObject* prim_Dict_keysAndValuesDo(STRuntime& rt, proto::ProtoC
                                                     const proto::ProtoObject* const* a,
                                                     int argc) {
     if (argc != 1)
-        throw std::runtime_error("keysAndValuesDo: expects 1 arg (block)");
+        throw NativeError("keysAndValuesDo: expects 1 arg (block)");
     const proto::ProtoObject* block = a[0];
     TransientPin pinRecv(ctx, r);
     dictForEachEntry(ctx, r, [&](const proto::ProtoObject* k,
@@ -1828,7 +1829,7 @@ const proto::ProtoObject* prim_Dict_associationsDo(STRuntime& rt, proto::ProtoCo
                                                    const proto::ProtoObject* const* a,
                                                    int argc) {
     if (argc != 1)
-        throw std::runtime_error("associationsDo: expects 1 arg (block)");
+        throw NativeError("associationsDo: expects 1 arg (block)");
     const proto::ProtoObject* block = a[0];
     TransientPin pinRecv(ctx, r);
     dictForEachEntry(ctx, r, [&](const proto::ProtoObject* k,
@@ -1959,7 +1960,7 @@ const proto::ProtoObject* prim_Collection_collect(STRuntime& rt, proto::ProtoCon
                                                   const proto::ProtoObject* r,
                                                   const proto::ProtoObject* const* a,
                                                   int argc) {
-    if (argc != 1) throw std::runtime_error("collect: expects 1 arg (block)");
+    if (argc != 1) throw NativeError("collect: expects 1 arg (block)");
     const proto::ProtoObject* block = a[0];
     const proto::ProtoList* out = ctx->newList();
     TransientPin pinOut(ctx, reinterpret_cast<const proto::ProtoObject*>(out));
@@ -1980,7 +1981,7 @@ const proto::ProtoObject* selectReject(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* r,
                                        const proto::ProtoObject* const* a, int argc,
                                        bool keepWhenTrue, const char* sel) {
-    if (argc != 1) throw std::runtime_error(std::string(sel) + " expects 1 arg (block)");
+    if (argc != 1) throw NativeError(std::string(sel) + " expects 1 arg (block)");
     const proto::ProtoObject* block = a[0];
     const proto::ProtoList* out = ctx->newList();
     TransientPin pinOut(ctx, reinterpret_cast<const proto::ProtoObject*>(out));
@@ -2017,7 +2018,7 @@ const proto::ProtoObject* prim_Collection_detect(STRuntime& rt, proto::ProtoCont
                                                  const proto::ProtoObject* r,
                                                  const proto::ProtoObject* const* a,
                                                  int argc) {
-    if (argc != 1) throw std::runtime_error("detect: expects 1 arg (block)");
+    if (argc != 1) throw NativeError("detect: expects 1 arg (block)");
     const proto::ProtoObject* block = a[0];
     const proto::ProtoObject* found = nullptr;
     forEachElement(rt, ctx, r, [&](const proto::ProtoObject* e) {
@@ -2040,7 +2041,7 @@ const proto::ProtoObject* prim_Collection_detectIfNone(STRuntime& rt, proto::Pro
                                                        const proto::ProtoObject* const* a,
                                                        int argc) {
     if (argc != 2)
-        throw std::runtime_error("detect:ifNone: expects 2 args (block, none-block)");
+        throw NativeError("detect:ifNone: expects 2 args (block, none-block)");
     const proto::ProtoObject* block     = a[0];
     const proto::ProtoObject* noneBlock = a[1];
     const proto::ProtoObject* found = nullptr;
@@ -2064,7 +2065,7 @@ const proto::ProtoObject* prim_Collection_injectInto(STRuntime& rt, proto::Proto
                                                      const proto::ProtoObject* const* a,
                                                      int argc) {
     if (argc != 2)
-        throw std::runtime_error("inject:into: expects 2 args (start, block)");
+        throw NativeError("inject:into: expects 2 args (start, block)");
     const proto::ProtoObject* acc   = a[0] ? a[0] : PROTO_NONE;
     const proto::ProtoObject* block = a[1];
     TransientPin pinAcc(ctx, acc);
@@ -2091,7 +2092,7 @@ const proto::ProtoObject* sendDynamicForSort(STRuntime& rt, proto::ProtoContext*
     const proto::ProtoObject* args1[1] = { arg };
     const proto::ProtoObject* r = sendDynamic(
         rt, ctx, recv, proto::ProtoString::createSymbol(ctx, "<="), args1, 1, &understood);
-    if (!understood) throw std::runtime_error("sort: elements do not understand <=");
+    if (!understood) throw NativeError("sort: elements do not understand <=");
     return r;
 }
 
@@ -2099,7 +2100,7 @@ const proto::ProtoObject* prim_Seq_sort(STRuntime& rt, proto::ProtoContext* ctx,
                                         const proto::ProtoObject* r,
                                         const proto::ProtoObject* const* a, int argc) {
     if (!isListBacked(ctx, r))
-        throw std::runtime_error("sort: needs an Array or an OrderedCollection (use sorted)");
+        throw NativeError("sort: needs an Array or an OrderedCollection (use sorted)");
     const proto::ProtoObject* block = (argc >= 1 && a[0] && a[0] != PROTO_NONE) ? a[0] : nullptr;
     const proto::ProtoList* data = arrayData(ctx, r);
     std::vector<const proto::ProtoObject*> elems;
@@ -2134,7 +2135,7 @@ const proto::ProtoObject* prim_Collection_doSeparatedBy(STRuntime& rt, proto::Pr
                                                         const proto::ProtoObject* const* a,
                                                         int argc) {
     if (argc != 2)
-        throw std::runtime_error("do:separatedBy: expects 2 args (block, sep-block)");
+        throw NativeError("do:separatedBy: expects 2 args (block, sep-block)");
     const proto::ProtoObject* block    = a[0];
     const proto::ProtoObject* sepBlock = a[1];
     TransientPin pinRecv(ctx, r);
@@ -2154,7 +2155,7 @@ const proto::ProtoObject* prim_Collection_count(STRuntime& rt, proto::ProtoConte
                                                 const proto::ProtoObject* r,
                                                 const proto::ProtoObject* const* a,
                                                 int argc) {
-    if (argc != 1) throw std::runtime_error("count: expects 1 arg (block)");
+    if (argc != 1) throw NativeError("count: expects 1 arg (block)");
     const proto::ProtoObject* block = a[0];
     long long n = 0;
     forEachElement(rt, ctx, r, [&](const proto::ProtoObject* e) {
@@ -2171,7 +2172,7 @@ const proto::ProtoObject* prim_Collection_anySatisfy(STRuntime& rt, proto::Proto
                                                      const proto::ProtoObject* r,
                                                      const proto::ProtoObject* const* a,
                                                      int argc) {
-    if (argc != 1) throw std::runtime_error("anySatisfy: expects 1 arg (block)");
+    if (argc != 1) throw NativeError("anySatisfy: expects 1 arg (block)");
     const proto::ProtoObject* block = a[0];
     bool any = false;
     forEachElement(rt, ctx, r, [&](const proto::ProtoObject* e) {
@@ -2189,7 +2190,7 @@ const proto::ProtoObject* prim_Collection_allSatisfy(STRuntime& rt, proto::Proto
                                                      const proto::ProtoObject* r,
                                                      const proto::ProtoObject* const* a,
                                                      int argc) {
-    if (argc != 1) throw std::runtime_error("allSatisfy: expects 1 arg (block)");
+    if (argc != 1) throw NativeError("allSatisfy: expects 1 arg (block)");
     const proto::ProtoObject* block = a[0];
     bool all = true;
     forEachElement(rt, ctx, r, [&](const proto::ProtoObject* e) {
@@ -2209,7 +2210,7 @@ const proto::ProtoObject* prim_Collection_concat(STRuntime& rt, proto::ProtoCont
                                                  const proto::ProtoObject* r,
                                                  const proto::ProtoObject* const* a,
                                                  int argc) {
-    if (argc != 1) throw std::runtime_error(", expects 1 arg (collection)");
+    if (argc != 1) throw NativeError(", expects 1 arg (collection)");
     const proto::ProtoList* out = ctx->newList();
     TransientPin pinOut(ctx, reinterpret_cast<const proto::ProtoObject*>(out));
     forEachElement(rt, ctx, r, [&](const proto::ProtoObject* e) {
@@ -2284,7 +2285,7 @@ const proto::ProtoObject* prim_Interval_at(STRuntime&, proto::ProtoContext* ctx,
                                            const proto::ProtoObject* r,
                                            const proto::ProtoObject* const* a,
                                            int argc) {
-    if (argc != 1) throw std::runtime_error("at: expects 1 arg (index)");
+    if (argc != 1) throw NativeError("at: expects 1 arg (index)");
     long long start = intervalAttr(ctx, r, intervalStartKey(ctx), 1);
     long long stop  = intervalAttr(ctx, r, intervalStopKey(ctx), 0);
     long long step  = intervalAttr(ctx, r, intervalStepKey(ctx), 1);
@@ -2307,7 +2308,7 @@ const proto::ProtoObject* prim_Interval_first(STRuntime&, proto::ProtoContext* c
     long long stop  = intervalAttr(ctx, r, intervalStopKey(ctx), 0);
     long long step  = intervalAttr(ctx, r, intervalStepKey(ctx), 1);
     if (intervalSize(start, stop, step) == 0)
-        throw std::runtime_error("Interval>>first: interval is empty");
+        throw NativeError("Interval>>first: interval is empty");
     return ctx->fromLong(start);
 }
 
@@ -2321,7 +2322,7 @@ const proto::ProtoObject* prim_Interval_last(STRuntime&, proto::ProtoContext* ct
     long long step  = intervalAttr(ctx, r, intervalStepKey(ctx), 1);
     long long n     = intervalSize(start, stop, step);
     if (n == 0)
-        throw std::runtime_error("Interval>>last: interval is empty");
+        throw NativeError("Interval>>last: interval is empty");
     return ctx->fromLong(start + (n - 1) * step);
 }
 
@@ -2331,7 +2332,7 @@ const proto::ProtoObject* prim_Interval_do(STRuntime& rt, proto::ProtoContext* c
                                            const proto::ProtoObject* r,
                                            const proto::ProtoObject* const* a,
                                            int argc) {
-    if (argc != 1) throw std::runtime_error("do: expects 1 arg (block)");
+    if (argc != 1) throw NativeError("do: expects 1 arg (block)");
     const proto::ProtoObject* block = a[0];
     TransientPin pinRecv(ctx, r);
     forEachElement(rt, ctx, r, [&](const proto::ProtoObject* e) {
@@ -2355,7 +2356,7 @@ const proto::ProtoObject* prim_Number_to(STRuntime& rt, proto::ProtoContext* ctx
                                          const proto::ProtoObject* r,
                                          const proto::ProtoObject* const* a,
                                          int argc) {
-    if (argc != 1) throw std::runtime_error("to: expects 1 arg (stop)");
+    if (argc != 1) throw NativeError("to: expects 1 arg (stop)");
     return makeIntervalInstance(rt, ctx, r->asLong(ctx), a[0]->asLong(ctx), 1);
 }
 
@@ -2364,7 +2365,7 @@ const proto::ProtoObject* prim_Number_toBy(STRuntime& rt, proto::ProtoContext* c
                                            const proto::ProtoObject* r,
                                            const proto::ProtoObject* const* a,
                                            int argc) {
-    if (argc != 2) throw std::runtime_error("to:by: expects 2 args (stop, step)");
+    if (argc != 2) throw NativeError("to:by: expects 2 args (stop, step)");
     return makeIntervalInstance(rt, ctx,
                                 r->asLong(ctx), a[0]->asLong(ctx), a[1]->asLong(ctx));
 }
@@ -2375,7 +2376,7 @@ const proto::ProtoObject* prim_Number_toDo(STRuntime& rt, proto::ProtoContext* c
                                            const proto::ProtoObject* r,
                                            const proto::ProtoObject* const* a,
                                            int argc) {
-    if (argc != 2) throw std::runtime_error("to:do: expects 2 args (stop, block)");
+    if (argc != 2) throw NativeError("to:do: expects 2 args (stop, block)");
     long long start = r->asLong(ctx);
     long long stop  = a[0]->asLong(ctx);
     const proto::ProtoObject* block = a[1];
@@ -2394,12 +2395,12 @@ const proto::ProtoObject* prim_Number_toByDo(STRuntime& rt, proto::ProtoContext*
                                              const proto::ProtoObject* const* a,
                                              int argc) {
     if (argc != 3)
-        throw std::runtime_error("to:by:do: expects 3 args (stop, step, block)");
+        throw NativeError("to:by:do: expects 3 args (stop, step, block)");
     long long start = r->asLong(ctx);
     long long stop  = a[0]->asLong(ctx);
     long long step  = a[1]->asLong(ctx);
     const proto::ProtoObject* block = a[2];
-    if (step == 0) throw std::runtime_error("to:by:do: step must be non-zero");
+    if (step == 0) throw NativeError("to:by:do: step must be non-zero");
     TransientPin pinRecv(ctx, r);
     if (step > 0) {
         for (long long i = start; i <= stop; i += step) {

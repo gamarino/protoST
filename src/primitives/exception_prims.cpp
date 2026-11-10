@@ -43,6 +43,7 @@
 //     protoST exceptions by the space's error factory (stErrorFactory).
 
 #include "runtime/ClassedErrorSignal.h"
+#include "runtime/NativeError.h"
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
@@ -708,7 +709,7 @@ const proto::ProtoObject* sendToForeignException(STRuntime& rt, proto::ProtoCont
 // --- Describing an uncaught exception -------------------------------------
 
 std::string describeUncaught(const std::exception& e) {
-    return std::string("error: ") + e.what();
+    return "error: " + nativeErrorText(e);
 }
 
 std::string describeProtoException(proto::ProtoContext* ctx, const proto::ProtoException& e) {
@@ -849,7 +850,7 @@ const proto::ProtoObject* prim_Exception_signalText(STRuntime& rt, proto::ProtoC
                                                      const proto::ProtoObject* r,
                                                      const proto::ProtoObject* const* a,
                                                      int argc) {
-    if (argc != 1) throw std::runtime_error("signal: expects 1 arg (message string)");
+    if (argc != 1) throw NativeError("signal: expects 1 arg (message string)");
     const proto::ProtoObject* exc = r;
     if (isClassObject(ctx, r)) {
         exc = newExceptionInstance(ctx, r);
@@ -885,7 +886,7 @@ const proto::ProtoObject* prim_Exception_setMessageText(STRuntime&, proto::Proto
                                                          const proto::ProtoObject* r,
                                                          const proto::ProtoObject* const* a,
                                                          int argc) {
-    if (argc != 1) throw std::runtime_error("messageText: expects 1 arg");
+    if (argc != 1) throw NativeError("messageText: expects 1 arg");
     const_cast<proto::ProtoObject*>(r)->setAttribute(ctx, msgTextKey(ctx), a[0]);
     return r;
 }
@@ -899,11 +900,11 @@ const proto::ProtoObject* prim_Exception_return(STRuntime&, proto::ProtoContext*
                                                  const proto::ProtoObject* r,
                                                  const proto::ProtoObject* const* a,
                                                  int argc) {
-    if (argc != 1) throw std::runtime_error("return: expects 1 arg (value)");
+    if (argc != 1) throw NativeError("return: expects 1 arg (value)");
     const proto::proto_ulong handlerId = activeHandlerIdOf(ctx, r);
     if (handlerId == 0) {
         // `return:` on an exception that is not currently being handled.
-        throw std::runtime_error("return: sent to an exception with no active handler");
+        throw NativeError("return: sent to an exception with no active handler");
     }
     throw UnwindToHandler(ctx, handlerId, a[0] ? a[0] : PROTO_NONE);
 }
@@ -918,15 +919,15 @@ const proto::ProtoObject* prim_Exception_resume(STRuntime&, proto::ProtoContext*
                                                  const proto::ProtoObject* const* a,
                                                  int argc) {
     if (argc > 1)
-        throw std::runtime_error("resume: expects 0 or 1 arg (value)");
+        throw NativeError("resume: expects 0 or 1 arg (value)");
     if (!isResumable(ctx, r)) {
         // `resume:` on a non-resumable exception (an Error). The native stack
         // analogue is already gone — reject it as a hard error.
-        throw std::runtime_error("cannot resume a non-resumable exception");
+        throw NativeError("cannot resume a non-resumable exception");
     }
     proto::proto_ulong handlerId = activeHandlerIdOf(ctx, r);
     if (handlerId == 0)
-        throw std::runtime_error("resume: sent to an exception with no active handler");
+        throw NativeError("resume: sent to an exception with no active handler");
     // `resume` with no argument == `resume: nil`.
     const proto::ProtoObject* v = (argc == 1 && a[0]) ? a[0] : PROTO_NONE;
     throw ResumeSignal(ctx, handlerId, v);
@@ -942,7 +943,7 @@ const proto::ProtoObject* prim_Exception_retry(STRuntime&, proto::ProtoContext* 
                                                 int) {
     proto::proto_ulong handlerId = activeHandlerIdOf(ctx, r);
     if (handlerId == 0)
-        throw std::runtime_error("retry sent to an exception with no active handler");
+        throw NativeError("retry sent to an exception with no active handler");
     throw RetrySignal{ handlerId };
 }
 
@@ -957,7 +958,7 @@ const proto::ProtoObject* prim_Exception_pass(STRuntime&, proto::ProtoContext* c
                                                int) {
     proto::proto_ulong handlerId = activeHandlerIdOf(ctx, r);
     if (handlerId == 0)
-        throw std::runtime_error("pass sent to an exception with no active handler");
+        throw NativeError("pass sent to an exception with no active handler");
     throw PassSignal{ handlerId };
 }
 
@@ -1111,7 +1112,7 @@ const proto::ProtoObject* prim_Block_on_do(STRuntime& rt, proto::ProtoContext* c
                                             const proto::ProtoObject* const* a,
                                             int argc) {
     if (argc != 2)
-        throw std::runtime_error("on:do: expects 2 args (guard class, handler block)");
+        throw NativeError("on:do: expects 2 args (guard class, handler block)");
     // 2026-05-24 perf: skip the std::vector<std::pair<...>> build that
     // runProtected (multi-guard variant) requires — call the
     // single-guard fast path directly. `exception_latency` fires this
@@ -1131,7 +1132,7 @@ const proto::ProtoObject* prim_Block_on_do_on_do(STRuntime& rt,
                                                   const proto::ProtoObject* const* a,
                                                   int argc) {
     if (argc != 4)
-        throw std::runtime_error(
+        throw NativeError(
             "on:do:on:do: expects 4 args (guard, handler, guard, handler)");
     std::vector<std::pair<const proto::ProtoObject*, const proto::ProtoObject*>> guards;
     guards.emplace_back(a[0], a[1]);
@@ -1193,7 +1194,7 @@ const proto::ProtoObject* prim_Block_ensure(STRuntime& rt, proto::ProtoContext* 
                                             const proto::ProtoObject* const* a,
                                             int argc) {
     if (argc != 1)
-        throw std::runtime_error("ensure: expects 1 arg (cleanup block)");
+        throw NativeError("ensure: expects 1 arg (cleanup block)");
     const proto::ProtoObject* cleanupBlock = a[0];
     // The cleanup and the re-throw run after the catch clause, once the
     // frames below this primitive are released: see translateNativeException
@@ -1228,7 +1229,7 @@ const proto::ProtoObject* prim_Block_ifCurtailed(STRuntime& rt, proto::ProtoCont
                                                  const proto::ProtoObject* const* a,
                                                  int argc) {
     if (argc != 1)
-        throw std::runtime_error("ifCurtailed: expects 1 arg (cleanup block)");
+        throw NativeError("ifCurtailed: expects 1 arg (cleanup block)");
     const proto::ProtoObject* cleanupBlock = a[0];
     // After the catch clause, as in ensure:.
     std::exception_ptr exit;

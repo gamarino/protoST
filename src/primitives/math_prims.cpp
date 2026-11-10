@@ -1,4 +1,5 @@
 #include "protoST/STRuntime.h"
+#include "runtime/NativeError.h"
 #include "primitives/IntegerDivision.h"
 #include "runtime/TransientPin.h"
 #include "protoST/primitives.h"
@@ -77,7 +78,7 @@ double asDoubleVal(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
 // LargeInteger (fromLong would overflow).
 const proto::ProtoObject* integerFromDouble(proto::ProtoContext* ctx, double d) {
     if (std::isnan(d) || std::isinf(d))
-        throw std::runtime_error("cannot convert a non-finite Float to an Integer");
+        throw NativeError("cannot convert a non-finite Float to an Integer");
     if (d > -9.2e18 && d < 9.2e18) return ctx->fromLong(static_cast<long long>(d));
     char digits[400];
     std::snprintf(digits, sizeof(digits), "%.0f", d);
@@ -87,7 +88,7 @@ const proto::ProtoObject* integerFromDouble(proto::ProtoContext* ctx, double d) 
 void requireNumberArg(proto::ProtoContext* ctx, const proto::ProtoObject* v,
                       const char* who) {
     if (!isNumber(ctx, v)) {
-        throw std::runtime_error(std::string(who) +
+        throw NativeError(std::string(who) +
                                  ": argument is not a number");
     }
 }
@@ -119,7 +120,7 @@ const proto::ProtoObject* prim_LogBase(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* r,
                                        const proto::ProtoObject* const* a,
                                        int argc) {
-    if (argc != 1) throw std::runtime_error("log: expects 1 arg (base)");
+    if (argc != 1) throw NativeError("log: expects 1 arg (base)");
     if (!isNumber(ctx, a[0]))
         if (const proto::ProtoObject* adapted = adaptNumberArgument(rt, ctx, r, a[0], "log:"))
             return adapted;
@@ -208,7 +209,7 @@ const proto::ProtoObject* prim_BetweenAnd(STRuntime&, proto::ProtoContext* ctx,
                                           const proto::ProtoObject* r,
                                           const proto::ProtoObject* const* a,
                                           int argc) {
-    if (argc != 2) throw std::runtime_error("between:and: expects 2 args");
+    if (argc != 2) throw NativeError("between:and: expects 2 args");
     requireNumberArg(ctx, a[0], "between:and:");
     requireNumberArg(ctx, a[1], "between:and:");
     bool inside = r->partialCompare(ctx, a[0]) >= 0 &&
@@ -256,10 +257,10 @@ const proto::ProtoObject* prim_Factorial(STRuntime&, proto::ProtoContext* ctx,
                                          const proto::ProtoObject* r,
                                          const proto::ProtoObject* const*, int) {
     if (r->isFloat(ctx)) {
-        throw std::runtime_error("factorial: receiver is not an integer");
+        throw NativeError("factorial: receiver is not an integer");
     }
     if (r->integerSign(ctx) < 0) {
-        throw std::runtime_error("factorial: receiver is negative");
+        throw NativeError("factorial: receiver is negative");
     }
     long long n = r->asLong(ctx);
     const proto::ProtoObject* acc = ctx->fromLong(1);
@@ -279,7 +280,7 @@ const proto::ProtoObject* prim_RaisedTo(STRuntime& rt, proto::ProtoContext* ctx,
                                         const proto::ProtoObject* r,
                                         const proto::ProtoObject* const* a,
                                         int argc) {
-    if (argc != 1) throw std::runtime_error("raisedTo: expects 1 arg");
+    if (argc != 1) throw NativeError("raisedTo: expects 1 arg");
     if (!isNumber(ctx, a[0]))
         if (const proto::ProtoObject* adapted = adaptNumberArgument(rt, ctx, r, a[0], "raisedTo:"))
             return adapted;
@@ -318,18 +319,18 @@ const proto::ProtoObject* prim_RaisedTo(STRuntime& rt, proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_Gcd(STRuntime& rt, proto::ProtoContext* ctx,
                                    const proto::ProtoObject* r,
                                    const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("gcd: expects 1 arg");
+    if (argc != 1) throw NativeError("gcd: expects 1 arg");
     if (!isNumber(ctx, a[0]))
         if (const proto::ProtoObject* adapted = adaptNumberArgument(rt, ctx, r, a[0], "gcd:"))
             return adapted;
     requireNumberArg(ctx, a[0], "gcd:");
     if (r->isFloat(ctx) || a[0]->isFloat(ctx)) {
-        throw std::runtime_error("gcd: operands must be integers");
+        throw NativeError("gcd: operands must be integers");
     }
     const proto::ProtoObject* x = r->abs(ctx);
     const proto::ProtoObject* y = a[0]->abs(ctx);
     if (x->integerSign(ctx) == 0 && y->integerSign(ctx) == 0) {
-        throw std::runtime_error("gcd: of zero and zero is undefined");
+        throw NativeError("gcd: of zero and zero is undefined");
     }
     while (y->integerSign(ctx) != 0) {
         const proto::ProtoObject* t = integerRemainder(ctx, x, y);
@@ -343,13 +344,13 @@ const proto::ProtoObject* prim_Gcd(STRuntime& rt, proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_Lcm(STRuntime& rt, proto::ProtoContext* ctx,
                                    const proto::ProtoObject* r,
                                    const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("lcm: expects 1 arg");
+    if (argc != 1) throw NativeError("lcm: expects 1 arg");
     if (!isNumber(ctx, a[0]))
         if (const proto::ProtoObject* adapted = adaptNumberArgument(rt, ctx, r, a[0], "lcm:"))
             return adapted;
     requireNumberArg(ctx, a[0], "lcm:");
     if (r->isFloat(ctx) || a[0]->isFloat(ctx)) {
-        throw std::runtime_error("lcm: operands must be integers");
+        throw NativeError("lcm: operands must be integers");
     }
     if (r->integerSign(ctx) == 0 || a[0]->integerSign(ctx) == 0) {
         return ctx->fromLong(0);
@@ -389,7 +390,7 @@ const proto::ProtoObject* prim_FloatParts(STRuntime& rt, proto::ProtoContext* ct
                                           const proto::ProtoObject* r,
                                           const proto::ProtoObject* const*, int) {
     const double d = r->asDouble(ctx);
-    if (!std::isfinite(d)) throw std::runtime_error("__floatParts: not a finite Float");
+    if (!std::isfinite(d)) throw NativeError("__floatParts: not a finite Float");
     int e = 0;
     const double m = std::frexp(d, &e);
     long long mant = static_cast<long long>(std::ldexp(m, 53));

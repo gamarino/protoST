@@ -1,4 +1,5 @@
 #include "runtime/ClassedErrorSignal.h"
+#include "runtime/NativeError.h"
 #include "STForeignSend.h"
 #include "STModuleProvider.h"
 #include "protoST/STRuntime.h"
@@ -105,7 +106,7 @@ const proto::ProtoObject* foreignSendEntry(proto::ProtoContext* callerCtx,
                                            const proto::ProtoArguments* positional,
                                            const proto::ProtoKeywordArguments* keywords) {
     if (!callerCtx || !callerCtx->space)
-        throw std::runtime_error("protoST: a send needs the caller's context");
+        throw NativeError("protoST: a send needs the caller's context");
     STRuntime* rt = stRuntimeForSpace(callerCtx->space);
     const bool foreign = rt == nullptr;
     if (foreign) {
@@ -114,26 +115,26 @@ const proto::ProtoObject* foreignSendEntry(proto::ProtoContext* callerCtx,
         // refused rather than resolved arbitrarily.
         rt = soleSTRuntime();
         if (!rt)
-            throw std::runtime_error(registeredSTRuntimeCount() > 1
+            throw NativeError(registeredSTRuntimeCount() > 1
                                          ? "protoST: a send from another runtime is ambiguous: "
                                            "this process holds more than one protoST runtime"
                                          : "protoST: a send from another runtime found no "
                                            "protoST runtime in this process");
         if (!rt->isOwnerThread())
-            throw std::runtime_error(
+            throw NativeError(
                 "protoST: a send from another runtime must run on the thread that "
                 "constructed the protoST runtime");
     }
     if (keywords && keywords->getSize(callerCtx) > 0)
-        throw std::runtime_error("protoST: a Smalltalk message takes no named arguments");
+        throw NativeError("protoST: a Smalltalk message takes no named arguments");
     const proto::proto_ulong n = positional ? positional->getSize(callerCtx) : 0;
     if (n < 1)
-        throw std::runtime_error("protoST: " + std::string(kForeignSendSelector) +
+        throw NativeError("protoST: " + std::string(kForeignSendSelector) +
                                  " expects the selector as its first argument");
     const proto::ProtoObject* selArg = positional->getAt(callerCtx, 0);
     const proto::ProtoString* selStr = selArg ? selArg->asString(callerCtx) : nullptr;
     if (!selStr)
-        throw std::runtime_error("protoST: the selector of a send must be a String or a Symbol");
+        throw NativeError("protoST: the selector of a send must be a String or a Symbol");
 
     // Where the message runs. A protoST caller keeps its own context. A foreign
     // one runs on protoST's current context on this thread -- the root context,
@@ -210,7 +211,7 @@ const proto::ProtoObject* foreignSendEntry(proto::ProtoContext* callerCtx,
     }
     if (failed) std::rethrow_exception(failed);
     if (controlFlowUnwind)
-        throw std::runtime_error(
+        throw NativeError(
             "protoST: #" + selector->toStdString(ctx) +
             " left through a control-flow unwind (a non-local return, a resumption, "
             "a retry, or a Future yield), which cannot cross a runtime boundary");

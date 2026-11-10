@@ -47,9 +47,9 @@ int runReporting(protoST::STRuntime& rt, const protoST::BytecodeModule& bc,
         return 0;
     } catch (const proto::ProtoException& e) {
         // An unhandled Error, a module's error, another language's exception.
-        std::fprintf(stderr, "%s\n", protoST::describeUncaught(rt.rootCtx(), e).c_str());
+        protoST::writeDiagnosticLine(stderr, protoST::describeUncaught(rt.rootCtx(), e));
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "%s\n", protoST::describeUncaught(e).c_str());
+        protoST::writeDiagnosticLine(stderr, protoST::describeUncaught(e));
     } catch (...) {
         std::fprintf(stderr, "error: an unknown exception reached the top level\n");
     }
@@ -229,7 +229,7 @@ int main(int argc, char** argv) {
             std::puts(protoST::formatValue(rt, rt.rootCtx(), r).c_str());
             return 0;
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "%s\n", protoST::describeUncaught(e).c_str());
+            protoST::writeDiagnosticLine(stderr, protoST::describeUncaught(e));
             return 1;
         }
     }
@@ -340,7 +340,7 @@ int main(int argc, char** argv) {
             if (printLast) std::puts(protoST::formatValue(rt, rt.rootCtx(), r).c_str());
             return 0;
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "%s\n", protoST::describeUncaught(e).c_str());
+            protoST::writeDiagnosticLine(stderr, protoST::describeUncaught(e));
             return 1;
         }
     }

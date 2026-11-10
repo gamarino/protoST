@@ -1,4 +1,5 @@
 #include "protoST/STRuntime.h"
+#include "runtime/NativeError.h"
 #include "protoST/primitives.h"
 #include "primitives/ArgSupport.h"
 #include "primitives/BytesSupport.h"
@@ -140,7 +141,7 @@ std::shared_ptr<OpenFile> openFile(proto::ProtoContext* ctx, const PO* h, const 
         auto it = reg.files.find(handle);
         if (it != reg.files.end()) return it->second;
     }
-    throw std::runtime_error(errorPrefix(who) + "BinaryFile is closed");
+    throw NativeError(errorPrefix(who) + "BinaryFile is closed");
 }
 
 // Whether the handle is still open. Touches no protoCore object, so it may
@@ -174,7 +175,7 @@ auto onFileBlocking(STRuntime& rt, proto::ProtoContext* ctx, std::shared_ptr<Ope
 
 #define PRIM(NAME) const PO* NAME(STRuntime& rt, proto::ProtoContext* ctx, const PO* r, \
                                    const PO* const* a, int argc)
-#define ARGS(N, SEL) if (argc != (N)) throw std::runtime_error(SEL " expects " #N " argument(s)"); \
+#define ARGS(N, SEL) if (argc != (N)) throw NativeError(SEL " expects " #N " argument(s)"); \
                      (void) rt; (void) r; (void) a
 
 // The bits of __binFileOpen:flags:, in the order of the option symbols in
@@ -248,7 +249,7 @@ PRIM(prim_BinFileReadAt) {
     const char* who = "BinaryFile>>readAt:size:";
     const long long offset = smallIntegerArg(ctx, a[1], who, "the offset");
     const long long count = smallIntegerArg(ctx, a[2], who, "the size");
-    if (count < 0) throw std::runtime_error(errorPrefix(who) + "the size must not be negative");
+    if (count < 0) throw NativeError(errorPrefix(who) + "the size must not be negative");
     auto file = openFile(ctx, a[0], who);
     const std::string got = onFileUnmanaged(ctx, std::move(file),
         [&](int fd) { return protoio::file::readAt(fd, offset, static_cast<std::size_t>(count)); });
@@ -343,7 +344,7 @@ PRIM(prim_BinFileTryLock) {
         return false;
     });
     if (closedMeanwhile)
-        throw std::runtime_error("BinaryFile>>tryLock: BinaryFile is closed (the lock was released)");
+        throw NativeError("BinaryFile>>tryLock: BinaryFile is closed (the lock was released)");
     return got ? PROTO_TRUE : PROTO_FALSE;
 }
 
@@ -357,7 +358,7 @@ PRIM(prim_BinFileLock) {
         protoio::file::unlock(fd);
         return false;
     });
-    if (!held) throw std::runtime_error("BinaryFile>>lock: BinaryFile is closed (the lock was released)");
+    if (!held) throw NativeError("BinaryFile>>lock: BinaryFile is closed (the lock was released)");
     return r;
 }
 

@@ -1,4 +1,5 @@
 #include "protoST/STRuntime.h"
+#include "runtime/NativeError.h"
 #include "protoST/primitives.h"
 #include "primitives/ArgSupport.h"
 #include "primitives/BytesSupport.h"
@@ -50,7 +51,7 @@ const proto::ProtoObject* makeBytes(proto::ProtoContext* ctx, std::string_view b
 std::string_view bytesView(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
     const proto::ProtoByteBuffer* b =
         (v && v != PROTO_NONE) ? v->asByteBuffer(ctx) : nullptr;
-    if (!b) throw std::runtime_error("a ByteArray was expected");
+    if (!b) throw NativeError("a ByteArray was expected");
     const proto::proto_ulong n = b->getSize(ctx);
     if (n == 0) return {};
     return std::string_view(b->getBuffer(ctx), static_cast<size_t>(n));
@@ -62,16 +63,16 @@ using PO = proto::ProtoObject;
 
 #define PRIM(NAME) const PO* NAME(STRuntime& rt, proto::ProtoContext* ctx, const PO* r, \
                                    const PO* const* a, int argc)
-#define ARGS(N, SEL) if (argc != (N)) throw std::runtime_error(SEL " expects " #N " argument(s)"); \
+#define ARGS(N, SEL) if (argc != (N)) throw NativeError(SEL " expects " #N " argument(s)"); \
                      (void) rt; (void) r; (void) a
 
 // The byte an element of `withAll:` stands for: an Integer from 0 to 255.
 char byteOf(proto::ProtoContext* ctx, const PO* v) {
     if (!v || v == PROTO_NONE || !v->isInteger(ctx) || !proto::isSmallInt(v))
-        throw std::runtime_error("ByteArray withAll: each element must be an Integer from 0 to 255");
+        throw NativeError("ByteArray withAll: each element must be an Integer from 0 to 255");
     const long long b = v->asLong(ctx);
     if (b < 0 || b > 255)
-        throw std::runtime_error("ByteArray withAll: " + std::to_string(b)
+        throw NativeError("ByteArray withAll: " + std::to_string(b)
                                  + " is not a byte; each element must be an Integer from 0 to 255");
     return static_cast<char>(b);
 }
@@ -100,7 +101,7 @@ int hexDigit(char c) {
 PRIM(prim_BytesNew) {
     ARGS(1, "__bytesNew:");
     const long long n = smallIntegerArg(ctx, a[0], "ByteArray new:", "the size");
-    if (n < 0) throw std::runtime_error("ByteArray new: the size must not be negative");
+    if (n < 0) throw NativeError("ByteArray new: the size must not be negative");
     return makeBytes(ctx, std::string(static_cast<size_t>(n), '\0'));
 }
 
@@ -112,7 +113,7 @@ PRIM(prim_BytesWithAll) {
         : nullptr;
     const proto::ProtoList* list =
         (data && data != PROTO_NONE) ? data->asList(ctx) : nullptr;
-    if (!list) throw std::runtime_error("ByteArray withAll: an Array was expected");
+    if (!list) throw NativeError("ByteArray withAll: an Array was expected");
     const proto::proto_ulong n = list->getSize(ctx);
     std::string out;
     out.reserve(static_cast<size_t>(n));
@@ -192,16 +193,16 @@ PRIM(prim_BytesFromHex) {
     ARGS(1, "__fromHex:");
     const proto::ProtoString* s =
         (a[0] && a[0] != PROTO_NONE) ? a[0]->asString(ctx) : nullptr;
-    if (!s) throw std::runtime_error("ByteArray fromHex: a String was expected");
+    if (!s) throw NativeError("ByteArray fromHex: a String was expected");
     const std::string hex = s->toStdString(ctx);
     if (hex.size() % 2 != 0)
-        throw std::runtime_error("ByteArray fromHex: the String must have an even number of digits");
+        throw NativeError("ByteArray fromHex: the String must have an even number of digits");
     std::string out;
     out.reserve(hex.size() / 2);
     for (size_t i = 0; i < hex.size(); i += 2) {
         const int hi = hexDigit(hex[i]), lo = hexDigit(hex[i + 1]);
         if (hi < 0 || lo < 0)
-            throw std::runtime_error("ByteArray fromHex: '" + hex.substr(i, 2)
+            throw NativeError("ByteArray fromHex: '" + hex.substr(i, 2)
                                      + "' at position " + std::to_string(i + 1)
                                      + " is not a pair of hexadecimal digits");
         out.push_back(static_cast<char>((hi << 4) | lo));
@@ -240,7 +241,7 @@ PRIM(prim_Utf8Encode) {
     ARGS(1, "__utf8Encode:");
     const proto::ProtoString* s =
         (a[0] && a[0] != PROTO_NONE) ? a[0]->asString(ctx) : nullptr;
-    if (!s) throw std::runtime_error("utf8Encoded: a String was expected");
+    if (!s) throw NativeError("utf8Encoded: a String was expected");
     return makeBytes(ctx, s->toStdString(ctx));
 }
 
@@ -252,7 +253,7 @@ PRIM(prim_Utf8Decode) {
     for (size_t i = 0; i < v.size();) {
         const size_t n = utf8SequenceLength(v.substr(i));
         if (n == 0)
-            throw std::runtime_error("utf8Decoded: the bytes are not valid UTF-8 (byte "
+            throw NativeError("utf8Decoded: the bytes are not valid UTF-8 (byte "
                                      + std::to_string(static_cast<unsigned>(static_cast<unsigned char>(v[i])))
                                      + " at position " + std::to_string(i + 1) + ")");
         i += n;
@@ -275,7 +276,7 @@ PRIM(prim_BytesJoin) {
         : nullptr;
     const proto::ProtoList* list =
         (data && data != PROTO_NONE) ? data->asList(ctx) : nullptr;
-    if (!list) throw std::runtime_error("ByteArray join: an Array was expected");
+    if (!list) throw NativeError("ByteArray join: an Array was expected");
     const proto::proto_ulong n = list->getSize(ctx);
     std::string out;
     for (proto::proto_ulong i = 0; i < n; ++i)
@@ -302,7 +303,7 @@ PRIM(prim_BytesJoin) {
 // The exact decimal text of an Integer (sign included); throws unless `v` is an Integer.
 std::string integerDigits(proto::ProtoContext* ctx, const PO* v, const char* who) {
     if (!v || v == PROTO_NONE || !v->isInteger(ctx))
-        throw std::runtime_error(errorPrefix(who) + "an Integer was expected");
+        throw NativeError(errorPrefix(who) + "an Integer was expected");
     return v->asIntegerString(ctx, 10)->toStdString(ctx);
 }
 
@@ -315,7 +316,7 @@ const PO* fromUnsigned64(proto::ProtoContext* ctx, std::uint64_t u) {
 int widthArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
     const long long w = smallIntegerArg(ctx, v, who, "the width");
     if (w != 1 && w != 2 && w != 4 && w != 8)
-        throw std::runtime_error(errorPrefix(who) + "the width must be 1, 2, 4 or 8, not "
+        throw NativeError(errorPrefix(who) + "the width must be 1, 2, 4 or 8, not "
                                  + std::to_string(w));
     return static_cast<int>(w);
 }
@@ -359,7 +360,7 @@ PRIM(prim_UnpackFloat) {
     ARGS(3, "__unpackFloatAt:width:bigEndian:");
     const std::string_view v = bytesView(ctx, r);
     const int w = widthArg(ctx, a[1], "ByteArray float read");
-    if (w != 4 && w != 8) throw std::runtime_error("ByteArray float read: the width must be 4 or 8");
+    if (w != 4 && w != 8) throw NativeError("ByteArray float read: the width must be 4 or 8");
     const size_t off = offsetOf(ctx, a[0], w, v.size(), "ByteArray float read");
     const bool big = booleanArg(a[2], "ByteArray float read", "bigEndian");
     return ctx->fromDouble(immediate([&] {
@@ -378,7 +379,7 @@ PRIM(prim_PackUnsigned) {
     char* end = nullptr;
     const std::uint64_t u = text[0] == '-' ? 0 : std::strtoull(text.c_str(), &end, 10);
     if (text[0] == '-' || errno == ERANGE)
-        throw std::runtime_error("ByteArray unsigned write: " + text + " does not fit in "
+        throw NativeError("ByteArray unsigned write: " + text + " does not fit in "
                                  + std::to_string(w) + " unsigned byte(s)");
     std::string out;
     immediate([&] { protoio::encoding::putUint(out, u, w, big); return 0; }, "ByteArray unsigned write");
@@ -394,7 +395,7 @@ PRIM(prim_PackSigned) {
     char* end = nullptr;
     const long long n = std::strtoll(text.c_str(), &end, 10);
     if (errno == ERANGE)
-        throw std::runtime_error("ByteArray signed write: " + text + " does not fit in "
+        throw NativeError("ByteArray signed write: " + text + " does not fit in "
                                  + std::to_string(w) + " signed byte(s)");
     std::string out;
     immediate([&] { protoio::encoding::putInt(out, n, w, big); return 0; }, "ByteArray signed write");
@@ -411,12 +412,12 @@ PRIM(prim_PackFloat) {
         const std::string text = integerDigits(ctx, x, "ByteArray float write");
         d = std::strtod(text.c_str(), nullptr);
         if (std::isinf(d))
-            throw std::runtime_error("ByteArray float write: the Integer " + text.substr(0, 20)
+            throw NativeError("ByteArray float write: the Integer " + text.substr(0, 20)
                                      + (text.size() > 20 ? "... " : " ") + "does not fit in a Float");
     }
-    else throw std::runtime_error("ByteArray float write: a Float or an Integer was expected");
+    else throw NativeError("ByteArray float write: a Float or an Integer was expected");
     const int w = widthArg(ctx, a[1], "ByteArray float write");
-    if (w != 4 && w != 8) throw std::runtime_error("ByteArray float write: the width must be 4 or 8");
+    if (w != 4 && w != 8) throw NativeError("ByteArray float write: the width must be 4 or 8");
     const bool big = booleanArg(a[2], "ByteArray float write", "bigEndian");
     std::string out;
     if (w == 8) {
@@ -424,7 +425,7 @@ PRIM(prim_PackFloat) {
     } else {
         const float f = static_cast<float>(d);
         if (std::isinf(f) && !std::isinf(d))
-            throw std::runtime_error("ByteArray float write: " + std::to_string(d)
+            throw NativeError("ByteArray float write: " + std::to_string(d)
                                      + " does not fit in a 32-bit float");
         immediate([&] { protoio::encoding::putFloat32(out, f, big); return 0; }, "ByteArray float write");
     }
@@ -467,12 +468,12 @@ std::uint64_t unsignedArg(proto::ProtoContext* ctx, const PO* v, int bits,
     const std::uint64_t max = bits == 64 ? ~std::uint64_t{0} : (std::uint64_t{1} << bits) - 1;
     const std::string text = integerDigits(ctx, v, who);
     if (text[0] == '-')
-        throw std::runtime_error(errorPrefix(who) + what + " " + text
+        throw NativeError(errorPrefix(who) + what + " " + text
                                  + " does not fit: it must not be negative");
     errno = 0;
     const std::uint64_t u = std::strtoull(text.c_str(), nullptr, 10);
     if (errno == ERANGE || u > max)
-        throw std::runtime_error(errorPrefix(who) + what + " " + text
+        throw NativeError(errorPrefix(who) + what + " " + text
                                  + " does not fit in " + std::to_string(bits) + " bits");
     return u;
 }
@@ -505,11 +506,11 @@ PRIM(prim_Blake2b) {
     const char* who = "ByteArray blake2b:key:";
     const long long n = smallIntegerArg(ctx, a[0], who, "the digest size");
     if (n < 1 || n > 64)
-        throw std::runtime_error(errorPrefix(who) + "the digest size must be from 1 to 64, not "
+        throw NativeError(errorPrefix(who) + "the digest size must be from 1 to 64, not "
                                  + std::to_string(n));
     const std::string_view key = bytesArg(ctx, a[1], who);
     if (key.size() > 64)
-        throw std::runtime_error(errorPrefix(who) + "a key is at most 64 bytes, not "
+        throw NativeError(errorPrefix(who) + "a key is at most 64 bytes, not "
                                  + std::to_string(key.size()));
     const std::string_view data = bytesView(ctx, r);
     return makeBytes(ctx, digesting(ctx, data.size(), who, [&] {
@@ -550,7 +551,7 @@ PRIM(prim_Base64Decode) {
     ARGS(1, "__base64Decode:");
     const proto::ProtoString* s =
         (a[0] && a[0] != PROTO_NONE) ? a[0]->asString(ctx) : nullptr;
-    if (!s) throw std::runtime_error("base64Decoded: a String was expected");
+    if (!s) throw NativeError("base64Decoded: a String was expected");
     const std::string text = s->toStdString(ctx);
     return makeBytes(ctx, digesting(ctx, text.size(), "base64Decoded", [&] {
         return protoio::encoding::base64Decode(text);

@@ -11,22 +11,21 @@
 // factory builds as a ZeroDivide (exception_prims.cpp), exactly as for a
 // division by zero detected by protoCore itself.
 
-#include <stdexcept>
+#include "runtime/NativeError.h"
+
 #include <string>
 
 namespace protoST {
 
-class ClassedErrorSignal : public std::runtime_error {
+// A NativeError, so its full message (NUL included) is message(), read by
+// nativeErrorText like that of any other native error.
+class ClassedErrorSignal : public NativeError {
 public:
     ClassedErrorSignal(const char* className, const std::string& message)
-        : std::runtime_error(message), className_(className), message_(message) {}
+        : NativeError(message), className_(className) {}
     const char* className() const { return className_; }
-    // The full message. what() is a C string and ends at a NUL; a message
-    // built from user text may hold one, so the bridge reads this instead.
-    const std::string& message() const noexcept { return message_; }
 private:
     const char* className_;
-    std::string message_;
 };
 
 } // namespace protoST

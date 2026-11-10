@@ -7,6 +7,7 @@
 // its own variant.
 
 #include "primitives/BytesSupport.h"
+#include "runtime/NativeError.h"
 #include "protoCore.h"
 
 #include <climits>
@@ -32,9 +33,9 @@ inline std::string errorPrefix(std::string_view who) {
 inline long long smallIntegerArg(proto::ProtoContext* ctx, const proto::ProtoObject* v,
                                  const char* who, const char* what) {
     if (!v || v == PROTO_NONE || !v->isInteger(ctx))
-        throw std::runtime_error(errorPrefix(who) + what + ": an Integer was expected");
+        throw NativeError(errorPrefix(who) + what + ": an Integer was expected");
     if (!proto::isSmallInt(v))
-        throw std::runtime_error(errorPrefix(who) + what + " is out of range");
+        throw NativeError(errorPrefix(who) + what + " is out of range");
     return v->asLong(ctx);
 }
 
@@ -44,7 +45,7 @@ inline int intArg(proto::ProtoContext* ctx, const proto::ProtoObject* v,
                   const char* who, const char* what) {
     const long long n = smallIntegerArg(ctx, v, who, what);
     if (n < INT_MIN || n > INT_MAX)
-        throw std::runtime_error(errorPrefix(who) + what + " is out of range");
+        throw NativeError(errorPrefix(who) + what + " is out of range");
     return static_cast<int>(n);
 }
 
@@ -52,7 +53,7 @@ inline int intArg(proto::ProtoContext* ctx, const proto::ProtoObject* v,
 inline bool booleanArg(const proto::ProtoObject* v, const char* who, const char* what) {
     if (v == PROTO_TRUE) return true;
     if (v == PROTO_FALSE) return false;
-    throw std::runtime_error(errorPrefix(who) + what + " must be true or false");
+    throw NativeError(errorPrefix(who) + what + " must be true or false");
 }
 
 // The contents of a ByteArray argument, read-only (bytesView: the view stays
@@ -61,7 +62,7 @@ inline bool booleanArg(const proto::ProtoObject* v, const char* who, const char*
 inline std::string_view bytesArg(proto::ProtoContext* ctx, const proto::ProtoObject* v,
                                  const char* who) {
     if (!v || v == PROTO_NONE || !v->isByteBuffer(ctx))
-        throw std::runtime_error(errorPrefix(who) + "a ByteArray was expected");
+        throw NativeError(errorPrefix(who) + "a ByteArray was expected");
     return bytesView(ctx, v);
 }
 
@@ -79,10 +80,10 @@ inline std::string_view bytesArg(proto::ProtoContext* ctx, const proto::ProtoObj
 inline std::string osStringArg(proto::ProtoContext* ctx, const proto::ProtoObject* v,
                                const char* who, const char* what) {
     const proto::ProtoString* s = (v && v != PROTO_NONE) ? v->asString(ctx) : nullptr;
-    if (!s) throw std::runtime_error(errorPrefix(who) + "a String was expected");
+    if (!s) throw NativeError(errorPrefix(who) + "a String was expected");
     std::string out = s->toStdString(ctx);
     if (out.find('\0') != std::string::npos)
-        throw std::runtime_error(errorPrefix(who) + what + " must not contain NUL");
+        throw NativeError(errorPrefix(who) + what + " must not contain NUL");
     return out;
 }
 

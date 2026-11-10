@@ -1,4 +1,5 @@
 #include "protoST/STRuntime.h"
+#include "runtime/NativeError.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/BytecodeModule.h"
@@ -57,12 +58,12 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
                 args, argc, &understood);
             if (understood) return r ? r : PROTO_NONE;
         }
-        throw std::runtime_error("a block was expected here, but the argument is not a block");
+        throw NativeError("a block was expected here, but the argument is not a block");
     }
     const BytecodeModule* sub =
         reinterpret_cast<const BytecodeModule*>(bcPtrObj->asLong(ctx));
     if (sub->argCount() != argc) {
-        throw std::runtime_error(
+        throw NativeError(
             "block arg count mismatch (expected " +
             std::to_string(sub->argCount()) + ", got " +
             std::to_string(argc) + ")");
@@ -133,11 +134,11 @@ const proto::ProtoObject* prim_Block_numArgs(STRuntime&, proto::ProtoContext* ct
 const proto::ProtoObject* prim_Block_valueWithArguments(STRuntime& rt, proto::ProtoContext* ctx,
                                                         const proto::ProtoObject* r,
                                                         const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw std::runtime_error("valueWithArguments: expects 1 arg");
+    if (argc != 1) throw NativeError("valueWithArguments: expects 1 arg");
     const proto::ProtoObject* data = a[0] && a[0] != PROTO_NONE
         ? a[0]->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__data__")) : nullptr;
     const proto::ProtoList* list = data && data != PROTO_NONE ? data->asList(ctx) : nullptr;
-    if (!list) throw std::runtime_error("valueWithArguments: expects an Array");
+    if (!list) throw NativeError("valueWithArguments: expects an Array");
     std::vector<const proto::ProtoObject*> args;
     for (proto::proto_ulong i = 0; i < list->getSize(ctx); ++i)
         args.push_back(list->getAt(ctx, static_cast<int>(i)));

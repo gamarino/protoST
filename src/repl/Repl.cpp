@@ -406,10 +406,10 @@ bool evaluate(Session& s, const std::string& buffer,
         return false;
     } catch (const proto::ProtoException& e) {
         // An unhandled Error, a module's error, another language's exception.
-        std::fprintf(stderr, "%s\n", describeUncaught(s.rt->rootCtx(), e).c_str());
+        writeDiagnosticLine(stderr, describeUncaught(s.rt->rootCtx(), e));
         return false;
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "%s\n", describeUncaught(e).c_str());
+        writeDiagnosticLine(stderr, describeUncaught(e));
         return false;
     } catch (...) {
         std::fprintf(stderr, "error: unknown runtime failure\n");

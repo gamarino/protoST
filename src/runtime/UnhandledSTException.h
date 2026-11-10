@@ -28,6 +28,7 @@
 // see it. The top-level entry points catch `const proto::ProtoException&`
 // and report it with describeUncaught.
 
+#include "runtime/NativeError.h"   // writeDiagnosticLine, for describeUncaught's text
 #include "protoCore.h"
 
 #include <exception>
@@ -76,7 +77,8 @@ private:
     std::exception_ptr original_;
 };
 
-// "error: <message>" for a C++ failure that reached a top level.
+// "error: <message>" for a C++ failure that reached a top level, the message
+// read with nativeErrorText (whole, NUL included).
 std::string describeUncaught(const std::exception& e);
 
 // "error: <description>" followed by the trace for an uncaught
