@@ -1,6 +1,6 @@
 # protoST: bytes, durable files, encodings, MessagePack and timers
 
-Status: **draft for review** (2026-11-09). Author: Gustavo Marino, with Claude.
+Status: **approved** (2026-11-09). Author: Gustavo Marino, with Claude.
 Companion: the C++ layer is specified in
 `protoIO/docs/specs/2026-11-09-binary-storage-design.md`. Read its §1–§3 first.
 
@@ -104,6 +104,24 @@ Its behaviour follows the `String` precedent (D34):
 and accept `ByteArray`. Accepting a plain `Array` of 0–255 as input stays
 possible for one release, with a deprecation note. Recorded in the changelog
 and in STATUS.md.
+
+**Why `ByteArray` has no `setAt` (maintainer review, 2026-11-09).**
+A mutable byte value would cause four problems, and restricting it to I/O
+cannot prevent them, because a mutable object can always escape:
+- a torn read when two threads share it;
+- a record whose CRC was computed over bytes that changed before the write;
+- a content-hashed `Dictionary` key that silently corrupts its dictionary;
+- a committed value that changes behind a pointer-keyed cache, breaking
+  perenniality.
+
+**Future extension, only if a measurement demands it: `IOBuffer`.** It is a
+separate, mutable type for reusing read buffers (Pharo's `readInto:` pattern):
+- it has a single owner and is never shared between actors;
+- it has no `hash`, so it cannot become a key;
+- it converts to `ByteArray` by copy, which is the only way its bytes leave
+  I/O.
+
+Allocation is cheap under protoCore's GC, so this is not built now.
 
 ### 4.2 Reading and writing numbers in bytes
 
