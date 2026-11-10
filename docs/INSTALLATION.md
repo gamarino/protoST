@@ -13,9 +13,10 @@ has been built for 0.9.0 yet: the last published one is 0.8.1's, built and
 tested against protoCore 3.5.0, the release to install with it, which depends
 on `protocore (>= 3.5.0)` through protoCore's shlibs file. CI builds against
 protoCore 3.5.0 on Linux, macOS and Windows, and against 3.4.0, the declared
-minimum, in one Linux job (the floor job); it pins protoIO 0.3.0 (main
-`002ab8a`), which 0.9.0 requires (see *Prerequisites*). The suite was last run
-locally (2026-11-10) against protoCore 3.5.0 and the protoIO 0.3.0 tree.
+minimum, in one Linux job (the floor job); it pins protoIO 0.4.0 (main
+`41a5db0`, not yet tagged), which 0.9.0 requires (see *Prerequisites*). The
+suite was last run locally (2026-11-10) against protoCore 3.5.0 and the
+protoIO 0.4.0 tree.
 
 ---
 
@@ -27,7 +28,9 @@ locally (2026-11-10) against protoCore 3.5.0 and the protoIO 0.3.0 tree.
   Fedora/RHEL, `brew install readline` on macOS). It is a hard requirement:
   `find_library(READLINE_LIBRARY NAMES readline REQUIRED)`, except on Windows,
   where the REPL uses the console's own line editing (*Windows (MSVC)*).
-- **protoIO 0.3.0 or a later 0.3.x** at build time only (0.3.0 adds the
+- **protoIO 0.4.0 or a later 0.4.x** at build time only (0.4.0 adds
+  `file::EndGuard`, the end guard `BinaryFile` uses, and the `Conflict`
+  error kind; 0.3.0 added the
   byte-level functions behind `ByteArray`, `BinaryFile` and `MessagePack`:
   `encoding`, `digest`, `msgpack`, positioned file reads and writes,
   `appendData`, `truncate`, `sync`, the file lock and `replace`; earlier
@@ -35,7 +38,7 @@ locally (2026-11-10) against protoCore 3.5.0 and the protoIO 0.3.0 tree.
   listener on a host-less address (0.2.2) and `readBufferedLine` (0.2.3, with
   which `nextLine` takes a line already in protoIO's read buffer without
   leaving the collector's quorum); protoIO's package is compatible within one
-  minor version, so a 0.2 or 0.4 is refused): the I/O
+  minor version, so a 0.3 or 0.5 is refused): the I/O
   library shared by the protoCore
   runtimes (files, processes, TCP, UDP, TLS, HTTP), linked statically, so the
   installed `protost` does not depend on it. Either install its `protoio-dev`

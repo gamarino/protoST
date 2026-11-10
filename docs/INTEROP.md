@@ -648,6 +648,7 @@ reader. What was run, with a real second implementation:
 | The vectors of protoIO (`packing`, `base64`, `crc32`, `blake2b`, `sha256_hmac`, `msgpack`: 440 entries) | Verified on every run | `15-binary/packing_vectors`, `digest_vectors`, `base64`, `msgpack_vectors`, generated from `protoIO/tests/vectors/*.json` by `tests/conformance/15-binary/gen_vectors.py` |
 | protoST reads or writes a ProtoBase **storage** file (segments, root pointer, record layout) | **Not done** | Nothing in protoST knows ProtoBase's layout. `BinaryFile` provides what such a reader needs (positioned reads, append, `truncateTo:`, `sync`, `replace:with:`, `syncDirectory:`, the owner lock) and the codecs above provide the encodings; the format itself is not implemented |
 | protoScala and protoClojure | Same protoIO library; not run from protoST | They use the same protoIO library; no test here exchanges data with them |
+| The `BinaryFile` end guard against another runtime's writer on the same file | **Not seen** | Since protoIO 0.4.0 the guard is protoIO's `file::EndGuard`, so every runtime can keep one beside its own file objects, but a guard sees only the calls made through it: another runtime's file object, like another `BinaryFile` or another process, is outside it (`KNOWN_ISSUES.md` K8); take the owner lock |
 
 Two cautions for anyone building on this. A `Dictionary` has no defined order,
 so its MessagePack bytes can differ between runs; a format that must be

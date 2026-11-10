@@ -7,8 +7,9 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## 0.9.0 — bytes, binary files, encodings, MessagePack and timers (2026-11-10)
 
-**Requires protoIO 0.3.0** (the declared minimum for a build from source,
-`PROTOIO_MIN_VERSION`; a 0.2.x checkout is refused at configure time). The
+**Requires protoIO 0.4.0** (the declared minimum for a build from source,
+`PROTOIO_MIN_VERSION`; a 0.3.x checkout is refused at configure time): the
+`BinaryFile` end guard is protoIO's `file::EndGuard`. The
 protoCore floor stays 3.4.0 (SOVERSION 5). Design record:
 `docs/superpowers/specs/2026-11-09-bytes-files-timers-design.md`; the language
 reference is `docs/LANGUAGE.md` §12.12, the tutorial is chapter 15 (§15.11)
@@ -82,15 +83,26 @@ and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
   cut at the first NUL through `c_str()`. They are built with an explicit
   length now. So are the texts of native errors: protoST throws `NativeError`,
   which keeps the whole message, and every site that turns one into a
-  Smalltalk error or prints it reads it whole (`nativeErrorText`), so
-  `ByteArray fromHex: '0', NUL, 'zz'` no longer reports `ByteArray fromHex:
-  '0` (`KNOWN_ISSUES.md` K7, resolved).
+  Smalltalk error reads it whole (`nativeErrorText`), so `ByteArray fromHex:
+  '0', NUL, 'zz'` no longer reports `ByteArray fromHex: '0`. The command line
+  and the REPL print diagnostics (the uncaught error, the unobserved actor
+  error, parse and compile errors) and printed values whole as well
+  (`KNOWN_ISSUES.md` K7, resolved).
 - **Every index handed to a protoCore list goes through `listIndex`**, which
   refuses an index past `INT_MAX` with an `Error`; about 30 sites narrowed it
   with `static_cast<int>`, which would have read or replaced the wrong
   element of a list with more than 2^31 - 1 elements. An index past the int
   range on a small collection (`#(1 2 3) at: (2 raisedTo: 32) + 1`) was
   already refused by the bounds check and still is.
+- **An index of 2^63 or more (or a negative `LargeInteger`) signals
+  `SubscriptOutOfBounds`**, with its exact digits, like any other index out of
+  range; it raised `ArithmeticError` ("LargeInteger value exceeds long long
+  range"). Every indexing primitive (`at:` and `at:put:` of `Array`,
+  `OrderedCollection`, `Interval` and `String`, `copyFrom:to:` of `String`
+  and `ByteArray`, `ByteArray at:` and the packed reads) reads its index
+  through one reader (`src/primitives/IndexArg.h`). An index that is not an
+  Integer signals `Error` "... the index: an Integer was expected" in all of
+  them (it was `InvalidArgument` in some).
 - **`STRuntime::enqueueTask` had no consumer**: a task put on the live
   registry's list was never run and the list grew for ever. `drainOne` now runs
   queued tasks first (`runOneTask`); the timer service uses it.
@@ -120,18 +132,31 @@ and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
 - Version 0.9.0 in the REPL banner and the HTTP client's `User-Agent`.
 - Digests, CRC-32 and base64 over 64 KiB or more run outside the collector's
   quorum, so they never hold up a collection. The decision is one function
-  (`runDigest`, `src/primitives/DigestRunner.h`), and a unit test observes
-  the unmanaged state from inside a digest on both sides of the threshold.
+  (`runDigest`, `src/primitives/DigestRunner.h`) that every digest primitive
+  calls. A unit test calls `runDigest` directly and observes the unmanaged
+  state from inside the digest on both sides of the threshold; that each
+  primitive calls it, with its input's size, is shown by the code, not by a
+  test.
+- **The `BinaryFile` end guard is protoIO's** (`file::EndGuard`, protoIO
+  0.4.0), and it now covers in-file writes too: `truncateTo:` is refused while
+  any `writeAt:bytes:` runs, so a write judged inside the file can no longer
+  land past the end of a file a concurrent `truncateTo:` cut (that race was
+  the caller's before). The refusals name their selector
+  (`BinaryFile>>append:`, `writeAt:bytes:`, `truncateTo:`); a unit test holds
+  the guard and checks every refusal. `append:` on a file that is not a
+  regular file (a FIFO, a pipe, a device) signals `FileSystemError` and
+  writes nothing.
 
 ### Known limitations (not defects of this release)
 
-K8 to K12 in `KNOWN_ISSUES.md`: the `BinaryFile`
-end guard and what it cannot see (and the protoIO 0.3.1 follow-up), timers
-and exit, what the tests do not prove (no ThreadSanitizer build; `InternalError`
-cannot be forced from a program, so its mapping is tested from C++; the macOS and Windows behaviour of the visible skip is
-unconfirmed until CI runs), protoCore's missing structural list split, and
-the NUL check for OS strings that protoIO itself does not make yet (0.3.1).
-CI pins protoIO 0.3.0 (`PROTOIO_REF`, main `002ab8a`) in both workflows.
+K8 to K11 in `KNOWN_ISSUES.md`: what the `BinaryFile` end guard cannot see
+(another `BinaryFile` object, another process), timers and exit, what the
+tests do not prove (no ThreadSanitizer build; `InternalError` cannot be
+forced from a program, so its mapping is tested from C++; the macOS and
+Windows behaviour of the visible skip is unconfirmed until CI runs), and
+protoCore's missing structural list split. K12 (protoIO did not refuse a NUL
+in an OS string) is resolved by protoIO 0.4.0. CI pins protoIO 0.4.0
+(`PROTOIO_REF`, main `41a5db0`, not yet tagged) in both workflows.
 
 ## 0.8.1 — on protoCore 3.5.0 (2026-10-31)
 

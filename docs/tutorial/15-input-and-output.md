@@ -901,9 +901,11 @@ until you `close` it or the program ends. Using it after `close` signals an
 time per file**. `append:` answers the end of the file just before it writes,
 so two concurrent appenders could receive the same offset. protoST refuses the
 second concurrent `append:` on the same `BinaryFile` with an `Error` instead
-of letting the records overlap, and the same holds for `truncateTo:` and for a
-`writeAt:bytes:` that extends the file. It cannot detect appenders in other
-processes, or on a second `BinaryFile` over the same path: use `lock` for them.
+of letting the records overlap. The same guard refuses a `truncateTo:` while
+anything writes, and a `writeAt:bytes:` that extends the file while an
+`append:` runs, so a write never lands past the end of a file that was cut
+meanwhile. It cannot detect appenders in other processes, or on a second
+`BinaryFile` over the same path: use `lock` for them.
 
 ### MessagePack
 

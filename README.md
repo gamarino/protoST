@@ -239,10 +239,10 @@ several cores without locks.
 ## Status
 
 Version 0.9.0 (2026-11-10); built from source it requires protoCore 3.4.0 or
-newer (SOVERSION 5) and protoIO 0.3.0 or newer; the last published `.deb` is
+newer (SOVERSION 5) and protoIO 0.4.0 or a later 0.4.x; the last published `.deb` is
 0.8.1 (below), which requires 3.5.0. CI builds against
-protoCore 3.5.0 (tag `v3.5.0`) and the 3.4.0 floor. On 0.9.0 (2026-11-10), `ctest` ran 1280 cases on Linux, all passing: 681
-conformance programs, 488 unit tests, 44 examples, 41 CLI tests, 23
+protoCore 3.5.0 (tag `v3.5.0`) and the 3.4.0 floor. On 0.9.0 (2026-11-10), `ctest` ran 1287 cases on Linux, all passing: 683
+conformance programs, 493 unit tests, 44 examples, 41 CLI tests, 23
 documentation checks (every example with a stated result in the documents,
 plus the checker's self-test) and 3 UMD host cases. Since 0.6.2 protoST lets
 protoCore's adaptive heap controller size the heap (budget: 75 % of physical
@@ -259,7 +259,7 @@ known deviations from Smalltalk-80 and the open bugs are tracked in
 
 protoST depends on [protoCore](https://github.com/numaes/protoCore) 3.4.0 or
 newer (below 4.0), which must be built first, on
-[protoIO](https://github.com/gamarino/protoIO) 0.3.0 or a later 0.3.x at build time (a sibling
+[protoIO](https://github.com/gamarino/protoIO) 0.4.0 or a later 0.4.x at build time (a sibling
 checkout `../protoIO`, or its `protoio-dev` package; it is linked statically),
 and on OpenSSL (`libssl-dev`) and libreadline. 3.4.0 is a hard floor (it
 changed `ProtoContext`'s layout, SOVERSION 5, so an older `libprotoCore` does

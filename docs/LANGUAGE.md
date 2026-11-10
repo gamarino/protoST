@@ -2654,12 +2654,18 @@ exclude each other. It belongs to the open file, not to the process: a second
 comment of `lib/kernel/binfile.st`:
 
 - one appender at a time per file. In one process, on one `BinaryFile` object,
-  a second concurrent `append:`, a `truncateTo:` during an `append:`, and a
-  `writeAt:bytes:` that extends the file during an `append:` or `truncateTo:`
-  signal `Error` and do nothing; appenders in other processes, or through
-  another `BinaryFile` over the same file, cannot be detected;
-- two `writeAt:bytes:` over the same bytes, or a `writeAt:bytes:` racing a
-  `truncateTo:`, are the caller's race, as in any file API;
+  the end guard refuses a conflicting call with `Error` (naming its selector)
+  and does nothing: `append:` while an `append:`, a `truncateTo:` or a
+  `writeAt:bytes:` that extends the file is in progress; `writeAt:bytes:`
+  while a `truncateTo:` is, and, when it extends the file, while an `append:`
+  is; `truncateTo:` while any of the three is. So the bytes of an `append:`
+  land at the offset it answers, and no write lands past the end of a file a
+  `truncateTo:` cut meanwhile. Appenders and writers in other processes, or
+  through another `BinaryFile` over the same file, cannot be detected;
+- two `writeAt:bytes:` over the same bytes are the caller's race, as in any
+  file API;
+- `append:` needs a regular file: on a pipe, a FIFO, a socket or a device it
+  signals `FileSystemError`;
 - an unclosed `BinaryFile` stays open, with its lock, until `close` or the end
   of the program; the collector never closes it.
 
