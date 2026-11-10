@@ -120,7 +120,10 @@ target_sources(protost_unit_tests PRIVATE
 )
 target_sources(protost_unit_tests PRIVATE
     unit/test_list_index.cpp
+    unit/test_protoio_errors.cpp
 )
+# The protoIO error cases synthesize protoio::Error values.
+target_link_libraries(protost_unit_tests PRIVATE protoIO::protoio)
 if(WIN32)
     # UTF-8 process code page: the test names CTest passes on the command line
     # (several contain an em dash) reach Catch2 as the UTF-8 it listed.
