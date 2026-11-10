@@ -182,11 +182,19 @@ and chapter 10 (§10.12), and the deviations are STATUS D41-D48.
   regular file (a FIFO, a pipe, a device) signals `FileSystemError` and
   writes nothing.
 
+- **ThreadSanitizer build and label.** `-DPROTOST_TSAN=ON` builds protoST,
+  and the sibling protoIO, with `-fsanitize=thread`; `ctest -L tsan` runs the
+  571 tests that exercise more than one thread, with TSan's reports written
+  to files and checked by a fixture at the end (`docs/INSTALLATION.md`,
+  "Running the tests under ThreadSanitizer"). CI runs it in a `tsan` job,
+  informational until protoCore's `newThread` race is fixed (K10).
+
 ### Known limitations (not defects of this release)
 
 K8 to K11 in `KNOWN_ISSUES.md`: what the `BinaryFile` end guard cannot see
 (another `BinaryFile` object, another process), timers and exit, what the
-tests do not prove (no ThreadSanitizer build; `InternalError` cannot be
+tests do not prove (ThreadSanitizer finds one race, in protoCore's
+`newThread`, so its CI job does not gate yet; `InternalError` cannot be
 forced from a program, so its mapping is tested from C++; the macOS and
 Windows behaviour of the visible skip is unconfirmed until CI runs),
 protoCore's missing structural list split, and K13, a mailbox batch of more

@@ -189,10 +189,22 @@ overflows the native stack.
 
 ## K10 — What the 0.9.0 tests do not prove (open)
 
-- **No ThreadSanitizer build of protoST exists.** The timer service, the
-  actor tests and the `BinaryFile` guards were never run under TSan; their
-  evidence is the repeated runs (20 of 20 for the timer cases), the mutation
-  checks recorded in the task reports and the review of the lock-free code.
+- **ThreadSanitizer finds one race, in protoCore.** `-DPROTOST_TSAN=ON` and
+  the `tsan` label (571 tests: every unit case, the actor, Future, Atom,
+  timer and `BinaryFile` programs, the concurrency CLI tests;
+  `docs/INSTALLATION.md`) ran twice on 2026-11-10 against a TSan build of
+  protoCore 3.5.0 and protoIO 0.4.0. TSan reported no race in protoST or
+  protoIO. It reported one in protoCore: `ProtoSpace::newThread` called from
+  two threads at once reads and writes `ProtoSpace::mainContext` without
+  synchronisation (`core/Thread.cpp:494` and `:506`, around
+  `core/ProtoContext.cpp:198`), and an interleaving can leave `mainContext`
+  on a worker's root context, which dangles once that worker exits. protoST
+  starts workers from worker threads (`STRuntime::enterBlockingIO`), so
+  programs that block several actors in I/O at once report it
+  (`14-io/http_concurrent`, `14-io/net_pool_growth`,
+  `15-binary/binfile_lock_actors`; two or three of them per run). It is not
+  suppressed, so the CI job that runs the label does not gate until protoCore
+  fixes it.
 - **`InternalError` cannot be forced from a program.** protoIO raises it only
   for OpenSSL failures that are practically unreachable, and the runtime ships
   no test-only primitive. The mapping (`src/primitives/ProtoioErrors.h`) is

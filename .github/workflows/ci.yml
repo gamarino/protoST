@@ -225,6 +225,88 @@ jobs:
           npm ci --no-audit --no-fund
           xvfb-run -a npm test < /dev/null
 
+  tsan:
+    name: 'ThreadSanitizer, the tsan label (informational, never gates)'
+    runs-on: ubuntu-24.04
+    # Measured locally (6 cores, 4 build jobs, ctest -j3): protoCore's library
+    # about 3 minutes, protoST about 4, the 571 tests of the label 7.
+    timeout-minutes: 45
+    # NON-GATING, and why. The label runs clean except for one race, which is
+    # in protoCore 3.5.0, not in protoST: ProtoSpace::newThread, called from
+    # two threads at once, reads and writes ProtoSpace::mainContext without
+    # synchronisation (core/Thread.cpp:494 and :506 around
+    # core/ProtoContext.cpp:198), and one interleaving leaves mainContext on a
+    # worker's root context, which dangles once that worker exits. protoST
+    # starts workers from worker threads (STRuntime::enterBlockingIO), so the
+    # I/O programs that block several actors at once report it
+    # (14-io/http_concurrent, 14-io/net_pool_growth,
+    # 15-binary/binfile_lock_actors). A real race is not suppressed
+    # (tsan.supp), so this job stays red until protoCore fixes it; then it
+    # gates: remove continue-on-error.
+    continue-on-error: true
+    steps:
+      - name: Check out protoST
+        uses: actions/checkout@v4
+        with:
+          path: protoST
+
+      - name: Check out protoCore as a sibling
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PROTOCORE_REPO }}
+          ref: ${{ env.PROTOCORE_REF }}
+          path: protoCore
+
+      - name: Check out protoIO as a sibling
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PROTOIO_REPO }}
+          ref: ${{ env.PROTOIO_REF }}
+          path: protoIO
+
+      - name: Install libreadline, OpenSSL and Python's msgpack
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libreadline-dev libssl-dev python3-msgpack
+
+      - name: Allow TSan's memory layout
+        # Ubuntu 24.04's kernel randomises 32 bits of mmap addresses, and the
+        # runner's TSan runtime then stops with "unexpected memory mapping".
+        run: sudo sysctl vm.mmap_rnd_bits=28
+
+      - name: Build protoCore with ThreadSanitizer
+        # protoCore has no sanitizer option: the flags are given directly, as
+        # protoCore's own ASan job does. Its package exports the library and
+        # two conformance targets, so the install needs all three. Installed in
+        # a prefix of its own, so protoST cannot pick up an uninstrumented
+        # build (-DPROTOCORE_REQUIRE_PACKAGE=ON below).
+        run: |
+          F="-fsanitize=thread -g -O1 -fno-omit-frame-pointer"
+          cmake -S protoCore -B protoCore/build_tsan -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS="$F" -DCMAKE_CXX_FLAGS="$F" \
+            -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=thread \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/tsan-prefix"
+          cmake --build protoCore/build_tsan --parallel "$(nproc)" \
+            --target protoCore protoCoreConformance protocore-conformance-isolate
+          cmake --install protoCore/build_tsan
+
+      - name: Configure and build protoST with ThreadSanitizer
+        # PROTOST_TSAN compiles the sibling ../protoIO with the same flags.
+        working-directory: protoST
+        run: |
+          cmake -B build_tsan -S . -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPROTOST_TSAN=ON \
+            -DPROTO_CORE_PREFIX="$RUNNER_TEMP/tsan-prefix" -DPROTOCORE_REQUIRE_PACKAGE=ON \
+            -DPython3_EXECUTABLE=/usr/bin/python3
+          cmake --build build_tsan --parallel "$(nproc)"
+          ldd build_tsan/protost | grep -E "libprotoCore|libtsan"
+
+      - name: The tsan label under ThreadSanitizer
+        # `< /dev/null`: S18 (see the header). tsan_reports_check, the last
+        # test, fails the step if any process wrote a TSan report, and prints
+        # every report.
+        working-directory: protoST
+        run: ctest --test-dir build_tsan -L tsan -j2 --timeout 900 --output-on-failure < /dev/null
+
   non-gating:
     name: 'The wall-clock proof (informational, never gates)'
     runs-on: ubuntu-24.04

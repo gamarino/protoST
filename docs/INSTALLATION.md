@@ -130,6 +130,66 @@ reconfiguring in place.
 
 ---
 
+## Running the tests under ThreadSanitizer
+
+`-DPROTOST_TSAN=ON` builds protoST with `-fsanitize=thread` (GCC or Clang),
+with the flags protoIO's `PROTOIO_TSAN` uses. TSan finds a race only in code
+it instruments and reports false positives around code it cannot see, so the
+whole stack must be instrumented:
+
+- **protoIO** is always the sibling `../protoIO`, compiled inside protoST's
+  build with the same flags (an installed protoIO package is ignored under
+  `PROTOST_TSAN`).
+- **protoCore** must be a TSan build of its own, installed in a prefix of its
+  own. protoCore has no sanitizer option; the flags are given directly. Its
+  package exports the library and two conformance targets, which the install
+  needs:
+
+```bash
+F="-fsanitize=thread -g -O1 -fno-omit-frame-pointer"
+cmake -S protoCore -B protoCore/build_tsan -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      -DCMAKE_C_FLAGS="$F" -DCMAKE_CXX_FLAGS="$F" \
+      -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=thread \
+      -DCMAKE_INSTALL_PREFIX="$HOME/tsan-prefix"
+cmake --build protoCore/build_tsan -j4 \
+      --target protoCore protoCoreConformance protocore-conformance-isolate
+cmake --install protoCore/build_tsan
+
+cd protoST
+cmake -B build_tsan -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPROTOST_TSAN=ON \
+      -DPROTO_CORE_PREFIX="$HOME/tsan-prefix" -DPROTOCORE_REQUIRE_PACKAGE=ON
+cmake --build build_tsan -j4
+ctest --test-dir build_tsan -L tsan -j3 --timeout 900 < /dev/null
+```
+
+`PROTOCORE_REQUIRE_PACKAGE=ON` keeps the build from falling back to an
+uninstrumented `../protoCore/build_release`; `ldd build_tsan/protost` shows
+which `libprotoCore` it runs with.
+
+The `tsan` label selects the tests that exercise more than one thread: every
+unit case, the conformance programs that use actors, Futures, Atoms, timers or
+`BinaryFile`, and the concurrency CLI tests (`ctest -L tsan -N` lists them).
+In a `PROTOST_TSAN` build, each runs with `TSAN_OPTIONS` that write TSan's
+reports to `build_tsan/tsan-reports/report.<pid>` and read the suppressions in
+`tsan.supp`. Two fixture tests frame the run: `tsan_reports_clear` empties
+that directory first, and `tsan_reports_check` fails, printing every report,
+if any process wrote one. So a race fails the run even in a test that expects
+an error exit, or in a child process a CLI test starts. A suppression in
+`tsan.supp` is only for a race that is not a defect, with its reason; a race
+in protoST is fixed.
+
+Measured on 2026-11-10 (6 cores): protoCore's library builds in about 3
+minutes, protoST in about 4, and the 571 tests of the label run in 7 to 8
+minutes with `-j3`. The run is clean in protoST and protoIO; the one race it
+reports is in protoCore 3.5.0 (`KNOWN_ISSUES.md` K10), which is why the CI
+job does not gate yet.
+
+On a kernel with 32 bits of mmap randomisation (`vm.mmap_rnd_bits`), older
+TSan runtimes stop with "unexpected memory mapping"; `sudo sysctl
+vm.mmap_rnd_bits=28` works around it (the CI job does this).
+
+---
+
 ## Installing
 
 ```bash

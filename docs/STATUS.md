@@ -14,12 +14,12 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Test suite:** 1290 `ctest` cases on Linux, 1290/1290 passing on
+- **Test suite:** 1291 `ctest` cases on Linux, 1291/1291 passing on
   2026-11-10 (0.9.0 after the pending fixes: NUL-safe native error text,
   checked list indices, one index rule, the protoIO error mapping and
   the unmanaged digest path tested, the end guard from protoIO 0.4.0; against
   protoCore 3.5.0 and the protoIO 0.4.0 tree, main `41a5db0`), none
-  skipped: 684 conformance
+  skipped: 685 conformance
   programs, 494 unit tests, 44 examples, 42 CLI tests (including
   `cli_binary_lock`, `cli_binary_lock_protobase` and `cli_binary_interop`),
   23 documentation checks (the examples with a stated result in the

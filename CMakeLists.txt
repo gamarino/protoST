@@ -22,6 +22,26 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(GNUInstallDirs)
 
+# ThreadSanitizer build (the TSan CI job; docs/INSTALLATION.md, "Running the tests
+# under ThreadSanitizer"). The flags are protoIO's PROTOIO_TSAN flags, applied
+# to every target defined from here on: protoST's own, and the sibling
+# ../protoIO when it is built as a subdirectory. TSan sees a race only in
+# instrumented code and reports false positives around code it cannot see, so
+# protoCore (a shared library, found as usual) must be a TSan build too, and
+# protoIO is always the sibling ../protoIO, compiled here with these flags: an
+# installed protoIO package is ignored, since nothing says how it was built.
+# GCC and Clang only.
+option(PROTOST_TSAN "Build with ThreadSanitizer (protoCore must be a TSan build too)" OFF)
+if(PROTOST_TSAN)
+    if(MSVC)
+        message(FATAL_ERROR "PROTOST_TSAN needs GCC or Clang (-fsanitize=thread)")
+    endif()
+    add_compile_options(-fsanitize=thread -g -O1 -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=thread)
+    # The TSan label (tests/CMakeLists.txt) sets TSAN_OPTIONS for each test.
+    message(STATUS "protoST: ThreadSanitizer build (PROTOST_TSAN)")
+endif()
+
 # protoST's own targets link this for their warning flags: /W3 under MSVC, and
 # with PROTOST_WARNINGS_AS_ERRORS (the Windows CI job) warnings are errors, so
 # a new one fails the build instead of scrolling past. Other compilers keep
@@ -271,7 +291,9 @@ target_link_libraries(protost_runtime PRIVATE protost_warnings)
 # package is compatible within one minor version (SameMinorVersion), so 0.1
 # would refuse 0.2.x.
 set(PROTOIO_MIN_VERSION "0.4.0")
-find_package(protoIO ${PROTOIO_MIN_VERSION} CONFIG QUIET)
+if(NOT PROTOST_TSAN)
+    find_package(protoIO ${PROTOIO_MIN_VERSION} CONFIG QUIET)
+endif()
 if(protoIO_FOUND)
     message(STATUS "protoST: installed protoIO ${protoIO_VERSION} from ${protoIO_DIR}")
 elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../protoIO/CMakeLists.txt")
@@ -422,6 +444,42 @@ if(WIN32)
     get_filename_component(PROTOST_POSIX_TOOLS "${PROTOST_BASH}/../../usr/bin" ABSOLUTE)
 else()
     set(PROTOST_SH "")
+endif()
+
+# --- the `tsan` label ----------------------------------------------------------
+# The tests that exercise more than one thread: every unit case, the actor,
+# Future, Atom, timer and BinaryFile conformance programs (tests/CMakeLists.txt)
+# and the concurrency CLI tests below. `ctest -L tsan` selects them in any
+# build; in a PROTOST_TSAN build each also gets TSAN_OPTIONS (reports to
+# files, tsan.supp) and the fixture that fails the run if any report was
+# written (tests/tsan/reports.cmake).
+set(PROTOST_TSAN_TEST_PROPERTIES LABELS tsan)
+if(PROTOST_TSAN)
+    if(CMAKE_VERSION VERSION_LESS 3.22)
+        message(FATAL_ERROR "PROTOST_TSAN needs CMake 3.22 (ENVIRONMENT_MODIFICATION)")
+    endif()
+    set(PROTOST_TSAN_REPORT_DIR "${CMAKE_BINARY_DIR}/tsan-reports")
+    # halt_on_error=0: a test runs to its end, so one run shows every race.
+    # second_deadlock_stack=1: both stacks of a lock-order inversion.
+    set(PROTOST_TSAN_OPTIONS
+        "log_path=${PROTOST_TSAN_REPORT_DIR}/report halt_on_error=0 second_deadlock_stack=1 suppressions=${CMAKE_SOURCE_DIR}/tsan.supp")
+    list(APPEND PROTOST_TSAN_TEST_PROPERTIES
+        FIXTURES_REQUIRED tsan_reports
+        ENVIRONMENT_MODIFICATION "TSAN_OPTIONS=set:${PROTOST_TSAN_OPTIONS}")
+    # A conformance program also gets 900 s instead of run_conformance.sh's
+    # 60 (CONFORMANCE_TIMEOUT): the BinaryFile stress programs take about a
+    # minute under TSan. Applied by tests/CMakeLists.txt in a call of its own,
+    # since a list value cannot travel inside PROTOST_TSAN_TEST_PROPERTIES.
+    set(PROTOST_TSAN_CONFORMANCE_ENV
+        "TSAN_OPTIONS=set:${PROTOST_TSAN_OPTIONS};CONFORMANCE_TIMEOUT=set:900")
+    add_test(NAME tsan_reports_clear
+        COMMAND ${CMAKE_COMMAND} -DDIR=${PROTOST_TSAN_REPORT_DIR} -DMODE=clear
+                -P ${CMAKE_SOURCE_DIR}/tests/tsan/reports.cmake)
+    add_test(NAME tsan_reports_check
+        COMMAND ${CMAKE_COMMAND} -DDIR=${PROTOST_TSAN_REPORT_DIR} -DMODE=check
+                -P ${CMAKE_SOURCE_DIR}/tests/tsan/reports.cmake)
+    set_tests_properties(tsan_reports_clear PROPERTIES FIXTURES_SETUP tsan_reports LABELS tsan)
+    set_tests_properties(tsan_reports_check PROPERTIES FIXTURES_CLEANUP tsan_reports LABELS tsan)
 endif()
 
 include(FindOrFetchCatch2)
@@ -636,6 +694,15 @@ if(WIN32)
                          cli_dap_conditions cli_dap_sources PROPERTIES
         ENVIRONMENT "PYTHON=${Python3_EXECUTABLE}")
 endif()
+
+# The concurrency CLI tests carry the `tsan` label (see above): actors and
+# their stress runs, the GC thread against running and exiting actors, the
+# owner lock across actors, signals and the DAP server's threads.
+set_tests_properties(cli_actor_unobserved_error cli_callback_error_reported
+                     cli_buried_actor_deadlock cli_actor_stress cli_concurrent_first_call
+                     cli_gc_shutdown_stress cli_gc_reclaims cli_gc_recursion_reclaims
+                     cli_actor_payload_gc cli_binary_lock cli_sigint cli_dap_threads cli_dap_gc
+                     PROPERTIES ${PROTOST_TSAN_TEST_PROPERTIES})
 
 # --- Track 10: Installation packaging ---------------------------------------
 # Install RPATH so an installed `bin/protost` finds libprotoCore.so under
