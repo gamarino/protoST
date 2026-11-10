@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <memory>
 #include <exception>
+#include <atomic>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -62,12 +63,32 @@ using PO = proto::ProtoObject;
 // One open descriptor. It is closed when the last user lets it go.
 struct OpenFile {
     const int fd;
+    // Set while an append: runs on this file. The one-appender contract is
+    // enforced in process: a second concurrent append: fails loudly instead
+    // of corrupting the offsets. Another process cannot be detected.
+    std::atomic<bool> appending{false};
     explicit OpenFile(int d) : fd(d) {}
     ~OpenFile() {
         try { protoio::close(fd); } catch (...) {}
     }
     OpenFile(const OpenFile&) = delete;
     OpenFile& operator=(const OpenFile&) = delete;
+};
+
+// Claims OpenFile::appending by CAS and releases it on every exit path.
+class AppendClaim {
+public:
+    explicit AppendClaim(OpenFile& f) : file_(f) {
+        bool expected = false;
+        if (!file_.appending.compare_exchange_strong(expected, true, std::memory_order_acquire))
+            throw std::runtime_error("BinaryFile>>append: another append is in progress on this BinaryFile "
+                                     "(one appender at a time)");
+    }
+    ~AppendClaim() { file_.appending.store(false, std::memory_order_release); }
+    AppendClaim(const AppendClaim&) = delete;
+    AppendClaim& operator=(const AppendClaim&) = delete;
+private:
+    OpenFile& file_;
 };
 
 struct Registry {
@@ -202,8 +223,13 @@ PRIM(prim_BinFileAppend) {
     const char* who = "BinaryFile>>append:";
     const std::string data = bytesArg(ctx, a[1], who);
     auto file = openFile(ctx, a[0], who);
-    const std::int64_t at = onFileUnmanaged(ctx, std::move(file),
-        [&](int fd) { return protoio::file::appendData(fd, data); });
+    // The claim lives inside the bracket, before the held reference: it is
+    // released first, then the reference (and a pending close) is dropped.
+    const std::int64_t at = unmanaged(ctx, [&] {
+        const std::shared_ptr<OpenFile> held = std::move(file);
+        AppendClaim claim(*held);
+        return protoio::file::appendData(held->fd, data);
+    });
     return ctx->fromLong(static_cast<long long>(at));
 }
 
