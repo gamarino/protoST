@@ -775,7 +775,7 @@ const proto::ProtoObject* prim_Array_at(STRuntime&, proto::ProtoContext* ctx,
     long long n    = static_cast<long long>(data->getSize(ctx));
     if (idx1 < 1 || idx1 > n) {
         throw ClassedErrorSignal("SubscriptOutOfBounds",
-            "Array>>at: index " + index.text +
+            "Array>>at: index " + index.text(ctx) +
             " out of range 1.." + std::to_string(n));
     }
     const proto::ProtoObject* e =
@@ -797,7 +797,7 @@ const proto::ProtoObject* prim_Array_atPut(STRuntime&, proto::ProtoContext* ctx,
     long long n    = static_cast<long long>(data->getSize(ctx));
     if (idx1 < 1 || idx1 > n) {
         throw ClassedErrorSignal("SubscriptOutOfBounds",
-            "Array>>at:put: index " + index.text +
+            "Array>>at:put: index " + index.text(ctx) +
             " out of range 1.." + std::to_string(n));
     }
     const proto::ProtoObject* value = a[1] ? a[1] : PROTO_NONE;
@@ -933,7 +933,7 @@ const proto::ProtoObject* prim_OC_at(STRuntime&, proto::ProtoContext* ctx,
     long long n    = static_cast<long long>(data->getSize(ctx));
     if (idx1 < 1 || idx1 > n) {
         throw ClassedErrorSignal("SubscriptOutOfBounds",
-            "OrderedCollection>>at: index " + index.text +
+            "OrderedCollection>>at: index " + index.text(ctx) +
             " out of range 1.." + std::to_string(n));
     }
     const proto::ProtoObject* e = data->getAt(ctx, listIndex(idx1 - 1));
@@ -952,7 +952,7 @@ const proto::ProtoObject* prim_OC_atPut(STRuntime&, proto::ProtoContext* ctx,
     long long n    = static_cast<long long>(data->getSize(ctx));
     if (idx1 < 1 || idx1 > n) {
         throw ClassedErrorSignal("SubscriptOutOfBounds",
-            "OrderedCollection>>at:put: index " + index.text +
+            "OrderedCollection>>at:put: index " + index.text(ctx) +
             " out of range 1.." + std::to_string(n));
     }
     const proto::ProtoObject* value = a[1] ? a[1] : PROTO_NONE;
@@ -2299,7 +2299,7 @@ const proto::ProtoObject* prim_Interval_at(STRuntime&, proto::ProtoContext* ctx,
     long long idx1  = index.value;                   // 1-based
     if (idx1 < 1 || idx1 > n) {
         throw ClassedErrorSignal("SubscriptOutOfBounds",
-            "Interval>>at: index " + index.text +
+            "Interval>>at: index " + index.text(ctx) +
             " out of range 1.." + std::to_string(n));
     }
     return ctx->fromLong(start + (idx1 - 1) * step);

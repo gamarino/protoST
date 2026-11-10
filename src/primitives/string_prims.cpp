@@ -127,7 +127,7 @@ const proto::ProtoObject* prim_StrAt(STRuntime&, proto::ProtoContext* ctx,
     const long long idx = index.value;
     const long long size = str ? static_cast<long long>(str->getSize(ctx)) : 0;
     if (idx < 1 || idx > size)
-        throw ClassedErrorSignal("SubscriptOutOfBounds", "String>>at: index " + index.text
+        throw ClassedErrorSignal("SubscriptOutOfBounds", "String>>at: index " + index.text(ctx)
                                  + " out of bounds (size " + std::to_string(size) + ")");
     // protoCore answers the element as a Character (an embedded unicode char),
     // without decoding the whole string.
@@ -314,8 +314,8 @@ const proto::ProtoObject* prim_StrCopyFromTo(STRuntime&, proto::ProtoContext* ct
     const long long from = fromArg.value, to = toArg.value;
     if (to < from) return ctx->fromUTF8String("");
     if (from < 1 || to > static_cast<long long>(cps.size()))
-        throw ClassedErrorSignal("SubscriptOutOfBounds", "copyFrom:to: range " + fromArg.text + " to "
-                                 + toArg.text + " out of bounds (size "
+        throw ClassedErrorSignal("SubscriptOutOfBounds", "copyFrom:to: range " + fromArg.text(ctx) + " to "
+                                 + toArg.text(ctx) + " out of bounds (size "
                                  + std::to_string(cps.size()) + ")");
     return makeString(ctx, encodeAll(cps, static_cast<size_t>(from - 1),
                                      static_cast<size_t>(to)));

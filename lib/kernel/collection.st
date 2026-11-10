@@ -244,14 +244,26 @@ Array class >> with: first with: second with: third with: fourth with: fifth
 Array class >> with: first with: second with: third with: fourth with: fifth with: sixth
   ^ (self new: 6) at: 1 put: first; at: 2 put: second; at: 3 put: third; at: 4 put: fourth; at: 5 put: fifth; at: 6 put: sixth; yourself.
 
+"--- indices --------------------------------------------------------------------
+ The rule every indexing primitive follows (src/primitives/IndexArg.h), for the
+ indexing methods written in Smalltalk: an index that is not an Integer
+ signals Error; an Integer outside low..high, however large, signals
+ SubscriptOutOfBounds. aSelectorName names the method the user called."
+
+Object >> __checkIndex: anIndex between: low and: high for: aSelectorName
+  anIndex isInteger ifFalse: [^ Error new signal: aSelectorName , ' the index: an Integer was expected'].
+  (anIndex between: low and: high) ifFalse: [
+    ^ SubscriptOutOfBounds new signal: aSelectorName , ' index ' , anIndex printString
+      , ' out of range ' , low printString , '..' , high printString].
+  ^ anIndex.
+
 "--- OrderedCollection ----------------------------------------------------------
  Insertion and removal at an index shift the tail through the primitive
  removeLast / addLast:."
 
 OrderedCollection >> add: anObject beforeIndex: anIndex
   | tail |
-  (anIndex between: 1 and: self size + 1)
-    ifFalse: [^ self error: 'index ' , anIndex printString , ' out of bounds 1..' , (self size + 1) printString].
+  self __checkIndex: anIndex between: 1 and: self size + 1 for: 'OrderedCollection>>add:beforeIndex:'.
   tail := OrderedCollection new.
   [self size >= anIndex] whileTrue: [tail addFirst: self removeLast].
   self addLast: anObject.
@@ -263,8 +275,7 @@ OrderedCollection >> add: anObject afterIndex: anIndex
 
 OrderedCollection >> removeAt: anIndex
   | tail removed |
-  (anIndex between: 1 and: self size)
-    ifFalse: [^ self error: 'index ' , anIndex printString , ' out of bounds 1..' , self size printString].
+  self __checkIndex: anIndex between: 1 and: self size for: 'OrderedCollection>>removeAt:'.
   tail := OrderedCollection new.
   [self size > anIndex] whileTrue: [tail addFirst: self removeLast].
   removed := self removeLast.
@@ -607,8 +618,7 @@ NumericInterval >> notEmpty
 NumericInterval >> at: anIndex
   "Each element is computed from start, as Pharo does, so that floating-point
    error does not accumulate along the interval."
-  (anIndex between: 1 and: self size)
-    ifFalse: [^ self error: 'Interval>>at:: index ' , anIndex printString , ' out of range 1..' , self size printString].
+  self __checkIndex: anIndex between: 1 and: self size for: 'Interval>>at:'.
   ^ start + ((anIndex - 1) * step).
 
 NumericInterval >> first

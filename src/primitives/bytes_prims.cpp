@@ -137,7 +137,7 @@ PRIM(prim_BytesAt) {
     const IndexArg index = indexArg(ctx, a[0], "ByteArray>>at:");
     const long long i = index.value;
     if (i < 1 || i > static_cast<long long>(v.size()))
-        throw ClassedErrorSignal("SubscriptOutOfBounds", "ByteArray>>at: index " + index.text
+        throw ClassedErrorSignal("SubscriptOutOfBounds", "ByteArray>>at: index " + index.text(ctx)
                                  + " out of bounds 1.." + std::to_string(v.size()));
     return ctx->fromLong(static_cast<unsigned char>(v[static_cast<size_t>(i - 1)]));
 }
@@ -153,7 +153,7 @@ PRIM(prim_BytesCopyFromTo) {
     if (to < from) return makeBytes(ctx, {});
     if (from < 1 || to > static_cast<long long>(v.size()))
         throw ClassedErrorSignal("SubscriptOutOfBounds", "ByteArray>>copyFrom:to: range "
-                                 + fromArg.text + " to " + toArg.text
+                                 + fromArg.text(ctx) + " to " + toArg.text(ctx)
                                  + " out of bounds (size " + std::to_string(v.size()) + ")");
     return makeBytes(ctx, v.substr(static_cast<size_t>(from - 1), static_cast<size_t>(to - from + 1)));
 }
@@ -335,7 +335,7 @@ size_t offsetOf(proto::ProtoContext* ctx, const PO* indexValue, int width, size_
     if (i < 1 || static_cast<unsigned long long>(i) > size
         || size - static_cast<size_t>(i - 1) < static_cast<size_t>(width))
         throw ClassedErrorSignal("SubscriptOutOfBounds", errorPrefix(who) + "reading "
-                                 + std::to_string(width) + " byte(s) at index " + index.text
+                                 + std::to_string(width) + " byte(s) at index " + index.text(ctx)
                                  + " is out of bounds (size " + std::to_string(size) + ")");
     return static_cast<size_t>(i - 1);
 }
