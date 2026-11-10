@@ -16,3 +16,4 @@ printing.st
 io.st
 binfile.st
 digest.st
+msgpack.st

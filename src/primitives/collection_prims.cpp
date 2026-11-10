@@ -40,6 +40,7 @@
 #include "protoST/STRuntime.h"
 #include "runtime/ClassedErrorSignal.h"
 #include "protoST/primitives.h"
+#include "primitives/CollectionSupport.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/TransientPin.h"
 #include "modules/STModuleProvider.h"
@@ -2655,6 +2656,63 @@ void installCollectionPrimitives(STRuntime& rt) {
     }
         bindPrimitive(rt, b.collectionProto, "asArray",
                   reg.registerPrim(prim_Collection_asArray));
+}
+
+// --- the narrow surface other primitive files use (CollectionSupport.h) -----
+
+bool inheritsFromProto(proto::ProtoContext* ctx, const proto::ProtoObject* obj,
+                       const proto::ProtoObject* target, const proto::ProtoObject* objectProto) {
+    return descendsFrom(ctx, obj, target, objectProto);
+}
+
+const proto::ProtoObject* makeEmptyDictionary(STRuntime& rt, proto::ProtoContext* ctx) {
+    return makeDictInstance(rt, ctx, nullptr, 0);
+}
+
+void dictionaryPut(proto::ProtoContext* ctx, const proto::ProtoObject* dict,
+                   const proto::ProtoObject* key, const proto::ProtoObject* value) {
+    dictStore(ctx, dict, key, value);
+}
+
+bool isArrayOrOrdered(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* o) {
+    if (!o || o == PROTO_NONE) return false;
+    const Bootstrap& b = rt.bootstrap();
+    return descendsFrom(ctx, o, b.arrayProto, b.objectProto)
+        || descendsFrom(ctx, o, b.orderedCollectionProto, b.objectProto);
+}
+
+const proto::ProtoList* arrayOrOrderedElements(proto::ProtoContext* ctx, const proto::ProtoObject* o) {
+    return listData(ctx, o);
+}
+
+bool isDictionary(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* o) {
+    return o && o != PROTO_NONE && isDictBacked(rt, ctx, o);
+}
+
+void dictionaryEntries(proto::ProtoContext* ctx, const proto::ProtoObject* dict,
+                       std::vector<std::pair<const proto::ProtoObject*, const proto::ProtoObject*>>& out) {
+    hashedEntries(ctx, dict, out);
+}
+
+const proto::ProtoObject* makeAssociationValue(STRuntime& rt, proto::ProtoContext* ctx,
+                                               const proto::ProtoObject* key,
+                                               const proto::ProtoObject* value) {
+    return makeAssociation(rt, ctx, key, value);
+}
+
+bool isAssociation(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* o) {
+    return o && o != PROTO_NONE
+        && descendsFrom(ctx, o, rt.bootstrap().associationProto, rt.bootstrap().objectProto);
+}
+
+const proto::ProtoObject* associationKey(proto::ProtoContext* ctx, const proto::ProtoObject* assoc) {
+    const proto::ProtoObject* k = assoc->getAttribute(ctx, assocKeyKey(ctx));
+    return k ? k : PROTO_NONE;
+}
+
+const proto::ProtoObject* associationValue(proto::ProtoContext* ctx, const proto::ProtoObject* assoc) {
+    const proto::ProtoObject* v = assoc->getAttribute(ctx, assocValueKey(ctx));
+    return v ? v : PROTO_NONE;
 }
 
 } // namespace protoST

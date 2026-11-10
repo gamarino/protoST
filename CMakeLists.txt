@@ -229,6 +229,7 @@ add_library(protost_runtime STATIC
     src/primitives/io_prims.cpp
     src/primitives/bytes_prims.cpp
     src/primitives/binfile_prims.cpp
+    src/primitives/msgpack_prims.cpp
     src/modules/STModuleProvider.cpp
     src/modules/STForeignSend.cpp
     src/repl/Repl.cpp
