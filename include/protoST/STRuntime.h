@@ -26,6 +26,7 @@ namespace protoST {
 
 class BytecodeModule;
 class ExecutionEngine;
+class TimerService;
 struct Bootstrap;
 struct PrimitiveRegistry;
 
@@ -142,13 +143,30 @@ public:
     void acquireMainWait(proto::ProtoContext* ctx);
     void notifyMainWaiterIfFor(const proto::ProtoObject* future);
 
-    // F6 v5 (2026-05-23): publish a task on the global task list. The task
-    // is a ProtoObject carrying `__actor__`, selector, args, future, and
-    // (optionally) `__resume__` (for resume-from-yield tasks). CAS-appends
-    // to `liveRegistry.__tasks__` (a ProtoList, FIFO) and releases the
-    // worker semaphore to wake one sleeping worker. O(log N_tasks) per
-    // append — typical N is small (≤ N_workers under normal load).
+    // Publish a task for the worker pool: "run this on a worker". The task
+    // list is `liveRegistry.__tasks__` (a ProtoList, FIFO, CAS-appended), so
+    // the collector reaches every queued task; one worker semaphore permit is
+    // released per task. Every drainOne runs a queued task before it looks
+    // for an actor turn. A task is a ProtoObject of one of two kinds:
+    //   * resume: `__resume__` = true and `__actor__` -- the actor is
+    //     scheduled (its suspended turn resumes);
+    //   * timer settle: `__timeout__` (true or false) and `__future__` -- the
+    //     Future is rejected with a new TimeoutError (true: the kernel's
+    //     Future>>__timedOut builds it, on the worker) or resolved with nil
+    //     (false), unless it settled first. Built by TimerService.
+    // A task of any other shape is an internal error, reported by the worker.
+    // `ctx` is the calling thread's own context. O(log N_tasks) per append.
     void enqueueTask(proto::ProtoContext* ctx, const proto::ProtoObject* task);
+
+    // Take one task from `__tasks__` (enqueueTask) and run it on `ctx`, the
+    // calling thread's own context. Answers false when there is none. Called
+    // first by drainOne, and alone by a worker waiting past the helping cap
+    // (waitHelping, future_prims.cpp), which must still let deadlines fire.
+    bool runOneTask(proto::ProtoContext* ctx);
+
+    // The runtime's timer service (Future after: / within:), whose thread is
+    // started on first use and joined by the destructor.
+    TimerService& timerService();
 
     // Build and enqueue a resume-task (no selector / args / future-to-settle —
     // just `__actor__` = actor and `__resume__` = TRUE). Pushed by the settler

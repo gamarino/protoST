@@ -11,6 +11,7 @@
 #include "RetrySignal.h"
 #include "PassSignal.h"
 #include "ReadyStack.h"
+#include "TimerService.h"
 #include "BytecodeModule.h"
 #include "Bootstrap.h"
 #include "Venv.h"
@@ -84,6 +85,10 @@ namespace protoST { void installIoPrimitives(STRuntime& rt); }
 namespace protoST { void installBytesPrimitives(STRuntime& rt); }
 namespace protoST { void installBinaryFilePrimitives(STRuntime& rt); }
 namespace protoST { void installMessagePackPrimitives(STRuntime& rt); }
+namespace protoST { void installTimerPrimitives(STRuntime& rt); }
+// Runs a timer settle task (enqueueTask), defined with the timer primitives.
+namespace protoST { void runTimerTask(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* task); }
 
 // F6-A6: future transition helpers defined alongside the Future primitives.
 // resolveFutureFromDrain / rejectFutureFromDrain perform the lock-free
@@ -383,6 +388,17 @@ struct STRuntime::Impl {
     std::atomic<const proto::ProtoObject*> mainWaitingOn{nullptr};
     Semaphore                               mainWaitSem;
 
+    // Tasks published on `liveRegistry.__tasks__` and not yet taken
+    // (enqueueTask / runOneTask). Raised after the append, lowered after the
+    // take, so every drainOne pays one atomic load when there is none; it may
+    // read 0 for a task whose append is still in flight, whose enqueueTask
+    // then releases a worker permit after raising it.
+    std::atomic<long> queuedTasks{0};
+
+    // The timer service (TimerService.h). Created by construct(); its thread
+    // starts on first use and is joined by ~STRuntime after the workers.
+    std::unique_ptr<TimerService> timers;
+
     // F5-M2 module cache: canonical absolute path -> module object.
     std::unordered_map<std::string, const proto::ProtoObject*> moduleCache;
 
@@ -607,6 +623,11 @@ struct STRuntime::Impl {
             const_cast<proto::ProtoObject*>(liveRegistry)->setAttribute(
                 rootCtx, bootstrap.sym.tasks,
                 rootCtx->newList()->asObject(rootCtx));
+            // Every pending timer's Future, keyed by entry id (TimerService):
+            // one structure for all timers, never a root per timer.
+            const_cast<proto::ProtoObject*>(liveRegistry)->setAttribute(
+                rootCtx, bootstrap.sym.timers,
+                rootCtx->newSparseList()->asObject(rootCtx));
         }
 
         // F6 v3 E2: anchor the runtime-wide GC roots in the live registry.
@@ -748,12 +769,17 @@ void STRuntime::construct() {
     installBytesPrimitives(*this);
     installBinaryFilePrimitives(*this);
     installMessagePackPrimitives(*this);
+    installTimerPrimitives(*this);
     installCollectionPrimitives(*this);
     installImportGlobal(*this);
     installWorkerPoolGlobal(*this);
     // The entry another runtime sends Smalltalk messages through
     // (modules/STForeignSend.h): a protoCore method on Object.
     installForeignSendEntry(*this);
+
+    // The timer service; its thread starts with the first timer.
+    impl_->timers = std::make_unique<TimerService>(
+        *this, impl_->liveRegistry, impl_->bootstrap.sym.timers);
 
     // F5 v2: register STModuleProvider once globally with protoCore's
     // ProviderRegistry; subsequent STRuntime instances reuse the same provider.
@@ -933,6 +959,13 @@ STRuntime::~STRuntime() {
         }
         impl_->workers.clear();
     }
+
+    // The timer thread, after the workers: until they are joined a worker can
+    // still wait for a deadline (a wait nested in a block blocks its worker,
+    // waitHelping), and no worker can schedule a timer once they are gone.
+    // Pending timers are dropped here; the service never keeps the process
+    // alive.
+    if (impl_->timers) impl_->timers->stop(impl_->rootCtx);
 
     // S6: drop the space -> runtime association, so a late provider lookup
     // after destruction does not dereference a dead runtime. Done after the
@@ -1546,10 +1579,62 @@ void STRuntime::enqueueTask(proto::ProtoContext* ctx,
         TransientPin pinNextObj(ctx, nextObj);
         if (reg->setAttributeIfEqual(ctx, tasksKey, cur, nextObj)) break;
     }
+    impl_->queuedTasks.fetch_add(1, std::memory_order_release);
     // Wake exactly one worker. If all busy, the counter accumulates and
     // the next worker to come back from drainOne will see the queue
     // non-empty (or, equivalently, acquire returns immediately).
     impl_->workerSem.release();
+}
+
+TimerService& STRuntime::timerService() { return *impl_->timers; }
+
+bool STRuntime::runOneTask(proto::ProtoContext* ctx) {
+    if (impl_->queuedTasks.load(std::memory_order_acquire) <= 0 || !impl_->liveRegistry)
+        return false;
+    auto* reg = const_cast<proto::ProtoObject*>(impl_->liveRegistry);
+    const proto::ProtoString* tasksKey = impl_->bootstrap.sym.tasks;
+    // CAS-take the head of the FIFO task list.
+    const proto::ProtoObject* task = nullptr;
+    for (;;) {
+        const proto::ProtoObject* cur = reg->getOwnAttributeDirect(ctx, tasksKey);
+        const proto::ProtoList* curList =
+            (cur && cur != PROTO_NONE) ? cur->asList(ctx) : nullptr;
+        if (!curList || curList->getSize(ctx) == 0) return false;
+        TransientPin pinCur(ctx, cur);
+        const proto::ProtoObject* head = curList->getAt(ctx, 0);
+        const proto::ProtoList* rest = curList->removeFirst(ctx);
+        TransientPin pinRest(ctx, reinterpret_cast<const proto::ProtoObject*>(rest));
+        const proto::ProtoObject* restObj = rest->asObject(ctx);
+        TransientPin pinRestObj(ctx, restObj);
+        if (reg->setAttributeIfEqual(ctx, tasksKey, cur, restObj)) { task = head; break; }
+    }
+    // Nothing allocates between the take and this pin.
+    TransientPin pinTask(ctx, task);
+    impl_->queuedTasks.fetch_sub(1, std::memory_order_acq_rel);
+    if (!task || task == PROTO_NONE) return true;
+
+    // A task is not actor code: whatever it runs (a settle's callbacks) runs
+    // with no current actor, also when this drain helps from inside an
+    // actor's wait (waitHelping), which restores its own actor afterwards.
+    struct ActorScope {
+        STRuntime* rt;
+        const proto::ProtoObject* saved;
+        ~ActorScope() { rt->setCurrentActor(saved); }
+    } actorScope{this, currentActor()};
+    setCurrentActor(nullptr);
+
+    const Bootstrap& b = impl_->bootstrap;
+    if (task->getOwnAttributeDirect(ctx, b.sym.resume) == PROTO_TRUE) {
+        const proto::ProtoObject* actor = task->getOwnAttributeDirect(ctx, b.sym.actor);
+        if (actor && actor != PROTO_NONE) schedule(ctx, actor);
+        return true;
+    }
+    const proto::ProtoObject* timeout = task->getOwnAttributeDirect(ctx, b.sym.timeout);
+    if (timeout == PROTO_TRUE || timeout == PROTO_FALSE) {
+        runTimerTask(*this, ctx, task);
+        return true;
+    }
+    throw std::runtime_error("internal error: a worker task of no known kind was dropped");
 }
 
 void STRuntime::notifyMainWaiterIfFor(const proto::ProtoObject* future) {
@@ -1807,6 +1892,10 @@ private:
 } // namespace
 
 bool STRuntime::drainOne(proto::ProtoContext* ctx) {
+    // A queued task (a timer settle, a resume) first: it is short, and a
+    // deadline should not wait behind actor turns.
+    if (runOneTask(ctx)) return true;
+
     // CAS-pop the head of the lock-free ready queue. If two drainers race,
     // exactly one wins the head; the loser re-reads and gets the next actor
     // or an empty queue.

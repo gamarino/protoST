@@ -207,6 +207,7 @@ add_library(protost_runtime STATIC
     src/runtime/BytecodeModule.cpp
     src/runtime/Disassembler.cpp
     src/runtime/STRuntime.cpp
+    src/runtime/TimerService.cpp
     src/runtime/ExecutionEngine.cpp
     src/runtime/Interrupt.cpp
     src/runtime/Bootstrap.cpp
@@ -230,6 +231,7 @@ add_library(protost_runtime STATIC
     src/primitives/bytes_prims.cpp
     src/primitives/binfile_prims.cpp
     src/primitives/msgpack_prims.cpp
+    src/primitives/timer_prims.cpp
     src/modules/STModuleProvider.cpp
     src/modules/STForeignSend.cpp
     src/repl/Repl.cpp

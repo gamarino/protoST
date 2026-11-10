@@ -171,6 +171,12 @@ struct Bootstrap {
         const proto::ProtoString* tasks           = nullptr;  // __tasks__ (on liveRegistry: the one task list)
         const proto::ProtoString* actor           = nullptr;  // __actor__ (on a task: which actor it targets)
         const proto::ProtoString* resume          = nullptr;  // __resume__ (on a task: marks a resume-from-yield task)
+        // protoST 0.9.0 timers (TimerService.h): `timers` holds, on
+        // liveRegistry, the ProtoSparseList (entry id -> Future) that roots
+        // every pending timer; `timeout` marks a timer task, TRUE to reject
+        // its __future__ with a TimeoutError, FALSE to resolve it with nil.
+        const proto::ProtoString* timers          = nullptr;  // __timers__ (on liveRegistry: pending timers)
+        const proto::ProtoString* timeout         = nullptr;  // __timeout__ (on a task: marks a timer settle)
         // 2026-05-23 night: profile of saturation under 8 workers showed
         // 51 % of CPU in SymbolTable::intern + mutex contention, traced to
         // two createSymbol calls per SEND_* dispatch (one for __class_name__,

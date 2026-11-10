@@ -1,0 +1,132 @@
+// TimerService (protoST 0.9.0, Task 7): the one timer ProtoThread that settles
+// Futures at a deadline on the monotonic clock.
+//
+// What these cases pin:
+//   1. The timer thread never runs Smalltalk code. A thenDo: callback fired by
+//      a timer runs on a pool worker, so a callback that blocks for 500 ms
+//      does not delay a second timer due 50 ms later by more than 100 ms.
+//      Needs at least two workers (PROTOST_WORKERS is raised to 2 when lower).
+//   2. A settled timer leaves nothing rooted: the pending-entry count returns
+//      to zero once the timer has fired.
+//   3. First completion wins: a Future resolved before its timer fires stays
+//      resolved with its own value.
+//   4. Pending timers never keep the runtime alive: a runtime destroyed with
+//      timers due in an hour is destroyed promptly, and the timers are dropped.
+//
+// Timing: case 1 asserts a lower bound (the timer cannot fire early) and a
+// generous upper bound (the 100 ms the plan allows); case 4 bounds the
+// destruction at 5 s against an hour. No case uses a sleep to synchronise:
+// every wait is on a Future.
+
+#include <catch2/catch_all.hpp>
+#include "PosixEnv.h"
+
+#include "protoST/STRuntime.h"
+#include "frontend/Parser.h"
+#include "frontend/Compiler.h"
+#include "runtime/BytecodeModule.h"
+#include "runtime/TimerService.h"
+#include "protoCore.h"
+
+#include <chrono>
+#include <cstdlib>
+#include <memory>
+#include <string>
+
+namespace {
+
+// Compiled once; the module must outlive the runtime when blocks it defines
+// can still run on a worker after the top level returned (case 1's callback).
+std::unique_ptr<protoST::BytecodeModule> compile(const char* src) {
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C;
+    auto bc = C.compileModule(*ast);
+    REQUIRE(!C.hasErrors());
+    return bc;
+}
+
+// At least two pool workers: one to be blocked by a callback, one to run the
+// next timer's settle.
+void requireTwoWorkers() {
+    const char* env = std::getenv("PROTOST_WORKERS");
+    if (!env || std::atoi(env) < 2) setenv("PROTOST_WORKERS", "2", 1);
+}
+
+} // namespace
+
+TEST_CASE("TimerService: a blocking callback does not delay a later timer",
+          "[timers][actors][parallel]") {
+    requireTwoWorkers();
+    // `blocker`'s callback announces that it started (resolving `started`)
+    // and then blocks its worker for 500 ms. Only once it is known to be
+    // blocking does the program start a 50 ms timer and wait for it.
+    auto bc = compile(
+        "| started blocker | "
+        "started := Future new. "
+        "blocker := Future new. "
+        "blocker thenDo: [:x | started resolve: true. Object sleep: 500]. "
+        "blocker __resolveNilAfter: 0. "
+        "started wait. "
+        "Time millisecondsToRun: [(Future after: 50) wait].");
+    protoST::STRuntime rt;
+    REQUIRE(rt.workerCount() >= 2);
+    const proto::ProtoObject* r = rt.runTopLevel(*bc);
+    REQUIRE(r != nullptr);
+    REQUIRE(r->isInteger(rt.rootCtx()));
+    const long long elapsed = r->asLong(rt.rootCtx());
+    INFO("the 50 ms timer settled after " << elapsed << " ms");
+    CHECK(elapsed >= 50);
+    CHECK(elapsed <= 150);
+}
+
+TEST_CASE("TimerService: a fired timer leaves no pending entry",
+          "[timers][actors]") {
+    auto bc = compile("(Future after: 10) wait. 1");
+    protoST::STRuntime rt;
+    REQUIRE(rt.timerService().pendingCount(rt.rootCtx()) == 0);
+    const proto::ProtoObject* r = rt.runTopLevel(*bc);
+    REQUIRE(r != nullptr);
+    REQUIRE(r->asLong(rt.rootCtx()) == 1);
+    // The entry is removed before the settle task is enqueued, so by the time
+    // the wait returned it is gone.
+    CHECK(rt.timerService().pendingCount(rt.rootCtx()) == 0);
+}
+
+TEST_CASE("TimerService: a Future settled first keeps its own value",
+          "[timers][actors]") {
+    // The 30 ms timer would reject `f` with a TimeoutError; `f` is resolved
+    // first. The 80 ms timer is popped after the 30 ms one (deadline order),
+    // so by the time its wait returns the first timer has been dealt with.
+    auto bc = compile(
+        "| f | "
+        "f := Future new. "
+        "f __rejectTimeoutAfter: 30. "
+        "f resolve: 41. "
+        "(Future after: 80) wait. "
+        "f wait + 1");
+    protoST::STRuntime rt;
+    const proto::ProtoObject* r = rt.runTopLevel(*bc);
+    REQUIRE(r != nullptr);
+    CHECK(r->asLong(rt.rootCtx()) == 42);
+}
+
+TEST_CASE("TimerService: pending timers never keep the runtime alive",
+          "[timers][actors]") {
+    auto bc = compile(
+        "Future after: 3600000. "
+        "(Future new) within: 3600000. "
+        "1");
+    const auto start = std::chrono::steady_clock::now();
+    {
+        protoST::STRuntime rt;
+        const proto::ProtoObject* r = rt.runTopLevel(*bc);
+        REQUIRE(r != nullptr);
+        REQUIRE(rt.timerService().pendingCount(rt.rootCtx()) == 2);
+    }
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start).count();
+    INFO("construction, run and destruction took " << ms << " ms");
+    CHECK(ms < 5000);
+}

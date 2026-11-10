@@ -325,11 +325,12 @@ const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
     } clearWaiting{rt, ctx, self};
     int idle = 0;
     while (readState(rt, ctx, awaited) == 0) {
-        if (t_buriedActors.size() > kMaxHelpingDepth) {
-            proto::ProtoContext::UnmanagedScope unmanaged(ctx);
-            std::this_thread::sleep_for(std::chrono::microseconds(200));
-            continue;
-        }
+        // Past the helping cap no further actor turn is buried here, but the
+        // queued worker tasks (timer settles) still run: they bury no actor,
+        // and a deadline must be able to end this wait even when every worker
+        // is at the cap (otherwise waitWithin: nested in blocks could wait
+        // for ever, its timeout queued behind workers that only poll).
+        const bool atCap = t_buriedActors.size() > kMaxHelpingDepth;
         bool helped = false;
         // The helped message belongs to another actor: this actor's exception
         // handlers, still on this thread's handler stack, must not catch its
@@ -339,7 +340,7 @@ const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
         // inside it: see translateNativeException (NativeExceptionBridge.h).
         std::exception_ptr failed;
         try {
-            helped = rt.drainOne(ctx);
+            helped = atCap ? rt.runOneTask(ctx) : rt.drainOne(ctx);
         } catch (...) {
             failed = std::current_exception();
         }
@@ -348,7 +349,7 @@ const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
         if (failed) std::rethrow_exception(failed);
         if (helped) { idle = 0; continue; }
         proto::ProtoContext::UnmanagedScope unmanaged(ctx);
-        std::this_thread::sleep_for(std::chrono::microseconds(idle < 10 ? 20 : 500));
+        std::this_thread::sleep_for(std::chrono::microseconds(atCap ? 200 : idle < 10 ? 20 : 500));
         ++idle;
     }
     const proto::ProtoString* valueKey = rt.bootstrap().sym.value;
