@@ -2571,12 +2571,11 @@ condition. Every place to touch, in order:
    ASSERT_LOOP_BOOL = 38, // arg = selector const index (for the message)
    ```
 2. **The engine,** `ExecutionEngine::runLoop` (`src/runtime/ExecutionEngine.cpp`):
-   - for the threaded dispatch (GCC builds), its label at the opcode's
-     position in the static `labels[256]` table, and the matching
-     `check[...] = &&L_X` line, from which a debug build verifies the table
-     (0.10.0: the table is built at compile time, not on every `runLoop`
-     call); a missing entry makes the opcode fail with `unimplemented
-     opcode (threaded dispatch)` on Linux only;
+   - a `labels[]` entry for the threaded dispatch (GCC builds); a missing one
+     makes the opcode fail with `unimplemented opcode (threaded dispatch)`
+     on Linux only. The table stays a local array filled per `runLoop`
+     call: a static one made GCC merge the handlers' indirect jumps into one
+     (about 10 % more cycles on a branchy loop, measured in 0.10.0);
    - a `case Op::X: L_X: { Frame& f = frames_.back(); ... }` in the switch,
      ending with `DISPATCH_DIRECT()`, or with `DISPATCH_SCOPED()` when a local
      with a destructor (a `TransientPin`) is alive in the case's scope (a

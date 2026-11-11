@@ -310,9 +310,10 @@ minor release, so the two services arrive in 0.5.0.
   - An assignment whose value is discarded compiles without `DUP`/`POP`.
     Test `05-messages/assignment-statement-values.st`.
   - The dispatch core indexes the frame's slots directly (bounds checks
-    become debug assertions), pushes SmallInteger and Symbol constants
-    without materialising them, and uses a jump table built at compile time
-    instead of one filled on every engine entry.
+    become debug assertions) and pushes SmallInteger and Symbol constants
+    without materialising them. (A jump table built at compile time was
+    tried and reverted: GCC then merged every handler's indirect jump into
+    one, and a branchy loop took about 10 % more cycles.)
   - `Array new:` builds its storage in one `newList` call and publishes no
     intermediate mutable object.
   - `perform:` to `perform:with:with:with:` are primitives (they built an
