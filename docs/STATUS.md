@@ -309,7 +309,8 @@ are noted where useful.
 - [x] `lib/random.st` — the `Random` module: a seedable, deterministic
       pseudo-random generator (`seed:`, `new`, `next`, `nextInt:`,
       `between:and:`, `next:`). Pure protoST, a 32-bit LCG; no new
-      primitives *(track4, T4-c)*
+      primitives. Integer draws scale the state's high bits into the range
+      (0.10.0; until then the low bits, which alternate) *(track4, T4-c)*
 - [x] `lib/json.st` — the `JSON` module: `JSON parse:` (a JSON document →
       `Dictionary` / `Array` / `String` / number / `Boolean` / `nil`,
       recursive to any depth) and `JSON stringify:` (the inverse, with JSON

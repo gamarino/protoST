@@ -118,6 +118,18 @@ minor release, so the two services arrive in 0.5.0.
 
 ### Fixed
 
+- **`lib/random.st`: `nextInt:` and `between:and:` alternated parity.** Both
+  took the generator's state modulo the range. The generator is a 32-bit LCG
+  with a power-of-two modulus, in which bit k of the state has period
+  2^(k+1): over an even range successive draws alternated between odd and
+  even, and `nextInt: 4` repeated with period 4. A draw is now
+  `floor(state * size / 2^32)`, decided by the high bits, in exact integer
+  arithmetic. `next` and `next:` are unchanged; the integer sequences a seed
+  gives change (no protoST or protoBaseST test pinned them: protoBaseST's
+  `AvlOps` draws with `next`). The kernel `Random` (Park-Miller, no import)
+  already scaled `next` and is unchanged. Found by protoBaseST's review
+  (P1). Test: `13-stdlib/random-draws-use-high-bits.st` (failed before:
+  0 of 999 successive `nextInt: 2` draws were equal, 517 after).
 - **The literal `5e-324` was a compile error (K16).** Every float literal
   whose value is subnormal or underflows (`5e-324`, `2.2e-308`, `1e-400`) was
   refused as *out of range*, so `printString` of such a `Float` did not read
