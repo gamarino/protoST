@@ -561,6 +561,9 @@ add_test(NAME cli_memory_bounded
 add_test(NAME cli_oom_clean
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_oom_clean.sh $<TARGET_FILE:protost>)
 
+add_test(NAME cli_array_new_headroom
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_array_new_headroom.sh $<TARGET_FILE:protost>)
+
 if(WIN32)
     # Ctrl-C is a console control event on Windows, which Git Bash cannot send
     # to a native program: the Windows variant runs in a console of its own.

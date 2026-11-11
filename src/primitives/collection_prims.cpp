@@ -51,6 +51,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <bit>
 #include <new>
 #include <utility>
 #include <algorithm>
@@ -862,22 +863,64 @@ const proto::ProtoObject* prim_Array_classNew(STRuntime& rt, proto::ProtoContext
     if (argc != 1) throw NativeError("new: expects 1 arg (size)");
     long long n = a[0]->asLong(ctx);
     if (n < 0) throw NativeError("Array new: negative size");
-    // A size that can never be held is refused before anything is allocated
-    // (review R3-2): a typo such as `Array new: 3000000000` used to build an
-    // 8n-byte vector and then n cells, and the system's OOM killer ended the
-    // process instead of an Error the program can handle (Pharo signals
-    // OutOfMemory). Two bounds: protoCore's list size (an unsigned) and the
-    // heap ceiling, since n elements take at least n cells.
+    // A size the heap cannot take is refused before anything is allocated
+    // (reviews R3-2, R4-1): `Array new: 3000000000` used to build an 8n-byte
+    // vector and then the list, and ended in protoCore's out-of-memory exit
+    // or the system's OOM killer instead of an Error the program can handle
+    // (Pharo signals OutOfMemory). Two bounds:
+    //   1. protoCore's list size, an unsigned: at most 2^32 - 1 elements.
+    //   2. The heap's remaining capacity. protoCore builds an n-element list
+    //      by appending, and each append path-copies the spine, so the build
+    //      holds about n * log2(n) cells until a collection (measured under
+    //      a 400,000-cell limit: 22,500 elements build, 22,656 do not;
+    //      n * log2(n) is 325,000 there). The estimate is n * bit_width(n),
+    //      at most n cells above that. What the heap has left is the ceiling
+    //      (STRuntime::heapCeilingCells) less the cells in use: the live set
+    //      of the last completed collection, the figure protoCore's own
+    //      out-of-memory rule uses, or, before the first collection, every
+    //      cell handed out so far (heapSize - freeCellsCount; nothing has
+    //      been reclaimed yet, so all of it still occupies the heap).
+    //      protoCore offers no exact free-capacity query, so this is an
+    //      estimate, read without a lock: it lags allocations made since
+    //      that collection (by this thread or another) and leaves out
+    //      protoCore's per-thread margin, so a size within a few percent of
+    //      the boundary can still pass and end in the out-of-memory exit;
+    //      and it counts objects that died since the last collection (all
+    //      the garbage, before the first one), so a size just below the
+    //      boundary can be refused until a collection runs. Sizes clearly
+    //      beyond what the heap can take are refused.
     if (n > static_cast<long long>(UINT32_MAX))
         throw NativeError("Array new: " + std::to_string(n)
                           + " elements is beyond protoCore's list limit of "
                           + std::to_string(UINT32_MAX));
-    const long long ceiling = STRuntime::heapCeilingCells(ctx);
-    if (ceiling > 0 && n > ceiling)
-        throw NativeError("Array new: " + std::to_string(n) + " elements need at least "
-                          + std::to_string(n) + " cells, more than the heap limit of "
-                          + std::to_string(ceiling)
-                          + " cells (PROTOCORE_HEAP_LIMIT_CELLS sets it; a cell is 64 bytes)");
+    // Up to 8 elements (one or two cells) nothing is checked: reading the
+    // ceiling takes protoCore's process-wide mutex (adaptiveHeapStats), which
+    // 28f8b4b took on every new:. Above 8 it is one uncontended acquisition
+    // next to a build of n * log2(n) cell allocations.
+    if (n > 8) {
+        const long long ceiling = STRuntime::heapCeilingCells(ctx);
+        if (ceiling > 0) {
+            proto::ProtoSpace* space = ctx->space;
+            long long live = static_cast<long long>(
+                space->liveCellsLastCycle.load(std::memory_order_relaxed));
+            if (space->getGCCycleCount() == 0)
+                // heapSize and freeCellsCount are ints protoCore updates with
+                // relaxed atomics; read them the same way.
+                live = std::max(0LL, static_cast<long long>(
+                    __atomic_load_n(&space->heapSize, __ATOMIC_RELAXED)
+                    - __atomic_load_n(&space->freeCellsCount, __ATOMIC_RELAXED)));
+            const long long need =
+                n * static_cast<long long>(std::bit_width(static_cast<unsigned long long>(n)));
+            if (need > ceiling - live)
+                throw NativeError("Array new: " + std::to_string(n) + " elements need about "
+                                  + std::to_string(need)
+                                  + " cells while the list is built, more than the heap can "
+                                    "still hold (limit " + std::to_string(ceiling)
+                                  + " cells, about " + std::to_string(live)
+                                  + " in use; PROTOCORE_HEAP_LIMIT_CELLS "
+                                    "sets the limit, a cell is 64 bytes)");
+        }
+    }
     // One bulk construction (0.10.0): a single cell up to 5 elements, the
     // protoCore builder beyond, instead of n appendLast copies. The elements
     // are all nil, which needs no rooting.
