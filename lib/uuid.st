@@ -28,9 +28,10 @@ TEXT
   Python's str(uuid); hex is the 32 lowercase digits, Python's uuid.hex.
 
 COMPARISON
-  = is true for another UUID with the same bytes, and false for anything else
-  (the bytes, the hex String or the Integer of the same UUID included), as in
-  Python. hash is asInteger hash, so it agrees with = and equals Python's
+  = is true for another UUID with the same value, an instance of a subclass of
+  UUID included (in either direction, as Python's isinstance test), and false
+  for anything else (the bytes, the hex String or the Integer of the same UUID
+  included), as in Python. hash is asInteger hash, so it agrees with = and equals Python's
   hash(uuid), which is hash(uuid.int). <, <=, >, >= order by asInteger (the
   unsigned big-endian value); ordering against a non-UUID signals Error.
 

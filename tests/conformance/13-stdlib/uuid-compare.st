@@ -1,11 +1,15 @@
-"EXPECT: true true true true true true true true true true"
+"EXPECT: true true true true true true true true true true true"
 "§13 stdlib: UUID comparison (lib/uuid.st), as Python's uuid: = compares the
  values, whatever text built them, and is false against anything that is not
  a UUID (its bytes, its hex String, its Integer); hash is the hash of
  asInteger, so it agrees with = and with Python's hash(uuid), which is
  hash(uuid.int) (276701140489800253 for the value below); < and the other
  orderings compare asInteger, and ordering against a non-UUID signals Error.
- Equal UUIDs are one Set element and one Dictionary key."
+ Equal UUIDs are one Set element and one Dictionary key. An instance of a
+ subclass of UUID equals a UUID of the same value, in both directions, as
+ Python's isinstance test makes it."
+Import from: 'uuid'.
+UUID subclass: #TaggedUUID.
 | m U a b low high set dict bad |
 m := Import from: 'uuid'.
 U := m UUID.
@@ -25,5 +29,6 @@ bad := [:block | [block value. false] on: Error do: [:e | e return: true]].
   high > low & (low <= low) & (high >= low) & (a <= b).
   (bad value: [low < 1]) & (bad value: [low > 'x']).
   set size = 2.
-  dict size = 1 and: [(dict at: a) = 2] }
+  dict size = 1 and: [(dict at: a) = 2].
+  (TaggedUUID fromString: a hex) = a and: [a = (TaggedUUID fromString: a hex) and: [(TaggedUUID fromString: a hex) hash = a hash]] }
   inject: '' into: [:acc :each | acc isEmpty ifTrue: [each printString] ifFalse: [acc , ' ' , each printString]].

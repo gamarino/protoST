@@ -3061,7 +3061,7 @@ written in protoST over `ByteArray` (`lib/uuid.st`).
 | `hex` | the 32 lowercase hexadecimal digits (Python's `uuid.hex`) |
 | `printString`, `displayString` | the 36-character lowercase form (Python's `str(uuid)`) |
 | `asInteger` | the unsigned big-endian value, 0 to 2^128 - 1 (Python's `uuid.int`) |
-| `=`, `hash` | equal bytes; never `=` to a non-UUID (its own `bytes`, `hex` or `asInteger` included). `hash` is `asInteger hash`, so it equals Python's `hash(uuid)` |
+| `=`, `hash` | equal bytes, with any `UUID`, an instance of a subclass included (as Python's `isinstance`); never `=` to a non-UUID (its own `bytes`, `hex` or `asInteger` included). `hash` is `asInteger hash`, so it equals Python's `hash(uuid)` |
 | `<`, `<=`, `>`, `>=` | compare `asInteger`; against a non-UUID they signal `Error` |
 
 A `UUID` is immutable: its one private initialiser, used by the class-side
