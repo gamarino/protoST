@@ -422,7 +422,44 @@ t printString.        "=> '2026-11-01 06:30:00Z[America/New_York]'"
 
 The full protocol is in the language reference, LANGUAGE.md §12.14.
 
-## 9.10 Reading the library as protoST code
+## 9.10 Identifiers — the `uuid` module
+
+A `UUID` (RFC 4122) names something uniquely without asking anyone for a
+number: a record, a file, a message sent between machines. `UUID new` draws
+a fresh one from the operating system's secure random generator (a
+version-4 UUID); `fromString:` and `fromBytes:` rebuild a known one.
+
+```smalltalk
+"-- uuid-demo.st --"
+Import from: 'uuid'.
+
+id := UUID fromString: '12345678-1234-5678-1234-567812345678'.
+same := UUID fromString: '12345678123456781234567812345678'.
+
+{ id printString. id hex. id bytes size. id = same.
+  id < (UUID fromString: 'ff000000-0000-0000-0000-000000000000').
+  ((UUID new bytes at: 7) bitShift: -4) } displayNl.
+```
+
+```bash
+$ ./build/protost uuid-demo.st
+#('12345678-1234-5678-1234-567812345678' '12345678123456781234567812345678' 16 true true 4)
+```
+
+`printString` is the 36-character lowercase form and `hex` the 32 digits;
+`fromString:` takes either, in either case, and anything else signals
+`Error`. `bytes` is the 16 bytes in RFC 4122 order and `asInteger` their
+unsigned big-endian value, which `<` compares. Two UUIDs are `=` when their
+bytes are; a UUID is never `=` to its own bytes, text or Integer. The high
+four bits of byte 7 of a new UUID are its version, 4.
+
+> **In Python** this is `uuid.UUID` and `uuid.uuid4()`, with the same text
+> (`str`), `hex`, `bytes`, `int`, comparison and hash. **In JavaScript**
+> `crypto.randomUUID()` answers the text of a version-4 UUID.
+
+The full protocol is in the language reference, LANGUAGE.md §12.16.
+
+## 9.11 Reading the library as protoST code
 
 The kernel classes and the modules are ordinary protoST `.st` files, written
 in exactly the language this tutorial teaches: the kernel is loaded at start-up
@@ -441,7 +478,7 @@ every non-`_`-prefixed class becomes an attribute of the module object that
 leaves the quotes off a string) print the receiver followed by a newline and
 answer the receiver. Both write in program order.
 
-## 9.11 Summary
+## 9.12 Summary
 
 - protoST's library is in two parts: the **kernel**, always loaded — the
   mathematical protocol on `Number`, streams, `Random`, `Time`, `Date`,
@@ -454,7 +491,8 @@ answer the receiver. Both write in program order.
   become globals.
 - The standard modules: `json` (`parse:`/`stringify:`), `decimal` (an exact
   `Decimal` value, no arithmetic), `calendar` (dates, times, datetimes and
-  time spans in microseconds, with fixed offsets), `net` and `http` (Chapter 15), and `stream`,
+  time spans in microseconds, with fixed offsets), `uuid` (`UUID`
+  identifiers, version 4 from the OS's secure random bytes), `net` and `http` (Chapter 15), and `stream`,
   `random` and `time`, kept from before the kernel had those classes
   (`random` and `time` replace the kernel's `Random`, `Time` and `Duration`
   when imported).

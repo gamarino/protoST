@@ -35,6 +35,17 @@ minor release, so the two services arrive in 0.5.0.
   by two wall-clock readings taken around it, never by elapsed time). The
   version banner in the REPL transcripts of tutorial chapters 1 and 12 and
   the `User-Agent` in `14-io/http_request_shape.st` read 0.10.0.
+- **`lib/uuid.st`: `UUID` values (RFC 4122).** `Import from: 'uuid'` binds
+  `UUID`: `fromString:` (32 hexadecimal digits or the 36-character form, in
+  either case), `fromBytes:` (16 bytes in RFC 4122 order) and `new`, a
+  version-4 UUID from `ByteArray randomBytes: 16` with the version and
+  variant bits set; `bytes`, `hex`, `printString` (the 36-character
+  lowercase form) and `asInteger` (the unsigned big-endian value). `=`,
+  `hash` and `<`, `<=`, `>`, `>=` are Python's `uuid.UUID` (`hash` is
+  `asInteger hash`, Python's `hash(uuid)`), which makes `UUID` the value of
+  ProtoBase's `@uuid`. Immutable, pure protoST. Docs: LANGUAGE.md §12.16,
+  tutorial §9.10, `lib/README.md`. Tests: `13-stdlib/uuid-parse-print.st`,
+  `uuid-compare.st`, `uuid-v4.st`.
 - **Python's numeric hash and `raisedTo:modulo:` (R3).** `hash` of an
   `Integer`, `LargeInteger`, `Float`, `Fraction` and `Decimal` is now
   CPython's numeric hash (modulo 2^61 - 1, Python's "Hashing of numeric

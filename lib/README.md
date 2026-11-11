@@ -61,6 +61,7 @@ another version may fail to start or behave differently, so point
 | `http`   | `Import from: 'http'`   | `HTTPClient` (http and https, JSON bodies, redirects), `HTTPResponse`, `HTTPServer` (one actor per connection), `HTTPRequest`; imports `net` and `json` |
 | `decimal` | `Import from: 'decimal'` | `Decimal`, an exact decimal value: Python's `Decimal(str)` text in and `str(Decimal)` out, exact comparison with any `Number`, `asExactFraction`; no arithmetic (STATUS D49) |
 | `calendar` | `Import from: 'calendar'` | `CalendarDate`, `TimeOfDay`, `DateTime`, `TimeSpan`, `ZoneOffset`, `ZoneName`, `TimeZoneUnavailable`: exact calendar values in microseconds with Python's `datetime` model; fixed offsets, named zones kept by key only (STATUS D50) |
+| `uuid` | `Import from: 'uuid'` | `UUID`, an RFC 4122 identifier: `fromString:` (32 hex digits or the 36-character form), `fromBytes:`, `new` (version 4, from `ByteArray randomBytes: 16`), `bytes`, `hex`, `asInteger`; `=`, `hash` and ordering as Python's `uuid.UUID` (0.10.0) |
 
 `net` and `http` are documented, with examples, in
 [tutorial chapter 15](../docs/tutorial/15-input-and-output.md); their
@@ -68,7 +69,9 @@ conformance tests are in `tests/conformance/14-io/`. `decimal` is documented
 in [LANGUAGE.md §12.13](../docs/LANGUAGE.md) and tutorial chapter 9 (§9.8);
 its tests are `tests/conformance/13-stdlib/decimal-*`. `calendar` is
 documented in [LANGUAGE.md §12.14](../docs/LANGUAGE.md) and tutorial §9.9; its
-tests are `tests/conformance/13-stdlib/calendar-*`.
+tests are `tests/conformance/13-stdlib/calendar-*`. `uuid` is documented in
+[LANGUAGE.md §12.16](../docs/LANGUAGE.md) and tutorial §9.10; its tests are
+`tests/conformance/13-stdlib/uuid-*`.
 
 `stream`, `random` and `time` predate the kernel classes of the same names
 and are kept so that programs written against them keep working. The classes

@@ -420,6 +420,13 @@ are noted where useful.
       Pure protoST; no time-zone database (D50). Tests:
       `conformance/13-stdlib/calendar-*` (`calendar-now-utc.st` skips until
       `Time utcMicroseconds`, 0.10.0).
+- [x] `lib/uuid.st` — `UUID`, an RFC 4122 identifier *(0.10.0)*:
+      `fromString:` (32 hex digits or the 36-character form, either case),
+      `fromBytes:`, `new` (version 4 from `ByteArray randomBytes: 16`),
+      `bytes`, `hex`, `printString` (Python's `str(uuid)`), `asInteger`; `=`,
+      `hash` (Python's `hash(uuid)`) and the orderings as Python's
+      `uuid.UUID`. Pure protoST; no deviation. Tests:
+      `conformance/13-stdlib/uuid-*`.
 - [x] `lib/net.st` — TCP and UDP sockets *(0.5.0)*: `Socket connectTo:port:`
       (`timeout:` variant; an `IOStream`), `tlsHost:` (TLS client with
       certificate and host-name verification, OpenSSL), `ServerSocket

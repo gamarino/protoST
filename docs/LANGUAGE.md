@@ -3043,6 +3043,38 @@ mistaken for the other.
 Time utcMicroseconds > 1767225600000000   "=> true"
 ```
 
+### 12.16 Identifiers: the `uuid` module
+
+Since protoST 0.10.0. `Import from: 'uuid'` binds the global `UUID`: a
+universally unique identifier as RFC 4122 defines it, 16 bytes in RFC 4122
+(big-endian) order. The meaning is Pharo's, an identifier whose `UUID new` is
+a fresh random one; the protocol and the text are those of Python's
+`uuid.UUID`, which makes `UUID` the value of ProtoBase's `@uuid`. It is
+written in protoST over `ByteArray` (`lib/uuid.st`).
+
+| Message | Meaning |
+|---------|---------|
+| `UUID new` | a version-4 UUID (RFC 4122 §4.4): `ByteArray randomBytes: 16` (the operating system's secure generator, §12.12.1) with the version nibble (high four bits of byte 7) set to 4 and the variant (two high bits of byte 9) set to `2r10` |
+| `UUID fromBytes: aByteArray` | the UUID of exactly 16 bytes; anything else signals `Error` naming it |
+| `UUID fromString: aString` | 32 hexadecimal digits, or the 36-character form (8-4-4-4-12 digits joined by hyphens), in either case; anything else (another length, a misplaced hyphen, a non-hex character, braces, a `urn:uuid:` prefix, surrounding whitespace, a non-String) signals `Error` naming it |
+| `bytes` | the 16 bytes, a `ByteArray` (immutable) |
+| `hex` | the 32 lowercase hexadecimal digits (Python's `uuid.hex`) |
+| `printString`, `displayString` | the 36-character lowercase form (Python's `str(uuid)`) |
+| `asInteger` | the unsigned big-endian value, 0 to 2^128 - 1 (Python's `uuid.int`) |
+| `=`, `hash` | equal bytes; never `=` to a non-UUID (its own `bytes`, `hex` or `asInteger` included). `hash` is `asInteger hash`, so it equals Python's `hash(uuid)` |
+| `<`, `<=`, `>`, `>=` | compare `asInteger`; against a non-UUID they signal `Error` |
+
+A `UUID` is immutable: its one private initialiser, used by the class-side
+constructors, refuses a second call, and its bytes are a `ByteArray`.
+
+```smalltalk
+Import from: 'uuid'.
+u := UUID fromString: '12345678123456781234567812345678'.
+u printString        "=> '12345678-1234-5678-1234-567812345678'"
+u asInteger          "=> 24197857161011715162171839636988778104"
+((UUID new bytes at: 9) bitShift: -6)   "=> 2"
+```
+
 ---
 
 ## 13. The CLI
