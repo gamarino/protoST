@@ -118,6 +118,17 @@ minor release, so the two services arrive in 0.5.0.
 
 ### Fixed
 
+- **`Array new:` with a size that can never be held signals an Error
+  (review R3-2).** `Array new: 3000000000` (a typo, say) built an 8n-byte
+  vector and then n cells, and on a machine with memory to spare for the
+  vector the system's OOM killer ended the process. A size beyond
+  protoCore's list limit (2^32 - 1), or with more elements than the heap
+  ceiling has cells (`STRuntime::heapCeilingCells`, the limit the
+  out-of-memory report names; never above 2^31 - 1), is refused before
+  anything is allocated, and a failing C++ allocation within the ceiling is
+  an Error rather than a terminate. Pharo signals `OutOfMemory`; protoST has
+  no such class and signals `Error`. Test
+  `12-builtins/array-new-unholdable-size-signals.st`.
 - **An unhandled error inside an inlined nil-test arm has one frame less in
   its trace.** The arm is no longer a block, so the `at <block>` line is gone
   (tutorial 15 updated).

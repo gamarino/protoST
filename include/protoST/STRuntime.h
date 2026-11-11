@@ -251,6 +251,13 @@ public:
     // isActor probes every object. Process-wide and never reset, since
     // runtimes may share a ProtoSpace and pass objects between them.
     static void noteActorCreated();
+    // The heap ceiling in force for ctx's space, in cells: the adaptive
+    // controller's hard budget, else the fixed limit (setHeapLimits), else
+    // PROTOCORE_HEAP_LIMIT_CELLS or protoST's default. Never above INT_MAX,
+    // since protoCore counts cells in an int. The out-of-memory report names
+    // it, and a primitive that is asked for more cells than it can ever hold
+    // refuses up front (Array new:).
+    static long long heapCeilingCells(const proto::ProtoContext* ctx);
 
     // The actor's mailbox: a protoCore ProtoMPSCQueue held under the
     // `__mailbox__` attribute. Lock-free and O(1) on the send side, traced by

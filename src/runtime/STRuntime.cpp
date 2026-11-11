@@ -2832,8 +2832,8 @@ bool envEquals(const char* name, const char* value) {
 }
 
 // The limit the out-of-memory report names: the controller's budget, or the
-// fixed limit in force.
-long long heapCeilingCells(const proto::ProtoContext* ctx) {
+// fixed limit in force (STRuntime::heapCeilingCells).
+long long heapCeilingCellsOf(const proto::ProtoContext* ctx) {
     if (ctx && ctx->space) {
         const proto::AdaptiveHeapStats stats = ctx->space->adaptiveHeapStats();
         if (stats.enabled) return static_cast<long long>(stats.hardCells);
@@ -2847,7 +2847,7 @@ proto::ProtoObject* reportOutOfMemory(proto::ProtoContext* ctx) {
     std::fflush(stdout);
     // protoCore calls this only when the live set itself does not fit: the
     // last collections reclaimed nothing.
-    const long long cells = heapCeilingCells(ctx);
+    const long long cells = heapCeilingCellsOf(ctx);
     std::fprintf(stderr, "error: out of memory: the live objects fill the heap limit of %lld cells "
                          "(%lld MB) and the last collections reclaimed nothing. To allow more, set "
                          "PROTOCORE_HEAP_LIMIT_CELLS (each cell is 64 bytes), e.g. "
@@ -2874,6 +2874,10 @@ int fixedHardCells() {
     return static_cast<int>(std::min<long long>(cells, INT_MAX));
 }
 } // namespace
+
+long long STRuntime::heapCeilingCells(const proto::ProtoContext* ctx) {
+    return heapCeilingCellsOf(ctx);
+}
 
 void STRuntime::configureHeap(proto::ProtoSpace& space) {
     space.outOfMemoryCallback = reportOutOfMemory;

@@ -51,6 +51,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <new>
 #include <utility>
 #include <algorithm>
 #include <vector>
@@ -861,6 +862,22 @@ const proto::ProtoObject* prim_Array_classNew(STRuntime& rt, proto::ProtoContext
     if (argc != 1) throw NativeError("new: expects 1 arg (size)");
     long long n = a[0]->asLong(ctx);
     if (n < 0) throw NativeError("Array new: negative size");
+    // A size that can never be held is refused before anything is allocated
+    // (review R3-2): a typo such as `Array new: 3000000000` used to build an
+    // 8n-byte vector and then n cells, and the system's OOM killer ended the
+    // process instead of an Error the program can handle (Pharo signals
+    // OutOfMemory). Two bounds: protoCore's list size (an unsigned) and the
+    // heap ceiling, since n elements take at least n cells.
+    if (n > static_cast<long long>(UINT32_MAX))
+        throw NativeError("Array new: " + std::to_string(n)
+                          + " elements is beyond protoCore's list limit of "
+                          + std::to_string(UINT32_MAX));
+    const long long ceiling = STRuntime::heapCeilingCells(ctx);
+    if (ceiling > 0 && n > ceiling)
+        throw NativeError("Array new: " + std::to_string(n) + " elements need at least "
+                          + std::to_string(n) + " cells, more than the heap limit of "
+                          + std::to_string(ceiling)
+                          + " cells (PROTOCORE_HEAP_LIMIT_CELLS sets it; a cell is 64 bytes)");
     // One bulk construction (0.10.0): a single cell up to 5 elements, the
     // protoCore builder beyond, instead of n appendLast copies. The elements
     // are all nil, which needs no rooting.
@@ -870,10 +887,15 @@ const proto::ProtoObject* prim_Array_classNew(STRuntime& rt, proto::ProtoContext
                                               PROTO_NONE, PROTO_NONE, PROTO_NONE, PROTO_NONE };
         data = ctx->newList(static_cast<unsigned>(n), nils);
     } else {
-        if (n > static_cast<long long>(UINT32_MAX))
-            throw NativeError("Array new: size too large");
-        std::vector<const proto::ProtoObject*> nils(static_cast<std::size_t>(n), PROTO_NONE);
-        data = ctx->newList(static_cast<unsigned>(n), nils.data());
+        // Within the ceiling the memory may still not be there: the C++
+        // allocation failing is an Error too, not a terminate.
+        try {
+            std::vector<const proto::ProtoObject*> nils(static_cast<std::size_t>(n), PROTO_NONE);
+            data = ctx->newList(static_cast<unsigned>(n), nils.data());
+        } catch (const std::bad_alloc&) {
+            throw NativeError("Array new: not enough memory for " + std::to_string(n)
+                              + " elements");
+        }
     }
     return instantiateAs(rt, ctx, cls, rt.bootstrap().arrayProto, makeArrayInstance(rt, ctx, data));
 }
