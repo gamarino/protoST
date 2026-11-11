@@ -288,6 +288,21 @@ that uses a boxed variable starts with `DEOPT_CHECK 1`, which signals an
 `Error` when its box is closed. One that uses none has `DEOPT_CHECK 0` and
 works at any time.
 
+Two limits follow, both recorded in STATUS (D53):
+
+- **Another thread.** `DEOPT_CHECK` guards only a block that *starts* after
+  the box closed. If the receiver hands a copy to another thread that runs it
+  while the send returns, `DEOPT_EXIT`'s copy-back races that thread: a write
+  made after the copy-back stays in the box and is lost to the method, and a
+  read sees the old value. Such a program is racy in any Smalltalk, but a
+  real closure's write would land. Nothing here is memory-unsafe: the box is
+  an ordinary protoCore mutable object.
+- **The debugger.** While the send is in progress, a debugger or DAP view of
+  the method's frame shows the frame slots of the boxed variables, which are
+  stale (the live values are in the box), and a value set from the debugger
+  in such a slot is overwritten by the copy-back. Reading and writing through
+  an open box from the frame inspector would fix it; it is not done.
+
 ### 1.5 Calling conventions
 
 **Sends.** `SEND_UNARY`, `SEND_BINARY` and `SEND_KEYWORD` expect
