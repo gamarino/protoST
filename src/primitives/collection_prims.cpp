@@ -125,6 +125,19 @@ const proto::ProtoList* arrayData(proto::ProtoContext* ctx,
     return l ? l : ctx->newList();
 }
 
+// The same, with the key the runtime interned at bootstrap (Bootstrap::sym):
+// the hot primitives (at:, at:put:, size, new:) have the runtime at hand and
+// skip interning "__data__" on every call (0.10.0; the interning was a sixth
+// of `anArray at: i`).
+const proto::ProtoList* arrayData(STRuntime& rt, proto::ProtoContext* ctx,
+                                  const proto::ProtoObject* arr) {
+    const proto::ProtoObject* d =
+        arr ? arr->getAttribute(ctx, rt.bootstrap().sym.data) : nullptr;
+    if (!d || d == PROTO_NONE) return ctx->newList();
+    const proto::ProtoList* l = d->asList(ctx);
+    return l ? l : ctx->newList();
+}
+
 // The backing ProtoList of any list-backed collection instance — `Array` and
 // `OrderedCollection` share the exact same `__data__` representation.
 const proto::ProtoList* listData(proto::ProtoContext* ctx,
@@ -534,13 +547,17 @@ const proto::ProtoObject* makeArrayInstance(STRuntime& rt,
     // all of which allocate.
     TransientPin pinData(
         ctx, reinterpret_cast<const proto::ProtoObject*>(data));
-    const proto::ProtoObject* arr =
-        const_cast<proto::ProtoObject*>(rt.bootstrap().arrayProto)
-            ->newChild(ctx, /*isMutable=*/true);
-    TransientPin pinArr(ctx, arr);
-    const_cast<proto::ProtoObject*>(arr)->setAttribute(
-        ctx, dataKey(ctx), data->asObject(ctx));
-    return arr;
+    // Built immutable with its data, then made mutable by `clone` (0.10.0).
+    // A mutable object's first write publishes a state into protoCore's
+    // global mutable table (a path copy of a shard); one born with its
+    // attributes has nothing to publish until its first at:put:. The clone
+    // is a sibling of the immutable child: same parents, same attributes.
+    const proto::ProtoObject* born =
+        rt.bootstrap().arrayProto->newChild(ctx, /*isMutable=*/false);
+    TransientPin pinBorn(ctx, born);
+    born = born->setAttribute(ctx, rt.bootstrap().sym.data, data->asObject(ctx));
+    pinBorn.reset(born);
+    return born->clone(ctx, /*isMutable=*/true);
 }
 
 // --- makeInstanceOfSpecies — wrap accumulated elements as the target class --
@@ -743,11 +760,11 @@ bool forEachElement(STRuntime& rt, proto::ProtoContext* ctx,
 // =====================  Array base operations  ============================
 
 // anArray size → element count (a SmallInteger)
-const proto::ProtoObject* prim_Array_size(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Array_size(STRuntime& rt, proto::ProtoContext* ctx,
                                           const proto::ProtoObject* r,
                                           const proto::ProtoObject* const*, int) {
     return ctx->fromLong(
-        static_cast<long long>(arrayData(ctx, r)->getSize(ctx)));
+        static_cast<long long>(arrayData(rt, ctx, r)->getSize(ctx)));
 }
 
 // anArray isEmpty → true when size = 0
@@ -766,12 +783,12 @@ const proto::ProtoObject* prim_Array_notEmpty(STRuntime&, proto::ProtoContext* c
 
 // anArray at: index → the element at the 1-based index. Out of range signals
 // an Error (via std::runtime_error → translateNativeException).
-const proto::ProtoObject* prim_Array_at(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Array_at(STRuntime& rt, proto::ProtoContext* ctx,
                                         const proto::ProtoObject* r,
                                         const proto::ProtoObject* const* a,
                                         int argc) {
     if (argc != 1) throw NativeError("at: expects 1 arg (index)");
-    const proto::ProtoList* data = arrayData(ctx, r);
+    const proto::ProtoList* data = arrayData(rt, ctx, r);
     const IndexArg index = indexArg(ctx, a[0], "Array>>at:");
     long long idx1 = index.value;                    // 1-based
     long long n    = static_cast<long long>(data->getSize(ctx));
@@ -788,12 +805,12 @@ const proto::ProtoObject* prim_Array_at(STRuntime&, proto::ProtoContext* ctx,
 // anArray at: index put: value → replace the element at the 1-based index by
 // swapping `__data__` with the snapshot setAt returns. Returns the stored
 // value (Smalltalk at:put: convention). Out of range signals an Error.
-const proto::ProtoObject* prim_Array_atPut(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Array_atPut(STRuntime& rt, proto::ProtoContext* ctx,
                                            const proto::ProtoObject* r,
                                            const proto::ProtoObject* const* a,
                                            int argc) {
     if (argc != 2) throw NativeError("at:put: expects 2 args (index, value)");
-    const proto::ProtoList* data = arrayData(ctx, r);
+    const proto::ProtoList* data = arrayData(rt, ctx, r);
     const IndexArg index = indexArg(ctx, a[0], "Array>>at:put:");
     long long idx1 = index.value;                    // 1-based
     long long n    = static_cast<long long>(data->getSize(ctx));
@@ -805,11 +822,11 @@ const proto::ProtoObject* prim_Array_atPut(STRuntime&, proto::ProtoContext* ctx,
     const proto::ProtoObject* value = a[1] ? a[1] : PROTO_NONE;
     const proto::ProtoList* updated =
         data->setAt(ctx, listIndex(idx1 - 1), value);
-    // `updated` is a fresh list held across the key interning + setAttribute.
+    // `updated` is a fresh list held across setAttribute, which allocates.
     TransientPin pinUpdated(
         ctx, reinterpret_cast<const proto::ProtoObject*>(updated));
     const_cast<proto::ProtoObject*>(r)->setAttribute(
-        ctx, dataKey(ctx), updated->asObject(ctx));
+        ctx, rt.bootstrap().sym.data, updated->asObject(ctx));
     return value;
 }
 
@@ -844,12 +861,19 @@ const proto::ProtoObject* prim_Array_classNew(STRuntime& rt, proto::ProtoContext
     if (argc != 1) throw NativeError("new: expects 1 arg (size)");
     long long n = a[0]->asLong(ctx);
     if (n < 0) throw NativeError("Array new: negative size");
-    const proto::ProtoList* data = ctx->newList();
-    TransientPin pinData(
-        ctx, reinterpret_cast<const proto::ProtoObject*>(data));
-    for (long long i = 0; i < n; ++i) {
-        data = data->appendLast(ctx, PROTO_NONE);
-        pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
+    // One bulk construction (0.10.0): a single cell up to 5 elements, the
+    // protoCore builder beyond, instead of n appendLast copies. The elements
+    // are all nil, which needs no rooting.
+    const proto::ProtoList* data;
+    if (n <= 8) {
+        const proto::ProtoObject* nils[8] = { PROTO_NONE, PROTO_NONE, PROTO_NONE, PROTO_NONE,
+                                              PROTO_NONE, PROTO_NONE, PROTO_NONE, PROTO_NONE };
+        data = ctx->newList(static_cast<unsigned>(n), nils);
+    } else {
+        if (n > static_cast<long long>(UINT32_MAX))
+            throw NativeError("Array new: size too large");
+        std::vector<const proto::ProtoObject*> nils(static_cast<std::size_t>(n), PROTO_NONE);
+        data = ctx->newList(static_cast<unsigned>(n), nils.data());
     }
     return instantiateAs(rt, ctx, cls, rt.bootstrap().arrayProto, makeArrayInstance(rt, ctx, data));
 }
