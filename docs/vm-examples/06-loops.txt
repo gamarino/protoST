@@ -55,7 +55,7 @@ module main: <module>
      37  PUSH_LOCAL         1     ; i
      38  PUSH_CONST         8     ; 3
      39  BIN_INT_LT         9     ; #<
-     40  ASSERT_BOOL_OR_DNU 7     ; #whileTrue:
+     40  ASSERT_LOOP_BOOL   7     ; #whileTrue:
      41  JUMP_IF_FALSE      7     ; -> 49
      42  PUSH_LOCAL         1     ; i
      43  PUSH_CONST         10    ; 1

@@ -1000,7 +1000,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     labels[static_cast<unsigned int>(Op::BIN_INT_GE)]       = &&L_BIN_INT_GE;
     labels[static_cast<unsigned int>(Op::BIN_INT_GT)]       = &&L_BIN_INT_GT;
     labels[static_cast<unsigned int>(Op::BIN_INT_EQ)]       = &&L_BIN_INT_EQ;
-    labels[static_cast<unsigned int>(Op::ASSERT_BOOL_OR_DNU)] = &&L_ASSERT_BOOL_OR_DNU;
+    labels[static_cast<unsigned int>(Op::ASSERT_LOOP_BOOL)] = &&L_ASSERT_LOOP_BOOL;
     labels[static_cast<unsigned int>(Op::PUSH_BLOCK)]       = &&L_PUSH_BLOCK;
     labels[static_cast<unsigned int>(Op::PUSH_CAPTURED)]    = &&L_PUSH_CAPTURED;
     labels[static_cast<unsigned int>(Op::STORE_CAPTURED)]   = &&L_STORE_CAPTURED;
@@ -2299,44 +2299,18 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 gcSafepoint(ctx);
                 DISPATCH_DIRECT();
             } break;
-            case Op::ASSERT_BOOL_OR_DNU: L_ASSERT_BOOL_OR_DNU: {
-                // 2026-05-24 correctness: the inlined whileTrue: /
-                // whileFalse: paths emit this BEFORE the JUMP_IF_FALSE /
-                // JUMP_IF_TRUE that follows, and an inlined value
-                // conditional (ifTrue:, and:, ...) reaches it out of line
-                // through JUMP_IF_NOT_BOOL, with a JUMP to the end of the
-                // expression after it.  JUMP_IF_FALSE only branches
-                // when the value is exactly PROTO_FALSE, so without this
-                // guard a non-Boolean receiver (e.g. `123 ifTrue: [x]`)
-                // would silently take the not-PROTO_FALSE branch and
-                // execute the body — a regression vs the SEND_KEYWORD
-                // dispatch that previously raised doesNotUnderstand:ifTrue:.
-                // The guard peeks the value (no pop — JUMP_IF_FALSE pops
-                // it on either branch), validates, and on a non-Boolean
-                // signals MessageNotUnderstood through the standard
-                // handler-stack path.  `arg` is the const-pool index of
-                // the selector symbol that the call site used (so
-                // `e messageText` reads back informatively).
+            case Op::ASSERT_LOOP_BOOL: L_ASSERT_LOOP_BOOL: {
+                // The condition of an inlined whileTrue: / whileFalse:
+                // (Opcodes.h). A non-Boolean is replaced by the truth a
+                // resumed NonBooleanReceiver gives, as in the primitives.
                 Frame& f = frames_.back();
                 const proto::ProtoObject* v = peek(f);
                 if (v == PROTO_TRUE || v == PROTO_FALSE) {
                     DISPATCH_DIRECT();
                 }
-                // Non-Boolean receiver: build "doesNotUnderstand: <sel>"
-                // exactly like the SEND handler does on an unresolved
-                // selector.  The signal goes through signalErrorOfClass
-                // which throws UnwindToHandler on a handler match or
-                // UnhandledSTException otherwise — matching the
-                // pre-inline behaviour exactly.
-                const std::string& selStr = f.m->constSymbol(arg);
-                // Pop the bad value before we signal so the operand
-                // stack is the same shape the non-inlined SEND would
-                // have left it in.
-                const proto::ProtoObject* badRecv = pop(f);
-                auto* r = doesNotUnderstand(ctx, badRecv, selStr, nullptr, 0);
-                // A resumed handler would push `r` as the message's
-                // apparent result; non-resumable MNU normally threw.
-                push(f, r ? r : PROTO_NONE);
+                const bool truth = loopConditionIsTrue(rt_, ctx, v, f.m->constSymbol(arg));
+                pop(f);
+                push(f, truth ? PROTO_TRUE : PROTO_FALSE);
                 DISPATCH_DIRECT();
             }
             case Op::JUMP_IF_TRUE: L_JUMP_IF_TRUE: {

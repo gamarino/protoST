@@ -74,6 +74,9 @@ struct Bootstrap {
     const proto::ProtoObject* zeroDivideProto    = nullptr;   // ZeroDivide < ArithmeticError
     const proto::ProtoObject* messageProto       = nullptr;   // Message (selector, arguments)
     const proto::ProtoObject* blockCannotReturnProto    = nullptr;
+    // NonBooleanReceiver < Error, resumable: a loop condition that is not a
+    // Boolean (loopConditionIsTrue).
+    const proto::ProtoObject* nonBooleanReceiverProto   = nullptr;
     // Track 2 slice a (COL-a): collection class hierarchy.
     //   Collection                 (abstract — shared iteration protocol)
     //     |-- SequenceableCollection (abstract — ordered, indexable)

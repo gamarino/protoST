@@ -529,6 +529,9 @@ struct STRuntime::Impl {
         globals->setAttribute(rootCtx,
             proto::ProtoString::createSymbol(rootCtx, "BlockCannotReturn"),
             bootstrap.blockCannotReturnProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "NonBooleanReceiver"),
+            bootstrap.nonBooleanReceiverProto);
 
         // Track 2 slice a (COL-a): register the collection class hierarchy in
         // globals so user code can name `Collection`, `Array`, etc. and do
@@ -698,6 +701,7 @@ struct STRuntime::Impl {
             // runtime's whole lifetime, like every other built-in class.
             pinPermanent(bootstrap.messageNotUnderstoodProto);
             pinPermanent(bootstrap.blockCannotReturnProto);
+            pinPermanent(bootstrap.nonBooleanReceiverProto);
             // Track 2 slice a (COL-a): the collection prototypes carry the
             // iteration protocol + Array base operations — pin them for the
             // runtime's whole lifetime, exactly like the other built-in classes.

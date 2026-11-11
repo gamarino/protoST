@@ -48,7 +48,7 @@ const char* opName(Op op) {
         case Op::BIN_INT_GE:         return "BIN_INT_GE";
         case Op::BIN_INT_GT:         return "BIN_INT_GT";
         case Op::BIN_INT_EQ:         return "BIN_INT_EQ";
-        case Op::ASSERT_BOOL_OR_DNU: return "ASSERT_BOOL_OR_DNU";
+        case Op::ASSERT_LOOP_BOOL: return "ASSERT_LOOP_BOOL";
         case Op::SEND_CALL:          return "SEND_CALL";
         case Op::DEFINE_CAPTURED:    return "DEFINE_CAPTURED";
         case Op::STORE_CLASSVAR:     return "STORE_CLASSVAR";
@@ -241,7 +241,7 @@ void listModule(const BytecodeModule& m, const std::string& path, std::string& o
             case Op::BIN_INT_LE:  case Op::BIN_INT_LT:
             case Op::BIN_INT_GE:  case Op::BIN_INT_GT:
             case Op::BIN_INT_EQ:
-            case Op::ASSERT_BOOL_OR_DNU:
+            case Op::ASSERT_LOOP_BOOL:
                 withOperand("#" + nameAt(m, in.arg));
                 break;
             case Op::SEND_KEYWORD:

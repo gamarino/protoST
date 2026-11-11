@@ -588,6 +588,27 @@ const proto::ProtoObject* signalErrorOfClass(STRuntime& rt,
     return signalInstance(rt, ctx, exc);
 }
 
+bool loopConditionIsTrue(STRuntime& rt, proto::ProtoContext* ctx,
+                         const proto::ProtoObject* value, std::string_view selector) {
+    if (value == PROTO_TRUE) return true;
+    if (value == PROTO_FALSE) return false;
+    // A primitive's condition value is held only here (the block's answer).
+    TransientPin pinValue(ctx, value);
+    const proto::ProtoObject* exc =
+        const_cast<proto::ProtoObject*>(rt.bootstrap().nonBooleanReceiverProto)
+            ->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinExc(ctx, exc);
+    std::string text = "the condition of ";
+    text += selector;
+    text += " is not a Boolean (it is the exception's object); "
+            "a handler may resume with true or false";
+    exc->setAttribute(ctx, msgTextKey(ctx), makeString(ctx, text));
+    exc->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "_iv_object"),
+                      value ? value : PROTO_NONE);
+    const proto::ProtoObject* resumed = signalInstance(rt, ctx, exc);
+    return resumed != PROTO_FALSE;
+}
+
 // Signal a fresh instance of the global class named `className` (an Error
 // subclass defined by the kernel, such as SubscriptOutOfBounds), or a plain
 // Error when no such global exists.

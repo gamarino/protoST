@@ -5,6 +5,7 @@
 #include "runtime/Bootstrap.h"
 #include "runtime/BytecodeModule.h"
 #include "runtime/ExecutionEngine.h"
+#include "runtime/NativeExceptionBridge.h"
 #include "protoCore.h"
 
 #include <stdexcept>
@@ -152,14 +153,16 @@ const proto::ProtoObject* prim_Block_value(STRuntime& rt, proto::ProtoContext* c
     return invokeBlock(rt, ctx, r, a, argc);
 }
 
+// The loop protocol of a block. The condition is the receiver's value; one
+// that is not a Boolean goes through loopConditionIsTrue (a resumable
+// NonBooleanReceiver, the resumed value true unless it is false), the rule of
+// the inlined loops (ASSERT_LOOP_BOOL) too. Until 0.10.0 these primitives
+// took any non-true value as false.
 const proto::ProtoObject* prim_Block_whileTrue(STRuntime& rt, proto::ProtoContext* ctx,
                                                 const proto::ProtoObject* r,
                                                 const proto::ProtoObject* const* a, int) {
-    while (true) {
-        auto* cond = invokeBlock(rt, ctx, r, nullptr, 0);
-        if (cond != PROTO_TRUE) break;
+    while (loopConditionIsTrue(rt, ctx, invokeBlock(rt, ctx, r, nullptr, 0), "whileTrue:"))
         invokeBlock(rt, ctx, a[0], nullptr, 0);
-    }
     return PROTO_NONE;
 }
 
@@ -168,11 +171,8 @@ const proto::ProtoObject* prim_Block_whileTrue(STRuntime& rt, proto::ProtoContex
 const proto::ProtoObject* prim_Block_whileFalse(STRuntime& rt, proto::ProtoContext* ctx,
                                                  const proto::ProtoObject* r,
                                                  const proto::ProtoObject* const* a, int) {
-    while (true) {
-        auto* cond = invokeBlock(rt, ctx, r, nullptr, 0);
-        if (cond == PROTO_TRUE) break;
+    while (!loopConditionIsTrue(rt, ctx, invokeBlock(rt, ctx, r, nullptr, 0), "whileFalse:"))
         invokeBlock(rt, ctx, a[0], nullptr, 0);
-    }
     return PROTO_NONE;
 }
 
@@ -181,13 +181,13 @@ const proto::ProtoObject* prim_Block_whileFalse(STRuntime& rt, proto::ProtoConte
 const proto::ProtoObject* prim_Block_whileTrueNoArg(STRuntime& rt, proto::ProtoContext* ctx,
                                                      const proto::ProtoObject* r,
                                                      const proto::ProtoObject* const*, int) {
-    while (invokeBlock(rt, ctx, r, nullptr, 0) == PROTO_TRUE) { /* loop */ }
+    while (loopConditionIsTrue(rt, ctx, invokeBlock(rt, ctx, r, nullptr, 0), "whileTrue")) {}
     return PROTO_NONE;
 }
 const proto::ProtoObject* prim_Block_whileFalseNoArg(STRuntime& rt, proto::ProtoContext* ctx,
                                                       const proto::ProtoObject* r,
                                                       const proto::ProtoObject* const*, int) {
-    while (invokeBlock(rt, ctx, r, nullptr, 0) != PROTO_TRUE) { /* loop */ }
+    while (!loopConditionIsTrue(rt, ctx, invokeBlock(rt, ctx, r, nullptr, 0), "whileFalse")) {}
     return PROTO_NONE;
 }
 

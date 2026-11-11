@@ -156,7 +156,7 @@ unsigned int BytecodeModule::computeMaxOperandDepth() const {
             case Op::JUMP_BACK: case Op::RETURN: case Op::RETURN_TOP:
                 reachable = false;
                 break;
-            default:   // ASSERT_BOOL_OR_DNU, MAKE_CAPTURED, IVAR_GROUP,
+            default:   // ASSERT_LOOP_BOOL, MAKE_CAPTURED, IVAR_GROUP,
                        // DEOPT_ENTER/EXIT/CHECK, PUSH_DEOPT_BLOCK: no change
                 break;
         }

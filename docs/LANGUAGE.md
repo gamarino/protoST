@@ -1265,6 +1265,19 @@ i := 1.
 The receiver block is the condition; while it evaluates to `true`, the
 argument block is evaluated. `whileTrue:` returns `nil`.
 
+A condition that answers anything but `true` or `false` signals
+**`NonBooleanReceiver`** (an `Error`, resumable, as in Pharo), whose
+`object` is the value. The loop takes the value a handler resumes with as
+true unless it is `false`. The rule is the same for `whileTrue:`,
+`whileFalse:`, `whileTrue` and `whileFalse`, compiled inline or sent (since
+0.10.0; before, an inlined loop signalled `doesNotUnderstand:` of its
+selector to the value, a sent `whileTrue:` stopped and a sent `whileFalse:`
+ran its body).
+
+```smalltalk
+[ [ 3 ] whileTrue: [ ] ] on: NonBooleanReceiver do: [ :e | e object ]   "=> 3"
+```
+
 **Numeric iteration** — `to:do:` and `to:by:do:` on a number iterate:
 
 ```smalltalk
@@ -1388,7 +1401,8 @@ Exception                  (root; resumable)
     KeyNotFound            (Dictionary>>at: with an absent key)
     NotFound               (remove: of an absent element)
     BlockCannotReturn      (§7.1)
-    ModificationForbidden  (at:put: on a String or a ByteArray)
+    ModificationForbidden  (at:put: on a String or a ByteArray; instVarNamed:put: on a block)
+    NonBooleanReceiver     (resumable; a loop condition that is not a Boolean; §6.4)
     TimeoutError           (a Future did not settle before its deadline; §10.3)
     InvalidArgument        (protoCore: a malformed argument, a wrong-typed operand; §8.7)
   Warning                  (resumable)

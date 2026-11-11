@@ -133,6 +133,14 @@ const proto::ProtoObject* resignalException(STRuntime& rt, proto::ProtoContext* 
 bool isExceptionInstance(STRuntime& rt, proto::ProtoContext* ctx,
                          const proto::ProtoObject* obj);
 
+// The truth of a loop condition (whileTrue:, whileFalse:, whileTrue,
+// whileFalse; inlined or sent). A Boolean is itself. Any other value signals
+// a resumable NonBooleanReceiver whose `object` is the value; the value a
+// handler resumes with counts as true unless it is false, as in Pharo
+// (ProtoObject>>mustBeBooleanIn:). Unhandled, it is an error.
+bool loopConditionIsTrue(STRuntime& rt, proto::ProtoContext* ctx,
+                         const proto::ProtoObject* value, std::string_view selector);
+
 const proto::ProtoObject* signalErrorOfClass(STRuntime& rt,
                                              proto::ProtoContext* ctx,
                                              const proto::ProtoObject* errorClass,

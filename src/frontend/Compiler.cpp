@@ -2054,7 +2054,7 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
         // Guard non-Boolean cond results — same correctness fix as for
         // ifTrue:/ifFalse: above. The cond block re-evaluates every
         // iteration, so the guard is at loopTest:, not pre-loop.
-        m.emitWide(Op::ASSERT_BOOL_OR_DNU,
+        m.emitWide(Op::ASSERT_LOOP_BOOL,
                    static_cast<unsigned int>(selSym), currentLine_);
         // Exit loop when cond does NOT match polarity.
         const size_t jExit = emitForwardJump(m, invert ? Op::JUMP_IF_TRUE : Op::JUMP_IF_FALSE);

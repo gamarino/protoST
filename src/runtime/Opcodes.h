@@ -75,18 +75,16 @@ enum class Op : uint8_t {
     BIN_INT_GE      = 35,   // >=
     BIN_INT_GT      = 36,   // >
     BIN_INT_EQ      = 37,   // =
-    // 2026-05-24: type guard for inlined ifTrue:/ifFalse:/whileTrue:.
-    // The standalone JUMP_IF_FALSE / JUMP_IF_TRUE opcodes silently
-    // fall through when the receiver is not PROTO_TRUE / PROTO_FALSE,
-    // which produced a Smalltalk-semantic regression: `123 ifTrue: [x]`
-    // executed the block instead of raising doesNotUnderstand:ifTrue:.
-    // ASSERT_BOOL_OR_DNU peeks the top of stack and, if it is not a
-    // Boolean, pops it and sends doesNotUnderstand: with the selector from
-    // the operand (a const-pool symbol index), pushing the answer of a
-    // resumed MessageNotUnderstood. On a Boolean it is a no-op and the
-    // stack is unchanged. The compiler emits it before the JUMP_IF_FALSE /
-    // JUMP_IF_TRUE of an inlined whileTrue: / whileFalse:.
-    ASSERT_BOOL_OR_DNU = 38, // arg = selector const index
+    // The type guard of an inlined whileTrue: / whileFalse: condition,
+    // before its JUMP_IF_FALSE / JUMP_IF_TRUE (which treat anything but
+    // false / true as the other value). A Boolean on top of the stack is
+    // left in place. Any other value is replaced by the truth that
+    // loopConditionIsTrue answers: it signals a resumable
+    // NonBooleanReceiver, and the resumed value counts as true unless it
+    // is false (Pharo's rule), the rule of the loop primitives too.
+    // Named ASSERT_BOOL_OR_DNU until 0.10.0, when it sent
+    // doesNotUnderstand: of the loop selector to the condition's value.
+    ASSERT_LOOP_BOOL = 38, // arg = selector const index (for the message)
     // 2026-06-13: protoCore-style call-form send (positional + named args).
     // The single operand is a const-pool index naming a *mangled* selector
     // of the form `<name>#<nPos>[#<sortedKey1>#<sortedKey2>...]`. The

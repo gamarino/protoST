@@ -72,6 +72,8 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     out.messageProto    = const_cast<proto::ProtoObject*>(out.objectProto)->newChild(ctx, /*isMutable=*/true);
     out.blockCannotReturnProto =
         const_cast<proto::ProtoObject*>(out.errorProto)->newChild(ctx, /*isMutable=*/true);
+    out.nonBooleanReceiverProto =
+        const_cast<proto::ProtoObject*>(out.errorProto)->newChild(ctx, /*isMutable=*/true);
 
     // Track 2 slice a (COL-a): collection class hierarchy. Ordinary mutable
     // prototypes — the abstract `Collection` carries the derived iteration
@@ -184,6 +186,7 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     stamp(out.zeroDivideProto,           "ZeroDivide");
     stamp(out.messageProto,              "Message");
     stamp(out.blockCannotReturnProto,    "BlockCannotReturn");
+    stamp(out.nonBooleanReceiverProto,   "NonBooleanReceiver");
     stamp(out.collectionProto,             "Collection");
     stamp(out.sequenceableCollectionProto, "SequenceableCollection");
     stamp(out.hashedCollectionProto,       "HashedCollection");
@@ -217,6 +220,8 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     // becomes the send's result.
     markResumable(out.messageNotUnderstoodProto, true);
     markResumable(out.arithmeticErrorProto, true);
+    // As in Pharo, a NonBooleanReceiver is resumed with the truth to use.
+    markResumable(out.nonBooleanReceiverProto, true);
     // Unhandled, every Error ends the activation -- a resumable one such as
     // MessageNotUnderstood included -- while an unhandled Warning or plain
     // Exception resumes with nil. The class decides, not resumability.
@@ -280,7 +285,8 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
              out.actorProto, out.futureProto, out.atomProto, out.nilProto,
              out.exceptionProto, out.errorProto, out.warningProto,
              out.messageNotUnderstoodProto, out.arithmeticErrorProto, out.zeroDivideProto,
-             out.messageProto, out.blockCannotReturnProto, out.collectionProto,
+             out.messageProto, out.blockCannotReturnProto, out.nonBooleanReceiverProto,
+             out.collectionProto,
              out.sequenceableCollectionProto, out.hashedCollectionProto, out.arrayProto,
              out.orderedCollectionProto, out.intervalProto, out.setProto, out.bagProto,
              out.dictionaryProto, out.associationProto, out.behaviorProto, out.classProto,

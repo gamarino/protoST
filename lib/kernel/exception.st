@@ -78,3 +78,10 @@ Notification >> messageText: aText
 
 Notification >> messageText
   ^ notificationText ifNil: [super messageText].
+
+"Signalled when a loop condition (whileTrue:, whileFalse:, whileTrue,
+ whileFalse; compiled inline or sent) answers an object that is not a
+ Boolean, as in Pharo. Resumable: the loop takes the resumed value as true
+ unless it is false. object answers the condition's value."
+NonBooleanReceiver >> object
+  ^ self instVarNamed: 'object'.

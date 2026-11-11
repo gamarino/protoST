@@ -148,6 +148,19 @@ minor release, so the two services arrive in 0.5.0.
   `08-exceptions/inlined-conditional-non-boolean-like-send.st` (failed
   before: 5 of 11 rows), `inlined-conditional-reaches-receiver-method.st`
   (failed before), `inlined-conditional-kept-block-is-refused.st`.
+- **One rule for a loop condition that is not a Boolean.** The four loop
+  forms disagreed: an inlined `whileTrue:` / `whileFalse:` sent
+  `doesNotUnderstand: whileTrue:` to the condition's value (which is not the
+  receiver of `whileTrue:`), a sent `[3] whileTrue: aBlock` stopped and
+  answered nil, a sent `[3] whileFalse: aBlock` ran its body, without end
+  unless something else stopped it, and so did `whileTrue` / `whileFalse`.
+  Every form now signals `NonBooleanReceiver`, a new resumable `Error` whose
+  `object` is the value, and takes the resumed value as true unless it is
+  `false`: Pharo's class and rule (`ProtoObject>>mustBeBooleanIn:`). The
+  inlined guard is renamed `ASSERT_LOOP_BOOL` (still 38; it was
+  `ASSERT_BOOL_OR_DNU`). Test:
+  `08-exceptions/loop-non-boolean-condition-one-rule.st` (16 rows, inlined
+  and sent forms side by side).
 - **`lib/random.st`: `nextInt:` and `between:and:` alternated parity.** Both
   took the generator's state modulo the range. The generator is a 32-bit LCG
   with a power-of-two modulus, in which bit k of the state has period

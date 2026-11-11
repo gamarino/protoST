@@ -176,7 +176,10 @@ are noted where useful.
       the whole Message. A closure it keeps and evaluates after the send
       returned signals an Error when it uses the method's variables
       (docs/VM.md 1.4). Pharo 10+ signals `NonBooleanReceiver` here instead;
-      Pharo 9 re-sent the expression, as protoST does
+      Pharo 9 re-sent the expression, as protoST does. A loop condition
+      that is not a Boolean signals the resumable `NonBooleanReceiver` in
+      every loop form, inlined or sent; the resumed value is true unless it
+      is false, as in Pharo (0.10.0)
 
 ### Non-local return
 - [x] `^expr` in a nested block returns from the enclosing method
