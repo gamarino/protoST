@@ -20,16 +20,21 @@
  A Symbol decodes as a String: a Symbol of up to six bytes already is a String
  here (D35), so no other rule could tell #foo from #foobarbaz.
 
- A cyclic structure signals Error ('MessagePack: cyclic structure'), and so
- does one nested deeper than 1024 levels, the depth the decoder accepts
- (msgpack-python 1.2's unpacker limit; ProtoBase format 4 records nest up to 1024). A
- container met twice without being inside itself is shared, not cyclic.
+ A cyclic structure signals Error ('MessagePack: cyclic structure'). A
+ structure nested deeper than 1024 levels signals MessagePackDepthExceeded, an
+ Error, on encode and on decode alike: 1024 is the depth the decoder accepts
+ (msgpack-python 1.2's unpacker limit; ProtoBase format 4 records nest up to
+ 1024), and the class lets a caller name its own limit without reading the
+ message. A container met twice without being inside itself is shared, not
+ cyclic.
 
  Map keys are strict by default, as in msgpack-python: only str and bin keys
  decode. decode:strictKeys: false accepts any key. A Dictionary has no order
  (protoCore's attribute order is unspecified), so encoding one writes its
  entries in an unspecified order and decoding one drops the wire order; use
  decodeOrdered: and MessagePackMap when the order of the bytes matters."
+
+Error subclass: #MessagePackDepthExceeded.
 
 Object subclass: #MessagePack instanceVariableNames: ''.
 

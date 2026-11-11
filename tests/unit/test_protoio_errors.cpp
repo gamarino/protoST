@@ -57,6 +57,7 @@ const char* expectedClass(Kind kind) {
         case Kind::InvalidArgument: return "Error";
         case Kind::Internal: return "InternalError";
         case Kind::Conflict: return "Error";
+        case Kind::DepthLimit: return "MessagePackDepthExceeded";
     }
     return nullptr;
 }
@@ -67,7 +68,7 @@ const char* expectedClass(Kind kind) {
 // The last enumerator of protoio::Error::Kind; the enumerators run from 0
 // to it without gaps (protoio/error.h appends new kinds). A kind added after
 // it is caught by the switch above.
-constexpr Kind kLastKind = Kind::Conflict;
+constexpr Kind kLastKind = Kind::DepthLimit;
 constexpr int kKindCount = static_cast<int>(kLastKind) + 1;
 static_assert(static_cast<int>(Kind::FileNotFound) == 0, "the kinds start at 0");
 

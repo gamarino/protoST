@@ -463,6 +463,11 @@ minor release, so the two services arrive in 0.5.0.
   v2.0.0rc2 (a value nests up to 1022 containers, the record envelope adds 2).
   A structure 513 to 1024 deep that signalled `Error` now encodes. Test
   `15-binary/msgpack_depth_boundary.st` pins 1024 / 1025.
+- **A structure nested too deep signals `MessagePackDepthExceeded`**, a new
+  `Error` subclass, on encode and decode (protoIO 0.5.0's
+  `Error::Kind::DepthLimit`), where it signalled a plain `Error`. `on: Error
+  do:` still catches it; protoBaseST reports ProtoBase's `MAX_VALUE_DEPTH`
+  text from the class instead of matching the message.
 
 - **An `Array` of Integers is no longer bytes (D45, ruling R11).** As the
   0.9.0 deprecation warning announced, every write that takes bytes or a
