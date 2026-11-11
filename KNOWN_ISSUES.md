@@ -292,8 +292,9 @@ the thread -- the ProtoException is replaced by a self-contained
 `protoST::STUncaughtError` (`include/protoST/STUncaughtError.h`), a
 `std::runtime_error` that holds plain strings only: `what()` is the
 description (`AppError: too much`), `report()` the text the binary prints
-(with the active methods), `trace()`, and `classNames()` / `isKindOf:` for the
-exception's class chain. The description is read while the space is alive,
+(with the active methods), `trace()`, and `classNames()` / `isKindOf()` for the
+exception's class and its ancestors, mixins included, so `isKindOf("M")`
+answers what `on: M do:` would have. The description is read while the space is alive,
 and the new exception is thrown after the catch clause has ended, so the
 ProtoException and its pin are released first. Everywhere else the
 ProtoException leaves unchanged, so protoCore's unified exceptions keep
@@ -305,9 +306,13 @@ destroys after it. The `protost` binary, the REPL and the debug adapter print
 
 Tests: `tests/unit/test_k20_embedder_boundary.cpp` (the pattern above with
 `std::exception`, with `STUncaughtError` and its class chain, a protoCore
-error, a module load, and a host-space runtime that keeps the
-ProtoException). The `std::exception` case, built against 4b47115, dies with
-SIGSEGV. `test_unified_exceptions.cpp` now runs its runtime in a host space,
+error, a module load, a mixin in the class chain, and a host-space runtime
+that keeps the ProtoException). The `std::exception` case, built against
+4b47115, dies with SIGSEGV. A module error imported by a caller in a space
+protoST does not own reaches it as `STUncaughtError` too: that import runs on
+protoST's root context, an embedder boundary
+(`tests/unit/test_cross_runtime_provider.cpp`); a caller in protoST's space,
+or a guest runtime's host, still gets the ProtoException. `test_unified_exceptions.cpp` now runs its runtime in a host space,
 the setting the unified-exception contract it checks is about.
 
 ### K16 — The smallest subnormal Float could not be written as a literal (resolved, unreleased)

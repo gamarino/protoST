@@ -13,12 +13,13 @@ Object >> value
 "--- class membership -------------------------------------------------------"
 
 Object >> isKindOf: aClass
+  "Whether the receiver is an instance of aClass or of a class that has
+   aClass among its ancestors, superclasses and mixins (`uses:`,
+   addBehavior:) alike: a mixin is a parent class in protoST (LANGUAGE.md
+   §4.11), the same ancestor set `on: aClass do:` selects an exception by."
   | c |
   c := self class.
-  [c notNil] whileTrue: [
-    c == aClass ifTrue: [^ true].
-    c := c superclass].
-  ^ false.
+  ^ c == aClass or: [c __hasAncestor: aClass].
 
 Object >> isMemberOf: aClass
   ^ self class == aClass.

@@ -1298,13 +1298,22 @@ const proto::ProtoObject* STRuntime::atEmbedderBoundary(proto::ProtoContext* ctx
         if (const auto* u = dynamic_cast<const UnhandledSTException*>(&e)) trace = u->trace();
         const proto::ProtoString* nameKey = bootstrap().sym.className;
         const proto::ProtoObject* v = e.value();
+        // The classes of every ancestor in resolution order -- superclasses
+        // and `uses:` mixins alike, the set `on: aClass do:` selects by
+        // (HandlerStack.cpp matchesGuard), so isKindOf() answers as a
+        // handler would (review round 3, R3-L2).
         if (v && v != PROTO_NONE && (reinterpret_cast<uintptr_t>(v) & 0x3F) == 0) {
-            for (const proto::ProtoObject* p = v->getFirstParent(ctx); p && p != PROTO_NONE;
-                 p = p->getFirstParent(ctx)) {
-                const proto::ProtoObject* n = p->getOwnAttributeDirect(ctx, nameKey);
-                if (n && n != PROTO_NONE)
-                    if (const proto::ProtoString* s = n->asString(ctx))
-                        classNames.push_back(s->toStdString(ctx));
+            if (const proto::ProtoList* chain = v->getParents(ctx)) {
+                TransientPin pinChain(ctx, reinterpret_cast<const proto::ProtoObject*>(chain));
+                const proto::proto_ulong n = chain->getSize(ctx);
+                for (proto::proto_ulong i = 0; i < n; ++i) {
+                    const proto::ProtoObject* p = chain->getAt(ctx, listIndex(i));
+                    if (!p || p == PROTO_NONE) continue;
+                    const proto::ProtoObject* name = p->getOwnAttributeDirect(ctx, nameKey);
+                    if (name && name != PROTO_NONE)
+                        if (const proto::ProtoString* s = name->asString(ctx))
+                            classNames.push_back(s->toStdString(ctx));
+                }
             }
         }
     }

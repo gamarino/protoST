@@ -206,10 +206,14 @@ STModuleProvider::loadForForeignCaller(STRuntime& rt, const std::string& logical
         if (sharedSpace) sharedModule = mod;
         else mod->processOwnAttributes(stCtx, &bindings, collectBinding);
     } catch (const UnhandledSTException& u) {
-        // An uncaught protoST exception, or an error a module the top level
-        // used raised (its original ProtoException): a language value, which
-        // leaves to the importing runtime unchanged -- its handlers select it
-        // by the value's prototype chain, as for any protoCore language.
+        // Shared space (a guest runtime, or K18's foreign frame context in
+        // protoST's own space): the import runs on the caller's context, which
+        // is not protoST's, so importModuleFile is not an embedder boundary
+        // (K20) and an uncaught protoST exception, or an error a module the
+        // top level used raised (its original ProtoException), arrives here as
+        // a language value. It leaves to the importing runtime unchanged: its
+        // handlers select it by the value's prototype chain, as for any
+        // protoCore language, and the value lives in the space they share.
         failed = u.original() ? u.original() : std::current_exception();
     } catch (const proto::ProtoException&) {
         failed = std::current_exception();
@@ -217,6 +221,17 @@ STModuleProvider::loadForForeignCaller(STRuntime& rt, const std::string& logical
         // A parse error, a compile error, an import cycle. All carry a
         // message; the importing runtime's own boundary translates them into
         // its own exception type.
+        //
+        // Separate spaces (a caller in a space protoST does not own): the
+        // import runs on protoST's root context with no protoST code running,
+        // so importModuleFile is an embedder boundary of a runtime that owns
+        // its space (K20) and an uncaught protoST error arrives here as a
+        // protoST::STUncaughtError, a std::runtime_error carrying the
+        // description, the trace and the class chain as strings. It leaves as
+        // that, never as a ProtoException: the exception object lives in
+        // protoST's space, whose prototypes the caller's handlers cannot
+        // select by, and which may be destroyed before the caller's exception
+        // is (tests/unit/test_cross_runtime_provider.cpp).
         failed = std::current_exception();
     } catch (...) {
         // protoST's control-flow unwinds (NonLocalReturn, UnwindToHandler,

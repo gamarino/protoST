@@ -45,12 +45,15 @@ public:
     // The active methods alone ("  at Class>>selector (file:line)" lines);
     // empty when unknown.
     const std::string& trace() const noexcept { return trace_; }
-    // The exception's class and its superclasses, nearest first
-    // ({"ZeroDivide", "ArithmeticError", "Error", "Exception", "Object"}).
-    // Empty for a value that is not an instance of a protoST class.
+    // The exception's class and its ancestors in resolution order -- the
+    // superclasses and the `uses:` mixins alike, the classes `on:do:` selects
+    // it by ({"ZeroDivide", "ArithmeticError", "Error", "Exception",
+    // "Object"}). Empty for a value that is not an instance of a protoST
+    // class.
     const std::vector<std::string>& classNames() const noexcept { return classNames_; }
-    // Whether the exception was an instance of the class named `name` or of
-    // a subclass of it.
+    // Whether `on: <the class named name> do:` would have selected the
+    // exception: an instance of that class or of a class that has it as an
+    // ancestor (superclass or mixin), as `isKindOf:` answers.
     bool isKindOf(const std::string& name) const {
         for (const auto& n : classNames_) if (n == name) return true;
         return false;

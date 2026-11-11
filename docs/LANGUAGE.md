@@ -877,7 +877,9 @@ The metaclass protocol: `Foo class isMeta` is true (`Foo isMeta` false),
 that holds the method for `sel`, or `nil` (Pharo answers the CompiledMethod;
 protoST has no method objects, STATUS D52). A metaclass has one instance, its
 class: `Metaclass new` and `Foo class new` signal an `Error`; classes and
-their metaclasses are made by `subclass:`. `Foo copy` is a class with a
+their metaclasses are made by `subclass:`. `Behavior new` and `Class new`
+signal an `Error` too: Pharo's `Class new` makes an anonymous class, and
+protoST has none (a class is known by its name). `Foo copy` is a class with a
 metaclass of its own (a copy of `Foo class`), so a class-side method added
 to the copy does not reach `Foo`.
 
@@ -1010,6 +1012,16 @@ messages on every class object.
 parents (the *diamond* case) resolves to the **first** in this order; shared
 ancestors are visited once. `super` from a method of a multiply-inheriting
 class searches this same order, starting after the method's defining class.
+
+**Type tests count mixins.** A mixin is a parent class, so it is part of
+the type: `isKindOf: aClass` is true when aClass is the receiver's class or
+any of its ancestors, superclasses and `uses:` / `addBehavior:` mixins alike,
+and `aClass inheritsFrom: anotherClass` asks the same of a class. This is the
+ancestor set method lookup walks and `on: aClass do:` selects an exception by
+(§8), so a handler for a mixin catches what `isKindOf:` says is one.
+`allSuperclasses` lists the primary superclass chain only. Pharo's traits
+are not classes and do not count for `isKindOf:`; protoST's mixins are
+classes, as in languages with multiple inheritance (Python's `isinstance`).
 
 **Instance variables.** Each parent may declare its own instance variables;
 they combine as the union. A mixin declaring `instanceVariableNames:` works as

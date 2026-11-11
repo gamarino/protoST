@@ -113,10 +113,19 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
   deviation: Pharo answers the CompiledMethod, STATUS D52),
   `instanceVariableNames:` answers the receiver, `Metaclass new` and
   `Foo class new` signal an Error (a metaclass is made by `subclass:` only),
+  so do `Behavior new` and `Class new` (protoST has no anonymous classes),
   and `Foo copy` gets a metaclass of its own, so a class-side method added to
   the copy does not reach `Foo`. Tests: `metaclass-reflection-selectors.st`,
   `class-instance-variable-names.st`, `class-copy-has-own-metaclass.st`,
-  `metaclass-new-is-refused.st` (`tests/conformance/04-object-model/`).
+  `metaclass-new-is-refused.st`, `behavior-and-class-new-are-refused.st`
+  (`tests/conformance/04-object-model/`).
+- **`isKindOf:` and `inheritsFrom:` ignored mixins that `on:do:` honours.**
+  `[MixErr signal] on: Tagged do: [...]` caught an error whose class uses
+  `Tagged`, while `MixErr new isKindOf: Tagged` answered false. Both now
+  count every ancestor, superclasses and `uses:` / `addBehavior:` mixins
+  alike, the set method lookup and handler selection use (LANGUAGE.md
+  §4.11); `allSuperclasses` stays the primary superclass chain. Test:
+  `04-object-model/is-kind-of-counts-mixins.st`.
 - **`perform:` with a selector nothing understands bypassed
   `doesNotUnderstand:`.** It signalled the error directly, so a class with
   its own `doesNotUnderstand:` (a proxy) was not asked. It now sends

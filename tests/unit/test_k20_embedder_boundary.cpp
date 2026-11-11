@@ -52,6 +52,30 @@ TEST_CASE("K20: an unhandled error caught after the runtime is destroyed",
     REQUIRE(kind);
 }
 
+TEST_CASE("K20: isKindOf follows handler selection, mixins included",
+          "[k20][exceptions]") {
+    // Review round 3 (R3-L2): `on: R3Tagged do:` selects an exception whose
+    // class uses R3Tagged, so STUncaughtError::isKindOf("R3Tagged") holds,
+    // and classNames() lists the ancestors in resolution order.
+    auto bc = compile("Object subclass: #R3Tagged. "
+                      "Error subclass: #R3MixErr uses: { R3Tagged }. "
+                      "R3MixErr signal: 'mixed'.");
+    std::vector<std::string> classes;
+    bool tagged = false, error = false;
+    try {
+        protoST::STRuntime rt;
+        rt.runTopLevel(*bc);
+    } catch (const protoST::STUncaughtError& e) {
+        classes = e.classNames();
+        tagged = e.isKindOf("R3Tagged");
+        error = e.isKindOf("Error");
+    }
+    REQUIRE(!classes.empty());
+    REQUIRE(classes.front() == "R3MixErr");
+    REQUIRE(tagged);
+    REQUIRE(error);
+}
+
 TEST_CASE("K20: the plain std::exception embedder pattern", "[k20][exceptions]") {
     auto bc = compile("Object zork.");
     std::string message;

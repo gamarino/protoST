@@ -37,6 +37,7 @@
 #include "PosixEnv.h"
 
 #include "protoST/STRuntime.h"
+#include "protoST/STUncaughtError.h"
 #include "modules/STModuleProvider.h"
 #include "protoCore.h"
 
@@ -233,4 +234,47 @@ TEST_CASE("Track Y: a cross-runtime import from another thread is refused, not r
     REQUIRE(threw);
     REQUIRE(message.find("thread that constructed the protoST runtime") !=
             std::string::npos);
+}
+
+// K20 / review round 3 (R3-L3): an error a module's top level leaves
+// unhandled, imported by a caller in a space protoST does not own. The import
+// runs on protoST's root context with no protoST code running, an embedder
+// boundary of a runtime that owns its space, so the error reaches the caller
+// as a self-contained protoST::STUncaughtError (a std::runtime_error), never
+// as a ProtoException whose value lives in protoST's space. It must survive
+// the runtime: the caller catches it after the runtime is destroyed.
+TEST_CASE("Track Y: a module error reaches a caller in another space as STUncaughtError",
+          "[umd][interop][k20]") {
+    static int serial = 0;
+#if defined(_WIN32)
+    const long pid = static_cast<long>(_getpid());
+#else
+    const long pid = static_cast<long>(::getpid());
+#endif
+    const std::string name = "cross_runtime_failing_" + std::to_string(pid) + "_" +
+                             std::to_string(++serial);
+    { std::ofstream(name + ".st") << "Error subclass: #CrossModuleError.\n"
+                                     "CrossModuleError signal: 'module top level failed'.\n"; }
+    ::setenv("STPATH", ".", 1);
+
+    proto::ProtoSpace foreign;
+    proto::ProtoContext foreignCtx(&foreign, nullptr);
+    std::string message;
+    bool kind = false, protoException = false;
+    try {
+        protoST::STRuntime rt;
+        proto::ModuleProvider* provider =
+            proto::ProviderRegistry::instance().getProviderForSpec("provider:st");
+        REQUIRE(provider != nullptr);
+        provider->tryLoad(name, &foreignCtx);
+    } catch (const protoST::STUncaughtError& e) {
+        message = e.what();
+        kind = e.isKindOf("CrossModuleError") && e.isKindOf("Error");
+    } catch (const proto::ProtoException&) {
+        protoException = true;
+    }
+    std::remove((name + ".st").c_str());
+    REQUIRE_FALSE(protoException);
+    REQUIRE(message == "CrossModuleError: module top level failed");
+    REQUIRE(kind);
 }

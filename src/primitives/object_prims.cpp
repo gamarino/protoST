@@ -1433,6 +1433,21 @@ const proto::ProtoObject* prim_Behavior_lookupSelector(STRuntime& rt, proto::Pro
     return PROTO_NONE;
 }
 
+// aBehavior __hasAncestor: aClass → whether aClass is on the receiver's
+// parent chain, the primary superclasses and the `uses:` / addBehavior:
+// mixins alike (the receiver itself excluded). This is the ancestor set that
+// method lookup and `on:do:` handler selection use (HandlerStack.cpp
+// matchesGuard), so `isKindOf:` and `inheritsFrom:` answer the same question
+// as they do (review round 3, R3-L2).
+const proto::ProtoObject* prim_Behavior_hasAncestor(STRuntime&, proto::ProtoContext* ctx,
+                                                    const proto::ProtoObject* r,
+                                                    const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw NativeError("__hasAncestor: expects 1 arg");
+    const proto::ProtoObject* c = a[0];
+    if (!r || !c || r == c || c == PROTO_NONE) return PROTO_FALSE;
+    return r->hasParent(ctx, c) != 0 ? PROTO_TRUE : PROTO_FALSE;
+}
+
 // aMetaclass soleInstance → the class it describes (Pharo's soleInstance,
 // also instanceClass).
 const proto::ProtoObject* prim_Metaclass_soleInstance(STRuntime& rt, proto::ProtoContext* ctx,
@@ -1451,6 +1466,19 @@ const proto::ProtoObject* prim_Metaclass_refuseNew(STRuntime&, proto::ProtoConte
                                                    const proto::ProtoObject* const*, int) {
     throw ClassedErrorSignal("Error",
         "A Metaclass should only have one instance: a class and its metaclass are made by subclass:");
+}
+
+// Behavior new, Class new (and basicNew, newChild), review round 3 (R3-L1):
+// a behavior is a class or a metaclass, and protoST makes both only with
+// subclass:, which names the class and gives it its metaclass. Pharo's
+// `Class new` builds an anonymous class; protoST has no anonymous classes
+// (a class is known by its name), so the message is refused, as for a
+// metaclass, instead of answering an object that is neither (STATUS D52).
+const proto::ProtoObject* prim_Behavior_refuseNew(STRuntime&, proto::ProtoContext*,
+                                                  const proto::ProtoObject*,
+                                                  const proto::ProtoObject* const*, int) {
+    throw ClassedErrorSignal("Error",
+        "A Behavior is a class or a metaclass, made by subclass:; protoST has no anonymous classes");
 }
 
 // aClass selectors → the selectors of the methods the class itself defines
@@ -1880,6 +1908,7 @@ void installObjectPrimitives(STRuntime& rt) {
     bindPrimitive(rt, b.behaviorProto, "__instVarNamesString", reg.registerPrim(prim_Object_instVarNamesString));
     bindPrimitive(rt, b.behaviorProto, "canUnderstand:", reg.registerPrim(prim_Object_canUnderstand));
     bindPrimitive(rt, b.behaviorProto, "lookupSelector:", reg.registerPrim(prim_Behavior_lookupSelector));
+    bindPrimitive(rt, b.behaviorProto, "__hasAncestor:", reg.registerPrim(prim_Behavior_hasAncestor));
     {
         const int sole = reg.registerPrim(prim_Metaclass_soleInstance);
         bindPrimitive(rt, b.metaclassProto, "soleInstance", sole);
@@ -1887,9 +1916,13 @@ void installObjectPrimitives(STRuntime& rt) {
         // A metaclass makes no instances, and Metaclass makes no metaclasses
         // from user code (D52).
         const int refuse = reg.registerPrim(prim_Metaclass_refuseNew);
+        // Behavior class, which Class class and Metaclass class inherit: a
+        // send to Behavior, Class or a subclass of them (R3-L1).
+        const int refuseBehavior = reg.registerPrim(prim_Behavior_refuseNew);
         for (const char* sel : {"new", "basicNew", "newChild"}) {
             bindPrimitive(rt, b.metaclassProto, sel, refuse);
             bindClassPrimitive(rt, b.metaclassProto, sel, refuse);
+            bindClassPrimitive(rt, b.behaviorProto, sel, refuseBehavior);
         }
     }
     bindPrimitive(rt, b.behaviorProto, "selectors", reg.registerPrim(prim_Object_selectors));

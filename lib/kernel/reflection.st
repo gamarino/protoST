@@ -47,14 +47,11 @@ Behavior >> withAllSuperclasses
   ^ self allSuperclasses addFirst: self; yourself.
 
 Behavior >> inheritsFrom: aClass
-  "Whether aClass is a superclass of the receiver, a class (not the class
-   itself)."
-  | c |
-  c := self superclass.
-  [c notNil] whileTrue: [
-    c == aClass ifTrue: [^ true].
-    c := c superclass].
-  ^ false.
+  "Whether aClass is an ancestor of the receiver, a class (not the class
+   itself): a superclass, or a mixin added by `uses:` or addBehavior:, which
+   is a parent class in protoST (LANGUAGE.md §4.11). allSuperclasses lists
+   the primary superclass chain only."
+  ^ self __hasAncestor: aClass.
 
 "allInstances is not provided: neither protoCore nor the runtime exposes an
  enumeration of the live objects of a class."
