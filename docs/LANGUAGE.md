@@ -2679,7 +2679,7 @@ when their contents are equal, and they work as `Set` elements and
 | Selector | Meaning |
 |----------|---------|
 | `ByteArray new`, `new: n`, `withAll: aCollection`, `fromHex: aString` | the empty one; `n` zero bytes; from a collection of integers 0-255 (a `ByteArray` answers itself); from hexadecimal digits (either case; an odd length or another character signals `Error`) |
-| `ByteArray randomBytes: n` | `n` bytes from the operating system's cryptographically secure generator (protoIO's `random::bytes`, 0.9.1), for identifiers, nonces and keys; `n` is a SmallInteger from 0 to 1048576 (1 MiB), anything else signals `InvalidArgument`. The answer is a `ByteArray` like any other: immutable, so it can be shared without a lock |
+| `ByteArray randomBytes: n` | `n` bytes from the operating system's cryptographically secure generator (since protoST 0.10.0, on protoIO 0.5.0's `random::bytes`), for identifiers, nonces and keys; `n` is a SmallInteger from 0 to 1048576 (1 MiB), anything else signals `InvalidArgument`. The answer is a `ByteArray` like any other: immutable, so it can be shared without a lock |
 | `size`, `isEmpty`, `notEmpty`, `at:` | `at:` answers an Integer 0-255 (1-based); an index outside 1..size signals `SubscriptOutOfBounds` |
 | `at:put:` | signals `ModificationForbidden` (D41) |
 | `do:`, `inject:into:`, `asArray` | iteration, as over an Array |
@@ -2958,7 +2958,7 @@ order.
 | `DateTime utcOrdinalMicroseconds: n zone: aZone` | the value of the UTC instant `n` (microseconds since 0001-01-01T00:00) at a `ZoneOffset` (its fields are the wall clock there), or the instant form for a `ZoneName`; the fields must lie in years 1..9999 |
 | `DateTime fromUnixMicroseconds: n zone: aZone` | the same for `n` microseconds since 1970-01-01T00:00Z (the count of `Time utcMicroseconds`) |
 | `DateTime unixEpochOrdinalMicroseconds` | `62135596800000000`: 1970-01-01T00:00Z on the ordinal scale, the offset between the two counts |
-| `DateTime nowUTC` | now, at `ZoneOffset utc`: `fromUnixMicroseconds: Time utcMicroseconds zone: ZoneOffset utc` (needs protoST 0.9.1) |
+| `DateTime nowUTC` | now, at `ZoneOffset utc`: `fromUnixMicroseconds: Time utcMicroseconds zone: ZoneOffset utc` (needs protoST 0.10.0) |
 | `year` … `microsecond` `fold` `zone` | the fields (the UTC instant for the instant form) |
 | `isNaive` `isInstantForm` | zone `nil`; zone a `ZoneName` |
 | `localOrdinalMicroseconds` | the fields' microseconds since 0001-01-01T00:00 |
@@ -3022,7 +3022,7 @@ The kernel's `Time` reads two clocks, and the selector says which:
 
 | Selector | Answers |
 |----------|---------|
-| `Time utcMicroseconds` | the wall clock: microseconds since 1970-01-01T00:00Z (the Unix epoch, leap seconds not counted), a SmallInteger, from protoIO's `clock::utcMicroseconds` (0.9.1). It dates events and is comparable across processes and machines, but it follows the system clock when that is set or adjusted, so it can jump in either direction. `DateTime nowUTC` (§12.14) is built on it |
+| `Time utcMicroseconds` | the wall clock: microseconds since 1970-01-01T00:00Z (the Unix epoch, leap seconds not counted), a SmallInteger, since protoST 0.10.0, on protoIO 0.5.0's `clock::utcMicroseconds`. It dates events and is comparable across processes and machines, but it follows the system clock when that is set or adjusted, so it can jump in either direction. `DateTime nowUTC` (§12.14) is built on it |
 | `Time microsecondClockValue`, `Time millisecondClockValue` | a **monotonic** clock (the steady clock) with an unspecified origin: only the difference between two readings means anything, and it never goes backwards. It measures durations (`Time millisecondsToRun:`, `timeToRun`) and must not be used as a date |
 | `Time now` | the local time of day (§9.7 of the tutorial) |
 

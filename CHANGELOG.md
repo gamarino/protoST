@@ -5,7 +5,7 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
-## 0.9.1 — protoBaseST groundwork (unreleased)
+## 0.10.0 — protoBaseST groundwork (unreleased)
 
 **Requires protoIO 0.5.0** (or a later 0.5.x; a 0.4.x checkout is refused at
 configure time). The planned floor was 0.4.1; protoIO numbers new API as a
@@ -34,7 +34,7 @@ minor release, so the two services arrive in 0.5.0.
   once; in the `tsan` label), `12-builtins/time_utc_microseconds.st` (bounded
   by two wall-clock readings taken around it, never by elapsed time). The
   version banner in the REPL transcripts of tutorial chapters 1 and 12 and
-  the `User-Agent` in `14-io/http_request_shape.st` read 0.9.1.
+  the `User-Agent` in `14-io/http_request_shape.st` read 0.10.0.
 - **Python's numeric hash and `raisedTo:modulo:` (R3).** `hash` of an
   `Integer`, `LargeInteger`, `Float`, `Fraction` and `Decimal` is now
   CPython's numeric hash (modulo 2^61 - 1, Python's "Hashing of numeric
@@ -93,7 +93,7 @@ minor release, so the two services arrive in 0.5.0.
   `utcOrdinalMicroseconds:zone:` count from 0001-01-01 (the format's epoch),
   `unixMicroseconds` and `fromUnixMicroseconds:zone:` from 1970, with
   `DateTime unixEpochOrdinalMicroseconds` between them; `DateTime nowUTC`
-  (needs `Time utcMicroseconds`, 0.9.1). Comparison and `hash` as Python's
+  (needs `Time utcMicroseconds`, 0.10.0). Comparison and `hash` as Python's
   `datetime` (aware values by instant, naive never `=` to aware, ordering them
   refused); `printString` as `str()`. No IANA database: a wall clock in a
   named zone signals `TimeZoneUnavailable` (STATUS D50). Written in protoST;

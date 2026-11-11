@@ -1,6 +1,6 @@
 # Installing protoST
 
-protoST 0.9.0 is a Smalltalk-syntax, actor-native runtime on protoCore (0.9.1,
+protoST 0.9.0 is a Smalltalk-syntax, actor-native runtime on protoCore (0.10.0,
 in development, adds `ByteArray randomBytes:` and `Time utcMicroseconds` and
 needs protoIO 0.5.0). It is
 a consumer of protoCore, never a bundler of it: `bin/protost` links
@@ -30,7 +30,7 @@ was last run locally (2026-11-10) against protoCore 3.5.2 and protoIO 0.4.0.
   where the REPL uses the console's own line editing (*Windows (MSVC)*).
 - **protoIO 0.5.0 or a later 0.5.x** at build time only (0.5.0 adds
   `random::bytes` and `clock::utcMicroseconds`, behind `ByteArray randomBytes:`
-  and `Time utcMicroseconds` in protoST 0.9.1; 0.9.0 needs 0.4.x; 0.4.0 adds
+  and `Time utcMicroseconds` in protoST 0.10.0; 0.9.0 needs 0.4.x; 0.4.0 adds
   `file::EndGuard`, the end guard `BinaryFile` uses, and the `Conflict`
   error kind; 0.3.0 added the
   byte-level functions behind `ByteArray`, `BinaryFile` and `MessagePack`:

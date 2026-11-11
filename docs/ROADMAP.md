@@ -185,7 +185,7 @@ the `net` (TCP, TLS client, UDP) and `http` (client and server) modules.
 0.9.0 added binary data to the kernel: `ByteArray`, `BinaryFile` (positioned,
 durable, lockable files), the byte-order readers and writers, checksums and
 digests, `MessagePack`, and `Future` deadlines (`after:`, `within:`,
-`waitWithin:`). 0.9.1 (unreleased) adds `ByteArray randomBytes:` (OS random
+`waitWithin:`). 0.10.0 (unreleased) adds `ByteArray randomBytes:` (OS random
 bytes) and `Time utcMicroseconds` (the wall clock in microseconds), the
 ground protoBaseST needs for its identifiers, on protoIO 0.5.0.
 

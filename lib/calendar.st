@@ -33,7 +33,7 @@ MICROSECOND COUNTS: TWO EPOCHS, TWO NAMES
   localOrdinalMicroseconds, utcOrdinalMicroseconds and
   DateTime utcOrdinalMicroseconds:zone:. The ...UnixMicroseconds selectors
   count from 1970-01-01T00:00Z, the POSIX epoch of Time utcMicroseconds
-  (protoST 0.9.1): unixMicroseconds and DateTime fromUnixMicroseconds:zone:.
+  (protoST 0.10.0): unixMicroseconds and DateTime fromUnixMicroseconds:zone:.
   DateTime unixEpochOrdinalMicroseconds (62135596800000000) is the Unix epoch
   on the ordinal scale, the one constant between the two; no caller needs to
   add it by hand.
@@ -445,7 +445,7 @@ DateTime class >> fromUnixMicroseconds: anInteger zone: aZone
       , anInteger printString ].
   ^ self utcOrdinalMicroseconds: anInteger + self unixEpochOrdinalMicroseconds zone: aZone.
 
-"Now, in UTC (zone ZoneOffset utc), from Time utcMicroseconds (protoST 0.9.1)."
+"Now, in UTC (zone ZoneOffset utc), from Time utcMicroseconds (protoST 0.10.0)."
 DateTime class >> nowUTC
   ^ self fromUnixMicroseconds: Time utcMicroseconds zone: ZoneOffset utc.
 

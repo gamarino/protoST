@@ -2,7 +2,7 @@
 //
 // A TransientPin keeps a ProtoObject* that lives in a C++ local alive across
 // allocations by writing it into the engine context's automaticLocals, which
-// the collector traces. Until 0.9.1 the pins lived only in a fixed scratch
+// the collector traces. Until 0.10.0 the pins lived only in a fixed scratch
 // region of 256 slots; the 257th live pin hit `assert(false)` and, in a release
 // build, returned without pinning anything. Nesting reaches that easily: every
 // `collect:` keeps its accumulator pinned while its block runs, and a block

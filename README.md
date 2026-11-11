@@ -238,7 +238,7 @@ several cores without locks.
 
 ## Status
 
-Version 0.9.0 (2026-11-10); 0.9.1 (unreleased: `ByteArray randomBytes:`,
+Version 0.9.0 (2026-11-10); 0.10.0 (unreleased: `ByteArray randomBytes:`,
 `Time utcMicroseconds`) is in development and needs protoIO 0.5.0 or a later
 0.5.x. Built from source, 0.9.0 requires protoCore 3.4.0 or
 newer (SOVERSION 5) and protoIO 0.4.0 (tag `v0.4.0`) or a later 0.4.x; its `.deb`

@@ -77,14 +77,14 @@
 // Pins nest strictly LIFO (matching C++ scope nesting); the destructor asserts
 // LIFO discipline in debug builds.
 //
-// Unbounded nesting (K15, 0.9.1)
+// Unbounded nesting (K15, 0.10.0)
 // ------------------------------
 // The scratch region holds a fixed number of pins, but nothing bounds how
 // many pins are live at once: every `collect:` / `select:` / `inject:into:`
 // keeps its accumulator pinned while its block runs, the block can recurse
 // into the same primitive, and the engine nesting limit (kMaxNestedEngines)
 // is 1000 levels, not 256 pins; a primitive that recurses in C++ is bounded by
-// nothing at all. Until 0.9.1 the 257th live pin hit `assert(false)` and, in a
+// nothing at all. Until 0.10.0 the 257th live pin hit `assert(false)` and, in a
 // release build, returned WITHOUT pinning: the object stayed in a C++ local
 // only, the next safepoint submitted its context's young chain, a collection
 // freed it, and the primitive then used a recycled cell (SIGSEGV in
