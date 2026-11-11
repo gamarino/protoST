@@ -240,10 +240,14 @@ Instance variables are never captured: they are attributes `_iv_<name>` of
 
 **Inlined blocks.** A literal block argument of `ifTrue:`, `ifFalse:`,
 `ifTrue:ifFalse:`, `ifFalse:ifTrue:`, `and:`, `or:`, `whileTrue:`,
-`whileFalse:` (zero arguments, no temporaries) and `to:do:` (one argument, no temporaries, the
-argument not captured by an inner block) is not a closure: its body is
-compiled into the enclosing code (`tryEmitInlinedControl`, examples 03, 05,
-06). `doYielding:` with a literal one-argument block is compiled to an
+`whileFalse:` (zero arguments, no temporaries), `to:do:` (one argument, no
+temporaries, the argument not captured by an inner block), and `ifNil:`,
+`ifNotNil:`, `ifNil:ifNotNil:`, `ifNotNil:ifNil:` (the nil arm without
+arguments, the non-nil arm with none or one that no inner block captures;
+0.10.0) is not a closure: its body is compiled into the enclosing code
+(`tryEmitInlinedControl`, examples 03, 05, 06, 19). The receiver of these
+sends is compiled as an ordinary expression: a block literal there is a real
+closure (only `whileTrue:` / `whileFalse:` inline their receiver block). `doYielding:` with a literal one-argument block is compiled to an
 explicit loop that sends `value:` to the block (example 15). Every other
 block is a real closure.
 
@@ -429,13 +433,13 @@ another runtime's `ProtoSpace` (`STRuntime`'s `ownRootCtx`).
 
 ## 2. Opcode reference
 
-`Op` (`src/runtime/Opcodes.h`) has **48 values**: 1 to 49 except 7 and 21,
+`Op` (`src/runtime/Opcodes.h`) has **51 values**: 1 to 52 except 7 and 21,
 and `EXTEND` (254). The values 0, 7, 21 and 255 are reserved: they were
 `NOP`, `PUSH_SUPER`, `DUP_RECEIVER` and `HALT`, removed because the compiler
 no longer emitted them (`PUSH_SUPER` since `super` sends became `SEND_SUPER`)
 and only hand-built unit tests ran them; a reserved value is an unimplemented
-opcode. The dispatch in `ExecutionEngine::runLoop` has a `case` for all 48
-and a threaded-dispatch label for the 47 that execute (`EXTEND` is a prefix,
+opcode. The dispatch in `ExecutionEngine::runLoop` has a `case` for all 51
+and a threaded-dispatch label for the 50 that execute (`EXTEND` is a prefix,
 consumed while decoding; a stray one raises `stray EXTEND prefix`). The
 compiler emits all of them; `EXTEND` only as a prefix, by `emitWide` and when
 it widens a jump.
@@ -502,6 +506,8 @@ the attribute `_iv_v` of the class that declares it.
 | `JUMP_BACK` | 30 | backward offset | `->` | `next -= operand` words, then polls the GC safepoint (1.6). | the back edge of inlined `whileTrue:`, `whileFalse:`, `to:do:` and of `doYielding:` |
 | `JUMP_IF_NOT_BOOL` | 45 | forward offset | `v -> v` | Peeks; jumps when the value is neither `true` nor `false`, which stays on the stack either way. | the guard of an inlined `ifTrue:` / `ifFalse:` / `ifTrue:ifFalse:` / `ifFalse:ifTrue:` / `and:` / `or:`, to its out-of-line send (`DEOPT_ENTER` ... `DEOPT_EXIT`, example 03) |
 | `ASSERT_LOOP_BOOL` | 38 | selector constant (wide) | `v -> b` | Leaves a Boolean in place. Any other value is replaced by `true` or `false`: a resumable `NonBooleanReceiver` is signalled with the value as its `object`, and the resumed value counts as true unless it is `false` (Pharo's rule; the loop primitives apply the same one). Named `ASSERT_BOOL_OR_DNU` until 0.10.0, when it sent `doesNotUnderstand:` of the loop selector to the value. | before the conditional jump of an inlined `whileTrue:` / `whileFalse:` (example 06) |
+| `JUMP_IF_NIL` | 50 | forward offset | `v -> v` | Peeks; jumps when the value is nil, which stays on the stack either way. | an inlined `ifNotNil:`, `ifNil:ifNotNil:`, `ifNotNil:ifNil:`, to the nil arm or the end (example 19) |
+| `JUMP_IF_NOT_NIL` | 51 | forward offset | `v -> v` | Peeks; jumps when the value is not nil, which stays on the stack either way. | an inlined `ifNil:`, over its arm: the receiver is the answer (example 19) |
 | `DEOPT_ENTER` | 46 | deopt entry (wide) | `->` | Builds the box of a de-optimised conditional: a mutable child of the frame's captured dict holding the frame locals the entry names; stores it in the entry's box slot. | first instruction of the out-of-line path of an inlined value conditional (examples 03, 05; section 1.4) |
 | `PUSH_DEOPT_BLOCK` | 47 | sub-module index (wide) | `box -> closure` | As `PUSH_BLOCK`, with the popped box as the closure's captured dict. | after `PUSH_LOCAL __deopt_box__`, once per block literal of the conditional |
 | `DEOPT_EXIT` | 48 | deopt entry (wide) | `->` | Copies the box's locals back to their frame slots, closes the box and clears the box slot. | after the `SEND_KEYWORD` of the out-of-line path |
@@ -516,6 +522,7 @@ the attribute `_iv_v` of the class that declares it.
 | `SEND_KEYWORD` | 13 | selector constant (wide) | `r a1..an -> v` | Sends with n = number of colons, any number. | keyword messages not inlined; class declarations and method installs (`__subclassNamed:`, `__installMethod:as:`, ...) |
 | `SEND_SUPER` | 14 | selector constant (wide) | `self a1..an -> v` | A send whose lookup starts above the class that defines the running method (1.5, step 3); n is the number of colons, or 1 for a binary selector. Only this send is affected: a send in its arguments is ordinary. Errors (catchable): `super send outside a method body`, `super: cannot resolve defining class C`, `super: class C has no superclass`. | a unary, binary or keyword message, or every part of a cascade, whose receiver is `super`, after `PUSH_SELF` (example 17). `super` as a value is `PUSH_SELF`; `super name(...)` is a compile error |
 | `SEND_CALL` | 39 | mangled call selector constant (wide) | `r p1..pn k1..km -> v` | Call-form send (1.5). Errors (catchable): more than 16 values; actor receiver; not a call-form method; wrong positional count; an unknown named argument; named arguments to a primitive. | `recv name(...)` (example 08) |
+| `IDENTICAL` | 52 | — | `a b -> bool` | Whether `a` and `b` are the same object, as `Object>>==` answers; never a send (0.10.0). | every `==` except `super == x`, which is a `SEND_SUPER` (example 19) |
 | `RETURN` | 18 | — | `v ->` | Returns the top of the stack (nil if empty) from the frame's home: a local return in a method or top-level frame, a non-local return in a block frame (1.7). | `^ expr`; the implicit `^ self` at the end of a method body |
 | `RETURN_TOP` | 19 | — | `v ->` | Returns the top of the stack (nil if empty) from this frame only. Falling off the end of the code does the same. | the end of every block body and of the top-level module |
 
@@ -2364,12 +2371,175 @@ module main.0.0.0: [] in Finder>>firstOver:in: (not inlined)
   engine catches it, pops the method's frame and pushes `4` for the caller.
   `^ nil` at `main.0` `7`-`8` is not reached.
 
+### Example 19: `==` and the nil tests
+
+`==` and the nil tests with literal blocks never send (0.10.0), as in Pharo:
+`==` is identity and is not looked up, and `ifNil:`, `ifNotNil:`,
+`ifNil:ifNotNil:` and `ifNotNil:ifNil:` test identity with nil.
+
+<!-- vm-example: 19-nil-tests -->
+```smalltalk
+Object subclass: #Cache instanceVariableNames: 'value'.
+
+Cache >> at: aBlock
+  ^ value ifNil: [ value := aBlock value ].
+
+Cache >> describe
+  ^ value ifNil: [ 'empty' ] ifNotNil: [ :v | v printString ].
+
+| c |
+c := Cache new.
+(c at: [ 6 * 7 ]) printNl.
+c describe printNl.
+(c at: [ 0 ]) == 42 ifTrue: [ 'cached' printNl ].
+```
+
+```text
+module main: <module>
+  args 0, locals 1 (0 c), stack 48 (deepest 3)
+  constants:
+    #0   symbol    #Cache
+    #1   symbol    #Object
+    #2   symbol    #__subclassNamed:
+    #3   string    'Cache'
+    #4   symbol    #__setClassName:
+    #5   string    'Cache'
+    #6   string    'value'
+    #7   symbol    #__setInstVarNames:
+    #8   symbol    #at:
+    #9   symbol    #__installMethod:as:
+    #10  symbol    #describe
+    #11  symbol    #new
+    #12  symbol    #printNl
+    #13  integer   42
+    #14  symbol    #==
+    #15  string    'cached'
+  code:
+      0  PUSH_GLOBAL        1     ; Object
+      1  PUSH_CONST         3     ; 'Cache'
+      2  SEND_KEYWORD       2     ; #__subclassNamed:, 1 arg
+      3  PUSH_CONST         5     ; 'Cache'
+      4  SEND_KEYWORD       4     ; #__setClassName:, 1 arg
+      5  PUSH_CONST         6     ; 'value'
+      6  SEND_KEYWORD       7     ; #__setInstVarNames:, 1 arg
+      7  DUP
+      8  STORE_GLOBAL       0     ; Cache
+      9  POP
+     10  PUSH_GLOBAL        0     ; Cache
+     11  PUSH_BLOCK         0     ; main.0 (Cache>>at:)
+     12  PUSH_CONST         8     ; #at:
+     13  SEND_KEYWORD       9     ; #__installMethod:as:, 2 args
+     14  POP
+     15  PUSH_GLOBAL        0     ; Cache
+     16  PUSH_BLOCK         1     ; main.1 (Cache>>describe)
+     17  PUSH_CONST         10    ; #describe
+     18  SEND_KEYWORD       9     ; #__installMethod:as:, 2 args
+     19  POP
+     20  PUSH_NIL
+     21  DUP
+     22  STORE_LOCAL        0     ; c
+     23  POP
+     24  PUSH_GLOBAL        0     ; Cache
+     25  SEND_UNARY         11    ; #new
+     26  DUP
+     27  STORE_LOCAL        0     ; c
+     28  POP
+     29  PUSH_LOCAL         0     ; c
+     30  PUSH_BLOCK         2     ; main.2 (<block>)
+     31  SEND_KEYWORD       8     ; #at:, 1 arg
+     32  SEND_UNARY         12    ; #printNl
+     33  POP
+     34  PUSH_LOCAL         0     ; c
+     35  SEND_UNARY         10    ; #describe
+     36  SEND_UNARY         12    ; #printNl
+     37  POP
+     38  PUSH_LOCAL         0     ; c
+     39  PUSH_BLOCK         3     ; main.3 (<block>)
+     40  SEND_KEYWORD       8     ; #at:, 1 arg
+     41  PUSH_CONST         13    ; 42
+     42  IDENTICAL
+     43  JUMP_IF_FALSE      3     ; -> 47
+     44  PUSH_CONST         15    ; 'cached'
+     45  SEND_UNARY         12    ; #printNl
+     46  JUMP               1     ; -> 48
+     47  PUSH_NIL
+     48  RETURN_TOP
+
+module main.0: Cache>>at:
+  args 2, locals 2 (0 self, 1 aBlock), stack 48 (deepest 2)
+  defining class Cache
+  constants:
+    #0   symbol    #value
+  code:
+      0  PUSH_INSTVAR       0     ; value
+      1  JUMP_IF_NOT_NIL    5     ; -> 7
+      2  POP
+      3  PUSH_LOCAL         1     ; aBlock
+      4  SEND_UNARY         0     ; #value
+      5  DUP
+      6  STORE_INSTVAR      0     ; value
+      7  RETURN
+
+module main.1: Cache>>describe
+  args 1, locals 2 (0 self, 1 __nn_1), stack 48 (deepest 1)
+  defining class Cache
+  slot 1 is 'v' in words 3..5
+  constants:
+    #0   symbol    #value
+    #1   symbol    #printString
+    #2   string    'empty'
+  code:
+      0  PUSH_INSTVAR       0     ; value
+      1  JUMP_IF_NIL        4     ; -> 6
+      2  STORE_LOCAL        1     ; __nn_1
+      3  PUSH_LOCAL         1     ; __nn_1
+      4  SEND_UNARY         1     ; #printString
+      5  JUMP               2     ; -> 8
+      6  POP
+      7  PUSH_CONST         2     ; 'empty'
+      8  RETURN
+
+module main.2: <block>
+  args 0, locals 0, stack 48 (deepest 2)
+  constants:
+    #0   integer   6
+    #1   integer   7
+    #2   symbol    #*
+  code:
+      0  PUSH_CONST         0     ; 6
+      1  PUSH_CONST         1     ; 7
+      2  SEND_BINARY        2     ; #*
+      3  RETURN_TOP
+
+module main.3: <block>
+  args 0, locals 0, stack 48 (deepest 1)
+  constants:
+    #0   integer   0
+  code:
+      0  PUSH_CONST         0     ; 0
+      1  RETURN_TOP
+42
+'42'
+'cached'
+```
+
+- `Cache>>at:`: `JUMP_IF_NOT_NIL` peeks the instance variable and, when it
+  is set, jumps to the end with it on the stack as the answer; otherwise
+  `POP` drops the nil and the arm computes and stores the value.
+- `Cache>>describe`: `JUMP_IF_NIL` leads to the nil arm (`POP`, then
+  `'empty'`); on the other path `STORE_LOCAL` binds the arm's argument `v`
+  to a hidden slot (`__nn_1`, shown as `v` by the debugger), as an inlined
+  `to:do:` binds its counter.
+- `IDENTICAL` is the whole of `== 42`: no selector, no lookup. Its answer
+  is always a Boolean, so the inlined `ifTrue:` after it has no
+  `JUMP_IF_NOT_BOOL` guard and no out-of-line send.
+
 ## 4. How to add an opcode
 
 The model is `ASSERT_LOOP_BOOL` (value 38), the guard of an inlined loop
 condition. Every place to touch, in order:
 
-1. **The enum,** `src/runtime/Opcodes.h`: the next free value (50 today),
+1. **The enum,** `src/runtime/Opcodes.h`: the next free value (53 today),
    with a comment giving its operand and stack effect. Never renumber an
    existing opcode: the value is the encoding.
    ```cpp

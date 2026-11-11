@@ -118,6 +118,9 @@ minor release, so the two services arrive in 0.5.0.
 
 ### Fixed
 
+- **An unhandled error inside an inlined nil-test arm has one frame less in
+  its trace.** The arm is no longer a block, so the `at <block>` line is gone
+  (tutorial 15 updated).
 - **A block literal receiving `and:`, `or:`, `ifTrue:` and the like
   captures its variables (protoBaseST review L3).** The closure analysis
   treated the receiver block of every inlinable send as inlined, but only
@@ -293,6 +296,28 @@ minor release, so the two services arrive in 0.5.0.
 
 ### Performance
 
+- **`==` and the nil tests never send (protoBaseST review P4).** As in
+  Pharo, `==` is compiled to an identity test (`IDENTICAL`, opcode 52) and
+  never looked up (Pharo's `ProtoObject>>==`: "No Lookup. Do not override"),
+  and `ifNil:`, `ifNotNil:`, `ifNil:ifNotNil:`, `ifNotNil:ifNil:` with
+  literal blocks (the nil arm without arguments, the non-nil arm with none
+  or one) are compiled inline (`JUMP_IF_NIL` 50, `JUMP_IF_NOT_NIL` 51) under
+  the conditions of Pharo's `RBMessageNode>>isInlineIfNil`. An inlined
+  `ifTrue:` after `==` needs no Boolean guard. 10^6 iterations in a method
+  (`benchmarks/micro/nil_identity.st`, three runs against 4bae623):
+  `x == #a ifTrue:` 247-300 -> 121-192 ms, `ifNil:` 1.80-1.97 ->
+  1.12-1.20 s, `ifNotNil: [:v|...]` 1.92-2.22 -> 0.97-1.00 s,
+  `ifNil:ifNotNil:` 2.39-2.61 -> 0.96-1.07 s. The protoBaseST AVL workload
+  runs 4.6 % fewer instructions than at 4bae623 (8.69G -> 8.30G; this
+  includes the startup cost of the de-optimised copies, see Fixed); its
+  wall-clock per-operation figures are within noise.
+  **Semantic change:** a class's own `==` or `ifNil:` is no longer reached by
+  these forms; `perform:` and non-literal blocks still send. No class in
+  `lib/` or protoBaseST defines either. `ifNotNil:ifNil:` is now also bound
+  as a method (it was listed as a nil test but had none). Tests:
+  `06-blocks/inlined-nil-tests-values.st`,
+  `04-object-model/identity-and-nil-tests-are-not-looked-up.st`; VM.md
+  example 19.
 - **`and:` and `or:` with a literal block are compiled inline (protoBaseST
   review P2).** Like `ifTrue:`, a zero-argument block without temporaries
   is no longer a closure evaluated by a primitive in a nested engine: its

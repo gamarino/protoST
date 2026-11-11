@@ -1310,9 +1310,12 @@ Chapter 10.8 of [the tutorial](TUTORIAL.md) for a worked example.
 **Inlined control messages.** The compiler compiles `ifTrue:`, `ifFalse:`,
 `ifTrue:ifFalse:`, `ifFalse:ifTrue:`, `and:` and `or:` whose arguments are
 literal blocks without arguments or temporaries, `whileTrue:` / `whileFalse:`
-with a literal receiver and argument block, and `to:do:` with a literal
-one-argument block, into the enclosing code: no closure is built and nothing
-is sent. The meaning is the send's. When the receiver of one of the six
+with a literal receiver and argument block, `to:do:` with a literal
+one-argument block, and `ifNil:`, `ifNotNil:`, `ifNil:ifNotNil:`,
+`ifNotNil:ifNil:` with literal blocks (0.10.0), into the enclosing code: no
+closure is built and nothing is sent. The meaning is the send's, with one
+exception the nil tests share with Pharo: they test identity with nil, so a
+class's own `ifNil:` is not run. When the receiver of one of the six
 conditionals is not a Boolean, the message is sent for real, with closures
 for the block literals (since 0.10.0): a class that defines `ifTrue:` or
 `and:` answers it, and a `doesNotUnderstand:` override receives the whole
@@ -1334,6 +1337,11 @@ and `not`.
 `ifNil:ifNotNil:`. `nil` (the sole `UndefinedObject`) answers `isNil` → `true`;
 every other object answers `isNil` → `false`. An `ifNotNil:` block may take the
 receiver as an argument (`anObject ifNotNil: [ :x | … ]`) or take none.
+`ifNotNil:ifNil:` is the same test with the arms in the other order (bound
+since 0.10.0). With literal blocks these four sends are compiled inline (see
+*Inlined control messages* above) and test identity with nil, as Pharo's
+compiler does: a class that defines its own `ifNil:` is reached only when the
+blocks are not literals.
 
 **Block loop protocol** — `whileTrue:`, `whileFalse:`, `whileTrue`,
 `whileFalse` and `repeat` (an unbounded loop, exited by a non-local return).
@@ -2218,7 +2226,7 @@ It is a reference snapshot of the current implementation.
 | `asHighPriorityActor` | same, but the actor sits in the High-priority ready queue (drained before Medium/Low) |
 | `asLowPriorityActor` | same, but the actor sits in the Low-priority queue (drained after Medium/High) |
 | `->` | build an `Association` (`key -> value`) |
-| `==` `~~` | identity / non-identity — same object, or not |
+| `==` `~~` | identity / non-identity — same object, or not. `==` is compiled to an identity test and never looked up (0.10.0), as in Pharo (`ProtoObject>>==`: "No Lookup. Do not override"): a class's own `==` is reached only by `perform: #==`. This holds for actor references and foreign objects too: `==` compares the references themselves |
 | `=` `~=` | equality / inequality; the default is identity, overridden to value-equality on `SmallInteger`, `String`, `Symbol`, `Boolean` and other value types |
 | `isNil` `notNil` | nil test — `false` / `true` for every object except `nil` |
 | `ifNil:` `ifNotNil:` `ifNil:ifNotNil:` | nil-conditional evaluation; an `ifNotNil:` block may take the receiver as an argument |

@@ -293,7 +293,6 @@ with status 1:
 $ ./build/protost fails.st
 starting
 error: PUMP_CONFIG is not set
-  at <block> (fails.st:3)
   at <module> (fails.st:3)
 ```
 

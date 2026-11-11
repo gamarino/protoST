@@ -262,11 +262,20 @@ void walkNode(const Node& n, ScopeWalker& cur,
             }
             // to:do: keeps the real block when an inner block captures its
             // argument (the argument then needs a binding per iteration).
+            // So does an inlined ifNotNil: arm whose argument an inner
+            // block captures.
             bool inlined = true;
             if (isToDo) {
                 const Node& blk = *n.children[2];
                 const auto& cap = out.capturedByScope[&blk];
                 inlined = cap.count(blk.stringList[0]) == 0;
+            }
+            if (shape == Compiler::InlineShape::IfNil) {
+                for (size_t i = 1; i < n.children.size(); ++i) {
+                    const Node& blk = *n.children[i];
+                    if (blk.stringList.empty()) continue;
+                    if (out.capturedByScope[&blk].count(blk.stringList[0]) != 0) inlined = false;
+                }
             }
             for (auto& f : blocks) {
                 if (inlined) {
@@ -1314,6 +1323,13 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             else if (n.text == ">=") send = Op::BIN_INT_GE;
             else if (n.text == ">")  send = Op::BIN_INT_GT;
             else if (n.text == "=")  send = Op::BIN_INT_EQ;
+            else if (n.text == "==") {
+                // `==` is identity and is never looked up, as in Pharo
+                // (ProtoObject>>== "No Lookup. Do not override"): one
+                // instruction, no send (0.10.0).
+                m.emit(Op::IDENTICAL, 0, currentLine_);
+                return;
+            }
             m.emitWide(send, static_cast<unsigned int>(sym), currentLine_);
             return;
         }
@@ -1895,6 +1911,26 @@ Compiler::InlineShape Compiler::inlineShapeOf(const ast::Node& n) {
     if (n.children.size() == 2 && isInlineableBlock(n.children[1].get())
         && (n.text == "and:" || n.text == "or:"))
         return InlineShape::AndOr;
+    // The nil tests, as Pharo's compiler inlines them (RBMessageNode>>
+    // isInlineIfNil): literal blocks, the nil arm without arguments, the
+    // non-nil arm with none or one, the receiver not a block literal.
+    if (n.children[0]->kind != NodeKind::Block) {
+        auto nilArm = [&](const ast::Node* b) { return isInlineableBlock(b); };
+        auto notNilArm = [](const ast::Node* b) {
+            return b && b->kind == NodeKind::Block && b->intValue <= 1
+                && b->stringList.size() == static_cast<size_t>(b->intValue);
+        };
+        if (n.children.size() == 2 && n.text == "ifNil:" && nilArm(n.children[1].get()))
+            return InlineShape::IfNil;
+        if (n.children.size() == 2 && n.text == "ifNotNil:" && notNilArm(n.children[1].get()))
+            return InlineShape::IfNil;
+        if (n.children.size() == 3 && n.text == "ifNil:ifNotNil:"
+            && nilArm(n.children[1].get()) && notNilArm(n.children[2].get()))
+            return InlineShape::IfNil;
+        if (n.children.size() == 3 && n.text == "ifNotNil:ifNil:"
+            && notNilArm(n.children[1].get()) && nilArm(n.children[2].get()))
+            return InlineShape::IfNil;
+    }
     if (n.text == "to:do:" && n.children.size() == 3
         && n.children[2]->kind == NodeKind::Block
         && n.children[2]->intValue == 1
@@ -1963,6 +1999,75 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
         emitInlinedConditional(m, n, isAnd ? Op::JUMP_IF_FALSE : Op::JUMP_IF_TRUE,
             [&] { emitInlinedBlockBody(m, rest); },
             [&] { m.emit(isAnd ? Op::PUSH_FALSE : Op::PUSH_TRUE, 0, currentLine_); });
+        return true;
+    }
+
+    // The nil tests. `r ifNil: [a]` answers r when r is not nil;
+    // `r ifNotNil: [:x | b]` answers nil when r is nil; the arm that runs
+    // answers its value. The test is identity with nil (no send), as in
+    // Pharo, so a class's own ifNil: is not reached by an inlined form.
+    //       <r>                               <r>
+    //       JUMP_IF_NOT_NIL end               JUMP_IF_NIL nilArm   (peek)
+    //       POP                               STORE_LOCAL x | POP
+    //       <a>                               <b>
+    //   end:                                  JUMP end
+    //                                     nilArm:
+    //                                         POP
+    //                                         <a>             (or nothing
+    //                                     end:                 for ifNotNil:)
+    if (inlineShapeOf(n) == InlineShape::IfNil) {
+        const bool nilFirst = n.text == "ifNil:" || n.text == "ifNil:ifNotNil:";
+        const ast::Node* nilArm = nullptr;
+        const ast::Node* notNilArm = nullptr;
+        if (n.text == "ifNil:") nilArm = n.children[1].get();
+        else if (n.text == "ifNotNil:") notNilArm = n.children[1].get();
+        else {
+            nilArm    = (nilFirst ? n.children[1] : n.children[2]).get();
+            notNilArm = (nilFirst ? n.children[2] : n.children[1]).get();
+        }
+        emitExpr(m, *n.children[0]);
+        if (!notNilArm) {
+            const size_t jEnd = emitForwardJump(m, Op::JUMP_IF_NOT_NIL);
+            m.emit(Op::POP, 0, currentLine_);
+            emitInlinedBlockBody(m, *nilArm);
+            resolveForwardJumps(m, {{jEnd, m.pos()}});
+            return true;
+        }
+        const size_t jNil = emitForwardJump(m, Op::JUMP_IF_NIL);
+        if (notNilArm->stringList.empty()) {
+            m.emit(Op::POP, 0, currentLine_);
+            emitInlinedBlockBody(m, *notNilArm);
+        } else {
+            // The argument is a hidden slot bound to the receiver for the
+            // arm, as an inlined to:do: binds its loop variable (no inner
+            // block captures it, or the send would not be inlined).
+            auto& s = scopes_.back();
+            const std::string& argName = notNilArm->stringList[0];
+            const int slot = declareLocal("__nn_" + std::to_string(s.nextSlot));
+            m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slot), currentLine_);
+            const size_t from = m.pos();
+            auto saved = s.slots.find(argName);
+            const bool hadBinding = saved != s.slots.end();
+            const int savedSlot = hadBinding ? saved->second : -1;
+            s.slots[argName] = slot;
+            const bool hidesCaptured = s.capturedNames.erase(argName) != 0;
+            inlinedLoopArgs_.emplace_back(&s, argName);
+            emitInlinedBlockBody(m, *notNilArm);
+            inlinedLoopArgs_.pop_back();
+            if (hidesCaptured) s.capturedNames.insert(argName);
+            if (hadBinding) s.slots[argName] = savedSlot;
+            else            s.slots.erase(argName);
+            m.addScopedLocal(static_cast<size_t>(slot), argName, from, m.pos());
+        }
+        if (!nilArm) {
+            resolveForwardJumps(m, {{jNil, m.pos()}});
+            return true;
+        }
+        const size_t jEnd = emitForwardJump(m, Op::JUMP);
+        const size_t nilPos = m.pos();
+        m.emit(Op::POP, 0, currentLine_);
+        emitInlinedBlockBody(m, *nilArm);
+        resolveForwardJumps(m, {{jNil, nilPos}, {jEnd, m.pos()}});
         return true;
     }
 
@@ -2105,6 +2210,17 @@ void Compiler::emitInlinedConditional(BytecodeModule& m, const ast::Node& send, 
                                       const std::function<void()>& first,
                                       const std::function<void()>& second) {
     emitExpr(m, *send.children[0]);
+    // `a == b` (IDENTICAL) always answers a Boolean: no guard, no slow path.
+    const ast::Node& recv = *send.children[0];
+    if (recv.kind == NodeKind::BinarySend && recv.text == "==" && !isSuperReceiver(recv)) {
+        const size_t jSecond = emitForwardJump(m, jumpOp);
+        first();
+        const size_t jDone = emitForwardJump(m, Op::JUMP);
+        const size_t secondPos = m.pos();
+        second();
+        resolveForwardJumps(m, {{jSecond, secondPos}, {jDone, m.pos()}});
+        return;
+    }
     const int line = currentLine_;
     const auto selSym = static_cast<unsigned int>(m.internSymbol(send.text));
     const int boxSlot = declareLocal("__deopt_box__");
@@ -2218,9 +2334,9 @@ bool Compiler::isInertGroupValue(const Node& e,
             return (instVar || classVar) && written.count(e.text) == 0;
         }
         case NodeKind::BinarySend: {
-            static const char* const fast[] = {"+", "-", "<=", "<", ">=", ">", "="};
+            static const char* const fast[] = {"+", "-", "<=", "<", ">=", ">", "=", "=="};
             if (e.children.size() < 2) return false;
-            bool isFast = false;
+            bool isFast = false;   // `==` (IDENTICAL) never sends at all
             for (const char* op : fast) if (e.text == op) isFast = true;
             return isFast && isInertGroupValue(*e.children[0], written)
                    && isInertGroupValue(*e.children[1], written);

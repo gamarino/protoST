@@ -132,7 +132,7 @@ unsigned int BytecodeModule::computeMaxOperandDepth() const {
                 break;
             case Op::BIN_INT_ADD: case Op::BIN_INT_SUB: case Op::BIN_INT_LE:
             case Op::BIN_INT_LT: case Op::BIN_INT_GE: case Op::BIN_INT_GT:
-            case Op::BIN_INT_EQ:
+            case Op::BIN_INT_EQ: case Op::IDENTICAL:
                 pushes(-1);
                 break;
             case Op::MAKE_ARRAY:
@@ -146,6 +146,7 @@ unsigned int BytecodeModule::computeMaxOperandDepth() const {
                 pushes(-1);
                 jumpTo(pc + static_cast<std::size_t>(arg) * kInstrSize, depth);
                 break;
+            case Op::JUMP_IF_NIL: case Op::JUMP_IF_NOT_NIL:
             case Op::JUMP_IF_NOT_BOOL:   // peeks: the value stays on both paths
                 jumpTo(pc + static_cast<std::size_t>(arg) * kInstrSize, depth);
                 break;

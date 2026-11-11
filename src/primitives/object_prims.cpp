@@ -1759,6 +1759,15 @@ const proto::ProtoObject* prim_Object_ifNilIfNotNil(STRuntime& rt, proto::ProtoC
     return invokeNilTestBlock(rt, ctx, a[1], r);
 }
 
+// `ifNotNil:ifNil:` — the same with the arms in the other order (bound since
+// 0.10.0; it was listed as a nil test but had no method).
+const proto::ProtoObject* prim_Object_ifNotNilIfNil(STRuntime& rt, proto::ProtoContext* ctx,
+                                                     const proto::ProtoObject* r,
+                                                     const proto::ProtoObject* const* a, int) {
+    if (r == PROTO_NONE) return invokeBlock(rt, ctx, a[1], nullptr, 0);
+    return invokeNilTestBlock(rt, ctx, a[0], r);
+}
+
 // --- D18: identity and default equality on Object --------------------------
 //
 // `==` is pointer identity; `~~` its negation. `=` defaults to identity (a
@@ -1982,6 +1991,8 @@ void installObjectPrimitives(STRuntime& rt) {
                   reg.registerPrim(prim_Object_ifNotNil));
     bindPrimitive(rt, b.objectProto, "ifNil:ifNotNil:",
                   reg.registerPrim(prim_Object_ifNilIfNotNil));
+    bindPrimitive(rt, b.objectProto, "ifNotNil:ifNil:",
+                  reg.registerPrim(prim_Object_ifNotNilIfNil));
     // D18: identity comparison and default equality, bound on Object so every
     // object answers them. `=` here is the identity default; value-equality
     // overrides on SmallInteger / String shadow it on those types.

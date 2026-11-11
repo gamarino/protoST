@@ -153,6 +153,14 @@ enum class Op : uint8_t {
     // returned and the frame owns the locals again) it signals an Error
     // instead of reading or writing stale copies. arg 0 = no check.
     DEOPT_CHECK        = 49, // arg = 1 to check, 0 for none
+    // The inlined nil tests (ifNil:, ifNotNil:, ifNil:ifNotNil:,
+    // ifNotNil:ifNil: with literal blocks; 0.10.0). Both peek: the value
+    // stays on the stack on both paths.
+    JUMP_IF_NIL        = 50, // arg = forward offset; jumps when the top is nil
+    JUMP_IF_NOT_NIL    = 51, // arg = forward offset; jumps when it is not nil
+    // `a == b`: pops two values, pushes whether they are the same object.
+    // Never a send: `==` is not looked up, as in Pharo (0.10.0).
+    IDENTICAL          = 52,
     // Prefix carrying the next-higher byte of the following instruction's
     // operand, for operands above 255 (constant indices, slots, jumps).
     EXTEND          = 254,

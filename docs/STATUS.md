@@ -170,7 +170,9 @@ are noted where useful.
 - [x] `whileTrue:`, `to:do:`, `to:by:do:`
 - [x] Compile-time inlining of `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:`,
       `ifFalse:ifTrue:`, `and:`, `or:` (0.10.0), `whileTrue:`,
-      `whileFalse:` and `to:do:` with literal blocks; a non-Boolean receiver
+      `whileFalse:`, `to:do:`, and `ifNil:` / `ifNotNil:` / `ifNil:ifNotNil:` /
+      `ifNotNil:ifNil:` (0.10.0, identity with nil as in Pharo) with literal
+      blocks, and `==` (0.10.0, never looked up, as in Pharo); a non-Boolean receiver
       of an inlined conditional gets the real send, with closures for the
       block literals (0.10.0): its own method, or `doesNotUnderstand:` with
       the whole Message. A closure it keeps and evaluates after the send

@@ -49,7 +49,7 @@ public:
     };
 
     // The control-send shape the compiler inlines, decided from the AST alone.
-    enum class InlineShape { None, IfTrue, IfTrueIfFalse, AndOr, WhileTrue, ToDo };
+    enum class InlineShape { None, IfTrue, IfTrueIfFalse, AndOr, WhileTrue, ToDo, IfNil };
     static InlineShape inlineShapeOf(const ast::Node& send);
 
     // F4-U2: per-class metadata gathered by a pre-pass over the module's

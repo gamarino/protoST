@@ -60,6 +60,9 @@ const char* opName(Op op) {
         case Op::PUSH_DEOPT_BLOCK:   return "PUSH_DEOPT_BLOCK";
         case Op::DEOPT_EXIT:         return "DEOPT_EXIT";
         case Op::DEOPT_CHECK:        return "DEOPT_CHECK";
+        case Op::JUMP_IF_NIL:        return "JUMP_IF_NIL";
+        case Op::JUMP_IF_NOT_NIL:    return "JUMP_IF_NOT_NIL";
+        case Op::IDENTICAL:          return "IDENTICAL";
         case Op::EXTEND:             return "EXTEND";
     }
     return nullptr;
@@ -265,6 +268,8 @@ void listModule(const BytecodeModule& m, const std::string& path, std::string& o
             case Op::JUMP_IF_TRUE:
             case Op::JUMP_IF_FALSE:
             case Op::JUMP_IF_NOT_BOOL:
+            case Op::JUMP_IF_NIL:
+            case Op::JUMP_IF_NOT_NIL:
                 withOperand("-> " + std::to_string(next + in.arg));
                 break;
             case Op::JUMP_BACK:

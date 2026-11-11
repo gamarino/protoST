@@ -997,6 +997,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     labels[static_cast<unsigned int>(Op::PUSH_DEOPT_BLOCK)] = &&L_PUSH_DEOPT_BLOCK;
     labels[static_cast<unsigned int>(Op::DEOPT_EXIT)]       = &&L_DEOPT_EXIT;
     labels[static_cast<unsigned int>(Op::DEOPT_CHECK)]      = &&L_DEOPT_CHECK;
+    labels[static_cast<unsigned int>(Op::JUMP_IF_NIL)]      = &&L_JUMP_IF_NIL;
+    labels[static_cast<unsigned int>(Op::JUMP_IF_NOT_NIL)]  = &&L_JUMP_IF_NOT_NIL;
+    labels[static_cast<unsigned int>(Op::IDENTICAL)]        = &&L_IDENTICAL;
     labels[static_cast<unsigned int>(Op::RETURN)]           = &&L_RETURN;
     labels[static_cast<unsigned int>(Op::RETURN_TOP)]       = &&L_RETURN_TOP;
     labels[static_cast<unsigned int>(Op::JUMP_BACK)]        = &&L_JUMP_BACK;
@@ -2331,6 +2334,32 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 Frame& f = frames_.back();
                 auto* v = pop(f);
                 if (v == PROTO_FALSE) f.pc += static_cast<std::size_t>(arg) * kInstrSize;
+                DISPATCH_DIRECT();
+                break;
+            }
+            case Op::JUMP_IF_NIL: L_JUMP_IF_NIL: {
+                // An inlined nil test (Opcodes.h): peek, jump on nil.
+                Frame& f = frames_.back();
+                const proto::ProtoObject* v = peek(f);
+                if (!v || v == PROTO_NONE)
+                    f.pc += static_cast<std::size_t>(arg) * kInstrSize;
+                DISPATCH_DIRECT();
+                break;
+            }
+            case Op::JUMP_IF_NOT_NIL: L_JUMP_IF_NOT_NIL: {
+                Frame& f = frames_.back();
+                const proto::ProtoObject* v = peek(f);
+                if (v && v != PROTO_NONE)
+                    f.pc += static_cast<std::size_t>(arg) * kInstrSize;
+                DISPATCH_DIRECT();
+                break;
+            }
+            case Op::IDENTICAL: L_IDENTICAL: {
+                // `==` (Opcodes.h): the identity test of Object>>==, no send.
+                Frame& f = frames_.back();
+                const proto::ProtoObject* b = pop(f);
+                const proto::ProtoObject* a = pop(f);
+                push(f, a == b ? PROTO_TRUE : PROTO_FALSE);
                 DISPATCH_DIRECT();
                 break;
             }
