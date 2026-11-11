@@ -480,7 +480,7 @@ class is a C++ `std::runtime_error`, impossible in compiler output.
 | Op | # | Operand | Stack | Semantics | Emitted by |
 |---|---|---|---|---|---|
 | `PUSH_LOCAL` | 2 | slot (wide) | `-> v` | Pushes the frame slot. Errors: `engine local slot out of range`. | a temporary or argument not captured; `self` at the end of a method (`PUSH_LOCAL 0`); the prologue copy of a captured argument |
-| `STORE_LOCAL` | 3 | slot (wide) | `v ->` | Pops into the slot. Errors: `STORE_LOCAL with empty stack`. | assignment to a temporary (after `DUP`); the hidden locals of `to:do:`, `doYielding:` and cascades; the call-form default prologue |
+| `STORE_LOCAL` | 3 | slot (wide) | `v ->` | Pops into the slot. Errors: `STORE_LOCAL with empty stack`. | assignment to a temporary (after `DUP`, except a statement in a method or block body whose value is discarded); the hidden locals of `to:do:`, `doYielding:` and cascades; the call-form default prologue |
 | `DUP` | 4 | — | `v -> v v` | | every assignment (the assigned value is the expression's value); each part of a cascade; a class declaration |
 | `POP` | 5 | — | `v ->` | | between statements; after a cascade part; after an inlined loop body |
 
@@ -698,12 +698,14 @@ module main: <module>
 30
 ```
 
-- `0`-`7`: the parser turns `| x y |` into `x := nil. y := nil.`. Every
-  assignment is `<value> DUP STORE_LOCAL` and, as a statement, `POP`: the
-  `DUP` keeps the assigned value as the expression's value.
+- `0`-`7`: the parser turns `| x y |` into `x := nil. y := nil.`. At the
+  top level every assignment is `<value> DUP STORE_LOCAL` and, as a
+  statement, `POP`: the `DUP` keeps the assigned value as the expression's
+  value. In a method or block body (0.10.0) an assignment statement whose
+  value is discarded is just `<value> STORE_LOCAL` (or `STORE_INSTVAR`,
+  `STORE_CAPTURED`, ...): no `DUP`, no `POP` (examples 05, 06).
 - Top-level variables are slots of the top-level frame (`locals 2`).
-- `14 SEND_BINARY 2`: `*` has no fast path; it is an ordinary send.
-- `20 BIN_INT_ADD`: `+` does.
+- `14 BIN_INT_MUL`, `20 BIN_INT_ADD`: SmallInteger fast paths (2.7).
 
 ### Example 03: `ifTrue:ifFalse:` and `ifTrue:`
 
@@ -889,17 +891,15 @@ module main: <module>
      26  RETURN_TOP
 
 module main.0: Greeter>>name:
-  args 2, locals 2 (0 self, 1 aString), stack 48 (deepest 2)
+  args 2, locals 2 (0 self, 1 aString), stack 48 (deepest 1)
   defining class Greeter
   constants:
     #0   symbol    #name
   code:
       0  PUSH_LOCAL         1     ; aString
-      1  DUP
-      2  STORE_INSTVAR      0     ; name
-      3  POP
-      4  PUSH_LOCAL         0     ; self
-      5  RETURN
+      1  STORE_INSTVAR      0     ; name
+      2  PUSH_LOCAL         0     ; self
+      3  RETURN
 
 module main.1: Greeter>>greeting
   args 1, locals 1 (0 self), stack 48 (deepest 2)
@@ -923,8 +923,9 @@ module main.1: Greeter>>greeting
   symbol, `SEND_KEYWORD #__installMethod:as:`. The same for `greeting` at
   `15`-`18`.
 - `main.0`: `args 2` is `self` and `aString`; slot 0 is `self`. The
-  assignment to the instance variable is `STORE_INSTVAR`. A method without
-  `^` answers `self`: `4 PUSH_LOCAL 0`, `5 RETURN`.
+  assignment to the instance variable is `STORE_INSTVAR`; as a statement
+  whose value nobody uses it has no `DUP` and no `POP` (0.10.0). A method
+  without `^` answers `self`: `2 PUSH_LOCAL 0`, `3 RETURN`.
 - `main.1`: `PUSH_INSTVAR` reads `_iv_name` of `self`; `,` is an ordinary
   binary send.
 
@@ -1063,7 +1064,7 @@ i := 0.
 ```text
 module main: <module>
   args 0, locals 4 (0 sum, 1 i, 2 __td_i_2, 3 __td_end_2), stack 48 (deepest 3)
-  slot 2 is 'k' in words 17..32
+  slot 2 is 'k' in words 17..30
   constants:
     #0   integer   0
     #1   integer   1
@@ -1098,58 +1099,56 @@ module main: <module>
      17  PUSH_LOCAL         2     ; __td_i_2
      18  PUSH_LOCAL         3     ; __td_end_2
      19  BIN_INT_LE         3     ; #<=
-     20  JUMP_IF_FALSE      11    ; -> 32
+     20  JUMP_IF_FALSE      9     ; -> 30
      21  PUSH_LOCAL         0     ; sum
      22  PUSH_LOCAL         2     ; __td_i_2
      23  BIN_INT_ADD        4     ; #+
-     24  DUP
-     25  STORE_LOCAL        0     ; sum
-     26  POP
-     27  PUSH_LOCAL         2     ; __td_i_2
-     28  PUSH_CONST         5     ; 1
-     29  BIN_INT_ADD        4     ; #+
-     30  STORE_LOCAL        2     ; __td_i_2
-     31  JUMP_BACK          15    ; -> 17
-     32  POP
-     33  PUSH_CONST         6     ; 0
-     34  DUP
-     35  STORE_LOCAL        1     ; i
-     36  POP
-     37  PUSH_LOCAL         1     ; i
-     38  PUSH_CONST         8     ; 3
-     39  BIN_INT_LT         9     ; #<
-     40  ASSERT_LOOP_BOOL   7     ; #whileTrue:
-     41  JUMP_IF_FALSE      7     ; -> 49
-     42  PUSH_LOCAL         1     ; i
-     43  PUSH_CONST         10    ; 1
-     44  BIN_INT_ADD        4     ; #+
-     45  DUP
-     46  STORE_LOCAL        1     ; i
-     47  POP
-     48  JUMP_BACK          12    ; -> 37
-     49  PUSH_NIL
-     50  POP
-     51  PUSH_LOCAL         0     ; sum
-     52  PUSH_LOCAL         1     ; i
-     53  BIN_INT_ADD        4     ; #+
-     54  SEND_UNARY         11    ; #printNl
-     55  RETURN_TOP
+     24  STORE_LOCAL        0     ; sum
+     25  PUSH_LOCAL         2     ; __td_i_2
+     26  PUSH_CONST         5     ; 1
+     27  BIN_INT_ADD        4     ; #+
+     28  STORE_LOCAL        2     ; __td_i_2
+     29  JUMP_BACK          13    ; -> 17
+     30  POP
+     31  PUSH_CONST         6     ; 0
+     32  DUP
+     33  STORE_LOCAL        1     ; i
+     34  POP
+     35  PUSH_LOCAL         1     ; i
+     36  PUSH_CONST         8     ; 3
+     37  BIN_INT_LT         9     ; #<
+     38  ASSERT_LOOP_BOOL   7     ; #whileTrue:
+     39  JUMP_IF_FALSE      5     ; -> 45
+     40  PUSH_LOCAL         1     ; i
+     41  PUSH_CONST         10    ; 1
+     42  BIN_INT_ADD        4     ; #+
+     43  STORE_LOCAL        1     ; i
+     44  JUMP_BACK          10    ; -> 35
+     45  PUSH_NIL
+     46  POP
+     47  PUSH_LOCAL         0     ; sum
+     48  PUSH_LOCAL         1     ; i
+     49  BIN_INT_ADD        4     ; #+
+     50  SEND_UNARY         11    ; #printNl
+     51  RETURN_TOP
 58
 ```
 
 - `12`-`16`: `to:do:` is inlined. The counter and the limit get hidden slots
-  (`__td_i_2`, `__td_end_2`); the header line `slot 2 is 'k' in words 17..32`
+  (`__td_i_2`, `__td_end_2`); the header line `slot 2 is 'k' in words 17..30`
   tells the debugger to show slot 2 as `k` inside the loop. The receiver and
   the limit are each evaluated once: `13 DUP` keeps a copy of the receiver
-  under the loop as the value of the `to:do:` expression (popped at `32`,
+  under the loop as the value of the `to:do:` expression (popped at `30`,
   since the statement's value is unused).
 - `17`-`20`: the loop test, `BIN_INT_LE` then `JUMP_IF_FALSE` to the exit at
-  `32`. No `ASSERT_LOOP_BOOL` here: the test is generated by the compiler.
-- `27`-`31`: `k := k + 1` with `BIN_INT_ADD`, then `JUMP_BACK 15` to `17`; the
+  `30`. No `ASSERT_LOOP_BOOL` here: the test is generated by the compiler.
+- `21`-`24`: the body, `sum := sum + k`. Its value is discarded, so the
+  assignment is a bare `STORE_LOCAL` (0.10.0; before, `DUP` ... `POP`).
+- `25`-`29`: `k := k + 1` with `BIN_INT_ADD`, then `JUMP_BACK 13` to `17`; the
   back edge polls the GC safepoint.
-- `37`-`49`: `whileTrue:` is inlined the same way, with the guard on the
+- `35`-`45`: `whileTrue:` is inlined the same way, with the guard on the
   condition at every iteration (`ASSERT_LOOP_BOOL`: a condition that is not
-  a Boolean signals `NonBooleanReceiver`), and answers nil (`49 PUSH_NIL`).
+  a Boolean signals `NonBooleanReceiver`), and answers nil (`45 PUSH_NIL`).
 
 ### Example 07: a block capturing a method argument
 

@@ -1,6 +1,6 @@
 module main: <module>
   args 0, locals 4 (0 sum, 1 i, 2 __td_i_2, 3 __td_end_2), stack 48 (deepest 3)
-  slot 2 is 'k' in words 17..32
+  slot 2 is 'k' in words 17..30
   constants:
     #0   integer   0
     #1   integer   1
@@ -35,40 +35,36 @@ module main: <module>
      17  PUSH_LOCAL         2     ; __td_i_2
      18  PUSH_LOCAL         3     ; __td_end_2
      19  BIN_INT_LE         3     ; #<=
-     20  JUMP_IF_FALSE      11    ; -> 32
+     20  JUMP_IF_FALSE      9     ; -> 30
      21  PUSH_LOCAL         0     ; sum
      22  PUSH_LOCAL         2     ; __td_i_2
      23  BIN_INT_ADD        4     ; #+
-     24  DUP
-     25  STORE_LOCAL        0     ; sum
-     26  POP
-     27  PUSH_LOCAL         2     ; __td_i_2
-     28  PUSH_CONST         5     ; 1
-     29  BIN_INT_ADD        4     ; #+
-     30  STORE_LOCAL        2     ; __td_i_2
-     31  JUMP_BACK          15    ; -> 17
-     32  POP
-     33  PUSH_CONST         6     ; 0
-     34  DUP
-     35  STORE_LOCAL        1     ; i
-     36  POP
-     37  PUSH_LOCAL         1     ; i
-     38  PUSH_CONST         8     ; 3
-     39  BIN_INT_LT         9     ; #<
-     40  ASSERT_LOOP_BOOL   7     ; #whileTrue:
-     41  JUMP_IF_FALSE      7     ; -> 49
-     42  PUSH_LOCAL         1     ; i
-     43  PUSH_CONST         10    ; 1
-     44  BIN_INT_ADD        4     ; #+
-     45  DUP
-     46  STORE_LOCAL        1     ; i
-     47  POP
-     48  JUMP_BACK          12    ; -> 37
-     49  PUSH_NIL
-     50  POP
-     51  PUSH_LOCAL         0     ; sum
-     52  PUSH_LOCAL         1     ; i
-     53  BIN_INT_ADD        4     ; #+
-     54  SEND_UNARY         11    ; #printNl
-     55  RETURN_TOP
+     24  STORE_LOCAL        0     ; sum
+     25  PUSH_LOCAL         2     ; __td_i_2
+     26  PUSH_CONST         5     ; 1
+     27  BIN_INT_ADD        4     ; #+
+     28  STORE_LOCAL        2     ; __td_i_2
+     29  JUMP_BACK          13    ; -> 17
+     30  POP
+     31  PUSH_CONST         6     ; 0
+     32  DUP
+     33  STORE_LOCAL        1     ; i
+     34  POP
+     35  PUSH_LOCAL         1     ; i
+     36  PUSH_CONST         8     ; 3
+     37  BIN_INT_LT         9     ; #<
+     38  ASSERT_LOOP_BOOL   7     ; #whileTrue:
+     39  JUMP_IF_FALSE      5     ; -> 45
+     40  PUSH_LOCAL         1     ; i
+     41  PUSH_CONST         10    ; 1
+     42  BIN_INT_ADD        4     ; #+
+     43  STORE_LOCAL        1     ; i
+     44  JUMP_BACK          10    ; -> 35
+     45  PUSH_NIL
+     46  POP
+     47  PUSH_LOCAL         0     ; sum
+     48  PUSH_LOCAL         1     ; i
+     49  BIN_INT_ADD        4     ; #+
+     50  SEND_UNARY         11    ; #printNl
+     51  RETURN_TOP
 58

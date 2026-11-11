@@ -131,6 +131,11 @@ private:
     // Loop variables of the to:do: loops being inlined (the scope whose slots
     // bind them, and the name), innermost last.
     std::vector<std::pair<const Scope*, std::string>> inlinedLoopArgs_;
+    // A statement assignment whose value is discarded (0.10.0): emitStatements
+    // sets this to the statement, the Assignment case then stores without the
+    // DUP and sets `valueDiscarded_`, and the caller omits the POP.
+    const ast::Node* discardValueOf_ = nullptr;
+    bool valueDiscarded_ = false;
     std::deque<Scope> scopes_;
     std::vector<std::string> errors_;
     ScopeAnalysis analysis_;
@@ -193,9 +198,12 @@ private:
     // Emits the statements stmts[from..end) as a body does: each statement,
     // with a POP between consecutive ones, so the last one's value stays on
     // the stack. Runs of instance-variable assignments become write groups
-    // (tryEmitInstVarGroup).
-    void   emitStatements(BytecodeModule& m, const std::vector<ast::NodePtr>& stmts,
-                          std::size_t from, std::size_t end);
+    // (tryEmitInstVarGroup). An assignment whose value the next POP would
+    // discard is stored without DUP and without that POP. With `discardLast`
+    // the caller discards the last value too; the answer is whether the last
+    // statement left a value on the stack.
+    bool   emitStatements(BytecodeModule& m, const std::vector<ast::NodePtr>& stmts,
+                          std::size_t from, std::size_t end, bool discardLast = false);
     // Instance-variable write groups. When stmts[i] starts a run of two or
     // more statements `v := e` that assign instance variables of `self`,
     // where every e after the first can neither run code nor observe `self`,
@@ -246,7 +254,10 @@ private:
     // local RETURN with no stack unwind. Returns true on inline success;
     // false means the caller should fall through to normal SEND_KEYWORD.
     bool   tryEmitInlinedControl(BytecodeModule& m, const ast::Node& send);
-    void   emitInlinedBlockBody(BytecodeModule& m, const ast::Node& block);
+    // The body's statements; the answer is whether it left its value on the
+    // stack (always, unless `discardValue` and it ends with an assignment).
+    bool   emitInlinedBlockBody(BytecodeModule& m, const ast::Node& block,
+                                bool discardValue = false);
     // The layout of an inlined ifTrue:-family, and: or or: send: the
     // receiver, a Boolean guard with an out-of-line doesNotUnderstand:, and
     // `jumpOp` (taken towards `second`) between the two arms.

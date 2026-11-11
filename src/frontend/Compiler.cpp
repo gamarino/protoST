@@ -804,15 +804,16 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         if (n.children.empty()) {
             sub->emit(Op::PUSH_NIL, 0, currentLine_);
         }
-        emitStatements(*sub, n.children, 0, n.children.size());
         // ST-80 default return: a method returns `self` if there is no
         // explicit `^`. If the last statement is already a Return, the
         // body's RETURN was already emitted by emitStatement.
         bool endsWithReturn = !n.children.empty()
             && n.children.back()->kind == NodeKind::Return;
+        const bool lastLeftValue =
+            emitStatements(*sub, n.children, 0, n.children.size(), !endsWithReturn);
         if (!endsWithReturn) {
             // Discard the last expression's value, push self, and return.
-            if (!n.children.empty()) sub->emit(Op::POP, 0, currentLine_);
+            if (!n.children.empty() && lastLeftValue) sub->emit(Op::POP, 0, currentLine_);
             sub->emit(Op::PUSH_LOCAL, 0, currentLine_);  // self
             sub->emit(Op::RETURN, 0, currentLine_);
         }
@@ -1022,11 +1023,12 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         if (bodyEmpty) {
             sub->emit(Op::PUSH_NIL, 0, currentLine_);
         }
-        emitStatements(*sub, n.children, static_cast<size_t>(nNamed), n.children.size());
         bool endsWithReturn = !bodyEmpty
             && n.children.back()->kind == NodeKind::Return;
+        const bool lastLeftValue = emitStatements(
+            *sub, n.children, static_cast<size_t>(nNamed), n.children.size(), !endsWithReturn);
         if (!endsWithReturn) {
-            if (!bodyEmpty) sub->emit(Op::POP, 0, currentLine_);
+            if (!bodyEmpty && lastLeftValue) sub->emit(Op::POP, 0, currentLine_);
             sub->emit(Op::PUSH_LOCAL, 0, currentLine_);  // self
             sub->emit(Op::RETURN, 0, currentLine_);
         }
@@ -1063,6 +1065,14 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         return;
     }
     if (n.kind == NodeKind::Assignment) {
+        // A statement whose value is discarded stores without the DUP
+        // (emitStatements omits the POP; 0.10.0).
+        const bool discard = discardValueOf_ == &n;
+        if (discard) discardValueOf_ = nullptr;
+        auto dupUnlessDiscarded = [&] {
+            if (discard) valueDiscarded_ = true;
+            else         m.emit(Op::DUP, 0, currentLine_);
+        };
         // Statement-level assignment. If the name is captured-by-an-inner-block,
         // it lives in the shared captured dict; otherwise it gets a local slot.
         // In both cases we DUP after evaluating the RHS so the assigned value
@@ -1073,7 +1083,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             if (reportUndeclaredInMethod(n.text)) return;
             emitExpr(m, *n.children[0]);
             auto sym = m.internSymbol(n.text);
-            m.emit(Op::DUP, 0, currentLine_);
+            dupUnlessDiscarded();
             m.emitWide(Op::STORE_CAPTURED, static_cast<unsigned int>(sym), currentLine_);
             return;
         }
@@ -1081,7 +1091,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         // itself wins over an instance variable of the same name.
         if (int slot = resolveLocal(n.text); slot >= 0) {
             emitExpr(m, *n.children[0]);
-            m.emit(Op::DUP, 0, currentLine_);
+            dupUnlessDiscarded();
             m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slot), currentLine_);
             return;
         }
@@ -1090,7 +1100,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             if (iv == n.text) {
                 emitExpr(m, *n.children[0]);
                 auto sym = m.internSymbol(n.text);
-                m.emit(Op::DUP, 0, currentLine_);
+                dupUnlessDiscarded();
                 m.emitWide(Op::STORE_INSTVAR, static_cast<unsigned int>(sym), currentLine_);
                 return;
             }
@@ -1101,7 +1111,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             if (cv == n.text) {
                 emitExpr(m, *n.children[0]);
                 auto sym = m.internSymbol(n.text);
-                m.emit(Op::DUP, 0, currentLine_);
+                dupUnlessDiscarded();
                 m.emitWide(Op::STORE_CLASSVAR, static_cast<unsigned int>(sym), currentLine_);
                 return;
             }
@@ -1114,14 +1124,14 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         if ((replMode_ && atModuleScope()) || assignsReplGlobalInBlock(n.text)) {
             emitExpr(m, *n.children[0]);
             auto sym = m.internSymbol(n.text);
-            m.emit(Op::DUP, 0, currentLine_);
+            dupUnlessDiscarded();
             m.emitWide(Op::STORE_GLOBAL, static_cast<unsigned int>(sym), currentLine_);
             return;
         }
         if (reportUndeclaredInMethod(n.text)) return;
         int slot = declareLocal(n.text);
         emitExpr(m, *n.children[0]);
-        m.emit(Op::DUP, 0, currentLine_);
+        dupUnlessDiscarded();
         m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slot), currentLine_);
         return;
     }
@@ -1238,19 +1248,28 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             // into the shared captured dict; otherwise use a local slot.
             // In both cases we DUP so the value is left on the stack as the
             // expression's result.
+            // A statement whose value is discarded stores without the DUP
+            // (emitStatements omits the POP). Only this node: an assignment
+            // nested in its value is an expression.
+            const bool discard = discardValueOf_ == &n;
+            if (discard) discardValueOf_ = nullptr;
+            auto dupUnlessDiscarded = [&] {
+                if (discard) valueDiscarded_ = true;
+                else         m.emit(Op::DUP, 0, currentLine_);
+            };
             if (reportArgumentAssignment(n.text)) { m.emit(Op::PUSH_NIL, 0, currentLine_); return; }
             if (isCaptured(n.text)) {
                 if (reportUndeclaredInMethod(n.text)) { m.emit(Op::PUSH_NIL, 0, currentLine_); return; }
                 emitExpr(m, *n.children[0]);
                 auto sym = m.internSymbol(n.text);
-                m.emit(Op::DUP, 0, currentLine_);
+                dupUnlessDiscarded();
                 m.emitWide(Op::STORE_CAPTURED, static_cast<unsigned int>(sym), currentLine_);
                 return;
             }
             // A temporary or argument wins over an instance variable.
             if (int slot = resolveLocal(n.text); slot >= 0) {
                 emitExpr(m, *n.children[0]);
-                m.emit(Op::DUP, 0, currentLine_);
+                dupUnlessDiscarded();
                 m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slot), currentLine_);
                 return;
             }
@@ -1259,7 +1278,7 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                 if (iv == n.text) {
                     emitExpr(m, *n.children[0]);
                     auto sym = m.internSymbol(n.text);
-                    m.emit(Op::DUP, 0, currentLine_);
+                    dupUnlessDiscarded();
                     m.emitWide(Op::STORE_INSTVAR, static_cast<unsigned int>(sym), currentLine_);
                     return;
                 }
@@ -1273,7 +1292,7 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                 if (cv == n.text) {
                     emitExpr(m, *n.children[0]);
                     auto sym = m.internSymbol(n.text);
-                    m.emit(Op::DUP, 0, currentLine_);
+                    dupUnlessDiscarded();
                     m.emitWide(Op::STORE_CLASSVAR, static_cast<unsigned int>(sym), currentLine_);
                     return;
                 }
@@ -1284,14 +1303,14 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             if ((replMode_ && atModuleScope()) || assignsReplGlobalInBlock(n.text)) {
                 emitExpr(m, *n.children[0]);
                 auto sym = m.internSymbol(n.text);
-                m.emit(Op::DUP, 0, currentLine_);
+                dupUnlessDiscarded();
                 m.emitWide(Op::STORE_GLOBAL, static_cast<unsigned int>(sym), currentLine_);
                 return;
             }
             if (reportUndeclaredInMethod(n.text)) { m.emit(Op::PUSH_NIL, 0, currentLine_); return; }
             int slot = declareLocal(n.text);
             emitExpr(m, *n.children[0]);
-            m.emit(Op::DUP, 0, currentLine_);
+            dupUnlessDiscarded();
             m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slot), currentLine_);
             return;
         }
@@ -2139,8 +2158,8 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
                        static_cast<unsigned int>(m.internSymbol("<=")), currentLine_);
             const size_t jExit = emitForwardJump(m, Op::JUMP_IF_FALSE);
             // body (the block's children) — inlined.
-            emitInlinedBlockBody(m, *blk);
-            m.emit(Op::POP, 0, currentLine_);
+            if (emitInlinedBlockBody(m, *blk, /*discardValue=*/true))
+                m.emit(Op::POP, 0, currentLine_);
             // i := i + 1   (SmallInt fast-path `+`).
             size_t oneConstIdx = m.addInteger(1);
             m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotI), currentLine_);
@@ -2180,8 +2199,8 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
         // Exit loop when cond does NOT match polarity.
         const size_t jExit = emitForwardJump(m, invert ? Op::JUMP_IF_TRUE : Op::JUMP_IF_FALSE);
         // body, discard its value, loop back.
-        emitInlinedBlockBody(m, *n.children[1]);
-        m.emit(Op::POP, 0, currentLine_);
+        if (emitInlinedBlockBody(m, *n.children[1], /*discardValue=*/true))
+            m.emit(Op::POP, 0, currentLine_);
         closeLoop(m, loopTest, jExit);
         // exit target — whileTrue: returns nil.
         m.emit(Op::PUSH_NIL, 0, currentLine_);
@@ -2273,23 +2292,41 @@ void Compiler::emitInlinedConditional(BytecodeModule& m, const ast::Node& send, 
                               static_cast<uint32_t>(slot));
 }
 
-void Compiler::emitInlinedBlockBody(BytecodeModule& m, const ast::Node& block) {
+bool Compiler::emitInlinedBlockBody(BytecodeModule& m, const ast::Node& block,
+                                    bool discardValue) {
     if (block.children.empty()) {
         m.emit(Op::PUSH_NIL, 0, currentLine_);
-        return;
+        return true;
     }
-    emitStatements(m, block.children, 0, block.children.size());
+    return emitStatements(m, block.children, 0, block.children.size(), discardValue);
 }
 
-void Compiler::emitStatements(BytecodeModule& m, const std::vector<ast::NodePtr>& stmts,
-                              std::size_t from, std::size_t end) {
+bool Compiler::emitStatements(BytecodeModule& m, const std::vector<ast::NodePtr>& stmts,
+                              std::size_t from, std::size_t end, bool discardLast) {
+    bool lastLeftValue = true;
     for (std::size_t i = from; i < end; ++i) {
-        if (std::size_t run = tryEmitInstVarGroup(m, stmts, i, end); run > 0)
+        bool leftValue = true;
+        if (std::size_t run = tryEmitInstVarGroup(m, stmts, i, end); run > 0) {
             i += run - 1;
-        else
+        } else if ((i + 1 != end || discardLast)
+                   && stmts[i]->kind == NodeKind::Assignment) {
+            // `x := e.` as a statement: store, no DUP, no POP (0.10.0).
+            discardValueOf_ = stmts[i].get();
+            valueDiscarded_ = false;
             emitStatement(m, *stmts[i]);
-        if (i + 1 != end) m.emit(Op::POP, 0, currentLine_);
+            leftValue = !valueDiscarded_;
+            discardValueOf_ = nullptr;
+            valueDiscarded_ = false;
+        } else {
+            emitStatement(m, *stmts[i]);
+        }
+        if (i + 1 != end) {
+            if (leftValue) m.emit(Op::POP, 0, currentLine_);
+        } else {
+            lastLeftValue = leftValue;
+        }
     }
+    return lastLeftValue;
 }
 
 // ---------------------------------------------------------------------------
