@@ -332,9 +332,18 @@ minor release, so the two services arrive in 0.5.0.
     Test `05-messages/assignment-statement-values.st`.
   - The dispatch core indexes the frame's slots directly (bounds checks
     become debug assertions) and pushes SmallInteger and Symbol constants
-    without materialising them. (A jump table built at compile time was
-    tried and reverted: GCC then merged every handler's indirect jump into
-    one, and a branchy loop took about 10 % more cycles.)
+    without materialising them. The threaded-dispatch jump table is built
+    at compile time instead of being filled (256 stores) on every engine
+    entry, which every block a primitive evaluates pays; GCC needs
+    `--param=max-goto-duplication-insns=32` on that file to keep one
+    indirect jump per handler (review R3-4). Against the round-3 base, in
+    cycles: `int_sum_loop` (`inject:into:`, 10^5) 106M -> 89M, the same at
+    3x10^6 1.63G -> 1.08G. **Measured regression:** a loop whose body is an
+    inlined `true ifTrue: [s := i]` (2x10^7) takes about 8 % more cycles
+    (4.8-5.0G -> 5.3-5.5G) with 13 % fewer instructions; its cost is the
+    shared loop-head dispatch that `JUMP_BACK` returns through, and no
+    layout under protoST's control was found that removes it without giving
+    back the gain above.
   - `Array new:` builds its storage in one `newList` call and publishes no
     intermediate mutable object.
   - `perform:` to `perform:with:with:with:` are primitives (they built an

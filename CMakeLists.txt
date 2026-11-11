@@ -263,6 +263,19 @@ add_library(protost_runtime STATIC
     src/dap/DapTransport.cpp
     src/dap/DapServer.cpp
 )
+
+# The dispatch loop is threaded (computed goto): each handler ends in its own
+# indirect jump, so each is predicted from its own history. GCC first merges
+# those jumps into one and then re-duplicates the shared block only when it is
+# at most max-goto-duplication-insns long (8 by default); the dispatch block,
+# which loads the jump table's address and decodes the next instruction, is
+# longer, so without this the loop kept 2 to 3 indirect jumps instead of one
+# per handler (0.10.0, review R3-4). GCC only: Clang keeps them apart, and
+# MSVC has no computed goto.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set_source_files_properties(src/runtime/ExecutionEngine.cpp
+        PROPERTIES COMPILE_OPTIONS "--param=max-goto-duplication-insns=32")
+endif()
 target_include_directories(protost_runtime PUBLIC src include ${PROTOCORE_INCLUDE_DIRS})
 target_link_libraries(protost_runtime PUBLIC nlohmann_json::nlohmann_json)
 target_link_libraries(protost_frontend PRIVATE protost_warnings)

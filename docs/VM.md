@@ -2576,11 +2576,15 @@ condition. Every place to touch, in order:
    ASSERT_LOOP_BOOL = 38, // arg = selector const index (for the message)
    ```
 2. **The engine,** `ExecutionEngine::runLoop` (`src/runtime/ExecutionEngine.cpp`):
-   - a `labels[]` entry for the threaded dispatch (GCC builds); a missing one
-     makes the opcode fail with `unimplemented opcode (threaded dispatch)`
-     on Linux only. The table stays a local array filled per `runLoop`
-     call: a static one made GCC merge the handlers' indirect jumps into one
-     (about 10 % more cycles on a branchy loop, measured in 0.10.0);
+   - for the threaded dispatch (GCC builds), its label at the opcode's
+     position in the static `kLabels[256]` table and the matching
+     `check[...] = &&L_X` line, from which a build with assertions verifies
+     the table; a missing entry makes the opcode fail with `unimplemented
+     opcode (threaded dispatch)` on Linux only. The table is static since
+     0.10.0 (it was filled on every `runLoop` entry); it relies on
+     `--param=max-goto-duplication-insns=32` for `ExecutionEngine.cpp`
+     (CMakeLists.txt), without which GCC merges the handlers' indirect
+     jumps;
    - a `case Op::X: L_X: { Frame& f = frames_.back(); ... }` in the switch,
      ending with `DISPATCH_DIRECT()`, or with `DISPATCH_SCOPED()` when a local
      with a destructor (a `TransientPin`) is alive in the case's scope (a
