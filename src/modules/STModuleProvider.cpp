@@ -1,4 +1,5 @@
 #include "STModuleProvider.h"
+#include "runtime/ExecutionEngine.h"
 #include "runtime/NativeError.h"
 #include "protoST/STRuntime.h"
 #include "runtime/NativeExceptionBridge.h"
@@ -247,6 +248,13 @@ STModuleProvider::tryLoad(const std::string& logicalPath, proto::ProtoContext* c
     // A guest runtime in the caller's space: the caller is the host runtime's
     // code, so the import crosses the runtime boundary as a foreign one does.
     if (rt && !rt->ownsSpace()) return loadForForeignCaller(*rt, logicalPath, ctx);
+    // K18: protoST's own space, but a context that is not protoST's (another
+    // runtime's frame context, an embedder's): the import crosses the runtime
+    // boundary too. importModuleFile runs it on a child context, and the
+    // foreign-caller path refuses a control-flow unwind that would leave
+    // through the caller's frames.
+    if (rt && !EntryContext::isProtoSTContext(*rt, ctx))
+        return loadForForeignCaller(*rt, logicalPath, ctx);
     if (!rt) {
         // Track Y: the caller's ProtoSpace is not one protoST owns, so this is
         // a cross-runtime import and the runtime comes from the provider's own

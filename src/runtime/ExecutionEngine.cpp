@@ -426,11 +426,21 @@ ExecutionEngine::flushInstVarGroup(proto::ProtoContext* ctx, Frame& f) {
 thread_local std::vector<std::vector<ExecutionEngine::Frame>>
     ExecutionEngine::framePool_;
 
-// K18: see EntryContext in ExecutionEngine.h.
+// K18: see EntryContext in ExecutionEngine.h. The child contexts live
+// EntryContexts opened on this thread, with their runtime: protoST's own too,
+// so an entry nested in another (importModuleFile -> loadModuleFromFile, a
+// send that imports) runs on the same child instead of opening another.
+namespace {
+struct EntryChild { const STRuntime* rt; const proto::ProtoContext* ctx; };
+thread_local std::vector<EntryChild> t_entryChildren;
+}  // namespace
+
 bool EntryContext::isProtoSTContext(const STRuntime& rt, const proto::ProtoContext* ctx) {
     if (ctx == rt.rootCtx()) return true;
     for (const ExecutionEngine* e : g_liveEngines)
         if (&e->rt_ == &rt && e->ctx_ == ctx) return true;
+    for (const EntryChild& c : t_entryChildren)
+        if (c.rt == &rt && c.ctx == ctx) return true;
     return false;
 }
 
@@ -441,8 +451,10 @@ EntryContext::EntryContext(STRuntime& rt, proto::ProtoContext* ctx) : ctx_(ctx) 
     // in the contexts below. No pin or frame of those contexts is released
     // while this entry runs (they are below it on the C++ stack), so the
     // cursors are simply saved here and put back in the destructor.
+    t_entryChildren.reserve(t_entryChildren.size() + 1);   // may throw: nothing opened yet
     own_.emplace(ctx->space, ctx);
     ctx_ = &*own_;
+    t_entryChildren.push_back(EntryChild{ &rt, ctx_ });
     savedSlotCursor_    = g_slotCursor;
     savedScratchCursor_ = g_scratchCursor;
     g_slotCursor    = kFrameRegionBase;
@@ -451,6 +463,7 @@ EntryContext::EntryContext(STRuntime& rt, proto::ProtoContext* ctx) : ctx_(ctx) 
 
 EntryContext::~EntryContext() {
     if (!own_) return;
+    t_entryChildren.pop_back();   // entries nest strictly with the C++ stack
     g_slotCursor    = savedSlotCursor_;
     g_scratchCursor = savedScratchCursor_;
     // own_ is destroyed next and anchors the return value in the caller's

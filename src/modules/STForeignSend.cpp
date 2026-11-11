@@ -166,12 +166,14 @@ const proto::ProtoObject* foreignSendEntry(proto::ProtoContext* callerCtx,
     const int argc = static_cast<int>(args.size());
     const proto::ProtoObject* recv = self ? self : PROTO_NONE;
 
-    // A guest in another runtime's space (STRuntime(proto::ProtoSpace&)): the
-    // caller shares protoST's space but is the host runtime's code, so the send
-    // crosses the runtime boundary as a foreign one does -- on the caller's own
-    // context, which belongs to protoST's space, from any thread of it.
-    if (!foreign && rt->ownsSpace())
-        return entry.leave(sendMessage(*rt, ctx, recv, selector, args.data(), argc));
+    // Every send through __st_send__ crosses a runtime boundary: protoST's own
+    // dispatch never comes here, so the caller is another runtime's code (a
+    // foreign space, a host whose space protoST is a guest in, or a runtime
+    // sharing protoST's space), with its frames between protoST code above and
+    // this send. Until fix round 2 of K15 a caller in protoST's own space
+    // skipped the boundary below, so a non-local return or a Future yield could
+    // unwind through the caller's frames, and an outer protoST handler could
+    // take an Error past them.
 
     // The foreign boundary. The send is a native call boundary like a
     // primitive's: a C++ failure becomes a signalled Error, and with protoST's

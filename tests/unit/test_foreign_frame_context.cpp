@@ -123,3 +123,58 @@ TEST_CASE("K18: a send from another runtime's frame context leaves its slots alo
     CHECK(g_localsKept);
     CHECK(g_localsInPlace);
 }
+
+namespace {
+
+// Another runtime's function that runs a protoST block it was handed: it sends
+// `value` to the block through __st_send__, on the context it was called with
+// (protoST's own engine context, so the send takes the path of a caller in
+// protoST's own space).
+const proto::ProtoObject* runBlockBack(proto::ProtoContext* ctx, const proto::ProtoObject*,
+                                       const proto::ParentLink*,
+                                       const proto::ProtoArguments* positional,
+                                       const proto::ProtoKeywordArguments*) {
+    const proto::ProtoObject* block = positional->getAt(ctx, 0);
+    return send(ctx, block, "value");
+}
+
+}  // namespace
+
+// The block's `^ 42` returns from `escape:`, whose frame is above the foreign
+// function's. Until fix round 2 of K15 the send from a caller in protoST's own
+// space skipped the runtime boundary, and the NonLocalReturn unwound through
+// the foreign function's frames (escape: answered 42). Like a send from a
+// foreign space, it must be refused: the foreign function sees an error, which
+// re-enters protoST as an Error where the function returns.
+TEST_CASE("K18: a non-local return cannot leave a __st_send__ through the caller's frames",
+          "[umd][interop]") {
+    std::vector<std::unique_ptr<protoST::BytecodeModule>> kept;
+    protoST::STRuntime rt;
+    auto run = [&](const std::string& src) {
+        protoST::Parser P(src.c_str());
+        auto ast = P.parseModule();
+        REQUIRE(P.errors().empty());
+        protoST::Compiler C;
+        auto bc = C.compileModule(*ast);
+        REQUIRE(!C.hasErrors());
+        const proto::ProtoObject* r = rt.runTopLevel(*bc);
+        kept.push_back(std::move(bc));
+        return r;
+    };
+    run("Object subclass: #Escaper.\n"
+        "Escaper >> escape: aCallable\n"
+        "  ^ [aCallable apply([^ 42]). 0] on: Error do: [:e | e messageText].\n"
+        "nil.");
+    proto::ProtoContext* root = rt.rootCtx();
+    const proto::ProtoObject* cls = rt.globals()->getAttribute(root, sym(root, "Escaper"));
+    REQUIRE(cls != PROTO_NONE);
+    const proto::ProtoObject* callable = root->newObject(true);
+    callable->setAttribute(root, sym(root, "apply"), root->fromMethod(nullptr, &runBlockBack));
+    const proto::ProtoObject* r = send(root, send(root, cls, "new"), "escape:", {callable});
+
+    REQUIRE(r != nullptr);
+    INFO("escape: answered " << (r->isInteger(root) ? std::to_string(r->asLong(root))
+                                                    : std::string("a non-integer")));
+    REQUIRE(r->asString(root) != nullptr);
+    CHECK(r->asString(root)->toStdString(root).find("control-flow unwind") != std::string::npos);
+}

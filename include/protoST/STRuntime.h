@@ -327,6 +327,13 @@ private:
     const proto::ProtoObject* runModuleTopLevel(const BytecodeModule& m,
                                                 proto::ProtoContext* ctx);
 
+    // The bodies of loadModuleFromFile and importModuleFile, on a context that
+    // is protoST's own (the public functions open an EntryContext first).
+    const proto::ProtoObject* loadModuleFromFileImpl(
+        proto::ProtoContext* ctx, const std::string& filePath, const std::string& logicalName);
+    const proto::ProtoObject* importModuleFileImpl(
+        proto::ProtoContext* ctx, const std::string& filePath, const std::string& logicalName);
+
     // F6 v3 E2b: live-registry GC anchoring. registryAdd makes `o` reachable
     // from the single pinned root (so it survives GC); registryRemove drops
     // it. No-ops for null / PROTO_NONE / before the registry is created.

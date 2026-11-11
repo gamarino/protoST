@@ -1275,9 +1275,13 @@ STRuntime::runTopLevel(const BytecodeModule& m, proto::ProtoContext* ctx) {
     // A foreign exception no handler took leaves as the ProtoException the
     // module raised (UnhandledSTException::original), re-thrown after the
     // catch clause.
+    // K18: a context that is not protoST's own (an embedder's, another
+    // runtime's frame) is never run on directly; see EntryContext.
+    EntryContext entry(*this, ctx);
+    ctx = entry.ctx();
     std::exception_ptr foreignOriginal;
     try {
-        return runModuleTopLevel(m, ctx);
+        return entry.leave(runModuleTopLevel(m, ctx));
     } catch (const UnhandledSTException& u) {
         if (!u.original()) throw;
         foreignOriginal = u.original();
@@ -2881,6 +2885,13 @@ void STRuntime::loadKernel() {
 // F5-M1: Read, parse, compile, and execute a module file. Wraps the classes
 // the module declared as attributes of a fresh ProtoObject and returns it.
 const proto::ProtoObject* STRuntime::loadModuleFromFile(
+    proto::ProtoContext* ctx, const std::string& filePath, const std::string& logicalName) {
+    // K18: see EntryContext (ExecutionEngine.h).
+    EntryContext entry(*this, ctx);
+    return entry.leave(loadModuleFromFileImpl(entry.ctx(), filePath, logicalName));
+}
+
+const proto::ProtoObject* STRuntime::loadModuleFromFileImpl(
     proto::ProtoContext* ctx,
     const std::string& filePath,
     const std::string& logicalName)
@@ -3019,6 +3030,15 @@ const proto::ProtoObject* STRuntime::loadModule(proto::ProtoContext* ctx, const 
 // anchored in the live registry before it is published, so a waiter that
 // parks for a collection on its way out still receives a live object.
 const proto::ProtoObject* STRuntime::importModuleFile(
+    proto::ProtoContext* ctx, const std::string& filePath, const std::string& logicalName) {
+    // K18: an import requested on a context that is not protoST's own (a UMD
+    // import from another runtime's frame, a host's context in guest mode)
+    // runs on a child context of it; see EntryContext (ExecutionEngine.h).
+    EntryContext entry(*this, ctx);
+    return entry.leave(importModuleFileImpl(entry.ctx(), filePath, logicalName));
+}
+
+const proto::ProtoObject* STRuntime::importModuleFileImpl(
     proto::ProtoContext* ctx,
     const std::string& filePath,
     const std::string& logicalName)
@@ -3082,7 +3102,7 @@ const proto::ProtoObject* STRuntime::importModuleFile(
         }
     } guard{impl_.get(), &canonical, true};
 
-    const proto::ProtoObject* mod = loadModuleFromFile(ctx, filePath, logicalName);
+    const proto::ProtoObject* mod = loadModuleFromFileImpl(ctx, filePath, logicalName);
     // registryAdd allocates; hold `mod` across it.
     TransientPin pinMod(ctx, mod);
     registryAdd(ctx, mod);

@@ -71,14 +71,23 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
   two contexts, out-of-order release) and
   `tests/conformance/09-collections/collect-deep-nesting-gc.st` (0.9.0 crashed
   10 runs out of 10).
-- **A send into protoST from another runtime's frame context wrote into that
-  frame's slots (K18).** `__st_send__` ran the message on the caller's context
-  whenever it belonged to protoST's space, so protoST's engine grew another
-  runtime's frame context to its own geometry and put transient pins at the
-  same indices as the frame's locals (a send nested about 250 pins deep
-  overwrote them). The message now runs on a child context of any context
+- **A send or an import into protoST from another runtime's frame context
+  wrote into that frame's slots (K18).** `__st_send__` and UMD module imports
+  (in protoST's own space, and with protoST a guest in a host's space) ran
+  protoST's engine on the caller's context whenever it belonged to protoST's
+  space, so the engine grew another runtime's frame context to its own
+  geometry and put transient pins and frames at the same indices as the
+  frame's locals. Work for a caller now runs on a child context of any context
   that is not protoST's own, with the frame and pin cursors started afresh for
-  it. Test: `tests/unit/test_foreign_frame_context.cpp`.
+  it; the guard is at every entry that runs protoST code on a caller-supplied
+  context (`__st_send__`, `runTopLevel(m, ctx)`, `loadModuleFromFile`,
+  `importModuleFile`). Tests: `tests/unit/test_foreign_frame_context.cpp`,
+  `tests/unit/test_k18_module_entry.cpp`.
+- **A non-local return or a Future yield could leave `__st_send__` through
+  the caller's frames (K19).** A caller in protoST's own space skipped the
+  runtime boundary; now every `__st_send__` crosses it, and a control-flow
+  unwind is reported as an error, as for a caller in another space. Test:
+  `tests/unit/test_foreign_frame_context.cpp`.
 
 - **`lib/json.st` crashed on every `\uXXXX` escape (K17).** The parser sent
   `and:ifTrue:` (an unparenthesised `and:` before `ifTrue:`) in its hex-digit

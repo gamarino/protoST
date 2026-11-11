@@ -375,9 +375,10 @@ on the host's main thread, after the host and destroyed before it. Then:
 - **The boundary is unchanged in meaning.** An import (`tryLoad`) and a send
   (`__st_send__`) from host code cross the runtime boundary as a foreign one
   does (protoST's handlers are not offered a host error; a protoST error no
-  handler takes leaves unchanged) -- but on the caller's own context, which
-  belongs to the shared space, so a call from any protoCore thread of the space
-  is served (the one-thread restriction of §4.1 is for a caller in another
+  handler takes leaves unchanged) -- but on a child context of the caller's
+  context, which belongs to the shared space, so a call from any protoCore
+  thread of the space is served (the child keeps protoST's frames and pins out
+  of the caller's own slots, K18) (the one-thread restriction of §4.1 is for a caller in another
   space).
 
 The sections below describe the shape where each runtime keeps its own space,
@@ -494,7 +495,11 @@ obj->call(ctx, nullptr, createSymbol(ctx, "__st_send__"), obj, args, 3);
   an actor is refused (its messages are asynchronous).
 - For a caller in a space protoST does not own, the message runs on protoST's
   current context on the thread that constructed the runtime (D26); a call from
-  any other thread is refused with a message, as an import is.
+  any other thread is refused with a message, as an import is. A context that is
+  not protoST's own (its root context, or one a protoST engine runs on) is never
+  run on directly: the message runs on a child context of it (K18). This holds
+  for a caller in protoST's own space too, and the rules below apply to every
+  caller: no caller of `__st_send__` is protoST code.
 - **The handlers of protoST code above the send are hidden while it runs**
   (`handlerStackDisableAll`), because the caller's frames lie between them and the
   send. An Error nothing inside the send handles leaves as the

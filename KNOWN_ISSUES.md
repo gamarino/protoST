@@ -317,14 +317,47 @@ into protoST, which nests `collect:` 300 deep):
   locals. Before K15's fix the region reached slot 0 at the 256th pin, so this
   is not a regression of K15.
 
-Fix: `EntryContext` (src/runtime/ExecutionEngine.h). At the `__st_send__`
-boundary, a context that is not protoST's own (its root context or the context
-of one of its engines live on this thread) is never run on: the message runs on
-a child context of it, with the thread's frame cursor and pin cursor started
-afresh for that child and restored when the send ends, and the result is
-anchored as the child's return value. `__st_send__` is the only entry from
-foreign code that runs protoST code on a caller's context (module loads run on
-the root context).
+Module imports had the same defect. A UMD import from a frame context in
+protoST's own space (`STModuleProvider::tryLoad`), or from a host frame with
+protoST a guest in the host's space (`loadForForeignCaller`, shared space), ran
+the module's top level on the frame context: in
+`tests/unit/test_k18_module_entry.cpp` (from the K15 re-review) the frame's
+four sentinel locals were overwritten and its `automaticLocalsCount` grew from
+4 to 65536. The first version of this fix covered `__st_send__` only and said
+module loads ran on the root context; they did not.
+
+Fix: `EntryContext` (src/runtime/ExecutionEngine.h). A context that is not
+protoST's own is never run on: the work runs on a child context of it, with the
+thread's frame cursor and pin cursor started afresh for that child and restored
+when the entry ends, and the result is anchored as the child's return value.
+protoST's own contexts are its root context, the context of one of its engines
+live on this thread, and a child an enclosing EntryContext opened. The guard
+sits at every entry that runs protoST code on a context its caller supplies:
+`__st_send__`, `STRuntime::runTopLevel(m, ctx)`, `loadModuleFromFile` and
+`importModuleFile` (`loadModule` and both STModuleProvider paths go through
+`importModuleFile`). Of the other public functions that take a context,
+`materialize` and the registry calls allocate on it but run no protoST code,
+and the scheduler entries that do run it (`drainOne`, `runOneTask`,
+`workerLoop`) are reached only from protoST itself: a worker thread protoST
+started (`st_worker_main`, on that thread's root context) and the Future wait
+primitive (on its engine context). A UMD import from a context in protoST's own space that is not
+protoST's now goes through the foreign-caller path, like a guest's.
+
+### K19 — A control-flow unwind could leave `__st_send__` through the caller's frames (resolved, unreleased)
+
+`__st_send__` from a caller in protoST's own space skipped the runtime boundary
+the other callers cross: it called `sendMessage` directly, so a non-local
+return, `retry`, `resume:`, `pass` or a Future yield whose target was a protoST
+frame above the caller unwound through the caller's frames (another runtime's
+code, which cannot interpret it), and an outer protoST handler could take an
+Error past them. Since protoST's own dispatch never goes through
+`__st_send__`, every caller is another runtime's code: the shortcut is gone and
+every send crosses the boundary (outer handlers hidden, an Error nothing
+inside handles leaves as an exception, a control-flow unwind is reported as an
+error). Test: `tests/unit/test_foreign_frame_context.cpp`, "a non-local return
+cannot leave a __st_send__ through the caller's frames" (before the fix the
+method answered 42 through the foreign function's frames). An import from such
+a caller has the same rule (K18 above).
 
 ### K15 — Deep nesting crashed the runtime: transient pins past 256 rooted nothing (resolved, unreleased)
 
