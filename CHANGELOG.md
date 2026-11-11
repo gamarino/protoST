@@ -50,6 +50,19 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ### Fixed
 
+- **The literal `5e-324` was a compile error (K16).** Every float literal
+  whose value is subnormal or underflows (`5e-324`, `2.2e-308`, `1e-400`) was
+  refused as *out of range*, so `printString` of such a `Float` did not read
+  back. A float literal is now the correctly rounded `Float` over the whole
+  range: a subnormal is kept, an underflow is `0.0` / `-0.0`, and only a
+  literal beyond the largest `Float` stays an error (STATUS D51, a recorded
+  decision; LANGUAGE.md §2.5). The lexer and `String >> asNumber` read the
+  digits with `std::from_chars`, which ignores the C locale. Tests:
+  `02-lexical/float-literal-full-range.st`, `float-literal-round-trip.st`,
+  `float-literal-overflow-is-error.st`, and the `[k16]` cases of
+  `tests/unit/test_lexer.cpp` (ties to even, 4,000 random doubles' shortest
+  forms, a comma-decimal `LC_NUMERIC`).
+
 - **Deeply nested `collect:` (and every other pinning primitive) crashed
   (K15).** A `TransientPin` lived only in a fixed 256-slot scratch region; the
   257th live pin hit `assert(false)` and, in a release build, returned without

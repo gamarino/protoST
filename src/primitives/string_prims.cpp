@@ -1,5 +1,6 @@
 #include "protoST/STRuntime.h"
 #include "runtime/NativeError.h"
+#include "runtime/DecimalDouble.h"
 #include "runtime/ListIndex.h"
 #include "runtime/ClassedErrorSignal.h"
 #include "protoST/primitives.h"
@@ -175,9 +176,10 @@ const proto::ProtoObject* parseNumber(proto::ProtoContext* ctx, const std::strin
         if (ed == 0) return PROTO_NONE;
     }
     if (j != t.size()) return PROTO_NONE;
-    char* end = nullptr;
-    const double d = std::strtod(t.c_str(), &end);
-    if (end != t.c_str() + t.size()) return PROTO_NONE;
+    // Correctly rounded and locale-independent; 1e400 reads as infinity and
+    // 1e-400 as 0.0, as Python's float().
+    double d = 0.0;
+    if (!parseDecimalDouble(t, d)) return PROTO_NONE;
     return ctx->fromDouble(d);
 }
 

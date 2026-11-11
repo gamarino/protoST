@@ -292,6 +292,30 @@ message cells. It is recorded because the loss is silent to the senders
 
 ## Resolved
 
+### K16 — The smallest subnormal Float could not be written as a literal (resolved, unreleased)
+
+`5e-324`, the smallest positive `Float`, was the compile error *float literal
+out of range*, and so was every literal whose value is subnormal (below
+`2.2250738585072014e-308`) or underflows to zero (`1e-400`). The lexer read
+float literals with `std::stod`, which throws `std::out_of_range` whenever
+`strtod` reports `ERANGE`, and `strtod` reports it for a subnormal result as
+well as for an underflow, although the value it answers is the correctly
+rounded one. `printString` of such a `Float` (`5.0e-324`) therefore did not
+read back, and protoBaseST had to build that value from its bits
+(`tests/unit/notation_float_hex.st`).
+
+Fix: `Lexer::lexNumber` and `String >> asNumber` read the digits with
+`parseDecimalDouble` (`src/runtime/DecimalDouble.h`, `std::from_chars`:
+correctly rounded and independent of the C locale's decimal separator), and
+the lexer refuses only an infinite result (overflow); a subnormal is kept and
+an underflow is `0.0` or `-0.0`, the rounding of IEEE 754, Pharo and Python
+(STATUS D51, LANGUAGE.md §2.5). Tests: `tests/conformance/02-lexical/float-literal-full-range.st` (18 edge
+literals by bit pattern: subnormals, the halfway points around `5e-324`, the
+normal/subnormal boundary, the largest `Float`, ties to even),
+`float-literal-round-trip.st` (`printString` of edge values read back as a
+literal and by `asNumber`, bit for bit) and
+`float-literal-overflow-is-error.st`; the first two fail on 0.9.0.
+
 ### K18 — A send from another runtime's frame context ran on that context (resolved, unreleased)
 
 `__st_send__` (src/modules/STForeignSend.cpp) chose the context a message runs

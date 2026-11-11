@@ -189,3 +189,94 @@ TEST_CASE("lexer skips a leading shebang line and keeps line numbers", "[lexer]"
     // Only the very first two bytes count: `#!` later is not a shebang.
     REQUIRE(Lexer(" #!x").next().kind != TokenKind::EndOfFile);
 }
+
+// K16, D51: a float literal is the correctly rounded double, read without the
+// C locale (parseDecimalDouble over std::from_chars).
+#include "runtime/DecimalDouble.h"
+#include <charconv>
+#include <clocale>
+#include <cstdint>
+#include <cstring>
+#include <random>
+
+namespace {
+std::uint64_t bitsOf(double d) {
+    std::uint64_t b = 0;
+    std::memcpy(&b, &d, sizeof b);
+    return b;
+}
+double lexFloat(const std::string& text) {
+    Lexer L(text);
+    auto t = L.next();
+    REQUIRE(t.kind == TokenKind::Float);
+    return t.floatValue;
+}
+} // namespace
+
+TEST_CASE("float literals round to nearest, ties to even, at the edges", "[lexer][k16]") {
+    // 2^53 + 1 is halfway between 2^53 and 2^53 + 2: ties to the even 2^53.
+    REQUIRE(lexFloat("9007199254740993.0") == 9007199254740992.0);
+    REQUIRE(lexFloat("9007199254740995.0") == 9007199254740996.0);
+    // The smallest subnormal and the halfway point below it.
+    REQUIRE(bitsOf(lexFloat("5e-324")) == 1u);
+    REQUIRE(bitsOf(lexFloat("2.4703282292062328e-324")) == 1u);
+    REQUIRE(bitsOf(lexFloat("2.4703282292062327e-324")) == 0u);
+    REQUIRE(bitsOf(lexFloat("1e-400")) == 0u);
+    REQUIRE(bitsOf(lexFloat("-1e-400")) == bitsOf(-0.0));
+    // The largest normal and the smallest normal double.
+    REQUIRE(lexFloat("1.7976931348623157e308") == 1.7976931348623157e308);
+    REQUIRE(lexFloat("2.2250738585072014e-308") == 2.2250738585072014e-308);
+    // Beyond the largest double: an error, not infinity.
+    Lexer L("1.0e309");
+    REQUIRE(L.next().kind == TokenKind::Error);
+}
+
+TEST_CASE("float literals read back every double's shortest form", "[lexer][k16]") {
+    std::mt19937_64 rng(20261111);
+    for (int i = 0; i < 4000; ++i) {
+        std::uint64_t b = rng() & 0x7fffffffffffffffULL;
+        if (i % 4 == 0) b &= 0x000fffffffffffffULL;   // subnormals
+        double d = 0.0;
+        std::memcpy(&d, &b, sizeof d);
+        if (!std::isfinite(d)) continue;
+        char buf[64];
+        auto res = std::to_chars(buf, buf + sizeof buf, d, std::chars_format::scientific);
+        std::string text(buf, res.ptr);
+        // A protoST literal writes a positive exponent without '+', and its
+        // mantissa always has a fraction part ("1e5" is an Integer).
+        if (auto plus = text.find("e+"); plus != std::string::npos) text.erase(plus + 1, 1);
+        if (text.find('.') == std::string::npos) text.insert(text.find('e'), ".0");
+        INFO(text);
+        REQUIRE(bitsOf(lexFloat(text)) == b);
+    }
+}
+
+TEST_CASE("float literals ignore LC_NUMERIC", "[lexer][k16]") {
+    const char* previous = std::setlocale(LC_NUMERIC, nullptr);
+    const std::string saved = previous ? previous : "C";
+    bool commaLocale = false;
+    for (const char* name : {"es_AR.UTF-8", "es_AR.utf8", "de_DE.UTF-8", "de_DE.utf8", "fr_FR.UTF-8"}) {
+        if (std::setlocale(LC_NUMERIC, name)) { commaLocale = true; break; }
+    }
+    double viaLexer = lexFloat("1.5");
+    double viaHelper = 0.0;
+    const bool ok = protoST::parseDecimalDouble("2.25e-1", viaHelper);
+    std::setlocale(LC_NUMERIC, saved.c_str());
+    if (!commaLocale) WARN("no comma-decimal locale installed; ran in the C locale");
+    REQUIRE(viaLexer == 1.5);
+    REQUIRE(ok);
+    REQUIRE(viaHelper == 0.225);
+}
+
+TEST_CASE("parseDecimalDouble refuses what is not a decimal numeral", "[lexer][k16]") {
+    double d = 0.0;
+    REQUIRE_FALSE(protoST::parseDecimalDouble("0x10", d));
+    REQUIRE_FALSE(protoST::parseDecimalDouble("inf", d));
+    REQUIRE_FALSE(protoST::parseDecimalDouble("nan", d));
+    REQUIRE_FALSE(protoST::parseDecimalDouble("1.5x", d));
+    REQUIRE_FALSE(protoST::parseDecimalDouble("--1", d));
+    REQUIRE(protoST::parseDecimalDouble("1e400", d));
+    REQUIRE(std::isinf(d));
+    REQUIRE(protoST::parseDecimalDouble("-1e400", d));
+    REQUIRE((std::isinf(d) && d < 0));
+}

@@ -188,6 +188,25 @@ statement terminator, and `.5` is not a float.
 An exponent suffix `e` (optionally negative) scales the value by a power of
 ten: `2.5e-3` is `0.0025`.
 
+An integer mantissa with a negative exponent is a float literal too:
+`25e-1` is `2.5` and `5e-324` a `Float` (with a non-negative exponent it stays
+an integer, §2.4).
+
+A float literal denotes the `Float` nearest to the decimal value written (IEEE
+754 binary64, round to nearest, ties to even), over the whole range of the
+type (STATUS D51):
+
+- **Subnormals are literals.** `5e-324` is the smallest positive `Float`, and
+  `2.225073858507201e-308` the largest subnormal.
+- **Underflow rounds.** A literal smaller than half of `5e-324` is `0.0`
+  (`-0.0` with a minus sign): `1e-400` is `0.0`, as in Pharo and Python.
+- **Overflow is an error.** A literal whose nearest `Float` would be infinite
+  (`1.0e309`, or `1.7976931348623159e308`) is a compile error, *float literal
+  out of range*; `Float infinity` is the way to write that value.
+
+`printString` of any finite `Float` is a float literal that reads back as the
+same `Float`, bit for bit (`5e-324 printString` is `'5.0e-324'`).
+
 ### 2.6 Character literals
 
 A character literal is `$` followed by exactly one character:
