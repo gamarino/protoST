@@ -287,9 +287,8 @@ FileReference >> binaryContents
   ^ self __fileRead: path binary: true.
 
 FileReference >> binaryContents: aByteArray
-  "Write aByteArray. Array arguments are deprecated and will be refused in
-   protoST 0.10.0 (until then an Array of Integers from 0 to 255 is accepted,
-   with a warning on stderr once per process)."
+  "Write aByteArray (or a String, as its UTF-8 bytes). An Array of Integers is
+   refused since protoST 0.10.0: convert it with ByteArray withAll: anArray."
   self __fileWrite: path data: aByteArray append: false.
   ^ self.
 

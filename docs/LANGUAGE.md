@@ -2535,7 +2535,7 @@ A `FileReference` names a path; it holds no open descriptor.
 | `basename`, `basenameWithoutExtension`, `extension`, `parent` | name parts (`extension` is `''` when there is none) |
 | `children`, `files`, `directories` | the entries of a directory, sorted by name |
 | `contents`, `contents: aString`, `appendContents: aString` | read the whole file; replace it; append to it |
-| `binaryContents`, `binaryContents: aByteArray` | the same with bytes, as a `ByteArray` (an Array of 0-255 is deprecated: it is refused from protoST 0.10.0, and until then prints a warning on stderr once per process) |
+| `binaryContents`, `binaryContents: aByteArray` | the same with bytes, as a `ByteArray` (an `Array` of Integers is refused since protoST 0.10.0 with an `Error` that names `ByteArray withAll:`; 0.9.0 accepted it with a warning) |
 | `lines`, `linesDo: aBlock` | the file's lines |
 | `readStream`, `writeStream`, `appendStream` | an open `IOStream` (`writeStream` truncates) |
 | `readStreamDo:`, `writeStreamDo:`, `appendStreamDo:` | evaluate the block with an open stream and close it afterwards, also on error; answer the block's value |
@@ -2602,7 +2602,7 @@ An `OSProcessResult` answers `exitCode`, `output`, `errorOutput` and
 | `ServerSocket listenOn: port host: '127.0.0.1'` | listen on one address |
 | `aServer port`, `accept`, `acceptTimeout: ms`, `close` | the port listened on; the next connection (a `Socket`); the same or nil after `ms`; stop listening |
 | `UDPSocket bindTo: port`, `bindTo:host:` | a bound UDP socket (port 0: any) |
-| `aUDPSocket send: data to: host port: p` | send a datagram (a String or a `ByteArray`; an Array of 0-255 is deprecated) |
+| `aUDPSocket send: data to: host port: p` | send a datagram (a String or a `ByteArray`; an `Array` of Integers is refused since 0.10.0) |
 | `receive`, `receiveTimeout: ms` | the next datagram as `{data. host. port}` with the data as a String; nil after `ms` |
 | `receiveBytesTimeout: ms` | the same, with the data as a `ByteArray` |
 

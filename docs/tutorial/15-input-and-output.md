@@ -807,8 +807,9 @@ simulations and tests, never for secrets.)
 A byte stream takes bytes as a `ByteArray`: `nextPutAll:` (and `<<`) refuse an
 `Array` of Integers, which goes in through `ByteArray withAll: #(1 2 3)`, and
 a `String`, which goes in through `utf8Encoded`. The same rule holds for the
-I/O methods that write bytes, where an `Array` is still accepted in 0.9.0 with
-a deprecation warning and refused from 0.10.0.
+I/O methods that write bytes (`binaryContents:`, `nextPutBytes:`, UDP
+`send:`): since 0.10.0 they refuse an `Array` with an `Error` that names
+`ByteArray withAll:` (0.9.0 accepted one with a deprecation warning).
 
 The same byte arrays feed the checksums and digests, which are one-shot
 functions (there are no incremental objects):

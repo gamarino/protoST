@@ -220,6 +220,15 @@ minor release, so the two services arrive in 0.5.0.
 
 ### Breaking changes
 
+- **An `Array` of Integers is no longer bytes (D45, ruling R11).** As the
+  0.9.0 deprecation warning announced, `binaryContents:`, `nextPutBytes:` and
+  UDP `send:` refuse an `Array` with an `Error` that says "an Array is not
+  bytes" and names the replacement, `ByteArray withAll: anArray` (or a
+  literal `#[1 2 3]`); nothing is written. The warning and its code path are
+  gone. Tests: `14-io/files_bytes_array_refused.st` (was
+  `files_bytes_array_deprecated.st`), `14-io/net_udp_array_refused.st`;
+  `files_bytes_bad_array.st` now expects the Array refusal, and
+  `http_chunked_utf8.st` passes a `ByteArray` literal.
 - **A class no longer answers its instances' methods (D52, superseding part
   of D5).** Until now a class object reached its own instance-side protocol:
   `Foo greet` ran `Foo >> greet` on the class, `Foo = Foo` ran an
@@ -484,7 +493,7 @@ skip is confirmed only by CI), and K13, a mailbox batch of more than 2^31 - 1 me
 reach and which would be lost. K12 (protoIO did not refuse a NUL in an OS
 string) is resolved by protoIO 0.4.0, and K11 (no structural list split) by
 protoCore 3.5.1. The `Array` argument deprecation ends
-in 0.10.0 (D45).
+in 0.10.0 (D45; it did).
 
 ## 0.8.1 — on protoCore 3.5.0 (2026-10-31)
 
