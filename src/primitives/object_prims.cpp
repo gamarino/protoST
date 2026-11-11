@@ -81,6 +81,8 @@ const proto::ProtoObject* prim_Object_asActor(STRuntime& rt, proto::ProtoContext
                                                const proto::ProtoObject* r,
                                                const proto::ProtoObject* const*, int) {
     auto& b = rt.bootstrap();
+    // Before the proxy exists: from now on every send probes for actors.
+    STRuntime::noteActorCreated();
     // Create a new mutable child of actorProto.
     auto* actor = b.actorProto->newChild(ctx, /*isMutable=*/true);
     // F6 v3 E5: `actor` is a fresh mutable object held in a C++ local across

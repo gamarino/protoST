@@ -2587,9 +2587,22 @@ const proto::ProtoObject* STRuntime::newFuture(proto::ProtoContext* ctx) {
     return fut;
 }
 
+namespace {
+// Set (release) before the first actor proxy is built, never cleared. A
+// thread that holds a proxy got its pointer through some synchronisation
+// after that store (the proxy is published by protoCore or a queue), so its
+// acquire load sees true: a proxy can never be taken for a plain object.
+std::atomic<bool> g_actorsCreated{false};
+} // namespace
+
+void STRuntime::noteActorCreated() {
+    g_actorsCreated.store(true, std::memory_order_release);
+}
+
 bool STRuntime::isActor(proto::ProtoContext* ctx,
                         const proto::ProtoObject* obj) const {
     if (!obj || obj == PROTO_NONE) return false;
+    if (!g_actorsCreated.load(std::memory_order_acquire)) return false;
     const proto::ProtoString* wrappedKey =
         impl_->bootstrap.sym.wrapped;
     auto* w = obj->getOwnAttributeDirect(ctx, wrappedKey);

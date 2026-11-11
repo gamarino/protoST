@@ -243,8 +243,14 @@ public:
     // canonical attribute layout (__state__=0, __value__=nil, __error__=nil).
     const proto::ProtoObject* newFuture(proto::ProtoContext* ctx);
     // Cheap actor detection: an object is treated as an actor iff it carries
-    // a non-nil __wrapped__ attribute (set by Object>>asActor).
+    // a non-nil __wrapped__ attribute (set by Object>>asActor). Until the
+    // process has created its first actor proxy the answer is false without
+    // a probe (0.10.0: the probe was about 5 % of a sequential workload).
     bool isActor(proto::ProtoContext* ctx, const proto::ProtoObject* obj) const;
+    // Called by Object>>asActor before it builds a proxy: from then on
+    // isActor probes every object. Process-wide and never reset, since
+    // runtimes may share a ProtoSpace and pass objects between them.
+    static void noteActorCreated();
 
     // The actor's mailbox: a protoCore ProtoMPSCQueue held under the
     // `__mailbox__` attribute. Lock-free and O(1) on the send side, traced by
