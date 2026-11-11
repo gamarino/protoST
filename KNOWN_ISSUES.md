@@ -292,6 +292,28 @@ message cells. It is recorded because the loss is silent to the senders
 
 ## Resolved
 
+### K17 — `JSON parse:` crashed on any `\uXXXX` escape (resolved, unreleased)
+
+`lib/json.st` read the four hex digits of a `\uXXXX` escape with a helper
+whose range tests were written `(code >= 48) and: [ code <= 57 ] ifTrue: [...]`.
+Smalltalk parses that as the keyword message `and:ifTrue:`, which `Boolean`
+does not understand, so every `\u` escape in parsed text raised
+`doesNotUnderstand`. The writer had a twin: escaping a control character
+other than `\n \t \r \b \f` (for example U+0001) concatenated a `Character`
+with a `String` and failed the same way, so no string with such a character
+could be written.
+
+Both are fixed. The parser follows RFC 8259 section 7: any case of hex digit,
+BMP code points directly, and a high surrogate (D800-DBFF) followed by a
+`\u` low surrogate (DC00-DFFF) combined into one code point (`\ud83d\ude00`
+is U+1F600, one character). A protoST `String` holds code points, not UTF-16
+units, so it cannot hold a lone surrogate; a lone high or low surrogate, a high
+surrogate not followed by a low one, an invalid hex digit and a truncated
+escape all signal the library's parse error (`JSON parse error at position
+N: ...`) rather than storing an invalid string. Tests:
+`tests/conformance/13-stdlib/json-*unicode*` and `json-*surrogate*`
+(round trip of control and non-BMP characters included).
+
 ### K12 — A NUL in a string for the OS was refused by protoST only (resolved in protoIO 0.4.0)
 
 The operating system reads a path, an argv element, a shell command line, an

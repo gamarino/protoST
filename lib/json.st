@@ -227,26 +227,48 @@ JSON class >> parseEscape: scanner
   e = $u  ifTrue: [ ^ self parseUnicodeEscape: scanner ].
   ^ scanner signalError: 'invalid escape \' , e asString.
 
-"Parse the four hex digits of a \\uXXXX escape and answer the character."
+"Parse a \\uXXXX escape (the \u already consumed) and answer the character as
+ a String. A high surrogate (D800-DBFF) must be followed by a \uXXXX low
+ surrogate (DC00-DFFF); the pair is combined into one code point (RFC 8259
+ section 7). A protoST String holds code points, not UTF-16 units, so a lone
+ or mismatched surrogate cannot be represented and signals a parse error."
 JSON class >> parseUnicodeEscape: scanner
-  | code i digit |
+  | code low |
+  code := self parseHex4: scanner.
+  ((code >= 16rDC00) and: [ code <= 16rDFFF ])
+    ifTrue: [ ^ scanner signalError: 'lone low surrogate in \u escape' ].
+  ((code >= 16rD800) and: [ code <= 16rDBFF ]) ifTrue: [
+    (scanner atEnd not and: [ scanner peek = $\ ])
+      ifFalse: [ ^ scanner signalError: 'lone high surrogate in \u escape' ].
+    scanner next.
+    (scanner atEnd not and: [ scanner peek = $u ])
+      ifFalse: [ ^ scanner signalError: 'lone high surrogate in \u escape' ].
+    scanner next.
+    low := self parseHex4: scanner.
+    ((low >= 16rDC00) and: [ low <= 16rDFFF ])
+      ifFalse: [ ^ scanner signalError: 'high surrogate not followed by a low surrogate' ].
+    code := 16r10000 + ((code - 16rD800) * 1024) + (low - 16rDC00) ].
+  ^ code asCharacter asString.
+
+"Read exactly four hex digits (either case) and answer their value."
+JSON class >> parseHex4: scanner
+  | code i |
   code := 0.
   i := 1.
   [ i <= 4 ] whileTrue: [
-    scanner atEnd ifTrue: [ ^ scanner signalError: 'truncated \\u escape' ].
-    digit := self hexValue: scanner next forScanner: scanner.
-    code := (code * 16) + digit.
+    scanner atEnd ifTrue: [ ^ scanner signalError: 'truncated \u escape' ].
+    code := (code * 16) + (self hexValue: scanner next forScanner: scanner).
     i := i + 1 ].
-  ^ code asCharacter asString.
+  ^ code.
 
 "The numeric value of a single hex digit (a 1-char String); signal otherwise."
 JSON class >> hexValue: aChar forScanner: scanner
   | code |
   code := aChar asInteger.
-  (code >= 48) and: [ code <= 57 ] ifTrue: [ ^ code - 48 ].
-  (code >= 65) and: [ code <= 70 ] ifTrue: [ ^ code - 55 ].
-  (code >= 97) and: [ code <= 102 ] ifTrue: [ ^ code - 87 ].
-  ^ scanner signalError: 'invalid hex digit ' , aChar.
+  ((code >= 48) and: [ code <= 57 ]) ifTrue: [ ^ code - 48 ].
+  ((code >= 65) and: [ code <= 70 ]) ifTrue: [ ^ code - 55 ].
+  ((code >= 97) and: [ code <= 102 ]) ifTrue: [ ^ code - 87 ].
+  ^ scanner signalError: 'invalid hex digit ' , aChar asString.
 
 "Parse a JSON number. Builds the value digit by digit: an integral mantissa
  with no fraction and no exponent yields an integer (which promotes to a
@@ -371,7 +393,7 @@ JSON class >> unicodeEscape: code
   i := 1.
   [ i <= 4 ] whileTrue: [
     d := rest \\ 16.
-    hex := (digits at: d + 1) , hex.
+    hex := (digits at: d + 1) asString , hex.
     rest := rest // 16.
     i := i + 1 ].
   ^ '\u' , hex.

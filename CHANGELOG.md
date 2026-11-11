@@ -48,6 +48,17 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
   understands it, as the numeric primitives already do. This is what makes
   `(5/4) = aDecimal` answer `true`; numbers and Fractions are unaffected.
 
+### Fixed
+
+- **`lib/json.st` crashed on every `\uXXXX` escape (K17).** The parser sent
+  `and:ifTrue:` (an unparenthesised `and:` before `ifTrue:`) in its hex-digit
+  reader, and the writer concatenated a `Character` when escaping control
+  characters. Both are fixed; `\uXXXX` now parses in either hex case, a
+  surrogate pair (`\ud83d\ude00`) becomes one code point, and a lone or
+  mismatched surrogate or an invalid or truncated hex escape signals the
+  library's parse error. Tests: `tests/conformance/13-stdlib/json-*unicode*`,
+  `json-*surrogate*`.
+
 ## 0.9.0 — bytes, binary files, encodings, MessagePack and timers (2026-11-10)
 
 Released 2026-11-10.
