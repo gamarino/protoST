@@ -136,7 +136,7 @@ module main.2: Box>>area
   code:
       0  PUSH_INSTVAR       0     ; w
       1  PUSH_INSTVAR       1     ; h
-      2  SEND_BINARY        2     ; #*
+      2  BIN_INT_MUL        2     ; #*
       3  RETURN
 
 module main.3: Box>>scaled(...)
@@ -159,7 +159,7 @@ module main.3: Box>>scaled(...)
       5  STORE_LOCAL        2     ; offset
       6  PUSH_INSTVAR       3     ; w
       7  PUSH_LOCAL         1     ; factor
-      8  SEND_BINARY        4     ; #*
+      8  BIN_INT_MUL        4     ; #*
       9  PUSH_LOCAL         2     ; offset
      10  BIN_INT_ADD        5     ; #+
      11  RETURN

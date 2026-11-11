@@ -448,13 +448,13 @@ another runtime's `ProtoSpace` (`STRuntime`'s `ownRootCtx`).
 
 ## 2. Opcode reference
 
-`Op` (`src/runtime/Opcodes.h`) has **51 values**: 1 to 52 except 7 and 21,
+`Op` (`src/runtime/Opcodes.h`) has **57 values**: 1 to 58 except 7 and 21,
 and `EXTEND` (254). The values 0, 7, 21 and 255 are reserved: they were
 `NOP`, `PUSH_SUPER`, `DUP_RECEIVER` and `HALT`, removed because the compiler
 no longer emitted them (`PUSH_SUPER` since `super` sends became `SEND_SUPER`)
 and only hand-built unit tests ran them; a reserved value is an unimplemented
-opcode. The dispatch in `ExecutionEngine::runLoop` has a `case` for all 51
-and a threaded-dispatch label for the 50 that execute (`EXTEND` is a prefix,
+opcode. The dispatch in `ExecutionEngine::runLoop` has a `case` for all 57
+and a threaded-dispatch label for the 56 that execute (`EXTEND` is a prefix,
 consumed while decoding; a stray one raises `stray EXTEND prefix`). The
 compiler emits all of them; `EXTEND` only as a prefix, by `emitWide` and when
 it widens a jump.
@@ -552,16 +552,27 @@ the attribute `_iv_v` of the class that declares it.
 | `BIN_INT_GE` | 35 | `#>=` | `a b -> bool` | both SmallIntegers |
 | `BIN_INT_GT` | 36 | `#>` | `a b -> bool` | both SmallIntegers |
 | `BIN_INT_EQ` | 37 | `#=` | `a b -> bool` | both SmallIntegers (pointer equality of the tagged values) |
+| `BIN_INT_MUL` | 53 | `#*` | `a b -> a*b` | both SmallIntegers and the product stays in range (0.10.0) |
+| `BIN_INT_MOD` | 54 | `#\\` | `a b -> a\\b` | both SmallIntegers, divisor not zero; floored (the sign of the divisor) (0.10.0) |
+| `BIN_INT_QUO` | 55 | `#//` | `a b -> a//b` | both SmallIntegers, divisor not zero, quotient in range; floored (0.10.0) |
+| `BIN_INT_REM` | 56 | `#rem:` | `a b -> a rem: b` | both SmallIntegers, divisor not zero; truncated (the sign of the dividend) (0.10.0) |
+| `BIN_INT_AND` | 57 | `#bitAnd:` | `a b -> a bitAnd: b` | both SmallIntegers (0.10.0) |
+| `BIN_INT_OR` | 58 | `#bitOr:` | `a b -> a bitOr: b` | both SmallIntegers (0.10.0) |
 
-Semantics, common to all seven: on the fast path the result replaces the
+Semantics, common to all thirteen: on the fast path the result replaces the
 operands with no send, no lookup and no allocation. Otherwise (another
-operand type, an overflow) the operands are pushed back and the instruction
-continues as `SEND_BINARY` with the same operand, so a Float, a
-`LargeInteger`, a `Fraction` or a user class defining `+` behaves exactly as
-with a send; an active write group is flushed first. **Emitted by:** every
-binary send whose selector is one of the seven, whatever the receiver; the
-counter test and increment of an inlined `to:do:`. There is no fast path for
-`*`, `//` or `\\`.
+operand type, an overflow, a zero divisor) the operands are pushed back and
+the instruction continues as `SEND_BINARY` (`SEND_KEYWORD` for `rem:`,
+`bitAnd:`, `bitOr:`) with the same operand, so a Float, a `LargeInteger`, a
+`Fraction`, a user class defining `+`, or a zero divisor (`ZeroDivide` from
+the primitive) behaves exactly as with a send; an active write group is
+flushed first. **Emitted by:** every binary send whose selector is one of
+the first ten, every one-keyword send of `rem:`, `bitAnd:` or `bitOr:` (not
+to `super`), whatever the receiver; the counter test and increment of an
+inlined `to:do:`. As for `+`, a method a program adds to `SmallInteger` for
+these selectors is not reached by a SmallInteger receiver.
+`tests/conformance/12-builtins/integer-fast-paths-match-the-send.st` checks
+each against the send.
 
 ### 2.8 Blocks
 
@@ -675,7 +686,7 @@ module main: <module>
      11  POP
      12  PUSH_LOCAL         0     ; x
      13  PUSH_CONST         1     ; 2
-     14  SEND_BINARY        2     ; #*
+     14  BIN_INT_MUL        2     ; #*
      15  DUP
      16  STORE_LOCAL        1     ; y
      17  POP
@@ -1404,7 +1415,7 @@ module main.2: Box>>area
   code:
       0  PUSH_INSTVAR       0     ; w
       1  PUSH_INSTVAR       1     ; h
-      2  SEND_BINARY        2     ; #*
+      2  BIN_INT_MUL        2     ; #*
       3  RETURN
 
 module main.3: Box>>scaled(...)
@@ -1427,7 +1438,7 @@ module main.3: Box>>scaled(...)
       5  STORE_LOCAL        2     ; offset
       6  PUSH_INSTVAR       3     ; w
       7  PUSH_LOCAL         1     ; factor
-      8  SEND_BINARY        4     ; #*
+      8  BIN_INT_MUL        4     ; #*
       9  PUSH_LOCAL         2     ; offset
      10  BIN_INT_ADD        5     ; #+
      11  RETURN
@@ -2523,7 +2534,7 @@ module main.2: <block>
   code:
       0  PUSH_CONST         0     ; 6
       1  PUSH_CONST         1     ; 7
-      2  SEND_BINARY        2     ; #*
+      2  BIN_INT_MUL        2     ; #*
       3  RETURN_TOP
 
 module main.3: <block>
@@ -2554,7 +2565,7 @@ module main.3: <block>
 The model is `ASSERT_LOOP_BOOL` (value 38), the guard of an inlined loop
 condition. Every place to touch, in order:
 
-1. **The enum,** `src/runtime/Opcodes.h`: the next free value (53 today),
+1. **The enum,** `src/runtime/Opcodes.h`: the next free value (59 today),
    with a comment giving its operand and stack effect. Never renumber an
    existing opcode: the value is the encoding.
    ```cpp

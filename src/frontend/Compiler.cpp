@@ -1323,6 +1323,9 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             else if (n.text == ">=") send = Op::BIN_INT_GE;
             else if (n.text == ">")  send = Op::BIN_INT_GT;
             else if (n.text == "=")  send = Op::BIN_INT_EQ;
+            else if (n.text == "*")  send = Op::BIN_INT_MUL;
+            else if (n.text == "\\\\") send = Op::BIN_INT_MOD;
+            else if (n.text == "//") send = Op::BIN_INT_QUO;
             else if (n.text == "==") {
                 // `==` is identity and is never looked up, as in Pharo
                 // (ProtoObject>>== "No Lookup. Do not override"): one
@@ -1372,8 +1375,15 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                 emitExpr(m, *n.children[i]);
             }
             auto sym = m.internSymbol(n.text);
-            m.emitWide(isSuperReceiver(n) ? Op::SEND_SUPER : Op::SEND_KEYWORD,
-                       static_cast<unsigned int>(sym), currentLine_);
+            Op kop = isSuperReceiver(n) ? Op::SEND_SUPER : Op::SEND_KEYWORD;
+            if (kop == Op::SEND_KEYWORD && n.children.size() == 2) {
+                // SmallInteger fast paths of three one-keyword selectors
+                // (0.10.0); a miss sends the keyword message.
+                if (n.text == "rem:")         kop = Op::BIN_INT_REM;
+                else if (n.text == "bitAnd:") kop = Op::BIN_INT_AND;
+                else if (n.text == "bitOr:")  kop = Op::BIN_INT_OR;
+            }
+            m.emitWide(kop, static_cast<unsigned int>(sym), currentLine_);
             return;
         }
         case NodeKind::CallSend: {

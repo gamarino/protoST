@@ -21,7 +21,7 @@ module main: <module>
      11  POP
      12  PUSH_LOCAL         0     ; x
      13  PUSH_CONST         1     ; 2
-     14  SEND_BINARY        2     ; #*
+     14  BIN_INT_MUL        2     ; #*
      15  DUP
      16  STORE_LOCAL        1     ; y
      17  POP

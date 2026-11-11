@@ -111,7 +111,7 @@ module main.2: <block>
   code:
       0  PUSH_CONST         0     ; 6
       1  PUSH_CONST         1     ; 7
-      2  SEND_BINARY        2     ; #*
+      2  BIN_INT_MUL        2     ; #*
       3  RETURN_TOP
 
 module main.3: <block>

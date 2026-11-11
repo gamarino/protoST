@@ -161,6 +161,16 @@ enum class Op : uint8_t {
     // `a == b`: pops two values, pushes whether they are the same object.
     // Never a send: `==` is not looked up, as in Pharo (0.10.0).
     IDENTICAL          = 52,
+    // More SmallInteger fast paths (0.10.0), like BIN_INT_ADD: both operands
+    // SmallIntegers and the result a SmallInteger, else the instruction is
+    // the send of its selector constant (`arg`). A zero divisor is a miss
+    // too, so the send's primitive signals ZeroDivide.
+    BIN_INT_MUL        = 53, // *
+    BIN_INT_MOD        = 54, // \\  (floored)
+    BIN_INT_QUO        = 55, // //  (floored)
+    BIN_INT_REM        = 56, // rem:    (truncated; a keyword send on a miss)
+    BIN_INT_AND        = 57, // bitAnd: (a keyword send on a miss)
+    BIN_INT_OR         = 58, // bitOr:  (a keyword send on a miss)
     // Prefix carrying the next-higher byte of the following instruction's
     // operand, for operands above 255 (constant indices, slots, jumps).
     EXTEND          = 254,

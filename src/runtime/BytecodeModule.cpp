@@ -133,6 +133,8 @@ unsigned int BytecodeModule::computeMaxOperandDepth() const {
             case Op::BIN_INT_ADD: case Op::BIN_INT_SUB: case Op::BIN_INT_LE:
             case Op::BIN_INT_LT: case Op::BIN_INT_GE: case Op::BIN_INT_GT:
             case Op::BIN_INT_EQ: case Op::IDENTICAL:
+            case Op::BIN_INT_MUL: case Op::BIN_INT_MOD: case Op::BIN_INT_QUO:
+            case Op::BIN_INT_REM: case Op::BIN_INT_AND: case Op::BIN_INT_OR:
                 pushes(-1);
                 break;
             case Op::MAKE_ARRAY:

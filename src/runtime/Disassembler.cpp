@@ -63,6 +63,12 @@ const char* opName(Op op) {
         case Op::JUMP_IF_NIL:        return "JUMP_IF_NIL";
         case Op::JUMP_IF_NOT_NIL:    return "JUMP_IF_NOT_NIL";
         case Op::IDENTICAL:          return "IDENTICAL";
+        case Op::BIN_INT_MUL:        return "BIN_INT_MUL";
+        case Op::BIN_INT_MOD:        return "BIN_INT_MOD";
+        case Op::BIN_INT_QUO:        return "BIN_INT_QUO";
+        case Op::BIN_INT_REM:        return "BIN_INT_REM";
+        case Op::BIN_INT_AND:        return "BIN_INT_AND";
+        case Op::BIN_INT_OR:         return "BIN_INT_OR";
         case Op::EXTEND:             return "EXTEND";
     }
     return nullptr;
@@ -244,6 +250,8 @@ void listModule(const BytecodeModule& m, const std::string& path, std::string& o
             case Op::BIN_INT_LE:  case Op::BIN_INT_LT:
             case Op::BIN_INT_GE:  case Op::BIN_INT_GT:
             case Op::BIN_INT_EQ:
+            case Op::BIN_INT_MUL: case Op::BIN_INT_MOD: case Op::BIN_INT_QUO:
+            case Op::BIN_INT_REM: case Op::BIN_INT_AND: case Op::BIN_INT_OR:
             case Op::ASSERT_LOOP_BOOL:
                 withOperand("#" + nameAt(m, in.arg));
                 break;

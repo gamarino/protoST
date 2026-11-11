@@ -88,6 +88,18 @@ inline bool addOverflows(long long a, long long b, long long* r) {
     return false;
 #endif
 }
+inline bool mulOverflows(long long a, long long b, long long* r) {
+#if defined(__GNUC__)
+    return __builtin_mul_overflow(a, b, r);
+#else
+    // Operands are SmallIntegers (54 bits): the product of the magnitudes is
+    // checked in floating point first, which is exact enough to decide.
+    const double p = static_cast<double>(a) * static_cast<double>(b);
+    if (p > 9.0e18 || p < -9.0e18) return true;
+    *r = a * b;
+    return false;
+#endif
+}
 inline bool subOverflows(long long a, long long b, long long* r) {
 #if defined(__GNUC__)
     return __builtin_sub_overflow(a, b, r);
@@ -1000,6 +1012,12 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     labels[static_cast<unsigned int>(Op::JUMP_IF_NIL)]      = &&L_JUMP_IF_NIL;
     labels[static_cast<unsigned int>(Op::JUMP_IF_NOT_NIL)]  = &&L_JUMP_IF_NOT_NIL;
     labels[static_cast<unsigned int>(Op::IDENTICAL)]        = &&L_IDENTICAL;
+    labels[static_cast<unsigned int>(Op::BIN_INT_MUL)]      = &&L_BIN_INT_MUL;
+    labels[static_cast<unsigned int>(Op::BIN_INT_MOD)]      = &&L_BIN_INT_MOD;
+    labels[static_cast<unsigned int>(Op::BIN_INT_QUO)]      = &&L_BIN_INT_QUO;
+    labels[static_cast<unsigned int>(Op::BIN_INT_REM)]      = &&L_BIN_INT_REM;
+    labels[static_cast<unsigned int>(Op::BIN_INT_AND)]      = &&L_BIN_INT_AND;
+    labels[static_cast<unsigned int>(Op::BIN_INT_OR)]       = &&L_BIN_INT_OR;
     labels[static_cast<unsigned int>(Op::RETURN)]           = &&L_RETURN;
     labels[static_cast<unsigned int>(Op::RETURN_TOP)]       = &&L_RETURN_TOP;
     labels[static_cast<unsigned int>(Op::JUMP_BACK)]        = &&L_JUMP_BACK;
@@ -1346,6 +1364,56 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 push(f, lhs); push(f, rhs);
                 if (f.ivGroupActive) flushInstVarGroup(ctx, f);  // the send may observe self
                 op = Op::SEND_BINARY; goto L_SEND_BINARY;
+            }
+            case Op::BIN_INT_MUL: L_BIN_INT_MUL:
+            case Op::BIN_INT_MOD: L_BIN_INT_MOD:
+            case Op::BIN_INT_QUO: L_BIN_INT_QUO:
+            case Op::BIN_INT_REM: L_BIN_INT_REM:
+            case Op::BIN_INT_AND: L_BIN_INT_AND:
+            case Op::BIN_INT_OR:  L_BIN_INT_OR: {
+                // Opcodes.h: the SmallInteger result, or the send.
+                Frame& f = frames_.back();
+                const proto::ProtoObject* rhs = pop(f);
+                const proto::ProtoObject* lhs = pop(f);
+                if (proto::isSmallInt(lhs) && proto::isSmallInt(rhs)) {
+                    const long long a = proto::asSmallInt(lhs);
+                    const long long b = proto::asSmallInt(rhs);
+                    long long r = 0;
+                    bool hit = true;
+                    switch (op) {
+                        case Op::BIN_INT_MUL:
+                            hit = !mulOverflows(a, b, &r);
+                            break;
+                        case Op::BIN_INT_MOD:   // floored: the sign of the divisor
+                            if (b == 0) { hit = false; break; }
+                            r = a % b;
+                            if (r != 0 && ((r < 0) != (b < 0))) r += b;
+                            break;
+                        case Op::BIN_INT_QUO:   // floored quotient
+                            if (b == 0) { hit = false; break; }
+                            r = a / b;
+                            if ((a % b != 0) && ((a < 0) != (b < 0))) --r;
+                            break;
+                        case Op::BIN_INT_REM:   // truncated: the sign of the dividend
+                            if (b == 0) { hit = false; break; }
+                            r = a % b;
+                            break;
+                        case Op::BIN_INT_AND: r = a & b; break;
+                        default:              r = a | b; break;   // BIN_INT_OR
+                    }
+                    // Operands are 54-bit, so / and % cannot overflow 64 bits;
+                    // only the range of the result is left to check.
+                    if (hit && proto::smallIntInRange(r)) {
+                        push(f, proto::makeSmallInt(r));
+                        DISPATCH_DIRECT();
+                    }
+                }
+                push(f, lhs); push(f, rhs);
+                if (f.ivGroupActive) flushInstVarGroup(ctx, f);  // the send may observe self
+                if (op == Op::BIN_INT_MUL || op == Op::BIN_INT_MOD || op == Op::BIN_INT_QUO) {
+                    op = Op::SEND_BINARY; goto L_SEND_BINARY;
+                }
+                op = Op::SEND_KEYWORD; goto L_SEND_KEYWORD;
             }
             case Op::BIN_INT_SUB: L_BIN_INT_SUB: {
                 Frame& f = frames_.back();
