@@ -1,11 +1,11 @@
 "EXPECT: 63929908800000000 63929919600000000 true true true false refused true 2026-11-10 12:00:00-03:00 2026-11-10 12:00:00.000005 true true true refused"
-"§13 stdlib: DateTime, naive and fixed-offset. localMicroseconds of
+"§13 stdlib: DateTime, naive and fixed-offset. localOrdinalMicroseconds of
  2026-11-10 12:00 (CPython: (dt - datetime(1,1,1)) // timedelta(microseconds=1));
- utcMicroseconds of 12:00 at UTC-03:00 is that of 15:00 UTC, the two are =
+ utcOrdinalMicroseconds of 12:00 at UTC-03:00 is that of 15:00 UTC, the two are =
  with equal hashes; fold does not change a naive value's equality or hash;
  a naive value is never = to an aware one and ordering them signals Error;
- utcMicroseconds:zone: rebuilds the value (fields and zone); printString is
- CPython's str(datetime); < orders aware values by instant; utcMicroseconds
+ utcOrdinalMicroseconds:zone: rebuilds the value (fields and zone); printString is
+ CPython's str(datetime); < orders aware values by instant; utcOrdinalMicroseconds
  of a naive value signals Error."
 | m DT O minus3 a b n n1 rebuilt r u |
 m := Import from: 'calendar'.
@@ -16,11 +16,11 @@ b := DT year: 2026 month: 11 day: 10 hour: 15 minute: 0 second: 0 microsecond: 0
 n := DT year: 2026 month: 11 day: 10 hour: 12 minute: 0 second: 0 microsecond: 0 fold: 0 zone: nil.
 n1 := DT year: 2026 month: 11 day: 10 hour: 12 minute: 0 second: 0 microsecond: 0 fold: 1 zone: nil.
 r := [n < b. 'ordered'] on: Error do: [:e | 'refused'].
-u := [n utcMicroseconds. 'answered'] on: Error do: [:e | 'refused'].
-rebuilt := DT utcMicroseconds: b utcMicroseconds zone: minus3.
-{ n localMicroseconds.
-  a utcMicroseconds.
-  a utcMicroseconds = b utcMicroseconds.
+u := [n utcOrdinalMicroseconds. 'answered'] on: Error do: [:e | 'refused'].
+rebuilt := DT utcOrdinalMicroseconds: b utcOrdinalMicroseconds zone: minus3.
+{ n localOrdinalMicroseconds.
+  a utcOrdinalMicroseconds.
+  a utcOrdinalMicroseconds = b utcOrdinalMicroseconds.
   a = b and: [a hash = b hash].
   n = n1 and: [n hash = n1 hash].
   n = a.

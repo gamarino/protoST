@@ -4,7 +4,7 @@
  minute 60, second 60, microsecond 10^6, fold 2, a zone that is neither nil,
  a ZoneOffset nor a ZoneName, an offset of -86400 * 10^6, a non-String
  offset name, an empty ZoneName key, utcFields: of 6 fields, utcFields: with
- a ZoneOffset, utcMicroseconds:zone: with nil, a TimeSpan of -10^9 days, a
+ a ZoneOffset, utcOrdinalMicroseconds:zone: with nil, a TimeSpan of -10^9 days, a
  non-Integer TimeSpan field, ordering a TimeSpan against an Integer, and a
  second call of a private initialiser on a live value (immutability)."
 | m n DT T |
@@ -26,7 +26,7 @@ n := 0.
   [m ZoneName key: ''].
   [DT utcFields: #(2026 11 1 6 30 0) zoneName: (m ZoneName key: 'UTC')].
   [DT utcFields: #(2026 11 1 6 30 0 0) zoneName: m ZoneOffset utc].
-  [DT utcMicroseconds: 0 zone: nil].
+  [DT utcOrdinalMicroseconds: 0 zone: nil].
   [m TimeSpan days: -1000000000 seconds: 0 microseconds: 0].
   [m TimeSpan days: 0 seconds: 1.5 microseconds: 0].
   [(m TimeSpan microseconds: 1) < 2].

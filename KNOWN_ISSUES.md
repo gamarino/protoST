@@ -243,6 +243,35 @@ against the 3.4.0 floor, the old cost remains; the MessagePack decoder still
 removes from the end of its work list and slices once when the children are
 fewer than the stack, which is cheap on either.
 
+## K14 — One selector on both sides of a class: the later definition wins (open, scheduled)
+
+D5 isolates class-side methods from instances, but both sides are installed
+in **one attribute slot of the class object**: `prim_Object_installMethod`
+(`src/primitives/object_prims.cpp`, the `setAttribute` at line 248) and
+`prim_Object_installClassMethod` (lines 262-279, `setAttribute` at 278)
+write the same selector key, so a selector defined on both sides keeps only
+the later method. The SEND filter for class-side methods
+(`src/runtime/ExecutionEngine.cpp`, lines 1758-1768) then sets the method to
+`nullptr` for an instance receiver, which answers `doesNotUnderstand` instead
+of continuing the lookup at the next parent. Three cases (0.9.0):
+
+| Definitions | `X new sel` | `X sel` |
+|-------------|-------------|---------|
+| `Foo >> x`, then `Foo class >> x` | `doesNotUnderstand` | the class-side method |
+| `Bar class >> x`, then `Bar >> x` | the instance method | the instance method: the class-side one is **lost silently** |
+| `Baz >> y`; `Qux` (a subclass of `Baz`) `class >> y` | `doesNotUnderstand`: the inherited instance `y` is hidden | the class-side method |
+
+The second case is a silent failure; the third hides a method defined on
+another object. Until the fix, never define one selector on both sides of a
+class or of a class and its subclasses (`lib/calendar.st` keeps its shared
+helpers on the instance side, which class objects also reach).
+`tests/conformance/04-object-model/class-and-instance-method-same-selector.st`
+pins the intended behaviour as `XFAIL`. The C++ fix (separate slots for the
+two sides, or at least an install that refuses a selector the other side
+already defines plus a SEND filter that resumes the lookup) is scheduled with
+the build-gated protoST 0.9.1 batch of the ProtoBase-support work (Task 2 of
+the protoBaseST plan), before the library classes of later tasks rely on it.
+
 ## K13 — A mailbox batch of more than 2^31 - 1 messages is refused, and lost (open, in protoCore)
 
 An actor's turn takes its mailbox in batches (`ProtoMPSCQueue::takeAll`) and

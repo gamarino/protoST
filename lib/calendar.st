@@ -23,14 +23,20 @@ USAGE
   t := DateTime year: 2026 month: 11 day: 10 hour: 12 minute: 0 second: 0
          microsecond: 0 fold: 0 zone: (ZoneOffset microseconds: -10800000000).
   t printString.                              => '2026-11-10 12:00:00-03:00'
-  t utcMicroseconds.                          => 63929919600000000
+  t utcOrdinalMicroseconds.                   => 63929919600000000
+  t unixMicroseconds.                         => 1794322800000000
   (TimeSpan days: 0 seconds: -1 microseconds: 0) days.   => -1
 
-MICROSECOND COUNTS
-  DateTime localMicroseconds and utcMicroseconds count from
-  0001-01-01T00:00 (the ordinal epoch of CalendarDate), not from 1970:
-  1970-01-01T00:00 is 62135596800000000. Time utcMicroseconds (protoST 0.9.1)
-  counts from 1970; DateTime nowUTC adds the difference.
+MICROSECOND COUNTS: TWO EPOCHS, TWO NAMES
+  The ...OrdinalMicroseconds selectors count from 0001-01-01T00:00, the
+  ordinal epoch of CalendarDate and the epoch of ProtoBase's format:
+  localOrdinalMicroseconds, utcOrdinalMicroseconds and
+  DateTime utcOrdinalMicroseconds:zone:. The ...UnixMicroseconds selectors
+  count from 1970-01-01T00:00Z, the POSIX epoch of Time utcMicroseconds
+  (protoST 0.9.1): unixMicroseconds and DateTime fromUnixMicroseconds:zone:.
+  DateTime unixEpochOrdinalMicroseconds (62135596800000000) is the Unix epoch
+  on the ordinal scale, the one constant between the two; no caller needs to
+  add it by hand.
 
 COMPARISON (as Python compares the values)
   CalendarDate and TimeSpan order by day and by duration.
@@ -87,13 +93,17 @@ _CalendarValue >> _cannotOrder: anObject
 _CalendarValue >> _sign: anInteger
   ^ anInteger sign.
 
-"An instance of aClass, not the class object itself. Instance side only, so
- the class side reaches it too (a selector defined on both sides would hide
- the instance one, STATUS D5)."
+"An instance of aClass, not the class object itself. Defined on the instance
+ side only: class objects reach instance-side methods too. Never define one
+ selector on both sides: both sides share one slot of the class object, so
+ the later definition replaces the earlier one (KNOWN_ISSUES K14)."
 _CalendarValue >> _isValue: anObject of: aClass
   ^ (anObject isKindOf: aClass) and: [anObject isClassObject not].
 
-"Signals Error unless aValue is an Integer in low..high."
+"The class side (Foo class >> ...) holds the constructors; every shared
+ helper is instance-side, reachable from the class object as well (K14).
+
+ Signals Error unless aValue is an Integer in low..high."
 _CalendarValue class >> _check: aValue from: low to: high named: aName
   (aValue isInteger and: [aValue between: low and: high]) ifFalse: [
     ^ Error signal: self name , ': ' , aName , ' must be an Integer in ' , low printString
@@ -186,6 +196,9 @@ ZoneOffset >> _setMicroseconds: anInteger name: aString
 ZoneOffset >> microseconds
   ^ microseconds.
 
+"The isClassObject guards in name, =, hash and printOn: exist because
+ instance-side methods are reachable from the class object too (K14): sent to
+ the class, they answer what a class answers."
 ZoneOffset >> name
   self isClassObject ifTrue: [^ super name].
   ^ name.
@@ -430,20 +443,34 @@ DateTime class >> utcFields: anArray zoneName: aZoneName
 "The value of the UTC instant anInteger (microseconds since 0001-01-01T00:00)
  at a fixed offset; with a ZoneName, the instant form. Its wall clock must
  lie in years 1..9999."
-DateTime class >> utcMicroseconds: anInteger zone: aZone
+DateTime class >> utcOrdinalMicroseconds: anInteger zone: aZone
   | lcl |
   anInteger isInteger ifFalse: [
-    ^ Error signal: 'DateTime utcMicroseconds: an Integer was expected, not ' , anInteger printString ].
+    ^ Error signal: 'DateTime utcOrdinalMicroseconds: an Integer was expected, not ' , anInteger printString ].
   (self _isValue: aZone of: ZoneName) ifTrue: [^ self _fromLocal: anInteger zone: aZone].
   (self _isValue: aZone of: ZoneOffset) ifFalse: [
-    ^ Error signal: 'DateTime utcMicroseconds:zone: a ZoneOffset or a ZoneName was expected, not '
+    ^ Error signal: 'DateTime utcOrdinalMicroseconds:zone: a ZoneOffset or a ZoneName was expected, not '
       , aZone printString ].
   lcl := anInteger + aZone microseconds.
   ^ self _fromLocal: lcl zone: aZone.
 
+"The Unix epoch, 1970-01-01T00:00Z, in microseconds since 0001-01-01T00:00:
+ the offset between the Unix and the ordinal counts."
+DateTime class >> unixEpochOrdinalMicroseconds
+  ^ 62135596800000000.
+
+"The value of the UTC instant anInteger, in microseconds since
+ 1970-01-01T00:00Z (the count of Time utcMicroseconds), at aZone, as
+ utcOrdinalMicroseconds:zone:."
+DateTime class >> fromUnixMicroseconds: anInteger zone: aZone
+  anInteger isInteger ifFalse: [
+    ^ Error signal: 'DateTime fromUnixMicroseconds: an Integer was expected, not '
+      , anInteger printString ].
+  ^ self utcOrdinalMicroseconds: anInteger + self unixEpochOrdinalMicroseconds zone: aZone.
+
 "Now, in UTC (zone ZoneOffset utc), from Time utcMicroseconds (protoST 0.9.1)."
 DateTime class >> nowUTC
-  ^ self utcMicroseconds: Time utcMicroseconds + 62135596800000000 zone: ZoneOffset utc.
+  ^ self fromUnixMicroseconds: Time utcMicroseconds zone: ZoneOffset utc.
 
 DateTime class >> _fromLocal: anInteger zone: aZone
   | days rest date |
@@ -462,7 +489,7 @@ DateTime class >> _fieldsText: anArray
     w nextPutAll: ((anArray at: 1) printPaddedWith: $0 to: 4); nextPut: $-;
       nextPutAll: ((anArray at: 2) printPaddedWith: $0 to: 2); nextPut: $-;
       nextPutAll: ((anArray at: 3) printPaddedWith: $0 to: 2); nextPut: $ .
-    self basicNew _printHour: (anArray at: 4) minute: (anArray at: 5) second: (anArray at: 6)
+    self _printHour: (anArray at: 4) minute: (anArray at: 5) second: (anArray at: 6)
       microsecond: (anArray at: 7) on: w].
 
 DateTime >> _setYear: y month: m day: d hour: h minute: mi second: s microsecond: us fold: f zone: z
@@ -510,16 +537,21 @@ DateTime >> isInstantForm
   ^ self _isValue: zone of: ZoneName.
 
 "The fields' microseconds since 0001-01-01T00:00."
-DateTime >> localMicroseconds
+DateTime >> localOrdinalMicroseconds
   ^ local.
 
 "The UTC instant in microseconds since 0001-01-01T00:00: the fields minus the
  offset, or the fields of the instant form. A naive value signals Error."
-DateTime >> utcMicroseconds
+DateTime >> utcOrdinalMicroseconds
   zone isNil ifTrue: [
     ^ Error signal: 'DateTime: a naive value has no UTC instant: ' , self printString ].
   self isInstantForm ifTrue: [^ local].
   ^ local - zone microseconds.
+
+"The UTC instant in microseconds since 1970-01-01T00:00Z (negative before
+ it). A naive value signals Error."
+DateTime >> unixMicroseconds
+  ^ self utcOrdinalMicroseconds - DateTime unixEpochOrdinalMicroseconds.
 
 "The receiver, whose fields are its wall clock; the instant form signals
  TimeZoneUnavailable (no time-zone database, STATUS D50)."
@@ -543,19 +575,19 @@ DateTime >> = anObject
   self isClassObject ifTrue: [^ self == anObject].
   (self _isValue: anObject of: DateTime) ifFalse: [^ false].
   self isNaive = anObject isNaive ifFalse: [^ false].
-  self isNaive ifTrue: [^ local = anObject localMicroseconds].
-  ^ self utcMicroseconds = anObject utcMicroseconds.
+  self isNaive ifTrue: [^ local = anObject localOrdinalMicroseconds].
+  ^ self utcOrdinalMicroseconds = anObject utcOrdinalMicroseconds.
 
 DateTime >> hash
   self isClassObject ifTrue: [^ self identityHash].
   self isNaive ifTrue: [^ local hash].
-  ^ self utcMicroseconds hash.
+  ^ self utcOrdinalMicroseconds hash.
 
 DateTime >> _orderWith: anObject
   ((self _isValue: anObject of: DateTime) and: [self isNaive = anObject isNaive])
     ifFalse: [^ self _cannotOrder: anObject].
-  self isNaive ifTrue: [^ self _sign: local - anObject localMicroseconds].
-  ^ self _sign: self utcMicroseconds - anObject utcMicroseconds.
+  self isNaive ifTrue: [^ self _sign: local - anObject localOrdinalMicroseconds].
+  ^ self _sign: self utcOrdinalMicroseconds - anObject utcOrdinalMicroseconds.
 
 "Python's str(datetime): YYYY-MM-DD HH:MM:SS[.ffffff], then the offset. The
  instant form prints its UTC fields, Z and the zone key in brackets (as in

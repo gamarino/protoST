@@ -2845,18 +2845,24 @@ order.
 |---------|---------|
 | `DateTime year:month:day:hour:minute:second:microsecond:fold:zone:` | from a wall clock: naive with `nil`, at a fixed offset with a `ZoneOffset`; with a `ZoneName` it signals `TimeZoneUnavailable` (turning a wall clock into an instant needs the zone's rules) |
 | `DateTime utcFields: anArray zoneName: aZoneName` | the **instant form**: the seven fields of `anArray` (year, month, day, hour, minute, second, microsecond) are the UTC instant; `fold` is 0 |
-| `DateTime utcMicroseconds: n zone: aZone` | the value of the UTC instant `n` at a `ZoneOffset` (its fields are the wall clock there), or the instant form for a `ZoneName`; the fields must lie in years 1..9999 |
-| `DateTime nowUTC` | now, at `ZoneOffset utc`, from `Time utcMicroseconds` (protoST 0.9.1) |
+| `DateTime utcOrdinalMicroseconds: n zone: aZone` | the value of the UTC instant `n` (microseconds since 0001-01-01T00:00) at a `ZoneOffset` (its fields are the wall clock there), or the instant form for a `ZoneName`; the fields must lie in years 1..9999 |
+| `DateTime fromUnixMicroseconds: n zone: aZone` | the same for `n` microseconds since 1970-01-01T00:00Z (the count of `Time utcMicroseconds`) |
+| `DateTime unixEpochOrdinalMicroseconds` | `62135596800000000`: 1970-01-01T00:00Z on the ordinal scale, the offset between the two counts |
+| `DateTime nowUTC` | now, at `ZoneOffset utc`: `fromUnixMicroseconds: Time utcMicroseconds zone: ZoneOffset utc` (needs protoST 0.9.1) |
 | `year` … `microsecond` `fold` `zone` | the fields (the UTC instant for the instant form) |
 | `isNaive` `isInstantForm` | zone `nil`; zone a `ZoneName` |
-| `localMicroseconds` | the fields' microseconds since 0001-01-01T00:00 |
-| `utcMicroseconds` | the UTC instant since 0001-01-01T00:00: the fields minus the offset, or the fields of the instant form; a naive value signals `Error` |
+| `localOrdinalMicroseconds` | the fields' microseconds since 0001-01-01T00:00 |
+| `utcOrdinalMicroseconds` | the UTC instant since 0001-01-01T00:00: the fields minus the offset, or the fields of the instant form; a naive value signals `Error` |
+| `unixMicroseconds` | the same instant since 1970-01-01T00:00Z (negative before it); a naive value signals `Error` |
 | `wallClock` | the receiver; the instant form signals `TimeZoneUnavailable` |
 | `date` `time` | the wall-clock `CalendarDate` and naive `TimeOfDay`; the instant form signals `TimeZoneUnavailable` |
 
-Both microsecond counts start at 0001-01-01T00:00, the ordinal epoch, not at
-1970: the Unix epoch is `62135596800000000`. `Time utcMicroseconds` counts from
-1970, and `nowUTC` adds the difference.
+**Two epochs, two names.** Every selector with `Ordinal` in its name counts
+from 0001-01-01T00:00, the ordinal epoch of `CalendarDate` and of ProtoBase's
+format (its order keys and hashes); every selector with `Unix` in its name
+counts from 1970-01-01T00:00Z, as `Time utcMicroseconds` does. No selector is
+shared between the two counts, and `unixEpochOrdinalMicroseconds` is the only
+place the offset between them is written, so no caller adds it by hand.
 
 **Comparison.** As Python compares the values. `CalendarDate` orders by day,
 `TimeSpan` by duration. A `TimeOfDay` that is naive or in a `ZoneName` has no
@@ -2884,6 +2890,8 @@ instant is known, the local offset is not).
 Import from: 'calendar'.
 (CalendarDate year: 2000 month: 2 day: 29) ordinal          "=> 730179"
 (CalendarDate fromOrdinal: 3652059) printString             "=> '9999-12-31'"
+(DateTime fromUnixMicroseconds: 0 zone: ZoneOffset utc)
+  utcOrdinalMicroseconds                                    "=> 62135596800000000"
 (TimeSpan days: 0 seconds: -1 microseconds: 0) days         "=> -1"
 (TimeSpan days: 0 seconds: -1 microseconds: 0) seconds      "=> 86399"
 (DateTime year: 2026 month: 11 day: 10 hour: 12 minute: 0 second: 0

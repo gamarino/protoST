@@ -4,7 +4,7 @@
  given name, and is = by offset alone (as Python's timezone). ZoneName keeps
  an IANA key as text. A DateTime in a ZoneName is the instant form
  (utcFields:zoneName:): its fields are the UTC instant, fold 0, and
- utcMicroseconds answers them; it is = (equal hash) to the fixed-offset
+ utcOrdinalMicroseconds answers them; it is = (equal hash) to the fixed-offset
  value of the same instant. Its wallClock, and building a DateTime from a
  wall clock in a ZoneName, signal TimeZoneUnavailable (an Error)."
 | m DT O Z ny inst fixed w1 w2 |
@@ -27,10 +27,10 @@ w2 := [DT year: 2026 month: 11 day: 1 hour: 1 minute: 30 second: 0 microsecond: 
   ny key.
   ny = (Z key: 'America/New_York') and: [ny hash = (Z key: 'America/New_York') hash and: [ny ~= (Z key: 'Europe/Paris')]].
   inst printString.
-  inst utcMicroseconds = inst localMicroseconds and: [inst fold = 0 and: [inst zone = ny and: [inst isNaive not]]].
+  inst utcOrdinalMicroseconds = inst localOrdinalMicroseconds and: [inst fold = 0 and: [inst zone = ny and: [inst isNaive not]]].
   inst = fixed and: [inst hash = fixed hash].
   w1.
   w2.
   (m TimeZoneUnavailable inheritsFrom: Error).
-  (DT utcMicroseconds: inst utcMicroseconds zone: ny) = inst }
+  (DT utcOrdinalMicroseconds: inst utcOrdinalMicroseconds zone: ny) = inst }
   inject: '' into: [:acc :each | acc isEmpty ifTrue: [each displayString] ifFalse: [acc , ' ' , each displayString]].

@@ -24,14 +24,24 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
   and `fromOrdinal:` as Python's `toordinal`), `TimeOfDay`, `DateTime` (naive,
   at a `ZoneOffset`, or the instant form in a `ZoneName`: the fields are the
   UTC instant), `TimeSpan` (normalised as `timedelta`), `ZoneOffset`,
-  `ZoneName` and the error `TimeZoneUnavailable`. `localMicroseconds`,
-  `utcMicroseconds`, `utcMicroseconds:zone:`, `DateTime nowUTC` (needs
-  `Time utcMicroseconds`, 0.9.1). Comparison and `hash` as Python's
+  `ZoneName` and the error `TimeZoneUnavailable`. Two epochs, each with its own
+  selectors: `localOrdinalMicroseconds`, `utcOrdinalMicroseconds` and
+  `utcOrdinalMicroseconds:zone:` count from 0001-01-01 (the format's epoch),
+  `unixMicroseconds` and `fromUnixMicroseconds:zone:` from 1970, with
+  `DateTime unixEpochOrdinalMicroseconds` between them; `DateTime nowUTC`
+  (needs `Time utcMicroseconds`, 0.9.1). Comparison and `hash` as Python's
   `datetime` (aware values by instant, naive never `=` to aware, ordering them
   refused); `printString` as `str()`. No IANA database: a wall clock in a
   named zone signals `TimeZoneUnavailable` (STATUS D50). Written in protoST;
   runs on the 0.9.0 binary. Docs: LANGUAGE.md §12.14, tutorial §9.9. Tests:
-  `tests/conformance/13-stdlib/calendar-*` (8 files).
+  `tests/conformance/13-stdlib/calendar-*` (9 files).
+- **KNOWN_ISSUES K14 recorded**: one selector defined on both the instance
+  and the class side of a class keeps only the later method (instances may
+  get `doesNotUnderstand`, or the class-side method is lost silently), and a
+  subclass's class-side method hides an inherited instance method. Pinned by
+  the `XFAIL` test
+  `tests/conformance/04-object-model/class-and-instance-method-same-selector.st`;
+  the C++ fix is scheduled with the 0.9.1 build.
 - **`Fraction` defers to a non-Number that adapts** (`lib/kernel/fraction.st`):
   `=`, `<` (and so `>`, `<=`, `>=`), `+`, `-`, `*`, `/`, and `Integer >> /`,
   send `adaptToNumber:andSend:` to an argument that is not a Number but
