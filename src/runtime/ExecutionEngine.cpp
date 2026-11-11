@@ -287,6 +287,9 @@ inline unsigned int computeMaxStack(const BytecodeModule& m) {
 // pre-sized 1 M-slot array).
 thread_local unsigned int g_scratchCursor = 0;
 
+// K15: the innermost live overflow-chain pin of this thread (TransientPin.h).
+thread_local TransientPin* g_overflowTop = nullptr;
+
 // Compile-time consistency: the scratch geometry in TransientPin.h must match
 // this engine's slot capacity, or a primitive would pin into slots the
 // engine believes are free frame storage. ExecutionEngine::kSlotCapacity is

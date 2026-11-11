@@ -50,6 +50,23 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ### Fixed
 
+- **Deeply nested `collect:` (and every other pinning primitive) crashed
+  (K15).** A `TransientPin` lived only in a fixed 256-slot scratch region; the
+  257th live pin hit `assert(false)` and, in a release build, returned without
+  pinning. Nesting reaches that easily: each `collect:` / `select:` /
+  `inject:into:` keeps its accumulator pinned while its block runs, and
+  protoBaseST's codec walked values 400-509 deep. The unpinned list was freed
+  by the next collection and the primitive appended to a recycled cell
+  (SIGSEGV in `ProtoList::appendLast`, or "stack smashing detected" when the
+  recycled cell's size overflowed appendLast's stack buffer). A pin that finds
+  the region full now goes on a per-context overflow chain (one list cell per
+  pin, its head in a reserved scratch slot, released without allocating), so
+  the number of live pins is bounded only by memory. A pin made with a nil
+  object now claims its place too, so a later `reset:` roots its object. Not a
+  protoCore bug. Tests: `tests/unit/test_transient_pin.cpp` (1000 live pins,
+  deterministic) and `tests/conformance/09-collections/collect-deep-nesting-gc.st`
+  (0.9.0 crashed 10 runs out of 10).
+
 - **`lib/json.st` crashed on every `\uXXXX` escape (K17).** The parser sent
   `and:ifTrue:` (an unparenthesised `and:` before `ifTrue:`) in its hex-digit
   reader, and the writer concatenated a `Character` when escaping control

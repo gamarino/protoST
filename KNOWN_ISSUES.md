@@ -292,6 +292,34 @@ message cells. It is recorded because the loss is silent to the senders
 
 ## Resolved
 
+### K15 — Deep nesting crashed the runtime: transient pins past 256 rooted nothing (resolved, unreleased)
+
+Repeatedly walking values nested 400-509 deep (protoBaseST's codec,
+`PBCodec canonical:`) crashed intermittently with SIGSEGV in
+`ProtoList::appendLast` or "stack smashing detected", more or less often as
+the allocation pattern changed. The cause was in protoST, not protoCore:
+`TransientPin` (src/runtime/TransientPin.h) stored pins only in a fixed
+256-slot scratch region of the engine context's `automaticLocals`, and the
+257th live pin hit `assert(false)` and, with `NDEBUG`, returned without
+pinning. Every `collect:` level keeps its result list pinned while its block
+runs the next level, so past about 256 levels the lists lived only in C++
+locals. The engine's call-entry safepoint handed the context's young chain to
+the collector, a cycle freed those lists, and `appendLast` read a recycled
+cell; a recycled cell whose `size` field exceeded 5 overflowed appendLast's
+`buf[MAX_INLINE + 1]`, which is the stack-smashing report. Plain method
+recursion pins nothing, which is why it never crashed, and a bigger native
+stack could not help.
+
+A pin that finds the region full now goes on a per-context overflow chain
+(one ProtoList cell `[object, previous head]` per pin, its head in reserved
+scratch slot 0, the pinned object staged in slot 1 while the cell is
+allocated). Releasing restores the previous head without allocating, and
+`reset:` rebuilds the cells above the pin. Tests:
+`tests/unit/test_transient_pin.cpp` (1000 live pins all reachable from the
+traced slots; on 0.9.0 744 of them were not) and
+`tests/conformance/09-collections/collect-deep-nesting-gc.st` (0.9.0 crashed
+10 runs out of 10).
+
 ### K17 — `JSON parse:` crashed on any `\uXXXX` escape (resolved, unreleased)
 
 `lib/json.st` read the four hex digits of a `\uXXXX` escape with a helper
