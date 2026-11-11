@@ -43,6 +43,7 @@ namespace protoST {
         case Kind::Internal: throw ClassedErrorSignal("InternalError", text);
         case Kind::InvalidArgument: break;
         case Kind::Conflict: break;
+        case Kind::DepthLimit: throw ClassedErrorSignal("MessagePackDepthExceeded", text);
     }
     throw NativeError(text);
 }

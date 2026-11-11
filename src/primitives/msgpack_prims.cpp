@@ -1,4 +1,5 @@
 #include "protoST/STRuntime.h"
+#include "runtime/ClassedErrorSignal.h"
 #include "runtime/NativeError.h"
 #include "protoST/primitives.h"
 #include "primitives/BytesSupport.h"
@@ -130,7 +131,8 @@ private:
     void open(const PO* container, const PO* snapshot, std::vector<const PO*>&& items, bool map) {
         if (path_.count(container)) throw NativeError("MessagePack: cyclic structure");
         if (frames_.size() >= kMaxDepth)
-            throw NativeError("MessagePack: nesting deeper than " + std::to_string(kMaxDepth)
+            throw ClassedErrorSignal("MessagePackDepthExceeded",
+                                     "MessagePack: nesting deeper than " + std::to_string(kMaxDepth)
                                      + " levels");
         const size_t entries = map ? items.size() / 2 : items.size();
         if (entries > 0xFFFFFFFFull)

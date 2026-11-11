@@ -2820,8 +2820,10 @@ comment of `lib/kernel/binfile.st`:
 | a `MessagePackExt` | ext | a `MessagePackExt` (ext -1, the timestamp, too) |
 
 Anything else signals `Error` ("MessagePack cannot encode an instance of
-...") and so does an Integer outside the range, a cyclic structure and a
-structure nested deeper than 1024 levels. Decoding refuses truncated input,
+...") and so does an Integer outside the range and a cyclic structure. A
+structure nested deeper than 1024 levels signals `MessagePackDepthExceeded`, an
+`Error`, on encode and on decode, so a caller can name its own limit without
+reading the message. Decoding refuses truncated input,
 invalid UTF-8 in a `str` and, by default, a map key that is not `str` or
 `bin`. The bytes are those of msgpack-python as ProtoBase uses it
 (`use_bin_type=True`, `raw=False`): `tests/cli/test_cli_binary_interop.sh`
