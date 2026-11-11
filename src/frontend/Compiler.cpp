@@ -244,9 +244,15 @@ void walkNode(const Node& n, ScopeWalker& cur,
                 return;
             }
             const bool isToDo = shape == Compiler::InlineShape::ToDo;
+            // Only whileTrue: / whileFalse: inline their receiver block; the
+            // receiver of the other shapes is an ordinary expression, so a
+            // block literal there (`[ x ] and: [ ... ]`) is a real closure
+            // and its free variables are captured.
+            const bool receiverInlined = shape == Compiler::InlineShape::WhileTrue;
             std::vector<InlinedFree> blocks;
-            for (const auto& child : n.children) {
-                if (child->kind != NodeKind::Block) {
+            for (size_t i = 0; i < n.children.size(); ++i) {
+                const auto& child = n.children[i];
+                if (child->kind != NodeKind::Block || (i == 0 && !receiverInlined)) {
                     walkNode(*child, cur, out, nullptr, classes);
                     continue;
                 }

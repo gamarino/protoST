@@ -118,6 +118,13 @@ minor release, so the two services arrive in 0.5.0.
 
 ### Fixed
 
+- **A block literal receiving `and:`, `or:`, `ifTrue:` and the like
+  captures its variables (protoBaseST review L3).** The closure analysis
+  treated the receiver block of every inlinable send as inlined, but only
+  `whileTrue:` / `whileFalse:` inline their receiver; for the others it is a
+  real closure, and a method variable it used was read from a dead slot once
+  the block outlived the send (`[ x ] and: [...]` reaching
+  `doesNotUnderstand:`). Test: `06-blocks/block-receiver-of-inlined-send-captures.st`.
 - **An inlined conditional with a non-Boolean receiver is now the send it
   replaces.** `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:`, `ifFalse:ifTrue:`
   (since 0.1) and `and:` / `or:` (new in 0.10.0) with literal blocks are
