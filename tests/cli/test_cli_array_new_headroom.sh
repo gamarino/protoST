@@ -21,4 +21,12 @@ for policy in fixed adaptive; do
   [[ "$out" == "#($ok 'Array new: $big elements need about "*"more than the heap can still hold (limit $limit cells"*"' $ok)" ]] \
     || { echo "FAIL ($policy): $out"; exit 1; }
 done
+# Garbage made before the first collection is not in use (review R5-1): a
+# size that fits once that garbage is reclaimed must build, not be refused.
+# 60,000 dead 9-element arrays leave about 2,000,000 cells handed out and
+# no collection yet under a 4,000,000-cell limit; 150,000 elements need about
+# 2,700,000 cells and build under round 4's code, which had no check.
+prog="| x | 1 to: 60000 do: [ :i | x := Array new: 9 ]. (Array new: 150000) size."
+out=$(PROTOCORE_ADAPTIVE_HEAP=0 PROTOCORE_HEAP_LIMIT_CELLS=4000000 timeout 120 "$PROTOST" -e "$prog" 2>&1); rc=$?
+[[ $rc -eq 0 && "$out" == "150000" ]] || { echo "FAIL (garbage before the first collection): rc=$rc"; echo "$out" | tail -3; exit 1; }
 echo OK

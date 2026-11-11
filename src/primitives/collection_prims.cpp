@@ -871,24 +871,28 @@ const proto::ProtoObject* prim_Array_classNew(STRuntime& rt, proto::ProtoContext
     //   1. protoCore's list size, an unsigned: at most 2^32 - 1 elements.
     //   2. The heap's remaining capacity. protoCore builds an n-element list
     //      by appending, and each append path-copies the spine, so the build
-    //      holds about n * log2(n) cells until a collection (measured under
-    //      a 400,000-cell limit: 22,500 elements build, 22,656 do not;
-    //      n * log2(n) is 325,000 there). The estimate is n * bit_width(n),
-    //      at most n cells above that. What the heap has left is the ceiling
-    //      (STRuntime::heapCeilingCells) less the cells in use: the live set
-    //      of the last completed collection, the figure protoCore's own
-    //      out-of-memory rule uses, or, before the first collection, every
-    //      cell handed out so far (heapSize - freeCellsCount; nothing has
-    //      been reclaimed yet, so all of it still occupies the heap).
-    //      protoCore offers no exact free-capacity query, so this is an
-    //      estimate, read without a lock: it lags allocations made since
-    //      that collection (by this thread or another) and leaves out
-    //      protoCore's per-thread margin, so a size within a few percent of
-    //      the boundary can still pass and end in the out-of-memory exit;
-    //      and it counts objects that died since the last collection (all
-    //      the garbage, before the first one), so a size just below the
-    //      boundary can be refused until a collection runs. Sizes clearly
-    //      beyond what the heap can take are refused.
+    //      holds about n * log2(n) cells until a collection (measured: under
+    //      a 400,000-cell limit 22,500 elements build and 23,000 do not; at
+    //      4,000,000, 200,000 and 202,000; at 40,000,000, 1,700,000 and
+    //      1,800,000). The estimate is n * bit_width(n), at most n cells above
+    //      that. The size is refused only when it cannot fit even if every
+    //      dead object is reclaimed first: when the estimate exceeds the
+    //      ceiling (STRuntime::heapCeilingCells) less the live set of the last
+    //      completed collection, the figure protoCore's own out-of-memory rule
+    //      uses. Before the first collection nothing is counted as live:
+    //      cells handed out by then include garbage protoCore would collect,
+    //      and counting them refused sizes that build (review R5-1). A false
+    //      refusal fails a program that would have run; a size the check
+    //      lets through and that does not fit ends as it did before the check,
+    //      in protoCore's out-of-memory exit.
+    //      protoCore offers no exact free-capacity query, so the bound is an
+    //      estimate, read without a lock. It errs only towards letting sizes
+    //      through: it ignores objects allocated since the last collection
+    //      (by this thread or another) and protoCore's per-thread margin, so
+    //      sizes up to about ten percent above the real boundary still end in
+    //      the out-of-memory exit (202,000 to 215,000 elements at a
+    //      4,000,000-cell limit), and more of them before the first
+    //      collection, when the live set is taken as empty.
     if (n > static_cast<long long>(UINT32_MAX))
         throw NativeError("Array new: " + std::to_string(n)
                           + " elements is beyond protoCore's list limit of "
@@ -901,14 +905,11 @@ const proto::ProtoObject* prim_Array_classNew(STRuntime& rt, proto::ProtoContext
         const long long ceiling = STRuntime::heapCeilingCells(ctx);
         if (ceiling > 0) {
             proto::ProtoSpace* space = ctx->space;
-            long long live = static_cast<long long>(
-                space->liveCellsLastCycle.load(std::memory_order_relaxed));
-            if (space->getGCCycleCount() == 0)
-                // heapSize and freeCellsCount are ints protoCore updates with
-                // relaxed atomics; read them the same way.
-                live = std::max(0LL, static_cast<long long>(
-                    __atomic_load_n(&space->heapSize, __ATOMIC_RELAXED)
-                    - __atomic_load_n(&space->freeCellsCount, __ATOMIC_RELAXED)));
+            // Before the first collection the live set is unknown: take it as
+            // empty rather than count garbage as live (review R5-1).
+            const long long live = space->getGCCycleCount() == 0 ? 0 :
+                static_cast<long long>(
+                    space->liveCellsLastCycle.load(std::memory_order_relaxed));
             const long long need =
                 n * static_cast<long long>(std::bit_width(static_cast<unsigned long long>(n)));
             if (need > ceiling - live)
@@ -916,8 +917,8 @@ const proto::ProtoObject* prim_Array_classNew(STRuntime& rt, proto::ProtoContext
                                   + std::to_string(need)
                                   + " cells while the list is built, more than the heap can "
                                     "still hold (limit " + std::to_string(ceiling)
-                                  + " cells, about " + std::to_string(live)
-                                  + " in use; PROTOCORE_HEAP_LIMIT_CELLS "
+                                  + " cells, " + std::to_string(live)
+                                  + " live at the last collection; PROTOCORE_HEAP_LIMIT_CELLS "
                                     "sets the limit, a cell is 64 bytes)");
         }
     }
