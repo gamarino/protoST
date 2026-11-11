@@ -2821,7 +2821,7 @@ comment of `lib/kernel/binfile.st`:
 
 Anything else signals `Error` ("MessagePack cannot encode an instance of
 ...") and so does an Integer outside the range, a cyclic structure and a
-structure nested deeper than 512 levels. Decoding refuses truncated input,
+structure nested deeper than 1024 levels. Decoding refuses truncated input,
 invalid UTF-8 in a `str` and, by default, a map key that is not `str` or
 `bin`. The bytes are those of msgpack-python as ProtoBase uses it
 (`use_bin_type=True`, `raw=False`): `tests/cli/test_cli_binary_interop.sh`

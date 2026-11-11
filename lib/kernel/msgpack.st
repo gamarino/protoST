@@ -21,7 +21,8 @@
  here (D35), so no other rule could tell #foo from #foobarbaz.
 
  A cyclic structure signals Error ('MessagePack: cyclic structure'), and so
- does one nested deeper than 512 levels, the depth the decoder accepts. A
+ does one nested deeper than 1024 levels, the depth the decoder accepts
+ (msgpack-python 1.2's unpacker limit; ProtoBase format 4 records nest up to 1024). A
  container met twice without being inside itself is shared, not cyclic.
 
  Map keys are strict by default, as in msgpack-python: only str and bin keys
