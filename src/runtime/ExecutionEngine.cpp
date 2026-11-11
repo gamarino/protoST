@@ -621,6 +621,16 @@ ExecutionEngine::canStartNestedEngine() {
 const proto::ProtoObject* ExecutionEngine::doesNotUnderstand(
         proto::ProtoContext* ctx, const proto::ProtoObject* recv,
         const std::string& selector, const proto::ProtoObject* const* args, int argc) {
+    return sendDoesNotUnderstand(rt_, ctx, recv, selector, args, argc);
+}
+
+// The body of ExecutionEngine::doesNotUnderstand, shared with perform: (a
+// reflective send of a selector the receiver does not understand goes
+// through doesNotUnderstand: as a direct send does, as in Pharo).
+const proto::ProtoObject* sendDoesNotUnderstand(
+        STRuntime& rt_, proto::ProtoContext* ctx, const proto::ProtoObject* recv,
+        const std::string& selector, const proto::ProtoObject* const* args, int argc) {
+    const Bootstrap& bs_ = rt_.bootstrap();
     // A foreign exception (a module's error, another language's exception)
     // understands the Exception protocol while its handler runs: Error's
     // method runs with the foreign value as the receiver. It is a native
@@ -1596,14 +1606,10 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     }
                 }
 
-                // Lookup walks from the receiver itself first, then up the
-                // prototype chain.  Starting at the receiver matters for
-                // "class as receiver" patterns (F4): a class prototype
-                // carries its instance methods as own-attributes, and
-                // messages sent to the class itself must resolve to those
-                // methods.  For ordinary instance receivers, getAttribute
-                // walks past the (typically empty) own-attribute slot to the
-                // prototype where the method is bound.
+                // Lookup starts at the receiver's method holder (methodHolder,
+                // Bootstrap.h): an instance itself, whose chain reaches the
+                // methods of its class, or for a class object its metaclass
+                // (D52), never the class's own instance-side methods.
                 //
                 // Note: getAttribute on a tagged immediate (SmallInteger,
                 // Boolean, ...) correctly delegates to its protoCore
@@ -1673,8 +1679,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         // through any parent subtree — a mixin's own method
                         // doing a `super` send — so every parent must be
                         // searched, in resolution order.
+                        // D52: the chain of the receiver's method holder --
+                        // for a class, its metaclass chain, where its
+                        // class-side methods are defined.
                         std::vector<const proto::ProtoObject*> stack;
-                        stack.push_back(recv);
+                        stack.push_back(lookupFrom);
                         for (int hops = 0; !stack.empty() && hops < 4096;
                              ++hops) {
                             const proto::ProtoObject* node = stack.back();
@@ -1746,6 +1755,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // a single subtree (the node itself plus its parents), so
                     // searching each parent in order via `getAttribute` and
                     // taking the first non-nil hit yields exactly that order.
+
                     auto* parents = defClsObj->getParents(ctx);
                     if (!parents || parents->getSize(ctx) == 0)
                         signalCatchable(rt_, ctx,
@@ -1773,50 +1783,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     superResolved = true;
                     lookupFrom = parents->getAt(ctx, 0);
                 }
-                auto* attr = superResolved
-                                 ? superResolvedAttr
-                                 : lookupFrom->getAttribute(ctx, selSym);
-                // D5 (MNT-b2): class-side / instance-side isolation. A method
-                // installed by `ClassName class >> sel` carries the
-                // `__class_side__` marker (stamped by __installClassMethod:as:).
-                // Such a method must NOT be reachable from an instance — only
-                // from a class object. The receiver is a class object when it
-                // owns `__class_name__` as a DIRECT own attribute (every user
-                // class is stamped with `__setClassName:`; a built-in class
-                // prototype is stamped at bootstrap). An instance merely
-                // inherits that attribute through its chain, so it does not own
-                // it. When a class-side method resolves for an instance
-                // receiver, drop it — the send then falls through to the
-                // `doesNotUnderstand` path below, signalling
-                // `MessageNotUnderstood`, exactly as the spec's class/instance
-                // protocol split requires.
-                //
-                // Only this one direction is enforced: an instance-side method
-                // sent to a class object is still allowed, because the built-in
-                // class prototypes (Array, Error, ...) deliberately double as
-                // both the class object and the instance-behaviour holder, and
-                // selectors such as `Array new:` rely on that. A `__class_side__`
-                // marker is only ever stamped on USER class-side methods, so
-                // this filter never touches the built-ins.
-                if (attr && attr != PROTO_NONE) {
-                    // Symbols are interned per-ProtoSpace; rather than calling
-                    // createSymbol on every SEND (which hits the SymbolTable
-                    // shard mutex — measured as 51 % of CPU under 8-worker
-                    // saturation), read the pointers cached on the Bootstrap
-                    // at runtime construction. Same per-space discipline,
-                    // amortised once.
-                    const proto::ProtoString* classSideKey = bs_.sym.classSide;
-                    const proto::ProtoString* classNameKey = bs_.sym.className;
-                    const proto::ProtoObject* csMark =
-                        attr->getOwnAttributeDirect(ctx, classSideKey);
-                    if (csMark == PROTO_TRUE) {
-                        const proto::ProtoObject* ownName =
-                            recv->getOwnAttributeDirect(ctx, classNameKey);
-                        bool recvIsClass = ownName && ownName != PROTO_NONE;
-                        if (!recvIsClass)
-                            attr = nullptr;   // hide it — instance receiver
-                    }
-                }
+                // K14, D52: lookupFrom is the receiver's method holder (a
+                // class's metaclass), so a class finds its class-side methods
+                // and the class protocol, and an instance never sees them.
+                const proto::ProtoObject* attr = superResolvedAttr;
+                if (!superResolved) attr = lookupFrom->getAttribute(ctx, selSym);
                 if (!attr || attr == PROTO_NONE) {
                     // D3 (MNT-b2): an unresolved selector is NOT a hard abort.
                     // It happens inside the engine's own SEND dispatch, never

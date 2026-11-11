@@ -786,8 +786,8 @@ void installFuturePrimitives(STRuntime& rt) {
     bindPrimitive(rt, b.futureProto, "__passError:to:",
                   reg.registerPrim(prim_Future_passErrorTo));
     // `Future new` — a first-class, manually-resolvable promise. Overrides the
-    // inherited Object>>new so the result carries the full future machinery.
-    bindPrimitive(rt, b.futureProto, "new",
+    // inherited Behavior>>new so the result carries the full future machinery.
+    bindClassPrimitive(rt, b.futureProto, "new",
                   reg.registerPrim(prim_Future_new));
 }
 

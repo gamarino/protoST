@@ -1,12 +1,11 @@
-"XFAIL: EXPECT: instance class instance class instance class"
-"§4.7 + D5, KNOWN_ISSUES K14 (open): one selector defined on the instance
- side and on the class side of a class must keep both methods, in either
- order of definition, and a class-side method of a subclass must not hide
- an instance method the subclass inherits. Today both sides write one slot
- of the class object, so the later definition replaces the earlier one
- (Foo: instances get doesNotUnderstand; Bar: the class-side method is lost
- silently), and the engine's SEND filter answers doesNotUnderstand instead
- of continuing the lookup (Qux). Remove XFAIL when the C++ fix lands."
+"EXPECT: instance class instance class instance class"
+"§4.7 + D5, KNOWN_ISSUES K14 (resolved): one selector defined on the instance
+ side and on the class side of a class keeps both methods, in either order of
+ definition, and a class-side method of a subclass does not hide an instance
+ method the subclass inherits. Before the fix both sides wrote one slot of the
+ class object: the later definition replaced the earlier one (Foo: instances
+ got doesNotUnderstand; Bar: the class-side method was lost silently), and the
+ SEND filter answered doesNotUnderstand instead of continuing the lookup (Qux)."
 Object subclass: #K14Foo.
 K14Foo >> x
   ^ 'instance'.

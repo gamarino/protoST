@@ -817,12 +817,10 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         //
         // D5 (MNT-b2): an instance-side method is installed via
         // `__installMethod:as:`; a `ClassName class >> sel` (n.boolFlag) via
-        // `__installClassMethod:as:`, which additionally stamps the method
-        // wrapper with `__class_side__`. Both still install onto the SAME class
-        // object — the metamodel is unchanged — but the marker lets the engine's
-        // SEND dispatch refuse a class-side method when the receiver is an
-        // instance (not a class), so class-side and instance-side protocols are
-        // no longer reachable from the same receiver.
+        // `__installClassMethod:as:`, which installs it on the class's
+        // metaclass (K14, D52, runtime/Bootstrap.h): the method holder of the
+        // class object, which its instances never reach. One selector can
+        // name a method on each side.
         auto classIdx    = m.internSymbol(n.text);
         auto selectorIdx = m.internSymbol(n.stringList[0]);
         auto installIdx  = m.internSymbol(

@@ -559,25 +559,38 @@ void installBytesPrimitives(STRuntime& rt) {
     const proto::ProtoObject* p = rt.bootstrap().byteArrayProto;
     struct Entry { const char* sel; PrimFn fn; };
     const Entry entries[] = {
-        {"__bytesNew:", prim_BytesNew},           {"__bytesWithAll:", prim_BytesWithAll},
-        {"__bytesSize", prim_BytesSize},          {"__bytesAt:", prim_BytesAt},
-        {"__bytesCopyFrom:to:", prim_BytesCopyFromTo}, {"__bytesConcat:", prim_BytesConcat},
-        {"__bytesEquals:", prim_BytesEquals},     {"__bytesHash", prim_BytesHash},
-        {"__bytesHex", prim_BytesHex},            {"__fromHex:", prim_BytesFromHex},
-        {"__utf8Encode:", prim_Utf8Encode},       {"__utf8Decode", prim_Utf8Decode},
-        {"__bytesJoin:", prim_BytesJoin},
+        {"__bytesSize", prim_BytesSize},
+        {"__bytesAt:", prim_BytesAt},
+        {"__bytesCopyFrom:to:", prim_BytesCopyFromTo},
+        {"__bytesConcat:", prim_BytesConcat},
+        {"__bytesEquals:", prim_BytesEquals},
+        {"__bytesHash", prim_BytesHash},
+        {"__bytesHex", prim_BytesHex},
+        {"__utf8Decode", prim_Utf8Decode},
         {"__unpackUnsignedAt:width:bigEndian:", prim_UnpackUnsigned},
         {"__unpackSignedAt:width:bigEndian:", prim_UnpackSigned},
         {"__unpackFloatAt:width:bigEndian:", prim_UnpackFloat},
+        {"__crc32Continuing:", prim_Crc32},
+        {"__blake2bSize:key:", prim_Blake2b},
+        {"__sha256", prim_Sha256},
+        {"__base64Encode", prim_Base64Encode},
+    };
+    for (const Entry& e : entries) bindPrimitive(rt, p, e.sel, reg.registerPrim(e.fn));
+    // The constructors and functions sent to `ByteArray` itself
+    // (lib/kernel/bytes.st, digest.st, stream.st, string.st): class side (D52).
+    const Entry classSide[] = {
+        {"__bytesNew:", prim_BytesNew},           {"__bytesWithAll:", prim_BytesWithAll},
+        {"__fromHex:", prim_BytesFromHex},
+        {"__crc32Combine:with:length:", prim_Crc32Combine},
+        {"__hmacSha256Key:message:", prim_HmacSha256},
+        {"__utf8Encode:", prim_Utf8Encode},
+        {"__bytesJoin:", prim_BytesJoin},
         {"__packUnsigned:width:bigEndian:", prim_PackUnsigned},
         {"__packSigned:width:bigEndian:", prim_PackSigned},
         {"__packFloat:width:bigEndian:", prim_PackFloat},
-        {"__crc32Continuing:", prim_Crc32},       {"__crc32Combine:with:length:", prim_Crc32Combine},
-        {"__blake2bSize:key:", prim_Blake2b},     {"__sha256", prim_Sha256},
-        {"__hmacSha256Key:message:", prim_HmacSha256},
-        {"__base64Encode", prim_Base64Encode},    {"__base64Decode:", prim_Base64Decode},
+        {"__base64Decode:", prim_Base64Decode},
     };
-    for (const Entry& e : entries) bindPrimitive(rt, p, e.sel, reg.registerPrim(e.fn));
+    for (const Entry& e : classSide) bindClassPrimitive(rt, p, e.sel, reg.registerPrim(e.fn));
 }
 
 } // namespace protoST

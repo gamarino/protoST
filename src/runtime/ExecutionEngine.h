@@ -429,5 +429,14 @@ private:
     unsigned int savedScratchCursor_ = 0;
 };
 
+// A send `recv` does not understand: its doesNotUnderstand: method, when its
+// class defines one in Smalltalk, runs with a Message; otherwise a resumable
+// MessageNotUnderstood is signalled. What a SEND and perform: both do.
+const proto::ProtoObject* sendDoesNotUnderstand(STRuntime& rt, proto::ProtoContext* ctx,
+                                                const proto::ProtoObject* recv,
+                                                const std::string& selector,
+                                                const proto::ProtoObject* const* args,
+                                                int argc);
+
 } // namespace protoST
 

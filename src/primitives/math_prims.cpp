@@ -453,12 +453,12 @@ void installMathPrimitives(STRuntime& rt) {
     bindPrimitive(rt, N, "gcd:",        reg.registerPrim(prim_Gcd));
     bindPrimitive(rt, N, "lcm:",        reg.registerPrim(prim_Lcm));
 
-    // Class-side constants on `Float` (the receiver is `floatProto` itself).
+    // Class-side constants of `Float`, on its metaclass (D52).
     auto* F = b.floatProto;
-    bindPrimitive(rt, F, "pi",       reg.registerPrim(prim_Pi));
-    bindPrimitive(rt, F, "e",        reg.registerPrim(prim_E));
-    bindPrimitive(rt, F, "infinity", reg.registerPrim(prim_Infinity));
-    bindPrimitive(rt, F, "nan",      reg.registerPrim(prim_Nan));
+    bindClassPrimitive(rt, F, "pi",       reg.registerPrim(prim_Pi));
+    bindClassPrimitive(rt, F, "e",        reg.registerPrim(prim_E));
+    bindClassPrimitive(rt, F, "infinity", reg.registerPrim(prim_Infinity));
+    bindClassPrimitive(rt, F, "nan",      reg.registerPrim(prim_Nan));
 }
 
 } // namespace protoST

@@ -119,7 +119,9 @@ Object >> initialize
 "--- class-instance variables -----------------------------------------------------
  `Foo class instanceVariableNames: 'default'` declares slots of the class
  object itself; the compiler reads the declaration, and at run time the
- statement only has to be understood by the metaclass."
+ metaclass records the names, so `Foo class instVarNames` lists them, as in
+ Pharo."
 
-Object >> instanceVariableNames: aString
+Behavior >> instanceVariableNames: aString
+  self __setInstVarNames: aString.
   ^ self.

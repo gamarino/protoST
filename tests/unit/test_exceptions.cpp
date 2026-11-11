@@ -349,13 +349,12 @@ TEST_CASE("EXC-b: retry re-evaluates the protected block from scratch",
     // the protected block re-ran. The one-shot gate guarantees termination
     // (a never-flipped flag would loop forever).
     //
-    // The gate lives as an attribute on the globally-named subclass `RetryErr`
-    // because, in the current build, block closures cannot capture method
-    // locals or `self` — a globally-resolvable prototype is the only mutable
-    // state a protected block can reach. (When block capture lands this test
-    // can use an ordinary instance-variable counter.)
+    // The gate is the messageText of an Error instance held in the global
+    // `RetryErr` (Smalltalk at:put:), mutable state the protected block
+    // reaches by name. (This test and the EXC-c flags used Error subclasses
+    // until D52: a class no longer answers its instance-side messageText:.)
     const char* src =
-        "Error subclass: #RetryErr. "
+        "Smalltalk at: #RetryErr put: Error new. "
         "RetryErr messageText: 'pending'. "
         "Object subclass: #Retrier. "
         "Retrier >> run "
@@ -519,7 +518,7 @@ TEST_CASE("EXC-c: ensure: runs the cleanup on normal completion and yields the "
     // from 'pending' to 'ran'. A second statement reads the flag back to
     // prove the cleanup ran.
     const char* src =
-        "Error subclass: #Flag1. "
+        "Smalltalk at: #Flag1 put: Error new. "
         "Flag1 messageText: 'pending'. "
         "Object subclass: #EnsureCalm. "
         "EnsureCalm >> run "
@@ -555,7 +554,7 @@ TEST_CASE("EXC-c: ensure: runs the cleanup on an abnormal exit — a signal "
     // which runs its cleanup (sets `Flag2 messageText` to 'ran') before
     // re-propagating to the outer handler.
     const char* src =
-        "Error subclass: #Flag2. "
+        "Smalltalk at: #Flag2 put: Error new. "
         "Flag2 messageText: 'pending'. "
         "Object subclass: #EnsureUnwind. "
         "EnsureUnwind >> run "
@@ -578,7 +577,7 @@ TEST_CASE("EXC-c: ensure: runs the cleanup when a non-local return unwinds "
     // method `run`. The NonLocalReturn unwinds through the `ensure:`, which
     // runs its cleanup (sets `Flag3 messageText` to 'ran').
     const char* src =
-        "Error subclass: #Flag3. "
+        "Smalltalk at: #Flag3 put: Error new. "
         "Flag3 messageText: 'pending'. "
         "Object subclass: #EnsureNLR. "
         "EnsureNLR >> run "
@@ -600,7 +599,7 @@ TEST_CASE("EXC-c: the non-local return through an ensure: still returns from "
     // the protected block must still return 42 from `run` (the `^0` after the
     // `ensure:` is abandoned), proving the cleanup did not swallow the unwind.
     const char* src =
-        "Error subclass: #Flag3b. "
+        "Smalltalk at: #Flag3b put: Error new. "
         "Flag3b messageText: 'pending'. "
         "Object subclass: #EnsureNLRv. "
         "EnsureNLRv >> run "
@@ -618,7 +617,7 @@ TEST_CASE("EXC-c: ifCurtailed: does NOT run the cleanup on normal completion",
     // The protected block completes normally with 5; `ifCurtailed:`'s cleanup
     // is SKIPPED, so `Flag4 messageText` stays 'pending'.
     const char* src =
-        "Error subclass: #Flag4. "
+        "Smalltalk at: #Flag4 put: Error new. "
         "Flag4 messageText: 'pending'. "
         "Object subclass: #CurtCalm. "
         "CurtCalm >> run "
@@ -653,7 +652,7 @@ TEST_CASE("EXC-c: ifCurtailed: DOES run the cleanup on an abnormal exit",
     // A `signal` unwinds through the `ifCurtailed:` to an outer handler; the
     // abnormal exit fires the cleanup, setting `Flag5 messageText` to 'ran'.
     const char* src =
-        "Error subclass: #Flag5. "
+        "Smalltalk at: #Flag5 put: Error new. "
         "Flag5 messageText: 'pending'. "
         "Object subclass: #CurtUnwind. "
         "CurtUnwind >> run "
@@ -677,7 +676,7 @@ TEST_CASE("EXC-c: nested ensure: — both cleanups run, innermost first",
     // `Order messageText`: the inner cleanup writes 'I', the outer 'O', so the
     // final string 'IO' proves innermost-first ordering.
     const char* src =
-        "Error subclass: #Order. "
+        "Smalltalk at: #Order put: Error new. "
         "Order messageText: ''. "
         "Object subclass: #NestEnsure. "
         "NestEnsure >> run "
@@ -764,7 +763,7 @@ TEST_CASE("EXC-d: ensure: cleanup runs when a translated native error unwinds "
     // outer `on: Error do:`. EXC-c's `catch (...)` path must run the cleanup
     // for a translated error exactly as for a script-signalled one.
     const char* src =
-        "Error subclass: #NFlag. "
+        "Smalltalk at: #NFlag put: Error new. "
         "NFlag messageText: 'pending'. "
         "Object subclass: #NativeEnsure. "
         "NativeEnsure >> run "

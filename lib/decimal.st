@@ -208,7 +208,6 @@ Decimal >> isZero
 "The to-scientific-string (Python's str(Decimal))."
 Decimal >> printOn: aStream
   | digits n adjusted point |
-  self isClassObject ifTrue: [^ aStream nextPutAll: self name].
   sign = 1 ifTrue: [aStream nextPut: $-].
   kind == #infinite ifTrue: [^ aStream nextPutAll: 'Infinity'].
   self isNaN ifTrue: [
@@ -253,7 +252,6 @@ Decimal >> asExactFraction
 
 Decimal >> = anObject
   | order |
-  self isClassObject ifTrue: [^ self == anObject].
   order := self _compareWith: anObject.
   ^ order == 0.
 
@@ -288,7 +286,6 @@ Decimal >> >= anObject
 
 "Agrees with = : an equal Integer, Fraction or Float has the same hash."
 Decimal >> hash
-  self isClassObject ifTrue: [^ self identityHash].
   kind == #infinite ifTrue: [
     ^ sign = 0 ifTrue: [Float infinity hash] ifFalse: [Float infinity negated hash]].
   self isNaN ifTrue: [^ coefficient hash].
@@ -330,7 +327,7 @@ Decimal >> _orderWith: anObject
  neither a Decimal nor a Number."
 Decimal >> _compareWith: anObject
   | otherIsDecimal otherRank myRank |
-  otherIsDecimal := (anObject isKindOf: Decimal) and: [anObject isClassObject not].
+  otherIsDecimal := anObject isKindOf: Decimal.
   (otherIsDecimal or: [anObject isNumber]) ifFalse: [^ #incomparable].
   (otherIsDecimal not and: [(anObject isFloat or: [anObject isInteger or: [anObject isFraction]]) not])
     ifTrue: [^ #incomparable].

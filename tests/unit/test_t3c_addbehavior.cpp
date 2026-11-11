@@ -91,13 +91,18 @@ TEST_CASE("T3-c: on-the-fly behaviour composition via addBehavior:",
         REQUIRE(s->toStdString(ctx) == "HEY!");
     }
 
-    SECTION("the class object itself responds to the mixin method") {
+    SECTION("the class object gains the mixin's class-side methods, not its instance side") {
+        // D52: a class answers its metaclass chain. addBehavior: composes both
+        // sides, so the mixin's class-side `tag` reaches the class, and its
+        // instance-side `inst` reaches instances only.
         auto* r = runSrc(rt,
             "Object subclass: #ClsResp."
             "Object subclass: #Tag."
-            "Tag >> tag  ^ 'tagged'."
+            "Tag class >> tag  ^ 'tagged'."
+            "Tag >> inst  ^ 'instance'."
             "ClsResp addBehavior: Tag."
-            "ClsResp tag.");
+            "((ClsResp respondsTo: #inst) not and: [ClsResp new inst = 'instance'])"
+            "  ifTrue: [ClsResp tag] ifFalse: ['leak'].");
         REQUIRE(r != nullptr);
         auto* s = r->asString(ctx);
         REQUIRE(s != nullptr);

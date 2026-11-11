@@ -238,12 +238,12 @@ Object subclass: #Random instanceVariableNames: 'seed'.
 Random class >> new
   ^ self seed: nil __entropySeed.
 
-"protoST keeps a class's class-side and instance-side methods of the same
- selector in one slot, so this method serves both of Pharo's: sent to the
- class (Random seed: 42) it answers a new generator, sent to a generator
- (Random new seed: 42) it re-seeds that generator and answers it."
+"A new generator seeded with anInteger (Random seed: 42)."
+Random class >> seed: anInteger
+  ^ self basicNew setSeed: anInteger; yourself.
+
+"Re-seed the receiver (Random new seed: 42) and answer it."
 Random >> seed: anInteger
-  self isClass ifTrue: [^ self basicNew setSeed: anInteger].
   self setSeed: anInteger.
   ^ self.
 

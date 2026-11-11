@@ -35,13 +35,6 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
   named zone signals `TimeZoneUnavailable` (STATUS D50). Written in protoST;
   runs on the 0.9.0 binary. Docs: LANGUAGE.md §12.14, tutorial §9.9. Tests:
   `tests/conformance/13-stdlib/calendar-*` (9 files).
-- **KNOWN_ISSUES K14 recorded**: one selector defined on both the instance
-  and the class side of a class keeps only the later method (instances may
-  get `doesNotUnderstand`, or the class-side method is lost silently), and a
-  subclass's class-side method hides an inherited instance method. Pinned by
-  the `XFAIL` test
-  `tests/conformance/04-object-model/class-and-instance-method-same-selector.st`;
-  the C++ fix is scheduled with the 0.9.1 build.
 - **`Fraction` defers to a non-Number that adapts** (`lib/kernel/fraction.st`):
   `=`, `<` (and so `>`, `<=`, `>=`), `+`, `-`, `*`, `/`, and `Integer >> /`,
   send `adaptToNumber:andSend:` to an argument that is not a Number but
@@ -62,6 +55,37 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
   `float-literal-overflow-is-error.st`, and the `[k16]` cases of
   `tests/unit/test_lexer.cpp` (ties to even, 4,000 random doubles' shortest
   forms, a comma-decimal `LC_NUMERIC`).
+- **One selector on both sides of a class kept only the later method
+  (K14).** `Foo >> x` and `Foo class >> x` wrote one slot of the class object:
+  instances got `doesNotUnderstand`, or the class-side method was lost
+  silently, and a subclass's class-side method hid an instance method the
+  subclass inherits. Every class now has a metaclass (`Foo class`), an object
+  of its own holding the class-side methods, and a send to a class looks up
+  the metaclass chain only: `Foo class` -> ... -> `Object class` -> `Class` ->
+  `Behavior` -> `Object`, as in Pharo (STATUS D52). The same one lookup serves
+  `super`, the call form (`Foo class >> make(x)` then `Foo make(1)`),
+  `perform:`, the kernel's dynamic sends, foreign sends, actor messages,
+  `doesNotUnderstand:` and `respondsTo:`. Tests: the former `XFAIL`
+  `04-object-model/class-and-instance-method-same-selector.st` passes; new:
+  redefinition of one side, `super` on each side, class-side inheritance and
+  override, reflection, `doesNotUnderstand:` on both sides, the class-side
+  call form, a class object is not an instance, the metaclass chain, and
+  `kernel-class-protocol-not-hidden.st` (`tests/conformance/04-object-model/`).
+  The metaclass protocol is Pharo's where the semantics hold: `isMeta`,
+  `Foo class soleInstance` (and `instanceClass`) answer `Foo`,
+  `lookupSelector:` answers the class or metaclass that holds the method (a
+  deviation: Pharo answers the CompiledMethod, STATUS D52),
+  `instanceVariableNames:` answers the receiver, `Metaclass new` and
+  `Foo class new` signal an Error (a metaclass is made by `subclass:` only),
+  and `Foo copy` gets a metaclass of its own, so a class-side method added to
+  the copy does not reach `Foo`. Tests: `metaclass-reflection-selectors.st`,
+  `class-instance-variable-names.st`, `class-copy-has-own-metaclass.st`,
+  `metaclass-new-is-refused.st` (`tests/conformance/04-object-model/`).
+- **`perform:` with a selector nothing understands bypassed
+  `doesNotUnderstand:`.** It signalled the error directly, so a class with
+  its own `doesNotUnderstand:` (a proxy) was not asked. It now sends
+  `doesNotUnderstand:` with the Message, as an ordinary send does. Test:
+  `05-messages/perform-unknown-selector-goes-through-dnu.st`.
 
 - **Deeply nested `collect:` (and every other pinning primitive) crashed
   (K15).** A `TransientPin` lived only in a fixed 256-slot scratch region; the
@@ -110,6 +134,35 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
   mismatched surrogate or an invalid or truncated hex escape signals the
   library's parse error. Tests: `tests/conformance/13-stdlib/json-*unicode*`,
   `json-*surrogate*`.
+
+### Breaking changes
+
+- **A class no longer answers its instances' methods (D52, superseding part
+  of D5).** Until now a class object reached its own instance-side protocol:
+  `Foo greet` ran `Foo >> greet` on the class, `Foo = Foo` ran an
+  instance-side `=`, `anInstance new` made a sibling, and `Array at: 1` reached
+  the Array primitive. Each of these is now `doesNotUnderstand` (or, for `=`,
+  Object's identity), as in Pharo. Code that relied on it must define the
+  method on the class side (`Foo class >> greet`). Related changes:
+  - The class protocol (`new`, `basicNew`, `newChild`, `subclass:`..., `name`,
+    `superclass`, `selectors`, `canUnderstand:`, `addBehavior:`, and the
+    `reflection.st` methods `instVarNames`, `inheritsFrom:`, `subclasses`,
+    ...) moved from `Object` to the new class `Behavior`; `Class` and
+    `Metaclass` are new globals. An instance no longer understands `new`.
+  - `canUnderstand:` describes the receiver's instances, as in Pharo
+    (`Array canUnderstand: #at:put:` true, `Array class canUnderstand:
+    #at:put:` false); `respondsTo:` describes the receiver.
+    `Foo class class` is `Metaclass`, `Object class superclass` is `Class`.
+  - The built-in constructors are bound on their metaclasses only (the
+    double binding of the first K14 fix is gone), and `Exception signal` /
+    `signal:` stay class-side messages that build the instance.
+  - The kernel's 37 `isClassObject` guards against a class running an
+    instance method are removed (`calendar.st`, `decimal.st`, `printing.st`,
+    `reflection.st`, `fraction.st`, `string.st`, `character.st`);
+    `Random seed:`, `Association key:value:` and `Notification signal:` are
+    class-side methods.
+  - A send to a class costs one lookup again (the first K14 fix added a
+    second).
 
 ## 0.9.0 — bytes, binary files, encodings, MessagePack and timers (2026-11-10)
 

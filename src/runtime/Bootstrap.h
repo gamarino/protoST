@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 // Forward declarations to avoid pulling protoCore headers everywhere.
 namespace proto {
     class ProtoSpace;
@@ -114,6 +116,15 @@ struct Bootstrap {
     // for the exception-hierarchy roots).
     const proto::ProtoObject* unsetMarker                 = nullptr;
 
+    // K14, D52: the class protocol. `Behavior` (a child of Object) holds what
+    // every class and metaclass understands; `Class` and `Metaclass` are its
+    // children. `Object class`, the root of the metaclass chain, is a child
+    // of `Class`, so a class object reaches Behavior's protocol and then
+    // Object's (src/runtime/Bootstrap.h, ensureMetaclass).
+    const proto::ProtoObject* behaviorProto               = nullptr;
+    const proto::ProtoObject* classProto                  = nullptr;
+    const proto::ProtoObject* metaclassProto              = nullptr;
+
     // Pre-interned hot-path attribute symbols.
     //
     // Interning is idempotent — the same content always yields the same
@@ -183,12 +194,13 @@ struct Bootstrap {
         // 2026-05-23 night: profile of saturation under 8 workers showed
         // 51 % of CPU in SymbolTable::intern + mutex contention, traced to
         // two createSymbol calls per SEND_* dispatch (one for __class_name__,
-        // one for __class_side__ — both > 6 bytes, so they skip the
+        // one for the class-side marker of the time — both > 6 bytes, so they skip the
         // inline-string path and hit the shard mutex). Cache them here so
         // every SEND reads a Bootstrap-perpetual pointer instead.
         const proto::ProtoString* className       = nullptr;  // __class_name__ (every SEND class-side filter)
         const proto::ProtoString* classId         = nullptr;  // __class_id__ (super: the defining class)
-        const proto::ProtoString* classSide       = nullptr;  // __class_side__ (every SEND class-side filter)
+        const proto::ProtoString* metaclass       = nullptr;  // __metaclass__ (methodHolder of a class)
+        const proto::ProtoString* soleInstance    = nullptr;  // __sole_instance__ (a metaclass's class)
         // 2026-06-15: actor priority bands (high/medium/low). `__priority__`
         // is a SmallInteger 0/1/2 stored on the actor; absence means medium.
         // The scheduler reads this on schedule() to pick which of three
@@ -211,7 +223,9 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
 
 // Where a protoST send to `recv` starts its method lookup: protoST's own
 // prototype for a primitive value (nil, a Boolean, an Integer, a Float, a
-// Character, a String or Symbol) and `recv` itself for anything else.  In a
+// Character, a String or Symbol), the metaclass for a class, `Metaclass` for
+// a metaclass (both: the object `recv` owns as `__metaclass__`), and `recv`
+// itself for anything else.  In a
 // space protoST owns this is exactly what protoCore's lookup through the
 // space's primitive slots finds; in another runtime's space, whose slots hold
 // that runtime's prototypes, it keeps protoST's semantics for protoST code.
@@ -220,5 +234,37 @@ const proto::ProtoObject* methodHolder(const Bootstrap& b, proto::ProtoContext* 
 
 // True when `v` is a Character (a protoCore unicode char).
 bool isCharacterValue(proto::ProtoContext* ctx, const proto::ProtoObject* v);
+
+// --- Classes and metaclasses (K14, D52) ----------------------------------------
+//
+// A class object is the prototype of its instances, so its own attributes are
+// its instance-side methods. Every class also has a metaclass object (`Foo
+// class`), which holds its class-side methods and is the method holder of the
+// class object itself: a send to a class looks the selector up on the
+// metaclass chain
+//
+//     Foo class -> Super class -> ... -> Object class -> Class -> Behavior -> Object
+//
+// and never on the class's own instance side, as in Smalltalk-80 and Pharo.
+// `Behavior` holds the protocol every class understands (`new`, `name`,
+// `selectors`, `subclass:` ...), `Class` the protocol of classes, and
+// `Metaclass` that of metaclasses: a metaclass's method holder is `Metaclass`
+// (`Foo class class == Metaclass`). Both sides of a class are ordinary
+// prototype chains, so inheritance, `super`, mixins (`uses:`) and
+// `addBehavior:` treat them alike.
+//
+// A class (or metaclass) owns `__metaclass__`, the object that holds the
+// methods it understands; methodHolder reads it, and an object without it
+// (every instance) is its own method holder. A metaclass owns
+// `__sole_instance__`, its class.
+
+// The metaclass of `cls` (an object that owns `__class_name__`), created on
+// first use: a child of the metaclass of `cls`'s superclass (of every class
+// on its chain, for a class with mixins), `Class` for a root class.
+const proto::ProtoObject* ensureMetaclass(const Bootstrap& b, proto::ProtoContext* ctx,
+                                          const proto::ProtoObject* cls);
+
+// True when `obj` is a metaclass (it owns `__sole_instance__`).
+bool isMetaclass(const Bootstrap& b, proto::ProtoContext* ctx, const proto::ProtoObject* obj);
 
 } // namespace protoST

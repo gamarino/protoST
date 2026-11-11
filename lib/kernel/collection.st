@@ -456,11 +456,10 @@ Dictionary class >> newFrom: aCollection
 
 "--- Association ---------------------------------------------------------------"
 
+Association class >> key: aKey value: aValue
+  ^ self new key: aKey value: aValue.
+
 Association >> key: aKey value: aValue
-  "protoST keeps a class's class-side and instance-side methods of the same
-   selector in one slot, so this method serves both of Pharo's: sent to the
-   class it creates an Association, sent to an instance it sets both fields."
-  self isClass ifTrue: [^ self new key: aKey value: aValue].
   self key: aKey.
   self value: aValue.
   ^ self.

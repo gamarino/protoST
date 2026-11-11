@@ -830,9 +830,9 @@ const proto::ProtoObject* prim_Array_do(STRuntime& rt, proto::ProtoContext* ctx,
 
 // =====================  Array class-side constructors  =====================
 //
-// Class-side methods are bound on the `Array` prototype: a class object IS its
-// prototype, so `getAttribute` from `Array` resolves these — exactly how
-// `Counter class >> startingAt:` works in protoST today.
+// Class-side methods are bound on `Array`'s metaclass (bindClassPrimitive,
+// STATUS D52), where a send to `Array` or to a user subclass looks them up,
+// exactly as `Counter class >> startingAt:` is installed.
 
 // Array new: n → an Array of `n` nil elements.
 const proto::ProtoObject* prim_Array_classNew(STRuntime& rt, proto::ProtoContext* ctx,
@@ -2442,18 +2442,17 @@ void installCollectionPrimitives(STRuntime& rt) {
     bindPrimitive(rt, b.arrayProto, "do:",
                   reg.registerPrim(prim_Array_do));
 
-    // --- Array class-side constructors — bound on the Array prototype ------
-    // A class object IS its prototype, so a send to `Array` resolves these.
-    bindPrimitive(rt, b.arrayProto, "new:",
+    // --- Array class-side constructors — bound on Array's metaclass -------
+    bindClassPrimitive(rt, b.arrayProto, "new:",
                   reg.registerPrim(prim_Array_classNew));
-    bindPrimitive(rt, b.arrayProto, "withAll:",
+    bindClassPrimitive(rt, b.arrayProto, "withAll:",
                   reg.registerPrim(prim_Array_classWithAll));
     {
         int withIdx = reg.registerPrim(prim_Array_classWith);
-        bindPrimitive(rt, b.arrayProto, "with:",                   withIdx);
-        bindPrimitive(rt, b.arrayProto, "with:with:",              withIdx);
-        bindPrimitive(rt, b.arrayProto, "with:with:with:",         withIdx);
-        bindPrimitive(rt, b.arrayProto, "with:with:with:with:",    withIdx);
+        bindClassPrimitive(rt, b.arrayProto, "with:",                   withIdx);
+        bindClassPrimitive(rt, b.arrayProto, "with:with:",              withIdx);
+        bindClassPrimitive(rt, b.arrayProto, "with:with:with:",         withIdx);
+        bindClassPrimitive(rt, b.arrayProto, "with:with:with:with:",    withIdx);
     }
 
     // --- OrderedCollection base operations — bound on the OC prototype -----
@@ -2494,9 +2493,9 @@ void installCollectionPrimitives(STRuntime& rt) {
     // --- OrderedCollection class-side constructors -------------------------
     // A class object IS its prototype, so a send to `OrderedCollection`
     // resolves these. `new` / `withAll:` build a fresh empty / filled instance.
-    bindPrimitive(rt, b.orderedCollectionProto, "new",
+    bindClassPrimitive(rt, b.orderedCollectionProto, "new",
                   reg.registerPrim(prim_OC_classNew));
-    bindPrimitive(rt, b.orderedCollectionProto, "withAll:",
+    bindClassPrimitive(rt, b.orderedCollectionProto, "withAll:",
                   reg.registerPrim(prim_OC_classWithAll));
 
     // --- Interval base operations — bound on the Interval prototype --------
@@ -2546,10 +2545,10 @@ void installCollectionPrimitives(STRuntime& rt) {
                   reg.registerPrim(prim_Set_notEmpty));
     bindPrimitive(rt, b.setProto, "do:",
                   reg.registerPrim(prim_Set_do));
-    // --- Set class-side constructors — bound on the Set prototype ----------
-    bindPrimitive(rt, b.setProto, "new",
+    // --- Set class-side constructors — bound on Set's metaclass -----------
+    bindClassPrimitive(rt, b.setProto, "new",
                   reg.registerPrim(prim_Set_classNew));
-    bindPrimitive(rt, b.setProto, "withAll:",
+    bindClassPrimitive(rt, b.setProto, "withAll:",
                   reg.registerPrim(prim_Set_classWithAll));
 
     // --- Bag base operations — bound on the Bag prototype ------------------
@@ -2573,10 +2572,10 @@ void installCollectionPrimitives(STRuntime& rt) {
                   reg.registerPrim(prim_Bag_notEmpty));
     bindPrimitive(rt, b.bagProto, "do:",
                   reg.registerPrim(prim_Bag_do));
-    // --- Bag class-side constructors — bound on the Bag prototype ----------
-    bindPrimitive(rt, b.bagProto, "new",
+    // --- Bag class-side constructors — bound on Bag's metaclass -----------
+    bindClassPrimitive(rt, b.bagProto, "new",
                   reg.registerPrim(prim_Bag_classNew));
-    bindPrimitive(rt, b.bagProto, "withAll:",
+    bindClassPrimitive(rt, b.bagProto, "withAll:",
                   reg.registerPrim(prim_Bag_classWithAll));
 
     // --- Dictionary base operations — bound on the Dictionary prototype ----
@@ -2619,7 +2618,7 @@ void installCollectionPrimitives(STRuntime& rt) {
     bindPrimitive(rt, b.dictionaryProto, "associations",
                   reg.registerPrim(prim_Dict_associations));
     // --- Dictionary class-side constructor ---------------------------------
-    bindPrimitive(rt, b.dictionaryProto, "new",
+    bindClassPrimitive(rt, b.dictionaryProto, "new",
                   reg.registerPrim(prim_Dict_classNew));
 
     // --- Association — bound on the Association prototype ------------------

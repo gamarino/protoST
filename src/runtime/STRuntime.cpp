@@ -184,6 +184,10 @@ void bindPrimitive(STRuntime& rt, const proto::ProtoObject* proto, const char* s
     const_cast<proto::ProtoObject*>(proto)->setAttribute(ctx, sel, val);
 }
 
+void bindClassPrimitive(STRuntime& rt, const proto::ProtoObject* cls, const char* selector, int idx) {
+    bindPrimitive(rt, ensureMetaclass(rt.bootstrap(), rt.rootCtx(), cls), selector, idx);
+}
+
 // F6 v3 E2b: derive a unique attribute key from an object pointer. The live
 // registry (a mutable ProtoObject) stores each anchored object under such a
 // key so the entry can later be removed by pointer identity. Pointer identity
@@ -595,6 +599,14 @@ struct STRuntime::Impl {
         globals->setAttribute(rootCtx,
             proto::ProtoString::createSymbol(rootCtx, "ByteArray"),
             bootstrap.byteArrayProto);
+        // K14, D52: the class protocol, nameable to extend it
+        // (`Behavior >> selector`).
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "Behavior"), bootstrap.behaviorProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "Class"), bootstrap.classProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "Metaclass"), bootstrap.metaclassProto);
 
         // F6 v3 E2b: create the single live-registry GC root and pin it.
         //
@@ -2191,7 +2203,9 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
         bool yielded = false;
 
         try {
-            auto* method = wrapped ? wrapped->getAttribute(ctx, selStr) : nullptr;
+            auto* method = wrapped
+                ? methodHolder(bootstrap(), ctx, wrapped)->getAttribute(ctx, selStr)
+                : nullptr;
             const proto::ProtoObject* result = nullptr;
 
             auto* bcPtrObj = method ? method->getOwnAttributeDirect(ctx, bcKey) : nullptr;

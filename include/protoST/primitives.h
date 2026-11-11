@@ -34,4 +34,13 @@ void bindPrimitive(STRuntime& rt,
                    const char* selector,
                    int primIndex);
 
+// Bind a class-side primitive of a built-in class (a constructor such as
+// `Array new:`, a constant such as `Float pi`) on the class's metaclass
+// (K14, D52, src/runtime/Bootstrap.h): the class understands it, its
+// instances do not.
+void bindClassPrimitive(STRuntime& rt,
+                        const proto::ProtoObject* cls,
+                        const char* selector,
+                        int primIndex);
+
 } // namespace protoST

@@ -203,15 +203,6 @@ std::string stringAttribute(proto::ProtoContext* ctx, const proto::ProtoObject* 
     return s ? s->toStdString(ctx) : std::string();
 }
 
-// True when `obj` is a class object (carries `__class_name__` as an OWN
-// attribute). Class-side `signal` / `signal:` is sent to such an object; an
-// instance does not own `__class_name__` — it inherits it.
-bool isClassObject(proto::ProtoContext* ctx, const proto::ProtoObject* obj) {
-    if (!obj) return false;
-    const proto::ProtoObject* own = obj->getOwnAttributeDirect(ctx, classNameKey(ctx));
-    return own && own != PROTO_NONE;
-}
-
 // The exception instance's messageText, or "" when nil/absent.
 std::string messageTextOf(proto::ProtoContext* ctx, const proto::ProtoObject* exc) {
     const proto::ProtoObject* m = exc ? exc->getAttribute(ctx, msgTextKey(ctx)) : nullptr;
@@ -829,36 +820,44 @@ const proto::ProtoObject* newExceptionInstance(proto::ProtoContext* ctx,
     return cls->newChild(ctx, /*isMutable=*/true);
 }
 
-// receiver signal
-//
-// Class-side  → build an instance, signal it.
-// Instance-side → signal the receiver directly.
+// anException signal → signal the receiver.
 const proto::ProtoObject* prim_Exception_signal(STRuntime& rt, proto::ProtoContext* ctx,
                                                  const proto::ProtoObject* r,
                                                  const proto::ProtoObject* const*, int) {
-    const proto::ProtoObject* exc = r;
-    if (isClassObject(ctx, r)) {
-        exc = newExceptionInstance(ctx, r);
-    }
-    return signalInstance(rt, ctx, exc);
+    return signalInstance(rt, ctx, r);
 }
 
-// receiver signal: aString
-//
-// Class-side  → build an instance, set messageText, signal it.
-// Instance-side → set messageText on the receiver, signal it.
+// anException signal: aString → set messageText on the receiver, signal it.
 const proto::ProtoObject* prim_Exception_signalText(STRuntime& rt, proto::ProtoContext* ctx,
                                                      const proto::ProtoObject* r,
                                                      const proto::ProtoObject* const* a,
                                                      int argc) {
     if (argc != 1) throw NativeError("signal: expects 1 arg (message string)");
-    const proto::ProtoObject* exc = r;
-    if (isClassObject(ctx, r)) {
-        exc = newExceptionInstance(ctx, r);
-    }
+    const_cast<proto::ProtoObject*>(r)->setAttribute(ctx, msgTextKey(ctx), a[0]);
+    return signalInstance(rt, ctx, r);
+}
+
+// AnExceptionClass signal → a new instance of the receiver, signalled
+// (Exception class >> signal, on the metaclass: STATUS D52).
+const proto::ProtoObject* prim_ExceptionClass_signal(STRuntime& rt, proto::ProtoContext* ctx,
+                                                      const proto::ProtoObject* cls,
+                                                      const proto::ProtoObject* const* a,
+                                                      int argc) {
+    const proto::ProtoObject* exc = newExceptionInstance(ctx, cls);
     TransientPin pinExc(ctx, exc);
-    const_cast<proto::ProtoObject*>(exc)->setAttribute(ctx, msgTextKey(ctx), a[0]);
-    return signalInstance(rt, ctx, exc);
+    return prim_Exception_signal(rt, ctx, exc, a, argc);
+}
+
+// AnExceptionClass signal: aString → a new instance with that messageText,
+// signalled.
+const proto::ProtoObject* prim_ExceptionClass_signalText(STRuntime& rt, proto::ProtoContext* ctx,
+                                                          const proto::ProtoObject* cls,
+                                                          const proto::ProtoObject* const* a,
+                                                          int argc) {
+    if (argc != 1) throw NativeError("signal: expects 1 arg (message string)");
+    const proto::ProtoObject* exc = newExceptionInstance(ctx, cls);
+    TransientPin pinExc(ctx, exc);
+    return prim_Exception_signalText(rt, ctx, exc, a, argc);
 }
 
 // anException messageText → the stored string, or the class name when unset
@@ -1288,12 +1287,14 @@ void installExceptionPrimitives(STRuntime& rt) {
     installErrorFactory(rt);
 
     // signal / signal: — bound on Exception, inherited by Error / Warning and
-    // by user subclasses. Works both class-side (`Error signal: 'x'`) and
-    // instance-side (`anError signal`).
-    int signalIdx     = reg.registerPrim(prim_Exception_signal);
-    int signalTextIdx = reg.registerPrim(prim_Exception_signalText);
-    bindPrimitive(rt, b.exceptionProto, "signal",  signalIdx);
-    bindPrimitive(rt, b.exceptionProto, "signal:", signalTextIdx);
+    // by user subclasses, on each side (D52): `anError signal` signals the
+    // receiver, `Error signal: 'x'` a new instance of the receiver class.
+    bindPrimitive(rt, b.exceptionProto, "signal",  reg.registerPrim(prim_Exception_signal));
+    bindPrimitive(rt, b.exceptionProto, "signal:", reg.registerPrim(prim_Exception_signalText));
+    bindClassPrimitive(rt, b.exceptionProto, "signal",
+                       reg.registerPrim(prim_ExceptionClass_signal));
+    bindClassPrimitive(rt, b.exceptionProto, "signal:",
+                       reg.registerPrim(prim_ExceptionClass_signalText));
 
     // Accessors + the handler actions.
 bindPrimitive(rt, b.messageNotUnderstoodProto, "receiver", reg.registerPrim(prim_MNU_receiver));

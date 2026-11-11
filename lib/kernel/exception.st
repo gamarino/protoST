@@ -66,11 +66,10 @@ Exception >> retryUsing: replacementBlock
  (answered by messageText and description) rather than in that slot."
 Exception subclass: #Notification instanceVariableNames: 'notificationText'.
 
-"protoST keeps a class's class-side and instance-side methods of the same
- selector in one slot, so this method serves both Notification signal: 'text'
- and aNotification signal: 'text'."
+Notification class >> signal: aText
+  ^ self new signal: aText.
+
 Notification >> signal: aText
-  self isClass ifTrue: [^ self new signal: aText].
   notificationText := aText.
   ^ self signal.
 

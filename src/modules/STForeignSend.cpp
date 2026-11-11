@@ -44,8 +44,8 @@ private:
     std::vector<proto::proto_ulong> disabled_;
 };
 
-// One SEND of `selector` to `recv`, with the engine's semantics: the class-side
-// isolation (D5), doesNotUnderstand (D3), a user method, a primitive, a value
+// One SEND of `selector` to `recv`, with the engine's semantics: the method
+// holder (a class's metaclass, D52), doesNotUnderstand (D3), a user method, a primitive, a value
 // attribute read by a unary send, and a protoCore method (a module's export).
 const proto::ProtoObject* sendMessage(STRuntime& rt, proto::ProtoContext* ctx,
                                       const proto::ProtoObject* recv,
@@ -59,11 +59,6 @@ const proto::ProtoObject* sendMessage(STRuntime& rt, proto::ProtoContext* ctx,
                                  "supported: an actor's messages are asynchronous");
     const proto::ProtoObject* holder = methodHolder(bs, ctx, recv);
     const proto::ProtoObject* attr = holder->getAttribute(ctx, selector);
-    if (attr && attr != PROTO_NONE && !attr->isInteger(ctx) &&
-        attr->getOwnAttributeDirect(ctx, bs.sym.classSide) == PROTO_TRUE) {
-        const proto::ProtoObject* ownName = holder->getOwnAttributeDirect(ctx, bs.sym.className);
-        if (!ownName || ownName == PROTO_NONE) attr = nullptr;  // an instance receiver
-    }
     if (!attr || attr == PROTO_NONE) {
         if (canSendToForeignException(rt, ctx, recv, selector))
             return sendToForeignException(rt, ctx, recv, selector, args, argc);

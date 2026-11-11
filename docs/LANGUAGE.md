@@ -696,6 +696,9 @@ Object
       Dictionary
   Association
   Point, ReadStream, WriteStream, Message, Date, Time, Duration, Random
+  Behavior              (the class protocol, §4.7)
+    Class               (the root of the classes' metaclass chain)
+    Metaclass           (the class of every metaclass)
 ```
 
 There are no `True`, `False` or `Magnitude` classes: `true class` and
@@ -734,7 +737,9 @@ instances of user subclasses too (`OrderedCollection subclass: #Stack`, then
 `Stack new` is a `Stack`).
 
 `newChild` is the underlying prototype operation: it answers a fresh child of
-the receiver and, like `basicNew`, does not send `initialize`.
+the receiver and, like `basicNew`, does not send `initialize`. All three are
+class-side messages (defined on `Behavior`, §4.7): an instance does not
+understand them, so `Account new new` is a `MessageNotUnderstood`.
 
 ### 4.5 Instance variables
 
@@ -837,12 +842,44 @@ Counter class >> startingAt: n
   ^ c.
 ```
 
-> **Implementation note.** Class-side and instance-side protocols are disjoint:
-> a `ClassName class >> selector` method is reachable from the class object but
-> *not* from its instances — an instance sending a class-side selector gets a
-> `MessageNotUnderstood`. Internally both still install onto the one class
-> object; class-side methods carry a marker that the send-dispatch path honours
-> when the receiver is an instance.
+Class-side and instance-side protocols are disjoint, in both directions, as
+in Pharo (STATUS D52). Every class has a **metaclass**, `ClassName class`, an
+object of its own that holds the class-side methods. A message sent to a class
+is looked up on the metaclass chain only:
+
+```
+Foo class -> Super class -> ... -> Object class -> Class -> Behavior -> Object
+```
+
+and a message sent to an instance on the class chain only (`Foo -> Super ->
+... -> Object`). So an instance sending a class-side selector, and a class
+sending one of its instances' selectors (`Foo greet`, `Array at: 1`,
+`#(1 2) new: 3`), both get a `MessageNotUnderstood`. One selector may name a
+method on each side (`Foo >> name` and `Foo class >> name` are two methods),
+and redefining one side leaves the other alone. Class-side methods are
+inherited along the metaclass chain; `super` in a class-side method starts at
+the superclass's metaclass.
+
+The class protocol every class answers (`new`, `basicNew`, `newChild`,
+`subclass:...`, `name`, `superclass`, `selectors`, `canUnderstand:`,
+`instVarNames`, `inheritsFrom:`, `includesSelector:`, ...) is defined on
+`Behavior`; `Class` (the metaclass chain's root for classes) and `Metaclass`
+(the class of every metaclass) descend from it. `canUnderstand:` describes the
+receiver's instances: `Array canUnderstand: #at:put:` is true,
+`Array class canUnderstand: #at:put:` false. `respondsTo:` describes the
+receiver itself. Reflection follows Pharo: `Foo class class == Metaclass`,
+`Foo class superclass == Super class`, `Object class superclass == Class`,
+`Class superclass == Behavior`, `Foo class printString` is `'Foo class'`.
+
+The metaclass protocol: `Foo class isMeta` is true (`Foo isMeta` false),
+`Foo class soleInstance` and `Foo class instanceClass` answer `Foo`, and
+`Foo lookupSelector: #sel` answers the class or metaclass on `Foo`'s chain
+that holds the method for `sel`, or `nil` (Pharo answers the CompiledMethod;
+protoST has no method objects, STATUS D52). A metaclass has one instance, its
+class: `Metaclass new` and `Foo class new` signal an `Error`; classes and
+their metaclasses are made by `subclass:`. `Foo copy` is a class with a
+metaclass of its own (a copy of `Foo class`), so a class-side method added
+to the copy does not reach `Foo`.
 
 Class-side methods do not see instance variables. They read and assign class
 variables and class-instance variables (§3.2).
@@ -2116,8 +2153,6 @@ It is a reference snapshot of the current implementation.
 
 | Selector | Meaning |
 |----------|---------|
-| `new` | a fresh instance, sent `initialize` before it is answered |
-| `basicNew` / `newChild` | a fresh instance, without `initialize` |
 | `printString`, `printOn:` | human-readable `String` (§4.8) |
 | `displayString`, `displayNl` | as `printString` / `printNl`, strings without quotes |
 | `printNl` | print the receiver followed by a newline; returns the receiver |
@@ -2136,6 +2171,17 @@ It is a reference snapshot of the current implementation.
 | `on:do:`, `on:do:on:do:`, `ensure:`, `ifCurtailed:` | exception protocol (these are bound on `Block`; see §12.5) |
 | `setInstVar:from:to:` | atomic compare-and-swap on an instance variable: set it to the third argument only if it currently holds the second; answer whether it did (see §10.8) |
 | `sleep:` | sleep the current thread N ms (a test helper, not for production use) |
+
+**`Behavior`** (the class protocol, answered by every class; §4.7, STATUS D52):
+
+| Selector | Meaning |
+|----------|---------|
+| `new` | a fresh instance, sent `initialize` before it is answered |
+| `basicNew` / `newChild` | a fresh instance, without `initialize` |
+| `subclass:` (and its `instanceVariableNames:` / `classVariableNames:` / `uses:` forms) | define a subclass (§4.3, §4.11) |
+| `name`, `superclass`, `selectors`, `includesSelector:`, `canUnderstand:` | reflection on the class and its instances' protocol |
+| `instVarNames`, `allInstVarNames`, `subclasses`, `allSubclasses`, `allSuperclasses`, `withAllSuperclasses`, `inheritsFrom:` | hierarchy reflection |
+| `addBehavior:` | on-the-fly composition (§4.12) |
 
 ### 12.2 `Number`, `SmallInteger`, `LargeInteger`, `Fraction`, `Float`
 

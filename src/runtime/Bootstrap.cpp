@@ -1,5 +1,10 @@
 #include "Bootstrap.h"
 #include "protoCore.h"
+#include "runtime/ListIndex.h"
+#include "runtime/TransientPin.h"
+
+#include <string>
+#include <vector>
 
 #include <cstdint>
 
@@ -106,6 +111,11 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     // the Bootstrap struct held by the runtime.
     out.unsetMarker = const_cast<proto::ProtoObject*>(out.objectProto)->newChild(ctx, /*isMutable=*/true);
 
+    // K14, D52: the class protocol (Bootstrap.h, "Classes and metaclasses").
+    out.behaviorProto  = out.objectProto->newChild(ctx, /*isMutable=*/true);
+    out.classProto     = out.behaviorProto->newChild(ctx, /*isMutable=*/true);
+    out.metaclassProto = out.behaviorProto->newChild(ctx, /*isMutable=*/true);
+
     // Bind protoCore primitive slots so values produced by fromLong/fromDouble/etc.
     // walk up through our Smalltalk prototypes.  This mirrors protoJS's
     // NumberPrototype.cpp pattern (space->smallIntegerPrototype = const_cast<...>).
@@ -185,6 +195,9 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     stamp(out.dictionaryProto,             "Dictionary");
     stamp(out.associationProto,            "Association");
     stamp(out.unsetMarker,                 "UnsetMarker");
+    stamp(out.behaviorProto,               "Behavior");
+    stamp(out.classProto,                  "Class");
+    stamp(out.metaclassProto,              "Metaclass");
 
     // Track 1 slice 2 (EXC-a): the class-derived `resumable` marker. Carried
     // on the class prototypes so an instance inherits it via the chain;
@@ -252,9 +265,27 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     // 2026-05-23 night: SEND-path class-side filter hot keys. See header.
     out.sym.className       = S("__class_name__");
     out.sym.classId         = S("__class_id__");
-    out.sym.classSide       = S("__class_side__");
+    out.sym.metaclass       = S("__metaclass__");
+    out.sym.soleInstance    = S("__sole_instance__");
     out.sym.priority        = S("__priority__");
     out.sym.data            = S("__data__");
+
+    // K14, D52: every built-in class gets its metaclass now, so the class-side
+    // primitives (Array new:, Float pi, ...) can be bound on it. The unset
+    // marker is a sentinel, not a class.
+    for (const proto::ProtoObject* cls : {
+             out.objectProto, out.numberProto, out.integerProto, out.smallIntegerProto,
+             out.largeIntegerProto, out.floatProto, out.booleanProto, out.stringProto,
+             out.symbolProto, out.byteArrayProto, out.characterProto, out.blockProto,
+             out.actorProto, out.futureProto, out.atomProto, out.nilProto,
+             out.exceptionProto, out.errorProto, out.warningProto,
+             out.messageNotUnderstoodProto, out.arithmeticErrorProto, out.zeroDivideProto,
+             out.messageProto, out.blockCannotReturnProto, out.collectionProto,
+             out.sequenceableCollectionProto, out.hashedCollectionProto, out.arrayProto,
+             out.orderedCollectionProto, out.intervalProto, out.setProto, out.bagProto,
+             out.dictionaryProto, out.associationProto, out.behaviorProto, out.classProto,
+             out.metaclassProto})
+        ensureMetaclass(out, ctx, cls);
 }
 
 bool isCharacterValue(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
@@ -265,13 +296,94 @@ bool isCharacterValue(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
     return v->getPrototype(ctx) == ctx->space->unicodeCharPrototype;
 }
 
+bool isMetaclass(const Bootstrap& b, proto::ProtoContext* ctx, const proto::ProtoObject* obj) {
+    if (!obj || obj == PROTO_NONE || (reinterpret_cast<uintptr_t>(obj) & 0x3F) != 0) return false;
+    const proto::ProtoObject* s = obj->getOwnAttributeDirect(ctx, b.sym.soleInstance);
+    return s && s != PROTO_NONE;
+}
+
+namespace {
+bool ownsClassName(const Bootstrap& b, proto::ProtoContext* ctx, const proto::ProtoObject* obj) {
+    if (!obj || obj == PROTO_NONE || (reinterpret_cast<uintptr_t>(obj) & 0x3F) != 0) return false;
+    const proto::ProtoObject* n = obj->getOwnAttributeDirect(ctx, b.sym.className);
+    return n && n != PROTO_NONE;
+}
+} // namespace
+
+const proto::ProtoObject* ensureMetaclass(const Bootstrap& b, proto::ProtoContext* ctx,
+                                          const proto::ProtoObject* cls) {
+    const proto::ProtoObject* meta = cls->getOwnAttributeDirect(ctx, b.sym.metaclass);
+    if (meta && meta != PROTO_NONE) return meta;
+
+    // The classes on cls's chain, nearest first: its superclass and its
+    // superclass's ancestors, then each mixin subtree (getParents is the
+    // flattened resolution order).
+    std::vector<const proto::ProtoObject*> classes;
+    if (const proto::ProtoList* chain = cls->getParents(ctx)) {
+        TransientPin pinChain(ctx, reinterpret_cast<const proto::ProtoObject*>(chain));
+        const proto::proto_ulong n = chain->getSize(ctx);
+        for (proto::proto_ulong i = 0; i < n; ++i) {
+            const proto::ProtoObject* p = chain->getAt(ctx, listIndex(i));
+            if (ownsClassName(b, ctx, p) && !isMetaclass(b, ctx, p)) classes.push_back(p);
+        }
+    }
+
+    const proto::ProtoObject* created = nullptr;
+    if (classes.empty()) {
+        // A root class (Object): its metaclass inherits Class.
+        created = b.classProto->newChild(ctx, /*isMutable=*/true);
+    } else {
+        const proto::ProtoObject* superMeta = ensureMetaclass(b, ctx, classes.front());
+        // Single inheritance: the superclass's chain holds every other class.
+        std::size_t inherited = 0;
+        if (const proto::ProtoList* sc = classes.front()->getParents(ctx)) {
+            const proto::proto_ulong n = sc->getSize(ctx);
+            for (proto::proto_ulong i = 0; i < n; ++i) {
+                const proto::ProtoObject* p = sc->getAt(ctx, listIndex(i));
+                if (ownsClassName(b, ctx, p) && !isMetaclass(b, ctx, p)) ++inherited;
+            }
+        }
+        if (inherited + 1 == classes.size()) {
+            created = superMeta->newChild(ctx, /*isMutable=*/true);
+        } else {
+            // Mixins: the metaclass chain mirrors the class chain, built as
+            // makeSubclassWithMixins builds a class -- on an immutable shape,
+            // adding the metaclasses last-wanted-first (addParent prepends a
+            // parent with its ancestors and drops duplicates).
+            const proto::ProtoObject* shape = b.classProto->newChild(ctx, /*isMutable=*/false);
+            TransientPin pinShape(ctx, shape);
+            for (std::size_t k = classes.size(); k > 0; --k) {
+                const proto::ProtoObject* m = ensureMetaclass(b, ctx, classes[k - 1]);
+                shape = shape->addParent(ctx, m);
+                pinShape.reset(shape);
+            }
+            created = shape->newChild(ctx, /*isMutable=*/true);
+        }
+    }
+    TransientPin pinMeta(ctx, created);
+    std::string name = "Class";
+    const proto::ProtoObject* own = cls->getOwnAttributeDirect(ctx, b.sym.className);
+    if (own && own != PROTO_NONE)
+        if (const proto::ProtoString* ns = own->asString(ctx)) name = ns->toStdString(ctx);
+    auto* m = const_cast<proto::ProtoObject*>(created);
+    m->setAttribute(ctx, b.sym.className, ctx->fromUTF8String((name + " class").c_str()));
+    m->setAttribute(ctx, b.sym.soleInstance, cls);
+    m->setAttribute(ctx, b.sym.metaclass, b.metaclassProto);
+    const_cast<proto::ProtoObject*>(cls)->setAttribute(ctx, b.sym.metaclass, created);
+    return created;
+}
+
 const proto::ProtoObject* methodHolder(const Bootstrap& b, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* recv) {
     if (!recv || recv == PROTO_NONE) return b.nilProto;
     if (recv == PROTO_TRUE || recv == PROTO_FALSE) return b.booleanProto;
     if (proto::isSmallInt(recv)) return b.smallIntegerProto;
-    // An object cell (tag 0) is its own holder; only tagged values remain.
-    if ((reinterpret_cast<uintptr_t>(recv) & 0x3F) == 0) return recv;
+    // An object cell (tag 0) is its own holder, unless it is a class or a
+    // metaclass: then the object it owns as `__metaclass__` (D52).
+    if ((reinterpret_cast<uintptr_t>(recv) & 0x3F) == 0) {
+        const proto::ProtoObject* meta = recv->getOwnAttributeDirect(ctx, b.sym.metaclass);
+        return (meta && meta != PROTO_NONE) ? meta : recv;
+    }
     if (recv->isInteger(ctx)) return b.largeIntegerProto;
     if (recv->isFloat(ctx)) return b.floatProto;
     if (recv->asString(ctx)) return b.stringProto;

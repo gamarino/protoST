@@ -14,7 +14,6 @@ Character >> asSymbol
   ^ self asString asSymbol.
 
 Character >> displayString
-  self isClassObject ifTrue: [^ self name].
   ^ self asString.
 
 Character >> hash

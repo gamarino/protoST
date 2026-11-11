@@ -93,15 +93,8 @@ _CalendarValue >> _cannotOrder: anObject
 _CalendarValue >> _sign: anInteger
   ^ anInteger sign.
 
-"An instance of aClass, not the class object itself. Defined on the instance
- side only: class objects reach instance-side methods too. Never define one
- selector on both sides: both sides share one slot of the class object, so
- the later definition replaces the earlier one (KNOWN_ISSUES K14)."
-_CalendarValue >> _isValue: anObject of: aClass
-  ^ (anObject isKindOf: aClass) and: [anObject isClassObject not].
-
-"The class side (Foo class >> ...) holds the constructors; every shared
- helper is instance-side, reachable from the class object as well (K14).
+"The class side (Foo class >> ...) holds the constructors and the helpers
+ they share; an instance reaches them through its class.
 
  Signals Error unless aValue is an Integer in low..high."
 _CalendarValue class >> _check: aValue from: low to: high named: aName
@@ -143,7 +136,7 @@ _CalendarValue class >> _checkHour: h minute: mi second: s microsecond: us fold:
   self _check: f from: 0 to: 1 named: 'fold'.
 
 "Writes HH:MM:SS, then .ffffff when the microsecond is not 0."
-_CalendarValue >> _printHour: h minute: mi second: s microsecond: us on: aStream
+_CalendarValue class >> _printHour: h minute: mi second: s microsecond: us on: aStream
   aStream
     nextPutAll: (h printPaddedWith: $0 to: 2); nextPut: $:;
     nextPutAll: (mi printPaddedWith: $0 to: 2); nextPut: $:;
@@ -196,11 +189,7 @@ ZoneOffset >> _setMicroseconds: anInteger name: aString
 ZoneOffset >> microseconds
   ^ microseconds.
 
-"The isClassObject guards in name, =, hash and printOn: exist because
- instance-side methods are reachable from the class object too (K14): sent to
- the class, they answer what a class answers."
 ZoneOffset >> name
-  self isClassObject ifTrue: [^ super name].
   ^ name.
 
 "The offset as +HH:MM[:SS[.ffffff]]."
@@ -208,15 +197,12 @@ ZoneOffset >> isoOffset
   ^ ZoneOffset _isoOffset: microseconds.
 
 ZoneOffset >> = anObject
-  self isClassObject ifTrue: [^ self == anObject].
-  ^ (self _isValue: anObject of: ZoneOffset) and: [microseconds = anObject microseconds].
+  ^ (anObject isKindOf: ZoneOffset) and: [microseconds = anObject microseconds].
 
 ZoneOffset >> hash
-  self isClassObject ifTrue: [^ self identityHash].
   ^ microseconds hash.
 
 ZoneOffset >> printOn: aStream
-  self isClassObject ifTrue: [^ aStream nextPutAll: self name].
   aStream nextPutAll: name.
 
 "=== ZoneName ================================================================"
@@ -239,15 +225,12 @@ ZoneName >> key
   ^ key.
 
 ZoneName >> = anObject
-  self isClassObject ifTrue: [^ self == anObject].
-  ^ (self _isValue: anObject of: ZoneName) and: [key = anObject key].
+  ^ (anObject isKindOf: ZoneName) and: [key = anObject key].
 
 ZoneName >> hash
-  self isClassObject ifTrue: [^ self identityHash].
   ^ key hash.
 
 ZoneName >> printOn: aStream
-  self isClassObject ifTrue: [^ aStream nextPutAll: self name].
   aStream nextPutAll: key.
 
 "=== CalendarDate ============================================================"
@@ -296,21 +279,18 @@ CalendarDate >> ordinal
   ^ CalendarDate _ordinalYear: year month: month day: day.
 
 CalendarDate >> = anObject
-  self isClassObject ifTrue: [^ self == anObject].
-  ^ (self _isValue: anObject of: CalendarDate)
+  ^ (anObject isKindOf: CalendarDate)
     and: [year = anObject year and: [month = anObject month and: [day = anObject day]]].
 
 CalendarDate >> hash
-  self isClassObject ifTrue: [^ self identityHash].
   ^ self ordinal hash.
 
 CalendarDate >> _orderWith: anObject
-  (self _isValue: anObject of: CalendarDate) ifFalse: [^ self _cannotOrder: anObject].
+  (anObject isKindOf: CalendarDate) ifFalse: [^ self _cannotOrder: anObject].
   ^ self _sign: self ordinal - anObject ordinal.
 
 "YYYY-MM-DD (Python's str(date))."
 CalendarDate >> printOn: aStream
-  self isClassObject ifTrue: [^ aStream nextPutAll: self name].
   aStream
     nextPutAll: (year printPaddedWith: $0 to: 4); nextPut: $-;
     nextPutAll: (month printPaddedWith: $0 to: 2); nextPut: $-;
@@ -326,7 +306,7 @@ _CalendarValue subclass: #TimeOfDay
 
 TimeOfDay class >> hour: h minute: mi second: s microsecond: us fold: f zone: z
   self _checkHour: h minute: mi second: s microsecond: us fold: f.
-  ((z isNil or: [self _isValue: z of: ZoneOffset]) or: [self _isValue: z of: ZoneName]) ifFalse: [
+  ((z isNil or: [z isKindOf: ZoneOffset]) or: [z isKindOf: ZoneName]) ifFalse: [
     ^ Error signal: 'TimeOfDay: the zone must be nil, a ZoneOffset or a ZoneName, not '
       , z printString ].
   ^ self basicNew _setHour: h minute: mi second: s microsecond: us fold: f zone: z.
@@ -364,7 +344,7 @@ TimeOfDay >> microsecondsSinceMidnight
 "The offset in microseconds of a fixed-offset time; nil for a naive time and
  for a time in a ZoneName (which has no offset)."
 TimeOfDay >> _offset
-  ^ (self _isValue: zone of: ZoneOffset) ifTrue: [zone microseconds] ifFalse: [nil].
+  ^ (zone isKindOf: ZoneOffset) ifTrue: [zone microseconds] ifFalse: [nil].
 
 "What = and the order compare: the wall clock, minus the offset if any."
 TimeOfDay >> _key
@@ -375,17 +355,15 @@ TimeOfDay >> _key
     ifFalse: [self microsecondsSinceMidnight - offset].
 
 TimeOfDay >> = anObject
-  self isClassObject ifTrue: [^ self == anObject].
-  (self _isValue: anObject of: TimeOfDay) ifFalse: [^ false].
+  (anObject isKindOf: TimeOfDay) ifFalse: [^ false].
   self _offset isNil = anObject _offset isNil ifFalse: [^ false].
   ^ self _key = anObject _key.
 
 TimeOfDay >> hash
-  self isClassObject ifTrue: [^ self identityHash].
   ^ self _key hash.
 
 TimeOfDay >> _orderWith: anObject
-  ((self _isValue: anObject of: TimeOfDay)
+  ((anObject isKindOf: TimeOfDay)
       and: [self _offset isNil = anObject _offset isNil])
     ifFalse: [^ self _cannotOrder: anObject].
   ^ self _sign: self _key - anObject _key.
@@ -393,10 +371,9 @@ TimeOfDay >> _orderWith: anObject
 "Python's str(time): HH:MM:SS[.ffffff], then the offset; a ZoneName key
  follows in brackets."
 TimeOfDay >> printOn: aStream
-  self isClassObject ifTrue: [^ aStream nextPutAll: self name].
-  self _printHour: hour minute: minute second: second microsecond: microsecond on: aStream.
-  (self _isValue: zone of: ZoneOffset) ifTrue: [aStream nextPutAll: zone isoOffset].
-  (self _isValue: zone of: ZoneName) ifTrue: [
+  self class _printHour: hour minute: minute second: second microsecond: microsecond on: aStream.
+  (zone isKindOf: ZoneOffset) ifTrue: [aStream nextPutAll: zone isoOffset].
+  (zone isKindOf: ZoneName) ifTrue: [
     aStream nextPut: $[; nextPutAll: zone key; nextPut: $]].
 
 "=== DateTime ================================================================"
@@ -413,11 +390,11 @@ _CalendarValue subclass: #DateTime
 DateTime class >> year: y month: m day: d hour: h minute: mi second: s microsecond: us fold: f zone: z
   self _checkYear: y month: m day: d.
   self _checkHour: h minute: mi second: s microsecond: us fold: f.
-  (self _isValue: z of: ZoneName) ifTrue: [
+  (z isKindOf: ZoneName) ifTrue: [
     ^ TimeZoneUnavailable signal: 'DateTime: no time-zone database (STATUS D50) to turn the wall clock '
       , (self _fieldsText: { y. m. d. h. mi. s. us }) , ' in ' , z key
       , ' into an instant; build it with utcFields:zoneName:' ].
-  (z isNil or: [self _isValue: z of: ZoneOffset]) ifFalse: [
+  (z isNil or: [z isKindOf: ZoneOffset]) ifFalse: [
     ^ Error signal: 'DateTime: the zone must be nil, a ZoneOffset or a ZoneName, not '
       , z printString ].
   ^ self basicNew _setYear: y month: m day: d hour: h minute: mi second: s
@@ -429,7 +406,7 @@ DateTime class >> utcFields: anArray zoneName: aZoneName
   ((anArray isKindOf: Array) and: [anArray size = 7]) ifFalse: [
     ^ Error signal: 'DateTime utcFields: an Array of 7 fields was expected, not '
       , anArray printString ].
-  (self _isValue: aZoneName of: ZoneName) ifFalse: [
+  (aZoneName isKindOf: ZoneName) ifFalse: [
     ^ Error signal: 'DateTime utcFields:zoneName: a ZoneName was expected, not '
       , aZoneName printString ].
   self _checkYear: (anArray at: 1) month: (anArray at: 2) day: (anArray at: 3).
@@ -447,8 +424,8 @@ DateTime class >> utcOrdinalMicroseconds: anInteger zone: aZone
   | lcl |
   anInteger isInteger ifFalse: [
     ^ Error signal: 'DateTime utcOrdinalMicroseconds: an Integer was expected, not ' , anInteger printString ].
-  (self _isValue: aZone of: ZoneName) ifTrue: [^ self _fromLocal: anInteger zone: aZone].
-  (self _isValue: aZone of: ZoneOffset) ifFalse: [
+  (aZone isKindOf: ZoneName) ifTrue: [^ self _fromLocal: anInteger zone: aZone].
+  (aZone isKindOf: ZoneOffset) ifFalse: [
     ^ Error signal: 'DateTime utcOrdinalMicroseconds:zone: a ZoneOffset or a ZoneName was expected, not '
       , aZone printString ].
   lcl := anInteger + aZone microseconds.
@@ -534,7 +511,7 @@ DateTime >> isNaive
 
 "True for the instant form (a ZoneName): the fields are the UTC instant."
 DateTime >> isInstantForm
-  ^ self _isValue: zone of: ZoneName.
+  ^ zone isKindOf: ZoneName.
 
 "The fields' microseconds since 0001-01-01T00:00."
 DateTime >> localOrdinalMicroseconds
@@ -572,19 +549,17 @@ DateTime >> time
   ^ TimeOfDay hour: hour minute: minute second: second microsecond: microsecond fold: fold zone: nil.
 
 DateTime >> = anObject
-  self isClassObject ifTrue: [^ self == anObject].
-  (self _isValue: anObject of: DateTime) ifFalse: [^ false].
+  (anObject isKindOf: DateTime) ifFalse: [^ false].
   self isNaive = anObject isNaive ifFalse: [^ false].
   self isNaive ifTrue: [^ local = anObject localOrdinalMicroseconds].
   ^ self utcOrdinalMicroseconds = anObject utcOrdinalMicroseconds.
 
 DateTime >> hash
-  self isClassObject ifTrue: [^ self identityHash].
   self isNaive ifTrue: [^ local hash].
   ^ self utcOrdinalMicroseconds hash.
 
 DateTime >> _orderWith: anObject
-  ((self _isValue: anObject of: DateTime) and: [self isNaive = anObject isNaive])
+  ((anObject isKindOf: DateTime) and: [self isNaive = anObject isNaive])
     ifFalse: [^ self _cannotOrder: anObject].
   self isNaive ifTrue: [^ self _sign: local - anObject localOrdinalMicroseconds].
   ^ self _sign: self utcOrdinalMicroseconds - anObject utcOrdinalMicroseconds.
@@ -593,9 +568,8 @@ DateTime >> _orderWith: anObject
  instant form prints its UTC fields, Z and the zone key in brackets (as in
  RFC 9557: the instant is known, the local offset is not)."
 DateTime >> printOn: aStream
-  self isClassObject ifTrue: [^ aStream nextPutAll: self name].
   aStream nextPutAll: (DateTime _fieldsText: { year. month. day. hour. minute. second. microsecond }).
-  (self _isValue: zone of: ZoneOffset) ifTrue: [aStream nextPutAll: zone isoOffset].
+  (zone isKindOf: ZoneOffset) ifTrue: [aStream nextPutAll: zone isoOffset].
   self isInstantForm ifTrue: [aStream nextPutAll: 'Z['; nextPutAll: zone key; nextPut: $]].
 
 "=== TimeSpan ================================================================"
@@ -640,20 +614,17 @@ TimeSpan >> totalMicroseconds
   ^ total.
 
 TimeSpan >> = anObject
-  self isClassObject ifTrue: [^ self == anObject].
-  ^ (self _isValue: anObject of: TimeSpan) and: [total = anObject totalMicroseconds].
+  ^ (anObject isKindOf: TimeSpan) and: [total = anObject totalMicroseconds].
 
 TimeSpan >> hash
-  self isClassObject ifTrue: [^ self identityHash].
   ^ total hash.
 
 TimeSpan >> _orderWith: anObject
-  (self _isValue: anObject of: TimeSpan) ifFalse: [^ self _cannotOrder: anObject].
+  (anObject isKindOf: TimeSpan) ifFalse: [^ self _cannotOrder: anObject].
   ^ self _sign: total - anObject totalMicroseconds.
 
 "Python's str(timedelta): [D day[s], ]H:MM:SS[.ffffff]."
 TimeSpan >> printOn: aStream
-  self isClassObject ifTrue: [^ aStream nextPutAll: self name].
   days = 0 ifFalse: [
     aStream nextPutAll: days printString; nextPutAll: ' day'.
     days abs = 1 ifFalse: [aStream nextPut: $s].

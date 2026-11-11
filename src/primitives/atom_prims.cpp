@@ -110,8 +110,8 @@ const proto::ProtoObject* prim_Atom_swap(STRuntime& rt, proto::ProtoContext* ctx
 void installAtomPrimitives(STRuntime& rt) {
     auto& reg = rt.registry();
     auto& b   = rt.bootstrap();
-    // `on:` is sent to the Atom prototype itself: `Atom on: 0`.
-    bindPrimitive(rt, b.atomProto, "on:",
+    // `on:` is class side: `Atom on: 0` (D52).
+    bindClassPrimitive(rt, b.atomProto, "on:",
                   reg.registerPrim(prim_Atom_on));
     bindPrimitive(rt, b.atomProto, "value",
                   reg.registerPrim(prim_Atom_value));

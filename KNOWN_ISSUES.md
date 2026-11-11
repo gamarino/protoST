@@ -243,35 +243,6 @@ against the 3.4.0 floor, the old cost remains; the MessagePack decoder still
 removes from the end of its work list and slices once when the children are
 fewer than the stack, which is cheap on either.
 
-## K14 — One selector on both sides of a class: the later definition wins (open, scheduled)
-
-D5 isolates class-side methods from instances, but both sides are installed
-in **one attribute slot of the class object**: `prim_Object_installMethod`
-(`src/primitives/object_prims.cpp`, the `setAttribute` at line 248) and
-`prim_Object_installClassMethod` (lines 262-279, `setAttribute` at 278)
-write the same selector key, so a selector defined on both sides keeps only
-the later method. The SEND filter for class-side methods
-(`src/runtime/ExecutionEngine.cpp`, lines 1758-1768) then sets the method to
-`nullptr` for an instance receiver, which answers `doesNotUnderstand` instead
-of continuing the lookup at the next parent. Three cases (0.9.0):
-
-| Definitions | `X new sel` | `X sel` |
-|-------------|-------------|---------|
-| `Foo >> x`, then `Foo class >> x` | `doesNotUnderstand` | the class-side method |
-| `Bar class >> x`, then `Bar >> x` | the instance method | the instance method: the class-side one is **lost silently** |
-| `Baz >> y`; `Qux` (a subclass of `Baz`) `class >> y` | `doesNotUnderstand`: the inherited instance `y` is hidden | the class-side method |
-
-The second case is a silent failure; the third hides a method defined on
-another object. Until the fix, never define one selector on both sides of a
-class or of a class and its subclasses (`lib/calendar.st` keeps its shared
-helpers on the instance side, which class objects also reach).
-`tests/conformance/04-object-model/class-and-instance-method-same-selector.st`
-pins the intended behaviour as `XFAIL`. The C++ fix (separate slots for the
-two sides, or at least an install that refuses a selector the other side
-already defines plus a SEND filter that resumes the lookup) is scheduled with
-the build-gated protoST 0.9.1 batch of the ProtoBase-support work (Task 2 of
-the protoBaseST plan), before the library classes of later tasks rely on it.
-
 ## K13 — A mailbox batch of more than 2^31 - 1 messages is refused, and lost (open, in protoCore)
 
 An actor's turn takes its mailbox in batches (`ProtoMPSCQueue::takeAll`) and
@@ -315,6 +286,66 @@ normal/subnormal boundary, the largest `Float`, ties to even),
 `float-literal-round-trip.st` (`printString` of edge values read back as a
 literal and by `asNumber`, bit for bit) and
 `float-literal-overflow-is-error.st`; the first two fail on 0.9.0.
+
+### K14 — One selector on both sides of a class: the later definition won (resolved, unreleased)
+
+D5 isolated class-side methods from instances, but both sides were installed
+in **one attribute slot of the class object** (0.9.0): `prim_Object_installMethod`
+(`src/primitives/object_prims.cpp`, the `setAttribute` at line 248) and
+`prim_Object_installClassMethod` (lines 262-279, `setAttribute` at 278)
+wrote the same selector key, so a selector defined on both sides kept only
+the later method. The SEND filter for class-side methods
+(`src/runtime/ExecutionEngine.cpp`, lines 1758-1768) then set the method to
+`nullptr` for an instance receiver, which answered `doesNotUnderstand` instead
+of continuing the lookup at the next parent. Three cases (0.9.0):
+
+| Definitions | `X new sel` | `X sel` |
+|-------------|-------------|---------|
+| `Foo >> x`, then `Foo class >> x` | `doesNotUnderstand` | the class-side method |
+| `Bar class >> x`, then `Bar >> x` | the instance method | the instance method: the class-side one is **lost silently** |
+| `Baz >> y`; `Qux` (a subclass of `Baz`) `class >> y` | `doesNotUnderstand`: the inherited instance `y` is hidden | the class-side method |
+
+The second case was a silent failure; the third hid a method defined on
+another object.
+
+Fix (STATUS D52, which supersedes the instance-side half of D5): every class
+has a **metaclass**, a separate object that holds the class-side methods, and
+a send to a class looks the selector up on the metaclass chain only:
+`Foo class` -> `Super class` -> ... -> `Object class` -> `Class` ->
+`Behavior` -> `Object`, as in Pharo (without `ClassDescription`). The class
+object answers `__metaclass__`; `methodHolder` (`src/runtime/Bootstrap.h`)
+gives the object a send starts from (the metaclass for a class, the receiver
+for anything else), and every send path -- SEND, `super`, the call-form
+send, `perform:` and the kernel's dynamic sends, a foreign send
+(`__st_send__`), an actor's message, `doesNotUnderstand:`, `respondsTo:` --
+does one ordinary protoCore lookup from it, with the selector as key.
+`Foo >> x` and `Foo class >> x` are therefore two attributes of two objects,
+and neither can hide the other. The class protocol (`new`, `basicNew`,
+`subclass:...`, `name`, `selectors`, `canUnderstand:`, `superclass`, the
+reflection methods of `reflection.st`) lives on `Behavior`; the built-in
+constructors (`Array new:`, `with:` ... `withAll:`, `OrderedCollection`,
+`Set`, `Bag`, `Dictionary`, `Future new`, `Float pi`, the `ByteArray`
+constructors, ...) are bound on each class's metaclass only. A class object
+is not an instance of itself: `Foo greet`, `Array at: 1`, `#(1 2) new: 3` and
+`Set new new` are `doesNotUnderstand`, `Foo = Foo` is identity even when the
+instances define `=`, and a class object can be a key of a `Set` whatever its
+instances' `hash` does.
+
+A first fix (commit `aae8b00`, never released) stored a class-side method
+under a prefixed key (`"__class_side__ " , selector`) on the class object and
+looked it up before the selector for a class receiver. It fixed the three
+cases above but kept the D5 leak (a class still answered its own instance
+methods) and needed a second binding of every built-in constructor and a
+second lookup per send to a class; review rejected it as conceptual debt, and
+D52 replaced it.
+
+Tests: `tests/conformance/04-object-model/class-and-instance-method-same-selector.st`
+(the former `XFAIL`, now passing) and, new,
+`class-and-instance-method-redefinition.st`, `class-side-super-send.st`,
+`class-side-inheritance.st`, `class-side-reflection-same-selector.st` and
+`class-side-does-not-understand.st` and `kernel-class-protocol-not-hidden.st`
+in the same directory. Each of them except the last fails on the 0.9.0 engine
+(the last guards the kernel against the new lookup order).
 
 ### K18 — A send from another runtime's frame context ran on that context (resolved, unreleased)
 

@@ -6,11 +6,19 @@
 
 "--- classes -------------------------------------------------------------------"
 
-Object >> instVarNames
+Behavior >> instVarNames
   "The instance variables a class declares itself, in declaration order."
   ^ (self __instVarNamesString substrings: ' ') asArray.
 
-Object >> allInstVarNames
+"Pharo's metaclass predicates (D52). A metaclass's soleInstance (and
+ instanceClass) is primitive."
+Behavior >> isMeta
+  ^ false.
+
+Metaclass >> isMeta
+  ^ true.
+
+Behavior >> allInstVarNames
   "The instance variables of a class's instances, inherited ones first."
   | sup |
   sup := self superclass.
@@ -18,16 +26,16 @@ Object >> allInstVarNames
     ifTrue: [self instVarNames]
     ifFalse: [sup allInstVarNames , self instVarNames].
 
-Object >> subclasses
+Behavior >> subclasses
   ^ (Smalltalk allClasses select: [:each | each superclass == self]) asArray.
 
-Object >> allSubclasses
+Behavior >> allSubclasses
   | out |
   out := OrderedCollection new.
   self subclasses do: [:each | out add: each; addAll: each allSubclasses].
   ^ out asArray.
 
-Object >> allSuperclasses
+Behavior >> allSuperclasses
   "The superclasses of a class, nearest first, in an OrderedCollection."
   | out c |
   out := OrderedCollection new.
@@ -35,10 +43,10 @@ Object >> allSuperclasses
   [c notNil] whileTrue: [out add: c. c := c superclass].
   ^ out.
 
-Object >> withAllSuperclasses
+Behavior >> withAllSuperclasses
   ^ self allSuperclasses addFirst: self; yourself.
 
-Object >> inheritsFrom: aClass
+Behavior >> inheritsFrom: aClass
   "Whether aClass is a superclass of the receiver, a class (not the class
    itself)."
   | c |
@@ -51,20 +59,24 @@ Object >> inheritsFrom: aClass
 "allInstances is not provided: neither protoCore nor the runtime exposes an
  enumeration of the live objects of a class."
 
-Object >> includesSelector: aSelector
+Behavior >> includesSelector: aSelector
   ^ self selectors includes: aSelector.
 
-Object >> comment
+Behavior >> comment
   ^ self instVarNamed: '__comment'.
 
-Object >> comment: aString
+Behavior >> comment: aString
   self instVarNamed: '__comment' put: aString.
 
-Object >> category
+Behavior >> category
   ^ self instVarNamed: '__category'.
 
-Object >> category: aString
+Behavior >> category: aString
   self instVarNamed: '__category' put: aString.
+
+"A class is not copied: deepCopy of a class answers the class."
+Behavior >> deepCopy
+  ^ self.
 
 "--- instances -----------------------------------------------------------------"
 
@@ -79,7 +91,6 @@ Object >> instVarAt: index put: anObject
  cycles: a structure that refers back to itself recurses without end."
 Object >> deepCopy
   | copy |
-  self isClassObject ifTrue: [^ self].
   copy := self shallowCopy.
   self class allInstVarNames do: [:name |
     copy instVarNamed: name put: (self instVarNamed: name) deepCopy].
@@ -104,12 +115,10 @@ BlockClosure >> deepCopy
   ^ self.
 
 Collection >> deepCopy
-  self isClassObject ifTrue: [^ self].
   ^ self collect: [:each | each deepCopy].
 
 Dictionary >> deepCopy
   | copy |
-  self isClassObject ifTrue: [^ self].
   copy := self species new.
   self keysAndValuesDo: [:key :value | copy at: key put: value deepCopy].
   ^ copy.
