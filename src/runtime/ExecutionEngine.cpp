@@ -2669,29 +2669,16 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             }
             case Op::STORE_INSTVAR: L_STORE_INSTVAR: {
                 Frame& f = frames_.back();
-                // F4-U5: write an instance variable on `self`. Mirror of
-                // PUSH_INSTVAR; pops the value-to-store from the operand
-                // stack and setAttribute's it under the mangled "_iv_<name>"
-                // key on local-0 self. See PUSH_INSTVAR for rationale.
-                if (f.sp == 0)
-                    throw NativeError("STORE_INSTVAR empty stack");
+                // F4-U5: write an instance variable on `self`: pop the value
+                // (it stays rooted in its slot) and set it under the module's
+                // cached "_iv_<name>" key on the frame's `self` (the header
+                // slot, right for method and block frames alike).
+                // storeInstVar refuses a write to an immutable receiver
+                // instead of losing it (review M1; this handler wrote
+                // directly, without that check, until 0.10.0).
                 const proto::ProtoObject* val = pop(f);
-                // Mangled "_iv_<name>" key, interned once and cached on the
-                // module (BytecodeModule::ivSymbol) — NOT rebuilt as a
-                // std::string and re-interned on every instance-variable
-                // access, which the profile measured as the dominant cost.
-                auto* sym = f.m->ivSymbol(ctx, arg);
-                // `sym` is interned (perennial) and `val` and `self` stay
-                // rooted via their frame slots, so nothing needs a pin across
-                // the allocating setAttribute.
-                // CLO Part 1: write to `self` from the frame's header
-                // self-slot (baseSlot+1) — correct for both method and block
-                // frames (see PUSH_INSTVAR rationale).
-                const proto::ProtoObject* self = getSelf(f);
-                if (!self || self == PROTO_NONE)
-                    throw NativeError("STORE_INSTVAR self is null");
-                const_cast<proto::ProtoObject*>(self)->setAttribute(ctx, sym, val);
-                DISPATCH_SCOPED();
+                storeInstVar(ctx, f, arg, val);
+                DISPATCH_DIRECT();
                 break;
             }
             case Op::IVAR_GROUP: L_IVAR_GROUP: {
