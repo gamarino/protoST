@@ -445,6 +445,13 @@ minor release, so the two services arrive in 0.5.0.
 
 ### Breaking changes
 
+- **MessagePack nesting depth is 1024 (was 512)**, encode and decode, from
+  protoIO 0.5.0's default: msgpack-python 1.2's unpacker limit and the record
+  depth ProtoBase format 4 requires every reader to accept since ProtoBase
+  v2.0.0rc2 (a value nests up to 1022 containers, the record envelope adds 2).
+  A structure 513 to 1024 deep that signalled `Error` now encodes. Test
+  `15-binary/msgpack_depth_boundary.st` pins 1024 / 1025.
+
 - **An `Array` of Integers is no longer bytes (D45, ruling R11).** As the
   0.9.0 deprecation warning announced, every write that takes bytes or a
   String refuses an `Array`: `FileReference >> contents:`, `appendContents:`
