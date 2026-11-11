@@ -58,6 +58,13 @@ struct GcHost {
     }
 };
 
+// heapSize and freeCellsCount are plain ints that protoCore writes
+// atomically (relaxedFetchAdd/relaxedStore, proto_internal.h) from the
+// collector thread; a reader outside its mutex loads them the same way.
+int relaxedRead(int& v) {
+    return __atomic_load_n(&v, __ATOMIC_RELAXED);
+}
+
 // Ask for collections and wait for them, with this thread parked.
 //
 // Parking matters: protoCore's Phase 1 waits until every registered thread is
@@ -108,8 +115,8 @@ struct CycleObserver {
              + (ran > 1 ? " (" + std::to_string(ran) + " since last look)" : std::string())
              + ", reclaimed " + std::to_string(r)
              + ", live " + std::to_string(sp->liveCellsLastCycle.load(std::memory_order_relaxed))
-             + ", heap " + std::to_string(sp->heapSize)
-             + ", free " + std::to_string(sp->freeCellsCount)
+             + ", heap " + std::to_string(relaxedRead(sp->heapSize))
+             + ", free " + std::to_string(relaxedRead(sp->freeCellsCount))
              + (a.enabled ? ", soft limit " + std::to_string(a.softCells) : std::string(", fixed limit"));
         return ran;
     }
@@ -160,7 +167,7 @@ TEST_CASE("S15: a forced collection completes and reclaims the interpreter's gar
         REQUIRE(r != nullptr);
         REQUIRE(r->asLong(h.rt.rootCtx()) == 20000);
         obs.observe("first program");
-        return static_cast<proto::proto_long>(sp->heapSize);
+        return static_cast<proto::proto_long>(relaxedRead(sp->heapSize));
     }();
 
     // Four rounds of "allocate a heap's worth, then collect it". triggerGC
@@ -179,7 +186,7 @@ TEST_CASE("S15: a forced collection completes and reclaims the interpreter's gar
 
     INFO("cycles " << cyclesBefore << " -> " << cyclesAfter
          << ", best cycle reclaimed " << obs.maxReclaimed << " cells, heap "
-         << heapAfterFirstRound << " -> " << sp->heapSize << " cells; observed:" << obs.log);
+         << heapAfterFirstRound << " -> " << relaxedRead(sp->heapSize) << " cells; observed:" << obs.log);
 
     // 1. A cycle completes.
     REQUIRE(cyclesAfter > cyclesBefore);
@@ -189,5 +196,5 @@ TEST_CASE("S15: a forced collection completes and reclaims the interpreter's gar
     // 3. And reclaiming keeps the heap bounded: four more rounds of the same
     //    garbage must not need a bigger heap than the first round did. Before
     //    the fix the heap grew by roughly the round's allocation every time.
-    REQUIRE(static_cast<proto::proto_long>(sp->heapSize) <= heapAfterFirstRound * 2);
+    REQUIRE(static_cast<proto::proto_long>(relaxedRead(sp->heapSize)) <= heapAfterFirstRound * 2);
 }
