@@ -7,6 +7,7 @@
 #include <thread>
 
 #include "protoST/STRuntime.h"
+#include "protoST/STUncaughtError.h"
 #include "runtime/UnhandledSTException.h"
 #include "runtime/ExecutionEngine.h"
 #include "runtime/BytecodeModule.h"
@@ -1173,8 +1174,9 @@ TEST_CASE("Engine: an operand stack overflow in a hand-built module is a Smallta
           "[engine][stack]") {
     // A loop that pushes without popping defeats the depth computation (it
     // is not code the compiler emits). The overflow must take the Smalltalk
-    // signal path -- catchable by on:do:, an UnhandledSTException at top
-    // level -- not escape as a bare C++ runtime_error.
+    // signal path -- catchable by on:do:, an unhandled Smalltalk error at top
+    // level (an STUncaughtError at this runtime's embedder boundary, K20) --
+    // not escape as a bare C++ runtime_error.
     protoST::STRuntime rt;
     protoST::BytecodeModule m;
     m.emit(protoST::Op::PUSH_NIL, 0);
@@ -1182,8 +1184,9 @@ TEST_CASE("Engine: an operand stack overflow in a hand-built module is a Smallta
     bool signalled = false;
     try {
         rt.runTopLevel(m);
-    } catch (const protoST::UnhandledSTException& e) {
-        signalled = std::string(e.what()).find("operand stack overflow") != std::string::npos;
+    } catch (const protoST::STUncaughtError& e) {
+        signalled = std::string(e.what()).find("operand stack overflow") != std::string::npos
+            && e.isKindOf("Error");
         if (!signalled) INFO(e.what());
     }
     REQUIRE(signalled);

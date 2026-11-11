@@ -353,7 +353,10 @@ There are **no exception opcodes**. `on:do:`, `on:do:on:do:`, `ensure:` and
   off the end of the handler, and `retry` unwind with a C++ exception
   (`UnwindToHandler`, `RetrySignal`) caught by the `on:do:` primitive that
   owns the handler id. An unhandled `Error` reaches the top level as
-  `UnhandledSTException` and is reported with the protoST stack.
+  `UnhandledSTException` and is reported with the protoST stack. When the
+  runtime owns its space, `STRuntime::atEmbedderBoundary` turns it into a
+  self-contained `STUncaughtError` as it leaves to the embedder, so it may
+  outlive the runtime (KNOWN_ISSUES K20).
 - `ensure:` runs its block on the way out of normal returns, unwinds and
   non-local returns.
 - Errors the engine itself raises (`doesNotUnderstand:`, an undefined

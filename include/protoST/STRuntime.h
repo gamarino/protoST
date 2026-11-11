@@ -104,6 +104,15 @@ public:
     // from the thread that owns the runtime (the main thread). Code running
     // on another thread — an actor method that imports a module — passes its
     // own context to the two-argument form.
+    //
+    // An unhandled exception leaves as the proto::ProtoException carrying it
+    // (protoCore's unified exceptions), with one exception (KNOWN_ISSUES
+    // K20): when this runtime owns its space (`STRuntime()`) and the call is
+    // the embedder's -- on protoST's own context, with no protoST code
+    // running on the thread -- it leaves as a self-contained
+    // protoST::STUncaughtError (a std::runtime_error, STUncaughtError.h), so
+    // it may outlive the runtime. loadModuleFromFile, importModuleFile and
+    // loadModule follow the same rule.
     const proto::ProtoObject* runTopLevel(const BytecodeModule& m);
     const proto::ProtoObject* runTopLevel(const BytecodeModule& m,
                                           proto::ProtoContext* ctx);
@@ -338,6 +347,12 @@ private:
     // (D28); runTopLevel wraps it with the outermost-entry conversions.
     const proto::ProtoObject* runModuleTopLevel(const BytecodeModule& m,
                                                 proto::ProtoContext* ctx);
+    // The body of runTopLevel(m, ctx), without the K20 conversion.
+    const proto::ProtoObject* runTopLevelEntry(const BytecodeModule& m,
+                                               proto::ProtoContext* ctx);
+    // K20: runs an embedder entry point; see runTopLevel.
+    template <class Body>
+    const proto::ProtoObject* atEmbedderBoundary(proto::ProtoContext* ctx, Body&& body);
 
     // The bodies of loadModuleFromFile and importModuleFile, on a context that
     // is protoST's own (the public functions open an EntryContext first).

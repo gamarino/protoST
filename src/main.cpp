@@ -1,4 +1,5 @@
 #include "protoST/STRuntime.h"
+#include "protoST/STUncaughtError.h"
 #include "frontend/Parser.h"
 #include "frontend/ASTPrinter.h"
 #include "frontend/Compiler.h"
@@ -48,6 +49,9 @@ int runReporting(protoST::STRuntime& rt, const protoST::BytecodeModule& bc,
     } catch (const proto::ProtoException& e) {
         // An unhandled Error, a module's error, another language's exception.
         protoST::writeWholeLine(stderr, protoST::describeUncaught(rt.rootCtx(), e));
+    } catch (const protoST::STUncaughtError& e) {
+        // The same, detached from the space at the runtime's boundary (K20).
+        protoST::writeWholeLine(stderr, e.report());
     } catch (const std::exception& e) {
         protoST::writeWholeLine(stderr, protoST::describeUncaught(e));
     } catch (...) {

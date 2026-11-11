@@ -122,6 +122,16 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
   its own `doesNotUnderstand:` (a proxy) was not asked. It now sends
   `doesNotUnderstand:` with the Message, as an ordinary send does. Test:
   `05-messages/perform-unknown-selector-goes-through-dnu.st`.
+- **An unhandled error caught after its runtime was destroyed crashed the
+  embedder (K20).** `try { STRuntime rt; rt.runTopLevel(m); } catch (const
+  std::exception&)` died with SIGSEGV: the `proto::ProtoException` pinned its
+  value in the space the runtime had just freed. At the embedder boundary of
+  a runtime that owns its space the error now leaves as the self-contained
+  `protoST::STUncaughtError` (`include/protoST/STUncaughtError.h`: the
+  description, the report the binary prints, the trace and the class chain).
+  A runtime in a host's space, and every call nested in protoST or another
+  runtime's frames, still raise the `proto::ProtoException`. The `protost`
+  binary's output is unchanged. Test: `tests/unit/test_k20_embedder_boundary.cpp`.
 
 - **Deeply nested `collect:` (and every other pinning primitive) crashed
   (K15).** A `TransientPin` lived only in a fixed 256-slot scratch region; the
@@ -199,6 +209,14 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
     class-side methods.
   - A send to a class costs one lookup again (the first K14 fix added a
     second).
+- **An embedder of a runtime that owns its space catches `STUncaughtError`
+  (K20).** `STRuntime()`'s `runTopLevel`, `loadModuleFromFile`,
+  `importModuleFile` and `loadModule` called by the embedder raise
+  `protoST::STUncaughtError` (a `std::runtime_error`) for an unhandled error
+  instead of `UnhandledSTException`; code that caught `proto::ProtoException`
+  there must catch `STUncaughtError` (or `std::exception`), and code that
+  needs the exception object must run the runtime in its own space
+  (`STRuntime(proto::ProtoSpace&)`).
 
 ## 0.9.0 — bytes, binary files, encodings, MessagePack and timers (2026-11-10)
 

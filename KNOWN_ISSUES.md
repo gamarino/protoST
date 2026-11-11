@@ -263,6 +263,53 @@ message cells. It is recorded because the loss is silent to the senders
 
 ## Resolved
 
+### K20 — An unhandled error caught after its runtime was destroyed crashed the process (resolved, unreleased)
+
+An unhandled protoST error leaves `STRuntime::runTopLevel` as a C++ exception,
+a `proto::ProtoException` carrying the exception object. protoCore pins that
+value in a root set of its space while the exception exists
+(`ProtoException::Pin`, protoCore `core/ProtoException.cpp`), and its contract
+is that the exception must not outlive the space. A runtime made with
+`STRuntime()` owns its space and destroys it with itself, so the most
+ordinary embedder code broke the contract:
+
+```cpp
+try { protoST::STRuntime rt; rt.runTopLevel(module); }
+catch (const std::exception& e) { /* ... */ }
+```
+
+The runtime, and its space, were destroyed while the exception unwound, and
+the exception's destructor then ran `ProtoRootSet::remove` on freed memory:
+the process died with SIGSEGV (exit 139 on 4b47115, and since protoCore
+3.0.0). The `protost` binary was not affected, because it reports the error
+while the runtime is alive; the unit-test harness was, when a test let an
+error escape (found while fixing K14).
+
+Fix: at the **embedder boundary** of a runtime that owns its space -- a
+public entry point (`runTopLevel`, `loadModuleFromFile`, `importModuleFile`,
+`loadModule`) called on protoST's own context with no protoST code running on
+the thread -- the ProtoException is replaced by a self-contained
+`protoST::STUncaughtError` (`include/protoST/STUncaughtError.h`), a
+`std::runtime_error` that holds plain strings only: `what()` is the
+description (`AppError: too much`), `report()` the text the binary prints
+(with the active methods), `trace()`, and `classNames()` / `isKindOf:` for the
+exception's class chain. The description is read while the space is alive,
+and the new exception is thrown after the catch clause has ended, so the
+ProtoException and its pin are released first. Everywhere else the
+ProtoException leaves unchanged, so protoCore's unified exceptions keep
+working: a call nested in running protoST code (an import from a primitive),
+a call from another runtime's frame (K18's foreign contexts), and a runtime
+in a host's space (`STRuntime(proto::ProtoSpace&)`), whose space the host
+destroys after it. The `protost` binary, the REPL and the debug adapter print
+`report()`, which is the same text as before.
+
+Tests: `tests/unit/test_k20_embedder_boundary.cpp` (the pattern above with
+`std::exception`, with `STUncaughtError` and its class chain, a protoCore
+error, a module load, and a host-space runtime that keeps the
+ProtoException). The `std::exception` case, built against 4b47115, dies with
+SIGSEGV. `test_unified_exceptions.cpp` now runs its runtime in a host space,
+the setting the unified-exception contract it checks is about.
+
 ### K16 — The smallest subnormal Float could not be written as a literal (resolved, unreleased)
 
 `5e-324`, the smallest positive `Float`, was the compile error *float literal

@@ -4,6 +4,7 @@
 #include "dap/DapTransport.h"
 
 #include "protoST/STRuntime.h"
+#include "protoST/STUncaughtError.h"
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
 #include "runtime/BytecodeModule.h"
@@ -656,6 +657,10 @@ private:
         } catch (const proto::ProtoException& e) {
             exitCode = 1;
             error = describeUncaught(ctx, e) + "\n";
+        } catch (const STUncaughtError& e) {
+            // The same, detached from the space at the runtime's boundary (K20).
+            exitCode = 1;
+            error = e.report() + "\n";
         } catch (const std::exception& e) {
             exitCode = 1;
             error = "error: " + nativeErrorText(e) + "\n";

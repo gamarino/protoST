@@ -20,6 +20,7 @@
 #include "SchedDiag.h"
 #include "TransientPin.h"
 #include "UnhandledSTException.h"
+#include "protoST/STUncaughtError.h"
 #include "NativeExceptionBridge.h"
 #include "debugger/DebuggerRuntime.h"
 #include "frontend/Parser.h"
@@ -1273,6 +1274,44 @@ STRuntime::runTopLevel(const BytecodeModule& m) {
     return runTopLevel(m, impl_->rootCtx);
 }
 
+// K20: run `body`, an embedder entry point, and when this call is the
+// embedder boundary of a runtime that owns its space -- protoST's own context,
+// no protoST code running on the thread -- replace a ProtoException leaving
+// it with a self-contained STUncaughtError (include/protoST/STUncaughtError.h).
+// The ProtoException pins its value in the runtime's space, and the embedder
+// may destroy the runtime, and the space, before the exception is destroyed.
+// The description is read here, while the space is alive, and the exception
+// is thrown after the catch clause has ended, so the ProtoException (and its
+// pin) is released first. Anywhere else the ProtoException leaves unchanged.
+template <class Body>
+const proto::ProtoObject* STRuntime::atEmbedderBoundary(proto::ProtoContext* ctx, Body&& body) {
+    const bool boundary = ownsSpace() && ExecutionEngine::liveEnginesOnThisThread() == 0
+        && EntryContext::isProtoSTContext(*this, ctx);
+    if (!boundary) return body();
+    std::string description, report, trace;
+    std::vector<std::string> classNames;
+    try {
+        return body();
+    } catch (const proto::ProtoException& e) {
+        description = describeProtoException(ctx, e);
+        report = describeUncaught(ctx, e);
+        if (const auto* u = dynamic_cast<const UnhandledSTException*>(&e)) trace = u->trace();
+        const proto::ProtoString* nameKey = bootstrap().sym.className;
+        const proto::ProtoObject* v = e.value();
+        if (v && v != PROTO_NONE && (reinterpret_cast<uintptr_t>(v) & 0x3F) == 0) {
+            for (const proto::ProtoObject* p = v->getFirstParent(ctx); p && p != PROTO_NONE;
+                 p = p->getFirstParent(ctx)) {
+                const proto::ProtoObject* n = p->getOwnAttributeDirect(ctx, nameKey);
+                if (n && n != PROTO_NONE)
+                    if (const proto::ProtoString* s = n->asString(ctx))
+                        classNames.push_back(s->toStdString(ctx));
+            }
+        }
+    }
+    throw STUncaughtError(std::move(description), std::move(report), std::move(trace),
+                          std::move(classNames));
+}
+
 // The outermost entry point for a script, `-e` expression, REPL input or
 // debuggee: runs the module's top level, then converts any control-flow
 // signal that escapes it into a std::runtime_error. Nothing outside this run
@@ -1280,6 +1319,11 @@ STRuntime::runTopLevel(const BytecodeModule& m) {
 // callers report it like any other runtime fault.
 const proto::ProtoObject*
 STRuntime::runTopLevel(const BytecodeModule& m, proto::ProtoContext* ctx) {
+    return atEmbedderBoundary(ctx, [&] { return runTopLevelEntry(m, ctx); });
+}
+
+const proto::ProtoObject*
+STRuntime::runTopLevelEntry(const BytecodeModule& m, proto::ProtoContext* ctx) {
     // Track 1 slice 1: a NonLocalReturn that escapes the top-level engine has
     // no live home frame anywhere — the block's home method already returned
     // (a "dead home"). Convert it to a std::runtime_error so the REPL / `-e`
@@ -2882,7 +2926,7 @@ void STRuntime::loadKernel() {
         }
         if (impl_->debugger.attached()) impl_->debugger.onModuleLoaded(rootCtx(), &module);
         try {
-            runTopLevel(module);
+            runTopLevelEntry(module, rootCtx());
         } catch (const proto::ProtoException& ex) {
             throw NativeError("kernel: " + file.string() + ": "
                                      + describeProtoException(rootCtx(), ex));
@@ -2900,9 +2944,11 @@ void STRuntime::loadKernel() {
 // the module declared as attributes of a fresh ProtoObject and returns it.
 const proto::ProtoObject* STRuntime::loadModuleFromFile(
     proto::ProtoContext* ctx, const std::string& filePath, const std::string& logicalName) {
-    // K18: see EntryContext (ExecutionEngine.h).
-    EntryContext entry(*this, ctx);
-    return entry.leave(loadModuleFromFileImpl(entry.ctx(), filePath, logicalName));
+    return atEmbedderBoundary(ctx, [&] {
+        // K18: see EntryContext (ExecutionEngine.h).
+        EntryContext entry(*this, ctx);
+        return entry.leave(loadModuleFromFileImpl(entry.ctx(), filePath, logicalName));
+    });
 }
 
 const proto::ProtoObject* STRuntime::loadModuleFromFileImpl(
@@ -3045,11 +3091,14 @@ const proto::ProtoObject* STRuntime::loadModule(proto::ProtoContext* ctx, const 
 // parks for a collection on its way out still receives a live object.
 const proto::ProtoObject* STRuntime::importModuleFile(
     proto::ProtoContext* ctx, const std::string& filePath, const std::string& logicalName) {
-    // K18: an import requested on a context that is not protoST's own (a UMD
-    // import from another runtime's frame, a host's context in guest mode)
-    // runs on a child context of it; see EntryContext (ExecutionEngine.h).
-    EntryContext entry(*this, ctx);
-    return entry.leave(importModuleFileImpl(entry.ctx(), filePath, logicalName));
+    return atEmbedderBoundary(ctx, [&] {
+        // K18: an import requested on a context that is not protoST's own (a
+        // UMD import from another runtime's frame, a host's context in guest
+        // mode) runs on a child context of it; see EntryContext
+        // (ExecutionEngine.h).
+        EntryContext entry(*this, ctx);
+        return entry.leave(importModuleFileImpl(entry.ctx(), filePath, logicalName));
+    });
 }
 
 const proto::ProtoObject* STRuntime::importModuleFileImpl(

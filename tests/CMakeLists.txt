@@ -112,6 +112,7 @@ target_sources(protost_unit_tests PRIVATE
     unit/test_foreign_frame_context.cpp
     unit/test_k18_module_entry.cpp
     unit/test_k18_reentry.cpp
+    unit/test_k20_embedder_boundary.cpp
 )
 target_sources(protost_unit_tests PRIVATE
     unit/test_hashed_collections.cpp

@@ -1,6 +1,7 @@
 #include "repl/Repl.h"
 
 #include "protoST/STRuntime.h"
+#include "protoST/STUncaughtError.h"
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
 #include <unordered_map>
@@ -407,6 +408,10 @@ bool evaluate(Session& s, const std::string& buffer,
     } catch (const proto::ProtoException& e) {
         // An unhandled Error, a module's error, another language's exception.
         writeWholeLine(stderr, describeUncaught(s.rt->rootCtx(), e));
+        return false;
+    } catch (const STUncaughtError& e) {
+        // The same, detached from the space at the runtime's boundary (K20).
+        writeWholeLine(stderr, e.report());
         return false;
     } catch (const std::exception& e) {
         writeWholeLine(stderr, describeUncaught(e));
