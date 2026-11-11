@@ -316,7 +316,8 @@ size_t BytecodeModule::addString(const std::string& s) {
 size_t BytecodeModule::internSymbol(const std::string& s) {
     auto it = symbolIndex_.find(s);
     if (it != symbolIndex_.end()) return it->second;
-    consts_.push_back(Const{ConstKind::Symbol, 0, 0.0, s});
+    const long long colons = static_cast<long long>(std::count(s.begin(), s.end(), ':'));
+    consts_.push_back(Const{ConstKind::Symbol, colons, 0.0, s});
     size_t idx = consts_.size() - 1;
     symbolIndex_[s] = idx;
     return idx;

@@ -200,8 +200,10 @@ method its closure was created in (`homeFrameId`, stamped on the closure by
 
 ### 1.4 Closures, blocks and captured variables
 
-`PUSH_BLOCK n` creates a fresh mutable child of `BlockClosure` with four
-attributes:
+`PUSH_BLOCK n` creates a fresh immutable child of `BlockClosure` with four
+attributes, written as one version (`setAttributes`; until 0.10.0 a mutable
+child written four times, each write a publication into protoCore's mutable
+table). Nothing writes a closure afterwards:
 
 | Attribute | Value |
 |---|---|
@@ -259,9 +261,9 @@ case of `runLoop`) tries, in order:
    the few the proxy answers itself (`isActorLocalSelector`: identity,
    printing, nil tests): the message is queued on the actor's mailbox, the
    actor is scheduled, and a pending `Future` is the result.
-2. **Block evaluation.** A receiver that owns `__bc_ptr__` and a selector
-   `value`, `value:`, `value:value:`, ... matching the block's argument
-   count: a block frame is pushed in this engine (self = `__block_self__`,
+2. **Block evaluation.** A selector `value`, `value:`, `value:value:`, ...
+   (tested first, so no other send probes the receiver) sent to a receiver
+   that owns `__bc_ptr__`, matching the block's argument count: a block frame is pushed in this engine (self = `__block_self__`,
    captured dict = `__captured__`, home = `__home_frame__`). This path can
    be suspended by a `Future>>wait` inside the block (cooperative yield).
 3. **Lookup.** `methodHolder(receiver)` (protoST's prototype for a primitive

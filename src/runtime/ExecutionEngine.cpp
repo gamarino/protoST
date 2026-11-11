@@ -338,28 +338,14 @@ void
 ExecutionEngine::setCaptured(const Frame& f, const proto::ProtoObject* v) {
     ctx_->setAutomaticLocal(f.baseSlot + 0, v);
 }
+// The failures of the inline push / pop / peek (ExecutionEngine.h).
 void
-ExecutionEngine::push(Frame& f, const proto::ProtoObject* v) {
-    // The compiler's code never gets here: frames are sized from the deepest
-    // point of their module. A hand-built module can, and then it is an
-    // ordinary catchable Error, not a C++ exception past every handler.
-    if (f.sp >= f.maxStack) [[unlikely]]
-        signalStackOverflow(rt_, ctx_, f.maxStack);
-    ctx_->setAutomaticLocal(opStackBase(f) + f.sp, v);
-    ++f.sp;
+ExecutionEngine::operandStackOverflow(const Frame& f) {
+    signalStackOverflow(rt_, ctx_, f.maxStack);
 }
-const proto::ProtoObject*
-ExecutionEngine::pop(Frame& f) {
-    if (f.sp == 0)
-        throw NativeError("engine operand stack underflow");
-    --f.sp;
-    return ctx_->getAutomaticLocal(opStackBase(f) + f.sp);
-}
-const proto::ProtoObject*
-ExecutionEngine::peek(const Frame& f) const {
-    if (f.sp == 0)
-        throw NativeError("engine operand stack peek on empty");
-    return ctx_->getAutomaticLocal(opStackBase(f) + f.sp - 1);
+void
+ExecutionEngine::operandStackUnderflow(const char* what) {
+    throw NativeError(what);
 }
 const proto::ProtoObject*
 ExecutionEngine::opAt(const Frame& f, unsigned int depth) const {
@@ -566,8 +552,16 @@ ExecutionEngine::pushFrame(const BytecodeModule* m,
     // × 75K calls this was visible per-call overhead. The array holds at
     // least regionEnd slots (ensured just above), so the direct write is
     // safe.
+    //
+    // Only the header and the locals are cleared (locals start nil). The
+    // operand stack is not (0.10.0; it was most of the fill, 48 slots or
+    // more per call): every read of it stops at `sp` (pop, peek, opAt, the
+    // debugger's and the yield's copies), and a value left in it by an
+    // earlier frame cannot dangle, because protoCore scans the whole
+    // automaticLocals array as roots, so that value is still alive. It is
+    // retained until overwritten, as the slots above the cursor always were.
     const proto::ProtoObject** slots = ctx_->getAutomaticLocals();
-    std::fill_n(slots + fr.baseSlot, regionSize, PROTO_NONE);
+    std::fill_n(slots + fr.baseSlot, kHeaderSlots + fr.localCount, PROTO_NONE);
 
     // Header slots — direct writes (region was zeroed above).
     slots[fr.baseSlot + 0] = captured ? captured : PROTO_NONE;
@@ -1156,66 +1150,47 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             }
             case Op::PUSH_BLOCK: L_PUSH_BLOCK: {
                 Frame& f = frames_.back();
-                // arg = block index inside f.m->blocks(). Create a fresh
-                // BlockClosure (a mutable child of the Block prototype) that
-                // carries an opaque pointer to the sub-module under
-                // attribute "__bc_ptr__".
-                auto* blkProto = bs_.blockProto;
-                auto* block = blkProto->newChild(ctx, /*isMutable=*/true);
-                // F6 v3 E5: `block` is a fresh mutable object held in a C++
-                // local across the fromUTF8String key interning (first call
-                // allocates), fromLong (allocates), and two setAttribute
-                // calls on a mutable object (each allocates a sparse-list
-                // node). Until `push(f, block)` lands it in a GC-traced frame
-                // slot it is reachable from nowhere the collector traces.
-                TransientPin pinBlock(ctx, block);
-                const proto::ProtoString* bcKey =
-                    bs_.sym.bcPtr;
-                const proto::ProtoString* capKey =
-                    bs_.sym.captured;
-                const proto::ProtoString* homeKey =
-                    bs_.sym.homeFrame;
-                const proto::ProtoString* blkSelfKey =
-                    bs_.sym.blockSelf;
-                auto* bcPtrObj = ctx->fromLong(
-                    reinterpret_cast<long long>(&f.m->block(arg)));
-                // `bcPtrObj` is held across the setAttribute below — pin it.
+                // arg = block index inside f.m->blocks(). A BlockClosure is
+                // an IMMUTABLE child of the Block prototype with four own
+                // attributes, written as one version (setAttributes):
+                //   __bc_ptr__      the sub-module (an opaque pointer);
+                //   __captured__    the creating frame's captured dict, so
+                //                   the block resolves its free variables in
+                //                   the outer scope (F3-C5);
+                //   __home_frame__  the creating frame's homeFrameId (not its
+                //                   frameId): a block created in a method
+                //                   gets that method's home, and one created
+                //                   in a block inherits the method home that
+                //                   block carries, so `^` at any nesting
+                //                   depth targets the method (Track 1);
+                //   __block_self__  the `self` of the creating frame (the
+                //                   inherited self in a nested block), the
+                //                   receiver of a block frame (CLO Part 1).
+                // Nothing writes a block after this point. Until 0.10.0 the
+                // block was a mutable object written by four setAttribute
+                // calls, each one a publication into protoCore's mutable
+                // table (a snapshot cell and a shard-root path copy): about
+                // 2.3 us and most of the garbage of every block created.
+                // Each value that allocates is pinned before the next
+                // allocation; the captured dict and self are frame values.
+                const proto::ProtoObject* bcPtrObj =
+                    ctx->fromLong(reinterpret_cast<long long>(&f.m->block(arg)));
                 TransientPin pinBcPtr(ctx, bcPtrObj);
-                block->setAttribute(ctx, bcKey, bcPtrObj);
-                // F3-C5: stash the current frame's captured dict so the
-                // block can resolve free variables back to the outer scope
-                // at invocation time.
-                const proto::ProtoObject* capD = getCaptured(f);
-                block->setAttribute(
-                    ctx, capKey,
-                    (capD && capD != PROTO_NONE) ? capD : PROTO_NONE);
-                // Track 1 slice 1: stamp the block with the HOME method
-                // activation. We store the creating frame's homeFrameId
-                // (NOT its frameId): a block created directly in a method
-                // gets that method's home, and a block created inside an
-                // outer block inherits the same method home the outer block
-                // already carries — so `^` from any nesting depth targets
-                // the method. `f.homeFrameId` gives both cases.
-                auto* homeObj = ctx->fromLong(
-                    static_cast<long long>(f.homeFrameId));
-                // F6 v3 E5 discipline: `homeObj` is held across setAttribute
-                // on the mutable block object (which allocates) — pin it.
+                const proto::ProtoObject* homeObj =
+                    ctx->fromLong(static_cast<long long>(f.homeFrameId));
                 TransientPin pinHome(ctx, homeObj);
-                block->setAttribute(ctx, homeKey, homeObj);
-                // CLO Part 1: stamp the block with the `self` of the frame
-                // that creates it (the header self-slot, baseSlot+1). For a
-                // block created directly in a method this is the method's
-                // receiver; for a block nested inside another block the
-                // creating frame's self is already the inherited self, so the
-                // stamp is transitive. Block invocation then builds the block
-                // frame with this self instead of PROTO_NONE, making
-                // `self` / PUSH_INSTVAR work inside method-level blocks.
+                const proto::ProtoObject* bare = bs_.blockProto->newChild(ctx, /*isMutable=*/false);
+                TransientPin pinBare(ctx, bare);
+                const proto::ProtoObject* capD = getCaptured(f);
                 const proto::ProtoObject* creatorSelf = getSelf(f);
-                if (!creatorSelf) creatorSelf = PROTO_NONE;
-                // `creatorSelf` is an already-rooted frame value, but pin it
-                // for symmetry across the setAttribute (which allocates).
-                TransientPin pinBlkSelf(ctx, creatorSelf);
-                block->setAttribute(ctx, blkSelfKey, creatorSelf);
+                const proto::ProtoString* names[4] = {
+                    bs_.sym.bcPtr, bs_.sym.captured, bs_.sym.homeFrame, bs_.sym.blockSelf };
+                const proto::ProtoObject* values[4] = {
+                    bcPtrObj,
+                    (capD && capD != PROTO_NONE) ? capD : PROTO_NONE,
+                    homeObj,
+                    creatorSelf ? creatorSelf : PROTO_NONE };
+                const proto::ProtoObject* block = bare->setAttributes(ctx, 4, names, values);
                 push(f, block);
                 DISPATCH_SCOPED();
                 break;
@@ -1354,7 +1329,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                            : /* keyword */ 0;
                 const std::string& selStr = f.m->constSymbol(arg);
                 if (op == Op::SEND_KEYWORD)
-                    for (char c : selStr) if (c == ':') ++argcOp;
+                    argcOp = static_cast<int>(f.m->constSymbolColons(arg));
                 // BL-1: a `super` send is its own instruction: the compiler
                 // pushes self and the arguments, then SEND_SUPER, so only
                 // this send looks up above the defining class -- not a send
@@ -1524,25 +1499,26 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // chain. `__bc_ptr__` is set only on BlockClosures (by
                     // PUSH_BLOCK), never on `blockProto` itself, so a hit
                     // here is unambiguous evidence that `recv` is a block.
-                    auto* recvBcPtr = recv->getOwnAttributeDirect(ctx, recvBcKey);
+                    // Only a value-family selector (value, value:,
+                    // value:value:, ...) can take this path, so the selector
+                    // is tested first and only such a send probes the
+                    // receiver for __bc_ptr__ (0.10.0: every send to an
+                    // object paid that probe). SEND_BINARY never matches.
+                    bool isValueFamily = false;
+                    if (op == Op::SEND_UNARY) {
+                        isValueFamily = (selStr == "value");
+                    } else if (op == Op::SEND_KEYWORD && argcOp > 0
+                               && selStr.size() == 6u * static_cast<std::size_t>(argcOp)) {
+                        isValueFamily = true;
+                        for (std::size_t k = 0; k < selStr.size(); k += 6)
+                            if (selStr.compare(k, 6, "value:") != 0) {
+                                isValueFamily = false;
+                                break;
+                            }
+                    }
+                    auto* recvBcPtr = isValueFamily
+                        ? recv->getOwnAttributeDirect(ctx, recvBcKey) : nullptr;
                     if (recvBcPtr && recvBcPtr != PROTO_NONE) {
-                        // Validate selector matches the value/value:/...
-                        // pattern for argcOp formal parameters. argcOp is
-                        // already computed from the selector colons above
-                        // (or 0 for SEND_UNARY which uses bare `value`).
-                        bool isValueFamily = false;
-                        if (op == Op::SEND_UNARY) {
-                            isValueFamily = (selStr == "value");
-                        } else if (op == Op::SEND_KEYWORD) {
-                            // selector must be exactly argcOp repetitions
-                            // of "value:" — i.e. "value:", "value:value:",
-                            // "value:value:value:", ...
-                            isValueFamily = true;
-                            std::string expected;
-                            for (int i = 0; i < argcOp; ++i) expected += "value:";
-                            if (selStr != expected) isValueFamily = false;
-                        }
-                        // SEND_BINARY never matches value-family.
                         if (isValueFamily) {
                             const protoST::BytecodeModule* sub =
                                 reinterpret_cast<const protoST::BytecodeModule*>(

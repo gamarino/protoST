@@ -1448,6 +1448,23 @@ const proto::ProtoObject* prim_Behavior_hasAncestor(STRuntime&, proto::ProtoCont
     return r->hasParent(ctx, c) != 0 ? PROTO_TRUE : PROTO_FALSE;
 }
 
+// anObject isKindOf: aClass → whether the receiver's class is aClass or has
+// aClass among its ancestors (superclasses and `uses:` / addBehavior:
+// mixins alike, the set __hasAncestor: answers for). Until 0.10.0 this was
+// `c := self class. ^ c == aClass or: [c __hasAncestor: aClass]` in
+// lib/kernel/object.st: a method activation and two sends for one pointer
+// comparison and one walk of the class's parent chain. The class is the
+// receiver's real class, as Pharo's `self class`, a special-selector
+// bytecode that a `class` method does not override.
+const proto::ProtoObject* prim_Object_isKindOf(STRuntime& rt, proto::ProtoContext* ctx,
+                                               const proto::ProtoObject* r,
+                                               const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw NativeError("isKindOf: expects 1 arg");
+    const proto::ProtoObject* c = prim_Object_class(rt, ctx, r, nullptr, 0);
+    if (c == a[0]) return PROTO_TRUE;
+    return prim_Behavior_hasAncestor(rt, ctx, c, a, 1);
+}
+
 // aMetaclass soleInstance → the class it describes (Pharo's soleInstance,
 // also instanceClass).
 const proto::ProtoObject* prim_Metaclass_soleInstance(STRuntime& rt, proto::ProtoContext* ctx,
@@ -1909,6 +1926,7 @@ void installObjectPrimitives(STRuntime& rt) {
     bindPrimitive(rt, b.behaviorProto, "canUnderstand:", reg.registerPrim(prim_Object_canUnderstand));
     bindPrimitive(rt, b.behaviorProto, "lookupSelector:", reg.registerPrim(prim_Behavior_lookupSelector));
     bindPrimitive(rt, b.behaviorProto, "__hasAncestor:", reg.registerPrim(prim_Behavior_hasAncestor));
+    bindPrimitive(rt, b.objectProto, "isKindOf:", reg.registerPrim(prim_Object_isKindOf));
     {
         const int sole = reg.registerPrim(prim_Metaclass_soleInstance);
         bindPrimitive(rt, b.metaclassProto, "soleInstance", sole);

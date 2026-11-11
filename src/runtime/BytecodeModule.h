@@ -33,6 +33,9 @@ public:
 
     struct Const {
         ConstKind kind;
+        // Integer: the value; LargeInteger: the radix; Symbol: the number of
+        // colons of the selector, counted once at intern time (a keyword
+        // send's argument count, read on every send).
         long long ival = 0;
         double    fval = 0.0;
         std::string sval;
@@ -98,6 +101,9 @@ public:
     // accessors
     const std::vector<uint8_t>& bytes() const { return bytes_; }
     long long           constInteger(size_t i) const { return consts_[i].ival; }
+    unsigned int        constSymbolColons(size_t i) const {
+        return static_cast<unsigned int>(consts_[i].ival);
+    }
     double              constFloat(size_t i)   const { return consts_[i].fval; }
     const std::string&  constString(size_t i)  const { return consts_[i].sval; }
     const std::string&  constSymbol(size_t i)  const { return consts_[i].sval; }

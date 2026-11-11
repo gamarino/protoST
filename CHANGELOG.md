@@ -274,6 +274,44 @@ minor release, so the two services arrive in 0.5.0.
   single-step case in `tests/unit/test_debugger.cpp`; `docs/VM.md` 1.4 and
   the opcode table; vm-examples 03, 05, 14 and 18 regenerated.
 
+- **A block costs a quarter of what it did; `isKindOf:` is a primitive; a
+  send does less work (protoBaseST review P3).** Profiled with `perf`:
+  - A closure was a *mutable* object written by four `setAttribute` calls,
+    four publications into protoCore's mutable table, and most of the
+    garbage of every block (the sweep was the top symbol of a block loop).
+    `PUSH_BLOCK` now builds an immutable child of `BlockClosure` and writes
+    its four attributes as one version (`setAttributes`); nothing writes a
+    closure afterwards, and a method, which is a closure, is immutable too.
+    Two closures of one literal remain distinct objects (test
+    `06-blocks/block-closures-are-distinct-objects.st`).
+  - `isKindOf:` was a kernel method (`self class`, then `or:` with a block,
+    then `__hasAncestor:`); it is now one primitive over the same ancestor
+    test. It uses the receiver's real class, as Pharo's (where `class` is a
+    bytecode): a `class` method that answers another class no longer
+    changes it (test `04-object-model/is-kind-of-uses-the-real-class.st`,
+    which answered `false` for the first case before).
+  - Per send: the block fast path tests for a `value`-family selector
+    before it probes the receiver for `__bc_ptr__` (every send to an object
+    paid that probe); a keyword selector's argument count is counted once
+    when the constant is interned, not on every send; `push` / `pop` /
+    `peek` are forced inline into `runLoop` (GCC had left them as calls);
+    a new frame clears its header and locals but not its operand stack,
+    which is never read above its top (protoCore scans every slot as a
+    root, so an old value there cannot dangle).
+
+  10^5 iterations in a method, ns per iteration including the loop
+  (`benchmarks/micro/blocks_kindof.st`, 0.9.x -> 0.10.0): create a block
+  2,200-2,400 -> 600-650; `[ 1 ] value` 2,050 -> 780-870; a block that
+  captures the loop variable 4,500-4,700 -> 1,760-1,990; `at:ifAbsent: [0]`
+  4,300 -> 790-830; `[ 1 ] on: Error do: [...]` 12,000-15,000 -> 1,280;
+  `isKindOf:` 9,500-14,000 -> 260-400 (the `or:` block was most of it). The
+  comparable suite (`perf stat -r 3`, instructions / cycles): `fib` -16 % /
+  -20 %, `attr_lookup` -11 % / -17 %, `exception_latency` -24 % / -27 %,
+  `int_sum_loop` -9 % / -2 %, `list_append` -4 % / -5 %. protoBaseST's
+  AVL on 1000-element trees: `posAt:` 209-222 -> 151 us, `keyAt:` 128-154
+  -> 85 us, `keyPut:` 1,088-1,167 -> 831-841 us; the rest of that cost is
+  the number of sends its code makes, at about 0.15 us each.
+
 ### Breaking changes
 
 - **An `Array` of Integers is no longer bytes (D45, ruling R11).** As the

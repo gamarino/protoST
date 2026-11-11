@@ -1019,6 +1019,10 @@ any of its ancestors, superclasses and `uses:` / `addBehavior:` mixins alike,
 and `aClass inheritsFrom: anotherClass` asks the same of a class. This is the
 ancestor set method lookup walks and `on: aClass do:` selects an exception by
 (§8), so a handler for a mixin catches what `isKindOf:` says is one.
+`isKindOf:` is a primitive over the receiver's real class: a method `class`
+that answers another class does not change it, as in Pharo, where `class`
+is a bytecode no method overrides (0.10.0; until then a `class` override
+was used).
 `allSuperclasses` lists the primary superclass chain only. Pharo's traits
 are not classes and do not count for `isKindOf:`; protoST's mixins are
 classes, as in languages with multiple inheritance (Python's `isinstance`).
