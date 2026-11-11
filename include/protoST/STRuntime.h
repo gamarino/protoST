@@ -117,6 +117,15 @@ public:
     // its own context, so the key-string allocation never races on a shared
     // per-thread allocation cache.
     void schedule(proto::ProtoContext* ctx, const proto::ProtoObject* actor);
+    // K18: drainOne, runOneTask, workerLoop, spawnWorker and acquireMainWait
+    // are protoST-INTERNAL entry points. They run protoST code (or block) on
+    // `ctx` directly, WITHOUT the EntryContext guard that runTopLevel(m, ctx),
+    // importModuleFile, loadModuleFromFile and __st_send__ apply to a context
+    // that is not protoST's own, so `ctx` must be one protoST runs on: a
+    // worker thread's root context (st_worker_main) or an engine context (the
+    // Future wait primitive). Embedders must not call them; another runtime's
+    // frame context passed here would have its locals overwritten by protoST's
+    // frames and pins (KNOWN_ISSUES K18).
     bool drainOne(proto::ProtoContext* ctx);   // returns true if a message was processed
     size_t scheduledCount() const;              // size of ready queue (for testing)
 
@@ -124,6 +133,7 @@ public:
     // constructor. Loops on the scheduler cv, calling drainOne() until shutdown
     // is requested by the destructor. Public for the C-style ProtoMethod
     // trampoline; embedders should not invoke this directly.
+    // protoST-internal, no EntryContext: see the K18 note at drainOne.
     void workerLoop(proto::ProtoContext* ctx);
     bool spawnWorker(proto::ProtoContext* ctx);
 
@@ -146,6 +156,7 @@ public:
     // must be the calling thread's own context: the waiter counts as parked
     // for the stop-the-world quorum while it waits.
     void markMainWaitingOn(const proto::ProtoObject* future);
+    // protoST-internal, no EntryContext: see the K18 note at drainOne.
     void acquireMainWait(proto::ProtoContext* ctx);
     void notifyMainWaiterIfFor(const proto::ProtoObject* future);
 
@@ -169,6 +180,7 @@ public:
     // calling thread's own context. Answers false when there is none. Called
     // first by drainOne, and alone by a worker waiting past the helping cap
     // (waitHelping, future_prims.cpp), which must still let deadlines fire.
+    // protoST-internal, no EntryContext: see the K18 note at drainOne.
     bool runOneTask(proto::ProtoContext* ctx);
 
     // The runtime's timer service (Future after: / within:), whose thread is

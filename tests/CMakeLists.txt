@@ -111,6 +111,7 @@ target_sources(protost_unit_tests PRIVATE
     unit/test_transient_pin.cpp
     unit/test_foreign_frame_context.cpp
     unit/test_k18_module_entry.cpp
+    unit/test_k18_reentry.cpp
 )
 target_sources(protost_unit_tests PRIVATE
     unit/test_hashed_collections.cpp
