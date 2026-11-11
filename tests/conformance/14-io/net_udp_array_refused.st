@@ -5,7 +5,7 @@ Import from: 'net'.
 | tx r |
 tx := UDPSocket bindTo: 0.
 r := [tx send: #(1 0 2) to: '127.0.0.1' port: 9. false]
-  on: Error do: [:e | (e messageText includesSubstring: 'an Array is not bytes')
+  on: Error do: [:e | (e messageText beginsWith: 'send: an Array is not bytes')
     and: [e messageText includesSubstring: 'ByteArray']].
 tx close.
 r.

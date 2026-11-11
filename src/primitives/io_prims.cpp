@@ -312,14 +312,26 @@ PRIM(prim_FdAtEnd) {
     return boolean(blocking(rt, ctx, [&] { return protoio::atEnd(fd); }));
 }
 
-// __fdWrite: fd data: aStringOrByteArray. Descriptors 1 and 2 go through the
-// C streams, so the order with Transcript and printNl is kept.
-PRIM(prim_FdWrite) {
-    ARGS(2, "__fdWrite:data:");
-    const int fd = fdArg(ctx, a[0], "nextPutAll:");
-    const std::string data = dataArg(rt, ctx, a[1], "nextPutAll:");
+// __fdWrite: fd data: aStringOrByteArray [for: aSelectorString]. Descriptors
+// 1 and 2 go through the C streams, so the order with Transcript and printNl
+// is kept. The kernel method passes its own selector (nextPutAll:,
+// nextPutBytes:), so a refused argument names what the program sent.
+const PO* fdWrite(STRuntime& rt, proto::ProtoContext* ctx, const PO* r, const PO* const* a,
+                  const std::string& who) {
+    const int fd = fdArg(ctx, a[0], who.c_str());
+    const std::string data = dataArg(rt, ctx, a[1], who.c_str());
     blocking(rt, ctx, [&] { protoio::write(fd, data); });
     return r;
+}
+
+PRIM(prim_FdWrite) {
+    ARGS(2, "__fdWrite:data:");
+    return fdWrite(rt, ctx, r, a, "nextPutAll:");
+}
+
+PRIM(prim_FdWriteFor) {
+    ARGS(3, "__fdWrite:data:for:");
+    return fdWrite(rt, ctx, r, a, str(ctx, a[2], "__fdWrite:data:for:"));
 }
 
 PRIM(prim_FdFlush) {
@@ -382,17 +394,29 @@ PRIM(prim_FileRead) {
     return truthy(a[1]) ? makeBytes(ctx, data) : string(ctx, data);
 }
 
-// __fileWrite: path data: aStringOrBytes append: aBoolean
-PRIM(prim_FileWrite) {
-    ARGS(3, "__fileWrite:data:append:");
-    const std::string path = osStringArg(ctx, a[0], "contents:", "the path");
-    const std::string data = dataArg(rt, ctx, a[1], "contents:");
+// __fileWrite: path data: aStringOrBytes append: aBoolean [for: aSelectorString].
+// The kernel method passes its own selector (contents:, appendContents:,
+// binaryContents:), so a refused argument names what the program sent.
+const PO* fileWrite(STRuntime& rt, proto::ProtoContext* ctx, const PO* r, const PO* const* a,
+                    const std::string& who) {
+    const std::string path = osStringArg(ctx, a[0], who.c_str(), "the path");
+    const std::string data = dataArg(rt, ctx, a[1], who.c_str());
     const bool append = truthy(a[2]);
     unmanaged(ctx, [&] {
         if (append) protoio::file::append(path, data);
         else protoio::file::write(path, data);
     });
     return r;
+}
+
+PRIM(prim_FileWrite) {
+    ARGS(3, "__fileWrite:data:append:");
+    return fileWrite(rt, ctx, r, a, "contents:");
+}
+
+PRIM(prim_FileWriteFor) {
+    ARGS(4, "__fileWrite:data:append:for:");
+    return fileWrite(rt, ctx, r, a, str(ctx, a[3], "__fileWrite:data:append:for:"));
 }
 
 // __fileStat: path — nil when absent, else
@@ -647,11 +671,11 @@ void installIoPrimitives(STRuntime& rt) {
         {"__fdReadAll:", prim_FdReadAll},        {"__httpReadChunked:max:", prim_HttpReadChunked},
         {"__fdRead:count:binary:", prim_FdRead}, {"__fdAtEnd:", prim_FdAtEnd},
         {"__fdReadChars:count:", prim_FdReadChars},
-        {"__fdWrite:data:", prim_FdWrite},       {"__fdFlush:", prim_FdFlush},
+        {"__fdWrite:data:", prim_FdWrite},       {"__fdWrite:data:for:", prim_FdWriteFor},       {"__fdFlush:", prim_FdFlush},
         {"__fdClose:", prim_FdClose},            {"__fdTimeout:ms:", prim_FdTimeout},
         {"__byteSize:", prim_ByteSize},          {"__percentDecode:", prim_PercentDecode},
         {"__fileOpen:mode:", prim_FileOpen},     {"__fileRead:binary:", prim_FileRead},
-        {"__fileWrite:data:append:", prim_FileWrite}, {"__fileStat:", prim_FileStat},
+        {"__fileWrite:data:append:", prim_FileWrite}, {"__fileWrite:data:append:for:", prim_FileWriteFor}, {"__fileStat:", prim_FileStat},
         {"__fileDelete:recursive:", prim_FileDelete}, {"__fileMove:to:", prim_FileMove},
         {"__fileReplace:with:", prim_FileReplace}, {"__fileSyncDirectory:", prim_FileSyncDirectory},
         {"__fileCopy:to:", prim_FileCopy},       {"__dirCreate:parents:", prim_DirCreate},

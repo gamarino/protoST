@@ -2535,7 +2535,7 @@ A `FileReference` names a path; it holds no open descriptor.
 | `basename`, `basenameWithoutExtension`, `extension`, `parent` | name parts (`extension` is `''` when there is none) |
 | `children`, `files`, `directories` | the entries of a directory, sorted by name |
 | `contents`, `contents: aString`, `appendContents: aString` | read the whole file; replace it; append to it |
-| `binaryContents`, `binaryContents: aByteArray` | the same with bytes, as a `ByteArray` (an `Array` of Integers is refused since protoST 0.10.0 with an `Error` that names `ByteArray withAll:`; 0.9.0 accepted it with a warning) |
+| `binaryContents`, `binaryContents: aByteArray` | the same with bytes, as a `ByteArray` |
 | `lines`, `linesDo: aBlock` | the file's lines |
 | `readStream`, `writeStream`, `appendStream` | an open `IOStream` (`writeStream` truncates) |
 | `readStreamDo:`, `writeStreamDo:`, `appendStreamDo:` | evaluate the block with an open stream and close it afterwards, also on error; answer the block's value |
@@ -2544,6 +2544,15 @@ A `FileReference` names a path; it holds no open descriptor.
 | `copyTo: ref`, `moveTo: ref`, `renameTo: 'name'` | copy or move a file; answer the destination |
 
 Two references are `=` when their `fullName`s are equal.
+
+**Bytes are a `String` or a `ByteArray`, never an `Array`.** Every write that
+takes bytes or a String refuses an `Array` of Integers since protoST 0.10.0:
+`contents:`, `appendContents:` and `binaryContents:` here, `IOStream >>
+nextPutAll:` and `nextPutBytes:` (§12.11.1; standard streams, file streams and
+sockets, TLS included) and UDP `send:` (§12.11.5). The `Error` names the
+selector that was sent and the replacement, `ByteArray withAll: anArray` (or a
+literal `#[1 2 3]`), and nothing is written. 0.9.0 accepted such an `Array`
+with a deprecation warning (STATUS D45).
 
 For a file read and written at explicit offsets, with `sync` and a lock, see
 `BinaryFile` in [§12.12.2](#12122-binaryfile).

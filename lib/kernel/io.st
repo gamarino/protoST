@@ -91,11 +91,11 @@ IOStream >> lines
   ^ out asArray.
 
 IOStream >> nextPutAll: aString
-  self __fdWrite: fd data: aString.
+  self __fdWrite: fd data: aString for: 'nextPutAll:'.
   ^ aString.
 
 IOStream >> nextPutBytes: aByteArray
-  self __fdWrite: fd data: aByteArray.
+  self __fdWrite: fd data: aByteArray for: 'nextPutBytes:'.
   ^ aByteArray.
 
 IOStream >> nextPut: aCharacter
@@ -276,11 +276,11 @@ FileReference >> contents
   ^ self __fileRead: path binary: false.
 
 FileReference >> contents: aString
-  self __fileWrite: path data: aString append: false.
+  self __fileWrite: path data: aString append: false for: 'contents:'.
   ^ self.
 
 FileReference >> appendContents: aString
-  self __fileWrite: path data: aString append: true.
+  self __fileWrite: path data: aString append: true for: 'appendContents:'.
   ^ self.
 
 FileReference >> binaryContents
@@ -289,7 +289,7 @@ FileReference >> binaryContents
 FileReference >> binaryContents: aByteArray
   "Write aByteArray (or a String, as its UTF-8 bytes). An Array of Integers is
    refused since protoST 0.10.0: convert it with ByteArray withAll: anArray."
-  self __fileWrite: path data: aByteArray append: false.
+  self __fileWrite: path data: aByteArray append: false for: 'binaryContents:'.
   ^ self.
 
 FileReference >> lines

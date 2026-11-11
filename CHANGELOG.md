@@ -221,10 +221,13 @@ minor release, so the two services arrive in 0.5.0.
 ### Breaking changes
 
 - **An `Array` of Integers is no longer bytes (D45, ruling R11).** As the
-  0.9.0 deprecation warning announced, `binaryContents:`, `nextPutBytes:` and
-  UDP `send:` refuse an `Array` with an `Error` that says "an Array is not
-  bytes" and names the replacement, `ByteArray withAll: anArray` (or a
-  literal `#[1 2 3]`); nothing is written. The warning and its code path are
+  0.9.0 deprecation warning announced, every write that takes bytes or a
+  String refuses an `Array`: `FileReference >> contents:`, `appendContents:`
+  and `binaryContents:`, `IOStream >> nextPutAll:` and `nextPutBytes:`
+  (standard streams, file streams and sockets, TLS included) and UDP `send:`.
+  The `Error` names the selector that was sent, says "an Array is not bytes"
+  and names the replacement, `ByteArray withAll: anArray` (or a literal
+  `#[1 2 3]`); nothing is written. The warning and its code path are
   gone. Tests: `14-io/files_bytes_array_refused.st` (was
   `files_bytes_array_deprecated.st`), `14-io/net_udp_array_refused.st`;
   `files_bytes_bad_array.st` now expects the Array refusal, and
