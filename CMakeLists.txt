@@ -232,6 +232,7 @@ add_library(protost_runtime STATIC
     src/runtime/STRuntime.cpp
     src/runtime/TimerService.cpp
     src/runtime/ExecutionEngine.cpp
+    src/runtime/TransientPin.cpp
     src/runtime/Interrupt.cpp
     src/runtime/Bootstrap.cpp
     src/runtime/HandlerStack.cpp

@@ -287,9 +287,6 @@ inline unsigned int computeMaxStack(const BytecodeModule& m) {
 // pre-sized 1 M-slot array).
 thread_local unsigned int g_scratchCursor = 0;
 
-// K15: the innermost live overflow-chain pin of this thread (TransientPin.h).
-thread_local TransientPin* g_overflowTop = nullptr;
-
 // Compile-time consistency: the scratch geometry in TransientPin.h must match
 // this engine's slot capacity, or a primitive would pin into slots the
 // engine believes are free frame storage. ExecutionEngine::kSlotCapacity is
@@ -429,6 +426,42 @@ ExecutionEngine::flushInstVarGroup(proto::ProtoContext* ctx, Frame& f) {
 thread_local std::vector<std::vector<ExecutionEngine::Frame>>
     ExecutionEngine::framePool_;
 
+// K18: see EntryContext in ExecutionEngine.h.
+bool EntryContext::isProtoSTContext(const STRuntime& rt, const proto::ProtoContext* ctx) {
+    if (ctx == rt.rootCtx()) return true;
+    for (const ExecutionEngine* e : g_liveEngines)
+        if (&e->rt_ == &rt && e->ctx_ == ctx) return true;
+    return false;
+}
+
+EntryContext::EntryContext(STRuntime& rt, proto::ProtoContext* ctx) : ctx_(ctx) {
+    if (isProtoSTContext(rt, ctx)) return;
+    // The child's array is its own: frames start at the region base and pins
+    // at the top of its scratch region, whatever the thread's cursors stand at
+    // in the contexts below. No pin or frame of those contexts is released
+    // while this entry runs (they are below it on the C++ stack), so the
+    // cursors are simply saved here and put back in the destructor.
+    own_.emplace(ctx->space, ctx);
+    ctx_ = &*own_;
+    savedSlotCursor_    = g_slotCursor;
+    savedScratchCursor_ = g_scratchCursor;
+    g_slotCursor    = kFrameRegionBase;
+    g_scratchCursor = 0;
+}
+
+EntryContext::~EntryContext() {
+    if (!own_) return;
+    g_slotCursor    = savedSlotCursor_;
+    g_scratchCursor = savedScratchCursor_;
+    // own_ is destroyed next and anchors the return value in the caller's
+    // context (~ProtoContext).
+}
+
+const proto::ProtoObject* EntryContext::leave(const proto::ProtoObject* result) {
+    if (own_) own_->returnValue = result;
+    return result;
+}
+
 ExecutionEngine::ExecutionEngine(STRuntime& rt)
     : rt_(rt), bs_(rt.bootstrap()), dbg_(rt.debugger()) {
     g_liveEngines.push_back(this);
@@ -494,8 +527,9 @@ ExecutionEngine::pushFrame(const BytecodeModule* m,
     fr.homeFrameId = (homeFrameId == 0) ? fr.frameId : homeFrameId;
     // F6 v3 E5: the engine's slot capacity and the TransientPin scratch
     // geometry must agree — pushFrame is a member function so it can see the
-    // private constant. Frame regions occupy [0, kFrameRegionLimit); the top
-    // kScratchSlots slots are reserved for transient pins.
+    // private constant. Transient pins occupy the bottom kScratchSlots slots
+    // (slots 0 and 1 hold their overflow chain, TransientPin.h); frame regions
+    // occupy [kFrameRegionBase, kFrameRegionLimit).
     static_assert(kSlotCapacity == kEngineSlotCapacity,
                   "engine kSlotCapacity must equal TransientPin kEngineSlotCapacity");
 

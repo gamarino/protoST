@@ -1376,7 +1376,12 @@ STRuntime::runModuleTopLevel(const BytecodeModule& m, proto::ProtoContext* ctx) 
 // lock guarding readyQueue / scheduledSet, so concurrent schedule / drain
 // callers never race on the registry. Callers MUST NOT already hold schedMu.
 void STRuntime::registryAdd(proto::ProtoContext* ctx, const proto::ProtoObject* o) {
-    if (!o || o == PROTO_NONE || !impl_->liveRegistry) return;
+    if (!o || o == PROTO_NONE) return;
+    // The registry is created with the runtime, before any caller can reach
+    // here. Without it the object would be rooted by nothing, silently (the
+    // shape of K15), so its absence is an error, not a no-op.
+    if (!impl_->liveRegistry)
+        throw std::logic_error("protoST: registryAdd before the live registry exists");
     // No lock: setAttribute on a mutable object is internally atomic
     // (protoCore's per-attribute shard CAS), so concurrent registryAdd /
     // registryRemove / enqueueReady calls on liveRegistry never corrupt it.

@@ -61,11 +61,24 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
   recycled cell's size overflowed appendLast's stack buffer). A pin that finds
   the region full now goes on a per-context overflow chain (one list cell per
   pin, its head in a reserved scratch slot, released without allocating), so
-  the number of live pins is bounded only by memory. A pin made with a nil
-  object now claims its place too, so a later `reset:` roots its object. Not a
-  protoCore bug. Tests: `tests/unit/test_transient_pin.cpp` (1000 live pins,
-  deterministic) and `tests/conformance/09-collections/collect-deep-nesting-gc.st`
-  (0.9.0 crashed 10 runs out of 10).
+  the number of live pins is bounded only by memory. The chain code is out of
+  line, so a pin in the region costs what it did (+0.07 % instructions on a
+  pin-heavy loop, cycles unchanged). A chain pin released out of LIFO order
+  aborts the process with a message in every build. A `TransientPin` made with
+  a null object pointer now claims its place too, so a later
+  `TransientPin::reset` roots its object. Not a protoCore bug. Tests:
+  `tests/unit/test_transient_pin.cpp` (1000 live pins, deterministic; unwinding,
+  two contexts, out-of-order release) and
+  `tests/conformance/09-collections/collect-deep-nesting-gc.st` (0.9.0 crashed
+  10 runs out of 10).
+- **A send into protoST from another runtime's frame context wrote into that
+  frame's slots (K18).** `__st_send__` ran the message on the caller's context
+  whenever it belonged to protoST's space, so protoST's engine grew another
+  runtime's frame context to its own geometry and put transient pins at the
+  same indices as the frame's locals (a send nested about 250 pins deep
+  overwrote them). The message now runs on a child context of any context
+  that is not protoST's own, with the frame and pin cursors started afresh for
+  it. Test: `tests/unit/test_foreign_frame_context.cpp`.
 
 - **`lib/json.st` crashed on every `\uXXXX` escape (K17).** The parser sent
   `and:ifTrue:` (an unparenthesised `and:` before `ifTrue:`) in its hex-digit

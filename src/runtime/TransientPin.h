@@ -95,14 +95,16 @@
 // A pin that finds the region full now goes on the context's OVERFLOW CHAIN:
 // one ProtoList cell `[object, previous head]` per pin, the head kept in the
 // reserved scratch slot kOverflowHeadSlot. The chain is one traced root (no
-// ProtoRootSet handle per pin), the region's fast path is unchanged, and the
-// number of live pins is bounded only by memory. Releasing a chain pin
-// restores the head it replaced and allocates nothing, so a destructor never
-// reaches a GC point. Creating one allocates a single cell; the object being
-// pinned sits in the reserved slot kOverflowStageSlot during that allocation,
-// so it is rooted throughout. `reset` on a chain pin rebuilds the cells of
-// the pins above it on the same context (none, for the usual reset of the
-// innermost pin).
+// ProtoRootSet handle per pin) and the number of live pins is bounded only by
+// memory. The chain code is out of line (TransientPin.cpp), so a pin in the
+// region costs what it did before. Releasing a chain pin restores the head it
+// replaced and allocates nothing, so a destructor never reaches a GC point.
+// Creating one allocates a single cell; the object being pinned sits in the
+// reserved slot kOverflowStageSlot during that allocation, so it is rooted
+// throughout. `reset` on a chain pin rebuilds the cells of the pins above it
+// on the same context, in one pass (none, for the usual reset of the innermost
+// pin). A chain pin released out of LIFO order would un-root every pin above
+// it, so that misuse aborts the process in every build, with a message.
 #ifndef PROTOST_TRANSIENT_PIN_H
 #define PROTOST_TRANSIENT_PIN_H
 
@@ -110,7 +112,6 @@
 
 #include <cassert>
 #include <cstddef>
-#include <vector>
 
 namespace protoST {
 
@@ -143,10 +144,9 @@ inline constexpr unsigned int kScratchPinSlots    = kScratchSlots - 2;
 // Defined in ExecutionEngine.cpp alongside the frame-region cursor.
 extern thread_local unsigned int g_scratchCursor;
 
-class TransientPin;
-// The innermost live overflow-chain pin of this thread (nullptr when none).
-// Defined in ExecutionEngine.cpp.
-extern thread_local TransientPin* g_overflowTop;
+// Number of live overflow-chain pins on the calling thread (TransientPin.cpp).
+// For tests and diagnostics.
+std::size_t overflowPinsOnThisThread();
 
 // Highest value g_slotCursor (the frame-region cursor, defined in
 // ExecutionEngine.cpp) is allowed to reach.
@@ -177,9 +177,8 @@ inline void ensureEngineSlots(proto::ProtoContext* ctx, unsigned int needed) {
 class TransientPin {
 public:
     TransientPin(proto::ProtoContext* ctx, const proto::ProtoObject* obj)
-        : ctx_(ctx) {
+        : ctx_(ctx), slot_(0) {
         if (!ctx_) return;
-        if (!obj) obj = PROTO_NONE;
         // The scratch region is the bottom of automaticLocals. A few
         // non-engine call sites (STRuntime::registryAdd / registryRemove /
         // runTopLevel) may pin on a worker / root context no engine has
@@ -188,44 +187,28 @@ public:
         if (g_scratchCursor < kScratchPinSlots) {
             slot_ = kScratchSlots - 1 - g_scratchCursor;
             ++g_scratchCursor;
-            ctx_->setAutomaticLocal(slot_, obj);
+            const bool stored = ctx_->setAutomaticLocal(slot_, obj ? obj : PROTO_NONE);
+            assert(stored && "TransientPin: scratch slot out of range");
+            (void)stored;
             return;
         }
-        // Allocate before linking, so an allocation that throws leaves the
-        // chain and the thread's pin stack as they were.
-        const proto::ProtoObject* head = ctx_->getAutomaticLocal(kOverflowHeadSlot);
-        const proto::ProtoObject* cell = chainCell(ctx_, obj, head);
-        ctx_->setAutomaticLocal(kOverflowHeadSlot, cell);
-        inChain_ = true;
-        prev_    = head;
-        below_   = g_overflowTop;
-        if (below_) below_->above_ = this;
-        g_overflowTop = this;
+        slot_ = pushChain(ctx_, obj ? obj : PROTO_NONE);
     }
 
     ~TransientPin() {
         if (!ctx_) return;
-        if (!inChain_) {
-            // LIFO discipline: the slot we release must be the most recently
-            // claimed one. C++ scope nesting guarantees this for
-            // stack-allocated pins; the assert catches a misuse (e.g. a
-            // heap-allocated pin outliving a later one).
-            assert(g_scratchCursor > 0 &&
-                   slot_ == kScratchSlots - g_scratchCursor &&
-                   "TransientPin: non-LIFO release");
-            --g_scratchCursor;
-            // Clear the slot so a stale pointer is not retained past the
-            // pin's lifetime (keeps the GC from over-retaining a dead
-            // transient).
-            ctx_->setAutomaticLocal(slot_, PROTO_NONE);
-            return;
-        }
-        assert(g_overflowTop == this && "TransientPin: non-LIFO release");
-        // The previous head is the second element of this pin's cell, so it
-        // was reachable all along; restoring it allocates nothing.
-        ctx_->setAutomaticLocal(kOverflowHeadSlot, prev_);
-        g_overflowTop = below_;
-        if (below_) below_->above_ = nullptr;
+        if (slot_ >= kScratchSlots) { popChain(ctx_, slot_); return; }
+        // LIFO discipline: the slot we release must be the most recently
+        // claimed one. C++ scope nesting guarantees this for stack-allocated
+        // pins; the assert catches a misuse (e.g. a heap-allocated pin
+        // outliving a later one).
+        assert(g_scratchCursor > 0 &&
+               slot_ == kScratchSlots - g_scratchCursor &&
+               "TransientPin: non-LIFO release");
+        --g_scratchCursor;
+        // Clear the slot so a stale pointer is not retained past the pin's
+        // lifetime (keeps the GC from over-retaining a now-dead transient).
+        ctx_->setAutomaticLocal(slot_, PROTO_NONE);
     }
 
     // Re-point the pin at a different object. Used when a transient is
@@ -235,34 +218,16 @@ public:
     void reset(const proto::ProtoObject* obj) {
         if (!ctx_) return;
         if (!obj) obj = PROTO_NONE;
-        if (!inChain_) {
-            ctx_->setAutomaticLocal(slot_, obj);
-            return;
-        }
-        // A chain cell is immutable: build a new one for this pin and for
-        // every pin above it on this context, each linked to the one below,
-        // then publish the new head. Until the publish the old chain is the
-        // head, so every object above stays rooted; `obj` is rooted by the
-        // stage slot, and the new cells are young cells of ctx_, which an
-        // allocation never submits.
-        // The cells are all built before any pin is updated, so an
-        // allocation that throws leaves the chain as it was.
-        std::vector<const proto::ProtoObject*> cells;
-        cells.push_back(chainCell(ctx_, obj, prev_));
-        for (TransientPin* p = above_; p; p = p->above_)
-            if (p->ctx_ == ctx_) cells.push_back(chainCell(ctx_, p->pinned(), cells.back()));
-        std::size_t i = 1;
-        for (TransientPin* p = above_; p; p = p->above_)
-            if (p->ctx_ == ctx_) p->prev_ = cells[i++ - 1];
-        ctx_->setAutomaticLocal(kOverflowHeadSlot, cells.back());
+        if (slot_ >= kScratchSlots) { resetChain(ctx_, slot_, obj); return; }
+        ctx_->setAutomaticLocal(slot_, obj);
     }
 
     // The object this pin holds (PROTO_NONE for an empty pin, nullptr for an
     // inert one). For tests and diagnostics.
     const proto::ProtoObject* pinned() const {
         if (!ctx_) return nullptr;
-        if (!inChain_) return ctx_->getAutomaticLocal(slot_);
-        return chainCellOf(this)->getAt(ctx_, 0);
+        if (slot_ >= kScratchSlots) return chainPinned(ctx_, slot_);
+        return ctx_->getAutomaticLocal(slot_);
     }
 
     TransientPin(const TransientPin&)            = delete;
@@ -271,36 +236,17 @@ public:
     TransientPin& operator=(TransientPin&&)      = delete;
 
 private:
-    // One overflow-chain cell, [obj, below]. obj is staged in a traced slot
-    // across the allocation; `below` is already traced (the current head, or
-    // a cell of the chain being rebuilt).
-    static const proto::ProtoObject* chainCell(proto::ProtoContext* ctx,
-                                               const proto::ProtoObject* obj,
-                                               const proto::ProtoObject* below) {
-        ctx->setAutomaticLocal(kOverflowStageSlot, obj);
-        const proto::ProtoObject* items[2] = { obj, below };
-        const proto::ProtoList* cell = ctx->newList(2, items);
-        ctx->setAutomaticLocal(kOverflowStageSlot, PROTO_NONE);
-        return reinterpret_cast<const proto::ProtoObject*>(cell);
-    }
+    // The overflow chain (TransientPin.cpp), kept out of line and cold so the
+    // region path above is all that is inlined at a pin site. A chain pin's
+    // slot_ is kScratchSlots + its index on the thread's chain-pin stack.
+    static unsigned int pushChain(proto::ProtoContext* ctx, const proto::ProtoObject* obj);
+    static void popChain(proto::ProtoContext* ctx, unsigned int slot);
+    static void resetChain(proto::ProtoContext* ctx, unsigned int slot,
+                           const proto::ProtoObject* obj);
+    static const proto::ProtoObject* chainPinned(proto::ProtoContext* ctx, unsigned int slot);
 
-    // This chain pin's cell: the head, walked down past the pins above it on
-    // the same context.
-    static const proto::ProtoList* chainCellOf(const TransientPin* pin) {
-        const proto::ProtoObject* cell = pin->ctx_->getAutomaticLocal(kOverflowHeadSlot);
-        for (const TransientPin* p = g_overflowTop; p && p != pin; p = p->below_)
-            if (p->ctx_ == pin->ctx_) cell = p->prev_;
-        return reinterpret_cast<const proto::ProtoList*>(cell);
-    }
-
-    proto::ProtoContext*      ctx_;
-    unsigned int              slot_    = 0;        // region pin: its slot
-    bool                      inChain_ = false;
-    // Chain pin: the head this pin's cell replaced (its cell's second
-    // element), and its neighbours on this thread's chain-pin stack.
-    const proto::ProtoObject* prev_    = nullptr;
-    TransientPin*             below_   = nullptr;
-    TransientPin*             above_   = nullptr;
+    proto::ProtoContext* ctx_;
+    unsigned int         slot_;   // region slot, or kScratchSlots + chain index
 };
 
 } // namespace protoST

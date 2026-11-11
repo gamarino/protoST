@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 #include "protoCore.h"  // proto::proto_ulong
@@ -15,6 +16,7 @@ namespace protoST {
 
 class STRuntime;
 class BytecodeModule;
+class EntryContext;
 class DebuggerRuntime;
 struct Bootstrap;
 struct DebugFrame;
@@ -161,6 +163,7 @@ public:
     const proto::ProtoObject* continueRun(proto::ProtoContext* ctx);
 
 private:
+    friend class EntryContext;   // K18: reads rt_ and ctx_ of live engines
     // F6 v3 E3: GC-correctness fix. The frame stack no longer holds any
     // ProtoObject* in plain C++ std::vectors — protoCore's tracing GC cannot
     // see the C++ heap. Instead, EVERY ProtoObject* a frame needs (locals,
@@ -390,4 +393,41 @@ private:
     const proto::ProtoObject* runLoop(proto::ProtoContext* ctx);
 };
 
+// K18: the context a message sent into protoST from outside runs on.
+//
+// protoST's engine treats its context's automaticLocals as its own: frame
+// regions at the thread's frame cursor, transient pins in the scratch slots
+// [0, kScratchSlots), and it grows the array to its geometry. That is right
+// for protoST's root context and for the context of an engine already running
+// on this thread, and wrong for any other context of protoST's space -- above
+// all another runtime's frame context, whose locals live in those same slots.
+//
+// Construct one at an entry with the context the message would run on. When
+// that context is not protoST's (isProtoSTContext), the entry opens a child
+// context of it and runs there, with the thread's frame and scratch cursors
+// started afresh for that context and restored when the entry ends. Answer the
+// result through leave(), which anchors it as the child's return value, so it
+// survives the child's young generation being submitted.
+class EntryContext {
+public:
+    EntryContext(STRuntime& rt, proto::ProtoContext* ctx);
+    ~EntryContext();
+    EntryContext(const EntryContext&) = delete;
+    EntryContext& operator=(const EntryContext&) = delete;
+
+    proto::ProtoContext* ctx() const { return ctx_; }
+    const proto::ProtoObject* leave(const proto::ProtoObject* result);
+
+    // True when `ctx` is `rt`'s root context or the context of an engine of
+    // `rt` live on this thread.
+    static bool isProtoSTContext(const STRuntime& rt, const proto::ProtoContext* ctx);
+
+private:
+    proto::ProtoContext* ctx_;
+    std::optional<proto::ProtoContext> own_;   // destroyed after the cursors are restored
+    unsigned int savedSlotCursor_ = 0;
+    unsigned int savedScratchCursor_ = 0;
+};
+
 } // namespace protoST
+

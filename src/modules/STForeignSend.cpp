@@ -1,4 +1,5 @@
 #include "runtime/ClassedErrorSignal.h"
+#include "runtime/ExecutionEngine.h"
 #include "runtime/NativeError.h"
 #include "runtime/ListIndex.h"
 #include "STForeignSend.h"
@@ -148,6 +149,11 @@ const proto::ProtoObject* foreignSendEntry(proto::ProtoContext* callerCtx,
         proto::ProtoContext* current = root->thread ? root->thread->getCurrentContext() : nullptr;
         ctx = (current && current->space == root->space) ? current : root;
     }
+    // K18: a context of protoST's space that is not protoST's own -- another
+    // runtime's frame context, whose locals sit in its automaticLocals -- is
+    // never run on directly; the message runs on a child context of it.
+    EntryContext entry(*rt, ctx);
+    ctx = entry.ctx();
 
     const proto::ProtoString* selector =
         proto::ProtoString::createSymbol(ctx, selStr->toStdString(callerCtx).c_str());
@@ -164,7 +170,8 @@ const proto::ProtoObject* foreignSendEntry(proto::ProtoContext* callerCtx,
     // caller shares protoST's space but is the host runtime's code, so the send
     // crosses the runtime boundary as a foreign one does -- on the caller's own
     // context, which belongs to protoST's space, from any thread of it.
-    if (!foreign && rt->ownsSpace()) return sendMessage(*rt, ctx, recv, selector, args.data(), argc);
+    if (!foreign && rt->ownsSpace())
+        return entry.leave(sendMessage(*rt, ctx, recv, selector, args.data(), argc));
 
     // The foreign boundary. The send is a native call boundary like a
     // primitive's: a C++ failure becomes a signalled Error, and with protoST's
@@ -216,7 +223,7 @@ const proto::ProtoObject* foreignSendEntry(proto::ProtoContext* callerCtx,
             "protoST: #" + selector->toStdString(ctx) +
             " left through a control-flow unwind (a non-local return, a resumption, "
             "a retry, or a Future yield), which cannot cross a runtime boundary");
-    return result ? result : PROTO_NONE;
+    return entry.leave(result ? result : PROTO_NONE);
 }
 
 void installForeignSendEntry(STRuntime& rt) {

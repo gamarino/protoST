@@ -292,6 +292,40 @@ message cells. It is recorded because the loss is silent to the senders
 
 ## Resolved
 
+### K18 — A send from another runtime's frame context ran on that context (resolved, unreleased)
+
+`__st_send__` (src/modules/STForeignSend.cpp) chose the context a message runs
+on as follows: the caller's context when it belongs to protoST's space, else
+protoST's current context on the thread (also only when it is in protoST's
+space), else the root context. A runtime that shares protoST's space (one
+space per process) and gives each interpreted frame a `ProtoContext` of its
+own, chained to its caller, therefore had its frame context used by protoST's
+engine as if it were protoST's. Two effects, reproduced by
+`tests/unit/test_foreign_frame_context.cpp` (a frame with four locals sends
+into protoST, which nests `collect:` 300 deep):
+
+- The engine grew the frame's `automaticLocals` to its own geometry (4,096
+  slots and up) with `resizeAutomaticLocals`. That can reallocate the array
+  under a runtime that keeps a pointer to its locals. In the test protoCore grew
+  it in place on the context slot stack, so the address did not change, but
+  nothing guarantees that.
+- Transient pins went into the scratch slots counting down from 255, and with
+  the K15 chain the reserved slots 0 and 1, which are the indices of the
+  frame's own locals. In the test, the frame's locals no longer held their
+  values after the send (the check failed before the fix). A shallow send
+  takes a few pins near slot 255 and touched only a frame with that many
+  locals. Before K15's fix the region reached slot 0 at the 256th pin, so this
+  is not a regression of K15.
+
+Fix: `EntryContext` (src/runtime/ExecutionEngine.h). At the `__st_send__`
+boundary, a context that is not protoST's own (its root context or the context
+of one of its engines live on this thread) is never run on: the message runs on
+a child context of it, with the thread's frame cursor and pin cursor started
+afresh for that child and restored when the send ends, and the result is
+anchored as the child's return value. `__st_send__` is the only entry from
+foreign code that runs protoST code on a caller's context (module loads run on
+the root context).
+
 ### K15 — Deep nesting crashed the runtime: transient pins past 256 rooted nothing (resolved, unreleased)
 
 Repeatedly walking values nested 400-509 deep (protoBaseST's codec,
@@ -314,7 +348,10 @@ A pin that finds the region full now goes on a per-context overflow chain
 (one ProtoList cell `[object, previous head]` per pin, its head in reserved
 scratch slot 0, the pinned object staged in slot 1 while the cell is
 allocated). Releasing restores the previous head without allocating, and
-`reset:` rebuilds the cells above the pin. Tests:
+`TransientPin::reset` rebuilds the cells above the pin in one pass. The chain
+code is out of line (src/runtime/TransientPin.cpp), so a pin in the region
+costs what it did. A chain pin released out of LIFO order would un-root the
+pins above it, so it aborts the process with a message in every build. Tests:
 `tests/unit/test_transient_pin.cpp` (1000 live pins all reachable from the
 traced slots; on 0.9.0 744 of them were not) and
 `tests/conformance/09-collections/collect-deep-nesting-gc.st` (0.9.0 crashed
