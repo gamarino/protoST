@@ -2736,8 +2736,8 @@ zero, `-0` its sign.
 | `isFinite` `isInfinite` `isNaN` `isSignaling` `isZero` | the kind; `isNaN` is true for a quiet and a signaling NaN |
 | `printString` | the to-scientific-string, Python's `str(Decimal)` |
 | `asExactFraction` | an Integer or a reduced `Fraction`; Infinity and NaN signal `Error` |
-| `=` `~=` `<` `<=` `>` `>=` | exact comparison with a `Decimal` or any `Number` |
-| `hash` | consistent with `=` across `Integer`, `Fraction` and `Float` |
+| `=` `~=` `<` `<=` `>` `>=` | exact comparison with a `Decimal` or any `Number`, in both directions |
+| `hash` | consistent with `=` across `Integer`, `Fraction`, `Float` and `Decimal` (cost: see below) |
 | `sameRepresentationAs:` | kind, sign, coefficient (or payload) and exponent all equal |
 
 **Text in.** An optional sign, then digits with an optional point and an
@@ -2761,25 +2761,37 @@ Import from: 'decimal'.
 (Decimal fromString: 'nan0123') printString    "=> 'NaN123'"
 (Decimal fromString: '1.25') asExactFraction printString   "=> '(5/4)'"
 (Decimal fromString: '1.00') = 1               "=> true"
+1 = (Decimal fromString: '1.00')               "=> true"
 (Decimal fromString: '0.1') = 0.1              "=> false"
 (Decimal fromString: '1.0')
     sameRepresentationAs: (Decimal fromString: '1.00')   "=> false"
 ```
 
 **Comparison.** Values compare exactly: a finite `Float` is read through its
-`asExactFraction`, so the decimal `0.1` is not the binary `Float` `0.1`. The infinities order at the ends and equal the `Float`
-infinities. A NaN, quiet or signaling, `Decimal` or `Float`, is never `=` (so
-`~=` answers true), and `<`, `<=`, `>`, `>=` with one signal `Error`; so does
-ordering against an object that is not a number. Python's `==` signals for a
-signaling NaN; protoST's `=` answers `false`, because `=` is what collections
-send. Ordering and equality never build a power of ten larger than the
-operands' own digits, so `1E+999999 > 9E+999998` is immediate. `hash` and
-`asExactFraction` do build the exact value, so their cost grows with the size
-of the exponent.
+`asExactFraction`, so the decimal `0.1` is not the binary `Float` `0.1`. The
+comparison is symmetric, as in Python: with a number as the receiver
+(`1 = aDecimal`, `(1/2) < aDecimal`), the numeric primitives and `Fraction`
+ask the `Decimal` through `adaptToNumber:andSend:`, the double dispatch
+`Fraction` uses, so `1`, `1.0` and `1.00` are one key of a `Set` or a
+`Dictionary` whichever is added first. Arithmetic with a number, from either
+side, signals `Error` (D49). The infinities order at the ends and equal the
+`Float` infinities. A NaN, quiet or signaling, `Decimal` or `Float`, is never
+`=` (so `~=` answers true), and `<`, `<=`, `>`, `>=` with one signal `Error`;
+so does ordering against an object that is not a number. Python's `==`
+signals for a signaling NaN; protoST's `=` answers `false`, because `=` is
+what collections send. Ordering and equality never build a power of ten
+larger than the operands' own digits, so `1E+999999 > 9E+999998` is
+immediate.
 
-The comparison is defined on `Decimal` only: `1 = (Decimal fromString: '1')`
-answers `false`, because the numeric primitives do not know `Decimal`. Put
-the `Decimal` on the left, or compare `asExactFraction`.
+**Cost of `hash` and `asExactFraction`.** Both build the exact value, so their
+cost grows with the size of the exponent, without bound: for
+`1E+999999999999` they would try to build 10^(10^12) and exhaust memory, not
+only take time. `hash` must equal the hash of an equal `Integer`, `Fraction`
+or `Float`, and protoST hashes a `LargeInteger` through its decimal digits
+today. A modular numeric hash shared by `Integer`, `Fraction`, `Float` and
+`Decimal` (modulo 2^61 - 1, as Python's) is scheduled for the protoST C++
+work of the ProtoBase support; it makes `hash` cheap for every exponent.
+Until then, do not hash a `Decimal` with an exponent of untrusted size.
 
 ---
 

@@ -12,12 +12,18 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
   NaN and sNaN with payloads) with its text in both directions,
   `fromString:` for `Decimal(str)` and `printString` for `str(Decimal)`, which
   is ProtoBase's `@dec` text. `asExactFraction`, exact comparison with any
-  `Number` (`(Decimal fromString: '1.00') = 1` is true, `= 0.1` is false),
+  `Number`, in both directions (`(Decimal fromString: '1.00') = 1` and
+  `1 = (Decimal fromString: '1.00')` are true, `= 0.1` is false),
   `hash` consistent with `=`, and `sameRepresentationAs:` (`1.0` and `1.00`
   differ). No arithmetic, context or rounding (STATUS D49). Written in
   protoST; no new primitive, so it runs on the 0.9.0 binary. Docs:
   LANGUAGE.md §12.13, tutorial §9.8. Tests:
-  `tests/conformance/13-stdlib/decimal-*` (6 files).
+  `tests/conformance/13-stdlib/decimal-*` (8 files).
+- **`Fraction` defers to a non-Number that adapts** (`lib/kernel/fraction.st`):
+  `=`, `<` (and so `>`, `<=`, `>=`), `+`, `-`, `*`, `/`, and `Integer >> /`,
+  send `adaptToNumber:andSend:` to an argument that is not a Number but
+  understands it, as the numeric primitives already do. This is what makes
+  `(5/4) = aDecimal` answer `true`; numbers and Fractions are unaffected.
 
 ## 0.9.0 — bytes, binary files, encodings, MessagePack and timers (2026-11-10)
 

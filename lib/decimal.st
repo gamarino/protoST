@@ -37,7 +37,8 @@ TEXT
 
 COMPARISON
   =, ~=, <, <=, >, >= take any Number (Integer, Fraction, Float) or another
-  Decimal and compare exact values: a finite Float is read through its
+  Decimal and compare exact values, in both directions (a number receiver
+  dispatches back through adaptToNumber:andSend:, so 1 = aDecimal works): a finite Float is read through its
   asExactFraction, so (Decimal fromString: '0.1') = 0.1 is false. The
   infinities order at the ends and equal the Float infinities. A NaN (quiet
   or signaling, Decimal or Float) is never =, and any ordering involving one
@@ -45,8 +46,8 @@ COMPARISON
   across Integer, Fraction and Float. sameRepresentationAs: compares the
   representation instead: kind, sign, coefficient (or payload) and exponent.
 
-The value is immutable: the only initialiser is private (_setSign:...) and
-used by the class-side constructors."
+The value is immutable: the only initialiser is private (_setSign:...),
+used by the class-side constructors, and refuses a second call."
 
 Object subclass: #Decimal
   instanceVariableNames: 'sign coefficient exponent kind'.
@@ -160,6 +161,8 @@ Decimal class >> _invalid: aString
 "=== private initialiser ===================================================="
 
 Decimal >> _setSign: aSign coefficient: aCoefficient exponent: anExponent kind: aKind
+  "Runs once, on a fresh instance: a live Decimal never changes."
+  kind isNil ifFalse: [^ Error signal: 'Decimal is immutable: ' , self printString].
   sign := aSign.
   coefficient := aCoefficient.
   exponent := anExponent.
@@ -256,6 +259,20 @@ Decimal >> = anObject
 
 Decimal >> ~= anObject
   ^ (self = anObject) not.
+
+"Double dispatch from the numeric primitives and from Fraction, when a
+ number is the receiver and a Decimal the argument (1 = aDecimal,
+ (1/2) < aDecimal): the comparison is answered from the Decimal's side, so
+ it is symmetric. Arithmetic is refused (D49)."
+Decimal >> adaptToNumber: aNumber andSend: aSelector
+  aSelector == #= ifTrue: [^ self = aNumber].
+  aSelector == #~= ifTrue: [^ self ~= aNumber].
+  aSelector == #< ifTrue: [^ self > aNumber].
+  aSelector == #> ifTrue: [^ self < aNumber].
+  aSelector == #<= ifTrue: [^ self >= aNumber].
+  aSelector == #>= ifTrue: [^ self <= aNumber].
+  ^ Error signal: 'Decimal has no arithmetic (STATUS D49): ' , aNumber printString , ' '
+    , aSelector , ' ' , self printString , '; use asExactFraction'.
 
 Decimal >> < anObject
   ^ (self _orderWith: anObject) < 0.
