@@ -33,6 +33,7 @@
 #include "protoCore.h"
 
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <string>
 #include <thread>
@@ -115,8 +116,14 @@ struct CycleObserver {
 };
 
 // Ask for one more collection and wait for it, with this thread parked.
-// Answers whether a cycle completed within the budget.
-bool forceCycle(protoST::STRuntime& rt, CycleObserver& obs, std::chrono::seconds budget) {
+// Answers whether a cycle completed within the budget. triggerGC starts a
+// cycle only when the heap is short of free cells, so a request that is not
+// answered is followed by a little more garbage (`pressure`) and asked
+// again: how much garbage a round of the program leaves depends on the
+// interpreter (0.10.0's Array new: allocates far less), and the test must
+// not depend on it to get its collection.
+bool forceCycle(protoST::STRuntime& rt, CycleObserver& obs, std::chrono::seconds budget,
+                const std::function<void()>& pressure) {
     proto::ProtoSpace* sp = rt.space();
     const auto deadline = std::chrono::steady_clock::now() + budget;
     while (std::chrono::steady_clock::now() < deadline) {
@@ -126,6 +133,7 @@ bool forceCycle(protoST::STRuntime& rt, CycleObserver& obs, std::chrono::seconds
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
         if (obs.observe("waiting") > 0) return true;
+        pressure();
     }
     return false;
 }
@@ -159,11 +167,12 @@ TEST_CASE("S15: a forced collection completes and reclaims the interpreter's gar
     // starts a cycle only when the heap is short of free cells, so each round
     // re-creates the pressure; an idle process has, by protoCore's design, no
     // reason to collect at all.
-    forceCycle(h.rt, obs, std::chrono::seconds(20));
+    const auto pressure = [&] { h.run("1 to: 5000 do: [ :i | Array new: 8 ]. 0."); };
+    forceCycle(h.rt, obs, std::chrono::seconds(20), pressure);
     for (int round = 0; round < 4; ++round) {
         h.run("1 to: 20000 do: [ :i | Array new: 8 ]. 0.");
         obs.observe("after a program");
-        forceCycle(h.rt, obs, std::chrono::seconds(20));
+        forceCycle(h.rt, obs, std::chrono::seconds(20), pressure);
     }
 
     const uint64_t cyclesAfter = sp->getGCCycleCount();

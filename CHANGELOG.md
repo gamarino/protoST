@@ -297,12 +297,17 @@ minor release, so the two services arrive in 0.5.0.
 ### Performance
 
 - **Interpreter round 3 (driven by the protoBaseST/ProtoBase gap
-  analysis).** Per operation, 3x10^5 iterations in a method
-  (`benchmarks/micro/vm_ops.st`, self-checking), before -> after, in ns:
-  `Array new:` 1630 -> 714, `at:` 303 -> 215, `at:put:` 671 -> 375, `*`
-  224 -> 89, `\\` 509 -> 95, `//` 480 -> 95, `rem:` 464 -> 93,
-  `bitAnd:`+`bitOr:` 375 -> 114, instance-variable write 185 -> 126, send
-  209 -> 211, `perform:with:` 3669 -> 391. The changes:
+  analysis).** Per operation, in ns beyond the empty loop (the analysis's
+  own `ops.st`, 2x10^6 iterations in a method, minimum of three runs),
+  round-3 base -> final, CPython 3.14 in brackets: `i * 2` 129 -> 21
+  [26], `i \\ 7` 420 -> 24 [37], `i // 7` 378 -> 23 [24], `rem:` 315 ->
+  18, `bitAnd:` 135 -> 20 [29], `Array at:` 237 -> 133 [~0], `Array new:
+  4` 2710 -> 292 [113], send 130 -> 114 [42], `block value:` 116 -> 104
+  [29]. `perform:with:` 3800 -> 375 ns per call, loop included
+  (`benchmarks/micro/vm_ops.st`, self-checking). An instance-variable write
+  did not improve measurably (79 -> 112 in the full `ops.st` order, not
+  reproduced alone, where it runs 10 % fewer instructions; it is
+  protoCore's `setAttribute` and the collector). The changes:
   - `*`, `\\`, `//`, `rem:`, `bitAnd:`, `bitOr:` on two SmallIntegers are
     computed in the engine (opcodes `BIN_INT_MUL` 53 to `BIN_INT_OR` 58;
     overflow, a non-SmallInteger operand and a zero divisor fall back to the
@@ -322,12 +327,13 @@ minor release, so the two services arrive in 0.5.0.
   - A send no longer probes an immediate receiver or a primitive marker for
     actor and method attributes, and no object at all for the actor
     attribute until the process has created an actor.
-  The protoBaseST AVL workload runs 11 % fewer user instructions (10.16G ->
-  9.03G); its per-operation wall-clock ratios to ProtoBase barely move,
-  because its cycles are mostly protoCore's (allocation, sparse-list
-  lookup and update, the collector's sweep), not dispatch. The send itself
-  (~210 ns, CPython ~42) is unchanged: its cost is the method lookup in
-  protoCore and the frame push.
+  The protoBaseST AVL workload runs 9.5 % fewer user instructions (10.15G
+  -> 9.18G) and 3 % less CPU time; its ratios to ProtoBase moved from
+  14-25x to 13-22x per operation in one interleaved run and barely in
+  another, because its cycles are mostly protoCore's (allocation,
+  sparse-list lookup and update, the collector's sweep), not dispatch. A
+  send remains about 3x CPython's: the method lookup in protoCore and the
+  frame push.
 - **`==` and the nil tests never send (protoBaseST review P4).** As in
   Pharo, `==` is compiled to an identity test (`IDENTICAL`, opcode 52) and
   never looked up (Pharo's `ProtoObject>>==`: "No Lookup. Do not override"),
