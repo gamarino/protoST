@@ -1369,7 +1369,14 @@ const proto::ProtoObject* prim_Object_instVarNamedPut(STRuntime&, proto::ProtoCo
         throw NativeError("instVarNamed:put: the receiver has no instance variables");
     const proto::ProtoString* key = ivarKey(ctx, a[0]);
     TransientPin pinKey(ctx, reinterpret_cast<const proto::ProtoObject*>(key));
-    const_cast<proto::ProtoObject*>(r)->setAttribute(ctx, key, a[1]);
+    // On an immutable receiver (a block closure, a method) protoCore's
+    // setAttribute leaves the receiver unchanged and answers a new object.
+    // Dropping that object would lose the write silently; refuse instead.
+    const proto::ProtoObject* written = r->setAttribute(ctx, key, a[1]);
+    if (written != r)
+        throw ClassedErrorSignal("ModificationForbidden",
+                                 "instVarNamed:put: the receiver is an immutable value "
+                                 "(a block or a method); nothing was written");
     return a[1];
 }
 

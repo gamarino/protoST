@@ -1168,6 +1168,13 @@ A block `[ :args | temps body ]` is a literal closure object — an instance of
 `Block`. Evaluating a block *literal* produces the closure; it does not run the
 body. The body runs only when the block is *evaluated* with `value`/`value:`/…
 
+A closure is an immutable value (since 0.10.0): it has no instance variables,
+and `aBlock instVarNamed: 'x' put: v` signals `ModificationForbidden` instead
+of storing anything. Each evaluation of a literal still makes a distinct
+closure (two of them are neither `==` nor `=`). Captured variables are not
+part of the closure's own state, so a block can still write the variables it
+captures (§6.3).
+
 ### 6.2 Evaluating a block
 
 A block is evaluated by sending it a `value`-family message whose arity matches

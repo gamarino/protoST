@@ -283,7 +283,14 @@ minor release, so the two services arrive in 0.5.0.
     its four attributes as one version (`setAttributes`); nothing writes a
     closure afterwards, and a method, which is a closure, is immutable too.
     Two closures of one literal remain distinct objects (test
-    `06-blocks/block-closures-are-distinct-objects.st`).
+    `06-blocks/block-closures-are-distinct-objects.st`). A block has no
+    instance variables to set: `aBlock instVarNamed: 'x' put: v`, which
+    stored the value on the mutable closure of 0.9.x, now signals
+    `ModificationForbidden`; without the check the write would have been
+    lost silently (test `06-blocks/block-instvar-write-is-refused.st`).
+    Instance-variable assignment in a method refuses an immutable receiver
+    the same way (the compiler already rejects it in `BlockClosure`
+    methods).
   - `isKindOf:` was a kernel method (`self class`, then `or:` with a block,
     then `__hasAncestor:`); it is now one primitive over the same ancestor
     test. It uses the receiver's real class, as Pharo's (where `class` is a
@@ -306,7 +313,7 @@ minor release, so the two services arrive in 0.5.0.
   4,300 -> 790-830; `[ 1 ] on: Error do: [...]` 12,000-15,000 -> 1,280;
   `isKindOf:` 9,500-14,000 -> 260-400 (the `or:` block was most of it). The
   comparable suite (`perf stat -r 3`, instructions / cycles): `fib` -16 % /
-  -20 %, `attr_lookup` -11 % / -17 %, `exception_latency` -24 % / -27 %,
+  -12..-20 % (two machines' runs; instructions are the stable figure), `attr_lookup` -11 % / -17 %, `exception_latency` -24 % / -27 %,
   `int_sum_loop` -9 % / -2 %, `list_append` -4 % / -5 %. protoBaseST's
   AVL on 1000-element trees: `posAt:` 209-222 -> 151 us, `keyAt:` 128-154
   -> 85 us, `keyPut:` 1,088-1,167 -> 831-841 us; the rest of that cost is
