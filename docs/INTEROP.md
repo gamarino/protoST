@@ -641,7 +641,11 @@ libraries. At startup it must, in order:
 The sections above are about objects shared inside one process. Since 0.9.0
 protoST also exchanges **bytes** with other languages, and that needs no shared
 `ProtoSpace`: a document, a record or a lock on a file is the same for every
-reader. What was run, with a real second implementation:
+reader. Since 0.9.1 a value that must be unique across processes and
+languages (ProtoBase's UUIDs) can be built from `ByteArray randomBytes:` (the
+operating system's generator, as Python's `os.urandom`) and dated with `Time
+utcMicroseconds` (the Unix epoch, as Python's `time.time_ns() // 1000`).
+What was run, with a real second implementation:
 
 | Claim | Status | Evidence |
 |-------|--------|----------|

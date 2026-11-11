@@ -300,6 +300,18 @@ $ ./build/protost time-demo.st
 #(90 210 Duration '2026-10-15')
 ```
 
+Two clocks, two names. `Time utcMicroseconds` is the wall clock: microseconds
+since 1970-01-01T00:00Z, the number to date an event with (a log line, a
+record's creation time); it follows the system clock, so it can jump when the
+clock is set. `Time microsecondClockValue` and `millisecondClockValue` are
+monotonic: their origin is arbitrary and only differences mean anything, so
+they measure durations and are never dates. (Pharo's `microsecondClockValue`
+is a wall clock; in protoST the wall clock has its own selector.)
+
+```smalltalk
+Time utcMicroseconds > 1767225600000000      "=> true"
+```
+
 There are no time zones: `Time now` and `Date today` are local wall-clock
 readings. A `Date` built with `year:month:day:` answers `nil` to `dayOfWeek`;
 only `Date today` knows its weekday.

@@ -16,6 +16,7 @@
 #include <protoio/digest.h>
 #include <protoio/encoding.h>
 #include <protoio/error.h>
+#include <protoio/random.h>
 
 #include <cerrno>
 #include <cmath>
@@ -123,6 +124,34 @@ PRIM(prim_BytesWithAll) {
     for (proto::proto_ulong i = 0; i < n; ++i)
         out.push_back(byteOf(ctx, list->getAt(ctx, listIndex(i))));
     return makeBytes(ctx, out);
+}
+
+// ByteArray __randomBytes: n -> n bytes from the operating system's
+// cryptographically secure generator (protoio::random::bytes), as a frozen
+// value like every other ByteArray. n is a SmallInteger from 0 to
+// kMaxRandomBytes; anything else signals InvalidArgument. The draw runs
+// unmanaged: getrandom may wait for the kernel pool at boot, and the lambda
+// touches no protoCore object (only C++ values); the value is built after
+// the bracket, with the context managed again.
+constexpr long long kMaxRandomBytes = 1048576;  // 1 MiB (protoBaseST plan, C4)
+
+PRIM(prim_RandomBytes) {
+    ARGS(1, "__randomBytes:");
+    const PO* v = a[0];
+    if (!v || v == PROTO_NONE || !v->isInteger(ctx) || !proto::isSmallInt(v))
+        throw ClassedErrorSignal("InvalidArgument",
+                                 "ByteArray randomBytes: the size must be an Integer from 0 to "
+                                     + std::to_string(kMaxRandomBytes));
+    const long long n = v->asLong(ctx);
+    if (n < 0 || n > kMaxRandomBytes)
+        throw ClassedErrorSignal("InvalidArgument",
+                                 "ByteArray randomBytes: the size must be from 0 to "
+                                     + std::to_string(kMaxRandomBytes) + ", not "
+                                     + std::to_string(n));
+    const std::string bytes = unmanaged(ctx, [n] {
+        return protoio::random::bytes(static_cast<std::size_t>(n));
+    }, "ByteArray randomBytes:");
+    return makeBytes(ctx, bytes);
 }
 
 PRIM(prim_BytesSize) {
@@ -589,6 +618,7 @@ void installBytesPrimitives(STRuntime& rt) {
         {"__packSigned:width:bigEndian:", prim_PackSigned},
         {"__packFloat:width:bigEndian:", prim_PackFloat},
         {"__base64Decode:", prim_Base64Decode},
+        {"__randomBytes:", prim_RandomBytes},
     };
     for (const Entry& e : classSide) bindClassPrimitive(rt, p, e.sel, reg.registerPrim(e.fn));
 }

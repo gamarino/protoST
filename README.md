@@ -238,7 +238,9 @@ several cores without locks.
 
 ## Status
 
-Version 0.9.0 (2026-11-10); built from source it requires protoCore 3.4.0 or
+Version 0.9.0 (2026-11-10); 0.9.1 (unreleased: `ByteArray randomBytes:`,
+`Time utcMicroseconds`) is in development and needs protoIO 0.5.0 or a later
+0.5.x. Built from source, 0.9.0 requires protoCore 3.4.0 or
 newer (SOVERSION 5) and protoIO 0.4.0 (tag `v0.4.0`) or a later 0.4.x; its `.deb`
 (below) requires protoCore 3.5.2. CI builds against
 protoCore 3.5.2 (tag `v3.5.2`) and the 3.4.0 floor. On 0.9.0 (2026-11-10), `ctest` ran 1291 cases on Linux, all passing: 685
@@ -259,7 +261,7 @@ known deviations from Smalltalk-80 and the open bugs are tracked in
 
 protoST depends on [protoCore](https://github.com/numaes/protoCore) 3.4.0 or
 newer (below 4.0), which must be built first, on
-[protoIO](https://github.com/gamarino/protoIO) 0.4.0 or a later 0.4.x at build time (a sibling
+[protoIO](https://github.com/gamarino/protoIO) 0.5.0 or a later 0.5.x at build time (0.9.0 needed 0.4.x; a sibling
 checkout `../protoIO`, or its `protoio-dev` package; it is linked statically),
 and on OpenSSL (`libssl-dev`) and libreadline. 3.4.0 is a hard floor (it
 changed `ProtoContext`'s layout, SOVERSION 5, so an older `libprotoCore` does

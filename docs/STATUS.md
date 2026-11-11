@@ -41,8 +41,10 @@ stable id and file it in the right bucket.
   well, `docs/INSTALLATION.md`, "Windows (MSVC)"). `cli_concurrent_first_call`
   (S19) gates CI again since 0.6.3. The history of earlier counts is in
   `CHANGELOG.md`.
-- **protoCore, protoIO:** 0.9.0 requires protoIO 0.4.0 or a later 0.4.x (a
-  0.3.x checkout is refused at configure time). 0.9.0 and 0.8.1 require protoCore
+- **protoCore, protoIO:** 0.9.1 (unreleased) requires protoIO 0.5.0 or a
+  later 0.5.x, for `ByteArray randomBytes:` and `Time utcMicroseconds` (a
+  0.4.x checkout is refused at configure time); 0.9.0 requires protoIO 0.4.0
+  or a later 0.4.x. 0.9.0 and 0.8.1 require protoCore
   3.4.0 or later built from source; 0.9.0's `.deb` requires 3.5.2 and 0.8.1's
   3.5.0 (SOVERSION 5 in all; 0.8.0 required 3.4.0, which removed
   `ProtoContext::pendingRoot`, so `ProtoContext`'s layout changed; 0.7.0

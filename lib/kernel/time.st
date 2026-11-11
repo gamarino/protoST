@@ -67,10 +67,20 @@ Time class >> hour: h minute: m second: s
   ^ self basicNew setHours: h minutes: m seconds: s.
 
 Time class >> millisecondClockValue
+  "A monotonic clock in milliseconds, from an unspecified origin: only the
+   difference between two readings means anything."
   ^ nil __clockMilliseconds.
 
 Time class >> microsecondClockValue
+  "A monotonic clock in microseconds, from an unspecified origin (unlike
+   Pharo's, it is not the wall clock: see utcMicroseconds)."
   ^ nil __clockMicroseconds.
+
+Time class >> utcMicroseconds
+  "The wall clock: microseconds since 1970-01-01T00:00Z (the Unix epoch). It
+   dates events; it follows the system clock when that is set, so it does not
+   measure durations (microsecondClockValue does)."
+  ^ nil __utcMicros.
 
 Time class >> millisecondsToRun: aBlock
   | start |

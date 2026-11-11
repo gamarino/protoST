@@ -5,8 +5,36 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+## 0.9.1 — protoBaseST groundwork (unreleased)
+
+**Requires protoIO 0.5.0** (or a later 0.5.x; a 0.4.x checkout is refused at
+configure time). The planned floor was 0.4.1; protoIO numbers new API as a
+minor release, so the two services arrive in 0.5.0.
+
 ### Added
 
+- **`ByteArray randomBytes: n` and `Time utcMicroseconds`.**
+  `randomBytes:` answers `n` bytes from the operating system's
+  cryptographically secure generator (protoIO's `random::bytes`: `getrandom`
+  on Linux, `arc4random_buf` on macOS and the BSDs, `BCryptGenRandom` on
+  Windows), as a frozen `ByteArray` like every other, so it is shared without
+  a lock. `n` is a SmallInteger from 0 to 1048576 (1 MiB); a negative or
+  larger size, a LargeInteger or a non-Integer signals `InvalidArgument`. The
+  call runs outside the collector's quorum (`unmanaged`), since `getrandom`
+  may wait for the kernel pool at boot. `Time utcMicroseconds` answers the
+  wall clock as microseconds since 1970-01-01T00:00Z, a SmallInteger
+  (protoIO's `clock::utcMicroseconds`); `Time microsecondClockValue` stays
+  monotonic, and the wall clock has its own name so that neither reading is
+  mistaken for the other (Pharo's `microsecondClockValue` is a wall clock).
+  `DateTime nowUTC` (`lib/calendar.st`) is built on it, and
+  `13-stdlib/calendar-now-utc.st` now runs instead of skipping. Docs:
+  LANGUAGE.md §12.12.1 and the new §12.15 (clocks); tutorial §9.7 and §15.11.
+  Tests: `15-binary/random_bytes.st`, `random_bytes_bounds.st`,
+  `random_bytes_sizes.st`, `random_bytes_actors.st` (four actors drawing at
+  once; in the `tsan` label), `12-builtins/time_utc_microseconds.st` (bounded
+  by two wall-clock readings taken around it, never by elapsed time). The
+  version banner in the REPL transcripts of tutorial chapters 1 and 12 and
+  the `User-Agent` in `14-io/http_request_shape.st` read 0.9.1.
 - **Python's numeric hash and `raisedTo:modulo:` (R3).** `hash` of an
   `Integer`, `LargeInteger`, `Float`, `Fraction` and `Decimal` is now
   CPython's numeric hash (modulo 2^61 - 1, Python's "Hashing of numeric

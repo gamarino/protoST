@@ -1,6 +1,8 @@
 # Installing protoST
 
-protoST 0.9.0 is a Smalltalk-syntax, actor-native runtime on protoCore. It is
+protoST 0.9.0 is a Smalltalk-syntax, actor-native runtime on protoCore (0.9.1,
+in development, adds `ByteArray randomBytes:` and `Time utcMicroseconds` and
+needs protoIO 0.5.0). It is
 a consumer of protoCore, never a bundler of it: `bin/protost` links
 `libprotoCore.so.5`, and every package protoST produces declares a runtime
 dependency on protoCore's own package instead of shipping a copy.
@@ -26,7 +28,9 @@ was last run locally (2026-11-10) against protoCore 3.5.2 and protoIO 0.4.0.
   Fedora/RHEL, `brew install readline` on macOS). It is a hard requirement:
   `find_library(READLINE_LIBRARY NAMES readline REQUIRED)`, except on Windows,
   where the REPL uses the console's own line editing (*Windows (MSVC)*).
-- **protoIO 0.4.0 or a later 0.4.x** at build time only (0.4.0 adds
+- **protoIO 0.5.0 or a later 0.5.x** at build time only (0.5.0 adds
+  `random::bytes` and `clock::utcMicroseconds`, behind `ByteArray randomBytes:`
+  and `Time utcMicroseconds` in protoST 0.9.1; 0.9.0 needs 0.4.x; 0.4.0 adds
   `file::EndGuard`, the end guard `BinaryFile` uses, and the `Conflict`
   error kind; 0.3.0 added the
   byte-level functions behind `ByteArray`, `BinaryFile` and `MessagePack`:
@@ -36,7 +40,7 @@ was last run locally (2026-11-10) against protoCore 3.5.2 and protoIO 0.4.0.
   listener on a host-less address (0.2.2) and `readBufferedLine` (0.2.3, with
   which `nextLine` takes a line already in protoIO's read buffer without
   leaving the collector's quorum); protoIO's package is compatible within one
-  minor version, so a 0.3 or 0.5 is refused): the I/O
+  minor version, so a 0.4 or 0.6 is refused): the I/O
   library shared by the protoCore
   runtimes (files, processes, TCP, UDP, TLS, HTTP), linked statically, so the
   installed `protost` does not depend on it. Either install its `protoio-dev`
