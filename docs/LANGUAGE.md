@@ -2793,6 +2793,111 @@ today. A modular numeric hash shared by `Integer`, `Fraction`, `Float` and
 work of the ProtoBase support; it makes `hash` cheap for every exponent.
 Until then, do not hash a `Decimal` with an exponent of untrusted size.
 
+### 12.14 Calendar values: the `calendar` module
+
+Unreleased (after 0.9.0). `Import from: 'calendar'` binds the globals
+`CalendarDate`, `TimeOfDay`, `DateTime`, `TimeSpan`, `ZoneOffset`, `ZoneName`
+and the error `TimeZoneUnavailable` (a subclass of `Error`). They are exact,
+immutable calendar values that count microseconds over the proleptic
+Gregorian calendar, years 1 to 9999, with the model of Python's `datetime`
+module (`date`, `time`, `datetime`, `timedelta`, `timezone`) as ProtoBase's
+format 4 stores it (`@date`, `@time`, `@dt`, `@td`). They are written in
+protoST (`lib/calendar.st`).
+
+They are protoST's own classes (STATUS D50): the kernel's `Date`, `Time` and
+`Duration` (§9.7 of the tutorial) keep their meaning and are not replaced by
+the import. There is **no IANA time-zone database**: a `ZoneName` keeps its
+key as text, and anything that needs the zone's rules signals
+`TimeZoneUnavailable`.
+
+**Zones.**
+
+| Message | Meaning |
+|---------|---------|
+| `ZoneOffset microseconds: us name: aString` | a fixed offset east of UTC, \|us\| < 86400 × 10^6, with a name (Python's `timezone(timedelta(microseconds=us), name)`) |
+| `ZoneOffset microseconds: us` | the same, named as Python names an unnamed offset: `UTC` for 0, else `UTC-03:00`, `UTC+05:30`, with `:SS` and `.ffffff` only when not zero |
+| `ZoneOffset utc` | offset 0, named `UTC` |
+| `microseconds` `name` `isoOffset` | the offset, the name, and the offset as `+HH:MM[:SS[.ffffff]]` |
+| `ZoneName key: aString` | an IANA zone (`America/Argentina/Buenos_Aires`), kept as a non-empty String; no rules |
+| `key` | the key |
+
+A `ZoneOffset` is `=` to another of the same offset whatever the names (as
+Python's `timezone`); a `ZoneName` to another of the same key. Zones have no
+order.
+
+**Dates, times and spans.**
+
+| Message | Meaning |
+|---------|---------|
+| `CalendarDate year: y month: m day: d` | a day of years 1..9999 |
+| `CalendarDate fromOrdinal: n` | the day number `n` (1 is 0001-01-01, 3652059 is 9999-12-31), Python's `date.fromordinal` |
+| `year` `month` `day` `ordinal` | the fields; `ordinal` is Python's `toordinal` |
+| `TimeOfDay hour: h minute: mi second: s microsecond: us fold: f zone: z` | a wall clock; `fold` is 0 or 1 (PEP 495), `z` is `nil`, a `ZoneOffset` or a `ZoneName` |
+| `TimeOfDay hour: h minute: mi second: s` | naive, microsecond 0, fold 0 |
+| `hour` `minute` `second` `microsecond` `fold` `zone` `microsecondsSinceMidnight` | the fields |
+| `TimeSpan days: d seconds: s microseconds: us` | a signed duration, normalised as Python's `timedelta`: 0 ≤ `seconds` < 86400, 0 ≤ `microseconds` < 10^6, \|`days`\| ≤ 999999999 (beyond, `Error`); Integer arguments only |
+| `TimeSpan microseconds: n` | the duration of `n` microseconds |
+| `days` `seconds` `microseconds` `totalMicroseconds` | the normalised fields and the whole duration |
+
+**Date and time.**
+
+| Message | Meaning |
+|---------|---------|
+| `DateTime year:month:day:hour:minute:second:microsecond:fold:zone:` | from a wall clock: naive with `nil`, at a fixed offset with a `ZoneOffset`; with a `ZoneName` it signals `TimeZoneUnavailable` (turning a wall clock into an instant needs the zone's rules) |
+| `DateTime utcFields: anArray zoneName: aZoneName` | the **instant form**: the seven fields of `anArray` (year, month, day, hour, minute, second, microsecond) are the UTC instant; `fold` is 0 |
+| `DateTime utcMicroseconds: n zone: aZone` | the value of the UTC instant `n` at a `ZoneOffset` (its fields are the wall clock there), or the instant form for a `ZoneName`; the fields must lie in years 1..9999 |
+| `DateTime nowUTC` | now, at `ZoneOffset utc`, from `Time utcMicroseconds` (protoST 0.9.1) |
+| `year` … `microsecond` `fold` `zone` | the fields (the UTC instant for the instant form) |
+| `isNaive` `isInstantForm` | zone `nil`; zone a `ZoneName` |
+| `localMicroseconds` | the fields' microseconds since 0001-01-01T00:00 |
+| `utcMicroseconds` | the UTC instant since 0001-01-01T00:00: the fields minus the offset, or the fields of the instant form; a naive value signals `Error` |
+| `wallClock` | the receiver; the instant form signals `TimeZoneUnavailable` |
+| `date` `time` | the wall-clock `CalendarDate` and naive `TimeOfDay`; the instant form signals `TimeZoneUnavailable` |
+
+Both microsecond counts start at 0001-01-01T00:00, the ordinal epoch, not at
+1970: the Unix epoch is `62135596800000000`. `Time utcMicroseconds` counts from
+1970, and `nowUTC` adds the difference.
+
+**Comparison.** As Python compares the values. `CalendarDate` orders by day,
+`TimeSpan` by duration. A `TimeOfDay` that is naive or in a `ZoneName` has no
+offset (a time has no date), so it compares by wall clock; a fixed-offset one
+by wall clock minus offset. A naive `DateTime` compares by its fields, an
+aware one (fixed offset or instant form) by its UTC instant, so two aware
+values of one instant in different zones are `=`. `fold` never takes part.
+Two instant-form values of one zone also compare by instant, where Python
+compares their wall clocks; the two disagree only inside a repeated
+wall-clock hour (D50). A
+naive value is never `=` to an aware one, and ordering the two signals
+`Error`; so does ordering against another class. `=`, `~=`, `<`, `<=`, `>`,
+`>=`, `max:` and `min:` are understood by all four value classes, and `hash`
+agrees with `=` everywhere.
+
+**Text out.** `printString` is Python's `str()`: `2026-11-10`,
+`01:02:03.000040+05:30`, `2026-11-10 12:00:00-03:00`,
+`-1 day, 23:59:59`; a `ZoneOffset` prints its name. Where Python would need the
+zone's rules, the key is shown instead: a `TimeOfDay` in a `ZoneName` prints
+`12:00:00[Europe/Paris]`, and the instant form prints its UTC fields, `Z` and
+the key, `2026-11-01 06:30:00Z[America/New_York]` (the RFC 9557 reading: the
+instant is known, the local offset is not).
+
+```smalltalk
+Import from: 'calendar'.
+(CalendarDate year: 2000 month: 2 day: 29) ordinal          "=> 730179"
+(CalendarDate fromOrdinal: 3652059) printString             "=> '9999-12-31'"
+(TimeSpan days: 0 seconds: -1 microseconds: 0) days         "=> -1"
+(TimeSpan days: 0 seconds: -1 microseconds: 0) seconds      "=> 86399"
+(DateTime year: 2026 month: 11 day: 10 hour: 12 minute: 0 second: 0
+   microsecond: 0 fold: 0 zone: (ZoneOffset microseconds: -10800000000))
+  = (DateTime year: 2026 month: 11 day: 10 hour: 15 minute: 0 second: 0
+       microsecond: 0 fold: 0 zone: ZoneOffset utc)         "=> true"
+(DateTime utcFields: #(2026 11 1 6 30 0 0)
+   zoneName: (ZoneName key: 'America/New_York')) wallClock  "signals TimeZoneUnavailable"
+```
+
+Every out-of-range field, wrong type or wrong zone signals `Error` naming the
+value. Each value is immutable: its one private initialiser, used by the
+class-side constructors, refuses a second call.
+
 ---
 
 ## 13. The CLI
@@ -2913,6 +3018,11 @@ commits. Summary as of 0.4.0, updated for changes merged since:
 - **Decimals (unreleased):** `Decimal` (the `decimal` module) is a value
   without arithmetic: parse, print, compare, `asExactFraction`; no context,
   no rounding (D49).
+- **Calendar values (unreleased):** the `calendar` module's `CalendarDate`,
+  `TimeOfDay`, `DateTime`, `TimeSpan`, `ZoneOffset` and `ZoneName` are
+  protoST's own classes, counting microseconds, beside the kernel's `Date`,
+  `Time` and `Duration`; there is no IANA database, so a wall clock in a named
+  zone signals `TimeZoneUnavailable` (D50, §12.14).
 - **Input and output (0.5.0):** blocking calls only, with no multiplexing of
   several sockets on one thread; no HTTP/2, WebSockets, keep-alive or TLS
   server; POSIX only, so no native Windows (§12.11).

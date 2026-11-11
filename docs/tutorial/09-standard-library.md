@@ -23,7 +23,7 @@ matters:
    protoST, in `lib/kernel/`, and loaded when the runtime starts.
 2. **Loadable modules.** Optional functionality lives in `.st` files under
    `lib/` and is pulled in explicitly with `Import from:`. `json`, `decimal`,
-   `net` and `http` are the ones you will use; `stream`, `random` and `time` are older modules kept for
+   `calendar`, `net` and `http` are the ones you will use; `stream`, `random` and `time` are older modules kept for
    compatibility (§9.4, §9.5, §9.7).
 
 Input and output — files, standard streams, the command line, other programs
@@ -355,7 +355,62 @@ string that is not a decimal (`'1..2'`, `''`, `'1e'`) signals `Error`.
 
 The full protocol is in the language reference, LANGUAGE.md §12.13.
 
-## 9.9 Reading the library as protoST code
+## 9.9 Calendar values — the `calendar` module
+
+The kernel's `Date`, `Time` and `Duration` (§9.7) read the local clock and have
+no zones. When a date or a moment must be stored and compared exactly — a
+timestamp in a database, a deadline shared between machines — use the
+`calendar` module. Its values are Python's `datetime` model: a
+`CalendarDate`, a `TimeOfDay`, a `DateTime`, a `TimeSpan`, and two kinds of
+zone, `ZoneOffset` (a fixed offset from UTC) and `ZoneName` (an IANA key such
+as `America/New_York`). Everything counts microseconds.
+
+```smalltalk
+"-- calendar-demo.st --"
+Import from: 'calendar'.
+
+day := CalendarDate year: 2026 month: 11 day: 10.
+noon := DateTime year: 2026 month: 11 day: 10 hour: 12 minute: 0 second: 0
+  microsecond: 0 fold: 0 zone: (ZoneOffset microseconds: -3 * 3600 * 1000000).
+utc := DateTime year: 2026 month: 11 day: 10 hour: 15 minute: 0 second: 0
+  microsecond: 0 fold: 0 zone: ZoneOffset utc.
+span := TimeSpan days: 0 seconds: -1 microseconds: 0.
+
+{ day printString. day ordinal. noon printString. noon = utc.
+  span printString. span days. span seconds } displayNl.
+```
+
+```bash
+$ ./build/protost calendar-demo.st
+#('2026-11-10' 739930 '2026-11-10 12:00:00-03:00' true '-1 day, 23:59:59' -1 86399)
+```
+
+Noon at UTC-03:00 and 15:00 UTC are one instant, so they are `=` (and hash
+alike); a naive `DateTime` (zone `nil`) is never `=` to an aware one, and
+ordering the two signals `Error`. A `TimeSpan` is normalised as Python's
+`timedelta`: minus one second is "minus one day plus 86399 seconds".
+
+There is **no time-zone database**. A `ZoneName` is kept by its key, and a
+`DateTime` in one is held as its UTC instant (`DateTime utcFields:zoneName:`).
+Turning it into a wall clock, or building one from a wall clock, needs the
+zone's rules, so it signals `TimeZoneUnavailable`:
+
+```smalltalk
+Import from: 'calendar'.
+ny := ZoneName key: 'America/New_York'.
+t := DateTime utcFields: #(2026 11 1 6 30 0 0) zoneName: ny.
+t printString.        "=> '2026-11-01 06:30:00Z[America/New_York]'"
+[t wallClock] on: TimeZoneUnavailable do: [:e | 'no tz database']
+```
+
+> **In Python** these are `date`, `time`, `datetime`, `timedelta` and
+> `timezone`, with the same comparisons and the same `str()`; a `ZoneInfo`
+> zone has rules, protoST's `ZoneName` has none. **In JavaScript** the
+> closest is `Temporal` (`PlainDate`, `ZonedDateTime`, `Duration`).
+
+The full protocol is in the language reference, LANGUAGE.md §12.14.
+
+## 9.10 Reading the library as protoST code
 
 The kernel classes and the modules are ordinary protoST `.st` files, written
 in exactly the language this tutorial teaches: the kernel is loaded at start-up
@@ -374,7 +429,7 @@ every non-`_`-prefixed class becomes an attribute of the module object that
 leaves the quotes off a string) print the receiver followed by a newline and
 answer the receiver. Both write in program order.
 
-## 9.10 Summary
+## 9.11 Summary
 
 - protoST's library is in two parts: the **kernel**, always loaded — the
   mathematical protocol on `Number`, streams, `Random`, `Time`, `Date`,
@@ -386,7 +441,8 @@ answer the receiver. Both write in program order.
   read its classes with unary sends (`m JSON`). The module's classes also
   become globals.
 - The standard modules: `json` (`parse:`/`stringify:`), `decimal` (an exact
-  `Decimal` value, no arithmetic), `net` and `http` (Chapter 15), and `stream`,
+  `Decimal` value, no arithmetic), `calendar` (dates, times, datetimes and
+  time spans in microseconds, with fixed offsets), `net` and `http` (Chapter 15), and `stream`,
   `random` and `time`, kept from before the kernel had those classes
   (`random` and `time` replace the kernel's `Random`, `Time` and `Duration`
   when imported).

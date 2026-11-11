@@ -19,6 +19,19 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
   protoST; no new primitive, so it runs on the 0.9.0 binary. Docs:
   LANGUAGE.md §12.13, tutorial §9.8. Tests:
   `tests/conformance/13-stdlib/decimal-*` (8 files).
+- **Calendar values with fixed offsets** (`lib/calendar.st`, `Import from:
+  'calendar'`): `CalendarDate` (proleptic Gregorian, years 1-9999, `ordinal`
+  and `fromOrdinal:` as Python's `toordinal`), `TimeOfDay`, `DateTime` (naive,
+  at a `ZoneOffset`, or the instant form in a `ZoneName`: the fields are the
+  UTC instant), `TimeSpan` (normalised as `timedelta`), `ZoneOffset`,
+  `ZoneName` and the error `TimeZoneUnavailable`. `localMicroseconds`,
+  `utcMicroseconds`, `utcMicroseconds:zone:`, `DateTime nowUTC` (needs
+  `Time utcMicroseconds`, 0.9.1). Comparison and `hash` as Python's
+  `datetime` (aware values by instant, naive never `=` to aware, ordering them
+  refused); `printString` as `str()`. No IANA database: a wall clock in a
+  named zone signals `TimeZoneUnavailable` (STATUS D50). Written in protoST;
+  runs on the 0.9.0 binary. Docs: LANGUAGE.md §12.14, tutorial §9.9. Tests:
+  `tests/conformance/13-stdlib/calendar-*` (8 files).
 - **`Fraction` defers to a non-Number that adapts** (`lib/kernel/fraction.st`):
   `=`, `<` (and so `>`, `<=`, `>=`), `+`, `-`, `*`, `/`, and `Integer >> /`,
   send `adaptToNumber:andSend:` to an argument that is not a Number but

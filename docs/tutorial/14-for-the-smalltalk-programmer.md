@@ -226,6 +226,15 @@ and compare a decimal exactly: `fromString:`, `printString`, `asExactFraction`
 and exact comparison with any number (chapter 9, §9.8; LANGUAGE.md §12.13). For
 arithmetic, take `asExactFraction` and compute with the `Fraction`.
 
+### Calendar values — D50
+
+The `calendar` module's `CalendarDate`, `TimeOfDay`, `DateTime`, `TimeSpan`,
+`ZoneOffset` and `ZoneName` are not Pharo's `Date`, `DateAndTime`, `Timespan`
+and `TimeZone`; they are Python's `datetime` values, counting microseconds,
+and the kernel's `Date`, `Time` and `Duration` keep their meaning beside them.
+There is no IANA database: a `ZoneName` keeps its key, and a wall clock in it
+signals `TimeZoneUnavailable` (chapter 9, §9.9; LANGUAGE.md §12.14).
+
 ### A few names and printed forms — D36
 
 `aClass name` answers a String. Large integers have one class, `LargeInteger`
@@ -529,7 +538,7 @@ For full grammar, see `LANGUAGE.md` §3.5.1 and §3.3.
   blank line ends a method body (D33); a script is its top-level forms, run
   in order (D12); strings are immutable (D34); short symbols are represented
   as strings (D35); a few printed forms differ (D36); a `ByteArray` is
-  immutable and has no `asString`, a `BinaryFile` has no position (D41-D48); `Decimal` has no arithmetic (D49); a thin metaclass; an
+  immutable and has no `asString`, a `BinaryFile` has no position (D41-D48); `Decimal` has no arithmetic (D49); calendar values are Python's, with no tz database (D50); a thin metaclass; an
   actor that waits is not re-entrant (D37); bounded recursion depth (D38); single
   runtime per process (D2); `addBehavior:` affects future instances only
   (D21).
