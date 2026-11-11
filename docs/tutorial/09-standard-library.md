@@ -22,8 +22,8 @@ matters:
    `Date`, `Duration`, `Transcript`. Much of the kernel is itself written in
    protoST, in `lib/kernel/`, and loaded when the runtime starts.
 2. **Loadable modules.** Optional functionality lives in `.st` files under
-   `lib/` and is pulled in explicitly with `Import from:`. `json`, `net` and
-   `http` are the ones you will use; `stream`, `random` and `time` are older modules kept for
+   `lib/` and is pulled in explicitly with `Import from:`. `json`, `decimal`,
+   `net` and `http` are the ones you will use; `stream`, `random` and `time` are older modules kept for
    compatibility (§9.4, §9.5, §9.7).
 
 Input and output — files, standard streams, the command line, other programs
@@ -310,7 +310,52 @@ The older `time` module (`Import from: 'time'`) has a different model: its
 constructor). Importing it **rebinds the globals `Time` and `Duration`** to the
 module's classes, as with `random` above.
 
-## 9.8 Reading the library as protoST code
+## 9.8 Exact decimals — the `decimal` module
+
+A `Float` is binary: `0.1` is not one tenth, and `1.20` prints as `1.2`. When
+a decimal must survive exactly, digits, trailing zeros and sign of zero
+included (an amount of money, a value read from a database), use `Decimal`
+from the `decimal` module. It is Python's decimal value: a sign, a
+coefficient and a power-of-ten exponent, plus `Infinity`, `NaN` and `sNaN`.
+
+```smalltalk
+"-- decimal-demo.st --"
+Import from: 'decimal'.
+
+price := Decimal fromString: '1250.00'.
+tiny := Decimal fromString: '0.0000001'.
+
+{ price printString. tiny printString. price exponent.
+  price = 1250. price asExactFraction.
+  (Decimal fromString: '0.1') = 0.1.
+  price sameRepresentationAs: (Decimal fromString: '1250') } displayNl.
+```
+
+```bash
+$ ./build/protost decimal-demo.st
+#('1250.00' '1E-7' -2 true 1250 false false)
+```
+
+`printString` is exactly Python's `str(Decimal)`: `1250.00` keeps its two
+zeros (its exponent is -2), and a value whose leading digit is more than six
+places after the point switches to exponent form, `1E-7`. Comparison is by
+exact value: `1250.00` equals the Integer `1250`, while the decimal `0.1` is
+not the `Float` `0.1`, whose exact value is a little more than one tenth.
+`sameRepresentationAs:` tells `1250.00` from `1250`, which `=` does not.
+
+A `Decimal` has **no arithmetic** — no `+`, no rounding, no precision; it
+parses, prints, compares and converts. To compute, take `asExactFraction`
+(an `Integer` or a `Fraction`) and work with the exact numbers of §9.2. A
+string that is not a decimal (`'1..2'`, `''`, `'1e'`) signals `Error`.
+
+> **In Python** this is `decimal.Decimal(str)` and `str(d)`, with the same
+> text both ways; protoST leaves out the arithmetic context. **In
+> JavaScript** there is no built-in decimal; a library such as `decimal.js`
+> plays this role.
+
+The full protocol is in the language reference, LANGUAGE.md §12.13.
+
+## 9.9 Reading the library as protoST code
 
 The kernel classes and the modules are ordinary protoST `.st` files, written
 in exactly the language this tutorial teaches: the kernel is loaded at start-up
@@ -329,7 +374,7 @@ every non-`_`-prefixed class becomes an attribute of the module object that
 leaves the quotes off a string) print the receiver followed by a newline and
 answer the receiver. Both write in program order.
 
-## 9.9 Summary
+## 9.10 Summary
 
 - protoST's library is in two parts: the **kernel**, always loaded — the
   mathematical protocol on `Number`, streams, `Random`, `Time`, `Date`,
@@ -340,8 +385,8 @@ answer the receiver. Both write in program order.
 - `Import from: 'name'` loads a module (cached) and answers a module object;
   read its classes with unary sends (`m JSON`). The module's classes also
   become globals.
-- The standard modules: `json` (`parse:`/`stringify:`), `net` and `http`
-  (Chapter 15), and `stream`,
+- The standard modules: `json` (`parse:`/`stringify:`), `decimal` (an exact
+  `Decimal` value, no arithmetic), `net` and `http` (Chapter 15), and `stream`,
   `random` and `time`, kept from before the kernel had those classes
   (`random` and `time` replace the kernel's `Random`, `Time` and `Duration`
   when imported).

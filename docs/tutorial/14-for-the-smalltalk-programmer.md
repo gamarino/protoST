@@ -217,6 +217,15 @@ encodes a Symbol as a str, so `#foo` comes back as `'foo'` (D47). `Future
 within:` and `waitWithin:` are protoST's own (D48). Chapter 15 (§15.11) and
 chapter 10 (§10.12) show them at work.
 
+### Decimals — D49
+
+The `decimal` module's `Decimal` is not Pharo's `ScaledDecimal`: there is no
+`1.20s2` literal and no scale, and it has **no arithmetic**. It is Python's
+decimal value (sign, coefficient, exponent, Infinity and NaN), made to store
+and compare a decimal exactly: `fromString:`, `printString`, `asExactFraction`
+and exact comparison with any number (chapter 9, §9.8; LANGUAGE.md §12.13). For
+arithmetic, take `asExactFraction` and compute with the `Fraction`.
+
 ### A few names and printed forms — D36
 
 `aClass name` answers a String. Large integers have one class, `LargeInteger`
@@ -520,7 +529,7 @@ For full grammar, see `LANGUAGE.md` §3.5.1 and §3.3.
   blank line ends a method body (D33); a script is its top-level forms, run
   in order (D12); strings are immutable (D34); short symbols are represented
   as strings (D35); a few printed forms differ (D36); a `ByteArray` is
-  immutable and has no `asString`, a `BinaryFile` has no position (D41-D48); a thin metaclass; an
+  immutable and has no `asString`, a `BinaryFile` has no position (D41-D48); `Decimal` has no arithmetic (D49); a thin metaclass; an
   actor that waits is not re-entrant (D37); bounded recursion depth (D38); single
   runtime per process (D2); `addBehavior:` affects future instances only
   (D21).

@@ -5,6 +5,20 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Unreleased
 
+### Added
+
+- **`Decimal`, an exact decimal value** (`lib/decimal.st`, `Import from:
+  'decimal'`): Python's decimal model (sign, coefficient, exponent; Infinity,
+  NaN and sNaN with payloads) with its text in both directions,
+  `fromString:` for `Decimal(str)` and `printString` for `str(Decimal)`, which
+  is ProtoBase's `@dec` text. `asExactFraction`, exact comparison with any
+  `Number` (`(Decimal fromString: '1.00') = 1` is true, `= 0.1` is false),
+  `hash` consistent with `=`, and `sameRepresentationAs:` (`1.0` and `1.00`
+  differ). No arithmetic, context or rounding (STATUS D49). Written in
+  protoST; no new primitive, so it runs on the 0.9.0 binary. Docs:
+  LANGUAGE.md §12.13, tutorial §9.8. Tests:
+  `tests/conformance/13-stdlib/decimal-*` (6 files).
+
 ## 0.9.0 — bytes, binary files, encodings, MessagePack and timers (2026-11-10)
 
 Released 2026-11-10.

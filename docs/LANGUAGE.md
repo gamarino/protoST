@@ -2709,6 +2709,78 @@ invalid UTF-8 in a `str` and, by default, a map key that is not `str` or
 exchanges documents with CPython in both directions when `python3` and
 `msgpack` are installed.
 
+### 12.13 Exact decimals: the `decimal` module
+
+Unreleased (after 0.9.0). `Import from: 'decimal'` binds the global
+`Decimal`: an exact decimal value, a sign, a coefficient and a power-of-ten
+exponent, or one of the special values Infinity, NaN and sNaN. The model and
+the text are those of the General Decimal Arithmetic specification as
+Python's `decimal` module implements them, which makes `Decimal` the value of
+ProtoBase's `@dec` (format-spec "Decimal text"). It is written in protoST over
+`LargeInteger` (`lib/decimal.st`).
+
+A `Decimal` is a value **without arithmetic** (STATUS D49): it parses,
+prints, compares and converts to an exact fraction. There is no context, no
+precision and no rounding, so nothing is lost: `1.20` keeps its trailing
+zero, `-0` its sign.
+
+| Message | Meaning |
+|---------|---------|
+| `Decimal fromString: aString` | parse Python's `Decimal(str)` grammar (below); a bad string signals `Error` naming it |
+| `Decimal sign: s coefficient: c exponent: e` | the finite value (-1)^s × c × 10^e; `s` is 0 or 1, `c` a non-negative Integer, `e` an Integer |
+| `Decimal infinity: s` | `Infinity` (s = 0) or `-Infinity` (s = 1) |
+| `Decimal nan: p signaling: aBoolean sign: s` | a NaN with payload `p` (a non-negative Integer) |
+| `sign` | 0 or 1; `-0` has sign 1 |
+| `coefficient` `exponent` | of a finite value; `nil` for Infinity and NaN |
+| `payload` | of a NaN (0 when it has none); `nil` otherwise |
+| `isFinite` `isInfinite` `isNaN` `isSignaling` `isZero` | the kind; `isNaN` is true for a quiet and a signaling NaN |
+| `printString` | the to-scientific-string, Python's `str(Decimal)` |
+| `asExactFraction` | an Integer or a reduced `Fraction`; Infinity and NaN signal `Error` |
+| `=` `~=` `<` `<=` `>` `>=` | exact comparison with a `Decimal` or any `Number` |
+| `hash` | consistent with `=` across `Integer`, `Fraction` and `Float` |
+| `sameRepresentationAs:` | kind, sign, coefficient (or payload) and exponent all equal |
+
+**Text in.** An optional sign, then digits with an optional point and an
+optional exponent (`e` or `E`, an optional sign, digits), or `Infinity` /
+`Inf`, or `NaN` / `sNaN` followed by optional payload digits; letters are
+case-insensitive, digits are ASCII. Python also accepts surrounding
+whitespace, underscores between digits and non-ASCII digits; `fromString:`
+refuses them.
+
+**Text out.** With `c` the coefficient's `n` digits, `e` the exponent and
+`a = e + n - 1` the adjusted exponent: the plain form when `e <= 0` and
+`a >= -6` (`1.20`, `0.000001`, `-0.00`), otherwise one digit, the rest after a
+point, and `E` with the signed adjusted exponent (`1E-7`, `-1.5E+30`, `1E+2`,
+`0E-10`). Specials print as `Infinity`, `NaN123`, `sNaN` (no payload digits
+when the payload is 0), with a leading `-` for sign 1.
+
+```smalltalk
+Import from: 'decimal'.
+(Decimal fromString: '1e5') printString        "=> '1E+5'"
+(Decimal fromString: '.5') printString         "=> '0.5'"
+(Decimal fromString: 'nan0123') printString    "=> 'NaN123'"
+(Decimal fromString: '1.25') asExactFraction printString   "=> '(5/4)'"
+(Decimal fromString: '1.00') = 1               "=> true"
+(Decimal fromString: '0.1') = 0.1              "=> false"
+(Decimal fromString: '1.0')
+    sameRepresentationAs: (Decimal fromString: '1.00')   "=> false"
+```
+
+**Comparison.** Values compare exactly: a finite `Float` is read through its
+`asExactFraction`, so the decimal `0.1` is not the binary `Float` `0.1`. The infinities order at the ends and equal the `Float`
+infinities. A NaN, quiet or signaling, `Decimal` or `Float`, is never `=` (so
+`~=` answers true), and `<`, `<=`, `>`, `>=` with one signal `Error`; so does
+ordering against an object that is not a number. Python's `==` signals for a
+signaling NaN; protoST's `=` answers `false`, because `=` is what collections
+send. Ordering and equality never build a power of ten larger than the
+operands' own digits, so `1E+999999 > 9E+999998` is immediate. `hash` and
+`asExactFraction` do build the exact value, so their cost grows with the size
+of the exponent.
+
+The comparison is defined on `Decimal` only: `1 = (Decimal fromString: '1')`
+answers `false`, because the numeric primitives do not know `Decimal`. Put
+the `Decimal` on the left, or compare `asExactFraction`.
+
 ---
 
 ## 13. The CLI
@@ -2826,6 +2898,9 @@ commits. Summary as of 0.4.0, updated for changes merged since:
   `asString`, it is not a collection (D41); a `BinaryFile` has no position
   (D46); MessagePack encodes a Symbol as `str` (D47); `Future` deadlines are
   protoST's own (D48).
+- **Decimals (unreleased):** `Decimal` (the `decimal` module) is a value
+  without arithmetic: parse, print, compare, `asExactFraction`; no context,
+  no rounding (D49).
 - **Input and output (0.5.0):** blocking calls only, with no multiplexing of
   several sockets on one thread; no HTTP/2, WebSockets, keep-alive or TLS
   server; POSIX only, so no native Windows (§12.11).
