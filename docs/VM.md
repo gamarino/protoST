@@ -364,7 +364,10 @@ it (`ifTrue:` when not inlined, `do:`, `inject:into:`, `on:do:`, `ensure:`,
 block in a **new `ExecutionEngine` on the C++ stack**, on the same
 `ProtoContext`. These nested engines nest strictly LIFO; at most 1,000 can be
 live on a thread (`kMaxNestedEngines`), past which the catchable `Error`
-"stack depth exceeded (nested block evaluation)" is raised. A `Future>>wait`
+"stack depth exceeded (nested block evaluation)" is raised. The count is
+sized for optimised native frames (about 4.6 KB a level, 4.6 MB in an 8 MB
+stack); an unoptimised `-O0` build takes 8 to 12 KB a level, so it needs a
+12 MB stack (`ulimit -s 16384`) to reach the limit instead of overflowing. A `Future>>wait`
 inside such a block is not cooperatively yieldable: it blocks its worker
 thread.
 

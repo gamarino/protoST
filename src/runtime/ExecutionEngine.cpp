@@ -732,6 +732,11 @@ ExecutionEngine::popFrame() {
 // Like protoPython's RecursionScope, the limit is a depth count, not a query of
 // the native thread: g_liveEngines already holds this thread's nested engines.
 // 1,000 levels use about 4.6 MB, within the 8 MB default stack of a ProtoThread.
+// That figure is for optimised code. An unoptimised (-O0) build takes 8 to
+// 12 KB a level (measured in 0.10.0), so there 1,000 levels need a 12 MB
+// stack (`ulimit -s 16384` for the main thread): with 8 MB a recursion to
+// the limit overflows the stack instead of raising the Error. CI therefore
+// runs its assertions-on job at -O2 (ci.yml, `assertions`).
 namespace {
 constexpr std::size_t kMaxNestedEngines = 1000;
 } // namespace
