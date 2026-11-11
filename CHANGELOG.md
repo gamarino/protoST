@@ -300,18 +300,23 @@ minor release, so the two services arrive in 0.5.0.
   analysis).** Per operation, in ns beyond the empty loop (the analysis's
   own `ops.st`, 2x10^6 iterations in a method, minimum of three runs),
   round-3 base -> final, CPython 3.14 in brackets: `i * 2` 129 -> 21
-  [26], `i \\ 7` 420 -> 24 [37], `i // 7` 378 -> 23 [24], `rem:` 315 ->
-  18, `bitAnd:` 135 -> 20 [29], `Array at:` 237 -> 133 [~0], `Array new:
+  [26], `i \\ 7` 420 -> 24 [37], `i // 7` 378 -> 23 [24], `bitAnd:` 135 -> 20 [29], `Array at:` 237 -> 133 [~0], `Array new:
   4` 2710 -> 292 [113], send 130 -> 114 [42], `block value:` 116 -> 104
   [29]. `perform:with:` 3800 -> 375 ns per call, loop included
   (`benchmarks/micro/vm_ops.st`, self-checking). An instance-variable write
   did not improve measurably (79 -> 112 in the full `ops.st` order, not
   reproduced alone, where it runs 10 % fewer instructions; it is
   protoCore's `setAttribute` and the collector). The changes:
-  - `*`, `\\`, `//`, `rem:`, `bitAnd:`, `bitOr:` on two SmallIntegers are
-    computed in the engine (opcodes `BIN_INT_MUL` 53 to `BIN_INT_OR` 58;
-    overflow, a non-SmallInteger operand and a zero divisor fall back to the
-    send). Test `12-builtins/integer-fast-paths-match-the-send.st`.
+  - `*`, `\\`, `//`, `bitAnd:`, `bitOr:` on two SmallIntegers are computed
+    in the engine (opcodes `BIN_INT_MUL` 53, `BIN_INT_MOD` 54, `BIN_INT_QUO`
+    55, `BIN_INT_AND` 57, `BIN_INT_OR` 58; overflow, a non-SmallInteger
+    operand and a zero divisor fall back to the send). These are Pharo's
+    special selectors, and as there (and as for `+`), a method a program
+    adds to `SmallInteger` for them is not reached by a SmallInteger
+    receiver. `rem:` is not a special selector in Pharo, so it stays a send
+    and such a method is reached (review R3-1; 56 is reserved). Tests
+    `12-builtins/integer-fast-paths-match-the-send.st`,
+    `04-object-model/smallinteger-rem-override-is-reached.st`.
   - An assignment whose value is discarded compiles without `DUP`/`POP`.
     Test `05-messages/assignment-statement-values.st`.
   - The dispatch core indexes the frame's slots directly (bounds checks

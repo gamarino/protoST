@@ -1396,10 +1396,10 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             auto sym = m.internSymbol(n.text);
             Op kop = isSuperReceiver(n) ? Op::SEND_SUPER : Op::SEND_KEYWORD;
             if (kop == Op::SEND_KEYWORD && n.children.size() == 2) {
-                // SmallInteger fast paths of three one-keyword selectors
-                // (0.10.0); a miss sends the keyword message.
-                if (n.text == "rem:")         kop = Op::BIN_INT_REM;
-                else if (n.text == "bitAnd:") kop = Op::BIN_INT_AND;
+                // SmallInteger fast paths of the two one-keyword special
+                // selectors of Pharo (0.10.0); a miss sends the keyword
+                // message. rem: is not one, so it is always a send.
+                if (n.text == "bitAnd:")      kop = Op::BIN_INT_AND;
                 else if (n.text == "bitOr:")  kop = Op::BIN_INT_OR;
             }
             m.emitWide(kop, static_cast<unsigned int>(sym), currentLine_);

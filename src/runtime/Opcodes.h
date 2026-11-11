@@ -168,7 +168,8 @@ enum class Op : uint8_t {
     BIN_INT_MUL        = 53, // *
     BIN_INT_MOD        = 54, // \\  (floored)
     BIN_INT_QUO        = 55, // //  (floored)
-    BIN_INT_REM        = 56, // rem:    (truncated; a keyword send on a miss)
+    // 56 is reserved: it was BIN_INT_REM, dropped before 0.10.0 shipped
+    // because rem: is not one of Pharo's special selectors (review R3-1).
     BIN_INT_AND        = 57, // bitAnd: (a keyword send on a miss)
     BIN_INT_OR         = 58, // bitOr:  (a keyword send on a miss)
     // Prefix carrying the next-higher byte of the following instruction's

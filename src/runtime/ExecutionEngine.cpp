@@ -1039,7 +1039,6 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     labels[static_cast<unsigned int>(Op::BIN_INT_MUL)]      = &&L_BIN_INT_MUL;
     labels[static_cast<unsigned int>(Op::BIN_INT_MOD)]      = &&L_BIN_INT_MOD;
     labels[static_cast<unsigned int>(Op::BIN_INT_QUO)]      = &&L_BIN_INT_QUO;
-    labels[static_cast<unsigned int>(Op::BIN_INT_REM)]      = &&L_BIN_INT_REM;
     labels[static_cast<unsigned int>(Op::BIN_INT_AND)]      = &&L_BIN_INT_AND;
     labels[static_cast<unsigned int>(Op::BIN_INT_OR)]       = &&L_BIN_INT_OR;
     labels[static_cast<unsigned int>(Op::RETURN)]           = &&L_RETURN;
@@ -1398,7 +1397,6 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             case Op::BIN_INT_MUL: L_BIN_INT_MUL:
             case Op::BIN_INT_MOD: L_BIN_INT_MOD:
             case Op::BIN_INT_QUO: L_BIN_INT_QUO:
-            case Op::BIN_INT_REM: L_BIN_INT_REM:
             case Op::BIN_INT_AND: L_BIN_INT_AND:
             case Op::BIN_INT_OR:  L_BIN_INT_OR: {
                 // Opcodes.h: the SmallInteger result, or the send.
@@ -1423,10 +1421,6 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                             if (b == 0) { hit = false; break; }
                             r = a / b;
                             if ((a % b != 0) && ((a < 0) != (b < 0))) --r;
-                            break;
-                        case Op::BIN_INT_REM:   // truncated: the sign of the dividend
-                            if (b == 0) { hit = false; break; }
-                            r = a % b;
                             break;
                         case Op::BIN_INT_AND: r = a & b; break;
                         default:              r = a | b; break;   // BIN_INT_OR
