@@ -247,6 +247,43 @@ compiled into the enclosing code (`tryEmitInlinedControl`, examples 03, 05,
 explicit loop that sends `value:` to the block (example 15). Every other
 block is a real closure.
 
+**A non-Boolean receiver of an inlined conditional** (`ifTrue:`, `ifFalse:`,
+`ifTrue:ifFalse:`, `ifFalse:ifTrue:`, `and:`, `or:`; 0.10.0) gets the
+message the source wrote, as if nothing were inlined: its class's own
+method, or `doesNotUnderstand:` with the whole Message. `JUMP_IF_NOT_BOOL`
+leads to an out-of-line path (example 03) that sends the selector with
+closures of *copies* of the block literals. The compiler makes each copy
+with `compileDeoptBlock`: the closure analysis is redone for the literal
+with nothing inlined, and the literal is compiled as a sub-module whose
+name ends in `(not inlined)`. A Boolean receiver never runs this code.
+
+The copies need the enclosing code's variables, which the inlined body keeps
+in frame slots (only variables of real blocks are captured). They reach them
+through a **box**, a mutable captured dict made for the send:
+
+- `DEOPT_ENTER k` builds the box as a child of the frame's captured dict
+  (so captured variables resolve through it as usual) and copies into it
+  the frame slots that deopt entry `k` names, the locals the copies use
+  (`Scope::boxed`, recorded by `isCaptured` when a name resolves past the
+  copy's scope to an enclosing slot). The box goes to a frame slot,
+  `__deopt_box__`, one per frame.
+- `PUSH_DEOPT_BLOCK n` pops the box and pushes a closure of sub-module `n`
+  whose `__captured__` is the box. In the copy those variables are
+  `PUSH_CAPTURED` / `STORE_CAPTURED`.
+- `DEOPT_EXIT k` copies the box's values back into the frame slots, then
+  closes the box.
+
+While the send runs the frame executes nothing, so the box holds the only
+live copy of those variables and the closures see what real closures would:
+a write in a block is seen by the method afterwards, `^` returns from the
+method (the closure's home is the frame's home). If the send unwinds the
+frame (an exception, a non-local return) the box stays open, and it is again
+the only copy. Only a closure the receiver keeps and evaluates after the
+send returned would see stale values: a copy, or a block nested in one,
+that uses a boxed variable starts with `DEOPT_CHECK 1`, which signals an
+`Error` when its box is closed. One that uses none has `DEOPT_CHECK 0` and
+works at any time.
+
 ### 1.5 Calling conventions
 
 **Sends.** `SEND_UNARY`, `SEND_BINARY` and `SEND_KEYWORD` expect
@@ -459,12 +496,16 @@ the attribute `_iv_v` of the class that declares it.
 
 | Op | # | Operand | Stack | Semantics | Emitted by |
 |---|---|---|---|---|---|
-| `JUMP` | 15 | forward offset | `->` | `next += operand` words. | inlined `ifTrue:ifFalse:` (over the else branch), `ifTrue:` (over the `PUSH_NIL`), `and:` / `or:` (over the `PUSH_FALSE` / `PUSH_TRUE`); after the out-of-line `ASSERT_BOOL_OR_DNU` of an inlined value conditional |
+| `JUMP` | 15 | forward offset | `->` | `next += operand` words. | inlined `ifTrue:ifFalse:` (over the else branch), `ifTrue:` (over the `PUSH_NIL`), `and:` / `or:` (over the `PUSH_FALSE` / `PUSH_TRUE`); after the out-of-line send of an inlined value conditional (`DEOPT_EXIT`) |
 | `JUMP_IF_FALSE` | 17 | forward offset | `v ->` | Pops; jumps when the value is exactly `false`. Any other value falls through, hence the guard below. | inlined `ifTrue:`, `ifTrue:ifFalse:`, `and:`, `whileTrue:`, `to:do:` (loop exit), `doYielding:`; the call-form default prologue |
 | `JUMP_IF_TRUE` | 16 | forward offset | `v ->` | Pops; jumps when the value is exactly `true`. | inlined `ifFalse:`, `or:`, `whileFalse:` |
 | `JUMP_BACK` | 30 | backward offset | `->` | `next -= operand` words, then polls the GC safepoint (1.6). | the back edge of inlined `whileTrue:`, `whileFalse:`, `to:do:` and of `doYielding:` |
-| `JUMP_IF_NOT_BOOL` | 45 | forward offset | `v -> v` | Peeks; jumps when the value is neither `true` nor `false`, which stays on the stack either way. | the guard of an inlined `ifTrue:` / `ifFalse:` / `ifTrue:ifFalse:` / `ifFalse:ifTrue:` / `and:` / `or:`, to its out-of-line `ASSERT_BOOL_OR_DNU` (example 03) |
-| `ASSERT_BOOL_OR_DNU` | 38 | selector constant (wide) | `v -> v` | Leaves a Boolean in place. Any other value is popped and `doesNotUnderstand: <selector>` is sent with it as the receiver, as the send the inlining replaced would have done; the answer of a resumed `MessageNotUnderstood` is pushed. | before the conditional jump of an inlined `whileTrue:` / `whileFalse:`; the out-of-line target of `JUMP_IF_NOT_BOOL`, followed by a `JUMP` to the end of the expression, whose value that answer is |
+| `JUMP_IF_NOT_BOOL` | 45 | forward offset | `v -> v` | Peeks; jumps when the value is neither `true` nor `false`, which stays on the stack either way. | the guard of an inlined `ifTrue:` / `ifFalse:` / `ifTrue:ifFalse:` / `ifFalse:ifTrue:` / `and:` / `or:`, to its out-of-line send (`DEOPT_ENTER` ... `DEOPT_EXIT`, example 03) |
+| `ASSERT_BOOL_OR_DNU` | 38 | selector constant (wide) | `v -> v` | Leaves a Boolean in place. Any other value is popped and `doesNotUnderstand: <selector>` is sent with it as the receiver, as the send the inlining replaced would have done; the answer of a resumed `MessageNotUnderstood` is pushed. | before the conditional jump of an inlined `whileTrue:` / `whileFalse:` |
+| `DEOPT_ENTER` | 46 | deopt entry (wide) | `->` | Builds the box of a de-optimised conditional: a mutable child of the frame's captured dict holding the frame locals the entry names; stores it in the entry's box slot. | first instruction of the out-of-line path of an inlined value conditional (examples 03, 05; section 1.4) |
+| `PUSH_DEOPT_BLOCK` | 47 | sub-module index (wide) | `box -> closure` | As `PUSH_BLOCK`, with the popped box as the closure's captured dict. | after `PUSH_LOCAL __deopt_box__`, once per block literal of the conditional |
+| `DEOPT_EXIT` | 48 | deopt entry (wide) | `->` | Copies the box's locals back to their frame slots, closes the box and clears the box slot. | after the `SEND_KEYWORD` of the out-of-line path |
+| `DEOPT_CHECK` | 49 | 1 or 0 | `->` | With 1, signals an `Error` when the box the closure resolves through is closed; with 0, nothing. | first instruction of a de-optimised copy and of every block nested in one |
 
 ### 2.6 Sends and returns
 
@@ -643,7 +684,7 @@ n odd ifTrue: ['odd' printNl].
 
 ```text
 module main: <module>
-  args 0, locals 1 (0 n), stack 48 (deepest 2)
+  args 0, locals 2 (0 n, 1 __deopt_box__), stack 48 (deepest 3)
   constants:
     #0   integer   7
     #1   integer   5
@@ -668,40 +709,88 @@ module main: <module>
       9  PUSH_CONST         1     ; 5
      10  BIN_INT_GT         2     ; #>
      11  JUMP_IF_NOT_BOOL   3     ; -> 15
-     12  JUMP_IF_FALSE      4     ; -> 17
+     12  JUMP_IF_FALSE      10    ; -> 23
      13  PUSH_CONST         4     ; 'big'
-     14  JUMP               3     ; -> 18
-     15  ASSERT_BOOL_OR_DNU 3     ; #ifTrue:ifFalse:
-     16  JUMP               1     ; -> 18
-     17  PUSH_CONST         5     ; 'small'
-     18  SEND_UNARY         6     ; #printNl
-     19  POP
-     20  PUSH_LOCAL         0     ; n
-     21  SEND_UNARY         7     ; #odd
-     22  JUMP_IF_NOT_BOOL   4     ; -> 27
-     23  JUMP_IF_FALSE      5     ; -> 29
-     24  PUSH_CONST         9     ; 'odd'
-     25  SEND_UNARY         6     ; #printNl
-     26  JUMP               3     ; -> 30
-     27  ASSERT_BOOL_OR_DNU 8     ; #ifTrue:
-     28  JUMP               1     ; -> 30
-     29  PUSH_NIL
-     30  RETURN_TOP
+     14  JUMP               9     ; -> 24
+     15  DEOPT_ENTER        0     ; box __deopt_box__: no locals
+     16  PUSH_LOCAL         1     ; __deopt_box__
+     17  PUSH_DEOPT_BLOCK   0     ; main.0 (<block> (not inlined))
+     18  PUSH_LOCAL         1     ; __deopt_box__
+     19  PUSH_DEOPT_BLOCK   1     ; main.1 (<block> (not inlined))
+     20  SEND_KEYWORD       3     ; #ifTrue:ifFalse:, 2 args
+     21  DEOPT_EXIT         0     ; box __deopt_box__: no locals
+     22  JUMP               1     ; -> 24
+     23  PUSH_CONST         5     ; 'small'
+     24  SEND_UNARY         6     ; #printNl
+     25  POP
+     26  PUSH_LOCAL         0     ; n
+     27  SEND_UNARY         7     ; #odd
+     28  JUMP_IF_NOT_BOOL   4     ; -> 33
+     29  JUMP_IF_FALSE      9     ; -> 39
+     30  PUSH_CONST         9     ; 'odd'
+     31  SEND_UNARY         6     ; #printNl
+     32  JUMP               7     ; -> 40
+     33  DEOPT_ENTER        1     ; box __deopt_box__: no locals
+     34  PUSH_LOCAL         1     ; __deopt_box__
+     35  PUSH_DEOPT_BLOCK   2     ; main.2 (<block> (not inlined))
+     36  SEND_KEYWORD       8     ; #ifTrue:, 1 arg
+     37  DEOPT_EXIT         1     ; box __deopt_box__: no locals
+     38  JUMP               1     ; -> 40
+     39  PUSH_NIL
+     40  RETURN_TOP
+
+module main.0: <block> (not inlined)
+  args 0, locals 0, stack 48 (deepest 1)
+  constants:
+    #0   string    'big'
+  code:
+      0  DEOPT_CHECK        0     ; none
+      1  PUSH_CONST         0     ; 'big'
+      2  RETURN_TOP
+
+module main.1: <block> (not inlined)
+  args 0, locals 0, stack 48 (deepest 1)
+  constants:
+    #0   string    'small'
+  code:
+      0  DEOPT_CHECK        0     ; none
+      1  PUSH_CONST         0     ; 'small'
+      2  RETURN_TOP
+
+module main.2: <block> (not inlined)
+  args 0, locals 0, stack 48 (deepest 1)
+  constants:
+    #0   string    'odd'
+    #1   symbol    #printNl
+  code:
+      0  DEOPT_CHECK        0     ; none
+      1  PUSH_CONST         0     ; 'odd'
+      2  SEND_UNARY         1     ; #printNl
+      3  RETURN_TOP
 'big'
 'odd'
 ```
 
 - Both conditionals are inlined: their literal blocks have no arguments and
-  no temporaries, so no closure is built and nothing is sent.
+  no temporaries, so no closure is built and nothing is sent when the
+  receiver is a Boolean.
 - `11 JUMP_IF_NOT_BOOL` checks that the receiver of `ifTrue:ifFalse:` is a
   Boolean (`JUMP_IF_FALSE` alone would treat `7` as true) and sends any
-  other value to `15`-`16`, out of line: `ASSERT_BOOL_OR_DNU` signals
-  `doesNotUnderstand: ifTrue:ifFalse:`, and if a handler resumes it, the
-  answer is the value of the expression (`JUMP` to `18`), as for the send.
-- `12`-`17`: false jumps to the else branch at `17`; the then branch jumps
-  over the slow path and the else branch to `18`.
-- `22`-`29`: a one-armed `ifTrue:` answers nil when not taken, so the
-  compiler adds `29 PUSH_NIL`, which the then branch jumps over.
+  other value to `15`-`22`, out of line: the expression is *sent*, as if
+  nothing were inlined. `DEOPT_ENTER` builds the box (here it carries no
+  locals: the blocks use none), `PUSH_DEOPT_BLOCK` makes closures of
+  `main.0` and `main.1`, copies of the two literals compiled without
+  inlining, and `SEND_KEYWORD #ifTrue:ifFalse:` sends them to the
+  receiver: its own method runs, or `doesNotUnderstand:` with the whole
+  Message. `DEOPT_EXIT` copies the box back and closes it; the answer is
+  the value of the expression (`JUMP` to `24`). Section 1.4 explains the
+  box.
+- `12`-`14`, `23`: false jumps to the else branch at `23`; the then branch
+  jumps over the slow path and the else branch to `24`.
+- `26`-`39`: a one-armed `ifTrue:` answers nil when not taken, so the
+  compiler adds `39 PUSH_NIL`, which the then branch jumps over.
+- The copies start with `DEOPT_CHECK 0`: they use no variable of the
+  enclosing code, so they need no check (section 1.4).
 
 ### Example 04: a class, a method and a send
 
@@ -856,54 +945,75 @@ module main: <module>
      18  RETURN_TOP
 
 module main.0: Math>>fib:
-  args 2, locals 2 (0 self, 1 n), stack 48 (deepest 4)
+  args 2, locals 3 (0 self, 1 n, 2 __deopt_box__), stack 48 (deepest 4)
   defining class Math
   constants:
     #0   integer   2
     #1   symbol    #<
     #2   symbol    #ifTrue:
-    #3   integer   1
-    #4   symbol    #-
-    #5   symbol    #fib:
-    #6   integer   2
-    #7   symbol    #+
+    #3   symbol    #n
+    #4   integer   1
+    #5   symbol    #-
+    #6   symbol    #fib:
+    #7   integer   2
+    #8   symbol    #+
   code:
       0  PUSH_LOCAL         1     ; n
       1  PUSH_CONST         0     ; 2
       2  BIN_INT_LT         1     ; #<
       3  JUMP_IF_NOT_BOOL   4     ; -> 8
-      4  JUMP_IF_FALSE      5     ; -> 10
+      4  JUMP_IF_FALSE      9     ; -> 14
       5  PUSH_LOCAL         1     ; n
       6  RETURN
-      7  JUMP               3     ; -> 11
-      8  ASSERT_BOOL_OR_DNU 2     ; #ifTrue:
-      9  JUMP               1     ; -> 11
-     10  PUSH_NIL
-     11  POP
-     12  PUSH_SELF
-     13  PUSH_LOCAL         1     ; n
-     14  PUSH_CONST         3     ; 1
-     15  BIN_INT_SUB        4     ; #-
-     16  SEND_KEYWORD       5     ; #fib:, 1 arg
-     17  PUSH_SELF
-     18  PUSH_LOCAL         1     ; n
-     19  PUSH_CONST         6     ; 2
-     20  BIN_INT_SUB        4     ; #-
-     21  SEND_KEYWORD       5     ; #fib:, 1 arg
-     22  BIN_INT_ADD        7     ; #+
-     23  RETURN
+      7  JUMP               7     ; -> 15
+      8  DEOPT_ENTER        0     ; box __deopt_box__: n
+      9  PUSH_LOCAL         2     ; __deopt_box__
+     10  PUSH_DEOPT_BLOCK   0     ; main.0.0 ([] in Math>>fib: (not inlined))
+     11  SEND_KEYWORD       2     ; #ifTrue:, 1 arg
+     12  DEOPT_EXIT         0     ; box __deopt_box__: n
+     13  JUMP               1     ; -> 15
+     14  PUSH_NIL
+     15  POP
+     16  PUSH_SELF
+     17  PUSH_LOCAL         1     ; n
+     18  PUSH_CONST         4     ; 1
+     19  BIN_INT_SUB        5     ; #-
+     20  SEND_KEYWORD       6     ; #fib:, 1 arg
+     21  PUSH_SELF
+     22  PUSH_LOCAL         1     ; n
+     23  PUSH_CONST         7     ; 2
+     24  BIN_INT_SUB        5     ; #-
+     25  SEND_KEYWORD       6     ; #fib:, 1 arg
+     26  BIN_INT_ADD        8     ; #+
+     27  RETURN
+
+module main.0.0: [] in Math>>fib: (not inlined)
+  args 0, locals 0, stack 48 (deepest 1)
+  defining class Math
+  constants:
+    #0   symbol    #n
+  code:
+      0  DEOPT_CHECK        1     ; box must be open
+      1  PUSH_CAPTURED      0     ; n
+      2  RETURN
+      3  RETURN_TOP
 55
 ```
 
-- `main.0` `0`-`10`: the guard `n < 2 ifTrue: [ ^ n ]` is inlined. Its `^ n`
+- `main.0` `0`-`15`: the guard `n < 2 ifTrue: [ ^ n ]` is inlined. Its `^ n`
   is a `RETURN` in the method's own frame: a plain return, no unwinding.
-  `8`-`9` are the out-of-line path of a receiver that is not a Boolean (see
-  example 03); `7 JUMP` follows a `RETURN` and is unreachable; `10 PUSH_NIL`
-  and `11 POP` complete the inlined `ifTrue:` as an expression statement.
-- `12`-`21`: each recursive call is `PUSH_SELF`, the argument (`BIN_INT_SUB`)
+  `7 JUMP` follows a `RETURN` and is unreachable; `14 PUSH_NIL` and `15 POP`
+  complete the inlined `ifTrue:` as an expression statement.
+- `8`-`13` are the out-of-line path of a receiver that is not a Boolean
+  (example 03). The block uses `n`, a frame slot of the method, so the box
+  carries it: `DEOPT_ENTER` copies slot 1 into the box held in slot 2, the
+  copy `main.0.0` reads it with `PUSH_CAPTURED` and starts with an active
+  `DEOPT_CHECK`, and `DEOPT_EXIT` copies it back. In the copy, `^ n` is a
+  real non-local return from `fib:`.
+- `16`-`25`: each recursive call is `PUSH_SELF`, the argument (`BIN_INT_SUB`)
   and `SEND_KEYWORD #fib:`. The send pushes a new frame on the same engine
   (no C++ recursion) and polls the safepoint at call entry.
-- `22 BIN_INT_ADD` adds the two results, `23 RETURN` answers the sum.
+- `26 BIN_INT_ADD` adds the two results, `27 RETURN` answers the sum.
 
 ### Example 06: `to:do:` and `whileTrue:`
 
@@ -1696,7 +1806,7 @@ blk := [ 'sent' ].
 
 ```text
 module main: <module>
-  args 0, locals 2 (0 cond, 1 blk), stack 48 (deepest 2)
+  args 0, locals 3 (0 cond, 1 blk, 2 __deopt_box__), stack 48 (deepest 2)
   constants:
     #0   integer   3
     #1   integer   2
@@ -1721,25 +1831,38 @@ module main: <module>
      13  POP
      14  PUSH_LOCAL         0     ; cond
      15  JUMP_IF_NOT_BOOL   3     ; -> 19
-     16  JUMP_IF_FALSE      4     ; -> 21
+     16  JUMP_IF_FALSE      8     ; -> 25
      17  PUSH_CONST         4     ; 'inlined'
-     18  JUMP               3     ; -> 22
-     19  ASSERT_BOOL_OR_DNU 3     ; #ifTrue:
-     20  JUMP               1     ; -> 22
-     21  PUSH_NIL
-     22  SEND_UNARY         5     ; #printNl
-     23  POP
-     24  PUSH_BLOCK         0     ; main.0 (<block>)
-     25  DUP
-     26  STORE_LOCAL        1     ; blk
+     18  JUMP               7     ; -> 26
+     19  DEOPT_ENTER        0     ; box __deopt_box__: no locals
+     20  PUSH_LOCAL         2     ; __deopt_box__
+     21  PUSH_DEOPT_BLOCK   0     ; main.0 (<block> (not inlined))
+     22  SEND_KEYWORD       3     ; #ifTrue:, 1 arg
+     23  DEOPT_EXIT         0     ; box __deopt_box__: no locals
+     24  JUMP               1     ; -> 26
+     25  PUSH_NIL
+     26  SEND_UNARY         5     ; #printNl
      27  POP
-     28  PUSH_LOCAL         0     ; cond
-     29  PUSH_LOCAL         1     ; blk
-     30  SEND_KEYWORD       3     ; #ifTrue:, 1 arg
-     31  SEND_UNARY         5     ; #printNl
-     32  RETURN_TOP
+     28  PUSH_BLOCK         1     ; main.1 (<block>)
+     29  DUP
+     30  STORE_LOCAL        1     ; blk
+     31  POP
+     32  PUSH_LOCAL         0     ; cond
+     33  PUSH_LOCAL         1     ; blk
+     34  SEND_KEYWORD       3     ; #ifTrue:, 1 arg
+     35  SEND_UNARY         5     ; #printNl
+     36  RETURN_TOP
 
-module main.0: <block>
+module main.0: <block> (not inlined)
+  args 0, locals 0, stack 48 (deepest 1)
+  constants:
+    #0   string    'inlined'
+  code:
+      0  DEOPT_CHECK        0     ; none
+      1  PUSH_CONST         0     ; 'inlined'
+      2  RETURN_TOP
+
+module main.1: <block>
   args 0, locals 0, stack 48 (deepest 1)
   constants:
     #0   string    'sent'
@@ -1750,14 +1873,17 @@ module main.0: <block>
 'sent'
 ```
 
-- `14`-`21`: `cond ifTrue: [ 'inlined' ]` is inlined (guard, jump, the body's
-  constant, the out-of-line `doesNotUnderstand:` path, `PUSH_NIL` for the
-  false case). `and:` and `or:` with a literal block are inlined the same
-  way, with `PUSH_FALSE` / `PUSH_TRUE` in place of the `PUSH_NIL`.
-- `28`-`30`: `cond ifTrue: blk` sends `ifTrue:` to `true`; the Boolean
-  primitive evaluates the closure `main.0` in a nested engine. Both forms
-  answer the same value; only the inlined one avoids the closure, the send
-  and the nested engine.
+- `14`-`25`: `cond ifTrue: [ 'inlined' ]` is inlined (guard, jump, the body's
+  constant, `PUSH_NIL` for the false case). `19`-`24` is the out-of-line
+  path of a receiver that is not a Boolean: the same send as `32`-`34`,
+  with a closure of `main.0`, a copy of the literal compiled without
+  inlining (example 03, section 1.4). `and:` and `or:` with a literal block
+  are inlined the same way, with `PUSH_FALSE` / `PUSH_TRUE` in place of the
+  `PUSH_NIL`.
+- `28`-`34`: `cond ifTrue: blk` sends `ifTrue:` to `true`; the Boolean
+  primitive evaluates the closure `main.1` in a nested engine. Both forms
+  answer the same value, for any receiver; only the inlined one avoids the
+  closure, the send and the nested engine when the receiver is a Boolean.
 
 ### Example 15: a deferred block, and `doYielding:`
 
@@ -2191,25 +2317,41 @@ module main.0: Finder>>firstOver:in:
       8  RETURN
 
 module main.0.0: [] in Finder>>firstOver:in:
-  args 1, locals 1 (0 x), stack 48 (deepest 2)
+  args 1, locals 2 (0 x, 1 __deopt_box__), stack 48 (deepest 2)
   defining class Finder
   constants:
     #0   symbol    #limit
     #1   symbol    #>
     #2   symbol    #ifTrue:
+    #3   symbol    #x
   code:
       0  PUSH_LOCAL         0     ; x
       1  PUSH_CAPTURED      0     ; limit
       2  BIN_INT_GT         1     ; #>
       3  JUMP_IF_NOT_BOOL   4     ; -> 8
-      4  JUMP_IF_FALSE      5     ; -> 10
+      4  JUMP_IF_FALSE      9     ; -> 14
       5  PUSH_LOCAL         0     ; x
       6  RETURN
-      7  JUMP               3     ; -> 11
-      8  ASSERT_BOOL_OR_DNU 2     ; #ifTrue:
-      9  JUMP               1     ; -> 11
-     10  PUSH_NIL
-     11  RETURN_TOP
+      7  JUMP               7     ; -> 15
+      8  DEOPT_ENTER        0     ; box __deopt_box__: x
+      9  PUSH_LOCAL         1     ; __deopt_box__
+     10  PUSH_DEOPT_BLOCK   0     ; main.0.0.0 ([] in Finder>>firstOver:in: (not inlined))
+     11  SEND_KEYWORD       2     ; #ifTrue:, 1 arg
+     12  DEOPT_EXIT         0     ; box __deopt_box__: x
+     13  JUMP               1     ; -> 15
+     14  PUSH_NIL
+     15  RETURN_TOP
+
+module main.0.0.0: [] in Finder>>firstOver:in: (not inlined)
+  args 0, locals 0, stack 48 (deepest 1)
+  defining class Finder
+  constants:
+    #0   symbol    #x
+  code:
+      0  DEOPT_CHECK        1     ; box must be open
+      1  PUSH_CAPTURED      0     ; x
+      2  RETURN
+      3  RETURN_TOP
 4
 ```
 
@@ -2226,7 +2368,7 @@ module main.0.0: [] in Finder>>firstOver:in:
 The model is `ASSERT_BOOL_OR_DNU` (value 38), a guard added to the inlined
 conditionals. Every place to touch, in order:
 
-1. **The enum,** `src/runtime/Opcodes.h`: the next free value (45 today),
+1. **The enum,** `src/runtime/Opcodes.h`: the next free value (50 today),
    with a comment giving its operand and stack effect. Never renumber an
    existing opcode: the value is the encoding.
    ```cpp

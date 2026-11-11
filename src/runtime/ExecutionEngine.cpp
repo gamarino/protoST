@@ -398,6 +398,102 @@ ExecutionEngine::storeInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t
                           "immutable value; nothing was written");
 }
 
+const proto::ProtoObject*
+ExecutionEngine::newClosure(proto::ProtoContext* ctx, const Frame& f, unsigned int blockIdx,
+                           const proto::ProtoObject* capD) {
+    const proto::ProtoObject* bcPtrObj =
+        ctx->fromLong(reinterpret_cast<long long>(&f.m->block(blockIdx)));
+    TransientPin pinBcPtr(ctx, bcPtrObj);
+    const proto::ProtoObject* homeObj =
+        ctx->fromLong(static_cast<long long>(f.homeFrameId));
+    TransientPin pinHome(ctx, homeObj);
+    const proto::ProtoObject* bare = bs_.blockProto->newChild(ctx, /*isMutable=*/false);
+    TransientPin pinBare(ctx, bare);
+    const proto::ProtoObject* creatorSelf = getSelf(f);
+    const proto::ProtoString* names[4] = {
+        bs_.sym.bcPtr, bs_.sym.captured, bs_.sym.homeFrame, bs_.sym.blockSelf };
+    const proto::ProtoObject* values[4] = {
+        bcPtrObj,
+        (capD && capD != PROTO_NONE) ? capD : PROTO_NONE,
+        homeObj,
+        creatorSelf ? creatorSelf : PROTO_NONE };
+    return bare->setAttributes(ctx, 4, names, values);
+}
+
+// ---------------------------------------------------------------------------
+// De-optimisation of inlined value conditionals (Opcodes.h, DEOPT_ENTER).
+//
+// `r ifTrue: [...]`, `r and: [...]` and the rest of the family are compiled
+// inline; when `r` is not a Boolean the expression is sent for real, with
+// closures compiled from the block literals, so the receiver's own method or
+// its doesNotUnderstand: gets the message the source wrote. Those closures
+// use variables that, inlined, are plain slots of this frame. The box carries
+// them for the duration of the send: DEOPT_ENTER copies the slots into it,
+// DEOPT_EXIT copies them back. While the send runs the frame executes
+// nothing, so the box is the only copy in use; the closures and the frame see
+// the same values a real closure would. After DEOPT_EXIT the frame owns the
+// variables again and the box is closed: a closure the receiver kept and
+// evaluates later signals an Error (DEOPT_CHECK) instead of using stale
+// copies. If the send unwinds the frame (an exception, a non-local return),
+// the box simply stays open: no frame code will run again, so the box is
+// once more the only copy, exactly what a real closure would hold.
+// ---------------------------------------------------------------------------
+
+namespace {
+const proto::ProtoString* deoptOpenKey(proto::ProtoContext* ctx) {
+    return proto::ProtoString::createSymbol(ctx, "__deopt_open__");
+}
+}  // namespace
+
+void
+ExecutionEngine::deoptEnter(proto::ProtoContext* ctx, Frame& f, unsigned int entry) {
+    const BytecodeModule::DeoptEntry& e = f.m->deoptEntry(entry);
+    const proto::ProtoObject* capD = getCaptured(f);
+    const proto::ProtoObject* parent =
+        (capD && capD != PROTO_NONE) ? capD : bs_.objectProto;
+    const proto::ProtoObject* box = parent->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinBox(ctx, box);
+    std::vector<const proto::ProtoString*> names;
+    std::vector<const proto::ProtoObject*> values;
+    names.reserve(e.locals.size() + 1);
+    values.reserve(e.locals.size() + 1);
+    // The box is open until DEOPT_EXIT closes it (DEOPT_CHECK).
+    names.push_back(deoptOpenKey(ctx));
+    values.push_back(PROTO_TRUE);
+    for (const auto& [nameConst, slot] : e.locals) {
+        names.push_back(f.m->constSym(ctx, nameConst));
+        const proto::ProtoObject* v = getLocal(f, slot);
+        values.push_back(v ? v : PROTO_NONE);   // frame values: rooted
+    }
+    box->setAttributes(ctx, static_cast<unsigned>(names.size()), names.data(), values.data());
+    setLocal(f, e.boxSlot, box);
+}
+
+void
+ExecutionEngine::deoptExit(proto::ProtoContext* ctx, Frame& f, unsigned int entry) {
+    const BytecodeModule::DeoptEntry& e = f.m->deoptEntry(entry);
+    const proto::ProtoObject* box = getLocal(f, e.boxSlot);
+    if (!box || box == PROTO_NONE) return;
+    for (const auto& [nameConst, slot] : e.locals) {
+        const proto::ProtoObject* v = box->getOwnAttributeDirect(ctx, f.m->constSym(ctx, nameConst));
+        setLocal(f, slot, v ? v : PROTO_NONE);
+    }
+    box->setAttribute(ctx, deoptOpenKey(ctx), PROTO_FALSE);
+    setLocal(f, e.boxSlot, PROTO_NONE);
+}
+
+void
+ExecutionEngine::deoptCheck(proto::ProtoContext* ctx, Frame& f) {
+    const proto::ProtoObject* capD = getCaptured(f);
+    if (!capD || capD == PROTO_NONE) return;
+    if (capD->getAttribute(ctx, deoptOpenKey(ctx)) != PROTO_FALSE) return;
+    signalErrorOfClass(rt_, ctx, bs_.errorProto,
+        "a block literal of an inlined ifTrue:/ifFalse:/and:/or: was passed to a "
+        "receiver that is not a Boolean, kept by it and evaluated after that send "
+        "returned; it uses variables of a method that has continued since. Pass a "
+        "block held in a variable when the receiver keeps it");
+}
+
 void
 ExecutionEngine::flushInstVarGroup(proto::ProtoContext* ctx, Frame& f) {
     const uint16_t pending = f.ivGroupPending;
@@ -890,6 +986,10 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     labels[static_cast<unsigned int>(Op::JUMP_IF_TRUE)]     = &&L_JUMP_IF_TRUE;
     labels[static_cast<unsigned int>(Op::JUMP_IF_FALSE)]    = &&L_JUMP_IF_FALSE;
     labels[static_cast<unsigned int>(Op::JUMP_IF_NOT_BOOL)] = &&L_JUMP_IF_NOT_BOOL;
+    labels[static_cast<unsigned int>(Op::DEOPT_ENTER)]      = &&L_DEOPT_ENTER;
+    labels[static_cast<unsigned int>(Op::PUSH_DEOPT_BLOCK)] = &&L_PUSH_DEOPT_BLOCK;
+    labels[static_cast<unsigned int>(Op::DEOPT_EXIT)]       = &&L_DEOPT_EXIT;
+    labels[static_cast<unsigned int>(Op::DEOPT_CHECK)]      = &&L_DEOPT_CHECK;
     labels[static_cast<unsigned int>(Op::RETURN)]           = &&L_RETURN;
     labels[static_cast<unsigned int>(Op::RETURN_TOP)]       = &&L_RETURN_TOP;
     labels[static_cast<unsigned int>(Op::JUMP_BACK)]        = &&L_JUMP_BACK;
@@ -1154,6 +1254,32 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 }
                 throw NonLocalReturn(ctx, f.homeFrameId, r);
             }
+            case Op::PUSH_DEOPT_BLOCK: L_PUSH_DEOPT_BLOCK: {
+                Frame& f = frames_.back();
+                // The box is a frame value (its slot) until DEOPT_EXIT.
+                const proto::ProtoObject* box = pop(f);
+                push(f, newClosure(ctx, f, arg, box));
+                DISPATCH_SCOPED();
+                break;
+            }
+            case Op::DEOPT_ENTER: L_DEOPT_ENTER: {
+                Frame& f = frames_.back();
+                deoptEnter(ctx, f, arg);
+                DISPATCH_SCOPED();
+                break;
+            }
+            case Op::DEOPT_EXIT: L_DEOPT_EXIT: {
+                Frame& f = frames_.back();
+                deoptExit(ctx, f, arg);
+                DISPATCH_SCOPED();
+                break;
+            }
+            case Op::DEOPT_CHECK: L_DEOPT_CHECK: {
+                Frame& f = frames_.back();
+                if (arg != 0) deoptCheck(ctx, f);
+                DISPATCH_SCOPED();
+                break;
+            }
             case Op::PUSH_BLOCK: L_PUSH_BLOCK: {
                 Frame& f = frames_.back();
                 // arg = block index inside f.m->blocks(). A BlockClosure is
@@ -1179,25 +1305,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // 2.3 us and most of the garbage of every block created.
                 // Each value that allocates is pinned before the next
                 // allocation; the captured dict and self are frame values.
-                const proto::ProtoObject* bcPtrObj =
-                    ctx->fromLong(reinterpret_cast<long long>(&f.m->block(arg)));
-                TransientPin pinBcPtr(ctx, bcPtrObj);
-                const proto::ProtoObject* homeObj =
-                    ctx->fromLong(static_cast<long long>(f.homeFrameId));
-                TransientPin pinHome(ctx, homeObj);
-                const proto::ProtoObject* bare = bs_.blockProto->newChild(ctx, /*isMutable=*/false);
-                TransientPin pinBare(ctx, bare);
-                const proto::ProtoObject* capD = getCaptured(f);
-                const proto::ProtoObject* creatorSelf = getSelf(f);
-                const proto::ProtoString* names[4] = {
-                    bs_.sym.bcPtr, bs_.sym.captured, bs_.sym.homeFrame, bs_.sym.blockSelf };
-                const proto::ProtoObject* values[4] = {
-                    bcPtrObj,
-                    (capD && capD != PROTO_NONE) ? capD : PROTO_NONE,
-                    homeObj,
-                    creatorSelf ? creatorSelf : PROTO_NONE };
-                const proto::ProtoObject* block = bare->setAttributes(ctx, 4, names, values);
-                push(f, block);
+                push(f, newClosure(ctx, f, arg, getCaptured(f)));
                 DISPATCH_SCOPED();
                 break;
             }

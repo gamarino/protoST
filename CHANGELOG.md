@@ -118,18 +118,36 @@ minor release, so the two services arrive in 0.5.0.
 
 ### Fixed
 
-- **A resumed `doesNotUnderstand:` ran the block of an inlined conditional.**
+- **An inlined conditional with a non-Boolean receiver is now the send it
+  replaces.** `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:`, `ifFalse:ifTrue:`
+  (since 0.1) and `and:` / `or:` (new in 0.10.0) with literal blocks are
+  compiled inline. Until now a receiver that was not a Boolean got
+  `doesNotUnderstand:` with a Message that had no arguments: a class that
+  defines `ifTrue:` (or `and:`, as three-valued-logic and query-builder
+  classes do) was never reached, a forwarding proxy could not forward the
+  message, and a resumed `doesNotUnderstand:` was taken as the condition, so
   `[ 3 ifTrue: [ #body ] ] on: MessageNotUnderstood do: [ :e | e resume:
-  42 ]` answered `#body`: the inlined `ifTrue:` took the resumed value as its
-  condition. The send it replaces answers 42 and runs no block, and so does
-  the inlined form now, for `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:`,
-  `ifFalse:ifTrue:`, `and:` and `or:`. The guard is a new opcode,
-  `JUMP_IF_NOT_BOOL` (45), to an out-of-line `ASSERT_BOOL_OR_DNU` followed
-  by a jump to the end of the expression; a Boolean receiver still costs two
-  dispatches. The inlined `whileTrue:` / `whileFalse:` keep their guard
-  (a resumed value is the loop condition). Test:
+  42 ]` answered `#body`. The receiver now gets the message the source
+  wrote, with closures for the block literals: its own method, or
+  `doesNotUnderstand:` with the whole Message, whose resumed value is the
+  value of the expression. The closures are compiled from the same literals
+  without inlining (a second copy of each, used only on this path); the
+  method's variables they use are carried by a box for the duration of the
+  send and copied back when it returns, so a write in the block is seen by
+  the method, and `^` in the block returns from the method. A closure the
+  receiver keeps and evaluates *after* the send returned signals an `Error`
+  (the method owns its variables again by then; a block held in a variable
+  has no such limit). A Boolean receiver costs what it did: the guard is a
+  new opcode `JUMP_IF_NOT_BOOL` (45) to the out-of-line path, which uses
+  four more (`DEOPT_ENTER`, `PUSH_DEOPT_BLOCK`, `DEOPT_EXIT`, `DEOPT_CHECK`,
+  46-49; `docs/VM.md` 1.4). Pharo differs here: since Pharo 10 a
+  non-Boolean receiver of an inlined conditional signals
+  `NonBooleanReceiver` ("proceed for truth") and the receiver's own method
+  is not run; Pharo 9 re-sent the expression without inlining
+  (`mustBeBooleanDeOptimizeIn:`), which is what protoST does. Tests:
   `08-exceptions/inlined-conditional-non-boolean-like-send.st` (failed
-  before: 5 of 11 rows).
+  before: 5 of 11 rows), `inlined-conditional-reaches-receiver-method.st`
+  (failed before), `inlined-conditional-kept-block-is-refused.st`.
 - **`lib/random.st`: `nextInt:` and `between:and:` alternated parity.** Both
   took the generator's state modulo the range. The generator is a 32-bit LCG
   with a power-of-two modulus, in which bit k of the state has period
@@ -263,13 +281,10 @@ minor release, so the two services arrive in 0.5.0.
   8.2-8.6 s to 0.21 s, `or:` from 9.8-10.4 s to 0.19 s, the cost of the
   nested `ifTrue:` they mean (0.19-0.23 s); `benchmarks/micro/and_or.st`.
   The value is the primitive's: `true and: [3]` is 3, the block's value is
-  not checked. A non-Boolean receiver signals `doesNotUnderstand: and:` /
-  `or:` as the send did; a non-literal argument (`x and: aBlock`) is still a
-  send. As with `ifTrue:`, a non-Boolean class that defines its own `and:`
-  or `or:` is not reached by a literal-block send (Pharo's compiler inlines
-  these selectors too), and a `doesNotUnderstand:` override receives a
-  Message without the block, which does not exist. protoST has no `and:and:` / `or:or:`, so there are none to inline.
-  Tests: `06-blocks/inlined-and-or-values.st`,
+  not checked. A non-Boolean receiver gets the real send (see Fixed); a
+  non-literal argument (`x and: aBlock`) is still a send. protoST has no
+  `and:and:` / `or:or:`, so there are none to inline. Tests:
+  `06-blocks/inlined-and-or-values.st`,
   `07-non-local-return/nonlocal-return-from-inlined-and-or.st`, a debugger
   single-step case in `tests/unit/test_debugger.cpp`; `docs/VM.md` 1.4 and
   the opcode table; vm-examples 03, 05, 14 and 18 regenerated.

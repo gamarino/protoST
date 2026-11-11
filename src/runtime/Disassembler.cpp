@@ -56,6 +56,10 @@ const char* opName(Op op) {
         case Op::IVAR_GROUP:         return "IVAR_GROUP";
         case Op::IVAR_GROUP_END:     return "IVAR_GROUP_END";
         case Op::JUMP_IF_NOT_BOOL:   return "JUMP_IF_NOT_BOOL";
+        case Op::DEOPT_ENTER:        return "DEOPT_ENTER";
+        case Op::PUSH_DEOPT_BLOCK:   return "PUSH_DEOPT_BLOCK";
+        case Op::DEOPT_EXIT:         return "DEOPT_EXIT";
+        case Op::DEOPT_CHECK:        return "DEOPT_CHECK";
         case Op::EXTEND:             return "EXTEND";
     }
     return nullptr;
@@ -268,6 +272,7 @@ void listModule(const BytecodeModule& m, const std::string& path, std::string& o
                                            : std::string("<before the start>"));
                 break;
             case Op::PUSH_BLOCK:
+            case Op::PUSH_DEOPT_BLOCK:
                 if (in.arg < m.numBlocks()) {
                     const std::string& dn = m.block(in.arg).debugName();
                     withOperand(path + "." + std::to_string(in.arg)
@@ -292,6 +297,24 @@ void listModule(const BytecodeModule& m, const std::string& path, std::string& o
                 } else {
                     withOperand("<group entry out of range>");
                 }
+                break;
+            case Op::DEOPT_ENTER:
+            case Op::DEOPT_EXIT:
+                if (in.arg < m.numDeoptEntries()) {
+                    const auto& e = m.deoptEntry(in.arg);
+                    std::string names;
+                    for (const auto& [nameConst, slot] : e.locals) {
+                        (void)slot;
+                        names += (names.empty() ? "" : " ") + nameAt(m, nameConst);
+                    }
+                    withOperand("box " + slotText(m, e.boxSlot) + ": "
+                                + (names.empty() ? std::string("no locals") : names));
+                } else {
+                    withOperand("<deopt entry out of range>");
+                }
+                break;
+            case Op::DEOPT_CHECK:
+                withOperand(in.arg ? "box must be open" : "none");
                 break;
             default:
                 // No operand (the compiler emits 0); show one only if set.

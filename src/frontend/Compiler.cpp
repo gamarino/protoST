@@ -98,6 +98,10 @@ struct ScopeWalker {
 
 using ClassMap = std::unordered_map<std::string, Compiler::ClassInfo>;
 
+// Set while analysing a de-optimised copy of an inlined block
+// (Compiler::compileDeoptBlock): nothing in it is inlined.
+thread_local bool t_analyseWithoutInlining = false;
+
 // Forward declarations.
 void walkNode(const Node& n, ScopeWalker& cur,
               Compiler::ScopeAnalysis& out, const Node* scopeKey,
@@ -232,7 +236,8 @@ void walkNode(const Node& n, ScopeWalker& cur,
         case NodeKind::KeywordSend: {
             // A control send the compiler inlines: its block arguments are
             // not closures, their bodies run in the enclosing scope.
-            const Compiler::InlineShape shape = Compiler::inlineShapeOf(n);
+            const Compiler::InlineShape shape = t_analyseWithoutInlining
+                ? Compiler::InlineShape::None : Compiler::inlineShapeOf(n);
             if (shape == Compiler::InlineShape::None) {
                 for (const auto& child : n.children)
                     if (child) walkNode(*child, cur, out, nullptr, classes);
@@ -1462,42 +1467,7 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             // block starts on: at the body's last line it took a breakpoint
             // meant for the body's last statement.
             const int blockLine = currentLine_;
-            auto sub = std::make_unique<BytecodeModule>();
-            // A block inside a method sends `super` on behalf of that method's
-            // class (Pharo allows super in blocks).
-            if (!currentMethodClass_.empty()) sub->setDefiningClass(currentMethodClass_);
-            // open fresh scope for block
-            scopes_.emplace_back();
-            {
-                auto& s = scopes_.back();
-                s.astNode = &n;
-                auto it = analysis_.capturedByScope.find(&n);
-                if (it != analysis_.capturedByScope.end()) {
-                    s.capturedNames = it->second;
-                }
-            }
-            reportDuplicateNames(n.stringList, 0, "a block");
-            int nArgs = static_cast<int>(n.intValue);
-            sub->setArgCount(nArgs);
-            // declare args first (slots 0..nArgs-1), then locals
-            for (size_t i = 0; i < n.stringList.size(); ++i) {
-                declareLocal(n.stringList[i]);
-                if (static_cast<int>(i) < nArgs) scopes_.back().args.insert(n.stringList[i]);
-            }
-            // A block that declares captured names opens its own captured
-            // dict (see emitCaptureProlog). The block's stringList is all
-            // args+locals; the first nArgs entries are the arguments.
-            emitCaptureProlog(*sub, /*isMethod=*/false, n.stringList,
-                              /*nArgs=*/nArgs, /*argNameOffset=*/0);
-            // emit body statements; last value implicitly returned
-            if (n.children.empty()) sub->emit(Op::PUSH_NIL, 0, currentLine_);
-            emitStatements(*sub, n.children, 0, n.children.size());
-            sub->emit(Op::RETURN_TOP, 0, currentLine_);
-            recordLocalNames(*sub);
-            sub->setDebugName(currentMethodDebugName_.empty()
-                                  ? std::string("<block>")
-                                  : "[] in " + currentMethodDebugName_);
-            scopes_.pop_back();
+            auto sub = compileBlockModule(n, /*deoptBoundary=*/false, nullptr);
             size_t blkIdx = m.addBlockModule(std::move(sub));
             currentLine_ = blockLine;
             m.emitWide(Op::PUSH_BLOCK, static_cast<unsigned int>(blkIdx), currentLine_);
@@ -1512,6 +1482,88 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             m.emit(Op::PUSH_NIL, 0, currentLine_);
             return;
     }
+}
+
+std::unique_ptr<BytecodeModule>
+Compiler::compileBlockModule(const Node& n, bool deoptBoundary,
+                             std::vector<std::pair<std::string, int>>* boxedOut) {
+    auto sub = std::make_unique<BytecodeModule>();
+    // A block inside a method sends `super` on behalf of that method's
+    // class (Pharo allows super in blocks).
+    if (!currentMethodClass_.empty()) sub->setDefiningClass(currentMethodClass_);
+    // open fresh scope for block
+    scopes_.emplace_back();
+    {
+        auto& s = scopes_.back();
+        s.astNode = &n;
+        s.deoptBoundary = deoptBoundary;
+        auto it = analysis_.capturedByScope.find(&n);
+        if (it != analysis_.capturedByScope.end()) {
+            s.capturedNames = it->second;
+        }
+    }
+    // Inside a de-optimised copy, a block that uses a boxed local checks on
+    // entry that the box is still open (DEOPT_CHECK, enabled below).
+    const bool mayUseBox = deoptDepth_ > 0;
+    const std::size_t checkPos = sub->pos();
+    if (mayUseBox) sub->emit(Op::DEOPT_CHECK, 0, currentLine_);
+    reportDuplicateNames(n.stringList, 0, "a block");
+    int nArgs = static_cast<int>(n.intValue);
+    sub->setArgCount(nArgs);
+    // declare args first (slots 0..nArgs-1), then locals
+    for (size_t i = 0; i < n.stringList.size(); ++i) {
+        declareLocal(n.stringList[i]);
+        if (static_cast<int>(i) < nArgs) scopes_.back().args.insert(n.stringList[i]);
+    }
+    // A block that declares captured names opens its own captured
+    // dict (see emitCaptureProlog). The block's stringList is all
+    // args+locals; the first nArgs entries are the arguments.
+    emitCaptureProlog(*sub, /*isMethod=*/false, n.stringList,
+                      /*nArgs=*/nArgs, /*argNameOffset=*/0);
+    // emit body statements; last value implicitly returned
+    if (n.children.empty()) sub->emit(Op::PUSH_NIL, 0, currentLine_);
+    emitStatements(*sub, n.children, 0, n.children.size());
+    sub->emit(Op::RETURN_TOP, 0, currentLine_);
+    if (mayUseBox && scopes_.back().usesBox) sub->patchWideArg(checkPos, 0, 1);
+    if (boxedOut) *boxedOut = scopes_.back().boxed;
+    recordLocalNames(*sub);
+    sub->setDebugName(currentMethodDebugName_.empty()
+                          ? std::string("<block>")
+                          : "[] in " + currentMethodDebugName_);
+    scopes_.pop_back();
+    return sub;
+}
+
+void Compiler::compileDeoptBlock(BytecodeModule& m, const Node& blk, size_t blockIdx,
+                                 std::vector<std::pair<std::string, int>>& boxedOut) {
+    // The copy is a real block, so the closure analysis is redone for it
+    // with nothing inlined: a block nested in it that the enclosing code
+    // inlines is a real block here, and the variables of the copy that such
+    // a block uses must be captured. Names the copy takes from the enclosing
+    // scopes resolve through those scopes (isCaptured): captured ones through
+    // the captured dict, which is the box's parent, and frame locals through
+    // the box. The enclosing code was compiled first, so it reported any
+    // compile error in these statements already; the copy's are dropped.
+    ScopeAnalysis cold;
+    {
+        ScopeWalker enclosing;
+        const bool saved = t_analyseWithoutInlining;
+        t_analyseWithoutInlining = true;
+        walkBlockScope(blk, enclosing, cold, &classes_);
+        t_analyseWithoutInlining = saved;
+    }
+    cold.moduleCaptured = analysis_.moduleCaptured;
+    std::swap(analysis_, cold);
+    const std::size_t errorCount = errors_.size();
+    const int line = currentLine_;
+    ++deoptDepth_;
+    auto sub = compileBlockModule(blk, /*deoptBoundary=*/true, &boxedOut);
+    --deoptDepth_;
+    currentLine_ = line;
+    errors_.resize(errorCount);
+    std::swap(analysis_, cold);
+    sub->setDebugName(sub->debugName() + " (not inlined)");
+    m.replaceBlockModule(blockIdx, std::move(sub));
 }
 
 // Inside a method, assigning to a name that is not an argument, temporary,
@@ -1614,10 +1666,25 @@ bool Compiler::isCaptured(const std::string& name) const {
     // by an inner block. Walk innermost-first; honour shadowing: if a closer
     // scope already binds this name as a non-captured local slot, that wins
     // and the use is NOT captured.
+    //
+    // Past a de-optimised copy of an inlined block (deoptBoundary), a local
+    // slot of an enclosing scope belongs to another frame: the copy reaches
+    // it through its box, as a captured name. It is recorded on the boundary
+    // nearest the slot's scope, and the innermost scope is marked as a user
+    // of the box.
+    const Scope* boundary = nullptr;
     for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
         if (it->capturedNames.count(name) != 0) return true;
-        if (it->slots.count(name) != 0) return false;
+        if (auto f = it->slots.find(name); f != it->slots.end()) {
+            if (!boundary) return false;
+            bool known = false;
+            for (const auto& [n, slot] : boundary->boxed) known = known || n == name;
+            if (!known) boundary->boxed.emplace_back(name, f->second);
+            scopes_.back().usesBox = true;
+            return true;
+        }
         if (isMethodScope(*it)) break;
+        if (it->deoptBoundary) boundary = &*it;
     }
     return false;
 }
@@ -1839,7 +1906,7 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
     // Inline exactly the sends the closure analysis treated as inlined: it
     // left the variables their blocks use out of the captured sets, so a
     // send emitted as a real block here would find them uncaptured.
-    if (analysis_.inlinedSends.count(&n) == 0) return false;
+    if (deoptDepth_ > 0 || analysis_.inlinedSends.count(&n) == 0) return false;
     auto isInlineableBlock = [](const ast::Node* b) -> bool {
         return b && b->kind == NodeKind::Block
             && b->intValue == 0
@@ -1848,12 +1915,11 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
 
     // The value conditionals: an inlined ifTrue:, ifFalse:, ifTrue:ifFalse:,
     // ifFalse:ifTrue:, and: or or: (emitInlinedConditional). The receiver
-    // is tested once; a non-Boolean receiver signals doesNotUnderstand: of
-    // the selector, as the send does (2026-05-24: without the guard,
+    // is tested once; a non-Boolean receiver gets the real send, with
+    // closures for the block literals (2026-05-24: without the guard,
     // `123 ifTrue: [x]` ran `[x]`, because JUMP_IF_FALSE branches only on
-    // false), and the answer of a resumed doesNotUnderstand: is the value
-    // of the expression with no branch run (0.10.0: it used to be taken as
-    // the condition).
+    // false; until 0.10.0 it got doesNotUnderstand: without arguments and a
+    // resumed value was taken as the condition).
     if (n.children.size() == 2
         && isInlineableBlock(n.children[1].get())
         && (n.text == "ifTrue:" || n.text == "ifFalse:")) {
@@ -2011,33 +2077,68 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
 //       <jumpOp>            second        JUMP_IF_FALSE or JUMP_IF_TRUE
 //       <first>
 //       JUMP                end
-//   slow:
-//       ASSERT_BOOL_OR_DNU  #selector     the receiver is not a Boolean
+//   slow:                                 the receiver is not a Boolean:
+//       DEOPT_ENTER         k             send the message for real
+//       PUSH_LOCAL          box
+//       PUSH_DEOPT_BLOCK    copy of the 1st block literal
+//      [PUSH_LOCAL          box
+//       PUSH_DEOPT_BLOCK    copy of the 2nd block literal]
+//       SEND_KEYWORD        #selector
+//       DEOPT_EXIT          k
 //       JUMP                end
 //   second:
 //       <second>
 //   end:
 //
 // The slow path is out of line, so a Boolean receiver costs the same two
-// dispatches as one guard and one conditional jump, and the answer of a
-// resumed doesNotUnderstand: is the expression's value, as for the send.
+// dispatches as one guard and one conditional jump. Any other receiver gets
+// the message the source wrote, with closures for the block literals
+// (compiled after the rest, compileDeoptBlock), as if nothing were inlined:
+// its own method, or doesNotUnderstand: with the whole Message.
 void Compiler::emitInlinedConditional(BytecodeModule& m, const ast::Node& send, Op jumpOp,
                                       const std::function<void()>& first,
                                       const std::function<void()>& second) {
     emitExpr(m, *send.children[0]);
+    const int line = currentLine_;
     const auto selSym = static_cast<unsigned int>(m.internSymbol(send.text));
+    const int boxSlot = declareLocal("__deopt_box__");
+    const size_t entry = m.addDeoptEntry();
+    std::vector<std::pair<const ast::Node*, size_t>> copies;   // (literal, sub-module)
+    for (size_t i = 1; i < send.children.size(); ++i)
+        copies.emplace_back(send.children[i].get(), m.reserveBlockModule());
     const size_t jNotBool = emitForwardJump(m, Op::JUMP_IF_NOT_BOOL);
     const size_t jSecond  = emitForwardJump(m, jumpOp);
     first();
     const size_t jDone1 = emitForwardJump(m, Op::JUMP);
     const size_t slow = m.pos();
-    m.emitWide(Op::ASSERT_BOOL_OR_DNU, selSym, currentLine_);
+    currentLine_ = line;
+    m.emitWide(Op::DEOPT_ENTER, static_cast<unsigned int>(entry), currentLine_);
+    for (const auto& [literal, idx] : copies) {
+        (void)literal;
+        m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(boxSlot), currentLine_);
+        m.emitWide(Op::PUSH_DEOPT_BLOCK, static_cast<unsigned int>(idx), currentLine_);
+    }
+    m.emitWide(Op::SEND_KEYWORD, selSym, currentLine_);
+    m.emitWide(Op::DEOPT_EXIT, static_cast<unsigned int>(entry), currentLine_);
     const size_t jDone2 = emitForwardJump(m, Op::JUMP);
     const size_t secondPos = m.pos();
     second();
     const size_t end = m.pos();
     resolveForwardJumps(m, {{jNotBool, slow}, {jSecond, secondPos},
                             {jDone1, end}, {jDone2, end}});
+    // The copies, and the locals their box carries.
+    std::vector<std::pair<std::string, int>> boxed;
+    for (const auto& [literal, idx] : copies) {
+        std::vector<std::pair<std::string, int>> used;
+        compileDeoptBlock(m, *literal, idx, used);
+        for (const auto& u : used)
+            if (std::find(boxed.begin(), boxed.end(), u) == boxed.end()) boxed.push_back(u);
+    }
+    auto& e = m.deoptEntry(entry);
+    e.boxSlot = static_cast<uint32_t>(boxSlot);
+    for (const auto& [name, slot] : boxed)
+        e.locals.emplace_back(static_cast<uint32_t>(m.internSymbol(name)),
+                              static_cast<uint32_t>(slot));
 }
 
 void Compiler::emitInlinedBlockBody(BytecodeModule& m, const ast::Node& block) {

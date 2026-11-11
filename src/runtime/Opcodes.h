@@ -85,10 +85,7 @@ enum class Op : uint8_t {
     // the operand (a const-pool symbol index), pushing the answer of a
     // resumed MessageNotUnderstood. On a Boolean it is a no-op and the
     // stack is unchanged. The compiler emits it before the JUMP_IF_FALSE /
-    // JUMP_IF_TRUE of an inlined whileTrue: / whileFalse:, and as the
-    // out-of-line target of JUMP_IF_NOT_BOOL in an inlined value
-    // conditional, so the inlined code keeps the observable semantics of
-    // the SEND_KEYWORD dispatch it replaced.
+    // JUMP_IF_TRUE of an inlined whileTrue: / whileFalse:.
     ASSERT_BOOL_OR_DNU = 38, // arg = selector const index
     // 2026-06-13: protoCore-style call-form send (positional + named args).
     // The single operand is a const-pool index naming a *mangled* selector
@@ -134,11 +131,30 @@ enum class Op : uint8_t {
     // Peeks the top of the stack and jumps forward when it is neither true
     // nor false; a Boolean stays and execution falls through. It opens every
     // inlined value conditional (ifTrue:, ifFalse:, ifTrue:ifFalse:,
-    // ifFalse:ifTrue:, and:, or:): the target is an out-of-line
-    // ASSERT_BOOL_OR_DNU followed by a JUMP to the end of the expression, so
-    // the answer of a resumed doesNotUnderstand: is the expression's value
-    // and no branch runs, as for the send the inlining replaced.
+    // ifFalse:ifTrue:, and:, or:): the target is the out-of-line real send
+    // of the expression (DEOPT_ENTER below) followed by a JUMP to its end.
     JUMP_IF_NOT_BOOL   = 45, // arg = forward offset in instructions
+    // De-optimisation of an inlined value conditional whose receiver is not
+    // a Boolean (0.10.0). The out-of-line target of JUMP_IF_NOT_BOOL sends
+    // the selector for real, with closures compiled from the block literals:
+    //     DEOPT_ENTER k  PUSH_LOCAL box  PUSH_DEOPT_BLOCK b1 [PUSH_LOCAL box
+    //     PUSH_DEOPT_BLOCK b2]  SEND_KEYWORD #sel  DEOPT_EXIT k  JUMP end
+    // DEOPT_ENTER builds the box, a mutable captured dict whose parent is the
+    // frame's captured dict, holding the frame locals that the closures use
+    // (deopt entry k), and stores it in the entry's frame slot. Nothing
+    // changes on the operand stack.
+    DEOPT_ENTER        = 46, // arg = deopt-entry index
+    // Pops a box and pushes a closure of sub-module `arg` that resolves its
+    // free variables in that box (PUSH_BLOCK uses the frame's captured dict).
+    PUSH_DEOPT_BLOCK   = 47, // arg = bytecode-module-table index
+    // Copies the box's locals back into the frame slots, marks the box
+    // closed and clears the slot. The send's answer stays on the stack.
+    DEOPT_EXIT         = 48, // arg = deopt-entry index
+    // First instruction of a de-optimised closure (and of a block nested in
+    // one) that uses a boxed local: when its box is closed (the send
+    // returned and the frame owns the locals again) it signals an Error
+    // instead of reading or writing stale copies. arg 0 = no check.
+    DEOPT_CHECK        = 49, // arg = 1 to check, 0 for none
     // Prefix carrying the next-higher byte of the following instruction's
     // operand, for operands above 255 (constant indices, slots, jumps).
     EXTEND          = 254,

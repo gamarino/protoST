@@ -1,5 +1,5 @@
 module main: <module>
-  args 0, locals 2 (0 cond, 1 blk), stack 48 (deepest 2)
+  args 0, locals 3 (0 cond, 1 blk, 2 __deopt_box__), stack 48 (deepest 2)
   constants:
     #0   integer   3
     #1   integer   2
@@ -24,25 +24,38 @@ module main: <module>
      13  POP
      14  PUSH_LOCAL         0     ; cond
      15  JUMP_IF_NOT_BOOL   3     ; -> 19
-     16  JUMP_IF_FALSE      4     ; -> 21
+     16  JUMP_IF_FALSE      8     ; -> 25
      17  PUSH_CONST         4     ; 'inlined'
-     18  JUMP               3     ; -> 22
-     19  ASSERT_BOOL_OR_DNU 3     ; #ifTrue:
-     20  JUMP               1     ; -> 22
-     21  PUSH_NIL
-     22  SEND_UNARY         5     ; #printNl
-     23  POP
-     24  PUSH_BLOCK         0     ; main.0 (<block>)
-     25  DUP
-     26  STORE_LOCAL        1     ; blk
+     18  JUMP               7     ; -> 26
+     19  DEOPT_ENTER        0     ; box __deopt_box__: no locals
+     20  PUSH_LOCAL         2     ; __deopt_box__
+     21  PUSH_DEOPT_BLOCK   0     ; main.0 (<block> (not inlined))
+     22  SEND_KEYWORD       3     ; #ifTrue:, 1 arg
+     23  DEOPT_EXIT         0     ; box __deopt_box__: no locals
+     24  JUMP               1     ; -> 26
+     25  PUSH_NIL
+     26  SEND_UNARY         5     ; #printNl
      27  POP
-     28  PUSH_LOCAL         0     ; cond
-     29  PUSH_LOCAL         1     ; blk
-     30  SEND_KEYWORD       3     ; #ifTrue:, 1 arg
-     31  SEND_UNARY         5     ; #printNl
-     32  RETURN_TOP
+     28  PUSH_BLOCK         1     ; main.1 (<block>)
+     29  DUP
+     30  STORE_LOCAL        1     ; blk
+     31  POP
+     32  PUSH_LOCAL         0     ; cond
+     33  PUSH_LOCAL         1     ; blk
+     34  SEND_KEYWORD       3     ; #ifTrue:, 1 arg
+     35  SEND_UNARY         5     ; #printNl
+     36  RETURN_TOP
 
-module main.0: <block>
+module main.0: <block> (not inlined)
+  args 0, locals 0, stack 48 (deepest 1)
+  constants:
+    #0   string    'inlined'
+  code:
+      0  DEOPT_CHECK        0     ; none
+      1  PUSH_CONST         0     ; 'inlined'
+      2  RETURN_TOP
+
+module main.1: <block>
   args 0, locals 0, stack 48 (deepest 1)
   constants:
     #0   string    'sent'

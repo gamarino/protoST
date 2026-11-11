@@ -116,6 +116,7 @@ unsigned int BytecodeModule::computeMaxOperandDepth() const {
             case Op::PUSH_CONST: case Op::PUSH_LOCAL: case Op::DUP:
             case Op::PUSH_SELF: case Op::PUSH_NIL: case Op::PUSH_TRUE:
             case Op::PUSH_FALSE: case Op::PUSH_BLOCK: case Op::PUSH_CAPTURED:
+            // PUSH_DEOPT_BLOCK pops a box and pushes a closure: no change.
             case Op::PUSH_GLOBAL: case Op::PUSH_INSTVAR: case Op::PUSH_OWN_INSTVAR:
                 pushes(1);
                 break;
@@ -155,7 +156,8 @@ unsigned int BytecodeModule::computeMaxOperandDepth() const {
             case Op::JUMP_BACK: case Op::RETURN: case Op::RETURN_TOP:
                 reachable = false;
                 break;
-            default:   // ASSERT_BOOL_OR_DNU, MAKE_CAPTURED, IVAR_GROUP: no change
+            default:   // ASSERT_BOOL_OR_DNU, MAKE_CAPTURED, IVAR_GROUP,
+                       // DEOPT_ENTER/EXIT/CHECK, PUSH_DEOPT_BLOCK: no change
                 break;
         }
     }

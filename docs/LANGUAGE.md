@@ -1294,6 +1294,23 @@ iterate those with `do:`, which may not contain `wait`, or convert them
 first (`aSet asArray doYielding: […]`). See
 Chapter 10.8 of [the tutorial](TUTORIAL.md) for a worked example.
 
+**Inlined control messages.** The compiler compiles `ifTrue:`, `ifFalse:`,
+`ifTrue:ifFalse:`, `ifFalse:ifTrue:`, `and:` and `or:` whose arguments are
+literal blocks without arguments or temporaries, `whileTrue:` / `whileFalse:`
+with a literal receiver and argument block, and `to:do:` with a literal
+one-argument block, into the enclosing code: no closure is built and nothing
+is sent. The meaning is the send's. When the receiver of one of the six
+conditionals is not a Boolean, the message is sent for real, with closures
+for the block literals (since 0.10.0): a class that defines `ifTrue:` or
+`and:` answers it, and a `doesNotUnderstand:` override receives the whole
+Message (a forwarding proxy forwards it). Those closures share the method's
+variables while the send runs; one that the receiver keeps and evaluates
+after the send has returned signals an `Error` if it uses a variable of the
+method (pass a block held in a variable when the receiver keeps it). This
+differs from Pharo 10 and later, where such a receiver gets
+`NonBooleanReceiver` and its own method is not run; Pharo 9 re-sent the
+expression without inlining, as protoST does.
+
 **Conditional and boolean protocol on `Boolean`** — `ifTrue:`, `ifFalse:`,
 `ifTrue:ifFalse:`, `ifFalse:ifTrue:`; the short-circuit combinators `and:` /
 `or:` (the argument is a block, evaluated only when needed); the eager

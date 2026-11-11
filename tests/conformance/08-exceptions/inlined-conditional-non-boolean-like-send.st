@@ -4,8 +4,9 @@
  send it replaces (the same selector with a block held in a variable): the
  same doesNotUnderstand: text, no block evaluated, and when the handler
  resumes the MessageNotUnderstood the resumed value is the value of the
- whole expression. Until 0.10.0 an inlined ifTrue: took the resumed value
- as its condition and ran its block. Each row is { inlined. sent } and the
+ whole expression. Since 0.10.0 the inlined form is the send itself for such
+ a receiver (inlined-conditional-reaches-receiver-method.st); until then an
+ inlined ifTrue: took the resumed value as its condition and ran its block. Each row is { inlined. sent } and the
  program answers whether every pair is equal; on a mismatch it prints them."
 | log blk text resumed rows ok |
 log := OrderedCollection new.

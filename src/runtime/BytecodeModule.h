@@ -190,8 +190,36 @@ public:
     const InstVarGroupEntry& instVarGroupEntry(size_t i) const { return groupEntries_.at(i); }
     size_t numInstVarGroupEntries() const { return groupEntries_.size(); }
 
+    // De-optimisation of an inlined value conditional (Op::DEOPT_ENTER /
+    // DEOPT_EXIT): when the receiver is not a Boolean, the expression is sent
+    // for real, with closures compiled from the inlined block literals. Those
+    // closures reach the enclosing frame's uncaptured locals through a box
+    // (a captured dict built for the send): one entry per conditional names
+    // the frame slot that holds the box and every local the closures use,
+    // as (name constant, frame slot) pairs, copied in before the send and
+    // back after it.
+    struct DeoptEntry {
+        uint32_t boxSlot = 0;
+        std::vector<std::pair<uint32_t, uint32_t>> locals;   // (name const, slot)
+    };
+    size_t addDeoptEntry() {
+        deoptEntries_.emplace_back();
+        return deoptEntries_.size() - 1;
+    }
+    DeoptEntry&       deoptEntry(size_t i)       { return deoptEntries_.at(i); }
+    const DeoptEntry& deoptEntry(size_t i) const { return deoptEntries_.at(i); }
+    size_t numDeoptEntries() const { return deoptEntries_.size(); }
+
     // sub-modules
     size_t              addBlockModule(std::unique_ptr<BytecodeModule> b);
+    // Reserves a sub-module index whose module is supplied later
+    // (replaceBlockModule): the de-optimised copies of inlined blocks are
+    // compiled after the code that refers to them.
+    size_t              reserveBlockModule() { return addBlockModule(std::make_unique<BytecodeModule>()); }
+    void                replaceBlockModule(size_t i, std::unique_ptr<BytecodeModule> b) {
+        if (b) b->sourceName_ = sourceName_;
+        blocks_.at(i) = std::move(b);
+    }
     const BytecodeModule& block(size_t i) const { return *blocks_[i]; }
     size_t              numBlocks() const { return blocks_.size(); }
 
@@ -385,6 +413,7 @@ private:
     std::string                         debugName_;   // F8-4: human label
     std::vector<Const>                  consts_;
     std::vector<InstVarGroupEntry>      groupEntries_;  // IVAR_GROUP operands
+    std::vector<DeoptEntry>             deoptEntries_;  // DEOPT_ENTER/EXIT operands
     // Per-constant runtime caches (constSym / ivSymbol / callDescriptor).
     // Null until first use. Holds perennial interned ProtoStrings, valid for
     // the runtime's ProtoSpace (one runtime per process).

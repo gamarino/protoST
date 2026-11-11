@@ -103,6 +103,15 @@ private:
         // The scope's arguments (a subset of `slots`): read-only, as in
         // Smalltalk.
         std::unordered_set<std::string> args;
+        // A de-optimised copy of an inlined block (compileDeoptBlock): the
+        // frame locals of the enclosing scopes that it, or a block nested in
+        // it, uses are reached through a box. isCaptured records each one
+        // here, as (name, enclosing slot), the first time it is used.
+        bool deoptBoundary = false;
+        mutable std::vector<std::pair<std::string, int>> boxed;
+        // This block itself uses a boxed local (it then starts with an
+        // active DEOPT_CHECK).
+        mutable bool usesBox = false;
     };
 
     // A deque, not a vector: emission recurses while holding a reference to
@@ -244,6 +253,18 @@ private:
     void   emitInlinedConditional(BytecodeModule& m, const ast::Node& send, Op jumpOp,
                                   const std::function<void()>& first,
                                   const std::function<void()>& second);
+    // A block literal compiled as a sub-module of its own (the Block case of
+    // emitExpr). With `deoptBoundary`, a de-optimised copy of an inlined
+    // block: `boxedOut` receives the enclosing frame locals it uses.
+    std::unique_ptr<BytecodeModule> compileBlockModule(
+        const ast::Node& n, bool deoptBoundary,
+        std::vector<std::pair<std::string, int>>* boxedOut);
+    // The de-optimised copy of the inlined block literal `blk`, compiled with
+    // no inlining into the reserved sub-module `blockIdx` of `m`.
+    void   compileDeoptBlock(BytecodeModule& m, const ast::Node& blk, size_t blockIdx,
+                             std::vector<std::pair<std::string, int>>& boxedOut);
+    // > 0 while compiling a de-optimised copy: nothing is inlined in it.
+    int    deoptDepth_ = 0;
     // Jumps of any length. A forward jump is emitted as one word with a
     // placeholder operand (emitForwardJump answers its byte position); once
     // its target is known, resolveForwardJumps writes the operand, widening

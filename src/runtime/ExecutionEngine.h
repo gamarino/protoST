@@ -325,6 +325,16 @@ private:
     // group entry `entry`'s name, and the write, one by one and in order, of
     // the pending writes of an active group (before a send, which could
     // observe `self`).
+    // A closure of sub-module `blockIdx` of the frame's module, created by
+    // the frame, resolving its free variables in `capD` (PUSH_BLOCK passes
+    // the frame's captured dict, PUSH_DEOPT_BLOCK a de-optimisation box).
+    const proto::ProtoObject* newClosure(proto::ProtoContext* ctx, const Frame& f,
+                                         unsigned int blockIdx,
+                                         const proto::ProtoObject* capD);
+    // The de-optimisation opcodes (Opcodes.h, DEOPT_ENTER ... DEOPT_CHECK).
+    void deoptEnter(proto::ProtoContext* ctx, Frame& f, unsigned int entry);
+    void deoptExit(proto::ProtoContext* ctx, Frame& f, unsigned int entry);
+    void deoptCheck(proto::ProtoContext* ctx, Frame& f);
     void storeInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t nameConst,
                       const proto::ProtoObject* val);
     void flushInstVarGroup(proto::ProtoContext* ctx, Frame& f);

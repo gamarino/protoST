@@ -171,8 +171,12 @@ are noted where useful.
 - [x] Compile-time inlining of `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:`,
       `ifFalse:ifTrue:`, `and:`, `or:` (0.10.0), `whileTrue:`,
       `whileFalse:` and `to:do:` with literal blocks; a non-Boolean receiver
-      of an inlined conditional signals `doesNotUnderstand:` as the send
-      does, and a resumed one answers the expression's value (docs/VM.md 1.4)
+      of an inlined conditional gets the real send, with closures for the
+      block literals (0.10.0): its own method, or `doesNotUnderstand:` with
+      the whole Message. A closure it keeps and evaluates after the send
+      returned signals an Error when it uses the method's variables
+      (docs/VM.md 1.4). Pharo 10+ signals `NonBooleanReceiver` here instead;
+      Pharo 9 re-sent the expression, as protoST does
 
 ### Non-local return
 - [x] `^expr` in a nested block returns from the enclosing method
