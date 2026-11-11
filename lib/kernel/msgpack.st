@@ -104,7 +104,7 @@ MessagePackMap >> hash
   | h |
   h := associations size.
   1 to: (associations size min: 3) do: [:i |
-    h := (h * 31 + (associations at: i) key hash) \\ 1073741824].
+    h := h __hashMix: (associations at: i) key].
   ^ h.
 
 MessagePackMap >> printOn: aStream

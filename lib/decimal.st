@@ -284,13 +284,21 @@ Decimal >> > anObject
 Decimal >> >= anObject
   ^ (self _orderWith: anObject) >= 0.
 
-"Agrees with = : an equal Integer, Fraction or Float has the same hash."
+"CPython's hash of a Decimal (R3), so an equal Integer, Fraction or Float has
+ the same hash: with P = 2^61 - 1, coefficient * 10^exponent modulo P, the
+ power taken modulo P (10^-1 modulo P for a negative exponent), so its cost
+ grows with the exponent's length, not its value; the sign applied after, -1
+ becoming -2. The infinities hash as the Float infinities, a quiet NaN by
+ identity, and a signaling NaN signals Error, as Python's TypeError."
 Decimal >> hash
-  kind == #infinite ifTrue: [
-    ^ sign = 0 ifTrue: [Float infinity hash] ifFalse: [Float infinity negated hash]].
-  self isNaN ifTrue: [^ coefficient hash].
-  coefficient = 0 ifTrue: [^ 0 hash].
-  ^ self asExactFraction hash.
+  | p h |
+  kind == #infinite ifTrue: [^ sign = 0 ifTrue: [314159] ifFalse: [-314159]].
+  kind == #snan ifTrue: [^ Error signal: 'Decimal hash: a signaling NaN cannot be hashed'].
+  kind == #nan ifTrue: [^ self identityHash].
+  p := 2305843009213693951.
+  h := coefficient * (10 raisedTo: exponent modulo: p) \\ p.
+  sign = 1 ifTrue: [h := h negated].
+  ^ h = -1 ifTrue: [-2] ifFalse: [h].
 
 "Same kind, sign, coefficient (or payload) and exponent: 1.0 and 1.00 are
  equal (=) but not the same representation."

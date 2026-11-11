@@ -10,6 +10,7 @@
 #include "runtime/TransientPin.h"
 #include "runtime/ValueFormat.h"
 #include "runtime/ExecutionEngine.h"
+#include "primitives/IntegerDivision.h"
 #include "protoCore.h"
 
 #include <atomic>
@@ -935,29 +936,198 @@ const proto::ProtoObject* prim_Object_identityHash(STRuntime&, proto::ProtoConte
 
 // recv hash → consistent with =: numbers by value (1 hash = 1.0 hash), strings
 // and symbols by content, every other object by identity.
-// The hash of a native number, shared by `hash` and the hashed collections'
-// key hash, so a number that defines its own hash in terms of a native one
-// (a Fraction equal to a Float answers that Float's hash) lands in the same
-// bucket. Equal numbers of different kinds (1 and 1.0) hash alike; the value
-// is kept below 2^53.
+//
+// The hash of a number is CPython's numeric hash (R3; Python's "Hashing of
+// numeric types", sys.hash_info): with P = 2^61 - 1, a prime, a rational
+// value x = m / n hashes to sign(x) * (|m| * n^-1 mod P), so equal values of
+// any kind -- Integer, LargeInteger, Float, and in the kernel Fraction and
+// Decimal, which compute the same function -- hash alike, and alike to
+// Python, which ProtoBase relies on. The infinities hash to +-314159, a value
+// whose denominator is a multiple of P (no inverse) to +-314159 as well, and
+// a hash of -1 becomes -2. A NaN equals nothing, so it hashes by identity, as
+// in Python 3.10 and later. The hash is shared by `hash` and the hashed
+// collections' key hash (stKeyHash).
+namespace {
+constexpr int           kHashBits    = 61;
+constexpr std::uint64_t kHashModulus = (std::uint64_t{1} << kHashBits) - 1;
+constexpr long long     kHashInf     = 314159;
+
+long long finishHash(std::uint64_t magnitude, bool negative) {
+    const long long h = negative ? -static_cast<long long>(magnitude)
+                                 : static_cast<long long>(magnitude);
+    return h == -1 ? -2 : h;
+}
+
+// CPython's _Py_HashDouble for a finite double: the mantissa is consumed 28
+// bits at a time, reducing modulo P, and the binary exponent becomes a
+// rotation (2^61 = 1 mod P, so multiplying by 2^e is rotating by e mod 61).
+long long hashFiniteDouble(double v) {
+    int e = 0;
+    double m = std::frexp(v, &e);
+    const bool negative = m < 0;
+    if (negative) m = -m;
+    std::uint64_t x = 0;
+    while (m != 0.0) {
+        x = ((x << 28) & kHashModulus) | (x >> (kHashBits - 28));
+        m *= 268435456.0;   // 2^28
+        e -= 28;
+        const auto y = static_cast<std::uint64_t>(m);
+        m -= static_cast<double>(y);
+        x += y;
+        if (x >= kHashModulus) x -= kHashModulus;
+    }
+    e = e >= 0 ? e % kHashBits : kHashBits - 1 - ((-1 - e) % kHashBits);
+    x = ((x << e) & kHashModulus) | (x >> (kHashBits - e));
+    return finishHash(x, negative);
+}
+
+// The value of an Integer when it fits a machine word: a SmallInteger
+// always, a LargeInteger below 2^63 in magnitude (protoCore's asLong reads it
+// without allocating, and throws for a larger one).
+bool integerWord(proto::ProtoContext* ctx, const proto::ProtoObject* r, long long& out) {
+    if (proto::isSmallInt(r)) { out = r->asLong(ctx); return true; }
+    try {
+        out = r->asLong(ctx);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+// |r| modulo P for an Integer r, and its sign. Allocates only for an integer
+// that does not fit a word.
+std::uint64_t hashResidue(proto::ProtoContext* ctx, const proto::ProtoObject* r, bool& negative) {
+    long long v = 0;
+    if (integerWord(ctx, r, v)) {
+        negative = v < 0;
+        const std::uint64_t mag = negative ? std::uint64_t{0} - static_cast<std::uint64_t>(v)
+                                           : static_cast<std::uint64_t>(v);
+        return mag % kHashModulus;
+    }
+    negative = r->integerSign(ctx) < 0;
+    const proto::ProtoObject* magnitude = r->abs(ctx);
+    TransientPin pinMagnitude(ctx, magnitude);
+    const proto::ProtoObject* residue =
+        integerRemainder(ctx, magnitude, ctx->fromLong(static_cast<long long>(kHashModulus)));
+    return static_cast<std::uint64_t>(residue->asLong(ctx));
+}
+
+// a * b modulo P for a, b < P: 2^61 = 1 modulo P, so the 122-bit product
+// folds into its low 61 bits plus the rest.
+std::uint64_t mulModP(std::uint64_t a, std::uint64_t b) {
+#if defined(__SIZEOF_INT128__)
+    const unsigned __int128 prod = static_cast<unsigned __int128>(a) * b;
+    std::uint64_t r = static_cast<std::uint64_t>(prod & kHashModulus)
+                    + static_cast<std::uint64_t>(prod >> kHashBits);
+    if (r >= kHashModulus) r -= kHashModulus;
+    return r;
+#else
+    std::uint64_t r = 0;
+    while (b) {
+        if (b & 1) { r += a; if (r >= kHashModulus) r -= kHashModulus; }
+        a += a; if (a >= kHashModulus) a -= kHashModulus;
+        b >>= 1;
+    }
+    return r;
+#endif
+}
+
+// x^-1 modulo P for 0 < x < P: x^(P - 2), P being prime.
+std::uint64_t inverseModP(std::uint64_t x) {
+    std::uint64_t result = 1, base = x, e = kHashModulus - 2;
+    while (e) {
+        if (e & 1) result = mulModP(result, base);
+        base = mulModP(base, base);
+        e >>= 1;
+    }
+    return result;
+}
+} // namespace
+
 long long numericHashImpl(proto::ProtoContext* ctx, const proto::ProtoObject* r) {
-    constexpr long long kMask = (1LL << 53) - 1;
     if (r->isFloat(ctx)) {
         const double d = r->asDouble(ctx);
-        if (std::isfinite(d) && d == std::floor(d)) {
-            // An integral Float hashes as the Integer it equals: by value
-            // below 2^53, by its exact decimal digits above (as LargeIntegers).
-            if (std::fabs(d) < 9007199254740992.0) return static_cast<long long>(d) & kMask;
-            char digits[400];
-            std::snprintf(digits, sizeof(digits), "%.0f", d);
-            return static_cast<long long>(std::hash<std::string>{}(std::string(digits))) & kMask;
+        if (std::isnan(d)) {
+            const auto bits = reinterpret_cast<std::uintptr_t>(r);
+            return static_cast<long long>((bits >> 4) & ((1ULL << 54) - 1));
         }
-        return static_cast<long long>(std::hash<double>{}(d)) & kMask;
+        if (std::isinf(d)) return d > 0 ? kHashInf : -kHashInf;
+        return hashFiniteDouble(d);
     }
-    if (r->compare(ctx, ctx->fromLong(1LL << 53)) < 0 && r->compare(ctx, ctx->fromLong(-(1LL << 53))) > 0)
-        return r->asLong(ctx) & kMask;
-    const std::string digits = formatNumber(ctx, r);
-    return static_cast<long long>(std::hash<std::string>{}(digits)) & kMask;
+    if (proto::isSmallInt(r)) {
+        const long long v = r->asLong(ctx);
+        // |v| < 2^54 < P: the value is its own residue.
+        return finishHash(static_cast<std::uint64_t>(v < 0 ? -v : v), v < 0);
+    }
+    // A LargeInteger: |v| mod P, on a machine word when it fits one.
+    bool negative = false;
+    const std::uint64_t residue = hashResidue(ctx, r, negative);
+    return finishHash(residue, negative);
+}
+
+// aNumerator __hashOver: aDenominator → CPython's hash of the rational
+// aNumerator / aDenominator (aDenominator > 0, the two coprime): |numerator| *
+// denominator^-1 modulo P with the numerator's sign, +-314159 when the
+// denominator is a multiple of P, -1 becoming -2. Fraction >> hash; computed
+// on machine words, so only a result beyond the SmallInteger range allocates.
+const proto::ProtoObject* prim_Integer_hashOver(STRuntime&, proto::ProtoContext* ctx,
+                                               const proto::ProtoObject* r,
+                                               const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1 || !r || !r->isInteger(ctx) || !a[0] || !a[0]->isInteger(ctx)
+        || a[0]->integerSign(ctx) <= 0)
+        throw NativeError("__hashOver: expects an Integer receiver and a positive Integer");
+    bool negative = false, ignored = false;
+    const std::uint64_t num = hashResidue(ctx, r, negative);
+    const std::uint64_t den = hashResidue(ctx, a[0], ignored);
+    const std::uint64_t h = den == 0 ? static_cast<std::uint64_t>(kHashInf)
+                                     : mulModP(num, inverseModP(den));
+    return ctx->fromLong(finishHash(h, negative));
+}
+
+namespace {
+// x's `hash` modulo P, in [0, P): a number's numeric hash computed here, on
+// machine words; any other object's `hash` sent (a user override answers),
+// then reduced. Equal to `x hash \\ P` in Smalltalk.
+std::uint64_t hashModP(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* x) {
+    long long h = 0;
+    bool negative = false;
+    std::uint64_t mag = 0;
+    if (x && x != PROTO_NONE && (x->isInteger(ctx) || x->isFloat(ctx))) {
+        h = numericHashImpl(ctx, x);
+    } else {
+        bool understood = false;
+        const proto::ProtoObject* hv = sendDynamic(
+            rt, ctx, x, proto::ProtoString::createSymbol(ctx, "hash"), nullptr, 0, &understood);
+        if (!understood || !hv || !hv->isInteger(ctx))
+            throw NativeError("__hashMix: a hash method must answer an Integer");
+        if (!integerWord(ctx, hv, h)) {
+            mag = hashResidue(ctx, hv, negative);
+            return negative && mag != 0 ? kHashModulus - mag : mag;
+        }
+    }
+    negative = h < 0;
+    mag = (negative ? std::uint64_t{0} - static_cast<std::uint64_t>(h)
+                    : static_cast<std::uint64_t>(h)) % kHashModulus;
+    return negative && mag != 0 ? kHashModulus - mag : mag;
+}
+} // namespace
+
+// a __hashMix: b → (a hash * 1000003 + b hash) \\ P, P = 2^61 - 1: the
+// combined hash of the kernel's composite values (Point, Association,
+// SequenceableCollection, MessagePackMap). An accumulated hash h, already in
+// [0, P), is its own hash, so `h __hashMix: e` folds one more element. The
+// numeric hashes are computed natively, so a Float or Fraction coordinate
+// costs no LargeInteger (R3, review round 2); only a result beyond the
+// SmallInteger range is boxed.
+const proto::ProtoObject* prim_Object_hashMix(STRuntime& rt, proto::ProtoContext* ctx,
+                                              const proto::ProtoObject* r,
+                                              const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw NativeError("__hashMix: expects 1 arg");
+    const std::uint64_t hr = hashModP(rt, ctx, r);
+    const std::uint64_t ha = hashModP(rt, ctx, a[0]);
+    std::uint64_t h = mulModP(hr, 1000003) + ha;
+    if (h >= kHashModulus) h -= kHashModulus;
+    return ctx->fromLong(static_cast<long long>(h));
 }
 
 const proto::ProtoObject* prim_Object_hash(STRuntime& rt, proto::ProtoContext* ctx,
@@ -1736,6 +1906,8 @@ void installObjectPrimitives(STRuntime& rt) {
     bindPrimitive(rt, b.objectProto, "shallowCopy", reg.registerPrim(prim_Object_shallowCopy));
     bindPrimitive(rt, b.objectProto, "identityHash", reg.registerPrim(prim_Object_identityHash));
     bindPrimitive(rt, b.objectProto, "hash", reg.registerPrim(prim_Object_hash));
+    bindPrimitive(rt, b.integerProto, "__hashOver:", reg.registerPrim(prim_Integer_hashOver));
+    bindPrimitive(rt, b.objectProto, "__hashMix:", reg.registerPrim(prim_Object_hashMix));
     // F6 v2 T6: sleep primitive — test-only helper for the wall-clock
     // parallelism proof. Bound on objectProto so any object responds to it.
     bindPrimitive(rt, b.objectProto, "sleep:",

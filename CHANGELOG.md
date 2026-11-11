@@ -7,6 +7,42 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ### Added
 
+- **Python's numeric hash and `raisedTo:modulo:` (R3).** `hash` of an
+  `Integer`, `LargeInteger`, `Float`, `Fraction` and `Decimal` is now
+  CPython's numeric hash (modulo 2^61 - 1, Python's "Hashing of numeric
+  types"): equal values of any kind hash alike, and to the value `hash()`
+  answers in Python, which ProtoBase relies on. The values change: `0.5 hash`
+  was a hash of the double's bits and is now 2^60, `-1 hash` is `-2`, and a
+  hash can be negative or reach 2^61 - 2 (the hashed collections take any
+  Integer a `hash` method answers; a user `hash` outside 0..2^53 used to share
+  one slot). `Decimal >> hash` no longer builds the exact value, so a huge
+  exponent hashes at once (STATUS D49); a signaling NaN cannot be hashed, and
+  a NaN hashes by identity. `b raisedTo: e modulo: m` is Python's
+  `pow(b, e, m)`: modular exponentiation of Integers, a negative exponent
+  through the modular inverse (`ArithmeticError` when there is none),
+  `ZeroDivide` for `m = 0`, the result with the sign of `m`. Docs:
+  LANGUAGE.md §12.2 and §12.13. Tests: `12-builtins/numeric-hash-cpython.st`
+  (55 values, each against python3.14's `hash()`),
+  `numeric-hash-across-kinds.st`, `number-raised-to-modulo.st` (against
+  `pow`). Hashed collections fold the bits above 54 of a key's hash into the
+  slot word protoCore keys a slot by (a SmallInteger's slot is unchanged), and
+  `Point`, `Association`, `SequenceableCollection` and `MessagePackMap`
+  combine hashes modulo 2^61 - 1 with the multiplier 1000003 instead of
+  reducing modulo 2^30: a Float's hash keeps its fraction bits high, and
+  without both changes `i / 64.0` keys shared one slot per 64 keys and a grid
+  of `i / 4.0 @ (j / 4.0)` Points a slot per 16. The combining step is one
+  primitive, `a __hashMix: b` (`(a hash * 1000003 + b hash) mod (2^61 - 1)`
+  on machine words), so no LargeInteger is built (measured against 0.9.0's
+  `4b47115`, `perf stat` user-space: Fraction keys 4.8x fewer instructions,
+  Point keys 24 % fewer instructions and 22 % fewer cycles, Integer keys 11 %
+  fewer instructions and 21 % fewer cycles, Float keys 12 % more
+  instructions and the same cycles). `Fraction >> hash` and
+  `raisedTo:modulo:` run on machine words when the operands fit one. Test:
+  `12-builtins/composite-hash-values.st` (Point, Association, Array and
+  nested values, each against the Python expression it mirrors).
+  Tests: `R3: keys differing in high hash bits take distinct slots` (slot
+  count per workload, `tests/unit/test_hashed_collections.cpp`),
+  `12-builtins/class-objects-as-hashed-keys.st`.
 - **`Decimal`, an exact decimal value** (`lib/decimal.st`, `Import from:
   'decimal'`): Python's decimal model (sign, coefficient, exponent; Infinity,
   NaN and sNaN with payloads) with its text in both directions,

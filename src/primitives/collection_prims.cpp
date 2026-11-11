@@ -54,6 +54,7 @@
 #include <utility>
 #include <algorithm>
 #include <vector>
+#include <cstdint>
 
 namespace protoST {
 
@@ -217,29 +218,6 @@ bool stKeyEquals(proto::ProtoContext* ctx, const proto::ProtoObject* a,
     return a->partialCompare(ctx, b) == 0;
 }
 
-// A hash for numbers that agrees with stKeyEquals across the whole tower.
-//
-// `partialCompare` equates a SmallInteger, a LargeInteger and a Float of the
-// same exact value, so those three have to hash alike; every number therefore
-// hashes through its double value. Three consequences, all of them benign:
-// -0.0 is normalised to 0.0 (they are the same key); two integers so large
-// that they round to the same double share a slot, where stKeyEquals tells
-// them apart; and every integer past the double range shares the slot of
-// infinity. A NaN hashes by its own bit pattern, which is all that is needed,
-// since a NaN is only ever found by identity and one object always has the
-// same bits.
-proto::proto_ulong numberKeyHash(double d) {
-    if (d == 0.0) d = 0.0;
-    static_assert(sizeof(proto::proto_ulong) >= sizeof(double),
-                  "the numeric key hash needs a word at least as wide as a double");
-    proto::proto_ulong bits = 0;
-    std::memcpy(&bits, &d, sizeof(d));
-    // ProtoMap orders its slots by the hash and the helper masks it to 54
-    // bits; the bit patterns of small integral doubles differ only near the
-    // top of the word, so fold the high half down before it is truncated.
-    return bits ^ (bits >> 32);
-}
-
 // Canonical hash for any object used as a hashed-collection key.
 //
 // Strings route through the symbol table (2026-05-24): protoCore's ProtoString
@@ -248,6 +226,24 @@ proto::proto_ulong numberKeyHash(double d) {
 // content to one canonical symbol whose pointer is the hash. Numbers take the
 // numeric path above. Everything else keeps its own hash protocol, which for a
 // plain object is identity -- and identity is what `=` means for it.
+// The slot word of a hash value. protoCore keys a slot by the low 54 bits of
+// the word, and a numeric hash (CPython's, R3) keeps the fraction bits of a
+// dyadic Float in its high bits -- 0.5 hashes to 2^60, 1.25 to 1 + 2^59 --
+// so every Float with few fraction bits would share the slot of its integer
+// part, and a combined hash of such values (a Point, an Array) would collapse
+// the same way. The bits above the slot's 54 are therefore folded into it,
+// multiplied by a large odd constant (Fibonacci hashing) so that each of
+// their values moves the slot far from small integers; only the bucket
+// changes, never the value `hash` answers. A hash below 2^54 (every
+// SmallInteger, every symbol's address) keeps its slot word unchanged: a full
+// mix of the word would scatter consecutive integer keys over the map and
+// cost them their locality (200,000 integer keys took 50 % more cycles with
+// splitmix64's finalizer, the first version of this fold).
+static proto::proto_ulong slotWord(std::uint64_t h) {
+    const std::uint64_t high = h >> 54;
+    return static_cast<proto::proto_ulong>(h ^ ((high * 0x9E3779B97F4A7C15ULL) >> 10));
+}
+
 proto::proto_ulong stKeyHash(proto::ProtoContext* ctx, const proto::ProtoObject* key) {
     if (!key || key == PROTO_NONE) return 0;
     if (key->isString(ctx)) {
@@ -265,16 +261,22 @@ proto::proto_ulong stKeyHash(proto::ProtoContext* ctx, const proto::ProtoObject*
             return reinterpret_cast<proto::proto_ulong>(s);
         }
     }
+    // A number takes the numeric hash (CPython's, R3): equal numbers of any
+    // kind hash alike, and a Fraction or a Decimal, whose `hash` computes the
+    // same function in the kernel, lands in the same slot as an equal native
+    // number. A NaN hashes by identity, the only way one is ever found.
     if (key->isInteger(ctx) || key->isDouble(ctx))
-        return static_cast<proto::proto_ulong>(numericHash(ctx, key));
+        return slotWord(static_cast<std::uint64_t>(numericHash(ctx, key)));
     if (STRuntime* rt = runtimeForUserEquality(ctx, key)) {
         bool understood = false;
         const proto::ProtoObject* h = sendDynamic(
             *rt, ctx, key, proto::ProtoString::createSymbol(ctx, "hash"), nullptr, 0, &understood);
+        // Any Integer is a usable hash, negative ones included (the numeric
+        // hash of a negative number is negative). A LargeInteger is reduced
+        // as the hash of that Integer, so equal hashes stay equal.
         if (understood && h && h->isInteger(ctx))
-            return h->compare(ctx, ctx->fromLong(0)) >= 0 && h->compare(ctx, ctx->fromLong(1LL << 53)) < 0
-                ? static_cast<proto::proto_ulong>(h->asLong(ctx))
-                : numberKeyHash(0.5);   // an out-of-range hash still has to be consistent
+            return slotWord(static_cast<std::uint64_t>(
+                proto::isSmallInt(h) ? h->asLong(ctx) : numericHash(ctx, h)));
     }
     return key->getHash(ctx);
 }

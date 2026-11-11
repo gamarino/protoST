@@ -2267,6 +2267,7 @@ thin wrappers over `<cmath>` (libm).
 | `even` `odd` | integer parity (aliases of `isEven` / `isOdd`) |
 | `factorial` | `1 * 2 * ... * n` on a non-negative integer — exact, promotes to `LargeInteger` |
 | `raisedTo:` | exponentiation — see below |
+| `raisedTo:modulo:` | modular exponentiation of Integers, Python's `pow(b, e, m)` — see below |
 | `gcd:` `lcm:` | greatest common divisor / least common multiple of two integers |
 | `**` | exponentiation (`2 ** 3` is `8`) |
 | `roundTo:` | round to a multiple of the argument |
@@ -2291,6 +2292,36 @@ Class-side **constants** are bound on `Float`: `Float pi`, `Float e`,
 > `30 factorial` are exact arbitrary-precision integers, never an overflowed
 > `double`. A `Float` exponent (or a negative integer exponent) routes through
 > libm `pow` and answers a `Float`.
+
+> **Modular exponentiation.** `b raisedTo: e modulo: m` is b^e modulo m,
+> computed without building b^e (its cost grows with the length of `e`, not
+> its value), as Python's three-argument `pow`. All three must be integers
+> (otherwise an `Error`); the result takes the sign of `m`, like `\\` (in
+> [0, m) for a positive `m`, in (m, 0] for a negative one), and is `0` when
+> `m` is `1` or `-1`. A negative `e` raises the inverse of `b` modulo `m`:
+> `3 raisedTo: -1 modulo: 7` is `5`. A base with no inverse (`4 raisedTo: -1
+> modulo: 8`) signals `ArithmeticError`, and `m = 0` signals `ZeroDivide`.
+
+> **Numeric hash.** `hash` of a number is Python's numeric hash (Python's
+> *Hashing of numeric types*, `sys.hash_info`), the same value for every
+> `Integer`, `LargeInteger`, `Float`, `Fraction` and `Decimal` that are `=`:
+> with P = 2^61 - 1, a value m / n hashes to its sign times |m| * n^-1 modulo
+> P, so `1`, `1.0` and `Decimal 1.00` hash to `1`, `0.5` and `(1/2)` to
+> 2^60, and `(2 raisedTo: 61) - 1` to `0`; a hash of `-1` becomes `-2`, the
+> infinities hash to `314159` and `-314159` (and so does a value whose
+> denominator is a multiple of P), and a NaN, equal to nothing, hashes by
+> identity. These are the values `hash()` answers in CPython, which ProtoBase
+> relies on for keys written by either language. A hash reaches 2^61 - 2, past
+> the `SmallInteger` range (2^53 - 1), so the hash of a typical `Float` or
+> `Fraction` is a `LargeInteger`: arithmetic on such hashes allocates, while
+> a number used directly as a `Set` or `Dictionary` key does not (the
+> collection computes its hash natively). To combine hashes, use
+> `a __hashMix: b`, which answers `(a hash * 1000003 + b hash) \\ P` computed
+> on machine words: the kernel's combined hashes (`Point`, `Association`,
+> `SequenceableCollection`, `MessagePackMap`) are made with it, starting from
+> the first element and mixing each next one in, so the high bits, where a
+> `Float`'s fraction bits land, keep counting, and no `LargeInteger` is built.
+> `(3 @ 4) hash` is Python's `(3 * 1000003 + 4) % (2**61 - 1)`.
 
 > **Domain errors.** A libm domain error — `(-1) sqrt`, `0 ln` — is **not**
 > turned into a protoST `Error`; the IEEE-754 result (`nan` / `inf`) is let
@@ -2848,15 +2879,15 @@ what collections send. Ordering and equality never build a power of ten
 larger than the operands' own digits, so `1E+999999 > 9E+999998` is
 immediate.
 
-**Cost of `hash` and `asExactFraction`.** Both build the exact value, so their
-cost grows with the size of the exponent, without bound: for
-`1E+999999999999` they would try to build 10^(10^12) and exhaust memory, not
-only take time. `hash` must equal the hash of an equal `Integer`, `Fraction`
-or `Float`, and protoST hashes a `LargeInteger` through its decimal digits
-today. A modular numeric hash shared by `Integer`, `Fraction`, `Float` and
-`Decimal` (modulo 2^61 - 1, as Python's) is scheduled for the protoST C++
-work of the ProtoBase support; it makes `hash` cheap for every exponent.
-Until then, do not hash a `Decimal` with an exponent of untrusted size.
+**Cost of `hash` and `asExactFraction`.** `hash` is Python's hash of a
+`Decimal` (§12.2, *Numeric hash*): the coefficient times 10^exponent modulo
+2^61 - 1, the power taken modulo 2^61 - 1, so its cost grows with the length
+of the exponent, not its value, and `1E+999999999999` hashes at once. A
+signaling NaN cannot be hashed (`Error`, as Python's `TypeError`).
+`asExactFraction` builds the exact value, so its cost grows with the size of
+the exponent, without bound: for `1E+999999999999` it would try to build
+10^(10^12) and exhaust memory. Do not convert a `Decimal` with an exponent of
+untrusted size.
 
 ### 12.14 Calendar values: the `calendar` module
 

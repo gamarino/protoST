@@ -103,11 +103,13 @@ Number >> _isAdaptor: anObject
   ^ anObject isNumber not and: [anObject respondsTo: #adaptToNumber:andSend:].
 
 Fraction >> hash
-  "Equal to the hash of the Float it equals, when there is one."
-  | f |
-  f := self asFloat.
-  (f isFinite and: [f asExactFraction = self]) ifTrue: [^ f hash].
-  ^ numerator hash bitXor: denominator hash.
+  "CPython's hash of a Fraction (R3), equal to the hash of every equal
+   Integer, Float and Decimal: with P = 2^61 - 1, |numerator| * denominator^-1
+   modulo P, with the numerator's sign; 314159 (the hash of infinity) when the
+   denominator is a multiple of P and has no inverse; -1 becomes -2. P is
+   prime, so the inverse is denominator^(P - 2) modulo P. The primitive
+   (Integer >> __hashOver:) computes it on machine words."
+  ^ numerator __hashOver: denominator.
 
 Fraction >> truncated
   ^ numerator quo: denominator.

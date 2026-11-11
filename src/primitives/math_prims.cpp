@@ -1,5 +1,6 @@
 #include "protoST/STRuntime.h"
 #include "runtime/NativeError.h"
+#include "runtime/ClassedErrorSignal.h"
 #include "primitives/IntegerDivision.h"
 #include "runtime/TransientPin.h"
 #include "protoST/primitives.h"
@@ -9,6 +10,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <climits>
+#include <cstdint>
 
 #include <cmath>
 #include <stdexcept>
@@ -313,6 +315,203 @@ const proto::ProtoObject* prim_RaisedTo(STRuntime& rt, proto::ProtoContext* ctx,
                                     asDoubleVal(ctx, exp)));
 }
 
+// `raisedTo:modulo:` — modular exponentiation, Python's three-argument pow
+// (R3): `b raisedTo: e modulo: m` is b^e mod m without building b^e.
+//   * All three must be Integers (SmallInteger or LargeInteger); otherwise an
+//     Error, as Python's TypeError.
+//   * m = 0 signals ZeroDivide (Python: ValueError).
+//   * The result takes the sign of m, like `\\`: in [0, m) for m > 0 and in
+//     (m, 0] for m < 0. When |m| = 1 it is 0, whatever b and e.
+//   * A negative e uses the inverse of b modulo |m|: b^-e = (b^-1)^e. When b
+//     has none (gcd(b, m) ~= 1), ArithmeticError, as Python's ValueError
+//     "base is not invertible for the given modulus".
+// A modulus below 2^63 runs on machine words (a 128-bit product, or a
+// shift-and-add product without one); a larger modulus on protoCore's exact
+// integers. The exponent is read bit by bit, so its size costs only its
+// length (Decimal's hash raises to exponents near 10^9 and beyond).
+namespace {
+
+// a * b mod n for a, b < n < 2^63.
+std::uint64_t mulMod(std::uint64_t a, std::uint64_t b, std::uint64_t n) {
+#if defined(__SIZEOF_INT128__)
+    return static_cast<std::uint64_t>(
+        (static_cast<unsigned __int128>(a) * b) % n);
+#else
+    // n < 2^63, so a + a never wraps.
+    std::uint64_t r = 0;
+    while (b) {
+        if (b & 1) { r += a; if (r >= n) r -= n; }
+        a += a; if (a >= n) a -= n;
+        b >>= 1;
+    }
+    return r;
+#endif
+}
+
+// x mod n in [0, n), for n > 0 (protoCore's remainder takes x's sign).
+const proto::ProtoObject* modPositive(proto::ProtoContext* ctx, const proto::ProtoObject* x,
+                                      const proto::ProtoObject* n) {
+    const proto::ProtoObject* r = integerRemainder(ctx, x, n);
+    if (r->integerSign(ctx) < 0) r = r->add(ctx, n);
+    return r;
+}
+
+// a^-1 mod n for 0 <= a < n and n > 1, or nullptr when gcd(a, n) ~= 1.
+// Extended Euclid, keeping t with t * a = r (mod n).
+const proto::ProtoObject* modInverse(proto::ProtoContext* ctx, const proto::ProtoObject* a,
+                                     const proto::ProtoObject* n) {
+    const proto::ProtoObject* r0 = n;
+    const proto::ProtoObject* r1 = a;
+    const proto::ProtoObject* t0 = ctx->fromLong(0);
+    const proto::ProtoObject* t1 = ctx->fromLong(1);
+    TransientPin pinR0(ctx, r0), pinR1(ctx, r1), pinT0(ctx, t0), pinT1(ctx, t1);
+    while (r1->integerSign(ctx) != 0) {
+        const proto::ProtoObject* q = integerQuotient(ctx, r0, r1);
+        TransientPin pinQ(ctx, q);
+        const proto::ProtoObject* qr = q->multiply(ctx, r1);
+        TransientPin pinQr(ctx, qr);
+        const proto::ProtoObject* r2 = r0->subtract(ctx, qr);
+        TransientPin pinR2(ctx, r2);
+        const proto::ProtoObject* qt = q->multiply(ctx, t1);
+        TransientPin pinQt(ctx, qt);
+        const proto::ProtoObject* t2 = t0->subtract(ctx, qt);
+        r0 = r1; pinR0.reset(r0);
+        r1 = r2; pinR1.reset(r1);
+        t0 = t1; pinT0.reset(t0);
+        t1 = t2; pinT1.reset(t1);
+    }
+    if (r0->compare(ctx, ctx->fromLong(1)) != 0) return nullptr;
+    return modPositive(ctx, t0, n);
+}
+
+// The value of an Integer when it fits a machine word (a LargeInteger below
+// 2^63 in magnitude is read without allocating; asLong throws beyond).
+bool integerWord(proto::ProtoContext* ctx, const proto::ProtoObject* v, long long& out) {
+    if (proto::isSmallInt(v)) { out = v->asLong(ctx); return true; }
+    try {
+        out = v->asLong(ctx);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+// a^-1 mod n for 0 <= a < n < 2^63, n > 1, on machine words; false when
+// gcd(a, n) ~= 1. The Bezout coefficients stay below n in magnitude, and so
+// does q * t1, so no step overflows.
+bool modInverseWord(std::uint64_t a, std::uint64_t n, std::uint64_t& out) {
+    long long r0 = static_cast<long long>(n), r1 = static_cast<long long>(a);
+    long long t0 = 0, t1 = 1;
+    while (r1 != 0) {
+        const long long q = r0 / r1;
+        const long long r2 = r0 - q * r1;
+        r0 = r1; r1 = r2;
+        const long long t2 = t0 - q * t1;
+        t0 = t1; t1 = t2;
+    }
+    if (r0 != 1) return false;
+    out = static_cast<std::uint64_t>(t0 < 0 ? t0 + static_cast<long long>(n) : t0);
+    return true;
+}
+
+} // namespace
+
+const proto::ProtoObject* prim_RaisedToModulo(STRuntime&, proto::ProtoContext* ctx,
+                                              const proto::ProtoObject* r,
+                                              const proto::ProtoObject* const* a,
+                                              int argc) {
+    if (argc != 2) throw NativeError("raisedTo:modulo: expects 2 args");
+    auto isInt = [ctx](const proto::ProtoObject* v) {
+        return v && v != PROTO_NONE && v->isInteger(ctx);
+    };
+    if (!isInt(r) || !isInt(a[0]) || !isInt(a[1]))
+        throw NativeError("raisedTo:modulo: the receiver, the exponent and the modulus must be Integers");
+
+    // All three on machine words: no allocation but the result's.
+    long long bv = 0, ev = 0, mv = 0;
+    if (integerWord(ctx, r, bv) && integerWord(ctx, a[0], ev) && integerWord(ctx, a[1], mv)
+        && mv != LLONG_MIN) {
+        if (mv == 0) ctx->raiseError(proto::ProtoErrorKind::DivisionByZero, "ZeroDivide");
+        const auto nw = static_cast<std::uint64_t>(mv < 0 ? -mv : mv);
+        if (nw == 1) return ctx->fromLong(0);
+        long long bm = bv % static_cast<long long>(nw);
+        if (bm < 0) bm += static_cast<long long>(nw);
+        std::uint64_t bw = static_cast<std::uint64_t>(bm);
+        std::uint64_t e = ev < 0 ? std::uint64_t{0} - static_cast<std::uint64_t>(ev)
+                                 : static_cast<std::uint64_t>(ev);
+        if (ev < 0 && !modInverseWord(bw, nw, bw))
+            throw ClassedErrorSignal("ArithmeticError",
+                "raisedTo:modulo: the base is not invertible for the given modulus");
+        std::uint64_t acc = 1 % nw;
+        while (e) {
+            if (e & 1) acc = mulMod(acc, bw, nw);
+            bw = mulMod(bw, bw, nw);
+            e >>= 1;
+        }
+        long long res = static_cast<long long>(acc);
+        // A negative modulus: the result in (m, 0], as Python's pow and `\\`.
+        if (mv < 0 && res != 0) res -= static_cast<long long>(nw);
+        return ctx->fromLong(res);
+    }
+
+    const proto::ProtoObject* modulus = a[1];
+    const int modSign = modulus->integerSign(ctx);
+    if (modSign == 0)
+        ctx->raiseError(proto::ProtoErrorKind::DivisionByZero, "ZeroDivide");
+    const proto::ProtoObject* n = modulus->abs(ctx);   // |m|
+    TransientPin pinN(ctx, n);
+    if (n->compare(ctx, ctx->fromLong(1)) == 0) return ctx->fromLong(0);
+
+    const proto::ProtoObject* base = modPositive(ctx, r, n);
+    TransientPin pinBase(ctx, base);
+    const proto::ProtoObject* exponent = a[0];
+    if (exponent->integerSign(ctx) < 0) {
+        base = modInverse(ctx, base, n);
+        if (!base)
+            throw ClassedErrorSignal("ArithmeticError",
+                "raisedTo:modulo: the base is not invertible for the given modulus");
+        pinBase.reset(base);
+        exponent = exponent->abs(ctx);
+    }
+    // The exponent's bits, most significant first.
+    const std::string bits = exponent->asIntegerString(ctx, 2)->toStdString(ctx);
+
+    const proto::ProtoObject* result = nullptr;
+    long long nl = 0;
+    if (integerWord(ctx, n, nl)) {
+        const auto nw = static_cast<std::uint64_t>(nl);
+        const auto bw = static_cast<std::uint64_t>(base->asLong(ctx));
+        std::uint64_t acc = 1 % nw;
+        for (char bit : bits) {
+            acc = mulMod(acc, acc, nw);
+            if (bit == '1') acc = mulMod(acc, bw, nw);
+        }
+        result = ctx->fromLong(static_cast<long long>(acc));
+    } else {
+        const proto::ProtoObject* acc = ctx->fromLong(1);
+        TransientPin pinAcc(ctx, acc);
+        for (char bit : bits) {
+            const proto::ProtoObject* sq = acc->multiply(ctx, acc);
+            pinAcc.reset(sq);
+            acc = modPositive(ctx, sq, n);
+            pinAcc.reset(acc);
+            if (bit == '1') {
+                const proto::ProtoObject* prod = acc->multiply(ctx, base);
+                pinAcc.reset(prod);
+                acc = modPositive(ctx, prod, n);
+                pinAcc.reset(acc);
+            }
+        }
+        result = acc;
+    }
+    // A negative modulus: the result in (m, 0], as Python's pow and `\\`.
+    if (modSign < 0 && result->integerSign(ctx) != 0) {
+        TransientPin pinResult(ctx, result);
+        result = result->subtract(ctx, n);
+    }
+    return result;
+}
+
 // `gcd:` — greatest common divisor of two integers (Euclid). Bignum-safe: the
 // remainder steps go through protoCore `modulo`, so a LargeInteger argument
 // works. `0 gcd: 0` is undefined and raises.
@@ -449,6 +648,7 @@ void installMathPrimitives(STRuntime& rt) {
     bindPrimitive(rt, N, "odd",         reg.registerPrim(prim_Odd));
     bindPrimitive(rt, N, "factorial",   reg.registerPrim(prim_Factorial));
     bindPrimitive(rt, N, "raisedTo:",   reg.registerPrim(prim_RaisedTo));
+    bindPrimitive(rt, N, "raisedTo:modulo:", reg.registerPrim(prim_RaisedToModulo));
     bindPrimitive(rt, N, "__floatParts", reg.registerPrim(prim_FloatParts));
     bindPrimitive(rt, N, "gcd:",        reg.registerPrim(prim_Gcd));
     bindPrimitive(rt, N, "lcm:",        reg.registerPrim(prim_Lcm));
