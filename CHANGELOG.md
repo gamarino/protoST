@@ -296,6 +296,37 @@ minor release, so the two services arrive in 0.5.0.
 
 ### Performance
 
+- **Interpreter round 3 (driven by the protoBaseST/ProtoBase gap
+  analysis).** Per operation, 3x10^5 iterations in a method
+  (`benchmarks/micro/vm_ops.st`, self-checking), before -> after, in ns:
+  `Array new:` 1630 -> 714, `at:` 303 -> 215, `at:put:` 671 -> 375, `*`
+  224 -> 89, `\\` 509 -> 95, `//` 480 -> 95, `rem:` 464 -> 93,
+  `bitAnd:`+`bitOr:` 375 -> 114, instance-variable write 185 -> 126, send
+  209 -> 211, `perform:with:` 3669 -> 391. The changes:
+  - `*`, `\\`, `//`, `rem:`, `bitAnd:`, `bitOr:` on two SmallIntegers are
+    computed in the engine (opcodes `BIN_INT_MUL` 53 to `BIN_INT_OR` 58;
+    overflow, a non-SmallInteger operand and a zero divisor fall back to the
+    send). Test `12-builtins/integer-fast-paths-match-the-send.st`.
+  - An assignment whose value is discarded compiles without `DUP`/`POP`.
+    Test `05-messages/assignment-statement-values.st`.
+  - The dispatch core indexes the frame's slots directly (bounds checks
+    become debug assertions), pushes SmallInteger and Symbol constants
+    without materialising them, and uses a jump table built at compile time
+    instead of one filled on every engine entry.
+  - `Array new:` builds its storage in one `newList` call and publishes no
+    intermediate mutable object.
+  - `perform:` to `perform:with:with:with:` are primitives (they built an
+    Array for `perform:withArguments:`). Test
+    `05-messages/perform-family-primitives.st`.
+  - A send no longer probes an immediate receiver or a primitive marker for
+    actor and method attributes, and no object at all for the actor
+    attribute until the process has created an actor.
+  The protoBaseST AVL workload runs 11 % fewer user instructions (10.16G ->
+  9.03G); its per-operation wall-clock ratios to ProtoBase barely move,
+  because its cycles are mostly protoCore's (allocation, sparse-list
+  lookup and update, the collector's sweep), not dispatch. The send itself
+  (~210 ns, CPython ~42) is unchanged: its cost is the method lookup in
+  protoCore and the frame push.
 - **`==` and the nil tests never send (protoBaseST review P4).** As in
   Pharo, `==` is compiled to an identity test (`IDENTICAL`, opcode 52) and
   never looked up (Pharo's `ProtoObject>>==`: "No Lookup. Do not override"),
@@ -350,7 +381,8 @@ minor release, so the two services arrive in 0.5.0.
     lost silently (test `06-blocks/block-instvar-write-is-refused.st`).
     Instance-variable assignment in a method refuses an immutable receiver
     the same way (the compiler already rejects it in `BlockClosure`
-    methods).
+    methods; the plain `STORE_INSTVAR` handler skipped the check until
+    16b940d, the grouped write had it).
   - `isKindOf:` was a kernel method (`self class`, then `or:` with a block,
     then `__hasAncestor:`); it is now one primitive over the same ancestor
     test. It uses the receiver's real class, as Pharo's (where `class` is a
