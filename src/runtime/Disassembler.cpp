@@ -55,6 +55,7 @@ const char* opName(Op op) {
         case Op::PUSH_OWN_INSTVAR:   return "PUSH_OWN_INSTVAR";
         case Op::IVAR_GROUP:         return "IVAR_GROUP";
         case Op::IVAR_GROUP_END:     return "IVAR_GROUP_END";
+        case Op::JUMP_IF_NOT_BOOL:   return "JUMP_IF_NOT_BOOL";
         case Op::EXTEND:             return "EXTEND";
     }
     return nullptr;
@@ -259,6 +260,7 @@ void listModule(const BytecodeModule& m, const std::string& path, std::string& o
             case Op::JUMP:
             case Op::JUMP_IF_TRUE:
             case Op::JUMP_IF_FALSE:
+            case Op::JUMP_IF_NOT_BOOL:
                 withOperand("-> " + std::to_string(next + in.arg));
                 break;
             case Op::JUMP_BACK:

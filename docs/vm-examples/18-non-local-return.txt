@@ -70,11 +70,13 @@ module main.0.0: [] in Finder>>firstOver:in:
       0  PUSH_LOCAL         0     ; x
       1  PUSH_CAPTURED      0     ; limit
       2  BIN_INT_GT         1     ; #>
-      3  ASSERT_BOOL_OR_DNU 2     ; #ifTrue:
-      4  JUMP_IF_FALSE      3     ; -> 8
+      3  JUMP_IF_NOT_BOOL   4     ; -> 8
+      4  JUMP_IF_FALSE      5     ; -> 10
       5  PUSH_LOCAL         0     ; x
       6  RETURN
-      7  JUMP               1     ; -> 9
-      8  PUSH_NIL
-      9  RETURN_TOP
+      7  JUMP               3     ; -> 11
+      8  ASSERT_BOOL_OR_DNU 2     ; #ifTrue:
+      9  JUMP               1     ; -> 11
+     10  PUSH_NIL
+     11  RETURN_TOP
 4

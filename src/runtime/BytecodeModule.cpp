@@ -145,6 +145,9 @@ unsigned int BytecodeModule::computeMaxOperandDepth() const {
                 pushes(-1);
                 jumpTo(pc + static_cast<std::size_t>(arg) * kInstrSize, depth);
                 break;
+            case Op::JUMP_IF_NOT_BOOL:   // peeks: the value stays on both paths
+                jumpTo(pc + static_cast<std::size_t>(arg) * kInstrSize, depth);
+                break;
             case Op::JUMP:
                 jumpTo(pc + static_cast<std::size_t>(arg) * kInstrSize, depth);
                 reachable = false;

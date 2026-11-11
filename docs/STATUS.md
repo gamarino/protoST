@@ -168,6 +168,11 @@ are noted where useful.
 - [x] Block syntax, 0–4 argument blocks
 - [x] Closures with variable capture *(f1-complete)*
 - [x] `whileTrue:`, `to:do:`, `to:by:do:`
+- [x] Compile-time inlining of `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:`,
+      `ifFalse:ifTrue:`, `and:`, `or:` (0.10.0), `whileTrue:`,
+      `whileFalse:` and `to:do:` with literal blocks; a non-Boolean receiver
+      of an inlined conditional signals `doesNotUnderstand:` as the send
+      does, and a resumed one answers the expression's value (docs/VM.md 1.4)
 
 ### Non-local return
 - [x] `^expr` in a nested block returns from the enclosing method

@@ -49,23 +49,25 @@ module main.0: Math>>fib:
       0  PUSH_LOCAL         1     ; n
       1  PUSH_CONST         0     ; 2
       2  BIN_INT_LT         1     ; #<
-      3  ASSERT_BOOL_OR_DNU 2     ; #ifTrue:
-      4  JUMP_IF_FALSE      3     ; -> 8
+      3  JUMP_IF_NOT_BOOL   4     ; -> 8
+      4  JUMP_IF_FALSE      5     ; -> 10
       5  PUSH_LOCAL         1     ; n
       6  RETURN
-      7  JUMP               1     ; -> 9
-      8  PUSH_NIL
-      9  POP
-     10  PUSH_SELF
-     11  PUSH_LOCAL         1     ; n
-     12  PUSH_CONST         3     ; 1
-     13  BIN_INT_SUB        4     ; #-
-     14  SEND_KEYWORD       5     ; #fib:, 1 arg
-     15  PUSH_SELF
-     16  PUSH_LOCAL         1     ; n
-     17  PUSH_CONST         6     ; 2
-     18  BIN_INT_SUB        4     ; #-
-     19  SEND_KEYWORD       5     ; #fib:, 1 arg
-     20  BIN_INT_ADD        7     ; #+
-     21  RETURN
+      7  JUMP               3     ; -> 11
+      8  ASSERT_BOOL_OR_DNU 2     ; #ifTrue:
+      9  JUMP               1     ; -> 11
+     10  PUSH_NIL
+     11  POP
+     12  PUSH_SELF
+     13  PUSH_LOCAL         1     ; n
+     14  PUSH_CONST         3     ; 1
+     15  BIN_INT_SUB        4     ; #-
+     16  SEND_KEYWORD       5     ; #fib:, 1 arg
+     17  PUSH_SELF
+     18  PUSH_LOCAL         1     ; n
+     19  PUSH_CONST         6     ; 2
+     20  BIN_INT_SUB        4     ; #-
+     21  SEND_KEYWORD       5     ; #fib:, 1 arg
+     22  BIN_INT_ADD        7     ; #+
+     23  RETURN
 55

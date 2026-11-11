@@ -1335,7 +1335,7 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                 return;
             }
             // 2026-05-24 Tier-S: inline ifTrue:/ifFalse:/ifTrue:ifFalse:/
-            // whileTrue:/whileFalse: when their block argument(s) are
+            // and:/or:/whileTrue:/whileFalse: when their block argument(s) are
             // zero-arg block literals with no local declarations. See
             // the helper for why.
             if (tryEmitInlinedControl(m, n)) return;
@@ -1787,7 +1787,7 @@ void Compiler::emitDoYieldingLoop(BytecodeModule& m,
 
 // 2026-05-24 Tier-S perf: inline ifTrue:/ifFalse:/ifTrue:ifFalse: and
 // whileTrue:/whileFalse: when their argument(s) are zero-arg, no-local
-// block literals. The win is structural, not micro: each non-inlined
+// block literals (and:/or: since 0.10.0). The win is structural, not micro: each non-inlined
 // `cond ifTrue: [^expr]` runs the block through `prim_True_ifTrue` →
 // `invokeBlock` → a NESTED ExecutionEngine on the C++ stack, and an
 // `^expr` from inside that block throws NonLocalReturn to unwind the
@@ -1819,6 +1819,9 @@ Compiler::InlineShape Compiler::inlineShapeOf(const ast::Node& n) {
         && isInlineableBlock(n.children[2].get())
         && (n.text == "ifTrue:ifFalse:" || n.text == "ifFalse:ifTrue:"))
         return InlineShape::IfTrueIfFalse;
+    if (n.children.size() == 2 && isInlineableBlock(n.children[1].get())
+        && (n.text == "and:" || n.text == "or:"))
+        return InlineShape::AndOr;
     if (n.text == "to:do:" && n.children.size() == 3
         && n.children[2]->kind == NodeKind::Block
         && n.children[2]->intValue == 1
@@ -1843,58 +1846,51 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
             && b->stringList.empty();
     };
 
-    // cond ifTrue:  [body]  / cond ifFalse: [body]
+    // The value conditionals: an inlined ifTrue:, ifFalse:, ifTrue:ifFalse:,
+    // ifFalse:ifTrue:, and: or or: (emitInlinedConditional). The receiver
+    // is tested once; a non-Boolean receiver signals doesNotUnderstand: of
+    // the selector, as the send does (2026-05-24: without the guard,
+    // `123 ifTrue: [x]` ran `[x]`, because JUMP_IF_FALSE branches only on
+    // false), and the answer of a resumed doesNotUnderstand: is the value
+    // of the expression with no branch run (0.10.0: it used to be taken as
+    // the condition).
     if (n.children.size() == 2
         && isInlineableBlock(n.children[1].get())
         && (n.text == "ifTrue:" || n.text == "ifFalse:")) {
-        bool invert = (n.text == "ifFalse:");
-        emitExpr(m, *n.children[0]);
-        // 2026-05-24 correctness fix: emit a non-Boolean guard before the
-        // jump. Without it, `123 ifTrue: [x]` silently runs `[x]` because
-        // JUMP_IF_FALSE only branches on PROTO_FALSE and any other
-        // non-PROTO_FALSE value (including 123) falls through to the body.
-        // ASSERT_BOOL_OR_DNU signals doesNotUnderstand:<sel> on non-Boolean
-        // receivers, matching the pre-inline SEND dispatch semantics.
-        auto selSym = m.internSymbol(n.text);
-        m.emitWide(Op::ASSERT_BOOL_OR_DNU,
-                   static_cast<unsigned int>(selSym), currentLine_);
-        // Skip body if the cond doesn't match the polarity we want.
-        // JUMP_IF_FALSE skips when receiver is PROTO_FALSE (so it skips
-        // the body of ifTrue when cond is false). JUMP_IF_TRUE skips
-        // when receiver is PROTO_TRUE (mirror for ifFalse).
-        const size_t jSkip = emitForwardJump(m, invert ? Op::JUMP_IF_TRUE : Op::JUMP_IF_FALSE);
-        emitInlinedBlockBody(m, *n.children[1]);
-        // The inlined body left a result on the stack. Jump past the nil
-        // we are about to emit for the not-taken branch.
-        const size_t jDone = emitForwardJump(m, Op::JUMP);
-        const size_t skipTarget = m.pos();   // PUSH_NIL
-        m.emit(Op::PUSH_NIL, 0, currentLine_);
-        resolveForwardJumps(m, {{jSkip, skipTarget}, {jDone, m.pos()}});
+        // The body runs on the polarity named by the selector; the other
+        // case answers nil.
+        const ast::Node& body = *n.children[1];
+        emitInlinedConditional(m, n,
+            n.text == "ifFalse:" ? Op::JUMP_IF_TRUE : Op::JUMP_IF_FALSE,
+            [&] { emitInlinedBlockBody(m, body); },
+            [&] { m.emit(Op::PUSH_NIL, 0, currentLine_); });
         return true;
     }
-
-    // cond ifTrue: [t] ifFalse: [f]  / cond ifFalse: [f] ifTrue: [t]
     if (n.children.size() == 3
         && isInlineableBlock(n.children[1].get())
         && isInlineableBlock(n.children[2].get())
         && (n.text == "ifTrue:ifFalse:" || n.text == "ifFalse:ifTrue:")) {
-        bool ifFalseFirst = (n.text == "ifFalse:ifTrue:");
+        const bool ifFalseFirst = (n.text == "ifFalse:ifTrue:");
         const ast::Node& trueBranch  = ifFalseFirst ? *n.children[2] : *n.children[1];
         const ast::Node& falseBranch = ifFalseFirst ? *n.children[1] : *n.children[2];
-        emitExpr(m, *n.children[0]);
-        // Non-Boolean guard (see ifTrue:/ifFalse: comment above).
-        auto selSym = m.internSymbol(n.text);
-        m.emitWide(Op::ASSERT_BOOL_OR_DNU,
-                   static_cast<unsigned int>(selSym), currentLine_);
-        // Jump to the false branch if cond is false.
-        const size_t jToFalse = emitForwardJump(m, Op::JUMP_IF_FALSE);
-        // True branch.
-        emitInlinedBlockBody(m, trueBranch);
-        const size_t jDone = emitForwardJump(m, Op::JUMP);
-        // False branch starts here.
-        const size_t falseTarget = m.pos();
-        emitInlinedBlockBody(m, falseBranch);
-        resolveForwardJumps(m, {{jToFalse, falseTarget}, {jDone, m.pos()}});
+        emitInlinedConditional(m, n, Op::JUMP_IF_FALSE,
+            [&] { emitInlinedBlockBody(m, trueBranch); },
+            [&] { emitInlinedBlockBody(m, falseBranch); });
+        return true;
+    }
+    // The short-circuit forms of Boolean (bool_prims.cpp): `and:` answers
+    // false without evaluating the block when the receiver is false, else
+    // the block's value; `or:` answers true when the receiver is true, else
+    // the block's value. The block's value is not checked to be a Boolean,
+    // as the primitive does not check it.
+    if (n.children.size() == 2
+        && isInlineableBlock(n.children[1].get())
+        && (n.text == "and:" || n.text == "or:")) {
+        const bool isAnd = (n.text == "and:");
+        const ast::Node& rest = *n.children[1];
+        emitInlinedConditional(m, n, isAnd ? Op::JUMP_IF_FALSE : Op::JUMP_IF_TRUE,
+            [&] { emitInlinedBlockBody(m, rest); },
+            [&] { m.emit(isAnd ? Op::PUSH_FALSE : Op::PUSH_TRUE, 0, currentLine_); });
         return true;
     }
 
@@ -2006,6 +2002,42 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
     }
 
     return false;
+}
+
+// An inlined value conditional, `receiver selector: [...]`:
+//
+//       <receiver>
+//       JUMP_IF_NOT_BOOL    slow
+//       <jumpOp>            second        JUMP_IF_FALSE or JUMP_IF_TRUE
+//       <first>
+//       JUMP                end
+//   slow:
+//       ASSERT_BOOL_OR_DNU  #selector     the receiver is not a Boolean
+//       JUMP                end
+//   second:
+//       <second>
+//   end:
+//
+// The slow path is out of line, so a Boolean receiver costs the same two
+// dispatches as one guard and one conditional jump, and the answer of a
+// resumed doesNotUnderstand: is the expression's value, as for the send.
+void Compiler::emitInlinedConditional(BytecodeModule& m, const ast::Node& send, Op jumpOp,
+                                      const std::function<void()>& first,
+                                      const std::function<void()>& second) {
+    emitExpr(m, *send.children[0]);
+    const auto selSym = static_cast<unsigned int>(m.internSymbol(send.text));
+    const size_t jNotBool = emitForwardJump(m, Op::JUMP_IF_NOT_BOOL);
+    const size_t jSecond  = emitForwardJump(m, jumpOp);
+    first();
+    const size_t jDone1 = emitForwardJump(m, Op::JUMP);
+    const size_t slow = m.pos();
+    m.emitWide(Op::ASSERT_BOOL_OR_DNU, selSym, currentLine_);
+    const size_t jDone2 = emitForwardJump(m, Op::JUMP);
+    const size_t secondPos = m.pos();
+    second();
+    const size_t end = m.pos();
+    resolveForwardJumps(m, {{jNotBool, slow}, {jSecond, secondPos},
+                            {jDone1, end}, {jDone2, end}});
 }
 
 void Compiler::emitInlinedBlockBody(BytecodeModule& m, const ast::Node& block) {

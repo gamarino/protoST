@@ -2,6 +2,7 @@
 #include "AST.h"
 #include "../runtime/BytecodeModule.h"
 #include <deque>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -39,7 +40,7 @@ public:
         std::unordered_map<const ast::Node*, std::unordered_set<std::string>> capturedByScope;
         // Top-level captured names (module scope) — keyed by nullptr.
         std::unordered_set<std::string> moduleCaptured;
-        // The control sends (ifTrue:, whileTrue:, to:do:, ...) whose block
+        // The control sends (ifTrue:, and:, whileTrue:, to:do:, ...) whose block
         // arguments the analysis treated as inlined: their bodies belong to
         // the enclosing scope, so a variable they use is not captured unless
         // a real block nested in them needs it. Emission inlines exactly
@@ -48,7 +49,7 @@ public:
     };
 
     // The control-send shape the compiler inlines, decided from the AST alone.
-    enum class InlineShape { None, IfTrue, IfTrueIfFalse, WhileTrue, ToDo };
+    enum class InlineShape { None, IfTrue, IfTrueIfFalse, AndOr, WhileTrue, ToDo };
     static InlineShape inlineShapeOf(const ast::Node& send);
 
     // F4-U2: per-class metadata gathered by a pre-pass over the module's
@@ -237,6 +238,12 @@ private:
     // false means the caller should fall through to normal SEND_KEYWORD.
     bool   tryEmitInlinedControl(BytecodeModule& m, const ast::Node& send);
     void   emitInlinedBlockBody(BytecodeModule& m, const ast::Node& block);
+    // The layout of an inlined ifTrue:-family, and: or or: send: the
+    // receiver, a Boolean guard with an out-of-line doesNotUnderstand:, and
+    // `jumpOp` (taken towards `second`) between the two arms.
+    void   emitInlinedConditional(BytecodeModule& m, const ast::Node& send, Op jumpOp,
+                                  const std::function<void()>& first,
+                                  const std::function<void()>& second);
     // Jumps of any length. A forward jump is emitted as one word with a
     // placeholder operand (emitForwardJump answers its byte position); once
     // its target is known, resolveForwardJumps writes the operand, widening

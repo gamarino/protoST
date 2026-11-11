@@ -102,3 +102,28 @@ TEST_CASE("Debugger: location breakpoint halts at given pc", "[debugger][bp]") {
     REQUIRE(out.str().find("breakpoint") != std::string::npos);
     REQUIRE(out.str().find("pc: 4")     != std::string::npos);
 }
+
+TEST_CASE("Debugger: single-step through inlined and:/or:, both guard paths", "[debugger][step]") {
+    // `true and: [...]` takes the Boolean path of JUMP_IF_NOT_BOOL; `3 or:
+    // [...]` its out-of-line doesNotUnderstand:, resumed with 10, which is
+    // the value of the expression (the block does not run).
+    protoST::Parser P("nil halt. (true and: [ 1 + 2 ]) + "
+                      "([ 3 or: [ 100 ] ] on: MessageNotUnderstood do: [ :e | e resume: 10 ]).");
+    protoST::Compiler C; auto bc = C.compileModule(*P.parseModule());
+    REQUIRE(!C.hasErrors());
+    protoST::STRuntime rt;
+    rt.debugger().attach();
+    std::string cmds;
+    for (int i = 0; i < 60; ++i) cmds += "step\n";
+    cmds += "cont\n";
+    std::istringstream in(cmds);
+    std::ostringstream out;
+    rt.debugger().setInputStream(&in);
+    rt.debugger().setOutputStream(&out);
+
+    auto* r = rt.runTopLevel(*bc);
+    REQUIRE(r->asLong(rt.rootCtx()) == 13);
+    size_t count = 0; size_t pos = 0;
+    while ((pos = out.str().find("(stdbg)", pos)) != std::string::npos) { ++count; ++pos; }
+    REQUIRE(count >= 10);
+}

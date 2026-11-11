@@ -23,21 +23,25 @@ module main: <module>
       8  PUSH_LOCAL         0     ; n
       9  PUSH_CONST         1     ; 5
      10  BIN_INT_GT         2     ; #>
-     11  ASSERT_BOOL_OR_DNU 3     ; #ifTrue:ifFalse:
-     12  JUMP_IF_FALSE      2     ; -> 15
+     11  JUMP_IF_NOT_BOOL   3     ; -> 15
+     12  JUMP_IF_FALSE      4     ; -> 17
      13  PUSH_CONST         4     ; 'big'
-     14  JUMP               1     ; -> 16
-     15  PUSH_CONST         5     ; 'small'
-     16  SEND_UNARY         6     ; #printNl
-     17  POP
-     18  PUSH_LOCAL         0     ; n
-     19  SEND_UNARY         7     ; #odd
-     20  ASSERT_BOOL_OR_DNU 8     ; #ifTrue:
-     21  JUMP_IF_FALSE      3     ; -> 25
-     22  PUSH_CONST         9     ; 'odd'
-     23  SEND_UNARY         6     ; #printNl
-     24  JUMP               1     ; -> 26
-     25  PUSH_NIL
-     26  RETURN_TOP
+     14  JUMP               3     ; -> 18
+     15  ASSERT_BOOL_OR_DNU 3     ; #ifTrue:ifFalse:
+     16  JUMP               1     ; -> 18
+     17  PUSH_CONST         5     ; 'small'
+     18  SEND_UNARY         6     ; #printNl
+     19  POP
+     20  PUSH_LOCAL         0     ; n
+     21  SEND_UNARY         7     ; #odd
+     22  JUMP_IF_NOT_BOOL   4     ; -> 27
+     23  JUMP_IF_FALSE      5     ; -> 29
+     24  PUSH_CONST         9     ; 'odd'
+     25  SEND_UNARY         6     ; #printNl
+     26  JUMP               3     ; -> 30
+     27  ASSERT_BOOL_OR_DNU 8     ; #ifTrue:
+     28  JUMP               1     ; -> 30
+     29  PUSH_NIL
+     30  RETURN_TOP
 'big'
 'odd'

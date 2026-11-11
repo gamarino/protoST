@@ -889,6 +889,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     labels[static_cast<unsigned int>(Op::JUMP)]             = &&L_JUMP;
     labels[static_cast<unsigned int>(Op::JUMP_IF_TRUE)]     = &&L_JUMP_IF_TRUE;
     labels[static_cast<unsigned int>(Op::JUMP_IF_FALSE)]    = &&L_JUMP_IF_FALSE;
+    labels[static_cast<unsigned int>(Op::JUMP_IF_NOT_BOOL)] = &&L_JUMP_IF_NOT_BOOL;
     labels[static_cast<unsigned int>(Op::RETURN)]           = &&L_RETURN;
     labels[static_cast<unsigned int>(Op::RETURN_TOP)]       = &&L_RETURN_TOP;
     labels[static_cast<unsigned int>(Op::JUMP_BACK)]        = &&L_JUMP_BACK;
@@ -2209,9 +2210,12 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 DISPATCH_DIRECT();
             } break;
             case Op::ASSERT_BOOL_OR_DNU: L_ASSERT_BOOL_OR_DNU: {
-                // 2026-05-24 correctness: the inlined ifTrue:/ifFalse:/
-                // whileTrue: paths emit this BEFORE the JUMP_IF_FALSE /
-                // JUMP_IF_TRUE that follows.  JUMP_IF_FALSE only branches
+                // 2026-05-24 correctness: the inlined whileTrue: /
+                // whileFalse: paths emit this BEFORE the JUMP_IF_FALSE /
+                // JUMP_IF_TRUE that follows, and an inlined value
+                // conditional (ifTrue:, and:, ...) reaches it out of line
+                // through JUMP_IF_NOT_BOOL, with a JUMP to the end of the
+                // expression after it.  JUMP_IF_FALSE only branches
                 // when the value is exactly PROTO_FALSE, so without this
                 // guard a non-Boolean receiver (e.g. `123 ifTrue: [x]`)
                 // would silently take the not-PROTO_FALSE branch and
@@ -2256,6 +2260,16 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 Frame& f = frames_.back();
                 auto* v = pop(f);
                 if (v == PROTO_FALSE) f.pc += static_cast<std::size_t>(arg) * kInstrSize;
+                DISPATCH_DIRECT();
+                break;
+            }
+            case Op::JUMP_IF_NOT_BOOL: L_JUMP_IF_NOT_BOOL: {
+                // The guard of an inlined value conditional (Opcodes.h):
+                // a non-Boolean goes to the out-of-line doesNotUnderstand:.
+                Frame& f = frames_.back();
+                const proto::ProtoObject* v = peek(f);
+                if (v != PROTO_TRUE && v != PROTO_FALSE)
+                    f.pc += static_cast<std::size_t>(arg) * kInstrSize;
                 DISPATCH_DIRECT();
                 break;
             }

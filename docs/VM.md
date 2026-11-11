@@ -237,8 +237,8 @@ Instance variables are never captured: they are attributes `_iv_<name>` of
 `self`, which a block reaches through its `__block_self__`.
 
 **Inlined blocks.** A literal block argument of `ifTrue:`, `ifFalse:`,
-`ifTrue:ifFalse:`, `ifFalse:ifTrue:`, `whileTrue:`, `whileFalse:` (zero
-arguments, no temporaries) and `to:do:` (one argument, no temporaries, the
+`ifTrue:ifFalse:`, `ifFalse:ifTrue:`, `and:`, `or:`, `whileTrue:`,
+`whileFalse:` (zero arguments, no temporaries) and `to:do:` (one argument, no temporaries, the
 argument not captured by an inner block) is not a closure: its body is
 compiled into the enclosing code (`tryEmitInlinedControl`, examples 03, 05,
 06). `doYielding:` with a literal one-argument block is compiled to an
@@ -412,8 +412,8 @@ class is a C++ `std::runtime_error`, impossible in compiler output.
 |---|---|---|---|---|---|
 | `PUSH_CONST` | 1 | constant index (wide) | `-> v` | Pushes the constant, materialised on the executing thread's context (`STRuntime::materialize`): an integer as a SmallInteger (or `LargeInteger` past 56 bits); a float, a string and a large integer allocate a new object on every execution; a symbol is the interned symbol; a char a `Character`; the unset marker the bootstrap singleton. | number, string, symbol and character literals; the elements of `#(...)`; the selector of a method install; the call-form prologue's unset marker |
 | `PUSH_NIL` | 8 | — | `-> nil` | | `nil`; the value of an empty body, of an inlined `ifTrue:` not taken and of an inlined loop; top-level temporaries |
-| `PUSH_TRUE` | 9 | — | `-> true` | | `true` |
-| `PUSH_FALSE` | 10 | — | `-> false` | | `false` |
+| `PUSH_TRUE` | 9 | — | `-> true` | | `true`; the value of an inlined `or:` whose receiver is true |
+| `PUSH_FALSE` | 10 | — | `-> false` | | `false`; the value of an inlined `and:` whose receiver is false |
 | `PUSH_SELF` | 6 | — | `-> self` | Pushes the frame's header `self` (the receiver in a method, `__block_self__` in a block). | `self` |
 | `MAKE_ARRAY` | 29 | element count (wide) | `v1..vn -> array` | Pops the n values (the first pushed is element 1) and pushes a new `Array` (allocates; the elements stay in their slots until the array exists). | `#( ... )` and `{ ... }`; both build a fresh array on every evaluation |
 
@@ -457,11 +457,12 @@ the attribute `_iv_v` of the class that declares it.
 
 | Op | # | Operand | Stack | Semantics | Emitted by |
 |---|---|---|---|---|---|
-| `JUMP` | 15 | forward offset | `->` | `next += operand` words. | inlined `ifTrue:ifFalse:` (over the else branch), `ifTrue:` (over the `PUSH_NIL`) |
-| `JUMP_IF_FALSE` | 17 | forward offset | `v ->` | Pops; jumps when the value is exactly `false`. Any other value falls through, hence the guard below. | inlined `ifTrue:`, `ifTrue:ifFalse:`, `whileTrue:`, `to:do:` (loop exit), `doYielding:`; the call-form default prologue |
-| `JUMP_IF_TRUE` | 16 | forward offset | `v ->` | Pops; jumps when the value is exactly `true`. | inlined `ifFalse:`, `whileFalse:` |
+| `JUMP` | 15 | forward offset | `->` | `next += operand` words. | inlined `ifTrue:ifFalse:` (over the else branch), `ifTrue:` (over the `PUSH_NIL`), `and:` / `or:` (over the `PUSH_FALSE` / `PUSH_TRUE`); after the out-of-line `ASSERT_BOOL_OR_DNU` of an inlined value conditional |
+| `JUMP_IF_FALSE` | 17 | forward offset | `v ->` | Pops; jumps when the value is exactly `false`. Any other value falls through, hence the guard below. | inlined `ifTrue:`, `ifTrue:ifFalse:`, `and:`, `whileTrue:`, `to:do:` (loop exit), `doYielding:`; the call-form default prologue |
+| `JUMP_IF_TRUE` | 16 | forward offset | `v ->` | Pops; jumps when the value is exactly `true`. | inlined `ifFalse:`, `or:`, `whileFalse:` |
 | `JUMP_BACK` | 30 | backward offset | `->` | `next -= operand` words, then polls the GC safepoint (1.6). | the back edge of inlined `whileTrue:`, `whileFalse:`, `to:do:` and of `doYielding:` |
-| `ASSERT_BOOL_OR_DNU` | 38 | selector constant (wide) | `v -> v` | Leaves a Boolean in place. Any other value is popped and `doesNotUnderstand: <selector>` is signalled with it as the receiver, as the send the inlining replaced would have done. | before every conditional jump of an inlined `ifTrue:` / `ifFalse:` / `ifTrue:ifFalse:` / `ifFalse:ifTrue:` / `whileTrue:` / `whileFalse:` |
+| `JUMP_IF_NOT_BOOL` | 45 | forward offset | `v -> v` | Peeks; jumps when the value is neither `true` nor `false`, which stays on the stack either way. | the guard of an inlined `ifTrue:` / `ifFalse:` / `ifTrue:ifFalse:` / `ifFalse:ifTrue:` / `and:` / `or:`, to its out-of-line `ASSERT_BOOL_OR_DNU` (example 03) |
+| `ASSERT_BOOL_OR_DNU` | 38 | selector constant (wide) | `v -> v` | Leaves a Boolean in place. Any other value is popped and `doesNotUnderstand: <selector>` is sent with it as the receiver, as the send the inlining replaced would have done; the answer of a resumed `MessageNotUnderstood` is pushed. | before the conditional jump of an inlined `whileTrue:` / `whileFalse:`; the out-of-line target of `JUMP_IF_NOT_BOOL`, followed by a `JUMP` to the end of the expression, whose value that answer is |
 
 ### 2.6 Sends and returns
 
@@ -538,7 +539,7 @@ compiler change, and review the notes.
 | 11 | primitive call | `size`, `at:` |
 | 12 | higher-order | `inject:into:` with a block |
 | 13 | exceptions | `on:do:`, `signal:`, `ensure:` |
-| 14 | metaprogramming | compile-time inlining of `ifTrue:`, and the send it replaces |
+| 14 | metaprogramming | compile-time inlining of `ifTrue:` (and of `and:` / `or:`), and the send it replaces |
 | 15 | laziness | a block as a deferred value; `doYielding:` |
 | 16 | shared mutable state | instance variables, a write group |
 | 17 | misc. | cascade, `super` |
@@ -664,34 +665,41 @@ module main: <module>
       8  PUSH_LOCAL         0     ; n
       9  PUSH_CONST         1     ; 5
      10  BIN_INT_GT         2     ; #>
-     11  ASSERT_BOOL_OR_DNU 3     ; #ifTrue:ifFalse:
-     12  JUMP_IF_FALSE      2     ; -> 15
+     11  JUMP_IF_NOT_BOOL   3     ; -> 15
+     12  JUMP_IF_FALSE      4     ; -> 17
      13  PUSH_CONST         4     ; 'big'
-     14  JUMP               1     ; -> 16
-     15  PUSH_CONST         5     ; 'small'
-     16  SEND_UNARY         6     ; #printNl
-     17  POP
-     18  PUSH_LOCAL         0     ; n
-     19  SEND_UNARY         7     ; #odd
-     20  ASSERT_BOOL_OR_DNU 8     ; #ifTrue:
-     21  JUMP_IF_FALSE      3     ; -> 25
-     22  PUSH_CONST         9     ; 'odd'
-     23  SEND_UNARY         6     ; #printNl
-     24  JUMP               1     ; -> 26
-     25  PUSH_NIL
-     26  RETURN_TOP
+     14  JUMP               3     ; -> 18
+     15  ASSERT_BOOL_OR_DNU 3     ; #ifTrue:ifFalse:
+     16  JUMP               1     ; -> 18
+     17  PUSH_CONST         5     ; 'small'
+     18  SEND_UNARY         6     ; #printNl
+     19  POP
+     20  PUSH_LOCAL         0     ; n
+     21  SEND_UNARY         7     ; #odd
+     22  JUMP_IF_NOT_BOOL   4     ; -> 27
+     23  JUMP_IF_FALSE      5     ; -> 29
+     24  PUSH_CONST         9     ; 'odd'
+     25  SEND_UNARY         6     ; #printNl
+     26  JUMP               3     ; -> 30
+     27  ASSERT_BOOL_OR_DNU 8     ; #ifTrue:
+     28  JUMP               1     ; -> 30
+     29  PUSH_NIL
+     30  RETURN_TOP
 'big'
 'odd'
 ```
 
 - Both conditionals are inlined: their literal blocks have no arguments and
   no temporaries, so no closure is built and nothing is sent.
-- `11 ASSERT_BOOL_OR_DNU` checks that the receiver of `ifTrue:ifFalse:` is a
-  Boolean; `JUMP_IF_FALSE` alone would treat `7` as true.
-- `12`-`15`: false jumps to the else branch at `15`; the then branch jumps
-  over it to `16`.
-- `20`-`25`: a one-armed `ifTrue:` answers nil when not taken, so the
-  compiler adds `25 PUSH_NIL` and a `JUMP` over it.
+- `11 JUMP_IF_NOT_BOOL` checks that the receiver of `ifTrue:ifFalse:` is a
+  Boolean (`JUMP_IF_FALSE` alone would treat `7` as true) and sends any
+  other value to `15`-`16`, out of line: `ASSERT_BOOL_OR_DNU` signals
+  `doesNotUnderstand: ifTrue:ifFalse:`, and if a handler resumes it, the
+  answer is the value of the expression (`JUMP` to `18`), as for the send.
+- `12`-`17`: false jumps to the else branch at `17`; the then branch jumps
+  over the slow path and the else branch to `18`.
+- `22`-`29`: a one-armed `ifTrue:` answers nil when not taken, so the
+  compiler adds `29 PUSH_NIL`, which the then branch jumps over.
 
 ### Example 04: a class, a method and a send
 
@@ -861,36 +869,39 @@ module main.0: Math>>fib:
       0  PUSH_LOCAL         1     ; n
       1  PUSH_CONST         0     ; 2
       2  BIN_INT_LT         1     ; #<
-      3  ASSERT_BOOL_OR_DNU 2     ; #ifTrue:
-      4  JUMP_IF_FALSE      3     ; -> 8
+      3  JUMP_IF_NOT_BOOL   4     ; -> 8
+      4  JUMP_IF_FALSE      5     ; -> 10
       5  PUSH_LOCAL         1     ; n
       6  RETURN
-      7  JUMP               1     ; -> 9
-      8  PUSH_NIL
-      9  POP
-     10  PUSH_SELF
-     11  PUSH_LOCAL         1     ; n
-     12  PUSH_CONST         3     ; 1
-     13  BIN_INT_SUB        4     ; #-
-     14  SEND_KEYWORD       5     ; #fib:, 1 arg
-     15  PUSH_SELF
-     16  PUSH_LOCAL         1     ; n
-     17  PUSH_CONST         6     ; 2
-     18  BIN_INT_SUB        4     ; #-
-     19  SEND_KEYWORD       5     ; #fib:, 1 arg
-     20  BIN_INT_ADD        7     ; #+
-     21  RETURN
+      7  JUMP               3     ; -> 11
+      8  ASSERT_BOOL_OR_DNU 2     ; #ifTrue:
+      9  JUMP               1     ; -> 11
+     10  PUSH_NIL
+     11  POP
+     12  PUSH_SELF
+     13  PUSH_LOCAL         1     ; n
+     14  PUSH_CONST         3     ; 1
+     15  BIN_INT_SUB        4     ; #-
+     16  SEND_KEYWORD       5     ; #fib:, 1 arg
+     17  PUSH_SELF
+     18  PUSH_LOCAL         1     ; n
+     19  PUSH_CONST         6     ; 2
+     20  BIN_INT_SUB        4     ; #-
+     21  SEND_KEYWORD       5     ; #fib:, 1 arg
+     22  BIN_INT_ADD        7     ; #+
+     23  RETURN
 55
 ```
 
-- `main.0` `0`-`8`: the guard `n < 2 ifTrue: [ ^ n ]` is inlined. Its `^ n` is
-  a `RETURN` in the method's own frame: a plain return, no unwinding. Words
-  `7`-`9` (`JUMP`, `PUSH_NIL`, `POP`) complete the inlined `ifTrue:` as an
-  expression statement; after a `RETURN` the `JUMP` is unreachable.
-- `10`-`19`: each recursive call is `PUSH_SELF`, the argument (`BIN_INT_SUB`)
+- `main.0` `0`-`10`: the guard `n < 2 ifTrue: [ ^ n ]` is inlined. Its `^ n`
+  is a `RETURN` in the method's own frame: a plain return, no unwinding.
+  `8`-`9` are the out-of-line path of a receiver that is not a Boolean (see
+  example 03); `7 JUMP` follows a `RETURN` and is unreachable; `10 PUSH_NIL`
+  and `11 POP` complete the inlined `ifTrue:` as an expression statement.
+- `12`-`21`: each recursive call is `PUSH_SELF`, the argument (`BIN_INT_SUB`)
   and `SEND_KEYWORD #fib:`. The send pushes a new frame on the same engine
   (no C++ recursion) and polls the safepoint at call entry.
-- `20 BIN_INT_ADD` adds the two results, `21 RETURN` answers the sum.
+- `22 BIN_INT_ADD` adds the two results, `23 RETURN` answers the sum.
 
 ### Example 06: `to:do:` and `whileTrue:`
 
@@ -1707,22 +1718,24 @@ module main: <module>
      12  STORE_LOCAL        0     ; cond
      13  POP
      14  PUSH_LOCAL         0     ; cond
-     15  ASSERT_BOOL_OR_DNU 3     ; #ifTrue:
-     16  JUMP_IF_FALSE      2     ; -> 19
+     15  JUMP_IF_NOT_BOOL   3     ; -> 19
+     16  JUMP_IF_FALSE      4     ; -> 21
      17  PUSH_CONST         4     ; 'inlined'
-     18  JUMP               1     ; -> 20
-     19  PUSH_NIL
-     20  SEND_UNARY         5     ; #printNl
-     21  POP
-     22  PUSH_BLOCK         0     ; main.0 (<block>)
-     23  DUP
-     24  STORE_LOCAL        1     ; blk
-     25  POP
-     26  PUSH_LOCAL         0     ; cond
-     27  PUSH_LOCAL         1     ; blk
-     28  SEND_KEYWORD       3     ; #ifTrue:, 1 arg
-     29  SEND_UNARY         5     ; #printNl
-     30  RETURN_TOP
+     18  JUMP               3     ; -> 22
+     19  ASSERT_BOOL_OR_DNU 3     ; #ifTrue:
+     20  JUMP               1     ; -> 22
+     21  PUSH_NIL
+     22  SEND_UNARY         5     ; #printNl
+     23  POP
+     24  PUSH_BLOCK         0     ; main.0 (<block>)
+     25  DUP
+     26  STORE_LOCAL        1     ; blk
+     27  POP
+     28  PUSH_LOCAL         0     ; cond
+     29  PUSH_LOCAL         1     ; blk
+     30  SEND_KEYWORD       3     ; #ifTrue:, 1 arg
+     31  SEND_UNARY         5     ; #printNl
+     32  RETURN_TOP
 
 module main.0: <block>
   args 0, locals 0, stack 48 (deepest 1)
@@ -1735,9 +1748,11 @@ module main.0: <block>
 'sent'
 ```
 
-- `14`-`20`: `cond ifTrue: [ 'inlined' ]` is inlined (guard, jump, the body's
-  constant, `PUSH_NIL` for the false case).
-- `26`-`28`: `cond ifTrue: blk` sends `ifTrue:` to `true`; the Boolean
+- `14`-`21`: `cond ifTrue: [ 'inlined' ]` is inlined (guard, jump, the body's
+  constant, the out-of-line `doesNotUnderstand:` path, `PUSH_NIL` for the
+  false case). `and:` and `or:` with a literal block are inlined the same
+  way, with `PUSH_FALSE` / `PUSH_TRUE` in place of the `PUSH_NIL`.
+- `28`-`30`: `cond ifTrue: blk` sends `ifTrue:` to `true`; the Boolean
   primitive evaluates the closure `main.0` in a nested engine. Both forms
   answer the same value; only the inlined one avoids the closure, the send
   and the nested engine.
@@ -2184,13 +2199,15 @@ module main.0.0: [] in Finder>>firstOver:in:
       0  PUSH_LOCAL         0     ; x
       1  PUSH_CAPTURED      0     ; limit
       2  BIN_INT_GT         1     ; #>
-      3  ASSERT_BOOL_OR_DNU 2     ; #ifTrue:
-      4  JUMP_IF_FALSE      3     ; -> 8
+      3  JUMP_IF_NOT_BOOL   4     ; -> 8
+      4  JUMP_IF_FALSE      5     ; -> 10
       5  PUSH_LOCAL         0     ; x
       6  RETURN
-      7  JUMP               1     ; -> 9
-      8  PUSH_NIL
-      9  RETURN_TOP
+      7  JUMP               3     ; -> 11
+      8  ASSERT_BOOL_OR_DNU 2     ; #ifTrue:
+      9  JUMP               1     ; -> 11
+     10  PUSH_NIL
+     11  RETURN_TOP
 4
 ```
 

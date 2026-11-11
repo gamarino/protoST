@@ -118,6 +118,18 @@ minor release, so the two services arrive in 0.5.0.
 
 ### Fixed
 
+- **A resumed `doesNotUnderstand:` ran the block of an inlined conditional.**
+  `[ 3 ifTrue: [ #body ] ] on: MessageNotUnderstood do: [ :e | e resume:
+  42 ]` answered `#body`: the inlined `ifTrue:` took the resumed value as its
+  condition. The send it replaces answers 42 and runs no block, and so does
+  the inlined form now, for `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:`,
+  `ifFalse:ifTrue:`, `and:` and `or:`. The guard is a new opcode,
+  `JUMP_IF_NOT_BOOL` (45), to an out-of-line `ASSERT_BOOL_OR_DNU` followed
+  by a jump to the end of the expression; a Boolean receiver still costs two
+  dispatches. The inlined `whileTrue:` / `whileFalse:` keep their guard
+  (a resumed value is the loop condition). Test:
+  `08-exceptions/inlined-conditional-non-boolean-like-send.st` (failed
+  before: 5 of 11 rows).
 - **`lib/random.st`: `nextInt:` and `between:and:` alternated parity.** Both
   took the generator's state modulo the range. The generator is a 32-bit LCG
   with a power-of-two modulus, in which bit k of the state has period
@@ -240,6 +252,27 @@ minor release, so the two services arrive in 0.5.0.
   mismatched surrogate or an invalid or truncated hex escape signals the
   library's parse error. Tests: `tests/conformance/13-stdlib/json-*unicode*`,
   `json-*surrogate*`.
+
+### Performance
+
+- **`and:` and `or:` with a literal block are compiled inline (protoBaseST
+  review P2).** Like `ifTrue:`, a zero-argument block without temporaries
+  is no longer a closure evaluated by a primitive in a nested engine: its
+  body is compiled into the enclosing method. 10^6 iterations of
+  `((i > 10) and: [ i < 900000 ]) ifTrue: [...]` in a method went from
+  8.2-8.6 s to 0.21 s, `or:` from 9.8-10.4 s to 0.19 s, the cost of the
+  nested `ifTrue:` they mean (0.19-0.23 s); `benchmarks/micro/and_or.st`.
+  The value is the primitive's: `true and: [3]` is 3, the block's value is
+  not checked. A non-Boolean receiver signals `doesNotUnderstand: and:` /
+  `or:` as the send did; a non-literal argument (`x and: aBlock`) is still a
+  send. As with `ifTrue:`, a non-Boolean class that defines its own `and:`
+  or `or:` is not reached by a literal-block send (Pharo's compiler inlines
+  these selectors too), and a `doesNotUnderstand:` override receives a
+  Message without the block, which does not exist. protoST has no `and:and:` / `or:or:`, so there are none to inline.
+  Tests: `06-blocks/inlined-and-or-values.st`,
+  `07-non-local-return/nonlocal-return-from-inlined-and-or.st`, a debugger
+  single-step case in `tests/unit/test_debugger.cpp`; `docs/VM.md` 1.4 and
+  the opcode table; vm-examples 03, 05, 14 and 18 regenerated.
 
 ### Breaking changes
 

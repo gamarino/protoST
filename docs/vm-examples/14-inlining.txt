@@ -23,22 +23,24 @@ module main: <module>
      12  STORE_LOCAL        0     ; cond
      13  POP
      14  PUSH_LOCAL         0     ; cond
-     15  ASSERT_BOOL_OR_DNU 3     ; #ifTrue:
-     16  JUMP_IF_FALSE      2     ; -> 19
+     15  JUMP_IF_NOT_BOOL   3     ; -> 19
+     16  JUMP_IF_FALSE      4     ; -> 21
      17  PUSH_CONST         4     ; 'inlined'
-     18  JUMP               1     ; -> 20
-     19  PUSH_NIL
-     20  SEND_UNARY         5     ; #printNl
-     21  POP
-     22  PUSH_BLOCK         0     ; main.0 (<block>)
-     23  DUP
-     24  STORE_LOCAL        1     ; blk
-     25  POP
-     26  PUSH_LOCAL         0     ; cond
-     27  PUSH_LOCAL         1     ; blk
-     28  SEND_KEYWORD       3     ; #ifTrue:, 1 arg
-     29  SEND_UNARY         5     ; #printNl
-     30  RETURN_TOP
+     18  JUMP               3     ; -> 22
+     19  ASSERT_BOOL_OR_DNU 3     ; #ifTrue:
+     20  JUMP               1     ; -> 22
+     21  PUSH_NIL
+     22  SEND_UNARY         5     ; #printNl
+     23  POP
+     24  PUSH_BLOCK         0     ; main.0 (<block>)
+     25  DUP
+     26  STORE_LOCAL        1     ; blk
+     27  POP
+     28  PUSH_LOCAL         0     ; cond
+     29  PUSH_LOCAL         1     ; blk
+     30  SEND_KEYWORD       3     ; #ifTrue:, 1 arg
+     31  SEND_UNARY         5     ; #printNl
+     32  RETURN_TOP
 
 module main.0: <block>
   args 0, locals 0, stack 48 (deepest 1)

@@ -81,12 +81,14 @@ enum class Op : uint8_t {
     // which produced a Smalltalk-semantic regression: `123 ifTrue: [x]`
     // executed the block instead of raising doesNotUnderstand:ifTrue:.
     // ASSERT_BOOL_OR_DNU peeks the top of stack and, if it is not a
-    // Boolean, signals MessageNotUnderstood with the selector from the
-    // operand (a const-pool symbol index). On a Boolean it is a no-op
-    // and the stack is unchanged. The compiler emits it before
-    // JUMP_IF_FALSE / JUMP_IF_TRUE inside any inlined conditional, so
-    // the inlined fast path keeps the same observable semantics as the
-    // SEND_KEYWORD dispatch it replaced.
+    // Boolean, pops it and sends doesNotUnderstand: with the selector from
+    // the operand (a const-pool symbol index), pushing the answer of a
+    // resumed MessageNotUnderstood. On a Boolean it is a no-op and the
+    // stack is unchanged. The compiler emits it before the JUMP_IF_FALSE /
+    // JUMP_IF_TRUE of an inlined whileTrue: / whileFalse:, and as the
+    // out-of-line target of JUMP_IF_NOT_BOOL in an inlined value
+    // conditional, so the inlined code keeps the observable semantics of
+    // the SEND_KEYWORD dispatch it replaced.
     ASSERT_BOOL_OR_DNU = 38, // arg = selector const index
     // 2026-06-13: protoCore-style call-form send (positional + named args).
     // The single operand is a const-pool index naming a *mangled* selector
@@ -129,6 +131,14 @@ enum class Op : uint8_t {
     // every write takes STORE_INSTVAR's path at its own position instead.
     IVAR_GROUP         = 43, // arg = group-entry index; leaves the value on the stack
     IVAR_GROUP_END     = 44, // arg = group-entry index of the run's last write
+    // Peeks the top of the stack and jumps forward when it is neither true
+    // nor false; a Boolean stays and execution falls through. It opens every
+    // inlined value conditional (ifTrue:, ifFalse:, ifTrue:ifFalse:,
+    // ifFalse:ifTrue:, and:, or:): the target is an out-of-line
+    // ASSERT_BOOL_OR_DNU followed by a JUMP to the end of the expression, so
+    // the answer of a resumed doesNotUnderstand: is the expression's value
+    // and no branch runs, as for the send the inlining replaced.
+    JUMP_IF_NOT_BOOL   = 45, // arg = forward offset in instructions
     // Prefix carrying the next-higher byte of the following instruction's
     // operand, for operands above 255 (constant indices, slots, jumps).
     EXTEND          = 254,
