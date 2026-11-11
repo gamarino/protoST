@@ -53,17 +53,9 @@ Object >> asString
 
 "--- sending messages by name ------------------------------------------------"
 
-Object >> perform: aSelector
-  ^ self perform: aSelector withArguments: #().
-
-Object >> perform: aSelector with: anObject
-  ^ self perform: aSelector withArguments: (Array with: anObject).
-
-Object >> perform: aSelector with: first with: second
-  ^ self perform: aSelector withArguments: (Array with: first with: second).
-
-Object >> perform: aSelector with: first with: second with: third
-  ^ self perform: aSelector withArguments: (Array with: first with: second with: third).
+"perform:, perform:with:, perform:with:with: and perform:with:with:with: are
+ primitives (0.10.0), like perform:withArguments:: they no longer build an
+ Array of the arguments."
 
 "--- errors -------------------------------------------------------------------"
 

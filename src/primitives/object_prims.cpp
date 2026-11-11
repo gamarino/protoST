@@ -792,15 +792,23 @@ const proto::ProtoObject* sendDynamicFrom(STRuntime& rt, proto::ProtoContext* ct
         if (sub->argCount() != argc + 1)
             throw NativeError("wrong number of arguments for "
                                      + selector->toStdString(ctx));
-        std::vector<const proto::ProtoObject*> methodArgs;
-        methodArgs.reserve(static_cast<size_t>(argc) + 1);
-        methodArgs.push_back(recv ? recv : PROTO_NONE);
-        for (int i = 0; i < argc; ++i) methodArgs.push_back(args[i]);
+        // [receiver, args...] on the C++ stack up to 8 arguments (0.10.0;
+        // a heap vector per call before). The values are the caller's,
+        // rooted where the caller holds them.
+        const proto::ProtoObject* inlineArgs[9];
+        std::vector<const proto::ProtoObject*> wideArgs;
+        const proto::ProtoObject** methodArgs = inlineArgs;
+        if (argc > 8) {
+            wideArgs.resize(static_cast<size_t>(argc) + 1);
+            methodArgs = wideArgs.data();
+        }
+        methodArgs[0] = recv ? recv : PROTO_NONE;
+        for (int i = 0; i < argc; ++i) methodArgs[i + 1] = args[i];
         const proto::ProtoObject* capDict = method->getOwnAttributeDirect(ctx, rt.bootstrap().sym.captured);
         if (capDict == PROTO_NONE) capDict = nullptr;
         if (understood) *understood = true;
         ExecutionEngine eng(rt);
-        return eng.runWithArgs(ctx, *sub, recv ? recv : PROTO_NONE, methodArgs.data(),
+        return eng.runWithArgs(ctx, *sub, recv ? recv : PROTO_NONE, methodArgs,
                                argc + 1, capDict);
     }
     if (method->isInteger(ctx)) {
@@ -846,6 +854,21 @@ const proto::ProtoObject* prim_Object_performWithArguments(STRuntime& rt, proto:
     if (!understood)
         res = sendDoesNotUnderstand(rt, ctx, r, sel->toStdString(ctx), args.data(),
                                     static_cast<int>(args.size()));
+    return res ? res : PROTO_NONE;
+}
+
+// recv perform: #selector, perform: #selector with: a1 ... (up to three):
+// the arguments are the primitive's own, so no Array is built (0.10.0; these
+// were kernel methods building an Array for perform:withArguments:).
+const proto::ProtoObject* prim_Object_performWith(STRuntime& rt, proto::ProtoContext* ctx,
+                                                  const proto::ProtoObject* r,
+                                                  const proto::ProtoObject* const* a, int argc) {
+    if (argc < 1) throw NativeError("perform: expects a selector");
+    const proto::ProtoString* sel = selectorArg(ctx, a[0]);
+    bool understood = false;
+    const proto::ProtoObject* res = sendDynamic(rt, ctx, r, sel, a + 1, argc - 1, &understood);
+    if (!understood)
+        res = sendDoesNotUnderstand(rt, ctx, r, sel->toStdString(ctx), a + 1, argc - 1);
     return res ? res : PROTO_NONE;
 }
 
@@ -1968,6 +1991,13 @@ void installObjectPrimitives(STRuntime& rt) {
     bindPrimitive(rt, b.objectProto, "__versionString", reg.registerPrim(prim_Object_versionString));
     bindPrimitive(rt, b.objectProto, "perform:withArguments:",
                   reg.registerPrim(prim_Object_performWithArguments));
+    {
+        const int performIdx = reg.registerPrim(prim_Object_performWith);
+        bindPrimitive(rt, b.objectProto, "perform:", performIdx);
+        bindPrimitive(rt, b.objectProto, "perform:with:", performIdx);
+        bindPrimitive(rt, b.objectProto, "perform:with:with:", performIdx);
+        bindPrimitive(rt, b.objectProto, "perform:with:with:with:", performIdx);
+    }
     bindPrimitive(rt, b.objectProto, "respondsTo:", reg.registerPrim(prim_Object_respondsTo));
     bindPrimitive(rt, b.behaviorProto, "superclass", reg.registerPrim(prim_Object_superclass));
     bindPrimitive(rt, b.objectProto, "shallowCopy", reg.registerPrim(prim_Object_shallowCopy));

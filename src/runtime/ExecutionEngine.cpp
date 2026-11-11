@@ -2101,7 +2101,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     bs_.sym.bcPtr;
                 const proto::ProtoString* capKey =
                     bs_.sym.captured;
-                auto* bcPtrObj = attr->getOwnAttributeDirect(ctx, bcKey);
+                // A user method is an object cell (pointer tag 0); a
+                // primitive marker is an Integer, so it skips the probe
+                // (0.10.0).
+                auto* bcPtrObj = (reinterpret_cast<uintptr_t>(attr) & 0x3F) == 0
+                    ? attr->getOwnAttributeDirect(ctx, bcKey) : nullptr;
                 if (bcPtrObj && bcPtrObj != PROTO_NONE) {
                     // User method: F6 v3 A previously recursed via
                     //   ExecutionEngine subEng(rt_);
