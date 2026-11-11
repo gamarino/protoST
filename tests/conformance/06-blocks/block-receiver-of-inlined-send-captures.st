@@ -2,7 +2,8 @@
 "A block literal that is the receiver of and:, or:, ifTrue: or ifNil: is not
  inlined (only whileTrue: / whileFalse: inline their receiver block): it is a
  real closure, and the method's variables it uses are captured like those of
- any other block (review L3). Here the block reaches the receiver's
+ any other block (review L3; the analysis had treated it as inlined, which
+ no program observed). Here the block reaches the receiver's
  doesNotUnderstand: and is evaluated by the handler after the method's frame
  has moved on."
 Object subclass: #T.

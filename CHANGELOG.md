@@ -121,13 +121,13 @@ minor release, so the two services arrive in 0.5.0.
 - **An unhandled error inside an inlined nil-test arm has one frame less in
   its trace.** The arm is no longer a block, so the `at <block>` line is gone
   (tutorial 15 updated).
-- **A block literal receiving `and:`, `or:`, `ifTrue:` and the like
-  captures its variables (protoBaseST review L3).** The closure analysis
-  treated the receiver block of every inlinable send as inlined, but only
-  `whileTrue:` / `whileFalse:` inline their receiver; for the others it is a
-  real closure, and a method variable it used was read from a dead slot once
-  the block outlived the send (`[ x ] and: [...]` reaching
-  `doesNotUnderstand:`). Test: `06-blocks/block-receiver-of-inlined-send-captures.st`.
+- **The closure analysis no longer treats a block literal receiving `and:`,
+  `or:`, `ifTrue:` and the like as inlined (protoBaseST review L3).** Only
+  `whileTrue:` / `whileFalse:` inline their receiver block; for the others
+  it is a real closure and is now analysed as one. No program observed the
+  difference (its variables were captured through another path), so this
+  is a robustness fix. Test, which passes before and after:
+  `06-blocks/block-receiver-of-inlined-send-captures.st`.
 - **An inlined conditional with a non-Boolean receiver is now the send it
   replaces.** `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:`, `ifFalse:ifTrue:`
   (since 0.1) and `and:` / `or:` (new in 0.10.0) with literal blocks are
