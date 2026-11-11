@@ -303,18 +303,20 @@ private:
         // The compiler's code never overflows: frames are sized from the
         // deepest point of their module. A hand-built module can, and then
         // it is an ordinary catchable Error.
+        // The region is inside the slot array (pushFrame), so the slot is
+        // indexed directly (0.10.0; see getLocal).
         if (f.sp >= f.maxStack) [[unlikely]] operandStackOverflow(f);
-        ctx_->setAutomaticLocal(opStackBase(f) + f.sp, v);
+        ctx_->getAutomaticLocals()[opStackBase(f) + f.sp] = v;
         ++f.sp;
     }
     PROTOST_ENGINE_INLINE const proto::ProtoObject* pop(Frame& f) {
         if (f.sp == 0) [[unlikely]] operandStackUnderflow("engine operand stack underflow");
         --f.sp;
-        return ctx_->getAutomaticLocal(opStackBase(f) + f.sp);
+        return ctx_->getAutomaticLocals()[opStackBase(f) + f.sp];
     }
     PROTOST_ENGINE_INLINE const proto::ProtoObject* peek(const Frame& f) const {
         if (f.sp == 0) [[unlikely]] operandStackUnderflow("engine operand stack peek on empty");
-        return ctx_->getAutomaticLocal(opStackBase(f) + f.sp - 1);
+        return ctx_->getAutomaticLocals()[opStackBase(f) + f.sp - 1];
     }
 #undef PROTOST_ENGINE_INLINE
     [[noreturn]] void operandStackOverflow(const Frame& f);

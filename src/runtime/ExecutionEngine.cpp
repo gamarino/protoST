@@ -43,6 +43,7 @@ bool appendFutureWaiter(STRuntime& rt,
 #include "NativeExceptionBridge.h"
 #include "Interrupt.h"
 
+#include <cassert>
 #include <cstdint>
 #include "debugger/DebuggerRuntime.h"
 #include "protoST/STRuntime.h"
@@ -77,6 +78,15 @@ bool appendFutureWaiter(STRuntime& rt,
 #endif
 
 namespace {
+// A constant PUSH_CONST can push without STRuntime::materialize: a
+// SmallInteger (a tagged immediate, the same on every thread and space), or
+// nullptr. Every other kind allocates on the running thread (D26) or interns
+// per space.
+inline const proto::ProtoObject* constImmediate(const protoST::BytecodeModule& m, std::size_t i) {
+    if (m.constKind(i) != protoST::BytecodeModule::ConstKind::Integer) return nullptr;
+    const long long v = m.constInteger(i);
+    return proto::smallIntInRange(v) ? proto::makeSmallInt(v) : nullptr;
+}
 // Overflow-checked 64-bit add/subtract: the GCC/Clang builtins, and the same
 // result computed by hand elsewhere.
 inline bool addOverflows(long long a, long long b, long long* r) {
@@ -325,18 +335,25 @@ static thread_local std::vector<ExecutionEngine*> g_liveEngines;
 // through the engine context's automaticLocals so the GC sees it.
 // ---------------------------------------------------------------------------
 
+// A frame's region lies inside the array: pushFrame grew it to the region's
+// end (ensureEngineSlots) and it never shrinks while the frame lives. The
+// accessors index it directly (0.10.0; protoCore's checked accessors tested
+// the bounds on every access); a debug build asserts.
 const proto::ProtoObject*
 ExecutionEngine::getLocal(const Frame& f, unsigned int i) const {
-    return ctx_->getAutomaticLocal(localsBase(f) + i);
+    assert(localsBase(f) + i < ctx_->getAutomaticLocalsCount());
+    return ctx_->getAutomaticLocals()[localsBase(f) + i];
 }
 void
 ExecutionEngine::setLocal(const Frame& f, unsigned int i,
                           const proto::ProtoObject* v) {
-    ctx_->setAutomaticLocal(localsBase(f) + i, v);
+    assert(localsBase(f) + i < ctx_->getAutomaticLocalsCount());
+    ctx_->getAutomaticLocals()[localsBase(f) + i] = v;
 }
 const proto::ProtoObject*
 ExecutionEngine::getSelf(const Frame& f) const {
-    return ctx_->getAutomaticLocal(f.baseSlot + 1);
+    assert(f.baseSlot + 1 < ctx_->getAutomaticLocalsCount());
+    return ctx_->getAutomaticLocals()[f.baseSlot + 1];
 }
 void
 ExecutionEngine::setSelf(const Frame& f, const proto::ProtoObject* v) {
@@ -944,9 +961,12 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     // highest slot referenced). A slot index past localCount is a compiler /
     // sizing bug; reject it rather than silently aliasing another frame's
     // region.
+    // The count comes from scanning the module itself (computeLocalCount), so
+    // no module, compiled or hand-built, can reach past it: a debug-build
+    // assertion (0.10.0; it was a check on every local access).
     auto checkLocal = [](const Frame& f, unsigned int slot) {
-        if (slot >= f.localCount)
-            throw NativeError("engine local slot out of range");
+        (void)f; (void)slot;
+        assert(slot < f.localCount && "engine local slot out of range");
     };
 
     // F6 v3 E3: whatever happens (normal return, cooperative yield rethrow,
@@ -985,64 +1005,142 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     // recognise. EXTEND never reaches dispatch because DISPATCH_DIRECT's
     // inner loop swallows EXTEND prefix words and accumulates `arg`.
 #if PROTOST_THREADED_DISPATCH
-    void* labels[256];
-    for (int i__ = 0; i__ < 256; ++i__) labels[i__] = &&L_BAD_OP;
-    labels[static_cast<unsigned int>(Op::PUSH_CONST)]       = &&L_PUSH_CONST;
-    labels[static_cast<unsigned int>(Op::PUSH_LOCAL)]       = &&L_PUSH_LOCAL;
-    labels[static_cast<unsigned int>(Op::STORE_LOCAL)]      = &&L_STORE_LOCAL;
-    labels[static_cast<unsigned int>(Op::DUP)]              = &&L_DUP;
-    labels[static_cast<unsigned int>(Op::POP)]              = &&L_POP;
-    labels[static_cast<unsigned int>(Op::PUSH_SELF)]        = &&L_PUSH_SELF;
-    labels[static_cast<unsigned int>(Op::PUSH_NIL)]         = &&L_PUSH_NIL;
-    labels[static_cast<unsigned int>(Op::PUSH_TRUE)]        = &&L_PUSH_TRUE;
-    labels[static_cast<unsigned int>(Op::PUSH_FALSE)]       = &&L_PUSH_FALSE;
-    labels[static_cast<unsigned int>(Op::SEND_UNARY)]       = &&L_SEND_UNARY;
-    labels[static_cast<unsigned int>(Op::SEND_BINARY)]      = &&L_SEND_BINARY;
-    labels[static_cast<unsigned int>(Op::SEND_KEYWORD)]     = &&L_SEND_KEYWORD;
-    labels[static_cast<unsigned int>(Op::SEND_SUPER)]       = &&L_SEND_SUPER;
-    labels[static_cast<unsigned int>(Op::SEND_CALL)]        = &&L_SEND_CALL;
-    labels[static_cast<unsigned int>(Op::JUMP)]             = &&L_JUMP;
-    labels[static_cast<unsigned int>(Op::JUMP_IF_TRUE)]     = &&L_JUMP_IF_TRUE;
-    labels[static_cast<unsigned int>(Op::JUMP_IF_FALSE)]    = &&L_JUMP_IF_FALSE;
-    labels[static_cast<unsigned int>(Op::JUMP_IF_NOT_BOOL)] = &&L_JUMP_IF_NOT_BOOL;
-    labels[static_cast<unsigned int>(Op::DEOPT_ENTER)]      = &&L_DEOPT_ENTER;
-    labels[static_cast<unsigned int>(Op::PUSH_DEOPT_BLOCK)] = &&L_PUSH_DEOPT_BLOCK;
-    labels[static_cast<unsigned int>(Op::DEOPT_EXIT)]       = &&L_DEOPT_EXIT;
-    labels[static_cast<unsigned int>(Op::DEOPT_CHECK)]      = &&L_DEOPT_CHECK;
-    labels[static_cast<unsigned int>(Op::JUMP_IF_NIL)]      = &&L_JUMP_IF_NIL;
-    labels[static_cast<unsigned int>(Op::JUMP_IF_NOT_NIL)]  = &&L_JUMP_IF_NOT_NIL;
-    labels[static_cast<unsigned int>(Op::IDENTICAL)]        = &&L_IDENTICAL;
-    labels[static_cast<unsigned int>(Op::BIN_INT_MUL)]      = &&L_BIN_INT_MUL;
-    labels[static_cast<unsigned int>(Op::BIN_INT_MOD)]      = &&L_BIN_INT_MOD;
-    labels[static_cast<unsigned int>(Op::BIN_INT_QUO)]      = &&L_BIN_INT_QUO;
-    labels[static_cast<unsigned int>(Op::BIN_INT_REM)]      = &&L_BIN_INT_REM;
-    labels[static_cast<unsigned int>(Op::BIN_INT_AND)]      = &&L_BIN_INT_AND;
-    labels[static_cast<unsigned int>(Op::BIN_INT_OR)]       = &&L_BIN_INT_OR;
-    labels[static_cast<unsigned int>(Op::RETURN)]           = &&L_RETURN;
-    labels[static_cast<unsigned int>(Op::RETURN_TOP)]       = &&L_RETURN_TOP;
-    labels[static_cast<unsigned int>(Op::JUMP_BACK)]        = &&L_JUMP_BACK;
-    labels[static_cast<unsigned int>(Op::BIN_INT_ADD)]      = &&L_BIN_INT_ADD;
-    labels[static_cast<unsigned int>(Op::BIN_INT_SUB)]      = &&L_BIN_INT_SUB;
-    labels[static_cast<unsigned int>(Op::BIN_INT_LE)]       = &&L_BIN_INT_LE;
-    labels[static_cast<unsigned int>(Op::BIN_INT_LT)]       = &&L_BIN_INT_LT;
-    labels[static_cast<unsigned int>(Op::BIN_INT_GE)]       = &&L_BIN_INT_GE;
-    labels[static_cast<unsigned int>(Op::BIN_INT_GT)]       = &&L_BIN_INT_GT;
-    labels[static_cast<unsigned int>(Op::BIN_INT_EQ)]       = &&L_BIN_INT_EQ;
-    labels[static_cast<unsigned int>(Op::ASSERT_LOOP_BOOL)] = &&L_ASSERT_LOOP_BOOL;
-    labels[static_cast<unsigned int>(Op::PUSH_BLOCK)]       = &&L_PUSH_BLOCK;
-    labels[static_cast<unsigned int>(Op::PUSH_CAPTURED)]    = &&L_PUSH_CAPTURED;
-    labels[static_cast<unsigned int>(Op::STORE_CAPTURED)]   = &&L_STORE_CAPTURED;
-    labels[static_cast<unsigned int>(Op::DEFINE_CAPTURED)]  = &&L_DEFINE_CAPTURED;
-    labels[static_cast<unsigned int>(Op::STORE_CLASSVAR)]   = &&L_STORE_CLASSVAR;
-    labels[static_cast<unsigned int>(Op::PUSH_OWN_INSTVAR)] = &&L_PUSH_OWN_INSTVAR;
-    labels[static_cast<unsigned int>(Op::PUSH_GLOBAL)]      = &&L_PUSH_GLOBAL;
-    labels[static_cast<unsigned int>(Op::STORE_GLOBAL)]     = &&L_STORE_GLOBAL;
-    labels[static_cast<unsigned int>(Op::PUSH_INSTVAR)]     = &&L_PUSH_INSTVAR;
-    labels[static_cast<unsigned int>(Op::STORE_INSTVAR)]    = &&L_STORE_INSTVAR;
-    labels[static_cast<unsigned int>(Op::IVAR_GROUP)]       = &&L_IVAR_GROUP;
-    labels[static_cast<unsigned int>(Op::IVAR_GROUP_END)]   = &&L_IVAR_GROUP_END;
-    labels[static_cast<unsigned int>(Op::MAKE_CAPTURED)]    = &&L_MAKE_CAPTURED;
-    labels[static_cast<unsigned int>(Op::MAKE_ARRAY)]       = &&L_MAKE_ARRAY;
+    // The jump table, indexed by opcode value: built once, at compile time
+    // (0.10.0; it was a local array filled on every runLoop call, 256+
+    // stores per engine entry, and an engine is entered for every block a
+    // primitive evaluates). The positional order is the Op values of
+    // Opcodes.h; a debug build checks it against the per-opcode assignments
+    // below, which stay the readable map.
+    static void* const labels[256] = {
+        &&L_BAD_OP, &&L_PUSH_CONST, &&L_PUSH_LOCAL, &&L_STORE_LOCAL,   // 0-3
+        &&L_DUP, &&L_POP, &&L_PUSH_SELF, &&L_BAD_OP,   // 4-7
+        &&L_PUSH_NIL, &&L_PUSH_TRUE, &&L_PUSH_FALSE, &&L_SEND_UNARY,   // 8-11
+        &&L_SEND_BINARY, &&L_SEND_KEYWORD, &&L_SEND_SUPER, &&L_JUMP,   // 12-15
+        &&L_JUMP_IF_TRUE, &&L_JUMP_IF_FALSE, &&L_RETURN, &&L_RETURN_TOP,   // 16-19
+        &&L_PUSH_BLOCK, &&L_BAD_OP, &&L_PUSH_CAPTURED, &&L_STORE_CAPTURED,   // 20-23
+        &&L_PUSH_GLOBAL, &&L_STORE_GLOBAL, &&L_PUSH_INSTVAR, &&L_STORE_INSTVAR,   // 24-27
+        &&L_MAKE_CAPTURED, &&L_MAKE_ARRAY, &&L_JUMP_BACK, &&L_BIN_INT_ADD,   // 28-31
+        &&L_BIN_INT_SUB, &&L_BIN_INT_LE, &&L_BIN_INT_LT, &&L_BIN_INT_GE,   // 32-35
+        &&L_BIN_INT_GT, &&L_BIN_INT_EQ, &&L_ASSERT_LOOP_BOOL, &&L_SEND_CALL,   // 36-39
+        &&L_DEFINE_CAPTURED, &&L_STORE_CLASSVAR, &&L_PUSH_OWN_INSTVAR, &&L_IVAR_GROUP,   // 40-43
+        &&L_IVAR_GROUP_END, &&L_JUMP_IF_NOT_BOOL, &&L_DEOPT_ENTER, &&L_PUSH_DEOPT_BLOCK,   // 44-47
+        &&L_DEOPT_EXIT, &&L_DEOPT_CHECK, &&L_JUMP_IF_NIL, &&L_JUMP_IF_NOT_NIL,   // 48-51
+        &&L_IDENTICAL, &&L_BIN_INT_MUL, &&L_BIN_INT_MOD, &&L_BIN_INT_QUO,   // 52-55
+        &&L_BIN_INT_REM, &&L_BIN_INT_AND, &&L_BIN_INT_OR, &&L_BAD_OP,   // 56-59
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 60-63
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 64-67
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 68-71
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 72-75
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 76-79
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 80-83
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 84-87
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 88-91
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 92-95
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 96-99
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 100-103
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 104-107
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 108-111
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 112-115
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 116-119
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 120-123
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 124-127
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 128-131
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 132-135
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 136-139
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 140-143
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 144-147
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 148-151
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 152-155
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 156-159
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 160-163
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 164-167
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 168-171
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 172-175
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 176-179
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 180-183
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 184-187
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 188-191
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 192-195
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 196-199
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 200-203
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 204-207
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 208-211
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 212-215
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 216-219
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 220-223
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 224-227
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 228-231
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 232-235
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 236-239
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 240-243
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 244-247
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 248-251
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 252-255
+    };
+#ifndef NDEBUG
+    {
+    void* check[256];
+    for (int i__ = 0; i__ < 256; ++i__) check[i__] = &&L_BAD_OP;
+    check[static_cast<unsigned int>(Op::PUSH_CONST)]       = &&L_PUSH_CONST;
+    check[static_cast<unsigned int>(Op::PUSH_LOCAL)]       = &&L_PUSH_LOCAL;
+    check[static_cast<unsigned int>(Op::STORE_LOCAL)]      = &&L_STORE_LOCAL;
+    check[static_cast<unsigned int>(Op::DUP)]              = &&L_DUP;
+    check[static_cast<unsigned int>(Op::POP)]              = &&L_POP;
+    check[static_cast<unsigned int>(Op::PUSH_SELF)]        = &&L_PUSH_SELF;
+    check[static_cast<unsigned int>(Op::PUSH_NIL)]         = &&L_PUSH_NIL;
+    check[static_cast<unsigned int>(Op::PUSH_TRUE)]        = &&L_PUSH_TRUE;
+    check[static_cast<unsigned int>(Op::PUSH_FALSE)]       = &&L_PUSH_FALSE;
+    check[static_cast<unsigned int>(Op::SEND_UNARY)]       = &&L_SEND_UNARY;
+    check[static_cast<unsigned int>(Op::SEND_BINARY)]      = &&L_SEND_BINARY;
+    check[static_cast<unsigned int>(Op::SEND_KEYWORD)]     = &&L_SEND_KEYWORD;
+    check[static_cast<unsigned int>(Op::SEND_SUPER)]       = &&L_SEND_SUPER;
+    check[static_cast<unsigned int>(Op::SEND_CALL)]        = &&L_SEND_CALL;
+    check[static_cast<unsigned int>(Op::JUMP)]             = &&L_JUMP;
+    check[static_cast<unsigned int>(Op::JUMP_IF_TRUE)]     = &&L_JUMP_IF_TRUE;
+    check[static_cast<unsigned int>(Op::JUMP_IF_FALSE)]    = &&L_JUMP_IF_FALSE;
+    check[static_cast<unsigned int>(Op::JUMP_IF_NOT_BOOL)] = &&L_JUMP_IF_NOT_BOOL;
+    check[static_cast<unsigned int>(Op::DEOPT_ENTER)]      = &&L_DEOPT_ENTER;
+    check[static_cast<unsigned int>(Op::PUSH_DEOPT_BLOCK)] = &&L_PUSH_DEOPT_BLOCK;
+    check[static_cast<unsigned int>(Op::DEOPT_EXIT)]       = &&L_DEOPT_EXIT;
+    check[static_cast<unsigned int>(Op::DEOPT_CHECK)]      = &&L_DEOPT_CHECK;
+    check[static_cast<unsigned int>(Op::JUMP_IF_NIL)]      = &&L_JUMP_IF_NIL;
+    check[static_cast<unsigned int>(Op::JUMP_IF_NOT_NIL)]  = &&L_JUMP_IF_NOT_NIL;
+    check[static_cast<unsigned int>(Op::IDENTICAL)]        = &&L_IDENTICAL;
+    check[static_cast<unsigned int>(Op::BIN_INT_MUL)]      = &&L_BIN_INT_MUL;
+    check[static_cast<unsigned int>(Op::BIN_INT_MOD)]      = &&L_BIN_INT_MOD;
+    check[static_cast<unsigned int>(Op::BIN_INT_QUO)]      = &&L_BIN_INT_QUO;
+    check[static_cast<unsigned int>(Op::BIN_INT_REM)]      = &&L_BIN_INT_REM;
+    check[static_cast<unsigned int>(Op::BIN_INT_AND)]      = &&L_BIN_INT_AND;
+    check[static_cast<unsigned int>(Op::BIN_INT_OR)]       = &&L_BIN_INT_OR;
+    check[static_cast<unsigned int>(Op::RETURN)]           = &&L_RETURN;
+    check[static_cast<unsigned int>(Op::RETURN_TOP)]       = &&L_RETURN_TOP;
+    check[static_cast<unsigned int>(Op::JUMP_BACK)]        = &&L_JUMP_BACK;
+    check[static_cast<unsigned int>(Op::BIN_INT_ADD)]      = &&L_BIN_INT_ADD;
+    check[static_cast<unsigned int>(Op::BIN_INT_SUB)]      = &&L_BIN_INT_SUB;
+    check[static_cast<unsigned int>(Op::BIN_INT_LE)]       = &&L_BIN_INT_LE;
+    check[static_cast<unsigned int>(Op::BIN_INT_LT)]       = &&L_BIN_INT_LT;
+    check[static_cast<unsigned int>(Op::BIN_INT_GE)]       = &&L_BIN_INT_GE;
+    check[static_cast<unsigned int>(Op::BIN_INT_GT)]       = &&L_BIN_INT_GT;
+    check[static_cast<unsigned int>(Op::BIN_INT_EQ)]       = &&L_BIN_INT_EQ;
+    check[static_cast<unsigned int>(Op::ASSERT_LOOP_BOOL)] = &&L_ASSERT_LOOP_BOOL;
+    check[static_cast<unsigned int>(Op::PUSH_BLOCK)]       = &&L_PUSH_BLOCK;
+    check[static_cast<unsigned int>(Op::PUSH_CAPTURED)]    = &&L_PUSH_CAPTURED;
+    check[static_cast<unsigned int>(Op::STORE_CAPTURED)]   = &&L_STORE_CAPTURED;
+    check[static_cast<unsigned int>(Op::DEFINE_CAPTURED)]  = &&L_DEFINE_CAPTURED;
+    check[static_cast<unsigned int>(Op::STORE_CLASSVAR)]   = &&L_STORE_CLASSVAR;
+    check[static_cast<unsigned int>(Op::PUSH_OWN_INSTVAR)] = &&L_PUSH_OWN_INSTVAR;
+    check[static_cast<unsigned int>(Op::PUSH_GLOBAL)]      = &&L_PUSH_GLOBAL;
+    check[static_cast<unsigned int>(Op::STORE_GLOBAL)]     = &&L_STORE_GLOBAL;
+    check[static_cast<unsigned int>(Op::PUSH_INSTVAR)]     = &&L_PUSH_INSTVAR;
+    check[static_cast<unsigned int>(Op::STORE_INSTVAR)]    = &&L_STORE_INSTVAR;
+    check[static_cast<unsigned int>(Op::IVAR_GROUP)]       = &&L_IVAR_GROUP;
+    check[static_cast<unsigned int>(Op::IVAR_GROUP_END)]   = &&L_IVAR_GROUP_END;
+    check[static_cast<unsigned int>(Op::MAKE_CAPTURED)]    = &&L_MAKE_CAPTURED;
+    check[static_cast<unsigned int>(Op::MAKE_ARRAY)]       = &&L_MAKE_ARRAY;
+    for (int i__ = 0; i__ < 256; ++i__)
+        assert(check[i__] == labels[i__] && "runLoop jump table out of order with Opcodes.h");
+    }
+#endif
 #endif
 
     unsigned int arg = 0;
@@ -1166,8 +1264,16 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             } break;
             case Op::PUSH_CONST: L_PUSH_CONST: {
                 Frame& f = frames_.back();
-                // D26: literals are allocated on THIS thread's context.
-                push(f, rt_.materialize(ctx, *f.m, arg));
+                // D26: literals are allocated on THIS thread's context. A
+                // SmallInteger allocates nothing and a symbol is cached on
+                // the module: neither needs materialize (0.10.0).
+                const proto::ProtoObject* v = constImmediate(*f.m, arg);
+                if (!v) {
+                    v = f.m->constKind(arg) == BytecodeModule::ConstKind::Symbol
+                        ? reinterpret_cast<const proto::ProtoObject*>(f.m->constSym(ctx, arg))
+                        : rt_.materialize(ctx, *f.m, arg);
+                }
+                push(f, v);
                 DISPATCH_DIRECT();
             } break;
             case Op::DUP: L_DUP: {
@@ -1189,9 +1295,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             case Op::STORE_LOCAL: L_STORE_LOCAL: {
                 Frame& f = frames_.back();
                 checkLocal(f, arg);
-                if (f.sp == 0)
-                    throw NativeError("STORE_LOCAL with empty stack");
-                setLocal(f, arg, pop(f));
+                setLocal(f, arg, pop(f));   // pop checks for an empty stack
                 DISPATCH_DIRECT();
                 break;
             }
@@ -1576,7 +1680,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // is pushed onto the operand stack as the apparent result of
                 // the send. The actual method execution happens later when
                 // STRuntime::drainOne pulls a message from the mailbox.
-                if (rt_.isActor(ctx, recv) && !isActorLocalSelector(selStr)) {
+                // Only an object cell (pointer tag 0, as methodHolder tests)
+                // can be an actor proxy: an immediate receiver skips the
+                // probe (0.10.0).
+                if ((reinterpret_cast<uintptr_t>(recv) & 0x3F) == 0
+                    && rt_.isActor(ctx, recv) && !isActorLocalSelector(selStr)) {
                     const proto::ProtoString* msgSelKey =
                         bs_.sym.selector;
                     const proto::ProtoString* msgArgsKey =

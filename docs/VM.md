@@ -479,8 +479,8 @@ class is a C++ `std::runtime_error`, impossible in compiler output.
 
 | Op | # | Operand | Stack | Semantics | Emitted by |
 |---|---|---|---|---|---|
-| `PUSH_LOCAL` | 2 | slot (wide) | `-> v` | Pushes the frame slot. Errors: `engine local slot out of range`. | a temporary or argument not captured; `self` at the end of a method (`PUSH_LOCAL 0`); the prologue copy of a captured argument |
-| `STORE_LOCAL` | 3 | slot (wide) | `v ->` | Pops into the slot. Errors: `STORE_LOCAL with empty stack`. | assignment to a temporary (after `DUP`, except a statement in a method or block body whose value is discarded); the hidden locals of `to:do:`, `doYielding:` and cascades; the call-form default prologue |
+| `PUSH_LOCAL` | 2 | slot (wide) | `-> v` | Pushes the frame slot. A slot past the frame's locals cannot occur (the count is computed from the module); a debug build asserts. | a temporary or argument not captured; `self` at the end of a method (`PUSH_LOCAL 0`); the prologue copy of a captured argument |
+| `STORE_LOCAL` | 3 | slot (wide) | `v ->` | Pops into the slot. Errors: `engine operand stack underflow` (a hand-built module). | assignment to a temporary (after `DUP`, except a statement in a method or block body whose value is discarded); the hidden locals of `to:do:`, `doYielding:` and cascades; the call-form default prologue |
 | `DUP` | 4 | — | `v -> v v` | | every assignment (the assigned value is the expression's value); each part of a cascade; a class declaration |
 | `POP` | 5 | — | `v ->` | | between statements; after a cascade part; after an inlined loop body |
 
@@ -2571,9 +2571,12 @@ condition. Every place to touch, in order:
    ASSERT_LOOP_BOOL = 38, // arg = selector const index (for the message)
    ```
 2. **The engine,** `ExecutionEngine::runLoop` (`src/runtime/ExecutionEngine.cpp`):
-   - a `labels[]` entry for the threaded dispatch (GCC builds); a missing one
-     makes the opcode fail with `unimplemented opcode (threaded dispatch)`
-     on Linux only;
+   - for the threaded dispatch (GCC builds), its label at the opcode's
+     position in the static `labels[256]` table, and the matching
+     `check[...] = &&L_X` line, from which a debug build verifies the table
+     (0.10.0: the table is built at compile time, not on every `runLoop`
+     call); a missing entry makes the opcode fail with `unimplemented
+     opcode (threaded dispatch)` on Linux only;
    - a `case Op::X: L_X: { Frame& f = frames_.back(); ... }` in the switch,
      ending with `DISPATCH_DIRECT()`, or with `DISPATCH_SCOPED()` when a local
      with a destructor (a `TransientPin`) is alive in the case's scope (a
