@@ -660,8 +660,15 @@ ExecutionEngine::pushFrame(const BytecodeModule* m,
     // more per call): every read of it stops at `sp` (pop, peek, opAt, the
     // debugger's and the yield's copies), and a value left in it by an
     // earlier frame cannot dangle, because protoCore scans the whole
-    // automaticLocals array as roots, so that value is still alive. It is
-    // retained until overwritten, as the slots above the cursor always were.
+    // automaticLocals array as roots, so that value is still alive. The
+    // cost is memory: such a value is over-retained until overwritten.
+    // Before 0.10.0 the next call cleared it; now a dead object left by a
+    // popped deep frame stays reachable for the whole life of a later
+    // frame whose region covers its slot and whose `sp` never reaches it
+    // (a large temporary built before a long-running loop lives as long as
+    // the loop). protoST has no weak references or finalizers, so no
+    // program can observe it. If it ever matters: clear on pop, up to a
+    // high-water mark recorded by `push`.
     const proto::ProtoObject** slots = ctx_->getAutomaticLocals();
     std::fill_n(slots + fr.baseSlot, kHeaderSlots + fr.localCount, PROTO_NONE);
 
