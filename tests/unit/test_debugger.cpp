@@ -127,3 +127,31 @@ TEST_CASE("Debugger: single-step through inlined and:/or:, both guard paths", "[
     while ((pos = out.str().find("(stdbg)", pos)) != std::string::npos) { ++count; ++pos; }
     REQUIRE(count >= 10);
 }
+
+TEST_CASE("Debugger: an inlined block's temporary is shown by its name inside the block",
+          "[debugger][vars]") {
+    // `[ | t | ... ]` of an inlined ifTrue: lives in a hidden slot of the
+    // enclosing frame (0.10.0); the variables view names it `t` over the
+    // block's code only.
+    protoST::Parser P("| n | n := 0. true ifTrue: [ | t | t := 5. n := t ]. n.");
+    protoST::Compiler C; auto bc = C.compileModule(*P.parseModule());
+    REQUIRE(!C.hasErrors());
+    protoST::STRuntime rt;
+    const protoST::BytecodeModule::ScopedLocal* t = nullptr;
+    for (const auto& sl : bc->scopedLocals())
+        if (sl.name == "t") t = &sl;
+    REQUIRE(t != nullptr);
+    protoST::DebugFrame f;
+    f.module = bc.get();
+    f.locals.assign(bc->localNames().size(), PROTO_NONE);
+    REQUIRE(t->slot < f.locals.size());
+    f.locals[t->slot] = proto::makeSmallInt(5);
+    auto valueOf = [&](size_t pc, const std::string& name) -> const proto::ProtoObject* {
+        f.pc = pc;
+        for (const auto& v : protoST::DebuggerRuntime::frameVariables(rt, rt.rootCtx(), f))
+            if (v.name == name) return v.value;
+        return nullptr;
+    };
+    REQUIRE(valueOf(t->fromPc, "t") == proto::makeSmallInt(5));
+    REQUIRE(valueOf(t->toPc, "t") == nullptr);
+}

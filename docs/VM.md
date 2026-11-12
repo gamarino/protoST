@@ -240,12 +240,18 @@ Instance variables are never captured: they are attributes `_iv_<name>` of
 
 **Inlined blocks.** A literal block argument of `ifTrue:`, `ifFalse:`,
 `ifTrue:ifFalse:`, `ifFalse:ifTrue:`, `and:`, `or:`, `whileTrue:`,
-`whileFalse:` (zero arguments, no temporaries), `to:do:` (one argument, no
-temporaries, the argument not captured by an inner block), and `ifNil:`,
+`whileFalse:` (zero arguments), `to:do:` (one argument), and `ifNil:`,
 `ifNotNil:`, `ifNil:ifNotNil:`, `ifNotNil:ifNil:` (the nil arm without
-arguments, the non-nil arm with none or one that no inner block captures;
-0.10.0) is not a closure: its body is compiled into the enclosing code
-(`tryEmitInlinedControl`, examples 03, 05, 06, 19). The receiver of these
+arguments, the non-nil arm with none or one; 0.10.0) is not a closure: its
+body is compiled into the enclosing code (`tryEmitInlinedControl`, examples
+03, 05, 06, 19). The block may declare temporaries (0.10.0): each becomes a
+hidden slot of the enclosing frame (`__bt_<n>`, shown by the debugger under
+its own name over the block's code), and `PUSH_NIL`, `STORE_LOCAL` at the
+start of the body reset it on every entry, so every evaluation starts with
+its temporaries nil (`emitInlinedBlockBody`). When a block nested in the
+body captures an argument or a temporary of the block, the send keeps its
+real blocks: each evaluation then needs a binding of its own, which only a
+block activation's captured dictionary gives. The receiver of these
 sends is compiled as an ordinary expression: a block literal there is a real
 closure (only `whileTrue:` / `whileFalse:` inline their receiver block). `doYielding:` with a literal one-argument block is compiled to an
 explicit loop that sends `value:` to the block (example 15). Every other

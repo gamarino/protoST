@@ -243,7 +243,6 @@ void walkNode(const Node& n, ScopeWalker& cur,
                     if (child) walkNode(*child, cur, out, nullptr, classes);
                 return;
             }
-            const bool isToDo = shape == Compiler::InlineShape::ToDo;
             // Only whileTrue: / whileFalse: inline their receiver block; the
             // receiver of the other shapes is an ordinary expression, so a
             // block literal there (`[ x ] and: [ ... ]`) is a real closure
@@ -260,22 +259,18 @@ void walkNode(const Node& n, ScopeWalker& cur,
                 walkBlockScope(*child, cur, out, classes, &f);
                 blocks.push_back(std::move(f));
             }
-            // to:do: keeps the real block when an inner block captures its
-            // argument (the argument then needs a binding per iteration).
-            // So does an inlined ifNotNil: arm whose argument an inner
-            // block captures.
+            // The send keeps its real blocks when an inner block captures an
+            // argument or a temporary of one of them (a to:do: loop variable,
+            // an ifNotNil: argument, a `| t |`): each evaluation of the block
+            // then needs a binding of its own, which only a real block's
+            // activation gives (its captured dictionary).
             bool inlined = true;
-            if (isToDo) {
-                const Node& blk = *n.children[2];
+            for (size_t i = 0; i < n.children.size(); ++i) {
+                const Node& blk = *n.children[i];
+                if (blk.kind != NodeKind::Block || (i == 0 && !receiverInlined)) continue;
                 const auto& cap = out.capturedByScope[&blk];
-                inlined = cap.count(blk.stringList[0]) == 0;
-            }
-            if (shape == Compiler::InlineShape::IfNil) {
-                for (size_t i = 1; i < n.children.size(); ++i) {
-                    const Node& blk = *n.children[i];
-                    if (blk.stringList.empty()) continue;
-                    if (out.capturedByScope[&blk].count(blk.stringList[0]) != 0) inlined = false;
-                }
+                for (const auto& name : blk.stringList)
+                    if (cap.count(name) != 0) inlined = false;
             }
             for (auto& f : blocks) {
                 if (inlined) {
@@ -1648,14 +1643,15 @@ void Compiler::reportDuplicateNames(const std::vector<std::string>& names, size_
 
 bool Compiler::reportArgumentAssignment(const std::string& name) {
     // Resolve the name as a read would, then ask whether that binding is an
-    // argument: a declared one, or the loop variable of an inlined to:do:
-    // bound in that very scope.
+    // argument: a declared one, or the argument of an inlined block (a to:do:
+    // loop variable, an ifNotNil: arm's argument) bound in that very scope
+    // and not hidden by an inlined block's temporary of the same name.
     bool isArgument = false;
     for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
-        if (it->slots.count(name)) {
+        if (auto f = it->slots.find(name); f != it->slots.end()) {
             isArgument = it->args.count(name) != 0;
-            for (const auto& loop : inlinedLoopArgs_)
-                if (loop.first == &*it && loop.second == name) isArgument = true;
+            for (const auto& a : inlinedLoopArgs_)
+                if (a.scope == &*it && a.name == name && a.slot == f->second) isArgument = true;
             break;
         }
         if (isMethodScope(*it)) break;
@@ -1916,39 +1912,38 @@ void Compiler::emitDoYieldingLoop(BytecodeModule& m,
 // the current frame so `^expr` becomes a plain local RETURN with no
 // stack unwind.
 //
-// We bail out (return false) if the block has any args or any local
-// declarations — closure-analysis decisions cannot be retraced
-// post-hoc, and captured variables would need separate plumbing. The
+// A block that declares temporaries is inlined too (0.10.0): they become
+// hidden slots of the enclosing frame, as in Pharo (emitInlinedBlockBody).
+// The closure analysis keeps the real blocks when an inner block captures
+// an argument or a temporary of one of them (walkNode, KeywordSend). The
 // caller falls back to a normal SEND_KEYWORD when inlining declines.
+bool Compiler::isInlinableBlock(const ast::Node* b, int maxArgs) {
+    return b && b->kind == NodeKind::Block
+        && b->intValue >= 0 && b->intValue <= maxArgs
+        && b->stringList.size() >= static_cast<size_t>(b->intValue);
+}
+
 Compiler::InlineShape Compiler::inlineShapeOf(const ast::Node& n) {
     using ast::NodeKind;
     if (n.kind != NodeKind::KeywordSend) return InlineShape::None;
     // `super ifTrue: [...]` is a super send of ifTrue:, not a conditional.
     if (isSuperReceiver(n)) return InlineShape::None;
-    auto isInlineableBlock = [](const ast::Node* b) -> bool {
-        return b && b->kind == NodeKind::Block
-            && b->intValue == 0
-            && b->stringList.empty();
-    };
-    if (n.children.size() == 2 && isInlineableBlock(n.children[1].get())
+    if (n.children.size() == 2 && isInlinableBlock(n.children[1].get())
         && (n.text == "ifTrue:" || n.text == "ifFalse:"))
         return InlineShape::IfTrue;
-    if (n.children.size() == 3 && isInlineableBlock(n.children[1].get())
-        && isInlineableBlock(n.children[2].get())
+    if (n.children.size() == 3 && isInlinableBlock(n.children[1].get())
+        && isInlinableBlock(n.children[2].get())
         && (n.text == "ifTrue:ifFalse:" || n.text == "ifFalse:ifTrue:"))
         return InlineShape::IfTrueIfFalse;
-    if (n.children.size() == 2 && isInlineableBlock(n.children[1].get())
+    if (n.children.size() == 2 && isInlinableBlock(n.children[1].get())
         && (n.text == "and:" || n.text == "or:"))
         return InlineShape::AndOr;
     // The nil tests, as Pharo's compiler inlines them (RBMessageNode>>
     // isInlineIfNil): literal blocks, the nil arm without arguments, the
     // non-nil arm with none or one, the receiver not a block literal.
     if (n.children[0]->kind != NodeKind::Block) {
-        auto nilArm = [&](const ast::Node* b) { return isInlineableBlock(b); };
-        auto notNilArm = [](const ast::Node* b) {
-            return b && b->kind == NodeKind::Block && b->intValue <= 1
-                && b->stringList.size() == static_cast<size_t>(b->intValue);
-        };
+        auto nilArm = [](const ast::Node* b) { return isInlinableBlock(b); };
+        auto notNilArm = [](const ast::Node* b) { return isInlinableBlock(b, 1); };
         if (n.children.size() == 2 && n.text == "ifNil:" && nilArm(n.children[1].get()))
             return InlineShape::IfNil;
         if (n.children.size() == 2 && n.text == "ifNotNil:" && notNilArm(n.children[1].get()))
@@ -1961,12 +1956,11 @@ Compiler::InlineShape Compiler::inlineShapeOf(const ast::Node& n) {
             return InlineShape::IfNil;
     }
     if (n.text == "to:do:" && n.children.size() == 3
-        && n.children[2]->kind == NodeKind::Block
-        && n.children[2]->intValue == 1
-        && n.children[2]->stringList.size() == 1)
+        && isInlinableBlock(n.children[2].get(), 1)
+        && n.children[2]->intValue == 1)
         return InlineShape::ToDo;
-    if (n.children.size() == 2 && isInlineableBlock(n.children[0].get())
-        && isInlineableBlock(n.children[1].get())
+    if (n.children.size() == 2 && isInlinableBlock(n.children[0].get())
+        && isInlinableBlock(n.children[1].get())
         && (n.text == "whileTrue:" || n.text == "whileFalse:"))
         return InlineShape::WhileTrue;
     return InlineShape::None;
@@ -1978,11 +1972,6 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
     // left the variables their blocks use out of the captured sets, so a
     // send emitted as a real block here would find them uncaptured.
     if (deoptDepth_ > 0 || analysis_.inlinedSends.count(&n) == 0) return false;
-    auto isInlineableBlock = [](const ast::Node* b) -> bool {
-        return b && b->kind == NodeKind::Block
-            && b->intValue == 0
-            && b->stringList.empty();
-    };
 
     // The value conditionals: an inlined ifTrue:, ifFalse:, ifTrue:ifFalse:,
     // ifFalse:ifTrue:, and: or or: (emitInlinedConditional). The receiver
@@ -1992,7 +1981,7 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
     // false; until 0.10.0 it got doesNotUnderstand: without arguments and a
     // resumed value was taken as the condition).
     if (n.children.size() == 2
-        && isInlineableBlock(n.children[1].get())
+        && isInlinableBlock(n.children[1].get())
         && (n.text == "ifTrue:" || n.text == "ifFalse:")) {
         // The body runs on the polarity named by the selector; the other
         // case answers nil.
@@ -2004,8 +1993,8 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
         return true;
     }
     if (n.children.size() == 3
-        && isInlineableBlock(n.children[1].get())
-        && isInlineableBlock(n.children[2].get())
+        && isInlinableBlock(n.children[1].get())
+        && isInlinableBlock(n.children[2].get())
         && (n.text == "ifTrue:ifFalse:" || n.text == "ifFalse:ifTrue:")) {
         const bool ifFalseFirst = (n.text == "ifFalse:ifTrue:");
         const ast::Node& trueBranch  = ifFalseFirst ? *n.children[2] : *n.children[1];
@@ -2021,7 +2010,7 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
     // the block's value. The block's value is not checked to be a Boolean,
     // as the primitive does not check it.
     if (n.children.size() == 2
-        && isInlineableBlock(n.children[1].get())
+        && isInlinableBlock(n.children[1].get())
         && (n.text == "and:" || n.text == "or:")) {
         const bool isAnd = (n.text == "and:");
         const ast::Node& rest = *n.children[1];
@@ -2063,7 +2052,7 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
             return true;
         }
         const size_t jNil = emitForwardJump(m, Op::JUMP_IF_NIL);
-        if (notNilArm->stringList.empty()) {
+        if (notNilArm->intValue == 0) {
             m.emit(Op::POP, 0, currentLine_);
             emitInlinedBlockBody(m, *notNilArm);
         } else {
@@ -2080,7 +2069,7 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
             const int savedSlot = hadBinding ? saved->second : -1;
             s.slots[argName] = slot;
             const bool hidesCaptured = s.capturedNames.erase(argName) != 0;
-            inlinedLoopArgs_.emplace_back(&s, argName);
+            inlinedLoopArgs_.push_back({&s, argName, slot});
             emitInlinedBlockBody(m, *notNilArm);
             inlinedLoopArgs_.pop_back();
             if (hidesCaptured) s.capturedNames.insert(argName);
@@ -2101,18 +2090,13 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
     }
 
     // start to: end do: [:i | body]
-    // The block has exactly one argument and no local declarations; its
-    // argument MUST NOT be captured by any inner block (otherwise the
-    // captured-dict plumbing would need separate setup we cannot do
-    // post-analysis). int_sum_loop's `1 to: 100000 do: [:i| total := total
+    // The block has exactly one argument (and any temporaries); neither may
+    // be captured by an inner block (otherwise each iteration would need a
+    // binding of its own; the analysis then keeps the real block). int_sum_loop's `1 to: 100000 do: [:i| total := total
     // + i]` matches this pattern; the inlining replaces the
     // PUSH_BLOCK + SEND_KEYWORD + prim_Integer_toDo:do: + invokeBlock
     // chain with a direct bytecode loop using SmallInt arithmetic.
-    if (n.text == "to:do:"
-        && n.children.size() == 3
-        && n.children[2]->kind == ast::NodeKind::Block
-        && n.children[2]->intValue == 1
-        && n.children[2]->stringList.size() == 1) {
+    if (inlineShapeOf(n) == InlineShape::ToDo) {
         // The analysis inlined this loop only if no inner block captures its
         // argument (inlinedSends, checked above).
         const ast::Node* blk = n.children[2].get();
@@ -2146,7 +2130,7 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
             // means the loop variable (no inner block captures it, or the
             // loop would not be inlined): hide the outer one meanwhile.
             const bool hidesCaptured = s.capturedNames.erase(iterName) != 0;
-            inlinedLoopArgs_.emplace_back(&s, iterName);
+            inlinedLoopArgs_.push_back({&s, iterName, slotI});
             // loopTest:
             const size_t loopFromPc = m.bytes().size();
             m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotI),   currentLine_);
@@ -2183,8 +2167,8 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
 
     // [cond] whileTrue: [body]  / [cond] whileFalse: [body]
     if (n.children.size() == 2
-        && isInlineableBlock(n.children[0].get())
-        && isInlineableBlock(n.children[1].get())
+        && isInlinableBlock(n.children[0].get())
+        && isInlinableBlock(n.children[1].get())
         && (n.text == "whileTrue:" || n.text == "whileFalse:")) {
         bool invert = (n.text == "whileFalse:");
         auto selSym = m.internSymbol(n.text);
@@ -2294,11 +2278,59 @@ void Compiler::emitInlinedConditional(BytecodeModule& m, const ast::Node& send, 
 
 bool Compiler::emitInlinedBlockBody(BytecodeModule& m, const ast::Node& block,
                                     bool discardValue) {
+    // The block's temporaries (after its arguments, which the caller binds).
+    // Each is a fresh hidden slot of the enclosing frame, set to nil here, on
+    // every entry: a loop body or a conditional arm in a loop runs this code
+    // once per evaluation, and every evaluation of a block starts with its
+    // temporaries nil (LANGUAGE.md 6.3; Pharo resets only those of loop
+    // bodies, OCASTTranslator>>visitInlinedBlockNode:). For the body the name
+    // denotes the slot, hiding a variable of the enclosing scope with the
+    // same name (an argument, a temporary, a captured variable, as the
+    // to:do: loop variable does above); no inner block captures it, or the
+    // send would not be inlined.
+    struct Hoisted {
+        std::string name;
+        int  slot;
+        bool hadBinding;
+        int  savedSlot;
+        bool hidesCaptured;
+        bool hidesArgument;
+    };
+    const std::size_t nArgs = static_cast<std::size_t>(block.intValue);
+    reportDuplicateNames(block.stringList, 0, "a block");
+    std::vector<Hoisted> hoisted;
+    auto& s = scopes_.back();   // stable across nested scopes: a deque (D29)
+    for (std::size_t i = nArgs; i < block.stringList.size(); ++i) {
+        const std::string& name = block.stringList[i];
+        const int slot = declareLocal("__bt_" + std::to_string(s.nextSlot));
+        m.emit(Op::PUSH_NIL, 0, currentLine_);
+        m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slot), currentLine_);
+        Hoisted h{name, slot, false, -1, false, false};
+        if (auto it = s.slots.find(name); it != s.slots.end()) {
+            h.hadBinding = true;
+            h.savedSlot = it->second;
+        }
+        s.slots[name] = slot;
+        h.hidesCaptured = s.capturedNames.erase(name) != 0;
+        h.hidesArgument = s.args.erase(name) != 0;
+        hoisted.push_back(std::move(h));
+    }
+    const std::size_t from = m.pos();
+    bool leftValue = true;
     if (block.children.empty()) {
         m.emit(Op::PUSH_NIL, 0, currentLine_);
-        return true;
+    } else {
+        leftValue = emitStatements(m, block.children, 0, block.children.size(), discardValue);
     }
-    return emitStatements(m, block.children, 0, block.children.size(), discardValue);
+    for (auto it = hoisted.rbegin(); it != hoisted.rend(); ++it) {
+        if (it->hidesArgument) s.args.insert(it->name);
+        if (it->hidesCaptured) s.capturedNames.insert(it->name);
+        if (it->hadBinding) s.slots[it->name] = it->savedSlot;
+        else                s.slots.erase(it->name);
+        // The debugger shows the slot under the temporary's name.
+        m.addScopedLocal(static_cast<size_t>(it->slot), it->name, from, m.pos());
+    }
+    return leftValue;
 }
 
 bool Compiler::emitStatements(BytecodeModule& m, const std::vector<ast::NodePtr>& stmts,

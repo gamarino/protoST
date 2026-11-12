@@ -1309,11 +1309,14 @@ Chapter 10.8 of [the tutorial](TUTORIAL.md) for a worked example.
 
 **Inlined control messages.** The compiler compiles `ifTrue:`, `ifFalse:`,
 `ifTrue:ifFalse:`, `ifFalse:ifTrue:`, `and:` and `or:` whose arguments are
-literal blocks without arguments or temporaries, `whileTrue:` / `whileFalse:`
-with a literal receiver and argument block, `to:do:` with a literal
-one-argument block, and `ifNil:`, `ifNotNil:`, `ifNil:ifNotNil:`,
-`ifNotNil:ifNil:` with literal blocks (0.10.0), into the enclosing code: no
-closure is built and nothing is sent. The meaning is the send's, with one
+literal blocks without arguments, `whileTrue:` / `whileFalse:` with a literal
+receiver and argument block, `to:do:` with a literal one-argument block, and
+`ifNil:`, `ifNotNil:`, `ifNil:ifNotNil:`, `ifNotNil:ifNil:` with literal
+blocks (0.10.0), into the enclosing code: no closure is built and nothing is
+sent. The blocks may declare temporaries (0.10.0); as for any block, every
+evaluation starts with them nil, in a loop too, and a block created inside
+the body that captures one sees the binding of its own evaluation (such a
+send is then compiled as a real send). The meaning is the send's, with one
 exception the nil tests share with Pharo: they test identity with nil, so a
 class's own `ifNil:` is not run. When the receiver of one of the six
 conditionals is not a Boolean, the message is sent for real, with closures

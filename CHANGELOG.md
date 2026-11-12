@@ -402,6 +402,29 @@ minor release, so the two services arrive in 0.5.0.
   `06-blocks/inlined-nil-tests-values.st`,
   `04-object-model/identity-and-nil-tests-are-not-looked-up.st`; VM.md
   example 19.
+- **Control blocks that declare temporaries are compiled inline too.**
+  `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:`, `ifFalse:ifTrue:`, `and:`,
+  `or:`, `whileTrue:`, `whileFalse:`, `to:do:` and the nil tests with a
+  literal block that declares `| t |` were real closures evaluated by a
+  primitive (a closure, a captured dictionary for the variables the block
+  shared with its method, and a nested engine per evaluation). Their
+  temporaries are now hidden slots of the enclosing frame, as in Pharo
+  (`OCASTTranslator>>visitInlinedBlockNode:`), set to nil on every entry of
+  the body: each evaluation of a block still starts with its own
+  temporaries nil, also an `ifTrue:` arm inside a loop, which Pharo does not
+  reset. A block whose argument or temporary a block inside it captures
+  stays a real block, so that closure still sees the binding of its own
+  iteration. A `[ k < n ] whileTrue: [ | z | z := k. k := k + 1 ]` loop in a
+  method went from 446 to 90 ns per iteration; protoBaseST's
+  `PBAvl check:` of a 1000-node tree, twenty times, from 6.58 to
+  4.30 x10^9 instructions (the scratch `chk.st`). Tests:
+  `06-blocks/inlined-block-temporaries.st` (19 rows, shadowing, per-iteration
+  closures, a non-Boolean receiver; passes before and after), unit tests
+  `Compiler: control blocks with temporaries are inlined`, `... reset to nil
+  on every entry` (both failed before), `... whose temporary a block
+  captures is not inlined`, `Debugger: an inlined block's temporary is shown
+  by its name inside the block` (failed before). LANGUAGE.md §6.4, VM.md
+  "Inlined blocks".
 - **`and:` and `or:` with a literal block are compiled inline (protoBaseST
   review P2).** Like `ifTrue:`, a zero-argument block without temporaries
   is no longer a closure evaluated by a primitive in a nested engine: its

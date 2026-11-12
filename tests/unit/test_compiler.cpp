@@ -274,3 +274,79 @@ TEST_CASE("Compiler: ClassDecl emits PUSH_GLOBAL/SEND/STORE_GLOBAL", "[compiler]
     REQUIRE(sawSendNewChild);
     REQUIRE(sawStoreClass);
 }
+
+// ---------------------------------------------------------------------------
+// Inlined control blocks that declare temporaries (0.10.0). Their temporaries
+// become hidden slots of the enclosing frame, as in Pharo; a block whose
+// temporary a real block inside it captures stays a real block (each
+// evaluation then needs its own binding).
+namespace {
+// The opcodes of a module's code, decoding EXTEND prefixes.
+std::vector<Op> opcodesOf(const BytecodeModule& m) {
+    std::vector<Op> ops;
+    const auto& b = m.bytes();
+    for (size_t i = 0; i + 1 < b.size(); i += 2) {
+        const auto op = static_cast<Op>(b[i]);
+        if (op != Op::EXTEND) ops.push_back(op);
+    }
+    return ops;
+}
+bool usesOp(const BytecodeModule& m, Op op) {
+    for (Op o : opcodesOf(m)) if (o == op) return true;
+    return false;
+}
+// The bytecode of method #m of class F declared in `src`: block 0 of the
+// module, the only method.
+std::unique_ptr<BytecodeModule> compileMethodModule(const std::string& src, Compiler& C) {
+    Parser P("Object subclass: #F instanceVariableNames: 'iv'.\n" + src);
+    auto bc = C.compileModule(*P.parseModule());
+    REQUIRE(!C.hasErrors());
+    REQUIRE(bc->numBlocks() >= 1);
+    return bc;
+}
+} // namespace
+
+TEST_CASE("Compiler: control blocks with temporaries are inlined", "[compiler][inline]") {
+    const char* bodies[] = {
+        "F >> m: c\n  | n |\n  n := 0.\n  c ifTrue: [ | t | t := 1. n := t ].\n  ^ n\n",
+        "F >> m: c\n  ^ c ifTrue: [ | t | t := 1. t ] ifFalse: [ | u | u := 2. u ]\n",
+        "F >> m: c\n  ^ c and: [ | t | t := 1. t > 0 ]\n",
+        "F >> m: c\n  | k |\n  k := 0.\n  [ | t | t := k. t < 5 ] whileTrue: [ | u | u := k + 1. k := u ].\n  ^ k\n",
+        "F >> m: c\n  | s |\n  s := 0.\n  1 to: 3 do: [ :i | | t | t := i * 2. s := s + t ].\n  ^ s\n",
+        "F >> m: c\n  ^ c ifNotNil: [ :x | | t | t := x. t ] ifNil: [ | u | u := 0. u ]\n",
+    };
+    for (const char* body : bodies) {
+        INFO(body);
+        Compiler C;
+        auto bc = compileMethodModule(body, C);
+        const BytecodeModule& method = bc->block(0);
+        REQUIRE_FALSE(usesOp(method, Op::PUSH_BLOCK));
+        REQUIRE_FALSE(usesOp(method, Op::MAKE_CAPTURED));
+        REQUIRE_FALSE(usesOp(method, Op::STORE_CAPTURED));
+        REQUIRE_FALSE(usesOp(method, Op::PUSH_CAPTURED));
+    }
+}
+
+TEST_CASE("Compiler: an inlined block's temporary is reset to nil on every entry",
+          "[compiler][inline]") {
+    // PUSH_NIL, STORE_LOCAL t precede the body, inside the loop: the loop's
+    // back jump lands before them.
+    Compiler C;
+    auto bc = compileMethodModule(
+        "F >> m\n  | k |\n  k := 0.\n  [ k < 3 ] whileTrue: [ | t | t := k. k := t + 1 ].\n  ^ k\n", C);
+    const auto ops = opcodesOf(bc->block(0));
+    bool nilStoreInLoop = false;
+    for (size_t i = 0; i + 1 < ops.size(); ++i)
+        if (ops[i] == Op::PUSH_NIL && ops[i + 1] == Op::STORE_LOCAL) nilStoreInLoop = true;
+    REQUIRE(nilStoreInLoop);
+}
+
+TEST_CASE("Compiler: a control block whose temporary a block captures is not inlined",
+          "[compiler][inline]") {
+    Compiler C;
+    auto bc = compileMethodModule(
+        "F >> m\n  | bs |\n  bs := OrderedCollection new.\n"
+        "  1 to: 3 do: [ :i | | t | t := i. bs add: [ t ] ].\n  ^ bs\n", C);
+    // The to:do: body is a real block, which makes its own captured dict.
+    REQUIRE(usesOp(bc->block(0), Op::PUSH_BLOCK));
+}
