@@ -16,4 +16,4 @@ discutir con quienes construyen VMs de Smalltalk. Sigue a la charla del
 
 `ejercicios/verificar.sh` corre los diez programas y compara su salida con la
 esperada, salvo las líneas que empiezan con `~` (tiempos y conteos que
-dependen de la máquina). Pasa con protoST 0.7.0 y con main.
+dependen de la máquina). Pasa con protoST 0.9.0, y también con 0.7.0.
