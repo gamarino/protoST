@@ -129,9 +129,10 @@ struct Bootstrap {
     const proto::ProtoObject* metaclassProto              = nullptr;
 
     // The kernel's own Exception>>isResumable method object, captured once
-    // when the kernel has loaded (STRuntime::loadKernel) and kept reachable
-    // from the globals (`__kernel_isResumable__`), so its address is never
-    // reused. resume: and the default action read the class marker directly
+    // when the kernel has loaded (STRuntime::loadKernel) and pinned in the
+    // runtime's live registry for the runtime's lifetime (its single GC
+    // root), so its address is never reused after a redefinition replaces
+    // it on Exception. resume: and the default action read the class marker directly
     // when an exception's isResumable lookup finds this very method, and send
     // the method otherwise (an override, or a redefinition of the kernel
     // method). nullptr when no kernel is loaded: always send.

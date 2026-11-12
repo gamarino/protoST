@@ -484,6 +484,13 @@ So a method is written without blank lines between its statements, and
 top-level code after a method starts at column 1. A method with no `^`
 returns `self`.
 
+Selectors and attribute names that begin with two underscores (`__isResumable`,
+`__class_name__`, `__hashMix:`) are private to the runtime: the kernel and the
+primitives use them, and the runtime may read the state behind them without a
+send. Defining or overriding a method with such a selector is unsupported, and
+its effect is unspecified. Override the public selector instead (for example
+`isResumable`, not `__isResumable`; see §8.6).
+
 ### 3.4 Statements
 
 ```

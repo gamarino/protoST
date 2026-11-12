@@ -2945,18 +2945,20 @@ void STRuntime::loadKernel() {
     if (auto* g = globals()) {
         g->setAttribute(rootCtx(), proto::ProtoString::createSymbol(rootCtx(), "__kernel_loaded__"),
                         PROTO_TRUE);
-        // The kernel's Exception>>isResumable, before any user code can
-        // redefine it (Bootstrap::kernelIsResumable). Held by the globals
-        // too, so it stays reachable after a redefinition replaces it on
-        // Exception.
-        Bootstrap& b = impl_->bootstrap;
-        const proto::ProtoObject* m = b.exceptionProto
-            ? b.exceptionProto->getAttribute(rootCtx(), b.sym.isResumable) : nullptr;
-        if (m && m != PROTO_NONE) {
-            g->setAttribute(rootCtx(),
-                            proto::ProtoString::createSymbol(rootCtx(), "__kernel_isResumable__"), m);
-            b.kernelIsResumable = m;
-        }
+    }
+    // The kernel's Exception>>isResumable, before any user code can redefine
+    // it (Bootstrap::kernelIsResumable). Pinned in the live registry, the
+    // runtime's single GC root, for the runtime's whole lifetime: it stays
+    // reachable after a redefinition replaces it on Exception, and no user
+    // code can reach or unpin it. Without a registry (no root to pin it in)
+    // it is not captured, and resume: always sends isResumable.
+    Bootstrap& b = impl_->bootstrap;
+    const proto::ProtoObject* m = b.exceptionProto
+        ? b.exceptionProto->getAttribute(rootCtx(), b.sym.isResumable) : nullptr;
+    if (m && m != PROTO_NONE && impl_->liveRegistry) {
+        const_cast<proto::ProtoObject*>(impl_->liveRegistry)
+            ->setAttribute(rootCtx(), ptrRegistryKey(rootCtx(), m), m);
+        b.kernelIsResumable = m;
     }
 }
 
