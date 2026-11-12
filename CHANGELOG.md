@@ -455,6 +455,10 @@ minor release, so the two services arrive in 0.5.0.
   about 9,050 frames when each arm had its own slot). A traceback no longer
   shows a `[] in` frame for a block that is now inlined: the error is
   reported in the enclosing method, at the block's line.
+  At a halt inside an inlined block, the debugger showed a temporary of the
+  block that was still nil as the method's captured variable of the same
+  name; it now shows nil (unit test `Debugger: a nil temporary does not
+  show a captured variable of the same name`, failed before).
 - **The collection primitives no longer intern their storage keys on every
   call.** `OrderedCollection`, `Set`, `Dictionary`, `Interval` and
   `Association` primitives looked up `__data__`, `__size__` and the
