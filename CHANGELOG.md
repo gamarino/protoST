@@ -740,10 +740,20 @@ minor release, so the two services arrive in 0.5.0.
   registry entry, which also sent the first runtime's imports to the second.
   A runtime whose construction fails is unregistered again. Test
   `tests/unit/test_primitive_methods.cpp`.
+- **A runtime under construction is reachable only from the thread
+  constructing it.** Its space is reserved first (so a second runtime is
+  still refused before anything is installed) and published, with its own
+  module provider, once everything but the worker pool is in place. Before,
+  another thread could find a runtime whose primitives or kernel were not yet
+  installed (a foreign importer would take it for the process's sole
+  runtime), and the registry entry named the runtime's provider before
+  protoCore owned it. Test `tests/unit/test_cross_runtime_provider.cpp`.
 - **A unary or keyword send calls a protoCore method attribute** (what a C++
   module or another runtime exports), as a call-form send already did. A unary
   send answered the method cell itself as a value, and a keyword send
-  signalled `the attribute is a value, not a method`.
+  signalled `the attribute is a value, not a method`. A program that kept the
+  cell as a function value holds a block over the receiver, or the selector
+  for `perform:`, instead (docs/INTEROP.md §3.2).
 - **`outer` no longer behaves as `pass`** (see *Fixed*): a program whose
   enclosing handler resumes now continues in the inner handler after
   `outer`, not at the `signal`. `[[(Warning signal: 'w') + 1] on: Warning do:

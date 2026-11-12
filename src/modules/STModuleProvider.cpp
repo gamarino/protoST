@@ -21,8 +21,29 @@ namespace {
     struct RuntimeEntry {
         const proto::ProtoSpace* space;
         STRuntime* runtime;
-        STModuleProvider* provider;   // the runtime's own (K1)
+        STModuleProvider* provider;   // the runtime's own (K1), set when published
+        bool published;
     };
+
+    // The runtime the calling thread is constructing (ConstructingSTRuntimeScope).
+    constinit thread_local const STRuntime* t_constructingRuntime = nullptr;
+
+    // Whether the calling thread may see the entry: a reserved runtime is
+    // seen only by the thread constructing it.
+    bool visible(const RuntimeEntry& e) {
+        return e.published || e.runtime == t_constructingRuntime;
+    }
+
+    // The one entry the calling thread sees, or nullptr for none or several.
+    const RuntimeEntry* soleVisibleEntry(const std::vector<RuntimeEntry>& entries) {
+        const RuntimeEntry* sole = nullptr;
+        for (const auto& e : entries) {
+            if (!visible(e)) continue;
+            if (sole) return nullptr;
+            sole = &e;
+        }
+        return sole;
+    }
 
     // Intentionally leaked: an STRuntime may be destroyed during static
     // destruction, after a function-local static container would be gone.
@@ -51,7 +72,7 @@ STRuntime& runtimeOfSlow(proto::ProtoContext* ctx) {
         std::lock_guard<std::mutex> lock(registryMutex());
         generation = g_runtimeRegistryGeneration.load(std::memory_order_relaxed);
         for (const auto& e : registryEntries()) {
-            if (e.space == space) { rt = e.runtime; break; }
+            if (e.space == space && visible(e)) { rt = e.runtime; break; }
         }
     }
     if (!rt)
@@ -71,8 +92,7 @@ void advanceRegistryGeneration() {
 }
 } // namespace
 
-void registerSTRuntime(const proto::ProtoSpace* space, STRuntime* rt,
-                       STModuleProvider* provider) {
+void reserveSTRuntime(const proto::ProtoSpace* space, STRuntime* rt) {
     if (!space || !rt) return;
     std::lock_guard<std::mutex> lock(registryMutex());
     auto& entries = registryEntries();
@@ -84,8 +104,31 @@ void registerSTRuntime(const proto::ProtoSpace* space, STRuntime* rt,
                 "share that STRuntime among the embedders of the space instead of "
                 "constructing another");
     }
-    entries.push_back({space, rt, provider});
+    entries.push_back({space, rt, nullptr, false});
     advanceRegistryGeneration();
+}
+
+void publishSTRuntime(const proto::ProtoSpace* space, STRuntime* rt,
+                      STModuleProvider* provider) {
+    std::lock_guard<std::mutex> lock(registryMutex());
+    for (auto& e : registryEntries()) {
+        if (e.space == space && e.runtime == rt) {
+            e.provider = provider;
+            e.published = true;
+            advanceRegistryGeneration();
+            return;
+        }
+    }
+    throw std::logic_error("protoST: publishing a runtime that was never reserved");
+}
+
+ConstructingSTRuntimeScope::ConstructingSTRuntimeScope(const STRuntime* rt)
+    : previous_(t_constructingRuntime) {
+    t_constructingRuntime = rt;
+}
+
+ConstructingSTRuntimeScope::~ConstructingSTRuntimeScope() {
+    t_constructingRuntime = previous_;
 }
 
 void unregisterSTRuntime(const proto::ProtoSpace* space, STRuntime* rt) {
@@ -103,21 +146,22 @@ STRuntime* stRuntimeForSpace(const proto::ProtoSpace* space) {
     if (!space) return nullptr;
     std::lock_guard<std::mutex> lock(registryMutex());
     for (const auto& e : registryEntries()) {
-        if (e.space == space) return e.runtime;
+        if (e.space == space && visible(e)) return e.runtime;
     }
     return nullptr;
 }
 
 std::size_t registeredSTRuntimeCount() {
     std::lock_guard<std::mutex> lock(registryMutex());
-    return registryEntries().size();
+    const auto& entries = registryEntries();
+    return static_cast<std::size_t>(std::count_if(entries.begin(), entries.end(), visible));
 }
 
 STRuntime* soleSTRuntime() {
     std::lock_guard<std::mutex> lock(registryMutex());
     auto& entries = registryEntries();
-    if (entries.size() != 1) return nullptr;
-    return entries.front().runtime;
+    const RuntimeEntry* sole = soleVisibleEntry(entries);
+    return sole ? sole->runtime : nullptr;
 }
 
 namespace {
@@ -127,8 +171,8 @@ namespace {
 STModuleProvider* soleSTProvider() {
     std::lock_guard<std::mutex> lock(registryMutex());
     auto& entries = registryEntries();
-    if (entries.size() != 1) return nullptr;
-    return entries.front().provider;
+    const RuntimeEntry* sole = soleVisibleEntry(entries);
+    return sole ? sole->provider : nullptr;
 }
 } // namespace
 

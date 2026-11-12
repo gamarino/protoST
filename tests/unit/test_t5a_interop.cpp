@@ -278,6 +278,21 @@ TEST_CASE("T5-a: protoST consumes a module from a foreign UMD provider",
         REQUIRE(r->asLong(ctx) == 10);
     }
 
+    SECTION("a foreign method is held as a value by a block or by its selector") {
+        // INTEROP.md §3.2: no protoST expression answers a native method cell
+        // itself (a unary send calls it). A protoST function value is a block
+        // over the receiver, or the selector, sent later with perform:.
+        auto* r = runSrc(rt,
+            "m := Import from: 'foreign:fnvalue'."
+            "w := m Widget."
+            "double := [:n | w doubleIt: n]."
+            "sel := #doubleIt:."
+            "((#(1 2 3) collect: double) inject: 0 into: [:acc :x | acc + x])"
+            "  + (w perform: sel with: 5).");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(ctx) == 22);   // (2 + 4 + 6) + 10
+    }
+
     SECTION("a foreign object passes through a protoST block") {
         // A block closing over the foreign object dispatches to it normally.
         auto* r = runSrc(rt,

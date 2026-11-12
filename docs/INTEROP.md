@@ -223,6 +223,27 @@ invoked with no special-casing. Two kinds of foreign method are reachable:
   it back as the result (`w label` → the stored value); a non-unary send to a
   value attribute is, correctly, an error.
 
+**A foreign function as a value.** Every send to a native method calls it,
+unary sends included (0.10.0; before, a unary send answered the method cell
+itself), and no protoST expression answers the method cell. A protoST
+program holds a foreign function the way it holds any function: as a block
+over the receiver, or as the selector, sent later with `perform:`:
+
+```smalltalk no-run
+w := m Widget.
+double := [:n | w doubleIt: n].          "a function value: a block"
+(#(1 2 3) collect: double).              "→ #(2 4 6)"
+sel := #doubleIt:.
+w perform: sel with: 5.                  "→ 10"
+```
+
+The block is an ordinary protoST closure: it can be stored, passed and sent
+`value:` like any other, and each evaluation sends `doubleIt:` to `w`, so it
+calls the method `w` has at that moment. Handing the method cell itself to
+another runtime is a host's job (C++), not a protoST program's. Test:
+`tests/unit/test_t5a_interop.cpp`, "a foreign method is held as a value by a
+block or by its selector".
+
 A foreign object also passes transparently through protoST collections
 (`Array`, `OrderedCollection`, …) and through blocks — it is an ordinary
 `ProtoObject`, so nothing along those paths needs to know its origin.

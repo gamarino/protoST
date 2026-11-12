@@ -44,6 +44,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #if defined(_WIN32)
@@ -282,4 +283,58 @@ TEST_CASE("Track Y: a module error reaches a caller in another space as STUncaug
     REQUIRE_FALSE(protoException);
     REQUIRE(message == "CrossModuleError: module top level failed");
     REQUIRE(kind);
+}
+
+// A runtime is registered in two steps (STModuleProvider.h). Construction
+// reserves the space's entry, so a second runtime for the space is refused
+// before anything is installed; only the constructing thread finds the
+// reserved runtime, which its kernel loading needs. Every other thread,
+// including a foreign importer that would otherwise take it for the process's
+// sole runtime, finds it only once construction publishes it with its
+// provider. The registry never dereferences the runtime or the space, so plain
+// addresses stand for them here; the other thread's lookups are ordered by
+// join, never by time.
+TEST_CASE("A runtime under construction is invisible to every other thread",
+          "[umd][registry]") {
+    REQUIRE(protoST::registeredSTRuntimeCount() == 0);
+    int spaceStandIn = 0, runtimeStandIn = 0;
+    auto* space = reinterpret_cast<const proto::ProtoSpace*>(&spaceStandIn);
+    auto* rt = reinterpret_cast<protoST::STRuntime*>(&runtimeStandIn);
+
+    struct Seen { protoST::STRuntime* forSpace; protoST::STRuntime* sole; std::size_t count; };
+    auto lookFromAnotherThread = [&] {
+        Seen seen{};
+        std::thread other([&] {
+            seen = {protoST::stRuntimeForSpace(space), protoST::soleSTRuntime(),
+                    protoST::registeredSTRuntimeCount()};
+        });
+        other.join();
+        return seen;
+    };
+
+    {
+        protoST::ConstructingSTRuntimeScope constructing(rt);
+        protoST::reserveSTRuntime(space, rt);
+        // The constructing thread finds it.
+        REQUIRE(protoST::stRuntimeForSpace(space) == rt);
+        // No other thread does.
+        Seen during = lookFromAnotherThread();
+        REQUIRE(during.forSpace == nullptr);
+        REQUIRE(during.sole == nullptr);
+        REQUIRE(during.count == 0);
+        // A reserved space refuses a second runtime all the same.
+        int secondStandIn = 0;
+        REQUIRE_THROWS_AS(protoST::reserveSTRuntime(
+                              space, reinterpret_cast<protoST::STRuntime*>(&secondStandIn)),
+                          std::logic_error);
+
+        protoST::publishSTRuntime(space, rt, nullptr);
+        Seen after = lookFromAnotherThread();
+        REQUIRE(after.forSpace == rt);
+        REQUIRE(after.sole == rt);
+        REQUIRE(after.count == 1);
+    }
+    protoST::unregisterSTRuntime(space, rt);
+    REQUIRE(protoST::stRuntimeForSpace(space) == nullptr);
+    REQUIRE(protoST::registeredSTRuntimeCount() == 0);
 }

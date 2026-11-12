@@ -101,15 +101,41 @@ private:
 // setup. (A thread-local pointer, set only by the constructing thread, made
 // `Import from:` answer "module not found" on every other thread.)
 //
-// STRuntime registers itself in its constructor, before any thread that can
-// import is started, and unregisters in its destructor, after those threads
-// are joined (or when its construction fails), with its own module provider
-// (K1). A space hosts one protoST runtime: registering a second one for a
-// space throws std::logic_error, since a primitive finds its runtime by its
-// context's space (primitives.h, runtimeOf). The registry lock is held only
-// for the container operation.
-void registerSTRuntime(const proto::ProtoSpace* space, STRuntime* rt,
-                       STModuleProvider* provider);
+// A runtime is registered in two steps, so no thread but the constructing one
+// can reach a runtime that is not fully built:
+//
+//   * reserveSTRuntime, first thing in construction: the space's entry is
+//     taken, so a second runtime for a space is refused (std::logic_error)
+//     before anything is installed in the space. A space hosts one protoST
+//     runtime, since a primitive finds its runtime by its context's space
+//     (primitives.h, runtimeOf). The reserved entry is visible only to the
+//     thread inside a ConstructingSTRuntimeScope for that runtime, whose
+//     kernel loading runs primitives and imports.
+//   * publishSTRuntime, once construction is done but for starting the worker
+//     pool (the first code on another thread that needs the runtime): the
+//     entry gets the runtime's own module provider (K1), which protoCore owns
+//     by then, and becomes visible to every thread.
+//
+// unregisterSTRuntime removes the entry, published or not: in the destructor,
+// after the runtime's threads are joined, or when construction fails. Every
+// change advances the generation runtimeOf's per-thread cache checks. The
+// registry lock is held only for the container operation.
+void reserveSTRuntime(const proto::ProtoSpace* space, STRuntime* rt);
+void publishSTRuntime(const proto::ProtoSpace* space, STRuntime* rt,
+                      STModuleProvider* provider);
+
+// Marks the calling thread as the one constructing `rt` for its lifetime, so
+// the registry's lookups on this thread find `rt` while it is only reserved.
+class ConstructingSTRuntimeScope {
+public:
+    explicit ConstructingSTRuntimeScope(const STRuntime* rt);
+    ~ConstructingSTRuntimeScope();
+    ConstructingSTRuntimeScope(const ConstructingSTRuntimeScope&) = delete;
+    ConstructingSTRuntimeScope& operator=(const ConstructingSTRuntimeScope&) = delete;
+
+private:
+    const STRuntime* previous_;
+};
 void unregisterSTRuntime(const proto::ProtoSpace* space, STRuntime* rt);
 STRuntime* stRuntimeForSpace(const proto::ProtoSpace* space);
 
@@ -126,7 +152,7 @@ STRuntime* stRuntimeForSpace(const proto::ProtoSpace* space);
 // gives the same "my own runtime" answer with a lifetime that is correct.
 STRuntime* soleSTRuntime();
 
-// Track Y: how many STRuntimes are registered right now. Exposed so a test can
+// Track Y: how many STRuntimes are registered and visible to the caller now. Exposed so a test can
 // assert the ambiguous case (two runtimes, a foreign importer) is refused
 // rather than silently served by an arbitrary one.
 std::size_t registeredSTRuntimeCount();

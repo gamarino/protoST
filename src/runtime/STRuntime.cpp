@@ -779,20 +779,23 @@ STRuntime::STRuntime(proto::ProtoSpace& hostSpace) : impl_(std::make_unique<Impl
 bool STRuntime::ownsSpace() const { return impl_->ownsSpace(); }
 
 void STRuntime::construct() {
-    // S6: associate this runtime with its ProtoSpace, first: the provider's
-    // tryLoad() dispatches back into our findModuleFile / importModuleFile
-    // helpers from ANY thread running on this space, and a primitive finds
-    // its runtime by its context's space (primitives.h, runtimeOf), so a
-    // space hosts one protoST runtime and a second one is refused here,
-    // before anything is installed in the space. Registered before the
-    // worker pool below is started, so no import can miss it; unregistered
-    // again if construction fails, since the destructor will not run.
+    // S6: associate this runtime with its ProtoSpace, in two steps
+    // (STModuleProvider.h). First the space's entry is reserved: a primitive
+    // finds its runtime by its context's space (primitives.h, runtimeOf), so
+    // a space hosts one protoST runtime and a second one is refused here,
+    // before anything is installed in the space. Until it is published below,
+    // only this thread, inside `constructing`, finds the runtime, which its
+    // kernel loading needs; every other thread finds nothing, so none reaches
+    // a runtime whose primitives, provider or kernel are not in place. The
+    // entry is removed again if construction fails, since the destructor will
+    // not run.
     //
-    // K1: the runtime's own module provider is registered with it, numbered by
-    // the runtime's serial. It is handed to protoCore's ProviderRegistry, which
-    // keeps it for the life of the process, only once this runtime is
-    // registered, so a refused runtime leaves no provider behind; a
-    // construction that fails later retires it, as the destructor would.
+    // K1: the runtime's own module provider, numbered by the runtime's serial,
+    // is handed to protoCore's ProviderRegistry, which keeps it for the life
+    // of the process, only once the space is reserved, so a refused runtime
+    // leaves no provider behind; a construction that fails later retires it,
+    // as the destructor would. The registry entry gets the provider when the
+    // runtime is published, by which time protoCore owns it.
     //
     // F5 v2, K1: first, once per process, the dispatcher foreign callers reach
     // as `provider:st`. protoCore's ProviderRegistry files a provider under the
@@ -805,9 +808,10 @@ void STRuntime::construct() {
         proto::ProviderRegistry::instance().registerProvider(
             std::make_unique<STDispatchProvider>());
     });
+    ConstructingSTRuntimeScope constructing(this);
     auto ownProvider = std::make_unique<STModuleProvider>(serial());
     impl_->moduleProvider = ownProvider.get();
-    registerSTRuntime(&impl_->space, this, impl_->moduleProvider);
+    reserveSTRuntime(&impl_->space, this);
     struct RegistrationGuard {
         const proto::ProtoSpace* space;
         STRuntime* rt;
@@ -906,6 +910,9 @@ void STRuntime::construct() {
         if (numWorkers > 8u) numWorkers = 8u;
 
         impl_->baseWorkers = numWorkers;
+        // Published now: the workers are the first code on another thread
+        // that needs the runtime, and everything else is in place.
+        publishSTRuntime(&impl_->space, this, impl_->moduleProvider);
         for (unsigned i = 0; i < numWorkers; ++i) spawnWorker(ctx);
     }
     registration.committed = true;
