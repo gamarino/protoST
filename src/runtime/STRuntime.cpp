@@ -805,7 +805,13 @@ void STRuntime::construct() {
 
     // F5 v2, K1: this runtime's own module provider (STModuleProvider.h),
     // registered with protoCore's ProviderRegistry, which owns it from here
-    // on and keeps it for the life of the process.
+    // on and keeps it for the life of the process; and, once per process,
+    // the dispatcher foreign callers reach as `provider:st`.
+    static std::once_flag s_dispatcherRegistered;
+    std::call_once(s_dispatcherRegistered, []() {
+        proto::ProviderRegistry::instance().registerProvider(
+            std::make_unique<STDispatchProvider>());
+    });
     {
         static std::atomic<unsigned long long> s_runtimeSerial{0};
         auto provider = std::make_unique<STModuleProvider>(
@@ -818,7 +824,7 @@ void STRuntime::construct() {
     // tryLoad() dispatches back into our findModuleFile / importModuleFile
     // helpers from ANY thread running on this space. Registered before the
     // worker pool below is started, so no import can miss it.
-    registerSTRuntime(&impl_->space, this);
+    registerSTRuntime(&impl_->space, this, impl_->moduleProvider);
 
     // Set the resolution chain on this space: protoST's source provider only,
     // named by its GUID so the cache entries of this runtime's imports are

@@ -16,6 +16,7 @@
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
 #include "protoCore.h"
+#include "modules/STModuleProvider.h"
 
 TEST_CASE("ExecutionEngine: empty module returns nil", "[engine]") {
     protoST::STRuntime rt;
@@ -840,10 +841,16 @@ TEST_CASE("K1: a runtime does not reach the modules of a runtime destroyed befor
             protoST::STRuntime rt;
             auto* r = rt.runTopLevel(*bc);
             REQUIRE(r->asLong(rt.rootCtx()) == 1);
-            provider = proto::ProviderRegistry::instance().getProviderForSpec("provider:st");
+            // `provider:st` answers the live runtime's own provider GUID.
+            proto::ModuleProvider* alias =
+                proto::ProviderRegistry::instance().getProviderForSpec("provider:st");
+            REQUIRE(alias != nullptr);
+            const std::string guid = alias->getGUID();
+            if (round == 0) firstGuid = guid;
+            else REQUIRE(guid != firstGuid);
+            provider = proto::ProviderRegistry::instance().findByGUID(guid);
             REQUIRE(provider != nullptr);
-            if (round == 0) firstGuid = provider->getGUID();
-            else REQUIRE(provider->getGUID() != firstGuid);
+            REQUIRE(provider != alias);
         }
         // The dead runtime's provider answers a GUID no entry is stored under
         // and loads nothing.
@@ -851,6 +858,32 @@ TEST_CASE("K1: a runtime does not reach the modules of a runtime destroyed befor
         proto::ProtoContext bareCtx(&bare, nullptr);
         REQUIRE(provider->tryLoad("counter_lib", &bareCtx) == PROTO_NONE);
     }
+    unsetenv("STPATH");
+}
+
+TEST_CASE("K1: provider:st serves the live runtime after another was destroyed",
+          "[engine][modules][umd]") {
+    // Re-review round 2, R2-1: the alias `st` named the provider registered
+    // last, so with runtime A alive and runtime B constructed and destroyed,
+    // a foreign import through `provider:st` reached B's retired provider and
+    // answered "no module" although A is the only runtime and the import is
+    // unambiguous.
+    std::string fixtures = PROTOST_FIXTURES_DIR;
+    setenv("STPATH", fixtures.c_str(), 1);
+    protoST::STRuntime a;
+    { protoST::STRuntime b; }
+    REQUIRE(protoST::soleSTRuntime() == &a);
+    proto::ModuleProvider* alias =
+        proto::ProviderRegistry::instance().getProviderForSpec("provider:st");
+    REQUIRE(alias != nullptr);
+    REQUIRE(alias->getGUID().find("#retired") == std::string::npos);
+    proto::ProtoSpace foreign;
+    proto::ProtoContext foreignCtx(&foreign, nullptr);
+    const proto::ProtoObject* module = alias->tryLoad("counter_lib", &foreignCtx);
+    REQUIRE(module != nullptr);
+    REQUIRE(module != PROTO_NONE);
+    REQUIRE(module->getAttribute(&foreignCtx,
+                proto::ProtoString::createSymbol(&foreignCtx, "Counter")) != PROTO_NONE);
     unsetenv("STPATH");
 }
 

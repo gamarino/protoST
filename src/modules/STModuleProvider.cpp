@@ -17,6 +17,7 @@ namespace {
     struct RuntimeEntry {
         const proto::ProtoSpace* space;
         STRuntime* runtime;
+        STModuleProvider* provider;   // the runtime's own (K1)
     };
 
     // Intentionally leaked: an STRuntime may be destroyed during static
@@ -31,14 +32,15 @@ namespace {
     }
 }
 
-void registerSTRuntime(const proto::ProtoSpace* space, STRuntime* rt) {
+void registerSTRuntime(const proto::ProtoSpace* space, STRuntime* rt,
+                       STModuleProvider* provider) {
     if (!space || !rt) return;
     std::lock_guard<std::mutex> lock(registryMutex());
     auto& entries = registryEntries();
     for (auto& e : entries) {
-        if (e.space == space) { e.runtime = rt; return; }
+        if (e.space == space) { e.runtime = rt; e.provider = provider; return; }
     }
-    entries.push_back({space, rt});
+    entries.push_back({space, rt, provider});
 }
 
 void unregisterSTRuntime(const proto::ProtoSpace* space, STRuntime* rt) {
@@ -72,11 +74,46 @@ STRuntime* soleSTRuntime() {
     return entries.front().runtime;
 }
 
+namespace {
+// The provider of the sole live runtime, or nullptr when there is none or
+// more than one. A provider is never freed (protoCore's registry owns it for
+// the life of the process), so the pointer stays valid after the lock.
+STModuleProvider* soleSTProvider() {
+    std::lock_guard<std::mutex> lock(registryMutex());
+    auto& entries = registryEntries();
+    if (entries.size() != 1) return nullptr;
+    return entries.front().provider;
+}
+} // namespace
+
 STModuleProvider::STModuleProvider(unsigned long long serial)
     : guid_("protoST-source-v1#" + std::to_string(serial))
     , retiredGuid_(guid_ + "#retired")
+    , alias_()
+{}
+
+STDispatchProvider::STDispatchProvider()
+    : noRuntimeGuid_("protoST-source-v1#none")
     , alias_("st")
 {}
+
+const std::string& STDispatchProvider::getGUID() const {
+    if (STModuleProvider* p = soleSTProvider()) return p->getGUID();
+    return noRuntimeGuid_;
+}
+
+const proto::ProtoObject*
+STDispatchProvider::tryLoad(const std::string& logicalPath, proto::ProtoContext* ctx) {
+    if (STModuleProvider* p = soleSTProvider()) return p->tryLoad(logicalPath, ctx);
+    if (registeredSTRuntimeCount() > 1) {
+        throw NativeError(
+            "protoST: a cross-runtime import of '" + logicalPath +
+            "' is ambiguous — this process holds more than one protoST "
+            "runtime and `provider:st` names no particular one, so "
+            "there is no way to tell which one is meant");
+    }
+    return PROTO_NONE;   // no protoST runtime in this process
+}
 
 namespace {
 

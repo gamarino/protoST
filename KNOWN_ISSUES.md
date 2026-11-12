@@ -15,7 +15,7 @@ departures from Smalltalk-80, and open bugs — see
 **What.** A process may construct and destroy protoST runtimes one after
 another (an embedder, the unit-test binary run whole). Two runtimes alive at
 the same time remain unsupported: a foreign caller's `provider:st` import is
-refused as ambiguous, and the alias names the runtime constructed last.
+refused as ambiguous.
 
 **Why it was open.** protoCore's UMD module cache is process-wide, keyed by
 provider GUID and logical path, and never drops an entry. All runtimes shared
@@ -28,9 +28,14 @@ unit binary ran in one process).
 **Fix (0.10.0).** Each runtime registers a provider of its own, with its own
 GUID, and names it in its resolution chain; its destructor retires the
 provider, which then answers a GUID no cache entry is stored under and loads
-nothing (`src/modules/STModuleProvider.h`). Test: `K1: a runtime does not reach
+nothing. The alias `st` belongs to one dispatcher per process, which serves
+the sole live runtime and answers that runtime's GUID, so imports through it
+are cached per runtime too (`src/modules/STModuleProvider.h`). Destroying a
+runtime while another runtime still uses its modules remains a host lifetime
+error (INTEROP.md §4.2). Tests: `K1: a runtime does not reach
 the modules of a runtime destroyed before it` (heap-use-after-free under ASan
-before the fix); the whole unit binary passes in one process, also under ASan.
+before the fix), `K1: provider:st serves the live runtime after another was
+destroyed`; the whole unit binary passes in one process, also under ASan.
 
 **Residual, in protoCore.** The cache entries of a destroyed runtime stay in
 protoCore's cache (never reached again, but not freed), and its retired

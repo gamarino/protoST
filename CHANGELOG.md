@@ -220,11 +220,14 @@ minor release, so the two services arrive in 0.5.0.
   dead runtime's modules, whose methods' bytecode had been freed (a
   heap-use-after-free; it could abort the process with a corrupted heap).
   Each runtime now registers a module provider of its own, named in its
-  resolution chain by GUID, and retires it when it is destroyed; `provider:st`
-  still names protoST for foreign callers. The unit-test binary now passes run
-  whole in one process, also under ASan. Test: `K1: a runtime does not reach
+  resolution chain by GUID, and retires it when it is destroyed. Foreign
+  callers' `provider:st` is one dispatcher per process that serves the sole
+  live runtime and answers its GUID, so it keeps working when another runtime
+  was constructed and destroyed meanwhile. The unit-test binary now passes run
+  whole in one process, also under ASan. Tests: `K1: a runtime does not reach
   the modules of a runtime destroyed before it` (heap-use-after-free under
-  ASan before).
+  ASan before), `K1: provider:st serves the live runtime after another was
+  destroyed`.
 - **One rule for a loop condition that is not a Boolean.** The four loop
   forms disagreed: an inlined `whileTrue:` / `whileFalse:` sent
   `doesNotUnderstand: whileTrue:` to the condition's value (which is not the

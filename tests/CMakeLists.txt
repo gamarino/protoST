@@ -153,7 +153,11 @@ endif()
 # working directory, process-wide registries). The binary also passes run
 # whole in one process, each case constructing and destroying its own runtime
 # (KNOWN_ISSUES K1; until 0.10.0 six cases failed that way and the F5 v2 UMD
-# cases read freed bytecode, which could corrupt the heap).
+# cases read freed bytecode, which could corrupt the heap). Many cases call
+# setenv("STPATH", ...) in-process; that is safe only because no runtime
+# outlives its case, so no worker thread that could read the environment is
+# alive when a case starts or ends. Keep it that way: a case must not leave a
+# runtime (or any thread) behind.
 # Every unit case carries the `tsan` label (PROTOST_TSAN_TEST_PROPERTIES,
 # defined in the top-level CMakeLists.txt): the runtime's threads, the
 # scheduler, the GC root discipline and the BinaryFile guard are exercised

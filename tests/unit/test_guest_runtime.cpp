@@ -100,12 +100,11 @@ TEST_CASE("Guest: a protoST runtime runs in its host's ProtoSpace", "[umd][guest
         bool hasST = false;
         for (proto::proto_ulong i = 0; i < chain->getSize(st.rootCtx()); ++i) {
             const proto::ProtoString* e = chain->getAt(st.rootCtx(), static_cast<int>(i))->asString(st.rootCtx());
-            // protoST's entry names its provider by GUID (K1); the alias
-            // `st` resolves to the same provider.
+            // protoST's entry names its own provider by GUID (K1), the GUID
+            // `provider:st` answers while this is the only runtime.
             const std::string spec = e ? e->toStdString(st.rootCtx()) : std::string();
-            if (spec.rfind("provider:", 0) == 0
-                && proto::ProviderRegistry::instance().getProviderForSpec(spec)
-                       == proto::ProviderRegistry::instance().getProviderForSpec("provider:st"))
+            if (spec == "provider:" + proto::ProviderRegistry::instance()
+                                          .getProviderForSpec("provider:st")->getGUID())
                 hasST = true;
         }
         REQUIRE(hasST);
