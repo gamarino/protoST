@@ -481,12 +481,23 @@ void debuggerExceptionStop(STRuntime& rt, proto::ProtoContext* ctx,
 // the catch clause, while the ResumeSignal still holds it, so it stays
 // reachable after the signal is gone until the caller hands it on (`pass`
 // re-throws it in a new ResumeSignal).
+//
+// The fall-through is not thrown here: runHandlers sets `fellOffHandlerId`
+// and returns the handler's value (pinned in `resultPin`), and the caller
+// throws the UnwindToHandler (throwIfFellOff). Every frame a C++ exception
+// crosses costs the unwinder an FDE lookup and a personality call in both
+// phases, so the fall-through -- the commonest way out of a handler -- starts
+// from the primitive's own frame, as it did when the signal loop was a single
+// function: thrown from this out-of-line frame, it made exception_latency 8 %
+// slower (instructions). Forcing this function inline instead fixed the
+// fall-through but slowed resume: (the catcher's frame grows).
 const proto::ProtoObject* runHandlers(STRuntime& rt, proto::ProtoContext* ctx,
                                       const proto::ProtoObject* exc, bool foreign,
                                       const std::exception_ptr* origin,
                                       proto::proto_ulong searchBelowId,
                                       proto::proto_ulong firstHandlerId,
-                                      TransientPin& resultPin) {
+                                      TransientPin& resultPin,
+                                      proto::proto_ulong& fellOffHandlerId) {
     const HandlerEntry* entry = firstHandlerId != 0
         ? handlerStackFindById(firstHandlerId)
         : handlerStackFindMatch(ctx, exc, searchBelowId,
@@ -559,9 +570,20 @@ const proto::ProtoObject* runHandlers(STRuntime& rt, proto::ProtoContext* ctx,
     if (resumed) return resumed;
 
     // The handler fell off its end without return:/resume:/retry.
-    // Fall-through == `return: handlerResult`.
-    throw UnwindToHandler(ctx, handlerId,
-                          handlerResult ? handlerResult : PROTO_NONE);
+    // Fall-through == `return: handlerResult`, thrown by the caller.
+    const proto::ProtoObject* fellOff = handlerResult ? handlerResult : PROTO_NONE;
+    resultPin.reset(fellOff);
+    fellOffHandlerId = handlerId;
+    return fellOff;
+}
+
+// The caller's half of a fall-through (see runHandlers): unwind to the
+// handler's on:do:, which answers `v`.
+inline const proto::ProtoObject* throwIfFellOff(proto::ProtoContext* ctx,
+                                                proto::proto_ulong fellOffHandlerId,
+                                                const proto::ProtoObject* v) {
+    if (fellOffHandlerId != 0) throw UnwindToHandler(ctx, fellOffHandlerId, v);
+    return v;
 }
 
 const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx,
@@ -579,8 +601,11 @@ const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx
     if (firstHandlerId == 0 && rt.debugger().attached() && rt.debugger().exceptionFilters() != 0)
         debuggerExceptionStop(rt, ctx, exc, foreign, fromPrimitive);
     TransientPin pinResult(ctx, nullptr);
-    return runHandlers(rt, ctx, exc, foreign, origin, /*searchBelowId=*/0, firstHandlerId,
-                       pinResult);
+    proto::proto_ulong fellOff = 0;
+    const proto::ProtoObject* v = runHandlers(rt, ctx, exc, foreign, origin,
+                                              /*searchBelowId=*/0, firstHandlerId,
+                                              pinResult, fellOff);
+    return throwIfFellOff(ctx, fellOff, v);
 }
 
 // `outer` and `pass`: run the handlers that enclose the one now handling
@@ -603,8 +628,11 @@ const proto::ProtoObject* runEnclosingHandlers(STRuntime& rt, proto::ProtoContex
         throw NativeError(std::string(selector) + " sent to an exception with no active handler");
     // Copied: the entry's vector grows while the enclosing handler runs.
     const ActiveSignal current = *active;
-    return runHandlers(rt, ctx, exc, current.foreign, current.origin,
-                       current.constructId, /*firstHandlerId=*/0, resultPin);
+    proto::proto_ulong fellOff = 0;
+    const proto::ProtoObject* v = runHandlers(rt, ctx, exc, current.foreign, current.origin,
+                                              current.constructId, /*firstHandlerId=*/0,
+                                              resultPin, fellOff);
+    return throwIfFellOff(ctx, fellOff, v);
 }
 
 } // namespace
