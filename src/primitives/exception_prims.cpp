@@ -22,9 +22,15 @@
 //         protected block, the `on:do:` yields the value);
 //       - `resume:` (ResumeSignal) → caught here; `signal` RETURNS the value,
 //         the protected block continues from the signal point;
-//       - `pass` / `outer` (PassSignal) → caught here; the loop searches
-//         OUTWARD for the next matching handler;
 //       - `retry` (RetrySignal) → NOT caught here; propagates to `on:do:`.
+//     `outer` and `pass` do not leave the handler block: they run the
+//     enclosing handlers IN PLACE, on top of the handler that sent them, with
+//     the same loop (runHandlers) searching from just outside the handler's
+//     construct. A resumption by the enclosing handler is caught by that inner
+//     loop: `outer` answers the value inside the handler, which continues;
+//     `pass` resumes the original signal with it. A return, retry or unwind by
+//     the enclosing handler passes through the handler that sent them. This is
+//     Pharo's model (Exception>>outer / pass / resumeUnchecked:), D7.
 //     With NO matching handler the exception's default action runs (EXC-b
 //     refinement: a resumable Exception/Warning resumes with nil; an Error /
 //     non-resumable one aborts by throwing UnhandledSTException, a
@@ -52,7 +58,6 @@
 #include "runtime/NestingLimitUnwind.h"
 #include "runtime/ResumeSignal.h"
 #include "runtime/RetrySignal.h"
-#include "runtime/PassSignal.h"
 #include "runtime/FutureYield.h"
 #include "runtime/UnhandledSTException.h"
 #include "runtime/NativeExceptionBridge.h"
@@ -135,11 +140,14 @@ const proto::ProtoString* resumableKey(proto::ProtoContext* ctx) {
 // --- The active-signal stack ----------------------------------------------
 //
 // One entry per handler block currently running on this thread, innermost
-// last: the exception it handles, the id of its handler entry, and whether the
-// exception is foreign (a value raised by a module or another language, not a
-// protoST exception instance). The handler actions (`return:`, `resume:`,
-// `retry`, `pass`), which only receive the exception as their receiver, find
-// their handler here by the exception's identity.
+// last: the exception it handles, the id of its handler entry, the id of that
+// entry's construct (where `outer` and `pass` start their search outward),
+// whether the exception is foreign (a value raised by a module or another
+// language, not a protoST exception instance) and, for a foreign exception
+// that arrived as a ProtoException, that exception (what continues outward
+// when no handler takes it). The handler actions (`return:`, `resume:`,
+// `retry`, `pass`, `outer`), which only receive the exception as their
+// receiver, find their handler here by the exception's identity.
 //
 // Earlier versions stamped the id onto the instance as an attribute. That
 // cannot work for a foreign exception: its value is not protoST's to modify,
@@ -151,13 +159,19 @@ const proto::ProtoString* resumableKey(proto::ProtoContext* ctx) {
 struct ActiveSignal {
     const proto::ProtoObject* exception;
     proto::proto_ulong handlerId;
+    proto::proto_ulong constructId;
     bool foreign;
+    // Owned by the signalProtoException frame below the handler; null when
+    // the exception did not arrive as a ProtoException.
+    const std::exception_ptr* origin;
 };
 thread_local std::vector<ActiveSignal> g_activeSignals;
 
 struct ActiveSignalScope {
-    ActiveSignalScope(const proto::ProtoObject* exc, proto::proto_ulong id, bool foreign) {
-        g_activeSignals.push_back(ActiveSignal{exc, id, foreign});
+    ActiveSignalScope(const proto::ProtoObject* exc, proto::proto_ulong id,
+                      proto::proto_ulong constructId, bool foreign,
+                      const std::exception_ptr* origin) {
+        g_activeSignals.push_back(ActiveSignal{exc, id, constructId, foreign, origin});
     }
     ~ActiveSignalScope() { g_activeSignals.pop_back(); }
     ActiveSignalScope(const ActiveSignalScope&) = delete;
@@ -293,15 +307,10 @@ const proto::ProtoObject* defaultAction(STRuntime& rt, proto::ProtoContext* ctx,
 //
 // Shared by instance-side `signal` and class-side `signal` / `signal:`.
 //
-// EXC-b restructures the handler-running as a LOOP so `pass` can move the
-// search outward. Each turn finds the newest enabled matching entry, runs its
-// handler block in place, and dispatches on the outcome:
-//   * fall-through → throw UnwindToHandler (the `on:do:` yields the value);
-//   * ResumeSignal for this id → return the value (the protected block
-//     continues from the signal point);
-//   * PassSignal for this id → continue the loop, searching strictly outward;
-//   * RetrySignal / UnwindToHandler / anything else → propagate past `signal`
-//     (RetrySignal reaches `on:do:`; a foreign throw bubbles on).
+// It finds the newest enabled matching entry and runs its handler block in
+// place (runHandlers, below, which also dispatches on the outcome). A handler
+// that sends `outer` or `pass` runs the enclosing handlers in place on top of
+// itself, through runHandlers again (runEnclosingHandlers).
 //
 // S23: a handler block needs a nested engine of its own. At the engine
 // nesting limit it cannot start, and the limit's Error is raised in its place
@@ -381,7 +390,7 @@ thread_local bool t_signalFromPrimitive = false;
 // filter is attached, as `signal` starts and before any handler runs or
 // anything unwinds, so the stop shows the signalling stack intact. Only what
 // `signal` sees reaches it: the C++ carriers of protoST's control flow
-// (NonLocalReturn, UnwindToHandler, ResumeSignal, RetrySignal, PassSignal,
+// (NonLocalReturn, UnwindToHandler, ResumeSignal, RetrySignal,
 // NestingLimitUnwind, FutureYield, DebuggerHalt, InterruptSignal) are thrown
 // and caught without signalling, and an UnhandledSTException continuing
 // outward was already signalled once. Reads attributes only: no Smalltalk runs
@@ -415,6 +424,97 @@ void debuggerExceptionStop(STRuntime& rt, proto::ProtoContext* ctx,
     dbg.onException(rt, ctx, exc, cls, msg, uncaught, fromPrimitive);
 }
 
+// The handler search and run, shared by `signal` (from the top of the handler
+// stack) and by `outer` / `pass` (from just outside the construct of the
+// handler that sent them). Each turn finds the next enabled matching entry,
+// runs its handler block in place and dispatches on the outcome:
+//   * fall-through → throw UnwindToHandler (the `on:do:` yields the value);
+//   * ResumeSignal for this id → return the value: to the protected block at
+//     the signal point, or, for `outer`, to the handler that sent it;
+//   * RetrySignal / UnwindToHandler / anything else → propagate (RetrySignal
+//     reaches `on:do:`; a foreign throw bubbles on).
+// With no (further) matching handler the default action runs: a resumable
+// exception's value is returned, anything else throws.
+//
+// `firstHandlerId` (S23) runs that entry first instead of searching.
+const proto::ProtoObject* runHandlers(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* exc, bool foreign,
+                                      const std::exception_ptr* origin,
+                                      proto::proto_ulong searchBelowId,
+                                      proto::proto_ulong firstHandlerId) {
+    const HandlerEntry* entry = firstHandlerId != 0
+        ? handlerStackFindById(firstHandlerId)
+        : handlerStackFindMatch(ctx, exc, searchBelowId,
+                                // `on: Exception do:` catches every value
+                                foreign ? rt.bootstrap().exceptionProto : nullptr);
+    if (!entry) {
+        // No (further) matching handler: run the exception's default action.
+        // For a resumable exception this returns a value that `signal` (or
+        // `outer`) answers; for an Error it throws; a foreign exception
+        // continues outward.
+        if (foreign) foreignDefaultAction(rt, ctx, exc, origin);
+        return defaultAction(rt, ctx, exc);
+    }
+
+    const proto::proto_ulong handlerId = entry->handlerId;
+    // The construct's outermost entry: every pair of an on:do:on:do: is
+    // skipped while this handler runs and by its outer / pass (HandlerStack.h).
+    const proto::proto_ulong constructId = entry->constructId;
+    const proto::ProtoObject* hBlock = entry->handlerBlock;
+
+    // S23: no engine is left for the handler block at this depth.
+    if (!ExecutionEngine::canStartNestedEngine())
+        return raiseNestingLimitError(rt, ctx, searchBelowId);
+
+    // Disable this construct's entries and every inner one, so a `signal`
+    // raised while the handler block runs is caught by an OUTER handler.
+    std::vector<proto::proto_ulong> disabled = handlerStackDisableFrom(constructId);
+
+    const proto::ProtoObject* handlerResult = nullptr;
+    // What leaves the handler block is decided inside the catch clauses
+    // and acted on after them: an exception that is not consumed here is
+    // re-thrown with std::rethrow_exception once the clause has ended, not
+    // with `throw;` inside it -- see translateNativeException
+    // (NativeExceptionBridge.h) for why.
+    std::exception_ptr propagate;
+    const proto::ProtoObject* resumed = nullptr;
+    try {
+        // The handler actions (`return:`, `resume:`, `retry`, `pass`,
+        // `outer`) -- which only receive the exception as their receiver --
+        // find this entry through the active-signal stack while the handler
+        // runs.
+        ActiveSignalScope active(exc, handlerId, constructId, foreign, origin);
+        const proto::ProtoObject* a0 = exc;
+        // The handler is culled, as in Pharo: a block with no argument
+        // (on: Error do: [nil]) is evaluated without the exception.
+        handlerResult = blockArgCount(ctx, hBlock) == 0
+            ? invokeBlock(rt, ctx, hBlock, nullptr, 0)
+            : invokeBlock(rt, ctx, hBlock, &a0, 1);
+    } catch (const ResumeSignal& r) {
+        // `resume: v` -- only ours is consumed here; another id belongs to
+        // the loop that ran an enclosing or an inner handler.
+        if (r.handlerId() != handlerId) propagate = std::current_exception();
+        else resumed = r.value() ? r.value() : PROTO_NONE;
+    } catch (...) {
+        // UnwindToHandler (return:), RetrySignal (retry), NonLocalReturn,
+        // a cooperative yield, or another error: let it continue.
+        propagate = std::current_exception();
+    }
+    // Re-enable what we disabled, so the handler stack stays consistent
+    // for outer handlers / the owning `on:do:`, whatever happens next.
+    handlerStackRestore(disabled);
+    if (propagate) std::rethrow_exception(propagate);
+    // The resumption value: `signal` returns it and the protected block
+    // (its stack never unwound) continues from the signal point; under
+    // `outer`, the handler that sent it continues.
+    if (resumed) return resumed;
+
+    // The handler fell off its end without return:/resume:/retry.
+    // Fall-through == `return: handlerResult`.
+    throw UnwindToHandler(ctx, handlerId,
+                          handlerResult ? handlerResult : PROTO_NONE);
+}
+
 const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx,
                                           const proto::ProtoObject* exc,
                                           proto::proto_ulong firstHandlerId,
@@ -429,89 +529,28 @@ const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx
     // debugger's exception breakpoints. One relaxed load when detached.
     if (firstHandlerId == 0 && rt.debugger().attached() && rt.debugger().exceptionFilters() != 0)
         debuggerExceptionStop(rt, ctx, exc, foreign, fromPrimitive);
+    return runHandlers(rt, ctx, exc, foreign, origin, /*searchBelowId=*/0, firstHandlerId);
+}
 
-    proto::proto_ulong searchBelowId = 0;   // 0 == search from the top of the stack
-    for (;;) {
-        const HandlerEntry* entry = firstHandlerId != 0
-            ? handlerStackFindById(firstHandlerId)
-            : handlerStackFindMatch(ctx, exc, searchBelowId,
-                                    // `on: Exception do:` catches every value
-                                    foreign ? rt.bootstrap().exceptionProto : nullptr);
-        firstHandlerId = 0;
-        if (!entry) {
-            // No (further) matching handler: run the exception's default
-            // action. For a resumable exception this returns a value that
-            // `signal` yields; for an Error it throws; a foreign exception
-            // continues outward.
-            if (foreign) foreignDefaultAction(rt, ctx, exc, origin);
-            return defaultAction(rt, ctx, exc);
-        }
-
-        proto::proto_ulong handlerId          = entry->handlerId;
-        // The construct's outermost entry: every pair of an on:do:on:do: is
-        // skipped while this handler runs and when it passes (HandlerStack.h).
-        const proto::proto_ulong constructId = entry->constructId;
-        const proto::ProtoObject* hBlock = entry->handlerBlock;
-
-        // S23: no engine is left for the handler block at this depth.
-        if (!ExecutionEngine::canStartNestedEngine())
-            return raiseNestingLimitError(rt, ctx, searchBelowId);
-
-        // Disable this construct's entries and every inner one, so a `signal`
-        // raised while the handler block runs is caught by an OUTER handler.
-        std::vector<proto::proto_ulong> disabled = handlerStackDisableFrom(constructId);
-
-        const proto::ProtoObject* handlerResult = nullptr;
-        // What leaves the handler block is decided inside the catch clauses
-        // and acted on after them: an exception that is not consumed here is
-        // re-thrown with std::rethrow_exception once the clause has ended, not
-        // with `throw;` inside it -- see translateNativeException
-        // (NativeExceptionBridge.h) for why.
-        std::exception_ptr propagate;
-        const proto::ProtoObject* resumed = nullptr;
-        bool passed = false;
-        try {
-            // The handler actions (`return:`, `resume:`, `retry`, `pass`) —
-            // which only receive the exception as their receiver — find this
-            // entry through the active-signal stack while the handler runs.
-            ActiveSignalScope active(exc, handlerId, foreign);
-            const proto::ProtoObject* a0 = exc;
-            // The handler is culled, as in Pharo: a block with no argument
-            // (on: Error do: [nil]) is evaluated without the exception.
-            handlerResult = blockArgCount(ctx, hBlock) == 0
-                ? invokeBlock(rt, ctx, hBlock, nullptr, 0)
-                : invokeBlock(rt, ctx, hBlock, &a0, 1);
-        } catch (const ResumeSignal& r) {
-            // `resume: v` -- only ours is consumed here; an inner id belongs
-            // to an outer signal loop.
-            if (r.handlerId() != handlerId) propagate = std::current_exception();
-            else resumed = r.value() ? r.value() : PROTO_NONE;
-        } catch (const PassSignal& p) {
-            // `pass` / `outer` -- search outward for the next matching handler.
-            if (p.handlerId() != handlerId) propagate = std::current_exception();
-            else passed = true;
-        } catch (...) {
-            // UnwindToHandler (return:), RetrySignal (retry), NonLocalReturn,
-            // a cooperative yield, or another error: let it continue.
-            propagate = std::current_exception();
-        }
-        // Re-enable what we disabled, so the handler stack stays consistent
-        // for outer handlers / the owning `on:do:`, whatever happens next.
-        handlerStackRestore(disabled);
-        if (propagate) std::rethrow_exception(propagate);
-        // `signal` returns v: the protected block (its stack never unwound)
-        // continues from the signal point.
-        if (resumed) return resumed;
-        if (passed) {
-            searchBelowId = constructId;   // resume strictly outer to this construct
-            continue;
-        }
-
-        // The handler fell off its end without return:/resume:/retry/pass.
-        // Fall-through == `return: handlerResult`.
-        throw UnwindToHandler(ctx, handlerId,
-                              handlerResult ? handlerResult : PROTO_NONE);
-    }
+// `outer` and `pass`: run the handlers that enclose the one now handling
+// `exc`, in place, on top of it. The search starts just outside the active
+// handler's construct, as if that construct had not handled the exception
+// (ANSI 5.5.2.1; Pharo's `handlerContext nextHandlerContext handleSignal:`).
+// Returns only when the enclosing handler resumes, or when none takes the
+// exception and its default action answers a value (a resumable exception);
+// a return, retry or unwind by the enclosing handler propagates through the
+// caller. Not a new signal: the debugger does not stop again.
+const proto::ProtoObject* runEnclosingHandlers(STRuntime& rt, proto::ProtoContext* ctx,
+                                               const proto::ProtoObject* exc,
+                                               const char* selector) {
+    const ActiveSignal* active = exc ? findActiveSignal(exc) : nullptr;
+    if (!active)
+        throw NativeError(std::string(selector) + " sent to an exception with no active handler");
+    // Copied: the entry's vector grows while the enclosing handler runs.
+    const ActiveSignal current = *active;
+    TransientPin pinExc(ctx, exc);
+    return runHandlers(rt, ctx, exc, current.foreign, current.origin,
+                       current.constructId, /*firstHandlerId=*/0);
 }
 
 } // namespace
@@ -968,19 +1007,41 @@ const proto::ProtoObject* prim_Exception_retry(STRuntime&, proto::ProtoContext* 
     throw RetrySignal{ handlerId };
 }
 
-// anException pass  (a.k.a. anException outer)
+// anException outer
 //
-// Handler action: resume the handler search OUTWARD from the current handler.
-// Caught by `signal`'s loop. For this MVP `outer` is an alias of `pass` — see
-// PassSignal.h for the documented simplification.
-const proto::ProtoObject* prim_Exception_pass(STRuntime&, proto::ProtoContext* ctx,
+// Handler action: evaluate the enclosing handler for the exception, in place.
+// If it resumes, `outer` answers the resumption value here, inside the
+// handler that sent it, which continues; with no enclosing handler a
+// resumable exception's default action answers its value. If the enclosing
+// handler returns, retries or unwinds, the unwind passes through this handler
+// and `outer` does not answer. For a non-resumable exception it never
+// answers, and is `pass`. (ANSI 5.5.2.1; Pharo Exception>>outer and
+// resumeUnchecked:; D7 until 0.10.0.)
+const proto::ProtoObject* prim_Exception_outer(STRuntime& rt, proto::ProtoContext* ctx,
                                                const proto::ProtoObject* r,
                                                const proto::ProtoObject* const*,
                                                int) {
-    proto::proto_ulong handlerId = activeHandlerIdOf(ctx, r);
-    if (handlerId == 0)
-        throw NativeError("pass sent to an exception with no active handler");
-    throw PassSignal{ handlerId };
+    const proto::ProtoObject* v = runEnclosingHandlers(rt, ctx, r, "outer");
+    return v ? v : PROTO_NONE;
+}
+
+// anException pass
+//
+// Handler action: yield to the enclosing handler as if this one had not
+// handled the exception. The enclosing handler runs in place, on top of this
+// one (Pharo Exception>>pass); a resumption resumes the original signal
+// point -- or the `outer` an inner handler is waiting in, which is where
+// Pharo's resumeUnchecked: returns to as well -- and any other outcome
+// unwinds through this handler. `pass` itself never answers.
+const proto::ProtoObject* prim_Exception_pass(STRuntime& rt, proto::ProtoContext* ctx,
+                                              const proto::ProtoObject* r,
+                                              const proto::ProtoObject* const*,
+                                              int) {
+    const proto::proto_ulong handlerId = activeHandlerIdOf(ctx, r);
+    const proto::ProtoObject* v = runEnclosingHandlers(rt, ctx, r, "pass");
+    // The enclosing handler resumed, or the default action answered: resume
+    // this handler's signal with that value, as its loop does for resume:.
+    throw ResumeSignal(ctx, handlerId, v ? v : PROTO_NONE);
 }
 
 // S23: run the handler with id `handlerId` (pushed by the calling `on:do:`)
@@ -1119,7 +1180,7 @@ const proto::ProtoObject* runProtected(
             popAll();
             notOurs = std::current_exception();
         } catch (...) {
-            // NonLocalReturn, FutureYield, ResumeSignal/PassSignal escaping a
+            // NonLocalReturn, FutureYield, a ResumeSignal escaping a
             // bug, std::exception — all must leave the handler stack balanced.
             popAll();
             notOurs = std::current_exception();
@@ -1188,10 +1249,13 @@ const proto::ProtoObject* prim_Block_on_do_on_do(STRuntime& rt,
 // FutureYield is caught specifically before `catch (...)` and merely
 // re-thrown.
 //
-// ResumeSignal / PassSignal are not a concern here: they are thrown by a
-// handler running INSIDE `signal`, which runs INSIDE the protected block;
-// `signal`'s own loop consumes them before control ever leaves the protected
-// block, so they never reach this primitive.
+// A ResumeSignal that resumes a signal raised inside the protected block is
+// consumed by that signal's loop before control leaves the protected block,
+// and one that answers an `outer` sent inside it is consumed by that `outer`.
+// One that crosses this primitive resumes a signal raised OUTSIDE the
+// protected block -- `[e resume: 1] ensure: [...]` or `[e pass] ensure:
+// [...]` in a handler -- and so abandons the protected block: the cleanup
+// runs, as Pharo's unwinding to the signal context runs it.
 //
 // Re-throw correctness: the `catch (...)` branch records the exception; the
 // cleanup runs after the catch clause and std::rethrow_exception re-throws the
@@ -1332,15 +1396,16 @@ bindPrimitive(rt, b.messageNotUnderstoodProto, "receiver", reg.registerPrim(prim
     bindPrimitive(rt, b.exceptionProto, "__isResumable",
                   reg.registerPrim(prim_Exception_isResumable));
 
-    // EXC-b handler actions: resume:/resume, retry, pass/outer.
+    // EXC-b handler actions: resume:/resume, retry, pass, outer.
     int resumeIdx = reg.registerPrim(prim_Exception_resume);
     bindPrimitive(rt, b.exceptionProto, "resume:", resumeIdx);
     bindPrimitive(rt, b.exceptionProto, "resume",  resumeIdx);
     bindPrimitive(rt, b.exceptionProto, "retry",
                   reg.registerPrim(prim_Exception_retry));
-    int passIdx = reg.registerPrim(prim_Exception_pass);
-    bindPrimitive(rt, b.exceptionProto, "pass",  passIdx);
-    bindPrimitive(rt, b.exceptionProto, "outer", passIdx);   // MVP alias
+    bindPrimitive(rt, b.exceptionProto, "pass",
+                  reg.registerPrim(prim_Exception_pass));
+    bindPrimitive(rt, b.exceptionProto, "outer",
+                  reg.registerPrim(prim_Exception_outer));
 
     // on:do: / on:do:on:do: — the protected-block primitives, on blockProto.
     bindPrimitive(rt, b.blockProto, "on:do:",

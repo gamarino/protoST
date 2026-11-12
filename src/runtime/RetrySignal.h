@@ -16,7 +16,7 @@
 //   outer `on:do:`. A RetrySignal that escapes a whole actor message /
 //   top-level run is a bug, converted to a runtime error in STRuntime.
 //
-//   Sibling of UnwindToHandler / ResumeSignal / PassSignal — not a
+//   Sibling of UnwindToHandler / ResumeSignal — not a
 //   std::exception subclass.
 
 namespace protoST {

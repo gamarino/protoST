@@ -209,7 +209,7 @@ const proto::ProtoObject* foreignSendEntry(proto::ProtoContext* callerCtx,
             failed = std::current_exception();
         } catch (...) {
             // NonLocalReturn, UnwindToHandler, RetrySignal, ResumeSignal,
-            // PassSignal, FutureYield: each means "resume protoST somewhere up
+            // FutureYield: each means "resume protoST somewhere up
             // the protoST stack", and the foreign caller's frames are in the way.
             controlFlowUnwind = true;
         }

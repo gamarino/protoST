@@ -385,9 +385,10 @@ TEST_CASE("EXC-b: pass hands the exception to an outer handler",
     REQUIRE(r->asLong(rt.rootCtx()) == 88);
 }
 
-TEST_CASE("EXC-b: outer is an alias of pass",
+TEST_CASE("EXC-b: outer on a non-resumable Error reaches the outer handler",
           "[exceptions][track1]") {
-    // `e outer` behaves as `e pass` for this MVP — the outer handler runs.
+    // An Error is not resumable, so `e outer` cannot answer and behaves as
+    // `e pass`: the outer handler runs and its value is the result.
     const char* src =
         "Object subclass: #Outerer. "
         "Outerer >> run "
