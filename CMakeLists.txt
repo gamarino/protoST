@@ -688,8 +688,9 @@ add_test(NAME cli_gc_reclaims
 add_test(NAME cli_gc_recursion_reclaims
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_gc_recursion_reclaims.sh $<TARGET_FILE:protost>)
 # S3: an allocation-free loop must not stall a collection; the fixture is the
-# deadlock shape (a thread spinning on a flag a collecting thread sets) and
-# also requires it to hang with the safepoint hook disabled.
+# deadlock shape (a thread spinning on a flag a collecting thread sets). Its
+# control, with the safepoint hook disabled, is a unit case
+# (tests/CMakeLists.txt, "S3: ... (hook disabled)").
 add_test(NAME cli_gc_spin_safepoint
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_gc_spin_safepoint.sh $<TARGET_FILE:protost>)
 

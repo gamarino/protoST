@@ -27,12 +27,15 @@
 #include <catch2/catch_all.hpp>
 
 #include "protoST/STRuntime.h"
+#include "protoST/primitives.h"
+#include "runtime/Bootstrap.h"
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
 #include "runtime/BytecodeModule.h"
 #include "protoCore.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <string>
@@ -154,32 +157,43 @@ TEST_CASE("S15: a forced collection completes and reclaims the interpreter's gar
 
     const uint64_t cyclesBefore = sp->getGCCycleCount();
     CycleObserver obs(sp);
-    const proto::proto_long     heapAfterFirstRound = [&] {
-        // 20,000 eight-element arrays, none of them kept. Nothing this program
-        // allocates is reachable when it returns, so a cycle that reclaims
-        // nothing is a cycle that is treating the interpreter's young
-        // generation as live — which is what S15 was.
+    {
+        // 20,000 eight-element arrays, none of them kept, each made in an
+        // activation of a real block (S15 was about the garbage of block
+        // activations: the block, its frame and its captured dict were never
+        // submitted). The block is held in a variable and sent value:, so the
+        // compiler cannot inline it. Nothing this program allocates is
+        // reachable when it returns, so a cycle that reclaims nothing is a
+        // cycle that is treating the interpreter's young generation as live
+        // -- which is what S15 was.
         const proto::ProtoObject* r = h.run(
             "n := 0. "
-            "1 to: 20000 do: [ :i | | a | a := Array new: 8. a at: 1 put: i. "
-            "                        n := n + 1 ]. "
+            "blk := [ :i | | a | a := Array new: 8. a at: 1 put: i. a ]. "
+            "1 to: 20000 do: [ :i | blk value: i. n := n + 1 ]. "
             "n.");
         REQUIRE(r != nullptr);
         REQUIRE(r->asLong(h.rt.rootCtx()) == 20000);
         obs.observe("first program");
-        return static_cast<proto::proto_long>(relaxedRead(sp->heapSize));
-    }();
+    }
 
-    // Four rounds of "allocate a heap's worth, then collect it". triggerGC
+    // Five rounds of "allocate a heap's worth, then collect it". triggerGC
     // starts a cycle only when the heap is short of free cells, so each round
     // re-creates the pressure; an idle process has, by protoCore's design, no
-    // reason to collect at all.
+    // reason to collect at all. The heap after the first round is the
+    // reference: the same round repeated four more times must not need more
+    // than twice that heap. Before the fix every round added roughly its own
+    // allocation to the heap. The reference is taken from the rounds
+    // themselves, not from a program, so it does not depend on how much a
+    // program allocates (the compiler's inlining changes that).
     const auto pressure = [&] { h.run("1 to: 5000 do: [ :i | Array new: 8 ]. 0."); };
     forceCycle(h.rt, obs, std::chrono::seconds(20), pressure);
-    for (int round = 0; round < 4; ++round) {
+    proto::proto_long heapAfterFirstRound = 0;
+    for (int round = 0; round < 5; ++round) {
         h.run("1 to: 20000 do: [ :i | Array new: 8 ]. 0.");
         obs.observe("after a program");
         forceCycle(h.rt, obs, std::chrono::seconds(20), pressure);
+        if (round == 0)
+            heapAfterFirstRound = static_cast<proto::proto_long>(relaxedRead(sp->heapSize));
     }
 
     const uint64_t cyclesAfter = sp->getGCCycleCount();
@@ -193,8 +207,113 @@ TEST_CASE("S15: a forced collection completes and reclaims the interpreter's gar
     // 2. It reclaims. This is the half that was zero before the fix, in every
     //    cycle, however many ran.
     REQUIRE(obs.maxReclaimed > 0);
-    // 3. And reclaiming keeps the heap bounded: four more rounds of the same
-    //    garbage must not need a bigger heap than the first round did. Before
-    //    the fix the heap grew by roughly the round's allocation every time.
+    // 3. And reclaiming keeps the heap bounded.
     REQUIRE(static_cast<proto::proto_long>(relaxedRead(sp->heapSize)) <= heapAfterFirstRound * 2);
+}
+
+// S3: a thread running an allocation-free loop must not stall a collection.
+//
+// protoCore starts a requested collection only after every running thread
+// parks, and a thread that never allocates never reaches allocCell's poll; the
+// interpreter parks at every loop back-edge (ExecutionEngine::gcSafepoint).
+// An actor allocates without end under a small heap ceiling, so collections
+// are requested again and again, while the main thread spins in a loop that
+// allocates nothing. The program reads the collector's state through two
+// primitives this test binds: `GcProbe gcCycles` (the completed cycles) and
+// `GcProbe stopTheWorldRequested` (a collection waits for every thread to
+// park).
+//
+// The case runs in both modes of the hook, read from the environment as the
+// engine reads it (ctest runs it once without and once with
+// PROTOST_NO_GC_SAFEPOINT=1, tests/CMakeLists.txt). Both outcomes are
+// decided by the order of events, never by elapsed time:
+//   * with the hook, the spin waits for a cycle to complete, which can only
+//     happen while it spins if the loop parks; without the hook that loop
+//     would never end;
+//   * without it, the spin first waits until a collection is requested (it
+//     stays requested: nothing the main thread does parks it), then runs a
+//     fixed number of back-edges: no cycle can complete during them, so the
+//     count is unchanged, and once the loop is over the program waits for
+//     the actor, which parks the main thread and lets the collections run.
+namespace {
+
+const proto::ProtoObject* primGcCycles(protoST::STRuntime& rt, proto::ProtoContext* ctx,
+                                       const proto::ProtoObject*,
+                                       const proto::ProtoObject* const*, int) {
+    return ctx->fromLong(static_cast<long long>(rt.space()->getGCCycleCount()));
+}
+
+const proto::ProtoObject* primStopTheWorldRequested(protoST::STRuntime& rt, proto::ProtoContext*,
+                                                    const proto::ProtoObject*,
+                                                    const proto::ProtoObject* const*, int) {
+    return rt.space()->stwFlag.load() ? PROTO_TRUE : PROTO_FALSE;
+}
+
+// Sets an environment variable for one scope (the runtime reads the heap
+// ceiling when it creates its space).
+struct ScopedEnv {
+    std::string name;
+    std::string saved;
+    bool had;
+    ScopedEnv(const char* n, const char* v) : name(n) {
+        const char* old = std::getenv(n);
+        had = old != nullptr;
+        if (had) saved = old;
+        ::setenv(n, v, 1);
+    }
+    ~ScopedEnv() {
+        if (had) ::setenv(name.c_str(), saved.c_str(), 1);
+        else     ::unsetenv(name.c_str());
+    }
+};
+
+} // namespace
+
+TEST_CASE("S3: an allocation-free loop does not stall a collection", "[gc]") {
+    const bool hookOff = std::getenv("PROTOST_NO_GC_SAFEPOINT") != nullptr;
+    ScopedEnv limit("PROTOCORE_HEAP_LIMIT_CELLS", "400000,8000000");
+    ScopedEnv workers("PROTOST_WORKERS", "2");
+    GcHost h;
+    proto::ProtoContext* ctx = h.rt.rootCtx();
+    const proto::ProtoObject* probe =
+        h.rt.bootstrap().objectProto->newChild(ctx, /*isMutable=*/true);
+    protoST::bindPrimitive(h.rt, probe, "gcCycles", h.rt.registry().registerPrim(primGcCycles));
+    protoST::bindPrimitive(h.rt, probe, "stopTheWorldRequested",
+                           h.rt.registry().registerPrim(primStopTheWorldRequested));
+    const_cast<proto::ProtoObject*>(h.rt.globals())->setAttribute(
+        ctx, proto::ProtoString::createSymbol(ctx, "GcProbe"), probe);
+
+    const std::string churner =
+        "Object subclass: #Churner.\n"
+        "Churner >> churnUntil: stop\n"
+        "  [ stop value ] whileFalse: [ Array new: 8 ].\n"
+        "  ^ #churned\n";
+    if (!hookOff) {
+        const proto::ProtoObject* r = h.run(churner +
+            "| stop f c0 |\n"
+            "stop := Atom on: false.\n"
+            "f := Churner new asActor churnUntil: stop.\n"
+            "c0 := GcProbe gcCycles.\n"
+            "[ GcProbe gcCycles > c0 ] whileFalse: [ ].\n"
+            "stop value: true ifCurrent: false.\n"
+            "f wait.\n");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asString(ctx) != nullptr);
+    } else {
+        const proto::ProtoObject* r = h.run(churner +
+            "| stop f c0 n delta |\n"
+            "stop := Atom on: false.\n"
+            "f := Churner new asActor churnUntil: stop.\n"
+            "[ GcProbe stopTheWorldRequested ] whileFalse: [ ].\n"
+            "c0 := GcProbe gcCycles.\n"
+            "n := 0.\n"
+            "[ n < 3000000 ] whileTrue: [ n := n + 1 ].\n"
+            "delta := GcProbe gcCycles - c0.\n"
+            "stop value: true ifCurrent: false.\n"
+            "f wait.\n"
+            "delta.\n");
+        REQUIRE(r != nullptr);
+        // No collection completed while the loop ran without parking.
+        REQUIRE(r->asLong(ctx) == 0);
+    }
 }

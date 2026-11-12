@@ -162,6 +162,13 @@ endif()
 # scheduler, the GC root discipline and the BinaryFile guard are exercised
 # there.
 catch_discover_tests(protost_unit_tests PROPERTIES ${PROTOST_TSAN_TEST_PROPERTIES})
+# S3's case once more with the engine's safepoint hook disabled (it is read at
+# static initialisation, so it takes a process of its own): the witness that
+# without the hook an allocation-free loop holds a requested collection.
+add_test(NAME "S3: an allocation-free loop does not stall a collection (hook disabled)"
+    COMMAND protost_unit_tests "S3: an allocation-free loop does not stall a collection")
+set_tests_properties("S3: an allocation-free loop does not stall a collection (hook disabled)"
+    PROPERTIES ENVIRONMENT "PROTOST_NO_GC_SAFEPOINT=1" ${PROTOST_TSAN_TEST_PROPERTIES})
 
 # --- conformance suite (Track 6, slice 2) --------------------------------
 # A defensible suite derived from docs/LANGUAGE.md. Every tests/conformance/
