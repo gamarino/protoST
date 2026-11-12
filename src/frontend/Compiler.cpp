@@ -1,6 +1,7 @@
 #include "Compiler.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cctype>
 #include <cstdlib>
 #include <mutex>
@@ -570,6 +571,7 @@ std::unique_ptr<BytecodeModule> Compiler::compileModule(const Node& mod) {
     }
     bc->emit(Op::RETURN_TOP, 0, currentLine_);
     recordLocalNames(*bc);
+    bc->routeSharedLocals();
     bc->setDebugName("<module>");
     return bc;
 }
@@ -814,6 +816,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         }
 
         recordLocalNames(*sub);
+        sub->routeSharedLocals();
         sub->setDebugName(n.text + ">>" +
                           (n.stringList.empty() ? std::string("<method>")
                                                 : n.stringList[0]));
@@ -1029,6 +1032,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         }
 
         recordLocalNames(*sub);
+        sub->routeSharedLocals();
         sub->setDebugName(n.text + ">>" + n.stringList[0] + "(...)");
         currentMethodDebugName_ = sub->debugName();
         sub->setDefiningClass(n.text);
@@ -1548,11 +1552,6 @@ Compiler::compileBlockModule(const Node& n, bool deoptBoundary,
             s.capturedNames = it->second;
         }
     }
-    // Inside a de-optimised copy, a block that uses a boxed local checks on
-    // entry that the box is still open (DEOPT_CHECK, enabled below).
-    const bool mayUseBox = deoptDepth_ > 0;
-    const std::size_t checkPos = sub->pos();
-    if (mayUseBox) sub->emit(Op::DEOPT_CHECK, 0, currentLine_);
     reportDuplicateNames(n.stringList, 0, "a block");
     int nArgs = static_cast<int>(n.intValue);
     sub->setArgCount(nArgs);
@@ -1570,9 +1569,9 @@ Compiler::compileBlockModule(const Node& n, bool deoptBoundary,
     if (n.children.empty()) sub->emit(Op::PUSH_NIL, 0, currentLine_);
     emitStatements(*sub, n.children, 0, n.children.size());
     sub->emit(Op::RETURN_TOP, 0, currentLine_);
-    if (mayUseBox && scopes_.back().usesBox) sub->patchWideArg(checkPos, 0, 1);
     if (boxedOut) *boxedOut = scopes_.back().boxed;
     recordLocalNames(*sub);
+    sub->routeSharedLocals();
     sub->setDebugName(currentMethodDebugName_.empty()
                           ? std::string("<block>")
                           : "[] in " + currentMethodDebugName_);
@@ -1717,8 +1716,7 @@ bool Compiler::isCaptured(const std::string& name) const {
     // Past a de-optimised copy of an inlined block (deoptBoundary), a local
     // slot of an enclosing scope belongs to another frame: the copy reaches
     // it through its box, as a captured name. It is recorded on the boundary
-    // nearest the slot's scope, and the innermost scope is marked as a user
-    // of the box.
+    // nearest the slot's scope.
     const Scope* boundary = nullptr;
     for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
         if (it->capturedNames.count(name) != 0) return true;
@@ -1727,7 +1725,6 @@ bool Compiler::isCaptured(const std::string& name) const {
             bool known = false;
             for (const auto& [n, slot] : boundary->boxed) known = known || n == name;
             if (!known) boundary->boxed.emplace_back(name, f->second);
-            scopes_.back().usesBox = true;
             return true;
         }
         if (isMethodScope(*it)) break;
@@ -2269,12 +2266,65 @@ void Compiler::emitInlinedConditional(BytecodeModule& m, const ast::Node& send, 
         for (const auto& u : used)
             if (std::find(boxed.begin(), boxed.end(), u) == boxed.end()) boxed.push_back(u);
     }
+    // The locals the copies use. A temporary is shared through the
+    // dictionary of the scope that declares it: the frame's own (scope 0) or
+    // an enclosing inlined block with temporaries (scope k, the k-th of
+    // fs.inlineScopes). An argument cannot be assigned: the copies get its
+    // value. Each name resolves here as it did in the copy (the same
+    // bindings are live).
+    auto& fs = scopes_.back();
     auto& e = m.deoptEntry(entry);
     e.boxSlot = static_cast<uint32_t>(boxSlot);
-    for (const auto& [name, slot] : boxed)
-        e.locals.emplace_back(static_cast<uint32_t>(m.internSymbol(name)),
-                              static_cast<uint32_t>(slot));
+    int32_t deepest = BytecodeModule::DeoptLocal::kReadOnly;
+    for (const auto& [name, slot] : boxed) {
+        BytecodeModule::DeoptLocal l;
+        l.nameConst = static_cast<uint32_t>(m.internSymbol(name));
+        l.slot = static_cast<uint32_t>(slot);
+        bool readOnly = fs.args.count(name) != 0;
+        for (const auto& a : inlinedLoopArgs_)
+            readOnly = readOnly || (a.scope == &fs && a.slot == slot);
+        if (!readOnly) {
+            l.scope = 0;
+            for (size_t k = 0; k < fs.inlineScopes.size(); ++k) {
+                const auto& sl = fs.inlineScopes[k].slots;
+                if (std::find(sl.begin(), sl.end(), slot) != sl.end())
+                    l.scope = static_cast<int32_t>(k + 1);
+            }
+            deepest = std::max(deepest, l.scope);
+        }
+        e.locals.push_back(l);
+    }
+    // The dictionaries of scopes 0 .. deepest, outermost first. Copies that
+    // share no temporary need none.
+    if (deepest >= 0) {
+        if (fs.frameDictSlot < 0) fs.frameDictSlot = declareLocal("__deopt_scope__");
+        e.scopeDictSlots.push_back(static_cast<uint32_t>(fs.frameDictSlot));
+        for (int32_t k = 1; k <= deepest; ++k) {
+            // Every inlined block with temporaries that contains a value
+            // conditional has a dictionary slot (emitInlinedBlockBody).
+            const int dictSlot = fs.inlineScopes[static_cast<size_t>(k - 1)].dictSlot;
+            assert(dictSlot >= 0);
+            e.scopeDictSlots.push_back(static_cast<uint32_t>(dictSlot));
+        }
+    }
 }
+
+namespace {
+// Whether `n` contains a value conditional (ifTrue:, ifFalse:,
+// ifTrue:ifFalse:, ifFalse:ifTrue:, and:, or:) anywhere, in nested blocks
+// included: such a conditional may de-optimise and share the temporaries of
+// the inlined blocks around it (DEOPT_ENTER). Over-approximating costs one
+// RESET_LOCAL per entry of the block; missing one would be wrong.
+bool containsValueConditional(const ast::Node& n) {
+    if (n.kind == NodeKind::KeywordSend
+        && (n.text == "ifTrue:" || n.text == "ifFalse:" || n.text == "ifTrue:ifFalse:"
+            || n.text == "ifFalse:ifTrue:" || n.text == "and:" || n.text == "or:"))
+        return true;
+    for (const auto& c : n.children)
+        if (c && containsValueConditional(*c)) return true;
+    return false;
+}
+} // namespace
 
 bool Compiler::emitInlinedBlockBody(BytecodeModule& m, const ast::Node& block,
                                     bool discardValue) {
@@ -2300,11 +2350,24 @@ bool Compiler::emitInlinedBlockBody(BytecodeModule& m, const ast::Node& block,
     reportDuplicateNames(block.stringList, 0, "a block");
     std::vector<Hoisted> hoisted;
     auto& s = scopes_.back();   // stable across nested scopes: a deque (D29)
+    // A hidden slot: one a finished sibling block released, else a new one.
+    auto acquire = [&]() {
+        if (!s.freeHidden.empty()) {
+            const int slot = s.freeHidden.back();
+            s.freeHidden.pop_back();
+            return slot;
+        }
+        return declareLocal("__bt_" + std::to_string(s.nextSlot));
+    };
+    Scope::InlineScope scope;
     for (std::size_t i = nArgs; i < block.stringList.size(); ++i) {
         const std::string& name = block.stringList[i];
-        const int slot = declareLocal("__bt_" + std::to_string(s.nextSlot));
-        m.emit(Op::PUSH_NIL, 0, currentLine_);
-        m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slot), currentLine_);
+        const int slot = acquire();
+        // RESET_LOCAL, not a store: a closure that shares the previous
+        // entry's variable (DEOPT_ENTER) keeps it, and this entry starts a
+        // fresh one.
+        m.emitWide(Op::RESET_LOCAL, static_cast<unsigned int>(slot), currentLine_);
+        scope.slots.push_back(slot);
         Hoisted h{name, slot, false, -1, false, false};
         if (auto it = s.slots.find(name); it != s.slots.end()) {
             h.hadBinding = true;
@@ -2315,12 +2378,27 @@ bool Compiler::emitInlinedBlockBody(BytecodeModule& m, const ast::Node& block,
         h.hidesArgument = s.args.erase(name) != 0;
         hoisted.push_back(std::move(h));
     }
+    // The scope's dictionary, which a de-optimised value conditional inside
+    // the block fills with the temporaries its closures share (DEOPT_ENTER):
+    // reset on every entry with them.
+    if (!scope.slots.empty() && containsValueConditional(block)) {
+        scope.dictSlot = acquire();
+        m.emitWide(Op::RESET_LOCAL, static_cast<unsigned int>(scope.dictSlot), currentLine_);
+    }
+    if (!scope.slots.empty()) s.inlineScopes.push_back(scope);
     const std::size_t from = m.pos();
     bool leftValue = true;
     if (block.children.empty()) {
         m.emit(Op::PUSH_NIL, 0, currentLine_);
     } else {
         leftValue = emitStatements(m, block.children, 0, block.children.size(), discardValue);
+    }
+    if (!scope.slots.empty()) {
+        s.inlineScopes.pop_back();
+        // The block's code ends here, so its slots are free for the next
+        // inlined block; that block's entry resets them.
+        for (int slot : scope.slots) s.freeHidden.push_back(slot);
+        if (scope.dictSlot >= 0) s.freeHidden.push_back(scope.dictSlot);
     }
     for (auto it = hoisted.rbegin(); it != hoisted.rend(); ++it) {
         if (it->hidesArgument) s.args.insert(it->name);

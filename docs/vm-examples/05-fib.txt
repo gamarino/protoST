@@ -55,11 +55,11 @@ module main.0: Math>>fib:
       5  PUSH_LOCAL         1     ; n
       6  RETURN
       7  JUMP               7     ; -> 15
-      8  DEOPT_ENTER        0     ; box __deopt_box__: n
+      8  DEOPT_ENTER        0     ; box __deopt_box__: n(copy)
       9  PUSH_LOCAL         2     ; __deopt_box__
      10  PUSH_DEOPT_BLOCK   0     ; main.0.0 ([] in Math>>fib: (not inlined))
      11  SEND_KEYWORD       2     ; #ifTrue:, 1 arg
-     12  DEOPT_EXIT         0     ; box __deopt_box__: n
+     12  DEOPT_EXIT         0     ; box __deopt_box__: n(copy)
      13  JUMP               1     ; -> 15
      14  PUSH_NIL
      15  POP
@@ -82,8 +82,7 @@ module main.0.0: [] in Math>>fib: (not inlined)
   constants:
     #0   symbol    #n
   code:
-      0  DEOPT_CHECK        1     ; box must be open
-      1  PUSH_CAPTURED      0     ; n
-      2  RETURN
-      3  RETURN_TOP
+      0  PUSH_CAPTURED      0     ; n
+      1  RETURN
+      2  RETURN_TOP
 55

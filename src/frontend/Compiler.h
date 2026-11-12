@@ -109,9 +109,23 @@ private:
         // here, as (name, enclosing slot), the first time it is used.
         bool deoptBoundary = false;
         mutable std::vector<std::pair<std::string, int>> boxed;
-        // This block itself uses a boxed local (it then starts with an
-        // active DEOPT_CHECK).
-        mutable bool usesBox = false;
+        // Hidden slots of this frame that an inlined block's temporaries
+        // (and its scope dictionary) used and released: the next inlined
+        // block takes them before declaring new ones, so sibling blocks
+        // share slots and the frame stays as small as its deepest nesting.
+        std::vector<int> freeHidden;
+        // The inlined blocks with temporaries that enclose the code being
+        // emitted, outermost first: their temporaries' slots and, when a
+        // value conditional inside may de-optimise, the slot of the scope's
+        // dictionary (DEOPT_ENTER; -1 when there is none).
+        struct InlineScope {
+            std::vector<int> slots;
+            int dictSlot = -1;
+        };
+        std::vector<InlineScope> inlineScopes;
+        // The slot of the dictionary of this frame's own temporaries
+        // (DEOPT_ENTER); -1 until a value conditional needs it.
+        int frameDictSlot = -1;
     };
 
     // A deque, not a vector: emission recurses while holding a reference to

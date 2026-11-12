@@ -207,6 +207,11 @@ private:
         // first group entry. Cleared once the run is published, or written
         // out one by one before a send (flushInstVarGroup).
         bool                       ivGroupActive  = false;
+        // Some local slot of this frame holds a forward (DEOPT_ENTER): its
+        // variable is shared with a de-optimised closure and lives in a
+        // scope dictionary. PUSH_SHARED_LOCAL and STORE_SHARED_LOCAL test it
+        // before reading or writing their slot directly.
+        bool                       deoptForwarded = false;
         uint16_t                   ivGroupPending = 0;
         unsigned int               ivGroupBase    = 0;
         std::size_t                ivGroupFirst   = 0;
@@ -333,10 +338,18 @@ private:
     const proto::ProtoObject* newClosure(proto::ProtoContext* ctx, const Frame& f,
                                          unsigned int blockIdx,
                                          const proto::ProtoObject* capD);
-    // The de-optimisation opcodes (Opcodes.h, DEOPT_ENTER ... DEOPT_CHECK).
+    // The de-optimisation opcodes (Opcodes.h, DEOPT_ENTER and DEOPT_EXIT).
     void deoptEnter(proto::ProtoContext* ctx, Frame& f, unsigned int entry);
-    void deoptExit(proto::ProtoContext* ctx, Frame& f, unsigned int entry);
-    void deoptCheck(proto::ProtoContext* ctx, Frame& f);
+    // A slot value that is a forward (DEOPT_ENTER), or nullptr.
+    const proto::ProtoObject* deoptForwardOf(proto::ProtoContext* ctx,
+                                             const proto::ProtoObject* v) const;
+    // The value of local `slot` through its forward, if it has one.
+    const proto::ProtoObject* readForwardedLocal(proto::ProtoContext* ctx, const Frame& f,
+                                                 unsigned int slot) const;
+    // Stores into local `slot`, through its forward if it has one.
+    void writeForwardedLocal(proto::ProtoContext* ctx, const Frame& f, unsigned int slot,
+                             const proto::ProtoObject* v);
+
     void storeInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t nameConst,
                       const proto::ProtoObject* val);
     void flushInstVarGroup(proto::ProtoContext* ctx, Frame& f);

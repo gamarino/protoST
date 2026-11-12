@@ -59,18 +59,16 @@ module main.0: <block> (not inlined)
   constants:
     #0   string    'big'
   code:
-      0  DEOPT_CHECK        0     ; none
-      1  PUSH_CONST         0     ; 'big'
-      2  RETURN_TOP
+      0  PUSH_CONST         0     ; 'big'
+      1  RETURN_TOP
 
 module main.1: <block> (not inlined)
   args 0, locals 0, stack 48 (deepest 1)
   constants:
     #0   string    'small'
   code:
-      0  DEOPT_CHECK        0     ; none
-      1  PUSH_CONST         0     ; 'small'
-      2  RETURN_TOP
+      0  PUSH_CONST         0     ; 'small'
+      1  RETURN_TOP
 
 module main.2: <block> (not inlined)
   args 0, locals 0, stack 48 (deepest 1)
@@ -78,9 +76,8 @@ module main.2: <block> (not inlined)
     #0   string    'odd'
     #1   symbol    #printNl
   code:
-      0  DEOPT_CHECK        0     ; none
-      1  PUSH_CONST         0     ; 'odd'
-      2  SEND_UNARY         1     ; #printNl
-      3  RETURN_TOP
+      0  PUSH_CONST         0     ; 'odd'
+      1  SEND_UNARY         1     ; #printNl
+      2  RETURN_TOP
 'big'
 'odd'

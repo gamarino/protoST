@@ -188,23 +188,32 @@ minor release, so the two services arrive in 0.5.0.
   wrote, with closures for the block literals: its own method, or
   `doesNotUnderstand:` with the whole Message, whose resumed value is the
   value of the expression. The closures are compiled from the same literals
-  without inlining (a second copy of each, used only on this path); the
-  method's variables they use are carried by a box for the duration of the
-  send and copied back when it returns, so a write in the block is seen by
-  the method, and `^` in the block returns from the method. A closure the
-  receiver keeps and evaluates *after* the send returned signals an `Error`
-  (the method owns its variables again by then; a block held in a variable
-  has no such limit). A Boolean receiver costs what it did: the guard is a
-  new opcode `JUMP_IF_NOT_BOOL` (45) to the out-of-line path, which uses
-  four more (`DEOPT_ENTER`, `PUSH_DEOPT_BLOCK`, `DEOPT_EXIT`, `DEOPT_CHECK`,
-  46-49; `docs/VM.md` 1.4). Pharo differs here: since Pharo 10 a
+  without inlining (a second copy of each, used only on this path), and
+  they are real closures: the method's temporaries they use move into
+  per-scope dictionaries that the frame reaches through forwards left in
+  its slots, so a write on either side is seen by the other, `^` in the
+  block returns from the method, and a closure the receiver keeps and
+  evaluates later, or on another thread, keeps working. Each entry of an
+  inlined block with temporaries gets its own variables. A Boolean receiver
+  costs what it did: the guard is a new opcode `JUMP_IF_NOT_BOOL` (45) to
+  the out-of-line path, which uses three more (`DEOPT_ENTER`,
+  `PUSH_DEOPT_BLOCK`, `DEOPT_EXIT`, 46-48; `docs/VM.md` 1.4); `RESET_LOCAL`
+  (49) starts the fresh variables of each entry of an inlined block, and
+  the accesses of the temporaries a closure may share are
+  `PUSH_SHARED_LOCAL` / `STORE_SHARED_LOCAL` (59, 60), so no other local
+  access pays for the sharing. Pharo differs here: since Pharo 10 a
   non-Boolean receiver of an inlined conditional signals
   `NonBooleanReceiver` ("proceed for truth") and the receiver's own method
   is not run; Pharo 9 re-sent the expression without inlining
   (`mustBeBooleanDeOptimizeIn:`), which is what protoST does. Tests:
   `08-exceptions/inlined-conditional-non-boolean-like-send.st` (failed
   before: 5 of 11 rows), `inlined-conditional-reaches-receiver-method.st`
-  (failed before), `inlined-conditional-kept-block-is-refused.st`.
+  (failed before), `06-blocks/inlined-conditional-kept-block-shares-variables.st`
+  (10 rows; a kept closure with or without temporaries, frame writes after
+  the send, per-iteration variables, shadowing; until fix round 1 of the
+  interpreter-overhead work a kept closure that used a method variable
+  signalled an `Error`, and one with temporaries inside an inlined block
+  read nil).
 - **One rule for a loop condition that is not a Boolean.** The four loop
   forms disagreed: an inlined `whileTrue:` / `whileFalse:` sent
   `doesNotUnderstand: whileTrue:` to the condition's value (which is not the
@@ -440,6 +449,12 @@ minor release, so the two services arrive in 0.5.0.
   captures is not inlined`, `Debugger: an inlined block's temporary is shown
   by its name inside the block` (failed before). LANGUAGE.md §6.4, VM.md
   "Inlined blocks".
+  The temporaries of sibling inlined blocks share their hidden slots (a
+  method with sixty one-temporary arms recurses as deep as without them:
+  `06-blocks/inlined-block-temporaries-share-slots.st`, which overflowed at
+  about 9,050 frames when each arm had its own slot). A traceback no longer
+  shows a `[] in` frame for a block that is now inlined: the error is
+  reported in the enclosing method, at the block's line.
 - **The collection primitives no longer intern their storage keys on every
   call.** `OrderedCollection`, `Set`, `Dictionary`, `Interval` and
   `Association` primitives looked up `__data__`, `__size__` and the

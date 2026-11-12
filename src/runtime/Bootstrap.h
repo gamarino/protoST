@@ -222,6 +222,12 @@ struct Bootstrap {
         const proto::ProtoString* intervalStep    = nullptr;  // __interval_step__
         const proto::ProtoString* assocKey        = nullptr;  // __assoc_key__
         const proto::ProtoString* assocValue      = nullptr;  // __assoc_value__
+        // A frame slot whose variable a de-optimised closure shares holds a
+        // forward: an object owning these two keys, the scope dictionary that
+        // now holds the variable and the variable's name (ExecutionEngine.cpp,
+        // "De-optimisation of inlined value conditionals").
+        const proto::ProtoString* deoptDict       = nullptr;  // __deopt_dict__
+        const proto::ProtoString* deoptName       = nullptr;  // __deopt_name__
     } sym;
 };
 

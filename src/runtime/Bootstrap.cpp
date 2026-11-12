@@ -280,6 +280,8 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     out.sym.intervalStep    = S("__interval_step__");
     out.sym.assocKey        = S("__assoc_key__");
     out.sym.assocValue      = S("__assoc_value__");
+    out.sym.deoptDict       = S("__deopt_dict__");
+    out.sym.deoptName       = S("__deopt_name__");
 
     // K14, D52: every built-in class gets its metaclass now, so the class-side
     // primitives (Array new:, Float pi, ...) can be bound on it. The unset

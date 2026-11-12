@@ -1322,10 +1322,12 @@ class's own `ifNil:` is not run. When the receiver of one of the six
 conditionals is not a Boolean, the message is sent for real, with closures
 for the block literals (since 0.10.0): a class that defines `ifTrue:` or
 `and:` answers it, and a `doesNotUnderstand:` override receives the whole
-Message (a forwarding proxy forwards it). Those closures share the method's
-variables while the send runs; one that the receiver keeps and evaluates
-after the send has returned signals an `Error` if it uses a variable of the
-method (pass a block held in a variable when the receiver keeps it). This
+Message (a forwarding proxy forwards it). Those closures are real ones: they
+share the method's variables with the method for as long as either lives,
+so a receiver may keep one and evaluate it later, on any thread, and each
+entry of an inlined block with temporaries has its own variables, as each
+activation of a block would (before fix round 1 of 0.10.0 a kept closure that
+used a variable of the method signalled an `Error`). This
 differs from Pharo 10 and later, where such a receiver gets
 `NonBooleanReceiver` and its own method is not run; Pharo 9 re-sent the
 expression without inlining, as protoST does.
