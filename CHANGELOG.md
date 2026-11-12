@@ -466,7 +466,10 @@ minor release, so the two services arrive in 0.5.0.
   call (UTF-8 validation, `strlen`, hash, compare); the keys are now
   interned once per runtime in `Bootstrap::sym`, as `Array>>at:` already
   did. `oc addLast: i. oc removeLast` went from 8,374 to 6,251 instructions
-  per iteration; the symbol-table probe was about 4 % of `PBAvl check:`.
+  per iteration; the symbol-table probe was about 4 % of `PBAvl check:`. The
+  other fixed keys interned per call on hot paths (`=`, `hash`, `<=`,
+  `initialize`, `__elementsForIteration`, `__data__` outside the
+  collections) now come from `Bootstrap::sym` as well.
 - **`and:` and `or:` with a literal block are compiled inline (protoBaseST
   review P2).** Like `ifTrue:`, a zero-argument block without temporaries
   is no longer a closure evaluated by a primitive in a nested engine: its

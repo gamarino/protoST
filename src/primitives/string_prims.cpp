@@ -437,7 +437,7 @@ const proto::ProtoObject* splitToArray(STRuntime& rt, proto::ProtoContext* ctx,
     }
     const proto::ProtoObject* arr = rt.bootstrap().arrayProto->newChild(ctx, /*isMutable=*/true);
     TransientPin pinArr(ctx, arr);
-    arr->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__data__"), parts->asObject(ctx));
+    arr->setAttribute(ctx, rt.bootstrap().sym.data, parts->asObject(ctx));
     return arr;
 }
 

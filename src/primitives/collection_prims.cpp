@@ -111,7 +111,7 @@ const proto::ProtoObject* instantiateAs(STRuntime& rt, proto::ProtoContext* ctx,
             static_cast<Sink*>(self)->out->setAttribute(c, key, value);
         });
     bool understood = false;
-    sendDynamic(rt, ctx, out, proto::ProtoString::createSymbol(ctx, "initialize"),
+    sendDynamic(rt, ctx, out, rt.bootstrap().sym.initialize,
                 nullptr, 0, &understood);
     return out;
 }
@@ -207,7 +207,7 @@ bool stKeyEquals(proto::ProtoContext* ctx, const proto::ProtoObject* a,
         bool understood = false;
         const proto::ProtoObject* args1[1] = { b };
         const proto::ProtoObject* r = sendDynamic(
-            *rt, ctx, a, proto::ProtoString::createSymbol(ctx, "="), args1, 1, &understood);
+            *rt, ctx, a, rt->bootstrap().sym.equal, args1, 1, &understood);
         if (understood) return r == PROTO_TRUE;
     }
     // A native key against an object with its own =, such as a Float against
@@ -216,7 +216,7 @@ bool stKeyEquals(proto::ProtoContext* ctx, const proto::ProtoObject* a,
         bool understood = false;
         const proto::ProtoObject* args1[1] = { a };
         const proto::ProtoObject* r = sendDynamic(
-            *rt, ctx, b, proto::ProtoString::createSymbol(ctx, "="), args1, 1, &understood);
+            *rt, ctx, b, rt->bootstrap().sym.equal, args1, 1, &understood);
         if (understood) return r == PROTO_TRUE;
     }
     return a->partialCompare(ctx, b) == 0;
@@ -274,7 +274,7 @@ proto::proto_ulong stKeyHash(proto::ProtoContext* ctx, const proto::ProtoObject*
     if (STRuntime* rt = runtimeForUserEquality(ctx, key)) {
         bool understood = false;
         const proto::ProtoObject* h = sendDynamic(
-            *rt, ctx, key, proto::ProtoString::createSymbol(ctx, "hash"), nullptr, 0, &understood);
+            *rt, ctx, key, rt->bootstrap().sym.hash, nullptr, 0, &understood);
         // Any Integer is a usable hash, negative ones included (the numeric
         // hash of a negative number is negative). A LargeInteger is reduced
         // as the hash of that Integer, so equal hashes stay equal.
@@ -732,7 +732,7 @@ bool forEachElement(STRuntime& rt, proto::ProtoContext* ctx,
     bool understood = false;
     const proto::ProtoObject* elements = sendDynamic(
         rt, ctx, collection,
-        proto::ProtoString::createSymbol(ctx, "__elementsForIteration"),
+        rt.bootstrap().sym.elementsForIteration,
         nullptr, 0, &understood);
     if (understood && elements && isListBacked(rt, ctx, elements)) {
         TransientPin pinElements(ctx, elements);
@@ -2182,7 +2182,7 @@ const proto::ProtoObject* sendDynamicForSort(STRuntime& rt, proto::ProtoContext*
     bool understood = false;
     const proto::ProtoObject* args1[1] = { arg };
     const proto::ProtoObject* r = sendDynamic(
-        rt, ctx, recv, proto::ProtoString::createSymbol(ctx, "<="), args1, 1, &understood);
+        rt, ctx, recv, rt.bootstrap().sym.lessOrEqual, args1, 1, &understood);
     if (!understood) throw NativeError("sort: elements do not understand <=");
     return r;
 }

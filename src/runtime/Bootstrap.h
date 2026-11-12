@@ -228,6 +228,14 @@ struct Bootstrap {
         // "De-optimisation of inlined value conditionals").
         const proto::ProtoString* deoptDict       = nullptr;  // __deopt_dict__
         const proto::ProtoString* deoptName       = nullptr;  // __deopt_name__
+        // Selectors the primitives send on every call of some paths (hashed
+        // collections, sort, instance creation, iteration of a user
+        // collection), interned once (0.10.0).
+        const proto::ProtoString* equal           = nullptr;  // =
+        const proto::ProtoString* hash            = nullptr;  // hash
+        const proto::ProtoString* lessOrEqual     = nullptr;  // <=
+        const proto::ProtoString* initialize      = nullptr;  // initialize
+        const proto::ProtoString* elementsForIteration = nullptr;  // __elementsForIteration
     } sym;
 };
 
