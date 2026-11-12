@@ -73,9 +73,10 @@ private:
 // no runtime of its own, registered once. It serves the process's sole live
 // runtime: tryLoad delegates to that runtime's provider, and getGUID answers
 // that provider's GUID, so the module cache entries made through the alias
-// are the runtime's own and die with it (K1). With no live runtime it answers
-// a GUID nothing is stored under and loads nothing; with two it answers that
-// GUID too and refuses the load as ambiguous.
+// are the runtime's own and die with it (K1). With no live runtime, or with
+// two, every call answers a new GUID that no other call ever answers, so
+// nothing stored under it can be found again; tryLoad then loads nothing (no
+// runtime) or refuses the load as ambiguous (two).
 //
 // protoCore reads getGUID before it calls tryLoad. A runtime constructed or
 // destroyed between the two calls can make them disagree; constructing or
@@ -90,7 +91,6 @@ public:
     const std::string& getAlias() const override { return alias_; }
 
 private:
-    std::string noRuntimeGuid_;
     std::string alias_;
 };
 

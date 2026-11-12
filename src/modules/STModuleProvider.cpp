@@ -93,13 +93,21 @@ STModuleProvider::STModuleProvider(unsigned long long serial)
 {}
 
 STDispatchProvider::STDispatchProvider()
-    : noRuntimeGuid_("protoST-source-v1#none")
-    , alias_("st")
+    : alias_("st")
 {}
 
 const std::string& STDispatchProvider::getGUID() const {
     if (STModuleProvider* p = soleSTProvider()) return p->getGUID();
-    return noRuntimeGuid_;
+    // No single live runtime: a GUID no other call ever answers, so an entry
+    // protoCore might store under it can never be found again. The number is
+    // process-wide, so no two calls collide on any thread; the text lives in
+    // the calling thread's buffer, which protoCore copies into the module
+    // identity before this thread calls again.
+    static std::atomic<unsigned long long> s_unmatched{0};
+    thread_local std::string buffer;
+    buffer = "protoST-source-v1#none#" +
+             std::to_string(s_unmatched.fetch_add(1, std::memory_order_relaxed));
+    return buffer;
 }
 
 const proto::ProtoObject*

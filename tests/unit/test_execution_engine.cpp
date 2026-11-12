@@ -887,6 +887,29 @@ TEST_CASE("K1: provider:st serves the live runtime after another was destroyed",
     unsetenv("STPATH");
 }
 
+TEST_CASE("K1: with no live runtime provider:st answers a GUID no call repeats",
+          "[engine][modules][umd]") {
+    // Constructing a runtime registers the dispatcher; once it is destroyed
+    // there is no live runtime. Each getGUID call then answers a new GUID,
+    // so no cache entry stored under one is ever found again, and tryLoad
+    // loads nothing.
+    { protoST::STRuntime once; }
+    REQUIRE(protoST::registeredSTRuntimeCount() == 0);
+    proto::ModuleProvider* alias =
+        proto::ProviderRegistry::instance().getProviderForSpec("provider:st");
+    REQUIRE(alias != nullptr);
+    const std::string first = alias->getGUID();
+    const std::string second = alias->getGUID();
+    REQUIRE(first != second);
+    std::string fromOtherThread;
+    std::thread([&] { fromOtherThread = alias->getGUID(); }).join();
+    REQUIRE(fromOtherThread != first);
+    REQUIRE(fromOtherThread != second);
+    proto::ProtoSpace foreign;
+    proto::ProtoContext foreignCtx(&foreign, nullptr);
+    REQUIRE(alias->tryLoad("counter_lib", &foreignCtx) == PROTO_NONE);
+}
+
 // ---------------------------------------------------------------------------
 // F6 v3 B: snapshot/restore round-trip for the engine's frame stack.
 //
