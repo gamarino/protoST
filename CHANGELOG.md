@@ -119,8 +119,8 @@ minor release, so the two services arrive in 0.5.0.
 ### Fixed
 
 - **`Array new:` with a size the heap can never take signals an Error
-  (reviews R3-2, R4-1, R5-1, R6-1).** `Array new: 3000000000` (a typo, say)
-  built an 8n-byte vector and then the list, and ended in protoCore's
+  (reviews R3-2, R4-1, R5-1, R6-1, R7-1).** `Array new: 3000000000` (a typo,
+  say) built an 8n-byte vector and then the list, and ended in protoCore's
   out-of-memory exit or the system's OOM killer. Before allocating, `new:`
   now refuses a size beyond protoCore's list limit (2^32 - 1), or one whose
   build cannot fit even in an empty heap. protoCore builds an n-element list
@@ -128,22 +128,28 @@ minor release, so the two services arrive in 0.5.0.
   (measured: under a 400,000-cell limit, 22,500 elements build and 23,000 do
   not; at 4,000,000 cells, 200,000 and 202,000); the estimate, n times the
   bit width of n, stays below that cost, and a size is refused only when it
-  exceeds the whole heap ceiling (`STRuntime::heapCeilingCells`). Nothing
-  that fits in an empty heap is refused: whether it fits now depends on what
-  is live now, which protoST cannot know without a collection. Subtracting
-  the cells handed out before the first collection (garbage included), or
-  the live set of the last one (structures dropped since included), refused
-  sizes that build (reviews R5-1, R6-1). So the check errs only towards
-  letting sizes through: those that do not fit still end in protoCore's
-  out-of-memory exit, as before (from 202,000 elements up to the refusal
-  at about 222,000 at a 4,000,000-cell limit, and smaller sizes when other
-  data is live). An exact answer is queued as protoCore follow-ups (a query
-  of the cells allocatable after a collection, a catchable out-of-memory).
-  A failing C++ allocation is an Error too, not a terminate. Pharo signals
-  `OutOfMemory`; protoST has no such class and signals `Error`. Tests
-  `12-builtins/array-new-unholdable-size-signals.st`, `cli_array_new_headroom`
-  (under a small fixed limit and a small adaptive budget, and sizes that fit
-  once garbage, or a structure dropped after a collection, is reclaimed).
+  exceeds the whole heap ceiling: the limit (`STRuntime::heapCeilingCells`),
+  or the heap protoCore already reserved when that is larger, since
+  protoCore does not enforce a limit below the 262,144 cells it reserves
+  while bootstrapping (review R7-1: `Array new: 8000` was refused under a
+  100,000-cell limit and builds). Nothing that fits in an empty heap is
+  refused: whether it fits now depends on what is live now, which protoST
+  cannot know without a collection. Subtracting the cells handed out before
+  the first collection (garbage included), or the live set of the last one
+  (structures dropped since included), refused sizes that build (reviews
+  R5-1, R6-1). So the check errs only towards letting sizes through: those
+  that do not fit still end in protoCore's out-of-memory exit, as before
+  (from 202,000 elements up to the refusal at about 222,000 at a
+  4,000,000-cell limit, and smaller sizes when other data is live). An exact
+  answer is queued as protoCore follow-ups (a query of the cells allocatable
+  after a collection, a catchable out-of-memory). A failing C++ allocation
+  is an Error too, not a terminate. Pharo signals `OutOfMemory`; protoST has
+  no such class and signals `Error`. Tests
+  `12-builtins/array-new-unholdable-size-signals.st`,
+  `cli_array_new_headroom` (under a small fixed limit and a small adaptive
+  budget, and sizes that fit once garbage, or a structure dropped after a
+  collection, is reclaimed, and a size that fits the reserved heap under a
+  smaller limit).
 - **An unhandled error inside an inlined nil-test arm has one frame less in
   its trace.** The arm is no longer a block, so the `at <block>` line is gone
   (tutorial 15 updated).

@@ -41,4 +41,14 @@ keep := nil.
 [ (Array new: 150000) size ] on: Error do: [ :e | e messageText ]."
 out=$(PROTOCORE_ADAPTIVE_HEAP=0 PROTOCORE_HEAP_LIMIT_CELLS=4000000 timeout 120 "$PROTOST" -e "$prog" 2>&1); rc=$?
 [[ $rc -eq 0 && "$out" == "150000" ]] || { echo "FAIL (structure dropped after a collection): rc=$rc"; echo "$out" | tail -3; exit 1; }
+# Under a limit below the heap protoCore reserved while bootstrapping, the
+# reserved heap is the ceiling: protoCore never grows past it nor shrinks
+# below it, and collects within it (review R7-1). Array new: 8000 (about
+# 104,000 cells) builds under a 100,000-cell limit and must not be refused;
+# a size beyond the reserved heap still is.
+prog="| try | try := [ :n | [ (Array new: n) size ] on: Error do: [ :e | e messageText ] ].
+{ try value: 8000. try value: 1000000 }."
+out=$(PROTOCORE_ADAPTIVE_HEAP=0 PROTOCORE_HEAP_LIMIT_CELLS=100000 timeout 120 "$PROTOST" -e "$prog" 2>&1); rc=$?
+[[ $rc -eq 0 && "$out" == "#(8000 'Array new: 1000000 elements need about "*"more than the whole heap can hold"*"')" ]] \
+  || { echo "FAIL (limit below the reserved heap): rc=$rc"; echo "$out" | tail -3; exit 1; }
 echo OK

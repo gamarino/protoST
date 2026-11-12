@@ -878,7 +878,8 @@ const proto::ProtoObject* prim_Array_classNew(STRuntime& rt, proto::ProtoContext
     //      bit_width(n) + 2 cells per element at the boundary, so the
     //      estimate n * bit_width(n) stays below the real cost, and a size
     //      whose estimate exceeds the whole ceiling cannot fit even in an
-    //      empty heap. Only that is refused.
+    //      empty heap. Only that is refused. The ceiling is the larger of
+    //      the limit and the heap already reserved (see below).
     // Nothing else is: whether a size fits *now* depends on what is live
     // now, and protoST cannot know that without a synchronous collection.
     // The live set of the last collection counts structures dropped since,
@@ -901,7 +902,16 @@ const proto::ProtoObject* prim_Array_classNew(STRuntime& rt, proto::ProtoContext
     // 28f8b4b took on every new:. Above 8 it is one uncontended acquisition
     // next to a build of n * log2(n) cell allocations.
     if (n > 8) {
-        const long long ceiling = STRuntime::heapCeilingCells(ctx);
+        // A limit below the heap protoCore reserved before the limit was set
+        // (while bootstrapping, 262,144 cells measured) is not enforced:
+        // protoCore keeps the reserved cells, never grows past them, and
+        // collects within them, so they are the real ceiling (review R7-1).
+        // heapSize is an int protoCore updates with relaxed atomics; read it
+        // the same way, without the lock.
+        const long long reserved = static_cast<long long>(
+            __atomic_load_n(&ctx->space->heapSize, __ATOMIC_RELAXED));
+        const long long limit = STRuntime::heapCeilingCells(ctx);
+        const long long ceiling = limit > 0 ? std::max(limit, reserved) : limit;
         const long long need =
             n * static_cast<long long>(std::bit_width(static_cast<unsigned long long>(n)));
         if (ceiling > 0 && need > ceiling)
