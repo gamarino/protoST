@@ -800,7 +800,9 @@ observe: it sees all of a run or none of it, never some of its assignments
 (10.6). Which assignments of a run survive if the thread is terminated in the
 middle of it is indeterminate. Under the debugger (`protost -d`, the DAP
 server) every assignment is published on its own, so stepping shows each one.
-`PROTOST_IVAR_GROUPS=off` in the environment turns runs off.
+`PROTOST_IVAR_GROUPS=off` in the environment turns runs off. A method whose
+instance variables are found when it is installed, not when it is compiled
+(§4.10), publishes each assignment on its own (STATUS D57).
 
 ### 4.6 `self` and `super`
 
@@ -1005,13 +1007,17 @@ This applies to a method whose class's chain — its superclasses and its
 imported class, a class built by the message form (`(m Base) subclass: #Kid
 instanceVariableNames: 'own'`), a class whose `uses:` clause is not a literal
 list of class names, and a method added to an imported class. In its methods
-a lowercase name that is not an argument, a temporary or a variable the
-compiler knows is looked up, when the method is installed, among the instance
-variables (for a class-side method, the class-instance variables) and then
-the class variables that the class and its ancestors declare, and the method
-reads and writes it exactly as if the compiler had known it. A name the class
-does not declare signals `Error` (`undeclared variable 'zork' in Kid (line
-9)`) and the method is not installed; so does an argument or temporary that
+a name that is not an argument, a temporary or a variable the compiler knows
+is looked up, when the method is installed, among the instance variables (for
+a class-side method, the class-instance variables) and then the class
+variables that the class and its ancestors declare, whatever its spelling
+(`secret`, `_x`, `Y`), and the method reads and writes it as if the compiler
+had known it, with one difference: a run of assignments to such variables is
+not published as one version (§4.5; STATUS D57). A read of a name the class
+does not declare that does not start with a lowercase letter is a global, as
+in any method. Any other name the class does not declare signals `Error`
+(`undeclared variable 'zork' in Kid (line 9)`) and the method is not
+installed; so does an argument or temporary that
 reuses the name of an inherited instance variable. These are the compiler's
 own errors, reported at a different time: when the definition runs rather
 than before the script starts, so the statements before it have run. A method
@@ -2145,8 +2151,20 @@ its frames on the worker's stack). A worker at that limit runs no more actor
 messages and counts as a blocked worker: the pool adds a worker for the other
 actors, as it does for a worker blocked in I/O, up to 256 workers. A program
 whose nested waits need more than that — about 4,000 at once — cannot
-proceed, and the wait signals an `Error` whose text starts with `deadlock:
-too many nested waits` instead of hanging. Waiting outside a block (at the
+proceed, and one of the waits signals an `Error` whose text starts with
+`deadlock: too many nested waits` instead of hanging, but only when nothing
+can still end a wait: every worker waits, at the limit, for an actor message
+that has not started, the pool cannot grow, no timer is pending, no task is
+queued or running, and the program's own thread is parked in its `wait`. The
+error is never signalled while the program can still finish. In the cases
+the runtime cannot prove stuck, the program waits for ever instead (STATUS
+D56): when the program's thread is not parked in a `wait` (the REPL between
+inputs, a loop that polls), a worker is blocked in I/O or `sleep:` that never
+ends, a timer is pending whose callback never releases anything, a wait is
+for a Future that no actor's message settles (`Future new`), protoST is
+called from another runtime or another thread, or a debugger is attached.
+While it waits there, every worker polls (about every 200 µs), and the
+workers added stay until the program ends. Waiting outside a block (at the
 top level of the method) suspends the actor and uses no worker.
 
 ### 10.5 `self` inside an actor
