@@ -54,7 +54,10 @@ private:
 //
 // STRuntime registers itself in its constructor, before any thread that can
 // import is started, and unregisters in its destructor, after those threads
-// are joined. The registry lock is held only for the container operation.
+// are joined (or when its construction fails). A space hosts one protoST
+// runtime: registering a second one for a space throws std::logic_error, since
+// a primitive finds its runtime by its context's space (primitives.h,
+// runtimeOf). The registry lock is held only for the container operation.
 void registerSTRuntime(const proto::ProtoSpace* space, STRuntime* rt);
 void unregisterSTRuntime(const proto::ProtoSpace* space, STRuntime* rt);
 STRuntime* stRuntimeForSpace(const proto::ProtoSpace* space);

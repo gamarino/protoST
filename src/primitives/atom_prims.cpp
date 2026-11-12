@@ -108,17 +108,16 @@ const proto::ProtoObject* prim_Atom_swap(STRuntime& rt, proto::ProtoContext* ctx
 } // anon
 
 void installAtomPrimitives(STRuntime& rt) {
-    auto& reg = rt.registry();
     auto& b   = rt.bootstrap();
     // `on:` is class side: `Atom on: 0` (D52).
     bindClassPrimitive(rt, b.atomProto, "on:",
-                  reg.registerPrim(prim_Atom_on));
+                  primitiveMethod<prim_Atom_on>);
     bindPrimitive(rt, b.atomProto, "value",
-                  reg.registerPrim(prim_Atom_value));
+                  primitiveMethod<prim_Atom_value>);
     bindPrimitive(rt, b.atomProto, "value:ifCurrent:",
-                  reg.registerPrim(prim_Atom_cas));
+                  primitiveMethod<prim_Atom_cas>);
     bindPrimitive(rt, b.atomProto, "swap:",
-                  reg.registerPrim(prim_Atom_swap));
+                  primitiveMethod<prim_Atom_swap>);
 }
 
 } // namespace protoST

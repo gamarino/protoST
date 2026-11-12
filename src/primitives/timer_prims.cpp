@@ -114,12 +114,11 @@ void runTimerTask(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObj
 }
 
 void installTimerPrimitives(STRuntime& rt) {
-    auto& reg = rt.registry();
     auto& b   = rt.bootstrap();
     bindPrimitive(rt, b.futureProto, "__resolveNilAfter:",
-                  reg.registerPrim(prim_Future_resolveNilAfter));
+                  primitiveMethod<prim_Future_resolveNilAfter>);
     bindPrimitive(rt, b.futureProto, "__rejectTimeoutAfter:",
-                  reg.registerPrim(prim_Future_rejectTimeoutAfter));
+                  primitiveMethod<prim_Future_rejectTimeoutAfter>);
 }
 
 } // namespace protoST

@@ -96,7 +96,7 @@ struct Host {
         // Held across the allocations below (bindPrimitive, createSymbol)
         // until the global keeps it.
         protoST::TransientPin pinProbe(ctx, probe);
-        protoST::bindPrimitive(rt, probe, "raise:", rt.registry().registerPrim(probeRaise));
+        protoST::bindPrimitive(rt, probe, "raise:", protoST::primitiveMethod<probeRaise>);
         rt.globals()->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "Probe"), probe);
     }
 

@@ -203,31 +203,30 @@ const proto::ProtoObject* prim_Block_repeat(STRuntime& rt, proto::ProtoContext* 
 } // anon
 
 void installBlockPrimitives(STRuntime& rt) {
-    auto& reg = rt.registry();
     auto& b   = rt.bootstrap();
-    int idx = reg.registerPrim(prim_Block_value);
-    bindPrimitive(rt, b.blockProto, "numArgs", reg.registerPrim(prim_Block_numArgs));
+    const proto::ProtoMethod blockValue = primitiveMethod<prim_Block_value>;
+    bindPrimitive(rt, b.blockProto, "numArgs", primitiveMethod<prim_Block_numArgs>);
     bindPrimitive(rt, b.blockProto, "valueWithArguments:",
-                  reg.registerPrim(prim_Block_valueWithArguments));
-    bindPrimitive(rt, b.blockProto, "value",                    idx);
-    bindPrimitive(rt, b.blockProto, "value:",                   idx);
-    bindPrimitive(rt, b.blockProto, "value:value:",             idx);
-    bindPrimitive(rt, b.blockProto, "value:value:value:",       idx);
-    bindPrimitive(rt, b.blockProto, "value:value:value:value:", idx);
+                  primitiveMethod<prim_Block_valueWithArguments>);
+    bindPrimitive(rt, b.blockProto, "value",                    blockValue);
+    bindPrimitive(rt, b.blockProto, "value:",                   blockValue);
+    bindPrimitive(rt, b.blockProto, "value:value:",             blockValue);
+    bindPrimitive(rt, b.blockProto, "value:value:value:",       blockValue);
+    bindPrimitive(rt, b.blockProto, "value:value:value:value:", blockValue);
 
-    int wIdx = reg.registerPrim(prim_Block_whileTrue);
+    const proto::ProtoMethod whileTrue = primitiveMethod<prim_Block_whileTrue>;
     // Functional but not exercised by F2 tests — needs closures (F3+) for the
     // typical loop idiom over mutable counters.
-    bindPrimitive(rt, b.blockProto, "whileTrue:", wIdx);
+    bindPrimitive(rt, b.blockProto, "whileTrue:", whileTrue);
     // D9: the rest of the block-side loop protocol.
     bindPrimitive(rt, b.blockProto, "whileFalse:",
-                  reg.registerPrim(prim_Block_whileFalse));
+                  primitiveMethod<prim_Block_whileFalse>);
     bindPrimitive(rt, b.blockProto, "whileTrue",
-                  reg.registerPrim(prim_Block_whileTrueNoArg));
+                  primitiveMethod<prim_Block_whileTrueNoArg>);
     bindPrimitive(rt, b.blockProto, "whileFalse",
-                  reg.registerPrim(prim_Block_whileFalseNoArg));
+                  primitiveMethod<prim_Block_whileFalseNoArg>);
     bindPrimitive(rt, b.blockProto, "repeat",
-                  reg.registerPrim(prim_Block_repeat));
+                  primitiveMethod<prim_Block_repeat>);
 }
 
 } // namespace protoST

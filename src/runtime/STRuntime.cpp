@@ -2,7 +2,6 @@
 #include "runtime/NativeError.h"
 #include "runtime/ListIndex.h"
 #include "protoST/STRuntime.h"
-#include "runtime/PrimitiveMarker.h"
 #include "protoST/primitives.h"
 #include "ExecutionEngine.h"
 #include "FutureYield.h"
@@ -157,17 +156,14 @@ namespace {
     thread_local const proto::ProtoObject* g_currentActor = nullptr;
 }
 
-struct PrimitiveRegistry::Impl { std::vector<PrimFn> fns; };
-PrimitiveRegistry::PrimitiveRegistry() : impl(std::make_unique<Impl>()) {}
-PrimitiveRegistry::~PrimitiveRegistry() = default;
-int PrimitiveRegistry::registerPrim(PrimFn fn) {
-    impl->fns.push_back(fn);
-    return static_cast<int>(impl->fns.size()) - 1;
+namespace detail {
+void refuseNamedArguments(proto::ProtoContext*) {
+    throw NativeError("a primitive method takes no named arguments");
 }
-PrimFn PrimitiveRegistry::at(int i) const { return impl->fns.at(i); }
-size_t PrimitiveRegistry::size() const   { return impl->fns.size(); }
+} // namespace detail
 
-void bindPrimitive(STRuntime& rt, const proto::ProtoObject* proto, const char* selector, int idx) {
+void bindPrimitive(STRuntime& rt, const proto::ProtoObject* proto, const char* selector,
+                   proto::ProtoMethod method) {
     auto* ctx = rt.rootCtx();
     // F6 v3 E5: intern the selector as a STRONG SYMBOL via createSymbol. A
     // strong symbol is eternal — recorded in the per-space SymbolTable and
@@ -180,13 +176,18 @@ void bindPrimitive(STRuntime& rt, const proto::ProtoObject* proto, const char* s
     // (ExecutionEngine.cpp) now also interns selectors via createSymbol, so
     // both sides agree on the same eternal symbol.
     auto* sel = proto::ProtoString::createSymbol(ctx, selector);
-    // Tag bit 62 marks "this is a primitive marker, not a real method object".
-    auto* val = ctx->fromLong(encodePrimitiveMarker(static_cast<int>(idx)));
+    // A primitive is a native method cell. Its receiver is never bound: the
+    // send passes it as `self`, and a cell bound to the prototype it is
+    // installed on would be a reference cycle protoCore never collects
+    // (ProtoContext::fromMethod). The cell is reachable from the prototype,
+    // which keeps it alive.
+    const proto::ProtoObject* val = ctx->fromMethod(nullptr, method);
     const_cast<proto::ProtoObject*>(proto)->setAttribute(ctx, sel, val);
 }
 
-void bindClassPrimitive(STRuntime& rt, const proto::ProtoObject* cls, const char* selector, int idx) {
-    bindPrimitive(rt, ensureMetaclass(rt.bootstrap(), rt.rootCtx(), cls), selector, idx);
+void bindClassPrimitive(STRuntime& rt, const proto::ProtoObject* cls, const char* selector,
+                        proto::ProtoMethod method) {
+    bindPrimitive(rt, ensureMetaclass(rt.bootstrap(), rt.rootCtx(), cls), selector, method);
 }
 
 // F6 v3 E2b: derive a unique attribute key from an object pointer. The live
@@ -264,7 +265,6 @@ struct STRuntime::Impl {
     proto::ProtoContext* rootCtx    = nullptr;
     proto::ProtoRootSet* asyncRoots = nullptr;
     Bootstrap            bootstrap;
-    PrimitiveRegistry    registry;
     DebuggerRuntime      debugger;
     // F4-U1: mutable globals namespace, used by PUSH_GLOBAL / STORE_GLOBAL.
     // A mutable child of objectProto so setAttribute updates this object in
@@ -771,6 +771,22 @@ STRuntime::STRuntime(proto::ProtoSpace& hostSpace) : impl_(std::make_unique<Impl
 bool STRuntime::ownsSpace() const { return impl_->ownsSpace(); }
 
 void STRuntime::construct() {
+    // S6: associate this runtime with its ProtoSpace, first: the provider's
+    // tryLoad() dispatches back into our findModuleFile / importModuleFile
+    // helpers from ANY thread running on this space, and a primitive finds
+    // its runtime by its context's space (primitives.h, runtimeOf), so a
+    // space hosts one protoST runtime and a second one is refused here,
+    // before anything is installed in the space. Registered before the
+    // worker pool below is started, so no import can miss it; unregistered
+    // again if construction fails, since the destructor will not run.
+    registerSTRuntime(&impl_->space, this);
+    struct RegistrationGuard {
+        const proto::ProtoSpace* space;
+        STRuntime* rt;
+        bool committed = false;
+        ~RegistrationGuard() { if (!committed) unregisterSTRuntime(space, rt); }
+    } registration{&impl_->space, this};
+
     installIntPrimitives(*this);
     installMathPrimitives(*this);
     installTimePrimitives(*this);
@@ -805,12 +821,6 @@ void STRuntime::construct() {
         proto::ProviderRegistry::instance().registerProvider(
             std::make_unique<STModuleProvider>());
     });
-
-    // S6: associate this runtime with its ProtoSpace so the provider's
-    // tryLoad() dispatches back into our findModuleFile / importModuleFile
-    // helpers from ANY thread running on this space. Registered before the
-    // worker pool below is started, so no import can miss it.
-    registerSTRuntime(&impl_->space, this);
 
     // Set the resolution chain on this space: protoST's source provider only.
     // In a host's space the host's chain stays, and protoST's provider is
@@ -868,6 +878,7 @@ void STRuntime::construct() {
         impl_->baseWorkers = numWorkers;
         for (unsigned i = 0; i < numWorkers; ++i) spawnWorker(ctx);
     }
+    registration.committed = true;
 }
 
 // Starts one more pool worker. Called at construction and by
@@ -1186,7 +1197,6 @@ proto::ProtoSpace*   STRuntime::space()         const { return &impl_->space; }
 proto::ProtoContext* STRuntime::rootCtx()       const { return impl_->rootCtx; }
 proto::ProtoRootSet* STRuntime::asyncRootSet()  const { return impl_->asyncRoots; }
 const Bootstrap&     STRuntime::bootstrap()     const { return impl_->bootstrap; }
-PrimitiveRegistry&   STRuntime::registry()            { return impl_->registry; }
 DebuggerRuntime&     STRuntime::debugger()            { return impl_->debugger; }
 proto::ProtoObject*  STRuntime::globals()       const { return impl_->globals; }
 
@@ -2284,20 +2294,17 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                     capDict);
                 SCHED_DIAG("drainOne USER-METHOD EXIT actor=" << actor
                            << " result=" << result);
-            } else if (method && method != PROTO_NONE && method->isInteger(ctx)) {
-                long long marker = method->asLong(ctx);
-                if (isPrimitiveMarker(marker)) {
-                    int idx = primitiveMarkerIndex(marker);
-                    auto fn = impl_->registry.at(idx);
-                    result = translateNativeException(
-                        *this, ctx,
-                        [&] { return fn(*this, ctx, wrapped, args.data(), argc); });
-                } else {
-                    throw NativeError("unknown method shape");
-                }
+            } else if (proto::ProtoMethod native = method ? method->asMethod(ctx) : nullptr) {
+                // A primitive, or another runtime's exported method.
+                const proto::ProtoArguments positional(args.data(),
+                                                       static_cast<unsigned>(argc));
+                result = translateNativeException(
+                    *this, ctx,
+                    [&] { return native(ctx, wrapped, nullptr, &positional, nullptr); });
             } else {
                 // An absent selector answers PROTO_NONE, not null: report it
-                // as the synchronous send path does.
+                // as the synchronous send path does. A value attribute is not
+                // a method either.
                 std::string msg = "doesNotUnderstand: " + selStr->toStdString(ctx);
                 const proto::ProtoObject* cname = wrapped
                     ? wrapped->getAttribute(ctx, impl_->bootstrap.sym.className) : nullptr;

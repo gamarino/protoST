@@ -767,28 +767,27 @@ void rejectFutureFromDrain(STRuntime& rt, proto::ProtoContext* ctx,
 }
 
 void installFuturePrimitives(STRuntime& rt) {
-    auto& reg = rt.registry();
     auto& b   = rt.bootstrap();
     bindPrimitive(rt, b.futureProto, "wait",
-                  reg.registerPrim(prim_Future_wait));
+                  primitiveMethod<prim_Future_wait>);
     bindPrimitive(rt, b.futureProto, "resolve:",
-                  reg.registerPrim(prim_Future_resolve));
+                  primitiveMethod<prim_Future_resolve>);
     bindPrimitive(rt, b.futureProto, "rejectWith:",
-                  reg.registerPrim(prim_Future_rejectWith));
+                  primitiveMethod<prim_Future_rejectWith>);
     bindPrimitive(rt, b.futureProto, "thenDo:",
-                  reg.registerPrim(prim_Future_thenDo));
+                  primitiveMethod<prim_Future_thenDo>);
     bindPrimitive(rt, b.futureProto, "catch:",
-                  reg.registerPrim(prim_Future_catch));
+                  primitiveMethod<prim_Future_catch>);
     bindPrimitive(rt, b.futureProto, "__thenDoUnobserved:",
-                  reg.registerPrim(prim_Future_thenDoUnobserved));
+                  primitiveMethod<prim_Future_thenDoUnobserved>);
     bindPrimitive(rt, b.futureProto, "__catchUnobserved:",
-                  reg.registerPrim(prim_Future_catchUnobserved));
+                  primitiveMethod<prim_Future_catchUnobserved>);
     bindPrimitive(rt, b.futureProto, "__passError:to:",
-                  reg.registerPrim(prim_Future_passErrorTo));
+                  primitiveMethod<prim_Future_passErrorTo>);
     // `Future new` — a first-class, manually-resolvable promise. Overrides the
     // inherited Behavior>>new so the result carries the full future machinery.
     bindClassPrimitive(rt, b.futureProto, "new",
-                  reg.registerPrim(prim_Future_new));
+                  primitiveMethod<prim_Future_new>);
 }
 
 } // namespace protoST

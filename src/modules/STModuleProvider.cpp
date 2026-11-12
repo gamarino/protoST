@@ -1,4 +1,6 @@
 #include "STModuleProvider.h"
+#include "STForeignSend.h"
+#include "protoST/primitives.h"
 #include "runtime/ExecutionEngine.h"
 #include "runtime/NativeError.h"
 #include "protoST/STRuntime.h"
@@ -6,6 +8,8 @@
 #include "protoCore.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cstdint>
 #include <exception>
 #include <mutex>
 #include <stdexcept>
@@ -31,14 +35,53 @@ namespace {
     }
 }
 
+namespace detail {
+// The registry's generation (primitives.h, runtimeOf): advanced, under the
+// registry lock, by every change to the registry, so a per-thread cache
+// entry filled under an older generation is never used.
+std::atomic<std::uint64_t> g_runtimeRegistryGeneration{1};
+constinit thread_local RuntimeOfSpaceCache t_runtimeOfSpace;
+
+STRuntime& runtimeOfSlow(proto::ProtoContext* ctx) {
+    const proto::ProtoSpace* space = ctx ? ctx->space : nullptr;
+    STRuntime* rt = nullptr;
+    std::uint64_t generation = 0;
+    {
+        std::lock_guard<std::mutex> lock(registryMutex());
+        generation = g_runtimeRegistryGeneration.load(std::memory_order_relaxed);
+        for (const auto& e : registryEntries()) {
+            if (e.space == space) { rt = e.runtime; break; }
+        }
+    }
+    if (!rt)
+        throw NativeError(
+            "protoST: a primitive was called on a context whose space no protoST runtime "
+            "owns; another runtime sends to protoST objects through " +
+            std::string(kForeignSendSelector));
+    t_runtimeOfSpace = RuntimeOfSpaceCache{space, rt, generation};
+    return *rt;
+}
+} // namespace detail
+
+namespace {
+// Called with the registry lock held.
+void advanceRegistryGeneration() {
+    detail::g_runtimeRegistryGeneration.fetch_add(1, std::memory_order_release);
+}
+} // namespace
+
 void registerSTRuntime(const proto::ProtoSpace* space, STRuntime* rt) {
     if (!space || !rt) return;
     std::lock_guard<std::mutex> lock(registryMutex());
     auto& entries = registryEntries();
-    for (auto& e : entries) {
-        if (e.space == space) { e.runtime = rt; return; }
+    for (const auto& e : entries) {
+        if (e.space == space)
+            throw std::logic_error(
+                "protoST: this ProtoSpace already hosts a protoST runtime; a space hosts "
+                "one protoST runtime (its primitives find their runtime by the space)");
     }
     entries.push_back({space, rt});
+    advanceRegistryGeneration();
 }
 
 void unregisterSTRuntime(const proto::ProtoSpace* space, STRuntime* rt) {
@@ -49,6 +92,7 @@ void unregisterSTRuntime(const proto::ProtoSpace* space, STRuntime* rt) {
                                      return e.space == space && e.runtime == rt;
                                  }),
                   entries.end());
+    advanceRegistryGeneration();
 }
 
 STRuntime* stRuntimeForSpace(const proto::ProtoSpace* space) {

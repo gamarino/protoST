@@ -1301,7 +1301,6 @@ const proto::ProtoObject* prim_Message_arguments(STRuntime&, proto::ProtoContext
 } // namespace
 
 void installExceptionPrimitives(STRuntime& rt) {
-    auto& reg = rt.registry();
     auto& b   = rt.bootstrap();
 
     // protoCore's own errors arrive as protoST exceptions (stErrorFactory).
@@ -1310,49 +1309,49 @@ void installExceptionPrimitives(STRuntime& rt) {
     // signal / signal: — bound on Exception, inherited by Error / Warning and
     // by user subclasses, on each side (D52): `anError signal` signals the
     // receiver, `Error signal: 'x'` a new instance of the receiver class.
-    bindPrimitive(rt, b.exceptionProto, "signal",  reg.registerPrim(prim_Exception_signal));
-    bindPrimitive(rt, b.exceptionProto, "signal:", reg.registerPrim(prim_Exception_signalText));
+    bindPrimitive(rt, b.exceptionProto, "signal",  primitiveMethod<prim_Exception_signal>);
+    bindPrimitive(rt, b.exceptionProto, "signal:", primitiveMethod<prim_Exception_signalText>);
     bindClassPrimitive(rt, b.exceptionProto, "signal",
-                       reg.registerPrim(prim_ExceptionClass_signal));
+                       primitiveMethod<prim_ExceptionClass_signal>);
     bindClassPrimitive(rt, b.exceptionProto, "signal:",
-                       reg.registerPrim(prim_ExceptionClass_signalText));
+                       primitiveMethod<prim_ExceptionClass_signalText>);
 
     // Accessors + the handler actions.
-bindPrimitive(rt, b.messageNotUnderstoodProto, "receiver", reg.registerPrim(prim_MNU_receiver));
-    bindPrimitive(rt, b.messageNotUnderstoodProto, "message", reg.registerPrim(prim_MNU_message));
-    bindPrimitive(rt, b.messageProto, "selector", reg.registerPrim(prim_Message_selector));
-    bindPrimitive(rt, b.messageProto, "arguments", reg.registerPrim(prim_Message_arguments));
+bindPrimitive(rt, b.messageNotUnderstoodProto, "receiver", primitiveMethod<prim_MNU_receiver>);
+    bindPrimitive(rt, b.messageNotUnderstoodProto, "message", primitiveMethod<prim_MNU_message>);
+    bindPrimitive(rt, b.messageProto, "selector", primitiveMethod<prim_Message_selector>);
+    bindPrimitive(rt, b.messageProto, "arguments", primitiveMethod<prim_Message_arguments>);
         bindPrimitive(rt, b.exceptionProto, "messageText",
-                  reg.registerPrim(prim_Exception_messageText));
+                  primitiveMethod<prim_Exception_messageText>);
     bindPrimitive(rt, b.exceptionProto, "messageText:",
-                  reg.registerPrim(prim_Exception_setMessageText));
+                  primitiveMethod<prim_Exception_setMessageText>);
     bindPrimitive(rt, b.exceptionProto, "return:",
-                  reg.registerPrim(prim_Exception_return));
+                  primitiveMethod<prim_Exception_return>);
 
     bindPrimitive(rt, b.exceptionProto, "__isResumable",
-                  reg.registerPrim(prim_Exception_isResumable));
+                  primitiveMethod<prim_Exception_isResumable>);
 
     // EXC-b handler actions: resume:/resume, retry, pass/outer.
-    int resumeIdx = reg.registerPrim(prim_Exception_resume);
-    bindPrimitive(rt, b.exceptionProto, "resume:", resumeIdx);
-    bindPrimitive(rt, b.exceptionProto, "resume",  resumeIdx);
+    const proto::ProtoMethod resume = primitiveMethod<prim_Exception_resume>;
+    bindPrimitive(rt, b.exceptionProto, "resume:", resume);
+    bindPrimitive(rt, b.exceptionProto, "resume",  resume);
     bindPrimitive(rt, b.exceptionProto, "retry",
-                  reg.registerPrim(prim_Exception_retry));
-    int passIdx = reg.registerPrim(prim_Exception_pass);
-    bindPrimitive(rt, b.exceptionProto, "pass",  passIdx);
-    bindPrimitive(rt, b.exceptionProto, "outer", passIdx);   // MVP alias
+                  primitiveMethod<prim_Exception_retry>);
+    const proto::ProtoMethod pass = primitiveMethod<prim_Exception_pass>;
+    bindPrimitive(rt, b.exceptionProto, "pass",  pass);
+    bindPrimitive(rt, b.exceptionProto, "outer", pass);   // MVP alias
 
     // on:do: / on:do:on:do: — the protected-block primitives, on blockProto.
     bindPrimitive(rt, b.blockProto, "on:do:",
-                  reg.registerPrim(prim_Block_on_do));
+                  primitiveMethod<prim_Block_on_do>);
     bindPrimitive(rt, b.blockProto, "on:do:on:do:",
-                  reg.registerPrim(prim_Block_on_do_on_do));
+                  primitiveMethod<prim_Block_on_do_on_do>);
 
     // EXC-c: ensure: / ifCurtailed: — the cleanup primitives, on blockProto.
     bindPrimitive(rt, b.blockProto, "ensure:",
-                  reg.registerPrim(prim_Block_ensure));
+                  primitiveMethod<prim_Block_ensure>);
     bindPrimitive(rt, b.blockProto, "ifCurtailed:",
-                  reg.registerPrim(prim_Block_ifCurtailed));
+                  primitiveMethod<prim_Block_ifCurtailed>);
 }
 
 } // namespace protoST

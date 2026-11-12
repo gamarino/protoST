@@ -20,7 +20,6 @@
 #include "runtime/NativeError.h"
 #include "runtime/ListIndex.h"
 #include "ExecutionEngine.h"
-#include "runtime/PrimitiveMarker.h"
 
 namespace protoST {
 const proto::ProtoObject* raiseRejection(STRuntime& rt, proto::ProtoContext* ctx,
@@ -2094,18 +2093,17 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     DISPATCH_SCOPED();
                     break;
                 }
-                // F4-U4: detect user method (Block-shaped wrapper carrying
-                // __bc_ptr__). User methods are installed by Compiler-emitted
-                // __installMethod:as: and are not tagged primitive markers.
-                // We probe for __bc_ptr__ first; if absent, fall through to
-                // the legacy primitive-marker (tagged SmallInteger with bit
-                // 62 set) dispatch.
+                // F4-U4: a user method is a Block-shaped wrapper carrying
+                // __bc_ptr__, installed by Compiler-emitted
+                // __installMethod:as:; it runs in a frame pushed on this
+                // engine. A primitive is a protoCore native method cell
+                // (bindPrimitive), called directly. Anything else is a value.
                 const proto::ProtoString* bcKey =
                     bs_.sym.bcPtr;
                 const proto::ProtoString* capKey =
                     bs_.sym.captured;
                 // A user method is an object cell (pointer tag 0); a
-                // primitive marker is an Integer, so it skips the probe
+                // primitive is a method cell, so it skips the probe
                 // (0.10.0).
                 auto* bcPtrObj = (reinterpret_cast<uintptr_t>(attr) & 0x3F) == 0
                     ? attr->getOwnAttributeDirect(ctx, bcKey) : nullptr;
@@ -2150,63 +2148,51 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // and dispatches the callee from its pc=0.
                     DISPATCH_SCOPED();
                 }
-                // F5-M3: member-access semantics. If the attribute is not a
-                // method (no __bc_ptr__) and is not a primitive marker (a
-                // tagged SmallInteger with bit 62 set), then a unary send is
-                // treated as a property read — the attribute is itself the
-                // result. This is what lets `m Greeter` resolve the class
+                if (const proto::ProtoMethod native = attr->asMethod(ctx)) {
+                    // A primitive (or another runtime's exported method):
+                    // called with the receiver as `self` and the operand
+                    // array as its positional arguments, nothing copied.
+                    const proto::ProtoArguments positional(
+                        sendArgs, static_cast<unsigned>(argcOp));
+                    // F6 v3 A note: this primitive call MAY itself end up
+                    // invoking invokeBlock() (e.g. ifTrue:, thenDo:, value)
+                    // which spins up a FRESH ExecutionEngine on the C++ stack.
+                    // That secondary engine has its own independent frames_
+                    // and does not interact with ours. The bounded primitive-
+                    // nesting depth makes that acceptable for F6 v3 A; the
+                    // unbounded user-method recursion was the actual target of
+                    // this refactor and is now gone.
+                    //
+                    // EXC-d: this is the engine's single native-primitive call
+                    // boundary. Wrap it in translateNativeException so a C++
+                    // exception thrown by the primitive (a std::runtime_error
+                    // from a bad selector / arity / arithmetic, or any UMD-native
+                    // throw) becomes a catchable protoST Error. The control-flow
+                    // siblings (NonLocalReturn / UnwindToHandler / RetrySignal /
+                    // ResumeSignal / PassSignal / FutureYield) and DebuggerHalt /
+                    // UnhandledSTException are re-thrown untouched by the wrapper,
+                    // so primitives that raise them on purpose are unaffected.
+                    auto* result = translateNativeException(
+                        rt_, ctx,
+                        [&] { return native(ctx, recv, nullptr, &positional, nullptr); });
+                    push(f, result ? result : PROTO_NONE);
+                    DISPATCH_SCOPED();
+                    break;
+                }
+                // F5-M3: member-access semantics. An attribute that is neither
+                // a user method nor a native method is a value: a unary send
+                // reads it -- this is what lets `m Greeter` resolve the class
                 // stored on a module wrapper (or any plain value attribute).
-                // For non-unary sends, treating a value attribute as a method
-                // is still an error.
-                if (!attr->isInteger(ctx)) {
-                    if (argcOp == 0) {
-                        push(f, attr);
-                        DISPATCH_SCOPED();
-                        break;
-                    }
-                    signalCatchable(rt_, ctx,
-                        "#" + selStr + ": the attribute is a value, not a method; "
-                        "only unary sends read value attributes");
+                // For non-unary sends, treating a value as a method is an
+                // error.
+                if (argcOp == 0) {
+                    push(f, attr);
+                    DISPATCH_SCOPED();
+                    break;
                 }
-                long long marker = attr->asLong(ctx);
-                if (!isPrimitiveMarker(marker)) {
-                    // Plain integer value stored as an attribute — same
-                    // member-access rule as above.
-                    if (argcOp == 0) {
-                        push(f, attr);
-                        DISPATCH_SCOPED();
-                        break;
-                    }
-                    signalCatchable(rt_, ctx,
-                        "#" + selStr + ": the attribute is a value, not a method; "
-                        "only unary sends read value attributes");
-                }
-                int primIdx = primitiveMarkerIndex(marker);
-                auto fn = rt_.registry().at(primIdx);
-                // F6 v3 A note: this primitive call MAY itself end up
-                // invoking invokeBlock() (e.g. ifTrue:, thenDo:, value)
-                // which spins up a FRESH ExecutionEngine on the C++ stack.
-                // That secondary engine has its own independent frames_
-                // and does not interact with ours. The bounded primitive-
-                // nesting depth makes that acceptable for F6 v3 A; the
-                // unbounded user-method recursion was the actual target of
-                // this refactor and is now gone.
-                //
-                // EXC-d: this is the engine's single native-primitive call
-                // boundary. Wrap it in translateNativeException so a C++
-                // exception thrown by the primitive (a std::runtime_error
-                // from a bad selector / arity / arithmetic, or any UMD-native
-                // throw) becomes a catchable protoST Error. The control-flow
-                // siblings (NonLocalReturn / UnwindToHandler / RetrySignal /
-                // ResumeSignal / PassSignal / FutureYield) and DebuggerHalt /
-                // UnhandledSTException are re-thrown untouched by the wrapper,
-                // so primitives that raise them on purpose are unaffected.
-                auto* result = translateNativeException(
-                    rt_, ctx,
-                    [&] { return fn(rt_, ctx, recv, sendArgs, argcOp); });
-                push(f, result ? result : PROTO_NONE);
-                DISPATCH_SCOPED();
-                break;
+                signalCatchable(rt_, ctx,
+                    "#" + selStr + ": the attribute is a value, not a method; "
+                    "only unary sends read value attributes");
             }
             case Op::SEND_CALL: L_SEND_CALL: {
                 // protoCore-style call-form send (positional + named args).
@@ -2417,25 +2403,27 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     DISPATCH_SCOPED();
                 }
 
-                // A protoCore method: what a module written in C++ or in
-                // another language exports (proto::ProtoMethod). Called with
-                // the receiver as `self`, the positional arguments and the
-                // named ones (interned names), through protoCore's array call
-                // form. It is a native boundary: a ProtoException it raises
-                // (the module's own error type, protoCore's error) is
-                // signalled as a Smalltalk exception with its value
-                // unchanged, and a C++ exception becomes an Error
-                // (translateNativeException).
-                if (attr->isMethod(ctx)) {
+                // A protoCore method: a primitive, or what a module written in
+                // C++ or in another language exports (proto::ProtoMethod).
+                // Called directly with the receiver as `self`, the positional
+                // arguments and the named ones (interned names) as array
+                // descriptors. A primitive refuses named arguments. It is a
+                // native boundary: a ProtoException it raises (the module's
+                // own error type, protoCore's error) is signalled as a
+                // Smalltalk exception with its value unchanged, and a C++
+                // exception becomes an Error (translateNativeException).
+                if (const proto::ProtoMethod native = attr->asMethod(ctx)) {
                     proto::ProtoKeywordArgument keywords[16];
                     for (int i = 0; i < callNNamed; ++i)
                         keywords[i] = proto::ProtoKeywordArgument{
                             desc.sortedKeys[i], callArgs[callNPos + i]};
+                    const proto::ProtoArguments positional(
+                        callArgs, static_cast<unsigned>(callNPos));
+                    const proto::ProtoKeywordArguments named(
+                        keywords, static_cast<unsigned>(callNNamed));
                     auto* result = translateNativeException(rt_, ctx, [&] {
-                        return recv->call(ctx, nullptr, desc.name, recv,
-                                          callArgs, static_cast<unsigned>(callNPos),
-                                          callNNamed > 0 ? keywords : nullptr,
-                                          static_cast<unsigned>(callNNamed));
+                        return native(ctx, recv, nullptr, &positional,
+                                      callNNamed > 0 ? &named : nullptr);
                     });
                     push(f, result ? result : PROTO_NONE);
                     DISPATCH_SCOPED();
@@ -2449,27 +2437,6 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     push(f, attr);
                     DISPATCH_SCOPED();
                     break;
-                }
-
-                // Primitive marker? Reserve for v2 — assert no named args.
-                if (attr->isInteger(ctx)) {
-                    long long marker = attr->asLong(ctx);
-                    if (isPrimitiveMarker(marker)) {
-                        if (callNNamed > 0) {
-                            signalCatchable(rt_, ctx, 
-                                "primitive method '"
-                                + std::string(desc.name->toStdString(ctx))
-                                + "' does not accept named args in v1");
-                        }
-                        int primIdx = primitiveMarkerIndex(marker);
-                        auto fn = rt_.registry().at(primIdx);
-                        auto* result = translateNativeException(
-                            rt_, ctx,
-                            [&] { return fn(rt_, ctx, recv, callArgs, callNPos); });
-                        push(f, result ? result : PROTO_NONE);
-                        DISPATCH_SCOPED();
-                        break;
-                    }
                 }
 
                 // Non-zero args on a non-method attribute is an error.

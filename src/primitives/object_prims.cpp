@@ -2,7 +2,6 @@
 #include "runtime/NativeError.h"
 #include "runtime/ListIndex.h"
 #include "protoST/STRuntime.h"
-#include "runtime/PrimitiveMarker.h"
 #include "protoST/primitives.h"
 #include "primitives/ArgSupport.h"
 #include "runtime/Bootstrap.h"
@@ -813,13 +812,11 @@ const proto::ProtoObject* sendDynamicFrom(STRuntime& rt, proto::ProtoContext* ct
         return eng.runWithArgs(ctx, *sub, recv ? recv : PROTO_NONE, methodArgs,
                                argc + 1, capDict);
     }
-    if (method->isInteger(ctx)) {
-        const long long marker = method->asLong(ctx);
-        if (isPrimitiveMarker(marker)) {
-            auto fn = rt.registry().at(primitiveMarkerIndex(marker));
-            if (understood) *understood = true;
-            return fn(rt, ctx, recv ? recv : PROTO_NONE, args, argc);
-        }
+    if (const proto::ProtoMethod native = method->asMethod(ctx)) {
+        // A primitive, or another runtime's exported method.
+        const proto::ProtoArguments positional(args, static_cast<unsigned>(argc));
+        if (understood) *understood = true;
+        return native(ctx, recv ? recv : PROTO_NONE, nullptr, &positional, nullptr);
     }
     return nullptr;
 }
@@ -886,8 +883,7 @@ const proto::ProtoObject* prim_Object_respondsTo(STRuntime& rt, proto::ProtoCont
     if (!m || m == PROTO_NONE) return PROTO_FALSE;
     const proto::ProtoObject* bc = m->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr);
     if (bc && bc != PROTO_NONE) return PROTO_TRUE;
-    if (m->isInteger(ctx) && isPrimitiveMarker(m->asLong(ctx))) return PROTO_TRUE;
-    return PROTO_FALSE;
+    return m->isMethod(ctx) ? PROTO_TRUE : PROTO_FALSE;
 }
 
 // aClass superclass → the next class up the chain, nil for Object.
@@ -1360,8 +1356,8 @@ const proto::ProtoObject* makeArrayFromList(STRuntime& rt, proto::ProtoContext* 
 
 bool isMethodValue(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* v) {
     if (!v || v == PROTO_NONE) return false;
-    if (v->isInteger(ctx)) return isPrimitiveMarker(v->asLong(ctx));
-    if (v->asString(ctx)) return false;
+    if (v->isMethod(ctx)) return true;   // a primitive, or an exported native method
+    if (v->isInteger(ctx) || v->asString(ctx)) return false;
     const proto::ProtoObject* bc = v->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr);
     return bc && bc != PROTO_NONE;
 }
@@ -1878,7 +1874,6 @@ const proto::ProtoObject* prim_Object_setInstVarFromTo(
 } // anon
 
 void installObjectPrimitives(STRuntime& rt) {
-    auto& reg = rt.registry();
     auto& b   = rt.bootstrap();
     {
         // BL-1: `newChild` and the conventional Smalltalk `new` both
@@ -1889,153 +1884,153 @@ void installObjectPrimitives(STRuntime& rt) {
         // D52: the class protocol (new, subclass:, selectors, ...) is bound
         // on Behavior, which every class and metaclass reaches and no
         // instance does.
-        auto newChildPrim = reg.registerPrim(prim_Object_newChild);
+        const proto::ProtoMethod newChildPrim = primitiveMethod<prim_Object_newChild>;
         bindPrimitive(rt, b.behaviorProto, "newChild", newChildPrim);
         bindPrimitive(rt, b.behaviorProto, "new", newChildPrim);
         // basicNew: the raw allocator, kept available when a class overrides new.
         bindPrimitive(rt, b.behaviorProto, "basicNew", newChildPrim);
     }
     bindPrimitive(rt, b.behaviorProto, "__installMethod:as:",
-                  reg.registerPrim(prim_Object_installMethod));
+                  primitiveMethod<prim_Object_installMethod>);
     bindPrimitive(rt, b.behaviorProto, "__installClassMethod:as:",
-                  reg.registerPrim(prim_Object_installClassMethod));
+                  primitiveMethod<prim_Object_installClassMethod>);
     bindPrimitive(rt, b.objectProto, "asActor",
-                  reg.registerPrim(prim_Object_asActor));
+                  primitiveMethod<prim_Object_asActor>);
     bindPrimitive(rt, b.objectProto, "asHighPriorityActor",
-                  reg.registerPrim(prim_Object_asHighPriorityActor));
+                  primitiveMethod<prim_Object_asHighPriorityActor>);
     bindPrimitive(rt, b.objectProto, "asLowPriorityActor",
-                  reg.registerPrim(prim_Object_asLowPriorityActor));
+                  primitiveMethod<prim_Object_asLowPriorityActor>);
     // Optimistic-concurrency CAS on a single instance variable — the raw,
     // unwrapped form of protoCore's atomic attribute compare-and-swap. See
     // the Atom class for the wrapped idiom.
     bindPrimitive(rt, b.objectProto, "setInstVar:from:to:",
-                  reg.registerPrim(prim_Object_setInstVarFromTo));
+                  primitiveMethod<prim_Object_setInstVarFromTo>);
     // BL-3: rich printString. `__setClassName:` is emitted by the compiler's
     // ClassDecl path; `printString` is the default inherited by every object.
     bindPrimitive(rt, b.behaviorProto, "__setClassName:",
-                  reg.registerPrim(prim_Object_setClassName));
+                  primitiveMethod<prim_Object_setClassName>);
     // D19: `__initClassVars:` is emitted by the compiler's ClassDecl path
     // when the class declares `classVariableNames: '...'`. It installs each
     // name as `_iv_<name>` = nil on the class object so instance-side reads
     // via the shared `_iv_<name>` chain walk pick up the shared storage.
     bindPrimitive(rt, b.behaviorProto, "__initClassVars:",
-                  reg.registerPrim(prim_Object_initClassVars));
+                  primitiveMethod<prim_Object_initClassVars>);
     // T3-a: `subclass:` as a runtime message so any class object — including
     // one imported from a module — can be subclassed via an expression
     // receiver, not just the compiler's textual `Identifier subclass: …` form.
     bindPrimitive(rt, b.behaviorProto, "subclass:",
-                  reg.registerPrim(prim_Object_subclass));
+                  primitiveMethod<prim_Object_subclass>);
     bindPrimitive(rt, b.behaviorProto, "subclass:instanceVariableNames:",
-                  reg.registerPrim(prim_Object_subclassIvars));
+                  primitiveMethod<prim_Object_subclassIvars>);
     // T3-b: multiple inheritance / mixins. `subclass:uses:` and
     // `subclass:instanceVariableNames:uses:` assemble a class with several
     // parents. The compiler's textual `Object subclass: #Foo uses: { … }`
     // form desugars to a send of these selectors; they also serve the
     // expression-receiver form (e.g. an imported module class).
     bindPrimitive(rt, b.behaviorProto, "subclass:uses:",
-                  reg.registerPrim(prim_Object_subclassUses));
+                  primitiveMethod<prim_Object_subclassUses>);
     bindPrimitive(rt, b.behaviorProto, "subclass:instanceVariableNames:uses:",
-                  reg.registerPrim(prim_Object_subclassIvarsUses));
+                  primitiveMethod<prim_Object_subclassIvarsUses>);
     // T3-c: on-the-fly behaviour composition. `addBehavior:` composes a mixin
     // into a class at runtime by rebuilding the class with the mixin baked
     // into its base chain; `addParent:` is a lower-level alias. Affects the
     // class and instances created after the call (see docs/LANGUAGE.md §4.12).
     {
-        auto addBehaviorPrim = reg.registerPrim(prim_Object_addBehavior);
+        const proto::ProtoMethod addBehaviorPrim = primitiveMethod<prim_Object_addBehavior>;
         bindPrimitive(rt, b.behaviorProto, "addBehavior:", addBehaviorPrim);
         bindPrimitive(rt, b.behaviorProto, "addParent:", addBehaviorPrim);
     }
     bindPrimitive(rt, b.objectProto, "printString",
-                  reg.registerPrim(prim_Object_printString));
+                  primitiveMethod<prim_Object_printString>);
     bindPrimitive(rt, b.objectProto, "basicPrintString",
-                  reg.registerPrim(prim_Object_printString));
-    bindPrimitive(rt, b.objectProto, "__printEnter", reg.registerPrim(prim_Object_printEnter));
-    bindPrimitive(rt, b.objectProto, "__printExit", reg.registerPrim(prim_Object_printExit));
-    bindPrimitive(rt, b.objectProto, "__stdout:", reg.registerPrim(prim_Object_stdout));
-    bindPrimitive(rt, b.objectProto, "class", reg.registerPrim(prim_Object_class));
-    bindPrimitive(rt, b.objectProto, "__globalIncludes:", reg.registerPrim(prim_Object_globalIncludes));
-    bindPrimitive(rt, b.objectProto, "__globalAt:", reg.registerPrim(prim_Object_globalAt));
-    bindPrimitive(rt, b.objectProto, "__globalAt:put:", reg.registerPrim(prim_Object_globalAtPut));
-    bindPrimitive(rt, b.behaviorProto, "name", reg.registerPrim(prim_Object_name));
-    bindPrimitive(rt, b.objectProto, "isClassObject", reg.registerPrim(prim_Object_isClassObject));
-    bindPrimitive(rt, b.behaviorProto, "__subclassNamed:", reg.registerPrim(prim_Object_subclassNamed));
-    bindPrimitive(rt, b.actorProto, "__wrappedObject", reg.registerPrim(prim_Actor_wrappedObject));
-    bindPrimitive(rt, b.objectProto, "instVarNamed:", reg.registerPrim(prim_Object_instVarNamed));
-    bindPrimitive(rt, b.objectProto, "instVarNamed:put:", reg.registerPrim(prim_Object_instVarNamedPut));
-    bindPrimitive(rt, b.behaviorProto, "__setInstVarNames:", reg.registerPrim(prim_Object_setInstVarNames));
-    bindPrimitive(rt, b.behaviorProto, "__instVarNamesString", reg.registerPrim(prim_Object_instVarNamesString));
-    bindPrimitive(rt, b.behaviorProto, "canUnderstand:", reg.registerPrim(prim_Object_canUnderstand));
-    bindPrimitive(rt, b.behaviorProto, "lookupSelector:", reg.registerPrim(prim_Behavior_lookupSelector));
-    bindPrimitive(rt, b.behaviorProto, "__hasAncestor:", reg.registerPrim(prim_Behavior_hasAncestor));
-    bindPrimitive(rt, b.objectProto, "isKindOf:", reg.registerPrim(prim_Object_isKindOf));
+                  primitiveMethod<prim_Object_printString>);
+    bindPrimitive(rt, b.objectProto, "__printEnter", primitiveMethod<prim_Object_printEnter>);
+    bindPrimitive(rt, b.objectProto, "__printExit", primitiveMethod<prim_Object_printExit>);
+    bindPrimitive(rt, b.objectProto, "__stdout:", primitiveMethod<prim_Object_stdout>);
+    bindPrimitive(rt, b.objectProto, "class", primitiveMethod<prim_Object_class>);
+    bindPrimitive(rt, b.objectProto, "__globalIncludes:", primitiveMethod<prim_Object_globalIncludes>);
+    bindPrimitive(rt, b.objectProto, "__globalAt:", primitiveMethod<prim_Object_globalAt>);
+    bindPrimitive(rt, b.objectProto, "__globalAt:put:", primitiveMethod<prim_Object_globalAtPut>);
+    bindPrimitive(rt, b.behaviorProto, "name", primitiveMethod<prim_Object_name>);
+    bindPrimitive(rt, b.objectProto, "isClassObject", primitiveMethod<prim_Object_isClassObject>);
+    bindPrimitive(rt, b.behaviorProto, "__subclassNamed:", primitiveMethod<prim_Object_subclassNamed>);
+    bindPrimitive(rt, b.actorProto, "__wrappedObject", primitiveMethod<prim_Actor_wrappedObject>);
+    bindPrimitive(rt, b.objectProto, "instVarNamed:", primitiveMethod<prim_Object_instVarNamed>);
+    bindPrimitive(rt, b.objectProto, "instVarNamed:put:", primitiveMethod<prim_Object_instVarNamedPut>);
+    bindPrimitive(rt, b.behaviorProto, "__setInstVarNames:", primitiveMethod<prim_Object_setInstVarNames>);
+    bindPrimitive(rt, b.behaviorProto, "__instVarNamesString", primitiveMethod<prim_Object_instVarNamesString>);
+    bindPrimitive(rt, b.behaviorProto, "canUnderstand:", primitiveMethod<prim_Object_canUnderstand>);
+    bindPrimitive(rt, b.behaviorProto, "lookupSelector:", primitiveMethod<prim_Behavior_lookupSelector>);
+    bindPrimitive(rt, b.behaviorProto, "__hasAncestor:", primitiveMethod<prim_Behavior_hasAncestor>);
+    bindPrimitive(rt, b.objectProto, "isKindOf:", primitiveMethod<prim_Object_isKindOf>);
     {
-        const int sole = reg.registerPrim(prim_Metaclass_soleInstance);
+        const proto::ProtoMethod sole = primitiveMethod<prim_Metaclass_soleInstance>;
         bindPrimitive(rt, b.metaclassProto, "soleInstance", sole);
         bindPrimitive(rt, b.metaclassProto, "instanceClass", sole);
         // A metaclass makes no instances, and Metaclass makes no metaclasses
         // from user code (D52).
-        const int refuse = reg.registerPrim(prim_Metaclass_refuseNew);
+        const proto::ProtoMethod refuse = primitiveMethod<prim_Metaclass_refuseNew>;
         // Behavior class, which Class class and Metaclass class inherit: a
         // send to Behavior, Class or a subclass of them (R3-L1).
-        const int refuseBehavior = reg.registerPrim(prim_Behavior_refuseNew);
+        const proto::ProtoMethod refuseBehavior = primitiveMethod<prim_Behavior_refuseNew>;
         for (const char* sel : {"new", "basicNew", "newChild"}) {
             bindPrimitive(rt, b.metaclassProto, sel, refuse);
             bindClassPrimitive(rt, b.metaclassProto, sel, refuse);
             bindClassPrimitive(rt, b.behaviorProto, sel, refuseBehavior);
         }
     }
-    bindPrimitive(rt, b.behaviorProto, "selectors", reg.registerPrim(prim_Object_selectors));
-    bindPrimitive(rt, b.objectProto, "__allClasses", reg.registerPrim(prim_Object_allClasses));
-    bindPrimitive(rt, b.objectProto, "__clockMilliseconds", reg.registerPrim(prim_Object_clockMilliseconds));
-    bindPrimitive(rt, b.objectProto, "__clockMicroseconds", reg.registerPrim(prim_Object_clockMicroseconds));
-    bindPrimitive(rt, b.objectProto, "__localTimeFields", reg.registerPrim(prim_Object_localTimeFields));
-    bindPrimitive(rt, b.objectProto, "__entropySeed", reg.registerPrim(prim_Object_entropySeed));
-    bindPrimitive(rt, b.objectProto, "__versionString", reg.registerPrim(prim_Object_versionString));
+    bindPrimitive(rt, b.behaviorProto, "selectors", primitiveMethod<prim_Object_selectors>);
+    bindPrimitive(rt, b.objectProto, "__allClasses", primitiveMethod<prim_Object_allClasses>);
+    bindPrimitive(rt, b.objectProto, "__clockMilliseconds", primitiveMethod<prim_Object_clockMilliseconds>);
+    bindPrimitive(rt, b.objectProto, "__clockMicroseconds", primitiveMethod<prim_Object_clockMicroseconds>);
+    bindPrimitive(rt, b.objectProto, "__localTimeFields", primitiveMethod<prim_Object_localTimeFields>);
+    bindPrimitive(rt, b.objectProto, "__entropySeed", primitiveMethod<prim_Object_entropySeed>);
+    bindPrimitive(rt, b.objectProto, "__versionString", primitiveMethod<prim_Object_versionString>);
     bindPrimitive(rt, b.objectProto, "perform:withArguments:",
-                  reg.registerPrim(prim_Object_performWithArguments));
+                  primitiveMethod<prim_Object_performWithArguments>);
     {
-        const int performIdx = reg.registerPrim(prim_Object_performWith);
-        bindPrimitive(rt, b.objectProto, "perform:", performIdx);
-        bindPrimitive(rt, b.objectProto, "perform:with:", performIdx);
-        bindPrimitive(rt, b.objectProto, "perform:with:with:", performIdx);
-        bindPrimitive(rt, b.objectProto, "perform:with:with:with:", performIdx);
+        const proto::ProtoMethod perform = primitiveMethod<prim_Object_performWith>;
+        bindPrimitive(rt, b.objectProto, "perform:", perform);
+        bindPrimitive(rt, b.objectProto, "perform:with:", perform);
+        bindPrimitive(rt, b.objectProto, "perform:with:with:", perform);
+        bindPrimitive(rt, b.objectProto, "perform:with:with:with:", perform);
     }
-    bindPrimitive(rt, b.objectProto, "respondsTo:", reg.registerPrim(prim_Object_respondsTo));
-    bindPrimitive(rt, b.behaviorProto, "superclass", reg.registerPrim(prim_Object_superclass));
-    bindPrimitive(rt, b.objectProto, "shallowCopy", reg.registerPrim(prim_Object_shallowCopy));
-    bindPrimitive(rt, b.objectProto, "identityHash", reg.registerPrim(prim_Object_identityHash));
-    bindPrimitive(rt, b.objectProto, "hash", reg.registerPrim(prim_Object_hash));
-    bindPrimitive(rt, b.integerProto, "__hashOver:", reg.registerPrim(prim_Integer_hashOver));
-    bindPrimitive(rt, b.objectProto, "__hashMix:", reg.registerPrim(prim_Object_hashMix));
+    bindPrimitive(rt, b.objectProto, "respondsTo:", primitiveMethod<prim_Object_respondsTo>);
+    bindPrimitive(rt, b.behaviorProto, "superclass", primitiveMethod<prim_Object_superclass>);
+    bindPrimitive(rt, b.objectProto, "shallowCopy", primitiveMethod<prim_Object_shallowCopy>);
+    bindPrimitive(rt, b.objectProto, "identityHash", primitiveMethod<prim_Object_identityHash>);
+    bindPrimitive(rt, b.objectProto, "hash", primitiveMethod<prim_Object_hash>);
+    bindPrimitive(rt, b.integerProto, "__hashOver:", primitiveMethod<prim_Integer_hashOver>);
+    bindPrimitive(rt, b.objectProto, "__hashMix:", primitiveMethod<prim_Object_hashMix>);
     // F6 v2 T6: sleep primitive — test-only helper for the wall-clock
     // parallelism proof. Bound on objectProto so any object responds to it.
     bindPrimitive(rt, b.objectProto, "sleep:",
-                  reg.registerPrim(prim_Object_sleepMs));
+                  primitiveMethod<prim_Object_sleepMs>);
     // D9: nil-test protocol — bound on Object so every object (nil included,
     // since nilProto descends from objectProto) answers it.
     bindPrimitive(rt, b.objectProto, "isNil",
-                  reg.registerPrim(prim_Object_isNil));
+                  primitiveMethod<prim_Object_isNil>);
     bindPrimitive(rt, b.objectProto, "notNil",
-                  reg.registerPrim(prim_Object_notNil));
+                  primitiveMethod<prim_Object_notNil>);
     bindPrimitive(rt, b.objectProto, "ifNil:",
-                  reg.registerPrim(prim_Object_ifNil));
+                  primitiveMethod<prim_Object_ifNil>);
     bindPrimitive(rt, b.objectProto, "ifNotNil:",
-                  reg.registerPrim(prim_Object_ifNotNil));
+                  primitiveMethod<prim_Object_ifNotNil>);
     bindPrimitive(rt, b.objectProto, "ifNil:ifNotNil:",
-                  reg.registerPrim(prim_Object_ifNilIfNotNil));
+                  primitiveMethod<prim_Object_ifNilIfNotNil>);
     bindPrimitive(rt, b.objectProto, "ifNotNil:ifNil:",
-                  reg.registerPrim(prim_Object_ifNotNilIfNil));
+                  primitiveMethod<prim_Object_ifNotNilIfNil>);
     // D18: identity comparison and default equality, bound on Object so every
     // object answers them. `=` here is the identity default; value-equality
     // overrides on SmallInteger / String shadow it on those types.
     bindPrimitive(rt, b.objectProto, "==",
-                  reg.registerPrim(prim_Object_identEq));
+                  primitiveMethod<prim_Object_identEq>);
     bindPrimitive(rt, b.objectProto, "~~",
-                  reg.registerPrim(prim_Object_identNe));
+                  primitiveMethod<prim_Object_identNe>);
     bindPrimitive(rt, b.objectProto, "=",
-                  reg.registerPrim(prim_Object_eq));
+                  primitiveMethod<prim_Object_eq>);
     bindPrimitive(rt, b.objectProto, "~=",
-                  reg.registerPrim(prim_Object_ne));
+                  primitiveMethod<prim_Object_ne>);
 }
 
 // F6 v6 (2026-05-23 night): WorkerPool singleton — exposes the actor
@@ -2074,7 +2069,6 @@ const proto::ProtoObject* prim_WorkerPool_paused(STRuntime& rt,
 } // namespace
 
 void installWorkerPoolGlobal(STRuntime& rt) {
-    auto& reg = rt.registry();
     auto& b   = rt.bootstrap();
     auto* ctx = rt.rootCtx();
 
@@ -2082,11 +2076,11 @@ void installWorkerPoolGlobal(STRuntime& rt) {
         ->newChild(ctx, /*isMutable=*/true);
 
     bindPrimitive(rt, pool, "stopProcessing",
-                  reg.registerPrim(prim_WorkerPool_stop));
+                  primitiveMethod<prim_WorkerPool_stop>);
     bindPrimitive(rt, pool, "startProcessing",
-                  reg.registerPrim(prim_WorkerPool_start));
+                  primitiveMethod<prim_WorkerPool_start>);
     bindPrimitive(rt, pool, "isPaused",
-                  reg.registerPrim(prim_WorkerPool_paused));
+                  primitiveMethod<prim_WorkerPool_paused>);
 
     auto* key = proto::ProtoString::createSymbol(ctx, "WorkerPool");
     auto* g = rt.globals();
@@ -2097,7 +2091,6 @@ void installWorkerPoolGlobal(STRuntime& rt) {
 // `from:` on it, and register it in globals so user code can write
 // `m := Import from: 'foo'.`
 void installImportGlobal(STRuntime& rt) {
-    auto& reg = rt.registry();
     auto& b   = rt.bootstrap();
     auto* ctx = rt.rootCtx();
 
@@ -2106,8 +2099,8 @@ void installImportGlobal(STRuntime& rt) {
         ->newChild(ctx, /*isMutable=*/true);
 
     // Bind from: on it.
-    int idx = reg.registerPrim(prim_Import_from);
-    bindPrimitive(rt, importObj, "from:", idx);
+    const proto::ProtoMethod importFrom = primitiveMethod<prim_Import_from>;
+    bindPrimitive(rt, importObj, "from:", importFrom);
 
     // Register in globals so PUSH_GLOBAL resolves `Import`.
     auto* importKey = proto::ProtoString::createSymbol(ctx, "Import");

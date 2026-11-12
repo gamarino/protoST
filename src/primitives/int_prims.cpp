@@ -407,35 +407,34 @@ const proto::ProtoObject* adaptNumberArgument(STRuntime& rt, proto::ProtoContext
 }
 
 void installIntPrimitives(STRuntime& rt) {
-    auto& reg = rt.registry();
     auto& b   = rt.bootstrap();
     // Bound on the shared `numberProto` so SmallInteger, LargeInteger and
     // Float all inherit one numeric protocol (D11 / D20).
     auto* N = b.numberProto;
-    bindPrimitive(rt, N, "+",  reg.registerPrim(prim_NumAdd));
-    bindPrimitive(rt, N, "-",  reg.registerPrim(prim_NumSub));
-    bindPrimitive(rt, N, "*",  reg.registerPrim(prim_NumMul));
-    bindPrimitive(rt, N, "/",  reg.registerPrim(prim_NumDiv));
-    bindPrimitive(rt, N, "//", reg.registerPrim(prim_NumIntDiv));
-    bindPrimitive(rt, N, "\\\\", reg.registerPrim(prim_NumMod));
-    bindPrimitive(rt, N, "quo:", reg.registerPrim(prim_NumQuo));
-    bindPrimitive(rt, N, "rem:", reg.registerPrim(prim_NumRem));
-    bindPrimitive(rt, N, "<",  reg.registerPrim(prim_NumLt));
-    bindPrimitive(rt, N, "<=", reg.registerPrim(prim_NumLe));
-    bindPrimitive(rt, N, ">",  reg.registerPrim(prim_NumGt));
-    bindPrimitive(rt, N, ">=", reg.registerPrim(prim_NumGe));
-    bindPrimitive(rt, N, "=",  reg.registerPrim(prim_NumEq));
-    bindPrimitive(rt, N, "~=", reg.registerPrim(prim_NumNe));
-    bindPrimitive(rt, N, "negated", reg.registerPrim(prim_NumNegated));
-    bindPrimitive(rt, N, "abs",     reg.registerPrim(prim_NumAbs));
-    bindPrimitive(rt, N, "isEven",  reg.registerPrim(prim_NumIsEven));
-    bindPrimitive(rt, N, "isOdd",   reg.registerPrim(prim_NumIsOdd));
-    bindPrimitive(rt, N, "printString", reg.registerPrim(prim_NumPrintString));
-    bindPrimitive(rt, N, "bitAnd:",   reg.registerPrim(prim_IntBitAnd));
-    bindPrimitive(rt, N, "bitOr:",    reg.registerPrim(prim_IntBitOr));
-    bindPrimitive(rt, N, "bitXor:",   reg.registerPrim(prim_IntBitXor));
-    bindPrimitive(rt, N, "bitInvert", reg.registerPrim(prim_IntBitInvert));
-    bindPrimitive(rt, N, "bitShift:", reg.registerPrim(prim_IntBitShift));
+    bindPrimitive(rt, N, "+",  primitiveMethod<prim_NumAdd>);
+    bindPrimitive(rt, N, "-",  primitiveMethod<prim_NumSub>);
+    bindPrimitive(rt, N, "*",  primitiveMethod<prim_NumMul>);
+    bindPrimitive(rt, N, "/",  primitiveMethod<prim_NumDiv>);
+    bindPrimitive(rt, N, "//", primitiveMethod<prim_NumIntDiv>);
+    bindPrimitive(rt, N, "\\\\", primitiveMethod<prim_NumMod>);
+    bindPrimitive(rt, N, "quo:", primitiveMethod<prim_NumQuo>);
+    bindPrimitive(rt, N, "rem:", primitiveMethod<prim_NumRem>);
+    bindPrimitive(rt, N, "<",  primitiveMethod<prim_NumLt>);
+    bindPrimitive(rt, N, "<=", primitiveMethod<prim_NumLe>);
+    bindPrimitive(rt, N, ">",  primitiveMethod<prim_NumGt>);
+    bindPrimitive(rt, N, ">=", primitiveMethod<prim_NumGe>);
+    bindPrimitive(rt, N, "=",  primitiveMethod<prim_NumEq>);
+    bindPrimitive(rt, N, "~=", primitiveMethod<prim_NumNe>);
+    bindPrimitive(rt, N, "negated", primitiveMethod<prim_NumNegated>);
+    bindPrimitive(rt, N, "abs",     primitiveMethod<prim_NumAbs>);
+    bindPrimitive(rt, N, "isEven",  primitiveMethod<prim_NumIsEven>);
+    bindPrimitive(rt, N, "isOdd",   primitiveMethod<prim_NumIsOdd>);
+    bindPrimitive(rt, N, "printString", primitiveMethod<prim_NumPrintString>);
+    bindPrimitive(rt, N, "bitAnd:",   primitiveMethod<prim_IntBitAnd>);
+    bindPrimitive(rt, N, "bitOr:",    primitiveMethod<prim_IntBitOr>);
+    bindPrimitive(rt, N, "bitXor:",   primitiveMethod<prim_IntBitXor>);
+    bindPrimitive(rt, N, "bitInvert", primitiveMethod<prim_IntBitInvert>);
+    bindPrimitive(rt, N, "bitShift:", primitiveMethod<prim_IntBitShift>);
 }
 
 } // namespace protoST

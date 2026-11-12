@@ -9,7 +9,6 @@
 #include "runtime/Bootstrap.h"
 #include "runtime/HandlerStack.h"
 #include "runtime/NativeExceptionBridge.h"
-#include "runtime/PrimitiveMarker.h"
 #include "runtime/TransientPin.h"
 #include "protoCore.h"
 
@@ -78,13 +77,16 @@ const proto::ProtoObject* sendMessage(STRuntime& rt, proto::ProtoContext* ctx,
         const std::string text = "doesNotUnderstand: " + selText;
         return signalMessageNotUnderstood(rt, ctx, recv, message, text);
     }
-    if (attr->isMethod(ctx))
-        return recv->call(ctx, nullptr, selector, recv, args, static_cast<unsigned>(argc));
-    const proto::ProtoObject* bc = attr->isInteger(ctx)
-                                       ? nullptr
-                                       : attr->getOwnAttributeDirect(ctx, bs.sym.bcPtr);
-    const bool primitive = attr->isInteger(ctx) && isPrimitiveMarker(attr->asLong(ctx));
-    if ((bc && bc != PROTO_NONE) || primitive) {
+    if (const proto::ProtoMethod native = attr->asMethod(ctx)) {
+        // A primitive, or a native method another runtime exported: the
+        // method cell is called directly, as a send in the engine calls it
+        // (foreignSendEntry is the native boundary around this send).
+        const proto::ProtoArguments positional(args, static_cast<unsigned>(argc));
+        const proto::ProtoObject* r = native(ctx, recv, nullptr, &positional, nullptr);
+        return r ? r : PROTO_NONE;
+    }
+    const proto::ProtoObject* bc = attr->getOwnAttributeDirect(ctx, bs.sym.bcPtr);
+    if (bc && bc != PROTO_NONE) {
         bool understood = false;
         const proto::ProtoObject* r = sendDynamic(rt, ctx, recv, selector, args, argc, &understood);
         return r ? r : PROTO_NONE;

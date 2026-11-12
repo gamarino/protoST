@@ -28,7 +28,6 @@ class BytecodeModule;
 class ExecutionEngine;
 class TimerService;
 struct Bootstrap;
-struct PrimitiveRegistry;
 
 class STRuntime {
 public:
@@ -84,9 +83,6 @@ public:
 
     // Access to the bootstrap prototype set (Object/Number/...).
     const Bootstrap& bootstrap() const;
-
-    // Access to the primitive registry that backs SEND dispatch.
-    PrimitiveRegistry& registry();
 
     // Access to the debugger runtime (attach state + session entry).
     DebuggerRuntime& debugger();

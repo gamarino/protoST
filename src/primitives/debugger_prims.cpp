@@ -35,11 +35,10 @@ const proto::ProtoObject* prim_DebuggerHalt(STRuntime& rt, proto::ProtoContext* 
 } // anon
 
 void installDebuggerPrimitives(STRuntime& rt) {
-    auto& reg = rt.registry();
     auto& b   = rt.bootstrap();
-    int idx = reg.registerPrim(prim_DebuggerHalt);
-    bindPrimitive(rt, b.objectProto, "halt",  idx);
-    bindPrimitive(rt, b.objectProto, "halt:", idx);
+    const proto::ProtoMethod halt = primitiveMethod<prim_DebuggerHalt>;
+    bindPrimitive(rt, b.objectProto, "halt",  halt);
+    bindPrimitive(rt, b.objectProto, "halt:", halt);
 }
 
 } // namespace protoST

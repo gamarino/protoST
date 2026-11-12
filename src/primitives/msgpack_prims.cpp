@@ -425,10 +425,9 @@ PRIM(prim_MsgpackDecode) {
 } // namespace
 
 void installMessagePackPrimitives(STRuntime& rt) {
-    auto& reg = rt.registry();
     const proto::ProtoObject* o = rt.bootstrap().objectProto;
-    bindPrimitive(rt, o, "__msgpackEncode:map:ext:", reg.registerPrim(prim_MsgpackEncode));
-    bindPrimitive(rt, o, "__msgpackDecode:strict:ordered:map:ext:first:", reg.registerPrim(prim_MsgpackDecode));
+    bindPrimitive(rt, o, "__msgpackEncode:map:ext:", primitiveMethod<prim_MsgpackEncode>);
+    bindPrimitive(rt, o, "__msgpackDecode:strict:ordered:map:ext:first:", primitiveMethod<prim_MsgpackDecode>);
 }
 
 } // namespace protoST

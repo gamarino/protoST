@@ -34,7 +34,7 @@ Read the source in the order a script travels through it:
 | 4. Bytecode | `src/runtime/Opcodes.h`, `BytecodeModule.h`, `BytecodeModule.cpp` | `BytecodeModule::emit`, `emitWide`, `patchArg`, `internSymbol`, `addBlockModule`, `cachedLocalCount`, `cachedExtraOperandStack` | The instruction set and the module: code bytes, constant pool, nested modules (block and method bodies), frame metadata, debug information. |
 | 5. VM | `src/runtime/ExecutionEngine.h`, `ExecutionEngine.cpp` | `ExecutionEngine::runWithArgs`, `runLoop`, `pushFrame`, `popFrame`, the `SEND_*` case of `runLoop`, `doesNotUnderstand`, `gcSafepoint` | The dispatch loop. Method and block frames are pushed on the engine's own frame stack; no C++ recursion per Smalltalk call. |
 | 6. Runtime | `src/runtime/STRuntime.cpp`, `Bootstrap.cpp` | `STRuntime::construct`, `loadKernel`, `runTopLevel`, `runModuleTopLevel`, `materialize`, `bindPrimitive` | Prototypes, globals, the kernel (`lib/kernel/*.st`, compiled and run like a script), literal materialisation, actors and their worker threads. |
-| 7. Primitives | `src/primitives/*.cpp`, `include/protoST/primitives.h` | `install*Primitives`, `PrimitiveRegistry::registerPrim`, `invokeBlock` (`block_prims.cpp`), `prim_Block_on_do` (`exception_prims.cpp`) | Built-in methods written in C++, bound on prototypes under a selector. |
+| 7. Primitives | `src/primitives/*.cpp`, `include/protoST/primitives.h` | `install*Primitives`, `primitiveMethod<F>`, `bindPrimitive`, `runtimeOf`, `invokeBlock` (`block_prims.cpp`), `prim_Block_on_do` (`exception_prims.cpp`) | Built-in methods written in C++: protoCore native methods bound on prototypes under a selector. |
 
 `src/runtime/Disassembler.cpp` prints a module; reading its `listModule`
 alongside `Opcodes.h` is a quick way to learn the operand of every opcode.
@@ -338,19 +338,29 @@ case of `runLoop`) tries, in order:
    method of the receiver's class runs with a `Message`; otherwise a
    `MessageNotUnderstood` (an `Error`) is signalled, text
    `doesNotUnderstand: sel (receiver class: C)`.
-5. **User method** (the attribute owns `__bc_ptr__`): the module's
-   `argCount` must be the send's argument count plus one; a frame is pushed
-   with local 0 = self = the receiver and the arguments in locals 1..n; then
-   the call-entry safepoint (1.6).
-6. **A value attribute** (not an integer): a unary send answers the
-   attribute itself (member access, used for module exports); any other send
-   raises `#sel: the attribute is a value, not a method`.
-7. **Primitive** (the attribute is an integer with bit 62 set, the
-   primitive's index in the registry): the C++ function is called as
-   `fn(rt, ctx, receiver, args, argc)` **in the engine's context**, inside
-   `translateNativeException`, which turns a C++ exception it throws into a
-   catchable protoST `Error`. `args` points into a C++ array whose values
-   are still in the frame's (popped but traced) operand-stack slots.
+5. **User method** (the attribute is an object cell that owns
+   `__bc_ptr__`): the module's `argCount` must be the send's argument count
+   plus one; a frame is pushed with local 0 = self = the receiver and the
+   arguments in locals 1..n; then the call-entry safepoint (1.6). Only an
+   object cell (pointer tag 0) is probed for `__bc_ptr__`.
+6. **Primitive** (the attribute is a protoCore method cell, `asMethod`
+   answers its `proto::ProtoMethod`): the method is called directly as
+   `method(ctx, receiver, nullptr, &positional, nullptr)` **in the engine's
+   context**, inside `translateNativeException`, which turns a C++ exception
+   it throws into a catchable protoST `Error`. `positional` is a
+   `proto::ProtoArguments` built on the C++ stack over the operand array,
+   whose values are still in the frame's (popped but traced) operand-stack
+   slots; nothing is copied. A protoST primitive is `primitiveMethod<F>`
+   (`include/protoST/primitives.h`), which finds the runtime with
+   `runtimeOf(ctx)` and calls `F(rt, ctx, receiver, args, argc)`. A method
+   another runtime exports (a C++ module, `protoscalac`) is a method cell
+   too and is called the same way.
+7. **A value attribute** (anything else, an integer included): a unary send
+   answers the attribute itself (member access, used for module exports);
+   any other send raises `#sel: the attribute is a value, not a method`.
+   Until 0.10.0 a primitive was an integer attribute (its registry index
+   with bit 62 set), so a value attribute holding such an integer was
+   dispatched as a primitive.
 
 **Call-form sends** (`SEND_CALL`): `recv name(p1, k = v)`. The operand names
 a symbol `name#nPos#key1#key2...` (named keys sorted); the engine parses it
@@ -359,10 +369,11 @@ positional values and the named values (in sorted-key order) are on the
 stack. The bare `name` is looked up; a call-form method gets its positional
 values in locals 1..nPos and each declared named parameter either the
 caller's value or the unset marker, which the method's prologue replaces by
-the default expression (example 08). A protoCore method (a module written in
-C++ or another language) is called through protoCore's array call form with
-the named values as `ProtoKeywordArgument`s; a primitive accepts positional
-values only. At most 16 values; actors are refused.
+the default expression (example 08). A protoCore method (a primitive, or a
+module written in C++ or another language) is called directly with the
+positional values as `ProtoArguments` and the named values as
+`ProtoKeywordArguments`; a primitive refuses named values (`a primitive
+method takes no named arguments`). At most 16 values; actors are refused.
 
 **Blocks evaluated by primitives.** A primitive that takes a block and runs
 it (`ifTrue:` when not inlined, `do:`, `inject:into:`, `on:do:`, `ensure:`,
@@ -1684,8 +1695,8 @@ module main: <module>
 ```
 
 - `12 SEND_UNARY #size` and `17 SEND_KEYWORD #at:` look the selector up on
-  the `Array` prototype and find a primitive marker, so the engine calls the
-  C++ function in the same context, with no frame (1.5 step 7).
+  the `Array` prototype and find a primitive, a protoCore method cell, so
+  the engine calls it in the same context, with no frame (1.5 step 6).
 
 ### Example 12: `inject:into:` with a block
 
@@ -2648,8 +2659,8 @@ condition. Every place to touch, in order:
 
 ## 5. How to add a primitive
 
-A primitive is a C++ function bound on a prototype under a selector. A send
-that finds it calls it directly (1.5 step 7).
+A primitive is a C++ function bound on a prototype under a selector, as a
+protoCore native method. A send that finds it calls it directly (1.5 step 6).
 
 **The context rule (maintainer's rule).** A `ProtoContext` is created only
 when a method, that is interpreted code with its own locals, is activated; a
@@ -2677,15 +2688,22 @@ blocks are frames inside one context per thread (1.3, 1.8).
    into a catchable `Error` whose `messageText` is the message), or by signalling a specific class
    (`signalErrorOfClass`). Model: the arithmetic primitives of
    `src/primitives/int_prims.cpp` (`DEFBIN`, `requireNumber`).
-2. **Register and bind it** in the file's `install*Primitives` function:
+2. **Bind it** in the file's `install*Primitives` function:
    ```cpp
-   bindPrimitive(rt, N, "+", reg.registerPrim(prim_NumAdd));
+   bindPrimitive(rt, N, "+", primitiveMethod<prim_NumAdd>);
    ```
-   `registerPrim` appends the function to the runtime's `PrimitiveRegistry`
-   and answers its index; `bindPrimitive` stores the index, tagged with bit
-   62, as an attribute of the prototype under the interned selector. A new
-   source file needs its `install*` function declared and called in
-   `STRuntime::construct` and the file listed in `CMakeLists.txt`.
+   `primitiveMethod<prim_NumAdd>` is the function as a protoCore method
+   (`proto::ProtoMethod`): it finds the runtime that owns the context's space
+   (`runtimeOf(ctx)`, a per-thread cache over the space-to-runtime registry
+   of `src/modules/STModuleProvider.h`), refuses named arguments, and calls
+   `prim_NumAdd(rt, ctx, self, args, argc)` over the caller's argument array.
+   `bindPrimitive` wraps it in a native method cell
+   (`ProtoContext::fromMethod(nullptr, method)`: no bound receiver, so no
+   cycle with the prototype) and stores it as an attribute of the prototype
+   under the interned selector, so ordinary lookup finds it and an attribute
+   of the same name lower in the chain overrides it. A new source file needs
+   its `install*` function declared and called in `STRuntime::construct` and
+   the file listed in `CMakeLists.txt`.
 3. **Running a block or a method** from a primitive: `invokeBlock(rt, ctx,
    block, args, argc)` (a nested engine) or `sendDynamic(rt, ctx, recv,
    selector, args, argc, &understood)`. Both run on the caller's `ctx`.

@@ -2511,254 +2511,253 @@ const proto::ProtoObject* prim_Number_toByDo(STRuntime& rt, proto::ProtoContext*
 } // namespace
 
 void installCollectionPrimitives(STRuntime& rt) {
-    auto& reg = rt.registry();
     auto& b   = rt.bootstrap();
 
     // --- Array base operations — bound on the Array prototype --------------
     bindPrimitive(rt, b.arrayProto, "size",
-                  reg.registerPrim(prim_Array_size));
+                  primitiveMethod<prim_Array_size>);
     bindPrimitive(rt, b.arrayProto, "isEmpty",
-                  reg.registerPrim(prim_Array_isEmpty));
+                  primitiveMethod<prim_Array_isEmpty>);
     bindPrimitive(rt, b.arrayProto, "notEmpty",
-                  reg.registerPrim(prim_Array_notEmpty));
+                  primitiveMethod<prim_Array_notEmpty>);
     bindPrimitive(rt, b.arrayProto, "at:",
-                  reg.registerPrim(prim_Array_at));
+                  primitiveMethod<prim_Array_at>);
     bindPrimitive(rt, b.arrayProto, "at:put:",
-                  reg.registerPrim(prim_Array_atPut));
+                  primitiveMethod<prim_Array_atPut>);
     bindPrimitive(rt, b.arrayProto, "do:",
-                  reg.registerPrim(prim_Array_do));
+                  primitiveMethod<prim_Array_do>);
 
     // --- Array class-side constructors — bound on Array's metaclass -------
     bindClassPrimitive(rt, b.arrayProto, "new:",
-                  reg.registerPrim(prim_Array_classNew));
+                  primitiveMethod<prim_Array_classNew>);
     bindClassPrimitive(rt, b.arrayProto, "withAll:",
-                  reg.registerPrim(prim_Array_classWithAll));
+                  primitiveMethod<prim_Array_classWithAll>);
     {
-        int withIdx = reg.registerPrim(prim_Array_classWith);
-        bindClassPrimitive(rt, b.arrayProto, "with:",                   withIdx);
-        bindClassPrimitive(rt, b.arrayProto, "with:with:",              withIdx);
-        bindClassPrimitive(rt, b.arrayProto, "with:with:with:",         withIdx);
-        bindClassPrimitive(rt, b.arrayProto, "with:with:with:with:",    withIdx);
+        const proto::ProtoMethod classWith = primitiveMethod<prim_Array_classWith>;
+        bindClassPrimitive(rt, b.arrayProto, "with:",                   classWith);
+        bindClassPrimitive(rt, b.arrayProto, "with:with:",              classWith);
+        bindClassPrimitive(rt, b.arrayProto, "with:with:with:",         classWith);
+        bindClassPrimitive(rt, b.arrayProto, "with:with:with:with:",    classWith);
     }
 
     // --- OrderedCollection base operations — bound on the OC prototype -----
     bindPrimitive(rt, b.orderedCollectionProto, "size",
-                  reg.registerPrim(prim_OC_size));
+                  primitiveMethod<prim_OC_size>);
     bindPrimitive(rt, b.orderedCollectionProto, "isEmpty",
-                  reg.registerPrim(prim_OC_isEmpty));
+                  primitiveMethod<prim_OC_isEmpty>);
     bindPrimitive(rt, b.orderedCollectionProto, "notEmpty",
-                  reg.registerPrim(prim_OC_notEmpty));
+                  primitiveMethod<prim_OC_notEmpty>);
     bindPrimitive(rt, b.orderedCollectionProto, "at:",
-                  reg.registerPrim(prim_OC_at));
+                  primitiveMethod<prim_OC_at>);
     bindPrimitive(rt, b.orderedCollectionProto, "at:put:",
-                  reg.registerPrim(prim_OC_atPut));
+                  primitiveMethod<prim_OC_atPut>);
     bindPrimitive(rt, b.orderedCollectionProto, "do:",
-                  reg.registerPrim(prim_OC_do));
+                  primitiveMethod<prim_OC_do>);
     {
-        int addIdx = reg.registerPrim(prim_OC_add);
-        bindPrimitive(rt, b.orderedCollectionProto, "add:",     addIdx);
-        bindPrimitive(rt, b.orderedCollectionProto, "addLast:", addIdx);
+        const proto::ProtoMethod ocAdd = primitiveMethod<prim_OC_add>;
+        bindPrimitive(rt, b.orderedCollectionProto, "add:",     ocAdd);
+        bindPrimitive(rt, b.orderedCollectionProto, "addLast:", ocAdd);
     }
     bindPrimitive(rt, b.orderedCollectionProto, "addFirst:",
-                  reg.registerPrim(prim_OC_addFirst));
+                  primitiveMethod<prim_OC_addFirst>);
     bindPrimitive(rt, b.orderedCollectionProto, "addAll:",
-                  reg.registerPrim(prim_OC_addAll));
+                  primitiveMethod<prim_OC_addAll>);
     bindPrimitive(rt, b.orderedCollectionProto, "removeFirst",
-                  reg.registerPrim(prim_OC_removeFirst));
+                  primitiveMethod<prim_OC_removeFirst>);
     bindPrimitive(rt, b.orderedCollectionProto, "removeLast",
-                  reg.registerPrim(prim_OC_removeLast));
+                  primitiveMethod<prim_OC_removeLast>);
     bindPrimitive(rt, b.orderedCollectionProto, "remove:",
-                  reg.registerPrim(prim_OC_remove));
+                  primitiveMethod<prim_OC_remove>);
     bindPrimitive(rt, b.orderedCollectionProto, "remove:ifAbsent:",
-                  reg.registerPrim(prim_OC_removeIfAbsent));
+                  primitiveMethod<prim_OC_removeIfAbsent>);
     bindPrimitive(rt, b.orderedCollectionProto, "first",
-                  reg.registerPrim(prim_OC_first));
+                  primitiveMethod<prim_OC_first>);
     bindPrimitive(rt, b.orderedCollectionProto, "last",
-                  reg.registerPrim(prim_OC_last));
+                  primitiveMethod<prim_OC_last>);
 
     // --- OrderedCollection class-side constructors -------------------------
     // A class object IS its prototype, so a send to `OrderedCollection`
     // resolves these. `new` / `withAll:` build a fresh empty / filled instance.
     bindClassPrimitive(rt, b.orderedCollectionProto, "new",
-                  reg.registerPrim(prim_OC_classNew));
+                  primitiveMethod<prim_OC_classNew>);
     bindClassPrimitive(rt, b.orderedCollectionProto, "withAll:",
-                  reg.registerPrim(prim_OC_classWithAll));
+                  primitiveMethod<prim_OC_classWithAll>);
 
     // --- Interval base operations — bound on the Interval prototype --------
     // COL-e: a lazy, read-only sequenceable collection — no add:/at:put:.
     bindPrimitive(rt, b.intervalProto, "size",
-                  reg.registerPrim(prim_Interval_size));
+                  primitiveMethod<prim_Interval_size>);
     bindPrimitive(rt, b.intervalProto, "isEmpty",
-                  reg.registerPrim(prim_Interval_isEmpty));
+                  primitiveMethod<prim_Interval_isEmpty>);
     bindPrimitive(rt, b.intervalProto, "notEmpty",
-                  reg.registerPrim(prim_Interval_notEmpty));
+                  primitiveMethod<prim_Interval_notEmpty>);
     bindPrimitive(rt, b.intervalProto, "at:",
-                  reg.registerPrim(prim_Interval_at));
+                  primitiveMethod<prim_Interval_at>);
     bindPrimitive(rt, b.intervalProto, "first",
-                  reg.registerPrim(prim_Interval_first));
+                  primitiveMethod<prim_Interval_first>);
     bindPrimitive(rt, b.intervalProto, "last",
-                  reg.registerPrim(prim_Interval_last));
+                  primitiveMethod<prim_Interval_last>);
     bindPrimitive(rt, b.intervalProto, "do:",
-                  reg.registerPrim(prim_Interval_do));
+                  primitiveMethod<prim_Interval_do>);
 
     // --- Number iteration — bound on numberProto, inherited by all numbers -
     // COL-e: `to:` / `to:by:` build a lazy Interval; `to:do:` / `to:by:do:`
     // iterate inline. Bound on `numberProto` (the shared numeric prototype)
     // so integers — and any future Float — inherit them uniformly.
     bindPrimitive(rt, b.numberProto, "to:",
-                  reg.registerPrim(prim_Number_to));
+                  primitiveMethod<prim_Number_to>);
     bindPrimitive(rt, b.numberProto, "to:by:",
-                  reg.registerPrim(prim_Number_toBy));
+                  primitiveMethod<prim_Number_toBy>);
     bindPrimitive(rt, b.numberProto, "to:do:",
-                  reg.registerPrim(prim_Number_toDo));
+                  primitiveMethod<prim_Number_toDo>);
     bindPrimitive(rt, b.numberProto, "to:by:do:",
-                  reg.registerPrim(prim_Number_toByDo));
+                  primitiveMethod<prim_Number_toByDo>);
 
     // --- Set base operations — bound on the Set prototype ------------------
     bindPrimitive(rt, b.setProto, "add:",
-                  reg.registerPrim(prim_Set_add));
+                  primitiveMethod<prim_Set_add>);
     bindPrimitive(rt, b.setProto, "remove:",
-                  reg.registerPrim(prim_Set_remove));
+                  primitiveMethod<prim_Set_remove>);
     bindPrimitive(rt, b.setProto, "remove:ifAbsent:",
-                  reg.registerPrim(prim_Set_removeIfAbsent));
+                  primitiveMethod<prim_Set_removeIfAbsent>);
     bindPrimitive(rt, b.setProto, "includes:",
-                  reg.registerPrim(prim_Set_includes));
+                  primitiveMethod<prim_Set_includes>);
     bindPrimitive(rt, b.setProto, "size",
-                  reg.registerPrim(prim_Set_size));
+                  primitiveMethod<prim_Set_size>);
     bindPrimitive(rt, b.setProto, "isEmpty",
-                  reg.registerPrim(prim_Set_isEmpty));
+                  primitiveMethod<prim_Set_isEmpty>);
     bindPrimitive(rt, b.setProto, "notEmpty",
-                  reg.registerPrim(prim_Set_notEmpty));
+                  primitiveMethod<prim_Set_notEmpty>);
     bindPrimitive(rt, b.setProto, "do:",
-                  reg.registerPrim(prim_Set_do));
+                  primitiveMethod<prim_Set_do>);
     // --- Set class-side constructors — bound on Set's metaclass -----------
     bindClassPrimitive(rt, b.setProto, "new",
-                  reg.registerPrim(prim_Set_classNew));
+                  primitiveMethod<prim_Set_classNew>);
     bindClassPrimitive(rt, b.setProto, "withAll:",
-                  reg.registerPrim(prim_Set_classWithAll));
+                  primitiveMethod<prim_Set_classWithAll>);
 
     // --- Bag base operations — bound on the Bag prototype ------------------
     bindPrimitive(rt, b.bagProto, "add:",
-                  reg.registerPrim(prim_Bag_add));
+                  primitiveMethod<prim_Bag_add>);
     bindPrimitive(rt, b.bagProto, "add:withOccurrences:",
-                  reg.registerPrim(prim_Bag_addWithOccurrences));
+                  primitiveMethod<prim_Bag_addWithOccurrences>);
     bindPrimitive(rt, b.bagProto, "remove:",
-                  reg.registerPrim(prim_Bag_remove));
+                  primitiveMethod<prim_Bag_remove>);
     bindPrimitive(rt, b.bagProto, "remove:ifAbsent:",
-                  reg.registerPrim(prim_Bag_removeIfAbsent));
+                  primitiveMethod<prim_Bag_removeIfAbsent>);
     bindPrimitive(rt, b.bagProto, "includes:",
-                  reg.registerPrim(prim_Bag_includes));
+                  primitiveMethod<prim_Bag_includes>);
     bindPrimitive(rt, b.bagProto, "occurrencesOf:",
-                  reg.registerPrim(prim_Bag_occurrencesOf));
+                  primitiveMethod<prim_Bag_occurrencesOf>);
     bindPrimitive(rt, b.bagProto, "size",
-                  reg.registerPrim(prim_Bag_size));
+                  primitiveMethod<prim_Bag_size>);
     bindPrimitive(rt, b.bagProto, "isEmpty",
-                  reg.registerPrim(prim_Bag_isEmpty));
+                  primitiveMethod<prim_Bag_isEmpty>);
     bindPrimitive(rt, b.bagProto, "notEmpty",
-                  reg.registerPrim(prim_Bag_notEmpty));
+                  primitiveMethod<prim_Bag_notEmpty>);
     bindPrimitive(rt, b.bagProto, "do:",
-                  reg.registerPrim(prim_Bag_do));
+                  primitiveMethod<prim_Bag_do>);
     // --- Bag class-side constructors — bound on Bag's metaclass -----------
     bindClassPrimitive(rt, b.bagProto, "new",
-                  reg.registerPrim(prim_Bag_classNew));
+                  primitiveMethod<prim_Bag_classNew>);
     bindClassPrimitive(rt, b.bagProto, "withAll:",
-                  reg.registerPrim(prim_Bag_classWithAll));
+                  primitiveMethod<prim_Bag_classWithAll>);
 
     // --- Dictionary base operations — bound on the Dictionary prototype ----
     bindPrimitive(rt, b.dictionaryProto, "at:",
-                  reg.registerPrim(prim_Dict_at));
+                  primitiveMethod<prim_Dict_at>);
     bindPrimitive(rt, b.dictionaryProto, "at:ifAbsent:",
-                  reg.registerPrim(prim_Dict_atIfAbsent));
+                  primitiveMethod<prim_Dict_atIfAbsent>);
     bindPrimitive(rt, b.dictionaryProto, "at:ifAbsentPut:",
-                  reg.registerPrim(prim_Dict_atIfAbsentPut));
+                  primitiveMethod<prim_Dict_atIfAbsentPut>);
     bindPrimitive(rt, b.dictionaryProto, "at:put:",
-                  reg.registerPrim(prim_Dict_atPut));
+                  primitiveMethod<prim_Dict_atPut>);
     bindPrimitive(rt, b.dictionaryProto, "removeKey:",
-                  reg.registerPrim(prim_Dict_removeKey));
+                  primitiveMethod<prim_Dict_removeKey>);
     bindPrimitive(rt, b.dictionaryProto, "removeKey:ifAbsent:",
-                  reg.registerPrim(prim_Dict_removeKeyIfAbsent));
+                  primitiveMethod<prim_Dict_removeKeyIfAbsent>);
     bindPrimitive(rt, b.dictionaryProto, "includesKey:",
-                  reg.registerPrim(prim_Dict_includesKey));
+                  primitiveMethod<prim_Dict_includesKey>);
     bindPrimitive(rt, b.dictionaryProto, "includes:",
-                  reg.registerPrim(prim_Dict_includes));
+                  primitiveMethod<prim_Dict_includes>);
     bindPrimitive(rt, b.dictionaryProto, "size",
-                  reg.registerPrim(prim_Dict_size));
+                  primitiveMethod<prim_Dict_size>);
     bindPrimitive(rt, b.dictionaryProto, "isEmpty",
-                  reg.registerPrim(prim_Dict_isEmpty));
+                  primitiveMethod<prim_Dict_isEmpty>);
     bindPrimitive(rt, b.dictionaryProto, "notEmpty",
-                  reg.registerPrim(prim_Dict_notEmpty));
+                  primitiveMethod<prim_Dict_notEmpty>);
     bindPrimitive(rt, b.dictionaryProto, "do:",
-                  reg.registerPrim(prim_Dict_do));
+                  primitiveMethod<prim_Dict_do>);
     bindPrimitive(rt, b.dictionaryProto, "keysDo:",
-                  reg.registerPrim(prim_Dict_keysDo));
+                  primitiveMethod<prim_Dict_keysDo>);
     bindPrimitive(rt, b.dictionaryProto, "valuesDo:",
-                  reg.registerPrim(prim_Dict_valuesDo));
+                  primitiveMethod<prim_Dict_valuesDo>);
     bindPrimitive(rt, b.dictionaryProto, "keysAndValuesDo:",
-                  reg.registerPrim(prim_Dict_keysAndValuesDo));
+                  primitiveMethod<prim_Dict_keysAndValuesDo>);
     bindPrimitive(rt, b.dictionaryProto, "associationsDo:",
-                  reg.registerPrim(prim_Dict_associationsDo));
+                  primitiveMethod<prim_Dict_associationsDo>);
     bindPrimitive(rt, b.dictionaryProto, "keys",
-                  reg.registerPrim(prim_Dict_keys));
+                  primitiveMethod<prim_Dict_keys>);
     bindPrimitive(rt, b.dictionaryProto, "values",
-                  reg.registerPrim(prim_Dict_values));
+                  primitiveMethod<prim_Dict_values>);
     bindPrimitive(rt, b.dictionaryProto, "associations",
-                  reg.registerPrim(prim_Dict_associations));
+                  primitiveMethod<prim_Dict_associations>);
     // --- Dictionary class-side constructor ---------------------------------
     bindClassPrimitive(rt, b.dictionaryProto, "new",
-                  reg.registerPrim(prim_Dict_classNew));
+                  primitiveMethod<prim_Dict_classNew>);
 
     // --- Association — bound on the Association prototype ------------------
     bindPrimitive(rt, b.associationProto, "key",
-                  reg.registerPrim(prim_Assoc_key));
+                  primitiveMethod<prim_Assoc_key>);
     bindPrimitive(rt, b.associationProto, "value",
-                  reg.registerPrim(prim_Assoc_value));
+                  primitiveMethod<prim_Assoc_value>);
     bindPrimitive(rt, b.associationProto, "key:",
-                  reg.registerPrim(prim_Assoc_keyPut));
+                  primitiveMethod<prim_Assoc_keyPut>);
     bindPrimitive(rt, b.associationProto, "value:",
-                  reg.registerPrim(prim_Assoc_valuePut));
+                  primitiveMethod<prim_Assoc_valuePut>);
     // `aKey -> aValue` builds an Association — bound on Object so any object
     // is a valid association key.
     bindPrimitive(rt, b.objectProto, "->",
-                  reg.registerPrim(prim_Object_arrow));
+                  primitiveMethod<prim_Object_arrow>);
 
     // --- Derived iteration protocol — bound on Collection, inherited by all -
     bindPrimitive(rt, b.collectionProto, "species",
-                  reg.registerPrim(prim_Collection_species));
+                  primitiveMethod<prim_Collection_species>);
     bindPrimitive(rt, b.collectionProto, "size",
-                  reg.registerPrim(prim_Collection_size));
+                  primitiveMethod<prim_Collection_size>);
     bindPrimitive(rt, b.collectionProto, "isEmpty",
-                  reg.registerPrim(prim_Collection_isEmpty));
+                  primitiveMethod<prim_Collection_isEmpty>);
     bindPrimitive(rt, b.collectionProto, "notEmpty",
-                  reg.registerPrim(prim_Collection_notEmpty));
+                  primitiveMethod<prim_Collection_notEmpty>);
     bindPrimitive(rt, b.collectionProto, "collect:",
-                  reg.registerPrim(prim_Collection_collect));
+                  primitiveMethod<prim_Collection_collect>);
     bindPrimitive(rt, b.collectionProto, "select:",
-                  reg.registerPrim(prim_Collection_select));
+                  primitiveMethod<prim_Collection_select>);
     bindPrimitive(rt, b.collectionProto, "reject:",
-                  reg.registerPrim(prim_Collection_reject));
+                  primitiveMethod<prim_Collection_reject>);
     bindPrimitive(rt, b.collectionProto, "detect:",
-                  reg.registerPrim(prim_Collection_detect));
+                  primitiveMethod<prim_Collection_detect>);
     bindPrimitive(rt, b.collectionProto, "detect:ifNone:",
-                  reg.registerPrim(prim_Collection_detectIfNone));
+                  primitiveMethod<prim_Collection_detectIfNone>);
     bindPrimitive(rt, b.collectionProto, "inject:into:",
-                  reg.registerPrim(prim_Collection_injectInto));
+                  primitiveMethod<prim_Collection_injectInto>);
     bindPrimitive(rt, b.collectionProto, "do:separatedBy:",
-                  reg.registerPrim(prim_Collection_doSeparatedBy));
+                  primitiveMethod<prim_Collection_doSeparatedBy>);
     bindPrimitive(rt, b.collectionProto, "count:",
-                  reg.registerPrim(prim_Collection_count));
+                  primitiveMethod<prim_Collection_count>);
     bindPrimitive(rt, b.collectionProto, "anySatisfy:",
-                  reg.registerPrim(prim_Collection_anySatisfy));
+                  primitiveMethod<prim_Collection_anySatisfy>);
     bindPrimitive(rt, b.collectionProto, "allSatisfy:",
-                  reg.registerPrim(prim_Collection_allSatisfy));
+                  primitiveMethod<prim_Collection_allSatisfy>);
     bindPrimitive(rt, b.collectionProto, ",",
-                  reg.registerPrim(prim_Collection_concat));
+                  primitiveMethod<prim_Collection_concat>);
 {
-        const int sortIdx = reg.registerPrim(prim_Seq_sort);
-        bindPrimitive(rt, b.sequenceableCollectionProto, "sort:", sortIdx);
-        bindPrimitive(rt, b.sequenceableCollectionProto, "sort", sortIdx);
+        const proto::ProtoMethod seqSort = primitiveMethod<prim_Seq_sort>;
+        bindPrimitive(rt, b.sequenceableCollectionProto, "sort:", seqSort);
+        bindPrimitive(rt, b.sequenceableCollectionProto, "sort", seqSort);
     }
         bindPrimitive(rt, b.collectionProto, "asArray",
-                  reg.registerPrim(prim_Collection_asArray));
+                  primitiveMethod<prim_Collection_asArray>);
 }
 
 // --- the narrow surface other primitive files use (CollectionSupport.h) -----

@@ -214,10 +214,11 @@ A foreign object's methods are attributes. A protoST message send dispatches
 by selector through the shared `getAttribute` walk, so a foreign method is
 invoked with no special-casing. Two kinds of foreign method are reachable:
 
-- **Primitive-backed method.** Stored as a tagged-`SmallInteger` marker that
-  indexes a native-primitive table. protoST's SEND dispatch recognises the
-  marker and calls the primitive. (In the stand-in test the foreign provider
-  registers its primitive in the shared primitive registry — see §5.)
+- **Native method.** A protoCore method cell (`proto::ProtoMethod`), which
+  is also how protoST stores its own primitives (0.10.0). protoST's SEND
+  dispatch calls it directly with the receiver as `self` and the arguments as
+  a `ProtoArguments` descriptor. (In the stand-in test the foreign provider
+  binds a protoST-style primitive, `primitiveMethod<F>` — see §5.)
 - **Attribute-stored value.** A non-callable attribute. A *unary* send reads
   it back as the result (`w label` → the stored value); a non-unary send to a
   value attribute is, correctly, an error.
@@ -307,12 +308,12 @@ m double_it(7, name = 'hello')        "→ same shape as the Python call"
 ```
 
 `SEND_CALL` (`src/runtime/ExecutionEngine.cpp`) looks up the bare attribute
-and handles a protoST bytecode method (an object carrying `__bc_ptr__`), a
-protoST primitive marker, and, since the protoCore 3.0.0 port, a
-`proto::ProtoMethod` cell: what a C++ module and `protoscalac` export. The
-method is called through protoCore's array call form with the receiver as
-`self`, the positional arguments, and the named arguments under their interned
-names. The call is a native boundary: a `proto::ProtoException` the method
+and handles a protoST bytecode method (an object carrying `__bc_ptr__`) and a
+`proto::ProtoMethod` cell: a protoST primitive (0.10.0), or what a C++ module
+and `protoscalac` export (since the protoCore 3.0.0 port). The method is
+called directly with the receiver as `self`, the positional arguments, and the
+named arguments under their interned names; a protoST primitive refuses named
+arguments. The call is a native boundary: a `proto::ProtoException` the method
 raises is signalled as a Smalltalk exception with its value unchanged, so
 `on:do:` naming the module's own error type catches it (LANGUAGE.md §8.7), and
 a C++ `std::exception` becomes a plain `Error`. This is exercised with
@@ -537,7 +538,7 @@ foreign collection wrapper distinct from a protoST `Array`; and bare
 immediates (`answerInt` 42, `answerBool` true, `answerString` "hello").
 
 The one genuinely runtime-specific piece — a primitive-backed method — is
-registered in the shared primitive registry. In the stand-in the test harness
+bound as a protoST primitive (`primitiveMethod<F>`). In the stand-in the test harness
 plays the *coordinating host* that a live tri-runtime process would be (§6):
 each runtime registers its own primitives, and the host wires the providers
 together.
@@ -582,13 +583,13 @@ libraries. At startup it must, in order:
    `STRuntime::addModuleProviderToChain("provider:js")` and
    `addModuleProviderToChain("provider:py")`; protoJS and protoPython need an
    equivalent call (a small addition on their side if absent).
-5. **Coordinate the primitive registries.** Each runtime owns a primitive
-   table. A foreign object's primitive-backed method indexes the *defining*
-   runtime's table. Either each runtime keeps its own table and a foreign
-   primitive marker is namespaced by runtime, or the host installs a shared
-   dispatch table. The exact mechanism is a host-design decision; T5-a's
-   stand-in sidesteps it by registering the foreign primitive in protoST's
-   own registry — acceptable for a test, not for the real host.
+5. **Native methods need no coordination.** Since 0.10.0 a protoST
+   primitive is a protoCore method cell, the representation every runtime on
+   protoCore shares, so there is no per-runtime primitive table to namespace:
+   a send calls the cell it finds. A protoST primitive finds its runtime from
+   the context's space (`runtimeOf`), and refuses a context whose space no
+   protoST runtime owns; another runtime sends to protoST objects through
+   `__st_send__` (§4.3).
 
 ### 6.2 What the demo must show
 

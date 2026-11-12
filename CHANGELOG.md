@@ -118,6 +118,16 @@ minor release, so the two services arrive in 0.5.0.
 
 ### Fixed
 
+- **An integer attribute is always a value.** A primitive was an integer
+  attribute, its registry index with bit 62 set (`PrimitiveMarker.h`), so any
+  value attribute holding such an integer, 2^62 + k, ran primitive k when a
+  send reached it, and `respondsTo:`, `canUnderstand:`, `lookupSelector:` and
+  `selectors` reported it as a method. A primitive is now a protoCore method
+  cell (see Performance), which no integer can be mistaken for. A call-form
+  send with no arguments to a primitive (`3 printString()`) answered the raw
+  marker integer instead of running the primitive; it runs it. Tests:
+  `tests/unit/test_primitive_methods.cpp` (fails on 83864c9 in five
+  assertions), `05-messages/primitive-is-a-native-method.st`.
 - **S3 is closed: an allocation-free loop does not stall a collection, and
   a test now proves it.** The park points came with S15 (the loop back-edge,
   engine entry and call entry call `ProtoContext::safepoint()`), but S3 stayed
@@ -343,6 +353,28 @@ minor release, so the two services arrive in 0.5.0.
 
 ### Performance
 
+- **A primitive is a protoCore native method.** `bindPrimitive` installs
+  `ProtoContext::fromMethod(nullptr, primitiveMethod<F>)` under the selector
+  (no bound receiver, so no cycle with the prototype), and a send that finds a
+  method cell calls it directly with the receiver as `self` and a
+  `ProtoArguments` over the operand array: one tag test (`asMethod`) where the
+  integer marker cost `isInteger`, protoCore's cross-library `Integer::asLong`
+  on a LargeInteger and a registry lookup. `primitiveMethod<F>` reaches the
+  runtime from the context's space through a per-thread cache over the
+  space-to-runtime registry, invalidated by a generation counter (no lock on
+  the hit path; `runtimeOf`, `include/protoST/primitives.h`), and refuses
+  named arguments. The integer marker, `PrimitiveMarker.h` and
+  `PrimitiveRegistry` are gone. Instructions per loop iteration
+  (`perf stat -r 3`, 200,000 vs 1,200,000 iterations, 83864c9 -> this
+  change): `a at: 1` 1,534 -> 1,437 (-97 per primitive send), `node class
+  == k` 2,064 -> 1,986, `node class` 1,979 -> 1,894, a user-method unary
+  send 1,478 -> 1,479 (unchanged: a user method is not probed). Whole
+  programs: protoBaseST's AVL workload 7.78 -> 7.58 x10^9 instructions
+  (-2.5 %), `PBAvl check:` x20 3.92 -> 3.87 x10^9 (-1.2 %), the comparable
+  suite -0.1 % to -1.0 %, except `exception_latency` +0.3 %: one template
+  instance per primitive adds unwind entries (FDEs), and the C++ unwinder's
+  FDE search (`_Unwind_Find_FDE`) grows from 4.3 % to 5.5 % of that
+  program's instructions.
 - **Interpreter round 3 (driven by the protoBaseST/ProtoBase gap
   analysis).** Per operation, in ns beyond the empty loop (the analysis's
   own `ops.st`, 2x10^6 iterations in a method, minimum of three runs),
@@ -512,6 +544,27 @@ minor release, so the two services arrive in 0.5.0.
 
 ### Breaking changes
 
+- **Embedder API: a primitive is a `proto::ProtoMethod`.** `PrimitiveRegistry`,
+  `STRuntime::registry()` and `registerPrim` are removed. `bindPrimitive` and
+  `bindClassPrimitive` take a `proto::ProtoMethod`; a function with the
+  `PrimFn` signature becomes one as `primitiveMethod<F>`
+  (`bindPrimitive(rt, proto, "sel", primitiveMethod<prim_X>)`). A primitive
+  called on a context whose space no protoST runtime owns signals an `Error`
+  naming `__st_send__`, the entry another runtime sends through. A primitive
+  sent named arguments in a call-form send reports `a primitive method takes
+  no named arguments` (was `primitive method 'sel' does not accept named args
+  in v1`).
+- **A ProtoSpace hosts one protoST runtime.** Constructing a second
+  `STRuntime` on a space that already hosts one (`STRuntime(hostSpace)`)
+  throws `std::logic_error`, since a primitive finds its runtime by its
+  context's space; it used to replace the first runtime in the space's
+  registry entry, which also sent the first runtime's imports to the second.
+  A runtime whose construction fails is unregistered again. Test
+  `tests/unit/test_primitive_methods.cpp`.
+- **A unary or keyword send calls a protoCore method attribute** (what a C++
+  module or another runtime exports), as a call-form send already did. A unary
+  send answered the method cell itself as a value, and a keyword send
+  signalled `the attribute is a value, not a method`.
 - **MessagePack nesting depth is 1024 (was 512)**, encode and decode, from
   protoIO 0.5.0's default: msgpack-python 1.2's unpacker limit and the record
   depth ProtoBase format 4 requires every reader to accept since ProtoBase

@@ -611,54 +611,53 @@ const proto::ProtoObject* prim_FloatParts(STRuntime& rt, proto::ProtoContext* ct
 } // anon
 
 void installMathPrimitives(STRuntime& rt) {
-    auto& reg = rt.registry();
     auto& b   = rt.bootstrap();
     auto* N   = b.numberProto;
 
     // Transcendental / irrational — each answers a Float.
-    bindPrimitive(rt, N, "sqrt",   reg.registerPrim(prim_Sqrt));
-    bindPrimitive(rt, N, "sin",    reg.registerPrim(prim_Sin));
-    bindPrimitive(rt, N, "cos",    reg.registerPrim(prim_Cos));
-    bindPrimitive(rt, N, "tan",    reg.registerPrim(prim_Tan));
-    bindPrimitive(rt, N, "arcSin", reg.registerPrim(prim_ArcSin));
-    bindPrimitive(rt, N, "arcCos", reg.registerPrim(prim_ArcCos));
-    bindPrimitive(rt, N, "arcTan", reg.registerPrim(prim_ArcTan));
-    bindPrimitive(rt, N, "ln",     reg.registerPrim(prim_Ln));
-    bindPrimitive(rt, N, "exp",    reg.registerPrim(prim_Exp));
-    bindPrimitive(rt, N, "log",    reg.registerPrim(prim_Log10));
-    bindPrimitive(rt, N, "log:",   reg.registerPrim(prim_LogBase));
+    bindPrimitive(rt, N, "sqrt",   primitiveMethod<prim_Sqrt>);
+    bindPrimitive(rt, N, "sin",    primitiveMethod<prim_Sin>);
+    bindPrimitive(rt, N, "cos",    primitiveMethod<prim_Cos>);
+    bindPrimitive(rt, N, "tan",    primitiveMethod<prim_Tan>);
+    bindPrimitive(rt, N, "arcSin", primitiveMethod<prim_ArcSin>);
+    bindPrimitive(rt, N, "arcCos", primitiveMethod<prim_ArcCos>);
+    bindPrimitive(rt, N, "arcTan", primitiveMethod<prim_ArcTan>);
+    bindPrimitive(rt, N, "ln",     primitiveMethod<prim_Ln>);
+    bindPrimitive(rt, N, "exp",    primitiveMethod<prim_Exp>);
+    bindPrimitive(rt, N, "log",    primitiveMethod<prim_Log10>);
+    bindPrimitive(rt, N, "log:",   primitiveMethod<prim_LogBase>);
 
     // Rounding — answer an integer.
-    bindPrimitive(rt, N, "floor",     reg.registerPrim(prim_Floor));
-    bindPrimitive(rt, N, "ceiling",   reg.registerPrim(prim_Ceiling));
-    bindPrimitive(rt, N, "rounded",   reg.registerPrim(prim_Rounded));
-    bindPrimitive(rt, N, "truncated", reg.registerPrim(prim_Truncated));
+    bindPrimitive(rt, N, "floor",     primitiveMethod<prim_Floor>);
+    bindPrimitive(rt, N, "ceiling",   primitiveMethod<prim_Ceiling>);
+    bindPrimitive(rt, N, "rounded",   primitiveMethod<prim_Rounded>);
+    bindPrimitive(rt, N, "truncated", primitiveMethod<prim_Truncated>);
 
     // Pure / algebraic.
-    bindPrimitive(rt, N, "sign",        reg.registerPrim(prim_Sign));
-    bindPrimitive(rt, N, "squared",     reg.registerPrim(prim_Squared));
-    bindPrimitive(rt, N, "reciprocal",  reg.registerPrim(prim_Reciprocal));
-    bindPrimitive(rt, N, "isZero",      reg.registerPrim(prim_IsZero));
-    bindPrimitive(rt, N, "min:",        reg.registerPrim(prim_Min));
-    bindPrimitive(rt, N, "max:",        reg.registerPrim(prim_Max));
-    bindPrimitive(rt, N, "between:and:",reg.registerPrim(prim_BetweenAnd));
-    bindPrimitive(rt, N, "asFloat",     reg.registerPrim(prim_AsFloat));
-    bindPrimitive(rt, N, "asInteger",   reg.registerPrim(prim_AsInteger));
-    bindPrimitive(rt, N, "even",        reg.registerPrim(prim_Even));
-    bindPrimitive(rt, N, "odd",         reg.registerPrim(prim_Odd));
-    bindPrimitive(rt, N, "factorial",   reg.registerPrim(prim_Factorial));
-    bindPrimitive(rt, N, "raisedTo:",   reg.registerPrim(prim_RaisedTo));
-    bindPrimitive(rt, N, "raisedTo:modulo:", reg.registerPrim(prim_RaisedToModulo));
-    bindPrimitive(rt, N, "__floatParts", reg.registerPrim(prim_FloatParts));
-    bindPrimitive(rt, N, "gcd:",        reg.registerPrim(prim_Gcd));
-    bindPrimitive(rt, N, "lcm:",        reg.registerPrim(prim_Lcm));
+    bindPrimitive(rt, N, "sign",        primitiveMethod<prim_Sign>);
+    bindPrimitive(rt, N, "squared",     primitiveMethod<prim_Squared>);
+    bindPrimitive(rt, N, "reciprocal",  primitiveMethod<prim_Reciprocal>);
+    bindPrimitive(rt, N, "isZero",      primitiveMethod<prim_IsZero>);
+    bindPrimitive(rt, N, "min:",        primitiveMethod<prim_Min>);
+    bindPrimitive(rt, N, "max:",        primitiveMethod<prim_Max>);
+    bindPrimitive(rt, N, "between:and:",primitiveMethod<prim_BetweenAnd>);
+    bindPrimitive(rt, N, "asFloat",     primitiveMethod<prim_AsFloat>);
+    bindPrimitive(rt, N, "asInteger",   primitiveMethod<prim_AsInteger>);
+    bindPrimitive(rt, N, "even",        primitiveMethod<prim_Even>);
+    bindPrimitive(rt, N, "odd",         primitiveMethod<prim_Odd>);
+    bindPrimitive(rt, N, "factorial",   primitiveMethod<prim_Factorial>);
+    bindPrimitive(rt, N, "raisedTo:",   primitiveMethod<prim_RaisedTo>);
+    bindPrimitive(rt, N, "raisedTo:modulo:", primitiveMethod<prim_RaisedToModulo>);
+    bindPrimitive(rt, N, "__floatParts", primitiveMethod<prim_FloatParts>);
+    bindPrimitive(rt, N, "gcd:",        primitiveMethod<prim_Gcd>);
+    bindPrimitive(rt, N, "lcm:",        primitiveMethod<prim_Lcm>);
 
     // Class-side constants of `Float`, on its metaclass (D52).
     auto* F = b.floatProto;
-    bindClassPrimitive(rt, F, "pi",       reg.registerPrim(prim_Pi));
-    bindClassPrimitive(rt, F, "e",        reg.registerPrim(prim_E));
-    bindClassPrimitive(rt, F, "infinity", reg.registerPrim(prim_Infinity));
-    bindClassPrimitive(rt, F, "nan",      reg.registerPrim(prim_Nan));
+    bindClassPrimitive(rt, F, "pi",       primitiveMethod<prim_Pi>);
+    bindClassPrimitive(rt, F, "e",        primitiveMethod<prim_E>);
+    bindClassPrimitive(rt, F, "infinity", primitiveMethod<prim_Infinity>);
+    bindClassPrimitive(rt, F, "nan",      primitiveMethod<prim_Nan>);
 }
 
 } // namespace protoST

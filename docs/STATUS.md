@@ -326,9 +326,11 @@ are noted where useful.
       - a unary send of a user method costs about 940 over the loop:
         protoCore's `getAttribute` (~200), three own-attribute probes
         (`__metaclass__` for the method holder, `__bc_ptr__` and `__captured__`
-        on the method, ~160), the frame push (~230) and dispatch. A primitive
-        send also decodes its marker, a LargeInteger, through
-        `Integer::asLong` (~90 of `Array at:`'s 990). Open.
+        on the method, ~160), the frame push (~230) and dispatch. Open;
+      - a primitive send also decoded its marker, a LargeInteger, through
+        `Integer::asLong` (~90 of `Array at:`'s 990). A primitive is now a
+        protoCore method cell called directly: `Array at:` -97 instructions
+        per send (closed, `perf/primitive-pointer`).
       `PBAvl check:` of a 1,000-node tree twenty times: 6.56 -> 4.18 x10^9
       instructions; ratio to ProtoBase 60x -> 24x (pos) and 60x -> 31x (key).
 

@@ -53,8 +53,8 @@ namespace {
 // `docs/INTEROP.md` §"The cross-repo follow-up").
 
 // A foreign primitive-backed method: `widget doubleIt: n` → n * 2.
-// Signature matches protoST's `PrimFn`; it is registered in the shared
-// primitive registry exactly as a protoST primitive would be.
+// Signature matches protoST's `PrimFn`; it is bound exactly as a protoST
+// primitive would be.
 const proto::ProtoObject* fakeForeignDoubleIt(protoST::STRuntime&,
                                               proto::ProtoContext* ctx,
                                               const proto::ProtoObject* /*recv*/,
@@ -79,12 +79,12 @@ const proto::ProtoObject* buildForeignModule(protoST::STRuntime& rt,
     // both a primitive-backed method and an attribute-stored value.
     auto* widget = objectProto->newChild(ctx, /*isMutable=*/true);
 
-    // Primitive-backed foreign method `doubleIt:` — registered in the shared
-    // registry and bound on the foreign object as a tagged-int marker, the
-    // same representation protoST's own primitives use, so protoST's SEND
-    // dispatch invokes it with no special-casing.
-    int primIdx = rt.registry().registerPrim(fakeForeignDoubleIt);
-    protoST::bindPrimitive(rt, widget, "doubleIt:", primIdx);
+    // Primitive-backed foreign method `doubleIt:` — bound on the foreign
+    // object as a native method cell, the same representation protoST's own
+    // primitives use, so protoST's SEND dispatch invokes it with no
+    // special-casing.
+    protoST::bindPrimitive(rt, widget, "doubleIt:",
+                           protoST::primitiveMethod<fakeForeignDoubleIt>);
 
     // Attribute-stored foreign value `label` — a unary send reads it back as
     // an ordinary property (protoST treats a non-primitive value attribute

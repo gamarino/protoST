@@ -654,40 +654,39 @@ void setProgramArguments(const std::string& programPath, const std::vector<std::
 }
 
 void installIoPrimitives(STRuntime& rt) {
-    auto& reg = rt.registry();
     const proto::ProtoObject* o = rt.bootstrap().objectProto;
-    struct Entry { const char* sel; PrimFn fn; };
+    struct Entry { const char* sel; proto::ProtoMethod fn; };
     const Entry entries[] = {
-        {"__osArguments", prim_Arguments},       {"__osProgramPath", prim_ProgramPath},
-        {"__osGetenv:", prim_Getenv},            {"__osSetenv:to:", prim_Setenv},
-        {"__osEnvironment", prim_Environment},   {"__osExit:", prim_Exit},
-        {"__osPid", prim_Pid},                   {"__osHostName", prim_HostName},
-        {"__osPlatform", prim_Platform},         {"__osCwd", prim_Cwd},
-        {"__osChdir:", prim_Chdir},              {"__osRun:input:", prim_Run},
-        {"__osShell:input:", prim_Shell},
-        {"__osSpawn:", prim_Spawn},              {"__osWaitPid:", prim_WaitPid},
-        {"__osKill:signal:", prim_Kill},
-        {"__fdReadLine:", prim_FdReadLine},      {"__fdReadLine:max:", prim_FdReadLineMax},
-        {"__fdReadAll:", prim_FdReadAll},        {"__httpReadChunked:max:", prim_HttpReadChunked},
-        {"__fdRead:count:binary:", prim_FdRead}, {"__fdAtEnd:", prim_FdAtEnd},
-        {"__fdReadChars:count:", prim_FdReadChars},
-        {"__fdWrite:data:", prim_FdWrite},       {"__fdWrite:data:for:", prim_FdWriteFor},       {"__fdFlush:", prim_FdFlush},
-        {"__fdClose:", prim_FdClose},            {"__fdTimeout:ms:", prim_FdTimeout},
-        {"__byteSize:", prim_ByteSize},          {"__percentDecode:", prim_PercentDecode},
-        {"__fileOpen:mode:", prim_FileOpen},     {"__fileRead:binary:", prim_FileRead},
-        {"__fileWrite:data:append:", prim_FileWrite}, {"__fileWrite:data:append:for:", prim_FileWriteFor}, {"__fileStat:", prim_FileStat},
-        {"__fileDelete:recursive:", prim_FileDelete}, {"__fileMove:to:", prim_FileMove},
-        {"__fileReplace:with:", prim_FileReplace}, {"__fileSyncDirectory:", prim_FileSyncDirectory},
-        {"__fileCopy:to:", prim_FileCopy},       {"__dirCreate:parents:", prim_DirCreate},
-        {"__dirList:", prim_DirList},            {"__fileAbsolute:", prim_FileAbsolute},
-        {"__fileTempDir", prim_TempDir},
-        {"__tcpConnect:port:timeout:", prim_TcpConnect}, {"__tcpListen:port:backlog:", prim_TcpListen},
-        {"__tcpAccept:timeout:", prim_TcpAccept}, {"__sockName:peer:", prim_SockName},
-        {"__tlsConnect:host:verify:", prim_TlsConnect},
-        {"__udpBind:port:", prim_UdpBind},       {"__udpSend:to:port:data:", prim_UdpSend},
-        {"__udpReceive:timeout:binary:", prim_UdpReceive},
+        {"__osArguments", primitiveMethod<prim_Arguments>},       {"__osProgramPath", primitiveMethod<prim_ProgramPath>},
+        {"__osGetenv:", primitiveMethod<prim_Getenv>},            {"__osSetenv:to:", primitiveMethod<prim_Setenv>},
+        {"__osEnvironment", primitiveMethod<prim_Environment>},   {"__osExit:", primitiveMethod<prim_Exit>},
+        {"__osPid", primitiveMethod<prim_Pid>},                   {"__osHostName", primitiveMethod<prim_HostName>},
+        {"__osPlatform", primitiveMethod<prim_Platform>},         {"__osCwd", primitiveMethod<prim_Cwd>},
+        {"__osChdir:", primitiveMethod<prim_Chdir>},              {"__osRun:input:", primitiveMethod<prim_Run>},
+        {"__osShell:input:", primitiveMethod<prim_Shell>},
+        {"__osSpawn:", primitiveMethod<prim_Spawn>},              {"__osWaitPid:", primitiveMethod<prim_WaitPid>},
+        {"__osKill:signal:", primitiveMethod<prim_Kill>},
+        {"__fdReadLine:", primitiveMethod<prim_FdReadLine>},      {"__fdReadLine:max:", primitiveMethod<prim_FdReadLineMax>},
+        {"__fdReadAll:", primitiveMethod<prim_FdReadAll>},        {"__httpReadChunked:max:", primitiveMethod<prim_HttpReadChunked>},
+        {"__fdRead:count:binary:", primitiveMethod<prim_FdRead>}, {"__fdAtEnd:", primitiveMethod<prim_FdAtEnd>},
+        {"__fdReadChars:count:", primitiveMethod<prim_FdReadChars>},
+        {"__fdWrite:data:", primitiveMethod<prim_FdWrite>},       {"__fdWrite:data:for:", primitiveMethod<prim_FdWriteFor>},       {"__fdFlush:", primitiveMethod<prim_FdFlush>},
+        {"__fdClose:", primitiveMethod<prim_FdClose>},            {"__fdTimeout:ms:", primitiveMethod<prim_FdTimeout>},
+        {"__byteSize:", primitiveMethod<prim_ByteSize>},          {"__percentDecode:", primitiveMethod<prim_PercentDecode>},
+        {"__fileOpen:mode:", primitiveMethod<prim_FileOpen>},     {"__fileRead:binary:", primitiveMethod<prim_FileRead>},
+        {"__fileWrite:data:append:", primitiveMethod<prim_FileWrite>}, {"__fileWrite:data:append:for:", primitiveMethod<prim_FileWriteFor>}, {"__fileStat:", primitiveMethod<prim_FileStat>},
+        {"__fileDelete:recursive:", primitiveMethod<prim_FileDelete>}, {"__fileMove:to:", primitiveMethod<prim_FileMove>},
+        {"__fileReplace:with:", primitiveMethod<prim_FileReplace>}, {"__fileSyncDirectory:", primitiveMethod<prim_FileSyncDirectory>},
+        {"__fileCopy:to:", primitiveMethod<prim_FileCopy>},       {"__dirCreate:parents:", primitiveMethod<prim_DirCreate>},
+        {"__dirList:", primitiveMethod<prim_DirList>},            {"__fileAbsolute:", primitiveMethod<prim_FileAbsolute>},
+        {"__fileTempDir", primitiveMethod<prim_TempDir>},
+        {"__tcpConnect:port:timeout:", primitiveMethod<prim_TcpConnect>}, {"__tcpListen:port:backlog:", primitiveMethod<prim_TcpListen>},
+        {"__tcpAccept:timeout:", primitiveMethod<prim_TcpAccept>}, {"__sockName:peer:", primitiveMethod<prim_SockName>},
+        {"__tlsConnect:host:verify:", primitiveMethod<prim_TlsConnect>},
+        {"__udpBind:port:", primitiveMethod<prim_UdpBind>},       {"__udpSend:to:port:data:", primitiveMethod<prim_UdpSend>},
+        {"__udpReceive:timeout:binary:", primitiveMethod<prim_UdpReceive>},
     };
-    for (const Entry& e : entries) bindPrimitive(rt, o, e.sel, reg.registerPrim(e.fn));
+    for (const Entry& e : entries) bindPrimitive(rt, o, e.sel, e.fn);
 }
 
 } // namespace protoST

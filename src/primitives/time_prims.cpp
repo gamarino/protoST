@@ -94,18 +94,17 @@ const proto::ProtoObject* prim_UtcMicros(STRuntime&,
 } // anon
 
 void installTimePrimitives(STRuntime& rt) {
-    auto& reg = rt.registry();
     auto& b   = rt.bootstrap();
     // Bound on `objectProto` so the `lib/time.st` module — whose classes all
     // descend from Object — can reach them as plain message sends.
     bindPrimitive(rt, b.objectProto, "__currentMillis",
-                  reg.registerPrim(prim_CurrentMillis));
+                  primitiveMethod<prim_CurrentMillis>);
     bindPrimitive(rt, b.objectProto, "__monotonicMillis",
-                  reg.registerPrim(prim_MonotonicMillis));
+                  primitiveMethod<prim_MonotonicMillis>);
     bindPrimitive(rt, b.objectProto, "__monotonicMicros",
-                  reg.registerPrim(prim_MonotonicMicros));
+                  primitiveMethod<prim_MonotonicMicros>);
     bindPrimitive(rt, b.objectProto, "__utcMicros",
-                  reg.registerPrim(prim_UtcMicros));
+                  primitiveMethod<prim_UtcMicros>);
 }
 
 } // namespace protoST
