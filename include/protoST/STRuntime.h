@@ -371,6 +371,9 @@ private:
     // 00-manifest.txt) into this runtime's globals. Throws std::runtime_error
     // naming file and line when a kernel file does not parse, compile or run.
     void loadKernel();
+    // S37: tells the compiler the class names the runtime built in C++ (see
+    // Compiler::publishNativeClasses).
+    void publishNativeClasses();
 
     // Runs a module's top level on `ctx` like runTopLevel, but lets every
     // control-flow signal (UnwindToHandler, RetrySignal, NonLocalReturn, ...)

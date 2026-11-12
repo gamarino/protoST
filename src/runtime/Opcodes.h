@@ -181,6 +181,18 @@ enum class Op : uint8_t {
     // the access of every other slot tests nothing.
     PUSH_SHARED_LOCAL  = 59, // arg = slot index
     STORE_SHARED_LOCAL = 60, // arg = slot index
+    // S37: a variable of a method whose class's chain the compiler could not
+    // see (a class built by the `subclass:` message, a subclass or extension
+    // of an imported class). Never executed: installing the method
+    // (`__installMethod:as:`, `__installClassMethod:as:`) rewrites each in
+    // place, once, into the access the class declares -- PUSH_INSTVAR or
+    // PUSH_OWN_INSTVAR (a class-side method's class-instance variable), and
+    // STORE_INSTVAR or STORE_CLASSVAR -- or, in the REPL, a read of a name
+    // the class does not declare into PUSH_GLOBAL; any other undeclared name
+    // signals `undeclared variable` and the method is not installed. The
+    // engine treats them as unimplemented opcodes.
+    PUSH_LATE_VAR      = 61, // arg = constant pool symbol index (variable name)
+    STORE_LATE_VAR     = 62, // arg = constant pool symbol index (variable name)
     // Prefix carrying the next-higher byte of the following instruction's
     // operand, for operands above 255 (constant indices, slots, jumps).
     EXTEND          = 254,

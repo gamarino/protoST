@@ -869,6 +869,12 @@ void STRuntime::construct() {
         impl_->space.setResolutionChain(chain->asObject(ctx));
     }
 
+    // S37: the classes built in C++ so far (Object, Error, Collection, ...)
+    // end a class chain the compiler knows: they declare no variable a method
+    // could name. A method of a class whose chain reaches anything else the
+    // compiler has not seen resolves its unknown names when installed.
+    publishNativeClasses();
+
     // The protocol written in protoST itself. Loaded before the worker pool
     // starts, so a broken kernel file fails construction with no thread left
     // to join.
@@ -2985,6 +2991,24 @@ std::string STRuntime::kernelManifestPath(std::string* problem) {
                    + ")";
     }
     return "";
+}
+
+void STRuntime::publishNativeClasses() {
+    const proto::ProtoObject* g = globals();
+    if (!g) return;
+    struct Sink { const proto::ProtoString* nameKey; std::vector<std::string> names; };
+    Sink sink{impl_->bootstrap.sym.className, {}};
+    g->processOwnAttributes(rootCtx(), &sink,
+        [](proto::ProtoContext* c, void* self, const proto::ProtoString* key,
+           const proto::ProtoObject* value) {
+            auto* k = static_cast<Sink*>(self);
+            if (!value || value == PROTO_NONE || value->isInteger(c) || value->isFloat(c)
+                || value->asString(c))
+                return;
+            const proto::ProtoObject* own = value->getOwnAttributeDirect(c, k->nameKey);
+            if (own && own != PROTO_NONE) k->names.push_back(key->toStdString(c));
+        });
+    Compiler::publishNativeClasses(sink.names);
 }
 
 // The kernel: protocol implemented in protoST source (lib/kernel/*.st), run

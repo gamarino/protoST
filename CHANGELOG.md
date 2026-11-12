@@ -126,6 +126,26 @@ minor release, so the two services arrive in 0.5.0.
 
 ### Fixed
 
+- **A method can name the variables its class inherits from an imported
+  class (S37).** A script is compiled before its imports run, so `Base
+  subclass: #Kid` with `Kid >> peek ^secret` (Base imported, declaring
+  `secret`) was a compile error, as were a class built by the message form
+  `(m Base) subclass: #Kid instanceVariableNames: 'own'` (even for `own`), an
+  extension `Base >> m`, a class or class-instance variable of the imported
+  class, and a class whose `uses:` clause is an expression. In a method whose
+  class's chain the compiler cannot see, an unresolved lowercase name is now
+  resolved when the method is installed, against the variables the class and
+  its ancestors declare, and becomes the access the compiler would have
+  emitted; a name the class does not declare signals `undeclared variable`
+  there, before the method can run (two new opcodes, `PUSH_LATE_VAR` and
+  `STORE_LATE_VAR`, that installing rewrites in place and the engine never
+  runs). Chains the compiler can see, including those that end at a class the
+  runtime builds in C++, are checked at compile time as before. The message
+  form of `subclass:instanceVariableNames:` records its names (`instVarNames`
+  answered none), and redeclaring an inherited instance variable under an
+  imported superclass is an `Error` of the declaration (it failed the import
+  as a compile error of the imported module). LANGUAGE.md §4.5, §4.10. Tests:
+  `11-modules/late-*.st` (12; nine fail on the unfixed build).
 - **An integer attribute is always a value.** A primitive was an integer
   attribute, its registry index with bit 62 set (`PrimitiveMarker.h`), so any
   value attribute holding such an integer, 2^62 + k, ran primitive k when a

@@ -28,6 +28,35 @@ std::unordered_map<std::string, Compiler::ClassInfo>& classRegistry() {
     return registry;
 }
 
+// S37: whether every class on `className`'s chain -- its superclasses and
+// mixins -- is known here, so the instance and class variables its methods
+// can name are all known at compile time. A class missing from `classes`
+// (built by the `subclass:` message, or imported by a module that has not run
+// yet) makes the chain unknown; a chain ends at a class with no superclass
+// name (a class the runtime builds in C++, publishNativeClasses).
+static bool chainFullyKnown(
+        const std::unordered_map<std::string, Compiler::ClassInfo>& classes,
+        const std::string& className, std::unordered_set<std::string>& seen) {
+    std::string cur = className;
+    while (!cur.empty()) {
+        if (!seen.insert(cur).second) return true;   // already checked
+        auto it = classes.find(cur);
+        if (it == classes.end()) return false;
+        if (it->second.mixinsUnknown) return false;
+        for (const auto& mixin : it->second.mixinNames)
+            if (!chainFullyKnown(classes, mixin, seen)) return false;
+        cur = it->second.superclassName;
+    }
+    return true;
+}
+
+static bool chainFullyKnown(
+        const std::unordered_map<std::string, Compiler::ClassInfo>& classes,
+        const std::string& className) {
+    std::unordered_set<std::string> seen;
+    return chainFullyKnown(classes, className, seen);
+}
+
 // The instance variables visible in a method of `className`: its own and every
 // superclass's declared in this module, root first. A subclass method reads and
 // writes an inherited instance variable like its own (they share the object's
@@ -95,6 +124,12 @@ struct ScopeWalker {
     // references it from a nested block no longer boxes the variable into an
     // (uninitialised) closure dict.
     const std::unordered_set<std::string>* instVars = nullptr;
+    // S37: a method of a class whose chain is not fully known. An assignment
+    // in it declares nothing (a method's temporaries are its `| t |` list): a
+    // name it assigns that is not a temporary or an argument is an instance
+    // or class variable resolved when the method is installed, so it is a
+    // reference, never a captured binding of the method.
+    bool lateNames = false;
 };
 
 using ClassMap = std::unordered_map<std::string, Compiler::ClassInfo>;
@@ -220,8 +255,8 @@ void walkNode(const Node& n, ScopeWalker& cur,
             //     it as a direct reference so it bubbles up as a free var
             //     and lands in an outer scope's captured dict (F3-C5).
             if (!n.text.empty()) {
-                if (cur.isBlock) cur.directRefs.insert(n.text);
-                else             cur.declared.insert(n.text);
+                if (cur.isBlock || cur.lateNames) cur.directRefs.insert(n.text);
+                else                              cur.declared.insert(n.text);
             }
             if (!n.children.empty()) walkNode(*n.children[0], cur, out, nullptr, classes);
             return;
@@ -342,6 +377,7 @@ void walkNode(const Node& n, ScopeWalker& cur,
                 ivarSet.erase(n.stringList[i]);  // a method-local shadows it
             }
             methodScope.instVars = &ivarSet;
+            methodScope.lateNames = classes && !chainFullyKnown(*classes, n.text);
             for (const auto& child : n.children) {
                 walkNode(*child, methodScope, out, &n, classes);
             }
@@ -378,6 +414,7 @@ void walkNode(const Node& n, ScopeWalker& cur,
                 ivarSet.erase(n.stringList[i]);
             }
             methodScope.instVars = &ivarSet;
+            methodScope.lateNames = classes && !chainFullyKnown(*classes, n.text);
             for (const auto& child : n.children) {
                 if (child) walkNode(*child, methodScope, out, &n, classes);
             }
@@ -452,6 +489,17 @@ std::unordered_map<std::string, Compiler::ClassInfo> Compiler::sharedClassRegist
     return classRegistry();
 }
 
+void Compiler::publishNativeClasses(const std::vector<std::string>& names) {
+    std::lock_guard<std::mutex> lock(g_classRegistryMutex);
+    for (const auto& name : names) {
+        // A class compiled from source under the same name keeps its entry.
+        if (classRegistry().count(name)) continue;
+        ClassInfo info;
+        info.name = name;
+        classRegistry()[name] = std::move(info);
+    }
+}
+
 void Compiler::publishToSharedClassRegistry(const Node& module) {
     if (module.kind != NodeKind::Module) return;
     std::lock_guard<std::mutex> lock(g_classRegistryMutex);
@@ -496,9 +544,14 @@ void Compiler::collectClasses(const Node& module) {
         if (!cd.children.empty() && cd.children[0]
             && (cd.children[0]->kind == NodeKind::DynArrayLit
                 || cd.children[0]->kind == NodeKind::ArrayLit)) {
-            for (const auto& el : cd.children[0]->children)
+            for (const auto& el : cd.children[0]->children) {
                 if (el && (el->kind == NodeKind::Identifier || el->kind == NodeKind::SymbolLit))
                     info.mixinNames.push_back(el->text);
+                else
+                    info.mixinsUnknown = true;
+            }
+        } else if (!cd.children.empty() && cd.children[0]) {
+            info.mixinsUnknown = true;
         }
         classes_[info.name] = std::move(info);
     }
@@ -525,8 +578,15 @@ void Compiler::collectClasses(const Node& module) {
         }
     }
     // A subclass may not redeclare an instance variable it inherits (as in
-    // Smalltalk): both would name the same slot of the object.
-    for (const auto& [name, info] : classes_) {
+    // Smalltalk): both would name the same slot of the object. Only the
+    // classes this module declares are checked: the registry also holds
+    // classes of other modules -- of the program that is importing this one,
+    // for instance -- whose errors are theirs (a class whose superclass the
+    // compiler could not see is checked when it is built, S37).
+    for (const auto& topPtr : module.children) {
+        if (!topPtr || topPtr->kind != NodeKind::ClassDecl) continue;
+        const std::string& name = topPtr->text;
+        const ClassInfo& info = classes_.at(name);
         std::unordered_set<std::string> seen;
         std::string sup = info.superclassName;
         while (!sup.empty() && !seen.count(sup)) {
@@ -734,19 +794,8 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         // names BEFORE emitting the body, so that emitExpr/emitStatement
         // can resolve identifiers against this class's inst vars before
         // falling back to globals.
-        currentMethodClass_         = n.text;
+        enterMethodClass(n);
         currentMethodDebugName_     = n.text + ">>" + (n.stringList.empty() ? std::string("<method>") : n.stringList[0]);
-        currentMethodIsClassSide_   = n.boolFlag;
-        {
-            auto it = classes_.find(n.text);
-            if (it != classes_.end()) {
-                currentInstVars_  = instVarsThroughChain(classes_, n.text, n.boolFlag);
-                currentClassVars_ = resolveClassVarsFor(n.text);
-            } else {
-                currentInstVars_.clear();
-                currentClassVars_.clear();
-            }
-        }
         reportDuplicateNames(n.stringList, 1,
                              n.text + ">>" + (n.stringList.empty() ? std::string() : n.stringList[0]));
         // An argument or temporary may not reuse an instance variable's name
@@ -824,6 +873,9 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         // BL-1: record the defining class so the engine can resolve `super`
         // sends inside this method body (lookup starts at the class's parent).
         sub->setDefiningClass(n.text);
+        if (currentMethodLate_)
+            sub->setLateBinding(replMode_, std::vector<std::string>(
+                                               n.stringList.begin() + 1, n.stringList.end()));
         scopes_.pop_back();
 
         // Attach the method module as a sub-block of the outer (module) bytecode.
@@ -852,11 +904,8 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(installIdx), currentLine_);  // → class
 
         // F4-U5: clear the method-body name-resolution context.
-        currentMethodClass_.clear();
         currentMethodDebugName_.clear();
-        currentInstVars_.clear();
-        currentClassVars_.clear();
-        currentMethodIsClassSide_ = false;
+        leaveMethodClass();
         return;
     }
     if (n.kind == NodeKind::CallMethodDecl) {
@@ -890,18 +939,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         const int nNamed = static_cast<int>(n.intValue2);
         const int nArgs  = nPos + nNamed;
 
-        currentMethodClass_       = n.text;
-        currentMethodIsClassSide_ = n.boolFlag;
-        {
-            auto it = classes_.find(n.text);
-            if (it != classes_.end()) {
-                currentInstVars_  = instVarsThroughChain(classes_, n.text, n.boolFlag);
-                currentClassVars_ = resolveClassVarsFor(n.text);
-            } else {
-                currentInstVars_.clear();
-                currentClassVars_.clear();
-            }
-        }
+        enterMethodClass(n);
         reportDuplicateNames(n.stringList, 1,
                              n.text + ">>" + (n.stringList.empty() ? std::string() : n.stringList[0]));
         // An argument or temporary may not reuse an instance variable's name
@@ -1036,6 +1074,9 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         sub->setDebugName(n.text + ">>" + n.stringList[0] + "(...)");
         currentMethodDebugName_ = sub->debugName();
         sub->setDefiningClass(n.text);
+        if (currentMethodLate_)
+            sub->setLateBinding(replMode_, std::vector<std::string>(
+                                               n.stringList.begin() + 1, n.stringList.end()));
         scopes_.pop_back();
 
         size_t blkIdx = m.addBlockModule(std::move(sub));
@@ -1056,11 +1097,8 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         m.emitWide(Op::PUSH_CONST,   static_cast<unsigned int>(selectorIdx), currentLine_);
         m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(installIdx), currentLine_);
 
-        currentMethodClass_.clear();
         currentMethodDebugName_.clear();
-        currentInstVars_.clear();
-        currentClassVars_.clear();
-        currentMethodIsClassSide_ = false;
+        leaveMethodClass();
         return;
     }
     if (n.kind == NodeKind::Assignment) {
@@ -1114,6 +1152,14 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
                 m.emitWide(Op::STORE_CLASSVAR, static_cast<unsigned int>(sym), currentLine_);
                 return;
             }
+        }
+        // S37: see emitExpr's Identifier case.
+        if (currentMethodLate_ && !n.text.empty()
+            && std::islower(static_cast<unsigned char>(n.text[0]))) {
+            emitExpr(m, *n.children[0]);
+            dupUnlessDiscarded();
+            emitLateVar(m, Op::STORE_LATE_VAR, n.text);
+            return;
         }
         // F7-REPL: at module scope, a top-level assignment binds a persistent
         // global so it is visible to subsequently-compiled REPL inputs. S10:
@@ -1231,6 +1277,14 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             // variables are not visible in methods): report it now instead of
             // failing when the method first runs. The REPL keeps the runtime
             // lookup, since its session variables are lowercase globals.
+            // S37: in a method of a class whose chain is not known here the
+            // name may be a variable the class inherits; it is resolved when
+            // the method is installed, and reported there if it is not one.
+            if (currentMethodLate_ && !n.text.empty()
+                && std::islower(static_cast<unsigned char>(n.text[0]))) {
+                emitLateVar(m, Op::PUSH_LATE_VAR, n.text);
+                return;
+            }
             if (!replMode_ && !currentMethodClass_.empty() && !n.text.empty()
                 && std::islower(static_cast<unsigned char>(n.text[0]))) {
                 error("undeclared variable '" + n.text + "' in " + currentMethodClass_
@@ -1295,6 +1349,14 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                     m.emitWide(Op::STORE_CLASSVAR, static_cast<unsigned int>(sym), currentLine_);
                     return;
                 }
+            }
+            // S37: see the Identifier case.
+            if (currentMethodLate_ && !n.text.empty()
+                && std::islower(static_cast<unsigned char>(n.text[0]))) {
+                emitExpr(m, *n.children[0]);
+                dupUnlessDiscarded();
+                emitLateVar(m, Op::STORE_LATE_VAR, n.text);
+                return;
             }
             // F7-REPL: module-scope assignment-expression binds a global, and
             // so does one in a module-level block to a name no enclosing scope
@@ -1617,6 +1679,38 @@ void Compiler::compileDeoptBlock(BytecodeModule& m, const Node& blk, size_t bloc
 // variable unchanged. Top-level scripts keep implicit globals.
 // Record a class declaration's instance-variable names on the class object on
 // top of the stack (reflection: instVarNames, instVarAt:, deepCopy).
+void Compiler::enterMethodClass(const Node& n) {
+    currentMethodClass_       = n.text;
+    currentMethodIsClassSide_ = n.boolFlag;
+    if (classes_.find(n.text) != classes_.end()) {
+        currentInstVars_  = instVarsThroughChain(classes_, n.text, n.boolFlag);
+        currentClassVars_ = resolveClassVarsFor(n.text);
+    } else {
+        currentInstVars_.clear();
+        currentClassVars_.clear();
+    }
+    currentMethodLate_ = !chainFullyKnown(classes_, n.text);
+}
+
+void Compiler::leaveMethodClass() {
+    currentMethodClass_.clear();
+    currentInstVars_.clear();
+    currentClassVars_.clear();
+    currentMethodIsClassSide_ = false;
+    currentMethodLate_        = false;
+}
+
+// S37: an instance or class variable of a class whose chain the compiler
+// cannot see. The operand names the variable; `__installMethod:as:` and
+// `__installClassMethod:as:` turn the instruction into the access the class
+// declares (PUSH_INSTVAR, PUSH_OWN_INSTVAR, STORE_INSTVAR, STORE_CLASSVAR) or
+// signal `undeclared variable` when the class has no such variable, before
+// the method can run (object_prims.cpp, resolveLateVariables).
+void Compiler::emitLateVar(BytecodeModule& m, Op op, const std::string& name) {
+    auto sym = m.internSymbol(name);
+    m.emitWide(op, static_cast<unsigned int>(sym), currentLine_);
+}
+
 void Compiler::emitSetInstVarNames(BytecodeModule& m, const Node& classDecl) {
     const size_t ivCount = static_cast<size_t>(classDecl.intValue);
     if (ivCount == 0) return;

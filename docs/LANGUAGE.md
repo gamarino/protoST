@@ -766,6 +766,11 @@ Account >> deposit: amount
 
 An instance variable that has never been assigned reads as `nil`.
 
+The compiler resolves instance-variable names. In a method of a class whose
+superclass it cannot see — a subclass of an imported class, a class built by
+the `subclass:` message — they are resolved when the method is installed
+instead ([§4.10](#410-extensible-classes-from-modules)).
+
 **Runs of assignments are published together.** Each assignment to an
 instance variable publishes a new version of the object (protoCore keeps
 objects as immutable snapshots; a mutable object is a reference to its
@@ -974,6 +979,53 @@ How it works:
 > simply the special case where the superclass is named by a bare identifier.
 > When the superclass is reached through an expression — a module attribute, a
 > block result, an array element — the message form above applies.
+
+**Inherited variables of a class the compiler cannot see.** A script is
+compiled whole before its first statement runs, so when a method is compiled
+the modules the script imports have not been loaded: the compiler does not
+know the imported classes, nor a class built by the `subclass:` message.
+Instance and class variables are names the compiler resolves (§4.5), so a
+method of such a class resolves them when it is **installed** instead — when
+its definition runs, in source order, after the `Import from:` and the class
+declaration before it:
+
+```smalltalk
+m := Import from: '_lib'.              "declares Base, instanceVariableNames: 'secret'"
+Base subclass: #Kid instanceVariableNames: 'own'.
+
+Kid >> peek
+  ^ secret + own.                      "secret: Base's instance variable"
+
+Base >> doubled                        "an extension of the imported class"
+  ^ secret * 2.
+```
+
+This applies to a method whose class's chain — its superclasses and its
+`uses:` mixins — reaches a class the compiler has not seen: a subclass of an
+imported class, a class built by the message form (`(m Base) subclass: #Kid
+instanceVariableNames: 'own'`), a class whose `uses:` clause is not a literal
+list of class names, and a method added to an imported class. In its methods
+a lowercase name that is not an argument, a temporary or a variable the
+compiler knows is looked up, when the method is installed, among the instance
+variables (for a class-side method, the class-instance variables) and then
+the class variables that the class and its ancestors declare, and the method
+reads and writes it exactly as if the compiler had known it. A name the class
+does not declare signals `Error` (`undeclared variable 'zork' in Kid (line
+9)`) and the method is not installed; so does an argument or temporary that
+reuses the name of an inherited instance variable. These are the compiler's
+own errors, reported at a different time: when the definition runs rather
+than before the script starts, so the statements before it have run. A method
+whose class's chain is fully known — declared in the same file, in the kernel
+or in a module already loaded — is checked by the compiler as before. In the
+REPL, which compiles each input after the previous ones ran, a name that is
+not a variable of the class reads the session global of that name, as other
+REPL code does.
+
+The `subclass:instanceVariableNames:` message records the names it is given,
+as the declaration does (`Kid instVarNames`), and a class may not redeclare
+an instance variable it inherits: the declaration signals `Error` (`instance
+variable 'secret' of Kid is already defined in its superclass Base`) when the
+superclass is one the compiler could not check.
 
 ### 4.11 Multiple inheritance and mixins (`uses:`)
 
