@@ -33,6 +33,7 @@
 #include "protoCore.h"
 
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -197,4 +198,63 @@ TEST_CASE("S15: a forced collection completes and reclaims the interpreter's gar
     //    garbage must not need a bigger heap than the first round did. Before
     //    the fix the heap grew by roughly the round's allocation every time.
     REQUIRE(static_cast<proto::proto_long>(relaxedRead(sp->heapSize)) <= heapAfterFirstRound * 2);
+}
+
+// I2 (0.10.0): the closures over one sub-block share one `__bc_ptr__` cell,
+// created with the first and anchored in the runtime's live registry
+// (src/runtime/BlockCode.h). Here every closure is created and dropped inside a
+// method, so once it returns only that anchor keeps the cell: after
+// collections and fresh allocation, the cell the module caches must still be
+// the external pointer to that sub-block.
+namespace {
+const protoST::BytecodeModule* moduleWithCodeRef(const protoST::BytecodeModule& m,
+                                                 std::uint64_t serial) {
+    if (m.codeRefFor(serial)) return &m;
+    for (size_t i = 0; i < m.numBlocks(); ++i)
+        if (const protoST::BytecodeModule* found = moduleWithCodeRef(m.block(i), serial))
+            return found;
+    return nullptr;
+}
+} // namespace
+
+TEST_CASE("The shared code cell of a sub-block survives collections with no closure left",
+          "[gc][closure]") {
+    GcHost h;
+    auto* ctx = h.rt.rootCtx();
+    // The runtime owns the module, so its closures share one anchored cell.
+    const protoST::BytecodeModule* module = nullptr;
+    {
+        protoST::Parser P("Object subclass: #Maker.\n"
+                          "Maker >> churn: n\n"
+                          "  | s |\n"
+                          "  s := 0.\n"
+                          "  1 to: n do: [:i | s := s + ([:y | y + i] value: 1)].\n"
+                          "  ^ s");
+        auto ast = P.parseModule();
+        REQUIRE(P.errors().empty());
+        protoST::Compiler C;
+        auto bc = C.compileModule(*ast);
+        REQUIRE(!C.hasErrors());
+        module = &h.rt.adoptModule(std::move(bc));
+        h.rt.runTopLevel(*module);
+    }
+    REQUIRE(h.run("Maker new churn: 100.")->asLong(ctx) == 5150);
+    const protoST::BytecodeModule* sub = moduleWithCodeRef(*module, h.rt.serial());
+    REQUIRE(sub != nullptr);
+    const proto::ProtoObject* cell = sub->codeRefFor(h.rt.serial());
+
+    proto::ProtoSpace* sp = h.rt.space();
+    CycleObserver obs(sp);
+    const auto pressure = [&] { h.run("1 to: 5000 do: [ :i | Array new: 8 ]. 0."); };
+    for (int round = 0; round < 3; ++round) {
+        h.run("1 to: 20000 do: [ :i | Array new: 8 ]. 0.");
+        REQUIRE(forceCycle(h.rt, obs, std::chrono::seconds(20), pressure));
+    }
+    // Fresh allocation, which would reuse the cell had it been freed.
+    h.run("1 to: 20000 do: [ :i | Array new: 8 ]. 0.");
+    const proto::ProtoExternalPointer* ep = cell->asExternalPointer(ctx);
+    REQUIRE(ep != nullptr);
+    REQUIRE(ep->getPointer(ctx) == static_cast<const void*>(sub));
+    REQUIRE(sub->codeRefFor(h.rt.serial()) == cell);
+    REQUIRE(h.run("Maker new churn: 10.")->asLong(ctx) == 65);
 }

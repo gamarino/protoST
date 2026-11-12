@@ -15,6 +15,13 @@
 
 namespace protoST {
 
+namespace {
+// BlockClosure>>value and its siblings (below).
+const proto::ProtoObject* prim_Block_value(STRuntime& rt, proto::ProtoContext* ctx,
+                                           const proto::ProtoObject* r,
+                                           const proto::ProtoObject* const* a, int argc);
+} // namespace
+
 // Defined in object_prims.cpp: run a method by name, as a send does.
 const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
                                       const proto::ProtoObject* recv,
@@ -48,22 +55,27 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
     // hot keys are now pulled from the Bootstrap cache.
     const proto::ProtoString* bcKey  = rt.bootstrap().sym.bcPtr;
     const proto::ProtoString* capKey = rt.bootstrap().sym.captured;
-    const BytecodeModule* sub = blockCodeOf(ctx, block->getOwnAttributeDirect(ctx, bcKey));
+    const BytecodeModule* sub = blockCodeOfCached(rt, ctx, block->getOwnAttributeDirect(ctx, bcKey));
     if (!sub) {
-        // A BlockClosure without code (`BlockClosure new`, or a forged
-        // `__bc_ptr__`) has nothing to run. Sending it value would find this
-        // very primitive again and recurse until the stack overflowed.
-        if (block->isInstanceOf(ctx, rt.bootstrap().blockProto) == PROTO_TRUE)
-            throw NativeError("the block has no code to run");
         // Not a block: evaluate it the way Smalltalk does, by sending it
         // value / value: / value:value: (so a Symbol stands for a block:
-        // #(1 2 3) collect: #squared).
+        // #(1 2 3) collect: #squared, and a BlockClosure subclass that
+        // overrides value: runs its method).
         static const char* const kValue[] = { "value", "value:", "value:value:" };
         if (argc >= 0 && argc <= 2) {
+            const proto::ProtoString* selector =
+                proto::ProtoString::createSymbol(ctx, kValue[argc]);
+            // A BlockClosure without code (`BlockClosure new`, or a forged
+            // `__bc_ptr__`) whose value is BlockClosure's own has nothing to
+            // run: the send would find this very primitive again and recurse
+            // until the stack overflowed.
+            const proto::ProtoObject* method =
+                methodHolder(rt.bootstrap(), ctx, block)->getAttribute(ctx, selector);
+            if (method && method->asMethod(ctx) == &primitiveMethod<prim_Block_value>)
+                throw NativeError("the block has no code to run");
             bool understood = false;
             const proto::ProtoObject* r = sendDynamic(
-                rt, ctx, block, proto::ProtoString::createSymbol(ctx, kValue[argc]),
-                args, argc, &understood);
+                rt, ctx, block, selector, args, argc, &understood);
             if (understood) return r ? r : PROTO_NONE;
         }
         throw NativeError("a block was expected here, but the argument is not a block");

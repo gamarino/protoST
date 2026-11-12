@@ -53,8 +53,14 @@ STRuntime& runtimeOfSlow(proto::ProtoContext* ctx);
 // (callMethodCell), consumed by the primitive it names on entry.
 extern constinit thread_local proto::ProtoMethod t_dispatchedMethod;
 
-// Refuses a call to a primitive that did not come from protoST's dispatch.
-[[noreturn]] void refuseDirectCall(proto::ProtoContext* ctx);
+// A call of `primitive` that did not come from protoST's dispatch -- another
+// runtime, or embedder C++, calling the method cell through protoCore's `call`
+// -- run behind the boundary __st_send__ gives (modules/STForeignSend.cpp).
+const proto::ProtoObject* callPrimitiveFromOutside(proto::ProtoMethod primitive,
+                                                   proto::ProtoContext* callerCtx,
+                                                   const proto::ProtoObject* self,
+                                                   const proto::ProtoArguments* positional,
+                                                   const proto::ProtoKeywordArguments* keywords);
 
 } // namespace detail
 
@@ -87,13 +93,13 @@ inline STRuntime& runtimeOf(proto::ProtoContext* ctx) {
 // callMethodCell. The receiver arrives as `self`, the positional arguments as
 // the caller's array, unchanged. A primitive takes no named arguments.
 //
-// It runs only for protoST's own dispatch. A caller outside it -- another
-// runtime, in a space of its own or sharing protoST's, or embedder C++ calling
-// the cell through protoCore's `call` -- is refused, uniformly: protoST is
-// entered from outside through `__st_send__` (docs/INTEROP.md section 4.3),
-// whose boundary (its own context, the handlers of protoST code above it
-// hidden, errors leaving as ProtoException) a bare primitive cannot provide,
-// and which reaches every method, not only the primitives. The test is the
+// A caller outside protoST's dispatch -- another runtime, in a space of its
+// own or sharing protoST's, or embedder C++ calling the cell through
+// protoCore's `call` -- is served too: a primitive honours protoCore's calling
+// convention for every caller. Such a call runs behind the boundary
+// `__st_send__` gives (docs/INTEROP.md section 4.3: protoST's own context, the
+// handlers of protoST code above it hidden, errors leaving as
+// ProtoException), which protoST's own sends must not pay for. The test is the
 // token callMethodCell leaves for this very method, consumed here so that a
 // nested call from another runtime finds none.
 template <PrimFn F>
@@ -102,7 +108,9 @@ const proto::ProtoObject* primitiveMethod(proto::ProtoContext* ctx,
                                           const proto::ParentLink*,
                                           const proto::ProtoArguments* positional,
                                           const proto::ProtoKeywordArguments* keywords) {
-    if (detail::t_dispatchedMethod != &primitiveMethod<F>) detail::refuseDirectCall(ctx);
+    if (detail::t_dispatchedMethod != &primitiveMethod<F>) [[unlikely]]
+        return detail::callPrimitiveFromOutside(&primitiveMethod<F>, ctx, self, positional,
+                                                keywords);
     detail::t_dispatchedMethod = nullptr;
     STRuntime& rt = runtimeOf(ctx);
     if (keywords && keywords->getSize(ctx) != 0) detail::refuseNamedArguments(ctx);

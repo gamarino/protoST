@@ -10,6 +10,18 @@ namespace protoST {
 
 BytecodeModule::~BytecodeModule() {
     delete constCache_.load(std::memory_order_acquire);
+    delete codeRef_.load(std::memory_order_acquire);
+}
+
+bool BytecodeModule::publishCodeRef(std::uint64_t runtimeSerial,
+                                    const proto::ProtoObject* cell) const {
+    auto* fresh = new CodeRef{runtimeSerial, cell};
+    const CodeRef* expected = nullptr;
+    if (codeRef_.compare_exchange_strong(expected, fresh, std::memory_order_acq_rel,
+                                         std::memory_order_acquire))
+        return true;
+    delete fresh;
+    return false;
 }
 
 BytecodeModule::ConstCache::~ConstCache() {

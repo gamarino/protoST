@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -71,10 +72,21 @@ public:
     // The source modules loaded so far (the kernel files, imported modules),
     // in load order. They live as long as the runtime. For the debugger.
     std::vector<const BytecodeModule*> loadedModules() const;
+
+    // Hands `module` to the runtime, which keeps it until it is destroyed, and
+    // answers it, to run with runTopLevel. The classes and methods a module
+    // defines run its code for as long as the runtime lives; a module the
+    // runtime owns needs no care from the embedder, and the closures over it
+    // share their code cell (src/runtime/BlockCode.h). The protost executable
+    // and the REPL hand over every module they run.
+    const BytecodeModule& adoptModule(std::unique_ptr<BytecodeModule> module);
     // The stdlib directory this runtime loads its kernel and library modules
     // from ("" when there is none).
     std::string stdlibDirectory() const;
     proto::ProtoRootSet* asyncRootSet()  const;
+    // A number no other STRuntime of this process has had, for caches that
+    // must tell runtimes apart (a runtime's address can be reused).
+    std::uint64_t serial() const noexcept { return serial_; }
 
     // Mutable globals namespace (PUSH_GLOBAL / STORE_GLOBAL). Allocated at
     // STRuntime construction as a mutable child of objectProto, with "Object"
@@ -100,6 +112,13 @@ public:
     // from the thread that owns the runtime (the main thread). Code running
     // on another thread — an actor method that imports a module — passes its
     // own context to the two-argument form.
+    //
+    // The module stays the caller's, and must outlive this runtime: every
+    // class and method it defines stays in the globals and runs the module's
+    // code (closures borrow their module, src/runtime/BlockCode.h), on any
+    // thread, until the runtime is destroyed. Keep it alive while the runtime
+    // lives (the REPL retains each line's module), or load it from a file
+    // (loadModuleFromFile), which keeps it for the runtime's lifetime.
     //
     // An unhandled exception leaves as the proto::ProtoException carrying it
     // (protoCore's unified exceptions), with one exception (KNOWN_ISSUES
@@ -338,6 +357,10 @@ public:
     static std::string kernelManifestPath(std::string* problem = nullptr);
 
 private:
+    // Creates and anchors the `__bc_ptr__` cell closures over a module share
+    // (src/runtime/BlockCode.h); it anchors through registryAdd.
+    friend const proto::ProtoObject* blockCodeRefSlow(STRuntime& rt, proto::ProtoContext* ctx,
+                                                      const BytecodeModule& module);
     // Installs protoST's memory policy (the adaptive heap controller unless the
     // environment asks for a fixed limit) and its out-of-memory report.
     static void configureHeap(proto::ProtoSpace& space);
@@ -414,6 +437,8 @@ private:
                      bool suspended);
 
     struct Impl;
+    const std::uint64_t serial_ = nextSerial();
+    static std::uint64_t nextSerial() noexcept;
     std::unique_ptr<Impl> impl_;
 };
 

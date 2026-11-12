@@ -7,7 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace proto { class ProtoContext; class ProtoString; }
+namespace proto { class ProtoContext; class ProtoObject; class ProtoString; }
 
 namespace protoST {
 
@@ -109,6 +109,31 @@ public:
     const std::string&  constSymbol(size_t i)  const { return consts_[i].sval; }
     ConstKind           constKind(size_t i)    const { return consts_[i].kind; }
     size_t              numConsts()            const { return consts_.size(); }
+
+    // The `__bc_ptr__` cell runtime `runtimeSerial` gave the closures over
+    // this module, or nullptr before it created one (BlockCode.h).
+    const proto::ProtoObject* codeRefFor(std::uint64_t runtimeSerial) const {
+        const CodeRef* c = codeRef_.load(std::memory_order_acquire);
+        return (c && c->runtimeSerial == runtimeSerial) ? c->cell : nullptr;
+    }
+    // Whether a runtime owns this module and every block in it, for the
+    // runtime's lifetime (STRuntime::adoptModule, loaded files): only then do
+    // the closures over it share one anchored `__bc_ptr__` cell (BlockCode.h).
+    bool runtimeOwned() const { return runtimeOwned_.load(std::memory_order_relaxed); }
+    // Marks this module and its blocks, recursively. Called once, before the
+    // module first runs.
+    void markRuntimeOwned() const {
+        runtimeOwned_.store(true, std::memory_order_relaxed);
+        for (const auto& b : blocks_) b->markRuntimeOwned();
+    }
+    // Whether some runtime's `__bc_ptr__` cell is published.
+    bool hasCodeRef() const { return codeRef_.load(std::memory_order_acquire) != nullptr; }
+    // Publishes `cell` as runtime `runtimeSerial`'s `__bc_ptr__` cell for
+    // this module. Answers true when it is published; false when a cell is
+    // already published (by another thread, or by another runtime, whose
+    // cell stays: a module belongs to the runtime that runs it, see the
+    // per-constant caches below).
+    bool publishCodeRef(std::uint64_t runtimeSerial, const proto::ProtoObject* cell) const;
 
     // ---------------------------------------------------------------------
     // Per-constant runtime caches (D25)
@@ -414,6 +439,16 @@ private:
     std::vector<Const>                  consts_;
     std::vector<InstVarGroupEntry>      groupEntries_;  // IVAR_GROUP operands
     std::vector<DeoptEntry>             deoptEntries_;  // DEOPT_ENTER/EXIT operands
+    // The `__bc_ptr__` cell of the closures over this module (BlockCode.h),
+    // for the first runtime that creates one: published once with a
+    // compare-and-swap and never replaced, so a reader can never see a freed
+    // entry; freed with the module.
+    struct CodeRef {
+        std::uint64_t              runtimeSerial;
+        const proto::ProtoObject*  cell;
+    };
+    mutable std::atomic<const CodeRef*> codeRef_{nullptr};
+    mutable std::atomic<bool>           runtimeOwned_{false};
     // Per-constant runtime caches (constSym / ivSymbol / callDescriptor).
     // Null until first use. Holds perennial interned ProtoStrings, valid for
     // the runtime's ProtoSpace (one runtime per process).

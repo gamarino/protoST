@@ -83,6 +83,37 @@ TEST_CASE("An integer under __bc_ptr__ is never run as code", "[closure][block-c
         REQUIRE(r->asString(ctx)->toStdString(ctx) == "refused");
     }
 
+    SECTION("a BlockClosure subclass that overrides value: is evaluated by its method") {
+        runSrc(rt, "BlockClosure subclass: #MyBlock.\nMyBlock >> value: x ^ x * 10.");
+        REQUIRE(runSrc(rt, "(#(1 2 3) collect: MyBlock new) last.")->asLong(ctx) == 30);
+        // Its value, which it does not override, is BlockClosure's: refused.
+        auto* r = runSrc(rt, "[MyBlock new value. #ran] on: Error do: [:e | e messageText].");
+        REQUIRE(r->asString(ctx)->toStdString(ctx) == "the block has no code to run");
+    }
+
+    SECTION("closures share their code cell only when the runtime owns the module") {
+        // An embedder-owned module (runTopLevel) may be freed while the
+        // runtime lives: each closure gets a cell of its own, and nothing
+        // is anchored for the module.
+        runSrc(rt, "Forged >> adder: i ^ [:y | y + i].");
+        const proto::ProtoString* bcKey = rt.bootstrap().sym.bcPtr;
+        const proto::ProtoObject* a = runSrc(rt, "Forged new adder: 1.");
+        const proto::ProtoObject* b = runSrc(rt, "Forged new adder: 2.");
+        REQUIRE(a->getOwnAttributeDirect(ctx, bcKey) != b->getOwnAttributeDirect(ctx, bcKey));
+        // An adopted module: one cell for every closure over the sub-block.
+        protoST::Parser P("Forged >> doubler: i ^ [:y | y * i].");
+        auto ast = P.parseModule();
+        REQUIRE(P.errors().empty());
+        protoST::Compiler C;
+        auto bc = C.compileModule(*ast);
+        REQUIRE(!C.hasErrors());
+        rt.runTopLevel(rt.adoptModule(std::move(bc)));
+        const proto::ProtoObject* c = runSrc(rt, "Forged new doubler: 3.");
+        const proto::ProtoObject* d = runSrc(rt, "Forged new doubler: 4.");
+        REQUIRE(c->getOwnAttributeDirect(ctx, bcKey) == d->getOwnAttributeDirect(ctx, bcKey));
+        REQUIRE(runSrc(rt, "(Forged new doubler: 4) value: 5.")->asLong(ctx) == 20);
+    }
+
     SECTION("real closures and methods still run") {
         REQUIRE(runSrc(rt, "[:x | x * 2] value: 21.")->asLong(ctx) == 42);
         runSrc(rt, "Forged >> twice: x ^ x * 2.");

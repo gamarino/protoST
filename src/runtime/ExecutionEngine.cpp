@@ -430,7 +430,7 @@ ExecutionEngine::storeInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t
 const proto::ProtoObject*
 ExecutionEngine::newClosure(proto::ProtoContext* ctx, const Frame& f, unsigned int blockIdx,
                            const proto::ProtoObject* capD) {
-    const proto::ProtoObject* bcPtrObj = blockCodeRef(ctx, &f.m->block(blockIdx));
+    const proto::ProtoObject* bcPtrObj = blockCodeRefFor(rt_, ctx, f.m->block(blockIdx));
     TransientPin pinBcPtr(ctx, bcPtrObj);
     const proto::ProtoObject* homeObj =
         ctx->fromLong(static_cast<long long>(f.homeFrameId));
@@ -1818,7 +1818,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                             }
                     }
                     const protoST::BytecodeModule* recvCode = isValueFamily
-                        ? blockCodeOf(ctx, recv->getOwnAttributeDirect(ctx, recvBcKey))
+                        ? blockCodeOfCached(rt_, ctx, recv->getOwnAttributeDirect(ctx, recvBcKey))
                         : nullptr;
                     if (recvCode) {
                         if (isValueFamily) {
@@ -2105,7 +2105,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // (0.10.0).
                 const protoST::BytecodeModule* sub =
                     (reinterpret_cast<uintptr_t>(attr) & 0x3F) == 0
-                        ? blockCodeOf(ctx, attr->getOwnAttributeDirect(ctx, bcKey))
+                        ? blockCodeOfCached(rt_, ctx, attr->getOwnAttributeDirect(ctx, bcKey))
                         : nullptr;
                 if (sub) {
                     // User method: F6 v3 A previously recursed via
@@ -2302,7 +2302,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 const proto::ProtoString* bcKey  = bs_.sym.bcPtr;
                 const proto::ProtoString* capKey = bs_.sym.captured;
                 if (const protoST::BytecodeModule* sub =
-                        blockCodeOf(ctx, attr->getOwnAttributeDirect(ctx, bcKey))) {
+                        blockCodeOfCached(rt_, ctx, attr->getOwnAttributeDirect(ctx, bcKey))) {
                     if (!sub->isCallForm()) {
                         // The receiver has a method under this bare name,
                         // but it was declared with Smalltalk syntax. Reject

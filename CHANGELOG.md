@@ -13,6 +13,14 @@ minor release, so the two services arrive in 0.5.0.
 
 ### Added
 
+- **`STRuntime::adoptModule(std::unique_ptr<BytecodeModule>)`.** The runtime
+  keeps a module an embedder hands it until the runtime is destroyed, and
+  answers it to run with `runTopLevel`. The classes and methods a module
+  defines run its code for as long as the runtime lives, so a module run with
+  `runTopLevel` must outlive the runtime (now stated in `STRuntime.h`);
+  handing it over removes that duty, and the closures over it share their
+  code cell. The `protost` executable and the REPL hand over every module
+  they run.
 - **`ByteArray randomBytes: n` and `Time utcMicroseconds`.**
   `randomBytes:` answers `n` bytes from the operating system's
   cryptographically secure generator (protoIO's `random::bytes`: `getrandom`
@@ -134,12 +142,28 @@ minor release, so the two services arrive in 0.5.0.
   `value` or reached as a method. It is now a protoCore external pointer that
   borrows the module (`src/runtime/BlockCode.h`), and only an external pointer
   is read as code: a forged closure is a value, is not evaluated, and is not
-  reported by `respondsTo:` or `canUnderstand:`. Test
+  reported by `respondsTo:` or `canUnderstand:`. The closures over one block
+  of a module the runtime owns share one such cell (see Performance). Test
   `tests/unit/test_block_code.cpp`.
 - **`BlockClosure new value` crashed the process.** A BlockClosure without
   code re-sent itself `value`, which found the same primitive and recursed
   until the stack overflowed (SIGSEGV on 83864c9). It signals `Error` (`the
-  block has no code to run`). Test `tests/unit/test_block_code.cpp`.
+  block has no code to run`) when the send would reach BlockClosure's own
+  `value` again; a BlockClosure subclass that overrides `value:` is still
+  evaluated by its method (`#(1 2 3) collect: MyBlock new`). Test
+  `tests/unit/test_block_code.cpp`.
+- **The REPL freed a session's modules before its runtime.** `:reset` and the
+  end of a session destroyed the modules of the lines run so far while the
+  runtime's actor threads could still run their methods. The runtime now owns
+  them (`STRuntime::adoptModule`) and frees them after its threads stop.
+- **Runtime-private selectors are hidden from reflection and `perform:`.** A
+  selector that begins with two underscores is private to the runtime
+  (LANGUAGE.md §3.3); `selectors` already left them out, but
+  `respondsTo:`, `canUnderstand:` and `lookupSelector:` reported them and
+  `perform:` sent them, `__st_send__` (the entry another runtime sends
+  through, a method cell since this release) included. They answer false or
+  nil, and `perform:` reports MessageNotUnderstood. Test
+  `05-messages/private-selectors-are-hidden.st`.
 - **S3 is closed: an allocation-free loop does not stall a collection, and
   a test now proves it.** The park points came with S15 (the loop back-edge,
   engine entry and call entry call `ProtoContext::safepoint()`), but S3 stayed
@@ -365,6 +389,21 @@ minor release, so the two services arrive in 0.5.0.
 
 ### Performance
 
+- **A closure's code costs no allocation, and reading it one table probe.**
+  `__bc_ptr__` became a protoCore external pointer (see Fixed): a cell where
+  the integer was inline, and two out-of-line calls to read where there was
+  one. For a module the runtime owns, the closures over one block share one
+  cell, created with the first closure and anchored once in the runtime's
+  live registry (the single pinned root); a module an embedder keeps gets a
+  cell per closure, so nothing accumulates for a module that may be freed.
+  Reads go through a 64-entry per-thread cache of decoded cells, which holds
+  only those anchored cells, keyed by cell and runtime serial
+  (`src/runtime/BlockCode.h`). Instructions per iteration (`perf stat -r 3`)
+  against 83864c9: a capturing block created and called per iteration, two
+  interleaved runs, 15,692 / 15,529 on 83864c9, 15,902 / 15,761 with a cell
+  per closure and no cache, 15,579 / 15,642 now (the benchmark allocates, so
+  collections move it by about 150 either way: level with 83864c9 within
+  that noise); a user method send 1,477 -> 1,480 (1,489 without the cache).
 - **A primitive is a protoCore native method.** `bindPrimitive` installs
   `ProtoContext::fromMethod(nullptr, primitiveMethod<F>)` under the selector
   (no bound receiver, so no cycle with the prototype), and a send that finds a
@@ -561,19 +600,23 @@ minor release, so the two services arrive in 0.5.0.
   `bindClassPrimitive` take a `proto::ProtoMethod`; a function with the
   `PrimFn` signature becomes one as `primitiveMethod<F>`
   (`bindPrimitive(rt, proto, "sel", primitiveMethod<prim_X>)`). A primitive
-  runs only for protoST's own dispatch: a call of its method cell through
-  protoCore's `call` -- from another runtime, in its own space or in
-  protoST's, or from embedder C++ -- is refused with an error naming
-  `__st_send__`, the entry another runtime sends through (docs/INTEROP.md
-  §4.3), which gives the call protoST's boundary: its own context, handlers
-  hidden, errors translated. A primitive
+  honours protoCore's calling convention for every caller: a call of its
+  method cell through protoCore's `call` that does not come from protoST's
+  dispatch -- another runtime, in its own space or sharing protoST's, or
+  embedder C++ -- runs behind the boundary `__st_send__` gives
+  (docs/INTEROP.md §4.3: protoST's context, the handlers of protoST code above
+  it hidden, errors leaving as `ProtoException`). protoScala calls protoST
+  primitives this way (`umd/protost-interop`, `tutorial/15`). A primitive
   sent named arguments in a call-form send reports `a primitive method takes
   no named arguments` (was `primitive method 'sel' does not accept named args
   in v1`).
-- **A ProtoSpace hosts one protoST runtime.** Constructing a second
-  `STRuntime` on a space that already hosts one (`STRuntime(hostSpace)`)
-  throws `std::logic_error`, since a primitive finds its runtime by its
-  context's space; it used to replace the first runtime in the space's
+- **A ProtoSpace hosts one protoST runtime: constructing a second one on it
+  throws `std::logic_error`.** In the ecosystem's recommended setup (one
+  ProtoSpace per process, runtimes sharing it), two embedders that each
+  construct `STRuntime(hostSpace)` now fail at the second construction; they
+  must share one `STRuntime`, which the message says. A primitive finds its
+  runtime by its context's space (INTEROP.md §4.1 already stated one protoST
+  runtime per process); it used to replace the first runtime in the space's
   registry entry, which also sent the first runtime's imports to the second.
   A runtime whose construction fails is unregistered again. Test
   `tests/unit/test_primitive_methods.cpp`.

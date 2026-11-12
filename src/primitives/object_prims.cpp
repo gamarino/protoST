@@ -827,6 +827,16 @@ const proto::ProtoString* selectorArg(proto::ProtoContext* ctx, const proto::Pro
 }
 } // namespace
 
+// A selector that begins with two underscores is private to the runtime
+// (LANGUAGE.md section 3.3): the kernel and the primitives send it, but
+// reflection does not report it, as `selectors` does not, and perform: does
+// not send it -- `__st_send__`, the entry another runtime sends through, is
+// one of them.
+static bool isRuntimePrivateSelector(proto::ProtoContext* ctx, const proto::ProtoString* sel) {
+    const std::string name = sel->toStdString(ctx);
+    return name.size() >= 2 && name[0] == '_' && name[1] == '_';
+}
+
 // recv perform: #selector withArguments: anArray
 const proto::ProtoObject* prim_Object_performWithArguments(STRuntime& rt, proto::ProtoContext* ctx,
                                                            const proto::ProtoObject* r,
@@ -843,8 +853,9 @@ const proto::ProtoObject* prim_Object_performWithArguments(STRuntime& rt, proto:
             args.push_back(list->getAt(ctx, listIndex(i)));
     }
     bool understood = false;
-    const proto::ProtoObject* res = sendDynamic(rt, ctx, r, sel, args.data(),
-                                                static_cast<int>(args.size()), &understood);
+    const proto::ProtoObject* res = isRuntimePrivateSelector(ctx, sel)
+        ? nullptr
+        : sendDynamic(rt, ctx, r, sel, args.data(), static_cast<int>(args.size()), &understood);
     // Not understood: doesNotUnderstand:, as a direct send (a user override
     // answers, else a resumable MessageNotUnderstood), as in Pharo.
     if (!understood)
@@ -862,7 +873,9 @@ const proto::ProtoObject* prim_Object_performWith(STRuntime& rt, proto::ProtoCon
     if (argc < 1) throw NativeError("perform: expects a selector");
     const proto::ProtoString* sel = selectorArg(ctx, a[0]);
     bool understood = false;
-    const proto::ProtoObject* res = sendDynamic(rt, ctx, r, sel, a + 1, argc - 1, &understood);
+    const proto::ProtoObject* res = isRuntimePrivateSelector(ctx, sel)
+        ? nullptr
+        : sendDynamic(rt, ctx, r, sel, a + 1, argc - 1, &understood);
     if (!understood)
         res = sendDoesNotUnderstand(rt, ctx, r, sel->toStdString(ctx), a + 1, argc - 1);
     return res ? res : PROTO_NONE;
@@ -874,6 +887,7 @@ const proto::ProtoObject* prim_Object_respondsTo(STRuntime& rt, proto::ProtoCont
                                                  const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("respondsTo: expects 1 arg");
     const proto::ProtoString* sel = selectorArg(ctx, a[0]);
+    if (isRuntimePrivateSelector(ctx, sel)) return PROTO_FALSE;
     // The lookup a send does: from the receiver's method holder (a class's
     // metaclass, D52).
     const proto::ProtoObject* m = methodHolder(rt.bootstrap(), ctx, r)->getAttribute(ctx, sel);
@@ -1426,7 +1440,7 @@ const proto::ProtoObject* prim_Object_canUnderstand(STRuntime& rt, proto::ProtoC
                                                    const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("canUnderstand: expects 1 arg");
     const proto::ProtoString* sel = a[0] ? a[0]->asString(ctx) : nullptr;
-    if (!sel || !r || r == PROTO_NONE) return PROTO_FALSE;
+    if (!sel || !r || r == PROTO_NONE || isRuntimePrivateSelector(ctx, sel)) return PROTO_FALSE;
     return isMethodValue(rt, ctx, r->getAttribute(ctx, sel)) ? PROTO_TRUE : PROTO_FALSE;
 }
 
@@ -1441,7 +1455,7 @@ const proto::ProtoObject* prim_Behavior_lookupSelector(STRuntime& rt, proto::Pro
                                                        const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("lookupSelector: expects 1 arg");
     const proto::ProtoString* sel = a[0] ? a[0]->asString(ctx) : nullptr;
-    if (!sel || !r || r == PROTO_NONE) return PROTO_NONE;
+    if (!sel || !r || r == PROTO_NONE || isRuntimePrivateSelector(ctx, sel)) return PROTO_NONE;
     sel = sel->intern(ctx);
     const proto::ProtoObject* m = r->getAttribute(ctx, sel);
     if (!isMethodValue(rt, ctx, m)) return PROTO_NONE;

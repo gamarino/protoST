@@ -14,9 +14,10 @@
 #include "frontend/Compiler.h"
 #include "protoCore.h"
 
-#include <functional>
+#include <initializer_list>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -176,50 +177,65 @@ const proto::ProtoString* sym(proto::ProtoContext* ctx, const char* s) {
     return proto::ProtoString::createSymbol(ctx, s);
 }
 
-// A protoCore call of `printString` on `target`: what another runtime (or
-// embedder C++) does when it calls a protoST object's method directly.
-const proto::ProtoObject* callPrintString(proto::ProtoContext* ctx,
-                                          const proto::ProtoObject* target) {
-    const proto::ProtoObject* const* none = nullptr;
-    return target->call(ctx, nullptr, sym(ctx, "printString"), target, none, 0);
+// A protoCore call of `selector` on `target`: what another runtime (or
+// embedder C++) does when it calls a protoST object's method cell directly.
+const proto::ProtoObject* callDirect(proto::ProtoContext* ctx, const proto::ProtoObject* target,
+                                     const char* selector,
+                                     std::initializer_list<const proto::ProtoObject*> args = {}) {
+    std::vector<const proto::ProtoObject*> a(args);
+    return target->call(ctx, nullptr, sym(ctx, selector), target, a.data(),
+                        static_cast<unsigned>(a.size()));
 }
 
-// A foreign method that calls a protoST primitive back directly: run from a
-// protoST send, so protoST's dispatch is active on the thread when it calls.
-const proto::ProtoObject* callBackDirectly(proto::ProtoContext* ctx, const proto::ProtoObject*,
-                                           const proto::ParentLink*,
-                                           const proto::ProtoArguments* positional,
-                                           const proto::ProtoKeywordArguments*) {
-    return callPrintString(ctx, positional->getAt(ctx, 0));
+// Foreign methods protoST calls, which call a primitive back directly while
+// protoST's dispatch is active on the thread.
+const proto::ProtoObject* printBack(proto::ProtoContext* ctx, const proto::ProtoObject*,
+                                    const proto::ParentLink*,
+                                    const proto::ProtoArguments* positional,
+                                    const proto::ProtoKeywordArguments*) {
+    return callDirect(ctx, positional->getAt(ctx, 0), "printString");
 }
 
-std::string thrownText(const std::function<void()>& f) {
-    try {
-        f();
-    } catch (const std::exception& e) {
-        return e.what();
-    }
-    return "<nothing thrown>";
+const proto::ProtoObject* valueBack(proto::ProtoContext* ctx, const proto::ProtoObject*,
+                                    const proto::ParentLink*,
+                                    const proto::ProtoArguments* positional,
+                                    const proto::ProtoKeywordArguments*) {
+    return callDirect(ctx, positional->getAt(ctx, 0), "value");
+}
+
+// protoST's number prototype: a SmallInteger names no prototype of its own
+// for protoCore's `call`, so the method cell is called on this holder.
+const proto::ProtoObject* g_numberProto = nullptr;
+
+const proto::ProtoObject* divideBack(proto::ProtoContext* ctx, const proto::ProtoObject*,
+                                     const proto::ParentLink*,
+                                     const proto::ProtoArguments* positional,
+                                     const proto::ProtoKeywordArguments*) {
+    const proto::ProtoObject* args[] = {ctx->fromLong(0)};
+    return g_numberProto->call(ctx, nullptr, sym(ctx, "/"), positional->getAt(ctx, 0), args, 1);
 }
 
 } // namespace
 
-TEST_CASE("A primitive runs only for protoST's own dispatch", "[primitive][interop]") {
-    SECTION("embedder C++ calling the method cell through protoCore is refused") {
+// A primitive is a protoCore method cell, so any caller may call it through
+// protoCore's calling convention. A call from outside protoST's dispatch runs
+// behind the boundary __st_send__ gives (docs/INTEROP.md section 4.3).
+TEST_CASE("A primitive called through protoCore runs behind protoST's boundary",
+          "[primitive][interop]") {
+    SECTION("embedder C++ calls the method cell on protoST's own context") {
         protoST::STRuntime rt;
         auto* ctx = rt.rootCtx();
         const proto::ProtoObject* three = ctx->fromLong(3);
-        // The integer's primitives live on protoST's number prototype; the
-        // method holder is what a send looks up.
+        // The integer's primitives live on protoST's number prototype.
         const proto::ProtoObject* holder = rt.bootstrap().numberProto;
-        const std::string text = thrownText([&] {
-            const proto::ProtoObject* const* none = nullptr;
-            holder->call(ctx, nullptr, sym(ctx, "printString"), three, none, 0);
-        });
-        REQUIRE(text.find("__st_send__") != std::string::npos);
+        const proto::ProtoObject* const* none = nullptr;
+        REQUIRE(asText(ctx, holder->call(ctx, nullptr, sym(ctx, "printString"), three, none,
+                                         0)) == "3");
+        // protoST's own dispatch is unaffected afterwards.
+        REQUIRE(asText(ctx, runSrc(rt, "4 printString.")) == "4");
     }
 
-    SECTION("another runtime sharing protoST's space is refused, and __st_send__ serves it") {
+    SECTION("another runtime sharing protoST's space calls it, and errors leave as exceptions") {
         proto::ProtoSpace space;
         protoST::STRuntime rt(space);
         // The host's own context in the shared space: not one of protoST's.
@@ -227,33 +243,48 @@ TEST_CASE("A primitive runs only for protoST's own dispatch", "[primitive][inter
         runSrc(rt, "Object subclass: #Shared.");
         const proto::ProtoObject* cls =
             rt.globals()->getAttribute(rt.rootCtx(), sym(rt.rootCtx(), "Shared"));
-        // An instance finds `class`, a primitive, through its own chain; the
-        // host calls that method cell directly.
         const proto::ProtoObject* inst = runSrc(rt, "Shared new.");
+        // An instance finds `class`, a primitive, through its own chain.
         REQUIRE(inst->getAttribute(&host, sym(&host, "class"))->isMethod(&host));
-        const std::string text = thrownText([&] {
-            const proto::ProtoObject* const* none = nullptr;
-            inst->call(&host, nullptr, sym(&host, "class"), inst, none, 0);
-        });
-        INFO(text);
-        REQUIRE(text.find("__st_send__") != std::string::npos);
-        // The same message through the entry another runtime uses.
-        const proto::ProtoObject* args[] = {
-            reinterpret_cast<const proto::ProtoObject*>(sym(&host, "printString"))};
-        const proto::ProtoObject* r =
-            cls->call(&host, nullptr, sym(&host, "__st_send__"), cls, args, 1);
-        REQUIRE(asText(&host, r) == "Shared");
+        REQUIRE(callDirect(&host, inst, "class") == cls);
+        // A failure inside the primitive leaves as a protoCore exception, as it
+        // does through __st_send__.
+        // (A SmallInteger names no prototype of its own for protoCore's
+        // `call`, so the call names protoST's number prototype.)
+        bool caught = false;
+        try {
+            const proto::ProtoObject* args[] = {host.fromLong(0)};
+            rt.bootstrap().numberProto->call(&host, nullptr, sym(&host, "/"),
+                                             host.fromLong(3), args, 1);
+        } catch (const proto::ProtoException&) {
+            caught = true;
+        }
+        REQUIRE(caught);
     }
 
-    SECTION("a foreign method protoST calls cannot call a primitive back directly") {
+    SECTION("a foreign method protoST calls can call a primitive back") {
         protoST::STRuntime rt;
         auto* ctx = rt.rootCtx();
         auto* foreign = rt.bootstrap().objectProto->newChild(ctx, /*isMutable=*/true);
-        foreign->setAttribute(ctx, sym(ctx, "poke:"), ctx->fromMethod(nullptr, &callBackDirectly));
+        foreign->setAttribute(ctx, sym(ctx, "print:"), ctx->fromMethod(nullptr, &printBack));
+        foreign->setAttribute(ctx, sym(ctx, "value:"), ctx->fromMethod(nullptr, &valueBack));
+        foreign->setAttribute(ctx, sym(ctx, "divide:"), ctx->fromMethod(nullptr, &divideBack));
         rt.globals()->setAttribute(ctx, sym(ctx, "Foreign"), foreign);
-        auto* r = runSrc(rt, "[Foreign poke: 3] on: Error do: [:e | e messageText].");
-        REQUIRE(asText(ctx, r).find("__st_send__") != std::string::npos);
-        // protoST's own dispatch is unaffected afterwards.
+        g_numberProto = rt.bootstrap().numberProto;
+        REQUIRE(asText(ctx, runSrc(rt, "Foreign print: 3.")) == "3");
+        REQUIRE(runSrc(rt, "Foreign value: [41 + 1].")->asLong(ctx) == 42);
+        // The error crosses the foreign frames and is signalled again where
+        // the foreign method returns into protoST, so the outer handler
+        // selects it by its class.
+        REQUIRE(asText(ctx, runSrc(rt,
+            "[Foreign divide: 3. #none] on: ZeroDivide do: [:e | #caught].")) == "caught");
+        // The boundary: a non-local return cannot unwind through the foreign
+        // method's frames; without it the method would answer 5.
+        runSrc(rt, "Object subclass: #Holder.");
+        auto* r = runSrc(rt,
+            "Holder >> run ^ Foreign value: [^ 5].\n"
+            "[Holder new run] on: Error do: [:e | e messageText].");
+        REQUIRE(asText(ctx, r).find("cannot cross a runtime boundary") != std::string::npos);
         REQUIRE(asText(ctx, runSrc(rt, "3 printString.")) == "3");
     }
 }

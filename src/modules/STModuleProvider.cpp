@@ -78,7 +78,9 @@ void registerSTRuntime(const proto::ProtoSpace* space, STRuntime* rt) {
         if (e.space == space)
             throw std::logic_error(
                 "protoST: this ProtoSpace already hosts a protoST runtime; a space hosts "
-                "one protoST runtime (its primitives find their runtime by the space)");
+                "one protoST runtime (its primitives find their runtime by the space): "
+                "share that STRuntime among the embedders of the space instead of "
+                "constructing another");
     }
     entries.push_back({space, rt});
     advanceRegistryGeneration();

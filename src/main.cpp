@@ -218,17 +218,18 @@ int main(int argc, char** argv) {
         if (!kernelPresent()) return kExitNoKernel;
 
         try {
-            std::unique_ptr<protoST::BytecodeModule> bc;  // outlives rt (see above)
             protoST::STRuntime rt;
             protoST::Compiler C;
-            bc = C.compileModule(*ast);
+            std::unique_ptr<protoST::BytecodeModule> bc = C.compileModule(*ast);
             bc->setSourceName("<expr>");
             if (C.hasErrors()) {
                 for (auto& s : C.errors()) protoST::writeWholeLine(stderr, "compile error: " + s);
                 return 70;
             }
             const proto::ProtoObject* r = nullptr;
-            if (int status = runReporting(rt, *bc, &r)) return status;
+            // The runtime keeps the module: its methods may run until the
+            // runtime is destroyed.
+            if (int status = runReporting(rt, rt.adoptModule(std::move(bc)), &r)) return status;
             // BL-3: shared formatter — non-primitive objects render as
             // "a ClassName" via the default printString logic.
             protoST::writeWholeLine(stdout, protoST::formatValue(rt, rt.rootCtx(), r));
@@ -253,9 +254,9 @@ int main(int argc, char** argv) {
             return 65;
         }
         if (!kernelPresent()) return kExitNoKernel;
-        std::unique_ptr<protoST::BytecodeModule> bc;  // outlives rt (see above)
         protoST::STRuntime rt;
-        protoST::Compiler C; bc = C.compileModule(*ast);
+        protoST::Compiler C;
+        std::unique_ptr<protoST::BytecodeModule> bc = C.compileModule(*ast);
         bc->setSourceName(path);
         if (C.hasErrors()) {
             for (auto& s : C.errors()) protoST::writeWholeLine(stderr, "compile error: " + s);
@@ -263,7 +264,7 @@ int main(int argc, char** argv) {
         }
         rt.debugger().attach();
         const proto::ProtoObject* r = nullptr;
-        if (int status = runReporting(rt, *bc, &r)) return status;
+        if (int status = runReporting(rt, rt.adoptModule(std::move(bc)), &r)) return status;
         if (r && r != PROTO_NONE) {
             // BL-3: shared formatter.
             protoST::writeWholeLine(stdout, "=> " + protoST::formatValue(rt, rt.rootCtx(), r));
@@ -320,13 +321,11 @@ int main(int argc, char** argv) {
             // The runtime (and with it the kernel) exists before the script is
             // compiled, so the compiler knows the kernel classes' instance
             // variables (a subclass of IOStream reads `fd`).
-            // `bc` is declared before `rt` so it is destroyed after it: the
-            // runtime's workers may still run this module's methods while it
-            // shuts down.
-            std::unique_ptr<protoST::BytecodeModule> bc;
+            // The runtime keeps the module (adoptModule below): its workers
+            // may still run the module's methods while it shuts down.
             protoST::STRuntime rt;
             protoST::Compiler C;
-            bc = C.compileModule(*ast);
+            std::unique_ptr<protoST::BytecodeModule> bc = C.compileModule(*ast);
             bc->setSourceName(sourceName);
             if (C.hasErrors()) {
                 for (auto& s : C.errors()) protoST::writeWholeLine(stderr, "compile error: " + s);
@@ -340,7 +339,7 @@ int main(int argc, char** argv) {
                 std::fflush(stdout);
             }
             const proto::ProtoObject* r = nullptr;
-            if (int status = runReporting(rt, *bc, &r)) return status;
+            if (int status = runReporting(rt, rt.adoptModule(std::move(bc)), &r)) return status;
             // BL-3: shared formatter.
             if (printLast) protoST::writeWholeLine(stdout, protoST::formatValue(rt, rt.rootCtx(), r));
             return 0;

@@ -164,12 +164,6 @@ void refuseNamedArguments(proto::ProtoContext*) {
     throw NativeError("a primitive method takes no named arguments");
 }
 
-void refuseDirectCall(proto::ProtoContext*) {
-    throw NativeError(
-        "protoST: a primitive runs only for a protoST send; another runtime or "
-        "embedder code sends to a protoST object through " +
-        std::string(kForeignSendSelector));
-}
 } // namespace detail
 
 void bindPrimitive(STRuntime& rt, const proto::ProtoObject* proto, const char* selector,
@@ -1206,6 +1200,29 @@ bool STRuntime::isOwnerThread() const {
 proto::ProtoSpace*   STRuntime::space()         const { return &impl_->space; }
 proto::ProtoContext* STRuntime::rootCtx()       const { return impl_->rootCtx; }
 proto::ProtoRootSet* STRuntime::asyncRootSet()  const { return impl_->asyncRoots; }
+std::uint64_t STRuntime::nextSerial() noexcept {
+    static std::atomic<std::uint64_t> next{1};
+    return next.fetch_add(1, std::memory_order_relaxed);
+}
+
+constinit thread_local BlockCodeCacheEntry t_blockCodeCache[kBlockCodeCacheSize] = {};
+
+const proto::ProtoObject* blockCodeRefSlow(STRuntime& rt, proto::ProtoContext* ctx,
+                                           const BytecodeModule& module) {
+    const proto::ProtoObject* cell = blockCodeRef(ctx, &module);
+    // Another runtime created closures over this module first and owns its
+    // cache: this closure gets a cell of its own, rooted by the closure.
+    if (module.hasCodeRef()) return cell;
+    TransientPin pin(ctx, cell);
+    // Anchored in the runtime's single pinned root before another thread can
+    // read it from the module, for as long as the runtime lives.
+    rt.registryAdd(ctx, cell);
+    if (module.publishCodeRef(rt.serial(), cell)) return cell;
+    // Another thread published first.
+    rt.registryRemove(ctx, cell);
+    if (const proto::ProtoObject* published = module.codeRefFor(rt.serial())) return published;
+    return cell;
+}
 const Bootstrap&     STRuntime::bootstrap()     const { return impl_->bootstrap; }
 DebuggerRuntime&     STRuntime::debugger()            { return impl_->debugger; }
 proto::ProtoObject*  STRuntime::globals()       const { return impl_->globals; }
@@ -2678,6 +2695,15 @@ static std::string executablePath() {
 
 static std::string discoverStdlibDir();
 
+const BytecodeModule& STRuntime::adoptModule(std::unique_ptr<BytecodeModule> module) {
+    if (!module) throw std::invalid_argument("protoST: adoptModule needs a module");
+    const BytecodeModule& adopted = *module;
+    std::lock_guard<std::mutex> lock(impl_->modulesMu);
+    module->markRuntimeOwned();
+    impl_->loadedModules.push_back(std::move(module));
+    return adopted;
+}
+
 std::vector<const BytecodeModule*> STRuntime::loadedModules() const {
     std::lock_guard<std::mutex> lock(impl_->modulesMu);
     std::vector<const BytecodeModule*> out;
@@ -2968,6 +2994,7 @@ void STRuntime::loadKernel() {
         const BytecodeModule& module = *bc;
         {
             std::lock_guard<std::mutex> lock(impl_->modulesMu);
+            bc->markRuntimeOwned();
             impl_->loadedModules.push_back(std::move(bc));
         }
         if (impl_->debugger.attached()) impl_->debugger.onModuleLoaded(rootCtx(), &module);
@@ -3054,6 +3081,7 @@ const proto::ProtoObject* STRuntime::loadModuleFromFileImpl(
     const BytecodeModule& module = *bc;
     {
         std::lock_guard<std::mutex> lock(impl_->modulesMu);
+        bc->markRuntimeOwned();
         impl_->loadedModules.push_back(std::move(bc));
     }
     // The debugger arms the module's breakpoints before its top level runs.

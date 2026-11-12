@@ -586,16 +586,21 @@ libraries. At startup it must, in order:
 5. **Native methods need no coordination.** Since 0.10.0 a protoST
    primitive is a protoCore method cell, the representation every runtime on
    protoCore shares, so there is no per-runtime primitive table to namespace:
-   a send calls the cell it finds. A protoST primitive runs only for
-   protoST's own dispatch (a protoST send, or `__st_send__`); called directly
-   through protoCore's `call` -- by another runtime, whether in its own space
-   or sharing protoST's, or by embedder C++ -- it is refused with an error
-   naming `__st_send__`. The refusal is uniform because a bare primitive
-   cannot give the call the boundary `__st_send__` gives (§4.3: protoST's own
-   context, the handlers of protoST code above it hidden, errors leaving as
-   `ProtoException`), and a direct call would reach only the primitives, not
-   the methods written in Smalltalk. Another runtime sends to protoST objects
-   through `__st_send__`. Test `tests/unit/test_primitive_methods.cpp`.
+   a send calls the cell it finds. A protoST primitive honours protoCore's
+   calling convention for every caller. Called directly through protoCore's
+   `call` -- by another runtime, whether in its own space or sharing
+   protoST's, or by embedder C++ -- it runs behind the same boundary
+   `__st_send__` gives (§4.3): the runtime is resolved the same way (a
+   foreign space's caller must be on the thread that constructed the
+   runtime), the call runs on protoST's context (a child of a context that is
+   not protoST's own), the handlers of protoST code above it are hidden, and
+   errors leave as `ProtoException`. protoST's own sends skip that boundary:
+   they leave a per-thread token naming the cell they call, which the
+   primitive consumes. Only primitives are method cells; a method written in
+   Smalltalk is reached through `__st_send__`, which serves both. protoScala
+   calls protoST primitives directly (`umd/protost-interop`,
+   `tutorial/15-modules-calling-smalltalk.scala`); both belong on protoST's
+   pre-merge checklist. Test `tests/unit/test_primitive_methods.cpp`.
 
 ### 6.2 What the demo must show
 
