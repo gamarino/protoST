@@ -5,7 +5,7 @@
 // created. What must hold:
 //   * no second space exists (ProtoSpace::liveSpaceCount);
 //   * the host keeps what is one per space: its primitive prototype slots, its
-//     error factory, its resolution chain (protoST only adds provider:st);
+//     error factory, its resolution chain (protoST only adds its provider);
 //   * protoST still answers its own sends to primitive values -- integers,
 //     floats, strings, characters, nil -- through its own prototypes, although
 //     the space's slots hold the host's;
@@ -100,7 +100,13 @@ TEST_CASE("Guest: a protoST runtime runs in its host's ProtoSpace", "[umd][guest
         bool hasST = false;
         for (proto::proto_ulong i = 0; i < chain->getSize(st.rootCtx()); ++i) {
             const proto::ProtoString* e = chain->getAt(st.rootCtx(), static_cast<int>(i))->asString(st.rootCtx());
-            if (e && e->toStdString(st.rootCtx()) == "provider:st") hasST = true;
+            // protoST's entry names its provider by GUID (K1); the alias
+            // `st` resolves to the same provider.
+            const std::string spec = e ? e->toStdString(st.rootCtx()) : std::string();
+            if (spec.rfind("provider:", 0) == 0
+                && proto::ProviderRegistry::instance().getProviderForSpec(spec)
+                       == proto::ProviderRegistry::instance().getProviderForSpec("provider:st"))
+                hasST = true;
         }
         REQUIRE(hasST);
         (void)hostChain;

@@ -214,6 +214,17 @@ minor release, so the two services arrive in 0.5.0.
   interpreter-overhead work a kept closure that used a method variable
   signalled an `Error`, and one with temporaries inside an inlined block
   read nil).
+- **Runtimes constructed one after another no longer reach each other's
+  modules (K1).** protoCore's process-wide module cache, keyed by provider
+  GUID and path, handed a runtime constructed after another was destroyed the
+  dead runtime's modules, whose methods' bytecode had been freed (a
+  heap-use-after-free; it could abort the process with a corrupted heap).
+  Each runtime now registers a module provider of its own, named in its
+  resolution chain by GUID, and retires it when it is destroyed; `provider:st`
+  still names protoST for foreign callers. The unit-test binary now passes run
+  whole in one process, also under ASan. Test: `K1: a runtime does not reach
+  the modules of a runtime destroyed before it` (heap-use-after-free under
+  ASan before).
 - **One rule for a loop condition that is not a Boolean.** The four loop
   forms disagreed: an inlined `whileTrue:` / `whileFalse:` sent
   `doesNotUnderstand: whileTrue:` to the condition's value (which is not the

@@ -465,7 +465,11 @@ attributes (§0).
   the thread that constructed the runtime may allocate on (D26), and a foreign
   caller has no context of its own in this space to chain to. An import from any
   other thread is refused with a message rather than raced.
-- **One protoST runtime per process**, because the provider is registered once.
+- **One protoST runtime at a time.** A foreign caller reaches protoST through
+  the alias `provider:st`, which names no particular runtime: with two live
+  runtimes the import is refused as ambiguous. Runtimes constructed one after
+  another are fine: each has a provider of its own, retired when the runtime
+  is destroyed (KNOWN_ISSUES K1).
 - **A namespace snapshot.** protoST's module object is mutable; the namespace the
   importer receives is taken once, at import.
 - **Errors cross unchanged.** An error the module's top level does not handle

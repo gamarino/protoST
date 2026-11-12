@@ -72,8 +72,9 @@ STRuntime* soleSTRuntime() {
     return entries.front().runtime;
 }
 
-STModuleProvider::STModuleProvider()
-    : guid_("protoST-source-v1")
+STModuleProvider::STModuleProvider(unsigned long long serial)
+    : guid_("protoST-source-v1#" + std::to_string(serial))
+    , retiredGuid_(guid_ + "#retired")
     , alias_("st")
 {}
 
@@ -258,6 +259,8 @@ STModuleProvider::loadForForeignCaller(STRuntime& rt, const std::string& logical
 const proto::ProtoObject*
 STModuleProvider::tryLoad(const std::string& logicalPath, proto::ProtoContext* ctx) {
     if (!ctx || !ctx->space) return PROTO_NONE;
+    // The runtime this provider served is gone (K1): nothing to load.
+    if (retired_.load(std::memory_order_acquire)) return PROTO_NONE;
 
     auto* rt = stRuntimeForSpace(ctx->space);
     // A guest runtime in the caller's space: the caller is the host runtime's
@@ -282,8 +285,8 @@ STModuleProvider::tryLoad(const std::string& logicalPath, proto::ProtoContext* c
                 throw NativeError(
                     "protoST: a cross-runtime import of '" + logicalPath +
                     "' is ambiguous — this process holds more than one protoST "
-                    "runtime and the UMD provider is registered once per "
-                    "process, so there is no way to tell which one is meant");
+                    "runtime and `provider:st` names no particular one, so "
+                    "there is no way to tell which one is meant");
             }
             return PROTO_NONE;  // no protoST runtime in this process
         }

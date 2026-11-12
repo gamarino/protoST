@@ -10,26 +10,33 @@ departures from Smalltalk-80, and open bugs — see
 
 ---
 
-## K1 — One `STRuntime` per process (open)
+## K1 — One `STRuntime` at a time per process (resolved for runtimes in sequence in 0.10.0)
 
-**What.** Constructing more than one `STRuntime` in a single OS process is not
-supported. The `protost` CLI always constructs exactly one, so this does not
-affect normal use.
+**What.** A process may construct and destroy protoST runtimes one after
+another (an embedder, the unit-test binary run whole). Two runtimes alive at
+the same time remain unsupported: a foreign caller's `provider:st` import is
+refused as ambiguous, and the alias names the runtime constructed last.
 
-**Why.** Some process-global state — protoCore's UMD module cache, keyed by
-logical path — is not isolated per `ProtoSpace`. A second runtime can
-mis-resolve `Import from:` against the first runtime's (already freed) space.
-(The protoST module provider itself resolves its runtime per `ProtoSpace`
-since S6.)
+**Why it was open.** protoCore's UMD module cache is process-wide, keyed by
+provider GUID and logical path, and never drops an entry. All runtimes shared
+one provider GUID, so a runtime constructed after another was destroyed found
+the dead runtime's module in the cache and ran methods whose bytecode had been
+freed (heap-use-after-free under ASan; `method initialize expects -1 args` in
+the F5 v2 unit cases; a `corrupted double-linked list` abort when the whole
+unit binary ran in one process).
 
-**Bounds.** Affects only an embedder that builds multiple runtimes in one
-process. The larger half of this hazard — function-local `static` caches
-holding per-`ProtoSpace` interned symbols — was fixed in 0.1.0. The residual
-is the module-provider / cache layer. The unit-test binary builds many
-runtimes and is therefore run one test per process by `ctest`.
+**Fix (0.10.0).** Each runtime registers a provider of its own, with its own
+GUID, and names it in its resolution chain; its destructor retires the
+provider, which then answers a GUID no cache entry is stored under and loads
+nothing (`src/modules/STModuleProvider.h`). Test: `K1: a runtime does not reach
+the modules of a runtime destroyed before it` (heap-use-after-free under ASan
+before the fix); the whole unit binary passes in one process, also under ASan.
 
-**Status.** Open — to be closed by making the UMD module provider and cache
-per-runtime. See deviation D2 in `docs/STATUS.md`.
+**Residual, in protoCore.** The cache entries of a destroyed runtime stay in
+protoCore's cache (never reached again, but not freed), and its retired
+provider stays in protoCore's ProviderRegistry, which has no removal. One small
+provider per runtime constructed. A per-space eviction of the module cache, or
+a removal API on the registry, would close it; that is protoCore's decision.
 
 ## K3 — No `%` string formatting (open)
 

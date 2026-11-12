@@ -814,6 +814,46 @@ TEST_CASE("F5 v2: Import>>from: hits protoCore cache on second call", "[engine][
     unsetenv("STPATH");
 }
 
+TEST_CASE("K1: a runtime does not reach the modules of a runtime destroyed before it",
+          "[engine][modules][umd]") {
+    // protoCore's module cache is process-wide and never drops an entry. When
+    // every runtime shared one provider GUID, the second runtime's import of
+    // counter_lib hit the first runtime's cached module, whose methods' bytecode
+    // had been freed: `initialize` read its argument count from freed memory
+    // ("method initialize expects -1 args"), a heap-use-after-free under ASan.
+    // Now each runtime has a provider of its own and retires it when it dies.
+    std::string fixtures = PROTOST_FIXTURES_DIR;
+    setenv("STPATH", fixtures.c_str(), 1);
+    const char* src =
+        "m := Import from: 'counter_lib'. "
+        "c := m Counter newChild. "
+        "c initialize. c increment. c value.";
+    std::string firstGuid;
+    for (int round = 0; round < 3; ++round) {
+        protoST::Parser P(src);
+        auto ast = P.parseModule();
+        REQUIRE(P.errors().empty());
+        protoST::Compiler C; auto bc = C.compileModule(*ast);
+        REQUIRE(!C.hasErrors());
+        proto::ModuleProvider* provider = nullptr;
+        {
+            protoST::STRuntime rt;
+            auto* r = rt.runTopLevel(*bc);
+            REQUIRE(r->asLong(rt.rootCtx()) == 1);
+            provider = proto::ProviderRegistry::instance().getProviderForSpec("provider:st");
+            REQUIRE(provider != nullptr);
+            if (round == 0) firstGuid = provider->getGUID();
+            else REQUIRE(provider->getGUID() != firstGuid);
+        }
+        // The dead runtime's provider answers a GUID no entry is stored under
+        // and loads nothing.
+        proto::ProtoSpace bare;
+        proto::ProtoContext bareCtx(&bare, nullptr);
+        REQUIRE(provider->tryLoad("counter_lib", &bareCtx) == PROTO_NONE);
+    }
+    unsetenv("STPATH");
+}
+
 // ---------------------------------------------------------------------------
 // F6 v3 B: snapshot/restore round-trip for the engine's frame stack.
 //

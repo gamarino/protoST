@@ -406,6 +406,8 @@ struct STRuntime::Impl {
 
     // F5-M2 module cache: canonical absolute path -> module object.
     std::unordered_map<std::string, const proto::ProtoObject*> moduleCache;
+    // This runtime's UMD provider (K1); owned by protoCore's ProviderRegistry.
+    STModuleProvider* moduleProvider = nullptr;
 
     // F5-M3: Keep compiled BytecodeModules alive for the lifetime of the
     // runtime. Block method wrappers store raw pointers into a module's
@@ -801,13 +803,16 @@ void STRuntime::construct() {
     impl_->timers = std::make_unique<TimerService>(
         *this, impl_->liveRegistry, impl_->bootstrap.sym.timers);
 
-    // F5 v2: register STModuleProvider once globally with protoCore's
-    // ProviderRegistry; subsequent STRuntime instances reuse the same provider.
-    static std::once_flag s_providerRegistered;
-    std::call_once(s_providerRegistered, []() {
-        proto::ProviderRegistry::instance().registerProvider(
-            std::make_unique<STModuleProvider>());
-    });
+    // F5 v2, K1: this runtime's own module provider (STModuleProvider.h),
+    // registered with protoCore's ProviderRegistry, which owns it from here
+    // on and keeps it for the life of the process.
+    {
+        static std::atomic<unsigned long long> s_runtimeSerial{0};
+        auto provider = std::make_unique<STModuleProvider>(
+            s_runtimeSerial.fetch_add(1, std::memory_order_relaxed) + 1);
+        impl_->moduleProvider = provider.get();
+        proto::ProviderRegistry::instance().registerProvider(std::move(provider));
+    }
 
     // S6: associate this runtime with its ProtoSpace so the provider's
     // tryLoad() dispatches back into our findModuleFile / importModuleFile
@@ -815,16 +820,18 @@ void STRuntime::construct() {
     // worker pool below is started, so no import can miss it.
     registerSTRuntime(&impl_->space, this);
 
-    // Set the resolution chain on this space: protoST's source provider only.
-    // In a host's space the host's chain stays, and protoST's provider is
-    // added to it.
+    // Set the resolution chain on this space: protoST's source provider only,
+    // named by its GUID so the cache entries of this runtime's imports are
+    // its own (K1). In a host's space the host's chain stays, and protoST's
+    // provider is added to it.
+    const std::string ownSpec = impl_->moduleProvider->chainSpec();
     if (!impl_->ownsSpace()) {
-        addModuleProviderToChain("provider:st");
+        addModuleProviderToChain(ownSpec);
     } else {
         auto* ctx = impl_->rootCtx;
         auto* chain = ctx->newList();
         chain = chain->appendLast(
-            ctx, ctx->fromUTF8String("provider:st"));
+            ctx, ctx->fromUTF8String(ownSpec.c_str()));
         impl_->space.setResolutionChain(chain->asObject(ctx));
     }
 
@@ -993,6 +1000,9 @@ STRuntime::~STRuntime() {
     // after destruction does not dereference a dead runtime. Done after the
     // workers are joined: none of them can still be importing.
     unregisterSTRuntime(&impl_->space, this);
+    // K1: and retire this runtime's module provider, so no later import, by
+    // a later runtime or a foreign caller, reaches a module of this one.
+    if (impl_->moduleProvider) impl_->moduleProvider->retire();
 
     // F6 v3 C: clear the thread-local current-actor pointer if it still
     // refers to an actor of this (now-dying) runtime. Without this a stale
@@ -3215,13 +3225,13 @@ const proto::ProtoObject* STRuntime::importModuleFileImpl(
 // T5-a: consumer-side cross-language interop.
 //
 // protoST's constructor sets the space's resolution chain to just
-// `["provider:st"]` — its own UMD provider. protoCore's getImportModule walks
+// `["provider:<GUID>"]` — its own UMD provider (K1). protoCore's getImportModule walks
 // that chain entry-by-entry; for a `provider:<key>` entry it looks the key up
 // in the global ProviderRegistry. A foreign runtime's provider (protoJS,
 // protoPython, or a test stand-in) may be *registered* with the registry, but
 // it is never *reached* unless its spec is in this space's chain. This method
 // closes that gap: it appends a foreign provider spec to the chain, leaving
-// `provider:st` first so a same-named protoST module still shadows a foreign
+// protoST's own first so a same-named protoST module still shadows a foreign
 // one. The filesystem fallback that getImportModule applies after the chain is
 // unchanged.
 void STRuntime::addModuleProviderToChain(const std::string& providerSpec) {
