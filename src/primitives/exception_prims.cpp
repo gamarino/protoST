@@ -212,12 +212,25 @@ bool resumableMarker(proto::ProtoContext* ctx, const proto::ProtoObject* exc) {
 // non-resumable exception) is honoured. A value that is not a protoST
 // exception instance (a foreign exception) is never resumable and runs no
 // method.
+//
+// The send is skipped when the lookup finds the kernel's own
+// Exception>>isResumable (`^ self __isResumable`, i.e. the marker): the
+// marker is read directly, which is what that method answers. The method is
+// looked up on every call, through protoCore's lookup and its attribute
+// cache, so an override installed at any time, or a redefinition of the
+// kernel method, is sent. A dynamic send costs a nested engine (about 5 k
+// instructions per resume:, review round 4).
 bool isResumable(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* exc) {
     if (!exc || !isExceptionInstance(rt, ctx, exc)) return false;
+    const Bootstrap& b = rt.bootstrap();
+    if (b.kernelIsResumable) {
+        const proto::ProtoObject* holder = methodHolder(b, ctx, exc);
+        if (holder && holder->getAttribute(ctx, b.sym.isResumable) == b.kernelIsResumable)
+            return resumableMarker(ctx, exc);
+    }
     bool understood = false;
     const proto::ProtoObject* answer = sendDynamic(
-        rt, ctx, exc, proto::ProtoString::createSymbol(ctx, "isResumable"),
-        nullptr, 0, &understood);
+        rt, ctx, exc, b.sym.isResumable, nullptr, 0, &understood);
     if (!understood) return resumableMarker(ctx, exc);
     return answer == PROTO_TRUE;
 }

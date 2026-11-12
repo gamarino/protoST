@@ -2942,9 +2942,22 @@ void STRuntime::loadKernel() {
         }
     }
     // From here on, classes are declared by user code (see __subclassNamed:).
-    if (auto* g = globals())
+    if (auto* g = globals()) {
         g->setAttribute(rootCtx(), proto::ProtoString::createSymbol(rootCtx(), "__kernel_loaded__"),
                         PROTO_TRUE);
+        // The kernel's Exception>>isResumable, before any user code can
+        // redefine it (Bootstrap::kernelIsResumable). Held by the globals
+        // too, so it stays reachable after a redefinition replaces it on
+        // Exception.
+        Bootstrap& b = impl_->bootstrap;
+        const proto::ProtoObject* m = b.exceptionProto
+            ? b.exceptionProto->getAttribute(rootCtx(), b.sym.isResumable) : nullptr;
+        if (m && m != PROTO_NONE) {
+            g->setAttribute(rootCtx(),
+                            proto::ProtoString::createSymbol(rootCtx(), "__kernel_isResumable__"), m);
+            b.kernelIsResumable = m;
+        }
+    }
 }
 
 // F5-M1: Read, parse, compile, and execute a module file. Wraps the classes
