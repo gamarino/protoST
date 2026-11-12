@@ -305,12 +305,14 @@ void collectLateSites(const BytecodeModule& m, std::vector<LateSite>& out) {
 // S37: resolve the late-bound variables of a method body (Op::PUSH_LATE_VAR,
 // STORE_LATE_VAR) against `cls`, the class the method is being installed on
 // (for a class-side method, the class whose metaclass receives it). The
-// compiler emits them for a lowercase name it could not resolve in a method
-// of a class whose superclass chain it could not see. Each becomes the access
-// the class declares, with the compiler's precedence: an instance variable
-// (on the class side, a class-instance variable), then a class variable.
-// Any other name signals `undeclared variable`, the compiler's error, and the
-// method is not installed; so does an argument or temporary that reuses an
+// compiler emits them for every name it could not resolve in a method of a
+// class whose superclass chain it could not see. Each becomes the access the
+// class declares, with the compiler's precedence: an instance variable (on
+// the class side, a class-instance variable), then a class variable. A read
+// of any other name becomes a global lookup when the compiler would have
+// emitted one (a name not starting with a lowercase letter, or any name in
+// REPL code); any other name signals `undeclared variable`, the compiler's
+// error, and the method is not installed; so does an argument or temporary that reuses an
 // instance variable's name. Everything is checked before anything is
 // rewritten, so a refused method leaves its body untouched.
 void resolveLateVariables(STRuntime& rt, proto::ProtoContext* ctx,
@@ -319,7 +321,20 @@ void resolveLateVariables(STRuntime& rt, proto::ProtoContext* ctx,
     const Bootstrap& b = rt.bootstrap();
     const BytecodeModule* code =
         blockCodeOf(ctx, methodObj->getOwnAttributeDirect(ctx, b.sym.bcPtr));
-    if (!code || !code->hasLateBinding() || code->lateResolved()) return;
+    if (!code || !code->hasLateBinding()) return;
+    // One resolver; a concurrent install of the same body waits for it
+    // (BytecodeModule::beginLateResolution). The wait leaves the
+    // stop-the-world quorum, so a collection the resolver triggers runs.
+    for (;;) {
+        const int state = code->lateState();
+        if (state == BytecodeModule::kLateResolved) return;
+        if (state == BytecodeModule::kLateUnresolved && code->beginLateResolution()) break;
+        proto::ProtoThread::yield(ctx);
+    }
+    struct Resolution {
+        const BytecodeModule* code; bool resolved = false;
+        ~Resolution() { code->finishLateResolution(resolved); }
+    } resolution{code};
     const proto::ProtoString* ivKey = proto::ProtoString::createSymbol(ctx, "__instvar_names__");
     const proto::ProtoString* cvKey = proto::ProtoString::createSymbol(ctx, "__classvar_names__");
     std::unordered_set<std::string> ivars, cvars;
@@ -349,17 +364,18 @@ void resolveLateVariables(STRuntime& rt, proto::ProtoContext* ctx,
             to = store ? Op::STORE_INSTVAR : (classSide ? Op::PUSH_OWN_INSTVAR : Op::PUSH_INSTVAR);
         else if (cvars.count(name))
             to = store ? Op::STORE_CLASSVAR : Op::PUSH_INSTVAR;
-        else if (!store && code->lateReadsFallBackToGlobals())
-            to = Op::PUSH_GLOBAL;
+        else if (!store && (code->lateReadsFallBackToGlobals() || name.empty()
+                            || !std::islower(static_cast<unsigned char>(name[0]))))
+            to = Op::PUSH_GLOBAL;   // as the compiler reads a name it does not bind
         if (to == Op::EXTEND)
             throw ClassedErrorSignal("Error",
                 "undeclared variable '" + name + "' in " + where + " (line "
                 + std::to_string(site.module->lineForPc(site.opPos)) + ")");
         resolved.push_back(to);
     }
-    if (!code->claimLateResolution()) return;
     for (std::size_t i = 0; i < sites.size(); ++i)
         sites[i].module->resolveLateOp(sites[i].opPos, resolved[i]);
+    resolution.resolved = true;
 }
 
 // Records the instance-variable names a class declares (`names`, a string of

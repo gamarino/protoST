@@ -270,19 +270,36 @@ public:
     bool hasLateBinding() const { return hasLateBinding_; }
     bool lateReadsFallBackToGlobals() const { return lateReadsGlobal_; }
     const std::vector<std::string>& lateMethodNames() const { return lateMethodNames_; }
-    // True for the first caller only: the one that resolves the module's
-    // late-bound instructions. A method body is resolved by the first install
-    // of the method, which runs before any thread can run it; a later install
-    // of the same body (the same method object installed elsewhere) keeps the
-    // resolution, as a method compiled against a known class keeps its
-    // instructions wherever it is installed.
-    bool claimLateResolution() const {
-        return !lateResolved_.exchange(true, std::memory_order_acq_rel);
+    // The resolution of the module's late-bound instructions, done once, by
+    // the first install of the method (before any thread can run the body).
+    // Three states, so a second install of the same body racing the first
+    // (the same compiled module run twice, a reflective re-install) never
+    // installs it half rewritten: beginLateResolution answers true for the
+    // one caller that resolves; every other caller waits for lateResolved()
+    // (or, when the resolver failed and released it with
+    // finishLateResolution(false), tries again and meets the same error).
+    // A later install keeps the resolution, as a method compiled against a
+    // known class keeps its instructions wherever it is installed.
+    //
+    // Thread safety: resolveLateOp writes the instruction bytes in place,
+    // through a const module, only between a successful beginLateResolution
+    // and finishLateResolution(true); the release/acquire pair on the state
+    // publishes the rewritten bytes to every thread that sees it resolved,
+    // and no thread runs the body before that (it is installed after).
+    enum : int { kLateUnresolved = 0, kLateResolving = 1, kLateResolved = 2 };
+    bool beginLateResolution() const {
+        int expected = kLateUnresolved;
+        return lateState_.compare_exchange_strong(expected, kLateResolving,
+                                                  std::memory_order_acq_rel);
     }
-    bool lateResolved() const { return lateResolved_.load(std::memory_order_acquire); }
+    void finishLateResolution(bool resolved) const {
+        lateState_.store(resolved ? kLateResolved : kLateUnresolved, std::memory_order_release);
+    }
+    int lateState() const { return lateState_.load(std::memory_order_acquire); }
+    bool lateResolved() const { return lateState() == kLateResolved; }
     // Rewrites the opcode word at byte offset `opPos` (a PUSH_LATE_VAR or
     // STORE_LATE_VAR found by decoding the module) into `op`, keeping its
-    // operand: same size, so no jump moves. Only before the module first runs.
+    // operand: same size, so no jump moves. Only by the resolver (above).
     void resolveLateOp(size_t opPos, Op op) const {
         const_cast<std::vector<uint8_t>&>(bytes_)[opPos] = static_cast<uint8_t>(op);
     }
@@ -494,7 +511,7 @@ private:
     bool                                hasLateBinding_ = false;   // S37
     bool                                lateReadsGlobal_ = false;
     std::vector<std::string>            lateMethodNames_;
-    mutable std::atomic<bool>           lateResolved_{false};
+    mutable std::atomic<int>            lateState_{0};   // kLate*
     // The `__bc_ptr__` cell of the closures over this module (BlockCode.h),
     // for the first runtime that creates one: published once with a
     // compare-and-swap and never replaced, so a reader can never see a freed

@@ -1154,8 +1154,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             }
         }
         // S37: see emitExpr's Identifier case.
-        if (currentMethodLate_ && !n.text.empty()
-            && std::islower(static_cast<unsigned char>(n.text[0]))) {
+        if (currentMethodLate_ && !n.text.empty()) {
             emitExpr(m, *n.children[0]);
             dupUnlessDiscarded();
             emitLateVar(m, Op::STORE_LATE_VAR, n.text);
@@ -1280,8 +1279,10 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             // S37: in a method of a class whose chain is not known here the
             // name may be a variable the class inherits; it is resolved when
             // the method is installed, and reported there if it is not one.
-            if (currentMethodLate_ && !n.text.empty()
-                && std::islower(static_cast<unsigned char>(n.text[0]))) {
+            // Every such name, whatever its first character: an instance
+            // variable may be named `_x` or `X`; one that is not a variable
+            // becomes the global lookup (or the error) below, at install.
+            if (currentMethodLate_ && !n.text.empty()) {
                 emitLateVar(m, Op::PUSH_LATE_VAR, n.text);
                 return;
             }
@@ -1351,8 +1352,7 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                 }
             }
             // S37: see the Identifier case.
-            if (currentMethodLate_ && !n.text.empty()
-                && std::islower(static_cast<unsigned char>(n.text[0]))) {
+            if (currentMethodLate_ && !n.text.empty()) {
                 emitExpr(m, *n.children[0]);
                 dupUnlessDiscarded();
                 emitLateVar(m, Op::STORE_LATE_VAR, n.text);
