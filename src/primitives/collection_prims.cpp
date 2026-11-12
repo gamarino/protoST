@@ -918,8 +918,13 @@ const proto::ProtoObject* prim_Array_classNew(STRuntime& rt, proto::ProtoContext
             throw NativeError("Array new: " + std::to_string(n) + " elements need about "
                               + std::to_string(need)
                               + " cells while the list is built, more than the whole heap "
-                                "can hold (limit " + std::to_string(ceiling)
-                              + " cells; PROTOCORE_HEAP_LIMIT_CELLS sets the limit, a cell "
+                                "can hold (limit " + std::to_string(limit) + " cells"
+                              + (reserved > limit
+                                     ? ", below the " + std::to_string(reserved)
+                                           + " cells protoCore has already reserved, which "
+                                             "are the ceiling"
+                                     : std::string())
+                              + "; PROTOCORE_HEAP_LIMIT_CELLS sets the limit, a cell "
                                 "is 64 bytes)");
     }
     // One bulk construction (0.10.0): a single cell up to 5 elements, the

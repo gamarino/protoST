@@ -49,6 +49,6 @@ out=$(PROTOCORE_ADAPTIVE_HEAP=0 PROTOCORE_HEAP_LIMIT_CELLS=4000000 timeout 120 "
 prog="| try | try := [ :n | [ (Array new: n) size ] on: Error do: [ :e | e messageText ] ].
 { try value: 8000. try value: 1000000 }."
 out=$(PROTOCORE_ADAPTIVE_HEAP=0 PROTOCORE_HEAP_LIMIT_CELLS=100000 timeout 120 "$PROTOST" -e "$prog" 2>&1); rc=$?
-[[ $rc -eq 0 && "$out" == "#(8000 'Array new: 1000000 elements need about "*"more than the whole heap can hold"*"')" ]] \
+[[ $rc -eq 0 && "$out" == "#(8000 'Array new: 1000000 elements need about "*"more than the whole heap can hold (limit 100000 cells, below the "*" cells protoCore has already reserved, which are the ceiling;"*"')" ]] \
   || { echo "FAIL (limit below the reserved heap): rc=$rc"; echo "$out" | tail -3; exit 1; }
 echo OK
