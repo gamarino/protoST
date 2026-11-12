@@ -780,7 +780,7 @@ const proto::ProtoObject* makeMessage(STRuntime& rt, proto::ProtoContext* ctx,
     }
     const proto::ProtoObject* arr = rt.bootstrap().arrayProto->newChild(ctx, /*isMutable=*/true);
     TransientPin pinArr(ctx, arr);
-    arr->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__data__"), list->asObject(ctx));
+    arr->setAttribute(ctx, rt.bootstrap().sym.data, list->asObject(ctx));
     const proto::ProtoObject* msg = rt.bootstrap().messageProto->newChild(ctx, /*isMutable=*/true);
     TransientPin pinMsg(ctx, msg);
     msg->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__selector__"),

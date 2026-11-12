@@ -77,6 +77,12 @@ struct Bootstrap {
     // NonBooleanReceiver < Error, resumable: a loop condition that is not a
     // Boolean (loopConditionIsTrue).
     const proto::ProtoObject* nonBooleanReceiverProto   = nullptr;
+    // The prototype of every forward that DEOPT_ENTER leaves in a frame slot
+    // whose variable a de-optimised closure shares (ExecutionEngine.cpp,
+    // "De-optimisation of inlined value conditionals"). A slot value is a
+    // forward exactly when this is its first parent: no Smalltalk program can
+    // reach it, so no program value is ever mistaken for one. Not a class.
+    const proto::ProtoObject* deoptForwardProto  = nullptr;
     // Track 2 slice a (COL-a): collection class hierarchy.
     //   Collection                 (abstract — shared iteration protocol)
     //     |-- SequenceableCollection (abstract — ordered, indexable)
@@ -220,10 +226,32 @@ struct Bootstrap {
         // ReadyStacks to push onto; workers drain highest non-empty band
         // first. See docs/tutorial/10-actors-and-futures.md §10.11.
         const proto::ProtoString* priority        = nullptr;  // __priority__   (on actor: 0=high, 1=medium, 2=low)
-        // The backing ProtoList of an Array (read by ByteArray withAll:).
+        // The backing ProtoList of an Array or OrderedCollection, or the
+        // ProtoMap of a Set or Dictionary.
         const proto::ProtoString* data            = nullptr;  // __data__
         // The selector resume: and the default action look up (D54).
         const proto::ProtoString* isResumable     = nullptr;  // isResumable
+        // The storage keys of the other built-in collections. The collection
+        // primitives read them on every call, so they are interned once here
+        // rather than on each use (0.10.0).
+        const proto::ProtoString* size            = nullptr;  // __size__ (Set, Dictionary entry count)
+        const proto::ProtoString* intervalStart   = nullptr;  // __interval_start__
+        const proto::ProtoString* intervalStop    = nullptr;  // __interval_stop__
+        const proto::ProtoString* intervalStep    = nullptr;  // __interval_step__
+        const proto::ProtoString* assocKey        = nullptr;  // __assoc_key__
+        const proto::ProtoString* assocValue      = nullptr;  // __assoc_value__
+        // The two attributes of a forward (deoptForwardProto): the scope
+        // dictionary that now holds the variable and the variable's name.
+        const proto::ProtoString* deoptDict       = nullptr;  // __deopt_dict__
+        const proto::ProtoString* deoptName       = nullptr;  // __deopt_name__
+        // Selectors the primitives send on every call of some paths (hashed
+        // collections, sort, instance creation, iteration of a user
+        // collection), interned once (0.10.0).
+        const proto::ProtoString* equal           = nullptr;  // =
+        const proto::ProtoString* hash            = nullptr;  // hash
+        const proto::ProtoString* lessOrEqual     = nullptr;  // <=
+        const proto::ProtoString* initialize      = nullptr;  // initialize
+        const proto::ProtoString* elementsForIteration = nullptr;  // __elementsForIteration
     } sym;
 };
 

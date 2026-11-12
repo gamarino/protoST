@@ -109,9 +109,23 @@ private:
         // here, as (name, enclosing slot), the first time it is used.
         bool deoptBoundary = false;
         mutable std::vector<std::pair<std::string, int>> boxed;
-        // This block itself uses a boxed local (it then starts with an
-        // active DEOPT_CHECK).
-        mutable bool usesBox = false;
+        // Hidden slots of this frame that an inlined block's temporaries
+        // (and its scope dictionary) used and released: the next inlined
+        // block takes them before declaring new ones, so sibling blocks
+        // share slots and the frame stays as small as its deepest nesting.
+        std::vector<int> freeHidden;
+        // The inlined blocks with temporaries that enclose the code being
+        // emitted, outermost first: their temporaries' slots and, when a
+        // value conditional inside may de-optimise, the slot of the scope's
+        // dictionary (DEOPT_ENTER; -1 when there is none).
+        struct InlineScope {
+            std::vector<int> slots;
+            int dictSlot = -1;
+        };
+        std::vector<InlineScope> inlineScopes;
+        // The slot of the dictionary of this frame's own temporaries
+        // (DEOPT_ENTER); -1 until a value conditional needs it.
+        int frameDictSlot = -1;
     };
 
     // A deque, not a vector: emission recurses while holding a reference to
@@ -128,9 +142,16 @@ private:
     void reportDuplicateNames(const std::vector<std::string>& names, size_t from,
                               const std::string& where);
     void emitSetInstVarNames(BytecodeModule& m, const ast::Node& classDecl);
-    // Loop variables of the to:do: loops being inlined (the scope whose slots
-    // bind them, and the name), innermost last.
-    std::vector<std::pair<const Scope*, std::string>> inlinedLoopArgs_;
+    // Arguments of the blocks being inlined (a to:do: loop variable, an
+    // ifNotNil: arm's argument): the scope whose slots bind them, the name
+    // and the slot, innermost last. The slot tells the argument from an
+    // inlined block's temporary of the same name bound over it.
+    struct InlinedArg {
+        const Scope* scope;
+        std::string  name;
+        int          slot;
+    };
+    std::vector<InlinedArg> inlinedLoopArgs_;
     // A statement assignment whose value is discarded (0.10.0): emitStatements
     // sets this to the statement, the Assignment case then stores without the
     // DUP and sets `valueDiscarded_`, and the caller omits the POP.
@@ -256,8 +277,14 @@ private:
     bool   tryEmitInlinedControl(BytecodeModule& m, const ast::Node& send);
     // The body's statements; the answer is whether it left its value on the
     // stack (always, unless `discardValue` and it ends with an assignment).
+    // The block's temporaries become hidden slots of the enclosing frame,
+    // reset to nil on every entry (each evaluation of a block has its own
+    // temporaries, LANGUAGE.md 6.3) and bound to their names for the body.
     bool   emitInlinedBlockBody(BytecodeModule& m, const ast::Node& block,
                                 bool discardValue = false);
+    // A literal block the compiler may inline: at most `maxArgs` arguments,
+    // any temporaries.
+    static bool isInlinableBlock(const ast::Node* b, int maxArgs = 0);
     // The layout of an inlined ifTrue:-family, and: or or: send: the
     // receiver, a Boolean guard with an out-of-line doesNotUnderstand:, and
     // `jumpOp` (taken towards `second`) between the two arms.

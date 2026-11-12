@@ -190,7 +190,21 @@ minor release, so the two services arrive in 0.5.0.
   false to `isResumable` ends the activation but did not stop; the
   classification now sends `isResumable` in that case. Test:
   `cli_dap_exceptions` (case `uncaught3`).
-
+- **S3 is closed: an allocation-free loop does not stall a collection, and
+  a test now proves it.** The park points came with S15 (the loop back-edge,
+  engine entry and call entry call `ProtoContext::safepoint()`), but S3 stayed
+  open because no protoST loop allocated nothing: about three cells per
+  iteration were measured for a SmallInteger loop. Those were the writes to a
+  method temporary that an inlined block body used, which then counted as
+  captured (each write published a new captured dictionary into protoCore's
+  mutable table, 4 cells); since `884778e` inlined bodies do not capture, and
+  a 3,000,000-iteration loop over a method temporary, at the top level or a
+  `whileTrue:` allocates nothing (counted at `ProtoContext::allocCell`). Test:
+  `tests/cli/test_cli_gc_spin_safepoint.sh` (`cli_gc_spin_safepoint`), the
+  deadlock shape: the main thread spins on an Atom while an actor churns
+  through garbage beyond the heap ceiling and then sets it. It completes, and
+  hangs with `PROTOST_NO_GC_SAFEPOINT=1`, while the same program without the
+  spinning loop does not.
 - **`Array new:` with a size the heap can never take signals an Error
   (reviews R3-2, R4-1, R5-1, R6-1, R7-1).** `Array new: 3000000000` (a typo,
   say) built an 8n-byte vector and then the list, and ended in protoCore's
@@ -246,23 +260,46 @@ minor release, so the two services arrive in 0.5.0.
   wrote, with closures for the block literals: its own method, or
   `doesNotUnderstand:` with the whole Message, whose resumed value is the
   value of the expression. The closures are compiled from the same literals
-  without inlining (a second copy of each, used only on this path); the
-  method's variables they use are carried by a box for the duration of the
-  send and copied back when it returns, so a write in the block is seen by
-  the method, and `^` in the block returns from the method. A closure the
-  receiver keeps and evaluates *after* the send returned signals an `Error`
-  (the method owns its variables again by then; a block held in a variable
-  has no such limit). A Boolean receiver costs what it did: the guard is a
-  new opcode `JUMP_IF_NOT_BOOL` (45) to the out-of-line path, which uses
-  four more (`DEOPT_ENTER`, `PUSH_DEOPT_BLOCK`, `DEOPT_EXIT`, `DEOPT_CHECK`,
-  46-49; `docs/VM.md` 1.4). Pharo differs here: since Pharo 10 a
+  without inlining (a second copy of each, used only on this path), and
+  they are real closures: the method's temporaries they use move into
+  per-scope dictionaries that the frame reaches through forwards left in
+  its slots, so a write on either side is seen by the other, `^` in the
+  block returns from the method, and a closure the receiver keeps and
+  evaluates later, or on another thread, keeps working. Each entry of an
+  inlined block with temporaries gets its own variables. A Boolean receiver
+  costs what it did: the guard is a new opcode `JUMP_IF_NOT_BOOL` (45) to
+  the out-of-line path, which uses three more (`DEOPT_ENTER`,
+  `PUSH_DEOPT_BLOCK`, `DEOPT_EXIT`, 46-48; `docs/VM.md` 1.4); `RESET_LOCAL`
+  (49) starts the fresh variables of each entry of an inlined block, and
+  the accesses of the temporaries a closure may share are
+  `PUSH_SHARED_LOCAL` / `STORE_SHARED_LOCAL` (59, 60), so no other local
+  access pays for the sharing. Pharo differs here: since Pharo 10 a
   non-Boolean receiver of an inlined conditional signals
   `NonBooleanReceiver` ("proceed for truth") and the receiver's own method
   is not run; Pharo 9 re-sent the expression without inlining
   (`mustBeBooleanDeOptimizeIn:`), which is what protoST does. Tests:
   `08-exceptions/inlined-conditional-non-boolean-like-send.st` (failed
   before: 5 of 11 rows), `inlined-conditional-reaches-receiver-method.st`
-  (failed before), `inlined-conditional-kept-block-is-refused.st`.
+  (failed before), `06-blocks/inlined-conditional-kept-block-shares-variables.st`
+  (10 rows; a kept closure with or without temporaries, frame writes after
+  the send, per-iteration variables, shadowing; until fix round 1 of the
+  interpreter-overhead work a kept closure that used a method variable
+  signalled an `Error`, and one with temporaries inside an inlined block
+  read nil).
+- **Runtimes constructed one after another no longer reach each other's
+  modules (K1).** protoCore's process-wide module cache, keyed by provider
+  GUID and path, handed a runtime constructed after another was destroyed the
+  dead runtime's modules, whose methods' bytecode had been freed (a
+  heap-use-after-free; it could abort the process with a corrupted heap).
+  Each runtime now registers a module provider of its own, named in its
+  resolution chain by GUID, and retires it when it is destroyed. Foreign
+  callers' `provider:st` is one dispatcher per process that serves the sole
+  live runtime and answers its GUID, so it keeps working when another runtime
+  was constructed and destroyed meanwhile. The unit-test binary now passes run
+  whole in one process, also under ASan. Tests: `K1: a runtime does not reach
+  the modules of a runtime destroyed before it` (heap-use-after-free under
+  ASan before), `K1: provider:st serves the live runtime after another was
+  destroyed`.
 - **One rule for a loop condition that is not a Boolean.** The four loop
   forms disagreed: an inlined `whileTrue:` / `whileFalse:` sent
   `doesNotUnderstand: whileTrue:` to the condition's value (which is not the
@@ -475,6 +512,50 @@ minor release, so the two services arrive in 0.5.0.
   `06-blocks/inlined-nil-tests-values.st`,
   `04-object-model/identity-and-nil-tests-are-not-looked-up.st`; VM.md
   example 19.
+- **Control blocks that declare temporaries are compiled inline too.**
+  `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:`, `ifFalse:ifTrue:`, `and:`,
+  `or:`, `whileTrue:`, `whileFalse:`, `to:do:` and the nil tests with a
+  literal block that declares `| t |` were real closures evaluated by a
+  primitive (a closure, a captured dictionary for the variables the block
+  shared with its method, and a nested engine per evaluation). Their
+  temporaries are now hidden slots of the enclosing frame, as in Pharo
+  (`OCASTTranslator>>visitInlinedBlockNode:`), set to nil on every entry of
+  the body: each evaluation of a block still starts with its own
+  temporaries nil, also an `ifTrue:` arm inside a loop, which Pharo does not
+  reset. A block whose argument or temporary a block inside it captures
+  stays a real block, so that closure still sees the binding of its own
+  iteration. A `[ k < n ] whileTrue: [ | z | z := k. k := k + 1 ]` loop in a
+  method went from 446 to 90 ns per iteration; protoBaseST's
+  `PBAvl check:` of a 1000-node tree, twenty times, from 6.58 to
+  4.30 x10^9 instructions (the scratch `chk.st`). Tests:
+  `06-blocks/inlined-block-temporaries.st` (19 rows, shadowing, per-iteration
+  closures, a non-Boolean receiver; passes before and after), unit tests
+  `Compiler: control blocks with temporaries are inlined`, `... reset to nil
+  on every entry` (both failed before), `... whose temporary a block
+  captures is not inlined`, `Debugger: an inlined block's temporary is shown
+  by its name inside the block` (failed before). LANGUAGE.md §6.4, VM.md
+  "Inlined blocks".
+  The temporaries of sibling inlined blocks share their hidden slots (a
+  method with sixty one-temporary arms recurses as deep as without them:
+  `06-blocks/inlined-block-temporaries-share-slots.st`, which overflowed at
+  about 9,050 frames when each arm had its own slot). A traceback no longer
+  shows a `[] in` frame for a block that is now inlined: the error is
+  reported in the enclosing method, at the block's line.
+  At a halt inside an inlined block, the debugger showed a temporary of the
+  block that was still nil as the method's captured variable of the same
+  name; it now shows nil (unit test `Debugger: a nil temporary does not
+  show a captured variable of the same name`, failed before).
+- **The collection primitives no longer intern their storage keys on every
+  call.** `OrderedCollection`, `Set`, `Dictionary`, `Interval` and
+  `Association` primitives looked up `__data__`, `__size__` and the
+  interval and association keys through protoCore's symbol table on each
+  call (UTF-8 validation, `strlen`, hash, compare); the keys are now
+  interned once per runtime in `Bootstrap::sym`, as `Array>>at:` already
+  did. `oc addLast: i. oc removeLast` went from 8,374 to 6,251 instructions
+  per iteration; the symbol-table probe was about 4 % of `PBAvl check:`. The
+  other fixed keys interned per call on hot paths (`=`, `hash`, `<=`,
+  `initialize`, `__elementsForIteration`, `__data__` outside the
+  collections) now come from `Bootstrap::sym` as well.
 - **`and:` and `or:` with a literal block are compiled inline (protoBaseST
   review P2).** Like `ifTrue:`, a zero-argument block without temporaries
   is no longer a closure evaluated by a primitive in a nested engine: its

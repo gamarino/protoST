@@ -148,20 +148,28 @@ if(WIN32)
         ${CMAKE_CURRENT_BINARY_DIR}/CatchAddTestsUtf8.cmake @ONLY)
     set(_CATCH_DISCOVER_TESTS_SCRIPT ${CMAKE_CURRENT_BINARY_DIR}/CatchAddTestsUtf8.cmake)
 endif()
-# Each TEST_CASE is a ctest test of its own, run in its own process. The
-# binary is not meant to be run whole: protoST is one runtime per process
-# (docs/STATUS.md D2), and a single process running every case fails six of
-# them for reasons of that contract, not of the runtime. protoCore's module
-# cache is process-wide and keeps the modules of a runtime the case before
-# destroyed (the F5 v2 UMD cases then call a method of a freed module), and
-# the T3-c case keeps a runtime alive in a static for the rest of the process
-# (the Track Y and __st_send__ cases then find two runtimes and refuse the
-# import as ambiguous). Run cases singly: `protost_unit_tests "<name>"`.
+# Each TEST_CASE is a ctest test of its own, run in its own process, so that
+# a case cannot depend on state another left behind (the environment, the
+# working directory, process-wide registries). The binary also passes run
+# whole in one process, each case constructing and destroying its own runtime
+# (KNOWN_ISSUES K1; until 0.10.0 six cases failed that way and the F5 v2 UMD
+# cases read freed bytecode, which could corrupt the heap). Many cases call
+# setenv("STPATH", ...) in-process; that is safe only because no runtime
+# outlives its case, so no worker thread that could read the environment is
+# alive when a case starts or ends. Keep it that way: a case must not leave a
+# runtime (or any thread) behind.
 # Every unit case carries the `tsan` label (PROTOST_TSAN_TEST_PROPERTIES,
 # defined in the top-level CMakeLists.txt): the runtime's threads, the
 # scheduler, the GC root discipline and the BinaryFile guard are exercised
 # there.
 catch_discover_tests(protost_unit_tests PROPERTIES ${PROTOST_TSAN_TEST_PROPERTIES})
+# S3's case once more with the engine's safepoint hook disabled (it is read at
+# static initialisation, so it takes a process of its own): the witness that
+# without the hook an allocation-free loop holds a requested collection.
+add_test(NAME "S3: an allocation-free loop does not stall a collection (hook disabled)"
+    COMMAND protost_unit_tests "S3: an allocation-free loop does not stall a collection")
+set_tests_properties("S3: an allocation-free loop does not stall a collection (hook disabled)"
+    PROPERTIES ENVIRONMENT "PROTOST_NO_GC_SAFEPOINT=1" ${PROTOST_TSAN_TEST_PROPERTIES})
 
 # --- conformance suite (Track 6, slice 2) --------------------------------
 # A defensible suite derived from docs/LANGUAGE.md. Every tests/conformance/

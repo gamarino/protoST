@@ -76,11 +76,11 @@ module main.0.0: [] in Finder>>firstOver:in:
       5  PUSH_LOCAL         0     ; x
       6  RETURN
       7  JUMP               7     ; -> 15
-      8  DEOPT_ENTER        0     ; box __deopt_box__: x
+      8  DEOPT_ENTER        0     ; box __deopt_box__: x(copy)
       9  PUSH_LOCAL         1     ; __deopt_box__
      10  PUSH_DEOPT_BLOCK   0     ; main.0.0.0 ([] in Finder>>firstOver:in: (not inlined))
      11  SEND_KEYWORD       2     ; #ifTrue:, 1 arg
-     12  DEOPT_EXIT         0     ; box __deopt_box__: x
+     12  DEOPT_EXIT         0     ; box __deopt_box__: x(copy)
      13  JUMP               1     ; -> 15
      14  PUSH_NIL
      15  RETURN_TOP
@@ -91,8 +91,7 @@ module main.0.0.0: [] in Finder>>firstOver:in: (not inlined)
   constants:
     #0   symbol    #x
   code:
-      0  DEOPT_CHECK        1     ; box must be open
-      1  PUSH_CAPTURED      0     ; x
-      2  RETURN
-      3  RETURN_TOP
+      0  PUSH_CAPTURED      0     ; x
+      1  RETURN
+      2  RETURN_TOP
 4

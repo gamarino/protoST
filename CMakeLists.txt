@@ -693,6 +693,12 @@ add_test(NAME cli_gc_reclaims
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_gc_reclaims.sh $<TARGET_FILE:protost>)
 add_test(NAME cli_gc_recursion_reclaims
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_gc_recursion_reclaims.sh $<TARGET_FILE:protost>)
+# S3: an allocation-free loop must not stall a collection; the fixture is the
+# deadlock shape (a thread spinning on a flag a collecting thread sets). Its
+# control, with the safepoint hook disabled, is a unit case
+# (tests/CMakeLists.txt, "S3: ... (hook disabled)").
+add_test(NAME cli_gc_spin_safepoint
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_gc_spin_safepoint.sh $<TARGET_FILE:protost>)
 
 # Track S: actor message payloads that only the mailbox references must survive
 # the collections that run while they are queued. Needs S15 fixed to mean
@@ -732,7 +738,7 @@ set_tests_properties(cli_actor_unobserved_error cli_callback_error_reported
                      cli_buried_actor_deadlock cli_helped_message_handler_actions
                      cli_future_callback_barrier
                      cli_actor_stress cli_concurrent_first_call
-                     cli_gc_shutdown_stress cli_gc_reclaims cli_gc_recursion_reclaims
+                     cli_gc_shutdown_stress cli_gc_reclaims cli_gc_recursion_reclaims cli_gc_spin_safepoint
                      cli_actor_payload_gc cli_binary_lock cli_sigint
                      cli_debugger cli_repl
                      cli_dap cli_dap_session cli_dap_output cli_dap_exceptions

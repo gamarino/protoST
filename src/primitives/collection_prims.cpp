@@ -76,11 +76,13 @@ const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
 
 namespace {
 
-// Attribute keys. Resolved fresh from the live ctx each call — protoCore
-// interns symbols per-ProtoSpace, so a function-local static would bind to
-// the first runtime's space and dangle for every later STRuntime.
-const proto::ProtoString* dataKey(proto::ProtoContext* ctx) {
-    return proto::ProtoString::createSymbol(ctx, "__data__");
+// Attribute keys. protoCore interns symbols per ProtoSpace, so a
+// function-local static would bind to the first runtime's space and dangle
+// for every later STRuntime; each key is the one the runtime interned at
+// bootstrap (Bootstrap::sym). Interning it on every call instead cost a
+// symbol-table probe per collection access (0.10.0).
+const proto::ProtoString* dataKey(STRuntime& rt) {
+    return rt.bootstrap().sym.data;
 }
 
 // A class-side constructor bound on a built-in collection class also serves
@@ -109,22 +111,9 @@ const proto::ProtoObject* instantiateAs(STRuntime& rt, proto::ProtoContext* ctx,
             static_cast<Sink*>(self)->out->setAttribute(c, key, value);
         });
     bool understood = false;
-    sendDynamic(rt, ctx, out, proto::ProtoString::createSymbol(ctx, "initialize"),
+    sendDynamic(rt, ctx, out, rt.bootstrap().sym.initialize,
                 nullptr, 0, &understood);
     return out;
-}
-
-// The backing ProtoList of an Array instance. The instance stores the list
-// (wrapped as a ProtoObject) under `__data__`; this unwraps it. A nullptr or
-// missing `__data__` yields a fresh empty list — defensive, so a hand-built
-// or partially-initialised instance never crashes.
-const proto::ProtoList* arrayData(proto::ProtoContext* ctx,
-                                  const proto::ProtoObject* arr) {
-    const proto::ProtoObject* d =
-        arr ? arr->getAttribute(ctx, dataKey(ctx)) : nullptr;
-    if (!d || d == PROTO_NONE) return ctx->newList();
-    const proto::ProtoList* l = d->asList(ctx);
-    return l ? l : ctx->newList();
 }
 
 // The same, with the key the runtime interned at bootstrap (Bootstrap::sym):
@@ -142,9 +131,9 @@ const proto::ProtoList* arrayData(STRuntime& rt, proto::ProtoContext* ctx,
 
 // The backing ProtoList of any list-backed collection instance — `Array` and
 // `OrderedCollection` share the exact same `__data__` representation.
-const proto::ProtoList* listData(proto::ProtoContext* ctx,
+const proto::ProtoList* listData(STRuntime& rt, proto::ProtoContext* ctx,
                                  const proto::ProtoObject* coll) {
-    return arrayData(ctx, coll);
+    return arrayData(rt, ctx, coll);
 }
 
 // --- Hashed collections: Set and Dictionary over protoCore's ProtoMap ------
@@ -185,8 +174,8 @@ const proto::ProtoList* listData(proto::ProtoContext* ctx,
 // collides is precisely the kind of defect a black-box test cannot see -- the
 // language cannot tell a collision from a non-collision. `test_collections.cpp`
 // therefore checks the stored count against a recount over forced collisions.
-const proto::ProtoString* sizeKey(proto::ProtoContext* ctx) {
-    return proto::ProtoString::createSymbol(ctx, "__size__");
+const proto::ProtoString* sizeKey(STRuntime& rt) {
+    return rt.bootstrap().sym.size;
 }
 
 // protoST's equality for hashed membership: identity first, then the
@@ -218,7 +207,7 @@ bool stKeyEquals(proto::ProtoContext* ctx, const proto::ProtoObject* a,
         bool understood = false;
         const proto::ProtoObject* args1[1] = { b };
         const proto::ProtoObject* r = sendDynamic(
-            *rt, ctx, a, proto::ProtoString::createSymbol(ctx, "="), args1, 1, &understood);
+            *rt, ctx, a, rt->bootstrap().sym.equal, args1, 1, &understood);
         if (understood) return r == PROTO_TRUE;
     }
     // A native key against an object with its own =, such as a Float against
@@ -227,7 +216,7 @@ bool stKeyEquals(proto::ProtoContext* ctx, const proto::ProtoObject* a,
         bool understood = false;
         const proto::ProtoObject* args1[1] = { a };
         const proto::ProtoObject* r = sendDynamic(
-            *rt, ctx, b, proto::ProtoString::createSymbol(ctx, "="), args1, 1, &understood);
+            *rt, ctx, b, rt->bootstrap().sym.equal, args1, 1, &understood);
         if (understood) return r == PROTO_TRUE;
     }
     return a->partialCompare(ctx, b) == 0;
@@ -285,7 +274,7 @@ proto::proto_ulong stKeyHash(proto::ProtoContext* ctx, const proto::ProtoObject*
     if (STRuntime* rt = runtimeForUserEquality(ctx, key)) {
         bool understood = false;
         const proto::ProtoObject* h = sendDynamic(
-            *rt, ctx, key, proto::ProtoString::createSymbol(ctx, "hash"), nullptr, 0, &understood);
+            *rt, ctx, key, rt->bootstrap().sym.hash, nullptr, 0, &understood);
         // Any Integer is a usable hash, negative ones included (the numeric
         // hash of a negative number is negative). A LargeInteger is reduced
         // as the hash of that Integer, so equal hashes stay equal.
@@ -317,18 +306,18 @@ const proto::KeySemantics& stKeySemantics() {
 
 // The backing ProtoMap of a Set or Dictionary instance. A missing or nil
 // `__data__` yields a fresh empty map -- defensive, like arrayData.
-const proto::ProtoMap* mapData(proto::ProtoContext* ctx,
+const proto::ProtoMap* mapData(STRuntime& rt, proto::ProtoContext* ctx,
                                const proto::ProtoObject* coll) {
     const proto::ProtoObject* d =
-        coll ? coll->getAttribute(ctx, dataKey(ctx)) : nullptr;
+        coll ? coll->getAttribute(ctx, dataKey(rt)) : nullptr;
     if (!d || d == PROTO_NONE) return ctx->newMap();
     const proto::ProtoMap* m = d->asMap(ctx);
     return m ? m : ctx->newMap();
 }
 
-long long hashedSize(proto::ProtoContext* ctx, const proto::ProtoObject* coll) {
+long long hashedSize(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* coll) {
     const proto::ProtoObject* n =
-        coll ? coll->getAttribute(ctx, sizeKey(ctx)) : nullptr;
+        coll ? coll->getAttribute(ctx, sizeKey(rt)) : nullptr;
     if (!n || n == PROTO_NONE) return 0;
     return n->asLong(ctx);
 }
@@ -336,15 +325,15 @@ long long hashedSize(proto::ProtoContext* ctx, const proto::ProtoObject* coll) {
 // The single write point for both hashed collections: the new map and the new
 // entry count are published together, so no mutator can update one and forget
 // the other.
-void setHashedData(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
+void setHashedData(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* coll,
                    const proto::ProtoMap* updated, long long size) {
     TransientPin pinUpdated(
         ctx, reinterpret_cast<const proto::ProtoObject*>(updated));
     const proto::ProtoObject* sizeVal = ctx->fromLong(size);
     TransientPin pinSize(ctx, sizeVal);
     const_cast<proto::ProtoObject*>(coll)->setAttribute(
-        ctx, dataKey(ctx), updated->asObject(ctx));
-    const_cast<proto::ProtoObject*>(coll)->setAttribute(ctx, sizeKey(ctx), sizeVal);
+        ctx, dataKey(rt), updated->asObject(ctx));
+    const_cast<proto::ProtoObject*>(coll)->setAttribute(ctx, sizeKey(rt), sizeVal);
 }
 
 // True when `obj` descends from `target`, stopping at protoST's Object root
@@ -402,9 +391,9 @@ void collectHashedEntry(proto::ProtoContext*, void* self,
 // block that replaces the receiver's `__data__` drops the last reference. So
 // the function answers the snapshot map, and the caller keeps it pinned
 // (TransientPin) for as long as it uses `out`.
-const proto::ProtoObject* hashedEntries(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
+const proto::ProtoObject* hashedEntries(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* coll,
                    std::vector<HashedEntry>& out) {
-    const proto::ProtoMap* data = mapData(ctx, coll);
+    const proto::ProtoMap* data = mapData(rt, ctx, coll);
     TransientPin pinData(
         ctx, reinterpret_cast<const proto::ProtoObject*>(data));
     out.reserve(static_cast<size_t>(data->getSize(ctx)));
@@ -428,21 +417,21 @@ const proto::ProtoObject* hashedEntries(proto::ProtoContext* ctx, const proto::P
 // occurrences, compared with `indexOfEqual`, gives correct `do:` /
 // `occurrencesOf:` / derived-protocol behaviour. `species` still resolves `Bag` by prototype identity, so a Bag's
 // `collect:`/`select:` still yields a Bag.
-bool isListBacked(proto::ProtoContext* ctx, const proto::ProtoObject* obj) {
+bool isListBacked(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* obj) {
     if (!obj) return false;
-    const proto::ProtoObject* d = obj->getAttribute(ctx, dataKey(ctx));
+    const proto::ProtoObject* d = obj->getAttribute(ctx, dataKey(rt));
     return d && d != PROTO_NONE && d->asList(ctx) != nullptr;
 }
 
 // Replace a list-backed collection's `__data__` with a fresh snapshot. Every
 // mutator (`add:`, `at:put:`, `removeFirst`, …) ends here. The new list is
 // pinned across the key interning + setAttribute, both of which allocate.
-void setData(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
+void setData(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* coll,
              const proto::ProtoList* updated) {
     TransientPin pinUpdated(
         ctx, reinterpret_cast<const proto::ProtoObject*>(updated));
     const_cast<proto::ProtoObject*>(coll)->setAttribute(
-        ctx, dataKey(ctx), updated->asObject(ctx));
+        ctx, dataKey(rt), updated->asObject(ctx));
 }
 
 // --- Interval backing — a LAZY collection (no `__data__`) ------------------
@@ -453,18 +442,18 @@ void setData(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
 // element on demand. There is no `__data__`; iteration strides from `start`
 // by `step` while not past `stop`.
 
-const proto::ProtoString* intervalStartKey(proto::ProtoContext* ctx) {
-    return proto::ProtoString::createSymbol(ctx, "__interval_start__");
+const proto::ProtoString* intervalStartKey(STRuntime& rt) {
+    return rt.bootstrap().sym.intervalStart;
 }
-const proto::ProtoString* intervalStopKey(proto::ProtoContext* ctx) {
-    return proto::ProtoString::createSymbol(ctx, "__interval_stop__");
+const proto::ProtoString* intervalStopKey(STRuntime& rt) {
+    return rt.bootstrap().sym.intervalStop;
 }
-const proto::ProtoString* intervalStepKey(proto::ProtoContext* ctx) {
-    return proto::ProtoString::createSymbol(ctx, "__interval_step__");
+const proto::ProtoString* intervalStepKey(STRuntime& rt) {
+    return rt.bootstrap().sym.intervalStep;
 }
 
 // Read one integer Interval bound; a missing/nil attribute defaults to `dflt`.
-long long intervalAttr(proto::ProtoContext* ctx, const proto::ProtoObject* iv,
+long long intervalAttr(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* iv,
                         const proto::ProtoString* key, long long dflt) {
     const proto::ProtoObject* v = iv ? iv->getAttribute(ctx, key) : nullptr;
     if (!v || v == PROTO_NONE) return dflt;
@@ -523,11 +512,11 @@ const proto::ProtoObject* makeIntervalInstance(STRuntime& rt,
             ->newChild(ctx, /*isMutable=*/true);
     TransientPin pinIv(ctx, iv);
     const_cast<proto::ProtoObject*>(iv)->setAttribute(
-        ctx, intervalStartKey(ctx), ctx->fromLong(start));
+        ctx, intervalStartKey(rt), ctx->fromLong(start));
     const_cast<proto::ProtoObject*>(iv)->setAttribute(
-        ctx, intervalStopKey(ctx), ctx->fromLong(stop));
+        ctx, intervalStopKey(rt), ctx->fromLong(stop));
     const_cast<proto::ProtoObject*>(iv)->setAttribute(
-        ctx, intervalStepKey(ctx), ctx->fromLong(step));
+        ctx, intervalStepKey(rt), ctx->fromLong(step));
     return iv;
 }
 
@@ -602,7 +591,7 @@ const proto::ProtoObject* makeInstanceOfSpecies(STRuntime& rt,
             pinSet.reset(reinterpret_cast<const proto::ProtoObject*>(set));
             ++size;
         }
-        setHashedData(ctx, inst, set, size);
+        setHashedData(rt, ctx, inst, set, size);
         return inst;
     }
 
@@ -612,7 +601,7 @@ const proto::ProtoObject* makeInstanceOfSpecies(STRuntime& rt,
             ->newChild(ctx, /*isMutable=*/true);
     TransientPin pinInst(ctx, inst);
     const_cast<proto::ProtoObject*>(inst)->setAttribute(
-        ctx, dataKey(ctx), data->asObject(ctx));
+        ctx, dataKey(rt), data->asObject(ctx));
     return inst;
 }
 
@@ -688,9 +677,9 @@ bool forEachElement(STRuntime& rt, proto::ProtoContext* ctx,
     // `start` by `step` while not past `stop`. After this arm the whole
     // derived protocol (`collect:`/`select:`/`inject:into:`/…) works on it.
     if (isIntervalBacked(rt, ctx, collection)) {
-        long long start = intervalAttr(ctx, collection, intervalStartKey(ctx), 1);
-        long long stop  = intervalAttr(ctx, collection, intervalStopKey(ctx), 0);
-        long long step  = intervalAttr(ctx, collection, intervalStepKey(ctx), 1);
+        long long start = intervalAttr(rt, ctx, collection, intervalStartKey(rt), 1);
+        long long stop  = intervalAttr(rt, ctx, collection, intervalStopKey(rt), 0);
+        long long step  = intervalAttr(rt, ctx, collection, intervalStepKey(rt), 1);
         long long n     = intervalSize(start, stop, step);
         long long cur   = start;
         for (long long i = 0; i < n; ++i, cur += step) {
@@ -698,8 +687,8 @@ bool forEachElement(STRuntime& rt, proto::ProtoContext* ctx,
         }
         return true;
     }
-    if (isListBacked(ctx, collection)) {
-        const proto::ProtoList* data = arrayData(ctx, collection);
+    if (isListBacked(rt, ctx, collection)) {
+        const proto::ProtoList* data = arrayData(rt, ctx, collection);
         // `fn` may run user code that replaces the receiver's `__data__`; the
         // snapshot being walked must not be freed under us.
         TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
@@ -714,7 +703,7 @@ bool forEachElement(STRuntime& rt, proto::ProtoContext* ctx,
     // iterate the keys, visiting each distinct element once.
     if (isSetBacked(rt, ctx, collection)) {
         std::vector<HashedEntry> entries;
-        TransientPin pinSnapshot(ctx, hashedEntries(ctx, collection, entries));
+        TransientPin pinSnapshot(ctx, hashedEntries(rt, ctx, collection, entries));
         for (const HashedEntry& e : entries) {
             if (!fn(e.first)) return false;
         }
@@ -726,7 +715,7 @@ bool forEachElement(STRuntime& rt, proto::ProtoContext* ctx,
     // `collect:`, …) works on a Dictionary over its values.
     if (isDictBacked(rt, ctx, collection)) {
         std::vector<HashedEntry> entries;
-        TransientPin pinSnapshot(ctx, hashedEntries(ctx, collection, entries));
+        TransientPin pinSnapshot(ctx, hashedEntries(rt, ctx, collection, entries));
         for (const HashedEntry& e : entries) {
             if (!fn(e.second)) return false;
         }
@@ -743,11 +732,11 @@ bool forEachElement(STRuntime& rt, proto::ProtoContext* ctx,
     bool understood = false;
     const proto::ProtoObject* elements = sendDynamic(
         rt, ctx, collection,
-        proto::ProtoString::createSymbol(ctx, "__elementsForIteration"),
+        rt.bootstrap().sym.elementsForIteration,
         nullptr, 0, &understood);
-    if (understood && elements && isListBacked(ctx, elements)) {
+    if (understood && elements && isListBacked(rt, ctx, elements)) {
         TransientPin pinElements(ctx, elements);
-        const proto::ProtoList* data = arrayData(ctx, elements);
+        const proto::ProtoList* data = arrayData(rt, ctx, elements);
         TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
         proto::proto_ulong n = data->getSize(ctx);
         for (proto::proto_ulong i = 0; i < n; ++i) {
@@ -770,17 +759,17 @@ const proto::ProtoObject* prim_Array_size(STRuntime& rt, proto::ProtoContext* ct
 }
 
 // anArray isEmpty → true when size = 0
-const proto::ProtoObject* prim_Array_isEmpty(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Array_isEmpty(STRuntime& rt, proto::ProtoContext* ctx,
                                              const proto::ProtoObject* r,
                                              const proto::ProtoObject* const*, int) {
-    return arrayData(ctx, r)->getSize(ctx) == 0 ? PROTO_TRUE : PROTO_FALSE;
+    return arrayData(rt, ctx, r)->getSize(ctx) == 0 ? PROTO_TRUE : PROTO_FALSE;
 }
 
 // anArray notEmpty → true when size > 0
-const proto::ProtoObject* prim_Array_notEmpty(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Array_notEmpty(STRuntime& rt, proto::ProtoContext* ctx,
                                               const proto::ProtoObject* r,
                                               const proto::ProtoObject* const*, int) {
-    return arrayData(ctx, r)->getSize(ctx) != 0 ? PROTO_TRUE : PROTO_FALSE;
+    return arrayData(rt, ctx, r)->getSize(ctx) != 0 ? PROTO_TRUE : PROTO_FALSE;
 }
 
 // anArray at: index → the element at the 1-based index. Out of range signals
@@ -999,32 +988,32 @@ const proto::ProtoObject* prim_Array_classWith(STRuntime& rt, proto::ProtoContex
 // (`collect:`/`select:`/`detect:`/`inject:into:`/…) works on it for free.
 
 // anOrderedCollection size → element count.
-const proto::ProtoObject* prim_OC_size(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_OC_size(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* r,
                                        const proto::ProtoObject* const*, int) {
     return ctx->fromLong(
-        static_cast<long long>(listData(ctx, r)->getSize(ctx)));
+        static_cast<long long>(listData(rt, ctx, r)->getSize(ctx)));
 }
 
-const proto::ProtoObject* prim_OC_isEmpty(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_OC_isEmpty(STRuntime& rt, proto::ProtoContext* ctx,
                                           const proto::ProtoObject* r,
                                           const proto::ProtoObject* const*, int) {
-    return listData(ctx, r)->getSize(ctx) == 0 ? PROTO_TRUE : PROTO_FALSE;
+    return listData(rt, ctx, r)->getSize(ctx) == 0 ? PROTO_TRUE : PROTO_FALSE;
 }
 
-const proto::ProtoObject* prim_OC_notEmpty(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_OC_notEmpty(STRuntime& rt, proto::ProtoContext* ctx,
                                            const proto::ProtoObject* r,
                                            const proto::ProtoObject* const*, int) {
-    return listData(ctx, r)->getSize(ctx) != 0 ? PROTO_TRUE : PROTO_FALSE;
+    return listData(rt, ctx, r)->getSize(ctx) != 0 ? PROTO_TRUE : PROTO_FALSE;
 }
 
 // anOrderedCollection at: index → element at the 1-based index. Out of range
 // signals an Error.
-const proto::ProtoObject* prim_OC_at(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_OC_at(STRuntime& rt, proto::ProtoContext* ctx,
                                      const proto::ProtoObject* r,
                                      const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("at: expects 1 arg (index)");
-    const proto::ProtoList* data = listData(ctx, r);
+    const proto::ProtoList* data = listData(rt, ctx, r);
     const IndexArg index = indexArg(ctx, a[0], "OrderedCollection>>at:");
     long long idx1 = index.value;
     long long n    = static_cast<long long>(data->getSize(ctx));
@@ -1039,11 +1028,11 @@ const proto::ProtoObject* prim_OC_at(STRuntime&, proto::ProtoContext* ctx,
 
 // anOrderedCollection at: index put: value → replace the 1-based slot. Returns
 // the stored value. Out of range signals an Error.
-const proto::ProtoObject* prim_OC_atPut(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_OC_atPut(STRuntime& rt, proto::ProtoContext* ctx,
                                         const proto::ProtoObject* r,
                                         const proto::ProtoObject* const* a, int argc) {
     if (argc != 2) throw NativeError("at:put: expects 2 args (index, value)");
-    const proto::ProtoList* data = listData(ctx, r);
+    const proto::ProtoList* data = listData(rt, ctx, r);
     const IndexArg index = indexArg(ctx, a[0], "OrderedCollection>>at:put:");
     long long idx1 = index.value;
     long long n    = static_cast<long long>(data->getSize(ctx));
@@ -1053,28 +1042,28 @@ const proto::ProtoObject* prim_OC_atPut(STRuntime&, proto::ProtoContext* ctx,
             " out of range 1.." + std::to_string(n));
     }
     const proto::ProtoObject* value = a[1] ? a[1] : PROTO_NONE;
-    setData(ctx, r, data->setAt(ctx, listIndex(idx1 - 1), value));
+    setData(rt, ctx, r, data->setAt(ctx, listIndex(idx1 - 1), value));
     return value;
 }
 
 // anOrderedCollection add: anObject / addLast: anObject → append at the end.
 // Returns the added element (Smalltalk `add:` answers its argument).
-const proto::ProtoObject* prim_OC_add(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_OC_add(STRuntime& rt, proto::ProtoContext* ctx,
                                       const proto::ProtoObject* r,
                                       const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("add: expects 1 arg (element)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
-    setData(ctx, r, listData(ctx, r)->appendLast(ctx, e));
+    setData(rt, ctx, r, listData(rt, ctx, r)->appendLast(ctx, e));
     return e;
 }
 
 // anOrderedCollection addFirst: anObject → prepend. Returns the added element.
-const proto::ProtoObject* prim_OC_addFirst(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_OC_addFirst(STRuntime& rt, proto::ProtoContext* ctx,
                                            const proto::ProtoObject* r,
                                            const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("addFirst: expects 1 arg (element)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
-    setData(ctx, r, listData(ctx, r)->appendFirst(ctx, e));
+    setData(rt, ctx, r, listData(rt, ctx, r)->appendFirst(ctx, e));
     return e;
 }
 
@@ -1085,40 +1074,40 @@ const proto::ProtoObject* prim_OC_addAll(STRuntime& rt, proto::ProtoContext* ctx
                                          const proto::ProtoObject* r,
                                          const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("addAll: expects 1 arg (collection)");
-    const proto::ProtoList* data = listData(ctx, r);
+    const proto::ProtoList* data = listData(rt, ctx, r);
     TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
     forEachElement(rt, ctx, a[0], [&](const proto::ProtoObject* e) {
         data = data->appendLast(ctx, e);
         pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
         return true;
     });
-    setData(ctx, r, data);
+    setData(rt, ctx, r, data);
     return a[0] ? a[0] : PROTO_NONE;
 }
 
 // anOrderedCollection removeFirst → remove and return the first element. Empty
 // receiver signals an Error.
-const proto::ProtoObject* prim_OC_removeFirst(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_OC_removeFirst(STRuntime& rt, proto::ProtoContext* ctx,
                                               const proto::ProtoObject* r,
                                               const proto::ProtoObject* const*, int) {
-    const proto::ProtoList* data = listData(ctx, r);
+    const proto::ProtoList* data = listData(rt, ctx, r);
     if (data->getSize(ctx) == 0)
         throw NativeError("OrderedCollection>>removeFirst: collection is empty");
     const proto::ProtoObject* e = data->getFirst(ctx);
-    setData(ctx, r, data->removeFirst(ctx));
+    setData(rt, ctx, r, data->removeFirst(ctx));
     return e ? e : PROTO_NONE;
 }
 
 // anOrderedCollection removeLast → remove and return the last element. Empty
 // receiver signals an Error.
-const proto::ProtoObject* prim_OC_removeLast(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_OC_removeLast(STRuntime& rt, proto::ProtoContext* ctx,
                                              const proto::ProtoObject* r,
                                              const proto::ProtoObject* const*, int) {
-    const proto::ProtoList* data = listData(ctx, r);
+    const proto::ProtoList* data = listData(rt, ctx, r);
     if (data->getSize(ctx) == 0)
         throw NativeError("OrderedCollection>>removeLast: collection is empty");
     const proto::ProtoObject* e = data->getLast(ctx);
-    setData(ctx, r, data->removeLast(ctx));
+    setData(rt, ctx, r, data->removeLast(ctx));
     return e ? e : PROTO_NONE;
 }
 
@@ -1141,16 +1130,16 @@ int indexOfEqual(proto::ProtoContext* ctx, const proto::ProtoList* data,
 
 // anOrderedCollection remove: anObject → remove the first element equal to the
 // argument; return the argument. Not found signals an Error.
-const proto::ProtoObject* prim_OC_remove(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_OC_remove(STRuntime& rt, proto::ProtoContext* ctx,
                                          const proto::ProtoObject* r,
                                          const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("remove: expects 1 arg (element)");
-    const proto::ProtoList* data = listData(ctx, r);
+    const proto::ProtoList* data = listData(rt, ctx, r);
     const proto::ProtoObject* value = a[0] ? a[0] : PROTO_NONE;
     int idx = indexOfEqual(ctx, data, value);
     if (idx < 0)
         throw ClassedErrorSignal("NotFound", "OrderedCollection>>remove: element not found");
-    setData(ctx, r, data->removeAt(ctx, idx));
+    setData(rt, ctx, r, data->removeAt(ctx, idx));
     return value;
 }
 
@@ -1162,32 +1151,32 @@ const proto::ProtoObject* prim_OC_removeIfAbsent(STRuntime& rt, proto::ProtoCont
                                                  int argc) {
     if (argc != 2)
         throw NativeError("remove:ifAbsent: expects 2 args (element, block)");
-    const proto::ProtoList* data = listData(ctx, r);
+    const proto::ProtoList* data = listData(rt, ctx, r);
     const proto::ProtoObject* value = a[0] ? a[0] : PROTO_NONE;
     int idx = indexOfEqual(ctx, data, value);
     if (idx < 0) {
         const proto::ProtoObject* fallback = invokeBlock(rt, ctx, a[1], nullptr, 0);
         return fallback ? fallback : PROTO_NONE;
     }
-    setData(ctx, r, data->removeAt(ctx, idx));
+    setData(rt, ctx, r, data->removeAt(ctx, idx));
     return value;
 }
 
 // anOrderedCollection first / last → convenience accessors. Empty → Error.
-const proto::ProtoObject* prim_OC_first(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_OC_first(STRuntime& rt, proto::ProtoContext* ctx,
                                         const proto::ProtoObject* r,
                                         const proto::ProtoObject* const*, int) {
-    const proto::ProtoList* data = listData(ctx, r);
+    const proto::ProtoList* data = listData(rt, ctx, r);
     if (data->getSize(ctx) == 0)
         throw NativeError("OrderedCollection>>first: collection is empty");
     const proto::ProtoObject* e = data->getFirst(ctx);
     return e ? e : PROTO_NONE;
 }
 
-const proto::ProtoObject* prim_OC_last(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_OC_last(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* r,
                                        const proto::ProtoObject* const*, int) {
-    const proto::ProtoList* data = listData(ctx, r);
+    const proto::ProtoList* data = listData(rt, ctx, r);
     if (data->getSize(ctx) == 0)
         throw NativeError("OrderedCollection>>last: collection is empty");
     const proto::ProtoObject* e = data->getLast(ctx);
@@ -1262,42 +1251,42 @@ const proto::ProtoObject* makeSetInstance(STRuntime& rt, proto::ProtoContext* ct
         const_cast<proto::ProtoObject*>(rt.bootstrap().setProto)
             ->newChild(ctx, /*isMutable=*/true);
     TransientPin pinS(ctx, s);
-    setHashedData(ctx, s, data, size);
+    setHashedData(rt, ctx, s, data, size);
     return s;
 }
 
 // aSet add: anObject → add the element; return it. Adding an element the Set
 // already holds (by the language's `=`) is a no-op, and keeps the element
 // already stored rather than replacing it with the equal one just offered.
-const proto::ProtoObject* prim_Set_add(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Set_add(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* r,
                                        const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("add: expects 1 arg (element)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
-    const proto::ProtoMap* data = mapData(ctx, r);
+    const proto::ProtoMap* data = mapData(rt, ctx, r);
     TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
     if (proto::hashedGet(ctx, data, stKeySemantics(), e) == nullptr) {
-        setHashedData(ctx, r,
+        setHashedData(rt, ctx, r,
                       proto::hashedPut(ctx, data, stKeySemantics(), e, e),
-                      hashedSize(ctx, r) + 1);
+                      hashedSize(rt, ctx, r) + 1);
     }
     return e;
 }
 
 // aSet remove: anObject → remove the element; return it. Not present signals
 // an Error.
-const proto::ProtoObject* prim_Set_remove(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Set_remove(STRuntime& rt, proto::ProtoContext* ctx,
                                           const proto::ProtoObject* r,
                                           const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("remove: expects 1 arg (element)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
-    const proto::ProtoMap* data = mapData(ctx, r);
+    const proto::ProtoMap* data = mapData(rt, ctx, r);
     TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
     if (proto::hashedGet(ctx, data, stKeySemantics(), e) == nullptr)
         throw ClassedErrorSignal("NotFound", "Set>>remove: element not found");
-    setHashedData(ctx, r,
+    setHashedData(rt, ctx, r,
                   proto::hashedRemove(ctx, data, stKeySemantics(), e),
-                  hashedSize(ctx, r) - 1);
+                  hashedSize(rt, ctx, r) - 1);
     return e;
 }
 
@@ -1310,45 +1299,45 @@ const proto::ProtoObject* prim_Set_removeIfAbsent(STRuntime& rt, proto::ProtoCon
     if (argc != 2)
         throw NativeError("remove:ifAbsent: expects 2 args (element, block)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
-    const proto::ProtoMap* data = mapData(ctx, r);
+    const proto::ProtoMap* data = mapData(rt, ctx, r);
     TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
     if (proto::hashedGet(ctx, data, stKeySemantics(), e) == nullptr) {
         const proto::ProtoObject* fallback = invokeBlock(rt, ctx, a[1], nullptr, 0);
         return fallback ? fallback : PROTO_NONE;
     }
-    setHashedData(ctx, r,
+    setHashedData(rt, ctx, r,
                   proto::hashedRemove(ctx, data, stKeySemantics(), e),
-                  hashedSize(ctx, r) - 1);
+                  hashedSize(rt, ctx, r) - 1);
     return e;
 }
 
 // aSet includes: anObject → true when the element is a member.
-const proto::ProtoObject* prim_Set_includes(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Set_includes(STRuntime& rt, proto::ProtoContext* ctx,
                                             const proto::ProtoObject* r,
                                             const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("includes: expects 1 arg (element)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
-    return proto::hashedGet(ctx, mapData(ctx, r), stKeySemantics(), e) != nullptr
+    return proto::hashedGet(ctx, mapData(rt, ctx, r), stKeySemantics(), e) != nullptr
         ? PROTO_TRUE : PROTO_FALSE;
 }
 
 // aSet size → number of distinct elements.
-const proto::ProtoObject* prim_Set_size(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Set_size(STRuntime& rt, proto::ProtoContext* ctx,
                                         const proto::ProtoObject* r,
                                         const proto::ProtoObject* const*, int) {
-    return ctx->fromLong(hashedSize(ctx, r));
+    return ctx->fromLong(hashedSize(rt, ctx, r));
 }
 
-const proto::ProtoObject* prim_Set_isEmpty(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Set_isEmpty(STRuntime& rt, proto::ProtoContext* ctx,
                                            const proto::ProtoObject* r,
                                            const proto::ProtoObject* const*, int) {
-    return hashedSize(ctx, r) == 0 ? PROTO_TRUE : PROTO_FALSE;
+    return hashedSize(rt, ctx, r) == 0 ? PROTO_TRUE : PROTO_FALSE;
 }
 
-const proto::ProtoObject* prim_Set_notEmpty(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Set_notEmpty(STRuntime& rt, proto::ProtoContext* ctx,
                                             const proto::ProtoObject* r,
                                             const proto::ProtoObject* const*, int) {
-    return hashedSize(ctx, r) != 0 ? PROTO_TRUE : PROTO_FALSE;
+    return hashedSize(rt, ctx, r) != 0 ? PROTO_TRUE : PROTO_FALSE;
 }
 
 // aSet do: aBlock → evaluate the one-arg block once for each distinct element.
@@ -1419,17 +1408,17 @@ const proto::ProtoObject* makeBagInstance(STRuntime& rt, proto::ProtoContext* ct
 }
 
 // aBag add: anObject → add one occurrence; return the element.
-const proto::ProtoObject* prim_Bag_add(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Bag_add(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* r,
                                        const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("add: expects 1 arg (element)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
-    setData(ctx, r, listData(ctx, r)->appendLast(ctx, e));
+    setData(rt, ctx, r, listData(rt, ctx, r)->appendLast(ctx, e));
     return e;
 }
 
 // aBag add: anObject withOccurrences: n → add N occurrences; return the element.
-const proto::ProtoObject* prim_Bag_addWithOccurrences(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Bag_addWithOccurrences(STRuntime& rt, proto::ProtoContext* ctx,
                                                       const proto::ProtoObject* r,
                                                       const proto::ProtoObject* const* a,
                                                       int argc) {
@@ -1438,28 +1427,28 @@ const proto::ProtoObject* prim_Bag_addWithOccurrences(STRuntime&, proto::ProtoCo
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
     long long n = a[1]->asLong(ctx);
     if (n < 0) throw NativeError("Bag>>add:withOccurrences: negative count");
-    const proto::ProtoList* data = listData(ctx, r);
+    const proto::ProtoList* data = listData(rt, ctx, r);
     TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
     for (long long i = 0; i < n; ++i) {
         data = data->appendLast(ctx, e);
         pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
     }
-    setData(ctx, r, data);
+    setData(rt, ctx, r, data);
     return e;
 }
 
 // aBag remove: anObject → remove one occurrence; return the element. Absent
 // signals an Error.
-const proto::ProtoObject* prim_Bag_remove(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Bag_remove(STRuntime& rt, proto::ProtoContext* ctx,
                                           const proto::ProtoObject* r,
                                           const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("remove: expects 1 arg (element)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
-    const proto::ProtoList* data = listData(ctx, r);
+    const proto::ProtoList* data = listData(rt, ctx, r);
     int idx = indexOfEqual(ctx, data, e);
     if (idx < 0)
         throw ClassedErrorSignal("NotFound", "Bag>>remove: element not found");
-    setData(ctx, r, data->removeAt(ctx, idx));
+    setData(rt, ctx, r, data->removeAt(ctx, idx));
     return e;
 }
 
@@ -1472,13 +1461,13 @@ const proto::ProtoObject* prim_Bag_removeIfAbsent(STRuntime& rt, proto::ProtoCon
     if (argc != 2)
         throw NativeError("remove:ifAbsent: expects 2 args (element, block)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
-    const proto::ProtoList* data = listData(ctx, r);
+    const proto::ProtoList* data = listData(rt, ctx, r);
     int idx = indexOfEqual(ctx, data, e);
     if (idx < 0) {
         const proto::ProtoObject* fallback = invokeBlock(rt, ctx, a[1], nullptr, 0);
         return fallback ? fallback : PROTO_NONE;
     }
-    setData(ctx, r, data->removeAt(ctx, idx));
+    setData(rt, ctx, r, data->removeAt(ctx, idx));
     return e;
 }
 
@@ -1498,42 +1487,42 @@ long long countEqual(proto::ProtoContext* ctx, const proto::ProtoList* data,
 }
 
 // aBag includes: anObject → true when at least one occurrence is present.
-const proto::ProtoObject* prim_Bag_includes(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Bag_includes(STRuntime& rt, proto::ProtoContext* ctx,
                                             const proto::ProtoObject* r,
                                             const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("includes: expects 1 arg (element)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
-    return indexOfEqual(ctx, listData(ctx, r), e) >= 0 ? PROTO_TRUE : PROTO_FALSE;
+    return indexOfEqual(ctx, listData(rt, ctx, r), e) >= 0 ? PROTO_TRUE : PROTO_FALSE;
 }
 
 // aBag occurrencesOf: anObject → the occurrence count for the element.
-const proto::ProtoObject* prim_Bag_occurrencesOf(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Bag_occurrencesOf(STRuntime& rt, proto::ProtoContext* ctx,
                                                  const proto::ProtoObject* r,
                                                  const proto::ProtoObject* const* a,
                                                  int argc) {
     if (argc != 1) throw NativeError("occurrencesOf: expects 1 arg (element)");
     const proto::ProtoObject* e = a[0] ? a[0] : PROTO_NONE;
-    return ctx->fromLong(countEqual(ctx, listData(ctx, r), e));
+    return ctx->fromLong(countEqual(ctx, listData(rt, ctx, r), e));
 }
 
 // aBag size → total number of elements, duplicates included.
-const proto::ProtoObject* prim_Bag_size(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Bag_size(STRuntime& rt, proto::ProtoContext* ctx,
                                         const proto::ProtoObject* r,
                                         const proto::ProtoObject* const*, int) {
     return ctx->fromLong(
-        static_cast<long long>(listData(ctx, r)->getSize(ctx)));
+        static_cast<long long>(listData(rt, ctx, r)->getSize(ctx)));
 }
 
-const proto::ProtoObject* prim_Bag_isEmpty(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Bag_isEmpty(STRuntime& rt, proto::ProtoContext* ctx,
                                            const proto::ProtoObject* r,
                                            const proto::ProtoObject* const*, int) {
-    return listData(ctx, r)->getSize(ctx) == 0 ? PROTO_TRUE : PROTO_FALSE;
+    return listData(rt, ctx, r)->getSize(ctx) == 0 ? PROTO_TRUE : PROTO_FALSE;
 }
 
-const proto::ProtoObject* prim_Bag_notEmpty(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Bag_notEmpty(STRuntime& rt, proto::ProtoContext* ctx,
                                             const proto::ProtoObject* r,
                                             const proto::ProtoObject* const*, int) {
-    return listData(ctx, r)->getSize(ctx) != 0 ? PROTO_TRUE : PROTO_FALSE;
+    return listData(rt, ctx, r)->getSize(ctx) != 0 ? PROTO_TRUE : PROTO_FALSE;
 }
 
 // aBag do: aBlock → evaluate the one-arg block once per occurrence.
@@ -1583,11 +1572,11 @@ const proto::ProtoObject* prim_Bag_classWithAll(STRuntime& rt, proto::ProtoConte
 // (`__assoc_key__` / `__assoc_value__`); `key`/`value`/`key:`/`value:` are
 // accessors.
 
-const proto::ProtoString* assocKeyKey(proto::ProtoContext* ctx) {
-    return proto::ProtoString::createSymbol(ctx, "__assoc_key__");
+const proto::ProtoString* assocKeyKey(STRuntime& rt) {
+    return rt.bootstrap().sym.assocKey;
 }
-const proto::ProtoString* assocValueKey(proto::ProtoContext* ctx) {
-    return proto::ProtoString::createSymbol(ctx, "__assoc_value__");
+const proto::ProtoString* assocValueKey(STRuntime& rt) {
+    return rt.bootstrap().sym.assocValue;
 }
 
 // makeAssociation — build a fresh Association instance for `key -> value`.
@@ -1603,9 +1592,9 @@ const proto::ProtoObject* makeAssociation(STRuntime& rt, proto::ProtoContext* ct
             ->newChild(ctx, /*isMutable=*/true);
     TransientPin pinAssoc(ctx, assoc);
     const_cast<proto::ProtoObject*>(assoc)->setAttribute(
-        ctx, assocKeyKey(ctx), key);
+        ctx, assocKeyKey(rt), key);
     const_cast<proto::ProtoObject*>(assoc)->setAttribute(
-        ctx, assocValueKey(ctx), value);
+        ctx, assocValueKey(rt), value);
     return assoc;
 }
 
@@ -1620,38 +1609,38 @@ const proto::ProtoObject* prim_Object_arrow(STRuntime& rt, proto::ProtoContext* 
 }
 
 // anAssociation key → the key.
-const proto::ProtoObject* prim_Assoc_key(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Assoc_key(STRuntime& rt, proto::ProtoContext* ctx,
                                          const proto::ProtoObject* r,
                                          const proto::ProtoObject* const*, int) {
-    const proto::ProtoObject* k = r ? r->getAttribute(ctx, assocKeyKey(ctx)) : nullptr;
+    const proto::ProtoObject* k = r ? r->getAttribute(ctx, assocKeyKey(rt)) : nullptr;
     return k ? k : PROTO_NONE;
 }
 
 // anAssociation value → the value.
-const proto::ProtoObject* prim_Assoc_value(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Assoc_value(STRuntime& rt, proto::ProtoContext* ctx,
                                            const proto::ProtoObject* r,
                                            const proto::ProtoObject* const*, int) {
-    const proto::ProtoObject* v = r ? r->getAttribute(ctx, assocValueKey(ctx)) : nullptr;
+    const proto::ProtoObject* v = r ? r->getAttribute(ctx, assocValueKey(rt)) : nullptr;
     return v ? v : PROTO_NONE;
 }
 
 // anAssociation key: aKey → set the key; return the receiver.
-const proto::ProtoObject* prim_Assoc_keyPut(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Assoc_keyPut(STRuntime& rt, proto::ProtoContext* ctx,
                                             const proto::ProtoObject* r,
                                             const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("key: expects 1 arg");
     const_cast<proto::ProtoObject*>(r)->setAttribute(
-        ctx, assocKeyKey(ctx), a[0] ? a[0] : PROTO_NONE);
+        ctx, assocKeyKey(rt), a[0] ? a[0] : PROTO_NONE);
     return r;
 }
 
 // anAssociation value: aValue → set the value; return the receiver.
-const proto::ProtoObject* prim_Assoc_valuePut(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Assoc_valuePut(STRuntime& rt, proto::ProtoContext* ctx,
                                               const proto::ProtoObject* r,
                                               const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("value: expects 1 arg");
     const_cast<proto::ProtoObject*>(r)->setAttribute(
-        ctx, assocValueKey(ctx), a[0] ? a[0] : PROTO_NONE);
+        ctx, assocValueKey(rt), a[0] ? a[0] : PROTO_NONE);
     return r;
 }
 
@@ -1693,50 +1682,50 @@ const proto::ProtoObject* makeDictInstance(STRuntime& rt, proto::ProtoContext* c
         const_cast<proto::ProtoObject*>(rt.bootstrap().dictionaryProto)
             ->newChild(ctx, /*isMutable=*/true);
     TransientPin pinD(ctx, d);
-    setHashedData(ctx, d, data, size);
+    setHashedData(rt, ctx, d, data, size);
     return d;
 }
 
 // Store `key -> value` on `coll`, replacing the value when the key is already
 // there (and keeping the key already stored, not the equal one just offered).
-void dictStore(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
+void dictStore(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* coll,
                const proto::ProtoObject* key, const proto::ProtoObject* value) {
     if (!key)   key   = PROTO_NONE;
     if (!value) value = PROTO_NONE;
-    const proto::ProtoMap* data = mapData(ctx, coll);
+    const proto::ProtoMap* data = mapData(rt, ctx, coll);
     TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
     const bool fresh =
         proto::hashedGet(ctx, data, stKeySemantics(), key) == nullptr;
-    setHashedData(ctx, coll,
+    setHashedData(rt, ctx, coll,
                   proto::hashedPut(ctx, data, stKeySemantics(), key, value),
-                  hashedSize(ctx, coll) + (fresh ? 1 : 0));
+                  hashedSize(rt, ctx, coll) + (fresh ? 1 : 0));
 }
 
 // Remove `key` from `coll`. On a hit returns the value it held; on a miss
 // returns nullptr and leaves `coll` untouched.
-const proto::ProtoObject* dictRemove(proto::ProtoContext* ctx,
+const proto::ProtoObject* dictRemove(STRuntime& rt, proto::ProtoContext* ctx,
                                      const proto::ProtoObject* coll,
                                      const proto::ProtoObject* key) {
     if (!key) key = PROTO_NONE;
-    const proto::ProtoMap* data = mapData(ctx, coll);
+    const proto::ProtoMap* data = mapData(rt, ctx, coll);
     TransientPin pinData(ctx, reinterpret_cast<const proto::ProtoObject*>(data));
     const proto::ProtoObject* v =
         proto::hashedGet(ctx, data, stKeySemantics(), key);
     if (!v) return nullptr;
     TransientPin pinValue(ctx, v);
-    setHashedData(ctx, coll,
+    setHashedData(rt, ctx, coll,
                   proto::hashedRemove(ctx, data, stKeySemantics(), key),
-                  hashedSize(ctx, coll) - 1);
+                  hashedSize(rt, ctx, coll) - 1);
     return v;
 }
 
 // aDictionary at: key → the value. Absent key signals an Error (catchable).
-const proto::ProtoObject* prim_Dict_at(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Dict_at(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* r,
                                        const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("at: expects 1 arg (key)");
     bool found = false;
-    const proto::ProtoObject* v = dictLookup(ctx, mapData(ctx, r), a[0], &found);
+    const proto::ProtoObject* v = dictLookup(ctx, mapData(rt, ctx, r), a[0], &found);
     if (!found) throw ClassedErrorSignal("KeyNotFound", "Dictionary>>at: key not found");
     return v;
 }
@@ -1748,7 +1737,7 @@ const proto::ProtoObject* prim_Dict_atIfAbsent(STRuntime& rt, proto::ProtoContex
     if (argc != 2)
         throw NativeError("at:ifAbsent: expects 2 args (key, block)");
     bool found = false;
-    const proto::ProtoObject* v = dictLookup(ctx, mapData(ctx, r), a[0], &found);
+    const proto::ProtoObject* v = dictLookup(ctx, mapData(rt, ctx, r), a[0], &found);
     if (found) return v;
     const proto::ProtoObject* fallback = invokeBlock(rt, ctx, a[1], nullptr, 0);
     return fallback ? fallback : PROTO_NONE;
@@ -1762,35 +1751,35 @@ const proto::ProtoObject* prim_Dict_atIfAbsentPut(STRuntime& rt, proto::ProtoCon
     if (argc != 2)
         throw NativeError("at:ifAbsentPut: expects 2 args (key, block)");
     bool found = false;
-    const proto::ProtoObject* v = dictLookup(ctx, mapData(ctx, r), a[0], &found);
+    const proto::ProtoObject* v = dictLookup(ctx, mapData(rt, ctx, r), a[0], &found);
     if (found) return v;
     const proto::ProtoObject* fresh = invokeBlock(rt, ctx, a[1], nullptr, 0);
     if (!fresh) fresh = PROTO_NONE;
     TransientPin pinFresh(ctx, fresh);
     // The map is re-read after the block ran: the block is user code and may
     // have stored into this very dictionary.
-    dictStore(ctx, r, a[0], fresh);
+    dictStore(rt, ctx, r, a[0], fresh);
     return fresh;
 }
 
 // aDictionary at: key put: value → store the entry; return `value`.
-const proto::ProtoObject* prim_Dict_atPut(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Dict_atPut(STRuntime& rt, proto::ProtoContext* ctx,
                                           const proto::ProtoObject* r,
                                           const proto::ProtoObject* const* a, int argc) {
     if (argc != 2)
         throw NativeError("at:put: expects 2 args (key, value)");
     const proto::ProtoObject* value = a[1] ? a[1] : PROTO_NONE;
-    dictStore(ctx, r, a[0], value);
+    dictStore(rt, ctx, r, a[0], value);
     return value;
 }
 
 // aDictionary removeKey: key → remove the entry, return the value. Absent key
 // signals an Error.
-const proto::ProtoObject* prim_Dict_removeKey(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Dict_removeKey(STRuntime& rt, proto::ProtoContext* ctx,
                                               const proto::ProtoObject* r,
                                               const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("removeKey: expects 1 arg (key)");
-    const proto::ProtoObject* removed = dictRemove(ctx, r, a[0]);
+    const proto::ProtoObject* removed = dictRemove(rt, ctx, r, a[0]);
     if (!removed) throw ClassedErrorSignal("KeyNotFound", "Dictionary>>removeKey: key not found");
     return removed;
 }
@@ -1803,7 +1792,7 @@ const proto::ProtoObject* prim_Dict_removeKeyIfAbsent(STRuntime& rt, proto::Prot
                                                       int argc) {
     if (argc != 2)
         throw NativeError("removeKey:ifAbsent: expects 2 args (key, block)");
-    const proto::ProtoObject* removed = dictRemove(ctx, r, a[0]);
+    const proto::ProtoObject* removed = dictRemove(rt, ctx, r, a[0]);
     if (!removed) {
         const proto::ProtoObject* fallback = invokeBlock(rt, ctx, a[1], nullptr, 0);
         return fallback ? fallback : PROTO_NONE;
@@ -1812,12 +1801,12 @@ const proto::ProtoObject* prim_Dict_removeKeyIfAbsent(STRuntime& rt, proto::Prot
 }
 
 // aDictionary includesKey: key → true when the key has an entry.
-const proto::ProtoObject* prim_Dict_includesKey(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Dict_includesKey(STRuntime& rt, proto::ProtoContext* ctx,
                                                 const proto::ProtoObject* r,
                                                 const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("includesKey: expects 1 arg (key)");
     bool found = false;
-    dictLookup(ctx, mapData(ctx, r), a[0], &found);
+    dictLookup(ctx, mapData(rt, ctx, r), a[0], &found);
     return found ? PROTO_TRUE : PROTO_FALSE;
 }
 
@@ -1836,31 +1825,31 @@ const proto::ProtoObject* prim_Dict_includes(STRuntime& rt, proto::ProtoContext*
 }
 
 // aDictionary size → number of entries.
-const proto::ProtoObject* prim_Dict_size(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Dict_size(STRuntime& rt, proto::ProtoContext* ctx,
                                          const proto::ProtoObject* r,
                                          const proto::ProtoObject* const*, int) {
-    return ctx->fromLong(hashedSize(ctx, r));
+    return ctx->fromLong(hashedSize(rt, ctx, r));
 }
 
-const proto::ProtoObject* prim_Dict_isEmpty(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Dict_isEmpty(STRuntime& rt, proto::ProtoContext* ctx,
                                             const proto::ProtoObject* r,
                                             const proto::ProtoObject* const*, int) {
-    return hashedSize(ctx, r) == 0 ? PROTO_TRUE : PROTO_FALSE;
+    return hashedSize(rt, ctx, r) == 0 ? PROTO_TRUE : PROTO_FALSE;
 }
 
-const proto::ProtoObject* prim_Dict_notEmpty(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Dict_notEmpty(STRuntime& rt, proto::ProtoContext* ctx,
                                              const proto::ProtoObject* r,
                                              const proto::ProtoObject* const*, int) {
-    return hashedSize(ctx, r) != 0 ? PROTO_TRUE : PROTO_FALSE;
+    return hashedSize(rt, ctx, r) != 0 ? PROTO_TRUE : PROTO_FALSE;
 }
 
 // dictForEachEntry — the shared entry walk for keysDo:/valuesDo:/etc. Calls
 // `fn(key, value)` for every entry; `fn` returns false to stop early. The walk
 // is over a snapshot (hashedEntries), in protoCore's ascending slot-hash order.
 template <typename Fn>
-void dictForEachEntry(proto::ProtoContext* ctx, const proto::ProtoObject* r, Fn&& fn) {
+void dictForEachEntry(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* r, Fn&& fn) {
     std::vector<HashedEntry> entries;
-    TransientPin pinSnapshot(ctx, hashedEntries(ctx, r, entries));
+    TransientPin pinSnapshot(ctx, hashedEntries(rt, ctx, r, entries));
     for (const HashedEntry& e : entries) {
         if (!fn(e.first, e.second)) return;
     }
@@ -1873,7 +1862,7 @@ const proto::ProtoObject* prim_Dict_keysDo(STRuntime& rt, proto::ProtoContext* c
     if (argc != 1) throw NativeError("keysDo: expects 1 arg (block)");
     const proto::ProtoObject* block = a[0];
     TransientPin pinRecv(ctx, r);
-    dictForEachEntry(ctx, r, [&](const proto::ProtoObject* k,
+    dictForEachEntry(rt, ctx, r, [&](const proto::ProtoObject* k,
                                  const proto::ProtoObject*) {
         const proto::ProtoObject* arg0 = k;
         invokeBlock(rt, ctx, block, &arg0, 1);
@@ -1889,7 +1878,7 @@ const proto::ProtoObject* prim_Dict_valuesDo(STRuntime& rt, proto::ProtoContext*
     if (argc != 1) throw NativeError("valuesDo: expects 1 arg (block)");
     const proto::ProtoObject* block = a[0];
     TransientPin pinRecv(ctx, r);
-    dictForEachEntry(ctx, r, [&](const proto::ProtoObject*,
+    dictForEachEntry(rt, ctx, r, [&](const proto::ProtoObject*,
                                  const proto::ProtoObject* v) {
         const proto::ProtoObject* arg0 = v;
         invokeBlock(rt, ctx, block, &arg0, 1);
@@ -1915,7 +1904,7 @@ const proto::ProtoObject* prim_Dict_keysAndValuesDo(STRuntime& rt, proto::ProtoC
         throw NativeError("keysAndValuesDo: expects 1 arg (block)");
     const proto::ProtoObject* block = a[0];
     TransientPin pinRecv(ctx, r);
-    dictForEachEntry(ctx, r, [&](const proto::ProtoObject* k,
+    dictForEachEntry(rt, ctx, r, [&](const proto::ProtoObject* k,
                                  const proto::ProtoObject* v) {
         const proto::ProtoObject* args[2] = { k, v };
         invokeBlock(rt, ctx, block, args, 2);
@@ -1934,7 +1923,7 @@ const proto::ProtoObject* prim_Dict_associationsDo(STRuntime& rt, proto::ProtoCo
         throw NativeError("associationsDo: expects 1 arg (block)");
     const proto::ProtoObject* block = a[0];
     TransientPin pinRecv(ctx, r);
-    dictForEachEntry(ctx, r, [&](const proto::ProtoObject* k,
+    dictForEachEntry(rt, ctx, r, [&](const proto::ProtoObject* k,
                                  const proto::ProtoObject* v) {
         const proto::ProtoObject* assoc = makeAssociation(rt, ctx, k, v);
         const proto::ProtoObject* arg0 = assoc;
@@ -1951,7 +1940,7 @@ const proto::ProtoObject* prim_Dict_keys(STRuntime& rt, proto::ProtoContext* ctx
     const proto::ProtoMap* set = ctx->newMap();
     TransientPin pinSet(ctx, reinterpret_cast<const proto::ProtoObject*>(set));
     long long size = 0;
-    dictForEachEntry(ctx, r, [&](const proto::ProtoObject* k,
+    dictForEachEntry(rt, ctx, r, [&](const proto::ProtoObject* k,
                                  const proto::ProtoObject*) {
         // Distinct dictionary keys are distinct Set elements by construction —
         // both collections decide membership with the same predicate — so the
@@ -1970,7 +1959,7 @@ const proto::ProtoObject* prim_Dict_values(STRuntime& rt, proto::ProtoContext* c
                                            const proto::ProtoObject* const*, int) {
     const proto::ProtoList* out = ctx->newList();
     TransientPin pinOut(ctx, reinterpret_cast<const proto::ProtoObject*>(out));
-    dictForEachEntry(ctx, r, [&](const proto::ProtoObject*,
+    dictForEachEntry(rt, ctx, r, [&](const proto::ProtoObject*,
                                  const proto::ProtoObject* v) {
         out = out->appendLast(ctx, v);
         pinOut.reset(reinterpret_cast<const proto::ProtoObject*>(out));
@@ -1985,7 +1974,7 @@ const proto::ProtoObject* prim_Dict_associations(STRuntime& rt, proto::ProtoCont
                                                  const proto::ProtoObject* const*, int) {
     const proto::ProtoList* out = ctx->newList();
     TransientPin pinOut(ctx, reinterpret_cast<const proto::ProtoObject*>(out));
-    dictForEachEntry(ctx, r, [&](const proto::ProtoObject* k,
+    dictForEachEntry(rt, ctx, r, [&](const proto::ProtoObject* k,
                                  const proto::ProtoObject* v) {
         const proto::ProtoObject* assoc = makeAssociation(rt, ctx, k, v);
         out = out->appendLast(ctx, assoc);
@@ -2193,7 +2182,7 @@ const proto::ProtoObject* sendDynamicForSort(STRuntime& rt, proto::ProtoContext*
     bool understood = false;
     const proto::ProtoObject* args1[1] = { arg };
     const proto::ProtoObject* r = sendDynamic(
-        rt, ctx, recv, proto::ProtoString::createSymbol(ctx, "<="), args1, 1, &understood);
+        rt, ctx, recv, rt.bootstrap().sym.lessOrEqual, args1, 1, &understood);
     if (!understood) throw NativeError("sort: elements do not understand <=");
     return r;
 }
@@ -2201,10 +2190,10 @@ const proto::ProtoObject* sendDynamicForSort(STRuntime& rt, proto::ProtoContext*
 const proto::ProtoObject* prim_Seq_sort(STRuntime& rt, proto::ProtoContext* ctx,
                                         const proto::ProtoObject* r,
                                         const proto::ProtoObject* const* a, int argc) {
-    if (!isListBacked(ctx, r))
+    if (!isListBacked(rt, ctx, r))
         throw NativeError("sort: needs an Array or an OrderedCollection (use sorted)");
     const proto::ProtoObject* block = (argc >= 1 && a[0] && a[0] != PROTO_NONE) ? a[0] : nullptr;
-    const proto::ProtoList* data = arrayData(ctx, r);
+    const proto::ProtoList* data = arrayData(rt, ctx, r);
     std::vector<const proto::ProtoObject*> elems;
     elems.reserve(data->getSize(ctx));
     for (proto::proto_ulong i = 0; i < data->getSize(ctx); ++i)
@@ -2226,7 +2215,7 @@ const proto::ProtoObject* prim_Seq_sort(STRuntime& rt, proto::ProtoContext* ctx,
         sorted = sorted->appendLast(ctx, e);
         pinSorted.reset(reinterpret_cast<const proto::ProtoObject*>(sorted));
     }
-    const_cast<proto::ProtoObject*>(r)->setAttribute(ctx, dataKey(ctx), sorted->asObject(ctx));
+    const_cast<proto::ProtoObject*>(r)->setAttribute(ctx, dataKey(rt), sorted->asObject(ctx));
     return r;
 }
 
@@ -2352,45 +2341,45 @@ const proto::ProtoObject* prim_Collection_asArray(STRuntime& rt, proto::ProtoCon
 // the derived protocol (via `forEachElement`'s lazy arm).
 
 // anInterval size → element count (a SmallInteger), never negative.
-const proto::ProtoObject* prim_Interval_size(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Interval_size(STRuntime& rt, proto::ProtoContext* ctx,
                                              const proto::ProtoObject* r,
                                              const proto::ProtoObject* const*, int) {
-    long long start = intervalAttr(ctx, r, intervalStartKey(ctx), 1);
-    long long stop  = intervalAttr(ctx, r, intervalStopKey(ctx), 0);
-    long long step  = intervalAttr(ctx, r, intervalStepKey(ctx), 1);
+    long long start = intervalAttr(rt, ctx, r, intervalStartKey(rt), 1);
+    long long stop  = intervalAttr(rt, ctx, r, intervalStopKey(rt), 0);
+    long long step  = intervalAttr(rt, ctx, r, intervalStepKey(rt), 1);
     return ctx->fromLong(intervalSize(start, stop, step));
 }
 
 // anInterval isEmpty → true when size = 0.
-const proto::ProtoObject* prim_Interval_isEmpty(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Interval_isEmpty(STRuntime& rt, proto::ProtoContext* ctx,
                                                 const proto::ProtoObject* r,
                                                 const proto::ProtoObject* const*, int) {
-    long long start = intervalAttr(ctx, r, intervalStartKey(ctx), 1);
-    long long stop  = intervalAttr(ctx, r, intervalStopKey(ctx), 0);
-    long long step  = intervalAttr(ctx, r, intervalStepKey(ctx), 1);
+    long long start = intervalAttr(rt, ctx, r, intervalStartKey(rt), 1);
+    long long stop  = intervalAttr(rt, ctx, r, intervalStopKey(rt), 0);
+    long long step  = intervalAttr(rt, ctx, r, intervalStepKey(rt), 1);
     return intervalSize(start, stop, step) == 0 ? PROTO_TRUE : PROTO_FALSE;
 }
 
 // anInterval notEmpty → true when size > 0.
-const proto::ProtoObject* prim_Interval_notEmpty(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Interval_notEmpty(STRuntime& rt, proto::ProtoContext* ctx,
                                                  const proto::ProtoObject* r,
                                                  const proto::ProtoObject* const*, int) {
-    long long start = intervalAttr(ctx, r, intervalStartKey(ctx), 1);
-    long long stop  = intervalAttr(ctx, r, intervalStopKey(ctx), 0);
-    long long step  = intervalAttr(ctx, r, intervalStepKey(ctx), 1);
+    long long start = intervalAttr(rt, ctx, r, intervalStartKey(rt), 1);
+    long long stop  = intervalAttr(rt, ctx, r, intervalStopKey(rt), 0);
+    long long step  = intervalAttr(rt, ctx, r, intervalStepKey(rt), 1);
     return intervalSize(start, stop, step) != 0 ? PROTO_TRUE : PROTO_FALSE;
 }
 
 // anInterval at: index → the 1-based element `start + (index-1)*step`. Out of
 // range `1..size` signals an Error (via std::runtime_error → translate).
-const proto::ProtoObject* prim_Interval_at(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Interval_at(STRuntime& rt, proto::ProtoContext* ctx,
                                            const proto::ProtoObject* r,
                                            const proto::ProtoObject* const* a,
                                            int argc) {
     if (argc != 1) throw NativeError("at: expects 1 arg (index)");
-    long long start = intervalAttr(ctx, r, intervalStartKey(ctx), 1);
-    long long stop  = intervalAttr(ctx, r, intervalStopKey(ctx), 0);
-    long long step  = intervalAttr(ctx, r, intervalStepKey(ctx), 1);
+    long long start = intervalAttr(rt, ctx, r, intervalStartKey(rt), 1);
+    long long stop  = intervalAttr(rt, ctx, r, intervalStopKey(rt), 0);
+    long long step  = intervalAttr(rt, ctx, r, intervalStepKey(rt), 1);
     long long n     = intervalSize(start, stop, step);
     const IndexArg index = indexArg(ctx, a[0], "Interval>>at:");
     long long idx1  = index.value;                   // 1-based
@@ -2404,12 +2393,12 @@ const proto::ProtoObject* prim_Interval_at(STRuntime&, proto::ProtoContext* ctx,
 
 // anInterval first → the first element (`start`). An empty Interval signals
 // an Error.
-const proto::ProtoObject* prim_Interval_first(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Interval_first(STRuntime& rt, proto::ProtoContext* ctx,
                                               const proto::ProtoObject* r,
                                               const proto::ProtoObject* const*, int) {
-    long long start = intervalAttr(ctx, r, intervalStartKey(ctx), 1);
-    long long stop  = intervalAttr(ctx, r, intervalStopKey(ctx), 0);
-    long long step  = intervalAttr(ctx, r, intervalStepKey(ctx), 1);
+    long long start = intervalAttr(rt, ctx, r, intervalStartKey(rt), 1);
+    long long stop  = intervalAttr(rt, ctx, r, intervalStopKey(rt), 0);
+    long long step  = intervalAttr(rt, ctx, r, intervalStepKey(rt), 1);
     if (intervalSize(start, stop, step) == 0)
         throw NativeError("Interval>>first: interval is empty");
     return ctx->fromLong(start);
@@ -2417,12 +2406,12 @@ const proto::ProtoObject* prim_Interval_first(STRuntime&, proto::ProtoContext* c
 
 // anInterval last → the last element (`start + (size-1)*step`). An empty
 // Interval signals an Error.
-const proto::ProtoObject* prim_Interval_last(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Interval_last(STRuntime& rt, proto::ProtoContext* ctx,
                                              const proto::ProtoObject* r,
                                              const proto::ProtoObject* const*, int) {
-    long long start = intervalAttr(ctx, r, intervalStartKey(ctx), 1);
-    long long stop  = intervalAttr(ctx, r, intervalStopKey(ctx), 0);
-    long long step  = intervalAttr(ctx, r, intervalStepKey(ctx), 1);
+    long long start = intervalAttr(rt, ctx, r, intervalStartKey(rt), 1);
+    long long stop  = intervalAttr(rt, ctx, r, intervalStopKey(rt), 0);
+    long long step  = intervalAttr(rt, ctx, r, intervalStepKey(rt), 1);
     long long n     = intervalSize(start, stop, step);
     if (n == 0)
         throw NativeError("Interval>>last: interval is empty");
@@ -2783,9 +2772,9 @@ const proto::ProtoObject* makeEmptyDictionary(STRuntime& rt, proto::ProtoContext
     return makeDictInstance(rt, ctx, nullptr, 0);
 }
 
-void dictionaryPut(proto::ProtoContext* ctx, const proto::ProtoObject* dict,
+void dictionaryPut(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* dict,
                    const proto::ProtoObject* key, const proto::ProtoObject* value) {
-    dictStore(ctx, dict, key, value);
+    dictStore(rt, ctx, dict, key, value);
 }
 
 bool isArrayOrOrdered(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* o) {
@@ -2795,8 +2784,8 @@ bool isArrayOrOrdered(STRuntime& rt, proto::ProtoContext* ctx, const proto::Prot
         || descendsFrom(ctx, o, b.orderedCollectionProto, b.objectProto);
 }
 
-const proto::ProtoList* arrayOrOrderedElements(proto::ProtoContext* ctx, const proto::ProtoObject* o) {
-    return listData(ctx, o);
+const proto::ProtoList* arrayOrOrderedElements(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* o) {
+    return listData(rt, ctx, o);
 }
 
 const proto::ProtoObject* asRootable(const proto::ProtoList* list) {
@@ -2807,9 +2796,9 @@ bool isDictionary(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObj
     return o && o != PROTO_NONE && isDictBacked(rt, ctx, o);
 }
 
-const proto::ProtoObject* dictionaryEntries(proto::ProtoContext* ctx, const proto::ProtoObject* dict,
+const proto::ProtoObject* dictionaryEntries(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* dict,
                        std::vector<std::pair<const proto::ProtoObject*, const proto::ProtoObject*>>& out) {
-    return hashedEntries(ctx, dict, out);
+    return hashedEntries(rt, ctx, dict, out);
 }
 
 const proto::ProtoObject* makeAssociationValue(STRuntime& rt, proto::ProtoContext* ctx,
@@ -2823,13 +2812,13 @@ bool isAssociation(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoOb
         && descendsFrom(ctx, o, rt.bootstrap().associationProto, rt.bootstrap().objectProto);
 }
 
-const proto::ProtoObject* associationKey(proto::ProtoContext* ctx, const proto::ProtoObject* assoc) {
-    const proto::ProtoObject* k = assoc->getAttribute(ctx, assocKeyKey(ctx));
+const proto::ProtoObject* associationKey(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* assoc) {
+    const proto::ProtoObject* k = assoc->getAttribute(ctx, assocKeyKey(rt));
     return k ? k : PROTO_NONE;
 }
 
-const proto::ProtoObject* associationValue(proto::ProtoContext* ctx, const proto::ProtoObject* assoc) {
-    const proto::ProtoObject* v = assoc->getAttribute(ctx, assocValueKey(ctx));
+const proto::ProtoObject* associationValue(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* assoc) {
+    const proto::ProtoObject* v = assoc->getAttribute(ctx, assocValueKey(rt));
     return v ? v : PROTO_NONE;
 }
 

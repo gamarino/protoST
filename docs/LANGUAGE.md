@@ -1316,20 +1316,25 @@ Chapter 10.8 of [the tutorial](TUTORIAL.md) for a worked example.
 
 **Inlined control messages.** The compiler compiles `ifTrue:`, `ifFalse:`,
 `ifTrue:ifFalse:`, `ifFalse:ifTrue:`, `and:` and `or:` whose arguments are
-literal blocks without arguments or temporaries, `whileTrue:` / `whileFalse:`
-with a literal receiver and argument block, `to:do:` with a literal
-one-argument block, and `ifNil:`, `ifNotNil:`, `ifNil:ifNotNil:`,
-`ifNotNil:ifNil:` with literal blocks (0.10.0), into the enclosing code: no
-closure is built and nothing is sent. The meaning is the send's, with one
+literal blocks without arguments, `whileTrue:` / `whileFalse:` with a literal
+receiver and argument block, `to:do:` with a literal one-argument block, and
+`ifNil:`, `ifNotNil:`, `ifNil:ifNotNil:`, `ifNotNil:ifNil:` with literal
+blocks (0.10.0), into the enclosing code: no closure is built and nothing is
+sent. The blocks may declare temporaries (0.10.0); as for any block, every
+evaluation starts with them nil, in a loop too, and a block created inside
+the body that captures one sees the binding of its own evaluation (such a
+send is then compiled as a real send). The meaning is the send's, with one
 exception the nil tests share with Pharo: they test identity with nil, so a
 class's own `ifNil:` is not run. When the receiver of one of the six
 conditionals is not a Boolean, the message is sent for real, with closures
 for the block literals (since 0.10.0): a class that defines `ifTrue:` or
 `and:` answers it, and a `doesNotUnderstand:` override receives the whole
-Message (a forwarding proxy forwards it). Those closures share the method's
-variables while the send runs; one that the receiver keeps and evaluates
-after the send has returned signals an `Error` if it uses a variable of the
-method (pass a block held in a variable when the receiver keeps it). This
+Message (a forwarding proxy forwards it). Those closures are real ones: they
+share the method's variables with the method for as long as either lives,
+so a receiver may keep one and evaluate it later, on any thread, and each
+entry of an inlined block with temporaries has its own variables, as each
+activation of a block would (before fix round 1 of 0.10.0 a kept closure that
+used a variable of the method signalled an `Error`). This
 differs from Pharo 10 and later, where such a receiver gets
 `NonBooleanReceiver` and its own method is not run; Pharo 9 re-sent the
 expression without inlining, as protoST does.
@@ -3326,7 +3331,7 @@ commits. Summary as of 0.4.0, updated for changes merged since:
 - **Input and output (0.5.0):** blocking calls only, with no multiplexing of
   several sockets on one thread; no HTTP/2, WebSockets, keep-alive or TLS
   server; POSIX only, so no native Windows (§12.11).
-- **Open bugs:** S3 (see `STATUS.md`); S19 was closed in 0.4.0.
+- **Open bugs:** none (see `STATUS.md`); S19 was closed in 0.4.0, S3 in 0.10.0.
 
 Closed before 0.4.0 and now as in Smalltalk-80: `new` sends `initialize`
 (D4), `Transcript` (D10), class variables assigned from instance methods (D19),

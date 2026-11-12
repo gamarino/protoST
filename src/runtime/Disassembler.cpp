@@ -59,7 +59,9 @@ const char* opName(Op op) {
         case Op::DEOPT_ENTER:        return "DEOPT_ENTER";
         case Op::PUSH_DEOPT_BLOCK:   return "PUSH_DEOPT_BLOCK";
         case Op::DEOPT_EXIT:         return "DEOPT_EXIT";
-        case Op::DEOPT_CHECK:        return "DEOPT_CHECK";
+        case Op::RESET_LOCAL:        return "RESET_LOCAL";
+        case Op::PUSH_SHARED_LOCAL:  return "PUSH_SHARED_LOCAL";
+        case Op::STORE_SHARED_LOCAL: return "STORE_SHARED_LOCAL";
         case Op::JUMP_IF_NIL:        return "JUMP_IF_NIL";
         case Op::JUMP_IF_NOT_NIL:    return "JUMP_IF_NOT_NIL";
         case Op::IDENTICAL:          return "IDENTICAL";
@@ -241,6 +243,9 @@ void listModule(const BytecodeModule& m, const std::string& path, std::string& o
                 break;
             case Op::PUSH_LOCAL:
             case Op::STORE_LOCAL:
+            case Op::RESET_LOCAL:
+            case Op::PUSH_SHARED_LOCAL:
+            case Op::STORE_SHARED_LOCAL:
                 withOperand(slotText(m, in.arg));
                 break;
             case Op::SEND_UNARY:
@@ -315,18 +320,15 @@ void listModule(const BytecodeModule& m, const std::string& path, std::string& o
                 if (in.arg < m.numDeoptEntries()) {
                     const auto& e = m.deoptEntry(in.arg);
                     std::string names;
-                    for (const auto& [nameConst, slot] : e.locals) {
-                        (void)slot;
-                        names += (names.empty() ? "" : " ") + nameAt(m, nameConst);
-                    }
+                    for (const auto& l : e.locals)
+                        names += (names.empty() ? "" : " ") + nameAt(m, l.nameConst)
+                               + (l.scope == BytecodeModule::DeoptLocal::kReadOnly
+                                      ? std::string("(copy)") : std::string());
                     withOperand("box " + slotText(m, e.boxSlot) + ": "
                                 + (names.empty() ? std::string("no locals") : names));
                 } else {
                     withOperand("<deopt entry out of range>");
                 }
-                break;
-            case Op::DEOPT_CHECK:
-                withOperand(in.arg ? "box must be open" : "none");
                 break;
             default:
                 // No operand (the compiler emits 0); show one only if set.

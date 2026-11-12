@@ -604,7 +604,7 @@ const proto::ProtoObject* prim_FloatParts(STRuntime& rt, proto::ProtoContext* ct
     pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
     const proto::ProtoObject* arr = rt.bootstrap().arrayProto->newChild(ctx, /*isMutable=*/true);
     TransientPin pinArr(ctx, arr);
-    arr->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__data__"), data->asObject(ctx));
+    arr->setAttribute(ctx, rt.bootstrap().sym.data, data->asObject(ctx));
     return arr;
 }
 

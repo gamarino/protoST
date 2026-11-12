@@ -201,11 +201,11 @@ TEST_CASE("T5-a: protoST consumes a module from a foreign UMD provider",
     g_currentForeignRuntime.store(&rt);
 
     // CONSUMER-SIDE GAP + FIX. protoST's constructor sets the resolution chain
-    // to just `["provider:st"]`. protoCore's getImportModule walks that chain;
+    // to just protoST's own provider (`["provider:<GUID>"]`, K1). protoCore's getImportModule walks that chain;
     // a `provider:` entry is looked up in the ProviderRegistry. A foreign
     // provider can be *registered* yet stay unreachable because its spec is
     // not in the chain. STRuntime::addModuleProviderToChain (added for T5-a)
-    // appends the foreign spec — AFTER `provider:st`, so a same-named protoST
+    // appends the foreign spec — AFTER protoST's own, so a same-named protoST
     // module still wins.
     rt.addModuleProviderToChain("provider:fake");
 
@@ -325,7 +325,7 @@ TEST_CASE("T5-a: protoST consumes a module from a foreign UMD provider",
 
 TEST_CASE("T5-a: protoST's own .st module import still resolves (regression)",
           "[interop][track5][t5a]") {
-    // The foreign provider is appended AFTER `provider:st`; protoST's own
+    // The foreign provider is appended AFTER protoST's own; protoST's own
     // module system must be unaffected.
     protoST::STRuntime rt;
     auto* ctx = rt.rootCtx();
@@ -345,7 +345,7 @@ TEST_CASE("T5-a: addModuleProviderToChain is idempotent",
           "[interop][track5][t5a]") {
     protoST::STRuntime rt;
     // Adding the same spec twice must not duplicate the chain entry; calling
-    // it must never disturb resolution of `provider:st`.
+    // it must never disturb resolution through protoST's own provider.
     rt.addModuleProviderToChain("provider:fake");
     rt.addModuleProviderToChain("provider:fake");
     auto* chainObj = rt.space()->getResolutionChain();

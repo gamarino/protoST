@@ -1,5 +1,6 @@
 #include <catch2/catch_all.hpp>
 #include "protoST/STRuntime.h"
+#include "runtime/Bootstrap.h"
 #include "debugger/DebuggerRuntime.h"
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
@@ -126,4 +127,65 @@ TEST_CASE("Debugger: single-step through inlined and:/or:, both guard paths", "[
     size_t count = 0; size_t pos = 0;
     while ((pos = out.str().find("(stdbg)", pos)) != std::string::npos) { ++count; ++pos; }
     REQUIRE(count >= 10);
+}
+
+TEST_CASE("Debugger: an inlined block's temporary is shown by its name inside the block",
+          "[debugger][vars]") {
+    // `[ | t | ... ]` of an inlined ifTrue: lives in a hidden slot of the
+    // enclosing frame (0.10.0); the variables view names it `t` over the
+    // block's code only.
+    protoST::Parser P("| n | n := 0. true ifTrue: [ | t | t := 5. n := t ]. n.");
+    protoST::Compiler C; auto bc = C.compileModule(*P.parseModule());
+    REQUIRE(!C.hasErrors());
+    protoST::STRuntime rt;
+    const protoST::BytecodeModule::ScopedLocal* t = nullptr;
+    for (const auto& sl : bc->scopedLocals())
+        if (sl.name == "t") t = &sl;
+    REQUIRE(t != nullptr);
+    protoST::DebugFrame f;
+    f.module = bc.get();
+    f.locals.assign(bc->localNames().size(), PROTO_NONE);
+    REQUIRE(t->slot < f.locals.size());
+    f.locals[t->slot] = proto::makeSmallInt(5);
+    auto valueOf = [&](size_t pc, const std::string& name) -> const proto::ProtoObject* {
+        f.pc = pc;
+        for (const auto& v : protoST::DebuggerRuntime::frameVariables(rt, rt.rootCtx(), f))
+            if (v.name == name) return v.value;
+        return nullptr;
+    };
+    REQUIRE(valueOf(t->fromPc, "t") == proto::makeSmallInt(5));
+    REQUIRE(valueOf(t->toPc, "t") == nullptr);
+}
+
+TEST_CASE("Debugger: a nil temporary does not show a captured variable of the same name",
+          "[debugger][vars]") {
+    // `t` of the method is captured by a block, so it lives in the captured
+    // dict; the inlined arm declares its own `t`, a hidden slot. At a halt
+    // inside the arm, before its first assignment, the arm's `t` is nil and
+    // must be shown as nil, not as the method's `t` (it showed 1).
+    protoST::Parser P("| t b | t := 1. b := [ t ]. true ifTrue: [ | t | t := 2 ]. b value.");
+    protoST::Compiler C; auto bc = C.compileModule(*P.parseModule());
+    REQUIRE(!C.hasErrors());
+    protoST::STRuntime rt;
+    proto::ProtoContext* ctx = rt.rootCtx();
+    const protoST::BytecodeModule::ScopedLocal* inner = nullptr;
+    for (const auto& sl : bc->scopedLocals())
+        if (sl.name == "t") inner = &sl;
+    REQUIRE(inner != nullptr);
+    auto* dict = const_cast<proto::ProtoObject*>(rt.bootstrap().objectProto->newChild(ctx, true));
+    dict->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "t"), proto::makeSmallInt(1));
+    protoST::DebugFrame f;
+    f.module = bc.get();
+    f.captured = dict;
+    f.locals.assign(bc->localNames().size(), PROTO_NONE);
+    auto valueOf = [&](size_t pc) -> const proto::ProtoObject* {
+        f.pc = pc;
+        for (const auto& v : protoST::DebuggerRuntime::frameVariables(rt, ctx, f))
+            if (v.name == "t") return v.value;
+        return nullptr;
+    };
+    // Inside the arm: the arm's own, still nil.
+    REQUIRE(valueOf(inner->fromPc) == PROTO_NONE);
+    // Outside it: the method's, from the captured dict.
+    REQUIRE(valueOf(inner->toPc) == proto::makeSmallInt(1));
 }

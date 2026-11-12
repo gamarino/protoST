@@ -240,12 +240,18 @@ Instance variables are never captured: they are attributes `_iv_<name>` of
 
 **Inlined blocks.** A literal block argument of `ifTrue:`, `ifFalse:`,
 `ifTrue:ifFalse:`, `ifFalse:ifTrue:`, `and:`, `or:`, `whileTrue:`,
-`whileFalse:` (zero arguments, no temporaries), `to:do:` (one argument, no
-temporaries, the argument not captured by an inner block), and `ifNil:`,
+`whileFalse:` (zero arguments), `to:do:` (one argument), and `ifNil:`,
 `ifNotNil:`, `ifNil:ifNotNil:`, `ifNotNil:ifNil:` (the nil arm without
-arguments, the non-nil arm with none or one that no inner block captures;
-0.10.0) is not a closure: its body is compiled into the enclosing code
-(`tryEmitInlinedControl`, examples 03, 05, 06, 19). The receiver of these
+arguments, the non-nil arm with none or one; 0.10.0) is not a closure: its
+body is compiled into the enclosing code (`tryEmitInlinedControl`, examples
+03, 05, 06, 19). The block may declare temporaries (0.10.0): each becomes a
+hidden slot of the enclosing frame (`__bt_<n>`, shown by the debugger under
+its own name over the block's code), and `PUSH_NIL`, `STORE_LOCAL` at the
+start of the body reset it on every entry, so every evaluation starts with
+its temporaries nil (`emitInlinedBlockBody`). When a block nested in the
+body captures an argument or a temporary of the block, the send keeps its
+real blocks: each evaluation then needs a binding of its own, which only a
+block activation's captured dictionary gives. The receiver of these
 sends is compiled as an ordinary expression: a block literal there is a real
 closure (only `whileTrue:` / `whileFalse:` inline their receiver block). `doYielding:` with a literal one-argument block is compiled to an
 explicit loop that sends `value:` to the block (example 15). Every other
@@ -262,46 +268,56 @@ with nothing inlined, and the literal is compiled as a sub-module whose
 name ends in `(not inlined)`. A Boolean receiver never runs this code.
 
 The copies need the enclosing code's variables, which the inlined body keeps
-in frame slots (only variables of real blocks are captured). They reach them
-through a **box**, a mutable captured dict made for the send:
+in frame slots (only variables of real blocks are captured). The receiver may
+keep a copy and evaluate it at any later time, on any thread, so the copies
+must *share* those variables with the frame, as real closures would, for as
+long as either lives:
 
-- `DEOPT_ENTER k` builds the box as a child of the frame's captured dict
-  (so captured variables resolve through it as usual) and copies into it
-  the frame slots that deopt entry `k` names, the locals the copies use
-  (`Scope::boxed`, recorded by `isCaptured` when a name resolves past the
-  copy's scope to an enclosing slot). The box goes to a frame slot,
-  `__deopt_box__`, one per frame.
+- `DEOPT_ENTER k` moves each temporary that the copies use (deopt entry `k`;
+  `Scope::boxed`, recorded by `isCaptured` when a name resolves past the
+  copy's scope to an enclosing slot) into a mutable **scope dictionary**, the
+  binding a real closure would have had. The method's (or block's) own
+  temporaries go into one dictionary per activation, kept in the hidden slot
+  `__deopt_scope__`; the temporaries of an inlined block with temporaries go
+  into one per entry of that block, in a hidden slot of its own. The
+  dictionaries are chained in lexical order, the outermost a child of the
+  frame's captured dict, so every name resolves to its innermost declaration
+  as the compiler resolved it. A scope's dictionary is created the first time
+  a conditional inside it de-optimises, with those of the scopes around it.
+  The frame slot then holds a **forward** (an immutable object naming the
+  dictionary and the variable), and the frame is marked
+  (`Frame::deoptForwarded`): from then on the accesses of such slots follow
+  forwards, so the frame and the copies read and write one variable. The
+  compiler knows which slots a conditional of the module may forward and,
+  once the module is complete, turns their `PUSH_LOCAL` / `STORE_LOCAL`
+  into `PUSH_SHARED_LOCAL` / `STORE_SHARED_LOCAL`
+  (`BytecodeModule::routeSharedLocals`), which test the mark; every other
+  local access tests nothing.
+  Arguments cannot be assigned: their values are copied. All of this goes
+  into the **box**, a child of the innermost dictionary that becomes the
+  copies' captured dict, stored in the frame slot `__deopt_box__`.
 - `PUSH_DEOPT_BLOCK n` pops the box and pushes a closure of sub-module `n`
   whose `__captured__` is the box. In the copy those variables are
   `PUSH_CAPTURED` / `STORE_CAPTURED`.
-- `DEOPT_EXIT k` copies the box's values back into the frame slots, then
-  closes the box.
+- `DEOPT_EXIT k` clears the box slot. Nothing is copied back: there is one
+  copy of each variable.
+- `RESET_LOCAL s`, at every entry of an inlined block with temporaries, sets
+  the block's slots to nil *without* following a forward (and its dictionary
+  slot, when it has one), so the next entry starts fresh variables while a
+  closure kept from the previous entry keeps the previous ones, as each
+  activation of a real block would have its own.
 
-While the send runs the frame executes nothing, so the box holds the only
-live copy of those variables and the closures see what real closures would:
-a write in a block is seen by the method afterwards, `^` returns from the
-method (the closure's home is the frame's home). If the send unwinds the
-frame (an exception, a non-local return) the box stays open, and it is again
-the only copy. Only a closure the receiver keeps and evaluates after the
-send returned would see stale values: a copy, or a block nested in one,
-that uses a boxed variable starts with `DEOPT_CHECK 1`, which signals an
-`Error` when its box is closed. One that uses none has `DEOPT_CHECK 0` and
-works at any time.
-
-Two limits follow, both recorded in STATUS (D53):
-
-- **Another thread.** `DEOPT_CHECK` guards only a block that *starts* after
-  the box closed. If the receiver hands a copy to another thread that runs it
-  while the send returns, `DEOPT_EXIT`'s copy-back races that thread: a write
-  made after the copy-back stays in the box and is lost to the method, and a
-  read sees the old value. Such a program is racy in any Smalltalk, but a
-  real closure's write would land. Nothing here is memory-unsafe: the box is
-  an ordinary protoCore mutable object.
-- **The debugger.** While the send is in progress, a debugger or DAP view of
-  the method's frame shows the frame slots of the boxed variables, which are
-  stale (the live values are in the box), and a value set from the debugger
-  in such a slot is overwritten by the copy-back. Reading and writing through
-  an open box from the frame inspector would fix it; it is not done.
+A write in a copy is seen by the method, during the send and after it; a
+write in the method is seen by a copy the receiver evaluates later; `^`
+returns from the method (the closure's home is the frame's home). The
+dictionaries are ordinary protoCore mutable objects, so a copy run by another
+thread is a closure like any other. A debugger or DAP view of the frame shows
+the values behind the forwards (`makeDebugFrame`). Programs whose
+conditionals always see Booleans never execute any of this; their only cost
+is the test of the frame mark in the accesses of shared slots.
+Until fix round 1 of 0.10.0 the box held copies that `DEOPT_EXIT` copied
+back, and a copy that used a frame variable signalled an `Error` when
+evaluated after the send returned (STATUS D53).
 
 ### 1.5 Calling conventions
 
@@ -451,7 +467,7 @@ another runtime's `ProtoSpace` (`STRuntime`'s `ownRootCtx`).
 
 ## 2. Opcode reference
 
-`Op` (`src/runtime/Opcodes.h`) has **56 values**: 1 to 58 except 7, 21 and
+`Op` (`src/runtime/Opcodes.h`) has **58 values**: 1 to 60 except 7, 21 and
 56, and `EXTEND` (254). The values 0, 7, 21, 56 and 255 are reserved: they
 were `NOP`, `PUSH_SUPER`, `DUP_RECEIVER`, `BIN_INT_REM` and `HALT`.
 `BIN_INT_REM` was dropped before 0.10.0 shipped because `rem:` is not one of
@@ -529,10 +545,12 @@ the attribute `_iv_v` of the class that declares it.
 | `ASSERT_LOOP_BOOL` | 38 | selector constant (wide) | `v -> b` | Leaves a Boolean in place. Any other value is replaced by `true` or `false`: a resumable `NonBooleanReceiver` is signalled with the value as its `object`, and the resumed value counts as true unless it is `false` (Pharo's rule; the loop primitives apply the same one). Named `ASSERT_BOOL_OR_DNU` until 0.10.0, when it sent `doesNotUnderstand:` of the loop selector to the value. | before the conditional jump of an inlined `whileTrue:` / `whileFalse:` (example 06) |
 | `JUMP_IF_NIL` | 50 | forward offset | `v -> v` | Peeks; jumps when the value is nil, which stays on the stack either way. | an inlined `ifNotNil:`, `ifNil:ifNotNil:`, `ifNotNil:ifNil:`, to the nil arm or the end (example 19) |
 | `JUMP_IF_NOT_NIL` | 51 | forward offset | `v -> v` | Peeks; jumps when the value is not nil, which stays on the stack either way. | an inlined `ifNil:`, over its arm: the receiver is the answer (example 19) |
-| `DEOPT_ENTER` | 46 | deopt entry (wide) | `->` | Builds the box of a de-optimised conditional: a mutable child of the frame's captured dict holding the frame locals the entry names; stores it in the entry's box slot. | first instruction of the out-of-line path of an inlined value conditional (examples 03, 05; section 1.4) |
+| `DEOPT_ENTER` | 46 | deopt entry (wide) | `->` | Moves the temporaries the entry names into their scope dictionaries (creating the missing ones) and leaves forwards in their slots; builds the box, a child of the innermost dictionary holding copies of the arguments the entry names; stores it in the entry's box slot. | first instruction of the out-of-line path of an inlined value conditional (examples 03, 05; section 1.4) |
 | `PUSH_DEOPT_BLOCK` | 47 | sub-module index (wide) | `box -> closure` | As `PUSH_BLOCK`, with the popped box as the closure's captured dict. | after `PUSH_LOCAL __deopt_box__`, once per block literal of the conditional |
-| `DEOPT_EXIT` | 48 | deopt entry (wide) | `->` | Copies the box's locals back to their frame slots, closes the box and clears the box slot. | after the `SEND_KEYWORD` of the out-of-line path |
-| `DEOPT_CHECK` | 49 | 1 or 0 | `->` | With 1, signals an `Error` when the box the closure resolves through is closed; with 0, nothing. | first instruction of a de-optimised copy and of every block nested in one |
+| `DEOPT_EXIT` | 48 | deopt entry (wide) | `->` | Clears the box slot. | after the `SEND_KEYWORD` of the out-of-line path |
+| `RESET_LOCAL` | 49 | slot | `->` | Stores nil in the slot without following a forward. | entry of an inlined block with temporaries, once per temporary (and its scope-dictionary slot) |
+| `PUSH_SHARED_LOCAL` | 59 | slot | `-> v` | As `PUSH_LOCAL`; when the frame holds forwards and the slot holds one, pushes the variable it names. | every read of a temporary that a de-optimised conditional of the module may share (section 1.4) |
+| `STORE_SHARED_LOCAL` | 60 | slot | `v ->` | As `STORE_LOCAL`; when the frame holds forwards and the slot holds one, writes the variable it names. | every write of such a temporary |
 
 ### 2.6 Sends and returns
 
@@ -784,18 +802,16 @@ module main.0: <block> (not inlined)
   constants:
     #0   string    'big'
   code:
-      0  DEOPT_CHECK        0     ; none
-      1  PUSH_CONST         0     ; 'big'
-      2  RETURN_TOP
+      0  PUSH_CONST         0     ; 'big'
+      1  RETURN_TOP
 
 module main.1: <block> (not inlined)
   args 0, locals 0, stack 48 (deepest 1)
   constants:
     #0   string    'small'
   code:
-      0  DEOPT_CHECK        0     ; none
-      1  PUSH_CONST         0     ; 'small'
-      2  RETURN_TOP
+      0  PUSH_CONST         0     ; 'small'
+      1  RETURN_TOP
 
 module main.2: <block> (not inlined)
   args 0, locals 0, stack 48 (deepest 1)
@@ -803,10 +819,9 @@ module main.2: <block> (not inlined)
     #0   string    'odd'
     #1   symbol    #printNl
   code:
-      0  DEOPT_CHECK        0     ; none
-      1  PUSH_CONST         0     ; 'odd'
-      2  SEND_UNARY         1     ; #printNl
-      3  RETURN_TOP
+      0  PUSH_CONST         0     ; 'odd'
+      1  SEND_UNARY         1     ; #printNl
+      2  RETURN_TOP
 'big'
 'odd'
 ```
@@ -822,15 +837,14 @@ module main.2: <block> (not inlined)
   `main.0` and `main.1`, copies of the two literals compiled without
   inlining, and `SEND_KEYWORD #ifTrue:ifFalse:` sends them to the
   receiver: its own method runs, or `doesNotUnderstand:` with the whole
-  Message. `DEOPT_EXIT` copies the box back and closes it; the answer is
-  the value of the expression (`JUMP` to `24`). Section 1.4 explains the
-  box.
+  Message. `DEOPT_EXIT` clears the box slot; the answer is the value of
+  the expression (`JUMP` to `24`). Section 1.4 explains the box.
 - `12`-`14`, `23`: false jumps to the else branch at `23`; the then branch
   jumps over the slow path and the else branch to `24`.
 - `26`-`39`: a one-armed `ifTrue:` answers nil when not taken, so the
   compiler adds `39 PUSH_NIL`, which the then branch jumps over.
-- The copies start with `DEOPT_CHECK 0`: they use no variable of the
-  enclosing code, so they need no check (section 1.4).
+- The copies use no variable of the enclosing code, so `DEOPT_ENTER` moves
+  nothing into a scope dictionary (section 1.4).
 
 ### Example 04: a class, a method and a send
 
@@ -1005,11 +1019,11 @@ module main.0: Math>>fib:
       5  PUSH_LOCAL         1     ; n
       6  RETURN
       7  JUMP               7     ; -> 15
-      8  DEOPT_ENTER        0     ; box __deopt_box__: n
+      8  DEOPT_ENTER        0     ; box __deopt_box__: n(copy)
       9  PUSH_LOCAL         2     ; __deopt_box__
      10  PUSH_DEOPT_BLOCK   0     ; main.0.0 ([] in Math>>fib: (not inlined))
      11  SEND_KEYWORD       2     ; #ifTrue:, 1 arg
-     12  DEOPT_EXIT         0     ; box __deopt_box__: n
+     12  DEOPT_EXIT         0     ; box __deopt_box__: n(copy)
      13  JUMP               1     ; -> 15
      14  PUSH_NIL
      15  POP
@@ -1032,10 +1046,9 @@ module main.0.0: [] in Math>>fib: (not inlined)
   constants:
     #0   symbol    #n
   code:
-      0  DEOPT_CHECK        1     ; box must be open
-      1  PUSH_CAPTURED      0     ; n
-      2  RETURN
-      3  RETURN_TOP
+      0  PUSH_CAPTURED      0     ; n
+      1  RETURN
+      2  RETURN_TOP
 55
 ```
 
@@ -1044,11 +1057,13 @@ module main.0.0: [] in Math>>fib: (not inlined)
   `7 JUMP` follows a `RETURN` and is unreachable; `14 PUSH_NIL` and `15 POP`
   complete the inlined `ifTrue:` as an expression statement.
 - `8`-`13` are the out-of-line path of a receiver that is not a Boolean
-  (example 03). The block uses `n`, a frame slot of the method, so the box
-  carries it: `DEOPT_ENTER` copies slot 1 into the box held in slot 2, the
-  copy `main.0.0` reads it with `PUSH_CAPTURED` and starts with an active
-  `DEOPT_CHECK`, and `DEOPT_EXIT` copies it back. In the copy, `^ n` is a
-  real non-local return from `fib:`.
+  (example 03). The block uses `n`, an argument of the method, so the box
+  carries a copy of it (`n(copy)`: an argument cannot be assigned, so a
+  copy is the same variable): `DEOPT_ENTER` copies slot 1 into the box held
+  in slot 2, the copy `main.0.0` reads it with `PUSH_CAPTURED`, and
+  `DEOPT_EXIT` clears slot 2. Had the block used a temporary of the method,
+  a slot `__deopt_scope__` would hold the dictionary it moves into. In the
+  copy, `^ n` is a real non-local return from `fib:`.
 - `16`-`25`: each recursive call is `PUSH_SELF`, the argument (`BIN_INT_SUB`)
   and `SEND_KEYWORD #fib:`. The send pushes a new frame on the same engine
   (no C++ recursion) and polls the safepoint at call entry.
@@ -1896,9 +1911,8 @@ module main.0: <block> (not inlined)
   constants:
     #0   string    'inlined'
   code:
-      0  DEOPT_CHECK        0     ; none
-      1  PUSH_CONST         0     ; 'inlined'
-      2  RETURN_TOP
+      0  PUSH_CONST         0     ; 'inlined'
+      1  RETURN_TOP
 
 module main.1: <block>
   args 0, locals 0, stack 48 (deepest 1)
@@ -2371,11 +2385,11 @@ module main.0.0: [] in Finder>>firstOver:in:
       5  PUSH_LOCAL         0     ; x
       6  RETURN
       7  JUMP               7     ; -> 15
-      8  DEOPT_ENTER        0     ; box __deopt_box__: x
+      8  DEOPT_ENTER        0     ; box __deopt_box__: x(copy)
       9  PUSH_LOCAL         1     ; __deopt_box__
      10  PUSH_DEOPT_BLOCK   0     ; main.0.0.0 ([] in Finder>>firstOver:in: (not inlined))
      11  SEND_KEYWORD       2     ; #ifTrue:, 1 arg
-     12  DEOPT_EXIT         0     ; box __deopt_box__: x
+     12  DEOPT_EXIT         0     ; box __deopt_box__: x(copy)
      13  JUMP               1     ; -> 15
      14  PUSH_NIL
      15  RETURN_TOP
@@ -2386,10 +2400,9 @@ module main.0.0.0: [] in Finder>>firstOver:in: (not inlined)
   constants:
     #0   symbol    #x
   code:
-      0  DEOPT_CHECK        1     ; box must be open
-      1  PUSH_CAPTURED      0     ; x
-      2  RETURN
-      3  RETURN_TOP
+      0  PUSH_CAPTURED      0     ; x
+      1  RETURN
+      2  RETURN_TOP
 4
 ```
 
