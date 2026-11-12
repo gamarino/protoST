@@ -11,7 +11,6 @@
 #include "NestingLimitUnwind.h"
 #include "ResumeSignal.h"
 #include "RetrySignal.h"
-#include "PassSignal.h"
 #include "ReadyStack.h"
 #include "TimerService.h"
 #include "BytecodeModule.h"
@@ -1378,10 +1377,6 @@ STRuntime::runTopLevelEntry(const BytecodeModule& m, proto::ProtoContext* ctx) {
         // always consumes the ResumeSignal for its own id.
         throw NativeError(
             "exception resume: no active signal to resume");
-    } catch (const PassSignal&) {
-        // EXC-b: a `pass` escaped its `signal` loop — a bug.
-        throw NativeError(
-            "exception pass: no active signal to pass");
     }
     std::rethrow_exception(foreignOriginal);
 }
@@ -2160,15 +2155,6 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                     TransientPin pinErr(ctx, err);
                     rejectFutureFromDrain(*this, ctx, msgFut, err);
                 }
-            } catch (const PassSignal&) {
-                SCHED_DIAG("drainOne RESUME STRAY exception-pass actor=" << actor);
-                setCurrentActor(nullptr);
-                if (msgFut && msgFut != PROTO_NONE) {
-                    auto* err = ctx->fromUTF8String(
-                        "exception pass: no active signal to pass");
-                    TransientPin pinErr(ctx, err);
-                    rejectFutureFromDrain(*this, ctx, msgFut, err);
-                }
             } catch (const proto::ProtoException& e) {
                 // An unhandled protoST exception, a module's error, another
                 // language's exception: the Future is rejected with its value.
@@ -2363,15 +2349,6 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             if (future) {
                 auto* err = ctx->fromUTF8String(
                     "exception resume: no active signal to resume");
-                TransientPin pinErr(ctx, err);
-                rejectFutureFromDrain(*this, ctx, future, err);
-            }
-        } catch (const PassSignal&) {
-            SCHED_DIAG("drainOne STRAY exception-pass actor=" << actor);
-            setCurrentActor(nullptr);
-            if (future) {
-                auto* err = ctx->fromUTF8String(
-                    "exception pass: no active signal to pass");
                 TransientPin pinErr(ctx, err);
                 rejectFutureFromDrain(*this, ctx, future, err);
             }
@@ -2965,9 +2942,24 @@ void STRuntime::loadKernel() {
         }
     }
     // From here on, classes are declared by user code (see __subclassNamed:).
-    if (auto* g = globals())
+    if (auto* g = globals()) {
         g->setAttribute(rootCtx(), proto::ProtoString::createSymbol(rootCtx(), "__kernel_loaded__"),
                         PROTO_TRUE);
+    }
+    // The kernel's Exception>>isResumable, before any user code can redefine
+    // it (Bootstrap::kernelIsResumable). Pinned in the live registry, the
+    // runtime's single GC root, for the runtime's whole lifetime: it stays
+    // reachable after a redefinition replaces it on Exception, and no user
+    // code can reach or unpin it. Without a registry (no root to pin it in)
+    // it is not captured, and resume: always sends isResumable.
+    Bootstrap& b = impl_->bootstrap;
+    const proto::ProtoObject* m = b.exceptionProto
+        ? b.exceptionProto->getAttribute(rootCtx(), b.sym.isResumable) : nullptr;
+    if (m && m != PROTO_NONE && impl_->liveRegistry) {
+        const_cast<proto::ProtoObject*>(impl_->liveRegistry)
+            ->setAttribute(rootCtx(), ptrRegistryKey(rootCtx(), m), m);
+        b.kernelIsResumable = m;
+    }
 }
 
 // F5-M1: Read, parse, compile, and execute a module file. Wraps the classes

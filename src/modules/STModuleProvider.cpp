@@ -235,7 +235,7 @@ STModuleProvider::loadForForeignCaller(STRuntime& rt, const std::string& logical
         failed = std::current_exception();
     } catch (...) {
         // protoST's control-flow unwinds (NonLocalReturn, UnwindToHandler,
-        // RetrySignal, ResumeSignal, PassSignal, FutureYield) are not
+        // RetrySignal, ResumeSignal, FutureYield) are not
         // std::exceptions and mean "resume protoST execution somewhere up the
         // protoST stack" — there is no such frame on a foreign importer's
         // stack, and letting one cross would unwind into a runtime that cannot

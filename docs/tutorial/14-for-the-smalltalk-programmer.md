@@ -278,25 +278,6 @@ accepted:
 It is reserved: using it is a compile error. Use the error traces
 (`at Class>>selector (file:line)`) and the debugger ([Chapter 12](12-tooling.md)).
 
-### `outer` is not implemented; it behaves as `pass` — D7
-
-This is a missing feature, not a design choice. In Pharo, when the outer
-handler resumes the exception, `outer` answers the resumption value *inside
-the inner handler*, which then continues. In protoST `outer` does what `pass`
-does: the resumption continues the protected block at the `signal`, and the
-rest of the inner handler never runs. For example,
-
-```smalltalk
-[[Warning signal: 'w'. 'body']
-    on: Warning do: [:e | e outer printNl. 'inner continued']]
-  on: Warning do: [:e | e resume: 5]     "protoST => 'body'"
-```
-
-in Pharo prints `5` and answers `'inner continued'`; protoST prints nothing
-and answers `'body'`. When the outer handler returns instead of resuming
-(`return:`, or falling off its end), both answer the same. `pass`, `retry`,
-`retryUsing:`, `resume:`, `return:` and `signal` behave as in Pharo.
-
 ### An actor that waits is not re-entrant — D37
 
 While an actor's method is parked on `wait`, that actor processes no other
@@ -382,6 +363,19 @@ If you read older protoST material, these are now as in Pharo:
 - The compiler reports, as Pharo does: an undeclared variable in a method,
   assignment to an argument or to `self`, a duplicated or redeclared instance
   variable.
+- `outer` is Pharo's `outer` (since 0.10.0; until then it behaved as `pass`,
+  D7): when the enclosing handler resumes, `outer` answers the resumption
+  value inside the inner handler, which continues. `pass` runs the enclosing
+  handler on top of the inner one, as in Pharo, so the inner handler's
+  `ensure:` blocks run after it.
+
+  ```smalltalk
+  [[Warning signal: 'w'. 'body']
+      on: Warning do: [:e | e outer printNl. 'inner continued']]
+    on: Warning do: [:e | e resume: 5]     "=> 'inner continued'"
+  ```
+
+  prints `5` and answers `'inner continued'`.
 
 ## 14.6 Protocol you can rely on
 
@@ -542,14 +536,13 @@ For full grammar, see `LANGUAGE.md` §3.5.1 and §3.3.
   actor that waits is not re-entrant (D37); bounded recursion depth (D38); single
   runtime per process (D2); `addBehavior:` affects future instances only
   (D21).
-- **Not implemented:** `thisContext` is reserved (D17); `outer` behaves as
-  `pass` (D7); the classes and syntax listed in "Classes and syntax not
-  present" (§14.4).
+- **Not implemented:** `thisContext` is reserved (D17); the classes and
+  syntax listed in "Classes and syntax not present" (§14.4).
 - **As in Pharo since 0.4.0 (§14.5):** `new` sends `initialize`; `Transcript`;
   `Character`; exact `Fraction` division with floored `//` and `\\`; class
   variables and class-instance variables; `doesNotUnderstand:` overrides;
   per-activation block variables; exceptions that keep their class; top-level
-  `| temps |`.
+  `| temps |`; and, since 0.10.0, `outer`.
 - **Unchanged:** the syntax, the message model, blocks and closures, non-local
   return, the exception protocol, the collection protocol, `super`.
 - `docs/STATUS.md` is the live, build-verified tracker — consult it when in

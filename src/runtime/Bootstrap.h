@@ -128,6 +128,16 @@ struct Bootstrap {
     const proto::ProtoObject* classProto                  = nullptr;
     const proto::ProtoObject* metaclassProto              = nullptr;
 
+    // The kernel's own Exception>>isResumable method object, captured once
+    // when the kernel has loaded (STRuntime::loadKernel) and pinned in the
+    // runtime's live registry for the runtime's lifetime (its single GC
+    // root), so its address is never reused after a redefinition replaces
+    // it on Exception. resume: and the default action read the class marker directly
+    // when an exception's isResumable lookup finds this very method, and send
+    // the method otherwise (an override, or a redefinition of the kernel
+    // method). nullptr when no kernel is loaded: always send.
+    const proto::ProtoObject* kernelIsResumable           = nullptr;
+
     // Pre-interned hot-path attribute symbols.
     //
     // Interning is idempotent — the same content always yields the same
@@ -212,6 +222,8 @@ struct Bootstrap {
         const proto::ProtoString* priority        = nullptr;  // __priority__   (on actor: 0=high, 1=medium, 2=low)
         // The backing ProtoList of an Array (read by ByteArray withAll:).
         const proto::ProtoString* data            = nullptr;  // __data__
+        // The selector resume: and the default action look up (D54).
+        const proto::ProtoString* isResumable     = nullptr;  // isResumable
     } sym;
 };
 

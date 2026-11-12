@@ -2198,7 +2198,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // from a bad selector / arity / arithmetic, or any UMD-native
                 // throw) becomes a catchable protoST Error. The control-flow
                 // siblings (NonLocalReturn / UnwindToHandler / RetrySignal /
-                // ResumeSignal / PassSignal / FutureYield) and DebuggerHalt /
+                // ResumeSignal / FutureYield) and DebuggerHalt /
                 // UnhandledSTException are re-thrown untouched by the wrapper,
                 // so primitives that raise them on purpose are unaffected.
                 auto* result = translateNativeException(

@@ -477,10 +477,7 @@ bool DebuggerRuntime::evaluateValue(STRuntime& rt, proto::ProtoContext* ctx,
     // exception the expression raises must not be caught by an on:do: of the
     // program, which would unwind the program's own frames from inside the
     // debugger. Restored on every exit.
-    struct HideHandlers {
-        std::vector<proto::proto_ulong> ids = handlerStackDisableAll();
-        ~HideHandlers() { handlerStackRestore(ids); }
-    } hidden;
+    HandlerBarrier hidden;
 
     // The frame's named variables (and the extra bindings, which shadow a
     // variable of the same name), bound by value as the parameters of a block

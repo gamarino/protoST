@@ -98,4 +98,37 @@ std::vector<proto::proto_ulong> handlerStackDisableFrom(proto::proto_ulong targe
 std::vector<proto::proto_ulong> handlerStackDisableAll();
 void handlerStackRestore(const std::vector<proto::proto_ulong>& disabledIds);
 
+// Hide every handler block now running on this thread from the handler
+// actions (`resume:`, `return:`, `retry`, `pass`, `outer` find their handler
+// on the thread's active-signal stack, exception_prims.cpp): code run while
+// they are hidden sees none of them, as it sees none of the disabled handler
+// entries. Returns the previous floor, which activeSignalsRestore takes back.
+// Strictly nested, like the code they bracket.
+std::size_t activeSignalsHide();
+void activeSignalsRestore(std::size_t previousFloor);
+
+// A barrier between the code that runs inside it and the protoST code on the
+// C++ stack below it: the handlers below are disabled and their running
+// handler blocks hidden for the barrier's lifetime, and restored on every
+// exit. Used where code that does not belong to the activation below runs on
+// its thread: another actor's message while this one waits (waitHelping), a
+// send from a foreign runtime's frame, a debugger evaluation.
+class HandlerBarrier {
+public:
+    HandlerBarrier()
+        : disabled_(handlerStackDisableAll()), activeFloor_(activeSignalsHide()) {}
+    ~HandlerBarrier() {
+        activeSignalsRestore(activeFloor_);
+        handlerStackRestore(disabled_);
+    }
+    // True when there was a handler below to hide.
+    bool hidOuterHandlers() const { return !disabled_.empty(); }
+    HandlerBarrier(const HandlerBarrier&) = delete;
+    HandlerBarrier& operator=(const HandlerBarrier&) = delete;
+
+private:
+    std::vector<proto::proto_ulong> disabled_;
+    std::size_t activeFloor_;
+};
+
 } // namespace protoST

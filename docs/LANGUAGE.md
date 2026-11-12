@@ -484,6 +484,13 @@ So a method is written without blank lines between its statements, and
 top-level code after a method starts at column 1. A method with no `^`
 returns `self`.
 
+Selectors and attribute names that begin with two underscores (`__isResumable`,
+`__class_name__`, `__hashMix:`) are private to the runtime: the kernel and the
+primitives use them, and the runtime may read the state behind them without a
+send. Defining or overriding a method with such a selector is unsupported, and
+its effect is unspecified. Override the public selector instead (for example
+`isResumable`, not `__isResumable`; see §8.6).
+
 ### 3.4 Statements
 
 ```
@@ -1501,11 +1508,12 @@ What the handler does determines whether — and how far — to unwind:
 |--------|--------|
 | handler falls off its end | `on:do:` yields the handler block's last value; the protected computation after the `signal` is abandoned. |
 | `ex return: v` | `on:do:` yields `v`; the protected computation is abandoned. |
-| `ex resume: v` | `signal` *returns* `v`; the protected computation **continues** from the `signal` point. Only valid for a resumable exception. |
+| `ex resume: v` | `signal` *returns* `v`; the protected computation **continues** from the `signal` point. Only valid for a resumable exception: otherwise it signals `IllegalResumeAttempt` in the handler (§8.6). |
 | `ex resume` | as `resume: nil`. |
 | `ex retry` | the protected block is re-evaluated from the start. |
-| `ex pass` | the handler search resumes *outward* — the next matching enclosing handler is tried; if none, the default action runs. |
-| `ex outer` | not implemented: behaves as `pass`. In Pharo, when the outer handler resumes, `outer` answers the resumption value inside the inner handler, which continues; in protoST the protected computation continues at the `signal` instead (D7, see [§14](#14-known-deviations)). |
+| `ex retryUsing: aBlock` | `aBlock` becomes the protected block of the handler's `on:do:` and is evaluated in its place, under the same handlers (a later `retry` evaluates `aBlock` again), as in Pharo. |
+| `ex pass` | yield to the enclosing handler, as if this one had not handled the exception: the next matching enclosing handler runs (if none, the default action). A resumption **resumes the `signal`**; any other outcome unwinds through this handler. `pass` never answers. |
+| `ex outer` | evaluate the enclosing handler (or, with none, the default action) and, if it resumes, **answer the resumption value here**, inside this handler, which continues. If it returns, retries or unwinds, the unwind passes through this handler and `outer` does not answer. For a non-resumable exception `outer` is `pass`. |
 
 ```smalltalk
 "resume: — continue past the signal"
@@ -1518,6 +1526,53 @@ What the handler does determines whether — and how far — to unwind:
   on: Error
   do: [ :ex | ex retry ].
 ```
+
+`outer` and `pass` run the enclosing handler *in place*, on top of the handler
+that sends them, as Pharo does (`Exception>>outer`, `pass` and
+`resumeUnchecked:`). They differ in where a resumption goes: under `outer` it
+answers the value inside the handler, which continues; under `pass` it resumes
+the `signal`. Under either, the enclosing handler's `return:`, `retry` or
+falling off its end unwinds through the handler that sent it, so that
+handler's `ensure:` blocks run after the enclosing handler, not before.
+
+```smalltalk
+"outer — ask the enclosing handler, then continue here"
+[ [ Warning signal: 'w'. 'body' ]
+    on: Warning
+    do: [ :ex | (ex outer + 1) printString , ' from the inner handler' ] ]
+  on: Warning
+  do: [ :ex | ex resume: 41 ].           "=> '42 from the inner handler'"
+```
+
+```smalltalk
+"pass — the enclosing handler's resumption resumes the signal"
+[ [ (Warning signal: 'w') + 1 ]
+    on: Warning
+    do: [ :ex | ex pass. 'never reached' ] ]
+  on: Warning
+  do: [ :ex | ex resume: 41 ].           "=> 42"
+```
+
+With no enclosing handler, `outer` answers the default action's value for a
+resumable exception (`nil` for an unhandled `Warning`, after its text is
+printed; §8.2), and for an `Error` the default action ends the activation,
+as for any unhandled `Error`. Handlers belong to the thread that runs the
+code (§10), so the search never crosses an actor message: inside an actor
+method `outer` sees only the handlers of that method's activation, and an
+`Error` it does not handle rejects the message's Future, which `wait`
+re-signals in the caller. The same holds when a waiting actor's thread runs
+another actor's message meanwhile: that message sees neither the waiting
+actor's handlers nor the handler blocks it is running, so an exception the
+two share has no active handler there.
+
+Because the enclosing handler runs on top of the one that sends `pass` or
+`outer`, a chain of handlers that each pass outward uses one nested engine
+per handler on top of the signalling stack, as Pharo's context stack does.
+Such a chain reaches the engine nesting limit (D38) at about half the depth
+of a plain recursion: about 500 levels of handlers that pass a resumed
+`Warning` (995 before 0.10.0, when `pass` unwound first). The limit is the
+usual catchable `Error`, delivered once to the handler that could not
+start.
 
 ### 8.5 `ensure:` and `ifCurtailed:`
 
@@ -1534,10 +1589,18 @@ What the handler does determines whether — and how far — to unwind:
 
 ### 8.6 Resumability
 
-Resumability is a class-derived property, answered by `isResumable`:
-`Exception`, `Warning` and `ZeroDivide` are resumable, `Error` and its other
-subclasses are not. A `resume:` on a non-resumable exception is itself an
-error. An exception translated from a native C++ exception (see [§8.7]) is
+Resumability is answered by `isResumable`: `Exception`, `Warning` and
+`ZeroDivide` are resumable, `Error` and its other subclasses are not, and a
+class may override `isResumable` (`MyException >> isResumable ^ false`, the
+ANSI way to declare a non-resumable exception); `resume:` and the default
+action ask the method, so the override is honoured. A `resume:` on a
+non-resumable exception signals `IllegalResumeAttempt` inside the handler
+that tried it, as in Pharo; like Pharo's it is an `Exception`, not an
+`Error` (catch it with `on: IllegalResumeAttempt do:` or `on: Exception
+do:`), it is itself not resumable, and unhandled it ends the activation with
+`cannot resume a non-resumable exception`. The default action of an
+unhandled exception that is not resumable ends the activation, as an
+`Error`'s does. An exception translated from a native C++ exception (see [§8.7]) is
 forced non-resumable, because the native stack between its origin and the
 catch is already gone, and so is a foreign exception (a module's error type,
 another language's exception). An error protoCore raises keeps its class's
@@ -1956,6 +2019,13 @@ f := actor compute.
 f thenDo: [ :result | Transcript show: result printString ].
 v := f wait.                 "v is the resolved value"
 ```
+
+A `thenDo:` / `catch:` callback may run in the code that settles the future
+(`resolve:`) or registers on a settled one, but it does not run under that
+code's handlers: an error it signals is not caught by the settler's
+`on:do:`, and it cannot `resume:`, `return:`, `pass` or `outer` an exception
+the settler is handling. What escapes a callback is reported on stderr
+(`error in a Future callback: ...`) and the next callback runs.
 
 Deadlines (`after:`, `within:`, `waitWithin:`) are measured in milliseconds on
 the monotonic clock; `ms` is a non-negative `SmallInteger`, anything else
@@ -2464,8 +2534,9 @@ A shared mutable cell with optimistic-concurrency compare-and-swap — see
 | `return:` | handler action — yield a value from `on:do:` |
 | `resume`, `resume:` | handler action — resume the protected computation |
 | `retry` | handler action — re-run the protected block |
-| `retryUsing:` | handler action — replace the protected block with the argument and run it |
-| `pass`, `outer` | handler action — continue the handler search outward (`outer` is not implemented and behaves as `pass`, D7) |
+| `retryUsing:` | handler action — make the argument the protected block and run it under the same handlers (§8.4) |
+| `pass` | handler action — yield to the enclosing handler; its resumption resumes the `signal` (§8.4) |
+| `outer` | handler action — evaluate the enclosing handler; its resumption is answered here (§8.4) |
 | `description` | the message text, or the class name when there is none |
 | `isResumable` | whether `resume:` is allowed (§8.6) |
 | `,` | an `ExceptionSet`: `on: ZeroDivide, KeyNotFound do: […]` |
@@ -3236,7 +3307,7 @@ commits. Summary as of 0.4.0, updated for changes merged since:
   is not re-entrant (D37); recursion depth is bounded with a catchable error
   (D38); one runtime per process (D2); `addBehavior:` reaches future
   instances only (D21).
-- **Not implemented:** `outer` behaves as `pass` (D7); `thisContext` is reserved: using it is a compile error (D17); the
+- **Not implemented:** `thisContext` is reserved: using it is a compile error (D17); the
   metaclass hierarchy is thin (`x class class` works; there is no
   `Metaclass`/`ClassDescription` protocol beyond the reflective messages of
   §14 of the tutorial).

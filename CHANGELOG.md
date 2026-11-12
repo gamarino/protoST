@@ -118,6 +118,79 @@ minor release, so the two services arrive in 0.5.0.
 
 ### Fixed
 
+- **`Exception >> outer` is Pharo's `outer` (D7).** It behaved as `pass`:
+  when the enclosing handler resumed, the protected block continued at the
+  `signal` and the inner handler never continued. `outer` now evaluates the
+  enclosing handler in place, on top of the handler that sends it; if that
+  handler resumes, `outer` answers the resumption value inside the inner
+  handler, which continues: `[[Warning signal: 'w'. 'body'] on: Warning do:
+  [:e | e outer printNl. 'inner continued']] on: Warning do: [:e | e resume:
+  5]` prints `5` and answers `'inner continued'` (it answered `'body'`). If
+  the enclosing handler returns, retries or falls off its end, the unwind
+  passes through the inner handler. With no enclosing handler a resumable
+  exception's default action value is answered (`nil` for a `Warning`); an
+  `Error`'s default action ends the activation. For a non-resumable
+  exception `outer` is `pass`, as ANSI states. The pattern of protoBaseST's
+  `newTransactionDo:` (a catch-all handler that sets a flag, asks `outer`,
+  clears it and resumes) now leaves the flag set only when the enclosing
+  handler unwinds. Handlers stay per thread: `outer` never crosses an actor
+  message. LANGUAGE.md §8.4; tutorial §14.5. Tests: 15 new programs in
+  `08-exceptions/` (`outer-*.st`, `pass-runs-enclosing-handler-before-
+  unwinding.st`, `nesting-limit-in-outer-resuming-chain.st`).
+- **`pass` runs the enclosing handler before unwinding the passing one**, as
+  Pharo's `Exception>>pass` does. It unwound the passing handler first, so
+  that handler's `ensure:` blocks ran before the enclosing handler instead of
+  after it. A resumption still resumes the `signal`, or the `outer` an inner
+  handler is waiting in (Pharo's `outerContext`).
+- **A class's `isResumable` override is honoured (D54); `resume:` of a
+  non-resumable exception signals `IllegalResumeAttempt`.** `resume:` and
+  the default action read only the class-derived marker, so
+  `MyException >> isResumable ^ false` (the ANSI / Pharo way to declare a
+  non-resumable exception) answered false and could still be resumed, and an
+  unhandled one resumed with nil. Both now ask the method. A `resume:` that
+  is not allowed signals the new kernel class `IllegalResumeAttempt` inside
+  the handler, as Pharo does: an `Exception` (not an `Error`), itself not
+  resumable, with the text it always had (`cannot resume a non-resumable
+  exception`). Through `outer`, an enclosing handler's illegal `resume:` now
+  unwinds through the inner handler instead of answering it (protoBaseST's
+  `newTransactionDo:` aborts). Tests:
+  `08-exceptions/resume-honours-isresumable-override.st`,
+  `unhandled-non-resumable-user-exception-aborts.st`; the umd tests catch
+  `IllegalResumeAttempt`.
+- **`retryUsing:` is Pharo's (D55).** It evaluated the replacement block
+  inside the handler, with the handler disabled, and returned its value from
+  the `on:do:`, so an exception the replacement signalled went to an
+  enclosing handler. The replacement now becomes the protected block of the
+  handler's `on:do:` and runs under the same handlers
+  (`handlerContext restartWithNewReceiver:`); a later `retry` runs it again.
+  Test: `08-exceptions/retry-using-replaces-protected-block.st`.
+- **Another actor's message run while an actor waits no longer sees the
+  waiting actor's running handlers (S36).** While a waiting actor's thread
+  ran another actor's message (`wait` nested in a block), the handler stack
+  was disabled but the stack of running handler blocks was not: `resume:`,
+  `outer` or `pass` of an exception instance the two actors shared resolved
+  to the waiting actor's handler, and the stray resumption rejected the
+  helped message's Future with `exception resume: no active signal to
+  resume`. One barrier (`HandlerBarrier`, `HandlerStack.h`) now hides both
+  for that turn, for a send from a foreign runtime's frame and for a
+  debugger evaluation. Test: `cli_helped_message_handler_actions` (one
+  worker, so the interleaving is deterministic; in the `tsan` label).
+- **A `thenDo:` / `catch:` callback no longer runs under the handlers of the
+  code that settles the future (S36).** `resolve:` inside a protected block
+  ran the callbacks at once with the settler's handlers visible: the
+  settler's `on: Error` handler caught the callback's error, and its
+  `return:` was then dropped, so a handler took effect without its unwind; a
+  callback's `resume:` of the settler's exception reached the settler's
+  running handler. Callbacks now run behind the same `HandlerBarrier`; their
+  errors are reported on stderr as callback errors. Tests:
+  `cli_future_callback_barrier`,
+  `10-actors/future-callback-not-caught-by-settler-handler.st`.
+- **The debugger's Uncaught Exceptions breakpoint honours an `isResumable`
+  override (D54).** An unhandled non-`Error` exception whose class answers
+  false to `isResumable` ends the activation but did not stop; the
+  classification now sends `isResumable` in that case. Test:
+  `cli_dap_exceptions` (case `uncaught3`).
+
 - **`Array new:` with a size the heap can never take signals an Error
   (reviews R3-2, R4-1, R5-1, R6-1, R7-1).** `Array new: 3000000000` (a typo,
   say) built an 8n-byte vector and then the list, and ended in protoCore's
@@ -466,6 +539,31 @@ minor release, so the two services arrive in 0.5.0.
 
 ### Breaking changes
 
+- **`outer` no longer behaves as `pass`** (see *Fixed*): a program whose
+  enclosing handler resumes now continues in the inner handler after
+  `outer`, not at the `signal`. `[[(Warning signal: 'w') + 1] on: Warning do:
+  [:e | e outer]] on: Warning do: [:e | e resume: 4]` answers 4 (it answered
+  5). Code that wanted the old effect sends `pass`.
+- **`pass` runs the enclosing handler before unwinding the passing one**
+  (see *Fixed*): the passing handler's `ensure:` and `ifCurtailed:` blocks
+  now run after the enclosing handler, not before it.
+- **A chain of handlers that pass or `outer` outward reaches the engine
+  nesting limit at about half the former depth.** Each enclosing handler
+  now runs on top of the one that passes (Pharo nests contexts the same
+  way). Measured on a Release build, a chain of `Warning` handlers that each
+  pass (or `outer`) to a resuming outermost handler completes up to 497
+  levels; f799ab9 completed 995. Past that the limit's catchable `Error`
+  arrives once, at the handler that could not start (S23); `Error` chains
+  still complete, because the limit `Error` goes to the next `on: Error`
+  handler. LANGUAGE.md §8.4.
+- **`resume:` of a non-resumable exception signals `IllegalResumeAttempt`,
+  which is not an `Error`.** It raised a plain `Error`, so `on: Error do:`
+  caught it; catch it with `on: IllegalResumeAttempt do:` or `on: Exception
+  do:`. Unhandled, it still ends the program with `cannot resume a
+  non-resumable exception`.
+- **A class's `isResumable` override decides resumability**, and
+  **`retryUsing:` runs the replacement under the same handler** (see
+  *Fixed*, D54 and D55).
 - **MessagePack nesting depth is 1024 (was 512)**, encode and decode, from
   protoIO 0.5.0's default: msgpack-python 1.2's unpacker limit and the record
   depth ProtoBase format 4 requires every reader to accept since ProtoBase
