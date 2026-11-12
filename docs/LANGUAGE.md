@@ -1501,9 +1501,10 @@ What the handler does determines whether — and how far — to unwind:
 |--------|--------|
 | handler falls off its end | `on:do:` yields the handler block's last value; the protected computation after the `signal` is abandoned. |
 | `ex return: v` | `on:do:` yields `v`; the protected computation is abandoned. |
-| `ex resume: v` | `signal` *returns* `v`; the protected computation **continues** from the `signal` point. Only valid for a resumable exception. |
+| `ex resume: v` | `signal` *returns* `v`; the protected computation **continues** from the `signal` point. Only valid for a resumable exception: otherwise it signals `IllegalResumeAttempt` in the handler (§8.6). |
 | `ex resume` | as `resume: nil`. |
 | `ex retry` | the protected block is re-evaluated from the start. |
+| `ex retryUsing: aBlock` | `aBlock` becomes the protected block of the handler's `on:do:` and is evaluated in its place, under the same handlers (a later `retry` evaluates `aBlock` again), as in Pharo. |
 | `ex pass` | yield to the enclosing handler, as if this one had not handled the exception: the next matching enclosing handler runs (if none, the default action). A resumption **resumes the `signal`**; any other outcome unwinds through this handler. `pass` never answers. |
 | `ex outer` | evaluate the enclosing handler (or, with none, the default action) and, if it resumes, **answer the resumption value here**, inside this handler, which continues. If it returns, retries or unwinds, the unwind passes through this handler and `outer` does not answer. For a non-resumable exception `outer` is `pass`. |
 
@@ -1552,7 +1553,19 @@ as for any unhandled `Error`. Handlers belong to the thread that runs the
 code (§10), so the search never crosses an actor message: inside an actor
 method `outer` sees only the handlers of that method's activation, and an
 `Error` it does not handle rejects the message's Future, which `wait`
-re-signals in the caller.
+re-signals in the caller. The same holds when a waiting actor's thread runs
+another actor's message meanwhile: that message sees neither the waiting
+actor's handlers nor the handler blocks it is running, so an exception the
+two share has no active handler there.
+
+Because the enclosing handler runs on top of the one that sends `pass` or
+`outer`, a chain of handlers that each pass outward uses one nested engine
+per handler on top of the signalling stack, as Pharo's context stack does.
+Such a chain reaches the engine nesting limit (D38) at about half the depth
+of a plain recursion: about 500 levels of handlers that pass a resumed
+`Warning` (995 before 0.10.0, when `pass` unwound first). The limit is the
+usual catchable `Error`, delivered once to the handler that could not
+start.
 
 ### 8.5 `ensure:` and `ifCurtailed:`
 
@@ -1569,10 +1582,18 @@ re-signals in the caller.
 
 ### 8.6 Resumability
 
-Resumability is a class-derived property, answered by `isResumable`:
-`Exception`, `Warning` and `ZeroDivide` are resumable, `Error` and its other
-subclasses are not. A `resume:` on a non-resumable exception is itself an
-error. An exception translated from a native C++ exception (see [§8.7]) is
+Resumability is answered by `isResumable`: `Exception`, `Warning` and
+`ZeroDivide` are resumable, `Error` and its other subclasses are not, and a
+class may override `isResumable` (`MyException >> isResumable ^ false`, the
+ANSI way to declare a non-resumable exception); `resume:` and the default
+action ask the method, so the override is honoured. A `resume:` on a
+non-resumable exception signals `IllegalResumeAttempt` inside the handler
+that tried it, as in Pharo; like Pharo's it is an `Exception`, not an
+`Error` (catch it with `on: IllegalResumeAttempt do:` or `on: Exception
+do:`), it is itself not resumable, and unhandled it ends the activation with
+`cannot resume a non-resumable exception`. The default action of an
+unhandled exception that is not resumable ends the activation, as an
+`Error`'s does. An exception translated from a native C++ exception (see [§8.7]) is
 forced non-resumable, because the native stack between its origin and the
 catch is already gone, and so is a foreign exception (a module's error type,
 another language's exception). An error protoCore raises keeps its class's
@@ -2499,7 +2520,7 @@ A shared mutable cell with optimistic-concurrency compare-and-swap — see
 | `return:` | handler action — yield a value from `on:do:` |
 | `resume`, `resume:` | handler action — resume the protected computation |
 | `retry` | handler action — re-run the protected block |
-| `retryUsing:` | handler action — replace the protected block with the argument and run it |
+| `retryUsing:` | handler action — make the argument the protected block and run it under the same handlers (§8.4) |
 | `pass` | handler action — yield to the enclosing handler; its resumption resumes the `signal` (§8.4) |
 | `outer` | handler action — evaluate the enclosing handler; its resumption is answered here (§8.4) |
 | `description` | the message text, or the class name when there is none |
