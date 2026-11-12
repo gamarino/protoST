@@ -4,6 +4,7 @@
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
 #include "primitives/ArgSupport.h"
+#include "runtime/BlockCode.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/BytecodeModule.h"
 #include "runtime/TransientPin.h"
@@ -211,10 +212,9 @@ namespace {
 void stampDefiningClass(STRuntime& rt, proto::ProtoContext* ctx,
                         const proto::ProtoObject* cls,
                         const proto::ProtoObject* methodObj) {
-    const proto::ProtoObject* bcPtrObj =
-        methodObj->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr);
-    if (!bcPtrObj || bcPtrObj == PROTO_NONE || !bcPtrObj->isInteger(ctx))
-        return;
+    const BytecodeModule* code =
+        blockCodeOf(ctx, methodObj->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr));
+    if (!code) return;
     static std::atomic<std::int64_t> nextClassId{1};
     const proto::ProtoString* idKey = rt.bootstrap().sym.classId;
     std::int64_t id = 0;
@@ -225,8 +225,7 @@ void stampDefiningClass(STRuntime& rt, proto::ProtoContext* ctx,
         id = nextClassId.fetch_add(1, std::memory_order_relaxed);
         cls->setAttribute(ctx, idKey, ctx->fromLong(id));
     }
-    reinterpret_cast<const BytecodeModule*>(bcPtrObj->asLong(ctx))
-        ->setDefiningClassId(id);
+    code->setDefiningClassId(id);
 }
 } // namespace
 
@@ -786,10 +785,8 @@ const proto::ProtoObject* sendDynamicFrom(STRuntime& rt, proto::ProtoContext* ct
     const proto::ProtoObject* method =
         lookupRoot ? lookupRoot->getAttribute(ctx, selector) : nullptr;
     if (!method || method == PROTO_NONE) return nullptr;
-    const proto::ProtoObject* bcPtrObj = method->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr);
-    if (bcPtrObj && bcPtrObj != PROTO_NONE && bcPtrObj->isInteger(ctx)) {
-        const BytecodeModule* sub =
-            reinterpret_cast<const BytecodeModule*>(bcPtrObj->asLong(ctx));
+    if (const BytecodeModule* sub =
+            blockCodeOf(ctx, method->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr))) {
         if (sub->argCount() != argc + 1)
             throw NativeError("wrong number of arguments for "
                                      + selector->toStdString(ctx));
@@ -816,7 +813,7 @@ const proto::ProtoObject* sendDynamicFrom(STRuntime& rt, proto::ProtoContext* ct
         // A primitive, or another runtime's exported method.
         const proto::ProtoArguments positional(args, static_cast<unsigned>(argc));
         if (understood) *understood = true;
-        return native(ctx, recv ? recv : PROTO_NONE, nullptr, &positional, nullptr);
+        return callMethodCell(native, ctx, recv ? recv : PROTO_NONE, &positional, nullptr);
     }
     return nullptr;
 }
@@ -881,8 +878,8 @@ const proto::ProtoObject* prim_Object_respondsTo(STRuntime& rt, proto::ProtoCont
     // metaclass, D52).
     const proto::ProtoObject* m = methodHolder(rt.bootstrap(), ctx, r)->getAttribute(ctx, sel);
     if (!m || m == PROTO_NONE) return PROTO_FALSE;
-    const proto::ProtoObject* bc = m->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr);
-    if (bc && bc != PROTO_NONE) return PROTO_TRUE;
+    if (blockCodeOf(ctx, m->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr)))
+        return PROTO_TRUE;
     return m->isMethod(ctx) ? PROTO_TRUE : PROTO_FALSE;
 }
 
@@ -1358,8 +1355,7 @@ bool isMethodValue(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoOb
     if (!v || v == PROTO_NONE) return false;
     if (v->isMethod(ctx)) return true;   // a primitive, or an exported native method
     if (v->isInteger(ctx) || v->asString(ctx)) return false;
-    const proto::ProtoObject* bc = v->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr);
-    return bc && bc != PROTO_NONE;
+    return blockCodeOf(ctx, v->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr)) != nullptr;
 }
 
 const proto::ProtoString* ivarKey(proto::ProtoContext* ctx, const proto::ProtoObject* name) {

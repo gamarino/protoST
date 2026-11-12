@@ -3,6 +3,7 @@
 #include "runtime/ListIndex.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
+#include "runtime/BlockCode.h"
 #include "runtime/BytecodeModule.h"
 #include "runtime/ExecutionEngine.h"
 #include "runtime/NativeExceptionBridge.h"
@@ -33,8 +34,8 @@ static const proto::ProtoString* bcPtrKey(proto::ProtoContext* ctx) {
     return key;
 }
 
-// Real BlockClosure>>value implementation. PUSH_BLOCK attaches the address of
-// the sub-module to the closure as a SmallInteger under attribute "__bc_ptr__";
+// Real BlockClosure>>value implementation. PUSH_BLOCK attaches the sub-module
+// to the closure as an external pointer under attribute "__bc_ptr__" (BlockCode.h);
 // here we retrieve it, validate the arg count and run the sub-module with the
 // supplied arguments pre-loaded into locals 0..argc-1.
 const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
@@ -47,8 +48,13 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
     // hot keys are now pulled from the Bootstrap cache.
     const proto::ProtoString* bcKey  = rt.bootstrap().sym.bcPtr;
     const proto::ProtoString* capKey = rt.bootstrap().sym.captured;
-    auto* bcPtrObj = block->getOwnAttributeDirect(ctx, bcKey);
-    if (!bcPtrObj || bcPtrObj == PROTO_NONE) {
+    const BytecodeModule* sub = blockCodeOf(ctx, block->getOwnAttributeDirect(ctx, bcKey));
+    if (!sub) {
+        // A BlockClosure without code (`BlockClosure new`, or a forged
+        // `__bc_ptr__`) has nothing to run. Sending it value would find this
+        // very primitive again and recurse until the stack overflowed.
+        if (block->isInstanceOf(ctx, rt.bootstrap().blockProto) == PROTO_TRUE)
+            throw NativeError("the block has no code to run");
         // Not a block: evaluate it the way Smalltalk does, by sending it
         // value / value: / value:value: (so a Symbol stands for a block:
         // #(1 2 3) collect: #squared).
@@ -62,8 +68,6 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
         }
         throw NativeError("a block was expected here, but the argument is not a block");
     }
-    const BytecodeModule* sub =
-        reinterpret_cast<const BytecodeModule*>(bcPtrObj->asLong(ctx));
     if (sub->argCount() != argc) {
         throw NativeError(
             "block arg count mismatch (expected " +
@@ -116,11 +120,8 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
 int blockArgCount(proto::ProtoContext* ctx, const proto::ProtoObject* block) {
     if (!block || block == PROTO_NONE) return -1;
     const proto::ProtoString* bcKey = bcPtrKey(ctx);
-    const proto::ProtoObject* bcPtrObj = block->getOwnAttributeDirect(ctx, bcKey);
-    if (!bcPtrObj || bcPtrObj == PROTO_NONE) return -1;
-    const BytecodeModule* sub =
-        reinterpret_cast<const BytecodeModule*>(bcPtrObj->asLong(ctx));
-    return sub->argCount();
+    const BytecodeModule* sub = blockCodeOf(ctx, block->getOwnAttributeDirect(ctx, bcKey));
+    return sub ? sub->argCount() : -1;
 }
 
 namespace {

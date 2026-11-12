@@ -20,6 +20,7 @@
 #include "runtime/NativeError.h"
 #include "runtime/ListIndex.h"
 #include "ExecutionEngine.h"
+#include "runtime/BlockCode.h"
 
 namespace protoST {
 const proto::ProtoObject* raiseRejection(STRuntime& rt, proto::ProtoContext* ctx,
@@ -429,8 +430,7 @@ ExecutionEngine::storeInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t
 const proto::ProtoObject*
 ExecutionEngine::newClosure(proto::ProtoContext* ctx, const Frame& f, unsigned int blockIdx,
                            const proto::ProtoObject* capD) {
-    const proto::ProtoObject* bcPtrObj =
-        ctx->fromLong(reinterpret_cast<long long>(&f.m->block(blockIdx)));
+    const proto::ProtoObject* bcPtrObj = blockCodeRef(ctx, &f.m->block(blockIdx));
     TransientPin pinBcPtr(ctx, bcPtrObj);
     const proto::ProtoObject* homeObj =
         ctx->fromLong(static_cast<long long>(f.homeFrameId));
@@ -787,8 +787,7 @@ const proto::ProtoObject* sendDoesNotUnderstand(
     const proto::ProtoObject* holder = methodHolder(bs_, ctx, recv);
     const proto::ProtoObject* handler = holder->getAttribute(ctx, dnuKey);
     if (handler && handler != PROTO_NONE) {
-        const proto::ProtoObject* bc = handler->getOwnAttributeDirect(ctx, bs_.sym.bcPtr);
-        if (bc && bc != PROTO_NONE) {
+        if (blockCodeOf(ctx, handler->getOwnAttributeDirect(ctx, bs_.sym.bcPtr))) {
             bool understood = false;
             const proto::ProtoObject* a1[1] = { message };
             return sendDynamic(rt_, ctx, recv, dnuKey, a1, 1, &understood);
@@ -1818,13 +1817,12 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                                 break;
                             }
                     }
-                    auto* recvBcPtr = isValueFamily
-                        ? recv->getOwnAttributeDirect(ctx, recvBcKey) : nullptr;
-                    if (recvBcPtr && recvBcPtr != PROTO_NONE) {
+                    const protoST::BytecodeModule* recvCode = isValueFamily
+                        ? blockCodeOf(ctx, recv->getOwnAttributeDirect(ctx, recvBcKey))
+                        : nullptr;
+                    if (recvCode) {
                         if (isValueFamily) {
-                            const protoST::BytecodeModule* sub =
-                                reinterpret_cast<const protoST::BytecodeModule*>(
-                                    recvBcPtr->asLong(ctx));
+                            const protoST::BytecodeModule* sub = recvCode;
                             if (sub->argCount() != argcOp) {
                                 // A catchable Error (with the trace when
                                 // unhandled), like any other runtime error.
@@ -2105,9 +2103,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // A user method is an object cell (pointer tag 0); a
                 // primitive is a method cell, so it skips the probe
                 // (0.10.0).
-                auto* bcPtrObj = (reinterpret_cast<uintptr_t>(attr) & 0x3F) == 0
-                    ? attr->getOwnAttributeDirect(ctx, bcKey) : nullptr;
-                if (bcPtrObj && bcPtrObj != PROTO_NONE) {
+                const protoST::BytecodeModule* sub =
+                    (reinterpret_cast<uintptr_t>(attr) & 0x3F) == 0
+                        ? blockCodeOf(ctx, attr->getOwnAttributeDirect(ctx, bcKey))
+                        : nullptr;
+                if (sub) {
                     // User method: F6 v3 A previously recursed via
                     //   ExecutionEngine subEng(rt_);
                     //   subEng.runWithArgs(...)
@@ -2117,9 +2117,6 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // RETURN/RETURN_TOP pops its frame and pushes its
                     // result onto OUR opStack (this very `f.opStack`,
                     // though by then `f` is a dangling reference).
-                    const protoST::BytecodeModule* sub =
-                        reinterpret_cast<const protoST::BytecodeModule*>(
-                            bcPtrObj->asLong(ctx));
                     if (sub->argCount() != argcOp + 1) {
                         signalCatchable(rt_, ctx,
                             "method " + selStr + " expects " +
@@ -2174,7 +2171,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // so primitives that raise them on purpose are unaffected.
                     auto* result = translateNativeException(
                         rt_, ctx,
-                        [&] { return native(ctx, recv, nullptr, &positional, nullptr); });
+                        [&] { return callMethodCell(native, ctx, recv, &positional, nullptr); });
                     push(f, result ? result : PROTO_NONE);
                     DISPATCH_SCOPED();
                     break;
@@ -2304,11 +2301,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // Bytecode method? Read declared signature and bind.
                 const proto::ProtoString* bcKey  = bs_.sym.bcPtr;
                 const proto::ProtoString* capKey = bs_.sym.captured;
-                auto* bcPtrObj = attr->getOwnAttributeDirect(ctx, bcKey);
-                if (bcPtrObj && bcPtrObj != PROTO_NONE) {
-                    const protoST::BytecodeModule* sub =
-                        reinterpret_cast<const protoST::BytecodeModule*>(
-                            bcPtrObj->asLong(ctx));
+                if (const protoST::BytecodeModule* sub =
+                        blockCodeOf(ctx, attr->getOwnAttributeDirect(ctx, bcKey))) {
                     if (!sub->isCallForm()) {
                         // The receiver has a method under this bare name,
                         // but it was declared with Smalltalk syntax. Reject
@@ -2422,8 +2416,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     const proto::ProtoKeywordArguments named(
                         keywords, static_cast<unsigned>(callNNamed));
                     auto* result = translateNativeException(rt_, ctx, [&] {
-                        return native(ctx, recv, nullptr, &positional,
-                                      callNNamed > 0 ? &named : nullptr);
+                        return callMethodCell(native, ctx, recv, &positional,
+                                              callNNamed > 0 ? &named : nullptr);
                     });
                     push(f, result ? result : PROTO_NONE);
                     DISPATCH_SCOPED();

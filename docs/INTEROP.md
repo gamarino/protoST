@@ -586,10 +586,16 @@ libraries. At startup it must, in order:
 5. **Native methods need no coordination.** Since 0.10.0 a protoST
    primitive is a protoCore method cell, the representation every runtime on
    protoCore shares, so there is no per-runtime primitive table to namespace:
-   a send calls the cell it finds. A protoST primitive finds its runtime from
-   the context's space (`runtimeOf`), and refuses a context whose space no
-   protoST runtime owns; another runtime sends to protoST objects through
-   `__st_send__` (§4.3).
+   a send calls the cell it finds. A protoST primitive runs only for
+   protoST's own dispatch (a protoST send, or `__st_send__`); called directly
+   through protoCore's `call` -- by another runtime, whether in its own space
+   or sharing protoST's, or by embedder C++ -- it is refused with an error
+   naming `__st_send__`. The refusal is uniform because a bare primitive
+   cannot give the call the boundary `__st_send__` gives (§4.3: protoST's own
+   context, the handlers of protoST code above it hidden, errors leaving as
+   `ProtoException`), and a direct call would reach only the primitives, not
+   the methods written in Smalltalk. Another runtime sends to protoST objects
+   through `__st_send__`. Test `tests/unit/test_primitive_methods.cpp`.
 
 ### 6.2 What the demo must show
 

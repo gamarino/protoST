@@ -128,6 +128,18 @@ minor release, so the two services arrive in 0.5.0.
   marker integer instead of running the primitive; it runs it. Tests:
   `tests/unit/test_primitive_methods.cpp` (fails on 83864c9 in five
   assertions), `05-messages/primitive-is-a-native-method.st`.
+- **An integer under `__bc_ptr__` is never run as code.** A closure's code
+  was its `BytecodeModule`'s address stored as an integer, so any integer
+  under that key was dereferenced as a module when the object was sent
+  `value` or reached as a method. It is now a protoCore external pointer that
+  borrows the module (`src/runtime/BlockCode.h`), and only an external pointer
+  is read as code: a forged closure is a value, is not evaluated, and is not
+  reported by `respondsTo:` or `canUnderstand:`. Test
+  `tests/unit/test_block_code.cpp`.
+- **`BlockClosure new value` crashed the process.** A BlockClosure without
+  code re-sent itself `value`, which found the same primitive and recursed
+  until the stack overflowed (SIGSEGV on 83864c9). It signals `Error` (`the
+  block has no code to run`). Test `tests/unit/test_block_code.cpp`.
 - **S3 is closed: an allocation-free loop does not stall a collection, and
   a test now proves it.** The park points came with S15 (the loop back-edge,
   engine entry and call entry call `ProtoContext::safepoint()`), but S3 stayed
@@ -549,8 +561,12 @@ minor release, so the two services arrive in 0.5.0.
   `bindClassPrimitive` take a `proto::ProtoMethod`; a function with the
   `PrimFn` signature becomes one as `primitiveMethod<F>`
   (`bindPrimitive(rt, proto, "sel", primitiveMethod<prim_X>)`). A primitive
-  called on a context whose space no protoST runtime owns signals an `Error`
-  naming `__st_send__`, the entry another runtime sends through. A primitive
+  runs only for protoST's own dispatch: a call of its method cell through
+  protoCore's `call` -- from another runtime, in its own space or in
+  protoST's, or from embedder C++ -- is refused with an error naming
+  `__st_send__`, the entry another runtime sends through (docs/INTEROP.md
+  §4.3), which gives the call protoST's boundary: its own context, handlers
+  hidden, errors translated. A primitive
   sent named arguments in a call-form send reports `a primitive method takes
   no named arguments` (was `primitive method 'sel' does not accept named args
   in v1`).

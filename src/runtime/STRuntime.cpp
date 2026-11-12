@@ -3,6 +3,7 @@
 #include "runtime/ListIndex.h"
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
+#include "runtime/BlockCode.h"
 #include "ExecutionEngine.h"
 #include "FutureYield.h"
 #include "NonLocalReturn.h"
@@ -157,8 +158,17 @@ namespace {
 }
 
 namespace detail {
+constinit thread_local proto::ProtoMethod t_dispatchedMethod = nullptr;
+
 void refuseNamedArguments(proto::ProtoContext*) {
     throw NativeError("a primitive method takes no named arguments");
+}
+
+void refuseDirectCall(proto::ProtoContext*) {
+    throw NativeError(
+        "protoST: a primitive runs only for a protoST send; another runtime or "
+        "embedder code sends to a protoST object through " +
+        std::string(kForeignSendSelector));
 }
 } // namespace detail
 
@@ -408,8 +418,8 @@ struct STRuntime::Impl {
     std::unordered_map<std::string, const proto::ProtoObject*> moduleCache;
 
     // F5-M3: Keep compiled BytecodeModules alive for the lifetime of the
-    // runtime. Block method wrappers store raw pointers into a module's
-    // `block(idx)` storage via __bc_ptr__; if the BytecodeModule were
+    // runtime. Block method wrappers borrow pointers into a module's
+    // `block(idx)` storage via __bc_ptr__ (external pointers, BlockCode.h); if the BytecodeModule were
     // destroyed at the end of loadModuleFromFile those pointers would
     // dangle and any subsequent send on a module-resident class would
     // segfault.
@@ -2275,10 +2285,9 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                 : nullptr;
             const proto::ProtoObject* result = nullptr;
 
-            auto* bcPtrObj = method ? method->getOwnAttributeDirect(ctx, bcKey) : nullptr;
-            if (bcPtrObj && bcPtrObj != PROTO_NONE) {
-                const BytecodeModule* sub =
-                    reinterpret_cast<const BytecodeModule*>(bcPtrObj->asLong(ctx));
+            const BytecodeModule* sub =
+                method ? blockCodeOf(ctx, method->getOwnAttributeDirect(ctx, bcKey)) : nullptr;
+            if (sub) {
                 std::vector<const proto::ProtoObject*> methodArgs;
                 methodArgs.reserve(static_cast<size_t>(argc) + 1);
                 methodArgs.push_back(wrapped);
@@ -2300,7 +2309,7 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                                                        static_cast<unsigned>(argc));
                 result = translateNativeException(
                     *this, ctx,
-                    [&] { return native(ctx, wrapped, nullptr, &positional, nullptr); });
+                    [&] { return callMethodCell(native, ctx, wrapped, &positional, nullptr); });
             } else {
                 // An absent selector answers PROTO_NONE, not null: report it
                 // as the synchronous send path does. A value attribute is not

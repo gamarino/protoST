@@ -207,14 +207,14 @@ table). Nothing writes a closure afterwards:
 
 | Attribute | Value |
 |---|---|
-| `__bc_ptr__` | the address of the block's `BytecodeModule`, stored as an integer |
+| `__bc_ptr__` | the block's `BytecodeModule`, as a protoCore external pointer that borrows it (no finalizer: the module belongs to the runtime's loaded modules or to the embedder that runs it; `src/runtime/BlockCode.h`). Until 0.10.0 it was the module's address as an integer, which any integer under that key could forge |
 | `__captured__` | the creating frame's captured-variables dict, or nil |
 | `__home_frame__` | the creating frame's home frame id |
 | `__block_self__` | the creating frame's `self` |
 
 A method value is the same object: `C >> sel` installs a closure over the
 method body's module under `sel`. A send recognises a method by its
-`__bc_ptr__`.
+`__bc_ptr__`, and only an external pointer there counts.
 
 **Captured variables** are not copied. A variable that some inner block uses
 (`Compiler::analyseClosures`: declared in a scope and needed by a block
@@ -345,14 +345,20 @@ case of `runLoop`) tries, in order:
    object cell (pointer tag 0) is probed for `__bc_ptr__`.
 6. **Primitive** (the attribute is a protoCore method cell, `asMethod`
    answers its `proto::ProtoMethod`): the method is called directly as
-   `method(ctx, receiver, nullptr, &positional, nullptr)` **in the engine's
+   `callMethodCell(method, ctx, receiver, &positional, nullptr)` (which calls
+   `method(ctx, receiver, nullptr, &positional, nullptr)`) **in the engine's
    context**, inside `translateNativeException`, which turns a C++ exception
    it throws into a catchable protoST `Error`. `positional` is a
    `proto::ProtoArguments` built on the C++ stack over the operand array,
    whose values are still in the frame's (popped but traced) operand-stack
    slots; nothing is copied. A protoST primitive is `primitiveMethod<F>`
    (`include/protoST/primitives.h`), which finds the runtime with
-   `runtimeOf(ctx)` and calls `F(rt, ctx, receiver, args, argc)`. A method
+   `runtimeOf(ctx)` and calls `F(rt, ctx, receiver, args, argc)`. A primitive
+   runs only for protoST's dispatch: `callMethodCell` leaves the cell it calls
+   in a thread-local token, the primitive consumes it on entry, and a
+   primitive entered without its token (a direct protoCore `call` from
+   another runtime or embedder C++) refuses with an error naming
+   `__st_send__` (INTEROP.md §6.1). A method
    another runtime exports (a C++ module, `protoscalac`) is a method cell
    too and is called the same way.
 7. **A value attribute** (anything else, an integer included): a unary send
@@ -2695,7 +2701,8 @@ blocks are frames inside one context per thread (1.3, 1.8).
    `primitiveMethod<prim_NumAdd>` is the function as a protoCore method
    (`proto::ProtoMethod`): it finds the runtime that owns the context's space
    (`runtimeOf(ctx)`, a per-thread cache over the space-to-runtime registry
-   of `src/modules/STModuleProvider.h`), refuses named arguments, and calls
+   of `src/modules/STModuleProvider.h`), refuses a call that did not come
+   from protoST's dispatch (`callMethodCell`), refuses named arguments, and calls
    `prim_NumAdd(rt, ctx, self, args, argc)` over the caller's argument array.
    `bindPrimitive` wraps it in a native method cell
    (`ProtoContext::fromMethod(nullptr, method)`: no bound receiver, so no

@@ -49,7 +49,26 @@ STRuntime& runtimeOfSlow(proto::ProtoContext* ctx);
 // Refuses the named arguments of a call to a primitive.
 [[noreturn]] void refuseNamedArguments(proto::ProtoContext* ctx);
 
+// The method cell protoST's own dispatch is calling on this thread
+// (callMethodCell), consumed by the primitive it names on entry.
+extern constinit thread_local proto::ProtoMethod t_dispatchedMethod;
+
+// Refuses a call to a primitive that did not come from protoST's dispatch.
+[[noreturn]] void refuseDirectCall(proto::ProtoContext* ctx);
+
 } // namespace detail
+
+// Calls a method cell that a protoST send found -- a primitive, or a method
+// another runtime exports -- with the receiver as `self`. Every send path of
+// protoST calls method cells through here, and only through here.
+inline const proto::ProtoObject* callMethodCell(proto::ProtoMethod method,
+                                                proto::ProtoContext* ctx,
+                                                const proto::ProtoObject* self,
+                                                const proto::ProtoArguments* positional,
+                                                const proto::ProtoKeywordArguments* keywords) {
+    detail::t_dispatchedMethod = method;
+    return method(ctx, self, nullptr, positional, keywords);
+}
 
 // The protoST runtime that owns `ctx`'s space. Throws a NativeError when the
 // space belongs to no protoST runtime (a caller from another runtime reaches
@@ -64,16 +83,27 @@ inline STRuntime& runtimeOf(proto::ProtoContext* ctx) {
 
 // A primitive as a protoCore method (proto::ProtoMethod): bound on a
 // prototype under its selector, it is found by ordinary attribute lookup and
-// overridden by ordinary attribute shadowing. The send path calls it
-// directly; protoCore's call reaches it the same way. The receiver arrives as
-// `self`, the positional arguments as the caller's array, unchanged. A
-// primitive takes no named arguments.
+// overridden by ordinary attribute shadowing. A protoST send calls it through
+// callMethodCell. The receiver arrives as `self`, the positional arguments as
+// the caller's array, unchanged. A primitive takes no named arguments.
+//
+// It runs only for protoST's own dispatch. A caller outside it -- another
+// runtime, in a space of its own or sharing protoST's, or embedder C++ calling
+// the cell through protoCore's `call` -- is refused, uniformly: protoST is
+// entered from outside through `__st_send__` (docs/INTEROP.md section 4.3),
+// whose boundary (its own context, the handlers of protoST code above it
+// hidden, errors leaving as ProtoException) a bare primitive cannot provide,
+// and which reaches every method, not only the primitives. The test is the
+// token callMethodCell leaves for this very method, consumed here so that a
+// nested call from another runtime finds none.
 template <PrimFn F>
 const proto::ProtoObject* primitiveMethod(proto::ProtoContext* ctx,
                                           const proto::ProtoObject* self,
                                           const proto::ParentLink*,
                                           const proto::ProtoArguments* positional,
                                           const proto::ProtoKeywordArguments* keywords) {
+    if (detail::t_dispatchedMethod != &primitiveMethod<F>) detail::refuseDirectCall(ctx);
+    detail::t_dispatchedMethod = nullptr;
     STRuntime& rt = runtimeOf(ctx);
     if (keywords && keywords->getSize(ctx) != 0) detail::refuseNamedArguments(ctx);
     return F(rt, ctx, self ? self : PROTO_NONE,

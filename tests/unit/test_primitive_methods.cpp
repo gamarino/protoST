@@ -14,6 +14,7 @@
 #include "frontend/Compiler.h"
 #include "protoCore.h"
 
+#include <functional>
 #include <stdexcept>
 #include <string>
 
@@ -167,4 +168,92 @@ TEST_CASE("Runtimes in separate spaces each run their own primitives",
     REQUIRE(runSrc(a, "#(5 6) at: 2.")->asLong(a.rootCtx()) == 6);
     REQUIRE(runSrc(b, "#(5 6) at: 1.")->asLong(b.rootCtx()) == 5);
     REQUIRE(runSrc(a, "3 + 4.")->asLong(a.rootCtx()) == 7);
+}
+
+namespace {
+
+const proto::ProtoString* sym(proto::ProtoContext* ctx, const char* s) {
+    return proto::ProtoString::createSymbol(ctx, s);
+}
+
+// A protoCore call of `printString` on `target`: what another runtime (or
+// embedder C++) does when it calls a protoST object's method directly.
+const proto::ProtoObject* callPrintString(proto::ProtoContext* ctx,
+                                          const proto::ProtoObject* target) {
+    const proto::ProtoObject* const* none = nullptr;
+    return target->call(ctx, nullptr, sym(ctx, "printString"), target, none, 0);
+}
+
+// A foreign method that calls a protoST primitive back directly: run from a
+// protoST send, so protoST's dispatch is active on the thread when it calls.
+const proto::ProtoObject* callBackDirectly(proto::ProtoContext* ctx, const proto::ProtoObject*,
+                                           const proto::ParentLink*,
+                                           const proto::ProtoArguments* positional,
+                                           const proto::ProtoKeywordArguments*) {
+    return callPrintString(ctx, positional->getAt(ctx, 0));
+}
+
+std::string thrownText(const std::function<void()>& f) {
+    try {
+        f();
+    } catch (const std::exception& e) {
+        return e.what();
+    }
+    return "<nothing thrown>";
+}
+
+} // namespace
+
+TEST_CASE("A primitive runs only for protoST's own dispatch", "[primitive][interop]") {
+    SECTION("embedder C++ calling the method cell through protoCore is refused") {
+        protoST::STRuntime rt;
+        auto* ctx = rt.rootCtx();
+        const proto::ProtoObject* three = ctx->fromLong(3);
+        // The integer's primitives live on protoST's number prototype; the
+        // method holder is what a send looks up.
+        const proto::ProtoObject* holder = rt.bootstrap().numberProto;
+        const std::string text = thrownText([&] {
+            const proto::ProtoObject* const* none = nullptr;
+            holder->call(ctx, nullptr, sym(ctx, "printString"), three, none, 0);
+        });
+        REQUIRE(text.find("__st_send__") != std::string::npos);
+    }
+
+    SECTION("another runtime sharing protoST's space is refused, and __st_send__ serves it") {
+        proto::ProtoSpace space;
+        protoST::STRuntime rt(space);
+        // The host's own context in the shared space: not one of protoST's.
+        proto::ProtoContext host(&space, nullptr);
+        runSrc(rt, "Object subclass: #Shared.");
+        const proto::ProtoObject* cls =
+            rt.globals()->getAttribute(rt.rootCtx(), sym(rt.rootCtx(), "Shared"));
+        // An instance finds `class`, a primitive, through its own chain; the
+        // host calls that method cell directly.
+        const proto::ProtoObject* inst = runSrc(rt, "Shared new.");
+        REQUIRE(inst->getAttribute(&host, sym(&host, "class"))->isMethod(&host));
+        const std::string text = thrownText([&] {
+            const proto::ProtoObject* const* none = nullptr;
+            inst->call(&host, nullptr, sym(&host, "class"), inst, none, 0);
+        });
+        INFO(text);
+        REQUIRE(text.find("__st_send__") != std::string::npos);
+        // The same message through the entry another runtime uses.
+        const proto::ProtoObject* args[] = {
+            reinterpret_cast<const proto::ProtoObject*>(sym(&host, "printString"))};
+        const proto::ProtoObject* r =
+            cls->call(&host, nullptr, sym(&host, "__st_send__"), cls, args, 1);
+        REQUIRE(asText(&host, r) == "Shared");
+    }
+
+    SECTION("a foreign method protoST calls cannot call a primitive back directly") {
+        protoST::STRuntime rt;
+        auto* ctx = rt.rootCtx();
+        auto* foreign = rt.bootstrap().objectProto->newChild(ctx, /*isMutable=*/true);
+        foreign->setAttribute(ctx, sym(ctx, "poke:"), ctx->fromMethod(nullptr, &callBackDirectly));
+        rt.globals()->setAttribute(ctx, sym(ctx, "Foreign"), foreign);
+        auto* r = runSrc(rt, "[Foreign poke: 3] on: Error do: [:e | e messageText].");
+        REQUIRE(asText(ctx, r).find("__st_send__") != std::string::npos);
+        // protoST's own dispatch is unaffected afterwards.
+        REQUIRE(asText(ctx, runSrc(rt, "3 printString.")) == "3");
+    }
 }

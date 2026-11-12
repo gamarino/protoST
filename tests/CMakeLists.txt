@@ -129,6 +129,7 @@ target_sources(protost_unit_tests PRIVATE
     unit/test_protoio_errors.cpp
     unit/test_binfile_guard.cpp
     unit/test_primitive_methods.cpp
+    unit/test_block_code.cpp
 )
 # The protoIO error cases synthesize protoio::Error values; the digest and
 # BinaryFile guard cases call protoio::digest and protoio::file.

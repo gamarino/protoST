@@ -7,6 +7,7 @@
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
+#include "runtime/BlockCode.h"
 #include "runtime/HandlerStack.h"
 #include "runtime/NativeExceptionBridge.h"
 #include "runtime/TransientPin.h"
@@ -67,8 +68,7 @@ const proto::ProtoObject* sendMessage(STRuntime& rt, proto::ProtoContext* ctx,
             proto::ProtoString::createSymbol(ctx, "doesNotUnderstand:");
         const proto::ProtoObject* dnu = holder->getAttribute(ctx, dnuKey);
         if (dnu && dnu != PROTO_NONE) {
-            const proto::ProtoObject* bc = dnu->getOwnAttributeDirect(ctx, bs.sym.bcPtr);
-            if (bc && bc != PROTO_NONE) {
+            if (blockCodeOf(ctx, dnu->getOwnAttributeDirect(ctx, bs.sym.bcPtr))) {
                 bool understood = false;
                 const proto::ProtoObject* a1[1] = {message};
                 return sendDynamic(rt, ctx, recv, dnuKey, a1, 1, &understood);
@@ -82,11 +82,10 @@ const proto::ProtoObject* sendMessage(STRuntime& rt, proto::ProtoContext* ctx,
         // method cell is called directly, as a send in the engine calls it
         // (foreignSendEntry is the native boundary around this send).
         const proto::ProtoArguments positional(args, static_cast<unsigned>(argc));
-        const proto::ProtoObject* r = native(ctx, recv, nullptr, &positional, nullptr);
+        const proto::ProtoObject* r = callMethodCell(native, ctx, recv, &positional, nullptr);
         return r ? r : PROTO_NONE;
     }
-    const proto::ProtoObject* bc = attr->getOwnAttributeDirect(ctx, bs.sym.bcPtr);
-    if (bc && bc != PROTO_NONE) {
+    if (blockCodeOf(ctx, attr->getOwnAttributeDirect(ctx, bs.sym.bcPtr))) {
         bool understood = false;
         const proto::ProtoObject* r = sendDynamic(rt, ctx, recv, selector, args, argc, &understood);
         return r ? r : PROTO_NONE;
