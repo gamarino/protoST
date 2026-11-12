@@ -1504,8 +1504,8 @@ What the handler does determines whether — and how far — to unwind:
 | `ex resume: v` | `signal` *returns* `v`; the protected computation **continues** from the `signal` point. Only valid for a resumable exception. |
 | `ex resume` | as `resume: nil`. |
 | `ex retry` | the protected block is re-evaluated from the start. |
-| `ex pass` | the handler search resumes *outward* — the next matching enclosing handler is tried; if none, the default action runs. |
-| `ex outer` | not implemented: behaves as `pass`. In Pharo, when the outer handler resumes, `outer` answers the resumption value inside the inner handler, which continues; in protoST the protected computation continues at the `signal` instead (D7, see [§14](#14-known-deviations)). |
+| `ex pass` | yield to the enclosing handler, as if this one had not handled the exception: the next matching enclosing handler runs (if none, the default action). A resumption **resumes the `signal`**; any other outcome unwinds through this handler. `pass` never answers. |
+| `ex outer` | evaluate the enclosing handler (or, with none, the default action) and, if it resumes, **answer the resumption value here**, inside this handler, which continues. If it returns, retries or unwinds, the unwind passes through this handler and `outer` does not answer. For a non-resumable exception `outer` is `pass`. |
 
 ```smalltalk
 "resume: — continue past the signal"
@@ -1518,6 +1518,41 @@ What the handler does determines whether — and how far — to unwind:
   on: Error
   do: [ :ex | ex retry ].
 ```
+
+`outer` and `pass` run the enclosing handler *in place*, on top of the handler
+that sends them, as Pharo does (`Exception>>outer`, `pass` and
+`resumeUnchecked:`). They differ in where a resumption goes: under `outer` it
+answers the value inside the handler, which continues; under `pass` it resumes
+the `signal`. Under either, the enclosing handler's `return:`, `retry` or
+falling off its end unwinds through the handler that sent it, so that
+handler's `ensure:` blocks run after the enclosing handler, not before.
+
+```smalltalk
+"outer — ask the enclosing handler, then continue here"
+[ [ Warning signal: 'w'. 'body' ]
+    on: Warning
+    do: [ :ex | (ex outer + 1) printString , ' from the inner handler' ] ]
+  on: Warning
+  do: [ :ex | ex resume: 41 ].           "=> '42 from the inner handler'"
+```
+
+```smalltalk
+"pass — the enclosing handler's resumption resumes the signal"
+[ [ (Warning signal: 'w') + 1 ]
+    on: Warning
+    do: [ :ex | ex pass. 'never reached' ] ]
+  on: Warning
+  do: [ :ex | ex resume: 41 ].           "=> 42"
+```
+
+With no enclosing handler, `outer` answers the default action's value for a
+resumable exception (`nil` for an unhandled `Warning`, after its text is
+printed; §8.2), and for an `Error` the default action ends the activation,
+as for any unhandled `Error`. Handlers belong to the thread that runs the
+code (§10), so the search never crosses an actor message: inside an actor
+method `outer` sees only the handlers of that method's activation, and an
+`Error` it does not handle rejects the message's Future, which `wait`
+re-signals in the caller.
 
 ### 8.5 `ensure:` and `ifCurtailed:`
 
@@ -2465,7 +2500,8 @@ A shared mutable cell with optimistic-concurrency compare-and-swap — see
 | `resume`, `resume:` | handler action — resume the protected computation |
 | `retry` | handler action — re-run the protected block |
 | `retryUsing:` | handler action — replace the protected block with the argument and run it |
-| `pass`, `outer` | handler action — continue the handler search outward (`outer` is not implemented and behaves as `pass`, D7) |
+| `pass` | handler action — yield to the enclosing handler; its resumption resumes the `signal` (§8.4) |
+| `outer` | handler action — evaluate the enclosing handler; its resumption is answered here (§8.4) |
 | `description` | the message text, or the class name when there is none |
 | `isResumable` | whether `resume:` is allowed (§8.6) |
 | `,` | an `ExceptionSet`: `on: ZeroDivide, KeyNotFound do: […]` |
@@ -3236,7 +3272,7 @@ commits. Summary as of 0.4.0, updated for changes merged since:
   is not re-entrant (D37); recursion depth is bounded with a catchable error
   (D38); one runtime per process (D2); `addBehavior:` reaches future
   instances only (D21).
-- **Not implemented:** `outer` behaves as `pass` (D7); `thisContext` is reserved: using it is a compile error (D17); the
+- **Not implemented:** `thisContext` is reserved: using it is a compile error (D17); the
   metaclass hierarchy is thin (`x class class` works; there is no
   `Metaclass`/`ClassDescription` protocol beyond the reflective messages of
   §14 of the tutorial).

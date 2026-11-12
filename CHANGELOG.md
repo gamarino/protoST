@@ -118,6 +118,31 @@ minor release, so the two services arrive in 0.5.0.
 
 ### Fixed
 
+- **`Exception >> outer` is Pharo's `outer` (D7).** It behaved as `pass`:
+  when the enclosing handler resumed, the protected block continued at the
+  `signal` and the inner handler never continued. `outer` now evaluates the
+  enclosing handler in place, on top of the handler that sends it; if that
+  handler resumes, `outer` answers the resumption value inside the inner
+  handler, which continues: `[[Warning signal: 'w'. 'body'] on: Warning do:
+  [:e | e outer printNl. 'inner continued']] on: Warning do: [:e | e resume:
+  5]` prints `5` and answers `'inner continued'` (it answered `'body'`). If
+  the enclosing handler returns, retries or falls off its end, the unwind
+  passes through the inner handler. With no enclosing handler a resumable
+  exception's default action value is answered (`nil` for a `Warning`); an
+  `Error`'s default action ends the activation. For a non-resumable
+  exception `outer` is `pass`, as ANSI states. The pattern of protoBaseST's
+  `newTransactionDo:` (a catch-all handler that sets a flag, asks `outer`,
+  clears it and resumes) now leaves the flag set only when the enclosing
+  handler unwinds. Handlers stay per thread: `outer` never crosses an actor
+  message. LANGUAGE.md §8.4; tutorial §14.5. Tests: 15 new programs in
+  `08-exceptions/` (`outer-*.st`, `pass-runs-enclosing-handler-before-
+  unwinding.st`, `nesting-limit-in-outer-resuming-chain.st`).
+- **`pass` runs the enclosing handler before unwinding the passing one**, as
+  Pharo's `Exception>>pass` does. It unwound the passing handler first, so
+  that handler's `ensure:` blocks ran before the enclosing handler instead of
+  after it. A resumption still resumes the `signal`, or the `outer` an inner
+  handler is waiting in (Pharo's `outerContext`).
+
 - **`Array new:` with a size the heap can never take signals an Error
   (reviews R3-2, R4-1, R5-1, R6-1, R7-1).** `Array new: 3000000000` (a typo,
   say) built an 8n-byte vector and then the list, and ended in protoCore's
@@ -466,6 +491,11 @@ minor release, so the two services arrive in 0.5.0.
 
 ### Breaking changes
 
+- **`outer` no longer behaves as `pass`** (see *Fixed*): a program whose
+  enclosing handler resumes now continues in the inner handler after
+  `outer`, not at the `signal`. `[[(Warning signal: 'w') + 1] on: Warning do:
+  [:e | e outer]] on: Warning do: [:e | e resume: 4]` answers 4 (it answered
+  5). Code that wanted the old effect sends `pass`.
 - **MessagePack nesting depth is 1024 (was 512)**, encode and decode, from
   protoIO 0.5.0's default: msgpack-python 1.2's unpacker limit and the record
   depth ProtoBase format 4 requires every reader to accept since ProtoBase
