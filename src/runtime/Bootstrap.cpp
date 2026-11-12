@@ -74,6 +74,7 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
         const_cast<proto::ProtoObject*>(out.errorProto)->newChild(ctx, /*isMutable=*/true);
     out.nonBooleanReceiverProto =
         const_cast<proto::ProtoObject*>(out.errorProto)->newChild(ctx, /*isMutable=*/true);
+    out.deoptForwardProto = out.objectProto->newChild(ctx, /*isMutable=*/false);
 
     // Track 2 slice a (COL-a): collection class hierarchy. Ordinary mutable
     // prototypes — the abstract `Collection` carries the derived iteration

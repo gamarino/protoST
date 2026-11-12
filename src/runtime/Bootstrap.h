@@ -77,6 +77,12 @@ struct Bootstrap {
     // NonBooleanReceiver < Error, resumable: a loop condition that is not a
     // Boolean (loopConditionIsTrue).
     const proto::ProtoObject* nonBooleanReceiverProto   = nullptr;
+    // The prototype of every forward that DEOPT_ENTER leaves in a frame slot
+    // whose variable a de-optimised closure shares (ExecutionEngine.cpp,
+    // "De-optimisation of inlined value conditionals"). A slot value is a
+    // forward exactly when this is its first parent: no Smalltalk program can
+    // reach it, so no program value is ever mistaken for one. Not a class.
+    const proto::ProtoObject* deoptForwardProto  = nullptr;
     // Track 2 slice a (COL-a): collection class hierarchy.
     //   Collection                 (abstract — shared iteration protocol)
     //     |-- SequenceableCollection (abstract — ordered, indexable)
@@ -222,10 +228,8 @@ struct Bootstrap {
         const proto::ProtoString* intervalStep    = nullptr;  // __interval_step__
         const proto::ProtoString* assocKey        = nullptr;  // __assoc_key__
         const proto::ProtoString* assocValue      = nullptr;  // __assoc_value__
-        // A frame slot whose variable a de-optimised closure shares holds a
-        // forward: an object owning these two keys, the scope dictionary that
-        // now holds the variable and the variable's name (ExecutionEngine.cpp,
-        // "De-optimisation of inlined value conditionals").
+        // The two attributes of a forward (deoptForwardProto): the scope
+        // dictionary that now holds the variable and the variable's name.
         const proto::ProtoString* deoptDict       = nullptr;  // __deopt_dict__
         const proto::ProtoString* deoptName       = nullptr;  // __deopt_name__
         // Selectors the primitives send on every call of some paths (hashed

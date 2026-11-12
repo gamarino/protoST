@@ -488,9 +488,10 @@ ExecutionEngine::newClosure(proto::ProtoContext* ctx, const Frame& f, unsigned i
 
 const proto::ProtoObject*
 ExecutionEngine::deoptForwardOf(proto::ProtoContext* ctx, const proto::ProtoObject* v) const {
-    if (!v || (reinterpret_cast<uintptr_t>(v) & 0x3F) != 0) return nullptr;
-    const proto::ProtoObject* d = v->getOwnAttributeDirect(ctx, bs_.sym.deoptDict);
-    return (d && d != PROTO_NONE) ? v : nullptr;
+    // getFirstParent answers PROTO_NONE for anything that is not an object
+    // cell (an embedded value, a string, a list), so any slot value is safe.
+    if (!v) return nullptr;
+    return v->getFirstParent(ctx) == bs_.deoptForwardProto ? v : nullptr;
 }
 
 const proto::ProtoObject*
@@ -545,7 +546,7 @@ ExecutionEngine::deoptEnter(proto::ProtoContext* ctx, Frame& f, unsigned int ent
         // The forward: an immutable object naming the dictionary and the
         // variable. It replaces the value in the slot, which the dictionary
         // now holds.
-        const proto::ProtoObject* bare = bs_.objectProto->newChild(ctx, /*isMutable=*/false);
+        const proto::ProtoObject* bare = bs_.deoptForwardProto->newChild(ctx, /*isMutable=*/false);
         TransientPin pinBare(ctx, bare);
         const proto::ProtoString* keys[2] = { bs_.sym.deoptDict, bs_.sym.deoptName };
         const proto::ProtoObject* vals[2] = {

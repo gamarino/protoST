@@ -702,6 +702,9 @@ struct STRuntime::Impl {
             pinPermanent(bootstrap.messageNotUnderstoodProto);
             pinPermanent(bootstrap.blockCannotReturnProto);
             pinPermanent(bootstrap.nonBooleanReceiverProto);
+            // Not a class: the prototype of de-optimisation forwards, which
+            // only the engine creates and recognises.
+            pinPermanent(bootstrap.deoptForwardProto);
             // Track 2 slice a (COL-a): the collection prototypes carry the
             // iteration protocol + Array base operations — pin them for the
             // runtime's whole lifetime, exactly like the other built-in classes.
