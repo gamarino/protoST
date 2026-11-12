@@ -455,23 +455,67 @@ ExecutionEngine::newClosure(proto::ProtoContext* ctx, const Frame& f, unsigned i
 // inline; when `r` is not a Boolean the expression is sent for real, with
 // closures compiled from the block literals, so the receiver's own method or
 // its doesNotUnderstand: gets the message the source wrote. Those closures
-// use variables that, inlined, are plain slots of this frame. The box carries
-// them for the duration of the send: DEOPT_ENTER copies the slots into it,
-// DEOPT_EXIT copies them back. While the send runs the frame executes
-// nothing, so the box is the only copy in use; the closures and the frame see
-// the same values a real closure would. After DEOPT_EXIT the frame owns the
-// variables again and the box is closed: a closure the receiver kept and
-// evaluates later signals an Error (DEOPT_CHECK) instead of using stale
-// copies. If the send unwinds the frame (an exception, a non-local return),
-// the box simply stays open: no frame code will run again, so the box is
-// once more the only copy, exactly what a real closure would hold.
+// use variables that, inlined, are plain slots of this frame, and the
+// receiver may keep a closure and evaluate it at any later time, on any
+// thread. So the closures must share those variables with the frame, as real
+// closures would, for as long as either lives.
+//
+// DEOPT_ENTER does that by moving each temporary a closure uses into a
+// dictionary of the scope that declares it, the binding real closures would
+// have had: the frame's own temporaries go into one dictionary per
+// activation, the temporaries of an inlined block with temporaries into one
+// per entry of that block (the block's entry code resets its slots with
+// RESET_LOCAL, so the next entry starts fresh variables while a closure keeps
+// the previous ones). The dictionaries are chained in the lexical order of
+// their scopes, outermost nearest the frame's captured dict, so a closure
+// resolves every name to the innermost declaration, as the compiler did. The
+// slot then holds a forward naming the dictionary and the variable;
+// PUSH_SHARED_LOCAL and STORE_SHARED_LOCAL follow it once the frame is marked
+// (Frame::deoptForwarded), so the frame and the closures read and write the
+// same variable from then on. Arguments cannot be assigned, so the box, a
+// child of the innermost dictionary that the closures receive as their
+// captured dict, holds copies of the ones they read.
+//
+// A scope's dictionary is created the first time a conditional in it
+// de-optimises, together with those of the scopes enclosing it, so a
+// dictionary's parent is always the dictionary of the enclosing scope's
+// current activation. Programs whose conditionals always see Booleans never
+// reach this code. The test of the frame mark is made only by the accesses
+// of slots some conditional may forward (PUSH_SHARED_LOCAL,
+// STORE_SHARED_LOCAL); every other PUSH_LOCAL / STORE_LOCAL tests nothing.
 // ---------------------------------------------------------------------------
 
-namespace {
-const proto::ProtoString* deoptOpenKey(proto::ProtoContext* ctx) {
-    return proto::ProtoString::createSymbol(ctx, "__deopt_open__");
+const proto::ProtoObject*
+ExecutionEngine::deoptForwardOf(proto::ProtoContext* ctx, const proto::ProtoObject* v) const {
+    // getFirstParent answers PROTO_NONE for anything that is not an object
+    // cell (an embedded value, a string, a list), so any slot value is safe.
+    if (!v) return nullptr;
+    return v->getFirstParent(ctx) == bs_.deoptForwardProto ? v : nullptr;
 }
-}  // namespace
+
+const proto::ProtoObject*
+ExecutionEngine::readForwardedLocal(proto::ProtoContext* ctx, const Frame& f,
+                                    unsigned int slot) const {
+    const proto::ProtoObject* v = getLocal(f, slot);
+    const proto::ProtoObject* fwd = deoptForwardOf(ctx, v);
+    if (!fwd) return v;
+    const proto::ProtoObject* dict = fwd->getOwnAttributeDirect(ctx, bs_.sym.deoptDict);
+    const auto* name = reinterpret_cast<const proto::ProtoString*>(
+        fwd->getOwnAttributeDirect(ctx, bs_.sym.deoptName));
+    const proto::ProtoObject* r = dict->getOwnAttributeDirect(ctx, name);
+    return r ? r : PROTO_NONE;
+}
+
+void
+ExecutionEngine::writeForwardedLocal(proto::ProtoContext* ctx, const Frame& f,
+                                     unsigned int slot, const proto::ProtoObject* v) {
+    const proto::ProtoObject* fwd = deoptForwardOf(ctx, getLocal(f, slot));
+    if (!fwd) { setLocal(f, slot, v); return; }
+    const proto::ProtoObject* dict = fwd->getOwnAttributeDirect(ctx, bs_.sym.deoptDict);
+    const auto* name = reinterpret_cast<const proto::ProtoString*>(
+        fwd->getOwnAttributeDirect(ctx, bs_.sym.deoptName));
+    const_cast<proto::ProtoObject*>(dict)->setAttribute(ctx, name, v);
+}
 
 void
 ExecutionEngine::deoptEnter(proto::ProtoContext* ctx, Frame& f, unsigned int entry) {
@@ -479,47 +523,50 @@ ExecutionEngine::deoptEnter(proto::ProtoContext* ctx, Frame& f, unsigned int ent
     const proto::ProtoObject* capD = getCaptured(f);
     const proto::ProtoObject* parent =
         (capD && capD != PROTO_NONE) ? capD : bs_.objectProto;
+    // The scope dictionaries, outermost first. Each lives in its frame slot
+    // (a frame value, so rooted) as soon as it is made.
+    for (uint32_t dictSlot : e.scopeDictSlots) {
+        const proto::ProtoObject* d = getLocal(f, dictSlot);
+        if (!d || d == PROTO_NONE) {
+            d = parent->newChild(ctx, /*isMutable=*/true);
+            setLocal(f, dictSlot, d);
+        }
+        parent = d;
+    }
+    // Move each shared temporary into its scope's dictionary, unless an
+    // earlier conditional of this activation of that scope already did.
+    for (const auto& l : e.locals) {
+        if (l.scope == BytecodeModule::DeoptLocal::kReadOnly) continue;
+        const proto::ProtoObject* v = getLocal(f, l.slot);
+        if (f.deoptForwarded && deoptForwardOf(ctx, v)) continue;
+        const proto::ProtoObject* dict = getLocal(f, e.scopeDictSlots.at(static_cast<size_t>(l.scope)));
+        const proto::ProtoString* name = f.m->constSym(ctx, l.nameConst);
+        const_cast<proto::ProtoObject*>(dict)->setAttribute(ctx, name, v ? v : PROTO_NONE);
+        // The forward: an immutable object naming the dictionary and the
+        // variable. It replaces the value in the slot, which the dictionary
+        // now holds.
+        const proto::ProtoObject* bare = bs_.deoptForwardProto->newChild(ctx, /*isMutable=*/false);
+        TransientPin pinBare(ctx, bare);
+        const proto::ProtoString* keys[2] = { bs_.sym.deoptDict, bs_.sym.deoptName };
+        const proto::ProtoObject* vals[2] = {
+            dict, reinterpret_cast<const proto::ProtoObject*>(name) };
+        setLocal(f, l.slot, bare->setAttributes(ctx, 2, keys, vals));
+        f.deoptForwarded = true;
+    }
+    // The box: copies of the arguments the closures read.
     const proto::ProtoObject* box = parent->newChild(ctx, /*isMutable=*/true);
     TransientPin pinBox(ctx, box);
     std::vector<const proto::ProtoString*> names;
     std::vector<const proto::ProtoObject*> values;
-    names.reserve(e.locals.size() + 1);
-    values.reserve(e.locals.size() + 1);
-    // The box is open until DEOPT_EXIT closes it (DEOPT_CHECK).
-    names.push_back(deoptOpenKey(ctx));
-    values.push_back(PROTO_TRUE);
-    for (const auto& [nameConst, slot] : e.locals) {
-        names.push_back(f.m->constSym(ctx, nameConst));
-        const proto::ProtoObject* v = getLocal(f, slot);
+    for (const auto& l : e.locals) {
+        if (l.scope != BytecodeModule::DeoptLocal::kReadOnly) continue;
+        names.push_back(f.m->constSym(ctx, l.nameConst));
+        const proto::ProtoObject* v = getLocal(f, l.slot);
         values.push_back(v ? v : PROTO_NONE);   // frame values: rooted
     }
-    box->setAttributes(ctx, static_cast<unsigned>(names.size()), names.data(), values.data());
+    if (!names.empty())
+        box->setAttributes(ctx, static_cast<unsigned>(names.size()), names.data(), values.data());
     setLocal(f, e.boxSlot, box);
-}
-
-void
-ExecutionEngine::deoptExit(proto::ProtoContext* ctx, Frame& f, unsigned int entry) {
-    const BytecodeModule::DeoptEntry& e = f.m->deoptEntry(entry);
-    const proto::ProtoObject* box = getLocal(f, e.boxSlot);
-    if (!box || box == PROTO_NONE) return;
-    for (const auto& [nameConst, slot] : e.locals) {
-        const proto::ProtoObject* v = box->getOwnAttributeDirect(ctx, f.m->constSym(ctx, nameConst));
-        setLocal(f, slot, v ? v : PROTO_NONE);
-    }
-    box->setAttribute(ctx, deoptOpenKey(ctx), PROTO_FALSE);
-    setLocal(f, e.boxSlot, PROTO_NONE);
-}
-
-void
-ExecutionEngine::deoptCheck(proto::ProtoContext* ctx, Frame& f) {
-    const proto::ProtoObject* capD = getCaptured(f);
-    if (!capD || capD == PROTO_NONE) return;
-    if (capD->getAttribute(ctx, deoptOpenKey(ctx)) != PROTO_FALSE) return;
-    signalErrorOfClass(rt_, ctx, bs_.errorProto,
-        "a block literal of an inlined ifTrue:/ifFalse:/and:/or: was passed to a "
-        "receiver that is not a Boolean, kept by it and evaluated after that send "
-        "returned; it uses variables of a method that has continued since. Pass a "
-        "block held in a variable when the receiver keeps it");
 }
 
 void
@@ -898,7 +945,7 @@ ExecutionEngine::makeDebugFrame(const Frame& f) const {
         d.stack.push_back(ctx_->getAutomaticLocal(opStackBase(f) + i));
     d.locals.reserve(f.localCount);
     for (unsigned int i = 0; i < f.localCount; ++i)
-        d.locals.push_back(getLocal(f, i));
+        d.locals.push_back(f.deoptForwarded ? readForwardedLocal(ctx_, f, i) : getLocal(f, i));
     return d;
 }
 
@@ -1030,10 +1077,10 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         &&L_BIN_INT_GT, &&L_BIN_INT_EQ, &&L_ASSERT_LOOP_BOOL, &&L_SEND_CALL,   // 36-39
         &&L_DEFINE_CAPTURED, &&L_STORE_CLASSVAR, &&L_PUSH_OWN_INSTVAR, &&L_IVAR_GROUP,   // 40-43
         &&L_IVAR_GROUP_END, &&L_JUMP_IF_NOT_BOOL, &&L_DEOPT_ENTER, &&L_PUSH_DEOPT_BLOCK,   // 44-47
-        &&L_DEOPT_EXIT, &&L_DEOPT_CHECK, &&L_JUMP_IF_NIL, &&L_JUMP_IF_NOT_NIL,   // 48-51
+        &&L_DEOPT_EXIT, &&L_RESET_LOCAL, &&L_JUMP_IF_NIL, &&L_JUMP_IF_NOT_NIL,   // 48-51
         &&L_IDENTICAL, &&L_BIN_INT_MUL, &&L_BIN_INT_MOD, &&L_BIN_INT_QUO,   // 52-55
-        &&L_BAD_OP, &&L_BIN_INT_AND, &&L_BIN_INT_OR, &&L_BAD_OP,   // 56-59
-        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 60-63
+        &&L_BAD_OP, &&L_BIN_INT_AND, &&L_BIN_INT_OR, &&L_PUSH_SHARED_LOCAL,   // 56-59
+        &&L_STORE_SHARED_LOCAL, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 60-63
         &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 64-67
         &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 68-71
         &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 72-75
@@ -1109,7 +1156,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     check[static_cast<unsigned int>(Op::DEOPT_ENTER)]      = &&L_DEOPT_ENTER;
     check[static_cast<unsigned int>(Op::PUSH_DEOPT_BLOCK)] = &&L_PUSH_DEOPT_BLOCK;
     check[static_cast<unsigned int>(Op::DEOPT_EXIT)]       = &&L_DEOPT_EXIT;
-    check[static_cast<unsigned int>(Op::DEOPT_CHECK)]      = &&L_DEOPT_CHECK;
+    check[static_cast<unsigned int>(Op::RESET_LOCAL)]      = &&L_RESET_LOCAL;
     check[static_cast<unsigned int>(Op::JUMP_IF_NIL)]      = &&L_JUMP_IF_NIL;
     check[static_cast<unsigned int>(Op::JUMP_IF_NOT_NIL)]  = &&L_JUMP_IF_NOT_NIL;
     check[static_cast<unsigned int>(Op::IDENTICAL)]        = &&L_IDENTICAL;
@@ -1118,6 +1165,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     check[static_cast<unsigned int>(Op::BIN_INT_QUO)]      = &&L_BIN_INT_QUO;
     check[static_cast<unsigned int>(Op::BIN_INT_AND)]      = &&L_BIN_INT_AND;
     check[static_cast<unsigned int>(Op::BIN_INT_OR)]       = &&L_BIN_INT_OR;
+    check[static_cast<unsigned int>(Op::PUSH_SHARED_LOCAL)]  = &&L_PUSH_SHARED_LOCAL;
+    check[static_cast<unsigned int>(Op::STORE_SHARED_LOCAL)] = &&L_STORE_SHARED_LOCAL;
     check[static_cast<unsigned int>(Op::RETURN)]           = &&L_RETURN;
     check[static_cast<unsigned int>(Op::RETURN_TOP)]       = &&L_RETURN_TOP;
     check[static_cast<unsigned int>(Op::JUMP_BACK)]        = &&L_JUMP_BACK;
@@ -1305,6 +1354,37 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 DISPATCH_DIRECT();
                 break;
             }
+            case Op::PUSH_SHARED_LOCAL: L_PUSH_SHARED_LOCAL: {
+                Frame& f = frames_.back();
+                checkLocal(f, arg);
+                if (f.deoptForwarded) {
+                    push(f, readForwardedLocal(ctx, f, arg));
+                    DISPATCH_SCOPED();
+                }
+                push(f, getLocal(f, arg));
+                DISPATCH_DIRECT();
+            } break;
+            case Op::STORE_SHARED_LOCAL: L_STORE_SHARED_LOCAL: {
+                Frame& f = frames_.back();
+                checkLocal(f, arg);
+                if (f.deoptForwarded) {
+                    // The value stays rooted in its stack slot until the
+                    // store (pop only lowers sp).
+                    const proto::ProtoObject* v = pop(f);
+                    writeForwardedLocal(ctx, f, arg, v);
+                    DISPATCH_SCOPED();
+                }
+                setLocal(f, arg, pop(f));
+                DISPATCH_DIRECT();
+                break;
+            }
+            case Op::RESET_LOCAL: L_RESET_LOCAL: {
+                Frame& f = frames_.back();
+                checkLocal(f, arg);
+                setLocal(f, arg, PROTO_NONE);
+                DISPATCH_DIRECT();
+                break;
+            }
             case Op::RETURN_TOP: L_RETURN_TOP: {
                 Frame& f = frames_.back();
                 // RETURN_TOP is the compiler's implicit trailer for a block
@@ -1407,15 +1487,10 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 break;
             }
             case Op::DEOPT_EXIT: L_DEOPT_EXIT: {
+                // The variables stay shared: only the box's slot is cleared.
                 Frame& f = frames_.back();
-                deoptExit(ctx, f, arg);
-                DISPATCH_SCOPED();
-                break;
-            }
-            case Op::DEOPT_CHECK: L_DEOPT_CHECK: {
-                Frame& f = frames_.back();
-                if (arg != 0) deoptCheck(ctx, f);
-                DISPATCH_SCOPED();
+                setLocal(f, f.m->deoptEntry(arg).boxSlot, PROTO_NONE);
+                DISPATCH_DIRECT();
                 break;
             }
             case Op::PUSH_BLOCK: L_PUSH_BLOCK: {
@@ -3338,6 +3413,12 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
             ctx_->setAutomaticLocal(opStackBase(fr) + static_cast<unsigned int>(j),
                                     v ? v : PROTO_NONE);
         }
+
+        // A slot that holds a forward (DEOPT_ENTER) keeps it: the variable
+        // is still shared with the closure, through the same dictionary.
+        for (proto::proto_ulong j = 0; j < locN && !fr.deoptForwarded; ++j)
+            if (deoptForwardOf(ctx, getLocal(fr, static_cast<unsigned int>(j))))
+                fr.deoptForwarded = true;
 
         g_slotCursor += regionSize;
         frames_.push_back(fr);

@@ -74,6 +74,7 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
         const_cast<proto::ProtoObject*>(out.errorProto)->newChild(ctx, /*isMutable=*/true);
     out.nonBooleanReceiverProto =
         const_cast<proto::ProtoObject*>(out.errorProto)->newChild(ctx, /*isMutable=*/true);
+    out.deoptForwardProto = out.objectProto->newChild(ctx, /*isMutable=*/false);
 
     // Track 2 slice a (COL-a): collection class hierarchy. Ordinary mutable
     // prototypes — the abstract `Collection` carries the derived iteration
@@ -274,12 +275,20 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     out.sym.soleInstance    = S("__sole_instance__");
     out.sym.priority        = S("__priority__");
     out.sym.data            = S("__data__");
+    out.sym.isResumable     = S("isResumable");
     out.sym.size            = S("__size__");
     out.sym.intervalStart   = S("__interval_start__");
     out.sym.intervalStop    = S("__interval_stop__");
     out.sym.intervalStep    = S("__interval_step__");
     out.sym.assocKey        = S("__assoc_key__");
     out.sym.assocValue      = S("__assoc_value__");
+    out.sym.deoptDict       = S("__deopt_dict__");
+    out.sym.deoptName       = S("__deopt_name__");
+    out.sym.equal           = S("=");
+    out.sym.hash            = S("hash");
+    out.sym.lessOrEqual     = S("<=");
+    out.sym.initialize      = S("initialize");
+    out.sym.elementsForIteration = S("__elementsForIteration");
 
     // K14, D52: every built-in class gets its metaclass now, so the class-side
     // primitives (Array new:, Float pi, ...) can be bound on it. The unset

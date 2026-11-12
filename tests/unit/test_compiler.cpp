@@ -1,4 +1,6 @@
 #include <catch2/catch_all.hpp>
+
+#include <algorithm>
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
 #include "runtime/BytecodeModule.h"
@@ -329,16 +331,62 @@ TEST_CASE("Compiler: control blocks with temporaries are inlined", "[compiler][i
 
 TEST_CASE("Compiler: an inlined block's temporary is reset to nil on every entry",
           "[compiler][inline]") {
-    // PUSH_NIL, STORE_LOCAL t precede the body, inside the loop: the loop's
-    // back jump lands before them.
+    // RESET_LOCAL t precedes the body, inside the loop: the loop's back jump
+    // lands before it.
     Compiler C;
     auto bc = compileMethodModule(
         "F >> m\n  | k |\n  k := 0.\n  [ k < 3 ] whileTrue: [ | t | t := k. k := t + 1 ].\n  ^ k\n", C);
     const auto ops = opcodesOf(bc->block(0));
-    bool nilStoreInLoop = false;
-    for (size_t i = 0; i + 1 < ops.size(); ++i)
-        if (ops[i] == Op::PUSH_NIL && ops[i + 1] == Op::STORE_LOCAL) nilStoreInLoop = true;
-    REQUIRE(nilStoreInLoop);
+    REQUIRE(std::find(ops.begin(), ops.end(), Op::RESET_LOCAL) != ops.end());
+}
+
+TEST_CASE("Compiler: sibling inlined blocks share the slots of their temporaries",
+          "[compiler][inline]") {
+    // Sixty sibling arms with one temporary each, then one with two: the
+    // frame needs the slots of the deepest nesting only, not one per
+    // temporary of the method.
+    std::string src = "F >> m: n\n  | s |\n  s := 0.\n";
+    for (int i = 0; i < 60; ++i)
+        src += "  n < 0 ifTrue: [ | u" + std::to_string(i) + " | u" + std::to_string(i)
+             + " := " + std::to_string(i) + ". s := u" + std::to_string(i) + " ].\n";
+    src += "  n < 0 ifTrue: [ | a b | a := 1. b := 2. s := a + b ].\n  ^ s\n";
+    Compiler C;
+    auto bc = compileMethodModule(src, C);
+    unsigned hidden = 0;
+    for (const auto& name : bc->block(0).localNames())
+        if (name.rfind("__bt_", 0) == 0) ++hidden;
+    REQUIRE(hidden == 2);
+}
+
+TEST_CASE("Compiler: only the slots a de-optimised conditional shares are routed",
+          "[compiler][inline]") {
+    // `t` is used by the block literal of an inlined and:, whose copy shares
+    // it when the receiver is not a Boolean: its accesses follow forwards.
+    // `k` is not: its accesses stay plain PUSH_LOCAL / STORE_LOCAL.
+    Compiler C;
+    auto bc = compileMethodModule(
+        "F >> m: r\n  | t k |\n  t := 1. k := 2.\n  ^ (r and: [ t > 0 ]) -> k\n", C);
+    const auto& m = bc->block(0);
+    const auto& names = m.localNames();
+    auto slotOf = [&](const std::string& n) {
+        for (size_t i = 0; i < names.size(); ++i) if (names[i] == n) return i;
+        FAIL("no slot " << n);
+        return size_t{0};
+    };
+    const size_t t = slotOf("t"), k = slotOf("k");
+    bool tShared = false, tPlain = false, kShared = false, kPlain = false;
+    for (size_t pc = 0; pc + 1 < m.bytes().size(); pc += protoST::kInstrSize) {
+        const auto op = static_cast<Op>(m.bytes()[pc]);
+        const size_t arg = m.bytes()[pc + 1];
+        const bool shared = op == Op::PUSH_SHARED_LOCAL || op == Op::STORE_SHARED_LOCAL;
+        const bool plain = op == Op::PUSH_LOCAL || op == Op::STORE_LOCAL;
+        if (arg == t) { tShared = tShared || shared; tPlain = tPlain || plain; }
+        if (arg == k) { kShared = kShared || shared; kPlain = kPlain || plain; }
+    }
+    REQUIRE(tShared);
+    REQUIRE_FALSE(tPlain);
+    REQUIRE(kPlain);
+    REQUIRE_FALSE(kShared);
 }
 
 TEST_CASE("Compiler: a control block whose temporary a block captures is not inlined",

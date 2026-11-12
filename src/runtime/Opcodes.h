@@ -137,22 +137,23 @@ enum class Op : uint8_t {
     // the selector for real, with closures compiled from the block literals:
     //     DEOPT_ENTER k  PUSH_LOCAL box  PUSH_DEOPT_BLOCK b1 [PUSH_LOCAL box
     //     PUSH_DEOPT_BLOCK b2]  SEND_KEYWORD #sel  DEOPT_EXIT k  JUMP end
-    // DEOPT_ENTER builds the box, a mutable captured dict whose parent is the
-    // frame's captured dict, holding the frame locals that the closures use
-    // (deopt entry k), and stores it in the entry's frame slot. Nothing
-    // changes on the operand stack.
+    // DEOPT_ENTER moves the temporaries the closures use out of their frame
+    // slots into the dictionary of the scope that declares them, leaving a
+    // forward in each slot, so the frame and the closures share them from
+    // then on, as with real closures; it builds the box, a captured dict
+    // whose parent is the innermost of those scope dictionaries and which
+    // holds copies of the arguments the closures read, and stores it in the
+    // entry's frame slot. Nothing changes on the operand stack.
     DEOPT_ENTER        = 46, // arg = deopt-entry index
     // Pops a box and pushes a closure of sub-module `arg` that resolves its
     // free variables in that box (PUSH_BLOCK uses the frame's captured dict).
     PUSH_DEOPT_BLOCK   = 47, // arg = bytecode-module-table index
-    // Copies the box's locals back into the frame slots, marks the box
-    // closed and clears the slot. The send's answer stays on the stack.
+    // Clears the box's frame slot. The send's answer stays on the stack.
     DEOPT_EXIT         = 48, // arg = deopt-entry index
-    // First instruction of a de-optimised closure (and of a block nested in
-    // one) that uses a boxed local: when its box is closed (the send
-    // returned and the frame owns the locals again) it signals an Error
-    // instead of reading or writing stale copies. arg 0 = no check.
-    DEOPT_CHECK        = 49, // arg = 1 to check, 0 for none
+    // Sets a local slot to nil without following a forward: the entry of
+    // an inlined block's scope gives each of its temporaries a fresh
+    // variable, while a closure that shares the previous one keeps it.
+    RESET_LOCAL        = 49, // arg = slot index
     // The inlined nil tests (ifNil:, ifNotNil:, ifNil:ifNotNil:,
     // ifNotNil:ifNil: with literal blocks; 0.10.0). Both peek: the value
     // stays on the stack on both paths.
@@ -172,6 +173,14 @@ enum class Op : uint8_t {
     // because rem: is not one of Pharo's special selectors (review R3-1).
     BIN_INT_AND        = 57, // bitAnd: (a keyword send on a miss)
     BIN_INT_OR         = 58, // bitOr:  (a keyword send on a miss)
+    // PUSH_LOCAL and STORE_LOCAL of a slot whose variable DEOPT_ENTER may
+    // move into a scope dictionary: when the frame holds forwards, they
+    // follow the slot's forward to the variable. The compiler emits
+    // PUSH_LOCAL / STORE_LOCAL and turns those of such slots into these
+    // once the module is complete (BytecodeModule::routeSharedLocals), so
+    // the access of every other slot tests nothing.
+    PUSH_SHARED_LOCAL  = 59, // arg = slot index
+    STORE_SHARED_LOCAL = 60, // arg = slot index
     // Prefix carrying the next-higher byte of the following instruction's
     // operand, for operands above 255 (constant indices, slots, jumps).
     EXTEND          = 254,

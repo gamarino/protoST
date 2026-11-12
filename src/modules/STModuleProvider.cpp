@@ -21,6 +21,7 @@ namespace {
     struct RuntimeEntry {
         const proto::ProtoSpace* space;
         STRuntime* runtime;
+        STModuleProvider* provider;   // the runtime's own (K1)
     };
 
     // Intentionally leaked: an STRuntime may be destroyed during static
@@ -70,7 +71,8 @@ void advanceRegistryGeneration() {
 }
 } // namespace
 
-void registerSTRuntime(const proto::ProtoSpace* space, STRuntime* rt) {
+void registerSTRuntime(const proto::ProtoSpace* space, STRuntime* rt,
+                       STModuleProvider* provider) {
     if (!space || !rt) return;
     std::lock_guard<std::mutex> lock(registryMutex());
     auto& entries = registryEntries();
@@ -82,7 +84,7 @@ void registerSTRuntime(const proto::ProtoSpace* space, STRuntime* rt) {
                 "share that STRuntime among the embedders of the space instead of "
                 "constructing another");
     }
-    entries.push_back({space, rt});
+    entries.push_back({space, rt, provider});
     advanceRegistryGeneration();
 }
 
@@ -118,10 +120,54 @@ STRuntime* soleSTRuntime() {
     return entries.front().runtime;
 }
 
-STModuleProvider::STModuleProvider()
-    : guid_("protoST-source-v1")
-    , alias_("st")
+namespace {
+// The provider of the sole live runtime, or nullptr when there is none or
+// more than one. A provider is never freed (protoCore's registry owns it for
+// the life of the process), so the pointer stays valid after the lock.
+STModuleProvider* soleSTProvider() {
+    std::lock_guard<std::mutex> lock(registryMutex());
+    auto& entries = registryEntries();
+    if (entries.size() != 1) return nullptr;
+    return entries.front().provider;
+}
+} // namespace
+
+STModuleProvider::STModuleProvider(unsigned long long serial)
+    : guid_("protoST-source-v1#" + std::to_string(serial))
+    , retiredGuid_(guid_ + "#retired")
+    , alias_()
 {}
+
+STDispatchProvider::STDispatchProvider()
+    : alias_("st")
+{}
+
+const std::string& STDispatchProvider::getGUID() const {
+    if (STModuleProvider* p = soleSTProvider()) return p->getGUID();
+    // No single live runtime: a GUID no other call ever answers, so an entry
+    // protoCore might store under it can never be found again. The number is
+    // process-wide, so no two calls collide on any thread; the text lives in
+    // the calling thread's buffer, which protoCore copies into the module
+    // identity before this thread calls again.
+    static std::atomic<unsigned long long> s_unmatched{0};
+    thread_local std::string buffer;
+    buffer = "protoST-source-v1#none#" +
+             std::to_string(s_unmatched.fetch_add(1, std::memory_order_relaxed));
+    return buffer;
+}
+
+const proto::ProtoObject*
+STDispatchProvider::tryLoad(const std::string& logicalPath, proto::ProtoContext* ctx) {
+    if (STModuleProvider* p = soleSTProvider()) return p->tryLoad(logicalPath, ctx);
+    if (registeredSTRuntimeCount() > 1) {
+        throw NativeError(
+            "protoST: a cross-runtime import of '" + logicalPath +
+            "' is ambiguous — this process holds more than one protoST "
+            "runtime and `provider:st` names no particular one, so "
+            "there is no way to tell which one is meant");
+    }
+    return PROTO_NONE;   // no protoST runtime in this process
+}
 
 namespace {
 
@@ -281,7 +327,7 @@ STModuleProvider::loadForForeignCaller(STRuntime& rt, const std::string& logical
         failed = std::current_exception();
     } catch (...) {
         // protoST's control-flow unwinds (NonLocalReturn, UnwindToHandler,
-        // RetrySignal, ResumeSignal, PassSignal, FutureYield) are not
+        // RetrySignal, ResumeSignal, FutureYield) are not
         // std::exceptions and mean "resume protoST execution somewhere up the
         // protoST stack" — there is no such frame on a foreign importer's
         // stack, and letting one cross would unwind into a runtime that cannot
@@ -304,6 +350,8 @@ STModuleProvider::loadForForeignCaller(STRuntime& rt, const std::string& logical
 const proto::ProtoObject*
 STModuleProvider::tryLoad(const std::string& logicalPath, proto::ProtoContext* ctx) {
     if (!ctx || !ctx->space) return PROTO_NONE;
+    // The runtime this provider served is gone (K1): nothing to load.
+    if (retired_.load(std::memory_order_acquire)) return PROTO_NONE;
 
     auto* rt = stRuntimeForSpace(ctx->space);
     // A guest runtime in the caller's space: the caller is the host runtime's
@@ -328,8 +376,8 @@ STModuleProvider::tryLoad(const std::string& logicalPath, proto::ProtoContext* c
                 throw NativeError(
                     "protoST: a cross-runtime import of '" + logicalPath +
                     "' is ambiguous — this process holds more than one protoST "
-                    "runtime and the UMD provider is registered once per "
-                    "process, so there is no way to tell which one is meant");
+                    "runtime and `provider:st` names no particular one, so "
+                    "there is no way to tell which one is meant");
             }
             return PROTO_NONE;  // no protoST runtime in this process
         }

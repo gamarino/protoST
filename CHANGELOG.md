@@ -166,6 +166,78 @@ minor release, so the two services arrive in 0.5.0.
   two characters in place: `3 perform: #between:and: with: 1 with: i` costs
   3,569 instructions per iteration against 3,591 on 83864c9. Test
   `05-messages/private-selectors-are-hidden.st`.
+- **`Exception >> outer` is Pharo's `outer` (D7).** It behaved as `pass`:
+  when the enclosing handler resumed, the protected block continued at the
+  `signal` and the inner handler never continued. `outer` now evaluates the
+  enclosing handler in place, on top of the handler that sends it; if that
+  handler resumes, `outer` answers the resumption value inside the inner
+  handler, which continues: `[[Warning signal: 'w'. 'body'] on: Warning do:
+  [:e | e outer printNl. 'inner continued']] on: Warning do: [:e | e resume:
+  5]` prints `5` and answers `'inner continued'` (it answered `'body'`). If
+  the enclosing handler returns, retries or falls off its end, the unwind
+  passes through the inner handler. With no enclosing handler a resumable
+  exception's default action value is answered (`nil` for a `Warning`); an
+  `Error`'s default action ends the activation. For a non-resumable
+  exception `outer` is `pass`, as ANSI states. The pattern of protoBaseST's
+  `newTransactionDo:` (a catch-all handler that sets a flag, asks `outer`,
+  clears it and resumes) now leaves the flag set only when the enclosing
+  handler unwinds. Handlers stay per thread: `outer` never crosses an actor
+  message. LANGUAGE.md §8.4; tutorial §14.5. Tests: 15 new programs in
+  `08-exceptions/` (`outer-*.st`, `pass-runs-enclosing-handler-before-
+  unwinding.st`, `nesting-limit-in-outer-resuming-chain.st`).
+- **`pass` runs the enclosing handler before unwinding the passing one**, as
+  Pharo's `Exception>>pass` does. It unwound the passing handler first, so
+  that handler's `ensure:` blocks ran before the enclosing handler instead of
+  after it. A resumption still resumes the `signal`, or the `outer` an inner
+  handler is waiting in (Pharo's `outerContext`).
+- **A class's `isResumable` override is honoured (D54); `resume:` of a
+  non-resumable exception signals `IllegalResumeAttempt`.** `resume:` and
+  the default action read only the class-derived marker, so
+  `MyException >> isResumable ^ false` (the ANSI / Pharo way to declare a
+  non-resumable exception) answered false and could still be resumed, and an
+  unhandled one resumed with nil. Both now ask the method. A `resume:` that
+  is not allowed signals the new kernel class `IllegalResumeAttempt` inside
+  the handler, as Pharo does: an `Exception` (not an `Error`), itself not
+  resumable, with the text it always had (`cannot resume a non-resumable
+  exception`). Through `outer`, an enclosing handler's illegal `resume:` now
+  unwinds through the inner handler instead of answering it (protoBaseST's
+  `newTransactionDo:` aborts). Tests:
+  `08-exceptions/resume-honours-isresumable-override.st`,
+  `unhandled-non-resumable-user-exception-aborts.st`; the umd tests catch
+  `IllegalResumeAttempt`.
+- **`retryUsing:` is Pharo's (D55).** It evaluated the replacement block
+  inside the handler, with the handler disabled, and returned its value from
+  the `on:do:`, so an exception the replacement signalled went to an
+  enclosing handler. The replacement now becomes the protected block of the
+  handler's `on:do:` and runs under the same handlers
+  (`handlerContext restartWithNewReceiver:`); a later `retry` runs it again.
+  Test: `08-exceptions/retry-using-replaces-protected-block.st`.
+- **Another actor's message run while an actor waits no longer sees the
+  waiting actor's running handlers (S36).** While a waiting actor's thread
+  ran another actor's message (`wait` nested in a block), the handler stack
+  was disabled but the stack of running handler blocks was not: `resume:`,
+  `outer` or `pass` of an exception instance the two actors shared resolved
+  to the waiting actor's handler, and the stray resumption rejected the
+  helped message's Future with `exception resume: no active signal to
+  resume`. One barrier (`HandlerBarrier`, `HandlerStack.h`) now hides both
+  for that turn, for a send from a foreign runtime's frame and for a
+  debugger evaluation. Test: `cli_helped_message_handler_actions` (one
+  worker, so the interleaving is deterministic; in the `tsan` label).
+- **A `thenDo:` / `catch:` callback no longer runs under the handlers of the
+  code that settles the future (S36).** `resolve:` inside a protected block
+  ran the callbacks at once with the settler's handlers visible: the
+  settler's `on: Error` handler caught the callback's error, and its
+  `return:` was then dropped, so a handler took effect without its unwind; a
+  callback's `resume:` of the settler's exception reached the settler's
+  running handler. Callbacks now run behind the same `HandlerBarrier`; their
+  errors are reported on stderr as callback errors. Tests:
+  `cli_future_callback_barrier`,
+  `10-actors/future-callback-not-caught-by-settler-handler.st`.
+- **The debugger's Uncaught Exceptions breakpoint honours an `isResumable`
+  override (D54).** An unhandled non-`Error` exception whose class answers
+  false to `isResumable` ends the activation but did not stop; the
+  classification now sends `isResumable` in that case. Test:
+  `cli_dap_exceptions` (case `uncaught3`).
 - **S3 is closed: an allocation-free loop does not stall a collection, and
   a test now proves it.** The park points came with S15 (the loop back-edge,
   engine entry and call entry call `ProtoContext::safepoint()`), but S3 stayed
@@ -236,23 +308,46 @@ minor release, so the two services arrive in 0.5.0.
   wrote, with closures for the block literals: its own method, or
   `doesNotUnderstand:` with the whole Message, whose resumed value is the
   value of the expression. The closures are compiled from the same literals
-  without inlining (a second copy of each, used only on this path); the
-  method's variables they use are carried by a box for the duration of the
-  send and copied back when it returns, so a write in the block is seen by
-  the method, and `^` in the block returns from the method. A closure the
-  receiver keeps and evaluates *after* the send returned signals an `Error`
-  (the method owns its variables again by then; a block held in a variable
-  has no such limit). A Boolean receiver costs what it did: the guard is a
-  new opcode `JUMP_IF_NOT_BOOL` (45) to the out-of-line path, which uses
-  four more (`DEOPT_ENTER`, `PUSH_DEOPT_BLOCK`, `DEOPT_EXIT`, `DEOPT_CHECK`,
-  46-49; `docs/VM.md` 1.4). Pharo differs here: since Pharo 10 a
+  without inlining (a second copy of each, used only on this path), and
+  they are real closures: the method's temporaries they use move into
+  per-scope dictionaries that the frame reaches through forwards left in
+  its slots, so a write on either side is seen by the other, `^` in the
+  block returns from the method, and a closure the receiver keeps and
+  evaluates later, or on another thread, keeps working. Each entry of an
+  inlined block with temporaries gets its own variables. A Boolean receiver
+  costs what it did: the guard is a new opcode `JUMP_IF_NOT_BOOL` (45) to
+  the out-of-line path, which uses three more (`DEOPT_ENTER`,
+  `PUSH_DEOPT_BLOCK`, `DEOPT_EXIT`, 46-48; `docs/VM.md` 1.4); `RESET_LOCAL`
+  (49) starts the fresh variables of each entry of an inlined block, and
+  the accesses of the temporaries a closure may share are
+  `PUSH_SHARED_LOCAL` / `STORE_SHARED_LOCAL` (59, 60), so no other local
+  access pays for the sharing. Pharo differs here: since Pharo 10 a
   non-Boolean receiver of an inlined conditional signals
   `NonBooleanReceiver` ("proceed for truth") and the receiver's own method
   is not run; Pharo 9 re-sent the expression without inlining
   (`mustBeBooleanDeOptimizeIn:`), which is what protoST does. Tests:
   `08-exceptions/inlined-conditional-non-boolean-like-send.st` (failed
   before: 5 of 11 rows), `inlined-conditional-reaches-receiver-method.st`
-  (failed before), `inlined-conditional-kept-block-is-refused.st`.
+  (failed before), `06-blocks/inlined-conditional-kept-block-shares-variables.st`
+  (10 rows; a kept closure with or without temporaries, frame writes after
+  the send, per-iteration variables, shadowing; until fix round 1 of the
+  interpreter-overhead work a kept closure that used a method variable
+  signalled an `Error`, and one with temporaries inside an inlined block
+  read nil).
+- **Runtimes constructed one after another no longer reach each other's
+  modules (K1).** protoCore's process-wide module cache, keyed by provider
+  GUID and path, handed a runtime constructed after another was destroyed the
+  dead runtime's modules, whose methods' bytecode had been freed (a
+  heap-use-after-free; it could abort the process with a corrupted heap).
+  Each runtime now registers a module provider of its own, named in its
+  resolution chain by GUID, and retires it when it is destroyed. Foreign
+  callers' `provider:st` is one dispatcher per process that serves the sole
+  live runtime and answers its GUID, so it keeps working when another runtime
+  was constructed and destroyed meanwhile. The unit-test binary now passes run
+  whole in one process, also under ASan. Tests: `K1: a runtime does not reach
+  the modules of a runtime destroyed before it` (heap-use-after-free under
+  ASan before), `K1: provider:st serves the live runtime after another was
+  destroyed`.
 - **One rule for a loop condition that is not a Boolean.** The four loop
   forms disagreed: an inlined `whileTrue:` / `whileFalse:` sent
   `doesNotUnderstand: whileTrue:` to the condition's value (which is not the
@@ -530,6 +625,16 @@ minor release, so the two services arrive in 0.5.0.
   captures is not inlined`, `Debugger: an inlined block's temporary is shown
   by its name inside the block` (failed before). LANGUAGE.md §6.4, VM.md
   "Inlined blocks".
+  The temporaries of sibling inlined blocks share their hidden slots (a
+  method with sixty one-temporary arms recurses as deep as without them:
+  `06-blocks/inlined-block-temporaries-share-slots.st`, which overflowed at
+  about 9,050 frames when each arm had its own slot). A traceback no longer
+  shows a `[] in` frame for a block that is now inlined: the error is
+  reported in the enclosing method, at the block's line.
+  At a halt inside an inlined block, the debugger showed a temporary of the
+  block that was still nil as the method's captured variable of the same
+  name; it now shows nil (unit test `Debugger: a nil temporary does not
+  show a captured variable of the same name`, failed before).
 - **The collection primitives no longer intern their storage keys on every
   call.** `OrderedCollection`, `Set`, `Dictionary`, `Interval` and
   `Association` primitives looked up `__data__`, `__size__` and the
@@ -537,7 +642,10 @@ minor release, so the two services arrive in 0.5.0.
   call (UTF-8 validation, `strlen`, hash, compare); the keys are now
   interned once per runtime in `Bootstrap::sym`, as `Array>>at:` already
   did. `oc addLast: i. oc removeLast` went from 8,374 to 6,251 instructions
-  per iteration; the symbol-table probe was about 4 % of `PBAvl check:`.
+  per iteration; the symbol-table probe was about 4 % of `PBAvl check:`. The
+  other fixed keys interned per call on hot paths (`=`, `hash`, `<=`,
+  `initialize`, `__elementsForIteration`, `__data__` outside the
+  collections) now come from `Bootstrap::sym` as well.
 - **`and:` and `or:` with a literal block are compiled inline (protoBaseST
   review P2).** Like `ifTrue:`, a zero-argument block without temporaries
   is no longer a closure evaluated by a primitive in a nested engine: its
@@ -636,6 +744,31 @@ minor release, so the two services arrive in 0.5.0.
   module or another runtime exports), as a call-form send already did. A unary
   send answered the method cell itself as a value, and a keyword send
   signalled `the attribute is a value, not a method`.
+- **`outer` no longer behaves as `pass`** (see *Fixed*): a program whose
+  enclosing handler resumes now continues in the inner handler after
+  `outer`, not at the `signal`. `[[(Warning signal: 'w') + 1] on: Warning do:
+  [:e | e outer]] on: Warning do: [:e | e resume: 4]` answers 4 (it answered
+  5). Code that wanted the old effect sends `pass`.
+- **`pass` runs the enclosing handler before unwinding the passing one**
+  (see *Fixed*): the passing handler's `ensure:` and `ifCurtailed:` blocks
+  now run after the enclosing handler, not before it.
+- **A chain of handlers that pass or `outer` outward reaches the engine
+  nesting limit at about half the former depth.** Each enclosing handler
+  now runs on top of the one that passes (Pharo nests contexts the same
+  way). Measured on a Release build, a chain of `Warning` handlers that each
+  pass (or `outer`) to a resuming outermost handler completes up to 497
+  levels; f799ab9 completed 995. Past that the limit's catchable `Error`
+  arrives once, at the handler that could not start (S23); `Error` chains
+  still complete, because the limit `Error` goes to the next `on: Error`
+  handler. LANGUAGE.md §8.4.
+- **`resume:` of a non-resumable exception signals `IllegalResumeAttempt`,
+  which is not an `Error`.** It raised a plain `Error`, so `on: Error do:`
+  caught it; catch it with `on: IllegalResumeAttempt do:` or `on: Exception
+  do:`. Unhandled, it still ends the program with `cannot resume a
+  non-resumable exception`.
+- **A class's `isResumable` override decides resumability**, and
+  **`retryUsing:` runs the replacement under the same handler** (see
+  *Fixed*, D54 and D55).
 - **MessagePack nesting depth is 1024 (was 512)**, encode and decode, from
   protoIO 0.5.0's default: msgpack-python 1.2's unpacker limit and the record
   depth ProtoBase format 4 requires every reader to accept since ProtoBase

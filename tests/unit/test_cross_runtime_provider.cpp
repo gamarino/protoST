@@ -255,6 +255,12 @@ TEST_CASE("Track Y: a module error reaches a caller in another space as STUncaug
                              std::to_string(++serial);
     { std::ofstream(name + ".st") << "Error subclass: #CrossModuleError.\n"
                                      "CrossModuleError signal: 'module top level failed'.\n"; }
+    // Removed however the case ends: an exception the catches below do not
+    // expect must not leave the file in the working directory.
+    struct RemoveOnExit {
+        std::string path;
+        ~RemoveOnExit() { std::remove(path.c_str()); }
+    } removeOnExit{name + ".st"};
     ::setenv("STPATH", ".", 1);
 
     proto::ProtoSpace foreign;
@@ -273,7 +279,6 @@ TEST_CASE("Track Y: a module error reaches a caller in another space as STUncaug
     } catch (const proto::ProtoException&) {
         protoException = true;
     }
-    std::remove((name + ".st").c_str());
     REQUIRE_FALSE(protoException);
     REQUIRE(message == "CrossModuleError: module top level failed");
     REQUIRE(kind);

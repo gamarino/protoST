@@ -94,9 +94,15 @@ void reportCallbackError(const std::string& text) {
     writeWholeLine(stderr, "error in a Future callback: " + std::string(message));
 }
 
-// Run one thenDo: / catch: callback, reporting whatever escapes it.
+// Run one thenDo: / catch: callback, reporting whatever escapes it. The
+// callback belongs to whoever registered it, not to the code that settled the
+// future (or registered on a settled one) and runs it here: behind a
+// HandlerBarrier, so the settler's handlers do not catch its errors and its
+// running handler blocks do not answer the callback's resume: / return: /
+// pass / outer (S36).
 void invokeCallback(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* block,
                     const proto::ProtoObject* const* args, int argc) {
+    HandlerBarrier barrier;
     try { invokeBlock(rt, ctx, block, args, argc); }
     catch (const proto::ProtoException& e) { reportCallbackError(describeUncaught(ctx, e)); }
     catch (const std::exception& e) { reportCallbackError(describeUncaught(e)); }
@@ -371,17 +377,19 @@ const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
         bool helped = false;
         // The helped message belongs to another actor: this actor's exception
         // handlers, still on this thread's handler stack, must not catch its
-        // errors.
-        const std::vector<proto::proto_ulong> hidden = handlerStackDisableAll();
+        // errors, and its running handler blocks must not answer the helped
+        // message's resume: / return: / pass / outer (HandlerBarrier).
         // An exception is re-thrown after the catch clause, not with `throw;`
         // inside it: see translateNativeException (NativeExceptionBridge.h).
         std::exception_ptr failed;
-        try {
-            helped = atCap ? rt.runOneTask(ctx) : rt.drainOne(ctx);
-        } catch (...) {
-            failed = std::current_exception();
+        {
+            HandlerBarrier hidden;
+            try {
+                helped = atCap ? rt.runOneTask(ctx) : rt.drainOne(ctx);
+            } catch (...) {
+                failed = std::current_exception();
+            }
         }
-        handlerStackRestore(hidden);
         rt.setCurrentActor(self);
         if (failed) std::rethrow_exception(failed);
         if (helped) { idle = 0; continue; }

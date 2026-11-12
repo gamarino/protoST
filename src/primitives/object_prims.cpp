@@ -848,7 +848,7 @@ const proto::ProtoObject* prim_Object_performWithArguments(STRuntime& rt, proto:
     const proto::ProtoString* sel = selectorArg(ctx, a[0]);
     std::vector<const proto::ProtoObject*> args;
     if (a[1] && a[1] != PROTO_NONE) {
-        const proto::ProtoString* dataKey = proto::ProtoString::createSymbol(ctx, "__data__");
+        const proto::ProtoString* dataKey = rt.bootstrap().sym.data;
         const proto::ProtoObject* elems = a[1]->getAttribute(ctx, dataKey);
         const proto::ProtoList* list = elems && elems != PROTO_NONE ? elems->asList(ctx) : nullptr;
         if (!list) throw NativeError("perform:withArguments: expects an Array of arguments");
@@ -1132,7 +1132,7 @@ std::uint64_t hashModP(STRuntime& rt, proto::ProtoContext* ctx, const proto::Pro
     } else {
         bool understood = false;
         const proto::ProtoObject* hv = sendDynamic(
-            rt, ctx, x, proto::ProtoString::createSymbol(ctx, "hash"), nullptr, 0, &understood);
+            rt, ctx, x, rt.bootstrap().sym.hash, nullptr, 0, &understood);
         if (!understood || !hv || !hv->isInteger(ctx))
             throw NativeError("__hashMix: a hash method must answer an Integer");
         if (!integerWord(ctx, hv, h)) {
@@ -1364,7 +1364,7 @@ const proto::ProtoObject* makeArrayFromList(STRuntime& rt, proto::ProtoContext* 
                                             const proto::ProtoList* data) {
     const proto::ProtoObject* arr = rt.bootstrap().arrayProto->newChild(ctx, /*isMutable=*/true);
     TransientPin pinArr(ctx, arr);
-    arr->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__data__"), data->asObject(ctx));
+    arr->setAttribute(ctx, rt.bootstrap().sym.data, data->asObject(ctx));
     return arr;
 }
 

@@ -151,7 +151,7 @@ const proto::ProtoObject* prim_Block_valueWithArguments(STRuntime& rt, proto::Pr
                                                         const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("valueWithArguments: expects 1 arg");
     const proto::ProtoObject* data = a[0] && a[0] != PROTO_NONE
-        ? a[0]->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__data__")) : nullptr;
+        ? a[0]->getAttribute(ctx, rt.bootstrap().sym.data) : nullptr;
     const proto::ProtoList* list = data && data != PROTO_NONE ? data->asList(ctx) : nullptr;
     if (!list) throw NativeError("valueWithArguments: expects an Array");
     std::vector<const proto::ProtoObject*> args;

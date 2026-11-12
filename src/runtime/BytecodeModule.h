@@ -218,14 +218,29 @@ public:
     // De-optimisation of an inlined value conditional (Op::DEOPT_ENTER /
     // DEOPT_EXIT): when the receiver is not a Boolean, the expression is sent
     // for real, with closures compiled from the inlined block literals. Those
-    // closures reach the enclosing frame's uncaptured locals through a box
-    // (a captured dict built for the send): one entry per conditional names
-    // the frame slot that holds the box and every local the closures use,
-    // as (name constant, frame slot) pairs, copied in before the send and
-    // back after it.
+    // closures reach the enclosing frame's uncaptured locals through a box (a
+    // captured dict built for the send). One entry per conditional names:
+    //   boxSlot         the frame slot that holds the box during the send;
+    //   scopeDictSlots  for each scope enclosing the conditional that declares
+    //                   temporaries, outermost first (the frame's own
+    //                   temporaries, then each inlined block with
+    //                   temporaries), the frame slot holding that scope's
+    //                   dictionary once a closure shares its variables;
+    //   locals          every frame local the closures use: its name, its slot
+    //                   and the index in scopeDictSlots of the scope that
+    //                   declares it, or kReadOnly for an argument (a method or
+    //                   block argument, a to:do: loop variable, the argument
+    //                   of an inlined block), which is copied into the box.
+    struct DeoptLocal {
+        static constexpr int32_t kReadOnly = -1;
+        uint32_t nameConst = 0;
+        uint32_t slot      = 0;
+        int32_t  scope     = kReadOnly;
+    };
     struct DeoptEntry {
         uint32_t boxSlot = 0;
-        std::vector<std::pair<uint32_t, uint32_t>> locals;   // (name const, slot)
+        std::vector<uint32_t>   scopeDictSlots;
+        std::vector<DeoptLocal> locals;
     };
     size_t addDeoptEntry() {
         deoptEntries_.emplace_back();
@@ -234,6 +249,11 @@ public:
     DeoptEntry&       deoptEntry(size_t i)       { return deoptEntries_.at(i); }
     const DeoptEntry& deoptEntry(size_t i) const { return deoptEntries_.at(i); }
     size_t numDeoptEntries() const { return deoptEntries_.size(); }
+    // Turns every PUSH_LOCAL / STORE_LOCAL of a slot that a de-optimisation
+    // entry may forward (a temporary it shares) into PUSH_SHARED_LOCAL /
+    // STORE_SHARED_LOCAL. Called once the module's code is complete; the
+    // instruction size does not change, so no jump moves.
+    void routeSharedLocals();
 
     // sub-modules
     size_t              addBlockModule(std::unique_ptr<BytecodeModule> b);

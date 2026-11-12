@@ -16,14 +16,14 @@
 # the heap ceiling holds, so it can only finish after collections ran while
 # the main thread was spinning, and then sets the flag.
 #
-# Three directions, so it cannot pass by accident:
-#   1. with the safepoints, the run completes;
-#   2. with PROTOST_NO_GC_SAFEPOINT=1 it must NOT complete: the first
-#      collection the actor needs waits for the spinning thread for ever
-#      (the bounded `timeout` only ends a run that is known to never end);
-#   3. the same program without the spinning loop, also with the hook off,
-#      ends -- with the out-of-memory the disabled hook causes (S15) -- so the
-#      hang of direction 2 is the spinning loop, not something else.
+# This script is the end-to-end direction: with the safepoints the run
+# completes. The control -- that without the hook an allocation-free loop does
+# hold a requested collection -- is the unit case "S3: an allocation-free
+# loop does not stall a collection" run with PROTOST_NO_GC_SAFEPOINT=1
+# (tests/unit/test_gc_cycle.cpp): it observes that the collector's cycle count
+# does not advance while a collection is requested and the loop spins, an
+# order of events rather than a timeout. Until fix round 1 of 0.10.0 the
+# control was a 10-second run here that had to time out.
 # Until 0.10.0 this test could not be written: every protoST loop allocated
 # (a method temporary used in an inlined block was captured, and each write
 # published a new version of the captured dictionary), so every loop parked at
@@ -46,11 +46,6 @@ spins := 0.
 [ flag value ] whileFalse: [ spins := spins + 1 ].
 { f wait. spins > 0 }
 EOS
-sed 's/^\[ flag value \] whileFalse: \[ spins := spins + 1 \]\./spins := 1./' \
-    "$WORK/spin.st" > "$WORK/nospin.st"
-if grep -q whileFalse "$WORK/nospin.st"; then
-    echo "FAIL: the control program still contains the spinning loop"; exit 1
-fi
 
 LIMIT=400000
 EXPECTED='#(#churned true)'
@@ -60,7 +55,6 @@ run() {   # run <timeout> <script> [env...]
         timeout "$t" "$PROTOST" --print-last "$script" 2>&1
 }
 
-# --- direction 1: with the safepoints, the run completes --------------------
 rc=0
 out="$(run 300 "$WORK/spin.st")" || rc=$?
 last="$(printf '%s\n' "$out" | tail -n 1)"
@@ -70,23 +64,4 @@ if [ "$rc" -ne 0 ] || [ "$last" != "$EXPECTED" ]; then
     exit 1
 fi
 
-# --- direction 2: without them, it never completes --------------------------
-rc=0
-out="$(run 10 "$WORK/spin.st" PROTOST_NO_GC_SAFEPOINT=1)" || rc=$?
-if [ "$rc" -ne 124 ]; then
-    echo "FAIL: with the safepoint hook DISABLED the run ended (exit $rc), so"
-    echo "      this fixture no longer shows that the back-edge parks:"
-    printf '%s\n' "$out"
-    exit 1
-fi
-
-# --- direction 3: without the spinning loop, the hook-off run ends ----------
-rc=0
-out="$(run 300 "$WORK/nospin.st" PROTOST_NO_GC_SAFEPOINT=1)" || rc=$?
-if [ "$rc" -eq 124 ]; then
-    echo "FAIL: the control program hangs too, so direction 2's hang is not"
-    echo "      the spinning loop's"
-    exit 1
-fi
-
-echo "OK (spinning main thread, ${LIMIT}-cell ceiling; hangs with the hook off, control ends with exit $rc)"
+echo "OK (spinning main thread, ${LIMIT}-cell ceiling)"

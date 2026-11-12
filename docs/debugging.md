@@ -147,7 +147,9 @@ Execution runs until it hits a breakpoint (or the entry point, if
     and `evaluate` are exactly as at the signal.
   - **Uncaught Exceptions** (`uncaught`, on by default) stops only when no
     `on:do:` handler on the thread will take the exception and its default
-    action ends the activation (an `Error`, or any non-resumable exception).
+    action ends the activation (an `Error`, or any non-resumable exception;
+    for an exception that is not an `Error`, its `isResumable` method decides,
+    so a class that overrides it to answer false stops here).
     Smalltalk looks for the handler before it unwinds anything, so this stop
     too has the stack intact. An unhandled `Warning` resumes with nil and does
     not count.
@@ -164,8 +166,8 @@ Execution runs until it hits a breakpoint (or the entry point, if
   What never stops: protoST's internal control flow, which is C++ unwinding and
   not a signal — the non-local return `^` from a block (`NonLocalReturn`), the
   unwinding to an `on:do:` after its handler (`UnwindToHandler`), `resume:`
-  (`ResumeSignal`), `retry` (`RetrySignal`), `pass` / `outer` (`PassSignal`),
-  the nesting-limit unwinding (`NestingLimitUnwind`), an actor's cooperative
+  and the resumption a `pass` ends with (`ResumeSignal`), `retry`
+  (`RetrySignal`), the nesting-limit unwinding (`NestingLimitUnwind`), an actor's cooperative
   yield in `wait` (`FutureYield`), `halt` (`DebuggerHalt`, which has its own
   stop) and Ctrl-C in the REPL (`InterruptSignal`). An exception that already
   went through every handler and continues outward (`UnhandledSTException`) is

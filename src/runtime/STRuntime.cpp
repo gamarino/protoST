@@ -11,7 +11,6 @@
 #include "NestingLimitUnwind.h"
 #include "ResumeSignal.h"
 #include "RetrySignal.h"
-#include "PassSignal.h"
 #include "ReadyStack.h"
 #include "TimerService.h"
 #include "BytecodeModule.h"
@@ -410,6 +409,8 @@ struct STRuntime::Impl {
 
     // F5-M2 module cache: canonical absolute path -> module object.
     std::unordered_map<std::string, const proto::ProtoObject*> moduleCache;
+    // This runtime's UMD provider (K1); owned by protoCore's ProviderRegistry.
+    STModuleProvider* moduleProvider = nullptr;
 
     // F5-M3: Keep compiled BytecodeModules alive for the lifetime of the
     // runtime. Block method wrappers borrow pointers into a module's
@@ -706,6 +707,9 @@ struct STRuntime::Impl {
             pinPermanent(bootstrap.messageNotUnderstoodProto);
             pinPermanent(bootstrap.blockCannotReturnProto);
             pinPermanent(bootstrap.nonBooleanReceiverProto);
+            // Not a class: the prototype of de-optimisation forwards, which
+            // only the engine creates and recognises.
+            pinPermanent(bootstrap.deoptForwardProto);
             // Track 2 slice a (COL-a): the collection prototypes carry the
             // iteration protocol + Array base operations — pin them for the
             // runtime's whole lifetime, exactly like the other built-in classes.
@@ -783,13 +787,40 @@ void STRuntime::construct() {
     // before anything is installed in the space. Registered before the
     // worker pool below is started, so no import can miss it; unregistered
     // again if construction fails, since the destructor will not run.
-    registerSTRuntime(&impl_->space, this);
+    //
+    // K1: the runtime's own module provider is registered with it, numbered by
+    // the runtime's serial. It is handed to protoCore's ProviderRegistry, which
+    // keeps it for the life of the process, only once this runtime is
+    // registered, so a refused runtime leaves no provider behind; a
+    // construction that fails later retires it, as the destructor would.
+    //
+    // F5 v2, K1: first, once per process, the dispatcher foreign callers reach
+    // as `provider:st`. protoCore's ProviderRegistry files a provider under the
+    // GUID it answers when it is registered, and the dispatcher answers the
+    // sole live runtime's GUID: registered after this runtime, it would take
+    // the place of the runtime's own provider under that GUID. Registered
+    // before any runtime, it answers a GUID no other call ever answers.
+    static std::once_flag s_dispatcherRegistered;
+    std::call_once(s_dispatcherRegistered, []() {
+        proto::ProviderRegistry::instance().registerProvider(
+            std::make_unique<STDispatchProvider>());
+    });
+    auto ownProvider = std::make_unique<STModuleProvider>(serial());
+    impl_->moduleProvider = ownProvider.get();
+    registerSTRuntime(&impl_->space, this, impl_->moduleProvider);
     struct RegistrationGuard {
         const proto::ProtoSpace* space;
         STRuntime* rt;
+        STModuleProvider* provider = nullptr;   // set once protoCore owns it
         bool committed = false;
-        ~RegistrationGuard() { if (!committed) unregisterSTRuntime(space, rt); }
+        ~RegistrationGuard() {
+            if (committed) return;
+            if (provider) provider->retire();
+            unregisterSTRuntime(space, rt);
+        }
     } registration{&impl_->space, this};
+    proto::ProviderRegistry::instance().registerProvider(std::move(ownProvider));
+    registration.provider = impl_->moduleProvider;
 
     installIntPrimitives(*this);
     installMathPrimitives(*this);
@@ -818,24 +849,19 @@ void STRuntime::construct() {
     impl_->timers = std::make_unique<TimerService>(
         *this, impl_->liveRegistry, impl_->bootstrap.sym.timers);
 
-    // F5 v2: register STModuleProvider once globally with protoCore's
-    // ProviderRegistry; subsequent STRuntime instances reuse the same provider.
-    static std::once_flag s_providerRegistered;
-    std::call_once(s_providerRegistered, []() {
-        proto::ProviderRegistry::instance().registerProvider(
-            std::make_unique<STModuleProvider>());
-    });
 
-    // Set the resolution chain on this space: protoST's source provider only.
-    // In a host's space the host's chain stays, and protoST's provider is
-    // added to it.
+    // Set the resolution chain on this space: protoST's source provider only,
+    // named by its GUID so the cache entries of this runtime's imports are
+    // its own (K1). In a host's space the host's chain stays, and protoST's
+    // provider is added to it.
+    const std::string ownSpec = impl_->moduleProvider->chainSpec();
     if (!impl_->ownsSpace()) {
-        addModuleProviderToChain("provider:st");
+        addModuleProviderToChain(ownSpec);
     } else {
         auto* ctx = impl_->rootCtx;
         auto* chain = ctx->newList();
         chain = chain->appendLast(
-            ctx, ctx->fromUTF8String("provider:st"));
+            ctx, ctx->fromUTF8String(ownSpec.c_str()));
         impl_->space.setResolutionChain(chain->asObject(ctx));
     }
 
@@ -1005,6 +1031,9 @@ STRuntime::~STRuntime() {
     // after destruction does not dereference a dead runtime. Done after the
     // workers are joined: none of them can still be importing.
     unregisterSTRuntime(&impl_->space, this);
+    // K1: and retire this runtime's module provider, so no later import, by
+    // a later runtime or a foreign caller, reaches a module of this one.
+    if (impl_->moduleProvider) impl_->moduleProvider->retire();
 
     // F6 v3 C: clear the thread-local current-actor pointer if it still
     // refers to an actor of this (now-dying) runtime. Without this a stale
@@ -1427,10 +1456,6 @@ STRuntime::runTopLevelEntry(const BytecodeModule& m, proto::ProtoContext* ctx) {
         // always consumes the ResumeSignal for its own id.
         throw NativeError(
             "exception resume: no active signal to resume");
-    } catch (const PassSignal&) {
-        // EXC-b: a `pass` escaped its `signal` loop — a bug.
-        throw NativeError(
-            "exception pass: no active signal to pass");
     }
     std::rethrow_exception(foreignOriginal);
 }
@@ -2209,15 +2234,6 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                     TransientPin pinErr(ctx, err);
                     rejectFutureFromDrain(*this, ctx, msgFut, err);
                 }
-            } catch (const PassSignal&) {
-                SCHED_DIAG("drainOne RESUME STRAY exception-pass actor=" << actor);
-                setCurrentActor(nullptr);
-                if (msgFut && msgFut != PROTO_NONE) {
-                    auto* err = ctx->fromUTF8String(
-                        "exception pass: no active signal to pass");
-                    TransientPin pinErr(ctx, err);
-                    rejectFutureFromDrain(*this, ctx, msgFut, err);
-                }
             } catch (const proto::ProtoException& e) {
                 // An unhandled protoST exception, a module's error, another
                 // language's exception: the Future is rejected with its value.
@@ -2408,15 +2424,6 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             if (future) {
                 auto* err = ctx->fromUTF8String(
                     "exception resume: no active signal to resume");
-                TransientPin pinErr(ctx, err);
-                rejectFutureFromDrain(*this, ctx, future, err);
-            }
-        } catch (const PassSignal&) {
-            SCHED_DIAG("drainOne STRAY exception-pass actor=" << actor);
-            setCurrentActor(nullptr);
-            if (future) {
-                auto* err = ctx->fromUTF8String(
-                    "exception pass: no active signal to pass");
                 TransientPin pinErr(ctx, err);
                 rejectFutureFromDrain(*this, ctx, future, err);
             }
@@ -3020,9 +3027,24 @@ void STRuntime::loadKernel() {
         }
     }
     // From here on, classes are declared by user code (see __subclassNamed:).
-    if (auto* g = globals())
+    if (auto* g = globals()) {
         g->setAttribute(rootCtx(), proto::ProtoString::createSymbol(rootCtx(), "__kernel_loaded__"),
                         PROTO_TRUE);
+    }
+    // The kernel's Exception>>isResumable, before any user code can redefine
+    // it (Bootstrap::kernelIsResumable). Pinned in the live registry, the
+    // runtime's single GC root, for the runtime's whole lifetime: it stays
+    // reachable after a redefinition replaces it on Exception, and no user
+    // code can reach or unpin it. Without a registry (no root to pin it in)
+    // it is not captured, and resume: always sends isResumable.
+    Bootstrap& b = impl_->bootstrap;
+    const proto::ProtoObject* m = b.exceptionProto
+        ? b.exceptionProto->getAttribute(rootCtx(), b.sym.isResumable) : nullptr;
+    if (m && m != PROTO_NONE && impl_->liveRegistry) {
+        const_cast<proto::ProtoObject*>(impl_->liveRegistry)
+            ->setAttribute(rootCtx(), ptrRegistryKey(rootCtx(), m), m);
+        b.kernelIsResumable = m;
+    }
 }
 
 // F5-M1: Read, parse, compile, and execute a module file. Wraps the classes
@@ -3268,13 +3290,13 @@ const proto::ProtoObject* STRuntime::importModuleFileImpl(
 // T5-a: consumer-side cross-language interop.
 //
 // protoST's constructor sets the space's resolution chain to just
-// `["provider:st"]` — its own UMD provider. protoCore's getImportModule walks
+// `["provider:<GUID>"]` — its own UMD provider (K1). protoCore's getImportModule walks
 // that chain entry-by-entry; for a `provider:<key>` entry it looks the key up
 // in the global ProviderRegistry. A foreign runtime's provider (protoJS,
 // protoPython, or a test stand-in) may be *registered* with the registry, but
 // it is never *reached* unless its spec is in this space's chain. This method
 // closes that gap: it appends a foreign provider spec to the chain, leaving
-// `provider:st` first so a same-named protoST module still shadows a foreign
+// protoST's own first so a same-named protoST module still shadows a foreign
 // one. The filesystem fallback that getImportModule applies after the chain is
 // unchanged.
 void STRuntime::addModuleProviderToChain(const std::string& providerSpec) {

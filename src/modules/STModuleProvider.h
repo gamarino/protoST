@@ -1,5 +1,6 @@
 #pragma once
 #include "protoCore.h"
+#include <atomic>
 #include <cstddef>
 #include <string>
 
@@ -25,13 +26,34 @@ class STRuntime;
 //     module's top level then runs in protoST's OWN space, because protoST's
 //     prototypes, globals and interned symbols live there, and `ctx` is used
 //     only to build the result the caller sees (see `tryLoad`).
+//
+// K1: each STRuntime registers a provider of its own, with a GUID of its own
+// (`serial` is the runtime's STRuntime::serial()), because protoCore keys its
+// process-wide module cache by provider GUID and logical path and never drops
+// an entry: under one process-wide GUID, a runtime constructed after another
+// was destroyed found the dead runtime's modules in that cache and ran methods
+// whose bytecode had been freed. The runtime's own resolution chain names its
+// provider by GUID; the provider has no alias. When the runtime is destroyed
+// its provider retires: it answers a GUID no entry was ever stored under and
+// loads nothing, so no caller, protoST's or a foreign one, can reach a module
+// of a dead runtime. protoCore's ProviderRegistry keeps every provider for the
+// life of the process (it has no removal), so a retired provider stays
+// registered, inert. Foreign callers name protoST by the alias `st`, which
+// belongs to STDispatchProvider below.
 class STModuleProvider : public proto::ModuleProvider {
 public:
-    STModuleProvider();
+    explicit STModuleProvider(unsigned long long serial);
     const proto::ProtoObject* tryLoad(const std::string& logicalPath,
                                        proto::ProtoContext* ctx) override;
-    const std::string& getGUID() const override { return guid_; }
+    const std::string& getGUID() const override {
+        return retired_.load(std::memory_order_acquire) ? retiredGuid_ : guid_;
+    }
     const std::string& getAlias() const override { return alias_; }
+    // The resolution-chain entry that names this provider ("provider:<GUID>").
+    std::string chainSpec() const { return "provider:" + guid_; }
+    // Called by the runtime's destructor once no thread of the runtime can
+    // import any more. Irreversible.
+    void retire() { retired_.store(true, std::memory_order_release); }
 
 private:
     // Track Y: the cross-runtime path. Runs the load in protoST's own space and
@@ -42,6 +64,33 @@ private:
         proto::ProtoContext* callerCtx);
 
     std::string guid_;
+    std::string retiredGuid_;
+    std::string alias_;
+    std::atomic<bool> retired_{false};
+};
+
+// `provider:st`: the one provider of the process under the alias `st`, with
+// no runtime of its own, registered once. It serves the process's sole live
+// runtime: tryLoad delegates to that runtime's provider, and getGUID answers
+// that provider's GUID, so the module cache entries made through the alias
+// are the runtime's own and die with it (K1). With no live runtime, or with
+// two, every call answers a new GUID that no other call ever answers, so
+// nothing stored under it can be found again; tryLoad then loads nothing (no
+// runtime) or refuses the load as ambiguous (two).
+//
+// protoCore reads getGUID before it calls tryLoad. A runtime constructed or
+// destroyed between the two calls can make them disagree; constructing or
+// destroying a runtime while another runtime imports from protoST is a host
+// lifetime error (INTEROP.md 4.2).
+class STDispatchProvider : public proto::ModuleProvider {
+public:
+    STDispatchProvider();
+    const proto::ProtoObject* tryLoad(const std::string& logicalPath,
+                                       proto::ProtoContext* ctx) override;
+    const std::string& getGUID() const override;
+    const std::string& getAlias() const override { return alias_; }
+
+private:
     std::string alias_;
 };
 
@@ -54,11 +103,13 @@ private:
 //
 // STRuntime registers itself in its constructor, before any thread that can
 // import is started, and unregisters in its destructor, after those threads
-// are joined (or when its construction fails). A space hosts one protoST
-// runtime: registering a second one for a space throws std::logic_error, since
-// a primitive finds its runtime by its context's space (primitives.h,
-// runtimeOf). The registry lock is held only for the container operation.
-void registerSTRuntime(const proto::ProtoSpace* space, STRuntime* rt);
+// are joined (or when its construction fails), with its own module provider
+// (K1). A space hosts one protoST runtime: registering a second one for a
+// space throws std::logic_error, since a primitive finds its runtime by its
+// context's space (primitives.h, runtimeOf). The registry lock is held only
+// for the container operation.
+void registerSTRuntime(const proto::ProtoSpace* space, STRuntime* rt,
+                       STModuleProvider* provider);
 void unregisterSTRuntime(const proto::ProtoSpace* space, STRuntime* rt);
 STRuntime* stRuntimeForSpace(const proto::ProtoSpace* space);
 
@@ -67,11 +118,10 @@ STRuntime* stRuntimeForSpace(const proto::ProtoSpace* space);
 // nullptr when there is none or when there is more than one.
 //
 // This reads the same registry rather than caching an STRuntime* inside the
-// provider, and it does so on purpose: the provider is registered once per
-// process under a std::call_once and outlives every STRuntime (protoCore's
-// ProviderRegistry never releases it), so a pointer captured at construction
-// would dangle as soon as that runtime was destroyed — which a host that
-// builds a runtime per test does on every case. The registry already
+// provider, and it does so on purpose: a provider outlives its STRuntime
+// (protoCore's ProviderRegistry never releases it), so a pointer captured at
+// construction would dangle once that runtime was destroyed — which a host
+// that builds a runtime per test does on every case. The registry already
 // register/unregisters in STRuntime's constructor and destructor, so asking it
 // gives the same "my own runtime" answer with a lifetime that is correct.
 STRuntime* soleSTRuntime();

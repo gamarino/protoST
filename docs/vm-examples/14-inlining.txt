@@ -51,9 +51,8 @@ module main.0: <block> (not inlined)
   constants:
     #0   string    'inlined'
   code:
-      0  DEOPT_CHECK        0     ; none
-      1  PUSH_CONST         0     ; 'inlined'
-      2  RETURN_TOP
+      0  PUSH_CONST         0     ; 'inlined'
+      1  RETURN_TOP
 
 module main.1: <block>
   args 0, locals 0, stack 48 (deepest 1)
