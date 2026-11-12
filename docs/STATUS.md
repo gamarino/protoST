@@ -309,6 +309,28 @@ are noted where useful.
       timed runs, reports the median and a geometric mean, and writes a dated
       report; `benchmarks/reports/2026-05-21-baseline.md` is the first one and
       `README.md` carries the headline numbers. *(Track 11)*
+- [x] **Interpreter overheads against protoCore (0.10.0, protoBaseST
+      `PBAvl check:`).** Measured in x86 instructions per loop iteration
+      beyond nothing (`perf stat`), on f799ab9 and after:
+      - an inlined control block that declares temporaries (`ifTrue: [ | t | ... ]`,
+        `whileTrue: [ | z | ... ]`) was a real closure run by a nested engine:
+        12,922 and 22,824 -> 924 and 1,712 (closed, `ded10e9`);
+      - the collection primitives interned their storage key on every call:
+        `addLast:` + `removeLast` 8,374 -> 6,251 (closed, `f39db66`);
+      - an allocation-free loop allocates nothing (S3, closed);
+      - a write to a variable a real block captures costs 1,464, an instance
+        variable write 1,357: both are one protoCore mutable `setAttribute`
+        (4 cells: the new state, the attribute-tree path, the mutable-table
+        path, the cache refresh). The protoST part of a captured write, the
+        owner walk, is about 100. Open on protoCore's side;
+      - a unary send of a user method costs about 940 over the loop:
+        protoCore's `getAttribute` (~200), three own-attribute probes
+        (`__metaclass__` for the method holder, `__bc_ptr__` and `__captured__`
+        on the method, ~160), the frame push (~230) and dispatch. A primitive
+        send also decodes its marker, a LargeInteger, through
+        `Integer::asLong` (~90 of `Array at:`'s 990). Open.
+      `PBAvl check:` of a 1,000-node tree twenty times: 6.56 -> 4.18 x10^9
+      instructions; ratio to ProtoBase 60x -> 24x (pos) and 60x -> 31x (key).
 
 ### Standard library
 - [x] `lib/` infrastructure + the `Stream` module *(track4, T4-a)*
