@@ -26,13 +26,13 @@ const proto::ProtoObject* makeArrayInstance(STRuntime& rt, proto::ProtoContext* 
 
 // A new, empty Dictionary; dictionaryPut adds (or replaces) an entry.
 const proto::ProtoObject* makeEmptyDictionary(STRuntime& rt, proto::ProtoContext* ctx);
-void dictionaryPut(proto::ProtoContext* ctx, const proto::ProtoObject* dict,
+void dictionaryPut(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* dict,
                    const proto::ProtoObject* key, const proto::ProtoObject* value);
 
 // True for an instance of Array or OrderedCollection (or a subclass of either).
 bool isArrayOrOrdered(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* o);
 // The elements of such an instance, as the immutable list it holds.
-const proto::ProtoList* arrayOrOrderedElements(proto::ProtoContext* ctx, const proto::ProtoObject* o);
+const proto::ProtoList* arrayOrOrderedElements(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* o);
 // A list (or map snapshot) as a value the collector can be told to keep: the
 // same pointer protoCore uses for it, typed as an object.
 const proto::ProtoObject* asRootable(const proto::ProtoList* list);
@@ -42,7 +42,7 @@ const proto::ProtoObject* asRootable(const proto::ProtoList* list);
 bool isDictionary(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* o);
 // Answers the snapshot map the entries point into: the caller keeps it
 // reachable (pinned or rooted) for as long as it uses `out`.
-const proto::ProtoObject* dictionaryEntries(proto::ProtoContext* ctx, const proto::ProtoObject* dict,
+const proto::ProtoObject* dictionaryEntries(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* dict,
                        std::vector<std::pair<const proto::ProtoObject*, const proto::ProtoObject*>>& out);
 
 // Associations.
@@ -50,7 +50,7 @@ const proto::ProtoObject* makeAssociationValue(STRuntime& rt, proto::ProtoContex
                                                const proto::ProtoObject* key,
                                                const proto::ProtoObject* value);
 bool isAssociation(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* o);
-const proto::ProtoObject* associationKey(proto::ProtoContext* ctx, const proto::ProtoObject* assoc);
-const proto::ProtoObject* associationValue(proto::ProtoContext* ctx, const proto::ProtoObject* assoc);
+const proto::ProtoObject* associationKey(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* assoc);
+const proto::ProtoObject* associationValue(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* assoc);
 
 } // namespace protoST

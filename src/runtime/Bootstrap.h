@@ -210,8 +210,18 @@ struct Bootstrap {
         // ReadyStacks to push onto; workers drain highest non-empty band
         // first. See docs/tutorial/10-actors-and-futures.md §10.11.
         const proto::ProtoString* priority        = nullptr;  // __priority__   (on actor: 0=high, 1=medium, 2=low)
-        // The backing ProtoList of an Array (read by ByteArray withAll:).
+        // The backing ProtoList of an Array or OrderedCollection, or the
+        // ProtoMap of a Set or Dictionary.
         const proto::ProtoString* data            = nullptr;  // __data__
+        // The storage keys of the other built-in collections. The collection
+        // primitives read them on every call, so they are interned once here
+        // rather than on each use (0.10.0).
+        const proto::ProtoString* size            = nullptr;  // __size__ (Set, Dictionary entry count)
+        const proto::ProtoString* intervalStart   = nullptr;  // __interval_start__
+        const proto::ProtoString* intervalStop    = nullptr;  // __interval_stop__
+        const proto::ProtoString* intervalStep    = nullptr;  // __interval_step__
+        const proto::ProtoString* assocKey        = nullptr;  // __assoc_key__
+        const proto::ProtoString* assocValue      = nullptr;  // __assoc_value__
     } sym;
 };
 

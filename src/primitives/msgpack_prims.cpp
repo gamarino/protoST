@@ -172,7 +172,7 @@ private:
         const PO* list = accessor(rt_, ctx_, m, "associations");
         if (!list || list == PROTO_NONE || !isArrayOrOrdered(rt_, ctx_, list))
             throw NativeError("MessagePackMap: its associations must be an Array");
-        const proto::ProtoList* l = arrayOrOrderedElements(ctx_, list);
+        const proto::ProtoList* l = arrayOrOrderedElements(rt_, ctx_, list);
         TransientPin pinList(ctx_, asRootable(l));
         const size_t n = static_cast<size_t>(l->getSize(ctx_));
         std::vector<const PO*> out;
@@ -181,8 +181,8 @@ private:
             const PO* assoc = l->getAt(ctx_, listIndex(i));
             if (!isAssociation(rt_, ctx_, assoc))
                 throw NativeError("MessagePackMap: every element must be an Association");
-            out.push_back(associationKey(ctx_, assoc));
-            out.push_back(associationValue(ctx_, assoc));
+            out.push_back(associationKey(rt_, ctx_, assoc));
+            out.push_back(associationValue(rt_, ctx_, assoc));
         }
         const proto::ProtoList* flat = out.empty() ? ctx_->newList()
             : ctx_->newList(static_cast<unsigned>(out.size()), out.data());
@@ -217,7 +217,7 @@ private:
         if (inheritsFromProto(ctx_, v, extClass_, objectProto)) { emitExt(v); return; }
         if (isDictionary(rt_, ctx_, v)) {
             std::vector<std::pair<const PO*, const PO*>> entries;
-            const PO* snapshot = dictionaryEntries(ctx_, v, entries);
+            const PO* snapshot = dictionaryEntries(rt_, ctx_, v, entries);
             std::vector<const PO*> flat;
             flat.reserve(entries.size() * 2);
             for (const auto& e : entries) { flat.push_back(e.first); flat.push_back(e.second); }
@@ -225,7 +225,7 @@ private:
             return;
         }
         if (isArrayOrOrdered(rt_, ctx_, v)) {
-            const proto::ProtoList* l = arrayOrOrderedElements(ctx_, v);
+            const proto::ProtoList* l = arrayOrOrderedElements(rt_, ctx_, v);
             const size_t n = static_cast<size_t>(l->getSize(ctx_));
             std::vector<const PO*> items;
             items.reserve(n);
@@ -362,7 +362,7 @@ private:
         if (!ordered_) {
             const PO* d = makeEmptyDictionary(rt_, ctx_);
             TransientPin pinDict(ctx_, d);
-            for (size_t i = 0; i < items.size(); i += 2) dictionaryPut(ctx_, d, items[i], items[i + 1]);
+            for (size_t i = 0; i < items.size(); i += 2) dictionaryPut(rt_, ctx_, d, items[i], items[i + 1]);
             return d;
         }
         const proto::ProtoList* assocs = ctx_->newList();
