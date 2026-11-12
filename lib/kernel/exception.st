@@ -1,6 +1,6 @@
-"Kernel: exception protocol. signal, signal:, on:do:, retry, resume:, pass,
- return: and ensure: are native; exception sets and the remaining accessors
- are defined here."
+"Kernel: exception protocol. signal, signal:, on:do:, retry, retryUsing:,
+ resume:, pass, outer, return: and ensure: are native; exception sets and the
+ remaining accessors are defined here."
 
 Object subclass: #ExceptionSet instanceVariableNames: 'exceptionClasses'.
 
@@ -54,10 +54,13 @@ Error subclass: #InvalidArgument.
 Exception >> isResumable
   ^ self __isResumable.
 
-"Evaluate replacementBlock in place of the protected block, as retry
- re-evaluates the protected block."
-Exception >> retryUsing: replacementBlock
-  ^ self return: replacementBlock value.
+"Signalled by resume: (and so by a resumption through outer or pass) of an
+ exception that is not resumable, inside the handler that tried it, as in
+ Pharo. It is an Exception, not an Error, and is itself not resumable."
+Exception subclass: #IllegalResumeAttempt.
+
+IllegalResumeAttempt >> isResumable
+  ^ false.
 
 "A Notification is a resumable Exception whose unhandled default action
  answers nil and reports nothing, as in Pharo. The runtime's default action

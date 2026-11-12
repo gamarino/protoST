@@ -30,20 +30,6 @@ const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
 
 namespace {
 
-// The handlers of the protoST code above a foreign frame, disabled for the
-// duration of one foreign send (see the header) and restored on every exit.
-class HandlerBarrier {
-public:
-    HandlerBarrier() : disabled_(handlerStackDisableAll()) {}
-    ~HandlerBarrier() { handlerStackRestore(disabled_); }
-    bool hidOuterHandlers() const { return !disabled_.empty(); }
-    HandlerBarrier(const HandlerBarrier&) = delete;
-    HandlerBarrier& operator=(const HandlerBarrier&) = delete;
-
-private:
-    std::vector<proto::proto_ulong> disabled_;
-};
-
 // One SEND of `selector` to `recv`, with the engine's semantics: the method
 // holder (a class's metaclass, D52), doesNotUnderstand (D3), a user method, a primitive, a value
 // attribute read by a unary send, and a protoCore method (a module's export).

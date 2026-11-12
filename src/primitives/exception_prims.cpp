@@ -166,6 +166,11 @@ struct ActiveSignal {
     const std::exception_ptr* origin;
 };
 thread_local std::vector<ActiveSignal> g_activeSignals;
+// Entries below this index belong to code that a HandlerBarrier hid (another
+// actor's turn run while this thread waits, a foreign send, a debugger
+// evaluation): the handler actions do not see them, as handlerStackFindMatch
+// does not see the disabled handler entries.
+thread_local std::size_t g_activeSignalsFloor = 0;
 
 struct ActiveSignalScope {
     ActiveSignalScope(const proto::ProtoObject* exc, proto::proto_ulong id,
@@ -179,25 +184,42 @@ struct ActiveSignalScope {
 };
 
 const ActiveSignal* findActiveSignal(const proto::ProtoObject* exc) {
-    for (std::size_t i = g_activeSignals.size(); i-- > 0; )
+    for (std::size_t i = g_activeSignals.size(); i-- > g_activeSignalsFloor; )
         if (g_activeSignals[i].exception == exc) return &g_activeSignals[i];
     return nullptr;
 }
 
-// True when the exception instance is resumable. The `__resumable__` marker is
-// installed class-side at bootstrap (`Exception`/`Warning` true, `Error`
-// false) and inherited by instances and user subclasses; an instance may
-// override it. Absent marker is treated as resumable (the `Exception` root
-// default) — only `Error` and its descendants stamp `false`. A foreign
-// exception is never resumable: the native frames between its origin and the
-// boundary that signalled it are gone.
-bool isResumable(proto::ProtoContext* ctx, const proto::ProtoObject* exc) {
+// The class-derived resumability marker. `__resumable__` is installed
+// class-side at bootstrap (`Exception`/`Warning` true, `Error` false) and
+// inherited by instances and user subclasses; an instance may override it.
+// Absent marker is treated as resumable (the `Exception` root default) — only
+// `Error` and its descendants stamp `false`. A foreign exception is never
+// resumable: the native frames between its origin and the boundary that
+// signalled it are gone. This is what Exception>>isResumable answers unless a
+// class overrides that method; it runs no Smalltalk.
+bool resumableMarker(proto::ProtoContext* ctx, const proto::ProtoObject* exc) {
     if (!exc) return false;
     if (const ActiveSignal* active = findActiveSignal(exc))
         if (active->foreign) return false;
     const proto::ProtoObject* m = exc->getAttribute(ctx, resumableKey(ctx));
     if (!m || m == PROTO_NONE) return true;
     return m == PROTO_TRUE;
+}
+
+// Whether the exception is resumable, as `resume:` and the default action
+// decide it: the answer of its `isResumable` method, so a class that
+// overrides isResumable (`^ false`, the ANSI / Pharo way to declare a
+// non-resumable exception) is honoured. A value that is not a protoST
+// exception instance (a foreign exception) is never resumable and runs no
+// method.
+bool isResumable(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* exc) {
+    if (!exc || !isExceptionInstance(rt, ctx, exc)) return false;
+    bool understood = false;
+    const proto::ProtoObject* answer = sendDynamic(
+        rt, ctx, exc, proto::ProtoString::createSymbol(ctx, "isResumable"),
+        nullptr, 0, &understood);
+    if (!understood) return resumableMarker(ctx, exc);
+    return answer == PROTO_TRUE;
 }
 
 // The id of the handler currently running for `exc`, or 0 when the exception
@@ -275,7 +297,7 @@ const proto::ProtoObject* defaultAction(STRuntime& rt, proto::ProtoContext* ctx,
                                         const proto::ProtoObject* exc) {
     const bool isErrorClass = exc && exc->getAttribute(
         ctx, proto::ProtoString::createSymbol(ctx, "__unhandled_is_error__")) == PROTO_TRUE;
-    if (isErrorClass || !isResumable(ctx, exc)) {
+    if (isErrorClass || !isResumable(rt, ctx, exc)) {
         // Error (resumable or not) / non-resumable: abort the activation by
         // throwing the exception itself, as a ProtoException (protoCore pins
         // it while it is in flight). Inside an actor the drain rejects the
@@ -394,7 +416,8 @@ thread_local bool t_signalFromPrimitive = false;
 // NestingLimitUnwind, FutureYield, DebuggerHalt, InterruptSignal) are thrown
 // and caught without signalling, and an UnhandledSTException continuing
 // outward was already signalled once. Reads attributes only: no Smalltalk runs
-// here (a messageText override is not consulted).
+// here (neither a messageText nor an isResumable override is consulted, so an
+// exception whose class overrides isResumable is classified by its marker).
 void debuggerExceptionStop(STRuntime& rt, proto::ProtoContext* ctx,
                            const proto::ProtoObject* exc, bool foreign, bool fromPrimitive) {
     DebuggerRuntime& dbg = rt.debugger();
@@ -419,7 +442,7 @@ void debuggerExceptionStop(STRuntime& rt, proto::ProtoContext* ctx,
             ctx, exc, 0, foreign ? rt.bootstrap().exceptionProto : nullptr) != nullptr;
         const bool isErrorClass = !foreign && exc->getAttribute(
             ctx, proto::ProtoString::createSymbol(ctx, "__unhandled_is_error__")) == PROTO_TRUE;
-        uncaught = !handled && (foreign || isErrorClass || !isResumable(ctx, exc));
+        uncaught = !handled && (foreign || isErrorClass || !resumableMarker(ctx, exc));
     }
     dbg.onException(rt, ctx, exc, cls, msg, uncaught, fromPrimitive);
 }
@@ -437,11 +460,17 @@ void debuggerExceptionStop(STRuntime& rt, proto::ProtoContext* ctx,
 // exception's value is returned, anything else throws.
 //
 // `firstHandlerId` (S23) runs that entry first instead of searching.
+//
+// `resultPin` is the caller's pin: a resumption value is pinned in it inside
+// the catch clause, while the ResumeSignal still holds it, so it stays
+// reachable after the signal is gone until the caller hands it on (`pass`
+// re-throws it in a new ResumeSignal).
 const proto::ProtoObject* runHandlers(STRuntime& rt, proto::ProtoContext* ctx,
                                       const proto::ProtoObject* exc, bool foreign,
                                       const std::exception_ptr* origin,
                                       proto::proto_ulong searchBelowId,
-                                      proto::proto_ulong firstHandlerId) {
+                                      proto::proto_ulong firstHandlerId,
+                                      TransientPin& resultPin) {
     const HandlerEntry* entry = firstHandlerId != 0
         ? handlerStackFindById(firstHandlerId)
         : handlerStackFindMatch(ctx, exc, searchBelowId,
@@ -493,8 +522,12 @@ const proto::ProtoObject* runHandlers(STRuntime& rt, proto::ProtoContext* ctx,
     } catch (const ResumeSignal& r) {
         // `resume: v` -- only ours is consumed here; another id belongs to
         // the loop that ran an enclosing or an inner handler.
-        if (r.handlerId() != handlerId) propagate = std::current_exception();
-        else resumed = r.value() ? r.value() : PROTO_NONE;
+        if (r.handlerId() != handlerId) {
+            propagate = std::current_exception();
+        } else {
+            resumed = r.value() ? r.value() : PROTO_NONE;
+            resultPin.reset(resumed);
+        }
     } catch (...) {
         // UnwindToHandler (return:), RetrySignal (retry), NonLocalReturn,
         // a cooperative yield, or another error: let it continue.
@@ -529,7 +562,9 @@ const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx
     // debugger's exception breakpoints. One relaxed load when detached.
     if (firstHandlerId == 0 && rt.debugger().attached() && rt.debugger().exceptionFilters() != 0)
         debuggerExceptionStop(rt, ctx, exc, foreign, fromPrimitive);
-    return runHandlers(rt, ctx, exc, foreign, origin, /*searchBelowId=*/0, firstHandlerId);
+    TransientPin pinResult(ctx, nullptr);
+    return runHandlers(rt, ctx, exc, foreign, origin, /*searchBelowId=*/0, firstHandlerId,
+                       pinResult);
 }
 
 // `outer` and `pass`: run the handlers that enclose the one now handling
@@ -540,27 +575,40 @@ const proto::ProtoObject* signalInstance(STRuntime& rt, proto::ProtoContext* ctx
 // exception and its default action answers a value (a resumable exception);
 // a return, retry or unwind by the enclosing handler propagates through the
 // caller. Not a new signal: the debugger does not stop again.
+//
+// `exc` needs no pin of its own: the signalInstance frame below pins it for
+// as long as its active-signal entry exists.
 const proto::ProtoObject* runEnclosingHandlers(STRuntime& rt, proto::ProtoContext* ctx,
                                                const proto::ProtoObject* exc,
-                                               const char* selector) {
+                                               const char* selector,
+                                               TransientPin& resultPin) {
     const ActiveSignal* active = exc ? findActiveSignal(exc) : nullptr;
     if (!active)
         throw NativeError(std::string(selector) + " sent to an exception with no active handler");
     // Copied: the entry's vector grows while the enclosing handler runs.
     const ActiveSignal current = *active;
-    TransientPin pinExc(ctx, exc);
     return runHandlers(rt, ctx, exc, current.foreign, current.origin,
-                       current.constructId, /*firstHandlerId=*/0);
+                       current.constructId, /*firstHandlerId=*/0, resultPin);
 }
 
 } // namespace
+
+std::size_t activeSignalsHide() {
+    const std::size_t previous = g_activeSignalsFloor;
+    g_activeSignalsFloor = g_activeSignals.size();
+    return previous;
+}
+
+void activeSignalsRestore(std::size_t previousFloor) {
+    g_activeSignalsFloor = previousFloor;
+}
 
 // anException __isResumable → whether resume: is allowed (the class-derived
 // marker, overridable per instance). Exception>>isResumable wraps it.
 const proto::ProtoObject* prim_Exception_isResumable(STRuntime&, proto::ProtoContext* ctx,
                                                      const proto::ProtoObject* r,
                                                      const proto::ProtoObject* const*, int) {
-    return isResumable(ctx, r) ? PROTO_TRUE : PROTO_FALSE;
+    return resumableMarker(ctx, r) ? PROTO_TRUE : PROTO_FALSE;
 }
 
 // Re-signal an exception instance in the current context: a Future rejected
@@ -969,21 +1017,44 @@ const proto::ProtoObject* prim_Exception_return(STRuntime&, proto::ProtoContext*
     throw UnwindToHandler(ctx, handlerId, a[0] ? a[0] : PROTO_NONE);
 }
 
+// Signal an IllegalResumeAttempt (lib/kernel/exception.st): a non-resumable
+// Exception, not an Error, as in Pharo, carrying the text this runtime has
+// always given. Without the kernel class (a bare runtime) a plain Error is
+// raised.
+const proto::ProtoObject* signalIllegalResumeAttempt(STRuntime& rt, proto::ProtoContext* ctx) {
+    static constexpr const char* kText = "cannot resume a non-resumable exception";
+    const proto::ProtoObject* g = rt.globals();
+    const proto::ProtoObject* cls = g
+        ? g->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, "IllegalResumeAttempt"))
+        : nullptr;
+    if (!cls || cls == PROTO_NONE || cls->hasParent(ctx, rt.bootstrap().exceptionProto) == 0)
+        throw NativeError(kText);
+    const proto::ProtoObject* exc =
+        const_cast<proto::ProtoObject*>(cls)->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinExc(ctx, exc);
+    exc->setAttribute(ctx, msgTextKey(ctx), makeString(ctx, kText));
+    exc->setAttribute(ctx, resumableKey(ctx), PROTO_FALSE);
+    return signalInstance(rt, ctx, exc);
+}
+
 // anException resume: v  /  anException resume
 //
 // Handler action: make the matching `signal` RETURN `v` without unwinding —
 // the protected computation continues from the signal point. Valid only for a
 // resumable exception; `resume:` on an `Error` is itself an error.
-const proto::ProtoObject* prim_Exception_resume(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Exception_resume(STRuntime& rt, proto::ProtoContext* ctx,
                                                  const proto::ProtoObject* r,
                                                  const proto::ProtoObject* const* a,
                                                  int argc) {
     if (argc > 1)
         throw NativeError("resume: expects 0 or 1 arg (value)");
-    if (!isResumable(ctx, r)) {
-        // `resume:` on a non-resumable exception (an Error). The native stack
-        // analogue is already gone — reject it as a hard error.
-        throw NativeError("cannot resume a non-resumable exception");
+    if (!isResumable(rt, ctx, r)) {
+        // `resume:` on a non-resumable exception (an Error, a foreign
+        // exception, or a class whose isResumable answers false): signal
+        // IllegalResumeAttempt here, inside the handler, as Pharo's
+        // Exception>>resume: does. It is itself not resumable, so the signal
+        // does not return.
+        return signalIllegalResumeAttempt(rt, ctx);
     }
     proto::proto_ulong handlerId = activeHandlerIdOf(ctx, r);
     if (handlerId == 0)
@@ -1004,7 +1075,25 @@ const proto::ProtoObject* prim_Exception_retry(STRuntime&, proto::ProtoContext* 
     proto::proto_ulong handlerId = activeHandlerIdOf(ctx, r);
     if (handlerId == 0)
         throw NativeError("retry sent to an exception with no active handler");
-    throw RetrySignal{ handlerId };
+    throw RetrySignal(ctx, handlerId);
+}
+
+// anException retryUsing: aBlock
+//
+// Handler action: abort the handler and evaluate aBlock in place of the
+// protected block, under the same handlers: the owning `on:do:` makes aBlock
+// its protected block (a later `retry` evaluates aBlock again). Pharo's
+// Exception>>retryUsing: (`handlerContext restartWithNewReceiver:`).
+const proto::ProtoObject* prim_Exception_retryUsing(STRuntime&, proto::ProtoContext* ctx,
+                                                    const proto::ProtoObject* r,
+                                                    const proto::ProtoObject* const* a,
+                                                    int argc) {
+    if (argc != 1 || !a[0] || a[0] == PROTO_NONE)
+        throw NativeError("retryUsing: expects a block");
+    proto::proto_ulong handlerId = activeHandlerIdOf(ctx, r);
+    if (handlerId == 0)
+        throw NativeError("retryUsing: sent to an exception with no active handler");
+    throw RetrySignal(ctx, handlerId, a[0]);
 }
 
 // anException outer
@@ -1021,7 +1110,8 @@ const proto::ProtoObject* prim_Exception_outer(STRuntime& rt, proto::ProtoContex
                                                const proto::ProtoObject* r,
                                                const proto::ProtoObject* const*,
                                                int) {
-    const proto::ProtoObject* v = runEnclosingHandlers(rt, ctx, r, "outer");
+    TransientPin pinResult(ctx, nullptr);
+    const proto::ProtoObject* v = runEnclosingHandlers(rt, ctx, r, "outer", pinResult);
     return v ? v : PROTO_NONE;
 }
 
@@ -1038,7 +1128,11 @@ const proto::ProtoObject* prim_Exception_pass(STRuntime& rt, proto::ProtoContext
                                               const proto::ProtoObject* const*,
                                               int) {
     const proto::proto_ulong handlerId = activeHandlerIdOf(ctx, r);
-    const proto::ProtoObject* v = runEnclosingHandlers(rt, ctx, r, "pass");
+    // Pinned from inside the enclosing loop's catch clause until the new
+    // ResumeSignal holds it (the exception object is built before pinResult
+    // is released by the unwinding).
+    TransientPin pinResult(ctx, nullptr);
+    const proto::ProtoObject* v = runEnclosingHandlers(rt, ctx, r, "pass", pinResult);
     // The enclosing handler resumed, or the default action answered: resume
     // this handler's signal with that value, as its loop does for resume:.
     throw ResumeSignal(ctx, handlerId, v ? v : PROTO_NONE);
@@ -1086,6 +1180,9 @@ const proto::ProtoObject* runProtectedSingle(
     // then keeps the entry pushed and runs the handler on the nesting limit's
     // Error instead of the protected block (see NestingLimitUnwind.h).
     bool limitPending = false;
+    // `retryUsing:` replaces the protected block; the replacement is held
+    // only here, so it is pinned for the rest of this construct.
+    TransientPin pinProtected(ctx, protectedBlock);
     for (;;) {   // each turn is one attempt; `retry` loops back here
         if (!limitPending) id = handlerStackPush(guardClass, handlerBlock);
 
@@ -1102,7 +1199,14 @@ const proto::ProtoObject* runProtectedSingle(
             notOurs = std::current_exception();
         } catch (const RetrySignal& r) {
             handlerStackPop(id);
-            if (r.handlerId() == id) { limitPending = false; continue; }
+            if (r.handlerId() == id) {
+                if (const proto::ProtoObject* replacement = r.replacement()) {
+                    protectedBlock = replacement;
+                    pinProtected.reset(replacement);
+                }
+                limitPending = false;
+                continue;
+            }
             notOurs = std::current_exception();
         } catch (const NestingLimitUnwind& n) {
             if (n.handlerId() == id && !limitPending) { limitPending = true; continue; }
@@ -1130,6 +1234,8 @@ const proto::ProtoObject* runProtected(
     }
     std::vector<proto::proto_ulong> ids;
     proto::proto_ulong limitTarget = 0;   // S23: as limitPending in runProtectedSingle
+    // `retryUsing:` replaces the protected block (as in runProtectedSingle).
+    TransientPin pinProtected(ctx, protectedBlock);
     for (;;) {   // each turn is one attempt; `retry` loops back here
         if (limitTarget == 0) {
             ids.clear();
@@ -1168,6 +1274,10 @@ const proto::ProtoObject* runProtected(
         } catch (const RetrySignal& r) {
             popAll();
             if (owns(r.handlerId())) {
+                if (const proto::ProtoObject* replacement = r.replacement()) {
+                    protectedBlock = replacement;
+                    pinProtected.reset(replacement);
+                }
                 limitTarget = 0;
                 continue;   // re-evaluate the protected block — loop again
             }
@@ -1402,6 +1512,8 @@ bindPrimitive(rt, b.messageNotUnderstoodProto, "receiver", reg.registerPrim(prim
     bindPrimitive(rt, b.exceptionProto, "resume",  resumeIdx);
     bindPrimitive(rt, b.exceptionProto, "retry",
                   reg.registerPrim(prim_Exception_retry));
+    bindPrimitive(rt, b.exceptionProto, "retryUsing:",
+                  reg.registerPrim(prim_Exception_retryUsing));
     bindPrimitive(rt, b.exceptionProto, "pass",
                   reg.registerPrim(prim_Exception_pass));
     bindPrimitive(rt, b.exceptionProto, "outer",

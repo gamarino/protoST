@@ -371,17 +371,19 @@ const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
         bool helped = false;
         // The helped message belongs to another actor: this actor's exception
         // handlers, still on this thread's handler stack, must not catch its
-        // errors.
-        const std::vector<proto::proto_ulong> hidden = handlerStackDisableAll();
+        // errors, and its running handler blocks must not answer the helped
+        // message's resume: / return: / pass / outer (HandlerBarrier).
         // An exception is re-thrown after the catch clause, not with `throw;`
         // inside it: see translateNativeException (NativeExceptionBridge.h).
         std::exception_ptr failed;
-        try {
-            helped = atCap ? rt.runOneTask(ctx) : rt.drainOne(ctx);
-        } catch (...) {
-            failed = std::current_exception();
+        {
+            HandlerBarrier hidden;
+            try {
+                helped = atCap ? rt.runOneTask(ctx) : rt.drainOne(ctx);
+            } catch (...) {
+                failed = std::current_exception();
+            }
         }
-        handlerStackRestore(hidden);
         rt.setCurrentActor(self);
         if (failed) std::rethrow_exception(failed);
         if (helped) { idle = 0; continue; }
