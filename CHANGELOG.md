@@ -175,6 +175,21 @@ minor release, so the two services arrive in 0.5.0.
   for that turn, for a send from a foreign runtime's frame and for a
   debugger evaluation. Test: `cli_helped_message_handler_actions` (one
   worker, so the interleaving is deterministic; in the `tsan` label).
+- **A `thenDo:` / `catch:` callback no longer runs under the handlers of the
+  code that settles the future (S36).** `resolve:` inside a protected block
+  ran the callbacks at once with the settler's handlers visible: the
+  settler's `on: Error` handler caught the callback's error, and its
+  `return:` was then dropped, so a handler took effect without its unwind; a
+  callback's `resume:` of the settler's exception reached the settler's
+  running handler. Callbacks now run behind the same `HandlerBarrier`; their
+  errors are reported on stderr as callback errors. Tests:
+  `cli_future_callback_barrier`,
+  `10-actors/future-callback-not-caught-by-settler-handler.st`.
+- **The debugger's Uncaught Exceptions breakpoint honours an `isResumable`
+  override (D54).** An unhandled non-`Error` exception whose class answers
+  false to `isResumable` ends the activation but did not stop; the
+  classification now sends `isResumable` in that case. Test:
+  `cli_dap_exceptions` (case `uncaught3`).
 
 - **`Array new:` with a size the heap can never take signals an Error
   (reviews R3-2, R4-1, R5-1, R6-1, R7-1).** `Array new: 3000000000` (a typo,

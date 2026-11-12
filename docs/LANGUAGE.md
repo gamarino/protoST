@@ -2013,6 +2013,13 @@ f thenDo: [ :result | Transcript show: result printString ].
 v := f wait.                 "v is the resolved value"
 ```
 
+A `thenDo:` / `catch:` callback may run in the code that settles the future
+(`resolve:`) or registers on a settled one, but it does not run under that
+code's handlers: an error it signals is not caught by the settler's
+`on:do:`, and it cannot `resume:`, `return:`, `pass` or `outer` an exception
+the settler is handling. What escapes a callback is reported on stderr
+(`error in a Future callback: ...`) and the next callback runs.
+
 Deadlines (`after:`, `within:`, `waitWithin:`) are measured in milliseconds on
 the monotonic clock; `ms` is a non-negative `SmallInteger`, anything else
 signals `Error`. `TimeoutError` is a subclass of `Error`, and its

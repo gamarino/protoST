@@ -147,7 +147,9 @@ Execution runs until it hits a breakpoint (or the entry point, if
     and `evaluate` are exactly as at the signal.
   - **Uncaught Exceptions** (`uncaught`, on by default) stops only when no
     `on:do:` handler on the thread will take the exception and its default
-    action ends the activation (an `Error`, or any non-resumable exception).
+    action ends the activation (an `Error`, or any non-resumable exception;
+    for an exception that is not an `Error`, its `isResumable` method decides,
+    so a class that overrides it to answer false stops here).
     Smalltalk looks for the handler before it unwinds anything, so this stop
     too has the stack intact. An unhandled `Warning` resumes with nil and does
     not count.
