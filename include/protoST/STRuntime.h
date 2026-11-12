@@ -238,12 +238,45 @@ public:
     // (future_prims.cpp, waitHelping) runs no more actor turns on its stack,
     // so it is blocked for the pool as a worker in I/O is: enterCappedWait
     // adds a worker on the same terms as enterBlockingIO and counts the
-    // worker as capped until leaveCappedWait. workerPoolExhausted answers
-    // whether the pool is at its maximum size with every worker in a capped
-    // wait: no worker is left to run an actor turn, now or later.
+    // thread as capped until leaveCappedWait. Called once per thread (the
+    // outermost capped wait on it), never nested.
     bool enterCappedWait(proto::ProtoContext* ctx);
     void leaveCappedWait();
-    bool workerPoolExhausted() const;
+
+    // S40: proving that no actor turn can ever run again. A capped wait that
+    // finds its own chain of waits ending at an actor message that has not
+    // started cannot tell, alone, whether something else will still release
+    // it; the runtime decides from pool-wide state, in rounds ("epochs"):
+    //  * every event that could release a capped wait while a thread is
+    //    capped (a Future settled, a task queued or finished, a timer
+    //    scheduled, a thread entering or leaving the capped state, the program
+    //    thread parking in its wait) first calls noteProgress, which ends the
+    //    current epoch;
+    //  * each capped thread, idle in its wait, reads the epoch
+    //    (quiescenceEpoch), walks its chain, and, finding it stuck, confirms
+    //    that epoch (confirmStuck), once per thread;
+    //  * the thread whose confirmation completes the epoch, with the pool at
+    //    its ceiling, every worker capped, no timer pending, no task queued
+    //    or running, the program thread parked in its wait and no foreign
+    //    caller ever seen, ends the epoch itself and answers true: it alone
+    //    signals the deadlock. If any event happened meanwhile the epoch has
+    //    changed and the confirmation does not count.
+    // deadlockPossible is the cheap pre-check (atomics only) done before a
+    // chain walk.
+    void noteProgress();
+    std::uint64_t quiescenceEpoch() const;
+    bool deadlockPossible() const;
+    bool confirmStuck(proto::ProtoContext* ctx, std::uint64_t epoch);
+    // A task whose thread now waits (waitHelping inside a callback) is not
+    // running for confirmStuck: pauseRunningTasks takes this thread's running
+    // tasks out of the count and answers how many; resumeRunningTasks puts
+    // them back when the wait ends.
+    int pauseRunningTasks();
+    void resumeRunningTasks(int n);
+    // A caller from another runtime, another thread embedding protoST, or a
+    // debugger can settle any Future at any time: once one is seen, the
+    // deadlock above is never signalled (a nested-wait overflow then waits).
+    void noteForeignCaller();
     // The most workers the pool grows to (enterBlockingIO, enterCappedWait).
     static constexpr std::size_t kMaxWorkers = 256;
 

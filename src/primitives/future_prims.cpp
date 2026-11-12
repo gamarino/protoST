@@ -22,7 +22,6 @@
 #include <chrono>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace protoST {
@@ -222,6 +221,10 @@ bool settleFuture(STRuntime& rt, proto::ProtoContext* ctx,
         return false;  // already settled / being settled
     }
 
+    // S40: a settle can release a capped wait (STRuntime::confirmStuck); it
+    // ends the quiescence epoch before anything of it is published.
+    rt.noteProgress();
+
     // 1a. The winner hands an error on (see observeOnWin above): the source
     //     counts as observed before any waiter of `future` can run.
     if (observeOnWin) markFutureObserved(ctx, observeOnWin);
@@ -307,6 +310,13 @@ long long readState(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoO
 // thread is running for another actor while it waits (waitHelping). A buried
 // actor cannot continue until everything above it returns.
 thread_local std::vector<const proto::ProtoObject*> t_buriedActors;
+// S40: waitHelping frames on this thread in the capped state (the thread
+// entered STRuntime::enterCappedWait once, for the outermost).
+thread_local int t_cappedDepth = 0;
+// S40: the quiescence epoch this thread last judged its wait in, and for
+// which runtime (waitHelping).
+thread_local const STRuntime* t_judgedFor = nullptr;
+thread_local std::uint64_t t_judgedEpoch = 0;
 
 bool isBuriedHere(const proto::ProtoObject* actor) {
     for (const auto* a : t_buriedActors) if (a == actor) return true;
@@ -334,18 +344,23 @@ void detectWaitCycle(STRuntime& rt, proto::ProtoContext* ctx,
     }
 }
 
-// S40: whether `awaited` can only be settled by an actor turn that has not
-// started: following the chain of waits from it (as detectWaitCycle does),
-// the first pending future whose target actor awaits nothing. When no worker
-// can run an actor turn any more (STRuntime::workerPoolExhausted) such a wait
-// never ends. A chain that reaches a settled future, or one with no target
-// actor (a timer's, a Future settled by the program with resolve:), can
-// still end, and is left waiting.
+// S40: whether `awaited` waits, through the chain of waits from it (as
+// detectWaitCycle follows it), for an actor message whose turn has not
+// started: the first pending future whose target actor awaits nothing. That
+// alone proves nothing (another thread may still settle any future of the
+// chain); STRuntime::confirmStuck decides from pool-wide state. A chain that
+// reaches a settled future, or one with no target actor (a timer's, a Future
+// settled by the program with resolve:), answers false.
+constexpr long kMaxStuckChain = 1L << 20;
 bool awaitsUnstartedTurn(STRuntime& rt, proto::ProtoContext* ctx,
                          const proto::ProtoObject* awaited) {
     const auto& sym = rt.bootstrap().sym;
     const proto::ProtoObject* fut = awaited;
-    for (int step = 0; step < 256 && fut && fut != PROTO_NONE; ++step) {
+    // The chain runs through every actor buried on every capped worker (at
+    // most 256 x 17) and any cooperatively suspended ones: the bound is far
+    // above that, and a chain longer than the bound answers false (the wait
+    // goes on).
+    for (long step = 0; step < kMaxStuckChain && fut && fut != PROTO_NONE; ++step) {
         if (readState(rt, ctx, fut) != 0) return false;
         const proto::ProtoObject* target = fut->getOwnAttributeDirect(ctx, sym.targetActor);
         if (!target || target == PROTO_NONE) return false;
@@ -385,6 +400,26 @@ const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
         explicit Bury(const proto::ProtoObject* a) : actor(a) { t_buriedActors.push_back(a); }
         ~Bury() { t_buriedActors.pop_back(); }
     } bury(self);
+    // S40: the capped state belongs to the thread, not to this frame: a
+    // callback run here (a timer's settle) can wait at the cap too, and the
+    // thread counts once (t_cappedDepth). Declared before clearWaiting, so it
+    // is destroyed after it: this actor's __waiting_on__ is cleared before
+    // the thread stops counting as capped.
+    struct CappedWait {
+        STRuntime& rt; bool entered = false;
+        void enter(proto::ProtoContext* ctx) {
+            if (t_cappedDepth == 0 && !rt.enterCappedWait(ctx)) return;
+            ++t_cappedDepth;
+            entered = true;
+        }
+        ~CappedWait() { if (entered && --t_cappedDepth == 0) rt.leaveCappedWait(); }
+    } capped{rt};
+    // Tasks this thread runs below this wait (a callback that waits) are not
+    // running while it waits (STRuntime::pauseRunningTasks).
+    struct PausedTasks {
+        STRuntime& rt; int n;
+        ~PausedTasks() { rt.resumeRunningTasks(n); }
+    } pausedTasks{rt, rt.pauseRunningTasks()};
     struct ClearWaiting {
         STRuntime& rt; proto::ProtoContext* ctx; const proto::ProtoObject* actor;
         ~ClearWaiting() {
@@ -392,11 +427,8 @@ const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
                 const_cast<proto::ProtoObject*>(actor)->setAttribute(ctx, rt.bootstrap().sym.waitingOn, PROTO_NONE);
         }
     } clearWaiting{rt, ctx, self};
-    struct CappedWait {
-        STRuntime& rt; bool entered = false;
-        ~CappedWait() { if (entered) rt.leaveCappedWait(); }
-    } capped{rt};
     int idle = 0;
+    t_judgedFor = nullptr;   // this frame's chain is judged afresh
     while (readState(rt, ctx, awaited) == 0) {
         // Past the helping cap no further actor turn is buried here, but the
         // queued worker tasks (timer settles) still run: they bury no actor,
@@ -404,7 +436,7 @@ const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
         // is at the cap (otherwise waitWithin: nested in blocks could wait
         // for ever, its timeout queued behind workers that only poll).
         const bool atCap = t_buriedActors.size() > kMaxHelpingDepth;
-        if (atCap && !capped.entered) capped.entered = rt.enterCappedWait(ctx);
+        if (atCap && !capped.entered) capped.enter(ctx);
         bool helped = false;
         // The helped message belongs to another actor: this actor's exception
         // handlers, still on this thread's handler stack, must not catch its
@@ -423,18 +455,28 @@ const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
         }
         rt.setCurrentActor(self);
         if (failed) std::rethrow_exception(failed);
-        if (helped) { idle = 0; continue; }
-        // S40: when the pool cannot grow and every worker is in a wait at the
-        // cap, no actor turn will run again; a wait for one is a deadlock.
-        if (atCap && rt.workerPoolExhausted() && awaitsUnstartedTurn(rt, ctx, awaited))
-            throw NativeError(
+        if (helped) { idle = 0; t_judgedFor = nullptr; continue; }
+        // S40: when the pool cannot grow, every worker is in a wait at the
+        // cap whose chain needs an actor turn that has not started, and
+        // nothing outside the pool can release one, no actor turn will run
+        // again (STRuntime::confirmStuck: one thread signals it).
+        // A verdict changes only with an event, and every event ends the
+        // epoch: one chain walk per thread per epoch (t_judgedEpoch).
+        if (atCap && capped.entered && rt.deadlockPossible()
+            && (t_judgedFor != &rt || t_judgedEpoch != rt.quiescenceEpoch())) {
+            const std::uint64_t epoch = rt.quiescenceEpoch();
+            t_judgedFor = &rt;
+            t_judgedEpoch = epoch;
+            if (awaitsUnstartedTurn(rt, ctx, awaited) && rt.confirmStuck(ctx, epoch))
+                throw NativeError(
                 "deadlock: too many nested waits (every worker is blocked in waits nested "
-                "in blocks, " + std::to_string(kMaxHelpingDepth) + " per worker, and the pool is "
-                "at its maximum of " + std::to_string(STRuntime::kMaxWorkers) + " workers, so the "
-                "awaited actor's message can never run; a wait inside a block that a primitive "
+                "in blocks, " + std::to_string(kMaxHelpingDepth) + " per worker, the pool cannot add "
+                "a worker (it holds at most " + std::to_string(STRuntime::kMaxWorkers) + "), and "
+                "nothing else can end a wait, so the awaited actor's message can never run; a wait inside a block that a primitive "
                 "evaluates blocks its worker: wait outside the block, or chain with thenDo:)");
-        proto::ProtoContext::UnmanagedScope unmanaged(ctx);
-        std::this_thread::sleep_for(std::chrono::microseconds(atCap ? 200 : idle < 10 ? 20 : 500));
+        }
+        // Off the stop-the-world quorum while it sleeps (`awaited` is pinned).
+        proto::ProtoThread::sleepFor(ctx, static_cast<proto::proto_ulong>(atCap ? 200 : idle < 10 ? 20 : 500));
         ++idle;
     }
     const proto::ProtoString* valueKey = rt.bootstrap().sym.value;

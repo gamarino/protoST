@@ -334,8 +334,26 @@ struct STRuntime::Impl {
     unsigned baseWorkers = 0;
     std::atomic<int> blockedInIO { 0 };
     // S40: the workers among `blockedInIO` that are in a wait at the helping
-    // cap (enterCappedWait), not in I/O.
-    std::atomic<int> cappedWaits { 0 };
+    // cap (enterCappedWait), not in I/O; one per thread.
+    std::atomic<int> cappedThreads { 0 };
+    // S40: `workers.size() + spawning`, mirrored for reads without the
+    // mutex (deadlockPossible polls it); `poolCannotGrow` is set when a
+    // worker could not be created, so the pool's real ceiling is below
+    // kMaxWorkers.
+    std::atomic<size_t> poolSize { 0 };
+    std::atomic<bool> poolCannotGrow { false };
+    // S40: the quiescence round (see STRuntime.h, confirmStuck): the epoch
+    // in the high bits, the capped threads that confirmed it in the low
+    // kConfirmBits.
+    std::atomic<std::uint64_t> quiesce { 0 };
+    // S40: tasks popped by runOneTask and not finished (minus those whose
+    // thread waits inside them, pauseRunningTasks).
+    std::atomic<int> runningTasks { 0 };
+    // S40: a caller that is not this runtime's program thread or a worker
+    // (noteForeignCaller), and the first non-worker thread that entered
+    // through atEmbedderBoundary (identified by a thread_local's address).
+    std::atomic<bool> foreignCaller { false };
+    std::atomic<const void*> programThread { nullptr };
 
     // F6 v4 (2026-05-23): the actual scheduling queue. The previous
     // ProtoList-under-__ready__ scheme is gone; this is the lock-free
@@ -938,23 +956,33 @@ bool STRuntime::spawnWorker(proto::ProtoContext* ctx) {
         std::lock_guard<std::mutex> lock(impl_->workersMutex);
         if (impl_->shutdown.load(std::memory_order_acquire)) return false;
         index = impl_->workers.size() + impl_->spawning++;
+        impl_->poolSize.store(impl_->workers.size() + impl_->spawning, std::memory_order_release);
     }
+    // The reserved slot is released on every exit, an exception included
+    // (an allocation below can throw): registered when the thread exists,
+    // given back otherwise.
+    struct Reservation {
+        Impl& impl; const proto::ProtoThread* thread = nullptr;
+        ~Reservation() {
+            std::lock_guard<std::mutex> lock(impl.workersMutex);
+            // Registered even when shutdown began meanwhile: the destructor
+            // waits for `spawning` to drain and joins every registered worker.
+            if (thread) impl.workers.push_back(thread);
+            --impl.spawning;
+            impl.poolSize.store(impl.workers.size() + impl.spawning, std::memory_order_release);
+            // S40: a pool that cannot grow has its ceiling here.
+            if (!thread) impl.poolCannotGrow.store(true, std::memory_order_release);
+        }
+    } reservation{*impl_};
     const proto::ProtoList* argsForThread = ctx->newList();
     argsForThread = argsForThread->appendLast(
         ctx, ctx->fromExternalPointer(this, nullptr));
     std::string nameStr = "protoST-worker-" + std::to_string(index);
     const proto::ProtoString* threadName =
         proto::ProtoString::createSymbol(ctx, nameStr.c_str());
-    const proto::ProtoThread* t = impl_->space.newThread(
+    reservation.thread = impl_->space.newThread(
         ctx, threadName, st_worker_main, argsForThread, nullptr);
-    {
-        // Registered even when shutdown began meanwhile: the destructor
-        // waits for `spawning` to drain and joins every registered worker.
-        std::lock_guard<std::mutex> lock(impl_->workersMutex);
-        if (t) impl_->workers.push_back(t);
-        --impl_->spawning;
-    }
-    return t != nullptr;
+    return reservation.thread != nullptr;
 }
 
 namespace { thread_local const STRuntime* t_workerOf = nullptr; }
@@ -962,13 +990,19 @@ namespace { thread_local const STRuntime* t_workerOf = nullptr; }
 bool STRuntime::enterBlockingIO(proto::ProtoContext* ctx) {
     if (t_workerOf != this) return false;
     const int blocked = impl_->blockedInIO.fetch_add(1, std::memory_order_acq_rel) + 1;
-    size_t total;
-    {
-        std::lock_guard<std::mutex> lock(impl_->workersMutex);
-        total = impl_->workers.size() + impl_->spawning;
+    const size_t total = impl_->poolSize.load(std::memory_order_acquire);
+    // Fewer free workers than configured: add one. `blocked` can exceed
+    // `total` only transiently (a worker being registered), and then no
+    // worker is free.
+    const size_t free = static_cast<size_t>(blocked) >= total ? 0 : total - static_cast<size_t>(blocked);
+    if (total < kMaxWorkers && free < impl_->baseWorkers) {
+        try {
+            spawnWorker(ctx);
+        } catch (...) {
+            impl_->blockedInIO.fetch_sub(1, std::memory_order_acq_rel);
+            throw;
+        }
     }
-    if (total < kMaxWorkers && total - static_cast<size_t>(blocked) < impl_->baseWorkers)
-        spawnWorker(ctx);
     return true;
 }
 
@@ -978,28 +1012,112 @@ void STRuntime::leaveBlockingIO() {
     impl_->blockedInIO.fetch_sub(1, std::memory_order_acq_rel);
 }
 
+namespace {
+// S40: the quiescence word (Impl::quiesce): epoch << kConfirmBits | confirmations.
+constexpr unsigned kConfirmBits = 20;
+constexpr std::uint64_t kConfirmMask = (std::uint64_t{1} << kConfirmBits) - 1;
+// The epoch this thread last confirmed, per runtime.
+thread_local const STRuntime* t_confirmedFor = nullptr;
+thread_local std::uint64_t t_confirmedEpoch = ~std::uint64_t{0};
+// Tasks this thread is running (runOneTask) and not waiting inside.
+thread_local int t_runningTasks = 0;
+// Identity of this thread for programThread.
+thread_local char t_threadMarker = 0;
+}
+
+// Ends the current epoch: the confirmations gathered so far no longer count.
+static void bumpEpoch(std::atomic<std::uint64_t>& q) {
+    std::uint64_t w = q.load(std::memory_order_seq_cst);
+    while (!q.compare_exchange_weak(w, ((w >> kConfirmBits) + 1) << kConfirmBits,
+                                    std::memory_order_seq_cst)) {}
+}
+
+void STRuntime::noteProgress() {
+    // Only while some thread is capped: before that no confirmation exists,
+    // and a thread entering the capped state ends the epoch itself.
+    if (impl_->cappedThreads.load(std::memory_order_seq_cst) > 0) bumpEpoch(impl_->quiesce);
+}
+
+std::uint64_t STRuntime::quiescenceEpoch() const {
+    return impl_->quiesce.load(std::memory_order_seq_cst) >> kConfirmBits;
+}
+
 bool STRuntime::enterCappedWait(proto::ProtoContext* ctx) {
     if (t_workerOf != this) return false;
-    // Counted before the pool is sized, so a worker that sees the pool
-    // exhausted counts itself.
-    impl_->cappedWaits.fetch_add(1, std::memory_order_acq_rel);
-    enterBlockingIO(ctx);
+    // The epoch ends before this thread counts as capped: whatever it did
+    // before (a settle, a turn) is behind every confirmation that counts.
+    bumpEpoch(impl_->quiesce);
+    impl_->cappedThreads.fetch_add(1, std::memory_order_seq_cst);
+    try {
+        enterBlockingIO(ctx);
+    } catch (...) {
+        impl_->cappedThreads.fetch_sub(1, std::memory_order_seq_cst);
+        throw;
+    }
     return true;
 }
 
 void STRuntime::leaveCappedWait() {
+    bumpEpoch(impl_->quiesce);
     leaveBlockingIO();
-    impl_->cappedWaits.fetch_sub(1, std::memory_order_acq_rel);
+    impl_->cappedThreads.fetch_sub(1, std::memory_order_seq_cst);
 }
 
-bool STRuntime::workerPoolExhausted() const {
-    size_t total;
-    {
-        std::lock_guard<std::mutex> lock(impl_->workersMutex);
-        total = impl_->workers.size() + impl_->spawning;
+bool STRuntime::deadlockPossible() const {
+    const size_t total = impl_->poolSize.load(std::memory_order_acquire);
+    const bool ceiling = total >= kMaxWorkers || impl_->poolCannotGrow.load(std::memory_order_acquire);
+    return ceiling && total > 0
+        && static_cast<size_t>(impl_->cappedThreads.load(std::memory_order_acquire)) >= total;
+}
+
+void STRuntime::noteForeignCaller() {
+    impl_->foreignCaller.store(true, std::memory_order_seq_cst);
+    noteProgress();
+}
+
+int STRuntime::pauseRunningTasks() {
+    const int n = t_runningTasks;
+    if (n > 0) {
+        noteProgress();
+        impl_->runningTasks.fetch_sub(n, std::memory_order_seq_cst);
+        t_runningTasks = 0;
     }
-    return total >= kMaxWorkers
-        && static_cast<size_t>(impl_->cappedWaits.load(std::memory_order_acquire)) >= total;
+    return n;
+}
+
+void STRuntime::resumeRunningTasks(int n) {
+    if (n <= 0) return;
+    impl_->runningTasks.fetch_add(n, std::memory_order_seq_cst);
+    t_runningTasks = n;
+}
+
+bool STRuntime::confirmStuck(proto::ProtoContext* ctx, std::uint64_t epoch) {
+    if (t_confirmedFor == this && t_confirmedEpoch == epoch) return false;
+    std::uint64_t w = impl_->quiesce.load(std::memory_order_seq_cst);
+    std::uint64_t count;
+    for (;;) {
+        if ((w >> kConfirmBits) != epoch) return false;      // something happened
+        count = (w & kConfirmMask) + 1;
+        if (impl_->quiesce.compare_exchange_weak(w, w + 1, std::memory_order_seq_cst)) break;
+    }
+    t_confirmedFor = this;
+    t_confirmedEpoch = epoch;
+    // Only the confirmation that completes the round goes on.
+    const size_t total = impl_->poolSize.load(std::memory_order_seq_cst);
+    if (count < total || !deadlockPossible()) return false;
+    // Nothing outside the pool can still release a wait. Read in this order:
+    // a timer stays pending until its settle task is queued, and a task
+    // counts as running before it leaves the queue.
+    if (impl_->foreignCaller.load(std::memory_order_seq_cst)) return false;
+    if (!ownsSpace() || debugger().attached()) return false;
+    if (impl_->mainWaitingOn.load(std::memory_order_seq_cst) == nullptr) return false;
+    if (impl_->timers && impl_->timers->pendingCount(ctx) != 0) return false;
+    if (impl_->queuedTasks.load(std::memory_order_seq_cst) > 0) return false;
+    if (impl_->runningTasks.load(std::memory_order_seq_cst) > 0) return false;
+    // Still the same round, complete: end it and signal.
+    std::uint64_t expected = (epoch << kConfirmBits) | count;
+    return impl_->quiesce.compare_exchange_strong(
+        expected, (epoch + 1) << kConfirmBits, std::memory_order_seq_cst);
 }
 // Forward-declared: defined down by workerLoop alongside the
 // per-worker stats globals.
@@ -1408,6 +1526,14 @@ template <class Body>
 const proto::ProtoObject* STRuntime::atEmbedderBoundary(proto::ProtoContext* ctx, Body&& body) {
     const bool boundary = ownsSpace() && ExecutionEngine::liveEnginesOnThisThread() == 0
         && EntryContext::isProtoSTContext(*this, ctx);
+    // S40: a second thread outside the pool running protoST code could settle
+    // any Future; the nested-wait deadlock is then never signalled.
+    if (t_workerOf != this) {
+        const void* expected = nullptr;
+        if (!impl_->programThread.compare_exchange_strong(expected, &t_threadMarker)
+            && expected != &t_threadMarker)
+            noteForeignCaller();
+    }
     if (!boundary) return body();
     std::string description, report, trace;
     std::vector<std::string> classNames;
@@ -1719,6 +1845,10 @@ const proto::ProtoObject* STRuntime::dequeueReady(proto::ProtoContext* ctx) {
 }
 
 void STRuntime::markMainWaitingOn(const proto::ProtoObject* future) {
+    // S40: the program thread parking is an event of the quiescence round
+    // (whatever it did before parking is behind every confirmation that
+    // counts); it ends the epoch before the park is visible.
+    if (future) bumpEpoch(impl_->quiesce);
     // seq_cst so the settler's load is ordered against its prior store
     // of the Future's state attribute. See the comment block on
     // `mainWaitingOn` in Impl for the full pairing argument.
@@ -1755,6 +1885,7 @@ void STRuntime::enqueueTask(proto::ProtoContext* ctx,
     if (!task || !impl_->liveRegistry) return;
     auto* reg = const_cast<proto::ProtoObject*>(impl_->liveRegistry);
     const proto::ProtoString* tasksKey = impl_->bootstrap.sym.tasks;
+    noteProgress();   // S40: before the task is visible
     // CAS-append to the global FIFO task list. ProtoList::appendLast is
     // O(log n) AVL — for the typical short list (≤ N_workers under load)
     // this is ~3-5 micro-ops; the rebuilt list takes one extra small
@@ -1805,6 +1936,21 @@ bool STRuntime::runOneTask(proto::ProtoContext* ctx) {
         TransientPin pinRestObj(ctx, restObj);
         if (reg->setAttributeIfEqual(ctx, tasksKey, cur, restObj)) { task = head; break; }
     }
+    // S40: the task counts as running before it stops counting as queued,
+    // and stops running only after it finished (and ended the quiescence
+    // epoch, noteProgress), so confirmStuck never sees it in neither.
+    struct Running {
+        STRuntime& rt; Impl& impl;
+        Running(STRuntime& r, Impl& i) : rt(r), impl(i) {
+            impl.runningTasks.fetch_add(1, std::memory_order_seq_cst);
+            ++t_runningTasks;
+        }
+        ~Running() {
+            rt.noteProgress();
+            impl.runningTasks.fetch_sub(1, std::memory_order_seq_cst);
+            --t_runningTasks;
+        }
+    } running{*this, *impl_};
     impl_->queuedTasks.fetch_sub(1, std::memory_order_acq_rel);
     if (!task || task == PROTO_NONE) return true;
 
