@@ -126,6 +126,14 @@ minor release, so the two services arrive in 0.5.0.
 
 ### Fixed
 
+- **`Atom on:` builds an instance of its receiver (S38).** `SeamAtom on: 7`
+  answered a plain `Atom`, so a subclass's `initialize` and overrides were
+  never reached through it. `on:` is now `Atom class >> on:` in
+  `lib/kernel/future.st`, `self new` (so `initialize` runs) with the cell then
+  holding the value. `swap:` and `value:ifCurrent:` keep working on the cell,
+  not through an overridden `value`: a compare-and-swap must expect what the
+  cell holds (LANGUAGE.md §10.8). Tests: `10-actors/atom-on-builds-receiver`,
+  `atom-swap-updates-the-cell`.
 - **A method can name the variables its class inherits from an imported
   class (S37).** A script is compiled before its imports run, so `Base
   subclass: #Kid` with `Kid >> peek ^secret` (Base imported, declaring

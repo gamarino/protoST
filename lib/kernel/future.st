@@ -37,6 +37,15 @@ Future class >> whenAny: aCollection
       (remaining swap: [:n | n - 1]) = 0 ifTrue: [result rejectWith: error]]].
   ^ result.
 
+"--- Atom ------------------------------------------------------------------------
+ on: is an instance-creation message like new, and builds an instance of its
+ receiver: Atom, or the subclass it is sent to, with initialize run as new runs
+ it; then the cell holds the initial value. (S38: it used to build a plain Atom
+ whatever the receiver.)"
+
+Atom class >> on: aValue
+  ^ self new __atomInit: aValue.
+
 "--- deadlines -------------------------------------------------------------------
  Measured on the monotonic clock, in milliseconds (a non-negative Integer). The
  runtime's timer thread only keeps the deadlines: when one passes it hands the

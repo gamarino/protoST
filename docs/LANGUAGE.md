@@ -2233,6 +2233,18 @@ side-effect free:
 total swap: [ :running | running + 1 ].
 ```
 
+**Subclasses.** `Atom` can be subclassed like any class. `on:` is an
+instance-creation message, as `new` is: `TaggedAtom on: 7` builds a
+`TaggedAtom` (its `initialize` runs, as with `new`) and then puts 7 in its
+cell. The atomic operations work on the cell itself: `swap:` applies its
+block to the snapshot the cell holds, and `value:ifCurrent:` and `swap:`
+compare against that snapshot. An override of `value` changes what the
+atom's clients read, not what the atomic operations update — a
+compare-and-swap that expected what an override answers, rather than what the
+cell holds, could never succeed. (Clojure's atoms, which `Atom` follows, are
+not extensible; the cell is the state, as an instance variable is the state
+an accessor may present differently.)
+
 Because the comparison is pointer identity over **immutable snapshots**, the
 classic ABA hazard does not arise: if the pointer is unchanged the value
 genuinely is the one observed. A CAS-retry over an `Atom` therefore needs none
@@ -2577,7 +2589,7 @@ A shared mutable cell with optimistic-concurrency compare-and-swap — see
 
 | Selector | Meaning |
 |----------|---------|
-| `Atom on: aValue` | a fresh cell holding `aValue` |
+| `Atom on: aValue` | a new instance of the receiver (Atom or a subclass, built by `new`) whose cell holds `aValue` |
 | `value` | the current snapshot |
 | `value: new ifCurrent: expected` | raw CAS — install `new` iff the cell still holds `expected`; answer whether it did |
 | `swap: aBlock` | read-modify-CAS retry loop; applies `aBlock` to the current value, retrying on contention; answers the value installed |

@@ -37,16 +37,16 @@ const proto::ProtoString* atomValueKey(proto::ProtoContext* ctx) {
     return proto::ProtoString::createSymbol(ctx, "__atom_value__");
 }
 
-// Atom on: anInitialValue  →  a fresh Atom cell holding anInitialValue.
-const proto::ProtoObject* prim_Atom_on(STRuntime& rt, proto::ProtoContext* ctx,
-                                       const proto::ProtoObject*,
-                                       const proto::ProtoObject* const* a, int argc) {
-    if (argc != 1) throw NativeError("Atom on: expects 1 argument");
-    auto* atom = const_cast<proto::ProtoObject*>(rt.bootstrap().atomProto)
-        ->newChild(ctx, /*isMutable=*/true);
-    TransientPin pinAtom(ctx, atom);
-    atom->setAttribute(ctx, atomValueKey(ctx), a[0] ? a[0] : PROTO_NONE);
-    return atom;
+// anAtom __atomInit: anInitialValue  →  the receiver, its cell now holding
+// anInitialValue. `Atom class >> on:` (lib/kernel/future.st) sends it to the
+// instance `new` just built -- of Atom or of the subclass `on:` was sent to
+// (S38) -- before the instance is shared, so a plain write is enough.
+const proto::ProtoObject* prim_Atom_init(STRuntime&, proto::ProtoContext* ctx,
+                                         const proto::ProtoObject* r,
+                                         const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw NativeError("Atom __atomInit: expects 1 argument");
+    const_cast<proto::ProtoObject*>(r)->setAttribute(ctx, atomValueKey(ctx), a[0] ? a[0] : PROTO_NONE);
+    return r;
 }
 
 // anAtom value  →  the current snapshot held in the cell.
@@ -109,9 +109,9 @@ const proto::ProtoObject* prim_Atom_swap(STRuntime& rt, proto::ProtoContext* ctx
 
 void installAtomPrimitives(STRuntime& rt) {
     auto& b   = rt.bootstrap();
-    // `on:` is class side: `Atom on: 0` (D52).
-    bindClassPrimitive(rt, b.atomProto, "on:",
-                  primitiveMethod<prim_Atom_on>);
+    // `Atom on: 0` is `Atom class >> on:` in lib/kernel/future.st.
+    bindPrimitive(rt, b.atomProto, "__atomInit:",
+                  primitiveMethod<prim_Atom_init>);
     bindPrimitive(rt, b.atomProto, "value",
                   primitiveMethod<prim_Atom_value>);
     bindPrimitive(rt, b.atomProto, "value:ifCurrent:",
