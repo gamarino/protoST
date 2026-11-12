@@ -249,31 +249,17 @@ const proto::ProtoObject* primStopTheWorldRequested(protoST::STRuntime& rt, prot
     return rt.space()->stwFlag.load() ? PROTO_TRUE : PROTO_FALSE;
 }
 
-// Sets an environment variable for one scope (the runtime reads the heap
-// ceiling when it creates its space).
-struct ScopedEnv {
-    std::string name;
-    std::string saved;
-    bool had;
-    ScopedEnv(const char* n, const char* v) : name(n) {
-        const char* old = std::getenv(n);
-        had = old != nullptr;
-        if (had) saved = old;
-        ::setenv(n, v, 1);
-    }
-    ~ScopedEnv() {
-        if (had) ::setenv(name.c_str(), saved.c_str(), 1);
-        else     ::unsetenv(name.c_str());
-    }
-};
-
 } // namespace
 
 TEST_CASE("S3: an allocation-free loop does not stall a collection", "[gc]") {
     const bool hookOff = std::getenv("PROTOST_NO_GC_SAFEPOINT") != nullptr;
-    ScopedEnv limit("PROTOCORE_HEAP_LIMIT_CELLS", "400000,8000000");
-    ScopedEnv workers("PROTOST_WORKERS", "2");
     GcHost h;
+    // A small soft limit, so the actor's garbage requests collections again
+    // and again, under a hard ceiling far above it, so that the hook-off run
+    // (whose collections reclaim nothing, S15) never reaches out-of-memory.
+    // Set on the space directly: mutating the environment while worker
+    // threads may read it is a data race.
+    h.rt.space()->setHeapLimits(400000, 8000000);
     proto::ProtoContext* ctx = h.rt.rootCtx();
     const proto::ProtoObject* probe =
         h.rt.bootstrap().objectProto->newChild(ctx, /*isMutable=*/true);
