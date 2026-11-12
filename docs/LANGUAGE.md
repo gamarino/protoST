@@ -2134,6 +2134,21 @@ pool because a `wait` does not tie up a worker.
 > thread** until the future settles — intentional, the main thread acts as a
 > synchronous client of the actor world.
 
+**A wait inside a block that a primitive evaluates** (`#(1) do: [:i | ^
+server ping wait]`, the block of `on:do:` or `ensure:`, a `thenDo:` callback
+run on a worker) cannot suspend the actor: the primitive's own state between
+the method and the block is not part of what a suspension saves. Such a wait
+**blocks its worker** instead, and while it waits the worker runs other
+actors' messages on top of it, so the program keeps going. Those messages can
+wait the same way; one worker holds at most 16 such nested waits (each keeps
+its frames on the worker's stack). A worker at that limit runs no more actor
+messages and counts as a blocked worker: the pool adds a worker for the other
+actors, as it does for a worker blocked in I/O, up to 256 workers. A program
+whose nested waits need more than that — about 4,000 at once — cannot
+proceed, and the wait signals an `Error` whose text starts with `deadlock:
+too many nested waits` instead of hanging. Waiting outside a block (at the
+top level of the method) suspends the actor and uses no worker.
+
 ### 10.5 `self` inside an actor
 
 Inside a method running on behalf of an actor, `self` is the **wrapped base

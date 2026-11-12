@@ -234,6 +234,19 @@ public:
     bool enterBlockingIO(proto::ProtoContext* ctx);
     void leaveBlockingIO();
 
+    // S40: a worker whose wait nested in a block reached the helping cap
+    // (future_prims.cpp, waitHelping) runs no more actor turns on its stack,
+    // so it is blocked for the pool as a worker in I/O is: enterCappedWait
+    // adds a worker on the same terms as enterBlockingIO and counts the
+    // worker as capped until leaveCappedWait. workerPoolExhausted answers
+    // whether the pool is at its maximum size with every worker in a capped
+    // wait: no worker is left to run an actor turn, now or later.
+    bool enterCappedWait(proto::ProtoContext* ctx);
+    void leaveCappedWait();
+    bool workerPoolExhausted() const;
+    // The most workers the pool grows to (enterBlockingIO, enterCappedWait).
+    static constexpr std::size_t kMaxWorkers = 256;
+
     // F6 v6 (2026-05-23 night): worker-pool gate. Lets a caller pause the
     // entire pool — workers in flight finish their current drainOne, but
     // no NEW drains start while paused. SEND fast-paths keep enqueuing

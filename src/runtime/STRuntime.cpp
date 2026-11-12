@@ -333,6 +333,9 @@ struct STRuntime::Impl {
     size_t spawning = 0;
     unsigned baseWorkers = 0;
     std::atomic<int> blockedInIO { 0 };
+    // S40: the workers among `blockedInIO` that are in a wait at the helping
+    // cap (enterCappedWait), not in I/O.
+    std::atomic<int> cappedWaits { 0 };
 
     // F6 v4 (2026-05-23): the actual scheduling queue. The previous
     // ProtoList-under-__ready__ scheme is gone; this is the lock-free
@@ -958,7 +961,6 @@ namespace { thread_local const STRuntime* t_workerOf = nullptr; }
 
 bool STRuntime::enterBlockingIO(proto::ProtoContext* ctx) {
     if (t_workerOf != this) return false;
-    constexpr size_t kMaxWorkers = 256;
     const int blocked = impl_->blockedInIO.fetch_add(1, std::memory_order_acq_rel) + 1;
     size_t total;
     {
@@ -974,6 +976,30 @@ bool STRuntime::isWorkerThread() const { return t_workerOf == this; }
 
 void STRuntime::leaveBlockingIO() {
     impl_->blockedInIO.fetch_sub(1, std::memory_order_acq_rel);
+}
+
+bool STRuntime::enterCappedWait(proto::ProtoContext* ctx) {
+    if (t_workerOf != this) return false;
+    // Counted before the pool is sized, so a worker that sees the pool
+    // exhausted counts itself.
+    impl_->cappedWaits.fetch_add(1, std::memory_order_acq_rel);
+    enterBlockingIO(ctx);
+    return true;
+}
+
+void STRuntime::leaveCappedWait() {
+    leaveBlockingIO();
+    impl_->cappedWaits.fetch_sub(1, std::memory_order_acq_rel);
+}
+
+bool STRuntime::workerPoolExhausted() const {
+    size_t total;
+    {
+        std::lock_guard<std::mutex> lock(impl_->workersMutex);
+        total = impl_->workers.size() + impl_->spawning;
+    }
+    return total >= kMaxWorkers
+        && static_cast<size_t>(impl_->cappedWaits.load(std::memory_order_acquire)) >= total;
 }
 // Forward-declared: defined down by workerLoop alongside the
 // per-worker stats globals.

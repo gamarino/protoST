@@ -126,6 +126,16 @@ minor release, so the two services arrive in 0.5.0.
 
 ### Fixed
 
+- **A wait nested in a block no longer hangs past 16 nested waits per worker
+  (S40).** Such a wait blocks its worker, which runs other actors' messages
+  meanwhile; past the cap of 16 on one thread it ran none, and when every
+  worker was there the program hung with no `deadlock:` (a chain of 18
+  actors on one worker, 200 clients of one server on the default pool). A
+  worker at the cap now counts as blocked, as one in I/O does, so the pool
+  adds a worker for the other actors' messages (up to its 256 workers); past
+  that, a wait for an actor message that can no longer run signals
+  `deadlock: too many nested waits` instead of hanging. LANGUAGE.md §10.4.
+  Test: `cli_nested_wait_progress`.
 - **`Atom new swap:` returns (S39).** A cell made by `new` holds nothing yet;
   `swap:` compared it against an explicit nil, which never matches, and
   retried for ever, and `value: x ifCurrent: nil` answered `false`. The empty

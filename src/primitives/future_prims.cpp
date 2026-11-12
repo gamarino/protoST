@@ -334,6 +334,28 @@ void detectWaitCycle(STRuntime& rt, proto::ProtoContext* ctx,
     }
 }
 
+// S40: whether `awaited` can only be settled by an actor turn that has not
+// started: following the chain of waits from it (as detectWaitCycle does),
+// the first pending future whose target actor awaits nothing. When no worker
+// can run an actor turn any more (STRuntime::workerPoolExhausted) such a wait
+// never ends. A chain that reaches a settled future, or one with no target
+// actor (a timer's, a Future settled by the program with resolve:), can
+// still end, and is left waiting.
+bool awaitsUnstartedTurn(STRuntime& rt, proto::ProtoContext* ctx,
+                         const proto::ProtoObject* awaited) {
+    const auto& sym = rt.bootstrap().sym;
+    const proto::ProtoObject* fut = awaited;
+    for (int step = 0; step < 256 && fut && fut != PROTO_NONE; ++step) {
+        if (readState(rt, ctx, fut) != 0) return false;
+        const proto::ProtoObject* target = fut->getOwnAttributeDirect(ctx, sym.targetActor);
+        if (!target || target == PROTO_NONE) return false;
+        const proto::ProtoObject* next = target->getAttribute(ctx, sym.waitingOn);
+        if (!next || next == PROTO_NONE) return true;
+        fut = next;
+    }
+    return false;
+}
+
 // Wait for `awaited` on a pool worker without suspending anything: while the
 // future is pending, run other ready actors' messages and queued tasks on this
 // thread (helping), and back off briefly when there are none. Two callers:
@@ -352,7 +374,11 @@ const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
     const proto::ProtoObject* self = rt.currentActor();
     TransientPin pinAwaited(ctx, awaited);
     // This actor stays buried under whatever it helps; nested helping is
-    // capped so a chain of waiting actors cannot exhaust the engine stack.
+    // capped so a chain of waiting actors cannot exhaust the engine stack:
+    // each level holds engine and primitive frames on this thread's C++
+    // stack. Past the cap this wait runs no actor turn; to keep every other
+    // actor's turns running it counts as a blocked worker (S40), so the pool
+    // adds a worker, with a fresh stack, as it does for a worker in I/O.
     constexpr std::size_t kMaxHelpingDepth = 16;
     struct Bury {
         const proto::ProtoObject* actor;
@@ -366,6 +392,10 @@ const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
                 const_cast<proto::ProtoObject*>(actor)->setAttribute(ctx, rt.bootstrap().sym.waitingOn, PROTO_NONE);
         }
     } clearWaiting{rt, ctx, self};
+    struct CappedWait {
+        STRuntime& rt; bool entered = false;
+        ~CappedWait() { if (entered) rt.leaveCappedWait(); }
+    } capped{rt};
     int idle = 0;
     while (readState(rt, ctx, awaited) == 0) {
         // Past the helping cap no further actor turn is buried here, but the
@@ -374,6 +404,7 @@ const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
         // is at the cap (otherwise waitWithin: nested in blocks could wait
         // for ever, its timeout queued behind workers that only poll).
         const bool atCap = t_buriedActors.size() > kMaxHelpingDepth;
+        if (atCap && !capped.entered) capped.entered = rt.enterCappedWait(ctx);
         bool helped = false;
         // The helped message belongs to another actor: this actor's exception
         // handlers, still on this thread's handler stack, must not catch its
@@ -393,6 +424,15 @@ const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
         rt.setCurrentActor(self);
         if (failed) std::rethrow_exception(failed);
         if (helped) { idle = 0; continue; }
+        // S40: when the pool cannot grow and every worker is in a wait at the
+        // cap, no actor turn will run again; a wait for one is a deadlock.
+        if (atCap && rt.workerPoolExhausted() && awaitsUnstartedTurn(rt, ctx, awaited))
+            throw NativeError(
+                "deadlock: too many nested waits (every worker is blocked in waits nested "
+                "in blocks, " + std::to_string(kMaxHelpingDepth) + " per worker, and the pool is "
+                "at its maximum of " + std::to_string(STRuntime::kMaxWorkers) + " workers, so the "
+                "awaited actor's message can never run; a wait inside a block that a primitive "
+                "evaluates blocks its worker: wait outside the block, or chain with thenDo:)");
         proto::ProtoContext::UnmanagedScope unmanaged(ctx);
         std::this_thread::sleep_for(std::chrono::microseconds(atCap ? 200 : idle < 10 ? 20 : 500));
         ++idle;
