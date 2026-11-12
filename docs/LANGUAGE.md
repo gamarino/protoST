@@ -2233,6 +2233,10 @@ side-effect free:
 total swap: [ :running | running + 1 ].
 ```
 
+An `Atom` made with `new` (or a subclass's `new` whose `initialize` does not
+set it) holds `nil`: `swap:` applies its block to `nil`, and
+`value: x ifCurrent: nil` installs `x`.
+
 **Subclasses.** `Atom` can be subclassed like any class. `on:` is an
 instance-creation message, as `new` is: `TaggedAtom on: 7` builds a
 `TaggedAtom` (its `initialize` runs, as with `new`) and then puts 7 in its

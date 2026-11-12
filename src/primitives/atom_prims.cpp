@@ -69,8 +69,15 @@ const proto::ProtoObject* prim_Atom_cas(STRuntime&, proto::ProtoContext* ctx,
         throw NativeError("Atom value:ifCurrent: expects 2 arguments");
     const proto::ProtoObject* newValue = a[0] ? a[0] : PROTO_NONE;
     const proto::ProtoObject* expected = a[1] ? a[1] : PROTO_NONE;
+    const proto::ProtoString* key = atomValueKey(ctx);
+    // S39: a cell made by `new` holds nothing yet, and reads as nil. An
+    // expected nil matches it, as an unset instance variable matches nil in
+    // setInstVar:from:to:; protoCore's CAS names "absent" with nullptr.
+    const proto::ProtoObject* casExpected =
+        (expected == PROTO_NONE && r->getOwnAttributeDirect(ctx, key) == nullptr)
+            ? nullptr : expected;
     bool ok = const_cast<proto::ProtoObject*>(r)
-        ->setAttributeIfEqual(ctx, atomValueKey(ctx), expected, newValue);
+        ->setAttributeIfEqual(ctx, key, casExpected, newValue);
     return ok ? PROTO_TRUE : PROTO_FALSE;
 }
 
@@ -87,8 +94,12 @@ const proto::ProtoObject* prim_Atom_swap(STRuntime& rt, proto::ProtoContext* ctx
     const proto::ProtoObject* block = a[0];
     const proto::ProtoString* key = atomValueKey(ctx);
     for (;;) {
-        const proto::ProtoObject* old = r->getOwnAttributeDirect(ctx, key);
-        if (!old) old = PROTO_NONE;
+        // S39: a cell made by `new` holds nothing yet (nullptr). The block
+        // sees nil, and the CAS expects the cell to be still empty: comparing
+        // against an explicit nil never matched it, and swap: retried for
+        // ever.
+        const proto::ProtoObject* current = r->getOwnAttributeDirect(ctx, key);
+        const proto::ProtoObject* old = current ? current : PROTO_NONE;
         // `old` is held across invokeBlock (arbitrary user allocation) and the
         // CAS; `neu` across the CAS. Pin both.
         TransientPin pinOld(ctx, old);
@@ -97,7 +108,7 @@ const proto::ProtoObject* prim_Atom_swap(STRuntime& rt, proto::ProtoContext* ctx
         if (!neu) neu = PROTO_NONE;
         TransientPin pinNeu(ctx, neu);
         if (const_cast<proto::ProtoObject*>(r)
-                ->setAttributeIfEqual(ctx, key, old, neu)) {
+                ->setAttributeIfEqual(ctx, key, current, neu)) {
             return neu;
         }
         // CAS lost — another writer won since our read. Loop: re-read the new

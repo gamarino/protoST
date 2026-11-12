@@ -126,6 +126,11 @@ minor release, so the two services arrive in 0.5.0.
 
 ### Fixed
 
+- **`Atom new swap:` returns (S39).** A cell made by `new` holds nothing yet;
+  `swap:` compared it against an explicit nil, which never matches, and
+  retried for ever, and `value: x ifCurrent: nil` answered `false`. The empty
+  cell now reads, swaps and compares as nil. Tests:
+  `10-actors/atom-new-swap`, `atom-subclass-new-swap`, `atom-new-cas-from-nil`.
 - **`Atom on:` builds an instance of its receiver (S38).** `SeamAtom on: 7`
   answered a plain `Atom`, so a subclass's `initialize` and overrides were
   never reached through it. `on:` is now `Atom class >> on:` in
