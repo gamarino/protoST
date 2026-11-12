@@ -621,6 +621,9 @@ add_test(NAME cli_buried_actor_deadlock
 add_test(NAME cli_helped_message_handler_actions
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_helped_message_handler_actions.sh $<TARGET_FILE:protost>)
 
+add_test(NAME cli_future_callback_barrier
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_future_callback_barrier.sh $<TARGET_FILE:protost>)
+
 add_test(NAME cli_kernel
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_kernel.sh $<TARGET_FILE:protost> ${CMAKE_BINARY_DIR}/cli-scratch/kernel)
 
@@ -727,6 +730,7 @@ endif()
 # or the text prompt), so each DAP session is a concurrency test.
 set_tests_properties(cli_actor_unobserved_error cli_callback_error_reported
                      cli_buried_actor_deadlock cli_helped_message_handler_actions
+                     cli_future_callback_barrier
                      cli_actor_stress cli_concurrent_first_call
                      cli_gc_shutdown_stress cli_gc_reclaims cli_gc_recursion_reclaims
                      cli_actor_payload_gc cli_binary_lock cli_sigint

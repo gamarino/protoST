@@ -415,9 +415,11 @@ thread_local bool t_signalFromPrimitive = false;
 // (NonLocalReturn, UnwindToHandler, ResumeSignal, RetrySignal,
 // NestingLimitUnwind, FutureYield, DebuggerHalt, InterruptSignal) are thrown
 // and caught without signalling, and an UnhandledSTException continuing
-// outward was already signalled once. Reads attributes only: no Smalltalk runs
-// here (neither a messageText nor an isResumable override is consulted, so an
-// exception whose class overrides isResumable is classified by its marker).
+// outward was already signalled once. Reads attributes, and runs Smalltalk in
+// one case only: an unhandled exception that is neither an Error nor foreign
+// is uncaught when it is not resumable, which its isResumable method decides
+// (D54) -- the method the default action is about to run as well. If that
+// method fails, the class marker answers.
 void debuggerExceptionStop(STRuntime& rt, proto::ProtoContext* ctx,
                            const proto::ProtoObject* exc, bool foreign, bool fromPrimitive) {
     DebuggerRuntime& dbg = rt.debugger();
@@ -442,7 +444,21 @@ void debuggerExceptionStop(STRuntime& rt, proto::ProtoContext* ctx,
             ctx, exc, 0, foreign ? rt.bootstrap().exceptionProto : nullptr) != nullptr;
         const bool isErrorClass = !foreign && exc->getAttribute(
             ctx, proto::ProtoString::createSymbol(ctx, "__unhandled_is_error__")) == PROTO_TRUE;
-        uncaught = !handled && (foreign || isErrorClass || !resumableMarker(ctx, exc));
+        if (!handled) {
+            if (foreign || isErrorClass) {
+                uncaught = true;
+            } else {
+                bool resumable;
+                try {
+                    resumable = isResumable(rt, ctx, exc);
+                } catch (const proto::ProtoException&) {
+                    resumable = resumableMarker(ctx, exc);
+                } catch (const std::exception&) {
+                    resumable = resumableMarker(ctx, exc);
+                }
+                uncaught = !resumable;
+            }
+        }
     }
     dbg.onException(rt, ctx, exc, cls, msg, uncaught, fromPrimitive);
 }

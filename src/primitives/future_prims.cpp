@@ -94,9 +94,15 @@ void reportCallbackError(const std::string& text) {
     writeWholeLine(stderr, "error in a Future callback: " + std::string(message));
 }
 
-// Run one thenDo: / catch: callback, reporting whatever escapes it.
+// Run one thenDo: / catch: callback, reporting whatever escapes it. The
+// callback belongs to whoever registered it, not to the code that settled the
+// future (or registered on a settled one) and runs it here: behind a
+// HandlerBarrier, so the settler's handlers do not catch its errors and its
+// running handler blocks do not answer the callback's resume: / return: /
+// pass / outer (S36).
 void invokeCallback(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* block,
                     const proto::ProtoObject* const* args, int argc) {
+    HandlerBarrier barrier;
     try { invokeBlock(rt, ctx, block, args, argc); }
     catch (const proto::ProtoException& e) { reportCallbackError(describeUncaught(ctx, e)); }
     catch (const std::exception& e) { reportCallbackError(describeUncaught(e)); }
