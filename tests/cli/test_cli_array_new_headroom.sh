@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# Array new: with a size below the heap ceiling but beyond what the heap can
-# still take (protoCore builds the list by path-copying appends, about
-# n * log2(n) cells) signals a catchable Error instead of protoCore's
-# out-of-memory exit (review R4-1). A small heap limit makes this cheap: no
-# test allocates more than a few MB. Both memory policies, as cli_oom_clean:
-# a fixed limit (PROTOCORE_HEAP_LIMIT_CELLS) and the adaptive controller
-# with a small budget (PROTOCORE_ADAPTIVE_HEAP=1 makes the same variable its
-# budget). The sizes stay clear of the boundary, where the check is an
-# estimate (collection_prims.cpp, prim_Array_classNew).
+# Array new: with a size whose list build (protoCore path-copies appends,
+# about n * log2(n) cells) cannot fit even in an empty heap signals a
+# catchable Error instead of protoCore's out-of-memory exit (reviews R3-2,
+# R4-1), and a size that fits is never refused because of garbage or of
+# structures dropped since the last collection (reviews R5-1, R6-1). A small
+# heap limit makes this cheap: no test allocates more than a few MB. Both
+# memory policies, as cli_oom_clean: a fixed limit
+# (PROTOCORE_HEAP_LIMIT_CELLS) and the adaptive controller with a small
+# budget (PROTOCORE_ADAPTIVE_HEAP=1 makes the same variable its budget). The
+# sizes stay clear of the boundary, where the check is an estimate
+# (collection_prims.cpp, prim_Array_classNew).
 set -u
 PROTOST="$1"
 ulimit -c 0
@@ -18,7 +20,7 @@ for policy in fixed adaptive; do
 { try value: $ok. try value: $big. try value: $ok } printNl."
   out=$(PROTOCORE_ADAPTIVE_HEAP=$mode PROTOCORE_HEAP_LIMIT_CELLS=$limit timeout 120 "$PROTOST" -e "$prog" 2>&1); rc=$?
   [[ $rc -eq 0 ]] || { echo "FAIL ($policy): rc=$rc"; echo "$out" | tail -3; exit 1; }
-  [[ "$out" == "#($ok 'Array new: $big elements need about "*"more than the heap can still hold (limit $limit cells"*"' $ok)" ]] \
+  [[ "$out" == "#($ok 'Array new: $big elements need about "*"more than the whole heap can hold (limit $limit cells"*"' $ok)" ]] \
     || { echo "FAIL ($policy): $out"; exit 1; }
 done
 # Garbage made before the first collection is not in use (review R5-1): a
@@ -29,4 +31,14 @@ done
 prog="| x | 1 to: 60000 do: [ :i | x := Array new: 9 ]. (Array new: 150000) size."
 out=$(PROTOCORE_ADAPTIVE_HEAP=0 PROTOCORE_HEAP_LIMIT_CELLS=4000000 timeout 120 "$PROTOST" -e "$prog" 2>&1); rc=$?
 [[ $rc -eq 0 && "$out" == "150000" ]] || { echo "FAIL (garbage before the first collection): rc=$rc"; echo "$out" | tail -3; exit 1; }
+# Nor is a structure that was live at the last collection and has been
+# dropped since (review R6-1): 100 arrays of 20,000 elements are live while
+# 300,000 small arrays force a collection, then dropped; 150,000 elements
+# fit once protoCore reclaims them, and round 4's code built it.
+prog="| keep x | keep := (1 to: 100) collect: [ :i | Array new: 20000 ].
+1 to: 300000 do: [ :i | x := Array new: 9 ].
+keep := nil.
+[ (Array new: 150000) size ] on: Error do: [ :e | e messageText ]."
+out=$(PROTOCORE_ADAPTIVE_HEAP=0 PROTOCORE_HEAP_LIMIT_CELLS=4000000 timeout 120 "$PROTOST" -e "$prog" 2>&1); rc=$?
+[[ $rc -eq 0 && "$out" == "150000" ]] || { echo "FAIL (structure dropped after a collection): rc=$rc"; echo "$out" | tail -3; exit 1; }
 echo OK
