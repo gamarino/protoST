@@ -3258,7 +3258,7 @@ commits. Summary as of 0.4.0, updated for changes merged since:
 - **Input and output (0.5.0):** blocking calls only, with no multiplexing of
   several sockets on one thread; no HTTP/2, WebSockets, keep-alive or TLS
   server; POSIX only, so no native Windows (§12.11).
-- **Open bugs:** S3 (see `STATUS.md`); S19 was closed in 0.4.0.
+- **Open bugs:** none (see `STATUS.md`); S19 was closed in 0.4.0, S3 in 0.10.0.
 
 Closed before 0.4.0 and now as in Smalltalk-80: `new` sends `initialize`
 (D4), `Transcript` (D10), class variables assigned from instance methods (D19),

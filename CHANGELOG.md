@@ -118,6 +118,21 @@ minor release, so the two services arrive in 0.5.0.
 
 ### Fixed
 
+- **S3 is closed: an allocation-free loop does not stall a collection, and
+  a test now proves it.** The park points came with S15 (the loop back-edge,
+  engine entry and call entry call `ProtoContext::safepoint()`), but S3 stayed
+  open because no protoST loop allocated nothing: about three cells per
+  iteration were measured for a SmallInteger loop. Those were the writes to a
+  method temporary that an inlined block body used, which then counted as
+  captured (each write published a new captured dictionary into protoCore's
+  mutable table, 4 cells); since `884778e` inlined bodies do not capture, and
+  a 3,000,000-iteration loop over a method temporary, at the top level or a
+  `whileTrue:` allocates nothing (counted at `ProtoContext::allocCell`). Test:
+  `tests/cli/test_cli_gc_spin_safepoint.sh` (`cli_gc_spin_safepoint`), the
+  deadlock shape: the main thread spins on an Atom while an actor churns
+  through garbage beyond the heap ceiling and then sets it. It completes, and
+  hangs with `PROTOST_NO_GC_SAFEPOINT=1`, while the same program without the
+  spinning loop does not.
 - **`Array new:` with a size the heap can never take signals an Error
   (reviews R3-2, R4-1, R5-1, R6-1, R7-1).** `Array new: 3000000000` (a typo,
   say) built an 8n-byte vector and then the list, and ended in protoCore's
