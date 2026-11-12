@@ -30,8 +30,11 @@
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
 #include "runtime/BytecodeModule.h"
+#include "runtime/BlockCode.h"
+#include "runtime/Bootstrap.h"
 #include "protoCore.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -203,58 +206,115 @@ TEST_CASE("S15: a forced collection completes and reclaims the interpreter's gar
 // I2 (0.10.0): the closures over one sub-block share one `__bc_ptr__` cell,
 // created with the first and anchored in the runtime's live registry
 // (src/runtime/BlockCode.h). Here every closure is created and dropped inside a
-// method, so once it returns only that anchor keeps the cell: after
-// collections and fresh allocation, the cell the module caches must still be
-// the external pointer to that sub-block.
+// method, so once it returns only that anchor keeps the cell alive.
+//
+// A collected cell cannot be recognised by reading it (the sweep leaves an
+// external pointer's fields in place, and the tag is in the pointer), so death
+// is observed through protoCore's finalizer contract: the shared cell counts
+// its finalization (detail::g_sharedCodeCellsFinalized), and a positive
+// control -- an unanchored external pointer with a counting finalizer, made
+// and dropped in the same way -- proves the harness does collect a dead one.
 namespace {
-const protoST::BytecodeModule* moduleWithCodeRef(const protoST::BytecodeModule& m,
-                                                 std::uint64_t serial) {
-    if (m.codeRefFor(serial)) return &m;
-    for (size_t i = 0; i < m.numBlocks(); ++i)
-        if (const protoST::BytecodeModule* found = moduleWithCodeRef(m.block(i), serial))
-            return found;
-    return nullptr;
+std::atomic<int> g_controlFinalized{0};
+int g_controlTarget = 0;
+
+void countControlFinalized(void*) { g_controlFinalized.fetch_add(1, std::memory_order_relaxed); }
+
+// `Probe drop`: makes an external pointer nothing references.
+const proto::ProtoObject* dropExternalPointer(proto::ProtoContext* ctx, const proto::ProtoObject*,
+                                              const proto::ParentLink*, const proto::ProtoArguments*,
+                                              const proto::ProtoKeywordArguments*) {
+    ctx->fromExternalPointer(&g_controlTarget, &countControlFinalized);
+    return PROTO_NONE;
 }
 } // namespace
 
-TEST_CASE("The shared code cell of a sub-block survives collections with no closure left",
+TEST_CASE("The shared code cell of a sub-block is anchored by its runtime and only by it",
           "[gc][closure]") {
-    GcHost h;
-    auto* ctx = h.rt.rootCtx();
-    // The runtime owns the module, so its closures share one anchored cell.
-    const protoST::BytecodeModule* module = nullptr;
+    const std::uint64_t before =
+        protoST::detail::g_sharedCodeCellsFinalized.load(std::memory_order_relaxed);
+    const int controlBefore = g_controlFinalized.load(std::memory_order_relaxed);
     {
+        GcHost h;
+        auto* ctx = h.rt.rootCtx();
+        auto* probe = h.rt.bootstrap().objectProto->newChild(ctx, /*isMutable=*/true);
+        probe->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "drop"),
+                            ctx->fromMethod(nullptr, &dropExternalPointer));
+        h.rt.globals()->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "Probe"), probe);
+        // The runtime owns the module, so its closures share one anchored cell.
+        {
+            protoST::Parser P("Object subclass: #Maker.\n"
+                              "Maker >> churn: n\n"
+                              "  | s |\n"
+                              "  s := 0.\n"
+                              "  1 to: n do: [:i | s := s + ([:y | y + i] value: 1). Probe drop].\n"
+                              "  ^ s");
+            auto ast = P.parseModule();
+            REQUIRE(P.errors().empty());
+            protoST::Compiler C;
+            auto bc = C.compileModule(*ast);
+            REQUIRE(!C.hasErrors());
+            h.rt.runTopLevel(h.rt.adoptModule(std::move(bc)));
+        }
+        REQUIRE(h.run("Maker new churn: 100.")->asLong(ctx) == 5150);
+
+        proto::ProtoSpace* sp = h.rt.space();
+        CycleObserver obs(sp);
+        const auto pressure = [&] { h.run("1 to: 5000 do: [ :i | Array new: 8 ]. 0."); };
+        for (int round = 0; round < 3; ++round) {
+            h.run("1 to: 20000 do: [ :i | Array new: 8 ]. 0.");
+            REQUIRE(forceCycle(h.rt, obs, std::chrono::seconds(20), pressure));
+        }
+        // The control: the harness collects a dead external pointer.
+        REQUIRE(g_controlFinalized.load(std::memory_order_relaxed) > controlBefore);
+        // The shared cell was not collected: the anchor kept it.
+        REQUIRE(protoST::detail::g_sharedCodeCellsFinalized.load(std::memory_order_relaxed) ==
+                before);
+        REQUIRE(h.run("Maker new churn: 10.")->asLong(ctx) == 65);
+    }
+}
+
+// The anchor lives exactly as long as the runtime: in a host's space, which
+// outlives the protoST runtime it hosts, no shared cell is collected while the
+// runtime lives, and the collections after it is destroyed collect them --
+// the kernel's (its files are modules the runtime owns) and `Maker`'s. (A
+// space's own teardown runs no finalizers, so a runtime that owns its space
+// cannot show this.)
+TEST_CASE("The shared code cell of a sub-block is released with its runtime", "[gc][closure]") {
+    const std::uint64_t before =
+        protoST::detail::g_sharedCodeCellsFinalized.load(std::memory_order_relaxed);
+    proto::ProtoSpace host;
+    proto::ProtoContext hostCtx(&host, nullptr);
+    {
+        protoST::STRuntime st(host);
         protoST::Parser P("Object subclass: #Maker.\n"
                           "Maker >> churn: n\n"
                           "  | s |\n"
                           "  s := 0.\n"
                           "  1 to: n do: [:i | s := s + ([:y | y + i] value: 1)].\n"
-                          "  ^ s");
+                          "  ^ s.\n"
+                          "Maker new churn: 100.");
         auto ast = P.parseModule();
         REQUIRE(P.errors().empty());
         protoST::Compiler C;
         auto bc = C.compileModule(*ast);
         REQUIRE(!C.hasErrors());
-        module = &h.rt.adoptModule(std::move(bc));
-        h.rt.runTopLevel(*module);
+        REQUIRE(st.runTopLevel(st.adoptModule(std::move(bc)))->asLong(st.rootCtx()) == 5150);
+        REQUIRE(protoST::detail::g_sharedCodeCellsFinalized.load(std::memory_order_relaxed) ==
+                before);
     }
-    REQUIRE(h.run("Maker new churn: 100.")->asLong(ctx) == 5150);
-    const protoST::BytecodeModule* sub = moduleWithCodeRef(*module, h.rt.serial());
-    REQUIRE(sub != nullptr);
-    const proto::ProtoObject* cell = sub->codeRefFor(h.rt.serial());
-
-    proto::ProtoSpace* sp = h.rt.space();
-    CycleObserver obs(sp);
-    const auto pressure = [&] { h.run("1 to: 5000 do: [ :i | Array new: 8 ]. 0."); };
-    for (int round = 0; round < 3; ++round) {
-        h.run("1 to: 20000 do: [ :i | Array new: 8 ]. 0.");
-        REQUIRE(forceCycle(h.rt, obs, std::chrono::seconds(20), pressure));
+    const uint64_t cycles = host.getGCCycleCount();
+    for (int round = 0;
+         round < 200 &&
+         protoST::detail::g_sharedCodeCellsFinalized.load(std::memory_order_relaxed) == before;
+         ++round) {
+        host.triggerGC();
+        for (int i = 0; i < 20000; ++i)
+            (void)hostCtx.newList()->appendLast(&hostCtx, hostCtx.fromInteger(i));
+        hostCtx.safepoint();
+        std::this_thread::yield();
     }
-    // Fresh allocation, which would reuse the cell had it been freed.
-    h.run("1 to: 20000 do: [ :i | Array new: 8 ]. 0.");
-    const proto::ProtoExternalPointer* ep = cell->asExternalPointer(ctx);
-    REQUIRE(ep != nullptr);
-    REQUIRE(ep->getPointer(ctx) == static_cast<const void*>(sub));
-    REQUIRE(sub->codeRefFor(h.rt.serial()) == cell);
-    REQUIRE(h.run("Maker new churn: 10.")->asLong(ctx) == 65);
+    INFO("cycles " << cycles << " -> " << host.getGCCycleCount());
+    REQUIRE(protoST::detail::g_sharedCodeCellsFinalized.load(std::memory_order_relaxed) >
+            before);
 }

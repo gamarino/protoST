@@ -162,7 +162,9 @@ minor release, so the two services arrive in 0.5.0.
   `respondsTo:`, `canUnderstand:` and `lookupSelector:` reported them and
   `perform:` sent them, `__st_send__` (the entry another runtime sends
   through, a method cell since this release) included. They answer false or
-  nil, and `perform:` reports MessageNotUnderstood. Test
+  nil, and `perform:` reports MessageNotUnderstood. The test reads the first
+  two characters in place: `3 perform: #between:and: with: 1 with: i` costs
+  3,569 instructions per iteration against 3,591 on 83864c9. Test
   `05-messages/private-selectors-are-hidden.st`.
 - **S3 is closed: an allocation-free loop does not stall a collection, and
   a test now proves it.** The park points came with S15 (the loop back-edge,
@@ -398,7 +400,12 @@ minor release, so the two services arrive in 0.5.0.
   cell per closure, so nothing accumulates for a module that may be freed.
   Reads go through a 64-entry per-thread cache of decoded cells, which holds
   only those anchored cells, keyed by cell and runtime serial
-  (`src/runtime/BlockCode.h`). Instructions per iteration (`perf stat -r 3`)
+  (`src/runtime/BlockCode.h`). The anchor is proven by finalization: the
+  shared cell counts its finalizer, and a test shows that no shared cell is
+  collected while its runtime lives (with an unanchored external pointer, made
+  and dropped the same way, collected as the positive control; without the
+  anchor the test fails), and that they are collected once it is gone
+  (`tests/unit/test_gc_cycle.cpp`). Instructions per iteration (`perf stat -r 3`)
   against 83864c9: a capturing block created and called per iteration, two
   interleaved runs, 15,692 / 15,529 on 83864c9, 15,902 / 15,761 with a cell
   per closure and no cache, 15,579 / 15,642 now (the benchmark allocates, so
@@ -610,6 +617,11 @@ minor release, so the two services arrive in 0.5.0.
   sent named arguments in a call-form send reports `a primitive method takes
   no named arguments` (was `primitive method 'sel' does not accept named args
   in v1`).
+- **Embedders must recompile, not relink.** `STRuntime` gained a data member
+  (`serial_`, behind the inline `serial()`), so its layout changed: an object
+  compiled against an earlier `STRuntime.h` and linked against this release
+  misreads the class (a relinked protoScala test executable crashed). The
+  embedder API changes listed here require a rebuild anyway.
 - **A ProtoSpace hosts one protoST runtime: constructing a second one on it
   throws `std::logic_error`.** In the ecosystem's recommended setup (one
   ProtoSpace per process, runtimes sharing it), two embedders that each

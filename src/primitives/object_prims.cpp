@@ -832,9 +832,12 @@ const proto::ProtoString* selectorArg(proto::ProtoContext* ctx, const proto::Pro
 // reflection does not report it, as `selectors` does not, and perform: does
 // not send it -- `__st_send__`, the entry another runtime sends through, is
 // one of them.
+// The first two characters are read in place (a character is an embedded
+// value), so no selector is copied out.
 static bool isRuntimePrivateSelector(proto::ProtoContext* ctx, const proto::ProtoString* sel) {
-    const std::string name = sel->toStdString(ctx);
-    return name.size() >= 2 && name[0] == '_' && name[1] == '_';
+    const proto::ProtoObject* underscore = ctx->fromUnicodeChar('_');
+    return sel->getSize(ctx) >= 2 && sel->getAt(ctx, 0) == underscore &&
+           sel->getAt(ctx, 1) == underscore;
 }
 
 // recv perform: #selector withArguments: anArray

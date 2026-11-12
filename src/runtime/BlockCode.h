@@ -4,6 +4,9 @@
 #include "runtime/BytecodeModule.h"
 #include "protoCore.h"
 
+#include <atomic>
+#include <cstdint>
+
 namespace protoST {
 
 // The code of a block or method closure: its `__bc_ptr__` attribute is a
@@ -23,6 +26,16 @@ inline const proto::ProtoObject* blockCodeRef(proto::ProtoContext* ctx,
                                               const BytecodeModule* module) {
     return ctx->fromExternalPointer(const_cast<BytecodeModule*>(module), /*finalizer=*/nullptr);
 }
+
+namespace detail {
+// How many cells created to be shared by the closures over a block have been
+// collected (their finalizer ran). A published cell is anchored for its
+// runtime's lifetime, so this advances only for a cell that lost the race to
+// publish, and for every cell once its runtime is gone. The finalizer runs on
+// the GC thread and only updates this counter (protoCore's finalizer
+// contract). For tests (test_gc_cycle.cpp).
+extern std::atomic<std::uint64_t> g_sharedCodeCellsFinalized;
+} // namespace detail
 
 // The first closure over `module` in `rt`: creates its `__bc_ptr__` cell,
 // anchors it in the runtime's live registry and publishes it on the module

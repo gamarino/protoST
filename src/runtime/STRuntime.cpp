@@ -1207,12 +1207,24 @@ std::uint64_t STRuntime::nextSerial() noexcept {
 
 constinit thread_local BlockCodeCacheEntry t_blockCodeCache[kBlockCodeCacheSize] = {};
 
+namespace detail {
+std::atomic<std::uint64_t> g_sharedCodeCellsFinalized{0};
+} // namespace detail
+
+namespace {
+// The finalizer of a cell made to be shared (blockCodeRefSlow).
+void noteSharedCodeCellFinalized(void*) {
+    detail::g_sharedCodeCellsFinalized.fetch_add(1, std::memory_order_relaxed);
+}
+} // namespace
+
 const proto::ProtoObject* blockCodeRefSlow(STRuntime& rt, proto::ProtoContext* ctx,
                                            const BytecodeModule& module) {
-    const proto::ProtoObject* cell = blockCodeRef(ctx, &module);
     // Another runtime created closures over this module first and owns its
     // cache: this closure gets a cell of its own, rooted by the closure.
-    if (module.hasCodeRef()) return cell;
+    if (module.hasCodeRef()) return blockCodeRef(ctx, &module);
+    const proto::ProtoObject* cell = ctx->fromExternalPointer(
+        const_cast<BytecodeModule*>(&module), &noteSharedCodeCellFinalized);
     TransientPin pin(ctx, cell);
     // Anchored in the runtime's single pinned root before another thread can
     // read it from the module, for as long as the runtime lives.
