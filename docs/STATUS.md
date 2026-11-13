@@ -15,6 +15,7 @@ relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
 - **Test suite:** 1291 `ctest` cases on Linux, 1291/1291 passing on
+  2026-11-13 (0.9.1, against protoCore 3.6.0 and protoIO 0.4.0) and on
   2026-11-10 (0.9.0 after the pending fixes: NUL-safe native error text,
   checked list indices, one index rule, the protoIO error mapping and
   the unmanaged digest path tested, the end guard from protoIO 0.4.0; against
@@ -29,7 +30,7 @@ stable id and file it in the right bucket.
   cannot verify its subject on a platform ends with `SKIP: <reason>` and CTest
   reports it as *Skipped* (`tests/conformance/README.md`); on Linux with
   Python 3 and `msgpack` none is skipped. CI (Linux, macOS and Windows) pins
-  protoIO 0.4.0 (tag `v0.4.0`) and protoCore 3.5.2 and installs `msgpack`; the macOS and Windows behaviour of the skip is confirmed
+  protoIO 0.4.0 (tag `v0.4.0`) and protoCore 3.6.0 (3.5.2 up to 0.9.0) and installs `msgpack`; the macOS and Windows behaviour of the skip is confirmed
   only by that CI (`KNOWN_ISSUES.md` K10). Earlier: 1105/1105 on 2026-10-17 (0.6.6, protoCore 2.14.6, protoIO 0.2.2):
   544 conformance programs, 462 unit tests, 44 examples, 33 CLI tests and 22
   documentation checks; CI ran the same suite on Linux, macOS and Windows
@@ -41,14 +42,15 @@ stable id and file it in the right bucket.
   well, `docs/INSTALLATION.md`, "Windows (MSVC)"). `cli_concurrent_first_call`
   (S19) gates CI again since 0.6.3. The history of earlier counts is in
   `CHANGELOG.md`.
-- **protoCore, protoIO:** 0.9.0 requires protoIO 0.4.0 or a later 0.4.x (a
-  0.3.x checkout is refused at configure time). 0.9.0 and 0.8.1 require protoCore
-  3.4.0 or later built from source; 0.9.0's `.deb` requires 3.5.2 and 0.8.1's
+- **protoCore, protoIO:** 0.9.1 and 0.9.0 require protoIO 0.4.0 or a later 0.4.x (a
+  0.3.x checkout is refused at configure time). 0.9.1, 0.9.0 and 0.8.1 require protoCore
+  3.4.0 or later built from source; 0.9.1's `.deb` requires 3.6.0 (`ProtoList`
+  is an RRB tree there; CHANGELOG 0.9.1), 0.9.0's 3.5.2 and 0.8.1's
   3.5.0 (SOVERSION 5 in all; 0.8.0 required 3.4.0, which removed
   `ProtoContext::pendingRoot`, so `ProtoContext`'s layout changed; 0.7.0
   required 3.0.0, for the descriptor calling convention and the unified
   exception model); its
-  `.deb` is built against 3.5.2 and depends on `protocore (>= 3.5.2)`; 3.5.2
+  `.deb` is built against 3.6.0 and depends on `protocore (>= 3.6.0)`; 3.5.2
   fixes a race in `ProtoSpace::newThread` that the ThreadSanitizer job found
   (`KNOWN_ISSUES.md` K10). Since
   2.14.6 protoCore's
@@ -73,7 +75,8 @@ stable id and file it in the right bucket.
   that a collection's pause no longer grows with the number of threads);
   precedence and
   details in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md) K5.
-- **Last verified:** 2026-11-10, by the test suite above (0.9.0, on the branch
+- **Last verified:** 2026-11-13, by the test suite above (0.9.1, against
+  protoCore 3.6.0). Before that, 2026-11-10 (0.9.0, on the branch
   `feature/binary-storage` before its merge; no `.deb` has been built for it).
   Before that, 2026-10-17 (release 0.6.6;
   its `.deb` was built in a clean Ubuntu 24.04 container with GCC 13 against
