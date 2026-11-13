@@ -52,7 +52,7 @@ namespace protoST {
 // closes the descriptors.
 //
 // Which bracket each call uses (spec section 3): readAt, writeAt, append,
-// size, truncate, tryLock, unlock and close are local and bounded, so they
+// size, linkCount, truncate, tryLock, unlock and close are local and bounded, so they
 // run unmanaged(); lock (another holder may keep the lock without bound),
 // sync and dataSync (they wait for the storage device) run blocking(), which
 // also lets the worker pool add a worker while this one waits. Opening runs
@@ -260,6 +260,17 @@ PRIM(prim_BinFileSize) {
     return ctx->fromLong(static_cast<long long>(n));
 }
 
+// __binFileLinkCount: h — the hard links (names) of the open file, read from
+// the descriptor (fstat; GetFileInformationByHandle), so the answer describes
+// the file this BinaryFile opened, whatever its path names by now.
+PRIM(prim_BinFileLinkCount) {
+    ARGS(1, "__binFileLinkCount:");
+    auto file = openFile(ctx, a[0], "BinaryFile>>linkCount");
+    const std::int64_t n = onFileUnmanaged(ctx, std::move(file),
+        [](int fd) { return protoio::file::linkCount(fd); });
+    return ctx->fromLong(static_cast<long long>(n));
+}
+
 // __binFileTruncate: h to: n — cuts the file, or extends it with zeros.
 PRIM(prim_BinFileTruncate) {
     ARGS(2, "__binFileTruncate:to:");
@@ -377,6 +388,7 @@ void installBinaryFilePrimitives(STRuntime& rt) {
         {"__binFileReadAt:offset:size:", primitiveMethod<prim_BinFileReadAt>},
         {"__binFileWriteAt:offset:data:", primitiveMethod<prim_BinFileWriteAt>},
         {"__binFileSize:", primitiveMethod<prim_BinFileSize>},
+        {"__binFileLinkCount:", primitiveMethod<prim_BinFileLinkCount>},
         {"__binFileTruncate:to:", primitiveMethod<prim_BinFileTruncate>},
         {"__binFileSync:", primitiveMethod<prim_BinFileSync>},
         {"__binFileDataSync:", primitiveMethod<prim_BinFileDataSync>},
