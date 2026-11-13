@@ -420,6 +420,11 @@ struct STRuntime::Impl {
     // the released thread runs again, so "parked" is mainWaitingOn set and
     // not equal to this. Compared as a pointer only, never dereferenced.
     std::atomic<const proto::ProtoObject*> mainReleasedFor{nullptr};
+    // S40 (review R2-I1): the program thread is inside acquireMainWait, which
+    // it enters only after reading its future pending (prim_Future_wait's
+    // slow path). A wait that finds its future already settled announces it
+    // in mainWaitingOn but never blocks, and must not count as parked.
+    std::atomic<bool> mainBlocked{false};
     Semaphore                               mainWaitSem;
 
     // Tasks published on `liveRegistry.__tasks__` and not yet taken
@@ -1081,8 +1086,8 @@ std::string STRuntime::poolCeilingReason() const {
     const std::string n = std::to_string(total) + (total == 1 ? " worker" : " workers");
     if (impl_->shutdown.load(std::memory_order_acquire))
         return "the program is ending, so the pool (" + n + ") adds no worker";
-    if (total >= kMaxWorkers)
-        return "the pool has " + n + ", its maximum";
+    if (total >= kMaxWorkers)   // two growths racing can pass kMaxWorkers by one
+        return "the pool has reached its maximum (" + n + ")";
     return "the pool has " + n + " and could not create another";
 }
 
@@ -1132,8 +1137,11 @@ bool STRuntime::confirmStuck(proto::ProtoContext* ctx, std::uint64_t epoch) {
     // parked (mainReleasedFor; review R1-I1). A stale record for an earlier
     // future never matches a later one, except when the later future reuses
     // the earlier one's address, which only withholds the error.
+    // It must also be blocked (mainBlocked, review R2-I1): a wait whose
+    // future was already settled announces itself but runs on.
+    const bool blocked = impl_->mainBlocked.load(std::memory_order_seq_cst);
     const proto::ProtoObject* waitingOn = impl_->mainWaitingOn.load(std::memory_order_seq_cst);
-    const bool parked = waitingOn != nullptr
+    const bool parked = blocked && waitingOn != nullptr
         && impl_->mainReleasedFor.load(std::memory_order_seq_cst) != waitingOn;
     if (!parked && !impl_->shutdown.load(std::memory_order_seq_cst)) return false;
     if (impl_->timers && impl_->timers->pendingCount(ctx) != 0) return false;
@@ -1904,7 +1912,17 @@ void STRuntime::acquireMainWait(proto::ProtoContext* ctx) {
     // submits the young generation (see prim_Future_wait for where the
     // waiting thread does).
     proto::ProtoContext::UnmanagedScope unmanaged(ctx);
+    // S40 (review R2-I1): blocked only here. Set after the caller read its
+    // future pending, which it did after storing mainWaitingOn: any settle of
+    // that future publishes after that read, so its load of mainWaitingOn
+    // matches and it records mainReleasedFor and ends the epoch before
+    // releasing this thread. Setting the flag needs no epoch bump: the
+    // thread changed nothing since markMainWaitingOn's bump. It is cleared on
+    // waking (a spurious wake from a leftover permit then counts as not
+    // parked until the caller blocks again: no error, never a false one).
+    impl_->mainBlocked.store(true, std::memory_order_seq_cst);
     impl_->mainWaitSem.acquire();
+    impl_->mainBlocked.store(false, std::memory_order_seq_cst);
 }
 
 void STRuntime::enqueueResumeTask(proto::ProtoContext* ctx,
