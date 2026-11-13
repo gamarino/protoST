@@ -389,10 +389,19 @@ TEST_CASE("S3: an allocation-free loop does not stall a collection", "[gc]") {
     const_cast<proto::ProtoObject*>(h.rt.globals())->setAttribute(
         ctx, proto::ProtoString::createSymbol(ctx, "GcProbe"), probe);
 
+    // The churn is bounded as well as stoppable. With the hook off a
+    // collection reclaims nothing, and whether an allocating thread parks
+    // while a collection is pending depends on the protoCore release: on the
+    // 3.4.0 floor it does not, so an unbounded churn filled the 8,000,000-cell
+    // ceiling (out of memory) before the main loop ended. 150,000 arrays stay
+    // far below that ceiling on every supported release and far above the
+    // 400,000-cell soft limit, so collections are still requested.
     const std::string churner =
         "Object subclass: #Churner.\n"
         "Churner >> churnUntil: stop\n"
-        "  [ stop value ] whileFalse: [ Array new: 8 ].\n"
+        "  | k |\n"
+        "  k := 0.\n"
+        "  [ stop value or: [ k >= 150000 ] ] whileFalse: [ Array new: 8. k := k + 1 ].\n"
         "  ^ #churned\n";
     if (!hookOff) {
         const proto::ProtoObject* r = h.run(churner +

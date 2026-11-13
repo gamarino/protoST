@@ -48,6 +48,7 @@
 #include "modules/STModuleProvider.h"
 #include "protoCore.h"
 
+#include <atomic>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -896,9 +897,17 @@ const proto::ProtoObject* prim_Array_classNew(STRuntime& rt, proto::ProtoContext
         // protoCore keeps the reserved cells, never grows past them, and
         // collects within them, so they are the real ceiling (review R7-1).
         // heapSize is an int protoCore updates with relaxed atomics; read it
-        // the same way, without the lock.
+        // the same way, without the lock. std::atomic_ref where the library
+        // has it (MSVC, libstdc++); Apple's libc++ before LLVM 19 lacks it and
+        // there the compiler builtin does the same, as protoCore's own
+        // relaxedLoad does.
+#if defined(__cpp_lib_atomic_ref)
+        const long long reserved = static_cast<long long>(
+            std::atomic_ref<int>(ctx->space->heapSize).load(std::memory_order_relaxed));
+#else
         const long long reserved = static_cast<long long>(
             __atomic_load_n(&ctx->space->heapSize, __ATOMIC_RELAXED));
+#endif
         const long long limit = STRuntime::heapCeilingCells(ctx);
         const long long ceiling = limit > 0 ? std::max(limit, reserved) : limit;
         const long long need =
