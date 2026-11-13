@@ -890,6 +890,61 @@ minor release, so the two services arrive in 0.5.0.
   needs the exception object must run the runtime in its own space
   (`STRuntime(proto::ProtoSpace&)`).
 
+## 0.9.1 — on protoCore 3.6.0 (2026-11-13)
+
+**Built, tested and released against protoCore 3.6.0** (SOVERSION 5,
+unchanged; `protoCore.h` changed only in comments). No source change was
+needed. The declared minimum for a build from source stays **protoCore
+3.4.0**, which CI's floor entry still builds; the `.deb` is built against the
+3.6.0 package, so it depends on `protocore (>= 3.6.0)` through protoCore's
+shlibs file, besides the declared `protocore (>= 3.4.0), protocore (<<
+4.0.0)`. CI pins protoCore tag `v3.6.0` on Linux, macOS, Windows and the
+ThreadSanitizer job; protoIO stays pinned to `v0.4.0`.
+
+**What 3.6.0 changes for protoST's lists.** `Array`, `OrderedCollection` and
+`Bag` wrap a `ProtoList`, and so do an actor's mailbox batches. In 3.6.0 every
+`ProtoList` of more than 5 elements is a relaxed radix balanced (RRB) tree
+instead of a persistent AVL tree with one element per node; every operation
+is still persistent and O(log n). protoCore's own measurements at 100,000
+elements: indexed read, append at the end, `at:put:`, removal from the end
+and iteration are faster (random `getAt` 586 ns to 36 ns, `appendLast` 777 ns
+to 30 ns); prepend, insertion and removal in the middle, slicing and
+concatenation are 1.2x to 2.7x slower, and `extend` up to 4.5x slower at
+1,000 elements. In protoST terms, `add:`/`addLast:`, `at:`, `at:put:`,
+`removeLast` and `do:` are on the faster side; `addFirst:` is on the slower
+side, and so are `add:beforeIndex:` and `removeAt:` (written in Smalltalk,
+they rebuild the tail with `addFirst:`), as is the slice a mailbox cursor takes
+of the unread part of a batch when a turn ends early. protoCore 3.6.0 also lets
+the adaptive heap controller measure the collector's throughput from narrow
+sweeps, so a single stalled mutator no longer keeps the soft limit at its
+starting value.
+
+Measured against protoST built on protoCore 3.5.2, interleaved
+(`benchmarks/compare_builds.py`, median of 5, same output on both sides):
+`list_append` -18 %, `parallel_speedup` (pool) -21 %, `saturation_big`
+(6 workers) -14 % in wall time; `range_iterate` +8 % slower, a loop that builds
+no list, so the cause is not established; the other benchmarks within
+±2 %. No benchmark exercises the slower operations (prepend, insertion,
+slicing, concatenation) on its own, so their cost in protoST programs is not
+measured here.
+
+### Changed
+
+- CI pins protoCore `v3.6.0` (was `v3.5.2`); the floor entry stays on
+  `v3.4.0`.
+- Version 0.9.1 in the REPL banner, the HTTP client's `User-Agent` and the
+  install guide.
+
+### Verification
+
+- `ctest` on Linux (`build_release`, `ctest -j2`), against protoCore 3.6.0
+  (the `v3.6.0` tag, built from source; `ldd` resolves `libprotoCore.so.5` to
+  that build) and protoIO 0.4.0: 1291 cases, all passing, none skipped (685
+  conformance programs, 494 unit tests, 44 examples, 42 CLI tests, 23
+  documentation checks, 3 UMD host cases).
+- The ThreadSanitizer label was not run locally for this release; CI's gating
+  TSan job runs it against a TSan build of protoCore 3.6.0.
+
 ## 0.9.0 — bytes, binary files, encodings, MessagePack and timers (2026-11-10)
 
 Released 2026-11-10.

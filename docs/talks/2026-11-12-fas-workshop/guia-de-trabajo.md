@@ -22,22 +22,22 @@ Trabajen de a dos si pueden: uno predice, el otro corre. Lo que no termine en la
 
 ## Preparación (antes del 12/11)
 
-Instalen antes de venir: en la sala no hay tiempo para compilar. Necesitan protoST 0.7.0 o posterior sobre protoCore 3.0.0 o posterior.
+Instalen antes de venir: en la sala no hay tiempo para compilar. Necesitan protoST 0.9.0 sobre protoCore 3.5.2 (los ejercicios también corren con 0.7.0 y 0.8.x).
 
 **Ubuntu 24.04 o Windows con WSL2 (recomendado).** Son dos paquetes `.deb` de las releases de GitHub:
 
 ```bash
 # Windows, una sola vez, en PowerShell:
 #   wsl --install -d Ubuntu-24.04
-wget https://github.com/numaes/protoCore/releases/download/v3.0.0/protoCore-3.0.0-Linux.deb
-wget https://github.com/gamarino/protoST/releases/download/v0.7.0/protost-0.7.0-Linux.deb
-sudo apt install ./protoCore-3.0.0-Linux.deb ./protost-0.7.0-Linux.deb
-protost --version          # protoST 0.7.0
+wget https://github.com/numaes/protoCore/releases/download/v3.5.2/protoCore-3.5.2-Linux.deb
+wget https://github.com/gamarino/protoST/releases/download/v0.9.0/protost-0.9.0-Linux.deb
+sudo apt install ./protoCore-3.5.2-Linux.deb ./protost-0.9.0-Linux.deb
+protost --version          # protoST 0.9.0
 ```
 
-Si ya tenían protoST 0.6.x, el mismo `apt install` actualiza protoCore (0.7.0 no corre sobre 2.14.x).
+Si ya tenían una versión anterior, el mismo `apt install` actualiza protoCore (0.9.0 necesita la 3.5.2: la 3.4.0 cambió el ABI).
 
-**macOS y Windows nativo.** No hay paquete publicado: se compila desde las fuentes (C++20, CMake 3.20+, protoCore 3.x instalado, protoIO 0.2.3, OpenSSL; en macOS también readline). Los pasos están en `docs/INSTALLATION.md`, incluida la sección *Windows (MSVC)*. Cuenten con una hora la primera vez.
+**macOS y Windows nativo.** No hay paquete publicado: se compila desde las fuentes (C++20, CMake 3.20+, protoCore 3.4.0 o posterior instalado, protoIO 0.4.x, OpenSSL; en macOS también readline). Los pasos están en `docs/INSTALLATION.md`, incluida la sección *Windows (MSVC)*. Cuenten con una hora la primera vez.
 
 **El repositorio.** Clonen `https://github.com/gamarino/protoST`: los ejercicios, el código de la VM y los listados de bytecode que vamos a leer están ahí.
 
@@ -46,7 +46,7 @@ Si ya tenían protoST 0.6.x, el mismo `apt install` actualiza protoCore (0.7.0 n
 1. `protost -e "(1/3) + (2/3)"` responde `1`.
 2. `protost -e "100 factorial printString size"` responde `158`.
 3. `protost -i` abre el REPL; salen con Ctrl-D.
-4. `protost --disasm docs/vm-examples/05-fib.st` imprime el bytecode y después corre el programa. `--disasm` entró después de 0.7.0: si su `protost` no lo reconoce (`unknown option`), lean los listados ya generados en `docs/vm-examples/*.txt`; son salida real del desensamblador y un test verifica que no se desactualicen.
+4. `protost --disasm docs/vm-examples/05-fib.st` imprime el bytecode y después corre el programa (desde 0.8.0). Los mismos listados, ya generados, están en `docs/vm-examples/*.txt`; un test verifica que no se desactualicen.
 5. En la carpeta de ejercicios, `./verificar.sh` corre todos los programas y compara con la salida esperada; ninguno tarda más de unos segundos.
 
 **Opcional: el depurador.** La extensión de VS Code (`editor-integration/vscode/`) habla DAP con `protost --dap`: breakpoints, paso a paso, excepciones, y varios hilos detenidos a la vez cuando hay actores. Ver `docs/debugging.md`.
@@ -100,7 +100,7 @@ Una tercera, menos visible: una racha de asignaciones a variables de instancia s
 
 **Para discutir.** Sin `become:` y sin slots indexados, ¿qué parte del problema clásico de cambio de forma desaparece y qué parte reaparece como "dos clases con el mismo nombre"?
 
-**Una trampa que encontró este ejercicio.** En 0.7.0, si un método terminaba en `^ variable` y la línea después de la línea en blanco empezaba con `(`, el parser la tomaba como argumento de un envío call-form `variable(...)` y la metía en el método, sin error. Está corregido en main (S32): el `(` de un call-form tiene que ir pegado al nombre, como los dos puntos de un keyword.
+**Una trampa que encontró este ejercicio.** En 0.7.0, si un método terminaba en `^ variable` y la línea después de la línea en blanco empezaba con `(`, el parser la tomaba como argumento de un envío call-form `variable(...)` y la metía en el método, sin error. Está corregido desde 0.8.0 (S32): el `(` de un call-form tiene que ir pegado al nombre, como los dos puntos de un keyword.
 
 ## Laboratorio 1 (cont.) — El recolector
 
@@ -138,7 +138,7 @@ La referencia de esta parte es `docs/VM.md`: el orden de lectura del código (pa
 
 ### Ejercicio 5 — Leer el bytecode (15 min)
 
-`protost --disasm 05-bytecode.st` (o, sin `--disasm`, los listados de `docs/vm-examples/`)
+`protost --disasm 05-bytecode.st` (los listados de `docs/vm-examples/` muestran otros casos)
 
 **Pregunta.** Para cada método de `Muestra`, antes de mirar: ¿qué variables van al diccionario de capturadas y cuáles quedan en el frame? ¿Qué bloques se inlinean? ¿Dónde aparecen `BIN_INT_ADD`, `IVAR_GROUP` y `ASSERT_BOOL_OR_DNU`? En `contadores`, ¿los tres bloques comparten `c`?
 
@@ -160,7 +160,7 @@ La referencia de esta parte es `docs/VM.md`: el orden de lectura del código (pa
 
 **Discusión.** Los frames no son objetos: son registros de enteros sobre el arreglo de slots del hilo, y el engine no es recursivo. Un `^` cuyo home está en el mismo engine desapila frames; si el bloque lo corre una primitiva (`do:`), el home está en un engine exterior y el retorno viaja como excepción de C++, corriendo los `ensure:` al desenrollar. Si el home ya retornó, es un `BlockCannotReturn` capturable.
 
-El caso 4 es el interesante. Saber si el home sigue vivo se resuelve con un registro thread-local de engines vivos. Desde otro hilo el home parece muerto, así que da `BlockCannotReturn` aunque el método esté esperando la respuesta. En 0.7.0 el texto decía que el home ya había retornado, lo que era falso; en main nombra los dos casos (S35). Comparen qué dice el suyo: el ejercicio lo imprime en una línea `~`.
+El caso 4 es el interesante. Saber si el home sigue vivo se resuelve con un registro thread-local de engines vivos. Desde otro hilo el home parece muerto, así que da `BlockCannotReturn` aunque el método esté esperando la respuesta. En 0.7.0 el texto decía que el home ya había retornado, lo que era falso; desde 0.8.0 nombra los dos casos (S35). Comparen qué dice el suyo: el ejercicio lo imprime en una línea `~`.
 
 **Para discutir.** ¿Debería un `^` cruzar actores? Si sí, ¿qué significa para la garantía de un mensaje por vez del actor que corre el bloque? `thisContext` está reservado (D17) justamente porque no hay contexto que reificar; ¿qué mínimo de reificación haría falta para un depurador al estilo Smalltalk?
 
@@ -225,7 +225,7 @@ protost 10-escalar.st        # por omisión: un worker por núcleo, hasta 8
 
 **Pregunta.** Contar los primos hasta 120 000 en un hilo y repartido en 12 actores. ¿La aceleración es lineal hasta los núcleos físicos?
 
-**Discusión.** En una máquina de referencia (Windows, 0.7.0) dio 0,9×, 1,9×, 2,9× y 4,2× con 1, 2, 4 y 8 workers. No hay lock global: el límite viene del costo de las escrituras (cada asignación a una variable capturada o de instancia publica una instantánea), del recolector cuando se asigna (ejercicio 4) y del pool, que por omisión no pasa de 8 workers. Los workers solo crecen, hasta 256, mientras hay hilos bloqueados en E/S.
+**Discusión.** En una máquina de referencia (Windows, 0.7.0) dio 0,9×, 1,9×, 2,9× y 4,2× con 1, 2, 4 y 8 workers; con 0.9.0 en Linux, en la misma máquina, 5,0× con el pool por omisión. No hay lock global: el límite viene del costo de las escrituras (cada asignación a una variable capturada o de instancia publica una instantánea), del recolector cuando se asigna (ejercicio 4) y del pool, que por omisión no pasa de 8 workers. Los workers solo crecen, hasta 256, mientras hay hilos bloqueados en E/S.
 
 **Para discutir.** Una VM de Smalltalk con green threads no escala nada en núcleos; una con un lock global, tampoco. ¿Qué aceleración tendría que mostrar protoST para que les importe, y en qué tipo de programa?
 
@@ -246,7 +246,7 @@ Ninguna de estas tiene respuesta cerrada; elijan la que les interese. Un issue o
 | Comparar con Cuis y VAST | `benchmarks/comparable/` | Nunca medido: el primer número sería de ustedes |
 | Un programa real suyo en ocho núcleos | `Import from: 'http'`, capítulo 15 del tutorial | Lo que ningún benchmark muestra |
 
-Preparando este taller aparecieron cuatro bugs reales: un envío call-form que cruzaba la línea en blanco, `super` resuelto por nombre con clases homónimas, el rango de `SmallInteger` y el mensaje del `^` entre actores. Los cuatro están corregidos en main, cada uno con su test (`docs/STATUS.md`, S32 a S35). Así se trabaja: se mide, se escribe el test, se arregla.
+Preparando este taller aparecieron cuatro bugs reales: un envío call-form que cruzaba la línea en blanco, `super` resuelto por nombre con clases homónimas, el rango de `SmallInteger` y el mensaje del `^` entre actores. Los cuatro están corregidos desde 0.8.0, cada uno con su test (`docs/STATUS.md`, S32 a S35). Así se trabaja: se mide, se escribe el test, se arregla.
 
 ## Referencias
 

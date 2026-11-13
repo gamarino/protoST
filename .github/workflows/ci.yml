@@ -26,7 +26,7 @@ name: CI
 # pinned release (3.6.0) and against the declared minimum (3.4.0, the floor
 # entry -- this repository's only floor job; it stays on 3.4.0 on the schedule).
 # protoCore 3.4.0 changed the ABI (SOVERSION 5), so no older protoCore can
-# satisfy the build; 3.5.0 through 3.6.0 kept SOVERSION 5.
+# satisfy the build; 3.5.0, 3.5.1, 3.5.2 and 3.6.0 kept SOVERSION 5.
 #
 # TWO BUGS OF THIS REPOSITORY'S OWN SHAPE THIS FILE HAS TO HANDLE:
 #
@@ -309,8 +309,8 @@ jobs:
     # about 3 minutes, protoST about 4, the 580 tests of the label 7.
     timeout-minutes: 45
     # Gates. The one race the label used to report, in protoCore 3.5.1's
-    # ProtoSpace::newThread (KNOWN_ISSUES.md K10), is fixed in 3.5.2; the
-    # pinned env.PROTOCORE_REF is 3.6.0 (master on the schedule).
+    # ProtoSpace::newThread (KNOWN_ISSUES.md K10), is fixed in 3.5.2; the job
+    # builds the pinned env.PROTOCORE_REF, 3.6.0 (master on the schedule).
     steps:
       - name: Check out protoST
         uses: actions/checkout@v4

@@ -61,7 +61,7 @@ Celda >> b
   ^ b
 
 "En 0.7.0, si la línea siguiente empezara con '(', el parser la tomaba como
- argumento de un envío call-form b(...) dentro del método (corregido en main)."
+ argumento de un envío call-form b(...) dentro del método (corregido en 0.8.0)."
 Transcript showCr: 'la celda vieja entiende #b: ', (c respondsTo: #b) printString.
 Transcript showCr: 'y su b vale: ', c b printString.
 Transcript showCr: 'misma clase: ', (c class == Celda) printString.

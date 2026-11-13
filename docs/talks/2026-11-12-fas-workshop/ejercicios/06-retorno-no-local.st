@@ -42,5 +42,5 @@ Transcript showCr: '2. ', ([ escape value: 4 ] on: Error do: [:e | e class name 
 Transcript showCr: '3. retornó ', b conLimpieza printString.
 [ b desdeOtroActor ] on: Error do: [:e |
   Transcript showCr: '4. ', e class name.
-  "El texto cambió después de 0.7.0: ¿qué dice el suyo, y es verdad?"
+  "El texto cambió en 0.8.0: ¿qué dice el suyo, y es verdad?"
   Transcript showCr: '~ 4. ', e messageText ].
