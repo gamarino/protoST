@@ -48,8 +48,10 @@ std::string formatFloat(double d) {
     const size_t ePos = e.find('e');
     const int exp10 = std::atoi(e.c_str() + ePos + 1);
     std::string digits;
+    // snprintf writes LC_NUMERIC's decimal separator (',' under a
+    // comma-decimal locale a host may set); keep only the digits.
     for (size_t i = 0; i < ePos; ++i)
-        if (e[i] != '.') digits += e[i];
+        if (e[i] >= '0' && e[i] <= '9') digits += e[i];
     while (digits.size() > 1 && digits.back() == '0') digits.pop_back();
 
     std::string out = negative ? "-" : "";

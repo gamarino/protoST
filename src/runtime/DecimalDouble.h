@@ -6,6 +6,16 @@
 #include <string>
 #include <system_error>
 
+#if !(defined(__cpp_lib_to_chars) && __cpp_lib_to_chars >= 201611L)
+#if defined(_WIN32)
+#include <locale.h>
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+#include <xlocale.h>
+#else
+#include <locale.h>
+#endif
+#endif
+
 namespace protoST {
 
 // The double nearest to a decimal numeral (round to nearest, ties to even),
@@ -20,7 +30,10 @@ namespace protoST {
 // std::from_chars is locale-independent (strtod reads LC_NUMERIC, which a
 // host embedding libprotost may set to a locale whose decimal separator is a
 // comma) and correctly rounded. A standard library without floating-point
-// from_chars falls back to strtod.
+// from_chars (Apple's libc++ among them) falls back to strtod_l with a
+// "C" locale object, which reads the same text whatever LC_NUMERIC says;
+// plain strtod would stop at the '.' under a comma-decimal locale and turn
+// every float literal into an error.
 inline bool parseDecimalDouble(const std::string& text, double& out) {
     const char* begin = text.data();
     const char* end = begin + text.size();
@@ -71,8 +84,15 @@ inline bool parseDecimalDouble(const std::string& text, double& out) {
     out = negative ? -v : v;
     return true;
 #else
+    // `text` is a std::string, so the digits are NUL-terminated for strtod_l.
     char* stop = nullptr;
-    const double v = std::strtod(begin, &stop);
+#if defined(_WIN32)
+    static const _locale_t cLocale = _create_locale(LC_NUMERIC, "C");
+    const double v = _strtod_l(begin, &stop, cLocale);
+#else
+    static const locale_t cLocale = newlocale(LC_NUMERIC_MASK, "C", static_cast<locale_t>(0));
+    const double v = strtod_l(begin, &stop, cLocale);
+#endif
     if (stop != end) return false;
     out = negative ? -v : v;
     return true;

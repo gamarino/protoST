@@ -12,6 +12,7 @@
 
 #include <catch2/catch_all.hpp>
 
+#include <clocale>
 #include <string>
 
 #include "protoST/STRuntime.h"
@@ -50,6 +51,24 @@ TEST_CASE("MNT-c D11: Float addition yields a Float", "[mnt-c][D11]") {
     REQUIRE(r->isFloat(rt.rootCtx()));
     REQUIRE(r->asDouble(rt.rootCtx()) == Catch::Approx(4.0));
     REQUIRE(fmt(rt, r) == "4.0");
+}
+
+// A host embedding libprotost may set LC_NUMERIC to a comma-decimal locale;
+// the rendering of a Float must not change with it (snprintf writes the
+// locale's separator, which the formatter used to copy into the digits).
+TEST_CASE("MNT-c D11: Float rendering ignores LC_NUMERIC", "[mnt-c][D11]") {
+    protoST::STRuntime rt;
+    auto* r = runSrc(rt, "1.5 + 1.0e-7.");
+    const char* previous = std::setlocale(LC_NUMERIC, nullptr);
+    const std::string saved = previous ? previous : "C";
+    bool commaLocale = false;
+    for (const char* name : {"es_AR.UTF-8", "es_AR.utf8", "de_DE.UTF-8", "de_DE.utf8", "fr_FR.UTF-8"}) {
+        if (std::setlocale(LC_NUMERIC, name)) { commaLocale = true; break; }
+    }
+    const std::string text = fmt(rt, r);
+    std::setlocale(LC_NUMERIC, saved.c_str());
+    if (!commaLocale) WARN("no comma-decimal locale installed; ran in the C locale");
+    REQUIRE(text == "1.5000001");
 }
 
 TEST_CASE("MNT-c D11: Float subtraction / multiplication / division",

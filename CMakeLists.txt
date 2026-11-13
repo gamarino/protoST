@@ -629,6 +629,14 @@ add_test(NAME cli_future_callback_barrier
 
 add_test(NAME cli_kernel
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_kernel.sh $<TARGET_FILE:protost> ${CMAKE_BINARY_DIR}/cli-scratch/kernel)
+# cli_kernel measures startup in wall-clock time (a 100 ms budget), so it runs
+# alone. Under `ctest -j2` it used to share the runner with
+# cli_nested_wait_progress, whose 256 workers keep every core busy (about 80
+# CPU-seconds in 15 s, measured locally): in the 0.10.0 assertions job the two
+# overlapped and even `protost --version` took 146 ms, so the budget failed on
+# the neighbour's load, not on protoST's startup (271 ms there, about 40 ms
+# alone).
+set_tests_properties(cli_kernel PROPERTIES RUN_SERIAL TRUE)
 
 add_test(NAME cli_debugger
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_debugger.sh $<TARGET_FILE:protost> ${CMAKE_SOURCE_DIR}/tests/fixtures)

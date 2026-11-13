@@ -305,6 +305,24 @@ minor release, so the two services arrive in 0.5.0.
   through garbage beyond the heap ceiling and then sets it. It completes, and
   hangs with `PROTOST_NO_GC_SAFEPOINT=1`, while the same program without the
   spinning loop does not.
+  The unit case `S3: an allocation-free loop does not stall a collection`
+  (`tests/unit/test_gc_cycle.cpp`, with and without the hook) no longer waits
+  for an event its program does not guarantee: with the hook the actor
+  churns until the main thread stops it (a bounded churn could end, and its
+  collections with it, before the spin started counting; the 3.4.0 floor job
+  timed out so), and without it the spin also ends when the bounded churn is
+  done, which fails with the observed cycle counts instead of hanging. The
+  fix needs no protoCore newer than 3.4.0, and the case runs on every
+  supported release (STATUS S3).
+- **The test suite builds with MSVC and its startup budget runs alone.**
+  `test_gc_cycle.cpp` read the collector's counters with GCC's
+  `__atomic_load_n` (it now uses `std::atomic_ref` where the library has it,
+  as `collection_prims.cpp` does), and `test_foreign_frame_context.cpp`
+  narrowed `asLong`'s `long long` to `long` (C4244, an error under `/WX`).
+  `cli_kernel`, which holds startup to 100 ms of wall-clock time, is
+  `RUN_SERIAL`: in the assertions job it overlapped `cli_nested_wait_progress`
+  (256 workers, every core busy) and failed at 271 ms, while `protost
+  --version` alone took 146 ms there; startup measures about 40 ms run alone.
 - **`Array new:` with a size the heap can never take signals an Error
   (reviews R3-2, R4-1, R5-1, R6-1, R7-1).** `Array new: 3000000000` (a typo,
   say) built an 8n-byte vector and then the list, and ended in protoCore's
@@ -432,7 +450,13 @@ minor release, so the two services arrive in 0.5.0.
   range: a subnormal is kept, an underflow is `0.0` / `-0.0`, and only a
   literal beyond the largest `Float` stays an error (STATUS D51, a recorded
   decision; LANGUAGE.md §2.5). The lexer and `String >> asNumber` read the
-  digits with `std::from_chars`, which ignores the C locale. Tests:
+  digits with `std::from_chars`, which ignores the C locale; a standard
+  library without floating-point `from_chars` (Apple's libc++) uses
+  `strtod_l` with a "C" locale object (plain `strtod` stopped at the `.`
+  under a comma-decimal `LC_NUMERIC`, so every float literal was an error on
+  macOS in such a host). Rendering a `Float` no longer copies a comma
+  separator from `snprintf` into its digits either (`Float rendering ignores
+  LC_NUMERIC`, `tests/unit/test_mnt_c_numbers.cpp`). Tests:
   `02-lexical/float-literal-full-range.st`, `float-literal-round-trip.st`,
   `float-literal-overflow-is-error.st`, and the `[k16]` cases of
   `tests/unit/test_lexer.cpp` (ties to even, 4,000 random doubles' shortest

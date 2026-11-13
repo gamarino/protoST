@@ -52,7 +52,7 @@ constexpr unsigned kFrameLocals = 4;
 const proto::ProtoObject* g_walkerClass = nullptr;
 bool g_localsKept = false;
 bool g_localsInPlace = false;
-long g_depth = -1;
+long long g_depth = -1;
 
 // The other runtime's frame: its own context with four locals, then a send
 // back into protoST.

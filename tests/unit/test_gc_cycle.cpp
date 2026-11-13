@@ -35,6 +35,7 @@
 #include "runtime/BlockCode.h"
 #include "runtime/Bootstrap.h"
 #include "protoCore.h"
+#include "runtime/ValueFormat.h"
 
 #include <atomic>
 #include <chrono>
@@ -42,6 +43,7 @@
 #include <cstdlib>
 #include <functional>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -68,8 +70,14 @@ struct GcHost {
 // heapSize and freeCellsCount are plain ints that protoCore writes
 // atomically (relaxedFetchAdd/relaxedStore, proto_internal.h) from the
 // collector thread; a reader outside its mutex loads them the same way.
+// std::atomic_ref where the library provides it (MSVC, libstdc++ >= 10);
+// the GCC/Clang builtin otherwise (Apple libc++ before atomic_ref).
 int relaxedRead(int& v) {
+#if defined(__cpp_lib_atomic_ref)
+    return std::atomic_ref<int>(v).load(std::memory_order_relaxed);
+#else
     return __atomic_load_n(&v, __ATOMIC_RELAXED);
+#endif
 }
 
 // Ask for collections and wait for them, with this thread parked.
@@ -346,15 +354,27 @@ TEST_CASE("The shared code cell of a sub-block is released with its runtime", "[
 // The case runs in both modes of the hook, read from the environment as the
 // engine reads it (ctest runs it once without and once with
 // PROTOST_NO_GC_SAFEPOINT=1, tests/CMakeLists.txt). Both outcomes are
-// decided by the order of events, never by elapsed time:
-//   * with the hook, the spin waits for a cycle to complete, which can only
-//     happen while it spins if the loop parks; without the hook that loop
-//     would never end;
-//   * without it, the spin first waits until a collection is requested (it
-//     stays requested: nothing the main thread does parks it), then runs a
-//     fixed number of back-edges: no cycle can complete during them, so the
-//     count is unchanged, and once the loop is over the program waits for
+// decided by the order of events, never by elapsed time, and neither mode
+// waits for an event the program does not guarantee:
+//   * with the hook, the actor churns until the main thread stops it, so
+//     collections keep being requested for as long as the main thread
+//     spins, and they reclaim the churn's garbage (the heap cannot fill).
+//     The spin waits for a cycle to complete, which can only happen while it
+//     spins if the loop parks; without the hook that loop would never end.
+//     The churn must not be bounded: a bounded churn can finish, and its
+//     collections with it, before the spin starts counting, and the spin
+//     then waits for a cycle nothing will request (the protoCore 3.4.0
+//     floor job timed out this way on 2026-11-13);
+//   * without it, a collection reclaims nothing (S15), so the churn is
+//     bounded (150,000 arrays, far below the 8,000,000-cell ceiling and far
+//     above the 400,000-cell soft limit) and says when it is done. The spin
+//     waits until a collection is requested or the churn is done. A request
+//     stays pending while the main thread spins (nothing it does parks it),
+//     so the spin then runs a fixed number of back-edges, no cycle can
+//     complete during them, and once the loop is over the program waits for
 //     the actor, which parks the main thread and lets the collections run.
+//     A churn that ends with no request seen is reported as a failure that
+//     names what was observed, never as a hang.
 namespace {
 
 const proto::ProtoObject* primGcCycles(protoST::STRuntime& rt, proto::ProtoContext* ctx,
@@ -389,23 +409,12 @@ TEST_CASE("S3: an allocation-free loop does not stall a collection", "[gc]") {
     const_cast<proto::ProtoObject*>(h.rt.globals())->setAttribute(
         ctx, proto::ProtoString::createSymbol(ctx, "GcProbe"), probe);
 
-    // The churn is bounded as well as stoppable. With the hook off a
-    // collection reclaims nothing, and on the protoCore 3.4.0 floor an
-    // unbounded churn filled the 8,000,000-cell ceiling (out of memory) before
-    // the main loop ended (CI, 2026-11-13; on 3.5.2 and 3.6.0 it did not). The
-    // likely cause, not verified, is that 3.4.0 lets an allocating thread run
-    // on while a collection is pending. 150,000 arrays stay
-    // far below that ceiling on every supported release and far above the
-    // 400,000-cell soft limit, so collections are still requested.
-    const std::string churner =
-        "Object subclass: #Churner.\n"
-        "Churner >> churnUntil: stop\n"
-        "  | k |\n"
-        "  k := 0.\n"
-        "  [ stop value or: [ k >= 150000 ] ] whileFalse: [ Array new: 8. k := k + 1 ].\n"
-        "  ^ #churned\n";
     if (!hookOff) {
-        const proto::ProtoObject* r = h.run(churner +
+        const proto::ProtoObject* r = h.run(
+            "Object subclass: #Churner.\n"
+            "Churner >> churnUntil: stop\n"
+            "  [ stop value ] whileFalse: [ Array new: 8 ].\n"
+            "  ^ #churned\n"
             "| stop f c0 |\n"
             "stop := Atom on: false.\n"
             "f := Churner new asActor churnUntil: stop.\n"
@@ -416,20 +425,41 @@ TEST_CASE("S3: an allocation-free loop does not stall a collection", "[gc]") {
         REQUIRE(r != nullptr);
         REQUIRE(r->asString(ctx) != nullptr);
     } else {
-        const proto::ProtoObject* r = h.run(churner +
-            "| stop f c0 n delta |\n"
+        const proto::ProtoObject* r = h.run(
+            "Object subclass: #Churner.\n"
+            "Churner >> churnUntil: stop then: done\n"
+            "  | k |\n"
+            "  k := 0.\n"
+            "  [ stop value or: [ k >= 150000 ] ] whileFalse: [ Array new: 8. k := k + 1 ].\n"
+            "  done value: true ifCurrent: false.\n"
+            "  ^ #churned\n"
+            "| stop done f before requested c0 n delta |\n"
             "stop := Atom on: false.\n"
-            "f := Churner new asActor churnUntil: stop.\n"
-            "[ GcProbe stopTheWorldRequested ] whileFalse: [ ].\n"
+            "done := Atom on: false.\n"
+            "before := GcProbe gcCycles.\n"
+            "f := Churner new asActor churnUntil: stop then: done.\n"
+            "[ GcProbe stopTheWorldRequested or: [ done value ] ] whileFalse: [ ].\n"
+            "requested := GcProbe stopTheWorldRequested.\n"
             "c0 := GcProbe gcCycles.\n"
             "n := 0.\n"
             "[ n < 3000000 ] whileTrue: [ n := n + 1 ].\n"
             "delta := GcProbe gcCycles - c0.\n"
             "stop value: true ifCurrent: false.\n"
             "f wait.\n"
-            "delta.\n");
+            "requested printString , ' ' , delta printString , ' ' , (c0 - before) printString.\n");
         REQUIRE(r != nullptr);
+        // "<requested> <delta> <cycles before the request>", e.g. "true 0 2".
+        std::istringstream observed(protoST::formatValue(h.rt, ctx, r));
+        std::string requested;
+        long long delta = -1, cyclesBeforeRequest = -1;
+        observed >> requested >> delta >> cyclesBeforeRequest;
+        INFO("collection pending when the spin ended: " << requested
+             << "; cycles completed from the actor's start to the end of the wait: "
+             << cyclesBeforeRequest << "; cycles completed during the fixed loop: " << delta);
+        // A collection was requested while the main thread spun, and stayed
+        // pending: the spin, with the hook off, does not park.
+        REQUIRE(requested == "true");
         // No collection completed while the loop ran without parking.
-        REQUIRE(r->asLong(ctx) == 0);
+        REQUIRE(delta == 0);
     }
 }
