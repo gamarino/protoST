@@ -26,7 +26,10 @@ was last run locally (2026-11-13) against protoCore 3.6.0 and protoIO 0.5.0.
   Fedora/RHEL, `brew install readline` on macOS). It is a hard requirement:
   `find_library(READLINE_LIBRARY NAMES readline REQUIRED)`, except on Windows,
   where the REPL uses the console's own line editing (*Windows (MSVC)*).
-- **protoIO 0.5.0 or a later 0.5.x** at build time only (0.5.0 adds
+- **protoIO 0.6.0 or a later 0.6.x** at build time only (0.6.0 adds the
+  hard-link count, `file::Stat::linkCount` and `file::linkCount(fd)`, behind
+  `FileReference >> linkCount` and `BinaryFile >> linkCount` in protoST
+  0.11.0; 0.10.0 needs 0.5.x; 0.5.0 adds
   `random::bytes` and `clock::utcMicroseconds`, behind `ByteArray randomBytes:`
   and `Time utcMicroseconds` in protoST 0.10.0; 0.9.0 needs 0.4.x; 0.4.0 adds
   `file::EndGuard`, the end guard `BinaryFile` uses, and the `Conflict`
@@ -38,7 +41,7 @@ was last run locally (2026-11-13) against protoCore 3.6.0 and protoIO 0.5.0.
   listener on a host-less address (0.2.2) and `readBufferedLine` (0.2.3, with
   which `nextLine` takes a line already in protoIO's read buffer without
   leaving the collector's quorum); protoIO's package is compatible within one
-  minor version, so a 0.4 or 0.6 is refused): the I/O
+  minor version, so a 0.5 or 0.7 is refused): the I/O
   library shared by the protoCore
   runtimes (files, processes, TCP, UDP, TLS, HTTP), linked statically, so the
   installed `protost` does not depend on it. Either install its `protoio-dev`

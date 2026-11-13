@@ -3,6 +3,27 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
+## 0.11.0 — unreleased
+
+**Requires protoIO 0.6.0** (or a later 0.6.x; a 0.5.x checkout is refused at
+configure time).
+
+### Added
+
+- **`BinaryFile >> linkCount`**: the number of hard links (names) of the open
+  file, read from the descriptor (protoIO's `file::linkCount(fd)`: `fstat`;
+  `GetFileInformationByHandle` on Windows), so it describes the file this
+  `BinaryFile` opened even if its path was renamed or replaced since. A store
+  whose lock file is named after the path of its data file checks
+  `linkCount = 1` on the open file before reading or repairing it, as
+  ProtoBase's `open_log` does with `os.fstat(fd).st_nlink`; protoBaseST needs
+  it for its log. On POSIX a file whose last name was removed while open
+  answers 0. After `close` it signals `Error` like every other use.
+- **`FileReference >> linkCount`**: the same count by path (symbolic links
+  followed), from protoIO's `Stat::linkCount`; `FileDoesNotExist` when the
+  path is missing, as `size` and `modificationTime`. The array the
+  `__fileStat:` primitive answers gains a seventh element, the link count.
+
 ## 0.10.0 — protoBaseST groundwork (2026-11-13)
 
 **Requires protoIO 0.5.0** (or a later 0.5.x; a 0.4.x checkout is refused at

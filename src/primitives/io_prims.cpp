@@ -420,7 +420,7 @@ PRIM(prim_FileWriteFor) {
 }
 
 // __fileStat: path — nil when absent, else
-// #(isFile isDirectory size modificationMillis readable writable)
+// #(isFile isDirectory size modificationMillis readable writable linkCount)
 PRIM(prim_FileStat) {
     ARGS(1, "__fileStat:");
     const std::string path = osStringArg(ctx, a[0], "exists", "the path");
@@ -429,7 +429,8 @@ PRIM(prim_FileStat) {
     return makeArray(rt, ctx, {boolean(st->isFile), boolean(st->isDirectory),
                                ctx->fromLong(static_cast<long long>(st->size)),
                                ctx->fromLong(static_cast<long long>(st->modifiedMs)),
-                               boolean(st->readable), boolean(st->writable)});
+                               boolean(st->readable), boolean(st->writable),
+                               ctx->fromLong(static_cast<long long>(st->linkCount))});
 }
 
 // __fileDelete: path recursive: aBoolean — answers whether something was deleted.

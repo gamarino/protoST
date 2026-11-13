@@ -2759,7 +2759,7 @@ A `FileReference` names a path; it holds no open descriptor.
 | Selector | Meaning |
 |----------|---------|
 | `exists`, `isFile`, `isDirectory`, `isReadable`, `isWritable` | tests (false when the path does not exist) |
-| `size`, `modificationTime` | size in bytes; milliseconds since the Unix epoch (`FileDoesNotExist` when missing) |
+| `size`, `modificationTime`, `linkCount` | size in bytes; milliseconds since the Unix epoch; the number of hard links (names) of the file, symbolic links followed (since 0.11.0) (`FileDoesNotExist` when missing) |
 | `pathString`, `fullName` | the path as given; the absolute path (`.` and `..` folded lexically, symbolic links kept) |
 | `basename`, `basenameWithoutExtension`, `extension`, `parent` | name parts (`extension` is `''` when there is none) |
 | `children`, `files`, `directories` | the entries of a directory, sorted by name |
@@ -2996,6 +2996,7 @@ opened).
 | `readAt: offset size: n` | up to `n` bytes as a `ByteArray`: fewer only at the end of the file, none past it |
 | `writeAt: offset bytes: aByteArray` | overwrite, extending the file as needed; answers the receiver. A file opened with `#append` refuses it |
 | `size`, `truncateTo: n` | the size; cut the file, or extend it with zero bytes |
+| `linkCount` | the number of hard links (names) of the open file (since 0.11.0): read from the descriptor, so it describes the file opened even if its path was renamed or replaced since; 0 on POSIX once the last name was removed |
 | `sync`, `dataSync` | data and metadata durable; data (with what is needed to read it) durable |
 | `tryLock`, `lock`, `unlock` | an exclusive advisory lock on the open file: `tryLock` answers a Boolean, `lock` waits |
 | `close`, `isClosed`, `path` | `close` releases the descriptor and the lock and is idempotent; any other use after `close` signals `Error` |
@@ -3022,6 +3023,13 @@ comment of `lib/kernel/binfile.st`:
   file API;
 - `append:` needs a regular file: on a pipe, a FIFO, a socket or a device it
   signals `FileSystemError`;
+- a lock file named after the path of a data file excludes only the openers
+  that reach the data file through that path. A store built that way opens the
+  data file and checks `linkCount = 1` on the open `BinaryFile` before reading
+  or repairing it, as ProtoBase's log does (`os.fstat(fd).st_nlink`): the
+  check describes the file actually opened, not whatever the path names by
+  the time it runs. The count is a snapshot: a name another process adds
+  after the check is not seen;
 - an unclosed `BinaryFile` stays open, with its lock, until `close` or the end
   of the program; the collector never closes it.
 

@@ -95,7 +95,7 @@ fails. The protocol it uses:
 | Read / replace / append text | `contents`, `contents:`, `appendContents:` |
 | Read lines | `lines` (an Array), `linesDo: aBlock` |
 | Binary data | `binaryContents`, `binaryContents:` (a `ByteArray`) |
-| Ask | `exists`, `isFile`, `isDirectory`, `size` (bytes), `modificationTime` (milliseconds since the Unix epoch), `isReadable`, `isWritable` |
+| Ask | `exists`, `isFile`, `isDirectory`, `size` (bytes), `modificationTime` (milliseconds since the Unix epoch), `linkCount` (hard links), `isReadable`, `isWritable` |
 | Names | `basename`, `basenameWithoutExtension`, `extension`, `parent`, `fullName` (absolute), `pathString` (as given) |
 | List a directory | `children`, `files`, `directories` (sorted by name) |
 | Create | `createFile`, `createDirectory`, `ensureCreateDirectory` (with parents) |
@@ -864,6 +864,7 @@ dir ensureCreateDirectory.
  file writeAt: 0 bytes: #[9].
  (file readAt: 0 size: 100) printNl.
  file size printNl.
+ file linkCount printNl.
  file truncateTo: 2.
  file size printNl.
  file sync.
@@ -885,6 +886,7 @@ $ ./build/protost binfile-demo.st
 #[3 4 5]
 #[9 2 3 4 5 6]
 6
+1
 2
 true
 false
@@ -895,7 +897,11 @@ true
 Offsets start at 0, as in the operating system. `append:` answers the offset
 where the bytes start. `readAt:size:` answers fewer bytes only at the end of
 the file, and an empty `ByteArray` past it. `sync` flushes data and metadata,
-`dataSync` only what is needed to read the data back. The options are a list
+`dataSync` only what is needed to read the data back. `linkCount` answers how
+many names (hard links) the open file has, read from the open file rather than
+the path, so it still describes the file you opened if the path was renamed or
+replaced since: a store whose lock file is named after its data file refuses a
+data file with more than one name before reading it. The options are a list
 of symbols (`#read #write #create #exclusive #truncate #append`); an unknown
 one signals an `Error` before anything is opened.
 

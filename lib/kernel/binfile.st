@@ -143,6 +143,17 @@ BinaryFile >> size
   "The size of the file, in bytes."
   ^ self __binFileSize: handle.
 
+BinaryFile >> linkCount
+  "The number of hard links (names) of the open file. It is read from the
+   open descriptor, not the path, so it describes the file this BinaryFile
+   opened even if the path was renamed or replaced since: a store whose lock
+   file is named after the path of its data file checks that the file it
+   opened has exactly one name (linkCount = 1) before reading or repairing
+   it, as ProtoBase's log does. On POSIX a file whose last name was removed
+   while open answers 0. The count is a snapshot: another process may add or
+   remove a name at once."
+  ^ self __binFileLinkCount: handle.
+
 BinaryFile >> truncateTo: aSize
   "Sets the size of the file: cuts it, or extends it with zero bytes."
   self __binFileTruncate: handle to: aSize.

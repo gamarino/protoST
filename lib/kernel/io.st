@@ -223,6 +223,13 @@ FileReference >> modificationTime
   "Milliseconds since the Unix epoch."
   ^ self statOrSignal at: 4.
 
+FileReference >> linkCount
+  "The number of hard links (names) of the file (symbolic links are
+   followed). Asked of the path, so another process may rename or relink it
+   before the answer is used; for a check that holds for the file actually
+   opened, ask the open BinaryFile its linkCount."
+  ^ self statOrSignal at: 7.
+
 FileReference >> isReadable
   | s |
   s := self __fileStat: path.
