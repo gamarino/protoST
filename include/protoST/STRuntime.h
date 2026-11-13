@@ -266,6 +266,9 @@ public:
     void noteProgress();
     std::uint64_t quiescenceEpoch() const;
     bool deadlockPossible() const;
+    // Why the pool cannot grow, with its size, for the deadlock message
+    // (its maximum, a worker that could not be created, or shutdown).
+    std::string poolCeilingReason() const;
     bool confirmStuck(proto::ProtoContext* ctx, std::uint64_t epoch);
     // A task whose thread now waits (waitHelping inside a callback) is not
     // running for confirmStuck: pauseRunningTasks takes this thread's running

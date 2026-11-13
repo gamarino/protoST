@@ -2149,8 +2149,9 @@ actors' messages on top of it, so the program keeps going. Those messages can
 wait the same way; one worker holds at most 16 such nested waits (each keeps
 its frames on the worker's stack). A worker at that limit runs no more actor
 messages and counts as a blocked worker: the pool adds a worker for the other
-actors, as it does for a worker blocked in I/O, up to 256 workers. A program
-whose nested waits need more than that — about 4,000 at once — cannot
+actors, as it does for a worker blocked in I/O, up to 256 workers (fewer if
+the system refuses a thread). A program whose nested waits need more than
+that — about 4,000 at once with 256 workers — cannot
 proceed, and one of the waits signals an `Error` whose text starts with
 `deadlock: too many nested waits` instead of hanging, but only when nothing
 can still end a wait: every worker waits, at the limit, for an actor message

@@ -415,6 +415,11 @@ struct STRuntime::Impl {
     // sees state(X)=settled (breaks the loop without parking). Both
     // outcomes are safe.
     std::atomic<const proto::ProtoObject*> mainWaitingOn{nullptr};
+    // S40 (review R1-I1): the future whose settle last released the program
+    // thread's wait (notifyMainWaiterIfFor). mainWaitingOn stays set until
+    // the released thread runs again, so "parked" is mainWaitingOn set and
+    // not equal to this. Compared as a pointer only, never dereferenced.
+    std::atomic<const proto::ProtoObject*> mainReleasedFor{nullptr};
     Semaphore                               mainWaitSem;
 
     // Tasks published on `liveRegistry.__tasks__` and not yet taken
@@ -1071,6 +1076,16 @@ bool STRuntime::deadlockPossible() const {
         && static_cast<size_t>(impl_->cappedThreads.load(std::memory_order_acquire)) >= total;
 }
 
+std::string STRuntime::poolCeilingReason() const {
+    const size_t total = impl_->poolSize.load(std::memory_order_acquire);
+    const std::string n = std::to_string(total) + (total == 1 ? " worker" : " workers");
+    if (impl_->shutdown.load(std::memory_order_acquire))
+        return "the program is ending, so the pool (" + n + ") adds no worker";
+    if (total >= kMaxWorkers)
+        return "the pool has " + n + ", its maximum";
+    return "the pool has " + n + " and could not create another";
+}
+
 void STRuntime::noteForeignCaller() {
     impl_->foreignCaller.store(true, std::memory_order_seq_cst);
     noteProgress();
@@ -1113,8 +1128,14 @@ bool STRuntime::confirmStuck(proto::ProtoContext* ctx, std::uint64_t epoch) {
     if (!ownsSpace() || debugger().attached()) return false;
     // The program thread is parked in its wait, or only joins the workers
     // (shutdown).
-    if (impl_->mainWaitingOn.load(std::memory_order_seq_cst) == nullptr
-        && !impl_->shutdown.load(std::memory_order_seq_cst)) return false;
+    // A program thread released by a settle but not yet running is not
+    // parked (mainReleasedFor; review R1-I1). A stale record for an earlier
+    // future never matches a later one, except when the later future reuses
+    // the earlier one's address, which only withholds the error.
+    const proto::ProtoObject* waitingOn = impl_->mainWaitingOn.load(std::memory_order_seq_cst);
+    const bool parked = waitingOn != nullptr
+        && impl_->mainReleasedFor.load(std::memory_order_seq_cst) != waitingOn;
+    if (!parked && !impl_->shutdown.load(std::memory_order_seq_cst)) return false;
     if (impl_->timers && impl_->timers->pendingCount(ctx) != 0) return false;
     if (impl_->queuedTasks.load(std::memory_order_seq_cst) > 0) return false;
     if (impl_->runningTasks.load(std::memory_order_seq_cst) > 0) return false;
@@ -2005,6 +2026,13 @@ void STRuntime::notifyMainWaiterIfFor(const proto::ProtoObject* future) {
     // multi-actor benchmarks (every unrelated settle would wake the
     // main once for nothing).
     if (impl_->mainWaitingOn.load(std::memory_order_seq_cst) == future) {
+        // S40 (review R1-I1): the program thread is runnable from here on,
+        // though mainWaitingOn stays set until it runs. Recorded, and the
+        // quiescence epoch ended, before the release: a round that completes
+        // either reads the record (the thread does not count as parked) or
+        // started before this bump (its final compare-and-swap fails).
+        impl_->mainReleasedFor.store(future, std::memory_order_seq_cst);
+        noteProgress();
         impl_->mainWaitSem.release();
     }
 }

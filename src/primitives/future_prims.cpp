@@ -469,11 +469,11 @@ const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
             t_judgedEpoch = epoch;
             if (awaitsUnstartedTurn(rt, ctx, awaited) && rt.confirmStuck(ctx, epoch))
                 throw NativeError(
-                "deadlock: too many nested waits (every worker is blocked in waits nested "
-                "in blocks, " + std::to_string(kMaxHelpingDepth) + " per worker, the pool cannot add "
-                "a worker (it holds at most " + std::to_string(STRuntime::kMaxWorkers) + "), and "
-                "nothing else can end a wait, so the awaited actor's message can never run; a wait inside a block that a primitive "
-                "evaluates blocks its worker: wait outside the block, or chain with thenDo:)");
+                "deadlock: too many nested waits (every worker is blocked in waits nested in "
+                "blocks, " + std::to_string(kMaxHelpingDepth) + " per worker; " + rt.poolCeilingReason()
+                + "; nothing else can end a wait, so the awaited actor's message can never run. "
+                "A wait inside a block that a primitive evaluates blocks its worker: wait outside "
+                "the block, or chain with thenDo:)");
         }
         // Off the stop-the-world quorum while it sleeps (`awaited` is pinned).
         proto::ProtoThread::sleepFor(ctx, static_cast<proto::proto_ulong>(atCap ? 200 : idle < 10 ? 20 : 500));
