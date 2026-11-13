@@ -3,7 +3,7 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
-## 0.11.0 — unreleased
+## 0.11.0 — 2026-11-13
 
 **Requires protoIO 0.6.0** (or a later 0.6.x; a 0.5.x checkout is refused at
 configure time).

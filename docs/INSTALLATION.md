@@ -1,14 +1,14 @@
 # Installing protoST
 
-protoST 0.10.0 is a Smalltalk-syntax, actor-native runtime on protoCore. It is
+protoST 0.11.0 is a Smalltalk-syntax, actor-native runtime on protoCore. It is
 a consumer of protoCore, never a bundler of it: `bin/protost` links
 `libprotoCore.so.5`, and every package protoST produces declares a runtime
 dependency on protoCore's own package instead of shipping a copy.
 
 On a Debian or Ubuntu machine where protoCore's package is installed, the
 library is `/usr/lib/x86_64-linux-gnu/libprotoCore.so.5`, a link to
-`libprotoCore.so.<version>`. protoST 0.10.0 needs protoCore 3.4.0 or later
-(*Prerequisites*), as 0.9.1, 0.9.0, 0.8.1 and 0.8.0 did (0.7.0 needed 3.0.0). Its `.deb`
+`libprotoCore.so.<version>`. protoST 0.11.0 needs protoCore 3.4.0 or later
+(*Prerequisites*), as 0.10.0, 0.9.1, 0.9.0, 0.8.1 and 0.8.0 did (0.7.0 needed 3.0.0). Its `.deb`
 is built and tested against protoCore 3.6.0, the release to install with it,
 and depends on `protocore (>= 3.6.0)` through protoCore's shlibs file. CI
 builds against protoCore 3.6.0 on Linux, macOS and Windows, and against
