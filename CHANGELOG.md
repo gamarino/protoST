@@ -3,7 +3,925 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
-## Unreleased
+## 0.10.0 — protoBaseST groundwork (2026-11-13)
+
+**Requires protoIO 0.5.0** (or a later 0.5.x; a 0.4.x checkout is refused at
+configure time). The planned floor was 0.4.1; protoIO numbers new API as a
+minor release, so the two services arrive in 0.5.0.
+
+### Added
+
+- **`STRuntime::adoptModule(std::unique_ptr<BytecodeModule>)`.** The runtime
+  keeps a module an embedder hands it until the runtime is destroyed, and
+  answers it to run with `runTopLevel`. The classes and methods a module
+  defines run its code for as long as the runtime lives, so a module run with
+  `runTopLevel` must outlive the runtime (now stated in `STRuntime.h`);
+  handing it over removes that duty, and the closures over it share their
+  code cell. The `protost` executable and the REPL hand over every module
+  they run.
+- **`ByteArray randomBytes: n` and `Time utcMicroseconds`.**
+  `randomBytes:` answers `n` bytes from the operating system's
+  cryptographically secure generator (protoIO's `random::bytes`: `getrandom`
+  on Linux, `arc4random_buf` on macOS and the BSDs, `BCryptGenRandom` on
+  Windows), as a frozen `ByteArray` like every other, so it is shared without
+  a lock. `n` is a SmallInteger from 0 to 1048576 (1 MiB); a negative or
+  larger size, a LargeInteger or a non-Integer signals `InvalidArgument`. The
+  call runs outside the collector's quorum (`unmanaged`), since `getrandom`
+  may wait for the kernel pool at boot. `Time utcMicroseconds` answers the
+  wall clock as microseconds since 1970-01-01T00:00Z, a SmallInteger
+  (protoIO's `clock::utcMicroseconds`); `Time microsecondClockValue` stays
+  monotonic, and the wall clock has its own name so that neither reading is
+  mistaken for the other (Pharo's `microsecondClockValue` is a wall clock).
+  `DateTime nowUTC` (`lib/calendar.st`) is built on it, and
+  `13-stdlib/calendar-now-utc.st` now runs instead of skipping. Docs:
+  LANGUAGE.md §12.12.1 and the new §12.15 (clocks); tutorial §9.7 and §15.11.
+  Tests: `15-binary/random_bytes.st`, `random_bytes_bounds.st`,
+  `random_bytes_sizes.st`, `random_bytes_actors.st` (four actors drawing at
+  once; in the `tsan` label), `12-builtins/time_utc_microseconds.st` (bounded
+  by two wall-clock readings taken around it, never by elapsed time). The
+  version banner in the REPL transcripts of tutorial chapters 1 and 12 and
+  the `User-Agent` in `14-io/http_request_shape.st` read 0.10.0.
+- **`lib/uuid.st`: `UUID` values (RFC 4122).** `Import from: 'uuid'` binds
+  `UUID`: `fromString:` (32 hexadecimal digits or the 36-character form, in
+  either case), `fromBytes:` (16 bytes in RFC 4122 order) and `new`, a
+  version-4 UUID from `ByteArray randomBytes: 16` with the version and
+  variant bits set; `bytes`, `hex`, `printString` (the 36-character
+  lowercase form) and `asInteger` (the unsigned big-endian value). `=`,
+  `hash` and `<`, `<=`, `>`, `>=` are Python's `uuid.UUID` (`hash` is
+  `asInteger hash`, Python's `hash(uuid)`), which makes `UUID` the value of
+  ProtoBase's `@uuid`. Immutable, pure protoST. Docs: LANGUAGE.md §12.16,
+  tutorial §9.10, `lib/README.md`. Tests: `13-stdlib/uuid-parse-print.st`,
+  `uuid-compare.st`, `uuid-v4.st`.
+- **Python's numeric hash and `raisedTo:modulo:` (R3).** `hash` of an
+  `Integer`, `LargeInteger`, `Float`, `Fraction` and `Decimal` is now
+  CPython's numeric hash (modulo 2^61 - 1, Python's "Hashing of numeric
+  types"): equal values of any kind hash alike, and to the value `hash()`
+  answers in Python, which ProtoBase relies on. The values change: `0.5 hash`
+  was a hash of the double's bits and is now 2^60, `-1 hash` is `-2`, and a
+  hash can be negative or reach 2^61 - 2 (the hashed collections take any
+  Integer a `hash` method answers; a user `hash` outside 0..2^53 used to share
+  one slot). `Decimal >> hash` no longer builds the exact value, so a huge
+  exponent hashes at once (STATUS D49); a signaling NaN cannot be hashed, and
+  a NaN hashes by identity. `b raisedTo: e modulo: m` is Python's
+  `pow(b, e, m)`: modular exponentiation of Integers, a negative exponent
+  through the modular inverse (`ArithmeticError` when there is none),
+  `ZeroDivide` for `m = 0`, the result with the sign of `m`. Docs:
+  LANGUAGE.md §12.2 and §12.13. Tests: `12-builtins/numeric-hash-cpython.st`
+  (55 values, each against python3.14's `hash()`),
+  `numeric-hash-across-kinds.st`, `number-raised-to-modulo.st` (against
+  `pow`). Hashed collections fold the bits above 54 of a key's hash into the
+  slot word protoCore keys a slot by (a SmallInteger's slot is unchanged), and
+  `Point`, `Association`, `SequenceableCollection` and `MessagePackMap`
+  combine hashes modulo 2^61 - 1 with the multiplier 1000003 instead of
+  reducing modulo 2^30: a Float's hash keeps its fraction bits high, and
+  without both changes `i / 64.0` keys shared one slot per 64 keys and a grid
+  of `i / 4.0 @ (j / 4.0)` Points a slot per 16. The combining step is one
+  primitive, `a __hashMix: b` (`(a hash * 1000003 + b hash) mod (2^61 - 1)`
+  on machine words), so no LargeInteger is built (measured against 0.9.0's
+  `4b47115`, `perf stat` user-space: Fraction keys 4.8x fewer instructions,
+  Point keys 24 % fewer instructions and 22 % fewer cycles, Integer keys 11 %
+  fewer instructions and 21 % fewer cycles, Float keys 12 % more
+  instructions and the same cycles). `Fraction >> hash` and
+  `raisedTo:modulo:` run on machine words when the operands fit one. Test:
+  `12-builtins/composite-hash-values.st` (Point, Association, Array and
+  nested values, each against the Python expression it mirrors).
+  Tests: `R3: keys differing in high hash bits take distinct slots` (slot
+  count per workload, `tests/unit/test_hashed_collections.cpp`),
+  `12-builtins/class-objects-as-hashed-keys.st`.
+- **`Decimal`, an exact decimal value** (`lib/decimal.st`, `Import from:
+  'decimal'`): Python's decimal model (sign, coefficient, exponent; Infinity,
+  NaN and sNaN with payloads) with its text in both directions,
+  `fromString:` for `Decimal(str)` and `printString` for `str(Decimal)`, which
+  is ProtoBase's `@dec` text. `asExactFraction`, exact comparison with any
+  `Number`, in both directions (`(Decimal fromString: '1.00') = 1` and
+  `1 = (Decimal fromString: '1.00')` are true, `= 0.1` is false),
+  `hash` consistent with `=`, and `sameRepresentationAs:` (`1.0` and `1.00`
+  differ). No arithmetic, context or rounding (STATUS D49). Written in
+  protoST; no new primitive, so it runs on the 0.9.0 binary. Docs:
+  LANGUAGE.md §12.13, tutorial §9.8. Tests:
+  `tests/conformance/13-stdlib/decimal-*` (8 files).
+- **Calendar values with fixed offsets** (`lib/calendar.st`, `Import from:
+  'calendar'`): `CalendarDate` (proleptic Gregorian, years 1-9999, `ordinal`
+  and `fromOrdinal:` as Python's `toordinal`), `TimeOfDay`, `DateTime` (naive,
+  at a `ZoneOffset`, or the instant form in a `ZoneName`: the fields are the
+  UTC instant), `TimeSpan` (normalised as `timedelta`), `ZoneOffset`,
+  `ZoneName` and the error `TimeZoneUnavailable`. Two epochs, each with its own
+  selectors: `localOrdinalMicroseconds`, `utcOrdinalMicroseconds` and
+  `utcOrdinalMicroseconds:zone:` count from 0001-01-01 (the format's epoch),
+  `unixMicroseconds` and `fromUnixMicroseconds:zone:` from 1970, with
+  `DateTime unixEpochOrdinalMicroseconds` between them; `DateTime nowUTC`
+  (needs `Time utcMicroseconds`, 0.10.0). Comparison and `hash` as Python's
+  `datetime` (aware values by instant, naive never `=` to aware, ordering them
+  refused); `printString` as `str()`. No IANA database: a wall clock in a
+  named zone signals `TimeZoneUnavailable` (STATUS D50). Written in protoST;
+  runs on the 0.9.0 binary. Docs: LANGUAGE.md §12.14, tutorial §9.9. Tests:
+  `tests/conformance/13-stdlib/calendar-*` (9 files).
+- **`Fraction` defers to a non-Number that adapts** (`lib/kernel/fraction.st`):
+  `=`, `<` (and so `>`, `<=`, `>=`), `+`, `-`, `*`, `/`, and `Integer >> /`,
+  send `adaptToNumber:andSend:` to an argument that is not a Number but
+  understands it, as the numeric primitives already do. This is what makes
+  `(5/4) = aDecimal` answer `true`; numbers and Fractions are unaffected.
+
+### Fixed
+
+- **A wait nested in a block no longer hangs past 16 nested waits per worker
+  (S40).** Such a wait blocks its worker, which runs other actors' messages
+  meanwhile; past the cap of 16 on one thread it ran none, and when every
+  worker was there the program hung with no `deadlock:` (a chain of 18
+  actors on one worker, 200 clients of one server on the default pool). A
+  worker at the cap now counts as blocked, as one in I/O does, so the pool
+  adds a worker for the other actors' messages (up to its 256 workers). Past
+  that, when nothing can end a wait any more (every worker waits at the limit
+  for an actor message that has not started, no timer is pending, no task is
+  queued or running, the program's thread is parked in its wait), one wait
+  signals `deadlock: too many nested waits` instead of hanging; the runtime
+  decides it from pool-wide state confirmed in rounds that any event ends, so
+  the error is never signalled while the program can finish. The cases it
+  cannot prove stuck still wait (STATUS D56). The worker's idle back-off
+  sleeps with `ProtoThread::sleepFor` instead of `std::this_thread`, and a
+  worker that could not be created no longer leaves the pool short for good.
+  LANGUAGE.md §10.4. Test: `cli_nested_wait_progress`.
+- **`Atom new swap:` returns (S39).** A cell made by `new` holds nothing yet;
+  `swap:` compared it against an explicit nil, which never matches, and
+  retried for ever, and `value: x ifCurrent: nil` answered `false`. The empty
+  cell now reads, swaps and compares as nil, also when another thread stores
+  an explicit nil meanwhile. Tests:
+  `10-actors/atom-new-swap`, `atom-subclass-new-swap`, `atom-new-cas-from-nil`.
+- **`Atom on:` builds an instance of its receiver (S38).** `SeamAtom on: 7`
+  answered a plain `Atom`, so a subclass's `initialize` and overrides were
+  never reached through it. `on:` now sends `new` to its receiver (so
+  `initialize` runs) and then fills the cell; it stays a primitive, so it
+  works without the kernel library. `swap:` and `value:ifCurrent:` keep working on the cell,
+  not through an overridden `value`: a compare-and-swap must expect what the
+  cell holds (LANGUAGE.md §10.8). Tests: `10-actors/atom-on-builds-receiver`,
+  `atom-swap-updates-the-cell`.
+- **A method can name the variables its class inherits from an imported
+  class (S37).** A script is compiled before its imports run, so `Base
+  subclass: #Kid` with `Kid >> peek ^secret` (Base imported, declaring
+  `secret`) was a compile error, as were a class built by the message form
+  `(m Base) subclass: #Kid instanceVariableNames: 'own'` (even for `own`), an
+  extension `Base >> m`, a class or class-instance variable of the imported
+  class, and a class whose `uses:` clause is an expression. In a method whose
+  class's chain the compiler cannot see, an unresolved name of any spelling
+  (`secret`, `_x`, `Y`) is now resolved when the method is installed, against
+  the variables the class and its ancestors declare, and becomes the access
+  the compiler would have emitted (a capitalised name that is not a variable
+  stays a global); a lowercase name the class does not declare signals
+  `undeclared variable` there, before the method can run (two new opcodes, `PUSH_LATE_VAR` and
+  `STORE_LATE_VAR`, that installing rewrites in place and the engine never
+  runs; two installs of the same body at once resolve it once). Such a
+  method publishes each instance-variable assignment on its own (STATUS D57).
+  Chains the compiler can see, including those that end at a class the
+  runtime builds in C++, are checked at compile time as before. The message
+  form of `subclass:instanceVariableNames:` records its names (`instVarNames`
+  answered none), and redeclaring an inherited instance variable under an
+  imported superclass is an `Error` of the declaration (it failed the import
+  as a compile error of the imported module). LANGUAGE.md §4.5, §4.10. Tests:
+  `11-modules/late-*.st` (13; ten fail on the unfixed build).
+- **An integer attribute is always a value.** A primitive was an integer
+  attribute, its registry index with bit 62 set (`PrimitiveMarker.h`), so any
+  value attribute holding such an integer, 2^62 + k, ran primitive k when a
+  send reached it, and `respondsTo:`, `canUnderstand:`, `lookupSelector:` and
+  `selectors` reported it as a method. A primitive is now a protoCore method
+  cell (see Performance), which no integer can be mistaken for. A call-form
+  send with no arguments to a primitive (`3 printString()`) answered the raw
+  marker integer instead of running the primitive; it runs it. Tests:
+  `tests/unit/test_primitive_methods.cpp` (fails on 83864c9 in five
+  assertions), `05-messages/primitive-is-a-native-method.st`.
+- **An integer under `__bc_ptr__` is never run as code.** A closure's code
+  was its `BytecodeModule`'s address stored as an integer, so any integer
+  under that key was dereferenced as a module when the object was sent
+  `value` or reached as a method. It is now a protoCore external pointer that
+  borrows the module (`src/runtime/BlockCode.h`), and only an external pointer
+  is read as code: a forged closure is a value, is not evaluated, and is not
+  reported by `respondsTo:` or `canUnderstand:`. The closures over one block
+  of a module the runtime owns share one such cell (see Performance). Test
+  `tests/unit/test_block_code.cpp`.
+- **`BlockClosure new value` crashed the process.** A BlockClosure without
+  code re-sent itself `value`, which found the same primitive and recursed
+  until the stack overflowed (SIGSEGV on 83864c9). It signals `Error` (`the
+  block has no code to run`) when the send would reach BlockClosure's own
+  `value` again; a BlockClosure subclass that overrides `value:` is still
+  evaluated by its method (`#(1 2 3) collect: MyBlock new`). Test
+  `tests/unit/test_block_code.cpp`.
+- **The REPL freed a session's modules before its runtime.** `:reset` and the
+  end of a session destroyed the modules of the lines run so far while the
+  runtime's actor threads could still run their methods. The runtime now owns
+  them (`STRuntime::adoptModule`) and frees them after its threads stop.
+- **Runtime-private selectors are hidden from reflection and `perform:`.** A
+  selector that begins with two underscores is private to the runtime
+  (LANGUAGE.md §3.3); `selectors` already left them out, but
+  `respondsTo:`, `canUnderstand:` and `lookupSelector:` reported them and
+  `perform:` sent them, `__st_send__` (the entry another runtime sends
+  through, a method cell since this release) included. They answer false or
+  nil, and `perform:` reports MessageNotUnderstood. The test reads the first
+  two characters in place: `3 perform: #between:and: with: 1 with: i` costs
+  3,569 instructions per iteration against 3,591 on 83864c9. Test
+  `05-messages/private-selectors-are-hidden.st`.
+- **`Exception >> outer` is Pharo's `outer` (D7).** It behaved as `pass`:
+  when the enclosing handler resumed, the protected block continued at the
+  `signal` and the inner handler never continued. `outer` now evaluates the
+  enclosing handler in place, on top of the handler that sends it; if that
+  handler resumes, `outer` answers the resumption value inside the inner
+  handler, which continues: `[[Warning signal: 'w'. 'body'] on: Warning do:
+  [:e | e outer printNl. 'inner continued']] on: Warning do: [:e | e resume:
+  5]` prints `5` and answers `'inner continued'` (it answered `'body'`). If
+  the enclosing handler returns, retries or falls off its end, the unwind
+  passes through the inner handler. With no enclosing handler a resumable
+  exception's default action value is answered (`nil` for a `Warning`); an
+  `Error`'s default action ends the activation. For a non-resumable
+  exception `outer` is `pass`, as ANSI states. The pattern of protoBaseST's
+  `newTransactionDo:` (a catch-all handler that sets a flag, asks `outer`,
+  clears it and resumes) now leaves the flag set only when the enclosing
+  handler unwinds. Handlers stay per thread: `outer` never crosses an actor
+  message. LANGUAGE.md §8.4; tutorial §14.5. Tests: 15 new programs in
+  `08-exceptions/` (`outer-*.st`, `pass-runs-enclosing-handler-before-
+  unwinding.st`, `nesting-limit-in-outer-resuming-chain.st`).
+- **`pass` runs the enclosing handler before unwinding the passing one**, as
+  Pharo's `Exception>>pass` does. It unwound the passing handler first, so
+  that handler's `ensure:` blocks ran before the enclosing handler instead of
+  after it. A resumption still resumes the `signal`, or the `outer` an inner
+  handler is waiting in (Pharo's `outerContext`).
+- **A class's `isResumable` override is honoured (D54); `resume:` of a
+  non-resumable exception signals `IllegalResumeAttempt`.** `resume:` and
+  the default action read only the class-derived marker, so
+  `MyException >> isResumable ^ false` (the ANSI / Pharo way to declare a
+  non-resumable exception) answered false and could still be resumed, and an
+  unhandled one resumed with nil. Both now ask the method. A `resume:` that
+  is not allowed signals the new kernel class `IllegalResumeAttempt` inside
+  the handler, as Pharo does: an `Exception` (not an `Error`), itself not
+  resumable, with the text it always had (`cannot resume a non-resumable
+  exception`). Through `outer`, an enclosing handler's illegal `resume:` now
+  unwinds through the inner handler instead of answering it (protoBaseST's
+  `newTransactionDo:` aborts). Tests:
+  `08-exceptions/resume-honours-isresumable-override.st`,
+  `unhandled-non-resumable-user-exception-aborts.st`; the umd tests catch
+  `IllegalResumeAttempt`.
+- **`retryUsing:` is Pharo's (D55).** It evaluated the replacement block
+  inside the handler, with the handler disabled, and returned its value from
+  the `on:do:`, so an exception the replacement signalled went to an
+  enclosing handler. The replacement now becomes the protected block of the
+  handler's `on:do:` and runs under the same handlers
+  (`handlerContext restartWithNewReceiver:`); a later `retry` runs it again.
+  Test: `08-exceptions/retry-using-replaces-protected-block.st`.
+- **Another actor's message run while an actor waits no longer sees the
+  waiting actor's running handlers (S36).** While a waiting actor's thread
+  ran another actor's message (`wait` nested in a block), the handler stack
+  was disabled but the stack of running handler blocks was not: `resume:`,
+  `outer` or `pass` of an exception instance the two actors shared resolved
+  to the waiting actor's handler, and the stray resumption rejected the
+  helped message's Future with `exception resume: no active signal to
+  resume`. One barrier (`HandlerBarrier`, `HandlerStack.h`) now hides both
+  for that turn, for a send from a foreign runtime's frame and for a
+  debugger evaluation. Test: `cli_helped_message_handler_actions` (one
+  worker, so the interleaving is deterministic; in the `tsan` label).
+- **A `thenDo:` / `catch:` callback no longer runs under the handlers of the
+  code that settles the future (S36).** `resolve:` inside a protected block
+  ran the callbacks at once with the settler's handlers visible: the
+  settler's `on: Error` handler caught the callback's error, and its
+  `return:` was then dropped, so a handler took effect without its unwind; a
+  callback's `resume:` of the settler's exception reached the settler's
+  running handler. Callbacks now run behind the same `HandlerBarrier`; their
+  errors are reported on stderr as callback errors. Tests:
+  `cli_future_callback_barrier`,
+  `10-actors/future-callback-not-caught-by-settler-handler.st`.
+- **The debugger's Uncaught Exceptions breakpoint honours an `isResumable`
+  override (D54).** An unhandled non-`Error` exception whose class answers
+  false to `isResumable` ends the activation but did not stop; the
+  classification now sends `isResumable` in that case. Test:
+  `cli_dap_exceptions` (case `uncaught3`).
+- **S3 is closed: an allocation-free loop does not stall a collection, and
+  a test now proves it.** The park points came with S15 (the loop back-edge,
+  engine entry and call entry call `ProtoContext::safepoint()`), but S3 stayed
+  open because no protoST loop allocated nothing: about three cells per
+  iteration were measured for a SmallInteger loop. Those were the writes to a
+  method temporary that an inlined block body used, which then counted as
+  captured (each write published a new captured dictionary into protoCore's
+  mutable table, 4 cells); since `884778e` inlined bodies do not capture, and
+  a 3,000,000-iteration loop over a method temporary, at the top level or a
+  `whileTrue:` allocates nothing (counted at `ProtoContext::allocCell`). Test:
+  `tests/cli/test_cli_gc_spin_safepoint.sh` (`cli_gc_spin_safepoint`), the
+  deadlock shape: the main thread spins on an Atom while an actor churns
+  through garbage beyond the heap ceiling and then sets it. It completes, and
+  hangs with `PROTOST_NO_GC_SAFEPOINT=1`, while the same program without the
+  spinning loop does not.
+  The unit case `S3: an allocation-free loop does not stall a collection`
+  (`tests/unit/test_gc_cycle.cpp`, with and without the hook) no longer waits
+  for an event its program does not guarantee. With the hook the actor
+  churns until the main thread stops it (a bounded churn could end, and its
+  collections with it, before the spin started counting; the 3.4.0 floor job
+  timed out so). Without it the spin waits for a pending collection
+  (`gcStarted` or `stwFlag`, not the flag alone), and the request comes from
+  a hard ceiling 1,000,000 cells above the heap: with fixed limits protoCore
+  asks for a collection at the soft limit only on a refill outside a
+  critical section, and on the 3.4.0 runner none came below the ceiling. An
+  out-of-memory callback raises the ceiling when the collections after the
+  loop reclaim nothing. The fix needs no protoCore newer than 3.4.0, and the
+  case runs on every supported release (STATUS S3).
+- **The test suite builds with MSVC and its startup budget runs alone.**
+  `test_gc_cycle.cpp` read the collector's counters with GCC's
+  `__atomic_load_n` (it now uses `std::atomic_ref` where the library has it,
+  as `collection_prims.cpp` does), and `test_foreign_frame_context.cpp` and
+  `test_k18_reentry.cpp` narrowed `asLong`'s `long long` to `long` (C4244, an error under `/WX`).
+  `cli_kernel`, which holds startup to 100 ms of wall-clock time, is
+  `RUN_SERIAL`: in the assertions job it overlapped `cli_nested_wait_progress`
+  (256 workers, every core busy) and failed at 271 ms, while `protost
+  --version` alone took 146 ms there; startup measures about 40 ms run alone.
+  `cli_nested_wait_progress` bounds each run with `timeout 120`; under
+  ThreadSanitizer the chain of 5000 signalled its deadlock and was then
+  killed before it exited (about 6 s in an optimised build), so the TSan
+  build raises that bound to 900 s (`NESTED_WAIT_TIMEOUT`), as it already
+  does for the conformance programs.
+- **`Array new:` with a size the heap can never take signals an Error
+  (reviews R3-2, R4-1, R5-1, R6-1, R7-1).** `Array new: 3000000000` (a typo,
+  say) built an 8n-byte vector and then the list, and ended in protoCore's
+  out-of-memory exit or the system's OOM killer. Before allocating, `new:`
+  now refuses a size beyond protoCore's list limit (2^32 - 1), or one whose
+  build cannot fit even in an empty heap. protoCore builds an n-element list
+  by path-copying appends, about n log2 n cells until a collection
+  (measured: under a 400,000-cell limit, 22,500 elements build and 23,000 do
+  not; at 4,000,000 cells, 200,000 and 202,000); the estimate, n times the
+  bit width of n, stays below that cost, and a size is refused only when it
+  exceeds the whole heap ceiling: the limit (`STRuntime::heapCeilingCells`),
+  or the heap protoCore already reserved when that is larger, since
+  protoCore does not enforce a limit below the 262,144 cells it reserves
+  while bootstrapping (review R7-1: `Array new: 8000` was refused under a
+  100,000-cell limit and builds). Nothing that fits in an empty heap is
+  refused: whether it fits now depends on what is live now, which protoST
+  cannot know without a collection. Subtracting the cells handed out before
+  the first collection (garbage included), or the live set of the last one
+  (structures dropped since included), refused sizes that build (reviews
+  R5-1, R6-1). So the check errs only towards letting sizes through: those
+  that do not fit still end in protoCore's out-of-memory exit, as before
+  (from 202,000 elements up to the refusal at about 222,000 at a
+  4,000,000-cell limit, and smaller sizes when other data is live). An exact
+  answer is queued as protoCore follow-ups (a query of the cells allocatable
+  after a collection, a catchable out-of-memory). A failing C++ allocation
+  is an Error too, not a terminate. Pharo signals `OutOfMemory`; protoST has
+  no such class and signals `Error`. Tests
+  `12-builtins/array-new-unholdable-size-signals.st`,
+  `cli_array_new_headroom` (under a small fixed limit and a small adaptive
+  budget, and sizes that fit once garbage, or a structure dropped after a
+  collection, is reclaimed, and a size that fits the reserved heap under a
+  smaller limit).
+- **An unhandled error inside an inlined nil-test arm has one frame less in
+  its trace.** The arm is no longer a block, so the `at <block>` line is gone
+  (tutorial 15 updated).
+- **The closure analysis no longer treats a block literal receiving `and:`,
+  `or:`, `ifTrue:` and the like as inlined (protoBaseST review L3).** Only
+  `whileTrue:` / `whileFalse:` inline their receiver block; for the others
+  it is a real closure and is now analysed as one. No program observed the
+  difference (its variables were captured through another path), so this
+  is a robustness fix. Test, which passes before and after:
+  `06-blocks/block-receiver-of-inlined-send-captures.st`.
+- **An inlined conditional with a non-Boolean receiver is now the send it
+  replaces.** `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:`, `ifFalse:ifTrue:`
+  (since 0.1) and `and:` / `or:` (new in 0.10.0) with literal blocks are
+  compiled inline. Until now a receiver that was not a Boolean got
+  `doesNotUnderstand:` with a Message that had no arguments: a class that
+  defines `ifTrue:` (or `and:`, as three-valued-logic and query-builder
+  classes do) was never reached, a forwarding proxy could not forward the
+  message, and a resumed `doesNotUnderstand:` was taken as the condition, so
+  `[ 3 ifTrue: [ #body ] ] on: MessageNotUnderstood do: [ :e | e resume:
+  42 ]` answered `#body`. The receiver now gets the message the source
+  wrote, with closures for the block literals: its own method, or
+  `doesNotUnderstand:` with the whole Message, whose resumed value is the
+  value of the expression. The closures are compiled from the same literals
+  without inlining (a second copy of each, used only on this path), and
+  they are real closures: the method's temporaries they use move into
+  per-scope dictionaries that the frame reaches through forwards left in
+  its slots, so a write on either side is seen by the other, `^` in the
+  block returns from the method, and a closure the receiver keeps and
+  evaluates later, or on another thread, keeps working. Each entry of an
+  inlined block with temporaries gets its own variables. A Boolean receiver
+  costs what it did: the guard is a new opcode `JUMP_IF_NOT_BOOL` (45) to
+  the out-of-line path, which uses three more (`DEOPT_ENTER`,
+  `PUSH_DEOPT_BLOCK`, `DEOPT_EXIT`, 46-48; `docs/VM.md` 1.4); `RESET_LOCAL`
+  (49) starts the fresh variables of each entry of an inlined block, and
+  the accesses of the temporaries a closure may share are
+  `PUSH_SHARED_LOCAL` / `STORE_SHARED_LOCAL` (59, 60), so no other local
+  access pays for the sharing. Pharo differs here: since Pharo 10 a
+  non-Boolean receiver of an inlined conditional signals
+  `NonBooleanReceiver` ("proceed for truth") and the receiver's own method
+  is not run; Pharo 9 re-sent the expression without inlining
+  (`mustBeBooleanDeOptimizeIn:`), which is what protoST does. Tests:
+  `08-exceptions/inlined-conditional-non-boolean-like-send.st` (failed
+  before: 5 of 11 rows), `inlined-conditional-reaches-receiver-method.st`
+  (failed before), `06-blocks/inlined-conditional-kept-block-shares-variables.st`
+  (10 rows; a kept closure with or without temporaries, frame writes after
+  the send, per-iteration variables, shadowing; until fix round 1 of the
+  interpreter-overhead work a kept closure that used a method variable
+  signalled an `Error`, and one with temporaries inside an inlined block
+  read nil).
+- **Runtimes constructed one after another no longer reach each other's
+  modules (K1).** protoCore's process-wide module cache, keyed by provider
+  GUID and path, handed a runtime constructed after another was destroyed the
+  dead runtime's modules, whose methods' bytecode had been freed (a
+  heap-use-after-free; it could abort the process with a corrupted heap).
+  Each runtime now registers a module provider of its own, named in its
+  resolution chain by GUID, and retires it when it is destroyed. Foreign
+  callers' `provider:st` is one dispatcher per process that serves the sole
+  live runtime and answers its GUID, so it keeps working when another runtime
+  was constructed and destroyed meanwhile. The unit-test binary now passes run
+  whole in one process, also under ASan. Tests: `K1: a runtime does not reach
+  the modules of a runtime destroyed before it` (heap-use-after-free under
+  ASan before), `K1: provider:st serves the live runtime after another was
+  destroyed`.
+- **One rule for a loop condition that is not a Boolean.** The four loop
+  forms disagreed: an inlined `whileTrue:` / `whileFalse:` sent
+  `doesNotUnderstand: whileTrue:` to the condition's value (which is not the
+  receiver of `whileTrue:`), a sent `[3] whileTrue: aBlock` stopped and
+  answered nil, a sent `[3] whileFalse: aBlock` ran its body, without end
+  unless something else stopped it, and so did `whileTrue` / `whileFalse`.
+  Every form now signals `NonBooleanReceiver`, a new resumable `Error` whose
+  `object` is the value, and takes the resumed value as true unless it is
+  `false`: Pharo's class and rule (`ProtoObject>>mustBeBooleanIn:`). The
+  inlined guard is renamed `ASSERT_LOOP_BOOL` (still 38; it was
+  `ASSERT_BOOL_OR_DNU`). Test:
+  `08-exceptions/loop-non-boolean-condition-one-rule.st` (16 rows, inlined
+  and sent forms side by side).
+- **`lib/random.st`: `nextInt:` and `between:and:` alternated parity.** Both
+  took the generator's state modulo the range. The generator is a 32-bit LCG
+  with a power-of-two modulus, in which bit k of the state has period
+  2^(k+1): over an even range successive draws alternated between odd and
+  even, and `nextInt: 4` repeated with period 4. A draw is now
+  `floor(state * size / 2^32)`, decided by the high bits, in exact integer
+  arithmetic. `next` and `next:` are unchanged; the integer sequences a seed
+  gives change (no protoST or protoBaseST test pinned them: protoBaseST's
+  `AvlOps` draws with `next`). The kernel `Random` (Park-Miller, no import)
+  already scaled `next` and is unchanged. Found by protoBaseST's review
+  (P1). Test: `13-stdlib/random-draws-use-high-bits.st` (failed before:
+  0 of 999 successive `nextInt: 2` draws were equal, 517 after).
+- **The literal `5e-324` was a compile error (K16).** Every float literal
+  whose value is subnormal or underflows (`5e-324`, `2.2e-308`, `1e-400`) was
+  refused as *out of range*, so `printString` of such a `Float` did not read
+  back. A float literal is now the correctly rounded `Float` over the whole
+  range: a subnormal is kept, an underflow is `0.0` / `-0.0`, and only a
+  literal beyond the largest `Float` stays an error (STATUS D51, a recorded
+  decision; LANGUAGE.md §2.5). The lexer and `String >> asNumber` read the
+  digits with `std::from_chars`, which ignores the C locale; a standard
+  library without floating-point `from_chars` (Apple's libc++) uses
+  `strtod_l` with a "C" locale object (plain `strtod` stopped at the `.`
+  under a comma-decimal `LC_NUMERIC`, so every float literal was an error on
+  macOS in such a host). Rendering a `Float` no longer copies a comma
+  separator from `snprintf` into its digits either (`Float rendering ignores
+  LC_NUMERIC`, `tests/unit/test_mnt_c_numbers.cpp`). Tests:
+  `02-lexical/float-literal-full-range.st`, `float-literal-round-trip.st`,
+  `float-literal-overflow-is-error.st`, and the `[k16]` cases of
+  `tests/unit/test_lexer.cpp` (ties to even, 4,000 random doubles' shortest
+  forms, a comma-decimal `LC_NUMERIC`).
+- **One selector on both sides of a class kept only the later method
+  (K14).** `Foo >> x` and `Foo class >> x` wrote one slot of the class object:
+  instances got `doesNotUnderstand`, or the class-side method was lost
+  silently, and a subclass's class-side method hid an instance method the
+  subclass inherits. Every class now has a metaclass (`Foo class`), an object
+  of its own holding the class-side methods, and a send to a class looks up
+  the metaclass chain only: `Foo class` -> ... -> `Object class` -> `Class` ->
+  `Behavior` -> `Object`, as in Pharo (STATUS D52). The same one lookup serves
+  `super`, the call form (`Foo class >> make(x)` then `Foo make(1)`),
+  `perform:`, the kernel's dynamic sends, foreign sends, actor messages,
+  `doesNotUnderstand:` and `respondsTo:`. Tests: the former `XFAIL`
+  `04-object-model/class-and-instance-method-same-selector.st` passes; new:
+  redefinition of one side, `super` on each side, class-side inheritance and
+  override, reflection, `doesNotUnderstand:` on both sides, the class-side
+  call form, a class object is not an instance, the metaclass chain, and
+  `kernel-class-protocol-not-hidden.st` (`tests/conformance/04-object-model/`).
+  The metaclass protocol is Pharo's where the semantics hold: `isMeta`,
+  `Foo class soleInstance` (and `instanceClass`) answer `Foo`,
+  `lookupSelector:` answers the class or metaclass that holds the method (a
+  deviation: Pharo answers the CompiledMethod, STATUS D52),
+  `instanceVariableNames:` answers the receiver, `Metaclass new` and
+  `Foo class new` signal an Error (a metaclass is made by `subclass:` only),
+  so do `Behavior new` and `Class new` (protoST has no anonymous classes),
+  and `Foo copy` gets a metaclass of its own, so a class-side method added to
+  the copy does not reach `Foo`. Tests: `metaclass-reflection-selectors.st`,
+  `class-instance-variable-names.st`, `class-copy-has-own-metaclass.st`,
+  `metaclass-new-is-refused.st`, `behavior-and-class-new-are-refused.st`
+  (`tests/conformance/04-object-model/`).
+- **`isKindOf:` and `inheritsFrom:` ignored mixins that `on:do:` honours.**
+  `[MixErr signal] on: Tagged do: [...]` caught an error whose class uses
+  `Tagged`, while `MixErr new isKindOf: Tagged` answered false. Both now
+  count every ancestor, superclasses and `uses:` / `addBehavior:` mixins
+  alike, the set method lookup and handler selection use (LANGUAGE.md
+  §4.11); `allSuperclasses` stays the primary superclass chain. Test:
+  `04-object-model/is-kind-of-counts-mixins.st`.
+- **`perform:` with a selector nothing understands bypassed
+  `doesNotUnderstand:`.** It signalled the error directly, so a class with
+  its own `doesNotUnderstand:` (a proxy) was not asked. It now sends
+  `doesNotUnderstand:` with the Message, as an ordinary send does. Test:
+  `05-messages/perform-unknown-selector-goes-through-dnu.st`.
+- **An unhandled error caught after its runtime was destroyed crashed the
+  embedder (K20).** `try { STRuntime rt; rt.runTopLevel(m); } catch (const
+  std::exception&)` died with SIGSEGV: the `proto::ProtoException` pinned its
+  value in the space the runtime had just freed. At the embedder boundary of
+  a runtime that owns its space the error now leaves as the self-contained
+  `protoST::STUncaughtError` (`include/protoST/STUncaughtError.h`: the
+  description, the report the binary prints, the trace and the class chain).
+  A runtime in a host's space, and every call nested in protoST or another
+  runtime's frames, still raise the `proto::ProtoException`. The `protost`
+  binary's output is unchanged. Test: `tests/unit/test_k20_embedder_boundary.cpp`.
+
+- **Deeply nested `collect:` (and every other pinning primitive) crashed
+  (K15).** A `TransientPin` lived only in a fixed 256-slot scratch region; the
+  257th live pin hit `assert(false)` and, in a release build, returned without
+  pinning. Nesting reaches that easily: each `collect:` / `select:` /
+  `inject:into:` keeps its accumulator pinned while its block runs, and
+  protoBaseST's codec walked values 400-509 deep. The unpinned list was freed
+  by the next collection and the primitive appended to a recycled cell
+  (SIGSEGV in `ProtoList::appendLast`, or "stack smashing detected" when the
+  recycled cell's size overflowed appendLast's stack buffer). A pin that finds
+  the region full now goes on a per-context overflow chain (one list cell per
+  pin, its head in a reserved scratch slot, released without allocating), so
+  the number of live pins is bounded only by memory. The chain code is out of
+  line, so a pin in the region costs what it did (+0.07 % instructions on a
+  pin-heavy loop, cycles unchanged). A chain pin released out of LIFO order
+  aborts the process with a message in every build. A `TransientPin` made with
+  a null object pointer now claims its place too, so a later
+  `TransientPin::reset` roots its object. Not a protoCore bug. Tests:
+  `tests/unit/test_transient_pin.cpp` (1000 live pins, deterministic; unwinding,
+  two contexts, out-of-order release) and
+  `tests/conformance/09-collections/collect-deep-nesting-gc.st` (0.9.0 crashed
+  10 runs out of 10).
+- **A send or an import into protoST from another runtime's frame context
+  wrote into that frame's slots (K18).** `__st_send__` and UMD module imports
+  (in protoST's own space, and with protoST a guest in a host's space) ran
+  protoST's engine on the caller's context whenever it belonged to protoST's
+  space, so the engine grew another runtime's frame context to its own
+  geometry and put transient pins and frames at the same indices as the
+  frame's locals. Work for a caller now runs on a child context of any context
+  that is not protoST's own, with the frame and pin cursors started afresh for
+  it; the guard is at every entry that runs protoST code on a caller-supplied
+  context (`__st_send__`, `runTopLevel(m, ctx)`, `loadModuleFromFile`,
+  `importModuleFile`). Tests: `tests/unit/test_foreign_frame_context.cpp`,
+  `tests/unit/test_k18_module_entry.cpp`.
+- **A non-local return or a Future yield could leave `__st_send__` through
+  the caller's frames (K19).** A caller in protoST's own space skipped the
+  runtime boundary; now every `__st_send__` crosses it, and a control-flow
+  unwind is reported as an error, as for a caller in another space. Test:
+  `tests/unit/test_foreign_frame_context.cpp`.
+
+- **`lib/json.st` crashed on every `\uXXXX` escape (K17).** The parser sent
+  `and:ifTrue:` (an unparenthesised `and:` before `ifTrue:`) in its hex-digit
+  reader, and the writer concatenated a `Character` when escaping control
+  characters. Both are fixed; `\uXXXX` now parses in either hex case, a
+  surrogate pair (`\ud83d\ude00`) becomes one code point, and a lone or
+  mismatched surrogate or an invalid or truncated hex escape signals the
+  library's parse error. Tests: `tests/conformance/13-stdlib/json-*unicode*`,
+  `json-*surrogate*`.
+
+### Performance
+
+- **A closure's code costs no allocation, and reading it one table probe.**
+  `__bc_ptr__` became a protoCore external pointer (see Fixed): a cell where
+  the integer was inline, and two out-of-line calls to read where there was
+  one. For a module the runtime owns, the closures over one block share one
+  cell, created with the first closure and anchored once in the runtime's
+  live registry (the single pinned root); a module an embedder keeps gets a
+  cell per closure, so nothing accumulates for a module that may be freed.
+  Reads go through a 64-entry per-thread cache of decoded cells, which holds
+  only those anchored cells, keyed by cell and runtime serial
+  (`src/runtime/BlockCode.h`). The anchor is proven by finalization: the
+  shared cell counts its finalizer, and a test shows that no shared cell is
+  collected while its runtime lives (with an unanchored external pointer, made
+  and dropped the same way, collected as the positive control; without the
+  anchor the test fails), and that they are collected once it is gone
+  (`tests/unit/test_gc_cycle.cpp`). Instructions per iteration (`perf stat -r 3`)
+  against 83864c9: a capturing block created and called per iteration, two
+  interleaved runs, 15,692 / 15,529 on 83864c9, 15,902 / 15,761 with a cell
+  per closure and no cache, 15,579 / 15,642 now (the benchmark allocates, so
+  collections move it by about 150 either way: level with 83864c9 within
+  that noise); a user method send 1,477 -> 1,480 (1,489 without the cache).
+- **A primitive is a protoCore native method.** `bindPrimitive` installs
+  `ProtoContext::fromMethod(nullptr, primitiveMethod<F>)` under the selector
+  (no bound receiver, so no cycle with the prototype), and a send that finds a
+  method cell calls it directly with the receiver as `self` and a
+  `ProtoArguments` over the operand array: one tag test (`asMethod`) where the
+  integer marker cost `isInteger`, protoCore's cross-library `Integer::asLong`
+  on a LargeInteger and a registry lookup. `primitiveMethod<F>` reaches the
+  runtime from the context's space through a per-thread cache over the
+  space-to-runtime registry, invalidated by a generation counter (no lock on
+  the hit path; `runtimeOf`, `include/protoST/primitives.h`), and refuses
+  named arguments. The integer marker, `PrimitiveMarker.h` and
+  `PrimitiveRegistry` are gone. Instructions per loop iteration
+  (`perf stat -r 3`, 200,000 vs 1,200,000 iterations, 83864c9 -> this
+  change): `a at: 1` 1,534 -> 1,437 (-97 per primitive send), `node class
+  == k` 2,064 -> 1,986, `node class` 1,979 -> 1,894, a user-method unary
+  send 1,478 -> 1,479 (unchanged: a user method is not probed). Whole
+  programs: protoBaseST's AVL workload 7.78 -> 7.58 x10^9 instructions
+  (-2.5 %), `PBAvl check:` x20 3.92 -> 3.87 x10^9 (-1.2 %), the comparable
+  suite -0.1 % to -1.0 %, except `exception_latency` +0.3 %: one template
+  instance per primitive adds unwind entries (FDEs), and the C++ unwinder's
+  FDE search (`_Unwind_Find_FDE`) grows from 4.3 % to 5.5 % of that
+  program's instructions.
+- **Interpreter round 3 (driven by the protoBaseST/ProtoBase gap
+  analysis).** Per operation, in ns beyond the empty loop (the analysis's
+  own `ops.st`, 2x10^6 iterations in a method, minimum of three runs),
+  round-3 base -> final, CPython 3.14 in brackets: `i * 2` 129 -> 21
+  [26], `i \\ 7` 420 -> 24 [37], `i // 7` 378 -> 23 [24], `bitAnd:` 135 -> 20 [29], `Array at:` 237 -> 133 [~0], `Array new:
+  4` 2710 -> 292 [113], send 130 -> 114 [42], `block value:` 116 -> 104
+  [29]. `perform:with:` 3800 -> 375 ns per call, loop included
+  (`benchmarks/micro/vm_ops.st`, self-checking). An instance-variable write
+  did not improve measurably (79 -> 112 in the full `ops.st` order, not
+  reproduced alone, where it runs 10 % fewer instructions; it is
+  protoCore's `setAttribute` and the collector). The changes:
+  - `*`, `\\`, `//`, `bitAnd:`, `bitOr:` on two SmallIntegers are computed
+    in the engine (opcodes `BIN_INT_MUL` 53, `BIN_INT_MOD` 54, `BIN_INT_QUO`
+    55, `BIN_INT_AND` 57, `BIN_INT_OR` 58; overflow, a non-SmallInteger
+    operand and a zero divisor fall back to the send). These are Pharo's
+    special selectors, and as there (and as for `+`), a method a program
+    adds to `SmallInteger` for them is not reached by a SmallInteger
+    receiver. `rem:` is not a special selector in Pharo, so it stays a send
+    and such a method is reached (review R3-1; 56 is reserved). Tests
+    `12-builtins/integer-fast-paths-match-the-send.st`,
+    `04-object-model/smallinteger-rem-override-is-reached.st`.
+  - An assignment whose value is discarded compiles without `DUP`/`POP`.
+    Test `05-messages/assignment-statement-values.st`.
+  - The dispatch core indexes the frame's slots directly (bounds checks
+    become debug assertions) and pushes SmallInteger and Symbol constants
+    without materialising them. The threaded-dispatch jump table is built
+    at compile time instead of being filled (256 stores) on every engine
+    entry, which every block a primitive evaluates pays; GCC needs
+    `--param=max-goto-duplication-insns=32` on that file to keep one
+    indirect jump per handler (review R3-4). Against the round-3 base, in
+    cycles: `int_sum_loop` (`inject:into:`, 10^5) 106M -> 89M, the same at
+    3x10^6 1.63G -> 1.08G. **Measured regression:** a loop whose body is an
+    inlined `true ifTrue: [s := i]` (2x10^7) takes about 8 % more cycles
+    (4.8-5.0G -> 5.3-5.5G) with 13 % fewer instructions; its cost is the
+    shared loop-head dispatch that `JUMP_BACK` returns through, and no
+    layout under protoST's control was found that removes it without giving
+    back the gain above.
+  - `Array new:` builds its storage in one `newList` call and publishes no
+    intermediate mutable object.
+  - `perform:` to `perform:with:with:with:` are primitives (they built an
+    Array for `perform:withArguments:`). Test
+    `05-messages/perform-family-primitives.st`.
+  - A send no longer probes an immediate receiver or a primitive marker for
+    actor and method attributes, and no object at all for the actor
+    attribute until the process has created an actor.
+  The protoBaseST AVL workload runs 9.5 % fewer user instructions (10.15G
+  -> 9.18G) and 3 % less CPU time; its ratios to ProtoBase moved from
+  14-25x to 13-22x per operation in one interleaved run and barely in
+  another, because its cycles are mostly protoCore's (allocation,
+  sparse-list lookup and update, the collector's sweep), not dispatch. A
+  send remains about 3x CPython's: the method lookup in protoCore and the
+  frame push.
+- **`==` and the nil tests never send (protoBaseST review P4).** As in
+  Pharo, `==` is compiled to an identity test (`IDENTICAL`, opcode 52) and
+  never looked up (Pharo's `ProtoObject>>==`: "No Lookup. Do not override"),
+  and `ifNil:`, `ifNotNil:`, `ifNil:ifNotNil:`, `ifNotNil:ifNil:` with
+  literal blocks (the nil arm without arguments, the non-nil arm with none
+  or one) are compiled inline (`JUMP_IF_NIL` 50, `JUMP_IF_NOT_NIL` 51) under
+  the conditions of Pharo's `RBMessageNode>>isInlineIfNil`. An inlined
+  `ifTrue:` after `==` needs no Boolean guard. 10^6 iterations in a method
+  (`benchmarks/micro/nil_identity.st`, three runs against 4bae623):
+  `x == #a ifTrue:` 247-300 -> 121-192 ms, `ifNil:` 1.80-1.97 ->
+  1.12-1.20 s, `ifNotNil: [:v|...]` 1.92-2.22 -> 0.97-1.00 s,
+  `ifNil:ifNotNil:` 2.39-2.61 -> 0.96-1.07 s. The protoBaseST AVL workload
+  runs 4.6 % fewer instructions than at 4bae623 (8.69G -> 8.30G; this
+  includes the startup cost of the de-optimised copies, see Fixed); its
+  wall-clock per-operation figures are within noise.
+  **Semantic change:** a class's own `==` or `ifNil:` is no longer reached by
+  these forms; `perform:` and non-literal blocks still send. No class in
+  `lib/` or protoBaseST defines either. `ifNotNil:ifNil:` is now also bound
+  as a method (it was listed as a nil test but had none). Tests:
+  `06-blocks/inlined-nil-tests-values.st`,
+  `04-object-model/identity-and-nil-tests-are-not-looked-up.st`; VM.md
+  example 19.
+- **Control blocks that declare temporaries are compiled inline too.**
+  `ifTrue:`, `ifFalse:`, `ifTrue:ifFalse:`, `ifFalse:ifTrue:`, `and:`,
+  `or:`, `whileTrue:`, `whileFalse:`, `to:do:` and the nil tests with a
+  literal block that declares `| t |` were real closures evaluated by a
+  primitive (a closure, a captured dictionary for the variables the block
+  shared with its method, and a nested engine per evaluation). Their
+  temporaries are now hidden slots of the enclosing frame, as in Pharo
+  (`OCASTTranslator>>visitInlinedBlockNode:`), set to nil on every entry of
+  the body: each evaluation of a block still starts with its own
+  temporaries nil, also an `ifTrue:` arm inside a loop, which Pharo does not
+  reset. A block whose argument or temporary a block inside it captures
+  stays a real block, so that closure still sees the binding of its own
+  iteration. A `[ k < n ] whileTrue: [ | z | z := k. k := k + 1 ]` loop in a
+  method went from 446 to 90 ns per iteration; protoBaseST's
+  `PBAvl check:` of a 1000-node tree, twenty times, from 6.58 to
+  4.30 x10^9 instructions (the scratch `chk.st`). Tests:
+  `06-blocks/inlined-block-temporaries.st` (19 rows, shadowing, per-iteration
+  closures, a non-Boolean receiver; passes before and after), unit tests
+  `Compiler: control blocks with temporaries are inlined`, `... reset to nil
+  on every entry` (both failed before), `... whose temporary a block
+  captures is not inlined`, `Debugger: an inlined block's temporary is shown
+  by its name inside the block` (failed before). LANGUAGE.md §6.4, VM.md
+  "Inlined blocks".
+  The temporaries of sibling inlined blocks share their hidden slots (a
+  method with sixty one-temporary arms recurses as deep as without them:
+  `06-blocks/inlined-block-temporaries-share-slots.st`, which overflowed at
+  about 9,050 frames when each arm had its own slot). A traceback no longer
+  shows a `[] in` frame for a block that is now inlined: the error is
+  reported in the enclosing method, at the block's line.
+  At a halt inside an inlined block, the debugger showed a temporary of the
+  block that was still nil as the method's captured variable of the same
+  name; it now shows nil (unit test `Debugger: a nil temporary does not
+  show a captured variable of the same name`, failed before).
+- **The collection primitives no longer intern their storage keys on every
+  call.** `OrderedCollection`, `Set`, `Dictionary`, `Interval` and
+  `Association` primitives looked up `__data__`, `__size__` and the
+  interval and association keys through protoCore's symbol table on each
+  call (UTF-8 validation, `strlen`, hash, compare); the keys are now
+  interned once per runtime in `Bootstrap::sym`, as `Array>>at:` already
+  did. `oc addLast: i. oc removeLast` went from 8,374 to 6,251 instructions
+  per iteration; the symbol-table probe was about 4 % of `PBAvl check:`. The
+  other fixed keys interned per call on hot paths (`=`, `hash`, `<=`,
+  `initialize`, `__elementsForIteration`, `__data__` outside the
+  collections) now come from `Bootstrap::sym` as well.
+- **`and:` and `or:` with a literal block are compiled inline (protoBaseST
+  review P2).** Like `ifTrue:`, a zero-argument block without temporaries
+  is no longer a closure evaluated by a primitive in a nested engine: its
+  body is compiled into the enclosing method. 10^6 iterations of
+  `((i > 10) and: [ i < 900000 ]) ifTrue: [...]` in a method went from
+  8.2-8.6 s to 0.21 s, `or:` from 9.8-10.4 s to 0.19 s, the cost of the
+  nested `ifTrue:` they mean (0.19-0.23 s); `benchmarks/micro/and_or.st`.
+  The value is the primitive's: `true and: [3]` is 3, the block's value is
+  not checked. A non-Boolean receiver gets the real send (see Fixed); a
+  non-literal argument (`x and: aBlock`) is still a send. protoST has no
+  `and:and:` / `or:or:`, so there are none to inline. Tests:
+  `06-blocks/inlined-and-or-values.st`,
+  `07-non-local-return/nonlocal-return-from-inlined-and-or.st`, a debugger
+  single-step case in `tests/unit/test_debugger.cpp`; `docs/VM.md` 1.4 and
+  the opcode table; vm-examples 03, 05, 14 and 18 regenerated.
+
+- **A block costs a quarter of what it did; `isKindOf:` is a primitive; a
+  send does less work (protoBaseST review P3).** Profiled with `perf`:
+  - A closure was a *mutable* object written by four `setAttribute` calls,
+    four publications into protoCore's mutable table, and most of the
+    garbage of every block (the sweep was the top symbol of a block loop).
+    `PUSH_BLOCK` now builds an immutable child of `BlockClosure` and writes
+    its four attributes as one version (`setAttributes`); nothing writes a
+    closure afterwards, and a method, which is a closure, is immutable too.
+    Two closures of one literal remain distinct objects (test
+    `06-blocks/block-closures-are-distinct-objects.st`). A block has no
+    instance variables to set: `aBlock instVarNamed: 'x' put: v`, which
+    stored the value on the mutable closure of 0.9.x, now signals
+    `ModificationForbidden`; without the check the write would have been
+    lost silently (test `06-blocks/block-instvar-write-is-refused.st`).
+    Instance-variable assignment in a method refuses an immutable receiver
+    the same way (the compiler already rejects it in `BlockClosure`
+    methods; the plain `STORE_INSTVAR` handler skipped the check until
+    16b940d, the grouped write had it).
+  - `isKindOf:` was a kernel method (`self class`, then `or:` with a block,
+    then `__hasAncestor:`); it is now one primitive over the same ancestor
+    test. It uses the receiver's real class, as Pharo's (where `class` is a
+    bytecode): a `class` method that answers another class no longer
+    changes it (test `04-object-model/is-kind-of-uses-the-real-class.st`,
+    which answered `false` for the first case before).
+  - Per send: the block fast path tests for a `value`-family selector
+    before it probes the receiver for `__bc_ptr__` (every send to an object
+    paid that probe); a keyword selector's argument count is counted once
+    when the constant is interned, not on every send; `push` / `pop` /
+    `peek` are forced inline into `runLoop` (GCC had left them as calls);
+    a new frame clears its header and locals but not its operand stack,
+    which is never read above its top (protoCore scans every slot as a
+    root, so an old value there cannot dangle).
+
+  10^5 iterations in a method, ns per iteration including the loop
+  (`benchmarks/micro/blocks_kindof.st`, 0.9.x -> 0.10.0): create a block
+  2,200-2,400 -> 600-650; `[ 1 ] value` 2,050 -> 780-870; a block that
+  captures the loop variable 4,500-4,700 -> 1,760-1,990; `at:ifAbsent: [0]`
+  4,300 -> 790-830; `[ 1 ] on: Error do: [...]` 12,000-15,000 -> 1,280;
+  `isKindOf:` 9,500-14,000 -> 260-400 (the `or:` block was most of it). The
+  comparable suite (`perf stat -r 3`, instructions / cycles): `fib` -16 % /
+  -12..-20 % (two machines' runs; instructions are the stable figure), `attr_lookup` -11 % / -17 %, `exception_latency` -24 % / -27 %,
+  `int_sum_loop` -9 % / -2 %, `list_append` -4 % / -5 %. protoBaseST's
+  AVL on 1000-element trees: `posAt:` 209-222 -> 151 us, `keyAt:` 128-154
+  -> 85 us, `keyPut:` 1,088-1,167 -> 831-841 us; the rest of that cost is
+  the number of sends its code makes, at about 0.15 us each.
+
+### Breaking changes
+
+- **Embedder API: a primitive is a `proto::ProtoMethod`.** `PrimitiveRegistry`,
+  `STRuntime::registry()` and `registerPrim` are removed. `bindPrimitive` and
+  `bindClassPrimitive` take a `proto::ProtoMethod`; a function with the
+  `PrimFn` signature becomes one as `primitiveMethod<F>`
+  (`bindPrimitive(rt, proto, "sel", primitiveMethod<prim_X>)`). A primitive
+  honours protoCore's calling convention for every caller: a call of its
+  method cell through protoCore's `call` that does not come from protoST's
+  dispatch -- another runtime, in its own space or sharing protoST's, or
+  embedder C++ -- runs behind the boundary `__st_send__` gives
+  (docs/INTEROP.md §4.3: protoST's context, the handlers of protoST code above
+  it hidden, errors leaving as `ProtoException`). protoScala calls protoST
+  primitives this way (`umd/protost-interop`, `tutorial/15`). A primitive
+  sent named arguments in a call-form send reports `a primitive method takes
+  no named arguments` (was `primitive method 'sel' does not accept named args
+  in v1`).
+- **Embedders must recompile, not relink.** `STRuntime` gained a data member
+  (`serial_`, behind the inline `serial()`), so its layout changed: an object
+  compiled against an earlier `STRuntime.h` and linked against this release
+  misreads the class (a relinked protoScala test executable crashed). The
+  embedder API changes listed here require a rebuild anyway.
+- **A ProtoSpace hosts one protoST runtime: constructing a second one on it
+  throws `std::logic_error`.** In the ecosystem's recommended setup (one
+  ProtoSpace per process, runtimes sharing it), two embedders that each
+  construct `STRuntime(hostSpace)` now fail at the second construction; they
+  must share one `STRuntime`, which the message says. A primitive finds its
+  runtime by its context's space (INTEROP.md §4.1 already stated one protoST
+  runtime per process); it used to replace the first runtime in the space's
+  registry entry, which also sent the first runtime's imports to the second.
+  A runtime whose construction fails is unregistered again. Test
+  `tests/unit/test_primitive_methods.cpp`.
+- **A runtime under construction is reachable only from the thread
+  constructing it.** Its space is reserved first (so a second runtime is
+  still refused before anything is installed) and published, with its own
+  module provider, once everything but the worker pool is in place. Before,
+  another thread could find a runtime whose primitives or kernel were not yet
+  installed (a foreign importer would take it for the process's sole
+  runtime), and the registry entry named the runtime's provider before
+  protoCore owned it. Test `tests/unit/test_cross_runtime_provider.cpp`.
+- **A unary or keyword send calls a protoCore method attribute** (what a C++
+  module or another runtime exports), as a call-form send already did. A unary
+  send answered the method cell itself as a value, and a keyword send
+  signalled `the attribute is a value, not a method`. A program that kept the
+  cell as a function value holds a block over the receiver, or the selector
+  for `perform:`, instead (docs/INTEROP.md §3.2).
+- **`outer` no longer behaves as `pass`** (see *Fixed*): a program whose
+  enclosing handler resumes now continues in the inner handler after
+  `outer`, not at the `signal`. `[[(Warning signal: 'w') + 1] on: Warning do:
+  [:e | e outer]] on: Warning do: [:e | e resume: 4]` answers 4 (it answered
+  5). Code that wanted the old effect sends `pass`.
+- **`pass` runs the enclosing handler before unwinding the passing one**
+  (see *Fixed*): the passing handler's `ensure:` and `ifCurtailed:` blocks
+  now run after the enclosing handler, not before it.
+- **A chain of handlers that pass or `outer` outward reaches the engine
+  nesting limit at about half the former depth.** Each enclosing handler
+  now runs on top of the one that passes (Pharo nests contexts the same
+  way). Measured on a Release build, a chain of `Warning` handlers that each
+  pass (or `outer`) to a resuming outermost handler completes up to 497
+  levels; f799ab9 completed 995. Past that the limit's catchable `Error`
+  arrives once, at the handler that could not start (S23); `Error` chains
+  still complete, because the limit `Error` goes to the next `on: Error`
+  handler. LANGUAGE.md §8.4.
+- **`resume:` of a non-resumable exception signals `IllegalResumeAttempt`,
+  which is not an `Error`.** It raised a plain `Error`, so `on: Error do:`
+  caught it; catch it with `on: IllegalResumeAttempt do:` or `on: Exception
+  do:`. Unhandled, it still ends the program with `cannot resume a
+  non-resumable exception`.
+- **A class's `isResumable` override decides resumability**, and
+  **`retryUsing:` runs the replacement under the same handler** (see
+  *Fixed*, D54 and D55).
+- **MessagePack nesting depth is 1024 (was 512)**, encode and decode, from
+  protoIO 0.5.0's default: msgpack-python 1.2's unpacker limit and the record
+  depth ProtoBase format 4 requires every reader to accept since ProtoBase
+  v2.0.0rc2 (a value nests up to 1022 containers, the record envelope adds 2).
+  A structure 513 to 1024 deep that signalled `Error` now encodes. Test
+  `15-binary/msgpack_depth_boundary.st` pins 1024 / 1025.
+- **A structure nested too deep signals `MessagePackDepthExceeded`**, a new
+  `Error` subclass, on encode and decode (protoIO 0.5.0's
+  `Error::Kind::DepthLimit`), where it signalled a plain `Error`. `on: Error
+  do:` still catches it; protoBaseST reports ProtoBase's `MAX_VALUE_DEPTH`
+  text from the class instead of matching the message.
+
+- **An `Array` of Integers is no longer bytes (D45, ruling R11).** As the
+  0.9.0 deprecation warning announced, every write that takes bytes or a
+  String refuses an `Array`: `FileReference >> contents:`, `appendContents:`
+  and `binaryContents:`, `IOStream >> nextPutAll:` and `nextPutBytes:`
+  (standard streams, file streams and sockets, TLS included) and UDP `send:`.
+  The `Error` names the selector that was sent, says "an Array is not bytes"
+  and names the replacement, `ByteArray withAll: anArray` (or a literal
+  `#[1 2 3]`); nothing is written. The warning and its code path are
+  gone. Tests: `14-io/files_bytes_array_refused.st` (was
+  `files_bytes_array_deprecated.st`), `14-io/net_udp_array_refused.st`;
+  `files_bytes_bad_array.st` now expects the Array refusal, and
+  `http_chunked_utf8.st` passes a `ByteArray` literal.
+- **A class no longer answers its instances' methods (D52, superseding part
+  of D5).** Until now a class object reached its own instance-side protocol:
+  `Foo greet` ran `Foo >> greet` on the class, `Foo = Foo` ran an
+  instance-side `=`, `anInstance new` made a sibling, and `Array at: 1` reached
+  the Array primitive. Each of these is now `doesNotUnderstand` (or, for `=`,
+  Object's identity), as in Pharo. Code that relied on it must define the
+  method on the class side (`Foo class >> greet`). Related changes:
+  - The class protocol (`new`, `basicNew`, `newChild`, `subclass:`..., `name`,
+    `superclass`, `selectors`, `canUnderstand:`, `addBehavior:`, and the
+    `reflection.st` methods `instVarNames`, `inheritsFrom:`, `subclasses`,
+    ...) moved from `Object` to the new class `Behavior`; `Class` and
+    `Metaclass` are new globals. An instance no longer understands `new`.
+  - `canUnderstand:` describes the receiver's instances, as in Pharo
+    (`Array canUnderstand: #at:put:` true, `Array class canUnderstand:
+    #at:put:` false); `respondsTo:` describes the receiver.
+    `Foo class class` is `Metaclass`, `Object class superclass` is `Class`.
+  - The built-in constructors are bound on their metaclasses only (the
+    double binding of the first K14 fix is gone), and `Exception signal` /
+    `signal:` stay class-side messages that build the instance.
+  - The kernel's 37 `isClassObject` guards against a class running an
+    instance method are removed (`calendar.st`, `decimal.st`, `printing.st`,
+    `reflection.st`, `fraction.st`, `string.st`, `character.st`);
+    `Random seed:`, `Association key:value:` and `Notification signal:` are
+    class-side methods.
+  - A send to a class costs one lookup again (the first K14 fix added a
+    second).
+- **An embedder of a runtime that owns its space catches `STUncaughtError`
+  (K20).** `STRuntime()`'s `runTopLevel`, `loadModuleFromFile`,
+  `importModuleFile` and `loadModule` called by the embedder raise
+  `protoST::STUncaughtError` (a `std::runtime_error`) for an unhandled error
+  instead of `UnhandledSTException`; code that caught `proto::ProtoException`
+  there must catch `STUncaughtError` (or `std::exception`), and code that
+  needs the exception object must run the runtime in its own space
+  (`STRuntime(proto::ProtoSpace&)`).
 
 ## 0.9.1 — on protoCore 3.6.0 (2026-11-13)
 
@@ -289,7 +1207,7 @@ skip is confirmed only by CI), and K13, a mailbox batch of more than 2^31 - 1 me
 reach and which would be lost. K12 (protoIO did not refuse a NUL in an OS
 string) is resolved by protoIO 0.4.0, and K11 (no structural list split) by
 protoCore 3.5.1. The `Array` argument deprecation ends
-in 0.10.0 (D45).
+in 0.10.0 (D45; it did).
 
 ## 0.8.1 — on protoCore 3.5.0 (2026-10-31)
 

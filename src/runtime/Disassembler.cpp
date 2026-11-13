@@ -48,13 +48,30 @@ const char* opName(Op op) {
         case Op::BIN_INT_GE:         return "BIN_INT_GE";
         case Op::BIN_INT_GT:         return "BIN_INT_GT";
         case Op::BIN_INT_EQ:         return "BIN_INT_EQ";
-        case Op::ASSERT_BOOL_OR_DNU: return "ASSERT_BOOL_OR_DNU";
+        case Op::ASSERT_LOOP_BOOL: return "ASSERT_LOOP_BOOL";
         case Op::SEND_CALL:          return "SEND_CALL";
         case Op::DEFINE_CAPTURED:    return "DEFINE_CAPTURED";
         case Op::STORE_CLASSVAR:     return "STORE_CLASSVAR";
         case Op::PUSH_OWN_INSTVAR:   return "PUSH_OWN_INSTVAR";
         case Op::IVAR_GROUP:         return "IVAR_GROUP";
         case Op::IVAR_GROUP_END:     return "IVAR_GROUP_END";
+        case Op::JUMP_IF_NOT_BOOL:   return "JUMP_IF_NOT_BOOL";
+        case Op::DEOPT_ENTER:        return "DEOPT_ENTER";
+        case Op::PUSH_DEOPT_BLOCK:   return "PUSH_DEOPT_BLOCK";
+        case Op::DEOPT_EXIT:         return "DEOPT_EXIT";
+        case Op::RESET_LOCAL:        return "RESET_LOCAL";
+        case Op::PUSH_SHARED_LOCAL:  return "PUSH_SHARED_LOCAL";
+        case Op::STORE_SHARED_LOCAL: return "STORE_SHARED_LOCAL";
+        case Op::PUSH_LATE_VAR:      return "PUSH_LATE_VAR";
+        case Op::STORE_LATE_VAR:     return "STORE_LATE_VAR";
+        case Op::JUMP_IF_NIL:        return "JUMP_IF_NIL";
+        case Op::JUMP_IF_NOT_NIL:    return "JUMP_IF_NOT_NIL";
+        case Op::IDENTICAL:          return "IDENTICAL";
+        case Op::BIN_INT_MUL:        return "BIN_INT_MUL";
+        case Op::BIN_INT_MOD:        return "BIN_INT_MOD";
+        case Op::BIN_INT_QUO:        return "BIN_INT_QUO";
+        case Op::BIN_INT_AND:        return "BIN_INT_AND";
+        case Op::BIN_INT_OR:         return "BIN_INT_OR";
         case Op::EXTEND:             return "EXTEND";
     }
     return nullptr;
@@ -228,6 +245,9 @@ void listModule(const BytecodeModule& m, const std::string& path, std::string& o
                 break;
             case Op::PUSH_LOCAL:
             case Op::STORE_LOCAL:
+            case Op::RESET_LOCAL:
+            case Op::PUSH_SHARED_LOCAL:
+            case Op::STORE_SHARED_LOCAL:
                 withOperand(slotText(m, in.arg));
                 break;
             case Op::SEND_UNARY:
@@ -236,7 +256,9 @@ void listModule(const BytecodeModule& m, const std::string& path, std::string& o
             case Op::BIN_INT_LE:  case Op::BIN_INT_LT:
             case Op::BIN_INT_GE:  case Op::BIN_INT_GT:
             case Op::BIN_INT_EQ:
-            case Op::ASSERT_BOOL_OR_DNU:
+            case Op::BIN_INT_MUL: case Op::BIN_INT_MOD: case Op::BIN_INT_QUO:
+            case Op::BIN_INT_AND: case Op::BIN_INT_OR:
+            case Op::ASSERT_LOOP_BOOL:
                 withOperand("#" + nameAt(m, in.arg));
                 break;
             case Op::SEND_KEYWORD:
@@ -254,11 +276,15 @@ void listModule(const BytecodeModule& m, const std::string& path, std::string& o
             case Op::DEFINE_CAPTURED:
             case Op::PUSH_INSTVAR:     case Op::STORE_INSTVAR:
             case Op::PUSH_OWN_INSTVAR: case Op::STORE_CLASSVAR:
+            case Op::PUSH_LATE_VAR:    case Op::STORE_LATE_VAR:
                 withOperand(nameAt(m, in.arg));
                 break;
             case Op::JUMP:
             case Op::JUMP_IF_TRUE:
             case Op::JUMP_IF_FALSE:
+            case Op::JUMP_IF_NOT_BOOL:
+            case Op::JUMP_IF_NIL:
+            case Op::JUMP_IF_NOT_NIL:
                 withOperand("-> " + std::to_string(next + in.arg));
                 break;
             case Op::JUMP_BACK:
@@ -266,6 +292,7 @@ void listModule(const BytecodeModule& m, const std::string& path, std::string& o
                                            : std::string("<before the start>"));
                 break;
             case Op::PUSH_BLOCK:
+            case Op::PUSH_DEOPT_BLOCK:
                 if (in.arg < m.numBlocks()) {
                     const std::string& dn = m.block(in.arg).debugName();
                     withOperand(path + "." + std::to_string(in.arg)
@@ -289,6 +316,21 @@ void listModule(const BytecodeModule& m, const std::string& path, std::string& o
                                 + std::to_string(e.count));
                 } else {
                     withOperand("<group entry out of range>");
+                }
+                break;
+            case Op::DEOPT_ENTER:
+            case Op::DEOPT_EXIT:
+                if (in.arg < m.numDeoptEntries()) {
+                    const auto& e = m.deoptEntry(in.arg);
+                    std::string names;
+                    for (const auto& l : e.locals)
+                        names += (names.empty() ? "" : " ") + nameAt(m, l.nameConst)
+                               + (l.scope == BytecodeModule::DeoptLocal::kReadOnly
+                                      ? std::string("(copy)") : std::string());
+                    withOperand("box " + slotText(m, e.boxSlot) + ": "
+                                + (names.empty() ? std::string("no locals") : names));
+                } else {
+                    withOperand("<deopt entry out of range>");
                 }
                 break;
             default:

@@ -75,19 +75,16 @@ enum class Op : uint8_t {
     BIN_INT_GE      = 35,   // >=
     BIN_INT_GT      = 36,   // >
     BIN_INT_EQ      = 37,   // =
-    // 2026-05-24: type guard for inlined ifTrue:/ifFalse:/whileTrue:.
-    // The standalone JUMP_IF_FALSE / JUMP_IF_TRUE opcodes silently
-    // fall through when the receiver is not PROTO_TRUE / PROTO_FALSE,
-    // which produced a Smalltalk-semantic regression: `123 ifTrue: [x]`
-    // executed the block instead of raising doesNotUnderstand:ifTrue:.
-    // ASSERT_BOOL_OR_DNU peeks the top of stack and, if it is not a
-    // Boolean, signals MessageNotUnderstood with the selector from the
-    // operand (a const-pool symbol index). On a Boolean it is a no-op
-    // and the stack is unchanged. The compiler emits it before
-    // JUMP_IF_FALSE / JUMP_IF_TRUE inside any inlined conditional, so
-    // the inlined fast path keeps the same observable semantics as the
-    // SEND_KEYWORD dispatch it replaced.
-    ASSERT_BOOL_OR_DNU = 38, // arg = selector const index
+    // The type guard of an inlined whileTrue: / whileFalse: condition,
+    // before its JUMP_IF_FALSE / JUMP_IF_TRUE (which treat anything but
+    // false / true as the other value). A Boolean on top of the stack is
+    // left in place. Any other value is replaced by the truth that
+    // loopConditionIsTrue answers: it signals a resumable
+    // NonBooleanReceiver, and the resumed value counts as true unless it
+    // is false (Pharo's rule), the rule of the loop primitives too.
+    // Named ASSERT_BOOL_OR_DNU until 0.10.0, when it sent
+    // doesNotUnderstand: of the loop selector to the condition's value.
+    ASSERT_LOOP_BOOL = 38, // arg = selector const index (for the message)
     // 2026-06-13: protoCore-style call-form send (positional + named args).
     // The single operand is a const-pool index naming a *mangled* selector
     // of the form `<name>#<nPos>[#<sortedKey1>#<sortedKey2>...]`. The
@@ -129,6 +126,73 @@ enum class Op : uint8_t {
     // every write takes STORE_INSTVAR's path at its own position instead.
     IVAR_GROUP         = 43, // arg = group-entry index; leaves the value on the stack
     IVAR_GROUP_END     = 44, // arg = group-entry index of the run's last write
+    // Peeks the top of the stack and jumps forward when it is neither true
+    // nor false; a Boolean stays and execution falls through. It opens every
+    // inlined value conditional (ifTrue:, ifFalse:, ifTrue:ifFalse:,
+    // ifFalse:ifTrue:, and:, or:): the target is the out-of-line real send
+    // of the expression (DEOPT_ENTER below) followed by a JUMP to its end.
+    JUMP_IF_NOT_BOOL   = 45, // arg = forward offset in instructions
+    // De-optimisation of an inlined value conditional whose receiver is not
+    // a Boolean (0.10.0). The out-of-line target of JUMP_IF_NOT_BOOL sends
+    // the selector for real, with closures compiled from the block literals:
+    //     DEOPT_ENTER k  PUSH_LOCAL box  PUSH_DEOPT_BLOCK b1 [PUSH_LOCAL box
+    //     PUSH_DEOPT_BLOCK b2]  SEND_KEYWORD #sel  DEOPT_EXIT k  JUMP end
+    // DEOPT_ENTER moves the temporaries the closures use out of their frame
+    // slots into the dictionary of the scope that declares them, leaving a
+    // forward in each slot, so the frame and the closures share them from
+    // then on, as with real closures; it builds the box, a captured dict
+    // whose parent is the innermost of those scope dictionaries and which
+    // holds copies of the arguments the closures read, and stores it in the
+    // entry's frame slot. Nothing changes on the operand stack.
+    DEOPT_ENTER        = 46, // arg = deopt-entry index
+    // Pops a box and pushes a closure of sub-module `arg` that resolves its
+    // free variables in that box (PUSH_BLOCK uses the frame's captured dict).
+    PUSH_DEOPT_BLOCK   = 47, // arg = bytecode-module-table index
+    // Clears the box's frame slot. The send's answer stays on the stack.
+    DEOPT_EXIT         = 48, // arg = deopt-entry index
+    // Sets a local slot to nil without following a forward: the entry of
+    // an inlined block's scope gives each of its temporaries a fresh
+    // variable, while a closure that shares the previous one keeps it.
+    RESET_LOCAL        = 49, // arg = slot index
+    // The inlined nil tests (ifNil:, ifNotNil:, ifNil:ifNotNil:,
+    // ifNotNil:ifNil: with literal blocks; 0.10.0). Both peek: the value
+    // stays on the stack on both paths.
+    JUMP_IF_NIL        = 50, // arg = forward offset; jumps when the top is nil
+    JUMP_IF_NOT_NIL    = 51, // arg = forward offset; jumps when it is not nil
+    // `a == b`: pops two values, pushes whether they are the same object.
+    // Never a send: `==` is not looked up, as in Pharo (0.10.0).
+    IDENTICAL          = 52,
+    // More SmallInteger fast paths (0.10.0), like BIN_INT_ADD: both operands
+    // SmallIntegers and the result a SmallInteger, else the instruction is
+    // the send of its selector constant (`arg`). A zero divisor is a miss
+    // too, so the send's primitive signals ZeroDivide.
+    BIN_INT_MUL        = 53, // *
+    BIN_INT_MOD        = 54, // \\  (floored)
+    BIN_INT_QUO        = 55, // //  (floored)
+    // 56 is reserved: it was BIN_INT_REM, dropped before 0.10.0 shipped
+    // because rem: is not one of Pharo's special selectors (review R3-1).
+    BIN_INT_AND        = 57, // bitAnd: (a keyword send on a miss)
+    BIN_INT_OR         = 58, // bitOr:  (a keyword send on a miss)
+    // PUSH_LOCAL and STORE_LOCAL of a slot whose variable DEOPT_ENTER may
+    // move into a scope dictionary: when the frame holds forwards, they
+    // follow the slot's forward to the variable. The compiler emits
+    // PUSH_LOCAL / STORE_LOCAL and turns those of such slots into these
+    // once the module is complete (BytecodeModule::routeSharedLocals), so
+    // the access of every other slot tests nothing.
+    PUSH_SHARED_LOCAL  = 59, // arg = slot index
+    STORE_SHARED_LOCAL = 60, // arg = slot index
+    // S37: a variable of a method whose class's chain the compiler could not
+    // see (a class built by the `subclass:` message, a subclass or extension
+    // of an imported class). Never executed: installing the method
+    // (`__installMethod:as:`, `__installClassMethod:as:`) rewrites each in
+    // place, once, into the access the class declares -- PUSH_INSTVAR or
+    // PUSH_OWN_INSTVAR (a class-side method's class-instance variable), and
+    // STORE_INSTVAR or STORE_CLASSVAR -- or, in the REPL, a read of a name
+    // the class does not declare into PUSH_GLOBAL; any other undeclared name
+    // signals `undeclared variable` and the method is not installed. The
+    // engine treats them as unimplemented opcodes.
+    PUSH_LATE_VAR      = 61, // arg = constant pool symbol index (variable name)
+    STORE_LATE_VAR     = 62, // arg = constant pool symbol index (variable name)
     // Prefix carrying the next-higher byte of the following instruction's
     // operand, for operands above 255 (constant indices, slots, jumps).
     EXTEND          = 254,

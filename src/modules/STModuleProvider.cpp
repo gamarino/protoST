@@ -1,10 +1,15 @@
 #include "STModuleProvider.h"
+#include "STForeignSend.h"
+#include "protoST/primitives.h"
+#include "runtime/ExecutionEngine.h"
 #include "runtime/NativeError.h"
 #include "protoST/STRuntime.h"
 #include "runtime/NativeExceptionBridge.h"
 #include "protoCore.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cstdint>
 #include <exception>
 #include <mutex>
 #include <stdexcept>
@@ -16,7 +21,29 @@ namespace {
     struct RuntimeEntry {
         const proto::ProtoSpace* space;
         STRuntime* runtime;
+        STModuleProvider* provider;   // the runtime's own (K1), set when published
+        bool published;
     };
+
+    // The runtime the calling thread is constructing (ConstructingSTRuntimeScope).
+    constinit thread_local const STRuntime* t_constructingRuntime = nullptr;
+
+    // Whether the calling thread may see the entry: a reserved runtime is
+    // seen only by the thread constructing it.
+    bool visible(const RuntimeEntry& e) {
+        return e.published || e.runtime == t_constructingRuntime;
+    }
+
+    // The one entry the calling thread sees, or nullptr for none or several.
+    const RuntimeEntry* soleVisibleEntry(const std::vector<RuntimeEntry>& entries) {
+        const RuntimeEntry* sole = nullptr;
+        for (const auto& e : entries) {
+            if (!visible(e)) continue;
+            if (sole) return nullptr;
+            sole = &e;
+        }
+        return sole;
+    }
 
     // Intentionally leaked: an STRuntime may be destroyed during static
     // destruction, after a function-local static container would be gone.
@@ -30,14 +57,78 @@ namespace {
     }
 }
 
-void registerSTRuntime(const proto::ProtoSpace* space, STRuntime* rt) {
+namespace detail {
+// The registry's generation (primitives.h, runtimeOf): advanced, under the
+// registry lock, by every change to the registry, so a per-thread cache
+// entry filled under an older generation is never used.
+std::atomic<std::uint64_t> g_runtimeRegistryGeneration{1};
+constinit thread_local RuntimeOfSpaceCache t_runtimeOfSpace;
+
+STRuntime& runtimeOfSlow(proto::ProtoContext* ctx) {
+    const proto::ProtoSpace* space = ctx ? ctx->space : nullptr;
+    STRuntime* rt = nullptr;
+    std::uint64_t generation = 0;
+    {
+        std::lock_guard<std::mutex> lock(registryMutex());
+        generation = g_runtimeRegistryGeneration.load(std::memory_order_relaxed);
+        for (const auto& e : registryEntries()) {
+            if (e.space == space && visible(e)) { rt = e.runtime; break; }
+        }
+    }
+    if (!rt)
+        throw NativeError(
+            "protoST: a primitive was called on a context whose space no protoST runtime "
+            "owns; another runtime sends to protoST objects through " +
+            std::string(kForeignSendSelector));
+    t_runtimeOfSpace = RuntimeOfSpaceCache{space, rt, generation};
+    return *rt;
+}
+} // namespace detail
+
+namespace {
+// Called with the registry lock held.
+void advanceRegistryGeneration() {
+    detail::g_runtimeRegistryGeneration.fetch_add(1, std::memory_order_release);
+}
+} // namespace
+
+void reserveSTRuntime(const proto::ProtoSpace* space, STRuntime* rt) {
     if (!space || !rt) return;
     std::lock_guard<std::mutex> lock(registryMutex());
     auto& entries = registryEntries();
-    for (auto& e : entries) {
-        if (e.space == space) { e.runtime = rt; return; }
+    for (const auto& e : entries) {
+        if (e.space == space)
+            throw std::logic_error(
+                "protoST: this ProtoSpace already hosts a protoST runtime; a space hosts "
+                "one protoST runtime (its primitives find their runtime by the space): "
+                "share that STRuntime among the embedders of the space instead of "
+                "constructing another");
     }
-    entries.push_back({space, rt});
+    entries.push_back({space, rt, nullptr, false});
+    advanceRegistryGeneration();
+}
+
+void publishSTRuntime(const proto::ProtoSpace* space, STRuntime* rt,
+                      STModuleProvider* provider) {
+    std::lock_guard<std::mutex> lock(registryMutex());
+    for (auto& e : registryEntries()) {
+        if (e.space == space && e.runtime == rt) {
+            e.provider = provider;
+            e.published = true;
+            advanceRegistryGeneration();
+            return;
+        }
+    }
+    throw std::logic_error("protoST: publishing a runtime that was never reserved");
+}
+
+ConstructingSTRuntimeScope::ConstructingSTRuntimeScope(const STRuntime* rt)
+    : previous_(t_constructingRuntime) {
+    t_constructingRuntime = rt;
+}
+
+ConstructingSTRuntimeScope::~ConstructingSTRuntimeScope() {
+    t_constructingRuntime = previous_;
 }
 
 void unregisterSTRuntime(const proto::ProtoSpace* space, STRuntime* rt) {
@@ -48,33 +139,79 @@ void unregisterSTRuntime(const proto::ProtoSpace* space, STRuntime* rt) {
                                      return e.space == space && e.runtime == rt;
                                  }),
                   entries.end());
+    advanceRegistryGeneration();
 }
 
 STRuntime* stRuntimeForSpace(const proto::ProtoSpace* space) {
     if (!space) return nullptr;
     std::lock_guard<std::mutex> lock(registryMutex());
     for (const auto& e : registryEntries()) {
-        if (e.space == space) return e.runtime;
+        if (e.space == space && visible(e)) return e.runtime;
     }
     return nullptr;
 }
 
 std::size_t registeredSTRuntimeCount() {
     std::lock_guard<std::mutex> lock(registryMutex());
-    return registryEntries().size();
+    const auto& entries = registryEntries();
+    return static_cast<std::size_t>(std::count_if(entries.begin(), entries.end(), visible));
 }
 
 STRuntime* soleSTRuntime() {
     std::lock_guard<std::mutex> lock(registryMutex());
     auto& entries = registryEntries();
-    if (entries.size() != 1) return nullptr;
-    return entries.front().runtime;
+    const RuntimeEntry* sole = soleVisibleEntry(entries);
+    return sole ? sole->runtime : nullptr;
 }
 
-STModuleProvider::STModuleProvider()
-    : guid_("protoST-source-v1")
-    , alias_("st")
+namespace {
+// The provider of the sole live runtime, or nullptr when there is none or
+// more than one. A provider is never freed (protoCore's registry owns it for
+// the life of the process), so the pointer stays valid after the lock.
+STModuleProvider* soleSTProvider() {
+    std::lock_guard<std::mutex> lock(registryMutex());
+    auto& entries = registryEntries();
+    const RuntimeEntry* sole = soleVisibleEntry(entries);
+    return sole ? sole->provider : nullptr;
+}
+} // namespace
+
+STModuleProvider::STModuleProvider(unsigned long long serial)
+    : guid_("protoST-source-v1#" + std::to_string(serial))
+    , retiredGuid_(guid_ + "#retired")
+    , alias_()
 {}
+
+STDispatchProvider::STDispatchProvider()
+    : alias_("st")
+{}
+
+const std::string& STDispatchProvider::getGUID() const {
+    if (STModuleProvider* p = soleSTProvider()) return p->getGUID();
+    // No single live runtime: a GUID no other call ever answers, so an entry
+    // protoCore might store under it can never be found again. The number is
+    // process-wide, so no two calls collide on any thread; the text lives in
+    // the calling thread's buffer, which protoCore copies into the module
+    // identity before this thread calls again.
+    static std::atomic<unsigned long long> s_unmatched{0};
+    thread_local std::string buffer;
+    buffer = "protoST-source-v1#none#" +
+             std::to_string(s_unmatched.fetch_add(1, std::memory_order_relaxed));
+    return buffer;
+}
+
+const proto::ProtoObject*
+STDispatchProvider::tryLoad(const std::string& logicalPath, proto::ProtoContext* ctx) {
+    if (STModuleProvider* p = soleSTProvider()) return p->tryLoad(logicalPath, ctx);
+    if (registeredSTRuntimeCount() > 1) {
+        throw NativeError(
+            "protoST: a cross-runtime import of '" + logicalPath +
+            "' is ambiguous — this process holds more than one protoST "
+            "runtime and `provider:st` names no particular one, so "
+            "there is no way to tell which one is meant");
+    }
+    return PROTO_NONE;   // no protoST runtime in this process
+}
 
 namespace {
 
@@ -176,6 +313,7 @@ const proto::ProtoObject* buildCallerFacade(proto::ProtoContext* callerCtx,
 const proto::ProtoObject*
 STModuleProvider::loadForForeignCaller(STRuntime& rt, const std::string& logicalPath,
                                        proto::ProtoContext* callerCtx) {
+    rt.noteForeignCaller();   // S40: see STRuntime::noteForeignCaller
     // A guest in the caller's space (STRuntime(proto::ProtoSpace&)): the
     // caller's context is a context of protoST's space, so the load runs on
     // it, from any thread, and the module object itself is the answer -- no
@@ -205,10 +343,14 @@ STModuleProvider::loadForForeignCaller(STRuntime& rt, const std::string& logical
         if (sharedSpace) sharedModule = mod;
         else mod->processOwnAttributes(stCtx, &bindings, collectBinding);
     } catch (const UnhandledSTException& u) {
-        // An uncaught protoST exception, or an error a module the top level
-        // used raised (its original ProtoException): a language value, which
-        // leaves to the importing runtime unchanged -- its handlers select it
-        // by the value's prototype chain, as for any protoCore language.
+        // Shared space (a guest runtime, or K18's foreign frame context in
+        // protoST's own space): the import runs on the caller's context, which
+        // is not protoST's, so importModuleFile is not an embedder boundary
+        // (K20) and an uncaught protoST exception, or an error a module the
+        // top level used raised (its original ProtoException), arrives here as
+        // a language value. It leaves to the importing runtime unchanged: its
+        // handlers select it by the value's prototype chain, as for any
+        // protoCore language, and the value lives in the space they share.
         failed = u.original() ? u.original() : std::current_exception();
     } catch (const proto::ProtoException&) {
         failed = std::current_exception();
@@ -216,10 +358,21 @@ STModuleProvider::loadForForeignCaller(STRuntime& rt, const std::string& logical
         // A parse error, a compile error, an import cycle. All carry a
         // message; the importing runtime's own boundary translates them into
         // its own exception type.
+        //
+        // Separate spaces (a caller in a space protoST does not own): the
+        // import runs on protoST's root context with no protoST code running,
+        // so importModuleFile is an embedder boundary of a runtime that owns
+        // its space (K20) and an uncaught protoST error arrives here as a
+        // protoST::STUncaughtError, a std::runtime_error carrying the
+        // description, the trace and the class chain as strings. It leaves as
+        // that, never as a ProtoException: the exception object lives in
+        // protoST's space, whose prototypes the caller's handlers cannot
+        // select by, and which may be destroyed before the caller's exception
+        // is (tests/unit/test_cross_runtime_provider.cpp).
         failed = std::current_exception();
     } catch (...) {
         // protoST's control-flow unwinds (NonLocalReturn, UnwindToHandler,
-        // RetrySignal, ResumeSignal, PassSignal, FutureYield) are not
+        // RetrySignal, ResumeSignal, FutureYield) are not
         // std::exceptions and mean "resume protoST execution somewhere up the
         // protoST stack" — there is no such frame on a foreign importer's
         // stack, and letting one cross would unwind into a runtime that cannot
@@ -242,11 +395,20 @@ STModuleProvider::loadForForeignCaller(STRuntime& rt, const std::string& logical
 const proto::ProtoObject*
 STModuleProvider::tryLoad(const std::string& logicalPath, proto::ProtoContext* ctx) {
     if (!ctx || !ctx->space) return PROTO_NONE;
+    // The runtime this provider served is gone (K1): nothing to load.
+    if (retired_.load(std::memory_order_acquire)) return PROTO_NONE;
 
     auto* rt = stRuntimeForSpace(ctx->space);
     // A guest runtime in the caller's space: the caller is the host runtime's
     // code, so the import crosses the runtime boundary as a foreign one does.
     if (rt && !rt->ownsSpace()) return loadForForeignCaller(*rt, logicalPath, ctx);
+    // K18: protoST's own space, but a context that is not protoST's (another
+    // runtime's frame context, an embedder's): the import crosses the runtime
+    // boundary too. importModuleFile runs it on a child context, and the
+    // foreign-caller path refuses a control-flow unwind that would leave
+    // through the caller's frames.
+    if (rt && !EntryContext::isProtoSTContext(*rt, ctx))
+        return loadForForeignCaller(*rt, logicalPath, ctx);
     if (!rt) {
         // Track Y: the caller's ProtoSpace is not one protoST owns, so this is
         // a cross-runtime import and the runtime comes from the provider's own
@@ -259,8 +421,8 @@ STModuleProvider::tryLoad(const std::string& logicalPath, proto::ProtoContext* c
                 throw NativeError(
                     "protoST: a cross-runtime import of '" + logicalPath +
                     "' is ambiguous — this process holds more than one protoST "
-                    "runtime and the UMD provider is registered once per "
-                    "process, so there is no way to tell which one is meant");
+                    "runtime and `provider:st` names no particular one, so "
+                    "there is no way to tell which one is meant");
             }
             return PROTO_NONE;  // no protoST runtime in this process
         }

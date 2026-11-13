@@ -3,8 +3,10 @@
 #include "runtime/ListIndex.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
+#include "runtime/BlockCode.h"
 #include "runtime/BytecodeModule.h"
 #include "runtime/ExecutionEngine.h"
+#include "runtime/NativeExceptionBridge.h"
 #include "protoCore.h"
 
 #include <stdexcept>
@@ -12,6 +14,13 @@
 #include <string>
 
 namespace protoST {
+
+namespace {
+// BlockClosure>>value and its siblings (below).
+const proto::ProtoObject* prim_Block_value(STRuntime& rt, proto::ProtoContext* ctx,
+                                           const proto::ProtoObject* r,
+                                           const proto::ProtoObject* const* a, int argc);
+} // namespace
 
 // Defined in object_prims.cpp: run a method by name, as a send does.
 const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
@@ -32,8 +41,8 @@ static const proto::ProtoString* bcPtrKey(proto::ProtoContext* ctx) {
     return key;
 }
 
-// Real BlockClosure>>value implementation. PUSH_BLOCK attaches the address of
-// the sub-module to the closure as a SmallInteger under attribute "__bc_ptr__";
+// Real BlockClosure>>value implementation. PUSH_BLOCK attaches the sub-module
+// to the closure as an external pointer under attribute "__bc_ptr__" (BlockCode.h);
 // here we retrieve it, validate the arg count and run the sub-module with the
 // supplied arguments pre-loaded into locals 0..argc-1.
 const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
@@ -46,23 +55,31 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
     // hot keys are now pulled from the Bootstrap cache.
     const proto::ProtoString* bcKey  = rt.bootstrap().sym.bcPtr;
     const proto::ProtoString* capKey = rt.bootstrap().sym.captured;
-    auto* bcPtrObj = block->getOwnAttributeDirect(ctx, bcKey);
-    if (!bcPtrObj || bcPtrObj == PROTO_NONE) {
+    const BytecodeModule* sub = blockCodeOfCached(rt, ctx, block->getOwnAttributeDirect(ctx, bcKey));
+    if (!sub) {
         // Not a block: evaluate it the way Smalltalk does, by sending it
         // value / value: / value:value: (so a Symbol stands for a block:
-        // #(1 2 3) collect: #squared).
+        // #(1 2 3) collect: #squared, and a BlockClosure subclass that
+        // overrides value: runs its method).
         static const char* const kValue[] = { "value", "value:", "value:value:" };
         if (argc >= 0 && argc <= 2) {
+            const proto::ProtoString* selector =
+                proto::ProtoString::createSymbol(ctx, kValue[argc]);
+            // A BlockClosure without code (`BlockClosure new`, or a forged
+            // `__bc_ptr__`) whose value is BlockClosure's own has nothing to
+            // run: the send would find this very primitive again and recurse
+            // until the stack overflowed.
+            const proto::ProtoObject* method =
+                methodHolder(rt.bootstrap(), ctx, block)->getAttribute(ctx, selector);
+            if (method && method->asMethod(ctx) == &primitiveMethod<prim_Block_value>)
+                throw NativeError("the block has no code to run");
             bool understood = false;
             const proto::ProtoObject* r = sendDynamic(
-                rt, ctx, block, proto::ProtoString::createSymbol(ctx, kValue[argc]),
-                args, argc, &understood);
+                rt, ctx, block, selector, args, argc, &understood);
             if (understood) return r ? r : PROTO_NONE;
         }
         throw NativeError("a block was expected here, but the argument is not a block");
     }
-    const BytecodeModule* sub =
-        reinterpret_cast<const BytecodeModule*>(bcPtrObj->asLong(ctx));
     if (sub->argCount() != argc) {
         throw NativeError(
             "block arg count mismatch (expected " +
@@ -115,11 +132,8 @@ const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
 int blockArgCount(proto::ProtoContext* ctx, const proto::ProtoObject* block) {
     if (!block || block == PROTO_NONE) return -1;
     const proto::ProtoString* bcKey = bcPtrKey(ctx);
-    const proto::ProtoObject* bcPtrObj = block->getOwnAttributeDirect(ctx, bcKey);
-    if (!bcPtrObj || bcPtrObj == PROTO_NONE) return -1;
-    const BytecodeModule* sub =
-        reinterpret_cast<const BytecodeModule*>(bcPtrObj->asLong(ctx));
-    return sub->argCount();
+    const BytecodeModule* sub = blockCodeOf(ctx, block->getOwnAttributeDirect(ctx, bcKey));
+    return sub ? sub->argCount() : -1;
 }
 
 namespace {
@@ -137,7 +151,7 @@ const proto::ProtoObject* prim_Block_valueWithArguments(STRuntime& rt, proto::Pr
                                                         const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("valueWithArguments: expects 1 arg");
     const proto::ProtoObject* data = a[0] && a[0] != PROTO_NONE
-        ? a[0]->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__data__")) : nullptr;
+        ? a[0]->getAttribute(ctx, rt.bootstrap().sym.data) : nullptr;
     const proto::ProtoList* list = data && data != PROTO_NONE ? data->asList(ctx) : nullptr;
     if (!list) throw NativeError("valueWithArguments: expects an Array");
     std::vector<const proto::ProtoObject*> args;
@@ -152,14 +166,16 @@ const proto::ProtoObject* prim_Block_value(STRuntime& rt, proto::ProtoContext* c
     return invokeBlock(rt, ctx, r, a, argc);
 }
 
+// The loop protocol of a block. The condition is the receiver's value; one
+// that is not a Boolean goes through loopConditionIsTrue (a resumable
+// NonBooleanReceiver, the resumed value true unless it is false), the rule of
+// the inlined loops (ASSERT_LOOP_BOOL) too. Until 0.10.0 these primitives
+// took any non-true value as false.
 const proto::ProtoObject* prim_Block_whileTrue(STRuntime& rt, proto::ProtoContext* ctx,
                                                 const proto::ProtoObject* r,
                                                 const proto::ProtoObject* const* a, int) {
-    while (true) {
-        auto* cond = invokeBlock(rt, ctx, r, nullptr, 0);
-        if (cond != PROTO_TRUE) break;
+    while (loopConditionIsTrue(rt, ctx, invokeBlock(rt, ctx, r, nullptr, 0), "whileTrue:"))
         invokeBlock(rt, ctx, a[0], nullptr, 0);
-    }
     return PROTO_NONE;
 }
 
@@ -168,11 +184,8 @@ const proto::ProtoObject* prim_Block_whileTrue(STRuntime& rt, proto::ProtoContex
 const proto::ProtoObject* prim_Block_whileFalse(STRuntime& rt, proto::ProtoContext* ctx,
                                                  const proto::ProtoObject* r,
                                                  const proto::ProtoObject* const* a, int) {
-    while (true) {
-        auto* cond = invokeBlock(rt, ctx, r, nullptr, 0);
-        if (cond == PROTO_TRUE) break;
+    while (!loopConditionIsTrue(rt, ctx, invokeBlock(rt, ctx, r, nullptr, 0), "whileFalse:"))
         invokeBlock(rt, ctx, a[0], nullptr, 0);
-    }
     return PROTO_NONE;
 }
 
@@ -181,13 +194,13 @@ const proto::ProtoObject* prim_Block_whileFalse(STRuntime& rt, proto::ProtoConte
 const proto::ProtoObject* prim_Block_whileTrueNoArg(STRuntime& rt, proto::ProtoContext* ctx,
                                                      const proto::ProtoObject* r,
                                                      const proto::ProtoObject* const*, int) {
-    while (invokeBlock(rt, ctx, r, nullptr, 0) == PROTO_TRUE) { /* loop */ }
+    while (loopConditionIsTrue(rt, ctx, invokeBlock(rt, ctx, r, nullptr, 0), "whileTrue")) {}
     return PROTO_NONE;
 }
 const proto::ProtoObject* prim_Block_whileFalseNoArg(STRuntime& rt, proto::ProtoContext* ctx,
                                                       const proto::ProtoObject* r,
                                                       const proto::ProtoObject* const*, int) {
-    while (invokeBlock(rt, ctx, r, nullptr, 0) != PROTO_TRUE) { /* loop */ }
+    while (!loopConditionIsTrue(rt, ctx, invokeBlock(rt, ctx, r, nullptr, 0), "whileFalse")) {}
     return PROTO_NONE;
 }
 
@@ -203,31 +216,30 @@ const proto::ProtoObject* prim_Block_repeat(STRuntime& rt, proto::ProtoContext* 
 } // anon
 
 void installBlockPrimitives(STRuntime& rt) {
-    auto& reg = rt.registry();
     auto& b   = rt.bootstrap();
-    int idx = reg.registerPrim(prim_Block_value);
-    bindPrimitive(rt, b.blockProto, "numArgs", reg.registerPrim(prim_Block_numArgs));
+    const proto::ProtoMethod blockValue = primitiveMethod<prim_Block_value>;
+    bindPrimitive(rt, b.blockProto, "numArgs", primitiveMethod<prim_Block_numArgs>);
     bindPrimitive(rt, b.blockProto, "valueWithArguments:",
-                  reg.registerPrim(prim_Block_valueWithArguments));
-    bindPrimitive(rt, b.blockProto, "value",                    idx);
-    bindPrimitive(rt, b.blockProto, "value:",                   idx);
-    bindPrimitive(rt, b.blockProto, "value:value:",             idx);
-    bindPrimitive(rt, b.blockProto, "value:value:value:",       idx);
-    bindPrimitive(rt, b.blockProto, "value:value:value:value:", idx);
+                  primitiveMethod<prim_Block_valueWithArguments>);
+    bindPrimitive(rt, b.blockProto, "value",                    blockValue);
+    bindPrimitive(rt, b.blockProto, "value:",                   blockValue);
+    bindPrimitive(rt, b.blockProto, "value:value:",             blockValue);
+    bindPrimitive(rt, b.blockProto, "value:value:value:",       blockValue);
+    bindPrimitive(rt, b.blockProto, "value:value:value:value:", blockValue);
 
-    int wIdx = reg.registerPrim(prim_Block_whileTrue);
+    const proto::ProtoMethod whileTrue = primitiveMethod<prim_Block_whileTrue>;
     // Functional but not exercised by F2 tests — needs closures (F3+) for the
     // typical loop idiom over mutable counters.
-    bindPrimitive(rt, b.blockProto, "whileTrue:", wIdx);
+    bindPrimitive(rt, b.blockProto, "whileTrue:", whileTrue);
     // D9: the rest of the block-side loop protocol.
     bindPrimitive(rt, b.blockProto, "whileFalse:",
-                  reg.registerPrim(prim_Block_whileFalse));
+                  primitiveMethod<prim_Block_whileFalse>);
     bindPrimitive(rt, b.blockProto, "whileTrue",
-                  reg.registerPrim(prim_Block_whileTrueNoArg));
+                  primitiveMethod<prim_Block_whileTrueNoArg>);
     bindPrimitive(rt, b.blockProto, "whileFalse",
-                  reg.registerPrim(prim_Block_whileFalseNoArg));
+                  primitiveMethod<prim_Block_whileFalseNoArg>);
     bindPrimitive(rt, b.blockProto, "repeat",
-                  reg.registerPrim(prim_Block_repeat));
+                  primitiveMethod<prim_Block_repeat>);
 }
 
 } // namespace protoST

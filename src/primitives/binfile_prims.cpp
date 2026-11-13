@@ -369,25 +369,24 @@ PRIM(prim_BinFileIsOpen) {
 } // anon
 
 void installBinaryFilePrimitives(STRuntime& rt) {
-    auto& reg = rt.registry();
     const proto::ProtoObject* o = rt.bootstrap().objectProto;
-    struct Entry { const char* sel; PrimFn fn; };
+    struct Entry { const char* sel; proto::ProtoMethod fn; };
     const Entry entries[] = {
-        {"__binFileOpen:flags:", prim_BinFileOpen},
-        {"__binFileAppend:data:", prim_BinFileAppend},
-        {"__binFileReadAt:offset:size:", prim_BinFileReadAt},
-        {"__binFileWriteAt:offset:data:", prim_BinFileWriteAt},
-        {"__binFileSize:", prim_BinFileSize},
-        {"__binFileTruncate:to:", prim_BinFileTruncate},
-        {"__binFileSync:", prim_BinFileSync},
-        {"__binFileDataSync:", prim_BinFileDataSync},
-        {"__binFileTryLock:", prim_BinFileTryLock},
-        {"__binFileLock:", prim_BinFileLock},
-        {"__binFileUnlock:", prim_BinFileUnlock},
-        {"__binFileClose:", prim_BinFileClose},
-        {"__binFileIsOpen:", prim_BinFileIsOpen},
+        {"__binFileOpen:flags:", primitiveMethod<prim_BinFileOpen>},
+        {"__binFileAppend:data:", primitiveMethod<prim_BinFileAppend>},
+        {"__binFileReadAt:offset:size:", primitiveMethod<prim_BinFileReadAt>},
+        {"__binFileWriteAt:offset:data:", primitiveMethod<prim_BinFileWriteAt>},
+        {"__binFileSize:", primitiveMethod<prim_BinFileSize>},
+        {"__binFileTruncate:to:", primitiveMethod<prim_BinFileTruncate>},
+        {"__binFileSync:", primitiveMethod<prim_BinFileSync>},
+        {"__binFileDataSync:", primitiveMethod<prim_BinFileDataSync>},
+        {"__binFileTryLock:", primitiveMethod<prim_BinFileTryLock>},
+        {"__binFileLock:", primitiveMethod<prim_BinFileLock>},
+        {"__binFileUnlock:", primitiveMethod<prim_BinFileUnlock>},
+        {"__binFileClose:", primitiveMethod<prim_BinFileClose>},
+        {"__binFileIsOpen:", primitiveMethod<prim_BinFileIsOpen>},
     };
-    for (const Entry& e : entries) bindPrimitive(rt, o, e.sel, reg.registerPrim(e.fn));
+    for (const Entry& e : entries) bindPrimitive(rt, o, e.sel, e.fn);
 }
 
 } // namespace protoST

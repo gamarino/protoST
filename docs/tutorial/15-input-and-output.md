@@ -293,7 +293,6 @@ with status 1:
 $ ./build/protost fails.st
 starting
 error: PUMP_CONFIG is not set
-  at <block> (fails.st:3)
   at <module> (fails.st:3)
 ```
 
@@ -792,11 +791,24 @@ width is an error, never a wrapped value: `out nextPutUnsigned: 256 width: 1
 bigEndian: true` signals. Floats are written and read through their bit
 patterns, so `-0.0`, infinities and NaN survive a round trip.
 
+Random bytes for an identifier, a nonce or a key come from the operating
+system's cryptographically secure generator: `ByteArray randomBytes: 16`
+answers 16 of them, a new value on every call and, like every `ByteArray`,
+immutable. The size is an Integer from 0 to 1048576; anything else signals
+`InvalidArgument`. (`Random` is a seeded, reproducible generator for
+simulations and tests, never for secrets.)
+
+```smalltalk
+(ByteArray randomBytes: 16) size        "=> 16"
+(ByteArray randomBytes: 16) = (ByteArray randomBytes: 16)   "=> false"
+```
+
 A byte stream takes bytes as a `ByteArray`: `nextPutAll:` (and `<<`) refuse an
 `Array` of Integers, which goes in through `ByteArray withAll: #(1 2 3)`, and
 a `String`, which goes in through `utf8Encoded`. The same rule holds for the
-I/O methods that write bytes, where an `Array` is still accepted in 0.9.0 with
-a deprecation warning and refused from 0.10.0.
+I/O methods that write bytes (`binaryContents:`, `nextPutBytes:`, UDP
+`send:`): since 0.10.0 they refuse an `Array` with an `Error` that names
+`ByteArray withAll:` (0.9.0 accepted one with a deprecation warning).
 
 The same byte arrays feed the checksums and digests, which are one-shot
 functions (there are no incremental objects):

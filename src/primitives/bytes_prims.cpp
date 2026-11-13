@@ -16,6 +16,7 @@
 #include <protoio/digest.h>
 #include <protoio/encoding.h>
 #include <protoio/error.h>
+#include <protoio/random.h>
 
 #include <cerrno>
 #include <cmath>
@@ -123,6 +124,34 @@ PRIM(prim_BytesWithAll) {
     for (proto::proto_ulong i = 0; i < n; ++i)
         out.push_back(byteOf(ctx, list->getAt(ctx, listIndex(i))));
     return makeBytes(ctx, out);
+}
+
+// ByteArray __randomBytes: n -> n bytes from the operating system's
+// cryptographically secure generator (protoio::random::bytes), as a frozen
+// value like every other ByteArray. n is a SmallInteger from 0 to
+// kMaxRandomBytes; anything else signals InvalidArgument. The draw runs
+// unmanaged: getrandom may wait for the kernel pool at boot, and the lambda
+// touches no protoCore object (only C++ values); the value is built after
+// the bracket, with the context managed again.
+constexpr long long kMaxRandomBytes = 1048576;  // 1 MiB (protoBaseST plan, C4)
+
+PRIM(prim_RandomBytes) {
+    ARGS(1, "__randomBytes:");
+    const PO* v = a[0];
+    if (!v || v == PROTO_NONE || !v->isInteger(ctx) || !proto::isSmallInt(v))
+        throw ClassedErrorSignal("InvalidArgument",
+                                 "ByteArray randomBytes: the size must be an Integer from 0 to "
+                                     + std::to_string(kMaxRandomBytes));
+    const long long n = v->asLong(ctx);
+    if (n < 0 || n > kMaxRandomBytes)
+        throw ClassedErrorSignal("InvalidArgument",
+                                 "ByteArray randomBytes: the size must be from 0 to "
+                                     + std::to_string(kMaxRandomBytes) + ", not "
+                                     + std::to_string(n));
+    const std::string bytes = unmanaged(ctx, [n] {
+        return protoio::random::bytes(static_cast<std::size_t>(n));
+    }, "ByteArray randomBytes:");
+    return makeBytes(ctx, bytes);
 }
 
 PRIM(prim_BytesSize) {
@@ -555,29 +584,42 @@ PRIM(prim_Base64Decode) {
 } // namespace
 
 void installBytesPrimitives(STRuntime& rt) {
-    auto& reg = rt.registry();
     const proto::ProtoObject* p = rt.bootstrap().byteArrayProto;
-    struct Entry { const char* sel; PrimFn fn; };
+    struct Entry { const char* sel; proto::ProtoMethod fn; };
     const Entry entries[] = {
-        {"__bytesNew:", prim_BytesNew},           {"__bytesWithAll:", prim_BytesWithAll},
-        {"__bytesSize", prim_BytesSize},          {"__bytesAt:", prim_BytesAt},
-        {"__bytesCopyFrom:to:", prim_BytesCopyFromTo}, {"__bytesConcat:", prim_BytesConcat},
-        {"__bytesEquals:", prim_BytesEquals},     {"__bytesHash", prim_BytesHash},
-        {"__bytesHex", prim_BytesHex},            {"__fromHex:", prim_BytesFromHex},
-        {"__utf8Encode:", prim_Utf8Encode},       {"__utf8Decode", prim_Utf8Decode},
-        {"__bytesJoin:", prim_BytesJoin},
-        {"__unpackUnsignedAt:width:bigEndian:", prim_UnpackUnsigned},
-        {"__unpackSignedAt:width:bigEndian:", prim_UnpackSigned},
-        {"__unpackFloatAt:width:bigEndian:", prim_UnpackFloat},
-        {"__packUnsigned:width:bigEndian:", prim_PackUnsigned},
-        {"__packSigned:width:bigEndian:", prim_PackSigned},
-        {"__packFloat:width:bigEndian:", prim_PackFloat},
-        {"__crc32Continuing:", prim_Crc32},       {"__crc32Combine:with:length:", prim_Crc32Combine},
-        {"__blake2bSize:key:", prim_Blake2b},     {"__sha256", prim_Sha256},
-        {"__hmacSha256Key:message:", prim_HmacSha256},
-        {"__base64Encode", prim_Base64Encode},    {"__base64Decode:", prim_Base64Decode},
+        {"__bytesSize", primitiveMethod<prim_BytesSize>},
+        {"__bytesAt:", primitiveMethod<prim_BytesAt>},
+        {"__bytesCopyFrom:to:", primitiveMethod<prim_BytesCopyFromTo>},
+        {"__bytesConcat:", primitiveMethod<prim_BytesConcat>},
+        {"__bytesEquals:", primitiveMethod<prim_BytesEquals>},
+        {"__bytesHash", primitiveMethod<prim_BytesHash>},
+        {"__bytesHex", primitiveMethod<prim_BytesHex>},
+        {"__utf8Decode", primitiveMethod<prim_Utf8Decode>},
+        {"__unpackUnsignedAt:width:bigEndian:", primitiveMethod<prim_UnpackUnsigned>},
+        {"__unpackSignedAt:width:bigEndian:", primitiveMethod<prim_UnpackSigned>},
+        {"__unpackFloatAt:width:bigEndian:", primitiveMethod<prim_UnpackFloat>},
+        {"__crc32Continuing:", primitiveMethod<prim_Crc32>},
+        {"__blake2bSize:key:", primitiveMethod<prim_Blake2b>},
+        {"__sha256", primitiveMethod<prim_Sha256>},
+        {"__base64Encode", primitiveMethod<prim_Base64Encode>},
     };
-    for (const Entry& e : entries) bindPrimitive(rt, p, e.sel, reg.registerPrim(e.fn));
+    for (const Entry& e : entries) bindPrimitive(rt, p, e.sel, e.fn);
+    // The constructors and functions sent to `ByteArray` itself
+    // (lib/kernel/bytes.st, digest.st, stream.st, string.st): class side (D52).
+    const Entry classSide[] = {
+        {"__bytesNew:", primitiveMethod<prim_BytesNew>},           {"__bytesWithAll:", primitiveMethod<prim_BytesWithAll>},
+        {"__fromHex:", primitiveMethod<prim_BytesFromHex>},
+        {"__crc32Combine:with:length:", primitiveMethod<prim_Crc32Combine>},
+        {"__hmacSha256Key:message:", primitiveMethod<prim_HmacSha256>},
+        {"__utf8Encode:", primitiveMethod<prim_Utf8Encode>},
+        {"__bytesJoin:", primitiveMethod<prim_BytesJoin>},
+        {"__packUnsigned:width:bigEndian:", primitiveMethod<prim_PackUnsigned>},
+        {"__packSigned:width:bigEndian:", primitiveMethod<prim_PackSigned>},
+        {"__packFloat:width:bigEndian:", primitiveMethod<prim_PackFloat>},
+        {"__base64Decode:", primitiveMethod<prim_Base64Decode>},
+        {"__randomBytes:", primitiveMethod<prim_RandomBytes>},
+    };
+    for (const Entry& e : classSide) bindClassPrimitive(rt, p, e.sel, e.fn);
 }
 
 } // namespace protoST

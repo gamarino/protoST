@@ -38,20 +38,24 @@ Fraction >> asFraction
 Fraction >> + aNumber
   aNumber isFloat ifTrue: [^ self asFloat + aNumber].
   aNumber isInteger ifTrue: [^ Fraction numerator: numerator + (aNumber * denominator) denominator: denominator].
+  (self _isAdaptor: aNumber) ifTrue: [^ aNumber adaptToNumber: self andSend: #+].
   ^ Fraction numerator: (numerator * aNumber denominator) + (aNumber numerator * denominator)
       denominator: denominator * aNumber denominator.
 
 Fraction >> - aNumber
+  (self _isAdaptor: aNumber) ifTrue: [^ aNumber adaptToNumber: self andSend: #-].
   ^ self + aNumber negated.
 
 Fraction >> * aNumber
   aNumber isFloat ifTrue: [^ self asFloat * aNumber].
   aNumber isInteger ifTrue: [^ Fraction numerator: numerator * aNumber denominator: denominator].
+  (self _isAdaptor: aNumber) ifTrue: [^ aNumber adaptToNumber: self andSend: #*].
   ^ Fraction numerator: numerator * aNumber numerator denominator: denominator * aNumber denominator.
 
 Fraction >> / aNumber
   aNumber isFloat ifTrue: [^ self asFloat / aNumber].
   aNumber isInteger ifTrue: [^ Fraction numerator: numerator denominator: denominator * aNumber].
+  (self _isAdaptor: aNumber) ifTrue: [^ aNumber adaptToNumber: self andSend: #/].
   ^ Fraction numerator: numerator * aNumber denominator denominator: denominator * aNumber numerator.
 
 Fraction >> // aNumber
@@ -71,6 +75,7 @@ Fraction >> abs
 
 Fraction >> < aNumber
   aNumber isFloat ifTrue: [^ self asFloat < aNumber].
+  (self _isAdaptor: aNumber) ifTrue: [^ aNumber adaptToNumber: self andSend: #<].
   ^ (self - aNumber) numerator < 0.
 
 Fraction >> > aNumber
@@ -83,18 +88,28 @@ Fraction >> >= aNumber
   ^ (self < aNumber) not.
 
 Fraction >> = aNumber
-  aNumber isNumber ifFalse: [^ false].
+  aNumber isNumber ifFalse: [
+    ^ (self _isAdaptor: aNumber) and: [(aNumber adaptToNumber: self andSend: #=) == true]].
   "Exact, as in Pharo: (1/10) = 0.1 is false, (1/2) = 0.5 is true."
   aNumber isFloat ifTrue: [^ aNumber isFinite and: [self = aNumber asExactFraction]].
   aNumber isInteger ifTrue: [^ false].
   ^ numerator = aNumber numerator and: [denominator = aNumber denominator].
 
+"An argument that is not a Number but adapts to one (a Decimal, from the
+ decimal module): it answers the operation through adaptToNumber:andSend:,
+ as it does for a native receiver (the numeric primitives ask it the same
+ way). > , <= and >= reach it through <."
+Number >> _isAdaptor: anObject
+  ^ anObject isNumber not and: [anObject respondsTo: #adaptToNumber:andSend:].
+
 Fraction >> hash
-  "Equal to the hash of the Float it equals, when there is one."
-  | f |
-  f := self asFloat.
-  (f isFinite and: [f asExactFraction = self]) ifTrue: [^ f hash].
-  ^ numerator hash bitXor: denominator hash.
+  "CPython's hash of a Fraction (R3), equal to the hash of every equal
+   Integer, Float and Decimal: with P = 2^61 - 1, |numerator| * denominator^-1
+   modulo P, with the numerator's sign; 314159 (the hash of infinity) when the
+   denominator is a multiple of P and has no inverse; -1 becomes -2. P is
+   prime, so the inverse is denominator^(P - 2) modulo P. The primitive
+   (Integer >> __hashOver:) computes it on machine words."
+  ^ numerator __hashOver: denominator.
 
 Fraction >> truncated
   ^ numerator quo: denominator.
@@ -115,11 +130,9 @@ Fraction >> printOn: aStream
 "Number has a native printString for native numbers; a Fraction prints
  through printOn: like any other object."
 Fraction >> printString
-  self isClassObject ifTrue: [^ self name].
   ^ String streamContents: [:s | self printOn: s].
 
 Fraction >> displayString
-  self isClassObject ifTrue: [^ self name].
   ^ numerator printString , '/' , denominator printString.
 
 "Double dispatch from the native primitives: a native number op aFraction."
@@ -135,6 +148,7 @@ Fraction >> adaptToNumber: rcvr andSend: selector
 Integer >> / aNumber
   aNumber isInteger ifTrue: [^ Fraction numerator: self denominator: aNumber].
   aNumber isFloat ifTrue: [^ self asFloat / aNumber].
+  (self _isAdaptor: aNumber) ifTrue: [^ aNumber adaptToNumber: self andSend: #/].
   ^ (Fraction basicNew setNumerator: self denominator: 1) / aNumber.
 
 Integer >> numerator

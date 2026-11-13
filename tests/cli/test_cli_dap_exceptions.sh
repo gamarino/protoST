@@ -14,6 +14,9 @@
 #      for one no handler takes (an Error signalled in a method, and a
 #      primitive's error at the top level), after which the program ends with
 #      the error.
+#   5. uncaught: an exception whose class answers false to isResumable (not
+#      an Error) stops when no handler takes it, as it ends the activation
+#      (D54); an unhandled Warning, which resumes, does not.
 set -euo pipefail
 PROTOST="$1"
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -84,6 +87,18 @@ c := Calc new.
 r := [ c risky: 1 ] on: Error do: [ :e | 'caught' ].
 r displayNl.
 #(1 2) at: 5.
+'not reached' displayNl.
+EOF
+
+# An exception class that declares itself non-resumable by overriding
+# isResumable; the unhandled signal is on line 6.
+cat > "$WORK/uncaught3.st" <<'EOF'
+Exception subclass: #NonRes.
+NonRes >> isResumable
+  ^ false.
+Warning signal: 'only a warning'.
+'after warning' displayNl.
+NonRes signal: 'boom nonres'.
 'not reached' displayNl.
 EOF
 
@@ -187,12 +202,31 @@ try:
         exited = [e for e in c.events if e.get("event") == "exited"]
         check(exited and exited[0]["body"]["exitCode"] == 1, "exited %r" % exited)
         check(rc == 0, "adapter exit %r" % rc)
+    elif case == "uncaught3":
+        prog = path("uncaught3.st")
+        c.start(prog, exception_filters=["uncaught"])
+        ev, _ = c.stopped()
+        b = ev["body"]
+        tid = b["threadId"]
+        check("boom nonres" in b.get("text", ""), "text %r" % b)
+        frames = c.top_frame(tid)
+        check(frames[0]["line"] == 6, "frame %r" % frames[0])
+        info = c.request("exceptionInfo", {"threadId": tid})["body"]
+        check(info["breakMode"] == "unhandled", "breakMode %r" % info)
+        c.request("continue", {"threadId": tid})
+        rc = c.finish()
+        check(len(exception_stops(c)) == 1, "one stop (not the Warning)")
+        check("after warning" in c.output_text(), "the Warning resumed")
+        check("not reached" not in c.output_text(), "ran past the exception")
+        exited = [e for e in c.events if e.get("event") == "exited"]
+        check(exited and exited[0]["body"]["exitCode"] == 1, "exited %r" % exited)
+        check(rc == 0, "adapter exit %r" % rc)
     print("OK", case)
 finally:
     c.kill()
 PYEOF
 
-for case in raised control off uncaught1 uncaught2; do
+for case in raised control off uncaught1 uncaught2 uncaught3; do
     "${PYTHON:-python3}" "$WORK/driver.py" "$HERE" "$PROTOST" "$WORK" "$case"
 done
 echo OK

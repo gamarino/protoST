@@ -238,13 +238,13 @@ several cores without locks.
 
 ## Status
 
-Version 0.9.1 (2026-11-13); built from source it requires protoCore 3.4.0 or
-newer (SOVERSION 5) and protoIO 0.4.0 (tag `v0.4.0`) or a later 0.4.x; its `.deb`
-(below) requires protoCore 3.6.0. CI builds against
-protoCore 3.6.0 (tag `v3.6.0`) and the 3.4.0 floor. On 0.9.1 (2026-11-13, against protoCore 3.6.0), `ctest` ran 1291 cases on Linux, all passing: 685
-conformance programs, 494 unit tests, 44 examples, 42 CLI tests, 23
-documentation checks (every example with a stated result in the documents,
-plus the checker's self-test) and 3 UMD host cases. Since 0.6.2 protoST lets
+Version 0.10.0 (2026-11-13), the protoBaseST groundwork: `ByteArray randomBytes:`,
+`Time utcMicroseconds`, `Exception >> outer`, `lib/decimal.st`, `lib/calendar.st`,
+`lib/uuid.st`, and the fixes for S37 to S40. Built from source it requires protoCore 3.4.0 or
+newer (SOVERSION 5) and protoIO 0.5.0 (tag `v0.5.0`) or a later 0.5.x; its `.deb`
+(below) requires protoCore 3.6.0. CI builds against protoCore 3.6.0 (tag `v3.6.0`) and
+the 3.4.0 floor. On 0.10.0, `ctest` ran 1461 cases on Linux, all passing, in the Release and
+assertion builds, and the 636 cases of the `tsan` label passed under ThreadSanitizer. Since 0.6.2 protoST lets
 protoCore's adaptive heap controller size the heap (budget: 75 % of physical
 memory or of the process memory limit); `PROTOCORE_HEAP_LIMIT_CELLS` forces a
 fixed limit and `PROTOCORE_ADAPTIVE_HEAP=0` restores 0.6.1's fixed 640 MB
@@ -259,7 +259,7 @@ known deviations from Smalltalk-80 and the open bugs are tracked in
 
 protoST depends on [protoCore](https://github.com/numaes/protoCore) 3.4.0 or
 newer (below 4.0), which must be built first, on
-[protoIO](https://github.com/gamarino/protoIO) 0.4.0 or a later 0.4.x at build time (a sibling
+[protoIO](https://github.com/gamarino/protoIO) 0.5.0 or a later 0.5.x at build time (0.9.0 needed 0.4.x; a sibling
 checkout `../protoIO`, or its `protoio-dev` package; it is linked statically),
 and on OpenSSL (`libssl-dev`) and libreadline. 3.4.0 is a hard floor (it
 changed `ProtoContext`'s layout, SOVERSION 5, so an older `libprotoCore` does
@@ -314,7 +314,7 @@ commands, and what differs on Windows, are in
 
 ## Installation
 
-protoST can be packaged with CPack. The 0.9.1 release has a Linux `.deb`
+protoST can be packaged with CPack. The 0.10.0 release has a Linux `.deb`
 attached to its GitHub release (below, with protoCore 3.6.0); other packages
 are built from source as shown below. Every package depends on
 [protoCore](https://github.com/numaes/protoCore) — install protoCore's package
@@ -342,11 +342,11 @@ the GitHub releases (or built as below):
 wsl --install -d Ubuntu-24.04        # in PowerShell, once
 # then, in the Ubuntu shell:
 wget https://github.com/numaes/protoCore/releases/download/v3.6.0/protoCore-3.6.0-Linux.deb
-wget https://github.com/gamarino/protoST/releases/download/v0.9.1/protost-0.9.1-Linux.deb
-sudo apt install ./protoCore-3.6.0-Linux.deb ./protost-0.9.1-Linux.deb
+wget https://github.com/gamarino/protoST/releases/download/v0.10.0/protost-0.10.0-Linux.deb
+sudo apt install ./protoCore-3.6.0-Linux.deb ./protost-0.10.0-Linux.deb
 ```
 
-These are the 0.9.1 release packages. Built from source, protoST 0.9.1 needs
+These are the 0.10.0 release packages. Built from source, protoST 0.10.0 needs
 protoCore 3.4.0 or later; the `.deb` was built against 3.6.0, the release
 to install with it, and depends on `protocore (>= 3.6.0)` through protoCore's
 shlibs file (an older protoCore package is not enough: upgrade it with the

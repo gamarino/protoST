@@ -110,32 +110,31 @@ const proto::ProtoObject* prim_dispatch_boolEq(STRuntime&, proto::ProtoContext*,
 } // anon
 
 void installBoolPrimitives(STRuntime& rt) {
-    auto& reg = rt.registry();
     auto& b   = rt.bootstrap();
     bindPrimitive(rt, b.booleanProto, "ifTrue:",
-                  reg.registerPrim(prim_dispatch_ifTrue));
+                  primitiveMethod<prim_dispatch_ifTrue>);
     bindPrimitive(rt, b.booleanProto, "ifFalse:",
-                  reg.registerPrim(prim_dispatch_ifFalse));
+                  primitiveMethod<prim_dispatch_ifFalse>);
     // D9: two-armed conditionals and the boolean combinators.
     bindPrimitive(rt, b.booleanProto, "ifTrue:ifFalse:",
-                  reg.registerPrim(prim_dispatch_ifTrueIfFalse));
+                  primitiveMethod<prim_dispatch_ifTrueIfFalse>);
     bindPrimitive(rt, b.booleanProto, "ifFalse:ifTrue:",
-                  reg.registerPrim(prim_dispatch_ifFalseIfTrue));
+                  primitiveMethod<prim_dispatch_ifFalseIfTrue>);
     bindPrimitive(rt, b.booleanProto, "and:",
-                  reg.registerPrim(prim_dispatch_and));
+                  primitiveMethod<prim_dispatch_and>);
     bindPrimitive(rt, b.booleanProto, "or:",
-                  reg.registerPrim(prim_dispatch_or));
+                  primitiveMethod<prim_dispatch_or>);
     bindPrimitive(rt, b.booleanProto, "&",
-                  reg.registerPrim(prim_dispatch_amp));
+                  primitiveMethod<prim_dispatch_amp>);
     bindPrimitive(rt, b.booleanProto, "|",
-                  reg.registerPrim(prim_dispatch_pipe));
+                  primitiveMethod<prim_dispatch_pipe>);
     bindPrimitive(rt, b.booleanProto, "xor:",
-                  reg.registerPrim(prim_dispatch_xor));
+                  primitiveMethod<prim_dispatch_xor>);
     bindPrimitive(rt, b.booleanProto, "not",
-                  reg.registerPrim(prim_dispatch_not));
+                  primitiveMethod<prim_dispatch_not>);
     // D18: value-equality on Boolean (identity for tagged immediates).
     bindPrimitive(rt, b.booleanProto, "=",
-                  reg.registerPrim(prim_dispatch_boolEq));
+                  primitiveMethod<prim_dispatch_boolEq>);
 }
 
 } // namespace protoST

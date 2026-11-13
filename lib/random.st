@@ -24,7 +24,7 @@ USAGE
   m := Import from: 'random'.
   r := m Random seed: 42.
   r next.               => a Float in [0, 1)
-  r nextInt: 6.         => an integer in 1..6
+  r nextInt: 6.         => an integer in 1..6 (from the state's high bits)
   r between: 10 and: 20. => an integer in 10..20
   r next: 3.            => an Array of 3 Floats in [0, 1)
 
@@ -72,12 +72,19 @@ Random >> next: n
   [ result size < n ] whileTrue: [ result add: self next ].
   ^ result asArray.
 
-"A pseudo-random integer in 1..n inclusive. Signals an Error when n < 1."
+"A pseudo-random integer in 1..n inclusive. Signals an Error when n < 1.
+ The draw scales the whole 32-bit state into the range (see between:and:)."
 Random >> nextInt: n
   n < 1 ifTrue: [ ^ Error signal: 'Random>>nextInt: argument must be >= 1' ].
-  ^ (self _step \\ n) + 1.
+  ^ ((self _step * n) // 4294967296) + 1.
 
-"A pseudo-random integer in lo..hi inclusive. Signals an Error when lo > hi."
+"A pseudo-random integer in lo..hi inclusive. Signals an Error when lo > hi.
+ The draw is floor(state * size / 2^32): it is decided by the state's HIGH
+ bits. Taking the state modulo the size (up to 0.9.x) used the low bits, and
+ in a power-of-two-modulus LCG bit k has period 2^(k+1): bit 0 alternates, so
+ every even range alternated parity on successive draws. The arithmetic is
+ exact (a LargeInteger when size exceeds 2^21); a range wider than 2^32 values
+ is reached only at 2^32 evenly spaced points, the generator's resolution."
 Random >> between: lo and: hi
   lo > hi ifTrue: [ ^ Error signal: 'Random>>between:and: requires lo <= hi' ].
-  ^ lo + (self _step \\ (hi - lo + 1)).
+  ^ lo + ((self _step * (hi - lo + 1)) // 4294967296).

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(protoST VERSION 0.9.1 LANGUAGES CXX)
+project(protoST VERSION 0.10.0 LANGUAGES CXX)
 
 # The one place the version is written: every binary and library reads it
 # through PROTOST_VERSION (include/protoST/STRuntime.h).
@@ -112,9 +112,7 @@ endif()
 # whose equality 3.5.0 changed, so the floor stays 3.4.0. 3.5.2 (the
 # release CI and the .deb build against) fixes a race in ProtoSpace::newThread
 # that protoST reaches by starting workers from worker threads; it changes no
-# API, so it is not the floor either. 3.6.0 (the release CI and the .deb now
-# build against) keeps SOVERSION 5 and changes ProtoList's internal form only
-# (an RRB tree), so it is not the floor either.
+# API, so it is not the floor either.
 set(PROTOCORE_MIN_VERSION      "3.4.0")
 set(PROTOCORE_MIN_VERSION_FULL "3.4.0")
 set(PROTOCORE_NEXT_MAJOR       "4.0.0")
@@ -234,6 +232,7 @@ add_library(protost_runtime STATIC
     src/runtime/STRuntime.cpp
     src/runtime/TimerService.cpp
     src/runtime/ExecutionEngine.cpp
+    src/runtime/TransientPin.cpp
     src/runtime/Interrupt.cpp
     src/runtime/Bootstrap.cpp
     src/runtime/HandlerStack.cpp
@@ -264,6 +263,19 @@ add_library(protost_runtime STATIC
     src/dap/DapTransport.cpp
     src/dap/DapServer.cpp
 )
+
+# The dispatch loop is threaded (computed goto): each handler ends in its own
+# indirect jump, so each is predicted from its own history. GCC first merges
+# those jumps into one and then re-duplicates the shared block only when it is
+# at most max-goto-duplication-insns long (8 by default); the dispatch block,
+# which loads the jump table's address and decodes the next instruction, is
+# longer, so without this the loop kept 2 to 3 indirect jumps instead of one
+# per handler (0.10.0, review R3-4). GCC only: Clang keeps them apart, and
+# MSVC has no computed goto.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set_source_files_properties(src/runtime/ExecutionEngine.cpp
+        PROPERTIES COMPILE_OPTIONS "--param=max-goto-duplication-insns=32")
+endif()
 target_include_directories(protost_runtime PUBLIC src include ${PROTOCORE_INCLUDE_DIRS})
 target_link_libraries(protost_runtime PUBLIC nlohmann_json::nlohmann_json)
 target_link_libraries(protost_frontend PRIVATE protost_warnings)
@@ -279,7 +291,9 @@ target_link_libraries(protost_runtime PRIVATE protost_warnings)
 # link interface; dpkg-shlibdeps turns it into the package's libssl
 # dependency.
 #
-# The floor is 0.4.0: file::EndGuard, the end guard of BinaryFile (append:,
+# The floor is 0.5.0: random::bytes (ByteArray randomBytes:) and
+# clock::utcMicroseconds (Time utcMicroseconds). 0.4.0 brought
+# file::EndGuard, the end guard of BinaryFile (append:,
 # writeAt:bytes:, truncateTo:), and Error::Kind::Conflict, its refusal
 # (ProtoioErrors.h maps it to Error). 0.3.0 brought Error::Kind::Internal, a failure inside a library
 # protoIO relies on (ProtoioErrors.h maps it to InternalError), with the binary
@@ -295,7 +309,7 @@ target_link_libraries(protost_runtime PRIVATE protost_warnings)
 # console reads and open files that can be deleted or renamed. protoIO's
 # package is compatible within one minor version (SameMinorVersion), so 0.1
 # would refuse 0.2.x.
-set(PROTOIO_MIN_VERSION "0.4.0")
+set(PROTOIO_MIN_VERSION "0.5.0")
 if(NOT PROTOST_TSAN)
     find_package(protoIO ${PROTOIO_MIN_VERSION} CONFIG QUIET)
 endif()
@@ -307,8 +321,8 @@ elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../protoIO/CMakeLists.txt")
                      "${CMAKE_CURRENT_BINARY_DIR}/_protoIO" EXCLUDE_FROM_ALL)
     # A source tree carries no version check of its own: compare here, with
     # the package's rule (SameMinorVersion): the same major.minor as the
-    # floor, and a patch level at least the floor's. So 0.4.x is accepted from
-    # 0.4.0 on, and 0.3.x and 0.5.x are refused, as an installed package is.
+    # floor, and a patch level at least the floor's. So 0.5.x is accepted from
+    # 0.5.0 on, and 0.4.x and 0.6.x are refused, as an installed package is.
     get_directory_property(_protoIO_version
         DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../protoIO" DEFINITION PROJECT_VERSION)
     string(REGEX MATCH "^[0-9]+\\.[0-9]+" _protoIO_minor "${_protoIO_version}")
@@ -547,6 +561,9 @@ add_test(NAME cli_memory_bounded
 add_test(NAME cli_oom_clean
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_oom_clean.sh $<TARGET_FILE:protost>)
 
+add_test(NAME cli_array_new_headroom
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_array_new_headroom.sh $<TARGET_FILE:protost>)
+
 if(WIN32)
     # Ctrl-C is a console control event on Windows, which Git Bash cannot send
     # to a native program: the Windows variant runs in a console of its own.
@@ -601,8 +618,25 @@ add_test(NAME cli_callback_error_reported
 add_test(NAME cli_buried_actor_deadlock
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_buried_actor_deadlock.sh $<TARGET_FILE:protost>)
 
+add_test(NAME cli_helped_message_handler_actions
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_helped_message_handler_actions.sh $<TARGET_FILE:protost>)
+
+add_test(NAME cli_nested_wait_progress
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_nested_wait_progress.sh $<TARGET_FILE:protost>)
+
+add_test(NAME cli_future_callback_barrier
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_future_callback_barrier.sh $<TARGET_FILE:protost>)
+
 add_test(NAME cli_kernel
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_kernel.sh $<TARGET_FILE:protost> ${CMAKE_BINARY_DIR}/cli-scratch/kernel)
+# cli_kernel measures startup in wall-clock time (a 100 ms budget), so it runs
+# alone. Under `ctest -j2` it used to share the runner with
+# cli_nested_wait_progress, whose 256 workers keep every core busy (about 80
+# CPU-seconds in 15 s, measured locally): in the 0.10.0 assertions job the two
+# overlapped and even `protost --version` took 146 ms, so the budget failed on
+# the neighbour's load, not on protoST's startup (271 ms there, about 40 ms
+# alone).
+set_tests_properties(cli_kernel PROPERTIES RUN_SERIAL TRUE)
 
 add_test(NAME cli_debugger
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_debugger.sh $<TARGET_FILE:protost> ${CMAKE_SOURCE_DIR}/tests/fixtures)
@@ -670,6 +704,12 @@ add_test(NAME cli_gc_reclaims
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_gc_reclaims.sh $<TARGET_FILE:protost>)
 add_test(NAME cli_gc_recursion_reclaims
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_gc_recursion_reclaims.sh $<TARGET_FILE:protost>)
+# S3: an allocation-free loop must not stall a collection; the fixture is the
+# deadlock shape (a thread spinning on a flag a collecting thread sets). Its
+# control, with the safepoint hook disabled, is a unit case
+# (tests/CMakeLists.txt, "S3: ... (hook disabled)").
+add_test(NAME cli_gc_spin_safepoint
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_gc_spin_safepoint.sh $<TARGET_FILE:protost>)
 
 # Track S: actor message payloads that only the mailbox references must survive
 # the collections that run while they are queued. Needs S15 fixed to mean
@@ -706,14 +746,25 @@ endif()
 # stops worker threads and talks to them from its own thread (the DAP reader,
 # or the text prompt), so each DAP session is a concurrency test.
 set_tests_properties(cli_actor_unobserved_error cli_callback_error_reported
-                     cli_buried_actor_deadlock cli_actor_stress cli_concurrent_first_call
-                     cli_gc_shutdown_stress cli_gc_reclaims cli_gc_recursion_reclaims
+                     cli_buried_actor_deadlock cli_helped_message_handler_actions
+                     cli_nested_wait_progress cli_future_callback_barrier
+                     cli_actor_stress cli_concurrent_first_call
+                     cli_gc_shutdown_stress cli_gc_reclaims cli_gc_recursion_reclaims cli_gc_spin_safepoint
                      cli_actor_payload_gc cli_binary_lock cli_sigint
                      cli_debugger cli_repl
                      cli_dap cli_dap_session cli_dap_output cli_dap_exceptions
                      cli_dap_stepping cli_dap_threads cli_dap_conditions
                      cli_dap_sources cli_dap_gc
                      PROPERTIES ${PROTOST_TSAN_TEST_PROPERTIES})
+# cli_nested_wait_progress bounds each of its runs with `timeout`; under TSan
+# the chain of 5000 (256 workers) needs more than its default 120 s, so the
+# bound is raised as the conformance programs' is, and the test's own ctest
+# limit with it (the script runs ten cases).
+if(PROTOST_TSAN)
+    set_tests_properties(cli_nested_wait_progress PROPERTIES
+        ENVIRONMENT_MODIFICATION "TSAN_OPTIONS=set:${PROTOST_TSAN_OPTIONS};NESTED_WAIT_TIMEOUT=set:900"
+        TIMEOUT 1800)
+endif()
 
 # --- Track 10: Installation packaging ---------------------------------------
 # Install RPATH so an installed `bin/protost` finds libprotoCore.so under

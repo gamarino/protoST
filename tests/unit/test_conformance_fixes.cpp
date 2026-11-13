@@ -16,6 +16,7 @@
 #include <stdexcept>
 
 #include "protoST/STRuntime.h"
+#include "protoST/STUncaughtError.h"
 #include "runtime/UnhandledSTException.h"
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
@@ -118,7 +119,7 @@ TEST_CASE("conformance #4: wait on a directly-rejected Future re-raises",
     // than silently returning the cause.
     REQUIRE_THROWS_AS(
         runSrc(rt, "f := Future new. f rejectWith: 'boom'. f wait."),
-        protoST::UnhandledSTException);
+        protoST::STUncaughtError);   // K20: detached at the embedder boundary
 }
 
 TEST_CASE("conformance #4: wait re-raises a rejection from an actor method",
@@ -135,7 +136,7 @@ TEST_CASE("conformance #4: wait re-raises a rejection from an actor method",
         "  ^ self. "
         "a := Faulty new asActor. "
         "(a boom) wait.";
-    REQUIRE_THROWS_AS(runSrc(rt, src), protoST::UnhandledSTException);
+    REQUIRE_THROWS_AS(runSrc(rt, src), protoST::STUncaughtError);   // K20
 }
 
 TEST_CASE("conformance #4: a wait on a resolved actor Future returns the value",

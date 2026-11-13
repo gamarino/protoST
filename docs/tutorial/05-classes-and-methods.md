@@ -374,15 +374,18 @@ $ ./build/protost class-side.st
 11
 ```
 
-`Counter class >> startingAt: n` installs `startingAt:` on the *class object*
-`Counter`. Inside it, `self` is the class (so `self new` makes a fresh
+`Counter class >> startingAt: n` installs `startingAt:` on `Counter`'s
+*metaclass*, `Counter class`, the object that holds the messages the class
+object `Counter` answers. Inside it, `self` is the class (so `self new` makes a fresh
 instance). Callers write `Counter startingAt: 10` and never see the `new` /
 `setValue:` mechanics.
 
 Class-side and instance-side protocols are kept disjoint: a class-side selector
 is reachable from the class object but **not** from an instance — sending
-`startingAt:` to a `Counter` *instance* is a `MessageNotUnderstood`. This is
-deliberate (it is how `new` itself stays a class-only message).
+`startingAt:` to a `Counter` *instance* is a `MessageNotUnderstood`. The
+converse holds too: the class does not answer its instances' messages
+(`Counter increment` is a `MessageNotUnderstood`). This is deliberate, as in
+Pharo (it is how `new` itself stays a class-only message).
 
 > **In Python** this is a `@classmethod` or `@staticmethod`. **In JavaScript**
 > it is a `static` method. **In protoST** it is the `class` marker on the

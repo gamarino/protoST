@@ -20,7 +20,6 @@
 #include <protoio/stream.h>
 
 #include <algorithm>
-#include <atomic>
 #include <cstdio>
 #include <optional>
 #include <stdexcept>
@@ -158,33 +157,21 @@ const PO* stringsArray(STRuntime& rt, proto::ProtoContext* ctx, const std::vecto
     return makeArray(rt, ctx, items);
 }
 
-// The bytes an I/O primitive writes: a String (its UTF-8 bytes), a ByteArray,
-// or, deprecated until protoST 0.10.0, an Array of Integers from 0 to 255.
-// The deprecation warning is printed only once the argument is known to be
-// such an Array, so a wrong argument fails without it.
+// The bytes an I/O primitive writes: a String (its UTF-8 bytes) or a
+// ByteArray. An Array of Integers, accepted with a deprecation warning in
+// 0.9.0, is refused since 0.10.0 (D45, ruling R11) with a message that names
+// the replacement; anything else is refused as before.
 std::string dataArg(STRuntime& rt, proto::ProtoContext* ctx, const PO* v, const char* who) {
     if (v && v != PROTO_NONE) {
         if (v->asString(ctx)) return str(ctx, v, who);
         if (v->isByteBuffer(ctx)) return std::string(bytesView(ctx, v));
+        const PO* d = v->getAttribute(ctx, rt.bootstrap().sym.data);
+        if (d && d != PROTO_NONE && d->asList(ctx))
+            throw NativeError(errorPrefix(who)
+                              + "an Array is not bytes (refused since protoST 0.10.0); pass a "
+                                "ByteArray: ByteArray withAll: anArray, or a literal #[1 2 3]");
     }
-    const PO* d = (v && v != PROTO_NONE)
-        ? v->getAttribute(ctx, rt.bootstrap().sym.data) : nullptr;
-    const proto::ProtoList* l = (d && d != PROTO_NONE) ? d->asList(ctx) : nullptr;
-    if (!l) throw NativeError(errorPrefix(who) + "a String or a ByteArray was expected");
-    std::string out;
-    const proto::proto_ulong n = l->getSize(ctx);
-    out.reserve(n);
-    for (proto::proto_ulong i = 0; i < n; ++i) {
-        const long long b = smallIntegerArg(ctx, l->getAt(ctx, listIndex(i)), who, "a byte");
-        if (b < 0 || b > 255) throw NativeError(errorPrefix(who) + "bytes are integers from 0 to 255");
-        out.push_back(static_cast<char>(b));
-    }
-    // Once per process, whichever thread gets here first.
-    static std::atomic<bool> warned{false};
-    if (!warned.exchange(true))
-        std::fputs("protoST: warning: Array arguments are deprecated and will be refused in protoST 0.10.0;"
-                   " pass a ByteArray (ByteArray withAll: anArray)\n", stderr);
-    return out;
+    throw NativeError(errorPrefix(who) + "a String or a ByteArray was expected");
 }
 
 // ============================================================ primitives
@@ -325,14 +312,26 @@ PRIM(prim_FdAtEnd) {
     return boolean(blocking(rt, ctx, [&] { return protoio::atEnd(fd); }));
 }
 
-// __fdWrite: fd data: aStringOrByteArray. Descriptors 1 and 2 go through the
-// C streams, so the order with Transcript and printNl is kept.
-PRIM(prim_FdWrite) {
-    ARGS(2, "__fdWrite:data:");
-    const int fd = fdArg(ctx, a[0], "nextPutAll:");
-    const std::string data = dataArg(rt, ctx, a[1], "nextPutAll:");
+// __fdWrite: fd data: aStringOrByteArray [for: aSelectorString]. Descriptors
+// 1 and 2 go through the C streams, so the order with Transcript and printNl
+// is kept. The kernel method passes its own selector (nextPutAll:,
+// nextPutBytes:), so a refused argument names what the program sent.
+const PO* fdWrite(STRuntime& rt, proto::ProtoContext* ctx, const PO* r, const PO* const* a,
+                  const std::string& who) {
+    const int fd = fdArg(ctx, a[0], who.c_str());
+    const std::string data = dataArg(rt, ctx, a[1], who.c_str());
     blocking(rt, ctx, [&] { protoio::write(fd, data); });
     return r;
+}
+
+PRIM(prim_FdWrite) {
+    ARGS(2, "__fdWrite:data:");
+    return fdWrite(rt, ctx, r, a, "nextPutAll:");
+}
+
+PRIM(prim_FdWriteFor) {
+    ARGS(3, "__fdWrite:data:for:");
+    return fdWrite(rt, ctx, r, a, str(ctx, a[2], "__fdWrite:data:for:"));
 }
 
 PRIM(prim_FdFlush) {
@@ -395,17 +394,29 @@ PRIM(prim_FileRead) {
     return truthy(a[1]) ? makeBytes(ctx, data) : string(ctx, data);
 }
 
-// __fileWrite: path data: aStringOrBytes append: aBoolean
-PRIM(prim_FileWrite) {
-    ARGS(3, "__fileWrite:data:append:");
-    const std::string path = osStringArg(ctx, a[0], "contents:", "the path");
-    const std::string data = dataArg(rt, ctx, a[1], "contents:");
+// __fileWrite: path data: aStringOrBytes append: aBoolean [for: aSelectorString].
+// The kernel method passes its own selector (contents:, appendContents:,
+// binaryContents:), so a refused argument names what the program sent.
+const PO* fileWrite(STRuntime& rt, proto::ProtoContext* ctx, const PO* r, const PO* const* a,
+                    const std::string& who) {
+    const std::string path = osStringArg(ctx, a[0], who.c_str(), "the path");
+    const std::string data = dataArg(rt, ctx, a[1], who.c_str());
     const bool append = truthy(a[2]);
     unmanaged(ctx, [&] {
         if (append) protoio::file::append(path, data);
         else protoio::file::write(path, data);
     });
     return r;
+}
+
+PRIM(prim_FileWrite) {
+    ARGS(3, "__fileWrite:data:append:");
+    return fileWrite(rt, ctx, r, a, "contents:");
+}
+
+PRIM(prim_FileWriteFor) {
+    ARGS(4, "__fileWrite:data:append:for:");
+    return fileWrite(rt, ctx, r, a, str(ctx, a[3], "__fileWrite:data:append:for:"));
 }
 
 // __fileStat: path — nil when absent, else
@@ -643,40 +654,39 @@ void setProgramArguments(const std::string& programPath, const std::vector<std::
 }
 
 void installIoPrimitives(STRuntime& rt) {
-    auto& reg = rt.registry();
     const proto::ProtoObject* o = rt.bootstrap().objectProto;
-    struct Entry { const char* sel; PrimFn fn; };
+    struct Entry { const char* sel; proto::ProtoMethod fn; };
     const Entry entries[] = {
-        {"__osArguments", prim_Arguments},       {"__osProgramPath", prim_ProgramPath},
-        {"__osGetenv:", prim_Getenv},            {"__osSetenv:to:", prim_Setenv},
-        {"__osEnvironment", prim_Environment},   {"__osExit:", prim_Exit},
-        {"__osPid", prim_Pid},                   {"__osHostName", prim_HostName},
-        {"__osPlatform", prim_Platform},         {"__osCwd", prim_Cwd},
-        {"__osChdir:", prim_Chdir},              {"__osRun:input:", prim_Run},
-        {"__osShell:input:", prim_Shell},
-        {"__osSpawn:", prim_Spawn},              {"__osWaitPid:", prim_WaitPid},
-        {"__osKill:signal:", prim_Kill},
-        {"__fdReadLine:", prim_FdReadLine},      {"__fdReadLine:max:", prim_FdReadLineMax},
-        {"__fdReadAll:", prim_FdReadAll},        {"__httpReadChunked:max:", prim_HttpReadChunked},
-        {"__fdRead:count:binary:", prim_FdRead}, {"__fdAtEnd:", prim_FdAtEnd},
-        {"__fdReadChars:count:", prim_FdReadChars},
-        {"__fdWrite:data:", prim_FdWrite},       {"__fdFlush:", prim_FdFlush},
-        {"__fdClose:", prim_FdClose},            {"__fdTimeout:ms:", prim_FdTimeout},
-        {"__byteSize:", prim_ByteSize},          {"__percentDecode:", prim_PercentDecode},
-        {"__fileOpen:mode:", prim_FileOpen},     {"__fileRead:binary:", prim_FileRead},
-        {"__fileWrite:data:append:", prim_FileWrite}, {"__fileStat:", prim_FileStat},
-        {"__fileDelete:recursive:", prim_FileDelete}, {"__fileMove:to:", prim_FileMove},
-        {"__fileReplace:with:", prim_FileReplace}, {"__fileSyncDirectory:", prim_FileSyncDirectory},
-        {"__fileCopy:to:", prim_FileCopy},       {"__dirCreate:parents:", prim_DirCreate},
-        {"__dirList:", prim_DirList},            {"__fileAbsolute:", prim_FileAbsolute},
-        {"__fileTempDir", prim_TempDir},
-        {"__tcpConnect:port:timeout:", prim_TcpConnect}, {"__tcpListen:port:backlog:", prim_TcpListen},
-        {"__tcpAccept:timeout:", prim_TcpAccept}, {"__sockName:peer:", prim_SockName},
-        {"__tlsConnect:host:verify:", prim_TlsConnect},
-        {"__udpBind:port:", prim_UdpBind},       {"__udpSend:to:port:data:", prim_UdpSend},
-        {"__udpReceive:timeout:binary:", prim_UdpReceive},
+        {"__osArguments", primitiveMethod<prim_Arguments>},       {"__osProgramPath", primitiveMethod<prim_ProgramPath>},
+        {"__osGetenv:", primitiveMethod<prim_Getenv>},            {"__osSetenv:to:", primitiveMethod<prim_Setenv>},
+        {"__osEnvironment", primitiveMethod<prim_Environment>},   {"__osExit:", primitiveMethod<prim_Exit>},
+        {"__osPid", primitiveMethod<prim_Pid>},                   {"__osHostName", primitiveMethod<prim_HostName>},
+        {"__osPlatform", primitiveMethod<prim_Platform>},         {"__osCwd", primitiveMethod<prim_Cwd>},
+        {"__osChdir:", primitiveMethod<prim_Chdir>},              {"__osRun:input:", primitiveMethod<prim_Run>},
+        {"__osShell:input:", primitiveMethod<prim_Shell>},
+        {"__osSpawn:", primitiveMethod<prim_Spawn>},              {"__osWaitPid:", primitiveMethod<prim_WaitPid>},
+        {"__osKill:signal:", primitiveMethod<prim_Kill>},
+        {"__fdReadLine:", primitiveMethod<prim_FdReadLine>},      {"__fdReadLine:max:", primitiveMethod<prim_FdReadLineMax>},
+        {"__fdReadAll:", primitiveMethod<prim_FdReadAll>},        {"__httpReadChunked:max:", primitiveMethod<prim_HttpReadChunked>},
+        {"__fdRead:count:binary:", primitiveMethod<prim_FdRead>}, {"__fdAtEnd:", primitiveMethod<prim_FdAtEnd>},
+        {"__fdReadChars:count:", primitiveMethod<prim_FdReadChars>},
+        {"__fdWrite:data:", primitiveMethod<prim_FdWrite>},       {"__fdWrite:data:for:", primitiveMethod<prim_FdWriteFor>},       {"__fdFlush:", primitiveMethod<prim_FdFlush>},
+        {"__fdClose:", primitiveMethod<prim_FdClose>},            {"__fdTimeout:ms:", primitiveMethod<prim_FdTimeout>},
+        {"__byteSize:", primitiveMethod<prim_ByteSize>},          {"__percentDecode:", primitiveMethod<prim_PercentDecode>},
+        {"__fileOpen:mode:", primitiveMethod<prim_FileOpen>},     {"__fileRead:binary:", primitiveMethod<prim_FileRead>},
+        {"__fileWrite:data:append:", primitiveMethod<prim_FileWrite>}, {"__fileWrite:data:append:for:", primitiveMethod<prim_FileWriteFor>}, {"__fileStat:", primitiveMethod<prim_FileStat>},
+        {"__fileDelete:recursive:", primitiveMethod<prim_FileDelete>}, {"__fileMove:to:", primitiveMethod<prim_FileMove>},
+        {"__fileReplace:with:", primitiveMethod<prim_FileReplace>}, {"__fileSyncDirectory:", primitiveMethod<prim_FileSyncDirectory>},
+        {"__fileCopy:to:", primitiveMethod<prim_FileCopy>},       {"__dirCreate:parents:", primitiveMethod<prim_DirCreate>},
+        {"__dirList:", primitiveMethod<prim_DirList>},            {"__fileAbsolute:", primitiveMethod<prim_FileAbsolute>},
+        {"__fileTempDir", primitiveMethod<prim_TempDir>},
+        {"__tcpConnect:port:timeout:", primitiveMethod<prim_TcpConnect>}, {"__tcpListen:port:backlog:", primitiveMethod<prim_TcpListen>},
+        {"__tcpAccept:timeout:", primitiveMethod<prim_TcpAccept>}, {"__sockName:peer:", primitiveMethod<prim_SockName>},
+        {"__tlsConnect:host:verify:", primitiveMethod<prim_TlsConnect>},
+        {"__udpBind:port:", primitiveMethod<prim_UdpBind>},       {"__udpSend:to:port:data:", primitiveMethod<prim_UdpSend>},
+        {"__udpReceive:timeout:binary:", primitiveMethod<prim_UdpReceive>},
     };
-    for (const Entry& e : entries) bindPrimitive(rt, o, e.sel, reg.registerPrim(e.fn));
+    for (const Entry& e : entries) bindPrimitive(rt, o, e.sel, e.fn);
 }
 
 } // namespace protoST

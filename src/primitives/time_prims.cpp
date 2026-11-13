@@ -1,9 +1,13 @@
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
+#include "primitives/IoBrackets.h"
 #include "protoCore.h"
 
 #include <chrono>
+#include <cstdint>
+
+#include <protoio/clock.h>
 
 namespace protoST {
 
@@ -28,9 +32,15 @@ namespace protoST {
 //     carries one significant digit and a per-operation cost derived from it
 //     is not a measurement.
 //
-// All three values comfortably fit a 56-bit SmallInteger: epoch milliseconds
-// in 2026 are ~1.8e12 and steady-clock microseconds on a host up a year are
-// ~3e13, both far inside 2^55, so no LargeInteger promotion is needed.
+//   * `__utcMicros`       — the wall clock in microseconds since the Unix
+//     epoch, from protoIO's clock::utcMicroseconds (clock_gettime(
+//     CLOCK_REALTIME), GetSystemTimePreciseAsFileTime on Windows): the basis
+//     of `Time utcMicroseconds` and `DateTime nowUTC`. Not monotonic.
+//
+// All four values comfortably fit a 56-bit SmallInteger: epoch milliseconds
+// in 2026 are ~1.8e12, epoch microseconds ~1.8e15 (2^55 is ~3.6e16, reached
+// about the year 3112), and steady-clock microseconds on a host up a year are
+// ~3e13, all far inside 2^55, so no LargeInteger promotion is needed.
 
 namespace {
 
@@ -69,19 +79,32 @@ const proto::ProtoObject* prim_MonotonicMicros(STRuntime&,
     return ctx->fromLong(static_cast<long long>(us.count()));
 }
 
+// `__utcMicros` — epoch microseconds from the wall clock (protoIO). A
+// failure of the system call, practically unreachable, signals InternalError.
+const proto::ProtoObject* prim_UtcMicros(STRuntime&,
+                                         proto::ProtoContext* ctx,
+                                         const proto::ProtoObject*,
+                                         const proto::ProtoObject* const*,
+                                         int) {
+    const std::int64_t us = immediate([] { return protoio::clock::utcMicroseconds(); },
+                                      "Time utcMicroseconds");
+    return ctx->fromLong(static_cast<long long>(us));
+}
+
 } // anon
 
 void installTimePrimitives(STRuntime& rt) {
-    auto& reg = rt.registry();
     auto& b   = rt.bootstrap();
     // Bound on `objectProto` so the `lib/time.st` module — whose classes all
     // descend from Object — can reach them as plain message sends.
     bindPrimitive(rt, b.objectProto, "__currentMillis",
-                  reg.registerPrim(prim_CurrentMillis));
+                  primitiveMethod<prim_CurrentMillis>);
     bindPrimitive(rt, b.objectProto, "__monotonicMillis",
-                  reg.registerPrim(prim_MonotonicMillis));
+                  primitiveMethod<prim_MonotonicMillis>);
     bindPrimitive(rt, b.objectProto, "__monotonicMicros",
-                  reg.registerPrim(prim_MonotonicMicros));
+                  primitiveMethod<prim_MonotonicMicros>);
+    bindPrimitive(rt, b.objectProto, "__utcMicros",
+                  primitiveMethod<prim_UtcMicros>);
 }
 
 } // namespace protoST

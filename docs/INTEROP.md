@@ -214,13 +214,35 @@ A foreign object's methods are attributes. A protoST message send dispatches
 by selector through the shared `getAttribute` walk, so a foreign method is
 invoked with no special-casing. Two kinds of foreign method are reachable:
 
-- **Primitive-backed method.** Stored as a tagged-`SmallInteger` marker that
-  indexes a native-primitive table. protoST's SEND dispatch recognises the
-  marker and calls the primitive. (In the stand-in test the foreign provider
-  registers its primitive in the shared primitive registry — see §5.)
+- **Native method.** A protoCore method cell (`proto::ProtoMethod`), which
+  is also how protoST stores its own primitives (0.10.0). protoST's SEND
+  dispatch calls it directly with the receiver as `self` and the arguments as
+  a `ProtoArguments` descriptor. (In the stand-in test the foreign provider
+  binds a protoST-style primitive, `primitiveMethod<F>` — see §5.)
 - **Attribute-stored value.** A non-callable attribute. A *unary* send reads
   it back as the result (`w label` → the stored value); a non-unary send to a
   value attribute is, correctly, an error.
+
+**A foreign function as a value.** Every send to a native method calls it,
+unary sends included (0.10.0; before, a unary send answered the method cell
+itself), and no protoST expression answers the method cell. A protoST
+program holds a foreign function the way it holds any function: as a block
+over the receiver, or as the selector, sent later with `perform:`:
+
+```smalltalk no-run
+w := m Widget.
+double := [:n | w doubleIt: n].          "a function value: a block"
+(#(1 2 3) collect: double).              "→ #(2 4 6)"
+sel := #doubleIt:.
+w perform: sel with: 5.                  "→ 10"
+```
+
+The block is an ordinary protoST closure: it can be stored, passed and sent
+`value:` like any other, and each evaluation sends `doubleIt:` to `w`, so it
+calls the method `w` has at that moment. Handing the method cell itself to
+another runtime is a host's job (C++), not a protoST program's. Test:
+`tests/unit/test_t5a_interop.cpp`, "a foreign method is held as a value by a
+block or by its selector".
 
 A foreign object also passes transparently through protoST collections
 (`Array`, `OrderedCollection`, …) and through blocks — it is an ordinary
@@ -307,12 +329,12 @@ m double_it(7, name = 'hello')        "→ same shape as the Python call"
 ```
 
 `SEND_CALL` (`src/runtime/ExecutionEngine.cpp`) looks up the bare attribute
-and handles a protoST bytecode method (an object carrying `__bc_ptr__`), a
-protoST primitive marker, and, since the protoCore 3.0.0 port, a
-`proto::ProtoMethod` cell: what a C++ module and `protoscalac` export. The
-method is called through protoCore's array call form with the receiver as
-`self`, the positional arguments, and the named arguments under their interned
-names. The call is a native boundary: a `proto::ProtoException` the method
+and handles a protoST bytecode method (an object carrying `__bc_ptr__`) and a
+`proto::ProtoMethod` cell: a protoST primitive (0.10.0), or what a C++ module
+and `protoscalac` export (since the protoCore 3.0.0 port). The method is
+called directly with the receiver as `self`, the positional arguments, and the
+named arguments under their interned names; a protoST primitive refuses named
+arguments. The call is a native boundary: a `proto::ProtoException` the method
 raises is signalled as a Smalltalk exception with its value unchanged, so
 `on:do:` naming the module's own error type catches it (LANGUAGE.md §8.7), and
 a C++ `std::exception` becomes a plain `Error`. This is exercised with
@@ -375,9 +397,10 @@ on the host's main thread, after the host and destroyed before it. Then:
 - **The boundary is unchanged in meaning.** An import (`tryLoad`) and a send
   (`__st_send__`) from host code cross the runtime boundary as a foreign one
   does (protoST's handlers are not offered a host error; a protoST error no
-  handler takes leaves unchanged) -- but on the caller's own context, which
-  belongs to the shared space, so a call from any protoCore thread of the space
-  is served (the one-thread restriction of §4.1 is for a caller in another
+  handler takes leaves unchanged) -- but on a child context of the caller's
+  context, which belongs to the shared space, so a call from any protoCore
+  thread of the space is served (the child keeps protoST's frames and pins out
+  of the caller's own slots, K18) (the one-thread restriction of §4.1 is for a caller in another
   space).
 
 The sections below describe the shape where each runtime keeps its own space,
@@ -464,7 +487,15 @@ attributes (§0).
   the thread that constructed the runtime may allocate on (D26), and a foreign
   caller has no context of its own in this space to chain to. An import from any
   other thread is refused with a message rather than raced.
-- **One protoST runtime per process**, because the provider is registered once.
+- **One protoST runtime at a time.** A foreign caller reaches protoST through
+  the alias `provider:st`, which names no particular runtime: with two live
+  runtimes the import is refused as ambiguous. Runtimes constructed one after
+  another are fine: each has a provider of its own, retired when the runtime
+  is destroyed, and `provider:st` serves whichever runtime is the live one
+  (KNOWN_ISSUES K1). Retiring blocks new lookups only: destroying a runtime
+  while another runtime still imports from it, or still holds a protoST class
+  or method it imported earlier, is a host lifetime error, since the
+  bytecode those refer to is freed with the runtime.
 - **A namespace snapshot.** protoST's module object is mutable; the namespace the
   importer receives is taken once, at import.
 - **Errors cross unchanged.** An error the module's top level does not handle
@@ -494,7 +525,11 @@ obj->call(ctx, nullptr, createSymbol(ctx, "__st_send__"), obj, args, 3);
   an actor is refused (its messages are asynchronous).
 - For a caller in a space protoST does not own, the message runs on protoST's
   current context on the thread that constructed the runtime (D26); a call from
-  any other thread is refused with a message, as an import is.
+  any other thread is refused with a message, as an import is. A context that is
+  not protoST's own (its root context, or one a protoST engine runs on) is never
+  run on directly: the message runs on a child context of it (K18). This holds
+  for a caller in protoST's own space too, and the rules below apply to every
+  caller: no caller of `__st_send__` is protoST code.
 - **The handlers of protoST code above the send are hidden while it runs**
   (`handlerStackDisableAll`), because the caller's frames lie between them and the
   send. An Error nothing inside the send handles leaves as the
@@ -532,7 +567,7 @@ foreign collection wrapper distinct from a protoST `Array`; and bare
 immediates (`answerInt` 42, `answerBool` true, `answerString` "hello").
 
 The one genuinely runtime-specific piece — a primitive-backed method — is
-registered in the shared primitive registry. In the stand-in the test harness
+bound as a protoST primitive (`primitiveMethod<F>`). In the stand-in the test harness
 plays the *coordinating host* that a live tri-runtime process would be (§6):
 each runtime registers its own primitives, and the host wires the providers
 together.
@@ -577,13 +612,24 @@ libraries. At startup it must, in order:
    `STRuntime::addModuleProviderToChain("provider:js")` and
    `addModuleProviderToChain("provider:py")`; protoJS and protoPython need an
    equivalent call (a small addition on their side if absent).
-5. **Coordinate the primitive registries.** Each runtime owns a primitive
-   table. A foreign object's primitive-backed method indexes the *defining*
-   runtime's table. Either each runtime keeps its own table and a foreign
-   primitive marker is namespaced by runtime, or the host installs a shared
-   dispatch table. The exact mechanism is a host-design decision; T5-a's
-   stand-in sidesteps it by registering the foreign primitive in protoST's
-   own registry — acceptable for a test, not for the real host.
+5. **Native methods need no coordination.** Since 0.10.0 a protoST
+   primitive is a protoCore method cell, the representation every runtime on
+   protoCore shares, so there is no per-runtime primitive table to namespace:
+   a send calls the cell it finds. A protoST primitive honours protoCore's
+   calling convention for every caller. Called directly through protoCore's
+   `call` -- by another runtime, whether in its own space or sharing
+   protoST's, or by embedder C++ -- it runs behind the same boundary
+   `__st_send__` gives (§4.3): the runtime is resolved the same way (a
+   foreign space's caller must be on the thread that constructed the
+   runtime), the call runs on protoST's context (a child of a context that is
+   not protoST's own), the handlers of protoST code above it are hidden, and
+   errors leave as `ProtoException`. protoST's own sends skip that boundary:
+   they leave a per-thread token naming the cell they call, which the
+   primitive consumes. Only primitives are method cells; a method written in
+   Smalltalk is reached through `__st_send__`, which serves both. protoScala
+   calls protoST primitives directly (`umd/protost-interop`,
+   `tutorial/15-modules-calling-smalltalk.scala`); both belong on protoST's
+   pre-merge checklist. Test `tests/unit/test_primitive_methods.cpp`.
 
 ### 6.2 What the demo must show
 
@@ -636,7 +682,11 @@ libraries. At startup it must, in order:
 The sections above are about objects shared inside one process. Since 0.9.0
 protoST also exchanges **bytes** with other languages, and that needs no shared
 `ProtoSpace`: a document, a record or a lock on a file is the same for every
-reader. What was run, with a real second implementation:
+reader. Since 0.10.0 a value that must be unique across processes and
+languages (ProtoBase's UUIDs) can be built from `ByteArray randomBytes:` (the
+operating system's generator, as Python's `os.urandom`) and dated with `Time
+utcMicroseconds` (the Unix epoch, as Python's `time.time_ns() // 1000`).
+What was run, with a real second implementation:
 
 | Claim | Status | Evidence |
 |-------|--------|----------|

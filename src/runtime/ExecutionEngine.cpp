@@ -20,7 +20,7 @@
 #include "runtime/NativeError.h"
 #include "runtime/ListIndex.h"
 #include "ExecutionEngine.h"
-#include "runtime/PrimitiveMarker.h"
+#include "runtime/BlockCode.h"
 
 namespace protoST {
 const proto::ProtoObject* raiseRejection(STRuntime& rt, proto::ProtoContext* ctx,
@@ -43,6 +43,7 @@ bool appendFutureWaiter(STRuntime& rt,
 #include "NativeExceptionBridge.h"
 #include "Interrupt.h"
 
+#include <cassert>
 #include <cstdint>
 #include "debugger/DebuggerRuntime.h"
 #include "protoST/STRuntime.h"
@@ -77,6 +78,15 @@ bool appendFutureWaiter(STRuntime& rt,
 #endif
 
 namespace {
+// A constant PUSH_CONST can push without STRuntime::materialize: a
+// SmallInteger (a tagged immediate, the same on every thread and space), or
+// nullptr. Every other kind allocates on the running thread (D26) or interns
+// per space.
+inline const proto::ProtoObject* constImmediate(const protoST::BytecodeModule& m, std::size_t i) {
+    if (m.constKind(i) != protoST::BytecodeModule::ConstKind::Integer) return nullptr;
+    const long long v = m.constInteger(i);
+    return proto::smallIntInRange(v) ? proto::makeSmallInt(v) : nullptr;
+}
 // Overflow-checked 64-bit add/subtract: the GCC/Clang builtins, and the same
 // result computed by hand elsewhere.
 inline bool addOverflows(long long a, long long b, long long* r) {
@@ -85,6 +95,18 @@ inline bool addOverflows(long long a, long long b, long long* r) {
 #else
     if ((b > 0 && a > LLONG_MAX - b) || (b < 0 && a < LLONG_MIN - b)) return true;
     *r = a + b;
+    return false;
+#endif
+}
+inline bool mulOverflows(long long a, long long b, long long* r) {
+#if defined(__GNUC__)
+    return __builtin_mul_overflow(a, b, r);
+#else
+    // Operands are SmallIntegers (54 bits): the product of the magnitudes is
+    // checked in floating point first, which is exact enough to decide.
+    const double p = static_cast<double>(a) * static_cast<double>(b);
+    if (p > 9.0e18 || p < -9.0e18) return true;
+    *r = a * b;
     return false;
 #endif
 }
@@ -313,18 +335,25 @@ static thread_local std::vector<ExecutionEngine*> g_liveEngines;
 // through the engine context's automaticLocals so the GC sees it.
 // ---------------------------------------------------------------------------
 
+// A frame's region lies inside the array: pushFrame grew it to the region's
+// end (ensureEngineSlots) and it never shrinks while the frame lives. The
+// accessors index it directly (0.10.0; protoCore's checked accessors tested
+// the bounds on every access); a debug build asserts.
 const proto::ProtoObject*
 ExecutionEngine::getLocal(const Frame& f, unsigned int i) const {
-    return ctx_->getAutomaticLocal(localsBase(f) + i);
+    assert(localsBase(f) + i < ctx_->getAutomaticLocalsCount());
+    return ctx_->getAutomaticLocals()[localsBase(f) + i];
 }
 void
 ExecutionEngine::setLocal(const Frame& f, unsigned int i,
                           const proto::ProtoObject* v) {
-    ctx_->setAutomaticLocal(localsBase(f) + i, v);
+    assert(localsBase(f) + i < ctx_->getAutomaticLocalsCount());
+    ctx_->getAutomaticLocals()[localsBase(f) + i] = v;
 }
 const proto::ProtoObject*
 ExecutionEngine::getSelf(const Frame& f) const {
-    return ctx_->getAutomaticLocal(f.baseSlot + 1);
+    assert(f.baseSlot + 1 < ctx_->getAutomaticLocalsCount());
+    return ctx_->getAutomaticLocals()[f.baseSlot + 1];
 }
 void
 ExecutionEngine::setSelf(const Frame& f, const proto::ProtoObject* v) {
@@ -338,28 +367,14 @@ void
 ExecutionEngine::setCaptured(const Frame& f, const proto::ProtoObject* v) {
     ctx_->setAutomaticLocal(f.baseSlot + 0, v);
 }
+// The failures of the inline push / pop / peek (ExecutionEngine.h).
 void
-ExecutionEngine::push(Frame& f, const proto::ProtoObject* v) {
-    // The compiler's code never gets here: frames are sized from the deepest
-    // point of their module. A hand-built module can, and then it is an
-    // ordinary catchable Error, not a C++ exception past every handler.
-    if (f.sp >= f.maxStack) [[unlikely]]
-        signalStackOverflow(rt_, ctx_, f.maxStack);
-    ctx_->setAutomaticLocal(opStackBase(f) + f.sp, v);
-    ++f.sp;
+ExecutionEngine::operandStackOverflow(const Frame& f) {
+    signalStackOverflow(rt_, ctx_, f.maxStack);
 }
-const proto::ProtoObject*
-ExecutionEngine::pop(Frame& f) {
-    if (f.sp == 0)
-        throw NativeError("engine operand stack underflow");
-    --f.sp;
-    return ctx_->getAutomaticLocal(opStackBase(f) + f.sp);
-}
-const proto::ProtoObject*
-ExecutionEngine::peek(const Frame& f) const {
-    if (f.sp == 0)
-        throw NativeError("engine operand stack peek on empty");
-    return ctx_->getAutomaticLocal(opStackBase(f) + f.sp - 1);
+void
+ExecutionEngine::operandStackUnderflow(const char* what) {
+    throw NativeError(what);
 }
 const proto::ProtoObject*
 ExecutionEngine::opAt(const Frame& f, unsigned int depth) const {
@@ -403,7 +418,155 @@ ExecutionEngine::storeInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t
     const proto::ProtoObject* self = getSelf(f);
     if (!self || self == PROTO_NONE)
         throw NativeError("STORE_INSTVAR self is null");
-    const_cast<proto::ProtoObject*>(self)->setAttribute(ctx, sym, val);
+    // A mutable receiver is updated in place and answered. Any other answer
+    // means the receiver is immutable and the write did not happen; refuse
+    // it rather than lose it (the compiler already rejects instance-variable
+    // assignment in BlockClosure methods; this is the defensive check).
+    if (self->setAttribute(ctx, sym, val) != self)
+        throw NativeError("instance variable assignment: the receiver is an "
+                          "immutable value; nothing was written");
+}
+
+const proto::ProtoObject*
+ExecutionEngine::newClosure(proto::ProtoContext* ctx, const Frame& f, unsigned int blockIdx,
+                           const proto::ProtoObject* capD) {
+    const proto::ProtoObject* bcPtrObj = blockCodeRefFor(rt_, ctx, f.m->block(blockIdx));
+    TransientPin pinBcPtr(ctx, bcPtrObj);
+    const proto::ProtoObject* homeObj =
+        ctx->fromLong(static_cast<long long>(f.homeFrameId));
+    TransientPin pinHome(ctx, homeObj);
+    const proto::ProtoObject* bare = bs_.blockProto->newChild(ctx, /*isMutable=*/false);
+    TransientPin pinBare(ctx, bare);
+    const proto::ProtoObject* creatorSelf = getSelf(f);
+    const proto::ProtoString* names[4] = {
+        bs_.sym.bcPtr, bs_.sym.captured, bs_.sym.homeFrame, bs_.sym.blockSelf };
+    const proto::ProtoObject* values[4] = {
+        bcPtrObj,
+        (capD && capD != PROTO_NONE) ? capD : PROTO_NONE,
+        homeObj,
+        creatorSelf ? creatorSelf : PROTO_NONE };
+    return bare->setAttributes(ctx, 4, names, values);
+}
+
+// ---------------------------------------------------------------------------
+// De-optimisation of inlined value conditionals (Opcodes.h, DEOPT_ENTER).
+//
+// `r ifTrue: [...]`, `r and: [...]` and the rest of the family are compiled
+// inline; when `r` is not a Boolean the expression is sent for real, with
+// closures compiled from the block literals, so the receiver's own method or
+// its doesNotUnderstand: gets the message the source wrote. Those closures
+// use variables that, inlined, are plain slots of this frame, and the
+// receiver may keep a closure and evaluate it at any later time, on any
+// thread. So the closures must share those variables with the frame, as real
+// closures would, for as long as either lives.
+//
+// DEOPT_ENTER does that by moving each temporary a closure uses into a
+// dictionary of the scope that declares it, the binding real closures would
+// have had: the frame's own temporaries go into one dictionary per
+// activation, the temporaries of an inlined block with temporaries into one
+// per entry of that block (the block's entry code resets its slots with
+// RESET_LOCAL, so the next entry starts fresh variables while a closure keeps
+// the previous ones). The dictionaries are chained in the lexical order of
+// their scopes, outermost nearest the frame's captured dict, so a closure
+// resolves every name to the innermost declaration, as the compiler did. The
+// slot then holds a forward naming the dictionary and the variable;
+// PUSH_SHARED_LOCAL and STORE_SHARED_LOCAL follow it once the frame is marked
+// (Frame::deoptForwarded), so the frame and the closures read and write the
+// same variable from then on. Arguments cannot be assigned, so the box, a
+// child of the innermost dictionary that the closures receive as their
+// captured dict, holds copies of the ones they read.
+//
+// A scope's dictionary is created the first time a conditional in it
+// de-optimises, together with those of the scopes enclosing it, so a
+// dictionary's parent is always the dictionary of the enclosing scope's
+// current activation. Programs whose conditionals always see Booleans never
+// reach this code. The test of the frame mark is made only by the accesses
+// of slots some conditional may forward (PUSH_SHARED_LOCAL,
+// STORE_SHARED_LOCAL); every other PUSH_LOCAL / STORE_LOCAL tests nothing.
+// ---------------------------------------------------------------------------
+
+const proto::ProtoObject*
+ExecutionEngine::deoptForwardOf(proto::ProtoContext* ctx, const proto::ProtoObject* v) const {
+    // getFirstParent answers PROTO_NONE for anything that is not an object
+    // cell (an embedded value, a string, a list), so any slot value is safe.
+    if (!v) return nullptr;
+    return v->getFirstParent(ctx) == bs_.deoptForwardProto ? v : nullptr;
+}
+
+const proto::ProtoObject*
+ExecutionEngine::readForwardedLocal(proto::ProtoContext* ctx, const Frame& f,
+                                    unsigned int slot) const {
+    const proto::ProtoObject* v = getLocal(f, slot);
+    const proto::ProtoObject* fwd = deoptForwardOf(ctx, v);
+    if (!fwd) return v;
+    const proto::ProtoObject* dict = fwd->getOwnAttributeDirect(ctx, bs_.sym.deoptDict);
+    const auto* name = reinterpret_cast<const proto::ProtoString*>(
+        fwd->getOwnAttributeDirect(ctx, bs_.sym.deoptName));
+    const proto::ProtoObject* r = dict->getOwnAttributeDirect(ctx, name);
+    return r ? r : PROTO_NONE;
+}
+
+void
+ExecutionEngine::writeForwardedLocal(proto::ProtoContext* ctx, const Frame& f,
+                                     unsigned int slot, const proto::ProtoObject* v) {
+    const proto::ProtoObject* fwd = deoptForwardOf(ctx, getLocal(f, slot));
+    if (!fwd) { setLocal(f, slot, v); return; }
+    const proto::ProtoObject* dict = fwd->getOwnAttributeDirect(ctx, bs_.sym.deoptDict);
+    const auto* name = reinterpret_cast<const proto::ProtoString*>(
+        fwd->getOwnAttributeDirect(ctx, bs_.sym.deoptName));
+    const_cast<proto::ProtoObject*>(dict)->setAttribute(ctx, name, v);
+}
+
+void
+ExecutionEngine::deoptEnter(proto::ProtoContext* ctx, Frame& f, unsigned int entry) {
+    const BytecodeModule::DeoptEntry& e = f.m->deoptEntry(entry);
+    const proto::ProtoObject* capD = getCaptured(f);
+    const proto::ProtoObject* parent =
+        (capD && capD != PROTO_NONE) ? capD : bs_.objectProto;
+    // The scope dictionaries, outermost first. Each lives in its frame slot
+    // (a frame value, so rooted) as soon as it is made.
+    for (uint32_t dictSlot : e.scopeDictSlots) {
+        const proto::ProtoObject* d = getLocal(f, dictSlot);
+        if (!d || d == PROTO_NONE) {
+            d = parent->newChild(ctx, /*isMutable=*/true);
+            setLocal(f, dictSlot, d);
+        }
+        parent = d;
+    }
+    // Move each shared temporary into its scope's dictionary, unless an
+    // earlier conditional of this activation of that scope already did.
+    for (const auto& l : e.locals) {
+        if (l.scope == BytecodeModule::DeoptLocal::kReadOnly) continue;
+        const proto::ProtoObject* v = getLocal(f, l.slot);
+        if (f.deoptForwarded && deoptForwardOf(ctx, v)) continue;
+        const proto::ProtoObject* dict = getLocal(f, e.scopeDictSlots.at(static_cast<size_t>(l.scope)));
+        const proto::ProtoString* name = f.m->constSym(ctx, l.nameConst);
+        const_cast<proto::ProtoObject*>(dict)->setAttribute(ctx, name, v ? v : PROTO_NONE);
+        // The forward: an immutable object naming the dictionary and the
+        // variable. It replaces the value in the slot, which the dictionary
+        // now holds.
+        const proto::ProtoObject* bare = bs_.deoptForwardProto->newChild(ctx, /*isMutable=*/false);
+        TransientPin pinBare(ctx, bare);
+        const proto::ProtoString* keys[2] = { bs_.sym.deoptDict, bs_.sym.deoptName };
+        const proto::ProtoObject* vals[2] = {
+            dict, reinterpret_cast<const proto::ProtoObject*>(name) };
+        setLocal(f, l.slot, bare->setAttributes(ctx, 2, keys, vals));
+        f.deoptForwarded = true;
+    }
+    // The box: copies of the arguments the closures read.
+    const proto::ProtoObject* box = parent->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinBox(ctx, box);
+    std::vector<const proto::ProtoString*> names;
+    std::vector<const proto::ProtoObject*> values;
+    for (const auto& l : e.locals) {
+        if (l.scope != BytecodeModule::DeoptLocal::kReadOnly) continue;
+        names.push_back(f.m->constSym(ctx, l.nameConst));
+        const proto::ProtoObject* v = getLocal(f, l.slot);
+        values.push_back(v ? v : PROTO_NONE);   // frame values: rooted
+    }
+    if (!names.empty())
+        box->setAttributes(ctx, static_cast<unsigned>(names.size()), names.data(), values.data());
+    setLocal(f, e.boxSlot, box);
 }
 
 void
@@ -425,6 +588,55 @@ ExecutionEngine::flushInstVarGroup(proto::ProtoContext* ctx, Frame& f) {
 // Per-thread frame-stack buffer pool (see ExecutionEngine.h — framePool_).
 thread_local std::vector<std::vector<ExecutionEngine::Frame>>
     ExecutionEngine::framePool_;
+
+// K18: see EntryContext in ExecutionEngine.h. The child contexts live
+// EntryContexts opened on this thread, with their runtime: protoST's own too,
+// so an entry nested in another (importModuleFile -> loadModuleFromFile, a
+// send that imports) runs on the same child instead of opening another.
+namespace {
+struct EntryChild { const STRuntime* rt; const proto::ProtoContext* ctx; };
+thread_local std::vector<EntryChild> t_entryChildren;
+}  // namespace
+
+bool EntryContext::isProtoSTContext(const STRuntime& rt, const proto::ProtoContext* ctx) {
+    if (ctx == rt.rootCtx()) return true;
+    for (const ExecutionEngine* e : g_liveEngines)
+        if (&e->rt_ == &rt && e->ctx_ == ctx) return true;
+    for (const EntryChild& c : t_entryChildren)
+        if (c.rt == &rt && c.ctx == ctx) return true;
+    return false;
+}
+
+EntryContext::EntryContext(STRuntime& rt, proto::ProtoContext* ctx) : ctx_(ctx) {
+    if (isProtoSTContext(rt, ctx)) return;
+    // The child's array is its own: frames start at the region base and pins
+    // at the top of its scratch region, whatever the thread's cursors stand at
+    // in the contexts below. No pin or frame of those contexts is released
+    // while this entry runs (they are below it on the C++ stack), so the
+    // cursors are simply saved here and put back in the destructor.
+    t_entryChildren.reserve(t_entryChildren.size() + 1);   // may throw: nothing opened yet
+    own_.emplace(ctx->space, ctx);
+    ctx_ = &*own_;
+    t_entryChildren.push_back(EntryChild{ &rt, ctx_ });
+    savedSlotCursor_    = g_slotCursor;
+    savedScratchCursor_ = g_scratchCursor;
+    g_slotCursor    = kFrameRegionBase;
+    g_scratchCursor = 0;
+}
+
+EntryContext::~EntryContext() {
+    if (!own_) return;
+    t_entryChildren.pop_back();   // entries nest strictly with the C++ stack
+    g_slotCursor    = savedSlotCursor_;
+    g_scratchCursor = savedScratchCursor_;
+    // own_ is destroyed next and anchors the return value in the caller's
+    // context (~ProtoContext).
+}
+
+const proto::ProtoObject* EntryContext::leave(const proto::ProtoObject* result) {
+    if (own_) own_->returnValue = result;
+    return result;
+}
 
 ExecutionEngine::ExecutionEngine(STRuntime& rt)
     : rt_(rt), bs_(rt.bootstrap()), dbg_(rt.debugger()) {
@@ -491,8 +703,9 @@ ExecutionEngine::pushFrame(const BytecodeModule* m,
     fr.homeFrameId = (homeFrameId == 0) ? fr.frameId : homeFrameId;
     // F6 v3 E5: the engine's slot capacity and the TransientPin scratch
     // geometry must agree — pushFrame is a member function so it can see the
-    // private constant. Frame regions occupy [0, kFrameRegionLimit); the top
-    // kScratchSlots slots are reserved for transient pins.
+    // private constant. Transient pins occupy the bottom kScratchSlots slots
+    // (slots 0 and 1 hold their overflow chain, TransientPin.h); frame regions
+    // occupy [kFrameRegionBase, kFrameRegionLimit).
     static_assert(kSlotCapacity == kEngineSlotCapacity,
                   "engine kSlotCapacity must equal TransientPin kEngineSlotCapacity");
 
@@ -516,8 +729,23 @@ ExecutionEngine::pushFrame(const BytecodeModule* m,
     // × 75K calls this was visible per-call overhead. The array holds at
     // least regionEnd slots (ensured just above), so the direct write is
     // safe.
+    //
+    // Only the header and the locals are cleared (locals start nil). The
+    // operand stack is not (0.10.0; it was most of the fill, 48 slots or
+    // more per call): every read of it stops at `sp` (pop, peek, opAt, the
+    // debugger's and the yield's copies), and a value left in it by an
+    // earlier frame cannot dangle, because protoCore scans the whole
+    // automaticLocals array as roots, so that value is still alive. The
+    // cost is memory: such a value is over-retained until overwritten.
+    // Before 0.10.0 the next call cleared it; now a dead object left by a
+    // popped deep frame stays reachable for the whole life of a later
+    // frame whose region covers its slot and whose `sp` never reaches it
+    // (a large temporary built before a long-running loop lives as long as
+    // the loop). protoST has no weak references or finalizers, so no
+    // program can observe it. If it ever matters: clear on pop, up to a
+    // high-water mark recorded by `push`.
     const proto::ProtoObject** slots = ctx_->getAutomaticLocals();
-    std::fill_n(slots + fr.baseSlot, regionSize, PROTO_NONE);
+    std::fill_n(slots + fr.baseSlot, kHeaderSlots + fr.localCount, PROTO_NONE);
 
     // Header slots — direct writes (region was zeroed above).
     slots[fr.baseSlot + 0] = captured ? captured : PROTO_NONE;
@@ -550,6 +778,11 @@ ExecutionEngine::popFrame() {
 // Like protoPython's RecursionScope, the limit is a depth count, not a query of
 // the native thread: g_liveEngines already holds this thread's nested engines.
 // 1,000 levels use about 4.6 MB, within the 8 MB default stack of a ProtoThread.
+// That figure is for optimised code. An unoptimised (-O0) build takes 8 to
+// 12 KB a level (measured in 0.10.0), so there 1,000 levels need a 12 MB
+// stack (`ulimit -s 16384` for the main thread): with 8 MB a recursion to
+// the limit overflows the stack instead of raising the Error. CI therefore
+// runs its assertions-on job at -O2 (ci.yml, `assertions`).
 namespace {
 constexpr std::size_t kMaxNestedEngines = 1000;
 } // namespace
@@ -571,6 +804,16 @@ ExecutionEngine::canStartNestedEngine() {
 const proto::ProtoObject* ExecutionEngine::doesNotUnderstand(
         proto::ProtoContext* ctx, const proto::ProtoObject* recv,
         const std::string& selector, const proto::ProtoObject* const* args, int argc) {
+    return sendDoesNotUnderstand(rt_, ctx, recv, selector, args, argc);
+}
+
+// The body of ExecutionEngine::doesNotUnderstand, shared with perform: (a
+// reflective send of a selector the receiver does not understand goes
+// through doesNotUnderstand: as a direct send does, as in Pharo).
+const proto::ProtoObject* sendDoesNotUnderstand(
+        STRuntime& rt_, proto::ProtoContext* ctx, const proto::ProtoObject* recv,
+        const std::string& selector, const proto::ProtoObject* const* args, int argc) {
+    const Bootstrap& bs_ = rt_.bootstrap();
     // A foreign exception (a module's error, another language's exception)
     // understands the Exception protocol while its handler runs: Error's
     // method runs with the foreign value as the receiver. It is a native
@@ -591,8 +834,7 @@ const proto::ProtoObject* ExecutionEngine::doesNotUnderstand(
     const proto::ProtoObject* holder = methodHolder(bs_, ctx, recv);
     const proto::ProtoObject* handler = holder->getAttribute(ctx, dnuKey);
     if (handler && handler != PROTO_NONE) {
-        const proto::ProtoObject* bc = handler->getOwnAttributeDirect(ctx, bs_.sym.bcPtr);
-        if (bc && bc != PROTO_NONE) {
+        if (blockCodeOf(ctx, handler->getOwnAttributeDirect(ctx, bs_.sym.bcPtr))) {
             bool understood = false;
             const proto::ProtoObject* a1[1] = { message };
             return sendDynamic(rt_, ctx, recv, dnuKey, a1, 1, &understood);
@@ -703,7 +945,7 @@ ExecutionEngine::makeDebugFrame(const Frame& f) const {
         d.stack.push_back(ctx_->getAutomaticLocal(opStackBase(f) + i));
     d.locals.reserve(f.localCount);
     for (unsigned int i = 0; i < f.localCount; ++i)
-        d.locals.push_back(getLocal(f, i));
+        d.locals.push_back(f.deoptForwarded ? readForwardedLocal(ctx_, f, i) : getLocal(f, i));
     return d;
 }
 
@@ -769,9 +1011,12 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     // highest slot referenced). A slot index past localCount is a compiler /
     // sizing bug; reject it rather than silently aliasing another frame's
     // region.
+    // The count comes from scanning the module itself (computeLocalCount), so
+    // no module, compiled or hand-built, can reach past it: a debug-build
+    // assertion (0.10.0; it was a check on every local access).
     auto checkLocal = [](const Frame& f, unsigned int slot) {
-        if (slot >= f.localCount)
-            throw NativeError("engine local slot out of range");
+        (void)f; (void)slot;
+        assert(slot < f.localCount && "engine local slot out of range");
     };
 
     // F6 v3 E3: whatever happens (normal return, cooperative yield rethrow,
@@ -810,50 +1055,147 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     // recognise. EXTEND never reaches dispatch because DISPATCH_DIRECT's
     // inner loop swallows EXTEND prefix words and accumulates `arg`.
 #if PROTOST_THREADED_DISPATCH
-    void* labels[256];
-    for (int i__ = 0; i__ < 256; ++i__) labels[i__] = &&L_BAD_OP;
-    labels[static_cast<unsigned int>(Op::PUSH_CONST)]       = &&L_PUSH_CONST;
-    labels[static_cast<unsigned int>(Op::PUSH_LOCAL)]       = &&L_PUSH_LOCAL;
-    labels[static_cast<unsigned int>(Op::STORE_LOCAL)]      = &&L_STORE_LOCAL;
-    labels[static_cast<unsigned int>(Op::DUP)]              = &&L_DUP;
-    labels[static_cast<unsigned int>(Op::POP)]              = &&L_POP;
-    labels[static_cast<unsigned int>(Op::PUSH_SELF)]        = &&L_PUSH_SELF;
-    labels[static_cast<unsigned int>(Op::PUSH_NIL)]         = &&L_PUSH_NIL;
-    labels[static_cast<unsigned int>(Op::PUSH_TRUE)]        = &&L_PUSH_TRUE;
-    labels[static_cast<unsigned int>(Op::PUSH_FALSE)]       = &&L_PUSH_FALSE;
-    labels[static_cast<unsigned int>(Op::SEND_UNARY)]       = &&L_SEND_UNARY;
-    labels[static_cast<unsigned int>(Op::SEND_BINARY)]      = &&L_SEND_BINARY;
-    labels[static_cast<unsigned int>(Op::SEND_KEYWORD)]     = &&L_SEND_KEYWORD;
-    labels[static_cast<unsigned int>(Op::SEND_SUPER)]       = &&L_SEND_SUPER;
-    labels[static_cast<unsigned int>(Op::SEND_CALL)]        = &&L_SEND_CALL;
-    labels[static_cast<unsigned int>(Op::JUMP)]             = &&L_JUMP;
-    labels[static_cast<unsigned int>(Op::JUMP_IF_TRUE)]     = &&L_JUMP_IF_TRUE;
-    labels[static_cast<unsigned int>(Op::JUMP_IF_FALSE)]    = &&L_JUMP_IF_FALSE;
-    labels[static_cast<unsigned int>(Op::RETURN)]           = &&L_RETURN;
-    labels[static_cast<unsigned int>(Op::RETURN_TOP)]       = &&L_RETURN_TOP;
-    labels[static_cast<unsigned int>(Op::JUMP_BACK)]        = &&L_JUMP_BACK;
-    labels[static_cast<unsigned int>(Op::BIN_INT_ADD)]      = &&L_BIN_INT_ADD;
-    labels[static_cast<unsigned int>(Op::BIN_INT_SUB)]      = &&L_BIN_INT_SUB;
-    labels[static_cast<unsigned int>(Op::BIN_INT_LE)]       = &&L_BIN_INT_LE;
-    labels[static_cast<unsigned int>(Op::BIN_INT_LT)]       = &&L_BIN_INT_LT;
-    labels[static_cast<unsigned int>(Op::BIN_INT_GE)]       = &&L_BIN_INT_GE;
-    labels[static_cast<unsigned int>(Op::BIN_INT_GT)]       = &&L_BIN_INT_GT;
-    labels[static_cast<unsigned int>(Op::BIN_INT_EQ)]       = &&L_BIN_INT_EQ;
-    labels[static_cast<unsigned int>(Op::ASSERT_BOOL_OR_DNU)] = &&L_ASSERT_BOOL_OR_DNU;
-    labels[static_cast<unsigned int>(Op::PUSH_BLOCK)]       = &&L_PUSH_BLOCK;
-    labels[static_cast<unsigned int>(Op::PUSH_CAPTURED)]    = &&L_PUSH_CAPTURED;
-    labels[static_cast<unsigned int>(Op::STORE_CAPTURED)]   = &&L_STORE_CAPTURED;
-    labels[static_cast<unsigned int>(Op::DEFINE_CAPTURED)]  = &&L_DEFINE_CAPTURED;
-    labels[static_cast<unsigned int>(Op::STORE_CLASSVAR)]   = &&L_STORE_CLASSVAR;
-    labels[static_cast<unsigned int>(Op::PUSH_OWN_INSTVAR)] = &&L_PUSH_OWN_INSTVAR;
-    labels[static_cast<unsigned int>(Op::PUSH_GLOBAL)]      = &&L_PUSH_GLOBAL;
-    labels[static_cast<unsigned int>(Op::STORE_GLOBAL)]     = &&L_STORE_GLOBAL;
-    labels[static_cast<unsigned int>(Op::PUSH_INSTVAR)]     = &&L_PUSH_INSTVAR;
-    labels[static_cast<unsigned int>(Op::STORE_INSTVAR)]    = &&L_STORE_INSTVAR;
-    labels[static_cast<unsigned int>(Op::IVAR_GROUP)]       = &&L_IVAR_GROUP;
-    labels[static_cast<unsigned int>(Op::IVAR_GROUP_END)]   = &&L_IVAR_GROUP_END;
-    labels[static_cast<unsigned int>(Op::MAKE_CAPTURED)]    = &&L_MAKE_CAPTURED;
-    labels[static_cast<unsigned int>(Op::MAKE_ARRAY)]       = &&L_MAKE_ARRAY;
+    // The jump table, indexed by opcode value, built at compile time; the
+    // positions are the Op values of Opcodes.h, and a build with assertions
+    // checks them against the per-opcode map below. It was a local array
+    // filled on every runLoop entry until 0.10.0: 256 stores per entry, and
+    // an engine is entered for every block a primitive evaluates (about 40 %
+    // of runLoop's cycles in an inject:into: loop, review R3-4). A static
+    // table needs GCC's max-goto-duplication-insns raised for this file
+    // (CMakeLists.txt): without it GCC merged the handlers' indirect jumps
+    // into 2 or 3 shared ones.
+    static void* const kLabels[256] = {
+        &&L_BAD_OP, &&L_PUSH_CONST, &&L_PUSH_LOCAL, &&L_STORE_LOCAL,   // 0-3
+        &&L_DUP, &&L_POP, &&L_PUSH_SELF, &&L_BAD_OP,   // 4-7
+        &&L_PUSH_NIL, &&L_PUSH_TRUE, &&L_PUSH_FALSE, &&L_SEND_UNARY,   // 8-11
+        &&L_SEND_BINARY, &&L_SEND_KEYWORD, &&L_SEND_SUPER, &&L_JUMP,   // 12-15
+        &&L_JUMP_IF_TRUE, &&L_JUMP_IF_FALSE, &&L_RETURN, &&L_RETURN_TOP,   // 16-19
+        &&L_PUSH_BLOCK, &&L_BAD_OP, &&L_PUSH_CAPTURED, &&L_STORE_CAPTURED,   // 20-23
+        &&L_PUSH_GLOBAL, &&L_STORE_GLOBAL, &&L_PUSH_INSTVAR, &&L_STORE_INSTVAR,   // 24-27
+        &&L_MAKE_CAPTURED, &&L_MAKE_ARRAY, &&L_JUMP_BACK, &&L_BIN_INT_ADD,   // 28-31
+        &&L_BIN_INT_SUB, &&L_BIN_INT_LE, &&L_BIN_INT_LT, &&L_BIN_INT_GE,   // 32-35
+        &&L_BIN_INT_GT, &&L_BIN_INT_EQ, &&L_ASSERT_LOOP_BOOL, &&L_SEND_CALL,   // 36-39
+        &&L_DEFINE_CAPTURED, &&L_STORE_CLASSVAR, &&L_PUSH_OWN_INSTVAR, &&L_IVAR_GROUP,   // 40-43
+        &&L_IVAR_GROUP_END, &&L_JUMP_IF_NOT_BOOL, &&L_DEOPT_ENTER, &&L_PUSH_DEOPT_BLOCK,   // 44-47
+        &&L_DEOPT_EXIT, &&L_RESET_LOCAL, &&L_JUMP_IF_NIL, &&L_JUMP_IF_NOT_NIL,   // 48-51
+        &&L_IDENTICAL, &&L_BIN_INT_MUL, &&L_BIN_INT_MOD, &&L_BIN_INT_QUO,   // 52-55
+        &&L_BAD_OP, &&L_BIN_INT_AND, &&L_BIN_INT_OR, &&L_PUSH_SHARED_LOCAL,   // 56-59
+        &&L_STORE_SHARED_LOCAL, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 60-63
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 64-67
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 68-71
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 72-75
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 76-79
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 80-83
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 84-87
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 88-91
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 92-95
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 96-99
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 100-103
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 104-107
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 108-111
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 112-115
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 116-119
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 120-123
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 124-127
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 128-131
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 132-135
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 136-139
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 140-143
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 144-147
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 148-151
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 152-155
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 156-159
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 160-163
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 164-167
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 168-171
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 172-175
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 176-179
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 180-183
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 184-187
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 188-191
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 192-195
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 196-199
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 200-203
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 204-207
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 208-211
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 212-215
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 216-219
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 220-223
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 224-227
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 228-231
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 232-235
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 236-239
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 240-243
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 244-247
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 248-251
+        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 252-255
+    };
+    void* const* const labels = kLabels;
+#ifndef NDEBUG
+    {
+    void* check[256];
+    for (int i__ = 0; i__ < 256; ++i__) check[i__] = &&L_BAD_OP;
+    check[static_cast<unsigned int>(Op::PUSH_CONST)]       = &&L_PUSH_CONST;
+    check[static_cast<unsigned int>(Op::PUSH_LOCAL)]       = &&L_PUSH_LOCAL;
+    check[static_cast<unsigned int>(Op::STORE_LOCAL)]      = &&L_STORE_LOCAL;
+    check[static_cast<unsigned int>(Op::DUP)]              = &&L_DUP;
+    check[static_cast<unsigned int>(Op::POP)]              = &&L_POP;
+    check[static_cast<unsigned int>(Op::PUSH_SELF)]        = &&L_PUSH_SELF;
+    check[static_cast<unsigned int>(Op::PUSH_NIL)]         = &&L_PUSH_NIL;
+    check[static_cast<unsigned int>(Op::PUSH_TRUE)]        = &&L_PUSH_TRUE;
+    check[static_cast<unsigned int>(Op::PUSH_FALSE)]       = &&L_PUSH_FALSE;
+    check[static_cast<unsigned int>(Op::SEND_UNARY)]       = &&L_SEND_UNARY;
+    check[static_cast<unsigned int>(Op::SEND_BINARY)]      = &&L_SEND_BINARY;
+    check[static_cast<unsigned int>(Op::SEND_KEYWORD)]     = &&L_SEND_KEYWORD;
+    check[static_cast<unsigned int>(Op::SEND_SUPER)]       = &&L_SEND_SUPER;
+    check[static_cast<unsigned int>(Op::SEND_CALL)]        = &&L_SEND_CALL;
+    check[static_cast<unsigned int>(Op::JUMP)]             = &&L_JUMP;
+    check[static_cast<unsigned int>(Op::JUMP_IF_TRUE)]     = &&L_JUMP_IF_TRUE;
+    check[static_cast<unsigned int>(Op::JUMP_IF_FALSE)]    = &&L_JUMP_IF_FALSE;
+    check[static_cast<unsigned int>(Op::JUMP_IF_NOT_BOOL)] = &&L_JUMP_IF_NOT_BOOL;
+    check[static_cast<unsigned int>(Op::DEOPT_ENTER)]      = &&L_DEOPT_ENTER;
+    check[static_cast<unsigned int>(Op::PUSH_DEOPT_BLOCK)] = &&L_PUSH_DEOPT_BLOCK;
+    check[static_cast<unsigned int>(Op::DEOPT_EXIT)]       = &&L_DEOPT_EXIT;
+    check[static_cast<unsigned int>(Op::RESET_LOCAL)]      = &&L_RESET_LOCAL;
+    check[static_cast<unsigned int>(Op::JUMP_IF_NIL)]      = &&L_JUMP_IF_NIL;
+    check[static_cast<unsigned int>(Op::JUMP_IF_NOT_NIL)]  = &&L_JUMP_IF_NOT_NIL;
+    check[static_cast<unsigned int>(Op::IDENTICAL)]        = &&L_IDENTICAL;
+    check[static_cast<unsigned int>(Op::BIN_INT_MUL)]      = &&L_BIN_INT_MUL;
+    check[static_cast<unsigned int>(Op::BIN_INT_MOD)]      = &&L_BIN_INT_MOD;
+    check[static_cast<unsigned int>(Op::BIN_INT_QUO)]      = &&L_BIN_INT_QUO;
+    check[static_cast<unsigned int>(Op::BIN_INT_AND)]      = &&L_BIN_INT_AND;
+    check[static_cast<unsigned int>(Op::BIN_INT_OR)]       = &&L_BIN_INT_OR;
+    check[static_cast<unsigned int>(Op::PUSH_SHARED_LOCAL)]  = &&L_PUSH_SHARED_LOCAL;
+    check[static_cast<unsigned int>(Op::STORE_SHARED_LOCAL)] = &&L_STORE_SHARED_LOCAL;
+    check[static_cast<unsigned int>(Op::RETURN)]           = &&L_RETURN;
+    check[static_cast<unsigned int>(Op::RETURN_TOP)]       = &&L_RETURN_TOP;
+    check[static_cast<unsigned int>(Op::JUMP_BACK)]        = &&L_JUMP_BACK;
+    check[static_cast<unsigned int>(Op::BIN_INT_ADD)]      = &&L_BIN_INT_ADD;
+    check[static_cast<unsigned int>(Op::BIN_INT_SUB)]      = &&L_BIN_INT_SUB;
+    check[static_cast<unsigned int>(Op::BIN_INT_LE)]       = &&L_BIN_INT_LE;
+    check[static_cast<unsigned int>(Op::BIN_INT_LT)]       = &&L_BIN_INT_LT;
+    check[static_cast<unsigned int>(Op::BIN_INT_GE)]       = &&L_BIN_INT_GE;
+    check[static_cast<unsigned int>(Op::BIN_INT_GT)]       = &&L_BIN_INT_GT;
+    check[static_cast<unsigned int>(Op::BIN_INT_EQ)]       = &&L_BIN_INT_EQ;
+    check[static_cast<unsigned int>(Op::ASSERT_LOOP_BOOL)] = &&L_ASSERT_LOOP_BOOL;
+    check[static_cast<unsigned int>(Op::PUSH_BLOCK)]       = &&L_PUSH_BLOCK;
+    check[static_cast<unsigned int>(Op::PUSH_CAPTURED)]    = &&L_PUSH_CAPTURED;
+    check[static_cast<unsigned int>(Op::STORE_CAPTURED)]   = &&L_STORE_CAPTURED;
+    check[static_cast<unsigned int>(Op::DEFINE_CAPTURED)]  = &&L_DEFINE_CAPTURED;
+    check[static_cast<unsigned int>(Op::STORE_CLASSVAR)]   = &&L_STORE_CLASSVAR;
+    check[static_cast<unsigned int>(Op::PUSH_OWN_INSTVAR)] = &&L_PUSH_OWN_INSTVAR;
+    check[static_cast<unsigned int>(Op::PUSH_GLOBAL)]      = &&L_PUSH_GLOBAL;
+    check[static_cast<unsigned int>(Op::STORE_GLOBAL)]     = &&L_STORE_GLOBAL;
+    check[static_cast<unsigned int>(Op::PUSH_INSTVAR)]     = &&L_PUSH_INSTVAR;
+    check[static_cast<unsigned int>(Op::STORE_INSTVAR)]    = &&L_STORE_INSTVAR;
+    check[static_cast<unsigned int>(Op::IVAR_GROUP)]       = &&L_IVAR_GROUP;
+    check[static_cast<unsigned int>(Op::IVAR_GROUP_END)]   = &&L_IVAR_GROUP_END;
+    check[static_cast<unsigned int>(Op::MAKE_CAPTURED)]    = &&L_MAKE_CAPTURED;
+    check[static_cast<unsigned int>(Op::MAKE_ARRAY)]       = &&L_MAKE_ARRAY;
+    for (int i__ = 0; i__ < 256; ++i__)
+        assert(check[i__] == kLabels[i__] && "runLoop jump table out of order with Opcodes.h");
+    }
+#endif
 #endif
 
     unsigned int arg = 0;
@@ -977,8 +1319,16 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             } break;
             case Op::PUSH_CONST: L_PUSH_CONST: {
                 Frame& f = frames_.back();
-                // D26: literals are allocated on THIS thread's context.
-                push(f, rt_.materialize(ctx, *f.m, arg));
+                // D26: literals are allocated on THIS thread's context. A
+                // SmallInteger allocates nothing and a symbol is cached on
+                // the module: neither needs materialize (0.10.0).
+                const proto::ProtoObject* v = constImmediate(*f.m, arg);
+                if (!v) {
+                    v = f.m->constKind(arg) == BytecodeModule::ConstKind::Symbol
+                        ? reinterpret_cast<const proto::ProtoObject*>(f.m->constSym(ctx, arg))
+                        : rt_.materialize(ctx, *f.m, arg);
+                }
+                push(f, v);
                 DISPATCH_DIRECT();
             } break;
             case Op::DUP: L_DUP: {
@@ -1000,9 +1350,38 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             case Op::STORE_LOCAL: L_STORE_LOCAL: {
                 Frame& f = frames_.back();
                 checkLocal(f, arg);
-                if (f.sp == 0)
-                    throw NativeError("STORE_LOCAL with empty stack");
+                setLocal(f, arg, pop(f));   // pop checks for an empty stack
+                DISPATCH_DIRECT();
+                break;
+            }
+            case Op::PUSH_SHARED_LOCAL: L_PUSH_SHARED_LOCAL: {
+                Frame& f = frames_.back();
+                checkLocal(f, arg);
+                if (f.deoptForwarded) {
+                    push(f, readForwardedLocal(ctx, f, arg));
+                    DISPATCH_SCOPED();
+                }
+                push(f, getLocal(f, arg));
+                DISPATCH_DIRECT();
+            } break;
+            case Op::STORE_SHARED_LOCAL: L_STORE_SHARED_LOCAL: {
+                Frame& f = frames_.back();
+                checkLocal(f, arg);
+                if (f.deoptForwarded) {
+                    // The value stays rooted in its stack slot until the
+                    // store (pop only lowers sp).
+                    const proto::ProtoObject* v = pop(f);
+                    writeForwardedLocal(ctx, f, arg, v);
+                    DISPATCH_SCOPED();
+                }
                 setLocal(f, arg, pop(f));
+                DISPATCH_DIRECT();
+                break;
+            }
+            case Op::RESET_LOCAL: L_RESET_LOCAL: {
+                Frame& f = frames_.back();
+                checkLocal(f, arg);
+                setLocal(f, arg, PROTO_NONE);
                 DISPATCH_DIRECT();
                 break;
             }
@@ -1093,69 +1472,53 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 }
                 throw NonLocalReturn(ctx, f.homeFrameId, r);
             }
+            case Op::PUSH_DEOPT_BLOCK: L_PUSH_DEOPT_BLOCK: {
+                Frame& f = frames_.back();
+                // The box is a frame value (its slot) until DEOPT_EXIT.
+                const proto::ProtoObject* box = pop(f);
+                push(f, newClosure(ctx, f, arg, box));
+                DISPATCH_SCOPED();
+                break;
+            }
+            case Op::DEOPT_ENTER: L_DEOPT_ENTER: {
+                Frame& f = frames_.back();
+                deoptEnter(ctx, f, arg);
+                DISPATCH_SCOPED();
+                break;
+            }
+            case Op::DEOPT_EXIT: L_DEOPT_EXIT: {
+                // The variables stay shared: only the box's slot is cleared.
+                Frame& f = frames_.back();
+                setLocal(f, f.m->deoptEntry(arg).boxSlot, PROTO_NONE);
+                DISPATCH_DIRECT();
+                break;
+            }
             case Op::PUSH_BLOCK: L_PUSH_BLOCK: {
                 Frame& f = frames_.back();
-                // arg = block index inside f.m->blocks(). Create a fresh
-                // BlockClosure (a mutable child of the Block prototype) that
-                // carries an opaque pointer to the sub-module under
-                // attribute "__bc_ptr__".
-                auto* blkProto = bs_.blockProto;
-                auto* block = blkProto->newChild(ctx, /*isMutable=*/true);
-                // F6 v3 E5: `block` is a fresh mutable object held in a C++
-                // local across the fromUTF8String key interning (first call
-                // allocates), fromLong (allocates), and two setAttribute
-                // calls on a mutable object (each allocates a sparse-list
-                // node). Until `push(f, block)` lands it in a GC-traced frame
-                // slot it is reachable from nowhere the collector traces.
-                TransientPin pinBlock(ctx, block);
-                const proto::ProtoString* bcKey =
-                    bs_.sym.bcPtr;
-                const proto::ProtoString* capKey =
-                    bs_.sym.captured;
-                const proto::ProtoString* homeKey =
-                    bs_.sym.homeFrame;
-                const proto::ProtoString* blkSelfKey =
-                    bs_.sym.blockSelf;
-                auto* bcPtrObj = ctx->fromLong(
-                    reinterpret_cast<long long>(&f.m->block(arg)));
-                // `bcPtrObj` is held across the setAttribute below — pin it.
-                TransientPin pinBcPtr(ctx, bcPtrObj);
-                block->setAttribute(ctx, bcKey, bcPtrObj);
-                // F3-C5: stash the current frame's captured dict so the
-                // block can resolve free variables back to the outer scope
-                // at invocation time.
-                const proto::ProtoObject* capD = getCaptured(f);
-                block->setAttribute(
-                    ctx, capKey,
-                    (capD && capD != PROTO_NONE) ? capD : PROTO_NONE);
-                // Track 1 slice 1: stamp the block with the HOME method
-                // activation. We store the creating frame's homeFrameId
-                // (NOT its frameId): a block created directly in a method
-                // gets that method's home, and a block created inside an
-                // outer block inherits the same method home the outer block
-                // already carries — so `^` from any nesting depth targets
-                // the method. `f.homeFrameId` gives both cases.
-                auto* homeObj = ctx->fromLong(
-                    static_cast<long long>(f.homeFrameId));
-                // F6 v3 E5 discipline: `homeObj` is held across setAttribute
-                // on the mutable block object (which allocates) — pin it.
-                TransientPin pinHome(ctx, homeObj);
-                block->setAttribute(ctx, homeKey, homeObj);
-                // CLO Part 1: stamp the block with the `self` of the frame
-                // that creates it (the header self-slot, baseSlot+1). For a
-                // block created directly in a method this is the method's
-                // receiver; for a block nested inside another block the
-                // creating frame's self is already the inherited self, so the
-                // stamp is transitive. Block invocation then builds the block
-                // frame with this self instead of PROTO_NONE, making
-                // `self` / PUSH_INSTVAR work inside method-level blocks.
-                const proto::ProtoObject* creatorSelf = getSelf(f);
-                if (!creatorSelf) creatorSelf = PROTO_NONE;
-                // `creatorSelf` is an already-rooted frame value, but pin it
-                // for symmetry across the setAttribute (which allocates).
-                TransientPin pinBlkSelf(ctx, creatorSelf);
-                block->setAttribute(ctx, blkSelfKey, creatorSelf);
-                push(f, block);
+                // arg = block index inside f.m->blocks(). A BlockClosure is
+                // an IMMUTABLE child of the Block prototype with four own
+                // attributes, written as one version (setAttributes):
+                //   __bc_ptr__      the sub-module (an opaque pointer);
+                //   __captured__    the creating frame's captured dict, so
+                //                   the block resolves its free variables in
+                //                   the outer scope (F3-C5);
+                //   __home_frame__  the creating frame's homeFrameId (not its
+                //                   frameId): a block created in a method
+                //                   gets that method's home, and one created
+                //                   in a block inherits the method home that
+                //                   block carries, so `^` at any nesting
+                //                   depth targets the method (Track 1);
+                //   __block_self__  the `self` of the creating frame (the
+                //                   inherited self in a nested block), the
+                //                   receiver of a block frame (CLO Part 1).
+                // Nothing writes a block after this point. Until 0.10.0 the
+                // block was a mutable object written by four setAttribute
+                // calls, each one a publication into protoCore's mutable
+                // table (a snapshot cell and a shard-root path copy): about
+                // 2.3 us and most of the garbage of every block created.
+                // Each value that allocates is pinned before the next
+                // allocation; the captured dict and self are frame values.
+                push(f, newClosure(ctx, f, arg, getCaptured(f)));
                 DISPATCH_SCOPED();
                 break;
             }
@@ -1186,6 +1549,51 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 push(f, lhs); push(f, rhs);
                 if (f.ivGroupActive) flushInstVarGroup(ctx, f);  // the send may observe self
                 op = Op::SEND_BINARY; goto L_SEND_BINARY;
+            }
+            case Op::BIN_INT_MUL: L_BIN_INT_MUL:
+            case Op::BIN_INT_MOD: L_BIN_INT_MOD:
+            case Op::BIN_INT_QUO: L_BIN_INT_QUO:
+            case Op::BIN_INT_AND: L_BIN_INT_AND:
+            case Op::BIN_INT_OR:  L_BIN_INT_OR: {
+                // Opcodes.h: the SmallInteger result, or the send.
+                Frame& f = frames_.back();
+                const proto::ProtoObject* rhs = pop(f);
+                const proto::ProtoObject* lhs = pop(f);
+                if (proto::isSmallInt(lhs) && proto::isSmallInt(rhs)) {
+                    const long long a = proto::asSmallInt(lhs);
+                    const long long b = proto::asSmallInt(rhs);
+                    long long r = 0;
+                    bool hit = true;
+                    switch (op) {
+                        case Op::BIN_INT_MUL:
+                            hit = !mulOverflows(a, b, &r);
+                            break;
+                        case Op::BIN_INT_MOD:   // floored: the sign of the divisor
+                            if (b == 0) { hit = false; break; }
+                            r = a % b;
+                            if (r != 0 && ((r < 0) != (b < 0))) r += b;
+                            break;
+                        case Op::BIN_INT_QUO:   // floored quotient
+                            if (b == 0) { hit = false; break; }
+                            r = a / b;
+                            if ((a % b != 0) && ((a < 0) != (b < 0))) --r;
+                            break;
+                        case Op::BIN_INT_AND: r = a & b; break;
+                        default:              r = a | b; break;   // BIN_INT_OR
+                    }
+                    // Operands are 54-bit, so / and % cannot overflow 64 bits;
+                    // only the range of the result is left to check.
+                    if (hit && proto::smallIntInRange(r)) {
+                        push(f, proto::makeSmallInt(r));
+                        DISPATCH_DIRECT();
+                    }
+                }
+                push(f, lhs); push(f, rhs);
+                if (f.ivGroupActive) flushInstVarGroup(ctx, f);  // the send may observe self
+                if (op == Op::BIN_INT_MUL || op == Op::BIN_INT_MOD || op == Op::BIN_INT_QUO) {
+                    op = Op::SEND_BINARY; goto L_SEND_BINARY;
+                }
+                op = Op::SEND_KEYWORD; goto L_SEND_KEYWORD;
             }
             case Op::BIN_INT_SUB: L_BIN_INT_SUB: {
                 Frame& f = frames_.back();
@@ -1293,7 +1701,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                            : /* keyword */ 0;
                 const std::string& selStr = f.m->constSymbol(arg);
                 if (op == Op::SEND_KEYWORD)
-                    for (char c : selStr) if (c == ':') ++argcOp;
+                    argcOp = static_cast<int>(f.m->constSymbolColons(arg));
                 // BL-1: a `super` send is its own instruction: the compiler
                 // pushes self and the arguments, then SEND_SUPER, so only
                 // this send looks up above the defining class -- not a send
@@ -1348,7 +1756,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // is pushed onto the operand stack as the apparent result of
                 // the send. The actual method execution happens later when
                 // STRuntime::drainOne pulls a message from the mailbox.
-                if (rt_.isActor(ctx, recv) && !isActorLocalSelector(selStr)) {
+                // Only an object cell (pointer tag 0, as methodHolder tests)
+                // can be an actor proxy: an immediate receiver skips the
+                // probe (0.10.0).
+                if ((reinterpret_cast<uintptr_t>(recv) & 0x3F) == 0
+                    && rt_.isActor(ctx, recv) && !isActorLocalSelector(selStr)) {
                     const proto::ProtoString* msgSelKey =
                         bs_.sym.selector;
                     const proto::ProtoString* msgArgsKey =
@@ -1463,29 +1875,29 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // chain. `__bc_ptr__` is set only on BlockClosures (by
                     // PUSH_BLOCK), never on `blockProto` itself, so a hit
                     // here is unambiguous evidence that `recv` is a block.
-                    auto* recvBcPtr = recv->getOwnAttributeDirect(ctx, recvBcKey);
-                    if (recvBcPtr && recvBcPtr != PROTO_NONE) {
-                        // Validate selector matches the value/value:/...
-                        // pattern for argcOp formal parameters. argcOp is
-                        // already computed from the selector colons above
-                        // (or 0 for SEND_UNARY which uses bare `value`).
-                        bool isValueFamily = false;
-                        if (op == Op::SEND_UNARY) {
-                            isValueFamily = (selStr == "value");
-                        } else if (op == Op::SEND_KEYWORD) {
-                            // selector must be exactly argcOp repetitions
-                            // of "value:" — i.e. "value:", "value:value:",
-                            // "value:value:value:", ...
-                            isValueFamily = true;
-                            std::string expected;
-                            for (int i = 0; i < argcOp; ++i) expected += "value:";
-                            if (selStr != expected) isValueFamily = false;
-                        }
-                        // SEND_BINARY never matches value-family.
+                    // Only a value-family selector (value, value:,
+                    // value:value:, ...) can take this path, so the selector
+                    // is tested first and only such a send probes the
+                    // receiver for __bc_ptr__ (0.10.0: every send to an
+                    // object paid that probe). SEND_BINARY never matches.
+                    bool isValueFamily = false;
+                    if (op == Op::SEND_UNARY) {
+                        isValueFamily = (selStr == "value");
+                    } else if (op == Op::SEND_KEYWORD && argcOp > 0
+                               && selStr.size() == 6u * static_cast<std::size_t>(argcOp)) {
+                        isValueFamily = true;
+                        for (std::size_t k = 0; k < selStr.size(); k += 6)
+                            if (selStr.compare(k, 6, "value:") != 0) {
+                                isValueFamily = false;
+                                break;
+                            }
+                    }
+                    const protoST::BytecodeModule* recvCode = isValueFamily
+                        ? blockCodeOfCached(rt_, ctx, recv->getOwnAttributeDirect(ctx, recvBcKey))
+                        : nullptr;
+                    if (recvCode) {
                         if (isValueFamily) {
-                            const protoST::BytecodeModule* sub =
-                                reinterpret_cast<const protoST::BytecodeModule*>(
-                                    recvBcPtr->asLong(ctx));
+                            const protoST::BytecodeModule* sub = recvCode;
                             if (sub->argCount() != argcOp) {
                                 // A catchable Error (with the trace when
                                 // unhandled), like any other runtime error.
@@ -1546,14 +1958,10 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     }
                 }
 
-                // Lookup walks from the receiver itself first, then up the
-                // prototype chain.  Starting at the receiver matters for
-                // "class as receiver" patterns (F4): a class prototype
-                // carries its instance methods as own-attributes, and
-                // messages sent to the class itself must resolve to those
-                // methods.  For ordinary instance receivers, getAttribute
-                // walks past the (typically empty) own-attribute slot to the
-                // prototype where the method is bound.
+                // Lookup starts at the receiver's method holder (methodHolder,
+                // Bootstrap.h): an instance itself, whose chain reaches the
+                // methods of its class, or for a class object its metaclass
+                // (D52), never the class's own instance-side methods.
                 //
                 // Note: getAttribute on a tagged immediate (SmallInteger,
                 // Boolean, ...) correctly delegates to its protoCore
@@ -1623,8 +2031,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         // through any parent subtree — a mixin's own method
                         // doing a `super` send — so every parent must be
                         // searched, in resolution order.
+                        // D52: the chain of the receiver's method holder --
+                        // for a class, its metaclass chain, where its
+                        // class-side methods are defined.
                         std::vector<const proto::ProtoObject*> stack;
-                        stack.push_back(recv);
+                        stack.push_back(lookupFrom);
                         for (int hops = 0; !stack.empty() && hops < 4096;
                              ++hops) {
                             const proto::ProtoObject* node = stack.back();
@@ -1696,6 +2107,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // a single subtree (the node itself plus its parents), so
                     // searching each parent in order via `getAttribute` and
                     // taking the first non-nil hit yields exactly that order.
+
                     auto* parents = defClsObj->getParents(ctx);
                     if (!parents || parents->getSize(ctx) == 0)
                         signalCatchable(rt_, ctx,
@@ -1723,50 +2135,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     superResolved = true;
                     lookupFrom = parents->getAt(ctx, 0);
                 }
-                auto* attr = superResolved
-                                 ? superResolvedAttr
-                                 : lookupFrom->getAttribute(ctx, selSym);
-                // D5 (MNT-b2): class-side / instance-side isolation. A method
-                // installed by `ClassName class >> sel` carries the
-                // `__class_side__` marker (stamped by __installClassMethod:as:).
-                // Such a method must NOT be reachable from an instance — only
-                // from a class object. The receiver is a class object when it
-                // owns `__class_name__` as a DIRECT own attribute (every user
-                // class is stamped with `__setClassName:`; a built-in class
-                // prototype is stamped at bootstrap). An instance merely
-                // inherits that attribute through its chain, so it does not own
-                // it. When a class-side method resolves for an instance
-                // receiver, drop it — the send then falls through to the
-                // `doesNotUnderstand` path below, signalling
-                // `MessageNotUnderstood`, exactly as the spec's class/instance
-                // protocol split requires.
-                //
-                // Only this one direction is enforced: an instance-side method
-                // sent to a class object is still allowed, because the built-in
-                // class prototypes (Array, Error, ...) deliberately double as
-                // both the class object and the instance-behaviour holder, and
-                // selectors such as `Array new:` rely on that. A `__class_side__`
-                // marker is only ever stamped on USER class-side methods, so
-                // this filter never touches the built-ins.
-                if (attr && attr != PROTO_NONE) {
-                    // Symbols are interned per-ProtoSpace; rather than calling
-                    // createSymbol on every SEND (which hits the SymbolTable
-                    // shard mutex — measured as 51 % of CPU under 8-worker
-                    // saturation), read the pointers cached on the Bootstrap
-                    // at runtime construction. Same per-space discipline,
-                    // amortised once.
-                    const proto::ProtoString* classSideKey = bs_.sym.classSide;
-                    const proto::ProtoString* classNameKey = bs_.sym.className;
-                    const proto::ProtoObject* csMark =
-                        attr->getOwnAttributeDirect(ctx, classSideKey);
-                    if (csMark == PROTO_TRUE) {
-                        const proto::ProtoObject* ownName =
-                            recv->getOwnAttributeDirect(ctx, classNameKey);
-                        bool recvIsClass = ownName && ownName != PROTO_NONE;
-                        if (!recvIsClass)
-                            attr = nullptr;   // hide it — instance receiver
-                    }
-                }
+                // K14, D52: lookupFrom is the receiver's method holder (a
+                // class's metaclass), so a class finds its class-side methods
+                // and the class protocol, and an instance never sees them.
+                const proto::ProtoObject* attr = superResolvedAttr;
+                if (!superResolved) attr = lookupFrom->getAttribute(ctx, selSym);
                 if (!attr || attr == PROTO_NONE) {
                     // D3 (MNT-b2): an unresolved selector is NOT a hard abort.
                     // It happens inside the engine's own SEND dispatch, never
@@ -1793,18 +2166,23 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     DISPATCH_SCOPED();
                     break;
                 }
-                // F4-U4: detect user method (Block-shaped wrapper carrying
-                // __bc_ptr__). User methods are installed by Compiler-emitted
-                // __installMethod:as: and are not tagged primitive markers.
-                // We probe for __bc_ptr__ first; if absent, fall through to
-                // the legacy primitive-marker (tagged SmallInteger with bit
-                // 62 set) dispatch.
+                // F4-U4: a user method is a Block-shaped wrapper carrying
+                // __bc_ptr__, installed by Compiler-emitted
+                // __installMethod:as:; it runs in a frame pushed on this
+                // engine. A primitive is a protoCore native method cell
+                // (bindPrimitive), called directly. Anything else is a value.
                 const proto::ProtoString* bcKey =
                     bs_.sym.bcPtr;
                 const proto::ProtoString* capKey =
                     bs_.sym.captured;
-                auto* bcPtrObj = attr->getOwnAttributeDirect(ctx, bcKey);
-                if (bcPtrObj && bcPtrObj != PROTO_NONE) {
+                // A user method is an object cell (pointer tag 0); a
+                // primitive is a method cell, so it skips the probe
+                // (0.10.0).
+                const protoST::BytecodeModule* sub =
+                    (reinterpret_cast<uintptr_t>(attr) & 0x3F) == 0
+                        ? blockCodeOfCached(rt_, ctx, attr->getOwnAttributeDirect(ctx, bcKey))
+                        : nullptr;
+                if (sub) {
                     // User method: F6 v3 A previously recursed via
                     //   ExecutionEngine subEng(rt_);
                     //   subEng.runWithArgs(...)
@@ -1814,9 +2192,6 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // RETURN/RETURN_TOP pops its frame and pushes its
                     // result onto OUR opStack (this very `f.opStack`,
                     // though by then `f` is a dangling reference).
-                    const protoST::BytecodeModule* sub =
-                        reinterpret_cast<const protoST::BytecodeModule*>(
-                            bcPtrObj->asLong(ctx));
                     if (sub->argCount() != argcOp + 1) {
                         signalCatchable(rt_, ctx,
                             "method " + selStr + " expects " +
@@ -1845,63 +2220,51 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // and dispatches the callee from its pc=0.
                     DISPATCH_SCOPED();
                 }
-                // F5-M3: member-access semantics. If the attribute is not a
-                // method (no __bc_ptr__) and is not a primitive marker (a
-                // tagged SmallInteger with bit 62 set), then a unary send is
-                // treated as a property read — the attribute is itself the
-                // result. This is what lets `m Greeter` resolve the class
+                if (const proto::ProtoMethod native = attr->asMethod(ctx)) {
+                    // A primitive (or another runtime's exported method):
+                    // called with the receiver as `self` and the operand
+                    // array as its positional arguments, nothing copied.
+                    const proto::ProtoArguments positional(
+                        sendArgs, static_cast<unsigned>(argcOp));
+                    // F6 v3 A note: this primitive call MAY itself end up
+                    // invoking invokeBlock() (e.g. ifTrue:, thenDo:, value)
+                    // which spins up a FRESH ExecutionEngine on the C++ stack.
+                    // That secondary engine has its own independent frames_
+                    // and does not interact with ours. The bounded primitive-
+                    // nesting depth makes that acceptable for F6 v3 A; the
+                    // unbounded user-method recursion was the actual target of
+                    // this refactor and is now gone.
+                    //
+                    // EXC-d: this is the engine's single native-primitive call
+                    // boundary. Wrap it in translateNativeException so a C++
+                    // exception thrown by the primitive (a std::runtime_error
+                    // from a bad selector / arity / arithmetic, or any UMD-native
+                    // throw) becomes a catchable protoST Error. The control-flow
+                    // siblings (NonLocalReturn / UnwindToHandler / RetrySignal /
+                    // ResumeSignal / PassSignal / FutureYield) and DebuggerHalt /
+                    // UnhandledSTException are re-thrown untouched by the wrapper,
+                    // so primitives that raise them on purpose are unaffected.
+                    auto* result = translateNativeException(
+                        rt_, ctx,
+                        [&] { return callMethodCell(native, ctx, recv, &positional, nullptr); });
+                    push(f, result ? result : PROTO_NONE);
+                    DISPATCH_SCOPED();
+                    break;
+                }
+                // F5-M3: member-access semantics. An attribute that is neither
+                // a user method nor a native method is a value: a unary send
+                // reads it -- this is what lets `m Greeter` resolve the class
                 // stored on a module wrapper (or any plain value attribute).
-                // For non-unary sends, treating a value attribute as a method
-                // is still an error.
-                if (!attr->isInteger(ctx)) {
-                    if (argcOp == 0) {
-                        push(f, attr);
-                        DISPATCH_SCOPED();
-                        break;
-                    }
-                    signalCatchable(rt_, ctx,
-                        "#" + selStr + ": the attribute is a value, not a method; "
-                        "only unary sends read value attributes");
+                // For non-unary sends, treating a value as a method is an
+                // error.
+                if (argcOp == 0) {
+                    push(f, attr);
+                    DISPATCH_SCOPED();
+                    break;
                 }
-                long long marker = attr->asLong(ctx);
-                if (!isPrimitiveMarker(marker)) {
-                    // Plain integer value stored as an attribute — same
-                    // member-access rule as above.
-                    if (argcOp == 0) {
-                        push(f, attr);
-                        DISPATCH_SCOPED();
-                        break;
-                    }
-                    signalCatchable(rt_, ctx,
-                        "#" + selStr + ": the attribute is a value, not a method; "
-                        "only unary sends read value attributes");
-                }
-                int primIdx = primitiveMarkerIndex(marker);
-                auto fn = rt_.registry().at(primIdx);
-                // F6 v3 A note: this primitive call MAY itself end up
-                // invoking invokeBlock() (e.g. ifTrue:, thenDo:, value)
-                // which spins up a FRESH ExecutionEngine on the C++ stack.
-                // That secondary engine has its own independent frames_
-                // and does not interact with ours. The bounded primitive-
-                // nesting depth makes that acceptable for F6 v3 A; the
-                // unbounded user-method recursion was the actual target of
-                // this refactor and is now gone.
-                //
-                // EXC-d: this is the engine's single native-primitive call
-                // boundary. Wrap it in translateNativeException so a C++
-                // exception thrown by the primitive (a std::runtime_error
-                // from a bad selector / arity / arithmetic, or any UMD-native
-                // throw) becomes a catchable protoST Error. The control-flow
-                // siblings (NonLocalReturn / UnwindToHandler / RetrySignal /
-                // ResumeSignal / PassSignal / FutureYield) and DebuggerHalt /
-                // UnhandledSTException are re-thrown untouched by the wrapper,
-                // so primitives that raise them on purpose are unaffected.
-                auto* result = translateNativeException(
-                    rt_, ctx,
-                    [&] { return fn(rt_, ctx, recv, sendArgs, argcOp); });
-                push(f, result ? result : PROTO_NONE);
-                DISPATCH_SCOPED();
-                break;
+                signalCatchable(rt_, ctx,
+                    "#" + selStr + ": the attribute is a value, not a method; "
+                    "only unary sends read value attributes");
             }
             case Op::SEND_CALL: L_SEND_CALL: {
                 // protoCore-style call-form send (positional + named args).
@@ -2013,11 +2376,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // Bytecode method? Read declared signature and bind.
                 const proto::ProtoString* bcKey  = bs_.sym.bcPtr;
                 const proto::ProtoString* capKey = bs_.sym.captured;
-                auto* bcPtrObj = attr->getOwnAttributeDirect(ctx, bcKey);
-                if (bcPtrObj && bcPtrObj != PROTO_NONE) {
-                    const protoST::BytecodeModule* sub =
-                        reinterpret_cast<const protoST::BytecodeModule*>(
-                            bcPtrObj->asLong(ctx));
+                if (const protoST::BytecodeModule* sub =
+                        blockCodeOfCached(rt_, ctx, attr->getOwnAttributeDirect(ctx, bcKey))) {
                     if (!sub->isCallForm()) {
                         // The receiver has a method under this bare name,
                         // but it was declared with Smalltalk syntax. Reject
@@ -2112,25 +2472,27 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     DISPATCH_SCOPED();
                 }
 
-                // A protoCore method: what a module written in C++ or in
-                // another language exports (proto::ProtoMethod). Called with
-                // the receiver as `self`, the positional arguments and the
-                // named ones (interned names), through protoCore's array call
-                // form. It is a native boundary: a ProtoException it raises
-                // (the module's own error type, protoCore's error) is
-                // signalled as a Smalltalk exception with its value
-                // unchanged, and a C++ exception becomes an Error
-                // (translateNativeException).
-                if (attr->isMethod(ctx)) {
+                // A protoCore method: a primitive, or what a module written in
+                // C++ or in another language exports (proto::ProtoMethod).
+                // Called directly with the receiver as `self`, the positional
+                // arguments and the named ones (interned names) as array
+                // descriptors. A primitive refuses named arguments. It is a
+                // native boundary: a ProtoException it raises (the module's
+                // own error type, protoCore's error) is signalled as a
+                // Smalltalk exception with its value unchanged, and a C++
+                // exception becomes an Error (translateNativeException).
+                if (const proto::ProtoMethod native = attr->asMethod(ctx)) {
                     proto::ProtoKeywordArgument keywords[16];
                     for (int i = 0; i < callNNamed; ++i)
                         keywords[i] = proto::ProtoKeywordArgument{
                             desc.sortedKeys[i], callArgs[callNPos + i]};
+                    const proto::ProtoArguments positional(
+                        callArgs, static_cast<unsigned>(callNPos));
+                    const proto::ProtoKeywordArguments named(
+                        keywords, static_cast<unsigned>(callNNamed));
                     auto* result = translateNativeException(rt_, ctx, [&] {
-                        return recv->call(ctx, nullptr, desc.name, recv,
-                                          callArgs, static_cast<unsigned>(callNPos),
-                                          callNNamed > 0 ? keywords : nullptr,
-                                          static_cast<unsigned>(callNNamed));
+                        return callMethodCell(native, ctx, recv, &positional,
+                                              callNNamed > 0 ? &named : nullptr);
                     });
                     push(f, result ? result : PROTO_NONE);
                     DISPATCH_SCOPED();
@@ -2144,27 +2506,6 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     push(f, attr);
                     DISPATCH_SCOPED();
                     break;
-                }
-
-                // Primitive marker? Reserve for v2 — assert no named args.
-                if (attr->isInteger(ctx)) {
-                    long long marker = attr->asLong(ctx);
-                    if (isPrimitiveMarker(marker)) {
-                        if (callNNamed > 0) {
-                            signalCatchable(rt_, ctx, 
-                                "primitive method '"
-                                + std::string(desc.name->toStdString(ctx))
-                                + "' does not accept named args in v1");
-                        }
-                        int primIdx = primitiveMarkerIndex(marker);
-                        auto fn = rt_.registry().at(primIdx);
-                        auto* result = translateNativeException(
-                            rt_, ctx,
-                            [&] { return fn(rt_, ctx, recv, callArgs, callNPos); });
-                        push(f, result ? result : PROTO_NONE);
-                        DISPATCH_SCOPED();
-                        break;
-                    }
                 }
 
                 // Non-zero args on a non-method attribute is an error.
@@ -2187,41 +2528,18 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 gcSafepoint(ctx);
                 DISPATCH_DIRECT();
             } break;
-            case Op::ASSERT_BOOL_OR_DNU: L_ASSERT_BOOL_OR_DNU: {
-                // 2026-05-24 correctness: the inlined ifTrue:/ifFalse:/
-                // whileTrue: paths emit this BEFORE the JUMP_IF_FALSE /
-                // JUMP_IF_TRUE that follows.  JUMP_IF_FALSE only branches
-                // when the value is exactly PROTO_FALSE, so without this
-                // guard a non-Boolean receiver (e.g. `123 ifTrue: [x]`)
-                // would silently take the not-PROTO_FALSE branch and
-                // execute the body — a regression vs the SEND_KEYWORD
-                // dispatch that previously raised doesNotUnderstand:ifTrue:.
-                // The guard peeks the value (no pop — JUMP_IF_FALSE pops
-                // it on either branch), validates, and on a non-Boolean
-                // signals MessageNotUnderstood through the standard
-                // handler-stack path.  `arg` is the const-pool index of
-                // the selector symbol that the call site used (so
-                // `e messageText` reads back informatively).
+            case Op::ASSERT_LOOP_BOOL: L_ASSERT_LOOP_BOOL: {
+                // The condition of an inlined whileTrue: / whileFalse:
+                // (Opcodes.h). A non-Boolean is replaced by the truth a
+                // resumed NonBooleanReceiver gives, as in the primitives.
                 Frame& f = frames_.back();
                 const proto::ProtoObject* v = peek(f);
                 if (v == PROTO_TRUE || v == PROTO_FALSE) {
                     DISPATCH_DIRECT();
                 }
-                // Non-Boolean receiver: build "doesNotUnderstand: <sel>"
-                // exactly like the SEND handler does on an unresolved
-                // selector.  The signal goes through signalErrorOfClass
-                // which throws UnwindToHandler on a handler match or
-                // UnhandledSTException otherwise — matching the
-                // pre-inline behaviour exactly.
-                const std::string& selStr = f.m->constSymbol(arg);
-                // Pop the bad value before we signal so the operand
-                // stack is the same shape the non-inlined SEND would
-                // have left it in.
-                const proto::ProtoObject* badRecv = pop(f);
-                auto* r = doesNotUnderstand(ctx, badRecv, selStr, nullptr, 0);
-                // A resumed handler would push `r` as the message's
-                // apparent result; non-resumable MNU normally threw.
-                push(f, r ? r : PROTO_NONE);
+                const bool truth = loopConditionIsTrue(rt_, ctx, v, f.m->constSymbol(arg));
+                pop(f);
+                push(f, truth ? PROTO_TRUE : PROTO_FALSE);
                 DISPATCH_DIRECT();
             }
             case Op::JUMP_IF_TRUE: L_JUMP_IF_TRUE: {
@@ -2235,6 +2553,42 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 Frame& f = frames_.back();
                 auto* v = pop(f);
                 if (v == PROTO_FALSE) f.pc += static_cast<std::size_t>(arg) * kInstrSize;
+                DISPATCH_DIRECT();
+                break;
+            }
+            case Op::JUMP_IF_NIL: L_JUMP_IF_NIL: {
+                // An inlined nil test (Opcodes.h): peek, jump on nil.
+                Frame& f = frames_.back();
+                const proto::ProtoObject* v = peek(f);
+                if (!v || v == PROTO_NONE)
+                    f.pc += static_cast<std::size_t>(arg) * kInstrSize;
+                DISPATCH_DIRECT();
+                break;
+            }
+            case Op::JUMP_IF_NOT_NIL: L_JUMP_IF_NOT_NIL: {
+                Frame& f = frames_.back();
+                const proto::ProtoObject* v = peek(f);
+                if (v && v != PROTO_NONE)
+                    f.pc += static_cast<std::size_t>(arg) * kInstrSize;
+                DISPATCH_DIRECT();
+                break;
+            }
+            case Op::IDENTICAL: L_IDENTICAL: {
+                // `==` (Opcodes.h): the identity test of Object>>==, no send.
+                Frame& f = frames_.back();
+                const proto::ProtoObject* b = pop(f);
+                const proto::ProtoObject* a = pop(f);
+                push(f, a == b ? PROTO_TRUE : PROTO_FALSE);
+                DISPATCH_DIRECT();
+                break;
+            }
+            case Op::JUMP_IF_NOT_BOOL: L_JUMP_IF_NOT_BOOL: {
+                // The guard of an inlined value conditional (Opcodes.h):
+                // a non-Boolean goes to the out-of-line doesNotUnderstand:.
+                Frame& f = frames_.back();
+                const proto::ProtoObject* v = peek(f);
+                if (v != PROTO_TRUE && v != PROTO_FALSE)
+                    f.pc += static_cast<std::size_t>(arg) * kInstrSize;
                 DISPATCH_DIRECT();
                 break;
             }
@@ -2354,29 +2708,16 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
             }
             case Op::STORE_INSTVAR: L_STORE_INSTVAR: {
                 Frame& f = frames_.back();
-                // F4-U5: write an instance variable on `self`. Mirror of
-                // PUSH_INSTVAR; pops the value-to-store from the operand
-                // stack and setAttribute's it under the mangled "_iv_<name>"
-                // key on local-0 self. See PUSH_INSTVAR for rationale.
-                if (f.sp == 0)
-                    throw NativeError("STORE_INSTVAR empty stack");
+                // F4-U5: write an instance variable on `self`: pop the value
+                // (it stays rooted in its slot) and set it under the module's
+                // cached "_iv_<name>" key on the frame's `self` (the header
+                // slot, right for method and block frames alike).
+                // storeInstVar refuses a write to an immutable receiver
+                // instead of losing it (review M1; this handler wrote
+                // directly, without that check, until 0.10.0).
                 const proto::ProtoObject* val = pop(f);
-                // Mangled "_iv_<name>" key, interned once and cached on the
-                // module (BytecodeModule::ivSymbol) — NOT rebuilt as a
-                // std::string and re-interned on every instance-variable
-                // access, which the profile measured as the dominant cost.
-                auto* sym = f.m->ivSymbol(ctx, arg);
-                // `sym` is interned (perennial) and `val` and `self` stay
-                // rooted via their frame slots, so nothing needs a pin across
-                // the allocating setAttribute.
-                // CLO Part 1: write to `self` from the frame's header
-                // self-slot (baseSlot+1) — correct for both method and block
-                // frames (see PUSH_INSTVAR rationale).
-                const proto::ProtoObject* self = getSelf(f);
-                if (!self || self == PROTO_NONE)
-                    throw NativeError("STORE_INSTVAR self is null");
-                const_cast<proto::ProtoObject*>(self)->setAttribute(ctx, sym, val);
-                DISPATCH_SCOPED();
+                storeInstVar(ctx, f, arg, val);
+                DISPATCH_DIRECT();
                 break;
             }
             case Op::IVAR_GROUP: L_IVAR_GROUP: {
@@ -2430,7 +2771,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     const proto::ProtoObject* self = getSelf(f);
                     if (!self || self == PROTO_NONE)
                         throw NativeError("STORE_INSTVAR self is null");
-                    self->setAttributes(ctx, e.count, names, values);
+                    if (self->setAttributes(ctx, e.count, names, values) != self)
+                        throw NativeError("instance variable assignment: the receiver "
+                                          "is an immutable value; nothing was written");
                 } else {
                     storeInstVar(ctx, f, e.nameConst, peek(f));
                 }
@@ -3070,6 +3413,12 @@ ExecutionEngine::restoreFrames(proto::ProtoContext* ctx,
             ctx_->setAutomaticLocal(opStackBase(fr) + static_cast<unsigned int>(j),
                                     v ? v : PROTO_NONE);
         }
+
+        // A slot that holds a forward (DEOPT_ENTER) keeps it: the variable
+        // is still shared with the closure, through the same dictionary.
+        for (proto::proto_ulong j = 0; j < locN && !fr.deoptForwarded; ++j)
+            if (deoptForwardOf(ctx, getLocal(fr, static_cast<unsigned int>(j))))
+                fr.deoptForwarded = true;
 
         g_slotCursor += regionSize;
         frames_.push_back(fr);

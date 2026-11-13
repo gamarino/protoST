@@ -1,0 +1,126 @@
+module main: <module>
+  args 0, locals 1 (0 c), stack 48 (deepest 3)
+  constants:
+    #0   symbol    #Cache
+    #1   symbol    #Object
+    #2   symbol    #__subclassNamed:
+    #3   string    'Cache'
+    #4   symbol    #__setClassName:
+    #5   string    'Cache'
+    #6   string    'value'
+    #7   symbol    #__setInstVarNames:
+    #8   symbol    #at:
+    #9   symbol    #__installMethod:as:
+    #10  symbol    #describe
+    #11  symbol    #new
+    #12  symbol    #printNl
+    #13  integer   42
+    #14  symbol    #==
+    #15  string    'cached'
+  code:
+      0  PUSH_GLOBAL        1     ; Object
+      1  PUSH_CONST         3     ; 'Cache'
+      2  SEND_KEYWORD       2     ; #__subclassNamed:, 1 arg
+      3  PUSH_CONST         5     ; 'Cache'
+      4  SEND_KEYWORD       4     ; #__setClassName:, 1 arg
+      5  PUSH_CONST         6     ; 'value'
+      6  SEND_KEYWORD       7     ; #__setInstVarNames:, 1 arg
+      7  DUP
+      8  STORE_GLOBAL       0     ; Cache
+      9  POP
+     10  PUSH_GLOBAL        0     ; Cache
+     11  PUSH_BLOCK         0     ; main.0 (Cache>>at:)
+     12  PUSH_CONST         8     ; #at:
+     13  SEND_KEYWORD       9     ; #__installMethod:as:, 2 args
+     14  POP
+     15  PUSH_GLOBAL        0     ; Cache
+     16  PUSH_BLOCK         1     ; main.1 (Cache>>describe)
+     17  PUSH_CONST         10    ; #describe
+     18  SEND_KEYWORD       9     ; #__installMethod:as:, 2 args
+     19  POP
+     20  PUSH_NIL
+     21  DUP
+     22  STORE_LOCAL        0     ; c
+     23  POP
+     24  PUSH_GLOBAL        0     ; Cache
+     25  SEND_UNARY         11    ; #new
+     26  DUP
+     27  STORE_LOCAL        0     ; c
+     28  POP
+     29  PUSH_LOCAL         0     ; c
+     30  PUSH_BLOCK         2     ; main.2 (<block>)
+     31  SEND_KEYWORD       8     ; #at:, 1 arg
+     32  SEND_UNARY         12    ; #printNl
+     33  POP
+     34  PUSH_LOCAL         0     ; c
+     35  SEND_UNARY         10    ; #describe
+     36  SEND_UNARY         12    ; #printNl
+     37  POP
+     38  PUSH_LOCAL         0     ; c
+     39  PUSH_BLOCK         3     ; main.3 (<block>)
+     40  SEND_KEYWORD       8     ; #at:, 1 arg
+     41  PUSH_CONST         13    ; 42
+     42  IDENTICAL
+     43  JUMP_IF_FALSE      3     ; -> 47
+     44  PUSH_CONST         15    ; 'cached'
+     45  SEND_UNARY         12    ; #printNl
+     46  JUMP               1     ; -> 48
+     47  PUSH_NIL
+     48  RETURN_TOP
+
+module main.0: Cache>>at:
+  args 2, locals 2 (0 self, 1 aBlock), stack 48 (deepest 2)
+  defining class Cache
+  constants:
+    #0   symbol    #value
+  code:
+      0  PUSH_INSTVAR       0     ; value
+      1  JUMP_IF_NOT_NIL    5     ; -> 7
+      2  POP
+      3  PUSH_LOCAL         1     ; aBlock
+      4  SEND_UNARY         0     ; #value
+      5  DUP
+      6  STORE_INSTVAR      0     ; value
+      7  RETURN
+
+module main.1: Cache>>describe
+  args 1, locals 2 (0 self, 1 __nn_1), stack 48 (deepest 1)
+  defining class Cache
+  slot 1 is 'v' in words 3..5
+  constants:
+    #0   symbol    #value
+    #1   symbol    #printString
+    #2   string    'empty'
+  code:
+      0  PUSH_INSTVAR       0     ; value
+      1  JUMP_IF_NIL        4     ; -> 6
+      2  STORE_LOCAL        1     ; __nn_1
+      3  PUSH_LOCAL         1     ; __nn_1
+      4  SEND_UNARY         1     ; #printString
+      5  JUMP               2     ; -> 8
+      6  POP
+      7  PUSH_CONST         2     ; 'empty'
+      8  RETURN
+
+module main.2: <block>
+  args 0, locals 0, stack 48 (deepest 2)
+  constants:
+    #0   integer   6
+    #1   integer   7
+    #2   symbol    #*
+  code:
+      0  PUSH_CONST         0     ; 6
+      1  PUSH_CONST         1     ; 7
+      2  BIN_INT_MUL        2     ; #*
+      3  RETURN_TOP
+
+module main.3: <block>
+  args 0, locals 0, stack 48 (deepest 1)
+  constants:
+    #0   integer   0
+  code:
+      0  PUSH_CONST         0     ; 0
+      1  RETURN_TOP
+42
+'42'
+'cached'

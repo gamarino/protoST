@@ -1,6 +1,6 @@
-"Kernel: exception protocol. signal, signal:, on:do:, retry, resume:, pass,
- return: and ensure: are native; exception sets and the remaining accessors
- are defined here."
+"Kernel: exception protocol. signal, signal:, on:do:, retry, retryUsing:,
+ resume:, pass, outer, return: and ensure: are native; exception sets and the
+ remaining accessors are defined here."
 
 Object subclass: #ExceptionSet instanceVariableNames: 'exceptionClasses'.
 
@@ -54,10 +54,13 @@ Error subclass: #InvalidArgument.
 Exception >> isResumable
   ^ self __isResumable.
 
-"Evaluate replacementBlock in place of the protected block, as retry
- re-evaluates the protected block."
-Exception >> retryUsing: replacementBlock
-  ^ self return: replacementBlock value.
+"Signalled by resume: (and so by a resumption through outer or pass) of an
+ exception that is not resumable, inside the handler that tried it, as in
+ Pharo. It is an Exception, not an Error, and is itself not resumable."
+Exception subclass: #IllegalResumeAttempt.
+
+IllegalResumeAttempt >> isResumable
+  ^ false.
 
 "A Notification is a resumable Exception whose unhandled default action
  answers nil and reports nothing, as in Pharo. The runtime's default action
@@ -66,11 +69,10 @@ Exception >> retryUsing: replacementBlock
  (answered by messageText and description) rather than in that slot."
 Exception subclass: #Notification instanceVariableNames: 'notificationText'.
 
-"protoST keeps a class's class-side and instance-side methods of the same
- selector in one slot, so this method serves both Notification signal: 'text'
- and aNotification signal: 'text'."
+Notification class >> signal: aText
+  ^ self new signal: aText.
+
 Notification >> signal: aText
-  self isClass ifTrue: [^ self new signal: aText].
   notificationText := aText.
   ^ self signal.
 
@@ -79,3 +81,10 @@ Notification >> messageText: aText
 
 Notification >> messageText
   ^ notificationText ifNil: [super messageText].
+
+"Signalled when a loop condition (whileTrue:, whileFalse:, whileTrue,
+ whileFalse; compiled inline or sent) answers an object that is not a
+ Boolean, as in Pharo. Resumable: the loop takes the resumed value as true
+ unless it is false. object answers the condition's value."
+NonBooleanReceiver >> object
+  ^ self instVarNamed: 'object'.

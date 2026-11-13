@@ -34,7 +34,7 @@ Read the source in the order a script travels through it:
 | 4. Bytecode | `src/runtime/Opcodes.h`, `BytecodeModule.h`, `BytecodeModule.cpp` | `BytecodeModule::emit`, `emitWide`, `patchArg`, `internSymbol`, `addBlockModule`, `cachedLocalCount`, `cachedExtraOperandStack` | The instruction set and the module: code bytes, constant pool, nested modules (block and method bodies), frame metadata, debug information. |
 | 5. VM | `src/runtime/ExecutionEngine.h`, `ExecutionEngine.cpp` | `ExecutionEngine::runWithArgs`, `runLoop`, `pushFrame`, `popFrame`, the `SEND_*` case of `runLoop`, `doesNotUnderstand`, `gcSafepoint` | The dispatch loop. Method and block frames are pushed on the engine's own frame stack; no C++ recursion per Smalltalk call. |
 | 6. Runtime | `src/runtime/STRuntime.cpp`, `Bootstrap.cpp` | `STRuntime::construct`, `loadKernel`, `runTopLevel`, `runModuleTopLevel`, `materialize`, `bindPrimitive` | Prototypes, globals, the kernel (`lib/kernel/*.st`, compiled and run like a script), literal materialisation, actors and their worker threads. |
-| 7. Primitives | `src/primitives/*.cpp`, `include/protoST/primitives.h` | `install*Primitives`, `PrimitiveRegistry::registerPrim`, `invokeBlock` (`block_prims.cpp`), `prim_Block_on_do` (`exception_prims.cpp`) | Built-in methods written in C++, bound on prototypes under a selector. |
+| 7. Primitives | `src/primitives/*.cpp`, `include/protoST/primitives.h` | `install*Primitives`, `primitiveMethod<F>`, `bindPrimitive`, `runtimeOf`, `invokeBlock` (`block_prims.cpp`), `prim_Block_on_do` (`exception_prims.cpp`) | Built-in methods written in C++: protoCore native methods bound on prototypes under a selector. |
 
 `src/runtime/Disassembler.cpp` prints a module; reading its `listModule`
 alongside `Opcodes.h` is a quick way to learn the operand of every opcode.
@@ -200,19 +200,21 @@ method its closure was created in (`homeFrameId`, stamped on the closure by
 
 ### 1.4 Closures, blocks and captured variables
 
-`PUSH_BLOCK n` creates a fresh mutable child of `BlockClosure` with four
-attributes:
+`PUSH_BLOCK n` creates a fresh immutable child of `BlockClosure` with four
+attributes, written as one version (`setAttributes`; until 0.10.0 a mutable
+child written four times, each write a publication into protoCore's mutable
+table). Nothing writes a closure afterwards:
 
 | Attribute | Value |
 |---|---|
-| `__bc_ptr__` | the address of the block's `BytecodeModule`, stored as an integer |
+| `__bc_ptr__` | the block's `BytecodeModule`, as a protoCore external pointer that borrows it (no finalizer: the module belongs to the runtime -- loaded files and modules handed over with `adoptModule` -- or to the embedder that runs it; `src/runtime/BlockCode.h`). For a module the runtime owns, the closures over one block share one cell, created with the first and anchored once in the runtime's live registry; a module an embedder keeps gets a cell per closure. The send and block paths read it through a 64-entry per-thread cache of decoded anchored cells. Until 0.10.0 it was the module's address as an integer, which any integer under that key could forge |
 | `__captured__` | the creating frame's captured-variables dict, or nil |
 | `__home_frame__` | the creating frame's home frame id |
 | `__block_self__` | the creating frame's `self` |
 
 A method value is the same object: `C >> sel` installs a closure over the
 method body's module under `sel`. A send recognises a method by its
-`__bc_ptr__`.
+`__bc_ptr__`, and only an external pointer there counts.
 
 **Captured variables** are not copied. A variable that some inner block uses
 (`Compiler::analyseClosures`: declared in a scope and needed by a block
@@ -237,13 +239,85 @@ Instance variables are never captured: they are attributes `_iv_<name>` of
 `self`, which a block reaches through its `__block_self__`.
 
 **Inlined blocks.** A literal block argument of `ifTrue:`, `ifFalse:`,
-`ifTrue:ifFalse:`, `ifFalse:ifTrue:`, `whileTrue:`, `whileFalse:` (zero
-arguments, no temporaries) and `to:do:` (one argument, no temporaries, the
-argument not captured by an inner block) is not a closure: its body is
-compiled into the enclosing code (`tryEmitInlinedControl`, examples 03, 05,
-06). `doYielding:` with a literal one-argument block is compiled to an
+`ifTrue:ifFalse:`, `ifFalse:ifTrue:`, `and:`, `or:`, `whileTrue:`,
+`whileFalse:` (zero arguments), `to:do:` (one argument), and `ifNil:`,
+`ifNotNil:`, `ifNil:ifNotNil:`, `ifNotNil:ifNil:` (the nil arm without
+arguments, the non-nil arm with none or one; 0.10.0) is not a closure: its
+body is compiled into the enclosing code (`tryEmitInlinedControl`, examples
+03, 05, 06, 19). The block may declare temporaries (0.10.0): each becomes a
+hidden slot of the enclosing frame (`__bt_<n>`, shown by the debugger under
+its own name over the block's code), and `PUSH_NIL`, `STORE_LOCAL` at the
+start of the body reset it on every entry, so every evaluation starts with
+its temporaries nil (`emitInlinedBlockBody`). When a block nested in the
+body captures an argument or a temporary of the block, the send keeps its
+real blocks: each evaluation then needs a binding of its own, which only a
+block activation's captured dictionary gives. The receiver of these
+sends is compiled as an ordinary expression: a block literal there is a real
+closure (only `whileTrue:` / `whileFalse:` inline their receiver block). `doYielding:` with a literal one-argument block is compiled to an
 explicit loop that sends `value:` to the block (example 15). Every other
 block is a real closure.
+
+**A non-Boolean receiver of an inlined conditional** (`ifTrue:`, `ifFalse:`,
+`ifTrue:ifFalse:`, `ifFalse:ifTrue:`, `and:`, `or:`; 0.10.0) gets the
+message the source wrote, as if nothing were inlined: its class's own
+method, or `doesNotUnderstand:` with the whole Message. `JUMP_IF_NOT_BOOL`
+leads to an out-of-line path (example 03) that sends the selector with
+closures of *copies* of the block literals. The compiler makes each copy
+with `compileDeoptBlock`: the closure analysis is redone for the literal
+with nothing inlined, and the literal is compiled as a sub-module whose
+name ends in `(not inlined)`. A Boolean receiver never runs this code.
+
+The copies need the enclosing code's variables, which the inlined body keeps
+in frame slots (only variables of real blocks are captured). The receiver may
+keep a copy and evaluate it at any later time, on any thread, so the copies
+must *share* those variables with the frame, as real closures would, for as
+long as either lives:
+
+- `DEOPT_ENTER k` moves each temporary that the copies use (deopt entry `k`;
+  `Scope::boxed`, recorded by `isCaptured` when a name resolves past the
+  copy's scope to an enclosing slot) into a mutable **scope dictionary**, the
+  binding a real closure would have had. The method's (or block's) own
+  temporaries go into one dictionary per activation, kept in the hidden slot
+  `__deopt_scope__`; the temporaries of an inlined block with temporaries go
+  into one per entry of that block, in a hidden slot of its own. The
+  dictionaries are chained in lexical order, the outermost a child of the
+  frame's captured dict, so every name resolves to its innermost declaration
+  as the compiler resolved it. A scope's dictionary is created the first time
+  a conditional inside it de-optimises, with those of the scopes around it.
+  The frame slot then holds a **forward** (an immutable object naming the
+  dictionary and the variable), and the frame is marked
+  (`Frame::deoptForwarded`): from then on the accesses of such slots follow
+  forwards, so the frame and the copies read and write one variable. The
+  compiler knows which slots a conditional of the module may forward and,
+  once the module is complete, turns their `PUSH_LOCAL` / `STORE_LOCAL`
+  into `PUSH_SHARED_LOCAL` / `STORE_SHARED_LOCAL`
+  (`BytecodeModule::routeSharedLocals`), which test the mark; every other
+  local access tests nothing.
+  Arguments cannot be assigned: their values are copied. All of this goes
+  into the **box**, a child of the innermost dictionary that becomes the
+  copies' captured dict, stored in the frame slot `__deopt_box__`.
+- `PUSH_DEOPT_BLOCK n` pops the box and pushes a closure of sub-module `n`
+  whose `__captured__` is the box. In the copy those variables are
+  `PUSH_CAPTURED` / `STORE_CAPTURED`.
+- `DEOPT_EXIT k` clears the box slot. Nothing is copied back: there is one
+  copy of each variable.
+- `RESET_LOCAL s`, at every entry of an inlined block with temporaries, sets
+  the block's slots to nil *without* following a forward (and its dictionary
+  slot, when it has one), so the next entry starts fresh variables while a
+  closure kept from the previous entry keeps the previous ones, as each
+  activation of a real block would have its own.
+
+A write in a copy is seen by the method, during the send and after it; a
+write in the method is seen by a copy the receiver evaluates later; `^`
+returns from the method (the closure's home is the frame's home). The
+dictionaries are ordinary protoCore mutable objects, so a copy run by another
+thread is a closure like any other. A debugger or DAP view of the frame shows
+the values behind the forwards (`makeDebugFrame`). Programs whose
+conditionals always see Booleans never execute any of this; their only cost
+is the test of the frame mark in the accesses of shared slots.
+Until fix round 1 of 0.10.0 the box held copies that `DEOPT_EXIT` copied
+back, and a copy that used a frame variable signalled an `Error` when
+evaluated after the send returned (STATUS D53).
 
 ### 1.5 Calling conventions
 
@@ -259,9 +333,9 @@ case of `runLoop`) tries, in order:
    the few the proxy answers itself (`isActorLocalSelector`: identity,
    printing, nil tests): the message is queued on the actor's mailbox, the
    actor is scheduled, and a pending `Future` is the result.
-2. **Block evaluation.** A receiver that owns `__bc_ptr__` and a selector
-   `value`, `value:`, `value:value:`, ... matching the block's argument
-   count: a block frame is pushed in this engine (self = `__block_self__`,
+2. **Block evaluation.** A selector `value`, `value:`, `value:value:`, ...
+   (tested first, so no other send probes the receiver) sent to a receiver
+   that owns `__bc_ptr__`, matching the block's argument count: a block frame is pushed in this engine (self = `__block_self__`,
    captured dict = `__captured__`, home = `__home_frame__`). This path can
    be suspended by a `Future>>wait` inside the block (cooperative yield).
 3. **Lookup.** `methodHolder(receiver)` (protoST's prototype for a primitive
@@ -274,19 +348,35 @@ case of `runLoop`) tries, in order:
    method of the receiver's class runs with a `Message`; otherwise a
    `MessageNotUnderstood` (an `Error`) is signalled, text
    `doesNotUnderstand: sel (receiver class: C)`.
-5. **User method** (the attribute owns `__bc_ptr__`): the module's
-   `argCount` must be the send's argument count plus one; a frame is pushed
-   with local 0 = self = the receiver and the arguments in locals 1..n; then
-   the call-entry safepoint (1.6).
-6. **A value attribute** (not an integer): a unary send answers the
-   attribute itself (member access, used for module exports); any other send
-   raises `#sel: the attribute is a value, not a method`.
-7. **Primitive** (the attribute is an integer with bit 62 set, the
-   primitive's index in the registry): the C++ function is called as
-   `fn(rt, ctx, receiver, args, argc)` **in the engine's context**, inside
-   `translateNativeException`, which turns a C++ exception it throws into a
-   catchable protoST `Error`. `args` points into a C++ array whose values
-   are still in the frame's (popped but traced) operand-stack slots.
+5. **User method** (the attribute is an object cell that owns
+   `__bc_ptr__`): the module's `argCount` must be the send's argument count
+   plus one; a frame is pushed with local 0 = self = the receiver and the
+   arguments in locals 1..n; then the call-entry safepoint (1.6). Only an
+   object cell (pointer tag 0) is probed for `__bc_ptr__`.
+6. **Primitive** (the attribute is a protoCore method cell, `asMethod`
+   answers its `proto::ProtoMethod`): the method is called directly as
+   `callMethodCell(method, ctx, receiver, &positional, nullptr)` (which calls
+   `method(ctx, receiver, nullptr, &positional, nullptr)`) **in the engine's
+   context**, inside `translateNativeException`, which turns a C++ exception
+   it throws into a catchable protoST `Error`. `positional` is a
+   `proto::ProtoArguments` built on the C++ stack over the operand array,
+   whose values are still in the frame's (popped but traced) operand-stack
+   slots; nothing is copied. A protoST primitive is `primitiveMethod<F>`
+   (`include/protoST/primitives.h`), which finds the runtime with
+   `runtimeOf(ctx)` and calls `F(rt, ctx, receiver, args, argc)`.
+   `callMethodCell` leaves the cell it calls in a thread-local token, which
+   the primitive consumes on entry; a primitive entered without its token (a
+   direct protoCore `call` from another runtime or embedder C++) runs behind
+   the boundary `__st_send__` gives (`detail::callPrimitiveFromOutside`,
+   INTEROP.md §4.3 and §6.1), which protoST's own sends do not pay for. A method
+   another runtime exports (a C++ module, `protoscalac`) is a method cell
+   too and is called the same way.
+7. **A value attribute** (anything else, an integer included): a unary send
+   answers the attribute itself (member access, used for module exports);
+   any other send raises `#sel: the attribute is a value, not a method`.
+   Until 0.10.0 a primitive was an integer attribute (its registry index
+   with bit 62 set), so a value attribute holding such an integer was
+   dispatched as a primitive.
 
 **Call-form sends** (`SEND_CALL`): `recv name(p1, k = v)`. The operand names
 a symbol `name#nPos#key1#key2...` (named keys sorted); the engine parses it
@@ -295,10 +385,11 @@ positional values and the named values (in sorted-key order) are on the
 stack. The bare `name` is looked up; a call-form method gets its positional
 values in locals 1..nPos and each declared named parameter either the
 caller's value or the unset marker, which the method's prologue replaces by
-the default expression (example 08). A protoCore method (a module written in
-C++ or another language) is called through protoCore's array call form with
-the named values as `ProtoKeywordArgument`s; a primitive accepts positional
-values only. At most 16 values; actors are refused.
+the default expression (example 08). A protoCore method (a primitive, or a
+module written in C++ or another language) is called directly with the
+positional values as `ProtoArguments` and the named values as
+`ProtoKeywordArguments`; a primitive refuses named values (`a primitive
+method takes no named arguments`). At most 16 values; actors are refused.
 
 **Blocks evaluated by primitives.** A primitive that takes a block and runs
 it (`ifTrue:` when not inlined, `do:`, `inject:into:`, `on:do:`, `ensure:`,
@@ -306,7 +397,10 @@ it (`ifTrue:` when not inlined, `do:`, `inject:into:`, `on:do:`, `ensure:`,
 block in a **new `ExecutionEngine` on the C++ stack**, on the same
 `ProtoContext`. These nested engines nest strictly LIFO; at most 1,000 can be
 live on a thread (`kMaxNestedEngines`), past which the catchable `Error`
-"stack depth exceeded (nested block evaluation)" is raised. A `Future>>wait`
+"stack depth exceeded (nested block evaluation)" is raised. The count is
+sized for optimised native frames (about 4.6 KB a level, 4.6 MB in an 8 MB
+stack); an unoptimised `-O0` build takes 8 to 12 KB a level, so it needs a
+12 MB stack (`ulimit -s 16384`) to reach the limit instead of overflowing. A `Future>>wait`
 inside such a block is not cooperatively yieldable: it blocks its worker
 thread.
 
@@ -353,7 +447,10 @@ There are **no exception opcodes**. `on:do:`, `on:do:on:do:`, `ensure:` and
   off the end of the handler, and `retry` unwind with a C++ exception
   (`UnwindToHandler`, `RetrySignal`) caught by the `on:do:` primitive that
   owns the handler id. An unhandled `Error` reaches the top level as
-  `UnhandledSTException` and is reported with the protoST stack.
+  `UnhandledSTException` and is reported with the protoST stack. When the
+  runtime owns its space, `STRuntime::atEmbedderBoundary` turns it into a
+  self-contained `STUncaughtError` as it leaves to the embedder, so it may
+  outlive the runtime (KNOWN_ISSUES K20).
 - `ensure:` runs its block on the way out of normal returns, unwinds and
   non-local returns.
 - Errors the engine itself raises (`doesNotUnderstand:`, an undefined
@@ -387,13 +484,16 @@ another runtime's `ProtoSpace` (`STRuntime`'s `ownRootCtx`).
 
 ## 2. Opcode reference
 
-`Op` (`src/runtime/Opcodes.h`) has **43 values**: 1 to 44 except 7 and 21,
-and `EXTEND` (254). The values 0, 7, 21 and 255 are reserved: they were
-`NOP`, `PUSH_SUPER`, `DUP_RECEIVER` and `HALT`, removed because the compiler
-no longer emitted them (`PUSH_SUPER` since `super` sends became `SEND_SUPER`)
+`Op` (`src/runtime/Opcodes.h`) has **58 values**: 1 to 60 except 7, 21 and
+56, and `EXTEND` (254). The values 0, 7, 21, 56 and 255 are reserved: they
+were `NOP`, `PUSH_SUPER`, `DUP_RECEIVER`, `BIN_INT_REM` and `HALT`.
+`BIN_INT_REM` was dropped before 0.10.0 shipped because `rem:` is not one of
+Pharo's special selectors, so a method a program adds for it must be reached
+(review R3-1); the others were removed because the compiler no longer
+emitted them (`PUSH_SUPER` since `super` sends became `SEND_SUPER`)
 and only hand-built unit tests ran them; a reserved value is an unimplemented
-opcode. The dispatch in `ExecutionEngine::runLoop` has a `case` for all 43
-and a threaded-dispatch label for the 42 that execute (`EXTEND` is a prefix,
+opcode. The dispatch in `ExecutionEngine::runLoop` has a `case` for all 56
+and a threaded-dispatch label for the 55 that execute (`EXTEND` is a prefix,
 consumed while decoding; a stray one raises `stray EXTEND prefix`). The
 compiler emits all of them; `EXTEND` only as a prefix, by `emitWide` and when
 it widens a jump.
@@ -409,8 +509,8 @@ class is a C++ `std::runtime_error`, impossible in compiler output.
 |---|---|---|---|---|---|
 | `PUSH_CONST` | 1 | constant index (wide) | `-> v` | Pushes the constant, materialised on the executing thread's context (`STRuntime::materialize`): an integer as a SmallInteger (or `LargeInteger` past 56 bits); a float, a string and a large integer allocate a new object on every execution; a symbol is the interned symbol; a char a `Character`; the unset marker the bootstrap singleton. | number, string, symbol and character literals; the elements of `#(...)`; the selector of a method install; the call-form prologue's unset marker |
 | `PUSH_NIL` | 8 | — | `-> nil` | | `nil`; the value of an empty body, of an inlined `ifTrue:` not taken and of an inlined loop; top-level temporaries |
-| `PUSH_TRUE` | 9 | — | `-> true` | | `true` |
-| `PUSH_FALSE` | 10 | — | `-> false` | | `false` |
+| `PUSH_TRUE` | 9 | — | `-> true` | | `true`; the value of an inlined `or:` whose receiver is true |
+| `PUSH_FALSE` | 10 | — | `-> false` | | `false`; the value of an inlined `and:` whose receiver is false |
 | `PUSH_SELF` | 6 | — | `-> self` | Pushes the frame's header `self` (the receiver in a method, `__block_self__` in a block). | `self` |
 | `MAKE_ARRAY` | 29 | element count (wide) | `v1..vn -> array` | Pops the n values (the first pushed is element 1) and pushes a new `Array` (allocates; the elements stay in their slots until the array exists). | `#( ... )` and `{ ... }`; both build a fresh array on every evaluation |
 
@@ -418,8 +518,8 @@ class is a C++ `std::runtime_error`, impossible in compiler output.
 
 | Op | # | Operand | Stack | Semantics | Emitted by |
 |---|---|---|---|---|---|
-| `PUSH_LOCAL` | 2 | slot (wide) | `-> v` | Pushes the frame slot. Errors: `engine local slot out of range`. | a temporary or argument not captured; `self` at the end of a method (`PUSH_LOCAL 0`); the prologue copy of a captured argument |
-| `STORE_LOCAL` | 3 | slot (wide) | `v ->` | Pops into the slot. Errors: `STORE_LOCAL with empty stack`. | assignment to a temporary (after `DUP`); the hidden locals of `to:do:`, `doYielding:` and cascades; the call-form default prologue |
+| `PUSH_LOCAL` | 2 | slot (wide) | `-> v` | Pushes the frame slot. A slot past the frame's locals cannot occur (the count is computed from the module); a debug build asserts. | a temporary or argument not captured; `self` at the end of a method (`PUSH_LOCAL 0`); the prologue copy of a captured argument |
+| `STORE_LOCAL` | 3 | slot (wide) | `v ->` | Pops into the slot. Errors: `engine operand stack underflow` (a hand-built module). | assignment to a temporary (after `DUP`, except a statement in a method or block body whose value is discarded); the hidden locals of `to:do:`, `doYielding:` and cascades; the call-form default prologue |
 | `DUP` | 4 | — | `v -> v v` | | every assignment (the assigned value is the expression's value); each part of a cascade; a class declaration |
 | `POP` | 5 | — | `v ->` | | between statements; after a cascade part; after an inlined loop body |
 
@@ -435,7 +535,7 @@ the attribute `_iv_v` of the class that declares it.
 | `PUSH_GLOBAL` | 24 | name constant (wide) | `-> v` | Pushes the global. Errors: `Error` "undefined global: X" (catchable) when it is unbound or bound to nil. | a capitalised or otherwise unresolved name; the class in a declaration or method install |
 | `STORE_GLOBAL` | 25 | name constant (wide) | `v ->` | Pops and binds the global. | a class declaration (after `DUP`); top-level assignment in the REPL |
 | `PUSH_INSTVAR` | 26 | name constant (wide) | `-> v` | Pushes `self`'s `_iv_<name>`, found up the prototype chain (so an instance reads a class variable from its class); nil when absent. | an instance variable or class variable in an instance-side method; a class variable in a class-side method |
-| `STORE_INSTVAR` | 27 | name constant (wide) | `v ->` | Pops and sets `self`'s own `_iv_<name>` (publishes a new version of `self` in protoCore's mutable table). Errors: `STORE_INSTVAR self is null`. | assignment to an instance variable that is not part of a write group |
+| `STORE_INSTVAR` | 27 | name constant (wide) | `v ->` | Pops and sets `self`'s own `_iv_<name>` (publishes a new version of `self` in protoCore's mutable table). Errors: `STORE_INSTVAR self is null`; an immutable `self` is refused (`instance variable assignment: the receiver is an immutable value; nothing was written`), never lost. | assignment to an instance variable that is not part of a write group |
 | `PUSH_OWN_INSTVAR` | 42 | name constant (wide) | `-> v` | As `PUSH_INSTVAR`, own attribute only (a subclass does not see its superclass's value). | a class-instance variable in a class-side method |
 | `STORE_CLASSVAR` | 41 | name constant (wide) | `v ->` | Pops and writes `_iv_<name>` on the first object up `self`'s chain that owns it (the declaring class), so the class, its subclasses and their instances share it. | assignment to a class variable, from either side |
 | `IVAR_GROUP` | 43 | write-group entry (wide) | `v -> v` | A write of a run of instance-variable assignments, not its last: the value stays on the stack, not yet written. At the run's first write the engine decides whether to group (not when a debugger is attached); when it does not, each write is done at once as `STORE_INSTVAR`. | `tryEmitInstVarGroup`: a run of 2-16 statements `v := e` on instance variables whose values after the first cannot run code (example 16) |
@@ -454,11 +554,22 @@ the attribute `_iv_v` of the class that declares it.
 
 | Op | # | Operand | Stack | Semantics | Emitted by |
 |---|---|---|---|---|---|
-| `JUMP` | 15 | forward offset | `->` | `next += operand` words. | inlined `ifTrue:ifFalse:` (over the else branch), `ifTrue:` (over the `PUSH_NIL`) |
-| `JUMP_IF_FALSE` | 17 | forward offset | `v ->` | Pops; jumps when the value is exactly `false`. Any other value falls through, hence the guard below. | inlined `ifTrue:`, `ifTrue:ifFalse:`, `whileTrue:`, `to:do:` (loop exit), `doYielding:`; the call-form default prologue |
-| `JUMP_IF_TRUE` | 16 | forward offset | `v ->` | Pops; jumps when the value is exactly `true`. | inlined `ifFalse:`, `whileFalse:` |
+| `JUMP` | 15 | forward offset | `->` | `next += operand` words. | inlined `ifTrue:ifFalse:` (over the else branch), `ifTrue:` (over the `PUSH_NIL`), `and:` / `or:` (over the `PUSH_FALSE` / `PUSH_TRUE`); after the out-of-line send of an inlined value conditional (`DEOPT_EXIT`) |
+| `JUMP_IF_FALSE` | 17 | forward offset | `v ->` | Pops; jumps when the value is exactly `false`. Any other value falls through, hence the guard below. | inlined `ifTrue:`, `ifTrue:ifFalse:`, `and:`, `whileTrue:`, `to:do:` (loop exit), `doYielding:`; the call-form default prologue |
+| `JUMP_IF_TRUE` | 16 | forward offset | `v ->` | Pops; jumps when the value is exactly `true`. | inlined `ifFalse:`, `or:`, `whileFalse:` |
 | `JUMP_BACK` | 30 | backward offset | `->` | `next -= operand` words, then polls the GC safepoint (1.6). | the back edge of inlined `whileTrue:`, `whileFalse:`, `to:do:` and of `doYielding:` |
-| `ASSERT_BOOL_OR_DNU` | 38 | selector constant (wide) | `v -> v` | Leaves a Boolean in place. Any other value is popped and `doesNotUnderstand: <selector>` is signalled with it as the receiver, as the send the inlining replaced would have done. | before every conditional jump of an inlined `ifTrue:` / `ifFalse:` / `ifTrue:ifFalse:` / `ifFalse:ifTrue:` / `whileTrue:` / `whileFalse:` |
+| `JUMP_IF_NOT_BOOL` | 45 | forward offset | `v -> v` | Peeks; jumps when the value is neither `true` nor `false`, which stays on the stack either way. | the guard of an inlined `ifTrue:` / `ifFalse:` / `ifTrue:ifFalse:` / `ifFalse:ifTrue:` / `and:` / `or:`, to its out-of-line send (`DEOPT_ENTER` ... `DEOPT_EXIT`, example 03) |
+| `ASSERT_LOOP_BOOL` | 38 | selector constant (wide) | `v -> b` | Leaves a Boolean in place. Any other value is replaced by `true` or `false`: a resumable `NonBooleanReceiver` is signalled with the value as its `object`, and the resumed value counts as true unless it is `false` (Pharo's rule; the loop primitives apply the same one). Named `ASSERT_BOOL_OR_DNU` until 0.10.0, when it sent `doesNotUnderstand:` of the loop selector to the value. | before the conditional jump of an inlined `whileTrue:` / `whileFalse:` (example 06) |
+| `JUMP_IF_NIL` | 50 | forward offset | `v -> v` | Peeks; jumps when the value is nil, which stays on the stack either way. | an inlined `ifNotNil:`, `ifNil:ifNotNil:`, `ifNotNil:ifNil:`, to the nil arm or the end (example 19) |
+| `JUMP_IF_NOT_NIL` | 51 | forward offset | `v -> v` | Peeks; jumps when the value is not nil, which stays on the stack either way. | an inlined `ifNil:`, over its arm: the receiver is the answer (example 19) |
+| `DEOPT_ENTER` | 46 | deopt entry (wide) | `->` | Moves the temporaries the entry names into their scope dictionaries (creating the missing ones) and leaves forwards in their slots; builds the box, a child of the innermost dictionary holding copies of the arguments the entry names; stores it in the entry's box slot. | first instruction of the out-of-line path of an inlined value conditional (examples 03, 05; section 1.4) |
+| `PUSH_DEOPT_BLOCK` | 47 | sub-module index (wide) | `box -> closure` | As `PUSH_BLOCK`, with the popped box as the closure's captured dict. | after `PUSH_LOCAL __deopt_box__`, once per block literal of the conditional |
+| `DEOPT_EXIT` | 48 | deopt entry (wide) | `->` | Clears the box slot. | after the `SEND_KEYWORD` of the out-of-line path |
+| `RESET_LOCAL` | 49 | slot | `->` | Stores nil in the slot without following a forward. | entry of an inlined block with temporaries, once per temporary (and its scope-dictionary slot) |
+| `PUSH_SHARED_LOCAL` | 59 | slot | `-> v` | As `PUSH_LOCAL`; when the frame holds forwards and the slot holds one, pushes the variable it names. | every read of a temporary that a de-optimised conditional of the module may share (section 1.4) |
+| `STORE_SHARED_LOCAL` | 60 | slot | `v ->` | As `STORE_LOCAL`; when the frame holds forwards and the slot holds one, writes the variable it names. | every write of such a temporary |
+| `PUSH_LATE_VAR` | 61 | name constant (wide) | `-> v` | Never executed (the engine reports an unimplemented opcode). Installing the method rewrites it in place, once, into `PUSH_INSTVAR`, `PUSH_OWN_INSTVAR` (a class-instance variable, class side) or, for a class variable, `PUSH_INSTVAR`, by what the class and its ancestors declare; in the REPL a name they do not declare becomes `PUSH_GLOBAL`; otherwise the install signals `undeclared variable` (S37, LANGUAGE.md §4.10). | a lowercase name the compiler cannot resolve in a method of a class whose superclass chain it cannot see (an imported class, a class built by the `subclass:` message) |
+| `STORE_LATE_VAR` | 62 | name constant (wide) | `v ->` | As `PUSH_LATE_VAR`, rewritten into `STORE_INSTVAR` or `STORE_CLASSVAR`. | an assignment to such a name |
 
 ### 2.6 Sends and returns
 
@@ -469,6 +580,7 @@ the attribute `_iv_v` of the class that declares it.
 | `SEND_KEYWORD` | 13 | selector constant (wide) | `r a1..an -> v` | Sends with n = number of colons, any number. | keyword messages not inlined; class declarations and method installs (`__subclassNamed:`, `__installMethod:as:`, ...) |
 | `SEND_SUPER` | 14 | selector constant (wide) | `self a1..an -> v` | A send whose lookup starts above the class that defines the running method (1.5, step 3); n is the number of colons, or 1 for a binary selector. Only this send is affected: a send in its arguments is ordinary. Errors (catchable): `super send outside a method body`, `super: cannot resolve defining class C`, `super: class C has no superclass`. | a unary, binary or keyword message, or every part of a cascade, whose receiver is `super`, after `PUSH_SELF` (example 17). `super` as a value is `PUSH_SELF`; `super name(...)` is a compile error |
 | `SEND_CALL` | 39 | mangled call selector constant (wide) | `r p1..pn k1..km -> v` | Call-form send (1.5). Errors (catchable): more than 16 values; actor receiver; not a call-form method; wrong positional count; an unknown named argument; named arguments to a primitive. | `recv name(...)` (example 08) |
+| `IDENTICAL` | 52 | — | `a b -> bool` | Whether `a` and `b` are the same object, as `Object>>==` answers; never a send (0.10.0). | every `==` except `super == x`, which is a `SEND_SUPER` (example 19) |
 | `RETURN` | 18 | — | `v ->` | Returns the top of the stack (nil if empty) from the frame's home: a local return in a method or top-level frame, a non-local return in a block frame (1.7). | `^ expr`; the implicit `^ self` at the end of a method body |
 | `RETURN_TOP` | 19 | — | `v ->` | Returns the top of the stack (nil if empty) from this frame only. Falling off the end of the code does the same. | the end of every block body and of the top-level module |
 
@@ -483,16 +595,26 @@ the attribute `_iv_v` of the class that declares it.
 | `BIN_INT_GE` | 35 | `#>=` | `a b -> bool` | both SmallIntegers |
 | `BIN_INT_GT` | 36 | `#>` | `a b -> bool` | both SmallIntegers |
 | `BIN_INT_EQ` | 37 | `#=` | `a b -> bool` | both SmallIntegers (pointer equality of the tagged values) |
+| `BIN_INT_MUL` | 53 | `#*` | `a b -> a*b` | both SmallIntegers and the product stays in range (0.10.0) |
+| `BIN_INT_MOD` | 54 | `#\\` | `a b -> a\\b` | both SmallIntegers, divisor not zero; floored (the sign of the divisor) (0.10.0) |
+| `BIN_INT_QUO` | 55 | `#//` | `a b -> a//b` | both SmallIntegers, divisor not zero, quotient in range; floored (0.10.0) |
+| `BIN_INT_AND` | 57 | `#bitAnd:` | `a b -> a bitAnd: b` | both SmallIntegers (0.10.0) |
+| `BIN_INT_OR` | 58 | `#bitOr:` | `a b -> a bitOr: b` | both SmallIntegers (0.10.0) |
 
-Semantics, common to all seven: on the fast path the result replaces the
+Semantics, common to all twelve: on the fast path the result replaces the
 operands with no send, no lookup and no allocation. Otherwise (another
-operand type, an overflow) the operands are pushed back and the instruction
-continues as `SEND_BINARY` with the same operand, so a Float, a
-`LargeInteger`, a `Fraction` or a user class defining `+` behaves exactly as
-with a send; an active write group is flushed first. **Emitted by:** every
-binary send whose selector is one of the seven, whatever the receiver; the
-counter test and increment of an inlined `to:do:`. There is no fast path for
-`*`, `//` or `\\`.
+operand type, an overflow, a zero divisor) the operands are pushed back and
+the instruction continues as `SEND_BINARY` (`SEND_KEYWORD` for
+`bitAnd:`, `bitOr:`) with the same operand, so a Float, a `LargeInteger`, a
+`Fraction`, a user class defining `+`, or a zero divisor (`ZeroDivide` from
+the primitive) behaves exactly as with a send; an active write group is
+flushed first. **Emitted by:** every binary send whose selector is one of
+the first ten, every one-keyword send of `bitAnd:` or `bitOr:` (not
+to `super`), whatever the receiver; the counter test and increment of an
+inlined `to:do:`. As for `+`, a method a program adds to `SmallInteger` for
+these selectors is not reached by a SmallInteger receiver.
+`tests/conformance/12-builtins/integer-fast-paths-match-the-send.st` checks
+each against the send.
 
 ### 2.8 Blocks
 
@@ -535,7 +657,7 @@ compiler change, and review the notes.
 | 11 | primitive call | `size`, `at:` |
 | 12 | higher-order | `inject:into:` with a block |
 | 13 | exceptions | `on:do:`, `signal:`, `ensure:` |
-| 14 | metaprogramming | compile-time inlining of `ifTrue:`, and the send it replaces |
+| 14 | metaprogramming | compile-time inlining of `ifTrue:` (and of `and:` / `or:`), and the send it replaces |
 | 15 | laziness | a block as a deferred value; `doYielding:` |
 | 16 | shared mutable state | instance variables, a write group |
 | 17 | misc. | cascade, `super` |
@@ -606,7 +728,7 @@ module main: <module>
      11  POP
      12  PUSH_LOCAL         0     ; x
      13  PUSH_CONST         1     ; 2
-     14  SEND_BINARY        2     ; #*
+     14  BIN_INT_MUL        2     ; #*
      15  DUP
      16  STORE_LOCAL        1     ; y
      17  POP
@@ -618,12 +740,14 @@ module main: <module>
 30
 ```
 
-- `0`-`7`: the parser turns `| x y |` into `x := nil. y := nil.`. Every
-  assignment is `<value> DUP STORE_LOCAL` and, as a statement, `POP`: the
-  `DUP` keeps the assigned value as the expression's value.
+- `0`-`7`: the parser turns `| x y |` into `x := nil. y := nil.`. At the
+  top level every assignment is `<value> DUP STORE_LOCAL` and, as a
+  statement, `POP`: the `DUP` keeps the assigned value as the expression's
+  value. In a method or block body (0.10.0) an assignment statement whose
+  value is discarded is just `<value> STORE_LOCAL` (or `STORE_INSTVAR`,
+  `STORE_CAPTURED`, ...): no `DUP`, no `POP` (examples 05, 06).
 - Top-level variables are slots of the top-level frame (`locals 2`).
-- `14 SEND_BINARY 2`: `*` has no fast path; it is an ordinary send.
-- `20 BIN_INT_ADD`: `+` does.
+- `14 BIN_INT_MUL`, `20 BIN_INT_ADD`: SmallInteger fast paths (2.7).
 
 ### Example 03: `ifTrue:ifFalse:` and `ifTrue:`
 
@@ -637,7 +761,7 @@ n odd ifTrue: ['odd' printNl].
 
 ```text
 module main: <module>
-  args 0, locals 1 (0 n), stack 48 (deepest 2)
+  args 0, locals 2 (0 n, 1 __deopt_box__), stack 48 (deepest 3)
   constants:
     #0   integer   7
     #1   integer   5
@@ -661,34 +785,85 @@ module main: <module>
       8  PUSH_LOCAL         0     ; n
       9  PUSH_CONST         1     ; 5
      10  BIN_INT_GT         2     ; #>
-     11  ASSERT_BOOL_OR_DNU 3     ; #ifTrue:ifFalse:
-     12  JUMP_IF_FALSE      2     ; -> 15
+     11  JUMP_IF_NOT_BOOL   3     ; -> 15
+     12  JUMP_IF_FALSE      10    ; -> 23
      13  PUSH_CONST         4     ; 'big'
-     14  JUMP               1     ; -> 16
-     15  PUSH_CONST         5     ; 'small'
-     16  SEND_UNARY         6     ; #printNl
-     17  POP
-     18  PUSH_LOCAL         0     ; n
-     19  SEND_UNARY         7     ; #odd
-     20  ASSERT_BOOL_OR_DNU 8     ; #ifTrue:
-     21  JUMP_IF_FALSE      3     ; -> 25
-     22  PUSH_CONST         9     ; 'odd'
-     23  SEND_UNARY         6     ; #printNl
-     24  JUMP               1     ; -> 26
-     25  PUSH_NIL
-     26  RETURN_TOP
+     14  JUMP               9     ; -> 24
+     15  DEOPT_ENTER        0     ; box __deopt_box__: no locals
+     16  PUSH_LOCAL         1     ; __deopt_box__
+     17  PUSH_DEOPT_BLOCK   0     ; main.0 (<block> (not inlined))
+     18  PUSH_LOCAL         1     ; __deopt_box__
+     19  PUSH_DEOPT_BLOCK   1     ; main.1 (<block> (not inlined))
+     20  SEND_KEYWORD       3     ; #ifTrue:ifFalse:, 2 args
+     21  DEOPT_EXIT         0     ; box __deopt_box__: no locals
+     22  JUMP               1     ; -> 24
+     23  PUSH_CONST         5     ; 'small'
+     24  SEND_UNARY         6     ; #printNl
+     25  POP
+     26  PUSH_LOCAL         0     ; n
+     27  SEND_UNARY         7     ; #odd
+     28  JUMP_IF_NOT_BOOL   4     ; -> 33
+     29  JUMP_IF_FALSE      9     ; -> 39
+     30  PUSH_CONST         9     ; 'odd'
+     31  SEND_UNARY         6     ; #printNl
+     32  JUMP               7     ; -> 40
+     33  DEOPT_ENTER        1     ; box __deopt_box__: no locals
+     34  PUSH_LOCAL         1     ; __deopt_box__
+     35  PUSH_DEOPT_BLOCK   2     ; main.2 (<block> (not inlined))
+     36  SEND_KEYWORD       8     ; #ifTrue:, 1 arg
+     37  DEOPT_EXIT         1     ; box __deopt_box__: no locals
+     38  JUMP               1     ; -> 40
+     39  PUSH_NIL
+     40  RETURN_TOP
+
+module main.0: <block> (not inlined)
+  args 0, locals 0, stack 48 (deepest 1)
+  constants:
+    #0   string    'big'
+  code:
+      0  PUSH_CONST         0     ; 'big'
+      1  RETURN_TOP
+
+module main.1: <block> (not inlined)
+  args 0, locals 0, stack 48 (deepest 1)
+  constants:
+    #0   string    'small'
+  code:
+      0  PUSH_CONST         0     ; 'small'
+      1  RETURN_TOP
+
+module main.2: <block> (not inlined)
+  args 0, locals 0, stack 48 (deepest 1)
+  constants:
+    #0   string    'odd'
+    #1   symbol    #printNl
+  code:
+      0  PUSH_CONST         0     ; 'odd'
+      1  SEND_UNARY         1     ; #printNl
+      2  RETURN_TOP
 'big'
 'odd'
 ```
 
 - Both conditionals are inlined: their literal blocks have no arguments and
-  no temporaries, so no closure is built and nothing is sent.
-- `11 ASSERT_BOOL_OR_DNU` checks that the receiver of `ifTrue:ifFalse:` is a
-  Boolean; `JUMP_IF_FALSE` alone would treat `7` as true.
-- `12`-`15`: false jumps to the else branch at `15`; the then branch jumps
-  over it to `16`.
-- `20`-`25`: a one-armed `ifTrue:` answers nil when not taken, so the
-  compiler adds `25 PUSH_NIL` and a `JUMP` over it.
+  no temporaries, so no closure is built and nothing is sent when the
+  receiver is a Boolean.
+- `11 JUMP_IF_NOT_BOOL` checks that the receiver of `ifTrue:ifFalse:` is a
+  Boolean (`JUMP_IF_FALSE` alone would treat `7` as true) and sends any
+  other value to `15`-`22`, out of line: the expression is *sent*, as if
+  nothing were inlined. `DEOPT_ENTER` builds the box (here it carries no
+  locals: the blocks use none), `PUSH_DEOPT_BLOCK` makes closures of
+  `main.0` and `main.1`, copies of the two literals compiled without
+  inlining, and `SEND_KEYWORD #ifTrue:ifFalse:` sends them to the
+  receiver: its own method runs, or `doesNotUnderstand:` with the whole
+  Message. `DEOPT_EXIT` clears the box slot; the answer is the value of
+  the expression (`JUMP` to `24`). Section 1.4 explains the box.
+- `12`-`14`, `23`: false jumps to the else branch at `23`; the then branch
+  jumps over the slow path and the else branch to `24`.
+- `26`-`39`: a one-armed `ifTrue:` answers nil when not taken, so the
+  compiler adds `39 PUSH_NIL`, which the then branch jumps over.
+- The copies use no variable of the enclosing code, so `DEOPT_ENTER` moves
+  nothing into a scope dictionary (section 1.4).
 
 ### Example 04: a class, a method and a send
 
@@ -754,17 +929,15 @@ module main: <module>
      26  RETURN_TOP
 
 module main.0: Greeter>>name:
-  args 2, locals 2 (0 self, 1 aString), stack 48 (deepest 2)
+  args 2, locals 2 (0 self, 1 aString), stack 48 (deepest 1)
   defining class Greeter
   constants:
     #0   symbol    #name
   code:
       0  PUSH_LOCAL         1     ; aString
-      1  DUP
-      2  STORE_INSTVAR      0     ; name
-      3  POP
-      4  PUSH_LOCAL         0     ; self
-      5  RETURN
+      1  STORE_INSTVAR      0     ; name
+      2  PUSH_LOCAL         0     ; self
+      3  RETURN
 
 module main.1: Greeter>>greeting
   args 1, locals 1 (0 self), stack 48 (deepest 2)
@@ -788,8 +961,9 @@ module main.1: Greeter>>greeting
   symbol, `SEND_KEYWORD #__installMethod:as:`. The same for `greeting` at
   `15`-`18`.
 - `main.0`: `args 2` is `self` and `aString`; slot 0 is `self`. The
-  assignment to the instance variable is `STORE_INSTVAR`. A method without
-  `^` answers `self`: `4 PUSH_LOCAL 0`, `5 RETURN`.
+  assignment to the instance variable is `STORE_INSTVAR`; as a statement
+  whose value nobody uses it has no `DUP` and no `POP` (0.10.0). A method
+  without `^` answers `self`: `2 PUSH_LOCAL 0`, `3 RETURN`.
 - `main.1`: `PUSH_INSTVAR` reads `_iv_name` of `self`; `,` is an ordinary
   binary send.
 
@@ -843,51 +1017,76 @@ module main: <module>
      18  RETURN_TOP
 
 module main.0: Math>>fib:
-  args 2, locals 2 (0 self, 1 n), stack 48 (deepest 4)
+  args 2, locals 3 (0 self, 1 n, 2 __deopt_box__), stack 48 (deepest 4)
   defining class Math
   constants:
     #0   integer   2
     #1   symbol    #<
     #2   symbol    #ifTrue:
-    #3   integer   1
-    #4   symbol    #-
-    #5   symbol    #fib:
-    #6   integer   2
-    #7   symbol    #+
+    #3   symbol    #n
+    #4   integer   1
+    #5   symbol    #-
+    #6   symbol    #fib:
+    #7   integer   2
+    #8   symbol    #+
   code:
       0  PUSH_LOCAL         1     ; n
       1  PUSH_CONST         0     ; 2
       2  BIN_INT_LT         1     ; #<
-      3  ASSERT_BOOL_OR_DNU 2     ; #ifTrue:
-      4  JUMP_IF_FALSE      3     ; -> 8
+      3  JUMP_IF_NOT_BOOL   4     ; -> 8
+      4  JUMP_IF_FALSE      9     ; -> 14
       5  PUSH_LOCAL         1     ; n
       6  RETURN
-      7  JUMP               1     ; -> 9
-      8  PUSH_NIL
-      9  POP
-     10  PUSH_SELF
-     11  PUSH_LOCAL         1     ; n
-     12  PUSH_CONST         3     ; 1
-     13  BIN_INT_SUB        4     ; #-
-     14  SEND_KEYWORD       5     ; #fib:, 1 arg
-     15  PUSH_SELF
-     16  PUSH_LOCAL         1     ; n
-     17  PUSH_CONST         6     ; 2
-     18  BIN_INT_SUB        4     ; #-
-     19  SEND_KEYWORD       5     ; #fib:, 1 arg
-     20  BIN_INT_ADD        7     ; #+
-     21  RETURN
+      7  JUMP               7     ; -> 15
+      8  DEOPT_ENTER        0     ; box __deopt_box__: n(copy)
+      9  PUSH_LOCAL         2     ; __deopt_box__
+     10  PUSH_DEOPT_BLOCK   0     ; main.0.0 ([] in Math>>fib: (not inlined))
+     11  SEND_KEYWORD       2     ; #ifTrue:, 1 arg
+     12  DEOPT_EXIT         0     ; box __deopt_box__: n(copy)
+     13  JUMP               1     ; -> 15
+     14  PUSH_NIL
+     15  POP
+     16  PUSH_SELF
+     17  PUSH_LOCAL         1     ; n
+     18  PUSH_CONST         4     ; 1
+     19  BIN_INT_SUB        5     ; #-
+     20  SEND_KEYWORD       6     ; #fib:, 1 arg
+     21  PUSH_SELF
+     22  PUSH_LOCAL         1     ; n
+     23  PUSH_CONST         7     ; 2
+     24  BIN_INT_SUB        5     ; #-
+     25  SEND_KEYWORD       6     ; #fib:, 1 arg
+     26  BIN_INT_ADD        8     ; #+
+     27  RETURN
+
+module main.0.0: [] in Math>>fib: (not inlined)
+  args 0, locals 0, stack 48 (deepest 1)
+  defining class Math
+  constants:
+    #0   symbol    #n
+  code:
+      0  PUSH_CAPTURED      0     ; n
+      1  RETURN
+      2  RETURN_TOP
 55
 ```
 
-- `main.0` `0`-`8`: the guard `n < 2 ifTrue: [ ^ n ]` is inlined. Its `^ n` is
-  a `RETURN` in the method's own frame: a plain return, no unwinding. Words
-  `7`-`9` (`JUMP`, `PUSH_NIL`, `POP`) complete the inlined `ifTrue:` as an
-  expression statement; after a `RETURN` the `JUMP` is unreachable.
-- `10`-`19`: each recursive call is `PUSH_SELF`, the argument (`BIN_INT_SUB`)
+- `main.0` `0`-`15`: the guard `n < 2 ifTrue: [ ^ n ]` is inlined. Its `^ n`
+  is a `RETURN` in the method's own frame: a plain return, no unwinding.
+  `7 JUMP` follows a `RETURN` and is unreachable; `14 PUSH_NIL` and `15 POP`
+  complete the inlined `ifTrue:` as an expression statement.
+- `8`-`13` are the out-of-line path of a receiver that is not a Boolean
+  (example 03). The block uses `n`, an argument of the method, so the box
+  carries a copy of it (`n(copy)`: an argument cannot be assigned, so a
+  copy is the same variable): `DEOPT_ENTER` copies slot 1 into the box held
+  in slot 2, the copy `main.0.0` reads it with `PUSH_CAPTURED`, and
+  `DEOPT_EXIT` clears slot 2. Had the block used a temporary of the method,
+  a slot `__deopt_scope__` would hold the dictionary it moves into. In the
+  copy, `^ n` is a real non-local return from `fib:`.
+- `16`-`25`: each recursive call is `PUSH_SELF`, the argument (`BIN_INT_SUB`)
   and `SEND_KEYWORD #fib:`. The send pushes a new frame on the same engine
   (no C++ recursion) and polls the safepoint at call entry.
-- `20 BIN_INT_ADD` adds the two results, `21 RETURN` answers the sum.
+- `26 BIN_INT_ADD` adds the two results, `27 RETURN` answers the sum.
 
 ### Example 06: `to:do:` and `whileTrue:`
 
@@ -904,7 +1103,7 @@ i := 0.
 ```text
 module main: <module>
   args 0, locals 4 (0 sum, 1 i, 2 __td_i_2, 3 __td_end_2), stack 48 (deepest 3)
-  slot 2 is 'k' in words 17..32
+  slot 2 is 'k' in words 17..30
   constants:
     #0   integer   0
     #1   integer   1
@@ -939,57 +1138,56 @@ module main: <module>
      17  PUSH_LOCAL         2     ; __td_i_2
      18  PUSH_LOCAL         3     ; __td_end_2
      19  BIN_INT_LE         3     ; #<=
-     20  JUMP_IF_FALSE      11    ; -> 32
+     20  JUMP_IF_FALSE      9     ; -> 30
      21  PUSH_LOCAL         0     ; sum
      22  PUSH_LOCAL         2     ; __td_i_2
      23  BIN_INT_ADD        4     ; #+
-     24  DUP
-     25  STORE_LOCAL        0     ; sum
-     26  POP
-     27  PUSH_LOCAL         2     ; __td_i_2
-     28  PUSH_CONST         5     ; 1
-     29  BIN_INT_ADD        4     ; #+
-     30  STORE_LOCAL        2     ; __td_i_2
-     31  JUMP_BACK          15    ; -> 17
-     32  POP
-     33  PUSH_CONST         6     ; 0
-     34  DUP
-     35  STORE_LOCAL        1     ; i
-     36  POP
-     37  PUSH_LOCAL         1     ; i
-     38  PUSH_CONST         8     ; 3
-     39  BIN_INT_LT         9     ; #<
-     40  ASSERT_BOOL_OR_DNU 7     ; #whileTrue:
-     41  JUMP_IF_FALSE      7     ; -> 49
-     42  PUSH_LOCAL         1     ; i
-     43  PUSH_CONST         10    ; 1
-     44  BIN_INT_ADD        4     ; #+
-     45  DUP
-     46  STORE_LOCAL        1     ; i
-     47  POP
-     48  JUMP_BACK          12    ; -> 37
-     49  PUSH_NIL
-     50  POP
-     51  PUSH_LOCAL         0     ; sum
-     52  PUSH_LOCAL         1     ; i
-     53  BIN_INT_ADD        4     ; #+
-     54  SEND_UNARY         11    ; #printNl
-     55  RETURN_TOP
+     24  STORE_LOCAL        0     ; sum
+     25  PUSH_LOCAL         2     ; __td_i_2
+     26  PUSH_CONST         5     ; 1
+     27  BIN_INT_ADD        4     ; #+
+     28  STORE_LOCAL        2     ; __td_i_2
+     29  JUMP_BACK          13    ; -> 17
+     30  POP
+     31  PUSH_CONST         6     ; 0
+     32  DUP
+     33  STORE_LOCAL        1     ; i
+     34  POP
+     35  PUSH_LOCAL         1     ; i
+     36  PUSH_CONST         8     ; 3
+     37  BIN_INT_LT         9     ; #<
+     38  ASSERT_LOOP_BOOL   7     ; #whileTrue:
+     39  JUMP_IF_FALSE      5     ; -> 45
+     40  PUSH_LOCAL         1     ; i
+     41  PUSH_CONST         10    ; 1
+     42  BIN_INT_ADD        4     ; #+
+     43  STORE_LOCAL        1     ; i
+     44  JUMP_BACK          10    ; -> 35
+     45  PUSH_NIL
+     46  POP
+     47  PUSH_LOCAL         0     ; sum
+     48  PUSH_LOCAL         1     ; i
+     49  BIN_INT_ADD        4     ; #+
+     50  SEND_UNARY         11    ; #printNl
+     51  RETURN_TOP
 58
 ```
 
 - `12`-`16`: `to:do:` is inlined. The counter and the limit get hidden slots
-  (`__td_i_2`, `__td_end_2`); the header line `slot 2 is 'k' in words 17..32`
+  (`__td_i_2`, `__td_end_2`); the header line `slot 2 is 'k' in words 17..30`
   tells the debugger to show slot 2 as `k` inside the loop. The receiver and
   the limit are each evaluated once: `13 DUP` keeps a copy of the receiver
-  under the loop as the value of the `to:do:` expression (popped at `32`,
+  under the loop as the value of the `to:do:` expression (popped at `30`,
   since the statement's value is unused).
 - `17`-`20`: the loop test, `BIN_INT_LE` then `JUMP_IF_FALSE` to the exit at
-  `32`. No `ASSERT_BOOL_OR_DNU` here: the test is generated by the compiler.
-- `27`-`31`: `k := k + 1` with `BIN_INT_ADD`, then `JUMP_BACK 15` to `17`; the
+  `30`. No `ASSERT_LOOP_BOOL` here: the test is generated by the compiler.
+- `21`-`24`: the body, `sum := sum + k`. Its value is discarded, so the
+  assignment is a bare `STORE_LOCAL` (0.10.0; before, `DUP` ... `POP`).
+- `25`-`29`: `k := k + 1` with `BIN_INT_ADD`, then `JUMP_BACK 13` to `17`; the
   back edge polls the GC safepoint.
-- `37`-`49`: `whileTrue:` is inlined the same way, with the guard on the
-  condition at every iteration, and answers nil (`49 PUSH_NIL`).
+- `35`-`45`: `whileTrue:` is inlined the same way, with the guard on the
+  condition at every iteration (`ASSERT_LOOP_BOOL`: a condition that is not
+  a Boolean signals `NonBooleanReceiver`), and answers nil (`45 PUSH_NIL`).
 
 ### Example 07: a block capturing a method argument
 
@@ -1255,7 +1453,7 @@ module main.2: Box>>area
   code:
       0  PUSH_INSTVAR       0     ; w
       1  PUSH_INSTVAR       1     ; h
-      2  SEND_BINARY        2     ; #*
+      2  BIN_INT_MUL        2     ; #*
       3  RETURN
 
 module main.3: Box>>scaled(...)
@@ -1278,7 +1476,7 @@ module main.3: Box>>scaled(...)
       5  STORE_LOCAL        2     ; offset
       6  PUSH_INSTVAR       3     ; w
       7  PUSH_LOCAL         1     ; factor
-      8  SEND_BINARY        4     ; #*
+      8  BIN_INT_MUL        4     ; #*
       9  PUSH_LOCAL         2     ; offset
      10  BIN_INT_ADD        5     ; #+
      11  RETURN
@@ -1514,8 +1712,8 @@ module main: <module>
 ```
 
 - `12 SEND_UNARY #size` and `17 SEND_KEYWORD #at:` look the selector up on
-  the `Array` prototype and find a primitive marker, so the engine calls the
-  C++ function in the same context, with no frame (1.5 step 7).
+  the `Array` prototype and find a primitive, a protoCore method cell, so
+  the engine calls it in the same context, with no frame (1.5 step 6).
 
 ### Example 12: `inject:into:` with a block
 
@@ -1680,7 +1878,7 @@ blk := [ 'sent' ].
 
 ```text
 module main: <module>
-  args 0, locals 2 (0 cond, 1 blk), stack 48 (deepest 2)
+  args 0, locals 3 (0 cond, 1 blk, 2 __deopt_box__), stack 48 (deepest 2)
   constants:
     #0   integer   3
     #1   integer   2
@@ -1704,24 +1902,38 @@ module main: <module>
      12  STORE_LOCAL        0     ; cond
      13  POP
      14  PUSH_LOCAL         0     ; cond
-     15  ASSERT_BOOL_OR_DNU 3     ; #ifTrue:
-     16  JUMP_IF_FALSE      2     ; -> 19
+     15  JUMP_IF_NOT_BOOL   3     ; -> 19
+     16  JUMP_IF_FALSE      8     ; -> 25
      17  PUSH_CONST         4     ; 'inlined'
-     18  JUMP               1     ; -> 20
-     19  PUSH_NIL
-     20  SEND_UNARY         5     ; #printNl
-     21  POP
-     22  PUSH_BLOCK         0     ; main.0 (<block>)
-     23  DUP
-     24  STORE_LOCAL        1     ; blk
-     25  POP
-     26  PUSH_LOCAL         0     ; cond
-     27  PUSH_LOCAL         1     ; blk
-     28  SEND_KEYWORD       3     ; #ifTrue:, 1 arg
-     29  SEND_UNARY         5     ; #printNl
-     30  RETURN_TOP
+     18  JUMP               7     ; -> 26
+     19  DEOPT_ENTER        0     ; box __deopt_box__: no locals
+     20  PUSH_LOCAL         2     ; __deopt_box__
+     21  PUSH_DEOPT_BLOCK   0     ; main.0 (<block> (not inlined))
+     22  SEND_KEYWORD       3     ; #ifTrue:, 1 arg
+     23  DEOPT_EXIT         0     ; box __deopt_box__: no locals
+     24  JUMP               1     ; -> 26
+     25  PUSH_NIL
+     26  SEND_UNARY         5     ; #printNl
+     27  POP
+     28  PUSH_BLOCK         1     ; main.1 (<block>)
+     29  DUP
+     30  STORE_LOCAL        1     ; blk
+     31  POP
+     32  PUSH_LOCAL         0     ; cond
+     33  PUSH_LOCAL         1     ; blk
+     34  SEND_KEYWORD       3     ; #ifTrue:, 1 arg
+     35  SEND_UNARY         5     ; #printNl
+     36  RETURN_TOP
 
-module main.0: <block>
+module main.0: <block> (not inlined)
+  args 0, locals 0, stack 48 (deepest 1)
+  constants:
+    #0   string    'inlined'
+  code:
+      0  PUSH_CONST         0     ; 'inlined'
+      1  RETURN_TOP
+
+module main.1: <block>
   args 0, locals 0, stack 48 (deepest 1)
   constants:
     #0   string    'sent'
@@ -1732,12 +1944,17 @@ module main.0: <block>
 'sent'
 ```
 
-- `14`-`20`: `cond ifTrue: [ 'inlined' ]` is inlined (guard, jump, the body's
-  constant, `PUSH_NIL` for the false case).
-- `26`-`28`: `cond ifTrue: blk` sends `ifTrue:` to `true`; the Boolean
-  primitive evaluates the closure `main.0` in a nested engine. Both forms
-  answer the same value; only the inlined one avoids the closure, the send
-  and the nested engine.
+- `14`-`25`: `cond ifTrue: [ 'inlined' ]` is inlined (guard, jump, the body's
+  constant, `PUSH_NIL` for the false case). `19`-`24` is the out-of-line
+  path of a receiver that is not a Boolean: the same send as `32`-`34`,
+  with a closure of `main.0`, a copy of the literal compiled without
+  inlining (example 03, section 1.4). `and:` and `or:` with a literal block
+  are inlined the same way, with `PUSH_FALSE` / `PUSH_TRUE` in place of the
+  `PUSH_NIL`.
+- `28`-`34`: `cond ifTrue: blk` sends `ifTrue:` to `true`; the Boolean
+  primitive evaluates the closure `main.1` in a nested engine. Both forms
+  answer the same value, for any receiver; only the inlined one avoids the
+  closure, the send and the nested engine when the receiver is a Boolean.
 
 ### Example 15: a deferred block, and `doYielding:`
 
@@ -2171,23 +2388,40 @@ module main.0: Finder>>firstOver:in:
       8  RETURN
 
 module main.0.0: [] in Finder>>firstOver:in:
-  args 1, locals 1 (0 x), stack 48 (deepest 2)
+  args 1, locals 2 (0 x, 1 __deopt_box__), stack 48 (deepest 2)
   defining class Finder
   constants:
     #0   symbol    #limit
     #1   symbol    #>
     #2   symbol    #ifTrue:
+    #3   symbol    #x
   code:
       0  PUSH_LOCAL         0     ; x
       1  PUSH_CAPTURED      0     ; limit
       2  BIN_INT_GT         1     ; #>
-      3  ASSERT_BOOL_OR_DNU 2     ; #ifTrue:
-      4  JUMP_IF_FALSE      3     ; -> 8
+      3  JUMP_IF_NOT_BOOL   4     ; -> 8
+      4  JUMP_IF_FALSE      9     ; -> 14
       5  PUSH_LOCAL         0     ; x
       6  RETURN
-      7  JUMP               1     ; -> 9
-      8  PUSH_NIL
-      9  RETURN_TOP
+      7  JUMP               7     ; -> 15
+      8  DEOPT_ENTER        0     ; box __deopt_box__: x(copy)
+      9  PUSH_LOCAL         1     ; __deopt_box__
+     10  PUSH_DEOPT_BLOCK   0     ; main.0.0.0 ([] in Finder>>firstOver:in: (not inlined))
+     11  SEND_KEYWORD       2     ; #ifTrue:, 1 arg
+     12  DEOPT_EXIT         0     ; box __deopt_box__: x(copy)
+     13  JUMP               1     ; -> 15
+     14  PUSH_NIL
+     15  RETURN_TOP
+
+module main.0.0.0: [] in Finder>>firstOver:in: (not inlined)
+  args 0, locals 0, stack 48 (deepest 1)
+  defining class Finder
+  constants:
+    #0   symbol    #x
+  code:
+      0  PUSH_CAPTURED      0     ; x
+      1  RETURN
+      2  RETURN_TOP
 4
 ```
 
@@ -2199,21 +2433,190 @@ module main.0.0: [] in Finder>>firstOver:in:
   engine catches it, pops the method's frame and pushes `4` for the caller.
   `^ nil` at `main.0` `7`-`8` is not reached.
 
+### Example 19: `==` and the nil tests
+
+`==` and the nil tests with literal blocks never send (0.10.0), as in Pharo:
+`==` is identity and is not looked up, and `ifNil:`, `ifNotNil:`,
+`ifNil:ifNotNil:` and `ifNotNil:ifNil:` test identity with nil.
+
+<!-- vm-example: 19-nil-tests -->
+```smalltalk
+Object subclass: #Cache instanceVariableNames: 'value'.
+
+Cache >> at: aBlock
+  ^ value ifNil: [ value := aBlock value ].
+
+Cache >> describe
+  ^ value ifNil: [ 'empty' ] ifNotNil: [ :v | v printString ].
+
+| c |
+c := Cache new.
+(c at: [ 6 * 7 ]) printNl.
+c describe printNl.
+(c at: [ 0 ]) == 42 ifTrue: [ 'cached' printNl ].
+```
+
+```text
+module main: <module>
+  args 0, locals 1 (0 c), stack 48 (deepest 3)
+  constants:
+    #0   symbol    #Cache
+    #1   symbol    #Object
+    #2   symbol    #__subclassNamed:
+    #3   string    'Cache'
+    #4   symbol    #__setClassName:
+    #5   string    'Cache'
+    #6   string    'value'
+    #7   symbol    #__setInstVarNames:
+    #8   symbol    #at:
+    #9   symbol    #__installMethod:as:
+    #10  symbol    #describe
+    #11  symbol    #new
+    #12  symbol    #printNl
+    #13  integer   42
+    #14  symbol    #==
+    #15  string    'cached'
+  code:
+      0  PUSH_GLOBAL        1     ; Object
+      1  PUSH_CONST         3     ; 'Cache'
+      2  SEND_KEYWORD       2     ; #__subclassNamed:, 1 arg
+      3  PUSH_CONST         5     ; 'Cache'
+      4  SEND_KEYWORD       4     ; #__setClassName:, 1 arg
+      5  PUSH_CONST         6     ; 'value'
+      6  SEND_KEYWORD       7     ; #__setInstVarNames:, 1 arg
+      7  DUP
+      8  STORE_GLOBAL       0     ; Cache
+      9  POP
+     10  PUSH_GLOBAL        0     ; Cache
+     11  PUSH_BLOCK         0     ; main.0 (Cache>>at:)
+     12  PUSH_CONST         8     ; #at:
+     13  SEND_KEYWORD       9     ; #__installMethod:as:, 2 args
+     14  POP
+     15  PUSH_GLOBAL        0     ; Cache
+     16  PUSH_BLOCK         1     ; main.1 (Cache>>describe)
+     17  PUSH_CONST         10    ; #describe
+     18  SEND_KEYWORD       9     ; #__installMethod:as:, 2 args
+     19  POP
+     20  PUSH_NIL
+     21  DUP
+     22  STORE_LOCAL        0     ; c
+     23  POP
+     24  PUSH_GLOBAL        0     ; Cache
+     25  SEND_UNARY         11    ; #new
+     26  DUP
+     27  STORE_LOCAL        0     ; c
+     28  POP
+     29  PUSH_LOCAL         0     ; c
+     30  PUSH_BLOCK         2     ; main.2 (<block>)
+     31  SEND_KEYWORD       8     ; #at:, 1 arg
+     32  SEND_UNARY         12    ; #printNl
+     33  POP
+     34  PUSH_LOCAL         0     ; c
+     35  SEND_UNARY         10    ; #describe
+     36  SEND_UNARY         12    ; #printNl
+     37  POP
+     38  PUSH_LOCAL         0     ; c
+     39  PUSH_BLOCK         3     ; main.3 (<block>)
+     40  SEND_KEYWORD       8     ; #at:, 1 arg
+     41  PUSH_CONST         13    ; 42
+     42  IDENTICAL
+     43  JUMP_IF_FALSE      3     ; -> 47
+     44  PUSH_CONST         15    ; 'cached'
+     45  SEND_UNARY         12    ; #printNl
+     46  JUMP               1     ; -> 48
+     47  PUSH_NIL
+     48  RETURN_TOP
+
+module main.0: Cache>>at:
+  args 2, locals 2 (0 self, 1 aBlock), stack 48 (deepest 2)
+  defining class Cache
+  constants:
+    #0   symbol    #value
+  code:
+      0  PUSH_INSTVAR       0     ; value
+      1  JUMP_IF_NOT_NIL    5     ; -> 7
+      2  POP
+      3  PUSH_LOCAL         1     ; aBlock
+      4  SEND_UNARY         0     ; #value
+      5  DUP
+      6  STORE_INSTVAR      0     ; value
+      7  RETURN
+
+module main.1: Cache>>describe
+  args 1, locals 2 (0 self, 1 __nn_1), stack 48 (deepest 1)
+  defining class Cache
+  slot 1 is 'v' in words 3..5
+  constants:
+    #0   symbol    #value
+    #1   symbol    #printString
+    #2   string    'empty'
+  code:
+      0  PUSH_INSTVAR       0     ; value
+      1  JUMP_IF_NIL        4     ; -> 6
+      2  STORE_LOCAL        1     ; __nn_1
+      3  PUSH_LOCAL         1     ; __nn_1
+      4  SEND_UNARY         1     ; #printString
+      5  JUMP               2     ; -> 8
+      6  POP
+      7  PUSH_CONST         2     ; 'empty'
+      8  RETURN
+
+module main.2: <block>
+  args 0, locals 0, stack 48 (deepest 2)
+  constants:
+    #0   integer   6
+    #1   integer   7
+    #2   symbol    #*
+  code:
+      0  PUSH_CONST         0     ; 6
+      1  PUSH_CONST         1     ; 7
+      2  BIN_INT_MUL        2     ; #*
+      3  RETURN_TOP
+
+module main.3: <block>
+  args 0, locals 0, stack 48 (deepest 1)
+  constants:
+    #0   integer   0
+  code:
+      0  PUSH_CONST         0     ; 0
+      1  RETURN_TOP
+42
+'42'
+'cached'
+```
+
+- `Cache>>at:`: `JUMP_IF_NOT_NIL` peeks the instance variable and, when it
+  is set, jumps to the end with it on the stack as the answer; otherwise
+  `POP` drops the nil and the arm computes and stores the value.
+- `Cache>>describe`: `JUMP_IF_NIL` leads to the nil arm (`POP`, then
+  `'empty'`); on the other path `STORE_LOCAL` binds the arm's argument `v`
+  to a hidden slot (`__nn_1`, shown as `v` by the debugger), as an inlined
+  `to:do:` binds its counter.
+- `IDENTICAL` is the whole of `== 42`: no selector, no lookup. Its answer
+  is always a Boolean, so the inlined `ifTrue:` after it has no
+  `JUMP_IF_NOT_BOOL` guard and no out-of-line send.
+
 ## 4. How to add an opcode
 
-The model is `ASSERT_BOOL_OR_DNU` (value 38), a guard added to the inlined
-conditionals. Every place to touch, in order:
+The model is `ASSERT_LOOP_BOOL` (value 38), the guard of an inlined loop
+condition. Every place to touch, in order:
 
-1. **The enum,** `src/runtime/Opcodes.h`: the next free value (45 today),
+1. **The enum,** `src/runtime/Opcodes.h`: the next free value (59 today),
    with a comment giving its operand and stack effect. Never renumber an
    existing opcode: the value is the encoding.
    ```cpp
-   ASSERT_BOOL_OR_DNU = 38, // arg = selector const index
+   ASSERT_LOOP_BOOL = 38, // arg = selector const index (for the message)
    ```
 2. **The engine,** `ExecutionEngine::runLoop` (`src/runtime/ExecutionEngine.cpp`):
-   - a `labels[]` entry for the threaded dispatch (GCC builds); a missing one
-     makes the opcode fail with `unimplemented opcode (threaded dispatch)`
-     on Linux only;
+   - for the threaded dispatch (GCC builds), its label at the opcode's
+     position in the static `kLabels[256]` table and the matching
+     `check[...] = &&L_X` line, from which a build with assertions verifies
+     the table; a missing entry makes the opcode fail with `unimplemented
+     opcode (threaded dispatch)` on Linux only. The table is static since
+     0.10.0 (it was filled on every `runLoop` entry); it relies on
+     `--param=max-goto-duplication-insns=32` for `ExecutionEngine.cpp`
+     (CMakeLists.txt), without which GCC merges the handlers' indirect
+     jumps;
    - a `case Op::X: L_X: { Frame& f = frames_.back(); ... }` in the switch,
      ending with `DISPATCH_DIRECT()`, or with `DISPATCH_SCOPED()` when a local
      with a destructor (a `TransientPin`) is alive in the case's scope (a
@@ -2223,19 +2626,19 @@ conditionals. Every place to touch, in order:
      in a C++ local across an allocation with `TransientPin`; never call
      `gcSafepoint` with a value only in a C++ local;
    - an error the program should be able to catch is signalled
-     (`signalNativeError`, `signalErrorOfClass`, `doesNotUnderstand`), not
+     (`signalNativeError`, `signalErrorOfClass`, `doesNotUnderstand`,
+     `loopConditionIsTrue`), not
      thrown as a `std::runtime_error`.
    ```cpp
-   case Op::ASSERT_BOOL_OR_DNU: L_ASSERT_BOOL_OR_DNU: {
+   case Op::ASSERT_LOOP_BOOL: L_ASSERT_LOOP_BOOL: {
        Frame& f = frames_.back();
        const proto::ProtoObject* v = peek(f);
        if (v == PROTO_TRUE || v == PROTO_FALSE) {
            DISPATCH_DIRECT();
        }
-       const std::string& selStr = f.m->constSymbol(arg);
-       const proto::ProtoObject* badRecv = pop(f);
-       auto* r = doesNotUnderstand(ctx, badRecv, selStr, nullptr, 0);
-       push(f, r ? r : PROTO_NONE);
+       const bool truth = loopConditionIsTrue(rt_, ctx, v, f.m->constSymbol(arg));
+       pop(f);
+       push(f, truth ? PROTO_TRUE : PROTO_FALSE);
        DISPATCH_DIRECT();
    }
    ```
@@ -2252,7 +2655,7 @@ conditionals. Every place to touch, in order:
    `tryEmitInlinedControl`.
    ```cpp
    auto selSym = m.internSymbol(n.text);
-   m.emitWide(Op::ASSERT_BOOL_OR_DNU, static_cast<unsigned int>(selSym), currentLine_);
+   m.emitWide(Op::ASSERT_LOOP_BOOL, static_cast<unsigned int>(selSym), currentLine_);
    ```
 5. **The debugger,** `src/debugger/DebuggerRuntime.cpp`, scans code for
    `PUSH_CAPTURED` / `STORE_CAPTURED` / `DEFINE_CAPTURED` to list captured
@@ -2271,8 +2674,8 @@ conditionals. Every place to touch, in order:
 
 ## 5. How to add a primitive
 
-A primitive is a C++ function bound on a prototype under a selector. A send
-that finds it calls it directly (1.5 step 7).
+A primitive is a C++ function bound on a prototype under a selector, as a
+protoCore native method. A send that finds it calls it directly (1.5 step 6).
 
 **The context rule (maintainer's rule).** A `ProtoContext` is created only
 when a method, that is interpreted code with its own locals, is activated; a
@@ -2300,15 +2703,24 @@ blocks are frames inside one context per thread (1.3, 1.8).
    into a catchable `Error` whose `messageText` is the message), or by signalling a specific class
    (`signalErrorOfClass`). Model: the arithmetic primitives of
    `src/primitives/int_prims.cpp` (`DEFBIN`, `requireNumber`).
-2. **Register and bind it** in the file's `install*Primitives` function:
+2. **Bind it** in the file's `install*Primitives` function:
    ```cpp
-   bindPrimitive(rt, N, "+", reg.registerPrim(prim_NumAdd));
+   bindPrimitive(rt, N, "+", primitiveMethod<prim_NumAdd>);
    ```
-   `registerPrim` appends the function to the runtime's `PrimitiveRegistry`
-   and answers its index; `bindPrimitive` stores the index, tagged with bit
-   62, as an attribute of the prototype under the interned selector. A new
-   source file needs its `install*` function declared and called in
-   `STRuntime::construct` and the file listed in `CMakeLists.txt`.
+   `primitiveMethod<prim_NumAdd>` is the function as a protoCore method
+   (`proto::ProtoMethod`): it finds the runtime that owns the context's space
+   (`runtimeOf(ctx)`, a per-thread cache over the space-to-runtime registry
+   of `src/modules/STModuleProvider.h`), runs a call that did not come from
+   protoST's dispatch (`callMethodCell`) behind the `__st_send__` boundary,
+   refuses named arguments, and calls
+   `prim_NumAdd(rt, ctx, self, args, argc)` over the caller's argument array.
+   `bindPrimitive` wraps it in a native method cell
+   (`ProtoContext::fromMethod(nullptr, method)`: no bound receiver, so no
+   cycle with the prototype) and stores it as an attribute of the prototype
+   under the interned selector, so ordinary lookup finds it and an attribute
+   of the same name lower in the chain overrides it. A new source file needs
+   its `install*` function declared and called in `STRuntime::construct` and
+   the file listed in `CMakeLists.txt`.
 3. **Running a block or a method** from a primitive: `invokeBlock(rt, ctx,
    block, args, argc)` (a nested engine) or `sendDynamic(rt, ctx, recv,
    selector, args, argc, &understood)`. Both run on the caller's `ctx`.

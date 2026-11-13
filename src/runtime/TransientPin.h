@@ -76,17 +76,49 @@
 // Non-copyable, non-movable: each pin is bound to a single C++ stack lifetime.
 // Pins nest strictly LIFO (matching C++ scope nesting); the destructor asserts
 // LIFO discipline in debug builds.
+//
+// Unbounded nesting (K15, 0.10.0)
+// ------------------------------
+// The scratch region holds a fixed number of pins, but nothing bounds how
+// many pins are live at once: every `collect:` / `select:` / `inject:into:`
+// keeps its accumulator pinned while its block runs, the block can recurse
+// into the same primitive, and the engine nesting limit (kMaxNestedEngines)
+// is 1000 levels, not 256 pins; a primitive that recurses in C++ is bounded by
+// nothing at all. Until 0.10.0 the 257th live pin hit `assert(false)` and, in a
+// release build, returned WITHOUT pinning: the object stayed in a C++ local
+// only, the next safepoint submitted its context's young chain, a collection
+// freed it, and the primitive then used a recycled cell (SIGSEGV in
+// ProtoList::appendLast, or "stack smashing detected" when the recycled cell's
+// size overflowed appendLast's on-stack buffer). protoBaseST's codec hit it
+// walking values nested 400-509 deep.
+//
+// A pin that finds the region full now goes on the context's OVERFLOW CHAIN:
+// one ProtoList cell `[object, previous head]` per pin, the head kept in the
+// reserved scratch slot kOverflowHeadSlot. The chain is one traced root (no
+// ProtoRootSet handle per pin) and the number of live pins is bounded only by
+// memory. The chain code is out of line (TransientPin.cpp), so a pin in the
+// region costs what it did before. Releasing a chain pin restores the head it
+// replaced and allocates nothing, so a destructor never reaches a GC point.
+// Creating one allocates a single cell; the object being pinned sits in the
+// reserved slot kOverflowStageSlot during that allocation, so it is rooted
+// throughout. `reset` on a chain pin rebuilds the cells of the pins above it
+// on the same context, in one pass (none, for the usual reset of the innermost
+// pin). A chain pin released out of LIFO order would un-root every pin above
+// it, so that misuse aborts the process in every build, with a message.
 #ifndef PROTOST_TRANSIENT_PIN_H
 #define PROTOST_TRANSIENT_PIN_H
 
 #include "protoCore.h"
 
 #include <cassert>
+#include <cstddef>
 
 namespace protoST {
 
 // Slot geometry of an engine context's automaticLocals:
-//   [0, kScratchSlots)                          transient pins (top-down)
+//   [0, kScratchSlots)                          transient pins (top-down);
+//                                               slots 0 and 1 are reserved
+//                                               for the overflow chain
 //   [kFrameRegionBase, kFrameRegionLimit)       frame regions (bottom-up)
 // kEngineSlotCapacity (1,048,576 since 0.4.0: 10,000-deep recursion needs
 // ~560,000 frame slots) is the most the array grows to; it starts at
@@ -96,23 +128,29 @@ inline constexpr unsigned int kScratchSlots       = 256;
 inline constexpr unsigned int kFrameRegionBase    = kScratchSlots;
 inline constexpr unsigned int kInitialEngineSlots = 4096;   // 32 KB
 
+// The overflow chain's head (PROTO_NONE when empty), and the slot that roots
+// the object a chain pin is being created for while its cell is allocated.
+inline constexpr unsigned int kOverflowHeadSlot   = 0;
+inline constexpr unsigned int kOverflowStageSlot  = 1;
+// Pins the region itself holds: slots [kOverflowStageSlot + 1, kScratchSlots).
+inline constexpr unsigned int kScratchPinSlots    = kScratchSlots - 2;
+
 // Thread-local scratch cursor. Counts slots CONSUMED in the scratch region;
 // the next free scratch slot is `kScratchSlots - 1 - g_scratchCursor`, i.e.
 // the region fills from its top downward. Thread-local because a
 // ProtoContext is per-thread and several engines / primitives nest LIFO on
-// the same OS thread.
+// the same OS thread. It never exceeds kScratchPinSlots.
 //
 // Defined in ExecutionEngine.cpp alongside the frame-region cursor.
 extern thread_local unsigned int g_scratchCursor;
 
+// Number of live overflow-chain pins on the calling thread (TransientPin.cpp).
+// For tests and diagnostics.
+std::size_t overflowPinsOnThisThread();
+
 // Highest value g_slotCursor (the frame-region cursor, defined in
 // ExecutionEngine.cpp) is allowed to reach.
 inline constexpr unsigned int kFrameRegionLimit = kEngineSlotCapacity;
-
-// 256 transient pins is far past any real nesting depth: the deepest pinning
-// site (the actor-message SEND fast-path) pins ~6 objects, and primitives
-// pin a handful each; even a long chain of nested engines / primitives on one
-// C++ stack stays well under 256. Overflow is a hard error, never silent.
 
 // Grows `ctx`'s automaticLocals so that slots [0, needed) exist: at least
 // kInitialEngineSlots, doubling, never beyond kEngineSlotCapacity. Must be
@@ -128,37 +166,38 @@ inline void ensureEngineSlots(proto::ProtoContext* ctx, unsigned int needed) {
 }
 
 // RAII pin for a `ProtoObject*` held in a C++ local across a possible-GC
-// operation. Construction claims the next scratch slot in the engine
-// context's GC-traced automaticLocals and writes the pointer there, so the
-// tracing collector keeps the object alive. Destruction releases the slot.
+// operation. Construction writes the pointer into the engine context's
+// GC-traced automaticLocals (a scratch slot, or the overflow chain once the
+// region is full), so the tracing collector keeps the object alive.
+// Destruction releases it.
 //
-// `ctx` must be the engine context (the thread's own context). A
-// nullptr `ctx` or nullptr `obj` makes the pin an inert no-op — kept cheap so
-// callers that may legitimately receive nullptr need not branch.
+// `ctx` must be the engine context (the thread's own context). A nullptr
+// `ctx` makes the pin an inert no-op. A nullptr `obj` still claims a place
+// (holding PROTO_NONE), so a later `reset` to a real object pins it.
 class TransientPin {
 public:
     TransientPin(proto::ProtoContext* ctx, const proto::ProtoObject* obj)
-        : ctx_(ctx), active_(false), slot_(0) {
-        if (!ctx_ || !obj) return;
+        : ctx_(ctx), slot_(0) {
+        if (!ctx_) return;
         // The scratch region is the bottom of automaticLocals. A few
         // non-engine call sites (STRuntime::registryAdd / registryRemove /
         // runTopLevel) may pin on a worker / root context no engine has
         // sized yet, so make sure it exists.
         ensureEngineSlots(ctx_, kScratchSlots);
-        // Scratch overflow: more than kScratchSlots live pins. A hard error,
-        // never silent slot reuse.
-        if (g_scratchCursor >= kScratchSlots) {
-            assert(false && "TransientPin: scratch slot region exhausted");
+        if (g_scratchCursor < kScratchPinSlots) {
+            slot_ = kScratchSlots - 1 - g_scratchCursor;
+            ++g_scratchCursor;
+            const bool stored = ctx_->setAutomaticLocal(slot_, obj ? obj : PROTO_NONE);
+            assert(stored && "TransientPin: scratch slot out of range");
+            (void)stored;
             return;
         }
-        slot_   = kScratchSlots - 1 - g_scratchCursor;
-        ++g_scratchCursor;
-        active_ = true;
-        ctx_->setAutomaticLocal(slot_, obj);
+        slot_ = pushChain(ctx_, obj ? obj : PROTO_NONE);
     }
 
     ~TransientPin() {
-        if (!active_) return;
+        if (!ctx_) return;
+        if (slot_ >= kScratchSlots) { popChain(ctx_, slot_); return; }
         // LIFO discipline: the slot we release must be the most recently
         // claimed one. C++ scope nesting guarantees this for stack-allocated
         // pins; the assert catches a misuse (e.g. a heap-allocated pin
@@ -174,11 +213,21 @@ public:
 
     // Re-point the pin at a different object. Used when a transient is
     // rebuilt in place inside a loop (e.g. an accumulator list reassigned by
-    // appendLast each iteration): the SAME pin slot tracks the latest value
-    // without claiming a fresh slot per iteration.
+    // appendLast each iteration): the SAME pin tracks the latest value
+    // without claiming a fresh place per iteration.
     void reset(const proto::ProtoObject* obj) {
-        if (!active_ || !ctx_) return;
-        ctx_->setAutomaticLocal(slot_, obj ? obj : PROTO_NONE);
+        if (!ctx_) return;
+        if (!obj) obj = PROTO_NONE;
+        if (slot_ >= kScratchSlots) { resetChain(ctx_, slot_, obj); return; }
+        ctx_->setAutomaticLocal(slot_, obj);
+    }
+
+    // The object this pin holds (PROTO_NONE for an empty pin, nullptr for an
+    // inert one). For tests and diagnostics.
+    const proto::ProtoObject* pinned() const {
+        if (!ctx_) return nullptr;
+        if (slot_ >= kScratchSlots) return chainPinned(ctx_, slot_);
+        return ctx_->getAutomaticLocal(slot_);
     }
 
     TransientPin(const TransientPin&)            = delete;
@@ -187,9 +236,17 @@ public:
     TransientPin& operator=(TransientPin&&)      = delete;
 
 private:
+    // The overflow chain (TransientPin.cpp), kept out of line and cold so the
+    // region path above is all that is inlined at a pin site. A chain pin's
+    // slot_ is kScratchSlots + its index on the thread's chain-pin stack.
+    static unsigned int pushChain(proto::ProtoContext* ctx, const proto::ProtoObject* obj);
+    static void popChain(proto::ProtoContext* ctx, unsigned int slot);
+    static void resetChain(proto::ProtoContext* ctx, unsigned int slot,
+                           const proto::ProtoObject* obj);
+    static const proto::ProtoObject* chainPinned(proto::ProtoContext* ctx, unsigned int slot);
+
     proto::ProtoContext* ctx_;
-    bool                 active_;
-    unsigned int         slot_;
+    unsigned int         slot_;   // region slot, or kScratchSlots + chain index
 };
 
 } // namespace protoST

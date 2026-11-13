@@ -1,4 +1,5 @@
 #include "runtime/ClassedErrorSignal.h"
+#include "runtime/ExecutionEngine.h"
 #include "runtime/NativeError.h"
 #include "runtime/ListIndex.h"
 #include "STForeignSend.h"
@@ -6,9 +7,9 @@
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
+#include "runtime/BlockCode.h"
 #include "runtime/HandlerStack.h"
 #include "runtime/NativeExceptionBridge.h"
-#include "runtime/PrimitiveMarker.h"
 #include "runtime/TransientPin.h"
 #include "protoCore.h"
 
@@ -29,22 +30,8 @@ const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
 
 namespace {
 
-// The handlers of the protoST code above a foreign frame, disabled for the
-// duration of one foreign send (see the header) and restored on every exit.
-class HandlerBarrier {
-public:
-    HandlerBarrier() : disabled_(handlerStackDisableAll()) {}
-    ~HandlerBarrier() { handlerStackRestore(disabled_); }
-    bool hidOuterHandlers() const { return !disabled_.empty(); }
-    HandlerBarrier(const HandlerBarrier&) = delete;
-    HandlerBarrier& operator=(const HandlerBarrier&) = delete;
-
-private:
-    std::vector<proto::proto_ulong> disabled_;
-};
-
-// One SEND of `selector` to `recv`, with the engine's semantics: the class-side
-// isolation (D5), doesNotUnderstand (D3), a user method, a primitive, a value
+// One SEND of `selector` to `recv`, with the engine's semantics: the method
+// holder (a class's metaclass, D52), doesNotUnderstand (D3), a user method, a primitive, a value
 // attribute read by a unary send, and a protoCore method (a module's export).
 const proto::ProtoObject* sendMessage(STRuntime& rt, proto::ProtoContext* ctx,
                                       const proto::ProtoObject* recv,
@@ -58,11 +45,6 @@ const proto::ProtoObject* sendMessage(STRuntime& rt, proto::ProtoContext* ctx,
                                  "supported: an actor's messages are asynchronous");
     const proto::ProtoObject* holder = methodHolder(bs, ctx, recv);
     const proto::ProtoObject* attr = holder->getAttribute(ctx, selector);
-    if (attr && attr != PROTO_NONE && !attr->isInteger(ctx) &&
-        attr->getOwnAttributeDirect(ctx, bs.sym.classSide) == PROTO_TRUE) {
-        const proto::ProtoObject* ownName = holder->getOwnAttributeDirect(ctx, bs.sym.className);
-        if (!ownName || ownName == PROTO_NONE) attr = nullptr;  // an instance receiver
-    }
     if (!attr || attr == PROTO_NONE) {
         if (canSendToForeignException(rt, ctx, recv, selector))
             return sendToForeignException(rt, ctx, recv, selector, args, argc);
@@ -72,8 +54,7 @@ const proto::ProtoObject* sendMessage(STRuntime& rt, proto::ProtoContext* ctx,
             proto::ProtoString::createSymbol(ctx, "doesNotUnderstand:");
         const proto::ProtoObject* dnu = holder->getAttribute(ctx, dnuKey);
         if (dnu && dnu != PROTO_NONE) {
-            const proto::ProtoObject* bc = dnu->getOwnAttributeDirect(ctx, bs.sym.bcPtr);
-            if (bc && bc != PROTO_NONE) {
+            if (blockCodeOf(ctx, dnu->getOwnAttributeDirect(ctx, bs.sym.bcPtr))) {
                 bool understood = false;
                 const proto::ProtoObject* a1[1] = {message};
                 return sendDynamic(rt, ctx, recv, dnuKey, a1, 1, &understood);
@@ -82,13 +63,15 @@ const proto::ProtoObject* sendMessage(STRuntime& rt, proto::ProtoContext* ctx,
         const std::string text = "doesNotUnderstand: " + selText;
         return signalMessageNotUnderstood(rt, ctx, recv, message, text);
     }
-    if (attr->isMethod(ctx))
-        return recv->call(ctx, nullptr, selector, recv, args, static_cast<unsigned>(argc));
-    const proto::ProtoObject* bc = attr->isInteger(ctx)
-                                       ? nullptr
-                                       : attr->getOwnAttributeDirect(ctx, bs.sym.bcPtr);
-    const bool primitive = attr->isInteger(ctx) && isPrimitiveMarker(attr->asLong(ctx));
-    if ((bc && bc != PROTO_NONE) || primitive) {
+    if (const proto::ProtoMethod native = attr->asMethod(ctx)) {
+        // A primitive, or a native method another runtime exported: the
+        // method cell is called directly, as a send in the engine calls it
+        // (foreignSendEntry is the native boundary around this send).
+        const proto::ProtoArguments positional(args, static_cast<unsigned>(argc));
+        const proto::ProtoObject* r = callMethodCell(native, ctx, recv, &positional, nullptr);
+        return r ? r : PROTO_NONE;
+    }
+    if (blockCodeOf(ctx, attr->getOwnAttributeDirect(ctx, bs.sym.bcPtr))) {
         bool understood = false;
         const proto::ProtoObject* r = sendDynamic(rt, ctx, recv, selector, args, argc, &understood);
         return r ? r : PROTO_NONE;
@@ -101,19 +84,19 @@ const proto::ProtoObject* sendMessage(STRuntime& rt, proto::ProtoContext* ctx,
 
 }  // namespace
 
-const proto::ProtoObject* foreignSendEntry(proto::ProtoContext* callerCtx,
-                                           const proto::ProtoObject* self,
-                                           const proto::ParentLink*,
-                                           const proto::ProtoArguments* positional,
-                                           const proto::ProtoKeywordArguments* keywords) {
+namespace {
+
+// The protoST runtime a call from outside protoST's dispatch runs in, and
+// whether the caller's space is a foreign one. The provider's rule (Track Y):
+// for a foreign space the runtime comes from protoST's own state, never from
+// the caller's space, and the ambiguous case is refused rather than resolved
+// arbitrarily.
+STRuntime& entryRuntime(proto::ProtoContext* callerCtx, bool& foreign) {
     if (!callerCtx || !callerCtx->space)
         throw NativeError("protoST: a send needs the caller's context");
     STRuntime* rt = stRuntimeForSpace(callerCtx->space);
-    const bool foreign = rt == nullptr;
+    foreign = rt == nullptr;
     if (foreign) {
-        // The provider's rule (Track Y): the runtime comes from protoST's own
-        // state, never from the caller's space, and the ambiguous case is
-        // refused rather than resolved arbitrarily.
         rt = soleSTRuntime();
         if (!rt)
             throw NativeError(registeredSTRuntimeCount() > 1
@@ -126,49 +109,47 @@ const proto::ProtoObject* foreignSendEntry(proto::ProtoContext* callerCtx,
                 "protoST: a send from another runtime must run on the thread that "
                 "constructed the protoST runtime");
     }
-    if (keywords && keywords->getSize(callerCtx) > 0)
-        throw NativeError("protoST: a Smalltalk message takes no named arguments");
-    const proto::proto_ulong n = positional ? positional->getSize(callerCtx) : 0;
-    if (n < 1)
-        throw NativeError("protoST: " + std::string(kForeignSendSelector) +
-                                 " expects the selector as its first argument");
-    const proto::ProtoObject* selArg = positional->getAt(callerCtx, 0);
-    const proto::ProtoString* selStr = selArg ? selArg->asString(callerCtx) : nullptr;
-    if (!selStr)
-        throw NativeError("protoST: the selector of a send must be a String or a Symbol");
+    return *rt;
+}
 
-    // Where the message runs. A protoST caller keeps its own context. A foreign
+// Runs `body(rt, ctx)` behind protoST's native boundary: the one every call
+// into protoST from outside its own dispatch crosses, whether it is a
+// message sent through __st_send__ or a primitive's method cell called
+// through protoCore's calling convention (primitiveMethod). `what` names the
+// call in the error a control-flow unwind leaving it reports.
+template <class Body>
+const proto::ProtoObject* acrossBoundary(proto::ProtoContext* callerCtx, STRuntime& rt,
+                                         bool foreign, const std::string& what, Body body) {
+    // Where the call runs. A protoST caller keeps its own context. A foreign
     // one runs on protoST's current context on this thread -- the root context,
     // or the innermost one protoST code above it is running on -- because a
     // context's space is its parent's, so a child of the caller's context would
     // put protoST's allocations in the caller's space.
     proto::ProtoContext* ctx = callerCtx;
     if (foreign) {
-        proto::ProtoContext* root = rt->rootCtx();
+        rt.noteForeignCaller();   // S40: see STRuntime::noteForeignCaller
+        proto::ProtoContext* root = rt.rootCtx();
         proto::ProtoContext* current = root->thread ? root->thread->getCurrentContext() : nullptr;
         ctx = (current && current->space == root->space) ? current : root;
     }
+    // K18: a context of protoST's space that is not protoST's own -- another
+    // runtime's frame context, whose locals sit in its automaticLocals -- is
+    // never run on directly; the call runs on a child context of it.
+    EntryContext entry(rt, ctx);
+    ctx = entry.ctx();
 
-    const proto::ProtoString* selector =
-        proto::ProtoString::createSymbol(ctx, selStr->toStdString(callerCtx).c_str());
-    std::vector<const proto::ProtoObject*> args;
-    args.reserve(static_cast<size_t>(n - 1));
-    for (proto::proto_ulong i = 1; i < n; ++i) {
-        const proto::ProtoObject* a = positional->getAt(callerCtx, listIndex(i));
-        args.push_back(a ? a : PROTO_NONE);
-    }
-    const int argc = static_cast<int>(args.size());
-    const proto::ProtoObject* recv = self ? self : PROTO_NONE;
+    // Every call that comes here crosses a runtime boundary: protoST's own
+    // dispatch never does, so the caller is another runtime's code (a
+    // foreign space, a host whose space protoST is a guest in, or a runtime
+    // sharing protoST's space), with its frames between protoST code above and
+    // this call. Until fix round 2 of K15 a caller in protoST's own space
+    // skipped the boundary below, so a non-local return or a Future yield could
+    // unwind through the caller's frames, and an outer protoST handler could
+    // take an Error past them.
 
-    // A guest in another runtime's space (STRuntime(proto::ProtoSpace&)): the
-    // caller shares protoST's space but is the host runtime's code, so the send
-    // crosses the runtime boundary as a foreign one does -- on the caller's own
-    // context, which belongs to protoST's space, from any thread of it.
-    if (!foreign && rt->ownsSpace()) return sendMessage(*rt, ctx, recv, selector, args.data(), argc);
-
-    // The foreign boundary. The send is a native call boundary like a
+    // The foreign boundary. The call is a native call boundary like a
     // primitive's: a C++ failure becomes a signalled Error, and with protoST's
-    // outer handlers disabled an Error nothing inside the send handles leaves
+    // outer handlers disabled an Error nothing inside the call handles leaves
     // as an UnhandledSTException. What leaves is decided in the catch clauses
     // and acted on after them (see translateNativeException).
     std::exception_ptr failed;
@@ -177,8 +158,8 @@ const proto::ProtoObject* foreignSendEntry(proto::ProtoContext* callerCtx,
     {
         HandlerBarrier barrier;
         try {
-            result = translateNativeException(*rt, ctx, [&]() -> const proto::ProtoObject* {
-                return sendMessage(*rt, ctx, recv, selector, args.data(), argc);
+            result = translateNativeException(rt, ctx, [&]() -> const proto::ProtoObject* {
+                return body(rt, ctx);
             });
         } catch (const UnhandledSTException& u) {
             // A foreign exception that crossed protoST unhandled leaves as the
@@ -187,7 +168,7 @@ const proto::ProtoObject* foreignSendEntry(proto::ProtoContext* callerCtx,
             // A protoST Error no handler took leaves as the UnhandledSTException
             // that carries it -- unless the barrier hid handlers of protoST code
             // further up this thread (protoST called the foreign runtime, which
-            // called this send). Those were never offered the Error, and an
+            // called into protoST). Those were never offered the Error, and an
             // UnhandledSTException tells every protoST boundary it crosses that
             // they were, so it would pass them by. It leaves instead as a plain
             // ProtoException with the same value, which the boundary where the
@@ -205,7 +186,7 @@ const proto::ProtoObject* foreignSendEntry(proto::ProtoContext* callerCtx,
             failed = std::current_exception();
         } catch (...) {
             // NonLocalReturn, UnwindToHandler, RetrySignal, ResumeSignal,
-            // PassSignal, FutureYield: each means "resume protoST somewhere up
+            // FutureYield: each means "resume protoST somewhere up
             // the protoST stack", and the foreign caller's frames are in the way.
             controlFlowUnwind = true;
         }
@@ -213,11 +194,63 @@ const proto::ProtoObject* foreignSendEntry(proto::ProtoContext* callerCtx,
     if (failed) std::rethrow_exception(failed);
     if (controlFlowUnwind)
         throw NativeError(
-            "protoST: #" + selector->toStdString(ctx) +
+            "protoST: " + what +
             " left through a control-flow unwind (a non-local return, a resumption, "
             "a retry, or a Future yield), which cannot cross a runtime boundary");
-    return result ? result : PROTO_NONE;
+    return entry.leave(result ? result : PROTO_NONE);
 }
+
+}  // namespace
+
+const proto::ProtoObject* foreignSendEntry(proto::ProtoContext* callerCtx,
+                                           const proto::ProtoObject* self,
+                                           const proto::ParentLink*,
+                                           const proto::ProtoArguments* positional,
+                                           const proto::ProtoKeywordArguments* keywords) {
+    bool foreign = false;
+    STRuntime& rt = entryRuntime(callerCtx, foreign);
+    if (keywords && keywords->getSize(callerCtx) > 0)
+        throw NativeError("protoST: a Smalltalk message takes no named arguments");
+    const proto::proto_ulong n = positional ? positional->getSize(callerCtx) : 0;
+    if (n < 1)
+        throw NativeError("protoST: " + std::string(kForeignSendSelector) +
+                                 " expects the selector as its first argument");
+    const proto::ProtoObject* selArg = positional->getAt(callerCtx, 0);
+    const proto::ProtoString* selStr = selArg ? selArg->asString(callerCtx) : nullptr;
+    if (!selStr)
+        throw NativeError("protoST: the selector of a send must be a String or a Symbol");
+    const std::string selText = selStr->toStdString(callerCtx);
+    std::vector<const proto::ProtoObject*> args;
+    args.reserve(static_cast<size_t>(n - 1));
+    for (proto::proto_ulong i = 1; i < n; ++i) {
+        const proto::ProtoObject* a = positional->getAt(callerCtx, listIndex(i));
+        args.push_back(a ? a : PROTO_NONE);
+    }
+    const proto::ProtoObject* recv = self ? self : PROTO_NONE;
+    return acrossBoundary(callerCtx, rt, foreign, "#" + selText,
+        [&](STRuntime& r, proto::ProtoContext* ctx) {
+            const proto::ProtoString* selector =
+                proto::ProtoString::createSymbol(ctx, selText.c_str());
+            return sendMessage(r, ctx, recv, selector, args.data(),
+                               static_cast<int>(args.size()));
+        });
+}
+
+namespace detail {
+const proto::ProtoObject* callPrimitiveFromOutside(proto::ProtoMethod primitive,
+                                                   proto::ProtoContext* callerCtx,
+                                                   const proto::ProtoObject* self,
+                                                   const proto::ProtoArguments* positional,
+                                                   const proto::ProtoKeywordArguments* keywords) {
+    bool foreign = false;
+    STRuntime& rt = entryRuntime(callerCtx, foreign);
+    const proto::ProtoObject* recv = self ? self : PROTO_NONE;
+    return acrossBoundary(callerCtx, rt, foreign, "a primitive called through protoCore",
+        [&](STRuntime&, proto::ProtoContext* ctx) {
+            return callMethodCell(primitive, ctx, recv, positional, keywords);
+        });
+}
+} // namespace detail
 
 void installForeignSendEntry(STRuntime& rt) {
     proto::ProtoContext* ctx = rt.rootCtx();

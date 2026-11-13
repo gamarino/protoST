@@ -227,7 +227,9 @@ loop in sight — `retry` *is* the loop.
 > the exception protocol.
 
 `e retryUsing: aBlock` is the variant that replaces the protected block with
-`aBlock` and runs that instead.
+`aBlock` and runs that instead, under the same handler: an exception `aBlock`
+signals comes back to the same handler, and a later `retry` runs `aBlock`
+again.
 
 ### `resume:` — continue past the signal
 
@@ -304,11 +306,13 @@ entries — the `ensure:` block ran even though the body raised.
 Whether an exception can be `resume:`d is a property of its class:
 
 - `Exception` and `Warning` are **resumable** — `resume:` works.
-- `Error` is **not resumable** — calling `resume:` on a caught `Error` is
-  itself an error. `ZeroDivide` is the exception to the rule, as in Pharo:
+- `Error` is **not resumable** — calling `resume:` on a caught `Error`
+  signals `IllegalResumeAttempt` (an `Exception`, not an `Error`, as in
+  Pharo). `ZeroDivide` is the exception to the rule, as in Pharo:
   `[ (1 / 0) + 1 ] on: ZeroDivide do: [ :e | e resume: 5 ]` answers `6`.
 
-`e isResumable` answers which case you are in.
+`e isResumable` answers which case you are in. A class can declare itself
+non-resumable by overriding it: `MyException >> isResumable ^ false`.
 
 The reasoning: an `Error` signals that a computation reached a state it cannot
 sensibly continue from, so "continue past the signal" is meaningless. A

@@ -188,6 +188,25 @@ statement terminator, and `.5` is not a float.
 An exponent suffix `e` (optionally negative) scales the value by a power of
 ten: `2.5e-3` is `0.0025`.
 
+An integer mantissa with a negative exponent is a float literal too:
+`25e-1` is `2.5` and `5e-324` a `Float` (with a non-negative exponent it stays
+an integer, §2.4).
+
+A float literal denotes the `Float` nearest to the decimal value written (IEEE
+754 binary64, round to nearest, ties to even), over the whole range of the
+type (STATUS D51):
+
+- **Subnormals are literals.** `5e-324` is the smallest positive `Float`, and
+  `2.225073858507201e-308` the largest subnormal.
+- **Underflow rounds.** A literal smaller than half of `5e-324` is `0.0`
+  (`-0.0` with a minus sign): `1e-400` is `0.0`, as in Pharo and Python.
+- **Overflow is an error.** A literal whose nearest `Float` would be infinite
+  (`1.0e309`, or `1.7976931348623159e308`) is a compile error, *float literal
+  out of range*; `Float infinity` is the way to write that value.
+
+`printString` of any finite `Float` is a float literal that reads back as the
+same `Float`, bit for bit (`5e-324 printString` is `'5.0e-324'`).
+
 ### 2.6 Character literals
 
 A character literal is `$` followed by exactly one character:
@@ -465,6 +484,13 @@ So a method is written without blank lines between its statements, and
 top-level code after a method starts at column 1. A method with no `^`
 returns `self`.
 
+Selectors and attribute names that begin with two underscores (`__isResumable`,
+`__class_name__`, `__hashMix:`) are private to the runtime: the kernel and the
+primitives use them, and the runtime may read the state behind them without a
+send. Defining or overriding a method with such a selector is unsupported, and
+its effect is unspecified. Override the public selector instead (for example
+`isResumable`, not `__isResumable`; see §8.6).
+
 ### 3.4 Statements
 
 ```
@@ -677,6 +703,9 @@ Object
       Dictionary
   Association
   Point, ReadStream, WriteStream, Message, Date, Time, Duration, Random
+  Behavior              (the class protocol, §4.7)
+    Class               (the root of the classes' metaclass chain)
+    Metaclass           (the class of every metaclass)
 ```
 
 There are no `True`, `False` or `Magnitude` classes: `true class` and
@@ -715,7 +744,9 @@ instances of user subclasses too (`OrderedCollection subclass: #Stack`, then
 `Stack new` is a `Stack`).
 
 `newChild` is the underlying prototype operation: it answers a fresh child of
-the receiver and, like `basicNew`, does not send `initialize`.
+the receiver and, like `basicNew`, does not send `initialize`. All three are
+class-side messages (defined on `Behavior`, §4.7): an instance does not
+understand them, so `Account new new` is a `MessageNotUnderstood`.
 
 ### 4.5 Instance variables
 
@@ -734,6 +765,11 @@ Account >> deposit: amount
 ```
 
 An instance variable that has never been assigned reads as `nil`.
+
+The compiler resolves instance-variable names. In a method of a class whose
+superclass it cannot see — a subclass of an imported class, a class built by
+the `subclass:` message — they are resolved when the method is installed
+instead ([§4.10](#410-extensible-classes-from-modules)).
 
 **Runs of assignments are published together.** Each assignment to an
 instance variable publishes a new version of the object (protoCore keeps
@@ -764,7 +800,9 @@ observe: it sees all of a run or none of it, never some of its assignments
 (10.6). Which assignments of a run survive if the thread is terminated in the
 middle of it is indeterminate. Under the debugger (`protost -d`, the DAP
 server) every assignment is published on its own, so stepping shows each one.
-`PROTOST_IVAR_GROUPS=off` in the environment turns runs off.
+`PROTOST_IVAR_GROUPS=off` in the environment turns runs off. A method whose
+instance variables are found when it is installed, not when it is compiled
+(§4.10), publishes each assignment on its own (STATUS D57).
 
 ### 4.6 `self` and `super`
 
@@ -818,12 +856,46 @@ Counter class >> startingAt: n
   ^ c.
 ```
 
-> **Implementation note.** Class-side and instance-side protocols are disjoint:
-> a `ClassName class >> selector` method is reachable from the class object but
-> *not* from its instances — an instance sending a class-side selector gets a
-> `MessageNotUnderstood`. Internally both still install onto the one class
-> object; class-side methods carry a marker that the send-dispatch path honours
-> when the receiver is an instance.
+Class-side and instance-side protocols are disjoint, in both directions, as
+in Pharo (STATUS D52). Every class has a **metaclass**, `ClassName class`, an
+object of its own that holds the class-side methods. A message sent to a class
+is looked up on the metaclass chain only:
+
+```
+Foo class -> Super class -> ... -> Object class -> Class -> Behavior -> Object
+```
+
+and a message sent to an instance on the class chain only (`Foo -> Super ->
+... -> Object`). So an instance sending a class-side selector, and a class
+sending one of its instances' selectors (`Foo greet`, `Array at: 1`,
+`#(1 2) new: 3`), both get a `MessageNotUnderstood`. One selector may name a
+method on each side (`Foo >> name` and `Foo class >> name` are two methods),
+and redefining one side leaves the other alone. Class-side methods are
+inherited along the metaclass chain; `super` in a class-side method starts at
+the superclass's metaclass.
+
+The class protocol every class answers (`new`, `basicNew`, `newChild`,
+`subclass:...`, `name`, `superclass`, `selectors`, `canUnderstand:`,
+`instVarNames`, `inheritsFrom:`, `includesSelector:`, ...) is defined on
+`Behavior`; `Class` (the metaclass chain's root for classes) and `Metaclass`
+(the class of every metaclass) descend from it. `canUnderstand:` describes the
+receiver's instances: `Array canUnderstand: #at:put:` is true,
+`Array class canUnderstand: #at:put:` false. `respondsTo:` describes the
+receiver itself. Reflection follows Pharo: `Foo class class == Metaclass`,
+`Foo class superclass == Super class`, `Object class superclass == Class`,
+`Class superclass == Behavior`, `Foo class printString` is `'Foo class'`.
+
+The metaclass protocol: `Foo class isMeta` is true (`Foo isMeta` false),
+`Foo class soleInstance` and `Foo class instanceClass` answer `Foo`, and
+`Foo lookupSelector: #sel` answers the class or metaclass on `Foo`'s chain
+that holds the method for `sel`, or `nil` (Pharo answers the CompiledMethod;
+protoST has no method objects, STATUS D52). A metaclass has one instance, its
+class: `Metaclass new` and `Foo class new` signal an `Error`; classes and
+their metaclasses are made by `subclass:`. `Behavior new` and `Class new`
+signal an `Error` too: Pharo's `Class new` makes an anonymous class, and
+protoST has none (a class is known by its name). `Foo copy` is a class with a
+metaclass of its own (a copy of `Foo class`), so a class-side method added
+to the copy does not reach `Foo`.
 
 Class-side methods do not see instance variables. They read and assign class
 variables and class-instance variables (§3.2).
@@ -910,6 +982,57 @@ How it works:
 > When the superclass is reached through an expression — a module attribute, a
 > block result, an array element — the message form above applies.
 
+**Inherited variables of a class the compiler cannot see.** A script is
+compiled whole before its first statement runs, so when a method is compiled
+the modules the script imports have not been loaded: the compiler does not
+know the imported classes, nor a class built by the `subclass:` message.
+Instance and class variables are names the compiler resolves (§4.5), so a
+method of such a class resolves them when it is **installed** instead — when
+its definition runs, in source order, after the `Import from:` and the class
+declaration before it:
+
+```smalltalk
+m := Import from: '_lib'.              "declares Base, instanceVariableNames: 'secret'"
+Base subclass: #Kid instanceVariableNames: 'own'.
+
+Kid >> peek
+  ^ secret + own.                      "secret: Base's instance variable"
+
+Base >> doubled                        "an extension of the imported class"
+  ^ secret * 2.
+```
+
+This applies to a method whose class's chain — its superclasses and its
+`uses:` mixins — reaches a class the compiler has not seen: a subclass of an
+imported class, a class built by the message form (`(m Base) subclass: #Kid
+instanceVariableNames: 'own'`), a class whose `uses:` clause is not a literal
+list of class names, and a method added to an imported class. In its methods
+a name that is not an argument, a temporary or a variable the compiler knows
+is looked up, when the method is installed, among the instance variables (for
+a class-side method, the class-instance variables) and then the class
+variables that the class and its ancestors declare, whatever its spelling
+(`secret`, `_x`, `Y`), and the method reads and writes it as if the compiler
+had known it, with one difference: a run of assignments to such variables is
+not published as one version (§4.5; STATUS D57). A read of a name the class
+does not declare that does not start with a lowercase letter is a global, as
+in any method. Any other name the class does not declare signals `Error`
+(`undeclared variable 'zork' in Kid (line 9)`) and the method is not
+installed; so does an argument or temporary that
+reuses the name of an inherited instance variable. These are the compiler's
+own errors, reported at a different time: when the definition runs rather
+than before the script starts, so the statements before it have run. A method
+whose class's chain is fully known — declared in the same file, in the kernel
+or in a module already loaded — is checked by the compiler as before. In the
+REPL, which compiles each input after the previous ones ran, a name that is
+not a variable of the class reads the session global of that name, as other
+REPL code does.
+
+The `subclass:instanceVariableNames:` message records the names it is given,
+as the declaration does (`Kid instVarNames`), and a class may not redeclare
+an instance variable it inherits: the declaration signals `Error` (`instance
+variable 'secret' of Kid is already defined in its superclass Base`) when the
+superclass is one the compiler could not check.
+
 ### 4.11 Multiple inheritance and mixins (`uses:`)
 
 A class may be defined with **several superclasses / mixins**. A *mixin* is not
@@ -954,6 +1077,20 @@ messages on every class object.
 parents (the *diamond* case) resolves to the **first** in this order; shared
 ancestors are visited once. `super` from a method of a multiply-inheriting
 class searches this same order, starting after the method's defining class.
+
+**Type tests count mixins.** A mixin is a parent class, so it is part of
+the type: `isKindOf: aClass` is true when aClass is the receiver's class or
+any of its ancestors, superclasses and `uses:` / `addBehavior:` mixins alike,
+and `aClass inheritsFrom: anotherClass` asks the same of a class. This is the
+ancestor set method lookup walks and `on: aClass do:` selects an exception by
+(§8), so a handler for a mixin catches what `isKindOf:` says is one.
+`isKindOf:` is a primitive over the receiver's real class: a method `class`
+that answers another class does not change it, as in Pharo, where `class`
+is a bytecode no method overrides (0.10.0; until then a `class` override
+was used).
+`allSuperclasses` lists the primary superclass chain only. Pharo's traits
+are not classes and do not count for `isKindOf:`; protoST's mixins are
+classes, as in languages with multiple inheritance (Python's `isinstance`).
 
 **Instance variables.** Each parent may declare its own instance variables;
 they combine as the union. A mixin declaring `instanceVariableNames:` works as
@@ -1096,6 +1233,13 @@ A block `[ :args | temps body ]` is a literal closure object — an instance of
 `Block`. Evaluating a block *literal* produces the closure; it does not run the
 body. The body runs only when the block is *evaluated* with `value`/`value:`/…
 
+A closure is an immutable value (since 0.10.0): it has no instance variables,
+and `aBlock instVarNamed: 'x' put: v` signals `ModificationForbidden` instead
+of storing anything. Each evaluation of a literal still makes a distinct
+closure (two of them are neither `==` nor `=`). Captured variables are not
+part of the closure's own state, so a block can still write the variables it
+captures (§6.3).
+
 ### 6.2 Evaluating a block
 
 A block is evaluated by sending it a `value`-family message whose arity matches
@@ -1186,6 +1330,19 @@ i := 1.
 The receiver block is the condition; while it evaluates to `true`, the
 argument block is evaluated. `whileTrue:` returns `nil`.
 
+A condition that answers anything but `true` or `false` signals
+**`NonBooleanReceiver`** (an `Error`, resumable, as in Pharo), whose
+`object` is the value. The loop takes the value a handler resumes with as
+true unless it is `false`. The rule is the same for `whileTrue:`,
+`whileFalse:`, `whileTrue` and `whileFalse`, compiled inline or sent (since
+0.10.0; before, an inlined loop signalled `doesNotUnderstand:` of its
+selector to the value, a sent `whileTrue:` stopped and a sent `whileFalse:`
+ran its body).
+
+```smalltalk
+[ [ 3 ] whileTrue: [ ] ] on: NonBooleanReceiver do: [ :e | e object ]   "=> 3"
+```
+
 **Numeric iteration** — `to:do:` and `to:by:do:` on a number iterate:
 
 ```smalltalk
@@ -1215,6 +1372,31 @@ iterate those with `do:`, which may not contain `wait`, or convert them
 first (`aSet asArray doYielding: […]`). See
 Chapter 10.8 of [the tutorial](TUTORIAL.md) for a worked example.
 
+**Inlined control messages.** The compiler compiles `ifTrue:`, `ifFalse:`,
+`ifTrue:ifFalse:`, `ifFalse:ifTrue:`, `and:` and `or:` whose arguments are
+literal blocks without arguments, `whileTrue:` / `whileFalse:` with a literal
+receiver and argument block, `to:do:` with a literal one-argument block, and
+`ifNil:`, `ifNotNil:`, `ifNil:ifNotNil:`, `ifNotNil:ifNil:` with literal
+blocks (0.10.0), into the enclosing code: no closure is built and nothing is
+sent. The blocks may declare temporaries (0.10.0); as for any block, every
+evaluation starts with them nil, in a loop too, and a block created inside
+the body that captures one sees the binding of its own evaluation (such a
+send is then compiled as a real send). The meaning is the send's, with one
+exception the nil tests share with Pharo: they test identity with nil, so a
+class's own `ifNil:` is not run. When the receiver of one of the six
+conditionals is not a Boolean, the message is sent for real, with closures
+for the block literals (since 0.10.0): a class that defines `ifTrue:` or
+`and:` answers it, and a `doesNotUnderstand:` override receives the whole
+Message (a forwarding proxy forwards it). Those closures are real ones: they
+share the method's variables with the method for as long as either lives,
+so a receiver may keep one and evaluate it later, on any thread, and each
+entry of an inlined block with temporaries has its own variables, as each
+activation of a block would (before fix round 1 of 0.10.0 a kept closure that
+used a variable of the method signalled an `Error`). This
+differs from Pharo 10 and later, where such a receiver gets
+`NonBooleanReceiver` and its own method is not run; Pharo 9 re-sent the
+expression without inlining, as protoST does.
+
 **Conditional and boolean protocol on `Boolean`** — `ifTrue:`, `ifFalse:`,
 `ifTrue:ifFalse:`, `ifFalse:ifTrue:`; the short-circuit combinators `and:` /
 `or:` (the argument is a block, evaluated only when needed); the eager
@@ -1225,6 +1407,11 @@ and `not`.
 `ifNil:ifNotNil:`. `nil` (the sole `UndefinedObject`) answers `isNil` → `true`;
 every other object answers `isNil` → `false`. An `ifNotNil:` block may take the
 receiver as an argument (`anObject ifNotNil: [ :x | … ]`) or take none.
+`ifNotNil:ifNil:` is the same test with the arms in the other order (bound
+since 0.10.0). With literal blocks these four sends are compiled inline (see
+*Inlined control messages* above) and test identity with nil, as Pharo's
+compiler does: a class that defines its own `ifNil:` is reached only when the
+blocks are not literals.
 
 **Block loop protocol** — `whileTrue:`, `whileFalse:`, `whileTrue`,
 `whileFalse` and `repeat` (an unbounded loop, exited by a non-local return).
@@ -1292,7 +1479,8 @@ Exception                  (root; resumable)
     KeyNotFound            (Dictionary>>at: with an absent key)
     NotFound               (remove: of an absent element)
     BlockCannotReturn      (§7.1)
-    ModificationForbidden  (at:put: on a String or a ByteArray)
+    ModificationForbidden  (at:put: on a String or a ByteArray; instVarNamed:put: on a block)
+    NonBooleanReceiver     (resumable; a loop condition that is not a Boolean; §6.4)
     TimeoutError           (a Future did not settle before its deadline; §10.3)
     InvalidArgument        (protoCore: a malformed argument, a wrong-typed operand; §8.7)
   Warning                  (resumable)
@@ -1383,11 +1571,12 @@ What the handler does determines whether — and how far — to unwind:
 |--------|--------|
 | handler falls off its end | `on:do:` yields the handler block's last value; the protected computation after the `signal` is abandoned. |
 | `ex return: v` | `on:do:` yields `v`; the protected computation is abandoned. |
-| `ex resume: v` | `signal` *returns* `v`; the protected computation **continues** from the `signal` point. Only valid for a resumable exception. |
+| `ex resume: v` | `signal` *returns* `v`; the protected computation **continues** from the `signal` point. Only valid for a resumable exception: otherwise it signals `IllegalResumeAttempt` in the handler (§8.6). |
 | `ex resume` | as `resume: nil`. |
 | `ex retry` | the protected block is re-evaluated from the start. |
-| `ex pass` | the handler search resumes *outward* — the next matching enclosing handler is tried; if none, the default action runs. |
-| `ex outer` | not implemented: behaves as `pass`. In Pharo, when the outer handler resumes, `outer` answers the resumption value inside the inner handler, which continues; in protoST the protected computation continues at the `signal` instead (D7, see [§14](#14-known-deviations)). |
+| `ex retryUsing: aBlock` | `aBlock` becomes the protected block of the handler's `on:do:` and is evaluated in its place, under the same handlers (a later `retry` evaluates `aBlock` again), as in Pharo. |
+| `ex pass` | yield to the enclosing handler, as if this one had not handled the exception: the next matching enclosing handler runs (if none, the default action). A resumption **resumes the `signal`**; any other outcome unwinds through this handler. `pass` never answers. |
+| `ex outer` | evaluate the enclosing handler (or, with none, the default action) and, if it resumes, **answer the resumption value here**, inside this handler, which continues. If it returns, retries or unwinds, the unwind passes through this handler and `outer` does not answer. For a non-resumable exception `outer` is `pass`. |
 
 ```smalltalk
 "resume: — continue past the signal"
@@ -1400,6 +1589,53 @@ What the handler does determines whether — and how far — to unwind:
   on: Error
   do: [ :ex | ex retry ].
 ```
+
+`outer` and `pass` run the enclosing handler *in place*, on top of the handler
+that sends them, as Pharo does (`Exception>>outer`, `pass` and
+`resumeUnchecked:`). They differ in where a resumption goes: under `outer` it
+answers the value inside the handler, which continues; under `pass` it resumes
+the `signal`. Under either, the enclosing handler's `return:`, `retry` or
+falling off its end unwinds through the handler that sent it, so that
+handler's `ensure:` blocks run after the enclosing handler, not before.
+
+```smalltalk
+"outer — ask the enclosing handler, then continue here"
+[ [ Warning signal: 'w'. 'body' ]
+    on: Warning
+    do: [ :ex | (ex outer + 1) printString , ' from the inner handler' ] ]
+  on: Warning
+  do: [ :ex | ex resume: 41 ].           "=> '42 from the inner handler'"
+```
+
+```smalltalk
+"pass — the enclosing handler's resumption resumes the signal"
+[ [ (Warning signal: 'w') + 1 ]
+    on: Warning
+    do: [ :ex | ex pass. 'never reached' ] ]
+  on: Warning
+  do: [ :ex | ex resume: 41 ].           "=> 42"
+```
+
+With no enclosing handler, `outer` answers the default action's value for a
+resumable exception (`nil` for an unhandled `Warning`, after its text is
+printed; §8.2), and for an `Error` the default action ends the activation,
+as for any unhandled `Error`. Handlers belong to the thread that runs the
+code (§10), so the search never crosses an actor message: inside an actor
+method `outer` sees only the handlers of that method's activation, and an
+`Error` it does not handle rejects the message's Future, which `wait`
+re-signals in the caller. The same holds when a waiting actor's thread runs
+another actor's message meanwhile: that message sees neither the waiting
+actor's handlers nor the handler blocks it is running, so an exception the
+two share has no active handler there.
+
+Because the enclosing handler runs on top of the one that sends `pass` or
+`outer`, a chain of handlers that each pass outward uses one nested engine
+per handler on top of the signalling stack, as Pharo's context stack does.
+Such a chain reaches the engine nesting limit (D38) at about half the depth
+of a plain recursion: about 500 levels of handlers that pass a resumed
+`Warning` (995 before 0.10.0, when `pass` unwound first). The limit is the
+usual catchable `Error`, delivered once to the handler that could not
+start.
 
 ### 8.5 `ensure:` and `ifCurtailed:`
 
@@ -1416,10 +1652,18 @@ What the handler does determines whether — and how far — to unwind:
 
 ### 8.6 Resumability
 
-Resumability is a class-derived property, answered by `isResumable`:
-`Exception`, `Warning` and `ZeroDivide` are resumable, `Error` and its other
-subclasses are not. A `resume:` on a non-resumable exception is itself an
-error. An exception translated from a native C++ exception (see [§8.7]) is
+Resumability is answered by `isResumable`: `Exception`, `Warning` and
+`ZeroDivide` are resumable, `Error` and its other subclasses are not, and a
+class may override `isResumable` (`MyException >> isResumable ^ false`, the
+ANSI way to declare a non-resumable exception); `resume:` and the default
+action ask the method, so the override is honoured. A `resume:` on a
+non-resumable exception signals `IllegalResumeAttempt` inside the handler
+that tried it, as in Pharo; like Pharo's it is an `Exception`, not an
+`Error` (catch it with `on: IllegalResumeAttempt do:` or `on: Exception
+do:`), it is itself not resumable, and unhandled it ends the activation with
+`cannot resume a non-resumable exception`. The default action of an
+unhandled exception that is not resumable ends the activation, as an
+`Error`'s does. An exception translated from a native C++ exception (see [§8.7]) is
 forced non-resumable, because the native stack between its origin and the
 catch is already gone, and so is a foreign exception (a module's error type,
 another language's exception). An error protoCore raises keeps its class's
@@ -1839,6 +2083,13 @@ f thenDo: [ :result | Transcript show: result printString ].
 v := f wait.                 "v is the resolved value"
 ```
 
+A `thenDo:` / `catch:` callback may run in the code that settles the future
+(`resolve:`) or registers on a settled one, but it does not run under that
+code's handlers: an error it signals is not caught by the settler's
+`on:do:`, and it cannot `resume:`, `return:`, `pass` or `outer` an exception
+the settler is handling. What escapes a callback is reported on stderr
+(`error in a Future callback: ...`) and the next callback runs.
+
 Deadlines (`after:`, `within:`, `waitWithin:`) are measured in milliseconds on
 the monotonic clock; `ms` is a non-negative `SmallInteger`, anything else
 signals `Error`. `TimeoutError` is a subclass of `Error`, and its
@@ -1888,6 +2139,35 @@ pool because a `wait` does not tie up a worker.
 > main thread (a script's top level, the REPL) instead **blocks the calling OS
 > thread** until the future settles — intentional, the main thread acts as a
 > synchronous client of the actor world.
+
+**A wait inside a block that a primitive evaluates** (`#(1) do: [:i | ^
+server ping wait]`, the block of `on:do:` or `ensure:`, a `thenDo:` callback
+run on a worker) cannot suspend the actor: the primitive's own state between
+the method and the block is not part of what a suspension saves. Such a wait
+**blocks its worker** instead, and while it waits the worker runs other
+actors' messages on top of it, so the program keeps going. Those messages can
+wait the same way; one worker holds at most 16 such nested waits (each keeps
+its frames on the worker's stack). A worker at that limit runs no more actor
+messages and counts as a blocked worker: the pool adds a worker for the other
+actors, as it does for a worker blocked in I/O, up to 256 workers (fewer if
+the system refuses a thread). A program whose nested waits need more than
+that — about 4,000 at once with 256 workers — cannot
+proceed, and one of the waits signals an `Error` whose text starts with
+`deadlock: too many nested waits` instead of hanging, but only when nothing
+can still end a wait: every worker waits, at the limit, for an actor message
+that has not started, the pool cannot grow, no timer is pending, no task is
+queued or running, and the program's own thread is parked in its `wait`. The
+error is never signalled while the program can still finish. In the cases
+the runtime cannot prove stuck, the program waits for ever instead (STATUS
+D56): when the program's thread is not parked in a `wait` (the REPL between
+inputs, a loop that polls), a worker is blocked in I/O or `sleep:` that never
+ends, a timer is pending whose callback never releases anything, a wait is
+for a Future that no actor's message settles (`Future new`), protoST is
+called from another runtime or another thread, or a debugger is attached.
+While it waits there, every worker polls (about every 200 µs), and the
+workers added stay until the program ends. A program that ends while such
+waits are still running waits for them to end, as for any running message. Waiting outside a block (at the
+top level of the method) suspends the actor and uses no worker.
 
 ### 10.5 `self` inside an actor
 
@@ -1987,6 +2267,22 @@ side-effect free:
 ```smalltalk
 total swap: [ :running | running + 1 ].
 ```
+
+An `Atom` made with `new` (or a subclass's `new` whose `initialize` does not
+set it) holds `nil`: `swap:` applies its block to `nil`, and
+`value: x ifCurrent: nil` installs `x`.
+
+**Subclasses.** `Atom` can be subclassed like any class. `on:` is an
+instance-creation message, as `new` is: `TaggedAtom on: 7` builds a
+`TaggedAtom` (its `initialize` runs, as with `new`) and then puts 7 in its
+cell. The atomic operations work on the cell itself: `swap:` applies its
+block to the snapshot the cell holds, and `value:ifCurrent:` and `swap:`
+compare against that snapshot. An override of `value` changes what the
+atom's clients read, not what the atomic operations update — a
+compare-and-swap that expected what an override answers, rather than what the
+cell holds, could never succeed. (Clojure's atoms, which `Atom` follows, are
+not extensible; the cell is the state, as an instance variable is the state
+an accessor may present differently.)
 
 Because the comparison is pointer identity over **immutable snapshots**, the
 classic ABA hazard does not arise: if the pointer is unchanged the value
@@ -2097,8 +2393,6 @@ It is a reference snapshot of the current implementation.
 
 | Selector | Meaning |
 |----------|---------|
-| `new` | a fresh instance, sent `initialize` before it is answered |
-| `basicNew` / `newChild` | a fresh instance, without `initialize` |
 | `printString`, `printOn:` | human-readable `String` (§4.8) |
 | `displayString`, `displayNl` | as `printString` / `printNl`, strings without quotes |
 | `printNl` | print the receiver followed by a newline; returns the receiver |
@@ -2110,13 +2404,24 @@ It is a reference snapshot of the current implementation.
 | `asHighPriorityActor` | same, but the actor sits in the High-priority ready queue (drained before Medium/Low) |
 | `asLowPriorityActor` | same, but the actor sits in the Low-priority queue (drained after Medium/High) |
 | `->` | build an `Association` (`key -> value`) |
-| `==` `~~` | identity / non-identity — same object, or not |
+| `==` `~~` | identity / non-identity — same object, or not. `==` is compiled to an identity test and never looked up (0.10.0), as in Pharo (`ProtoObject>>==`: "No Lookup. Do not override"): a class's own `==` is reached only by `perform: #==`. This holds for actor references and foreign objects too: `==` compares the references themselves |
 | `=` `~=` | equality / inequality; the default is identity, overridden to value-equality on `SmallInteger`, `String`, `Symbol`, `Boolean` and other value types |
 | `isNil` `notNil` | nil test — `false` / `true` for every object except `nil` |
 | `ifNil:` `ifNotNil:` `ifNil:ifNotNil:` | nil-conditional evaluation; an `ifNotNil:` block may take the receiver as an argument |
 | `on:do:`, `on:do:on:do:`, `ensure:`, `ifCurtailed:` | exception protocol (these are bound on `Block`; see §12.5) |
 | `setInstVar:from:to:` | atomic compare-and-swap on an instance variable: set it to the third argument only if it currently holds the second; answer whether it did (see §10.8) |
 | `sleep:` | sleep the current thread N ms (a test helper, not for production use) |
+
+**`Behavior`** (the class protocol, answered by every class; §4.7, STATUS D52):
+
+| Selector | Meaning |
+|----------|---------|
+| `new` | a fresh instance, sent `initialize` before it is answered |
+| `basicNew` / `newChild` | a fresh instance, without `initialize` |
+| `subclass:` (and its `instanceVariableNames:` / `classVariableNames:` / `uses:` forms) | define a subclass (§4.3, §4.11) |
+| `name`, `superclass`, `selectors`, `includesSelector:`, `canUnderstand:` | reflection on the class and its instances' protocol |
+| `instVarNames`, `allInstVarNames`, `subclasses`, `allSubclasses`, `allSuperclasses`, `withAllSuperclasses`, `inheritsFrom:` | hierarchy reflection |
+| `addBehavior:` | on-the-fly composition (§4.12) |
 
 ### 12.2 `Number`, `SmallInteger`, `LargeInteger`, `Fraction`, `Float`
 
@@ -2202,6 +2507,7 @@ thin wrappers over `<cmath>` (libm).
 | `even` `odd` | integer parity (aliases of `isEven` / `isOdd`) |
 | `factorial` | `1 * 2 * ... * n` on a non-negative integer — exact, promotes to `LargeInteger` |
 | `raisedTo:` | exponentiation — see below |
+| `raisedTo:modulo:` | modular exponentiation of Integers, Python's `pow(b, e, m)` — see below |
 | `gcd:` `lcm:` | greatest common divisor / least common multiple of two integers |
 | `**` | exponentiation (`2 ** 3` is `8`) |
 | `roundTo:` | round to a multiple of the argument |
@@ -2226,6 +2532,36 @@ Class-side **constants** are bound on `Float`: `Float pi`, `Float e`,
 > `30 factorial` are exact arbitrary-precision integers, never an overflowed
 > `double`. A `Float` exponent (or a negative integer exponent) routes through
 > libm `pow` and answers a `Float`.
+
+> **Modular exponentiation.** `b raisedTo: e modulo: m` is b^e modulo m,
+> computed without building b^e (its cost grows with the length of `e`, not
+> its value), as Python's three-argument `pow`. All three must be integers
+> (otherwise an `Error`); the result takes the sign of `m`, like `\\` (in
+> [0, m) for a positive `m`, in (m, 0] for a negative one), and is `0` when
+> `m` is `1` or `-1`. A negative `e` raises the inverse of `b` modulo `m`:
+> `3 raisedTo: -1 modulo: 7` is `5`. A base with no inverse (`4 raisedTo: -1
+> modulo: 8`) signals `ArithmeticError`, and `m = 0` signals `ZeroDivide`.
+
+> **Numeric hash.** `hash` of a number is Python's numeric hash (Python's
+> *Hashing of numeric types*, `sys.hash_info`), the same value for every
+> `Integer`, `LargeInteger`, `Float`, `Fraction` and `Decimal` that are `=`:
+> with P = 2^61 - 1, a value m / n hashes to its sign times |m| * n^-1 modulo
+> P, so `1`, `1.0` and `Decimal 1.00` hash to `1`, `0.5` and `(1/2)` to
+> 2^60, and `(2 raisedTo: 61) - 1` to `0`; a hash of `-1` becomes `-2`, the
+> infinities hash to `314159` and `-314159` (and so does a value whose
+> denominator is a multiple of P), and a NaN, equal to nothing, hashes by
+> identity. These are the values `hash()` answers in CPython, which ProtoBase
+> relies on for keys written by either language. A hash reaches 2^61 - 2, past
+> the `SmallInteger` range (2^53 - 1), so the hash of a typical `Float` or
+> `Fraction` is a `LargeInteger`: arithmetic on such hashes allocates, while
+> a number used directly as a `Set` or `Dictionary` key does not (the
+> collection computes its hash natively). To combine hashes, use
+> `a __hashMix: b`, which answers `(a hash * 1000003 + b hash) \\ P` computed
+> on machine words: the kernel's combined hashes (`Point`, `Association`,
+> `SequenceableCollection`, `MessagePackMap`) are made with it, starting from
+> the first element and mixing each next one in, so the high bits, where a
+> `Float`'s fraction bits land, keep counting, and no `LargeInteger` is built.
+> `(3 @ 4) hash` is Python's `(3 * 1000003 + 4) % (2**61 - 1)`.
 
 > **Domain errors.** A libm domain error — `(-1) sqrt`, `0 ln` — is **not**
 > turned into a protoST `Error`; the IEEE-754 result (`nan` / `inf`) is let
@@ -2292,7 +2628,7 @@ A shared mutable cell with optimistic-concurrency compare-and-swap — see
 
 | Selector | Meaning |
 |----------|---------|
-| `Atom on: aValue` | a fresh cell holding `aValue` |
+| `Atom on: aValue` | a new instance of the receiver (Atom or a subclass, built by `new`) whose cell holds `aValue` |
 | `value` | the current snapshot |
 | `value: new ifCurrent: expected` | raw CAS — install `new` iff the cell still holds `expected`; answer whether it did |
 | `swap: aBlock` | read-modify-CAS retry loop; applies `aBlock` to the current value, retrying on contention; answers the value installed |
@@ -2306,8 +2642,9 @@ A shared mutable cell with optimistic-concurrency compare-and-swap — see
 | `return:` | handler action — yield a value from `on:do:` |
 | `resume`, `resume:` | handler action — resume the protected computation |
 | `retry` | handler action — re-run the protected block |
-| `retryUsing:` | handler action — replace the protected block with the argument and run it |
-| `pass`, `outer` | handler action — continue the handler search outward (`outer` is not implemented and behaves as `pass`, D7) |
+| `retryUsing:` | handler action — make the argument the protected block and run it under the same handlers (§8.4) |
+| `pass` | handler action — yield to the enclosing handler; its resumption resumes the `signal` (§8.4) |
+| `outer` | handler action — evaluate the enclosing handler; its resumption is answered here (§8.4) |
 | `description` | the message text, or the class name when there is none |
 | `isResumable` | whether `resume:` is allowed (§8.6) |
 | `,` | an `ExceptionSet`: `on: ZeroDivide, KeyNotFound do: […]` |
@@ -2427,7 +2764,7 @@ A `FileReference` names a path; it holds no open descriptor.
 | `basename`, `basenameWithoutExtension`, `extension`, `parent` | name parts (`extension` is `''` when there is none) |
 | `children`, `files`, `directories` | the entries of a directory, sorted by name |
 | `contents`, `contents: aString`, `appendContents: aString` | read the whole file; replace it; append to it |
-| `binaryContents`, `binaryContents: aByteArray` | the same with bytes, as a `ByteArray` (an Array of 0-255 is deprecated: it is refused from protoST 0.10.0, and until then prints a warning on stderr once per process) |
+| `binaryContents`, `binaryContents: aByteArray` | the same with bytes, as a `ByteArray` |
 | `lines`, `linesDo: aBlock` | the file's lines |
 | `readStream`, `writeStream`, `appendStream` | an open `IOStream` (`writeStream` truncates) |
 | `readStreamDo:`, `writeStreamDo:`, `appendStreamDo:` | evaluate the block with an open stream and close it afterwards, also on error; answer the block's value |
@@ -2436,6 +2773,15 @@ A `FileReference` names a path; it holds no open descriptor.
 | `copyTo: ref`, `moveTo: ref`, `renameTo: 'name'` | copy or move a file; answer the destination |
 
 Two references are `=` when their `fullName`s are equal.
+
+**Bytes are a `String` or a `ByteArray`, never an `Array`.** Every write that
+takes bytes or a String refuses an `Array` of Integers since protoST 0.10.0:
+`contents:`, `appendContents:` and `binaryContents:` here, `IOStream >>
+nextPutAll:` and `nextPutBytes:` (§12.11.1; standard streams, file streams and
+sockets, TLS included) and UDP `send:` (§12.11.5). The `Error` names the
+selector that was sent and the replacement, `ByteArray withAll: anArray` (or a
+literal `#[1 2 3]`), and nothing is written. 0.9.0 accepted such an `Array`
+with a deprecation warning (STATUS D45).
 
 For a file read and written at explicit offsets, with `sync` and a lock, see
 `BinaryFile` in [§12.12.2](#12122-binaryfile).
@@ -2494,7 +2840,7 @@ An `OSProcessResult` answers `exitCode`, `output`, `errorOutput` and
 | `ServerSocket listenOn: port host: '127.0.0.1'` | listen on one address |
 | `aServer port`, `accept`, `acceptTimeout: ms`, `close` | the port listened on; the next connection (a `Socket`); the same or nil after `ms`; stop listening |
 | `UDPSocket bindTo: port`, `bindTo:host:` | a bound UDP socket (port 0: any) |
-| `aUDPSocket send: data to: host port: p` | send a datagram (a String or a `ByteArray`; an Array of 0-255 is deprecated) |
+| `aUDPSocket send: data to: host port: p` | send a datagram (a String or a `ByteArray`; an `Array` of Integers is refused since 0.10.0) |
 | `receive`, `receiveTimeout: ms` | the next datagram as `{data. host. port}` with the data as a String; nil after `ms` |
 | `receiveBytesTimeout: ms` | the same, with the data as a `ByteArray` |
 
@@ -2571,6 +2917,7 @@ when their contents are equal, and they work as `Set` elements and
 | Selector | Meaning |
 |----------|---------|
 | `ByteArray new`, `new: n`, `withAll: aCollection`, `fromHex: aString` | the empty one; `n` zero bytes; from a collection of integers 0-255 (a `ByteArray` answers itself); from hexadecimal digits (either case; an odd length or another character signals `Error`) |
+| `ByteArray randomBytes: n` | `n` bytes from the operating system's cryptographically secure generator (since protoST 0.10.0, on protoIO 0.5.0's `random::bytes`), for identifiers, nonces and keys; `n` is a SmallInteger from 0 to 1048576 (1 MiB), anything else signals `InvalidArgument`. The answer is a `ByteArray` like any other: immutable, so it can be shared without a lock |
 | `size`, `isEmpty`, `notEmpty`, `at:` | `at:` answers an Integer 0-255 (1-based); an index outside 1..size signals `SubscriptOutOfBounds` |
 | `at:put:` | signals `ModificationForbidden` (D41) |
 | `do:`, `inject:into:`, `asArray` | iteration, as over an Array |
@@ -2583,6 +2930,7 @@ when their contents are equal, and they work as `Set` elements and
 
 ```smalltalk
 #[1 2 255] hex                        "=> '0102ff'"
+(ByteArray randomBytes: 16) size       "=> 16"
 (#[1 2 3] copyFrom: 2 to: 3)            "=> #[2 3]"
 'héllo' utf8Encoded size                "=> 6"
 #[104 195 169] utf8Decoded              "=> 'hé'"
@@ -2701,13 +3049,262 @@ comment of `lib/kernel/binfile.st`:
 | a `MessagePackExt` | ext | a `MessagePackExt` (ext -1, the timestamp, too) |
 
 Anything else signals `Error` ("MessagePack cannot encode an instance of
-...") and so does an Integer outside the range, a cyclic structure and a
-structure nested deeper than 512 levels. Decoding refuses truncated input,
+...") and so does an Integer outside the range and a cyclic structure. A
+structure nested deeper than 1024 levels signals `MessagePackDepthExceeded`, an
+`Error`, on encode and on decode, so a caller can name its own limit without
+reading the message. Decoding refuses truncated input,
 invalid UTF-8 in a `str` and, by default, a map key that is not `str` or
 `bin`. The bytes are those of msgpack-python as ProtoBase uses it
 (`use_bin_type=True`, `raw=False`): `tests/cli/test_cli_binary_interop.sh`
 exchanges documents with CPython in both directions when `python3` and
 `msgpack` are installed.
+
+### 12.13 Exact decimals: the `decimal` module
+
+Unreleased (after 0.9.0). `Import from: 'decimal'` binds the global
+`Decimal`: an exact decimal value, a sign, a coefficient and a power-of-ten
+exponent, or one of the special values Infinity, NaN and sNaN. The model and
+the text are those of the General Decimal Arithmetic specification as
+Python's `decimal` module implements them, which makes `Decimal` the value of
+ProtoBase's `@dec` (format-spec "Decimal text"). It is written in protoST over
+`LargeInteger` (`lib/decimal.st`).
+
+A `Decimal` is a value **without arithmetic** (STATUS D49): it parses,
+prints, compares and converts to an exact fraction. There is no context, no
+precision and no rounding, so nothing is lost: `1.20` keeps its trailing
+zero, `-0` its sign.
+
+| Message | Meaning |
+|---------|---------|
+| `Decimal fromString: aString` | parse Python's `Decimal(str)` grammar (below); a bad string signals `Error` naming it |
+| `Decimal sign: s coefficient: c exponent: e` | the finite value (-1)^s × c × 10^e; `s` is 0 or 1, `c` a non-negative Integer, `e` an Integer |
+| `Decimal infinity: s` | `Infinity` (s = 0) or `-Infinity` (s = 1) |
+| `Decimal nan: p signaling: aBoolean sign: s` | a NaN with payload `p` (a non-negative Integer) |
+| `sign` | 0 or 1; `-0` has sign 1 |
+| `coefficient` `exponent` | of a finite value; `nil` for Infinity and NaN |
+| `payload` | of a NaN (0 when it has none); `nil` otherwise |
+| `isFinite` `isInfinite` `isNaN` `isSignaling` `isZero` | the kind; `isNaN` is true for a quiet and a signaling NaN |
+| `printString` | the to-scientific-string, Python's `str(Decimal)` |
+| `asExactFraction` | an Integer or a reduced `Fraction`; Infinity and NaN signal `Error` |
+| `=` `~=` `<` `<=` `>` `>=` | exact comparison with a `Decimal` or any `Number`, in both directions |
+| `hash` | consistent with `=` across `Integer`, `Fraction`, `Float` and `Decimal` (cost: see below) |
+| `sameRepresentationAs:` | kind, sign, coefficient (or payload) and exponent all equal |
+
+**Text in.** An optional sign, then digits with an optional point and an
+optional exponent (`e` or `E`, an optional sign, digits), or `Infinity` /
+`Inf`, or `NaN` / `sNaN` followed by optional payload digits; letters are
+case-insensitive, digits are ASCII. Python also accepts surrounding
+whitespace, underscores between digits and non-ASCII digits; `fromString:`
+refuses them.
+
+**Text out.** With `c` the coefficient's `n` digits, `e` the exponent and
+`a = e + n - 1` the adjusted exponent: the plain form when `e <= 0` and
+`a >= -6` (`1.20`, `0.000001`, `-0.00`), otherwise one digit, the rest after a
+point, and `E` with the signed adjusted exponent (`1E-7`, `-1.5E+30`, `1E+2`,
+`0E-10`). Specials print as `Infinity`, `NaN123`, `sNaN` (no payload digits
+when the payload is 0), with a leading `-` for sign 1.
+
+```smalltalk
+Import from: 'decimal'.
+(Decimal fromString: '1e5') printString        "=> '1E+5'"
+(Decimal fromString: '.5') printString         "=> '0.5'"
+(Decimal fromString: 'nan0123') printString    "=> 'NaN123'"
+(Decimal fromString: '1.25') asExactFraction printString   "=> '(5/4)'"
+(Decimal fromString: '1.00') = 1               "=> true"
+1 = (Decimal fromString: '1.00')               "=> true"
+(Decimal fromString: '0.1') = 0.1              "=> false"
+(Decimal fromString: '1.0')
+    sameRepresentationAs: (Decimal fromString: '1.00')   "=> false"
+```
+
+**Comparison.** Values compare exactly: a finite `Float` is read through its
+`asExactFraction`, so the decimal `0.1` is not the binary `Float` `0.1`. The
+comparison is symmetric, as in Python: with a number as the receiver
+(`1 = aDecimal`, `(1/2) < aDecimal`), the numeric primitives and `Fraction`
+ask the `Decimal` through `adaptToNumber:andSend:`, the double dispatch
+`Fraction` uses, so `1`, `1.0` and `1.00` are one key of a `Set` or a
+`Dictionary` whichever is added first. Arithmetic with a number, from either
+side, signals `Error` (D49). The infinities order at the ends and equal the
+`Float` infinities. A NaN, quiet or signaling, `Decimal` or `Float`, is never
+`=` (so `~=` answers true), and `<`, `<=`, `>`, `>=` with one signal `Error`;
+so does ordering against an object that is not a number. Python's `==`
+signals for a signaling NaN; protoST's `=` answers `false`, because `=` is
+what collections send. Ordering and equality never build a power of ten
+larger than the operands' own digits, so `1E+999999 > 9E+999998` is
+immediate.
+
+**Cost of `hash` and `asExactFraction`.** `hash` is Python's hash of a
+`Decimal` (§12.2, *Numeric hash*): the coefficient times 10^exponent modulo
+2^61 - 1, the power taken modulo 2^61 - 1, so its cost grows with the length
+of the exponent, not its value, and `1E+999999999999` hashes at once. A
+signaling NaN cannot be hashed (`Error`, as Python's `TypeError`).
+`asExactFraction` builds the exact value, so its cost grows with the size of
+the exponent, without bound: for `1E+999999999999` it would try to build
+10^(10^12) and exhaust memory. Do not convert a `Decimal` with an exponent of
+untrusted size.
+
+### 12.14 Calendar values: the `calendar` module
+
+Unreleased (after 0.9.0). `Import from: 'calendar'` binds the globals
+`CalendarDate`, `TimeOfDay`, `DateTime`, `TimeSpan`, `ZoneOffset`, `ZoneName`
+and the error `TimeZoneUnavailable` (a subclass of `Error`). They are exact,
+immutable calendar values that count microseconds over the proleptic
+Gregorian calendar, years 1 to 9999, with the model of Python's `datetime`
+module (`date`, `time`, `datetime`, `timedelta`, `timezone`) as ProtoBase's
+format 4 stores it (`@date`, `@time`, `@dt`, `@td`). They are written in
+protoST (`lib/calendar.st`).
+
+They are protoST's own classes (STATUS D50): the kernel's `Date`, `Time` and
+`Duration` (§9.7 of the tutorial) keep their meaning and are not replaced by
+the import. There is **no IANA time-zone database**: a `ZoneName` keeps its
+key as text, and anything that needs the zone's rules signals
+`TimeZoneUnavailable`.
+
+**Zones.**
+
+| Message | Meaning |
+|---------|---------|
+| `ZoneOffset microseconds: us name: aString` | a fixed offset east of UTC, \|us\| < 86400 × 10^6, with a name (Python's `timezone(timedelta(microseconds=us), name)`) |
+| `ZoneOffset microseconds: us` | the same, named as Python names an unnamed offset: `UTC` for 0, else `UTC-03:00`, `UTC+05:30`, with `:SS` and `.ffffff` only when not zero |
+| `ZoneOffset utc` | offset 0, named `UTC` |
+| `microseconds` `name` `isoOffset` | the offset, the name, and the offset as `+HH:MM[:SS[.ffffff]]` |
+| `ZoneName key: aString` | an IANA zone (`America/Argentina/Buenos_Aires`), kept as a non-empty String; no rules |
+| `key` | the key |
+
+A `ZoneOffset` is `=` to another of the same offset whatever the names (as
+Python's `timezone`); a `ZoneName` to another of the same key. Zones have no
+order.
+
+**Dates, times and spans.**
+
+| Message | Meaning |
+|---------|---------|
+| `CalendarDate year: y month: m day: d` | a day of years 1..9999 |
+| `CalendarDate fromOrdinal: n` | the day number `n` (1 is 0001-01-01, 3652059 is 9999-12-31), Python's `date.fromordinal` |
+| `year` `month` `day` `ordinal` | the fields; `ordinal` is Python's `toordinal` |
+| `TimeOfDay hour: h minute: mi second: s microsecond: us fold: f zone: z` | a wall clock; `fold` is 0 or 1 (PEP 495), `z` is `nil`, a `ZoneOffset` or a `ZoneName` |
+| `TimeOfDay hour: h minute: mi second: s` | naive, microsecond 0, fold 0 |
+| `hour` `minute` `second` `microsecond` `fold` `zone` `microsecondsSinceMidnight` | the fields |
+| `TimeSpan days: d seconds: s microseconds: us` | a signed duration, normalised as Python's `timedelta`: 0 ≤ `seconds` < 86400, 0 ≤ `microseconds` < 10^6, \|`days`\| ≤ 999999999 (beyond, `Error`); Integer arguments only |
+| `TimeSpan microseconds: n` | the duration of `n` microseconds |
+| `days` `seconds` `microseconds` `totalMicroseconds` | the normalised fields and the whole duration |
+
+**Date and time.**
+
+| Message | Meaning |
+|---------|---------|
+| `DateTime year:month:day:hour:minute:second:microsecond:fold:zone:` | from a wall clock: naive with `nil`, at a fixed offset with a `ZoneOffset`; with a `ZoneName` it signals `TimeZoneUnavailable` (turning a wall clock into an instant needs the zone's rules) |
+| `DateTime utcFields: anArray zoneName: aZoneName` | the **instant form**: the seven fields of `anArray` (year, month, day, hour, minute, second, microsecond) are the UTC instant; `fold` is 0 |
+| `DateTime utcOrdinalMicroseconds: n zone: aZone` | the value of the UTC instant `n` (microseconds since 0001-01-01T00:00) at a `ZoneOffset` (its fields are the wall clock there), or the instant form for a `ZoneName`; the fields must lie in years 1..9999 |
+| `DateTime fromUnixMicroseconds: n zone: aZone` | the same for `n` microseconds since 1970-01-01T00:00Z (the count of `Time utcMicroseconds`) |
+| `DateTime unixEpochOrdinalMicroseconds` | `62135596800000000`: 1970-01-01T00:00Z on the ordinal scale, the offset between the two counts |
+| `DateTime nowUTC` | now, at `ZoneOffset utc`: `fromUnixMicroseconds: Time utcMicroseconds zone: ZoneOffset utc` (needs protoST 0.10.0) |
+| `year` … `microsecond` `fold` `zone` | the fields (the UTC instant for the instant form) |
+| `isNaive` `isInstantForm` | zone `nil`; zone a `ZoneName` |
+| `localOrdinalMicroseconds` | the fields' microseconds since 0001-01-01T00:00 |
+| `utcOrdinalMicroseconds` | the UTC instant since 0001-01-01T00:00: the fields minus the offset, or the fields of the instant form; a naive value signals `Error` |
+| `unixMicroseconds` | the same instant since 1970-01-01T00:00Z (negative before it); a naive value signals `Error` |
+| `wallClock` | the receiver; the instant form signals `TimeZoneUnavailable` |
+| `date` `time` | the wall-clock `CalendarDate` and naive `TimeOfDay`; the instant form signals `TimeZoneUnavailable` |
+
+**Two epochs, two names.** Every selector with `Ordinal` in its name counts
+from 0001-01-01T00:00, the ordinal epoch of `CalendarDate` and of ProtoBase's
+format (its order keys and hashes); every selector with `Unix` in its name
+counts from 1970-01-01T00:00Z, as `Time utcMicroseconds` does. No selector is
+shared between the two counts, and `unixEpochOrdinalMicroseconds` is the only
+place the offset between them is written, so no caller adds it by hand.
+
+**Comparison.** As Python compares the values. `CalendarDate` orders by day,
+`TimeSpan` by duration. A `TimeOfDay` that is naive or in a `ZoneName` has no
+offset (a time has no date), so it compares by wall clock; a fixed-offset one
+by wall clock minus offset. A naive `DateTime` compares by its fields, an
+aware one (fixed offset or instant form) by its UTC instant, so two aware
+values of one instant in different zones are `=`. `fold` never takes part.
+Two instant-form values of one zone also compare by instant, where Python
+compares their wall clocks; the two disagree only inside a repeated
+wall-clock hour (D50). A
+naive value is never `=` to an aware one, and ordering the two signals
+`Error`; so does ordering against another class. `=`, `~=`, `<`, `<=`, `>`,
+`>=`, `max:` and `min:` are understood by all four value classes, and `hash`
+agrees with `=` everywhere.
+
+**Text out.** `printString` is Python's `str()`: `2026-11-10`,
+`01:02:03.000040+05:30`, `2026-11-10 12:00:00-03:00`,
+`-1 day, 23:59:59`; a `ZoneOffset` prints its name. Where Python would need the
+zone's rules, the key is shown instead: a `TimeOfDay` in a `ZoneName` prints
+`12:00:00[Europe/Paris]`, and the instant form prints its UTC fields, `Z` and
+the key, `2026-11-01 06:30:00Z[America/New_York]` (the RFC 9557 reading: the
+instant is known, the local offset is not).
+
+```smalltalk
+Import from: 'calendar'.
+(CalendarDate year: 2000 month: 2 day: 29) ordinal          "=> 730179"
+(CalendarDate fromOrdinal: 3652059) printString             "=> '9999-12-31'"
+(DateTime fromUnixMicroseconds: 0 zone: ZoneOffset utc)
+  utcOrdinalMicroseconds                                    "=> 62135596800000000"
+(TimeSpan days: 0 seconds: -1 microseconds: 0) days         "=> -1"
+(TimeSpan days: 0 seconds: -1 microseconds: 0) seconds      "=> 86399"
+(DateTime year: 2026 month: 11 day: 10 hour: 12 minute: 0 second: 0
+   microsecond: 0 fold: 0 zone: (ZoneOffset microseconds: -10800000000))
+  = (DateTime year: 2026 month: 11 day: 10 hour: 15 minute: 0 second: 0
+       microsecond: 0 fold: 0 zone: ZoneOffset utc)         "=> true"
+(DateTime utcFields: #(2026 11 1 6 30 0 0)
+   zoneName: (ZoneName key: 'America/New_York')) wallClock  "signals TimeZoneUnavailable"
+```
+
+Every out-of-range field, wrong type or wrong zone signals `Error` naming the
+value. Each value is immutable: its one private initialiser, used by the
+class-side constructors, refuses a second call.
+
+### 12.15 Clocks: `Time`
+
+The kernel's `Time` reads two clocks, and the selector says which:
+
+| Selector | Answers |
+|----------|---------|
+| `Time utcMicroseconds` | the wall clock: microseconds since 1970-01-01T00:00Z (the Unix epoch, leap seconds not counted), a SmallInteger, since protoST 0.10.0, on protoIO 0.5.0's `clock::utcMicroseconds`. It dates events and is comparable across processes and machines, but it follows the system clock when that is set or adjusted, so it can jump in either direction. `DateTime nowUTC` (§12.14) is built on it |
+| `Time microsecondClockValue`, `Time millisecondClockValue` | a **monotonic** clock (the steady clock) with an unspecified origin: only the difference between two readings means anything, and it never goes backwards. It measures durations (`Time millisecondsToRun:`, `timeToRun`) and must not be used as a date |
+| `Time now` | the local time of day (§9.7 of the tutorial) |
+
+Pharo's `microsecondClockValue` is a wall clock; protoST's is monotonic, and
+the wall clock has its own name, `utcMicroseconds`, so that neither reading is
+mistaken for the other.
+
+```smalltalk
+Time utcMicroseconds > 1767225600000000   "=> true"
+```
+
+### 12.16 Identifiers: the `uuid` module
+
+Since protoST 0.10.0. `Import from: 'uuid'` binds the global `UUID`: a
+universally unique identifier as RFC 4122 defines it, 16 bytes in RFC 4122
+(big-endian) order. The meaning is Pharo's, an identifier whose `UUID new` is
+a fresh random one; the protocol and the text are those of Python's
+`uuid.UUID`, which makes `UUID` the value of ProtoBase's `@uuid`. It is
+written in protoST over `ByteArray` (`lib/uuid.st`).
+
+| Message | Meaning |
+|---------|---------|
+| `UUID new` | a version-4 UUID (RFC 4122 §4.4): `ByteArray randomBytes: 16` (the operating system's secure generator, §12.12.1) with the version nibble (high four bits of byte 7) set to 4 and the variant (two high bits of byte 9) set to `2r10` |
+| `UUID fromBytes: aByteArray` | the UUID of exactly 16 bytes; anything else signals `Error` naming it |
+| `UUID fromString: aString` | 32 hexadecimal digits, or the 36-character form (8-4-4-4-12 digits joined by hyphens), in either case; anything else (another length, a misplaced hyphen, a non-hex character, braces, a `urn:uuid:` prefix, surrounding whitespace, a non-String) signals `Error` naming it |
+| `bytes` | the 16 bytes, a `ByteArray` (immutable) |
+| `hex` | the 32 lowercase hexadecimal digits (Python's `uuid.hex`) |
+| `printString`, `displayString` | the 36-character lowercase form (Python's `str(uuid)`) |
+| `asInteger` | the unsigned big-endian value, 0 to 2^128 - 1 (Python's `uuid.int`) |
+| `=`, `hash` | equal bytes, with any `UUID`, an instance of a subclass included (as Python's `isinstance`); never `=` to a non-UUID (its own `bytes`, `hex` or `asInteger` included). `hash` is `asInteger hash`, so it equals Python's `hash(uuid)` |
+| `<`, `<=`, `>`, `>=` | compare `asInteger`; against a non-UUID they signal `Error` |
+
+A `UUID` is immutable: its one private initialiser, used by the class-side
+constructors, refuses a second call, and its bytes are a `ByteArray`.
+
+```smalltalk
+Import from: 'uuid'.
+u := UUID fromString: '12345678123456781234567812345678'.
+u printString        "=> '12345678-1234-5678-1234-567812345678'"
+u asInteger          "=> 24197857161011715162171839636988778104"
+((UUID new bytes at: 9) bitShift: -6)   "=> 2"
+```
 
 ---
 
@@ -2818,7 +3415,7 @@ commits. Summary as of 0.4.0, updated for changes merged since:
   is not re-entrant (D37); recursion depth is bounded with a catchable error
   (D38); one runtime per process (D2); `addBehavior:` reaches future
   instances only (D21).
-- **Not implemented:** `outer` behaves as `pass` (D7); `thisContext` is reserved: using it is a compile error (D17); the
+- **Not implemented:** `thisContext` is reserved: using it is a compile error (D17); the
   metaclass hierarchy is thin (`x class class` works; there is no
   `Metaclass`/`ClassDescription` protocol beyond the reflective messages of
   §14 of the tutorial).
@@ -2826,10 +3423,18 @@ commits. Summary as of 0.4.0, updated for changes merged since:
   `asString`, it is not a collection (D41); a `BinaryFile` has no position
   (D46); MessagePack encodes a Symbol as `str` (D47); `Future` deadlines are
   protoST's own (D48).
+- **Decimals (unreleased):** `Decimal` (the `decimal` module) is a value
+  without arithmetic: parse, print, compare, `asExactFraction`; no context,
+  no rounding (D49).
+- **Calendar values (unreleased):** the `calendar` module's `CalendarDate`,
+  `TimeOfDay`, `DateTime`, `TimeSpan`, `ZoneOffset` and `ZoneName` are
+  protoST's own classes, counting microseconds, beside the kernel's `Date`,
+  `Time` and `Duration`; there is no IANA database, so a wall clock in a named
+  zone signals `TimeZoneUnavailable` (D50, §12.14).
 - **Input and output (0.5.0):** blocking calls only, with no multiplexing of
   several sockets on one thread; no HTTP/2, WebSockets, keep-alive or TLS
   server; POSIX only, so no native Windows (§12.11).
-- **Open bugs:** S3 (see `STATUS.md`); S19 was closed in 0.4.0.
+- **Open bugs:** none (see `STATUS.md`); S19 was closed in 0.4.0, S3 in 0.10.0.
 
 Closed before 0.4.0 and now as in Smalltalk-80: `new` sends `initialize`
 (D4), `Transcript` (D10), class variables assigned from instance methods (D19),

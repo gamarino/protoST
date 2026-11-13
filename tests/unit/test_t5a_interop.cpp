@@ -53,8 +53,8 @@ namespace {
 // `docs/INTEROP.md` §"The cross-repo follow-up").
 
 // A foreign primitive-backed method: `widget doubleIt: n` → n * 2.
-// Signature matches protoST's `PrimFn`; it is registered in the shared
-// primitive registry exactly as a protoST primitive would be.
+// Signature matches protoST's `PrimFn`; it is bound exactly as a protoST
+// primitive would be.
 const proto::ProtoObject* fakeForeignDoubleIt(protoST::STRuntime&,
                                               proto::ProtoContext* ctx,
                                               const proto::ProtoObject* /*recv*/,
@@ -79,12 +79,12 @@ const proto::ProtoObject* buildForeignModule(protoST::STRuntime& rt,
     // both a primitive-backed method and an attribute-stored value.
     auto* widget = objectProto->newChild(ctx, /*isMutable=*/true);
 
-    // Primitive-backed foreign method `doubleIt:` — registered in the shared
-    // registry and bound on the foreign object as a tagged-int marker, the
-    // same representation protoST's own primitives use, so protoST's SEND
-    // dispatch invokes it with no special-casing.
-    int primIdx = rt.registry().registerPrim(fakeForeignDoubleIt);
-    protoST::bindPrimitive(rt, widget, "doubleIt:", primIdx);
+    // Primitive-backed foreign method `doubleIt:` — bound on the foreign
+    // object as a native method cell, the same representation protoST's own
+    // primitives use, so protoST's SEND dispatch invokes it with no
+    // special-casing.
+    protoST::bindPrimitive(rt, widget, "doubleIt:",
+                           protoST::primitiveMethod<fakeForeignDoubleIt>);
 
     // Attribute-stored foreign value `label` — a unary send reads it back as
     // an ordinary property (protoST treats a non-primitive value attribute
@@ -201,11 +201,11 @@ TEST_CASE("T5-a: protoST consumes a module from a foreign UMD provider",
     g_currentForeignRuntime.store(&rt);
 
     // CONSUMER-SIDE GAP + FIX. protoST's constructor sets the resolution chain
-    // to just `["provider:st"]`. protoCore's getImportModule walks that chain;
+    // to just protoST's own provider (`["provider:<GUID>"]`, K1). protoCore's getImportModule walks that chain;
     // a `provider:` entry is looked up in the ProviderRegistry. A foreign
     // provider can be *registered* yet stay unreachable because its spec is
     // not in the chain. STRuntime::addModuleProviderToChain (added for T5-a)
-    // appends the foreign spec — AFTER `provider:st`, so a same-named protoST
+    // appends the foreign spec — AFTER protoST's own, so a same-named protoST
     // module still wins.
     rt.addModuleProviderToChain("provider:fake");
 
@@ -278,6 +278,21 @@ TEST_CASE("T5-a: protoST consumes a module from a foreign UMD provider",
         REQUIRE(r->asLong(ctx) == 10);
     }
 
+    SECTION("a foreign method is held as a value by a block or by its selector") {
+        // INTEROP.md §3.2: no protoST expression answers a native method cell
+        // itself (a unary send calls it). A protoST function value is a block
+        // over the receiver, or the selector, sent later with perform:.
+        auto* r = runSrc(rt,
+            "m := Import from: 'foreign:fnvalue'."
+            "w := m Widget."
+            "double := [:n | w doubleIt: n]."
+            "sel := #doubleIt:."
+            "((#(1 2 3) collect: double) inject: 0 into: [:acc :x | acc + x])"
+            "  + (w perform: sel with: 5).");
+        REQUIRE(r != nullptr);
+        REQUIRE(r->asLong(ctx) == 22);   // (2 + 4 + 6) + 10
+    }
+
     SECTION("a foreign object passes through a protoST block") {
         // A block closing over the foreign object dispatches to it normally.
         auto* r = runSrc(rt,
@@ -325,7 +340,7 @@ TEST_CASE("T5-a: protoST consumes a module from a foreign UMD provider",
 
 TEST_CASE("T5-a: protoST's own .st module import still resolves (regression)",
           "[interop][track5][t5a]") {
-    // The foreign provider is appended AFTER `provider:st`; protoST's own
+    // The foreign provider is appended AFTER protoST's own; protoST's own
     // module system must be unaffected.
     protoST::STRuntime rt;
     auto* ctx = rt.rootCtx();
@@ -345,7 +360,7 @@ TEST_CASE("T5-a: addModuleProviderToChain is idempotent",
           "[interop][track5][t5a]") {
     protoST::STRuntime rt;
     // Adding the same spec twice must not duplicate the chain entry; calling
-    // it must never disturb resolution of `provider:st`.
+    // it must never disturb resolution through protoST's own provider.
     rt.addModuleProviderToChain("provider:fake");
     rt.addModuleProviderToChain("provider:fake");
     auto* chainObj = rt.space()->getResolutionChain();

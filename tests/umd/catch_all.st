@@ -18,7 +18,7 @@ Raising := Import from: 'test/raising'.
   [Raising raiseInteger()] on: ZeroDivide, Exception do: [:e | 'set'].
   "a raised non-exception value is not resumable"
   [[Raising raiseInteger()] on: Exception do: [:e | e resume: 1]]
-     on: Error do: [:e | e messageText = 'cannot resume a non-resumable exception'].
+     on: IllegalResumeAttempt do: [:e | e messageText = 'cannot resume a non-resumable exception'].
   "pass from a specific handler reaches the catch-all"
   [[Geo circleArea(-1)] on: Geo NegativeRadius do: [:e | e pass]]
      on: Exception do: [:e | 'outer Exception'] }

@@ -1,5 +1,8 @@
 #include "Lexer.h"
+#include "runtime/DecimalDouble.h"
 #include <cctype>
+#include <cmath>
+#include <cstdlib>
 #include <stdexcept>
 
 namespace protoST {
@@ -164,11 +167,22 @@ Token Lexer::lexNumber(bool negative) {
     if (isFloat || !exponent.empty()) {
         t.kind = TokenKind::Float;
         t.text = sign + digits + (frac.empty() ? "" : "." + frac) + (exponent.empty() ? "" : "e" + exponent);
-        try {
-            t.floatValue = std::stod(t.text);
-        } catch (const std::out_of_range&) {
-            return makeError("float literal out of range", startLine, startCol);
-        }
+        // The correctly rounded double (round to nearest, ties to even), over
+        // the whole range (D51, K16). A literal below the smallest normal
+        // double is a subnormal (5e-324, the smallest, is a literal), and one
+        // below half the smallest subnormal is 0.0 or -0.0, as in IEEE 754,
+        // Pharo and Python. A literal beyond the largest double stays an
+        // error: it has no finite value, and `Float infinity` says what it
+        // means. parseDecimalDouble reads the text without the C locale
+        // (std::from_chars): a host that sets LC_NUMERIC cannot change what a
+        // literal means. std::stod threw for every subnormal result.
+        double d = 0.0;
+        if (!parseDecimalDouble(t.text, d))
+            return makeError("malformed float literal", startLine, startCol);
+        if (std::isinf(d))
+            return makeError("float literal out of range (larger than the largest Float)",
+                             startLine, startCol);
+        t.floatValue = d;
         return t;
     }
     t.kind = TokenKind::Integer;

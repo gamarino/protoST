@@ -24,8 +24,8 @@
 // `addBehavior:` REBUILDS the class with the mixin baked into the base chain
 // and rebinds the global; this is exercised end to end here.
 //
-// All assertions share one STRuntime: protoST is single-runtime-per-process
-// (STATUS.md D2), so the whole T3-c surface is exercised in one TEST_CASE.
+// Each SECTION runs the TEST_CASE body once, with a runtime of its own that
+// is destroyed when the run ends, so no runtime outlives its case.
 
 #include <catch2/catch_all.hpp>
 
@@ -41,45 +41,33 @@
 
 namespace {
 
-// Compiled modules must outlive the run: a block closure embeds a `__bc_ptr__`
-// into its defining BytecodeModule, so a module freed while a closure (e.g. an
-// `on:do:` handler block) is still reachable would leave that closure dangling.
-// The fixture owns every module it compiles for the process lifetime.
-std::vector<std::unique_ptr<protoST::BytecodeModule>> g_modules;
-
-// protoST is single-runtime-per-process (STATUS.md D2): symbols are interned
-// per ProtoSpace, so creating a second STRuntime in the same process leaves
-// process-wide cached symbols (e.g. the `__bc_ptr__` block-metadata key)
-// pointing at the first space — which makes block dispatch in a later runtime
-// fail to find `__bc_ptr__`. The whole T3-c surface therefore shares ONE
-// STRuntime, constructed once via a function-local static and reused across
-// every Catch2 SECTION re-run of the TEST_CASE body.
-protoST::STRuntime& sharedRuntime() {
-    static protoST::STRuntime rt;
-    return rt;
-}
-
 // Compile `src` and run it at top level, returning the module's result.
-const proto::ProtoObject* runSrc(protoST::STRuntime& rt, const char* src) {
+// Compiled modules must outlive the runtime: a block closure embeds a
+// `__bc_ptr__` into its defining BytecodeModule, so the caller declares
+// `modules` before the runtime and it is destroyed after it.
+const proto::ProtoObject* runSrc(protoST::STRuntime& rt,
+                                 std::vector<std::unique_ptr<protoST::BytecodeModule>>& modules,
+                                 const char* src) {
     protoST::Parser P(src);
     auto ast = P.parseModule();
     REQUIRE(P.errors().empty());
     protoST::Compiler C;
     auto bc = C.compileModule(*ast);
     REQUIRE(!C.hasErrors());
-    g_modules.push_back(std::move(bc));
-    return rt.runTopLevel(*g_modules.back());
+    modules.push_back(std::move(bc));
+    return rt.runTopLevel(*modules.back());
 }
 
 } // namespace
 
 TEST_CASE("T3-c: on-the-fly behaviour composition via addBehavior:",
           "[object-model][track3][t3c]") {
-    protoST::STRuntime& rt = sharedRuntime();
+    std::vector<std::unique_ptr<protoST::BytecodeModule>> modules;
+    protoST::STRuntime rt;
     auto* ctx = rt.rootCtx();
 
     SECTION("addBehavior: adds a mixin method; a later instance responds") {
-        auto* r = runSrc(rt,
+        auto* r = runSrc(rt, modules,
             "Object subclass: #Greeter."
             "Object subclass: #Loud."
             "Loud >> shout  ^ 'HEY!'."
@@ -91,13 +79,18 @@ TEST_CASE("T3-c: on-the-fly behaviour composition via addBehavior:",
         REQUIRE(s->toStdString(ctx) == "HEY!");
     }
 
-    SECTION("the class object itself responds to the mixin method") {
-        auto* r = runSrc(rt,
+    SECTION("the class object gains the mixin's class-side methods, not its instance side") {
+        // D52: a class answers its metaclass chain. addBehavior: composes both
+        // sides, so the mixin's class-side `tag` reaches the class, and its
+        // instance-side `inst` reaches instances only.
+        auto* r = runSrc(rt, modules,
             "Object subclass: #ClsResp."
             "Object subclass: #Tag."
-            "Tag >> tag  ^ 'tagged'."
+            "Tag class >> tag  ^ 'tagged'."
+            "Tag >> inst  ^ 'instance'."
             "ClsResp addBehavior: Tag."
-            "ClsResp tag.");
+            "((ClsResp respondsTo: #inst) not and: [ClsResp new inst = 'instance'])"
+            "  ifTrue: [ClsResp tag] ifFalse: ['leak'].");
         REQUIRE(r != nullptr);
         auto* s = r->asString(ctx);
         REQUIRE(s != nullptr);
@@ -108,7 +101,7 @@ TEST_CASE("T3-c: on-the-fly behaviour composition via addBehavior:",
         // `Pup` overrides `sound` calling `super sound` on `Beast`; after
         // `addBehavior:` it must still answer `sound` correctly AND gain
         // `wag` from the mixin.
-        auto* r = runSrc(rt,
+        auto* r = runSrc(rt, modules,
             "Object subclass: #Beast."
             "Beast >> sound  ^ 1."
             "Beast subclass: #Pup."
@@ -122,7 +115,7 @@ TEST_CASE("T3-c: on-the-fly behaviour composition via addBehavior:",
     }
 
     SECTION("addBehavior: composes with a uses: class") {
-        auto* r = runSrc(rt,
+        auto* r = runSrc(rt, modules,
             "Object subclass: #UA."
             "UA >> a  ^ 1."
             "Object subclass: #UB."
@@ -142,7 +135,7 @@ TEST_CASE("T3-c: on-the-fly behaviour composition via addBehavior:",
         // `pre` is created before `addBehavior:`; it must NOT gain `mm`.
         // The send is guarded so the documented limitation is pinned as a
         // caught MessageNotUnderstood, not a crash.
-        auto* r = runSrc(rt,
+        auto* r = runSrc(rt, modules,
             "Object subclass: #FG."
             "Object subclass: #FM."
             "FM >> mm  ^ 'mixin'."
@@ -157,7 +150,7 @@ TEST_CASE("T3-c: on-the-fly behaviour composition via addBehavior:",
     }
 
     SECTION("an instance created after the call IS affected (same scenario)") {
-        auto* r = runSrc(rt,
+        auto* r = runSrc(rt, modules,
             "Object subclass: #FG2."
             "Object subclass: #FM2."
             "FM2 >> mm  ^ 'mixin'."
@@ -170,7 +163,7 @@ TEST_CASE("T3-c: on-the-fly behaviour composition via addBehavior:",
     }
 
     SECTION("addParent: is a lower-level alias for addBehavior:") {
-        auto* r = runSrc(rt,
+        auto* r = runSrc(rt, modules,
             "Object subclass: #AliasCls."
             "Object subclass: #AliasMix."
             "AliasMix >> ping  ^ 77."
@@ -220,7 +213,7 @@ TEST_CASE("T3-c: on-the-fly behaviour composition via addBehavior:",
     }
 
     SECTION("regression: single inheritance and uses: are unaffected") {
-        auto* r = runSrc(rt,
+        auto* r = runSrc(rt, modules,
             "Object subclass: #RegBase."
             "RegBase >> base  ^ 3."
             "RegBase subclass: #RegSub."

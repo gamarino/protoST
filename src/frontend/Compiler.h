@@ -2,6 +2,7 @@
 #include "AST.h"
 #include "../runtime/BytecodeModule.h"
 #include <deque>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -39,7 +40,7 @@ public:
         std::unordered_map<const ast::Node*, std::unordered_set<std::string>> capturedByScope;
         // Top-level captured names (module scope) — keyed by nullptr.
         std::unordered_set<std::string> moduleCaptured;
-        // The control sends (ifTrue:, whileTrue:, to:do:, ...) whose block
+        // The control sends (ifTrue:, and:, whileTrue:, to:do:, ...) whose block
         // arguments the analysis treated as inlined: their bodies belong to
         // the enclosing scope, so a variable they use is not captured unless
         // a real block nested in them needs it. Emission inlines exactly
@@ -48,7 +49,7 @@ public:
     };
 
     // The control-send shape the compiler inlines, decided from the AST alone.
-    enum class InlineShape { None, IfTrue, IfTrueIfFalse, WhileTrue, ToDo };
+    enum class InlineShape { None, IfTrue, IfTrueIfFalse, AndOr, WhileTrue, ToDo, IfNil };
     static InlineShape inlineShapeOf(const ast::Node& send);
 
     // F4-U2: per-class metadata gathered by a pre-pass over the module's
@@ -70,7 +71,16 @@ public:
         // Classes mixed in with `uses: { A. B }` (identifiers only): their
         // instance variables are the using class's too.
         std::vector<std::string> mixinNames;
+        // S37: the `uses:` clause is an expression the compiler cannot read
+        // as a list of class names, so the mixins' variables are unknown.
+        bool mixinsUnknown = false;
     };
+
+    // S37: classes the runtime builds in C++ (Object, Error, Collection, ...).
+    // They declare no instance variables a method could name, so a class
+    // chain that reaches one of them is fully known. STRuntime publishes them
+    // before it compiles the kernel.
+    static void publishNativeClasses(const std::vector<std::string>& names);
 
     // REPL: classes declared by earlier inputs (their instance, class and
     // class-instance variables), so a method entered later can name them.
@@ -102,6 +112,29 @@ private:
         // The scope's arguments (a subset of `slots`): read-only, as in
         // Smalltalk.
         std::unordered_set<std::string> args;
+        // A de-optimised copy of an inlined block (compileDeoptBlock): the
+        // frame locals of the enclosing scopes that it, or a block nested in
+        // it, uses are reached through a box. isCaptured records each one
+        // here, as (name, enclosing slot), the first time it is used.
+        bool deoptBoundary = false;
+        mutable std::vector<std::pair<std::string, int>> boxed;
+        // Hidden slots of this frame that an inlined block's temporaries
+        // (and its scope dictionary) used and released: the next inlined
+        // block takes them before declaring new ones, so sibling blocks
+        // share slots and the frame stays as small as its deepest nesting.
+        std::vector<int> freeHidden;
+        // The inlined blocks with temporaries that enclose the code being
+        // emitted, outermost first: their temporaries' slots and, when a
+        // value conditional inside may de-optimise, the slot of the scope's
+        // dictionary (DEOPT_ENTER; -1 when there is none).
+        struct InlineScope {
+            std::vector<int> slots;
+            int dictSlot = -1;
+        };
+        std::vector<InlineScope> inlineScopes;
+        // The slot of the dictionary of this frame's own temporaries
+        // (DEOPT_ENTER); -1 until a value conditional needs it.
+        int frameDictSlot = -1;
     };
 
     // A deque, not a vector: emission recurses while holding a reference to
@@ -118,9 +151,21 @@ private:
     void reportDuplicateNames(const std::vector<std::string>& names, size_t from,
                               const std::string& where);
     void emitSetInstVarNames(BytecodeModule& m, const ast::Node& classDecl);
-    // Loop variables of the to:do: loops being inlined (the scope whose slots
-    // bind them, and the name), innermost last.
-    std::vector<std::pair<const Scope*, std::string>> inlinedLoopArgs_;
+    // Arguments of the blocks being inlined (a to:do: loop variable, an
+    // ifNotNil: arm's argument): the scope whose slots bind them, the name
+    // and the slot, innermost last. The slot tells the argument from an
+    // inlined block's temporary of the same name bound over it.
+    struct InlinedArg {
+        const Scope* scope;
+        std::string  name;
+        int          slot;
+    };
+    std::vector<InlinedArg> inlinedLoopArgs_;
+    // A statement assignment whose value is discarded (0.10.0): emitStatements
+    // sets this to the statement, the Assignment case then stores without the
+    // DUP and sets `valueDiscarded_`, and the caller omits the POP.
+    const ast::Node* discardValueOf_ = nullptr;
+    bool valueDiscarded_ = false;
     std::deque<Scope> scopes_;
     std::vector<std::string> errors_;
     ScopeAnalysis analysis_;
@@ -155,6 +200,18 @@ private:
     // form). Class-var assignments are legal here because `self` IS the
     // class object, so STORE_INSTVAR writes the shared storage.
     bool currentMethodIsClassSide_ = false;
+    // S37: the method being emitted belongs to a class whose superclass
+    // chain is not fully known here (a class built by the `subclass:`
+    // message, a subclass or extension of an imported class): an unresolved
+    // lowercase name compiles to PUSH_LATE_VAR / STORE_LATE_VAR, resolved
+    // against the real class when the method is installed.
+    bool currentMethodLate_ = false;
+    // Sets the name-resolution context above for the method declaration `n`
+    // (MethodDecl or CallMethodDecl), or clears it.
+    void enterMethodClass(const ast::Node& n);
+    void leaveMethodClass();
+    // Emits a late-bound read or write of `name` (S37).
+    void emitLateVar(BytecodeModule& m, Op op, const std::string& name);
     // F7-REPL: see setReplMode(). When true and emission is at module scope
     // (scopes_.size() == 1), top-level assignments target the global
     // namespace so REPL state persists across separately-compiled inputs.
@@ -183,9 +240,12 @@ private:
     // Emits the statements stmts[from..end) as a body does: each statement,
     // with a POP between consecutive ones, so the last one's value stays on
     // the stack. Runs of instance-variable assignments become write groups
-    // (tryEmitInstVarGroup).
-    void   emitStatements(BytecodeModule& m, const std::vector<ast::NodePtr>& stmts,
-                          std::size_t from, std::size_t end);
+    // (tryEmitInstVarGroup). An assignment whose value the next POP would
+    // discard is stored without DUP and without that POP. With `discardLast`
+    // the caller discards the last value too; the answer is whether the last
+    // statement left a value on the stack.
+    bool   emitStatements(BytecodeModule& m, const std::vector<ast::NodePtr>& stmts,
+                          std::size_t from, std::size_t end, bool discardLast = false);
     // Instance-variable write groups. When stmts[i] starts a run of two or
     // more statements `v := e` that assign instance variables of `self`,
     // where every e after the first can neither run code nor observe `self`,
@@ -236,7 +296,34 @@ private:
     // local RETURN with no stack unwind. Returns true on inline success;
     // false means the caller should fall through to normal SEND_KEYWORD.
     bool   tryEmitInlinedControl(BytecodeModule& m, const ast::Node& send);
-    void   emitInlinedBlockBody(BytecodeModule& m, const ast::Node& block);
+    // The body's statements; the answer is whether it left its value on the
+    // stack (always, unless `discardValue` and it ends with an assignment).
+    // The block's temporaries become hidden slots of the enclosing frame,
+    // reset to nil on every entry (each evaluation of a block has its own
+    // temporaries, LANGUAGE.md 6.3) and bound to their names for the body.
+    bool   emitInlinedBlockBody(BytecodeModule& m, const ast::Node& block,
+                                bool discardValue = false);
+    // A literal block the compiler may inline: at most `maxArgs` arguments,
+    // any temporaries.
+    static bool isInlinableBlock(const ast::Node* b, int maxArgs = 0);
+    // The layout of an inlined ifTrue:-family, and: or or: send: the
+    // receiver, a Boolean guard with an out-of-line doesNotUnderstand:, and
+    // `jumpOp` (taken towards `second`) between the two arms.
+    void   emitInlinedConditional(BytecodeModule& m, const ast::Node& send, Op jumpOp,
+                                  const std::function<void()>& first,
+                                  const std::function<void()>& second);
+    // A block literal compiled as a sub-module of its own (the Block case of
+    // emitExpr). With `deoptBoundary`, a de-optimised copy of an inlined
+    // block: `boxedOut` receives the enclosing frame locals it uses.
+    std::unique_ptr<BytecodeModule> compileBlockModule(
+        const ast::Node& n, bool deoptBoundary,
+        std::vector<std::pair<std::string, int>>* boxedOut);
+    // The de-optimised copy of the inlined block literal `blk`, compiled with
+    // no inlining into the reserved sub-module `blockIdx` of `m`.
+    void   compileDeoptBlock(BytecodeModule& m, const ast::Node& blk, size_t blockIdx,
+                             std::vector<std::pair<std::string, int>>& boxedOut);
+    // > 0 while compiling a de-optimised copy: nothing is inlined in it.
+    int    deoptDepth_ = 0;
     // Jumps of any length. A forward jump is emitted as one word with a
     // placeholder operand (emitForwardJump answers its byte position); once
     // its target is known, resolveForwardJumps writes the operand, widening

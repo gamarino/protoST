@@ -2,14 +2,15 @@
 #include "runtime/NativeError.h"
 #include "runtime/ListIndex.h"
 #include "protoST/STRuntime.h"
-#include "runtime/PrimitiveMarker.h"
 #include "protoST/primitives.h"
 #include "primitives/ArgSupport.h"
+#include "runtime/BlockCode.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/BytecodeModule.h"
 #include "runtime/TransientPin.h"
 #include "runtime/ValueFormat.h"
 #include "runtime/ExecutionEngine.h"
+#include "primitives/IntegerDivision.h"
 #include "protoCore.h"
 
 #include <atomic>
@@ -26,6 +27,7 @@
 #include <ctime>
 #include <random>
 #include <thread>
+#include <unordered_set>
 
 namespace protoST {
 
@@ -80,6 +82,8 @@ const proto::ProtoObject* prim_Object_asActor(STRuntime& rt, proto::ProtoContext
                                                const proto::ProtoObject* r,
                                                const proto::ProtoObject* const*, int) {
     auto& b = rt.bootstrap();
+    // Before the proxy exists: from now on every send probes for actors.
+    STRuntime::noteActorCreated();
     // Create a new mutable child of actorProto.
     auto* actor = b.actorProto->newChild(ctx, /*isMutable=*/true);
     // F6 v3 E5: `actor` is a fresh mutable object held in a C++ local across
@@ -209,10 +213,9 @@ namespace {
 void stampDefiningClass(STRuntime& rt, proto::ProtoContext* ctx,
                         const proto::ProtoObject* cls,
                         const proto::ProtoObject* methodObj) {
-    const proto::ProtoObject* bcPtrObj =
-        methodObj->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr);
-    if (!bcPtrObj || bcPtrObj == PROTO_NONE || !bcPtrObj->isInteger(ctx))
-        return;
+    const BytecodeModule* code =
+        blockCodeOf(ctx, methodObj->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr));
+    if (!code) return;
     static std::atomic<std::int64_t> nextClassId{1};
     const proto::ProtoString* idKey = rt.bootstrap().sym.classId;
     std::int64_t id = 0;
@@ -223,8 +226,205 @@ void stampDefiningClass(STRuntime& rt, proto::ProtoContext* ctx,
         id = nextClassId.fetch_add(1, std::memory_order_relaxed);
         cls->setAttribute(ctx, idKey, ctx->fromLong(id));
     }
-    reinterpret_cast<const BytecodeModule*>(bcPtrObj->asLong(ctx))
-        ->setDefiningClassId(id);
+    code->setDefiningClassId(id);
+}
+} // namespace
+
+namespace {
+// S37: the names a class declares, recorded on the class object as one
+// space-separated string under `key`: `__instvar_names__` (instance
+// variables; on a metaclass, class-instance variables) and
+// `__classvar_names__` (class variables).
+void addDeclaredNames(proto::ProtoContext* ctx, const proto::ProtoObject* o,
+                      const proto::ProtoString* key, std::unordered_set<std::string>& out) {
+    if (!o || o == PROTO_NONE || o->isInteger(ctx) || o->isFloat(ctx) || o->asString(ctx)) return;
+    if (o->hasOwnAttribute(ctx, key) != PROTO_TRUE) return;
+    const proto::ProtoObject* v = o->getAttribute(ctx, key);
+    const proto::ProtoString* str = v && v != PROTO_NONE ? v->asString(ctx) : nullptr;
+    if (!str) return;
+    std::string word;
+    for (char c : str->toStdString(ctx) + " ") {
+        if (std::isspace(static_cast<unsigned char>(c))) {
+            if (!word.empty()) out.insert(word);
+            word.clear();
+        } else {
+            word += c;
+        }
+    }
+}
+
+// The name a class object carries (`__class_name__`), or "" for none.
+std::string ownClassName(const Bootstrap& b, proto::ProtoContext* ctx, const proto::ProtoObject* o) {
+    if (!o || o == PROTO_NONE || o->isInteger(ctx) || o->asString(ctx)) return {};
+    const proto::ProtoObject* n = o->getOwnAttributeDirect(ctx, b.sym.className);
+    const proto::ProtoString* str = n && n != PROTO_NONE ? n->asString(ctx) : nullptr;
+    return str ? str->toStdString(ctx) : std::string();
+}
+
+// Calls `f` on `cls` and then on each of its ancestors (superclasses and
+// mixins: protoCore's flattened parent chain), nearest first.
+template <typename F>
+void forClassAndAncestors(proto::ProtoContext* ctx, const proto::ProtoObject* cls, F&& f) {
+    f(cls);
+    if (const proto::ProtoList* chain = cls->getParents(ctx)) {
+        TransientPin pinChain(ctx, reinterpret_cast<const proto::ProtoObject*>(chain));
+        const proto::proto_ulong n = chain->getSize(ctx);
+        for (proto::proto_ulong i = 0; i < n; ++i) {
+            const proto::ProtoObject* p = chain->getAt(ctx, listIndex(i));
+            if (p && p != PROTO_NONE) f(p);
+        }
+    }
+}
+
+struct LateSite {
+    const BytecodeModule* module;
+    std::size_t opPos;    // byte offset of the opcode word (after any EXTEND)
+    Op op;
+    unsigned int arg;     // constant index of the variable's name
+};
+
+void collectLateSites(const BytecodeModule& m, std::vector<LateSite>& out) {
+    const std::vector<uint8_t>& bytes = m.bytes();
+    for (std::size_t pc = 0; pc + 1 < bytes.size(); ) {
+        std::size_t opPos = pc;
+        Op op = static_cast<Op>(bytes[pc]);
+        unsigned int arg = bytes[pc + 1];
+        pc += kInstrSize;
+        while (op == Op::EXTEND && pc + 1 < bytes.size()) {
+            opPos = pc;
+            op  = static_cast<Op>(bytes[pc]);
+            arg = (arg << 8) | bytes[pc + 1];
+            pc += kInstrSize;
+        }
+        if (op == Op::PUSH_LATE_VAR || op == Op::STORE_LATE_VAR)
+            out.push_back(LateSite{&m, opPos, op, arg});
+    }
+    for (std::size_t i = 0; i < m.numBlocks(); ++i) collectLateSites(m.block(i), out);
+}
+
+// S37: resolve the late-bound variables of a method body (Op::PUSH_LATE_VAR,
+// STORE_LATE_VAR) against `cls`, the class the method is being installed on
+// (for a class-side method, the class whose metaclass receives it). The
+// compiler emits them for every name it could not resolve in a method of a
+// class whose superclass chain it could not see. Each becomes the access the
+// class declares, with the compiler's precedence: an instance variable (on
+// the class side, a class-instance variable), then a class variable. A read
+// of any other name becomes a global lookup when the compiler would have
+// emitted one (a name not starting with a lowercase letter, or any name in
+// REPL code); any other name signals `undeclared variable`, the compiler's
+// error, and the method is not installed; so does an argument or temporary that reuses an
+// instance variable's name. Everything is checked before anything is
+// rewritten, so a refused method leaves its body untouched.
+void resolveLateVariables(STRuntime& rt, proto::ProtoContext* ctx,
+                          const proto::ProtoObject* cls, bool classSide,
+                          const proto::ProtoObject* methodObj) {
+    const Bootstrap& b = rt.bootstrap();
+    const BytecodeModule* code =
+        blockCodeOf(ctx, methodObj->getOwnAttributeDirect(ctx, b.sym.bcPtr));
+    if (!code || !code->hasLateBinding()) return;
+    // One resolver; a concurrent install of the same body waits for it
+    // (BytecodeModule::beginLateResolution). The wait leaves the
+    // stop-the-world quorum, so a collection the resolver triggers runs.
+    for (;;) {
+        const int state = code->lateState();
+        if (state == BytecodeModule::kLateResolved) return;
+        if (state == BytecodeModule::kLateUnresolved && code->beginLateResolution()) break;
+        proto::ProtoThread::yield(ctx);
+    }
+    struct Resolution {
+        const BytecodeModule* code; bool resolved = false;
+        ~Resolution() { code->finishLateResolution(resolved); }
+    } resolution{code};
+    const proto::ProtoString* ivKey = proto::ProtoString::createSymbol(ctx, "__instvar_names__");
+    const proto::ProtoString* cvKey = proto::ProtoString::createSymbol(ctx, "__classvar_names__");
+    std::unordered_set<std::string> ivars, cvars;
+    forClassAndAncestors(ctx, cls, [&](const proto::ProtoObject* k) {
+        addDeclaredNames(ctx, k, cvKey, cvars);
+        if (!classSide) {
+            addDeclaredNames(ctx, k, ivKey, ivars);
+        } else if (!k->isInteger(ctx) && !k->asString(ctx)) {
+            addDeclaredNames(ctx, k->getOwnAttributeDirect(ctx, b.sym.metaclass), ivKey, ivars);
+        }
+    });
+    const std::string& where = code->definingClass();
+    for (const auto& name : code->lateMethodNames())
+        if (ivars.count(name))
+            throw ClassedErrorSignal("Error",
+                "'" + name + "' is already defined as an instance variable of "
+                + where + " (in " + code->debugName() + ")");
+    std::vector<LateSite> sites;
+    collectLateSites(*code, sites);
+    std::vector<Op> resolved;
+    resolved.reserve(sites.size());
+    for (const LateSite& site : sites) {
+        const std::string& name = site.module->constSymbol(site.arg);
+        const bool store = site.op == Op::STORE_LATE_VAR;
+        Op to = Op::EXTEND;
+        if (ivars.count(name))
+            to = store ? Op::STORE_INSTVAR : (classSide ? Op::PUSH_OWN_INSTVAR : Op::PUSH_INSTVAR);
+        else if (cvars.count(name))
+            to = store ? Op::STORE_CLASSVAR : Op::PUSH_INSTVAR;
+        else if (!store && (code->lateReadsFallBackToGlobals() || name.empty()
+                            || !std::islower(static_cast<unsigned char>(name[0]))))
+            to = Op::PUSH_GLOBAL;   // as the compiler reads a name it does not bind
+        if (to == Op::EXTEND)
+            throw ClassedErrorSignal("Error",
+                "undeclared variable '" + name + "' in " + where + " (line "
+                + std::to_string(site.module->lineForPc(site.opPos)) + ")");
+        resolved.push_back(to);
+    }
+    for (std::size_t i = 0; i < sites.size(); ++i)
+        sites[i].module->resolveLateOp(sites[i].opPos, resolved[i]);
+    resolution.resolved = true;
+}
+
+// Records the instance-variable names a class declares (`names`, a string of
+// space-separated names) on the class object, `__instvar_names__`, which
+// `instVarNames` and resolveLateVariables read. For a class (not a
+// metaclass) it first applies the rules the compiler applies to a class
+// declaration it can see whole: a name is declared once, and a class may not
+// redeclare an instance variable it inherits (both would name the same slot
+// of the object). The compiler cannot apply the second one when the
+// superclass is not known to it (S37: an imported class, a class built by
+// the `subclass:` message), so it is checked here, when the class is built.
+void declareInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
+                         const proto::ProtoObject* cls, const proto::ProtoObject* names) {
+    const Bootstrap& b = rt.bootstrap();
+    const proto::ProtoString* ivKey = proto::ProtoString::createSymbol(ctx, "__instvar_names__");
+    const proto::ProtoString* str = names && names != PROTO_NONE ? names->asString(ctx) : nullptr;
+    if (str && !isMetaclass(b, ctx, cls)) {
+        std::vector<std::string> declared;
+        std::string word;
+        for (char c : str->toStdString(ctx) + " ") {
+            if (std::isspace(static_cast<unsigned char>(c))) {
+                if (!word.empty()) declared.push_back(word);
+                word.clear();
+            } else {
+                word += c;
+            }
+        }
+        const std::string name = ownClassName(b, ctx, cls);
+        std::unordered_set<std::string> seen;
+        for (const auto& iv : declared)
+            if (!seen.insert(iv).second)
+                throw ClassedErrorSignal("Error",
+                    "instance variable '" + iv + "' is declared twice in " + name);
+        if (const proto::ProtoList* chain = cls->getParents(ctx)) {
+            TransientPin pinChain(ctx, reinterpret_cast<const proto::ProtoObject*>(chain));
+            const proto::proto_ulong n = chain->getSize(ctx);
+            for (proto::proto_ulong i = 0; i < n; ++i) {
+                const proto::ProtoObject* p = chain->getAt(ctx, listIndex(i));
+                std::unordered_set<std::string> inherited;
+                addDeclaredNames(ctx, p, ivKey, inherited);
+                for (const auto& iv : declared)
+                    if (inherited.count(iv))
+                        throw ClassedErrorSignal("Error",
+                            "instance variable '" + iv + "' of " + name
+                            + " is already defined in its superclass " + ownClassName(b, ctx, p));
+            }
+        }
+    }
+    const_cast<proto::ProtoObject*>(cls)->setAttribute(ctx, ivKey, names);
 }
 } // namespace
 
@@ -244,21 +444,20 @@ const proto::ProtoObject* prim_Object_installMethod(STRuntime& rt,
     // a[1] = selector symbol (ProtoString tagged as symbol)
     auto* selStr = a[1]->asString(ctx);
     if (!selStr) throw NativeError("__installMethod:as: selector must be a symbol");
+    resolveLateVariables(rt, ctx, r, /*classSide=*/false, a[0]);
     stampDefiningClass(rt, ctx, r, a[0]);
     r->setAttribute(ctx, selStr, a[0]);
     return r;
 }
 
 // class __installClassMethod: methodObj as: selectorSym
-//   → stamp methodObj with `__class_side__ = true`
-//   → setAttribute(class, selectorSym, methodObj)
+//   → setAttribute(class's metaclass, selectorSym, methodObj)
 //   → returns class (recv)
 //
-// D5 (MNT-b2): the class-side counterpart of `__installMethod:as:`. The method
-// still lands on the SAME class object, but the `__class_side__` marker on the
-// wrapper lets the engine's SEND dispatch refuse it when the receiver is an
-// instance — so `ClassName class >> sel` is reachable from the class object and
-// NOT from its instances.
+// K14, D52: the class-side counterpart of `__installMethod:as:`. The method
+// lands on the class's metaclass (ensureMetaclass, Bootstrap.h), the method
+// holder of the class object: the class understands it, its instances do not,
+// and `Foo >> x` and `Foo class >> x` are two methods on two objects.
 const proto::ProtoObject* prim_Object_installClassMethod(STRuntime& rt,
                                                          proto::ProtoContext* ctx,
                                                          const proto::ProtoObject* r,
@@ -270,12 +469,10 @@ const proto::ProtoObject* prim_Object_installClassMethod(STRuntime& rt,
     if (!selStr)
         throw NativeError(
             "__installClassMethod:as: selector must be a symbol");
-    const proto::ProtoString* classSideKey =
-        proto::ProtoString::createSymbol(ctx, "__class_side__");
-    const_cast<proto::ProtoObject*>(a[0])->setAttribute(
-        ctx, classSideKey, PROTO_TRUE);
-    stampDefiningClass(rt, ctx, r, a[0]);
-    r->setAttribute(ctx, selStr, a[0]);
+    resolveLateVariables(rt, ctx, r, /*classSide=*/true, a[0]);
+    const proto::ProtoObject* meta = ensureMetaclass(rt.bootstrap(), ctx, r);
+    stampDefiningClass(rt, ctx, meta, a[0]);
+    meta->setAttribute(ctx, selStr, a[0]);
     return r;
 }
 
@@ -319,6 +516,9 @@ const proto::ProtoObject* prim_Object_initClassVars(STRuntime&,
         else cur += ch;
     }
     flush();
+    // S37: the declared names, for a method compiled without knowing this
+    // class (resolveLateVariables).
+    cls->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__classvar_names__"), a[0]);
     return r;
 }
 
@@ -329,7 +529,7 @@ const proto::ProtoObject* prim_Object_initClassVars(STRuntime&,
 // BL-3: emitted by the compiler's ClassDecl path right after `newChild`, so
 // every user class object carries its declared name. printString reads this
 // attribute (walking the prototype chain) to render "a Counter" etc.
-const proto::ProtoObject* prim_Object_setClassName(STRuntime&,
+const proto::ProtoObject* prim_Object_setClassName(STRuntime& rt,
                                                     proto::ProtoContext* ctx,
                                                     const proto::ProtoObject* r,
                                                     const proto::ProtoObject* const* a,
@@ -343,6 +543,9 @@ const proto::ProtoObject* prim_Object_setClassName(STRuntime&,
     const proto::ProtoString* nameKey =
         proto::ProtoString::createSymbol(ctx, "__class_name__");
     const_cast<proto::ProtoObject*>(r)->setAttribute(ctx, nameKey, a[0]);
+    // D52: a class has its metaclass from the start, so its class-side sends
+    // never reach its own instance side.
+    ensureMetaclass(rt.bootstrap(), ctx, r);
     return r;
 }
 
@@ -390,6 +593,7 @@ const proto::ProtoObject* makeSubclass(STRuntime& rt, proto::ProtoContext* ctx,
     std::string name = nameStr->toStdString(ctx);
     auto* nameSym = proto::ProtoString::createSymbol(ctx, name.c_str());
     if (auto* g = rt.globals()) g->setAttribute(ctx, nameSym, sub);
+    ensureMetaclass(rt.bootstrap(), ctx, sub);
     return sub;
 }
 } // namespace
@@ -502,6 +706,8 @@ const proto::ProtoObject* makeSubclassWithMixins(
     std::string name = nameStr->toStdString(ctx);
     auto* nameSym = proto::ProtoString::createSymbol(ctx, name.c_str());
     if (auto* g = rt.globals()) g->setAttribute(ctx, nameSym, sub);
+    // D52: the metaclass chain mirrors the class chain, mixins included.
+    ensureMetaclass(rt.bootstrap(), ctx, sub);
     return sub;
 }
 } // namespace
@@ -571,6 +777,30 @@ namespace {
 // `oldCls` plus `mixin` (added last → searched after the existing parents),
 // carrying a copy of every own attribute of `oldCls`. Rebinds the class's
 // global name to the rebuilt object and returns it.
+// D52: give `newCls`, a class built from `oldCls` (rebuilt by addBehavior:,
+// or copied), a metaclass of its own -- on newCls's own chain -- holding the
+// class-side methods and class-instance variables of oldCls's metaclass.
+// newCls must not own `__metaclass__` yet.
+void giveOwnMetaclass(STRuntime& rt, proto::ProtoContext* ctx,
+                      const proto::ProtoObject* oldCls, const proto::ProtoObject* newCls) {
+    const proto::ProtoObject* oldMeta =
+        oldCls->getOwnAttributeDirect(ctx, rt.bootstrap().sym.metaclass);
+    const proto::ProtoObject* newMeta = ensureMetaclass(rt.bootstrap(), ctx, newCls);
+    if (!oldMeta || oldMeta == PROTO_NONE) return;
+    // Everything but what names the metaclass and its class.
+    struct MetaSink { const proto::ProtoObject* to; const Bootstrap* b; };
+    MetaSink toMeta{newMeta, &rt.bootstrap()};
+    oldMeta->processOwnAttributes(ctx, &toMeta,
+        [](proto::ProtoContext* c, void* self, const proto::ProtoString* name,
+           const proto::ProtoObject* val) {
+            auto* k = static_cast<MetaSink*>(self);
+            if (!name || name == k->b->sym.metaclass || name == k->b->sym.soleInstance
+                || name == k->b->sym.className)
+                return;
+            k->to->setAttribute(c, name, val);
+        });
+}
+
 const proto::ProtoObject* addBehaviorToClass(STRuntime& rt,
                                              proto::ProtoContext* ctx,
                                              const proto::ProtoObject* oldCls,
@@ -614,12 +844,18 @@ const proto::ProtoObject* addBehaviorToClass(STRuntime& rt,
     // reports is the canonical symbol the attribute was set with, and newCls
     // is pinned above, so the allocations setAttribute makes in the callback
     // cannot orphan it.
-    oldCls->processOwnAttributes(ctx, const_cast<proto::ProtoObject*>(newCls),
-        [](proto::ProtoContext* c, void* self, const proto::ProtoString* name,
-           const proto::ProtoObject* val) {
-            if (name)
-                static_cast<const proto::ProtoObject*>(self)->setAttribute(c, name, val);
-        });
+    struct CopySink { const proto::ProtoObject* to; const proto::ProtoString* skip; };
+    CopySink toNew{newCls, rt.bootstrap().sym.metaclass};
+    auto copyOwn = [](proto::ProtoContext* c, void* self, const proto::ProtoString* name,
+                      const proto::ProtoObject* val) {
+        auto* k = static_cast<CopySink*>(self);
+        if (name && name != k->skip) k->to->setAttribute(c, name, val);
+    };
+    oldCls->processOwnAttributes(ctx, &toNew, copyOwn);
+
+    // D52: the rebuilt class gets its own metaclass, whose chain carries the
+    // mixin's metaclass, and the class-side methods of the old one.
+    giveOwnMetaclass(rt, ctx, oldCls, newCls);
 
     // Rebind the class's global name to the rebuilt object so subsequent
     // `ClassName` PUSH_GLOBALs and `ClassName >> sel` installs see it.
@@ -679,7 +915,9 @@ const proto::ProtoObject* prim_Object_subclassIvarsUses(
     if (a[1] && a[1] != PROTO_NONE && !a[1]->asString(ctx))
         throw NativeError(
             "subclass:instanceVariableNames:uses:: ivar names must be a string");
-    return makeSubclassWithMixins(rt, ctx, r, a[0], a[2]);
+    const proto::ProtoObject* sub = makeSubclassWithMixins(rt, ctx, r, a[0], a[2]);
+    if (a[1] && a[1] != PROTO_NONE) declareInstVarNames(rt, ctx, sub, a[1]);
+    return sub;
 }
 
 // superClass subclass: #Name
@@ -698,9 +936,10 @@ const proto::ProtoObject* prim_Object_subclass(STRuntime& rt,
 //
 // Instance variables in protoST are plain attributes resolved by symbol on
 // `self` (STORE_INSTVAR / PUSH_INSTVAR walk the parent chain), so no slot
-// layout has to be reserved here — declaring them is informational. The names
-// string is validated for shape and otherwise carried only so the surface
-// syntax matches the textual `subclass:instanceVariableNames:` form.
+// layout has to be reserved here. The names are recorded on the class, as the
+// textual form records them (S37): `instVarNames` answers them, and the
+// methods of the class, which the compiler could not resolve against a class
+// built by a message, are resolved against them when installed.
 const proto::ProtoObject* prim_Object_subclassIvars(
     STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* r,
     const proto::ProtoObject* const* a, int argc) {
@@ -711,7 +950,9 @@ const proto::ProtoObject* prim_Object_subclassIvars(
     if (a[1] && a[1] != PROTO_NONE && !a[1]->asString(ctx))
         throw NativeError(
             "subclass:instanceVariableNames:: ivar names must be a string");
-    return makeSubclass(rt, ctx, r, a[0]);
+    const proto::ProtoObject* sub = makeSubclass(rt, ctx, r, a[0]);
+    if (a[1] && a[1] != PROTO_NONE) declareInstVarNames(rt, ctx, sub, a[1]);
+    return sub;
 }
 
 // --- reflection --------------------------------------------------------------
@@ -750,33 +991,38 @@ const proto::ProtoObject* sendDynamicFrom(STRuntime& rt, proto::ProtoContext* ct
                                           const proto::ProtoObject* const* args, int argc,
                                           bool* understood) {
     if (understood) *understood = false;
-    const proto::ProtoObject* method = lookupRoot ? lookupRoot->getAttribute(ctx, selector) : nullptr;
+    const proto::ProtoObject* method =
+        lookupRoot ? lookupRoot->getAttribute(ctx, selector) : nullptr;
     if (!method || method == PROTO_NONE) return nullptr;
-    const proto::ProtoObject* bcPtrObj = method->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr);
-    if (bcPtrObj && bcPtrObj != PROTO_NONE && bcPtrObj->isInteger(ctx)) {
-        const BytecodeModule* sub =
-            reinterpret_cast<const BytecodeModule*>(bcPtrObj->asLong(ctx));
+    if (const BytecodeModule* sub =
+            blockCodeOf(ctx, method->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr))) {
         if (sub->argCount() != argc + 1)
             throw NativeError("wrong number of arguments for "
                                      + selector->toStdString(ctx));
-        std::vector<const proto::ProtoObject*> methodArgs;
-        methodArgs.reserve(static_cast<size_t>(argc) + 1);
-        methodArgs.push_back(recv ? recv : PROTO_NONE);
-        for (int i = 0; i < argc; ++i) methodArgs.push_back(args[i]);
+        // [receiver, args...] on the C++ stack up to 8 arguments (0.10.0;
+        // a heap vector per call before). The values are the caller's,
+        // rooted where the caller holds them.
+        const proto::ProtoObject* inlineArgs[9];
+        std::vector<const proto::ProtoObject*> wideArgs;
+        const proto::ProtoObject** methodArgs = inlineArgs;
+        if (argc > 8) {
+            wideArgs.resize(static_cast<size_t>(argc) + 1);
+            methodArgs = wideArgs.data();
+        }
+        methodArgs[0] = recv ? recv : PROTO_NONE;
+        for (int i = 0; i < argc; ++i) methodArgs[i + 1] = args[i];
         const proto::ProtoObject* capDict = method->getOwnAttributeDirect(ctx, rt.bootstrap().sym.captured);
         if (capDict == PROTO_NONE) capDict = nullptr;
         if (understood) *understood = true;
         ExecutionEngine eng(rt);
-        return eng.runWithArgs(ctx, *sub, recv ? recv : PROTO_NONE, methodArgs.data(),
+        return eng.runWithArgs(ctx, *sub, recv ? recv : PROTO_NONE, methodArgs,
                                argc + 1, capDict);
     }
-    if (method->isInteger(ctx)) {
-        const long long marker = method->asLong(ctx);
-        if (isPrimitiveMarker(marker)) {
-            auto fn = rt.registry().at(primitiveMarkerIndex(marker));
-            if (understood) *understood = true;
-            return fn(rt, ctx, recv ? recv : PROTO_NONE, args, argc);
-        }
+    if (const proto::ProtoMethod native = method->asMethod(ctx)) {
+        // A primitive, or another runtime's exported method.
+        const proto::ProtoArguments positional(args, static_cast<unsigned>(argc));
+        if (understood) *understood = true;
+        return callMethodCell(native, ctx, recv ? recv : PROTO_NONE, &positional, nullptr);
     }
     return nullptr;
 }
@@ -790,6 +1036,19 @@ const proto::ProtoString* selectorArg(proto::ProtoContext* ctx, const proto::Pro
 }
 } // namespace
 
+// A selector that begins with two underscores is private to the runtime
+// (LANGUAGE.md section 3.3): the kernel and the primitives send it, but
+// reflection does not report it, as `selectors` does not, and perform: does
+// not send it -- `__st_send__`, the entry another runtime sends through, is
+// one of them.
+// The first two characters are read in place (a character is an embedded
+// value), so no selector is copied out.
+static bool isRuntimePrivateSelector(proto::ProtoContext* ctx, const proto::ProtoString* sel) {
+    const proto::ProtoObject* underscore = ctx->fromUnicodeChar('_');
+    return sel->getSize(ctx) >= 2 && sel->getAt(ctx, 0) == underscore &&
+           sel->getAt(ctx, 1) == underscore;
+}
+
 // recv perform: #selector withArguments: anArray
 const proto::ProtoObject* prim_Object_performWithArguments(STRuntime& rt, proto::ProtoContext* ctx,
                                                            const proto::ProtoObject* r,
@@ -798,7 +1057,7 @@ const proto::ProtoObject* prim_Object_performWithArguments(STRuntime& rt, proto:
     const proto::ProtoString* sel = selectorArg(ctx, a[0]);
     std::vector<const proto::ProtoObject*> args;
     if (a[1] && a[1] != PROTO_NONE) {
-        const proto::ProtoString* dataKey = proto::ProtoString::createSymbol(ctx, "__data__");
+        const proto::ProtoString* dataKey = rt.bootstrap().sym.data;
         const proto::ProtoObject* elems = a[1]->getAttribute(ctx, dataKey);
         const proto::ProtoList* list = elems && elems != PROTO_NONE ? elems->asList(ctx) : nullptr;
         if (!list) throw NativeError("perform:withArguments: expects an Array of arguments");
@@ -806,10 +1065,31 @@ const proto::ProtoObject* prim_Object_performWithArguments(STRuntime& rt, proto:
             args.push_back(list->getAt(ctx, listIndex(i)));
     }
     bool understood = false;
-    const proto::ProtoObject* res = sendDynamic(rt, ctx, r, sel, args.data(),
-                                                static_cast<int>(args.size()), &understood);
+    const proto::ProtoObject* res = isRuntimePrivateSelector(ctx, sel)
+        ? nullptr
+        : sendDynamic(rt, ctx, r, sel, args.data(), static_cast<int>(args.size()), &understood);
+    // Not understood: doesNotUnderstand:, as a direct send (a user override
+    // answers, else a resumable MessageNotUnderstood), as in Pharo.
     if (!understood)
-        throw ClassedErrorSignal("Error", "doesNotUnderstand: " + sel->toStdString(ctx));
+        res = sendDoesNotUnderstand(rt, ctx, r, sel->toStdString(ctx), args.data(),
+                                    static_cast<int>(args.size()));
+    return res ? res : PROTO_NONE;
+}
+
+// recv perform: #selector, perform: #selector with: a1 ... (up to three):
+// the arguments are the primitive's own, so no Array is built (0.10.0; these
+// were kernel methods building an Array for perform:withArguments:).
+const proto::ProtoObject* prim_Object_performWith(STRuntime& rt, proto::ProtoContext* ctx,
+                                                  const proto::ProtoObject* r,
+                                                  const proto::ProtoObject* const* a, int argc) {
+    if (argc < 1) throw NativeError("perform: expects a selector");
+    const proto::ProtoString* sel = selectorArg(ctx, a[0]);
+    bool understood = false;
+    const proto::ProtoObject* res = isRuntimePrivateSelector(ctx, sel)
+        ? nullptr
+        : sendDynamic(rt, ctx, r, sel, a + 1, argc - 1, &understood);
+    if (!understood)
+        res = sendDoesNotUnderstand(rt, ctx, r, sel->toStdString(ctx), a + 1, argc - 1);
     return res ? res : PROTO_NONE;
 }
 
@@ -819,19 +1099,14 @@ const proto::ProtoObject* prim_Object_respondsTo(STRuntime& rt, proto::ProtoCont
                                                  const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("respondsTo: expects 1 arg");
     const proto::ProtoString* sel = selectorArg(ctx, a[0]);
-    const proto::ProtoObject* holder = methodHolder(rt.bootstrap(), ctx, r);
-    const proto::ProtoObject* m = holder->getAttribute(ctx, sel);
+    if (isRuntimePrivateSelector(ctx, sel)) return PROTO_FALSE;
+    // The lookup a send does: from the receiver's method holder (a class's
+    // metaclass, D52).
+    const proto::ProtoObject* m = methodHolder(rt.bootstrap(), ctx, r)->getAttribute(ctx, sel);
     if (!m || m == PROTO_NONE) return PROTO_FALSE;
-    // A class-side method answers only for the class itself, as the send
-    // dispatch does (an instance receiver does not see it).
-    if (!m->isInteger(ctx) && m->getOwnAttributeDirect(ctx, rt.bootstrap().sym.classSide) == PROTO_TRUE) {
-        const proto::ProtoObject* own = holder->getOwnAttributeDirect(ctx, rt.bootstrap().sym.className);
-        if (!own || own == PROTO_NONE) return PROTO_FALSE;
-    }
-    const proto::ProtoObject* bc = m->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr);
-    if (bc && bc != PROTO_NONE) return PROTO_TRUE;
-    if (m->isInteger(ctx) && isPrimitiveMarker(m->asLong(ctx))) return PROTO_TRUE;
-    return PROTO_FALSE;
+    if (blockCodeOf(ctx, m->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr)))
+        return PROTO_TRUE;
+    return m->isMethod(ctx) ? PROTO_TRUE : PROTO_FALSE;
 }
 
 // aClass superclass → the next class up the chain, nil for Object.
@@ -845,12 +1120,13 @@ const proto::ProtoObject* prim_Object_superclass(STRuntime& rt, proto::ProtoCont
     const proto::ProtoString* nameKey = rt.bootstrap().sym.className;
     if (!r || r == PROTO_NONE) return PROTO_NONE;
     // A metaclass's superclass is its class's superclass's metaclass
-    // (B class superclass is A class); Object class answers nil here.
+    // (B class superclass is A class), and Object class's is Class (D52).
     if (const proto::ProtoObject* sole = r->isInteger(ctx) || r->asString(ctx) ? nullptr
-            : r->getOwnAttributeDirect(ctx, proto::ProtoString::createSymbol(ctx, "__sole_instance__"))) {
+            : r->getOwnAttributeDirect(ctx, rt.bootstrap().sym.soleInstance)) {
         if (sole != PROTO_NONE) {
             const proto::ProtoObject* sup = prim_Object_superclass(rt, ctx, sole, nullptr, 0);
-            return (sup && sup != PROTO_NONE) ? prim_Object_class(rt, ctx, sup, nullptr, 0) : PROTO_NONE;
+            return (sup && sup != PROTO_NONE) ? prim_Object_class(rt, ctx, sup, nullptr, 0)
+                                              : rt.bootstrap().classProto;
         }
     }
     for (const proto::ProtoObject* p = r->getFirstParent(ctx); p && p != PROTO_NONE;
@@ -865,23 +1141,32 @@ const proto::ProtoObject* prim_Object_superclass(STRuntime& rt, proto::ProtoCont
 // instance-variable values. Values (numbers, strings, nil, booleans) answer
 // themselves. Collections copy their element storage attribute, which is an
 // immutable protoCore list, so the copy and the original evolve independently.
-const proto::ProtoObject* prim_Object_shallowCopy(STRuntime&, proto::ProtoContext* ctx,
+//
+// A class is copied as Pharo copies one: the copy gets a metaclass of its own
+// with the original's class-side methods and class-instance variables (D52),
+// so the two classes' class sides evolve independently and `copy class
+// soleInstance` is the copy.
+const proto::ProtoObject* prim_Object_shallowCopy(STRuntime& rt, proto::ProtoContext* ctx,
                                                   const proto::ProtoObject* r,
                                                   const proto::ProtoObject* const*, int) {
     if (!r || r == PROTO_NONE || r == PROTO_TRUE || r == PROTO_FALSE) return r;
     if (r->isInteger(ctx) || r->isFloat(ctx) || r->asString(ctx)) return r;
     const proto::ProtoObject* parent = r->getFirstParent(ctx);
     if (!parent || parent == PROTO_NONE) return r;
+    const Bootstrap& b = rt.bootstrap();
+    const proto::ProtoObject* meta = r->getOwnAttributeDirect(ctx, b.sym.metaclass);
+    const bool isClass = meta && meta != PROTO_NONE && !isMetaclass(b, ctx, r);
     const proto::ProtoObject* copy = parent->newChild(ctx, /*isMutable=*/true);
     TransientPin pinCopy(ctx, copy);
-    struct Sink { const proto::ProtoObject* copy; };
-    Sink sink{copy};
+    struct Sink { const proto::ProtoObject* copy; const proto::ProtoString* skip; };
+    Sink sink{copy, isClass ? b.sym.metaclass : nullptr};
     r->processOwnAttributes(ctx, &sink,
         [](proto::ProtoContext* c, void* self, const proto::ProtoString* key,
            const proto::ProtoObject* value) {
             auto* s = static_cast<Sink*>(self);
-            s->copy->setAttribute(c, key, value);
+            if (key != s->skip) s->copy->setAttribute(c, key, value);
         });
+    if (isClass) giveOwnMetaclass(rt, ctx, r, copy);
     return copy;
 }
 
@@ -895,29 +1180,198 @@ const proto::ProtoObject* prim_Object_identityHash(STRuntime&, proto::ProtoConte
 
 // recv hash → consistent with =: numbers by value (1 hash = 1.0 hash), strings
 // and symbols by content, every other object by identity.
-// The hash of a native number, shared by `hash` and the hashed collections'
-// key hash, so a number that defines its own hash in terms of a native one
-// (a Fraction equal to a Float answers that Float's hash) lands in the same
-// bucket. Equal numbers of different kinds (1 and 1.0) hash alike; the value
-// is kept below 2^53.
+//
+// The hash of a number is CPython's numeric hash (R3; Python's "Hashing of
+// numeric types", sys.hash_info): with P = 2^61 - 1, a prime, a rational
+// value x = m / n hashes to sign(x) * (|m| * n^-1 mod P), so equal values of
+// any kind -- Integer, LargeInteger, Float, and in the kernel Fraction and
+// Decimal, which compute the same function -- hash alike, and alike to
+// Python, which ProtoBase relies on. The infinities hash to +-314159, a value
+// whose denominator is a multiple of P (no inverse) to +-314159 as well, and
+// a hash of -1 becomes -2. A NaN equals nothing, so it hashes by identity, as
+// in Python 3.10 and later. The hash is shared by `hash` and the hashed
+// collections' key hash (stKeyHash).
+namespace {
+constexpr int           kHashBits    = 61;
+constexpr std::uint64_t kHashModulus = (std::uint64_t{1} << kHashBits) - 1;
+constexpr long long     kHashInf     = 314159;
+
+long long finishHash(std::uint64_t magnitude, bool negative) {
+    const long long h = negative ? -static_cast<long long>(magnitude)
+                                 : static_cast<long long>(magnitude);
+    return h == -1 ? -2 : h;
+}
+
+// CPython's _Py_HashDouble for a finite double: the mantissa is consumed 28
+// bits at a time, reducing modulo P, and the binary exponent becomes a
+// rotation (2^61 = 1 mod P, so multiplying by 2^e is rotating by e mod 61).
+long long hashFiniteDouble(double v) {
+    int e = 0;
+    double m = std::frexp(v, &e);
+    const bool negative = m < 0;
+    if (negative) m = -m;
+    std::uint64_t x = 0;
+    while (m != 0.0) {
+        x = ((x << 28) & kHashModulus) | (x >> (kHashBits - 28));
+        m *= 268435456.0;   // 2^28
+        e -= 28;
+        const auto y = static_cast<std::uint64_t>(m);
+        m -= static_cast<double>(y);
+        x += y;
+        if (x >= kHashModulus) x -= kHashModulus;
+    }
+    e = e >= 0 ? e % kHashBits : kHashBits - 1 - ((-1 - e) % kHashBits);
+    x = ((x << e) & kHashModulus) | (x >> (kHashBits - e));
+    return finishHash(x, negative);
+}
+
+// The value of an Integer when it fits a machine word: a SmallInteger
+// always, a LargeInteger below 2^63 in magnitude (protoCore's asLong reads it
+// without allocating, and throws for a larger one).
+bool integerWord(proto::ProtoContext* ctx, const proto::ProtoObject* r, long long& out) {
+    if (proto::isSmallInt(r)) { out = r->asLong(ctx); return true; }
+    try {
+        out = r->asLong(ctx);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+// |r| modulo P for an Integer r, and its sign. Allocates only for an integer
+// that does not fit a word.
+std::uint64_t hashResidue(proto::ProtoContext* ctx, const proto::ProtoObject* r, bool& negative) {
+    long long v = 0;
+    if (integerWord(ctx, r, v)) {
+        negative = v < 0;
+        const std::uint64_t mag = negative ? std::uint64_t{0} - static_cast<std::uint64_t>(v)
+                                           : static_cast<std::uint64_t>(v);
+        return mag % kHashModulus;
+    }
+    negative = r->integerSign(ctx) < 0;
+    const proto::ProtoObject* magnitude = r->abs(ctx);
+    TransientPin pinMagnitude(ctx, magnitude);
+    const proto::ProtoObject* residue =
+        integerRemainder(ctx, magnitude, ctx->fromLong(static_cast<long long>(kHashModulus)));
+    return static_cast<std::uint64_t>(residue->asLong(ctx));
+}
+
+// a * b modulo P for a, b < P: 2^61 = 1 modulo P, so the 122-bit product
+// folds into its low 61 bits plus the rest.
+std::uint64_t mulModP(std::uint64_t a, std::uint64_t b) {
+#if defined(__SIZEOF_INT128__)
+    const unsigned __int128 prod = static_cast<unsigned __int128>(a) * b;
+    std::uint64_t r = static_cast<std::uint64_t>(prod & kHashModulus)
+                    + static_cast<std::uint64_t>(prod >> kHashBits);
+    if (r >= kHashModulus) r -= kHashModulus;
+    return r;
+#else
+    std::uint64_t r = 0;
+    while (b) {
+        if (b & 1) { r += a; if (r >= kHashModulus) r -= kHashModulus; }
+        a += a; if (a >= kHashModulus) a -= kHashModulus;
+        b >>= 1;
+    }
+    return r;
+#endif
+}
+
+// x^-1 modulo P for 0 < x < P: x^(P - 2), P being prime.
+std::uint64_t inverseModP(std::uint64_t x) {
+    std::uint64_t result = 1, base = x, e = kHashModulus - 2;
+    while (e) {
+        if (e & 1) result = mulModP(result, base);
+        base = mulModP(base, base);
+        e >>= 1;
+    }
+    return result;
+}
+} // namespace
+
 long long numericHashImpl(proto::ProtoContext* ctx, const proto::ProtoObject* r) {
-    constexpr long long kMask = (1LL << 53) - 1;
     if (r->isFloat(ctx)) {
         const double d = r->asDouble(ctx);
-        if (std::isfinite(d) && d == std::floor(d)) {
-            // An integral Float hashes as the Integer it equals: by value
-            // below 2^53, by its exact decimal digits above (as LargeIntegers).
-            if (std::fabs(d) < 9007199254740992.0) return static_cast<long long>(d) & kMask;
-            char digits[400];
-            std::snprintf(digits, sizeof(digits), "%.0f", d);
-            return static_cast<long long>(std::hash<std::string>{}(std::string(digits))) & kMask;
+        if (std::isnan(d)) {
+            const auto bits = reinterpret_cast<std::uintptr_t>(r);
+            return static_cast<long long>((bits >> 4) & ((1ULL << 54) - 1));
         }
-        return static_cast<long long>(std::hash<double>{}(d)) & kMask;
+        if (std::isinf(d)) return d > 0 ? kHashInf : -kHashInf;
+        return hashFiniteDouble(d);
     }
-    if (r->compare(ctx, ctx->fromLong(1LL << 53)) < 0 && r->compare(ctx, ctx->fromLong(-(1LL << 53))) > 0)
-        return r->asLong(ctx) & kMask;
-    const std::string digits = formatNumber(ctx, r);
-    return static_cast<long long>(std::hash<std::string>{}(digits)) & kMask;
+    if (proto::isSmallInt(r)) {
+        const long long v = r->asLong(ctx);
+        // |v| < 2^54 < P: the value is its own residue.
+        return finishHash(static_cast<std::uint64_t>(v < 0 ? -v : v), v < 0);
+    }
+    // A LargeInteger: |v| mod P, on a machine word when it fits one.
+    bool negative = false;
+    const std::uint64_t residue = hashResidue(ctx, r, negative);
+    return finishHash(residue, negative);
+}
+
+// aNumerator __hashOver: aDenominator → CPython's hash of the rational
+// aNumerator / aDenominator (aDenominator > 0, the two coprime): |numerator| *
+// denominator^-1 modulo P with the numerator's sign, +-314159 when the
+// denominator is a multiple of P, -1 becoming -2. Fraction >> hash; computed
+// on machine words, so only a result beyond the SmallInteger range allocates.
+const proto::ProtoObject* prim_Integer_hashOver(STRuntime&, proto::ProtoContext* ctx,
+                                               const proto::ProtoObject* r,
+                                               const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1 || !r || !r->isInteger(ctx) || !a[0] || !a[0]->isInteger(ctx)
+        || a[0]->integerSign(ctx) <= 0)
+        throw NativeError("__hashOver: expects an Integer receiver and a positive Integer");
+    bool negative = false, ignored = false;
+    const std::uint64_t num = hashResidue(ctx, r, negative);
+    const std::uint64_t den = hashResidue(ctx, a[0], ignored);
+    const std::uint64_t h = den == 0 ? static_cast<std::uint64_t>(kHashInf)
+                                     : mulModP(num, inverseModP(den));
+    return ctx->fromLong(finishHash(h, negative));
+}
+
+namespace {
+// x's `hash` modulo P, in [0, P): a number's numeric hash computed here, on
+// machine words; any other object's `hash` sent (a user override answers),
+// then reduced. Equal to `x hash \\ P` in Smalltalk.
+std::uint64_t hashModP(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* x) {
+    long long h = 0;
+    bool negative = false;
+    std::uint64_t mag = 0;
+    if (x && x != PROTO_NONE && (x->isInteger(ctx) || x->isFloat(ctx))) {
+        h = numericHashImpl(ctx, x);
+    } else {
+        bool understood = false;
+        const proto::ProtoObject* hv = sendDynamic(
+            rt, ctx, x, rt.bootstrap().sym.hash, nullptr, 0, &understood);
+        if (!understood || !hv || !hv->isInteger(ctx))
+            throw NativeError("__hashMix: a hash method must answer an Integer");
+        if (!integerWord(ctx, hv, h)) {
+            mag = hashResidue(ctx, hv, negative);
+            return negative && mag != 0 ? kHashModulus - mag : mag;
+        }
+    }
+    negative = h < 0;
+    mag = (negative ? std::uint64_t{0} - static_cast<std::uint64_t>(h)
+                    : static_cast<std::uint64_t>(h)) % kHashModulus;
+    return negative && mag != 0 ? kHashModulus - mag : mag;
+}
+} // namespace
+
+// a __hashMix: b → (a hash * 1000003 + b hash) \\ P, P = 2^61 - 1: the
+// combined hash of the kernel's composite values (Point, Association,
+// SequenceableCollection, MessagePackMap). An accumulated hash h, already in
+// [0, P), is its own hash, so `h __hashMix: e` folds one more element. The
+// numeric hashes are computed natively, so a Float or Fraction coordinate
+// costs no LargeInteger (R3, review round 2); only a result beyond the
+// SmallInteger range is boxed.
+const proto::ProtoObject* prim_Object_hashMix(STRuntime& rt, proto::ProtoContext* ctx,
+                                              const proto::ProtoObject* r,
+                                              const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw NativeError("__hashMix: expects 1 arg");
+    const std::uint64_t hr = hashModP(rt, ctx, r);
+    const std::uint64_t ha = hashModP(rt, ctx, a[0]);
+    std::uint64_t h = mulModP(hr, 1000003) + ha;
+    if (h >= kHashModulus) h -= kHashModulus;
+    return ctx->fromLong(static_cast<long long>(h));
 }
 
 const proto::ProtoObject* prim_Object_hash(STRuntime& rt, proto::ProtoContext* ctx,
@@ -1005,24 +1459,14 @@ const proto::ProtoObject* prim_Object_globalAtPut(STRuntime& rt, proto::ProtoCon
 // answers the class as `soleInstance`.
 namespace {
 
+// D52: a class's metaclass, or `Metaclass` for a metaclass -- the object it
+// owns as `__metaclass__` (created with the class; ensureMetaclass covers an
+// object stamped with a class name some other way).
 const proto::ProtoObject* metaclassOf(STRuntime& rt, proto::ProtoContext* ctx,
-                                      const proto::ProtoObject* cls,
-                                      const proto::ProtoString* nameKey,
-                                      const proto::ProtoObject* className) {
-    // Symbols are interned per ProtoSpace: never cache them in a static.
-    const proto::ProtoString* metaKey = proto::ProtoString::createSymbol(ctx, "__metaclass__");
-    const proto::ProtoString* soleKey = proto::ProtoString::createSymbol(ctx, "__sole_instance__");
-    const proto::ProtoObject* meta = cls->getOwnAttributeDirect(ctx, metaKey);
+                                      const proto::ProtoObject* cls) {
+    const proto::ProtoObject* meta = cls->getOwnAttributeDirect(ctx, rt.bootstrap().sym.metaclass);
     if (meta && meta != PROTO_NONE) return meta;
-    std::string name = "Class";
-    if (const proto::ProtoString* ns = className->asString(ctx)) name = ns->toStdString(ctx);
-    meta = rt.bootstrap().objectProto->newChild(ctx, /*isMutable=*/true);
-    TransientPin pinMeta(ctx, meta);
-    const_cast<proto::ProtoObject*>(meta)->setAttribute(
-        ctx, nameKey, ctx->fromUTF8String((name + " class").c_str()));
-    const_cast<proto::ProtoObject*>(meta)->setAttribute(ctx, soleKey, cls);
-    const_cast<proto::ProtoObject*>(cls)->setAttribute(ctx, metaKey, meta);
-    return meta;
+    return ensureMetaclass(rt.bootstrap(), ctx, cls);
 }
 } // namespace
 
@@ -1050,7 +1494,7 @@ const proto::ProtoObject* prim_Object_class(STRuntime& rt, proto::ProtoContext* 
         return b.byteArrayProto;
     const proto::ProtoString* nameKey = b.sym.className;
     const proto::ProtoObject* own = r->getOwnAttributeDirect(ctx, nameKey);
-    if (own && own != PROTO_NONE) return metaclassOf(rt, ctx, r, nameKey, own);
+    if (own && own != PROTO_NONE) return metaclassOf(rt, ctx, r);
     for (const proto::ProtoObject* p = r->getFirstParent(ctx); p && p != PROTO_NONE;
          p = p->getFirstParent(ctx)) {
         const proto::ProtoObject* name = p->getOwnAttributeDirect(ctx, nameKey);
@@ -1104,11 +1548,19 @@ const proto::ProtoObject* prim_Object_subclassNamed(STRuntime& rt, proto::ProtoC
             return existing;
     }
     const proto::ProtoObject* cls = const_cast<proto::ProtoObject*>(r)->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinCls(ctx, cls);
     const proto::ProtoObject* g = rt.globals();
     if (g && g->getOwnAttributeDirect(ctx, proto::ProtoString::createSymbol(ctx, "__kernel_loaded__")) == PROTO_TRUE) {
-        TransientPin pinCls(ctx, cls);
         const_cast<proto::ProtoObject*>(cls)->setAttribute(
             ctx, proto::ProtoString::createSymbol(ctx, "__user_class__"), PROTO_TRUE);
+    }
+    // D52: the new object is a class from the start -- named, with its
+    // metaclass -- so the class protocol the declaration sends next
+    // (__setClassName:, __setInstVarNames:, ...) reaches it.
+    if (name) {
+        const_cast<proto::ProtoObject*>(cls)->setAttribute(ctx, rt.bootstrap().sym.className,
+                                                           name->asObject(ctx));
+        ensureMetaclass(rt.bootstrap(), ctx, cls);
     }
     return cls;
 }
@@ -1121,16 +1573,15 @@ const proto::ProtoObject* makeArrayFromList(STRuntime& rt, proto::ProtoContext* 
                                             const proto::ProtoList* data) {
     const proto::ProtoObject* arr = rt.bootstrap().arrayProto->newChild(ctx, /*isMutable=*/true);
     TransientPin pinArr(ctx, arr);
-    arr->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__data__"), data->asObject(ctx));
+    arr->setAttribute(ctx, rt.bootstrap().sym.data, data->asObject(ctx));
     return arr;
 }
 
 bool isMethodValue(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* v) {
     if (!v || v == PROTO_NONE) return false;
-    if (v->isInteger(ctx)) return isPrimitiveMarker(v->asLong(ctx));
-    if (v->asString(ctx)) return false;
-    const proto::ProtoObject* bc = v->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr);
-    return bc && bc != PROTO_NONE;
+    if (v->isMethod(ctx)) return true;   // a primitive, or an exported native method
+    if (v->isInteger(ctx) || v->asString(ctx)) return false;
+    return blockCodeOf(ctx, v->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr)) != nullptr;
 }
 
 const proto::ProtoString* ivarKey(proto::ProtoContext* ctx, const proto::ProtoObject* name) {
@@ -1139,15 +1590,6 @@ const proto::ProtoString* ivarKey(proto::ProtoContext* ctx, const proto::ProtoOb
     return proto::ProtoString::createSymbol(ctx, ("_iv_" + s->toStdString(ctx)).c_str());
 }
 } // namespace
-
-// The class a metaclass describes (`A class` answers a metaclass object that
-// records its sole instance), or nullptr when `r` is not a metaclass.
-const proto::ProtoObject* soleInstanceOf(proto::ProtoContext* ctx, const proto::ProtoObject* r) {
-    if (!r || r == PROTO_NONE || r->isInteger(ctx) || r->asString(ctx)) return nullptr;
-    const proto::ProtoObject* s =
-        r->getOwnAttributeDirect(ctx, proto::ProtoString::createSymbol(ctx, "__sole_instance__"));
-    return (s && s != PROTO_NONE) ? s : nullptr;
-}
 
 // anObject instVarNamed: aName → the value of that instance variable of the
 // receiver (nil when unset); instVarNamed:put: sets it.
@@ -1170,18 +1612,24 @@ const proto::ProtoObject* prim_Object_instVarNamedPut(STRuntime&, proto::ProtoCo
         throw NativeError("instVarNamed:put: the receiver has no instance variables");
     const proto::ProtoString* key = ivarKey(ctx, a[0]);
     TransientPin pinKey(ctx, reinterpret_cast<const proto::ProtoObject*>(key));
-    const_cast<proto::ProtoObject*>(r)->setAttribute(ctx, key, a[1]);
+    // On an immutable receiver (a block closure, a method) protoCore's
+    // setAttribute leaves the receiver unchanged and answers a new object.
+    // Dropping that object would lose the write silently; refuse instead.
+    const proto::ProtoObject* written = r->setAttribute(ctx, key, a[1]);
+    if (written != r)
+        throw ClassedErrorSignal("ModificationForbidden",
+                                 "instVarNamed:put: the receiver is an immutable value "
+                                 "(a block or a method); nothing was written");
     return a[1];
 }
 
 // aClass __setInstVarNames: 'a b' records the declared instance-variable
 // names on the class (compiler-emitted); __instVarNamesString answers them.
-const proto::ProtoObject* prim_Object_setInstVarNames(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Object_setInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
                                                       const proto::ProtoObject* r,
                                                       const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("__setInstVarNames: expects 1 arg");
-    const_cast<proto::ProtoObject*>(r)->setAttribute(
-        ctx, proto::ProtoString::createSymbol(ctx, "__instvar_names__"), a[0]);
+    declareInstVarNames(rt, ctx, r, a[0]);
     return r;
 }
 
@@ -1195,41 +1643,118 @@ const proto::ProtoObject* prim_Object_instVarNamesString(STRuntime&, proto::Prot
     return r->getAttribute(ctx, key);
 }
 
-// aClass canUnderstand: aSelector → whether its instances respond to it
-// (a class-side method does not count).
+// aClass canUnderstand: aSelector → whether its instances respond to it: the
+// receiver's own chain (a metaclass's: the class side and the class protocol,
+// D52).
 const proto::ProtoObject* prim_Object_canUnderstand(STRuntime& rt, proto::ProtoContext* ctx,
                                                    const proto::ProtoObject* r,
                                                    const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("canUnderstand: expects 1 arg");
     const proto::ProtoString* sel = a[0] ? a[0]->asString(ctx) : nullptr;
-    if (!sel || !r || r == PROTO_NONE) return PROTO_FALSE;
-    if (const proto::ProtoObject* cls = soleInstanceOf(ctx, r)) {
-        // A metaclass: what the class itself understands — its class-side
-        // methods and the protocol every class has (new, name, ...), not its
-        // instances' methods.
-        const proto::ProtoObject* m = cls->getAttribute(ctx, sel);
-        if (!isMethodValue(rt, ctx, m)) return PROTO_FALSE;
-        if (m->isInteger(ctx)) return PROTO_TRUE;
-        if (m->getOwnAttributeDirect(ctx, rt.bootstrap().sym.classSide) == PROTO_TRUE) return PROTO_TRUE;
-        return rt.bootstrap().objectProto->getAttribute(ctx, sel) == m ? PROTO_TRUE : PROTO_FALSE;
-    }
-    const proto::ProtoObject* m = methodHolder(rt.bootstrap(), ctx, r)->getAttribute(ctx, sel);
-    if (!isMethodValue(rt, ctx, m)) return PROTO_FALSE;
-    if (!m->isInteger(ctx) && m->getOwnAttributeDirect(ctx, rt.bootstrap().sym.classSide) == PROTO_TRUE)
-        return PROTO_FALSE;
-    return PROTO_TRUE;
+    if (!sel || !r || r == PROTO_NONE || isRuntimePrivateSelector(ctx, sel)) return PROTO_FALSE;
+    return isMethodValue(rt, ctx, r->getAttribute(ctx, sel)) ? PROTO_TRUE : PROTO_FALSE;
 }
 
-// aClass selectors → the selectors of the instance-side methods the class
-// itself defines, sorted (internal selectors, those starting with '__', are
-// left out).
+// aClass lookupSelector: aSelector → the behavior (a class, or a metaclass
+// for the class side) whose method answers aSelector for the receiver's
+// instances, or nil: the lookup a send to an instance does, along the
+// receiver's resolution order. Pharo answers the CompiledMethod; protoST has
+// no method objects, so it answers the method's holder, which is what
+// `(C lookupSelector: s) methodClass` gives in Pharo (STATUS D52).
+const proto::ProtoObject* prim_Behavior_lookupSelector(STRuntime& rt, proto::ProtoContext* ctx,
+                                                       const proto::ProtoObject* r,
+                                                       const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw NativeError("lookupSelector: expects 1 arg");
+    const proto::ProtoString* sel = a[0] ? a[0]->asString(ctx) : nullptr;
+    if (!sel || !r || r == PROTO_NONE || isRuntimePrivateSelector(ctx, sel)) return PROTO_NONE;
+    sel = sel->intern(ctx);
+    const proto::ProtoObject* m = r->getAttribute(ctx, sel);
+    if (!isMethodValue(rt, ctx, m)) return PROTO_NONE;
+    if (r->getOwnAttributeDirect(ctx, sel) == m) return r;
+    if (const proto::ProtoList* chain = r->getParents(ctx)) {
+        TransientPin pinChain(ctx, reinterpret_cast<const proto::ProtoObject*>(chain));
+        const proto::proto_ulong n = chain->getSize(ctx);
+        for (proto::proto_ulong i = 0; i < n; ++i) {
+            const proto::ProtoObject* p = chain->getAt(ctx, listIndex(i));
+            if (p && p != PROTO_NONE && p->getOwnAttributeDirect(ctx, sel) == m) return p;
+        }
+    }
+    return PROTO_NONE;
+}
+
+// aBehavior __hasAncestor: aClass → whether aClass is on the receiver's
+// parent chain, the primary superclasses and the `uses:` / addBehavior:
+// mixins alike (the receiver itself excluded). This is the ancestor set that
+// method lookup and `on:do:` handler selection use (HandlerStack.cpp
+// matchesGuard), so `isKindOf:` and `inheritsFrom:` answer the same question
+// as they do (review round 3, R3-L2).
+const proto::ProtoObject* prim_Behavior_hasAncestor(STRuntime&, proto::ProtoContext* ctx,
+                                                    const proto::ProtoObject* r,
+                                                    const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw NativeError("__hasAncestor: expects 1 arg");
+    const proto::ProtoObject* c = a[0];
+    if (!r || !c || r == c || c == PROTO_NONE) return PROTO_FALSE;
+    return r->hasParent(ctx, c) != 0 ? PROTO_TRUE : PROTO_FALSE;
+}
+
+// anObject isKindOf: aClass → whether the receiver's class is aClass or has
+// aClass among its ancestors (superclasses and `uses:` / addBehavior:
+// mixins alike, the set __hasAncestor: answers for). Until 0.10.0 this was
+// `c := self class. ^ c == aClass or: [c __hasAncestor: aClass]` in
+// lib/kernel/object.st: a method activation and two sends for one pointer
+// comparison and one walk of the class's parent chain. The class is the
+// receiver's real class, as Pharo's `self class`, a special-selector
+// bytecode that a `class` method does not override.
+const proto::ProtoObject* prim_Object_isKindOf(STRuntime& rt, proto::ProtoContext* ctx,
+                                               const proto::ProtoObject* r,
+                                               const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw NativeError("isKindOf: expects 1 arg");
+    const proto::ProtoObject* c = prim_Object_class(rt, ctx, r, nullptr, 0);
+    if (c == a[0]) return PROTO_TRUE;
+    return prim_Behavior_hasAncestor(rt, ctx, c, a, 1);
+}
+
+// aMetaclass soleInstance → the class it describes (Pharo's soleInstance,
+// also instanceClass).
+const proto::ProtoObject* prim_Metaclass_soleInstance(STRuntime& rt, proto::ProtoContext* ctx,
+                                                      const proto::ProtoObject* r,
+                                                      const proto::ProtoObject* const*, int) {
+    const proto::ProtoObject* s =
+        r ? r->getOwnAttributeDirect(ctx, rt.bootstrap().sym.soleInstance) : nullptr;
+    return (s && s != PROTO_NONE) ? s : PROTO_NONE;
+}
+
+// aMetaclass new / basicNew / newChild, Metaclass new: refused. A metaclass
+// has exactly one instance, its class, made with it by subclass: (Pharo's
+// Metaclass >> new answers "A Metaclass should only have one instance!").
+const proto::ProtoObject* prim_Metaclass_refuseNew(STRuntime&, proto::ProtoContext*,
+                                                   const proto::ProtoObject*,
+                                                   const proto::ProtoObject* const*, int) {
+    throw ClassedErrorSignal("Error",
+        "A Metaclass should only have one instance: a class and its metaclass are made by subclass:");
+}
+
+// Behavior new, Class new (and basicNew, newChild), review round 3 (R3-L1):
+// a behavior is a class or a metaclass, and protoST makes both only with
+// subclass:, which names the class and gives it its metaclass. Pharo's
+// `Class new` builds an anonymous class; protoST has no anonymous classes
+// (a class is known by its name), so the message is refused, as for a
+// metaclass, instead of answering an object that is neither (STATUS D52).
+const proto::ProtoObject* prim_Behavior_refuseNew(STRuntime&, proto::ProtoContext*,
+                                                  const proto::ProtoObject*,
+                                                  const proto::ProtoObject* const*, int) {
+    throw ClassedErrorSignal("Error",
+        "A Behavior is a class or a metaclass, made by subclass:; protoST has no anonymous classes");
+}
+
+// aClass selectors → the selectors of the methods the class itself defines
+// for its instances (a metaclass: the class-side methods), sorted; internal
+// selectors, those starting with '__', are left out.
 const proto::ProtoObject* prim_Object_selectors(STRuntime& rt, proto::ProtoContext* ctx,
                                                 const proto::ProtoObject* r,
                                                 const proto::ProtoObject* const*, int) {
-    struct Sink { STRuntime* rt; std::vector<std::string> names; bool classSide; };
-    const proto::ProtoObject* cls = soleInstanceOf(ctx, r);
-    Sink sink{&rt, {}, cls != nullptr};
-    if (cls) r = cls;   // a metaclass lists its class's class-side methods
+    struct Sink { STRuntime* rt; std::vector<std::string> names; };
+    Sink sink{&rt, {}};
     if (r && r != PROTO_NONE && !r->isInteger(ctx) && !r->asString(ctx)) {
         r->processOwnAttributes(ctx, &sink,
             [](proto::ProtoContext* c, void* self, const proto::ProtoString* key,
@@ -1238,9 +1763,6 @@ const proto::ProtoObject* prim_Object_selectors(STRuntime& rt, proto::ProtoConte
                 std::string name = key->toStdString(c);
                 if (name.rfind("__", 0) == 0 || name.rfind("_iv_", 0) == 0) return;
                 if (!isMethodValue(*k->rt, c, value)) return;
-                const bool classSideMethod = !value->isInteger(c)
-                    && value->getOwnAttributeDirect(c, k->rt->bootstrap().sym.classSide) == PROTO_TRUE;
-                if (classSideMethod != k->classSide) return;
                 k->names.push_back(name);
             });
     }
@@ -1340,9 +1862,9 @@ const proto::ProtoObject* prim_Object_versionString(STRuntime&, proto::ProtoCont
 }
 
 // recv isClassObject → true when the receiver is a class (it owns the
-// `__class_name__` stamp) rather than an instance of one. Printing uses it
-// to show a class by name even when the class defines instance-side
-// printOn: / printString, which a class object would otherwise inherit.
+// `__class_name__` stamp) rather than an instance of one; `Object >> isClass`
+// answers it. Since D52 a class never runs its instances' methods, so the
+// kernel no longer needs it as a guard.
 const proto::ProtoObject* prim_Object_isClassObject(STRuntime& rt, proto::ProtoContext* ctx,
                                                     const proto::ProtoObject* r,
                                                     const proto::ProtoObject* const*, int) {
@@ -1479,6 +2001,15 @@ const proto::ProtoObject* prim_Object_ifNilIfNotNil(STRuntime& rt, proto::ProtoC
     return invokeNilTestBlock(rt, ctx, a[1], r);
 }
 
+// `ifNotNil:ifNil:` — the same with the arms in the other order (bound since
+// 0.10.0; it was listed as a nil test but had no method).
+const proto::ProtoObject* prim_Object_ifNotNilIfNil(STRuntime& rt, proto::ProtoContext* ctx,
+                                                     const proto::ProtoObject* r,
+                                                     const proto::ProtoObject* const* a, int) {
+    if (r == PROTO_NONE) return invokeBlock(rt, ctx, a[1], nullptr, 0);
+    return invokeNilTestBlock(rt, ctx, a[0], r);
+}
+
 // --- D18: identity and default equality on Object --------------------------
 //
 // `==` is pointer identity; `~~` its negation. `=` defaults to identity (a
@@ -1564,7 +2095,6 @@ const proto::ProtoObject* prim_Object_setInstVarFromTo(
 } // anon
 
 void installObjectPrimitives(STRuntime& rt) {
-    auto& reg = rt.registry();
     auto& b   = rt.bootstrap();
     {
         // BL-1: `newChild` and the conventional Smalltalk `new` both
@@ -1572,123 +2102,156 @@ void installObjectPrimitives(STRuntime& rt) {
         // such as `Counter class >> startingAt:` call `self new`; bind `new`
         // as an alias so that pattern resolves without forcing user code to
         // spell `newChild`.
-        auto newChildPrim = reg.registerPrim(prim_Object_newChild);
-        bindPrimitive(rt, b.objectProto, "newChild", newChildPrim);
-        bindPrimitive(rt, b.objectProto, "new", newChildPrim);
+        // D52: the class protocol (new, subclass:, selectors, ...) is bound
+        // on Behavior, which every class and metaclass reaches and no
+        // instance does.
+        const proto::ProtoMethod newChildPrim = primitiveMethod<prim_Object_newChild>;
+        bindPrimitive(rt, b.behaviorProto, "newChild", newChildPrim);
+        bindPrimitive(rt, b.behaviorProto, "new", newChildPrim);
         // basicNew: the raw allocator, kept available when a class overrides new.
-        bindPrimitive(rt, b.objectProto, "basicNew", newChildPrim);
+        bindPrimitive(rt, b.behaviorProto, "basicNew", newChildPrim);
     }
-    bindPrimitive(rt, b.objectProto, "__installMethod:as:",
-                  reg.registerPrim(prim_Object_installMethod));
-    bindPrimitive(rt, b.objectProto, "__installClassMethod:as:",
-                  reg.registerPrim(prim_Object_installClassMethod));
+    bindPrimitive(rt, b.behaviorProto, "__installMethod:as:",
+                  primitiveMethod<prim_Object_installMethod>);
+    bindPrimitive(rt, b.behaviorProto, "__installClassMethod:as:",
+                  primitiveMethod<prim_Object_installClassMethod>);
     bindPrimitive(rt, b.objectProto, "asActor",
-                  reg.registerPrim(prim_Object_asActor));
+                  primitiveMethod<prim_Object_asActor>);
     bindPrimitive(rt, b.objectProto, "asHighPriorityActor",
-                  reg.registerPrim(prim_Object_asHighPriorityActor));
+                  primitiveMethod<prim_Object_asHighPriorityActor>);
     bindPrimitive(rt, b.objectProto, "asLowPriorityActor",
-                  reg.registerPrim(prim_Object_asLowPriorityActor));
+                  primitiveMethod<prim_Object_asLowPriorityActor>);
     // Optimistic-concurrency CAS on a single instance variable — the raw,
     // unwrapped form of protoCore's atomic attribute compare-and-swap. See
     // the Atom class for the wrapped idiom.
     bindPrimitive(rt, b.objectProto, "setInstVar:from:to:",
-                  reg.registerPrim(prim_Object_setInstVarFromTo));
+                  primitiveMethod<prim_Object_setInstVarFromTo>);
     // BL-3: rich printString. `__setClassName:` is emitted by the compiler's
     // ClassDecl path; `printString` is the default inherited by every object.
-    bindPrimitive(rt, b.objectProto, "__setClassName:",
-                  reg.registerPrim(prim_Object_setClassName));
+    bindPrimitive(rt, b.behaviorProto, "__setClassName:",
+                  primitiveMethod<prim_Object_setClassName>);
     // D19: `__initClassVars:` is emitted by the compiler's ClassDecl path
     // when the class declares `classVariableNames: '...'`. It installs each
     // name as `_iv_<name>` = nil on the class object so instance-side reads
     // via the shared `_iv_<name>` chain walk pick up the shared storage.
-    bindPrimitive(rt, b.objectProto, "__initClassVars:",
-                  reg.registerPrim(prim_Object_initClassVars));
+    bindPrimitive(rt, b.behaviorProto, "__initClassVars:",
+                  primitiveMethod<prim_Object_initClassVars>);
     // T3-a: `subclass:` as a runtime message so any class object — including
     // one imported from a module — can be subclassed via an expression
     // receiver, not just the compiler's textual `Identifier subclass: …` form.
-    bindPrimitive(rt, b.objectProto, "subclass:",
-                  reg.registerPrim(prim_Object_subclass));
-    bindPrimitive(rt, b.objectProto, "subclass:instanceVariableNames:",
-                  reg.registerPrim(prim_Object_subclassIvars));
+    bindPrimitive(rt, b.behaviorProto, "subclass:",
+                  primitiveMethod<prim_Object_subclass>);
+    bindPrimitive(rt, b.behaviorProto, "subclass:instanceVariableNames:",
+                  primitiveMethod<prim_Object_subclassIvars>);
     // T3-b: multiple inheritance / mixins. `subclass:uses:` and
     // `subclass:instanceVariableNames:uses:` assemble a class with several
     // parents. The compiler's textual `Object subclass: #Foo uses: { … }`
     // form desugars to a send of these selectors; they also serve the
     // expression-receiver form (e.g. an imported module class).
-    bindPrimitive(rt, b.objectProto, "subclass:uses:",
-                  reg.registerPrim(prim_Object_subclassUses));
-    bindPrimitive(rt, b.objectProto, "subclass:instanceVariableNames:uses:",
-                  reg.registerPrim(prim_Object_subclassIvarsUses));
+    bindPrimitive(rt, b.behaviorProto, "subclass:uses:",
+                  primitiveMethod<prim_Object_subclassUses>);
+    bindPrimitive(rt, b.behaviorProto, "subclass:instanceVariableNames:uses:",
+                  primitiveMethod<prim_Object_subclassIvarsUses>);
     // T3-c: on-the-fly behaviour composition. `addBehavior:` composes a mixin
     // into a class at runtime by rebuilding the class with the mixin baked
     // into its base chain; `addParent:` is a lower-level alias. Affects the
     // class and instances created after the call (see docs/LANGUAGE.md §4.12).
     {
-        auto addBehaviorPrim = reg.registerPrim(prim_Object_addBehavior);
-        bindPrimitive(rt, b.objectProto, "addBehavior:", addBehaviorPrim);
-        bindPrimitive(rt, b.objectProto, "addParent:", addBehaviorPrim);
+        const proto::ProtoMethod addBehaviorPrim = primitiveMethod<prim_Object_addBehavior>;
+        bindPrimitive(rt, b.behaviorProto, "addBehavior:", addBehaviorPrim);
+        bindPrimitive(rt, b.behaviorProto, "addParent:", addBehaviorPrim);
     }
     bindPrimitive(rt, b.objectProto, "printString",
-                  reg.registerPrim(prim_Object_printString));
+                  primitiveMethod<prim_Object_printString>);
     bindPrimitive(rt, b.objectProto, "basicPrintString",
-                  reg.registerPrim(prim_Object_printString));
-    bindPrimitive(rt, b.objectProto, "__printEnter", reg.registerPrim(prim_Object_printEnter));
-    bindPrimitive(rt, b.objectProto, "__printExit", reg.registerPrim(prim_Object_printExit));
-    bindPrimitive(rt, b.objectProto, "__stdout:", reg.registerPrim(prim_Object_stdout));
-    bindPrimitive(rt, b.objectProto, "class", reg.registerPrim(prim_Object_class));
-    bindPrimitive(rt, b.objectProto, "__globalIncludes:", reg.registerPrim(prim_Object_globalIncludes));
-    bindPrimitive(rt, b.objectProto, "__globalAt:", reg.registerPrim(prim_Object_globalAt));
-    bindPrimitive(rt, b.objectProto, "__globalAt:put:", reg.registerPrim(prim_Object_globalAtPut));
-    bindPrimitive(rt, b.objectProto, "name", reg.registerPrim(prim_Object_name));
-    bindPrimitive(rt, b.objectProto, "isClassObject", reg.registerPrim(prim_Object_isClassObject));
-    bindPrimitive(rt, b.objectProto, "__subclassNamed:", reg.registerPrim(prim_Object_subclassNamed));
-    bindPrimitive(rt, b.actorProto, "__wrappedObject", reg.registerPrim(prim_Actor_wrappedObject));
-    bindPrimitive(rt, b.objectProto, "instVarNamed:", reg.registerPrim(prim_Object_instVarNamed));
-    bindPrimitive(rt, b.objectProto, "instVarNamed:put:", reg.registerPrim(prim_Object_instVarNamedPut));
-    bindPrimitive(rt, b.objectProto, "__setInstVarNames:", reg.registerPrim(prim_Object_setInstVarNames));
-    bindPrimitive(rt, b.objectProto, "__instVarNamesString", reg.registerPrim(prim_Object_instVarNamesString));
-    bindPrimitive(rt, b.objectProto, "canUnderstand:", reg.registerPrim(prim_Object_canUnderstand));
-    bindPrimitive(rt, b.objectProto, "selectors", reg.registerPrim(prim_Object_selectors));
-    bindPrimitive(rt, b.objectProto, "__allClasses", reg.registerPrim(prim_Object_allClasses));
-    bindPrimitive(rt, b.objectProto, "__clockMilliseconds", reg.registerPrim(prim_Object_clockMilliseconds));
-    bindPrimitive(rt, b.objectProto, "__clockMicroseconds", reg.registerPrim(prim_Object_clockMicroseconds));
-    bindPrimitive(rt, b.objectProto, "__localTimeFields", reg.registerPrim(prim_Object_localTimeFields));
-    bindPrimitive(rt, b.objectProto, "__entropySeed", reg.registerPrim(prim_Object_entropySeed));
-    bindPrimitive(rt, b.objectProto, "__versionString", reg.registerPrim(prim_Object_versionString));
+                  primitiveMethod<prim_Object_printString>);
+    bindPrimitive(rt, b.objectProto, "__printEnter", primitiveMethod<prim_Object_printEnter>);
+    bindPrimitive(rt, b.objectProto, "__printExit", primitiveMethod<prim_Object_printExit>);
+    bindPrimitive(rt, b.objectProto, "__stdout:", primitiveMethod<prim_Object_stdout>);
+    bindPrimitive(rt, b.objectProto, "class", primitiveMethod<prim_Object_class>);
+    bindPrimitive(rt, b.objectProto, "__globalIncludes:", primitiveMethod<prim_Object_globalIncludes>);
+    bindPrimitive(rt, b.objectProto, "__globalAt:", primitiveMethod<prim_Object_globalAt>);
+    bindPrimitive(rt, b.objectProto, "__globalAt:put:", primitiveMethod<prim_Object_globalAtPut>);
+    bindPrimitive(rt, b.behaviorProto, "name", primitiveMethod<prim_Object_name>);
+    bindPrimitive(rt, b.objectProto, "isClassObject", primitiveMethod<prim_Object_isClassObject>);
+    bindPrimitive(rt, b.behaviorProto, "__subclassNamed:", primitiveMethod<prim_Object_subclassNamed>);
+    bindPrimitive(rt, b.actorProto, "__wrappedObject", primitiveMethod<prim_Actor_wrappedObject>);
+    bindPrimitive(rt, b.objectProto, "instVarNamed:", primitiveMethod<prim_Object_instVarNamed>);
+    bindPrimitive(rt, b.objectProto, "instVarNamed:put:", primitiveMethod<prim_Object_instVarNamedPut>);
+    bindPrimitive(rt, b.behaviorProto, "__setInstVarNames:", primitiveMethod<prim_Object_setInstVarNames>);
+    bindPrimitive(rt, b.behaviorProto, "__instVarNamesString", primitiveMethod<prim_Object_instVarNamesString>);
+    bindPrimitive(rt, b.behaviorProto, "canUnderstand:", primitiveMethod<prim_Object_canUnderstand>);
+    bindPrimitive(rt, b.behaviorProto, "lookupSelector:", primitiveMethod<prim_Behavior_lookupSelector>);
+    bindPrimitive(rt, b.behaviorProto, "__hasAncestor:", primitiveMethod<prim_Behavior_hasAncestor>);
+    bindPrimitive(rt, b.objectProto, "isKindOf:", primitiveMethod<prim_Object_isKindOf>);
+    {
+        const proto::ProtoMethod sole = primitiveMethod<prim_Metaclass_soleInstance>;
+        bindPrimitive(rt, b.metaclassProto, "soleInstance", sole);
+        bindPrimitive(rt, b.metaclassProto, "instanceClass", sole);
+        // A metaclass makes no instances, and Metaclass makes no metaclasses
+        // from user code (D52).
+        const proto::ProtoMethod refuse = primitiveMethod<prim_Metaclass_refuseNew>;
+        // Behavior class, which Class class and Metaclass class inherit: a
+        // send to Behavior, Class or a subclass of them (R3-L1).
+        const proto::ProtoMethod refuseBehavior = primitiveMethod<prim_Behavior_refuseNew>;
+        for (const char* sel : {"new", "basicNew", "newChild"}) {
+            bindPrimitive(rt, b.metaclassProto, sel, refuse);
+            bindClassPrimitive(rt, b.metaclassProto, sel, refuse);
+            bindClassPrimitive(rt, b.behaviorProto, sel, refuseBehavior);
+        }
+    }
+    bindPrimitive(rt, b.behaviorProto, "selectors", primitiveMethod<prim_Object_selectors>);
+    bindPrimitive(rt, b.objectProto, "__allClasses", primitiveMethod<prim_Object_allClasses>);
+    bindPrimitive(rt, b.objectProto, "__clockMilliseconds", primitiveMethod<prim_Object_clockMilliseconds>);
+    bindPrimitive(rt, b.objectProto, "__clockMicroseconds", primitiveMethod<prim_Object_clockMicroseconds>);
+    bindPrimitive(rt, b.objectProto, "__localTimeFields", primitiveMethod<prim_Object_localTimeFields>);
+    bindPrimitive(rt, b.objectProto, "__entropySeed", primitiveMethod<prim_Object_entropySeed>);
+    bindPrimitive(rt, b.objectProto, "__versionString", primitiveMethod<prim_Object_versionString>);
     bindPrimitive(rt, b.objectProto, "perform:withArguments:",
-                  reg.registerPrim(prim_Object_performWithArguments));
-    bindPrimitive(rt, b.objectProto, "respondsTo:", reg.registerPrim(prim_Object_respondsTo));
-    bindPrimitive(rt, b.objectProto, "superclass", reg.registerPrim(prim_Object_superclass));
-    bindPrimitive(rt, b.objectProto, "shallowCopy", reg.registerPrim(prim_Object_shallowCopy));
-    bindPrimitive(rt, b.objectProto, "identityHash", reg.registerPrim(prim_Object_identityHash));
-    bindPrimitive(rt, b.objectProto, "hash", reg.registerPrim(prim_Object_hash));
+                  primitiveMethod<prim_Object_performWithArguments>);
+    {
+        const proto::ProtoMethod perform = primitiveMethod<prim_Object_performWith>;
+        bindPrimitive(rt, b.objectProto, "perform:", perform);
+        bindPrimitive(rt, b.objectProto, "perform:with:", perform);
+        bindPrimitive(rt, b.objectProto, "perform:with:with:", perform);
+        bindPrimitive(rt, b.objectProto, "perform:with:with:with:", perform);
+    }
+    bindPrimitive(rt, b.objectProto, "respondsTo:", primitiveMethod<prim_Object_respondsTo>);
+    bindPrimitive(rt, b.behaviorProto, "superclass", primitiveMethod<prim_Object_superclass>);
+    bindPrimitive(rt, b.objectProto, "shallowCopy", primitiveMethod<prim_Object_shallowCopy>);
+    bindPrimitive(rt, b.objectProto, "identityHash", primitiveMethod<prim_Object_identityHash>);
+    bindPrimitive(rt, b.objectProto, "hash", primitiveMethod<prim_Object_hash>);
+    bindPrimitive(rt, b.integerProto, "__hashOver:", primitiveMethod<prim_Integer_hashOver>);
+    bindPrimitive(rt, b.objectProto, "__hashMix:", primitiveMethod<prim_Object_hashMix>);
     // F6 v2 T6: sleep primitive — test-only helper for the wall-clock
     // parallelism proof. Bound on objectProto so any object responds to it.
     bindPrimitive(rt, b.objectProto, "sleep:",
-                  reg.registerPrim(prim_Object_sleepMs));
+                  primitiveMethod<prim_Object_sleepMs>);
     // D9: nil-test protocol — bound on Object so every object (nil included,
     // since nilProto descends from objectProto) answers it.
     bindPrimitive(rt, b.objectProto, "isNil",
-                  reg.registerPrim(prim_Object_isNil));
+                  primitiveMethod<prim_Object_isNil>);
     bindPrimitive(rt, b.objectProto, "notNil",
-                  reg.registerPrim(prim_Object_notNil));
+                  primitiveMethod<prim_Object_notNil>);
     bindPrimitive(rt, b.objectProto, "ifNil:",
-                  reg.registerPrim(prim_Object_ifNil));
+                  primitiveMethod<prim_Object_ifNil>);
     bindPrimitive(rt, b.objectProto, "ifNotNil:",
-                  reg.registerPrim(prim_Object_ifNotNil));
+                  primitiveMethod<prim_Object_ifNotNil>);
     bindPrimitive(rt, b.objectProto, "ifNil:ifNotNil:",
-                  reg.registerPrim(prim_Object_ifNilIfNotNil));
+                  primitiveMethod<prim_Object_ifNilIfNotNil>);
+    bindPrimitive(rt, b.objectProto, "ifNotNil:ifNil:",
+                  primitiveMethod<prim_Object_ifNotNilIfNil>);
     // D18: identity comparison and default equality, bound on Object so every
     // object answers them. `=` here is the identity default; value-equality
     // overrides on SmallInteger / String shadow it on those types.
     bindPrimitive(rt, b.objectProto, "==",
-                  reg.registerPrim(prim_Object_identEq));
+                  primitiveMethod<prim_Object_identEq>);
     bindPrimitive(rt, b.objectProto, "~~",
-                  reg.registerPrim(prim_Object_identNe));
+                  primitiveMethod<prim_Object_identNe>);
     bindPrimitive(rt, b.objectProto, "=",
-                  reg.registerPrim(prim_Object_eq));
+                  primitiveMethod<prim_Object_eq>);
     bindPrimitive(rt, b.objectProto, "~=",
-                  reg.registerPrim(prim_Object_ne));
+                  primitiveMethod<prim_Object_ne>);
 }
 
 // F6 v6 (2026-05-23 night): WorkerPool singleton — exposes the actor
@@ -1727,7 +2290,6 @@ const proto::ProtoObject* prim_WorkerPool_paused(STRuntime& rt,
 } // namespace
 
 void installWorkerPoolGlobal(STRuntime& rt) {
-    auto& reg = rt.registry();
     auto& b   = rt.bootstrap();
     auto* ctx = rt.rootCtx();
 
@@ -1735,11 +2297,11 @@ void installWorkerPoolGlobal(STRuntime& rt) {
         ->newChild(ctx, /*isMutable=*/true);
 
     bindPrimitive(rt, pool, "stopProcessing",
-                  reg.registerPrim(prim_WorkerPool_stop));
+                  primitiveMethod<prim_WorkerPool_stop>);
     bindPrimitive(rt, pool, "startProcessing",
-                  reg.registerPrim(prim_WorkerPool_start));
+                  primitiveMethod<prim_WorkerPool_start>);
     bindPrimitive(rt, pool, "isPaused",
-                  reg.registerPrim(prim_WorkerPool_paused));
+                  primitiveMethod<prim_WorkerPool_paused>);
 
     auto* key = proto::ProtoString::createSymbol(ctx, "WorkerPool");
     auto* g = rt.globals();
@@ -1750,7 +2312,6 @@ void installWorkerPoolGlobal(STRuntime& rt) {
 // `from:` on it, and register it in globals so user code can write
 // `m := Import from: 'foo'.`
 void installImportGlobal(STRuntime& rt) {
-    auto& reg = rt.registry();
     auto& b   = rt.bootstrap();
     auto* ctx = rt.rootCtx();
 
@@ -1759,8 +2320,8 @@ void installImportGlobal(STRuntime& rt) {
         ->newChild(ctx, /*isMutable=*/true);
 
     // Bind from: on it.
-    int idx = reg.registerPrim(prim_Import_from);
-    bindPrimitive(rt, importObj, "from:", idx);
+    const proto::ProtoMethod importFrom = primitiveMethod<prim_Import_from>;
+    bindPrimitive(rt, importObj, "from:", importFrom);
 
     // Register in globals so PUSH_GLOBAL resolves `Import`.
     auto* importKey = proto::ProtoString::createSymbol(ctx, "Import");

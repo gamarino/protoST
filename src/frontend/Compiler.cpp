@@ -1,6 +1,7 @@
 #include "Compiler.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cctype>
 #include <cstdlib>
 #include <mutex>
@@ -25,6 +26,35 @@ std::mutex g_classRegistryMutex;
 std::unordered_map<std::string, Compiler::ClassInfo>& classRegistry() {
     static std::unordered_map<std::string, Compiler::ClassInfo> registry;
     return registry;
+}
+
+// S37: whether every class on `className`'s chain -- its superclasses and
+// mixins -- is known here, so the instance and class variables its methods
+// can name are all known at compile time. A class missing from `classes`
+// (built by the `subclass:` message, or imported by a module that has not run
+// yet) makes the chain unknown; a chain ends at a class with no superclass
+// name (a class the runtime builds in C++, publishNativeClasses).
+static bool chainFullyKnown(
+        const std::unordered_map<std::string, Compiler::ClassInfo>& classes,
+        const std::string& className, std::unordered_set<std::string>& seen) {
+    std::string cur = className;
+    while (!cur.empty()) {
+        if (!seen.insert(cur).second) return true;   // already checked
+        auto it = classes.find(cur);
+        if (it == classes.end()) return false;
+        if (it->second.mixinsUnknown) return false;
+        for (const auto& mixin : it->second.mixinNames)
+            if (!chainFullyKnown(classes, mixin, seen)) return false;
+        cur = it->second.superclassName;
+    }
+    return true;
+}
+
+static bool chainFullyKnown(
+        const std::unordered_map<std::string, Compiler::ClassInfo>& classes,
+        const std::string& className) {
+    std::unordered_set<std::string> seen;
+    return chainFullyKnown(classes, className, seen);
 }
 
 // The instance variables visible in a method of `className`: its own and every
@@ -94,9 +124,19 @@ struct ScopeWalker {
     // references it from a nested block no longer boxes the variable into an
     // (uninitialised) closure dict.
     const std::unordered_set<std::string>* instVars = nullptr;
+    // S37: a method of a class whose chain is not fully known. An assignment
+    // in it declares nothing (a method's temporaries are its `| t |` list): a
+    // name it assigns that is not a temporary or an argument is an instance
+    // or class variable resolved when the method is installed, so it is a
+    // reference, never a captured binding of the method.
+    bool lateNames = false;
 };
 
 using ClassMap = std::unordered_map<std::string, Compiler::ClassInfo>;
+
+// Set while analysing a de-optimised copy of an inlined block
+// (Compiler::compileDeoptBlock): nothing in it is inlined.
+thread_local bool t_analyseWithoutInlining = false;
 
 // Forward declarations.
 void walkNode(const Node& n, ScopeWalker& cur,
@@ -215,8 +255,8 @@ void walkNode(const Node& n, ScopeWalker& cur,
             //     it as a direct reference so it bubbles up as a free var
             //     and lands in an outer scope's captured dict (F3-C5).
             if (!n.text.empty()) {
-                if (cur.isBlock) cur.directRefs.insert(n.text);
-                else             cur.declared.insert(n.text);
+                if (cur.isBlock || cur.lateNames) cur.directRefs.insert(n.text);
+                else                              cur.declared.insert(n.text);
             }
             if (!n.children.empty()) walkNode(*n.children[0], cur, out, nullptr, classes);
             return;
@@ -232,16 +272,22 @@ void walkNode(const Node& n, ScopeWalker& cur,
         case NodeKind::KeywordSend: {
             // A control send the compiler inlines: its block arguments are
             // not closures, their bodies run in the enclosing scope.
-            const Compiler::InlineShape shape = Compiler::inlineShapeOf(n);
+            const Compiler::InlineShape shape = t_analyseWithoutInlining
+                ? Compiler::InlineShape::None : Compiler::inlineShapeOf(n);
             if (shape == Compiler::InlineShape::None) {
                 for (const auto& child : n.children)
                     if (child) walkNode(*child, cur, out, nullptr, classes);
                 return;
             }
-            const bool isToDo = shape == Compiler::InlineShape::ToDo;
+            // Only whileTrue: / whileFalse: inline their receiver block; the
+            // receiver of the other shapes is an ordinary expression, so a
+            // block literal there (`[ x ] and: [ ... ]`) is a real closure
+            // and its free variables are captured.
+            const bool receiverInlined = shape == Compiler::InlineShape::WhileTrue;
             std::vector<InlinedFree> blocks;
-            for (const auto& child : n.children) {
-                if (child->kind != NodeKind::Block) {
+            for (size_t i = 0; i < n.children.size(); ++i) {
+                const auto& child = n.children[i];
+                if (child->kind != NodeKind::Block || (i == 0 && !receiverInlined)) {
                     walkNode(*child, cur, out, nullptr, classes);
                     continue;
                 }
@@ -249,13 +295,18 @@ void walkNode(const Node& n, ScopeWalker& cur,
                 walkBlockScope(*child, cur, out, classes, &f);
                 blocks.push_back(std::move(f));
             }
-            // to:do: keeps the real block when an inner block captures its
-            // argument (the argument then needs a binding per iteration).
+            // The send keeps its real blocks when an inner block captures an
+            // argument or a temporary of one of them (a to:do: loop variable,
+            // an ifNotNil: argument, a `| t |`): each evaluation of the block
+            // then needs a binding of its own, which only a real block's
+            // activation gives (its captured dictionary).
             bool inlined = true;
-            if (isToDo) {
-                const Node& blk = *n.children[2];
+            for (size_t i = 0; i < n.children.size(); ++i) {
+                const Node& blk = *n.children[i];
+                if (blk.kind != NodeKind::Block || (i == 0 && !receiverInlined)) continue;
                 const auto& cap = out.capturedByScope[&blk];
-                inlined = cap.count(blk.stringList[0]) == 0;
+                for (const auto& name : blk.stringList)
+                    if (cap.count(name) != 0) inlined = false;
             }
             for (auto& f : blocks) {
                 if (inlined) {
@@ -326,6 +377,7 @@ void walkNode(const Node& n, ScopeWalker& cur,
                 ivarSet.erase(n.stringList[i]);  // a method-local shadows it
             }
             methodScope.instVars = &ivarSet;
+            methodScope.lateNames = classes && !chainFullyKnown(*classes, n.text);
             for (const auto& child : n.children) {
                 walkNode(*child, methodScope, out, &n, classes);
             }
@@ -362,6 +414,7 @@ void walkNode(const Node& n, ScopeWalker& cur,
                 ivarSet.erase(n.stringList[i]);
             }
             methodScope.instVars = &ivarSet;
+            methodScope.lateNames = classes && !chainFullyKnown(*classes, n.text);
             for (const auto& child : n.children) {
                 if (child) walkNode(*child, methodScope, out, &n, classes);
             }
@@ -436,6 +489,17 @@ std::unordered_map<std::string, Compiler::ClassInfo> Compiler::sharedClassRegist
     return classRegistry();
 }
 
+void Compiler::publishNativeClasses(const std::vector<std::string>& names) {
+    std::lock_guard<std::mutex> lock(g_classRegistryMutex);
+    for (const auto& name : names) {
+        // A class compiled from source under the same name keeps its entry.
+        if (classRegistry().count(name)) continue;
+        ClassInfo info;
+        info.name = name;
+        classRegistry()[name] = std::move(info);
+    }
+}
+
 void Compiler::publishToSharedClassRegistry(const Node& module) {
     if (module.kind != NodeKind::Module) return;
     std::lock_guard<std::mutex> lock(g_classRegistryMutex);
@@ -480,9 +544,14 @@ void Compiler::collectClasses(const Node& module) {
         if (!cd.children.empty() && cd.children[0]
             && (cd.children[0]->kind == NodeKind::DynArrayLit
                 || cd.children[0]->kind == NodeKind::ArrayLit)) {
-            for (const auto& el : cd.children[0]->children)
+            for (const auto& el : cd.children[0]->children) {
                 if (el && (el->kind == NodeKind::Identifier || el->kind == NodeKind::SymbolLit))
                     info.mixinNames.push_back(el->text);
+                else
+                    info.mixinsUnknown = true;
+            }
+        } else if (!cd.children.empty() && cd.children[0]) {
+            info.mixinsUnknown = true;
         }
         classes_[info.name] = std::move(info);
     }
@@ -509,8 +578,15 @@ void Compiler::collectClasses(const Node& module) {
         }
     }
     // A subclass may not redeclare an instance variable it inherits (as in
-    // Smalltalk): both would name the same slot of the object.
-    for (const auto& [name, info] : classes_) {
+    // Smalltalk): both would name the same slot of the object. Only the
+    // classes this module declares are checked: the registry also holds
+    // classes of other modules -- of the program that is importing this one,
+    // for instance -- whose errors are theirs (a class whose superclass the
+    // compiler could not see is checked when it is built, S37).
+    for (const auto& topPtr : module.children) {
+        if (!topPtr || topPtr->kind != NodeKind::ClassDecl) continue;
+        const std::string& name = topPtr->text;
+        const ClassInfo& info = classes_.at(name);
         std::unordered_set<std::string> seen;
         std::string sup = info.superclassName;
         while (!sup.empty() && !seen.count(sup)) {
@@ -555,6 +631,7 @@ std::unique_ptr<BytecodeModule> Compiler::compileModule(const Node& mod) {
     }
     bc->emit(Op::RETURN_TOP, 0, currentLine_);
     recordLocalNames(*bc);
+    bc->routeSharedLocals();
     bc->setDebugName("<module>");
     return bc;
 }
@@ -717,19 +794,8 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         // names BEFORE emitting the body, so that emitExpr/emitStatement
         // can resolve identifiers against this class's inst vars before
         // falling back to globals.
-        currentMethodClass_         = n.text;
+        enterMethodClass(n);
         currentMethodDebugName_     = n.text + ">>" + (n.stringList.empty() ? std::string("<method>") : n.stringList[0]);
-        currentMethodIsClassSide_   = n.boolFlag;
-        {
-            auto it = classes_.find(n.text);
-            if (it != classes_.end()) {
-                currentInstVars_  = instVarsThroughChain(classes_, n.text, n.boolFlag);
-                currentClassVars_ = resolveClassVarsFor(n.text);
-            } else {
-                currentInstVars_.clear();
-                currentClassVars_.clear();
-            }
-        }
         reportDuplicateNames(n.stringList, 1,
                              n.text + ">>" + (n.stringList.empty() ? std::string() : n.stringList[0]));
         // An argument or temporary may not reuse an instance variable's name
@@ -784,20 +850,22 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         if (n.children.empty()) {
             sub->emit(Op::PUSH_NIL, 0, currentLine_);
         }
-        emitStatements(*sub, n.children, 0, n.children.size());
         // ST-80 default return: a method returns `self` if there is no
         // explicit `^`. If the last statement is already a Return, the
         // body's RETURN was already emitted by emitStatement.
         bool endsWithReturn = !n.children.empty()
             && n.children.back()->kind == NodeKind::Return;
+        const bool lastLeftValue =
+            emitStatements(*sub, n.children, 0, n.children.size(), !endsWithReturn);
         if (!endsWithReturn) {
             // Discard the last expression's value, push self, and return.
-            if (!n.children.empty()) sub->emit(Op::POP, 0, currentLine_);
+            if (!n.children.empty() && lastLeftValue) sub->emit(Op::POP, 0, currentLine_);
             sub->emit(Op::PUSH_LOCAL, 0, currentLine_);  // self
             sub->emit(Op::RETURN, 0, currentLine_);
         }
 
         recordLocalNames(*sub);
+        sub->routeSharedLocals();
         sub->setDebugName(n.text + ">>" +
                           (n.stringList.empty() ? std::string("<method>")
                                                 : n.stringList[0]));
@@ -805,6 +873,9 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         // BL-1: record the defining class so the engine can resolve `super`
         // sends inside this method body (lookup starts at the class's parent).
         sub->setDefiningClass(n.text);
+        if (currentMethodLate_)
+            sub->setLateBinding(replMode_, std::vector<std::string>(
+                                               n.stringList.begin() + 1, n.stringList.end()));
         scopes_.pop_back();
 
         // Attach the method module as a sub-block of the outer (module) bytecode.
@@ -817,12 +888,10 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         //
         // D5 (MNT-b2): an instance-side method is installed via
         // `__installMethod:as:`; a `ClassName class >> sel` (n.boolFlag) via
-        // `__installClassMethod:as:`, which additionally stamps the method
-        // wrapper with `__class_side__`. Both still install onto the SAME class
-        // object — the metamodel is unchanged — but the marker lets the engine's
-        // SEND dispatch refuse a class-side method when the receiver is an
-        // instance (not a class), so class-side and instance-side protocols are
-        // no longer reachable from the same receiver.
+        // `__installClassMethod:as:`, which installs it on the class's
+        // metaclass (K14, D52, runtime/Bootstrap.h): the method holder of the
+        // class object, which its instances never reach. One selector can
+        // name a method on each side.
         auto classIdx    = m.internSymbol(n.text);
         auto selectorIdx = m.internSymbol(n.stringList[0]);
         auto installIdx  = m.internSymbol(
@@ -835,11 +904,8 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(installIdx), currentLine_);  // → class
 
         // F4-U5: clear the method-body name-resolution context.
-        currentMethodClass_.clear();
         currentMethodDebugName_.clear();
-        currentInstVars_.clear();
-        currentClassVars_.clear();
-        currentMethodIsClassSide_ = false;
+        leaveMethodClass();
         return;
     }
     if (n.kind == NodeKind::CallMethodDecl) {
@@ -873,18 +939,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         const int nNamed = static_cast<int>(n.intValue2);
         const int nArgs  = nPos + nNamed;
 
-        currentMethodClass_       = n.text;
-        currentMethodIsClassSide_ = n.boolFlag;
-        {
-            auto it = classes_.find(n.text);
-            if (it != classes_.end()) {
-                currentInstVars_  = instVarsThroughChain(classes_, n.text, n.boolFlag);
-                currentClassVars_ = resolveClassVarsFor(n.text);
-            } else {
-                currentInstVars_.clear();
-                currentClassVars_.clear();
-            }
-        }
+        enterMethodClass(n);
         reportDuplicateNames(n.stringList, 1,
                              n.text + ">>" + (n.stringList.empty() ? std::string() : n.stringList[0]));
         // An argument or temporary may not reuse an instance variable's name
@@ -1004,19 +1059,24 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         if (bodyEmpty) {
             sub->emit(Op::PUSH_NIL, 0, currentLine_);
         }
-        emitStatements(*sub, n.children, static_cast<size_t>(nNamed), n.children.size());
         bool endsWithReturn = !bodyEmpty
             && n.children.back()->kind == NodeKind::Return;
+        const bool lastLeftValue = emitStatements(
+            *sub, n.children, static_cast<size_t>(nNamed), n.children.size(), !endsWithReturn);
         if (!endsWithReturn) {
-            if (!bodyEmpty) sub->emit(Op::POP, 0, currentLine_);
+            if (!bodyEmpty && lastLeftValue) sub->emit(Op::POP, 0, currentLine_);
             sub->emit(Op::PUSH_LOCAL, 0, currentLine_);  // self
             sub->emit(Op::RETURN, 0, currentLine_);
         }
 
         recordLocalNames(*sub);
+        sub->routeSharedLocals();
         sub->setDebugName(n.text + ">>" + n.stringList[0] + "(...)");
         currentMethodDebugName_ = sub->debugName();
         sub->setDefiningClass(n.text);
+        if (currentMethodLate_)
+            sub->setLateBinding(replMode_, std::vector<std::string>(
+                                               n.stringList.begin() + 1, n.stringList.end()));
         scopes_.pop_back();
 
         size_t blkIdx = m.addBlockModule(std::move(sub));
@@ -1037,14 +1097,19 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         m.emitWide(Op::PUSH_CONST,   static_cast<unsigned int>(selectorIdx), currentLine_);
         m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(installIdx), currentLine_);
 
-        currentMethodClass_.clear();
         currentMethodDebugName_.clear();
-        currentInstVars_.clear();
-        currentClassVars_.clear();
-        currentMethodIsClassSide_ = false;
+        leaveMethodClass();
         return;
     }
     if (n.kind == NodeKind::Assignment) {
+        // A statement whose value is discarded stores without the DUP
+        // (emitStatements omits the POP; 0.10.0).
+        const bool discard = discardValueOf_ == &n;
+        if (discard) discardValueOf_ = nullptr;
+        auto dupUnlessDiscarded = [&] {
+            if (discard) valueDiscarded_ = true;
+            else         m.emit(Op::DUP, 0, currentLine_);
+        };
         // Statement-level assignment. If the name is captured-by-an-inner-block,
         // it lives in the shared captured dict; otherwise it gets a local slot.
         // In both cases we DUP after evaluating the RHS so the assigned value
@@ -1055,7 +1120,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             if (reportUndeclaredInMethod(n.text)) return;
             emitExpr(m, *n.children[0]);
             auto sym = m.internSymbol(n.text);
-            m.emit(Op::DUP, 0, currentLine_);
+            dupUnlessDiscarded();
             m.emitWide(Op::STORE_CAPTURED, static_cast<unsigned int>(sym), currentLine_);
             return;
         }
@@ -1063,7 +1128,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         // itself wins over an instance variable of the same name.
         if (int slot = resolveLocal(n.text); slot >= 0) {
             emitExpr(m, *n.children[0]);
-            m.emit(Op::DUP, 0, currentLine_);
+            dupUnlessDiscarded();
             m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slot), currentLine_);
             return;
         }
@@ -1072,7 +1137,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             if (iv == n.text) {
                 emitExpr(m, *n.children[0]);
                 auto sym = m.internSymbol(n.text);
-                m.emit(Op::DUP, 0, currentLine_);
+                dupUnlessDiscarded();
                 m.emitWide(Op::STORE_INSTVAR, static_cast<unsigned int>(sym), currentLine_);
                 return;
             }
@@ -1083,10 +1148,17 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             if (cv == n.text) {
                 emitExpr(m, *n.children[0]);
                 auto sym = m.internSymbol(n.text);
-                m.emit(Op::DUP, 0, currentLine_);
+                dupUnlessDiscarded();
                 m.emitWide(Op::STORE_CLASSVAR, static_cast<unsigned int>(sym), currentLine_);
                 return;
             }
+        }
+        // S37: see emitExpr's Identifier case.
+        if (currentMethodLate_ && !n.text.empty()) {
+            emitExpr(m, *n.children[0]);
+            dupUnlessDiscarded();
+            emitLateVar(m, Op::STORE_LATE_VAR, n.text);
+            return;
         }
         // F7-REPL: at module scope, a top-level assignment binds a persistent
         // global so it is visible to subsequently-compiled REPL inputs. S10:
@@ -1096,14 +1168,14 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         if ((replMode_ && atModuleScope()) || assignsReplGlobalInBlock(n.text)) {
             emitExpr(m, *n.children[0]);
             auto sym = m.internSymbol(n.text);
-            m.emit(Op::DUP, 0, currentLine_);
+            dupUnlessDiscarded();
             m.emitWide(Op::STORE_GLOBAL, static_cast<unsigned int>(sym), currentLine_);
             return;
         }
         if (reportUndeclaredInMethod(n.text)) return;
         int slot = declareLocal(n.text);
         emitExpr(m, *n.children[0]);
-        m.emit(Op::DUP, 0, currentLine_);
+        dupUnlessDiscarded();
         m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slot), currentLine_);
         return;
     }
@@ -1204,6 +1276,16 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             // variables are not visible in methods): report it now instead of
             // failing when the method first runs. The REPL keeps the runtime
             // lookup, since its session variables are lowercase globals.
+            // S37: in a method of a class whose chain is not known here the
+            // name may be a variable the class inherits; it is resolved when
+            // the method is installed, and reported there if it is not one.
+            // Every such name, whatever its first character: an instance
+            // variable may be named `_x` or `X`; one that is not a variable
+            // becomes the global lookup (or the error) below, at install.
+            if (currentMethodLate_ && !n.text.empty()) {
+                emitLateVar(m, Op::PUSH_LATE_VAR, n.text);
+                return;
+            }
             if (!replMode_ && !currentMethodClass_.empty() && !n.text.empty()
                 && std::islower(static_cast<unsigned char>(n.text[0]))) {
                 error("undeclared variable '" + n.text + "' in " + currentMethodClass_
@@ -1220,19 +1302,28 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             // into the shared captured dict; otherwise use a local slot.
             // In both cases we DUP so the value is left on the stack as the
             // expression's result.
+            // A statement whose value is discarded stores without the DUP
+            // (emitStatements omits the POP). Only this node: an assignment
+            // nested in its value is an expression.
+            const bool discard = discardValueOf_ == &n;
+            if (discard) discardValueOf_ = nullptr;
+            auto dupUnlessDiscarded = [&] {
+                if (discard) valueDiscarded_ = true;
+                else         m.emit(Op::DUP, 0, currentLine_);
+            };
             if (reportArgumentAssignment(n.text)) { m.emit(Op::PUSH_NIL, 0, currentLine_); return; }
             if (isCaptured(n.text)) {
                 if (reportUndeclaredInMethod(n.text)) { m.emit(Op::PUSH_NIL, 0, currentLine_); return; }
                 emitExpr(m, *n.children[0]);
                 auto sym = m.internSymbol(n.text);
-                m.emit(Op::DUP, 0, currentLine_);
+                dupUnlessDiscarded();
                 m.emitWide(Op::STORE_CAPTURED, static_cast<unsigned int>(sym), currentLine_);
                 return;
             }
             // A temporary or argument wins over an instance variable.
             if (int slot = resolveLocal(n.text); slot >= 0) {
                 emitExpr(m, *n.children[0]);
-                m.emit(Op::DUP, 0, currentLine_);
+                dupUnlessDiscarded();
                 m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slot), currentLine_);
                 return;
             }
@@ -1241,7 +1332,7 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                 if (iv == n.text) {
                     emitExpr(m, *n.children[0]);
                     auto sym = m.internSymbol(n.text);
-                    m.emit(Op::DUP, 0, currentLine_);
+                    dupUnlessDiscarded();
                     m.emitWide(Op::STORE_INSTVAR, static_cast<unsigned int>(sym), currentLine_);
                     return;
                 }
@@ -1255,10 +1346,17 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                 if (cv == n.text) {
                     emitExpr(m, *n.children[0]);
                     auto sym = m.internSymbol(n.text);
-                    m.emit(Op::DUP, 0, currentLine_);
+                    dupUnlessDiscarded();
                     m.emitWide(Op::STORE_CLASSVAR, static_cast<unsigned int>(sym), currentLine_);
                     return;
                 }
+            }
+            // S37: see the Identifier case.
+            if (currentMethodLate_ && !n.text.empty()) {
+                emitExpr(m, *n.children[0]);
+                dupUnlessDiscarded();
+                emitLateVar(m, Op::STORE_LATE_VAR, n.text);
+                return;
             }
             // F7-REPL: module-scope assignment-expression binds a global, and
             // so does one in a module-level block to a name no enclosing scope
@@ -1266,14 +1364,14 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             if ((replMode_ && atModuleScope()) || assignsReplGlobalInBlock(n.text)) {
                 emitExpr(m, *n.children[0]);
                 auto sym = m.internSymbol(n.text);
-                m.emit(Op::DUP, 0, currentLine_);
+                dupUnlessDiscarded();
                 m.emitWide(Op::STORE_GLOBAL, static_cast<unsigned int>(sym), currentLine_);
                 return;
             }
             if (reportUndeclaredInMethod(n.text)) { m.emit(Op::PUSH_NIL, 0, currentLine_); return; }
             int slot = declareLocal(n.text);
             emitExpr(m, *n.children[0]);
-            m.emit(Op::DUP, 0, currentLine_);
+            dupUnlessDiscarded();
             m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slot), currentLine_);
             return;
         }
@@ -1305,6 +1403,16 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             else if (n.text == ">=") send = Op::BIN_INT_GE;
             else if (n.text == ">")  send = Op::BIN_INT_GT;
             else if (n.text == "=")  send = Op::BIN_INT_EQ;
+            else if (n.text == "*")  send = Op::BIN_INT_MUL;
+            else if (n.text == "\\\\") send = Op::BIN_INT_MOD;
+            else if (n.text == "//") send = Op::BIN_INT_QUO;
+            else if (n.text == "==") {
+                // `==` is identity and is never looked up, as in Pharo
+                // (ProtoObject>>== "No Lookup. Do not override"): one
+                // instruction, no send (0.10.0).
+                m.emit(Op::IDENTICAL, 0, currentLine_);
+                return;
+            }
             m.emitWide(send, static_cast<unsigned int>(sym), currentLine_);
             return;
         }
@@ -1337,7 +1445,7 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                 return;
             }
             // 2026-05-24 Tier-S: inline ifTrue:/ifFalse:/ifTrue:ifFalse:/
-            // whileTrue:/whileFalse: when their block argument(s) are
+            // and:/or:/whileTrue:/whileFalse: when their block argument(s) are
             // zero-arg block literals with no local declarations. See
             // the helper for why.
             if (tryEmitInlinedControl(m, n)) return;
@@ -1347,8 +1455,15 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                 emitExpr(m, *n.children[i]);
             }
             auto sym = m.internSymbol(n.text);
-            m.emitWide(isSuperReceiver(n) ? Op::SEND_SUPER : Op::SEND_KEYWORD,
-                       static_cast<unsigned int>(sym), currentLine_);
+            Op kop = isSuperReceiver(n) ? Op::SEND_SUPER : Op::SEND_KEYWORD;
+            if (kop == Op::SEND_KEYWORD && n.children.size() == 2) {
+                // SmallInteger fast paths of the two one-keyword special
+                // selectors of Pharo (0.10.0); a miss sends the keyword
+                // message. rem: is not one, so it is always a send.
+                if (n.text == "bitAnd:")      kop = Op::BIN_INT_AND;
+                else if (n.text == "bitOr:")  kop = Op::BIN_INT_OR;
+            }
+            m.emitWide(kop, static_cast<unsigned int>(sym), currentLine_);
             return;
         }
         case NodeKind::CallSend: {
@@ -1464,42 +1579,7 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             // block starts on: at the body's last line it took a breakpoint
             // meant for the body's last statement.
             const int blockLine = currentLine_;
-            auto sub = std::make_unique<BytecodeModule>();
-            // A block inside a method sends `super` on behalf of that method's
-            // class (Pharo allows super in blocks).
-            if (!currentMethodClass_.empty()) sub->setDefiningClass(currentMethodClass_);
-            // open fresh scope for block
-            scopes_.emplace_back();
-            {
-                auto& s = scopes_.back();
-                s.astNode = &n;
-                auto it = analysis_.capturedByScope.find(&n);
-                if (it != analysis_.capturedByScope.end()) {
-                    s.capturedNames = it->second;
-                }
-            }
-            reportDuplicateNames(n.stringList, 0, "a block");
-            int nArgs = static_cast<int>(n.intValue);
-            sub->setArgCount(nArgs);
-            // declare args first (slots 0..nArgs-1), then locals
-            for (size_t i = 0; i < n.stringList.size(); ++i) {
-                declareLocal(n.stringList[i]);
-                if (static_cast<int>(i) < nArgs) scopes_.back().args.insert(n.stringList[i]);
-            }
-            // A block that declares captured names opens its own captured
-            // dict (see emitCaptureProlog). The block's stringList is all
-            // args+locals; the first nArgs entries are the arguments.
-            emitCaptureProlog(*sub, /*isMethod=*/false, n.stringList,
-                              /*nArgs=*/nArgs, /*argNameOffset=*/0);
-            // emit body statements; last value implicitly returned
-            if (n.children.empty()) sub->emit(Op::PUSH_NIL, 0, currentLine_);
-            emitStatements(*sub, n.children, 0, n.children.size());
-            sub->emit(Op::RETURN_TOP, 0, currentLine_);
-            recordLocalNames(*sub);
-            sub->setDebugName(currentMethodDebugName_.empty()
-                                  ? std::string("<block>")
-                                  : "[] in " + currentMethodDebugName_);
-            scopes_.pop_back();
+            auto sub = compileBlockModule(n, /*deoptBoundary=*/false, nullptr);
             size_t blkIdx = m.addBlockModule(std::move(sub));
             currentLine_ = blockLine;
             m.emitWide(Op::PUSH_BLOCK, static_cast<unsigned int>(blkIdx), currentLine_);
@@ -1516,12 +1596,121 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
     }
 }
 
+std::unique_ptr<BytecodeModule>
+Compiler::compileBlockModule(const Node& n, bool deoptBoundary,
+                             std::vector<std::pair<std::string, int>>* boxedOut) {
+    auto sub = std::make_unique<BytecodeModule>();
+    // A block inside a method sends `super` on behalf of that method's
+    // class (Pharo allows super in blocks).
+    if (!currentMethodClass_.empty()) sub->setDefiningClass(currentMethodClass_);
+    // open fresh scope for block
+    scopes_.emplace_back();
+    {
+        auto& s = scopes_.back();
+        s.astNode = &n;
+        s.deoptBoundary = deoptBoundary;
+        auto it = analysis_.capturedByScope.find(&n);
+        if (it != analysis_.capturedByScope.end()) {
+            s.capturedNames = it->second;
+        }
+    }
+    reportDuplicateNames(n.stringList, 0, "a block");
+    int nArgs = static_cast<int>(n.intValue);
+    sub->setArgCount(nArgs);
+    // declare args first (slots 0..nArgs-1), then locals
+    for (size_t i = 0; i < n.stringList.size(); ++i) {
+        declareLocal(n.stringList[i]);
+        if (static_cast<int>(i) < nArgs) scopes_.back().args.insert(n.stringList[i]);
+    }
+    // A block that declares captured names opens its own captured
+    // dict (see emitCaptureProlog). The block's stringList is all
+    // args+locals; the first nArgs entries are the arguments.
+    emitCaptureProlog(*sub, /*isMethod=*/false, n.stringList,
+                      /*nArgs=*/nArgs, /*argNameOffset=*/0);
+    // emit body statements; last value implicitly returned
+    if (n.children.empty()) sub->emit(Op::PUSH_NIL, 0, currentLine_);
+    emitStatements(*sub, n.children, 0, n.children.size());
+    sub->emit(Op::RETURN_TOP, 0, currentLine_);
+    if (boxedOut) *boxedOut = scopes_.back().boxed;
+    recordLocalNames(*sub);
+    sub->routeSharedLocals();
+    sub->setDebugName(currentMethodDebugName_.empty()
+                          ? std::string("<block>")
+                          : "[] in " + currentMethodDebugName_);
+    scopes_.pop_back();
+    return sub;
+}
+
+void Compiler::compileDeoptBlock(BytecodeModule& m, const Node& blk, size_t blockIdx,
+                                 std::vector<std::pair<std::string, int>>& boxedOut) {
+    // The copy is a real block, so the closure analysis is redone for it
+    // with nothing inlined: a block nested in it that the enclosing code
+    // inlines is a real block here, and the variables of the copy that such
+    // a block uses must be captured. Names the copy takes from the enclosing
+    // scopes resolve through those scopes (isCaptured): captured ones through
+    // the captured dict, which is the box's parent, and frame locals through
+    // the box. The enclosing code was compiled first, so it reported any
+    // compile error in these statements already; the copy's are dropped.
+    ScopeAnalysis cold;
+    {
+        ScopeWalker enclosing;
+        const bool saved = t_analyseWithoutInlining;
+        t_analyseWithoutInlining = true;
+        walkBlockScope(blk, enclosing, cold, &classes_);
+        t_analyseWithoutInlining = saved;
+    }
+    cold.moduleCaptured = analysis_.moduleCaptured;
+    std::swap(analysis_, cold);
+    const std::size_t errorCount = errors_.size();
+    const int line = currentLine_;
+    ++deoptDepth_;
+    auto sub = compileBlockModule(blk, /*deoptBoundary=*/true, &boxedOut);
+    --deoptDepth_;
+    currentLine_ = line;
+    errors_.resize(errorCount);
+    std::swap(analysis_, cold);
+    sub->setDebugName(sub->debugName() + " (not inlined)");
+    m.replaceBlockModule(blockIdx, std::move(sub));
+}
+
 // Inside a method, assigning to a name that is not an argument, temporary,
 // block parameter, instance or class variable is a compile error, as in Pharo;
 // declaring it implicitly let a typo (`cuont := count + 1`) leave the real
 // variable unchanged. Top-level scripts keep implicit globals.
 // Record a class declaration's instance-variable names on the class object on
 // top of the stack (reflection: instVarNames, instVarAt:, deepCopy).
+void Compiler::enterMethodClass(const Node& n) {
+    currentMethodClass_       = n.text;
+    currentMethodIsClassSide_ = n.boolFlag;
+    if (classes_.find(n.text) != classes_.end()) {
+        currentInstVars_  = instVarsThroughChain(classes_, n.text, n.boolFlag);
+        currentClassVars_ = resolveClassVarsFor(n.text);
+    } else {
+        currentInstVars_.clear();
+        currentClassVars_.clear();
+    }
+    currentMethodLate_ = !chainFullyKnown(classes_, n.text);
+}
+
+void Compiler::leaveMethodClass() {
+    currentMethodClass_.clear();
+    currentInstVars_.clear();
+    currentClassVars_.clear();
+    currentMethodIsClassSide_ = false;
+    currentMethodLate_        = false;
+}
+
+// S37: an instance or class variable of a class whose chain the compiler
+// cannot see. The operand names the variable; `__installMethod:as:` and
+// `__installClassMethod:as:` turn the instruction into the access the class
+// declares (PUSH_INSTVAR, PUSH_OWN_INSTVAR, STORE_INSTVAR, STORE_CLASSVAR) or
+// signal `undeclared variable` when the class has no such variable, before
+// the method can run (object_prims.cpp, resolveLateVariables).
+void Compiler::emitLateVar(BytecodeModule& m, Op op, const std::string& name) {
+    auto sym = m.internSymbol(name);
+    m.emitWide(op, static_cast<unsigned int>(sym), currentLine_);
+}
+
 void Compiler::emitSetInstVarNames(BytecodeModule& m, const Node& classDecl) {
     const size_t ivCount = static_cast<size_t>(classDecl.intValue);
     if (ivCount == 0) return;
@@ -1547,14 +1736,15 @@ void Compiler::reportDuplicateNames(const std::vector<std::string>& names, size_
 
 bool Compiler::reportArgumentAssignment(const std::string& name) {
     // Resolve the name as a read would, then ask whether that binding is an
-    // argument: a declared one, or the loop variable of an inlined to:do:
-    // bound in that very scope.
+    // argument: a declared one, or the argument of an inlined block (a to:do:
+    // loop variable, an ifNotNil: arm's argument) bound in that very scope
+    // and not hidden by an inlined block's temporary of the same name.
     bool isArgument = false;
     for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
-        if (it->slots.count(name)) {
+        if (auto f = it->slots.find(name); f != it->slots.end()) {
             isArgument = it->args.count(name) != 0;
-            for (const auto& loop : inlinedLoopArgs_)
-                if (loop.first == &*it && loop.second == name) isArgument = true;
+            for (const auto& a : inlinedLoopArgs_)
+                if (a.scope == &*it && a.name == name && a.slot == f->second) isArgument = true;
             break;
         }
         if (isMethodScope(*it)) break;
@@ -1616,10 +1806,23 @@ bool Compiler::isCaptured(const std::string& name) const {
     // by an inner block. Walk innermost-first; honour shadowing: if a closer
     // scope already binds this name as a non-captured local slot, that wins
     // and the use is NOT captured.
+    //
+    // Past a de-optimised copy of an inlined block (deoptBoundary), a local
+    // slot of an enclosing scope belongs to another frame: the copy reaches
+    // it through its box, as a captured name. It is recorded on the boundary
+    // nearest the slot's scope.
+    const Scope* boundary = nullptr;
     for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
         if (it->capturedNames.count(name) != 0) return true;
-        if (it->slots.count(name) != 0) return false;
+        if (auto f = it->slots.find(name); f != it->slots.end()) {
+            if (!boundary) return false;
+            bool known = false;
+            for (const auto& [n, slot] : boundary->boxed) known = known || n == name;
+            if (!known) boundary->boxed.emplace_back(name, f->second);
+            return true;
+        }
         if (isMethodScope(*it)) break;
+        if (it->deoptBoundary) boundary = &*it;
     }
     return false;
 }
@@ -1789,7 +1992,7 @@ void Compiler::emitDoYieldingLoop(BytecodeModule& m,
 
 // 2026-05-24 Tier-S perf: inline ifTrue:/ifFalse:/ifTrue:ifFalse: and
 // whileTrue:/whileFalse: when their argument(s) are zero-arg, no-local
-// block literals. The win is structural, not micro: each non-inlined
+// block literals (and:/or: since 0.10.0). The win is structural, not micro: each non-inlined
 // `cond ifTrue: [^expr]` runs the block through `prim_True_ifTrue` →
 // `invokeBlock` → a NESTED ExecutionEngine on the C++ stack, and an
 // `^expr` from inside that block throws NonLocalReturn to unwind the
@@ -1800,34 +2003,55 @@ void Compiler::emitDoYieldingLoop(BytecodeModule& m,
 // the current frame so `^expr` becomes a plain local RETURN with no
 // stack unwind.
 //
-// We bail out (return false) if the block has any args or any local
-// declarations — closure-analysis decisions cannot be retraced
-// post-hoc, and captured variables would need separate plumbing. The
+// A block that declares temporaries is inlined too (0.10.0): they become
+// hidden slots of the enclosing frame, as in Pharo (emitInlinedBlockBody).
+// The closure analysis keeps the real blocks when an inner block captures
+// an argument or a temporary of one of them (walkNode, KeywordSend). The
 // caller falls back to a normal SEND_KEYWORD when inlining declines.
+bool Compiler::isInlinableBlock(const ast::Node* b, int maxArgs) {
+    return b && b->kind == NodeKind::Block
+        && b->intValue >= 0 && b->intValue <= maxArgs
+        && b->stringList.size() >= static_cast<size_t>(b->intValue);
+}
+
 Compiler::InlineShape Compiler::inlineShapeOf(const ast::Node& n) {
     using ast::NodeKind;
     if (n.kind != NodeKind::KeywordSend) return InlineShape::None;
     // `super ifTrue: [...]` is a super send of ifTrue:, not a conditional.
     if (isSuperReceiver(n)) return InlineShape::None;
-    auto isInlineableBlock = [](const ast::Node* b) -> bool {
-        return b && b->kind == NodeKind::Block
-            && b->intValue == 0
-            && b->stringList.empty();
-    };
-    if (n.children.size() == 2 && isInlineableBlock(n.children[1].get())
+    if (n.children.size() == 2 && isInlinableBlock(n.children[1].get())
         && (n.text == "ifTrue:" || n.text == "ifFalse:"))
         return InlineShape::IfTrue;
-    if (n.children.size() == 3 && isInlineableBlock(n.children[1].get())
-        && isInlineableBlock(n.children[2].get())
+    if (n.children.size() == 3 && isInlinableBlock(n.children[1].get())
+        && isInlinableBlock(n.children[2].get())
         && (n.text == "ifTrue:ifFalse:" || n.text == "ifFalse:ifTrue:"))
         return InlineShape::IfTrueIfFalse;
+    if (n.children.size() == 2 && isInlinableBlock(n.children[1].get())
+        && (n.text == "and:" || n.text == "or:"))
+        return InlineShape::AndOr;
+    // The nil tests, as Pharo's compiler inlines them (RBMessageNode>>
+    // isInlineIfNil): literal blocks, the nil arm without arguments, the
+    // non-nil arm with none or one, the receiver not a block literal.
+    if (n.children[0]->kind != NodeKind::Block) {
+        auto nilArm = [](const ast::Node* b) { return isInlinableBlock(b); };
+        auto notNilArm = [](const ast::Node* b) { return isInlinableBlock(b, 1); };
+        if (n.children.size() == 2 && n.text == "ifNil:" && nilArm(n.children[1].get()))
+            return InlineShape::IfNil;
+        if (n.children.size() == 2 && n.text == "ifNotNil:" && notNilArm(n.children[1].get()))
+            return InlineShape::IfNil;
+        if (n.children.size() == 3 && n.text == "ifNil:ifNotNil:"
+            && nilArm(n.children[1].get()) && notNilArm(n.children[2].get()))
+            return InlineShape::IfNil;
+        if (n.children.size() == 3 && n.text == "ifNotNil:ifNil:"
+            && notNilArm(n.children[1].get()) && nilArm(n.children[2].get()))
+            return InlineShape::IfNil;
+    }
     if (n.text == "to:do:" && n.children.size() == 3
-        && n.children[2]->kind == NodeKind::Block
-        && n.children[2]->intValue == 1
-        && n.children[2]->stringList.size() == 1)
+        && isInlinableBlock(n.children[2].get(), 1)
+        && n.children[2]->intValue == 1)
         return InlineShape::ToDo;
-    if (n.children.size() == 2 && isInlineableBlock(n.children[0].get())
-        && isInlineableBlock(n.children[1].get())
+    if (n.children.size() == 2 && isInlinableBlock(n.children[0].get())
+        && isInlinableBlock(n.children[1].get())
         && (n.text == "whileTrue:" || n.text == "whileFalse:"))
         return InlineShape::WhileTrue;
     return InlineShape::None;
@@ -1838,81 +2062,132 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
     // Inline exactly the sends the closure analysis treated as inlined: it
     // left the variables their blocks use out of the captured sets, so a
     // send emitted as a real block here would find them uncaptured.
-    if (analysis_.inlinedSends.count(&n) == 0) return false;
-    auto isInlineableBlock = [](const ast::Node* b) -> bool {
-        return b && b->kind == NodeKind::Block
-            && b->intValue == 0
-            && b->stringList.empty();
-    };
+    if (deoptDepth_ > 0 || analysis_.inlinedSends.count(&n) == 0) return false;
 
-    // cond ifTrue:  [body]  / cond ifFalse: [body]
+    // The value conditionals: an inlined ifTrue:, ifFalse:, ifTrue:ifFalse:,
+    // ifFalse:ifTrue:, and: or or: (emitInlinedConditional). The receiver
+    // is tested once; a non-Boolean receiver gets the real send, with
+    // closures for the block literals (2026-05-24: without the guard,
+    // `123 ifTrue: [x]` ran `[x]`, because JUMP_IF_FALSE branches only on
+    // false; until 0.10.0 it got doesNotUnderstand: without arguments and a
+    // resumed value was taken as the condition).
     if (n.children.size() == 2
-        && isInlineableBlock(n.children[1].get())
+        && isInlinableBlock(n.children[1].get())
         && (n.text == "ifTrue:" || n.text == "ifFalse:")) {
-        bool invert = (n.text == "ifFalse:");
-        emitExpr(m, *n.children[0]);
-        // 2026-05-24 correctness fix: emit a non-Boolean guard before the
-        // jump. Without it, `123 ifTrue: [x]` silently runs `[x]` because
-        // JUMP_IF_FALSE only branches on PROTO_FALSE and any other
-        // non-PROTO_FALSE value (including 123) falls through to the body.
-        // ASSERT_BOOL_OR_DNU signals doesNotUnderstand:<sel> on non-Boolean
-        // receivers, matching the pre-inline SEND dispatch semantics.
-        auto selSym = m.internSymbol(n.text);
-        m.emitWide(Op::ASSERT_BOOL_OR_DNU,
-                   static_cast<unsigned int>(selSym), currentLine_);
-        // Skip body if the cond doesn't match the polarity we want.
-        // JUMP_IF_FALSE skips when receiver is PROTO_FALSE (so it skips
-        // the body of ifTrue when cond is false). JUMP_IF_TRUE skips
-        // when receiver is PROTO_TRUE (mirror for ifFalse).
-        const size_t jSkip = emitForwardJump(m, invert ? Op::JUMP_IF_TRUE : Op::JUMP_IF_FALSE);
-        emitInlinedBlockBody(m, *n.children[1]);
-        // The inlined body left a result on the stack. Jump past the nil
-        // we are about to emit for the not-taken branch.
-        const size_t jDone = emitForwardJump(m, Op::JUMP);
-        const size_t skipTarget = m.pos();   // PUSH_NIL
-        m.emit(Op::PUSH_NIL, 0, currentLine_);
-        resolveForwardJumps(m, {{jSkip, skipTarget}, {jDone, m.pos()}});
+        // The body runs on the polarity named by the selector; the other
+        // case answers nil.
+        const ast::Node& body = *n.children[1];
+        emitInlinedConditional(m, n,
+            n.text == "ifFalse:" ? Op::JUMP_IF_TRUE : Op::JUMP_IF_FALSE,
+            [&] { emitInlinedBlockBody(m, body); },
+            [&] { m.emit(Op::PUSH_NIL, 0, currentLine_); });
+        return true;
+    }
+    if (n.children.size() == 3
+        && isInlinableBlock(n.children[1].get())
+        && isInlinableBlock(n.children[2].get())
+        && (n.text == "ifTrue:ifFalse:" || n.text == "ifFalse:ifTrue:")) {
+        const bool ifFalseFirst = (n.text == "ifFalse:ifTrue:");
+        const ast::Node& trueBranch  = ifFalseFirst ? *n.children[2] : *n.children[1];
+        const ast::Node& falseBranch = ifFalseFirst ? *n.children[1] : *n.children[2];
+        emitInlinedConditional(m, n, Op::JUMP_IF_FALSE,
+            [&] { emitInlinedBlockBody(m, trueBranch); },
+            [&] { emitInlinedBlockBody(m, falseBranch); });
+        return true;
+    }
+    // The short-circuit forms of Boolean (bool_prims.cpp): `and:` answers
+    // false without evaluating the block when the receiver is false, else
+    // the block's value; `or:` answers true when the receiver is true, else
+    // the block's value. The block's value is not checked to be a Boolean,
+    // as the primitive does not check it.
+    if (n.children.size() == 2
+        && isInlinableBlock(n.children[1].get())
+        && (n.text == "and:" || n.text == "or:")) {
+        const bool isAnd = (n.text == "and:");
+        const ast::Node& rest = *n.children[1];
+        emitInlinedConditional(m, n, isAnd ? Op::JUMP_IF_FALSE : Op::JUMP_IF_TRUE,
+            [&] { emitInlinedBlockBody(m, rest); },
+            [&] { m.emit(isAnd ? Op::PUSH_FALSE : Op::PUSH_TRUE, 0, currentLine_); });
         return true;
     }
 
-    // cond ifTrue: [t] ifFalse: [f]  / cond ifFalse: [f] ifTrue: [t]
-    if (n.children.size() == 3
-        && isInlineableBlock(n.children[1].get())
-        && isInlineableBlock(n.children[2].get())
-        && (n.text == "ifTrue:ifFalse:" || n.text == "ifFalse:ifTrue:")) {
-        bool ifFalseFirst = (n.text == "ifFalse:ifTrue:");
-        const ast::Node& trueBranch  = ifFalseFirst ? *n.children[2] : *n.children[1];
-        const ast::Node& falseBranch = ifFalseFirst ? *n.children[1] : *n.children[2];
+    // The nil tests. `r ifNil: [a]` answers r when r is not nil;
+    // `r ifNotNil: [:x | b]` answers nil when r is nil; the arm that runs
+    // answers its value. The test is identity with nil (no send), as in
+    // Pharo, so a class's own ifNil: is not reached by an inlined form.
+    //       <r>                               <r>
+    //       JUMP_IF_NOT_NIL end               JUMP_IF_NIL nilArm   (peek)
+    //       POP                               STORE_LOCAL x | POP
+    //       <a>                               <b>
+    //   end:                                  JUMP end
+    //                                     nilArm:
+    //                                         POP
+    //                                         <a>             (or nothing
+    //                                     end:                 for ifNotNil:)
+    if (inlineShapeOf(n) == InlineShape::IfNil) {
+        const bool nilFirst = n.text == "ifNil:" || n.text == "ifNil:ifNotNil:";
+        const ast::Node* nilArm = nullptr;
+        const ast::Node* notNilArm = nullptr;
+        if (n.text == "ifNil:") nilArm = n.children[1].get();
+        else if (n.text == "ifNotNil:") notNilArm = n.children[1].get();
+        else {
+            nilArm    = (nilFirst ? n.children[1] : n.children[2]).get();
+            notNilArm = (nilFirst ? n.children[2] : n.children[1]).get();
+        }
         emitExpr(m, *n.children[0]);
-        // Non-Boolean guard (see ifTrue:/ifFalse: comment above).
-        auto selSym = m.internSymbol(n.text);
-        m.emitWide(Op::ASSERT_BOOL_OR_DNU,
-                   static_cast<unsigned int>(selSym), currentLine_);
-        // Jump to the false branch if cond is false.
-        const size_t jToFalse = emitForwardJump(m, Op::JUMP_IF_FALSE);
-        // True branch.
-        emitInlinedBlockBody(m, trueBranch);
-        const size_t jDone = emitForwardJump(m, Op::JUMP);
-        // False branch starts here.
-        const size_t falseTarget = m.pos();
-        emitInlinedBlockBody(m, falseBranch);
-        resolveForwardJumps(m, {{jToFalse, falseTarget}, {jDone, m.pos()}});
+        if (!notNilArm) {
+            const size_t jEnd = emitForwardJump(m, Op::JUMP_IF_NOT_NIL);
+            m.emit(Op::POP, 0, currentLine_);
+            emitInlinedBlockBody(m, *nilArm);
+            resolveForwardJumps(m, {{jEnd, m.pos()}});
+            return true;
+        }
+        const size_t jNil = emitForwardJump(m, Op::JUMP_IF_NIL);
+        if (notNilArm->intValue == 0) {
+            m.emit(Op::POP, 0, currentLine_);
+            emitInlinedBlockBody(m, *notNilArm);
+        } else {
+            // The argument is a hidden slot bound to the receiver for the
+            // arm, as an inlined to:do: binds its loop variable (no inner
+            // block captures it, or the send would not be inlined).
+            auto& s = scopes_.back();
+            const std::string& argName = notNilArm->stringList[0];
+            const int slot = declareLocal("__nn_" + std::to_string(s.nextSlot));
+            m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slot), currentLine_);
+            const size_t from = m.pos();
+            auto saved = s.slots.find(argName);
+            const bool hadBinding = saved != s.slots.end();
+            const int savedSlot = hadBinding ? saved->second : -1;
+            s.slots[argName] = slot;
+            const bool hidesCaptured = s.capturedNames.erase(argName) != 0;
+            inlinedLoopArgs_.push_back({&s, argName, slot});
+            emitInlinedBlockBody(m, *notNilArm);
+            inlinedLoopArgs_.pop_back();
+            if (hidesCaptured) s.capturedNames.insert(argName);
+            if (hadBinding) s.slots[argName] = savedSlot;
+            else            s.slots.erase(argName);
+            m.addScopedLocal(static_cast<size_t>(slot), argName, from, m.pos());
+        }
+        if (!nilArm) {
+            resolveForwardJumps(m, {{jNil, m.pos()}});
+            return true;
+        }
+        const size_t jEnd = emitForwardJump(m, Op::JUMP);
+        const size_t nilPos = m.pos();
+        m.emit(Op::POP, 0, currentLine_);
+        emitInlinedBlockBody(m, *nilArm);
+        resolveForwardJumps(m, {{jNil, nilPos}, {jEnd, m.pos()}});
         return true;
     }
 
     // start to: end do: [:i | body]
-    // The block has exactly one argument and no local declarations; its
-    // argument MUST NOT be captured by any inner block (otherwise the
-    // captured-dict plumbing would need separate setup we cannot do
-    // post-analysis). int_sum_loop's `1 to: 100000 do: [:i| total := total
+    // The block has exactly one argument (and any temporaries); neither may
+    // be captured by an inner block (otherwise each iteration would need a
+    // binding of its own; the analysis then keeps the real block). int_sum_loop's `1 to: 100000 do: [:i| total := total
     // + i]` matches this pattern; the inlining replaces the
     // PUSH_BLOCK + SEND_KEYWORD + prim_Integer_toDo:do: + invokeBlock
     // chain with a direct bytecode loop using SmallInt arithmetic.
-    if (n.text == "to:do:"
-        && n.children.size() == 3
-        && n.children[2]->kind == ast::NodeKind::Block
-        && n.children[2]->intValue == 1
-        && n.children[2]->stringList.size() == 1) {
+    if (inlineShapeOf(n) == InlineShape::ToDo) {
         // The analysis inlined this loop only if no inner block captures its
         // argument (inlinedSends, checked above).
         const ast::Node* blk = n.children[2].get();
@@ -1946,7 +2221,7 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
             // means the loop variable (no inner block captures it, or the
             // loop would not be inlined): hide the outer one meanwhile.
             const bool hidesCaptured = s.capturedNames.erase(iterName) != 0;
-            inlinedLoopArgs_.emplace_back(&s, iterName);
+            inlinedLoopArgs_.push_back({&s, iterName, slotI});
             // loopTest:
             const size_t loopFromPc = m.bytes().size();
             m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotI),   currentLine_);
@@ -1958,8 +2233,8 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
                        static_cast<unsigned int>(m.internSymbol("<=")), currentLine_);
             const size_t jExit = emitForwardJump(m, Op::JUMP_IF_FALSE);
             // body (the block's children) — inlined.
-            emitInlinedBlockBody(m, *blk);
-            m.emit(Op::POP, 0, currentLine_);
+            if (emitInlinedBlockBody(m, *blk, /*discardValue=*/true))
+                m.emit(Op::POP, 0, currentLine_);
             // i := i + 1   (SmallInt fast-path `+`).
             size_t oneConstIdx = m.addInteger(1);
             m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(slotI), currentLine_);
@@ -1983,8 +2258,8 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
 
     // [cond] whileTrue: [body]  / [cond] whileFalse: [body]
     if (n.children.size() == 2
-        && isInlineableBlock(n.children[0].get())
-        && isInlineableBlock(n.children[1].get())
+        && isInlinableBlock(n.children[0].get())
+        && isInlinableBlock(n.children[1].get())
         && (n.text == "whileTrue:" || n.text == "whileFalse:")) {
         bool invert = (n.text == "whileFalse:");
         auto selSym = m.internSymbol(n.text);
@@ -1994,13 +2269,13 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
         // Guard non-Boolean cond results — same correctness fix as for
         // ifTrue:/ifFalse: above. The cond block re-evaluates every
         // iteration, so the guard is at loopTest:, not pre-loop.
-        m.emitWide(Op::ASSERT_BOOL_OR_DNU,
+        m.emitWide(Op::ASSERT_LOOP_BOOL,
                    static_cast<unsigned int>(selSym), currentLine_);
         // Exit loop when cond does NOT match polarity.
         const size_t jExit = emitForwardJump(m, invert ? Op::JUMP_IF_TRUE : Op::JUMP_IF_FALSE);
         // body, discard its value, loop back.
-        emitInlinedBlockBody(m, *n.children[1]);
-        m.emit(Op::POP, 0, currentLine_);
+        if (emitInlinedBlockBody(m, *n.children[1], /*discardValue=*/true))
+            m.emit(Op::POP, 0, currentLine_);
         closeLoop(m, loopTest, jExit);
         // exit target — whileTrue: returns nil.
         m.emit(Op::PUSH_NIL, 0, currentLine_);
@@ -2010,23 +2285,252 @@ bool Compiler::tryEmitInlinedControl(BytecodeModule& m, const ast::Node& n) {
     return false;
 }
 
-void Compiler::emitInlinedBlockBody(BytecodeModule& m, const ast::Node& block) {
-    if (block.children.empty()) {
-        m.emit(Op::PUSH_NIL, 0, currentLine_);
+// An inlined value conditional, `receiver selector: [...]`:
+//
+//       <receiver>
+//       JUMP_IF_NOT_BOOL    slow
+//       <jumpOp>            second        JUMP_IF_FALSE or JUMP_IF_TRUE
+//       <first>
+//       JUMP                end
+//   slow:                                 the receiver is not a Boolean:
+//       DEOPT_ENTER         k             send the message for real
+//       PUSH_LOCAL          box
+//       PUSH_DEOPT_BLOCK    copy of the 1st block literal
+//      [PUSH_LOCAL          box
+//       PUSH_DEOPT_BLOCK    copy of the 2nd block literal]
+//       SEND_KEYWORD        #selector
+//       DEOPT_EXIT          k
+//       JUMP                end
+//   second:
+//       <second>
+//   end:
+//
+// The slow path is out of line, so a Boolean receiver costs the same two
+// dispatches as one guard and one conditional jump. Any other receiver gets
+// the message the source wrote, with closures for the block literals
+// (compiled after the rest, compileDeoptBlock), as if nothing were inlined:
+// its own method, or doesNotUnderstand: with the whole Message.
+void Compiler::emitInlinedConditional(BytecodeModule& m, const ast::Node& send, Op jumpOp,
+                                      const std::function<void()>& first,
+                                      const std::function<void()>& second) {
+    emitExpr(m, *send.children[0]);
+    // `a == b` (IDENTICAL) always answers a Boolean: no guard, no slow path.
+    const ast::Node& recv = *send.children[0];
+    if (recv.kind == NodeKind::BinarySend && recv.text == "==" && !isSuperReceiver(recv)) {
+        const size_t jSecond = emitForwardJump(m, jumpOp);
+        first();
+        const size_t jDone = emitForwardJump(m, Op::JUMP);
+        const size_t secondPos = m.pos();
+        second();
+        resolveForwardJumps(m, {{jSecond, secondPos}, {jDone, m.pos()}});
         return;
     }
-    emitStatements(m, block.children, 0, block.children.size());
+    const int line = currentLine_;
+    const auto selSym = static_cast<unsigned int>(m.internSymbol(send.text));
+    const int boxSlot = declareLocal("__deopt_box__");
+    const size_t entry = m.addDeoptEntry();
+    std::vector<std::pair<const ast::Node*, size_t>> copies;   // (literal, sub-module)
+    for (size_t i = 1; i < send.children.size(); ++i)
+        copies.emplace_back(send.children[i].get(), m.reserveBlockModule());
+    const size_t jNotBool = emitForwardJump(m, Op::JUMP_IF_NOT_BOOL);
+    const size_t jSecond  = emitForwardJump(m, jumpOp);
+    first();
+    const size_t jDone1 = emitForwardJump(m, Op::JUMP);
+    const size_t slow = m.pos();
+    currentLine_ = line;
+    m.emitWide(Op::DEOPT_ENTER, static_cast<unsigned int>(entry), currentLine_);
+    for (const auto& [literal, idx] : copies) {
+        (void)literal;
+        m.emitWide(Op::PUSH_LOCAL, static_cast<unsigned int>(boxSlot), currentLine_);
+        m.emitWide(Op::PUSH_DEOPT_BLOCK, static_cast<unsigned int>(idx), currentLine_);
+    }
+    m.emitWide(Op::SEND_KEYWORD, selSym, currentLine_);
+    m.emitWide(Op::DEOPT_EXIT, static_cast<unsigned int>(entry), currentLine_);
+    const size_t jDone2 = emitForwardJump(m, Op::JUMP);
+    const size_t secondPos = m.pos();
+    second();
+    const size_t end = m.pos();
+    resolveForwardJumps(m, {{jNotBool, slow}, {jSecond, secondPos},
+                            {jDone1, end}, {jDone2, end}});
+    // The copies, and the locals their box carries.
+    std::vector<std::pair<std::string, int>> boxed;
+    for (const auto& [literal, idx] : copies) {
+        std::vector<std::pair<std::string, int>> used;
+        compileDeoptBlock(m, *literal, idx, used);
+        for (const auto& u : used)
+            if (std::find(boxed.begin(), boxed.end(), u) == boxed.end()) boxed.push_back(u);
+    }
+    // The locals the copies use. A temporary is shared through the
+    // dictionary of the scope that declares it: the frame's own (scope 0) or
+    // an enclosing inlined block with temporaries (scope k, the k-th of
+    // fs.inlineScopes). An argument cannot be assigned: the copies get its
+    // value. Each name resolves here as it did in the copy (the same
+    // bindings are live).
+    auto& fs = scopes_.back();
+    auto& e = m.deoptEntry(entry);
+    e.boxSlot = static_cast<uint32_t>(boxSlot);
+    int32_t deepest = BytecodeModule::DeoptLocal::kReadOnly;
+    for (const auto& [name, slot] : boxed) {
+        BytecodeModule::DeoptLocal l;
+        l.nameConst = static_cast<uint32_t>(m.internSymbol(name));
+        l.slot = static_cast<uint32_t>(slot);
+        bool readOnly = fs.args.count(name) != 0;
+        for (const auto& a : inlinedLoopArgs_)
+            readOnly = readOnly || (a.scope == &fs && a.slot == slot);
+        if (!readOnly) {
+            l.scope = 0;
+            for (size_t k = 0; k < fs.inlineScopes.size(); ++k) {
+                const auto& sl = fs.inlineScopes[k].slots;
+                if (std::find(sl.begin(), sl.end(), slot) != sl.end())
+                    l.scope = static_cast<int32_t>(k + 1);
+            }
+            deepest = std::max(deepest, l.scope);
+        }
+        e.locals.push_back(l);
+    }
+    // The dictionaries of scopes 0 .. deepest, outermost first. Copies that
+    // share no temporary need none.
+    if (deepest >= 0) {
+        if (fs.frameDictSlot < 0) fs.frameDictSlot = declareLocal("__deopt_scope__");
+        e.scopeDictSlots.push_back(static_cast<uint32_t>(fs.frameDictSlot));
+        for (int32_t k = 1; k <= deepest; ++k) {
+            // Every inlined block with temporaries that contains a value
+            // conditional has a dictionary slot (emitInlinedBlockBody).
+            const int dictSlot = fs.inlineScopes[static_cast<size_t>(k - 1)].dictSlot;
+            assert(dictSlot >= 0);
+            e.scopeDictSlots.push_back(static_cast<uint32_t>(dictSlot));
+        }
+    }
 }
 
-void Compiler::emitStatements(BytecodeModule& m, const std::vector<ast::NodePtr>& stmts,
-                              std::size_t from, std::size_t end) {
-    for (std::size_t i = from; i < end; ++i) {
-        if (std::size_t run = tryEmitInstVarGroup(m, stmts, i, end); run > 0)
-            i += run - 1;
-        else
-            emitStatement(m, *stmts[i]);
-        if (i + 1 != end) m.emit(Op::POP, 0, currentLine_);
+namespace {
+// Whether `n` contains a value conditional (ifTrue:, ifFalse:,
+// ifTrue:ifFalse:, ifFalse:ifTrue:, and:, or:) anywhere, in nested blocks
+// included: such a conditional may de-optimise and share the temporaries of
+// the inlined blocks around it (DEOPT_ENTER). Over-approximating costs one
+// RESET_LOCAL per entry of the block; missing one would be wrong.
+bool containsValueConditional(const ast::Node& n) {
+    if (n.kind == NodeKind::KeywordSend
+        && (n.text == "ifTrue:" || n.text == "ifFalse:" || n.text == "ifTrue:ifFalse:"
+            || n.text == "ifFalse:ifTrue:" || n.text == "and:" || n.text == "or:"))
+        return true;
+    for (const auto& c : n.children)
+        if (c && containsValueConditional(*c)) return true;
+    return false;
+}
+} // namespace
+
+bool Compiler::emitInlinedBlockBody(BytecodeModule& m, const ast::Node& block,
+                                    bool discardValue) {
+    // The block's temporaries (after its arguments, which the caller binds).
+    // Each is a fresh hidden slot of the enclosing frame, set to nil here, on
+    // every entry: a loop body or a conditional arm in a loop runs this code
+    // once per evaluation, and every evaluation of a block starts with its
+    // temporaries nil (LANGUAGE.md 6.3; Pharo resets only those of loop
+    // bodies, OCASTTranslator>>visitInlinedBlockNode:). For the body the name
+    // denotes the slot, hiding a variable of the enclosing scope with the
+    // same name (an argument, a temporary, a captured variable, as the
+    // to:do: loop variable does above); no inner block captures it, or the
+    // send would not be inlined.
+    struct Hoisted {
+        std::string name;
+        int  slot;
+        bool hadBinding;
+        int  savedSlot;
+        bool hidesCaptured;
+        bool hidesArgument;
+    };
+    const std::size_t nArgs = static_cast<std::size_t>(block.intValue);
+    reportDuplicateNames(block.stringList, 0, "a block");
+    std::vector<Hoisted> hoisted;
+    auto& s = scopes_.back();   // stable across nested scopes: a deque (D29)
+    // A hidden slot: one a finished sibling block released, else a new one.
+    auto acquire = [&]() {
+        if (!s.freeHidden.empty()) {
+            const int slot = s.freeHidden.back();
+            s.freeHidden.pop_back();
+            return slot;
+        }
+        return declareLocal("__bt_" + std::to_string(s.nextSlot));
+    };
+    Scope::InlineScope scope;
+    for (std::size_t i = nArgs; i < block.stringList.size(); ++i) {
+        const std::string& name = block.stringList[i];
+        const int slot = acquire();
+        // RESET_LOCAL, not a store: a closure that shares the previous
+        // entry's variable (DEOPT_ENTER) keeps it, and this entry starts a
+        // fresh one.
+        m.emitWide(Op::RESET_LOCAL, static_cast<unsigned int>(slot), currentLine_);
+        scope.slots.push_back(slot);
+        Hoisted h{name, slot, false, -1, false, false};
+        if (auto it = s.slots.find(name); it != s.slots.end()) {
+            h.hadBinding = true;
+            h.savedSlot = it->second;
+        }
+        s.slots[name] = slot;
+        h.hidesCaptured = s.capturedNames.erase(name) != 0;
+        h.hidesArgument = s.args.erase(name) != 0;
+        hoisted.push_back(std::move(h));
     }
+    // The scope's dictionary, which a de-optimised value conditional inside
+    // the block fills with the temporaries its closures share (DEOPT_ENTER):
+    // reset on every entry with them.
+    if (!scope.slots.empty() && containsValueConditional(block)) {
+        scope.dictSlot = acquire();
+        m.emitWide(Op::RESET_LOCAL, static_cast<unsigned int>(scope.dictSlot), currentLine_);
+    }
+    if (!scope.slots.empty()) s.inlineScopes.push_back(scope);
+    const std::size_t from = m.pos();
+    bool leftValue = true;
+    if (block.children.empty()) {
+        m.emit(Op::PUSH_NIL, 0, currentLine_);
+    } else {
+        leftValue = emitStatements(m, block.children, 0, block.children.size(), discardValue);
+    }
+    if (!scope.slots.empty()) {
+        s.inlineScopes.pop_back();
+        // The block's code ends here, so its slots are free for the next
+        // inlined block; that block's entry resets them.
+        for (int slot : scope.slots) s.freeHidden.push_back(slot);
+        if (scope.dictSlot >= 0) s.freeHidden.push_back(scope.dictSlot);
+    }
+    for (auto it = hoisted.rbegin(); it != hoisted.rend(); ++it) {
+        if (it->hidesArgument) s.args.insert(it->name);
+        if (it->hidesCaptured) s.capturedNames.insert(it->name);
+        if (it->hadBinding) s.slots[it->name] = it->savedSlot;
+        else                s.slots.erase(it->name);
+        // The debugger shows the slot under the temporary's name.
+        m.addScopedLocal(static_cast<size_t>(it->slot), it->name, from, m.pos());
+    }
+    return leftValue;
+}
+
+bool Compiler::emitStatements(BytecodeModule& m, const std::vector<ast::NodePtr>& stmts,
+                              std::size_t from, std::size_t end, bool discardLast) {
+    bool lastLeftValue = true;
+    for (std::size_t i = from; i < end; ++i) {
+        bool leftValue = true;
+        if (std::size_t run = tryEmitInstVarGroup(m, stmts, i, end); run > 0) {
+            i += run - 1;
+        } else if ((i + 1 != end || discardLast)
+                   && stmts[i]->kind == NodeKind::Assignment) {
+            // `x := e.` as a statement: store, no DUP, no POP (0.10.0).
+            discardValueOf_ = stmts[i].get();
+            valueDiscarded_ = false;
+            emitStatement(m, *stmts[i]);
+            leftValue = !valueDiscarded_;
+            discardValueOf_ = nullptr;
+            valueDiscarded_ = false;
+        } else {
+            emitStatement(m, *stmts[i]);
+        }
+        if (i + 1 != end) {
+            if (leftValue) m.emit(Op::POP, 0, currentLine_);
+        } else {
+            lastLeftValue = leftValue;
+        }
+    }
+    return lastLeftValue;
 }
 
 // ---------------------------------------------------------------------------
@@ -2081,9 +2585,9 @@ bool Compiler::isInertGroupValue(const Node& e,
             return (instVar || classVar) && written.count(e.text) == 0;
         }
         case NodeKind::BinarySend: {
-            static const char* const fast[] = {"+", "-", "<=", "<", ">=", ">", "="};
+            static const char* const fast[] = {"+", "-", "<=", "<", ">=", ">", "=", "=="};
             if (e.children.size() < 2) return false;
-            bool isFast = false;
+            bool isFast = false;   // `==` (IDENTICAL) never sends at all
             for (const char* op : fast) if (e.text == op) isFast = true;
             return isFast && isInertGroupValue(*e.children[0], written)
                    && isInertGroupValue(*e.children[1], written);

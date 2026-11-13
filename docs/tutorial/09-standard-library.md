@@ -22,8 +22,8 @@ matters:
    `Date`, `Duration`, `Transcript`. Much of the kernel is itself written in
    protoST, in `lib/kernel/`, and loaded when the runtime starts.
 2. **Loadable modules.** Optional functionality lives in `.st` files under
-   `lib/` and is pulled in explicitly with `Import from:`. `json`, `net` and
-   `http` are the ones you will use; `stream`, `random` and `time` are older modules kept for
+   `lib/` and is pulled in explicitly with `Import from:`. `json`, `decimal`,
+   `calendar`, `net` and `http` are the ones you will use; `stream`, `random` and `time` are older modules kept for
    compatibility (§9.4, §9.5, §9.7).
 
 Input and output — files, standard streams, the command line, other programs
@@ -300,6 +300,18 @@ $ ./build/protost time-demo.st
 #(90 210 Duration '2026-10-15')
 ```
 
+Two clocks, two names. `Time utcMicroseconds` is the wall clock: microseconds
+since 1970-01-01T00:00Z, the number to date an event with (a log line, a
+record's creation time); it follows the system clock, so it can jump when the
+clock is set. `Time microsecondClockValue` and `millisecondClockValue` are
+monotonic: their origin is arbitrary and only differences mean anything, so
+they measure durations and are never dates. (Pharo's `microsecondClockValue`
+is a wall clock; in protoST the wall clock has its own selector.)
+
+```smalltalk
+Time utcMicroseconds > 1767225600000000      "=> true"
+```
+
 There are no time zones: `Time now` and `Date today` are local wall-clock
 readings. A `Date` built with `year:month:day:` answers `nil` to `dayOfWeek`;
 only `Date today` knows its weekday.
@@ -310,7 +322,144 @@ The older `time` module (`Import from: 'time'`) has a different model: its
 constructor). Importing it **rebinds the globals `Time` and `Duration`** to the
 module's classes, as with `random` above.
 
-## 9.8 Reading the library as protoST code
+## 9.8 Exact decimals — the `decimal` module
+
+A `Float` is binary: `0.1` is not one tenth, and `1.20` prints as `1.2`. When
+a decimal must survive exactly, digits, trailing zeros and sign of zero
+included (an amount of money, a value read from a database), use `Decimal`
+from the `decimal` module. It is Python's decimal value: a sign, a
+coefficient and a power-of-ten exponent, plus `Infinity`, `NaN` and `sNaN`.
+
+```smalltalk
+"-- decimal-demo.st --"
+Import from: 'decimal'.
+
+price := Decimal fromString: '1250.00'.
+tiny := Decimal fromString: '0.0000001'.
+
+{ price printString. tiny printString. price exponent.
+  price = 1250. price asExactFraction.
+  (Decimal fromString: '0.1') = 0.1.
+  price sameRepresentationAs: (Decimal fromString: '1250') } displayNl.
+```
+
+```bash
+$ ./build/protost decimal-demo.st
+#('1250.00' '1E-7' -2 true 1250 false false)
+```
+
+`printString` is exactly Python's `str(Decimal)`: `1250.00` keeps its two
+zeros (its exponent is -2), and a value whose leading digit is more than six
+places after the point switches to exponent form, `1E-7`. Comparison is by
+exact value: `1250.00` equals the Integer `1250`, while the decimal `0.1` is
+not the `Float` `0.1`, whose exact value is a little more than one tenth.
+`sameRepresentationAs:` tells `1250.00` from `1250`, which `=` does not.
+
+A `Decimal` has **no arithmetic** — no `+`, no rounding, no precision; it
+parses, prints, compares and converts. To compute, take `asExactFraction`
+(an `Integer` or a `Fraction`) and work with the exact numbers of §9.2. A
+string that is not a decimal (`'1..2'`, `''`, `'1e'`) signals `Error`.
+
+> **In Python** this is `decimal.Decimal(str)` and `str(d)`, with the same
+> text both ways; protoST leaves out the arithmetic context. **In
+> JavaScript** there is no built-in decimal; a library such as `decimal.js`
+> plays this role.
+
+The full protocol is in the language reference, LANGUAGE.md §12.13.
+
+## 9.9 Calendar values — the `calendar` module
+
+The kernel's `Date`, `Time` and `Duration` (§9.7) read the local clock and have
+no zones. When a date or a moment must be stored and compared exactly — a
+timestamp in a database, a deadline shared between machines — use the
+`calendar` module. Its values are Python's `datetime` model: a
+`CalendarDate`, a `TimeOfDay`, a `DateTime`, a `TimeSpan`, and two kinds of
+zone, `ZoneOffset` (a fixed offset from UTC) and `ZoneName` (an IANA key such
+as `America/New_York`). Everything counts microseconds.
+
+```smalltalk
+"-- calendar-demo.st --"
+Import from: 'calendar'.
+
+day := CalendarDate year: 2026 month: 11 day: 10.
+noon := DateTime year: 2026 month: 11 day: 10 hour: 12 minute: 0 second: 0
+  microsecond: 0 fold: 0 zone: (ZoneOffset microseconds: -3 * 3600 * 1000000).
+utc := DateTime year: 2026 month: 11 day: 10 hour: 15 minute: 0 second: 0
+  microsecond: 0 fold: 0 zone: ZoneOffset utc.
+span := TimeSpan days: 0 seconds: -1 microseconds: 0.
+
+{ day printString. day ordinal. noon printString. noon = utc.
+  span printString. span days. span seconds } displayNl.
+```
+
+```bash
+$ ./build/protost calendar-demo.st
+#('2026-11-10' 739930 '2026-11-10 12:00:00-03:00' true '-1 day, 23:59:59' -1 86399)
+```
+
+Noon at UTC-03:00 and 15:00 UTC are one instant, so they are `=` (and hash
+alike); a naive `DateTime` (zone `nil`) is never `=` to an aware one, and
+ordering the two signals `Error`. A `TimeSpan` is normalised as Python's
+`timedelta`: minus one second is "minus one day plus 86399 seconds".
+
+There is **no time-zone database**. A `ZoneName` is kept by its key, and a
+`DateTime` in one is held as its UTC instant (`DateTime utcFields:zoneName:`).
+Turning it into a wall clock, or building one from a wall clock, needs the
+zone's rules, so it signals `TimeZoneUnavailable`:
+
+```smalltalk
+Import from: 'calendar'.
+ny := ZoneName key: 'America/New_York'.
+t := DateTime utcFields: #(2026 11 1 6 30 0 0) zoneName: ny.
+t printString.        "=> '2026-11-01 06:30:00Z[America/New_York]'"
+[t wallClock] on: TimeZoneUnavailable do: [:e | 'no tz database']
+```
+
+> **In Python** these are `date`, `time`, `datetime`, `timedelta` and
+> `timezone`, with the same comparisons and the same `str()`; a `ZoneInfo`
+> zone has rules, protoST's `ZoneName` has none. **In JavaScript** the
+> closest is `Temporal` (`PlainDate`, `ZonedDateTime`, `Duration`).
+
+The full protocol is in the language reference, LANGUAGE.md §12.14.
+
+## 9.10 Identifiers — the `uuid` module
+
+A `UUID` (RFC 4122) names something uniquely without asking anyone for a
+number: a record, a file, a message sent between machines. `UUID new` draws
+a fresh one from the operating system's secure random generator (a
+version-4 UUID); `fromString:` and `fromBytes:` rebuild a known one.
+
+```smalltalk
+"-- uuid-demo.st --"
+Import from: 'uuid'.
+
+id := UUID fromString: '12345678-1234-5678-1234-567812345678'.
+same := UUID fromString: '12345678123456781234567812345678'.
+
+{ id printString. id hex. id bytes size. id = same.
+  id < (UUID fromString: 'ff000000-0000-0000-0000-000000000000').
+  ((UUID new bytes at: 7) bitShift: -4) } displayNl.
+```
+
+```bash
+$ ./build/protost uuid-demo.st
+#('12345678-1234-5678-1234-567812345678' '12345678123456781234567812345678' 16 true true 4)
+```
+
+`printString` is the 36-character lowercase form and `hex` the 32 digits;
+`fromString:` takes either, in either case, and anything else signals
+`Error`. `bytes` is the 16 bytes in RFC 4122 order and `asInteger` their
+unsigned big-endian value, which `<` compares. Two UUIDs are `=` when their
+bytes are; a UUID is never `=` to its own bytes, text or Integer. The high
+four bits of byte 7 of a new UUID are its version, 4.
+
+> **In Python** this is `uuid.UUID` and `uuid.uuid4()`, with the same text
+> (`str`), `hex`, `bytes`, `int`, comparison and hash. **In JavaScript**
+> `crypto.randomUUID()` answers the text of a version-4 UUID.
+
+The full protocol is in the language reference, LANGUAGE.md §12.16.
+
+## 9.11 Reading the library as protoST code
 
 The kernel classes and the modules are ordinary protoST `.st` files, written
 in exactly the language this tutorial teaches: the kernel is loaded at start-up
@@ -329,7 +478,7 @@ every non-`_`-prefixed class becomes an attribute of the module object that
 leaves the quotes off a string) print the receiver followed by a newline and
 answer the receiver. Both write in program order.
 
-## 9.9 Summary
+## 9.12 Summary
 
 - protoST's library is in two parts: the **kernel**, always loaded — the
   mathematical protocol on `Number`, streams, `Random`, `Time`, `Date`,
@@ -340,8 +489,10 @@ answer the receiver. Both write in program order.
 - `Import from: 'name'` loads a module (cached) and answers a module object;
   read its classes with unary sends (`m JSON`). The module's classes also
   become globals.
-- The standard modules: `json` (`parse:`/`stringify:`), `net` and `http`
-  (Chapter 15), and `stream`,
+- The standard modules: `json` (`parse:`/`stringify:`), `decimal` (an exact
+  `Decimal` value, no arithmetic), `calendar` (dates, times, datetimes and
+  time spans in microseconds, with fixed offsets), `uuid` (`UUID`
+  identifiers, version 4 from the OS's secure random bytes), `net` and `http` (Chapter 15), and `stream`,
   `random` and `time`, kept from before the kernel had those classes
   (`random` and `time` replace the kernel's `Random`, `Time` and `Duration`
   when imported).

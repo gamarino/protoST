@@ -41,6 +41,13 @@ ByteArray class >> fromHex: aString
   "The bytes aString spells in hexadecimal, two digits per byte, in either case."
   ^ self __fromHex: aString.
 
+ByteArray class >> randomBytes: anInteger
+  "anInteger bytes from the operating system's cryptographically secure
+   generator, for identifiers, nonces and keys (never Random, which is seeded
+   and reproducible). anInteger is from 0 to 1048576; anything else signals
+   InvalidArgument."
+  ^ self __randomBytes: anInteger.
+
 "--- accessing ------------------------------------------------------------------"
 
 ByteArray >> size

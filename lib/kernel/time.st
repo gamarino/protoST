@@ -67,10 +67,20 @@ Time class >> hour: h minute: m second: s
   ^ self basicNew setHours: h minutes: m seconds: s.
 
 Time class >> millisecondClockValue
+  "A monotonic clock in milliseconds, from an unspecified origin: only the
+   difference between two readings means anything."
   ^ nil __clockMilliseconds.
 
 Time class >> microsecondClockValue
+  "A monotonic clock in microseconds, from an unspecified origin (unlike
+   Pharo's, it is not the wall clock: see utcMicroseconds)."
   ^ nil __clockMicroseconds.
+
+Time class >> utcMicroseconds
+  "The wall clock: microseconds since 1970-01-01T00:00Z (the Unix epoch). It
+   dates events; it follows the system clock when that is set, so it does not
+   measure durations (microsecondClockValue does)."
+  ^ nil __utcMicros.
 
 Time class >> millisecondsToRun: aBlock
   | start |
@@ -238,12 +248,12 @@ Object subclass: #Random instanceVariableNames: 'seed'.
 Random class >> new
   ^ self seed: nil __entropySeed.
 
-"protoST keeps a class's class-side and instance-side methods of the same
- selector in one slot, so this method serves both of Pharo's: sent to the
- class (Random seed: 42) it answers a new generator, sent to a generator
- (Random new seed: 42) it re-seeds that generator and answers it."
+"A new generator seeded with anInteger (Random seed: 42)."
+Random class >> seed: anInteger
+  ^ self basicNew setSeed: anInteger; yourself.
+
+"Re-seed the receiver (Random new seed: 42) and answer it."
 Random >> seed: anInteger
-  self isClass ifTrue: [^ self basicNew setSeed: anInteger].
   self setSeed: anInteger.
   ^ self.
 

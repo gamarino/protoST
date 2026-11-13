@@ -7,6 +7,7 @@
 #include <thread>
 
 #include "protoST/STRuntime.h"
+#include "protoST/STUncaughtError.h"
 #include "runtime/UnhandledSTException.h"
 #include "runtime/ExecutionEngine.h"
 #include "runtime/BytecodeModule.h"
@@ -15,6 +16,7 @@
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
 #include "protoCore.h"
+#include "modules/STModuleProvider.h"
 
 TEST_CASE("ExecutionEngine: empty module returns nil", "[engine]") {
     protoST::STRuntime rt;
@@ -813,6 +815,101 @@ TEST_CASE("F5 v2: Import>>from: hits protoCore cache on second call", "[engine][
     unsetenv("STPATH");
 }
 
+TEST_CASE("K1: a runtime does not reach the modules of a runtime destroyed before it",
+          "[engine][modules][umd]") {
+    // protoCore's module cache is process-wide and never drops an entry. When
+    // every runtime shared one provider GUID, the second runtime's import of
+    // counter_lib hit the first runtime's cached module, whose methods' bytecode
+    // had been freed: `initialize` read its argument count from freed memory
+    // ("method initialize expects -1 args"), a heap-use-after-free under ASan.
+    // Now each runtime has a provider of its own and retires it when it dies.
+    std::string fixtures = PROTOST_FIXTURES_DIR;
+    setenv("STPATH", fixtures.c_str(), 1);
+    const char* src =
+        "m := Import from: 'counter_lib'. "
+        "c := m Counter newChild. "
+        "c initialize. c increment. c value.";
+    std::string firstGuid;
+    for (int round = 0; round < 3; ++round) {
+        protoST::Parser P(src);
+        auto ast = P.parseModule();
+        REQUIRE(P.errors().empty());
+        protoST::Compiler C; auto bc = C.compileModule(*ast);
+        REQUIRE(!C.hasErrors());
+        proto::ModuleProvider* provider = nullptr;
+        {
+            protoST::STRuntime rt;
+            auto* r = rt.runTopLevel(*bc);
+            REQUIRE(r->asLong(rt.rootCtx()) == 1);
+            // `provider:st` answers the live runtime's own provider GUID.
+            proto::ModuleProvider* alias =
+                proto::ProviderRegistry::instance().getProviderForSpec("provider:st");
+            REQUIRE(alias != nullptr);
+            const std::string guid = alias->getGUID();
+            if (round == 0) firstGuid = guid;
+            else REQUIRE(guid != firstGuid);
+            provider = proto::ProviderRegistry::instance().findByGUID(guid);
+            REQUIRE(provider != nullptr);
+            REQUIRE(provider != alias);
+        }
+        // The dead runtime's provider answers a GUID no entry is stored under
+        // and loads nothing.
+        proto::ProtoSpace bare;
+        proto::ProtoContext bareCtx(&bare, nullptr);
+        REQUIRE(provider->tryLoad("counter_lib", &bareCtx) == PROTO_NONE);
+    }
+    unsetenv("STPATH");
+}
+
+TEST_CASE("K1: provider:st serves the live runtime after another was destroyed",
+          "[engine][modules][umd]") {
+    // Re-review round 2, R2-1: the alias `st` named the provider registered
+    // last, so with runtime A alive and runtime B constructed and destroyed,
+    // a foreign import through `provider:st` reached B's retired provider and
+    // answered "no module" although A is the only runtime and the import is
+    // unambiguous.
+    std::string fixtures = PROTOST_FIXTURES_DIR;
+    setenv("STPATH", fixtures.c_str(), 1);
+    protoST::STRuntime a;
+    { protoST::STRuntime b; }
+    REQUIRE(protoST::soleSTRuntime() == &a);
+    proto::ModuleProvider* alias =
+        proto::ProviderRegistry::instance().getProviderForSpec("provider:st");
+    REQUIRE(alias != nullptr);
+    REQUIRE(alias->getGUID().find("#retired") == std::string::npos);
+    proto::ProtoSpace foreign;
+    proto::ProtoContext foreignCtx(&foreign, nullptr);
+    const proto::ProtoObject* module = alias->tryLoad("counter_lib", &foreignCtx);
+    REQUIRE(module != nullptr);
+    REQUIRE(module != PROTO_NONE);
+    REQUIRE(module->getAttribute(&foreignCtx,
+                proto::ProtoString::createSymbol(&foreignCtx, "Counter")) != PROTO_NONE);
+    unsetenv("STPATH");
+}
+
+TEST_CASE("K1: with no live runtime provider:st answers a GUID no call repeats",
+          "[engine][modules][umd]") {
+    // Constructing a runtime registers the dispatcher; once it is destroyed
+    // there is no live runtime. Each getGUID call then answers a new GUID,
+    // so no cache entry stored under one is ever found again, and tryLoad
+    // loads nothing.
+    { protoST::STRuntime once; }
+    REQUIRE(protoST::registeredSTRuntimeCount() == 0);
+    proto::ModuleProvider* alias =
+        proto::ProviderRegistry::instance().getProviderForSpec("provider:st");
+    REQUIRE(alias != nullptr);
+    const std::string first = alias->getGUID();
+    const std::string second = alias->getGUID();
+    REQUIRE(first != second);
+    std::string fromOtherThread;
+    std::thread([&] { fromOtherThread = alias->getGUID(); }).join();
+    REQUIRE(fromOtherThread != first);
+    REQUIRE(fromOtherThread != second);
+    proto::ProtoSpace foreign;
+    proto::ProtoContext foreignCtx(&foreign, nullptr);
+    REQUIRE(alias->tryLoad("counter_lib", &foreignCtx) == PROTO_NONE);
+}
+
 // ---------------------------------------------------------------------------
 // F6 v3 B: snapshot/restore round-trip for the engine's frame stack.
 //
@@ -1173,8 +1270,9 @@ TEST_CASE("Engine: an operand stack overflow in a hand-built module is a Smallta
           "[engine][stack]") {
     // A loop that pushes without popping defeats the depth computation (it
     // is not code the compiler emits). The overflow must take the Smalltalk
-    // signal path -- catchable by on:do:, an UnhandledSTException at top
-    // level -- not escape as a bare C++ runtime_error.
+    // signal path -- catchable by on:do:, an unhandled Smalltalk error at top
+    // level (an STUncaughtError at this runtime's embedder boundary, K20) --
+    // not escape as a bare C++ runtime_error.
     protoST::STRuntime rt;
     protoST::BytecodeModule m;
     m.emit(protoST::Op::PUSH_NIL, 0);
@@ -1182,8 +1280,9 @@ TEST_CASE("Engine: an operand stack overflow in a hand-built module is a Smallta
     bool signalled = false;
     try {
         rt.runTopLevel(m);
-    } catch (const protoST::UnhandledSTException& e) {
-        signalled = std::string(e.what()).find("operand stack overflow") != std::string::npos;
+    } catch (const protoST::STUncaughtError& e) {
+        signalled = std::string(e.what()).find("operand stack overflow") != std::string::npos
+            && e.isKindOf("Error");
         if (!signalled) INFO(e.what());
     }
     REQUIRE(signalled);

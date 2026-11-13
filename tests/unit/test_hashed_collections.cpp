@@ -102,10 +102,10 @@ long long storedSize(proto::ProtoContext* ctx, const proto::ProtoObject* coll) {
     return n->asLong(ctx);
 }
 
-// Two different integers whose numeric hash is the same: the hash keeps the
-// low 53 bits, so 2^53 - 1 and -1 collide.
+// Two different integers whose numeric hash is the same: the numeric hash is
+// CPython's (R3), where a hash of -1 becomes -2, so -1 and -2 collide.
 const char* const kCollidingKeys =
-    "a := (2 raisedTo: 53) - 1. b := -1. ";
+    "a := -1. b := -2. ";
 
 } // namespace
 
@@ -186,4 +186,36 @@ TEST_CASE("Track S: a Set's stored count tracks removals through a collision buc
     REQUIRE(shape.entries == 2);
     REQUIRE(storedSize(ctx, set) == 2);
     REQUIRE(shape.identitySlots == 0);
+}
+
+// R3, fix round 1: the numeric hash keeps a dyadic Float's fraction bits in
+// its high bits (0.5 hashes to 2^60), and protoCore keys a slot by the low 54
+// bits of the hash word. Unmixed, every Float with few fraction bits shared
+// the slot of its integer part, and so did every Point or Array combined from
+// such Floats: a 100 x 100 grid of i/4.0 @ j/4.0 Points used 1/16 of the
+// slots, and i/64.0 one slot per 64 keys, each slot a linear bucket. This is
+// the bucket-count regression check: on each workload nearly every key must
+// have a slot of its own. (An exact count is not required: two keys of a
+// workload may share a 54-bit slot word by chance.)
+TEST_CASE("R3: keys differing in high hash bits take distinct slots",
+          "[collections][hashed][whitebox][r3]") {
+    CollectionHost h;
+    proto::ProtoContext* ctx = h.rt.rootCtx();
+    struct Workload { const char* name; const char* src; };
+    const Workload workloads[] = {
+        {"dyadic Points", "s := Set new. 1 to: 40 do: [:i | 1 to: 40 do: [:j | s add: (i / 4.0) @ (j / 4.0)]]. s"},
+        {"dyadic Floats", "s := Set new. 1 to: 5000 do: [:i | s add: i / 64.0]. s"},
+        {"Floats", "s := Set new. 1 to: 5000 do: [:i | s add: i * 1.1]. s"},
+        {"Fractions", "s := Set new. 1 to: 5000 do: [:i | s add: i / 7]. s"},
+        {"Integers", "s := Set new. 1 to: 5000 do: [:i | s add: i]. s"},
+        {"Arrays of Floats", "s := Set new. 1 to: 2000 do: [:i | s add: (Array with: i / 8.0 with: 0.5)]. s"},
+        {"Associations", "d := Dictionary new. 1 to: 2000 do: [:i | d at: (i / 16.0) -> 1 put: i]. d"},
+    };
+    for (const Workload& w : workloads) {
+        INFO(w.name);
+        const proto::ProtoObject* coll = h.run(w.src);
+        const MapShape shape = shapeOf(ctx, coll);
+        REQUIRE(shape.entries == static_cast<proto::proto_ulong>(storedSize(ctx, coll)));
+        REQUIRE(shape.slots + 2 >= shape.entries);
+    }
 }

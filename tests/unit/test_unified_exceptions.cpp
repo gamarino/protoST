@@ -44,9 +44,25 @@ CATCH_TRANSLATE_EXCEPTION(const proto::ProtoException& e) {
 
 namespace {
 
+// By default the runtime runs in a host's space, as next to another
+// language: there an unhandled exception leaves as the unified
+// ProtoException. (A runtime that owns its space hands its embedder a
+// self-contained STUncaughtError instead, K20, test_k20_embedder_boundary.cpp.)
+// The space outlives the runtime. `Host(true)` makes a runtime that owns its
+// space, for the cases about protoST's error factory, which only such a
+// runtime installs.
 struct Host {
     std::vector<std::unique_ptr<protoST::BytecodeModule>> kept;
-    protoST::STRuntime rt;
+    std::unique_ptr<proto::ProtoSpace> space;
+    std::unique_ptr<protoST::STRuntime> owner;
+    protoST::STRuntime& rt;
+
+    explicit Host(bool ownSpace = false)
+        : space(ownSpace ? nullptr : std::make_unique<proto::ProtoSpace>()),
+          owner(ownSpace ? std::make_unique<protoST::STRuntime>()
+                         : std::make_unique<protoST::STRuntime>(*space)),
+          rt(*owner) {}
+    ~Host() { owner.reset(); }
 
     proto::ProtoContext* ctx() { return rt.rootCtx(); }
 
@@ -154,7 +170,7 @@ TEST_CASE("unified exceptions: an unhandled Error leaves as a ProtoException car
 
 TEST_CASE("unified exceptions: protoCore's errors are built as protoST classes",
           "[exceptions][unified]") {
-    Host h;
+    Host h(true);
     proto::ProtoContext* ctx = h.ctx();
     bool zero = false;
     try {
@@ -178,7 +194,7 @@ TEST_CASE("unified exceptions: protoCore's errors are built as protoST classes",
 
 TEST_CASE("unified exceptions: a protoCore error inside a primitive is caught by its protoST class",
           "[exceptions][unified]") {
-    Host h;
+    Host h(true);
     // 1 // 0 and 1.0 reciprocal-style divisions raise protoCore's
     // DivisionByZero through the factory; ZeroDivide stays resumable.
     const proto::ProtoObject* r = h.run("[(10 // 0) + 1] on: ZeroDivide do: [:e | e resume: 5].");

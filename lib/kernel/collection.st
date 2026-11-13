@@ -456,11 +456,10 @@ Dictionary class >> newFrom: aCollection
 
 "--- Association ---------------------------------------------------------------"
 
+Association class >> key: aKey value: aValue
+  ^ self new key: aKey value: aValue.
+
 Association >> key: aKey value: aValue
-  "protoST keeps a class's class-side and instance-side methods of the same
-   selector in one slot, so this method serves both of Pharo's: sent to the
-   class it creates an Association, sent to an instance it sets both fields."
-  self isClass ifTrue: [^ self new key: aKey value: aValue].
   self key: aKey.
   self value: aValue.
   ^ self.
@@ -470,8 +469,9 @@ Association >> = anObject
   (anObject isKindOf: Association) ifFalse: [^ false].
   ^ self key = anObject key and: [self value = anObject value].
 
+"Modulo 2^61 - 1, as Point >> hash: the high bits of a numeric hash count."
 Association >> hash
-  ^ (self key hash * 31 + self value hash) \\ 1073741824.
+  ^ self key __hashMix: self value.
 
 "--- SortedCollection: an OrderedCollection that keeps its sort order ---------"
 
@@ -532,7 +532,7 @@ SequenceableCollection >> = other
 SequenceableCollection >> hash
   | h |
   h := self size.
-  1 to: (self size min: 8) do: [:i | h := (h * 31 + (self at: i) hash) \\ 1073741824].
+  1 to: (self size min: 8) do: [:i | h := h __hashMix: (self at: i)].
   ^ h.
 
 Set >> = other

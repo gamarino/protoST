@@ -2,8 +2,8 @@
 #include "runtime/NativeError.h"
 #include "runtime/ListIndex.h"
 #include "protoST/STRuntime.h"
-#include "runtime/PrimitiveMarker.h"
 #include "protoST/primitives.h"
+#include "runtime/BlockCode.h"
 #include "ExecutionEngine.h"
 #include "FutureYield.h"
 #include "NonLocalReturn.h"
@@ -11,7 +11,6 @@
 #include "NestingLimitUnwind.h"
 #include "ResumeSignal.h"
 #include "RetrySignal.h"
-#include "PassSignal.h"
 #include "ReadyStack.h"
 #include "TimerService.h"
 #include "BytecodeModule.h"
@@ -20,6 +19,7 @@
 #include "SchedDiag.h"
 #include "TransientPin.h"
 #include "UnhandledSTException.h"
+#include "protoST/STUncaughtError.h"
 #include "NativeExceptionBridge.h"
 #include "debugger/DebuggerRuntime.h"
 #include "frontend/Parser.h"
@@ -156,17 +156,17 @@ namespace {
     thread_local const proto::ProtoObject* g_currentActor = nullptr;
 }
 
-struct PrimitiveRegistry::Impl { std::vector<PrimFn> fns; };
-PrimitiveRegistry::PrimitiveRegistry() : impl(std::make_unique<Impl>()) {}
-PrimitiveRegistry::~PrimitiveRegistry() = default;
-int PrimitiveRegistry::registerPrim(PrimFn fn) {
-    impl->fns.push_back(fn);
-    return static_cast<int>(impl->fns.size()) - 1;
-}
-PrimFn PrimitiveRegistry::at(int i) const { return impl->fns.at(i); }
-size_t PrimitiveRegistry::size() const   { return impl->fns.size(); }
+namespace detail {
+constinit thread_local proto::ProtoMethod t_dispatchedMethod = nullptr;
 
-void bindPrimitive(STRuntime& rt, const proto::ProtoObject* proto, const char* selector, int idx) {
+void refuseNamedArguments(proto::ProtoContext*) {
+    throw NativeError("a primitive method takes no named arguments");
+}
+
+} // namespace detail
+
+void bindPrimitive(STRuntime& rt, const proto::ProtoObject* proto, const char* selector,
+                   proto::ProtoMethod method) {
     auto* ctx = rt.rootCtx();
     // F6 v3 E5: intern the selector as a STRONG SYMBOL via createSymbol. A
     // strong symbol is eternal — recorded in the per-space SymbolTable and
@@ -179,9 +179,18 @@ void bindPrimitive(STRuntime& rt, const proto::ProtoObject* proto, const char* s
     // (ExecutionEngine.cpp) now also interns selectors via createSymbol, so
     // both sides agree on the same eternal symbol.
     auto* sel = proto::ProtoString::createSymbol(ctx, selector);
-    // Tag bit 62 marks "this is a primitive marker, not a real method object".
-    auto* val = ctx->fromLong(encodePrimitiveMarker(static_cast<int>(idx)));
+    // A primitive is a native method cell. Its receiver is never bound: the
+    // send passes it as `self`, and a cell bound to the prototype it is
+    // installed on would be a reference cycle protoCore never collects
+    // (ProtoContext::fromMethod). The cell is reachable from the prototype,
+    // which keeps it alive.
+    const proto::ProtoObject* val = ctx->fromMethod(nullptr, method);
     const_cast<proto::ProtoObject*>(proto)->setAttribute(ctx, sel, val);
+}
+
+void bindClassPrimitive(STRuntime& rt, const proto::ProtoObject* cls, const char* selector,
+                        proto::ProtoMethod method) {
+    bindPrimitive(rt, ensureMetaclass(rt.bootstrap(), rt.rootCtx(), cls), selector, method);
 }
 
 // F6 v3 E2b: derive a unique attribute key from an object pointer. The live
@@ -259,7 +268,6 @@ struct STRuntime::Impl {
     proto::ProtoContext* rootCtx    = nullptr;
     proto::ProtoRootSet* asyncRoots = nullptr;
     Bootstrap            bootstrap;
-    PrimitiveRegistry    registry;
     DebuggerRuntime      debugger;
     // F4-U1: mutable globals namespace, used by PUSH_GLOBAL / STORE_GLOBAL.
     // A mutable child of objectProto so setAttribute updates this object in
@@ -325,6 +333,27 @@ struct STRuntime::Impl {
     size_t spawning = 0;
     unsigned baseWorkers = 0;
     std::atomic<int> blockedInIO { 0 };
+    // S40: the workers among `blockedInIO` that are in a wait at the helping
+    // cap (enterCappedWait), not in I/O; one per thread.
+    std::atomic<int> cappedThreads { 0 };
+    // S40: `workers.size() + spawning`, mirrored for reads without the
+    // mutex (deadlockPossible polls it); `poolCannotGrow` is set when a
+    // worker could not be created, so the pool's real ceiling is below
+    // kMaxWorkers.
+    std::atomic<size_t> poolSize { 0 };
+    std::atomic<bool> poolCannotGrow { false };
+    // S40: the quiescence round (see STRuntime.h, confirmStuck): the epoch
+    // in the high bits, the capped threads that confirmed it in the low
+    // kConfirmBits.
+    std::atomic<std::uint64_t> quiesce { 0 };
+    // S40: tasks popped by runOneTask and not finished (minus those whose
+    // thread waits inside them, pauseRunningTasks).
+    std::atomic<int> runningTasks { 0 };
+    // S40: a caller that is not this runtime's program thread or a worker
+    // (noteForeignCaller), and the first non-worker thread that entered
+    // through atEmbedderBoundary (identified by a thread_local's address).
+    std::atomic<bool> foreignCaller { false };
+    std::atomic<const void*> programThread { nullptr };
 
     // F6 v4 (2026-05-23): the actual scheduling queue. The previous
     // ProtoList-under-__ready__ scheme is gone; this is the lock-free
@@ -386,6 +415,16 @@ struct STRuntime::Impl {
     // sees state(X)=settled (breaks the loop without parking). Both
     // outcomes are safe.
     std::atomic<const proto::ProtoObject*> mainWaitingOn{nullptr};
+    // S40 (review R1-I1): the future whose settle last released the program
+    // thread's wait (notifyMainWaiterIfFor). mainWaitingOn stays set until
+    // the released thread runs again, so "parked" is mainWaitingOn set and
+    // not equal to this. Compared as a pointer only, never dereferenced.
+    std::atomic<const proto::ProtoObject*> mainReleasedFor{nullptr};
+    // S40 (review R2-I1): the program thread is inside acquireMainWait, which
+    // it enters only after reading its future pending (prim_Future_wait's
+    // slow path). A wait that finds its future already settled announces it
+    // in mainWaitingOn but never blocks, and must not count as parked.
+    std::atomic<bool> mainBlocked{false};
     Semaphore                               mainWaitSem;
 
     // Tasks published on `liveRegistry.__tasks__` and not yet taken
@@ -401,10 +440,12 @@ struct STRuntime::Impl {
 
     // F5-M2 module cache: canonical absolute path -> module object.
     std::unordered_map<std::string, const proto::ProtoObject*> moduleCache;
+    // This runtime's UMD provider (K1); owned by protoCore's ProviderRegistry.
+    STModuleProvider* moduleProvider = nullptr;
 
     // F5-M3: Keep compiled BytecodeModules alive for the lifetime of the
-    // runtime. Block method wrappers store raw pointers into a module's
-    // `block(idx)` storage via __bc_ptr__; if the BytecodeModule were
+    // runtime. Block method wrappers borrow pointers into a module's
+    // `block(idx)` storage via __bc_ptr__ (external pointers, BlockCode.h); if the BytecodeModule were
     // destroyed at the end of loadModuleFromFile those pointers would
     // dangle and any subsequent send on a module-resident class would
     // segfault.
@@ -524,6 +565,9 @@ struct STRuntime::Impl {
         globals->setAttribute(rootCtx,
             proto::ProtoString::createSymbol(rootCtx, "BlockCannotReturn"),
             bootstrap.blockCannotReturnProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "NonBooleanReceiver"),
+            bootstrap.nonBooleanReceiverProto);
 
         // Track 2 slice a (COL-a): register the collection class hierarchy in
         // globals so user code can name `Collection`, `Array`, etc. and do
@@ -595,6 +639,14 @@ struct STRuntime::Impl {
         globals->setAttribute(rootCtx,
             proto::ProtoString::createSymbol(rootCtx, "ByteArray"),
             bootstrap.byteArrayProto);
+        // K14, D52: the class protocol, nameable to extend it
+        // (`Behavior >> selector`).
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "Behavior"), bootstrap.behaviorProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "Class"), bootstrap.classProto);
+        globals->setAttribute(rootCtx,
+            proto::ProtoString::createSymbol(rootCtx, "Metaclass"), bootstrap.metaclassProto);
 
         // F6 v3 E2b: create the single live-registry GC root and pin it.
         //
@@ -685,6 +737,10 @@ struct STRuntime::Impl {
             // runtime's whole lifetime, like every other built-in class.
             pinPermanent(bootstrap.messageNotUnderstoodProto);
             pinPermanent(bootstrap.blockCannotReturnProto);
+            pinPermanent(bootstrap.nonBooleanReceiverProto);
+            // Not a class: the prototype of de-optimisation forwards, which
+            // only the engine creates and recognises.
+            pinPermanent(bootstrap.deoptForwardProto);
             // Track 2 slice a (COL-a): the collection prototypes carry the
             // iteration protocol + Array base operations — pin them for the
             // runtime's whole lifetime, exactly like the other built-in classes.
@@ -754,6 +810,53 @@ STRuntime::STRuntime(proto::ProtoSpace& hostSpace) : impl_(std::make_unique<Impl
 bool STRuntime::ownsSpace() const { return impl_->ownsSpace(); }
 
 void STRuntime::construct() {
+    // S6: associate this runtime with its ProtoSpace, in two steps
+    // (STModuleProvider.h). First the space's entry is reserved: a primitive
+    // finds its runtime by its context's space (primitives.h, runtimeOf), so
+    // a space hosts one protoST runtime and a second one is refused here,
+    // before anything is installed in the space. Until it is published below,
+    // only this thread, inside `constructing`, finds the runtime, which its
+    // kernel loading needs; every other thread finds nothing, so none reaches
+    // a runtime whose primitives, provider or kernel are not in place. The
+    // entry is removed again if construction fails, since the destructor will
+    // not run.
+    //
+    // K1: the runtime's own module provider, numbered by the runtime's serial,
+    // is handed to protoCore's ProviderRegistry, which keeps it for the life
+    // of the process, only once the space is reserved, so a refused runtime
+    // leaves no provider behind; a construction that fails later retires it,
+    // as the destructor would. The registry entry gets the provider when the
+    // runtime is published, by which time protoCore owns it.
+    //
+    // F5 v2, K1: first, once per process, the dispatcher foreign callers reach
+    // as `provider:st`. protoCore's ProviderRegistry files a provider under the
+    // GUID it answers when it is registered, and the dispatcher answers the
+    // sole live runtime's GUID: registered after this runtime, it would take
+    // the place of the runtime's own provider under that GUID. Registered
+    // before any runtime, it answers a GUID no other call ever answers.
+    static std::once_flag s_dispatcherRegistered;
+    std::call_once(s_dispatcherRegistered, []() {
+        proto::ProviderRegistry::instance().registerProvider(
+            std::make_unique<STDispatchProvider>());
+    });
+    ConstructingSTRuntimeScope constructing(this);
+    auto ownProvider = std::make_unique<STModuleProvider>(serial());
+    impl_->moduleProvider = ownProvider.get();
+    reserveSTRuntime(&impl_->space, this);
+    struct RegistrationGuard {
+        const proto::ProtoSpace* space;
+        STRuntime* rt;
+        STModuleProvider* provider = nullptr;   // set once protoCore owns it
+        bool committed = false;
+        ~RegistrationGuard() {
+            if (committed) return;
+            if (provider) provider->retire();
+            unregisterSTRuntime(space, rt);
+        }
+    } registration{&impl_->space, this};
+    proto::ProviderRegistry::instance().registerProvider(std::move(ownProvider));
+    registration.provider = impl_->moduleProvider;
+
     installIntPrimitives(*this);
     installMathPrimitives(*this);
     installTimePrimitives(*this);
@@ -781,32 +884,27 @@ void STRuntime::construct() {
     impl_->timers = std::make_unique<TimerService>(
         *this, impl_->liveRegistry, impl_->bootstrap.sym.timers);
 
-    // F5 v2: register STModuleProvider once globally with protoCore's
-    // ProviderRegistry; subsequent STRuntime instances reuse the same provider.
-    static std::once_flag s_providerRegistered;
-    std::call_once(s_providerRegistered, []() {
-        proto::ProviderRegistry::instance().registerProvider(
-            std::make_unique<STModuleProvider>());
-    });
 
-    // S6: associate this runtime with its ProtoSpace so the provider's
-    // tryLoad() dispatches back into our findModuleFile / importModuleFile
-    // helpers from ANY thread running on this space. Registered before the
-    // worker pool below is started, so no import can miss it.
-    registerSTRuntime(&impl_->space, this);
-
-    // Set the resolution chain on this space: protoST's source provider only.
-    // In a host's space the host's chain stays, and protoST's provider is
-    // added to it.
+    // Set the resolution chain on this space: protoST's source provider only,
+    // named by its GUID so the cache entries of this runtime's imports are
+    // its own (K1). In a host's space the host's chain stays, and protoST's
+    // provider is added to it.
+    const std::string ownSpec = impl_->moduleProvider->chainSpec();
     if (!impl_->ownsSpace()) {
-        addModuleProviderToChain("provider:st");
+        addModuleProviderToChain(ownSpec);
     } else {
         auto* ctx = impl_->rootCtx;
         auto* chain = ctx->newList();
         chain = chain->appendLast(
-            ctx, ctx->fromUTF8String("provider:st"));
+            ctx, ctx->fromUTF8String(ownSpec.c_str()));
         impl_->space.setResolutionChain(chain->asObject(ctx));
     }
+
+    // S37: the classes built in C++ so far (Object, Error, Collection, ...)
+    // end a class chain the compiler knows: they declare no variable a method
+    // could name. A method of a class whose chain reaches anything else the
+    // compiler has not seen resolves its unknown names when installed.
+    publishNativeClasses();
 
     // The protocol written in protoST itself. Loaded before the worker pool
     // starts, so a broken kernel file fails construction with no thread left
@@ -849,8 +947,12 @@ void STRuntime::construct() {
         if (numWorkers > 8u) numWorkers = 8u;
 
         impl_->baseWorkers = numWorkers;
+        // Published now: the workers are the first code on another thread
+        // that needs the runtime, and everything else is in place.
+        publishSTRuntime(&impl_->space, this, impl_->moduleProvider);
         for (unsigned i = 0; i < numWorkers; ++i) spawnWorker(ctx);
     }
+    registration.committed = true;
 }
 
 // Starts one more pool worker. Called at construction and by
@@ -864,38 +966,53 @@ bool STRuntime::spawnWorker(proto::ProtoContext* ctx) {
         std::lock_guard<std::mutex> lock(impl_->workersMutex);
         if (impl_->shutdown.load(std::memory_order_acquire)) return false;
         index = impl_->workers.size() + impl_->spawning++;
+        impl_->poolSize.store(impl_->workers.size() + impl_->spawning, std::memory_order_release);
     }
+    // The reserved slot is released on every exit, an exception included
+    // (an allocation below can throw): registered when the thread exists,
+    // given back otherwise.
+    struct Reservation {
+        Impl& impl; const proto::ProtoThread* thread = nullptr;
+        ~Reservation() {
+            std::lock_guard<std::mutex> lock(impl.workersMutex);
+            // Registered even when shutdown began meanwhile: the destructor
+            // waits for `spawning` to drain and joins every registered worker.
+            if (thread) impl.workers.push_back(thread);
+            --impl.spawning;
+            impl.poolSize.store(impl.workers.size() + impl.spawning, std::memory_order_release);
+            // S40: a pool that cannot grow has its ceiling here.
+            if (!thread) impl.poolCannotGrow.store(true, std::memory_order_release);
+        }
+    } reservation{*impl_};
     const proto::ProtoList* argsForThread = ctx->newList();
     argsForThread = argsForThread->appendLast(
         ctx, ctx->fromExternalPointer(this, nullptr));
     std::string nameStr = "protoST-worker-" + std::to_string(index);
     const proto::ProtoString* threadName =
         proto::ProtoString::createSymbol(ctx, nameStr.c_str());
-    const proto::ProtoThread* t = impl_->space.newThread(
+    reservation.thread = impl_->space.newThread(
         ctx, threadName, st_worker_main, argsForThread, nullptr);
-    {
-        // Registered even when shutdown began meanwhile: the destructor
-        // waits for `spawning` to drain and joins every registered worker.
-        std::lock_guard<std::mutex> lock(impl_->workersMutex);
-        if (t) impl_->workers.push_back(t);
-        --impl_->spawning;
-    }
-    return t != nullptr;
+    return reservation.thread != nullptr;
 }
 
 namespace { thread_local const STRuntime* t_workerOf = nullptr; }
 
 bool STRuntime::enterBlockingIO(proto::ProtoContext* ctx) {
     if (t_workerOf != this) return false;
-    constexpr size_t kMaxWorkers = 256;
     const int blocked = impl_->blockedInIO.fetch_add(1, std::memory_order_acq_rel) + 1;
-    size_t total;
-    {
-        std::lock_guard<std::mutex> lock(impl_->workersMutex);
-        total = impl_->workers.size() + impl_->spawning;
+    const size_t total = impl_->poolSize.load(std::memory_order_acquire);
+    // Fewer free workers than configured: add one. `blocked` can exceed
+    // `total` only transiently (a worker being registered), and then no
+    // worker is free.
+    const size_t free = static_cast<size_t>(blocked) >= total ? 0 : total - static_cast<size_t>(blocked);
+    if (total < kMaxWorkers && free < impl_->baseWorkers) {
+        try {
+            spawnWorker(ctx);
+        } catch (...) {
+            impl_->blockedInIO.fetch_sub(1, std::memory_order_acq_rel);
+            throw;
+        }
     }
-    if (total < kMaxWorkers && total - static_cast<size_t>(blocked) < impl_->baseWorkers)
-        spawnWorker(ctx);
     return true;
 }
 
@@ -903,6 +1020,137 @@ bool STRuntime::isWorkerThread() const { return t_workerOf == this; }
 
 void STRuntime::leaveBlockingIO() {
     impl_->blockedInIO.fetch_sub(1, std::memory_order_acq_rel);
+}
+
+namespace {
+// S40: the quiescence word (Impl::quiesce): epoch << kConfirmBits | confirmations.
+constexpr unsigned kConfirmBits = 20;
+constexpr std::uint64_t kConfirmMask = (std::uint64_t{1} << kConfirmBits) - 1;
+// The epoch this thread last confirmed, per runtime.
+thread_local const STRuntime* t_confirmedFor = nullptr;
+thread_local std::uint64_t t_confirmedEpoch = ~std::uint64_t{0};
+// Tasks this thread is running (runOneTask) and not waiting inside.
+thread_local int t_runningTasks = 0;
+// Identity of this thread for programThread.
+thread_local char t_threadMarker = 0;
+}
+
+// Ends the current epoch: the confirmations gathered so far no longer count.
+static void bumpEpoch(std::atomic<std::uint64_t>& q) {
+    std::uint64_t w = q.load(std::memory_order_seq_cst);
+    while (!q.compare_exchange_weak(w, ((w >> kConfirmBits) + 1) << kConfirmBits,
+                                    std::memory_order_seq_cst)) {}
+}
+
+void STRuntime::noteProgress() {
+    // Only while some thread is capped: before that no confirmation exists,
+    // and a thread entering the capped state ends the epoch itself.
+    if (impl_->cappedThreads.load(std::memory_order_seq_cst) > 0) bumpEpoch(impl_->quiesce);
+}
+
+std::uint64_t STRuntime::quiescenceEpoch() const {
+    return impl_->quiesce.load(std::memory_order_seq_cst) >> kConfirmBits;
+}
+
+bool STRuntime::enterCappedWait(proto::ProtoContext* ctx) {
+    if (t_workerOf != this) return false;
+    // The epoch ends before this thread counts as capped: whatever it did
+    // before (a settle, a turn) is behind every confirmation that counts.
+    bumpEpoch(impl_->quiesce);
+    impl_->cappedThreads.fetch_add(1, std::memory_order_seq_cst);
+    try {
+        enterBlockingIO(ctx);
+    } catch (...) {
+        impl_->cappedThreads.fetch_sub(1, std::memory_order_seq_cst);
+        throw;
+    }
+    return true;
+}
+
+void STRuntime::leaveCappedWait() {
+    bumpEpoch(impl_->quiesce);
+    leaveBlockingIO();
+    impl_->cappedThreads.fetch_sub(1, std::memory_order_seq_cst);
+}
+
+bool STRuntime::deadlockPossible() const {
+    const size_t total = impl_->poolSize.load(std::memory_order_acquire);
+    const bool ceiling = total >= kMaxWorkers || impl_->poolCannotGrow.load(std::memory_order_acquire)
+        || impl_->shutdown.load(std::memory_order_seq_cst);   // no worker is added at shutdown
+    return ceiling && total > 0
+        && static_cast<size_t>(impl_->cappedThreads.load(std::memory_order_acquire)) >= total;
+}
+
+std::string STRuntime::poolCeilingReason() const {
+    const size_t total = impl_->poolSize.load(std::memory_order_acquire);
+    const std::string n = std::to_string(total) + (total == 1 ? " worker" : " workers");
+    if (impl_->shutdown.load(std::memory_order_acquire))
+        return "the program is ending, so the pool (" + n + ") adds no worker";
+    if (total >= kMaxWorkers)   // two growths racing can pass kMaxWorkers by one
+        return "the pool has reached its maximum (" + n + ")";
+    return "the pool has " + n + " and could not create another";
+}
+
+void STRuntime::noteForeignCaller() {
+    impl_->foreignCaller.store(true, std::memory_order_seq_cst);
+    noteProgress();
+}
+
+int STRuntime::pauseRunningTasks() {
+    const int n = t_runningTasks;
+    if (n > 0) {
+        noteProgress();
+        impl_->runningTasks.fetch_sub(n, std::memory_order_seq_cst);
+        t_runningTasks = 0;
+    }
+    return n;
+}
+
+void STRuntime::resumeRunningTasks(int n) {
+    if (n <= 0) return;
+    impl_->runningTasks.fetch_add(n, std::memory_order_seq_cst);
+    t_runningTasks = n;
+}
+
+bool STRuntime::confirmStuck(proto::ProtoContext* ctx, std::uint64_t epoch) {
+    if (t_confirmedFor == this && t_confirmedEpoch == epoch) return false;
+    std::uint64_t w = impl_->quiesce.load(std::memory_order_seq_cst);
+    std::uint64_t count;
+    for (;;) {
+        if ((w >> kConfirmBits) != epoch) return false;      // something happened
+        count = (w & kConfirmMask) + 1;
+        if (impl_->quiesce.compare_exchange_weak(w, w + 1, std::memory_order_seq_cst)) break;
+    }
+    t_confirmedFor = this;
+    t_confirmedEpoch = epoch;
+    // Only the confirmation that completes the round goes on.
+    const size_t total = impl_->poolSize.load(std::memory_order_seq_cst);
+    if (count < total || !deadlockPossible()) return false;
+    // Nothing outside the pool can still release a wait. Read in this order:
+    // a timer stays pending until its settle task is queued, and a task
+    // counts as running before it leaves the queue.
+    if (impl_->foreignCaller.load(std::memory_order_seq_cst)) return false;
+    if (!ownsSpace() || debugger().attached()) return false;
+    // The program thread is parked in its wait, or only joins the workers
+    // (shutdown).
+    // A program thread released by a settle but not yet running is not
+    // parked (mainReleasedFor; review R1-I1). A stale record for an earlier
+    // future never matches a later one, except when the later future reuses
+    // the earlier one's address, which only withholds the error.
+    // It must also be blocked (mainBlocked, review R2-I1): a wait whose
+    // future was already settled announces itself but runs on.
+    const bool blocked = impl_->mainBlocked.load(std::memory_order_seq_cst);
+    const proto::ProtoObject* waitingOn = impl_->mainWaitingOn.load(std::memory_order_seq_cst);
+    const bool parked = blocked && waitingOn != nullptr
+        && impl_->mainReleasedFor.load(std::memory_order_seq_cst) != waitingOn;
+    if (!parked && !impl_->shutdown.load(std::memory_order_seq_cst)) return false;
+    if (impl_->timers && impl_->timers->pendingCount(ctx) != 0) return false;
+    if (impl_->queuedTasks.load(std::memory_order_seq_cst) > 0) return false;
+    if (impl_->runningTasks.load(std::memory_order_seq_cst) > 0) return false;
+    // Still the same round, complete: end it and signal.
+    std::uint64_t expected = (epoch << kConfirmBits) | count;
+    return impl_->quiesce.compare_exchange_strong(
+        expected, (epoch + 1) << kConfirmBits, std::memory_order_seq_cst);
 }
 // Forward-declared: defined down by workerLoop alongside the
 // per-worker stats globals.
@@ -930,8 +1178,11 @@ STRuntime::~STRuntime() {
         proto::ProtoContext::UnmanagedScope unmanaged(impl_->rootCtx);
         for (;;) {
             {
+                // S40: the program thread stops acting here (it only joins);
+                // the quiescence epoch ends before that is visible.
+                bumpEpoch(impl_->quiesce);
                 std::lock_guard<std::mutex> lock(impl_->workersMutex);
-                impl_->shutdown.store(true, std::memory_order_release);
+                impl_->shutdown.store(true, std::memory_order_seq_cst);
                 if (impl_->spawning == 0) { pool = impl_->workers; break; }
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -973,6 +1224,9 @@ STRuntime::~STRuntime() {
     // after destruction does not dereference a dead runtime. Done after the
     // workers are joined: none of them can still be importing.
     unregisterSTRuntime(&impl_->space, this);
+    // K1: and retire this runtime's module provider, so no later import, by
+    // a later runtime or a foreign caller, reaches a module of this one.
+    if (impl_->moduleProvider) impl_->moduleProvider->retire();
 
     // F6 v3 C: clear the thread-local current-actor pointer if it still
     // refers to an actor of this (now-dying) runtime. Without this a stale
@@ -1079,6 +1333,19 @@ void STRuntime::workerLoop(proto::ProtoContext* ctx) {
             while (drainOneReporting(*this, ctx)) {
                 g_drainHits[wid].fetch_add(1, std::memory_order_relaxed);
             }
+            // S40: a worker in a wait at the helping cap runs no actor turn
+            // itself, so while one is, the others keep running the turns its
+            // wait needs; otherwise it never returns and the join below
+            // waits for ever. A wait that can never end is still reported
+            // (confirmStuck counts shutdown as the pool's ceiling and the
+            // program thread as parked).
+            while (impl_->cappedThreads.load(std::memory_order_seq_cst) > 0) {
+                if (drainOneReporting(*this, ctx)) {
+                    g_drainHits[wid].fetch_add(1, std::memory_order_relaxed);
+                    continue;
+                }
+                proto::ProtoThread::sleepFor(ctx, 200);
+            }
             return;
         }
 
@@ -1168,8 +1435,42 @@ bool STRuntime::isOwnerThread() const {
 proto::ProtoSpace*   STRuntime::space()         const { return &impl_->space; }
 proto::ProtoContext* STRuntime::rootCtx()       const { return impl_->rootCtx; }
 proto::ProtoRootSet* STRuntime::asyncRootSet()  const { return impl_->asyncRoots; }
+std::uint64_t STRuntime::nextSerial() noexcept {
+    static std::atomic<std::uint64_t> next{1};
+    return next.fetch_add(1, std::memory_order_relaxed);
+}
+
+constinit thread_local BlockCodeCacheEntry t_blockCodeCache[kBlockCodeCacheSize] = {};
+
+namespace detail {
+std::atomic<std::uint64_t> g_sharedCodeCellsFinalized{0};
+} // namespace detail
+
+namespace {
+// The finalizer of a cell made to be shared (blockCodeRefSlow).
+void noteSharedCodeCellFinalized(void*) {
+    detail::g_sharedCodeCellsFinalized.fetch_add(1, std::memory_order_relaxed);
+}
+} // namespace
+
+const proto::ProtoObject* blockCodeRefSlow(STRuntime& rt, proto::ProtoContext* ctx,
+                                           const BytecodeModule& module) {
+    // Another runtime created closures over this module first and owns its
+    // cache: this closure gets a cell of its own, rooted by the closure.
+    if (module.hasCodeRef()) return blockCodeRef(ctx, &module);
+    const proto::ProtoObject* cell = ctx->fromExternalPointer(
+        const_cast<BytecodeModule*>(&module), &noteSharedCodeCellFinalized);
+    TransientPin pin(ctx, cell);
+    // Anchored in the runtime's single pinned root before another thread can
+    // read it from the module, for as long as the runtime lives.
+    rt.registryAdd(ctx, cell);
+    if (module.publishCodeRef(rt.serial(), cell)) return cell;
+    // Another thread published first.
+    rt.registryRemove(ctx, cell);
+    if (const proto::ProtoObject* published = module.codeRefFor(rt.serial())) return published;
+    return cell;
+}
 const Bootstrap&     STRuntime::bootstrap()     const { return impl_->bootstrap; }
-PrimitiveRegistry&   STRuntime::registry()            { return impl_->registry; }
 DebuggerRuntime&     STRuntime::debugger()            { return impl_->debugger; }
 proto::ProtoObject*  STRuntime::globals()       const { return impl_->globals; }
 
@@ -1261,6 +1562,61 @@ STRuntime::runTopLevel(const BytecodeModule& m) {
     return runTopLevel(m, impl_->rootCtx);
 }
 
+// K20: run `body`, an embedder entry point, and when this call is the
+// embedder boundary of a runtime that owns its space -- protoST's own context,
+// no protoST code running on the thread -- replace a ProtoException leaving
+// it with a self-contained STUncaughtError (include/protoST/STUncaughtError.h).
+// The ProtoException pins its value in the runtime's space, and the embedder
+// may destroy the runtime, and the space, before the exception is destroyed.
+// The description is read here, while the space is alive, and the exception
+// is thrown after the catch clause has ended, so the ProtoException (and its
+// pin) is released first. Anywhere else the ProtoException leaves unchanged.
+template <class Body>
+const proto::ProtoObject* STRuntime::atEmbedderBoundary(proto::ProtoContext* ctx, Body&& body) {
+    const bool boundary = ownsSpace() && ExecutionEngine::liveEnginesOnThisThread() == 0
+        && EntryContext::isProtoSTContext(*this, ctx);
+    // S40: a second thread outside the pool running protoST code could settle
+    // any Future; the nested-wait deadlock is then never signalled.
+    if (t_workerOf != this) {
+        const void* expected = nullptr;
+        if (!impl_->programThread.compare_exchange_strong(expected, &t_threadMarker)
+            && expected != &t_threadMarker)
+            noteForeignCaller();
+    }
+    if (!boundary) return body();
+    std::string description, report, trace;
+    std::vector<std::string> classNames;
+    try {
+        return body();
+    } catch (const proto::ProtoException& e) {
+        description = describeProtoException(ctx, e);
+        report = describeUncaught(ctx, e);
+        if (const auto* u = dynamic_cast<const UnhandledSTException*>(&e)) trace = u->trace();
+        const proto::ProtoString* nameKey = bootstrap().sym.className;
+        const proto::ProtoObject* v = e.value();
+        // The classes of every ancestor in resolution order -- superclasses
+        // and `uses:` mixins alike, the set `on: aClass do:` selects by
+        // (HandlerStack.cpp matchesGuard), so isKindOf() answers as a
+        // handler would (review round 3, R3-L2).
+        if (v && v != PROTO_NONE && (reinterpret_cast<uintptr_t>(v) & 0x3F) == 0) {
+            if (const proto::ProtoList* chain = v->getParents(ctx)) {
+                TransientPin pinChain(ctx, reinterpret_cast<const proto::ProtoObject*>(chain));
+                const proto::proto_ulong n = chain->getSize(ctx);
+                for (proto::proto_ulong i = 0; i < n; ++i) {
+                    const proto::ProtoObject* p = chain->getAt(ctx, listIndex(i));
+                    if (!p || p == PROTO_NONE) continue;
+                    const proto::ProtoObject* name = p->getOwnAttributeDirect(ctx, nameKey);
+                    if (name && name != PROTO_NONE)
+                        if (const proto::ProtoString* s = name->asString(ctx))
+                            classNames.push_back(s->toStdString(ctx));
+                }
+            }
+        }
+    }
+    throw STUncaughtError(std::move(description), std::move(report), std::move(trace),
+                          std::move(classNames));
+}
+
 // The outermost entry point for a script, `-e` expression, REPL input or
 // debuggee: runs the module's top level, then converts any control-flow
 // signal that escapes it into a std::runtime_error. Nothing outside this run
@@ -1268,6 +1624,11 @@ STRuntime::runTopLevel(const BytecodeModule& m) {
 // callers report it like any other runtime fault.
 const proto::ProtoObject*
 STRuntime::runTopLevel(const BytecodeModule& m, proto::ProtoContext* ctx) {
+    return atEmbedderBoundary(ctx, [&] { return runTopLevelEntry(m, ctx); });
+}
+
+const proto::ProtoObject*
+STRuntime::runTopLevelEntry(const BytecodeModule& m, proto::ProtoContext* ctx) {
     // Track 1 slice 1: a NonLocalReturn that escapes the top-level engine has
     // no live home frame anywhere — the block's home method already returned
     // (a "dead home"). Convert it to a std::runtime_error so the REPL / `-e`
@@ -1275,9 +1636,13 @@ STRuntime::runTopLevel(const BytecodeModule& m, proto::ProtoContext* ctx) {
     // A foreign exception no handler took leaves as the ProtoException the
     // module raised (UnhandledSTException::original), re-thrown after the
     // catch clause.
+    // K18: a context that is not protoST's own (an embedder's, another
+    // runtime's frame) is never run on directly; see EntryContext.
+    EntryContext entry(*this, ctx);
+    ctx = entry.ctx();
     std::exception_ptr foreignOriginal;
     try {
-        return runModuleTopLevel(m, ctx);
+        return entry.leave(runModuleTopLevel(m, ctx));
     } catch (const UnhandledSTException& u) {
         if (!u.original()) throw;
         foreignOriginal = u.original();
@@ -1305,10 +1670,6 @@ STRuntime::runTopLevel(const BytecodeModule& m, proto::ProtoContext* ctx) {
         // always consumes the ResumeSignal for its own id.
         throw NativeError(
             "exception resume: no active signal to resume");
-    } catch (const PassSignal&) {
-        // EXC-b: a `pass` escaped its `signal` loop — a bug.
-        throw NativeError(
-            "exception pass: no active signal to pass");
     }
     std::rethrow_exception(foreignOriginal);
 }
@@ -1376,7 +1737,12 @@ STRuntime::runModuleTopLevel(const BytecodeModule& m, proto::ProtoContext* ctx) 
 // lock guarding readyQueue / scheduledSet, so concurrent schedule / drain
 // callers never race on the registry. Callers MUST NOT already hold schedMu.
 void STRuntime::registryAdd(proto::ProtoContext* ctx, const proto::ProtoObject* o) {
-    if (!o || o == PROTO_NONE || !impl_->liveRegistry) return;
+    if (!o || o == PROTO_NONE) return;
+    // The registry is created with the runtime, before any caller can reach
+    // here. Without it the object would be rooted by nothing, silently (the
+    // shape of K15), so its absence is an error, not a no-op.
+    if (!impl_->liveRegistry)
+        throw std::logic_error("protoST: registryAdd before the live registry exists");
     // No lock: setAttribute on a mutable object is internally atomic
     // (protoCore's per-attribute shard CAS), so concurrent registryAdd /
     // registryRemove / enqueueReady calls on liveRegistry never corrupt it.
@@ -1528,6 +1894,10 @@ const proto::ProtoObject* STRuntime::dequeueReady(proto::ProtoContext* ctx) {
 }
 
 void STRuntime::markMainWaitingOn(const proto::ProtoObject* future) {
+    // S40: the program thread parking is an event of the quiescence round
+    // (whatever it did before parking is behind every confirmation that
+    // counts); it ends the epoch before the park is visible.
+    if (future) bumpEpoch(impl_->quiesce);
     // seq_cst so the settler's load is ordered against its prior store
     // of the Future's state attribute. See the comment block on
     // `mainWaitingOn` in Impl for the full pairing argument.
@@ -1542,7 +1912,17 @@ void STRuntime::acquireMainWait(proto::ProtoContext* ctx) {
     // submits the young generation (see prim_Future_wait for where the
     // waiting thread does).
     proto::ProtoContext::UnmanagedScope unmanaged(ctx);
+    // S40 (review R2-I1): blocked only here. Set after the caller read its
+    // future pending, which it did after storing mainWaitingOn: any settle of
+    // that future publishes after that read, so its load of mainWaitingOn
+    // matches and it records mainReleasedFor and ends the epoch before
+    // releasing this thread. Setting the flag needs no epoch bump: the
+    // thread changed nothing since markMainWaitingOn's bump. It is cleared on
+    // waking (a spurious wake from a leftover permit then counts as not
+    // parked until the caller blocks again: no error, never a false one).
+    impl_->mainBlocked.store(true, std::memory_order_seq_cst);
     impl_->mainWaitSem.acquire();
+    impl_->mainBlocked.store(false, std::memory_order_seq_cst);
 }
 
 void STRuntime::enqueueResumeTask(proto::ProtoContext* ctx,
@@ -1564,6 +1944,7 @@ void STRuntime::enqueueTask(proto::ProtoContext* ctx,
     if (!task || !impl_->liveRegistry) return;
     auto* reg = const_cast<proto::ProtoObject*>(impl_->liveRegistry);
     const proto::ProtoString* tasksKey = impl_->bootstrap.sym.tasks;
+    noteProgress();   // S40: before the task is visible
     // CAS-append to the global FIFO task list. ProtoList::appendLast is
     // O(log n) AVL — for the typical short list (≤ N_workers under load)
     // this is ~3-5 micro-ops; the rebuilt list takes one extra small
@@ -1614,6 +1995,21 @@ bool STRuntime::runOneTask(proto::ProtoContext* ctx) {
         TransientPin pinRestObj(ctx, restObj);
         if (reg->setAttributeIfEqual(ctx, tasksKey, cur, restObj)) { task = head; break; }
     }
+    // S40: the task counts as running before it stops counting as queued,
+    // and stops running only after it finished (and ended the quiescence
+    // epoch, noteProgress), so confirmStuck never sees it in neither.
+    struct Running {
+        STRuntime& rt; Impl& impl;
+        Running(STRuntime& r, Impl& i) : rt(r), impl(i) {
+            impl.runningTasks.fetch_add(1, std::memory_order_seq_cst);
+            ++t_runningTasks;
+        }
+        ~Running() {
+            rt.noteProgress();
+            impl.runningTasks.fetch_sub(1, std::memory_order_seq_cst);
+            --t_runningTasks;
+        }
+    } running{*this, *impl_};
     impl_->queuedTasks.fetch_sub(1, std::memory_order_acq_rel);
     if (!task || task == PROTO_NONE) return true;
 
@@ -1648,6 +2044,13 @@ void STRuntime::notifyMainWaiterIfFor(const proto::ProtoObject* future) {
     // multi-actor benchmarks (every unrelated settle would wake the
     // main once for nothing).
     if (impl_->mainWaitingOn.load(std::memory_order_seq_cst) == future) {
+        // S40 (review R1-I1): the program thread is runnable from here on,
+        // though mainWaitingOn stays set until it runs. Recorded, and the
+        // quiescence epoch ended, before the release: a round that completes
+        // either reads the record (the thread does not count as parked) or
+        // started before this bump (its final compare-and-swap fails).
+        impl_->mainReleasedFor.store(future, std::memory_order_seq_cst);
+        noteProgress();
         impl_->mainWaitSem.release();
     }
 }
@@ -2082,15 +2485,6 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                     TransientPin pinErr(ctx, err);
                     rejectFutureFromDrain(*this, ctx, msgFut, err);
                 }
-            } catch (const PassSignal&) {
-                SCHED_DIAG("drainOne RESUME STRAY exception-pass actor=" << actor);
-                setCurrentActor(nullptr);
-                if (msgFut && msgFut != PROTO_NONE) {
-                    auto* err = ctx->fromUTF8String(
-                        "exception pass: no active signal to pass");
-                    TransientPin pinErr(ctx, err);
-                    rejectFutureFromDrain(*this, ctx, msgFut, err);
-                }
             } catch (const proto::ProtoException& e) {
                 // An unhandled protoST exception, a module's error, another
                 // language's exception: the Future is rejected with its value.
@@ -2182,13 +2576,14 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
         bool yielded = false;
 
         try {
-            auto* method = wrapped ? wrapped->getAttribute(ctx, selStr) : nullptr;
+            auto* method = wrapped
+                ? methodHolder(bootstrap(), ctx, wrapped)->getAttribute(ctx, selStr)
+                : nullptr;
             const proto::ProtoObject* result = nullptr;
 
-            auto* bcPtrObj = method ? method->getOwnAttributeDirect(ctx, bcKey) : nullptr;
-            if (bcPtrObj && bcPtrObj != PROTO_NONE) {
-                const BytecodeModule* sub =
-                    reinterpret_cast<const BytecodeModule*>(bcPtrObj->asLong(ctx));
+            const BytecodeModule* sub =
+                method ? blockCodeOf(ctx, method->getOwnAttributeDirect(ctx, bcKey)) : nullptr;
+            if (sub) {
                 std::vector<const proto::ProtoObject*> methodArgs;
                 methodArgs.reserve(static_cast<size_t>(argc) + 1);
                 methodArgs.push_back(wrapped);
@@ -2204,20 +2599,17 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                     capDict);
                 SCHED_DIAG("drainOne USER-METHOD EXIT actor=" << actor
                            << " result=" << result);
-            } else if (method && method != PROTO_NONE && method->isInteger(ctx)) {
-                long long marker = method->asLong(ctx);
-                if (isPrimitiveMarker(marker)) {
-                    int idx = primitiveMarkerIndex(marker);
-                    auto fn = impl_->registry.at(idx);
-                    result = translateNativeException(
-                        *this, ctx,
-                        [&] { return fn(*this, ctx, wrapped, args.data(), argc); });
-                } else {
-                    throw NativeError("unknown method shape");
-                }
+            } else if (proto::ProtoMethod native = method ? method->asMethod(ctx) : nullptr) {
+                // A primitive, or another runtime's exported method.
+                const proto::ProtoArguments positional(args.data(),
+                                                       static_cast<unsigned>(argc));
+                result = translateNativeException(
+                    *this, ctx,
+                    [&] { return callMethodCell(native, ctx, wrapped, &positional, nullptr); });
             } else {
                 // An absent selector answers PROTO_NONE, not null: report it
-                // as the synchronous send path does.
+                // as the synchronous send path does. A value attribute is not
+                // a method either.
                 std::string msg = "doesNotUnderstand: " + selStr->toStdString(ctx);
                 const proto::ProtoObject* cname = wrapped
                     ? wrapped->getAttribute(ctx, impl_->bootstrap.sym.className) : nullptr;
@@ -2283,15 +2675,6 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
             if (future) {
                 auto* err = ctx->fromUTF8String(
                     "exception resume: no active signal to resume");
-                TransientPin pinErr(ctx, err);
-                rejectFutureFromDrain(*this, ctx, future, err);
-            }
-        } catch (const PassSignal&) {
-            SCHED_DIAG("drainOne STRAY exception-pass actor=" << actor);
-            setCurrentActor(nullptr);
-            if (future) {
-                auto* err = ctx->fromUTF8String(
-                    "exception pass: no active signal to pass");
                 TransientPin pinErr(ctx, err);
                 rejectFutureFromDrain(*this, ctx, future, err);
             }
@@ -2507,9 +2890,22 @@ const proto::ProtoObject* STRuntime::newFuture(proto::ProtoContext* ctx) {
     return fut;
 }
 
+namespace {
+// Set (release) before the first actor proxy is built, never cleared. A
+// thread that holds a proxy got its pointer through some synchronisation
+// after that store (the proxy is published by protoCore or a queue), so its
+// acquire load sees true: a proxy can never be taken for a plain object.
+std::atomic<bool> g_actorsCreated{false};
+} // namespace
+
+void STRuntime::noteActorCreated() {
+    g_actorsCreated.store(true, std::memory_order_release);
+}
+
 bool STRuntime::isActor(proto::ProtoContext* ctx,
                         const proto::ProtoObject* obj) const {
     if (!obj || obj == PROTO_NONE) return false;
+    if (!g_actorsCreated.load(std::memory_order_acquire)) return false;
     const proto::ProtoString* wrappedKey =
         impl_->bootstrap.sym.wrapped;
     auto* w = obj->getOwnAttributeDirect(ctx, wrappedKey);
@@ -2568,6 +2964,15 @@ static std::string executablePath() {
 }
 
 static std::string discoverStdlibDir();
+
+const BytecodeModule& STRuntime::adoptModule(std::unique_ptr<BytecodeModule> module) {
+    if (!module) throw std::invalid_argument("protoST: adoptModule needs a module");
+    const BytecodeModule& adopted = *module;
+    std::lock_guard<std::mutex> lock(impl_->modulesMu);
+    module->markRuntimeOwned();
+    impl_->loadedModules.push_back(std::move(module));
+    return adopted;
+}
 
 std::vector<const BytecodeModule*> STRuntime::loadedModules() const {
     std::lock_guard<std::mutex> lock(impl_->modulesMu);
@@ -2739,8 +3144,8 @@ bool envEquals(const char* name, const char* value) {
 }
 
 // The limit the out-of-memory report names: the controller's budget, or the
-// fixed limit in force.
-long long heapCeilingCells(const proto::ProtoContext* ctx) {
+// fixed limit in force (STRuntime::heapCeilingCells).
+long long heapCeilingCellsOf(const proto::ProtoContext* ctx) {
     if (ctx && ctx->space) {
         const proto::AdaptiveHeapStats stats = ctx->space->adaptiveHeapStats();
         if (stats.enabled) return static_cast<long long>(stats.hardCells);
@@ -2754,7 +3159,7 @@ proto::ProtoObject* reportOutOfMemory(proto::ProtoContext* ctx) {
     std::fflush(stdout);
     // protoCore calls this only when the live set itself does not fit: the
     // last collections reclaimed nothing.
-    const long long cells = heapCeilingCells(ctx);
+    const long long cells = heapCeilingCellsOf(ctx);
     std::fprintf(stderr, "error: out of memory: the live objects fill the heap limit of %lld cells "
                          "(%lld MB) and the last collections reclaimed nothing. To allow more, set "
                          "PROTOCORE_HEAP_LIMIT_CELLS (each cell is 64 bytes), e.g. "
@@ -2781,6 +3186,10 @@ int fixedHardCells() {
     return static_cast<int>(std::min<long long>(cells, INT_MAX));
 }
 } // namespace
+
+long long STRuntime::heapCeilingCells(const proto::ProtoContext* ctx) {
+    return heapCeilingCellsOf(ctx);
+}
 
 void STRuntime::configureHeap(proto::ProtoSpace& space) {
     space.outOfMemoryCallback = reportOutOfMemory;
@@ -2822,6 +3231,24 @@ std::string STRuntime::kernelManifestPath(std::string* problem) {
     return "";
 }
 
+void STRuntime::publishNativeClasses() {
+    const proto::ProtoObject* g = globals();
+    if (!g) return;
+    struct Sink { const proto::ProtoString* nameKey; std::vector<std::string> names; };
+    Sink sink{impl_->bootstrap.sym.className, {}};
+    g->processOwnAttributes(rootCtx(), &sink,
+        [](proto::ProtoContext* c, void* self, const proto::ProtoString* key,
+           const proto::ProtoObject* value) {
+            auto* k = static_cast<Sink*>(self);
+            if (!value || value == PROTO_NONE || value->isInteger(c) || value->isFloat(c)
+                || value->asString(c))
+                return;
+            const proto::ProtoObject* own = value->getOwnAttributeDirect(c, k->nameKey);
+            if (own && own != PROTO_NONE) k->names.push_back(key->toStdString(c));
+        });
+    Compiler::publishNativeClasses(sink.names);
+}
+
 // The kernel: protocol implemented in protoST source (lib/kernel/*.st), run
 // at top level so the classes and methods it defines are ordinary globals, in
 // the order listed by lib/kernel/00-manifest.txt. A runtime without a stdlib
@@ -2855,11 +3282,12 @@ void STRuntime::loadKernel() {
         const BytecodeModule& module = *bc;
         {
             std::lock_guard<std::mutex> lock(impl_->modulesMu);
+            bc->markRuntimeOwned();
             impl_->loadedModules.push_back(std::move(bc));
         }
         if (impl_->debugger.attached()) impl_->debugger.onModuleLoaded(rootCtx(), &module);
         try {
-            runTopLevel(module);
+            runTopLevelEntry(module, rootCtx());
         } catch (const proto::ProtoException& ex) {
             throw NativeError("kernel: " + file.string() + ": "
                                      + describeProtoException(rootCtx(), ex));
@@ -2868,14 +3296,38 @@ void STRuntime::loadKernel() {
         }
     }
     // From here on, classes are declared by user code (see __subclassNamed:).
-    if (auto* g = globals())
+    if (auto* g = globals()) {
         g->setAttribute(rootCtx(), proto::ProtoString::createSymbol(rootCtx(), "__kernel_loaded__"),
                         PROTO_TRUE);
+    }
+    // The kernel's Exception>>isResumable, before any user code can redefine
+    // it (Bootstrap::kernelIsResumable). Pinned in the live registry, the
+    // runtime's single GC root, for the runtime's whole lifetime: it stays
+    // reachable after a redefinition replaces it on Exception, and no user
+    // code can reach or unpin it. Without a registry (no root to pin it in)
+    // it is not captured, and resume: always sends isResumable.
+    Bootstrap& b = impl_->bootstrap;
+    const proto::ProtoObject* m = b.exceptionProto
+        ? b.exceptionProto->getAttribute(rootCtx(), b.sym.isResumable) : nullptr;
+    if (m && m != PROTO_NONE && impl_->liveRegistry) {
+        const_cast<proto::ProtoObject*>(impl_->liveRegistry)
+            ->setAttribute(rootCtx(), ptrRegistryKey(rootCtx(), m), m);
+        b.kernelIsResumable = m;
+    }
 }
 
 // F5-M1: Read, parse, compile, and execute a module file. Wraps the classes
 // the module declared as attributes of a fresh ProtoObject and returns it.
 const proto::ProtoObject* STRuntime::loadModuleFromFile(
+    proto::ProtoContext* ctx, const std::string& filePath, const std::string& logicalName) {
+    return atEmbedderBoundary(ctx, [&] {
+        // K18: see EntryContext (ExecutionEngine.h).
+        EntryContext entry(*this, ctx);
+        return entry.leave(loadModuleFromFileImpl(entry.ctx(), filePath, logicalName));
+    });
+}
+
+const proto::ProtoObject* STRuntime::loadModuleFromFileImpl(
     proto::ProtoContext* ctx,
     const std::string& filePath,
     const std::string& logicalName)
@@ -2932,6 +3384,7 @@ const proto::ProtoObject* STRuntime::loadModuleFromFile(
     const BytecodeModule& module = *bc;
     {
         std::lock_guard<std::mutex> lock(impl_->modulesMu);
+        bc->markRuntimeOwned();
         impl_->loadedModules.push_back(std::move(bc));
     }
     // The debugger arms the module's breakpoints before its top level runs.
@@ -3014,6 +3467,18 @@ const proto::ProtoObject* STRuntime::loadModule(proto::ProtoContext* ctx, const 
 // anchored in the live registry before it is published, so a waiter that
 // parks for a collection on its way out still receives a live object.
 const proto::ProtoObject* STRuntime::importModuleFile(
+    proto::ProtoContext* ctx, const std::string& filePath, const std::string& logicalName) {
+    return atEmbedderBoundary(ctx, [&] {
+        // K18: an import requested on a context that is not protoST's own (a
+        // UMD import from another runtime's frame, a host's context in guest
+        // mode) runs on a child context of it; see EntryContext
+        // (ExecutionEngine.h).
+        EntryContext entry(*this, ctx);
+        return entry.leave(importModuleFileImpl(entry.ctx(), filePath, logicalName));
+    });
+}
+
+const proto::ProtoObject* STRuntime::importModuleFileImpl(
     proto::ProtoContext* ctx,
     const std::string& filePath,
     const std::string& logicalName)
@@ -3077,7 +3542,7 @@ const proto::ProtoObject* STRuntime::importModuleFile(
         }
     } guard{impl_.get(), &canonical, true};
 
-    const proto::ProtoObject* mod = loadModuleFromFile(ctx, filePath, logicalName);
+    const proto::ProtoObject* mod = loadModuleFromFileImpl(ctx, filePath, logicalName);
     // registryAdd allocates; hold `mod` across it.
     TransientPin pinMod(ctx, mod);
     registryAdd(ctx, mod);
@@ -3094,13 +3559,13 @@ const proto::ProtoObject* STRuntime::importModuleFile(
 // T5-a: consumer-side cross-language interop.
 //
 // protoST's constructor sets the space's resolution chain to just
-// `["provider:st"]` — its own UMD provider. protoCore's getImportModule walks
+// `["provider:<GUID>"]` — its own UMD provider (K1). protoCore's getImportModule walks
 // that chain entry-by-entry; for a `provider:<key>` entry it looks the key up
 // in the global ProviderRegistry. A foreign runtime's provider (protoJS,
 // protoPython, or a test stand-in) may be *registered* with the registry, but
 // it is never *reached* unless its spec is in this space's chain. This method
 // closes that gap: it appends a foreign provider spec to the chain, leaving
-// `provider:st` first so a same-named protoST module still shadows a foreign
+// protoST's own first so a same-named protoST module still shadows a foreign
 // one. The filesystem fallback that getImportModule applies after the chain is
 // unchanged.
 void STRuntime::addModuleProviderToChain(const std::string& providerSpec) {

@@ -1,6 +1,7 @@
 #include "repl/Repl.h"
 
 #include "protoST/STRuntime.h"
+#include "protoST/STUncaughtError.h"
 #include "frontend/Parser.h"
 #include "frontend/Compiler.h"
 #include <unordered_map>
@@ -325,11 +326,12 @@ Completeness classify(const std::string& buffer) {
     return Completeness::Error;
 }
 
-// The REPL session: a persistent runtime plus the bytecode modules it has
-// installed. `:reset` rebuilds the whole struct from scratch.
+// The REPL session: a persistent runtime, which keeps the bytecode module of
+// every line it ran (adoptModule): a line's methods run its module's code for
+// as long as the runtime lives. `:reset` rebuilds the whole struct from
+// scratch.
 struct Session {
     std::unique_ptr<STRuntime> rt;
-    std::vector<std::unique_ptr<BytecodeModule>> retained;
     // Snapshot of the global names the runtime pre-registers at construction
     // (Object, Number, Array, …). `:vars` reports only the names absent from
     // this set, i.e. the names the user actually defined.
@@ -342,7 +344,8 @@ struct Session {
     // process" contract (LANGUAGE.md §13.2 / D2) forbids two *simultaneously*
     // live runtimes, not a sequential rebuild.
     void rebuild() {
-        retained.clear();
+        // The runtime frees the modules it kept only after its actor threads
+        // have stopped running their methods.
         rt.reset();
         rt = std::make_unique<STRuntime>();
         builtinGlobals = currentGlobalNames();
@@ -393,8 +396,7 @@ bool evaluate(Session& s, const std::string& buffer,
             writeWholeLine(stderr, "compile error: " + str);
         return false;
     }
-    BytecodeModule* mod = bc.get();
-    s.retained.push_back(std::move(bc));
+    const BytecodeModule* mod = &s.rt->adoptModule(std::move(bc));
     try {
         clearPendingInterrupt();
         auto* r = s.rt->runTopLevel(*mod);
@@ -407,6 +409,10 @@ bool evaluate(Session& s, const std::string& buffer,
     } catch (const proto::ProtoException& e) {
         // An unhandled Error, a module's error, another language's exception.
         writeWholeLine(stderr, describeUncaught(s.rt->rootCtx(), e));
+        return false;
+    } catch (const STUncaughtError& e) {
+        // The same, detached from the space at the runtime's boundary (K20).
+        writeWholeLine(stderr, e.report());
         return false;
     } catch (const std::exception& e) {
         writeWholeLine(stderr, describeUncaught(e));

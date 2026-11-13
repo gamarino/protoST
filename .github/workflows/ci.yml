@@ -79,13 +79,13 @@ env:
   #                               tens of milliseconds.  It is a good test and a
   #                               bad gate.
   PROTOIO_REPO: gamarino/protoIO
-  # protoIO 0.4.0 (tag v0.4.0): file::EndGuard and
-  # Error::Kind::Conflict (the BinaryFile end guard), on top of 0.3.0's
-  # positioned binary files, the ProtoBase-compatible owner lock, packing,
-  # CRC32/BLAKE2b/SHA-256/HMAC, base64 and MessagePack, so 0.4.0 is also the
+  # protoIO 0.5.0 (tag v0.5.0): OS random bytes, a UTC microsecond clock and
+  # the MessagePack depth limit, on top of 0.4.0's binary-file end guard and
+  # 0.3.0's positioned binary files, ProtoBase-compatible owner lock, packing,
+  # CRC32/BLAKE2b/SHA-256/HMAC, base64 and MessagePack, so 0.5.0 is also the
   # floor CMakeLists.txt declares. Pinned so a red build is attributable;
   # bump deliberately.
-  PROTOIO_REF: v0.4.0
+  PROTOIO_REF: v0.5.0
   NON_GATING_TESTS: '^(F6 v2 T7: two actors run in parallel \(wall-clock proof\))$'
 
 jobs:
@@ -224,6 +224,83 @@ jobs:
           sudo apt-get install -y xvfb libnss3 libgbm1 libasound2t64 libgtk-3-0t64 libxss1 libsecret-1-0
           npm ci --no-audit --no-fund
           xvfb-run -a npm test < /dev/null
+
+  assertions:
+    # The same suite with assert() compiled in (review R3-3). Since 0.10.0
+    # the engine's frame-slot bounds checks and the check of the
+    # threaded-dispatch jump table against Opcodes.h are assert()s; Release
+    # and the TSan job's RelWithDebInfo pass -DNDEBUG, so only this job runs
+    # them. It is RelWithDebInfo with the flags restated without -DNDEBUG
+    # (-O2 -g), not CMake's Debug: at -O0 the native frames of a nested
+    # engine are about twice as large (8 to 12 KB a level, measured), so the
+    # 1,000-level nesting limit (kMaxNestedEngines, sized for optimised frames
+    # in an 8 MB stack) overflows the stack before it is reached, and the
+    # tests that recurse to it crash. protoCore and protoIO stay Release; the
+    # asserts are protoST's. Measured locally (0.10.0): 1,390 tests in 176 s
+    # sequential, all passing; at -O0 six of them overflowed the stack.
+    name: Build and test suite (assertions on)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out protoST
+        uses: actions/checkout@v4
+        with:
+          path: protoST
+
+      - name: Check out protoCore as a sibling
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PROTOCORE_REPO }}
+          ref: ${{ env.PROTOCORE_REF }}
+          path: protoCore
+
+      - name: Check out protoIO as a sibling
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PROTOIO_REPO }}
+          ref: ${{ env.PROTOIO_REF }}
+          path: protoIO
+
+      - name: Install libreadline, OpenSSL and Python's msgpack
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libreadline-dev libssl-dev python3-msgpack
+
+      - name: Build protoCore
+        run: |
+          cmake -S protoCore -B protoCore/build_release -DCMAKE_BUILD_TYPE=Release
+          cmake --build protoCore/build_release --target protoCore --parallel "$(nproc)"
+
+      - name: Build protoIO
+        run: |
+          cmake -S protoIO -B protoIO/build_release -DCMAKE_BUILD_TYPE=Release -DPROTOIO_BUILD_TESTS=OFF
+          cmake --build protoIO/build_release --target protoio --parallel "$(nproc)"
+
+      - name: Configure protoST (assertions on)
+        working-directory: protoST
+        run: >-
+          cmake -B build_assert -S . -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O2 -g" "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g"
+          -DprotoIO_DIR="$GITHUB_WORKSPACE/protoIO/build_release" -DPython3_EXECUTABLE=/usr/bin/python3
+
+      - name: Check that assertions are compiled in
+        # A configuration change that brought -DNDEBUG back would leave this
+        # job green and useless.
+        working-directory: protoST
+        run: |
+          if grep -q -- '-DNDEBUG' build_assert/CMakeFiles/protost_runtime.dir/flags.make; then
+            echo "build_assert compiles with -DNDEBUG: the assertions this job exists for are off" >&2
+            exit 1
+          fi
+
+      - name: Build protoST (assertions on)
+        working-directory: protoST
+        run: cmake --build build_assert --parallel "$(nproc)"
+
+      - name: Test suite (assertions on)
+        # `< /dev/null` is S18's mitigation (see the header).
+        working-directory: protoST
+        run: ctest --test-dir build_assert -j2 --timeout 300 --output-on-failure -E "$NON_GATING_TESTS" < /dev/null
 
   tsan:
     name: 'ThreadSanitizer, the tsan label'

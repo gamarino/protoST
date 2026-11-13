@@ -217,6 +217,24 @@ encodes a Symbol as a str, so `#foo` comes back as `'foo'` (D47). `Future
 within:` and `waitWithin:` are protoST's own (D48). Chapter 15 (§15.11) and
 chapter 10 (§10.12) show them at work.
 
+### Decimals — D49
+
+The `decimal` module's `Decimal` is not Pharo's `ScaledDecimal`: there is no
+`1.20s2` literal and no scale, and it has **no arithmetic**. It is Python's
+decimal value (sign, coefficient, exponent, Infinity and NaN), made to store
+and compare a decimal exactly: `fromString:`, `printString`, `asExactFraction`
+and exact comparison with any number (chapter 9, §9.8; LANGUAGE.md §12.13). For
+arithmetic, take `asExactFraction` and compute with the `Fraction`.
+
+### Calendar values — D50
+
+The `calendar` module's `CalendarDate`, `TimeOfDay`, `DateTime`, `TimeSpan`,
+`ZoneOffset` and `ZoneName` are not Pharo's `Date`, `DateAndTime`, `Timespan`
+and `TimeZone`; they are Python's `datetime` values, counting microseconds,
+and the kernel's `Date`, `Time` and `Duration` keep their meaning beside them.
+There is no IANA database: a `ZoneName` keeps its key, and a wall clock in it
+signals `TimeZoneUnavailable` (chapter 9, §9.9; LANGUAGE.md §12.14).
+
 ### A few names and printed forms — D36
 
 `aClass name` answers a String. Large integers have one class, `LargeInteger`
@@ -259,25 +277,6 @@ accepted:
 
 It is reserved: using it is a compile error. Use the error traces
 (`at Class>>selector (file:line)`) and the debugger ([Chapter 12](12-tooling.md)).
-
-### `outer` is not implemented; it behaves as `pass` — D7
-
-This is a missing feature, not a design choice. In Pharo, when the outer
-handler resumes the exception, `outer` answers the resumption value *inside
-the inner handler*, which then continues. In protoST `outer` does what `pass`
-does: the resumption continues the protected block at the `signal`, and the
-rest of the inner handler never runs. For example,
-
-```smalltalk
-[[Warning signal: 'w'. 'body']
-    on: Warning do: [:e | e outer printNl. 'inner continued']]
-  on: Warning do: [:e | e resume: 5]     "protoST => 'body'"
-```
-
-in Pharo prints `5` and answers `'inner continued'`; protoST prints nothing
-and answers `'body'`. When the outer handler returns instead of resuming
-(`return:`, or falling off its end), both answer the same. `pass`, `retry`,
-`retryUsing:`, `resume:`, `return:` and `signal` behave as in Pharo.
 
 ### An actor that waits is not re-entrant — D37
 
@@ -364,6 +363,19 @@ If you read older protoST material, these are now as in Pharo:
 - The compiler reports, as Pharo does: an undeclared variable in a method,
   assignment to an argument or to `self`, a duplicated or redeclared instance
   variable.
+- `outer` is Pharo's `outer` (since 0.10.0; until then it behaved as `pass`,
+  D7): when the enclosing handler resumes, `outer` answers the resumption
+  value inside the inner handler, which continues. `pass` runs the enclosing
+  handler on top of the inner one, as in Pharo, so the inner handler's
+  `ensure:` blocks run after it.
+
+  ```smalltalk
+  [[Warning signal: 'w'. 'body']
+      on: Warning do: [:e | e outer printNl. 'inner continued']]
+    on: Warning do: [:e | e resume: 5]     "=> 'inner continued'"
+  ```
+
+  prints `5` and answers `'inner continued'`.
 
 ## 14.6 Protocol you can rely on
 
@@ -520,18 +532,17 @@ For full grammar, see `LANGUAGE.md` §3.5.1 and §3.3.
   blank line ends a method body (D33); a script is its top-level forms, run
   in order (D12); strings are immutable (D34); short symbols are represented
   as strings (D35); a few printed forms differ (D36); a `ByteArray` is
-  immutable and has no `asString`, a `BinaryFile` has no position (D41-D48); a thin metaclass; an
+  immutable and has no `asString`, a `BinaryFile` has no position (D41-D48); `Decimal` has no arithmetic (D49); calendar values are Python's, with no tz database (D50); a thin metaclass; an
   actor that waits is not re-entrant (D37); bounded recursion depth (D38); single
   runtime per process (D2); `addBehavior:` affects future instances only
   (D21).
-- **Not implemented:** `thisContext` is reserved (D17); `outer` behaves as
-  `pass` (D7); the classes and syntax listed in "Classes and syntax not
-  present" (§14.4).
+- **Not implemented:** `thisContext` is reserved (D17); the classes and
+  syntax listed in "Classes and syntax not present" (§14.4).
 - **As in Pharo since 0.4.0 (§14.5):** `new` sends `initialize`; `Transcript`;
   `Character`; exact `Fraction` division with floored `//` and `\\`; class
   variables and class-instance variables; `doesNotUnderstand:` overrides;
   per-activation block variables; exceptions that keep their class; top-level
-  `| temps |`.
+  `| temps |`; and, since 0.10.0, `outer`.
 - **Unchanged:** the syntax, the message model, blocks and closures, non-local
   return, the exception protocol, the collection protocol, `super`.
 - `docs/STATUS.md` is the live, build-verified tracker — consult it when in

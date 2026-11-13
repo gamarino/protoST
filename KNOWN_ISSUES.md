@@ -10,26 +10,38 @@ departures from Smalltalk-80, and open bugs — see
 
 ---
 
-## K1 — One `STRuntime` per process (open)
+## K1 — One `STRuntime` at a time per process (resolved for runtimes in sequence in 0.10.0)
 
-**What.** Constructing more than one `STRuntime` in a single OS process is not
-supported. The `protost` CLI always constructs exactly one, so this does not
-affect normal use.
+**What.** A process may construct and destroy protoST runtimes one after
+another (an embedder, the unit-test binary run whole). Two runtimes alive at
+the same time remain unsupported: a foreign caller's `provider:st` import is
+refused as ambiguous.
 
-**Why.** Some process-global state — protoCore's UMD module cache, keyed by
-logical path — is not isolated per `ProtoSpace`. A second runtime can
-mis-resolve `Import from:` against the first runtime's (already freed) space.
-(The protoST module provider itself resolves its runtime per `ProtoSpace`
-since S6.)
+**Why it was open.** protoCore's UMD module cache is process-wide, keyed by
+provider GUID and logical path, and never drops an entry. All runtimes shared
+one provider GUID, so a runtime constructed after another was destroyed found
+the dead runtime's module in the cache and ran methods whose bytecode had been
+freed (heap-use-after-free under ASan; `method initialize expects -1 args` in
+the F5 v2 unit cases; a `corrupted double-linked list` abort when the whole
+unit binary ran in one process).
 
-**Bounds.** Affects only an embedder that builds multiple runtimes in one
-process. The larger half of this hazard — function-local `static` caches
-holding per-`ProtoSpace` interned symbols — was fixed in 0.1.0. The residual
-is the module-provider / cache layer. The unit-test binary builds many
-runtimes and is therefore run one test per process by `ctest`.
+**Fix (0.10.0).** Each runtime registers a provider of its own, with its own
+GUID, and names it in its resolution chain; its destructor retires the
+provider, which then answers a GUID no cache entry is stored under and loads
+nothing. The alias `st` belongs to one dispatcher per process, which serves
+the sole live runtime and answers that runtime's GUID, so imports through it
+are cached per runtime too (`src/modules/STModuleProvider.h`). Destroying a
+runtime while another runtime still uses its modules remains a host lifetime
+error (INTEROP.md §4.2). Tests: `K1: a runtime does not reach
+the modules of a runtime destroyed before it` (heap-use-after-free under ASan
+before the fix), `K1: provider:st serves the live runtime after another was
+destroyed`; the whole unit binary passes in one process, also under ASan.
 
-**Status.** Open — to be closed by making the UMD module provider and cache
-per-runtime. See deviation D2 in `docs/STATUS.md`.
+**Residual, in protoCore.** The cache entries of a destroyed runtime stay in
+protoCore's cache (never reached again, but not freed), and its retired
+provider stays in protoCore's ProviderRegistry, which has no removal. One small
+provider per runtime constructed. A per-space eviction of the module cache, or
+a removal API on the registry, would close it; that is protoCore's decision.
 
 ## K3 — No `%` string formatting (open)
 
@@ -262,6 +274,262 @@ message cells. It is recorded because the loss is silent to the senders
 ---
 
 ## Resolved
+
+### K20 — An unhandled error caught after its runtime was destroyed crashed the process (resolved, unreleased)
+
+An unhandled protoST error leaves `STRuntime::runTopLevel` as a C++ exception,
+a `proto::ProtoException` carrying the exception object. protoCore pins that
+value in a root set of its space while the exception exists
+(`ProtoException::Pin`, protoCore `core/ProtoException.cpp`), and its contract
+is that the exception must not outlive the space. A runtime made with
+`STRuntime()` owns its space and destroys it with itself, so the most
+ordinary embedder code broke the contract:
+
+```cpp
+try { protoST::STRuntime rt; rt.runTopLevel(module); }
+catch (const std::exception& e) { /* ... */ }
+```
+
+The runtime, and its space, were destroyed while the exception unwound, and
+the exception's destructor then ran `ProtoRootSet::remove` on freed memory:
+the process died with SIGSEGV (exit 139 on 4b47115, and since protoCore
+3.0.0). The `protost` binary was not affected, because it reports the error
+while the runtime is alive; the unit-test harness was, when a test let an
+error escape (found while fixing K14).
+
+Fix: at the **embedder boundary** of a runtime that owns its space -- a
+public entry point (`runTopLevel`, `loadModuleFromFile`, `importModuleFile`,
+`loadModule`) called on protoST's own context with no protoST code running on
+the thread -- the ProtoException is replaced by a self-contained
+`protoST::STUncaughtError` (`include/protoST/STUncaughtError.h`), a
+`std::runtime_error` that holds plain strings only: `what()` is the
+description (`AppError: too much`), `report()` the text the binary prints
+(with the active methods), `trace()`, and `classNames()` / `isKindOf()` for the
+exception's class and its ancestors, mixins included, so `isKindOf("M")`
+answers what `on: M do:` would have. The description is read while the space is alive,
+and the new exception is thrown after the catch clause has ended, so the
+ProtoException and its pin are released first. Everywhere else the
+ProtoException leaves unchanged, so protoCore's unified exceptions keep
+working: a call nested in running protoST code (an import from a primitive),
+a call from another runtime's frame (K18's foreign contexts), and a runtime
+in a host's space (`STRuntime(proto::ProtoSpace&)`), whose space the host
+destroys after it. The `protost` binary, the REPL and the debug adapter print
+`report()`, which is the same text as before.
+
+Tests: `tests/unit/test_k20_embedder_boundary.cpp` (the pattern above with
+`std::exception`, with `STUncaughtError` and its class chain, a protoCore
+error, a module load, a mixin in the class chain, and a host-space runtime
+that keeps the ProtoException). The `std::exception` case, built against
+4b47115, dies with SIGSEGV. A module error imported by a caller in a space
+protoST does not own reaches it as `STUncaughtError` too: that import runs on
+protoST's root context, an embedder boundary
+(`tests/unit/test_cross_runtime_provider.cpp`); a caller in protoST's space,
+or a guest runtime's host, still gets the ProtoException. `test_unified_exceptions.cpp` now runs its runtime in a host space,
+the setting the unified-exception contract it checks is about.
+
+### K16 — The smallest subnormal Float could not be written as a literal (resolved, unreleased)
+
+`5e-324`, the smallest positive `Float`, was the compile error *float literal
+out of range*, and so was every literal whose value is subnormal (below
+`2.2250738585072014e-308`) or underflows to zero (`1e-400`). The lexer read
+float literals with `std::stod`, which throws `std::out_of_range` whenever
+`strtod` reports `ERANGE`, and `strtod` reports it for a subnormal result as
+well as for an underflow, although the value it answers is the correctly
+rounded one. `printString` of such a `Float` (`5.0e-324`) therefore did not
+read back, and protoBaseST had to build that value from its bits
+(`tests/unit/notation_float_hex.st`).
+
+Fix: `Lexer::lexNumber` and `String >> asNumber` read the digits with
+`parseDecimalDouble` (`src/runtime/DecimalDouble.h`, `std::from_chars`:
+correctly rounded and independent of the C locale's decimal separator), and
+the lexer refuses only an infinite result (overflow); a subnormal is kept and
+an underflow is `0.0` or `-0.0`, the rounding of IEEE 754, Pharo and Python
+(STATUS D51, LANGUAGE.md §2.5). Tests: `tests/conformance/02-lexical/float-literal-full-range.st` (18 edge
+literals by bit pattern: subnormals, the halfway points around `5e-324`, the
+normal/subnormal boundary, the largest `Float`, ties to even),
+`float-literal-round-trip.st` (`printString` of edge values read back as a
+literal and by `asNumber`, bit for bit) and
+`float-literal-overflow-is-error.st`; the first two fail on 0.9.0.
+
+### K14 — One selector on both sides of a class: the later definition won (resolved, unreleased)
+
+D5 isolated class-side methods from instances, but both sides were installed
+in **one attribute slot of the class object** (0.9.0): `prim_Object_installMethod`
+(`src/primitives/object_prims.cpp`, the `setAttribute` at line 248) and
+`prim_Object_installClassMethod` (lines 262-279, `setAttribute` at 278)
+wrote the same selector key, so a selector defined on both sides kept only
+the later method. The SEND filter for class-side methods
+(`src/runtime/ExecutionEngine.cpp`, lines 1758-1768) then set the method to
+`nullptr` for an instance receiver, which answered `doesNotUnderstand` instead
+of continuing the lookup at the next parent. Three cases (0.9.0):
+
+| Definitions | `X new sel` | `X sel` |
+|-------------|-------------|---------|
+| `Foo >> x`, then `Foo class >> x` | `doesNotUnderstand` | the class-side method |
+| `Bar class >> x`, then `Bar >> x` | the instance method | the instance method: the class-side one is **lost silently** |
+| `Baz >> y`; `Qux` (a subclass of `Baz`) `class >> y` | `doesNotUnderstand`: the inherited instance `y` is hidden | the class-side method |
+
+The second case was a silent failure; the third hid a method defined on
+another object.
+
+Fix (STATUS D52, which supersedes the instance-side half of D5): every class
+has a **metaclass**, a separate object that holds the class-side methods, and
+a send to a class looks the selector up on the metaclass chain only:
+`Foo class` -> `Super class` -> ... -> `Object class` -> `Class` ->
+`Behavior` -> `Object`, as in Pharo (without `ClassDescription`). The class
+object answers `__metaclass__`; `methodHolder` (`src/runtime/Bootstrap.h`)
+gives the object a send starts from (the metaclass for a class, the receiver
+for anything else), and every send path -- SEND, `super`, the call-form
+send, `perform:` and the kernel's dynamic sends, a foreign send
+(`__st_send__`), an actor's message, `doesNotUnderstand:`, `respondsTo:` --
+does one ordinary protoCore lookup from it, with the selector as key.
+`Foo >> x` and `Foo class >> x` are therefore two attributes of two objects,
+and neither can hide the other. The class protocol (`new`, `basicNew`,
+`subclass:...`, `name`, `selectors`, `canUnderstand:`, `superclass`, the
+reflection methods of `reflection.st`) lives on `Behavior`; the built-in
+constructors (`Array new:`, `with:` ... `withAll:`, `OrderedCollection`,
+`Set`, `Bag`, `Dictionary`, `Future new`, `Float pi`, the `ByteArray`
+constructors, ...) are bound on each class's metaclass only. A class object
+is not an instance of itself: `Foo greet`, `Array at: 1`, `#(1 2) new: 3` and
+`Set new new` are `doesNotUnderstand`, `Foo = Foo` is identity even when the
+instances define `=`, and a class object can be a key of a `Set` whatever its
+instances' `hash` does.
+
+A first fix (commit `aae8b00`, never released) stored a class-side method
+under a prefixed key (`"__class_side__ " , selector`) on the class object and
+looked it up before the selector for a class receiver. It fixed the three
+cases above but kept the D5 leak (a class still answered its own instance
+methods) and needed a second binding of every built-in constructor and a
+second lookup per send to a class; review rejected it as conceptual debt, and
+D52 replaced it.
+
+Tests: `tests/conformance/04-object-model/class-and-instance-method-same-selector.st`
+(the former `XFAIL`, now passing) and, new,
+`class-and-instance-method-redefinition.st`, `class-side-super-send.st`,
+`class-side-inheritance.st`, `class-side-reflection-same-selector.st` and
+`class-side-does-not-understand.st` and `kernel-class-protocol-not-hidden.st`
+in the same directory. Each of them except the last fails on the 0.9.0 engine
+(the last guards the kernel against the new lookup order).
+
+### K18 — A send from another runtime's frame context ran on that context (resolved, unreleased)
+
+`__st_send__` (src/modules/STForeignSend.cpp) chose the context a message runs
+on as follows: the caller's context when it belongs to protoST's space, else
+protoST's current context on the thread (also only when it is in protoST's
+space), else the root context. A runtime that shares protoST's space (one
+space per process) and gives each interpreted frame a `ProtoContext` of its
+own, chained to its caller, therefore had its frame context used by protoST's
+engine as if it were protoST's. Two effects, reproduced by
+`tests/unit/test_foreign_frame_context.cpp` (a frame with four locals sends
+into protoST, which nests `collect:` 300 deep):
+
+- The engine grew the frame's `automaticLocals` to its own geometry (4,096
+  slots and up) with `resizeAutomaticLocals`. That can reallocate the array
+  under a runtime that keeps a pointer to its locals. In the test protoCore grew
+  it in place on the context slot stack, so the address did not change, but
+  nothing guarantees that.
+- Transient pins went into the scratch slots counting down from 255, and with
+  the K15 chain the reserved slots 0 and 1, which are the indices of the
+  frame's own locals. In the test, the frame's locals no longer held their
+  values after the send (the check failed before the fix). A shallow send
+  takes a few pins near slot 255 and touched only a frame with that many
+  locals. Before K15's fix the region reached slot 0 at the 256th pin, so this
+  is not a regression of K15.
+
+Module imports had the same defect. A UMD import from a frame context in
+protoST's own space (`STModuleProvider::tryLoad`), or from a host frame with
+protoST a guest in the host's space (`loadForForeignCaller`, shared space), ran
+the module's top level on the frame context: in
+`tests/unit/test_k18_module_entry.cpp` (from the K15 re-review) the frame's
+four sentinel locals were overwritten and its `automaticLocalsCount` grew from
+4 to 65536. The first version of this fix covered `__st_send__` only and said
+module loads ran on the root context; they did not.
+
+Fix: `EntryContext` (src/runtime/ExecutionEngine.h). A context that is not
+protoST's own is never run on: the work runs on a child context of it, with the
+thread's frame cursor and pin cursor started afresh for that child and restored
+when the entry ends, and the result is anchored as the child's return value.
+protoST's own contexts are its root context, the context of one of its engines
+live on this thread, and a child an enclosing EntryContext opened. The guard
+sits at every entry that runs protoST code on a context its caller supplies:
+`__st_send__`, `STRuntime::runTopLevel(m, ctx)`, `loadModuleFromFile` and
+`importModuleFile` (`loadModule` and both STModuleProvider paths go through
+`importModuleFile`). Of the other public functions that take a context,
+`materialize` and the registry calls allocate on it but run no protoST code,
+and the scheduler entries that do run it (`drainOne`, `runOneTask`,
+`workerLoop`) are reached only from protoST itself: a worker thread protoST
+started (`st_worker_main`, on that thread's root context) and the Future wait
+primitive (on its engine context). A UMD import from a context in protoST's own space that is not
+protoST's now goes through the foreign-caller path, like a guest's.
+
+### K19 — A control-flow unwind could leave `__st_send__` through the caller's frames (resolved, unreleased)
+
+`__st_send__` from a caller in protoST's own space skipped the runtime boundary
+the other callers cross: it called `sendMessage` directly, so a non-local
+return, `retry`, `resume:`, `pass` or a Future yield whose target was a protoST
+frame above the caller unwound through the caller's frames (another runtime's
+code, which cannot interpret it), and an outer protoST handler could take an
+Error past them. Since protoST's own dispatch never goes through
+`__st_send__`, every caller is another runtime's code: the shortcut is gone and
+every send crosses the boundary (outer handlers hidden, an Error nothing
+inside handles leaves as an exception, a control-flow unwind is reported as an
+error). Test: `tests/unit/test_foreign_frame_context.cpp`, "a non-local return
+cannot leave a __st_send__ through the caller's frames" (before the fix the
+method answered 42 through the foreign function's frames). An import from such
+a caller has the same rule (K18 above).
+
+### K15 — Deep nesting crashed the runtime: transient pins past 256 rooted nothing (resolved, unreleased)
+
+Repeatedly walking values nested 400-509 deep (protoBaseST's codec,
+`PBCodec canonical:`) crashed intermittently with SIGSEGV in
+`ProtoList::appendLast` or "stack smashing detected", more or less often as
+the allocation pattern changed. The cause was in protoST, not protoCore:
+`TransientPin` (src/runtime/TransientPin.h) stored pins only in a fixed
+256-slot scratch region of the engine context's `automaticLocals`, and the
+257th live pin hit `assert(false)` and, with `NDEBUG`, returned without
+pinning. Every `collect:` level keeps its result list pinned while its block
+runs the next level, so past about 256 levels the lists lived only in C++
+locals. The engine's call-entry safepoint handed the context's young chain to
+the collector, a cycle freed those lists, and `appendLast` read a recycled
+cell; a recycled cell whose `size` field exceeded 5 overflowed appendLast's
+`buf[MAX_INLINE + 1]`, which is the stack-smashing report. Plain method
+recursion pins nothing, which is why it never crashed, and a bigger native
+stack could not help.
+
+A pin that finds the region full now goes on a per-context overflow chain
+(one ProtoList cell `[object, previous head]` per pin, its head in reserved
+scratch slot 0, the pinned object staged in slot 1 while the cell is
+allocated). Releasing restores the previous head without allocating, and
+`TransientPin::reset` rebuilds the cells above the pin in one pass. The chain
+code is out of line (src/runtime/TransientPin.cpp), so a pin in the region
+costs what it did. A chain pin released out of LIFO order would un-root the
+pins above it, so it aborts the process with a message in every build. Tests:
+`tests/unit/test_transient_pin.cpp` (1000 live pins all reachable from the
+traced slots; on 0.9.0 744 of them were not) and
+`tests/conformance/09-collections/collect-deep-nesting-gc.st` (0.9.0 crashed
+10 runs out of 10).
+
+### K17 — `JSON parse:` crashed on any `\uXXXX` escape (resolved, unreleased)
+
+`lib/json.st` read the four hex digits of a `\uXXXX` escape with a helper
+whose range tests were written `(code >= 48) and: [ code <= 57 ] ifTrue: [...]`.
+Smalltalk parses that as the keyword message `and:ifTrue:`, which `Boolean`
+does not understand, so every `\u` escape in parsed text raised
+`doesNotUnderstand`. The writer had a twin: escaping a control character
+other than `\n \t \r \b \f` (for example U+0001) concatenated a `Character`
+with a `String` and failed the same way, so no string with such a character
+could be written.
+
+Both are fixed. The parser follows RFC 8259 section 7: any case of hex digit,
+BMP code points directly, and a high surrogate (D800-DBFF) followed by a
+`\u` low surrogate (DC00-DFFF) combined into one code point (`\ud83d\ude00`
+is U+1F600, one character). A protoST `String` holds code points, not UTF-16
+units, so it cannot hold a lone surrogate; a lone high or low surrogate, a high
+surrogate not followed by a low one, an invalid hex digit and a truncated
+escape all signal the library's parse error (`JSON parse error at position
+N: ...`) rather than storing an invalid string. Tests:
+`tests/conformance/13-stdlib/json-*unicode*` and `json-*surrogate*`
+(round trip of control and non-BMP characters included).
 
 ### K12 — A NUL in a string for the OS was refused by protoST only (resolved in protoIO 0.4.0)
 

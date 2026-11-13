@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -28,7 +29,6 @@ class BytecodeModule;
 class ExecutionEngine;
 class TimerService;
 struct Bootstrap;
-struct PrimitiveRegistry;
 
 class STRuntime {
 public:
@@ -72,10 +72,21 @@ public:
     // The source modules loaded so far (the kernel files, imported modules),
     // in load order. They live as long as the runtime. For the debugger.
     std::vector<const BytecodeModule*> loadedModules() const;
+
+    // Hands `module` to the runtime, which keeps it until it is destroyed, and
+    // answers it, to run with runTopLevel. The classes and methods a module
+    // defines run its code for as long as the runtime lives; a module the
+    // runtime owns needs no care from the embedder, and the closures over it
+    // share their code cell (src/runtime/BlockCode.h). The protost executable
+    // and the REPL hand over every module they run.
+    const BytecodeModule& adoptModule(std::unique_ptr<BytecodeModule> module);
     // The stdlib directory this runtime loads its kernel and library modules
     // from ("" when there is none).
     std::string stdlibDirectory() const;
     proto::ProtoRootSet* asyncRootSet()  const;
+    // A number no other STRuntime of this process has had, for caches that
+    // must tell runtimes apart (a runtime's address can be reused).
+    std::uint64_t serial() const noexcept { return serial_; }
 
     // Mutable globals namespace (PUSH_GLOBAL / STORE_GLOBAL). Allocated at
     // STRuntime construction as a mutable child of objectProto, with "Object"
@@ -84,9 +95,6 @@ public:
 
     // Access to the bootstrap prototype set (Object/Number/...).
     const Bootstrap& bootstrap() const;
-
-    // Access to the primitive registry that backs SEND dispatch.
-    PrimitiveRegistry& registry();
 
     // Access to the debugger runtime (attach state + session entry).
     DebuggerRuntime& debugger();
@@ -104,6 +112,22 @@ public:
     // from the thread that owns the runtime (the main thread). Code running
     // on another thread — an actor method that imports a module — passes its
     // own context to the two-argument form.
+    //
+    // The module stays the caller's, and must outlive this runtime: every
+    // class and method it defines stays in the globals and runs the module's
+    // code (closures borrow their module, src/runtime/BlockCode.h), on any
+    // thread, until the runtime is destroyed. Keep it alive while the runtime
+    // lives (the REPL retains each line's module), or load it from a file
+    // (loadModuleFromFile), which keeps it for the runtime's lifetime.
+    //
+    // An unhandled exception leaves as the proto::ProtoException carrying it
+    // (protoCore's unified exceptions), with one exception (KNOWN_ISSUES
+    // K20): when this runtime owns its space (`STRuntime()`) and the call is
+    // the embedder's -- on protoST's own context, with no protoST code
+    // running on the thread -- it leaves as a self-contained
+    // protoST::STUncaughtError (a std::runtime_error, STUncaughtError.h), so
+    // it may outlive the runtime. loadModuleFromFile, importModuleFile and
+    // loadModule follow the same rule.
     const proto::ProtoObject* runTopLevel(const BytecodeModule& m);
     const proto::ProtoObject* runTopLevel(const BytecodeModule& m,
                                           proto::ProtoContext* ctx);
@@ -117,6 +141,15 @@ public:
     // its own context, so the key-string allocation never races on a shared
     // per-thread allocation cache.
     void schedule(proto::ProtoContext* ctx, const proto::ProtoObject* actor);
+    // K18: drainOne, runOneTask, workerLoop, spawnWorker and acquireMainWait
+    // are protoST-INTERNAL entry points. They run protoST code (or block) on
+    // `ctx` directly, WITHOUT the EntryContext guard that runTopLevel(m, ctx),
+    // importModuleFile, loadModuleFromFile and __st_send__ apply to a context
+    // that is not protoST's own, so `ctx` must be one protoST runs on: a
+    // worker thread's root context (st_worker_main) or an engine context (the
+    // Future wait primitive). Embedders must not call them; another runtime's
+    // frame context passed here would have its locals overwritten by protoST's
+    // frames and pins (KNOWN_ISSUES K18).
     bool drainOne(proto::ProtoContext* ctx);   // returns true if a message was processed
     size_t scheduledCount() const;              // size of ready queue (for testing)
 
@@ -124,6 +157,7 @@ public:
     // constructor. Loops on the scheduler cv, calling drainOne() until shutdown
     // is requested by the destructor. Public for the C-style ProtoMethod
     // trampoline; embedders should not invoke this directly.
+    // protoST-internal, no EntryContext: see the K18 note at drainOne.
     void workerLoop(proto::ProtoContext* ctx);
     bool spawnWorker(proto::ProtoContext* ctx);
 
@@ -146,6 +180,7 @@ public:
     // must be the calling thread's own context: the waiter counts as parked
     // for the stop-the-world quorum while it waits.
     void markMainWaitingOn(const proto::ProtoObject* future);
+    // protoST-internal, no EntryContext: see the K18 note at drainOne.
     void acquireMainWait(proto::ProtoContext* ctx);
     void notifyMainWaiterIfFor(const proto::ProtoObject* future);
 
@@ -169,6 +204,7 @@ public:
     // calling thread's own context. Answers false when there is none. Called
     // first by drainOne, and alone by a worker waiting past the helping cap
     // (waitHelping, future_prims.cpp), which must still let deadlines fire.
+    // protoST-internal, no EntryContext: see the K18 note at drainOne.
     bool runOneTask(proto::ProtoContext* ctx);
 
     // The runtime's timer service (Future after: / within:), whose thread is
@@ -198,6 +234,55 @@ public:
     bool enterBlockingIO(proto::ProtoContext* ctx);
     void leaveBlockingIO();
 
+    // S40: a worker whose wait nested in a block reached the helping cap
+    // (future_prims.cpp, waitHelping) runs no more actor turns on its stack,
+    // so it is blocked for the pool as a worker in I/O is: enterCappedWait
+    // adds a worker on the same terms as enterBlockingIO and counts the
+    // thread as capped until leaveCappedWait. Called once per thread (the
+    // outermost capped wait on it), never nested.
+    bool enterCappedWait(proto::ProtoContext* ctx);
+    void leaveCappedWait();
+
+    // S40: proving that no actor turn can ever run again. A capped wait that
+    // finds its own chain of waits ending at an actor message that has not
+    // started cannot tell, alone, whether something else will still release
+    // it; the runtime decides from pool-wide state, in rounds ("epochs"):
+    //  * every event that could release a capped wait while a thread is
+    //    capped (a Future settled, a task queued or finished, a timer
+    //    scheduled, a thread entering or leaving the capped state, the program
+    //    thread parking in its wait) first calls noteProgress, which ends the
+    //    current epoch;
+    //  * each capped thread, idle in its wait, reads the epoch
+    //    (quiescenceEpoch), walks its chain, and, finding it stuck, confirms
+    //    that epoch (confirmStuck), once per thread;
+    //  * the thread whose confirmation completes the epoch, with the pool at
+    //    its ceiling, every worker capped, no timer pending, no task queued
+    //    or running, the program thread parked in its wait and no foreign
+    //    caller ever seen, ends the epoch itself and answers true: it alone
+    //    signals the deadlock. If any event happened meanwhile the epoch has
+    //    changed and the confirmation does not count.
+    // deadlockPossible is the cheap pre-check (atomics only) done before a
+    // chain walk.
+    void noteProgress();
+    std::uint64_t quiescenceEpoch() const;
+    bool deadlockPossible() const;
+    // Why the pool cannot grow, with its size, for the deadlock message
+    // (its maximum, a worker that could not be created, or shutdown).
+    std::string poolCeilingReason() const;
+    bool confirmStuck(proto::ProtoContext* ctx, std::uint64_t epoch);
+    // A task whose thread now waits (waitHelping inside a callback) is not
+    // running for confirmStuck: pauseRunningTasks takes this thread's running
+    // tasks out of the count and answers how many; resumeRunningTasks puts
+    // them back when the wait ends.
+    int pauseRunningTasks();
+    void resumeRunningTasks(int n);
+    // A caller from another runtime, another thread embedding protoST, or a
+    // debugger can settle any Future at any time: once one is seen, the
+    // deadlock above is never signalled (a nested-wait overflow then waits).
+    void noteForeignCaller();
+    // The most workers the pool grows to (enterBlockingIO, enterCappedWait).
+    static constexpr std::size_t kMaxWorkers = 256;
+
     // F6 v6 (2026-05-23 night): worker-pool gate. Lets a caller pause the
     // entire pool — workers in flight finish their current drainOne, but
     // no NEW drains start while paused. SEND fast-paths keep enqueuing
@@ -222,8 +307,21 @@ public:
     // canonical attribute layout (__state__=0, __value__=nil, __error__=nil).
     const proto::ProtoObject* newFuture(proto::ProtoContext* ctx);
     // Cheap actor detection: an object is treated as an actor iff it carries
-    // a non-nil __wrapped__ attribute (set by Object>>asActor).
+    // a non-nil __wrapped__ attribute (set by Object>>asActor). Until the
+    // process has created its first actor proxy the answer is false without
+    // a probe (0.10.0: the probe was about 5 % of a sequential workload).
     bool isActor(proto::ProtoContext* ctx, const proto::ProtoObject* obj) const;
+    // Called by Object>>asActor before it builds a proxy: from then on
+    // isActor probes every object. Process-wide and never reset, since
+    // runtimes may share a ProtoSpace and pass objects between them.
+    static void noteActorCreated();
+    // The heap ceiling in force for ctx's space, in cells: the adaptive
+    // controller's hard budget, else the fixed limit (setHeapLimits), else
+    // PROTOCORE_HEAP_LIMIT_CELLS or protoST's default. Never above INT_MAX,
+    // since protoCore counts cells in an int. The out-of-memory report names
+    // it, and a primitive that is asked for more cells than it can ever hold
+    // refuses up front (Array new:).
+    static long long heapCeilingCells(const proto::ProtoContext* ctx);
 
     // The actor's mailbox: a protoCore ProtoMPSCQueue held under the
     // `__mailbox__` attribute. Lock-free and O(1) on the send side, traced by
@@ -308,6 +406,10 @@ public:
     static std::string kernelManifestPath(std::string* problem = nullptr);
 
 private:
+    // Creates and anchors the `__bc_ptr__` cell closures over a module share
+    // (src/runtime/BlockCode.h); it anchors through registryAdd.
+    friend const proto::ProtoObject* blockCodeRefSlow(STRuntime& rt, proto::ProtoContext* ctx,
+                                                      const BytecodeModule& module);
     // Installs protoST's memory policy (the adaptive heap controller unless the
     // environment asks for a fixed limit) and its out-of-memory report.
     static void configureHeap(proto::ProtoSpace& space);
@@ -318,6 +420,9 @@ private:
     // 00-manifest.txt) into this runtime's globals. Throws std::runtime_error
     // naming file and line when a kernel file does not parse, compile or run.
     void loadKernel();
+    // S37: tells the compiler the class names the runtime built in C++ (see
+    // Compiler::publishNativeClasses).
+    void publishNativeClasses();
 
     // Runs a module's top level on `ctx` like runTopLevel, but lets every
     // control-flow signal (UnwindToHandler, RetrySignal, NonLocalReturn, ...)
@@ -326,6 +431,19 @@ private:
     // (D28); runTopLevel wraps it with the outermost-entry conversions.
     const proto::ProtoObject* runModuleTopLevel(const BytecodeModule& m,
                                                 proto::ProtoContext* ctx);
+    // The body of runTopLevel(m, ctx), without the K20 conversion.
+    const proto::ProtoObject* runTopLevelEntry(const BytecodeModule& m,
+                                               proto::ProtoContext* ctx);
+    // K20: runs an embedder entry point; see runTopLevel.
+    template <class Body>
+    const proto::ProtoObject* atEmbedderBoundary(proto::ProtoContext* ctx, Body&& body);
+
+    // The bodies of loadModuleFromFile and importModuleFile, on a context that
+    // is protoST's own (the public functions open an EntryContext first).
+    const proto::ProtoObject* loadModuleFromFileImpl(
+        proto::ProtoContext* ctx, const std::string& filePath, const std::string& logicalName);
+    const proto::ProtoObject* importModuleFileImpl(
+        proto::ProtoContext* ctx, const std::string& filePath, const std::string& logicalName);
 
     // F6 v3 E2b: live-registry GC anchoring. registryAdd makes `o` reachable
     // from the single pinned root (so it survives GC); registryRemove drops
@@ -371,6 +489,8 @@ private:
                      bool suspended);
 
     struct Impl;
+    const std::uint64_t serial_ = nextSerial();
+    static std::uint64_t nextSerial() noexcept;
     std::unique_ptr<Impl> impl_;
 };
 

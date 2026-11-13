@@ -1,5 +1,5 @@
 module main: <module>
-  args 0, locals 1 (0 n), stack 48 (deepest 2)
+  args 0, locals 2 (0 n, 1 __deopt_box__), stack 48 (deepest 3)
   constants:
     #0   integer   7
     #1   integer   5
@@ -23,21 +23,61 @@ module main: <module>
       8  PUSH_LOCAL         0     ; n
       9  PUSH_CONST         1     ; 5
      10  BIN_INT_GT         2     ; #>
-     11  ASSERT_BOOL_OR_DNU 3     ; #ifTrue:ifFalse:
-     12  JUMP_IF_FALSE      2     ; -> 15
+     11  JUMP_IF_NOT_BOOL   3     ; -> 15
+     12  JUMP_IF_FALSE      10    ; -> 23
      13  PUSH_CONST         4     ; 'big'
-     14  JUMP               1     ; -> 16
-     15  PUSH_CONST         5     ; 'small'
-     16  SEND_UNARY         6     ; #printNl
-     17  POP
-     18  PUSH_LOCAL         0     ; n
-     19  SEND_UNARY         7     ; #odd
-     20  ASSERT_BOOL_OR_DNU 8     ; #ifTrue:
-     21  JUMP_IF_FALSE      3     ; -> 25
-     22  PUSH_CONST         9     ; 'odd'
-     23  SEND_UNARY         6     ; #printNl
-     24  JUMP               1     ; -> 26
-     25  PUSH_NIL
-     26  RETURN_TOP
+     14  JUMP               9     ; -> 24
+     15  DEOPT_ENTER        0     ; box __deopt_box__: no locals
+     16  PUSH_LOCAL         1     ; __deopt_box__
+     17  PUSH_DEOPT_BLOCK   0     ; main.0 (<block> (not inlined))
+     18  PUSH_LOCAL         1     ; __deopt_box__
+     19  PUSH_DEOPT_BLOCK   1     ; main.1 (<block> (not inlined))
+     20  SEND_KEYWORD       3     ; #ifTrue:ifFalse:, 2 args
+     21  DEOPT_EXIT         0     ; box __deopt_box__: no locals
+     22  JUMP               1     ; -> 24
+     23  PUSH_CONST         5     ; 'small'
+     24  SEND_UNARY         6     ; #printNl
+     25  POP
+     26  PUSH_LOCAL         0     ; n
+     27  SEND_UNARY         7     ; #odd
+     28  JUMP_IF_NOT_BOOL   4     ; -> 33
+     29  JUMP_IF_FALSE      9     ; -> 39
+     30  PUSH_CONST         9     ; 'odd'
+     31  SEND_UNARY         6     ; #printNl
+     32  JUMP               7     ; -> 40
+     33  DEOPT_ENTER        1     ; box __deopt_box__: no locals
+     34  PUSH_LOCAL         1     ; __deopt_box__
+     35  PUSH_DEOPT_BLOCK   2     ; main.2 (<block> (not inlined))
+     36  SEND_KEYWORD       8     ; #ifTrue:, 1 arg
+     37  DEOPT_EXIT         1     ; box __deopt_box__: no locals
+     38  JUMP               1     ; -> 40
+     39  PUSH_NIL
+     40  RETURN_TOP
+
+module main.0: <block> (not inlined)
+  args 0, locals 0, stack 48 (deepest 1)
+  constants:
+    #0   string    'big'
+  code:
+      0  PUSH_CONST         0     ; 'big'
+      1  RETURN_TOP
+
+module main.1: <block> (not inlined)
+  args 0, locals 0, stack 48 (deepest 1)
+  constants:
+    #0   string    'small'
+  code:
+      0  PUSH_CONST         0     ; 'small'
+      1  RETURN_TOP
+
+module main.2: <block> (not inlined)
+  args 0, locals 0, stack 48 (deepest 1)
+  constants:
+    #0   string    'odd'
+    #1   symbol    #printNl
+  code:
+      0  PUSH_CONST         0     ; 'odd'
+      1  SEND_UNARY         1     ; #printNl
+      2  RETURN_TOP
 'big'
 'odd'

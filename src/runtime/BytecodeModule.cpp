@@ -10,6 +10,18 @@ namespace protoST {
 
 BytecodeModule::~BytecodeModule() {
     delete constCache_.load(std::memory_order_acquire);
+    delete codeRef_.load(std::memory_order_acquire);
+}
+
+bool BytecodeModule::publishCodeRef(std::uint64_t runtimeSerial,
+                                    const proto::ProtoObject* cell) const {
+    auto* fresh = new CodeRef{runtimeSerial, cell};
+    const CodeRef* expected = nullptr;
+    if (codeRef_.compare_exchange_strong(expected, fresh, std::memory_order_acq_rel,
+                                         std::memory_order_acquire))
+        return true;
+    delete fresh;
+    return false;
 }
 
 BytecodeModule::ConstCache::~ConstCache() {
@@ -42,9 +54,21 @@ unsigned int BytecodeModule::cachedLocalCount(unsigned int argc) const {
             arg = (arg << 8) | bytes_[pc + 1];
             pc += kInstrSize;
         }
-        if (op == Op::PUSH_LOCAL || op == Op::STORE_LOCAL) {
+        if (op == Op::PUSH_LOCAL || op == Op::STORE_LOCAL || op == Op::RESET_LOCAL
+            || op == Op::PUSH_SHARED_LOCAL || op == Op::STORE_SHARED_LOCAL) {
             if (!sawSlot || arg > maxSlot) { maxSlot = arg; sawSlot = true; }
         }
+    }
+    // A de-optimisation entry names slots no instruction may address: the
+    // dictionary slot of the frame's own scope is written only by
+    // DEOPT_ENTER.
+    auto see = [&](unsigned int slot) {
+        if (!sawSlot || slot > maxSlot) { maxSlot = slot; sawSlot = true; }
+    };
+    for (const DeoptEntry& e : deoptEntries_) {
+        see(e.boxSlot);
+        for (uint32_t d : e.scopeDictSlots) see(d);
+        for (const DeoptLocal& l : e.locals) see(l.slot);
     }
     unsigned int needed = sawSlot ? (maxSlot + 1) : 0;
     needed = std::max(needed, argc);
@@ -55,6 +79,37 @@ unsigned int BytecodeModule::cachedLocalCount(unsigned int argc) const {
     localCountCache_.store((static_cast<uint64_t>(argc) << 32) | needed,
                            std::memory_order_release);
     return needed;
+}
+
+void BytecodeModule::routeSharedLocals() {
+    std::vector<bool> shared;
+    for (const DeoptEntry& e : deoptEntries_)
+        for (const DeoptLocal& l : e.locals) {
+            if (l.scope == DeoptLocal::kReadOnly) continue;
+            if (shared.size() <= l.slot) shared.resize(l.slot + 1, false);
+            shared[l.slot] = true;
+        }
+    if (shared.empty()) return;
+    // A slot is shared for the whole module: a hidden slot that sibling
+    // inlined blocks reuse is routed in all of them, which costs those
+    // blocks the frame test and changes nothing else.
+    for (std::size_t pc = 0; pc + 1 < bytes_.size(); ) {
+        std::size_t opPos = pc;
+        Op op  = static_cast<Op>(bytes_[pc]);
+        unsigned int arg = bytes_[pc + 1];
+        pc += kInstrSize;
+        while (op == Op::EXTEND && pc + 1 < bytes_.size()) {
+            opPos = pc;
+            op  = static_cast<Op>(bytes_[pc]);
+            arg = (arg << 8) | bytes_[pc + 1];
+            pc += kInstrSize;
+        }
+        if (arg >= shared.size() || !shared[arg]) continue;
+        if (op == Op::PUSH_LOCAL)
+            bytes_[opPos] = static_cast<uint8_t>(Op::PUSH_SHARED_LOCAL);
+        else if (op == Op::STORE_LOCAL)
+            bytes_[opPos] = static_cast<uint8_t>(Op::STORE_SHARED_LOCAL);
+    }
 }
 
 unsigned int BytecodeModule::sendArgCount(Op op, const std::string& sel) {
@@ -113,15 +168,17 @@ unsigned int BytecodeModule::computeMaxOperandDepth() const {
             if (d > t) t = d;
         };
         switch (op) {
-            case Op::PUSH_CONST: case Op::PUSH_LOCAL: case Op::DUP:
+            case Op::PUSH_CONST: case Op::PUSH_LOCAL: case Op::PUSH_SHARED_LOCAL: case Op::DUP:
             case Op::PUSH_SELF: case Op::PUSH_NIL: case Op::PUSH_TRUE:
             case Op::PUSH_FALSE: case Op::PUSH_BLOCK: case Op::PUSH_CAPTURED:
+            // PUSH_DEOPT_BLOCK pops a box and pushes a closure: no change.
             case Op::PUSH_GLOBAL: case Op::PUSH_INSTVAR: case Op::PUSH_OWN_INSTVAR:
+            case Op::PUSH_LATE_VAR:
                 pushes(1);
                 break;
-            case Op::STORE_LOCAL: case Op::POP: case Op::STORE_CAPTURED:
+            case Op::STORE_LOCAL: case Op::STORE_SHARED_LOCAL: case Op::POP: case Op::STORE_CAPTURED:
             case Op::STORE_GLOBAL: case Op::STORE_INSTVAR: case Op::STORE_CLASSVAR:
-            case Op::DEFINE_CAPTURED:
+            case Op::DEFINE_CAPTURED: case Op::STORE_LATE_VAR:
                 pushes(-1);
                 break;
             case Op::SEND_UNARY: case Op::SEND_BINARY: case Op::SEND_KEYWORD:
@@ -131,7 +188,9 @@ unsigned int BytecodeModule::computeMaxOperandDepth() const {
                 break;
             case Op::BIN_INT_ADD: case Op::BIN_INT_SUB: case Op::BIN_INT_LE:
             case Op::BIN_INT_LT: case Op::BIN_INT_GE: case Op::BIN_INT_GT:
-            case Op::BIN_INT_EQ:
+            case Op::BIN_INT_EQ: case Op::IDENTICAL:
+            case Op::BIN_INT_MUL: case Op::BIN_INT_MOD: case Op::BIN_INT_QUO:
+            case Op::BIN_INT_AND: case Op::BIN_INT_OR:
                 pushes(-1);
                 break;
             case Op::MAKE_ARRAY:
@@ -145,6 +204,10 @@ unsigned int BytecodeModule::computeMaxOperandDepth() const {
                 pushes(-1);
                 jumpTo(pc + static_cast<std::size_t>(arg) * kInstrSize, depth);
                 break;
+            case Op::JUMP_IF_NIL: case Op::JUMP_IF_NOT_NIL:
+            case Op::JUMP_IF_NOT_BOOL:   // peeks: the value stays on both paths
+                jumpTo(pc + static_cast<std::size_t>(arg) * kInstrSize, depth);
+                break;
             case Op::JUMP:
                 jumpTo(pc + static_cast<std::size_t>(arg) * kInstrSize, depth);
                 reachable = false;
@@ -152,7 +215,8 @@ unsigned int BytecodeModule::computeMaxOperandDepth() const {
             case Op::JUMP_BACK: case Op::RETURN: case Op::RETURN_TOP:
                 reachable = false;
                 break;
-            default:   // ASSERT_BOOL_OR_DNU, MAKE_CAPTURED, IVAR_GROUP: no change
+            default:   // ASSERT_LOOP_BOOL, MAKE_CAPTURED, IVAR_GROUP,
+                       // DEOPT_ENTER/EXIT, RESET_LOCAL, PUSH_DEOPT_BLOCK: no change
                 break;
         }
     }
@@ -313,7 +377,8 @@ size_t BytecodeModule::addString(const std::string& s) {
 size_t BytecodeModule::internSymbol(const std::string& s) {
     auto it = symbolIndex_.find(s);
     if (it != symbolIndex_.end()) return it->second;
-    consts_.push_back(Const{ConstKind::Symbol, 0, 0.0, s});
+    const long long colons = static_cast<long long>(std::count(s.begin(), s.end(), ':'));
+    consts_.push_back(Const{ConstKind::Symbol, colons, 0.0, s});
     size_t idx = consts_.size() - 1;
     symbolIndex_[s] = idx;
     return idx;

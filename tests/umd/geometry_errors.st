@@ -38,7 +38,7 @@ cleaned := false.
   [attempts := attempts + 1. Geo circleArea(attempts - 2)]
      on: Geo NegativeRadius do: [:e | e retry].
   [[Geo circleArea(-1)] on: Geo GeometryError do: [:e | e resume: 1]]
-     on: Error do: [:e | e messageText].
+     on: IllegalResumeAttempt do: [:e | e messageText].
   [[Geo circleArea(-1)] on: Geo NegativeRadius do: [:e | e pass]]
      on: Geo GeometryError do: [:e | 'outer'].
   [Geo circleArea(-1)] on: ZeroDivide, Geo GeometryError do: [:e | 'set'].

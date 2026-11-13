@@ -1,5 +1,6 @@
 #include "protoST/STRuntime.h"
 #include "runtime/NativeError.h"
+#include "runtime/DecimalDouble.h"
 #include "runtime/ListIndex.h"
 #include "runtime/ClassedErrorSignal.h"
 #include "protoST/primitives.h"
@@ -175,9 +176,10 @@ const proto::ProtoObject* parseNumber(proto::ProtoContext* ctx, const std::strin
         if (ed == 0) return PROTO_NONE;
     }
     if (j != t.size()) return PROTO_NONE;
-    char* end = nullptr;
-    const double d = std::strtod(t.c_str(), &end);
-    if (end != t.c_str() + t.size()) return PROTO_NONE;
+    // Correctly rounded and locale-independent; 1e400 reads as infinity and
+    // 1e-400 as 0.0, as Python's float().
+    double d = 0.0;
+    if (!parseDecimalDouble(t, d)) return PROTO_NONE;
     return ctx->fromDouble(d);
 }
 
@@ -435,7 +437,7 @@ const proto::ProtoObject* splitToArray(STRuntime& rt, proto::ProtoContext* ctx,
     }
     const proto::ProtoObject* arr = rt.bootstrap().arrayProto->newChild(ctx, /*isMutable=*/true);
     TransientPin pinArr(ctx, arr);
-    arr->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__data__"), parts->asObject(ctx));
+    arr->setAttribute(ctx, rt.bootstrap().sym.data, parts->asObject(ctx));
     return arr;
 }
 
@@ -492,44 +494,43 @@ const proto::ProtoObject* prim_SymAsString(STRuntime&, proto::ProtoContext* ctx,
 } // anon
 
 void installStringPrimitives(STRuntime& rt) {
-    auto& reg = rt.registry();
     auto& b   = rt.bootstrap();
-    bindPrimitive(rt, b.stringProto, ",",       reg.registerPrim(prim_StrConcat));
-    bindPrimitive(rt, b.stringProto, "size",    reg.registerPrim(prim_StrSize));
-    bindPrimitive(rt, b.stringProto, "=",       reg.registerPrim(prim_StrEq));
-    bindPrimitive(rt, b.stringProto, "~=",      reg.registerPrim(prim_StrNe));
-    bindPrimitive(rt, b.stringProto, "printNl", reg.registerPrim(prim_PrintNl));
+    bindPrimitive(rt, b.stringProto, ",",       primitiveMethod<prim_StrConcat>);
+    bindPrimitive(rt, b.stringProto, "size",    primitiveMethod<prim_StrSize>);
+    bindPrimitive(rt, b.stringProto, "=",       primitiveMethod<prim_StrEq>);
+    bindPrimitive(rt, b.stringProto, "~=",      primitiveMethod<prim_StrNe>);
+    bindPrimitive(rt, b.stringProto, "printNl", primitiveMethod<prim_PrintNl>);
     // Character access — the n-th character as a 1-char String, and the
     // codepoint of the first character. The String protocol previously had no
     // character access at all; these are the minimal idiomatic accessors a
     // text-processing stdlib module (JSON, T4-d) needs.
-    bindPrimitive(rt, b.stringProto, "at:",        reg.registerPrim(prim_StrAt));
-    bindPrimitive(rt, b.stringProto, "asInteger",  reg.registerPrim(prim_StrAsInteger));
+    bindPrimitive(rt, b.stringProto, "at:",        primitiveMethod<prim_StrAt>);
+    bindPrimitive(rt, b.stringProto, "asInteger",  primitiveMethod<prim_StrAsInteger>);
     // The inverse, bound on the shared number prototype: codepoint -> 1-char
     // String. Lets a module render an escape (`\n`, `\uXXXX`) from a number.
-    bindPrimitive(rt, b.numberProto, "asCharacter", reg.registerPrim(prim_NumAsCharacter));
-    bindPrimitive(rt, b.stringProto, "asNumber",   reg.registerPrim(prim_StrAsNumber));
-    bindPrimitive(rt, b.stringProto, "copyFrom:to:", reg.registerPrim(prim_StrCopyFromTo));
-    bindPrimitive(rt, b.stringProto, "asUppercase", reg.registerPrim(prim_StrAsUppercase));
-    bindPrimitive(rt, b.stringProto, "asLowercase", reg.registerPrim(prim_StrAsLowercase));
-    bindPrimitive(rt, b.stringProto, "reversed",   reg.registerPrim(prim_StrReversed));
-    bindPrimitive(rt, b.stringProto, "includesSubstring:", reg.registerPrim(prim_StrIncludesSubstring));
-    bindPrimitive(rt, b.stringProto, "copyReplaceAll:with:", reg.registerPrim(prim_StrCopyReplaceAll));
-    bindPrimitive(rt, b.stringProto, "trimBoth",   reg.registerPrim(prim_StrTrimBoth));
-    bindPrimitive(rt, b.stringProto, "substrings", reg.registerPrim(prim_StrSubstrings));
-    bindPrimitive(rt, b.stringProto, "substrings:", reg.registerPrim(prim_StrSubstringsSep));
-    bindPrimitive(rt, b.stringProto, "<",          reg.registerPrim(prim_StrLt));
-    bindPrimitive(rt, b.stringProto, "<=",         reg.registerPrim(prim_StrLe));
-    bindPrimitive(rt, b.stringProto, ">",          reg.registerPrim(prim_StrGt));
-    bindPrimitive(rt, b.stringProto, ">=",         reg.registerPrim(prim_StrGe));
-    bindPrimitive(rt, b.stringProto, "asSymbol",   reg.registerPrim(prim_StrAsSymbol));
-    bindPrimitive(rt, b.symbolProto, "asString",   reg.registerPrim(prim_SymAsString));
-    bindPrimitive(rt, b.stringProto, "__symbolAsString", reg.registerPrim(prim_SymAsString));
-    bindPrimitive(rt, b.characterProto, "value",    reg.registerPrim(prim_CharValue));
-    bindPrimitive(rt, b.characterProto, "asString", reg.registerPrim(prim_CharAsString));
-    bindPrimitive(rt, b.characterProto, "asUppercase", reg.registerPrim(prim_CharAsUppercase));
-    bindPrimitive(rt, b.characterProto, "asLowercase", reg.registerPrim(prim_CharAsLowercase));
-    bindPrimitive(rt, b.objectProto, "printNl", reg.registerPrim(prim_PrintNl)); // fallback
+    bindPrimitive(rt, b.numberProto, "asCharacter", primitiveMethod<prim_NumAsCharacter>);
+    bindPrimitive(rt, b.stringProto, "asNumber",   primitiveMethod<prim_StrAsNumber>);
+    bindPrimitive(rt, b.stringProto, "copyFrom:to:", primitiveMethod<prim_StrCopyFromTo>);
+    bindPrimitive(rt, b.stringProto, "asUppercase", primitiveMethod<prim_StrAsUppercase>);
+    bindPrimitive(rt, b.stringProto, "asLowercase", primitiveMethod<prim_StrAsLowercase>);
+    bindPrimitive(rt, b.stringProto, "reversed",   primitiveMethod<prim_StrReversed>);
+    bindPrimitive(rt, b.stringProto, "includesSubstring:", primitiveMethod<prim_StrIncludesSubstring>);
+    bindPrimitive(rt, b.stringProto, "copyReplaceAll:with:", primitiveMethod<prim_StrCopyReplaceAll>);
+    bindPrimitive(rt, b.stringProto, "trimBoth",   primitiveMethod<prim_StrTrimBoth>);
+    bindPrimitive(rt, b.stringProto, "substrings", primitiveMethod<prim_StrSubstrings>);
+    bindPrimitive(rt, b.stringProto, "substrings:", primitiveMethod<prim_StrSubstringsSep>);
+    bindPrimitive(rt, b.stringProto, "<",          primitiveMethod<prim_StrLt>);
+    bindPrimitive(rt, b.stringProto, "<=",         primitiveMethod<prim_StrLe>);
+    bindPrimitive(rt, b.stringProto, ">",          primitiveMethod<prim_StrGt>);
+    bindPrimitive(rt, b.stringProto, ">=",         primitiveMethod<prim_StrGe>);
+    bindPrimitive(rt, b.stringProto, "asSymbol",   primitiveMethod<prim_StrAsSymbol>);
+    bindPrimitive(rt, b.symbolProto, "asString",   primitiveMethod<prim_SymAsString>);
+    bindPrimitive(rt, b.stringProto, "__symbolAsString", primitiveMethod<prim_SymAsString>);
+    bindPrimitive(rt, b.characterProto, "value",    primitiveMethod<prim_CharValue>);
+    bindPrimitive(rt, b.characterProto, "asString", primitiveMethod<prim_CharAsString>);
+    bindPrimitive(rt, b.characterProto, "asUppercase", primitiveMethod<prim_CharAsUppercase>);
+    bindPrimitive(rt, b.characterProto, "asLowercase", primitiveMethod<prim_CharAsLowercase>);
+    bindPrimitive(rt, b.objectProto, "printNl", primitiveMethod<prim_PrintNl>); // fallback
 }
 
 } // namespace protoST

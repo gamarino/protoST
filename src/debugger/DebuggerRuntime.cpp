@@ -420,14 +420,34 @@ std::vector<FrameVariable> DebuggerRuntime::frameVariables(STRuntime& rt, proto:
     // Such a counter goes first: it shadows a variable of the same name.
     std::vector<std::string> slotNames(f.locals.size());
     std::vector<size_t> order;
+    std::vector<bool> scoped(f.locals.size(), false);
     for (size_t i = 0; i < slotNames.size(); ++i) slotNames[i] = m->localName(i);
     for (const auto& sl : m->scopedLocals())
         if (sl.slot < slotNames.size() && f.pc >= sl.fromPc && f.pc < sl.toPc) {
             slotNames[sl.slot] = sl.name;
+            scoped[sl.slot] = true;
             order.push_back(sl.slot);
         }
     for (size_t i = 0; i < slotNames.size(); ++i)
         if (std::find(order.begin(), order.end(), i) == order.end()) order.push_back(i);
+
+    // The names this code reads or writes as captured variables.
+    std::unordered_set<std::string> capturedHere;
+    {
+        const auto& bytes = m->bytes();
+        for (size_t pc = 0; pc + 1 < bytes.size(); ) {
+            Op op = static_cast<Op>(bytes[pc]);
+            unsigned int arg = bytes[pc + 1];
+            pc += kInstrSize;
+            while (op == Op::EXTEND && pc + 1 < bytes.size()) {
+                op  = static_cast<Op>(bytes[pc]);
+                arg = (arg << 8) | bytes[pc + 1];
+                pc += kInstrSize;
+            }
+            if (op == Op::PUSH_CAPTURED || op == Op::STORE_CAPTURED || op == Op::DEFINE_CAPTURED)
+                capturedHere.insert(m->constSymbol(arg));
+        }
+    }
 
     std::unordered_set<std::string> seen;
     for (size_t i : order) {
@@ -435,8 +455,12 @@ std::vector<FrameVariable> DebuggerRuntime::frameVariables(STRuntime& rt, proto:
         if (!shown(n) || !seen.insert(n).second) continue;
         const proto::ProtoObject* v = f.locals[i];
         // A temporary a block shares lives in the captured dict; its slot
-        // stays nil.
-        if (!v || v == PROTO_NONE) capturedValue(n, v);
+        // stays nil. Only such a temporary is read there: a slot that holds
+        // its own variable (an inlined block's temporary, or a temporary no
+        // block shares) shows its own value, nil included, even when an
+        // enclosing scope's captured variable has the same name.
+        if ((!v || v == PROTO_NONE) && !scoped[i] && capturedHere.count(n) != 0)
+            capturedValue(n, v);
         out.push_back({n, v ? v : PROTO_NONE});
     }
     // The captured names this code reads or writes without a slot of its
@@ -477,10 +501,7 @@ bool DebuggerRuntime::evaluateValue(STRuntime& rt, proto::ProtoContext* ctx,
     // exception the expression raises must not be caught by an on:do: of the
     // program, which would unwind the program's own frames from inside the
     // debugger. Restored on every exit.
-    struct HideHandlers {
-        std::vector<proto::proto_ulong> ids = handlerStackDisableAll();
-        ~HideHandlers() { handlerStackRestore(ids); }
-    } hidden;
+    HandlerBarrier hidden;
 
     // The frame's named variables (and the extra bindings, which shadow a
     // variable of the same name), bound by value as the parameters of a block

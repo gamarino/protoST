@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 #include "protoCore.h"  // proto::proto_ulong
@@ -15,6 +16,7 @@ namespace protoST {
 
 class STRuntime;
 class BytecodeModule;
+class EntryContext;
 class DebuggerRuntime;
 struct Bootstrap;
 struct DebugFrame;
@@ -161,6 +163,7 @@ public:
     const proto::ProtoObject* continueRun(proto::ProtoContext* ctx);
 
 private:
+    friend class EntryContext;   // K18: reads rt_ and ctx_ of live engines
     // F6 v3 E3: GC-correctness fix. The frame stack no longer holds any
     // ProtoObject* in plain C++ std::vectors — protoCore's tracing GC cannot
     // see the C++ heap. Instead, EVERY ProtoObject* a frame needs (locals,
@@ -204,6 +207,11 @@ private:
         // first group entry. Cleared once the run is published, or written
         // out one by one before a send (flushInstVarGroup).
         bool                       ivGroupActive  = false;
+        // Some local slot of this frame holds a forward (DEOPT_ENTER): its
+        // variable is shared with a de-optimised closure and lives in a
+        // scope dictionary. PUSH_SHARED_LOCAL and STORE_SHARED_LOCAL test it
+        // before reading or writing their slot directly.
+        bool                       deoptForwarded = false;
         uint16_t                   ivGroupPending = 0;
         unsigned int               ivGroupBase    = 0;
         std::size_t                ivGroupFirst   = 0;
@@ -287,15 +295,61 @@ private:
     void setSelf(const Frame& f, const proto::ProtoObject* v);
     const proto::ProtoObject* getCaptured(const Frame& f) const;
     void setCaptured(const Frame& f, const proto::ProtoObject* v);
-    void push(Frame& f, const proto::ProtoObject* v);
-    const proto::ProtoObject* pop(Frame& f);
-    const proto::ProtoObject* peek(const Frame& f) const;
+    // push / pop / peek run on nearly every instruction: they are defined
+    // here and forced inline into runLoop (0.10.0; until then GCC left them
+    // out of line in that very large function, a call per stack access).
+    // The checks stay, with their failures out of line.
+#if defined(_MSC_VER)
+#define PROTOST_ENGINE_INLINE __forceinline
+#else
+#define PROTOST_ENGINE_INLINE inline __attribute__((always_inline))
+#endif
+    PROTOST_ENGINE_INLINE void push(Frame& f, const proto::ProtoObject* v) {
+        // The compiler's code never overflows: frames are sized from the
+        // deepest point of their module. A hand-built module can, and then
+        // it is an ordinary catchable Error.
+        // The region is inside the slot array (pushFrame), so the slot is
+        // indexed directly (0.10.0; see getLocal).
+        if (f.sp >= f.maxStack) [[unlikely]] operandStackOverflow(f);
+        ctx_->getAutomaticLocals()[opStackBase(f) + f.sp] = v;
+        ++f.sp;
+    }
+    PROTOST_ENGINE_INLINE const proto::ProtoObject* pop(Frame& f) {
+        if (f.sp == 0) [[unlikely]] operandStackUnderflow("engine operand stack underflow");
+        --f.sp;
+        return ctx_->getAutomaticLocals()[opStackBase(f) + f.sp];
+    }
+    PROTOST_ENGINE_INLINE const proto::ProtoObject* peek(const Frame& f) const {
+        if (f.sp == 0) [[unlikely]] operandStackUnderflow("engine operand stack peek on empty");
+        return ctx_->getAutomaticLocals()[opStackBase(f) + f.sp - 1];
+    }
+#undef PROTOST_ENGINE_INLINE
+    [[noreturn]] void operandStackOverflow(const Frame& f);
+    [[noreturn]] static void operandStackUnderflow(const char* what);
     const proto::ProtoObject* opAt(const Frame& f, unsigned int depth) const;
 
     // Instance-variable write groups: STORE_INSTVAR's write of `val` under
     // group entry `entry`'s name, and the write, one by one and in order, of
     // the pending writes of an active group (before a send, which could
     // observe `self`).
+    // A closure of sub-module `blockIdx` of the frame's module, created by
+    // the frame, resolving its free variables in `capD` (PUSH_BLOCK passes
+    // the frame's captured dict, PUSH_DEOPT_BLOCK a de-optimisation box).
+    const proto::ProtoObject* newClosure(proto::ProtoContext* ctx, const Frame& f,
+                                         unsigned int blockIdx,
+                                         const proto::ProtoObject* capD);
+    // The de-optimisation opcodes (Opcodes.h, DEOPT_ENTER and DEOPT_EXIT).
+    void deoptEnter(proto::ProtoContext* ctx, Frame& f, unsigned int entry);
+    // A slot value that is a forward (DEOPT_ENTER), or nullptr.
+    const proto::ProtoObject* deoptForwardOf(proto::ProtoContext* ctx,
+                                             const proto::ProtoObject* v) const;
+    // The value of local `slot` through its forward, if it has one.
+    const proto::ProtoObject* readForwardedLocal(proto::ProtoContext* ctx, const Frame& f,
+                                                 unsigned int slot) const;
+    // Stores into local `slot`, through its forward if it has one.
+    void writeForwardedLocal(proto::ProtoContext* ctx, const Frame& f, unsigned int slot,
+                             const proto::ProtoObject* v);
+
     void storeInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t nameConst,
                       const proto::ProtoObject* val);
     void flushInstVarGroup(proto::ProtoContext* ctx, Frame& f);
@@ -390,4 +444,50 @@ private:
     const proto::ProtoObject* runLoop(proto::ProtoContext* ctx);
 };
 
+// K18: the context a message sent into protoST from outside runs on.
+//
+// protoST's engine treats its context's automaticLocals as its own: frame
+// regions at the thread's frame cursor, transient pins in the scratch slots
+// [0, kScratchSlots), and it grows the array to its geometry. That is right
+// for protoST's root context and for the context of an engine already running
+// on this thread, and wrong for any other context of protoST's space -- above
+// all another runtime's frame context, whose locals live in those same slots.
+//
+// Construct one at an entry with the context the message would run on. When
+// that context is not protoST's (isProtoSTContext), the entry opens a child
+// context of it and runs there, with the thread's frame and scratch cursors
+// started afresh for that context and restored when the entry ends. Answer the
+// result through leave(), which anchors it as the child's return value, so it
+// survives the child's young generation being submitted.
+class EntryContext {
+public:
+    EntryContext(STRuntime& rt, proto::ProtoContext* ctx);
+    ~EntryContext();
+    EntryContext(const EntryContext&) = delete;
+    EntryContext& operator=(const EntryContext&) = delete;
+
+    proto::ProtoContext* ctx() const { return ctx_; }
+    const proto::ProtoObject* leave(const proto::ProtoObject* result);
+
+    // True when `ctx` is `rt`'s root context or the context of an engine of
+    // `rt` live on this thread.
+    static bool isProtoSTContext(const STRuntime& rt, const proto::ProtoContext* ctx);
+
+private:
+    proto::ProtoContext* ctx_;
+    std::optional<proto::ProtoContext> own_;   // destroyed after the cursors are restored
+    unsigned int savedSlotCursor_ = 0;
+    unsigned int savedScratchCursor_ = 0;
+};
+
+// A send `recv` does not understand: its doesNotUnderstand: method, when its
+// class defines one in Smalltalk, runs with a Message; otherwise a resumable
+// MessageNotUnderstood is signalled. What a SEND and perform: both do.
+const proto::ProtoObject* sendDoesNotUnderstand(STRuntime& rt, proto::ProtoContext* ctx,
+                                                const proto::ProtoObject* recv,
+                                                const std::string& selector,
+                                                const proto::ProtoObject* const* args,
+                                                int argc);
+
 } // namespace protoST
+

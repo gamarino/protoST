@@ -10,7 +10,7 @@ RawServer >> answer: srv
   [(c nextLine ifNil: ['']) notEmpty] whileTrue: [].
   c nextPutAll: 'HTTP/1.1 200 OK' , crlf , 'Transfer-Encoding: chunked' , crlf , crlf.
   "1\r\n<C3>\r\n1\r\n<A9>\r\n0\r\n\r\n: the two bytes of U+00E9 in two chunks"
-  c nextPutBytes: #(49 13 10 195 13 10 49 13 10 169 13 10 48 13 10 13 10).
+  c nextPutBytes: #[49 13 10 195 13 10 49 13 10 169 13 10 48 13 10 13 10].
   c flush; close.
   ^ nil.
 srv := ServerSocket listenOn: 0 host: '127.0.0.1'.

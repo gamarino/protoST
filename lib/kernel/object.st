@@ -12,13 +12,11 @@ Object >> value
 
 "--- class membership -------------------------------------------------------"
 
-Object >> isKindOf: aClass
-  | c |
-  c := self class.
-  [c notNil] whileTrue: [
-    c == aClass ifTrue: [^ true].
-    c := c superclass].
-  ^ false.
+"isKindOf: aClass is a primitive (object_prims.cpp): whether the receiver is
+ an instance of aClass or of a class that has aClass among its ancestors,
+ superclasses and mixins (`uses:`, addBehavior:) alike: a mixin is a parent
+ class in protoST (LANGUAGE.md §4.11), the same ancestor set `on: aClass do:`
+ selects an exception by."
 
 Object >> isMemberOf: aClass
   ^ self class == aClass.
@@ -55,17 +53,9 @@ Object >> asString
 
 "--- sending messages by name ------------------------------------------------"
 
-Object >> perform: aSelector
-  ^ self perform: aSelector withArguments: #().
-
-Object >> perform: aSelector with: anObject
-  ^ self perform: aSelector withArguments: (Array with: anObject).
-
-Object >> perform: aSelector with: first with: second
-  ^ self perform: aSelector withArguments: (Array with: first with: second).
-
-Object >> perform: aSelector with: first with: second with: third
-  ^ self perform: aSelector withArguments: (Array with: first with: second with: third).
+"perform:, perform:with:, perform:with:with: and perform:with:with:with: are
+ primitives (0.10.0), like perform:withArguments:: they no longer build an
+ Array of the arguments."
 
 "--- errors -------------------------------------------------------------------"
 
@@ -119,7 +109,9 @@ Object >> initialize
 "--- class-instance variables -----------------------------------------------------
  `Foo class instanceVariableNames: 'default'` declares slots of the class
  object itself; the compiler reads the declaration, and at run time the
- statement only has to be understood by the metaclass."
+ metaclass records the names, so `Foo class instVarNames` lists them, as in
+ Pharo."
 
-Object >> instanceVariableNames: aString
+Behavior >> instanceVariableNames: aString
+  self __setInstVarNames: aString.
   ^ self.

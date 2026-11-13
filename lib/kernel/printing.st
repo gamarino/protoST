@@ -1,16 +1,15 @@
 "Kernel: printing. printString and displayString are built on printOn:, so a
  class that overrides printOn: prints the same way everywhere (printString,
  displayString, printNl, the REPL, a script's result). basicPrintString is the
- primitive 'a ClassName' form (digits for numbers, the name for a class).
- A class object inherits its instances' printOn:, so every printString and
- displayString entry point answers the name first when the receiver is a
- class (isClassObject)."
+ primitive 'a ClassName' form (digits for numbers, the name for a class). A
+ class prints through Object's printOn: as well, which its metaclass chain
+ reaches (Foo class -> ... -> Class -> Behavior -> Object), never through the
+ printOn: of its instances (STATUS D52)."
 
 Object >> printOn: aStream
   aStream nextPutAll: self basicPrintString.
 
 Object >> printString
-  self isClassObject ifTrue: [^ self name].
   ^ String streamContents: [:s | self printOn: s].
 
 Object >> displayString
@@ -53,7 +52,6 @@ UndefinedObject >> printOn: aStream
   aStream nextPutAll: 'nil'.
 
 Number >> displayString
-  self isClassObject ifTrue: [^ self name].
   ^ self printString.
 
 Association >> printOn: aStream

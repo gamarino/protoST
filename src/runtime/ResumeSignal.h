@@ -22,7 +22,7 @@
 //   actor message / top-level run is a bug, converted to a runtime error in
 //   STRuntime::drainOne / runTopLevel — never allowed to call std::terminate.
 //
-//   Sibling of UnwindToHandler / RetrySignal / PassSignal / NonLocalReturn /
+//   Sibling of UnwindToHandler / RetrySignal / NonLocalReturn /
 //   FutureYield — none derive from std::exception or proto::ProtoException
 //   (see PinnedValue.h).
 

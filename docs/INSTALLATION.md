@@ -1,20 +1,20 @@
 # Installing protoST
 
-protoST 0.9.1 is a Smalltalk-syntax, actor-native runtime on protoCore. It is
+protoST 0.10.0 is a Smalltalk-syntax, actor-native runtime on protoCore. It is
 a consumer of protoCore, never a bundler of it: `bin/protost` links
 `libprotoCore.so.5`, and every package protoST produces declares a runtime
 dependency on protoCore's own package instead of shipping a copy.
 
 On a Debian or Ubuntu machine where protoCore's package is installed, the
 library is `/usr/lib/x86_64-linux-gnu/libprotoCore.so.5`, a link to
-`libprotoCore.so.<version>`. protoST 0.9.1 needs protoCore 3.4.0 or later
-(*Prerequisites*), as 0.9.0, 0.8.1 and 0.8.0 did (0.7.0 needed 3.0.0). Its `.deb`
+`libprotoCore.so.<version>`. protoST 0.10.0 needs protoCore 3.4.0 or later
+(*Prerequisites*), as 0.9.1, 0.9.0, 0.8.1 and 0.8.0 did (0.7.0 needed 3.0.0). Its `.deb`
 is built and tested against protoCore 3.6.0, the release to install with it,
 and depends on `protocore (>= 3.6.0)` through protoCore's shlibs file. CI
 builds against protoCore 3.6.0 on Linux, macOS and Windows, and against
 3.4.0, the declared minimum, in one Linux job (the floor job); it pins protoIO
-0.4.0 (tag `v0.4.0`), which 0.9.1 requires (see *Prerequisites*). The suite
-was last run locally (2026-11-13) against protoCore 3.6.0 and protoIO 0.4.0.
+0.5.0 (tag `v0.5.0`), which 0.10.0 requires (see *Prerequisites*). The suite
+was last run locally (2026-11-13) against protoCore 3.6.0 and protoIO 0.5.0.
 
 ---
 
@@ -26,7 +26,9 @@ was last run locally (2026-11-13) against protoCore 3.6.0 and protoIO 0.4.0.
   Fedora/RHEL, `brew install readline` on macOS). It is a hard requirement:
   `find_library(READLINE_LIBRARY NAMES readline REQUIRED)`, except on Windows,
   where the REPL uses the console's own line editing (*Windows (MSVC)*).
-- **protoIO 0.4.0 or a later 0.4.x** at build time only (0.4.0 adds
+- **protoIO 0.5.0 or a later 0.5.x** at build time only (0.5.0 adds
+  `random::bytes` and `clock::utcMicroseconds`, behind `ByteArray randomBytes:`
+  and `Time utcMicroseconds` in protoST 0.10.0; 0.9.0 needs 0.4.x; 0.4.0 adds
   `file::EndGuard`, the end guard `BinaryFile` uses, and the `Conflict`
   error kind; 0.3.0 added the
   byte-level functions behind `ByteArray`, `BinaryFile` and `MessagePack`:
@@ -36,7 +38,7 @@ was last run locally (2026-11-13) against protoCore 3.6.0 and protoIO 0.4.0.
   listener on a host-less address (0.2.2) and `readBufferedLine` (0.2.3, with
   which `nextLine` takes a line already in protoIO's read buffer without
   leaving the collector's quorum); protoIO's package is compatible within one
-  minor version, so a 0.3 or 0.5 is refused): the I/O
+  minor version, so a 0.4 or 0.6 is refused): the I/O
   library shared by the protoCore
   runtimes (files, processes, TCP, UDP, TLS, HTTP), linked statically, so the
   installed `protost` does not depend on it. Either install its `protoio-dev`
@@ -344,16 +346,16 @@ wsl --install -d Ubuntu-24.04
 
 # Then, in the Ubuntu shell: the two packages of the GitHub releases.
 wget https://github.com/numaes/protoCore/releases/download/v3.6.0/protoCore-3.6.0-Linux.deb
-wget https://github.com/gamarino/protoST/releases/download/v0.9.1/protost-0.9.1-Linux.deb
-sudo apt install ./protoCore-3.6.0-Linux.deb ./protost-0.9.1-Linux.deb
+wget https://github.com/gamarino/protoST/releases/download/v0.10.0/protost-0.10.0-Linux.deb
+sudo apt install ./protoCore-3.6.0-Linux.deb ./protost-0.10.0-Linux.deb
 protost --version
 ```
 
 The packages are attached to the GitHub releases
 [protoCore v3.6.0](https://github.com/numaes/protoCore/releases/tag/v3.6.0)
-and [protoST v0.9.1](https://github.com/gamarino/protoST/releases/tag/v0.9.1)
+and [protoST v0.10.0](https://github.com/gamarino/protoST/releases/tag/v0.10.0)
 (built on Ubuntu 24.04, x86_64). The same commands install them on Ubuntu
-24.04 itself. Built from source, protoST 0.9.1's floor is protoCore 3.4.0;
+24.04 itself. Built from source, protoST 0.10.0's floor is protoCore 3.4.0;
 the `.deb` depends on `protocore (>= 3.6.0)`, the release CI builds against
 (*Prerequisites*). The package also installs the FAST talk's demos, ready to
 run: `cd /usr/share/protoST/talks/2026-10-15-fas/demos && ./check_all.sh`
