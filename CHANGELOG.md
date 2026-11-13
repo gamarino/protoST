@@ -310,19 +310,26 @@ minor release, so the two services arrive in 0.5.0.
   for an event its program does not guarantee: with the hook the actor
   churns until the main thread stops it (a bounded churn could end, and its
   collections with it, before the spin started counting; the 3.4.0 floor job
-  timed out so), and without it the spin also ends when the bounded churn is
-  done, which fails with the observed cycle counts instead of hanging. The
+  timed out so), and without it the churn is bounded by heap growth, the
+  spin waits for a pending collection (`gcStarted` or `stwFlag`, not the
+  flag alone) or for the churn's end, and the latter fails with the observed
+  cycle counts instead of hanging. The
   fix needs no protoCore newer than 3.4.0, and the case runs on every
   supported release (STATUS S3).
 - **The test suite builds with MSVC and its startup budget runs alone.**
   `test_gc_cycle.cpp` read the collector's counters with GCC's
   `__atomic_load_n` (it now uses `std::atomic_ref` where the library has it,
-  as `collection_prims.cpp` does), and `test_foreign_frame_context.cpp`
-  narrowed `asLong`'s `long long` to `long` (C4244, an error under `/WX`).
+  as `collection_prims.cpp` does), and `test_foreign_frame_context.cpp` and
+  `test_k18_reentry.cpp` narrowed `asLong`'s `long long` to `long` (C4244, an error under `/WX`).
   `cli_kernel`, which holds startup to 100 ms of wall-clock time, is
   `RUN_SERIAL`: in the assertions job it overlapped `cli_nested_wait_progress`
   (256 workers, every core busy) and failed at 271 ms, while `protost
   --version` alone took 146 ms there; startup measures about 40 ms run alone.
+  `cli_nested_wait_progress` bounds each run with `timeout 120`; under
+  ThreadSanitizer the chain of 5000 signalled its deadlock and was then
+  killed before it exited (about 6 s in an optimised build), so the TSan
+  build raises that bound to 900 s (`NESTED_WAIT_TIMEOUT`), as it already
+  does for the conformance programs.
 - **`Array new:` with a size the heap can never take signals an Error
   (reviews R3-2, R4-1, R5-1, R6-1, R7-1).** `Array new: 3000000000` (a typo,
   say) built an 8n-byte vector and then the list, and ended in protoCore's

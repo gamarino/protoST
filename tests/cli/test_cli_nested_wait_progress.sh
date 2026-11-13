@@ -12,13 +12,19 @@
 set -uo pipefail
 PROTOST="$1"
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# The bound on each run, in seconds: a hang guard, not a measurement. 120 s
+# is ample for an optimised build (the chain of 5000 takes about 6 s); under
+# ThreadSanitizer the same case took more than 120 s on a 4-vCPU runner and
+# was killed after it had signalled the deadlock (CI, 2026-11-13), so the
+# TSan build passes NESTED_WAIT_TIMEOUT=900 (CMakeLists.txt).
+HANG_TIMEOUT="${NESTED_WAIT_TIMEOUT:-120}"
 fail=0
 run() {   # run <expected> <workers or empty> <fixture> <arg>
     local expected="$1" workers="$2" fixture="$3" arg="$4" out rc
     if [ -n "$workers" ]; then
-        out="$(PROTOST_WORKERS="$workers" timeout 120 "$PROTOST" --print-last "$HERE/fixtures/$fixture" "$arg" 2>&1)"
+        out="$(PROTOST_WORKERS="$workers" timeout "$HANG_TIMEOUT" "$PROTOST" --print-last "$HERE/fixtures/$fixture" "$arg" 2>&1)"
     else
-        out="$(timeout 120 "$PROTOST" --print-last "$HERE/fixtures/$fixture" "$arg" 2>&1)"
+        out="$(timeout "$HANG_TIMEOUT" "$PROTOST" --print-last "$HERE/fixtures/$fixture" "$arg" 2>&1)"
     fi
     rc=$?
     if [ "$rc" -ne 0 ] || [ "$(echo "$out" | tail -n 1)" != "$expected" ]; then
@@ -41,7 +47,7 @@ run 44 "" nested_wait_capped_callback.st 40
 # fills (1 ms) or long after (3000 ms); the answer is 17 + 4336.
 run4() {  # like run, with two arguments
     local expected="$1" fixture="$2" out rc
-    out="$(PROTOST_WORKERS=1 timeout 120 "$PROTOST" --print-last "$HERE/fixtures/$fixture" "$3" "$4" 2>&1)"
+    out="$(PROTOST_WORKERS=1 timeout "$HANG_TIMEOUT" "$PROTOST" --print-last "$HERE/fixtures/$fixture" "$3" "$4" 2>&1)"
     rc=$?
     if [ "$rc" -ne 0 ] || [ "$(echo "$out" | tail -n 1)" != "$expected" ]; then
         echo "FAIL: $fixture $3 $4 (one worker): exit $rc: $(echo "$out" | tail -n 3)"
@@ -50,7 +56,7 @@ run4() {  # like run, with two arguments
 }
 run4 4353 nested_wait_timer_release.st 4336 3000
 run4 4353 nested_wait_timer_release.st 4336 1
-out="$(PROTOST_WORKERS=1 timeout 120 "$PROTOST" --print-last "$HERE/fixtures/nested_wait_chain.st" 5000 2>&1)"
+out="$(PROTOST_WORKERS=1 timeout "$HANG_TIMEOUT" "$PROTOST" --print-last "$HERE/fixtures/nested_wait_chain.st" 5000 2>&1)"
 rc=$?
 if [ "$rc" -eq 0 ] || [ "$rc" -eq 124 ] || ! echo "$out" | grep -q "deadlock: too many nested waits"; then
     echo "FAIL: chain of 5000 (one worker): exit $rc: $(echo "$out" | tail -n 3)"

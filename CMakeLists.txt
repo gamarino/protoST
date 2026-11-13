@@ -756,6 +756,15 @@ set_tests_properties(cli_actor_unobserved_error cli_callback_error_reported
                      cli_dap_stepping cli_dap_threads cli_dap_conditions
                      cli_dap_sources cli_dap_gc
                      PROPERTIES ${PROTOST_TSAN_TEST_PROPERTIES})
+# cli_nested_wait_progress bounds each of its runs with `timeout`; under TSan
+# the chain of 5000 (256 workers) needs more than its default 120 s, so the
+# bound is raised as the conformance programs' is, and the test's own ctest
+# limit with it (the script runs ten cases).
+if(PROTOST_TSAN)
+    set_tests_properties(cli_nested_wait_progress PROPERTIES
+        ENVIRONMENT_MODIFICATION "TSAN_OPTIONS=set:${PROTOST_TSAN_OPTIONS};NESTED_WAIT_TIMEOUT=set:900"
+        TIMEOUT 1800)
+endif()
 
 # --- Track 10: Installation packaging ---------------------------------------
 # Install RPATH so an installed `bin/protost` finds libprotoCore.so under

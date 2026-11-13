@@ -56,8 +56,8 @@ const proto::ProtoObject* frameFn(proto::ProtoContext* ctx, const proto::ProtoOb
         catch (...) { g_errorSeen = true; }
     }
     const proto::ProtoObject* walked = send(&frame, g_walker, "walk:", {nested});
-    const long d = send(&frame, g_walker, "depthOf:", {walked})->asLong(&frame);
-    const long leaf = send(&frame, g_walker, "leafOf:", {walked})->asLong(&frame);
+    const long long d = send(&frame, g_walker, "depthOf:", {walked})->asLong(&frame);
+    const long long leaf = send(&frame, g_walker, "leafOf:", {walked})->asLong(&frame);
     bool kept = true;
     for (int i = 0; i < 3; ++i) if (frame.getAutomaticLocal(i) != s[i]) kept = false;
     if (kept && d == 300 && leaf == level + 1 && protoST::g_scratchCursor == cursorIn) ++g_okLevels;
