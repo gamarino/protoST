@@ -1065,7 +1065,8 @@ void STRuntime::leaveCappedWait() {
 
 bool STRuntime::deadlockPossible() const {
     const size_t total = impl_->poolSize.load(std::memory_order_acquire);
-    const bool ceiling = total >= kMaxWorkers || impl_->poolCannotGrow.load(std::memory_order_acquire);
+    const bool ceiling = total >= kMaxWorkers || impl_->poolCannotGrow.load(std::memory_order_acquire)
+        || impl_->shutdown.load(std::memory_order_seq_cst);   // no worker is added at shutdown
     return ceiling && total > 0
         && static_cast<size_t>(impl_->cappedThreads.load(std::memory_order_acquire)) >= total;
 }
@@ -1110,7 +1111,10 @@ bool STRuntime::confirmStuck(proto::ProtoContext* ctx, std::uint64_t epoch) {
     // counts as running before it leaves the queue.
     if (impl_->foreignCaller.load(std::memory_order_seq_cst)) return false;
     if (!ownsSpace() || debugger().attached()) return false;
-    if (impl_->mainWaitingOn.load(std::memory_order_seq_cst) == nullptr) return false;
+    // The program thread is parked in its wait, or only joins the workers
+    // (shutdown).
+    if (impl_->mainWaitingOn.load(std::memory_order_seq_cst) == nullptr
+        && !impl_->shutdown.load(std::memory_order_seq_cst)) return false;
     if (impl_->timers && impl_->timers->pendingCount(ctx) != 0) return false;
     if (impl_->queuedTasks.load(std::memory_order_seq_cst) > 0) return false;
     if (impl_->runningTasks.load(std::memory_order_seq_cst) > 0) return false;
@@ -1145,8 +1149,11 @@ STRuntime::~STRuntime() {
         proto::ProtoContext::UnmanagedScope unmanaged(impl_->rootCtx);
         for (;;) {
             {
+                // S40: the program thread stops acting here (it only joins);
+                // the quiescence epoch ends before that is visible.
+                bumpEpoch(impl_->quiesce);
                 std::lock_guard<std::mutex> lock(impl_->workersMutex);
-                impl_->shutdown.store(true, std::memory_order_release);
+                impl_->shutdown.store(true, std::memory_order_seq_cst);
                 if (impl_->spawning == 0) { pool = impl_->workers; break; }
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -1296,6 +1303,19 @@ void STRuntime::workerLoop(proto::ProtoContext* ctx) {
             // Final drain in case a sender pushed after our last pop.
             while (drainOneReporting(*this, ctx)) {
                 g_drainHits[wid].fetch_add(1, std::memory_order_relaxed);
+            }
+            // S40: a worker in a wait at the helping cap runs no actor turn
+            // itself, so while one is, the others keep running the turns its
+            // wait needs; otherwise it never returns and the join below
+            // waits for ever. A wait that can never end is still reported
+            // (confirmStuck counts shutdown as the pool's ceiling and the
+            // program thread as parked).
+            while (impl_->cappedThreads.load(std::memory_order_seq_cst) > 0) {
+                if (drainOneReporting(*this, ctx)) {
+                    g_drainHits[wid].fetch_add(1, std::memory_order_relaxed);
+                    continue;
+                }
+                proto::ProtoThread::sleepFor(ctx, 200);
             }
             return;
         }

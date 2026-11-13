@@ -2164,7 +2164,8 @@ ends, a timer is pending whose callback never releases anything, a wait is
 for a Future that no actor's message settles (`Future new`), protoST is
 called from another runtime or another thread, or a debugger is attached.
 While it waits there, every worker polls (about every 200 µs), and the
-workers added stay until the program ends. Waiting outside a block (at the
+workers added stay until the program ends. A program that ends while such
+waits are still running waits for them to end, as for any running message. Waiting outside a block (at the
 top level of the method) suspends the actor and uses no worker.
 
 ### 10.5 `self` inside an actor
