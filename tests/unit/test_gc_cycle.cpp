@@ -344,12 +344,11 @@ TEST_CASE("The shared code cell of a sub-block is released with its runtime", "[
 // protoCore starts a requested collection only after every running thread
 // parks, and a thread that never allocates never reaches allocCell's poll; the
 // interpreter parks at every loop back-edge (ExecutionEngine::gcSafepoint).
-// An actor allocates without end under a small heap ceiling, so collections
-// are requested again and again, while the main thread spins in a loop that
-// allocates nothing. The program reads the collector's state through
-// primitives this test binds: `GcProbe gcCycles` (the cycle count),
-// `GcProbe collectionPending` (a collection was asked for and has not
-// completed) and `GcProbe heapSize` (cells).
+// An actor allocates without end under a heap ceiling, so collections are
+// requested, while the main thread spins in a loop that allocates nothing.
+// The program reads the collector's state through two primitives this test
+// binds: `GcProbe gcCycles` (the cycle count) and `GcProbe collectionPending`
+// (a collection was asked for and has not completed).
 //
 // The case runs in both modes of the hook, read from the environment as the
 // engine reads it (ctest runs it once without and once with
@@ -358,31 +357,39 @@ TEST_CASE("The shared code cell of a sub-block is released with its runtime", "[
 // waits for an event the program does not guarantee:
 //   * with the hook, the actor churns until the main thread stops it, so
 //     collections keep being requested for as long as the main thread
-//     spins, and they reclaim the churn's garbage (the heap cannot fill).
+//     spins (at the latest when the heap reaches its 8,000,000-cell
+//     ceiling; see the soft limit below), and they reclaim the churn's
+//     garbage, so the heap cannot fill.
 //     The spin waits for a cycle to complete, which can only happen while it
 //     spins if the loop parks; without the hook that loop would never end.
 //     The churn must not be bounded: a bounded churn can finish, and its
 //     collections with it, before the spin starts counting, and the spin
 //     then waits for a cycle nothing will request (the protoCore 3.4.0
 //     floor job timed out this way on 2026-11-13);
-//   * without it, a collection reclaims nothing (S15), so the churn is
-//     bounded by the heap: it stops once the heap has grown by 1,000,000
-//     cells (far below the 8,000,000-cell ceiling), and says when it is done.
-//     The heap starts above the 400,000-cell soft limit, where protoCore
-//     asks for a collection before it grows the heap, so the churn cannot
-//     end without a request. The spin waits until a collection is pending or
-//     the churn is done. A pending collection cannot complete while the main
-//     thread spins (nothing it does parks it), so the spin then runs a fixed
-//     number of back-edges and the count is unchanged; once the loop is over
-//     the program waits for the actor, which parks the main thread and lets
-//     the collections run. A churn that ends with no collection pending is
-//     reported as a failure that names what was observed, never as a hang.
-//     The request is read as protoCore's gcStarted or stwFlag, not the flag
-//     alone: the collector raises the flag only once it holds the process's
-//     cycle token, so a request can wait without it. On the protoCore 3.4.0
-//     floor runner a churn bounded at 150,000 arrays ended with no cycle
-//     completed and the flag never seen (CI, 2026-11-13); whether a request
-//     was waiting or none had been made, the old case could not tell.
+//   * without it, a collection reclaims nothing (S15). The spin waits until
+//     a collection is pending (protoCore's gcStarted or stwFlag: the
+//     collector raises the flag only once it holds the process's cycle
+//     token, so a request can wait without it). A pending collection cannot
+//     complete while the main thread spins (nothing it does parks it), so
+//     the spin then runs a fixed number of back-edges and the count is
+//     unchanged; once the loop is over the program waits for the actor,
+//     which parks the main thread and lets the collections run.
+//     What guarantees the request is the hard ceiling, set 1,000,000 cells
+//     above the heap: the churn, whose garbage is never reclaimed, reaches
+//     it, and an allocation at the ceiling outside a critical section always
+//     waits for a collection. The soft limit guarantees nothing: with fixed
+//     limits protoCore asks for a collection there only on a refill made
+//     outside a critical section, and a refill inside one (an Array's list
+//     being built) grows the heap without asking. On the protoCore 3.4.0
+//     floor runner no request came below the ceiling at all: a churn bounded
+//     at 150,000 arrays, and then one bounded at 1,000,000 cells of growth,
+//     ended with no collection requested and no cycle completed (CI,
+//     2026-11-13), and an unbounded churn under an 8,000,000-cell ceiling
+//     ended in out-of-memory (the request came at the ceiling, and the
+//     collections that ran once the main thread parked reclaimed nothing).
+//     Hence the out-of-memory callback: when those collections reclaim
+//     nothing, it raises the ceiling, and the actor goes on to its stop
+//     flag instead of ending the process.
 namespace {
 
 const proto::ProtoObject* primGcCycles(protoST::STRuntime& rt, proto::ProtoContext* ctx,
@@ -403,10 +410,13 @@ const proto::ProtoObject* primCollectionPending(protoST::STRuntime& rt, proto::P
     return (sp->gcStarted.load() || sp->stwFlag.load()) ? PROTO_TRUE : PROTO_FALSE;
 }
 
-const proto::ProtoObject* primHeapSize(protoST::STRuntime& rt, proto::ProtoContext* ctx,
-                                       const proto::ProtoObject*,
-                                       const proto::ProtoObject* const*, int) {
-    return ctx->fromLong(relaxedRead(rt.space()->heapSize));
+// The hook-off run's out-of-memory callback. Its collections reclaim nothing
+// (S15), so once the main thread parks and they run, the actor waiting at the
+// ceiling would be declared out of memory; the callback raises the ceiling
+// instead, and the actor goes on to read its stop flag.
+proto::ProtoObject* raiseCeiling(proto::ProtoContext* ctx) {
+    ctx->space->setHeapLimits(400000, relaxedRead(ctx->space->heapSize) + 2000000);
+    return nullptr;
 }
 
 } // namespace
@@ -414,19 +424,25 @@ const proto::ProtoObject* primHeapSize(protoST::STRuntime& rt, proto::ProtoConte
 TEST_CASE("S3: an allocation-free loop does not stall a collection", "[gc]") {
     const bool hookOff = std::getenv("PROTOST_NO_GC_SAFEPOINT") != nullptr;
     GcHost h;
-    // A small soft limit, so the actor's garbage requests collections again
-    // and again, under a hard ceiling far above it, so that the hook-off run
-    // (whose collections reclaim nothing, S15) never reaches out-of-memory.
-    // Set on the space directly: mutating the environment while worker
-    // threads may read it is a data race.
-    h.rt.space()->setHeapLimits(400000, 8000000);
+    // Fixed limits, set on the space directly (mutating the environment while
+    // worker threads may read it is a data race). With the hook, a small soft
+    // limit under an 8,000,000-cell ceiling. Without it, the ceiling is the
+    // current heap plus 1,000,000 cells, and an out-of-memory callback raises
+    // it (see the comment above the test).
+    proto::ProtoSpace* sp = h.rt.space();
+    if (!hookOff) {
+        sp->setHeapLimits(400000, 8000000);
+    } else {
+        sp->setHeapLimits(400000, relaxedRead(sp->heapSize) + 1000000);
+        std::lock_guard<std::recursive_mutex> lock(proto::ProtoSpace::globalMutex);
+        sp->outOfMemoryCallback = &raiseCeiling;
+    }
     proto::ProtoContext* ctx = h.rt.rootCtx();
     const proto::ProtoObject* probe =
         h.rt.bootstrap().objectProto->newChild(ctx, /*isMutable=*/true);
     protoST::bindPrimitive(h.rt, probe, "gcCycles", protoST::primitiveMethod<primGcCycles>);
     protoST::bindPrimitive(h.rt, probe, "collectionPending",
                            protoST::primitiveMethod<primCollectionPending>);
-    protoST::bindPrimitive(h.rt, probe, "heapSize", protoST::primitiveMethod<primHeapSize>);
     const_cast<proto::ProtoObject*>(h.rt.globals())->setAttribute(
         ctx, proto::ProtoString::createSymbol(ctx, "GcProbe"), probe);
 
@@ -448,16 +464,14 @@ TEST_CASE("S3: an allocation-free loop does not stall a collection", "[gc]") {
     } else {
         const proto::ProtoObject* r = h.run(
             "Object subclass: #Churner.\n"
-            "Churner >> churnUntil: stop below: cap then: done\n"
-            "  [ stop value or: [ GcProbe heapSize >= cap ] ] whileFalse: [ Array new: 8 ].\n"
-            "  done value: true ifCurrent: false.\n"
+            "Churner >> churnUntil: stop\n"
+            "  [ stop value ] whileFalse: [ Array new: 8 ].\n"
             "  ^ #churned\n"
-            "| stop done f before requested c0 n delta |\n"
+            "| stop f before requested c0 n delta |\n"
             "stop := Atom on: false.\n"
-            "done := Atom on: false.\n"
             "before := GcProbe gcCycles.\n"
-            "f := Churner new asActor churnUntil: stop below: GcProbe heapSize + 1000000 then: done.\n"
-            "[ GcProbe collectionPending or: [ done value ] ] whileFalse: [ ].\n"
+            "f := Churner new asActor churnUntil: stop.\n"
+            "[ GcProbe collectionPending ] whileFalse: [ ].\n"
             "requested := GcProbe collectionPending.\n"
             "c0 := GcProbe gcCycles.\n"
             "n := 0.\n"
@@ -473,10 +487,9 @@ TEST_CASE("S3: an allocation-free loop does not stall a collection", "[gc]") {
         long long delta = -1, cyclesBeforeRequest = -1;
         observed >> requested >> delta >> cyclesBeforeRequest;
         INFO("collection pending when the spin ended: " << requested
-             << "; cycles completed from the actor's start to the end of the wait: "
+             << "; cycles completed from the actor's start to the end of the spin: "
              << cyclesBeforeRequest << "; cycles completed during the fixed loop: " << delta);
-        // A collection was requested while the main thread spun, and stayed
-        // pending: the spin, with the hook off, does not park.
+        // The spin ended on a pending collection.
         REQUIRE(requested == "true");
         // No collection completed while the loop ran without parking.
         REQUIRE(delta == 0);

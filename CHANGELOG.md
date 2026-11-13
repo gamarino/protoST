@@ -307,15 +307,17 @@ minor release, so the two services arrive in 0.5.0.
   spinning loop does not.
   The unit case `S3: an allocation-free loop does not stall a collection`
   (`tests/unit/test_gc_cycle.cpp`, with and without the hook) no longer waits
-  for an event its program does not guarantee: with the hook the actor
+  for an event its program does not guarantee. With the hook the actor
   churns until the main thread stops it (a bounded churn could end, and its
   collections with it, before the spin started counting; the 3.4.0 floor job
-  timed out so), and without it the churn is bounded by heap growth, the
-  spin waits for a pending collection (`gcStarted` or `stwFlag`, not the
-  flag alone) or for the churn's end, and the latter fails with the observed
-  cycle counts instead of hanging. The
-  fix needs no protoCore newer than 3.4.0, and the case runs on every
-  supported release (STATUS S3).
+  timed out so). Without it the spin waits for a pending collection
+  (`gcStarted` or `stwFlag`, not the flag alone), and the request comes from
+  a hard ceiling 1,000,000 cells above the heap: with fixed limits protoCore
+  asks for a collection at the soft limit only on a refill outside a
+  critical section, and on the 3.4.0 runner none came below the ceiling. An
+  out-of-memory callback raises the ceiling when the collections after the
+  loop reclaim nothing. The fix needs no protoCore newer than 3.4.0, and the
+  case runs on every supported release (STATUS S3).
 - **The test suite builds with MSVC and its startup budget runs alone.**
   `test_gc_cycle.cpp` read the collector's counters with GCC's
   `__atomic_load_n` (it now uses `std::atomic_ref` where the library has it,
