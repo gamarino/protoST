@@ -27,6 +27,7 @@
 #include <ctime>
 #include <random>
 #include <thread>
+#include <unordered_set>
 
 namespace protoST {
 
@@ -229,6 +230,204 @@ void stampDefiningClass(STRuntime& rt, proto::ProtoContext* ctx,
 }
 } // namespace
 
+namespace {
+// S37: the names a class declares, recorded on the class object as one
+// space-separated string under `key`: `__instvar_names__` (instance
+// variables; on a metaclass, class-instance variables) and
+// `__classvar_names__` (class variables).
+void addDeclaredNames(proto::ProtoContext* ctx, const proto::ProtoObject* o,
+                      const proto::ProtoString* key, std::unordered_set<std::string>& out) {
+    if (!o || o == PROTO_NONE || o->isInteger(ctx) || o->isFloat(ctx) || o->asString(ctx)) return;
+    if (o->hasOwnAttribute(ctx, key) != PROTO_TRUE) return;
+    const proto::ProtoObject* v = o->getAttribute(ctx, key);
+    const proto::ProtoString* str = v && v != PROTO_NONE ? v->asString(ctx) : nullptr;
+    if (!str) return;
+    std::string word;
+    for (char c : str->toStdString(ctx) + " ") {
+        if (std::isspace(static_cast<unsigned char>(c))) {
+            if (!word.empty()) out.insert(word);
+            word.clear();
+        } else {
+            word += c;
+        }
+    }
+}
+
+// The name a class object carries (`__class_name__`), or "" for none.
+std::string ownClassName(const Bootstrap& b, proto::ProtoContext* ctx, const proto::ProtoObject* o) {
+    if (!o || o == PROTO_NONE || o->isInteger(ctx) || o->asString(ctx)) return {};
+    const proto::ProtoObject* n = o->getOwnAttributeDirect(ctx, b.sym.className);
+    const proto::ProtoString* str = n && n != PROTO_NONE ? n->asString(ctx) : nullptr;
+    return str ? str->toStdString(ctx) : std::string();
+}
+
+// Calls `f` on `cls` and then on each of its ancestors (superclasses and
+// mixins: protoCore's flattened parent chain), nearest first.
+template <typename F>
+void forClassAndAncestors(proto::ProtoContext* ctx, const proto::ProtoObject* cls, F&& f) {
+    f(cls);
+    if (const proto::ProtoList* chain = cls->getParents(ctx)) {
+        TransientPin pinChain(ctx, reinterpret_cast<const proto::ProtoObject*>(chain));
+        const proto::proto_ulong n = chain->getSize(ctx);
+        for (proto::proto_ulong i = 0; i < n; ++i) {
+            const proto::ProtoObject* p = chain->getAt(ctx, listIndex(i));
+            if (p && p != PROTO_NONE) f(p);
+        }
+    }
+}
+
+struct LateSite {
+    const BytecodeModule* module;
+    std::size_t opPos;    // byte offset of the opcode word (after any EXTEND)
+    Op op;
+    unsigned int arg;     // constant index of the variable's name
+};
+
+void collectLateSites(const BytecodeModule& m, std::vector<LateSite>& out) {
+    const std::vector<uint8_t>& bytes = m.bytes();
+    for (std::size_t pc = 0; pc + 1 < bytes.size(); ) {
+        std::size_t opPos = pc;
+        Op op = static_cast<Op>(bytes[pc]);
+        unsigned int arg = bytes[pc + 1];
+        pc += kInstrSize;
+        while (op == Op::EXTEND && pc + 1 < bytes.size()) {
+            opPos = pc;
+            op  = static_cast<Op>(bytes[pc]);
+            arg = (arg << 8) | bytes[pc + 1];
+            pc += kInstrSize;
+        }
+        if (op == Op::PUSH_LATE_VAR || op == Op::STORE_LATE_VAR)
+            out.push_back(LateSite{&m, opPos, op, arg});
+    }
+    for (std::size_t i = 0; i < m.numBlocks(); ++i) collectLateSites(m.block(i), out);
+}
+
+// S37: resolve the late-bound variables of a method body (Op::PUSH_LATE_VAR,
+// STORE_LATE_VAR) against `cls`, the class the method is being installed on
+// (for a class-side method, the class whose metaclass receives it). The
+// compiler emits them for every name it could not resolve in a method of a
+// class whose superclass chain it could not see. Each becomes the access the
+// class declares, with the compiler's precedence: an instance variable (on
+// the class side, a class-instance variable), then a class variable. A read
+// of any other name becomes a global lookup when the compiler would have
+// emitted one (a name not starting with a lowercase letter, or any name in
+// REPL code); any other name signals `undeclared variable`, the compiler's
+// error, and the method is not installed; so does an argument or temporary that reuses an
+// instance variable's name. Everything is checked before anything is
+// rewritten, so a refused method leaves its body untouched.
+void resolveLateVariables(STRuntime& rt, proto::ProtoContext* ctx,
+                          const proto::ProtoObject* cls, bool classSide,
+                          const proto::ProtoObject* methodObj) {
+    const Bootstrap& b = rt.bootstrap();
+    const BytecodeModule* code =
+        blockCodeOf(ctx, methodObj->getOwnAttributeDirect(ctx, b.sym.bcPtr));
+    if (!code || !code->hasLateBinding()) return;
+    // One resolver; a concurrent install of the same body waits for it
+    // (BytecodeModule::beginLateResolution). The wait leaves the
+    // stop-the-world quorum, so a collection the resolver triggers runs.
+    for (;;) {
+        const int state = code->lateState();
+        if (state == BytecodeModule::kLateResolved) return;
+        if (state == BytecodeModule::kLateUnresolved && code->beginLateResolution()) break;
+        proto::ProtoThread::yield(ctx);
+    }
+    struct Resolution {
+        const BytecodeModule* code; bool resolved = false;
+        ~Resolution() { code->finishLateResolution(resolved); }
+    } resolution{code};
+    const proto::ProtoString* ivKey = proto::ProtoString::createSymbol(ctx, "__instvar_names__");
+    const proto::ProtoString* cvKey = proto::ProtoString::createSymbol(ctx, "__classvar_names__");
+    std::unordered_set<std::string> ivars, cvars;
+    forClassAndAncestors(ctx, cls, [&](const proto::ProtoObject* k) {
+        addDeclaredNames(ctx, k, cvKey, cvars);
+        if (!classSide) {
+            addDeclaredNames(ctx, k, ivKey, ivars);
+        } else if (!k->isInteger(ctx) && !k->asString(ctx)) {
+            addDeclaredNames(ctx, k->getOwnAttributeDirect(ctx, b.sym.metaclass), ivKey, ivars);
+        }
+    });
+    const std::string& where = code->definingClass();
+    for (const auto& name : code->lateMethodNames())
+        if (ivars.count(name))
+            throw ClassedErrorSignal("Error",
+                "'" + name + "' is already defined as an instance variable of "
+                + where + " (in " + code->debugName() + ")");
+    std::vector<LateSite> sites;
+    collectLateSites(*code, sites);
+    std::vector<Op> resolved;
+    resolved.reserve(sites.size());
+    for (const LateSite& site : sites) {
+        const std::string& name = site.module->constSymbol(site.arg);
+        const bool store = site.op == Op::STORE_LATE_VAR;
+        Op to = Op::EXTEND;
+        if (ivars.count(name))
+            to = store ? Op::STORE_INSTVAR : (classSide ? Op::PUSH_OWN_INSTVAR : Op::PUSH_INSTVAR);
+        else if (cvars.count(name))
+            to = store ? Op::STORE_CLASSVAR : Op::PUSH_INSTVAR;
+        else if (!store && (code->lateReadsFallBackToGlobals() || name.empty()
+                            || !std::islower(static_cast<unsigned char>(name[0]))))
+            to = Op::PUSH_GLOBAL;   // as the compiler reads a name it does not bind
+        if (to == Op::EXTEND)
+            throw ClassedErrorSignal("Error",
+                "undeclared variable '" + name + "' in " + where + " (line "
+                + std::to_string(site.module->lineForPc(site.opPos)) + ")");
+        resolved.push_back(to);
+    }
+    for (std::size_t i = 0; i < sites.size(); ++i)
+        sites[i].module->resolveLateOp(sites[i].opPos, resolved[i]);
+    resolution.resolved = true;
+}
+
+// Records the instance-variable names a class declares (`names`, a string of
+// space-separated names) on the class object, `__instvar_names__`, which
+// `instVarNames` and resolveLateVariables read. For a class (not a
+// metaclass) it first applies the rules the compiler applies to a class
+// declaration it can see whole: a name is declared once, and a class may not
+// redeclare an instance variable it inherits (both would name the same slot
+// of the object). The compiler cannot apply the second one when the
+// superclass is not known to it (S37: an imported class, a class built by
+// the `subclass:` message), so it is checked here, when the class is built.
+void declareInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
+                         const proto::ProtoObject* cls, const proto::ProtoObject* names) {
+    const Bootstrap& b = rt.bootstrap();
+    const proto::ProtoString* ivKey = proto::ProtoString::createSymbol(ctx, "__instvar_names__");
+    const proto::ProtoString* str = names && names != PROTO_NONE ? names->asString(ctx) : nullptr;
+    if (str && !isMetaclass(b, ctx, cls)) {
+        std::vector<std::string> declared;
+        std::string word;
+        for (char c : str->toStdString(ctx) + " ") {
+            if (std::isspace(static_cast<unsigned char>(c))) {
+                if (!word.empty()) declared.push_back(word);
+                word.clear();
+            } else {
+                word += c;
+            }
+        }
+        const std::string name = ownClassName(b, ctx, cls);
+        std::unordered_set<std::string> seen;
+        for (const auto& iv : declared)
+            if (!seen.insert(iv).second)
+                throw ClassedErrorSignal("Error",
+                    "instance variable '" + iv + "' is declared twice in " + name);
+        if (const proto::ProtoList* chain = cls->getParents(ctx)) {
+            TransientPin pinChain(ctx, reinterpret_cast<const proto::ProtoObject*>(chain));
+            const proto::proto_ulong n = chain->getSize(ctx);
+            for (proto::proto_ulong i = 0; i < n; ++i) {
+                const proto::ProtoObject* p = chain->getAt(ctx, listIndex(i));
+                std::unordered_set<std::string> inherited;
+                addDeclaredNames(ctx, p, ivKey, inherited);
+                for (const auto& iv : declared)
+                    if (inherited.count(iv))
+                        throw ClassedErrorSignal("Error",
+                            "instance variable '" + iv + "' of " + name
+                            + " is already defined in its superclass " + ownClassName(b, ctx, p));
+            }
+        }
+    }
+    const_cast<proto::ProtoObject*>(cls)->setAttribute(ctx, ivKey, names);
+}
+} // namespace
+
 // class __installMethod: methodObj as: selectorSym
 //   → setAttribute(class, selectorSym, methodObj)
 //   → returns class (recv)
@@ -245,6 +444,7 @@ const proto::ProtoObject* prim_Object_installMethod(STRuntime& rt,
     // a[1] = selector symbol (ProtoString tagged as symbol)
     auto* selStr = a[1]->asString(ctx);
     if (!selStr) throw NativeError("__installMethod:as: selector must be a symbol");
+    resolveLateVariables(rt, ctx, r, /*classSide=*/false, a[0]);
     stampDefiningClass(rt, ctx, r, a[0]);
     r->setAttribute(ctx, selStr, a[0]);
     return r;
@@ -269,6 +469,7 @@ const proto::ProtoObject* prim_Object_installClassMethod(STRuntime& rt,
     if (!selStr)
         throw NativeError(
             "__installClassMethod:as: selector must be a symbol");
+    resolveLateVariables(rt, ctx, r, /*classSide=*/true, a[0]);
     const proto::ProtoObject* meta = ensureMetaclass(rt.bootstrap(), ctx, r);
     stampDefiningClass(rt, ctx, meta, a[0]);
     meta->setAttribute(ctx, selStr, a[0]);
@@ -315,6 +516,9 @@ const proto::ProtoObject* prim_Object_initClassVars(STRuntime&,
         else cur += ch;
     }
     flush();
+    // S37: the declared names, for a method compiled without knowing this
+    // class (resolveLateVariables).
+    cls->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__classvar_names__"), a[0]);
     return r;
 }
 
@@ -711,7 +915,9 @@ const proto::ProtoObject* prim_Object_subclassIvarsUses(
     if (a[1] && a[1] != PROTO_NONE && !a[1]->asString(ctx))
         throw NativeError(
             "subclass:instanceVariableNames:uses:: ivar names must be a string");
-    return makeSubclassWithMixins(rt, ctx, r, a[0], a[2]);
+    const proto::ProtoObject* sub = makeSubclassWithMixins(rt, ctx, r, a[0], a[2]);
+    if (a[1] && a[1] != PROTO_NONE) declareInstVarNames(rt, ctx, sub, a[1]);
+    return sub;
 }
 
 // superClass subclass: #Name
@@ -730,9 +936,10 @@ const proto::ProtoObject* prim_Object_subclass(STRuntime& rt,
 //
 // Instance variables in protoST are plain attributes resolved by symbol on
 // `self` (STORE_INSTVAR / PUSH_INSTVAR walk the parent chain), so no slot
-// layout has to be reserved here — declaring them is informational. The names
-// string is validated for shape and otherwise carried only so the surface
-// syntax matches the textual `subclass:instanceVariableNames:` form.
+// layout has to be reserved here. The names are recorded on the class, as the
+// textual form records them (S37): `instVarNames` answers them, and the
+// methods of the class, which the compiler could not resolve against a class
+// built by a message, are resolved against them when installed.
 const proto::ProtoObject* prim_Object_subclassIvars(
     STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* r,
     const proto::ProtoObject* const* a, int argc) {
@@ -743,7 +950,9 @@ const proto::ProtoObject* prim_Object_subclassIvars(
     if (a[1] && a[1] != PROTO_NONE && !a[1]->asString(ctx))
         throw NativeError(
             "subclass:instanceVariableNames:: ivar names must be a string");
-    return makeSubclass(rt, ctx, r, a[0]);
+    const proto::ProtoObject* sub = makeSubclass(rt, ctx, r, a[0]);
+    if (a[1] && a[1] != PROTO_NONE) declareInstVarNames(rt, ctx, sub, a[1]);
+    return sub;
 }
 
 // --- reflection --------------------------------------------------------------
@@ -1416,12 +1625,11 @@ const proto::ProtoObject* prim_Object_instVarNamedPut(STRuntime&, proto::ProtoCo
 
 // aClass __setInstVarNames: 'a b' records the declared instance-variable
 // names on the class (compiler-emitted); __instVarNamesString answers them.
-const proto::ProtoObject* prim_Object_setInstVarNames(STRuntime&, proto::ProtoContext* ctx,
+const proto::ProtoObject* prim_Object_setInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
                                                       const proto::ProtoObject* r,
                                                       const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("__setInstVarNames: expects 1 arg");
-    const_cast<proto::ProtoObject*>(r)->setAttribute(
-        ctx, proto::ProtoString::createSymbol(ctx, "__instvar_names__"), a[0]);
+    declareInstVarNames(rt, ctx, r, a[0]);
     return r;
 }
 

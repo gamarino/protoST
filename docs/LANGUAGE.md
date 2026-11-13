@@ -766,6 +766,11 @@ Account >> deposit: amount
 
 An instance variable that has never been assigned reads as `nil`.
 
+The compiler resolves instance-variable names. In a method of a class whose
+superclass it cannot see — a subclass of an imported class, a class built by
+the `subclass:` message — they are resolved when the method is installed
+instead ([§4.10](#410-extensible-classes-from-modules)).
+
 **Runs of assignments are published together.** Each assignment to an
 instance variable publishes a new version of the object (protoCore keeps
 objects as immutable snapshots; a mutable object is a reference to its
@@ -795,7 +800,9 @@ observe: it sees all of a run or none of it, never some of its assignments
 (10.6). Which assignments of a run survive if the thread is terminated in the
 middle of it is indeterminate. Under the debugger (`protost -d`, the DAP
 server) every assignment is published on its own, so stepping shows each one.
-`PROTOST_IVAR_GROUPS=off` in the environment turns runs off.
+`PROTOST_IVAR_GROUPS=off` in the environment turns runs off. A method whose
+instance variables are found when it is installed, not when it is compiled
+(§4.10), publishes each assignment on its own (STATUS D57).
 
 ### 4.6 `self` and `super`
 
@@ -974,6 +981,57 @@ How it works:
 > simply the special case where the superclass is named by a bare identifier.
 > When the superclass is reached through an expression — a module attribute, a
 > block result, an array element — the message form above applies.
+
+**Inherited variables of a class the compiler cannot see.** A script is
+compiled whole before its first statement runs, so when a method is compiled
+the modules the script imports have not been loaded: the compiler does not
+know the imported classes, nor a class built by the `subclass:` message.
+Instance and class variables are names the compiler resolves (§4.5), so a
+method of such a class resolves them when it is **installed** instead — when
+its definition runs, in source order, after the `Import from:` and the class
+declaration before it:
+
+```smalltalk
+m := Import from: '_lib'.              "declares Base, instanceVariableNames: 'secret'"
+Base subclass: #Kid instanceVariableNames: 'own'.
+
+Kid >> peek
+  ^ secret + own.                      "secret: Base's instance variable"
+
+Base >> doubled                        "an extension of the imported class"
+  ^ secret * 2.
+```
+
+This applies to a method whose class's chain — its superclasses and its
+`uses:` mixins — reaches a class the compiler has not seen: a subclass of an
+imported class, a class built by the message form (`(m Base) subclass: #Kid
+instanceVariableNames: 'own'`), a class whose `uses:` clause is not a literal
+list of class names, and a method added to an imported class. In its methods
+a name that is not an argument, a temporary or a variable the compiler knows
+is looked up, when the method is installed, among the instance variables (for
+a class-side method, the class-instance variables) and then the class
+variables that the class and its ancestors declare, whatever its spelling
+(`secret`, `_x`, `Y`), and the method reads and writes it as if the compiler
+had known it, with one difference: a run of assignments to such variables is
+not published as one version (§4.5; STATUS D57). A read of a name the class
+does not declare that does not start with a lowercase letter is a global, as
+in any method. Any other name the class does not declare signals `Error`
+(`undeclared variable 'zork' in Kid (line 9)`) and the method is not
+installed; so does an argument or temporary that
+reuses the name of an inherited instance variable. These are the compiler's
+own errors, reported at a different time: when the definition runs rather
+than before the script starts, so the statements before it have run. A method
+whose class's chain is fully known — declared in the same file, in the kernel
+or in a module already loaded — is checked by the compiler as before. In the
+REPL, which compiles each input after the previous ones ran, a name that is
+not a variable of the class reads the session global of that name, as other
+REPL code does.
+
+The `subclass:instanceVariableNames:` message records the names it is given,
+as the declaration does (`Kid instVarNames`), and a class may not redeclare
+an instance variable it inherits: the declaration signals `Error` (`instance
+variable 'secret' of Kid is already defined in its superclass Base`) when the
+superclass is one the compiler could not check.
 
 ### 4.11 Multiple inheritance and mixins (`uses:`)
 
@@ -2082,6 +2140,35 @@ pool because a `wait` does not tie up a worker.
 > thread** until the future settles — intentional, the main thread acts as a
 > synchronous client of the actor world.
 
+**A wait inside a block that a primitive evaluates** (`#(1) do: [:i | ^
+server ping wait]`, the block of `on:do:` or `ensure:`, a `thenDo:` callback
+run on a worker) cannot suspend the actor: the primitive's own state between
+the method and the block is not part of what a suspension saves. Such a wait
+**blocks its worker** instead, and while it waits the worker runs other
+actors' messages on top of it, so the program keeps going. Those messages can
+wait the same way; one worker holds at most 16 such nested waits (each keeps
+its frames on the worker's stack). A worker at that limit runs no more actor
+messages and counts as a blocked worker: the pool adds a worker for the other
+actors, as it does for a worker blocked in I/O, up to 256 workers (fewer if
+the system refuses a thread). A program whose nested waits need more than
+that — about 4,000 at once with 256 workers — cannot
+proceed, and one of the waits signals an `Error` whose text starts with
+`deadlock: too many nested waits` instead of hanging, but only when nothing
+can still end a wait: every worker waits, at the limit, for an actor message
+that has not started, the pool cannot grow, no timer is pending, no task is
+queued or running, and the program's own thread is parked in its `wait`. The
+error is never signalled while the program can still finish. In the cases
+the runtime cannot prove stuck, the program waits for ever instead (STATUS
+D56): when the program's thread is not parked in a `wait` (the REPL between
+inputs, a loop that polls), a worker is blocked in I/O or `sleep:` that never
+ends, a timer is pending whose callback never releases anything, a wait is
+for a Future that no actor's message settles (`Future new`), protoST is
+called from another runtime or another thread, or a debugger is attached.
+While it waits there, every worker polls (about every 200 µs), and the
+workers added stay until the program ends. A program that ends while such
+waits are still running waits for them to end, as for any running message. Waiting outside a block (at the
+top level of the method) suspends the actor and uses no worker.
+
 ### 10.5 `self` inside an actor
 
 Inside a method running on behalf of an actor, `self` is the **wrapped base
@@ -2180,6 +2267,22 @@ side-effect free:
 ```smalltalk
 total swap: [ :running | running + 1 ].
 ```
+
+An `Atom` made with `new` (or a subclass's `new` whose `initialize` does not
+set it) holds `nil`: `swap:` applies its block to `nil`, and
+`value: x ifCurrent: nil` installs `x`.
+
+**Subclasses.** `Atom` can be subclassed like any class. `on:` is an
+instance-creation message, as `new` is: `TaggedAtom on: 7` builds a
+`TaggedAtom` (its `initialize` runs, as with `new`) and then puts 7 in its
+cell. The atomic operations work on the cell itself: `swap:` applies its
+block to the snapshot the cell holds, and `value:ifCurrent:` and `swap:`
+compare against that snapshot. An override of `value` changes what the
+atom's clients read, not what the atomic operations update — a
+compare-and-swap that expected what an override answers, rather than what the
+cell holds, could never succeed. (Clojure's atoms, which `Atom` follows, are
+not extensible; the cell is the state, as an instance variable is the state
+an accessor may present differently.)
 
 Because the comparison is pointer identity over **immutable snapshots**, the
 classic ABA hazard does not arise: if the pointer is unchanged the value
@@ -2525,7 +2628,7 @@ A shared mutable cell with optimistic-concurrency compare-and-swap — see
 
 | Selector | Meaning |
 |----------|---------|
-| `Atom on: aValue` | a fresh cell holding `aValue` |
+| `Atom on: aValue` | a new instance of the receiver (Atom or a subclass, built by `new`) whose cell holds `aValue` |
 | `value` | the current snapshot |
 | `value: new ifCurrent: expected` | raw CAS — install `new` iff the cell still holds `expected`; answer whether it did |
 | `swap: aBlock` | read-modify-CAS retry loop; applies `aBlock` to the current value, retrying on contention; answers the value installed |

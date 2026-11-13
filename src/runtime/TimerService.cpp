@@ -112,6 +112,9 @@ void TimerService::schedule(proto::ProtoContext* ctx, TimePoint deadline,
     }
     const Bootstrap& b = rt_.bootstrap();
     TransientPin pinFuture(ctx, future);
+    // S40: a pending timer can release a capped wait; ends the quiescence
+    // epoch before it is rooted (STRuntime::confirmStuck).
+    rt_.noteProgress();
     // The id first, so a settler that wins the claim from here on finds it
     // and cancels; then the root, so the timer thread always finds the
     // Future of an entry it pops; then a look at the claim: a settle that

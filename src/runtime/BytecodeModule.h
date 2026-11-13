@@ -255,6 +255,55 @@ public:
     // instruction size does not change, so no jump moves.
     void routeSharedLocals();
 
+    // S37: late-bound variables (Op::PUSH_LATE_VAR / STORE_LATE_VAR). Set
+    // by the compiler on the body of every method of a class whose chain it
+    // could not see (the late-bound instructions may be in the body or in its
+    // blocks; there may be none): whether a read of a name the class does not declare falls
+    // back to a global (the REPL, whose session variables are lowercase
+    // globals), and the method's argument and temporary names, which may not
+    // reuse the name of an instance variable the class turns out to have.
+    void setLateBinding(bool readsFallBackToGlobals, std::vector<std::string> methodNames) {
+        hasLateBinding_  = true;
+        lateReadsGlobal_ = readsFallBackToGlobals;
+        lateMethodNames_ = std::move(methodNames);
+    }
+    bool hasLateBinding() const { return hasLateBinding_; }
+    bool lateReadsFallBackToGlobals() const { return lateReadsGlobal_; }
+    const std::vector<std::string>& lateMethodNames() const { return lateMethodNames_; }
+    // The resolution of the module's late-bound instructions, done once, by
+    // the first install of the method (before any thread can run the body).
+    // Three states, so a second install of the same body racing the first
+    // (the same compiled module run twice, a reflective re-install) never
+    // installs it half rewritten: beginLateResolution answers true for the
+    // one caller that resolves; every other caller waits for lateResolved()
+    // (or, when the resolver failed and released it with
+    // finishLateResolution(false), tries again and meets the same error).
+    // A later install keeps the resolution, as a method compiled against a
+    // known class keeps its instructions wherever it is installed.
+    //
+    // Thread safety: resolveLateOp writes the instruction bytes in place,
+    // through a const module, only between a successful beginLateResolution
+    // and finishLateResolution(true); the release/acquire pair on the state
+    // publishes the rewritten bytes to every thread that sees it resolved,
+    // and no thread runs the body before that (it is installed after).
+    enum : int { kLateUnresolved = 0, kLateResolving = 1, kLateResolved = 2 };
+    bool beginLateResolution() const {
+        int expected = kLateUnresolved;
+        return lateState_.compare_exchange_strong(expected, kLateResolving,
+                                                  std::memory_order_acq_rel);
+    }
+    void finishLateResolution(bool resolved) const {
+        lateState_.store(resolved ? kLateResolved : kLateUnresolved, std::memory_order_release);
+    }
+    int lateState() const { return lateState_.load(std::memory_order_acquire); }
+    bool lateResolved() const { return lateState() == kLateResolved; }
+    // Rewrites the opcode word at byte offset `opPos` (a PUSH_LATE_VAR or
+    // STORE_LATE_VAR found by decoding the module) into `op`, keeping its
+    // operand: same size, so no jump moves. Only by the resolver (above).
+    void resolveLateOp(size_t opPos, Op op) const {
+        const_cast<std::vector<uint8_t>&>(bytes_)[opPos] = static_cast<uint8_t>(op);
+    }
+
     // sub-modules
     size_t              addBlockModule(std::unique_ptr<BytecodeModule> b);
     // Reserves a sub-module index whose module is supplied later
@@ -459,6 +508,10 @@ private:
     std::vector<Const>                  consts_;
     std::vector<InstVarGroupEntry>      groupEntries_;  // IVAR_GROUP operands
     std::vector<DeoptEntry>             deoptEntries_;  // DEOPT_ENTER/EXIT operands
+    bool                                hasLateBinding_ = false;   // S37
+    bool                                lateReadsGlobal_ = false;
+    std::vector<std::string>            lateMethodNames_;
+    mutable std::atomic<int>            lateState_{0};   // kLate*
     // The `__bc_ptr__` cell of the closures over this module (BlockCode.h),
     // for the first runtime that creates one: published once with a
     // compare-and-swap and never replaced, so a reader can never see a freed

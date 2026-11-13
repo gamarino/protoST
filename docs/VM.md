@@ -568,6 +568,8 @@ the attribute `_iv_v` of the class that declares it.
 | `RESET_LOCAL` | 49 | slot | `->` | Stores nil in the slot without following a forward. | entry of an inlined block with temporaries, once per temporary (and its scope-dictionary slot) |
 | `PUSH_SHARED_LOCAL` | 59 | slot | `-> v` | As `PUSH_LOCAL`; when the frame holds forwards and the slot holds one, pushes the variable it names. | every read of a temporary that a de-optimised conditional of the module may share (section 1.4) |
 | `STORE_SHARED_LOCAL` | 60 | slot | `v ->` | As `STORE_LOCAL`; when the frame holds forwards and the slot holds one, writes the variable it names. | every write of such a temporary |
+| `PUSH_LATE_VAR` | 61 | name constant (wide) | `-> v` | Never executed (the engine reports an unimplemented opcode). Installing the method rewrites it in place, once, into `PUSH_INSTVAR`, `PUSH_OWN_INSTVAR` (a class-instance variable, class side) or, for a class variable, `PUSH_INSTVAR`, by what the class and its ancestors declare; in the REPL a name they do not declare becomes `PUSH_GLOBAL`; otherwise the install signals `undeclared variable` (S37, LANGUAGE.md §4.10). | a lowercase name the compiler cannot resolve in a method of a class whose superclass chain it cannot see (an imported class, a class built by the `subclass:` message) |
+| `STORE_LATE_VAR` | 62 | name constant (wide) | `v ->` | As `PUSH_LATE_VAR`, rewritten into `STORE_INSTVAR` or `STORE_CLASSVAR`. | an assignment to such a name |
 
 ### 2.6 Sends and returns
 

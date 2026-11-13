@@ -127,6 +127,7 @@ const proto::ProtoObject* acrossBoundary(proto::ProtoContext* callerCtx, STRunti
     // put protoST's allocations in the caller's space.
     proto::ProtoContext* ctx = callerCtx;
     if (foreign) {
+        rt.noteForeignCaller();   // S40: see STRuntime::noteForeignCaller
         proto::ProtoContext* root = rt.rootCtx();
         proto::ProtoContext* current = root->thread ? root->thread->getCurrentContext() : nullptr;
         ctx = (current && current->space == root->space) ? current : root;

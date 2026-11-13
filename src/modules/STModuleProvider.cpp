@@ -313,6 +313,7 @@ const proto::ProtoObject* buildCallerFacade(proto::ProtoContext* callerCtx,
 const proto::ProtoObject*
 STModuleProvider::loadForForeignCaller(STRuntime& rt, const std::string& logicalPath,
                                        proto::ProtoContext* callerCtx) {
+    rt.noteForeignCaller();   // S40: see STRuntime::noteForeignCaller
     // A guest in the caller's space (STRuntime(proto::ProtoSpace&)): the
     // caller's context is a context of protoST's space, so the load runs on
     // it, from any thread, and the module object itself is the answer -- no

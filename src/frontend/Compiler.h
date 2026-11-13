@@ -71,7 +71,16 @@ public:
         // Classes mixed in with `uses: { A. B }` (identifiers only): their
         // instance variables are the using class's too.
         std::vector<std::string> mixinNames;
+        // S37: the `uses:` clause is an expression the compiler cannot read
+        // as a list of class names, so the mixins' variables are unknown.
+        bool mixinsUnknown = false;
     };
+
+    // S37: classes the runtime builds in C++ (Object, Error, Collection, ...).
+    // They declare no instance variables a method could name, so a class
+    // chain that reaches one of them is fully known. STRuntime publishes them
+    // before it compiles the kernel.
+    static void publishNativeClasses(const std::vector<std::string>& names);
 
     // REPL: classes declared by earlier inputs (their instance, class and
     // class-instance variables), so a method entered later can name them.
@@ -191,6 +200,18 @@ private:
     // form). Class-var assignments are legal here because `self` IS the
     // class object, so STORE_INSTVAR writes the shared storage.
     bool currentMethodIsClassSide_ = false;
+    // S37: the method being emitted belongs to a class whose superclass
+    // chain is not fully known here (a class built by the `subclass:`
+    // message, a subclass or extension of an imported class): an unresolved
+    // lowercase name compiles to PUSH_LATE_VAR / STORE_LATE_VAR, resolved
+    // against the real class when the method is installed.
+    bool currentMethodLate_ = false;
+    // Sets the name-resolution context above for the method declaration `n`
+    // (MethodDecl or CallMethodDecl), or clears it.
+    void enterMethodClass(const ast::Node& n);
+    void leaveMethodClass();
+    // Emits a late-bound read or write of `name` (S37).
+    void emitLateVar(BytecodeModule& m, Op op, const std::string& name);
     // F7-REPL: see setReplMode(). When true and emission is at module scope
     // (scopes_.size() == 1), top-level assignments target the global
     // namespace so REPL state persists across separately-compiled inputs.

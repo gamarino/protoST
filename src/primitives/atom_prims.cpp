@@ -9,6 +9,13 @@
 
 namespace protoST {
 
+// Defined in object_prims.cpp: a send by name, with the engine's semantics.
+const proto::ProtoObject* sendDynamic(STRuntime& rt, proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* recv,
+                                      const proto::ProtoString* selector,
+                                      const proto::ProtoObject* const* args, int argc,
+                                      bool* understood);
+
 // Defined in block_prims.cpp.
 extern const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext* ctx,
                                               const proto::ProtoObject* block,
@@ -37,15 +44,26 @@ const proto::ProtoString* atomValueKey(proto::ProtoContext* ctx) {
     return proto::ProtoString::createSymbol(ctx, "__atom_value__");
 }
 
-// Atom on: anInitialValue  →  a fresh Atom cell holding anInitialValue.
+// Atom on: anInitialValue  →  a new instance of the receiver (Atom, or the
+// subclass `on:` is sent to: S38), made by sending it `new` (so the class's
+// initialize runs, as for any instance creation), its cell then holding
+// anInitialValue. The instance is not shared yet, so a plain write is
+// enough. A primitive, not a kernel method, so `on:` works with the
+// primitives alone (no stdlib directory), and there is no public setter
+// that bypasses the compare-and-swap.
 const proto::ProtoObject* prim_Atom_on(STRuntime& rt, proto::ProtoContext* ctx,
-                                       const proto::ProtoObject*,
+                                       const proto::ProtoObject* r,
                                        const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("Atom on: expects 1 argument");
-    auto* atom = const_cast<proto::ProtoObject*>(rt.bootstrap().atomProto)
-        ->newChild(ctx, /*isMutable=*/true);
+    const proto::ProtoObject* value = a[0] ? a[0] : PROTO_NONE;
+    TransientPin pinValue(ctx, value);
+    bool understood = false;
+    const proto::ProtoObject* atom = sendDynamic(
+        rt, ctx, r, proto::ProtoString::createSymbol(ctx, "new"), nullptr, 0, &understood);
+    if (!understood || !atom || atom == PROTO_NONE || atom->isInteger(ctx))
+        throw NativeError("Atom on: the receiver's new did not answer an object");
     TransientPin pinAtom(ctx, atom);
-    atom->setAttribute(ctx, atomValueKey(ctx), a[0] ? a[0] : PROTO_NONE);
+    const_cast<proto::ProtoObject*>(atom)->setAttribute(ctx, atomValueKey(ctx), value);
     return atom;
 }
 
@@ -69,8 +87,19 @@ const proto::ProtoObject* prim_Atom_cas(STRuntime&, proto::ProtoContext* ctx,
         throw NativeError("Atom value:ifCurrent: expects 2 arguments");
     const proto::ProtoObject* newValue = a[0] ? a[0] : PROTO_NONE;
     const proto::ProtoObject* expected = a[1] ? a[1] : PROTO_NONE;
-    bool ok = const_cast<proto::ProtoObject*>(r)
-        ->setAttributeIfEqual(ctx, atomValueKey(ctx), expected, newValue);
+    const proto::ProtoString* key = atomValueKey(ctx);
+    auto* cell = const_cast<proto::ProtoObject*>(r);
+    if (expected != PROTO_NONE)
+        return cell->setAttributeIfEqual(ctx, key, expected, newValue) ? PROTO_TRUE : PROTO_FALSE;
+    // S39: a cell made by `new` holds nothing yet, and reads as nil. An
+    // expected nil matches it, as an unset instance variable matches nil in
+    // setInstVar:from:to:; protoCore's CAS names "absent" with nullptr. An
+    // empty cell first, then an explicit nil: a cell never becomes empty
+    // again, so when both fail the cell held something other than nil at the
+    // second attempt (the answer false is then exact), and an explicit nil
+    // stored between the two is still matched.
+    const bool ok = cell->setAttributeIfEqual(ctx, key, nullptr, newValue)
+                 || cell->setAttributeIfEqual(ctx, key, PROTO_NONE, newValue);
     return ok ? PROTO_TRUE : PROTO_FALSE;
 }
 
@@ -87,8 +116,12 @@ const proto::ProtoObject* prim_Atom_swap(STRuntime& rt, proto::ProtoContext* ctx
     const proto::ProtoObject* block = a[0];
     const proto::ProtoString* key = atomValueKey(ctx);
     for (;;) {
-        const proto::ProtoObject* old = r->getOwnAttributeDirect(ctx, key);
-        if (!old) old = PROTO_NONE;
+        // S39: a cell made by `new` holds nothing yet (nullptr). The block
+        // sees nil, and the CAS expects the cell to be still empty: comparing
+        // against an explicit nil never matched it, and swap: retried for
+        // ever.
+        const proto::ProtoObject* current = r->getOwnAttributeDirect(ctx, key);
+        const proto::ProtoObject* old = current ? current : PROTO_NONE;
         // `old` is held across invokeBlock (arbitrary user allocation) and the
         // CAS; `neu` across the CAS. Pin both.
         TransientPin pinOld(ctx, old);
@@ -97,7 +130,7 @@ const proto::ProtoObject* prim_Atom_swap(STRuntime& rt, proto::ProtoContext* ctx
         if (!neu) neu = PROTO_NONE;
         TransientPin pinNeu(ctx, neu);
         if (const_cast<proto::ProtoObject*>(r)
-                ->setAttributeIfEqual(ctx, key, old, neu)) {
+                ->setAttributeIfEqual(ctx, key, current, neu)) {
             return neu;
         }
         // CAS lost — another writer won since our read. Loop: re-read the new
@@ -109,7 +142,6 @@ const proto::ProtoObject* prim_Atom_swap(STRuntime& rt, proto::ProtoContext* ctx
 
 void installAtomPrimitives(STRuntime& rt) {
     auto& b   = rt.bootstrap();
-    // `on:` is class side: `Atom on: 0` (D52).
     bindClassPrimitive(rt, b.atomProto, "on:",
                   primitiveMethod<prim_Atom_on>);
     bindPrimitive(rt, b.atomProto, "value",

@@ -62,6 +62,8 @@ const char* opName(Op op) {
         case Op::RESET_LOCAL:        return "RESET_LOCAL";
         case Op::PUSH_SHARED_LOCAL:  return "PUSH_SHARED_LOCAL";
         case Op::STORE_SHARED_LOCAL: return "STORE_SHARED_LOCAL";
+        case Op::PUSH_LATE_VAR:      return "PUSH_LATE_VAR";
+        case Op::STORE_LATE_VAR:     return "STORE_LATE_VAR";
         case Op::JUMP_IF_NIL:        return "JUMP_IF_NIL";
         case Op::JUMP_IF_NOT_NIL:    return "JUMP_IF_NOT_NIL";
         case Op::IDENTICAL:          return "IDENTICAL";
@@ -274,6 +276,7 @@ void listModule(const BytecodeModule& m, const std::string& path, std::string& o
             case Op::DEFINE_CAPTURED:
             case Op::PUSH_INSTVAR:     case Op::STORE_INSTVAR:
             case Op::PUSH_OWN_INSTVAR: case Op::STORE_CLASSVAR:
+            case Op::PUSH_LATE_VAR:    case Op::STORE_LATE_VAR:
                 withOperand(nameAt(m, in.arg));
                 break;
             case Op::JUMP:

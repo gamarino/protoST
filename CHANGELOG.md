@@ -126,6 +126,60 @@ minor release, so the two services arrive in 0.5.0.
 
 ### Fixed
 
+- **A wait nested in a block no longer hangs past 16 nested waits per worker
+  (S40).** Such a wait blocks its worker, which runs other actors' messages
+  meanwhile; past the cap of 16 on one thread it ran none, and when every
+  worker was there the program hung with no `deadlock:` (a chain of 18
+  actors on one worker, 200 clients of one server on the default pool). A
+  worker at the cap now counts as blocked, as one in I/O does, so the pool
+  adds a worker for the other actors' messages (up to its 256 workers). Past
+  that, when nothing can end a wait any more (every worker waits at the limit
+  for an actor message that has not started, no timer is pending, no task is
+  queued or running, the program's thread is parked in its wait), one wait
+  signals `deadlock: too many nested waits` instead of hanging; the runtime
+  decides it from pool-wide state confirmed in rounds that any event ends, so
+  the error is never signalled while the program can finish. The cases it
+  cannot prove stuck still wait (STATUS D56). The worker's idle back-off
+  sleeps with `ProtoThread::sleepFor` instead of `std::this_thread`, and a
+  worker that could not be created no longer leaves the pool short for good.
+  LANGUAGE.md §10.4. Test: `cli_nested_wait_progress`.
+- **`Atom new swap:` returns (S39).** A cell made by `new` holds nothing yet;
+  `swap:` compared it against an explicit nil, which never matches, and
+  retried for ever, and `value: x ifCurrent: nil` answered `false`. The empty
+  cell now reads, swaps and compares as nil, also when another thread stores
+  an explicit nil meanwhile. Tests:
+  `10-actors/atom-new-swap`, `atom-subclass-new-swap`, `atom-new-cas-from-nil`.
+- **`Atom on:` builds an instance of its receiver (S38).** `SeamAtom on: 7`
+  answered a plain `Atom`, so a subclass's `initialize` and overrides were
+  never reached through it. `on:` now sends `new` to its receiver (so
+  `initialize` runs) and then fills the cell; it stays a primitive, so it
+  works without the kernel library. `swap:` and `value:ifCurrent:` keep working on the cell,
+  not through an overridden `value`: a compare-and-swap must expect what the
+  cell holds (LANGUAGE.md §10.8). Tests: `10-actors/atom-on-builds-receiver`,
+  `atom-swap-updates-the-cell`.
+- **A method can name the variables its class inherits from an imported
+  class (S37).** A script is compiled before its imports run, so `Base
+  subclass: #Kid` with `Kid >> peek ^secret` (Base imported, declaring
+  `secret`) was a compile error, as were a class built by the message form
+  `(m Base) subclass: #Kid instanceVariableNames: 'own'` (even for `own`), an
+  extension `Base >> m`, a class or class-instance variable of the imported
+  class, and a class whose `uses:` clause is an expression. In a method whose
+  class's chain the compiler cannot see, an unresolved name of any spelling
+  (`secret`, `_x`, `Y`) is now resolved when the method is installed, against
+  the variables the class and its ancestors declare, and becomes the access
+  the compiler would have emitted (a capitalised name that is not a variable
+  stays a global); a lowercase name the class does not declare signals
+  `undeclared variable` there, before the method can run (two new opcodes, `PUSH_LATE_VAR` and
+  `STORE_LATE_VAR`, that installing rewrites in place and the engine never
+  runs; two installs of the same body at once resolve it once). Such a
+  method publishes each instance-variable assignment on its own (STATUS D57).
+  Chains the compiler can see, including those that end at a class the
+  runtime builds in C++, are checked at compile time as before. The message
+  form of `subclass:instanceVariableNames:` records its names (`instVarNames`
+  answered none), and redeclaring an inherited instance variable under an
+  imported superclass is an `Error` of the declaration (it failed the import
+  as a compile error of the imported module). LANGUAGE.md §4.5, §4.10. Tests:
+  `11-modules/late-*.st` (13; ten fail on the unfixed build).
 - **An integer attribute is always a value.** A primitive was an integer
   attribute, its registry index with bit 62 set (`PrimitiveMarker.h`), so any
   value attribute holding such an integer, 2^62 + k, ran primitive k when a
