@@ -23,10 +23,10 @@ name: CI
 # nightly schedule.  A pinned ref makes a red pull request unambiguous.  The
 # schedule keeps the integration signal separate, and the summary always records
 # the protoCore commit actually used.  The `test` job runs twice: against the
-# pinned release (3.5.2) and against the declared minimum (3.4.0, the floor
+# pinned release (3.6.0) and against the declared minimum (3.4.0, the floor
 # entry -- this repository's only floor job; it stays on 3.4.0 on the schedule).
 # protoCore 3.4.0 changed the ABI (SOVERSION 5), so no older protoCore can
-# satisfy the build; 3.5.0, 3.5.1 and 3.5.2 kept SOVERSION 5.
+# satisfy the build; 3.5.0 through 3.6.0 kept SOVERSION 5.
 #
 # TWO BUGS OF THIS REPOSITORY'S OWN SHAPE THIS FILE HAS TO HANDLE:
 #
@@ -65,11 +65,11 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  # protoCore 3.5.2 (tag v3.5.2), SOVERSION 5: what every
+  # protoCore 3.6.0 (tag v3.6.0), SOVERSION 5: what every
   # push and pull request builds against. The declared minimum, 3.4.0 (the
   # first SOVERSION 5 release), is what the floor entry of the `test` job
   # builds. Bump deliberately.
-  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'v3.5.2' }}
+  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'v3.6.0' }}
   # The test excluded from the gate, run in the `non-gating` job:
   #   F6 v2 T7: two actors ...    a wall-clock proof of parallelism: two 200 ms
   #                               sleeps must finish inside 350 ms
@@ -79,13 +79,13 @@ env:
   #                               tens of milliseconds.  It is a good test and a
   #                               bad gate.
   PROTOIO_REPO: gamarino/protoIO
-  # protoIO 0.4.0 (tag v0.4.0): file::EndGuard and
-  # Error::Kind::Conflict (the BinaryFile end guard), on top of 0.3.0's
-  # positioned binary files, the ProtoBase-compatible owner lock, packing,
-  # CRC32/BLAKE2b/SHA-256/HMAC, base64 and MessagePack, so 0.4.0 is also the
+  # protoIO 0.5.0 (tag v0.5.0): OS random bytes, a UTC microsecond clock and
+  # the MessagePack depth limit, on top of 0.4.0's binary-file end guard and
+  # 0.3.0's positioned binary files, ProtoBase-compatible owner lock, packing,
+  # CRC32/BLAKE2b/SHA-256/HMAC, base64 and MessagePack, so 0.5.0 is also the
   # floor CMakeLists.txt declares. Pinned so a red build is attributable;
   # bump deliberately.
-  PROTOIO_REF: v0.4.0
+  PROTOIO_REF: v0.5.0
   NON_GATING_TESTS: '^(F6 v2 T7: two actors run in parallel \(wall-clock proof\))$'
 
 jobs:
@@ -98,12 +98,12 @@ jobs:
       matrix:
         include:
           - name: Build and test suite
-            # Empty: env.PROTOCORE_REF (3.5.2, or master on the schedule).
+            # Empty: env.PROTOCORE_REF (3.6.0, or master on the schedule).
             protocore_ref: ''
           # THE FLOOR JOB, the only one in this repository (cross-platform.yml
           # builds the pin on macOS and Windows). protoCore 3.4.0 (tag v3.4.0,
           # f63adc08), SOVERSION 5: PROTOCORE_MIN_VERSION in CMakeLists.txt,
-          # behind the 3.5.2 pin. 3.4.0 changed ProtoContext's
+          # behind the 3.6.0 pin. 3.4.0 changed ProtoContext's
           # layout, so no older protoCore links. Built on every event, the schedule
           # included, so a change that needs a newer protoCore is caught
           # before the declared minimum becomes a lie.
@@ -309,8 +309,8 @@ jobs:
     # about 3 minutes, protoST about 4, the 580 tests of the label 7.
     timeout-minutes: 45
     # Gates. The one race the label used to report, in protoCore 3.5.1's
-    # ProtoSpace::newThread (KNOWN_ISSUES.md K10), is fixed in 3.5.2, the
-    # pinned env.PROTOCORE_REF (master on the schedule).
+    # ProtoSpace::newThread (KNOWN_ISSUES.md K10), is fixed in 3.5.2; the
+    # pinned env.PROTOCORE_REF is 3.6.0 (master on the schedule).
     steps:
       - name: Check out protoST
         uses: actions/checkout@v4
