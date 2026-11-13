@@ -3,9 +3,7 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
-## Unreleased
-
-## 0.10.0 — protoBaseST groundwork (unreleased)
+## 0.10.0 — protoBaseST groundwork (2026-11-13)
 
 **Requires protoIO 0.5.0** (or a later 0.5.x; a 0.4.x checkout is refused at
 configure time). The planned floor was 0.4.1; protoIO numbers new API as a
