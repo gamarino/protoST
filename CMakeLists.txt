@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(protoST VERSION 0.9.0 LANGUAGES CXX)
+project(protoST VERSION 0.9.1 LANGUAGES CXX)
 
 # The one place the version is written: every binary and library reads it
 # through PROTOST_VERSION (include/protoST/STRuntime.h).
@@ -112,7 +112,9 @@ endif()
 # whose equality 3.5.0 changed, so the floor stays 3.4.0. 3.5.2 (the
 # release CI and the .deb build against) fixes a race in ProtoSpace::newThread
 # that protoST reaches by starting workers from worker threads; it changes no
-# API, so it is not the floor either.
+# API, so it is not the floor either. 3.6.0 (the release CI and the .deb now
+# build against) keeps SOVERSION 5 and changes ProtoList's internal form only
+# (an RRB tree), so it is not the floor either.
 set(PROTOCORE_MIN_VERSION      "3.4.0")
 set(PROTOCORE_MIN_VERSION_FULL "3.4.0")
 set(PROTOCORE_NEXT_MAJOR       "4.0.0")
