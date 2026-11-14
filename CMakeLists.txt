@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(protoST VERSION 0.11.0 LANGUAGES CXX)
+project(protoST VERSION 0.12.0 LANGUAGES CXX)
 
 # The one place the version is written: every binary and library reads it
 # through PROTOST_VERSION (include/protoST/STRuntime.h).
@@ -291,7 +291,8 @@ target_link_libraries(protost_runtime PRIVATE protost_warnings)
 # link interface; dpkg-shlibdeps turns it into the package's libssl
 # dependency.
 #
-# The floor is 0.6.0: file::Stat::linkCount and file::linkCount(fd)
+# The floor is 0.7.0: file::realPath (FileReference>>realPath). 0.6.0
+# brought file::Stat::linkCount and file::linkCount(fd)
 # (FileReference>>linkCount, BinaryFile>>linkCount). 0.5.0 brought
 # random::bytes (ByteArray randomBytes:) and
 # clock::utcMicroseconds (Time utcMicroseconds). 0.4.0 brought
@@ -311,7 +312,7 @@ target_link_libraries(protost_runtime PRIVATE protost_warnings)
 # console reads and open files that can be deleted or renamed. protoIO's
 # package is compatible within one minor version (SameMinorVersion), so 0.1
 # would refuse 0.2.x.
-set(PROTOIO_MIN_VERSION "0.6.0")
+set(PROTOIO_MIN_VERSION "0.7.0")
 if(NOT PROTOST_TSAN)
     find_package(protoIO ${PROTOIO_MIN_VERSION} CONFIG QUIET)
 endif()
@@ -323,8 +324,8 @@ elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../protoIO/CMakeLists.txt")
                      "${CMAKE_CURRENT_BINARY_DIR}/_protoIO" EXCLUDE_FROM_ALL)
     # A source tree carries no version check of its own: compare here, with
     # the package's rule (SameMinorVersion): the same major.minor as the
-    # floor, and a patch level at least the floor's. So 0.6.x is accepted from
-    # 0.6.0 on, and 0.5.x and 0.7.x are refused, as an installed package is.
+    # floor, and a patch level at least the floor's. So 0.7.x is accepted from
+    # 0.7.0 on, and 0.6.x and 0.8.x are refused, as an installed package is.
     get_directory_property(_protoIO_version
         DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../protoIO" DEFINITION PROJECT_VERSION)
     string(REGEX MATCH "^[0-9]+\\.[0-9]+" _protoIO_minor "${_protoIO_version}")

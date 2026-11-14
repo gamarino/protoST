@@ -191,6 +191,18 @@ FileReference >> pathString
 FileReference >> fullName
   ^ self __fileAbsolute: path.
 
+FileReference >> realPath
+  "The canonical reference: the absolute path with every symbolic link
+   resolved and . and .. folded physically (fullName keeps links). The part
+   of the path that does not exist yet is appended as written, and a dangling
+   link is followed to its target, as Python's os.path.realpath does, so a
+   file about to be created has the name it will have. A store that names a
+   lock file after its data file resolves the path first: a symbolic link to
+   the file and its real path then name the same lock. A link loop signals
+   FileSystemError. Asked of the path: a link changed meanwhile by another
+   process is not seen."
+  ^ FileReference path: (self __fileRealPath: path).
+
 FileReference >> asFileReference
   ^ self.
 

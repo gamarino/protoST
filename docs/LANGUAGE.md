@@ -2761,6 +2761,7 @@ A `FileReference` names a path; it holds no open descriptor.
 | `exists`, `isFile`, `isDirectory`, `isReadable`, `isWritable` | tests (false when the path does not exist) |
 | `size`, `modificationTime`, `linkCount` | size in bytes; milliseconds since the Unix epoch; the number of hard links (names) of the file, symbolic links followed (since 0.11.0) (`FileDoesNotExist` when missing) |
 | `pathString`, `fullName` | the path as given; the absolute path (`.` and `..` folded lexically, symbolic links kept) |
+| `realPath` | the canonical reference (since 0.12.0): absolute, every symbolic link resolved, `.` and `..` folded physically; the part of the path that does not exist yet is appended as written and a dangling link is followed to its target, as Python's non-strict `os.path.realpath`; a link loop signals `FileSystemError` |
 | `basename`, `basenameWithoutExtension`, `extension`, `parent` | name parts (`extension` is `''` when there is none) |
 | `children`, `files`, `directories` | the entries of a directory, sorted by name |
 | `contents`, `contents: aString`, `appendContents: aString` | read the whole file; replace it; append to it |
@@ -3024,7 +3025,11 @@ comment of `lib/kernel/binfile.st`:
 - `append:` needs a regular file: on a pipe, a FIFO, a socket or a device it
   signals `FileSystemError`;
 - a lock file named after the path of a data file excludes only the openers
-  that reach the data file through that path. A store built that way opens the
+  that reach the data file through that path. A store built that way names
+  the lock after the resolved path, `(ref realPath pathString , '.lock')`, so
+  a symbolic link to the data file (or to a directory above it) and its real
+  path name the same lock, as ProtoBase's log does (`os.path.realpath`;
+  since 0.12.0). It then opens the
   data file and checks `linkCount = 1` on the open `BinaryFile` before reading
   or repairing it, as ProtoBase's log does (`os.fstat(fd).st_nlink`): the
   check describes the file actually opened, not whatever the path names by
