@@ -3,6 +3,26 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
+## 0.12.0 — 2026-11-13
+
+**Requires protoIO 0.7.0** (or a later 0.7.x; a 0.6.x checkout is refused at
+configure time).
+
+### Added
+
+- **`FileReference >> realPath`**: the canonical reference, absolute, with
+  every symbolic link resolved and `.` and `..` folded physically (protoIO's
+  `file::realPath`: `realpath(3)`; `GetFinalPathNameByHandleW` on Windows).
+  It has the semantics of Python's non-strict `os.path.realpath`: the part of
+  the path that does not exist yet is appended as written and a dangling link
+  is followed to its target, so a log about to be created has the name it
+  will have. protoBaseST names its log's lock file after it, as ProtoBase's
+  `open_log` does, so two openers reaching the same log through a symbolic
+  link and through its real path take the same lock. Unlike Python's
+  non-strict form, a symbolic link loop signals `FileSystemError`.
+  `fullName` is unchanged (lexical, links kept). New primitive
+  `__fileRealPath:`.
+
 ## 0.11.0 — 2026-11-13
 
 **Requires protoIO 0.6.0** (or a later 0.6.x; a 0.5.x checkout is refused at

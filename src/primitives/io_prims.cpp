@@ -503,6 +503,16 @@ PRIM(prim_FileAbsolute) {
     return string(ctx, portablePath(immediate([&] { return protoio::file::absolute(path); })));
 }
 
+// __fileRealPath: path — the canonical path, symbolic links resolved and a
+// missing tail appended as written (protoio::file::realPath: CPython's
+// non-strict os.path.realpath, except that a link loop signals). It examines
+// the file system, so it leaves the collector's quorum as __fileStat: does.
+PRIM(prim_FileRealPath) {
+    ARGS(1, "__fileRealPath:");
+    const std::string path = osStringArg(ctx, a[0], "realPath", "the path");
+    return string(ctx, portablePath(unmanaged(ctx, [&] { return protoio::file::realPath(path); })));
+}
+
 PRIM(prim_TempDir) { ARGS(0, "__fileTempDir"); return string(ctx, portablePath(protoio::file::tempDir())); }
 
 // --------------------------------------------------------------- processes
@@ -680,6 +690,7 @@ void installIoPrimitives(STRuntime& rt) {
         {"__fileReplace:with:", primitiveMethod<prim_FileReplace>}, {"__fileSyncDirectory:", primitiveMethod<prim_FileSyncDirectory>},
         {"__fileCopy:to:", primitiveMethod<prim_FileCopy>},       {"__dirCreate:parents:", primitiveMethod<prim_DirCreate>},
         {"__dirList:", primitiveMethod<prim_DirList>},            {"__fileAbsolute:", primitiveMethod<prim_FileAbsolute>},
+        {"__fileRealPath:", primitiveMethod<prim_FileRealPath>},
         {"__fileTempDir", primitiveMethod<prim_TempDir>},
         {"__tcpConnect:port:timeout:", primitiveMethod<prim_TcpConnect>}, {"__tcpListen:port:backlog:", primitiveMethod<prim_TcpListen>},
         {"__tcpAccept:timeout:", primitiveMethod<prim_TcpAccept>}, {"__sockName:peer:", primitiveMethod<prim_SockName>},

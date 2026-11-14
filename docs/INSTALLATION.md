@@ -1,20 +1,20 @@
 # Installing protoST
 
-protoST 0.11.0 is a Smalltalk-syntax, actor-native runtime on protoCore. It is
+protoST 0.12.0 is a Smalltalk-syntax, actor-native runtime on protoCore. It is
 a consumer of protoCore, never a bundler of it: `bin/protost` links
 `libprotoCore.so.5`, and every package protoST produces declares a runtime
 dependency on protoCore's own package instead of shipping a copy.
 
 On a Debian or Ubuntu machine where protoCore's package is installed, the
 library is `/usr/lib/x86_64-linux-gnu/libprotoCore.so.5`, a link to
-`libprotoCore.so.<version>`. protoST 0.11.0 needs protoCore 3.4.0 or later
-(*Prerequisites*), as 0.10.0, 0.9.1, 0.9.0, 0.8.1 and 0.8.0 did (0.7.0 needed 3.0.0). Its `.deb`
+`libprotoCore.so.<version>`. protoST 0.12.0 needs protoCore 3.4.0 or later
+(*Prerequisites*), as 0.11.0, 0.10.0, 0.9.1, 0.9.0, 0.8.1 and 0.8.0 did (0.7.0 needed 3.0.0). Its `.deb`
 is built and tested against protoCore 3.6.0, the release to install with it,
 and depends on `protocore (>= 3.6.0)` through protoCore's shlibs file. CI
 builds against protoCore 3.6.0 on Linux, macOS and Windows, and against
 3.4.0, the declared minimum, in one Linux job (the floor job); it pins protoIO
-0.5.0 (tag `v0.5.0`), which 0.10.0 requires (see *Prerequisites*). The suite
-was last run locally (2026-11-13) against protoCore 3.6.0 and protoIO 0.5.0.
+0.7.0 (tag `v0.7.0`), which 0.12.0 requires (see *Prerequisites*). The suite
+was last run locally (2026-11-13) against protoCore 3.6.0 and protoIO 0.7.0.
 
 ---
 
@@ -26,8 +26,10 @@ was last run locally (2026-11-13) against protoCore 3.6.0 and protoIO 0.5.0.
   Fedora/RHEL, `brew install readline` on macOS). It is a hard requirement:
   `find_library(READLINE_LIBRARY NAMES readline REQUIRED)`, except on Windows,
   where the REPL uses the console's own line editing (*Windows (MSVC)*).
-- **protoIO 0.6.0 or a later 0.6.x** at build time only (0.6.0 adds the
-  hard-link count, `file::Stat::linkCount` and `file::linkCount(fd)`, behind
+- **protoIO 0.7.0 or a later 0.7.x** at build time only (0.7.0 adds
+  `file::realPath`, the symbolic-link-resolving canonical path, behind
+  `FileReference >> realPath` in protoST 0.12.0; 0.11.0 needs 0.6.x; 0.6.0
+  adds the hard-link count, `file::Stat::linkCount` and `file::linkCount(fd)`, behind
   `FileReference >> linkCount` and `BinaryFile >> linkCount` in protoST
   0.11.0; 0.10.0 needs 0.5.x; 0.5.0 adds
   `random::bytes` and `clock::utcMicroseconds`, behind `ByteArray randomBytes:`
@@ -41,7 +43,7 @@ was last run locally (2026-11-13) against protoCore 3.6.0 and protoIO 0.5.0.
   listener on a host-less address (0.2.2) and `readBufferedLine` (0.2.3, with
   which `nextLine` takes a line already in protoIO's read buffer without
   leaving the collector's quorum); protoIO's package is compatible within one
-  minor version, so a 0.5 or 0.7 is refused): the I/O
+  minor version, so a 0.6 or 0.8 is refused): the I/O
   library shared by the protoCore
   runtimes (files, processes, TCP, UDP, TLS, HTTP), linked statically, so the
   installed `protost` does not depend on it. Either install its `protoio-dev`

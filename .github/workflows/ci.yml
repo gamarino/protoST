@@ -79,14 +79,14 @@ env:
   #                               tens of milliseconds.  It is a good test and a
   #                               bad gate.
   PROTOIO_REPO: gamarino/protoIO
-  # protoIO 0.6.0: the hard-link count (Stat::linkCount, file::linkCount(fd),
-  # behind FileReference>>linkCount and BinaryFile>>linkCount), on top of
-  # 0.5.0's OS random bytes, UTC microsecond clock and MessagePack depth
-  # limit, 0.4.0's binary-file end guard and 0.3.0's positioned binary files,
+  # protoIO 0.7.0: the canonical path (file::realPath, behind
+  # FileReference>>realPath), on top of 0.6.0's hard-link count, 0.5.0's OS
+  # random bytes, UTC microsecond clock and MessagePack depth limit, 0.4.0's
+  # binary-file end guard and 0.3.0's positioned binary files,
   # ProtoBase-compatible owner lock, packing, CRC32/BLAKE2b/SHA-256/HMAC,
-  # base64 and MessagePack, so 0.6.0 is also the floor CMakeLists.txt
+  # base64 and MessagePack, so 0.7.0 is also the floor CMakeLists.txt
   # declares. Pinned so a red build is attributable; bump deliberately.
-  PROTOIO_REF: v0.6.0
+  PROTOIO_REF: v0.7.0
   NON_GATING_TESTS: '^(F6 v2 T7: two actors run in parallel \(wall-clock proof\))$'
 
 jobs:
