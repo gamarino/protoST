@@ -86,9 +86,7 @@ env:
   # ProtoBase-compatible owner lock, packing, CRC32/BLAKE2b/SHA-256/HMAC,
   # base64 and MessagePack, so 0.7.0 is also the floor CMakeLists.txt
   # declares. Pinned so a red build is attributable; bump deliberately.
-  # TEMPORARY: the head of protoIO's feat/realpath branch (PR #2) until
-  # v0.7.0 is tagged; this must become v0.7.0 before this branch is merged.
-  PROTOIO_REF: 6414cad8cee541509c949c339399c81bde8aa0db
+  PROTOIO_REF: v0.7.0
   NON_GATING_TESTS: '^(F6 v2 T7: two actors run in parallel \(wall-clock proof\))$'
 
 jobs:

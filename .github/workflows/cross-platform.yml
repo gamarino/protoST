@@ -24,10 +24,7 @@ env:
   # job. The declared minimum (3.4.0) is built by ci.yml's floor entry only.
   PROTOCORE_REF: v3.6.0
   PROTOIO_REPO: gamarino/protoIO
-  # protoIO 0.7.0, as in ci.yml, and the declared floor. TEMPORARY: the
-  # head of protoIO's feat/realpath branch (PR #2) until v0.7.0 is tagged;
-  # this must become v0.7.0 before this branch is merged.
-  PROTOIO_REF: 6414cad8cee541509c949c339399c81bde8aa0db
+  PROTOIO_REF: v0.7.0
   # As in ci.yml: a wall-clock verdict never gates.
   NON_GATING_TESTS: '^(F6 v2 T7: two actors run in parallel \(wall-clock proof\))$'
 
