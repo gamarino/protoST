@@ -3,6 +3,79 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
+## Unreleased
+
+**Requires protoCore's object-shape model** (protoCore master after 3.6.0,
+`eced46bd` or later: `ProtoObject::newClone`). It still reports version 3.6.0
+and SOVERSION 5, so the configure step cannot tell it from the 3.6.0 release
+by version; the developer-tree probe now checks for `newClone`, and a 3.6.0
+library fails at start-up with an undefined `ProtoObject::newClone`.
+
+### Changed
+
+- **Instances, closures and Arrays are clones of templates**
+  (`src/runtime/InstanceTemplate.h`). Each class keeps an immutable instance
+  template whose `ProtoShape` names every instance variable the class declares
+  or inherits, all unset; `basicNew` / `new`, class-side `Exception signal`
+  and instances of user subclasses of the built-in collections are
+  `template->newClone(ctx, true)`, so all instances of a class share one
+  parent link and one shape, and assigning a declared variable replaces a
+  value instead of extending the object's shape. A declaration of instance
+  variables anywhere advances a layout epoch, so re-declared classes and their
+  subclasses rebuild their templates; a class rebuilt by `addBehavior:` gets
+  its own. Closures and Arrays are written over two per-runtime templates.
+  Unset variables stay invisible (`nil` on read, absent to reflection).
+  `newChild` keeps making a plain child.
+- **protoST uses protoCore's public API only.** Seven hand-copied pointer-tag
+  tests (`(uintptr_t)p & 0x3F`) are replaced by `getOwnAttributeDirect`'s own
+  type check, `isSmallInt`, `isStringTagFast`, `isCellPointer` and the
+  `is*`/`as*` predicates. The `src_public_api_only` test fails when `src/` or
+  `include/` include `proto_internal.h`, name protoCore's tag or cell types,
+  or mask a pointer cast to an integer.
+- `cli_gc_recursion_reclaims` allocates four Arrays per call instead of two:
+  with three-cell Arrays its negative control no longer filled the ceiling.
+
+### Measured
+
+`perf stat -r 3`, user-space instructions per operation (a loop of 300,000
+minus the same program at 0; each program verifies its result), protoCore
+`eced46bd`. Instruction counts are the reliable figure: the machine ran other
+sessions' builds throughout (load 7 to 27), so cycles are reported but noisy.
+Full tables: `docs/superpowers/reports/2026-11-17-protocore-shapes-adoption.md`.
+
+| Operation | 0.12.0 | public API only | final | final vs 0.12.0 |
+|---|---:|---:|---:|---:|
+| send | 1679 | 1761 | 1794 | +6.9% |
+| `Array new:` | 3981 | 4099 | 3410 | −14.3% |
+| `Array at:` | 1638 | 1739 | 1719 | +5.0% |
+| `Array at:put:` | 2445 | 2546 | 2526 | +3.3% |
+| `new` (no variables set) | 4102 | 4176 | 4586 | +11.8% |
+| `new` + 4 variables | 11812 | 11863 | 12048 | +2.0% |
+| subclass `new` + 8 variables | 15512 | 15952 | 16372 | +5.5% |
+| 4 variable reads, 1000 instances | 4256 | 4438 | 4330 | +1.7% |
+| closure + `value:` | 3163 | 3164 | 2704 | −14.5% |
+| class-side `Error signal` + `on:do:` | 92973 | 90543 | 91508 | −1.6% |
+
+Whole programs (instructions; cycles in parentheses): `blocks_kindof` −7.8%
+(−12.0%), `instances.st` +1.4% (−8.8%), `vm_ops` −0.8% (−3.0%), `fib` +3.5%
+(−5.4%), `exception_latency` −1.9% (−1.4%); `attr_lookup` and `list_append`
+unchanged in instructions.
+
+Regressions, honestly: the public-API change costs about 60 instructions per
+send (+82 before the predicates were reordered for the commonest receiver):
+`methodHolder` can no longer recognise an object by its tag, so a plain
+object runs three or four out-of-line kind predicates after the metaclass
+probe. The rest of the send row (+56) is the template: the benchmark's
+receiver has assigned none of its variables, so under 0.12.0 it had no shape
+to probe before its class, and now it has its class's; a receiver that has
+assigned a variable probes its own shape either way. Class instantiation costs about 400 more instructions per `new` than
+`newChild`: the template lookup reads two attributes of the (mutable) class
+and checks the template's parent. A templated instance allocates one cell
+fewer (4 against 5, measured by `[templates][cells]`), and every instance of
+a class shares one shape, which is the model protoCore's object-shape change
+is built for; the cycle figures, though noisy, do not show the instruction
+regression. Closures and Arrays are clear wins.
+
 ## 0.12.0 — 2026-11-13
 
 **Requires protoIO 0.7.0** (or a later 0.7.x; a 0.6.x checkout is refused at

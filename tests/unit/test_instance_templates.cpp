@@ -187,3 +187,43 @@ TEST_CASE("Templates: a class rebuilt by addBehavior: gets its own template",
     REQUIRE(r != nullptr);
     CHECK(r->asLong(ctx) == 7);
 }
+
+namespace {
+// Cells allocated by making an instance of `cls` (from its template, or as a
+// plain mutable child) and assigning `n` of `keys` in one group, as an
+// initializer's write group does (ProtoObject::setAttributes on the mutable
+// instance). The template is built before counting.
+long long constructionCells(Host& h, const proto::ProtoObject* cls, bool fromTemplate,
+                            const std::vector<const char*>& keys) {
+    proto::ProtoContext* c = h.ctx();
+    REQUIRE(protoST::instanceTemplate(h.rt, c, cls) != nullptr);
+    std::vector<const proto::ProtoString*> names;
+    std::vector<const proto::ProtoObject*> values;
+    for (const char* k : keys) {
+        names.push_back(h.sym(k));
+        values.push_back(c->fromLong(static_cast<long long>(names.size())));
+    }
+    const proto::proto_ulong before = c->allocatedCellsCount;
+    const proto::ProtoObject* inst = fromTemplate ? protoST::newInstance(h.rt, c, cls)
+                                                  : cls->newChild(c, /*isMutable=*/true);
+    inst->setAttributes(c, static_cast<unsigned>(names.size()), names.data(), values.data());
+    const proto::proto_ulong after = c->allocatedCellsCount;
+    return static_cast<long long>(after - before);
+}
+} // namespace
+
+TEST_CASE("Templates: a templated construction allocates no more cells than a plain child",
+          "[templates][cells]") {
+    Host h;
+    h.run(kDefs);
+    const proto::ProtoObject* base = h.global("Base");
+    const proto::ProtoObject* sub = h.global("Sub");
+    const long long b2t = constructionCells(h, base, true, {"_iv_a", "_iv_b"});
+    const long long b2c = constructionCells(h, base, false, {"_iv_a", "_iv_b"});
+    const long long s4t = constructionCells(h, sub, true, {"_iv_a", "_iv_b", "_iv_c", "_iv_d"});
+    const long long s4c = constructionCells(h, sub, false, {"_iv_a", "_iv_b", "_iv_c", "_iv_d"});
+    WARN("cells per construction: Base (2 ivars) template " << b2t << ", plain child " << b2c
+         << "; Sub (4 ivars) template " << s4t << ", plain child " << s4c);
+    CHECK(b2t <= b2c);
+    CHECK(s4t <= s4c);
+}
