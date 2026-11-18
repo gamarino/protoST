@@ -430,11 +430,18 @@ const proto::ProtoObject* methodHolder(const Bootstrap& b, proto::ProtoContext* 
     // not an object, so only an object can take this branch.
     const proto::ProtoObject* meta = recv->getOwnAttributeDirect(ctx, b.sym.metaclass);
     if (meta && meta != PROTO_NONE) return meta;
-    // The remaining value kinds; any other object is its own holder.
-    if (recv->isInteger(ctx)) return b.largeIntegerProto;
-    if (recv->isFloat(ctx)) return b.floatProto;
-    if (isCharacterValue(ctx, recv)) return b.characterProto;
+    // The remaining value kinds; any other object is its own holder. Split
+    // on isCellPointer so that a plain object, the commonest receiver here,
+    // runs only the predicates of the kinds that live in cells; a character
+    // is an immediate value (protoCore's header documents it as an embedded
+    // type).
+    if (!proto::ProtoObject::isCellPointer(recv)) {
+        if (isCharacterValue(ctx, recv)) return b.characterProto;
+        return recv->isDouble(ctx) ? b.floatProto : recv;
+    }
     if (recv->isByteBuffer(ctx)) return b.byteArrayProto;
+    if (recv->isDouble(ctx)) return b.floatProto;
+    if (recv->isInteger(ctx)) return b.largeIntegerProto;
     return recv;
 }
 
