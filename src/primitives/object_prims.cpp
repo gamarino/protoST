@@ -7,6 +7,7 @@
 #include "runtime/BlockCode.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/BytecodeModule.h"
+#include "runtime/InstanceTemplate.h"
 #include "runtime/TransientPin.h"
 #include "runtime/ValueFormat.h"
 #include "runtime/ExecutionEngine.h"
@@ -65,6 +66,21 @@ const proto::ProtoObject* prim_Object_newChild(STRuntime&,
                                                 const proto::ProtoObject* const*,
                                                 int) {
     return r->newChild(ctx, /*isMutable=*/true);
+}
+
+// aClass basicNew (and the primitive `new` of a class that does not reach
+// Object class >> new)
+//
+// A fresh mutable instance of the receiver, cloned from the class's instance
+// template so that every instance of the class shares one parent link and
+// one attribute shape (InstanceTemplate.h). `newChild` keeps making a plain
+// child: it is also how a prototype is derived from any object.
+const proto::ProtoObject* prim_Behavior_basicNew(STRuntime& rt,
+                                                 proto::ProtoContext* ctx,
+                                                 const proto::ProtoObject* r,
+                                                 const proto::ProtoObject* const*,
+                                                 int) {
+    return newInstance(rt, ctx, r);
 }
 
 // recv asActor → new Actor wrapping recv
@@ -425,6 +441,9 @@ void declareInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
         }
     }
     const_cast<proto::ProtoObject*>(cls)->setAttribute(ctx, ivKey, names);
+    // Every instance template built before this declaration may now lack a
+    // variable (this class's or, for a subclass, an inherited one).
+    noteInstanceLayoutChanged();
 }
 } // namespace
 
@@ -1489,8 +1508,7 @@ const proto::ProtoObject* prim_Object_class(STRuntime& rt, proto::ProtoContext* 
         return reinterpret_cast<const proto::ProtoString*>(r)->isSymbol()
             ? b.symbolProto : b.stringProto;
     }
-    // A byte buffer is a tagged value; an object cell (tag 0) is not tested.
-    if ((reinterpret_cast<uintptr_t>(r) & 0x3F) != 0 && r->isByteBuffer(ctx))
+    if (r->isByteBuffer(ctx))
         return b.byteArrayProto;
     const proto::ProtoString* nameKey = b.sym.className;
     const proto::ProtoObject* own = r->getOwnAttributeDirect(ctx, nameKey);
@@ -2098,18 +2116,21 @@ void installObjectPrimitives(STRuntime& rt) {
     auto& b   = rt.bootstrap();
     {
         // BL-1: `newChild` and the conventional Smalltalk `new` both
-        // allocate a fresh mutable child of the receiver. Class-side methods
+        // allocate a fresh mutable object inheriting from the receiver. Class-side methods
         // such as `Counter class >> startingAt:` call `self new`; bind `new`
         // as an alias so that pattern resolves without forcing user code to
         // spell `newChild`.
         // D52: the class protocol (new, subclass:, selectors, ...) is bound
         // on Behavior, which every class and metaclass reaches and no
         // instance does.
+        // `new` and `basicNew` make an instance from the class's template
+        // (InstanceTemplate.h); `newChild` a plain child of the receiver.
         const proto::ProtoMethod newChildPrim = primitiveMethod<prim_Object_newChild>;
+        const proto::ProtoMethod basicNewPrim = primitiveMethod<prim_Behavior_basicNew>;
         bindPrimitive(rt, b.behaviorProto, "newChild", newChildPrim);
-        bindPrimitive(rt, b.behaviorProto, "new", newChildPrim);
+        bindPrimitive(rt, b.behaviorProto, "new", basicNewPrim);
         // basicNew: the raw allocator, kept available when a class overrides new.
-        bindPrimitive(rt, b.behaviorProto, "basicNew", newChildPrim);
+        bindPrimitive(rt, b.behaviorProto, "basicNew", basicNewPrim);
     }
     bindPrimitive(rt, b.behaviorProto, "__installMethod:as:",
                   primitiveMethod<prim_Object_installMethod>);

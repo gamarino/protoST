@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(protoST VERSION 0.12.0 LANGUAGES CXX)
+project(protoST VERSION 0.13.0 LANGUAGES CXX)
 
 # The one place the version is written: every binary and library reads it
 # through PROTOST_VERSION (include/protoST/STRuntime.h).
@@ -113,8 +113,12 @@ endif()
 # release CI and the .deb build against) fixes a race in ProtoSpace::newThread
 # that protoST reaches by starting workers from worker threads; it changes no
 # API, so it is not the floor either.
-set(PROTOCORE_MIN_VERSION      "3.4.0")
-set(PROTOCORE_MIN_VERSION_FULL "3.4.0")
+# 3.6.1: the floor since protoST 0.13.0. Instances, closures and Arrays are
+# clones of per-class templates made with ProtoObject::newClone, which
+# protoCore first provides in 3.6.1 (object-shape model, SOVERSION still 5).
+# A 3.6.0 library fails at start-up with an undefined ProtoObject::newClone.
+set(PROTOCORE_MIN_VERSION      "3.6.1")
+set(PROTOCORE_MIN_VERSION_FULL "3.6.1")
 set(PROTOCORE_NEXT_MAJOR       "4.0.0")
 set(PROTOCORE_ABI_SOVERSION    "5")
 option(PROTOCORE_REQUIRE_PACKAGE
@@ -192,16 +196,17 @@ else()
     endif()
     unset(_protoCore_abi_file)
     # The developer tree has no version to check; probe for the newest API the
-    # sources use instead (ProtoObject::setAttributes, protoCore 2.11.0).
-    file(STRINGS "${PROTOCORE_DIR}/headers/protoCore.h" _protoCore_setAttributes
-         REGEX "setAttributes\\(")
-    if(NOT _protoCore_setAttributes)
+    # sources use instead (ProtoObject::newClone, protoCore's object-shape
+    # model, first released in 3.6.1).
+    file(STRINGS "${PROTOCORE_DIR}/headers/protoCore.h" _protoCore_newClone
+         REGEX "newClone\\(")
+    if(NOT _protoCore_newClone)
         message(FATAL_ERROR
             "The protoCore tree in ${PROTOCORE_DIR} predates "
-            "ProtoObject::setAttributes (protoCore 2.11.0); protoST needs "
-            "protoCore ${PROTOCORE_MIN_VERSION_FULL} or later. Update and rebuild it.")
+            "ProtoObject::newClone (protoCore's object-shape model, 3.6.1); "
+            "protoST's instance templates need it. Update and rebuild it.")
     endif()
-    unset(_protoCore_setAttributes)
+    unset(_protoCore_newClone)
     set(PROTOCORE_INCLUDE_DIRS ${PROTOCORE_DIR} ${PROTOCORE_DIR}/headers)
     set(CMAKE_BUILD_RPATH "${PROTOCORE_LIB_DIR}")
     set(CMAKE_BUILD_RPATH_USE_LINK_PATH TRUE)
@@ -235,6 +240,7 @@ add_library(protost_runtime STATIC
     src/runtime/TransientPin.cpp
     src/runtime/Interrupt.cpp
     src/runtime/Bootstrap.cpp
+    src/runtime/InstanceTemplate.cpp
     src/runtime/HandlerStack.cpp
     src/runtime/ValueFormat.cpp
     src/debugger/DebuggerRuntime.cpp
@@ -582,6 +588,12 @@ endif()
 
 add_test(NAME cli_inputs
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_inputs.sh $<TARGET_FILE:protost>)
+
+# protoST uses protoCore's public API only: no internal header, no
+# hand-copied pointer tags or cell layouts (see the script).
+add_test(NAME src_public_api_only
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_src_public_api_only.sh
+            ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include)
 
 add_test(NAME cli_shebang
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_shebang.sh $<TARGET_FILE:protost>)

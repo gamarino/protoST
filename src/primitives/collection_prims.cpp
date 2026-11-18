@@ -44,6 +44,7 @@
 #include "primitives/CollectionSupport.h"
 #include "primitives/IndexArg.h"
 #include "runtime/Bootstrap.h"
+#include "runtime/InstanceTemplate.h"
 #include "runtime/TransientPin.h"
 #include "modules/STModuleProvider.h"
 #include "protoCore.h"
@@ -101,8 +102,9 @@ const proto::ProtoObject* instantiateAs(STRuntime& rt, proto::ProtoContext* ctx,
         cls->getOwnAttributeDirect(ctx, rt.bootstrap().sym.className);
     if (!own || own == PROTO_NONE) return inst;
     TransientPin pinInst(ctx, inst);
-    const proto::ProtoObject* out =
-        const_cast<proto::ProtoObject*>(cls)->newChild(ctx, /*isMutable=*/true);
+    // An instance of the user subclass, from its instance template
+    // (InstanceTemplate.h), carrying the built-in instance's attributes.
+    const proto::ProtoObject* out = newInstance(rt, ctx, cls);
     TransientPin pinOut(ctx, out);
     struct Sink { const proto::ProtoObject* out; };
     Sink sink{out};
@@ -542,13 +544,13 @@ const proto::ProtoObject* makeArrayInstance(STRuntime& rt,
     // Built immutable with its data, then made mutable by `clone` (0.10.0).
     // A mutable object's first write publishes a state into protoCore's
     // global mutable table (a path copy of a shard); one born with its
-    // attributes has nothing to publish until its first at:put:. The clone
-    // is a sibling of the immutable child: same parents, same attributes.
+    // attributes has nothing to publish until its first at:put:. The
+    // immutable version is the Array template (Bootstrap.h) with `__data__`
+    // replaced, so every Array shares the template's parent link and shape;
+    // the clone is its sibling: same parents, same attributes.
     const proto::ProtoObject* born =
-        rt.bootstrap().arrayProto->newChild(ctx, /*isMutable=*/false);
+        rt.bootstrap().arrayTemplate->setAttribute(ctx, rt.bootstrap().sym.data, data->asObject(ctx));
     TransientPin pinBorn(ctx, born);
-    born = born->setAttribute(ctx, rt.bootstrap().sym.data, data->asObject(ctx));
-    pinBorn.reset(born);
     return born->clone(ctx, /*isMutable=*/true);
 }
 

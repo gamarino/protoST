@@ -13,9 +13,10 @@
 # every cycle futile (fib.st three times slower).
 #
 # The workload is fib 25 written with sends and inlined ifTrue: only (no
-# loop, no block evaluated through a primitive), allocating two small Arrays
+# loop, no block evaluated through a primitive), allocating four small Arrays
 # per call so that the recursion produces garbage of its own (one was enough
-# until 0.10.0 built an Array from fewer cells). (fib itself
+# until 0.10.0 built an Array from fewer cells, two until the Array template
+# halved them again). (fib itself
 # allocates nothing since an inlined ifTrue: stopped boxing the variables it
 # uses into a captured dict; before, that dict was the garbage.) The ceiling
 # is about one million cells above the start-up live set, so the run can
@@ -33,6 +34,8 @@ cat > "$SCRIPT" <<'ST'
 Object subclass: #Fib.
 Fib >> compute: n
   | a |
+  a := Array new: 4.
+  a := Array new: 4.
   a := Array new: 4.
   a := Array new: 4.
   (n <= 1) ifTrue: [ ^ n ].

@@ -53,6 +53,7 @@
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
 #include "runtime/Bootstrap.h"
+#include "runtime/InstanceTemplate.h"
 #include "runtime/HandlerStack.h"
 #include "runtime/UnwindToHandler.h"
 #include "runtime/NestingLimitUnwind.h"
@@ -978,11 +979,12 @@ namespace {
 
 // --- Build an instance from a class object ---------------------------------
 //
-// Class-side `signal` / `signal:` desugar to `self new` then signal. `new` is
-// `newChild` (BL-1), so a fresh mutable child of the class prototype.
-const proto::ProtoObject* newExceptionInstance(proto::ProtoContext* ctx,
+// Class-side `signal` / `signal:` desugar to `self basicNew` then signal: a
+// fresh mutable instance cloned from the class's instance template
+// (InstanceTemplate.h), as `basicNew` makes it.
+const proto::ProtoObject* newExceptionInstance(STRuntime& rt, proto::ProtoContext* ctx,
                                                 const proto::ProtoObject* cls) {
-    return cls->newChild(ctx, /*isMutable=*/true);
+    return newInstance(rt, ctx, cls);
 }
 
 // anException signal → signal the receiver.
@@ -1008,7 +1010,7 @@ const proto::ProtoObject* prim_ExceptionClass_signal(STRuntime& rt, proto::Proto
                                                       const proto::ProtoObject* cls,
                                                       const proto::ProtoObject* const* a,
                                                       int argc) {
-    const proto::ProtoObject* exc = newExceptionInstance(ctx, cls);
+    const proto::ProtoObject* exc = newExceptionInstance(rt, ctx, cls);
     TransientPin pinExc(ctx, exc);
     return prim_Exception_signal(rt, ctx, exc, a, argc);
 }
@@ -1020,7 +1022,7 @@ const proto::ProtoObject* prim_ExceptionClass_signalText(STRuntime& rt, proto::P
                                                           const proto::ProtoObject* const* a,
                                                           int argc) {
     if (argc != 1) throw NativeError("signal: expects 1 arg (message string)");
-    const proto::ProtoObject* exc = newExceptionInstance(ctx, cls);
+    const proto::ProtoObject* exc = newExceptionInstance(rt, ctx, cls);
     TransientPin pinExc(ctx, exc);
     return prim_Exception_signalText(rt, ctx, exc, a, argc);
 }
