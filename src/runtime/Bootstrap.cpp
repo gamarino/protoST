@@ -310,22 +310,26 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
 }
 
 bool isCharacterValue(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
-    // A unicode char is an embedded value whose prototype is the space's
-    // unicode char slot (protoCore resolves it from the value's tag).
+    // A unicode char is an immediate value (no cell) whose prototype is the
+    // space's unicode char slot, which protoCore resolves from the value
+    // itself. An object, even an instance of Character, is never one.
     if (!v || v == PROTO_NONE || v == PROTO_TRUE || v == PROTO_FALSE) return false;
     if (v->isInteger(ctx) || v->isFloat(ctx)) return false;
     return v->getPrototype(ctx) == ctx->space->unicodeCharPrototype;
 }
+    if (proto::ProtoObject::isCellPointer(v)) return false;
 
 bool isMetaclass(const Bootstrap& b, proto::ProtoContext* ctx, const proto::ProtoObject* obj) {
-    if (!obj || obj == PROTO_NONE || (reinterpret_cast<uintptr_t>(obj) & 0x3F) != 0) return false;
+    // getOwnAttributeDirect answers nullptr for any value that is not an
+    // object, so it needs no type test of its own.
+    if (!obj || obj == PROTO_NONE) return false;
     const proto::ProtoObject* s = obj->getOwnAttributeDirect(ctx, b.sym.soleInstance);
     return s && s != PROTO_NONE;
 }
 
 namespace {
 bool ownsClassName(const Bootstrap& b, proto::ProtoContext* ctx, const proto::ProtoObject* obj) {
-    if (!obj || obj == PROTO_NONE || (reinterpret_cast<uintptr_t>(obj) & 0x3F) != 0) return false;
+    if (!obj || obj == PROTO_NONE) return false;   // see isMetaclass
     const proto::ProtoObject* n = obj->getOwnAttributeDirect(ctx, b.sym.className);
     return n && n != PROTO_NONE;
 }
@@ -399,15 +403,17 @@ const proto::ProtoObject* methodHolder(const Bootstrap& b, proto::ProtoContext* 
     if (!recv || recv == PROTO_NONE) return b.nilProto;
     if (recv == PROTO_TRUE || recv == PROTO_FALSE) return b.booleanProto;
     if (proto::isSmallInt(recv)) return b.smallIntegerProto;
-    // An object cell (tag 0) is its own holder, unless it is a class or a
-    // metaclass: then the object it owns as `__metaclass__` (D52).
-    if ((reinterpret_cast<uintptr_t>(recv) & 0x3F) == 0) {
-        const proto::ProtoObject* meta = recv->getOwnAttributeDirect(ctx, b.sym.metaclass);
-        return (meta && meta != PROTO_NONE) ? meta : recv;
-    }
+    // A string or symbol value (not an object wrapping one, which is its own
+    // holder like any other object).
+    if (proto::ProtoObject::isStringTagFast(recv)) return b.stringProto;
+    // A class or a metaclass is held by the object it owns as `__metaclass__`
+    // (D52). getOwnAttributeDirect answers nullptr for every value that is
+    // not an object, so only an object can take this branch.
+    const proto::ProtoObject* meta = recv->getOwnAttributeDirect(ctx, b.sym.metaclass);
+    if (meta && meta != PROTO_NONE) return meta;
+    // The remaining value kinds; any other object is its own holder.
     if (recv->isInteger(ctx)) return b.largeIntegerProto;
     if (recv->isFloat(ctx)) return b.floatProto;
-    if (recv->asString(ctx)) return b.stringProto;
     if (isCharacterValue(ctx, recv)) return b.characterProto;
     if (recv->isByteBuffer(ctx)) return b.byteArrayProto;
     return recv;

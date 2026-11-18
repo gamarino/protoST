@@ -67,9 +67,9 @@ struct GcHost {
     }
 };
 
-// heapSize and freeCellsCount are plain ints that protoCore writes
-// atomically (relaxedFetchAdd/relaxedStore, proto_internal.h) from the
-// collector thread; a reader outside its mutex loads them the same way.
+// heapSize and freeCellsCount are public ProtoSpace ints that protoCore's
+// collector thread updates with relaxed atomic operations; a reader outside
+// its mutex loads them the same way.
 // std::atomic_ref where the library provides it (MSVC, libstdc++ >= 10);
 // the GCC/Clang builtin otherwise (Apple libc++ before atomic_ref).
 int relaxedRead(int& v) {

@@ -1489,8 +1489,7 @@ const proto::ProtoObject* prim_Object_class(STRuntime& rt, proto::ProtoContext* 
         return reinterpret_cast<const proto::ProtoString*>(r)->isSymbol()
             ? b.symbolProto : b.stringProto;
     }
-    // A byte buffer is a tagged value; an object cell (tag 0) is not tested.
-    if ((reinterpret_cast<uintptr_t>(r) & 0x3F) != 0 && r->isByteBuffer(ctx))
+    if (r->isByteBuffer(ctx))
         return b.byteArrayProto;
     const proto::ProtoString* nameKey = b.sym.className;
     const proto::ProtoObject* own = r->getOwnAttributeDirect(ctx, nameKey);

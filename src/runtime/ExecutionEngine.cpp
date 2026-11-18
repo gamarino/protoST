@@ -1756,10 +1756,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // is pushed onto the operand stack as the apparent result of
                 // the send. The actual method execution happens later when
                 // STRuntime::drainOne pulls a message from the mailbox.
-                // Only an object cell (pointer tag 0, as methodHolder tests)
-                // can be an actor proxy: an immediate receiver skips the
-                // probe (0.10.0).
-                if ((reinterpret_cast<uintptr_t>(recv) & 0x3F) == 0
+                // Only an object can be an actor proxy: a SmallInteger
+                // receiver, the commonest immediate, skips the probe.
+                if (!proto::isSmallInt(recv)
                     && rt_.isActor(ctx, recv) && !isActorLocalSelector(selStr)) {
                     const proto::ProtoString* msgSelKey =
                         bs_.sym.selector;
@@ -2175,13 +2174,12 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     bs_.sym.bcPtr;
                 const proto::ProtoString* capKey =
                     bs_.sym.captured;
-                // A user method is an object cell (pointer tag 0); a
-                // primitive is a method cell, so it skips the probe
-                // (0.10.0).
+                // A user method is an object carrying __bc_ptr__; for a
+                // primitive (a method value) or any other non-object,
+                // getOwnAttributeDirect answers nullptr at once.
+                const proto::ProtoObject* bcRef = attr->getOwnAttributeDirect(ctx, bcKey);
                 const protoST::BytecodeModule* sub =
-                    (reinterpret_cast<uintptr_t>(attr) & 0x3F) == 0
-                        ? blockCodeOfCached(rt_, ctx, attr->getOwnAttributeDirect(ctx, bcKey))
-                        : nullptr;
+                    bcRef ? blockCodeOfCached(rt_, ctx, bcRef) : nullptr;
                 if (sub) {
                     // User method: F6 v3 A previously recursed via
                     //   ExecutionEngine subEng(rt_);

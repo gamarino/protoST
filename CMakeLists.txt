@@ -584,6 +584,12 @@ add_test(NAME cli_inputs
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_inputs.sh $<TARGET_FILE:protost>)
 
 add_test(NAME cli_shebang
+# protoST uses protoCore's public API only: no internal header, no
+# hand-copied pointer tags or cell layouts (see the script).
+add_test(NAME src_public_api_only
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_src_public_api_only.sh
+            ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include)
+
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_shebang.sh $<TARGET_FILE:protost>)
 
 add_test(NAME cli_actor_unobserved_error

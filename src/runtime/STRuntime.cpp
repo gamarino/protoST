@@ -1598,7 +1598,8 @@ const proto::ProtoObject* STRuntime::atEmbedderBoundary(proto::ProtoContext* ctx
         // and `uses:` mixins alike, the set `on: aClass do:` selects by
         // (HandlerStack.cpp matchesGuard), so isKindOf() answers as a
         // handler would (review round 3, R3-L2).
-        if (v && v != PROTO_NONE && (reinterpret_cast<uintptr_t>(v) & 0x3F) == 0) {
+        // getParents answers an empty list for a value that is not an object.
+        if (v && v != PROTO_NONE) {
             if (const proto::ProtoList* chain = v->getParents(ctx)) {
                 TransientPin pinChain(ctx, reinterpret_cast<const proto::ProtoObject*>(chain));
                 const proto::proto_ulong n = chain->getSize(ctx);
