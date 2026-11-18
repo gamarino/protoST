@@ -743,6 +743,15 @@ inherits an empty one. Built-in collection classes send `initialize` to
 instances of user subclasses too (`OrderedCollection subclass: #Stack`, then
 `Stack new` is a `Stack`).
 
+`basicNew` makes the instance as a copy of the class's *instance template*,
+an object kept on the class whose attribute shape already names every
+instance variable the class declares or inherits, all unset; every instance
+of a class therefore shares one parent link and one protoCore `ProtoShape`,
+and assigning a declared variable replaces a value instead of growing the
+object. The template is rebuilt when any class declares instance variables.
+None of this is visible to a program: an unset variable reads as `nil`, and
+reflection sees only the variables an instance has assigned.
+
 `newChild` is the underlying prototype operation: it answers a fresh child of
 the receiver and, like `basicNew`, does not send `initialize`. All three are
 class-side messages (defined on `Behavior`, §4.7): an instance does not

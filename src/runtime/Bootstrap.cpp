@@ -273,6 +273,9 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     out.sym.classId         = S("__class_id__");
     out.sym.metaclass       = S("__metaclass__");
     out.sym.soleInstance    = S("__sole_instance__");
+    out.sym.instanceTemplate      = S("__instance_template__");
+    out.sym.instanceTemplateEpoch = S("__instance_template_epoch__");
+    out.sym.instVarNames          = S("__instvar_names__");
     out.sym.priority        = S("__priority__");
     out.sym.data            = S("__data__");
     out.sym.isResumable     = S("isResumable");
@@ -307,6 +310,22 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
              out.dictionaryProto, out.associationProto, out.behaviorProto, out.classProto,
              out.metaclassProto})
         ensureMetaclass(out, ctx, cls);
+
+    // The closure and Array templates (Bootstrap.h). Their slots hold nil
+    // until a clone writes them: every closure and Array writes all of them.
+    {
+        const proto::ProtoString* names[4] = {
+            out.sym.bcPtr, out.sym.captured, out.sym.homeFrame, out.sym.blockSelf };
+        const proto::ProtoObject* nils[4] = { PROTO_NONE, PROTO_NONE, PROTO_NONE, PROTO_NONE };
+        const proto::ProtoObject* bare = out.blockProto->newChild(ctx, /*isMutable=*/false);
+        TransientPin pinBare(ctx, bare);
+        out.closureTemplate = bare->setAttributes(ctx, 4, names, nils);
+    }
+    {
+        const proto::ProtoObject* bare = out.arrayProto->newChild(ctx, /*isMutable=*/false);
+        TransientPin pinBare(ctx, bare);
+        out.arrayTemplate = bare->setAttribute(ctx, out.sym.data, ctx->newList()->asObject(ctx));
+    }
 }
 
 bool isCharacterValue(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
@@ -314,10 +333,10 @@ bool isCharacterValue(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
     // space's unicode char slot, which protoCore resolves from the value
     // itself. An object, even an instance of Character, is never one.
     if (!v || v == PROTO_NONE || v == PROTO_TRUE || v == PROTO_FALSE) return false;
+    if (proto::ProtoObject::isCellPointer(v)) return false;
     if (v->isInteger(ctx) || v->isFloat(ctx)) return false;
     return v->getPrototype(ctx) == ctx->space->unicodeCharPrototype;
 }
-    if (proto::ProtoObject::isCellPointer(v)) return false;
 
 bool isMetaclass(const Bootstrap& b, proto::ProtoContext* ctx, const proto::ProtoObject* obj) {
     // getOwnAttributeDirect answers nullptr for any value that is not an

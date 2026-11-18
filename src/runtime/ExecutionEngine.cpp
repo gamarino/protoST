@@ -435,8 +435,9 @@ ExecutionEngine::newClosure(proto::ProtoContext* ctx, const Frame& f, unsigned i
     const proto::ProtoObject* homeObj =
         ctx->fromLong(static_cast<long long>(f.homeFrameId));
     TransientPin pinHome(ctx, homeObj);
-    const proto::ProtoObject* bare = bs_.blockProto->newChild(ctx, /*isMutable=*/false);
-    TransientPin pinBare(ctx, bare);
+    // A clone of the closure template (Bootstrap.h): the four writes
+    // replace its slots, so every closure shares one parent link and shape.
+    const proto::ProtoObject* bare = bs_.closureTemplate;
     const proto::ProtoObject* creatorSelf = getSelf(f);
     const proto::ProtoString* names[4] = {
         bs_.sym.bcPtr, bs_.sym.captured, bs_.sym.homeFrame, bs_.sym.blockSelf };

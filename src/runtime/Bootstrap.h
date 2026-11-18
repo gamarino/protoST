@@ -83,6 +83,15 @@ struct Bootstrap {
     // forward exactly when this is its first parent: no Smalltalk program can
     // reach it, so no program value is ever mistaken for one. Not a class.
     const proto::ProtoObject* deoptForwardProto  = nullptr;
+    // Templates of the two commonest runtime-made objects (InstanceTemplate.h
+    // explains the idea): immutable children of blockProto and arrayProto
+    // whose shape already holds a closure's four attributes and an Array's
+    // `__data__`. A closure or an Array is a clone of its template with the
+    // values written over it, so all of them share one parent link and one
+    // ProtoShape. Built at the end of bootstrapPrototypes, once the
+    // prototypes' chains are final (no prototype is re-parented later).
+    const proto::ProtoObject* closureTemplate    = nullptr;
+    const proto::ProtoObject* arrayTemplate      = nullptr;
     // Track 2 slice a (COL-a): collection class hierarchy.
     //   Collection                 (abstract — shared iteration protocol)
     //     |-- SequenceableCollection (abstract — ordered, indexable)
@@ -220,6 +229,11 @@ struct Bootstrap {
         const proto::ProtoString* classId         = nullptr;  // __class_id__ (super: the defining class)
         const proto::ProtoString* metaclass       = nullptr;  // __metaclass__ (methodHolder of a class)
         const proto::ProtoString* soleInstance    = nullptr;  // __sole_instance__ (a metaclass's class)
+        // A class's instance template and the layout epoch it was built in
+        // (InstanceTemplate.h): read by every basicNew.
+        const proto::ProtoString* instanceTemplate      = nullptr;  // __instance_template__
+        const proto::ProtoString* instanceTemplateEpoch = nullptr;  // __instance_template_epoch__
+        const proto::ProtoString* instVarNames          = nullptr;  // __instvar_names__
         // 2026-06-15: actor priority bands (high/medium/low). `__priority__`
         // is a SmallInteger 0/1/2 stored on the actor; absence means medium.
         // The scheduler reads this on schedule() to pick which of three

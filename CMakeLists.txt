@@ -192,16 +192,17 @@ else()
     endif()
     unset(_protoCore_abi_file)
     # The developer tree has no version to check; probe for the newest API the
-    # sources use instead (ProtoObject::setAttributes, protoCore 2.11.0).
-    file(STRINGS "${PROTOCORE_DIR}/headers/protoCore.h" _protoCore_setAttributes
-         REGEX "setAttributes\\(")
-    if(NOT _protoCore_setAttributes)
+    # sources use instead (ProtoObject::newClone, protoCore's object-shape
+    # model, unreleased after 3.6.0, which still reports version 3.6.0).
+    file(STRINGS "${PROTOCORE_DIR}/headers/protoCore.h" _protoCore_newClone
+         REGEX "newClone\\(")
+    if(NOT _protoCore_newClone)
         message(FATAL_ERROR
             "The protoCore tree in ${PROTOCORE_DIR} predates "
-            "ProtoObject::setAttributes (protoCore 2.11.0); protoST needs "
-            "protoCore ${PROTOCORE_MIN_VERSION_FULL} or later. Update and rebuild it.")
+            "ProtoObject::newClone (protoCore's object-shape model, after "
+            "3.6.0); protoST's instance templates need it. Update and rebuild it.")
     endif()
-    unset(_protoCore_setAttributes)
+    unset(_protoCore_newClone)
     set(PROTOCORE_INCLUDE_DIRS ${PROTOCORE_DIR} ${PROTOCORE_DIR}/headers)
     set(CMAKE_BUILD_RPATH "${PROTOCORE_LIB_DIR}")
     set(CMAKE_BUILD_RPATH_USE_LINK_PATH TRUE)
@@ -235,6 +236,7 @@ add_library(protost_runtime STATIC
     src/runtime/TransientPin.cpp
     src/runtime/Interrupt.cpp
     src/runtime/Bootstrap.cpp
+    src/runtime/InstanceTemplate.cpp
     src/runtime/HandlerStack.cpp
     src/runtime/ValueFormat.cpp
     src/debugger/DebuggerRuntime.cpp
@@ -583,13 +585,13 @@ endif()
 add_test(NAME cli_inputs
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_inputs.sh $<TARGET_FILE:protost>)
 
-add_test(NAME cli_shebang
 # protoST uses protoCore's public API only: no internal header, no
 # hand-copied pointer tags or cell layouts (see the script).
 add_test(NAME src_public_api_only
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_src_public_api_only.sh
             ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include)
 
+add_test(NAME cli_shebang
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_shebang.sh $<TARGET_FILE:protost>)
 
 add_test(NAME cli_actor_unobserved_error
