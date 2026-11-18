@@ -3,13 +3,15 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
-## Unreleased
+## 0.13.0 — 2026-11-18
 
-**Requires protoCore's object-shape model** (protoCore master after 3.6.0,
-`eced46bd` or later: `ProtoObject::newClone`). It still reports version 3.6.0
-and SOVERSION 5, so the configure step cannot tell it from the 3.6.0 release
-by version; the developer-tree probe now checks for `newClone`, and a 3.6.0
-library fails at start-up with an undefined `ProtoObject::newClone`.
+**Requires protoCore 3.6.1** (its object-shape model and
+`ProtoObject::newClone`; SOVERSION 5 as before). The declared floor rises from
+3.4.0 to 3.6.1: `find_package(protoCore 3.6.1)`, and the `.deb` depends on
+`protocore (>= 3.6.1)`. A 3.6.0 library fails at start-up with an undefined
+`ProtoObject::newClone`; the developer-tree probe checks the header for
+`newClone`. CI pins protoCore v3.6.1 (the floor job builds the same release)
+and protoIO v0.7.0, which is unchanged as the build-time requirement.
 
 ### Changed
 

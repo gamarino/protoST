@@ -238,13 +238,14 @@ several cores without locks.
 
 ## Status
 
-Version 0.10.0 (2026-11-13), the protoBaseST groundwork: `ByteArray randomBytes:`,
-`Time utcMicroseconds`, `Exception >> outer`, `lib/decimal.st`, `lib/calendar.st`,
-`lib/uuid.st`, and the fixes for S37 to S40. Built from source it requires protoCore 3.4.0 or
-newer (SOVERSION 5) and protoIO 0.5.0 (tag `v0.5.0`) or a later 0.5.x; its `.deb`
-(below) requires protoCore 3.6.0. CI builds against protoCore 3.6.0 (tag `v3.6.0`) and
-the 3.4.0 floor. On 0.10.0, `ctest` ran 1461 cases on Linux, all passing, in the Release and
-assertion builds, and the 636 cases of the `tsan` label passed under ThreadSanitizer. Since 0.6.2 protoST lets
+Version 0.13.0 (2026-11-18): instances, closures and Arrays are clones of
+per-class templates on protoCore's object-shape model, and protoST uses
+protoCore's public API only. Built from source it requires protoCore 3.6.1 or
+newer (SOVERSION 5, `ProtoObject::newClone`) and protoIO 0.7.0 (tag `v0.7.0`)
+or a later 0.7.x; its `.deb` (below) requires protoCore 3.6.1. CI builds
+against protoCore 3.6.1 (tag `v3.6.1`), which is also the floor. Before the
+release, `ctest` ran 1473 cases on Linux locally, all passing (0.10.0: 1461,
+and the 636 cases of the `tsan` label under ThreadSanitizer). Since 0.6.2 protoST lets
 protoCore's adaptive heap controller size the heap (budget: 75 % of physical
 memory or of the process memory limit); `PROTOCORE_HEAP_LIMIT_CELLS` forces a
 fixed limit and `PROTOCORE_ADAPTIVE_HEAP=0` restores 0.6.1's fixed 640 MB
@@ -257,11 +258,12 @@ known deviations from Smalltalk-80 and the open bugs are tracked in
 
 ## Getting started
 
-protoST depends on [protoCore](https://github.com/numaes/protoCore) 3.4.0 or
-newer (below 4.0), which must be built first, on
-[protoIO](https://github.com/gamarino/protoIO) 0.5.0 or a later 0.5.x at build time (0.9.0 needed 0.4.x; a sibling
+protoST depends on [protoCore](https://github.com/numaes/protoCore) 3.6.1 or
+newer (below 4.0; 3.6.1 first provides `ProtoObject::newClone`, which the
+instance templates use), which must be built first, on
+[protoIO](https://github.com/gamarino/protoIO) 0.7.0 or a later 0.7.x at build time (0.9.0 needed 0.4.x; a sibling
 checkout `../protoIO`, or its `protoio-dev` package; it is linked statically),
-and on OpenSSL (`libssl-dev`) and libreadline. 3.4.0 is a hard floor (it
+and on OpenSSL (`libssl-dev`) and libreadline. 3.4.0 was a hard floor before it (it
 changed `ProtoContext`'s layout, SOVERSION 5, so an older `libprotoCore` does
 not load); 3.0.0 was one before it (a
 thread's method receives its arguments as `ProtoArguments`); 2.11.0 already was
@@ -314,8 +316,8 @@ commands, and what differs on Windows, are in
 
 ## Installation
 
-protoST can be packaged with CPack. The 0.10.0 release has a Linux `.deb`
-attached to its GitHub release (below, with protoCore 3.6.0); other packages
+protoST can be packaged with CPack. The 0.13.0 release has a Linux `.deb`
+attached to its GitHub release (below, with protoCore 3.6.1); other packages
 are built from source as shown below. Every package depends on
 [protoCore](https://github.com/numaes/protoCore) — install protoCore's package
 first (it provides `libprotoCore`).
@@ -341,14 +343,14 @@ the GitHub releases (or built as below):
 ```bash
 wsl --install -d Ubuntu-24.04        # in PowerShell, once
 # then, in the Ubuntu shell:
-wget https://github.com/numaes/protoCore/releases/download/v3.6.0/protoCore-3.6.0-Linux.deb
-wget https://github.com/gamarino/protoST/releases/download/v0.10.0/protost-0.10.0-Linux.deb
-sudo apt install ./protoCore-3.6.0-Linux.deb ./protost-0.10.0-Linux.deb
+wget https://github.com/numaes/protoCore/releases/download/v3.6.1/protoCore-3.6.1-Linux.deb
+wget https://github.com/gamarino/protoST/releases/download/v0.13.0/protost-0.13.0-Linux.deb
+sudo apt install ./protoCore-3.6.1-Linux.deb ./protost-0.13.0-Linux.deb
 ```
 
-These are the 0.10.0 release packages. Built from source, protoST 0.10.0 needs
-protoCore 3.4.0 or later; the `.deb` was built against 3.6.0, the release
-to install with it, and depends on `protocore (>= 3.6.0)` through protoCore's
+These are the 0.13.0 release packages. Built from source, protoST 0.13.0 needs
+protoCore 3.6.1 or later; the `.deb` was built against 3.6.1, the release
+to install with it, and depends on `protocore (>= 3.6.1)` through protoCore's
 shlibs file (an older protoCore package is not enough: upgrade it with the
 command above).
 

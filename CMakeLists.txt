@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(protoST VERSION 0.12.0 LANGUAGES CXX)
+project(protoST VERSION 0.13.0 LANGUAGES CXX)
 
 # The one place the version is written: every binary and library reads it
 # through PROTOST_VERSION (include/protoST/STRuntime.h).
@@ -113,8 +113,12 @@ endif()
 # release CI and the .deb build against) fixes a race in ProtoSpace::newThread
 # that protoST reaches by starting workers from worker threads; it changes no
 # API, so it is not the floor either.
-set(PROTOCORE_MIN_VERSION      "3.4.0")
-set(PROTOCORE_MIN_VERSION_FULL "3.4.0")
+# 3.6.1: the floor since protoST 0.13.0. Instances, closures and Arrays are
+# clones of per-class templates made with ProtoObject::newClone, which
+# protoCore first provides in 3.6.1 (object-shape model, SOVERSION still 5).
+# A 3.6.0 library fails at start-up with an undefined ProtoObject::newClone.
+set(PROTOCORE_MIN_VERSION      "3.6.1")
+set(PROTOCORE_MIN_VERSION_FULL "3.6.1")
 set(PROTOCORE_NEXT_MAJOR       "4.0.0")
 set(PROTOCORE_ABI_SOVERSION    "5")
 option(PROTOCORE_REQUIRE_PACKAGE
@@ -193,14 +197,14 @@ else()
     unset(_protoCore_abi_file)
     # The developer tree has no version to check; probe for the newest API the
     # sources use instead (ProtoObject::newClone, protoCore's object-shape
-    # model, unreleased after 3.6.0, which still reports version 3.6.0).
+    # model, first released in 3.6.1).
     file(STRINGS "${PROTOCORE_DIR}/headers/protoCore.h" _protoCore_newClone
          REGEX "newClone\\(")
     if(NOT _protoCore_newClone)
         message(FATAL_ERROR
             "The protoCore tree in ${PROTOCORE_DIR} predates "
-            "ProtoObject::newClone (protoCore's object-shape model, after "
-            "3.6.0); protoST's instance templates need it. Update and rebuild it.")
+            "ProtoObject::newClone (protoCore's object-shape model, 3.6.1); "
+            "protoST's instance templates need it. Update and rebuild it.")
     endif()
     unset(_protoCore_newClone)
     set(PROTOCORE_INCLUDE_DIRS ${PROTOCORE_DIR} ${PROTOCORE_DIR}/headers)
