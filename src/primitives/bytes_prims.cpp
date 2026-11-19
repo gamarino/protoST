@@ -11,6 +11,7 @@
 #include "primitives/ProtoioErrors.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/ClassedErrorSignal.h"
+#include "runtime/TransientPin.h"
 #include "protoCore.h"
 
 #include <protoio/digest.h>
@@ -380,6 +381,54 @@ PRIM(prim_UnpackUnsigned) {
                                          "ByteArray unsigned read"));
 }
 
+// aByteArray __unsignedFrom: start to: stop bigEndian: b -> the unsigned
+// Integer the bytes from start to stop spell, of any length: below 2^53 a
+// SmallInteger, above it a LargeInteger. The range follows copyFrom:to:: a
+// stop before start is empty (0), otherwise both ends must be in bounds.
+// Leading zero bytes are skipped; at most six bytes (48 bits, always a
+// SmallInteger) are read into a machine word, and longer values are built
+// from 48-bit chunks with protoCore's exact shift and add, a few Integer
+// operations for an oid instead of one per byte.
+PRIM(prim_UnsignedFromTo) {
+    ARGS(3, "__unsignedFrom:to:bigEndian:");
+    constexpr const char* who = "ByteArray>>unsignedIntegerFrom:to:bigEndian:";
+    const std::string_view v = bytesView(ctx, r);
+    const IndexArg fromArg = indexArg(ctx, a[0], who);
+    const IndexArg toArg = indexArg(ctx, a[1], who);
+    const bool big = booleanArg(a[2], who, "bigEndian");
+    const long long from = fromArg.value, to = toArg.value;
+    if (to < from) return ctx->fromInteger(0);
+    if (from < 1 || to > static_cast<long long>(v.size()))
+        throw ClassedErrorSignal("SubscriptOutOfBounds", std::string(who) + " range "
+                                 + fromArg.text(ctx) + " to " + toArg.text(ctx)
+                                 + " out of bounds (size " + std::to_string(v.size()) + ")");
+    const auto* p = reinterpret_cast<const unsigned char*>(v.data()) + (from - 1);
+    const size_t n = static_cast<size_t>(to - from + 1);
+    // The k-th byte from the most significant one.
+    auto byteAt = [&](size_t k) -> std::uint64_t { return big ? p[k] : p[n - 1 - k]; };
+    size_t k = 0;
+    while (k < n && byteAt(k) == 0) ++k;
+    constexpr size_t chunkBytes = 6;
+    auto chunk = [&](size_t start, size_t count) {
+        std::uint64_t u = 0;
+        for (size_t i = 0; i < count; ++i) u = (u << 8) | byteAt(start + i);
+        return static_cast<long long>(u);
+    };
+    const size_t significant = n - k;
+    if (significant <= chunkBytes) return ctx->fromInteger(chunk(k, significant));
+    size_t head = significant % chunkBytes;
+    if (head == 0) head = chunkBytes;
+    const PO* acc = ctx->fromInteger(chunk(k, head));
+    TransientPin pinAcc(ctx, acc);
+    for (size_t i = k + head; i < n; i += chunkBytes) {
+        acc = acc->shiftLeft(ctx, static_cast<int>(8 * chunkBytes));
+        pinAcc.reset(acc);
+        acc = acc->add(ctx, ctx->fromInteger(chunk(i, chunkBytes)));
+        pinAcc.reset(acc);
+    }
+    return acc;
+}
+
 PRIM(prim_UnpackSigned) {
     ARGS(3, "__unpackSignedAt:width:bigEndian:");
     const std::string_view v = bytesView(ctx, r);
@@ -597,6 +646,7 @@ void installBytesPrimitives(STRuntime& rt) {
         {"__utf8Decode", primitiveMethod<prim_Utf8Decode>},
         {"__unpackUnsignedAt:width:bigEndian:", primitiveMethod<prim_UnpackUnsigned>},
         {"__unpackSignedAt:width:bigEndian:", primitiveMethod<prim_UnpackSigned>},
+        {"__unsignedFrom:to:bigEndian:", primitiveMethod<prim_UnsignedFromTo>},
         {"__unpackFloatAt:width:bigEndian:", primitiveMethod<prim_UnpackFloat>},
         {"__crc32Continuing:", primitiveMethod<prim_Crc32>},
         {"__blake2bSize:key:", primitiveMethod<prim_Blake2b>},
