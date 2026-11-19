@@ -290,6 +290,12 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     out.sym.equal           = S("=");
     out.sym.hash            = S("hash");
     out.sym.lessOrEqual     = S("<=");
+    out.sym.lessThan        = S("<");
+    out.sym.greaterThan     = S(">");
+    out.sym.greaterOrEqual  = S(">=");
+    out.sym.notEqual        = S("~=");
+    out.sym.ivNumerator     = S("_iv_numerator");
+    out.sym.ivDenominator   = S("_iv_denominator");
     out.sym.initialize      = S("initialize");
     out.sym.elementsForIteration = S("__elementsForIteration");
 

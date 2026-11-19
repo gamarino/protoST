@@ -176,6 +176,16 @@ ByteArray >> unsignedLongAt: anIndex bigEndian: aBoolean
 ByteArray >> unsignedLong64At: anIndex bigEndian: aBoolean
   ^ self __unpackUnsignedAt: anIndex width: 8 bigEndian: aBoolean.
 
+ByteArray >> unsignedIntegerFrom: start to: stop bigEndian: aBoolean
+  "The unsigned Integer that the bytes from start to stop spell, in network
+   order when aBoolean is true and least significant byte first when it is
+   false. Any number of bytes: the high bit is never a sign, a value below
+   2^53 is a SmallInteger and a larger one a LargeInteger, built by the
+   primitive (a 16-byte oid is one call). The range is that of
+   copyFrom:to:: a stop before start is empty and answers 0; otherwise a
+   range past either end signals SubscriptOutOfBounds."
+  ^ self __unsignedFrom: start to: stop bigEndian: aBoolean.
+
 ByteArray >> signedByteAt: anIndex
   ^ self __unpackSignedAt: anIndex width: 1 bigEndian: true.
 

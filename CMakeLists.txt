@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(protoST VERSION 0.13.0 LANGUAGES CXX)
+project(protoST VERSION 0.14.0 LANGUAGES CXX)
 
 # The one place the version is written: every binary and library reads it
 # through PROTOST_VERSION (include/protoST/STRuntime.h).
@@ -247,6 +247,7 @@ add_library(protost_runtime STATIC
     src/debugger/BreakpointTable.cpp
     src/primitives/int_prims.cpp
     src/primitives/math_prims.cpp
+    src/primitives/fraction_prims.cpp
     src/primitives/time_prims.cpp
     src/primitives/bool_prims.cpp
     src/primitives/string_prims.cpp

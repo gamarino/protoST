@@ -238,14 +238,17 @@ several cores without locks.
 
 ## Status
 
-Version 0.13.0 (2026-11-18): instances, closures and Arrays are clones of
-per-class templates on protoCore's object-shape model, and protoST uses
-protoCore's public API only. Built from source it requires protoCore 3.6.1 or
-newer (SOVERSION 5, `ProtoObject::newClone`) and protoIO 0.7.0 (tag `v0.7.0`)
-or a later 0.7.x; its `.deb` (below) requires protoCore 3.6.1. CI builds
-against protoCore 3.6.1 (tag `v3.6.1`), which is also the floor. Before the
-release, `ctest` ran 1473 cases on Linux locally, all passing (0.10.0: 1461,
-and the 636 cases of the `tsan` label under ThreadSanitizer). Since 0.6.2 protoST lets
+Version 0.14.0 (2026-11-19): exact `Fraction` comparisons in one primitive,
+`ByteArray >> unsignedIntegerFrom:to:bigEndian:`, and the fixes for S41 (a
+`Fraction`'s `<=` / `>=` against NaN) and S42 (`Array new` and collections made
+by `basicNew` could not be iterated). Since 0.13.0, instances, closures and
+Arrays are clones of per-class templates on protoCore's object-shape model, and
+protoST uses protoCore's public API only. Built from source it requires
+protoCore 3.6.1 or newer (SOVERSION 5, `ProtoObject::newClone`) and protoIO
+0.7.0 (tag `v0.7.0`) or a later 0.7.x; its `.deb` (below) requires protoCore
+3.6.1. CI builds against protoCore 3.6.1 (tag `v3.6.1`), which is also the
+floor. Before the release, `ctest` ran 1479 cases on Linux locally, all passing
+(0.10.0: 1461, and the 636 cases of the `tsan` label under ThreadSanitizer). Since 0.6.2 protoST lets
 protoCore's adaptive heap controller size the heap (budget: 75 % of physical
 memory or of the process memory limit); `PROTOCORE_HEAP_LIMIT_CELLS` forces a
 fixed limit and `PROTOCORE_ADAPTIVE_HEAP=0` restores 0.6.1's fixed 640 MB
@@ -316,7 +319,7 @@ commands, and what differs on Windows, are in
 
 ## Installation
 
-protoST can be packaged with CPack. The 0.13.0 release has a Linux `.deb`
+protoST can be packaged with CPack. The 0.14.0 release has a Linux `.deb`
 attached to its GitHub release (below, with protoCore 3.6.1); other packages
 are built from source as shown below. Every package depends on
 [protoCore](https://github.com/numaes/protoCore) — install protoCore's package
@@ -344,11 +347,11 @@ the GitHub releases (or built as below):
 wsl --install -d Ubuntu-24.04        # in PowerShell, once
 # then, in the Ubuntu shell:
 wget https://github.com/numaes/protoCore/releases/download/v3.6.1/protoCore-3.6.1-Linux.deb
-wget https://github.com/gamarino/protoST/releases/download/v0.13.0/protost-0.13.0-Linux.deb
-sudo apt install ./protoCore-3.6.1-Linux.deb ./protost-0.13.0-Linux.deb
+wget https://github.com/gamarino/protoST/releases/download/v0.14.0/protost-0.14.0-Linux.deb
+sudo apt install ./protoCore-3.6.1-Linux.deb ./protost-0.14.0-Linux.deb
 ```
 
-These are the 0.13.0 release packages. Built from source, protoST 0.13.0 needs
+These are the 0.14.0 release packages. Built from source, protoST 0.14.0 needs
 protoCore 3.6.1 or later; the `.deb` was built against 3.6.1, the release
 to install with it, and depends on `protocore (>= 3.6.1)` through protoCore's
 shlibs file (an older protoCore package is not enough: upgrade it with the

@@ -2478,6 +2478,19 @@ arithmetic, which gives the tower three properties for free:
 > arithmetic operation and comparison. `ZeroDivide` is a subclass of
 > `ArithmeticError` and is resumable.
 
+> **Comparing Fractions.** `<`, `<=`, `>`, `>=`, `=` and `~=` between a
+> `Fraction` and a `Fraction`, an `Integer` of any size or a finite `Float`,
+> in either order, are exact and take one primitive call: the operands are
+> cross-multiplied (on machine words when all are `SmallInteger`s), a `Float`
+> counts as its exact binary value, and nothing rounds through `Float`, so
+> `(1/2) - (1 / (2 raisedTo: 80)) < 0.5` is true. No gcd is computed and no
+> `Fraction` is built; an unnormalized `Fraction` (made with `basicNew`)
+> compares by its value. A `Fraction` is above `Float infinity negated` and
+> below `Float infinity`, however large. Against NaN, `<`, `>` and `=` are
+> false and `~=` is true; a `Fraction`'s `<=` and `>=` are the negations of
+> `>` and `<` and answer true (a NaN receiver answers false to every
+> ordering).
+
 Iteration helpers are bound on `Number`:
 
 | Selector | Meaning |
@@ -2965,11 +2978,21 @@ signals `SubscriptOutOfBounds`. `bigEndian:` takes `true` or `false`.
 | `unsignedLongAt:bigEndian:`, `signedLongAt:bigEndian:` (4 bytes) | |
 | `unsignedLong64At:bigEndian:`, `signedLong64At:bigEndian:` (8 bytes) | (64-bit values above 2^53 - 1 are `LargeInteger`) |
 | `float32At:bigEndian:`, `float64At:bigEndian:` | `nextPutFloat32:bigEndian:`, `nextPutFloat64:bigEndian:` |
+| `unsignedIntegerFrom: start to: stop bigEndian: b` (any number of bytes) | |
 
 A value that does not fit its width signals `Error`; it never wraps.
 `nextPutFloat32:` rounds a finite `Float` to single precision and refuses one
 beyond the single range. Floats travel as bit patterns, so `-0.0`, infinities
 and NaN payloads survive.
+
+`unsignedIntegerFrom:to:bigEndian:` answers the unsigned Integer that the
+bytes from `start` to `stop` spell, of any length: a 16-byte oid is one call,
+`oid unsignedIntegerFrom: 1 to: 16 bigEndian: true`. The high bit is never a
+sign (`#[255 255] unsignedIntegerFrom: 1 to: 2 bigEndian: true` is 65535). A
+value below 2^53 is a `SmallInteger`, a larger one a `LargeInteger`, built by
+the primitive from 48-bit chunks. The range is that of `copyFrom:to:`: a
+`stop` before `start` is empty and answers 0; otherwise a range past either
+end signals `SubscriptOutOfBounds`.
 
 **Checksums, digests and base64.** One-shot functions; there are no
 incremental objects. A digest is a new `ByteArray` (raw bytes; `hex` prints it).

@@ -3,6 +3,93 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
+## 0.14.0 — 2026-11-19
+
+**Requires protoCore 3.6.1**, as 0.13.0 did (the floor is unchanged:
+`find_package(protoCore 3.6.1)`, and the `.deb` depends on
+`protocore (>= 3.6.1)`), and protoIO 0.7.0 at build time. New primitives for
+exact `Fraction` comparison and for reading an unsigned Integer from a byte
+range, and the fixes for S41 and S42.
+
+### Added
+
+- **`ByteArray >> unsignedIntegerFrom: start to: stop bigEndian: aBoolean`**:
+  the unsigned Integer that a byte range spells, big- or little-endian, of any
+  length, in one primitive (`__unsignedFrom:to:bigEndian:` in
+  `bytes_prims.cpp`). A value below 2^53 is a `SmallInteger`, a larger one a
+  `LargeInteger` built from 48-bit chunks with protoCore's exact shift and add;
+  the high bit is never a sign. The range follows `copyFrom:to:` (a stop before
+  the start answers 0; past either end, `SubscriptOutOfBounds`). It can replace
+  the two `unsignedLong64At:bigEndian:` reads, the shift and the add that
+  protoBaseST used for a 16-byte oid.
+
+### Changed
+
+- **Fraction comparisons are one exact primitive.** `<`, `<=`, `>`, `>=`, `=`
+  and `~=` of a `Fraction` against a `Fraction`, an `Integer` or a finite
+  `Float`, and the reverse comparisons that native numbers delegate through
+  `adaptToNumber:andSend:`, call `__fractionCompare:by:` /
+  `__fractionCompareFrom:by:` (`src/primitives/fraction_prims.cpp`). The order
+  was the sign of `self - aNumber`: about forty message sends, two gcds and two
+  new Fractions per comparison. It is now a cross-multiplication, in 128-bit
+  arithmetic when every operand is a `SmallInteger` (protoCore's exact Integer
+  arithmetic otherwise), and a `Float` is compared as its exact binary value.
+  The cases the primitive does not order (NaN, non-numbers, Decimal and other
+  adaptors, instances of another class) take the former code.
+- Results that change, all toward the exact answer:
+  - a `Fraction` against a finite `Float` no longer rounds the `Fraction` to a
+    `Float` first: `((1/2) - (1 / (2 raisedTo: 80))) < 0.5` is now true (it was
+    false, while `<=` was true and `=` false);
+  - a `Fraction` too large for a `Float` (`(10 raisedTo: 400) / 3`) is below
+    `Float infinity`; `Float infinity = ((10 raisedTo: 400) / 3)` was true;
+  - an unnormalized `Fraction`, which only `basicNew setNumerator:denominator:`
+    makes, is `=` to the normalized one and to an equal `Integer`, as its
+    `hash` already was.
+  Against NaN the primitive answers nothing and the general code decides;
+  see S41 under Fixed for `<=` and `>=`.
+
+### Fixed
+
+- **A `Fraction`'s `<=` and `>=` against NaN answer `false` (S41).** They
+  answered `true`, being the negations of `>` and `<`, while every other
+  ordering with NaN answered `false`. Every ordering with NaN and `=` now
+  answer `false` and `~=` answers `true`, in both directions, as IEEE 754,
+  Pharo and protoST's `Float` answer. Pinned by the NaN table of
+  `12-builtins/fraction-compare-exact.st`.
+- **`Array new` is a real empty Array, and a collection made by `basicNew`
+  can be iterated (S42).** `Array new collect: [:x | x]` recursed until
+  `stack depth exceeded`, and so did `do:`, `select:`, `,` and `printString`:
+  `Array new` fell back to `Behavior >> new`, whose instance has no element
+  store, and the native iteration, which recognised an Array by its store,
+  asked its `do:`, which is the native iteration again. `basicNew` of `Array`,
+  `OrderedCollection`, `Bag` and `SortedCollection` made the same instance, so
+  an empty `SortedCollection` recursed and `#() asSortedCollection` failed. An
+  instance of those classes whose store was never set now iterates as empty,
+  `Array new` answers `Array new: 0` (as in Pharo) and `Interval new` the
+  empty interval `(1 to: 0)`. Found while building protoBaseST. Test:
+  `09-collections/new-without-size.st`.
+
+### Measured
+
+`benchmarks/micro/fraction_bytes.st` (new): nanoseconds per loop iteration,
+loop included, median of three interleaved runs of 0.13.0 and this tree,
+RelWithDebInfo, protoCore 3.6.1, run one at a time. The loop alone costs
+about 0.5 µs (Fraction loops) and 0.9 µs (oid loops), the control lines.
+
+| Operation | 0.13.0 | now |
+|---|---:|---:|
+| Fraction < Fraction | 11301 | 987 |
+| Fraction <= Fraction | 15095 | 1016 |
+| Fraction > Fraction | 16265 | 1009 |
+| Fraction = Fraction | 1740 | 1004 |
+| Fraction < Fraction, 80-bit terms | 1902657 | 2450 |
+| Fraction < Integer | 8428 | 960 |
+| Integer < Fraction | 22300 | 1274 |
+| Fraction < Float | 3078 | 1101 |
+| Float < Fraction | 79272 | 1438 |
+| 16-byte oid, two `unsignedLong64At:bigEndian:` reads, shift, add | 8926 | 7723 |
+| 16-byte oid, `unsignedIntegerFrom:to:bigEndian:` | — | 2000 |
+
 ## 0.13.0 — 2026-11-18
 
 **Requires protoCore 3.6.1** (its object-shape model and
