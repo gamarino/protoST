@@ -420,10 +420,24 @@ const proto::ProtoObject* hashedEntries(STRuntime& rt, proto::ProtoContext* ctx,
 // occurrences, compared with `indexOfEqual`, gives correct `do:` /
 // `occurrencesOf:` / derived-protocol behaviour. `species` still resolves `Bag` by prototype identity, so a Bag's
 // `collect:`/`select:` still yields a Bag.
+//
+// An instance of one of those three classes (or of a subclass) whose
+// `__data__` was never set is list-backed too, and empty: `basicNew` makes
+// such an instance (`Array basicNew`, the `SortedCollection` that
+// `sortBlock:` builds), and `arrayData` already reads an absent store as the
+// empty list for `size`, `at:` and `isEmpty`. Before 0.14.0 (S42) only the
+// store made an object list-backed, so iterating a storeless instance took the
+// user-collection path of forEachElement, whose `do:` is the native `do:`
+// itself, and recursed until the stack depth was exceeded. The class is read
+// only when the store is absent, so a filled collection costs nothing more.
 bool isListBacked(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* obj) {
     if (!obj) return false;
     const proto::ProtoObject* d = obj->getAttribute(ctx, dataKey(rt));
-    return d && d != PROTO_NONE && d->asList(ctx) != nullptr;
+    if (d && d != PROTO_NONE) return d->asList(ctx) != nullptr;
+    const Bootstrap& b = rt.bootstrap();
+    return descendsFrom(ctx, obj, b.arrayProto, b.objectProto)
+        || descendsFrom(ctx, obj, b.orderedCollectionProto, b.objectProto)
+        || descendsFrom(ctx, obj, b.bagProto, b.objectProto);
 }
 
 // Replace a list-backed collection's `__data__` with a fresh snapshot. Every

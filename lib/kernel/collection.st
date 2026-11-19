@@ -213,6 +213,11 @@ Bag class >> withAll: aCollection
 
 "An Array has a fixed size and no add:, so its creators fill a new: instance."
 
+Array class >> new
+  "The empty Array, as in Pharo (S42: Behavior's new made an instance with no
+   element store)."
+  ^ self new: 0.
+
 Array class >> new: size withAll: anObject
   | array |
   array := self new: size.
@@ -565,6 +570,11 @@ Dictionary >> hash
  single-element, an inexact stride, Float, Fraction or LargeInteger bounds)
  is a NumericInterval: an Interval subclass that keeps its bounds and computes
  its elements in protoST."
+
+Interval class >> new
+  "The empty Interval, (1 to: 0) (S42: Behavior's new made an Interval with
+   no bounds, which could not print itself)."
+  ^ self from: 1 to: 0.
 
 Interval class >> from: start to: stop
   ^ start to: stop.
