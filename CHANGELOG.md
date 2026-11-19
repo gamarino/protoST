@@ -3,7 +3,13 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
-## Unreleased
+## 0.14.0 — 2026-11-19
+
+**Requires protoCore 3.6.1**, as 0.13.0 did (the floor is unchanged:
+`find_package(protoCore 3.6.1)`, and the `.deb` depends on
+`protocore (>= 3.6.1)`), and protoIO 0.7.0 at build time. New primitives for
+exact `Fraction` comparison and for reading an unsigned Integer from a byte
+range, and the fixes for S41 and S42.
 
 ### Added
 

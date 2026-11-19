@@ -1,20 +1,20 @@
 # Installing protoST
 
-protoST 0.13.0 is a Smalltalk-syntax, actor-native runtime on protoCore. It is
+protoST 0.14.0 is a Smalltalk-syntax, actor-native runtime on protoCore. It is
 a consumer of protoCore, never a bundler of it: `bin/protost` links
 `libprotoCore.so.5`, and every package protoST produces declares a runtime
 dependency on protoCore's own package instead of shipping a copy.
 
 On a Debian or Ubuntu machine where protoCore's package is installed, the
 library is `/usr/lib/x86_64-linux-gnu/libprotoCore.so.5`, a link to
-`libprotoCore.so.<version>`. protoST 0.13.0 needs protoCore 3.6.1 or later
+`libprotoCore.so.<version>`. protoST 0.14.0, like 0.13.0, needs protoCore 3.6.1 or later
 (*Prerequisites*); 0.8.0 to 0.12.0 needed 3.4.0 (0.7.0 needed 3.0.0). Its `.deb`
 is built and tested against protoCore 3.6.1, the release to install with it,
 and depends on `protocore (>= 3.6.1)`. CI builds against protoCore 3.6.1 on
 Linux, macOS and Windows, and the floor job builds the same release, the
-declared minimum; it pins protoIO 0.7.0 (tag `v0.7.0`), which 0.13.0 requires
-(see *Prerequisites*). The suite was last run locally (2026-11-18) against
-protoCore 3.6.1's code (master `eced46bd`) and protoIO 0.7.0.
+declared minimum; it pins protoIO 0.7.0 (tag `v0.7.0`), which 0.14.0 requires
+(see *Prerequisites*). The suite was last run locally (2026-11-19, 1479
+cases) against protoCore 3.6.1 (tag `v3.6.1`) and protoIO 0.7.0.
 
 ---
 
@@ -28,7 +28,7 @@ protoCore 3.6.1's code (master `eced46bd`) and protoIO 0.7.0.
   where the REPL uses the console's own line editing (*Windows (MSVC)*).
 - **protoIO 0.7.0 or a later 0.7.x** at build time only (0.7.0 adds
   `file::realPath`, the symbolic-link-resolving canonical path, behind
-  `FileReference >> realPath` in protoST 0.12.0, also required by 0.13.0; 0.11.0 needs 0.6.x; 0.6.0
+  `FileReference >> realPath` in protoST 0.12.0, also required by 0.13.0 and 0.14.0; 0.11.0 needs 0.6.x; 0.6.0
   adds the hard-link count, `file::Stat::linkCount` and `file::linkCount(fd)`, behind
   `FileReference >> linkCount` and `BinaryFile >> linkCount` in protoST
   0.11.0; 0.10.0 needs 0.5.x; 0.5.0 adds
@@ -354,16 +354,16 @@ wsl --install -d Ubuntu-24.04
 
 # Then, in the Ubuntu shell: the two packages of the GitHub releases.
 wget https://github.com/numaes/protoCore/releases/download/v3.6.1/protoCore-3.6.1-Linux.deb
-wget https://github.com/gamarino/protoST/releases/download/v0.13.0/protost-0.13.0-Linux.deb
-sudo apt install ./protoCore-3.6.1-Linux.deb ./protost-0.13.0-Linux.deb
+wget https://github.com/gamarino/protoST/releases/download/v0.14.0/protost-0.14.0-Linux.deb
+sudo apt install ./protoCore-3.6.1-Linux.deb ./protost-0.14.0-Linux.deb
 protost --version
 ```
 
 The packages are attached to the GitHub releases
 [protoCore v3.6.1](https://github.com/numaes/protoCore/releases/tag/v3.6.1)
-and [protoST v0.13.0](https://github.com/gamarino/protoST/releases/tag/v0.13.0)
+and [protoST v0.14.0](https://github.com/gamarino/protoST/releases/tag/v0.14.0)
 (built on Ubuntu 24.04, x86_64). The same commands install them on Ubuntu
-24.04 itself. Built from source, protoST 0.13.0's floor is protoCore 3.6.1;
+24.04 itself. Built from source, protoST 0.14.0's floor is protoCore 3.6.1;
 the `.deb` depends on `protocore (>= 3.6.1)`, the release CI builds against
 (*Prerequisites*). The package also installs the FAST talk's demos, ready to
 run: `cd /usr/share/protoST/talks/2026-10-15-fas/demos && ./check_all.sh`
