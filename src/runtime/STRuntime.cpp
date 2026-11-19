@@ -71,6 +71,7 @@
 
 namespace protoST { void installIntPrimitives(STRuntime& rt); }
 namespace protoST { void installMathPrimitives(STRuntime& rt); }
+namespace protoST { void installFractionPrimitives(STRuntime& rt); }
 namespace protoST { void installTimePrimitives(STRuntime& rt); }
 namespace protoST { void installBoolPrimitives(STRuntime& rt); }
 namespace protoST { void installStringPrimitives(STRuntime& rt); }
@@ -861,6 +862,7 @@ void STRuntime::construct() {
 
     installIntPrimitives(*this);
     installMathPrimitives(*this);
+    installFractionPrimitives(*this);
     installTimePrimitives(*this);
     installBoolPrimitives(*this);
     installStringPrimitives(*this);

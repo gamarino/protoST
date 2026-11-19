@@ -264,6 +264,15 @@ struct Bootstrap {
         const proto::ProtoString* equal           = nullptr;  // =
         const proto::ProtoString* hash            = nullptr;  // hash
         const proto::ProtoString* lessOrEqual     = nullptr;  // <=
+        // The other comparison selectors and the instance variables of a
+        // Fraction, read by the Fraction comparison primitives
+        // (fraction_prims.cpp).
+        const proto::ProtoString* lessThan        = nullptr;  // <
+        const proto::ProtoString* greaterThan     = nullptr;  // >
+        const proto::ProtoString* greaterOrEqual  = nullptr;  // >=
+        const proto::ProtoString* notEqual        = nullptr;  // ~=
+        const proto::ProtoString* ivNumerator     = nullptr;  // _iv_numerator
+        const proto::ProtoString* ivDenominator   = nullptr;  // _iv_denominator
         const proto::ProtoString* initialize      = nullptr;  // initialize
         const proto::ProtoString* elementsForIteration = nullptr;  // __elementsForIteration
     } sym;

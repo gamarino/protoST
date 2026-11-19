@@ -73,21 +73,38 @@ Fraction >> reciprocal
 Fraction >> abs
   ^ numerator < 0 ifTrue: [self negated] ifFalse: [self].
 
+"--- comparing ------------------------------------------------------------------
+ Against a Fraction, an Integer of any size or a finite Float the order is
+ exact and decided in one primitive call (__fractionCompare:by:, in
+ src/primitives/fraction_prims.cpp): cross-multiplication, on machine words
+ when every operand is a SmallInteger, and a Float taken as its exact value.
+ No gcd, no intermediate Fraction, nothing rounds through Float; an
+ unnormalized Fraction compares by its value. The primitive answers nil for
+ the pairs it does not order (a NaN, a non-number, an adaptor such as a
+ Decimal, an instance of another class); the general code after it decides
+ those, as it always did. Against NaN that keeps the former answers: <, >
+ and = are false, and <= and >= are true, being the negations of > and <."
+
 Fraction >> < aNumber
+  (self __fractionCompare: aNumber by: #<) ifNotNil: [:answer | ^ answer].
   aNumber isFloat ifTrue: [^ self asFloat < aNumber].
   (self _isAdaptor: aNumber) ifTrue: [^ aNumber adaptToNumber: self andSend: #<].
   ^ (self - aNumber) numerator < 0.
 
 Fraction >> > aNumber
+  (self __fractionCompare: aNumber by: #>) ifNotNil: [:answer | ^ answer].
   ^ aNumber < self.
 
 Fraction >> <= aNumber
+  (self __fractionCompare: aNumber by: #<=) ifNotNil: [:answer | ^ answer].
   ^ (self > aNumber) not.
 
 Fraction >> >= aNumber
+  (self __fractionCompare: aNumber by: #>=) ifNotNil: [:answer | ^ answer].
   ^ (self < aNumber) not.
 
 Fraction >> = aNumber
+  (self __fractionCompare: aNumber by: #=) ifNotNil: [:answer | ^ answer].
   aNumber isNumber ifFalse: [
     ^ (self _isAdaptor: aNumber) and: [(aNumber adaptToNumber: self andSend: #=) == true]].
   "Exact, as in Pharo: (1/10) = 0.1 is false, (1/2) = 0.5 is true."
@@ -137,7 +154,10 @@ Fraction >> displayString
 
 "Double dispatch from the native primitives: a native number op aFraction."
 Fraction >> adaptToNumber: rcvr andSend: selector
-  "Comparisons with a Float are exact; arithmetic with a Float is Float."
+  "Comparisons with a Float are exact; arithmetic with a Float is Float.
+   A comparison with an Integer or a non-NaN Float is answered by the
+   primitive, exactly; the rest by the code after it."
+  (self __fractionCompareFrom: rcvr by: selector) ifNotNil: [:answer | ^ answer].
   (rcvr isFloat and: [#(#= #~= #< #> #<= #>=) includes: selector])
     ifTrue: [^ rcvr isFinite
       ifTrue: [rcvr asExactFraction perform: selector with: self]
@@ -169,6 +189,7 @@ Integer >> asFraction
  where the result is rational, through asFloat where it is not."
 
 Fraction >> ~= aNumber
+  (self __fractionCompare: aNumber by: #~=) ifNotNil: [:answer | ^ answer].
   ^ (self = aNumber) not.
 
 Fraction >> quo: aNumber
