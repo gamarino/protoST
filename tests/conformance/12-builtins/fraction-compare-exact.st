@@ -1,16 +1,18 @@
-"EXPECT: #(true false true false true true true true true true true true true true true false true false true true false false true true true true true true true true true true true true true true true true true true true true true true true false false) ftftft ffffft|ttffft ffttft|ffttft ttffft|ftftft ffffft|ttffft ffttft|ffttft ttffft|ftftft ffffft|ttffft ffttft|ffttft ttffft|"
+"EXPECT: #(true false true false true true true true true true true true true true true false true false true true false false true true true true true true true true true true true true true true true true true true true true true true true false false true true) ffffft ffffft|ttffft ffttft|ffttft ttffft|ffffft ffffft|ttffft ffttft|ffttft ttffft|ffffft ffffft|ttffft ffttft|ffttft ttffft|"
 "Fractions compare exactly with Fractions, Integers, LargeIntegers and finite
  Floats, in both directions, and nothing rounds through Float (the
  comparisons were a subtraction and two normalized Fractions; they are now
  one primitive). An unnormalized Fraction equals the normalized one. The
  last string is the table against NaN, +Inf and -Inf, receiver op Float then
- Float op receiver, for < <= > >= = ~=: the NaN columns are what the kernel
- answered before (a Fraction's <= and >= are the negations of > and <); a
+ Float op receiver, for < <= > >= = ~=: every ordering with NaN and = are
+ false and ~= is true, in both directions, as IEEE 754 and Pharo answer (S41:
+ a Fraction's <= and >= answered true, being the negations of > and <); a
  Fraction too large for a Float (10^400/3) is still below +Inf. The
  unnormalized Fractions with a negative denominator check the sign
- correction of every path (SmallInteger, LargeInteger, Float); the two F2
- cases (last) check that an instance of another class, in either order, is
- decided by the general code, which reads F2's overrides."
+ correction of every path (SmallInteger, LargeInteger, Float); the first two
+ F2 cases check that an instance of another class, in either order, is
+ decided by the general code, which reads F2's overrides; the last two, that
+ the general code answers false for <= and >= against NaN (S41)."
 Fraction subclass: #F2 instanceVariableNames: ''.
 
 "F2 changes what the general comparison code reads: numerator answers ten
@@ -54,7 +56,9 @@ f := {
   (Fraction basicNew setNumerator: 1 denominator: (2 raisedTo: 70) negated) < 1.0e-30.
   (1 / (2 raisedTo: 80)) > (Fraction basicNew setNumerator: 1 denominator: (2 raisedTo: 70) negated).
   (F2 basicNew setNumerator: 1 denominator: 3) < (1/2).
-  (1/2) = (F2 basicNew setNumerator: 1 denominator: 2) }.
+  (1/2) = (F2 basicNew setNumerator: 1 denominator: 2).
+  ((F2 basicNew setNumerator: 1 denominator: 3) <= Float nan) not.
+  ((F2 basicNew setNumerator: 1 denominator: 3) >= Float nan) not }.
 out := WriteStream on: String new.
 ops := #(#< #<= #> #>= #= #~=).
 {1/3. (10 raisedTo: 400) / 3. ((10 raisedTo: 400) / 3) negated} do: [:x |

@@ -82,8 +82,10 @@ Fraction >> abs
  unnormalized Fraction compares by its value. The primitive answers nil for
  the pairs it does not order (a NaN, a non-number, an adaptor such as a
  Decimal, an instance of another class); the general code after it decides
- those, as it always did. Against NaN that keeps the former answers: <, >
- and = are false, and <= and >= are true, being the negations of > and <."
+ those. Against NaN every ordering and = answer false and ~= answers true,
+ as IEEE 754 and Pharo answer and as a Float does: <= and >= are the
+ negations of > and <, so they answer false for a NaN before negating
+ (S41)."
 
 Fraction >> < aNumber
   (self __fractionCompare: aNumber by: #<) ifNotNil: [:answer | ^ answer].
@@ -97,10 +99,12 @@ Fraction >> > aNumber
 
 Fraction >> <= aNumber
   (self __fractionCompare: aNumber by: #<=) ifNotNil: [:answer | ^ answer].
+  (aNumber isFloat and: [aNumber isNaN]) ifTrue: [^ false].
   ^ (self > aNumber) not.
 
 Fraction >> >= aNumber
   (self __fractionCompare: aNumber by: #>=) ifNotNil: [:answer | ^ answer].
+  (aNumber isFloat and: [aNumber isNaN]) ifTrue: [^ false].
   ^ (self < aNumber) not.
 
 Fraction >> = aNumber

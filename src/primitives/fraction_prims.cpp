@@ -32,8 +32,9 @@ namespace protoST {
 // answers `other selector aFraction` (the adaptToNumber:andSend: direction).
 // selector is one of < <= > >= = ~=. Each answers nil, for the kernel's
 // general code to decide, when it does not order the pair exactly: a NaN
-// (whose answers the kernel keeps as they were), a non-number or a Decimal,
-// an object of another class, a zero denominator, another selector.
+// (unordered; the kernel answers false for every ordering, S41), a
+// non-number or a Decimal, an object of another class, a zero denominator,
+// another selector.
 
 namespace {
 
