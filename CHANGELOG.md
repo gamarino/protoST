@@ -39,8 +39,29 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
   - an unnormalized `Fraction`, which only `basicNew setNumerator:denominator:`
     makes, is `=` to the normalized one and to an equal `Integer`, as its
     `hash` already was.
-  Against NaN the answers are unchanged, including a `Fraction`'s `<=` and
-  `>=`, which answer true (each is the negation of `>` or `<`).
+  Against NaN the primitive answers nothing and the general code decides;
+  see S41 under Fixed for `<=` and `>=`.
+
+### Fixed
+
+- **A `Fraction`'s `<=` and `>=` against NaN answer `false` (S41).** They
+  answered `true`, being the negations of `>` and `<`, while every other
+  ordering with NaN answered `false`. Every ordering with NaN and `=` now
+  answer `false` and `~=` answers `true`, in both directions, as IEEE 754,
+  Pharo and protoST's `Float` answer. Pinned by the NaN table of
+  `12-builtins/fraction-compare-exact.st`.
+- **`Array new` is a real empty Array, and a collection made by `basicNew`
+  can be iterated (S42).** `Array new collect: [:x | x]` recursed until
+  `stack depth exceeded`, and so did `do:`, `select:`, `,` and `printString`:
+  `Array new` fell back to `Behavior >> new`, whose instance has no element
+  store, and the native iteration, which recognised an Array by its store,
+  asked its `do:`, which is the native iteration again. `basicNew` of `Array`,
+  `OrderedCollection`, `Bag` and `SortedCollection` made the same instance, so
+  an empty `SortedCollection` recursed and `#() asSortedCollection` failed. An
+  instance of those classes whose store was never set now iterates as empty,
+  `Array new` answers `Array new: 0` (as in Pharo) and `Interval new` the
+  empty interval `(1 to: 0)`. Found while building protoBaseST. Test:
+  `09-collections/new-without-size.st`.
 
 ### Measured
 
