@@ -1,4 +1,4 @@
-"EXPECT: #(true false true false true true true true true true true true true true true false true false true true false false true true true true true true true true true true true true true true true true true) ftftft ffffft|ttffft ffttft|ffttft ttffft|ftftft ffffft|ttffft ffttft|ffttft ttffft|ftftft ffffft|ttffft ffttft|ffttft ttffft|"
+"EXPECT: #(true false true false true true true true true true true true true true true false true false true true false false true true true true true true true true true true true true true true true true true true true true true true true false false) ftftft ffffft|ttffft ffttft|ffttft ttffft|ftftft ffffft|ttffft ffttft|ffttft ttffft|ftftft ffffft|ttffft ffttft|ffttft ttffft|"
 "Fractions compare exactly with Fractions, Integers, LargeIntegers and finite
  Floats, in both directions, and nothing rounds through Float (the
  comparisons were a subtraction and two normalized Fractions; they are now
@@ -6,7 +6,22 @@
  last string is the table against NaN, +Inf and -Inf, receiver op Float then
  Float op receiver, for < <= > >= = ~=: the NaN columns are what the kernel
  answered before (a Fraction's <= and >= are the negations of > and <); a
- Fraction too large for a Float (10^400/3) is still below +Inf."
+ Fraction too large for a Float (10^400/3) is still below +Inf. The
+ unnormalized Fractions with a negative denominator check the sign
+ correction of every path (SmallInteger, LargeInteger, Float); the two F2
+ cases (last) check that an instance of another class, in either order, is
+ decided by the general code, which reads F2's overrides."
+Fraction subclass: #F2 instanceVariableNames: ''.
+
+"F2 changes what the general comparison code reads: numerator answers ten
+ times the stored one and - answers the negated difference. The primitive
+ reads the stored values, so it must leave an F2 to the general code."
+F2 >> numerator
+  ^ numerator * 10.
+
+F2 >> - aNumber
+  ^ (super - aNumber) negated.
+
 | half twoFourths eightHalves big small n m f out ops tinyBelowHalf |
 half := 1/2.
 twoFourths := Fraction basicNew setNumerator: 2 denominator: 4.
@@ -31,7 +46,15 @@ f := {
   (tinyBelowHalf = 0.5) not. 0.5 > tinyBelowHalf. (1/2) = 0.5.
   ((1/3) < (1/3) asFloat) not. (1/3) > -0.0. (1 / (2 raisedTo: 1075)) < (0.5 raisedTo: 1074).
   (1 / (2 raisedTo: 1074)) = (0.5 raisedTo: 1074). ((10 raisedTo: 299) / 3) < 1.0e300.
-  ((3/2) max: 1) = (3/2). ((1/2) between: 0 and: 1) }.
+  ((3/2) max: 1) = (3/2). ((1/2) between: 0 and: 1).
+  (Fraction basicNew setNumerator: -1 denominator: -2) = (1/2).
+  (Fraction basicNew setNumerator: 1 denominator: -3) < 0.1.
+  0 > (Fraction basicNew setNumerator: 1 denominator: -3).
+  (Fraction basicNew setNumerator: 1 denominator: (2 raisedTo: 70) negated) < (1 / (2 raisedTo: 80)).
+  (Fraction basicNew setNumerator: 1 denominator: (2 raisedTo: 70) negated) < 1.0e-30.
+  (1 / (2 raisedTo: 80)) > (Fraction basicNew setNumerator: 1 denominator: (2 raisedTo: 70) negated).
+  (F2 basicNew setNumerator: 1 denominator: 3) < (1/2).
+  (1/2) = (F2 basicNew setNumerator: 1 denominator: 2) }.
 out := WriteStream on: String new.
 ops := #(#< #<= #> #>= #= #~=).
 {1/3. (10 raisedTo: 400) / 3. ((10 raisedTo: 400) / 3) negated} do: [:x |

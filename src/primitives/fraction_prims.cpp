@@ -110,7 +110,7 @@ int compareRationals(proto::ProtoContext* ctx, const Rational& x, const Rational
         const long long n1 = proto::asSmallInt(x.num), d1 = proto::asSmallInt(x.den);
         const long long n2 = proto::asSmallInt(y.num), d2 = proto::asSmallInt(y.den);
 #if defined(__SIZEOF_INT128__)
-        // |n| and |d| are below 2^53, so each product is below 2^106.
+        // |n| and |d| are at most 2^53, so each product is at most 2^106.
         const __int128 lhs = static_cast<__int128>(n1) * d2;
         const __int128 rhs = static_cast<__int128>(n2) * d1;
         return ((lhs > rhs) - (lhs < rhs)) * denSigns;
@@ -125,6 +125,13 @@ int compareRationals(proto::ProtoContext* ctx, const Rational& x, const Rational
         }
 #endif
     }
+    // The operands are reachable from the receiver and the argument, which
+    // the calling frame roots; they are pinned anyway, so that no Integer
+    // this function reads is held only by a C++ local across an allocation.
+    TransientPin pinN1(ctx, x.num);
+    TransientPin pinD1(ctx, x.den);
+    TransientPin pinN2(ctx, y.num);
+    TransientPin pinD2(ctx, y.den);
     const PO* lhs = x.num->multiply(ctx, y.den);
     TransientPin pinLhs(ctx, lhs);
     const PO* rhs = y.num->multiply(ctx, x.den);
@@ -177,6 +184,7 @@ int compareRationalWithDouble(proto::ProtoContext* ctx, const Rational& q, doubl
         return c * denSign;
     }
 #endif
+    TransientPin pinDen(ctx, q.den);   // as in compareRationals
     const PO* mantissa = ctx->fromLong(mant);
     TransientPin pinMantissa(ctx, mantissa);
     const PO* rhs = mantissa->multiply(ctx, q.den);

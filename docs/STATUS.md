@@ -95,7 +95,7 @@ stable id and file it in the right bucket.
   was an adversarial Smalltalk-semantics audit of about 1,100 probe programs
   in two rounds; each fix of a wrong result, crash or hang it found carries a
   regression test.
-- **Open bugs:** none (S3, and S37-S40 found while building protoBaseST, closed for 0.10.0). K14 in
+- **Open bugs:** S41 (a `Fraction`'s `<=` / `>=` against NaN answer `true`; awaiting the maintainer's decision). S3, and S37-S40 found while building protoBaseST, were closed for 0.10.0. K14 in
   [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md) (one selector defined on both sides
   of a class kept only the later method, found after 0.9.0) is resolved for
   0.10.0. Known limitations of
@@ -556,7 +556,7 @@ idiomatic code; Low = narrow edge case).
 
 | Id | Bug | Severity |
 |----|-----|----------|
-| — | None. | |
+| S41 | **A `Fraction`'s `<=` and `>=` against NaN answer `true`.** `(1/3) <= Float nan` and `(1/3) >= Float nan` are `true`, while `(1/3) < Float nan`, `>`, `=` and every ordering with a NaN receiver (`Float nan <= (1/3)`) are `false`, as IEEE 754 and Pharo answer for all of them. Cause: `Fraction >> <=` is `(self > aNumber) not` and `>=` is `(self < aNumber) not`, so the negation of an unordered `false` comes out `true`. The exact comparison primitive (`fraction_prims.cpp`) answers `nil` for a NaN and leaves it to that code, which keeps the former answers on purpose. Awaiting the maintainer's decision; the fix is to answer `false` for a NaN argument before the negation. Pinned by `12-builtins/fraction-compare-exact.st` (its NaN table). | Low |
 
 ---
 

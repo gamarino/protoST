@@ -13,7 +13,7 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
   `bytes_prims.cpp`). A value below 2^53 is a `SmallInteger`, a larger one a
   `LargeInteger` built from 48-bit chunks with protoCore's exact shift and add;
   the high bit is never a sign. The range follows `copyFrom:to:` (a stop before
-  the start answers 0; past either end, `SubscriptOutOfBounds`). It replaces
+  the start answers 0; past either end, `SubscriptOutOfBounds`). It can replace
   the two `unsignedLong64At:bigEndian:` reads, the shift and the add that
   protoBaseST used for a 16-byte oid.
 

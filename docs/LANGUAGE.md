@@ -2981,6 +2981,9 @@ signals `SubscriptOutOfBounds`. `bigEndian:` takes `true` or `false`.
 | `unsignedIntegerFrom: start to: stop bigEndian: b` (any number of bytes) | |
 
 A value that does not fit its width signals `Error`; it never wraps.
+`nextPutFloat32:` rounds a finite `Float` to single precision and refuses one
+beyond the single range. Floats travel as bit patterns, so `-0.0`, infinities
+and NaN payloads survive.
 
 `unsignedIntegerFrom:to:bigEndian:` answers the unsigned Integer that the
 bytes from `start` to `stop` spell, of any length: a 16-byte oid is one call,
@@ -2990,9 +2993,6 @@ value below 2^53 is a `SmallInteger`, a larger one a `LargeInteger`, built by
 the primitive from 48-bit chunks. The range is that of `copyFrom:to:`: a
 `stop` before `start` is empty and answers 0; otherwise a range past either
 end signals `SubscriptOutOfBounds`.
-`nextPutFloat32:` rounds a finite `Float` to single precision and refuses one
-beyond the single range. Floats travel as bit patterns, so `-0.0`, infinities
-and NaN payloads survive.
 
 **Checksums, digests and base64.** One-shot functions; there are no
 incremental objects. A digest is a new `ByteArray` (raw bytes; `hex` prints it).
