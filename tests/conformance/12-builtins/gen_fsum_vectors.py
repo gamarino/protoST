@@ -3,12 +3,15 @@
 
     python3 tests/conformance/12-builtins/gen_fsum_vectors.py
 
-writes _vectors_fsum.st next to this script. The answers are CPython's own
-math.fsum, run on this interpreter (CPython 3.14 when the file was committed):
+writes _vectors_fsum.st and _vectors_fsum_pow.st next to this script. The
+answers are CPython's own math.fsum, run on this interpreter (CPython 3.14 on
+glibc Linux when the files were committed):
 
-  fsum:                            math.fsum(xs)
-  fsumOfProducts:with:             math.fsum(x * y for x, y in zip(xs, ys))
-  fsumOfSquaredDifferences:with:   math.fsum((x - y) * (x - y) for x, y in zip(xs, ys))
+  fsum:                               math.fsum(xs)
+  fsumOfProducts:with:                math.fsum(x * y for x, y in zip(xs, ys))
+  fsumOfSquaredDifferences:with:      math.fsum((x - y) * (x - y) for x, y in zip(xs, ys))
+  fsumOfPowSquaredDifferences:with:   math.fsum((x - y) ** 2 for x, y in zip(xs, ys))
+                                      (_vectors_fsum_pow.st, 0.16.0)
 
 The two-sequence forms are what protoBaseST's vector scores compute
 (proto_db vector_backends.py): every product and difference is one IEEE
@@ -34,12 +37,41 @@ Entry layouts (each an Array):
   VectorsFsum sums         #(name #(x1 x2 ...) expected)
   VectorsFsum products     #(name #(x1 ...) #(y1 ...) expected)
   VectorsFsum sqdiffs      #(name #(x1 ...) #(y1 ...) expected)
+  VectorsFsumPow sqpows    #(name #(x1 ...) #(y1 ...) expected libmDependent decisive)
+
+The pow form. CPython's float ** float calls the C library's pow (after its
+own sign handling: a negative base is replaced by its absolute value, which
+for the exponent 2 changes nothing), so on glibc `d ** 2` is glibc's
+pow(d, 2.0). glibc's pow is not correctly rounded: when the exact square of d
+lies half-way between two doubles it rounds either way (about half of such
+ties differ from d * d, which rounds to even), and it misrounds a few non-tie
+squares as well. The pow cases therefore include ties and non-ties where
+pow(d, 2.0) and d * d differ, and whose sums differ, so that the vectors fail
+an implementation that computes d * d (or lets the compiler fold pow(d, 2.0)
+into d * d).
+
+libmDependent is true when at least one term of the case has
+(x - y) ** 2 != (x - y) * (x - y) on this interpreter; decisive is true when,
+moreover, the fsum of the d * d terms differs from the expected answer (such a
+case fails an implementation that squares by multiplying). Its expected value is
+glibc's, so the test pins its bytes on Linux only; another C library's pow
+may round those squares differently (CPython on that platform would answer
+what that pow answers). Every case, on every platform, must also equal
+protoST's own `Float fsum: (... collect: [... raisedTo: 2])`, which calls the
+same pow.
+
+One difference from CPython is kept on purpose. When (x - y) ** 2 overflows,
+CPython raises OverflowError at the `**`, before math.fsum sees the term;
+protoST's `raisedTo: 2` answers infinity there, as the C library's pow does,
+and so does the primitive. Such a case expects the sum with an infinite term
+(its name says "CPython raises at **").
 
 The random cases use a fixed seed: a rerun leaves `git diff` clean. The file
 starts with "EXPECT: generated" like the 15-binary vector modules, and its
 name starts with '_', so the conformance runner does not run it on its own.
 """
 import math
+import platform
 import random
 import struct
 import sys
@@ -48,6 +80,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "_vectors_fsum.st"
+OUT_POW = HERE / "_vectors_fsum_pow.st"
 
 INF = math.inf
 NAN = math.nan
@@ -338,6 +371,135 @@ def pair_cases(rng, kind):
     return out
 
 
+# --- the pow form (0.16.0) ------------------------------------------------------
+
+def pow_term(x, y):
+    """(x - y) ** 2 as CPython computes it, except that a square that overflows
+    is infinity (the C library's pow, and protoST's raisedTo:) instead of
+    CPython's OverflowError."""
+    d = x - y
+    try:
+        return d ** 2
+    except OverflowError:
+        return INF
+
+
+def pow_differs(d):
+    """True when this interpreter's d ** 2 is not the rounded d * d."""
+    if not math.isfinite(d):
+        return False
+    try:
+        p = d ** 2
+    except OverflowError:
+        return False
+    return p != d * d
+
+
+def pow_cases(rng):
+    cases = []
+
+    def add(name, xs, ys):
+        cases.append((name, list(xs), list(ys)))
+
+    # The edge cases of the other two-sequence forms.
+    add("empty", [], [])
+    add("one", [3.0], [0.5])
+    add("-0.0 - 1", [-0.0], [1.0])
+    add("-0.0 - -0.0", [-0.0], [-0.0])
+    add("0.0 - -0.0 and -0.0 - 0.0", [0.0, -0.0], [-0.0, 0.0])
+    add("negative differences", [-1.0, 1.0, -3.5], [1.0, 3.0, 0.25])
+    add("1e8 1 -1e8 against zeros", [1e8, 1.0, -1e8], [0.0, 0.0, 0.0])
+    add("a == b", [1.5, -2.0, 0.0], [1.5, -2.0, -0.0])
+    add("sum overflows (intermediate)", [1e154, 1e154, 1.0], [0.0, -0.0, 1.0])
+    add("sum overflows then cancels", [1e154, 1e154, 0.0], [0.0, 0.0, 0.0])
+    add("square overflows, CPython raises at **", [1e200], [0.0])
+    add("square overflows twice, CPython raises at **", [1e200, -1e300], [-1e200, 1e300])
+    add("difference overflows", [FMAX], [-FMAX])
+    add("inf - 1", [INF], [1.0])
+    add("1 - inf and inf - 1", [1.0, INF], [INF, 1.0])
+    add("inf - inf (nan)", [INF], [INF])
+    add("nan - 2", [NAN], [2.0])
+    add("-nan - 2", [NEG_NAN], [2.0])
+    add("payload nan - 2", [PAYLOAD_NAN], [2.0])
+    add("nan and inf", [NAN, INF], [0.0, 0.0])
+    add("square subnormal", [1e-160, -1e-160], [0.0, 0.0])
+    add("square underflows to 0", [TINY, -TINY], [0.0, 0.0])
+    add("tiny differences", [MIN_NORMAL, 3 * TINY], [MIN_NORMAL - TINY, 0.0])
+    add("fma-sensitive", [1.0 + 2.0**-30, -1.0], [0.0, 2.0**-29])
+
+    # Squares that are exact ties: d with 27 significant bits, so d * d has 54.
+    ties_differ, ties_same = [], []
+    while len(ties_differ) < 16 or len(ties_same) < 8:
+        d = float((1 << 26) | (rng.getrandbits(26) | 1)) * 2.0 ** rng.randint(-30, 30)
+        b = rng.uniform(-4.0, 4.0) * 2.0 ** rng.randint(-5, 5)
+        a = b + d
+        if Fraction(a) - Fraction(b) != Fraction(a - b):
+            continue
+        if not ulp_tie(a - b, a - b, lambda p, q: p * q):
+            continue
+        if rng.random() < 0.5:
+            a, b = b, a                              # a negative difference
+        (ties_differ if pow_differs(a - b) else ties_same).append((a, b))
+    ties_differ, ties_same = ties_differ[:16], ties_same[:8]
+    for k, (a, b) in enumerate(ties_differ[:12]):
+        add(f"tie square, pow differs from d*d {k}", [a], [b])
+    for k, (a, b) in enumerate(ties_same[:4]):
+        add(f"tie square, pow equals d*d {k}", [a], [b])
+    mixed = ties_differ + ties_same
+    rng.shuffle(mixed)
+    add("tie squares together", [p[0] for p in mixed], [p[1] for p in mixed])
+
+    # The difference itself a tie (2^53 + 1 rounds to even), then squared.
+    for k in range(4):
+        e = rng.randint(0, 20)
+        a = 2.0 ** (53 + e)
+        b = -(2.0 ** e) * rng.choice([1, 3, 5])
+        add(f"tie difference squared {k}", [a], [b])
+
+    # Non-tie squares that glibc's pow misrounds.
+    misrounded = []
+    while len(misrounded) < 24:
+        d = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-300, 300)
+        if rng.random() < 0.5:
+            d = -d
+        if pow_differs(d) and not ulp_tie(d, d, lambda p, q: p * q):
+            b = 0.0 if rng.random() < 0.5 else -0.0
+            misrounded.append((d + b, b))
+    for k, (a, b) in enumerate(misrounded[:8]):
+        add(f"misrounded square {k}", [a], [b])
+    add("misrounded squares together", [p[0] for p in misrounded], [p[1] for p in misrounded])
+
+    # Random vectors, the k-means shapes.
+    for k in range(8):
+        n = rng.choice([8, 32, 128, 512])
+        xs = [rng.gauss(0.0, 1.0) * 2.0 ** rng.randint(-20, 20) for _ in range(n)]
+        ys = [rng.gauss(0.0, 1.0) * 2.0 ** rng.randint(-20, 20) for _ in range(n)]
+        add(f"random {k} n={n}", xs, ys)
+    for k in range(6):
+        # Embedding-like: unit-range point against a centroid (a mean of points).
+        n = rng.choice([16, 64, 256])
+        pts = [[rng.uniform(-1.0, 1.0) for _ in range(n)] for _ in range(5)]
+        centroid = [math.fsum(col) / 5 for col in zip(*pts)]
+        add(f"point to centroid {k} n={n}", pts[0], centroid)
+    for k in range(4):
+        # Nearly equal vectors: the distance near zero.
+        n = 64
+        xs = [rng.uniform(-1.0, 1.0) for _ in range(n)]
+        ys = [x + rng.choice([-1, 0, 1]) * math.ulp(x) for x in xs]
+        add(f"near-equal {k}", xs, ys)
+
+    out = []
+    for (name, xs, ys) in cases:
+        expected = oracle([pow_term(x, y) for x, y in zip(xs, ys)])
+        if (expected not in (OVERFLOW, INF_MINUS_INF) and math.isnan(from_bits(expected))
+                and not any(math.isnan(v) for v in xs + ys)):
+            expected = "nan"
+        libm = any(pow_differs(x - y) for x, y in zip(xs, ys))
+        decisive = libm and expected != oracle([(x - y) * (x - y) for x, y in zip(xs, ys)])
+        out.append((name, xs, ys, expected, libm, decisive))
+    return out
+
+
 # --- output --------------------------------------------------------------------
 
 def st_string(s):
@@ -397,6 +559,50 @@ def main():
     print(f"{OUT.name}: {len(sums)} sums, {len(products)} products, {len(sqdiffs)} squared "
           f"differences ({len(sums) + len(products) + len(sqdiffs)} cases, {errors} of them errors, "
           f"{made_nans} NaNs made by an invalid operation)")
+
+    # The pow form, in its own file and from its own seed, so that the file
+    # above stays as 0.15.0 generated it.
+    libc = platform.libc_ver()
+    if sys.platform != "linux" or libc[0] != "glibc":
+        sys.exit("the pow vectors pin glibc's pow: run this generator on glibc Linux")
+    sqpows = pow_cases(random.Random(20261121))
+    lines = [
+        '"EXPECT: generated"',
+        '"Generated by gen_fsum_vectors.py from CPython ' + sys.version.split()[0]
+        + "'s math.fsum and float ** on glibc " + libc[1] + '. Do not edit."',
+        '"Floats are 16 hex digits of their big-endian IEEE 754 bits. An expected'
+        ' value is such a String, the error text, or nan for a NaN made by an invalid'
+        ' operation (any NaN matches). libmDependent: some term has (x - y) ** 2 ~='
+        ' (x - y) * (x - y) on glibc, so the expected bytes are glibc pow\'s.'
+        ' decisive: the d * d terms would sum to another answer."',
+        "Object subclass: #VectorsFsumPow instanceVariableNames: ''.",
+        "",
+    ]
+    sels = []
+    for i, e in enumerate(sqpows):
+        sel = f"sqpows{i + 1}"
+        sels.append(sel)
+        lines.append(f"VectorsFsumPow class >> {sel}")
+        lines.append("  ^ { " + st_string(e[0]) + ". " + st_floats(e[1]) + ". " + st_floats(e[2])
+                     + ". " + st_string(e[3]) + ". " + ("true" if e[4] else "false")
+                     + ". " + ("true" if e[5] else "false") + " }.")
+        lines.append("")
+    lines.append("VectorsFsumPow class >> sqpows")
+    lines.append('  "Every sqpows entry."')
+    lines.append("  ^ {")
+    for sel in sels:
+        lines.append(f"    self {sel}.")
+    lines.append("  }.")
+    lines.append("")
+    OUT_POW.write_text("\n".join(lines))
+    errors = sum(1 for e in sqpows if e[3] in (OVERFLOW, INF_MINUS_INF))
+    made_nans = sum(1 for e in sqpows if e[3] == "nan")
+    libm = sum(1 for e in sqpows if e[4])
+    decisive = sum(1 for e in sqpows if e[5])
+    raises = sum(1 for e in sqpows if "CPython raises at **" in e[0])
+    print(f"{OUT_POW.name}: {len(sqpows)} pow squared differences ({errors} of them errors, "
+          f"{made_nans} NaNs made by an invalid operation, {libm} libm-dependent, "
+          f"{decisive} decisive against d * d, {raises} where CPython raises at **)")
 
 
 if __name__ == "__main__":

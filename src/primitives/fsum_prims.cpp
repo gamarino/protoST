@@ -3,6 +3,7 @@
 //   Float fsum: aSequence                          CPython's math.fsum
 //   Float fsumOfProducts: a with: b                fsum of a_i * b_i
 //   Float fsumOfSquaredDifferences: a with: b      fsum of (a_i - b_i) * (a_i - b_i)
+//   Float fsumOfPowSquaredDifferences: a with: b   fsum of pow(a_i - b_i, 2.0)    (0.16.0)
 //
 // Specified by the protoBaseST vectors addendum (2026-11-19, section 2.2.4),
 // whose Smalltalk kernel is the reference and the fallback. The algorithm is a
@@ -42,6 +43,13 @@
 //   '<selector> the argument does not answer size and at: as a sequence'
 // The elements of both sequences are read and checked before any summing, so
 // a refused element is reported even when an overflow would have come first.
+//
+// The pow form. Its terms are what protoBaseST's kernel sums with
+// `(a_i - b_i) raisedTo: 2` and proto_db with `(x - y) ** 2`: the C library's
+// pow, which on glibc is not always d * d (see powSquareExponent below). The
+// answer is therefore the platform's, as CPython's is. One difference from
+// CPython is kept: a square that overflows is an infinite term here, as
+// raisedTo: answers, where CPython's `**` raises OverflowError before fsum.
 
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
@@ -242,6 +250,31 @@ const PO* prim_FsumOfSquaredDifferences(STRuntime& rt, proto::ProtoContext* ctx,
     }));
 }
 
+// The exponent of fsumOfPowSquaredDifferences:with:, read through a volatile
+// so that it reaches pow as a run-time value. GCC and Clang fold
+// pow(x, 2.0) with a constant 2.0 into x * x (even at -O2, without
+// -ffast-math), and glibc's pow is not correctly rounded: when the exact
+// square lies half-way between two doubles, or close to it, pow(x, 2.0) and
+// x * x differ in the last bit. CPython's `x ** 2` and protoST's
+// `x raisedTo: 2` call pow with the exponent as data, so this must too. The
+// objdump check in the 0.16.0 report and the decisive cases of
+// tests/conformance/12-builtins/_vectors_fsum_pow.st both catch a fold.
+volatile double powSquareExponent = 2.0;
+
+// Float fsumOfPowSquaredDifferences: a with: b (0.16.0) — each term
+// pow(d, 2.0), d = a_i - b_i rounded first: the C library's pow, as
+// `d raisedTo: 2` and CPython's `d ** 2` compute it, and not d * d.
+const PO* prim_FsumOfPowSquaredDifferences(STRuntime& rt, proto::ProtoContext* ctx, const PO*,
+                                           const PO* const* a, int) {
+    std::vector<double> xs, ys;
+    readPair(rt, ctx, a, "fsumOfPowSquaredDifferences:with:", xs, ys);
+    const double exponent = powSquareExponent;   // one volatile read per call
+    return ctx->fromDouble(cpythonFsum(xs.size(), [&](size_t k) {
+        const double d = xs[k] - ys[k];
+        return std::pow(d, exponent);
+    }));
+}
+
 } // namespace
 
 void installFsumPrimitives(STRuntime& rt) {
@@ -249,6 +282,7 @@ void installFsumPrimitives(STRuntime& rt) {
     bindClassPrimitive(rt, F, "fsum:",                          primitiveMethod<prim_Fsum>);
     bindClassPrimitive(rt, F, "fsumOfProducts:with:",           primitiveMethod<prim_FsumOfProducts>);
     bindClassPrimitive(rt, F, "fsumOfSquaredDifferences:with:", primitiveMethod<prim_FsumOfSquaredDifferences>);
+    bindClassPrimitive(rt, F, "fsumOfPowSquaredDifferences:with:", primitiveMethod<prim_FsumOfPowSquaredDifferences>);
 }
 
 } // namespace protoST
