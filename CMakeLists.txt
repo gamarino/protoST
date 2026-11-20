@@ -644,6 +644,13 @@ add_test(NAME cli_nested_wait_progress
 add_test(NAME cli_capped_wait_parks
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_capped_wait_parks.sh $<TARGET_FILE:protost>)
 
+# S45: a program ends while a capped wait is pending, the pool running or
+# paused. S46: a deadlock verdict whose last event is the program thread's park.
+add_test(NAME cli_exit_capped_pending
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_exit_capped_pending.sh $<TARGET_FILE:protost>)
+add_test(NAME cli_late_main_park
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_late_main_park.sh $<TARGET_FILE:protost>)
+
 add_test(NAME cli_future_callback_barrier
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_future_callback_barrier.sh $<TARGET_FILE:protost>)
 
@@ -769,6 +776,7 @@ endif()
 set_tests_properties(cli_actor_unobserved_error cli_callback_error_reported
                      cli_buried_actor_deadlock cli_helped_message_handler_actions
                      cli_nested_wait_progress cli_capped_wait_parks cli_future_callback_barrier
+                     cli_exit_capped_pending cli_late_main_park
                      cli_actor_stress cli_concurrent_first_call
                      cli_gc_shutdown_stress cli_gc_reclaims cli_gc_recursion_reclaims cli_gc_spin_safepoint
                      cli_actor_payload_gc cli_binary_lock cli_sigint
@@ -784,7 +792,7 @@ set_tests_properties(cli_actor_unobserved_error cli_callback_error_reported
 # about 11 s under TSan on four CPUs (it took 158 s while capped waits
 # polled); the bound stays a hang guard, never a measurement.
 if(PROTOST_TSAN)
-    set_tests_properties(cli_nested_wait_progress PROPERTIES
+    set_tests_properties(cli_nested_wait_progress cli_late_main_park PROPERTIES
         ENVIRONMENT_MODIFICATION "TSAN_OPTIONS=set:${PROTOST_TSAN_OPTIONS};NESTED_WAIT_TIMEOUT=set:900"
         TIMEOUT 1800)
 endif()

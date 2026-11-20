@@ -297,10 +297,31 @@ public:
     // registrations (both sides sequentially consistent), so either the
     // waiter's check sees the change or the waker sees the registration and
     // changes the word.
-    struct CappedPark { int slot = -1; std::uint32_t word = 0; };
+    // S47 (review M1): a registration is a scope. endCappedPark ends it; if
+    // the code between the two leaves by an exception, the destructor
+    // unregisters the thread, so no stale registration keeps parkedCapped
+    // raised and the slot's awaited Future recorded.
+    class CappedPark {
+    public:
+        CappedPark() = default;
+        CappedPark(CappedPark&& o) noexcept : rt(o.rt), slot(o.slot), word(o.word) { o.slot = -1; }
+        CappedPark(const CappedPark&) = delete;
+        CappedPark& operator=(const CappedPark&) = delete;
+        CappedPark& operator=(CappedPark&&) = delete;
+        ~CappedPark() { if (slot >= 0) rt->endCappedPark(nullptr, *this, /*sleep=*/false); }
+    private:
+        friend class STRuntime;
+        STRuntime* rt = nullptr;
+        int slot = -1;              // -1: not registered (or already ended)
+        std::uint32_t word = 0;
+    };
     CappedPark beginCappedPark(const proto::ProtoObject* awaited);
-    void endCappedPark(proto::ProtoContext* ctx, const CappedPark& park, bool sleep);
+    // Sleeps if `sleep` (and the slot's word is unchanged), then unregisters.
+    void endCappedPark(proto::ProtoContext* ctx, CappedPark& park, bool sleep);
     bool hasQueuedTasks() const;
+    // Capped waits registered for a park and not yet unregistered (S47); a
+    // diagnostic for tests.
+    int parkedCappedWaits() const;
     void wakeCappedWaitersFor(const proto::ProtoObject* future);
     void wakeCappedIfJudgeable();
     // A caller from another runtime, another thread embedding protoST, or a
@@ -433,6 +454,7 @@ public:
     static std::string kernelManifestPath(std::string* problem = nullptr);
 
 private:
+    void holdMainParkForTest();   // S46 test hook (acquireMainWait)
     // Creates and anchors the `__bc_ptr__` cell closures over a module share
     // (src/runtime/BlockCode.h); it anchors through registryAdd.
     friend const proto::ProtoObject* blockCodeRefSlow(STRuntime& rt, proto::ProtoContext* ctx,

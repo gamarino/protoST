@@ -125,6 +125,7 @@ target_sources(protost_unit_tests PRIVATE
 )
 target_sources(protost_unit_tests PRIVATE
     unit/test_timer_service.cpp
+    unit/test_capped_park.cpp
 )
 target_sources(protost_unit_tests PRIVATE
     unit/test_list_index.cpp
