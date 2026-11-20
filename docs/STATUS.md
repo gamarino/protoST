@@ -14,10 +14,11 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Test suite:** 1488 `ctest` cases on Linux, 1488/1488 passing on
-  2026-11-20 (0.15.0, against protoCore 3.6.1, tag `v3.6.1`, and protoIO
-  0.7.0; the four new `Float fsum:` cases are not in the `tsan` label, whose
-  649 cases CI runs under ThreadSanitizer); 1484 for 0.14.2 (the `tsan`
+- **Test suite:** 1493 `ctest` cases on Linux, 1493/1493 passing on
+  2026-11-20 (0.16.0, against protoCore 3.6.1, tag `v3.6.1`, and protoIO
+  0.7.0; the five new `fsumOfPowSquaredDifferences:with:` cases are not in
+  the `tsan` label, whose 649 cases CI runs under ThreadSanitizer); 1488 for
+  0.15.0, 1484 for 0.14.2 (the `tsan`
   label also under ThreadSanitizer locally, with `ctest -j2` on four CPUs as
   CI runs them), 1481 for 0.14.1, 1479 for
   0.14.0 and 1473 for
@@ -522,6 +523,15 @@ are noted where useful.
       `OrderedCollection` is read directly, any other sequence through `size`
       and `at:`. Checked against 237 CPython vectors by their bytes
       (`12-builtins/gen_fsum_vectors.py`) *(0.15.0)*
+- [x] `Float fsumOfPowSquaredDifferences:with:`: the fsum of
+      `(a_i - b_i) raisedTo: 2`, squared by the C library's `pow` (not
+      `d * d`: glibc's `pow` rounds some half-way squares otherwise), so the
+      same bytes as `Float fsum:` over `raisedTo: 2` and as CPython's
+      `math.fsum((x - y) ** 2 ...)` on the same platform. A square that
+      overflows is infinite (CPython's `**` raises). Checked against 72
+      CPython vectors (22 where `pow` and `d * d` give different sums; their
+      bytes pinned on glibc only) and against `raisedTo: 2` on 400 vectors
+      made in Smalltalk *(0.16.0)*
 
 ---
 

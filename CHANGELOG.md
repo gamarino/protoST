@@ -3,6 +3,50 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
+## 0.16.0 — 2026-11-20
+
+**Requires protoCore 3.6.1**, as 0.15.0 did (the floor is unchanged), and
+protoIO 0.7.0 at build time. A minor release: it adds API.
+
+### Added
+
+- **`Float fsumOfPowSquaredDifferences: a with: b`**, for protoBaseST's vector
+  k-means, whose distance is the fsum of `(a_i - b_i) raisedTo: 2`.
+  - Each term is `pow(d, 2.0)` with `d = a_i - b_i`, the difference rounded
+    first: the C library's `pow`, as `raisedTo: 2` and CPython's `d ** 2`
+    compute it. The answer equals
+    `Float fsum: ((1 to: n) collect: [:i | ((a at: i) - (b at: i)) raisedTo: 2])`
+    and, on the same platform, CPython's `math.fsum((x - y) ** 2 ...)`.
+  - **It is not always `fsumOfSquaredDifferences:with:`.** glibc's `pow` is
+    not correctly rounded: it rounds about half of the squares that lie
+    exactly half-way between two `Float`s, and a few others, away from
+    `d * d`. Since the answer follows the platform's `pow`, it can differ
+    between C libraries, as CPython's does.
+  - Sequences, element checks, the size check and the sum errors are those of
+    `fsumOfSquaredDifferences:with:`, with this selector in the texts.
+  - **One difference from CPython:** a square that overflows is an infinite
+    term, as `raisedTo: 2` answers it; CPython's `**` raises `OverflowError`
+    there.
+  - GCC folds `pow(d, 2.0)` with a constant exponent into `d * d` even at
+    `-O2`. The exponent is therefore read from a `volatile`, so it reaches
+    `pow` at run time; the object file calls `pow`.
+- **Tests.**
+  - `gen_fsum_vectors.py` also writes `_vectors_fsum_pow.st`: 72 cases from
+    CPython 3.14's `math.fsum` and `float **` on glibc. In 22 of them `pow`
+    and `d * d` differ for some term and give different sums (half-way and
+    misrounded squares); the others cover ties of the difference, overflow,
+    NaN, the infinities, `-0.0`, subnormals, and random and k-means shapes.
+    `_vectors_fsum.st` is unchanged.
+  - `float-fsum-pow-vectors.st` runs each case on an `Array`, an
+    `OrderedCollection` and a `size`/`at:` sequence, and against the
+    `raisedTo: 2` sum (288 checks). The 22 glibc-dependent cases pin their
+    bytes on Linux; on other platforms they must equal the `raisedTo: 2` sum.
+  - `float-fsum-pow-decisive.st` (Linux) shows that the `d * d` form fails
+    all 22 decisive cases.
+  - `float-fsum-pow-matches-raisedto.st` compares 1200 sums over 400 vectors
+    made in Smalltalk with the `raisedTo: 2` sum.
+  - Two further tests cover the refusals and the uncaught overflow.
+
 ## 0.15.0 — 2026-11-20
 
 **Requires protoCore 3.6.1**, as 0.14.x did (the floor is unchanged), and
