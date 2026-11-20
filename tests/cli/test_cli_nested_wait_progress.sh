@@ -16,7 +16,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # is ample for an optimised build (the chain of 5000 takes about 6 s); under
 # ThreadSanitizer the same case took more than 120 s on a 4-vCPU runner and
 # was killed after it had signalled the deadlock (CI, 2026-11-13), so the
-# TSan build passes NESTED_WAIT_TIMEOUT=900 (CMakeLists.txt).
+# TSan build passes NESTED_WAIT_TIMEOUT=900 (CMakeLists.txt). That slowness
+# was S43: every capped worker polled every 200 us; since 0.14.1 they park
+# until an event, and the case takes about 11 s under TSan on four CPUs.
 HANG_TIMEOUT="${NESTED_WAIT_TIMEOUT:-120}"
 fail=0
 run() {   # run <expected> <workers or empty> <fixture> <arg>

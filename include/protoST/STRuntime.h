@@ -276,6 +276,33 @@ public:
     // them back when the wait ends.
     int pauseRunningTasks();
     void resumeRunningTasks(int n);
+    // S43: counts one idle round of a wait at the helping cap (a round that
+    // found nothing to run and no verdict to make); PROTOST_WORKER_STATS=1
+    // prints the total at exit. A diagnostic, read by cli_capped_wait_parks.
+    static void noteCappedIdleRound();
+
+    // S43: a wait at the helping cap that finds nothing to run and no verdict
+    // to make parks until an event it can act on, instead of polling:
+    //  * its Future is settled (wakeCappedWaitersFor, after settleFuture
+    //    publishes the state);
+    //  * a task is queued (enqueueTask): a capped wait runs queued tasks;
+    //  * the quiescence epoch ends, or the pool's size, its ceiling, the
+    //    capped count or shutdown changes, while a deadlock verdict is
+    //    possible (wakeCappedIfJudgeable): the wait judges its chain again.
+    // These are exactly the changes the polling loop reacted to. The protocol
+    // closes the race with a waker: beginCappedPark registers the thread and
+    // reads its slot's word; the caller then checks its conditions again and
+    // calls endCappedPark, which sleeps only if they still hold and the word
+    // is unchanged. A waker changes the state first, then reads the
+    // registrations (both sides sequentially consistent), so either the
+    // waiter's check sees the change or the waker sees the registration and
+    // changes the word.
+    struct CappedPark { int slot = -1; std::uint32_t word = 0; };
+    CappedPark beginCappedPark(const proto::ProtoObject* awaited);
+    void endCappedPark(proto::ProtoContext* ctx, const CappedPark& park, bool sleep);
+    bool hasQueuedTasks() const;
+    void wakeCappedWaitersFor(const proto::ProtoObject* future);
+    void wakeCappedIfJudgeable();
     // A caller from another runtime, another thread embedding protoST, or a
     // debugger can settle any Future at any time: once one is seen, the
     // deadlock above is never signalled (a nested-wait overflow then waits).

@@ -435,6 +435,24 @@ struct STRuntime::Impl {
     // then releases a worker permit after raising it.
     std::atomic<long> queuedTasks{0};
 
+    // S43: where waits at the helping cap park (beginCappedPark). One slot
+    // per worker thread that ever parked, claimed once (parkSlotsUsed); a
+    // parked thread publishes the Future it waits for in `awaited` and
+    // sleeps on `word` (a futex, std::atomic::wait; never
+    // std::counting_semaphore, S19). A waker changes `word` and notifies.
+    // `parkedCapped` counts the registered slots, so that a settle, a task
+    // or an epoch end pays one atomic load while no capped wait is parked.
+    // The pool never exceeds kMaxWorkers + 1 threads, so the slots never run
+    // out; if they did, a wait would poll as before S43.
+    struct ParkSlot {
+        std::atomic<const proto::ProtoObject*> awaited{nullptr};
+        std::atomic<std::uint32_t> word{0};
+    };
+    static constexpr int kParkSlots = 2 * static_cast<int>(kMaxWorkers);
+    ParkSlot parkSlots[kParkSlots];
+    std::atomic<int> parkSlotsUsed{0};
+    std::atomic<int> parkedCapped{0};
+
     // The timer service (TimerService.h). Created by construct(); its thread
     // starts on first use and is joined by ~STRuntime after the workers.
     std::unique_ptr<TimerService> timers;
@@ -970,24 +988,28 @@ bool STRuntime::spawnWorker(proto::ProtoContext* ctx) {
         std::lock_guard<std::mutex> lock(impl_->workersMutex);
         if (impl_->shutdown.load(std::memory_order_acquire)) return false;
         index = impl_->workers.size() + impl_->spawning++;
-        impl_->poolSize.store(impl_->workers.size() + impl_->spawning, std::memory_order_release);
+        impl_->poolSize.store(impl_->workers.size() + impl_->spawning, std::memory_order_seq_cst);
     }
     // The reserved slot is released on every exit, an exception included
     // (an allocation below can throw): registered when the thread exists,
     // given back otherwise.
     struct Reservation {
-        Impl& impl; const proto::ProtoThread* thread = nullptr;
+        STRuntime& rt; Impl& impl; const proto::ProtoThread* thread = nullptr;
         ~Reservation() {
-            std::lock_guard<std::mutex> lock(impl.workersMutex);
-            // Registered even when shutdown began meanwhile: the destructor
-            // waits for `spawning` to drain and joins every registered worker.
-            if (thread) impl.workers.push_back(thread);
-            --impl.spawning;
-            impl.poolSize.store(impl.workers.size() + impl.spawning, std::memory_order_release);
-            // S40: a pool that cannot grow has its ceiling here.
-            if (!thread) impl.poolCannotGrow.store(true, std::memory_order_release);
+            {
+                std::lock_guard<std::mutex> lock(impl.workersMutex);
+                // Registered even when shutdown began meanwhile: the destructor
+                // waits for `spawning` to drain and joins every registered worker.
+                if (thread) impl.workers.push_back(thread);
+                --impl.spawning;
+                impl.poolSize.store(impl.workers.size() + impl.spawning, std::memory_order_seq_cst);
+                // S40: a pool that cannot grow has its ceiling here.
+                if (!thread) impl.poolCannotGrow.store(true, std::memory_order_seq_cst);
+            }
+            // S43: the pool's size or ceiling changed (deadlockPossible).
+            rt.wakeCappedIfJudgeable();
         }
-    } reservation{*impl_};
+    } reservation{*this, *impl_};
     const proto::ProtoList* argsForThread = ctx->newList();
     argsForThread = argsForThread->appendLast(
         ctx, ctx->fromExternalPointer(this, nullptr));
@@ -1037,6 +1059,9 @@ thread_local std::uint64_t t_confirmedEpoch = ~std::uint64_t{0};
 thread_local int t_runningTasks = 0;
 // Identity of this thread for programThread.
 thread_local char t_threadMarker = 0;
+// S43: this thread's park slot, per runtime (beginCappedPark).
+thread_local const STRuntime* t_parkSlotFor = nullptr;
+thread_local int t_parkSlot = -1;
 }
 
 // Ends the current epoch: the confirmations gathered so far no longer count.
@@ -1049,7 +1074,10 @@ static void bumpEpoch(std::atomic<std::uint64_t>& q) {
 void STRuntime::noteProgress() {
     // Only while some thread is capped: before that no confirmation exists,
     // and a thread entering the capped state ends the epoch itself.
-    if (impl_->cappedThreads.load(std::memory_order_seq_cst) > 0) bumpEpoch(impl_->quiesce);
+    if (impl_->cappedThreads.load(std::memory_order_seq_cst) > 0) {
+        bumpEpoch(impl_->quiesce);
+        wakeCappedIfJudgeable();
+    }
 }
 
 std::uint64_t STRuntime::quiescenceEpoch() const {
@@ -1068,21 +1096,33 @@ bool STRuntime::enterCappedWait(proto::ProtoContext* ctx) {
         impl_->cappedThreads.fetch_sub(1, std::memory_order_seq_cst);
         throw;
     }
+    // S43: this thread may complete the pool's capped state.
+    wakeCappedIfJudgeable();
     return true;
 }
 
 void STRuntime::leaveCappedWait() {
     bumpEpoch(impl_->quiesce);
     leaveBlockingIO();
-    impl_->cappedThreads.fetch_sub(1, std::memory_order_seq_cst);
+    const int left = impl_->cappedThreads.fetch_sub(1, std::memory_order_seq_cst) - 1;
+    // S43: at shutdown the workers park on workerSem while a capped wait
+    // remains (workerLoop); the last one to leave releases them all. Either
+    // a worker reads the count after this decrement (and exits), or this
+    // read of `shutdown` follows that worker's and the release reaches it.
+    if (left == 0 && impl_->shutdown.load(std::memory_order_seq_cst))
+        impl_->workerSem.release(static_cast<int>(
+            impl_->poolSize.load(std::memory_order_seq_cst)));
 }
 
 bool STRuntime::deadlockPossible() const {
-    const size_t total = impl_->poolSize.load(std::memory_order_acquire);
-    const bool ceiling = total >= kMaxWorkers || impl_->poolCannotGrow.load(std::memory_order_acquire)
+    // Sequentially consistent (S43): a thread that changes one of these
+    // inputs reads the others after its change (wakeCappedIfJudgeable), so
+    // the last change to them always sees the final state.
+    const size_t total = impl_->poolSize.load(std::memory_order_seq_cst);
+    const bool ceiling = total >= kMaxWorkers || impl_->poolCannotGrow.load(std::memory_order_seq_cst)
         || impl_->shutdown.load(std::memory_order_seq_cst);   // no worker is added at shutdown
     return ceiling && total > 0
-        && static_cast<size_t>(impl_->cappedThreads.load(std::memory_order_acquire)) >= total;
+        && static_cast<size_t>(impl_->cappedThreads.load(std::memory_order_seq_cst)) >= total;
 }
 
 std::string STRuntime::poolCeilingReason() const {
@@ -1153,8 +1193,92 @@ bool STRuntime::confirmStuck(proto::ProtoContext* ctx, std::uint64_t epoch) {
     if (impl_->runningTasks.load(std::memory_order_seq_cst) > 0) return false;
     // Still the same round, complete: end it and signal.
     std::uint64_t expected = (epoch << kConfirmBits) | count;
-    return impl_->quiesce.compare_exchange_strong(
-        expected, (epoch + 1) << kConfirmBits, std::memory_order_seq_cst);
+    if (!impl_->quiesce.compare_exchange_strong(
+            expected, (epoch + 1) << kConfirmBits, std::memory_order_seq_cst))
+        return false;
+    wakeCappedIfJudgeable();   // S43: the epoch ended; the others judge again
+    return true;
+}
+
+STRuntime::CappedPark STRuntime::beginCappedPark(const proto::ProtoObject* awaited) {
+    if (t_parkSlotFor != this) {
+        t_parkSlotFor = this;
+        t_parkSlot = impl_->parkSlotsUsed.fetch_add(1, std::memory_order_seq_cst);
+    }
+    CappedPark park;
+    if (t_parkSlot < 0 || t_parkSlot >= Impl::kParkSlots) return park;   // no slot: poll
+    Impl::ParkSlot& slot = impl_->parkSlots[t_parkSlot];
+    slot.awaited.store(awaited, std::memory_order_seq_cst);
+    impl_->parkedCapped.fetch_add(1, std::memory_order_seq_cst);
+    // The Future's state is a protoCore attribute, not one of these atomics:
+    // the fence orders this registration before the caller's re-read of it,
+    // as the one in wakeCappedWaitersFor orders the settle's write before
+    // that waker's read of the registrations.
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    park.slot = t_parkSlot;
+    park.word = slot.word.load(std::memory_order_seq_cst);
+    return park;
+}
+
+void STRuntime::endCappedPark(proto::ProtoContext* ctx, const CappedPark& park, bool sleep) {
+    if (park.slot < 0) {
+        // No slot (cannot happen within kMaxWorkers): the pre-S43 back-off.
+        if (sleep) proto::ProtoThread::sleepFor(ctx, 200);
+        return;
+    }
+    Impl::ParkSlot& slot = impl_->parkSlots[park.slot];
+    if (sleep) {
+        if (ctx && ctx->criticalSectionDepth > 0) {
+            // A thread inside a critical section may not leave the quorum;
+            // ProtoThread::sleepFor waits holding it (and says so once).
+            proto::ProtoThread::sleepFor(ctx, 200);
+        } else {
+            // Off the stop-the-world quorum while it sleeps, as the worker's
+            // idle wait on workerSem is; the caller pins what it still needs.
+            proto::ProtoContext::UnmanagedScope unmanaged(ctx);
+            slot.word.wait(park.word, std::memory_order_seq_cst);
+        }
+    }
+    impl_->parkedCapped.fetch_sub(1, std::memory_order_seq_cst);
+    slot.awaited.store(nullptr, std::memory_order_seq_cst);
+}
+
+bool STRuntime::hasQueuedTasks() const {
+    return impl_->queuedTasks.load(std::memory_order_seq_cst) > 0;
+}
+
+namespace {
+// Wakes the parked slots that `match` selects (S43).
+template <typename Slot, typename Match>
+void wakeParkedSlots(std::atomic<int>& parked, std::atomic<int>& used,
+                     Slot* slots, int max, Match match) {
+    if (parked.load(std::memory_order_seq_cst) == 0) return;
+    const int n = std::min(used.load(std::memory_order_seq_cst), max);
+    for (int i = 0; i < n; ++i) {
+        const proto::ProtoObject* a = slots[i].awaited.load(std::memory_order_seq_cst);
+        if (a && match(a)) {
+            slots[i].word.fetch_add(1, std::memory_order_seq_cst);
+            slots[i].word.notify_one();
+        }
+    }
+}
+}
+
+void STRuntime::wakeCappedWaitersFor(const proto::ProtoObject* future) {
+    std::atomic_thread_fence(std::memory_order_seq_cst);   // see beginCappedPark
+    wakeParkedSlots(impl_->parkedCapped, impl_->parkSlotsUsed, impl_->parkSlots,
+                    Impl::kParkSlots, [future](const proto::ProtoObject* a) { return a == future; });
+}
+
+void STRuntime::wakeCappedIfJudgeable() {
+    // A parked wait judges its chain again only when a verdict is possible
+    // (its loop's condition): waking every parked wait on every epoch end
+    // would be a wake storm while the chain unwinds, when settles are many and
+    // no verdict is possible. A change that makes a verdict possible calls
+    // this too, after the change, so the last change sees it.
+    if (!deadlockPossible()) return;
+    wakeParkedSlots(impl_->parkedCapped, impl_->parkSlotsUsed, impl_->parkSlots,
+                    Impl::kParkSlots, [](const proto::ProtoObject*) { return true; });
 }
 // Forward-declared: defined down by workerLoop alongside the
 // per-worker stats globals.
@@ -1192,6 +1316,8 @@ STRuntime::~STRuntime() {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
+    // S43: shutdown is the pool's ceiling for a verdict (deadlockPossible).
+    wakeCappedIfJudgeable();
     if (!pool.empty()) {
         // F6 v4 (2026-05-23): wake every worker once. The new event-driven
         // workerLoop blocks on `workerSem.acquire()` when the queue is
@@ -1259,9 +1385,13 @@ std::atomic<long long> g_drainHits[kMaxWorkerStatsSlots]   = {};
 std::atomic<long long> g_parkCount[kMaxWorkerStatsSlots]   = {};
 std::atomic<int>       g_nextWorkerStatsId{0};
 thread_local int       t_workerStatsId = -1;
+// S43: idle rounds of waits at the helping cap (STRuntime::noteCappedIdleRound).
+std::atomic<long long> g_cappedIdleRounds{0};
 
 void printWorkerStatsAtExit() {
     if (!std::getenv("PROTOST_WORKER_STATS")) return;
+    std::fprintf(stderr, "[worker-stats] capped idle rounds %lld\n",
+                 g_cappedIdleRounds.load(std::memory_order_relaxed));
     bool any = false;
     for (int i = 0; i < kMaxWorkerStatsSlots; ++i) {
         long long d = g_drainHits[i].load();
@@ -1276,6 +1406,10 @@ void printWorkerStatsAtExit() {
     }
 }
 } // anon
+
+void STRuntime::noteCappedIdleRound() {
+    g_cappedIdleRounds.fetch_add(1, std::memory_order_relaxed);
+}
 
 void STRuntime::workerLoop(proto::ProtoContext* ctx) {
     // F6 v4 (2026-05-23): event-driven worker pool. Workers loop draining
@@ -1343,12 +1477,17 @@ void STRuntime::workerLoop(proto::ProtoContext* ctx) {
             // waits for ever. A wait that can never end is still reported
             // (confirmStuck counts shutdown as the pool's ceiling and the
             // program thread as parked).
+            // S43: the worker parks on workerSem meanwhile, as an idle
+            // worker does: an enqueue releases it, and so does the last
+            // leaveCappedWait (it reads `shutdown` after its decrement, and
+            // this loop reads the count after reading `shutdown`).
             while (impl_->cappedThreads.load(std::memory_order_seq_cst) > 0) {
                 if (drainOneReporting(*this, ctx)) {
                     g_drainHits[wid].fetch_add(1, std::memory_order_relaxed);
                     continue;
                 }
-                proto::ProtoThread::sleepFor(ctx, 200);
+                proto::ProtoContext::UnmanagedScope unmanaged(ctx);
+                impl_->workerSem.acquire();
             }
             return;
         }
@@ -1902,7 +2041,7 @@ void STRuntime::markMainWaitingOn(const proto::ProtoObject* future) {
     // S40: the program thread parking is an event of the quiescence round
     // (whatever it did before parking is behind every confirmation that
     // counts); it ends the epoch before the park is visible.
-    if (future) bumpEpoch(impl_->quiesce);
+    if (future) { bumpEpoch(impl_->quiesce); wakeCappedIfJudgeable(); }
     // seq_cst so the settler's load is ordered against its prior store
     // of the Future's state attribute. See the comment block on
     // `mainWaitingOn` in Impl for the full pairing argument.
@@ -1967,7 +2106,11 @@ void STRuntime::enqueueTask(proto::ProtoContext* ctx,
         TransientPin pinNextObj(ctx, nextObj);
         if (reg->setAttributeIfEqual(ctx, tasksKey, cur, nextObj)) break;
     }
-    impl_->queuedTasks.fetch_add(1, std::memory_order_release);
+    impl_->queuedTasks.fetch_add(1, std::memory_order_seq_cst);
+    // S43: a parked capped wait runs queued tasks (waitHelping); tasks are
+    // timer settles and resumptions, rare beside actor turns.
+    wakeParkedSlots(impl_->parkedCapped, impl_->parkSlotsUsed, impl_->parkSlots,
+                    Impl::kParkSlots, [](const proto::ProtoObject*) { return true; });
     // Wake exactly one worker. If all busy, the counter accumulates and
     // the next worker to come back from drainOne will see the queue
     // non-empty (or, equivalently, acquire returns immediately).
