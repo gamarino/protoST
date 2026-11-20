@@ -247,6 +247,7 @@ add_library(protost_runtime STATIC
     src/debugger/BreakpointTable.cpp
     src/primitives/int_prims.cpp
     src/primitives/math_prims.cpp
+    src/primitives/fsum_prims.cpp
     src/primitives/fraction_prims.cpp
     src/primitives/time_prims.cpp
     src/primitives/bool_prims.cpp
@@ -282,6 +283,16 @@ add_library(protost_runtime STATIC
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     set_source_files_properties(src/runtime/ExecutionEngine.cpp
         PROPERTIES COMPILE_OPTIONS "--param=max-goto-duplication-insns=32")
+endif()
+# Float fsum: and its two-sequence forms port CPython's math_fsum, whose
+# error-free transformations need each + - * to be one rounded IEEE operation:
+# a fused multiply-add would change the partials and the rounded products. GCC
+# and Clang contract by default on targets with FMA (arm64; x86-64 with -march
+# flags), so contraction is off for that one translation unit. MSVC (VS 2022)
+# does not contract under its default /fp:precise.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    set_source_files_properties(src/primitives/fsum_prims.cpp
+        PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 endif()
 target_include_directories(protost_runtime PUBLIC src include ${PROTOCORE_INCLUDE_DIRS})
 target_link_libraries(protost_runtime PUBLIC nlohmann_json::nlohmann_json)
