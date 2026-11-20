@@ -394,6 +394,11 @@ struct STRuntime::Impl {
     // enqueues during a pause accumulate normally; the gate just
     // delays the consumer.
     std::atomic<bool> processingPaused{false};
+    // S46: PROTOST_TEST_HOLD_MAIN_PARK=1 (holdMainParkForTest); read once.
+    const bool testHoldMainPark = [] {
+        const char* v = std::getenv("PROTOST_TEST_HOLD_MAIN_PARK");
+        return v != nullptr && v[0] == '1';
+    }();
     std::mutex pauseMutex;
     std::condition_variable pauseCV;
 
@@ -1215,12 +1220,13 @@ STRuntime::CappedPark STRuntime::beginCappedPark(const proto::ProtoObject* await
     // as the one in wakeCappedWaitersFor orders the settle's write before
     // that waker's read of the registrations.
     std::atomic_thread_fence(std::memory_order_seq_cst);
+    park.rt = this;
     park.slot = t_parkSlot;
     park.word = slot.word.load(std::memory_order_seq_cst);
     return park;
 }
 
-void STRuntime::endCappedPark(proto::ProtoContext* ctx, const CappedPark& park, bool sleep) {
+void STRuntime::endCappedPark(proto::ProtoContext* ctx, CappedPark& park, bool sleep) {
     if (park.slot < 0) {
         // No slot (cannot happen within kMaxWorkers): the pre-S43 back-off.
         if (sleep) proto::ProtoThread::sleepFor(ctx, 200);
@@ -1241,6 +1247,34 @@ void STRuntime::endCappedPark(proto::ProtoContext* ctx, const CappedPark& park, 
     }
     impl_->parkedCapped.fetch_sub(1, std::memory_order_seq_cst);
     slot.awaited.store(nullptr, std::memory_order_seq_cst);
+    park.slot = -1;   // ended: the destructor has nothing to undo
+}
+
+// S46 test hook (PROTOST_TEST_HOLD_MAIN_PARK=1): holds the program thread
+// just before it marks itself blocked until the program thread's park is the
+// only event left: a deadlock verdict is possible, every worker has confirmed
+// the current round (and so refused it, the program thread not being blocked
+// yet) and every worker is registered for a park. It returns at once when the
+// awaited Future has already released this thread. It counts events and
+// never sleeps for a time; the caller is in an unmanaged region, so a
+// collection does not wait for it.
+void STRuntime::holdMainParkForTest() {
+    for (;;) {
+        const proto::ProtoObject* w = impl_->mainWaitingOn.load(std::memory_order_seq_cst);
+        if (w == nullptr || impl_->mainReleasedFor.load(std::memory_order_seq_cst) == w) return;
+        const std::uint64_t q = impl_->quiesce.load(std::memory_order_seq_cst);
+        const std::size_t total = impl_->poolSize.load(std::memory_order_seq_cst);
+        if (deadlockPossible() && (q & kConfirmMask) >= total
+            && static_cast<std::size_t>(impl_->parkedCapped.load(std::memory_order_seq_cst)) >= total)
+            return;
+#if defined(__x86_64__) || defined(__i386__)
+        __builtin_ia32_pause();
+#endif
+    }
+}
+
+int STRuntime::parkedCappedWaits() const {
+    return impl_->parkedCapped.load(std::memory_order_seq_cst);
 }
 
 bool STRuntime::hasQueuedTasks() const {
@@ -1292,6 +1326,19 @@ STRuntime::~STRuntime() {
     // shutting cleanly still emits something useful — even an empty table
     // is a signal that no worker ever entered drainOne.
     printWorkerStatsAtExit();
+    // S45 (review I1): end a pause (WorkerPool stopProcessing) the program
+    // left in place: nobody can start processing again, and the workers must
+    // run the turns that a pending wait still needs before the join below
+    // can return. A worker held in the pause gate is woken here (its
+    // predicate also checks `shutdown`, but nothing notified pauseCV for
+    // that), and from now on enqueueReady releases workerSem again; a
+    // release it skipped while paused is covered by the release of one
+    // permit per worker below, which follows this store.
+    {
+        std::lock_guard<std::mutex> lk(impl_->pauseMutex);
+        impl_->processingPaused.store(false, std::memory_order_seq_cst);
+    }
+    impl_->pauseCV.notify_all();
     // F6 v2 T7: signal every worker to exit, then join them. workerLoop's
     // cv predicate checks `shutdown` before the queue, so a single
     // notify_all wakes the whole pool even if some workers were inside the
@@ -1481,6 +1528,16 @@ void STRuntime::workerLoop(proto::ProtoContext* ctx) {
             // worker does: an enqueue releases it, and so does the last
             // leaveCappedWait (it reads `shutdown` after its decrement, and
             // this loop reads the count after reading `shutdown`).
+            // Review M4: this loop also uses up spare permits, the
+            // destructor's one-per-worker release included, so while a
+            // capped wait remains the workers are released only by an
+            // enqueue or by that last leaveCappedWait, which releases
+            // poolSize permits. It cannot miss them: this thread's load of
+            // `shutdown` saw the destructor's seq_cst store, and its seq_cst
+            // read of the count follows; if that read sees the count above
+            // zero, it precedes the leaver's decrement in the single total
+            // order, so the leaver's later seq_cst read of `shutdown` sees
+            // true and releases.
             while (impl_->cappedThreads.load(std::memory_order_seq_cst) > 0) {
                 if (drainOneReporting(*this, ctx)) {
                     g_drainHits[wid].fetch_add(1, std::memory_order_relaxed);
@@ -2060,11 +2117,19 @@ void STRuntime::acquireMainWait(proto::ProtoContext* ctx) {
     // future pending, which it did after storing mainWaitingOn: any settle of
     // that future publishes after that read, so its load of mainWaitingOn
     // matches and it records mainReleasedFor and ends the epoch before
-    // releasing this thread. Setting the flag needs no epoch bump: the
-    // thread changed nothing since markMainWaitingOn's bump. It is cleared on
-    // waking (a spurious wake from a leftover permit then counts as not
-    // parked until the caller blocks again: no error, never a false one).
+    // releasing this thread. It is cleared on waking (a spurious wake from a
+    // leftover permit then counts as not parked until the caller blocks
+    // again: no error, never a false one).
+    // S46 (review I2): setting the flag is itself an event of the round. A
+    // worker that confirmed the round after markMainWaitingOn's bump but
+    // before this store found the program thread not blocked, refused the
+    // verdict and parked; if no other event follows, nothing would judge
+    // the round again and the program would hang instead of reporting the
+    // deadlock. noteProgress after the store ends the epoch and wakes the
+    // parked waits, so the next round sees the thread blocked.
+    if (impl_->testHoldMainPark) holdMainParkForTest();
     impl_->mainBlocked.store(true, std::memory_order_seq_cst);
+    noteProgress();
     impl_->mainWaitSem.acquire();
     impl_->mainBlocked.store(false, std::memory_order_seq_cst);
 }

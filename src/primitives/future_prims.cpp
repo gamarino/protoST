@@ -486,7 +486,7 @@ const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
             // registering, so an event between the checks above and the park
             // is never missed. `awaited` is pinned across the park.
             STRuntime::noteCappedIdleRound();
-            const STRuntime::CappedPark park = rt.beginCappedPark(awaited);
+            STRuntime::CappedPark park = rt.beginCappedPark(awaited);
             const bool verdictDue = rt.deadlockPossible()
                 && (t_judgedFor != &rt || t_judgedEpoch != rt.quiescenceEpoch());
             const bool stillIdle = readState(rt, ctx, awaited) == 0

@@ -3,6 +3,43 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
+## 0.14.2 — 2026-11-20
+
+**Requires protoCore 3.6.1**, as 0.14.1 did (the floor is unchanged), and
+protoIO 0.7.0 at build time. A patch release with the fixes from the
+adversarial review of S43. No language or library behaviour changes.
+
+### Fixed
+
+- **A program that ends with the worker pool paused no longer hangs (S45).**
+  When a program called `WorkerPool stopProcessing` and ended while a wait
+  past the helping cap was still pending, the runtime waited for that wait in
+  its shutdown, but no worker ran the actor turns it needed: a turn made ready
+  while paused released no worker (a regression of 0.14.1, whose shutdown
+  workers park instead of polling), and a worker already held in the pause
+  gate was never woken (older). The runtime now ends the pause when it shuts
+  down. New test `cli_exit_capped_pending`.
+- **A deadlock verdict whose last event is the program thread's park (S46).**
+  The verdict of a chain of nested waits (S40) needs the program thread
+  blocked. Workers that judged the round between the program thread's
+  announcement of its wait and its park refused the verdict and parked, and
+  nothing judged the round again: the program hung instead of reporting
+  `deadlock: too many nested waits`. The park now ends the round. New test
+  `cli_late_main_park`, which makes that order happen in every run with the
+  test hook `PROTOST_TEST_HOLD_MAIN_PARK=1`.
+- **A capped park registration is exception-safe (S47).** The registration of
+  a capped wait for a park is now a scope object: if the code between
+  registering and parking throws, the registration is undone, so no stale
+  registration makes later settles and tasks wake a thread that is not
+  parked. New unit test.
+
+### Known
+
+- Two performance costs the review found in S43 are recorded in
+  `docs/STATUS.md` and left for a later release: a queued task wakes every
+  parked capped wait, and a capped wait spins briefly while another thread
+  has taken a task but not yet counted it out.
+
 ## 0.14.1 — 2026-11-20
 
 **Requires protoCore 3.6.1**, as 0.14.0 did (the floor is unchanged), and
