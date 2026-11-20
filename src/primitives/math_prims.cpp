@@ -610,6 +610,9 @@ const proto::ProtoObject* prim_FloatParts(STRuntime& rt, proto::ProtoContext* ct
 
 } // anon
 
+// fsum_prims.cpp: Float fsum: and its two-sequence forms (0.15.0).
+void installFsumPrimitives(STRuntime& rt);
+
 void installMathPrimitives(STRuntime& rt) {
     auto& b   = rt.bootstrap();
     auto* N   = b.numberProto;
@@ -658,6 +661,9 @@ void installMathPrimitives(STRuntime& rt) {
     bindClassPrimitive(rt, F, "e",        primitiveMethod<prim_E>);
     bindClassPrimitive(rt, F, "infinity", primitiveMethod<prim_Infinity>);
     bindClassPrimitive(rt, F, "nan",      primitiveMethod<prim_Nan>);
+    // Class-side correctly rounded sums, in their own translation unit
+    // (compiled without floating-point contraction).
+    installFsumPrimitives(rt);
 }
 
 } // namespace protoST

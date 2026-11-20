@@ -238,8 +238,11 @@ several cores without locks.
 
 ## Status
 
-Version 0.14.2 (2026-11-20), a patch release from the adversarial review of
-S43: a program that ends with the worker pool paused while a capped wait is
+Version 0.15.0 (2026-11-20) adds correctly rounded sums, class-side on
+`Float`: `Float fsum:`, `Float fsumOfProducts:with:` and
+`Float fsumOfSquaredDifferences:with:` answer CPython's `math.fsum` to the
+last bit (for protoBaseST's vector indexes). Version 0.14.2 (2026-11-20), a
+patch release from the adversarial review of S43: a program that ends with the worker pool paused while a capped wait is
 pending exits instead of hanging (S45), a deadlock verdict whose last event is
 the program thread's park is no longer lost (S46), and a capped park
 registration is exception-safe (S47). Version 0.14.1 (2026-11-20): waits
@@ -254,7 +257,7 @@ protoST uses protoCore's public API only. Built from source it requires
 protoCore 3.6.1 or newer (SOVERSION 5, `ProtoObject::newClone`) and protoIO
 0.7.0 (tag `v0.7.0`) or a later 0.7.x; its `.deb` (below) requires protoCore
 3.6.1. CI builds against protoCore 3.6.1 (tag `v3.6.1`), which is also the
-floor. Before the release, `ctest` ran 1484 cases on Linux locally, all passing
+floor. Before the release, `ctest` ran 1488 cases on Linux locally, all passing
 (0.10.0: 1461, and the 636 cases of the `tsan` label under ThreadSanitizer). Since 0.6.2 protoST lets
 protoCore's adaptive heap controller size the heap (budget: 75 % of physical
 memory or of the process memory limit); `PROTOCORE_HEAP_LIMIT_CELLS` forces a
@@ -326,7 +329,7 @@ commands, and what differs on Windows, are in
 
 ## Installation
 
-protoST can be packaged with CPack. The 0.14.2 release has a Linux `.deb`
+protoST can be packaged with CPack. The 0.15.0 release has a Linux `.deb`
 attached to its GitHub release (below, with protoCore 3.6.1); other packages
 are built from source as shown below. Every package depends on
 [protoCore](https://github.com/numaes/protoCore) — install protoCore's package
@@ -354,11 +357,11 @@ the GitHub releases (or built as below):
 wsl --install -d Ubuntu-24.04        # in PowerShell, once
 # then, in the Ubuntu shell:
 wget https://github.com/numaes/protoCore/releases/download/v3.6.1/protoCore-3.6.1-Linux.deb
-wget https://github.com/gamarino/protoST/releases/download/v0.14.2/protost-0.14.2-Linux.deb
-sudo apt install ./protoCore-3.6.1-Linux.deb ./protost-0.14.2-Linux.deb
+wget https://github.com/gamarino/protoST/releases/download/v0.15.0/protost-0.15.0-Linux.deb
+sudo apt install ./protoCore-3.6.1-Linux.deb ./protost-0.15.0-Linux.deb
 ```
 
-These are the 0.14.2 release packages. Built from source, protoST 0.14.2 needs
+These are the 0.15.0 release packages. Built from source, protoST 0.15.0 needs
 protoCore 3.6.1 or later; the `.deb` was built against 3.6.1, the release
 to install with it, and depends on `protocore (>= 3.6.1)` through protoCore's
 shlibs file (an older protoCore package is not enough: upgrade it with the

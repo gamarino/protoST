@@ -2538,6 +2538,30 @@ thin wrappers over `<cmath>` (libm).
 Class-side **constants** are bound on `Float`: `Float pi`, `Float e`,
 `Float infinity`, `Float nan`.
 
+Class-side **correctly rounded sums** (0.15.0) are bound on `Float` too. Each
+answers CPython's `math.fsum` of its terms, to the last bit:
+
+| Selector | Meaning |
+|----------|---------|
+| `Float fsum: aSequence` | the exact sum of the `Float`s, rounded once (Shewchuk's algorithm, ported from CPython's `math_fsum`) |
+| `Float fsumOfProducts: a with: b` | `fsum` of `a_i * b_i`, each product one IEEE double product |
+| `Float fsumOfSquaredDifferences: a with: b` | `fsum` of `(a_i - b_i) * (a_i - b_i)`, the difference and the product each rounded |
+
+> **Terms and sequences.** Every element must be a `Float`: an `Integer`, a
+> `Fraction`, `nil` or any other element signals `Error` (convert with
+> `asFloat` first). A sequence is an `Array` or an `OrderedCollection` (or a
+> subclass of either), read directly, or any other object that answers `size`
+> and `at:` from 1 to `size`, read through those messages (an `Interval` of
+> `Float`s, a user-defined sequence). The two sequences of a two-argument form
+> must have the same size. Special values behave as in CPython: a NaN term
+> makes the sum NaN, an infinite term makes it that infinity, and `-0.0` terms
+> sum to `0.0`. Two errors are signalled as `Error`, with the texts
+> `fsum: intermediate overflow` (CPython's `OverflowError`: a partial sum left
+> the `Float` range, even when the exact sum would not have) and
+> `fsum: -inf + inf` (CPython's `ValueError`). The primitives are compiled
+> without floating-point contraction (`-ffp-contract=off`), so no fused
+> multiply-add changes a rounded product or a partial.
+
 > **NaN.** Comparisons follow IEEE 754. A NaN is unordered with every number,
 > itself included: `<`, `<=`, `>`, `>=` and `=` answer `false` and `~=`
 > answers `true`, so `Float nan = Float nan` is `false`, while identity (`==`)

@@ -14,10 +14,12 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Test suite:** 1484 `ctest` cases on Linux, 1484/1484 passing on
-  2026-11-20 (0.14.2, against protoCore 3.6.1, tag `v3.6.1`, and protoIO
-  0.7.0; the 649 cases of the `tsan` label also under ThreadSanitizer, with
-  `ctest -j2` on four CPUs as CI runs them); 1481 for 0.14.1, 1479 for
+- **Test suite:** 1488 `ctest` cases on Linux, 1488/1488 passing on
+  2026-11-20 (0.15.0, against protoCore 3.6.1, tag `v3.6.1`, and protoIO
+  0.7.0; the four new `Float fsum:` cases are not in the `tsan` label, whose
+  649 cases CI runs under ThreadSanitizer); 1484 for 0.14.2 (the `tsan`
+  label also under ThreadSanitizer locally, with `ctest -j2` on four CPUs as
+  CI runs them), 1481 for 0.14.1, 1479 for
   0.14.0 and 1473 for
   0.13.0; 1461/1461 on
   2026-11-13 (0.10.0, against protoCore 3.6.0 and protoIO 0.5.0; the 636 cases
@@ -513,6 +515,13 @@ are noted where useful.
       `size` and `at:` are codepoint-based (UTF-8-aware); `'42' asInteger`
       parses, `'abc' asInteger` is nil *(0.4.0)*
 - [x] `Block` evaluation and control-flow protocol
+- [x] Correctly rounded sums, class-side on `Float`: `fsum:`,
+      `fsumOfProducts:with:` and `fsumOfSquaredDifferences:with:`, CPython's
+      `math.fsum` to the last bit (special values, both errors and the
+      half-way correction included). Floats only; an `Array` or
+      `OrderedCollection` is read directly, any other sequence through `size`
+      and `at:`. Checked against 237 CPython vectors by their bytes
+      (`12-builtins/gen_fsum_vectors.py`) *(0.15.0)*
 
 ---
 

@@ -3,6 +3,51 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
+## 0.15.0 — 2026-11-20
+
+**Requires protoCore 3.6.1**, as 0.14.x did (the floor is unchanged), and
+protoIO 0.7.0 at build time. A minor release: it adds API.
+
+### Added
+
+- **Correctly rounded sums, class-side on `Float`.** They are for protoBaseST's
+  vector indexes (the vectors addendum, section 2.2.4), whose Smalltalk kernel
+  stays the reference and the fallback.
+  - `Float fsum: aSequence` answers CPython's `math.fsum`, to the last bit. It
+    is a line-for-line port of `math_fsum` (Shewchuk's partials and the final
+    half-way correction).
+  - `Float fsumOfProducts: a with: b` is the fsum of the IEEE products
+    `a_i * b_i`.
+  - `Float fsumOfSquaredDifferences: a with: b` is the fsum of
+    `(a_i - b_i) * (a_i - b_i)`, with the difference and the product each
+    rounded.
+- **Terms.** Every term must be a `Float`. An `Integer`, a `Fraction` or any
+  other element signals `Error`.
+- **Sequences.** An `Array` or `OrderedCollection` (or a subclass) is read
+  directly from its element list. Any other object is read through `size` and
+  `at:`, so protoBaseST's `PBTuple` and `PBFrozenList` are accepted as they
+  are.
+- **Special values** are handled as in CPython:
+  - a NaN term gives NaN;
+  - an infinite term gives that infinity;
+  - `-0.0` terms sum to `0.0`.
+- **Errors.** Each of these is signalled as an `Error`:
+  - `fsum: intermediate overflow` (CPython's `OverflowError`);
+  - `fsum: -inf + inf` (CPython's `ValueError`);
+  - two sequences of different sizes.
+- The new translation unit, `src/primitives/fsum_prims.cpp`, is compiled with
+  `-ffp-contract=off` on GCC and Clang, so no fused multiply-add can change a
+  partial or a rounded product.
+- **Tests.**
+  - `tests/conformance/12-builtins/gen_fsum_vectors.py` generates 237 cases
+    from CPython 3.14's `math.fsum`. They cover near-cancelling sums,
+    subnormals, the overflow paths, NaN, the infinities, `-0.0`, half-way
+    final roundings, half-way products and differences, and long random
+    sequences.
+  - Each result is compared by its 8 bytes. Each case runs on an `Array`, on
+    an `OrderedCollection` and on a `size`/`at:` sequence.
+  - Three further tests cover the refusals and the uncaught errors.
+
 ## 0.14.2 — 2026-11-20
 
 **Requires protoCore 3.6.1**, as 0.14.1 did (the floor is unchanged), and
