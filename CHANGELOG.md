@@ -3,6 +3,36 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
+## 0.14.1 — 2026-11-20
+
+**Requires protoCore 3.6.1**, as 0.14.0 did (the floor is unchanged), and
+protoIO 0.7.0 at build time. A patch release: the fix for S43 and a
+regression test for S44. No language or library behaviour changes.
+
+### Fixed
+
+- **A wait nested in a block past the helping cap parks instead of polling
+  (S43).** Each such wait (S40) woke every 200 microseconds to look for work
+  or a settled Future, and the workers at shutdown polled the same way; with
+  up to 256 of them, the polling took the CPU from the threads doing the work.
+  The ThreadSanitizer CI job failed intermittently from it: the 5,000-link
+  chain of `cli_nested_wait_progress` signalled its deadlock error but did not
+  exit within 900 s, and the tests beside it starved. A capped wait now sleeps
+  on a futex until its Future is settled, a task is queued, or a deadlock
+  verdict may have changed, and the workers at shutdown wait on the pool's
+  semaphore. The 5,000 chain takes 11 s under ThreadSanitizer on four CPUs
+  (158 s before) and 1.3 s in a release build (3 s), with a seventh of the
+  CPU time. New test `cli_capped_wait_parks`. `PROTOST_WORKER_STATS=1` also
+  prints the number of idle rounds of capped waits.
+- **`asSortedCollection:` on an empty collection (S44).** protoBaseST found
+  that `#() asSortedCollection: aBlock`, and the same on an empty `Set`,
+  `OrderedCollection` or `Bag`, signalled `sort: needs an Array or an
+  OrderedCollection` at 0.12.0. The S42 fix of 0.14.0 had already removed the
+  cause (the result, made by `basicNew`, had no element store when `sort:`
+  ran); `09-collections/empty-conversions.st` now pins every form, with the
+  sibling conversions (`asBag`, `asSet`, `asOrderedCollection`, `asArray`,
+  `sorted`, `sorted:`) on empty receivers.
+
 ## 0.14.0 — 2026-11-19
 
 **Requires protoCore 3.6.1**, as 0.13.0 did (the floor is unchanged:

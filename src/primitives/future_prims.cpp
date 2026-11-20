@@ -267,6 +267,8 @@ bool settleFuture(STRuntime& rt, proto::ProtoContext* ctx,
     //     state and never parks, or it parks AFTER setting `mainWaitingOn`
     //     and the load below observes the pointer match.
     rt.notifyMainWaiterIfFor(future);
+    // 4c. S43: and any pool worker parked at the helping cap on it.
+    rt.wakeCappedWaitersFor(future);
 
     // 5. Drain and reschedule yielded actor waiters. Done after __state__ is
     //    published so a resumed actor reads the final state. A yield racing
@@ -475,8 +477,27 @@ const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
                 "A wait inside a block that a primitive evaluates blocks its worker: wait outside "
                 "the block, or chain with thenDo:)");
         }
-        // Off the stop-the-world quorum while it sleeps (`awaited` is pinned).
-        proto::ProtoThread::sleepFor(ctx, static_cast<proto::proto_ulong>(atCap ? 200 : idle < 10 ? 20 : 500));
+        if (atCap && capped.entered) {
+            // S43: nothing to run and no verdict to make: park until an event
+            // that can change that (STRuntime::beginCappedPark). Polling here
+            // woke every capped worker every 200 us; with up to 256 of them it
+            // took the CPU from the threads doing the work, worst under
+            // ThreadSanitizer. The conditions are read again after
+            // registering, so an event between the checks above and the park
+            // is never missed. `awaited` is pinned across the park.
+            STRuntime::noteCappedIdleRound();
+            const STRuntime::CappedPark park = rt.beginCappedPark(awaited);
+            const bool verdictDue = rt.deadlockPossible()
+                && (t_judgedFor != &rt || t_judgedEpoch != rt.quiescenceEpoch());
+            const bool stillIdle = readState(rt, ctx, awaited) == 0
+                && !rt.hasQueuedTasks() && !verdictDue;
+            rt.endCappedPark(ctx, park, stillIdle);
+        } else {
+            // Below the cap (or off the pool) the wait helps with actor turns,
+            // which arrive without a wake for it: a short back-off. Off the
+            // stop-the-world quorum while it sleeps (`awaited` is pinned).
+            proto::ProtoThread::sleepFor(ctx, static_cast<proto::proto_ulong>(atCap ? 200 : idle < 10 ? 20 : 500));
+        }
         ++idle;
     }
     const proto::ProtoString* valueKey = rt.bootstrap().sym.value;

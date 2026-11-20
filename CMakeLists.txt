@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(protoST VERSION 0.14.0 LANGUAGES CXX)
+project(protoST VERSION 0.14.1 LANGUAGES CXX)
 
 # The one place the version is written: every binary and library reads it
 # through PROTOST_VERSION (include/protoST/STRuntime.h).
@@ -640,6 +640,10 @@ add_test(NAME cli_helped_message_handler_actions
 add_test(NAME cli_nested_wait_progress
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_nested_wait_progress.sh $<TARGET_FILE:protost>)
 
+# S43: a wait past the helping cap parks until an event; it does not poll.
+add_test(NAME cli_capped_wait_parks
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_capped_wait_parks.sh $<TARGET_FILE:protost>)
+
 add_test(NAME cli_future_callback_barrier
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_future_callback_barrier.sh $<TARGET_FILE:protost>)
 
@@ -651,7 +655,8 @@ add_test(NAME cli_kernel
 # CPU-seconds in 15 s, measured locally): in the 0.10.0 assertions job the two
 # overlapped and even `protost --version` took 146 ms, so the budget failed on
 # the neighbour's load, not on protoST's startup (271 ms there, about 40 ms
-# alone).
+# alone). Since 0.14.1 (S43) those workers park instead of polling, but a
+# wall-clock budget still runs alone: any heavy neighbour can disturb it.
 set_tests_properties(cli_kernel PROPERTIES RUN_SERIAL TRUE)
 
 add_test(NAME cli_debugger
@@ -763,7 +768,7 @@ endif()
 # or the text prompt), so each DAP session is a concurrency test.
 set_tests_properties(cli_actor_unobserved_error cli_callback_error_reported
                      cli_buried_actor_deadlock cli_helped_message_handler_actions
-                     cli_nested_wait_progress cli_future_callback_barrier
+                     cli_nested_wait_progress cli_capped_wait_parks cli_future_callback_barrier
                      cli_actor_stress cli_concurrent_first_call
                      cli_gc_shutdown_stress cli_gc_reclaims cli_gc_recursion_reclaims cli_gc_spin_safepoint
                      cli_actor_payload_gc cli_binary_lock cli_sigint
@@ -773,9 +778,11 @@ set_tests_properties(cli_actor_unobserved_error cli_callback_error_reported
                      cli_dap_sources cli_dap_gc
                      PROPERTIES ${PROTOST_TSAN_TEST_PROPERTIES})
 # cli_nested_wait_progress bounds each of its runs with `timeout`; under TSan
-# the chain of 5000 (256 workers) needs more than its default 120 s, so the
+# the chain of 5000 (256 workers) needed more than its default 120 s, so the
 # bound is raised as the conformance programs' is, and the test's own ctest
-# limit with it (the script runs ten cases).
+# limit with it (the script runs ten cases). Since 0.14.1 (S43) the case takes
+# about 11 s under TSan on four CPUs (it took 158 s while capped waits
+# polled); the bound stays a hang guard, never a measurement.
 if(PROTOST_TSAN)
     set_tests_properties(cli_nested_wait_progress PROPERTIES
         ENVIRONMENT_MODIFICATION "TSAN_OPTIONS=set:${PROTOST_TSAN_OPTIONS};NESTED_WAIT_TIMEOUT=set:900"
