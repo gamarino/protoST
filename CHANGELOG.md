@@ -27,6 +27,14 @@ protoIO 0.7.0 at build time. A minor release: it adds API.
   - **One difference from CPython:** a square that overflows is an infinite
     term, as `raisedTo: 2` answers it; CPython's `**` raises `OverflowError`
     there.
+  - **Platform note (Windows).** MSVC's `pow(x, 2.0)` is not correctly
+    rounded on some exact half-way squares that glibc's rounds to even. CI
+    measured 3 of the 72 vector cases one unit in the last place higher on
+    Windows, so the sum can differ from Linux's in the last bit. It still
+    equals CPython's on Windows, which calls the same `pow`, and
+    `raisedTo: 2` on every platform. `raisedTo:` with a `Float` receiver
+    already called the platform's `pow` before this release. The deviation
+    is D58 in `docs/STATUS.md`.
   - GCC folds `pow(d, 2.0)` with a constant exponent into `d * d` even at
     `-O2`. The exponent is therefore read from a `volatile`, so it reaches
     `pow` at run time; the object file calls `pow`.
@@ -40,11 +48,14 @@ protoIO 0.7.0 at build time. A minor release: it adds API.
   - `float-fsum-pow-vectors.st` runs each case on an `Array`, an
     `OrderedCollection` and a `size`/`at:` sequence, and against the
     `raisedTo: 2` sum (288 checks). The 22 glibc-dependent cases pin their
-    bytes on Linux; on other platforms they must equal the `raisedTo: 2` sum.
+    bytes on Linux; on macOS they must equal the `raisedTo: 2` sum. On
+    Windows the test is skipped, with the reason printed: the bytes are those
+    of CPython on glibc, and MSVC's `pow` rounds some squares otherwise.
   - `float-fsum-pow-decisive.st` (Linux) shows that the `d * d` form fails
     all 22 decisive cases.
-  - `float-fsum-pow-matches-raisedto.st` compares 1200 sums over 400 vectors
-    made in Smalltalk with the `raisedTo: 2` sum.
+  - `float-fsum-pow-matches-raisedto.st` compares the primitive with the
+    `raisedTo: 2` sum on every platform, Windows included: 1416 sums, over
+    400 vectors made in Smalltalk and the 72 vector cases, on 3 shapes each.
   - Two further tests cover the refusals and the uncaught overflow.
 
 ## 0.15.0 — 2026-11-20

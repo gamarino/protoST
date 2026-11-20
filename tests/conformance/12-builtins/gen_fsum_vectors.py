@@ -58,7 +58,10 @@ glibc's, so the test pins its bytes on Linux only; another C library's pow
 may round those squares differently (CPython on that platform would answer
 what that pow answers). Every case, on every platform, must also equal
 protoST's own `Float fsum: (... collect: [... raisedTo: 2])`, which calls the
-same pow.
+same pow. On Windows the pow vectors are not pinned at all: MSVC's pow
+rounds some half-way squares that glibc's rounds to even (CI measured 3 of
+these cases), so float-fsum-pow-vectors.st is skipped there, and
+float-fsum-pow-matches-raisedto.st holds these cases to raisedTo: 2 instead.
 
 One difference from CPython is kept on purpose. When (x - y) ** 2 overflows,
 CPython raises OverflowError at the `**`, before math.fsum sees the term;

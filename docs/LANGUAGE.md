@@ -2573,7 +2573,14 @@ answers CPython's `math.fsum` of its terms, to the last bit:
 > two may differ in the last bit, and so may the sums; use
 > `fsumOfSquaredDifferences:with:` for the rounded `d * d`. Because the answer
 > follows the platform's `pow`, it can differ between C libraries, as
-> CPython's does. Sequences, elements, the size check and the two errors are
+> CPython's does. **Platform note:** on Windows, MSVC's `pow(x, 2.0)` is not
+> correctly rounded on some exact half-way squares that glibc's rounds to
+> even (CI measured three of the conformance cases, each one unit in the last
+> place higher), so the answer there can differ from Linux's in the last
+> bit. It still equals CPython's on Windows, which calls the same `pow` for
+> `**`, and it equals `raisedTo: 2` on every platform. `raisedTo:` itself
+> already had this property before 0.16.0: with a `Float` receiver it has
+> always called the platform's `pow`. Sequences, elements, the size check and the two errors are
 > those of `fsumOfSquaredDifferences:with:`, with this selector in the texts.
 > One difference from CPython: a square that overflows is an infinite term,
 > as `raisedTo: 2` answers, where CPython's `**` raises `OverflowError`.
