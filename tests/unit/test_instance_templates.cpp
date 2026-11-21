@@ -128,7 +128,22 @@ TEST_CASE("Templates: two instances share the template's shape", "[templates]") 
         h.rt.globals()->setAttribute(ctx, h.sym(inst), h.run("Sub new."));
     const proto::ProtoObject* t = protoST::instanceTemplate(h.rt, ctx, h.global("Sub"));
     const long long replace = h.writeCost(t, "_iv_a");
+    // Adding a name the shape lacks costs more than replacing a value the
+    // first time it happens.  Since protoCore's shape transition table
+    // (after 3.6.1), the child shape a (shape, name) addition makes is
+    // shared, so repeating the same addition from the same shape reuses it
+    // and allocates one cell less; without the table every addition makes a
+    // fresh shape.  The reference for the instances below is therefore the
+    // repeated addition on the template, which costs the same as an
+    // instance's addition under both behaviours, and which (with the table)
+    // an instance matches only if its shape is the template's own.
+    const long long firstAdd = h.writeCost(t, "_iv_notDeclared");
+    REQUIRE(replace < firstAdd);
     const long long added = h.writeCost(t, "_iv_notDeclared");
+    INFO("replace " << replace << " cells, first add " << firstAdd
+         << " cells, repeated add " << added << " cells");
+    REQUIRE(added <= firstAdd);
+    // Otherwise the checks below could not tell a replacement from an addition.
     REQUIRE(replace < added);
     for (const char* inst : {"X", "Y"}) {
         // Read the instance through an immutable copy: newClone keeps the
