@@ -2546,6 +2546,7 @@ answers CPython's `math.fsum` of its terms, to the last bit:
 | `Float fsum: aSequence` | the exact sum of the `Float`s, rounded once (Shewchuk's algorithm, ported from CPython's `math_fsum`) |
 | `Float fsumOfProducts: a with: b` | `fsum` of `a_i * b_i`, each product one IEEE double product |
 | `Float fsumOfSquaredDifferences: a with: b` | `fsum` of `(a_i - b_i) * (a_i - b_i)`, the difference and the product each rounded |
+| `Float fsumOfPowSquaredDifferences: a with: b` | `fsum` of `(a_i - b_i) raisedTo: 2`, the difference rounded, then squared by the C library's `pow` (0.16.0) |
 
 > **Terms and sequences.** Every element must be a `Float`: an `Integer`, a
 > `Fraction`, `nil` or any other element signals `Error` (convert with
@@ -2561,6 +2562,28 @@ answers CPython's `math.fsum` of its terms, to the last bit:
 > `fsum: -inf + inf` (CPython's `ValueError`). The primitives are compiled
 > without floating-point contraction (`-ffp-contract=off`), so no fused
 > multiply-add changes a rounded product or a partial.
+
+> **The pow form** (0.16.0). `Float fsumOfPowSquaredDifferences: a with: b`
+> answers the same bytes as
+> `Float fsum: ((1 to: a size) collect: [:i | ((a at: i) - (b at: i)) raisedTo: 2])`,
+> and those of CPython's `math.fsum((x - y) ** 2 for x, y in zip(a, b))` on
+> the same platform: all three square with the C library's `pow(d, 2.0)`.
+> That is not always `d * d`. glibc's `pow` is not correctly rounded, so where
+> the exact square lies half-way between two `Float`s (or very near it) the
+> two may differ in the last bit, and so may the sums; use
+> `fsumOfSquaredDifferences:with:` for the rounded `d * d`. Because the answer
+> follows the platform's `pow`, it can differ between C libraries, as
+> CPython's does. **Platform note:** on Windows, MSVC's `pow(x, 2.0)` is not
+> correctly rounded on some exact half-way squares that glibc's rounds to
+> even (CI measured three of the conformance cases, each one unit in the last
+> place higher), so the answer there can differ from Linux's in the last
+> bit. It still equals CPython's on Windows, which calls the same `pow` for
+> `**`, and it equals `raisedTo: 2` on every platform. `raisedTo:` itself
+> already had this property before 0.16.0: with a `Float` receiver it has
+> always called the platform's `pow`. Sequences, elements, the size check and the two errors are
+> those of `fsumOfSquaredDifferences:with:`, with this selector in the texts.
+> One difference from CPython: a square that overflows is an infinite term,
+> as `raisedTo: 2` answers, where CPython's `**` raises `OverflowError`.
 
 > **NaN.** Comparisons follow IEEE 754. A NaN is unordered with every number,
 > itself included: `<`, `<=`, `>`, `>=` and `=` answer `false` and `~=`
