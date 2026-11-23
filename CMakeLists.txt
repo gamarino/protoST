@@ -259,6 +259,7 @@ add_library(protost_runtime STATIC
     src/primitives/object_prims.cpp
     src/primitives/future_prims.cpp
     src/primitives/atom_prims.cpp
+    src/primitives/state_prims.cpp
     src/primitives/exception_prims.cpp
     src/primitives/collection_prims.cpp
     src/primitives/io_prims.cpp
@@ -590,6 +591,9 @@ add_test(NAME cli_oom_clean
 
 add_test(NAME cli_array_new_headroom
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_array_new_headroom.sh $<TARGET_FILE:protost>)
+
+add_test(NAME cli_setinstvar_deprecation
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_setinstvar_deprecation.sh $<TARGET_FILE:protost>)
 
 if(WIN32)
     # Ctrl-C is a console control event on Windows, which Git Bash cannot send

@@ -80,6 +80,7 @@ namespace protoST { void installDebuggerPrimitives(STRuntime& rt); }
 namespace protoST { void installObjectPrimitives(STRuntime& rt); }
 namespace protoST { void installFuturePrimitives(STRuntime& rt); }
 namespace protoST { void installAtomPrimitives(STRuntime& rt); }
+namespace protoST { void installStatePrimitives(STRuntime& rt); }
 namespace protoST { void installImportGlobal(STRuntime& rt); }
 namespace protoST { void installWorkerPoolGlobal(STRuntime& rt); }
 namespace protoST { void installExceptionPrimitives(STRuntime& rt); }
@@ -894,6 +895,7 @@ void STRuntime::construct() {
     installObjectPrimitives(*this);
     installFuturePrimitives(*this);
     installAtomPrimitives(*this);
+    installStatePrimitives(*this);
     installExceptionPrimitives(*this);
     installIoPrimitives(*this);
     installBytesPrimitives(*this);
