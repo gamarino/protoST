@@ -32,10 +32,13 @@ log add: r.
 "ZeroDivide es reanudable."
 log add: ([ (1 / 0) + 1 ] on: ZeroDivide do: [:e | e resume: 41 ]).
 
-"outer: en Pharo el handler interno continúa; en protoST 0.7.0 se comporta
- como pass (D7). ¿Qué imprime?"
+"outer: el handler externo corre encima del interno; si reanuda, outer
+ devuelve ese valor DENTRO del handler interno, que continúa. Hasta 0.9.x
+ protoST lo trataba como pass (D7, cerrado en 0.10.0). ¿Qué imprime?"
 r := [[ Warning signal: 'w'. 'cuerpo' ]
-        on: Warning do: [:e | e outer. 'interno continuó' ]]
+        on: Warning do: [:e |
+          log add: 'outer devolvió ', e outer printString.
+          'interno continuó' ]]
       on: Warning do: [:e | e resume: 5 ].
 log add: r.
 
