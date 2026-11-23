@@ -488,7 +488,9 @@ void markUserDeclared(STRuntime& rt, proto::ProtoContext* ctx, const proto::Prot
 // UnsetConstantError do:` keep meaning the kernel class. Once the kernel is
 // loaded, a declaration under that name is refused: the Error is signalled in
 // place and its answer returned (nullptr means the name is free). Only this
-// name is reserved here; the other kernel class names are a recorded gap.
+// name is reserved here; the other kernel class names are a recorded gap
+// (STATUS D64). The routes that bind a global directly (Smalltalk at:put:,
+// STORE_GLOBAL, addBehavior:) are refused by refuseReservedGlobalStore.
 const proto::ProtoObject* refuseReservedClassName(STRuntime& rt, proto::ProtoContext* ctx,
                                                   const proto::ProtoObject* nameArg) {
     const proto::ProtoString* name = nameArg ? nameArg->asString(ctx) : nullptr;
@@ -497,9 +499,7 @@ const proto::ProtoObject* refuseReservedClassName(STRuntime& rt, proto::ProtoCon
     if (!g || g->getOwnAttributeDirect(ctx, proto::ProtoString::createSymbol(ctx, "__kernel_loaded__"))
                   != PROTO_TRUE)
         return nullptr;
-    const proto::ProtoObject* v = signalErrorNamed(rt, ctx, "Error",
-        "UnsetConstantError is a reserved kernel class name; "
-        "a class cannot be declared under it");
+    const proto::ProtoObject* v = signalErrorNamed(rt, ctx, "Error", kUnsetConstantErrorReservedText);
     return v ? v : PROTO_NONE;
 }
 
@@ -1039,6 +1039,17 @@ const proto::ProtoObject* addBehaviorToClass(STRuntime& rt,
         throw NativeError("addBehavior:: receiver is nil");
     if (!mixin || mixin == PROTO_NONE)
         throw NativeError("addBehavior:: behaviour (mixin) is nil");
+    // The rebuild rebinds the class's name. A class named UnsetConstantError
+    // (the kernel class, or a copy carrying its name) would rebind the
+    // reserved global: refused before anything changes (spec §6.9).
+    {
+        const std::string name = ownClassName(rt.bootstrap(), ctx, oldCls);
+        if (!name.empty()) {
+            const proto::ProtoString* key = proto::ProtoString::createSymbol(ctx, name.c_str());
+            if (const proto::ProtoObject* refused = refuseReservedGlobalStore(rt, ctx, key, nullptr))
+                return refused;
+        }
+    }
 
     // Build the immutable shape carrying [old parents…, mixin]. `addParent`
     // PREPENDS at the chain head, so to leave the head-first walk order
@@ -1704,7 +1715,11 @@ const proto::ProtoObject* prim_Object_globalAt(STRuntime& rt, proto::ProtoContex
 const proto::ProtoObject* prim_Object_globalAtPut(STRuntime& rt, proto::ProtoContext* ctx,
                                                   const proto::ProtoObject*,
                                                   const proto::ProtoObject* const* a, int) {
-    rt.globals()->setAttribute(ctx, globalKey(ctx, a[0]), a[1]);
+    const proto::ProtoString* key = globalKey(ctx, a[0]);
+    // Smalltalk at: #UnsetConstantError put: x is refused (spec §6.9).
+    if (const proto::ProtoObject* refused = refuseReservedGlobalStore(rt, ctx, key, a[1]))
+        return refused;
+    rt.globals()->setAttribute(ctx, key, a[1]);
     return a[1];
 }
 

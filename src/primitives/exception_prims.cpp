@@ -808,12 +808,11 @@ const proto::ProtoObject* signalUnsetConstantError(STRuntime& rt, proto::ProtoCo
     TransientPin pinReceiver(ctx, receiver);
     const std::string text = "constant '" + variableName + "' of "
                              + articleAndClassName(rt, ctx, receiver) + " read before it was set";
-    const proto::ProtoObject* g = rt.globals();
-    const proto::ProtoObject* cls = g
-        ? g->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, "UnsetConstantError"))
-        : nullptr;
-    if (!cls || cls == PROTO_NONE || !isExceptionClassObject(rt, ctx, cls))
-        return signalNativeError(rt, ctx, text);
+    // The class captured when the kernel loaded, never a global-name lookup:
+    // the reserved global cannot be rebound, and even if it were, M14 would
+    // keep its class (spec §6.9). Without a kernel there is no class.
+    const proto::ProtoObject* cls = rt.bootstrap().unsetConstantErrorClass;
+    if (!cls) return signalNativeError(rt, ctx, text);
     const proto::ProtoObject* exc =
         const_cast<proto::ProtoObject*>(cls)->newChild(ctx, /*isMutable=*/true);
     TransientPin pinExc(ctx, exc);
@@ -823,6 +822,20 @@ const proto::ProtoObject* signalUnsetConstantError(STRuntime& rt, proto::ProtoCo
     exc->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "_iv_variableName"),
                       makeString(ctx, variableName));
     return signalInstance(rt, ctx, exc);
+}
+
+const char* const kUnsetConstantErrorReservedText =
+    "UnsetConstantError is a reserved kernel class name; a class cannot be declared under it";
+
+const proto::ProtoObject* refuseReservedGlobalStore(STRuntime& rt, proto::ProtoContext* ctx,
+                                                    const proto::ProtoString* key,
+                                                    const proto::ProtoObject* value) {
+    const Bootstrap& b = rt.bootstrap();
+    if (!b.unsetConstantErrorClass || key != b.sym.unsetConstantErrorName
+        || value == b.unsetConstantErrorClass)
+        return nullptr;
+    const proto::ProtoObject* v = signalErrorNamed(rt, ctx, "Error", kUnsetConstantErrorReservedText);
+    return v ? v : PROTO_NONE;
 }
 
 // A Message: the selector and the arguments of a send, as a

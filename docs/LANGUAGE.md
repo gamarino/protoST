@@ -1608,8 +1608,11 @@ till instVarIsSet: #owner.                             "=> true"
 
 A read of an unset constant signals `UnsetConstantError`, a direct subclass
 of `Error` (§8.1), so that a caller can catch that and nothing else. It is a
-kernel class, bound at start-up like `ModificationForbidden`; its name is
-reserved, so a class declaration under it is refused. Like every `Error`, it
+kernel class, bound at start-up like `ModificationForbidden`. Its name is
+reserved: a class declaration under it, `Smalltalk at: #UnsetConstantError
+put:`, a REPL assignment to it and `addBehavior:` on it are refused with an
+`Error`, and nothing is rebound. The runtime signals it through the class it
+captured when the kernel loaded, never by looking the name up. Like every `Error`, it
 is not resumable: the read cannot be given a value after the fact.
 
 - `receiver` answers the object whose constant was read, and `variableName`

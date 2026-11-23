@@ -758,3 +758,47 @@ TEST_CASE("IvarModifiers: the mutability probe answers true only for a mutable o
     CHECK(mut->hasOwnAttribute(ctx, probe) != PROTO_TRUE);
     CHECK(mut->getOwnAttributeDirect(ctx, key)->asLong(ctx) == 5);
 }
+
+TEST_CASE("IvarModifiers: M14 is signalled through the UnsetConstantError captured at bootstrap, "
+          "not through the global name",
+          "[ivar_modifiers]") {
+    // Explicit-state spec §6.9 (Task 11 fix round 1). Every language route
+    // that would rebind the reserved global is refused; this case rebinds it
+    // from C++, past all of them, and checks that a read of an unset
+    // constant still signals the kernel class, with its accessors.
+    protoST::STRuntime rt;
+    proto::ProtoContext* ctx = rt.rootCtx();
+    auto sym = [&](const char* s) { return proto::ProtoString::createSymbol(ctx, s); };
+    const proto::ProtoObject* kernel = rt.globals()->getAttribute(ctx, sym("UnsetConstantError"));
+    REQUIRE(kernel != nullptr);
+    REQUIRE(kernel != PROTO_NONE);
+    CHECK(rt.bootstrap().unsetConstantErrorClass == kernel);
+    rt.globals()->setAttribute(ctx, sym("KernelUnsetConstantError"), kernel);
+    rt.globals()->setAttribute(ctx, sym("UnsetConstantError"), ctx->fromInteger(42));
+
+    const char* run =
+        "Object subclass: #Acct instanceVariableNames: '' constantNames: 'owner'.\n"
+        "Acct >> owner\n"
+        "  ^ owner\n"
+        "\n"
+        "[[Acct basicNew owner. 'no error']\n"
+        "   on: KernelUnsetConstantError do: [:e | e variableName]]\n"
+        "  on: Error do: [:e | 'a plain Error']\n";
+    protoST::Parser P(run);
+    auto mod = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C;
+    auto bc = C.compileModule(*mod);
+    REQUIRE_FALSE(C.hasErrors());
+    const proto::ProtoObject* answer = nullptr;
+    std::string error;
+    try {
+        answer = rt.runTopLevel(*bc);
+    } catch (const std::exception& e) {
+        error = protoST::nativeErrorText(e);
+    }
+    REQUIRE(error.empty());
+    const proto::ProtoString* s = answer && answer != PROTO_NONE ? answer->asString(ctx) : nullptr;
+    REQUIRE(s != nullptr);
+    CHECK(s->toStdString(ctx) == "owner");
+}

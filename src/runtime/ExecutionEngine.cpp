@@ -2818,6 +2818,14 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // allocating setAttribute on the globals object.
                 auto* g = rt_.globals();
                 if (!g) throw NativeError("globals not initialized");
+                // The reserved global UnsetConstantError (spec §6.9): a REPL
+                // assignment to it is refused in place and binds nothing.
+                // One pointer comparison; the helper runs only on a match.
+                if (sym == bs_.sym.unsetConstantErrorName && bs_.unsetConstantErrorClass
+                    && val != bs_.unsetConstantErrorClass) {
+                    refuseReservedGlobalStore(rt_, ctx, sym, val);
+                    DISPATCH_SCOPED();
+                }
                 g->setAttribute(ctx, sym, val);
                 DISPATCH_SCOPED();
                 break;

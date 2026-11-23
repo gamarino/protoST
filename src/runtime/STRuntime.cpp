@@ -3547,6 +3547,17 @@ void STRuntime::loadKernel() {
             ->setAttribute(rootCtx(), ptrRegistryKey(rootCtx(), m), m);
         b.kernelIsResumable = m;
     }
+    // The kernel's UnsetConstantError (Bootstrap::unsetConstantErrorClass),
+    // pinned the same way. From here on M14 is signalled through it and the
+    // reserved global cannot be rebound (explicit-state spec §6.9).
+    const proto::ProtoObject* g = globals();
+    const proto::ProtoObject* uce = (g && b.sym.unsetConstantErrorName)
+        ? g->getOwnAttributeDirect(rootCtx(), b.sym.unsetConstantErrorName) : nullptr;
+    if (uce && uce != PROTO_NONE && impl_->liveRegistry) {
+        const_cast<proto::ProtoObject*>(impl_->liveRegistry)
+            ->setAttribute(rootCtx(), ptrRegistryKey(rootCtx(), uce), uce);
+        b.unsetConstantErrorClass = uce;
+    }
 }
 
 // F5-M1: Read, parse, compile, and execute a module file. Wraps the classes

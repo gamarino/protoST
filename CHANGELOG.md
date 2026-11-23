@@ -36,7 +36,10 @@ at 0.7.1, unchanged.
     an `update:with:` block, its handlers included, signals an `Error` (D61).
   - **Checked constant reads:** a read of an unset constant signals the new
     kernel class `UnsetConstantError` (with `receiver` and `variableName`;
-    D62), on every read path; the name is reserved for declarations.
+    D62), on every read path. It is signalled through the class captured when
+    the kernel loaded, and its name is reserved: a declaration under it,
+    `Smalltalk at:put:`, a REPL assignment and `addBehavior:` on it are
+    refused.
   - `instVarIsSet:` asks whether a declared variable is set without reading
     it; `Behavior >> instVarModifierOf:` answers a variable's modifier.
   - Reflection (`instVarNamed:put:`, `instVarAt:put:`), `copy`,
@@ -99,9 +102,10 @@ Behaviour changes for code that uses none of the new forms (spec §13.1):
 
 ### Known gaps
 
-Recorded in STATUS, found while building the release: the reservation of
-`UnsetConstantError` covers declarations, not `Smalltalk at:put:` or
-`addBehavior:` on the kernel class (D64); a compiled plain read can find a
+Recorded in STATUS, found while building the release: the kernel error
+classes other than `UnsetConstantError` are found by their global name and
+are not reserved, so rebinding one (`Smalltalk at: #SubscriptOutOfBounds
+put: x`) turns its signals into plain `Error`s (D64, predates 0.17.0); a compiled plain read can find a
 same-named class-instance variable (D67, predates 0.17.0); a stale generated
 constructor fails when called, naming the class to redeclare (D68); the
 compile-time constructor-redefinition check needs a plain-name receiver of
@@ -124,7 +128,10 @@ changes here.
 - `tests/conformance/16-explicit-state/`: the 0.17.0 rows of the spec's
   conformance list, the concurrency cases T1, T2, T4 and T5 (`tsan` label),
   and the review findings, including
-  `unset-constant-error-smalltalk-at-put.st`, an `XFAIL` for D64.
+  `unset-constant-error-global-reserved.st` and
+  `cli_unset_constant_error_reserved` (the reserved global refused on every
+  route), and the unit case that M14 keeps its class when the global is
+  rebound from C++.
 - `tests/unit/test_ivar_modifiers.cpp` (`IvarModifiers:` cases), among them
   the pin of the mutability probe.
 - `docs/vm-examples/20-explicit-state` (the VM listing of the new opcodes).

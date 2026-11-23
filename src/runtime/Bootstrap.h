@@ -153,6 +153,15 @@ struct Bootstrap {
     // method). nullptr when no kernel is loaded: always send.
     const proto::ProtoObject* kernelIsResumable           = nullptr;
 
+    // The kernel class UnsetConstantError (lib/kernel/exception.st), captured
+    // once when the kernel has loaded (STRuntime::loadKernel) and pinned in
+    // the runtime's live registry for the runtime's lifetime. M14 is signalled
+    // through this reference, never through a global-name lookup, and from
+    // the capture on every route that would rebind the reserved global is
+    // refused (refuseReservedGlobalStore, explicit-state spec §6.9). nullptr
+    // when no kernel is loaded.
+    const proto::ProtoObject* unsetConstantErrorClass     = nullptr;
+
     // Pre-interned hot-path attribute symbols.
     //
     // Interning is idempotent — the same content always yields the same
@@ -229,6 +238,7 @@ struct Bootstrap {
         // A key never written: the state primitives' mutability probe
         // (state_prims.cpp, receiverIsWritable).
         const proto::ProtoString* mutabilityProbe = nullptr;  // __protost_mutability_probe__
+        const proto::ProtoString* unsetConstantErrorName = nullptr;  // UnsetConstantError (reserved global)
         const proto::ProtoString* classId         = nullptr;  // __class_id__ (super: the defining class)
         const proto::ProtoString* metaclass       = nullptr;  // __metaclass__ (methodHolder of a class)
         const proto::ProtoString* soleInstance    = nullptr;  // __sole_instance__ (a metaclass's class)

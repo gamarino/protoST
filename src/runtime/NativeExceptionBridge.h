@@ -139,6 +139,20 @@ const proto::ProtoObject* signalUnsetConstantError(STRuntime& rt, proto::ProtoCo
                                                    const proto::ProtoObject* receiver,
                                                    const std::string& variableName);
 
+// The text of the refusal of the reserved name UnsetConstantError.
+extern const char* const kUnsetConstantErrorReservedText;
+
+// Explicit-state spec §6.9: the global UnsetConstantError is reserved. Once
+// the kernel has loaded, binding the interned key `key` to anything but the
+// captured kernel class (Bootstrap::unsetConstantErrorClass) is refused: an
+// Error with kUnsetConstantErrorReservedText is signalled in place, and the
+// signal's answer is returned (PROTO_NONE for nil); the caller then binds
+// nothing. Answers nullptr when the store may go ahead. `key` must be
+// interned (a pointer comparison decides).
+const proto::ProtoObject* refuseReservedGlobalStore(STRuntime& rt, proto::ProtoContext* ctx,
+                                                    const proto::ProtoString* key,
+                                                    const proto::ProtoObject* value);
+
 // Re-signal an existing exception instance in the current context, and test
 // whether an object is one (exception_prims.cpp).
 const proto::ProtoObject* resignalException(STRuntime& rt, proto::ProtoContext* ctx,

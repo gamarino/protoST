@@ -549,6 +549,14 @@ On M13 the check signals in place and answers nil, so the constructor never
 answers a half-built instance. `--disasm` does not list the constructor: it
 is not in the program's module.
 
+**`UnsetConstantError`** is captured when the kernel has loaded
+(`Bootstrap::unsetConstantErrorClass`, pinned in the live registry), and
+M14 is signalled through that reference, never through the global name. Every
+route that would rebind the global is refused by `refuseReservedGlobalStore`
+(`exception_prims.cpp`): `STORE_GLOBAL`, `__globalAt:put:` (behind `Smalltalk
+at:put:`) and `addBehavior:` / `addParent:` on a class of that name; the
+declaration paths refuse the name first (`refuseReservedClassName`).
+
 **Refusals are signalled in place** (`signalErrorNamed`), never thrown from
 an opcode handler, so an `on:do:` in the method's caller catches them by
 class. `ModificationForbidden` and `UnsetConstantError` are `Error`s and not
@@ -626,7 +634,7 @@ the attribute `_iv_v` of the class that declares it.
 | Op | # | Operand | Stack | Semantics | Emitted by |
 |---|---|---|---|---|---|
 | `PUSH_GLOBAL` | 24 | name constant (wide) | `-> v` | Pushes the global. Errors: `Error` "undefined global: X" (catchable) when it is unbound or bound to nil. | a capitalised or otherwise unresolved name; the class in a declaration or method install |
-| `STORE_GLOBAL` | 25 | name constant (wide) | `v ->` | Pops and binds the global. | a class declaration (after `DUP`); top-level assignment in the REPL |
+| `STORE_GLOBAL` | 25 | name constant (wide) | `v ->` | Pops and binds the global. The reserved name `UnsetConstantError` (0.17.0) is refused once the kernel has loaded: an `Error` is signalled in place and nothing is bound (one pointer comparison of the name). | a class declaration (after `DUP`); top-level assignment in the REPL |
 | `PUSH_INSTVAR` | 26 | name constant (wide) | `-> v` | Pushes `self`'s `_iv_<name>`, found up the prototype chain (so an instance reads a class variable from its class); nil when absent. | an instance variable or class variable in an instance-side method; a class variable in a class-side method |
 | `STORE_INSTVAR` | 27 | name constant (wide) | `v ->` | Pops and sets `self`'s own `_iv_<name>` (publishes a new version of `self` in protoCore's mutable table). Errors: `STORE_INSTVAR self is null`; an immutable `self` is refused, never lost: `ModificationForbidden` (`instance variable assignment: the receiver is an immutable value; nothing was written`; a plain `Error` before 0.17.0). | assignment to a plain instance variable that is not part of a write group |
 | `PUSH_OWN_INSTVAR` | 42 | name constant (wide) | `-> v` | As `PUSH_INSTVAR`, own attribute only (a subclass does not see its superclass's value). | a class-instance variable in a class-side method |
