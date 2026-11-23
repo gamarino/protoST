@@ -551,8 +551,8 @@ no other read changes.
     reflection (§11) before anyone reads them. What `basicNew` gives up at
     construction, the read check below recovers at first use.
 - **Reading an unset constant signals** (maintainer, 2026-11-23, N1 = C). Any
-  read of a constant that is still unset (nil) signals **M14** instead of
-  answering nil. This covers every object that left construction without the
+  read of a constant that is still unset (nil) signals **M14**, an
+  `UnsetConstantError` (§6.9), instead of answering nil. This covers every object that left construction without the
   end-of-construction check: one made by `basicNew` and filled partly or not
   at all, and one made by a class-side `new` written in the Pharo idiom
   `^ self basicNew initialize`, whose `initialize` forgot a constant. The
@@ -566,7 +566,7 @@ no other read changes.
   | a read inside `initialize` before the constant is assigned (`id isNil ifTrue: [...]`) | yes | `initialize` is code like any other. A constant given to the generated constructor is set before `initialize` runs, so `initialize` reads it freely; one `initialize` must compute is assigned before it is read. "Is it set yet?" is asked with `instVarIsSet:`, not by reading |
   | `instVarAt:`, `instVarNamed:` | yes | reflection reads what a program reads; a reflective reader of an unset constant would otherwise reintroduce the nil |
   | generated readers | not applicable | readers are generated for value-class fields only (§5.2), which are not constants and are always complete; a mutable class writes its own accessors, which are compiled reads and check |
-  | `instVarIsSet: #name` (new, any variable) | no; it is the probe | answers whether the variable holds a non-nil value, without signalling. Loaders and tools use it instead of catching M14 (***Proposed***) |
+  | `instVarIsSet: #name` (new, any variable) | no; it is the probe | answers whether the variable is set, without reading it as a value and without signalling (maintainer, 2026-11-23, N2 = D; §6.8). It is the normal way to ask whether a constant has been set |
   | the private copy of `deepCopy` and `shallowCopy` (§11) | no | they move the attribute, unset included, without reading it as a value; the copy is checked when it is read |
   | the debugger (DAP) | no | it shows `<unset constant>`; inspecting is not a program read |
   | `compareAndSet:from:to:`, `update:with:` | not applicable | they signal M5 on any constant (§6.5) |
@@ -736,6 +736,102 @@ protoBaseST measured four `Atom` cells per atom for its write-once fields.
 Reimplementing `Atom` over an atomic variable is left to the builder, if it
 costs nothing (§16).
 
+### 6.8 `instVarIsSet:`: asking whether a variable is set
+
+(maintainer, 2026-11-23, N2 = D: accepted.)
+
+`anObject instVarIsSet: #name` answers `true` or `false`. It **never reads the
+variable as a value and never signals** for a declared name, whatever the
+variable's state. It is the normal way to ask whether a constant has been set,
+used by loaders, serializers, tools and `initialize` ("is it set yet?"),
+instead of reading the constant and catching `UnsetConstantError`.
+
+| Kind of variable | `true` when | Notes |
+|---|---|---|
+| plain | it holds a non-nil value | "set" means "not nil": an assigned `nil` answers `false`, like a never-assigned variable |
+| constant | it holds a value (constants are never nil, §6.2) | the one kind where it answers something a read cannot: a read of an unset constant signals, `instVarIsSet:` answers `false` |
+| write-once | it holds a value (not nil) | once `true`, it stays `true` (§6.3) |
+| atomic | it holds a non-nil value | a snapshot answer: another thread may change it right after |
+| value-class field | it holds a non-nil value | a value never changes, so the answer never changes; a field given `nil` at birth answers `false` |
+
+- For every kind except constant, "set" means exactly "not nil". protoST does
+  not distinguish an absent attribute from one that holds `nil` (an unset
+  variable reads as `nil`, LANGUAGE.md §4.5), and neither does this probe.
+- **Names.** The name is a `Symbol` or a `String`, matched against the
+  receiver's declared instance variables, own and inherited, mixins included
+  (for a class object, its class-instance variables), as `instVarNamed:`
+  matches them. A name the receiver does not declare (including any name on an
+  object without instance variables, such as `3`), or an argument that is not
+  a `String` or a `Symbol`, signals **M15**. It is never answered `false`,
+  because a misspelt name would then read as "not set yet" and a loader would
+  fill a variable that does not exist (***Proposed***: the ruling asked this
+  spec to decide; an error, as M8 does for the CAS messages).
+- **Threads.** The answer is the state of one snapshot. For a constant or a
+  write-once variable, `true` is final. For a plain or an atomic variable it
+  is a moment's answer, like any read.
+- **Cost.** One own-attribute lookup and a nil test. It allocates nothing.
+
+```smalltalk
+acct := Account basicNew.
+(acct instVarIsSet: #owner) printNl.             "false, and no error"
+acct instVarNamed: 'owner' put: 'ada'.
+(acct instVarIsSet: #owner) printNl.             "true"
+acct instVarIsSet: #ownr.                        "signals M15"
+```
+
+### 6.9 `UnsetConstantError`
+
+(maintainer, 2026-11-23, N2 = D.) M14 is its own class, so that a caller can
+catch a constant read before it was set and nothing else.
+
+- **Hierarchy:** a direct subclass of `Error`, beside `ModificationForbidden`
+  and `TimeoutError` in LANGUAGE.md §8.1:
+
+  ```
+  Exception
+    Error
+      …
+      ModificationForbidden
+      UnsetConstantError     (a constant read before it was set; §6.2)
+      …
+  ```
+
+  Like every `Error`, it is not resumable: the read cannot be given a value
+  after the fact.
+- **Where it comes from:** a kernel class, bound as a global at start-up like
+  `ModificationForbidden` and `TimeoutError`. No `Import from:` is needed and
+  no module exports it. Since protoST 0.17.0 the name is reserved in the
+  global namespace, as every kernel class name is.
+- **Accessors:**
+  - `receiver`: the object whose constant was read;
+  - `variableName`: the constant's name, a `String` (`'owner'`).
+
+  Both are set when the runtime signals it, and they answer `nil` on an
+  instance a program makes itself (`UnsetConstantError new signal`).
+  `messageText` is M14's exact text, built from them:
+  `constant 'owner' of an Account read before it was set`. The receiver part
+  is `a` or `an` followed by the receiver's class name, as `printString`'s
+  default (LANGUAGE.md §4.8) and the other M texts. It does not call the
+  receiver's own `printOn:`, which could read the unset constant again.
+- **Raised by** every checking read path of §6.2: compiled reads,
+  install-time-resolved reads, reads in `initialize`, `instVarAt:` and
+  `instVarNamed:`. The class and accessors are the same whichever path read.
+- **Across actors:** an `UnsetConstantError` that an actor's method lets
+  through rejects the message's `Future`, and `wait` re-signals it with its
+  class, text and accessors (LANGUAGE.md §10.7). So
+  `on: UnsetConstantError do:` around the `wait` catches it.
+- **Catching it precisely:**
+
+  ```smalltalk
+  [ acct owner ]
+    on: UnsetConstantError
+    do: [ :e | e return: (loader fill: e variableName of: e receiver) ].
+  ```
+
+  An unrelated `Error` signalled in the protected block (a
+  `MessageNotUnderstood`, `ModificationForbidden`, a program's own `Error`)
+  is not caught by this handler and goes on to the enclosing ones.
+
 ## 7. Errors in user code, by kind of state
 
 What a programmer sees when they get it wrong is summarised here; the exact
@@ -746,7 +842,8 @@ texts are in §12.
 - A constant outside `initialize`: a compile error. A second set at run time:
   `ModificationForbidden`. A constant still unset when `new` or the generated
   constructor ends: an `Error` naming it. A constant read while unset, on an
-  object made any other way: an `Error` naming it.
+  object made any other way: an `UnsetConstantError` naming it, which a caller
+  can catch alone; `instVarIsSet:` asks first without any error.
 - A write-once variable assigned a value not `=` to the one installed:
   `ModificationForbidden`. An equal value is silent and answers the installed
   one.
@@ -888,8 +985,8 @@ allocate nothing beyond the attribute version, and never help.
 
 | Message | Plain | Constant | Write-once | Atomic | Value field |
 |---|---|---|---|---|---|
-| `instVarNamed:`, `instVarAt:` | reads | reads; unset signals M14 | reads | reads | reads |
-| `instVarIsSet:` | whether non-nil | whether set, never signals | whether set | whether non-nil | whether non-nil |
+| `instVarNamed:`, `instVarAt:` | reads | reads; unset signals M14 (`UnsetConstantError`) | reads | reads | reads |
+| `instVarIsSet:` (§6.8) | whether non-nil | whether set; never signals, never reads | whether set (not nil) | whether non-nil | whether non-nil |
 | `instVarNamed:put:`, `instVarAt:put:` | writes | writes only while unset (M3 after) | writes only while unset (M6 after) | M6 | V13 |
 | `compareAndSet:from:to:` | CAS | M5 | CAS only `from: nil` (M5 otherwise) | CAS | V13 |
 | `setInstVar:from:to:` (deprecated, 0.17.0 only) | as `compareAndSet:from:to:`, after warning W1 once per process | | | | |
@@ -960,7 +1057,8 @@ reported when the method is installed. Run-time errors use the classes given.
 | M11 | a redeclaration changes a variable's modifier | `Error` | `Account is already declared with 'balance' atomic; a class keeps the modifiers it was declared with` |
 | M12 | `:=` on a write-once variable that holds a value not `=` to the one written | `ModificationForbidden` | `the write-once variable 'oid' of a PBAtom already holds a different value; nothing was written` |
 | M13 | a constant unset (or nil) when `new` or the generated constructor ends | `Error` | `the constant 'owner' of an Account is not set at the end of construction (number:owner:)` (the selector is `new` or the constructor) |
-| M14 | a constant read while unset (nil): compiled read, `instVarAt:` or `instVarNamed:` | `Error` | `constant 'owner' of an Account read before it was set` |
+| M14 | a constant read while unset (nil): compiled read, `instVarAt:` or `instVarNamed:` | **`UnsetConstantError`** (a subclass of `Error`, §6.9), with `receiver` and `variableName` | `constant 'owner' of an Account read before it was set` |
+| M15 | `instVarIsSet:` with a name the receiver does not declare, or an argument that is not a `String` or `Symbol` | `Error` | `instVarIsSet: an Account has no instance variable 'ownr'` (for a non-name argument: `instVarIsSet: expects a String or Symbol, not 3`) |
 
 **Deprecation**
 
@@ -972,7 +1070,7 @@ The wording of V and M texts is fixed by this spec only where conformance
 tests pin it. The pinned parts are the quoted names and the phrases *value
 class*, *fixed at birth*, *already set*, *atomic variable*, *must be pure*,
 *generated constructor*, *withAll:*, *already holds a different value* and
-*not set at the end of construction*. M14 and W1 are pinned whole, as the 0.9.0
+*not set at the end of construction*. M14, M15 and W1 are pinned whole, as the 0.9.0
 deprecation line was. The rest may be polished.
 
 ## 13. Migration
@@ -1005,6 +1103,8 @@ deprecation line was. The rest may be polished.
     construction; a write-once assignment silent for an equal value and
     refused for an unequal one;
   - waits refused inside `update:with:`;
+  - the constant read check, with its own error class `UnsetConstantError`,
+    and the probe `instVarIsSet:` (Pharo has neither);
   - `setInstVar:from:to:` deprecated, then removed.
 - **Kernel values that hand-roll immutability** (`UUID`, the calendar
   classes, `Decimal`: "its one private initialiser … refuses a second call")
@@ -1167,8 +1267,19 @@ release that carries each feature. Its acceptance criteria:
 89. `const-pharo-new-override`: a class-side `new` written `^ self basicNew initialize` whose `initialize` forgets `owner` answers the object without M13; the first `anAccount owner` signals M14.
 90. `const-read-before-assignment-in-initialize`: `initialize` reads `id` before assigning it (`id isNil ifTrue: [...]`) and signals M14; reading a constant the generated constructor set works there.
 91. `const-instVarAt-unset`: `instVarAt:` and `instVarNamed:` on an unset constant signal M14; on a set one they answer it.
-92. `const-instVarIsSet`: `instVarIsSet:` answers false then true around a reflective fill, and never signals.
+92. `const-instVarIsSet`: `instVarIsSet:` answers false then true around a reflective fill, and never signals (no `UnsetConstantError` while the constant is unset).
 93. `const-copy-keeps-unset`: `shallowCopy` and `deepCopy` of a `basicNew` object with an unset constant succeed; the copy signals M14 when that constant is read.
+94. `unset-constant-error-class`: `UnsetConstantError superclass == Error`; reading an unset constant inside `[...] on: UnsetConstantError do: [:e | e class]` answers `UnsetConstantError`; `isResumable` is false.
+95. `unset-constant-error-precise`: under `on: UnsetConstantError do:` nested inside `on: Error do:`, an unset-constant read is caught by the inner handler, while `Error signal: 'other'`, a `MessageNotUnderstood` and a `ModificationForbidden` in the same protected block pass through to the outer one.
+96. `unset-constant-error-accessors`: `e receiver == acct`, `e variableName = 'owner'`, `e variableName isString`, and `e messageText` is exactly `constant 'owner' of an Account read before it was set`; the receiver's own `printOn:` is not called (a `printOn:` that reads the constant does not recurse).
+97. `unset-constant-error-every-path`: a compiled read, `instVarAt:` and `instVarNamed:` each signal `UnsetConstantError` with the same accessors.
+98. `unset-constant-error-across-actor`: an actor's method reads an unset constant; `on: UnsetConstantError do:` around the `wait` catches it, with its accessors.
+99. `instVarIsSet-plain`: false when never assigned, true after `x := 1`, false again after `x := nil`.
+100. `instVarIsSet-constant`: false after `basicNew`, true after a reflective fill and on an object from the generated constructor; never signals.
+101. `instVarIsSet-write-once`: false, then true after the first `:=`, and still true after an equal second write.
+102. `instVarIsSet-atomic`: false before `initialize`'s `compareAndSet:`, true after it.
+103. `instVarIsSet-value-field` (0.18.0): true for a field given a value, false for a field given `nil`, true for a derived field `initialize` computed.
+104. `instVarIsSet-unknown-name`: `instVarIsSet: #ownr` signals M15 with the exact text; `3 instVarIsSet: #x` signals M15; `acct instVarIsSet: 3` signals M15's non-name text.
 
 **CLI** (`tests/cli`, since the conformance runner reads stdout only)
 
@@ -1201,8 +1312,8 @@ release that carries each feature. Its acceptance criteria:
 
 | Release | Carries | Requires |
 |---|---|---|
-| **protoST 0.17.0**, *explicit state I: modifiers* | `constantNames:`, `writeOnceNames:`, `atomicNames:` (textual and message forms); generated constructors over constants and the end-of-construction check (M13); `STORE_CONST_INSTVAR` and `STORE_ONCE_INSTVAR` with the write-once equality rule (M12); `update:with:`, `compareAndSet:from:to:`; `setInstVar:from:to:` as a deprecated alias with its checks and warning W1; reflection (§11), `instVarModifierOf:`; `ModificationForbidden` for refused stores; M7 wait check; runs excluding CAS stores; LANGUAGE.md §4.13 (modifiers), §10.9 (the pattern, §9's table), the "locals" note (§4); the constant read check (M14, `PUSH_CONST_INSTVAR`, `instVarIsSet:`) and its measurement (§14.1, `benchmarks/micro/const_read.st`); conformance 47–85 and 87–93, `cli_setinstvar_deprecation`, T1, T2, T4, T5 | protoCore 3.6.1 (unchanged) |
-| **protoST 0.18.0**, *explicit state II: value classes* | `valueSubclass:`, `derivedNames:`; pre-birth `initialize` with automatic chaining; generated constructor, readers, `withX:`, `withAll:`, `=`, `hash`; immutable instances and template; V1–V17; `isValueClass`; `deepCopy`/`copy` rules; shallow immutability documented; `setInstVar:from:to:` removed; LANGUAGE.md §4.14 (value classes) and §8.1's pattern; a tutorial section "values, versions and retries"; conformance 1–46 and 86 (85 and `cli_setinstvar_deprecation` retired), T3, T6 | protoCore 3.6.1 (unchanged) |
+| **protoST 0.17.0**, *explicit state I: modifiers* | `constantNames:`, `writeOnceNames:`, `atomicNames:` (textual and message forms); generated constructors over constants and the end-of-construction check (M13); `STORE_CONST_INSTVAR` and `STORE_ONCE_INSTVAR` with the write-once equality rule (M12); `update:with:`, `compareAndSet:from:to:`; `setInstVar:from:to:` as a deprecated alias with its checks and warning W1; reflection (§11), `instVarModifierOf:`; `ModificationForbidden` for refused stores; M7 wait check; runs excluding CAS stores; LANGUAGE.md §4.13 (modifiers), §10.9 (the pattern, §9's table), the "locals" note (§4); the constant read check (M14, `PUSH_CONST_INSTVAR`) and its measurement (§14.1, `benchmarks/micro/const_read.st`); the kernel class `UnsetConstantError` (§6.9) with `receiver` and `variableName`; `instVarIsSet:` on every kind of variable (§6.8) and M15; LANGUAGE.md §8.1's hierarchy gains `UnsetConstantError`; conformance 47–85, 87–102 and 104, `cli_setinstvar_deprecation`, T1, T2, T4, T5 | protoCore 3.6.1 (unchanged) |
+| **protoST 0.18.0**, *explicit state II: value classes* | `valueSubclass:`, `derivedNames:`; pre-birth `initialize` with automatic chaining; generated constructor, readers, `withX:`, `withAll:`, `=`, `hash`; immutable instances and template; V1–V17; `isValueClass`; `deepCopy`/`copy` rules; shallow immutability documented; `setInstVar:from:to:` removed; LANGUAGE.md §4.14 (value classes) and §8.1's pattern; a tutorial section "values, versions and retries"; conformance 1–46, 86 and 103 (85 and `cli_setinstvar_deprecation` retired), T3, T6 | protoCore 3.6.1 (unchanged) |
 | **protoBaseST 0.5.0** | The migration of §13.2: values become value classes; write-once fields declared, published with `:=` or the CAS form as §13.2 decides; `Atom` fields become atomic; no `setInstVar:from:to:` left; the allowlist test becomes a reflective test. The atom-weight figures are re-measured and reported | protoST 0.18.0 |
 | later, only if measured | `Atom` reimplemented over an atomic variable; kernel values (`UUID`, calendar, `Decimal`) as value classes | — |
 
@@ -1230,6 +1341,9 @@ promised for that date.
   `setAttributes`); `nil` fields are not written.
 - **The generated methods.** Primitives or generated bytecode, and how
   `withX:` and `withAll:` reuse the constructor path.
+- **`UnsetConstantError`.** Where its `receiver` and `variableName` are
+  stored (its own instance variables, as other kernel exceptions keep theirs),
+  and how the opcode's C++ exception builds it.
 - **`PUSH_CONST_INSTVAR`.** Its number, and whether a `PUSH_OWN_CONST_INSTVAR`
   twin is worth it, decided by the §14.1 measurement.
 - **The end-of-construction check.** Where `new` and the generated
@@ -1259,7 +1373,7 @@ promised for that date.
 - The optimistic pattern taken to the user, and the Croquet link as
   direction. §9, §19.
 
-**2026-11-23, rulings on the first draft's open questions, and on N1:**
+**2026-11-23, rulings on the first draft's open questions, and on N1 and N2:**
 
 | Q | Question | Ruling | Where |
 |---|---|---|---|
@@ -1275,6 +1389,7 @@ promised for that date.
 | Q10 | Order of the releases | Modifiers in 0.17.0, values in 0.18.0 | §15 |
 | Q11 | Replicated world | On the volunteer menu now, as an L research item | §19 |
 | N1 | `basicNew` on a class with constants (a question that arose while applying Q4) | Option C: `basicNew` stays allowed, so loaders fill constants by reflection; every read of an unset constant signals M14, which covers `^ self basicNew initialize` at first use. The Q4 check stays on `new` and the generated constructor | §6.2, §11, M14, §14.1 (cost), tests 87–93 |
+| N2 | The constant probe, and how precisely M14 can be caught (a question that arose while applying N1) | Option D: `instVarIsSet:` is accepted as the normal way to ask whether a constant is set, defined for every kind of variable ("set" means "not nil" except for constants, which are never nil), never reading or signalling for a declared name; M14 becomes its own class, `UnsetConstantError`, a subclass of `Error` with `receiver` and `variableName` | §6.8, §6.9, §11, M14, M15, tests 94–104 |
 
 ### 17.2 Decisions this spec makes (***Proposed***)
 
@@ -1299,16 +1414,19 @@ full text.
   other value class cannot have one (V9). §5.1.
 - **`compareAndSet: … from: nil to: …` on a write-once variable never compares
   values**: it is the "first wins, the others adopt" form. §6.3.
-- **`instVarIsSet:`**, a non-signalling probe, so loaders and tools need not
-  catch M14. §6.2, §11.
+- **`instVarIsSet:` with an unknown name signals M15** instead of answering
+  `false`, so a misspelt name is not read as "not set yet". N2 asked this spec
+  to decide. §6.8.
+- **`UnsetConstantError`'s text names the receiver's class**, without calling
+  its `printOn:`. §6.9.
 - **Copies and the debugger do not check constant reads**: they move or show
   the attribute without reading it as a value. §6.2.
 - **`withAll:` errors are `InvalidArgument`; M13 is an `Error`.** §12.
 
 ## 18. Open questions
 
-None. The first draft's eleven questions and N1, which arose while applying
-Q4, are ruled (§17.1).
+None. The first draft's eleven questions are ruled (§17.1), and so are N1,
+which arose while applying Q4, and N2, which arose while applying N1.
 
 ## 19. Direction: versions, snapshots and replicated worlds
 
