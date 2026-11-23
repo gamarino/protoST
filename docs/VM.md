@@ -484,7 +484,7 @@ another runtime's `ProtoSpace` (`STRuntime`'s `ownRootCtx`).
 
 ## 2. Opcode reference
 
-`Op` (`src/runtime/Opcodes.h`) has **58 values**: 1 to 60 except 7, 21 and
+`Op` (`src/runtime/Opcodes.h`) has **60 values**: 1 to 62 except 7, 21 and
 56, and `EXTEND` (254). The values 0, 7, 21, 56 and 255 are reserved: they
 were `NOP`, `PUSH_SUPER`, `DUP_RECEIVER`, `BIN_INT_REM` and `HALT`.
 `BIN_INT_REM` was dropped before 0.10.0 shipped because `rem:` is not one of
