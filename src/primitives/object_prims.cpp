@@ -307,22 +307,27 @@ void collectLateSites(const BytecodeModule& m, std::vector<LateSite>& out,
 Op lateInstVarStoreOp(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* cls,
                       const std::string& name, const std::string& selector,
                       const LateSite& site, const std::string& where) {
-    const std::string line =
-        " (line " + std::to_string(site.module->lineForPc(site.opPos)) + ")";
+    const int line = site.module->lineForPc(site.opPos);
     switch (modifierOf(rt, ctx, cls, name, nullptr)) {
-        case IvarModifier::Constant: {
-            const std::string what = "cannot assign to the constant '" + name + "' of " + where;
+        case IvarModifier::Constant:
             if (selector != "initialize")
-                throw ClassedErrorSignal("Error", what + " outside initialize" + line);
+                throw ClassedErrorSignal("Error", assignmentRefusalText(
+                    AssignmentRefusal::ConstantOutsideInitialize, name, where, line));
+            // M2 skips a site inside a de-optimised copy. That is safe only
+            // because every copy has an inlined twin in the method's code:
+            // the same statements, compiled with the blocks the source
+            // inlines inlined, whose sites are collected and checked here
+            // too. The copy inlines nothing, so a block the twin inlines can
+            // be a real block in the copy; the twin decides whether the
+            // assignment stands in a closure, as the compiler decides it
+            // (Compiler::compileDeoptBlock drops the copy's errors).
             if (site.inClosure && !site.inDeoptCopy)
-                throw ClassedErrorSignal("Error",
-                    what + " inside a block: the block may run after construction" + line);
+                throw ClassedErrorSignal("Error", assignmentRefusalText(
+                    AssignmentRefusal::ConstantInsideBlock, name, where, line));
             return Op::STORE_CONST_INSTVAR;
-        }
         case IvarModifier::Atomic:
-            throw ClassedErrorSignal("Error",
-                "cannot assign to the atomic variable '" + name + "' of " + where
-                + ": use update:with: or compareAndSet:from:to:" + line);
+            throw ClassedErrorSignal("Error", assignmentRefusalText(
+                AssignmentRefusal::AtomicAssigned, name, where, line));
         default:
             // Plain, and write-once until Task 4 resolves it to
             // STORE_ONCE_INSTVAR (pre-flight ruling C3).

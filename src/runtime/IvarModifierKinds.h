@@ -94,4 +94,35 @@ inline std::string constructorSelectorFor(const std::vector<std::string>& consta
     return sel;
 }
 
+// Why `:=` to a modified instance variable is refused (explicit-state spec
+// §12): M1, M2 and M4.
+enum class AssignmentRefusal : uint8_t {
+    ConstantOutsideInitialize,   // M1
+    ConstantInsideBlock,         // M2
+    AtomicAssigned,              // M4
+};
+
+// The text of a refused `:=` to the variable `name` in a method of the class
+// `className`, with the compiler's ` (line N)` suffix. The compiler reports
+// it at compile time and install-time resolution of a late method signals it,
+// so both paths give the same words.
+inline std::string assignmentRefusalText(AssignmentRefusal why, const std::string& name,
+                                         const std::string& className, int line) {
+    std::string text;
+    switch (why) {
+    case AssignmentRefusal::ConstantOutsideInitialize:
+        text = "cannot assign to the constant '" + name + "' of " + className + " outside initialize";
+        break;
+    case AssignmentRefusal::ConstantInsideBlock:
+        text = "cannot assign to the constant '" + name + "' of " + className
+               + " inside a block: the block may run after construction";
+        break;
+    case AssignmentRefusal::AtomicAssigned:
+        text = "cannot assign to the atomic variable '" + name + "' of " + className
+               + ": use update:with: or compareAndSet:from:to:";
+        break;
+    }
+    return text + " (line " + std::to_string(line) + ")";
+}
+
 } // namespace protoST

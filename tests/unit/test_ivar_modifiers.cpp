@@ -404,7 +404,9 @@ TEST_CASE("IvarModifiers: nested inlined blocks of initialize may assign a const
         "  x ifTrue: [y ifTrue: [number := 1]]\n");
     CHECK(c.errors.empty());
     CHECK(countOp(*c.code, protoST::Op::STORE_INSTVAR) == 0);
-    CHECK(countOp(*c.code, protoST::Op::STORE_CONST_INSTVAR) >= 3);
+    // One store each: the inlined code, the copy of the inner block (made by
+    // the inlined outer one), and the real inner block in the outer copy.
+    CHECK(countOp(*c.code, protoST::Op::STORE_CONST_INSTVAR) == 3);
 }
 
 TEST_CASE("IvarModifiers: M1, M2 and M4 at compile time", "[ivar_modifiers]") {
@@ -424,6 +426,14 @@ TEST_CASE("IvarModifiers: M1, M2 and M4 at compile time", "[ivar_modifiers]") {
     }
     SECTION("a constant inside a real block of initialize") {
         const auto c = compileSource(std::string(decl) + "IvmRules >> initialize\n  [number := 1] value\n");
+        CHECK(hasErrorContaining(c, "cannot assign to the constant 'number' of IvmRules inside a "
+                                    "block: the block may run after construction (line 3)"));
+    }
+    SECTION("a real block inside an inlined block of initialize") {
+        // The de-optimised copies do not make a real closure acceptable:
+        // the inlined code itself holds the closure.
+        const auto c = compileSource(std::string(decl)
+            + "IvmRules >> initialize\n  h ifTrue: [[number := 1] value]\n");
         CHECK(hasErrorContaining(c, "cannot assign to the constant 'number' of IvmRules inside a "
                                     "block: the block may run after construction (line 3)"));
     }

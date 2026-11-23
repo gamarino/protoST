@@ -1735,6 +1735,14 @@ void Compiler::compileDeoptBlock(BytecodeModule& m, const Node& blk, size_t bloc
     auto sub = compileBlockModule(blk, /*deoptBoundary=*/true, &boxedOut);
     --deoptDepth_;
     currentLine_ = line;
+    // Dropping the copy's errors is sound because every de-optimised copy
+    // has an inlined twin: the enclosing code compiled the same statements
+    // first, with the blocks it inlines inlined, and reported their errors.
+    // The copy is never more permissive than the twin, only stricter (a
+    // block inlined in the twin can be a real block in the copy), so a
+    // refusal only the copy would make, such as M2 for that block, is not
+    // one the source deserves. Install-time resolution relies on the same
+    // twin (object_prims.cpp, LateSite::inDeoptCopy).
     errors_.resize(errorCount);
     std::swap(analysis_, cold);
     sub->setDebugName(sub->debugName() + " (not inlined)");
@@ -1783,25 +1791,23 @@ Op Compiler::instVarStoreOp(const std::string& name) {
     // A class-side method's instance variables are the class object's own
     // (class-instance variables), which take no modifiers (plan ruling G1).
     if (currentMethodIsClassSide_) return Op::STORE_INSTVAR;
-    const std::string line = " (line " + std::to_string(currentLine_) + ")";
     switch (modifierThroughChain(currentMethodClass_, name)) {
-        case IvarModifier::Constant: {
+        case IvarModifier::Constant:
             // A de-optimised copy inlines nothing, so a block the enclosing
             // code inlined can be a real block in it; the enclosing code,
             // compiled first, already judged the assignment, and the copy's
             // errors are dropped (compileDeoptBlock). The copy stores the
             // constant as the inlined code does.
-            const std::string what = "cannot assign to the constant '" + name + "' of "
-                                     + currentMethodClass_;
             if (currentMethodSelector_ != "initialize")
-                error(what + " outside initialize" + line);
+                error(assignmentRefusalText(AssignmentRefusal::ConstantOutsideInitialize, name,
+                                            currentMethodClass_, currentLine_));
             else if (insideRealBlock())
-                error(what + " inside a block: the block may run after construction" + line);
+                error(assignmentRefusalText(AssignmentRefusal::ConstantInsideBlock, name,
+                                            currentMethodClass_, currentLine_));
             return Op::STORE_CONST_INSTVAR;
-        }
         case IvarModifier::Atomic:
-            error("cannot assign to the atomic variable '" + name + "' of " + currentMethodClass_
-                  + ": use update:with: or compareAndSet:from:to:" + line);
+            error(assignmentRefusalText(AssignmentRefusal::AtomicAssigned, name,
+                                        currentMethodClass_, currentLine_));
             return Op::STORE_INSTVAR;
         default:
             // Plain, and write-once until STORE_ONCE_INSTVAR is emitted.

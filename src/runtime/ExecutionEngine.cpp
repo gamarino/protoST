@@ -449,6 +449,13 @@ ExecutionEngine::storeConstInstVar(proto::ProtoContext* ctx, const Frame& f, uin
         const proto::ProtoObject* cur = self->getOwnAttributeDirect(ctx, sym);
         return !cur || cur == PROTO_NONE;
     };
+    // `an Account`: the class-name form of printString's default.
+    auto owner = [&] {
+        const proto::ProtoObject* nameObj = self->getAttribute(ctx, bs_.sym.className);
+        const proto::ProtoString* nameStr =
+            nameObj && nameObj != PROTO_NONE ? nameObj->asString(ctx) : nullptr;
+        return nameStr ? articleAndClassName(nameStr->toStdString(ctx)) : std::string("an object");
+    };
     if (val == PROTO_NONE) {
         // Storing nil into an unset constant changes nothing.
         if (isUnset()) return;
@@ -462,16 +469,13 @@ ExecutionEngine::storeConstInstVar(proto::ProtoContext* ctx, const Frame& f, uin
             // The CAS cannot write an immutable receiver.
             signalErrorNamed(rt_, ctx, "ModificationForbidden",
                              "cannot assign to the constant '" + f.m->constSymbol(nameConst)
-                             + "': the receiver is an immutable value; nothing was written");
+                             + "' of " + owner()
+                             + ": the receiver is immutable; nothing was written");
             return;
         }
     }
-    const proto::ProtoObject* nameObj = self->getAttribute(ctx, bs_.sym.className);
-    const proto::ProtoString* nameStr = nameObj && nameObj != PROTO_NONE ? nameObj->asString(ctx) : nullptr;
-    const std::string owner = nameStr ? articleAndClassName(nameStr->toStdString(ctx))
-                                      : std::string("an object");
     signalErrorNamed(rt_, ctx, "ModificationForbidden",
-                     "the constant '" + f.m->constSymbol(nameConst) + "' of " + owner
+                     "the constant '" + f.m->constSymbol(nameConst) + "' of " + owner()
                      + " is already set; nothing was written");
 }
 
