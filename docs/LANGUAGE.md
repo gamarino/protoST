@@ -1555,7 +1555,9 @@ variables accept reflection, so that serializers, `deepCopy` and loaders can
 fill them; a constant filled by reflection after `basicNew` is the caller's
 responsibility, and a forgotten one signals `UnsetConstantError` at its first
 read. `copy`, `shallowCopy` and `deepCopy` copy every variable, an unset
-constant staying unset.
+constant staying unset. `deepCopy` builds its copy in one write group and,
+as in Pharo, does not send `shallowCopy`, so an override of `shallowCopy` is
+not used by `deepCopy`.
 
 #### 4.13.6 Runs of assignments
 
@@ -1609,10 +1611,17 @@ till instVarIsSet: #owner.                             "=> true"
 A read of an unset constant signals `UnsetConstantError`, a direct subclass
 of `Error` (§8.1), so that a caller can catch that and nothing else. It is a
 kernel class, bound at start-up like `ModificationForbidden`. Its name is
-reserved: a class declaration under it, `Smalltalk at: #UnsetConstantError
-put:`, a REPL assignment to it and `addBehavior:` on it are refused with an
-`Error`, and nothing is rebound. The runtime signals it through the class it
-captured when the kernel loaded, never by looking the name up. Like every `Error`, it
+reserved. A class declaration under it is refused with an `Error`
+(`UnsetConstantError is a reserved kernel class name; a class cannot be
+declared under it`), and so are `Smalltalk at: #UnsetConstantError put:`, a
+REPL assignment to it and `addBehavior:` on it (`UnsetConstantError is a
+reserved kernel class name; the global cannot be rebound`); nothing is
+rebound. In a script file, `UnsetConstantError := 42` is an ordinary
+top-level assignment: it creates an implicit top-level local that shadows the
+global for the rest of the file's top level, while the global and
+every method keep the kernel class, so the reservation holds. The runtime
+signals it through the class it captured when the kernel loaded, never by
+looking the name up. Like every `Error`, it
 is not resumable: the read cannot be given a value after the fact.
 
 - `receiver` answers the object whose constant was read, and `variableName`
@@ -4140,7 +4149,7 @@ commits. Summary as of 0.4.0, updated for changes merged since:
   `setInstVar:from:to:` deprecated (D63); kernel constructors other than `new`
   do not send `initialize`, so a subclass with constants writes its own
   constructor (D72). The other gaps found while building it are D64 and
-  D67-D71.
+  D67-D70; `deepCopy` does not send `shallowCopy`, as in Pharo (§4.13.5).
 - **Bytes and timers (0.9.0):** a `ByteArray` is immutable and has no
   `asString`, it is not a collection (D41); a `BinaryFile` has no position
   (D46); MessagePack encodes a Symbol as `str` (D47); `Future` deadlines are

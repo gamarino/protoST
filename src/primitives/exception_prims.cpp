@@ -826,6 +826,8 @@ const proto::ProtoObject* signalUnsetConstantError(STRuntime& rt, proto::ProtoCo
 
 const char* const kUnsetConstantErrorReservedText =
     "UnsetConstantError is a reserved kernel class name; a class cannot be declared under it";
+const char* const kUnsetConstantErrorRebindText =
+    "UnsetConstantError is a reserved kernel class name; the global cannot be rebound";
 
 const proto::ProtoObject* refuseReservedGlobalStore(STRuntime& rt, proto::ProtoContext* ctx,
                                                     const proto::ProtoString* key,
@@ -834,7 +836,7 @@ const proto::ProtoObject* refuseReservedGlobalStore(STRuntime& rt, proto::ProtoC
     if (!b.unsetConstantErrorClass || key != b.sym.unsetConstantErrorName
         || value == b.unsetConstantErrorClass)
         return nullptr;
-    const proto::ProtoObject* v = signalErrorNamed(rt, ctx, "Error", kUnsetConstantErrorReservedText);
+    const proto::ProtoObject* v = signalErrorNamed(rt, ctx, "Error", kUnsetConstantErrorRebindText);
     return v ? v : PROTO_NONE;
 }
 

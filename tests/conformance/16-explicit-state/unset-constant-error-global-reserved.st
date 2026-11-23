@@ -1,4 +1,4 @@
-"EXPECT: #('UnsetConstantError is a reserved kernel class name; a class cannot be declared under it' 'UnsetConstantError is a reserved kernel class name; a class cannot be declared under it' 'UnsetConstantError is a reserved kernel class name; a class cannot be declared under it' 'UnsetConstantError is a reserved kernel class name; a class cannot be declared under it' 'UnsetConstantError is a reserved kernel class name; a class cannot be declared under it' true true true true true)"
+"EXPECT: #('UnsetConstantError is a reserved kernel class name; the global cannot be rebound' 'UnsetConstantError is a reserved kernel class name; the global cannot be rebound' 'UnsetConstantError is a reserved kernel class name; the global cannot be rebound' 'UnsetConstantError is a reserved kernel class name; the global cannot be rebound' 'UnsetConstantError is a reserved kernel class name; the global cannot be rebound' true true true true true)"
 "Spec §6.9: the name UnsetConstantError is reserved in the global namespace,
  on every route that would rebind it, not only the declarations
  (unset-constant-error-name-reserved.st): Smalltalk at:put:, the primitive

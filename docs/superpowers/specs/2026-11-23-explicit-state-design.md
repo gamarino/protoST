@@ -1113,7 +1113,7 @@ deprecation line was. The rest may be polished.
     - `allInstVarNames` lists each name once, in layout order, a second
       mixin's variables included (a bug fix);
     - `deepCopy` does not send `shallowCopy`, so an override of
-      `shallowCopy` is ignored by `deepCopy` (STATUS D71).
+      `shallowCopy` is ignored by `deepCopy`, as in Pharo.
 - **New deviations** (next free ids, D60 onwards):
   - value classes: their syntax, birth, pre-birth `initialize` with automatic
     chaining, no freeze, shallow immutability and the generated protocol

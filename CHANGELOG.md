@@ -87,8 +87,8 @@ Behaviour changes for code that uses none of the new forms (spec §13.1):
   `superclass` (open bug D66).
 - `deepCopy` builds the copy with private primitives in one write group, so
   set constants and write-once variables copy; it does not send
-  `shallowCopy`, so an override of `shallowCopy` is ignored by `deepCopy`
-  (D71).
+  `shallowCopy`, as in Pharo, so an override of `shallowCopy` is ignored by
+  `deepCopy`.
 
 ### Deprecated
 
