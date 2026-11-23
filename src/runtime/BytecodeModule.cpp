@@ -179,6 +179,9 @@ unsigned int BytecodeModule::computeMaxOperandDepth() const {
             case Op::STORE_LOCAL: case Op::STORE_SHARED_LOCAL: case Op::POP: case Op::STORE_CAPTURED:
             case Op::STORE_GLOBAL: case Op::STORE_INSTVAR: case Op::STORE_CLASSVAR:
             case Op::DEFINE_CAPTURED: case Op::STORE_LATE_VAR:
+            // STORE_CONST_INSTVAR pops its value; STORE_ONCE_INSTVAR pops
+            // the value and replaces the copy below it (`x v -> w`).
+            case Op::STORE_CONST_INSTVAR: case Op::STORE_ONCE_INSTVAR:
                 pushes(-1);
                 break;
             case Op::SEND_UNARY: case Op::SEND_BINARY: case Op::SEND_KEYWORD:

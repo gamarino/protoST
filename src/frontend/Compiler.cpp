@@ -1192,13 +1192,15 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slot), currentLine_);
             return;
         }
-        // F4-U5: instance variable of the current method's class.
+        // F4-U5: instance variable of the current method's class, stored
+        // by its modifier (STORE_INSTVAR or STORE_CONST_INSTVAR).
         for (const auto& iv : currentInstVars_) {
             if (iv == n.text) {
+                const Op store = instVarStoreOp(n.text);
                 emitExpr(m, *n.children[0]);
                 auto sym = m.internSymbol(n.text);
                 dupUnlessDiscarded();
-                m.emitWide(Op::STORE_INSTVAR, static_cast<unsigned int>(sym), currentLine_);
+                m.emitWide(store, static_cast<unsigned int>(sym), currentLine_);
                 return;
             }
         }
@@ -1213,10 +1215,13 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
                 return;
             }
         }
-        // S37: see emitExpr's Identifier case.
+        // S37: see emitExpr's Identifier case. A late store always keeps
+        // its value (DUP; the caller pops a discarded one): install time may
+        // turn it into STORE_ONCE_INSTVAR, which replaces the top of the
+        // stack instead of popping it (pre-flight ruling C2).
         if (currentMethodLate_ && !n.text.empty()) {
             emitExpr(m, *n.children[0]);
-            dupUnlessDiscarded();
+            m.emit(Op::DUP, 0, currentLine_);
             emitLateVar(m, Op::STORE_LATE_VAR, n.text);
             return;
         }
@@ -1387,13 +1392,15 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                 m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slot), currentLine_);
                 return;
             }
-            // F4-U5: instance variable of the current method's class.
+            // F4-U5: instance variable of the current method's class, stored
+            // by its modifier (STORE_INSTVAR or STORE_CONST_INSTVAR).
             for (const auto& iv : currentInstVars_) {
                 if (iv == n.text) {
+                    const Op store = instVarStoreOp(n.text);
                     emitExpr(m, *n.children[0]);
                     auto sym = m.internSymbol(n.text);
                     dupUnlessDiscarded();
-                    m.emitWide(Op::STORE_INSTVAR, static_cast<unsigned int>(sym), currentLine_);
+                    m.emitWide(store, static_cast<unsigned int>(sym), currentLine_);
                     return;
                 }
             }
@@ -1411,10 +1418,11 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                     return;
                 }
             }
-            // S37: see the Identifier case.
+            // S37: see the Identifier case. Always DUP, as in emitStatement
+            // (pre-flight ruling C2); the caller pops a discarded value.
             if (currentMethodLate_ && !n.text.empty()) {
                 emitExpr(m, *n.children[0]);
-                dupUnlessDiscarded();
+                m.emit(Op::DUP, 0, currentLine_);
                 emitLateVar(m, Op::STORE_LATE_VAR, n.text);
                 return;
             }
@@ -1730,6 +1738,7 @@ void Compiler::compileDeoptBlock(BytecodeModule& m, const Node& blk, size_t bloc
     errors_.resize(errorCount);
     std::swap(analysis_, cold);
     sub->setDebugName(sub->debugName() + " (not inlined)");
+    sub->setDeoptCopy(true);
     m.replaceBlockModule(blockIdx, std::move(sub));
 }
 
@@ -1742,6 +1751,7 @@ void Compiler::compileDeoptBlock(BytecodeModule& m, const Node& blk, size_t bloc
 void Compiler::enterMethodClass(const Node& n) {
     currentMethodClass_       = n.text;
     currentMethodIsClassSide_ = n.boolFlag;
+    currentMethodSelector_    = n.stringList.empty() ? std::string() : n.stringList[0];
     if (classes_.find(n.text) != classes_.end()) {
         currentInstVars_  = instVarsThroughChain(classes_, n.text, n.boolFlag);
         currentClassVars_ = resolveClassVarsFor(n.text);
@@ -1758,6 +1768,45 @@ void Compiler::leaveMethodClass() {
     currentClassVars_.clear();
     currentMethodIsClassSide_ = false;
     currentMethodLate_        = false;
+    currentMethodSelector_.clear();
+}
+
+bool Compiler::insideRealBlock() const {
+    for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
+        if (isMethodScope(*it)) return false;
+        if (!it->deoptBoundary) return true;
+    }
+    return false;
+}
+
+Op Compiler::instVarStoreOp(const std::string& name) {
+    // A class-side method's instance variables are the class object's own
+    // (class-instance variables), which take no modifiers (plan ruling G1).
+    if (currentMethodIsClassSide_) return Op::STORE_INSTVAR;
+    const std::string line = " (line " + std::to_string(currentLine_) + ")";
+    switch (modifierThroughChain(currentMethodClass_, name)) {
+        case IvarModifier::Constant: {
+            // A de-optimised copy inlines nothing, so a block the enclosing
+            // code inlined can be a real block in it; the enclosing code,
+            // compiled first, already judged the assignment, and the copy's
+            // errors are dropped (compileDeoptBlock). The copy stores the
+            // constant as the inlined code does.
+            const std::string what = "cannot assign to the constant '" + name + "' of "
+                                     + currentMethodClass_;
+            if (currentMethodSelector_ != "initialize")
+                error(what + " outside initialize" + line);
+            else if (insideRealBlock())
+                error(what + " inside a block: the block may run after construction" + line);
+            return Op::STORE_CONST_INSTVAR;
+        }
+        case IvarModifier::Atomic:
+            error("cannot assign to the atomic variable '" + name + "' of " + currentMethodClass_
+                  + ": use update:with: or compareAndSet:from:to:" + line);
+            return Op::STORE_INSTVAR;
+        default:
+            // Plain, and write-once until STORE_ONCE_INSTVAR is emitted.
+            return Op::STORE_INSTVAR;
+    }
 }
 
 // S37: an instance or class variable of a class whose chain the compiler
@@ -2643,8 +2692,14 @@ bool Compiler::isInstVarAssignment(const Node& n) const {
     // The order of emitStatement's Assignment case: a captured name, then a
     // temporary or argument, wins over an instance variable.
     if (isCaptured(n.text) || resolveLocal(n.text) >= 0) return false;
-    return std::find(currentInstVars_.begin(), currentInstVars_.end(), n.text)
-           != currentInstVars_.end();
+    if (std::find(currentInstVars_.begin(), currentInstVars_.end(), n.text)
+        == currentInstVars_.end())
+        return false;
+    // Only a plain variable joins a run: a constant or write-once store is a
+    // CAS, its own publication, and an atomic one is refused (plan D-g,
+    // spec §6.6). Class-instance variables are always plain (G1).
+    return currentMethodIsClassSide_
+           || modifierThroughChain(currentMethodClass_, n.text) == IvarModifier::Plain;
 }
 
 bool Compiler::isInertGroupValue(const Node& e,

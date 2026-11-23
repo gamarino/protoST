@@ -15,6 +15,8 @@
 #include "protoCore.h"
 #include "frontend/Parser.h"
 #include "runtime/IvarModifiers.h"
+#include "runtime/BytecodeModule.h"
+#include "runtime/Opcodes.h"
 
 using protoST::IvarModifier;
 using protoST::ast::NodeKind;
@@ -136,9 +138,8 @@ TEST_CASE("IvarModifiers: modifiers survive into a later compilation", "[ivar_mo
 }
 
 // The second half of review focus 4: the later method is refused with M4.
-// Task 3 implements the assignment rules and removes the [!mayfail] tag.
 TEST_CASE("IvarModifiers: a later REPL method that assigns an atomic variable reports M4",
-          "[ivar_modifiers][!mayfail]") {
+          "[ivar_modifiers]") {
     protoST::Parser P1("Object subclass: #IvmAccount atomicNames: 'balance'.");
     auto mod1 = P1.parseModule();
     REQUIRE(P1.errors().empty());
@@ -268,4 +269,198 @@ TEST_CASE("IvarModifiers: has-constants follows the chain after redeclarations",
     CHECK(sub->hasOwnAttribute(ctx, key) != PROTO_TRUE);
     CHECK(global("HcPlain")->getAttribute(ctx, key) != PROTO_TRUE);
     CHECK(protoST::constantNamesOf(rt, ctx, sub) == std::vector<std::string>{"c"});
+}
+
+// ---------------------------------------------------------------------------
+// Assignment rules (explicit-state spec §6.2, §6.4, §6.5; Task 3)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// The opcodes of `m` in code order.
+std::vector<protoST::Op> opsOf(const protoST::BytecodeModule& m) {
+    std::vector<protoST::Op> ops;
+    const auto& b = m.bytes();
+    for (std::size_t pc = 0; pc + 1 < b.size();) {
+        auto op = static_cast<protoST::Op>(b[pc]);
+        pc += protoST::kInstrSize;
+        while (op == protoST::Op::EXTEND && pc + 1 < b.size()) {
+            op = static_cast<protoST::Op>(b[pc]);
+            pc += protoST::kInstrSize;
+        }
+        ops.push_back(op);
+    }
+    return ops;
+}
+
+// Every module of the tree rooted at `m`, `m` first.
+void modulesOf(const protoST::BytecodeModule& m, std::vector<const protoST::BytecodeModule*>& out) {
+    out.push_back(&m);
+    for (std::size_t i = 0; i < m.numBlocks(); ++i) modulesOf(m.block(i), out);
+}
+
+// How many times `op` occurs in the whole tree.
+int countOp(const protoST::BytecodeModule& root, protoST::Op op) {
+    std::vector<const protoST::BytecodeModule*> mods;
+    modulesOf(root, mods);
+    int n = 0;
+    for (const auto* mod : mods)
+        for (protoST::Op o : opsOf(*mod)) n += o == op ? 1 : 0;
+    return n;
+}
+
+struct Compiled {
+    std::unique_ptr<protoST::BytecodeModule> code;
+    std::vector<std::string> errors;
+};
+
+Compiled compileSource(const std::string& src) {
+    protoST::Parser P(src);
+    auto ast = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C;
+    Compiled out;
+    out.code = C.compileModule(*ast);
+    out.errors = C.errors();
+    return out;
+}
+
+bool hasErrorContaining(const Compiled& c, const std::string& text) {
+    for (const auto& e : c.errors)
+        if (e.find(text) != std::string::npos) return true;
+    return false;
+}
+
+} // namespace
+
+TEST_CASE("IvarModifiers: a constant assigned in initialize compiles to STORE_CONST_INSTVAR",
+          "[ivar_modifiers]") {
+    const auto c = compileSource(
+        "Object subclass: #IvmConstA instanceVariableNames: 'history' constantNames: 'number'.\n"
+        "IvmConstA >> initialize\n"
+        "  number := 7\n");
+    REQUIRE(c.errors.empty());
+    CHECK(countOp(*c.code, protoST::Op::STORE_CONST_INSTVAR) == 1);
+    CHECK(countOp(*c.code, protoST::Op::STORE_INSTVAR) == 0);
+    CHECK(countOp(*c.code, protoST::Op::IVAR_GROUP) == 0);
+    CHECK(countOp(*c.code, protoST::Op::IVAR_GROUP_END) == 0);
+}
+
+TEST_CASE("IvarModifiers: a constant store ends a run of plain assignments", "[ivar_modifiers]") {
+    // Two runs of two plain stores, around the constant: the constant joins
+    // neither (it is a CAS, its own publication; spec §6.6).
+    const auto c = compileSource(
+        "Object subclass: #IvmConstB instanceVariableNames: 'history other' constantNames: 'number'.\n"
+        "IvmConstB >> initialize\n"
+        "  history := 1. other := 2. number := 3. history := 4. other := 5\n");
+    REQUIRE(c.errors.empty());
+    CHECK(countOp(*c.code, protoST::Op::STORE_CONST_INSTVAR) == 1);
+    CHECK(countOp(*c.code, protoST::Op::IVAR_GROUP) == 2);
+    CHECK(countOp(*c.code, protoST::Op::IVAR_GROUP_END) == 2);
+    CHECK(countOp(*c.code, protoST::Op::STORE_INSTVAR) == 0);
+
+    // The spec's shape: no group at all can hold `number`.
+    const auto d = compileSource(
+        "Object subclass: #IvmConstB2 instanceVariableNames: 'history' constantNames: 'number'.\n"
+        "IvmConstB2 >> initialize\n"
+        "  history := 1. number := 2. history := 3\n");
+    REQUIRE(d.errors.empty());
+    CHECK(countOp(*d.code, protoST::Op::IVAR_GROUP_END) == 0);
+    CHECK(countOp(*d.code, protoST::Op::STORE_CONST_INSTVAR) == 1);
+    CHECK(countOp(*d.code, protoST::Op::STORE_INSTVAR) == 2);
+}
+
+TEST_CASE("IvarModifiers: a constant in an inlined block of initialize, and its de-optimised copy",
+          "[ivar_modifiers]") {
+    const auto c = compileSource(
+        "Object subclass: #IvmConstC instanceVariableNames: 'x' constantNames: 'number'.\n"
+        "IvmConstC >> initialize\n"
+        "  x > 0 ifTrue: [number := 1]\n");
+    REQUIRE(c.errors.empty());
+    std::vector<const protoST::BytecodeModule*> mods;
+    modulesOf(*c.code, mods);
+    int deoptCopies = 0, deoptStores = 0;
+    for (const auto* mod : mods) {
+        if (!mod->isDeoptCopy()) continue;
+        ++deoptCopies;
+        for (protoST::Op op : opsOf(*mod)) deoptStores += op == protoST::Op::STORE_CONST_INSTVAR ? 1 : 0;
+    }
+    CHECK(deoptCopies == 1);
+    CHECK(deoptStores == 1);
+    // The inlined body stores it too, and nothing stores it as a plain variable.
+    CHECK(countOp(*c.code, protoST::Op::STORE_CONST_INSTVAR) == 2);
+    CHECK(countOp(*c.code, protoST::Op::STORE_INSTVAR) == 0);
+    // Only de-optimised copies carry the flag.
+    CHECK_FALSE(c.code->isDeoptCopy());
+}
+
+TEST_CASE("IvarModifiers: nested inlined blocks of initialize may assign a constant", "[ivar_modifiers]") {
+    // The de-optimised copy of the outer block inlines nothing, so the inner
+    // block is a real block there; it stands for code the source inlined, so
+    // the copy compiles to the constant store and reports nothing.
+    const auto c = compileSource(
+        "Object subclass: #IvmConstD instanceVariableNames: 'x y' constantNames: 'number'.\n"
+        "IvmConstD >> initialize\n"
+        "  x ifTrue: [y ifTrue: [number := 1]]\n");
+    CHECK(c.errors.empty());
+    CHECK(countOp(*c.code, protoST::Op::STORE_INSTVAR) == 0);
+    CHECK(countOp(*c.code, protoST::Op::STORE_CONST_INSTVAR) >= 3);
+}
+
+TEST_CASE("IvarModifiers: M1, M2 and M4 at compile time", "[ivar_modifiers]") {
+    const char* decl =
+        "Object subclass: #IvmRules instanceVariableNames: 'h' constantNames: 'number' "
+        "atomicNames: 'balance'.\n";
+    SECTION("a constant outside initialize") {
+        const auto c = compileSource(std::string(decl) + "IvmRules >> setNumber: n\n  number := n\n");
+        CHECK(hasErrorContaining(c, "cannot assign to the constant 'number' of IvmRules outside "
+                                    "initialize (line 3)"));
+    }
+    SECTION("a constant in a class-side initialize") {
+        const auto c = compileSource(std::string(decl)
+            + "IvmRules class instanceVariableNames: 'number'.\n"
+              "IvmRules class >> initialize\n  number := 1\n");
+        CHECK(c.errors.empty());   // the class-side variable is another, plain one
+    }
+    SECTION("a constant inside a real block of initialize") {
+        const auto c = compileSource(std::string(decl) + "IvmRules >> initialize\n  [number := 1] value\n");
+        CHECK(hasErrorContaining(c, "cannot assign to the constant 'number' of IvmRules inside a "
+                                    "block: the block may run after construction (line 3)"));
+    }
+    SECTION("an atomic variable, in initialize too") {
+        const auto c = compileSource(std::string(decl) + "IvmRules >> initialize\n  ^ balance := 0\n");
+        CHECK(hasErrorContaining(c, "cannot assign to the atomic variable 'balance' of IvmRules: "
+                                    "use update:with: or compareAndSet:from:to: (line 3)"));
+    }
+    SECTION("a plain variable is unaffected") {
+        const auto c = compileSource(std::string(decl) + "IvmRules >> setH: x\n  h := x\n");
+        CHECK(c.errors.empty());
+    }
+}
+
+TEST_CASE("IvarModifiers: a late store keeps its value: DUP STORE_LATE_VAR POP", "[ivar_modifiers]") {
+    // Pre-flight ruling C2: install time may rewrite the store into an
+    // opcode that replaces the top of the stack, so every late store is
+    // emitted with the DUP, and a discarded value is popped after it.
+    const auto c = compileSource(
+        "(Object yourself) subclass: #IvmLate instanceVariableNames: 'v'.\n"
+        "IvmLate >> f\n"
+        "  v := 1.\n"
+        "  ^ 2\n");
+    REQUIRE(c.errors.empty());
+    std::vector<const protoST::BytecodeModule*> mods;
+    modulesOf(*c.code, mods);
+    bool found = false;
+    for (const auto* mod : mods) {
+        const auto ops = opsOf(*mod);
+        for (std::size_t i = 0; i < ops.size(); ++i) {
+            if (ops[i] != protoST::Op::STORE_LATE_VAR) continue;
+            found = true;
+            REQUIRE(i > 0);
+            REQUIRE(i + 1 < ops.size());
+            CHECK(ops[i - 1] == protoST::Op::DUP);
+            CHECK(ops[i + 1] == protoST::Op::POP);
+        }
+    }
+    CHECK(found);
 }

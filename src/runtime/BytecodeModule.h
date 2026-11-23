@@ -268,6 +268,14 @@ public:
         lateMethodNames_ = std::move(methodNames);
     }
     bool hasLateBinding() const { return hasLateBinding_; }
+    // Whether this module is the de-optimised copy of an inlined block
+    // (Compiler::compileDeoptBlock): a real block only when the receiver of
+    // the inlined send is not a Boolean, standing for code the source wrote
+    // inline. A constant may be assigned in it (explicit-state spec §6.2);
+    // install-time resolution reads the flag to tell such a copy from a
+    // real closure.
+    void setDeoptCopy(bool deoptCopy) { isDeoptCopy_ = deoptCopy; }
+    bool isDeoptCopy() const { return isDeoptCopy_; }
     bool lateReadsFallBackToGlobals() const { return lateReadsGlobal_; }
     const std::vector<std::string>& lateMethodNames() const { return lateMethodNames_; }
     // The resolution of the module's late-bound instructions, done once, by
@@ -509,6 +517,7 @@ private:
     std::vector<InstVarGroupEntry>      groupEntries_;  // IVAR_GROUP operands
     std::vector<DeoptEntry>             deoptEntries_;  // DEOPT_ENTER/EXIT operands
     bool                                hasLateBinding_ = false;   // S37
+    bool                                isDeoptCopy_ = false;
     bool                                lateReadsGlobal_ = false;
     std::vector<std::string>            lateMethodNames_;
     mutable std::atomic<int>            lateState_{0};   // kLate*

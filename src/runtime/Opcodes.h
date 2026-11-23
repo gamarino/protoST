@@ -193,6 +193,20 @@ enum class Op : uint8_t {
     // engine treats them as unimplemented opcodes.
     PUSH_LATE_VAR      = 61, // arg = constant pool symbol index (variable name)
     STORE_LATE_VAR     = 62, // arg = constant pool symbol index (variable name)
+    // Explicit state (0.17.0): `:=` to a constant instance variable, emitted
+    // only in an instance-side `initialize` (its body, the blocks inlined
+    // there and their de-optimised copies). Pops its value like
+    // STORE_INSTVAR, so the compiler emits DUP before it unless the value is
+    // discarded. The write is a CAS from unset (absent or nil): losing it
+    // signals ModificationForbidden (M3), and so does an immutable receiver.
+    // Storing nil into an unset constant changes nothing.
+    STORE_CONST_INSTVAR = 63, // arg = constant pool symbol index (variable name)
+    // Explicit state (0.17.0): `:=` to a write-once instance variable. The
+    // stack shape is `x v -> w`: it pops `v` and replaces the copy below it
+    // with the value the variable holds afterwards, so it is always preceded
+    // by DUP and followed by POP when the value is discarded. Reserved here;
+    // emitted from Task 4 of the 0.17.0 plan.
+    STORE_ONCE_INSTVAR  = 64, // arg = constant pool symbol index (variable name)
     // Prefix carrying the next-higher byte of the following instruction's
     // operand, for operands above 255 (constant indices, slots, jumps).
     EXTEND          = 254,

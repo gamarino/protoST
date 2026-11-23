@@ -19,6 +19,7 @@
 #include "primitives/StringSupport.h"
 #include "runtime/NativeError.h"
 #include "runtime/ListIndex.h"
+#include "runtime/ValueFormat.h"
 #include "ExecutionEngine.h"
 #include "runtime/BlockCode.h"
 
@@ -425,6 +426,53 @@ ExecutionEngine::storeInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t
     if (self->setAttribute(ctx, sym, val) != self)
         throw NativeError("instance variable assignment: the receiver is an "
                           "immutable value; nothing was written");
+}
+
+void
+ExecutionEngine::storeConstInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t nameConst,
+                                   const proto::ProtoObject* val) {
+    // STORE_CONST_INSTVAR's write (explicit-state spec §6.2, plan D-c). A
+    // constant is unset while its own attribute is absent or holds nil; the
+    // store is a CAS from unset, so a constant is set at most once, by one
+    // writer, whatever the threads. Errors are signalled in place, so an
+    // on:do: in the method's caller catches them by class (pre-flight ruling
+    // C1); nothing is written when the signal returns.
+    auto* sym = f.m->ivSymbol(ctx, nameConst);
+    const proto::ProtoObject* self = getSelf(f);
+    if (!self || self == PROTO_NONE)
+        throw NativeError("STORE_CONST_INSTVAR self is null");
+    if (!val) val = PROTO_NONE;
+    // `val` and `self` stay rooted in their frame slots; the pin covers the
+    // value across the signal, whose handler runs on top of this frame.
+    TransientPin pinVal(ctx, val);
+    auto isUnset = [&] {
+        const proto::ProtoObject* cur = self->getOwnAttributeDirect(ctx, sym);
+        return !cur || cur == PROTO_NONE;
+    };
+    if (val == PROTO_NONE) {
+        // Storing nil into an unset constant changes nothing.
+        if (isUnset()) return;
+    } else {
+        // Absent first, then an explicit nil (as prim_Atom_cas): a constant
+        // never becomes unset again, so when both fail it was set.
+        if (self->setAttributeIfEqual(ctx, sym, nullptr, val)
+            || self->setAttributeIfEqual(ctx, sym, PROTO_NONE, val))
+            return;
+        if (isUnset()) {
+            // The CAS cannot write an immutable receiver.
+            signalErrorNamed(rt_, ctx, "ModificationForbidden",
+                             "cannot assign to the constant '" + f.m->constSymbol(nameConst)
+                             + "': the receiver is an immutable value; nothing was written");
+            return;
+        }
+    }
+    const proto::ProtoObject* nameObj = self->getAttribute(ctx, bs_.sym.className);
+    const proto::ProtoString* nameStr = nameObj && nameObj != PROTO_NONE ? nameObj->asString(ctx) : nullptr;
+    const std::string owner = nameStr ? articleAndClassName(nameStr->toStdString(ctx))
+                                      : std::string("an object");
+    signalErrorNamed(rt_, ctx, "ModificationForbidden",
+                     "the constant '" + f.m->constSymbol(nameConst) + "' of " + owner
+                     + " is already set; nothing was written");
 }
 
 const proto::ProtoObject*
@@ -1081,7 +1129,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         &&L_DEOPT_EXIT, &&L_RESET_LOCAL, &&L_JUMP_IF_NIL, &&L_JUMP_IF_NOT_NIL,   // 48-51
         &&L_IDENTICAL, &&L_BIN_INT_MUL, &&L_BIN_INT_MOD, &&L_BIN_INT_QUO,   // 52-55
         &&L_BAD_OP, &&L_BIN_INT_AND, &&L_BIN_INT_OR, &&L_PUSH_SHARED_LOCAL,   // 56-59
-        &&L_STORE_SHARED_LOCAL, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 60-63
+        &&L_STORE_SHARED_LOCAL, &&L_BAD_OP, &&L_BAD_OP, &&L_STORE_CONST_INSTVAR,   // 60-63
         &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 64-67
         &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 68-71
         &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 72-75
@@ -1189,6 +1237,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     check[static_cast<unsigned int>(Op::STORE_GLOBAL)]     = &&L_STORE_GLOBAL;
     check[static_cast<unsigned int>(Op::PUSH_INSTVAR)]     = &&L_PUSH_INSTVAR;
     check[static_cast<unsigned int>(Op::STORE_INSTVAR)]    = &&L_STORE_INSTVAR;
+    check[static_cast<unsigned int>(Op::STORE_CONST_INSTVAR)] = &&L_STORE_CONST_INSTVAR;
     check[static_cast<unsigned int>(Op::IVAR_GROUP)]       = &&L_IVAR_GROUP;
     check[static_cast<unsigned int>(Op::IVAR_GROUP_END)]   = &&L_IVAR_GROUP_END;
     check[static_cast<unsigned int>(Op::MAKE_CAPTURED)]    = &&L_MAKE_CAPTURED;
@@ -2716,6 +2765,16 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // directly, without that check, until 0.10.0).
                 const proto::ProtoObject* val = pop(f);
                 storeInstVar(ctx, f, arg, val);
+                DISPATCH_DIRECT();
+                break;
+            }
+            case Op::STORE_CONST_INSTVAR: L_STORE_CONST_INSTVAR: {
+                // `:=` to a constant (explicit-state spec §6.2): pop the
+                // value and CAS it in from unset (storeConstInstVar). A
+                // refused store signals ModificationForbidden in place.
+                Frame& f = frames_.back();
+                const proto::ProtoObject* val = pop(f);
+                storeConstInstVar(ctx, f, arg, val);
                 DISPATCH_DIRECT();
                 break;
             }

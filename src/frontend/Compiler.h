@@ -218,6 +218,21 @@ private:
     // lowercase name compiles to PUSH_LATE_VAR / STORE_LATE_VAR, resolved
     // against the real class when the method is installed.
     bool currentMethodLate_ = false;
+    // The selector of the method being emitted (empty outside a method).
+    // A constant instance variable is assigned only in the instance-side
+    // `initialize` (explicit-state spec §6.2).
+    std::string currentMethodSelector_;
+    // The store opcode of `:=` to the instance variable `name` of the
+    // current method's class, by its modifier (spec §6.2, §6.4, §6.5): a
+    // constant in the instance-side `initialize` is STORE_CONST_INSTVAR, and
+    // anywhere else M1 (M2 inside a real block); an atomic variable is M4.
+    // Errors are reported here; the opcode answered keeps the code well
+    // formed (the module is not run after an error).
+    Op     instVarStoreOp(const std::string& name);
+    // Whether the code being emitted is inside a real block of the current
+    // method: a block scope between the method scope and here that is not
+    // a de-optimised copy of an inlined block.
+    bool   insideRealBlock() const;
     // Sets the name-resolution context above for the method declaration `n`
     // (MethodDecl or CallMethodDecl), or clears it.
     void enterMethodClass(const ast::Node& n);

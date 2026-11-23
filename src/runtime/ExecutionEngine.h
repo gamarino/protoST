@@ -352,6 +352,12 @@ private:
 
     void storeInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t nameConst,
                       const proto::ProtoObject* val);
+    // STORE_CONST_INSTVAR's write: a CAS of `val` from unset into the
+    // constant named by constant `nameConst`, on the frame's `self`. Storing
+    // nil into an unset constant does nothing. A set constant (M3) or an
+    // immutable receiver signals ModificationForbidden in place.
+    void storeConstInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t nameConst,
+                           const proto::ProtoObject* val);
     void flushInstVarGroup(proto::ProtoContext* ctx, Frame& f);
 
     // Push a new frame for module `m`, returning a reference is unsafe across

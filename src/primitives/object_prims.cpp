@@ -264,9 +264,21 @@ struct LateSite {
     std::size_t opPos;    // byte offset of the opcode word (after any EXTEND)
     Op op;
     unsigned int arg;     // constant index of the variable's name
+    // The sub-module chain from the method body to the site crosses a real
+    // block (a module that is not a de-optimised copy).
+    bool inClosure;
+    // ... or a de-optimised copy of an inlined block. Such a copy inlines
+    // nothing, so a block the method's code inlines can be a real block in
+    // it; every site in it has a twin in the method's inlined code, which
+    // decides whether it stands in a closure (explicit-state spec §6.2).
+    bool inDeoptCopy;
 };
 
-void collectLateSites(const BytecodeModule& m, std::vector<LateSite>& out) {
+// The late sites of `m` and of its sub-modules, in code order, `m` first.
+// `inClosure` and `inDeoptCopy` describe the chain from the method body
+// down to `m` (both false for the body itself).
+void collectLateSites(const BytecodeModule& m, std::vector<LateSite>& out,
+                      bool inClosure = false, bool inDeoptCopy = false) {
     const std::vector<uint8_t>& bytes = m.bytes();
     for (std::size_t pc = 0; pc + 1 < bytes.size(); ) {
         std::size_t opPos = pc;
@@ -280,9 +292,42 @@ void collectLateSites(const BytecodeModule& m, std::vector<LateSite>& out) {
             pc += kInstrSize;
         }
         if (op == Op::PUSH_LATE_VAR || op == Op::STORE_LATE_VAR)
-            out.push_back(LateSite{&m, opPos, op, arg});
+            out.push_back(LateSite{&m, opPos, op, arg, inClosure, inDeoptCopy});
     }
-    for (std::size_t i = 0; i < m.numBlocks(); ++i) collectLateSites(m.block(i), out);
+    for (std::size_t i = 0; i < m.numBlocks(); ++i) {
+        const BytecodeModule& sub = m.block(i);
+        collectLateSites(sub, out, inClosure || !sub.isDeoptCopy(),
+                         inDeoptCopy || sub.isDeoptCopy());
+    }
+}
+
+// The store opcode of a late `:=` to the instance variable `name` of `cls`,
+// by its modifier; M1, M2 and M4 are signalled with the compiler's texts.
+// `where` is the method's class, as the compiler names it.
+Op lateInstVarStoreOp(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* cls,
+                      const std::string& name, const std::string& selector,
+                      const LateSite& site, const std::string& where) {
+    const std::string line =
+        " (line " + std::to_string(site.module->lineForPc(site.opPos)) + ")";
+    switch (modifierOf(rt, ctx, cls, name, nullptr)) {
+        case IvarModifier::Constant: {
+            const std::string what = "cannot assign to the constant '" + name + "' of " + where;
+            if (selector != "initialize")
+                throw ClassedErrorSignal("Error", what + " outside initialize" + line);
+            if (site.inClosure && !site.inDeoptCopy)
+                throw ClassedErrorSignal("Error",
+                    what + " inside a block: the block may run after construction" + line);
+            return Op::STORE_CONST_INSTVAR;
+        }
+        case IvarModifier::Atomic:
+            throw ClassedErrorSignal("Error",
+                "cannot assign to the atomic variable '" + name + "' of " + where
+                + ": use update:with: or compareAndSet:from:to:" + line);
+        default:
+            // Plain, and write-once until Task 4 resolves it to
+            // STORE_ONCE_INSTVAR (pre-flight ruling C3).
+            return Op::STORE_INSTVAR;
+    }
 }
 
 // S37: resolve the late-bound variables of a method body (Op::PUSH_LATE_VAR,
@@ -296,11 +341,18 @@ void collectLateSites(const BytecodeModule& m, std::vector<LateSite>& out) {
 // emitted one (a name not starting with a lowercase letter, or any name in
 // REPL code); any other name signals `undeclared variable`, the compiler's
 // error, and the method is not installed; so does an argument or temporary that reuses an
-// instance variable's name. Everything is checked before anything is
-// rewritten, so a refused method leaves its body untouched.
+// instance variable's name. A store to an instance variable follows its
+// modifier (explicit-state spec §6.2, §6.4, §6.5), as the compiler does: a
+// constant is stored by STORE_CONST_INSTVAR in `initialize` (`selector`, the
+// selector being installed) outside real blocks, and refused anywhere else
+// (M1, M2); an atomic variable is refused (M4); a write-once variable is a
+// plain store until STORE_ONCE_INSTVAR exists (pre-flight ruling C3). A read
+// of a constant stays PUSH_INSTVAR until PUSH_CONST_INSTVAR exists. Everything
+// is checked before anything is rewritten, so a refused method leaves its
+// body untouched.
 void resolveLateVariables(STRuntime& rt, proto::ProtoContext* ctx,
                           const proto::ProtoObject* cls, bool classSide,
-                          const proto::ProtoObject* methodObj) {
+                          const proto::ProtoObject* methodObj, const std::string& selector) {
     const Bootstrap& b = rt.bootstrap();
     const BytecodeModule* code =
         blockCodeOf(ctx, methodObj->getOwnAttributeDirect(ctx, b.sym.bcPtr));
@@ -343,7 +395,9 @@ void resolveLateVariables(STRuntime& rt, proto::ProtoContext* ctx,
         const std::string& name = site.module->constSymbol(site.arg);
         const bool store = site.op == Op::STORE_LATE_VAR;
         Op to = Op::EXTEND;
-        if (ivars.count(name))
+        if (ivars.count(name) && store && !classSide)
+            to = lateInstVarStoreOp(rt, ctx, cls, name, selector, site, where);
+        else if (ivars.count(name))
             to = store ? Op::STORE_INSTVAR : (classSide ? Op::PUSH_OWN_INSTVAR : Op::PUSH_INSTVAR);
         else if (cvars.count(name))
             to = store ? Op::STORE_CLASSVAR : Op::PUSH_INSTVAR;
@@ -545,7 +599,7 @@ const proto::ProtoObject* prim_Object_installMethod(STRuntime& rt,
     // a[1] = selector symbol (ProtoString tagged as symbol)
     auto* selStr = a[1]->asString(ctx);
     if (!selStr) throw NativeError("__installMethod:as: selector must be a symbol");
-    resolveLateVariables(rt, ctx, r, /*classSide=*/false, a[0]);
+    resolveLateVariables(rt, ctx, r, /*classSide=*/false, a[0], selStr->toStdString(ctx));
     stampDefiningClass(rt, ctx, r, a[0]);
     r->setAttribute(ctx, selStr, a[0]);
     return r;
@@ -570,7 +624,7 @@ const proto::ProtoObject* prim_Object_installClassMethod(STRuntime& rt,
     if (!selStr)
         throw NativeError(
             "__installClassMethod:as: selector must be a symbol");
-    resolveLateVariables(rt, ctx, r, /*classSide=*/true, a[0]);
+    resolveLateVariables(rt, ctx, r, /*classSide=*/true, a[0], selStr->toStdString(ctx));
     const proto::ProtoObject* meta = ensureMetaclass(rt.bootstrap(), ctx, r);
     stampDefiningClass(rt, ctx, meta, a[0]);
     meta->setAttribute(ctx, selStr, a[0]);
