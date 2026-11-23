@@ -4,7 +4,7 @@
    PROTOCORE_HEAP_TRACE=1 protost 04-gc-en-vivo.st 2> traza.txt
  y después:
    grep -c 'protoCore heap' traza.txt          (cuántos ciclos)
-   grep -o 'stw=[0-9.]*ms' traza.txt | sort -t= -k2 -n | tail -3   (las pausas más largas)
+   grep -o 'stw=[0-9.]*ms' traza.txt | sort -t '=' -k2 -n | tail -3   (las pausas más largas)
  En cada línea: L = celdas vivas al final del ciclo (de 64 bytes),
  S = límite blando, H = presupuesto, C = duración del ciclo concurrente,
  stw = la pausa stop-the-world.

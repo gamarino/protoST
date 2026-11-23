@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Print deck.html to slides/protoST-por-dentro-FAST-2026-11-12.pdf.
+"""Print deck.html to slides/protoST-por-dentro-FAST-2026-12-03.pdf.
 
 deck.html is the source: one <section> per slide on a 1920x1080 canvas, every
 style inline, speaker notes in <aside>. A browser needs a few rules to print it
@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-OUT = HERE / "slides" / "protoST-por-dentro-FAST-2026-11-12.pdf"
+OUT = HERE / "slides" / "protoST-por-dentro-FAST-2026-12-03.pdf"
 
 PRINT_CSS = """<style>
 @page { size: 1920px 1080px; margin: 0; }
