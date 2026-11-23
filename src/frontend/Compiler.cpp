@@ -718,12 +718,25 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             m.emitWide(Op::PUSH_CONST,
                        static_cast<unsigned int>(nameSymIdx), currentLine_);
             const size_t ivCount = static_cast<size_t>(n.intValue);
+            const bool modified = hasIvarModifiers(n);
             std::string selector;
-            // With modifiers, the variables are declared once, by the
-            // __setInstVarNames:modifiers: that emitSetInstVarNames sends
-            // next (pre-flight ruling C8): declared here as plain first, they
-            // would be refused there as a change of modifier (M11).
-            if (ivCount > 0 && !hasIvarModifiers(n)) {
+            if (modified) {
+                // With modifiers, the variables are declared once, with
+                // their modifiers, by the primitive that builds the class
+                // (pre-flight ruling C8), before it binds the class (M11).
+                std::vector<std::string> declared(n.stringList.begin() + 1,
+                                                  n.stringList.begin() + 1 + static_cast<long>(ivCount));
+                std::string ivars;
+                for (size_t i = 0; i < ivCount; ++i) {
+                    if (i > 0) ivars += ' ';
+                    ivars += declared[i];
+                }
+                auto ivStrIdx = m.addString(ivars);
+                auto kindsIdx = m.addString(encodeModifiers(declared, n.ivarModifiers));
+                m.emitWide(Op::PUSH_CONST, static_cast<unsigned int>(ivStrIdx), currentLine_);
+                m.emitWide(Op::PUSH_CONST, static_cast<unsigned int>(kindsIdx), currentLine_);
+                selector = "__subclass:instanceVariableNames:modifiers:uses:";
+            } else if (ivCount > 0) {
                 // declared instance variables → subclass:instanceVariableNames:uses:
                 std::string ivars;
                 for (size_t i = 0; i < ivCount; ++i) {
@@ -742,7 +755,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             auto selIdx = m.internSymbol(selector);
             m.emitWide(Op::SEND_KEYWORD,
                        static_cast<unsigned int>(selIdx), currentLine_);
-            emitSetInstVarNames(m, n);
+            if (!modified) emitSetInstVarNames(m, n);
             // D19 (2026-06-13): install class-var initial values on the new
             // class. Class is on the stack as the SEND's result; the primitive
             // walks the packed name string, sets `_iv_<name>` = nil for each,

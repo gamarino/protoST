@@ -16,26 +16,18 @@
 // Modifiers apply to instance variables only: class-instance variables and
 // class variables take none (plan ruling G1).
 
-#include <cstdint>
 #include <string>
-#include <string_view>
 #include <unordered_set>
 #include <vector>
 
 #include "protoCore.h"
+#include "runtime/IvarModifierKinds.h"
 #include "runtime/ListIndex.h"
 #include "runtime/TransientPin.h"
 
 namespace protoST {
 
 class STRuntime;
-
-enum class IvarModifier : uint8_t { Plain, Constant, WriteOnce, Atomic };
-
-// "plain", "constant", "writeOnce", "atomic".
-const char* modifierName(IvarModifier);
-// The inverse of modifierName; false for any other text.
-bool parseModifierName(std::string_view, IvarModifier&);
 
 // The names a class declares, recorded on the class object as one
 // space-separated string under `key`: `__instvar_names__` (instance
@@ -59,20 +51,9 @@ void forClassAndAncestors(proto::ProtoContext* ctx, const proto::ProtoObject* cl
     }
 }
 
-// One `kind:name` entry of a class's `__ivar_modifiers__`.
-struct ModifiedIvar {
-    std::string name;
-    IvarModifier modifier;
-};
-
 // The entries of `cls`'s OWN `__ivar_modifiers__`, in source order (empty
 // when the class records none). Throws NativeError on a malformed record.
 std::vector<ModifiedIvar> ownModifiersOf(proto::ProtoContext* ctx, const proto::ProtoObject* cls);
-
-// The `__ivar_modifiers__` text for `names` and the aligned `modifiers`
-// (plain variables are left out; empty when every variable is plain).
-std::string encodeModifiers(const std::vector<std::string>& names,
-                            const std::vector<IvarModifier>& modifiers);
 
 // The instance side. `obj` is a class or an instance; its class chain is
 // walked (the class, its superclasses and its mixins, as
@@ -100,9 +81,5 @@ IvarModifier receiverModifierOf(STRuntime&, proto::ProtoContext*, const proto::P
 // class's in source order, every name once.
 std::vector<std::string> constantNamesOf(STRuntime&, proto::ProtoContext*,
                                          const proto::ProtoObject* cls);
-
-// The keyword selector over `constants`: {"number","owner"} -> "number:owner:".
-// Empty for no constants.
-std::string constructorSelectorFor(const std::vector<std::string>& constants);
 
 } // namespace protoST

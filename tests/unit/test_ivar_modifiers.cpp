@@ -227,3 +227,45 @@ TEST_CASE("IvarModifiers: run-time lookups on classes, instances and class objec
     CHECK_FALSE(declared);
     CHECK_FALSE(protoST::declaresInstVar(rt, ctx, PROTO_NONE, "a"));
 }
+
+// `__has_constants__` answers, through the chain, whether a class declares or
+// inherits a constant (plan decision D-a). A class that drops its own
+// constants must not keep an own record that hides one its superclass gains
+// later (fix round 1 of Task 2; Task 6's M13 check reads it).
+TEST_CASE("IvarModifiers: has-constants follows the chain after redeclarations", "[ivar_modifiers]") {
+    const char* src =
+        "Object subclass: #HcBase instanceVariableNames: 'p'.\n"
+        "HcBase subclass: #HcSub constantNames: 'k'.\n"
+        "HcBase subclass: #HcSub instanceVariableNames: 'q'.\n"
+        "Object subclass: #HcPlain instanceVariableNames: 'r'.\n"
+        "Object subclass: #HcBase instanceVariableNames: 'p' constantNames: 'c'.\n"
+        "0\n";
+    protoST::Parser P(src);
+    auto mod = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C;
+    auto bc = C.compileModule(*mod);
+    REQUIRE_FALSE(C.hasErrors());
+    protoST::STRuntime rt;
+    std::string error;
+    try {
+        rt.runTopLevel(*bc);
+    } catch (const std::exception& e) {
+        error = protoST::nativeErrorText(e);
+    }
+    REQUIRE(error.empty());
+    proto::ProtoContext* ctx = rt.rootCtx();
+    auto global = [&](const char* name) {
+        return rt.globals()->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, name));
+    };
+    const proto::ProtoString* key = proto::ProtoString::createSymbol(ctx, "__has_constants__");
+    const proto::ProtoObject* sub = global("HcSub");
+    const proto::ProtoObject* base = global("HcBase");
+    REQUIRE(sub != nullptr);
+    REQUIRE(base != nullptr);
+    CHECK(base->getAttribute(ctx, key) == PROTO_TRUE);
+    CHECK(sub->getAttribute(ctx, key) == PROTO_TRUE);
+    CHECK(sub->hasOwnAttribute(ctx, key) != PROTO_TRUE);
+    CHECK(global("HcPlain")->getAttribute(ctx, key) != PROTO_TRUE);
+    CHECK(protoST::constantNamesOf(rt, ctx, sub) == std::vector<std::string>{"c"});
+}

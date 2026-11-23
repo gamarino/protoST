@@ -5,7 +5,6 @@
 #include "runtime/NativeError.h"
 
 #include <algorithm>
-#include <cctype>
 
 namespace protoST {
 
@@ -39,16 +38,7 @@ std::vector<std::string> ownWords(proto::ProtoContext* ctx, const proto::ProtoOb
     const proto::ProtoObject* v = o->getOwnAttributeDirect(ctx, key);
     const proto::ProtoString* str = v && v != PROTO_NONE ? v->asString(ctx) : nullptr;
     if (!str) return out;
-    std::string word;
-    for (char c : str->toStdString(ctx) + " ") {
-        if (std::isspace(static_cast<unsigned char>(c))) {
-            if (!word.empty()) out.push_back(word);
-            word.clear();
-        } else {
-            word += c;
-        }
-    }
-    return out;
+    return splitNames(str->toStdString(ctx));
 }
 
 // A class object (it owns `__class_name__`) that is not a metaclass.
@@ -84,27 +74,6 @@ void collectConstants(const Bootstrap& b, proto::ProtoContext* ctx, const proto:
 
 } // namespace
 
-const char* modifierName(IvarModifier m) {
-    switch (m) {
-    case IvarModifier::Plain:     return "plain";
-    case IvarModifier::Constant:  return "constant";
-    case IvarModifier::WriteOnce: return "writeOnce";
-    case IvarModifier::Atomic:    return "atomic";
-    }
-    return "plain";
-}
-
-bool parseModifierName(std::string_view text, IvarModifier& out) {
-    for (IvarModifier m : {IvarModifier::Plain, IvarModifier::Constant, IvarModifier::WriteOnce,
-                           IvarModifier::Atomic}) {
-        if (text == modifierName(m)) {
-            out = m;
-            return true;
-        }
-    }
-    return false;
-}
-
 void addDeclaredNames(proto::ProtoContext* ctx, const proto::ProtoObject* o,
                       const proto::ProtoString* key, std::unordered_set<std::string>& out) {
     for (auto& w : ownWords(ctx, o, key)) out.insert(std::move(w));
@@ -123,19 +92,6 @@ std::vector<ModifiedIvar> ownModifiersOf(proto::ProtoContext* ctx, const proto::
     return out;
 }
 
-std::string encodeModifiers(const std::vector<std::string>& names,
-                            const std::vector<IvarModifier>& modifiers) {
-    std::string out;
-    for (std::size_t i = 0; i < names.size() && i < modifiers.size(); ++i) {
-        if (modifiers[i] == IvarModifier::Plain) continue;
-        if (!out.empty()) out += ' ';
-        out += modifierName(modifiers[i]);
-        out += ':';
-        out += names[i];
-    }
-    return out;
-}
-
 IvarModifier modifierOf(STRuntime&, proto::ProtoContext* ctx, const proto::ProtoObject* obj,
                         const std::string& name, bool* declared) {
     bool found = false;
@@ -147,8 +103,7 @@ IvarModifier modifierOf(STRuntime&, proto::ProtoContext* ctx, const proto::Proto
             const std::vector<std::string> names = ownWords(ctx, k, ivKey);
             if (std::find(names.begin(), names.end(), name) == names.end()) return;
             found = true;
-            for (const ModifiedIvar& e : ownModifiersOf(ctx, k))
-                if (e.name == name) mod = e.modifier;
+            mod = modifierIn(ownModifiersOf(ctx, k), name);
         });
     }
     if (declared) *declared = found;
@@ -192,15 +147,6 @@ std::vector<std::string> constantNamesOf(STRuntime& rt, proto::ProtoContext* ctx
     std::unordered_set<std::string> seen;
     collectConstants(rt.bootstrap(), ctx, cls, out, seen);
     return out;
-}
-
-std::string constructorSelectorFor(const std::vector<std::string>& constants) {
-    std::string sel;
-    for (const auto& c : constants) {
-        sel += c;
-        sel += ':';
-    }
-    return sel;
 }
 
 } // namespace protoST

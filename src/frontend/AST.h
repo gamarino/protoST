@@ -5,7 +5,7 @@
 #include <variant>
 #include <cstdint>
 
-#include "runtime/IvarModifiers.h"
+#include "runtime/IvarModifierKinds.h"
 
 namespace protoST::ast {
 
