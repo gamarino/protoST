@@ -173,7 +173,7 @@ unsigned int BytecodeModule::computeMaxOperandDepth() const {
             case Op::PUSH_FALSE: case Op::PUSH_BLOCK: case Op::PUSH_CAPTURED:
             // PUSH_DEOPT_BLOCK pops a box and pushes a closure: no change.
             case Op::PUSH_GLOBAL: case Op::PUSH_INSTVAR: case Op::PUSH_OWN_INSTVAR:
-            case Op::PUSH_LATE_VAR:
+            case Op::PUSH_LATE_VAR: case Op::PUSH_CONST_INSTVAR:
                 pushes(1);
                 break;
             case Op::STORE_LOCAL: case Op::STORE_SHARED_LOCAL: case Op::POP: case Op::STORE_CAPTURED:

@@ -541,3 +541,31 @@ TEST_CASE("IvarModifiers: a write-once store is DUP STORE_ONCE_INSTVAR then RETU
     REQUIRE(n.size() == 2);
     for (const auto& p : n) CHECK(p.first == protoST::Op::DUP);
 }
+
+TEST_CASE("IvarModifiers: a constant read compiles to PUSH_CONST_INSTVAR", "[ivar_modifiers]") {
+    // Spec §6.2: a compiled read of a constant, in a method or a block, is
+    // the checked opcode; plain, write-once and atomic reads keep
+    // PUSH_INSTVAR, and a class-side method's class-instance variables are
+    // always plain (G1).
+    const auto c = compileSource(
+        "Object subclass: #IvmReadA instanceVariableNames: 'plain' constantNames: 'number'\n"
+        "  writeOnceNames: 'once' atomicNames: 'count'.\n"
+        "IvmReadA >> number\n"
+        "  ^ number\n"
+        "IvmReadA >> later\n"
+        "  ^ [number + 1] value\n"
+        "IvmReadA >> others\n"
+        "  ^ {plain. once. count}\n");
+    REQUIRE(c.errors.empty());
+    CHECK(countOp(*c.code, protoST::Op::PUSH_CONST_INSTVAR) == 2);
+    CHECK(countOp(*c.code, protoST::Op::PUSH_INSTVAR) == 3);
+
+    const auto cls = compileSource(
+        "Object subclass: #IvmReadB instanceVariableNames: 'x' constantNames: 'number'.\n"
+        "IvmReadB class instanceVariableNames: 'number'.\n"
+        "IvmReadB class >> number\n"
+        "  ^ number\n");
+    REQUIRE(cls.errors.empty());
+    CHECK(countOp(*cls.code, protoST::Op::PUSH_CONST_INSTVAR) == 0);
+    CHECK(countOp(*cls.code, protoST::Op::PUSH_OWN_INSTVAR) == 1);
+}

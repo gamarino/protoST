@@ -1317,10 +1317,15 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             // class-side method's instance variables are the class object's
             // own slots: read own-only, so a subclass does not see its
             // superclass's value.
+            // A constant is read by PUSH_CONST_INSTVAR, which signals M14
+            // when it is unset (explicit-state spec §6.2); every other
+            // variable keeps its unchecked read.
             for (const auto& iv : currentInstVars_) {
                 if (iv == n.text) {
                     auto sym = m.internSymbol(n.text);
-                    m.emitWide(currentMethodIsClassSide_ ? Op::PUSH_OWN_INSTVAR : Op::PUSH_INSTVAR,
+                    m.emitWide(currentMethodIsClassSide_ ? Op::PUSH_OWN_INSTVAR
+                               : isConstantInstVar(n.text) ? Op::PUSH_CONST_INSTVAR
+                                                           : Op::PUSH_INSTVAR,
                                static_cast<unsigned int>(sym), currentLine_);
                     return;
                 }
@@ -1793,6 +1798,13 @@ bool Compiler::insideRealBlock() const {
         if (!it->deoptBoundary) return true;
     }
     return false;
+}
+
+bool Compiler::isConstantInstVar(const std::string& name) const {
+    // A class-side method's instance variables are class-instance variables,
+    // which take no modifiers (plan ruling G1).
+    return !currentMethodIsClassSide_
+           && modifierThroughChain(currentMethodClass_, name) == IvarModifier::Constant;
 }
 
 Op Compiler::instVarStoreOp(const std::string& name) {
@@ -2733,6 +2745,10 @@ bool Compiler::isInertGroupValue(const Node& e,
                                            e.text) != currentInstVars_.end();
             const bool classVar = std::find(currentClassVars_.begin(), currentClassVars_.end(),
                                             e.text) != currentClassVars_.end();
+            // A constant's read can signal UnsetConstantError, so it is not
+            // inert: it ends the run, and the writes before it are published
+            // before it runs (plan D-g, spec §6.6).
+            if (instVar && isConstantInstVar(e.text)) return false;
             return (instVar || classVar) && written.count(e.text) == 0;
         }
         case NodeKind::BinarySend: {

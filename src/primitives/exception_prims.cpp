@@ -63,6 +63,7 @@
 #include "runtime/UnhandledSTException.h"
 #include "runtime/NativeExceptionBridge.h"
 #include "runtime/TransientPin.h"
+#include "runtime/ValueFormat.h"
 #include "primitives/StringSupport.h"
 #include "runtime/ExecutionEngine.h"
 #include "modules/STModuleProvider.h"
@@ -791,6 +792,37 @@ const proto::ProtoObject* signalErrorNamed(STRuntime& rt, proto::ProtoContext* c
         return signalNativeError(rt, ctx, message);
     t_signalFromPrimitive = true;
     return signalErrorOfClassWith(rt, ctx, cls, message, ivar, value);
+}
+
+// M14 (explicit-state spec §6.2, §6.9): signal a fresh UnsetConstantError
+// whose `receiver` is the object whose constant was read and whose
+// `variableName` is the constant's name, a String. Its text names the
+// receiver as printString's default does, from the class name alone, so the
+// receiver's own printOn: (which could read the unset constant again) is
+// never sent. Built as signalMessageNotUnderstood builds its exception, and
+// non-resumable like every Error.
+const proto::ProtoObject* signalUnsetConstantError(STRuntime& rt, proto::ProtoContext* ctx,
+                                                   const proto::ProtoObject* receiver,
+                                                   const std::string& variableName) {
+    if (!receiver) receiver = PROTO_NONE;
+    TransientPin pinReceiver(ctx, receiver);
+    const std::string text = "constant '" + variableName + "' of "
+                             + articleAndClassName(ctx, receiver) + " read before it was set";
+    const proto::ProtoObject* g = rt.globals();
+    const proto::ProtoObject* cls = g
+        ? g->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, "UnsetConstantError"))
+        : nullptr;
+    if (!cls || cls == PROTO_NONE || !isExceptionClassObject(rt, ctx, cls))
+        return signalNativeError(rt, ctx, text);
+    const proto::ProtoObject* exc =
+        const_cast<proto::ProtoObject*>(cls)->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinExc(ctx, exc);
+    exc->setAttribute(ctx, msgTextKey(ctx), makeString(ctx, text));
+    exc->setAttribute(ctx, resumableKey(ctx), PROTO_FALSE);
+    exc->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "_iv_receiver"), receiver);
+    exc->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "_iv_variableName"),
+                      makeString(ctx, variableName));
+    return signalInstance(rt, ctx, exc);
 }
 
 // A Message: the selector and the arguments of a send, as a

@@ -477,10 +477,18 @@ std::string
 ExecutionEngine::ivarOwnerDescription(proto::ProtoContext* ctx,
                                       const proto::ProtoObject* self) const {
     // `an Account`: the class-name form of printString's default.
-    const proto::ProtoObject* nameObj = self->getAttribute(ctx, bs_.sym.className);
-    const proto::ProtoString* nameStr =
-        nameObj && nameObj != PROTO_NONE ? nameObj->asString(ctx) : nullptr;
-    return nameStr ? articleAndClassName(nameStr->toStdString(ctx)) : std::string("an object");
+    return articleAndClassName(ctx, self);
+}
+
+const proto::ProtoObject*
+ExecutionEngine::unsetConstantRead(proto::ProtoContext* ctx, const Frame& f, uint32_t nameConst) {
+    // PUSH_CONST_INSTVAR's slow path (explicit-state spec §6.2): the constant
+    // is unset. Signal M14 in place (pre-flight ruling C1). The name is
+    // copied and `self` read before the signal, whose handler runs on top of
+    // this frame; the signal helper pins the receiver.
+    const proto::ProtoObject* self = getSelf(f);
+    const std::string name = f.m->constSymbol(nameConst);
+    return signalUnsetConstantError(rt_, ctx, self, name);
 }
 
 const proto::ProtoObject*
@@ -1201,7 +1209,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         &&L_IDENTICAL, &&L_BIN_INT_MUL, &&L_BIN_INT_MOD, &&L_BIN_INT_QUO,   // 52-55
         &&L_BAD_OP, &&L_BIN_INT_AND, &&L_BIN_INT_OR, &&L_PUSH_SHARED_LOCAL,   // 56-59
         &&L_STORE_SHARED_LOCAL, &&L_BAD_OP, &&L_BAD_OP, &&L_STORE_CONST_INSTVAR,   // 60-63
-        &&L_STORE_ONCE_INSTVAR, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 64-67
+        &&L_STORE_ONCE_INSTVAR, &&L_PUSH_CONST_INSTVAR, &&L_BAD_OP, &&L_BAD_OP,   // 64-67
         &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 68-71
         &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 72-75
         &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 76-79
@@ -1310,6 +1318,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     check[static_cast<unsigned int>(Op::STORE_INSTVAR)]    = &&L_STORE_INSTVAR;
     check[static_cast<unsigned int>(Op::STORE_CONST_INSTVAR)] = &&L_STORE_CONST_INSTVAR;
     check[static_cast<unsigned int>(Op::STORE_ONCE_INSTVAR)] = &&L_STORE_ONCE_INSTVAR;
+    check[static_cast<unsigned int>(Op::PUSH_CONST_INSTVAR)] = &&L_PUSH_CONST_INSTVAR;
     check[static_cast<unsigned int>(Op::IVAR_GROUP)]       = &&L_IVAR_GROUP;
     check[static_cast<unsigned int>(Op::IVAR_GROUP_END)]   = &&L_IVAR_GROUP_END;
     check[static_cast<unsigned int>(Op::MAKE_CAPTURED)]    = &&L_MAKE_CAPTURED;
@@ -2869,6 +2878,27 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 Frame& f = frames_.back();
                 pop(f);
                 push(f, w ? w : PROTO_NONE);
+                DISPATCH_DIRECT();
+                break;
+            }
+            case Op::PUSH_CONST_INSTVAR: L_PUSH_CONST_INSTVAR: {
+                // A read of a constant (explicit-state spec §6.2): read as
+                // PUSH_INSTVAR does; an unset constant (absent or nil)
+                // signals UnsetConstantError (M14) in place instead of
+                // answering nil. The signal runs handlers on top of this
+                // frame, so the frame is re-acquired after the helper, which
+                // keeps the slow path out of line.
+                const proto::ProtoObject* val;
+                {
+                    Frame& f = frames_.back();
+                    auto* sym = f.m->ivSymbol(ctx, arg);
+                    const proto::ProtoObject* self = getSelf(f);
+                    val = (self && self != PROTO_NONE) ? self->getAttribute(ctx, sym) : nullptr;
+                    if (!val || val == PROTO_NONE)
+                        val = unsetConstantRead(ctx, f, arg);
+                }
+                Frame& f = frames_.back();
+                push(f, val ? val : PROTO_NONE);
                 DISPATCH_DIRECT();
                 break;
             }

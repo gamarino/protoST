@@ -35,6 +35,12 @@ std::string formatValue(STRuntime& rt, proto::ProtoContext* ctx,
 // instance (explicit-state spec §6.9, §12) all use it.
 std::string articleAndClassName(const std::string& className);
 
+// The same phrase for the instance `obj`: its class name, found through its
+// prototype chain, with its article ("an Account"); "an object" when the
+// chain names no class. Reads attributes only and never sends a message, so
+// the receiver's own printOn: is not consulted (explicit-state spec §6.9).
+std::string articleAndClassName(proto::ProtoContext* ctx, const proto::ProtoObject* obj);
+
 // Numeric tower rendering (D11 / D20).
 //
 // protoCore stores numbers as tagged `SmallInteger`, heap `LargeInteger` and

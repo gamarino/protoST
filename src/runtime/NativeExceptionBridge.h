@@ -130,6 +130,15 @@ const proto::ProtoObject* signalMessageNotUnderstood(STRuntime& rt, proto::Proto
                                                      const proto::ProtoObject* message,
                                                      std::string_view text);
 
+// M14 (explicit-state spec §6.9): signal a fresh, non-resumable
+// UnsetConstantError carrying `receiver` and `variableName` (as a String),
+// with the text `constant '<name>' of <a|an> <ClassName> read before it was
+// set`. The receiver's printOn: is never sent. Used by PUSH_CONST_INSTVAR and
+// instVarNamed: (so instVarAt:) for an unset constant (exception_prims.cpp).
+const proto::ProtoObject* signalUnsetConstantError(STRuntime& rt, proto::ProtoContext* ctx,
+                                                   const proto::ProtoObject* receiver,
+                                                   const std::string& variableName);
+
 // Re-signal an existing exception instance in the current context, and test
 // whether an object is one (exception_prims.cpp).
 const proto::ProtoObject* resignalException(STRuntime& rt, proto::ProtoContext* ctx,

@@ -369,6 +369,17 @@ private:
     const proto::ProtoObject* storeOnceInstVar(proto::ProtoContext* ctx, const Frame& f,
                                                uint32_t nameConst,
                                                const proto::ProtoObject* val);
+    // PUSH_CONST_INSTVAR's slow path: the constant named by constant
+    // `nameConst` is unset on the frame's `self`. Signals UnsetConstantError
+    // (M14) in place and answers what the signal answers. Runs Smalltalk code
+    // (a handler): the caller re-acquires its frame after.
+#if defined(_MSC_VER)
+    __declspec(noinline)
+#else
+    __attribute__((noinline, cold))
+#endif
+    const proto::ProtoObject* unsetConstantRead(proto::ProtoContext* ctx, const Frame& f,
+                                                uint32_t nameConst);
     // `an Account`: the receiver's class name in printString's default form,
     // as the modifier errors (M3, M12) name the object.
     std::string ivarOwnerDescription(proto::ProtoContext* ctx,

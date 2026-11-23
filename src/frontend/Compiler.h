@@ -231,6 +231,9 @@ private:
     // Errors are reported here; the opcode answered keeps the code well
     // formed (the module is not run after an error).
     Op     instVarStoreOp(const std::string& name);
+    // Whether `name`, an instance variable of the current method's class, is
+    // a constant read by PUSH_CONST_INSTVAR (instance side only, G1).
+    bool   isConstantInstVar(const std::string& name) const;
     // Whether the code being emitted is inside a real block of the current
     // method: a block scope between the method scope and here that is not
     // a de-optimised copy of an inlined block.

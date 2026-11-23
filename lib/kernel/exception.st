@@ -33,6 +33,20 @@ Message >> printOn: aStream
 "Signalled on an attempt to modify an immutable object, such as a String."
 Error subclass: #ModificationForbidden.
 
+"Signalled by a read of a constant instance variable that is still unset
+ (nil): a compiled read, instVarAt: or instVarNamed: (explicit-state spec
+ §6.2, §6.9, M14). receiver is the object whose constant was read and
+ variableName the constant's name, a String; both are set by the runtime and
+ are nil on an instance a program makes itself. Not resumable, as every
+ Error: the read cannot be given a value after the fact."
+Error subclass: #UnsetConstantError instanceVariableNames: 'receiver variableName'.
+
+UnsetConstantError >> receiver
+  ^ receiver.
+
+UnsetConstantError >> variableName
+  ^ variableName.
+
 "Signalled by indexed access outside a collection's bounds."
 Error subclass: #SubscriptOutOfBounds.
 

@@ -354,8 +354,8 @@ Op lateInstVarStoreOp(STRuntime& rt, proto::ProtoContext* ctx, const proto::Prot
 // constant is stored by STORE_CONST_INSTVAR in `initialize` (`selector`, the
 // selector being installed) outside real blocks, and refused anywhere else
 // (M1, M2); an atomic variable is refused (M4); a write-once variable is
-// stored by STORE_ONCE_INSTVAR (pre-flight rulings C2, C3). A read
-// of a constant stays PUSH_INSTVAR until PUSH_CONST_INSTVAR exists. Everything
+// stored by STORE_ONCE_INSTVAR (pre-flight rulings C2, C3). A read of a
+// constant is PUSH_CONST_INSTVAR, the compiler's checked read (§6.2). Everything
 // is checked before anything is rewritten, so a refused method leaves its
 // body untouched.
 void resolveLateVariables(STRuntime& rt, proto::ProtoContext* ctx,
@@ -405,8 +405,11 @@ void resolveLateVariables(STRuntime& rt, proto::ProtoContext* ctx,
         Op to = Op::EXTEND;
         if (ivars.count(name) && store && !classSide)
             to = lateInstVarStoreOp(rt, ctx, cls, name, selector, site, where);
+        else if (ivars.count(name) && classSide)
+            to = store ? Op::STORE_INSTVAR : Op::PUSH_OWN_INSTVAR;
         else if (ivars.count(name))
-            to = store ? Op::STORE_INSTVAR : (classSide ? Op::PUSH_OWN_INSTVAR : Op::PUSH_INSTVAR);
+            to = modifierOf(rt, ctx, cls, name, nullptr) == IvarModifier::Constant
+                 ? Op::PUSH_CONST_INSTVAR : Op::PUSH_INSTVAR;
         else if (cvars.count(name))
             to = store ? Op::STORE_CLASSVAR : Op::PUSH_INSTVAR;
         else if (!store && (code->lateReadsFallBackToGlobals() || name.empty()
@@ -1781,16 +1784,24 @@ const proto::ProtoString* ivarKey(proto::ProtoContext* ctx, const proto::ProtoOb
 } // namespace
 
 // anObject instVarNamed: aName → the value of that instance variable of the
-// receiver (nil when unset); instVarNamed:put: sets it.
-const proto::ProtoObject* prim_Object_instVarNamed(STRuntime&, proto::ProtoContext* ctx,
+// receiver (nil when unset); instVarNamed:put: sets it. A constant that is
+// unset signals UnsetConstantError (M14) instead, as a compiled read does
+// (explicit-state spec §6.2, §11); instVarAt: reaches this check through
+// lib/kernel/reflection.st. A class receiver's variables are always plain
+// (pre-flight ruling C10).
+const proto::ProtoObject* prim_Object_instVarNamed(STRuntime& rt, proto::ProtoContext* ctx,
                                                    const proto::ProtoObject* r,
                                                    const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("instVarNamed: expects 1 arg");
     const proto::ProtoString* key = ivarKey(ctx, a[0]);
     if (!r || r == PROTO_NONE || r->isInteger(ctx) || r->asString(ctx)) return PROTO_NONE;
-    if (r->hasOwnAttribute(ctx, key) != PROTO_TRUE) return PROTO_NONE;
-    const proto::ProtoObject* v = r->getAttribute(ctx, key);
-    return v ? v : PROTO_NONE;
+    const proto::ProtoObject* v = r->hasOwnAttribute(ctx, key) == PROTO_TRUE
+        ? r->getAttribute(ctx, key) : nullptr;
+    if (v && v != PROTO_NONE) return v;
+    const std::string name = a[0]->asString(ctx)->toStdString(ctx);
+    if (receiverModifierOf(rt, ctx, r, name, nullptr) == IvarModifier::Constant)
+        return signalUnsetConstantError(rt, ctx, r, name);
+    return PROTO_NONE;
 }
 
 const proto::ProtoObject* prim_Object_instVarNamedPut(STRuntime&, proto::ProtoContext* ctx,

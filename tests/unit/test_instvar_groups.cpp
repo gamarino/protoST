@@ -178,6 +178,30 @@ P >> m5: x
     CHECK(groupsIn(src.c_str()) == std::make_pair(0, 0));
 }
 
+TEST_CASE("IvarGroups: a constant read ends a run", "[ivargroups]") {
+    // Plan D-g, review focus 5: a read of a constant can signal
+    // UnsetConstantError (M14), so it is not an inert value. The writes
+    // before it are published one by one, and a handler of the signal sees
+    // them; no group spans the read.
+    const char* src = R"(Object subclass: #CQ instanceVariableNames: 'history history2 other' constantNames: 'owner'.
+CQ >> f
+    history := 1. history2 := owner. ^ self
+CQ >> g
+    history := 1. history2 := other. ^ self
+CQ >> h
+    history := owner. history2 := 2. other := 3. ^ self
+0.)";
+    // f: the read ends the run before it, so nothing is grouped. g: the
+    // same shape with a plain read is one group of two. h: a constant read
+    // as the first value runs before the run starts, so the group follows.
+    CHECK(groupsIn(src) == std::make_pair(2, 5));
+    const char* fOnly = R"(Object subclass: #CQ2 instanceVariableNames: 'history history2' constantNames: 'owner'.
+CQ2 >> f
+    history := 1. history2 := owner. ^ self
+0.)";
+    CHECK(groupsIn(fOnly) == std::make_pair(0, 0));
+}
+
 TEST_CASE("IvarGroups: temporaries and arguments are not instance variables",
           "[ivargroups]") {
     const auto src = withPoint(R"(P >> m: x
