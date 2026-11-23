@@ -30,12 +30,14 @@ extern const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext*
 //   anObject setInstVar: aName from: expected to: new       (deprecated alias)
 //   anObject instVarIsSet: aName                            → Boolean (§6.8)
 //
-// Every object understands them. They write the receiver's OWN attribute
-// `_iv_<name>` (never the chain) with protoCore's attribute CAS, as the Atom
-// primitives write `__atom_value__`. Before anything is read or written the
-// name is checked (a String or Symbol the receiver declares, else M8) and
-// then the variable's modifier, per §6.5 (M5). Errors are signalled in
-// place (pre-flight ruling C1).
+// Every object understands them. They address the receiver's OWN attribute
+// `_iv_<name>`, never the chain. The three CAS messages write it with
+// protoCore's attribute CAS, as the Atom primitives write `__atom_value__`;
+// before anything is read or written they check the name (a String or
+// Symbol the receiver declares, else M8) and then the variable's modifier,
+// per §6.5 (M5). `instVarIsSet:` only reads the attribute: it checks the
+// name (else M15), never the modifier, and writes nothing. Errors are
+// signalled in place (pre-flight ruling C1).
 // ===========================================================================
 
 namespace {

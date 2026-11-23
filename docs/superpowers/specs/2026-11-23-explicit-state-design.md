@@ -1095,6 +1095,25 @@ deprecation line was. The rest may be polished.
       `compareAndSet:from:to:` in 0.17.0. protoBaseST 0.4.x runs on 0.17.0
       with the warning, and does not run on 0.18.0; protoBaseST 0.5.0
       migrates (§13.2) and raises its floor.
+  - **Found while building 0.17.0** (build rulings of 2026-11-23, recorded in
+    CHANGELOG and STATUS):
+    - a refused declaration no longer leaves a half-built class bound;
+    - the kernel `new` of `SortedCollection`, `WriteStream`, `Random` and
+      `UUID` sends `initialize` exactly once (0.16.1: zero times), so a user
+      subclass's `initialize` now runs under `new`;
+    - `SortedCollection new` and `Random new` no longer go through the
+      class-side `sortBlock:` / `seed:`, so a subclass override of those is
+      not reached from `new`;
+    - kernel and library constructors other than `new` (`x:y:`,
+      `sortBlock:`, `on:`, `seed:`, the calendar, decimal and network
+      constructors ...) still send no `initialize` and now run the
+      end-of-construction check, so a user subclass with constants writes its
+      own constructor; inherited `DateTime` arithmetic and `MessagePackMap`
+      decoding fail the same way, naming private selectors (STATUS D72);
+    - `allInstVarNames` lists each name once, in layout order, a second
+      mixin's variables included (a bug fix);
+    - `deepCopy` does not send `shallowCopy`, so an override of
+      `shallowCopy` is ignored by `deepCopy` (STATUS D71).
 - **New deviations** (next free ids, D60 onwards):
   - value classes: their syntax, birth, pre-birth `initialize` with automatic
     chaining, no freeze, shallow immutability and the generated protocol

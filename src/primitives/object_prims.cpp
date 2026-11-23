@@ -461,6 +461,17 @@ void checkModifierConflicts(STRuntime& rt, proto::ProtoContext* ctx, const proto
 // The marker of a class user code declared (after the kernel loaded), on
 // every path that builds one: M11 compares a redeclaration only with such a
 // class, so re-declaring a kernel class name defines a new class, as before.
+//
+// Why two markers. `__user_class__` (set by __subclassNamed: only) means
+// "this class object may be reused in place": the textual declaration path
+// re-runs into the same object when its name and first parent match, so
+// existing instances and methods stay attached. The uses: path and the
+// message forms never reuse an object; they build a new class every time.
+// `__user_declared__` (set on every path) means "user code declared this
+// class", which is what M11 needs to know about the class still bound under
+// a name, whichever path built it. Folding the two into one marker would
+// either let the uses: and message paths reuse objects they must replace,
+// or hide their classes from M11.
 const proto::ProtoString* userDeclaredKey(proto::ProtoContext* ctx) {
     return proto::ProtoString::createSymbol(ctx, "__user_declared__");
 }
@@ -708,24 +719,15 @@ const proto::ProtoObject* prim_Object_initClassVars(STRuntime&,
     if (!namesObj)
         throw NativeError(
             "__initClassVars:: names must be a string");
-    std::string names = namesObj->toStdString(ctx);
     auto* cls = const_cast<proto::ProtoObject*>(r);
-    std::string cur;
-    auto flush = [&]() {
-        if (cur.empty()) return;
-        std::string mangled = "_iv_" + cur;
+    // The names are split as every declaration clause is (splitNames).
+    for (const std::string& name : splitNames(namesObj->toStdString(ctx))) {
         const proto::ProtoString* key =
-            proto::ProtoString::createSymbol(ctx, mangled.c_str());
+            proto::ProtoString::createSymbol(ctx, ("_iv_" + name).c_str());
         // A redefined class keeps the values its class variables already have.
         if (cls->hasOwnAttribute(ctx, key) != PROTO_TRUE)
             cls->setAttribute(ctx, key, PROTO_NONE);
-        cur.clear();
-    };
-    for (char ch : names) {
-        if (std::isspace(static_cast<unsigned char>(ch))) flush();
-        else cur += ch;
     }
-    flush();
     // S37: the declared names, for a method compiled without knowing this
     // class (resolveLateVariables).
     cls->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__classvar_names__"), a[0]);

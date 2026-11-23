@@ -336,13 +336,19 @@ class object and install the method); see [§4](#4-the-object-model).
 classDecl  ::=  Identifier 'subclass:' SymbolLit
                   ( 'instanceVariableNames:' StringLit )?
                   ( 'classVariableNames:'    StringLit )?
+                  ( 'constantNames:'         StringLit )?
+                  ( 'writeOnceNames:'        StringLit )?
+                  ( 'atomicNames:'           StringLit )?
                   ( 'uses:'                  Expression )?
                   '.'?
 ```
 
 The leading `Identifier` is the **superclass** name; the symbol after
 `subclass:` is the **new class name**. `instanceVariableNames:` takes a string
-of space-separated instance-variable names.
+of space-separated instance-variable names. `constantNames:`,
+`writeOnceNames:` and `atomicNames:` (0.17.0) declare instance variables with
+a modifier ([§4.13](#413-instance-variable-modifiers)); each clause may be
+left out.
 
 ```smalltalk
 Object subclass: #Point
@@ -813,6 +819,29 @@ server) every assignment is published on its own, so stepping shows each one.
 instance variables are found when it is installed, not when it is compiled
 (§4.10), publishes each assignment on its own (STATUS D57).
 
+A run groups plain instance variables only. A store to a constant or a
+write-once variable, and a read of a constant, end the run before it
+([§4.13.6](#4136-runs-of-assignments)).
+
+**Locals stay as they are.** Instance variables can be declared constant,
+write-once or atomic ([§4.13](#413-instance-variable-modifiers)); method and
+block temporaries and arguments cannot. A temporary stays an automatic,
+rebindable variable, and an argument stays unassignable (`cannot assign to
+the argument 'x'`). The reasons:
+
+- A temporary belongs to one activation. No other thread can see it, so
+  making it constant would buy no safety, only a second way to write the same
+  code.
+- The only way a temporary is shared is a block that captures it
+  ([§6.3](#63-closures-variable-capture)). When such a block crosses threads
+  (an actor message argument, a `thenDo:` callback, a block run by another
+  actor), the captured variable is shared storage. A write to it replaces the
+  whole reference: it is never torn, but it is ordered with nothing. Capture
+  values, not variables, across threads, and hand results back through a
+  `Future`.
+- Modifiers are about *object* state, which outlives activations and is
+  shared. That is where explicit state pays.
+
 ### 4.6 `self` and `super`
 
 `self` is the receiver of the currently executing method. A self-send
@@ -1161,6 +1190,471 @@ class's behaviour assembled incrementally at runtime from independent mixins.
 removal of a parent baked into a frozen base chain, so it is out of scope for
 this release.
 
+### 4.13 Instance-variable modifiers
+
+*(0.17.0.)* An instance variable can be declared with a **modifier** that
+states how it may change. The runtime enforces it on every write path, so a
+mistake is an error at the point it is made, never a value that travels on.
+
+<!-- snippet-group: modifiers -->
+```smalltalk
+Object subclass: #Account
+  instanceVariableNames: 'history'
+  constantNames: 'number owner'
+  writeOnceNames: 'oid'
+  atomicNames: 'balance'.
+```
+
+| Modifier | `:=` in methods | Allowed writes | Read |
+|---|---|---|---|
+| plain | anywhere | any | plain |
+| `constant` | only in `initialize`, outside closures | at most once, and set (not nil) by the end of construction | **checked**: reading it while unset signals `UnsetConstantError` (§4.13.2) |
+| `writeOnce` | anywhere | at most once, by CAS from nil; a later or losing write is silent when its value is `=` to the installed one, and signals `ModificationForbidden` otherwise | plain |
+| `atomic` | **never** (compile error) | `update:with:`, `compareAndSet:from:to:` | plain |
+
+Every read is a read of the current snapshot. A protoCore attribute read is
+one pointer, so it is never torn. A constant's read adds one nil test; no
+other read changes.
+
+#### 4.13.1 Declaration
+
+- Each clause declares instance variables with a modifier;
+  `instanceVariableNames:` declares **plain** variables, as before. Each
+  clause may be left out, and the clauses may be written in any order.
+- A name appears in one clause only. A repeat is the compile error
+  `instance variable 'x' is declared twice in Account`.
+- **Order.** `instVarNames` and `allInstVarNames` answer the names in source
+  order: clause by clause as written, and names in order within each clause.
+  `instVarAt:` indexes that order.
+- **Message form.**
+  `subclass:instanceVariableNames:constantNames:writeOnceNames:atomicNames:`,
+  each argument a String (`''` for none), declares the same class from an
+  expression receiver (§4.10). It is the one message selector with
+  modifiers: mixins and modifiers together in the message form go through
+  `addBehavior:` after the declaration.
+- **Modifiers are inherited.** A subclass cannot redeclare an inherited
+  variable. Two parents (`uses:`, `addBehavior:`) that declare one name with
+  different modifiers signal an `Error`:
+  `instance variable 'id' is constant in Keyed and atomic in Shared`.
+  Re-running a class declaration (in the REPL, or in one program) that changes
+  the modifier of an existing variable signals an `Error`:
+  `Account is already declared with 'balance' atomic; a class keeps the
+  modifiers it was declared with`.
+- **Reflection.** `Behavior >> instVarModifierOf:` answers `#plain`,
+  `#constant`, `#writeOnce` or `#atomic`, and signals an `Error` for an
+  undeclared name (`Account has no instance variable 'zork'`).
+
+<!-- snippet-group: modifiers -->
+```smalltalk
+Account instVarNames.                                  "=> #('history' 'number' 'owner' 'oid' 'balance')"
+(Account instVarModifierOf: #balance) == #atomic.     "=> true"
+(Account instVarModifierOf: #history) == #plain.      "=> true"
+```
+
+Modifiers apply to instance variables only. Class variables and
+class-instance variables take none.
+
+#### 4.13.2 `constant`: assigned only during construction
+
+**Where it may be assigned.** `:=` to a constant compiles only in the body of
+an instance-side `initialize`, and in the blocks the compiler inlines there
+(`ifTrue:`, `whileTrue:`, `and:` ...). Anywhere else it is a compile error,
+also for a method installed later (§4.10), where the same text is reported
+when the method is installed:
+
+- outside `initialize`: `cannot assign to the constant 'owner' of Account
+  outside initialize (line N)`;
+- in a real closure inside `initialize`: `cannot assign to the constant
+  'number' of Account inside a block: the block may run after construction
+  (line N)`.
+
+**The generated constructor.** A class with constants, own or inherited,
+answers a class-side keyword constructor over them, inherited first:
+`Account number:owner:`. It:
+
+1. allocates the instance (`basicNew`);
+2. writes the given constants in one write group on the fresh, still
+   unpublished object, never writing `nil`;
+3. sends `initialize`;
+4. runs the end-of-construction check below, and answers the instance.
+
+So `initialize` can read the constants the constructor was given. The
+constructor cannot be redefined: a class-side method with its selector is
+the compile error `number:owner: is the generated constructor of Account and
+cannot be redefined; give your constructor another name`. A constructor of
+another name can call it. `new` stays available; then `initialize` must set
+the constants.
+
+<!-- snippet-group: modifiers -->
+```smalltalk
+Account >> initialize
+  history := OrderedCollection new.
+  self compareAndSet: #balance from: nil to: 0.
+
+Account >> number  ^ number.
+Account >> owner   ^ owner.
+Account >> balance ^ balance.
+
+| acct |
+acct := Account number: 7 owner: 'ada'.
+acct owner.                                            "=> 'ada'"
+acct balance.                                          "=> 0"
+```
+
+A subclass inherits the constructor and, when it declares constants of its
+own, gets a longer one, the inherited constants first:
+
+<!-- snippet-group: modifiers -->
+```smalltalk
+Account subclass: #Savings constantNames: 'rate'.
+Savings >> rate  ^ rate.
+
+(Savings number: 8 owner: 'bo' rate: 3) rate.          "=> 3"
+```
+
+**At run time a constant is set at most once.** The store is a
+compare-and-swap from unset. A store that finds the constant set signals
+`ModificationForbidden` and writes nothing, so a second `initialize` that
+assigns a constant fails, and so does a racing write. Storing `nil` into an
+unset constant succeeds and changes nothing.
+
+**Set by the end of construction.** When `initialize` returns inside `new`
+or inside the generated constructor, every constant of the class, own and
+inherited, must be set. The first one that is unset signals an `Error`, and
+the construction answers nothing. `nil` counts as unset, so a constant cannot
+be "set to nil": a field that is optional is write-once or plain.
+
+<!-- snippet-group: modifiers -->
+```smalltalk
+[Account new]
+  on: Error
+  do: [:e | e messageText].   "=> 'the constant ''number'' of an Account is not set at the end of construction (new)'"
+```
+
+- The check runs only for a class that has constants. The class records
+  whether it has any, so `new` on any other class pays one test of a class
+  attribute.
+- A class-side `new` override that calls `super new` gets the check. One
+  written `^ self basicNew initialize` (the Pharo idiom) does not.
+- `basicNew` stays allowed and skips the check. It is the raw allocator that
+  serializers and loaders use, filling constants by reflection afterwards.
+
+**Reading an unset constant signals `UnsetConstantError`**
+([§4.13.8](#4138-unsetconstanterror)) instead of answering nil. This covers
+every object that left construction without the check: one made by
+`basicNew` and filled partly or not at all, and one made by a `new` override
+whose `initialize` forgot a constant. The mistake surfaces at the first read,
+naming the constant.
+
+<!-- snippet-group: modifiers -->
+```smalltalk
+[Account basicNew owner]
+  on: UnsetConstantError
+  do: [:e | e messageText].   "=> 'constant ''owner'' of an Account read before it was set'"
+```
+
+| Read path | Checks | Why |
+|---|---|---|
+| a compiled read in any method or block (`^ number`, `number + 1`), the class's own accessors included | yes | the compiler knows the variable is a constant and emits a checked read; plain reads keep their instruction |
+| a read in a method installed late (§4.10) | yes | install-time resolution looks the modifier up and emits the same checked read |
+| a read inside `initialize` before the constant is assigned | yes | `initialize` is code like any other; a constant given to the generated constructor is set before `initialize` runs, so it can be read there |
+| `instVarAt:`, `instVarNamed:` | yes | reflection reads what a program reads |
+| `instVarIsSet: #name` | no; it is the probe | answers whether the variable is set without reading it as a value (§4.13.7) |
+| the private copy made by `shallowCopy`, `copy` and `deepCopy` | no | they move the attribute, unset included; the copy is checked when it is read |
+| `inspect` | no | it prints `<unset constant>`; inspecting is not a program read |
+| `compareAndSet:from:to:`, `update:with:` | not applicable | they refuse any constant (§4.13.5) |
+
+What "constant" guarantees:
+
+- an object answered by `new` or by the generated constructor has every
+  constant set;
+- no read of a constant ever answers nil, however the object was made;
+- after construction, the value never changes;
+- constants given to the generated constructor are visible from the
+  instance's first moment, because they are written before `initialize`
+  runs.
+
+`initialize` can still let `self` escape, as before, and a thread that
+receives it there may see a constant unset (and get `UnsetConstantError` at
+its first read). Do not publish `self` from `initialize`.
+
+**Subclasses of kernel classes.** `new` on a kernel class (`Object class >>
+new`, and the `new` of `SortedCollection`, `WriteStream`, `Random` and `UUID`)
+sends `initialize` once and runs the check, so a subclass whose `initialize`
+sets its constants is made with `new`. The other kernel and library
+constructors (`Point x:y:`, `SortedCollection sortBlock:`, `WriteStream on:`,
+`Random seed:`, the calendar, decimal and network constructors ...) do not
+send `initialize`, as in Pharo, where `initialize` belongs to `new`; they
+only run the check. So a subclass with constants built through one of them
+gets the end-of-construction error naming that constructor, and **writes its
+own constructor**, which goes through the generated one:
+
+```smalltalk
+Point subclass: #Pin instanceVariableNames: '' constantNames: 'label'.
+Pin >> label  ^ label.
+Pin class >> x: ax y: ay label: aString
+  ^ (self label: aString) setX: ax y: ay.
+
+[Pin x: 1 y: 2]
+  on: Error
+  do: [:e | e messageText].   "=> 'the constant ''label'' of a Pin is not set at the end of construction (x:y:)'"
+(Pin x: 1 y: 2 label: 'home') label.                   "=> 'home'"
+```
+
+The same holds for inherited methods that build instances of the receiver's
+class through such a constructor: `DateTime` arithmetic (through
+`_fromLocal:zone:` and `utcFields:zoneName:`) and `MessagePackMap` decoding
+(through `__fromAssociations:`) signal the error for a subclass with unset
+constants, naming the private selector.
+
+#### 4.13.3 `writeOnce`: a CAS from nil
+
+`v := expr` on a write-once variable evaluates `expr`, then installs it
+**only if `v` is unset** (nil), by one compare-and-swap.
+
+- **A write that finds the variable set** (it lost a race, or came later) is
+  judged by equality. When the installed value `w` and the written value are
+  identical, or `w = value` answers `true`, the write is **silent**.
+  Otherwise it signals `ModificationForbidden` (`the write-once variable
+  'oid' of an Account already holds a different value; nothing was
+  written`), and the variable keeps `w`. Like every `Error`, it is not
+  resumable: `resume:` in its handler signals `IllegalResumeAttempt`.
+- **The `=` used is the installed value's,** late-bound: `String`'s,
+  `ByteArray`'s content `=`, or a class's own; for an object that does not
+  define `=` it is identity. It runs on the writing thread, after the failed
+  compare-and-swap, with no lock held. If `=` itself signals, that exception
+  propagates and the variable keeps `w`; an `=` that answers something other
+  than a Boolean signals `NonBooleanReceiver`.
+- **The value of the assignment is the value the variable holds afterwards:**
+  the written value when this write won, the equal winner's when it lost
+  silently. So `^ oid := candidate` answers the one installed.
+- **`nil` never replaces a value.** Assigning `nil` writes nothing and answers
+  the current value.
+
+<!-- snippet-group: modifiers -->
+```smalltalk
+Account >> oid     ^ oid.
+Account >> oid: x  ^ oid := x.
+
+| held |
+held := Account number: 9 owner: 'cy'.
+held oid: 'x-1'.                                       "=> 'x-1'"
+held oid: 'x-1'.                                       "=> 'x-1'"
+[held oid: 'y-2']
+  on: ModificationForbidden
+  do: [:e | e messageText].   "=> 'the write-once variable ''oid'' of an Account already holds a different value; nothing was written'"
+held oid.                                              "=> 'x-1'"
+```
+
+`:=` states that every writer publishes the same fact, so an unequal value
+is a bug the runtime reports. Racers that legitimately compute different
+candidates (a random draw, a place chosen by each save) use
+`compareAndSet: #oid from: nil to: candidate`, which never compares values:
+it answers whether this write won, and every racer then reads the one
+installed.
+
+```smalltalk no-run
+Account >> oid
+  oid isNil ifTrue: [self compareAndSet: #oid from: nil to: self newOid].
+  ^ oid.          "the first candidate wins; every racer answers it"
+```
+
+#### 4.13.4 `atomic`: `update:with:` and `compareAndSet:from:to:`
+
+`:=` to an atomic variable is a compile error, in `initialize` too:
+`cannot assign to the atomic variable 'balance' of Account: use update:with:
+or compareAndSet:from:to: (line N)`. An atomic variable starts unset (nil);
+`initialize` gives it a first value with `compareAndSet:from:to:`, as
+`Account >> initialize` does above.
+
+- **`anObject update: #name with: aBlock`** reads the variable's current
+  value, evaluates `aBlock value: current`, and installs the result by
+  compare-and-swap against the value read (identity). When another writer got
+  there first, it starts again from the read. It answers the value installed.
+- **`anObject compareAndSet: #name from: expected to: new`** installs `new`
+  if the variable holds `expected` (identity; nil matches unset) and answers
+  whether it did.
+
+<!-- snippet-group: modifiers -->
+```smalltalk
+Account >> deposit: amount
+  ^ self update: #balance with: [:old | old + amount].
+
+Account >> withdraw: amount
+  ^ self update: #balance with: [:old |
+      old < amount ifTrue: [^ InvalidArgument signal: 'insufficient funds'].
+      old - amount].
+
+| till |
+till := Account number: 10 owner: 'di'.
+till deposit: 50.                                      "=> 50"
+till deposit: 25.                                      "=> 75"
+[till withdraw: 500] on: InvalidArgument do: [:e | e messageText].   "=> 'insufficient funds'"
+till balance.                                          "=> 75"
+till compareAndSet: #balance from: 75 to: 0.           "=> true"
+till compareAndSet: #balance from: 75 to: 1.           "=> false"
+```
+
+- **The block must be pure:** no side effects, and no waits. It may run
+  several times. A `wait` or `waitWithin:` evaluated while an `update:with:`
+  block runs on that thread signals an `Error` (`wait inside an update:with:
+  block: the block must be pure and may run several times`), whether the
+  Future is pending or not. A wait there would block the worker, which then
+  runs other actors' messages on top of it (§10.4); those could update the
+  same variable, and the block would run and wait again, a livelock the
+  deadlock detector cannot see.
+- **Handlers count as part of the block.** An exception handler for an
+  exception signalled inside the block runs on top of the block, so the block
+  is still running: a `wait` in that handler signals the same error, and the
+  handler is held to the same purity.
+- **Leaving the block** by a non-local return (`^` in the block, as
+  `withdraw:` above) or by an exception abandons the update: nothing is
+  written.
+- Both messages are understood by every object. The name must be a declared
+  instance variable of the receiver, or they signal an `Error`: `an Account
+  has no instance variable 'zork'`. Wrap them in domain methods
+  (`deposit:`), as above.
+- **ABA does not arise.** The comparison is between pointers to immutable
+  snapshots, so an unchanged pointer means an unchanged value (§10.8).
+- **No backoff and no bound.** The loop is lock-free: a failed
+  compare-and-swap means another writer succeeded. A compare-and-swap that
+  can never succeed, on an immutable receiver, signals
+  `ModificationForbidden` instead of answering `false` or looping.
+- A plain variable also accepts both messages, as `setInstVar:from:to:` did.
+
+An object with atomic variables can be shared between actors and threads
+without a proxy, as an `Atom` can (§10.6): atomic, constant and write-once
+variables stay consistent whatever path reaches them. `self update: #x with:
+...` inside an actor's method is a direct call, with no lock and no mailbox.
+
+#### 4.13.5 Which messages may write which variable
+
+| Write path | plain | constant | writeOnce | atomic |
+|---|---|---|---|---|
+| `:=` (compiled) | yes | `initialize` only, at most once | CAS from nil; a write that finds it set is silent if `=`, else `ModificationForbidden` | compile error |
+| `update:with:` | yes | `ModificationForbidden` | `ModificationForbidden` | yes |
+| `compareAndSet:from:to:` (and the deprecated `setInstVar:from:to:`) | yes | `ModificationForbidden` | only `from: nil`, answering whether it won (no equality check); otherwise `ModificationForbidden` | yes |
+| `instVarNamed:put:` / `instVarAt:put:` | yes | only while unset, else `ModificationForbidden` | only while unset, else `ModificationForbidden` | `ModificationForbidden` |
+
+<!-- snippet-group: modifiers -->
+```smalltalk
+[till update: #owner with: [:o | o]]
+  on: ModificationForbidden
+  do: [:e | e messageText].   "=> 'update:with: cannot write the constant ''owner'' of an Account; assign it in initialize'"
+[till instVarNamed: 'balance' put: 3]
+  on: ModificationForbidden
+  do: [:e | e messageText].   "=> 'instVarNamed:put: cannot write the atomic variable ''balance'' of an Account: use update:with: or compareAndSet:from:to:'"
+```
+
+Only `:=` on a write-once variable compares values, because only `:=`
+states that every writer publishes the same fact. The CAS messages answer
+`true` or `false`, or the installed value: their loser adopts or retries. A
+reflective write never *replaces* a value, even with an equal one:
+reflection is not a publication protocol. Unset constants and write-once
+variables accept reflection, so that serializers, `deepCopy` and loaders can
+fill them; a constant filled by reflection after `basicNew` is the caller's
+responsibility, and a forgotten one signals `UnsetConstantError` at its first
+read. `copy`, `shallowCopy` and `deepCopy` copy every variable, an unset
+constant staying unset.
+
+#### 4.13.6 Runs of assignments
+
+A run of assignments (§4.5) groups only **plain** variable stores. A constant
+or write-once store is a compare-and-swap, its own publication, so it ends
+the run before it, like a message send; a read of a constant ends it too,
+because the read can signal. Atomic variables are never assigned. The
+generated constructor writes its constants in one group. A run is about
+**visibility**, not invariants: readers see all of a run or none of it, but
+two threads running `x := x + 1. y := y + 1` on one object can still lose an
+update. For an invariant over several fields, see §10.9.
+
+#### 4.13.7 `instVarIsSet:`: asking whether a variable is set
+
+`anObject instVarIsSet: #name` answers `true` or `false`. It never reads the
+variable as a value and never signals for a declared name. It is the way to
+ask whether a constant has been set, for loaders, serializers, tools and
+`initialize` ("is it set yet?"), instead of reading the constant and catching
+`UnsetConstantError`.
+
+| Kind of variable | `true` when | Notes |
+|---|---|---|
+| plain | it holds a non-nil value | an assigned `nil` answers `false`, like a never-assigned variable |
+| constant | it holds a value | the one kind where it answers something a read cannot: a read of an unset constant signals, `instVarIsSet:` answers `false` |
+| writeOnce | it holds a value | once `true`, it stays `true` |
+| atomic | it holds a non-nil value | a snapshot answer: another thread may change it right after |
+
+- The name is a `Symbol` or a `String`, matched against the receiver's own
+  declared instance variables, inherited and mixin ones included (for a class
+  object, its class-instance variables), as `instVarNamed:` matches them. It
+  tests the receiver's own attribute only.
+- A name the receiver does not declare, or an argument that is not a `String`
+  or a `Symbol`, signals an `Error`. It is never answered `false`: a misspelt
+  name would then read as "not set yet".
+- It allocates nothing: one own-attribute lookup and a nil test.
+
+<!-- snippet-group: modifiers -->
+```smalltalk
+Account basicNew instVarIsSet: #owner.                 "=> false"
+till instVarIsSet: #owner.                             "=> true"
+[till instVarIsSet: #ownr]
+  on: Error
+  do: [:e | e messageText].   "=> 'instVarIsSet: an Account has no instance variable ''ownr'''"
+[till instVarIsSet: 3]
+  on: Error
+  do: [:e | e messageText].   "=> 'instVarIsSet: expects a String or Symbol, not 3'"
+```
+
+#### 4.13.8 `UnsetConstantError`
+
+A read of an unset constant signals `UnsetConstantError`, a direct subclass
+of `Error` (§8.1), so that a caller can catch that and nothing else. It is a
+kernel class, bound at start-up like `ModificationForbidden`; its name is
+reserved, so a class declaration under it is refused. Like every `Error`, it
+is not resumable: the read cannot be given a value after the fact.
+
+- `receiver` answers the object whose constant was read, and `variableName`
+  the constant's name, a `String`. Both are `nil` on an instance a program
+  makes itself (`UnsetConstantError new signal`).
+- `messageText` is `constant 'owner' of an Account read before it was set`.
+  The receiver is named from its class, as `printString`'s default names it
+  (§4.8); its own `printOn:`, which could read the constant again, is never
+  sent.
+- It is raised by every checking read path (§4.13.2), with the same class and
+  accessors whichever path read.
+- **Across actors:** an `UnsetConstantError` that an actor's method lets
+  through rejects the message's `Future`, and `wait` re-signals it with its
+  class, text and accessors (§10.7), so `on: UnsetConstantError do:` around
+  the `wait` catches it.
+
+<!-- snippet-group: modifiers -->
+```smalltalk
+[Account basicNew owner]
+  on: UnsetConstantError
+  do: [:e | e variableName].                           "=> 'owner'"
+```
+
+An unrelated `Error` in the protected block (a `MessageNotUnderstood`, a
+`ModificationForbidden`, a program's own `Error`) is not caught by such a
+handler.
+
+#### 4.13.9 Errors, by kind of state
+
+What a program sees when it gets the state rules wrong:
+
+- Assigning an atomic variable: a compile error naming `update:with:`.
+- A constant assigned outside `initialize`, or in a closure there: a compile
+  error. A second set at run time: `ModificationForbidden`. A constant still
+  unset when `new` or the generated constructor ends: an `Error` naming it
+  and the constructor. A constant read while unset, on an object made any
+  other way: an `UnsetConstantError` naming it; `instVarIsSet:` asks first
+  without any error.
+- A write-once variable assigned a value not `=` to the one installed:
+  `ModificationForbidden`. An equal value is silent and answers the installed
+  one.
+- Any refused write at run time: `ModificationForbidden`, never a silent
+  no-op, and never `false` from a compare-and-swap that can never succeed.
+  This includes an instance-variable assignment to an immutable receiver.
+
 ---
 
 ## 5. Messages and dispatch
@@ -1488,7 +1982,10 @@ Exception                  (root; resumable)
     KeyNotFound            (Dictionary>>at: with an absent key)
     NotFound               (remove: of an absent element)
     BlockCannotReturn      (§7.1)
-    ModificationForbidden  (at:put: on a String or a ByteArray; instVarNamed:put: on a block)
+    ModificationForbidden  (at:put: on a String or a ByteArray; instVarNamed:put: on a block;
+                            a refused instance-variable store: a set constant, an unequal
+                            write-once value, a write to an immutable receiver; §4.13)
+    UnsetConstantError     (a constant read before it was set; §4.13.8)
     NonBooleanReceiver     (resumable; a loop condition that is not a Boolean; §6.4)
     TimeoutError           (a Future did not settle before its deadline; §10.3)
     InvalidArgument        (protoCore: a malformed argument, a wrong-typed operand; §8.7)
@@ -1501,6 +1998,14 @@ Exception                  (root; resumable)
   is resumable, so `[ (1 / 0) + 1 ] on: ZeroDivide do: [ :e | e resume: 5 ]`
   answers `6`.
 - **`Warning`** — a non-fatal condition. Resumable.
+- **`ModificationForbidden`** covers every write the runtime refuses. Since
+  0.17.0 that includes an instance-variable assignment whose receiver is an
+  immutable value (before, a plain `Error` without a class of its own), and
+  every refusal of an instance-variable modifier (§4.13.5). It is an `Error`,
+  so it is not resumable.
+- **`UnsetConstantError`** (0.17.0) is signalled by a read of a constant that
+  is still unset; `receiver` and `variableName` name the object and the
+  constant (§4.13.8).
 
 Users may subclass any of these: `Error subclass: #AppError.` A subclass
 instance *is* an instance of its superclass for handler-matching purposes (an
@@ -2309,18 +2814,106 @@ classic ABA hazard does not arise: if the pointer is unchanged the value
 genuinely is the one observed. A CAS-retry over an `Atom` therefore needs none
 of the guards a compare-and-swap over raw mutable memory would.
 
-**`setInstVar:from:to:`** exposes the same compare-and-swap directly on any
-object's instance variable — the unwrapped form, for a CAS on an object you do
-not want to wrap in an `Atom`:
+**An `Atom` is one atomic variable in an object of its own** (§4.13.4):
+`Atom on: v` is an object whose cell holds `v`, `swap:` is `update: #value
+with:`, and `value:ifCurrent:` is `compareAndSet:from:to:` with its arguments
+swapped. An object that needs a shared cell can declare an atomic variable
+instead of holding an `Atom`, and saves the `Atom` object:
 
 ```smalltalk
-"set #count to new only if it currently holds old; answer whether it did"
-account setInstVar: #count from: old to: new.
+Object subclass: #Hits atomicNames: 'count'.
+Hits >> initialize  self compareAndSet: #count from: nil to: 0.
+Hits >> hit         ^ self update: #count with: [:n | n + 1].
+
+| hits |
+hits := Hits new.
+hits hit; hit.
+hits hit.                         "=> 3"
 ```
 
-An unset instance variable reads as `nil`; pass `nil` as the expected value to
-match it. The name is matched against the receiver's own instance variables,
-never its methods.
+**`compareAndSet:from:to:`** is the same compare-and-swap on any object's
+instance variable, the unwrapped form: it installs the new value only if the
+variable holds the expected one (identity), and answers whether it did. An
+unset variable reads as `nil`; pass `nil` as the expected value to match it.
+The name must be a declared instance variable of the receiver, own or
+inherited, never a method; the variable's modifier is honoured (§4.13.5).
+
+**`setInstVar:from:to:` is deprecated** (0.17.0). It is an alias of
+`compareAndSet:from:to:`, with the same name and modifier checks (until 0.17.0
+it silently created an attribute for an undeclared name). Its first use in a
+process prints one line on standard error, once:
+
+```smalltalk
+"-- deprecated-cas.st: setInstVar:from:to: in 0.17.0"
+Object subclass: #Cell instanceVariableNames: 'v'.
+| c |
+c := Cell new.
+(c setInstVar: #v from: nil to: 1) printNl.
+(c setInstVar: #v from: 1 to: 2) printNl.
+```
+
+```
+$ ./build/protost deprecated-cas.st
+protoST: warning: setInstVar:from:to: is deprecated and is removed in protoST 0.18.0; use compareAndSet:from:to:
+true
+true
+```
+
+It is removed in 0.18.0, where a send is `MessageNotUnderstood`.
+
+### 10.9 One pattern from the attribute to the commit
+
+Fields that must change together form one value; the mutable object holds it
+in one atomic variable, and every change is an `update:with:` whose block
+builds the new value. Readers then see one whole version, writers never lose
+an update (a failed compare-and-swap re-runs the pure block on the newer
+version), and a reader can keep the version it read as long as it likes:
+
+```smalltalk
+Object subclass: #Range instanceVariableNames: 'low high'.
+Range class >> low: l high: h
+  ^ self new setLow: l high: h.
+Range >> setLow: l high: h
+  low := l. high := h.
+Range >> low   ^ low.
+Range >> high  ^ high.
+Range >> with: x
+  ^ Range low: (low min: x) high: (high max: x).
+
+Object subclass: #Sensor atomicNames: 'range'.
+Sensor >> initialize
+  self compareAndSet: #range from: nil to: (Range low: 0 high: 0).
+Sensor >> record: x
+  ^ self update: #range with: [:r | r with: x].
+Sensor >> snapshot
+  ^ range.            "one consistent version; never a mix of two"
+
+| s |
+s := Sensor new.
+s record: 5; record: -2.
+{s snapshot low. s snapshot high}.          "=> #(-2 5)"
+```
+
+`Range` is never changed after its constructor answers it, which is what
+makes a version safe to keep; declared value classes, which the runtime
+keeps immutable, are planned for 0.18.0.
+
+The same four steps appear at every level: a snapshot, a pure computation,
+a conditional publish, and a re-run on conflict.
+
+| Level | Unit | Read | Compute | Publish if current | On conflict |
+|---|---|---|---|---|---|
+| attribute, raw | one variable | read it | any | `compareAndSet:from:to:` | answers `false`; the caller loops |
+| attribute, managed | one variable | `update:with:` reads it | pure block | CAS | re-reads, re-runs the block |
+| cell | an `Atom` | `value` | pure block | `swap:` / `value:ifCurrent:` | same |
+| invariant | a value in an atomic variable | `update:with:` | block over the value's constructor | CAS | same |
+| database | a protoBaseST transaction | snapshot at the transaction's start | the block passed to `run:` | commit | `PBConflictError`; `run:` re-runs the block with a fresh transaction, with backoff |
+
+A run of assignments (§4.5) is not this tool: it makes several writes
+visible together, but two writers can still lose an update. protoCore's
+write groups publish several attributes as one version, unconditionally, so
+they cannot express "only if these still hold what I read"; one value in one
+atomic variable gives that guarantee with what exists.
 
 ---
 
@@ -2429,16 +3022,21 @@ It is a reference snapshot of the current implementation.
 | `isNil` `notNil` | nil test — `false` / `true` for every object except `nil` |
 | `ifNil:` `ifNotNil:` `ifNil:ifNotNil:` | nil-conditional evaluation; an `ifNotNil:` block may take the receiver as an argument |
 | `on:do:`, `on:do:on:do:`, `ensure:`, `ifCurtailed:` | exception protocol (these are bound on `Block`; see §12.5) |
-| `setInstVar:from:to:` | atomic compare-and-swap on an instance variable: set it to the third argument only if it currently holds the second; answer whether it did (see §10.8) |
+| `compareAndSet: #name from: expected to: new` | atomic compare-and-swap on a declared instance variable: install `new` only if the variable holds `expected` (identity; nil matches unset); answer whether it did (§4.13.4, §10.8) |
+| `update: #name with: aBlock` | compare-and-swap loop on a declared instance variable: install `aBlock value: current`, re-running the pure block on contention; answer the value installed (§4.13.4) |
+| `instVarIsSet: #name` | whether a declared instance variable is set (non-nil), without reading it as a value and without signalling (§4.13.7) |
+| `setInstVar:from:to:` | **deprecated** (0.17.0, removed in 0.18.0): an alias of `compareAndSet:from:to:` that prints a warning once per process (§10.8) |
 | `sleep:` | sleep the current thread N ms (a test helper, not for production use) |
 
 **`Behavior`** (the class protocol, answered by every class; §4.7, STATUS D52):
 
 | Selector | Meaning |
 |----------|---------|
-| `new` | a fresh instance, sent `initialize` before it is answered |
+| `new` | a fresh instance, sent `initialize` before it is answered; for a class with constants, every constant must then be set (§4.13.2) |
 | `basicNew` / `newChild` | a fresh instance, without `initialize` |
-| `subclass:` (and its `instanceVariableNames:` / `classVariableNames:` / `uses:` forms) | define a subclass (§4.3, §4.11) |
+| `subclass:` (and its `instanceVariableNames:` / `classVariableNames:` / `uses:` forms, and `subclass:instanceVariableNames:constantNames:writeOnceNames:atomicNames:`) | define a subclass (§4.3, §4.11, §4.13) |
+| `instVarModifierOf: #name` | `#plain`, `#constant`, `#writeOnce` or `#atomic` (§4.13.1) |
+| the generated constructor (`number:owner:` for constants `number owner`) | a class with constants: an instance with the given constants set, sent `initialize`, then checked (§4.13.2) |
 | `name`, `superclass`, `selectors`, `includesSelector:`, `canUnderstand:` | reflection on the class and its instances' protocol |
 | `instVarNames`, `allInstVarNames`, `subclasses`, `allSubclasses`, `allSuperclasses`, `withAllSuperclasses`, `inheritsFrom:` | hierarchy reflection |
 | `addBehavior:` | on-the-fly composition (§4.12) |
@@ -3532,6 +4130,14 @@ commits. Summary as of 0.4.0, updated for changes merged since:
   metaclass hierarchy is thin (`x class class` works; there is no
   `Metaclass`/`ClassDescription` protocol beyond the reflective messages of
   §14 of the tutorial).
+- **Explicit state (0.17.0):** instance-variable modifiers, with constants
+  checked at the end of construction and a write-once assignment silent for
+  an equal value (D60); waits refused inside `update:with:` (D61); the checked
+  constant read, `UnsetConstantError` and `instVarIsSet:` (D62);
+  `setInstVar:from:to:` deprecated (D63); kernel constructors other than `new`
+  do not send `initialize`, so a subclass with constants writes its own
+  constructor (D72). The other gaps found while building it are D64 and
+  D67-D71.
 - **Bytes and timers (0.9.0):** a `ByteArray` is immutable and has no
   `asString`, it is not a collection (D41); a `BinaryFile` has no position
   (D46); MessagePack encodes a Symbol as `str` (D47); `Future` deadlines are
@@ -3547,7 +4153,10 @@ commits. Summary as of 0.4.0, updated for changes merged since:
 - **Input and output (0.5.0):** blocking calls only, with no multiplexing of
   several sockets on one thread; no HTTP/2, WebSockets, keep-alive or TLS
   server; POSIX only, so no native Windows (§12.11).
-- **Open bugs:** none (see `STATUS.md`); S19 was closed in 0.4.0, S3 in 0.10.0.
+- **Open bugs:** two low-severity reflection bugs that predate 0.17.0:
+  `superclass` can answer a mixin, or a class `addBehavior:` rebuilt (D65),
+  and a metaclass's `allInstVarNames` can miss a second mixin's variables
+  (D66) (see `STATUS.md`); S19 was closed in 0.4.0, S3 in 0.10.0.
 
 Closed before 0.4.0 and now as in Smalltalk-80: `new` sends `initialize`
 (D4), `Transcript` (D10), class variables assigned from instance methods (D19),
