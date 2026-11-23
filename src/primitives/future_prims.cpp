@@ -450,7 +450,10 @@ const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
         {
             HandlerBarrier hidden;
             try {
-                helped = atCap ? rt.runOneTask(ctx) : rt.drainOne(ctx);
+                // S48: one message at a time (helpOne), so this Future is
+                // checked again after each: an actor that keeps sending
+                // itself messages cannot keep this wait buried.
+                helped = atCap ? rt.runOneTask(ctx) : rt.helpOne(ctx);
             } catch (...) {
                 failed = std::current_exception();
             }

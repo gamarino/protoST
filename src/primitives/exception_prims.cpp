@@ -713,10 +713,15 @@ bool isExceptionInstance(STRuntime& rt, proto::ProtoContext* ctx,
 // (errorClass == Error) and of the runtime-internal `doesNotUnderstand` /
 // dead-home-return signals (errorClass == MessageNotUnderstood /
 // BlockCannotReturn).
-const proto::ProtoObject* signalErrorOfClass(STRuntime& rt,
-                                             proto::ProtoContext* ctx,
-                                             const proto::ProtoObject* errorClass,
-                                             std::string_view message) {
+namespace {
+
+// signalErrorOfClass, with an optional Integer instance variable (`ivar`,
+// nullptr for none) set on the instance before it is signalled.
+const proto::ProtoObject* signalErrorOfClassWith(STRuntime& rt,
+                                                 proto::ProtoContext* ctx,
+                                                 const proto::ProtoObject* errorClass,
+                                                 std::string_view message,
+                                                 const char* ivar, long long value) {
     // Fresh mutable child of the error class — inherits the non-resumable
     // marker from Error and a chain to objectProto.
     const proto::ProtoObject* exc =
@@ -730,7 +735,21 @@ const proto::ProtoObject* signalErrorOfClass(STRuntime& rt,
     // error of this kind is never resumable (the offending stack is gone).
     const_cast<proto::ProtoObject*>(exc)->setAttribute(
         ctx, resumableKey(ctx), PROTO_FALSE);
+    if (ivar) {
+        const std::string key = std::string("_iv_") + ivar;
+        const_cast<proto::ProtoObject*>(exc)->setAttribute(
+            ctx, proto::ProtoString::createSymbol(ctx, key.c_str()), ctx->fromLong(value));
+    }
     return signalInstance(rt, ctx, exc);
+}
+
+} // namespace
+
+const proto::ProtoObject* signalErrorOfClass(STRuntime& rt,
+                                             proto::ProtoContext* ctx,
+                                             const proto::ProtoObject* errorClass,
+                                             std::string_view message) {
+    return signalErrorOfClassWith(rt, ctx, errorClass, message, nullptr, 0);
 }
 
 bool loopConditionIsTrue(STRuntime& rt, proto::ProtoContext* ctx,
@@ -759,13 +778,19 @@ bool loopConditionIsTrue(STRuntime& rt, proto::ProtoContext* ctx,
 // Error when no such global exists.
 const proto::ProtoObject* signalErrorNamed(STRuntime& rt, proto::ProtoContext* ctx,
                                            const char* className, std::string_view message) {
+    return signalErrorNamed(rt, ctx, className, message, nullptr, 0);
+}
+
+const proto::ProtoObject* signalErrorNamed(STRuntime& rt, proto::ProtoContext* ctx,
+                                           const char* className, std::string_view message,
+                                           const char* ivar, long long value) {
     const proto::ProtoObject* g = rt.globals();
     const proto::ProtoObject* cls = g
         ? g->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, className)) : nullptr;
     if (!cls || cls == PROTO_NONE || !isExceptionClassObject(rt, ctx, cls))
         return signalNativeError(rt, ctx, message);
     t_signalFromPrimitive = true;
-    return signalErrorOfClass(rt, ctx, cls, message);
+    return signalErrorOfClassWith(rt, ctx, cls, message, ivar, value);
 }
 
 // A Message: the selector and the arguments of a send, as a

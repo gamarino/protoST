@@ -17,7 +17,7 @@ FileSystemError subclass: #FileDoesNotExist.
 FileSystemError subclass: #FileAlreadyExists.
 Error subclass: #NetworkError.
 NetworkError subclass: #ConnectionRefused.
-NetworkError subclass: #ConnectionTimedOut.
+NetworkError subclass: #ConnectionTimedOut instanceVariableNames: 'bytesWritten'.
 NetworkError subclass: #NameLookupFailure.
 NetworkError subclass: #BodyTooLarge.
 Error subclass: #LineTooLong.
@@ -25,6 +25,14 @@ Error subclass: #OSProcessError.
 "Signalled when a library the I/O layer relies on (such as OpenSSL) fails
  internally: neither the program nor its environment caused it."
 Error subclass: #InternalError.
+
+ConnectionTimedOut >> bytesWritten
+  "For a write that timed out (nextPutAll:, nextPutBytes:, nextPut: on a
+   stream with a timeout:), how many leading bytes of the argument were
+   written before the deadline (of its UTF-8 encoding, for a String): an
+   Integer below the number of bytes it has. nil when
+   a connect or a read timed out."
+  ^ bytesWritten.
 
 "-- Streams over a descriptor (standard streams, files, sockets) -----------"
 
@@ -150,7 +158,11 @@ IOStream >> flush
 
 IOStream >> timeout: milliseconds
   "Reads and writes wait at most this long, then signal ConnectionTimedOut
-   (nil: no limit)."
+   (nil: no limit). A read's timeout bounds each wait for input; a write's
+   bounds the whole write, however large. A write that times out has written
+   exactly the error's bytesWritten leading bytes of its argument; on a
+   socket without TLS the stream goes on after them, so writing the rest
+   continues it, and a TLS socket refuses every later write."
   self __fdTimeout: fd ms: milliseconds.
   ^ self.
 

@@ -23,9 +23,19 @@ class ClassedErrorSignal : public NativeError {
 public:
     ClassedErrorSignal(const char* className, const std::string& message)
         : NativeError(message), className_(className) {}
+    // An error that also carries an Integer in one instance variable of its
+    // class (`ivar`, a name the kernel declares): ConnectionTimedOut's
+    // bytesWritten.
+    ClassedErrorSignal(const char* className, const std::string& message,
+                       const char* ivar, long long value)
+        : NativeError(message), className_(className), ivar_(ivar), ivarValue_(value) {}
     const char* className() const { return className_; }
+    const char* ivar() const { return ivar_; }        // nullptr: none
+    long long ivarValue() const { return ivarValue_; }
 private:
     const char* className_;
+    const char* ivar_ = nullptr;
+    long long ivarValue_ = 0;
 };
 
 } // namespace protoST

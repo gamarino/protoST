@@ -320,7 +320,25 @@ const PO* fdWrite(STRuntime& rt, proto::ProtoContext* ctx, const PO* r, const PO
                   const std::string& who) {
     const int fd = fdArg(ctx, a[0], who.c_str());
     const std::string data = dataArg(rt, ctx, a[1], who.c_str());
-    blocking(rt, ctx, [&] { protoio::write(fd, data); });
+    // protoIO 0.7.1: the stream's timeout bounds the whole write, and a write
+    // that fails says how many leading bytes went out (bytesWritten). A
+    // timed-out socket write is a ConnectionTimedOut, as a timed-out read is,
+    // whose bytesWritten is that count (nil for a connect or a read). The
+    // error is copied out and raised once the brackets have been left.
+    std::optional<protoio::Error> failed;
+    blocking(rt, ctx, [&] {
+        try {
+            protoio::write(fd, data);
+        } catch (const protoio::Error& e) {
+            failed = e;
+        }
+    });
+    if (failed) {
+        if (failed->kind == protoio::Error::Kind::ConnectionTimedOut)
+            throw ClassedErrorSignal("ConnectionTimedOut", failed->what(), "bytesWritten",
+                                     static_cast<long long>(failed->bytesWritten));
+        raiseProtoioError(*failed);
+    }
     return r;
 }
 

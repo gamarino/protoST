@@ -238,7 +238,13 @@ several cores without locks.
 
 ## Status
 
-Version 0.16.0 (2026-11-20) adds `Float fsumOfPowSquaredDifferences:with:`,
+Version 0.16.1 (2026-11-23), a patch release: a wait nested in a block helps
+other actors one message at a time and checks its Future after each, so an
+actor that keeps sending itself messages can no longer bury it (S48; with one
+worker it used to stop the whole program), and a socket's `timeout:` bounds a
+whole write, however large, with `ConnectionTimedOut>>bytesWritten` reporting
+how many bytes went out (S49, protoIO 0.7.1). Version 0.16.0 (2026-11-20) added
+`Float fsumOfPowSquaredDifferences:with:`,
 the fsum of `(a_i - b_i) raisedTo: 2` squared by the C library's `pow`, as
 CPython's `(x - y) ** 2` is (for protoBaseST's vector k-means). Version 0.15.0
 (2026-11-20) added correctly rounded sums, class-side on
@@ -258,9 +264,9 @@ collections made by `basicNew` could not be iterated). Since 0.13.0, instances, 
 Arrays are clones of per-class templates on protoCore's object-shape model, and
 protoST uses protoCore's public API only. Built from source it requires
 protoCore 3.6.1 or newer (SOVERSION 5, `ProtoObject::newClone`) and protoIO
-0.7.0 (tag `v0.7.0`) or a later 0.7.x; its `.deb` (below) requires protoCore
+0.7.1 (tag `v0.7.1`) or a later 0.7.x; its `.deb` (below) requires protoCore
 3.6.1. CI builds against protoCore 3.6.1 (tag `v3.6.1`), which is also the
-floor. Before the release, `ctest` ran 1493 cases on Linux locally, all passing
+floor. Before the release, `ctest` ran 1496 cases on Linux locally, all passing
 (0.10.0: 1461, and the 636 cases of the `tsan` label under ThreadSanitizer). Since 0.6.2 protoST lets
 protoCore's adaptive heap controller size the heap (budget: 75 % of physical
 memory or of the process memory limit); `PROTOCORE_HEAP_LIMIT_CELLS` forces a
@@ -277,7 +283,7 @@ known deviations from Smalltalk-80 and the open bugs are tracked in
 protoST depends on [protoCore](https://github.com/numaes/protoCore) 3.6.1 or
 newer (below 4.0; 3.6.1 first provides `ProtoObject::newClone`, which the
 instance templates use), which must be built first, on
-[protoIO](https://github.com/gamarino/protoIO) 0.7.0 or a later 0.7.x at build time (0.9.0 needed 0.4.x; a sibling
+[protoIO](https://github.com/gamarino/protoIO) 0.7.1 or a later 0.7.x at build time (0.9.0 needed 0.4.x; a sibling
 checkout `../protoIO`, or its `protoio-dev` package; it is linked statically),
 and on OpenSSL (`libssl-dev`) and libreadline. 3.4.0 was a hard floor before it (it
 changed `ProtoContext`'s layout, SOVERSION 5, so an older `libprotoCore` does
@@ -332,7 +338,7 @@ commands, and what differs on Windows, are in
 
 ## Installation
 
-protoST can be packaged with CPack. The 0.16.0 release has a Linux `.deb`
+protoST can be packaged with CPack. The 0.16.1 release has a Linux `.deb`
 attached to its GitHub release (below, with protoCore 3.6.1); other packages
 are built from source as shown below. Every package depends on
 [protoCore](https://github.com/numaes/protoCore) — install protoCore's package
@@ -360,11 +366,11 @@ the GitHub releases (or built as below):
 wsl --install -d Ubuntu-24.04        # in PowerShell, once
 # then, in the Ubuntu shell:
 wget https://github.com/numaes/protoCore/releases/download/v3.6.1/protoCore-3.6.1-Linux.deb
-wget https://github.com/gamarino/protoST/releases/download/v0.16.0/protost-0.16.0-Linux.deb
-sudo apt install ./protoCore-3.6.1-Linux.deb ./protost-0.16.0-Linux.deb
+wget https://github.com/gamarino/protoST/releases/download/v0.16.1/protost-0.16.1-Linux.deb
+sudo apt install ./protoCore-3.6.1-Linux.deb ./protost-0.16.1-Linux.deb
 ```
 
-These are the 0.16.0 release packages. Built from source, protoST 0.16.0 needs
+These are the 0.16.1 release packages. Built from source, protoST 0.16.1 needs
 protoCore 3.6.1 or later; the `.deb` was built against 3.6.1, the release
 to install with it, and depends on `protocore (>= 3.6.1)` through protoCore's
 shlibs file (an older protoCore package is not enough: upgrade it with the

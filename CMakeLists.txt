@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(protoST VERSION 0.16.0 LANGUAGES CXX)
+project(protoST VERSION 0.16.1 LANGUAGES CXX)
 
 # The one place the version is written: every binary and library reads it
 # through PROTOST_VERSION (include/protoST/STRuntime.h).
@@ -309,7 +309,10 @@ target_link_libraries(protost_runtime PRIVATE protost_warnings)
 # link interface; dpkg-shlibdeps turns it into the package's libssl
 # dependency.
 #
-# The floor is 0.7.0: file::realPath (FileReference>>realPath). 0.6.0
+# The floor is 0.7.1: a socket's timeout bounds a whole write, and a failed
+# write reports how many bytes it wrote (Error::bytesWritten,
+# ConnectionTimedOut>>bytesWritten). 0.7.0 brought file::realPath
+# (FileReference>>realPath). 0.6.0
 # brought file::Stat::linkCount and file::linkCount(fd)
 # (FileReference>>linkCount, BinaryFile>>linkCount). 0.5.0 brought
 # random::bytes (ByteArray randomBytes:) and
@@ -330,7 +333,7 @@ target_link_libraries(protost_runtime PRIVATE protost_warnings)
 # console reads and open files that can be deleted or renamed. protoIO's
 # package is compatible within one minor version (SameMinorVersion), so 0.1
 # would refuse 0.2.x.
-set(PROTOIO_MIN_VERSION "0.7.0")
+set(PROTOIO_MIN_VERSION "0.7.1")
 if(NOT PROTOST_TSAN)
     find_package(protoIO ${PROTOIO_MIN_VERSION} CONFIG QUIET)
 endif()
@@ -343,7 +346,8 @@ elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../protoIO/CMakeLists.txt")
     # A source tree carries no version check of its own: compare here, with
     # the package's rule (SameMinorVersion): the same major.minor as the
     # floor, and a patch level at least the floor's. So 0.7.x is accepted from
-    # 0.7.0 on, and 0.6.x and 0.8.x are refused, as an installed package is.
+    # 0.7.1 on, and 0.7.0, 0.6.x and 0.8.x are refused, as an installed
+    # package is.
     get_directory_property(_protoIO_version
         DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../protoIO" DEFINITION PROJECT_VERSION)
     string(REGEX MATCH "^[0-9]+\\.[0-9]+" _protoIO_minor "${_protoIO_version}")
@@ -662,6 +666,11 @@ add_test(NAME cli_exit_capped_pending
 add_test(NAME cli_late_main_park
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_late_main_park.sh $<TARGET_FILE:protost>)
 
+# S48: a wait that helps runs one message at a time, so a self-sending actor
+# cannot bury it; timers settle, mailbox order and the single runner hold.
+add_test(NAME cli_helping_bounded_turn
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_helping_bounded_turn.sh $<TARGET_FILE:protost>)
+
 add_test(NAME cli_future_callback_barrier
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_future_callback_barrier.sh $<TARGET_FILE:protost>)
 
@@ -787,7 +796,7 @@ endif()
 set_tests_properties(cli_actor_unobserved_error cli_callback_error_reported
                      cli_buried_actor_deadlock cli_helped_message_handler_actions
                      cli_nested_wait_progress cli_capped_wait_parks cli_future_callback_barrier
-                     cli_exit_capped_pending cli_late_main_park
+                     cli_exit_capped_pending cli_late_main_park cli_helping_bounded_turn
                      cli_actor_stress cli_concurrent_first_call
                      cli_gc_shutdown_stress cli_gc_reclaims cli_gc_recursion_reclaims cli_gc_spin_safepoint
                      cli_actor_payload_gc cli_binary_lock cli_sigint

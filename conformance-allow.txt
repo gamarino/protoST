@@ -20,5 +20,5 @@ external_finalizer src/dap/DapServer.cpp:590 bcdcd097ab21 :: Legitimate, same sh
 # same reason as the two above -- the wrapper carries a BytecodeModule* owned by
 # the compiler's module vector, which protoST's own tests are careful to outlive
 # the runtime -- but it is unchecked, not checked-and-cleared.
-symbol_key_source src/primitives/exception_prims.cpp:962 cc7eaf0e2b83 :: False positive. `text` is the attribute VALUE; the name argument is msgTextKey(ctx), an interned key. Reviewed 2026-11-13, agent, pending maintainer review.
+symbol_key_source src/primitives/exception_prims.cpp:987 cc7eaf0e2b83 :: False positive. `text` is the attribute VALUE; the name argument is msgTextKey(ctx), an interned key. Reviewed 2026-11-13, agent, pending maintainer review.
 symbol_key_source src/runtime/Bootstrap.cpp:419 cd69f2fd9905 :: False positive. The uninterned string is the attribute VALUE (the metaclass's printable name); the name argument is b.sym.className, an interned key. Reviewed 2026-11-13, agent, pending maintainer review.
