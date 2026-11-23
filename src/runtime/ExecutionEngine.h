@@ -352,6 +352,19 @@ private:
 
     void storeInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t nameConst,
                       const proto::ProtoObject* val);
+    // The refusal of STORE_INSTVAR, IVAR_GROUP and IVAR_GROUP_END when the
+    // receiver is an immutable value: nothing was written. Signals
+    // ModificationForbidden in place (explicit-state spec §13.1, pre-flight
+    // ruling C1), so on:do: catches it by class. ModificationForbidden is not
+    // resumable, so a handler leaves by unwinding; the caller still
+    // re-acquires its frame should the signal return. Out of line and cold:
+    // the store handlers' fast path is unchanged.
+#if defined(_MSC_VER)
+    __declspec(noinline)
+#else
+    __attribute__((noinline, cold))
+#endif
+    void refuseImmutableStore(proto::ProtoContext* ctx);
     // STORE_CONST_INSTVAR's write: a CAS of `val` from unset into the
     // constant named by constant `nameConst`, on the frame's `self`. Storing
     // nil into an unset constant does nothing. A set constant (M3) or an

@@ -5,6 +5,7 @@
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
 #include "primitives/ArgSupport.h"
+#include "primitives/CollectionSupport.h"
 #include "primitives/StringSupport.h"
 #include "runtime/BlockCode.h"
 #include "runtime/Bootstrap.h"
@@ -1870,7 +1871,16 @@ const proto::ProtoObject* prim_Object_instVarNamed(STRuntime& rt, proto::ProtoCo
     return PROTO_NONE;
 }
 
-const proto::ProtoObject* prim_Object_instVarNamedPut(STRuntime&, proto::ProtoContext* ctx,
+// instVarNamed:put: follows the variable's modifier (explicit-state spec §6.5,
+// §11). A plain variable is written. A constant or a write-once variable is
+// filled only while it is unset (its own attribute absent or nil, plan
+// decision D-c), by a CAS from unset; writing nil while it is unset changes
+// nothing. Once set, a constant refuses with M3 and a write-once variable
+// with M6, even for an equal value: reflection never replaces a value. An
+// atomic variable always refuses with M6. Refusals signal
+// ModificationForbidden in place and write nothing. instVarAt:put: reaches
+// this through lib/kernel/reflection.st.
+const proto::ProtoObject* prim_Object_instVarNamedPut(STRuntime& rt, proto::ProtoContext* ctx,
                                                       const proto::ProtoObject* r,
                                                       const proto::ProtoObject* const* a, int argc) {
     if (argc != 2) throw NativeError("instVarNamed:put: expects 2 args");
@@ -1878,15 +1888,111 @@ const proto::ProtoObject* prim_Object_instVarNamedPut(STRuntime&, proto::ProtoCo
         throw NativeError("instVarNamed:put: the receiver has no instance variables");
     const proto::ProtoString* key = ivarKey(ctx, a[0]);
     TransientPin pinKey(ctx, reinterpret_cast<const proto::ProtoObject*>(key));
-    // On an immutable receiver (a block closure, a method) protoCore's
-    // setAttribute leaves the receiver unchanged and answers a new object.
-    // Dropping that object would lose the write silently; refuse instead.
-    const proto::ProtoObject* written = r->setAttribute(ctx, key, a[1]);
-    if (written != r)
+    const proto::ProtoObject* value = a[1] ? a[1] : PROTO_NONE;
+    static constexpr const char* kImmutable =
+        "instVarNamed:put: the receiver is an immutable value "
+        "(a block or a method); nothing was written";
+    const std::string name = a[0]->asString(ctx)->toStdString(ctx);
+    const IvarModifier mod = receiverModifierOf(rt, ctx, r, name, nullptr);
+    if (mod == IvarModifier::Plain) {
+        // On an immutable receiver (a block closure, a method) protoCore's
+        // setAttribute leaves the receiver unchanged and answers a new
+        // object. Dropping that object would lose the write silently;
+        // refuse instead.
+        const proto::ProtoObject* written = r->setAttribute(ctx, key, value);
+        if (written != r) throw ClassedErrorSignal("ModificationForbidden", kImmutable);
+        return value;
+    }
+    const std::string owner = articleAndClassName(rt, ctx, r);
+    if (mod == IvarModifier::Atomic)
+        return signalErrorNamed(rt, ctx, "ModificationForbidden",
+                                "instVarNamed:put: cannot write the atomic variable '" + name
+                                + "' of " + owner
+                                + ": use update:with: or compareAndSet:from:to:");
+    const bool constant = mod == IvarModifier::Constant;
+    auto isUnset = [&] {
+        const proto::ProtoObject* cur = r->getOwnAttributeDirect(ctx, key);
+        return !cur || cur == PROTO_NONE;
+    };
+    auto refuseSet = [&] {
+        return signalErrorNamed(rt, ctx, "ModificationForbidden",
+            constant
+                ? "the constant '" + name + "' of " + owner + " is already set; nothing was written"
+                : "instVarNamed:put: cannot replace the write-once variable '" + name + "' of "
+                  + owner);
+    };
+    if (value == PROTO_NONE) {
+        // nil never sets a constant or a write-once variable.
+        if (isUnset()) return PROTO_NONE;
+        return refuseSet();
+    }
+    // Absent first, then an explicit nil (as prim_Atom_cas, S39).
+    if (r->setAttributeIfEqual(ctx, key, nullptr, value)
+        || r->setAttributeIfEqual(ctx, key, PROTO_NONE, value))
+        return value;
+    // Neither modifier lets a set variable become unset again, so a CAS that
+    // fails on an unset variable met an immutable receiver.
+    if (isUnset()) throw ClassedErrorSignal("ModificationForbidden", kImmutable);
+    return refuseSet();
+}
+
+// anObject __rawInstVarNamed: aName   (private; plan decision D-h)
+//   The receiver's own attribute for the instance variable aName, or nil when
+//   it is unset. Never checks: an unset constant answers nil instead of
+//   signalling M14. deepCopy and inspect use it; a program reads with
+//   instVarNamed:.
+const proto::ProtoObject* prim_Object_rawInstVarNamed(STRuntime&, proto::ProtoContext* ctx,
+                                                      const proto::ProtoObject* r,
+                                                      const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw NativeError("__rawInstVarNamed: expects 1 arg");
+    const proto::ProtoString* key = ivarKey(ctx, a[0]);
+    if (!r || r == PROTO_NONE || r->isInteger(ctx) || r->isFloat(ctx) || r->asString(ctx))
+        return PROTO_NONE;
+    const proto::ProtoObject* v = r->getOwnAttributeDirect(ctx, key);
+    return v ? v : PROTO_NONE;
+}
+
+// anObject __copyWithInstVarValues: anArray   (private; plan decision D-h)
+//   A shallowCopy of the receiver whose instance variables, in
+//   `self class allInstVarNames` order, are replaced by the non-nil elements
+//   of anArray in ONE setAttributes, before the copy is visible to anyone
+//   (explicit-state spec §11). A nil element leaves the variable as the
+//   shallow copy has it, unset included, so no write ever meets a set
+//   constant or write-once variable, and an unset constant stays unset.
+const proto::ProtoObject* prim_Object_copyWithInstVarValues(STRuntime& rt,
+                                                            proto::ProtoContext* ctx,
+                                                            const proto::ProtoObject* r,
+                                                            const proto::ProtoObject* const* a,
+                                                            int argc) {
+    if (argc != 1) throw NativeError("__copyWithInstVarValues: expects 1 arg");
+    if (!a[0] || !isArrayOrOrdered(rt, ctx, a[0]))
+        throw NativeError("__copyWithInstVarValues: expects an Array");
+    const proto::ProtoObject* cls = prim_Object_class(rt, ctx, r, nullptr, 0);
+    const std::vector<std::string> names = allInstVarNamesOf(rt, ctx, cls);
+    const proto::ProtoList* elements = arrayOrOrderedElements(rt, ctx, a[0]);
+    const proto::proto_ulong n = elements ? elements->getSize(ctx) : 0;
+    if (n != names.size())
+        throw NativeError("__copyWithInstVarValues: expects " + std::to_string(names.size())
+                          + " values, got " + std::to_string(n));
+    const proto::ProtoObject* copy = prim_Object_shallowCopy(rt, ctx, r, nullptr, 0);
+    if (n == 0) return copy;
+    TransientPin pinCopy(ctx, copy);
+    // The keys are interned symbols (perennial); the values stay reachable
+    // through anArray, which the caller's frame holds.
+    std::vector<const proto::ProtoString*> keys;
+    std::vector<const proto::ProtoObject*> values;
+    for (proto::proto_ulong i = 0; i < n; ++i) {
+        const proto::ProtoObject* v = elements->getAt(ctx, listIndex(i));
+        if (!v || v == PROTO_NONE) continue;
+        keys.push_back(proto::ProtoString::createSymbol(ctx, ("_iv_" + names[i]).c_str()));
+        values.push_back(v);
+    }
+    if (keys.empty()) return copy;
+    if (copy == r || copy->setAttributes(ctx, static_cast<unsigned>(keys.size()), keys.data(),
+                                         values.data()) != copy)
         throw ClassedErrorSignal("ModificationForbidden",
-                                 "instVarNamed:put: the receiver is an immutable value "
-                                 "(a block or a method); nothing was written");
-    return a[1];
+                                 "deepCopy: the copy is an immutable value; nothing was written");
+    return copy;
 }
 
 // aClass __setInstVarNames: 'a b' records the declared instance-variable
@@ -2080,6 +2186,23 @@ const proto::ProtoObject* prim_Behavior_checkConstantsOf(STRuntime& rt, proto::P
     const proto::ProtoString* sel = a[1] ? a[1]->asString(ctx) : nullptr;
     if (!sel) throw NativeError("__checkConstantsOf:after: the selector must be a Symbol");
     return checkConstantsSet(rt, ctx, r, a[0] ? a[0] : PROTO_NONE, sel->toStdString(ctx));
+}
+
+// aClass __allInstVarNamesString → the names of allInstVarNamesOf (the
+// superclass's, each mixin's, the class's own; IvarModifiers.h), separated by
+// spaces. Behavior >> allInstVarNames splits it for a class that is not a
+// metaclass.
+const proto::ProtoObject* prim_Behavior_allInstVarNamesString(STRuntime& rt,
+                                                              proto::ProtoContext* ctx,
+                                                              const proto::ProtoObject* r,
+                                                              const proto::ProtoObject* const*,
+                                                              int) {
+    std::string joined;
+    for (const std::string& name : allInstVarNamesOf(rt, ctx, r)) {
+        if (!joined.empty()) joined += ' ';
+        joined += name;
+    }
+    return ctx->fromUTF8String(joined.c_str());
 }
 
 const proto::ProtoObject* prim_Object_instVarNamesString(STRuntime&, proto::ProtoContext* ctx,
@@ -2571,6 +2694,9 @@ void installObjectPrimitives(STRuntime& rt) {
     bindPrimitive(rt, b.actorProto, "__wrappedObject", primitiveMethod<prim_Actor_wrappedObject>);
     bindPrimitive(rt, b.objectProto, "instVarNamed:", primitiveMethod<prim_Object_instVarNamed>);
     bindPrimitive(rt, b.objectProto, "instVarNamed:put:", primitiveMethod<prim_Object_instVarNamedPut>);
+    bindPrimitive(rt, b.objectProto, "__rawInstVarNamed:", primitiveMethod<prim_Object_rawInstVarNamed>);
+    bindPrimitive(rt, b.objectProto, "__copyWithInstVarValues:",
+                  primitiveMethod<prim_Object_copyWithInstVarValues>);
     bindPrimitive(rt, b.behaviorProto, "__setInstVarNames:", primitiveMethod<prim_Object_setInstVarNames>);
     bindPrimitive(rt, b.behaviorProto, "__setInstVarNames:modifiers:",
                   primitiveMethod<prim_Behavior_setInstVarNamesModifiers>);
@@ -2586,6 +2712,8 @@ void installObjectPrimitives(STRuntime& rt) {
     bindPrimitive(rt, b.behaviorProto, "__subclass:instanceVariableNames:modifiers:uses:",
                   primitiveMethod<prim_Behavior_subclassModifiersUses>);
     bindPrimitive(rt, b.behaviorProto, "__instVarNamesString", primitiveMethod<prim_Object_instVarNamesString>);
+    bindPrimitive(rt, b.behaviorProto, "__allInstVarNamesString",
+                  primitiveMethod<prim_Behavior_allInstVarNamesString>);
     bindPrimitive(rt, b.behaviorProto, "canUnderstand:", primitiveMethod<prim_Object_canUnderstand>);
     bindPrimitive(rt, b.behaviorProto, "lookupSelector:", primitiveMethod<prim_Behavior_lookupSelector>);
     bindPrimitive(rt, b.behaviorProto, "__hasAncestor:", primitiveMethod<prim_Behavior_hasAncestor>);

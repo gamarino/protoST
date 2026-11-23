@@ -1,8 +1,9 @@
 "Kernel: reflection. Instance-variable access by name or index, the
  instance-variable and subclass lists of a class, class comments and
  categories, deepCopy and inspect. The primitives underneath are
- instVarNamed:, instVarNamed:put:, canUnderstand:, selectors and the
- declared instance-variable names the compiler records on each class."
+ instVarNamed:, instVarNamed:put:, canUnderstand:, selectors, the declared
+ instance-variable names the compiler records on each class, and the private
+ __rawInstVarNamed: and __copyWithInstVarValues: of deepCopy and inspect."
 
 "--- classes -------------------------------------------------------------------"
 
@@ -19,8 +20,13 @@ Metaclass >> isMeta
   ^ true.
 
 Behavior >> allInstVarNames
-  "The instance variables of a class's instances, inherited ones first."
+  "The instance variables of a class's instances, inherited ones first, in the
+   runtime's order: the superclass's, then each mixin's (uses:, addBehavior:)
+   in listed order, then the class's own; each name once. It does not follow
+   superclass, which answers the first mixin once a class uses one. A
+   metaclass lists its class-instance variables, its superclass's first."
   | sup |
+  self isMeta ifFalse: [^ (self __allInstVarNamesString substrings: ' ') asArray].
   sup := self superclass.
   ^ sup isNil
     ifTrue: [self instVarNames]
@@ -85,13 +91,17 @@ Object >> instVarAt: index put: anObject
 
 "deepCopy copies the receiver and, recursively, what its instance variables
  (or elements) refer to. Like Smalltalk-80's deepCopy it does not detect
- cycles: a structure that refers back to itself recurses without end."
+ cycles: a structure that refers back to itself recurses without end.
+
+ The copy is built with all its variables in one write, before anyone can
+ see it (explicit-state spec §11, plan decision D-h), so a constant or a
+ write-once variable that is set is copied, not refused by a reflective
+ write, and an atomic variable gets its value read once. The values are read
+ without the constant check, so an unset constant stays unset in the copy
+ and signals when the copy reads it."
 Object >> deepCopy
-  | copy |
-  copy := self shallowCopy.
-  self class allInstVarNames do: [:name |
-    copy instVarNamed: name put: (self instVarNamed: name) deepCopy].
-  ^ copy.
+  ^ self __copyWithInstVarValues:
+      (self class allInstVarNames collect: [:name | (self __rawInstVarNamed: name) deepCopy]).
 
 Number >> deepCopy
   ^ self.
@@ -121,11 +131,20 @@ Dictionary >> deepCopy
   ^ copy.
 
 "inspect prints the receiver and its instance variables on the Transcript
- and answers the receiver (the textual form of an inspector)."
+ and answers the receiver (the textual form of an inspector). Inspecting is
+ not a program read: an unset constant prints as <unset constant> and
+ signals nothing (plan decisions D-h and G4, as the debugger's row of
+ explicit-state spec §6.2)."
 Object >> inspect
   Transcript show: self printString; cr.
-  self class allInstVarNames do: [:name |
-    Transcript show: '  '; show: name; show: ': '; print: (self instVarNamed: name); cr].
+  self class allInstVarNames do: [:name | | value |
+    value := self __rawInstVarNamed: name.
+    Transcript show: '  '; show: name; show: ': '.
+    (value isNil and: [self class isMeta not
+        and: [(self class instVarModifierOf: name) = #constant]])
+      ifTrue: [Transcript show: '<unset constant>']
+      ifFalse: [Transcript print: value].
+    Transcript cr].
   ^ self.
 
 Collection >> inspect

@@ -422,10 +422,17 @@ ExecutionEngine::storeInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t
     // A mutable receiver is updated in place and answered. Any other answer
     // means the receiver is immutable and the write did not happen; refuse
     // it rather than lose it (the compiler already rejects instance-variable
-    // assignment in BlockClosure methods; this is the defensive check).
+    // assignment in BlockClosure methods; a method installed on BlockClosure
+    // from a block made elsewhere still reaches it).
     if (self->setAttribute(ctx, sym, val) != self)
-        throw NativeError("instance variable assignment: the receiver is an "
-                          "immutable value; nothing was written");
+        refuseImmutableStore(ctx);
+}
+
+void
+ExecutionEngine::refuseImmutableStore(proto::ProtoContext* ctx) {
+    signalErrorNamed(rt_, ctx, "ModificationForbidden",
+                     "instance variable assignment: the receiver is an "
+                     "immutable value; nothing was written");
 }
 
 void
@@ -2969,11 +2976,31 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     const proto::ProtoObject* self = getSelf(f);
                     if (!self || self == PROTO_NONE)
                         throw NativeError("STORE_INSTVAR self is null");
-                    if (self->setAttributes(ctx, e.count, names, values) != self)
-                        throw NativeError("instance variable assignment: the receiver "
-                                          "is an immutable value; nothing was written");
+                    if (self->setAttributes(ctx, e.count, names, values) != self) {
+                        // Nothing was written. The refusal signals in
+                        // place; should it return, the frame is
+                        // re-acquired and the run's values are cut as
+                        // below.
+                        const uint16_t count = e.count;
+                        refuseImmutableStore(ctx);
+                        Frame& g = frames_.back();
+                        const proto::ProtoObject* last = pop(g);
+                        g.sp -= count - 1u;
+                        push(g, last);
+                        DISPATCH_DIRECT();
+                        break;
+                    }
                 } else {
+                    // The per-write path: the store may signal in place
+                    // (an immutable receiver), so the frame is re-acquired.
+                    const uint16_t count = e.count;
                     storeInstVar(ctx, f, e.nameConst, peek(f));
+                    Frame& g = frames_.back();
+                    const proto::ProtoObject* last = pop(g);
+                    g.sp -= count - 1u;
+                    push(g, last);
+                    DISPATCH_DIRECT();
+                    break;
                 }
                 const proto::ProtoObject* last = pop(f);
                 f.sp -= e.count - 1u;

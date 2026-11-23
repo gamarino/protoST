@@ -666,3 +666,68 @@ TEST_CASE("IvarModifiers: the generated constructor is a class-side method over 
     CHECK(code->constSymbol(ins[10].second) == "number:owner:");
     CHECK(code->constSymbol(ins[11].second) == "__checkConstantsOf:after:");
 }
+
+// The constant store on an immutable receiver (Task 3/4 ruling, Task 8). No
+// Smalltalk route reaches it: a constant is assigned only in initialize and
+// its inlined blocks, and a de-optimised copy of those blocks takes no
+// argument, so none can run as a method of an immutable receiver. So the
+// compiled initialize of a class is taken from the class here and installed
+// as a BlockClosure method; sent to a block, its STORE_CONST_INSTVAR meets an
+// immutable self and signals ModificationForbidden in place, with the text
+// pinned below, catchable by class. The block is left unchanged.
+TEST_CASE("IvarModifiers: a constant store on an immutable receiver signals ModificationForbidden",
+          "[ivar_modifiers]") {
+    const char* declare =
+        "Object subclass: #ImAccount instanceVariableNames: '' constantNames: 'number'.\n"
+        "ImAccount >> initialize\n"
+        "  number := 1\n"
+        "\n"
+        "0\n";
+    protoST::Parser P(declare);
+    auto mod = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C;
+    auto bc = C.compileModule(*mod);
+    REQUIRE_FALSE(C.hasErrors());
+    protoST::STRuntime rt;
+    std::string error;
+    try {
+        rt.runTopLevel(*bc);
+    } catch (const std::exception& e) {
+        error = protoST::nativeErrorText(e);
+    }
+    REQUIRE(error.empty());
+    proto::ProtoContext* ctx = rt.rootCtx();
+    auto sym = [&](const char* s) { return proto::ProtoString::createSymbol(ctx, s); };
+    const proto::ProtoObject* cls = rt.globals()->getAttribute(ctx, sym("ImAccount"));
+    REQUIRE(cls != nullptr);
+    const proto::ProtoObject* init = cls->getOwnAttributeDirect(ctx, sym("initialize"));
+    REQUIRE(init != nullptr);
+    REQUIRE(init != PROTO_NONE);
+    rt.globals()->setAttribute(ctx, sym("ImInitialize"), init);
+
+    const char* run =
+        "| target |\n"
+        "BlockClosure __installMethod: ImInitialize as: #poke.\n"
+        "target := [:a | a].\n"
+        "([target poke. 'no error'] on: ModificationForbidden do: [:e | e messageText])\n"
+        "  , ' / ' , (target instVarNamed: 'number') printString\n";
+    protoST::Parser P2(run);
+    auto mod2 = P2.parseModule();
+    REQUIRE(P2.errors().empty());
+    protoST::Compiler C2;
+    auto bc2 = C2.compileModule(*mod2);
+    REQUIRE_FALSE(C2.hasErrors());
+    const proto::ProtoObject* answer = nullptr;
+    try {
+        answer = rt.runTopLevel(*bc2);
+    } catch (const std::exception& e) {
+        error = protoST::nativeErrorText(e);
+    }
+    REQUIRE(error.empty());
+    const proto::ProtoString* s = answer && answer != PROTO_NONE ? answer->asString(ctx) : nullptr;
+    REQUIRE(s != nullptr);
+    CHECK(s->toStdString(ctx)
+          == "cannot assign to the constant 'number' of a BlockClosure: the receiver is "
+             "immutable; nothing was written / nil");
+}

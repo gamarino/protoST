@@ -82,6 +82,14 @@ IvarModifier receiverModifierOf(STRuntime&, proto::ProtoContext*, const proto::P
 std::vector<std::string> constantNamesOf(STRuntime&, proto::ProtoContext*,
                                          const proto::ProtoObject* cls);
 
+// The instance variables of `cls`'s instances, in the runtime's resolution
+// order: the superclass's (recursively), then each mixin's in listed order,
+// then the class's own, each class's in source order, every name once. It
+// walks the parent chain, never `superclass`, which answers the first mixin
+// once a class uses one. Empty for a value that is not a class.
+std::vector<std::string> allInstVarNamesOf(STRuntime&, proto::ProtoContext*,
+                                           const proto::ProtoObject* cls);
+
 // The same, with `ownConstants` standing for the class's own constants (in
 // source order) instead of its records: the list a declaration that is about
 // to be recorded would give, so it can be checked before anything changes.
