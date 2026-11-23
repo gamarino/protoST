@@ -68,7 +68,7 @@ constexpr const char* kSetInstVarWarning =
 // never sends.
 std::string receiverPhrase(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* r) {
     if (!r || r == PROTO_NONE) return "nil";
-    if (r && r != PROTO_NONE && !r->isInteger(ctx) && !r->asString(ctx)) {
+    if (!r->isInteger(ctx) && !r->asString(ctx)) {
         const proto::ProtoObject* own = r->getOwnAttributeDirect(ctx, rt.bootstrap().sym.className);
         if (own && own != PROTO_NONE)
             if (const proto::ProtoString* s = own->asString(ctx)) return s->toStdString(ctx);
@@ -136,36 +136,17 @@ const proto::ProtoObject* signalImmutableReceiver(STRuntime& rt, proto::ProtoCon
         + receiverPhrase(rt, ctx, r) + ": the receiver is immutable; nothing was written");
 }
 
-// protoCore refuses every CAS on an immutable receiver, and gives no
-// public way to ask whether a receiver is one. A CAS that fails while the
-// variable still reads as the expected value is therefore unexplained: on a
-// mutable receiver it means other writers changed the value and restored it
-// between the CAS and the read, which a retry outlives; on an immutable one
-// it repeats for ever. After this many consecutive unexplained failures the
-// receiver is taken to be immutable. On a mutable receiver that would need
-// as many complete change-and-restore cycles by other writers, each inside
-// the window between one CAS and the next read.
-constexpr unsigned kUnexplainedCasLimit = 1024;
-
-enum class CasOutcome { Installed, Lost, Immutable };
-
 // The CAS of the variable `key` from `expected` to `newValue`, on the
 // receiver's OWN attribute. An expected nil matches unset (plan decision
 // D-c): absent first, then an explicit nil, as prim_Atom_cas does.
-CasOutcome casVariable(proto::ProtoContext* ctx, const proto::ProtoObject* r,
-                       const proto::ProtoString* key, const proto::ProtoObject* expected,
-                       const proto::ProtoObject* newValue) {
+bool casVariable(proto::ProtoContext* ctx, const proto::ProtoObject* r,
+                 const proto::ProtoString* key, const proto::ProtoObject* expected,
+                 const proto::ProtoObject* newValue) {
     auto* obj = const_cast<proto::ProtoObject*>(r);
-    for (unsigned unexplained = 0;;) {
-        const bool ok = expected == PROTO_NONE
-            ? (obj->setAttributeIfEqual(ctx, key, nullptr, newValue)
-               || obj->setAttributeIfEqual(ctx, key, PROTO_NONE, newValue))
-            : obj->setAttributeIfEqual(ctx, key, expected, newValue);
-        if (ok) return CasOutcome::Installed;
-        const proto::ProtoObject* cur = r->getOwnAttributeDirect(ctx, key);
-        if ((cur ? cur : PROTO_NONE) != expected) return CasOutcome::Lost;
-        if (++unexplained == kUnexplainedCasLimit) return CasOutcome::Immutable;
-    }
+    return expected == PROTO_NONE
+        ? (obj->setAttributeIfEqual(ctx, key, nullptr, newValue)
+           || obj->setAttributeIfEqual(ctx, key, PROTO_NONE, newValue))
+        : obj->setAttributeIfEqual(ctx, key, expected, newValue);
 }
 
 // compareAndSet:from:to: and its alias, under the selector that was sent.
@@ -187,12 +168,11 @@ const proto::ProtoObject* compareAndSet(STRuntime& rt, proto::ProtoContext* ctx,
     }
     // On a write-once variable this is the "first wins, the others adopt it"
     // form (§6.3): it never compares values, it answers whether it won.
-    switch (casVariable(ctx, r, t.key, expected, newValue)) {
-        case CasOutcome::Installed: return PROTO_TRUE;
-        case CasOutcome::Lost:      return PROTO_FALSE;
-        case CasOutcome::Immutable: break;
-    }
-    return signalImmutableReceiver(rt, ctx, r, selector, t);
+    if (casVariable(ctx, r, t.key, expected, newValue)) return PROTO_TRUE;
+    // A failed CAS is a lost race only on a writable receiver; an immutable
+    // one refuses every write, and never answers false (spec §2, §6.5).
+    if (!receiverIsWritable(rt, ctx, r)) return signalImmutableReceiver(rt, ctx, r, selector, t);
+    return PROTO_FALSE;
 }
 
 // anObject compareAndSet: aName from: expected to: new
@@ -212,12 +192,12 @@ const proto::ProtoObject* prim_Object_setInstVarFromTo(STRuntime& rt, proto::Pro
                                                        const proto::ProtoObject* r,
                                                        const proto::ProtoObject* const* a,
                                                        int argc) {
+    if (argc != 3) throw NativeError("setInstVar:from:to: expects 3 arguments");
     if (!gSetInstVarWarned.exchange(true, std::memory_order_relaxed)) {
         std::fputs(kSetInstVarWarning, stderr);
         std::fputc('\n', stderr);
         std::fflush(stderr);
     }
-    if (argc != 3) throw NativeError("setInstVar:from:to: expects 3 arguments");
     return compareAndSet(rt, ctx, r, a, "setInstVar:from:to:");
 }
 
@@ -257,21 +237,30 @@ const proto::ProtoObject* prim_Object_updateWith(STRuntime& rt, proto::ProtoCont
         }
         if (!neu) neu = PROTO_NONE;
         TransientPin pinNeu(ctx, neu);
-        for (unsigned unexplained = 0;;) {
-            if (obj->setAttributeIfEqual(ctx, t.key, current, neu)) return neu;
-            // Lost to another writer: run the block again on the new value.
-            if (r->getOwnAttributeDirect(ctx, t.key) != current) break;
-            // Unexplained (see kUnexplainedCasLimit): the value the block was
-            // given is still current, so its answer still applies.
-            if (++unexplained == kUnexplainedCasLimit)
-                return signalImmutableReceiver(rt, ctx, r, kSelector, t);
-        }
+        if (obj->setAttributeIfEqual(ctx, t.key, current, neu)) return neu;
+        // An immutable receiver refuses every write. It is found only here,
+        // after a failed CAS, so the success path pays nothing for it; the
+        // block has then run once before the refusal, which is harmless
+        // because the block is pure (spec §6.4).
+        if (!receiverIsWritable(rt, ctx, r)) return signalImmutableReceiver(rt, ctx, r, kSelector, t);
+        // Lost to another writer: read again and run the block on the new value.
     }
 }
 
 } // anon
 
 bool insideUpdateBlock() { return tUpdateBlockDepth > 0; }
+
+bool receiverIsWritable(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* r) {
+    // A CAS of the reserved, never-written probe key from absent to absent.
+    // protoCore answers false at once for a non-object or an immutable cell;
+    // on a mutable one the absent value matches, the publication changes no
+    // content, and the answer is true. The nullptr new value is not
+    // documented by protoCore 3.6.1: the unit case "IvarModifiers: the
+    // mutability probe ..." pins this behaviour.
+    return r && const_cast<proto::ProtoObject*>(r)->setAttributeIfEqual(
+        ctx, rt.bootstrap().sym.mutabilityProbe, nullptr, nullptr);
+}
 
 void installStatePrimitives(STRuntime& rt) {
     auto& b = rt.bootstrap();

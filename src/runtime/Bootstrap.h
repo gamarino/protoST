@@ -226,6 +226,9 @@ struct Bootstrap {
         // inline-string path and hit the shard mutex). Cache them here so
         // every SEND reads a Bootstrap-perpetual pointer instead.
         const proto::ProtoString* className       = nullptr;  // __class_name__ (every SEND class-side filter)
+        // A key never written: the state primitives' mutability probe
+        // (state_prims.cpp, receiverIsWritable).
+        const proto::ProtoString* mutabilityProbe = nullptr;  // __protost_mutability_probe__
         const proto::ProtoString* classId         = nullptr;  // __class_id__ (super: the defining class)
         const proto::ProtoString* metaclass       = nullptr;  // __metaclass__ (methodHolder of a class)
         const proto::ProtoString* soleInstance    = nullptr;  // __sole_instance__ (a metaclass's class)

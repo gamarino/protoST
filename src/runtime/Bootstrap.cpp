@@ -270,6 +270,7 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     out.sym.timedOutAfter   = S("__timedOutAfter:");
     // 2026-05-23 night: SEND-path class-side filter hot keys. See header.
     out.sym.className       = S("__class_name__");
+    out.sym.mutabilityProbe = S("__protost_mutability_probe__");
     out.sym.classId         = S("__class_id__");
     out.sym.metaclass       = S("__metaclass__");
     out.sym.soleInstance    = S("__sole_instance__");

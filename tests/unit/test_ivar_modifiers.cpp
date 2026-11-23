@@ -19,6 +19,8 @@
 #include "runtime/BlockCode.h"
 #include "runtime/BytecodeModule.h"
 #include "runtime/Opcodes.h"
+#include "runtime/Bootstrap.h"
+#include "primitives/state_prims.h"
 
 using protoST::IvarModifier;
 using protoST::ast::NodeKind;
@@ -730,4 +732,29 @@ TEST_CASE("IvarModifiers: a constant store on an immutable receiver signals Modi
     CHECK(s->toStdString(ctx)
           == "cannot assign to the constant 'number' of a BlockClosure: the receiver is "
              "immutable; nothing was written / nil");
+}
+
+TEST_CASE("IvarModifiers: the mutability probe answers true only for a mutable object and leaves "
+          "nothing behind",
+          "[ivar_modifiers]") {
+    // The state primitives tell an immutable receiver from a lost race with
+    // protoCore's setAttributeIfEqual(probe, nullptr, nullptr) (Task 7
+    // review 1, I2). Its nullptr new value is not documented by protoCore
+    // 3.6.1, so this case pins the behaviour the primitives rely on.
+    protoST::STRuntime rt;
+    proto::ProtoContext* ctx = rt.rootCtx();
+    const proto::ProtoString* key = proto::ProtoString::createSymbol(ctx, "_iv_v");
+    const proto::ProtoObject* mut = ctx->newObject(true);
+    const proto::ProtoObject* imm = ctx->newObject(false);
+    mut->setAttribute(ctx, key, ctx->fromInteger(5));
+    for (int i = 0; i < 3; ++i) {
+        CHECK(protoST::receiverIsWritable(rt, ctx, mut));
+        CHECK_FALSE(protoST::receiverIsWritable(rt, ctx, imm));
+        CHECK_FALSE(protoST::receiverIsWritable(rt, ctx, ctx->fromInteger(3)));
+    }
+    const proto::ProtoString* probe = rt.bootstrap().sym.mutabilityProbe;
+    REQUIRE(probe != nullptr);
+    CHECK(mut->getOwnAttributeDirect(ctx, probe) == nullptr);
+    CHECK(mut->hasOwnAttribute(ctx, probe) != PROTO_TRUE);
+    CHECK(mut->getOwnAttributeDirect(ctx, key)->asLong(ctx) == 5);
 }
