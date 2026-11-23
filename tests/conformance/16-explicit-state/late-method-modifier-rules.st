@@ -4,8 +4,8 @@
  methods are resolved when they are installed. They get the compiler's
  rules there: M1, M2 (also for a real block inside an inlined one) and M4 refuse the install (each refused method is in a
  helper module, so the refusal is caught here); initialize stores the
- constant; a write-once store installs (until Task 4 as a plain store,
- ruling C3)."
+ constant; a write-once store installs as STORE_ONCE_INSTVAR (rulings C2,
+ C3)."
 (Object yourself) subclass: #Acc
   instanceVariableNames: 'h'
   constantNames: 'n'

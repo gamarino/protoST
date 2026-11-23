@@ -225,7 +225,9 @@ private:
     // The store opcode of `:=` to the instance variable `name` of the
     // current method's class, by its modifier (spec §6.2, §6.4, §6.5): a
     // constant in the instance-side `initialize` is STORE_CONST_INSTVAR, and
-    // anywhere else M1 (M2 inside a real block); an atomic variable is M4.
+    // anywhere else M1 (M2 inside a real block); an atomic variable is M4;
+    // a write-once variable is STORE_ONCE_INSTVAR, which its emitters always
+    // precede with DUP (pre-flight ruling C2).
     // Errors are reported here; the opcode answered keeps the code well
     // formed (the module is not run after an error).
     Op     instVarStoreOp(const std::string& name);

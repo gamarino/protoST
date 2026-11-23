@@ -328,9 +328,12 @@ Op lateInstVarStoreOp(STRuntime& rt, proto::ProtoContext* ctx, const proto::Prot
         case IvarModifier::Atomic:
             throw ClassedErrorSignal("Error", assignmentRefusalText(
                 AssignmentRefusal::AtomicAssigned, name, where, line));
+        case IvarModifier::WriteOnce:
+            // Allowed anywhere. The compiler emits every late store as
+            // `DUP STORE_LATE_VAR` (+ POP), the shape STORE_ONCE_INSTVAR
+            // takes (pre-flight ruling C2).
+            return Op::STORE_ONCE_INSTVAR;
         default:
-            // Plain, and write-once until Task 4 resolves it to
-            // STORE_ONCE_INSTVAR (pre-flight ruling C3).
             return Op::STORE_INSTVAR;
     }
 }
@@ -350,8 +353,8 @@ Op lateInstVarStoreOp(STRuntime& rt, proto::ProtoContext* ctx, const proto::Prot
 // modifier (explicit-state spec §6.2, §6.4, §6.5), as the compiler does: a
 // constant is stored by STORE_CONST_INSTVAR in `initialize` (`selector`, the
 // selector being installed) outside real blocks, and refused anywhere else
-// (M1, M2); an atomic variable is refused (M4); a write-once variable is a
-// plain store until STORE_ONCE_INSTVAR exists (pre-flight ruling C3). A read
+// (M1, M2); an atomic variable is refused (M4); a write-once variable is
+// stored by STORE_ONCE_INSTVAR (pre-flight rulings C2, C3). A read
 // of a constant stays PUSH_INSTVAR until PUSH_CONST_INSTVAR exists. Everything
 // is checked before anything is rewritten, so a refused method leaves its
 // body untouched.

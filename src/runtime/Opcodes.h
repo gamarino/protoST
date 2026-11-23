@@ -204,8 +204,11 @@ enum class Op : uint8_t {
     // Explicit state (0.17.0): `:=` to a write-once instance variable. The
     // stack shape is `x v -> w`: it pops `v` and replaces the copy below it
     // with the value the variable holds afterwards, so it is always preceded
-    // by DUP and followed by POP when the value is discarded. Reserved here;
-    // emitted from Task 4 of the 0.17.0 plan.
+    // by DUP and followed by POP when the value is discarded. The write is a
+    // CAS from unset (absent or nil). When it finds the variable set, the
+    // installed value `w` stays and the store is silent if `w == v` or
+    // `w = v` answers true; otherwise it signals ModificationForbidden (M12).
+    // Storing nil never writes and answers the current value.
     STORE_ONCE_INSTVAR  = 64, // arg = constant pool symbol index (variable name)
     // Prefix carrying the next-higher byte of the following instruction's
     // operand, for operands above 255 (constant indices, slots, jumps).

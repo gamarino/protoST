@@ -7,6 +7,7 @@
 
 #include <exception>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "frontend/Compiler.h"
@@ -473,4 +474,70 @@ TEST_CASE("IvarModifiers: a late store keeps its value: DUP STORE_LATE_VAR POP",
         }
     }
     CHECK(found);
+}
+
+namespace {
+
+// The opcodes on each side of every `op` in the tree, as (before, after)
+// pairs; an edge of a module answers EXTEND.
+std::vector<std::pair<protoST::Op, protoST::Op>> neighboursOf(const protoST::BytecodeModule& root,
+                                                              protoST::Op op) {
+    std::vector<const protoST::BytecodeModule*> mods;
+    modulesOf(root, mods);
+    std::vector<std::pair<protoST::Op, protoST::Op>> out;
+    for (const auto* mod : mods) {
+        const auto ops = opsOf(*mod);
+        for (std::size_t i = 0; i < ops.size(); ++i) {
+            if (ops[i] != op) continue;
+            out.emplace_back(i > 0 ? ops[i - 1] : protoST::Op::EXTEND,
+                             i + 1 < ops.size() ? ops[i + 1] : protoST::Op::EXTEND);
+        }
+    }
+    return out;
+}
+
+} // namespace
+
+TEST_CASE("IvarModifiers: a write-once store is DUP STORE_ONCE_INSTVAR then RETURN or POP",
+          "[ivar_modifiers]") {
+    // Pre-flight rulings C2 and C6: STORE_ONCE_INSTVAR takes `x v -> w`, so
+    // it always follows a DUP; its answer is returned by `^ key := x`, and
+    // popped when the statement's value is discarded.
+    const auto ret = compileSource(
+        "Object subclass: #IvmOnceA instanceVariableNames: 'h' writeOnceNames: 'key'.\n"
+        "IvmOnceA >> setKey: x\n"
+        "  ^ key := x\n");
+    REQUIRE(ret.errors.empty());
+    CHECK(countOp(*ret.code, protoST::Op::STORE_INSTVAR) == 0);
+    const auto r = neighboursOf(*ret.code, protoST::Op::STORE_ONCE_INSTVAR);
+    REQUIRE(r.size() == 1);
+    CHECK(r[0].first == protoST::Op::DUP);
+    CHECK(r[0].second == protoST::Op::RETURN);
+
+    const auto stmt = compileSource(
+        "Object subclass: #IvmOnceB instanceVariableNames: 'h' writeOnceNames: 'key'.\n"
+        "IvmOnceB >> setKey: x\n"
+        "  h := 1.\n"
+        "  key := x.\n"
+        "  h := 2.\n"
+        "  ^ 3\n");
+    REQUIRE(stmt.errors.empty());
+    const auto s = neighboursOf(*stmt.code, protoST::Op::STORE_ONCE_INSTVAR);
+    REQUIRE(s.size() == 1);
+    CHECK(s[0].first == protoST::Op::DUP);
+    CHECK(s[0].second == protoST::Op::POP);
+    // A write-once store never joins a run of assignments (spec §6.6).
+    CHECK(countOp(*stmt.code, protoST::Op::IVAR_GROUP) == 0);
+
+    // Inside a real block, and as the value of a temporary's assignment.
+    const auto nested = compileSource(
+        "Object subclass: #IvmOnceC instanceVariableNames: 'h' writeOnceNames: 'key'.\n"
+        "IvmOnceC >> setKey: x\n"
+        "  | t |\n"
+        "  t := key := x.\n"
+        "  ^ [key := t] value\n");
+    REQUIRE(nested.errors.empty());
+    const auto n = neighboursOf(*nested.code, protoST::Op::STORE_ONCE_INSTVAR);
+    REQUIRE(n.size() == 2);
+    for (const auto& p : n) CHECK(p.first == protoST::Op::DUP);
 }

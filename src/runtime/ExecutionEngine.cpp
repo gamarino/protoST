@@ -449,13 +449,7 @@ ExecutionEngine::storeConstInstVar(proto::ProtoContext* ctx, const Frame& f, uin
         const proto::ProtoObject* cur = self->getOwnAttributeDirect(ctx, sym);
         return !cur || cur == PROTO_NONE;
     };
-    // `an Account`: the class-name form of printString's default.
-    auto owner = [&] {
-        const proto::ProtoObject* nameObj = self->getAttribute(ctx, bs_.sym.className);
-        const proto::ProtoString* nameStr =
-            nameObj && nameObj != PROTO_NONE ? nameObj->asString(ctx) : nullptr;
-        return nameStr ? articleAndClassName(nameStr->toStdString(ctx)) : std::string("an object");
-    };
+    auto owner = [&] { return ivarOwnerDescription(ctx, self); };
     if (val == PROTO_NONE) {
         // Storing nil into an unset constant changes nothing.
         if (isUnset()) return;
@@ -477,6 +471,79 @@ ExecutionEngine::storeConstInstVar(proto::ProtoContext* ctx, const Frame& f, uin
     signalErrorNamed(rt_, ctx, "ModificationForbidden",
                      "the constant '" + f.m->constSymbol(nameConst) + "' of " + owner()
                      + " is already set; nothing was written");
+}
+
+std::string
+ExecutionEngine::ivarOwnerDescription(proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* self) const {
+    // `an Account`: the class-name form of printString's default.
+    const proto::ProtoObject* nameObj = self->getAttribute(ctx, bs_.sym.className);
+    const proto::ProtoString* nameStr =
+        nameObj && nameObj != PROTO_NONE ? nameObj->asString(ctx) : nullptr;
+    return nameStr ? articleAndClassName(nameStr->toStdString(ctx)) : std::string("an object");
+}
+
+const proto::ProtoObject*
+ExecutionEngine::storeOnceInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t nameConst,
+                                  const proto::ProtoObject* val) {
+    // STORE_ONCE_INSTVAR's write (explicit-state spec §6.3, plan D-c). A
+    // write-once variable is unset while its own attribute is absent or
+    // holds nil; the store is a CAS from unset, so the variable is set at
+    // most once, by one writer, whatever the threads. A write that finds it
+    // set is judged by the installed value's `=`, on this thread, with no
+    // lock held. Errors are signalled in place (pre-flight ruling C1).
+    //
+    // Everything read from `f` is read before the first send: the `=` send
+    // and a signal's handler run Smalltalk code, which may grow `frames_`.
+    auto* sym = f.m->ivSymbol(ctx, nameConst);
+    const proto::ProtoObject* self = getSelf(f);
+    if (!self || self == PROTO_NONE)
+        throw NativeError("STORE_ONCE_INSTVAR self is null");
+    const std::string name = f.m->constSymbol(nameConst);
+    if (!val) val = PROTO_NONE;
+    // `self` stays rooted in its frame slot; the pins cover the written
+    // and the installed values across the `=` send and the signal.
+    TransientPin pinVal(ctx, val);
+    auto current = [&]() -> const proto::ProtoObject* {
+        const proto::ProtoObject* cur = self->getOwnAttributeDirect(ctx, sym);
+        return cur ? cur : PROTO_NONE;
+    };
+    // nil never replaces a value: the assignment answers what is there.
+    if (val == PROTO_NONE) return current();
+    // Absent first, then an explicit nil (as prim_Atom_cas).
+    if (self->setAttributeIfEqual(ctx, sym, nullptr, val)
+        || self->setAttributeIfEqual(ctx, sym, PROTO_NONE, val))
+        return val;
+    const proto::ProtoObject* w = current();
+    if (w == PROTO_NONE) {
+        // A write-once variable never becomes unset again once set, so a
+        // CAS that fails on an unset variable met an immutable receiver.
+        signalErrorNamed(rt_, ctx, "ModificationForbidden",
+                         "cannot assign to the write-once variable '" + name + "' of "
+                         + ivarOwnerDescription(ctx, self)
+                         + ": the receiver is immutable; nothing was written");
+        return PROTO_NONE;
+    }
+    if (w == val) return w;
+    TransientPin pinW(ctx, w);
+    // `w = val`, late-bound on the installed value, as a send would be: a
+    // receiver that does not understand `=` goes through
+    // doesNotUnderstand:, whose answer is then the comparison's.
+    const proto::ProtoObject* args[1] = { val };
+    bool understood = false;
+    const proto::ProtoObject* answer =
+        sendDynamic(rt_, ctx, w, bs_.sym.equal, args, 1, &understood);
+    if (!understood)
+        answer = sendDoesNotUnderstand(rt_, ctx, w, "=", args, 1);
+    // A non-Boolean signals NonBooleanReceiver; a handler's resumption
+    // value decides, as for any condition.
+    if (loopConditionIsTrue(rt_, ctx, answer ? answer : PROTO_NONE, "="))
+        return w;
+    signalErrorNamed(rt_, ctx, "ModificationForbidden",
+                     "the write-once variable '" + name + "' of "
+                     + ivarOwnerDescription(ctx, self)
+                     + " already holds a different value; nothing was written");
+    return w;
 }
 
 const proto::ProtoObject*
@@ -1134,7 +1201,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         &&L_IDENTICAL, &&L_BIN_INT_MUL, &&L_BIN_INT_MOD, &&L_BIN_INT_QUO,   // 52-55
         &&L_BAD_OP, &&L_BIN_INT_AND, &&L_BIN_INT_OR, &&L_PUSH_SHARED_LOCAL,   // 56-59
         &&L_STORE_SHARED_LOCAL, &&L_BAD_OP, &&L_BAD_OP, &&L_STORE_CONST_INSTVAR,   // 60-63
-        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 64-67
+        &&L_STORE_ONCE_INSTVAR, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 64-67
         &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 68-71
         &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 72-75
         &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 76-79
@@ -1242,6 +1309,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     check[static_cast<unsigned int>(Op::PUSH_INSTVAR)]     = &&L_PUSH_INSTVAR;
     check[static_cast<unsigned int>(Op::STORE_INSTVAR)]    = &&L_STORE_INSTVAR;
     check[static_cast<unsigned int>(Op::STORE_CONST_INSTVAR)] = &&L_STORE_CONST_INSTVAR;
+    check[static_cast<unsigned int>(Op::STORE_ONCE_INSTVAR)] = &&L_STORE_ONCE_INSTVAR;
     check[static_cast<unsigned int>(Op::IVAR_GROUP)]       = &&L_IVAR_GROUP;
     check[static_cast<unsigned int>(Op::IVAR_GROUP_END)]   = &&L_IVAR_GROUP_END;
     check[static_cast<unsigned int>(Op::MAKE_CAPTURED)]    = &&L_MAKE_CAPTURED;
@@ -2779,6 +2847,28 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 Frame& f = frames_.back();
                 const proto::ProtoObject* val = pop(f);
                 storeConstInstVar(ctx, f, arg, val);
+                DISPATCH_DIRECT();
+                break;
+            }
+            case Op::STORE_ONCE_INSTVAR: L_STORE_ONCE_INSTVAR: {
+                // `:=` to a write-once variable (explicit-state spec §6.3),
+                // stack `x v -> w` (pre-flight ruling C2): pop the value,
+                // CAS it in from unset (storeOnceInstVar), and replace the
+                // DUPed copy below it with the value the variable holds
+                // afterwards. The helper may run Smalltalk code (the
+                // installed value's `=`, a handler), so the frame is
+                // re-acquired after it; its pins live inside it.
+                const proto::ProtoObject* w;
+                {
+                    Frame& f = frames_.back();
+                    if (f.sp < 2)
+                        throw NativeError("STORE_ONCE_INSTVAR stack underflow");
+                    const proto::ProtoObject* val = pop(f);
+                    w = storeOnceInstVar(ctx, f, arg, val);
+                }
+                Frame& f = frames_.back();
+                pop(f);
+                push(f, w ? w : PROTO_NONE);
                 DISPATCH_DIRECT();
                 break;
             }

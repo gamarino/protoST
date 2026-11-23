@@ -1193,13 +1193,18 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             return;
         }
         // F4-U5: instance variable of the current method's class, stored
-        // by its modifier (STORE_INSTVAR or STORE_CONST_INSTVAR).
+        // by its modifier (STORE_INSTVAR, STORE_CONST_INSTVAR or
+        // STORE_ONCE_INSTVAR). STORE_ONCE_INSTVAR replaces the DUPed copy
+        // with the value the variable holds afterwards, so it always keeps
+        // the DUP; this statement's POP drops a discarded value (pre-flight
+        // ruling C2).
         for (const auto& iv : currentInstVars_) {
             if (iv == n.text) {
                 const Op store = instVarStoreOp(n.text);
                 emitExpr(m, *n.children[0]);
                 auto sym = m.internSymbol(n.text);
-                dupUnlessDiscarded();
+                if (store == Op::STORE_ONCE_INSTVAR) m.emit(Op::DUP, 0, currentLine_);
+                else                                 dupUnlessDiscarded();
                 m.emitWide(store, static_cast<unsigned int>(sym), currentLine_);
                 return;
             }
@@ -1393,13 +1398,16 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                 return;
             }
             // F4-U5: instance variable of the current method's class, stored
-            // by its modifier (STORE_INSTVAR or STORE_CONST_INSTVAR).
+            // by its modifier (STORE_INSTVAR, STORE_CONST_INSTVAR or
+            // STORE_ONCE_INSTVAR, which always keeps its DUP: see
+            // emitStatement).
             for (const auto& iv : currentInstVars_) {
                 if (iv == n.text) {
                     const Op store = instVarStoreOp(n.text);
                     emitExpr(m, *n.children[0]);
                     auto sym = m.internSymbol(n.text);
-                    dupUnlessDiscarded();
+                    if (store == Op::STORE_ONCE_INSTVAR) m.emit(Op::DUP, 0, currentLine_);
+                    else                                 dupUnlessDiscarded();
                     m.emitWide(store, static_cast<unsigned int>(sym), currentLine_);
                     return;
                 }
@@ -1809,8 +1817,11 @@ Op Compiler::instVarStoreOp(const std::string& name) {
             error(assignmentRefusalText(AssignmentRefusal::AtomicAssigned, name,
                                         currentMethodClass_, currentLine_));
             return Op::STORE_INSTVAR;
+        case IvarModifier::WriteOnce:
+            // Allowed anywhere (spec §6.3): a CAS from unset, judged by the
+            // installed value's = when it finds the variable set.
+            return Op::STORE_ONCE_INSTVAR;
         default:
-            // Plain, and write-once until STORE_ONCE_INSTVAR is emitted.
             return Op::STORE_INSTVAR;
     }
 }

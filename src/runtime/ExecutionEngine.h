@@ -358,6 +358,21 @@ private:
     // immutable receiver signals ModificationForbidden in place.
     void storeConstInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t nameConst,
                            const proto::ProtoObject* val);
+    // STORE_ONCE_INSTVAR's write (spec §6.3): a CAS of `val` from unset into
+    // the write-once variable named by constant `nameConst`, on the frame's
+    // `self`. Answers the value the variable holds afterwards: `val` when
+    // this write won, the installed value when it lost to an identical or
+    // `=` one, the current value (nil when unset) when `val` is nil. A
+    // losing write whose value is not `=` signals ModificationForbidden
+    // (M12) in place; an exception from `=` propagates. Runs Smalltalk code
+    // (the `=` send, a handler): the caller re-acquires its frame after.
+    const proto::ProtoObject* storeOnceInstVar(proto::ProtoContext* ctx, const Frame& f,
+                                               uint32_t nameConst,
+                                               const proto::ProtoObject* val);
+    // `an Account`: the receiver's class name in printString's default form,
+    // as the modifier errors (M3, M12) name the object.
+    std::string ivarOwnerDescription(proto::ProtoContext* ctx,
+                                     const proto::ProtoObject* self) const;
     void flushInstVarGroup(proto::ProtoContext* ctx, Frame& f);
 
     // Push a new frame for module `m`, returning a reference is unsafe across
