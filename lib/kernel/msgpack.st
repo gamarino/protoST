@@ -78,7 +78,7 @@ MessagePackMap class >> withAll: anArrayOfAssociations
 
 MessagePackMap class >> __fromAssociations: anArray
   "Unchecked: the decoder builds the Array itself."
-  ^ self __checkedNew: (self basicNew __setAssociations: anArray) after: #__fromAssociations:.
+  ^ self __checkConstructed: (self basicNew __setAssociations: anArray) selector: #__fromAssociations:.
 
 MessagePackMap >> __setAssociations: anArray
   associations := anArray.
@@ -124,7 +124,7 @@ MessagePackExt class >> type: anInteger data: aByteArray
     ifFalse: [^ self error: 'MessagePackExt: the ext type must be an Integer from -128 to 127'].
   (aByteArray isKindOf: ByteArray)
     ifFalse: [^ self error: 'MessagePackExt: a ByteArray was expected for the data'].
-  ^ self __checkedNew: (self basicNew __setType: anInteger data: aByteArray) after: #type:data:.
+  ^ self __checkConstructed: (self basicNew __setType: anInteger data: aByteArray) selector: #type:data:.
 
 MessagePackExt >> __setType: anInteger data: aByteArray
   type := anInteger.

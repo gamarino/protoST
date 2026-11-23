@@ -49,7 +49,7 @@ UUID class >> fromBytes: aByteArray
   ((aByteArray isKindOf: ByteArray) and: [aByteArray size = 16]) ifFalse: [
     ^ Error signal: 'UUID fromBytes: a ByteArray of 16 bytes was expected, not '
       , aByteArray printString].
-  ^ self __checkedNew: (self basicNew _setBytes: aByteArray) after: #fromBytes:.
+  ^ self __checkConstructed: (self basicNew _setBytes: aByteArray) selector: #fromBytes:.
 
 "The UUID of 32 hexadecimal digits or of the 36-character form, in either case."
 UUID class >> fromString: aString
@@ -65,7 +65,7 @@ UUID class >> fromString: aString
         , (aString copyFrom: 15 to: 18) , (aString copyFrom: 20 to: 23)
         , (aString copyFrom: 25 to: 36)].
   1 to: 32 do: [:i | (self _isHexDigit: (digits at: i) asInteger) ifFalse: [^ self _invalid: aString]].
-  ^ self __checkedNew: (self basicNew _setBytes: (ByteArray fromHex: digits)) after: #fromString:.
+  ^ self __checkConstructed: (self basicNew _setBytes: (ByteArray fromHex: digits)) selector: #fromString:.
 
 "A new version-4 UUID from the operating system's secure random bytes."
 UUID class >> new

@@ -14,11 +14,11 @@ WriteStream class >> new
   ^ self __checkedNew: (self basicNew setOn: #()).
 
 WriteStream class >> on: aCollection
-  ^ self __checkedNew: (self basicNew setOn: aCollection) after: #on:.
+  ^ self __checkConstructed: (self basicNew setOn: aCollection) selector: #on:.
 
 WriteStream class >> with: aCollection
-  ^ self __checkedNew: ((self basicNew setOn: aCollection) nextPutAll: aCollection; yourself)
-      after: #with:.
+  ^ self __checkConstructed: ((self basicNew setOn: aCollection) nextPutAll: aCollection; yourself)
+      selector: #with:.
 
 WriteStream >> setOn: aCollection
   onString := aCollection isString.
@@ -148,7 +148,7 @@ WriteStream >> bytesContents
 Object subclass: #ReadStream instanceVariableNames: 'collection position'.
 
 ReadStream class >> on: aCollection
-  ^ self __checkedNew: (self basicNew setOn: aCollection) after: #on:.
+  ^ self __checkConstructed: (self basicNew setOn: aCollection) selector: #on:.
 
 ReadStream >> setOn: aCollection
   collection := aCollection.

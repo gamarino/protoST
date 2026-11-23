@@ -153,7 +153,8 @@ ZoneOffset class >> microseconds: anInteger name: aString
   self _check: anInteger from: -86399999999 to: 86399999999 named: 'the offset in microseconds'.
   aString isString ifFalse: [
     ^ Error signal: 'ZoneOffset: the name must be a String, not ' , aString printString ].
-  ^ self basicNew _setMicroseconds: anInteger name: aString.
+  ^ self __checkConstructed: (self basicNew _setMicroseconds: anInteger name: aString)
+      selector: #microseconds:name:.
 
 "A fixed offset named as Python names an unnamed timezone: UTC for 0, else
  UTC followed by the offset (UTC-03:00, UTC+05:30:07.000008)."
@@ -214,7 +215,8 @@ _CalendarValue subclass: #ZoneName instanceVariableNames: 'key'.
 ZoneName class >> key: aString
   (aString isString and: [aString isEmpty not]) ifFalse: [
     ^ Error signal: 'ZoneName: the key must be a non-empty String, not ' , aString printString ].
-  ^ self basicNew _setKey: aString.
+  ^ self __checkConstructed: (self basicNew _setKey: aString)
+      selector: #key:.
 
 ZoneName >> _setKey: aString
   key isNil ifFalse: [^ Error signal: 'ZoneName is immutable: ' , self printString].
@@ -240,7 +242,8 @@ _CalendarValue subclass: #CalendarDate instanceVariableNames: 'year month day'.
 
 CalendarDate class >> year: y month: m day: d
   self _checkYear: y month: m day: d.
-  ^ self basicNew _setYear: y month: m day: d.
+  ^ self __checkConstructed: (self basicNew _setYear: y month: m day: d)
+      selector: #year:month:day:.
 
 "The date of day number anInteger (1 is 0001-01-01); Python's
  date.fromordinal."
@@ -309,7 +312,8 @@ TimeOfDay class >> hour: h minute: mi second: s microsecond: us fold: f zone: z
   ((z isNil or: [z isKindOf: ZoneOffset]) or: [z isKindOf: ZoneName]) ifFalse: [
     ^ Error signal: 'TimeOfDay: the zone must be nil, a ZoneOffset or a ZoneName, not '
       , z printString ].
-  ^ self basicNew _setHour: h minute: mi second: s microsecond: us fold: f zone: z.
+  ^ self __checkConstructed: (self basicNew _setHour: h minute: mi second: s microsecond: us fold: f zone: z)
+      selector: #hour:minute:second:microsecond:fold:zone:.
 
 "A naive time, microsecond 0, fold 0."
 TimeOfDay class >> hour: h minute: mi second: s
@@ -397,8 +401,9 @@ DateTime class >> year: y month: m day: d hour: h minute: mi second: s microseco
   (z isNil or: [z isKindOf: ZoneOffset]) ifFalse: [
     ^ Error signal: 'DateTime: the zone must be nil, a ZoneOffset or a ZoneName, not '
       , z printString ].
-  ^ self basicNew _setYear: y month: m day: d hour: h minute: mi second: s
-      microsecond: us fold: f zone: z.
+  ^ self __checkConstructed: (self basicNew _setYear: y month: m day: d hour: h minute: mi second: s
+      microsecond: us fold: f zone: z)
+      selector: #year:month:day:hour:minute:second:microsecond:fold:zone:.
 
 "The instant form: anArray holds the UTC instant as year, month, day, hour,
  minute, second, microsecond; fold is 0 and the zone is aZoneName."
@@ -412,10 +417,11 @@ DateTime class >> utcFields: anArray zoneName: aZoneName
   self _checkYear: (anArray at: 1) month: (anArray at: 2) day: (anArray at: 3).
   self _checkHour: (anArray at: 4) minute: (anArray at: 5) second: (anArray at: 6)
     microsecond: (anArray at: 7) fold: 0.
-  ^ self basicNew
+  ^ self __checkConstructed: (self basicNew
       _setYear: (anArray at: 1) month: (anArray at: 2) day: (anArray at: 3)
       hour: (anArray at: 4) minute: (anArray at: 5) second: (anArray at: 6)
-      microsecond: (anArray at: 7) fold: 0 zone: aZoneName.
+      microsecond: (anArray at: 7) fold: 0 zone: aZoneName)
+      selector: #utcFields:zoneName:.
 
 "The value of the UTC instant anInteger (microseconds since 0001-01-01T00:00)
  at a fixed offset; with a ZoneName, the instant form. Its wall clock must
@@ -455,11 +461,12 @@ DateTime class >> _fromLocal: anInteger zone: aZone
   days := anInteger // 86400000000.
   rest := anInteger \\ 86400000000.
   date := CalendarDate fromOrdinal: days + 1.
-  ^ self basicNew
+  ^ self __checkConstructed: (self basicNew
       _setYear: date year month: date month day: date day
       hour: rest // 3600000000 minute: rest // 60000000 \\ 60
       second: rest // 1000000 \\ 60 microsecond: rest \\ 1000000
-      fold: 0 zone: aZone.
+      fold: 0 zone: aZone)
+      selector: #_fromLocal:zone:.
 
 DateTime class >> _fieldsText: anArray
   ^ String streamContents: [:w |
@@ -594,7 +601,8 @@ TimeSpan class >> microseconds: anInteger
   d abs <= 999999999 ifFalse: [
     ^ Error signal: 'TimeSpan: |days| must be at most 999999999, not ' , d printString ].
   rest := anInteger \\ 86400000000.
-  ^ self basicNew _setDays: d seconds: rest // 1000000 microseconds: rest \\ 1000000 total: anInteger.
+  ^ self __checkConstructed: (self basicNew _setDays: d seconds: rest // 1000000 microseconds: rest \\ 1000000 total: anInteger)
+      selector: #microseconds:.
 
 TimeSpan >> _setDays: d seconds: s microseconds: us total: n
   total isNil ifFalse: [^ Error signal: 'TimeSpan is immutable: ' , self printString].

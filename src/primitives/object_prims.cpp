@@ -2189,6 +2189,25 @@ const proto::ProtoObject* prim_Behavior_checkConstantsOf(STRuntime& rt, proto::P
     return checkConstantsSet(rt, ctx, r, a[0] ? a[0] : PROTO_NONE, sel->toStdString(ctx));
 }
 
+// aClass __checkConstructed: anInstance selector: aSymbol   (private)
+//   The end-of-construction check of a class-side constructor that builds
+//   with basicNew and a setter (SortedCollection sortBlock:, Point x:y:, ...):
+//   for a class without constants (the cached `__has_constants__`, read
+//   through the chain) it answers anInstance at once, so such constructors
+//   pay this one primitive call and no Smalltalk send; otherwise it is
+//   __checkConstantsOf:after: (M13, naming aSymbol). It sends no initialize.
+const proto::ProtoObject* prim_Behavior_checkConstructed(STRuntime& rt, proto::ProtoContext* ctx,
+                                                         const proto::ProtoObject* r,
+                                                         const proto::ProtoObject* const* a,
+                                                         int argc) {
+    if (argc != 2) throw NativeError("__checkConstructed:selector: expects 2 args");
+    const proto::ProtoObject* instance = a[0] ? a[0] : PROTO_NONE;
+    if (r->getAttribute(ctx, rt.bootstrap().sym.hasConstants) != PROTO_TRUE) return instance;
+    const proto::ProtoString* sel = a[1] ? a[1]->asString(ctx) : nullptr;
+    if (!sel) throw NativeError("__checkConstructed:selector: the selector must be a Symbol");
+    return checkConstantsSet(rt, ctx, r, instance, sel->toStdString(ctx));
+}
+
 // aClass __allInstVarNamesString → the names of allInstVarNamesOf (the
 // superclass's, each mixin's, the class's own; IvarModifiers.h), separated by
 // spaces. Behavior >> allInstVarNames splits it for a class that is not a
@@ -2708,6 +2727,8 @@ void installObjectPrimitives(STRuntime& rt) {
     bindPrimitive(rt, b.behaviorProto, "__constructConstants:selector:",
                   primitiveMethod<prim_Behavior_constructConstants>);
     bindPrimitive(rt, b.behaviorProto, "__hasConstants", primitiveMethod<prim_Behavior_hasConstants>);
+    bindPrimitive(rt, b.behaviorProto, "__checkConstructed:selector:",
+                  primitiveMethod<prim_Behavior_checkConstructed>);
     bindPrimitive(rt, b.behaviorProto, "__checkConstantsOf:after:",
                   primitiveMethod<prim_Behavior_checkConstantsOf>);
     bindPrimitive(rt, b.behaviorProto, "__subclass:instanceVariableNames:modifiers:uses:",
