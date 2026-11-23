@@ -484,6 +484,45 @@ Compiler::resolveClassVarsFor(const std::string& className) const {
     return out;
 }
 
+// The class in `classes`, on `className`'s chain, that declares the instance
+// variable `name` (searched as instVarsThroughChain walks: each class, its
+// mixins, then its superclass); `out` receives that declaration's modifier.
+static bool findModifierThroughChain(
+        const std::unordered_map<std::string, Compiler::ClassInfo>& classes,
+        const std::string& className, const std::string& name, IvarModifier& out,
+        std::unordered_set<std::string>& seenClasses) {
+    std::string cur = className;
+    while (!cur.empty() && seenClasses.insert(cur).second) {
+        auto it = classes.find(cur);
+        if (it == classes.end()) return false;
+        const Compiler::ClassInfo& info = it->second;
+        if (std::find(info.instVarNames.begin(), info.instVarNames.end(), name)
+            != info.instVarNames.end()) {
+            auto m = info.modifiers.find(name);
+            out = m == info.modifiers.end() ? IvarModifier::Plain : m->second;
+            return true;
+        }
+        for (const auto& mixin : info.mixinNames)
+            if (findModifierThroughChain(classes, mixin, name, out, seenClasses)) return true;
+        cur = info.superclassName;
+    }
+    return false;
+}
+
+IvarModifier Compiler::modifierThroughChain(const std::string& cls, const std::string& name) const {
+    IvarModifier out = IvarModifier::Plain;
+    std::unordered_set<std::string> seen;
+    if (!classes_.empty()) {
+        findModifierThroughChain(classes_, cls, name, out, seen);
+        return out;
+    }
+    // Before collectClasses: the classes it would start from.
+    auto inView = sharedClassRegistrySnapshot();
+    for (const auto& [n, info] : knownClasses_) inView[n] = info;
+    findModifierThroughChain(inView, cls, name, out, seen);
+    return out;
+}
+
 std::unordered_map<std::string, Compiler::ClassInfo> Compiler::sharedClassRegistrySnapshot() {
     std::lock_guard<std::mutex> lock(g_classRegistryMutex);
     return classRegistry();
@@ -537,6 +576,10 @@ void Compiler::collectClasses(const Node& module) {
                 != info.instVarNames.end())
                 error("instance variable '" + iv + "' is declared twice in " + info.name);
             info.instVarNames.push_back(iv);
+            // Explicit-state spec §6.1: only the non-plain variables are
+            // recorded; a name declared twice keeps its first modifier.
+            if (i - 1 < cd.ivarModifiers.size() && cd.ivarModifiers[i - 1] != IvarModifier::Plain)
+                info.modifiers.emplace(iv, cd.ivarModifiers[i - 1]);
         }
         for (size_t i = ivEnd; i < cd.stringList.size(); ++i) {
             info.classVarNames.push_back(cd.stringList[i]);
@@ -676,7 +719,11 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
                        static_cast<unsigned int>(nameSymIdx), currentLine_);
             const size_t ivCount = static_cast<size_t>(n.intValue);
             std::string selector;
-            if (ivCount > 0) {
+            // With modifiers, the variables are declared once, by the
+            // __setInstVarNames:modifiers: that emitSetInstVarNames sends
+            // next (pre-flight ruling C8): declared here as plain first, they
+            // would be refused there as a change of modifier (M11).
+            if (ivCount > 0 && !hasIvarModifiers(n)) {
                 // declared instance variables → subclass:instanceVariableNames:uses:
                 std::string ivars;
                 for (size_t i = 0; i < ivCount; ++i) {
@@ -1711,17 +1758,36 @@ void Compiler::emitLateVar(BytecodeModule& m, Op op, const std::string& name) {
     m.emitWide(op, static_cast<unsigned int>(sym), currentLine_);
 }
 
+bool Compiler::hasIvarModifiers(const Node& classDecl) {
+    for (IvarModifier mod : classDecl.ivarModifiers)
+        if (mod != IvarModifier::Plain) return true;
+    return false;
+}
+
 void Compiler::emitSetInstVarNames(BytecodeModule& m, const Node& classDecl) {
     const size_t ivCount = static_cast<size_t>(classDecl.intValue);
     if (ivCount == 0) return;
+    std::vector<std::string> declared;
     std::string names;
     for (size_t i = 0; i < ivCount && 1 + i < classDecl.stringList.size(); ++i) {
         if (i > 0) names += ' ';
         names += classDecl.stringList[1 + i];
+        declared.push_back(classDecl.stringList[1 + i]);
     }
     auto namesIdx = m.addString(names);
-    auto selIdx   = m.internSymbol("__setInstVarNames:");
     m.emitWide(Op::PUSH_CONST,   static_cast<unsigned int>(namesIdx), currentLine_);
+    // A declaration without modifiers keeps the one-argument form, so its
+    // listing is the one it always was.
+    if (!hasIvarModifiers(classDecl)) {
+        auto selIdx = m.internSymbol("__setInstVarNames:");
+        m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(selIdx), currentLine_);
+        return;
+    }
+    // Plan decision D-a: the modifiers travel as the class records them,
+    // `kind:name` words for the non-plain variables.
+    auto kindsIdx = m.addString(encodeModifiers(declared, classDecl.ivarModifiers));
+    auto selIdx   = m.internSymbol("__setInstVarNames:modifiers:");
+    m.emitWide(Op::PUSH_CONST,   static_cast<unsigned int>(kindsIdx), currentLine_);
     m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(selIdx), currentLine_);
 }
 

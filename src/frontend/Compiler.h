@@ -74,6 +74,9 @@ public:
         // S37: the `uses:` clause is an expression the compiler cannot read
         // as a list of class names, so the mixins' variables are unknown.
         bool mixinsUnknown = false;
+        // The modifiers of the class's OWN non-plain instance variables
+        // (explicit-state spec §6.1); a variable not listed is plain.
+        std::unordered_map<std::string, IvarModifier> modifiers;
     };
 
     // S37: classes the runtime builds in C++ (Object, Error, Collection, ...).
@@ -96,6 +99,13 @@ public:
     const ScopeAnalysis& analysis() const { return analysis_; }
 
     const std::unordered_map<std::string, ClassInfo>& classes() const { return classes_; }
+
+    // The modifier of the instance variable `name` as `cls` sees it: its own
+    // declaration's, or the one of the superclass or mixin that declares it,
+    // walked as instVarsThroughChain walks them. Plain for a name no class in
+    // view declares. Reads the classes in view: before compileModule, the
+    // shared registry and the known classes; after it, also the module's.
+    IvarModifier modifierThroughChain(const std::string& cls, const std::string& name) const;
 
 private:
     std::string currentMethodDebugName_;   // e.g. "A>>inner", for block frame names
@@ -151,6 +161,8 @@ private:
     void reportDuplicateNames(const std::vector<std::string>& names, size_t from,
                               const std::string& where);
     void emitSetInstVarNames(BytecodeModule& m, const ast::Node& classDecl);
+    // Whether a ClassDecl declares any non-plain instance variable.
+    static bool hasIvarModifiers(const ast::Node& classDecl);
     // Arguments of the blocks being inlined (a to:do: loop variable, an
     // ifNotNil: arm's argument): the scope whose slots bind them, the name
     // and the slot, innermost last. The slot tells the argument from an

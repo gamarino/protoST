@@ -4,10 +4,12 @@
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
 #include "primitives/ArgSupport.h"
+#include "primitives/StringSupport.h"
 #include "runtime/BlockCode.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/BytecodeModule.h"
 #include "runtime/InstanceTemplate.h"
+#include "runtime/IvarModifiers.h"
 #include "runtime/TransientPin.h"
 #include "runtime/ValueFormat.h"
 #include "runtime/ExecutionEngine.h"
@@ -28,6 +30,7 @@
 #include <ctime>
 #include <random>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace protoST {
@@ -247,49 +250,12 @@ void stampDefiningClass(STRuntime& rt, proto::ProtoContext* ctx,
 } // namespace
 
 namespace {
-// S37: the names a class declares, recorded on the class object as one
-// space-separated string under `key`: `__instvar_names__` (instance
-// variables; on a metaclass, class-instance variables) and
-// `__classvar_names__` (class variables).
-void addDeclaredNames(proto::ProtoContext* ctx, const proto::ProtoObject* o,
-                      const proto::ProtoString* key, std::unordered_set<std::string>& out) {
-    if (!o || o == PROTO_NONE || o->isInteger(ctx) || o->isFloat(ctx) || o->asString(ctx)) return;
-    if (o->hasOwnAttribute(ctx, key) != PROTO_TRUE) return;
-    const proto::ProtoObject* v = o->getAttribute(ctx, key);
-    const proto::ProtoString* str = v && v != PROTO_NONE ? v->asString(ctx) : nullptr;
-    if (!str) return;
-    std::string word;
-    for (char c : str->toStdString(ctx) + " ") {
-        if (std::isspace(static_cast<unsigned char>(c))) {
-            if (!word.empty()) out.insert(word);
-            word.clear();
-        } else {
-            word += c;
-        }
-    }
-}
-
 // The name a class object carries (`__class_name__`), or "" for none.
 std::string ownClassName(const Bootstrap& b, proto::ProtoContext* ctx, const proto::ProtoObject* o) {
     if (!o || o == PROTO_NONE || o->isInteger(ctx) || o->asString(ctx)) return {};
     const proto::ProtoObject* n = o->getOwnAttributeDirect(ctx, b.sym.className);
     const proto::ProtoString* str = n && n != PROTO_NONE ? n->asString(ctx) : nullptr;
     return str ? str->toStdString(ctx) : std::string();
-}
-
-// Calls `f` on `cls` and then on each of its ancestors (superclasses and
-// mixins: protoCore's flattened parent chain), nearest first.
-template <typename F>
-void forClassAndAncestors(proto::ProtoContext* ctx, const proto::ProtoObject* cls, F&& f) {
-    f(cls);
-    if (const proto::ProtoList* chain = cls->getParents(ctx)) {
-        TransientPin pinChain(ctx, reinterpret_cast<const proto::ProtoObject*>(chain));
-        const proto::proto_ulong n = chain->getSize(ctx);
-        for (proto::proto_ulong i = 0; i < n; ++i) {
-            const proto::ProtoObject* p = chain->getAt(ctx, listIndex(i));
-            if (p && p != PROTO_NONE) f(p);
-        }
-    }
 }
 
 struct LateSite {
@@ -394,31 +360,88 @@ void resolveLateVariables(STRuntime& rt, proto::ProtoContext* ctx,
     resolution.resolved = true;
 }
 
-// Records the instance-variable names a class declares (`names`, a string of
-// space-separated names) on the class object, `__instvar_names__`, which
-// `instVarNames` and resolveLateVariables read. For a class (not a
-// metaclass) it first applies the rules the compiler applies to a class
-// declaration it can see whole: a name is declared once, and a class may not
-// redeclare an instance variable it inherits (both would name the same slot
-// of the object). The compiler cannot apply the second one when the
-// superclass is not known to it (S37: an imported class, a class built by
-// the `subclass:` message), so it is checked here, when the class is built.
-void declareInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
-                         const proto::ProtoObject* cls, const proto::ProtoObject* names) {
+// The space-separated words of `text`, in order.
+std::vector<std::string> splitNames(const std::string& text) {
+    std::vector<std::string> out;
+    std::string word;
+    for (char c : text + " ") {
+        if (std::isspace(static_cast<unsigned char>(c))) {
+            if (!word.empty()) out.push_back(word);
+            word.clear();
+        } else {
+            word += c;
+        }
+    }
+    return out;
+}
+
+// M10 (explicit-state spec §6.1): the classes on `cls`'s chain -- `cls`
+// itself when it already records instance variables, its superclasses and
+// its mixins -- must agree on the modifier of every instance variable two of
+// them declare. Runs when a class is declared, when `uses:` assembles its
+// chain, and when addBehavior: rebuilds it.
+void checkModifierConflicts(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* cls) {
     const Bootstrap& b = rt.bootstrap();
     const proto::ProtoString* ivKey = proto::ProtoString::createSymbol(ctx, "__instvar_names__");
-    const proto::ProtoString* str = names && names != PROTO_NONE ? names->asString(ctx) : nullptr;
-    if (str && !isMetaclass(b, ctx, cls)) {
-        std::vector<std::string> declared;
-        std::string word;
-        for (char c : str->toStdString(ctx) + " ") {
-            if (std::isspace(static_cast<unsigned char>(c))) {
-                if (!word.empty()) declared.push_back(word);
-                word.clear();
-            } else {
-                word += c;
-            }
+    struct Seen { IvarModifier modifier; std::string owner; };
+    std::unordered_map<std::string, Seen> seen;
+    forClassAndAncestors(ctx, cls, [&](const proto::ProtoObject* k) {
+        if (!k || k == PROTO_NONE || k->isInteger(ctx) || k->isFloat(ctx) || k->asString(ctx)
+            || k->hasOwnAttribute(ctx, ivKey) != PROTO_TRUE || isMetaclass(b, ctx, k))
+            return;
+        const proto::ProtoObject* v = k->getOwnAttributeDirect(ctx, ivKey);
+        const proto::ProtoString* str = v && v != PROTO_NONE ? v->asString(ctx) : nullptr;
+        if (!str) return;
+        const std::vector<ModifiedIvar> modified = ownModifiersOf(ctx, k);
+        const std::string owner = ownClassName(b, ctx, k);
+        for (const std::string& iv : splitNames(str->toStdString(ctx))) {
+            IvarModifier mod = IvarModifier::Plain;
+            for (const ModifiedIvar& e : modified)
+                if (e.name == iv) mod = e.modifier;
+            auto [it, inserted] = seen.emplace(iv, Seen{mod, owner});
+            if (!inserted && it->second.modifier != mod)
+                throw ClassedErrorSignal("Error",
+                    "instance variable '" + iv + "' is " + modifierName(it->second.modifier)
+                    + " in " + it->second.owner + " and " + modifierName(mod) + " in " + owner);
         }
+    });
+}
+
+// Records the instance-variable names a class declares (`names`, a string of
+// space-separated names) on the class object, `__instvar_names__`, which
+// `instVarNames` and resolveLateVariables read, and their modifiers
+// (`modifiers`, aligned with the names; empty means every one is plain) as
+// plan decision D-a describes: `__ivar_modifiers__` and `__has_constants__`.
+// For a class (not a metaclass) it first applies the rules the compiler
+// applies to a class declaration it can see whole: a name is declared once,
+// and a class may not redeclare an instance variable it inherits (both would
+// name the same slot of the object). The compiler cannot apply the second one
+// when the superclass is not known to it (S37: an imported class, a class
+// built by the `subclass:` message), so it is checked here, when the class is
+// built. Then the explicit-state rules: a redeclaration keeps the modifier of
+// every variable it repeats (M11), and the class's parents agree on the
+// modifiers of the names they share (M10). Modifiers apply to instance
+// variables only, so a metaclass (class-instance variables) takes none (G1).
+void declareInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
+                         const proto::ProtoObject* cls, const proto::ProtoObject* names,
+                         const std::vector<IvarModifier>& modifiers = {}) {
+    const Bootstrap& b = rt.bootstrap();
+    const proto::ProtoString* ivKey = proto::ProtoString::createSymbol(ctx, "__instvar_names__");
+    const proto::ProtoString* modKey = proto::ProtoString::createSymbol(ctx, "__ivar_modifiers__");
+    const proto::ProtoString* hasConstKey = proto::ProtoString::createSymbol(ctx, "__has_constants__");
+    const proto::ProtoString* str = names && names != PROTO_NONE ? names->asString(ctx) : nullptr;
+    const bool meta = isMetaclass(b, ctx, cls);
+    const bool anyModifier = std::any_of(modifiers.begin(), modifiers.end(),
+                                         [](IvarModifier m) { return m != IvarModifier::Plain; });
+    if (meta && anyModifier)
+        throw ClassedErrorSignal("Error",
+            "class-instance variables take no modifiers: only instance variables are constant, "
+            "writeOnce or atomic");
+    std::vector<std::string> declared;
+    if (str) declared = splitNames(str->toStdString(ctx));
+    if (!modifiers.empty() && modifiers.size() != declared.size())
+        throw NativeError("__setInstVarNames:modifiers:: the modifiers do not match the names");
+    if (str && !meta) {
         const std::string name = ownClassName(b, ctx, cls);
         std::unordered_set<std::string> seen;
         for (const auto& iv : declared)
@@ -439,8 +462,50 @@ void declareInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
                             + " is already defined in its superclass " + ownClassName(b, ctx, p));
             }
         }
+        // M11: a redeclaration (the class already records its variables)
+        // keeps the modifier of every variable it declares again.
+        if (cls->hasOwnAttribute(ctx, ivKey) == PROTO_TRUE) {
+            std::unordered_set<std::string> before;
+            addDeclaredNames(ctx, cls, ivKey, before);
+            const std::vector<ModifiedIvar> recorded = ownModifiersOf(ctx, cls);
+            for (std::size_t i = 0; i < declared.size(); ++i) {
+                if (!before.count(declared[i])) continue;
+                IvarModifier was = IvarModifier::Plain;
+                for (const ModifiedIvar& e : recorded)
+                    if (e.name == declared[i]) was = e.modifier;
+                const IvarModifier now = modifiers.empty() ? IvarModifier::Plain : modifiers[i];
+                if (was != now)
+                    throw ClassedErrorSignal("Error",
+                        name + " is already declared with '" + declared[i] + "' "
+                        + modifierName(was) + "; a class keeps the modifiers it was declared with");
+            }
+        }
+        // M10: the parents agree on the modifiers of the names they share.
+        checkModifierConflicts(rt, ctx, cls);
     }
-    const_cast<proto::ProtoObject*>(cls)->setAttribute(ctx, ivKey, names);
+    auto* mcls = const_cast<proto::ProtoObject*>(cls);
+    mcls->setAttribute(ctx, ivKey, names);
+    if (!meta) {
+        const std::string encoded = encodeModifiers(declared, modifiers);
+        if (!encoded.empty() || cls->hasOwnAttribute(ctx, modKey) == PROTO_TRUE)
+            mcls->setAttribute(ctx, modKey, ctx->fromUTF8String(encoded.c_str()));
+        // `__has_constants__` answers, through the chain, whether the class
+        // declares or inherits a constant. An own record is only written when
+        // the class declares one, or to correct one an earlier declaration
+        // of the class wrote.
+        const bool ownConstant = std::find(modifiers.begin(), modifiers.end(),
+                                           IvarModifier::Constant) != modifiers.end();
+        if (ownConstant) {
+            mcls->setAttribute(ctx, hasConstKey, PROTO_TRUE);
+        } else if (cls->hasOwnAttribute(ctx, hasConstKey) == PROTO_TRUE) {
+            bool inherited = false;
+            forClassAndAncestors(ctx, cls, [&](const proto::ProtoObject* k) {
+                if (k != cls && k->getOwnAttributeDirect(ctx, hasConstKey) == PROTO_TRUE)
+                    inherited = true;
+            });
+            mcls->setAttribute(ctx, hasConstKey, inherited ? PROTO_TRUE : PROTO_FALSE);
+        }
+    }
     // Every instance template built before this declaration may now lack a
     // variable (this class's or, for a subclass, an inherited one).
     noteInstanceLayoutChanged();
@@ -718,6 +783,10 @@ const proto::ProtoObject* makeSubclassWithMixins(
     // every parent.
     auto* sub = shape->newChild(ctx, /*isMutable=*/true);
     TransientPin pinSub(ctx, sub);
+    // M10: the parents must agree on the modifiers of the instance variables
+    // they share. Checked before the class is named and bound, so a refused
+    // composition leaves no class behind.
+    checkModifierConflicts(rt, ctx, sub);
     const proto::ProtoString* nameKey =
         proto::ProtoString::createSymbol(ctx, "__class_name__");
     const_cast<proto::ProtoObject*>(sub)->setAttribute(
@@ -871,6 +940,12 @@ const proto::ProtoObject* addBehaviorToClass(STRuntime& rt,
         if (name && name != k->skip) k->to->setAttribute(c, name, val);
     };
     oldCls->processOwnAttributes(ctx, &toNew, copyOwn);
+
+    // M10: the class's own instance variables, its parents' and the new
+    // behaviour's must agree on the modifier of every name two of them
+    // declare. Checked before the global is rebound, so a refused composition
+    // leaves the class as it was.
+    checkModifierConflicts(rt, ctx, newCls);
 
     // D52: the rebuilt class gets its own metaclass, whose chain carries the
     // mixin's metaclass, and the class-side methods of the old one.
@@ -1651,6 +1726,101 @@ const proto::ProtoObject* prim_Object_setInstVarNames(STRuntime& rt, proto::Prot
     return r;
 }
 
+// aClass __setInstVarNames: 'a b c' modifiers: 'constant:b atomic:c' records
+// the declared instance variables with their modifiers (compiler-emitted for
+// a declaration with constantNames:, writeOnceNames: or atomicNames:). The
+// second argument is plan decision D-a's encoding: `kind:name` words for the
+// non-plain variables, each naming one of the first argument's names.
+const proto::ProtoObject* prim_Behavior_setInstVarNamesModifiers(STRuntime& rt, proto::ProtoContext* ctx,
+                                                                 const proto::ProtoObject* r,
+                                                                 const proto::ProtoObject* const* a,
+                                                                 int argc) {
+    if (argc != 2) throw NativeError("__setInstVarNames:modifiers: expects 2 args");
+    const proto::ProtoString* names = a[0] ? a[0]->asString(ctx) : nullptr;
+    const proto::ProtoString* kinds = a[1] ? a[1]->asString(ctx) : nullptr;
+    if (!names || !kinds) throw NativeError("__setInstVarNames:modifiers: expects two Strings");
+    const std::vector<std::string> declared = splitNames(names->toStdString(ctx));
+    std::vector<IvarModifier> modifiers(declared.size(), IvarModifier::Plain);
+    for (const std::string& w : splitNames(kinds->toStdString(ctx))) {
+        const std::size_t colon = w.find(':');
+        IvarModifier m = IvarModifier::Plain;
+        if (colon == std::string::npos
+            || !parseModifierName(std::string_view(w).substr(0, colon), m))
+            throw NativeError("__setInstVarNames:modifiers: malformed modifier '" + w + "'");
+        const std::string iv = w.substr(colon + 1);
+        auto it = std::find(declared.begin(), declared.end(), iv);
+        if (it == declared.end())
+            throw NativeError("__setInstVarNames:modifiers: '" + iv + "' is not among the names");
+        modifiers[static_cast<std::size_t>(it - declared.begin())] = m;
+    }
+    declareInstVarNames(rt, ctx, r, a[0], modifiers);
+    return r;
+}
+
+// superClass subclass: #Name instanceVariableNames: 'a' constantNames: 'b c'
+//            writeOnceNames: 'd' atomicNames: 'e'
+//   → the message form of a class declaration with modifiers (explicit-state
+//     spec §6.1): as subclass:instanceVariableNames:, with each clause's
+//     variables declared with its modifier, in the order of the arguments.
+//     Each argument is a String ('' for none).
+const proto::ProtoObject* prim_Behavior_subclassModifiers(STRuntime& rt, proto::ProtoContext* ctx,
+                                                          const proto::ProtoObject* r,
+                                                          const proto::ProtoObject* const* a,
+                                                          int argc) {
+    static const char* const kSelector =
+        "subclass:instanceVariableNames:constantNames:writeOnceNames:atomicNames:";
+    if (argc != 5) throw NativeError(std::string(kSelector) + " expects 5 args");
+    static const IvarModifier kClauses[4] = {IvarModifier::Plain, IvarModifier::Constant,
+                                             IvarModifier::WriteOnce, IvarModifier::Atomic};
+    std::string names;
+    std::vector<IvarModifier> modifiers;
+    for (int k = 0; k < 4; ++k) {
+        const proto::ProtoObject* arg = a[1 + k];
+        if (!arg || arg == PROTO_NONE) continue;
+        const proto::ProtoString* str = arg->asString(ctx);
+        if (!str)
+            throw NativeError(std::string(kSelector) + ": the " + modifierName(kClauses[k])
+                              + " names must be a String");
+        for (const std::string& iv : splitNames(str->toStdString(ctx))) {
+            if (!names.empty()) names += ' ';
+            names += iv;
+            modifiers.push_back(kClauses[k]);
+        }
+    }
+    const proto::ProtoObject* sub = makeSubclass(rt, ctx, r, a[0]);
+    TransientPin pinSub(ctx, sub);
+    const proto::ProtoObject* namesObj = ctx->fromUTF8String(names.c_str());
+    TransientPin pinNames(ctx, namesObj);
+    declareInstVarNames(rt, ctx, sub, namesObj, modifiers);
+    return sub;
+}
+
+// aClass instVarModifierOf: aName → #plain, #constant, #writeOnce or #atomic:
+// the modifier of the instance variable aName of the receiver's instances,
+// declared by the class, a superclass or a mixin (explicit-state spec §6.1,
+// §11). A name the class does not declare signals Error; the text names the
+// receiver as printString's default does, so a class by its bare name
+// (pre-flight ruling C7).
+const proto::ProtoObject* prim_Behavior_instVarModifierOf(STRuntime& rt, proto::ProtoContext* ctx,
+                                                          const proto::ProtoObject* r,
+                                                          const proto::ProtoObject* const* a,
+                                                          int argc) {
+    if (argc != 1) throw NativeError("instVarModifierOf: expects 1 arg");
+    const proto::ProtoString* nameStr = a[0] ? a[0]->asString(ctx) : nullptr;
+    if (!nameStr)
+        throw ClassedErrorSignal("Error",
+            "instVarModifierOf: expects a String or Symbol, not " + formatValue(rt, ctx, a[0]));
+    const std::string name = nameStr->toStdString(ctx);
+    bool declared = false;
+    const IvarModifier m = modifierOf(rt, ctx, r, name, &declared);
+    if (!declared)
+        throw ClassedErrorSignal("Error",
+            formatValue(rt, ctx, r) + " has no instance variable '" + name + "'");
+    // A Symbol as `#atomic` reads: an interned name (createSymbol answers a
+    // String for a name short enough to be stored inline).
+    return internName(ctx, modifierName(m))->asObject(ctx);
+}
+
 const proto::ProtoObject* prim_Object_instVarNamesString(STRuntime&, proto::ProtoContext* ctx,
                                                          const proto::ProtoObject* r,
                                                          const proto::ProtoObject* const*, int) {
@@ -1928,11 +2098,7 @@ const proto::ProtoObject* prim_Object_printString(STRuntime& rt,
         if (s) name = s->toStdString(ctx);
     }
     if (name.empty()) return ctx->fromUTF8String("an object");
-
-    char c0 = name.empty() ? '\0' : name[0];
-    bool vowel = (c0 == 'A' || c0 == 'E' || c0 == 'I' || c0 == 'O' || c0 == 'U');
-    std::string out = (vowel ? "an " : "a ") + name;
-    return ctx->fromUTF8String(out.c_str());
+    return ctx->fromUTF8String(articleAndClassName(name).c_str());
 }
 
 // Import from: 'foo'
@@ -2200,6 +2366,12 @@ void installObjectPrimitives(STRuntime& rt) {
     bindPrimitive(rt, b.objectProto, "instVarNamed:", primitiveMethod<prim_Object_instVarNamed>);
     bindPrimitive(rt, b.objectProto, "instVarNamed:put:", primitiveMethod<prim_Object_instVarNamedPut>);
     bindPrimitive(rt, b.behaviorProto, "__setInstVarNames:", primitiveMethod<prim_Object_setInstVarNames>);
+    bindPrimitive(rt, b.behaviorProto, "__setInstVarNames:modifiers:",
+                  primitiveMethod<prim_Behavior_setInstVarNamesModifiers>);
+    bindPrimitive(rt, b.behaviorProto,
+                  "subclass:instanceVariableNames:constantNames:writeOnceNames:atomicNames:",
+                  primitiveMethod<prim_Behavior_subclassModifiers>);
+    bindPrimitive(rt, b.behaviorProto, "instVarModifierOf:", primitiveMethod<prim_Behavior_instVarModifierOf>);
     bindPrimitive(rt, b.behaviorProto, "__instVarNamesString", primitiveMethod<prim_Object_instVarNamesString>);
     bindPrimitive(rt, b.behaviorProto, "canUnderstand:", primitiveMethod<prim_Object_canUnderstand>);
     bindPrimitive(rt, b.behaviorProto, "lookupSelector:", primitiveMethod<prim_Behavior_lookupSelector>);

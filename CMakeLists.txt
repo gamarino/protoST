@@ -241,6 +241,7 @@ add_library(protost_runtime STATIC
     src/runtime/Interrupt.cpp
     src/runtime/Bootstrap.cpp
     src/runtime/InstanceTemplate.cpp
+    src/runtime/IvarModifiers.cpp
     src/runtime/HandlerStack.cpp
     src/runtime/ValueFormat.cpp
     src/debugger/DebuggerRuntime.cpp

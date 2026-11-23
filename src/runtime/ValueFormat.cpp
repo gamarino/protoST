@@ -188,10 +188,13 @@ std::string formatValue(STRuntime& rt, proto::ProtoContext* ctx,
         // fall through
     }
     if (name.empty()) return "an object";
+    return articleAndClassName(name);
+}
 
-    char c0 = name[0];
-    bool vowel = (c0 == 'A' || c0 == 'E' || c0 == 'I' || c0 == 'O' || c0 == 'U');
-    return (vowel ? "an " : "a ") + name;
+std::string articleAndClassName(const std::string& className) {
+    const char c0 = className.empty() ? '\0' : className[0];
+    const bool vowel = (c0 == 'A' || c0 == 'E' || c0 == 'I' || c0 == 'O' || c0 == 'U');
+    return (vowel ? "an " : "a ") + className;
 }
 
 } // namespace protoST
