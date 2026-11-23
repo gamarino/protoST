@@ -240,6 +240,7 @@ add_library(protost_runtime STATIC
     src/runtime/TransientPin.cpp
     src/runtime/Interrupt.cpp
     src/runtime/Bootstrap.cpp
+    src/runtime/ConstantConstructor.cpp
     src/runtime/InstanceTemplate.cpp
     src/runtime/IvarModifiers.cpp
     src/runtime/HandlerStack.cpp

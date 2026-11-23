@@ -94,6 +94,15 @@ inline std::string constructorSelectorFor(const std::vector<std::string>& consta
     return sel;
 }
 
+// M9's text (explicit-state spec §12), without the line: `number:owner: is the
+// generated constructor of Account and cannot be redefined; give your
+// constructor another name`. The compiler and the install-time check share it.
+inline std::string constructorRedefinitionText(const std::string& selector,
+                                               const std::string& className) {
+    return selector + " is the generated constructor of " + className
+           + " and cannot be redefined; give your constructor another name";
+}
+
 // Why `:=` to a modified instance variable is refused (explicit-state spec
 // §12): M1, M2 and M4.
 enum class AssignmentRefusal : uint8_t {

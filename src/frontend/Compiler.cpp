@@ -509,6 +509,29 @@ static bool findModifierThroughChain(
     return false;
 }
 
+// The constants of `className`'s instances as the runtime orders them
+// (constantNamesOf, IvarModifiers.h): the superclass's (recursively), then each
+// mixin's in listed order, then the class's own in source order, every name
+// once. Only meaningful for a class whose chain is fully known.
+static void constantsThroughChain(
+        const std::unordered_map<std::string, Compiler::ClassInfo>& classes,
+        const std::string& className, std::vector<std::string>& out,
+        std::unordered_set<std::string>& seenClasses) {
+    if (className.empty() || !seenClasses.insert(className).second) return;
+    auto it = classes.find(className);
+    if (it == classes.end()) return;
+    const Compiler::ClassInfo& info = it->second;
+    constantsThroughChain(classes, info.superclassName, out, seenClasses);
+    for (const auto& mixin : info.mixinNames)
+        constantsThroughChain(classes, mixin, out, seenClasses);
+    for (const auto& iv : info.instVarNames) {
+        auto m = info.modifiers.find(iv);
+        if (m != info.modifiers.end() && m->second == IvarModifier::Constant
+            && std::find(out.begin(), out.end(), iv) == out.end())
+            out.push_back(iv);
+    }
+}
+
 IvarModifier Compiler::modifierThroughChain(const std::string& cls, const std::string& name) const {
     IvarModifier out = IvarModifier::Plain;
     std::unordered_set<std::string> seen;
@@ -855,6 +878,18 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         // can resolve identifiers against this class's inst vars before
         // falling back to globals.
         enterMethodClass(n);
+        // M9 (explicit-state spec §6.2, §12): a class-side method may not
+        // take the selector of the class's generated constructor. For a class
+        // whose chain the compiler cannot see whole, __installClassMethod:as:
+        // refuses it when it is installed.
+        if (n.boolFlag && !currentMethodLate_ && !n.stringList.empty()) {
+            std::vector<std::string> constants;
+            std::unordered_set<std::string> seen;
+            constantsThroughChain(classes_, n.text, constants, seen);
+            if (!constants.empty() && n.stringList[0] == constructorSelectorFor(constants))
+                error(constructorRedefinitionText(n.stringList[0], n.text)
+                      + " (line " + std::to_string(headerLine) + ")");
+        }
         currentMethodDebugName_     = n.text + ">>" + (n.stringList.empty() ? std::string("<method>") : n.stringList[0]);
         reportDuplicateNames(n.stringList, 1,
                              n.text + ">>" + (n.stringList.empty() ? std::string() : n.stringList[0]));
@@ -933,6 +968,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         // BL-1: record the defining class so the engine can resolve `super`
         // sends inside this method body (lookup starts at the class's parent).
         sub->setDefiningClass(n.text);
+        sub->setHeaderLine(headerLine);
         if (currentMethodLate_)
             sub->setLateBinding(replMode_, std::vector<std::string>(
                                                n.stringList.begin() + 1, n.stringList.end()));
@@ -1134,6 +1170,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         sub->setDebugName(n.text + ">>" + n.stringList[0] + "(...)");
         currentMethodDebugName_ = sub->debugName();
         sub->setDefiningClass(n.text);
+        sub->setHeaderLine(headerLine);
         if (currentMethodLate_)
             sub->setLateBinding(replMode_, std::vector<std::string>(
                                                n.stringList.begin() + 1, n.stringList.end()));

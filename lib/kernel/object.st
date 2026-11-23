@@ -95,12 +95,15 @@ Collection >> isCollection
 
 "--- instance creation ---------------------------------------------------------
  new sends initialize, as in Smalltalk-80 implementations since Pharo/Squeak;
- basicNew is the raw allocator."
+ basicNew is the raw allocator. For a class with constants, new then checks
+ that initialize set every one (explicit-state spec §6.2, M13); basicNew does
+ not."
 
 Object class >> new
   | instance |
   instance := self basicNew.
   instance initialize.
+  self __hasConstants ifTrue: [self __checkConstantsOf: instance after: #new].
   ^ instance.
 
 Object >> initialize

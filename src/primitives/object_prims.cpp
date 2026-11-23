@@ -9,6 +9,7 @@
 #include "runtime/BlockCode.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/BytecodeModule.h"
+#include "runtime/ConstantConstructor.h"
 #include "runtime/InstanceTemplate.h"
 #include "runtime/IvarModifiers.h"
 #include "runtime/TransientPin.h"
@@ -607,6 +608,9 @@ void declareInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
             mcls->setAttribute(ctx, hasConstKey, PROTO_TRUE);
         else
             mcls->removeAttribute(ctx, hasConstKey);
+        // The generated constructor over every constant, own and inherited
+        // (§6.2, D-d); a subclass that adds none gets the same selector.
+        installConstantConstructor(rt, ctx, cls);
     }
     // Every instance template built before this declaration may now lack a
     // variable (this class's or, for a subclass, an inherited one).
@@ -655,7 +659,19 @@ const proto::ProtoObject* prim_Object_installClassMethod(STRuntime& rt,
     if (!selStr)
         throw NativeError(
             "__installClassMethod:as: selector must be a symbol");
-    resolveLateVariables(rt, ctx, r, /*classSide=*/true, a[0], selStr->toStdString(ctx));
+    // M9 (explicit-state spec §6.2, §12): the generated constructor of the
+    // class, its own or the one it inherits (read through the chain,
+    // pre-flight ruling C9), cannot be redefined. The compiler refuses it for
+    // a class it can see; this refuses it for every other class.
+    const std::string selector = selStr->toStdString(ctx);
+    if (!selector.empty() && selector == constantConstructorOf(rt, ctx, r)) {
+        const BytecodeModule* code =
+            blockCodeOf(ctx, a[0]->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr));
+        std::string text = constructorRedefinitionText(selector, ownClassName(rt.bootstrap(), ctx, r));
+        if (code) text += " (line " + std::to_string(code->methodLine()) + ")";
+        throw ClassedErrorSignal("Error", text);
+    }
+    resolveLateVariables(rt, ctx, r, /*classSide=*/true, a[0], selector);
     const proto::ProtoObject* meta = ensureMetaclass(rt.bootstrap(), ctx, r);
     stampDefiningClass(rt, ctx, meta, a[0]);
     meta->setAttribute(ctx, selStr, a[0]);
@@ -906,6 +922,10 @@ const proto::ProtoObject* makeSubclassWithMixins(
     markUserDeclared(rt, ctx, sub);
     // D52: the metaclass chain mirrors the class chain, mixins included.
     ensureMetaclass(rt.bootstrap(), ctx, sub);
+    // A class that declares no variables of its own still inherits its
+    // parents' constants, and gets their generated constructor (§6.2,
+    // pre-flight ruling C9).
+    installConstantConstructor(rt, ctx, sub);
     // As makeSubclass: a caller that declares variables binds afterwards.
     if (bind) bindClassGlobal(rt, ctx, sub);
     return sub;
@@ -1062,6 +1082,10 @@ const proto::ProtoObject* addBehaviorToClass(STRuntime& rt,
     // D52: the rebuilt class gets its own metaclass, whose chain carries the
     // mixin's metaclass, and the class-side methods of the old one.
     giveOwnMetaclass(rt, ctx, oldCls, newCls);
+
+    // The new behaviour may bring constants: the generated constructor
+    // covers them, replacing the copied one (§6.2, pre-flight ruling C9).
+    installConstantConstructor(rt, ctx, newCls);
 
     // Rebind the class's global name to the rebuilt object so subsequent
     // `ClassName` PUSH_GLOBALs and `ClassName >> sel` installs see it.
@@ -2005,6 +2029,47 @@ const proto::ProtoObject* prim_Behavior_instVarModifierOf(STRuntime& rt, proto::
     return internName(ctx, modifierName(m))->asObject(ctx);
 }
 
+// aClass __constructConstants: anArray selector: aSymbol   (private)
+//   The body of a generated constructor (explicit-state spec §6.2, plan
+//   decision D-d): the class's constructor method passes its arguments and
+//   its own selector, whose keywords name the constants. A new instance, the
+//   non-nil arguments in one write, initialize, then the end-of-construction
+//   check (M13) naming the constructor.
+const proto::ProtoObject* prim_Behavior_constructConstants(STRuntime& rt, proto::ProtoContext* ctx,
+                                                           const proto::ProtoObject* r,
+                                                           const proto::ProtoObject* const* a,
+                                                           int argc) {
+    if (argc != 2) throw NativeError("__constructConstants:selector: expects 2 args");
+    const proto::ProtoString* sel = a[1] ? a[1]->asString(ctx) : nullptr;
+    if (!sel) throw NativeError("__constructConstants:selector: the selector must be a Symbol");
+    return constructWithConstants(rt, ctx, r, a[0], sel->toStdString(ctx));
+}
+
+// aClass __hasConstants   (private) → whether the class declares or inherits
+//   a constant: the one test `new` makes (plan decision D-e), the class's
+//   `__has_constants__` read through the chain.
+const proto::ProtoObject* prim_Behavior_hasConstants(STRuntime& rt, proto::ProtoContext* ctx,
+                                                     const proto::ProtoObject* r,
+                                                     const proto::ProtoObject* const*, int) {
+    return r->getAttribute(ctx, rt.bootstrap().sym.hasConstants) == PROTO_TRUE ? PROTO_TRUE
+                                                                               : PROTO_FALSE;
+}
+
+// aClass __checkConstantsOf: anInstance after: aSymbol   (private)
+//   The end-of-construction check of `new` (plan decision D-e): every
+//   constant of the class must be set on anInstance; the first unset one
+//   signals M13, an Error, naming aSymbol. Answers anInstance, or what the
+//   signal answers.
+const proto::ProtoObject* prim_Behavior_checkConstantsOf(STRuntime& rt, proto::ProtoContext* ctx,
+                                                         const proto::ProtoObject* r,
+                                                         const proto::ProtoObject* const* a,
+                                                         int argc) {
+    if (argc != 2) throw NativeError("__checkConstantsOf:after: expects 2 args");
+    const proto::ProtoString* sel = a[1] ? a[1]->asString(ctx) : nullptr;
+    if (!sel) throw NativeError("__checkConstantsOf:after: the selector must be a Symbol");
+    return checkConstantsSet(rt, ctx, r, a[0] ? a[0] : PROTO_NONE, sel->toStdString(ctx));
+}
+
 const proto::ProtoObject* prim_Object_instVarNamesString(STRuntime&, proto::ProtoContext* ctx,
                                                          const proto::ProtoObject* r,
                                                          const proto::ProtoObject* const*, int) {
@@ -2556,6 +2621,11 @@ void installObjectPrimitives(STRuntime& rt) {
                   "subclass:instanceVariableNames:constantNames:writeOnceNames:atomicNames:",
                   primitiveMethod<prim_Behavior_subclassModifiers>);
     bindPrimitive(rt, b.behaviorProto, "instVarModifierOf:", primitiveMethod<prim_Behavior_instVarModifierOf>);
+    bindPrimitive(rt, b.behaviorProto, "__constructConstants:selector:",
+                  primitiveMethod<prim_Behavior_constructConstants>);
+    bindPrimitive(rt, b.behaviorProto, "__hasConstants", primitiveMethod<prim_Behavior_hasConstants>);
+    bindPrimitive(rt, b.behaviorProto, "__checkConstantsOf:after:",
+                  primitiveMethod<prim_Behavior_checkConstantsOf>);
     bindPrimitive(rt, b.behaviorProto, "__subclass:instanceVariableNames:modifiers:uses:",
                   primitiveMethod<prim_Behavior_subclassModifiersUses>);
     bindPrimitive(rt, b.behaviorProto, "__instVarNamesString", primitiveMethod<prim_Object_instVarNamesString>);

@@ -16,6 +16,7 @@
 #include "protoCore.h"
 #include "frontend/Parser.h"
 #include "runtime/IvarModifiers.h"
+#include "runtime/BlockCode.h"
 #include "runtime/BytecodeModule.h"
 #include "runtime/Opcodes.h"
 
@@ -568,4 +569,64 @@ TEST_CASE("IvarModifiers: a constant read compiles to PUSH_CONST_INSTVAR", "[iva
     REQUIRE(cls.errors.empty());
     CHECK(countOp(*cls.code, protoST::Op::PUSH_CONST_INSTVAR) == 0);
     CHECK(countOp(*cls.code, protoST::Op::PUSH_OWN_INSTVAR) == 1);
+}
+
+// ---------------------------------------------------------------------------
+// The generated constructor (explicit-state spec §6.2, plan decision D-d,
+// pre-flight ruling C11; Task 6)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("IvarModifiers: the generated constructor is a class-side method over every constant",
+          "[ivar_modifiers]") {
+    const char* src =
+        "Object subclass: #GcAccount instanceVariableNames: 'seen' constantNames: 'number owner'.\n"
+        "GcAccount subclass: #GcSub instanceVariableNames: '' constantNames: 'extra'.\n"
+        "GcAccount subclass: #GcSame instanceVariableNames: 'more'.\n"
+        "Object subclass: #GcPlain instanceVariableNames: 'p'.\n"
+        "0\n";
+    protoST::Parser P(src);
+    auto mod = P.parseModule();
+    REQUIRE(P.errors().empty());
+    protoST::Compiler C;
+    auto bc = C.compileModule(*mod);
+    REQUIRE_FALSE(C.hasErrors());
+    protoST::STRuntime rt;
+    std::string error;
+    try {
+        rt.runTopLevel(*bc);
+    } catch (const std::exception& e) {
+        error = protoST::nativeErrorText(e);
+    }
+    REQUIRE(error.empty());
+    proto::ProtoContext* ctx = rt.rootCtx();
+    auto sym = [&](const char* s) { return proto::ProtoString::createSymbol(ctx, s); };
+    auto global = [&](const char* name) { return rt.globals()->getAttribute(ctx, sym(name)); };
+    auto recorded = [&](const char* name) {
+        const proto::ProtoObject* v = global(name)->getOwnAttributeDirect(ctx, sym("__constant_constructor__"));
+        const proto::ProtoString* s = v && v != PROTO_NONE ? v->asString(ctx) : nullptr;
+        return s ? s->toStdString(ctx) : std::string();
+    };
+    CHECK(recorded("GcAccount") == "number:owner:");
+    CHECK(recorded("GcSub") == "number:owner:extra:");
+    CHECK(recorded("GcSame") == "number:owner:");   // adds no constant: the same selector
+    CHECK(recorded("GcPlain").empty());
+
+    // The body on the metaclass: PUSH_SELF; PUSH_LOCAL 1..n; MAKE_ARRAY n;
+    // PUSH_CONST #sel; SEND_KEYWORD #__constructConstants:selector:; RETURN.
+    const proto::ProtoObject* meta = global("GcAccount")->getOwnAttributeDirect(ctx, sym("__metaclass__"));
+    REQUIRE(meta != nullptr);
+    const proto::ProtoObject* method = meta->getOwnAttributeDirect(ctx, sym("number:owner:"));
+    REQUIRE(method != nullptr);
+    const protoST::BytecodeModule* code = protoST::blockCodeOf(ctx, method->getOwnAttributeDirect(ctx, sym("__bc_ptr__")));
+    REQUIRE(code != nullptr);
+    CHECK(code->argCount() == 3);
+    using protoST::Op;
+    CHECK(opsOf(*code) == std::vector<Op>{Op::PUSH_SELF, Op::PUSH_LOCAL, Op::PUSH_LOCAL, Op::MAKE_ARRAY,
+                                          Op::PUSH_CONST, Op::SEND_KEYWORD, Op::RETURN});
+    const auto& b = code->bytes();
+    CHECK(b[3] == 1);   // PUSH_LOCAL 1: the first argument (local 0 is self)
+    CHECK(b[5] == 2);
+    CHECK(b[7] == 2);   // MAKE_ARRAY 2
+    CHECK(code->constSymbol(b[9]) == "number:owner:");
+    CHECK(code->constSymbol(b[11]) == "__constructConstants:selector:");
 }

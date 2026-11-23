@@ -337,6 +337,13 @@ public:
     void setDefiningClass(const std::string& s) { definingClass_ = s; }
     const std::string& definingClass() const { return definingClass_; }
 
+    // The source line of a method's header (`Account class >> number:
+    // owner:`), set by the compiler on a method body; an error about the
+    // method as a whole, reported when it is installed, names it. Falls back
+    // to the line of the body's first instruction when none was recorded.
+    void setHeaderLine(int line) { headerLine_ = line; }
+    int  methodLine() const { return headerLine_ > 0 ? headerLine_ : lineForPc(0); }
+
     // The identity of that class: the `__class_id__` the class object carries,
     // stamped on this module and its blocks when the method is installed
     // (`__installMethod:as:`). 0 until then. `super` finds the defining class
@@ -539,6 +546,7 @@ private:
     std::vector<std::unique_ptr<BytecodeModule>> blocks_;
     int argCount_ = 0;
     std::string definingClass_;   // BL-1: class owning this method body
+    int headerLine_ = 0;          // a method body's header line (0: none)
     mutable std::atomic<std::int64_t> definingClassId_{0};  // its __class_id__
     // Call-form signature (populated by the compiler for call-form bodies).
     bool isCallForm_   = false;

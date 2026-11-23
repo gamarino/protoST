@@ -234,6 +234,9 @@ struct Bootstrap {
         const proto::ProtoString* instanceTemplate      = nullptr;  // __instance_template__
         const proto::ProtoString* instanceTemplateEpoch = nullptr;  // __instance_template_epoch__
         const proto::ProtoString* instVarNames          = nullptr;  // __instvar_names__
+        // Whether a class declares or inherits a constant (explicit-state
+        // spec §6.2, plan decision D-a): read by every `new` (D-e).
+        const proto::ProtoString* hasConstants          = nullptr;  // __has_constants__
         // 2026-06-15: actor priority bands (high/medium/low). `__priority__`
         // is a SmallInteger 0/1/2 stored on the actor; absence means medium.
         // The scheduler reads this on schedule() to pick which of three
