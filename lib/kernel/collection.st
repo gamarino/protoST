@@ -483,10 +483,10 @@ Association >> hash
 OrderedCollection subclass: #SortedCollection instanceVariableNames: 'sortBlock'.
 
 SortedCollection class >> new
-  ^ self __checkedNew: (self sortBlock: [:a :b | a <= b]).
+  ^ self __checkedNew: (self basicNew setSortBlock: [:a :b | a <= b]).
 
 SortedCollection class >> sortBlock: aBlock
-  ^ self basicNew setSortBlock: aBlock.
+  ^ self __checkedNew: (self basicNew setSortBlock: aBlock) after: #sortBlock:.
 
 SortedCollection >> setSortBlock: aBlock
   sortBlock := aBlock.
@@ -599,7 +599,8 @@ Interval subclass: #NumericInterval instanceVariableNames: 'start stop step'.
 
 NumericInterval class >> from: aStart to: aStop by: aStep
   aStep = 0 ifTrue: [^ self error: 'the step of an Interval must not be zero'].
-  ^ self basicNew setFrom: aStart to: aStop by: aStep.
+  ^ self __checkedNew: (self basicNew setFrom: aStart to: aStop by: aStep)
+      after: #from:to:by:.
 
 NumericInterval >> setFrom: aStart to: aStop by: aStep
   start := aStart.

@@ -323,6 +323,14 @@ private:
         if (f.sp == 0) [[unlikely]] operandStackUnderflow("engine operand stack peek on empty");
         return ctx_->getAutomaticLocals()[opStackBase(f) + f.sp - 1];
     }
+    // IVAR_GROUP_END's tail: a run of `count` assignments leaves its values
+    // on the operand stack until its last write; cut them, keeping only the
+    // last value, which is the run's value.
+    PROTOST_ENGINE_INLINE void cutInstVarGroupValues(Frame& f, uint16_t count) {
+        const proto::ProtoObject* last = pop(f);
+        f.sp -= count - 1u;
+        push(f, last);
+    }
 #undef PROTOST_ENGINE_INLINE
     [[noreturn]] void operandStackOverflow(const Frame& f);
     [[noreturn]] static void operandStackUnderflow(const char* what);

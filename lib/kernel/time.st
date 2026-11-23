@@ -9,7 +9,7 @@
 Object subclass: #Duration instanceVariableNames: 'milliseconds'.
 
 Duration class >> milliseconds: anInteger
-  ^ self basicNew setMilliseconds: anInteger.
+  ^ self __checkedNew: (self basicNew setMilliseconds: anInteger) after: #milliseconds:.
 
 Duration class >> seconds: aNumber
   ^ self milliseconds: (aNumber * 1000) rounded.
@@ -64,7 +64,8 @@ Time class >> now
   ^ self hour: (f at: 4) minute: (f at: 5) second: (f at: 6).
 
 Time class >> hour: h minute: m second: s
-  ^ self basicNew setHours: h minutes: m seconds: s.
+  ^ self __checkedNew: (self basicNew setHours: h minutes: m seconds: s)
+      after: #hour:minute:second:.
 
 Time class >> millisecondClockValue
   "A monotonic clock in milliseconds, from an unspecified origin: only the
@@ -122,10 +123,12 @@ Object subclass: #Date instanceVariableNames: 'year month day weekday'.
 Date class >> today
   | f |
   f := nil __localTimeFields.
-  ^ self basicNew setYear: (f at: 1) month: (f at: 2) day: (f at: 3) weekday: (f at: 7).
+  ^ self __checkedNew: (self basicNew setYear: (f at: 1) month: (f at: 2) day: (f at: 3)
+      weekday: (f at: 7)) after: #today.
 
 Date class >> year: y month: m day: d
-  ^ self basicNew setYear: y month: m day: d weekday: nil.
+  ^ self __checkedNew: (self basicNew setYear: y month: m day: d weekday: nil)
+      after: #year:month:day:.
 
 Date >> setYear: y month: m day: d weekday: w
   year := y. month := m. day := d. weekday := w.
@@ -246,11 +249,11 @@ BlockClosure >> timeToRun
 Object subclass: #Random instanceVariableNames: 'seed'.
 
 Random class >> new
-  ^ self __checkedNew: (self seed: nil __entropySeed).
+  ^ self __checkedNew: (self basicNew setSeed: nil __entropySeed; yourself).
 
 "A new generator seeded with anInteger (Random seed: 42)."
 Random class >> seed: anInteger
-  ^ self basicNew setSeed: anInteger; yourself.
+  ^ self __checkedNew: (self basicNew setSeed: anInteger; yourself) after: #seed:.
 
 "Re-seed the receiver (Random new seed: 42) and answer it."
 Random >> seed: anInteger

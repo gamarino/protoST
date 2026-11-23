@@ -13,7 +13,8 @@ Fraction class >> numerator: n denominator: d
   den := d // g.
   den < 0 ifTrue: [num := num negated. den := den negated].
   den = 1 ifTrue: [^ num].
-  ^ self basicNew setNumerator: num denominator: den.
+  ^ self __checkedNew: (self basicNew setNumerator: num denominator: den)
+      after: #numerator:denominator:.
 
 Fraction >> setNumerator: n denominator: d
   numerator := n.

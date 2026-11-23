@@ -1877,8 +1877,9 @@ const proto::ProtoObject* prim_Object_instVarNamed(STRuntime& rt, proto::ProtoCo
 // decision D-c), by a CAS from unset; writing nil while it is unset changes
 // nothing. Once set, a constant refuses with M3 and a write-once variable
 // with M6, even for an equal value: reflection never replaces a value. An
-// atomic variable always refuses with M6. Refusals signal
-// ModificationForbidden in place and write nothing. instVarAt:put: reaches
+// atomic variable always refuses with M6. Every refusal, an immutable
+// receiver's included, signals ModificationForbidden in place (pre-flight
+// ruling C1, as the engine's stores do) and writes nothing. instVarAt:put: reaches
 // this through lib/kernel/reflection.st.
 const proto::ProtoObject* prim_Object_instVarNamedPut(STRuntime& rt, proto::ProtoContext* ctx,
                                                       const proto::ProtoObject* r,
@@ -1900,7 +1901,7 @@ const proto::ProtoObject* prim_Object_instVarNamedPut(STRuntime& rt, proto::Prot
         // object. Dropping that object would lose the write silently;
         // refuse instead.
         const proto::ProtoObject* written = r->setAttribute(ctx, key, value);
-        if (written != r) throw ClassedErrorSignal("ModificationForbidden", kImmutable);
+        if (written != r) return signalErrorNamed(rt, ctx, "ModificationForbidden", kImmutable);
         return value;
     }
     const std::string owner = articleAndClassName(rt, ctx, r);
@@ -1932,7 +1933,7 @@ const proto::ProtoObject* prim_Object_instVarNamedPut(STRuntime& rt, proto::Prot
         return value;
     // Neither modifier lets a set variable become unset again, so a CAS that
     // fails on an unset variable met an immutable receiver.
-    if (isUnset()) throw ClassedErrorSignal("ModificationForbidden", kImmutable);
+    if (isUnset()) return signalErrorNamed(rt, ctx, "ModificationForbidden", kImmutable);
     return refuseSet();
 }
 

@@ -106,17 +106,24 @@ Object class >> new
   self __hasConstants ifTrue: [^ self __checkConstantsOf: instance after: #new].
   ^ instance.
 
-"The end of a class-side new that does not reach Object class >> new
- (SortedCollection, WriteStream, Random, UUID): it sends initialize, as
- Object class >> new does, then runs the end-of-construction check. Answers
- anInstance, or nothing when a constant of the receiver is unset (M13, spec
- §6.2). The kernel classes that use it define no initialize of their own, so
- for them the send runs Object >> initialize and changes nothing; a user
- subclass's initialize runs, and may set its constants."
-Object class >> __checkedNew: anInstance
+"The end of a kernel class-side constructor that does not reach Object
+ class >> new (SortedCollection new and sortBlock:, WriteStream on:, Random
+ seed:, Point x:y:, ...): the constructor makes anInstance with basicNew and
+ its kernel setter, then this sends initialize once, as Object class >> new
+ does, and runs the end-of-construction check, naming aSelector (M13, spec
+ §6.2, which makes no exception for kernel constructors). Answers anInstance,
+ or nothing when a constant of the receiver is unset. The kernel classes that
+ use it define no initialize of their own, so for them the send runs
+ Object >> initialize and changes nothing, and their setup runs once; a user
+ subclass's initialize runs after that setup, and may set its constants."
+Object class >> __checkedNew: anInstance after: aSelector
   anInstance initialize.
-  self __hasConstants ifTrue: [^ self __checkConstantsOf: anInstance after: #new].
+  self __hasConstants ifTrue: [^ self __checkConstantsOf: anInstance after: aSelector].
   ^ anInstance.
+
+"The same, for a class-side new."
+Object class >> __checkedNew: anInstance
+  ^ self __checkedNew: anInstance after: #new.
 
 Object >> initialize
   ^ self.

@@ -3,7 +3,7 @@
 Object subclass: #Point instanceVariableNames: 'x y'.
 
 Point class >> x: ax y: ay
-  ^ self basicNew setX: ax y: ay.
+  ^ self __checkedNew: (self basicNew setX: ax y: ay) after: #x:y:.
 
 Point >> setX: ax y: ay
   x := ax.

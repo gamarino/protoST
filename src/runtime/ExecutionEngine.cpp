@@ -2979,14 +2979,10 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     if (self->setAttributes(ctx, e.count, names, values) != self) {
                         // Nothing was written. The refusal signals in
                         // place; should it return, the frame is
-                        // re-acquired and the run's values are cut as
-                        // below.
+                        // re-acquired before the run's values are cut.
                         const uint16_t count = e.count;
                         refuseImmutableStore(ctx);
-                        Frame& g = frames_.back();
-                        const proto::ProtoObject* last = pop(g);
-                        g.sp -= count - 1u;
-                        push(g, last);
+                        cutInstVarGroupValues(frames_.back(), count);
                         DISPATCH_DIRECT();
                         break;
                     }
@@ -2995,16 +2991,11 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // (an immutable receiver), so the frame is re-acquired.
                     const uint16_t count = e.count;
                     storeInstVar(ctx, f, e.nameConst, peek(f));
-                    Frame& g = frames_.back();
-                    const proto::ProtoObject* last = pop(g);
-                    g.sp -= count - 1u;
-                    push(g, last);
+                    cutInstVarGroupValues(frames_.back(), count);
                     DISPATCH_DIRECT();
                     break;
                 }
-                const proto::ProtoObject* last = pop(f);
-                f.sp -= e.count - 1u;
-                push(f, last);
+                cutInstVarGroupValues(f, e.count);
                 DISPATCH_DIRECT();
                 break;
             }
