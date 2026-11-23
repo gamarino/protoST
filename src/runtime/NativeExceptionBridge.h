@@ -112,6 +112,11 @@ std::string describeExceptionValue(proto::ProtoContext* ctx, const proto::ProtoO
 // (a plain Error if there is none), carrying `message` (exception_prims.cpp).
 const proto::ProtoObject* signalErrorNamed(STRuntime& rt, proto::ProtoContext* ctx,
                                            const char* className, std::string_view message);
+// The same, with the Integer `value` in the instance variable `ivar` of the
+// new instance (a ClassedErrorSignal that carries one).
+const proto::ProtoObject* signalErrorNamed(STRuntime& rt, proto::ProtoContext* ctx,
+                                           const char* className, std::string_view message,
+                                           const char* ivar, long long value);
 bool isExceptionClassObject(STRuntime& rt, proto::ProtoContext* ctx,
                             const proto::ProtoObject* obj);
 
@@ -182,7 +187,10 @@ const proto::ProtoObject* translateNativeException(STRuntime& rt,
         signalled = std::current_exception();
     }
     // --- a genuine native error: translate into a catchable protoST Error --
-    catch (const ClassedErrorSignal& e) { return signalErrorNamed(rt, ctx, e.className(), e.message()); }
+    catch (const ClassedErrorSignal& e) {
+        if (e.ivar()) return signalErrorNamed(rt, ctx, e.className(), e.message(), e.ivar(), e.ivarValue());
+        return signalErrorNamed(rt, ctx, e.className(), e.message());
+    }
     catch (const std::exception& e)     { return signalNativeError(rt, ctx, nativeErrorText(e)); }
     catch (...)                         { return signalNativeError(rt, ctx, "native exception"); }
     if (signalled) return signalProtoException(rt, ctx, signalledValue, std::move(signalled));

@@ -2514,7 +2514,20 @@ private:
 
 } // namespace
 
-bool STRuntime::drainOne(proto::ProtoContext* ctx) {
+bool STRuntime::drainOne(proto::ProtoContext* ctx) { return drainTurn(ctx, false); }
+
+bool STRuntime::helpOne(proto::ProtoContext* ctx) { return drainTurn(ctx, true); }
+
+// One turn. `oneMessage` (helpOne, S48) ends the turn after one message, or
+// after the resumption of a suspended method: a waiter that helps (waitHelping)
+// checks its own Future only between turns, and a turn that drained the whole
+// mailbox never ended while the actor kept sending itself messages, which
+// buried the waiter for good (and, with one worker, stopped the program,
+// timers included). The messages the turn leaves stay in FIFO order: the
+// cursor parks the rest of its batch in `__pending__`, which the next turn
+// reads before the queue, and finishDrain re-queues the actor (mailboxHasWork
+// counts `__pending__`).
+bool STRuntime::drainTurn(proto::ProtoContext* ctx, bool oneMessage) {
     // A queued task (a timer settle, a resume) first: it is short, and a
     // deadline should not wait behind actor turns.
     if (runOneTask(ctx)) return true;
@@ -2722,13 +2735,15 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
                     rejectFutureFromDrain(*this, ctx, msgFut, err);
                 }
             }
-            // Fall through to per-turn drain loop.
+            // Fall through to per-turn drain loop, unless the turn is bounded
+            // (helpOne): the resumed method was its one message.
+            if (oneMessage) return true;
         }
     }
 
     // F6 v5 (2026-05-23): per-turn drain loop. Process ALL pending messages
     // for this actor in one turn, instead of one-message-per-turn with
-    // re-enqueue churn. Per-actor FIFO is trivially preserved — we own the
+    // re-enqueue churn; a bounded turn (helpOne, S48) stops after one. Per-actor FIFO is trivially preserved — we own the
     // actor (popped from ready queue, __sched__ marked), one worker per actor
     // at a time, and the mailbox itself is FIFO ProtoList. Only FutureYield
     // breaks the loop (actor stays suspended); other exceptions reject the
@@ -2741,7 +2756,10 @@ bool STRuntime::drainOne(proto::ProtoContext* ctx) {
     // mailboxHasWork whether the actor should be re-queued.
     MailboxCursor cursor(*this, ctx, actor);
 
-    for (;;) {
+    for (bool first = true;; first = false) {
+        // A bounded turn (helpOne) takes one message. Checked before
+        // cursor.next(), which consumes the message it answers.
+        if (oneMessage && !first) break;
         // The next FIFO message; exit the drain when there is none.
         const proto::ProtoObject* msg = cursor.next();
         if (!msg) break;

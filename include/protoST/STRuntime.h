@@ -151,6 +151,15 @@ public:
     // frame context passed here would have its locals overwritten by protoST's
     // frames and pins (KNOWN_ISSUES K18).
     bool drainOne(proto::ProtoContext* ctx);   // returns true if a message was processed
+    // S48: the bounded form a wait that helps (waitHelping) runs: a queued
+    // task, or ONE message of one ready actor (or the resumption of one
+    // suspended method), then it returns, so the waiter checks its own Future
+    // after every message. drainOne, run by a worker that waits for nothing,
+    // runs the popped actor's whole mailbox in one turn, including messages
+    // the actor sends itself meanwhile (F6 v5). Order and the single runner
+    // are the same in both: the messages left go to `__pending__`, ahead of
+    // the queue, and finishDrain re-queues the actor. Same K18 note.
+    bool helpOne(proto::ProtoContext* ctx);
     size_t scheduledCount() const;              // size of ready queue (for testing)
 
     // F6 v2 T2: entry called by the managed worker ProtoThread spawned in the
@@ -536,6 +545,8 @@ private:
     // decision atomic against a concurrent SEND / future-settle with no lock.
     void finishDrain(proto::ProtoContext* ctx, const proto::ProtoObject* actor,
                      bool suspended);
+    // drainOne (oneMessage false) and helpOne (oneMessage true).
+    bool drainTurn(proto::ProtoContext* ctx, bool oneMessage);
 
     struct Impl;
     const std::uint64_t serial_ = nextSerial();

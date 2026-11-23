@@ -2154,7 +2154,16 @@ server ping wait]`, the block of `on:do:` or `ensure:`, a `thenDo:` callback
 run on a worker) cannot suspend the actor: the primitive's own state between
 the method and the block is not part of what a suspension saves. Such a wait
 **blocks its worker** instead, and while it waits the worker runs other
-actors' messages on top of it, so the program keeps going. Those messages can
+actors' messages on top of it, so the program keeps going. It runs one message
+at a time (or one queued task, such as a timer's settle) and checks its own
+Future after each, so the wait ends as soon as its Future settles and the
+message on top of it returns, even under an actor that keeps sending itself
+messages (0.16.1; before, one such turn ran the actor's whole mailbox, the
+messages it sent itself meanwhile included, and could bury the wait for
+good). The actor's remaining messages keep their order and wait for its next
+turn, which only one worker runs at a time. A worker that is not waiting
+runs, in one turn, every message of the actor it picked, including those the
+actor sends itself during the turn (STATUS D59). Those messages can
 wait the same way; one worker holds at most 16 such nested waits (each keeps
 its frames on the worker's stack). A worker at that limit runs no more actor
 messages and counts as a blocked worker: the pool adds a worker for the other
@@ -2769,7 +2778,7 @@ Common rules:
 | `FileAlreadyExists` | `FileSystemError` | `createDirectory` on an existing path |
 | `NetworkError` | `Error` | a socket, TLS or HTTP failure not covered below |
 | `ConnectionRefused` | `NetworkError` | the connection is refused |
-| `ConnectionTimedOut` | `NetworkError` | a connect, read or write exceeds its timeout |
+| `ConnectionTimedOut` | `NetworkError` | a connect, read or write exceeds its timeout; for a write, `bytesWritten` answers how many leading bytes went out (nil for a connect or a read) |
 | `NameLookupFailure` | `NetworkError` | the host name does not resolve |
 | `BodyTooLarge` | `NetworkError` | an HTTP body exceeds the limit it is read with (`HTTPServer maxBodySize:`) |
 | `LineTooLong` | `Error` | `nextLineMax:` meets a longer line |
@@ -2801,8 +2810,18 @@ and sockets (§12.11.5) are `IOStream`s too.
 | `lf`, `cr`, `nl` | write a line feed (all three) |
 | `crlf`, `space`, `tab` | write `CR LF`, a space, a tab |
 | `flush` | flush buffered output (standard output is buffered and flushed at each line end) |
-| `timeout: ms` | later reads and writes signal `ConnectionTimedOut` after `ms` milliseconds (nil: no limit) |
+| `timeout: ms` | later reads and writes signal `ConnectionTimedOut` after `ms` milliseconds (nil: no limit): a read when one wait for input lasts that long, a write when the whole write does, however large (0.16.1) |
 | `close`, `isClosed` | close the descriptor (idempotent) |
+
+A write that times out has written exactly `bytesWritten` leading bytes of
+its argument (of its UTF-8 encoding, for a String), and no others. On a
+socket without TLS the stream goes on after them: writing the rest, `rest :=
+bytes copyFrom: e bytesWritten + 1 to: bytes size`, continues it with
+nothing lost or repeated. A TLS socket refuses every later write after a
+failed one (`NetworkError`), because the TLS record in progress can only be
+finished with the same bytes: close it. Before 0.16.1 (protoIO 0.7.1) a large
+write to a peer that stopped reading could wait without limit, whatever the
+timeout.
 
 Several actors may share one stream: reads are serialised (each line goes to
 exactly one reader) and so are writes, independently, so one actor can read a
