@@ -1,7 +1,8 @@
 #pragma once
 // The state messages of explicit-state spec §6.4 and §6.5:
 // compareAndSet:from:to:, update:with: and the deprecated alias
-// setInstVar:from:to: (state_prims.cpp).
+// setInstVar:from:to:, and the probe instVarIsSet: of §6.8
+// (state_prims.cpp).
 
 namespace proto { class ProtoContext; class ProtoObject; }
 

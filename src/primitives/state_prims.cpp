@@ -28,6 +28,7 @@ extern const proto::ProtoObject* invokeBlock(STRuntime& rt, proto::ProtoContext*
 //   anObject compareAndSet: aName from: expected to: new   → Boolean
 //   anObject update: aName with: aBlock                     → the installed value
 //   anObject setInstVar: aName from: expected to: new       (deprecated alias)
+//   anObject instVarIsSet: aName                            → Boolean (§6.8)
 //
 // Every object understands them. They write the receiver's OWN attribute
 // `_iv_<name>` (never the chain) with protoCore's attribute CAS, as the Atom
@@ -247,6 +248,46 @@ const proto::ProtoObject* prim_Object_updateWith(STRuntime& rt, proto::ProtoCont
     }
 }
 
+// anObject instVarIsSet: aName
+//   Whether the variable is set (spec §6.8): the receiver's OWN attribute
+//   `_iv_<name>` holds a value other than nil. Never the chain (Task 5's
+//   fix-round ruling): a same-named class-instance variable holding a value
+//   must not answer for an instance's unset constant, so the probe agrees
+//   with every read path (an unset constant reads as M14, a set one answers
+//   its value). It never reads the variable as a value and never signals for
+//   a declared name. The name is matched as the other state messages match
+//   it: the receiver's declared instance variables, own and inherited,
+//   mixins included, or a class object's class-instance variables (ruling
+//   C10). An undeclared name, or an argument that is not a String or a
+//   Symbol, signals M15 in place (ruling C1).
+const proto::ProtoObject* prim_Object_instVarIsSet(STRuntime& rt, proto::ProtoContext* ctx,
+                                                   const proto::ProtoObject* r,
+                                                   const proto::ProtoObject* const* a, int argc) {
+    static const char* const kSelector = "instVarIsSet:";
+    if (argc != 1) throw NativeError("instVarIsSet: expects 1 argument");
+    const proto::ProtoObject* nameArg = a[0] ? a[0] : PROTO_NONE;
+    const proto::ProtoString* nameStr = nameArg != PROTO_NONE ? nameArg->asString(ctx) : nullptr;
+    if (!nameStr) {
+        // M15, the non-name form.
+        return signalErrorNamed(rt, ctx, "Error",
+            std::string(kSelector) + " expects a String or Symbol, not "
+            + formatValue(rt, ctx, nameArg));
+    }
+    const std::string name = nameStr->toStdString(ctx);
+    bool declared = false;
+    receiverModifierOf(rt, ctx, r, name, &declared);
+    if (!declared) {
+        // M15
+        return signalErrorNamed(rt, ctx, "Error",
+            std::string(kSelector) + " " + receiverPhrase(rt, ctx, r)
+            + " has no instance variable '" + name + "'");
+    }
+    // A declared name implies a receiver that holds attributes.
+    const proto::ProtoString* key = proto::ProtoString::createSymbol(ctx, ("_iv_" + name).c_str());
+    const proto::ProtoObject* v = r->getOwnAttributeDirect(ctx, key);
+    return (v && v != PROTO_NONE) ? PROTO_TRUE : PROTO_FALSE;
+}
+
 } // anon
 
 bool insideUpdateBlock() { return tUpdateBlockDepth > 0; }
@@ -270,6 +311,8 @@ void installStatePrimitives(STRuntime& rt) {
                   primitiveMethod<prim_Object_updateWith>);
     bindPrimitive(rt, b.objectProto, "setInstVar:from:to:",
                   primitiveMethod<prim_Object_setInstVarFromTo>);
+    bindPrimitive(rt, b.objectProto, "instVarIsSet:",
+                  primitiveMethod<prim_Object_instVarIsSet>);
 }
 
 } // namespace protoST
