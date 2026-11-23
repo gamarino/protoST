@@ -6,7 +6,9 @@
    a) ¿qué variables viven en el diccionario de capturadas
       (MAKE_CAPTURED / PUSH_CAPTURED) y cuáles en el frame (PUSH_LOCAL)?
    b) ¿qué bloques se inlinean (no aparece PUSH_BLOCK) y cuáles no?
-   c) ¿dónde aparecen BIN_INT_ADD, IVAR_GROUP y ASSERT_BOOL_OR_DNU?
+   c) ¿dónde aparecen BIN_INT_ADD, BIN_INT_MUL, IVAR_GROUP y
+      JUMP_IF_NOT_BOOL? ¿Qué corre si el receptor de un ifTrue:ifFalse:
+      inlineado no es un Boolean (busquen DEOPT_ENTER)?
    d) en #contadores: ¿los tres bloques comparten una variable o cada uno
       tiene la suya?"
 

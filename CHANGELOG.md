@@ -3,6 +3,21 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
+## Unreleased
+
+### Documentation
+
+- **FAST workshop of 2026-12-03** (Spanish): the workshop material of
+  `docs/talks/2026-11-12-fas-workshop/` moved to
+  `docs/talks/2026-12-03-fas-workshop/` and was brought up to 0.16.1: the
+  deck, the guide (timing for a two-to-three-hour workshop shared with a
+  protoBaseST session, what changed from 0.9.0 to 0.16.1, the S48 lesson, and
+  the explicit-state proposal of PR #25 marked as a proposal under review), and
+  exercise 7, whose `outer` case now shows Pharo's `outer` (D7, closed in
+  0.10.0). `verificar.sh` passes on 0.16.1. The 0.16.1 package still installs
+  the earlier copy under `<datadir>/protoST/talks/2026-11-12-fas-workshop/`,
+  whose exercise 7 expects the pre-0.10.0 `outer`.
+
 ## 0.16.1 — 2026-11-23
 
 **Requires protoCore 3.6.1**, as 0.16.0 did, and **protoIO 0.7.1** at build
@@ -1677,7 +1692,8 @@ This release brings a guest mode in another runtime's ProtoSpace, the Debug Adap
 - **CI: the macOS job runs on `macos-15`** (arm64), since GitHub retires the
   macOS 14 images on 2026-11-02.
 - **FAST workshop material** (2026-11-12): slides, guide and exercises under
-  `docs/talks/2026-11-12-fas-workshop/` (Spanish).
+  `docs/talks/2026-11-12-fas-workshop/` (Spanish; moved to
+  `docs/talks/2026-12-03-fas-workshop/` for the 2026-12-03 workshop).
 
 - **Four defects found while preparing the FAST workshop, fixed** (STATUS S32-S35).
   (1) A call-form `name(` needs its `(` right after the name: a method ending in
