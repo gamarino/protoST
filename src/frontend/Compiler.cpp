@@ -532,6 +532,26 @@ static void constantsThroughChain(
     }
 }
 
+// Whether `className` or a class on its chain was composed with addBehavior:
+// (ClassInfo::behaviorAdded): its constants are then not all in view.
+static bool chainHasAddedBehavior(
+        const std::unordered_map<std::string, Compiler::ClassInfo>& classes,
+        const std::string& className) {
+    std::unordered_set<std::string> seen;
+    std::vector<std::string> todo{className};
+    while (!todo.empty()) {
+        const std::string cur = todo.back();
+        todo.pop_back();
+        if (cur.empty() || !seen.insert(cur).second) continue;
+        auto it = classes.find(cur);
+        if (it == classes.end()) continue;
+        if (it->second.behaviorAdded) return true;
+        todo.push_back(it->second.superclassName);
+        for (const auto& m : it->second.mixinNames) todo.push_back(m);
+    }
+    return false;
+}
+
 IvarModifier Compiler::modifierThroughChain(const std::string& cls, const std::string& name) const {
     IvarModifier out = IvarModifier::Plain;
     std::unordered_set<std::string> seen;
@@ -569,6 +589,12 @@ void Compiler::publishToSharedClassRegistry(const Node& module) {
         if (!topPtr || topPtr->kind != NodeKind::ClassDecl) continue;
         auto it = classes_.find(topPtr->text);
         if (it != classes_.end()) classRegistry()[it->first] = it->second;
+    }
+    // A class of another module that this one composes keeps the mark.
+    for (const auto& [name, info] : classes_) {
+        if (!info.behaviorAdded) continue;
+        auto it = classRegistry().find(name);
+        if (it != classRegistry().end()) it->second.behaviorAdded = true;
     }
 }
 
@@ -667,7 +693,22 @@ void Compiler::collectClasses(const Node& module) {
             sup = it->second.superclassName;
         }
     }
+    // A class this module composes at run time (`Name addBehavior: …`,
+    // `Name addParent: …`) gains parents the compiler does not see, and with
+    // them constants: its generated constructor's selector is known only at
+    // run time, so the compile-time M9 leaves it to the install-time check.
+    markBehaviorAdded(module);
     publishToSharedClassRegistry(module);
+}
+
+void Compiler::markBehaviorAdded(const Node& n) {
+    if (n.kind == NodeKind::KeywordSend && (n.text == "addBehavior:" || n.text == "addParent:")
+        && !n.children.empty() && n.children[0] && n.children[0]->kind == NodeKind::Identifier) {
+        auto it = classes_.find(n.children[0]->text);
+        if (it != classes_.end()) it->second.behaviorAdded = true;
+    }
+    for (const auto& c : n.children)
+        if (c) markBehaviorAdded(*c);
 }
 
 std::unique_ptr<BytecodeModule> Compiler::compileModule(const Node& mod) {
@@ -886,7 +927,8 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             std::vector<std::string> constants;
             std::unordered_set<std::string> seen;
             constantsThroughChain(classes_, n.text, constants, seen);
-            if (!constants.empty() && n.stringList[0] == constructorSelectorFor(constants))
+            if (!constants.empty() && !chainHasAddedBehavior(classes_, n.text)
+                && n.stringList[0] == constructorSelectorFor(constants))
                 error(constructorRedefinitionText(n.stringList[0], n.text)
                       + " (line " + std::to_string(headerLine) + ")");
         }

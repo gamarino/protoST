@@ -246,7 +246,7 @@ BlockClosure >> timeToRun
 Object subclass: #Random instanceVariableNames: 'seed'.
 
 Random class >> new
-  ^ self seed: nil __entropySeed.
+  ^ self __checkedNew: (self seed: nil __entropySeed).
 
 "A new generator seeded with anInteger (Random seed: 42)."
 Random class >> seed: anInteger

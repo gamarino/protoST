@@ -11,7 +11,7 @@
 Object subclass: #WriteStream instanceVariableNames: 'buffer onString onBytes chunks'.
 
 WriteStream class >> new
-  ^ self basicNew setOn: #().
+  ^ self __checkedNew: (self basicNew setOn: #()).
 
 WriteStream class >> on: aCollection
   ^ self basicNew setOn: aCollection.

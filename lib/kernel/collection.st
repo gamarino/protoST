@@ -483,7 +483,7 @@ Association >> hash
 OrderedCollection subclass: #SortedCollection instanceVariableNames: 'sortBlock'.
 
 SortedCollection class >> new
-  ^ self sortBlock: [:a :b | a <= b].
+  ^ self __checkedNew: (self sortBlock: [:a :b | a <= b]).
 
 SortedCollection class >> sortBlock: aBlock
   ^ self basicNew setSortBlock: aBlock.

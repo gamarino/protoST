@@ -576,6 +576,28 @@ TEST_CASE("IvarModifiers: a constant read compiles to PUSH_CONST_INSTVAR", "[iva
 // pre-flight ruling C11; Task 6)
 // ---------------------------------------------------------------------------
 
+namespace {
+
+// Each instruction of `m` as (opcode, operand), EXTEND prefixes folded in.
+std::vector<std::pair<protoST::Op, unsigned int>> instructionsOf(const protoST::BytecodeModule& m) {
+    std::vector<std::pair<protoST::Op, unsigned int>> out;
+    const auto& b = m.bytes();
+    for (std::size_t pc = 0; pc + 1 < b.size();) {
+        auto op = static_cast<protoST::Op>(b[pc]);
+        unsigned int arg = b[pc + 1];
+        pc += protoST::kInstrSize;
+        while (op == protoST::Op::EXTEND && pc + 1 < b.size()) {
+            op = static_cast<protoST::Op>(b[pc]);
+            arg = (arg << 8) | b[pc + 1];
+            pc += protoST::kInstrSize;
+        }
+        out.emplace_back(op, arg);
+    }
+    return out;
+}
+
+} // namespace
+
 TEST_CASE("IvarModifiers: the generated constructor is a class-side method over every constant",
           "[ivar_modifiers]") {
     const char* src =
@@ -601,32 +623,46 @@ TEST_CASE("IvarModifiers: the generated constructor is a class-side method over 
     proto::ProtoContext* ctx = rt.rootCtx();
     auto sym = [&](const char* s) { return proto::ProtoString::createSymbol(ctx, s); };
     auto global = [&](const char* name) { return rt.globals()->getAttribute(ctx, sym(name)); };
-    auto recorded = [&](const char* name) {
-        const proto::ProtoObject* v = global(name)->getOwnAttributeDirect(ctx, sym("__constant_constructor__"));
+    auto text = [&](const proto::ProtoObject* v) {
         const proto::ProtoString* s = v && v != PROTO_NONE ? v->asString(ctx) : nullptr;
         return s ? s->toStdString(ctx) : std::string();
     };
+    auto recorded = [&](const char* name) {
+        return text(global(name)->getOwnAttributeDirect(ctx, sym("__constant_constructor__")));
+    };
     CHECK(recorded("GcAccount") == "number:owner:");
     CHECK(recorded("GcSub") == "number:owner:extra:");
-    CHECK(recorded("GcSame") == "number:owner:");   // adds no constant: the same selector
+    // A subclass that adds no constant owns no copy: it inherits the
+    // superclass's constructor and record (Task 6 ruling I2).
+    CHECK(recorded("GcSame").empty());
+    CHECK(text(global("GcSame")->getAttribute(ctx, sym("__constant_constructor__"))) == "number:owner:");
     CHECK(recorded("GcPlain").empty());
 
-    // The body on the metaclass: PUSH_SELF; PUSH_LOCAL 1..n; MAKE_ARRAY n;
-    // PUSH_CONST #sel; SEND_KEYWORD #__constructConstants:selector:; RETURN.
     const proto::ProtoObject* meta = global("GcAccount")->getOwnAttributeDirect(ctx, sym("__metaclass__"));
     REQUIRE(meta != nullptr);
     const proto::ProtoObject* method = meta->getOwnAttributeDirect(ctx, sym("number:owner:"));
     REQUIRE(method != nullptr);
-    const protoST::BytecodeModule* code = protoST::blockCodeOf(ctx, method->getOwnAttributeDirect(ctx, sym("__bc_ptr__")));
+    const protoST::BytecodeModule* code =
+        protoST::blockCodeOf(ctx, method->getOwnAttributeDirect(ctx, sym("__bc_ptr__")));
     REQUIRE(code != nullptr);
     CHECK(code->argCount() == 3);
+    // The body (D-d as amended by the Task 6 ruling on concern 1; C11: local
+    // 0 is self, the arguments are locals 1..n), pinned by opcode and operand.
     using protoST::Op;
-    CHECK(opsOf(*code) == std::vector<Op>{Op::PUSH_SELF, Op::PUSH_LOCAL, Op::PUSH_LOCAL, Op::MAKE_ARRAY,
-                                          Op::PUSH_CONST, Op::SEND_KEYWORD, Op::RETURN});
-    const auto& b = code->bytes();
-    CHECK(b[3] == 1);   // PUSH_LOCAL 1: the first argument (local 0 is self)
-    CHECK(b[5] == 2);
-    CHECK(b[7] == 2);   // MAKE_ARRAY 2
-    CHECK(code->constSymbol(b[9]) == "number:owner:");
-    CHECK(code->constSymbol(b[11]) == "__constructConstants:selector:");
+    const auto ins = instructionsOf(*code);
+    std::vector<Op> ops;
+    for (const auto& i : ins) ops.push_back(i.first);
+    CHECK(ops == std::vector<Op>{Op::PUSH_SELF, Op::PUSH_SELF, Op::PUSH_LOCAL, Op::PUSH_LOCAL,
+                                 Op::MAKE_ARRAY, Op::PUSH_CONST, Op::SEND_KEYWORD, Op::DUP,
+                                 Op::SEND_UNARY, Op::POP, Op::PUSH_CONST, Op::SEND_KEYWORD,
+                                 Op::RETURN});
+    REQUIRE(ins.size() == 13);
+    CHECK(ins[2].second == 1);
+    CHECK(ins[3].second == 2);
+    CHECK(ins[4].second == 2);
+    CHECK(code->constSymbol(ins[5].second) == "number:owner:");
+    CHECK(code->constSymbol(ins[6].second) == "__constructConstants:selector:");
+    CHECK(code->constSymbol(ins[8].second) == "initialize");
+    CHECK(code->constSymbol(ins[10].second) == "number:owner:");
+    CHECK(code->constSymbol(ins[11].second) == "__checkConstantsOf:after:");
 }

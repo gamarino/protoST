@@ -71,11 +71,11 @@ UUID class >> fromString: aString
 UUID class >> new
   | random |
   random := ByteArray randomBytes: 16.
-  ^ self basicNew _setBytes: (random
+  ^ self __checkedNew: (self basicNew _setBytes: (random
       copyReplaceFrom: 7 to: 9
       with: { ((random at: 7) bitAnd: 16r0F) bitOr: 16r40.
               random at: 8.
-              ((random at: 9) bitAnd: 16r3F) bitOr: 16r80 }).
+              ((random at: 9) bitAnd: 16r3F) bitOr: 16r80 })).
 
 UUID class >> _isHexDigit: aCode
   ^ (aCode between: 48 and: 57) or: [(aCode between: 65 and: 70) or: [aCode between: 97 and: 102]].

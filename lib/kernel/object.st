@@ -103,8 +103,15 @@ Object class >> new
   | instance |
   instance := self basicNew.
   instance initialize.
-  self __hasConstants ifTrue: [self __checkConstantsOf: instance after: #new].
+  self __hasConstants ifTrue: [^ self __checkConstantsOf: instance after: #new].
   ^ instance.
+
+"The end-of-construction check for a class-side new that does not reach
+ Object class >> new (SortedCollection, WriteStream, Random, ...): anInstance,
+ or nothing when a constant of the receiver is unset (M13, spec §6.2)."
+Object class >> __checkedNew: anInstance
+  self __hasConstants ifTrue: [^ self __checkConstantsOf: anInstance after: #new].
+  ^ anInstance.
 
 Object >> initialize
   ^ self.

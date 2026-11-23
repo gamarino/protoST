@@ -77,6 +77,11 @@ public:
         // The modifiers of the class's OWN non-plain instance variables
         // (explicit-state spec §6.1); a variable not listed is plain.
         std::unordered_map<std::string, IvarModifier> modifiers;
+        // The class is composed at run time by `addBehavior:` / `addParent:`
+        // (in this module or an earlier one): parents, and constants, the
+        // compiler does not see. The compile-time M9 skips it; the
+        // install-time check judges it (Task 6 ruling m1).
+        bool behaviorAdded = false;
     };
 
     // S37: classes the runtime builds in C++ (Object, Error, Collection, ...).
@@ -267,6 +272,7 @@ private:
     bool assignsReplGlobalInBlock(const std::string& name) const;
 
     void   collectClasses(const ast::Node& module);
+    void   markBehaviorAdded(const ast::Node& n);
     void   emitExpr(BytecodeModule& m, const ast::Node& n);
     void   emitStatement(BytecodeModule& m, const ast::Node& n);
     // Emits the statements stmts[from..end) as a body does: each statement,

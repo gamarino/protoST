@@ -82,4 +82,11 @@ IvarModifier receiverModifierOf(STRuntime&, proto::ProtoContext*, const proto::P
 std::vector<std::string> constantNamesOf(STRuntime&, proto::ProtoContext*,
                                          const proto::ProtoObject* cls);
 
+// The same, with `ownConstants` standing for the class's own constants (in
+// source order) instead of its records: the list a declaration that is about
+// to be recorded would give, so it can be checked before anything changes.
+std::vector<std::string> constantNamesOf(STRuntime&, proto::ProtoContext*,
+                                         const proto::ProtoObject* cls,
+                                         const std::vector<std::string>& ownConstants);
+
 } // namespace protoST

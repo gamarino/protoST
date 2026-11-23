@@ -49,7 +49,8 @@ bool isClassObject(const Bootstrap& b, proto::ProtoContext* ctx, const proto::Pr
 }
 
 void collectConstants(const Bootstrap& b, proto::ProtoContext* ctx, const proto::ProtoObject* cls,
-                      std::vector<std::string>& out, std::unordered_set<std::string>& seen) {
+                      std::vector<std::string>& out, std::unordered_set<std::string>& seen,
+                      const std::vector<std::string>* ownConstants = nullptr) {
     // The direct parents, in resolution order: the primary superclass, then
     // each mixin. getParents is the flattened chain [primary, its ancestors…,
     // mixin0, its ancestors…, …]; a class that is an ancestor of a parent
@@ -68,6 +69,11 @@ void collectConstants(const Bootstrap& b, proto::ProtoContext* ctx, const proto:
         }
     }
     for (const proto::ProtoObject* d : directs) collectConstants(b, ctx, d, out, seen);
+    if (ownConstants) {
+        for (const std::string& name : *ownConstants)
+            if (seen.insert(name).second) out.push_back(name);
+        return;
+    }
     for (const ModifiedIvar& e : ownModifiersOf(ctx, cls))
         if (e.modifier == IvarModifier::Constant && seen.insert(e.name).second) out.push_back(e.name);
 }
@@ -146,6 +152,16 @@ std::vector<std::string> constantNamesOf(STRuntime& rt, proto::ProtoContext* ctx
     if (!isChainedObject(ctx, cls)) return out;
     std::unordered_set<std::string> seen;
     collectConstants(rt.bootstrap(), ctx, cls, out, seen);
+    return out;
+}
+
+std::vector<std::string> constantNamesOf(STRuntime& rt, proto::ProtoContext* ctx,
+                                         const proto::ProtoObject* cls,
+                                         const std::vector<std::string>& ownConstants) {
+    std::vector<std::string> out;
+    if (!isChainedObject(ctx, cls)) return ownConstants;
+    std::unordered_set<std::string> seen;
+    collectConstants(rt.bootstrap(), ctx, cls, out, seen, &ownConstants);
     return out;
 }
 

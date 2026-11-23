@@ -590,6 +590,13 @@ void declareInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
         }
         // M10: the parents agree on the modifiers of the names they share.
         checkModifierConflicts(rt, ctx, cls);
+        // M9: the generated constructor this declaration gives the class must
+        // not take a selector a user method of the class already holds
+        // (Task 6 ruling I1). Checked before anything is recorded.
+        std::vector<std::string> ownConstants;
+        for (std::size_t i = 0; i < modifiers.size(); ++i)
+            if (modifiers[i] == IvarModifier::Constant) ownConstants.push_back(declared[i]);
+        checkConstantConstructorFree(rt, ctx, cls, ownConstants);
     }
     auto* mcls = const_cast<proto::ProtoObject*>(cls);
     mcls->setAttribute(ctx, ivKey, names);
@@ -609,7 +616,7 @@ void declareInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
         else
             mcls->removeAttribute(ctx, hasConstKey);
         // The generated constructor over every constant, own and inherited
-        // (§6.2, D-d); a subclass that adds none gets the same selector.
+        // (§6.2, D-d); a subclass that adds none inherits its superclass's.
         installConstantConstructor(rt, ctx, cls);
     }
     // Every instance template built before this declaration may now lack a
@@ -1084,8 +1091,13 @@ const proto::ProtoObject* addBehaviorToClass(STRuntime& rt,
     giveOwnMetaclass(rt, ctx, oldCls, newCls);
 
     // The new behaviour may bring constants: the generated constructor
-    // covers them, replacing the copied one (§6.2, pre-flight ruling C9).
+    // covers them, replacing the copied one (§6.2, pre-flight ruling C9). A
+    // copied user class method under the new selector refuses the
+    // composition with M9 (Task 6 ruling I1), before the global is rebound.
+    // The rebuilt class carries copies of the old one's per-epoch caches
+    // (instance template, constant cache), which a new epoch invalidates.
     installConstantConstructor(rt, ctx, newCls);
+    noteInstanceLayoutChanged();
 
     // Rebind the class's global name to the rebuilt object so subsequent
     // `ClassName` PUSH_GLOBALs and `ClassName >> sel` installs see it.
@@ -2030,19 +2042,19 @@ const proto::ProtoObject* prim_Behavior_instVarModifierOf(STRuntime& rt, proto::
 }
 
 // aClass __constructConstants: anArray selector: aSymbol   (private)
-//   The body of a generated constructor (explicit-state spec §6.2, plan
-//   decision D-d): the class's constructor method passes its arguments and
-//   its own selector, whose keywords name the constants. A new instance, the
-//   non-nil arguments in one write, initialize, then the end-of-construction
-//   check (M13) naming the constructor.
+//   The first step of a generated constructor (explicit-state spec §6.2, plan
+//   decision D-d as amended by the Task 6 rulings): the class's constructor
+//   method passes its arguments and its own selector, whose keywords name the
+//   constants. Answers a new instance with the non-nil arguments written in
+//   one write; the method then sends initialize and the check below.
 const proto::ProtoObject* prim_Behavior_constructConstants(STRuntime& rt, proto::ProtoContext* ctx,
                                                            const proto::ProtoObject* r,
                                                            const proto::ProtoObject* const* a,
                                                            int argc) {
     if (argc != 2) throw NativeError("__constructConstants:selector: expects 2 args");
-    const proto::ProtoString* sel = a[1] ? a[1]->asString(ctx) : nullptr;
-    if (!sel) throw NativeError("__constructConstants:selector: the selector must be a Symbol");
-    return constructWithConstants(rt, ctx, r, a[0], sel->toStdString(ctx));
+    if (!a[1] || !a[1]->asString(ctx))
+        throw NativeError("__constructConstants:selector: the selector must be a Symbol");
+    return constructWithConstants(rt, ctx, r, a[0], a[1]);
 }
 
 // aClass __hasConstants   (private) → whether the class declares or inherits
@@ -2056,10 +2068,10 @@ const proto::ProtoObject* prim_Behavior_hasConstants(STRuntime& rt, proto::Proto
 }
 
 // aClass __checkConstantsOf: anInstance after: aSymbol   (private)
-//   The end-of-construction check of `new` (plan decision D-e): every
-//   constant of the class must be set on anInstance; the first unset one
-//   signals M13, an Error, naming aSymbol. Answers anInstance, or what the
-//   signal answers.
+//   The end-of-construction check of `new` (plan decision D-e) and of the
+//   generated constructor: every constant of the class must be set on
+//   anInstance; the first unset one signals M13, an Error, naming aSymbol,
+//   and the construction answers nothing (nil). Answers anInstance otherwise.
 const proto::ProtoObject* prim_Behavior_checkConstantsOf(STRuntime& rt, proto::ProtoContext* ctx,
                                                          const proto::ProtoObject* r,
                                                          const proto::ProtoObject* const* a,

@@ -63,4 +63,9 @@ const proto::ProtoObject* newInstance(STRuntime& rt, proto::ProtoContext* ctx,
 // variables.
 void noteInstanceLayoutChanged();
 
+// The current instance-layout epoch: a cache derived from class declarations
+// (templates, the constant lists of ConstantConstructor.h) records the epoch it
+// was built in and is rebuilt once it differs.
+long long instanceLayoutEpoch();
+
 } // namespace protoST
