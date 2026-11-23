@@ -1,0 +1,32 @@
+  const_read             old  not runnable: exit 65; /home/gamarino/Documentos/proyectos/worktrees/protost-0170/benchmarks/micro/const_read.st:8:30: unknown keyword in class declaration: constantNames:
+round 1/3
+  startup                old     124,762,402 cycles  (+-0.66%)  $S/gate-runs/2
+  startup                new     133,439,384 cycles  (+-3.04%)  $S/gate-runs/3
+  attr_lookup            old     177,431,861 cycles  (+-1.34%)  $S/gate-runs/4
+  attr_lookup            new     186,931,330 cycles  (+-0.57%)  $S/gate-runs/5
+  const_read             new     199,730,780 cycles  (+-8.95%)  $S/gate-runs/6
+round 2/3
+  startup                new     136,239,601 cycles  (+-6.73%)  $S/gate-runs/7
+  startup                old     133,209,510 cycles  (+-6.13%)  $S/gate-runs/8
+  attr_lookup            new     190,209,084 cycles  (+-4.36%)  $S/gate-runs/9
+  attr_lookup            old     177,354,279 cycles  (+-1.76%)  $S/gate-runs/10
+  const_read             new     184,837,362 cycles  (+-2.85%)  $S/gate-runs/11
+round 3/3
+  startup                old     125,145,148 cycles  (+-1.83%)  $S/gate-runs/12
+  startup                new     127,407,830 cycles  (+-1.55%)  $S/gate-runs/13
+  attr_lookup            old     175,012,534 cycles  (+-0.99%)  $S/gate-runs/14
+  attr_lookup            new     185,026,603 cycles  (+-1.44%)  $S/gate-runs/15
+  const_read             new     186,917,639 cycles  (+-5.03%)  $S/gate-runs/16
+
+mean cycles (perf -r 3, 3 round(s))
+  startup                old    127,705,687  new    132,362,272
+  attr_lookup            old    176,599,558  new    187,389,006
+  const_read             new    190,495,260
+
+§14.1 gate
+  attr_lookup new/old            1.0611  (bound 1.01)  BREACH
+  const_read new / attr_lookup new 1.0166  (bound 1.03)  ok
+  startup-subtracted: attr 1.1254  const 1.0564  (information; verdicts differ: False)
+  const_read old: not runnable (G3)
+
+GATE BREACH: the release is blocked until the maintainer accepts the figures.

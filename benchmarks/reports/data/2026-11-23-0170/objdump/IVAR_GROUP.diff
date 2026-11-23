@@ -1,0 +1,53 @@
+3,4c3,4
+< mov edi,DWORD PTR [rax-0x24]
+< test edi,edi
+---
+> mov ecx,DWORD PTR [rax-0x24]
+> test ecx,ecx
+7c7
+< mov rcx,QWORD PTR [rdx+0xd0]
+---
+> mov rsi,QWORD PTR [rdx+0xd0]
+9c9
+< sub rdx,rcx
+---
+> sub rdx,rsi
+13c13
+< lea r8,[rcx+rbx*8]
+---
+> lea r8,[rsi+rbx*8]
+17c17
+< mov ecx,DWORD PTR [rax-0x30]
+---
+> mov edi,DWORD PTR [rax-0x30]
+19c19
+< lea r9d,[rcx+0x1]
+---
+> lea r9d,[rdi+0x1]
+26,27c26
+< mov r12d,0x0
+< lea r9d,[rdi-0x1]
+---
+> mov r9d,0x0
+29c28,29
+< mov WORD PTR [rax-0xe],r12w
+---
+> mov WORD PTR [rax-0xe],r9w
+> lea r9d,[rcx-0x1]
+57c57
+< mov BYTE PTR [rbp-0x4c0],sil
+---
+> mov BYTE PTR [rbp-0x5c0],sil
+62c62,63
+< nop DWORD PTR [rax+0x0]
+---
+> nop
+> data16 cs nop WORD PTR [rax+rax*1+0x0]
+74,76c75,77
+< mov BYTE PTR [rbp-0x4c0],dil
+< movzx eax,BYTE PTR [rbp-0x4c0]
+< lea rdx,[rip+0x161e01] # <_ZZN7protoST15ExecutionEngine7runLoopEPN5proto12ProtoContextEE7kLabels>
+---
+> mov BYTE PTR [rbp-0x5c0],dil
+> movzx eax,BYTE PTR [rbp-0x5c0]
+> lea rdx,[rip+0x181501] # <_ZZN7protoST15ExecutionEngine7runLoopEPN5proto12ProtoContextEE7kLabels>

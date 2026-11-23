@@ -1,0 +1,51 @@
+3c3,4
+< mov rsi,QWORD PTR [rbp-0x4b8]
+---
+> mov rsi,QWORD PTR [rbp-0x5b8]
+> mov edx,ebx
+6,13c7,8
+< mov rdx,QWORD PTR [rdi+0x138]
+< test rdx,rdx
+< je <_ZN7protoST15ExecutionEngine7runLoopEPN5proto12ProtoContextE+X>
+< cmp rbx,QWORD PTR [rdx]
+< jb <_ZN7protoST15ExecutionEngine7runLoopEPN5proto12ProtoContextE+X>
+< mov rdx,rbx
+< call <_ZNK7protoST14BytecodeModule12ivSymbolSlowEPN5proto12ProtoContextEm>
+< mov rdx,rax
+---
+> call <_ZNK7protoST14BytecodeModule8ivSymbolEPN5proto12ProtoContextEm>
+> mov rsi,rax
+15c10
+< mov ecx,DWORD PTR [r14-0x30]
+---
+> mov edx,DWORD PTR [r14-0x30]
+17,18c12,13
+< add ecx,0x1
+< mov rdi,QWORD PTR [rax+rcx*8]
+---
+> add edx,0x1
+> mov rdi,QWORD PTR [rax+rdx*8]
+23c18,19
+< mov rsi,QWORD PTR [rbp-0x4b8]
+---
+> mov rdx,rsi
+> mov rsi,QWORD PTR [rbp-0x5b8]
+61c57
+< mov BYTE PTR [rbp-0x4c0],sil
+---
+> mov BYTE PTR [rbp-0x5c0],sil
+66c62,65
+< cs nop WORD PTR [rax+rax*1+0x0]
+---
+> xchg ax,ax
+> data16 cs nop WORD PTR [rax+rax*1+0x0]
+> data16 cs nop WORD PTR [rax+rax*1+0x0]
+> data16 cs nop WORD PTR [rax+rax*1+0x0]
+80,82c79,81
+< mov BYTE PTR [rbp-0x4c0],dil
+< movzx eax,BYTE PTR [rbp-0x4c0]
+< lea rdx,[rip+0x162ec1] # <_ZZN7protoST15ExecutionEngine7runLoopEPN5proto12ProtoContextEE7kLabels>
+---
+> mov BYTE PTR [rbp-0x5c0],dil
+> movzx eax,BYTE PTR [rbp-0x5c0]
+> lea rdx,[rip+0x180e41] # <_ZZN7protoST15ExecutionEngine7runLoopEPN5proto12ProtoContextEE7kLabels>

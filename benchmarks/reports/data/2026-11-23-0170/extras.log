@@ -1,0 +1,35 @@
+round 1/3
+  instances              old  11,052,230,430 cycles  (+-1.04%)  $S/gate-runs/23
+  instances              new  12,451,240,407 cycles  (+-0.28%)  $S/gate-runs/24
+  vm_ops                 old   4,071,803,576 cycles  (+-1.25%)  $S/gate-runs/25
+  vm_ops                 new   4,128,319,674 cycles  (+-1.57%)  $S/gate-runs/26
+  point_new              old   2,390,522,184 cycles  (+-3.9%)  $S/gate-runs/27
+  point_new              new   2,532,438,167 cycles  (+-3.44%)  $S/gate-runs/28
+  fraction_new           old   3,225,565,939 cycles  (+-2.62%)  $S/gate-runs/29
+  fraction_new           new   3,601,692,545 cycles  (+-0.23%)  $S/gate-runs/30
+round 2/3
+  instances              new  11,739,770,755 cycles  (+-1.51%)  $S/gate-runs/31
+  instances              old  11,164,804,640 cycles  (+-1.51%)  $S/gate-runs/32
+  vm_ops                 new   4,239,929,150 cycles  (+-0.19%)  $S/gate-runs/33
+  vm_ops                 old   4,370,811,871 cycles  (+-5.25%)  $S/gate-runs/34
+  point_new              new   2,725,756,810 cycles  (+-5.69%)  $S/gate-runs/35
+  point_new              old   2,336,866,089 cycles  (+-3.19%)  $S/gate-runs/36
+  fraction_new           new   3,438,521,068 cycles  (+-2.52%)  $S/gate-runs/37
+  fraction_new           old   3,297,051,226 cycles  (+-3.36%)  $S/gate-runs/38
+round 3/3
+  instances              old  10,757,943,485 cycles  (+-1.9%)  $S/gate-runs/39
+  instances              new  10,857,776,399 cycles  (+-0.37%)  $S/gate-runs/40
+  vm_ops                 old   3,972,980,453 cycles  (+-0.84%)  $S/gate-runs/41
+  vm_ops                 new   3,998,800,075 cycles  (+-1.09%)  $S/gate-runs/42
+  point_new              old   2,229,870,750 cycles  (+-0.6%)  $S/gate-runs/43
+  point_new              new   2,617,560,668 cycles  (+-4.7%)  $S/gate-runs/44
+  fraction_new           old   3,135,879,728 cycles  (+-4.66%)  $S/gate-runs/45
+  fraction_new           new   3,283,256,524 cycles  (+-0.85%)  $S/gate-runs/46
+
+mean cycles (perf -r 3, 3 round(s))
+  instances              old 10,991,659,518  new 11,682,929,187
+  vm_ops                 old  4,138,531,967  new  4,122,349,633
+  point_new              old  2,319,086,341  new  2,625,251,882
+  fraction_new           old  3,219,498,964  new  3,441,156,712
+
+All runs verified.

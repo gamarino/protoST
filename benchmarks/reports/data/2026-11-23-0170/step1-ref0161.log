@@ -1,0 +1,4 @@
+benchmarks/micro/const_read.st:8:30: unknown keyword in class declaration: constantNames:
+benchmarks/micro/const_read.st:8:30: expected primary expression, got Keyword
+benchmarks/micro/const_read.st:8:45: expected '.' after top-level expression
+rc=65

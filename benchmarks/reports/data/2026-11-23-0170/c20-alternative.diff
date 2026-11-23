@@ -1,0 +1,12 @@
+--- lib/kernel/object.st	2026-11-23 16:34:27.531125907 -0300
++++ $S/t12/c20alt/lib/kernel/object.st	2026-11-23 19:04:48.644954932 -0300
+@@ -103,8 +103,7 @@
+   | instance |
+   instance := self basicNew.
+   instance initialize.
+-  self __hasConstants ifTrue: [^ self __checkConstantsOf: instance after: #new].
+-  ^ instance.
++  ^ self __checkConstructed: instance selector: #new.
+ 
+ "The end of a class-side new that does not reach Object class >> new
+  (SortedCollection, WriteStream, Random, UUID): it sends initialize once, as
