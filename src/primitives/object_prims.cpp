@@ -470,6 +470,26 @@ void markUserDeclared(STRuntime& rt, proto::ProtoContext* ctx, const proto::Prot
         cls->setAttribute(ctx, userDeclaredKey(ctx), PROTO_TRUE);
 }
 
+// Explicit-state spec §6.9: the name of the kernel class UnsetConstantError is
+// reserved, so that the runtime's M14 signal and every `on:
+// UnsetConstantError do:` keep meaning the kernel class. Once the kernel is
+// loaded, a declaration under that name is refused: the Error is signalled in
+// place and its answer returned (nullptr means the name is free). Only this
+// name is reserved here; the other kernel class names are a recorded gap.
+const proto::ProtoObject* refuseReservedClassName(STRuntime& rt, proto::ProtoContext* ctx,
+                                                  const proto::ProtoObject* nameArg) {
+    const proto::ProtoString* name = nameArg ? nameArg->asString(ctx) : nullptr;
+    if (!name || name->toStdString(ctx) != "UnsetConstantError") return nullptr;
+    const proto::ProtoObject* g = rt.globals();
+    if (!g || g->getOwnAttributeDirect(ctx, proto::ProtoString::createSymbol(ctx, "__kernel_loaded__"))
+                  != PROTO_TRUE)
+        return nullptr;
+    const proto::ProtoObject* v = signalErrorNamed(rt, ctx, "Error",
+        "UnsetConstantError is a reserved kernel class name; "
+        "a class cannot be declared under it");
+    return v ? v : PROTO_NONE;
+}
+
 // The earlier declaration M11 compares a class declaration with: the class
 // itself when it already records its variables (the textual path answers the
 // existing class again), or else the user-declared class still bound under
@@ -1087,6 +1107,8 @@ const proto::ProtoObject* prim_Object_subclassUses(
     const proto::ProtoObject* const* a, int argc) {
     if (argc != 2)
         throw NativeError("subclass:uses: expects 2 args");
+    if (const proto::ProtoObject* refused = refuseReservedClassName(rt, ctx, a[0]))
+        return refused;
     return makeSubclassWithMixins(rt, ctx, r, a[0], a[1]);
 }
 
@@ -1098,6 +1120,8 @@ const proto::ProtoObject* prim_Object_subclassIvarsUses(
     if (argc != 3)
         throw NativeError(
             "subclass:instanceVariableNames:uses: expects 3 args");
+    if (const proto::ProtoObject* refused = refuseReservedClassName(rt, ctx, a[0]))
+        return refused;
     if (a[1] && a[1] != PROTO_NONE && !a[1]->asString(ctx))
         throw NativeError(
             "subclass:instanceVariableNames:uses:: ivar names must be a string");
@@ -1117,6 +1141,8 @@ const proto::ProtoObject* prim_Object_subclass(STRuntime& rt,
                                                const proto::ProtoObject* const* a,
                                                int argc) {
     if (argc != 1) throw NativeError("subclass: expects 1 arg");
+    if (const proto::ProtoObject* refused = refuseReservedClassName(rt, ctx, a[0]))
+        return refused;
     return makeSubclass(rt, ctx, r, a[0]);
 }
 
@@ -1135,6 +1161,8 @@ const proto::ProtoObject* prim_Object_subclassIvars(
     if (argc != 2)
         throw NativeError(
             "subclass:instanceVariableNames: expects 2 args");
+    if (const proto::ProtoObject* refused = refuseReservedClassName(rt, ctx, a[0]))
+        return refused;
     // a[1] is the instance-variable-names string; accept any string (incl. '').
     if (a[1] && a[1] != PROTO_NONE && !a[1]->asString(ctx))
         throw NativeError(
@@ -1723,6 +1751,8 @@ const proto::ProtoObject* prim_Object_subclassNamed(STRuntime& rt, proto::ProtoC
                                                     const proto::ProtoObject* r,
                                                     const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("__subclassNamed: expects 1 arg");
+    if (const proto::ProtoObject* refused = refuseReservedClassName(rt, ctx, a[0]))
+        return refused;
     const proto::ProtoString* name = a[0] ? a[0]->asString(ctx) : nullptr;
     if (name) {
         const proto::ProtoObject* g = rt.globals();
@@ -1889,6 +1919,8 @@ const proto::ProtoObject* prim_Behavior_subclassModifiersUses(STRuntime& rt, pro
                                                               int argc) {
     static const char* const kSelector = "__subclass:instanceVariableNames:modifiers:uses:";
     if (argc != 4) throw NativeError(std::string(kSelector) + " expects 4 args");
+    if (const proto::ProtoObject* refused = refuseReservedClassName(rt, ctx, a[0]))
+        return refused;
     const proto::ProtoString* names = a[1] ? a[1]->asString(ctx) : nullptr;
     const proto::ProtoString* kinds = a[2] ? a[2]->asString(ctx) : nullptr;
     if (!names || !kinds) throw NativeError(std::string(kSelector) + " expects two Strings");
@@ -1920,6 +1952,8 @@ const proto::ProtoObject* prim_Behavior_subclassModifiers(STRuntime& rt, proto::
     static const IvarModifier kClauses[4] = {IvarModifier::Plain, IvarModifier::Constant,
                                              IvarModifier::WriteOnce, IvarModifier::Atomic};
     if (argc != 5) throw NativeError(std::string(kSelector) + " expects 5 args");
+    if (const proto::ProtoObject* refused = refuseReservedClassName(rt, ctx, a[0]))
+        return refused;
     std::string names;
     std::vector<IvarModifier> modifiers;
     for (int k = 0; k < 4; ++k) {

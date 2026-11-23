@@ -807,7 +807,7 @@ const proto::ProtoObject* signalUnsetConstantError(STRuntime& rt, proto::ProtoCo
     if (!receiver) receiver = PROTO_NONE;
     TransientPin pinReceiver(ctx, receiver);
     const std::string text = "constant '" + variableName + "' of "
-                             + articleAndClassName(ctx, receiver) + " read before it was set";
+                             + articleAndClassName(rt, ctx, receiver) + " read before it was set";
     const proto::ProtoObject* g = rt.globals();
     const proto::ProtoObject* cls = g
         ? g->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, "UnsetConstantError"))

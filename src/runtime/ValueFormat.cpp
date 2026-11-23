@@ -1,5 +1,6 @@
 #include "ValueFormat.h"
 #include "protoST/STRuntime.h"
+#include "runtime/Bootstrap.h"
 #include "protoCore.h"
 
 #include <algorithm>
@@ -197,10 +198,10 @@ std::string articleAndClassName(const std::string& className) {
     return (vowel ? "an " : "a ") + className;
 }
 
-std::string articleAndClassName(proto::ProtoContext* ctx, const proto::ProtoObject* obj) {
+std::string articleAndClassName(STRuntime& rt, proto::ProtoContext* ctx,
+                               const proto::ProtoObject* obj) {
     if (!obj || obj == PROTO_NONE) return "an object";
-    const proto::ProtoObject* nameObj =
-        obj->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__class_name__"));
+    const proto::ProtoObject* nameObj = obj->getAttribute(ctx, rt.bootstrap().sym.className);
     const proto::ProtoString* nameStr =
         nameObj && nameObj != PROTO_NONE ? nameObj->asString(ctx) : nullptr;
     return nameStr ? articleAndClassName(nameStr->toStdString(ctx)) : std::string("an object");

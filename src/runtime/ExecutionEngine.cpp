@@ -477,7 +477,7 @@ std::string
 ExecutionEngine::ivarOwnerDescription(proto::ProtoContext* ctx,
                                       const proto::ProtoObject* self) const {
     // `an Account`: the class-name form of printString's default.
-    return articleAndClassName(ctx, self);
+    return articleAndClassName(rt_, ctx, self);
 }
 
 const proto::ProtoObject*
@@ -2893,10 +2893,14 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 break;
             }
             case Op::PUSH_CONST_INSTVAR: L_PUSH_CONST_INSTVAR: {
-                // A read of a constant (explicit-state spec §6.2): read as
-                // PUSH_INSTVAR does; an unset constant (absent or nil)
-                // signals UnsetConstantError (M14) in place instead of
-                // answering nil. The signal runs handlers on top of this
+                // A read of a constant (explicit-state spec §6.2). A
+                // constant is the receiver's OWN attribute, as for its
+                // store and for instVarNamed:, so it is read own-only (as
+                // PUSH_OWN_INSTVAR reads): a same-named class-instance
+                // variable or class attribute up the chain never answers
+                // for it. An unset constant (absent or nil) signals
+                // UnsetConstantError (M14) in place instead of answering
+                // nil. The signal runs handlers on top of this
                 // frame, so the frame is re-acquired after the helper, which
                 // keeps the slow path out of line.
                 const proto::ProtoObject* val;
@@ -2904,7 +2908,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     Frame& f = frames_.back();
                     auto* sym = f.m->ivSymbol(ctx, arg);
                     const proto::ProtoObject* self = getSelf(f);
-                    val = (self && self != PROTO_NONE) ? self->getAttribute(ctx, sym) : nullptr;
+                    val = (self && self != PROTO_NONE) ? self->getOwnAttributeDirect(ctx, sym)
+                                                       : nullptr;
                     if (!val || val == PROTO_NONE)
                         val = unsetConstantRead(ctx, f, arg);
                 }
