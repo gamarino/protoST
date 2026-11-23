@@ -17,7 +17,7 @@ Markers used below:
 - **(maintainer, 2026-11-23, Qn)**: a ruling on open question Qn of the first
   draft; binding. §17.1 lists them all.
 - ***Proposed***: a decision this spec makes to fill a gap the scope left
-  open. §17.2 lists them; §18 lists the one question still open.
+  open. §17.2 lists them. §18 confirms that no question is open.
 
 ## 1. Intent
 
@@ -500,12 +500,13 @@ Object subclass: #Account
 | Modifier | `:=` in methods | Allowed writes | Read |
 |---|---|---|---|
 | plain | anywhere | any | plain |
-| `constant` | only in `initialize`, outside closures | at most once, and set (not nil) by the end of construction | plain |
+| `constant` | only in `initialize`, outside closures | at most once, and set (not nil) by the end of construction | **checked**: reading it while unset signals M14 (§6.2) |
 | `writeOnce` | anywhere | at most once, by CAS from nil; a later or losing write is silent when its value is `=` to the installed one, and signals M12 otherwise | plain |
 | `atomic` | **never** (compile error) | `update:with:`, `compareAndSet:from:to:` | plain |
 
-All reads are plain reads of the current snapshot. A protoCore attribute read
-is one pointer, so it is never torn.
+Every read is a read of the current snapshot. A protoCore attribute read is
+one pointer, so it is never torn. A constant's read adds one nil test (§6.2);
+no other read changes.
 
 ### 6.2 `constant`: assigned only during construction
 
@@ -544,15 +545,45 @@ is one pointer, so it is never torn.
   - A class-side `new` override that calls `super new` gets the check (it runs
     in `super new`, before the override goes on). An override written
     `^ self basicNew initialize` does not: see the next point.
-  - **`basicNew` skips the check** (***Proposed***; question N1 in §18). It is
-    the raw allocator, which skips `initialize` today, and serializers and
-    loaders use it before they fill constants by reflection (§11). The
-    documentation says that a class with constants is made with `new` or its
-    generated constructor, and that `basicNew` hands over an object whose
-    constants are the caller's responsibility.
+  - **`basicNew` stays allowed and skips this check** (maintainer,
+    2026-11-23, N1 = C). It is the raw allocator, which skips `initialize`
+    today, and serializers and loaders use it, then fill constants by
+    reflection (§11) before anyone reads them. What `basicNew` gives up at
+    construction, the read check below recovers at first use.
+- **Reading an unset constant signals** (maintainer, 2026-11-23, N1 = C). Any
+  read of a constant that is still unset (nil) signals **M14** instead of
+  answering nil. This covers every object that left construction without the
+  end-of-construction check: one made by `basicNew` and filled partly or not
+  at all, and one made by a class-side `new` written in the Pharo idiom
+  `^ self basicNew initialize`, whose `initialize` forgot a constant. The
+  mistake surfaces at the first read, naming the constant, never as a nil that
+  travels on. The paths:
+
+  | Read path | Checks | Why |
+  |---|---|---|
+  | a compiled read in any method or block (`^ number`, `number + 1`), the class's own accessors included | yes: `PUSH_CONST_INSTVAR` | the compiler knows the variable is a constant, so the check sits on a new opcode and plain reads keep their opcode unchanged (§3) |
+  | a read in a method installed late (LANGUAGE.md §4.10) | yes | install-time resolution looks the modifier up and emits the same checked read |
+  | a read inside `initialize` before the constant is assigned (`id isNil ifTrue: [...]`) | yes | `initialize` is code like any other. A constant given to the generated constructor is set before `initialize` runs, so `initialize` reads it freely; one `initialize` must compute is assigned before it is read. "Is it set yet?" is asked with `instVarIsSet:`, not by reading |
+  | `instVarAt:`, `instVarNamed:` | yes | reflection reads what a program reads; a reflective reader of an unset constant would otherwise reintroduce the nil |
+  | generated readers | not applicable | readers are generated for value-class fields only (§5.2), which are not constants and are always complete; a mutable class writes its own accessors, which are compiled reads and check |
+  | `instVarIsSet: #name` (new, any variable) | no; it is the probe | answers whether the variable holds a non-nil value, without signalling. Loaders and tools use it instead of catching M14 (***Proposed***) |
+  | the private copy of `deepCopy` and `shallowCopy` (§11) | no | they move the attribute, unset included, without reading it as a value; the copy is checked when it is read |
+  | the debugger (DAP) | no | it shows `<unset constant>`; inspecting is not a program read |
+  | `compareAndSet:from:to:`, `update:with:` | not applicable | they signal M5 on any constant (§6.5) |
+
+  - **Which nil.** A constant counts as unset when the attribute is absent or
+    holds nil, as for the end-of-construction check: no constant ever holds
+    nil legitimately (§6.2).
+  - **Threads.** A thread that receives an object which escaped from
+    `initialize` before its constants were set now gets M14 at its first read
+    of one, not a silent nil.
+  - **Cost.** One nil test per constant read, on the constant's own opcode;
+    plain, write-once and atomic reads are unchanged. §14.1 requires it to be
+    measured and sets the acceptance criterion.
 - **What "constant" guarantees:**
   - an object answered by `new` or by the generated constructor has every
     constant set;
+  - no read of a constant ever answers nil, however the object was made;
   - after construction, the value never changes;
   - constants given to the generated constructor are visible from the
     instance's first moment, because they are written before `initialize`
@@ -563,8 +594,8 @@ is one pointer, so it is never torn.
   advises against it.
 
 Construction is defined by *where* a constant may be assigned (compile time),
-*at most once* and *set at the end of `new` or the generated constructor*
-(run time). It is not tracked as a "constructing" state per object or per
+*at most once*, *set at the end of `new` or the generated constructor*, and
+*never read unset* (run time). It is not tracked as a "constructing" state per object or per
 frame, which would cost a write or a frame flag on every construction.
 
 ### 6.3 `writeOnce`: a CAS from nil
@@ -714,7 +745,8 @@ texts are in §12.
 - Assigning an atomic variable: a compile error naming `update:with:`.
 - A constant outside `initialize`: a compile error. A second set at run time:
   `ModificationForbidden`. A constant still unset when `new` or the generated
-  constructor ends: an `Error` naming it.
+  constructor ends: an `Error` naming it. A constant read while unset, on an
+  object made any other way: an `Error` naming it.
 - A write-once variable assigned a value not `=` to the one installed:
   `ModificationForbidden`. An equal value is silent and answers the installed
   one.
@@ -856,7 +888,8 @@ allocate nothing beyond the attribute version, and never help.
 
 | Message | Plain | Constant | Write-once | Atomic | Value field |
 |---|---|---|---|---|---|
-| `instVarNamed:`, `instVarAt:` | reads | reads | reads | reads | reads |
+| `instVarNamed:`, `instVarAt:` | reads | reads; unset signals M14 | reads | reads | reads |
+| `instVarIsSet:` | whether non-nil | whether set, never signals | whether set | whether non-nil | whether non-nil |
 | `instVarNamed:put:`, `instVarAt:put:` | writes | writes only while unset (M3 after) | writes only while unset (M6 after) | M6 | V13 |
 | `compareAndSet:from:to:` | CAS | M5 | CAS only `from: nil` (M5 otherwise) | CAS | V13 |
 | `setInstVar:from:to:` (deprecated, 0.17.0 only) | as `compareAndSet:from:to:`, after warning W1 once per process | | | | |
@@ -871,7 +904,9 @@ allocate nothing beyond the attribute version, and never help.
   reflective writer that finds the variable set gets an error, even with an
   equal value (unlike `:=`, §6.3).
 - **A constant filled by reflection after `basicNew`** is the caller's
-  responsibility: no end-of-construction check runs (§6.2).
+  responsibility: no end-of-construction check runs (§6.2). A constant the
+  loader forgot signals M14 at its first read, by any path. A loader asks
+  `instVarIsSet:` when it needs to know.
 - **`Object >> deepCopy`** today makes a `shallowCopy` and then writes every
   variable with `instVarNamed:put:`. For a constant or write-once variable that
   is already set, that write would fail. `deepCopy` therefore builds the copy
@@ -925,6 +960,7 @@ reported when the method is installed. Run-time errors use the classes given.
 | M11 | a redeclaration changes a variable's modifier | `Error` | `Account is already declared with 'balance' atomic; a class keeps the modifiers it was declared with` |
 | M12 | `:=` on a write-once variable that holds a value not `=` to the one written | `ModificationForbidden` | `the write-once variable 'oid' of a PBAtom already holds a different value; nothing was written` |
 | M13 | a constant unset (or nil) when `new` or the generated constructor ends | `Error` | `the constant 'owner' of an Account is not set at the end of construction (number:owner:)` (the selector is `new` or the constructor) |
+| M14 | a constant read while unset (nil): compiled read, `instVarAt:` or `instVarNamed:` | `Error` | `constant 'owner' of an Account read before it was set` |
 
 **Deprecation**
 
@@ -936,7 +972,7 @@ The wording of V and M texts is fixed by this spec only where conformance
 tests pin it. The pinned parts are the quoted names and the phrases *value
 class*, *fixed at birth*, *already set*, *atomic variable*, *must be pure*,
 *generated constructor*, *withAll:*, *already holds a different value* and
-*not set at the end of construction*. W1 is pinned whole, as the 0.9.0
+*not set at the end of construction*. M14 and W1 are pinned whole, as the 0.9.0
 deprecation line was. The rest may be polished.
 
 ## 13. Migration
@@ -1018,6 +1054,20 @@ release that carries each feature. Its acceptance criteria:
 - **Non-regression of the plain path.** Run the existing benchmarks before and
   after, measured with `perf stat -r 3` cycles, with a fresh copy of the
   library per run. Plain stores must not slow down. The figures are reported.
+- **The cost of the constant read check** (N1 = C). Measured, never assumed:
+  - **Benchmarks:** `benchmarks/comparable/attr_lookup.st` (100,000 × 3 plain
+    instance-variable reads, existing) and a new
+    `benchmarks/micro/const_read.st`, its exact twin with the three variables
+    declared `constantNames: 'a b c'` and set by the generated constructor.
+    Each self-reports its result (600000), and the runner verifies it.
+  - **Measurement:** `perf stat -r 3` cycles of each, on 0.16.1 and on the
+    0.17.0 candidate, serial, on an idle machine, with a fresh copy of the
+    library per run.
+  - **Acceptance:** `attr_lookup.st` on 0.17.0 is within 1 % of 0.16.1 (plain
+    reads unchanged), and `const_read.st` on 0.17.0 is within 3 % of
+    `attr_lookup.st` on 0.17.0 (the nil test is the whole difference). A
+    result outside either bound blocks the release until it is explained and
+    the maintainer accepts it. The four figures go in the release notes.
 - **protoBaseST acceptance** (§13.2).
 
 ### 14.2 Conformance list
@@ -1112,6 +1162,13 @@ release that carries each feature. Its acceptance criteria:
 84. `runs-end-before-cas-stores`: through the documentation's bytecode listing.
 85. `setinstvar-alias` (0.17.0 only): `setInstVar:from:to:` behaves as `compareAndSet:from:to:`, M8 included.
 86. `setinstvar-removed` (from 0.18.0): `setInstVar:from:to:` is `MessageNotUnderstood`.
+87. `const-loader-fills-by-reflection`: a loader does `basicNew`, fills both constants with `instVarNamed:put:`, and the object then reads them normally; no error at any point.
+88. `const-loader-forgets-one`: the same loader fills one constant of two; reading the other (an accessor) signals M14 with the exact text; reading the filled one works.
+89. `const-pharo-new-override`: a class-side `new` written `^ self basicNew initialize` whose `initialize` forgets `owner` answers the object without M13; the first `anAccount owner` signals M14.
+90. `const-read-before-assignment-in-initialize`: `initialize` reads `id` before assigning it (`id isNil ifTrue: [...]`) and signals M14; reading a constant the generated constructor set works there.
+91. `const-instVarAt-unset`: `instVarAt:` and `instVarNamed:` on an unset constant signal M14; on a set one they answer it.
+92. `const-instVarIsSet`: `instVarIsSet:` answers false then true around a reflective fill, and never signals.
+93. `const-copy-keeps-unset`: `shallowCopy` and `deepCopy` of a `basicNew` object with an unset constant succeed; the copy signals M14 when that constant is read.
 
 **CLI** (`tests/cli`, since the conformance runner reads stdout only)
 
@@ -1144,7 +1201,7 @@ release that carries each feature. Its acceptance criteria:
 
 | Release | Carries | Requires |
 |---|---|---|
-| **protoST 0.17.0**, *explicit state I: modifiers* | `constantNames:`, `writeOnceNames:`, `atomicNames:` (textual and message forms); generated constructors over constants and the end-of-construction check (M13); `STORE_CONST_INSTVAR` and `STORE_ONCE_INSTVAR` with the write-once equality rule (M12); `update:with:`, `compareAndSet:from:to:`; `setInstVar:from:to:` as a deprecated alias with its checks and warning W1; reflection (§11), `instVarModifierOf:`; `ModificationForbidden` for refused stores; M7 wait check; runs excluding CAS stores; LANGUAGE.md §4.13 (modifiers), §10.9 (the pattern, §9's table), the "locals" note (§4); conformance 47–85, `cli_setinstvar_deprecation`, T1, T2, T4, T5 | protoCore 3.6.1 (unchanged) |
+| **protoST 0.17.0**, *explicit state I: modifiers* | `constantNames:`, `writeOnceNames:`, `atomicNames:` (textual and message forms); generated constructors over constants and the end-of-construction check (M13); `STORE_CONST_INSTVAR` and `STORE_ONCE_INSTVAR` with the write-once equality rule (M12); `update:with:`, `compareAndSet:from:to:`; `setInstVar:from:to:` as a deprecated alias with its checks and warning W1; reflection (§11), `instVarModifierOf:`; `ModificationForbidden` for refused stores; M7 wait check; runs excluding CAS stores; LANGUAGE.md §4.13 (modifiers), §10.9 (the pattern, §9's table), the "locals" note (§4); the constant read check (M14, `PUSH_CONST_INSTVAR`, `instVarIsSet:`) and its measurement (§14.1, `benchmarks/micro/const_read.st`); conformance 47–85 and 87–93, `cli_setinstvar_deprecation`, T1, T2, T4, T5 | protoCore 3.6.1 (unchanged) |
 | **protoST 0.18.0**, *explicit state II: value classes* | `valueSubclass:`, `derivedNames:`; pre-birth `initialize` with automatic chaining; generated constructor, readers, `withX:`, `withAll:`, `=`, `hash`; immutable instances and template; V1–V17; `isValueClass`; `deepCopy`/`copy` rules; shallow immutability documented; `setInstVar:from:to:` removed; LANGUAGE.md §4.14 (value classes) and §8.1's pattern; a tutorial section "values, versions and retries"; conformance 1–46 and 86 (85 and `cli_setinstvar_deprecation` retired), T3, T6 | protoCore 3.6.1 (unchanged) |
 | **protoBaseST 0.5.0** | The migration of §13.2: values become value classes; write-once fields declared, published with `:=` or the CAS form as §13.2 decides; `Atom` fields become atomic; no `setInstVar:from:to:` left; the allowlist test becomes a reflective test. The atom-weight figures are re-measured and reported | protoST 0.18.0 |
 | later, only if measured | `Atom` reimplemented over an atomic variable; kernel values (`UUID`, calendar, `Decimal`) as value classes | — |
@@ -1173,6 +1230,8 @@ promised for that date.
   `setAttributes`); `nil` fields are not written.
 - **The generated methods.** Primitives or generated bytecode, and how
   `withX:` and `withAll:` reuse the constructor path.
+- **`PUSH_CONST_INSTVAR`.** Its number, and whether a `PUSH_OWN_CONST_INSTVAR`
+  twin is worth it, decided by the §14.1 measurement.
 - **The end-of-construction check.** Where `new` and the generated
   constructor test it, and how a class records that it has constants, so a
   class without any pays one attribute test.
@@ -1200,7 +1259,7 @@ promised for that date.
 - The optimistic pattern taken to the user, and the Croquet link as
   direction. §9, §19.
 
-**2026-11-23, rulings on the first draft's open questions:**
+**2026-11-23, rulings on the first draft's open questions, and on N1:**
 
 | Q | Question | Ruling | Where |
 |---|---|---|---|
@@ -1215,6 +1274,7 @@ promised for that date.
 | Q9 | Names | As specified. `setInstVar:from:to:` is deprecated: an alias with warning W1 in 0.17.0, removed in 0.18.0 | §6.4, §12, §13.1, tests 85–86 |
 | Q10 | Order of the releases | Modifiers in 0.17.0, values in 0.18.0 | §15 |
 | Q11 | Replicated world | On the volunteer menu now, as an L research item | §19 |
+| N1 | `basicNew` on a class with constants (a question that arose while applying Q4) | Option C: `basicNew` stays allowed, so loaders fill constants by reflection; every read of an unset constant signals M14, which covers `^ self basicNew initialize` at first use. The Q4 check stays on `new` and the generated constructor | §6.2, §11, M14, §14.1 (cost), tests 87–93 |
 
 ### 17.2 Decisions this spec makes (***Proposed***)
 
@@ -1239,23 +1299,16 @@ full text.
   other value class cannot have one (V9). §5.1.
 - **`compareAndSet: … from: nil to: …` on a write-once variable never compares
   values**: it is the "first wins, the others adopt" form. §6.3.
-- **`basicNew` skips the end-of-construction check** (see N1). §6.2.
+- **`instVarIsSet:`**, a non-signalling probe, so loaders and tools need not
+  catch M14. §6.2, §11.
+- **Copies and the debugger do not check constant reads**: they move or show
+  the attribute without reading it as a value. §6.2.
 - **`withAll:` errors are `InvalidArgument`; M13 is an `Error`.** §12.
 
 ## 18. Open questions
 
-The first draft's eleven questions are ruled (§17.1). One question appeared
-while applying the rulings, and only the maintainer can settle it:
-
-- **N1. `basicNew` on a class with constants.** Q4 makes a constant set by
-  the end of construction, checked in `new` and the generated constructor.
-  `basicNew` skips `initialize`, so this spec lets it skip the check too:
-  serializers and loaders use it and then fill constants by reflection.
-  The cost: a class-side `new` written in the Pharo idiom
-  `^ self basicNew initialize` is not checked. The alternative is to refuse
-  `basicNew` on a class with constants (V5-style), which closes the gap but
-  leaves loaders with only the generated constructor, which runs
-  `initialize`. Keep `basicNew` unchecked (as specified), or refuse it?
+None. The first draft's eleven questions and N1, which arose while applying
+Q4, are ruled (§17.1).
 
 ## 19. Direction: versions, snapshots and replicated worlds
 
