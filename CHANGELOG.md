@@ -3,6 +3,75 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
+## 0.16.1 — 2026-11-23
+
+**Requires protoCore 3.6.1**, as 0.16.0 did, and **protoIO 0.7.1** at build
+time (the floor rises from 0.7.0; 0.7.0 is refused). A patch release: two
+fixes, found by protoBaseST's TCP cluster transport, which could bury an
+actor waiting inside a block for good.
+
+### Fixed
+
+- **A wait that helps can no longer be buried by an actor that keeps sending
+  itself messages** (STATUS S48). A wait inside a block that a primitive
+  evaluates (`ensure:`, `on:do:`, `do:` ...) blocks its worker, which runs
+  other actors' messages on top of it (LANGUAGE.md §10.4).
+  - **Before:** each such run was a whole mailbox turn, and the turn took
+    the messages the actor sent itself meanwhile as well. Under an actor that
+    re-sent itself a finite message for ever, the turn never ended, and the
+    wait never checked its Future again. With `PROTOST_WORKERS=1` the whole
+    program stopped, timers included. When each re-sent message also waited,
+    the wait stayed buried with the default pool too.
+  - **Now:** the wait runs one message at a time (`STRuntime::helpOne`): a
+    queued task, or one message of one ready actor, or the resumption of one
+    suspended method. After each it checks its Future. The rest of the
+    actor's batch keeps its place ahead of the queue (`__pending__`), and
+    the actor is re-queued.
+  - **Unchanged:** per-actor order, the single runner per actor, the helping
+    cap and the capped park (S40, S43, S45-S47), and the deadlock verdicts.
+  - **Not changed, on purpose:** a worker that waits for nothing still runs
+    the popped actor's whole mailbox in one turn, its self-sends included
+    (F6 v5). So an actor that keeps re-sending itself keeps that worker, and
+    with one worker nothing else runs meanwhile. This is new deviation D59,
+    which also explains why bounding those turns would not buy fairness with
+    the LIFO ready queue.
+- **A socket's `timeout:` bounds a whole write, however large** (S49,
+  protoIO 0.7.1).
+  - **Before:** `nextPutBytes:` of 8 MiB to a peer that never reads blocked
+    in the kernel's `send` without limit.
+  - **Now:** the write never waits past the deadline. It signals
+    `ConnectionTimedOut`, as a read that times out does.
+  - **New `ConnectionTimedOut>>bytesWritten`:** for a write, the exact number
+    of leading bytes that went out (nil for a connect or a read). The message
+    text says it too: `write (N of M bytes written): Connection timed out`.
+  - **Continuing after a timeout:** on a socket without TLS the stream goes
+    on after those bytes, so writing the rest continues it. A TLS socket
+    refuses later writes after a failed one, because the half-sent record can
+    only be finished with the same bytes.
+  - **Pipes:** a pipe or terminal with a timeout is bounded the same way and
+    signals `FileSystemError`.
+
+### Tests
+
+- `conformance/10-actors/helping-wait-under-self-sending-actor.st` (the
+  protoBaseST probe).
+- `cli_helping_bounded_turn` (`tsan` label) runs, with `PROTOST_WORKERS=1`
+  and with the default pool:
+  - that program;
+  - a Spinner that waits 1 ms per spin;
+  - two timer-bound waits under a Spinner;
+  - a 500-message mailbox helped one message at a time, whose order and
+    single runner are checked.
+- `conformance/14-io/net_write_timeout.st`: a timed-out write's
+  `bytesWritten` is exact (the peer receives exactly what was written, then
+  the rest, in order), and a read timeout answers nil.
+- Against 0.16.0, four runs failed:
+  - the Spinner, the waiting Spinner and the timer cases with one worker:
+    the first and the timer case hung, and the waiting Spinner left the
+    waiter buried;
+  - the waiting Spinner with the default pool: the waiter stayed buried;
+  - the write test hung.
+
 ## 0.16.0 — 2026-11-20
 
 **Requires protoCore 3.6.1**, as 0.15.0 did (the floor is unchanged), and
