@@ -165,13 +165,25 @@ public:
     // load.
     // ---------------------------------------------------------------------
 
+    // Both fast paths below are forced inline (0.17.0): they run on every
+    // instance-variable read and every send, and GCC stopped inlining
+    // ivSymbol into PUSH_INSTVAR once runLoop grew by three handlers, which
+    // cost about 16 cycles per plain read (the 0.17.0 §14.1 gate). The slow
+    // paths stay out of line.
+#if defined(_MSC_VER)
+#define PROTOST_MODULE_INLINE __forceinline
+#else
+#define PROTOST_MODULE_INLINE inline __attribute__((always_inline))
+#endif
+
     // Interned symbol for constant-pool entry `i`, cached. The opcodes that
     // resolve a name — SEND_* (the selector), PUSH/STORE_GLOBAL,
     // PUSH/STORE_CAPTURED — run constantly; calling createSymbol (a SymbolTable
     // hash over a freshly parsed rope) on every execution was measured as a
     // dominant message-path cost. The symbol for a given constant never
     // changes, so it is interned once and cached.
-    const proto::ProtoString* constSym(proto::ProtoContext* ctx, size_t i) const {
+    PROTOST_MODULE_INLINE const proto::ProtoString* constSym(proto::ProtoContext* ctx,
+                                                         size_t i) const {
         if (const ConstCache* c = constCache_.load(std::memory_order_acquire);
             c && i < c->size) {
             if (const proto::ProtoString* s =
@@ -185,7 +197,8 @@ public:
     // mangled instance-variable storage key (PUSH_INSTVAR / STORE_INSTVAR).
     // Same rationale as constSym; a separate entry because the key carries
     // the "_iv_" prefix.
-    const proto::ProtoString* ivSymbol(proto::ProtoContext* ctx, size_t i) const {
+    PROTOST_MODULE_INLINE const proto::ProtoString* ivSymbol(proto::ProtoContext* ctx,
+                                                         size_t i) const {
         if (const ConstCache* c = constCache_.load(std::memory_order_acquire);
             c && i < c->size) {
             if (const proto::ProtoString* s =
