@@ -503,6 +503,13 @@ ExecutionEngine::storeOnceInstVar(proto::ProtoContext* ctx, const Frame& f, uint
     //
     // Everything read from `f` is read before the first send: the `=` send
     // and a signal's handler run Smalltalk code, which may grow `frames_`.
+    //
+    // The `=` send runs in a nested engine (sendDynamic), and `wait` never
+    // yields (FutureYield) while more than one engine is live on the thread
+    // (future_prims.cpp, prim_Future_wait: it helps instead). That is what
+    // keeps an actor from suspending in the middle of this store, between
+    // the popped `v` and the `x -> w` replacement, which a frame snapshot
+    // could not resume. A change to that yield policy must keep it so.
     auto* sym = f.m->ivSymbol(ctx, nameConst);
     const proto::ProtoObject* self = getSelf(f);
     if (!self || self == PROTO_NONE)
@@ -530,7 +537,7 @@ ExecutionEngine::storeOnceInstVar(proto::ProtoContext* ctx, const Frame& f, uint
                          "cannot assign to the write-once variable '" + name + "' of "
                          + ivarOwnerDescription(ctx, self)
                          + ": the receiver is immutable; nothing was written");
-        return PROTO_NONE;
+        return PROTO_NONE;   // defensive: the signal is not resumable
     }
     if (w == val) return w;
     TransientPin pinW(ctx, w);
@@ -551,6 +558,10 @@ ExecutionEngine::storeOnceInstVar(proto::ProtoContext* ctx, const Frame& f, uint
                      "the write-once variable '" + name + "' of "
                      + ivarOwnerDescription(ctx, self)
                      + " already holds a different value; nothing was written");
+    // Not reached by a resumption: ModificationForbidden is not resumable
+    // (`e resume:` raises IllegalResumeAttempt; once-unequal-not-resumable.st),
+    // and retry, return: and an unhandled error all unwind past this frame.
+    // A defensive fallthrough only, answering the variable's value.
     return w;
 }
 

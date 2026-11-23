@@ -364,8 +364,12 @@ private:
     // this write won, the installed value when it lost to an identical or
     // `=` one, the current value (nil when unset) when `val` is nil. A
     // losing write whose value is not `=` signals ModificationForbidden
-    // (M12) in place; an exception from `=` propagates. Runs Smalltalk code
-    // (the `=` send, a handler): the caller re-acquires its frame after.
+    // (M12) in place; ModificationForbidden is not resumable, so no handler
+    // supplies the store's value. An exception from `=` propagates. Runs
+    // Smalltalk code (the `=` send, a handler): the caller re-acquires its
+    // frame after. It is safe from FutureYield only because `wait` never
+    // yields inside a nested engine, where the `=` send runs
+    // (future_prims.cpp, prim_Future_wait).
     const proto::ProtoObject* storeOnceInstVar(proto::ProtoContext* ctx, const Frame& f,
                                                uint32_t nameConst,
                                                const proto::ProtoObject* val);
