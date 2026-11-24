@@ -276,11 +276,12 @@ struct LateSite {
     bool inDeoptCopy;
 };
 
-// The late sites of `m` and of its sub-modules, in code order, `m` first.
-// `inClosure` and `inDeoptCopy` describe the chain from the method body
-// down to `m` (both false for the body itself).
-void collectLateSites(const BytecodeModule& m, std::vector<LateSite>& out,
-                      bool inClosure = false, bool inDeoptCopy = false) {
+// Calls `f` on every instruction of `m` and of its sub-modules, in code
+// order, `m` first, as a LateSite (the operand decoded across EXTEND
+// prefixes). `inClosure` and `inDeoptCopy` describe the chain from the
+// method body down to `m` (both false for the body itself).
+template <typename F>
+void forEachSite(const BytecodeModule& m, F&& f, bool inClosure = false, bool inDeoptCopy = false) {
     const std::vector<uint8_t>& bytes = m.bytes();
     for (std::size_t pc = 0; pc + 1 < bytes.size(); ) {
         std::size_t opPos = pc;
@@ -293,14 +294,19 @@ void collectLateSites(const BytecodeModule& m, std::vector<LateSite>& out,
             arg = (arg << 8) | bytes[pc + 1];
             pc += kInstrSize;
         }
-        if (op == Op::PUSH_LATE_VAR || op == Op::STORE_LATE_VAR)
-            out.push_back(LateSite{&m, opPos, op, arg, inClosure, inDeoptCopy});
+        f(LateSite{&m, opPos, op, arg, inClosure, inDeoptCopy});
     }
     for (std::size_t i = 0; i < m.numBlocks(); ++i) {
         const BytecodeModule& sub = m.block(i);
-        collectLateSites(sub, out, inClosure || !sub.isDeoptCopy(),
-                         inDeoptCopy || sub.isDeoptCopy());
+        forEachSite(sub, f, inClosure || !sub.isDeoptCopy(), inDeoptCopy || sub.isDeoptCopy());
     }
+}
+
+// The late sites of `m` and of its sub-modules, in code order, `m` first.
+void collectLateSites(const BytecodeModule& m, std::vector<LateSite>& out) {
+    forEachSite(m, [&](const LateSite& site) {
+        if (site.op == Op::PUSH_LATE_VAR || site.op == Op::STORE_LATE_VAR) out.push_back(site);
+    });
 }
 
 // The store opcode of a late `:=` to the instance variable `name` of `cls`,
@@ -526,6 +532,124 @@ const proto::ProtoObject* previousDeclaration(STRuntime& rt, proto::ProtoContext
     return existing;
 }
 
+// Final review m3: a redeclaration that reuses the class object `cls` (the
+// textual path re-running into it) keeps every method installed on the class
+// and on the classes whose chain holds it. M11 compares the declaration with
+// the previous one only, so a variable that the previous declaration dropped
+// can come back with another modifier, and a method compiled while it had the
+// old one would still write or read it with the old modifier's instruction:
+// a write path that forgets the modifier (spec §2). For each such name
+// (`reintroduced`, with the modifier it now takes), every installed method
+// that names it is judged as a method installed late is (M1, M2, M4, with
+// the compiler's texts), and is also refused when its source would be allowed
+// but its instruction was chosen for the old modifier: compiled code is never
+// rewritten in place. The first M1, M2 or M4, else the first other misfit
+// (classes and selectors in name order), signals an Error before the
+// declaration records anything, so the class
+// keeps its previous declaration, as a script file refuses the same program
+// at compile time.
+void refuseStaleMethods(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* cls,
+                        const std::string& className,
+                        const std::unordered_map<std::string, IvarModifier>& reintroduced) {
+    const Bootstrap& b = rt.bootstrap();
+    auto isObject = [&](const proto::ProtoObject* o) {
+        return o && o != PROTO_NONE && !o->isInteger(ctx) && !o->isFloat(ctx) && !o->asString(ctx);
+    };
+    // The classes bound as globals (collected first: the callback must not
+    // allocate), then those whose chain holds `cls`. Every one is reachable
+    // from the globals, so the raw pointers stay valid.
+    struct ClassSink { const Bootstrap* b; std::vector<const proto::ProtoObject*> all; };
+    ClassSink classSink{&b, {}};
+    if (const proto::ProtoObject* g = rt.globals())
+        g->processOwnAttributes(ctx, &classSink,
+            [](proto::ProtoContext* c, void* self, const proto::ProtoString*,
+               const proto::ProtoObject* v) {
+                auto* k = static_cast<ClassSink*>(self);
+                if (!v || v == PROTO_NONE || v->isInteger(c) || v->isFloat(c) || v->asString(c))
+                    return;
+                const proto::ProtoObject* own = v->getOwnAttributeDirect(c, k->b->sym.className);
+                if (own && own != PROTO_NONE) k->all.push_back(v);
+            });
+    std::vector<std::pair<std::string, const proto::ProtoObject*>> classes{{className, cls}};
+    std::unordered_set<const proto::ProtoObject*> seen{cls};
+    std::vector<std::pair<std::string, const proto::ProtoObject*>> users;
+    for (const proto::ProtoObject* k : classSink.all) {
+        if (!seen.insert(k).second || isMetaclass(b, ctx, k)) continue;
+        bool holds = false;
+        forClassAndAncestors(ctx, k, [&](const proto::ProtoObject* p) { holds = holds || p == cls; });
+        if (holds) users.emplace_back(ownClassName(b, ctx, k), k);
+    }
+    std::sort(users.begin(), users.end(),
+              [](const auto& x, const auto& y) { return x.first < y.first; });
+    classes.insert(classes.end(), users.begin(), users.end());
+
+    struct Method { std::string selector; const BytecodeModule* code; };
+    std::string refusal, misfit;   // the first of each, in that order of precedence
+    for (const auto& [where, k] : classes) {
+        struct MethodSink { const Bootstrap* b; std::vector<Method> methods; };
+        MethodSink methodSink{&b, {}};
+        k->processOwnAttributes(ctx, &methodSink,
+            [](proto::ProtoContext* c, void* self, const proto::ProtoString* key,
+               const proto::ProtoObject* v) {
+                auto* s = static_cast<MethodSink*>(self);
+                if (!key || !v || v == PROTO_NONE || v->isInteger(c) || v->isFloat(c)
+                    || v->asString(c))
+                    return;
+                if (const BytecodeModule* code =
+                        blockCodeOf(c, v->getOwnAttributeDirect(c, s->b->sym.bcPtr)))
+                    s->methods.push_back(Method{key->toStdString(c), code});
+            });
+        std::sort(methodSink.methods.begin(), methodSink.methods.end(),
+                  [](const Method& x, const Method& y) { return x.selector < y.selector; });
+        for (const Method& method : methodSink.methods) {
+            forEachSite(*method.code, [&](const LateSite& site) {
+                const BytecodeModule& m = *site.module;
+                const bool group = site.op == Op::IVAR_GROUP || site.op == Op::IVAR_GROUP_END;
+                const bool store = group || site.op == Op::STORE_INSTVAR
+                                   || site.op == Op::STORE_CONST_INSTVAR
+                                   || site.op == Op::STORE_ONCE_INSTVAR;
+                const bool read = site.op == Op::PUSH_INSTVAR || site.op == Op::PUSH_CONST_INSTVAR;
+                if (!store && !read) return;
+                const std::string& var =
+                    m.constSymbol(group ? m.instVarGroupEntry(site.arg).nameConst : site.arg);
+                const auto it = reintroduced.find(var);
+                if (it == reintroduced.end()) return;
+                const IvarModifier now = it->second;
+                const std::string redo = ": redefine it first, then declare " + className + " again";
+                const std::string head = where + " >> " + method.selector + " was compiled when '"
+                                         + var + "' was ";
+                if (read) {
+                    const bool wasConstant = site.op == Op::PUSH_CONST_INSTVAR;
+                    if (wasConstant != (now == IvarModifier::Constant) && misfit.empty())
+                        misfit = head + (wasConstant ? "constant" : "not constant")
+                                 + " and does not fit '" + var + "' " + modifierName(now) + redo;
+                    return;
+                }
+                const IvarModifier was = site.op == Op::STORE_CONST_INSTVAR ? IvarModifier::Constant
+                                       : site.op == Op::STORE_ONCE_INSTVAR  ? IvarModifier::WriteOnce
+                                                                            : IvarModifier::Plain;
+                const int line = m.lineForPc(site.opPos);
+                auto refuse = [&](AssignmentRefusal why) {
+                    if (refusal.empty())
+                        refusal = assignmentRefusalText(why, var, where, line) + "; " + head
+                                  + modifierName(was) + redo;
+                };
+                if (now == IvarModifier::Atomic)
+                    refuse(AssignmentRefusal::AtomicAssigned);
+                else if (now == IvarModifier::Constant && method.selector != "initialize")
+                    refuse(AssignmentRefusal::ConstantOutsideInitialize);
+                else if (now == IvarModifier::Constant && site.inClosure && !site.inDeoptCopy)
+                    refuse(AssignmentRefusal::ConstantInsideBlock);
+                else if (was != now && misfit.empty())
+                    misfit = head + modifierName(was) + " and does not fit '" + var + "' "
+                             + modifierName(now) + redo;
+            });
+        }
+    }
+    if (!refusal.empty()) throw ClassedErrorSignal("Error", refusal);
+    if (!misfit.empty()) throw ClassedErrorSignal("Error", misfit);
+}
+
 // Records the instance-variable names a class declares (`names`, a string of
 // space-separated names) on the class object, `__instvar_names__`, which
 // `instVarNames` and resolveLateVariables read, and their modifiers
@@ -589,6 +713,16 @@ void declareInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
         if (const proto::ProtoObject* prev = previousDeclaration(rt, ctx, cls, name, ivKey)) {
             std::unordered_set<std::string> before;
             addDeclaredNames(ctx, prev, ivKey, before);
+            // m3: the methods a reused class object keeps must fit the
+            // modifier of every variable this declaration brings back.
+            if (prev == cls) {
+                std::unordered_map<std::string, IvarModifier> reintroduced;
+                for (std::size_t i = 0; i < declared.size(); ++i)
+                    if (!before.count(declared[i]))
+                        reintroduced.emplace(declared[i], modifiers.empty() ? IvarModifier::Plain
+                                                                            : modifiers[i]);
+                if (!reintroduced.empty()) refuseStaleMethods(rt, ctx, cls, name, reintroduced);
+            }
             const std::vector<ModifiedIvar> recorded = ownModifiersOf(ctx, prev);
             for (std::size_t i = 0; i < declared.size(); ++i) {
                 if (!before.count(declared[i])) continue;

@@ -649,6 +649,9 @@ add_test(NAME cli_unhandled_exception_label
 add_test(NAME cli_repl_class_across_inputs
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_repl_class_across_inputs.sh $<TARGET_FILE:protost>)
 
+add_test(NAME cli_repl_redeclare_stale_method
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_repl_redeclare_stale_method.sh $<TARGET_FILE:protost>)
+
 add_test(NAME cli_unset_constant_error_reserved
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_unset_constant_error_reserved.sh $<TARGET_FILE:protost>)
 

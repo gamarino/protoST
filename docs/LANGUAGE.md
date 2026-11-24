@@ -1240,6 +1240,16 @@ other read changes.
   the modifier of an existing variable signals an `Error`:
   `Account is already declared with 'balance' atomic; a class keeps the
   modifiers it was declared with`.
+  A redeclaration that brings back a variable an earlier one dropped, with
+  another modifier, keeps the class's methods. Each method of the class or of
+  a class that inherits it, if it uses that variable, must still fit. A method
+  that assigns it breaks M1, M2 or M4, as a method installed late does; a
+  method compiled for the old modifier does not fit either. Either one refuses
+  the redeclaration with an `Error`, and the class keeps its previous
+  declaration:
+  `Foo >> initialize was compiled when 'a' was plain and does not fit 'a'
+  constant: redefine it first, then declare Foo again`. A script file
+  refuses the same program at compile time.
 - **Reflection.** `Behavior >> instVarModifierOf:` answers `#plain`,
   `#constant`, `#writeOnce` or `#atomic`, and signals an `Error` for an
   undeclared name (`Account has no instance variable 'zork'`).
