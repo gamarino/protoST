@@ -1,0 +1,32 @@
+  const_read             old  not runnable: exit 65; /home/gamarino/Documentos/proyectos/worktrees/protost-0170/benchmarks/micro/const_read.st:8:30: unknown keyword in class declaration: constantNames:
+round 1/3
+  startup                old     127,391,293 cycles  (+-5.93%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2b/runs-gate/2
+  startup                new     123,813,784 cycles  (+-2.06%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2b/runs-gate/3
+  attr_lookup            old     172,077,804 cycles  (+-0.5%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2b/runs-gate/4
+  attr_lookup            new     175,050,616 cycles  (+-0.93%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2b/runs-gate/5
+  const_read             new     177,303,470 cycles  (+-0.65%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2b/runs-gate/6
+round 2/3
+  startup                new     121,446,662 cycles  (+-1.09%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2b/runs-gate/7
+  startup                old     119,143,028 cycles  (+-2.74%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2b/runs-gate/8
+  attr_lookup            new     174,288,656 cycles  (+-0.53%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2b/runs-gate/9
+  attr_lookup            old     170,346,802 cycles  (+-1.14%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2b/runs-gate/10
+  const_read             new     177,187,824 cycles  (+-1.08%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2b/runs-gate/11
+round 3/3
+  startup                old     113,686,599 cycles  (+-1.67%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2b/runs-gate/12
+  startup                new     123,270,854 cycles  (+-0.91%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2b/runs-gate/13
+  attr_lookup            old     176,589,624 cycles  (+-0.67%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2b/runs-gate/14
+  attr_lookup            new     173,184,821 cycles  (+-0.95%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2b/runs-gate/15
+  const_read             new     181,248,593 cycles  (+-2.09%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2b/runs-gate/16
+
+mean cycles (perf -r 3, 3 round(s))
+  startup                old    120,073,640  new    122,843,767
+  attr_lookup            old    173,004,743  new    174,174,698
+  const_read             new    178,579,962
+
+§14.1 gate
+  attr_lookup new/old            1.0068  (bound 1.01)  ok
+  const_read new / attr_lookup new 1.0253  (bound 1.03)  ok
+  startup-subtracted: attr 0.9698  const 1.0858  (information; verdicts differ: True)
+  const_read old: not runnable (G3)
+
+All runs verified. Both bounds hold.

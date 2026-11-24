@@ -137,10 +137,13 @@ a fresh copy of the binary and libprotoCore per run, and verified outputs
 
   | Program | 0.17.0 / 0.16.1 |
   |---|---:|
-  | 1,000,000 × bare `new` | R2_BARE |
-  | `Point x:y:` | R2_POINT |
-  | `Fraction numerator:denominator:` | R2_FRACTION |
-  | `micro/instances.st` | R2_INSTANCES |
+  | 1,000,000 × bare `new` | 1.018 (within noise) |
+  | `Point x:y:` | 1.052 |
+  | `Fraction numerator:denominator:` | 1.063 |
+  | `micro/instances.st` | 1.003 (noise) |
+
+  Two load-gated runs of three rounds each, pooled; per-round ratios for
+  `Point` and `Fraction` range from 0.95 to 1.20 on this machine.
 
 ### Deprecated
 

@@ -1,0 +1,35 @@
+round 1/3
+  bare_new               old   2,557,936,468 cycles  (+-1.3%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2/runs-new/1
+  bare_new               new   2,633,313,859 cycles  (+-3.54%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2/runs-new/2
+  instances              old   9,901,197,476 cycles  (+-0.37%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2/runs-new/3
+  instances              new  10,126,304,845 cycles  (+-1.96%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2/runs-new/4
+  point_new              old   2,203,007,575 cycles  (+-1.66%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2/runs-new/5
+  point_new              new   2,350,164,647 cycles  (+-1.05%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2/runs-new/6
+  fraction_new           old   3,277,173,512 cycles  (+-8.62%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2/runs-new/7
+  fraction_new           new   3,261,910,018 cycles  (+-2.91%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2/runs-new/8
+round 2/3
+  bare_new               new   2,488,889,874 cycles  (+-1.14%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2/runs-new/9
+  bare_new               old   2,441,607,248 cycles  (+-1.08%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2/runs-new/10
+  instances              new   9,994,251,391 cycles  (+-0.53%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2/runs-new/11
+  instances              old  10,597,167,375 cycles  (+-5.94%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2/runs-new/12
+  point_new              new   2,465,588,314 cycles  (+-5.57%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2/runs-new/13
+  point_new              old   2,413,261,953 cycles  (+-8.01%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2/runs-new/14
+  fraction_new           new   3,386,079,258 cycles  (+-5.15%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2/runs-new/15
+  fraction_new           old   3,115,634,713 cycles  (+-5.01%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2/runs-new/16
+round 3/3
+  bare_new               old   2,479,603,879 cycles  (+-0.71%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2/runs-new/17
+  bare_new               new   2,472,934,477 cycles  (+-0.4%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2/runs-new/18
+  instances              old   9,908,172,326 cycles  (+-2.09%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2/runs-new/19
+  instances              new  10,227,204,179 cycles  (+-2.75%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2/runs-new/20
+  point_new              old   2,262,954,474 cycles  (+-4.03%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2/runs-new/21
+  point_new              new   2,540,063,138 cycles  (+-4.17%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2/runs-new/22
+  fraction_new           old   3,343,713,388 cycles  (+-10.46%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2/runs-new/23
+  fraction_new           new   3,100,975,381 cycles  (+-1.27%)  /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r2/runs-new/24
+
+mean cycles (perf -r 3, 3 round(s))
+  bare_new               old  2,493,049,198  new  2,531,712,737
+  instances              old 10,135,512,392  new 10,115,920,138
+  point_new              old  2,293,074,667  new  2,451,938,700
+  fraction_new           old  3,245,507,204  new  3,249,654,886
+
+All runs verified.
