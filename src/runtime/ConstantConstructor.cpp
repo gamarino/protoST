@@ -230,11 +230,17 @@ const proto::ProtoObject* recordOwnerOf(STRuntime& rt, proto::ProtoContext* ctx,
 }
 
 // ---------------------------------------------------------------------------
-// The generated `new` (ConstantConstructor.h).
+// The generated `new` (ConstantConstructor.h): a hidden parent of the
+// metaclass.
 // ---------------------------------------------------------------------------
 
 const proto::ProtoString* generatedNewKey(proto::ProtoContext* ctx) {
     return proto::ProtoString::createSymbol(ctx, "__constant_new__");
+}
+
+// Owned by a hidden parent only: the metaclass it was built for.
+const proto::ProtoString* hiddenOwnerKey(proto::ProtoContext* ctx) {
+    return proto::ProtoString::createSymbol(ctx, "__generated_new_of__");
 }
 
 const proto::ProtoString* newSelector(proto::ProtoContext* ctx) {
@@ -248,57 +254,48 @@ const proto::ProtoObject* ownMetaclassOf(const Bootstrap& b, proto::ProtoContext
     return m && m != PROTO_NONE ? m : nullptr;
 }
 
-// The method object `cls` recorded as its generated `new`, or nullptr.
-const proto::ProtoObject* recordedNewOf(proto::ProtoContext* ctx, const proto::ProtoObject* cls) {
-    const proto::ProtoObject* v = cls->getOwnAttributeDirect(ctx, generatedNewKey(ctx));
-    return v && v != PROTO_NONE ? v : nullptr;
-}
-
-// The `new` the metaclass of `cls` holds itself, or nullptr.
-const proto::ProtoObject* ownNewOf(const Bootstrap& b, proto::ProtoContext* ctx,
-                                   const proto::ProtoObject* cls) {
+// The hidden parent `cls` recorded, when it was built for the metaclass the
+// class owns now (addBehavior: and a class copy carry the record of the
+// class they were built from, whose metaclass is another one), else nullptr.
+const proto::ProtoObject* liveHiddenOf(const Bootstrap& b, proto::ProtoContext* ctx,
+                                       const proto::ProtoObject* cls) {
+    const proto::ProtoObject* h = cls->getOwnAttributeDirect(ctx, generatedNewKey(ctx));
+    if (!h || h == PROTO_NONE) return nullptr;
     const proto::ProtoObject* meta = ownMetaclassOf(b, ctx, cls);
-    if (!meta) return nullptr;
-    const proto::ProtoObject* v = meta->getOwnAttributeDirect(ctx, newSelector(ctx));
-    return v && v != PROTO_NONE ? v : nullptr;
+    return meta && h->getOwnAttributeDirect(ctx, hiddenOwnerKey(ctx)) == meta ? h : nullptr;
 }
 
-// A user `new` on the metaclass of `cls`: one that is not the generated one
-// `cls` recorded. M9 keeps it off a class with constants.
-bool hasUserNew(const Bootstrap& b, proto::ProtoContext* ctx, const proto::ProtoObject* cls) {
-    const proto::ProtoObject* own = ownNewOf(b, ctx, cls);
-    return own && own != recordedNewOf(ctx, cls);
-}
-
-void refuseUserNew(const Bootstrap& b, proto::ProtoContext* ctx, const proto::ProtoObject* cls) {
-    if (hasUserNew(b, ctx, cls))
-        throw ClassedErrorSignal("Error", newRedefinitionText(classNameOf(b, ctx, cls)));
-}
-
-// Whether metaclass lookup from `cls` reaches a generated `new` before any
-// other: the first class on its chain, nearest first, whose metaclass holds
-// a `new` itself decides (Object's holds the kernel one).
+// Whether metaclass lookup from `cls`, past its own metaclass, reaches a
+// generated new: the first class on its chain, nearest first, that either
+// has a hidden parent (answers true) or is a kernel class whose metaclass
+// holds a `new` itself (Object, SortedCollection, ...: answers false)
+// decides. A `new` written by user code is transparent here: whether it
+// reaches the check through `super new` is the user's choice, and a subclass
+// inherits it (explicit-state spec §6.2, conformance 58 and 89).
 bool inheritsGeneratedNew(const Bootstrap& b, proto::ProtoContext* ctx,
                           const proto::ProtoObject* cls) {
     const proto::ProtoList* chain = cls->getParents(ctx);
     if (!chain) return false;
     TransientPin pinChain(ctx, reinterpret_cast<const proto::ProtoObject*>(chain));
+    const proto::ProtoString* userDeclared = proto::ProtoString::createSymbol(ctx, "__user_declared__");
     const proto::proto_ulong n = chain->getSize(ctx);
     for (proto::proto_ulong i = 0; i < n; ++i) {
         const proto::ProtoObject* p = chain->getAt(ctx, listIndex(i));
         if (!isClass(b, ctx, p)) continue;
-        const proto::ProtoObject* own = ownNewOf(b, ctx, p);
-        if (own) return own == recordedNewOf(ctx, p);
+        if (liveHiddenOf(b, ctx, p)) return true;
+        if (p->getOwnAttributeDirect(ctx, userDeclared) == PROTO_TRUE) continue;
+        const proto::ProtoObject* meta = ownMetaclassOf(b, ctx, p);
+        if (!meta) continue;
+        const proto::ProtoObject* own = meta->getOwnAttributeDirect(ctx, newSelector(ctx));
+        if (own && own != PROTO_NONE) return false;
     }
     return false;
 }
 
 // The method `new  ^ self __checkConstantsOf: super new after: #new`,
-// compiled by hand as the generated constructor is, and stamped for `super`
-// with the metaclass it is installed on.
-const proto::ProtoObject* buildGeneratedNew(STRuntime& rt, proto::ProtoContext* ctx,
-                                            const proto::ProtoObject* cls,
-                                            const proto::ProtoObject* meta) {
+// compiled by hand as the generated constructor is.
+const proto::ProtoObject* buildGeneratedNewMethod(STRuntime& rt, proto::ProtoContext* ctx,
+                                                  const proto::ProtoObject* cls) {
     const Bootstrap& b = rt.bootstrap();
     auto module = std::make_unique<BytecodeModule>();
     module->setArgCount(1);                                  // local 0 is self
@@ -316,16 +313,67 @@ const proto::ProtoObject* buildGeneratedNew(STRuntime& rt, proto::ProtoContext* 
     module->setDebugName(className + " class>>new");
     module->setSourceName("<generated new>");
     const BytecodeModule& code = rt.adoptModule(std::move(module));
-    // The method object, as installConstantConstructor makes one.
     const proto::ProtoObject* codeRef = blockCodeRefFor(rt, ctx, code);
     TransientPin pinCode(ctx, codeRef);
     const proto::ProtoString* names[4] = {
         b.sym.bcPtr, b.sym.captured, b.sym.homeFrame, b.sym.blockSelf };
     const proto::ProtoObject* values[4] = { codeRef, PROTO_NONE, ctx->fromLong(0), PROTO_NONE };
-    const proto::ProtoObject* method = b.closureTemplate->setAttributes(ctx, 4, names, values);
-    TransientPin pinMethod(ctx, method);
-    stampDefiningClass(rt, ctx, meta, method);
-    return method;
+    return b.closureTemplate->setAttributes(ctx, 4, names, values);
+}
+
+const proto::ProtoObject* asListObj(const proto::ProtoList* l) {
+    return reinterpret_cast<const proto::ProtoObject*>(l);
+}
+
+bool isHiddenParent(proto::ProtoContext* ctx, const proto::ProtoObject* o) {
+    if (!o || o == PROTO_NONE) return false;
+    const proto::ProtoObject* owner = o->getOwnAttributeDirect(ctx, hiddenOwnerKey(ctx));
+    return owner && owner != PROTO_NONE;
+}
+
+// The parent list of `meta` without hidden parents, with the live hidden
+// parent of every metaclass on it placed right after that metaclass (where
+// a metaclass created now, as a child of it, would see it), and `ownHidden`
+// first when given. Its parents become the rest of the list, so its
+// `super new` continues where the metaclass's lookup would. The metaclass is
+// re-parented only when the list changed.
+void rebuildMetaclassChain(const Bootstrap& b, proto::ProtoContext* ctx,
+                           const proto::ProtoObject* meta, const proto::ProtoObject* ownHidden) {
+    const proto::ProtoList* cur = meta->getParents(ctx);
+    TransientPin pinCur(ctx, asListObj(cur));
+    std::vector<const proto::ProtoObject*> curV, out;
+    const proto::proto_ulong n = cur ? cur->getSize(ctx) : 0;
+    for (proto::proto_ulong i = 0; i < n; ++i) curV.push_back(cur->getAt(ctx, listIndex(i)));
+    for (const proto::ProtoObject* e : curV) {
+        if (isHiddenParent(ctx, e)) continue;
+        out.push_back(e);
+        if (isMetaclass(b, ctx, e)) {
+            const proto::ProtoObject* cls = e->getOwnAttributeDirect(ctx, b.sym.soleInstance);
+            if (cls && cls != PROTO_NONE)
+                if (const proto::ProtoObject* h = liveHiddenOf(b, ctx, cls))
+                    if (h != ownHidden) out.push_back(h);
+        }
+    }
+    const proto::ProtoList* rest = ctx->newList();
+    TransientPin pinRest(ctx, asListObj(rest));
+    for (const proto::ProtoObject* e : out) {
+        rest = rest->appendLast(ctx, e);
+        pinRest.reset(asListObj(rest));
+    }
+    std::vector<const proto::ProtoObject*> want;
+    if (ownHidden) {
+        ownHidden->setParents(ctx, rest);   // mutable: in place
+        want.push_back(ownHidden);
+    }
+    want.insert(want.end(), out.begin(), out.end());
+    if (want == curV) return;
+    const proto::ProtoList* all = ctx->newList();
+    TransientPin pinAll(ctx, asListObj(all));
+    for (const proto::ProtoObject* e : want) {
+        all = all->appendLast(ctx, e);
+        pinAll.reset(asListObj(all));
+    }
+    meta->setParents(ctx, all);             // mutable: in place
 }
 
 } // namespace
@@ -468,46 +516,41 @@ void installGeneratedNew(STRuntime& rt, proto::ProtoContext* ctx, const proto::P
     const std::vector<std::string> own = ownConstantsOf(ctx, cls);
     const bool hasConstants = !constantNamesOf(rt, ctx, cls, own).empty();
     const bool needed = hasConstants && (!own.empty() || !inheritsGeneratedNew(b, ctx, cls));
-    const proto::ProtoObject* recorded = recordedNewOf(ctx, cls);
     auto* mcls = const_cast<proto::ProtoObject*>(cls);
     if (!needed) {
-        // A generated new the class no longer needs: it has no constants, or
-        // it now inherits one. Only the recorded method object is removed.
-        if (recorded) {
-            if (const proto::ProtoObject* meta = ownMetaclassOf(b, ctx, cls))
-                if (meta->getOwnAttributeDirect(ctx, newSelector(ctx)) == recorded)
-                    meta->removeAttribute(ctx, newSelector(ctx));
+        // No hidden parent of its own (none needed, or the one inherited
+        // through the metaclass chain is enough); only a recorded one is
+        // ever taken out of the chain.
+        if (cls->hasOwnAttribute(ctx, generatedNewKey(ctx)) == PROTO_TRUE)
             mcls->removeAttribute(ctx, generatedNewKey(ctx));
-        }
-        // M9: a class with constants that inherits its generated new keeps
-        // no user new either.
-        if (hasConstants) refuseUserNew(b, ctx, cls);
+        // The chain still follows the ancestors' hidden parents.
+        if (const proto::ProtoObject* meta = ownMetaclassOf(b, ctx, cls))
+            rebuildMetaclassChain(b, ctx, meta, nullptr);
         return;
     }
-    refuseUserNew(b, ctx, cls);
     const proto::ProtoObject* meta = ensureMetaclass(b, ctx, cls);
-    // Built afresh on every declaration: the method is stamped with the
-    // metaclass it is installed on, which addBehavior: replaces.
-    const proto::ProtoObject* method = buildGeneratedNew(rt, ctx, cls, meta);
-    TransientPin pinMethod(ctx, method);
-    meta->setAttribute(ctx, newSelector(ctx), method);
-    mcls->setAttribute(ctx, generatedNewKey(ctx), method);
+    const proto::ProtoObject* hidden = liveHiddenOf(b, ctx, cls);
+    if (!hidden) {
+        // A new hidden parent: an unnamed mutable object holding only the
+        // generated new and its owner, fully built before any chain holds
+        // it. The class's record and the metaclass's chain keep it alive.
+        const proto::ProtoObject* method = buildGeneratedNewMethod(rt, ctx, cls);
+        TransientPin pinMethod(ctx, method);
+        const proto::ProtoObject* h = b.classProto->newChild(ctx, /*isMutable=*/true);
+        TransientPin pinHidden(ctx, h);
+        h->setAttribute(ctx, hiddenOwnerKey(ctx), meta);
+        // `super new` inside it continues above the hidden parent.
+        stampDefiningClass(rt, ctx, h, method);
+        h->setAttribute(ctx, newSelector(ctx), method);
+        mcls->setAttribute(ctx, generatedNewKey(ctx), h);
+        hidden = h;
+    }
+    rebuildMetaclassChain(b, ctx, meta, hidden);
 }
 
-void checkGeneratedNewFree(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* cls,
-                           const std::vector<std::string>& ownConstants) {
-    const Bootstrap& b = rt.bootstrap();
-    if (!isClass(b, ctx, cls)) return;
-    if (constantNamesOf(rt, ctx, cls, ownConstants).empty()) return;
-    refuseUserNew(b, ctx, cls);
-    // A class redeclared in place that now declares constants gives them to
-    // every class whose chain holds it; none may keep a user new. (A new
-    // class object has no such classes; one that only inherits constants
-    // gave them to its dependents already.)
-    if (ownConstants.empty()
-        || cls->hasOwnAttribute(ctx, b.sym.instVarNames) != PROTO_TRUE)
-        return;
-    for (const proto::ProtoObject* k : classesHolding(rt, ctx, cls)) refuseUserNew(b, ctx, k);
+const proto::ProtoObject* visibleHolder(proto::ProtoContext* ctx, const proto::ProtoObject* holder) {
+    if (!isHiddenParent(ctx, holder)) return holder;
+    return holder->getOwnAttributeDirect(ctx, hiddenOwnerKey(ctx));
 }
 
 void refreshDependentGeneratedNews(STRuntime& rt, proto::ProtoContext* ctx,

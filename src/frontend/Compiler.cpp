@@ -931,10 +931,6 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
                 && n.stringList[0] == constructorSelectorFor(constants))
                 error(constructorRedefinitionText(n.stringList[0], n.text)
                       + " (line " + std::to_string(headerLine) + ")");
-            // The generated new of a class with constants (maintainer
-            // ruling of 2026-11-23): a user new would skip the check.
-            else if (!constants.empty() && n.stringList[0] == "new")
-                error(newRedefinitionText(n.text) + " (line " + std::to_string(headerLine) + ")");
         }
         currentMethodDebugName_     = n.text + ">>" + (n.stringList.empty() ? std::string("<method>") : n.stringList[0]);
         reportDuplicateNames(n.stringList, 1,

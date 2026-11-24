@@ -76,29 +76,32 @@ void installConstantConstructor(STRuntime& rt, proto::ProtoContext* ctx,
                                 const proto::ProtoObject* cls);
 
 // The generated `new` (explicit-state spec §6.2, maintainer ruling of
-// 2026-11-23). Object class >> new checks nothing. A class that has
+// 2026-11-23, round 3). Object class >> new checks nothing. A class that has
 // constants and does not reach a generated `new` through its metaclass chain
-// gets one on its own metaclass, a method equivalent to
+// gets a hidden parent: an unnamed object, first in its metaclass's parent
+// list, ahead of the superclass's metaclass, holding only
 //     new  ^ self __checkConstantsOf: super new after: #new
-// whose `super` is bound to that metaclass, so a kernel `new` above it
-// (SortedCollection, WriteStream, Random, UUID) still runs first. The class
-// records the method object it installed under `__constant_new__`. A
-// subclass without constants of its own inherits it through metaclass
-// lookup. A class that no longer needs its own loses it, and only the
-// recorded method object is ever removed, never a user method.
+// whose `super` continues above the hidden parent, so a kernel `new` above
+// it (SortedCollection, WriteStream, Random, UUID) still runs first. A user
+// class-side `new` on the metaclass overrides it, and its `super new` runs
+// the check (conformance 58); one that skips super, `^ self basicNew
+// initialize`, is unchecked (conformance 89, M14 at the first read). A
+// subclass without constants of its own inherits it through its metaclass
+// chain. The class records its hidden parent under `__constant_new__`; the
+// hidden parent owns `__generated_new_of__`, its metaclass. Reflection
+// never shows it: it owns no `__class_name__`, `superclass` is computed from
+// the class, and `lookupSelector:` answers its metaclass (visibleHolder).
 //
-// installGeneratedNew installs, re-installs or removes the method of `cls`
-// for its current records. M9: a user `new` on the metaclass of a class with
-// constants refuses it with an Error (ClassedErrorSignal), before anything
-// is changed. installConstantConstructor calls it.
+// installGeneratedNew builds, keeps or drops the hidden parent of `cls` for
+// its current records, and re-parents its metaclass, when it has one, so its
+// chain carries the live hidden parent of every metaclass on it (an
+// ancestor's that appeared or went away included). installConstantConstructor
+// calls it.
 void installGeneratedNew(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* cls);
 
-// M9 before a declaration changes anything: once `cls`'s own constants are
-// `ownConstants`, neither `cls` nor, when it gains constants of its own, any
-// class bound as a global whose chain holds it may keep a user `new` on its
-// metaclass. Throws a ClassedErrorSignal (Error) with M9's text otherwise.
-void checkGeneratedNewFree(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* cls,
-                           const std::vector<std::string>& ownConstants);
+// The object `lookupSelector:` answers for a method found on `holder`: the
+// metaclass a hidden parent was built for, else `holder` itself.
+const proto::ProtoObject* visibleHolder(proto::ProtoContext* ctx, const proto::ProtoObject* holder);
 
 // Re-plans the generated `new` of every class bound as a global whose chain
 // holds `cls`, after a declaration changed `cls` in place: a class that

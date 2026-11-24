@@ -1,4 +1,4 @@
-"-- used by const-generated-new-m9.st: Sub inherits its constants."
-"A class-side new on a subclass, installed late (M9)."
+"-- used by const-generated-new-late-user-new.st: Sub inherits its constants."
+"A class-side new on a subclass that calls super new, installed late."
 Sub class >> new
-  ^ self basicNew initialize
+  ^ super new

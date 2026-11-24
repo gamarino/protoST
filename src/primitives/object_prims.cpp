@@ -699,9 +699,6 @@ void declareInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
         for (std::size_t i = 0; i < modifiers.size(); ++i)
             if (modifiers[i] == IvarModifier::Constant) ownConstants.push_back(declared[i]);
         checkConstantConstructorFree(rt, ctx, cls, ownConstants);
-        // M9 for the generated new: no user new on the class, nor, when it
-        // now declares constants in place, on a class whose chain holds it.
-        checkGeneratedNewFree(rt, ctx, cls, ownConstants);
     }
     // Every instance template and constant cache built before this
     // declaration may now be wrong (this class's or, for a subclass or a
@@ -745,25 +742,20 @@ void declareInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
 //
 // Used by MethodDecl compilation (F4-U3) to attach a compiled method wrapper
 // (a BlockClosure-shaped object) to a class proto under its selector symbol.
-// M9 (explicit-state spec §6.2, §12; maintainer ruling of 2026-11-23): a
-// class-side method of `cls` cannot take the selector of a method generated
-// for it: its generated constructor, its own or the one it inherits (read
-// through the chain, pre-flight ruling C9), or, for a class with constants,
-// own or inherited, the generated new that checks them. The compiler refuses
-// both for a class it can see; this refuses them at install time for every
-// other class, on both install paths (__installClassMethod:as: on the class,
-// __installMethod:as: on its metaclass), so no install bypasses the check.
+// M9 (explicit-state spec §6.2, §12): a class-side method of `cls` cannot
+// take the selector of its generated constructor, its own or the one it
+// inherits (read through the chain, pre-flight ruling C9). The compiler
+// refuses it for a class it can see; this refuses it at install time for
+// every other class, on both install paths (__installClassMethod:as: on the
+// class, __installMethod:as: on its metaclass), so no install bypasses it.
+// (A user class-side new is allowed: the generated new lives in a hidden
+// parent of the metaclass, and the user's `super new` reaches it.)
 static void refuseGeneratedSelector(STRuntime& rt, proto::ProtoContext* ctx,
                                     const proto::ProtoObject* cls, const std::string& selector,
                                     const proto::ProtoObject* methodObj) {
     const Bootstrap& b = rt.bootstrap();
-    std::string text;
-    if (selector == "new" && cls->getAttribute(ctx, b.sym.hasConstants) == PROTO_TRUE)
-        text = newRedefinitionText(ownClassName(b, ctx, cls));
-    else if (!selector.empty() && selector == constantConstructorOf(rt, ctx, cls))
-        text = constructorRedefinitionText(selector, ownClassName(b, ctx, cls));
-    else
-        return;
+    if (selector.empty() || selector != constantConstructorOf(rt, ctx, cls)) return;
+    std::string text = constructorRedefinitionText(selector, ownClassName(b, ctx, cls));
     const BytecodeModule* code = blockCodeOf(ctx, methodObj->getOwnAttributeDirect(ctx, b.sym.bcPtr));
     if (code) text += " (line " + std::to_string(code->methodLine()) + ")";
     throw ClassedErrorSignal("Error", text);
@@ -1152,6 +1144,9 @@ void giveOwnMetaclass(STRuntime& rt, proto::ProtoContext* ctx,
                 return;
             k->to->setAttribute(c, name, val);
         });
+    // The copied class carries the record of the original's hidden parent,
+    // built for the original's metaclass: the copy gets its own.
+    installGeneratedNew(rt, ctx, newCls);
 }
 
 const proto::ProtoObject* addBehaviorToClass(STRuntime& rt,
@@ -2401,7 +2396,10 @@ const proto::ProtoObject* prim_Behavior_lookupSelector(STRuntime& rt, proto::Pro
         const proto::proto_ulong n = chain->getSize(ctx);
         for (proto::proto_ulong i = 0; i < n; ++i) {
             const proto::ProtoObject* p = chain->getAt(ctx, listIndex(i));
-            if (p && p != PROTO_NONE && p->getOwnAttributeDirect(ctx, sel) == m) return p;
+            if (p && p != PROTO_NONE && p->getOwnAttributeDirect(ctx, sel) == m)
+                // The generated new's hidden parent is not a behavior of its
+                // own: it answers as the metaclass it was built for.
+                return visibleHolder(ctx, p);
         }
     }
     return PROTO_NONE;

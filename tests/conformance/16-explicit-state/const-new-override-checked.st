@@ -1,13 +1,17 @@
-"EXPECT-ERROR: new is generated for Account, which has constants: it runs super new and then checks them, and cannot be redefined; give your constructor another name (line 9)"
-"Spec §6.2, M9, conformance 58 as amended by the maintainer ruling of
- 2026-11-23: a class with constants has a generated class-side new that runs
- super new and then the end-of-construction check. A user new on it would
- skip or reorder that check, so the compiler refuses one, even one that
- calls super new. The class gets its initialisation through initialize or a
- constructor under another name."
-Object subclass: #Account instanceVariableNames: '' constantNames: 'number owner'.
+"EXPECT: #('the constant ''owner'' of an Account is not set at the end of construction (new)' 'not reached')"
+"Spec §6.2, M13, conformance 58: a class-side new override that calls super
+ new gets the check. It runs in super new, so the override never goes on
+ past it."
+Object subclass: #Account instanceVariableNames: '' classVariableNames: 'Trace' constantNames: 'number owner'.
+Account class >> trace
+  ^ Trace
 Account class >> new
-  ^ super new
+  | a |
+  Trace := 'not reached'.
+  a := super new.
+  Trace := 'reached'.
+  ^ a
 Account >> initialize
   number := 1
-'not reached' printNl.
+
+{[Account new] on: Error do: [:e | e messageText]. Account trace}
