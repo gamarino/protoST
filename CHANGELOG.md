@@ -27,6 +27,10 @@ since 3.6.1), with no API or ABI change.
 - **`--print-last` could lose its result.** The result was written to stdout
   and left in its buffer while the runtime shut down; a shutdown that was slow
   or killed discarded it. It is now flushed before `~STRuntime` runs.
+- **`cli_actor_stress` reported a hang as "exited 0".** The script read `$?`
+  after `if ! out=$(...)`, which is the negated status; a run that hit its
+  15 s timeout looked like a clean exit. It now reports a timeout as a
+  deadlock and any other failure with its real status.
 
 ## 0.17.0 — 2026-11-24
 
