@@ -137,13 +137,16 @@ a fresh copy of the binary and libprotoCore per run, and verified outputs
 
   | Program | 0.17.0 / 0.16.1 |
   |---|---:|
-  | 1,000,000 × bare `new` | 1.018 (within noise) |
+  | 1,000,000 × bare `new` | 0.974 (within noise) |
   | `Point x:y:` | 1.052 |
   | `Fraction numerator:denominator:` | 1.063 |
-  | `micro/instances.st` | 1.003 (noise) |
+  | `micro/instances.st` | 1.012 (noise) |
 
-  Two load-gated runs of three rounds each, pooled; per-round ratios for
-  `Point` and `Fraction` range from 0.95 to 1.20 on this machine.
+  Two load-gated runs of three rounds each, pooled: bare `new` and
+  `instances.st` on the final build, `Point` and `Fraction` on the build
+  before the generated `new` moved into a hidden parent, which does not
+  touch their path; per-round ratios for those two range from 0.95 to 1.20
+  on this machine.
 
 ### Deprecated
 

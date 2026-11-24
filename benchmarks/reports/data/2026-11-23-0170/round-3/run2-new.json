@@ -1,0 +1,301 @@
+{
+ "date": "2026-11-24T00:31:31",
+ "host": "DEV12",
+ "kernel": "7.0.0-43-generic",
+ "repeat": 3,
+ "rounds": 3,
+ "libdir": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/pc-361/lib",
+ "builds": [
+  {
+   "label": "old",
+   "path": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ref-0161/build_release/protost",
+   "sha256": "2dbe59c369550e9893005d26a77386566ace066a1c758da7986a3c6b029404c0",
+   "stdlib": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ref-0161/lib",
+   "version": "protoST 0.16.1"
+  },
+  {
+   "label": "new",
+   "path": "/home/gamarino/Documentos/proyectos/worktrees/protost-0170/build_release/protost",
+   "sha256": "a1b9203b8b7e44c86f466b6f2c00b92887a99d022b8686ae31e0450b3e8d0a1b",
+   "stdlib": "/home/gamarino/Documentos/proyectos/worktrees/protost-0170/lib",
+   "version": "protoST 0.16.1"
+  }
+ ],
+ "not_runnable": [],
+ "measurements": [
+  {
+   "program": "bare_new",
+   "build": "old",
+   "run_dir": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/1",
+   "protoCore": "libprotoCore.so.5 => /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/1/libprotoCore.so.5",
+   "protoCore_file": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/1/libprotoCore.so.3.6.1",
+   "cycles": 2582550789,
+   "stddev_pct": 1.92,
+   "runs": 3,
+   "verified": "3 x VERIFIED 1000000",
+   "load_before": [
+    3.16,
+    4.89,
+    6.71
+   ],
+   "load_after": [
+    3.16,
+    4.89,
+    6.71
+   ],
+   "time": "2026-11-24T00:31:33"
+  },
+  {
+   "program": "bare_new",
+   "build": "new",
+   "run_dir": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/2",
+   "protoCore": "libprotoCore.so.5 => /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/2/libprotoCore.so.5",
+   "protoCore_file": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/2/libprotoCore.so.3.6.1",
+   "cycles": 2504038417,
+   "stddev_pct": 4.32,
+   "runs": 3,
+   "verified": "3 x VERIFIED 1000000",
+   "load_before": [
+    3.16,
+    4.89,
+    6.71
+   ],
+   "load_after": [
+    3.63,
+    4.96,
+    6.73
+   ],
+   "time": "2026-11-24T00:31:36"
+  },
+  {
+   "program": "instances",
+   "build": "old",
+   "run_dir": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/3",
+   "protoCore": "libprotoCore.so.5 => /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/3/libprotoCore.so.5",
+   "protoCore_file": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/3/libprotoCore.so.3.6.1",
+   "cycles": 10258956165,
+   "stddev_pct": 1.6,
+   "runs": 3,
+   "verified": "3 x instances ok",
+   "load_before": [
+    3.63,
+    4.96,
+    6.73
+   ],
+   "load_after": [
+    3.66,
+    4.94,
+    6.71
+   ],
+   "time": "2026-11-24T00:31:44"
+  },
+  {
+   "program": "instances",
+   "build": "new",
+   "run_dir": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/4",
+   "protoCore": "libprotoCore.so.5 => /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/4/libprotoCore.so.5",
+   "protoCore_file": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/4/libprotoCore.so.3.6.1",
+   "cycles": 10145124969,
+   "stddev_pct": 1.38,
+   "runs": 3,
+   "verified": "3 x instances ok",
+   "load_before": [
+    3.66,
+    4.94,
+    6.71
+   ],
+   "load_after": [
+    4.35,
+    5.04,
+    6.73
+   ],
+   "time": "2026-11-24T00:31:51"
+  },
+  {
+   "program": "bare_new",
+   "build": "new",
+   "run_dir": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/5",
+   "protoCore": "libprotoCore.so.5 => /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/5/libprotoCore.so.5",
+   "protoCore_file": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/5/libprotoCore.so.3.6.1",
+   "cycles": 2444981010,
+   "stddev_pct": 0.53,
+   "runs": 3,
+   "verified": "3 x VERIFIED 1000000",
+   "load_before": [
+    4.35,
+    5.04,
+    6.73
+   ],
+   "load_after": [
+    4.35,
+    5.04,
+    6.73
+   ],
+   "time": "2026-11-24T00:31:53"
+  },
+  {
+   "program": "bare_new",
+   "build": "old",
+   "run_dir": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/6",
+   "protoCore": "libprotoCore.so.5 => /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/6/libprotoCore.so.5",
+   "protoCore_file": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/6/libprotoCore.so.3.6.1",
+   "cycles": 2471998292,
+   "stddev_pct": 0.61,
+   "runs": 3,
+   "verified": "3 x VERIFIED 1000000",
+   "load_before": [
+    4.35,
+    5.04,
+    6.73
+   ],
+   "load_after": [
+    4.56,
+    5.07,
+    6.73
+   ],
+   "time": "2026-11-24T00:31:56"
+  },
+  {
+   "program": "instances",
+   "build": "new",
+   "run_dir": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/7",
+   "protoCore": "libprotoCore.so.5 => /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/7/libprotoCore.so.5",
+   "protoCore_file": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/7/libprotoCore.so.3.6.1",
+   "cycles": 10529792997,
+   "stddev_pct": 4.35,
+   "runs": 3,
+   "verified": "3 x instances ok",
+   "load_before": [
+    4.56,
+    5.07,
+    6.73
+   ],
+   "load_after": [
+    4.92,
+    5.14,
+    6.74
+   ],
+   "time": "2026-11-24T00:32:03"
+  },
+  {
+   "program": "instances",
+   "build": "old",
+   "run_dir": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/8",
+   "protoCore": "libprotoCore.so.5 => /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/8/libprotoCore.so.5",
+   "protoCore_file": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/8/libprotoCore.so.3.6.1",
+   "cycles": 10348090629,
+   "stddev_pct": 3.11,
+   "runs": 3,
+   "verified": "3 x instances ok",
+   "load_before": [
+    4.92,
+    5.14,
+    6.74
+   ],
+   "load_after": [
+    4.92,
+    5.14,
+    6.72
+   ],
+   "time": "2026-11-24T00:32:11"
+  },
+  {
+   "program": "bare_new",
+   "build": "old",
+   "run_dir": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/9",
+   "protoCore": "libprotoCore.so.5 => /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/9/libprotoCore.so.5",
+   "protoCore_file": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/9/libprotoCore.so.3.6.1",
+   "cycles": 2565928016,
+   "stddev_pct": 0.68,
+   "runs": 3,
+   "verified": "3 x VERIFIED 1000000",
+   "load_before": [
+    4.92,
+    5.14,
+    6.72
+   ],
+   "load_after": [
+    4.92,
+    5.14,
+    6.72
+   ],
+   "time": "2026-11-24T00:32:14"
+  },
+  {
+   "program": "bare_new",
+   "build": "new",
+   "run_dir": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/10",
+   "protoCore": "libprotoCore.so.5 => /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/10/libprotoCore.so.5",
+   "protoCore_file": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/10/libprotoCore.so.3.6.1",
+   "cycles": 2397793824,
+   "stddev_pct": 1.02,
+   "runs": 3,
+   "verified": "3 x VERIFIED 1000000",
+   "load_before": [
+    4.92,
+    5.14,
+    6.72
+   ],
+   "load_after": [
+    4.69,
+    5.08,
+    6.7
+   ],
+   "time": "2026-11-24T00:32:16"
+  },
+  {
+   "program": "instances",
+   "build": "old",
+   "run_dir": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/11",
+   "protoCore": "libprotoCore.so.5 => /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/11/libprotoCore.so.5",
+   "protoCore_file": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/11/libprotoCore.so.3.6.1",
+   "cycles": 9918380788,
+   "stddev_pct": 2.59,
+   "runs": 3,
+   "verified": "3 x instances ok",
+   "load_before": [
+    4.69,
+    5.08,
+    6.7
+   ],
+   "load_after": [
+    4.63,
+    5.06,
+    6.68
+   ],
+   "time": "2026-11-24T00:32:23"
+  },
+  {
+   "program": "instances",
+   "build": "new",
+   "run_dir": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/12",
+   "protoCore": "libprotoCore.so.5 => /tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/12/libprotoCore.so.5",
+   "protoCore_file": "/tmp/claude-1000/-home-gamarino-Documentos-proyectos/c08c626b-89d4-4a1e-b668-5ae9b9051093/scratchpad/plan0170/ffix/perf-r3b/runs-new/12/libprotoCore.so.3.6.1",
+   "cycles": 10039315976,
+   "stddev_pct": 1.41,
+   "runs": 3,
+   "verified": "3 x instances ok",
+   "load_before": [
+    4.63,
+    5.06,
+    6.68
+   ],
+   "load_after": [
+    4.53,
+    5.03,
+    6.65
+   ],
+   "time": "2026-11-24T00:32:31"
+  }
+ ],
+ "mean_cycles": {
+  "bare_new": {
+   "old": 2540159032,
+   "new": 2448937750
+  },
+  "instances": {
+   "old": 10175142527,
+   "new": 10238077981
+  }
+ }
+}
