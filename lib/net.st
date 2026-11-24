@@ -77,7 +77,8 @@ ServerSocket class >> listenOn: aPort
 
 ServerSocket class >> listenOn: aPort host: aHost
   "aHost '' listens on every interface; '127.0.0.1' only locally."
-  ^ self basicNew setDescriptor: (self __tcpListen: aHost port: aPort backlog: 128).
+  ^ self __checkConstructed: (self basicNew setDescriptor: (self __tcpListen: aHost port: aPort backlog: 128))
+      selector: #listenOn:host:.
 
 ServerSocket >> setDescriptor: anInteger
   fd := anInteger.
@@ -108,7 +109,8 @@ UDPSocket class >> bindTo: aPort
   ^ self bindTo: aPort host: ''.
 
 UDPSocket class >> bindTo: aPort host: aHost
-  ^ self basicNew setDescriptor: (self __udpBind: aHost port: aPort).
+  ^ self __checkConstructed: (self basicNew setDescriptor: (self __udpBind: aHost port: aPort))
+      selector: #bindTo:host:.
 
 UDPSocket >> setDescriptor: anInteger
   fd := anInteger.

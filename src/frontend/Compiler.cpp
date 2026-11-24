@@ -484,6 +484,88 @@ Compiler::resolveClassVarsFor(const std::string& className) const {
     return out;
 }
 
+// The class in `classes`, on `className`'s chain, that declares the instance
+// variable `name` (searched as instVarsThroughChain walks: each class, its
+// mixins, then its superclass); `out` receives that declaration's modifier.
+static bool findModifierThroughChain(
+        const std::unordered_map<std::string, Compiler::ClassInfo>& classes,
+        const std::string& className, const std::string& name, IvarModifier& out,
+        std::unordered_set<std::string>& seenClasses) {
+    std::string cur = className;
+    while (!cur.empty() && seenClasses.insert(cur).second) {
+        auto it = classes.find(cur);
+        if (it == classes.end()) return false;
+        const Compiler::ClassInfo& info = it->second;
+        if (std::find(info.instVarNames.begin(), info.instVarNames.end(), name)
+            != info.instVarNames.end()) {
+            auto m = info.modifiers.find(name);
+            out = m == info.modifiers.end() ? IvarModifier::Plain : m->second;
+            return true;
+        }
+        for (const auto& mixin : info.mixinNames)
+            if (findModifierThroughChain(classes, mixin, name, out, seenClasses)) return true;
+        cur = info.superclassName;
+    }
+    return false;
+}
+
+// The constants of `className`'s instances as the runtime orders them
+// (constantNamesOf, IvarModifiers.h): the superclass's (recursively), then each
+// mixin's in listed order, then the class's own in source order, every name
+// once. Only meaningful for a class whose chain is fully known.
+static void constantsThroughChain(
+        const std::unordered_map<std::string, Compiler::ClassInfo>& classes,
+        const std::string& className, std::vector<std::string>& out,
+        std::unordered_set<std::string>& seenClasses) {
+    if (className.empty() || !seenClasses.insert(className).second) return;
+    auto it = classes.find(className);
+    if (it == classes.end()) return;
+    const Compiler::ClassInfo& info = it->second;
+    constantsThroughChain(classes, info.superclassName, out, seenClasses);
+    for (const auto& mixin : info.mixinNames)
+        constantsThroughChain(classes, mixin, out, seenClasses);
+    for (const auto& iv : info.instVarNames) {
+        auto m = info.modifiers.find(iv);
+        if (m != info.modifiers.end() && m->second == IvarModifier::Constant
+            && std::find(out.begin(), out.end(), iv) == out.end())
+            out.push_back(iv);
+    }
+}
+
+// Whether `className` or a class on its chain was composed with addBehavior:
+// (ClassInfo::behaviorAdded): its constants are then not all in view.
+static bool chainHasAddedBehavior(
+        const std::unordered_map<std::string, Compiler::ClassInfo>& classes,
+        const std::string& className) {
+    std::unordered_set<std::string> seen;
+    std::vector<std::string> todo{className};
+    while (!todo.empty()) {
+        const std::string cur = todo.back();
+        todo.pop_back();
+        if (cur.empty() || !seen.insert(cur).second) continue;
+        auto it = classes.find(cur);
+        if (it == classes.end()) continue;
+        if (it->second.behaviorAdded) return true;
+        todo.push_back(it->second.superclassName);
+        for (const auto& m : it->second.mixinNames) todo.push_back(m);
+    }
+    return false;
+}
+
+IvarModifier Compiler::modifierThroughChain(const std::string& cls, const std::string& name) const {
+    IvarModifier out = IvarModifier::Plain;
+    std::unordered_set<std::string> seen;
+    if (!classes_.empty()) {
+        findModifierThroughChain(classes_, cls, name, out, seen);
+        return out;
+    }
+    // Before collectClasses: the classes it would start from.
+    auto inView = sharedClassRegistrySnapshot();
+    for (const auto& [n, info] : knownClasses_) inView[n] = info;
+    findModifierThroughChain(inView, cls, name, out, seen);
+    return out;
+}
+
 std::unordered_map<std::string, Compiler::ClassInfo> Compiler::sharedClassRegistrySnapshot() {
     std::lock_guard<std::mutex> lock(g_classRegistryMutex);
     return classRegistry();
@@ -507,6 +589,12 @@ void Compiler::publishToSharedClassRegistry(const Node& module) {
         if (!topPtr || topPtr->kind != NodeKind::ClassDecl) continue;
         auto it = classes_.find(topPtr->text);
         if (it != classes_.end()) classRegistry()[it->first] = it->second;
+    }
+    // A class of another module that this one composes keeps the mark.
+    for (const auto& [name, info] : classes_) {
+        if (!info.behaviorAdded) continue;
+        auto it = classRegistry().find(name);
+        if (it != classRegistry().end()) it->second.behaviorAdded = true;
     }
 }
 
@@ -537,6 +625,10 @@ void Compiler::collectClasses(const Node& module) {
                 != info.instVarNames.end())
                 error("instance variable '" + iv + "' is declared twice in " + info.name);
             info.instVarNames.push_back(iv);
+            // Explicit-state spec §6.1: only the non-plain variables are
+            // recorded; a name declared twice keeps its first modifier.
+            if (i - 1 < cd.ivarModifiers.size() && cd.ivarModifiers[i - 1] != IvarModifier::Plain)
+                info.modifiers.emplace(iv, cd.ivarModifiers[i - 1]);
         }
         for (size_t i = ivEnd; i < cd.stringList.size(); ++i) {
             info.classVarNames.push_back(cd.stringList[i]);
@@ -601,7 +693,22 @@ void Compiler::collectClasses(const Node& module) {
             sup = it->second.superclassName;
         }
     }
+    // A class this module composes at run time (`Name addBehavior: …`,
+    // `Name addParent: …`) gains parents the compiler does not see, and with
+    // them constants: its generated constructor's selector is known only at
+    // run time, so the compile-time M9 leaves it to the install-time check.
+    markBehaviorAdded(module);
     publishToSharedClassRegistry(module);
+}
+
+void Compiler::markBehaviorAdded(const Node& n) {
+    if (n.kind == NodeKind::KeywordSend && (n.text == "addBehavior:" || n.text == "addParent:")
+        && !n.children.empty() && n.children[0] && n.children[0]->kind == NodeKind::Identifier) {
+        auto it = classes_.find(n.children[0]->text);
+        if (it != classes_.end()) it->second.behaviorAdded = true;
+    }
+    for (const auto& c : n.children)
+        if (c) markBehaviorAdded(*c);
 }
 
 std::unique_ptr<BytecodeModule> Compiler::compileModule(const Node& mod) {
@@ -675,8 +782,25 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             m.emitWide(Op::PUSH_CONST,
                        static_cast<unsigned int>(nameSymIdx), currentLine_);
             const size_t ivCount = static_cast<size_t>(n.intValue);
+            const bool modified = hasIvarModifiers(n);
             std::string selector;
-            if (ivCount > 0) {
+            if (modified) {
+                // With modifiers, the variables are declared once, with
+                // their modifiers, by the primitive that builds the class
+                // (pre-flight ruling C8), before it binds the class (M11).
+                std::vector<std::string> declared(n.stringList.begin() + 1,
+                                                  n.stringList.begin() + 1 + static_cast<long>(ivCount));
+                std::string ivars;
+                for (size_t i = 0; i < ivCount; ++i) {
+                    if (i > 0) ivars += ' ';
+                    ivars += declared[i];
+                }
+                auto ivStrIdx = m.addString(ivars);
+                auto kindsIdx = m.addString(encodeModifiers(declared, n.ivarModifiers));
+                m.emitWide(Op::PUSH_CONST, static_cast<unsigned int>(ivStrIdx), currentLine_);
+                m.emitWide(Op::PUSH_CONST, static_cast<unsigned int>(kindsIdx), currentLine_);
+                selector = "__subclass:instanceVariableNames:modifiers:uses:";
+            } else if (ivCount > 0) {
                 // declared instance variables → subclass:instanceVariableNames:uses:
                 std::string ivars;
                 for (size_t i = 0; i < ivCount; ++i) {
@@ -695,7 +819,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             auto selIdx = m.internSymbol(selector);
             m.emitWide(Op::SEND_KEYWORD,
                        static_cast<unsigned int>(selIdx), currentLine_);
-            emitSetInstVarNames(m, n);
+            if (!modified) emitSetInstVarNames(m, n);
             // D19 (2026-06-13): install class-var initial values on the new
             // class. Class is on the stack as the SEND's result; the primitive
             // walks the packed name string, sets `_iv_<name>` = nil for each,
@@ -795,6 +919,19 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         // can resolve identifiers against this class's inst vars before
         // falling back to globals.
         enterMethodClass(n);
+        // M9 (explicit-state spec §6.2, §12): a class-side method may not
+        // take the selector of the class's generated constructor. For a class
+        // whose chain the compiler cannot see whole, __installClassMethod:as:
+        // refuses it when it is installed.
+        if (n.boolFlag && !currentMethodLate_ && !n.stringList.empty()) {
+            std::vector<std::string> constants;
+            std::unordered_set<std::string> seen;
+            constantsThroughChain(classes_, n.text, constants, seen);
+            if (!constants.empty() && !chainHasAddedBehavior(classes_, n.text)
+                && n.stringList[0] == constructorSelectorFor(constants))
+                error(constructorRedefinitionText(n.stringList[0], n.text)
+                      + " (line " + std::to_string(headerLine) + ")");
+        }
         currentMethodDebugName_     = n.text + ">>" + (n.stringList.empty() ? std::string("<method>") : n.stringList[0]);
         reportDuplicateNames(n.stringList, 1,
                              n.text + ">>" + (n.stringList.empty() ? std::string() : n.stringList[0]));
@@ -873,6 +1010,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         // BL-1: record the defining class so the engine can resolve `super`
         // sends inside this method body (lookup starts at the class's parent).
         sub->setDefiningClass(n.text);
+        sub->setHeaderLine(headerLine);
         if (currentMethodLate_)
             sub->setLateBinding(replMode_, std::vector<std::string>(
                                                n.stringList.begin() + 1, n.stringList.end()));
@@ -1074,6 +1212,7 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
         sub->setDebugName(n.text + ">>" + n.stringList[0] + "(...)");
         currentMethodDebugName_ = sub->debugName();
         sub->setDefiningClass(n.text);
+        sub->setHeaderLine(headerLine);
         if (currentMethodLate_)
             sub->setLateBinding(replMode_, std::vector<std::string>(
                                                n.stringList.begin() + 1, n.stringList.end()));
@@ -1132,13 +1271,20 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
             m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slot), currentLine_);
             return;
         }
-        // F4-U5: instance variable of the current method's class.
+        // F4-U5: instance variable of the current method's class, stored
+        // by its modifier (STORE_INSTVAR, STORE_CONST_INSTVAR or
+        // STORE_ONCE_INSTVAR). STORE_ONCE_INSTVAR replaces the DUPed copy
+        // with the value the variable holds afterwards, so it always keeps
+        // the DUP; this statement's POP drops a discarded value (pre-flight
+        // ruling C2).
         for (const auto& iv : currentInstVars_) {
             if (iv == n.text) {
+                const Op store = instVarStoreOp(n.text);
                 emitExpr(m, *n.children[0]);
                 auto sym = m.internSymbol(n.text);
-                dupUnlessDiscarded();
-                m.emitWide(Op::STORE_INSTVAR, static_cast<unsigned int>(sym), currentLine_);
+                if (store == Op::STORE_ONCE_INSTVAR) m.emit(Op::DUP, 0, currentLine_);
+                else                                 dupUnlessDiscarded();
+                m.emitWide(store, static_cast<unsigned int>(sym), currentLine_);
                 return;
             }
         }
@@ -1153,10 +1299,13 @@ void Compiler::emitStatement(BytecodeModule& m, const Node& n) {
                 return;
             }
         }
-        // S37: see emitExpr's Identifier case.
+        // S37: see emitExpr's Identifier case. A late store always keeps
+        // its value (DUP; the caller pops a discarded one): install time may
+        // turn it into STORE_ONCE_INSTVAR, which replaces the top of the
+        // stack instead of popping it (pre-flight ruling C2).
         if (currentMethodLate_ && !n.text.empty()) {
             emitExpr(m, *n.children[0]);
-            dupUnlessDiscarded();
+            m.emit(Op::DUP, 0, currentLine_);
             emitLateVar(m, Op::STORE_LATE_VAR, n.text);
             return;
         }
@@ -1247,10 +1396,15 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
             // class-side method's instance variables are the class object's
             // own slots: read own-only, so a subclass does not see its
             // superclass's value.
+            // A constant is read by PUSH_CONST_INSTVAR, which signals M14
+            // when it is unset (explicit-state spec §6.2); every other
+            // variable keeps its unchecked read.
             for (const auto& iv : currentInstVars_) {
                 if (iv == n.text) {
                     auto sym = m.internSymbol(n.text);
-                    m.emitWide(currentMethodIsClassSide_ ? Op::PUSH_OWN_INSTVAR : Op::PUSH_INSTVAR,
+                    m.emitWide(currentMethodIsClassSide_ ? Op::PUSH_OWN_INSTVAR
+                               : isConstantInstVar(n.text) ? Op::PUSH_CONST_INSTVAR
+                                                           : Op::PUSH_INSTVAR,
                                static_cast<unsigned int>(sym), currentLine_);
                     return;
                 }
@@ -1327,13 +1481,18 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                 m.emitWide(Op::STORE_LOCAL, static_cast<unsigned int>(slot), currentLine_);
                 return;
             }
-            // F4-U5: instance variable of the current method's class.
+            // F4-U5: instance variable of the current method's class, stored
+            // by its modifier (STORE_INSTVAR, STORE_CONST_INSTVAR or
+            // STORE_ONCE_INSTVAR, which always keeps its DUP: see
+            // emitStatement).
             for (const auto& iv : currentInstVars_) {
                 if (iv == n.text) {
+                    const Op store = instVarStoreOp(n.text);
                     emitExpr(m, *n.children[0]);
                     auto sym = m.internSymbol(n.text);
-                    dupUnlessDiscarded();
-                    m.emitWide(Op::STORE_INSTVAR, static_cast<unsigned int>(sym), currentLine_);
+                    if (store == Op::STORE_ONCE_INSTVAR) m.emit(Op::DUP, 0, currentLine_);
+                    else                                 dupUnlessDiscarded();
+                    m.emitWide(store, static_cast<unsigned int>(sym), currentLine_);
                     return;
                 }
             }
@@ -1351,10 +1510,11 @@ void Compiler::emitExpr(BytecodeModule& m, const Node& n) {
                     return;
                 }
             }
-            // S37: see the Identifier case.
+            // S37: see the Identifier case. Always DUP, as in emitStatement
+            // (pre-flight ruling C2); the caller pops a discarded value.
             if (currentMethodLate_ && !n.text.empty()) {
                 emitExpr(m, *n.children[0]);
-                dupUnlessDiscarded();
+                m.emit(Op::DUP, 0, currentLine_);
                 emitLateVar(m, Op::STORE_LATE_VAR, n.text);
                 return;
             }
@@ -1667,9 +1827,18 @@ void Compiler::compileDeoptBlock(BytecodeModule& m, const Node& blk, size_t bloc
     auto sub = compileBlockModule(blk, /*deoptBoundary=*/true, &boxedOut);
     --deoptDepth_;
     currentLine_ = line;
+    // Dropping the copy's errors is sound because every de-optimised copy
+    // has an inlined twin: the enclosing code compiled the same statements
+    // first, with the blocks it inlines inlined, and reported their errors.
+    // The copy is never more permissive than the twin, only stricter (a
+    // block inlined in the twin can be a real block in the copy), so a
+    // refusal only the copy would make, such as M2 for that block, is not
+    // one the source deserves. Install-time resolution relies on the same
+    // twin (object_prims.cpp, LateSite::inDeoptCopy).
     errors_.resize(errorCount);
     std::swap(analysis_, cold);
     sub->setDebugName(sub->debugName() + " (not inlined)");
+    sub->setDeoptCopy(true);
     m.replaceBlockModule(blockIdx, std::move(sub));
 }
 
@@ -1682,6 +1851,7 @@ void Compiler::compileDeoptBlock(BytecodeModule& m, const Node& blk, size_t bloc
 void Compiler::enterMethodClass(const Node& n) {
     currentMethodClass_       = n.text;
     currentMethodIsClassSide_ = n.boolFlag;
+    currentMethodSelector_    = n.stringList.empty() ? std::string() : n.stringList[0];
     if (classes_.find(n.text) != classes_.end()) {
         currentInstVars_  = instVarsThroughChain(classes_, n.text, n.boolFlag);
         currentClassVars_ = resolveClassVarsFor(n.text);
@@ -1698,6 +1868,53 @@ void Compiler::leaveMethodClass() {
     currentClassVars_.clear();
     currentMethodIsClassSide_ = false;
     currentMethodLate_        = false;
+    currentMethodSelector_.clear();
+}
+
+bool Compiler::insideRealBlock() const {
+    for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
+        if (isMethodScope(*it)) return false;
+        if (!it->deoptBoundary) return true;
+    }
+    return false;
+}
+
+bool Compiler::isConstantInstVar(const std::string& name) const {
+    // A class-side method's instance variables are class-instance variables,
+    // which take no modifiers (plan ruling G1).
+    return !currentMethodIsClassSide_
+           && modifierThroughChain(currentMethodClass_, name) == IvarModifier::Constant;
+}
+
+Op Compiler::instVarStoreOp(const std::string& name) {
+    // A class-side method's instance variables are the class object's own
+    // (class-instance variables), which take no modifiers (plan ruling G1).
+    if (currentMethodIsClassSide_) return Op::STORE_INSTVAR;
+    switch (modifierThroughChain(currentMethodClass_, name)) {
+        case IvarModifier::Constant:
+            // A de-optimised copy inlines nothing, so a block the enclosing
+            // code inlined can be a real block in it; the enclosing code,
+            // compiled first, already judged the assignment, and the copy's
+            // errors are dropped (compileDeoptBlock). The copy stores the
+            // constant as the inlined code does.
+            if (currentMethodSelector_ != "initialize")
+                error(assignmentRefusalText(AssignmentRefusal::ConstantOutsideInitialize, name,
+                                            currentMethodClass_, currentLine_));
+            else if (insideRealBlock())
+                error(assignmentRefusalText(AssignmentRefusal::ConstantInsideBlock, name,
+                                            currentMethodClass_, currentLine_));
+            return Op::STORE_CONST_INSTVAR;
+        case IvarModifier::Atomic:
+            error(assignmentRefusalText(AssignmentRefusal::AtomicAssigned, name,
+                                        currentMethodClass_, currentLine_));
+            return Op::STORE_INSTVAR;
+        case IvarModifier::WriteOnce:
+            // Allowed anywhere (spec §6.3): a CAS from unset, judged by the
+            // installed value's = when it finds the variable set.
+            return Op::STORE_ONCE_INSTVAR;
+        default:
+            return Op::STORE_INSTVAR;
+    }
 }
 
 // S37: an instance or class variable of a class whose chain the compiler
@@ -1711,17 +1928,36 @@ void Compiler::emitLateVar(BytecodeModule& m, Op op, const std::string& name) {
     m.emitWide(op, static_cast<unsigned int>(sym), currentLine_);
 }
 
+bool Compiler::hasIvarModifiers(const Node& classDecl) {
+    for (IvarModifier mod : classDecl.ivarModifiers)
+        if (mod != IvarModifier::Plain) return true;
+    return false;
+}
+
 void Compiler::emitSetInstVarNames(BytecodeModule& m, const Node& classDecl) {
     const size_t ivCount = static_cast<size_t>(classDecl.intValue);
     if (ivCount == 0) return;
+    std::vector<std::string> declared;
     std::string names;
     for (size_t i = 0; i < ivCount && 1 + i < classDecl.stringList.size(); ++i) {
         if (i > 0) names += ' ';
         names += classDecl.stringList[1 + i];
+        declared.push_back(classDecl.stringList[1 + i]);
     }
     auto namesIdx = m.addString(names);
-    auto selIdx   = m.internSymbol("__setInstVarNames:");
     m.emitWide(Op::PUSH_CONST,   static_cast<unsigned int>(namesIdx), currentLine_);
+    // A declaration without modifiers keeps the one-argument form, so its
+    // listing is the one it always was.
+    if (!hasIvarModifiers(classDecl)) {
+        auto selIdx = m.internSymbol("__setInstVarNames:");
+        m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(selIdx), currentLine_);
+        return;
+    }
+    // Plan decision D-a: the modifiers travel as the class records them,
+    // `kind:name` words for the non-plain variables.
+    auto kindsIdx = m.addString(encodeModifiers(declared, classDecl.ivarModifiers));
+    auto selIdx   = m.internSymbol("__setInstVarNames:modifiers:");
+    m.emitWide(Op::PUSH_CONST,   static_cast<unsigned int>(kindsIdx), currentLine_);
     m.emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(selIdx), currentLine_);
 }
 
@@ -2564,8 +2800,14 @@ bool Compiler::isInstVarAssignment(const Node& n) const {
     // The order of emitStatement's Assignment case: a captured name, then a
     // temporary or argument, wins over an instance variable.
     if (isCaptured(n.text) || resolveLocal(n.text) >= 0) return false;
-    return std::find(currentInstVars_.begin(), currentInstVars_.end(), n.text)
-           != currentInstVars_.end();
+    if (std::find(currentInstVars_.begin(), currentInstVars_.end(), n.text)
+        == currentInstVars_.end())
+        return false;
+    // Only a plain variable joins a run: a constant or write-once store is a
+    // CAS, its own publication, and an atomic one is refused (plan D-g,
+    // spec §6.6). Class-instance variables are always plain (G1).
+    return currentMethodIsClassSide_
+           || modifierThroughChain(currentMethodClass_, n.text) == IvarModifier::Plain;
 }
 
 bool Compiler::isInertGroupValue(const Node& e,
@@ -2582,6 +2824,10 @@ bool Compiler::isInertGroupValue(const Node& e,
                                            e.text) != currentInstVars_.end();
             const bool classVar = std::find(currentClassVars_.begin(), currentClassVars_.end(),
                                             e.text) != currentClassVars_.end();
+            // A constant's read can signal UnsetConstantError, so it is not
+            // inert: it ends the run, and the writes before it are published
+            // before it runs (plan D-g, spec §6.6).
+            if (instVar && isConstantInstVar(e.text)) return false;
             return (instVar || classVar) && written.count(e.text) == 0;
         }
         case NodeKind::BinarySend: {

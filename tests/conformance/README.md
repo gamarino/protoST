@@ -28,7 +28,23 @@ Tests are organised by language-reference section:
 10-actors/            §10 actors and futures
 11-modules/           §11 modules (each .st here; modules/ holds importable libs)
 12-builtins/          §12 built-in classes and selectors
+13-stdlib/            the standard-library modules (lib/*.st)
+14-io/                §12.11 input and output
+15-binary/            §12.12 bytes, binary files and encodings
+16-explicit-state/    §4.13 instance-variable modifiers (0.17.0): constants,
+                      write-once and atomic variables, the generated
+                      constructor, UnsetConstantError, instVarIsSet:
 ```
+
+`16-explicit-state/` follows the numbering of the explicit-state spec's
+conformance list (`docs/superpowers/specs/2026-11-23-explicit-state-design.md`
+§14.2, 0.17.0 rows): each program cites, in its header comment, the spec
+section it checks and, for a program of that list, its number; the others
+pin review findings and rulings. Files whose name starts with `_` are helper modules that
+the programs import, not tests. The `t1-` ... `t5-` programs are the
+concurrency cases of spec §14.3; together with the other programs that start
+actors or Futures they are in the `tsan` label, so CI also runs them under
+ThreadSanitizer.
 
 ## The directive format
 

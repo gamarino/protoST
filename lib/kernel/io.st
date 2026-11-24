@@ -39,7 +39,7 @@ ConnectionTimedOut >> bytesWritten
 Object subclass: #IOStream instanceVariableNames: 'fd closed'.
 
 IOStream class >> onDescriptor: anInteger
-  ^ self basicNew setDescriptor: anInteger.
+  ^ self __checkConstructed: (self basicNew setDescriptor: anInteger) selector: #onDescriptor:.
 
 IOStream >> setDescriptor: anInteger
   fd := anInteger.
@@ -191,7 +191,7 @@ Stdio class >> stderr
 Object subclass: #FileReference instanceVariableNames: 'path'.
 
 FileReference class >> path: aString
-  ^ self basicNew setPath: aString.
+  ^ self __checkConstructed: (self basicNew setPath: aString) selector: #path:.
 
 FileReference >> setPath: aString
   path := aString.

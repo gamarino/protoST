@@ -1,0 +1,50 @@
+1a2,3
+> push   r13
+> mov    r13,r8
+3c5
+< mov    r12,rdx
+---
+> mov    r12,rdi
+5c7
+< mov    rbp,r8
+---
+> mov    rbp,rsi
+7,8c9,10
+< mov    rbx,rdi
+< sub    rsp,0x10
+---
+> mov    rbx,rdx
+> sub    rsp,0x8
+16c18
+< mov    QWORD PTR [rsp+0x8],rsi
+---
+> mov    rsi,rbp
+18d19
+< mov    rsi,QWORD PTR [rsp+0x8]
+20,21c21,22
+< mov    rax,QWORD PTR [rbx+0x30]
+< mov    ecx,DWORD PTR [r12+0x10]
+---
+> mov    rax,QWORD PTR [r12+0x30]
+> mov    ecx,DWORD PTR [rbx+0x10]
+29c30,31
+< mov    rcx,rbp
+---
+> mov    rcx,r13
+> mov    rsi,rbp
+34c36
+< add    rsp,0x10
+---
+> add    rsp,0x8
+37a40
+> pop    r13
+39,40c42,43
+< nop    DWORD PTR [rax+rax*1+0x0]
+< mov    r8,QWORD PTR [rax+0x8]
+---
+> nop    DWORD PTR [rax]
+> mov    rsi,QWORD PTR [rax+0x8]
+42c45
+< lea    rcx,[r8+rcx*8]
+---
+> lea    rcx,[rsi+rcx*8]

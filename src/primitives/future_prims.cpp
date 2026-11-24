@@ -9,6 +9,7 @@
 #include "runtime/TransientPin.h"
 #include "runtime/TimerService.h"
 #include "runtime/NativeExceptionBridge.h"
+#include "primitives/state_prims.h"
 #include "runtime/UnhandledSTException.h"
 #include <cstdio>
 #include <exception>
@@ -520,6 +521,14 @@ const proto::ProtoObject* waitHelping(STRuntime& rt, proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* ctx,
                                             const proto::ProtoObject* r,
                                             const proto::ProtoObject* const*, int) {
+    // M7 (explicit-state spec §10.3, plan decision D-f), before anything
+    // else: a wait inside an update:with: block is an error whether the
+    // Future is pending or settled. The block may run several times and
+    // must be pure; a wait there would help, run other actors' updates of
+    // the same variable, and livelock. waitWithin: reaches this through wait.
+    if (insideUpdateBlock())
+        return signalErrorNamed(rt, ctx, "Error",
+            "wait inside an update:with: block: the block must be pure and may run several times");
     markFutureObserved(ctx, r);
     const proto::ProtoString* valueKey =
         rt.bootstrap().sym.value;

@@ -3,9 +3,229 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
-## Unreleased
+## 0.17.0 — 2026-11-24
+
+Explicit state I: instance-variable modifiers on mutable
+classes, from the approved spec
+`docs/superpowers/specs/2026-11-23-explicit-state-design.md` (the first row
+of its §15). Value classes are 0.18.0. protoCore stays at 3.6.1 and protoIO
+at 0.7.1, unchanged.
+
+### Added
+
+- **Instance-variable modifiers** (LANGUAGE.md §4.13, STATUS D60): the
+  clauses `constantNames:`, `writeOnceNames:` and `atomicNames:` in the
+  textual class declaration, in any order and each optional, and the message
+  form `subclass:instanceVariableNames:constantNames:writeOnceNames:atomicNames:`.
+  - **Constants** are assigned only in `initialize`, outside closures (a
+    compile error elsewhere, and an install-time error for a method installed
+    late), at most once (a second set signals `ModificationForbidden`), and
+    must be set when `initialize` returns inside `new` or the generated
+    constructor.
+  - **The generated constructor:** a class with constants answers a
+    class-side keyword constructor over them, inherited first
+    (`Account number:owner:`), which writes them in one write group, sends
+    `initialize` and runs the end-of-construction check. It cannot be
+    redefined.
+  - **The generated `new`:** a class with constants inherits a generated
+    class-side `new`, held by a hidden parent of its metaclass, which runs
+    `super new` (an ancestor's `new` included, such as `SortedCollection`'s)
+    and then the end-of-construction check. Reflection does not show it
+    (`Account class superclass` is `Object class`, `selectors` does not
+    list it). A user class-side `new` overrides it: one that calls `super
+    new` is checked, one written `^ self basicNew initialize` is not.
+  - **Write-once variables:** `:=` is a CAS from nil; a write that finds the
+    variable set is silent when the installed value is `=` to the written one,
+    and signals `ModificationForbidden` otherwise.
+  - **Atomic variables** cannot be assigned; they are written with the new
+    `update:with:` (a CAS loop over a pure block) and
+    `compareAndSet:from:to:`, both understood by every object. A wait inside
+    an `update:with:` block, its handlers included, signals an `Error` (D61).
+  - **Checked constant reads:** a read of an unset constant signals the new
+    kernel class `UnsetConstantError` (with `receiver` and `variableName`;
+    D62), on every read path. It is signalled through the class captured when
+    the kernel loaded, and its name is reserved: a declaration under it,
+    `Smalltalk at:put:`, a REPL assignment and `addBehavior:` on it are
+    refused.
+  - `instVarIsSet:` asks whether a declared variable is set without reading
+    it; `Behavior >> instVarModifierOf:` answers a variable's modifier.
+  - Reflection (`instVarNamed:put:`, `instVarAt:put:`), `copy`,
+    `shallowCopy`, `deepCopy` and `inspect` (`<unset constant>`) honour the
+    modifiers.
+  - A redeclaration keeps the modifier of every variable it repeats. One
+    that brings back a variable an earlier declaration dropped, with another
+    modifier, is refused while an installed method of the class, or of a
+    class that inherits it, was compiled for the old modifier (M1, M2 or M4,
+    or a "was compiled when" text); the class keeps its previous declaration.
+    The same holds from above: a declaration (or `addBehavior:`) that gives
+    a class a constant, write-once or atomic variable is refused while a
+    superclass or mixin that does not see it holds a method compiled when it
+    declared that name itself.
+- **Opcodes** `STORE_CONST_INSTVAR` (63), `STORE_ONCE_INSTVAR` (64) and
+  `PUSH_CONST_INSTVAR` (65) (VM.md 2.3, 1.9 and example 20). Plain reads and
+  stores keep their instructions.
+
+### Changed
+
+Behaviour changes for code that uses none of the new forms (spec §13.1):
+
+- **An instance-variable assignment to an immutable receiver signals
+  `ModificationForbidden`** (`STORE_INSTVAR` and the end of a write group),
+  where it signalled a plain `Error`: same condition, now catchable by class.
+  The text names the variable and the receiver, in the form every refused
+  write to an immutable receiver now shares:
+  `cannot assign to the instance variable 'x' of a BlockClosure: the receiver is immutable; nothing was written`
+  (it was `instance variable assignment: the receiver is an immutable value; nothing was written`).
+  `instVarNamed:put:` on a block says `instVarNamed:put: cannot write the
+  instance variable 'x' of a BlockClosure: ...` instead of `instVarNamed:put:
+  the receiver is an immutable value (a block or a method); nothing was
+  written`.
+- **A refused declaration no longer leaves a half-built class bound.** The
+  `uses:` and message forms bind the class only after its variables are
+  declared, so a declaration refused for a modifier conflict or a reserved
+  name binds nothing.
+- **The kernel `new` of `SortedCollection`, `WriteStream`, `Random` and
+  `UUID` now sends `initialize` exactly once.** In 0.16.1 it sent it zero
+  times, so a user subclass's `initialize` now runs under `new`; the kernel
+  classes define none, so for them nothing changes. `Object class >> new`
+  itself is unchanged from 0.16.1 and checks nothing: the
+  end-of-construction check of a class with constants is in that class's
+  generated `new`.
+- **`SortedCollection new` and `Random new` no longer go through the
+  class-side `sortBlock:` / `seed:`.** A subclass that overrides those
+  selectors is no longer reached from `new`, as in Pharo.
+- **Kernel and library constructors other than `new` run the
+  end-of-construction check.** `x:y:`, `sortBlock:`, `on:`, `seed:`, the
+  calendar, decimal, UUID, MessagePack and network constructors still do not
+  send `initialize` (as in 0.16.1 and in Pharo), and cost no send for a class
+  without constants. A user subclass with unset constants built through one
+  of them gets the end-of-construction error naming that constructor, and
+  must write its own constructor (D72, LANGUAGE.md §4.13.2). This also
+  affects inherited arithmetic and decoding that build instances through
+  private selectors: `DateTime` (`_fromLocal:zone:`, `utcFields:zoneName:`)
+  and `MessagePackMap` (`__fromAssociations:`).
+- **`allInstVarNames` lists each name once, in layout order** (superclass,
+  then mixins, then own), including a second mixin's variables. Before, it
+  followed `superclass` and missed mixin variables (0.16.1:
+  `Base subclass: #K instanceVariableNames: 'own' uses: {Ma. Mb}` gave
+  `#('base' 'own')`; now `#('base' 'a' 'b' 'own')`). This is
+  a bug fix; the metaclass side (class-instance variables) still follows
+  `superclass` (open bug D66).
+- `deepCopy` builds the copy with private primitives in one write group, so
+  set constants and write-once variables copy; it does not send
+  `shallowCopy`, as in Pharo, so an override of `shallowCopy` is ignored by
+  `deepCopy`.
+
+### Performance
+
+Measured in CPU cycles against 0.16.1, with three rounds of `perf stat -r 3`,
+a fresh copy of the binary and libprotoCore per run, and verified outputs
+(`benchmarks/reports/2026-11-23-release-0.17.0-const-read.md`).
+
+- **The §14.1 constant-read gate.**
+  - At the release head, `attr_lookup` is 1.040 over the whole program
+    and 1.023 with startup subtracted; `const_read` is 0.971 of
+    `attr_lookup`, inside its 3 % bound.
+  - The read loop is at parity with the build first accepted (0.953 with
+    startup subtracted, eight rounds); what grew is startup, +2 to +5 %
+    against 0.16.1 (about ±4 % between runs): the larger kernel, and the
+    generated `new` planned on every class declaration. That is above the
+    1 % bound, and the maintainer accepted it on 2026-11-23 and 2026-11-24.
+- **No `std::string` temporaries in `runLoop`, and no allocation for an
+  unchanged metaclass chain** (rebuilt on every class declaration).
+- **`BytecodeModule::constSym` and `ivSymbol` are forced inline**
+  (`always_inline`). GCC had stopped inlining `ivSymbol` into `PUSH_INSTVAR`
+  and `PUSH_OWN_INSTVAR` once the three new opcodes grew `runLoop`, which
+  cost about 16 cycles per plain read (`attr_lookup` was 1.061 before).
+- **Construction.** `new` on a class without constants is the 0.16.1
+  method, with no test and no send added: the end-of-construction check
+  lives in the generated `new` of a class with constants (maintainer ruling
+  of 2026-11-23). The kernel constructors other than `new` still call
+  `__checkConstructed:selector:`, which reads `__has_constants__` through
+  the chain; the maintainer accepted that cost for `Point` and `Fraction`.
+
+  | Program | 0.17.0 / 0.16.1 |
+  |---|---:|
+  | 1,000,000 × bare `new` | 0.974 (within noise) |
+  | `Point x:y:` | 1.052 |
+  | `Fraction numerator:denominator:` | 1.063 |
+  | `micro/instances.st` | 1.012 (noise) |
+
+  Two load-gated runs of three rounds each, pooled: bare `new` and
+  `instances.st` on the final build, `Point` and `Fraction` on the build
+  before the generated `new` moved into a hidden parent, which does not
+  touch their path; per-round ratios for those two range from 0.95 to 1.20
+  on this machine.
+
+### Deprecated
+
+- **`setInstVar:from:to:`** (D63): an alias of `compareAndSet:from:to:`, now
+  with its name check (an undeclared name signals an `Error` instead of
+  silently creating an attribute) and modifier checks. The first call in a
+  process prints, once, on standard error:
+  `protoST: warning: setInstVar:from:to: is deprecated and is removed in protoST 0.18.0; use compareAndSet:from:to:`.
+  It is removed in 0.18.0. protoST's own tests and examples use
+  `compareAndSet:from:to:`.
+
+### Known gaps
+
+Recorded in STATUS, found while building the release: the kernel error
+classes other than `UnsetConstantError` are found by their global name and
+are not reserved, so rebinding one (`Smalltalk at: #SubscriptOutOfBounds
+put: x`) turns its signals into plain `Error`s (D64, predates 0.17.0); a compiled plain read can find a
+same-named class-instance variable (D67, predates 0.17.0); a stale generated
+constructor fails when called, naming the class to redeclare (D68); the
+compile-time constructor-redefinition check needs a plain-name receiver of
+`addBehavior:` (D69); the DAP shows no modifiers, having no
+instance-variable view (D70); and two pre-existing reflection bugs,
+`superclass` answering a mixin or a class `addBehavior:` rebuilt (D65) and
+the metaclass `allInstVarNames` (D66).
+
+### protoBaseST
+
+protoBaseST 0.4.x runs on 0.17.0 and prints warning W1 once (it uses
+`setInstVar:from:to:` for its write-once fields). It does not run on 0.18.0.
+Its migration to `writeOnceNames:` and `compareAndSet:from:to:` is
+protoBaseST 0.5.0, after protoST 0.18.0 (spec §13.2); the write-once equality
+rule decides which of its publishers keep `:=`. Nothing in protoBaseST
+changes here.
+
+### Tests
+
+- `tests/conformance/16-explicit-state/`: the 0.17.0 rows of the spec's
+  conformance list, the concurrency cases T1, T2, T4 and T5 (`tsan` label),
+  and the review findings, including
+  `unset-constant-error-global-reserved.st` and
+  `cli_unset_constant_error_reserved` (the reserved global refused on every
+  route), and the unit case that M14 keeps its class when the global is
+  rebound from C++. `const-generated-new-never-stale.st`,
+  `const-generated-new-stale.st`, `const-generated-new-super.st`,
+  `const-generated-new-subclass-override.st`,
+  `const-generated-new-late-user-new.st` and `const-generated-new-hidden.st`
+  cover the generated `new` under redeclaration, `addBehavior:`, mixins,
+  kernel `new`s and user overrides, and its invisibility to reflection;
+  `cli_repl_generated_new_in_place` covers a metaclass re-parented by a
+  declaration in place and the M9 refusal on the metaclass install path.
+  `cli_repl_redeclare_stale_method` covers the REPL redeclaration that brings
+  a variable back with another modifier.
+- `tests/unit/test_ivar_modifiers.cpp` (`IvarModifiers:` cases), among them
+  the pin of the mutability probe.
+- `docs/vm-examples/20-explicit-state` (the VM listing of the new opcodes).
+- `conformance/04-object-model/class-variable-names-whitespace.st`: class
+  variable names split on any whitespace (`__initClassVars:` now uses the
+  declaration clauses' splitter).
 
 ### Documentation
+
+- LANGUAGE.md: new §4.13 *Instance-variable modifiers*, a note in §4.5 on
+  why locals take no modifier, `UnsetConstantError` and the extended
+  `ModificationForbidden` in §8.1, `Atom` as one atomic variable and the
+  deprecation in §10.8, and new §10.9 *One pattern from the attribute to the
+  commit*. Tutorial chapter 10 uses `compareAndSet:from:to:` and
+  `update:with:`, and explains why handlers inside an `update:with:` block
+  must be pure too. VM.md: the three opcodes, the late-store shape, the
+  class records, private selectors and the generated constructor (1.9), and
+  example 20. STATUS: D60-D72.
 
 - **FAST workshop of 2026-12-03** (Spanish): the workshop material of
   `docs/talks/2026-11-12-fas-workshop/` moved to

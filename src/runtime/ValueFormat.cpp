@@ -1,5 +1,6 @@
 #include "ValueFormat.h"
 #include "protoST/STRuntime.h"
+#include "runtime/Bootstrap.h"
 #include "protoCore.h"
 
 #include <algorithm>
@@ -188,10 +189,22 @@ std::string formatValue(STRuntime& rt, proto::ProtoContext* ctx,
         // fall through
     }
     if (name.empty()) return "an object";
+    return articleAndClassName(name);
+}
 
-    char c0 = name[0];
-    bool vowel = (c0 == 'A' || c0 == 'E' || c0 == 'I' || c0 == 'O' || c0 == 'U');
-    return (vowel ? "an " : "a ") + name;
+std::string articleAndClassName(const std::string& className) {
+    const char c0 = className.empty() ? '\0' : className[0];
+    const bool vowel = (c0 == 'A' || c0 == 'E' || c0 == 'I' || c0 == 'O' || c0 == 'U');
+    return (vowel ? "an " : "a ") + className;
+}
+
+std::string articleAndClassName(STRuntime& rt, proto::ProtoContext* ctx,
+                               const proto::ProtoObject* obj) {
+    if (!obj || obj == PROTO_NONE) return "an object";
+    const proto::ProtoObject* nameObj = obj->getAttribute(ctx, rt.bootstrap().sym.className);
+    const proto::ProtoString* nameStr =
+        nameObj && nameObj != PROTO_NONE ? nameObj->asString(ctx) : nullptr;
+    return nameStr ? articleAndClassName(nameStr->toStdString(ctx)) : std::string("an object");
 }
 
 } // namespace protoST

@@ -9,6 +9,20 @@ the tree of that day.
 - Run the static half:
   `python3 ../protoCore/scripts/conformance/check_static.py --repo .`
 
+## Explicit state (0.17.0)
+
+The instance-variable modifiers added no new kind of protoCore use. Their
+writes are `setAttributeIfEqual` (constant and write-once stores, the CAS
+messages) and `setAttributes` (the generated constructor, `deepCopy`), and
+their checks read the own attribute (`getOwnAttributeDirect`); transients are held on the operand stack or
+under `TransientPin`; there is no new root set, no change to the collector
+loop and no `ProtoTuple`. One behaviour of the public API that protoCore 3.6.1
+does not document is relied on: `setAttributeIfEqual` with a `nullptr` new
+value, the probe that tells an immutable receiver from a lost race (VM.md
+1.9); the unit case `IvarModifiers: the mutability probe ...` pins it. The
+static check was not re-run for this record. The language-level tests are
+`tests/conformance/16-explicit-state/` (`tests/conformance/README.md`).
+
 ## What is not covered, and why that matters more than what is
 
 **protoST has no `proto::conformance::Host` yet, so none of the twelve runtime

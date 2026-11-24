@@ -5,6 +5,8 @@
 #include <variant>
 #include <cstdint>
 
+#include "runtime/IvarModifierKinds.h"
+
 namespace protoST::ast {
 
 enum class NodeKind : uint8_t {
@@ -46,6 +48,9 @@ enum class NodeKind : uint8_t {
     //   intValue                              = inst-var count
     //   stringList[1..1+intValue]             = inst-var names (source order)
     //   stringList[1+intValue..]              = class-var names (source order)
+    //   ivarModifiers                         = the modifier of each inst-var
+    //                                           name, aligned with
+    //                                           stringList[1..1+intValue]
     //   children[0]                           = optional mixin expression
     //                                           (only present when `uses:`)
     ClassDecl,
@@ -70,6 +75,9 @@ struct Node {
     std::vector<NodePtr> children;
     std::vector<std::string> stringList; // e.g., keyword parts of a Block's args, inst-var names
     bool boolFlag = false;        // e.g., ClassDecl: isClassSide on method, etc.
+    // ClassDecl: the modifier of each instance variable, aligned with the
+    // names in stringList[1..1+intValue] (explicit-state spec §6.1).
+    std::vector<IvarModifier> ivarModifiers;
 
     explicit Node(NodeKind k) : kind(k) {}
 };

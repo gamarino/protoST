@@ -1,0 +1,573 @@
+{
+ "date": "2026-11-23T22:12:29",
+ "host": "DEV12",
+ "kernel": "7.0.0-43-generic",
+ "repeat": 3,
+ "rounds": 3,
+ "libdir": "$S/pc-361/lib",
+ "builds": [
+  {
+   "label": "old",
+   "path": "$S/ref-0161/build_release/protost",
+   "sha256": "2dbe59c369550e9893005d26a77386566ace066a1c758da7986a3c6b029404c0",
+   "stdlib": "$S/ref-0161/lib",
+   "version": "protoST 0.16.1"
+  },
+  {
+   "label": "new",
+   "path": "/home/gamarino/Documentos/proyectos/worktrees/protost-0170/build_release/protost",
+   "sha256": "e3e7106f4a453d5b265162ad289f9774cb9f080049a99d191c5211e45f45d53a",
+   "stdlib": "/home/gamarino/Documentos/proyectos/worktrees/protost-0170/lib",
+   "version": "protoST 0.16.1"
+  }
+ ],
+ "not_runnable": [],
+ "measurements": [
+  {
+   "program": "bare_new",
+   "build": "old",
+   "run_dir": "$S/ffix/perf/runs-new/1",
+   "protoCore": "libprotoCore.so.5 => $S/ffix/perf/runs-new/1/libprotoCore.so.5",
+   "protoCore_file": "$S/ffix/perf/runs-new/1/libprotoCore.so.3.6.1",
+   "cycles": 2633186013,
+   "stddev_pct": 3.28,
+   "runs": 3,
+   "verified": "3 x VERIFIED 1000000",
+   "load_before": [
+    3.49,
+    7.0,
+    7.56
+   ],
+   "load_after": [
+    3.49,
+    7.0,
+    7.56
+   ],
+   "time": "2026-11-23T22:12:32"
+  },
+  {
+   "program": "bare_new",
+   "build": "new",
+   "run_dir": "$S/ffix/perf/runs-new/2",
+   "protoCore": "libprotoCore.so.5 => $S/ffix/perf/runs-new/2/libprotoCore.so.5",
+   "protoCore_file": "$S/ffix/perf/runs-new/2/libprotoCore.so.3.6.1",
+   "cycles": 3144627468,
+   "stddev_pct": 1.54,
+   "runs": 3,
+   "verified": "3 x VERIFIED 1000000",
+   "load_before": [
+    3.49,
+    7.0,
+    7.56
+   ],
+   "load_after": [
+    3.37,
+    6.91,
+    7.53
+   ],
+   "time": "2026-11-23T22:12:35"
+  },
+  {
+   "program": "instances",
+   "build": "old",
+   "run_dir": "$S/ffix/perf/runs-new/3",
+   "protoCore": "libprotoCore.so.5 => $S/ffix/perf/runs-new/3/libprotoCore.so.5",
+   "protoCore_file": "$S/ffix/perf/runs-new/3/libprotoCore.so.3.6.1",
+   "cycles": 10399367411,
+   "stddev_pct": 0.82,
+   "runs": 3,
+   "verified": "3 x instances ok",
+   "load_before": [
+    3.37,
+    6.91,
+    7.53
+   ],
+   "load_after": [
+    3.53,
+    6.83,
+    7.5
+   ],
+   "time": "2026-11-23T22:12:43"
+  },
+  {
+   "program": "instances",
+   "build": "new",
+   "run_dir": "$S/ffix/perf/runs-new/4",
+   "protoCore": "libprotoCore.so.5 => $S/ffix/perf/runs-new/4/libprotoCore.so.5",
+   "protoCore_file": "$S/ffix/perf/runs-new/4/libprotoCore.so.3.6.1",
+   "cycles": 10773875893,
+   "stddev_pct": 1.26,
+   "runs": 3,
+   "verified": "3 x instances ok",
+   "load_before": [
+    3.53,
+    6.83,
+    7.5
+   ],
+   "load_after": [
+    3.48,
+    6.77,
+    7.47
+   ],
+   "time": "2026-11-23T22:12:51"
+  },
+  {
+   "program": "point_new",
+   "build": "old",
+   "run_dir": "$S/ffix/perf/runs-new/5",
+   "protoCore": "libprotoCore.so.5 => $S/ffix/perf/runs-new/5/libprotoCore.so.5",
+   "protoCore_file": "$S/ffix/perf/runs-new/5/libprotoCore.so.3.6.1",
+   "cycles": 2127122683,
+   "stddev_pct": 0.59,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    3.48,
+    6.77,
+    7.47
+   ],
+   "load_after": [
+    3.61,
+    6.74,
+    7.46
+   ],
+   "time": "2026-11-23T22:12:52"
+  },
+  {
+   "program": "point_new",
+   "build": "new",
+   "run_dir": "$S/ffix/perf/runs-new/6",
+   "protoCore": "libprotoCore.so.5 => $S/ffix/perf/runs-new/6/libprotoCore.so.5",
+   "protoCore_file": "$S/ffix/perf/runs-new/6/libprotoCore.so.3.6.1",
+   "cycles": 2328548287,
+   "stddev_pct": 1.84,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    3.61,
+    6.74,
+    7.46
+   ],
+   "load_after": [
+    3.61,
+    6.74,
+    7.46
+   ],
+   "time": "2026-11-23T22:12:54"
+  },
+  {
+   "program": "fraction_new",
+   "build": "old",
+   "run_dir": "$S/ffix/perf/runs-new/7",
+   "protoCore": "libprotoCore.so.5 => $S/ffix/perf/runs-new/7/libprotoCore.so.5",
+   "protoCore_file": "$S/ffix/perf/runs-new/7/libprotoCore.so.3.6.1",
+   "cycles": 3154874314,
+   "stddev_pct": 4.16,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    3.61,
+    6.74,
+    7.46
+   ],
+   "load_after": [
+    3.61,
+    6.74,
+    7.46
+   ],
+   "time": "2026-11-23T22:12:57"
+  },
+  {
+   "program": "fraction_new",
+   "build": "new",
+   "run_dir": "$S/ffix/perf/runs-new/8",
+   "protoCore": "libprotoCore.so.5 => $S/ffix/perf/runs-new/8/libprotoCore.so.5",
+   "protoCore_file": "$S/ffix/perf/runs-new/8/libprotoCore.so.3.6.1",
+   "cycles": 3469384443,
+   "stddev_pct": 4.52,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    3.61,
+    6.74,
+    7.46
+   ],
+   "load_after": [
+    3.72,
+    6.71,
+    7.45
+   ],
+   "time": "2026-11-23T22:13:00"
+  },
+  {
+   "program": "bare_new",
+   "build": "new",
+   "run_dir": "$S/ffix/perf/runs-new/9",
+   "protoCore": "libprotoCore.so.5 => $S/ffix/perf/runs-new/9/libprotoCore.so.5",
+   "protoCore_file": "$S/ffix/perf/runs-new/9/libprotoCore.so.3.6.1",
+   "cycles": 3185597869,
+   "stddev_pct": 0.82,
+   "runs": 3,
+   "verified": "3 x VERIFIED 1000000",
+   "load_before": [
+    3.72,
+    6.71,
+    7.45
+   ],
+   "load_after": [
+    3.82,
+    6.68,
+    7.43
+   ],
+   "time": "2026-11-23T22:13:03"
+  },
+  {
+   "program": "bare_new",
+   "build": "old",
+   "run_dir": "$S/ffix/perf/runs-new/10",
+   "protoCore": "libprotoCore.so.5 => $S/ffix/perf/runs-new/10/libprotoCore.so.5",
+   "protoCore_file": "$S/ffix/perf/runs-new/10/libprotoCore.so.3.6.1",
+   "cycles": 2737251510,
+   "stddev_pct": 2.03,
+   "runs": 3,
+   "verified": "3 x VERIFIED 1000000",
+   "load_before": [
+    3.82,
+    6.68,
+    7.43
+   ],
+   "load_after": [
+    3.82,
+    6.68,
+    7.43
+   ],
+   "time": "2026-11-23T22:13:06"
+  },
+  {
+   "program": "instances",
+   "build": "new",
+   "run_dir": "$S/ffix/perf/runs-new/11",
+   "protoCore": "libprotoCore.so.5 => $S/ffix/perf/runs-new/11/libprotoCore.so.5",
+   "protoCore_file": "$S/ffix/perf/runs-new/11/libprotoCore.so.3.6.1",
+   "cycles": 10409077067,
+   "stddev_pct": 1.85,
+   "runs": 3,
+   "verified": "3 x instances ok",
+   "load_before": [
+    3.82,
+    6.68,
+    7.43
+   ],
+   "load_after": [
+    3.93,
+    6.61,
+    7.4
+   ],
+   "time": "2026-11-23T22:13:14"
+  },
+  {
+   "program": "instances",
+   "build": "old",
+   "run_dir": "$S/ffix/perf/runs-new/12",
+   "protoCore": "libprotoCore.so.5 => $S/ffix/perf/runs-new/12/libprotoCore.so.5",
+   "protoCore_file": "$S/ffix/perf/runs-new/12/libprotoCore.so.3.6.1",
+   "cycles": 10329706708,
+   "stddev_pct": 1.44,
+   "runs": 3,
+   "verified": "3 x instances ok",
+   "load_before": [
+    3.93,
+    6.61,
+    7.4
+   ],
+   "load_after": [
+    3.69,
+    6.52,
+    7.37
+   ],
+   "time": "2026-11-23T22:13:22"
+  },
+  {
+   "program": "point_new",
+   "build": "new",
+   "run_dir": "$S/ffix/perf/runs-new/13",
+   "protoCore": "libprotoCore.so.5 => $S/ffix/perf/runs-new/13/libprotoCore.so.5",
+   "protoCore_file": "$S/ffix/perf/runs-new/13/libprotoCore.so.3.6.1",
+   "cycles": 2281433449,
+   "stddev_pct": 1.12,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    3.69,
+    6.52,
+    7.37
+   ],
+   "load_after": [
+    3.72,
+    6.47,
+    7.35
+   ],
+   "time": "2026-11-23T22:13:24"
+  },
+  {
+   "program": "point_new",
+   "build": "old",
+   "run_dir": "$S/ffix/perf/runs-new/14",
+   "protoCore": "libprotoCore.so.5 => $S/ffix/perf/runs-new/14/libprotoCore.so.5",
+   "protoCore_file": "$S/ffix/perf/runs-new/14/libprotoCore.so.3.6.1",
+   "cycles": 2184370406,
+   "stddev_pct": 2.42,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    3.72,
+    6.47,
+    7.35
+   ],
+   "load_after": [
+    3.72,
+    6.47,
+    7.35
+   ],
+   "time": "2026-11-23T22:13:26"
+  },
+  {
+   "program": "fraction_new",
+   "build": "new",
+   "run_dir": "$S/ffix/perf/runs-new/15",
+   "protoCore": "libprotoCore.so.5 => $S/ffix/perf/runs-new/15/libprotoCore.so.5",
+   "protoCore_file": "$S/ffix/perf/runs-new/15/libprotoCore.so.3.6.1",
+   "cycles": 3349031630,
+   "stddev_pct": 3.29,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    3.72,
+    6.47,
+    7.35
+   ],
+   "load_after": [
+    3.66,
+    6.42,
+    7.32
+   ],
+   "time": "2026-11-23T22:13:28"
+  },
+  {
+   "program": "fraction_new",
+   "build": "old",
+   "run_dir": "$S/ffix/perf/runs-new/16",
+   "protoCore": "libprotoCore.so.5 => $S/ffix/perf/runs-new/16/libprotoCore.so.5",
+   "protoCore_file": "$S/ffix/perf/runs-new/16/libprotoCore.so.3.6.1",
+   "cycles": 3150315874,
+   "stddev_pct": 1.43,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    3.66,
+    6.42,
+    7.32
+   ],
+   "load_after": [
+    3.66,
+    6.42,
+    7.32
+   ],
+   "time": "2026-11-23T22:13:31"
+  },
+  {
+   "program": "bare_new",
+   "build": "old",
+   "run_dir": "$S/ffix/perf/runs-new/17",
+   "protoCore": "libprotoCore.so.5 => $S/ffix/perf/runs-new/17/libprotoCore.so.5",
+   "protoCore_file": "$S/ffix/perf/runs-new/17/libprotoCore.so.3.6.1",
+   "cycles": 2596335512,
+   "stddev_pct": 1.28,
+   "runs": 3,
+   "verified": "3 x VERIFIED 1000000",
+   "load_before": [
+    3.66,
+    6.42,
+    7.32
+   ],
+   "load_after": [
+    3.85,
+    6.41,
+    7.32
+   ],
+   "time": "2026-11-23T22:13:34"
+  },
+  {
+   "program": "bare_new",
+   "build": "new",
+   "run_dir": "$S/ffix/perf/runs-new/18",
+   "protoCore": "libprotoCore.so.5 => $S/ffix/perf/runs-new/18/libprotoCore.so.5",
+   "protoCore_file": "$S/ffix/perf/runs-new/18/libprotoCore.so.3.6.1",
+   "cycles": 3211843165,
+   "stddev_pct": 1.52,
+   "runs": 3,
+   "verified": "3 x VERIFIED 1000000",
+   "load_before": [
+    3.85,
+    6.41,
+    7.32
+   ],
+   "load_after": [
+    3.94,
+    6.38,
+    7.3
+   ],
+   "time": "2026-11-23T22:13:37"
+  },
+  {
+   "program": "instances",
+   "build": "old",
+   "run_dir": "$S/ffix/perf/runs-new/19",
+   "protoCore": "libprotoCore.so.5 => $S/ffix/perf/runs-new/19/libprotoCore.so.5",
+   "protoCore_file": "$S/ffix/perf/runs-new/19/libprotoCore.so.3.6.1",
+   "cycles": 12784839520,
+   "stddev_pct": 0.54,
+   "runs": 3,
+   "verified": "3 x instances ok",
+   "load_before": [
+    3.94,
+    6.38,
+    7.3
+   ],
+   "load_after": [
+    6.3,
+    6.8,
+    7.43
+   ],
+   "time": "2026-11-23T22:13:49"
+  },
+  {
+   "program": "instances",
+   "build": "new",
+   "run_dir": "$S/ffix/perf/runs-new/20",
+   "protoCore": "libprotoCore.so.5 => $S/ffix/perf/runs-new/20/libprotoCore.so.5",
+   "protoCore_file": "$S/ffix/perf/runs-new/20/libprotoCore.so.3.6.1",
+   "cycles": 10961122470,
+   "stddev_pct": 4.56,
+   "runs": 3,
+   "verified": "3 x instances ok",
+   "load_before": [
+    6.3,
+    6.8,
+    7.43
+   ],
+   "load_after": [
+    5.94,
+    6.71,
+    7.39
+   ],
+   "time": "2026-11-23T22:13:59"
+  },
+  {
+   "program": "point_new",
+   "build": "old",
+   "run_dir": "$S/ffix/perf/runs-new/21",
+   "protoCore": "libprotoCore.so.5 => $S/ffix/perf/runs-new/21/libprotoCore.so.5",
+   "protoCore_file": "$S/ffix/perf/runs-new/21/libprotoCore.so.3.6.1",
+   "cycles": 2241320124,
+   "stddev_pct": 2.09,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    5.94,
+    6.71,
+    7.39
+   ],
+   "load_after": [
+    5.94,
+    6.71,
+    7.39
+   ],
+   "time": "2026-11-23T22:14:00"
+  },
+  {
+   "program": "point_new",
+   "build": "new",
+   "run_dir": "$S/ffix/perf/runs-new/22",
+   "protoCore": "libprotoCore.so.5 => $S/ffix/perf/runs-new/22/libprotoCore.so.5",
+   "protoCore_file": "$S/ffix/perf/runs-new/22/libprotoCore.so.3.6.1",
+   "cycles": 2190089284,
+   "stddev_pct": 0.73,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    5.94,
+    6.71,
+    7.39
+   ],
+   "load_after": [
+    5.7,
+    6.65,
+    7.37
+   ],
+   "time": "2026-11-23T22:14:02"
+  },
+  {
+   "program": "fraction_new",
+   "build": "old",
+   "run_dir": "$S/ffix/perf/runs-new/23",
+   "protoCore": "libprotoCore.so.5 => $S/ffix/perf/runs-new/23/libprotoCore.so.5",
+   "protoCore_file": "$S/ffix/perf/runs-new/23/libprotoCore.so.3.6.1",
+   "cycles": 2885951050,
+   "stddev_pct": 2.05,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    5.7,
+    6.65,
+    7.37
+   ],
+   "load_after": [
+    5.7,
+    6.65,
+    7.37
+   ],
+   "time": "2026-11-23T22:14:05"
+  },
+  {
+   "program": "fraction_new",
+   "build": "new",
+   "run_dir": "$S/ffix/perf/runs-new/24",
+   "protoCore": "libprotoCore.so.5 => $S/ffix/perf/runs-new/24/libprotoCore.so.5",
+   "protoCore_file": "$S/ffix/perf/runs-new/24/libprotoCore.so.3.6.1",
+   "cycles": 3157586578,
+   "stddev_pct": 1.88,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    5.7,
+    6.65,
+    7.37
+   ],
+   "load_after": [
+    5.56,
+    6.6,
+    7.35
+   ],
+   "time": "2026-11-23T22:14:08"
+  }
+ ],
+ "mean_cycles": {
+  "bare_new": {
+   "old": 2655591012,
+   "new": 3180689501
+  },
+  "instances": {
+   "old": 11171304546,
+   "new": 10714691810
+  },
+  "point_new": {
+   "old": 2184271071,
+   "new": 2266690340
+  },
+  "fraction_new": {
+   "old": 3063713746,
+   "new": 3325334217
+  }
+ }
+}

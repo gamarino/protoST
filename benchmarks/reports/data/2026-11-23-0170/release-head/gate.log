@@ -1,0 +1,44 @@
+  const_read             old  not runnable: exit 65; /home/gamarino/Documentos/proyectos/worktrees/protost-0170/benchmarks/micro/const_read.st:8:30: unknown keyword in class declaration: constantNames:
+round 1/5
+  startup                old     115,755,945 cycles  (+-1.46%)  $S/gate-d3d05f4/runs/2
+  startup                new     125,703,513 cycles  (+-4.29%)  $S/gate-d3d05f4/runs/3
+  attr_lookup            old     171,546,583 cycles  (+-1.67%)  $S/gate-d3d05f4/runs/4
+  attr_lookup            new     176,271,423 cycles  (+-2.55%)  $S/gate-d3d05f4/runs/5
+  const_read             new     176,096,965 cycles  (+-0.93%)  $S/gate-d3d05f4/runs/6
+round 2/5
+  startup                new     119,590,138 cycles  (+-1.13%)  $S/gate-d3d05f4/runs/7
+  startup                old     115,675,015 cycles  (+-1.75%)  $S/gate-d3d05f4/runs/8
+  attr_lookup            new     181,449,699 cycles  (+-3.62%)  $S/gate-d3d05f4/runs/9
+  attr_lookup            old     169,844,464 cycles  (+-1.0%)  $S/gate-d3d05f4/runs/10
+  const_read             new     173,344,381 cycles  (+-0.17%)  $S/gate-d3d05f4/runs/11
+round 3/5
+  startup                old     118,415,279 cycles  (+-2.94%)  $S/gate-d3d05f4/runs/12
+  startup                new     122,218,565 cycles  (+-2.48%)  $S/gate-d3d05f4/runs/13
+  attr_lookup            old     173,344,690 cycles  (+-0.5%)  $S/gate-d3d05f4/runs/14
+  attr_lookup            new     179,848,902 cycles  (+-2.67%)  $S/gate-d3d05f4/runs/15
+  const_read             new     173,033,927 cycles  (+-1.46%)  $S/gate-d3d05f4/runs/16
+round 4/5
+  startup                new     124,268,055 cycles  (+-4.84%)  $S/gate-d3d05f4/runs/17
+  startup                old     116,730,380 cycles  (+-2.06%)  $S/gate-d3d05f4/runs/18
+  attr_lookup            new     181,322,095 cycles  (+-2.53%)  $S/gate-d3d05f4/runs/19
+  attr_lookup            old     168,103,995 cycles  (+-0.7%)  $S/gate-d3d05f4/runs/20
+  const_read             new     178,012,275 cycles  (+-0.82%)  $S/gate-d3d05f4/runs/21
+round 5/5
+  startup                old     119,417,557 cycles  (+-2.99%)  $S/gate-d3d05f4/runs/22
+  startup                new     122,745,476 cycles  (+-3.9%)  $S/gate-d3d05f4/runs/23
+  attr_lookup            old     178,513,904 cycles  (+-2.92%)  $S/gate-d3d05f4/runs/24
+  attr_lookup            new     177,251,168 cycles  (+-1.29%)  $S/gate-d3d05f4/runs/25
+  const_read             new     169,912,425 cycles  (+-0.06%)  $S/gate-d3d05f4/runs/26
+
+mean cycles (perf -r 3, 5 round(s))
+  startup                old    117,198,835  new    122,905,149
+  attr_lookup            old    172,270,727  new    179,228,657
+  const_read             new    174,079,995
+
+§14.1 gate
+  attr_lookup new/old            1.0404  (bound 1.01)  BREACH
+  const_read new / attr_lookup new 0.9713  (bound 1.03)  ok
+  startup-subtracted: attr 1.0227  const 0.9086  (information; verdicts differ: False)
+  const_read old: not runnable (G3)
+
+GATE BREACH: the release is blocked until the maintainer accepts the figures.

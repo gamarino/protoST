@@ -62,12 +62,14 @@ Decimal class >> sign: aSign coefficient: aCoefficient exponent: anExponent
       , aCoefficient printString ].
   anExponent isInteger ifFalse: [
     ^ Error signal: 'Decimal: the exponent must be an Integer, not ' , anExponent printString ].
-  ^ self basicNew _setSign: aSign coefficient: aCoefficient exponent: anExponent kind: #finite.
+  ^ self __checkConstructed: (self basicNew _setSign: aSign coefficient: aCoefficient exponent: anExponent kind: #finite)
+      selector: #sign:coefficient:exponent:.
 
 "Infinity (sign 0) or -Infinity (sign 1)."
 Decimal class >> infinity: aSign
   self _checkSign: aSign.
-  ^ self basicNew _setSign: aSign coefficient: 0 exponent: 0 kind: #infinite.
+  ^ self __checkConstructed: (self basicNew _setSign: aSign coefficient: 0 exponent: 0 kind: #infinite)
+      selector: #infinity:.
 
 "A NaN with a non-negative Integer payload; signaling when aBoolean is true."
 Decimal class >> nan: aPayload signaling: aBoolean sign: aSign
@@ -77,9 +79,10 @@ Decimal class >> nan: aPayload signaling: aBoolean sign: aSign
       , aPayload printString ].
   (aBoolean == true or: [aBoolean == false]) ifFalse: [
     ^ Error signal: 'Decimal: signaling: must be a Boolean, not ' , aBoolean printString ].
-  ^ self basicNew
+  ^ self __checkConstructed: (self basicNew
       _setSign: aSign coefficient: aPayload exponent: 0
-      kind: (aBoolean ifTrue: [#snan] ifFalse: [#nan]).
+      kind: (aBoolean ifTrue: [#snan] ifFalse: [#nan]))
+      selector: #nan:signaling:sign:.
 
 Decimal class >> _checkSign: aSign
   (aSign == 0 or: [aSign == 1]) ifFalse: [

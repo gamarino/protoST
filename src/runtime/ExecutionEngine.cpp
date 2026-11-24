@@ -19,8 +19,10 @@
 #include "primitives/StringSupport.h"
 #include "runtime/NativeError.h"
 #include "runtime/ListIndex.h"
+#include "runtime/ValueFormat.h"
 #include "ExecutionEngine.h"
 #include "runtime/BlockCode.h"
+#include "runtime/IvarModifierKinds.h"
 
 namespace protoST {
 const proto::ProtoObject* raiseRejection(STRuntime& rt, proto::ProtoContext* ctx,
@@ -421,10 +423,154 @@ ExecutionEngine::storeInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t
     // A mutable receiver is updated in place and answered. Any other answer
     // means the receiver is immutable and the write did not happen; refuse
     // it rather than lose it (the compiler already rejects instance-variable
-    // assignment in BlockClosure methods; this is the defensive check).
+    // assignment in BlockClosure methods; a method installed on BlockClosure
+    // from a block made elsewhere still reaches it).
     if (self->setAttribute(ctx, sym, val) != self)
-        throw NativeError("instance variable assignment: the receiver is an "
-                          "immutable value; nothing was written");
+        refuseImmutableStore(ctx, *f.m, nameConst, self);
+}
+
+void
+ExecutionEngine::refuseImmutableStore(proto::ProtoContext* ctx, const BytecodeModule& m,
+                                      uint32_t nameConst, const proto::ProtoObject* self) {
+    const std::string name = m.constSymbol(nameConst);
+    signalErrorNamed(rt_, ctx, "ModificationForbidden",
+                     immutableReceiverText("cannot assign to", IvarModifier::Plain, name,
+                                           ivarOwnerDescription(ctx, self)));
+}
+
+void
+ExecutionEngine::storeConstInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t nameConst,
+                                   const proto::ProtoObject* val) {
+    // STORE_CONST_INSTVAR's write (explicit-state spec §6.2, plan D-c). A
+    // constant is unset while its own attribute is absent or holds nil; the
+    // store is a CAS from unset, so a constant is set at most once, by one
+    // writer, whatever the threads. Errors are signalled in place, so an
+    // on:do: in the method's caller catches them by class (pre-flight ruling
+    // C1); nothing is written when the signal returns.
+    auto* sym = f.m->ivSymbol(ctx, nameConst);
+    const proto::ProtoObject* self = getSelf(f);
+    if (!self || self == PROTO_NONE)
+        throw NativeError("STORE_CONST_INSTVAR self is null");
+    if (!val) val = PROTO_NONE;
+    // `val` and `self` stay rooted in their frame slots; the pin covers the
+    // value across the signal, whose handler runs on top of this frame.
+    TransientPin pinVal(ctx, val);
+    auto isUnset = [&] {
+        const proto::ProtoObject* cur = self->getOwnAttributeDirect(ctx, sym);
+        return !cur || cur == PROTO_NONE;
+    };
+    auto owner = [&] { return ivarOwnerDescription(ctx, self); };
+    if (val == PROTO_NONE) {
+        // Storing nil into an unset constant changes nothing.
+        if (isUnset()) return;
+    } else {
+        // Absent first, then an explicit nil (as prim_Atom_cas): a constant
+        // never becomes unset again, so when both fail it was set.
+        if (self->setAttributeIfEqual(ctx, sym, nullptr, val)
+            || self->setAttributeIfEqual(ctx, sym, PROTO_NONE, val))
+            return;
+        if (isUnset()) {
+            // The CAS cannot write an immutable receiver.
+            signalErrorNamed(rt_, ctx, "ModificationForbidden",
+                             immutableReceiverText("cannot assign to", IvarModifier::Constant,
+                                                   f.m->constSymbol(nameConst), owner()));
+            return;
+        }
+    }
+    signalErrorNamed(rt_, ctx, "ModificationForbidden",
+                     "the constant '" + f.m->constSymbol(nameConst) + "' of " + owner()
+                     + " is already set; nothing was written");
+}
+
+std::string
+ExecutionEngine::ivarOwnerDescription(proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* self) const {
+    // `an Account`: the class-name form of printString's default.
+    return articleAndClassName(rt_, ctx, self);
+}
+
+const proto::ProtoObject*
+ExecutionEngine::unsetConstantRead(proto::ProtoContext* ctx, const Frame& f, uint32_t nameConst) {
+    // PUSH_CONST_INSTVAR's slow path (explicit-state spec §6.2): the constant
+    // is unset. Signal M14 in place (pre-flight ruling C1). The name is
+    // copied and `self` read before the signal, whose handler runs on top of
+    // this frame; the signal helper pins the receiver.
+    const proto::ProtoObject* self = getSelf(f);
+    const std::string name = f.m->constSymbol(nameConst);
+    return signalUnsetConstantError(rt_, ctx, self, name);
+}
+
+const proto::ProtoObject*
+ExecutionEngine::storeOnceInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t nameConst,
+                                  const proto::ProtoObject* val) {
+    // STORE_ONCE_INSTVAR's write (explicit-state spec §6.3, plan D-c). A
+    // write-once variable is unset while its own attribute is absent or
+    // holds nil; the store is a CAS from unset, so the variable is set at
+    // most once, by one writer, whatever the threads. A write that finds it
+    // set is judged by the installed value's `=`, on this thread, with no
+    // lock held. Errors are signalled in place (pre-flight ruling C1).
+    //
+    // Everything read from `f` is read before the first send: the `=` send
+    // and a signal's handler run Smalltalk code, which may grow `frames_`.
+    //
+    // The `=` send runs in a nested engine (sendDynamic), and `wait` never
+    // yields (FutureYield) while more than one engine is live on the thread
+    // (future_prims.cpp, prim_Future_wait: it helps instead). That is what
+    // keeps an actor from suspending in the middle of this store, between
+    // the popped `v` and the `x -> w` replacement, which a frame snapshot
+    // could not resume. A change to that yield policy must keep it so.
+    auto* sym = f.m->ivSymbol(ctx, nameConst);
+    const proto::ProtoObject* self = getSelf(f);
+    if (!self || self == PROTO_NONE)
+        throw NativeError("STORE_ONCE_INSTVAR self is null");
+    const std::string name = f.m->constSymbol(nameConst);
+    if (!val) val = PROTO_NONE;
+    // `self` stays rooted in its frame slot; the pins cover the written
+    // and the installed values across the `=` send and the signal.
+    TransientPin pinVal(ctx, val);
+    auto current = [&]() -> const proto::ProtoObject* {
+        const proto::ProtoObject* cur = self->getOwnAttributeDirect(ctx, sym);
+        return cur ? cur : PROTO_NONE;
+    };
+    // nil never replaces a value: the assignment answers what is there.
+    if (val == PROTO_NONE) return current();
+    // Absent first, then an explicit nil (as prim_Atom_cas).
+    if (self->setAttributeIfEqual(ctx, sym, nullptr, val)
+        || self->setAttributeIfEqual(ctx, sym, PROTO_NONE, val))
+        return val;
+    const proto::ProtoObject* w = current();
+    if (w == PROTO_NONE) {
+        // A write-once variable never becomes unset again once set, so a
+        // CAS that fails on an unset variable met an immutable receiver.
+        signalErrorNamed(rt_, ctx, "ModificationForbidden",
+                         immutableReceiverText("cannot assign to", IvarModifier::WriteOnce, name,
+                                               ivarOwnerDescription(ctx, self)));
+        return PROTO_NONE;   // defensive: the signal is not resumable
+    }
+    if (w == val) return w;
+    TransientPin pinW(ctx, w);
+    // `w = val`, late-bound on the installed value, as a send would be: a
+    // receiver that does not understand `=` goes through
+    // doesNotUnderstand:, whose answer is then the comparison's.
+    const proto::ProtoObject* args[1] = { val };
+    bool understood = false;
+    const proto::ProtoObject* answer =
+        sendDynamic(rt_, ctx, w, bs_.sym.equal, args, 1, &understood);
+    if (!understood)
+        answer = sendDoesNotUnderstand(rt_, ctx, w, "=", args, 1);
+    // A non-Boolean signals NonBooleanReceiver; a handler's resumption
+    // value decides, as for any condition.
+    if (loopConditionIsTrue(rt_, ctx, answer ? answer : PROTO_NONE, "="))
+        return w;
+    signalErrorNamed(rt_, ctx, "ModificationForbidden",
+                     "the write-once variable '" + name + "' of "
+                     + ivarOwnerDescription(ctx, self)
+                     + " already holds a different value; nothing was written");
+    // Not reached by a resumption: ModificationForbidden is not resumable
+    // (`e resume:` raises IllegalResumeAttempt; once-unequal-not-resumable.st),
+    // and retry, return: and an unhandled error all unwind past this frame.
+    // A defensive fallthrough only, answering the variable's value.
+    return w;
 }
 
 const proto::ProtoObject*
@@ -1081,8 +1227,8 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
         &&L_DEOPT_EXIT, &&L_RESET_LOCAL, &&L_JUMP_IF_NIL, &&L_JUMP_IF_NOT_NIL,   // 48-51
         &&L_IDENTICAL, &&L_BIN_INT_MUL, &&L_BIN_INT_MOD, &&L_BIN_INT_QUO,   // 52-55
         &&L_BAD_OP, &&L_BIN_INT_AND, &&L_BIN_INT_OR, &&L_PUSH_SHARED_LOCAL,   // 56-59
-        &&L_STORE_SHARED_LOCAL, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 60-63
-        &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 64-67
+        &&L_STORE_SHARED_LOCAL, &&L_BAD_OP, &&L_BAD_OP, &&L_STORE_CONST_INSTVAR,   // 60-63
+        &&L_STORE_ONCE_INSTVAR, &&L_PUSH_CONST_INSTVAR, &&L_BAD_OP, &&L_BAD_OP,   // 64-67
         &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 68-71
         &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 72-75
         &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP, &&L_BAD_OP,   // 76-79
@@ -1189,6 +1335,9 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
     check[static_cast<unsigned int>(Op::STORE_GLOBAL)]     = &&L_STORE_GLOBAL;
     check[static_cast<unsigned int>(Op::PUSH_INSTVAR)]     = &&L_PUSH_INSTVAR;
     check[static_cast<unsigned int>(Op::STORE_INSTVAR)]    = &&L_STORE_INSTVAR;
+    check[static_cast<unsigned int>(Op::STORE_CONST_INSTVAR)] = &&L_STORE_CONST_INSTVAR;
+    check[static_cast<unsigned int>(Op::STORE_ONCE_INSTVAR)] = &&L_STORE_ONCE_INSTVAR;
+    check[static_cast<unsigned int>(Op::PUSH_CONST_INSTVAR)] = &&L_PUSH_CONST_INSTVAR;
     check[static_cast<unsigned int>(Op::IVAR_GROUP)]       = &&L_IVAR_GROUP;
     check[static_cast<unsigned int>(Op::IVAR_GROUP_END)]   = &&L_IVAR_GROUP_END;
     check[static_cast<unsigned int>(Op::MAKE_CAPTURED)]    = &&L_MAKE_CAPTURED;
@@ -2670,6 +2819,14 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // allocating setAttribute on the globals object.
                 auto* g = rt_.globals();
                 if (!g) throw NativeError("globals not initialized");
+                // The reserved global UnsetConstantError (spec §6.9): a REPL
+                // assignment to it is refused in place and binds nothing.
+                // One pointer comparison; the helper runs only on a match.
+                if (sym == bs_.sym.unsetConstantErrorName && bs_.unsetConstantErrorClass
+                    && val != bs_.unsetConstantErrorClass) {
+                    refuseReservedGlobalStore(rt_, ctx, sym, val);
+                    DISPATCH_SCOPED();
+                }
                 g->setAttribute(ctx, sym, val);
                 DISPATCH_SCOPED();
                 break;
@@ -2716,6 +2873,64 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                 // directly, without that check, until 0.10.0).
                 const proto::ProtoObject* val = pop(f);
                 storeInstVar(ctx, f, arg, val);
+                DISPATCH_DIRECT();
+                break;
+            }
+            case Op::STORE_CONST_INSTVAR: L_STORE_CONST_INSTVAR: {
+                // `:=` to a constant (explicit-state spec §6.2): pop the
+                // value and CAS it in from unset (storeConstInstVar). A
+                // refused store signals ModificationForbidden in place.
+                Frame& f = frames_.back();
+                const proto::ProtoObject* val = pop(f);
+                storeConstInstVar(ctx, f, arg, val);
+                DISPATCH_DIRECT();
+                break;
+            }
+            case Op::STORE_ONCE_INSTVAR: L_STORE_ONCE_INSTVAR: {
+                // `:=` to a write-once variable (explicit-state spec §6.3),
+                // stack `x v -> w` (pre-flight ruling C2): pop the value,
+                // CAS it in from unset (storeOnceInstVar), and replace the
+                // DUPed copy below it with the value the variable holds
+                // afterwards. The helper may run Smalltalk code (the
+                // installed value's `=`, a handler), so the frame is
+                // re-acquired after it; its pins live inside it.
+                const proto::ProtoObject* w;
+                {
+                    Frame& f = frames_.back();
+                    if (f.sp < 2)
+                        throw NativeError("STORE_ONCE_INSTVAR stack underflow");
+                    const proto::ProtoObject* val = pop(f);
+                    w = storeOnceInstVar(ctx, f, arg, val);
+                }
+                Frame& f = frames_.back();
+                pop(f);
+                push(f, w ? w : PROTO_NONE);
+                DISPATCH_DIRECT();
+                break;
+            }
+            case Op::PUSH_CONST_INSTVAR: L_PUSH_CONST_INSTVAR: {
+                // A read of a constant (explicit-state spec §6.2). A
+                // constant is the receiver's OWN attribute, as for its
+                // store and for instVarNamed:, so it is read own-only (as
+                // PUSH_OWN_INSTVAR reads): a same-named class-instance
+                // variable or class attribute up the chain never answers
+                // for it. An unset constant (absent or nil) signals
+                // UnsetConstantError (M14) in place instead of answering
+                // nil. The signal runs handlers on top of this
+                // frame, so the frame is re-acquired after the helper, which
+                // keeps the slow path out of line.
+                const proto::ProtoObject* val;
+                {
+                    Frame& f = frames_.back();
+                    auto* sym = f.m->ivSymbol(ctx, arg);
+                    const proto::ProtoObject* self = getSelf(f);
+                    val = (self && self != PROTO_NONE) ? self->getOwnAttributeDirect(ctx, sym)
+                                                       : nullptr;
+                    if (!val || val == PROTO_NONE)
+                        val = unsetConstantRead(ctx, f, arg);
+                }
+                Frame& f = frames_.back();
+                push(f, val ? val : PROTO_NONE);
                 DISPATCH_DIRECT();
                 break;
             }
@@ -2770,15 +2985,28 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     const proto::ProtoObject* self = getSelf(f);
                     if (!self || self == PROTO_NONE)
                         throw NativeError("STORE_INSTVAR self is null");
-                    if (self->setAttributes(ctx, e.count, names, values) != self)
-                        throw NativeError("instance variable assignment: the receiver "
-                                          "is an immutable value; nothing was written");
+                    if (self->setAttributes(ctx, e.count, names, values) != self) {
+                        // Nothing was written. The refusal signals in
+                        // place; should it return, the frame is
+                        // re-acquired before the run's values are cut.
+                        const uint16_t count = e.count;
+                        // The run is refused whole; the text names its
+                        // first variable.
+                        refuseImmutableStore(ctx, *f.m, f.m->instVarGroupEntry(first).nameConst, self);
+                        cutInstVarGroupValues(frames_.back(), count);
+                        DISPATCH_DIRECT();
+                        break;
+                    }
                 } else {
+                    // The per-write path: the store may signal in place
+                    // (an immutable receiver), so the frame is re-acquired.
+                    const uint16_t count = e.count;
                     storeInstVar(ctx, f, e.nameConst, peek(f));
+                    cutInstVarGroupValues(frames_.back(), count);
+                    DISPATCH_DIRECT();
+                    break;
                 }
-                const proto::ProtoObject* last = pop(f);
-                f.sp -= e.count - 1u;
-                push(f, last);
+                cutInstVarGroupValues(f, e.count);
                 DISPATCH_DIRECT();
                 break;
             }

@@ -1,0 +1,12 @@
+     289082539  11.54% protoST::ExecutionEngine::runLoop(proto::ProtoContext*) - - 
+     263685378  10.52% proto::ProtoSparseListImplementation const* proto::sparse_avl::(anonymous 
+     241544904   9.64% proto::(anonymous namespace)::gcThreadLoop(proto::ProtoSpace*) - 
+     180215027   7.19% proto::ProtoObject::getAttribute(proto::ProtoContext*, proto::ProtoString const*, 
+     158550370   6.33% proto::ProtoSparseListImplementation::implGetAt(proto::ProtoContext*, unsigned long) 
+     142915087   5.70% void proto::sweep::(anonymous namespace)::sweepLoop<false, 
+     101594659   4.05% protoST::ExecutionEngine::pushFrame(protoST::BytecodeModule const*, proto::ProtoObject 
+     101209129   4.04% proto::ProtoObject::getOwnAttributeDirect(proto::ProtoContext*, proto::ProtoString const*) 
+      75519220   3.01% proto::ProtoSparseListImplementation const* proto::sparse_avl::(anonymous 
+      72988325   2.91% 0xffffffff9c434fce - - 
+      72293541   2.88% proto::ProtoThreadImplementation::implAllocCell(proto::ProtoContext*) - - 
+      67551311   2.70% void std::__introsort_loop<__gnu_cxx::__normal_iterator<unsigned long*, 

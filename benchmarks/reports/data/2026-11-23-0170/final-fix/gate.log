@@ -1,0 +1,32 @@
+  const_read             old  not runnable: exit 65; /home/gamarino/Documentos/proyectos/worktrees/protost-0170/benchmarks/micro/const_read.st:8:30: unknown keyword in class declaration: constantNames:
+round 1/3
+  startup                old     117,403,047 cycles  (+-1.57%)  $S/ffix/perf/runs-gate/2
+  startup                new     119,037,310 cycles  (+-0.5%)  $S/ffix/perf/runs-gate/3
+  attr_lookup            old     176,146,618 cycles  (+-1.22%)  $S/ffix/perf/runs-gate/4
+  attr_lookup            new     175,219,637 cycles  (+-0.71%)  $S/ffix/perf/runs-gate/5
+  const_read             new     173,083,230 cycles  (+-0.81%)  $S/ffix/perf/runs-gate/6
+round 2/3
+  startup                new     117,722,890 cycles  (+-2.51%)  $S/ffix/perf/runs-gate/7
+  startup                old     114,285,567 cycles  (+-1.75%)  $S/ffix/perf/runs-gate/8
+  attr_lookup            new     175,063,487 cycles  (+-1.01%)  $S/ffix/perf/runs-gate/9
+  attr_lookup            old     173,371,923 cycles  (+-0.5%)  $S/ffix/perf/runs-gate/10
+  const_read             new     176,075,075 cycles  (+-2.21%)  $S/ffix/perf/runs-gate/11
+round 3/3
+  startup                old     117,021,715 cycles  (+-0.79%)  $S/ffix/perf/runs-gate/12
+  startup                new     117,130,284 cycles  (+-1.4%)  $S/ffix/perf/runs-gate/13
+  attr_lookup            old     199,633,566 cycles  (+-8.26%)  $S/ffix/perf/runs-gate/14
+  attr_lookup            new     172,988,582 cycles  (+-1.07%)  $S/ffix/perf/runs-gate/15
+  const_read             new     171,753,945 cycles  (+-1.93%)  $S/ffix/perf/runs-gate/16
+
+mean cycles (perf -r 3, 3 round(s))
+  startup                old    116,236,776  new    117,963,495
+  attr_lookup            old    183,050,702  new    174,423,902
+  const_read             new    173,637,417
+
+§14.1 gate
+  attr_lookup new/old            0.9529  (bound 1.01)  ok
+  const_read new / attr_lookup new 0.9955  (bound 1.03)  ok
+  startup-subtracted: attr 0.8450  const 0.9861  (information; verdicts differ: False)
+  const_read old: not runnable (G3)
+
+All runs verified. Both bounds hold.

@@ -516,12 +516,87 @@ the CAS keeps failing; each retry re-reads `total value` — the *updated* value
 — and rebuilds from there. This is **optimistic concurrency**: assume no
 conflict, do the work, and only retry if the commit is rejected.
 
-The same raw CAS is available on any object's instance variable, without
-wrapping it in an `Atom`, as `setInstVar:from:to:`:
+The same CAS is available on any object's instance variable, without
+wrapping it in an `Atom`. Declare the variable **atomic**, and the object
+*is* the cell (LANGUAGE.md §4.13):
 
 ```smalltalk
-account setInstVar: #balance from: old to: new.   "answers true/false"
+"-- shared-account.st --"
+Object subclass: #Account atomicNames: 'balance'.
+
+Account >> initialize
+  self compareAndSet: #balance from: nil to: 0.
+
+Account >> deposit: amount
+  ^ self update: #balance with: [ :old | old + amount ].
+
+Account >> balance
+  ^ balance.
+
+Object subclass: #Teller.
+Teller >> pay: anAccount
+  1 to: 250 do: [ :i | anAccount deposit: 1 ].
+  ^ self.
+
+account := Account new.
+t1 := Teller new asActor.  t2 := Teller new asActor.
+t3 := Teller new asActor.  t4 := Teller new asActor.
+
+f1 := t1 pay: account.  f2 := t2 pay: account.
+f3 := t3 pay: account.  f4 := t4 pay: account.
+f1 wait.  f2 wait.  f3 wait.  f4 wait.
+
+account balance displayNl.
 ```
+
+```bash
+$ ./build/protost shared-account.st
+1000
+```
+
+- **`update: #balance with: aBlock`** is `swap:` on the variable: it reads
+  it, runs the block, compare-and-swaps the result in, and re-runs the block
+  from a fresh read when another thread won. It answers the value installed.
+- **`compareAndSet: #balance from: old to: new`** is the raw form, as
+  `value:ifCurrent:` is for an `Atom`: it answers `true` or `false`, and you
+  drive the retry.
+- `balance := ...` is a **compile error** for an atomic variable, so no
+  method can bypass the CAS by accident. `initialize` gives the first value
+  with `compareAndSet: #balance from: nil to: 0`.
+- The four tellers share the account *directly*, not through an actor: an
+  atomic variable stays consistent whatever thread writes it.
+
+`setInstVar:from:to:`, the name this CAS had before 0.17.0, still works in
+0.17.0 as an alias of `compareAndSet:from:to:`. It prints a deprecation
+warning once per process and is removed in 0.18.0.
+
+**The block must be pure, and that includes its handlers.** The block of
+`update:with:` (and of `swap:`) may run several times, so it must not have
+side effects. Above all it must not **wait**: a `wait` or `waitWithin:`
+while an `update:with:` block runs signals an `Error` (`wait inside an
+update:with: block: the block must be pure and may run several times`). A
+wait there would park the worker, which then runs other actors' messages on
+top of it (10.4); those could update the same variable, and the block would
+fail its CAS, run again and wait again, for ever. An exception handler for
+something signalled inside the block runs *on top of* the block, so the
+block is still running and the same rule holds there:
+
+```smalltalk
+Object subclass: #Gauge atomicNames: 'level'.
+Gauge >> initialize  self compareAndSet: #level from: nil to: 0.
+
+| gauge ready |
+gauge := Gauge new.
+ready := Future new resolve: 1; yourself.
+[ gauge update: #level with: [ :old |
+    [ 1 / 0 ] on: ZeroDivide do: [ :e | ready wait ] ] ]
+  on: Error
+  do: [ :e | e messageText ].   "=> 'wait inside an update:with: block: the block must be pure and may run several times'"
+gauge instVarNamed: 'level'.    "=> 0  -- the update was abandoned"
+```
+
+Compute what the block needs *before* calling `update:with:`, and let the
+block only build the new value from the old one.
 
 > **Why this is safe without ABA guards.** A CAS over raw memory has the
 > classic *ABA problem*: a value can change A → B → A and a naive CAS cannot

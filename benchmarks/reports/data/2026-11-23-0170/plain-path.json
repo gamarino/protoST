@@ -1,0 +1,1428 @@
+{
+ "date": "2026-11-23T19:04:36",
+ "host": "DEV12",
+ "kernel": "7.0.0-43-generic",
+ "runs": 3,
+ "warmup": 1,
+ "builds": [
+  {
+   "label": "old",
+   "path": "$S/ref-0161/build_release/protost",
+   "version": "protoST 0.16.1",
+   "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+   "libdir": "$S/pc-361/lib"
+  },
+  {
+   "label": "new",
+   "path": "/home/gamarino/Documentos/proyectos/worktrees/protost-0170/build_release/protost",
+   "version": "protoST 0.16.1",
+   "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+   "libdir": "$S/pc-361/lib"
+  }
+ ],
+ "workloads": [
+  {
+   "name": "startup",
+   "env": {},
+   "expected": 42,
+   "samples": {
+    "old": [
+     {
+      "ms": 42.77,
+      "rss_kb": 28192,
+      "user_ms": 16.14,
+      "sys_ms": 27.24,
+      "load": 5.55,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 47.26,
+      "rss_kb": 28108,
+      "user_ms": 31.48,
+      "sys_ms": 17.26,
+      "load": 5.55,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 43.98,
+      "rss_kb": 27932,
+      "user_ms": 28.36,
+      "sys_ms": 18.3,
+      "load": 5.55,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ],
+    "new": [
+     {
+      "ms": 41.64,
+      "rss_kb": 28032,
+      "user_ms": 27.51,
+      "sys_ms": 16.3,
+      "load": 5.55,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 46.67,
+      "rss_kb": 28132,
+      "user_ms": 28.51,
+      "sys_ms": 21.15,
+      "load": 5.55,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 40.79,
+      "rss_kb": 28028,
+      "user_ms": 28.88,
+      "sys_ms": 13.9,
+      "load": 5.55,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "old": 43.98,
+    "new": 41.64
+   },
+   "median_rss_kb": {
+    "old": 28108,
+    "new": 28032
+   },
+   "median_cpu_ms": {
+    "old": 46.66,
+    "new": 43.81
+   }
+  },
+  {
+   "name": "int_sum_loop",
+   "env": {},
+   "expected": 4999950000,
+   "samples": {
+    "old": [
+     {
+      "ms": 62.08,
+      "rss_kb": 28076,
+      "user_ms": 37.94,
+      "sys_ms": 26.83,
+      "load": 5.55,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 62.46,
+      "rss_kb": 27936,
+      "user_ms": 42.79,
+      "sys_ms": 22.41,
+      "load": 5.55,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 60.78,
+      "rss_kb": 28128,
+      "user_ms": 41.7,
+      "sys_ms": 20.85,
+      "load": 5.55,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ],
+    "new": [
+     {
+      "ms": 58.29,
+      "rss_kb": 28300,
+      "user_ms": 34.8,
+      "sys_ms": 25.59,
+      "load": 5.55,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 70.34,
+      "rss_kb": 28236,
+      "user_ms": 42.9,
+      "sys_ms": 29.93,
+      "load": 5.55,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 58.82,
+      "rss_kb": 28136,
+      "user_ms": 37.44,
+      "sys_ms": 23.64,
+      "load": 5.55,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "old": 62.08,
+    "new": 58.82
+   },
+   "median_rss_kb": {
+    "old": 28076,
+    "new": 28236
+   },
+   "median_cpu_ms": {
+    "old": 64.77,
+    "new": 61.08
+   }
+  },
+  {
+   "name": "fib",
+   "env": {},
+   "expected": 75025,
+   "samples": {
+    "old": [
+     {
+      "ms": 110.13,
+      "rss_kb": 27872,
+      "user_ms": 80.38,
+      "sys_ms": 30.76,
+      "load": 5.55,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 121.38,
+      "rss_kb": 27848,
+      "user_ms": 96.88,
+      "sys_ms": 26.24,
+      "load": 5.55,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 108.17,
+      "rss_kb": 28116,
+      "user_ms": 85.66,
+      "sys_ms": 24.47,
+      "load": 5.55,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ],
+    "new": [
+     {
+      "ms": 128.28,
+      "rss_kb": 28280,
+      "user_ms": 99.29,
+      "sys_ms": 29.09,
+      "load": 5.55,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 112.53,
+      "rss_kb": 28052,
+      "user_ms": 88.66,
+      "sys_ms": 25.48,
+      "load": 5.55,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 107.54,
+      "rss_kb": 27952,
+      "user_ms": 82.16,
+      "sys_ms": 27.39,
+      "load": 5.55,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "old": 110.13,
+    "new": 112.53
+   },
+   "median_rss_kb": {
+    "old": 27872,
+    "new": 28052
+   },
+   "median_cpu_ms": {
+    "old": 111.14,
+    "new": 114.14
+   }
+  },
+  {
+   "name": "list_append",
+   "env": {},
+   "expected": 10000,
+   "samples": {
+    "old": [
+     {
+      "ms": 46.73,
+      "rss_kb": 27916,
+      "user_ms": 25.76,
+      "sys_ms": 22.79,
+      "load": 5.55,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 47.04,
+      "rss_kb": 27908,
+      "user_ms": 31.77,
+      "sys_ms": 16.94,
+      "load": 5.59,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 46.73,
+      "rss_kb": 28152,
+      "user_ms": 26.66,
+      "sys_ms": 21.53,
+      "load": 5.59,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ],
+    "new": [
+     {
+      "ms": 59.28,
+      "rss_kb": 27980,
+      "user_ms": 35.98,
+      "sys_ms": 24.68,
+      "load": 5.55,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 45.38,
+      "rss_kb": 28336,
+      "user_ms": 28.95,
+      "sys_ms": 18.61,
+      "load": 5.59,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 48.33,
+      "rss_kb": 28096,
+      "user_ms": 29.04,
+      "sys_ms": 21.78,
+      "load": 5.59,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "old": 46.73,
+    "new": 48.33
+   },
+   "median_rss_kb": {
+    "old": 27916,
+    "new": 28096
+   },
+   "median_cpu_ms": {
+    "old": 48.55,
+    "new": 50.82
+   }
+  },
+  {
+   "name": "str_concat",
+   "env": {},
+   "expected": 2000,
+   "samples": {
+    "old": [
+     {
+      "ms": 42.81,
+      "rss_kb": 28136,
+      "user_ms": 27.7,
+      "sys_ms": 17.8,
+      "load": 5.59,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 46.43,
+      "rss_kb": 28192,
+      "user_ms": 29.69,
+      "sys_ms": 20.41,
+      "load": 5.59,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 42.53,
+      "rss_kb": 28072,
+      "user_ms": 26.22,
+      "sys_ms": 18.88,
+      "load": 5.59,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ],
+    "new": [
+     {
+      "ms": 48.1,
+      "rss_kb": 28048,
+      "user_ms": 28.77,
+      "sys_ms": 21.58,
+      "load": 5.59,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 43.01,
+      "rss_kb": 28064,
+      "user_ms": 23.37,
+      "sys_ms": 22.36,
+      "load": 5.59,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 46.6,
+      "rss_kb": 28040,
+      "user_ms": 31.45,
+      "sys_ms": 17.82,
+      "load": 5.59,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "old": 42.81,
+    "new": 46.6
+   },
+   "median_rss_kb": {
+    "old": 28136,
+    "new": 28048
+   },
+   "median_cpu_ms": {
+    "old": 45.5,
+    "new": 49.269999999999996
+   }
+  },
+  {
+   "name": "attr_lookup",
+   "env": {},
+   "expected": 600000,
+   "samples": {
+    "old": [
+     {
+      "ms": 81.47,
+      "rss_kb": 28048,
+      "user_ms": 59.85,
+      "sys_ms": 23.1,
+      "load": 5.59,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 76.22,
+      "rss_kb": 28156,
+      "user_ms": 55.99,
+      "sys_ms": 21.38,
+      "load": 5.59,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 66.63,
+      "rss_kb": 27928,
+      "user_ms": 41.84,
+      "sys_ms": 27.55,
+      "load": 5.59,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ],
+    "new": [
+     {
+      "ms": 76.49,
+      "rss_kb": 28036,
+      "user_ms": 49.51,
+      "sys_ms": 28.29,
+      "load": 5.59,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 90.9,
+      "rss_kb": 28048,
+      "user_ms": 68.57,
+      "sys_ms": 24.93,
+      "load": 5.59,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 73.07,
+      "rss_kb": 27964,
+      "user_ms": 52.29,
+      "sys_ms": 20.11,
+      "load": 5.59,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "old": 76.22,
+    "new": 76.49
+   },
+   "median_rss_kb": {
+    "old": 28048,
+    "new": 28036
+   },
+   "median_cpu_ms": {
+    "old": 77.37,
+    "new": 77.8
+   }
+  },
+  {
+   "name": "range_iterate",
+   "env": {},
+   "expected": 100000,
+   "samples": {
+    "old": [
+     {
+      "ms": 62.99,
+      "rss_kb": 28024,
+      "user_ms": 34.87,
+      "sys_ms": 30.77,
+      "load": 5.59,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 52.12,
+      "rss_kb": 27960,
+      "user_ms": 30.46,
+      "sys_ms": 23.58,
+      "load": 5.59,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 59.32,
+      "rss_kb": 28028,
+      "user_ms": 32.44,
+      "sys_ms": 28.62,
+      "load": 5.59,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ],
+    "new": [
+     {
+      "ms": 54.36,
+      "rss_kb": 28104,
+      "user_ms": 32.16,
+      "sys_ms": 22.82,
+      "load": 5.59,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 59.37,
+      "rss_kb": 28124,
+      "user_ms": 43.88,
+      "sys_ms": 16.95,
+      "load": 5.59,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 58.75,
+      "rss_kb": 28188,
+      "user_ms": 35.42,
+      "sys_ms": 25.58,
+      "load": 5.59,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "old": 59.32,
+    "new": 58.75
+   },
+   "median_rss_kb": {
+    "old": 28024,
+    "new": 28124
+   },
+   "median_cpu_ms": {
+    "old": 61.06,
+    "new": 60.83
+   }
+  },
+  {
+   "name": "exception_latency",
+   "env": {},
+   "expected": 50000,
+   "samples": {
+    "old": [
+     {
+      "ms": 667.89,
+      "rss_kb": 142976,
+      "user_ms": 553.23,
+      "sys_ms": 125.6,
+      "load": 5.46,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 610.54,
+      "rss_kb": 148928,
+      "user_ms": 503.22,
+      "sys_ms": 135.6,
+      "load": 5.46,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 642.59,
+      "rss_kb": 148944,
+      "user_ms": 542.02,
+      "sys_ms": 139.75,
+      "load": 5.46,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ],
+    "new": [
+     {
+      "ms": 646.26,
+      "rss_kb": 148976,
+      "user_ms": 541.74,
+      "sys_ms": 143.4,
+      "load": 5.46,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 752.1,
+      "rss_kb": 149180,
+      "user_ms": 605.07,
+      "sys_ms": 145.29,
+      "load": 5.46,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 651.55,
+      "rss_kb": 149240,
+      "user_ms": 536.31,
+      "sys_ms": 144.08,
+      "load": 5.46,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "old": 642.59,
+    "new": 651.55
+   },
+   "median_rss_kb": {
+    "old": 148928,
+    "new": 149180
+   },
+   "median_cpu_ms": {
+    "old": 678.83,
+    "new": 685.14
+   }
+  },
+  {
+   "name": "parallel_speedup pool",
+   "env": {},
+   "expected": 135000900000,
+   "samples": {
+    "old": [
+     {
+      "ms": 98.42,
+      "rss_kb": 28200,
+      "user_ms": 294.34,
+      "sys_ms": 29.53,
+      "load": 6.06,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 123.61,
+      "rss_kb": 28360,
+      "user_ms": 337.74,
+      "sys_ms": 27.73,
+      "load": 6.06,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 91.21,
+      "rss_kb": 28108,
+      "user_ms": 293.44,
+      "sys_ms": 27.66,
+      "load": 6.06,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ],
+    "new": [
+     {
+      "ms": 118.34,
+      "rss_kb": 28492,
+      "user_ms": 354.46,
+      "sys_ms": 30.52,
+      "load": 6.06,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 103.56,
+      "rss_kb": 28408,
+      "user_ms": 327.26,
+      "sys_ms": 24.94,
+      "load": 6.06,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 112.2,
+      "rss_kb": 28176,
+      "user_ms": 408.93,
+      "sys_ms": 30.69,
+      "load": 6.06,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "old": 98.42,
+    "new": 112.2
+   },
+   "median_rss_kb": {
+    "old": 28200,
+    "new": 28408
+   },
+   "median_cpu_ms": {
+    "old": 323.87,
+    "new": 384.97999999999996
+   }
+  },
+  {
+   "name": "parallel_speedup w=1",
+   "env": {
+    "PROTOST_WORKERS": "1"
+   },
+   "expected": 135000900000,
+   "samples": {
+    "old": [
+     {
+      "ms": 212.25,
+      "rss_kb": 27592,
+      "user_ms": 181.8,
+      "sys_ms": 28.97,
+      "load": 6.06,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 252.58,
+      "rss_kb": 27656,
+      "user_ms": 221.78,
+      "sys_ms": 30.83,
+      "load": 6.06,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 206.77,
+      "rss_kb": 27660,
+      "user_ms": 182.85,
+      "sys_ms": 23.98,
+      "load": 6.06,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ],
+    "new": [
+     {
+      "ms": 272.08,
+      "rss_kb": 27716,
+      "user_ms": 245.44,
+      "sys_ms": 25.04,
+      "load": 6.06,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 210.31,
+      "rss_kb": 27772,
+      "user_ms": 184.17,
+      "sys_ms": 24.02,
+      "load": 6.06,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 220.39,
+      "rss_kb": 27924,
+      "user_ms": 196.37,
+      "sys_ms": 24.05,
+      "load": 6.06,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "old": 212.25,
+    "new": 220.39
+   },
+   "median_rss_kb": {
+    "old": 27656,
+    "new": 27772
+   },
+   "median_cpu_ms": {
+    "old": 210.77,
+    "new": 220.42000000000002
+   }
+  },
+  {
+   "name": "cooperative_yield w=2",
+   "env": {
+    "PROTOST_WORKERS": "2"
+   },
+   "expected": 1000000,
+   "samples": {
+    "old": [
+     {
+      "ms": 191.66,
+      "rss_kb": 44564,
+      "user_ms": 309.86,
+      "sys_ms": 36.33,
+      "load": 6.06,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 231.41,
+      "rss_kb": 48828,
+      "user_ms": 344.03,
+      "sys_ms": 46.87,
+      "load": 6.06,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 202.78,
+      "rss_kb": 44524,
+      "user_ms": 329.92,
+      "sys_ms": 44.85,
+      "load": 6.46,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ],
+    "new": [
+     {
+      "ms": 179.29,
+      "rss_kb": 44704,
+      "user_ms": 282.8,
+      "sys_ms": 42.82,
+      "load": 6.06,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 189.22,
+      "rss_kb": 44812,
+      "user_ms": 304.16,
+      "sys_ms": 42.02,
+      "load": 6.46,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 186.03,
+      "rss_kb": 44672,
+      "user_ms": 288.62,
+      "sys_ms": 47.94,
+      "load": 6.46,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "old": 202.78,
+    "new": 186.03
+   },
+   "median_rss_kb": {
+    "old": 44564,
+    "new": 44704
+   },
+   "median_cpu_ms": {
+    "old": 374.77000000000004,
+    "new": 336.56
+   }
+  },
+  {
+   "name": "message_throughput",
+   "env": {},
+   "expected": 2000,
+   "samples": {
+    "old": [
+     {
+      "ms": 105.23,
+      "rss_kb": 28020,
+      "user_ms": 216.73,
+      "sys_ms": 45.02,
+      "load": 6.46,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 83.5,
+      "rss_kb": 28244,
+      "user_ms": 178.75,
+      "sys_ms": 40.86,
+      "load": 6.46,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 84.58,
+      "rss_kb": 28000,
+      "user_ms": 197.98,
+      "sys_ms": 37.43,
+      "load": 6.46,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ],
+    "new": [
+     {
+      "ms": 84.89,
+      "rss_kb": 32440,
+      "user_ms": 213.58,
+      "sys_ms": 40.88,
+      "load": 6.46,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 83.71,
+      "rss_kb": 28280,
+      "user_ms": 201.55,
+      "sys_ms": 42.59,
+      "load": 6.46,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 112.66,
+      "rss_kb": 28292,
+      "user_ms": 180.81,
+      "sys_ms": 49.61,
+      "load": 6.46,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "old": 84.58,
+    "new": 84.89
+   },
+   "median_rss_kb": {
+    "old": 28020,
+    "new": 28292
+   },
+   "median_cpu_ms": {
+    "old": 235.41,
+    "new": 244.14000000000001
+   }
+  },
+  {
+   "name": "saturation_big w=1",
+   "env": {
+    "PROTOST_WORKERS": "1"
+   },
+   "expected": 20004000000,
+   "samples": {
+    "old": [
+     {
+      "ms": 819.41,
+      "rss_kb": 27908,
+      "user_ms": 799.62,
+      "sys_ms": 23.1,
+      "load": 6.46,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 748.21,
+      "rss_kb": 27420,
+      "user_ms": 727.2,
+      "sys_ms": 25.01,
+      "load": 6.34,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 828.53,
+      "rss_kb": 27492,
+      "user_ms": 803.34,
+      "sys_ms": 24.98,
+      "load": 6.34,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ],
+    "new": [
+     {
+      "ms": 746.46,
+      "rss_kb": 27728,
+      "user_ms": 725.95,
+      "sys_ms": 25.03,
+      "load": 6.46,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 787.0,
+      "rss_kb": 27776,
+      "user_ms": 764.15,
+      "sys_ms": 24.07,
+      "load": 6.34,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 810.15,
+      "rss_kb": 28008,
+      "user_ms": 785.34,
+      "sys_ms": 22.92,
+      "load": 6.34,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "old": 819.41,
+    "new": 787.0
+   },
+   "median_rss_kb": {
+    "old": 27492,
+    "new": 27776
+   },
+   "median_cpu_ms": {
+    "old": 822.72,
+    "new": 788.22
+   }
+  },
+  {
+   "name": "saturation_big w=2",
+   "env": {
+    "PROTOST_WORKERS": "2"
+   },
+   "expected": 20004000000,
+   "samples": {
+    "old": [
+     {
+      "ms": 456.5,
+      "rss_kb": 27876,
+      "user_ms": 821.25,
+      "sys_ms": 23.95,
+      "load": 6.64,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 430.97,
+      "rss_kb": 27756,
+      "user_ms": 774.69,
+      "sys_ms": 27.02,
+      "load": 6.64,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 462.28,
+      "rss_kb": 27848,
+      "user_ms": 834.03,
+      "sys_ms": 23.06,
+      "load": 6.64,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ],
+    "new": [
+     {
+      "ms": 711.86,
+      "rss_kb": 27748,
+      "user_ms": 1281.77,
+      "sys_ms": 28.86,
+      "load": 6.64,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 472.32,
+      "rss_kb": 27820,
+      "user_ms": 843.61,
+      "sys_ms": 29.88,
+      "load": 6.64,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 461.79,
+      "rss_kb": 27760,
+      "user_ms": 833.44,
+      "sys_ms": 25.04,
+      "load": 6.64,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "old": 456.5,
+    "new": 472.32
+   },
+   "median_rss_kb": {
+    "old": 27848,
+    "new": 27760
+   },
+   "median_cpu_ms": {
+    "old": 845.2,
+    "new": 873.49
+   }
+  },
+  {
+   "name": "saturation_big w=3",
+   "env": {
+    "PROTOST_WORKERS": "3"
+   },
+   "expected": 20004000000,
+   "samples": {
+    "old": [
+     {
+      "ms": 357.08,
+      "rss_kb": 28072,
+      "user_ms": 917.83,
+      "sys_ms": 25.0,
+      "load": 6.58,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 360.95,
+      "rss_kb": 28076,
+      "user_ms": 909.29,
+      "sys_ms": 27.04,
+      "load": 6.58,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 349.48,
+      "rss_kb": 27628,
+      "user_ms": 881.37,
+      "sys_ms": 31.72,
+      "load": 6.58,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ],
+    "new": [
+     {
+      "ms": 369.66,
+      "rss_kb": 27944,
+      "user_ms": 945.2,
+      "sys_ms": 32.07,
+      "load": 6.58,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 369.24,
+      "rss_kb": 27916,
+      "user_ms": 920.59,
+      "sys_ms": 26.9,
+      "load": 6.58,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 382.35,
+      "rss_kb": 27996,
+      "user_ms": 942.69,
+      "sys_ms": 30.92,
+      "load": 6.58,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "old": 357.08,
+    "new": 369.66
+   },
+   "median_rss_kb": {
+    "old": 28072,
+    "new": 27944
+   },
+   "median_cpu_ms": {
+    "old": 936.3299999999999,
+    "new": 973.61
+   }
+  },
+  {
+   "name": "saturation_big w=4",
+   "env": {
+    "PROTOST_WORKERS": "4"
+   },
+   "expected": 20004000000,
+   "samples": {
+    "old": [
+     {
+      "ms": 407.74,
+      "rss_kb": 27856,
+      "user_ms": 1368.44,
+      "sys_ms": 26.93,
+      "load": 6.58,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 323.28,
+      "rss_kb": 27752,
+      "user_ms": 1026.27,
+      "sys_ms": 24.69,
+      "load": 6.58,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 380.5,
+      "rss_kb": 28084,
+      "user_ms": 1231.2,
+      "sys_ms": 30.83,
+      "load": 6.62,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ],
+    "new": [
+     {
+      "ms": 311.39,
+      "rss_kb": 28048,
+      "user_ms": 959.05,
+      "sys_ms": 35.7,
+      "load": 6.58,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 456.01,
+      "rss_kb": 27608,
+      "user_ms": 1458.65,
+      "sys_ms": 30.8,
+      "load": 6.62,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 366.23,
+      "rss_kb": 28216,
+      "user_ms": 1147.17,
+      "sys_ms": 31.56,
+      "load": 6.62,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "old": 380.5,
+    "new": 366.23
+   },
+   "median_rss_kb": {
+    "old": 27856,
+    "new": 28048
+   },
+   "median_cpu_ms": {
+    "old": 1262.03,
+    "new": 1178.73
+   }
+  },
+  {
+   "name": "saturation_big w=5",
+   "env": {
+    "PROTOST_WORKERS": "5"
+   },
+   "expected": 20004000000,
+   "samples": {
+    "old": [
+     {
+      "ms": 260.97,
+      "rss_kb": 28020,
+      "user_ms": 1005.47,
+      "sys_ms": 26.8,
+      "load": 6.62,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 294.3,
+      "rss_kb": 27920,
+      "user_ms": 1126.71,
+      "sys_ms": 31.88,
+      "load": 6.62,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 328.92,
+      "rss_kb": 27972,
+      "user_ms": 1303.49,
+      "sys_ms": 27.95,
+      "load": 6.62,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ],
+    "new": [
+     {
+      "ms": 293.7,
+      "rss_kb": 28080,
+      "user_ms": 1094.78,
+      "sys_ms": 26.41,
+      "load": 6.62,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 316.3,
+      "rss_kb": 28004,
+      "user_ms": 1238.14,
+      "sys_ms": 29.86,
+      "load": 6.62,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 339.15,
+      "rss_kb": 28092,
+      "user_ms": 1318.65,
+      "sys_ms": 29.72,
+      "load": 6.62,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "old": 294.3,
+    "new": 316.3
+   },
+   "median_rss_kb": {
+    "old": 27972,
+    "new": 28080
+   },
+   "median_cpu_ms": {
+    "old": 1158.5900000000001,
+    "new": 1268.0
+   }
+  },
+  {
+   "name": "saturation_big w=6",
+   "env": {
+    "PROTOST_WORKERS": "6"
+   },
+   "expected": 20004000000,
+   "samples": {
+    "old": [
+     {
+      "ms": 340.22,
+      "rss_kb": 28108,
+      "user_ms": 1373.78,
+      "sys_ms": 38.54,
+      "load": 6.81,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 284.4,
+      "rss_kb": 28096,
+      "user_ms": 1269.52,
+      "sys_ms": 30.58,
+      "load": 6.81,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 244.14,
+      "rss_kb": 27944,
+      "user_ms": 1053.27,
+      "sys_ms": 28.84,
+      "load": 6.81,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ],
+    "new": [
+     {
+      "ms": 329.91,
+      "rss_kb": 28204,
+      "user_ms": 1504.91,
+      "sys_ms": 33.8,
+      "load": 6.81,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 260.07,
+      "rss_kb": 28136,
+      "user_ms": 1123.58,
+      "sys_ms": 23.97,
+      "load": 6.81,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     },
+     {
+      "ms": 336.22,
+      "rss_kb": 28320,
+      "user_ms": 1561.51,
+      "sys_ms": 26.8,
+      "load": 6.81,
+      "protoCore": "libprotoCore.so.5 => $S/pc-361/lib/libprotoCore.so.5",
+      "contenders": []
+     }
+    ]
+   },
+   "median_ms": {
+    "old": 284.4,
+    "new": 329.91
+   },
+   "median_rss_kb": {
+    "old": 28096,
+    "new": 28204
+   },
+   "median_cpu_ms": {
+    "old": 1300.1,
+    "new": 1538.71
+   }
+  }
+ ],
+ "failures": []
+}

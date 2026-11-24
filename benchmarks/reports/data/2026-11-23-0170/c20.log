@@ -1,0 +1,14 @@
+round 1/3
+  instances              old  11,125,888,862 cycles  (+-2.36%)  $S/gate-runs/47
+  instances              new  11,355,368,663 cycles  (+-1.82%)  $S/gate-runs/48
+round 2/3
+  instances              new  11,889,061,600 cycles  (+-0.31%)  $S/gate-runs/49
+  instances              old  11,100,538,817 cycles  (+-2.46%)  $S/gate-runs/50
+round 3/3
+  instances              old  11,708,349,240 cycles  (+-4.04%)  $S/gate-runs/51
+  instances              new  11,710,967,442 cycles  (+-1.4%)  $S/gate-runs/52
+
+mean cycles (perf -r 3, 3 round(s))
+  instances              old 11,311,592,306  new 11,651,799,235
+
+All runs verified.

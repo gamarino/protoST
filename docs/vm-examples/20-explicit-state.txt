@@ -1,0 +1,87 @@
+module main: <module>
+  args 0, locals 0, stack 48 (deepest 3)
+  constants:
+    #0   symbol    #Box
+    #1   symbol    #Object
+    #2   symbol    #__subclassNamed:
+    #3   string    'Box'
+    #4   symbol    #__setClassName:
+    #5   string    'Box'
+    #6   string    'a b k w'
+    #7   string    'constant:k writeOnce:w'
+    #8   symbol    #__setInstVarNames:modifiers:
+    #9   symbol    #initialize
+    #10  symbol    #__installMethod:as:
+    #11  symbol    #k
+    #12  symbol    #new
+    #13  symbol    #printNl
+  code:
+      0  PUSH_GLOBAL        1     ; Object
+      1  PUSH_CONST         3     ; 'Box'
+      2  SEND_KEYWORD       2     ; #__subclassNamed:, 1 arg
+      3  PUSH_CONST         5     ; 'Box'
+      4  SEND_KEYWORD       4     ; #__setClassName:, 1 arg
+      5  PUSH_CONST         6     ; 'a b k w'
+      6  PUSH_CONST         7     ; 'constant:k writeOnce:w'
+      7  SEND_KEYWORD       8     ; #__setInstVarNames:modifiers:, 2 args
+      8  DUP
+      9  STORE_GLOBAL       0     ; Box
+     10  POP
+     11  PUSH_GLOBAL        0     ; Box
+     12  PUSH_BLOCK         0     ; main.0 (Box>>initialize)
+     13  PUSH_CONST         9     ; #initialize
+     14  SEND_KEYWORD       10    ; #__installMethod:as:, 2 args
+     15  POP
+     16  PUSH_GLOBAL        0     ; Box
+     17  PUSH_BLOCK         1     ; main.1 (Box>>k)
+     18  PUSH_CONST         11    ; #k
+     19  SEND_KEYWORD       10    ; #__installMethod:as:, 2 args
+     20  POP
+     21  PUSH_GLOBAL        0     ; Box
+     22  SEND_UNARY         12    ; #new
+     23  SEND_UNARY         11    ; #k
+     24  SEND_UNARY         13    ; #printNl
+     25  RETURN_TOP
+
+module main.0: Box>>initialize
+  args 1, locals 1 (0 self), stack 48 (deepest 2)
+  defining class Box
+  write groups:
+    @0   a, write 1 of 2
+    @1   b, write 2 of 2
+  constants:
+    #0   integer   1
+    #1   symbol    #a
+    #2   integer   2
+    #3   symbol    #b
+    #4   integer   3
+    #5   symbol    #k
+    #6   integer   4
+    #7   integer   5
+    #8   symbol    #w
+  code:
+      0  PUSH_CONST         0     ; 1
+      1  IVAR_GROUP         0     ; a, write 1 of 2
+      2  PUSH_CONST         2     ; 2
+      3  IVAR_GROUP_END     1     ; b, write 2 of 2
+      4  POP
+      5  PUSH_CONST         4     ; 3
+      6  STORE_CONST_INSTVAR 5     ; k
+      7  PUSH_CONST         6     ; 4
+      8  STORE_INSTVAR      1     ; a
+      9  PUSH_CONST         7     ; 5
+     10  DUP
+     11  STORE_ONCE_INSTVAR 8     ; w
+     12  POP
+     13  PUSH_LOCAL         0     ; self
+     14  RETURN
+
+module main.1: Box>>k
+  args 1, locals 1 (0 self), stack 48 (deepest 1)
+  defining class Box
+  constants:
+    #0   symbol    #k
+  code:
+      0  PUSH_CONST_INSTVAR 0     ; k
+      1  RETURN
+3

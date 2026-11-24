@@ -1,13 +1,18 @@
 #include "runtime/ClassedErrorSignal.h"
 #include "runtime/NativeError.h"
+#include "runtime/NativeExceptionBridge.h"
 #include "runtime/ListIndex.h"
 #include "protoST/STRuntime.h"
 #include "protoST/primitives.h"
 #include "primitives/ArgSupport.h"
+#include "primitives/CollectionSupport.h"
+#include "primitives/StringSupport.h"
 #include "runtime/BlockCode.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/BytecodeModule.h"
+#include "runtime/ConstantConstructor.h"
 #include "runtime/InstanceTemplate.h"
+#include "runtime/IvarModifiers.h"
 #include "runtime/TransientPin.h"
 #include "runtime/ValueFormat.h"
 #include "runtime/ExecutionEngine.h"
@@ -28,6 +33,7 @@
 #include <ctime>
 #include <random>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace protoST {
@@ -220,55 +226,8 @@ const proto::ProtoObject* prim_Object_sleepMs(STRuntime&,
     return r;
 }
 
-namespace {
-// Stamp the method's body (and its blocks) with the identity of the class it
-// is installed on, for `super` (BytecodeModule::definingClassId). The class
-// gets its `__class_id__`, a process-unique integer, on its first install;
-// `addBehavior:` copies it to the rebuilt class, which stands for the same
-// class. A method object without bytecode (a primitive) is left alone.
-void stampDefiningClass(STRuntime& rt, proto::ProtoContext* ctx,
-                        const proto::ProtoObject* cls,
-                        const proto::ProtoObject* methodObj) {
-    const BytecodeModule* code =
-        blockCodeOf(ctx, methodObj->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr));
-    if (!code) return;
-    static std::atomic<std::int64_t> nextClassId{1};
-    const proto::ProtoString* idKey = rt.bootstrap().sym.classId;
-    std::int64_t id = 0;
-    const proto::ProtoObject* idObj = cls->getOwnAttributeDirect(ctx, idKey);
-    if (idObj && idObj != PROTO_NONE && idObj->isInteger(ctx)) {
-        id = idObj->asLong(ctx);
-    } else {
-        id = nextClassId.fetch_add(1, std::memory_order_relaxed);
-        cls->setAttribute(ctx, idKey, ctx->fromLong(id));
-    }
-    code->setDefiningClassId(id);
-}
-} // namespace
 
 namespace {
-// S37: the names a class declares, recorded on the class object as one
-// space-separated string under `key`: `__instvar_names__` (instance
-// variables; on a metaclass, class-instance variables) and
-// `__classvar_names__` (class variables).
-void addDeclaredNames(proto::ProtoContext* ctx, const proto::ProtoObject* o,
-                      const proto::ProtoString* key, std::unordered_set<std::string>& out) {
-    if (!o || o == PROTO_NONE || o->isInteger(ctx) || o->isFloat(ctx) || o->asString(ctx)) return;
-    if (o->hasOwnAttribute(ctx, key) != PROTO_TRUE) return;
-    const proto::ProtoObject* v = o->getAttribute(ctx, key);
-    const proto::ProtoString* str = v && v != PROTO_NONE ? v->asString(ctx) : nullptr;
-    if (!str) return;
-    std::string word;
-    for (char c : str->toStdString(ctx) + " ") {
-        if (std::isspace(static_cast<unsigned char>(c))) {
-            if (!word.empty()) out.insert(word);
-            word.clear();
-        } else {
-            word += c;
-        }
-    }
-}
-
 // The name a class object carries (`__class_name__`), or "" for none.
 std::string ownClassName(const Bootstrap& b, proto::ProtoContext* ctx, const proto::ProtoObject* o) {
     if (!o || o == PROTO_NONE || o->isInteger(ctx) || o->asString(ctx)) return {};
@@ -277,29 +236,27 @@ std::string ownClassName(const Bootstrap& b, proto::ProtoContext* ctx, const pro
     return str ? str->toStdString(ctx) : std::string();
 }
 
-// Calls `f` on `cls` and then on each of its ancestors (superclasses and
-// mixins: protoCore's flattened parent chain), nearest first.
-template <typename F>
-void forClassAndAncestors(proto::ProtoContext* ctx, const proto::ProtoObject* cls, F&& f) {
-    f(cls);
-    if (const proto::ProtoList* chain = cls->getParents(ctx)) {
-        TransientPin pinChain(ctx, reinterpret_cast<const proto::ProtoObject*>(chain));
-        const proto::proto_ulong n = chain->getSize(ctx);
-        for (proto::proto_ulong i = 0; i < n; ++i) {
-            const proto::ProtoObject* p = chain->getAt(ctx, listIndex(i));
-            if (p && p != PROTO_NONE) f(p);
-        }
-    }
-}
-
 struct LateSite {
     const BytecodeModule* module;
     std::size_t opPos;    // byte offset of the opcode word (after any EXTEND)
     Op op;
     unsigned int arg;     // constant index of the variable's name
+    // The sub-module chain from the method body to the site crosses a real
+    // block (a module that is not a de-optimised copy).
+    bool inClosure;
+    // ... or a de-optimised copy of an inlined block. Such a copy inlines
+    // nothing, so a block the method's code inlines can be a real block in
+    // it; every site in it has a twin in the method's inlined code, which
+    // decides whether it stands in a closure (explicit-state spec §6.2).
+    bool inDeoptCopy;
 };
 
-void collectLateSites(const BytecodeModule& m, std::vector<LateSite>& out) {
+// Calls `f` on every instruction of `m` and of its sub-modules, in code
+// order, `m` first, as a LateSite (the operand decoded across EXTEND
+// prefixes). `inClosure` and `inDeoptCopy` describe the chain from the
+// method body down to `m` (both false for the body itself).
+template <typename F>
+void forEachSite(const BytecodeModule& m, F&& f, bool inClosure = false, bool inDeoptCopy = false) {
     const std::vector<uint8_t>& bytes = m.bytes();
     for (std::size_t pc = 0; pc + 1 < bytes.size(); ) {
         std::size_t opPos = pc;
@@ -312,10 +269,56 @@ void collectLateSites(const BytecodeModule& m, std::vector<LateSite>& out) {
             arg = (arg << 8) | bytes[pc + 1];
             pc += kInstrSize;
         }
-        if (op == Op::PUSH_LATE_VAR || op == Op::STORE_LATE_VAR)
-            out.push_back(LateSite{&m, opPos, op, arg});
+        f(LateSite{&m, opPos, op, arg, inClosure, inDeoptCopy});
     }
-    for (std::size_t i = 0; i < m.numBlocks(); ++i) collectLateSites(m.block(i), out);
+    for (std::size_t i = 0; i < m.numBlocks(); ++i) {
+        const BytecodeModule& sub = m.block(i);
+        forEachSite(sub, f, inClosure || !sub.isDeoptCopy(), inDeoptCopy || sub.isDeoptCopy());
+    }
+}
+
+// The late sites of `m` and of its sub-modules, in code order, `m` first.
+void collectLateSites(const BytecodeModule& m, std::vector<LateSite>& out) {
+    forEachSite(m, [&](const LateSite& site) {
+        if (site.op == Op::PUSH_LATE_VAR || site.op == Op::STORE_LATE_VAR) out.push_back(site);
+    });
+}
+
+// The store opcode of a late `:=` to the instance variable `name` of `cls`,
+// by its modifier; M1, M2 and M4 are signalled with the compiler's texts.
+// `where` is the method's class, as the compiler names it.
+Op lateInstVarStoreOp(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* cls,
+                      const std::string& name, const std::string& selector,
+                      const LateSite& site, const std::string& where) {
+    const int line = site.module->lineForPc(site.opPos);
+    switch (modifierOf(rt, ctx, cls, name, nullptr)) {
+        case IvarModifier::Constant:
+            if (selector != "initialize")
+                throw ClassedErrorSignal("Error", assignmentRefusalText(
+                    AssignmentRefusal::ConstantOutsideInitialize, name, where, line));
+            // M2 skips a site inside a de-optimised copy. That is safe only
+            // because every copy has an inlined twin in the method's code:
+            // the same statements, compiled with the blocks the source
+            // inlines inlined, whose sites are collected and checked here
+            // too. The copy inlines nothing, so a block the twin inlines can
+            // be a real block in the copy; the twin decides whether the
+            // assignment stands in a closure, as the compiler decides it
+            // (Compiler::compileDeoptBlock drops the copy's errors).
+            if (site.inClosure && !site.inDeoptCopy)
+                throw ClassedErrorSignal("Error", assignmentRefusalText(
+                    AssignmentRefusal::ConstantInsideBlock, name, where, line));
+            return Op::STORE_CONST_INSTVAR;
+        case IvarModifier::Atomic:
+            throw ClassedErrorSignal("Error", assignmentRefusalText(
+                AssignmentRefusal::AtomicAssigned, name, where, line));
+        case IvarModifier::WriteOnce:
+            // Allowed anywhere. The compiler emits every late store as
+            // `DUP STORE_LATE_VAR` (+ POP), the shape STORE_ONCE_INSTVAR
+            // takes (pre-flight ruling C2).
+            return Op::STORE_ONCE_INSTVAR;
+        default:
+            return Op::STORE_INSTVAR;
+    }
 }
 
 // S37: resolve the late-bound variables of a method body (Op::PUSH_LATE_VAR,
@@ -329,11 +332,18 @@ void collectLateSites(const BytecodeModule& m, std::vector<LateSite>& out) {
 // emitted one (a name not starting with a lowercase letter, or any name in
 // REPL code); any other name signals `undeclared variable`, the compiler's
 // error, and the method is not installed; so does an argument or temporary that reuses an
-// instance variable's name. Everything is checked before anything is
-// rewritten, so a refused method leaves its body untouched.
+// instance variable's name. A store to an instance variable follows its
+// modifier (explicit-state spec §6.2, §6.4, §6.5), as the compiler does: a
+// constant is stored by STORE_CONST_INSTVAR in `initialize` (`selector`, the
+// selector being installed) outside real blocks, and refused anywhere else
+// (M1, M2); an atomic variable is refused (M4); a write-once variable is
+// stored by STORE_ONCE_INSTVAR (pre-flight rulings C2, C3). A read of a
+// constant is PUSH_CONST_INSTVAR, the compiler's checked read (§6.2). Everything
+// is checked before anything is rewritten, so a refused method leaves its
+// body untouched.
 void resolveLateVariables(STRuntime& rt, proto::ProtoContext* ctx,
                           const proto::ProtoObject* cls, bool classSide,
-                          const proto::ProtoObject* methodObj) {
+                          const proto::ProtoObject* methodObj, const std::string& selector) {
     const Bootstrap& b = rt.bootstrap();
     const BytecodeModule* code =
         blockCodeOf(ctx, methodObj->getOwnAttributeDirect(ctx, b.sym.bcPtr));
@@ -376,8 +386,13 @@ void resolveLateVariables(STRuntime& rt, proto::ProtoContext* ctx,
         const std::string& name = site.module->constSymbol(site.arg);
         const bool store = site.op == Op::STORE_LATE_VAR;
         Op to = Op::EXTEND;
-        if (ivars.count(name))
-            to = store ? Op::STORE_INSTVAR : (classSide ? Op::PUSH_OWN_INSTVAR : Op::PUSH_INSTVAR);
+        if (ivars.count(name) && store && !classSide)
+            to = lateInstVarStoreOp(rt, ctx, cls, name, selector, site, where);
+        else if (ivars.count(name) && classSide)
+            to = store ? Op::STORE_INSTVAR : Op::PUSH_OWN_INSTVAR;
+        else if (ivars.count(name))
+            to = modifierOf(rt, ctx, cls, name, nullptr) == IvarModifier::Constant
+                 ? Op::PUSH_CONST_INSTVAR : Op::PUSH_INSTVAR;
         else if (cvars.count(name))
             to = store ? Op::STORE_CLASSVAR : Op::PUSH_INSTVAR;
         else if (!store && (code->lateReadsFallBackToGlobals() || name.empty()
@@ -394,31 +409,305 @@ void resolveLateVariables(STRuntime& rt, proto::ProtoContext* ctx,
     resolution.resolved = true;
 }
 
-// Records the instance-variable names a class declares (`names`, a string of
-// space-separated names) on the class object, `__instvar_names__`, which
-// `instVarNames` and resolveLateVariables read. For a class (not a
-// metaclass) it first applies the rules the compiler applies to a class
-// declaration it can see whole: a name is declared once, and a class may not
-// redeclare an instance variable it inherits (both would name the same slot
-// of the object). The compiler cannot apply the second one when the
-// superclass is not known to it (S37: an imported class, a class built by
-// the `subclass:` message), so it is checked here, when the class is built.
-void declareInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
-                         const proto::ProtoObject* cls, const proto::ProtoObject* names) {
+// M10 (explicit-state spec §6.1): the classes on `cls`'s chain -- `cls`
+// itself when it already records instance variables, its superclasses and
+// its mixins -- must agree on the modifier of every instance variable two of
+// them declare. Runs when a class is declared, when `uses:` assembles its
+// chain, and when addBehavior: rebuilds it.
+void checkModifierConflicts(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* cls) {
     const Bootstrap& b = rt.bootstrap();
     const proto::ProtoString* ivKey = proto::ProtoString::createSymbol(ctx, "__instvar_names__");
-    const proto::ProtoString* str = names && names != PROTO_NONE ? names->asString(ctx) : nullptr;
-    if (str && !isMetaclass(b, ctx, cls)) {
-        std::vector<std::string> declared;
-        std::string word;
-        for (char c : str->toStdString(ctx) + " ") {
-            if (std::isspace(static_cast<unsigned char>(c))) {
-                if (!word.empty()) declared.push_back(word);
-                word.clear();
-            } else {
-                word += c;
-            }
+    struct Seen { IvarModifier modifier; std::string owner; };
+    std::unordered_map<std::string, Seen> seen;
+    forClassAndAncestors(ctx, cls, [&](const proto::ProtoObject* k) {
+        if (!k || k == PROTO_NONE || k->isInteger(ctx) || k->isFloat(ctx) || k->asString(ctx)
+            || k->hasOwnAttribute(ctx, ivKey) != PROTO_TRUE || isMetaclass(b, ctx, k))
+            return;
+        const proto::ProtoObject* v = k->getOwnAttributeDirect(ctx, ivKey);
+        const proto::ProtoString* str = v && v != PROTO_NONE ? v->asString(ctx) : nullptr;
+        if (!str) return;
+        const std::vector<ModifiedIvar> modified = ownModifiersOf(ctx, k);
+        const std::string owner = ownClassName(b, ctx, k);
+        for (const std::string& iv : splitNames(str->toStdString(ctx))) {
+            const IvarModifier mod = modifierIn(modified, iv);
+            auto [it, inserted] = seen.emplace(iv, Seen{mod, owner});
+            if (!inserted && it->second.modifier != mod)
+                throw ClassedErrorSignal("Error",
+                    "instance variable '" + iv + "' is " + modifierName(it->second.modifier)
+                    + " in " + it->second.owner + " and " + modifierName(mod) + " in " + owner);
         }
+    });
+}
+
+// The marker of a class user code declared (after the kernel loaded), on
+// every path that builds one: M11 compares a redeclaration only with such a
+// class, so re-declaring a kernel class name defines a new class, as before.
+//
+// Why two markers. `__user_class__` (set by __subclassNamed: only) means
+// "this class object may be reused in place": the textual declaration path
+// re-runs into the same object when its name and first parent match, so
+// existing instances and methods stay attached. The uses: path and the
+// message forms never reuse an object; they build a new class every time.
+// `__user_declared__` (set on every path) means "user code declared this
+// class", which is what M11 needs to know about the class still bound under
+// a name, whichever path built it. Folding the two into one marker would
+// either let the uses: and message paths reuse objects they must replace,
+// or hide their classes from M11.
+const proto::ProtoString* userDeclaredKey(proto::ProtoContext* ctx) {
+    return proto::ProtoString::createSymbol(ctx, "__user_declared__");
+}
+
+void markUserDeclared(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* cls) {
+    const proto::ProtoObject* g = rt.globals();
+    if (g && g->getOwnAttributeDirect(ctx, proto::ProtoString::createSymbol(ctx, "__kernel_loaded__"))
+                 == PROTO_TRUE)
+        cls->setAttribute(ctx, userDeclaredKey(ctx), PROTO_TRUE);
+}
+
+// Explicit-state spec §6.9: the name of the kernel class UnsetConstantError is
+// reserved, so that the runtime's M14 signal and every `on:
+// UnsetConstantError do:` keep meaning the kernel class. Once the kernel is
+// loaded, a declaration under that name is refused: the Error is signalled in
+// place and its answer returned (nullptr means the name is free). Only this
+// name is reserved here; the other kernel class names are a recorded gap
+// (STATUS D64). The routes that bind a global directly (Smalltalk at:put:,
+// STORE_GLOBAL, addBehavior:) are refused by refuseReservedGlobalStore.
+const proto::ProtoObject* refuseReservedClassName(STRuntime& rt, proto::ProtoContext* ctx,
+                                                  const proto::ProtoObject* nameArg) {
+    const proto::ProtoString* name = nameArg ? nameArg->asString(ctx) : nullptr;
+    if (!name || name->toStdString(ctx) != "UnsetConstantError") return nullptr;
+    const proto::ProtoObject* g = rt.globals();
+    if (!g || g->getOwnAttributeDirect(ctx, proto::ProtoString::createSymbol(ctx, "__kernel_loaded__"))
+                  != PROTO_TRUE)
+        return nullptr;
+    const proto::ProtoObject* v = signalErrorNamed(rt, ctx, "Error", kUnsetConstantErrorReservedText);
+    return v ? v : PROTO_NONE;
+}
+
+// The earlier declaration M11 compares a class declaration with: the class
+// itself when it already records its variables (the textual path answers the
+// existing class again), or else the user-declared class still bound under
+// its name (the uses: path and the message forms build a new class object
+// each time, and bind it only after its variables are declared). nullptr
+// when there is none.
+const proto::ProtoObject* previousDeclaration(STRuntime& rt, proto::ProtoContext* ctx,
+                                              const proto::ProtoObject* cls, const std::string& name,
+                                              const proto::ProtoString* ivKey) {
+    if (cls->hasOwnAttribute(ctx, ivKey) == PROTO_TRUE) return cls;
+    const proto::ProtoObject* g = rt.globals();
+    if (!g || name.empty()) return nullptr;
+    const proto::ProtoObject* existing =
+        g->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, name.c_str()));
+    if (!existing || existing == PROTO_NONE || existing == cls || existing->isInteger(ctx)
+        || existing->isFloat(ctx) || existing->asString(ctx)
+        || existing->getOwnAttributeDirect(ctx, userDeclaredKey(ctx)) != PROTO_TRUE
+        || ownClassName(rt.bootstrap(), ctx, existing) != name
+        || existing->hasOwnAttribute(ctx, ivKey) != PROTO_TRUE)
+        return nullptr;
+    return existing;
+}
+
+// Final review m3: a redeclaration that reuses the class object `cls` (the
+// textual path re-running into it) keeps every method installed on the class
+// and on the classes whose chain holds it. M11 compares the declaration with
+// the previous one only, so a variable that the previous declaration dropped
+// can come back with another modifier, and a method compiled while it had the
+// old one would still write or read it with the old modifier's instruction:
+// a write path that forgets the modifier (spec §2). For each such name
+// (`reintroduced`, with the modifier it now takes), every installed method
+// that names it is judged as a method installed late is (M1, M2, M4, with
+// the compiler's texts), and is also refused when its source would be allowed
+// but its instruction was chosen for the old modifier: compiled code is never
+// rewritten in place. The first M1, M2 or M4, else the first other misfit
+// (classes and selectors in name order), signals an Error before the
+// declaration records anything, so the class
+// keeps its previous declaration, as a script file refuses the same program
+// at compile time.
+using NamedClasses = std::vector<std::pair<std::string, const proto::ProtoObject*>>;
+
+// The judging step of refuseStaleMethods and refuseStaleAncestorMethods: the
+// methods of `classes` (in that order) against `reintroduced`.
+void judgeStaleSites(STRuntime& rt, proto::ProtoContext* ctx, const NamedClasses& classes,
+                     const std::string& className,
+                     const std::unordered_map<std::string, IvarModifier>& reintroduced) {
+    const Bootstrap& b = rt.bootstrap();
+    struct Method { std::string selector; const BytecodeModule* code; };
+    std::string refusal, misfit;   // the first of each, in that order of precedence
+    for (const auto& [where, k] : classes) {
+        struct MethodSink { const Bootstrap* b; std::vector<Method> methods; };
+        MethodSink methodSink{&b, {}};
+        k->processOwnAttributes(ctx, &methodSink,
+            [](proto::ProtoContext* c, void* self, const proto::ProtoString* key,
+               const proto::ProtoObject* v) {
+                auto* s = static_cast<MethodSink*>(self);
+                if (!key || !v || v == PROTO_NONE || v->isInteger(c) || v->isFloat(c)
+                    || v->asString(c))
+                    return;
+                if (const BytecodeModule* code =
+                        blockCodeOf(c, v->getOwnAttributeDirect(c, s->b->sym.bcPtr)))
+                    s->methods.push_back(Method{key->toStdString(c), code});
+            });
+        std::sort(methodSink.methods.begin(), methodSink.methods.end(),
+                  [](const Method& x, const Method& y) { return x.selector < y.selector; });
+        for (const Method& method : methodSink.methods) {
+            forEachSite(*method.code, [&](const LateSite& site) {
+                const BytecodeModule& m = *site.module;
+                const bool group = site.op == Op::IVAR_GROUP || site.op == Op::IVAR_GROUP_END;
+                const bool store = group || site.op == Op::STORE_INSTVAR
+                                   || site.op == Op::STORE_CONST_INSTVAR
+                                   || site.op == Op::STORE_ONCE_INSTVAR;
+                const bool read = site.op == Op::PUSH_INSTVAR || site.op == Op::PUSH_CONST_INSTVAR;
+                if (!store && !read) return;
+                const std::string& var =
+                    m.constSymbol(group ? m.instVarGroupEntry(site.arg).nameConst : site.arg);
+                const auto it = reintroduced.find(var);
+                if (it == reintroduced.end()) return;
+                const IvarModifier now = it->second;
+                const std::string redo = ": redefine it first, then declare " + className + " again";
+                const std::string head = where + " >> " + method.selector + " was compiled when '"
+                                         + var + "' was ";
+                if (read) {
+                    const bool wasConstant = site.op == Op::PUSH_CONST_INSTVAR;
+                    if (wasConstant != (now == IvarModifier::Constant) && misfit.empty())
+                        misfit = head + (wasConstant ? "constant" : "not constant")
+                                 + " and does not fit '" + var + "' " + modifierName(now) + redo;
+                    return;
+                }
+                const IvarModifier was = site.op == Op::STORE_CONST_INSTVAR ? IvarModifier::Constant
+                                       : site.op == Op::STORE_ONCE_INSTVAR  ? IvarModifier::WriteOnce
+                                                                            : IvarModifier::Plain;
+                const int line = m.lineForPc(site.opPos);
+                auto refuse = [&](AssignmentRefusal why) {
+                    if (refusal.empty())
+                        refusal = assignmentRefusalText(why, var, where, line) + "; " + head
+                                  + modifierName(was) + redo;
+                };
+                if (now == IvarModifier::Atomic)
+                    refuse(AssignmentRefusal::AtomicAssigned);
+                else if (now == IvarModifier::Constant && method.selector != "initialize")
+                    refuse(AssignmentRefusal::ConstantOutsideInitialize);
+                else if (now == IvarModifier::Constant && site.inClosure && !site.inDeoptCopy)
+                    refuse(AssignmentRefusal::ConstantInsideBlock);
+                else if (was != now && misfit.empty())
+                    misfit = head + modifierName(was) + " and does not fit '" + var + "' "
+                             + modifierName(now) + redo;
+            });
+        }
+    }
+    if (!refusal.empty()) throw ClassedErrorSignal("Error", refusal);
+    if (!misfit.empty()) throw ClassedErrorSignal("Error", misfit);
+}
+
+void refuseStaleMethods(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* cls,
+                        const std::string& className,
+                        const std::unordered_map<std::string, IvarModifier>& reintroduced) {
+    const Bootstrap& b = rt.bootstrap();
+    // The class, then those whose chain holds it, in name order.
+    NamedClasses classes{{className, cls}};
+    NamedClasses users;
+    for (const proto::ProtoObject* k : classesHolding(rt, ctx, cls))
+        users.emplace_back(ownClassName(b, ctx, k), k);
+    std::sort(users.begin(), users.end(),
+              [](const auto& x, const auto& y) { return x.first < y.first; });
+    classes.insert(classes.end(), users.begin(), users.end());
+    judgeStaleSites(rt, ctx, classes, className, reintroduced);
+}
+
+// The same hazard from above (final re-review, New Issue 1): a class on
+// `cls`'s chain that cannot see the class declaring a constant, write-once
+// or atomic variable may still hold a method compiled when it declared that
+// name itself (it was redeclared without it since). Its instruction was
+// chosen for the old declaration, so it would write the variable of an
+// instance of `cls` past the modifier. `own` is the modified variables of
+// `cls` itself: the ones a declaration is about to record, or, when it is
+// null (addBehavior: rebuilt `cls` with its records), the ones `cls` records;
+// the ones `cls` inherits are read from the chain. Each class of the chain (`cls` excluded: its own
+// methods are judged by refuseStaleMethods) that neither is nor inherits the
+// declaring class is judged as refuseStaleMethods judges a reused class. A
+// chain with no modified variable, the kernel's, costs one pass over its
+// records and no method scan.
+void refuseStaleAncestorMethods(STRuntime& rt, proto::ProtoContext* ctx,
+                                const proto::ProtoObject* cls, const std::string& className,
+                                const std::unordered_map<std::string, IvarModifier>* own) {
+    const Bootstrap& b = rt.bootstrap();
+    struct Declared { IvarModifier modifier; const proto::ProtoObject* owner; };
+    std::unordered_map<std::string, Declared> modified;
+    if (own) {
+        for (const auto& [name, mod] : *own)
+            if (mod != IvarModifier::Plain) modified.emplace(name, Declared{mod, cls});
+    } else {
+        for (const ModifiedIvar& e : ownModifiersOf(ctx, cls))
+            if (e.modifier != IvarModifier::Plain)
+                modified.emplace(e.name, Declared{e.modifier, cls});
+    }
+    std::vector<const proto::ProtoObject*> chain;
+    forClassAndAncestors(ctx, cls, [&](const proto::ProtoObject* k) {
+        if (k == cls || k->isInteger(ctx) || k->isFloat(ctx) || k->asString(ctx)
+            || isMetaclass(b, ctx, k))
+            return;
+        chain.push_back(k);
+        for (const ModifiedIvar& e : ownModifiersOf(ctx, k))
+            if (e.modifier != IvarModifier::Plain)
+                modified.emplace(e.name, Declared{e.modifier, k});
+    });
+    if (modified.empty()) return;
+    auto sees = [&](const proto::ProtoObject* k, const proto::ProtoObject* owner) {
+        bool found = false;
+        forClassAndAncestors(ctx, k, [&](const proto::ProtoObject* p) { found = found || p == owner; });
+        return found;
+    };
+    // A class that sees one declaring class may be blind to another: each
+    // class is judged only against the names it cannot see.
+    for (const proto::ProtoObject* k : chain) {
+        std::unordered_map<std::string, IvarModifier> blind;
+        for (const auto& [name, d] : modified)
+            if (!sees(k, d.owner)) blind.emplace(name, d.modifier);
+        if (!blind.empty())
+            judgeStaleSites(rt, ctx, NamedClasses{{ownClassName(b, ctx, k), k}}, className, blind);
+    }
+}
+
+// Records the instance-variable names a class declares (`names`, a string of
+// space-separated names) on the class object, `__instvar_names__`, which
+// `instVarNames` and resolveLateVariables read, and their modifiers
+// (`modifiers`, aligned with the names; empty means every one is plain) as
+// plan decision D-a describes: `__ivar_modifiers__` and `__has_constants__`.
+// For a class (not a metaclass) it first applies the rules the compiler
+// applies to a class declaration it can see whole: a name is declared once,
+// and a class may not redeclare an instance variable it inherits (both would
+// name the same slot of the object). The compiler cannot apply the second one
+// when the superclass is not known to it (S37: an imported class, a class
+// built by the `subclass:` message), so it is checked here, when the class is
+// built. Then the explicit-state rules: a redeclaration keeps the modifier of
+// every variable it repeats (M11), and the class's parents agree on the
+// modifiers of the names they share (M10). Modifiers apply to instance
+// variables only, so a metaclass (class-instance variables) takes none (G1).
+//
+// `selector` is the message that declared the variables, for the error that
+// reports `modifiers` not matching the names.
+void declareInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
+                         const proto::ProtoObject* cls, const proto::ProtoObject* names,
+                         const std::vector<IvarModifier>& modifiers, std::string_view selector) {
+    const Bootstrap& b = rt.bootstrap();
+    const proto::ProtoString* ivKey = proto::ProtoString::createSymbol(ctx, "__instvar_names__");
+    const proto::ProtoString* modKey = proto::ProtoString::createSymbol(ctx, "__ivar_modifiers__");
+    const proto::ProtoString* hasConstKey = proto::ProtoString::createSymbol(ctx, "__has_constants__");
+    const proto::ProtoString* str = names && names != PROTO_NONE ? names->asString(ctx) : nullptr;
+    const bool meta = isMetaclass(b, ctx, cls);
+    // A class object that already records variables is being redeclared in
+    // place: classes whose chain holds it may gain or lose constants.
+    const bool inPlace = cls->hasOwnAttribute(ctx, ivKey) == PROTO_TRUE;
+    const bool anyModifier = std::any_of(modifiers.begin(), modifiers.end(),
+                                         [](IvarModifier m) { return m != IvarModifier::Plain; });
+    if (meta && anyModifier)
+        throw ClassedErrorSignal("Error",
+            "class-instance variables take no modifiers: only instance variables are constant, "
+            "writeOnce or atomic");
+    std::vector<std::string> declared;
+    if (str) declared = splitNames(str->toStdString(ctx));
+    if (!modifiers.empty() && modifiers.size() != declared.size())
+        throw NativeError(std::string(selector) + ": the modifiers do not match the names");
+    if (str && !meta) {
         const std::string name = ownClassName(b, ctx, cls);
         std::unordered_set<std::string> seen;
         for (const auto& iv : declared)
@@ -439,11 +728,81 @@ void declareInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
                             + " is already defined in its superclass " + ownClassName(b, ctx, p));
             }
         }
+        // M11: a redeclaration keeps the modifier of every variable it
+        // declares again, whichever path declares it.
+        if (const proto::ProtoObject* prev = previousDeclaration(rt, ctx, cls, name, ivKey)) {
+            std::unordered_set<std::string> before;
+            addDeclaredNames(ctx, prev, ivKey, before);
+            // m3: the methods a reused class object keeps must fit the
+            // modifier of every variable this declaration brings back.
+            if (prev == cls) {
+                std::unordered_map<std::string, IvarModifier> reintroduced;
+                for (std::size_t i = 0; i < declared.size(); ++i)
+                    if (!before.count(declared[i]))
+                        reintroduced.emplace(declared[i], modifiers.empty() ? IvarModifier::Plain
+                                                                            : modifiers[i]);
+                if (!reintroduced.empty()) refuseStaleMethods(rt, ctx, cls, name, reintroduced);
+            }
+            const std::vector<ModifiedIvar> recorded = ownModifiersOf(ctx, prev);
+            for (std::size_t i = 0; i < declared.size(); ++i) {
+                if (!before.count(declared[i])) continue;
+                const IvarModifier was = modifierIn(recorded, declared[i]);
+                const IvarModifier now = modifiers.empty() ? IvarModifier::Plain : modifiers[i];
+                if (was != now)
+                    throw ClassedErrorSignal("Error",
+                        name + " is already declared with '" + declared[i] + "' "
+                        + modifierName(was) + "; a class keeps the modifiers it was declared with");
+            }
+        }
+        // M10: the parents agree on the modifiers of the names they share.
+        checkModifierConflicts(rt, ctx, cls);
+        {
+            std::unordered_map<std::string, IvarModifier> own;
+            for (std::size_t i = 0; i < modifiers.size(); ++i)
+                if (modifiers[i] != IvarModifier::Plain) own.emplace(declared[i], modifiers[i]);
+            refuseStaleAncestorMethods(rt, ctx, cls, name, &own);
+        }
+        // M9: the generated constructor this declaration gives the class must
+        // not take a selector a user method of the class already holds
+        // (Task 6 ruling I1). Checked before anything is recorded.
+        std::vector<std::string> ownConstants;
+        for (std::size_t i = 0; i < modifiers.size(); ++i)
+            if (modifiers[i] == IvarModifier::Constant) ownConstants.push_back(declared[i]);
+        checkConstantConstructorFree(rt, ctx, cls, ownConstants);
     }
-    const_cast<proto::ProtoObject*>(cls)->setAttribute(ctx, ivKey, names);
-    // Every instance template built before this declaration may now lack a
-    // variable (this class's or, for a subclass, an inherited one).
-    noteInstanceLayoutChanged();
+    // Every instance template and constant cache built before this
+    // declaration may now be wrong (this class's or, for a subclass or a
+    // class using this one, an inherited variable). The epoch advances when
+    // the declaration ends, after its last record, and also when a later
+    // step throws, so no cache
+    // outlives the records it was built from.
+    struct AdvanceLayoutEpoch { ~AdvanceLayoutEpoch() { noteInstanceLayoutChanged(); } } advance;
+    auto* mcls = const_cast<proto::ProtoObject*>(cls);
+    mcls->setAttribute(ctx, ivKey, names);
+    if (!meta) {
+        const std::string encoded = encodeModifiers(declared, modifiers);
+        if (!encoded.empty() || cls->hasOwnAttribute(ctx, modKey) == PROTO_TRUE)
+            mcls->setAttribute(ctx, modKey, ctx->fromUTF8String(encoded.c_str()));
+        // `__has_constants__` answers, through the chain, whether the class
+        // declares or inherits a constant. Only `true` is ever recorded, on a
+        // class that declares a constant itself; a class that no longer does
+        // drops its own record, so the chain answers for it, a superclass
+        // that gains a constant later included.
+        const bool ownConstant = std::find(modifiers.begin(), modifiers.end(),
+                                           IvarModifier::Constant) != modifiers.end();
+        if (ownConstant)
+            mcls->setAttribute(ctx, hasConstKey, PROTO_TRUE);
+        else
+            mcls->removeAttribute(ctx, hasConstKey);
+        // The generated constructor over every constant, own and inherited
+        // (§6.2, D-d); a subclass that adds none inherits its superclass's.
+        // It also installs the generated new.
+        installConstantConstructor(rt, ctx, cls);
+        // The generated new of every class whose chain holds this one: a
+        // subclass or a class using it as a mixin may have gained or lost
+        // constants through it.
+        if (inPlace) refreshDependentGeneratedNews(rt, ctx, cls);
+    }
 }
 } // namespace
 
@@ -453,6 +812,25 @@ void declareInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
 //
 // Used by MethodDecl compilation (F4-U3) to attach a compiled method wrapper
 // (a BlockClosure-shaped object) to a class proto under its selector symbol.
+// M9 (explicit-state spec §6.2, §12): a class-side method of `cls` cannot
+// take the selector of its generated constructor, its own or the one it
+// inherits (read through the chain, pre-flight ruling C9). The compiler
+// refuses it for a class it can see; this refuses it at install time for
+// every other class, on both install paths (__installClassMethod:as: on the
+// class, __installMethod:as: on its metaclass), so no install bypasses it.
+// (A user class-side new is allowed: the generated new lives in a hidden
+// parent of the metaclass, and the user's `super new` reaches it.)
+static void refuseGeneratedSelector(STRuntime& rt, proto::ProtoContext* ctx,
+                                    const proto::ProtoObject* cls, const std::string& selector,
+                                    const proto::ProtoObject* methodObj) {
+    const Bootstrap& b = rt.bootstrap();
+    if (selector.empty() || selector != constantConstructorOf(rt, ctx, cls)) return;
+    std::string text = constructorRedefinitionText(selector, ownClassName(b, ctx, cls));
+    const BytecodeModule* code = blockCodeOf(ctx, methodObj->getOwnAttributeDirect(ctx, b.sym.bcPtr));
+    if (code) text += " (line " + std::to_string(code->methodLine()) + ")";
+    throw ClassedErrorSignal("Error", text);
+}
+
 const proto::ProtoObject* prim_Object_installMethod(STRuntime& rt,
                                                      proto::ProtoContext* ctx,
                                                      const proto::ProtoObject* r,
@@ -463,7 +841,14 @@ const proto::ProtoObject* prim_Object_installMethod(STRuntime& rt,
     // a[1] = selector symbol (ProtoString tagged as symbol)
     auto* selStr = a[1]->asString(ctx);
     if (!selStr) throw NativeError("__installMethod:as: selector must be a symbol");
-    resolveLateVariables(rt, ctx, r, /*classSide=*/false, a[0]);
+    // On a metaclass, the method is class-side for its sole instance (M9).
+    if (isMetaclass(rt.bootstrap(), ctx, r)) {
+        const proto::ProtoObject* cls =
+            r->getOwnAttributeDirect(ctx, rt.bootstrap().sym.soleInstance);
+        if (cls && cls != PROTO_NONE)
+            refuseGeneratedSelector(rt, ctx, cls, selStr->toStdString(ctx), a[0]);
+    }
+    resolveLateVariables(rt, ctx, r, /*classSide=*/false, a[0], selStr->toStdString(ctx));
     stampDefiningClass(rt, ctx, r, a[0]);
     r->setAttribute(ctx, selStr, a[0]);
     return r;
@@ -488,7 +873,9 @@ const proto::ProtoObject* prim_Object_installClassMethod(STRuntime& rt,
     if (!selStr)
         throw NativeError(
             "__installClassMethod:as: selector must be a symbol");
-    resolveLateVariables(rt, ctx, r, /*classSide=*/true, a[0]);
+    const std::string selector = selStr->toStdString(ctx);
+    refuseGeneratedSelector(rt, ctx, r, selector, a[0]);
+    resolveLateVariables(rt, ctx, r, /*classSide=*/true, a[0], selector);
     const proto::ProtoObject* meta = ensureMetaclass(rt.bootstrap(), ctx, r);
     stampDefiningClass(rt, ctx, meta, a[0]);
     meta->setAttribute(ctx, selStr, a[0]);
@@ -517,24 +904,15 @@ const proto::ProtoObject* prim_Object_initClassVars(STRuntime&,
     if (!namesObj)
         throw NativeError(
             "__initClassVars:: names must be a string");
-    std::string names = namesObj->toStdString(ctx);
     auto* cls = const_cast<proto::ProtoObject*>(r);
-    std::string cur;
-    auto flush = [&]() {
-        if (cur.empty()) return;
-        std::string mangled = "_iv_" + cur;
+    // The names are split as every declaration clause is (splitNames).
+    for (const std::string& name : splitNames(namesObj->toStdString(ctx))) {
         const proto::ProtoString* key =
-            proto::ProtoString::createSymbol(ctx, mangled.c_str());
+            proto::ProtoString::createSymbol(ctx, ("_iv_" + name).c_str());
         // A redefined class keeps the values its class variables already have.
         if (cls->hasOwnAttribute(ctx, key) != PROTO_TRUE)
             cls->setAttribute(ctx, key, PROTO_NONE);
-        cur.clear();
-    };
-    for (char ch : names) {
-        if (std::isspace(static_cast<unsigned char>(ch))) flush();
-        else cur += ch;
     }
-    flush();
     // S37: the declared names, for a method compiled without knowing this
     // class (resolveLateVariables).
     cls->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__classvar_names__"), a[0]);
@@ -591,9 +969,23 @@ const proto::ProtoObject* prim_Object_setClassName(STRuntime& rt,
 
 namespace {
 // Shared helper: create a named subclass of `superCls` and bind it as a global.
+// Bind `cls` as a global under its declared name (`__class_name__`), as the
+// textual `subclass:` form's STORE_GLOBAL does; the global key is the name's
+// interned-symbol form.
+void bindClassGlobal(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* cls) {
+    const std::string name = ownClassName(rt.bootstrap(), ctx, cls);
+    if (name.empty()) return;
+    auto* nameSym = proto::ProtoString::createSymbol(ctx, name.c_str());
+    if (auto* g = rt.globals()) g->setAttribute(ctx, nameSym, cls);
+}
+
+// Shared helper: create a named subclass of `superCls`, and bind it as a
+// global unless `bind` is false: a caller that declares the class's variables
+// binds it afterwards (bindClassGlobal), so a refused declaration binds
+// nothing and M11 still sees the class the name was bound to.
 const proto::ProtoObject* makeSubclass(STRuntime& rt, proto::ProtoContext* ctx,
                                        const proto::ProtoObject* superCls,
-                                       const proto::ProtoObject* nameArg) {
+                                       const proto::ProtoObject* nameArg, bool bind = true) {
     if (!superCls || superCls == PROTO_NONE)
         throw NativeError("subclass:: superclass is nil");
     auto* nameStr = nameArg ? nameArg->asString(ctx) : nullptr;
@@ -606,13 +998,9 @@ const proto::ProtoObject* makeSubclass(STRuntime& rt, proto::ProtoContext* ctx,
         proto::ProtoString::createSymbol(ctx, "__class_name__");
     const_cast<proto::ProtoObject*>(sub)->setAttribute(
         ctx, nameKey, nameStr->asObject(ctx));
-    // Bind the class globally under its declared name, mirroring the textual
-    // `subclass:` form's STORE_GLOBAL. The class name is a symbol/string; the
-    // global key is its interned-symbol form.
-    std::string name = nameStr->toStdString(ctx);
-    auto* nameSym = proto::ProtoString::createSymbol(ctx, name.c_str());
-    if (auto* g = rt.globals()) g->setAttribute(ctx, nameSym, sub);
+    markUserDeclared(rt, ctx, sub);
     ensureMetaclass(rt.bootstrap(), ctx, sub);
+    if (bind) bindClassGlobal(rt, ctx, sub);
     return sub;
 }
 } // namespace
@@ -672,7 +1060,7 @@ const proto::ProtoList* mixinList(proto::ProtoContext* ctx,
 // class as a global, mirroring `makeSubclass`.
 const proto::ProtoObject* makeSubclassWithMixins(
     STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* superCls,
-    const proto::ProtoObject* nameArg, const proto::ProtoObject* mixinColl) {
+    const proto::ProtoObject* nameArg, const proto::ProtoObject* mixinColl, bool bind = true) {
     if (!superCls || superCls == PROTO_NONE)
         throw NativeError("subclass:uses:: superclass is nil");
     auto* nameStr = nameArg ? nameArg->asString(ctx) : nullptr;
@@ -718,15 +1106,23 @@ const proto::ProtoObject* makeSubclassWithMixins(
     // every parent.
     auto* sub = shape->newChild(ctx, /*isMutable=*/true);
     TransientPin pinSub(ctx, sub);
+    // M10: the parents must agree on the modifiers of the instance variables
+    // they share. Checked before the class is named and bound, so a refused
+    // composition leaves no class behind.
+    checkModifierConflicts(rt, ctx, sub);
     const proto::ProtoString* nameKey =
         proto::ProtoString::createSymbol(ctx, "__class_name__");
     const_cast<proto::ProtoObject*>(sub)->setAttribute(
         ctx, nameKey, nameStr->asObject(ctx));
-    std::string name = nameStr->toStdString(ctx);
-    auto* nameSym = proto::ProtoString::createSymbol(ctx, name.c_str());
-    if (auto* g = rt.globals()) g->setAttribute(ctx, nameSym, sub);
+    markUserDeclared(rt, ctx, sub);
     // D52: the metaclass chain mirrors the class chain, mixins included.
     ensureMetaclass(rt.bootstrap(), ctx, sub);
+    // A class that declares no variables of its own still inherits its
+    // parents' constants, and gets their generated constructor (§6.2,
+    // pre-flight ruling C9).
+    installConstantConstructor(rt, ctx, sub);
+    // As makeSubclass: a caller that declares variables binds afterwards.
+    if (bind) bindClassGlobal(rt, ctx, sub);
     return sub;
 }
 } // namespace
@@ -818,6 +1214,9 @@ void giveOwnMetaclass(STRuntime& rt, proto::ProtoContext* ctx,
                 return;
             k->to->setAttribute(c, name, val);
         });
+    // The copied class carries the record of the original's hidden parent,
+    // built for the original's metaclass: the copy gets its own.
+    installGeneratedNew(rt, ctx, newCls);
 }
 
 const proto::ProtoObject* addBehaviorToClass(STRuntime& rt,
@@ -828,6 +1227,17 @@ const proto::ProtoObject* addBehaviorToClass(STRuntime& rt,
         throw NativeError("addBehavior:: receiver is nil");
     if (!mixin || mixin == PROTO_NONE)
         throw NativeError("addBehavior:: behaviour (mixin) is nil");
+    // The rebuild rebinds the class's name. A class named UnsetConstantError
+    // (the kernel class, or a copy carrying its name) would rebind the
+    // reserved global: refused before anything changes (spec §6.9).
+    {
+        const std::string name = ownClassName(rt.bootstrap(), ctx, oldCls);
+        if (!name.empty()) {
+            const proto::ProtoString* key = proto::ProtoString::createSymbol(ctx, name.c_str());
+            if (const proto::ProtoObject* refused = refuseReservedGlobalStore(rt, ctx, key, nullptr))
+                return refused;
+        }
+    }
 
     // Build the immutable shape carrying [old parents…, mixin]. `addParent`
     // PREPENDS at the chain head, so to leave the head-first walk order
@@ -872,9 +1282,26 @@ const proto::ProtoObject* addBehaviorToClass(STRuntime& rt,
     };
     oldCls->processOwnAttributes(ctx, &toNew, copyOwn);
 
+    // M10: the class's own instance variables, its parents' and the new
+    // behaviour's must agree on the modifier of every name two of them
+    // declare. Checked before the global is rebound, so a refused composition
+    // leaves the class as it was.
+    checkModifierConflicts(rt, ctx, newCls);
+    refuseStaleAncestorMethods(rt, ctx, newCls, ownClassName(rt.bootstrap(), ctx, newCls),
+                               nullptr);
+
     // D52: the rebuilt class gets its own metaclass, whose chain carries the
     // mixin's metaclass, and the class-side methods of the old one.
     giveOwnMetaclass(rt, ctx, oldCls, newCls);
+
+    // The new behaviour may bring constants: the generated constructor
+    // covers them, replacing the copied one (§6.2, pre-flight ruling C9). A
+    // copied user class method under the new selector refuses the
+    // composition with M9 (Task 6 ruling I1), before the global is rebound.
+    // The rebuilt class carries copies of the old one's per-epoch caches
+    // (instance template, constant cache), which a new epoch invalidates.
+    installConstantConstructor(rt, ctx, newCls);
+    noteInstanceLayoutChanged();
 
     // Rebind the class's global name to the rebuilt object so subsequent
     // `ClassName` PUSH_GLOBALs and `ClassName >> sel` installs see it.
@@ -920,6 +1347,8 @@ const proto::ProtoObject* prim_Object_subclassUses(
     const proto::ProtoObject* const* a, int argc) {
     if (argc != 2)
         throw NativeError("subclass:uses: expects 2 args");
+    if (const proto::ProtoObject* refused = refuseReservedClassName(rt, ctx, a[0]))
+        return refused;
     return makeSubclassWithMixins(rt, ctx, r, a[0], a[1]);
 }
 
@@ -931,11 +1360,16 @@ const proto::ProtoObject* prim_Object_subclassIvarsUses(
     if (argc != 3)
         throw NativeError(
             "subclass:instanceVariableNames:uses: expects 3 args");
+    if (const proto::ProtoObject* refused = refuseReservedClassName(rt, ctx, a[0]))
+        return refused;
     if (a[1] && a[1] != PROTO_NONE && !a[1]->asString(ctx))
         throw NativeError(
             "subclass:instanceVariableNames:uses:: ivar names must be a string");
-    const proto::ProtoObject* sub = makeSubclassWithMixins(rt, ctx, r, a[0], a[2]);
-    if (a[1] && a[1] != PROTO_NONE) declareInstVarNames(rt, ctx, sub, a[1]);
+    const proto::ProtoObject* sub = makeSubclassWithMixins(rt, ctx, r, a[0], a[2], /*bind=*/false);
+    TransientPin pinSub(ctx, sub);
+    if (a[1] && a[1] != PROTO_NONE)
+        declareInstVarNames(rt, ctx, sub, a[1], {}, "subclass:instanceVariableNames:uses:");
+    bindClassGlobal(rt, ctx, sub);
     return sub;
 }
 
@@ -947,6 +1381,8 @@ const proto::ProtoObject* prim_Object_subclass(STRuntime& rt,
                                                const proto::ProtoObject* const* a,
                                                int argc) {
     if (argc != 1) throw NativeError("subclass: expects 1 arg");
+    if (const proto::ProtoObject* refused = refuseReservedClassName(rt, ctx, a[0]))
+        return refused;
     return makeSubclass(rt, ctx, r, a[0]);
 }
 
@@ -965,12 +1401,17 @@ const proto::ProtoObject* prim_Object_subclassIvars(
     if (argc != 2)
         throw NativeError(
             "subclass:instanceVariableNames: expects 2 args");
+    if (const proto::ProtoObject* refused = refuseReservedClassName(rt, ctx, a[0]))
+        return refused;
     // a[1] is the instance-variable-names string; accept any string (incl. '').
     if (a[1] && a[1] != PROTO_NONE && !a[1]->asString(ctx))
         throw NativeError(
             "subclass:instanceVariableNames:: ivar names must be a string");
-    const proto::ProtoObject* sub = makeSubclass(rt, ctx, r, a[0]);
-    if (a[1] && a[1] != PROTO_NONE) declareInstVarNames(rt, ctx, sub, a[1]);
+    const proto::ProtoObject* sub = makeSubclass(rt, ctx, r, a[0], /*bind=*/false);
+    TransientPin pinSub(ctx, sub);
+    if (a[1] && a[1] != PROTO_NONE)
+        declareInstVarNames(rt, ctx, sub, a[1], {}, "subclass:instanceVariableNames:");
+    bindClassGlobal(rt, ctx, sub);
     return sub;
 }
 
@@ -1464,7 +1905,11 @@ const proto::ProtoObject* prim_Object_globalAt(STRuntime& rt, proto::ProtoContex
 const proto::ProtoObject* prim_Object_globalAtPut(STRuntime& rt, proto::ProtoContext* ctx,
                                                   const proto::ProtoObject*,
                                                   const proto::ProtoObject* const* a, int) {
-    rt.globals()->setAttribute(ctx, globalKey(ctx, a[0]), a[1]);
+    const proto::ProtoString* key = globalKey(ctx, a[0]);
+    // Smalltalk at: #UnsetConstantError put: x is refused (spec §6.9).
+    if (const proto::ProtoObject* refused = refuseReservedGlobalStore(rt, ctx, key, a[1]))
+        return refused;
+    rt.globals()->setAttribute(ctx, key, a[1]);
     return a[1];
 }
 
@@ -1550,6 +1995,8 @@ const proto::ProtoObject* prim_Object_subclassNamed(STRuntime& rt, proto::ProtoC
                                                     const proto::ProtoObject* r,
                                                     const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("__subclassNamed: expects 1 arg");
+    if (const proto::ProtoObject* refused = refuseReservedClassName(rt, ctx, a[0]))
+        return refused;
     const proto::ProtoString* name = a[0] ? a[0]->asString(ctx) : nullptr;
     if (name) {
         const proto::ProtoObject* g = rt.globals();
@@ -1572,6 +2019,7 @@ const proto::ProtoObject* prim_Object_subclassNamed(STRuntime& rt, proto::ProtoC
         const_cast<proto::ProtoObject*>(cls)->setAttribute(
             ctx, proto::ProtoString::createSymbol(ctx, "__user_class__"), PROTO_TRUE);
     }
+    markUserDeclared(rt, ctx, cls);
     // D52: the new object is a class from the start -- named, with its
     // metaclass -- so the class protocol the declaration sends next
     // (__setClassName:, __setInstVarNames:, ...) reaches it.
@@ -1610,19 +2058,37 @@ const proto::ProtoString* ivarKey(proto::ProtoContext* ctx, const proto::ProtoOb
 } // namespace
 
 // anObject instVarNamed: aName → the value of that instance variable of the
-// receiver (nil when unset); instVarNamed:put: sets it.
-const proto::ProtoObject* prim_Object_instVarNamed(STRuntime&, proto::ProtoContext* ctx,
+// receiver (nil when unset); instVarNamed:put: sets it. A constant that is
+// unset signals UnsetConstantError (M14) instead, as a compiled read does
+// (explicit-state spec §6.2, §11); instVarAt: reaches this check through
+// lib/kernel/reflection.st. A class receiver's variables are always plain
+// (pre-flight ruling C10).
+const proto::ProtoObject* prim_Object_instVarNamed(STRuntime& rt, proto::ProtoContext* ctx,
                                                    const proto::ProtoObject* r,
                                                    const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("instVarNamed: expects 1 arg");
     const proto::ProtoString* key = ivarKey(ctx, a[0]);
     if (!r || r == PROTO_NONE || r->isInteger(ctx) || r->asString(ctx)) return PROTO_NONE;
-    if (r->hasOwnAttribute(ctx, key) != PROTO_TRUE) return PROTO_NONE;
-    const proto::ProtoObject* v = r->getAttribute(ctx, key);
-    return v ? v : PROTO_NONE;
+    const proto::ProtoObject* v = r->hasOwnAttribute(ctx, key) == PROTO_TRUE
+        ? r->getAttribute(ctx, key) : nullptr;
+    if (v && v != PROTO_NONE) return v;
+    const std::string name = a[0]->asString(ctx)->toStdString(ctx);
+    if (receiverModifierOf(rt, ctx, r, name, nullptr) == IvarModifier::Constant)
+        return signalUnsetConstantError(rt, ctx, r, name);
+    return PROTO_NONE;
 }
 
-const proto::ProtoObject* prim_Object_instVarNamedPut(STRuntime&, proto::ProtoContext* ctx,
+// instVarNamed:put: follows the variable's modifier (explicit-state spec §6.5,
+// §11). A plain variable is written. A constant or a write-once variable is
+// filled only while it is unset (its own attribute absent or nil, plan
+// decision D-c), by a CAS from unset; writing nil while it is unset changes
+// nothing. Once set, a constant refuses with M3 and a write-once variable
+// with M6, even for an equal value: reflection never replaces a value. An
+// atomic variable always refuses with M6. Every refusal, an immutable
+// receiver's included, signals ModificationForbidden in place (pre-flight
+// ruling C1, as the engine's stores do) and writes nothing. instVarAt:put: reaches
+// this through lib/kernel/reflection.st.
+const proto::ProtoObject* prim_Object_instVarNamedPut(STRuntime& rt, proto::ProtoContext* ctx,
                                                       const proto::ProtoObject* r,
                                                       const proto::ProtoObject* const* a, int argc) {
     if (argc != 2) throw NativeError("instVarNamed:put: expects 2 args");
@@ -1630,15 +2096,114 @@ const proto::ProtoObject* prim_Object_instVarNamedPut(STRuntime&, proto::ProtoCo
         throw NativeError("instVarNamed:put: the receiver has no instance variables");
     const proto::ProtoString* key = ivarKey(ctx, a[0]);
     TransientPin pinKey(ctx, reinterpret_cast<const proto::ProtoObject*>(key));
-    // On an immutable receiver (a block closure, a method) protoCore's
-    // setAttribute leaves the receiver unchanged and answers a new object.
-    // Dropping that object would lose the write silently; refuse instead.
-    const proto::ProtoObject* written = r->setAttribute(ctx, key, a[1]);
-    if (written != r)
+    const proto::ProtoObject* value = a[1] ? a[1] : PROTO_NONE;
+    const std::string name = a[0]->asString(ctx)->toStdString(ctx);
+    const IvarModifier mod = receiverModifierOf(rt, ctx, r, name, nullptr);
+    auto refuseImmutable = [&] {
+        return signalErrorNamed(rt, ctx, "ModificationForbidden",
+            immutableReceiverText("instVarNamed:put: cannot write", mod, name,
+                                  articleAndClassName(rt, ctx, r)));
+    };
+    if (mod == IvarModifier::Plain) {
+        // On an immutable receiver (a block closure, a method) protoCore's
+        // setAttribute leaves the receiver unchanged and answers a new
+        // object. Dropping that object would lose the write silently;
+        // refuse instead.
+        const proto::ProtoObject* written = r->setAttribute(ctx, key, value);
+        if (written != r) return refuseImmutable();
+        return value;
+    }
+    const std::string owner = articleAndClassName(rt, ctx, r);
+    if (mod == IvarModifier::Atomic)
+        return signalErrorNamed(rt, ctx, "ModificationForbidden",
+                                "instVarNamed:put: cannot write the atomic variable '" + name
+                                + "' of " + owner
+                                + ": use update:with: or compareAndSet:from:to:");
+    const bool constant = mod == IvarModifier::Constant;
+    auto isUnset = [&] {
+        const proto::ProtoObject* cur = r->getOwnAttributeDirect(ctx, key);
+        return !cur || cur == PROTO_NONE;
+    };
+    auto refuseSet = [&] {
+        return signalErrorNamed(rt, ctx, "ModificationForbidden",
+            constant
+                ? "the constant '" + name + "' of " + owner + " is already set; nothing was written"
+                : "instVarNamed:put: cannot replace the write-once variable '" + name + "' of "
+                  + owner + "; nothing was written");
+    };
+    if (value == PROTO_NONE) {
+        // nil never sets a constant or a write-once variable.
+        if (isUnset()) return PROTO_NONE;
+        return refuseSet();
+    }
+    // Absent first, then an explicit nil (as prim_Atom_cas, S39).
+    if (r->setAttributeIfEqual(ctx, key, nullptr, value)
+        || r->setAttributeIfEqual(ctx, key, PROTO_NONE, value))
+        return value;
+    // Neither modifier lets a set variable become unset again, so a CAS that
+    // fails on an unset variable met an immutable receiver.
+    if (isUnset()) return refuseImmutable();
+    return refuseSet();
+}
+
+// anObject __rawInstVarNamed: aName   (private; plan decision D-h)
+//   The receiver's own attribute for the instance variable aName, or nil when
+//   it is unset. Never checks: an unset constant answers nil instead of
+//   signalling M14. deepCopy and inspect use it; a program reads with
+//   instVarNamed:.
+const proto::ProtoObject* prim_Object_rawInstVarNamed(STRuntime&, proto::ProtoContext* ctx,
+                                                      const proto::ProtoObject* r,
+                                                      const proto::ProtoObject* const* a, int argc) {
+    if (argc != 1) throw NativeError("__rawInstVarNamed: expects 1 arg");
+    const proto::ProtoString* key = ivarKey(ctx, a[0]);
+    if (!r || r == PROTO_NONE || r->isInteger(ctx) || r->isFloat(ctx) || r->asString(ctx))
+        return PROTO_NONE;
+    const proto::ProtoObject* v = r->getOwnAttributeDirect(ctx, key);
+    return v ? v : PROTO_NONE;
+}
+
+// anObject __copyWithInstVarValues: anArray   (private; plan decision D-h)
+//   A shallowCopy of the receiver whose instance variables, in
+//   `self class allInstVarNames` order, are replaced by the non-nil elements
+//   of anArray in ONE setAttributes, before the copy is visible to anyone
+//   (explicit-state spec §11). A nil element leaves the variable as the
+//   shallow copy has it, unset included, so no write ever meets a set
+//   constant or write-once variable, and an unset constant stays unset.
+const proto::ProtoObject* prim_Object_copyWithInstVarValues(STRuntime& rt,
+                                                            proto::ProtoContext* ctx,
+                                                            const proto::ProtoObject* r,
+                                                            const proto::ProtoObject* const* a,
+                                                            int argc) {
+    if (argc != 1) throw NativeError("__copyWithInstVarValues: expects 1 arg");
+    if (!a[0] || !isArrayOrOrdered(rt, ctx, a[0]))
+        throw NativeError("__copyWithInstVarValues: expects an Array");
+    const proto::ProtoObject* cls = prim_Object_class(rt, ctx, r, nullptr, 0);
+    const std::vector<std::string> names = allInstVarNamesOf(rt, ctx, cls);
+    const proto::ProtoList* elements = arrayOrOrderedElements(rt, ctx, a[0]);
+    const proto::proto_ulong n = elements ? elements->getSize(ctx) : 0;
+    if (n != names.size())
+        throw NativeError("__copyWithInstVarValues: expects " + std::to_string(names.size())
+                          + " values, got " + std::to_string(n));
+    const proto::ProtoObject* copy = prim_Object_shallowCopy(rt, ctx, r, nullptr, 0);
+    if (n == 0) return copy;
+    TransientPin pinCopy(ctx, copy);
+    // The keys are interned symbols (perennial); the values stay reachable
+    // through anArray, which the caller's frame holds.
+    std::vector<const proto::ProtoString*> keys;
+    std::vector<const proto::ProtoObject*> values;
+    for (proto::proto_ulong i = 0; i < n; ++i) {
+        const proto::ProtoObject* v = elements->getAt(ctx, listIndex(i));
+        if (!v || v == PROTO_NONE) continue;
+        keys.push_back(proto::ProtoString::createSymbol(ctx, ("_iv_" + names[i]).c_str()));
+        values.push_back(v);
+    }
+    if (keys.empty()) return copy;
+    if (copy == r || copy->setAttributes(ctx, static_cast<unsigned>(keys.size()), keys.data(),
+                                         values.data()) != copy)
         throw ClassedErrorSignal("ModificationForbidden",
-                                 "instVarNamed:put: the receiver is an immutable value "
-                                 "(a block or a method); nothing was written");
-    return a[1];
+                                 "deepCopy cannot write the copy of " + articleAndClassName(rt, ctx, r)
+                                 + ": the copy is immutable; nothing was written");
+    return copy;
 }
 
 // aClass __setInstVarNames: 'a b' records the declared instance-variable
@@ -1647,8 +2212,217 @@ const proto::ProtoObject* prim_Object_setInstVarNames(STRuntime& rt, proto::Prot
                                                       const proto::ProtoObject* r,
                                                       const proto::ProtoObject* const* a, int argc) {
     if (argc != 1) throw NativeError("__setInstVarNames: expects 1 arg");
-    declareInstVarNames(rt, ctx, r, a[0]);
+    declareInstVarNames(rt, ctx, r, a[0], {}, "__setInstVarNames:");
     return r;
+}
+
+namespace {
+// Decodes plan decision D-a's `kind:name` words (`kinds`) into the modifiers
+// of `declared`, aligned with it; a malformed word, or one naming a variable
+// `declared` does not hold, is refused under `selector`.
+std::vector<IvarModifier> decodeModifiers(const std::vector<std::string>& declared,
+                                          const std::string& kinds, std::string_view selector) {
+    std::vector<IvarModifier> modifiers(declared.size(), IvarModifier::Plain);
+    for (const std::string& w : splitNames(kinds)) {
+        const std::size_t colon = w.find(':');
+        IvarModifier m = IvarModifier::Plain;
+        if (colon == std::string::npos
+            || !parseModifierName(std::string_view(w).substr(0, colon), m))
+            throw NativeError(std::string(selector) + ": malformed modifier '" + w + "'");
+        const std::string iv = w.substr(colon + 1);
+        auto it = std::find(declared.begin(), declared.end(), iv);
+        if (it == declared.end())
+            throw NativeError(std::string(selector) + ": '" + iv + "' is not among the names");
+        modifiers[static_cast<std::size_t>(it - declared.begin())] = m;
+    }
+    return modifiers;
+}
+} // namespace
+
+// aClass __setInstVarNames: 'a b c' modifiers: 'constant:b atomic:c' records
+// the declared instance variables with their modifiers (compiler-emitted for
+// a textual declaration with constantNames:, writeOnceNames: or atomicNames:).
+// The second argument is plan decision D-a's encoding: `kind:name` words for
+// the non-plain variables, each naming one of the first argument's names.
+const proto::ProtoObject* prim_Behavior_setInstVarNamesModifiers(STRuntime& rt, proto::ProtoContext* ctx,
+                                                                 const proto::ProtoObject* r,
+                                                                 const proto::ProtoObject* const* a,
+                                                                 int argc) {
+    static const char* const kSelector = "__setInstVarNames:modifiers:";
+    if (argc != 2) throw NativeError(std::string(kSelector) + " expects 2 args");
+    const proto::ProtoString* names = a[0] ? a[0]->asString(ctx) : nullptr;
+    const proto::ProtoString* kinds = a[1] ? a[1]->asString(ctx) : nullptr;
+    if (!names || !kinds) throw NativeError(std::string(kSelector) + " expects two Strings");
+    const std::vector<IvarModifier> modifiers =
+        decodeModifiers(splitNames(names->toStdString(ctx)), kinds->toStdString(ctx), kSelector);
+    declareInstVarNames(rt, ctx, r, a[0], modifiers, kSelector);
+    return r;
+}
+
+// superClass __subclass: #Name instanceVariableNames: 'a b' modifiers: 'atomic:b'
+//            uses: aCollection
+//   → the textual `uses:` declaration with modifier clauses (compiler-emitted):
+//     as subclass:instanceVariableNames:uses:, with the modifiers in D-a's
+//     encoding. The variables are declared once, before the class is bound
+//     (pre-flight ruling C8; M11 compares them with the class bound under the
+//     name).
+const proto::ProtoObject* prim_Behavior_subclassModifiersUses(STRuntime& rt, proto::ProtoContext* ctx,
+                                                              const proto::ProtoObject* r,
+                                                              const proto::ProtoObject* const* a,
+                                                              int argc) {
+    static const char* const kSelector = "__subclass:instanceVariableNames:modifiers:uses:";
+    if (argc != 4) throw NativeError(std::string(kSelector) + " expects 4 args");
+    if (const proto::ProtoObject* refused = refuseReservedClassName(rt, ctx, a[0]))
+        return refused;
+    const proto::ProtoString* names = a[1] ? a[1]->asString(ctx) : nullptr;
+    const proto::ProtoString* kinds = a[2] ? a[2]->asString(ctx) : nullptr;
+    if (!names || !kinds) throw NativeError(std::string(kSelector) + " expects two Strings");
+    const std::vector<IvarModifier> modifiers =
+        decodeModifiers(splitNames(names->toStdString(ctx)), kinds->toStdString(ctx), kSelector);
+    const proto::ProtoObject* sub = makeSubclassWithMixins(rt, ctx, r, a[0], a[3], /*bind=*/false);
+    TransientPin pinSub(ctx, sub);
+    declareInstVarNames(rt, ctx, sub, a[1], modifiers, kSelector);
+    bindClassGlobal(rt, ctx, sub);
+    return sub;
+}
+
+// superClass subclass: #Name instanceVariableNames: 'a' constantNames: 'b c'
+//            writeOnceNames: 'd' atomicNames: 'e'
+//   → the message form of a class declaration with modifiers (explicit-state
+//     spec §6.1): as subclass:instanceVariableNames:, with each clause's
+//     variables declared with its modifier, in the order of the arguments.
+//     Each argument is a String (nil or '' for none); another value signals
+//     Error. The class is bound once its variables are declared, so a refused
+//     declaration binds nothing.
+const proto::ProtoObject* prim_Behavior_subclassModifiers(STRuntime& rt, proto::ProtoContext* ctx,
+                                                          const proto::ProtoObject* r,
+                                                          const proto::ProtoObject* const* a,
+                                                          int argc) {
+    static const char* const kSelector =
+        "subclass:instanceVariableNames:constantNames:writeOnceNames:atomicNames:";
+    static const char* const kClauseNames[4] = {"instanceVariableNames:", "constantNames:",
+                                                "writeOnceNames:", "atomicNames:"};
+    static const IvarModifier kClauses[4] = {IvarModifier::Plain, IvarModifier::Constant,
+                                             IvarModifier::WriteOnce, IvarModifier::Atomic};
+    if (argc != 5) throw NativeError(std::string(kSelector) + " expects 5 args");
+    if (const proto::ProtoObject* refused = refuseReservedClassName(rt, ctx, a[0]))
+        return refused;
+    std::string names;
+    std::vector<IvarModifier> modifiers;
+    for (int k = 0; k < 4; ++k) {
+        const proto::ProtoObject* arg = a[1 + k];
+        if (!arg || arg == PROTO_NONE) continue;
+        const proto::ProtoString* str = arg->asString(ctx);
+        if (!str)
+            return signalErrorNamed(rt, ctx, "Error",
+                std::string(kSelector) + " expects a String for " + kClauseNames[k] + ", not "
+                + formatValue(rt, ctx, arg));
+        for (const std::string& iv : splitNames(str->toStdString(ctx))) {
+            if (!names.empty()) names += ' ';
+            names += iv;
+            modifiers.push_back(kClauses[k]);
+        }
+    }
+    const proto::ProtoObject* sub = makeSubclass(rt, ctx, r, a[0], /*bind=*/false);
+    TransientPin pinSub(ctx, sub);
+    const proto::ProtoObject* namesObj = ctx->fromUTF8String(names.c_str());
+    TransientPin pinNames(ctx, namesObj);
+    declareInstVarNames(rt, ctx, sub, namesObj, modifiers, kSelector);
+    bindClassGlobal(rt, ctx, sub);
+    return sub;
+}
+
+// aClass instVarModifierOf: aName → #plain, #constant, #writeOnce or #atomic:
+// the modifier of the instance variable aName of the receiver's instances,
+// declared by the class, a superclass or a mixin (explicit-state spec §6.1,
+// §11). A name the class does not declare signals Error; the text names the
+// receiver as printString's default does, so a class by its bare name
+// (pre-flight ruling C7).
+const proto::ProtoObject* prim_Behavior_instVarModifierOf(STRuntime& rt, proto::ProtoContext* ctx,
+                                                          const proto::ProtoObject* r,
+                                                          const proto::ProtoObject* const* a,
+                                                          int argc) {
+    if (argc != 1) throw NativeError("instVarModifierOf: expects 1 arg");
+    const proto::ProtoString* nameStr = a[0] ? a[0]->asString(ctx) : nullptr;
+    if (!nameStr)
+        throw ClassedErrorSignal("Error",
+            "instVarModifierOf: expects a String or Symbol, not " + formatValue(rt, ctx, a[0]));
+    const std::string name = nameStr->toStdString(ctx);
+    bool declared = false;
+    const IvarModifier m = modifierOf(rt, ctx, r, name, &declared);
+    if (!declared)
+        throw ClassedErrorSignal("Error",
+            formatValue(rt, ctx, r) + " has no instance variable '" + name + "'");
+    // A Symbol as `#atomic` reads: an interned name (createSymbol answers a
+    // String for a name short enough to be stored inline).
+    return internName(ctx, modifierName(m))->asObject(ctx);
+}
+
+// aClass __constructConstants: anArray selector: aSymbol   (private)
+//   The first step of a generated constructor (explicit-state spec §6.2, plan
+//   decision D-d as amended by the Task 6 rulings): the class's constructor
+//   method passes its arguments and its own selector, whose keywords name the
+//   constants. Answers a new instance with the non-nil arguments written in
+//   one write; the method then sends initialize and the check below.
+const proto::ProtoObject* prim_Behavior_constructConstants(STRuntime& rt, proto::ProtoContext* ctx,
+                                                           const proto::ProtoObject* r,
+                                                           const proto::ProtoObject* const* a,
+                                                           int argc) {
+    if (argc != 2) throw NativeError("__constructConstants:selector: expects 2 args");
+    if (!a[1] || !a[1]->asString(ctx))
+        throw NativeError("__constructConstants:selector: the selector must be a Symbol");
+    return constructWithConstants(rt, ctx, r, a[0], a[1]);
+}
+
+// aClass __checkConstantsOf: anInstance after: aSymbol   (private)
+//   The end-of-construction check of `new` (plan decision D-e) and of the
+//   generated constructor: every constant of the class must be set on
+//   anInstance; the first unset one signals M13, an Error, naming aSymbol,
+//   and the construction answers nothing (nil). Answers anInstance otherwise.
+const proto::ProtoObject* prim_Behavior_checkConstantsOf(STRuntime& rt, proto::ProtoContext* ctx,
+                                                         const proto::ProtoObject* r,
+                                                         const proto::ProtoObject* const* a,
+                                                         int argc) {
+    if (argc != 2) throw NativeError("__checkConstantsOf:after: expects 2 args");
+    const proto::ProtoString* sel = a[1] ? a[1]->asString(ctx) : nullptr;
+    if (!sel) throw NativeError("__checkConstantsOf:after: the selector must be a Symbol");
+    return checkConstantsSet(rt, ctx, r, a[0] ? a[0] : PROTO_NONE, sel->toStdString(ctx));
+}
+
+// aClass __checkConstructed: anInstance selector: aSymbol   (private)
+//   The end-of-construction check of a class-side constructor that builds
+//   with basicNew and a setter (SortedCollection sortBlock:, Point x:y:, ...):
+//   for a class without constants (`__has_constants__`, read through the
+//   chain) it answers anInstance at once, so such constructors
+//   pay this one primitive call and no Smalltalk send; otherwise it is
+//   __checkConstantsOf:after: (M13, naming aSymbol). It sends no initialize.
+const proto::ProtoObject* prim_Behavior_checkConstructed(STRuntime& rt, proto::ProtoContext* ctx,
+                                                         const proto::ProtoObject* r,
+                                                         const proto::ProtoObject* const* a,
+                                                         int argc) {
+    if (argc != 2) throw NativeError("__checkConstructed:selector: expects 2 args");
+    const proto::ProtoObject* instance = a[0] ? a[0] : PROTO_NONE;
+    if (r->getAttribute(ctx, rt.bootstrap().sym.hasConstants) != PROTO_TRUE) return instance;
+    const proto::ProtoString* sel = a[1] ? a[1]->asString(ctx) : nullptr;
+    if (!sel) throw NativeError("__checkConstructed:selector: the selector must be a Symbol");
+    return checkConstantsSet(rt, ctx, r, instance, sel->toStdString(ctx));
+}
+
+// aClass __allInstVarNamesString → the names of allInstVarNamesOf (the
+// superclass's, each mixin's, the class's own; IvarModifiers.h), separated by
+// spaces. Behavior >> allInstVarNames splits it for a class that is not a
+// metaclass.
+const proto::ProtoObject* prim_Behavior_allInstVarNamesString(STRuntime& rt,
+                                                              proto::ProtoContext* ctx,
+                                                              const proto::ProtoObject* r,
+                                                              const proto::ProtoObject* const*,
+                                                              int) {
+    std::string joined;
+    for (const std::string& name : allInstVarNamesOf(rt, ctx, r)) {
+        if (!joined.empty()) joined += ' ';
+        joined += name;
+    }
+    return ctx->fromUTF8String(joined.c_str());
 }
 
 const proto::ProtoObject* prim_Object_instVarNamesString(STRuntime&, proto::ProtoContext* ctx,
@@ -1694,7 +2468,10 @@ const proto::ProtoObject* prim_Behavior_lookupSelector(STRuntime& rt, proto::Pro
         const proto::proto_ulong n = chain->getSize(ctx);
         for (proto::proto_ulong i = 0; i < n; ++i) {
             const proto::ProtoObject* p = chain->getAt(ctx, listIndex(i));
-            if (p && p != PROTO_NONE && p->getOwnAttributeDirect(ctx, sel) == m) return p;
+            if (p && p != PROTO_NONE && p->getOwnAttributeDirect(ctx, sel) == m)
+                // The generated new's hidden parent is not a behavior of its
+                // own: it answers as the metaclass it was built for.
+                return visibleHolder(ctx, p);
         }
     }
     return PROTO_NONE;
@@ -1928,11 +2705,7 @@ const proto::ProtoObject* prim_Object_printString(STRuntime& rt,
         if (s) name = s->toStdString(ctx);
     }
     if (name.empty()) return ctx->fromUTF8String("an object");
-
-    char c0 = name.empty() ? '\0' : name[0];
-    bool vowel = (c0 == 'A' || c0 == 'E' || c0 == 'I' || c0 == 'O' || c0 == 'U');
-    std::string out = (vowel ? "an " : "a ") + name;
-    return ctx->fromUTF8String(out.c_str());
+    return ctx->fromUTF8String(articleAndClassName(name).c_str());
 }
 
 // Import from: 'foo'
@@ -2060,56 +2833,6 @@ const proto::ProtoObject* prim_Object_ne(STRuntime&, proto::ProtoContext*,
     return (r != a[0]) ? PROTO_TRUE : PROTO_FALSE;
 }
 
-// recv setInstVar: #name from: expected to: newValue
-//
-// Optimistic-concurrency compare-and-swap on a single instance variable. If
-// `recv`'s instance variable `name` currently holds (by pointer identity)
-// `expected`, atomically replace it with `newValue` and answer true;
-// otherwise write nothing and answer false. This exposes protoCore's atomic
-// attribute CAS (ProtoObject::setAttributeIfEqual) directly — the building
-// block for lock-free, user-controlled retry:
-//
-//   [ old := obj count.
-//     new := old + 1.
-//     obj setInstVar: #count from: old to: new ] whileFalse.
-//
-// A failed CAS means another thread won the race; the loop re-reads the now
-// current value and retries. Because the comparison is pointer identity over
-// immutable snapshots, the classic ABA hazard does not arise: if the pointer
-// is unchanged, the value genuinely is the one observed.
-//
-// Instance variables are stored under the mangled key "_iv_<name>" (see
-// PUSH_INSTVAR / STORE_INSTVAR in the engine), so this never collides with a
-// same-named method selector. An unset instance variable reads as nil; pass
-// `nil` as `expected` to match it.
-const proto::ProtoObject* prim_Object_setInstVarFromTo(
-        STRuntime&, proto::ProtoContext* ctx,
-        const proto::ProtoObject* r,
-        const proto::ProtoObject* const* a, int argc) {
-    if (argc != 3)
-        throw NativeError("setInstVar:from:to: expects 3 arguments");
-    auto* nameStr = a[0] ? a[0]->asString(ctx) : nullptr;
-    if (!nameStr)
-        throw NativeError(
-            "setInstVar:from:to: — the variable name must be a symbol or string");
-    std::string mangled = "_iv_";
-    mangled += nameStr->toStdString(ctx);
-    auto* slot = proto::ProtoString::createSymbol(ctx, mangled.c_str());
-    const proto::ProtoObject* expected = a[1] ? a[1] : PROTO_NONE;
-    const proto::ProtoObject* newValue = a[2] ? a[2] : PROTO_NONE;
-
-    // An unset instance variable is physically absent yet reads as nil. Map a
-    // `nil` expectation onto the absent slot so a CAS "from nil" matches it;
-    // every other case passes `expected` straight through to the CAS, which
-    // re-validates it atomically.
-    const proto::ProtoObject* cur = r->getOwnAttributeDirect(ctx, slot);
-    const proto::ProtoObject* casExpected =
-        (cur == nullptr && expected == PROTO_NONE) ? nullptr : expected;
-    bool ok = const_cast<proto::ProtoObject*>(r)
-        ->setAttributeIfEqual(ctx, slot, casExpected, newValue);
-    return ok ? PROTO_TRUE : PROTO_FALSE;
-}
-
 } // anon
 
 void installObjectPrimitives(STRuntime& rt) {
@@ -2142,11 +2865,6 @@ void installObjectPrimitives(STRuntime& rt) {
                   primitiveMethod<prim_Object_asHighPriorityActor>);
     bindPrimitive(rt, b.objectProto, "asLowPriorityActor",
                   primitiveMethod<prim_Object_asLowPriorityActor>);
-    // Optimistic-concurrency CAS on a single instance variable — the raw,
-    // unwrapped form of protoCore's atomic attribute compare-and-swap. See
-    // the Atom class for the wrapped idiom.
-    bindPrimitive(rt, b.objectProto, "setInstVar:from:to:",
-                  primitiveMethod<prim_Object_setInstVarFromTo>);
     // BL-3: rich printString. `__setClassName:` is emitted by the compiler's
     // ClassDecl path; `printString` is the default inherited by every object.
     bindPrimitive(rt, b.behaviorProto, "__setClassName:",
@@ -2199,8 +2917,27 @@ void installObjectPrimitives(STRuntime& rt) {
     bindPrimitive(rt, b.actorProto, "__wrappedObject", primitiveMethod<prim_Actor_wrappedObject>);
     bindPrimitive(rt, b.objectProto, "instVarNamed:", primitiveMethod<prim_Object_instVarNamed>);
     bindPrimitive(rt, b.objectProto, "instVarNamed:put:", primitiveMethod<prim_Object_instVarNamedPut>);
+    bindPrimitive(rt, b.objectProto, "__rawInstVarNamed:", primitiveMethod<prim_Object_rawInstVarNamed>);
+    bindPrimitive(rt, b.objectProto, "__copyWithInstVarValues:",
+                  primitiveMethod<prim_Object_copyWithInstVarValues>);
     bindPrimitive(rt, b.behaviorProto, "__setInstVarNames:", primitiveMethod<prim_Object_setInstVarNames>);
+    bindPrimitive(rt, b.behaviorProto, "__setInstVarNames:modifiers:",
+                  primitiveMethod<prim_Behavior_setInstVarNamesModifiers>);
+    bindPrimitive(rt, b.behaviorProto,
+                  "subclass:instanceVariableNames:constantNames:writeOnceNames:atomicNames:",
+                  primitiveMethod<prim_Behavior_subclassModifiers>);
+    bindPrimitive(rt, b.behaviorProto, "instVarModifierOf:", primitiveMethod<prim_Behavior_instVarModifierOf>);
+    bindPrimitive(rt, b.behaviorProto, "__constructConstants:selector:",
+                  primitiveMethod<prim_Behavior_constructConstants>);
+    bindPrimitive(rt, b.behaviorProto, "__checkConstructed:selector:",
+                  primitiveMethod<prim_Behavior_checkConstructed>);
+    bindPrimitive(rt, b.behaviorProto, "__checkConstantsOf:after:",
+                  primitiveMethod<prim_Behavior_checkConstantsOf>);
+    bindPrimitive(rt, b.behaviorProto, "__subclass:instanceVariableNames:modifiers:uses:",
+                  primitiveMethod<prim_Behavior_subclassModifiersUses>);
     bindPrimitive(rt, b.behaviorProto, "__instVarNamesString", primitiveMethod<prim_Object_instVarNamesString>);
+    bindPrimitive(rt, b.behaviorProto, "__allInstVarNamesString",
+                  primitiveMethod<prim_Behavior_allInstVarNamesString>);
     bindPrimitive(rt, b.behaviorProto, "canUnderstand:", primitiveMethod<prim_Object_canUnderstand>);
     bindPrimitive(rt, b.behaviorProto, "lookupSelector:", primitiveMethod<prim_Behavior_lookupSelector>);
     bindPrimitive(rt, b.behaviorProto, "__hasAncestor:", primitiveMethod<prim_Behavior_hasAncestor>);

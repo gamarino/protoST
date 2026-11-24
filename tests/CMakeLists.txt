@@ -19,6 +19,9 @@ target_sources(protost_unit_tests PRIVATE
     unit/test_instvar_groups.cpp
 )
 target_sources(protost_unit_tests PRIVATE
+    unit/test_ivar_modifiers.cpp
+)
+target_sources(protost_unit_tests PRIVATE
     unit/test_instance_templates.cpp
 )
 target_sources(protost_unit_tests PRIVATE

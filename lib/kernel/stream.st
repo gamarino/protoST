@@ -11,13 +11,14 @@
 Object subclass: #WriteStream instanceVariableNames: 'buffer onString onBytes chunks'.
 
 WriteStream class >> new
-  ^ self basicNew setOn: #().
+  ^ self __checkedNew: (self basicNew setOn: #()).
 
 WriteStream class >> on: aCollection
-  ^ self basicNew setOn: aCollection.
+  ^ self __checkConstructed: (self basicNew setOn: aCollection) selector: #on:.
 
 WriteStream class >> with: aCollection
-  ^ (self basicNew setOn: aCollection) nextPutAll: aCollection; yourself.
+  ^ self __checkConstructed: ((self basicNew setOn: aCollection) nextPutAll: aCollection; yourself)
+      selector: #with:.
 
 WriteStream >> setOn: aCollection
   onString := aCollection isString.
@@ -147,7 +148,7 @@ WriteStream >> bytesContents
 Object subclass: #ReadStream instanceVariableNames: 'collection position'.
 
 ReadStream class >> on: aCollection
-  ^ self basicNew setOn: aCollection.
+  ^ self __checkConstructed: (self basicNew setOn: aCollection) selector: #on:.
 
 ReadStream >> setOn: aCollection
   collection := aCollection.

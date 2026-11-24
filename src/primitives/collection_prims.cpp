@@ -45,6 +45,7 @@
 #include "primitives/IndexArg.h"
 #include "runtime/Bootstrap.h"
 #include "runtime/InstanceTemplate.h"
+#include "runtime/ConstantConstructor.h"
 #include "runtime/TransientPin.h"
 #include "modules/STModuleProvider.h"
 #include "protoCore.h"
@@ -87,16 +88,28 @@ const proto::ProtoString* dataKey(STRuntime& rt) {
     return rt.bootstrap().sym.data;
 }
 
+// The selector of `Array with:...` taking `argc` arguments.
+std::string withSelector(int argc) {
+    std::string sel;
+    for (int i = 0; i < argc; ++i) sel += "with:";
+    return sel;
+}
+
 // A class-side constructor bound on a built-in collection class also serves
 // its user subclasses (`OrderedCollection subclass: #Stack`, then
 // `Stack new`). The primitive builds a built-in instance; when the receiver is
 // a user subclass, the result is re-made as a child of that class with the
 // same own attributes (the backing data), and receives `initialize`, as `new`
 // sends it for every other class.
+// A user subclass with constants then gets the end-of-construction check
+// (M13, explicit-state spec §6.2) naming `selector`, as `new` and the
+// generated constructor run it; it answers nothing (nil) when a constant is
+// unset.
 const proto::ProtoObject* instantiateAs(STRuntime& rt, proto::ProtoContext* ctx,
                                         const proto::ProtoObject* cls,
                                         const proto::ProtoObject* base,
-                                        const proto::ProtoObject* inst) {
+                                        const proto::ProtoObject* inst,
+                                        const std::string& selector) {
     if (!cls || cls == base || cls == PROTO_NONE || !inst) return inst;
     const proto::ProtoObject* own =
         cls->getOwnAttributeDirect(ctx, rt.bootstrap().sym.className);
@@ -116,6 +129,8 @@ const proto::ProtoObject* instantiateAs(STRuntime& rt, proto::ProtoContext* ctx,
     bool understood = false;
     sendDynamic(rt, ctx, out, rt.bootstrap().sym.initialize,
                 nullptr, 0, &understood);
+    if (cls->getAttribute(ctx, rt.bootstrap().sym.hasConstants) == PROTO_TRUE)
+        return checkConstantsSet(rt, ctx, cls, out, selector);
     return out;
 }
 
@@ -960,7 +975,7 @@ const proto::ProtoObject* prim_Array_classNew(STRuntime& rt, proto::ProtoContext
                               + " elements");
         }
     }
-    return instantiateAs(rt, ctx, cls, rt.bootstrap().arrayProto, makeArrayInstance(rt, ctx, data));
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().arrayProto, makeArrayInstance(rt, ctx, data), "new:");
 }
 
 // Array withAll: aCollection → an Array of the elements of `aCollection`. The
@@ -981,7 +996,7 @@ const proto::ProtoObject* prim_Array_classWithAll(STRuntime& rt, proto::ProtoCon
         pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
         return true;
     });
-    return instantiateAs(rt, ctx, cls, rt.bootstrap().arrayProto, makeArrayInstance(rt, ctx, data));
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().arrayProto, makeArrayInstance(rt, ctx, data), "withAll:");
 }
 
 // Array with: ... — fixed-arity convenience constructors (1..4 elements).
@@ -996,7 +1011,7 @@ const proto::ProtoObject* prim_Array_classWith(STRuntime& rt, proto::ProtoContex
         data = data->appendLast(ctx, a[i] ? a[i] : PROTO_NONE);
         pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
     }
-    return instantiateAs(rt, ctx, cls, rt.bootstrap().arrayProto, makeArrayInstance(rt, ctx, data));
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().arrayProto, makeArrayInstance(rt, ctx, data), withSelector(argc));
 }
 
 // =================  OrderedCollection base operations  =====================
@@ -1231,7 +1246,7 @@ const proto::ProtoObject* prim_OC_classNew(STRuntime& rt, proto::ProtoContext* c
                                            const proto::ProtoObject* cls,
                                            const proto::ProtoObject* const*, int) {
     return instantiateAs(rt, ctx, cls, rt.bootstrap().orderedCollectionProto, makeInstanceOfSpecies(rt, ctx, rt.bootstrap().orderedCollectionProto,
-                                 ctx->newList()));
+                                 ctx->newList()), "new");
 }
 
 // OrderedCollection withAll: aCollection → an OrderedCollection of the elements
@@ -1248,7 +1263,7 @@ const proto::ProtoObject* prim_OC_classWithAll(STRuntime& rt, proto::ProtoContex
         pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
         return true;
     });
-    return instantiateAs(rt, ctx, cls, rt.bootstrap().orderedCollectionProto, makeInstanceOfSpecies(rt, ctx, rt.bootstrap().orderedCollectionProto, data));
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().orderedCollectionProto, makeInstanceOfSpecies(rt, ctx, rt.bootstrap().orderedCollectionProto, data), "withAll:");
 }
 
 // =========================  Set base operations  ===========================
@@ -1384,7 +1399,7 @@ const proto::ProtoObject* prim_Set_do(STRuntime& rt, proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_Set_classNew(STRuntime& rt, proto::ProtoContext* ctx,
                                             const proto::ProtoObject* cls,
                                             const proto::ProtoObject* const*, int) {
-    return instantiateAs(rt, ctx, cls, rt.bootstrap().setProto, makeSetInstance(rt, ctx, ctx->newMap(), 0));
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().setProto, makeSetInstance(rt, ctx, ctx->newMap(), 0), "new");
 }
 
 // Set withAll: aCollection → a Set of the distinct elements of the argument
@@ -1406,7 +1421,7 @@ const proto::ProtoObject* prim_Set_classWithAll(STRuntime& rt, proto::ProtoConte
         }
         return true;
     });
-    return instantiateAs(rt, ctx, cls, rt.bootstrap().setProto, makeSetInstance(rt, ctx, data, size));
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().setProto, makeSetInstance(rt, ctx, data, size), "withAll:");
 }
 
 // =========================  Bag base operations  ===========================
@@ -1569,7 +1584,7 @@ const proto::ProtoObject* prim_Bag_do(STRuntime& rt, proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_Bag_classNew(STRuntime& rt, proto::ProtoContext* ctx,
                                             const proto::ProtoObject* cls,
                                             const proto::ProtoObject* const*, int) {
-    return instantiateAs(rt, ctx, cls, rt.bootstrap().bagProto, makeBagInstance(rt, ctx, ctx->newList()));
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().bagProto, makeBagInstance(rt, ctx, ctx->newList()), "new");
 }
 
 // Bag withAll: aCollection → a Bag of every element of the argument (any
@@ -1586,7 +1601,7 @@ const proto::ProtoObject* prim_Bag_classWithAll(STRuntime& rt, proto::ProtoConte
         pinData.reset(reinterpret_cast<const proto::ProtoObject*>(data));
         return true;
     });
-    return instantiateAs(rt, ctx, cls, rt.bootstrap().bagProto, makeBagInstance(rt, ctx, data));
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().bagProto, makeBagInstance(rt, ctx, data), "withAll:");
 }
 
 // =========================  Association  ===================================
@@ -2013,7 +2028,7 @@ const proto::ProtoObject* prim_Dict_associations(STRuntime& rt, proto::ProtoCont
 const proto::ProtoObject* prim_Dict_classNew(STRuntime& rt, proto::ProtoContext* ctx,
                                              const proto::ProtoObject* cls,
                                              const proto::ProtoObject* const*, int) {
-    return instantiateAs(rt, ctx, cls, rt.bootstrap().dictionaryProto, makeDictInstance(rt, ctx, ctx->newMap(), 0));
+    return instantiateAs(rt, ctx, cls, rt.bootstrap().dictionaryProto, makeDictInstance(rt, ctx, ctx->newMap(), 0), "new");
 }
 
 // =====================  Derived iteration protocol  ========================

@@ -673,12 +673,29 @@ ast::NodePtr Parser::parseClassDecl(Token classIdent) {
     // the clauses in any order. The two lists are then packed into stringList
     // with intValue = ivCount as the boundary (see ClassDecl shape in AST.h).
     std::vector<std::string> ivs;
+    std::vector<IvarModifier> ivMods;   // aligned with ivs
     std::vector<std::string> cvs;
+
+    // Explicit-state spec §6.1: instanceVariableNames: declares plain
+    // instance variables, constantNames:, writeOnceNames: and atomicNames:
+    // declare them with a modifier. Every clause appends to `ivs`, so the
+    // names keep source order: clause by clause as written, and in order
+    // within each clause.
+    auto ivarClause = [&](IvarModifier mod) {
+        advance();
+        parseStringList(ivs);
+        ivMods.resize(ivs.size(), mod);
+    };
 
     while (current_.kind == TokenKind::Keyword) {
         if (current_.text == "instanceVariableNames:") {
-            advance();
-            parseStringList(ivs);
+            ivarClause(IvarModifier::Plain);
+        } else if (current_.text == "constantNames:") {
+            ivarClause(IvarModifier::Constant);
+        } else if (current_.text == "writeOnceNames:") {
+            ivarClause(IvarModifier::WriteOnce);
+        } else if (current_.text == "atomicNames:") {
+            ivarClause(IvarModifier::Atomic);
         } else if (current_.text == "uses:") {
             // T3-b: multiple inheritance / mixins. `uses:` takes an expression
             // — typically a `{ MixinA. MixinB }` dynamic-array literal — whose
@@ -717,6 +734,7 @@ ast::NodePtr Parser::parseClassDecl(Token classIdent) {
     for (auto& s : ivs) cd->stringList.push_back(std::move(s));
     for (auto& s : cvs) cd->stringList.push_back(std::move(s));
     cd->intValue = static_cast<long long>(ivs.size());
+    cd->ivarModifiers = std::move(ivMods);
 
     // consume optional terminating '.'
     match(TokenKind::Period);

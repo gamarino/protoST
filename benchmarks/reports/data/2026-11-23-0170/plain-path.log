@@ -1,0 +1,22 @@
+ 19:04:36 up 7 days, 10:10,  1 user,  load average: 5,55, 5,81, 7,78
+startup                  old     44.0 ms  new     41.6 ms
+int_sum_loop             old     62.1 ms  new     58.8 ms
+fib                      old    110.1 ms  new    112.5 ms
+list_append              old     46.7 ms  new     48.3 ms
+str_concat               old     42.8 ms  new     46.6 ms
+attr_lookup              old     76.2 ms  new     76.5 ms
+range_iterate            old     59.3 ms  new     58.8 ms
+exception_latency        old    642.6 ms  new    651.5 ms
+parallel_speedup pool    old     98.4 ms  new    112.2 ms
+parallel_speedup w=1     old    212.2 ms  new    220.4 ms
+cooperative_yield w=2    old    202.8 ms  new    186.0 ms
+message_throughput       old     84.6 ms  new     84.9 ms
+saturation_big w=1       old    819.4 ms  new    787.0 ms
+saturation_big w=2       old    456.5 ms  new    472.3 ms
+saturation_big w=3       old    357.1 ms  new    369.7 ms
+saturation_big w=4       old    380.5 ms  new    366.2 ms
+saturation_big w=5       old    294.3 ms  new    316.3 ms
+saturation_big w=6       old    284.4 ms  new    329.9 ms
+
+All runs verified.
+exit=0

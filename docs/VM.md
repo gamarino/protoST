@@ -102,7 +102,9 @@ time:
 
 - `Object subclass: #C instanceVariableNames: 'a b'` compiles to sends of
   `__subclassNamed:`, `__setClassName:` and `__setInstVarNames:` and a
-  `STORE_GLOBAL` (example 04).
+  `STORE_GLOBAL` (example 04). With modifier clauses (`constantNames:`,
+  `writeOnceNames:`, `atomicNames:`), `__setInstVarNames:` becomes
+  `__setInstVarNames:modifiers:` (example 20, section 1.9).
 - `C >> sel body` compiles the body into a nested module and installs it at
   run time with `PUSH_GLOBAL C`, `PUSH_BLOCK n`, `PUSH_CONST #sel`,
   `SEND_KEYWORD #__installMethod:as:` (`__installClassMethod:as:` for
@@ -482,9 +484,159 @@ primitives receive the engine's `ctx`. The only `ProtoContext` protoST
 constructs itself is the root context it makes when it is embedded in
 another runtime's `ProtoSpace` (`STRuntime`'s `ownRootCtx`).
 
+### 1.9 Explicit state: records, private selectors and checks
+
+The instance-variable modifiers of 0.17.0 (LANGUAGE.md §4.13) live in class
+records, three opcodes (section 2.3) and a set of private primitives. Every
+check is on a new opcode or in a primitive; `PUSH_INSTVAR`, `STORE_INSTVAR`,
+`PUSH_OWN_INSTVAR`, `IVAR_GROUP` and `IVAR_GROUP_END` execute the
+instructions they did before (only their immutable-receiver branch changed
+its error class).
+
+**Class records** (attributes of the class object):
+
+| Attribute | Holds |
+|---|---|
+| `__instvar_names__` | every declared name, in source order, as before |
+| `__ivar_modifiers__` | a String of `kind:name` words for the class's **own** non-plain variables (`'constant:k writeOnce:w'`); plain variables are not listed |
+| `__has_constants__` | `true` on a class that declares or inherits a constant, read through the chain |
+| `__constant_constructor__` | the selector of the generated constructor this class owns (absent on a class that inherits its parent's) |
+| `__constant_new__` | the hidden parent holding the generated `new` of this class, first in its metaclass's parents (absent on a class without constants and on one that inherits an ancestor's); the only hidden parent that a re-plan ever places in or takes out of its metaclass's chain |
+| `__constant_cache__` | the constants a construction checks and the constructor selectors still valid for the class, keyed to the instance-layout epoch (no chain walk per construction) |
+| `__user_declared__` | set on every class user code declares; a redeclaration is compared with such a class only (M11) |
+| `__user_class__` | set by `__subclassNamed:` only: the textual path may re-run into this class object |
+
+**Private selectors added in 0.17.0** (none is part of the language):
+
+| Selector | On | Does |
+|---|---|---|
+| `__setInstVarNames:modifiers:` | `Behavior` | the textual declaration with modifier clauses: the names in source order and the `kind:name` String, recorded through `declareInstVarNames`, the path every declaration form shares (M10, M11, the generated constructor) |
+| `__subclass:instanceVariableNames:modifiers:uses:` | `Behavior` | the textual `uses:` declaration with modifiers, declared once (ruling C8) |
+| `__constructConstants:selector:` | `Behavior` | the generated constructor's allocation: a new instance with the non-nil arguments written in one write group under the constants the selector names; a constructor that is out of date signals an `Error` naming the class to redeclare |
+| `__checkConstantsOf:after:` | `Behavior` | the end-of-construction check (M13) at the end of the generated `new` (in the hidden parent) and the generated constructor: answers the instance, or signals and answers nil |
+| `__checkConstructed:selector:` | `Behavior` | the same check at the end of a kernel or library constructor other than `new`; answers the instance at once, with no send, for a class without constants |
+| `__allInstVarNamesString` | `Behavior` | the names of `allInstVarNames` in layout order (superclass, then mixins, then own), each once |
+| `__checkedNew:` | `Object class` (kernel, `lib/kernel/object.st`) | the end of the `new` of `SortedCollection`, `WriteStream`, `Random` and `UUID`: sends `initialize` once and answers the instance; it checks nothing (a subclass with constants is checked by its generated `new`, which runs this `new` as `super new`) |
+| `__rawInstVarNamed:` | `Object` | the attribute, or nil when unset, never checking (`deepCopy`, `inspect`) |
+| `__copyWithInstVarValues:` | `Object` | a shallow copy whose declared variables are replaced, in one `setAttributes`, by the non-nil values given (`deepCopy`) |
+
+`__installClassMethod:as:` (older) also refuses a method under the selector of
+the generated constructor the chain records (M9); `__installMethod:as:` sent
+to a metaclass refuses the same selector for its sole instance, so neither
+install path bypasses it. A class-side `new` installs on both paths. Both resolve late variables by modifier (section 2.5). The public messages
+`compareAndSet:from:to:`, `update:with:`, `setInstVar:from:to:` and
+`instVarIsSet:` are primitives on `Object` (`src/primitives/state_prims.cpp`).
+
+**The generated constructor** of a class with constants is real bytecode,
+built in C++ when the declaration runs (`installConstantConstructor`,
+`src/runtime/ConstantConstructor.cpp`) and installed on the metaclass of the
+class that owns it. For `Account number:owner:` (local 0 is `self`, the
+arguments are locals 1 and 2):
+
+```text
+PUSH_SELF                                   receiver of the check
+PUSH_SELF  PUSH_LOCAL 1  PUSH_LOCAL 2  MAKE_ARRAY 2  PUSH_CONST #number:owner:
+SEND_KEYWORD #__constructConstants:selector:       the instance, constants set
+DUP  SEND_UNARY #initialize  POP                   initialize, in this engine
+PUSH_CONST #number:owner:
+SEND_KEYWORD #__checkConstantsOf:after:            M13: the instance, or nil
+RETURN
+```
+
+`initialize` is sent by the body itself, as `new` sends it, so it runs in the
+caller's engine and a Future wait inside it behaves as under `new`. A
+primitive cannot know the selector it was sent under, so the body passes it.
+On M13 the check signals in place and answers nil, so the constructor never
+answers a half-built instance. `--disasm` does not list the constructor: it
+is not in the program's module.
+
+**The generated `new`** (maintainer ruling of 2026-11-23, round 3).
+`Object class >> new` is the 0.16.1 method, `^ self basicNew initialize` in
+three statements, and checks nothing, so a class without constants pays
+nothing for them. A class with constants that declares some of its own, or
+whose metaclass lookup would not reach a generated `new` first, gets a
+**hidden parent**: an unnamed mutable object, built by `installGeneratedNew`
+(same file) when the declaration runs, and placed first in its metaclass's
+parent list, ahead of the superclass's metaclass. It holds only
+`__generated_new_of__` (its metaclass) and this method:
+
+```text
+PUSH_SELF                                   receiver of the check
+PUSH_SELF  SEND_SUPER #new                  the inherited new, initialize included
+PUSH_CONST #new
+SEND_KEYWORD #__checkConstantsOf:after:            M13: the instance, or nil
+RETURN
+```
+
+The method is stamped with the hidden parent's `__class_id__`
+(`stampDefiningClass`, `src/runtime/BlockCode.h`, the one class-id counter
+every install shares), and the hidden parent's own parents are the rest of
+the metaclass's chain, so its `super new` continues above it: a kernel `new`
+(`SortedCollection`, `WriteStream`, `Random`, `UUID`) still runs first. A
+user class-side `new` on the metaclass comes before the hidden parent and
+overrides it; its `super new` resolves into the hidden parent and runs the
+check (conformance 58), and `^ self basicNew initialize` skips it
+(conformance 89, M14 at the first read).
+
+Which `new` a class without constants of its own inherits: the first class on
+its chain that has a hidden parent decides (it inherits it), or the first
+kernel class whose metaclass holds a `new` (it gets its own hidden parent);
+a user-written `new` is transparent to that choice, so a subclass inherits
+whatever its superclass's override does. A metaclass created later is a child
+of its superclass's metaclass and so carries the hidden parent; one that
+exists already is re-parented in place (`setParents` on the mutable
+metaclass, after the hidden parent is fully built): every declaration re-plans
+its class, and a declaration in place re-plans every class bound as a global
+whose chain holds it (`classesHolding`). Each rebuilt chain drops every hidden
+parent and puts back the live one of each metaclass on it, right after that
+metaclass. Only the hidden parent recorded under `__constant_new__` and built
+for the class's current metaclass (`addBehavior:` and a class copy carry the
+original's record, and get their own) is ever placed or taken out. The class
+record and the metaclass's chain keep it reachable for the collector.
+
+Reflection never sees it: it owns no `__class_name__`, so no walk that looks
+for a named parent stops on it; a metaclass's `superclass` is computed from
+its class (`Account class superclass == Object class`); `selectors`,
+`includesSelector:` and `inspect` show the metaclass's own attributes; and
+`lookupSelector: #new` answers the metaclass the hidden parent was built for
+(`visibleHolder`).
+
+**`UnsetConstantError`** is captured when the kernel has loaded
+(`Bootstrap::unsetConstantErrorClass`, pinned in the live registry), and
+M14 is signalled through that reference, never through the global name. Every
+route that would rebind the global is refused by `refuseReservedGlobalStore`
+(`exception_prims.cpp`): `STORE_GLOBAL`, `__globalAt:put:` (behind `Smalltalk
+at:put:`) and `addBehavior:` / `addParent:` on a class of that name; the
+declaration paths refuse the name first (`refuseReservedClassName`).
+
+**Refusals are signalled in place** (`signalErrorNamed`), never thrown from
+an opcode handler, so an `on:do:` in the method's caller catches them by
+class. `ModificationForbidden` and `UnsetConstantError` are `Error`s and not
+resumable: `resume:` in their handler signals `IllegalResumeAttempt`.
+
+**A failed compare-and-swap** of `compareAndSet:from:to:` or `update:with:`
+must tell a lost race from a receiver that can never be written (an
+immutable value). After any failed CAS the primitive probes the receiver
+with `setAttributeIfEqual(ctx, __protost_mutability_probe__, nullptr,
+nullptr)`, a CAS of a reserved key that is never written, from absent to
+absent: protoCore answers false at once for an immutable cell (signal
+`ModificationForbidden`), and true for a mutable one (the race was lost:
+answer `false`, or re-run the update block). It uses no retry count and no
+timing. protoCore 3.6.1 does not document a `nullptr` new value; the unit
+case `IvarModifiers: the mutability probe ...` pins it.
+
+**The `update:with:` depth.** A thread-local counter
+(`insideUpdateBlock()`, `state_prims.cpp`) counts the `update:with:` blocks
+running on the thread; an RAII guard restores it on every exit, a non-local
+return and an exception included. `prim_Future_wait` tests it first and
+signals M7, pending Future or not; `waitWithin:` reaches it through `wait`.
+An exception handler for a signal raised inside the block runs on top of the
+block, so the counter is still raised there and a wait in the handler
+signals M7 too.
+
 ## 2. Opcode reference
 
-`Op` (`src/runtime/Opcodes.h`) has **60 values**: 1 to 62 except 7, 21 and
+`Op` (`src/runtime/Opcodes.h`) has **63 values**: 1 to 65 except 7, 21 and
 56, and `EXTEND` (254). The values 0, 7, 21, 56 and 255 are reserved: they
 were `NOP`, `PUSH_SUPER`, `DUP_RECEIVER`, `BIN_INT_REM` and `HALT`.
 `BIN_INT_REM` was dropped before 0.10.0 shipped because `rem:` is not one of
@@ -492,11 +644,12 @@ Pharo's special selectors, so a method a program adds for it must be reached
 (review R3-1); the others were removed because the compiler no longer
 emitted them (`PUSH_SUPER` since `super` sends became `SEND_SUPER`)
 and only hand-built unit tests ran them; a reserved value is an unimplemented
-opcode. The dispatch in `ExecutionEngine::runLoop` has a `case` for all 56
-and a threaded-dispatch label for the 55 that execute (`EXTEND` is a prefix,
-consumed while decoding; a stray one raises `stray EXTEND prefix`). The
-compiler emits all of them; `EXTEND` only as a prefix, by `emitWide` and when
-it widens a jump.
+opcode. The dispatch in `ExecutionEngine::runLoop` has a `case` for 61 of
+them and a threaded-dispatch label for the 60 that execute: `EXTEND` is a
+prefix, consumed while decoding (a stray one raises `stray EXTEND prefix`),
+and `PUSH_LATE_VAR` / `STORE_LATE_VAR` (61, 62) are never executed, because
+installing the method rewrites them (section 2.5). The compiler emits all of
+them; `EXTEND` only as a prefix, by `emitWide` and when it widens a jump.
 
 Notation: the stack effect is `before -> after`, top of stack on the right;
 `v` is any value. Operands not listed are emitted as 0 and ignored. "Errors"
@@ -533,13 +686,16 @@ the attribute `_iv_v` of the class that declares it.
 | Op | # | Operand | Stack | Semantics | Emitted by |
 |---|---|---|---|---|---|
 | `PUSH_GLOBAL` | 24 | name constant (wide) | `-> v` | Pushes the global. Errors: `Error` "undefined global: X" (catchable) when it is unbound or bound to nil. | a capitalised or otherwise unresolved name; the class in a declaration or method install |
-| `STORE_GLOBAL` | 25 | name constant (wide) | `v ->` | Pops and binds the global. | a class declaration (after `DUP`); top-level assignment in the REPL |
+| `STORE_GLOBAL` | 25 | name constant (wide) | `v ->` | Pops and binds the global. The reserved name `UnsetConstantError` (0.17.0) is refused once the kernel has loaded: an `Error` is signalled in place and nothing is bound (one pointer comparison of the name). | a class declaration (after `DUP`); top-level assignment in the REPL |
 | `PUSH_INSTVAR` | 26 | name constant (wide) | `-> v` | Pushes `self`'s `_iv_<name>`, found up the prototype chain (so an instance reads a class variable from its class); nil when absent. | an instance variable or class variable in an instance-side method; a class variable in a class-side method |
-| `STORE_INSTVAR` | 27 | name constant (wide) | `v ->` | Pops and sets `self`'s own `_iv_<name>` (publishes a new version of `self` in protoCore's mutable table). Errors: `STORE_INSTVAR self is null`; an immutable `self` is refused (`instance variable assignment: the receiver is an immutable value; nothing was written`), never lost. | assignment to an instance variable that is not part of a write group |
+| `STORE_INSTVAR` | 27 | name constant (wide) | `v ->` | Pops and sets `self`'s own `_iv_<name>` (publishes a new version of `self` in protoCore's mutable table). Errors: `STORE_INSTVAR self is null`; an immutable `self` is refused, never lost: `ModificationForbidden` (`cannot assign to the instance variable 'x' of a BlockClosure: the receiver is immutable; nothing was written`; a plain `Error` before 0.17.0). | assignment to a plain instance variable that is not part of a write group |
 | `PUSH_OWN_INSTVAR` | 42 | name constant (wide) | `-> v` | As `PUSH_INSTVAR`, own attribute only (a subclass does not see its superclass's value). | a class-instance variable in a class-side method |
 | `STORE_CLASSVAR` | 41 | name constant (wide) | `v ->` | Pops and writes `_iv_<name>` on the first object up `self`'s chain that owns it (the declaring class), so the class, its subclasses and their instances share it. | assignment to a class variable, from either side |
 | `IVAR_GROUP` | 43 | write-group entry (wide) | `v -> v` | A write of a run of instance-variable assignments, not its last: the value stays on the stack, not yet written. At the run's first write the engine decides whether to group (not when a debugger is attached); when it does not, each write is done at once as `STORE_INSTVAR`. | `tryEmitInstVarGroup`: a run of 2-16 statements `v := e` on instance variables whose values after the first cannot run code (example 16) |
-| `IVAR_GROUP_END` | 44 | entry of the run's last write (wide) | `v1..vn -> vn` | Publishes the whole run as **one** new version of `self` (`ProtoObject::setAttributes`), atomic to other threads, then leaves only the last value. If a `BIN_INT_*` inside the run missed its fast path, the pending writes were flushed one by one before its send and the rest of the run is per write. Errors: `IVAR_GROUP_END stack underflow`. | the last statement of such a run. `PROTOST_IVAR_GROUPS=off` compiles runs as plain `STORE_INSTVAR`s |
+| `IVAR_GROUP_END` | 44 | entry of the run's last write (wide) | `v1..vn -> vn` | Publishes the whole run as **one** new version of `self` (`ProtoObject::setAttributes`), atomic to other threads, then leaves only the last value. If a `BIN_INT_*` inside the run missed its fast path, the pending writes were flushed one by one before its send and the rest of the run is per write. Errors: `IVAR_GROUP_END stack underflow`; an immutable `self` is refused as by `STORE_INSTVAR` (`ModificationForbidden`, the same text). | the last statement of such a run. `PROTOST_IVAR_GROUPS=off` compiles runs as plain `STORE_INSTVAR`s |
+| `STORE_CONST_INSTVAR` | 63 | name constant (wide) | `v ->` | `:=` to a constant (0.17.0). Pops like `STORE_INSTVAR` and writes `self`'s own `_iv_<name>` by a CAS from unset (absent, then nil): a constant is set at most once, whatever the threads. Storing nil into an unset constant changes nothing. Errors, signalled in place: `ModificationForbidden` when the constant is already set (`the constant 'k' of a Box is already set; nothing was written`) or `self` is immutable. | assignment to a constant in an instance-side `initialize`, its inlined blocks and their de-optimised copies (example 20); `DUP` before it unless the value is discarded |
+| `STORE_ONCE_INSTVAR` | 64 | name constant (wide) | `x v -> w` | `:=` to a write-once variable (0.17.0). Pops `v` and replaces the copy `x` below it with the value the variable holds afterwards. A CAS from unset installs `v` (then `w` is `v`). When the variable is already set to `w`, the store is silent if `w == v` or `w = v` answers true (the installed value's `=`, sent in a nested engine, where a `wait` helps and never yields); storing nil never writes and answers the current value. Errors, signalled in place: `ModificationForbidden` for an unequal value (`the write-once variable 'w' of a Box already holds a different value; nothing was written`; not resumable) or an immutable `self`; an `=` that signals propagates; a non-Boolean `=` signals `NonBooleanReceiver`. | assignment to a write-once variable, anywhere: always `DUP STORE_ONCE_INSTVAR`, then `POP` when the value is discarded (example 20) or `RETURN` for `^ w := x` |
+| `PUSH_CONST_INSTVAR` | 65 | name constant (wide) | `-> v` | A read of a constant (0.17.0): `self`'s **own** `_iv_<name>` (`getOwnAttributeDirect`, as `PUSH_OWN_INSTVAR`), so a same-named class-instance variable up the chain never answers for it. An unset constant (absent or nil) signals `UnsetConstantError` in place (`constant 'k' of a Box read before it was set`, with `receiver` and `variableName`) instead of answering nil. | every read of a constant in an instance-side method or block (example 20); a constant read is never an inert write-group value, so it ends a run |
 
 ### 2.4 Captured variables
 
@@ -568,8 +724,8 @@ the attribute `_iv_v` of the class that declares it.
 | `RESET_LOCAL` | 49 | slot | `->` | Stores nil in the slot without following a forward. | entry of an inlined block with temporaries, once per temporary (and its scope-dictionary slot) |
 | `PUSH_SHARED_LOCAL` | 59 | slot | `-> v` | As `PUSH_LOCAL`; when the frame holds forwards and the slot holds one, pushes the variable it names. | every read of a temporary that a de-optimised conditional of the module may share (section 1.4) |
 | `STORE_SHARED_LOCAL` | 60 | slot | `v ->` | As `STORE_LOCAL`; when the frame holds forwards and the slot holds one, writes the variable it names. | every write of such a temporary |
-| `PUSH_LATE_VAR` | 61 | name constant (wide) | `-> v` | Never executed (the engine reports an unimplemented opcode). Installing the method rewrites it in place, once, into `PUSH_INSTVAR`, `PUSH_OWN_INSTVAR` (a class-instance variable, class side) or, for a class variable, `PUSH_INSTVAR`, by what the class and its ancestors declare; in the REPL a name they do not declare becomes `PUSH_GLOBAL`; otherwise the install signals `undeclared variable` (S37, LANGUAGE.md §4.10). | a lowercase name the compiler cannot resolve in a method of a class whose superclass chain it cannot see (an imported class, a class built by the `subclass:` message) |
-| `STORE_LATE_VAR` | 62 | name constant (wide) | `v ->` | As `PUSH_LATE_VAR`, rewritten into `STORE_INSTVAR` or `STORE_CLASSVAR`. | an assignment to such a name |
+| `PUSH_LATE_VAR` | 61 | name constant (wide) | `-> v` | Never executed (the engine reports an unimplemented opcode). Installing the method rewrites it in place, once, into `PUSH_INSTVAR`, `PUSH_CONST_INSTVAR` (a constant, 0.17.0), `PUSH_OWN_INSTVAR` (a class-instance variable, class side) or, for a class variable, `PUSH_INSTVAR`, by what the class and its ancestors declare; in the REPL a name they do not declare becomes `PUSH_GLOBAL`; otherwise the install signals `undeclared variable` (S37, LANGUAGE.md §4.10). | a lowercase name the compiler cannot resolve in a method of a class whose superclass chain it cannot see (an imported class, a class built by the `subclass:` message) |
+| `STORE_LATE_VAR` | 62 | name constant (wide) | `v ->` | As `PUSH_LATE_VAR`, rewritten into `STORE_INSTVAR`, `STORE_CLASSVAR`, `STORE_CONST_INSTVAR` or `STORE_ONCE_INSTVAR` by the variable's modifier. The install refuses the method with the compiler's texts and line when the store breaks a modifier rule: a constant outside `initialize` (M1) or in a real closure there (M2; a site in a de-optimised copy is judged by its inlined twin), an atomic variable (M4). Since 0.17.0 every late store is emitted `DUP STORE_LATE_VAR`, followed by `POP` when the value is discarded (`RETURN` for `^ x := e`), the shape `STORE_ONCE_INSTVAR` needs, because the rewrite replaces one opcode byte in place and cannot add a `DUP`. | an assignment to such a name |
 
 ### 2.6 Sends and returns
 
@@ -2596,12 +2752,140 @@ module main.3: <block>
   is always a Boolean, so the inlined `ifTrue:` after it has no
   `JUMP_IF_NOT_BOOL` guard and no out-of-line send.
 
+### Example 20: instance-variable modifiers
+
+A constant, a write-once and two plain variables (0.17.0, LANGUAGE.md
+§4.13; section 1.9).
+
+<!-- vm-example: 20-explicit-state -->
+```smalltalk
+Object subclass: #Box
+  instanceVariableNames: 'a b'
+  constantNames: 'k'
+  writeOnceNames: 'w'.
+
+Box >> initialize
+  a := 1. b := 2. k := 3. a := 4. w := 5.
+
+Box >> k
+  ^ k.
+
+Box new k printNl.
+```
+
+```text
+module main: <module>
+  args 0, locals 0, stack 48 (deepest 3)
+  constants:
+    #0   symbol    #Box
+    #1   symbol    #Object
+    #2   symbol    #__subclassNamed:
+    #3   string    'Box'
+    #4   symbol    #__setClassName:
+    #5   string    'Box'
+    #6   string    'a b k w'
+    #7   string    'constant:k writeOnce:w'
+    #8   symbol    #__setInstVarNames:modifiers:
+    #9   symbol    #initialize
+    #10  symbol    #__installMethod:as:
+    #11  symbol    #k
+    #12  symbol    #new
+    #13  symbol    #printNl
+  code:
+      0  PUSH_GLOBAL        1     ; Object
+      1  PUSH_CONST         3     ; 'Box'
+      2  SEND_KEYWORD       2     ; #__subclassNamed:, 1 arg
+      3  PUSH_CONST         5     ; 'Box'
+      4  SEND_KEYWORD       4     ; #__setClassName:, 1 arg
+      5  PUSH_CONST         6     ; 'a b k w'
+      6  PUSH_CONST         7     ; 'constant:k writeOnce:w'
+      7  SEND_KEYWORD       8     ; #__setInstVarNames:modifiers:, 2 args
+      8  DUP
+      9  STORE_GLOBAL       0     ; Box
+     10  POP
+     11  PUSH_GLOBAL        0     ; Box
+     12  PUSH_BLOCK         0     ; main.0 (Box>>initialize)
+     13  PUSH_CONST         9     ; #initialize
+     14  SEND_KEYWORD       10    ; #__installMethod:as:, 2 args
+     15  POP
+     16  PUSH_GLOBAL        0     ; Box
+     17  PUSH_BLOCK         1     ; main.1 (Box>>k)
+     18  PUSH_CONST         11    ; #k
+     19  SEND_KEYWORD       10    ; #__installMethod:as:, 2 args
+     20  POP
+     21  PUSH_GLOBAL        0     ; Box
+     22  SEND_UNARY         12    ; #new
+     23  SEND_UNARY         11    ; #k
+     24  SEND_UNARY         13    ; #printNl
+     25  RETURN_TOP
+
+module main.0: Box>>initialize
+  args 1, locals 1 (0 self), stack 48 (deepest 2)
+  defining class Box
+  write groups:
+    @0   a, write 1 of 2
+    @1   b, write 2 of 2
+  constants:
+    #0   integer   1
+    #1   symbol    #a
+    #2   integer   2
+    #3   symbol    #b
+    #4   integer   3
+    #5   symbol    #k
+    #6   integer   4
+    #7   integer   5
+    #8   symbol    #w
+  code:
+      0  PUSH_CONST         0     ; 1
+      1  IVAR_GROUP         0     ; a, write 1 of 2
+      2  PUSH_CONST         2     ; 2
+      3  IVAR_GROUP_END     1     ; b, write 2 of 2
+      4  POP
+      5  PUSH_CONST         4     ; 3
+      6  STORE_CONST_INSTVAR 5     ; k
+      7  PUSH_CONST         6     ; 4
+      8  STORE_INSTVAR      1     ; a
+      9  PUSH_CONST         7     ; 5
+     10  DUP
+     11  STORE_ONCE_INSTVAR 8     ; w
+     12  POP
+     13  PUSH_LOCAL         0     ; self
+     14  RETURN
+
+module main.1: Box>>k
+  args 1, locals 1 (0 self), stack 48 (deepest 1)
+  defining class Box
+  constants:
+    #0   symbol    #k
+  code:
+      0  PUSH_CONST_INSTVAR 0     ; k
+      1  RETURN
+3
+```
+
+- `main`: the declaration sends `__setInstVarNames:modifiers:` with the
+  names in source order (`'a b k w'`) and the modifiers of the non-plain
+  ones (`'constant:k writeOnce:w'`). The class gets the generated
+  constructor `k:` (section 1.9), which is not in this module.
+- `Box>>initialize`: `a := 1. b := 2.` is a write group (`IVAR_GROUP` ...
+  `IVAR_GROUP_END`). The constant store `k := 3` is a CAS, its own
+  publication, so it ends the run before it: `STORE_CONST_INSTVAR` pops its
+  value (no `DUP`, the value is discarded). `a := 4` is a single plain store
+  (a run needs two or more), so it is a `STORE_INSTVAR` of its own. The write-once store
+  `w := 5` is always `DUP STORE_ONCE_INSTVAR`: the instruction replaces the
+  copy with the value the variable holds afterwards, and `POP` drops it here
+  because the statement's value is discarded (`^ w := 5` would end in
+  `RETURN` instead).
+- `Box>>k`: the read of a constant is `PUSH_CONST_INSTVAR`, which signals
+  `UnsetConstantError` instead of answering nil; plain, write-once and
+  atomic reads stay `PUSH_INSTVAR`.
+
 ## 4. How to add an opcode
 
 The model is `ASSERT_LOOP_BOOL` (value 38), the guard of an inlined loop
 condition. Every place to touch, in order:
 
-1. **The enum,** `src/runtime/Opcodes.h`: the next free value (59 today),
+1. **The enum,** `src/runtime/Opcodes.h`: the next free value (66 today),
    with a comment giving its operand and stack effect. Never renumber an
    existing opcode: the value is the encoding.
    ```cpp

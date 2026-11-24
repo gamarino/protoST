@@ -80,6 +80,7 @@ namespace protoST { void installDebuggerPrimitives(STRuntime& rt); }
 namespace protoST { void installObjectPrimitives(STRuntime& rt); }
 namespace protoST { void installFuturePrimitives(STRuntime& rt); }
 namespace protoST { void installAtomPrimitives(STRuntime& rt); }
+namespace protoST { void installStatePrimitives(STRuntime& rt); }
 namespace protoST { void installImportGlobal(STRuntime& rt); }
 namespace protoST { void installWorkerPoolGlobal(STRuntime& rt); }
 namespace protoST { void installExceptionPrimitives(STRuntime& rt); }
@@ -894,6 +895,7 @@ void STRuntime::construct() {
     installObjectPrimitives(*this);
     installFuturePrimitives(*this);
     installAtomPrimitives(*this);
+    installStatePrimitives(*this);
     installExceptionPrimitives(*this);
     installIoPrimitives(*this);
     installBytesPrimitives(*this);
@@ -1645,6 +1647,30 @@ constinit thread_local BlockCodeCacheEntry t_blockCodeCache[kBlockCodeCacheSize]
 namespace detail {
 std::atomic<std::uint64_t> g_sharedCodeCellsFinalized{0};
 } // namespace detail
+
+// Stamp the method's body (and its blocks) with the identity of the class it
+// is installed on, for `super` (BytecodeModule::definingClassId). The class
+// gets its `__class_id__`, a process-unique integer, on its first install;
+// `addBehavior:` copies it to the rebuilt class, which stands for the same
+// class. A method object without bytecode (a primitive) is left alone.
+void stampDefiningClass(STRuntime& rt, proto::ProtoContext* ctx,
+                        const proto::ProtoObject* cls,
+                        const proto::ProtoObject* methodObj) {
+    const BytecodeModule* code =
+        blockCodeOf(ctx, methodObj->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr));
+    if (!code) return;
+    static std::atomic<std::int64_t> nextClassId{1};
+    const proto::ProtoString* idKey = rt.bootstrap().sym.classId;
+    std::int64_t id = 0;
+    const proto::ProtoObject* idObj = cls->getOwnAttributeDirect(ctx, idKey);
+    if (idObj && idObj != PROTO_NONE && idObj->isInteger(ctx)) {
+        id = idObj->asLong(ctx);
+    } else {
+        id = nextClassId.fetch_add(1, std::memory_order_relaxed);
+        cls->setAttribute(ctx, idKey, ctx->fromLong(id));
+    }
+    code->setDefiningClassId(id);
+}
 
 namespace {
 // The finalizer of a cell made to be shared (blockCodeRefSlow).
@@ -3544,6 +3570,17 @@ void STRuntime::loadKernel() {
         const_cast<proto::ProtoObject*>(impl_->liveRegistry)
             ->setAttribute(rootCtx(), ptrRegistryKey(rootCtx(), m), m);
         b.kernelIsResumable = m;
+    }
+    // The kernel's UnsetConstantError (Bootstrap::unsetConstantErrorClass),
+    // pinned the same way. From here on M14 is signalled through it and the
+    // reserved global cannot be rebound (explicit-state spec §6.9).
+    const proto::ProtoObject* g = globals();
+    const proto::ProtoObject* uce = (g && b.sym.unsetConstantErrorName)
+        ? g->getOwnAttributeDirect(rootCtx(), b.sym.unsetConstantErrorName) : nullptr;
+    if (uce && uce != PROTO_NONE && impl_->liveRegistry) {
+        const_cast<proto::ProtoObject*>(impl_->liveRegistry)
+            ->setAttribute(rootCtx(), ptrRegistryKey(rootCtx(), uce), uce);
+        b.unsetConstantErrorClass = uce;
     }
 }
 

@@ -153,6 +153,15 @@ struct Bootstrap {
     // method). nullptr when no kernel is loaded: always send.
     const proto::ProtoObject* kernelIsResumable           = nullptr;
 
+    // The kernel class UnsetConstantError (lib/kernel/exception.st), captured
+    // once when the kernel has loaded (STRuntime::loadKernel) and pinned in
+    // the runtime's live registry for the runtime's lifetime. M14 is signalled
+    // through this reference, never through a global-name lookup, and from
+    // the capture on every route that would rebind the reserved global is
+    // refused (refuseReservedGlobalStore, explicit-state spec §6.9). nullptr
+    // when no kernel is loaded.
+    const proto::ProtoObject* unsetConstantErrorClass     = nullptr;
+
     // Pre-interned hot-path attribute symbols.
     //
     // Interning is idempotent — the same content always yields the same
@@ -226,6 +235,10 @@ struct Bootstrap {
         // inline-string path and hit the shard mutex). Cache them here so
         // every SEND reads a Bootstrap-perpetual pointer instead.
         const proto::ProtoString* className       = nullptr;  // __class_name__ (every SEND class-side filter)
+        // A key never written: the state primitives' mutability probe
+        // (state_prims.cpp, receiverIsWritable).
+        const proto::ProtoString* mutabilityProbe = nullptr;  // __protost_mutability_probe__
+        const proto::ProtoString* unsetConstantErrorName = nullptr;  // UnsetConstantError (reserved global)
         const proto::ProtoString* classId         = nullptr;  // __class_id__ (super: the defining class)
         const proto::ProtoString* metaclass       = nullptr;  // __metaclass__ (methodHolder of a class)
         const proto::ProtoString* soleInstance    = nullptr;  // __sole_instance__ (a metaclass's class)
@@ -234,6 +247,9 @@ struct Bootstrap {
         const proto::ProtoString* instanceTemplate      = nullptr;  // __instance_template__
         const proto::ProtoString* instanceTemplateEpoch = nullptr;  // __instance_template_epoch__
         const proto::ProtoString* instVarNames          = nullptr;  // __instvar_names__
+        // Whether a class declares or inherits a constant (explicit-state
+        // spec §6.2, plan decision D-a): read by every `new` (D-e).
+        const proto::ProtoString* hasConstants          = nullptr;  // __has_constants__
         // 2026-06-15: actor priority bands (high/medium/low). `__priority__`
         // is a SmallInteger 0/1/2 stored on the actor; absence means medium.
         // The scheduler reads this on schedule() to pick which of three

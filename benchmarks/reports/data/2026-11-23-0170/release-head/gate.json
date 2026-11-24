@@ -1,0 +1,612 @@
+{
+ "date": "2026-11-24T01:57:53",
+ "host": "DEV12",
+ "kernel": "7.0.0-43-generic",
+ "repeat": 3,
+ "rounds": 5,
+ "libdir": "$S/pc-361/lib",
+ "builds": [
+  {
+   "label": "old",
+   "path": "$S/ref-0161/build_release/protost",
+   "sha256": "2dbe59c369550e9893005d26a77386566ace066a1c758da7986a3c6b029404c0",
+   "stdlib": "$S/ref-0161/lib",
+   "version": "protoST 0.16.1"
+  },
+  {
+   "label": "new",
+   "path": "/home/gamarino/Documentos/proyectos/worktrees/protost-0170/build_release/protost",
+   "sha256": "20ff509275e8b7a0c9e84fda26e2a0a96af2f522d3dbf0e15f43fce46aa644d8",
+   "stdlib": "/home/gamarino/Documentos/proyectos/worktrees/protost-0170/lib",
+   "version": "protoST 0.16.1"
+  }
+ ],
+ "not_runnable": [
+  {
+   "program": "const_read",
+   "build": "old",
+   "status": "not runnable",
+   "exit": 65,
+   "output": "/home/gamarino/Documentos/proyectos/worktrees/protost-0170/benchmarks/micro/const_read.st:8:30: unknown keyword in class declaration: constantNames:\n/home/gamarino/Documentos/proyectos/worktrees/protost-0170/benchmarks/micro/const_read.st:8:30: expected primary expression, got Keyword\n/home/gamarino/Documentos/proyectos/worktrees/protost-0170/benchmarks/micro/const_read.st:8:45: expected '.' after top-level expression"
+  }
+ ],
+ "measurements": [
+  {
+   "program": "startup",
+   "build": "old",
+   "run_dir": "$S/gate-d3d05f4/runs/2",
+   "protoCore": "libprotoCore.so.5 => $S/gate-d3d05f4/runs/2/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-d3d05f4/runs/2/libprotoCore.so.3.6.1",
+   "cycles": 115755945,
+   "stddev_pct": 1.46,
+   "runs": 3,
+   "verified": "3 x VERIFIED 42",
+   "load_before": [
+    3.76,
+    3.11,
+    3.17
+   ],
+   "load_after": [
+    3.76,
+    3.11,
+    3.17
+   ],
+   "time": "2026-11-24T01:57:53"
+  },
+  {
+   "program": "startup",
+   "build": "new",
+   "run_dir": "$S/gate-d3d05f4/runs/3",
+   "protoCore": "libprotoCore.so.5 => $S/gate-d3d05f4/runs/3/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-d3d05f4/runs/3/libprotoCore.so.3.6.1",
+   "cycles": 125703513,
+   "stddev_pct": 4.29,
+   "runs": 3,
+   "verified": "3 x VERIFIED 42",
+   "load_before": [
+    3.76,
+    3.11,
+    3.17
+   ],
+   "load_after": [
+    3.76,
+    3.11,
+    3.17
+   ],
+   "time": "2026-11-24T01:57:53"
+  },
+  {
+   "program": "attr_lookup",
+   "build": "old",
+   "run_dir": "$S/gate-d3d05f4/runs/4",
+   "protoCore": "libprotoCore.so.5 => $S/gate-d3d05f4/runs/4/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-d3d05f4/runs/4/libprotoCore.so.3.6.1",
+   "cycles": 171546583,
+   "stddev_pct": 1.67,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    3.76,
+    3.11,
+    3.17
+   ],
+   "load_after": [
+    3.76,
+    3.11,
+    3.17
+   ],
+   "time": "2026-11-24T01:57:54"
+  },
+  {
+   "program": "attr_lookup",
+   "build": "new",
+   "run_dir": "$S/gate-d3d05f4/runs/5",
+   "protoCore": "libprotoCore.so.5 => $S/gate-d3d05f4/runs/5/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-d3d05f4/runs/5/libprotoCore.so.3.6.1",
+   "cycles": 176271423,
+   "stddev_pct": 2.55,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    3.76,
+    3.11,
+    3.17
+   ],
+   "load_after": [
+    3.76,
+    3.11,
+    3.17
+   ],
+   "time": "2026-11-24T01:57:54"
+  },
+  {
+   "program": "const_read",
+   "build": "new",
+   "run_dir": "$S/gate-d3d05f4/runs/6",
+   "protoCore": "libprotoCore.so.5 => $S/gate-d3d05f4/runs/6/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-d3d05f4/runs/6/libprotoCore.so.3.6.1",
+   "cycles": 176096965,
+   "stddev_pct": 0.93,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    3.76,
+    3.11,
+    3.17
+   ],
+   "load_after": [
+    3.76,
+    3.11,
+    3.17
+   ],
+   "time": "2026-11-24T01:57:54"
+  },
+  {
+   "program": "startup",
+   "build": "new",
+   "run_dir": "$S/gate-d3d05f4/runs/7",
+   "protoCore": "libprotoCore.so.5 => $S/gate-d3d05f4/runs/7/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-d3d05f4/runs/7/libprotoCore.so.3.6.1",
+   "cycles": 119590138,
+   "stddev_pct": 1.13,
+   "runs": 3,
+   "verified": "3 x VERIFIED 42",
+   "load_before": [
+    3.76,
+    3.11,
+    3.17
+   ],
+   "load_after": [
+    3.76,
+    3.11,
+    3.17
+   ],
+   "time": "2026-11-24T01:57:54"
+  },
+  {
+   "program": "startup",
+   "build": "old",
+   "run_dir": "$S/gate-d3d05f4/runs/8",
+   "protoCore": "libprotoCore.so.5 => $S/gate-d3d05f4/runs/8/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-d3d05f4/runs/8/libprotoCore.so.3.6.1",
+   "cycles": 115675015,
+   "stddev_pct": 1.75,
+   "runs": 3,
+   "verified": "3 x VERIFIED 42",
+   "load_before": [
+    3.76,
+    3.11,
+    3.17
+   ],
+   "load_after": [
+    3.76,
+    3.11,
+    3.17
+   ],
+   "time": "2026-11-24T01:57:54"
+  },
+  {
+   "program": "attr_lookup",
+   "build": "new",
+   "run_dir": "$S/gate-d3d05f4/runs/9",
+   "protoCore": "libprotoCore.so.5 => $S/gate-d3d05f4/runs/9/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-d3d05f4/runs/9/libprotoCore.so.3.6.1",
+   "cycles": 181449699,
+   "stddev_pct": 3.62,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    3.76,
+    3.11,
+    3.17
+   ],
+   "load_after": [
+    3.76,
+    3.11,
+    3.17
+   ],
+   "time": "2026-11-24T01:57:55"
+  },
+  {
+   "program": "attr_lookup",
+   "build": "old",
+   "run_dir": "$S/gate-d3d05f4/runs/10",
+   "protoCore": "libprotoCore.so.5 => $S/gate-d3d05f4/runs/10/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-d3d05f4/runs/10/libprotoCore.so.3.6.1",
+   "cycles": 169844464,
+   "stddev_pct": 1.0,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    3.76,
+    3.11,
+    3.17
+   ],
+   "load_after": [
+    3.76,
+    3.11,
+    3.17
+   ],
+   "time": "2026-11-24T01:57:55"
+  },
+  {
+   "program": "const_read",
+   "build": "new",
+   "run_dir": "$S/gate-d3d05f4/runs/11",
+   "protoCore": "libprotoCore.so.5 => $S/gate-d3d05f4/runs/11/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-d3d05f4/runs/11/libprotoCore.so.3.6.1",
+   "cycles": 173344381,
+   "stddev_pct": 0.17,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    3.76,
+    3.11,
+    3.17
+   ],
+   "load_after": [
+    3.76,
+    3.11,
+    3.17
+   ],
+   "time": "2026-11-24T01:57:55"
+  },
+  {
+   "program": "startup",
+   "build": "old",
+   "run_dir": "$S/gate-d3d05f4/runs/12",
+   "protoCore": "libprotoCore.so.5 => $S/gate-d3d05f4/runs/12/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-d3d05f4/runs/12/libprotoCore.so.3.6.1",
+   "cycles": 118415279,
+   "stddev_pct": 2.94,
+   "runs": 3,
+   "verified": "3 x VERIFIED 42",
+   "load_before": [
+    3.76,
+    3.11,
+    3.17
+   ],
+   "load_after": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "time": "2026-11-24T01:57:55"
+  },
+  {
+   "program": "startup",
+   "build": "new",
+   "run_dir": "$S/gate-d3d05f4/runs/13",
+   "protoCore": "libprotoCore.so.5 => $S/gate-d3d05f4/runs/13/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-d3d05f4/runs/13/libprotoCore.so.3.6.1",
+   "cycles": 122218565,
+   "stddev_pct": 2.48,
+   "runs": 3,
+   "verified": "3 x VERIFIED 42",
+   "load_before": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "load_after": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "time": "2026-11-24T01:57:55"
+  },
+  {
+   "program": "attr_lookup",
+   "build": "old",
+   "run_dir": "$S/gate-d3d05f4/runs/14",
+   "protoCore": "libprotoCore.so.5 => $S/gate-d3d05f4/runs/14/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-d3d05f4/runs/14/libprotoCore.so.3.6.1",
+   "cycles": 173344690,
+   "stddev_pct": 0.5,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "load_after": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "time": "2026-11-24T01:57:56"
+  },
+  {
+   "program": "attr_lookup",
+   "build": "new",
+   "run_dir": "$S/gate-d3d05f4/runs/15",
+   "protoCore": "libprotoCore.so.5 => $S/gate-d3d05f4/runs/15/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-d3d05f4/runs/15/libprotoCore.so.3.6.1",
+   "cycles": 179848902,
+   "stddev_pct": 2.67,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "load_after": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "time": "2026-11-24T01:57:56"
+  },
+  {
+   "program": "const_read",
+   "build": "new",
+   "run_dir": "$S/gate-d3d05f4/runs/16",
+   "protoCore": "libprotoCore.so.5 => $S/gate-d3d05f4/runs/16/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-d3d05f4/runs/16/libprotoCore.so.3.6.1",
+   "cycles": 173033927,
+   "stddev_pct": 1.46,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "load_after": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "time": "2026-11-24T01:57:56"
+  },
+  {
+   "program": "startup",
+   "build": "new",
+   "run_dir": "$S/gate-d3d05f4/runs/17",
+   "protoCore": "libprotoCore.so.5 => $S/gate-d3d05f4/runs/17/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-d3d05f4/runs/17/libprotoCore.so.3.6.1",
+   "cycles": 124268055,
+   "stddev_pct": 4.84,
+   "runs": 3,
+   "verified": "3 x VERIFIED 42",
+   "load_before": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "load_after": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "time": "2026-11-24T01:57:56"
+  },
+  {
+   "program": "startup",
+   "build": "old",
+   "run_dir": "$S/gate-d3d05f4/runs/18",
+   "protoCore": "libprotoCore.so.5 => $S/gate-d3d05f4/runs/18/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-d3d05f4/runs/18/libprotoCore.so.3.6.1",
+   "cycles": 116730380,
+   "stddev_pct": 2.06,
+   "runs": 3,
+   "verified": "3 x VERIFIED 42",
+   "load_before": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "load_after": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "time": "2026-11-24T01:57:56"
+  },
+  {
+   "program": "attr_lookup",
+   "build": "new",
+   "run_dir": "$S/gate-d3d05f4/runs/19",
+   "protoCore": "libprotoCore.so.5 => $S/gate-d3d05f4/runs/19/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-d3d05f4/runs/19/libprotoCore.so.3.6.1",
+   "cycles": 181322095,
+   "stddev_pct": 2.53,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "load_after": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "time": "2026-11-24T01:57:57"
+  },
+  {
+   "program": "attr_lookup",
+   "build": "old",
+   "run_dir": "$S/gate-d3d05f4/runs/20",
+   "protoCore": "libprotoCore.so.5 => $S/gate-d3d05f4/runs/20/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-d3d05f4/runs/20/libprotoCore.so.3.6.1",
+   "cycles": 168103995,
+   "stddev_pct": 0.7,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "load_after": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "time": "2026-11-24T01:57:57"
+  },
+  {
+   "program": "const_read",
+   "build": "new",
+   "run_dir": "$S/gate-d3d05f4/runs/21",
+   "protoCore": "libprotoCore.so.5 => $S/gate-d3d05f4/runs/21/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-d3d05f4/runs/21/libprotoCore.so.3.6.1",
+   "cycles": 178012275,
+   "stddev_pct": 0.82,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "load_after": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "time": "2026-11-24T01:57:57"
+  },
+  {
+   "program": "startup",
+   "build": "old",
+   "run_dir": "$S/gate-d3d05f4/runs/22",
+   "protoCore": "libprotoCore.so.5 => $S/gate-d3d05f4/runs/22/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-d3d05f4/runs/22/libprotoCore.so.3.6.1",
+   "cycles": 119417557,
+   "stddev_pct": 2.99,
+   "runs": 3,
+   "verified": "3 x VERIFIED 42",
+   "load_before": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "load_after": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "time": "2026-11-24T01:57:57"
+  },
+  {
+   "program": "startup",
+   "build": "new",
+   "run_dir": "$S/gate-d3d05f4/runs/23",
+   "protoCore": "libprotoCore.so.5 => $S/gate-d3d05f4/runs/23/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-d3d05f4/runs/23/libprotoCore.so.3.6.1",
+   "cycles": 122745476,
+   "stddev_pct": 3.9,
+   "runs": 3,
+   "verified": "3 x VERIFIED 42",
+   "load_before": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "load_after": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "time": "2026-11-24T01:57:57"
+  },
+  {
+   "program": "attr_lookup",
+   "build": "old",
+   "run_dir": "$S/gate-d3d05f4/runs/24",
+   "protoCore": "libprotoCore.so.5 => $S/gate-d3d05f4/runs/24/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-d3d05f4/runs/24/libprotoCore.so.3.6.1",
+   "cycles": 178513904,
+   "stddev_pct": 2.92,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "load_after": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "time": "2026-11-24T01:57:58"
+  },
+  {
+   "program": "attr_lookup",
+   "build": "new",
+   "run_dir": "$S/gate-d3d05f4/runs/25",
+   "protoCore": "libprotoCore.so.5 => $S/gate-d3d05f4/runs/25/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-d3d05f4/runs/25/libprotoCore.so.3.6.1",
+   "cycles": 177251168,
+   "stddev_pct": 1.29,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "load_after": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "time": "2026-11-24T01:57:58"
+  },
+  {
+   "program": "const_read",
+   "build": "new",
+   "run_dir": "$S/gate-d3d05f4/runs/26",
+   "protoCore": "libprotoCore.so.5 => $S/gate-d3d05f4/runs/26/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-d3d05f4/runs/26/libprotoCore.so.3.6.1",
+   "cycles": 169912425,
+   "stddev_pct": 0.06,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "load_after": [
+    3.62,
+    3.09,
+    3.16
+   ],
+   "time": "2026-11-24T01:57:58"
+  }
+ ],
+ "mean_cycles": {
+  "startup": {
+   "old": 117198835,
+   "new": 122905149
+  },
+  "attr_lookup": {
+   "old": 172270727,
+   "new": 179228657
+  },
+  "const_read": {
+   "new": 174079995
+  }
+ },
+ "gate": {
+  "attr_lookup new/old": 1.0404,
+  "bound attr": 1.01,
+  "attr ok": false,
+  "const_read new / attr_lookup new": 0.9713,
+  "bound const": 1.03,
+  "const ok": true,
+  "startup-subtracted attr new/old": 1.0227,
+  "startup-subtracted const/attr new": 0.9086,
+  "startup-subtracted attr ok": false,
+  "startup-subtracted const ok": true,
+  "verdicts differ": false,
+  "const_read old": "not runnable"
+ }
+}

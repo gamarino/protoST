@@ -1,0 +1,573 @@
+{
+ "date": "2026-11-23T19:05:35",
+ "host": "DEV12",
+ "kernel": "7.0.0-43-generic",
+ "repeat": 3,
+ "rounds": 3,
+ "libdir": "$S/pc-361/lib",
+ "builds": [
+  {
+   "label": "old",
+   "path": "$S/ref-0161/build_release/protost",
+   "sha256": "2dbe59c369550e9893005d26a77386566ace066a1c758da7986a3c6b029404c0",
+   "stdlib": "$S/ref-0161/lib",
+   "version": "protoST 0.16.1"
+  },
+  {
+   "label": "new",
+   "path": "/home/gamarino/Documentos/proyectos/worktrees/protost-0170/build_release/protost",
+   "sha256": "d43525912c7ccb17948af5b85876b5e7615f16c924277285e84ac265aa860c8e",
+   "stdlib": "/home/gamarino/Documentos/proyectos/worktrees/protost-0170/lib",
+   "version": "protoST 0.16.1"
+  }
+ ],
+ "not_runnable": [],
+ "measurements": [
+  {
+   "program": "instances",
+   "build": "old",
+   "run_dir": "$S/gate-runs/23",
+   "protoCore": "libprotoCore.so.5 => $S/gate-runs/23/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-runs/23/libprotoCore.so.3.6.1",
+   "cycles": 11052230430,
+   "stddev_pct": 1.04,
+   "runs": 3,
+   "verified": "3 x instances ok",
+   "load_before": [
+    6.68,
+    6.1,
+    7.77
+   ],
+   "load_after": [
+    6.65,
+    6.12,
+    7.75
+   ],
+   "time": "2026-11-23T19:05:45"
+  },
+  {
+   "program": "instances",
+   "build": "new",
+   "run_dir": "$S/gate-runs/24",
+   "protoCore": "libprotoCore.so.5 => $S/gate-runs/24/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-runs/24/libprotoCore.so.3.6.1",
+   "cycles": 12451240407,
+   "stddev_pct": 0.28,
+   "runs": 3,
+   "verified": "3 x instances ok",
+   "load_before": [
+    6.65,
+    6.12,
+    7.75
+   ],
+   "load_after": [
+    6.21,
+    6.04,
+    7.7
+   ],
+   "time": "2026-11-23T19:05:56"
+  },
+  {
+   "program": "vm_ops",
+   "build": "old",
+   "run_dir": "$S/gate-runs/25",
+   "protoCore": "libprotoCore.so.5 => $S/gate-runs/25/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-runs/25/libprotoCore.so.3.6.1",
+   "cycles": 4071803576,
+   "stddev_pct": 1.25,
+   "runs": 3,
+   "verified": "3 x vm_ops ok",
+   "load_before": [
+    6.21,
+    6.04,
+    7.7
+   ],
+   "load_after": [
+    6.11,
+    6.03,
+    7.69
+   ],
+   "time": "2026-11-23T19:06:01"
+  },
+  {
+   "program": "vm_ops",
+   "build": "new",
+   "run_dir": "$S/gate-runs/26",
+   "protoCore": "libprotoCore.so.5 => $S/gate-runs/26/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-runs/26/libprotoCore.so.3.6.1",
+   "cycles": 4128319674,
+   "stddev_pct": 1.57,
+   "runs": 3,
+   "verified": "3 x vm_ops ok",
+   "load_before": [
+    6.11,
+    6.03,
+    7.69
+   ],
+   "load_after": [
+    6.18,
+    6.04,
+    7.69
+   ],
+   "time": "2026-11-23T19:06:06"
+  },
+  {
+   "program": "point_new",
+   "build": "old",
+   "run_dir": "$S/gate-runs/27",
+   "protoCore": "libprotoCore.so.5 => $S/gate-runs/27/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-runs/27/libprotoCore.so.3.6.1",
+   "cycles": 2390522184,
+   "stddev_pct": 3.9,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    6.18,
+    6.04,
+    7.69
+   ],
+   "load_after": [
+    6.18,
+    6.04,
+    7.69
+   ],
+   "time": "2026-11-23T19:06:08"
+  },
+  {
+   "program": "point_new",
+   "build": "new",
+   "run_dir": "$S/gate-runs/28",
+   "protoCore": "libprotoCore.so.5 => $S/gate-runs/28/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-runs/28/libprotoCore.so.3.6.1",
+   "cycles": 2532438167,
+   "stddev_pct": 3.44,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    6.18,
+    6.04,
+    7.69
+   ],
+   "load_after": [
+    6.09,
+    6.03,
+    7.67
+   ],
+   "time": "2026-11-23T19:06:11"
+  },
+  {
+   "program": "fraction_new",
+   "build": "old",
+   "run_dir": "$S/gate-runs/29",
+   "protoCore": "libprotoCore.so.5 => $S/gate-runs/29/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-runs/29/libprotoCore.so.3.6.1",
+   "cycles": 3225565939,
+   "stddev_pct": 2.62,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    6.09,
+    6.03,
+    7.67
+   ],
+   "load_after": [
+    6.09,
+    6.03,
+    7.67
+   ],
+   "time": "2026-11-23T19:06:14"
+  },
+  {
+   "program": "fraction_new",
+   "build": "new",
+   "run_dir": "$S/gate-runs/30",
+   "protoCore": "libprotoCore.so.5 => $S/gate-runs/30/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-runs/30/libprotoCore.so.3.6.1",
+   "cycles": 3601692545,
+   "stddev_pct": 0.23,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    6.09,
+    6.03,
+    7.67
+   ],
+   "load_after": [
+    6.0,
+    6.01,
+    7.66
+   ],
+   "time": "2026-11-23T19:06:17"
+  },
+  {
+   "program": "instances",
+   "build": "new",
+   "run_dir": "$S/gate-runs/31",
+   "protoCore": "libprotoCore.so.5 => $S/gate-runs/31/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-runs/31/libprotoCore.so.3.6.1",
+   "cycles": 11739770755,
+   "stddev_pct": 1.51,
+   "runs": 3,
+   "verified": "3 x instances ok",
+   "load_before": [
+    6.0,
+    6.01,
+    7.66
+   ],
+   "load_after": [
+    6.22,
+    6.06,
+    7.65
+   ],
+   "time": "2026-11-23T19:06:28"
+  },
+  {
+   "program": "instances",
+   "build": "old",
+   "run_dir": "$S/gate-runs/32",
+   "protoCore": "libprotoCore.so.5 => $S/gate-runs/32/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-runs/32/libprotoCore.so.3.6.1",
+   "cycles": 11164804640,
+   "stddev_pct": 1.51,
+   "runs": 3,
+   "verified": "3 x instances ok",
+   "load_before": [
+    6.22,
+    6.06,
+    7.65
+   ],
+   "load_after": [
+    6.11,
+    6.04,
+    7.63
+   ],
+   "time": "2026-11-23T19:06:38"
+  },
+  {
+   "program": "vm_ops",
+   "build": "new",
+   "run_dir": "$S/gate-runs/33",
+   "protoCore": "libprotoCore.so.5 => $S/gate-runs/33/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-runs/33/libprotoCore.so.3.6.1",
+   "cycles": 4239929150,
+   "stddev_pct": 0.19,
+   "runs": 3,
+   "verified": "3 x vm_ops ok",
+   "load_before": [
+    6.11,
+    6.04,
+    7.63
+   ],
+   "load_after": [
+    6.34,
+    6.09,
+    7.64
+   ],
+   "time": "2026-11-23T19:06:43"
+  },
+  {
+   "program": "vm_ops",
+   "build": "old",
+   "run_dir": "$S/gate-runs/34",
+   "protoCore": "libprotoCore.so.5 => $S/gate-runs/34/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-runs/34/libprotoCore.so.3.6.1",
+   "cycles": 4370811871,
+   "stddev_pct": 5.25,
+   "runs": 3,
+   "verified": "3 x vm_ops ok",
+   "load_before": [
+    6.34,
+    6.09,
+    7.64
+   ],
+   "load_after": [
+    7.44,
+    6.32,
+    7.7
+   ],
+   "time": "2026-11-23T19:06:48"
+  },
+  {
+   "program": "point_new",
+   "build": "new",
+   "run_dir": "$S/gate-runs/35",
+   "protoCore": "libprotoCore.so.5 => $S/gate-runs/35/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-runs/35/libprotoCore.so.3.6.1",
+   "cycles": 2725756810,
+   "stddev_pct": 5.69,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    7.44,
+    6.32,
+    7.7
+   ],
+   "load_after": [
+    7.64,
+    6.38,
+    7.72
+   ],
+   "time": "2026-11-23T19:06:51"
+  },
+  {
+   "program": "point_new",
+   "build": "old",
+   "run_dir": "$S/gate-runs/36",
+   "protoCore": "libprotoCore.so.5 => $S/gate-runs/36/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-runs/36/libprotoCore.so.3.6.1",
+   "cycles": 2336866089,
+   "stddev_pct": 3.19,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    7.64,
+    6.38,
+    7.72
+   ],
+   "load_after": [
+    7.64,
+    6.38,
+    7.72
+   ],
+   "time": "2026-11-23T19:06:53"
+  },
+  {
+   "program": "fraction_new",
+   "build": "new",
+   "run_dir": "$S/gate-runs/37",
+   "protoCore": "libprotoCore.so.5 => $S/gate-runs/37/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-runs/37/libprotoCore.so.3.6.1",
+   "cycles": 3438521068,
+   "stddev_pct": 2.52,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    7.64,
+    6.38,
+    7.72
+   ],
+   "load_after": [
+    7.43,
+    6.36,
+    7.7
+   ],
+   "time": "2026-11-23T19:06:57"
+  },
+  {
+   "program": "fraction_new",
+   "build": "old",
+   "run_dir": "$S/gate-runs/38",
+   "protoCore": "libprotoCore.so.5 => $S/gate-runs/38/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-runs/38/libprotoCore.so.3.6.1",
+   "cycles": 3297051226,
+   "stddev_pct": 3.36,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    7.43,
+    6.36,
+    7.7
+   ],
+   "load_after": [
+    7.43,
+    6.36,
+    7.7
+   ],
+   "time": "2026-11-23T19:07:00"
+  },
+  {
+   "program": "instances",
+   "build": "old",
+   "run_dir": "$S/gate-runs/39",
+   "protoCore": "libprotoCore.so.5 => $S/gate-runs/39/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-runs/39/libprotoCore.so.3.6.1",
+   "cycles": 10757943485,
+   "stddev_pct": 1.9,
+   "runs": 3,
+   "verified": "3 x instances ok",
+   "load_before": [
+    7.43,
+    6.36,
+    7.7
+   ],
+   "load_after": [
+    6.9,
+    6.28,
+    7.66
+   ],
+   "time": "2026-11-23T19:07:09"
+  },
+  {
+   "program": "instances",
+   "build": "new",
+   "run_dir": "$S/gate-runs/40",
+   "protoCore": "libprotoCore.so.5 => $S/gate-runs/40/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-runs/40/libprotoCore.so.3.6.1",
+   "cycles": 10857776399,
+   "stddev_pct": 0.37,
+   "runs": 3,
+   "verified": "3 x instances ok",
+   "load_before": [
+    6.9,
+    6.28,
+    7.66
+   ],
+   "load_after": [
+    6.53,
+    6.22,
+    7.63
+   ],
+   "time": "2026-11-23T19:07:19"
+  },
+  {
+   "program": "vm_ops",
+   "build": "old",
+   "run_dir": "$S/gate-runs/41",
+   "protoCore": "libprotoCore.so.5 => $S/gate-runs/41/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-runs/41/libprotoCore.so.3.6.1",
+   "cycles": 3972980453,
+   "stddev_pct": 0.84,
+   "runs": 3,
+   "verified": "3 x vm_ops ok",
+   "load_before": [
+    6.53,
+    6.22,
+    7.63
+   ],
+   "load_after": [
+    6.97,
+    6.32,
+    7.65
+   ],
+   "time": "2026-11-23T19:07:23"
+  },
+  {
+   "program": "vm_ops",
+   "build": "new",
+   "run_dir": "$S/gate-runs/42",
+   "protoCore": "libprotoCore.so.5 => $S/gate-runs/42/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-runs/42/libprotoCore.so.3.6.1",
+   "cycles": 3998800075,
+   "stddev_pct": 1.09,
+   "runs": 3,
+   "verified": "3 x vm_ops ok",
+   "load_before": [
+    6.97,
+    6.32,
+    7.65
+   ],
+   "load_after": [
+    6.89,
+    6.31,
+    7.64
+   ],
+   "time": "2026-11-23T19:07:27"
+  },
+  {
+   "program": "point_new",
+   "build": "old",
+   "run_dir": "$S/gate-runs/43",
+   "protoCore": "libprotoCore.so.5 => $S/gate-runs/43/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-runs/43/libprotoCore.so.3.6.1",
+   "cycles": 2229870750,
+   "stddev_pct": 0.6,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    6.89,
+    6.31,
+    7.64
+   ],
+   "load_after": [
+    6.89,
+    6.31,
+    7.64
+   ],
+   "time": "2026-11-23T19:07:30"
+  },
+  {
+   "program": "point_new",
+   "build": "new",
+   "run_dir": "$S/gate-runs/44",
+   "protoCore": "libprotoCore.so.5 => $S/gate-runs/44/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-runs/44/libprotoCore.so.3.6.1",
+   "cycles": 2617560668,
+   "stddev_pct": 4.7,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    6.89,
+    6.31,
+    7.64
+   ],
+   "load_after": [
+    7.06,
+    6.36,
+    7.65
+   ],
+   "time": "2026-11-23T19:07:32"
+  },
+  {
+   "program": "fraction_new",
+   "build": "old",
+   "run_dir": "$S/gate-runs/45",
+   "protoCore": "libprotoCore.so.5 => $S/gate-runs/45/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-runs/45/libprotoCore.so.3.6.1",
+   "cycles": 3135879728,
+   "stddev_pct": 4.66,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    7.06,
+    6.36,
+    7.65
+   ],
+   "load_after": [
+    6.9,
+    6.33,
+    7.63
+   ],
+   "time": "2026-11-23T19:07:35"
+  },
+  {
+   "program": "fraction_new",
+   "build": "new",
+   "run_dir": "$S/gate-runs/46",
+   "protoCore": "libprotoCore.so.5 => $S/gate-runs/46/libprotoCore.so.5",
+   "protoCore_file": "$S/gate-runs/46/libprotoCore.so.3.6.1",
+   "cycles": 3283256524,
+   "stddev_pct": 0.85,
+   "runs": 3,
+   "verified": "3 x VERIFIED 600000",
+   "load_before": [
+    6.9,
+    6.33,
+    7.63
+   ],
+   "load_after": [
+    6.9,
+    6.33,
+    7.63
+   ],
+   "time": "2026-11-23T19:07:38"
+  }
+ ],
+ "mean_cycles": {
+  "instances": {
+   "old": 10991659518,
+   "new": 11682929187
+  },
+  "vm_ops": {
+   "old": 4138531967,
+   "new": 4122349633
+  },
+  "point_new": {
+   "old": 2319086341,
+   "new": 2625251882
+  },
+  "fraction_new": {
+   "old": 3219498964,
+   "new": 3441156712
+  }
+ }
+}

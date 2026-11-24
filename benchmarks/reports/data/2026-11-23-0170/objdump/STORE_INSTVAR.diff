@@ -1,0 +1,25 @@
+18c18
+< mov rsi,QWORD PTR [rbp-0x4b8]
+---
+> mov rsi,QWORD PTR [rbp-0x5b8]
+40c40
+< mov BYTE PTR [rbp-0x4c0],sil
+---
+> mov BYTE PTR [rbp-0x5c0],sil
+45,50c45
+< nop
+< data16 cs nop WORD PTR [rax+rax*1+0x0]
+< data16 cs nop WORD PTR [rax+rax*1+0x0]
+< data16 cs nop WORD PTR [rax+rax*1+0x0]
+< data16 cs nop WORD PTR [rax+rax*1+0x0]
+< data16 cs nop WORD PTR [rax+rax*1+0x0]
+---
+> nop WORD PTR [rax+rax*1+0x0]
+62,64c57,59
+< mov BYTE PTR [rbp-0x4c0],dil
+< movzx eax,BYTE PTR [rbp-0x4c0]
+< lea rdx,[rip+0x1619c1] # <_ZZN7protoST15ExecutionEngine7runLoopEPN5proto12ProtoContextEE7kLabels>
+---
+> mov BYTE PTR [rbp-0x5c0],dil
+> movzx eax,BYTE PTR [rbp-0x5c0]
+> lea rdx,[rip+0x180d41] # <_ZZN7protoST15ExecutionEngine7runLoopEPN5proto12ProtoContextEE7kLabels>

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(protoST VERSION 0.16.1 LANGUAGES CXX)
+project(protoST VERSION 0.17.0 LANGUAGES CXX)
 
 # The one place the version is written: every binary and library reads it
 # through PROTOST_VERSION (include/protoST/STRuntime.h).
@@ -240,7 +240,9 @@ add_library(protost_runtime STATIC
     src/runtime/TransientPin.cpp
     src/runtime/Interrupt.cpp
     src/runtime/Bootstrap.cpp
+    src/runtime/ConstantConstructor.cpp
     src/runtime/InstanceTemplate.cpp
+    src/runtime/IvarModifiers.cpp
     src/runtime/HandlerStack.cpp
     src/runtime/ValueFormat.cpp
     src/debugger/DebuggerRuntime.cpp
@@ -257,6 +259,7 @@ add_library(protost_runtime STATIC
     src/primitives/object_prims.cpp
     src/primitives/future_prims.cpp
     src/primitives/atom_prims.cpp
+    src/primitives/state_prims.cpp
     src/primitives/exception_prims.cpp
     src/primitives/collection_prims.cpp
     src/primitives/io_prims.cpp
@@ -589,6 +592,9 @@ add_test(NAME cli_oom_clean
 add_test(NAME cli_array_new_headroom
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_array_new_headroom.sh $<TARGET_FILE:protost>)
 
+add_test(NAME cli_setinstvar_deprecation
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_setinstvar_deprecation.sh $<TARGET_FILE:protost>)
+
 if(WIN32)
     # Ctrl-C is a console control event on Windows, which Git Bash cannot send
     # to a native program: the Windows variant runs in a console of its own.
@@ -642,6 +648,14 @@ add_test(NAME cli_unhandled_exception_label
 
 add_test(NAME cli_repl_class_across_inputs
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_repl_class_across_inputs.sh $<TARGET_FILE:protost>)
+
+add_test(NAME cli_repl_redeclare_stale_method
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_repl_redeclare_stale_method.sh $<TARGET_FILE:protost>)
+add_test(NAME cli_repl_generated_new_in_place
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_repl_generated_new_in_place.sh $<TARGET_FILE:protost>)
+
+add_test(NAME cli_unset_constant_error_reserved
+    COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_unset_constant_error_reserved.sh $<TARGET_FILE:protost>)
 
 add_test(NAME cli_callback_error_reported
     COMMAND ${PROTOST_SH} ${CMAKE_SOURCE_DIR}/tests/cli/test_cli_callback_error_reported.sh $<TARGET_FILE:protost>)

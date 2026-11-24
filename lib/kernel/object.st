@@ -95,13 +95,35 @@ Collection >> isCollection
 
 "--- instance creation ---------------------------------------------------------
  new sends initialize, as in Smalltalk-80 implementations since Pharo/Squeak;
- basicNew is the raw allocator."
+ basicNew is the raw allocator. Object class >> new is the 0.16.1 method and
+ checks nothing, so a class without constants pays nothing for the explicit
+ state. A class that owns constants gets a generated class-side new
+ (ConstantConstructor.cpp, explicit-state spec §6.2) that runs super new and
+ then checks that initialize set every constant (M13); basicNew does not."
 
 Object class >> new
   | instance |
   instance := self basicNew.
   instance initialize.
   ^ instance.
+
+"The end of a class-side new that does not reach Object class >> new
+ (SortedCollection, WriteStream, Random, UUID): it sends initialize once, as
+ Object class >> new does, and answers anInstance. The kernel classes that use
+ it define no initialize of their own, so for them the send runs
+ Object >> initialize and changes nothing. For a user subclass with
+ constants, the generated new runs this new as its super new and then makes
+ the end-of-construction check.
+
+ The other kernel and library class-side constructors (sortBlock:, on:,
+ seed:, x:y:, ...) build with basicNew and a setter and, as in Pharo, do not
+ send initialize, which belongs to new. They end with the primitive
+ __checkConstructed:selector:, which answers the instance at once for a
+ class without constants and otherwise runs the M13 check naming the
+ constructor: a subclass with constants needs its own constructor."
+Object class >> __checkedNew: anInstance
+  anInstance initialize.
+  ^ anInstance.
 
 Object >> initialize
   ^ self.

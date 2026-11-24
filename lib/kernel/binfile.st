@@ -113,7 +113,8 @@ BinaryFile class >> open: aPath options: anArrayOfSymbols
       , (each isString ifTrue: ['#' , each] ifFalse: [each printString])].
     flags := flags bitOr: (1 bitShift: i - 1)].
   p := aPath asFileReference pathString.
-  ^ self basicNew setHandle: (self __binFileOpen: p flags: flags) path: p.
+  ^ self __checkConstructed: (self basicNew setHandle: (self __binFileOpen: p flags: flags) path: p)
+      selector: #open:options:.
 
 BinaryFile >> setHandle: anInteger path: aString
   handle := anInteger.

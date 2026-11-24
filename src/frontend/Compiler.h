@@ -74,6 +74,14 @@ public:
         // S37: the `uses:` clause is an expression the compiler cannot read
         // as a list of class names, so the mixins' variables are unknown.
         bool mixinsUnknown = false;
+        // The modifiers of the class's OWN non-plain instance variables
+        // (explicit-state spec §6.1); a variable not listed is plain.
+        std::unordered_map<std::string, IvarModifier> modifiers;
+        // The class is composed at run time by `addBehavior:` / `addParent:`
+        // (in this module or an earlier one): parents, and constants, the
+        // compiler does not see. The compile-time M9 skips it; the
+        // install-time check judges it (Task 6 ruling m1).
+        bool behaviorAdded = false;
     };
 
     // S37: classes the runtime builds in C++ (Object, Error, Collection, ...).
@@ -96,6 +104,13 @@ public:
     const ScopeAnalysis& analysis() const { return analysis_; }
 
     const std::unordered_map<std::string, ClassInfo>& classes() const { return classes_; }
+
+    // The modifier of the instance variable `name` as `cls` sees it: its own
+    // declaration's, or the one of the superclass or mixin that declares it,
+    // walked as instVarsThroughChain walks them. Plain for a name no class in
+    // view declares. Reads the classes in view: before compileModule, the
+    // shared registry and the known classes; after it, also the module's.
+    IvarModifier modifierThroughChain(const std::string& cls, const std::string& name) const;
 
 private:
     std::string currentMethodDebugName_;   // e.g. "A>>inner", for block frame names
@@ -151,6 +166,8 @@ private:
     void reportDuplicateNames(const std::vector<std::string>& names, size_t from,
                               const std::string& where);
     void emitSetInstVarNames(BytecodeModule& m, const ast::Node& classDecl);
+    // Whether a ClassDecl declares any non-plain instance variable.
+    static bool hasIvarModifiers(const ast::Node& classDecl);
     // Arguments of the blocks being inlined (a to:do: loop variable, an
     // ifNotNil: arm's argument): the scope whose slots bind them, the name
     // and the slot, innermost last. The slot tells the argument from an
@@ -206,6 +223,26 @@ private:
     // lowercase name compiles to PUSH_LATE_VAR / STORE_LATE_VAR, resolved
     // against the real class when the method is installed.
     bool currentMethodLate_ = false;
+    // The selector of the method being emitted (empty outside a method).
+    // A constant instance variable is assigned only in the instance-side
+    // `initialize` (explicit-state spec §6.2).
+    std::string currentMethodSelector_;
+    // The store opcode of `:=` to the instance variable `name` of the
+    // current method's class, by its modifier (spec §6.2, §6.4, §6.5): a
+    // constant in the instance-side `initialize` is STORE_CONST_INSTVAR, and
+    // anywhere else M1 (M2 inside a real block); an atomic variable is M4;
+    // a write-once variable is STORE_ONCE_INSTVAR, which its emitters always
+    // precede with DUP (pre-flight ruling C2).
+    // Errors are reported here; the opcode answered keeps the code well
+    // formed (the module is not run after an error).
+    Op     instVarStoreOp(const std::string& name);
+    // Whether `name`, an instance variable of the current method's class, is
+    // a constant read by PUSH_CONST_INSTVAR (instance side only, G1).
+    bool   isConstantInstVar(const std::string& name) const;
+    // Whether the code being emitted is inside a real block of the current
+    // method: a block scope between the method scope and here that is not
+    // a de-optimised copy of an inlined block.
+    bool   insideRealBlock() const;
     // Sets the name-resolution context above for the method declaration `n`
     // (MethodDecl or CallMethodDecl), or clears it.
     void enterMethodClass(const ast::Node& n);
@@ -235,6 +272,7 @@ private:
     bool assignsReplGlobalInBlock(const std::string& name) const;
 
     void   collectClasses(const ast::Node& module);
+    void   markBehaviorAdded(const ast::Node& n);
     void   emitExpr(BytecodeModule& m, const ast::Node& n);
     void   emitStatement(BytecodeModule& m, const ast::Node& n);
     // Emits the statements stmts[from..end) as a body does: each statement,

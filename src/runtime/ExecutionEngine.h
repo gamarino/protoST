@@ -323,6 +323,14 @@ private:
         if (f.sp == 0) [[unlikely]] operandStackUnderflow("engine operand stack peek on empty");
         return ctx_->getAutomaticLocals()[opStackBase(f) + f.sp - 1];
     }
+    // IVAR_GROUP_END's tail: a run of `count` assignments leaves its values
+    // on the operand stack until its last write; cut them, keeping only the
+    // last value, which is the run's value.
+    PROTOST_ENGINE_INLINE void cutInstVarGroupValues(Frame& f, uint16_t count) {
+        const proto::ProtoObject* last = pop(f);
+        f.sp -= count - 1u;
+        push(f, last);
+    }
 #undef PROTOST_ENGINE_INLINE
     [[noreturn]] void operandStackOverflow(const Frame& f);
     [[noreturn]] static void operandStackUnderflow(const char* what);
@@ -352,6 +360,60 @@ private:
 
     void storeInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t nameConst,
                       const proto::ProtoObject* val);
+    // The refusal of STORE_INSTVAR, IVAR_GROUP and IVAR_GROUP_END when the
+    // receiver is an immutable value: nothing was written. Signals
+    // ModificationForbidden in place (explicit-state spec §13.1, pre-flight
+    // ruling C1), so on:do: catches it by class. ModificationForbidden is not
+    // resumable, so a handler leaves by unwinding; the caller still
+    // re-acquires its frame should the signal return. Out of line and cold:
+    // the store handlers' fast path is unchanged.
+#if defined(_MSC_VER)
+    __declspec(noinline)
+#else
+    __attribute__((noinline, cold))
+#endif
+    // Takes the name's constant index, not a string: the string is built
+    // here, in the cold helper, so runLoop's handlers build no std::string
+    // temporary (one in IVAR_GROUP_END's refusal branch grew runLoop's
+    // frame and cleanup paths and cost every plain read; 0.17.0 gate).
+    void refuseImmutableStore(proto::ProtoContext* ctx, const BytecodeModule& m,
+                              uint32_t nameConst, const proto::ProtoObject* self);
+    // STORE_CONST_INSTVAR's write: a CAS of `val` from unset into the
+    // constant named by constant `nameConst`, on the frame's `self`. Storing
+    // nil into an unset constant does nothing. A set constant (M3) or an
+    // immutable receiver signals ModificationForbidden in place.
+    void storeConstInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t nameConst,
+                           const proto::ProtoObject* val);
+    // STORE_ONCE_INSTVAR's write (spec §6.3): a CAS of `val` from unset into
+    // the write-once variable named by constant `nameConst`, on the frame's
+    // `self`. Answers the value the variable holds afterwards: `val` when
+    // this write won, the installed value when it lost to an identical or
+    // `=` one, the current value (nil when unset) when `val` is nil. A
+    // losing write whose value is not `=` signals ModificationForbidden
+    // (M12) in place; ModificationForbidden is not resumable, so no handler
+    // supplies the store's value. An exception from `=` propagates. Runs
+    // Smalltalk code (the `=` send, a handler): the caller re-acquires its
+    // frame after. It is safe from FutureYield only because `wait` never
+    // yields inside a nested engine, where the `=` send runs
+    // (future_prims.cpp, prim_Future_wait).
+    const proto::ProtoObject* storeOnceInstVar(proto::ProtoContext* ctx, const Frame& f,
+                                               uint32_t nameConst,
+                                               const proto::ProtoObject* val);
+    // PUSH_CONST_INSTVAR's slow path: the constant named by constant
+    // `nameConst` is unset on the frame's `self`. Signals UnsetConstantError
+    // (M14) in place and answers what the signal answers. Runs Smalltalk code
+    // (a handler): the caller re-acquires its frame after.
+#if defined(_MSC_VER)
+    __declspec(noinline)
+#else
+    __attribute__((noinline, cold))
+#endif
+    const proto::ProtoObject* unsetConstantRead(proto::ProtoContext* ctx, const Frame& f,
+                                                uint32_t nameConst);
+    // `an Account`: the receiver's class name in printString's default form,
+    // as the modifier errors (M3, M12) name the object.
+    std::string ivarOwnerDescription(proto::ProtoContext* ctx,
+                                     const proto::ProtoObject* self) const;
     void flushInstVarGroup(proto::ProtoContext* ctx, Frame& f);
 
     // Push a new frame for module `m`, returning a reference is unsafe across

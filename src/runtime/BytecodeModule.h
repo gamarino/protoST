@@ -165,13 +165,25 @@ public:
     // load.
     // ---------------------------------------------------------------------
 
+    // Both fast paths below are forced inline (0.17.0): they run on every
+    // instance-variable read and every send, and GCC stopped inlining
+    // ivSymbol into PUSH_INSTVAR once runLoop grew by three handlers, which
+    // cost about 16 cycles per plain read (the 0.17.0 §14.1 gate). The slow
+    // paths stay out of line.
+#if defined(_MSC_VER)
+#define PROTOST_MODULE_INLINE __forceinline
+#else
+#define PROTOST_MODULE_INLINE inline __attribute__((always_inline))
+#endif
+
     // Interned symbol for constant-pool entry `i`, cached. The opcodes that
     // resolve a name — SEND_* (the selector), PUSH/STORE_GLOBAL,
     // PUSH/STORE_CAPTURED — run constantly; calling createSymbol (a SymbolTable
     // hash over a freshly parsed rope) on every execution was measured as a
     // dominant message-path cost. The symbol for a given constant never
     // changes, so it is interned once and cached.
-    const proto::ProtoString* constSym(proto::ProtoContext* ctx, size_t i) const {
+    PROTOST_MODULE_INLINE const proto::ProtoString* constSym(proto::ProtoContext* ctx,
+                                                         size_t i) const {
         if (const ConstCache* c = constCache_.load(std::memory_order_acquire);
             c && i < c->size) {
             if (const proto::ProtoString* s =
@@ -185,7 +197,8 @@ public:
     // mangled instance-variable storage key (PUSH_INSTVAR / STORE_INSTVAR).
     // Same rationale as constSym; a separate entry because the key carries
     // the "_iv_" prefix.
-    const proto::ProtoString* ivSymbol(proto::ProtoContext* ctx, size_t i) const {
+    PROTOST_MODULE_INLINE const proto::ProtoString* ivSymbol(proto::ProtoContext* ctx,
+                                                         size_t i) const {
         if (const ConstCache* c = constCache_.load(std::memory_order_acquire);
             c && i < c->size) {
             if (const proto::ProtoString* s =
@@ -268,6 +281,14 @@ public:
         lateMethodNames_ = std::move(methodNames);
     }
     bool hasLateBinding() const { return hasLateBinding_; }
+    // Whether this module is the de-optimised copy of an inlined block
+    // (Compiler::compileDeoptBlock): a real block only when the receiver of
+    // the inlined send is not a Boolean, standing for code the source wrote
+    // inline. A constant may be assigned in it (explicit-state spec §6.2);
+    // install-time resolution reads the flag to tell such a copy from a
+    // real closure.
+    void setDeoptCopy(bool deoptCopy) { isDeoptCopy_ = deoptCopy; }
+    bool isDeoptCopy() const { return isDeoptCopy_; }
     bool lateReadsFallBackToGlobals() const { return lateReadsGlobal_; }
     const std::vector<std::string>& lateMethodNames() const { return lateMethodNames_; }
     // The resolution of the module's late-bound instructions, done once, by
@@ -328,6 +349,13 @@ public:
     // own class. Set by the compiler's MethodDecl emission.
     void setDefiningClass(const std::string& s) { definingClass_ = s; }
     const std::string& definingClass() const { return definingClass_; }
+
+    // The source line of a method's header (`Account class >> number:
+    // owner:`), set by the compiler on a method body; an error about the
+    // method as a whole, reported when it is installed, names it. Falls back
+    // to the line of the body's first instruction when none was recorded.
+    void setHeaderLine(int line) { headerLine_ = line; }
+    int  methodLine() const { return headerLine_ > 0 ? headerLine_ : lineForPc(0); }
 
     // The identity of that class: the `__class_id__` the class object carries,
     // stamped on this module and its blocks when the method is installed
@@ -509,6 +537,7 @@ private:
     std::vector<InstVarGroupEntry>      groupEntries_;  // IVAR_GROUP operands
     std::vector<DeoptEntry>             deoptEntries_;  // DEOPT_ENTER/EXIT operands
     bool                                hasLateBinding_ = false;   // S37
+    bool                                isDeoptCopy_ = false;
     bool                                lateReadsGlobal_ = false;
     std::vector<std::string>            lateMethodNames_;
     mutable std::atomic<int>            lateState_{0};   // kLate*
@@ -530,6 +559,7 @@ private:
     std::vector<std::unique_ptr<BytecodeModule>> blocks_;
     int argCount_ = 0;
     std::string definingClass_;   // BL-1: class owning this method body
+    int headerLine_ = 0;          // a method body's header line (0: none)
     mutable std::atomic<std::int64_t> definingClassId_{0};  // its __class_id__
     // Call-form signature (populated by the compiler for call-form bodies).
     bool isCallForm_   = false;

@@ -63,6 +63,7 @@
 #include "runtime/UnhandledSTException.h"
 #include "runtime/NativeExceptionBridge.h"
 #include "runtime/TransientPin.h"
+#include "runtime/ValueFormat.h"
 #include "primitives/StringSupport.h"
 #include "runtime/ExecutionEngine.h"
 #include "modules/STModuleProvider.h"
@@ -791,6 +792,52 @@ const proto::ProtoObject* signalErrorNamed(STRuntime& rt, proto::ProtoContext* c
         return signalNativeError(rt, ctx, message);
     t_signalFromPrimitive = true;
     return signalErrorOfClassWith(rt, ctx, cls, message, ivar, value);
+}
+
+// M14 (explicit-state spec §6.2, §6.9): signal a fresh UnsetConstantError
+// whose `receiver` is the object whose constant was read and whose
+// `variableName` is the constant's name, a String. Its text names the
+// receiver as printString's default does, from the class name alone, so the
+// receiver's own printOn: (which could read the unset constant again) is
+// never sent. Built as signalMessageNotUnderstood builds its exception, and
+// non-resumable like every Error.
+const proto::ProtoObject* signalUnsetConstantError(STRuntime& rt, proto::ProtoContext* ctx,
+                                                   const proto::ProtoObject* receiver,
+                                                   const std::string& variableName) {
+    if (!receiver) receiver = PROTO_NONE;
+    TransientPin pinReceiver(ctx, receiver);
+    const std::string text = "constant '" + variableName + "' of "
+                             + articleAndClassName(rt, ctx, receiver) + " read before it was set";
+    // The class captured when the kernel loaded, never a global-name lookup:
+    // the reserved global cannot be rebound, and even if it were, M14 would
+    // keep its class (spec §6.9). Without a kernel there is no class.
+    const proto::ProtoObject* cls = rt.bootstrap().unsetConstantErrorClass;
+    if (!cls) return signalNativeError(rt, ctx, text);
+    const proto::ProtoObject* exc =
+        const_cast<proto::ProtoObject*>(cls)->newChild(ctx, /*isMutable=*/true);
+    TransientPin pinExc(ctx, exc);
+    exc->setAttribute(ctx, msgTextKey(ctx), makeString(ctx, text));
+    exc->setAttribute(ctx, resumableKey(ctx), PROTO_FALSE);
+    exc->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "_iv_receiver"), receiver);
+    exc->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "_iv_variableName"),
+                      makeString(ctx, variableName));
+    return signalInstance(rt, ctx, exc);
+}
+
+const char* const kUnsetConstantErrorReservedText =
+    "UnsetConstantError is a reserved kernel class name; a class cannot be declared under it";
+const char* const kUnsetConstantErrorRebindText =
+    "UnsetConstantError is a reserved kernel class name; the global cannot be rebound";
+
+const proto::ProtoObject* refuseReservedGlobalStore(STRuntime& rt, proto::ProtoContext* ctx,
+                                                    const proto::ProtoString* key,
+                                                    const proto::ProtoObject* value) {
+    const Bootstrap& b = rt.bootstrap();
+    if (!b.unsetConstantErrorClass || key != b.sym.unsetConstantErrorName
+        || value == b.unsetConstantErrorClass)
+        return nullptr;
+    const proto::ProtoObject* v = signalErrorNamed(rt, ctx, "Error", kUnsetConstantErrorRebindText);
+    return v ? v : PROTO_NONE;
 }
 
 // A Message: the selector and the arguments of a send, as a

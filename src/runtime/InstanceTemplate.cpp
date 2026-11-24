@@ -85,6 +85,10 @@ void noteInstanceLayoutChanged() {
     g_layoutEpoch.fetch_add(1, std::memory_order_acq_rel);
 }
 
+long long instanceLayoutEpoch() {
+    return g_layoutEpoch.load(std::memory_order_acquire);
+}
+
 const proto::ProtoObject* instanceTemplate(STRuntime& rt, proto::ProtoContext* ctx,
                                            const proto::ProtoObject* cls) {
     if (!cls || cls == PROTO_NONE) return nullptr;
