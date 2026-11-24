@@ -339,6 +339,11 @@ public:
     void noteForeignCaller();
     // The most workers the pool grows to (enterBlockingIO, enterCappedWait).
     static constexpr std::size_t kMaxWorkers = 256;
+    // S50: at shutdown the workers leave one at a time (~STRuntime lets one
+    // leave, joins it, then lets the next). A test accessor: the most workers
+    // that were leaving at once (out of workerLoop and not yet joined) during
+    // the last ~STRuntime of this process; 0 before any.
+    static int maxWorkersLeavingAtOnce();
 
     // F6 v6 (2026-05-23 night): worker-pool gate. Lets a caller pause the
     // entire pool — workers in flight finish their current drainOne, but

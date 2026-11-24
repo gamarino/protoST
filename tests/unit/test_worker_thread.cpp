@@ -978,3 +978,28 @@ TEST_CASE("S4: a thread blocked in Future>>wait is counted exactly once",
     }
     unsetenv("PROTOST_WORKERS");
 }
+
+// S50: at shutdown the workers leave one at a time. Released together, every
+// worker ran protoCore's thread teardown at once, and its young-generation
+// submit spins on a process-wide lock: with the 256 workers of a nested-wait
+// program (S40) that took longer than 900 s under ThreadSanitizer on four
+// CPUs (CI 45420985532). ~STRuntime now lets one worker leave, joins it, and
+// only then lets the next one go, so at most one worker is ever between
+// leaving workerLoop and its join. The count is structural: it does not
+// depend on timing, and before the gate every worker of the pool left at
+// once.
+TEST_CASE("S50: workers leave one at a time at shutdown",
+          "[engine][actors][parallel][s50]") {
+    const char* old = std::getenv("PROTOST_WORKERS");
+    const std::string saved = old ? old : "";
+    setenv("PROTOST_WORKERS", "8", 1);
+    std::size_t workers = 0;
+    {
+        protoST::STRuntime rt;
+        workers = rt.workerCount();
+    }
+    if (old) setenv("PROTOST_WORKERS", saved.c_str(), 1);
+    else unsetenv("PROTOST_WORKERS");
+    REQUIRE(workers == 8);
+    CHECK(protoST::STRuntime::maxWorkersLeavingAtOnce() == 1);
+}
