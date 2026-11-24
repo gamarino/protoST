@@ -1,0 +1,98 @@
+name: Diag macOS cli_actor_stress hang
+
+# Temporary diagnostic (never merged): loops the cli_actor_stress workload on
+# macOS against protoCore 3.6.1 and 3.6.2 and, on a hang, captures every
+# thread's stack.
+
+on:
+  push:
+    branches: ['diag/actor-stress-macos']
+
+permissions:
+  contents: read
+
+jobs:
+  loop:
+    name: ${{ matrix.ref }} transitions=${{ matrix.transitions }} (${{ matrix.shard }})
+    runs-on: macos-15
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: [v3.6.1, v3.6.2]
+        transitions: ['1']
+        shard: [a, b]
+        include:
+          - ref: v3.6.2
+            transitions: '0'
+            shard: a
+          - ref: v3.6.2
+            transitions: '0'
+            shard: b
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: protoST }
+      - uses: actions/checkout@v4
+        with: { repository: numaes/protoCore, ref: '${{ matrix.ref }}', path: protoCore }
+      - uses: actions/checkout@v4
+        with: { repository: gamarino/protoIO, ref: v0.7.1, path: protoIO }
+      - name: Dependencies
+        run: |
+          for f in readline openssl@3 ninja coreutils; do brew list "$f" >/dev/null 2>&1 || brew install "$f"; done
+          echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          echo "EXTRA_PREFIX=;$(brew --prefix readline)" >> "$GITHUB_ENV"
+      - name: Build protoCore and protoST (RelWithDebInfo)
+        run: |
+          cmake -S protoCore -B protoCore/build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build protoCore/build --parallel 4
+          cmake --install protoCore/build --prefix "$GITHUB_WORKSPACE/prefix"
+          cd protoST
+          cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPROTOCORE_REQUIRE_PACKAGE=ON \
+            "-DCMAKE_PREFIX_PATH=$GITHUB_WORKSPACE/prefix$EXTRA_PREFIX" "-DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR"
+          cmake --build build --parallel 4 --target protost
+      - name: Loop the workload
+        env:
+          PROTOCORE_SHAPE_TRANSITIONS: ${{ matrix.transitions }}
+        run: |
+          cat > w.st <<'ST'
+          Object subclass: #Sink instanceVariableNames: 'count'.
+          Sink >> initialize  count := 0. ^ self.
+          Sink >> ping  count := count + 1. ^ count.
+          Sink >> count  ^ count.
+          base := Sink new. base initialize.
+          sink := base asActor.
+          1 to: 1000 do: [ :i | sink ping ].
+          (sink count) wait.
+          ST
+          P=protoST/build/protost
+          hangs=0; bad=0; N=400
+          for i in $(seq 1 $N); do
+            "$P" --print-last w.st > out.txt 2>&1 &
+            pid=$!
+            t=0
+            while kill -0 $pid 2>/dev/null && [ $t -lt 150 ]; do sleep 0.1; t=$((t+1)); done
+            if kill -0 $pid 2>/dev/null; then
+              hangs=$((hangs+1))
+              echo "::warning::hang at run $i (pid $pid)"
+              echo "=== run $i: output so far"; cat out.txt
+              if [ $hangs -le 2 ]; then
+                sudo lldb -p $pid --batch -o "thread backtrace all" > "lldb-$i.txt" 2>&1 || true
+                sample $pid 2 -file "sample-$i.txt" >/dev/null 2>&1 || true
+                echo "=== lldb run $i"; cat "lldb-$i.txt"
+              fi
+              kill -9 $pid; wait $pid 2>/dev/null || true
+            else
+              wait $pid; rc=$?
+              last=$(tail -1 out.txt)
+              if [ $rc -ne 0 ] || [ "$last" != 1000 ]; then bad=$((bad+1)); echo "bad run $i rc=$rc last='$last'"; fi
+            fi
+          done
+          echo "ref=${{ matrix.ref }} transitions=${{ matrix.transitions }} runs=$N hangs=$hangs bad=$bad" | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stacks-${{ matrix.ref }}-t${{ matrix.transitions }}-${{ matrix.shard }}
+          path: |
+            lldb-*.txt
+            sample-*.txt
+          if-no-files-found: ignore
