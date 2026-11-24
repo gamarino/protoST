@@ -23,10 +23,10 @@ name: CI
 # nightly schedule.  A pinned ref makes a red pull request unambiguous.  The
 # schedule keeps the integration signal separate, and the summary always records
 # the protoCore commit actually used.  The `test` job runs twice: against the
-# pinned release (3.6.1) and against the declared minimum (3.6.1 since protoST
+# pinned release (3.6.2) and against the declared minimum (3.6.1 since protoST
 # 0.13.0, the floor entry -- this repository's only floor job; it stays on the
 # floor on the schedule).  protoCore 3.4.0 changed the ABI (SOVERSION 5);
-# 3.5.x, 3.6.0 and 3.6.1 kept it.  3.6.1 is the floor because it first
+# 3.5.x and 3.6.x kept it.  3.6.1 is the floor because it first
 # provides ProtoObject::newClone, which the instance templates use.
 #
 # TWO BUGS OF THIS REPOSITORY'S OWN SHAPE THIS FILE HAS TO HANDLE:
@@ -66,11 +66,11 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  # protoCore 3.6.1 (tag v3.6.1), SOVERSION 5: what every
-  # push and pull request builds against. The declared minimum, also 3.6.1
+  # protoCore 3.6.2 (tag v3.6.2), SOVERSION 5: what every
+  # push and pull request builds against. The declared minimum, 3.6.1
   # (the first release with ProtoObject::newClone), is what the floor entry of
   # the `test` job builds. Bump deliberately.
-  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'v3.6.1' }}
+  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'v3.6.2' }}
   # The test excluded from the gate, run in the `non-gating` job:
   #   F6 v2 T7: two actors ...    a wall-clock proof of parallelism: two 200 ms
   #                               sleeps must finish inside 350 ms
@@ -102,12 +102,12 @@ jobs:
       matrix:
         include:
           - name: Build and test suite
-            # Empty: env.PROTOCORE_REF (3.6.1, or master on the schedule).
+            # Empty: env.PROTOCORE_REF (3.6.2, or master on the schedule).
             protocore_ref: ''
           # THE FLOOR JOB, the only one in this repository (cross-platform.yml
           # builds the pin on macOS and Windows). protoCore 3.6.1 (tag v3.6.1,
           # 00a90df3), SOVERSION 5: PROTOCORE_MIN_VERSION in CMakeLists.txt,
-          # equal to the pin since protoST 0.13.0. 3.6.1 first provides
+          # the pin from protoST 0.13.0 to 0.17.0 (0.17.1 pins 3.6.2). 3.6.1 first provides
           # ProtoObject::newClone (the instance templates), so no older
           # protoCore links (3.4.0, f63adc08, was the floor up to 0.12.0).
           # Built on every event, the schedule included, so a change that
@@ -316,7 +316,7 @@ jobs:
     timeout-minutes: 45
     # Gates. The one race the label used to report, in protoCore 3.5.1's
     # ProtoSpace::newThread (KNOWN_ISSUES.md K10), is fixed in 3.5.2; the job
-    # builds the pinned env.PROTOCORE_REF, 3.6.1 (master on the schedule).
+    # builds the pinned env.PROTOCORE_REF, 3.6.2 (master on the schedule).
     steps:
       - name: Check out protoST
         uses: actions/checkout@v4
