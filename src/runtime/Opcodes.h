@@ -211,9 +211,10 @@ enum class Op : uint8_t {
     // Storing nil never writes and answers the current value.
     STORE_ONCE_INSTVAR  = 64, // arg = constant pool symbol index (variable name)
     // Explicit state (0.17.0): a read of a constant instance variable, in any
-    // instance-side method or block (spec §6.2). Reads like PUSH_INSTVAR; a
-    // constant that is unset (absent or nil) signals UnsetConstantError (M14)
-    // in place instead of answering nil. Plain, write-once and atomic reads
+    // instance-side method or block (spec §6.2). Reads the receiver's OWN
+    // attribute only (never the chain, unlike PUSH_INSTVAR); a constant that
+    // is unset (absent or nil) signals UnsetConstantError (M14) in place
+    // instead of answering nil. Plain, write-once and atomic reads
     // keep PUSH_INSTVAR, so they pay nothing for the check.
     PUSH_CONST_INSTVAR  = 65, // arg = constant pool symbol index (variable name)
     // Prefix carrying the next-higher byte of the following instruction's

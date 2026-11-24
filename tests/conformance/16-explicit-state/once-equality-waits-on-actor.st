@@ -22,6 +22,7 @@ Waiter >> sink: s answer: a
 Waiter >> answer
   ^ answer
 Waiter >> = other
+  "The store evaluates installed = new, so the operand order matters."
   ^ (sink echo: other answer) wait
 
 Object subclass: #Holder instanceVariableNames: '' writeOnceNames: 'key'.

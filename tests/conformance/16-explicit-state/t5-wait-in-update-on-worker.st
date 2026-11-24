@@ -18,7 +18,9 @@ Echo >> echo: x
 Object subclass: #Updater instanceVariableNames: ''.
 Updater >> update: anAccount waitingOn: aBlock
   ^ [anAccount update: #balance with: [:old | aBlock value: old]]
-      on: Error do: [:e | e messageText]
+      on: Error do: [:e |
+        "M7 is a plain Error (spec §12), not one of its subclasses."
+        e class == Error ifTrue: [e messageText] ifFalse: ['wrong class: ' , e class name]]
 
 | acct echo updater r1 r2 r3 |
 acct := Account new.

@@ -608,7 +608,8 @@ name := expression
 
 Assignment binds `name` to the value of `expression`. The target may be a
 method/block temporary, a method argument, an instance variable of the current
-method's class, or (at module top level) a global. An assignment is itself an
+method's class, or (at the top level of a file) an implicit top-level local
+([§4.9](#49-globals)); at the REPL prompt it is a global. An assignment is itself an
 expression whose value is the assigned value, so `a := b := 0` is legal.
 
 ### 3.7 Return
@@ -961,10 +962,18 @@ a String or Symbol is shown without quotes.
 
 ### 4.9 Globals
 
-The global namespace holds all class names and any name assigned at module top
-level. A free identifier in an expression that is not a local, argument, or
-instance variable resolves as a global. A failed global lookup is a runtime
-error (`undefined global: X`).
+The global namespace holds every class name, every name bound with
+`Smalltalk at:put:`, and, in the REPL, every name assigned at the prompt
+([§13.1](#131-the-repl)). A free identifier in an expression that
+is not a local, argument, or instance variable resolves as a global. A failed
+global lookup is a runtime error (`undefined global: X`).
+
+An assignment at the top level of a script file or a module does not create a
+global. It creates an implicit top-level local, which the rest of that file's
+top level and the blocks written there see. Methods, other modules and
+`Smalltalk at:` do not see it. When the name is already a global, the local
+shadows it for the rest of the file's top level, and the global keeps its
+value.
 
 ### 4.10 Extensible classes from modules
 
