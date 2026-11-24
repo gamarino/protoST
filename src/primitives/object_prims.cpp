@@ -523,19 +523,14 @@ const proto::ProtoObject* previousDeclaration(STRuntime& rt, proto::ProtoContext
 // declaration records anything, so the class
 // keeps its previous declaration, as a script file refuses the same program
 // at compile time.
-void refuseStaleMethods(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* cls,
-                        const std::string& className,
-                        const std::unordered_map<std::string, IvarModifier>& reintroduced) {
-    const Bootstrap& b = rt.bootstrap();
-    // The class, then those whose chain holds it, in name order.
-    std::vector<std::pair<std::string, const proto::ProtoObject*>> classes{{className, cls}};
-    std::vector<std::pair<std::string, const proto::ProtoObject*>> users;
-    for (const proto::ProtoObject* k : classesHolding(rt, ctx, cls))
-        users.emplace_back(ownClassName(b, ctx, k), k);
-    std::sort(users.begin(), users.end(),
-              [](const auto& x, const auto& y) { return x.first < y.first; });
-    classes.insert(classes.end(), users.begin(), users.end());
+using NamedClasses = std::vector<std::pair<std::string, const proto::ProtoObject*>>;
 
+// The judging step of refuseStaleMethods and refuseStaleAncestorMethods: the
+// methods of `classes` (in that order) against `reintroduced`.
+void judgeStaleSites(STRuntime& rt, proto::ProtoContext* ctx, const NamedClasses& classes,
+                     const std::string& className,
+                     const std::unordered_map<std::string, IvarModifier>& reintroduced) {
+    const Bootstrap& b = rt.bootstrap();
     struct Method { std::string selector; const BytecodeModule* code; };
     std::string refusal, misfit;   // the first of each, in that order of precedence
     for (const auto& [where, k] : classes) {
@@ -601,6 +596,75 @@ void refuseStaleMethods(STRuntime& rt, proto::ProtoContext* ctx, const proto::Pr
     }
     if (!refusal.empty()) throw ClassedErrorSignal("Error", refusal);
     if (!misfit.empty()) throw ClassedErrorSignal("Error", misfit);
+}
+
+void refuseStaleMethods(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* cls,
+                        const std::string& className,
+                        const std::unordered_map<std::string, IvarModifier>& reintroduced) {
+    const Bootstrap& b = rt.bootstrap();
+    // The class, then those whose chain holds it, in name order.
+    NamedClasses classes{{className, cls}};
+    NamedClasses users;
+    for (const proto::ProtoObject* k : classesHolding(rt, ctx, cls))
+        users.emplace_back(ownClassName(b, ctx, k), k);
+    std::sort(users.begin(), users.end(),
+              [](const auto& x, const auto& y) { return x.first < y.first; });
+    classes.insert(classes.end(), users.begin(), users.end());
+    judgeStaleSites(rt, ctx, classes, className, reintroduced);
+}
+
+// The same hazard from above (final re-review, New Issue 1): a class on
+// `cls`'s chain that cannot see the class declaring a constant, write-once
+// or atomic variable may still hold a method compiled when it declared that
+// name itself (it was redeclared without it since). Its instruction was
+// chosen for the old declaration, so it would write the variable of an
+// instance of `cls` past the modifier. `own` is the modified variables of
+// `cls` itself: the ones a declaration is about to record, or, when it is
+// null (addBehavior: rebuilt `cls` with its records), the ones `cls` records;
+// the ones `cls` inherits are read from the chain. Each class of the chain (`cls` excluded: its own
+// methods are judged by refuseStaleMethods) that neither is nor inherits the
+// declaring class is judged as refuseStaleMethods judges a reused class. A
+// chain with no modified variable, the kernel's, costs one pass over its
+// records and no method scan.
+void refuseStaleAncestorMethods(STRuntime& rt, proto::ProtoContext* ctx,
+                                const proto::ProtoObject* cls, const std::string& className,
+                                const std::unordered_map<std::string, IvarModifier>* own) {
+    const Bootstrap& b = rt.bootstrap();
+    struct Declared { IvarModifier modifier; const proto::ProtoObject* owner; };
+    std::unordered_map<std::string, Declared> modified;
+    if (own) {
+        for (const auto& [name, mod] : *own)
+            if (mod != IvarModifier::Plain) modified.emplace(name, Declared{mod, cls});
+    } else {
+        for (const ModifiedIvar& e : ownModifiersOf(ctx, cls))
+            if (e.modifier != IvarModifier::Plain)
+                modified.emplace(e.name, Declared{e.modifier, cls});
+    }
+    std::vector<const proto::ProtoObject*> chain;
+    forClassAndAncestors(ctx, cls, [&](const proto::ProtoObject* k) {
+        if (k == cls || k->isInteger(ctx) || k->isFloat(ctx) || k->asString(ctx)
+            || isMetaclass(b, ctx, k))
+            return;
+        chain.push_back(k);
+        for (const ModifiedIvar& e : ownModifiersOf(ctx, k))
+            if (e.modifier != IvarModifier::Plain)
+                modified.emplace(e.name, Declared{e.modifier, k});
+    });
+    if (modified.empty()) return;
+    auto sees = [&](const proto::ProtoObject* k, const proto::ProtoObject* owner) {
+        bool found = false;
+        forClassAndAncestors(ctx, k, [&](const proto::ProtoObject* p) { found = found || p == owner; });
+        return found;
+    };
+    // A class that sees one declaring class may be blind to another: each
+    // class is judged only against the names it cannot see.
+    for (const proto::ProtoObject* k : chain) {
+        std::unordered_map<std::string, IvarModifier> blind;
+        for (const auto& [name, d] : modified)
+            if (!sees(k, d.owner)) blind.emplace(name, d.modifier);
+        if (!blind.empty())
+            judgeStaleSites(rt, ctx, NamedClasses{{ownClassName(b, ctx, k), k}}, className, blind);
+    }
 }
 
 // Records the instance-variable names a class declares (`names`, a string of
@@ -692,6 +756,12 @@ void declareInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
         }
         // M10: the parents agree on the modifiers of the names they share.
         checkModifierConflicts(rt, ctx, cls);
+        {
+            std::unordered_map<std::string, IvarModifier> own;
+            for (std::size_t i = 0; i < modifiers.size(); ++i)
+                if (modifiers[i] != IvarModifier::Plain) own.emplace(declared[i], modifiers[i]);
+            refuseStaleAncestorMethods(rt, ctx, cls, name, &own);
+        }
         // M9: the generated constructor this declaration gives the class must
         // not take a selector a user method of the class already holds
         // (Task 6 ruling I1). Checked before anything is recorded.
@@ -704,7 +774,7 @@ void declareInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
     // declaration may now be wrong (this class's or, for a subclass or a
     // class using this one, an inherited variable). The epoch advances when
     // the declaration ends, after its last record, and also when a later
-    // step throws (the generated new refuses a user new, M9), so no cache
+    // step throws, so no cache
     // outlives the records it was built from.
     struct AdvanceLayoutEpoch { ~AdvanceLayoutEpoch() { noteInstanceLayoutChanged(); } } advance;
     auto* mcls = const_cast<proto::ProtoObject*>(cls);
@@ -1217,6 +1287,8 @@ const proto::ProtoObject* addBehaviorToClass(STRuntime& rt,
     // declare. Checked before the global is rebound, so a refused composition
     // leaves the class as it was.
     checkModifierConflicts(rt, ctx, newCls);
+    refuseStaleAncestorMethods(rt, ctx, newCls, ownClassName(rt.bootstrap(), ctx, newCls),
+                               nullptr);
 
     // D52: the rebuilt class gets its own metaclass, whose chain carries the
     // mixin's metaclass, and the class-side methods of the old one.

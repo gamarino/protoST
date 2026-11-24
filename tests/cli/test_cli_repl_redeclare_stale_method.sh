@@ -7,7 +7,8 @@
 # subclasses that use the variable, with the rule a method installed late
 # follows (M1, M2, M4), and is refused, signalled in place, when one of them
 # no longer fits; the class then keeps its previous declaration. A script
-# file refuses the same program at compile time.
+# file refuses the same program at compile time. Cases 6 and 7 are the same
+# hazard from above (a superclass or mixin method; final re-review).
 set -uo pipefail
 PROTOST="$1"
 fail() { echo "FAIL ($1): $out"; exit 1; }
@@ -86,4 +87,42 @@ out="$(printf '%s\n' \
   "(Foo new seta: 7; yourself) a." | "$PROTOST" -i 2>&1)"
 echo "$out" | grep -q "error" && fail "a plain variable brought back plain"
 echo "$out" | grep -q "=> 7" || fail "the method still works"
+
+# 6. From above (final re-review, New Issue 1): a superclass redeclared
+#    without 'a' keeps a method compiled when it declared 'a' plain; a new
+#    subclass that declares 'a' constant is refused, so the stale store cannot
+#    overwrite a set constant. Redefined, the declaration is accepted.
+out="$(printf '%s\n' \
+  "Object subclass: #Foo instanceVariableNames: 'a'." \
+  "Foo >> seta: x  a := x." \
+  "Object subclass: #Foo instanceVariableNames: 'b'." \
+  "Foo subclass: #Bar instanceVariableNames: '' constantNames: 'a'." \
+  "Smalltalk includesKey: #Bar." \
+  "Foo >> seta: x  ^ x." \
+  "Foo subclass: #Bar instanceVariableNames: '' constantNames: 'a'." \
+  "Bar >> initialize  a := 1." \
+  "Bar new instVarIsSet: #a." | "$PROTOST" -i 2>&1)"
+echo "$out" | grep -q "error: cannot assign to the constant 'a' of Foo outside initialize (line 1); Foo >> seta: was compiled when 'a' was plain: redefine it first, then declare Bar again" \
+  || fail "a stale superclass store"
+echo "$out" | grep -q "=> false" || fail "the refused subclass is not bound"
+echo "$out" | grep -q "=> true" || fail "the subclass is accepted once the method is redefined"
+
+# 7. The same through addBehavior: a mixin's stale store on a name the class
+#    declares constant is refused; a mixin with no stale method is accepted.
+out="$(printf '%s\n' \
+  "Object subclass: #Mx instanceVariableNames: 'a'." \
+  "Mx >> seta: x  a := x." \
+  "Object subclass: #Mx instanceVariableNames: 'b'." \
+  "Object subclass: #K instanceVariableNames: '' constantNames: 'a'." \
+  "K >> initialize  a := 1." \
+  "K addBehavior: Mx." \
+  "K new respondsTo: #seta:." \
+  "Object subclass: #Ok instanceVariableNames: 'z'." \
+  "Ok >> setz: x  z := x." \
+  "K addBehavior: Ok." \
+  "K new respondsTo: #setz:." | "$PROTOST" -i 2>&1)"
+echo "$out" | grep -q "error: cannot assign to the constant 'a' of Mx outside initialize (line 1); Mx >> seta: was compiled when 'a' was plain" \
+  || fail "a stale mixin store"
+echo "$out" | grep -q "=> false" || fail "the refused mixin is not added"
+echo "$out" | grep -q "=> true" || fail "a mixin without a stale method is added"
 echo PASS

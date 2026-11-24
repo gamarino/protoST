@@ -1258,7 +1258,12 @@ other read changes.
   declaration:
   `Foo >> initialize was compiled when 'a' was plain and does not fit 'a'
   constant: redefine it first, then declare Foo again`. A script file
-  refuses the same program at compile time.
+  refuses the same program at compile time. The same rule applies from
+  above: a declaration, or an `addBehavior:`, that gives a class a constant,
+  write-once or atomic variable is refused while a superclass or mixin that
+  does not see that declaration holds a method compiled when it declared the
+  name itself (`Foo >> seta: was compiled when 'a' was plain: redefine it
+  first, then declare Bar again`).
 - **Reflection.** `Behavior >> instVarModifierOf:` answers `#plain`,
   `#constant`, `#writeOnce` or `#atomic`, and signals an `Error` for an
   undeclared name (`Account has no instance variable 'zork'`).
