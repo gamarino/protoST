@@ -1,0 +1,14 @@
+    29.58%  [.] protoST::ExecutionEngine::runLoop(proto::ProtoContext*)
+    20.48%  [.] proto::ProtoObject::getAttribute(proto::ProtoContext*, proto::ProtoString const*, bool) const
+    10.65%  [.] proto::ProtoObject::getOwnAttributeDirect(proto::ProtoContext*, proto::ProtoString const*) const
+     3.25%  [.] protoST::ExecutionEngine::pushFrame(protoST::BytecodeModule const*, proto::ProtoObject const*, proto::ProtoObject const*, proto::ProtoObject const* const*, unsigned int, unsigned long)
+     2.10%  [k] 0xffffffff9c434fce
+     2.06%  [.] protoST::methodHolder(protoST::Bootstrap const&, proto::ProtoContext*, proto::ProtoObject const*)
+     1.38%  [.] protoST::ExecutionEngine::signalIfTooDeep(proto::ProtoContext*, protoST::ExecutionEngine::Frame&, protoST::BytecodeModule const*, unsigned int)
+     1.24%  [.] proto::ProtoObject::newClone(proto::ProtoContext*, bool) const
+     1.22%  [.] protoST::instanceTemplate(protoST::STRuntime&, proto::ProtoContext*, proto::ProtoObject const*)
+     1.20%  [.] proto::ProtoObject const* protoST::primitiveMethod<&protoST::(anonymous namespace)::prim_Behavior_hasConstants>(proto::ProtoContext*, proto::ProtoObject const*, proto::ParentLink const*, proto::ProtoArguments const*, proto::ProtoKeywordArguments const*)
+     1.17%  [.] proto::ProtoObject const* protoST::translateNativeException<protoST::ExecutionEngine::runLoop(proto::ProtoContext*)::{lambda()#1}>(protoST::STRuntime&, proto::ProtoContext*, protoST::ExecutionEngine::runLoop(proto::ProtoContext*)::{lambda()#1}&&)
+     1.12%  [.] proto::ProtoObject const* protoST::primitiveMethod<&protoST::(anonymous namespace)::prim_Behavior_basicNew>(proto::ProtoContext*, proto::ProtoObject const*, proto::ParentLink const*, proto::ProtoArguments const*, proto::ProtoKeywordArguments const*)
+     0.93%  [.] void proto::sweep::(anonymous namespace)::sweepLoop<false, true, false>(proto::sweep::SegmentSource&, proto::sweep::SweeperLocal&, unsigned int, proto::sweep::Engagement)
+     0.87%  [.] proto::ProtoContext::safepoint()

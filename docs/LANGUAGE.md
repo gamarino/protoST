@@ -1351,8 +1351,12 @@ be "set to nil": a field that is optional is write-once or plain.
 ```
 
 - The check runs only for a class that has constants. The class records
-  whether it has any, so `new` on any other class pays one test of a class
-  attribute.
+  whether it has any and keeps that answer on itself until a declaration
+  changes some class's layout. `new` on any other class therefore pays one
+  primitive send, which reads the kept answer, and runs no check. That send
+  is not free: a bare `new` of a class without constants costs about 520
+  CPU cycles more than in 0.16.1, which is +20 % on a loop doing nothing but
+  `new` (benchmarks/reports/2026-11-23-release-0.17.0-const-read.md).
 - A class-side `new` override that calls `super new` gets the check. One
   written `^ self basicNew initialize` (the Pharo idiom) does not.
 - `basicNew` stays allowed and skips the check. It is the raw allocator that

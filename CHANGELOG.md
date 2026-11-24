@@ -45,6 +45,11 @@ at 0.7.1, unchanged.
   - Reflection (`instVarNamed:put:`, `instVarAt:put:`), `copy`,
     `shallowCopy`, `deepCopy` and `inspect` (`<unset constant>`) honour the
     modifiers.
+  - A redeclaration keeps the modifier of every variable it repeats. One
+    that brings back a variable an earlier declaration dropped, with another
+    modifier, is refused while an installed method of the class, or of a
+    class that inherits it, was compiled for the old modifier (M1, M2 or M4,
+    or a "was compiled when" text); the class keeps its previous declaration.
 - **Opcodes** `STORE_CONST_INSTVAR` (63), `STORE_ONCE_INSTVAR` (64) and
   `PUSH_CONST_INSTVAR` (65) (VM.md 2.3, 1.9 and example 20). Plain reads and
   stores keep their instructions.
@@ -55,8 +60,15 @@ Behaviour changes for code that uses none of the new forms (spec §13.1):
 
 - **An instance-variable assignment to an immutable receiver signals
   `ModificationForbidden`** (`STORE_INSTVAR` and the end of a write group),
-  where it signalled a plain `Error`: same condition and text, now catchable
-  by class.
+  where it signalled a plain `Error`: same condition, now catchable by class.
+  The text names the variable and the receiver, in the form every refused
+  write to an immutable receiver now shares:
+  `cannot assign to the instance variable 'x' of a BlockClosure: the receiver is immutable; nothing was written`
+  (it was `instance variable assignment: the receiver is an immutable value; nothing was written`).
+  `instVarNamed:put:` on a block says `instVarNamed:put: cannot write the
+  instance variable 'x' of a BlockClosure: ...` instead of `instVarNamed:put:
+  the receiver is an immutable value (a block or a method); nothing was
+  written`.
 - **A refused declaration no longer leaves a half-built class bound.** The
   `uses:` and message forms bind the class only after its variables are
   declared, so a declaration refused for a modifier conflict or a reserved
@@ -89,6 +101,39 @@ Behaviour changes for code that uses none of the new forms (spec §13.1):
   set constants and write-once variables copy; it does not send
   `shallowCopy`, as in Pharo, so an override of `shallowCopy` is ignored by
   `deepCopy`.
+
+### Performance
+
+Measured in CPU cycles against 0.16.1, with three rounds of `perf stat -r 3`,
+a fresh copy of the binary and libprotoCore per run, and verified outputs
+(`benchmarks/reports/2026-11-23-release-0.17.0-const-read.md`).
+
+- **The §14.1 constant-read gate.**
+  - `attr_lookup` is 1.014 over the whole program and 0.995 with startup
+    subtracted. The residual is startup, +2.3 %: the larger kernel this
+    release loads. That is above the 1 % bound, and the maintainer accepted
+    it on 2026-11-23.
+  - `const_read` is 0.998 of `attr_lookup`, inside its 3 % bound.
+- **`BytecodeModule::constSym` and `ivSymbol` are forced inline**
+  (`always_inline`). GCC had stopped inlining `ivSymbol` into `PUSH_INSTVAR`
+  and `PUSH_OWN_INSTVAR` once the three new opcodes grew `runLoop`, which
+  cost about 16 cycles per plain read (`attr_lookup` was 1.061 before).
+- **Construction.** Every class caches on itself, per instance-layout epoch,
+  whether it has constants (`__has_constants_verdict__`). `new` and the kernel
+  constructors then read one own attribute instead of walking the class
+  chain. Even so, construction of a class without constants is still slower
+  than in 0.16.1:
+
+  | Program | 0.17.0 / 0.16.1 |
+  |---|---:|
+  | 1,000,000 × bare `new` | 1.198 (about 520 cycles per `new`) |
+  | `Point x:y:` | 1.038 |
+  | `Fraction numerator:denominator:` | 1.085 |
+  | `micro/instances.st` | 0.959 (noise) |
+
+  The cache itself changed these figures by less than noise. What remains is
+  the cost of the extra send in `Object class >> new` and of the
+  `__checkConstructed:selector:` call, not of the test those make.
 
 ### Deprecated
 
@@ -131,7 +176,10 @@ changes here.
   `unset-constant-error-global-reserved.st` and
   `cli_unset_constant_error_reserved` (the reserved global refused on every
   route), and the unit case that M14 keeps its class when the global is
-  rebound from C++.
+  rebound from C++. `const-verdict-never-stale.st` covers the cached
+  has-constants verdict under redeclaration, `addBehavior:` and mixins.
+  `cli_repl_redeclare_stale_method` covers the REPL redeclaration that brings
+  a variable back with another modifier.
 - `tests/unit/test_ivar_modifiers.cpp` (`IvarModifiers:` cases), among them
   the pin of the mutability probe.
 - `docs/vm-examples/20-explicit-state` (the VM listing of the new opcodes).

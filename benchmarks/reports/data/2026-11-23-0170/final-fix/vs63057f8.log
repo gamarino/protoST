@@ -1,0 +1,28 @@
+round 1/3
+  bare_new               old   3,079,321,509 cycles  (+-0.09%)  $S/ffix/perf/runs-diag/1
+  bare_new               new   3,075,160,251 cycles  (+-1.0%)  $S/ffix/perf/runs-diag/2
+  point_new              old   2,347,231,440 cycles  (+-1.32%)  $S/ffix/perf/runs-diag/3
+  point_new              new   2,461,340,895 cycles  (+-5.48%)  $S/ffix/perf/runs-diag/4
+  fraction_new           old   3,104,360,982 cycles  (+-0.29%)  $S/ffix/perf/runs-diag/5
+  fraction_new           new   3,114,021,495 cycles  (+-2.0%)  $S/ffix/perf/runs-diag/6
+round 2/3
+  bare_new               new   3,054,807,201 cycles  (+-1.36%)  $S/ffix/perf/runs-diag/7
+  bare_new               old   3,204,735,229 cycles  (+-1.66%)  $S/ffix/perf/runs-diag/8
+  point_new              new   2,299,169,956 cycles  (+-1.26%)  $S/ffix/perf/runs-diag/9
+  point_new              old   2,338,820,304 cycles  (+-3.29%)  $S/ffix/perf/runs-diag/10
+  fraction_new           new   3,195,178,937 cycles  (+-0.55%)  $S/ffix/perf/runs-diag/11
+  fraction_new           old   3,453,322,451 cycles  (+-3.07%)  $S/ffix/perf/runs-diag/12
+round 3/3
+  bare_new               old   3,147,673,708 cycles  (+-0.71%)  $S/ffix/perf/runs-diag/13
+  bare_new               new   3,174,108,614 cycles  (+-1.97%)  $S/ffix/perf/runs-diag/14
+  point_new              old   2,336,959,542 cycles  (+-1.38%)  $S/ffix/perf/runs-diag/15
+  point_new              new   2,297,440,721 cycles  (+-1.05%)  $S/ffix/perf/runs-diag/16
+  fraction_new           old   3,152,917,325 cycles  (+-1.54%)  $S/ffix/perf/runs-diag/17
+  fraction_new           new   3,101,830,005 cycles  (+-0.56%)  $S/ffix/perf/runs-diag/18
+
+mean cycles (perf -r 3, 3 round(s))
+  bare_new               old  3,143,910,149  new  3,101,358,689
+  point_new              old  2,341,003,762  new  2,352,650,524
+  fraction_new           old  3,236,866,919  new  3,137,010,146
+
+All runs verified.

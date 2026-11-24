@@ -1,0 +1,14 @@
+    29.53%  [.] protoST::ExecutionEngine::runLoop(proto::ProtoContext*)
+    18.28%  [.] proto::ProtoObject::getAttribute(proto::ProtoContext*, proto::ProtoString const*, bool) const
+    11.49%  [.] proto::ProtoObject::getOwnAttributeDirect(proto::ProtoContext*, proto::ProtoString const*) const
+     3.00%  [.] protoST::ExecutionEngine::pushFrame(protoST::BytecodeModule const*, proto::ProtoObject const*, proto::ProtoObject const*, proto::ProtoObject const* const*, unsigned int, unsigned long)
+     2.37%  [.] proto::ProtoObject const* protoST::translateNativeException<protoST::ExecutionEngine::runLoop(proto::ProtoContext*)::{lambda()#1}>(protoST::STRuntime&, proto::ProtoContext*, protoST::ExecutionEngine::runLoop(proto::ProtoContext*)::{lambda()#1}&&)
+     1.86%  [.] protoST::methodHolder(protoST::Bootstrap const&, proto::ProtoContext*, proto::ProtoObject const*)
+     1.79%  [k] 0xffffffff9c434fce
+     1.54%  [.] protoST::instanceTemplate(protoST::STRuntime&, proto::ProtoContext*, proto::ProtoObject const*)
+     1.26%  [.] proto::ProtoObject::newClone(proto::ProtoContext*, bool) const
+     1.07%  [.] proto::returnUnusedCellBatch(proto::ProtoSpace*, proto::Cell*)
+     1.04%  [.] proto::ProtoContext::safepoint()
+     1.01%  [.] proto::ProtoObject const* protoST::primitiveMethod<&protoST::(anonymous namespace)::prim_Behavior_hasConstants>(proto::ProtoContext*, proto::ProtoObject const*, proto::ParentLink const*, proto::ProtoArguments const*, proto::ProtoKeywordArguments const*)
+     0.97%  [.] protoST::ExecutionEngine::signalIfTooDeep(proto::ProtoContext*, protoST::ExecutionEngine::Frame&, protoST::BytecodeModule const*, unsigned int)
+     0.87%  [.] proto::ProtoSpace::getFreeCells(proto::ProtoContext*)
