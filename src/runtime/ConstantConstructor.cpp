@@ -354,18 +354,30 @@ void rebuildMetaclassChain(const Bootstrap& b, proto::ProtoContext* ctx,
                     if (h != ownHidden) out.push_back(h);
         }
     }
-    const proto::ProtoList* rest = ctx->newList();
-    TransientPin pinRest(ctx, asListObj(rest));
-    for (const proto::ProtoObject* e : out) {
-        rest = rest->appendLast(ctx, e);
-        pinRest.reset(asListObj(rest));
-    }
+    // Nothing is allocated when the chain is already right: this runs for
+    // every class declaration (the kernel loads hundreds), and building the
+    // lists unconditionally cost the 0.17.0 startup.
     std::vector<const proto::ProtoObject*> want;
-    if (ownHidden) {
-        ownHidden->setParents(ctx, rest);   // mutable: in place
-        want.push_back(ownHidden);
-    }
+    if (ownHidden) want.push_back(ownHidden);
     want.insert(want.end(), out.begin(), out.end());
+    bool hiddenRight = true;
+    if (ownHidden) {
+        const proto::ProtoList* hp = ownHidden->getParents(ctx);
+        const proto::proto_ulong hn = hp ? hp->getSize(ctx) : 0;
+        hiddenRight = hn == out.size();
+        for (proto::proto_ulong i = 0; hiddenRight && i < hn; ++i)
+            hiddenRight = hp->getAt(ctx, listIndex(i)) == out[i];
+    }
+    if (want == curV && hiddenRight) return;
+    if (ownHidden && !hiddenRight) {
+        const proto::ProtoList* rest = ctx->newList();
+        TransientPin pinRest(ctx, asListObj(rest));
+        for (const proto::ProtoObject* e : out) {
+            rest = rest->appendLast(ctx, e);
+            pinRest.reset(asListObj(rest));
+        }
+        ownHidden->setParents(ctx, rest);   // mutable: in place
+    }
     if (want == curV) return;
     const proto::ProtoList* all = ctx->newList();
     TransientPin pinAll(ctx, asListObj(all));

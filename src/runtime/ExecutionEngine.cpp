@@ -426,12 +426,13 @@ ExecutionEngine::storeInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t
     // assignment in BlockClosure methods; a method installed on BlockClosure
     // from a block made elsewhere still reaches it).
     if (self->setAttribute(ctx, sym, val) != self)
-        refuseImmutableStore(ctx, f.m->constSymbol(nameConst), self);
+        refuseImmutableStore(ctx, *f.m, nameConst, self);
 }
 
 void
-ExecutionEngine::refuseImmutableStore(proto::ProtoContext* ctx, const std::string& name,
-                                      const proto::ProtoObject* self) {
+ExecutionEngine::refuseImmutableStore(proto::ProtoContext* ctx, const BytecodeModule& m,
+                                      uint32_t nameConst, const proto::ProtoObject* self) {
+    const std::string name = m.constSymbol(nameConst);
     signalErrorNamed(rt_, ctx, "ModificationForbidden",
                      immutableReceiverText("cannot assign to", IvarModifier::Plain, name,
                                            ivarOwnerDescription(ctx, self)));
@@ -2991,8 +2992,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         const uint16_t count = e.count;
                         // The run is refused whole; the text names its
                         // first variable.
-                        refuseImmutableStore(ctx, f.m->constSymbol(f.m->instVarGroupEntry(first).nameConst),
-                                             self);
+                        refuseImmutableStore(ctx, *f.m, f.m->instVarGroupEntry(first).nameConst, self);
                         cutInstVarGroupValues(frames_.back(), count);
                         DISPATCH_DIRECT();
                         break;

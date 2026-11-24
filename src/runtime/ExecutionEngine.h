@@ -372,8 +372,12 @@ private:
 #else
     __attribute__((noinline, cold))
 #endif
-    void refuseImmutableStore(proto::ProtoContext* ctx, const std::string& name,
-                              const proto::ProtoObject* self);
+    // Takes the name's constant index, not a string: the string is built
+    // here, in the cold helper, so runLoop's handlers build no std::string
+    // temporary (one in IVAR_GROUP_END's refusal branch grew runLoop's
+    // frame and cleanup paths and cost every plain read; 0.17.0 gate).
+    void refuseImmutableStore(proto::ProtoContext* ctx, const BytecodeModule& m,
+                              uint32_t nameConst, const proto::ProtoObject* self);
     // STORE_CONST_INSTVAR's write: a CAS of `val` from unset into the
     // constant named by constant `nameConst`, on the frame's `self`. Storing
     // nil into an unset constant does nothing. A set constant (M3) or an
