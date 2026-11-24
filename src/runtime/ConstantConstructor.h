@@ -89,18 +89,6 @@ const proto::ProtoObject* constructWithConstants(STRuntime& rt, proto::ProtoCont
                                                  const proto::ProtoObject* args,
                                                  const proto::ProtoObject* selector);
 
-// Whether `cls` declares or inherits a constant: the one test `new` and the
-// kernel class-side constructors make (plan decision D-e). The answer comes
-// from `__has_constants__` read through the chain, and is cached on the class
-// itself under `__has_constants_verdict__` for the current instance-layout
-// epoch, as the constant cache and the instance template are: every
-// declaration of instance variables and every addBehavior: advances the
-// epoch, so a class without constants pays one own read per construction and
-// a cached answer never outlives a change of its chain. The verdict is a
-// SmallInteger (epoch * 2 + answer), so one publication sets both and the GC
-// has nothing to trace.
-bool classHasConstants(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* cls);
-
 // The end-of-construction check (M13): every constant of `cls` must be set on
 // `instance`, its own attribute neither absent nor nil. The first unset one,
 // in constantNamesOf order, signals an Error in place naming `selector`, and

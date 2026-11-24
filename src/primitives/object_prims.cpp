@@ -744,13 +744,6 @@ void declareInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
             if (modifiers[i] == IvarModifier::Constant) ownConstants.push_back(declared[i]);
         checkConstantConstructorFree(rt, ctx, cls, ownConstants);
     }
-    // Every instance template, constant cache and has-constants verdict
-    // built before this declaration may now be wrong (this class's or, for a
-    // subclass or a class using this one, an inherited variable). The epoch
-    // advances when the declaration ends, after its last record, and also
-    // when one of those records throws, so no record outlives the epoch it
-    // was cached in.
-    struct AdvanceLayoutEpoch { ~AdvanceLayoutEpoch() { noteInstanceLayoutChanged(); } } advance;
     auto* mcls = const_cast<proto::ProtoObject*>(cls);
     mcls->setAttribute(ctx, ivKey, names);
     if (!meta) {
@@ -772,6 +765,9 @@ void declareInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
         // (§6.2, D-d); a subclass that adds none inherits its superclass's.
         installConstantConstructor(rt, ctx, cls);
     }
+    // Every instance template built before this declaration may now lack a
+    // variable (this class's or, for a subclass, an inherited one).
+    noteInstanceLayoutChanged();
 }
 } // namespace
 
@@ -1247,8 +1243,7 @@ const proto::ProtoObject* addBehaviorToClass(STRuntime& rt,
     // copied user class method under the new selector refuses the
     // composition with M9 (Task 6 ruling I1), before the global is rebound.
     // The rebuilt class carries copies of the old one's per-epoch caches
-    // (instance template, constant cache, has-constants verdict), which a
-    // new epoch invalidates.
+    // (instance template, constant cache), which a new epoch invalidates.
     installConstantConstructor(rt, ctx, newCls);
     noteInstanceLayoutChanged();
 
@@ -2324,13 +2319,13 @@ const proto::ProtoObject* prim_Behavior_constructConstants(STRuntime& rt, proto:
 }
 
 // aClass __hasConstants   (private) → whether the class declares or inherits
-//   a constant: the one test `new` makes (plan decision D-e), answered by
-//   classHasConstants (the class's own verdict for the current layout epoch;
-//   ConstantConstructor.h).
+//   a constant: the one test `new` makes (plan decision D-e), the class's
+//   `__has_constants__` read through the chain.
 const proto::ProtoObject* prim_Behavior_hasConstants(STRuntime& rt, proto::ProtoContext* ctx,
                                                      const proto::ProtoObject* r,
                                                      const proto::ProtoObject* const*, int) {
-    return classHasConstants(rt, ctx, r) ? PROTO_TRUE : PROTO_FALSE;
+    return r->getAttribute(ctx, rt.bootstrap().sym.hasConstants) == PROTO_TRUE ? PROTO_TRUE
+                                                                               : PROTO_FALSE;
 }
 
 // aClass __checkConstantsOf: anInstance after: aSymbol   (private)
@@ -2351,8 +2346,8 @@ const proto::ProtoObject* prim_Behavior_checkConstantsOf(STRuntime& rt, proto::P
 // aClass __checkConstructed: anInstance selector: aSymbol   (private)
 //   The end-of-construction check of a class-side constructor that builds
 //   with basicNew and a setter (SortedCollection sortBlock:, Point x:y:, ...):
-//   for a class without constants (classHasConstants, the class's own
-//   verdict for the current layout epoch) it answers anInstance at once, so such constructors
+//   for a class without constants (the cached `__has_constants__`, read
+//   through the chain) it answers anInstance at once, so such constructors
 //   pay this one primitive call and no Smalltalk send; otherwise it is
 //   __checkConstantsOf:after: (M13, naming aSymbol). It sends no initialize.
 const proto::ProtoObject* prim_Behavior_checkConstructed(STRuntime& rt, proto::ProtoContext* ctx,
@@ -2361,7 +2356,7 @@ const proto::ProtoObject* prim_Behavior_checkConstructed(STRuntime& rt, proto::P
                                                          int argc) {
     if (argc != 2) throw NativeError("__checkConstructed:selector: expects 2 args");
     const proto::ProtoObject* instance = a[0] ? a[0] : PROTO_NONE;
-    if (!classHasConstants(rt, ctx, r)) return instance;
+    if (r->getAttribute(ctx, rt.bootstrap().sym.hasConstants) != PROTO_TRUE) return instance;
     const proto::ProtoString* sel = a[1] ? a[1]->asString(ctx) : nullptr;
     if (!sel) throw NativeError("__checkConstructed:selector: the selector must be a Symbol");
     return checkConstantsSet(rt, ctx, r, instance, sel->toStdString(ctx));

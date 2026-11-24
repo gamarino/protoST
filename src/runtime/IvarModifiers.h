@@ -11,9 +11,6 @@
 //                            'constant:number constant:owner atomic:balance';
 //   __has_constants__        true on a class that declares a constant; read
 //                            with getAttribute, so subclasses see it;
-//   __has_constants_verdict__ the class's own cached answer, for one layout
-//                            epoch, to whether it declares or inherits a
-//                            constant (classHasConstants, ConstantConstructor.h);
 //   __constant_constructor__ the generated constructor's Symbol (Task 6).
 //
 // Modifiers apply to instance variables only: class-instance variables and
