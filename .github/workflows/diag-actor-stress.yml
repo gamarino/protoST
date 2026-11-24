@@ -50,10 +50,11 @@ jobs:
           cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPROTOCORE_REQUIRE_PACKAGE=ON \
             "-DCMAKE_PREFIX_PATH=$GITHUB_WORKSPACE/prefix$EXTRA_PREFIX" "-DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR"
           cmake --build build --parallel 4 --target protost
-      - name: Loop the workload
+      - name: Loop the workload under load (3 loops + 2 CPU hogs)
         env:
           PROTOCORE_SHAPE_TRANSITIONS: ${{ matrix.transitions }}
         run: |
+          set +e
           cat > w.st <<'ST'
           Object subclass: #Sink instanceVariableNames: 'count'.
           Sink >> initialize  count := 0. ^ self.
@@ -64,30 +65,36 @@ jobs:
           1 to: 1000 do: [ :i | sink ping ].
           (sink count) wait.
           ST
-          P=protoST/build/protost
-          hangs=0; bad=0; N=400
+          cat > loop.sh <<'SH'
+          #!/bin/bash
+          L=$1; P=protoST/build/protost; hangs=0; bad=0; N=300
           for i in $(seq 1 $N); do
-            "$P" --print-last w.st > out.txt 2>&1 &
-            pid=$!
-            t=0
-            while kill -0 $pid 2>/dev/null && [ $t -lt 150 ]; do sleep 0.1; t=$((t+1)); done
+            "$P" --print-last w.st > out-$L.txt 2>&1 &
+            pid=$!; t=0
+            while kill -0 $pid 2>/dev/null && [ $t -lt 300 ]; do sleep 0.1; t=$((t+1)); done
             if kill -0 $pid 2>/dev/null; then
-              hangs=$((hangs+1))
-              echo "::warning::hang at run $i (pid $pid)"
-              echo "=== run $i: output so far"; cat out.txt
-              if [ $hangs -le 2 ]; then
-                sudo lldb -p $pid --batch -o "thread backtrace all" > "lldb-$i.txt" 2>&1 || true
-                sample $pid 2 -file "sample-$i.txt" >/dev/null 2>&1 || true
-                echo "=== lldb run $i"; cat "lldb-$i.txt"
+              hangs=$((hangs+1)); echo "::warning::loop $L hang at run $i (pid $pid)"
+              if [ $hangs -le 1 ]; then
+                sudo lldb -p $pid --batch -o "thread backtrace all" > "lldb-$L-$i.txt" 2>&1
+                sample $pid 2 -file "sample-$L-$i.txt" >/dev/null 2>&1
+                echo "=== lldb loop $L run $i"; cat "lldb-$L-$i.txt"
               fi
-              kill -9 $pid; wait $pid 2>/dev/null || true
+              kill -9 $pid; wait $pid 2>/dev/null
             else
-              wait $pid; rc=$?
-              last=$(tail -1 out.txt)
-              if [ $rc -ne 0 ] || [ "$last" != 1000 ]; then bad=$((bad+1)); echo "bad run $i rc=$rc last='$last'"; fi
+              wait $pid; rc=$?; last=$(tail -1 out-$L.txt)
+              if [ $rc -ne 0 ] || [ "$last" != 1000 ]; then bad=$((bad+1)); echo "loop $L bad run $i rc=$rc last='$last'"; fi
             fi
           done
-          echo "ref=${{ matrix.ref }} transitions=${{ matrix.transitions }} runs=$N hangs=$hangs bad=$bad" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "loop $L runs=$N hangs=$hangs bad=$bad"
+          SH
+          chmod +x loop.sh
+          (while :; do :; done) & h1=$!
+          (while :; do :; done) & h2=$!
+          ./loop.sh 1 > l1.log 2>&1 & ./loop.sh 2 > l2.log 2>&1 & ./loop.sh 3 > l3.log 2>&1 &
+          wait %3 %4 %5 2>/dev/null; wait $(jobs -p | grep -v -e $h1 -e $h2) 2>/dev/null
+          kill $h1 $h2
+          cat l1.log l2.log l3.log
+          for f in l1.log l2.log l3.log; do tail -1 $f; done | sed "s/^/ref=${{ matrix.ref }} transitions=${{ matrix.transitions }} /" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
