@@ -14,9 +14,9 @@ bug is fixed, move it to *Closed items* with the fixing commit SHA. When a
 relevant checklist line. When a new divergence is discovered, give it a fresh
 stable id and file it in the right bucket.
 
-- **Test suite:** 1623 `ctest` cases on Linux, 1623/1623 passing on
-  2026-11-23 (0.17.0 before its release, the explicit-state branch, against
-  protoCore 3.6.1 and protoIO 0.7.1; the 127 new cases are the
+- **Test suite:** 1631 `ctest` cases on Linux, 1631/1631 passing on
+  2026-11-24 (0.17.0, against protoCore 3.6.1, tag `v3.6.1`, and protoIO
+  0.7.1; the 135 new cases are the
   `tests/conformance/16-explicit-state/` programs (the concurrency cases T1,
   T2, T4 and T5 among them, in the `tsan` label), the `IvarModifiers:` unit
   cases, `cli_unset_constant_error_reserved` and one class-variable guard in

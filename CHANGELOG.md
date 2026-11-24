@@ -3,9 +3,9 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
-## Unreleased
+## 0.17.0 — 2026-11-24
 
-Explicit state I (protoST 0.17.0): instance-variable modifiers on mutable
+Explicit state I: instance-variable modifiers on mutable
 classes, from the approved spec
 `docs/superpowers/specs/2026-11-23-explicit-state-design.md` (the first row
 of its §15). Value classes are 0.18.0. protoCore stays at 3.6.1 and protoIO
@@ -57,6 +57,10 @@ at 0.7.1, unchanged.
     modifier, is refused while an installed method of the class, or of a
     class that inherits it, was compiled for the old modifier (M1, M2 or M4,
     or a "was compiled when" text); the class keeps its previous declaration.
+    The same holds from above: a declaration (or `addBehavior:`) that gives
+    a class a constant, write-once or atomic variable is refused while a
+    superclass or mixin that does not see it holds a method compiled when it
+    declared that name itself.
 - **Opcodes** `STORE_CONST_INSTVAR` (63), `STORE_ONCE_INSTVAR` (64) and
   `PUSH_CONST_INSTVAR` (65) (VM.md 2.3, 1.9 and example 20). Plain reads and
   stores keep their instructions.
@@ -119,11 +123,16 @@ a fresh copy of the binary and libprotoCore per run, and verified outputs
 (`benchmarks/reports/2026-11-23-release-0.17.0-const-read.md`).
 
 - **The §14.1 constant-read gate.**
-  - `attr_lookup` is 1.014 over the whole program and 0.995 with startup
-    subtracted. The residual is startup, +2.3 %: the larger kernel this
-    release loads. That is above the 1 % bound, and the maintainer accepted
-    it on 2026-11-23.
-  - `const_read` is 0.998 of `attr_lookup`, inside its 3 % bound.
+  - At the release head, `attr_lookup` is 1.040 over the whole program
+    and 1.023 with startup subtracted; `const_read` is 0.971 of
+    `attr_lookup`, inside its 3 % bound.
+  - The read loop is at parity with the build first accepted (0.953 with
+    startup subtracted, eight rounds); what grew is startup, +2 to +5 %
+    against 0.16.1 (about ±4 % between runs): the larger kernel, and the
+    generated `new` planned on every class declaration. That is above the
+    1 % bound, and the maintainer accepted it on 2026-11-23 and 2026-11-24.
+- **No `std::string` temporaries in `runLoop`, and no allocation for an
+  unchanged metaclass chain** (rebuilt on every class declaration).
 - **`BytecodeModule::constSym` and `ivSymbol` are forced inline**
   (`always_inline`). GCC had stopped inlining `ivSymbol` into `PUSH_INSTVAR`
   and `PUSH_OWN_INSTVAR` once the three new opcodes grew `runLoop`, which

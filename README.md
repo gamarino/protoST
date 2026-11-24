@@ -238,7 +238,13 @@ several cores without locks.
 
 ## Status
 
-Version 0.16.1 (2026-11-23), a patch release: a wait nested in a block helps
+Version 0.17.0 (2026-11-24), explicit state I: instance variables declared
+constant, write-once or atomic (`constantNames:`, `writeOnceNames:`,
+`atomicNames:`), enforced on every write path, with a generated keyword
+constructor over a class's constants, an end-of-construction check, and
+`update:with:` / `compareAndSet:from:to:` for atomic variables (LANGUAGE.md
+§4.13; `setInstVar:from:to:` is deprecated and removed in 0.18.0). Version
+0.16.1 (2026-11-23), a patch release: a wait nested in a block helps
 other actors one message at a time and checks its Future after each, so an
 actor that keeps sending itself messages can no longer bury it (S48; with one
 worker it used to stop the whole program), and a socket's `timeout:` bounds a
@@ -338,7 +344,7 @@ commands, and what differs on Windows, are in
 
 ## Installation
 
-protoST can be packaged with CPack. The 0.16.1 release has a Linux `.deb`
+protoST can be packaged with CPack. The 0.17.0 release has a Linux `.deb`
 attached to its GitHub release (below, with protoCore 3.6.1); other packages
 are built from source as shown below. Every package depends on
 [protoCore](https://github.com/numaes/protoCore) — install protoCore's package
@@ -366,11 +372,11 @@ the GitHub releases (or built as below):
 wsl --install -d Ubuntu-24.04        # in PowerShell, once
 # then, in the Ubuntu shell:
 wget https://github.com/numaes/protoCore/releases/download/v3.6.1/protoCore-3.6.1-Linux.deb
-wget https://github.com/gamarino/protoST/releases/download/v0.16.1/protost-0.16.1-Linux.deb
-sudo apt install ./protoCore-3.6.1-Linux.deb ./protost-0.16.1-Linux.deb
+wget https://github.com/gamarino/protoST/releases/download/v0.17.0/protost-0.17.0-Linux.deb
+sudo apt install ./protoCore-3.6.1-Linux.deb ./protost-0.17.0-Linux.deb
 ```
 
-These are the 0.16.1 release packages. Built from source, protoST 0.16.1 needs
+These are the 0.17.0 release packages. Built from source, protoST 0.17.0 needs
 protoCore 3.6.1 or later; the `.deb` was built against 3.6.1, the release
 to install with it, and depends on `protocore (>= 3.6.1)` through protoCore's
 shlibs file (an older protoCore package is not enough: upgrade it with the

@@ -1,0 +1,71 @@
+  const_read             old  runnable: exit 0; VERIFIED 600000
+  note: const_read runs on the old build; it is measured there too
+round 1/8
+  startup                old     118,681,731 cycles  (+-3.9%)  $S/ab2/runs/2
+  startup                new     124,716,689 cycles  (+-3.19%)  $S/ab2/runs/3
+  attr_lookup            old     182,217,716 cycles  (+-1.34%)  $S/ab2/runs/4
+  attr_lookup            new     186,926,757 cycles  (+-2.84%)  $S/ab2/runs/5
+  const_read             old     189,177,812 cycles  (+-3.1%)  $S/ab2/runs/6
+  const_read             new     182,373,489 cycles  (+-2.4%)  $S/ab2/runs/7
+round 2/8
+  startup                new     133,277,984 cycles  (+-5.15%)  $S/ab2/runs/8
+  startup                old     116,627,459 cycles  (+-1.25%)  $S/ab2/runs/9
+  attr_lookup            new     183,120,510 cycles  (+-1.53%)  $S/ab2/runs/10
+  attr_lookup            old     177,556,660 cycles  (+-1.68%)  $S/ab2/runs/11
+  const_read             new     178,651,002 cycles  (+-1.08%)  $S/ab2/runs/12
+  const_read             old     183,671,571 cycles  (+-3.15%)  $S/ab2/runs/13
+round 3/8
+  startup                old     119,363,416 cycles  (+-1.19%)  $S/ab2/runs/14
+  startup                new     124,065,009 cycles  (+-0.58%)  $S/ab2/runs/15
+  attr_lookup            old     175,322,298 cycles  (+-0.45%)  $S/ab2/runs/16
+  attr_lookup            new     177,656,303 cycles  (+-1.79%)  $S/ab2/runs/17
+  const_read             old     177,169,367 cycles  (+-1.15%)  $S/ab2/runs/18
+  const_read             new     174,552,444 cycles  (+-0.7%)  $S/ab2/runs/19
+round 4/8
+  startup                new     121,735,726 cycles  (+-3.9%)  $S/ab2/runs/20
+  startup                old     118,028,074 cycles  (+-2.33%)  $S/ab2/runs/21
+  attr_lookup            new     221,397,281 cycles  (+-5.72%)  $S/ab2/runs/22
+  attr_lookup            old     176,143,411 cycles  (+-0.77%)  $S/ab2/runs/23
+  const_read             new     183,982,644 cycles  (+-3.51%)  $S/ab2/runs/24
+  const_read             old     181,926,994 cycles  (+-5.65%)  $S/ab2/runs/25
+round 5/8
+  startup                old     123,208,936 cycles  (+-3.67%)  $S/ab2/runs/26
+  startup                new     122,805,366 cycles  (+-1.48%)  $S/ab2/runs/27
+  attr_lookup            old     184,489,572 cycles  (+-2.29%)  $S/ab2/runs/28
+  attr_lookup            new     185,785,209 cycles  (+-3.72%)  $S/ab2/runs/29
+  const_read             old     175,169,198 cycles  (+-1.89%)  $S/ab2/runs/30
+  const_read             new     185,407,954 cycles  (+-0.4%)  $S/ab2/runs/31
+round 6/8
+  startup                new     119,580,798 cycles  (+-2.46%)  $S/ab2/runs/32
+  startup                old     126,737,034 cycles  (+-6.23%)  $S/ab2/runs/33
+  attr_lookup            new     178,512,215 cycles  (+-1.46%)  $S/ab2/runs/34
+  attr_lookup            old     175,962,787 cycles  (+-0.45%)  $S/ab2/runs/35
+  const_read             new     185,594,757 cycles  (+-2.38%)  $S/ab2/runs/36
+  const_read             old     177,124,948 cycles  (+-0.63%)  $S/ab2/runs/37
+round 7/8
+  startup                old     119,763,199 cycles  (+-1.12%)  $S/ab2/runs/38
+  startup                new     155,798,255 cycles  (+-0.89%)  $S/ab2/runs/39
+  attr_lookup            old     204,212,973 cycles  (+-2.28%)  $S/ab2/runs/40
+  attr_lookup            new     191,768,282 cycles  (+-3.24%)  $S/ab2/runs/41
+  const_read             old     181,669,714 cycles  (+-3.23%)  $S/ab2/runs/42
+  const_read             new     185,239,325 cycles  (+-3.43%)  $S/ab2/runs/43
+round 8/8
+  startup                new     124,668,211 cycles  (+-3.83%)  $S/ab2/runs/44
+  startup                old     124,550,703 cycles  (+-2.26%)  $S/ab2/runs/45
+  attr_lookup            new     181,911,853 cycles  (+-2.23%)  $S/ab2/runs/46
+  attr_lookup            old     195,275,103 cycles  (+-0.89%)  $S/ab2/runs/47
+  const_read             new     183,957,564 cycles  (+-1.62%)  $S/ab2/runs/48
+  const_read             old     192,794,838 cycles  (+-6.96%)  $S/ab2/runs/49
+
+mean cycles (perf -r 3, 8 round(s))
+  startup                old    120,870,069  new    128,331,005
+  attr_lookup            old    183,897,565  new    188,384,801
+  const_read             old    182,338,055  new    182,469,897
+
+§14.1 gate
+  attr_lookup new/old            1.0244  (bound 1.01)  BREACH
+  const_read new / attr_lookup new 0.9686  (bound 1.03)  ok
+  startup-subtracted: attr 0.9528  const 0.9015  (information; verdicts differ: True)
+  const_read old: runnable (G3)
+
+GATE BREACH: the release is blocked until the maintainer accepts the figures.
