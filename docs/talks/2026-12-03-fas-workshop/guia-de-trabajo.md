@@ -24,7 +24,7 @@ El taller tiene dos mitades de duración parecida. Esta guía cubre la primera, 
 | 0:30 | — | Laboratorio 1 | Ejercicios 1 y 2 (3 y 4 quedan para casa) |
 | 0:45 | 0:20 | protoST II — la VM y los actores | Bytecode, excepciones, actores, la lección del actor enterrado |
 | 1:05 | 0:35 | Laboratorio 2 | 3 h: ejercicios 7, 8 y 10. 2 h: solo el 2 y el 8 (5, 6 y 9 quedan para casa) |
-| 1:20 | 0:45 | Dirección | Estado explícito: una propuesta en revisión, no una release |
+| 1:20 | 0:45 | Dirección | Estado explícito: los modificadores salieron en 0.17.0; las clases valor son una propuesta para 0.18.0 |
 | 1:30 | 0:55 | Corte | 10 minutos (5 en la versión de 2 h) |
 | 1:40 | 1:00 | protoBaseST | La segunda sesión, con su propio deck |
 | 2:50 | 1:50 | Cierre común | Proyectos voluntarios de las dos sesiones, preguntas |
@@ -33,7 +33,7 @@ Trabajen de a dos si pueden: uno predice, el otro corre. Lo que no termine en la
 
 ## Preparación (antes del 3/12)
 
-Instalen antes de venir: en la sala no hay tiempo para compilar. Necesitan **protoST 0.16.1 sobre protoCore 3.6.1**. La sesión de protoBaseST pide la misma versión de protoST.
+Instalen antes de venir: en la sala no hay tiempo para compilar. Necesitan **protoST 0.17.0 sobre protoCore 3.6.1**. La sesión de protoBaseST pide la misma versión de protoST.
 
 **Ubuntu 24.04 o Windows con WSL2 (recomendado).** Son dos paquetes `.deb` de las releases de GitHub:
 
@@ -41,16 +41,16 @@ Instalen antes de venir: en la sala no hay tiempo para compilar. Necesitan **pro
 # Windows, una sola vez, en PowerShell:
 #   wsl --install -d Ubuntu-24.04
 wget https://github.com/numaes/protoCore/releases/download/v3.6.1/protoCore-3.6.1-Linux.deb
-wget https://github.com/gamarino/protoST/releases/download/v0.16.1/protost-0.16.1-Linux.deb
-sudo apt install ./protoCore-3.6.1-Linux.deb ./protost-0.16.1-Linux.deb
-protost --version          # protoST 0.16.1
+wget https://github.com/gamarino/protoST/releases/download/v0.17.0/protost-0.17.0-Linux.deb
+sudo apt install ./protoCore-3.6.1-Linux.deb ./protost-0.17.0-Linux.deb
+protost --version          # protoST 0.17.0
 ```
 
-Si ya tenían una versión anterior, el mismo `apt install` actualiza las dos: 0.16.1 necesita protoCore 3.6.1 (desde 0.13.0) y el `.deb` lo declara como dependencia.
+Si ya tenían una versión anterior, el mismo `apt install` actualiza las dos: 0.17.0 necesita protoCore 3.6.1 (desde 0.13.0) y el `.deb` lo declara como dependencia.
 
 **macOS y Windows nativo.** No hay paquete publicado: se compila desde las fuentes (C++20, CMake 3.20+, protoCore 3.6.1 instalado, protoIO 0.7.1 o un 0.7.x posterior, OpenSSL; en macOS también readline). Los pasos están en `docs/INSTALLATION.md`, incluida la sección *Windows (MSVC)*. Cuenten con una hora la primera vez.
 
-**El repositorio.** Clonen `https://github.com/gamarino/protoST` y usen los ejercicios de `docs/talks/2026-12-03-fas-workshop/ejercicios/` en `main`. El paquete 0.16.1 instala una copia anterior en `/usr/share/protoST/talks/2026-11-12-fas-workshop/`: con 0.16.1 su ejercicio 7 da una línea distinta de la esperada, porque `outer` cambió en 0.10.0 (ver el ejercicio 7).
+**El repositorio.** Clonen `https://github.com/gamarino/protoST` y usen los ejercicios de `docs/talks/2026-12-03-fas-workshop/ejercicios/` en `main`. El paquete 0.17.0 instala una copia anterior en `/usr/share/protoST/talks/2026-11-12-fas-workshop/`: con 0.17.0 su ejercicio 7 da una línea distinta de la esperada, porque `outer` cambió en 0.10.0 (ver el ejercicio 7).
 
 **Verificación en dos minutos.**
 
@@ -59,7 +59,7 @@ Si ya tenían una versión anterior, el mismo `apt install` actualiza las dos: 0
 3. `protost -e "Float fsum: #(1.0e100 1.0 -1.0e100)"` responde `1.0` (la suma ingenua da `0.0`; ver "Lo nuevo").
 4. `protost -i` abre el REPL; salen con Ctrl-D.
 5. `protost --disasm docs/vm-examples/05-fib.st` imprime el bytecode y después corre el programa. Los mismos listados, ya generados, están en `docs/vm-examples/*.txt`; un test verifica que no se desactualicen.
-6. En la carpeta de ejercicios, `./verificar.sh` corre los diez programas y compara con la salida esperada; ninguno tarda más de unos segundos. Con 0.16.1 tiene que terminar en `todos los ejercicios dan lo esperado`.
+6. En la carpeta de ejercicios, `./verificar.sh` corre los diez programas y compara con la salida esperada; ninguno tarda más de unos segundos. Con 0.17.0 tiene que terminar en `todos los ejercicios dan lo esperado`.
 
 **Opcional: el depurador.** La extensión de VS Code (`editor-integration/vscode/`) habla DAP con `protost --dap`: breakpoints, paso a paso, excepciones y varios hilos detenidos a la vez cuando hay actores. Ver `docs/debugging.md`.
 
@@ -67,7 +67,7 @@ Si ya tenían una versión anterior, el mismo `apt install` actualiza las dos: 0
 
 **Las cifras de esta guía.** Las mediciones marcadas "medido el 23/11" son corridas de 0.16.1 (protoCore 3.6.1) en una notebook Ryzen 5 5500U (6 núcleos, 12 hilos) que **no estaba en reposo**: corrían otras tareas (carga de 3 a 4). Son órdenes de magnitud, no curvas. Las demás cifras citan su fuente.
 
-## Lo nuevo desde el taller de noviembre (0.9.0 → 0.16.1)
+## Lo nuevo desde el taller de noviembre (0.9.0 → 0.17.0)
 
 Todo esto está en `CHANGELOG.md` y `docs/STATUS.md`; acá va lo que cambia algo de lo que van a ver.
 
@@ -76,7 +76,8 @@ Todo esto está en `CHANGELOG.md` y `docs/STATUS.md`; acá va lo que cambia algo
 - **0.14.0.** Comparaciones exactas de `Fraction` en una primitiva (de unos 11 µs a 1 µs por comparación en el micro-benchmark de `CHANGELOG.md`).
 - **0.15.0 y 0.16.0, sumas correctamente redondeadas.** `Float fsum:` es un port línea por línea de `math.fsum` de CPython (parciales de Shewchuk), comparado bit a bit contra 237 casos generados con CPython 3.14. `fsumOfProducts:with:`, `fsumOfSquaredDifferences:with:` y `fsumOfPowSquaredDifferences:with:` existen para los índices vectoriales de protoBaseST. La última sigue al `pow` de la plataforma, así que su último bit puede diferir entre glibc y MSVC: es la desviación D58, y vuelve a aparecer en la sección "Dirección".
 - **0.14.1 a 0.16.1, el planificador de actores.** Cuando un actor espera dentro de un bloque que corre una primitiva, su worker "ayuda": corre mensajes de otros actores encima de la espera. Cinco arreglos en ese mecanismo (S40, S43, S45 a S48), todos encontrados por programas reales o por la revisión de un arreglo anterior. El último, S48, es la lección del ejercicio 8.
-- **Tests.** 1496 casos de `ctest` en Linux, todos pasando con 0.16.1 (`docs/STATUS.md`); 650 de ellos también bajo ThreadSanitizer. Son programas propios: no hay suite ANSI.
+- **0.17.0, estado explícito I.** Modificadores de variables de instancia (`constantNames:`, `writeOnceNames:`, `atomicNames:`) con `update:with:` y `compareAndSet:from:to:` (ver "Dirección"). Cambio de nombre: el CAS sobre una variable es `compareAndSet:from:to:`, y el viejo nombre queda deprecado (ver "Dirección").
+- **Tests.** 1631 casos de `ctest` en Linux, todos pasando con 0.17.0 (`docs/STATUS.md`); los del grupo `tsan` también bajo ThreadSanitizer. Son programas propios: no hay suite ANSI.
 
 ## Laboratorio 1 — Identidad, estado y valor
 
@@ -98,18 +99,19 @@ El `String` no tiene identidad mutable detrás: es el valor mismo (una cuerda de
 
 `protost 02-actualizaciones-perdidas.st`
 
-**Pregunta.** Ocho actores incrementan un mismo contador 100 000 veces cada uno. ¿Cuánto da con un objeto común compartido, con el contador como actor y con un `Atom`?
+**Pregunta.** Ocho actores incrementan un mismo contador 100 000 veces cada uno. ¿Cuánto da con un objeto común compartido, con el contador como actor, con un `Atom` y (0.17.0) con una variable de instancia `atomic`?
 
 **Discusión.** Con el objeto común se pierde la mayoría de los incrementos (medido el 23/11, tres corridas: 190 207, 183 468 y 215 498 de 800 000), pero el objeto nunca queda en un estado roto. Cada escritura de variable de instancia es atómica: el CAS sobre la tabla de mutables reintenta hasta publicar. Lo que no es atómico es `n := n + 1`, que son dos operaciones: leer y publicar. Gana la última escritura.
 
 Las dos correcciones son las dos herramientas del modelo:
 
 - el **actor** serializa la lógica: un mensaje por vez;
-- el **Atom** es una celda con compare-and-swap; `swap:` reintenta el bloque, que debe ser puro.
+- el **Atom** es una celda con compare-and-swap; `swap:` reintenta el bloque, que debe ser puro;
+- desde 0.17.0, una **variable de instancia `atomic`**: el mismo reintento sobre el atributo (`self update: #n with: [:v | v + 1]`). Es la cuarta versión del ejercicio y también da 80 000 de 80 000.
 
 Una tercera, menos visible: una racha de asignaciones a variables de instancia se publica como una sola versión (`IVAR_GROUP` … `IVAR_GROUP_END`, la ven en el ejercicio 5). Otro hilo ve la racha entera o nada.
 
-**Para discutir.** En Smalltalk-80 con `Process` el mismo `n := n + 1` pierde incrementos si el scheduler cambia de proceso entre la lectura y la escritura; un store de un solo slot tampoco se rompe allí. Lo distinto acá es que hay paralelismo real y que la unidad atómica es la instantánea del objeto entero, no el slot. ¿Alcanza con eso, o el lenguaje debería ofrecer read-modify-write atómico sobre variables de instancia? Hoy existe `setInstVar:from:to:`; la propuesta de la sección "Dirección" agrega `update:with:` sobre variables declaradas `atomic`.
+**Para discutir.** En Smalltalk-80 con `Process` el mismo `n := n + 1` pierde incrementos si el scheduler cambia de proceso entre la lectura y la escritura; un store de un solo slot tampoco se rompe allí. Lo distinto acá es que hay paralelismo real y que la unidad atómica es la instantánea del objeto entero, no el slot. ¿Alcanza con eso, o el lenguaje debería ofrecer read-modify-write atómico sobre variables de instancia? Desde 0.17.0 existen `update:with:` sobre variables declaradas `atomic` y `compareAndSet:from:to:`. ¿Es la forma que esperaban, o preferirían algo más cerca de `Atom`?
 
 ### Ejercicio 3 — Cambiar la clase con instancias vivas (10 min, para casa)
 
@@ -255,22 +257,30 @@ protost 10-escalar.st        # por omisión: un worker por hilo de hardware, has
 
 **Para discutir.** Una VM de Smalltalk con green threads no escala nada en núcleos; una con un lock global, tampoco. ¿Qué aceleración tendría que mostrar protoST para que les importe, y en qué tipo de programa?
 
-## Dirección: estado explícito (propuesta en revisión)
+## Dirección: estado explícito (parte I en 0.17.0; clases valor, propuesta para 0.18.0)
 
-**Esto no está implementado ni prometido para ninguna fecha.** Es un borrador de diseño en revisión: [PR #25](https://github.com/gamarino/protoST/pull/25), `docs/superpowers/specs/2026-11-23-explicit-state-design.md` en la rama `docs/explicit-state-spec`. Lo traigo para discutirlo, no para venderlo.
+**Qué salió y qué no.** La parte I del diseño está en la release [v0.17.0](https://github.com/gamarino/protoST/releases/tag/v0.17.0) (`docs/LANGUAGE.md` §4.13, `docs/STATUS.md` D60 a D63): los modificadores de variables de instancia, `update:with:` y `compareAndSet:from:to:`. Las **clases valor siguen siendo una propuesta para 0.18.0**: no están implementadas. La spec completa es `docs/superpowers/specs/2026-11-23-explicit-state-design.md` ([PR #25](https://github.com/gamarino/protoST/pull/25); el orden de entrega está en su sección 15).
 
-**El problema.** Hoy el programador no puede decir qué estado está pensado para cambiar, cuál no debe cambiar nunca y cuál se comparte entre hilos y solo debe cambiar por compare-and-swap. protoBaseST lo tuvo que decir igual, por convención: un test que busca `:=` y `setInstVar:` en las fuentes contra una lista de 59 excepciones permitidas, e inicializadores privados `_publish…:` escritos a mano.
+**El problema.** El programador no podía decir qué estado está pensado para cambiar, cuál no debe cambiar nunca y cuál se comparte entre hilos y solo debe cambiar por compare-and-swap. protoBaseST lo tuvo que decir igual, por convención: un test que busca `:=` y los CAS a mano en las fuentes contra una lista de 59 excepciones permitidas, e inicializadores privados `_publish…:` escritos a mano. protoBaseST 0.4.x sigue corriendo sobre 0.17.0 (con el aviso de deprecación); la 0.5.0 migra.
 
-**Lo que propone.**
+**Lo que ya está en 0.17.0.**
+
+- **Tres modificadores** de variables de instancia en clases comunes, declarados con `constantNames:`, `writeOnceNames:` y `atomicNames:`, y comprobados en **cada camino de escritura** (compilador, intérprete, reflexión, copia):
+  - `constant`: solo se asigna en `initialize` (fuera de bloques) o en el constructor generado, y a lo sumo una vez; leerlo sin haberlo asignado señala `UnsetConstantError`.
+  - `writeOnce`: un CAS desde nil; el que pierde la carrera es silencioso si su valor es `=` al instalado, y señala `ModificationForbidden` si no.
+  - `atomic`: nunca con `:=` (error de compilación); solo con `update:with:`, que reintenta un bloque puro, o con `compareAndSet:from:to:`. Ambos los entiende cualquier objeto.
+- **Constructor por keywords generado** sobre las constantes (`Account number: 10 owner: 'di'`), y la comprobación de fin de construcción: si `initialize` termina con una constante sin asignar, la construcción falla.
+- **Un mismo patrón optimista** desde el atributo hasta el commit de protoBaseST: leer una instantánea, calcular sin efectos, publicar solo si sigue vigente, y si no, recalcular.
+- **Deprecación:** `setInstVar:from:to:` pasa a ser un alias de `compareAndSet:from:to:` (con comprobación del nombre) que imprime un aviso una sola vez por stderr; se elimina en 0.18.0 (D63).
+
+**Lo que sigue siendo propuesta (0.18.0).**
 
 - **Clases valor** (`valueSubclass:`), cuyas instancias son objetos inmutables de protoCore, **nacidas completas** desde un constructor por keywords generado (`Point x: 1 y: 2`). `initialize` corre **antes** del nacimiento: valida y deriva sobre los valores recibidos, sin `self` (todavía no existe). No hay fase mutable seguida de un *freeze*, ni bloques constructores. `p withX: 3` da un valor nuevo y vuelve a correr `initialize`.
-- **Tres modificadores** de variables de instancia en clases comunes: `constant` (solo se asigna en `initialize` o en el constructor generado, y a lo sumo una vez), `writeOnce` (un CAS desde nil; el que pierde la carrera recibe el valor del ganador) y `atomic` (nunca con `:=`; solo con `update:with:`, que reintenta un bloque puro, o con `compareAndSet:from:to:`).
-- **Invariantes sobre varios campos:** un valor inmutable dentro de una sola variable atómica. Sin STM, sin locks y sin cambios en protoCore.
-- **Un mismo patrón optimista** desde el atributo hasta el commit de protoBaseST: leer una instantánea, calcular sin efectos, publicar solo si sigue vigente, y si no, recalcular.
+- **Invariantes sobre varios campos:** un valor inmutable dentro de una sola variable atómica, con `update:with:` sobre `withX:`. Sin STM, sin locks y sin cambios en protoCore. La mitad atómica ya funciona en 0.17.0; lo que falta es el valor inmutable que la complete.
 
 **Hacia dónde apunta (dirección, no promesa).** La tesis de David P. Reed (MIT, 1978, *Naming and Synchronization in a Decentralized Computer System*) modela un objeto como una secuencia de versiones inmutables en pseudo-tiempo; de ahí desciende TeaTime, el protocolo de replicación de Croquet. En protoCore las versiones y las instantáneas salen casi gratis. Lo que sigue siendo trabajo real: ejecución determinista entre réplicas (los `Float` ya difieren entre plataformas en un caso, D58, y el planificador de actores no es determinista, D59), un *reflector* que ordene los mensajes externos, tiempo de mensaje en lugar de tiempo de reloj, y la identidad de los objetos entre réplicas.
 
-**Para discutir.** La sección 18 de la spec tiene once preguntas abiertas para el mantenedor. Las que más me interesa escucharles: ¿encadenar automáticamente los `initialize` de una jerarquía de valores, o la convención de `super initialize` (Q1)? ¿Inmutabilidad superficial o profunda (Q3)? ¿Son buenos los nombres (Q9)? ¿Va un "mundo replicado" al menú de voluntarios (Q11)?
+**Para discutir.** Sobre lo que ya salió: ¿los nombres `constantNames:`, `writeOnceNames:`, `atomicNames:`, `update:with:` y `compareAndSet:from:to:` son los que escribirían (Q9)? Un `writeOnce` perdido con un valor distinto señala `ModificationForbidden` (Q5 se decidió así): ¿encaja con lo que escribirían? Sobre lo que falta, que todavía se puede cambiar: ¿encadenar automáticamente los `initialize` de una jerarquía de valores, o la convención de `super initialize` (Q1)? ¿Inmutabilidad superficial o profunda (Q3)? ¿Va un "mundo replicado" al menú de voluntarios (Q11)?
 
 ## Dónde meterse
 
@@ -278,7 +288,7 @@ Ninguna de estas tiene respuesta cerrada; elijan la que les interese. Un issue o
 
 | Línea abierta | Dónde mirar | La pregunta de fondo |
 | --- | --- | --- |
-| La spec de estado explícito | [PR #25](https://github.com/gamarino/protoST/pull/25), §18 | ¿Son los nombres, las reglas y el orden correctos para un programador Smalltalk? |
+| Clases valor (0.18.0) y el resto de la spec de estado explícito | [PR #25](https://github.com/gamarino/protoST/pull/25), §15 y §18 | ¿Son los nombres, las reglas y el orden correctos para un programador Smalltalk, ahora que la parte I se puede probar? |
 | Equidad entre actores | `docs/STATUS.md` D59 (cola de listos LIFO) | ¿Una cola FIFO compra equidad sin perder lo que da el turno por buzón entero? Hay que medirlo |
 | Contextos y depuración: un mínimo de `thisContext` | `ExecutionEngine.h` (`snapshotFrames`, que ya materializa frames para el yield de los actores) | ¿Qué necesita de verdad un depurador Smalltalk? |
 | Un inline cache en `SEND_*` | `ExecutionEngine.cpp`, `benchmarks/compare_builds.py` | Qué lo invalida cuando la caché de protoCore ya es por forma |
@@ -297,9 +307,9 @@ Ninguna de estas tiene respuesta cerrada; elijan la que les interese. Un issue o
 | Lo que cambia para un programador Smalltalk | `docs/tutorial/14-for-the-smalltalk-programmer.md` |
 | La VM, opcodes y ejemplos con su bytecode | `docs/VM.md`, `docs/vm-examples/` |
 | Estado vivo, desvíos y bugs con su test | `docs/STATUS.md`, `KNOWN_ISSUES.md` |
-| Qué cambió en cada versión | `CHANGELOG.md` (0.10.0 a 0.16.1 para este taller) |
+| Qué cambió en cada versión | `CHANGELOG.md` (0.10.0 a 0.17.0 para este taller) |
 | Actores, futures y la espera que ayuda | `docs/LANGUAGE.md` §10 (§10.4), capítulo 10 del tutorial |
-| La propuesta de estado explícito | [PR #25](https://github.com/gamarino/protoST/pull/25) |
+| Estado explícito: lo publicado y la propuesta | `docs/LANGUAGE.md` §4.13, [release v0.17.0](https://github.com/gamarino/protoST/releases/tag/v0.17.0), spec en [PR #25](https://github.com/gamarino/protoST/pull/25) |
 | Interoperación | `docs/INTEROP.md` (§4.0 y §4.3 están al día; §0 es del 29/9) |
 | El recolector de protoCore | `protoCore/docs/GarbageCollector.md`, `protoCore/docs/MemoryModel.md` |
 | Formas y listas en protoCore | CHANGELOG de protoCore 3.6.0 (RRB) y 3.6.1 (`ProtoShape`) |
