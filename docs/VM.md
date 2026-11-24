@@ -501,6 +501,7 @@ its error class).
 | `__ivar_modifiers__` | a String of `kind:name` words for the class's **own** non-plain variables (`'constant:k writeOnce:w'`); plain variables are not listed |
 | `__has_constants__` | `true` on a class that declares or inherits a constant, read through the chain |
 | `__constant_constructor__` | the selector of the generated constructor this class owns (absent on a class that inherits its parent's) |
+| `__constant_new__` | the method object of the generated `new` this class installed on its metaclass (absent on a class without constants and on one whose metaclass lookup reaches an ancestor's generated `new` first); the only `new` that stale removal ever takes off a metaclass |
 | `__constant_cache__` | the constants a construction checks and the constructor selectors still valid for the class, keyed to the instance-layout epoch (no chain walk per construction) |
 | `__user_declared__` | set on every class user code declares; a redeclaration is compared with such a class only (M11) |
 | `__user_class__` | set by `__subclassNamed:` only: the textual path may re-run into this class object |
@@ -512,17 +513,18 @@ its error class).
 | `__setInstVarNames:modifiers:` | `Behavior` | the textual declaration with modifier clauses: the names in source order and the `kind:name` String, recorded through `declareInstVarNames`, the path every declaration form shares (M10, M11, the generated constructor) |
 | `__subclass:instanceVariableNames:modifiers:uses:` | `Behavior` | the textual `uses:` declaration with modifiers, declared once (ruling C8) |
 | `__constructConstants:selector:` | `Behavior` | the generated constructor's allocation: a new instance with the non-nil arguments written in one write group under the constants the selector names; a constructor that is out of date signals an `Error` naming the class to redeclare |
-| `__checkConstantsOf:after:` | `Behavior` | the end-of-construction check (M13) after `new` or the generated constructor: answers the instance, or signals and answers nil |
+| `__checkConstantsOf:after:` | `Behavior` | the end-of-construction check (M13) at the end of the generated `new` and the generated constructor: answers the instance, or signals and answers nil |
 | `__checkConstructed:selector:` | `Behavior` | the same check at the end of a kernel or library constructor other than `new`; answers the instance at once, with no send, for a class without constants |
-| `__hasConstants` | `Behavior` | reads `__has_constants__` (the test in `Object class >> new`) |
 | `__allInstVarNamesString` | `Behavior` | the names of `allInstVarNames` in layout order (superclass, then mixins, then own), each once |
-| `__checkedNew:` | `Object class` (kernel, `lib/kernel/object.st`) | the end of the `new` of `SortedCollection`, `WriteStream`, `Random` and `UUID`: sends `initialize` once, then `__checkConstructed:selector:` with `#new` |
+| `__checkedNew:` | `Object class` (kernel, `lib/kernel/object.st`) | the end of the `new` of `SortedCollection`, `WriteStream`, `Random` and `UUID`: sends `initialize` once and answers the instance; it checks nothing (a subclass with constants is checked by its generated `new`, which runs this `new` as `super new`) |
 | `__rawInstVarNamed:` | `Object` | the attribute, or nil when unset, never checking (`deepCopy`, `inspect`) |
 | `__copyWithInstVarValues:` | `Object` | a shallow copy whose declared variables are replaced, in one `setAttributes`, by the non-nil values given (`deepCopy`) |
 
 `__installClassMethod:as:` (older) also refuses a method under the selector of
-the generated constructor the chain records (M9); `__installMethod:as:` and it
-resolve late variables by modifier (section 2.5). The public messages
+the generated constructor the chain records, and a `new` on a class with
+constants, own or inherited (M9); `__installMethod:as:` sent to a metaclass
+refuses the same two selectors for its sole instance, so neither install path
+bypasses the check. Both resolve late variables by modifier (section 2.5). The public messages
 `compareAndSet:from:to:`, `update:with:`, `setInstVar:from:to:` and
 `instVarIsSet:` are primitives on `Object` (`src/primitives/state_prims.cpp`).
 
@@ -548,6 +550,36 @@ primitive cannot know the selector it was sent under, so the body passes it.
 On M13 the check signals in place and answers nil, so the constructor never
 answers a half-built instance. `--disasm` does not list the constructor: it
 is not in the program's module.
+
+**The generated `new`** (maintainer ruling of 2026-11-23). `Object class >>
+new` is the 0.16.1 method, `^ self basicNew initialize` in three statements,
+and checks nothing, so a class without constants pays nothing for them. A
+class with constants whose metaclass lookup would not reach a generated `new`
+before any other gets its own on its metaclass, built by
+`installGeneratedNew` (same file) when the declaration runs:
+
+```text
+PUSH_SELF                                   receiver of the check
+PUSH_SELF  SEND_SUPER #new                  the inherited new, initialize included
+PUSH_CONST #new
+SEND_KEYWORD #__checkConstantsOf:after:            M13: the instance, or nil
+RETURN
+```
+
+Its `super` is bound, through `stampDefiningClass` (`src/runtime/BlockCode.h`,
+the one class-id counter every install shares), to the metaclass it is
+installed on, so a kernel `new` above it (`SortedCollection`, `WriteStream`,
+`Random`, `UUID`) still runs first. A subclass without constants of its own
+inherits it through metaclass lookup; one whose lookup reaches another `new`
+first (a mixin's constants under a `SortedCollection` subclass) gets its own.
+Every declaration re-plans the class, and a declaration in place re-plans
+every class bound as a global whose chain holds it (`classesHolding`); a class
+that no longer needs its generated `new` loses it, and only the method object
+recorded under `__constant_new__` is ever removed. M9: a user `new` on the
+metaclass of a class with constants is refused by the compiler, by both
+install paths, and by a declaration that would give constants to a class, or
+to the superclass or mixin of a class, that holds one, before the declaration
+records anything.
 
 **`UnsetConstantError`** is captured when the kernel has loaded
 (`Bootstrap::unsetConstantErrorClass`, pinned in the live registry), and

@@ -27,6 +27,13 @@ at 0.7.1, unchanged.
     (`Account number:owner:`), which writes them in one write group, sends
     `initialize` and runs the end-of-construction check. It cannot be
     redefined.
+  - **The generated `new`:** a class with constants also answers a generated
+    class-side `new`, which runs `super new` (an ancestor's `new` included,
+    such as `SortedCollection`'s) and then the end-of-construction check.
+    It cannot be redefined either: a class-side `new` on a class with
+    constants is a compile error, an install-time error, and refuses a
+    declaration that would give constants to a class, or to an ancestor of
+    a class, that has one (M9).
   - **Write-once variables:** `:=` is a CAS from nil; a write that finds the
     variable set is silent when the installed value is `=` to the written one,
     and signals `ModificationForbidden` otherwise.
@@ -76,7 +83,10 @@ Behaviour changes for code that uses none of the new forms (spec §13.1):
 - **The kernel `new` of `SortedCollection`, `WriteStream`, `Random` and
   `UUID` now sends `initialize` exactly once.** In 0.16.1 it sent it zero
   times, so a user subclass's `initialize` now runs under `new`; the kernel
-  classes define none, so for them nothing changes.
+  classes define none, so for them nothing changes. `Object class >> new`
+  itself is unchanged from 0.16.1 and checks nothing: the
+  end-of-construction check of a class with constants is in that class's
+  generated `new`.
 - **`SortedCollection new` and `Random new` no longer go through the
   class-side `sortBlock:` / `seed:`.** A subclass that overrides those
   selectors is no longer reached from `new`, as in Pharo.
@@ -118,22 +128,19 @@ a fresh copy of the binary and libprotoCore per run, and verified outputs
   (`always_inline`). GCC had stopped inlining `ivSymbol` into `PUSH_INSTVAR`
   and `PUSH_OWN_INSTVAR` once the three new opcodes grew `runLoop`, which
   cost about 16 cycles per plain read (`attr_lookup` was 1.061 before).
-- **Construction.** Every class caches on itself, per instance-layout epoch,
-  whether it has constants (`__has_constants_verdict__`). `new` and the kernel
-  constructors then read one own attribute instead of walking the class
-  chain. Even so, construction of a class without constants is still slower
-  than in 0.16.1:
+- **Construction.** `new` on a class without constants is the 0.16.1
+  method, with no test and no send added: the end-of-construction check
+  lives in the generated `new` of a class with constants (maintainer ruling
+  of 2026-11-23). The kernel constructors other than `new` still call
+  `__checkConstructed:selector:`, which reads `__has_constants__` through
+  the chain; the maintainer accepted that cost for `Point` and `Fraction`.
 
   | Program | 0.17.0 / 0.16.1 |
   |---|---:|
-  | 1,000,000 × bare `new` | 1.198 (about 520 cycles per `new`) |
-  | `Point x:y:` | 1.038 |
-  | `Fraction numerator:denominator:` | 1.085 |
-  | `micro/instances.st` | 0.959 (noise) |
-
-  The cache itself changed these figures by less than noise. What remains is
-  the cost of the extra send in `Object class >> new` and of the
-  `__checkConstructed:selector:` call, not of the test those make.
+  | 1,000,000 × bare `new` | R2_BARE |
+  | `Point x:y:` | R2_POINT |
+  | `Fraction numerator:denominator:` | R2_FRACTION |
+  | `micro/instances.st` | R2_INSTANCES |
 
 ### Deprecated
 
@@ -176,8 +183,12 @@ changes here.
   `unset-constant-error-global-reserved.st` and
   `cli_unset_constant_error_reserved` (the reserved global refused on every
   route), and the unit case that M14 keeps its class when the global is
-  rebound from C++. `const-verdict-never-stale.st` covers the cached
-  has-constants verdict under redeclaration, `addBehavior:` and mixins.
+  rebound from C++. `const-generated-new-never-stale.st`,
+  `const-generated-new-stale.st`, `const-generated-new-super.st` and
+  `const-generated-new-m9.st` cover the generated `new` under redeclaration,
+  `addBehavior:`, mixins and kernel `new`s, and its M9 refusals;
+  `cli_repl_generated_new_m9` covers the refusals of a declaration in place
+  and of the metaclass install path.
   `cli_repl_redeclare_stale_method` covers the REPL redeclaration that brings
   a variable back with another modifier.
 - `tests/unit/test_ivar_modifiers.cpp` (`IvarModifiers:` cases), among them
