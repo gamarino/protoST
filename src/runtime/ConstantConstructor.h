@@ -75,6 +75,43 @@ void checkConstantConstructorFree(STRuntime& rt, proto::ProtoContext* ctx,
 void installConstantConstructor(STRuntime& rt, proto::ProtoContext* ctx,
                                 const proto::ProtoObject* cls);
 
+// The generated `new` (explicit-state spec §6.2, maintainer ruling of
+// 2026-11-23). Object class >> new checks nothing. A class that has
+// constants and does not reach a generated `new` through its metaclass chain
+// gets one on its own metaclass, a method equivalent to
+//     new  ^ self __checkConstantsOf: super new after: #new
+// whose `super` is bound to that metaclass, so a kernel `new` above it
+// (SortedCollection, WriteStream, Random, UUID) still runs first. The class
+// records the method object it installed under `__constant_new__`. A
+// subclass without constants of its own inherits it through metaclass
+// lookup. A class that no longer needs its own loses it, and only the
+// recorded method object is ever removed, never a user method.
+//
+// installGeneratedNew installs, re-installs or removes the method of `cls`
+// for its current records. M9: a user `new` on the metaclass of a class with
+// constants refuses it with an Error (ClassedErrorSignal), before anything
+// is changed. installConstantConstructor calls it.
+void installGeneratedNew(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* cls);
+
+// M9 before a declaration changes anything: once `cls`'s own constants are
+// `ownConstants`, neither `cls` nor, when it gains constants of its own, any
+// class bound as a global whose chain holds it may keep a user `new` on its
+// metaclass. Throws a ClassedErrorSignal (Error) with M9's text otherwise.
+void checkGeneratedNewFree(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* cls,
+                           const std::vector<std::string>& ownConstants);
+
+// Re-plans the generated `new` of every class bound as a global whose chain
+// holds `cls`, after a declaration changed `cls` in place: a class that
+// gained or lost constants through it, a mixin's included.
+void refreshDependentGeneratedNews(STRuntime& rt, proto::ProtoContext* ctx,
+                                   const proto::ProtoObject* cls);
+
+// The classes bound as globals, other than `cls` and its metaclasses, whose
+// chain holds `cls` (its subclasses and the classes that use it as a mixin),
+// each once, with the fewest ancestors first.
+std::vector<const proto::ProtoObject*> classesHolding(STRuntime& rt, proto::ProtoContext* ctx,
+                                                      const proto::ProtoObject* cls);
+
 // The selector `cls` answers as its generated constructor, read through the
 // chain (pre-flight ruling C9), or "" when it has none.
 std::string constantConstructorOf(STRuntime& rt, proto::ProtoContext* ctx,

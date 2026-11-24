@@ -229,6 +229,105 @@ const proto::ProtoObject* recordOwnerOf(STRuntime& rt, proto::ProtoContext* ctx,
     return owner ? owner : cls;
 }
 
+// ---------------------------------------------------------------------------
+// The generated `new` (ConstantConstructor.h).
+// ---------------------------------------------------------------------------
+
+const proto::ProtoString* generatedNewKey(proto::ProtoContext* ctx) {
+    return proto::ProtoString::createSymbol(ctx, "__constant_new__");
+}
+
+const proto::ProtoString* newSelector(proto::ProtoContext* ctx) {
+    return proto::ProtoString::createSymbol(ctx, "new");
+}
+
+// The metaclass `cls` owns, or nullptr when it has none yet.
+const proto::ProtoObject* ownMetaclassOf(const Bootstrap& b, proto::ProtoContext* ctx,
+                                         const proto::ProtoObject* cls) {
+    const proto::ProtoObject* m = cls->getOwnAttributeDirect(ctx, b.sym.metaclass);
+    return m && m != PROTO_NONE ? m : nullptr;
+}
+
+// The method object `cls` recorded as its generated `new`, or nullptr.
+const proto::ProtoObject* recordedNewOf(proto::ProtoContext* ctx, const proto::ProtoObject* cls) {
+    const proto::ProtoObject* v = cls->getOwnAttributeDirect(ctx, generatedNewKey(ctx));
+    return v && v != PROTO_NONE ? v : nullptr;
+}
+
+// The `new` the metaclass of `cls` holds itself, or nullptr.
+const proto::ProtoObject* ownNewOf(const Bootstrap& b, proto::ProtoContext* ctx,
+                                   const proto::ProtoObject* cls) {
+    const proto::ProtoObject* meta = ownMetaclassOf(b, ctx, cls);
+    if (!meta) return nullptr;
+    const proto::ProtoObject* v = meta->getOwnAttributeDirect(ctx, newSelector(ctx));
+    return v && v != PROTO_NONE ? v : nullptr;
+}
+
+// A user `new` on the metaclass of `cls`: one that is not the generated one
+// `cls` recorded. M9 keeps it off a class with constants.
+bool hasUserNew(const Bootstrap& b, proto::ProtoContext* ctx, const proto::ProtoObject* cls) {
+    const proto::ProtoObject* own = ownNewOf(b, ctx, cls);
+    return own && own != recordedNewOf(ctx, cls);
+}
+
+void refuseUserNew(const Bootstrap& b, proto::ProtoContext* ctx, const proto::ProtoObject* cls) {
+    if (hasUserNew(b, ctx, cls))
+        throw ClassedErrorSignal("Error", newRedefinitionText(classNameOf(b, ctx, cls)));
+}
+
+// Whether metaclass lookup from `cls` reaches a generated `new` before any
+// other: the first class on its chain, nearest first, whose metaclass holds
+// a `new` itself decides (Object's holds the kernel one).
+bool inheritsGeneratedNew(const Bootstrap& b, proto::ProtoContext* ctx,
+                          const proto::ProtoObject* cls) {
+    const proto::ProtoList* chain = cls->getParents(ctx);
+    if (!chain) return false;
+    TransientPin pinChain(ctx, reinterpret_cast<const proto::ProtoObject*>(chain));
+    const proto::proto_ulong n = chain->getSize(ctx);
+    for (proto::proto_ulong i = 0; i < n; ++i) {
+        const proto::ProtoObject* p = chain->getAt(ctx, listIndex(i));
+        if (!isClass(b, ctx, p)) continue;
+        const proto::ProtoObject* own = ownNewOf(b, ctx, p);
+        if (own) return own == recordedNewOf(ctx, p);
+    }
+    return false;
+}
+
+// The method `new  ^ self __checkConstantsOf: super new after: #new`,
+// compiled by hand as the generated constructor is, and stamped for `super`
+// with the metaclass it is installed on.
+const proto::ProtoObject* buildGeneratedNew(STRuntime& rt, proto::ProtoContext* ctx,
+                                            const proto::ProtoObject* cls,
+                                            const proto::ProtoObject* meta) {
+    const Bootstrap& b = rt.bootstrap();
+    auto module = std::make_unique<BytecodeModule>();
+    module->setArgCount(1);                                  // local 0 is self
+    const auto newIdx = static_cast<unsigned int>(module->internSymbol("new"));
+    module->emit(Op::PUSH_SELF, 0);                          // receiver of the check
+    module->emit(Op::PUSH_SELF, 0);                          // receiver of super new
+    module->emitWide(Op::SEND_SUPER, newIdx);
+    module->emitWide(Op::PUSH_CONST, newIdx);
+    module->emitWide(Op::SEND_KEYWORD, static_cast<unsigned int>(
+                                           module->internSymbol("__checkConstantsOf:after:")));
+    module->emit(Op::RETURN, 0);
+    module->setLocalNames({"self"});
+    const std::string className = classNameOf(b, ctx, cls);
+    module->setDefiningClass(className);
+    module->setDebugName(className + " class>>new");
+    module->setSourceName("<generated new>");
+    const BytecodeModule& code = rt.adoptModule(std::move(module));
+    // The method object, as installConstantConstructor makes one.
+    const proto::ProtoObject* codeRef = blockCodeRefFor(rt, ctx, code);
+    TransientPin pinCode(ctx, codeRef);
+    const proto::ProtoString* names[4] = {
+        b.sym.bcPtr, b.sym.captured, b.sym.homeFrame, b.sym.blockSelf };
+    const proto::ProtoObject* values[4] = { codeRef, PROTO_NONE, ctx->fromLong(0), PROTO_NONE };
+    const proto::ProtoObject* method = b.closureTemplate->setAttributes(ctx, 4, names, values);
+    TransientPin pinMethod(ctx, method);
+    stampDefiningClass(rt, ctx, meta, method);
+    return method;
+}
+
 } // namespace
 
 const proto::ProtoString* constantConstructorKey(proto::ProtoContext* ctx) {
@@ -255,6 +354,7 @@ void installConstantConstructor(STRuntime& rt, proto::ProtoContext* ctx,
                                 const proto::ProtoObject* cls) {
     const Bootstrap& b = rt.bootstrap();
     if (!isClass(b, ctx, cls)) return;
+    installGeneratedNew(rt, ctx, cls);
     const ConstructorPlan plan = planFor(rt, ctx, cls, ownConstantsOf(ctx, cls));
     const proto::ProtoString* key = constantConstructorKey(ctx);
     const std::string previous = ownText(ctx, cls, key);
@@ -321,6 +421,98 @@ void installConstantConstructor(STRuntime& rt, proto::ProtoContext* ctx,
     const proto::ProtoString* selectorSym = proto::ProtoString::createSymbol(ctx, selector.c_str());
     meta->setAttribute(ctx, selectorSym, method);
     mcls->setAttribute(ctx, key, selectorSym->asObject(ctx));
+}
+
+std::vector<const proto::ProtoObject*> classesHolding(STRuntime& rt, proto::ProtoContext* ctx,
+                                                      const proto::ProtoObject* cls) {
+    const Bootstrap& b = rt.bootstrap();
+    // The classes bound as globals, collected first: the callback must not
+    // allocate. Every one is reachable from the globals.
+    struct Sink { const Bootstrap* b; std::vector<const proto::ProtoObject*> all; };
+    Sink sink{&b, {}};
+    if (const proto::ProtoObject* g = rt.globals())
+        g->processOwnAttributes(ctx, &sink,
+            [](proto::ProtoContext* c, void* self, const proto::ProtoString*,
+               const proto::ProtoObject* v) {
+                auto* k = static_cast<Sink*>(self);
+                if (!v || v == PROTO_NONE || v->isInteger(c) || v->isFloat(c) || v->asString(c))
+                    return;
+                const proto::ProtoObject* own = v->getOwnAttributeDirect(c, k->b->sym.className);
+                if (own && own != PROTO_NONE) k->all.push_back(v);
+            });
+    std::vector<std::pair<proto::proto_ulong, const proto::ProtoObject*>> found;
+    std::vector<const proto::ProtoObject*> seen{cls};
+    for (const proto::ProtoObject* k : sink.all) {
+        if (std::find(seen.begin(), seen.end(), k) != seen.end() || !isClass(b, ctx, k)) continue;
+        seen.push_back(k);
+        const proto::ProtoList* chain = k->getParents(ctx);
+        if (!chain) continue;
+        TransientPin pinChain(ctx, reinterpret_cast<const proto::ProtoObject*>(chain));
+        const proto::proto_ulong n = chain->getSize(ctx);
+        for (proto::proto_ulong i = 0; i < n; ++i)
+            if (chain->getAt(ctx, listIndex(i)) == cls) {
+                found.emplace_back(n, k);
+                break;
+            }
+    }
+    std::stable_sort(found.begin(), found.end(),
+                     [](const auto& x, const auto& y) { return x.first < y.first; });
+    std::vector<const proto::ProtoObject*> out;
+    for (const auto& f : found) out.push_back(f.second);
+    return out;
+}
+
+void installGeneratedNew(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* cls) {
+    const Bootstrap& b = rt.bootstrap();
+    if (!isClass(b, ctx, cls)) return;
+    const std::vector<std::string> own = ownConstantsOf(ctx, cls);
+    const bool hasConstants = !constantNamesOf(rt, ctx, cls, own).empty();
+    const bool needed = hasConstants && (!own.empty() || !inheritsGeneratedNew(b, ctx, cls));
+    const proto::ProtoObject* recorded = recordedNewOf(ctx, cls);
+    auto* mcls = const_cast<proto::ProtoObject*>(cls);
+    if (!needed) {
+        // A generated new the class no longer needs: it has no constants, or
+        // it now inherits one. Only the recorded method object is removed.
+        if (recorded) {
+            if (const proto::ProtoObject* meta = ownMetaclassOf(b, ctx, cls))
+                if (meta->getOwnAttributeDirect(ctx, newSelector(ctx)) == recorded)
+                    meta->removeAttribute(ctx, newSelector(ctx));
+            mcls->removeAttribute(ctx, generatedNewKey(ctx));
+        }
+        // M9: a class with constants that inherits its generated new keeps
+        // no user new either.
+        if (hasConstants) refuseUserNew(b, ctx, cls);
+        return;
+    }
+    refuseUserNew(b, ctx, cls);
+    const proto::ProtoObject* meta = ensureMetaclass(b, ctx, cls);
+    // Built afresh on every declaration: the method is stamped with the
+    // metaclass it is installed on, which addBehavior: replaces.
+    const proto::ProtoObject* method = buildGeneratedNew(rt, ctx, cls, meta);
+    TransientPin pinMethod(ctx, method);
+    meta->setAttribute(ctx, newSelector(ctx), method);
+    mcls->setAttribute(ctx, generatedNewKey(ctx), method);
+}
+
+void checkGeneratedNewFree(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* cls,
+                           const std::vector<std::string>& ownConstants) {
+    const Bootstrap& b = rt.bootstrap();
+    if (!isClass(b, ctx, cls)) return;
+    if (constantNamesOf(rt, ctx, cls, ownConstants).empty()) return;
+    refuseUserNew(b, ctx, cls);
+    // A class redeclared in place that now declares constants gives them to
+    // every class whose chain holds it; none may keep a user new. (A new
+    // class object has no such classes; one that only inherits constants
+    // gave them to its dependents already.)
+    if (ownConstants.empty()
+        || cls->hasOwnAttribute(ctx, b.sym.instVarNames) != PROTO_TRUE)
+        return;
+    for (const proto::ProtoObject* k : classesHolding(rt, ctx, cls)) refuseUserNew(b, ctx, k);
+}
+
+void refreshDependentGeneratedNews(STRuntime& rt, proto::ProtoContext* ctx,
+                                   const proto::ProtoObject* cls) {
+    for (const proto::ProtoObject* k : classesHolding(rt, ctx, cls)) installGeneratedNew(rt, ctx, k);
 }
 
 const proto::ProtoObject* constructWithConstants(STRuntime& rt, proto::ProtoContext* ctx,

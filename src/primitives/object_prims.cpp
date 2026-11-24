@@ -226,31 +226,6 @@ const proto::ProtoObject* prim_Object_sleepMs(STRuntime&,
     return r;
 }
 
-namespace {
-// Stamp the method's body (and its blocks) with the identity of the class it
-// is installed on, for `super` (BytecodeModule::definingClassId). The class
-// gets its `__class_id__`, a process-unique integer, on its first install;
-// `addBehavior:` copies it to the rebuilt class, which stands for the same
-// class. A method object without bytecode (a primitive) is left alone.
-void stampDefiningClass(STRuntime& rt, proto::ProtoContext* ctx,
-                        const proto::ProtoObject* cls,
-                        const proto::ProtoObject* methodObj) {
-    const BytecodeModule* code =
-        blockCodeOf(ctx, methodObj->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr));
-    if (!code) return;
-    static std::atomic<std::int64_t> nextClassId{1};
-    const proto::ProtoString* idKey = rt.bootstrap().sym.classId;
-    std::int64_t id = 0;
-    const proto::ProtoObject* idObj = cls->getOwnAttributeDirect(ctx, idKey);
-    if (idObj && idObj != PROTO_NONE && idObj->isInteger(ctx)) {
-        id = idObj->asLong(ctx);
-    } else {
-        id = nextClassId.fetch_add(1, std::memory_order_relaxed);
-        cls->setAttribute(ctx, idKey, ctx->fromLong(id));
-    }
-    code->setDefiningClassId(id);
-}
-} // namespace
 
 namespace {
 // The name a class object carries (`__class_name__`), or "" for none.
@@ -552,33 +527,11 @@ void refuseStaleMethods(STRuntime& rt, proto::ProtoContext* ctx, const proto::Pr
                         const std::string& className,
                         const std::unordered_map<std::string, IvarModifier>& reintroduced) {
     const Bootstrap& b = rt.bootstrap();
-    auto isObject = [&](const proto::ProtoObject* o) {
-        return o && o != PROTO_NONE && !o->isInteger(ctx) && !o->isFloat(ctx) && !o->asString(ctx);
-    };
-    // The classes bound as globals (collected first: the callback must not
-    // allocate), then those whose chain holds `cls`. Every one is reachable
-    // from the globals, so the raw pointers stay valid.
-    struct ClassSink { const Bootstrap* b; std::vector<const proto::ProtoObject*> all; };
-    ClassSink classSink{&b, {}};
-    if (const proto::ProtoObject* g = rt.globals())
-        g->processOwnAttributes(ctx, &classSink,
-            [](proto::ProtoContext* c, void* self, const proto::ProtoString*,
-               const proto::ProtoObject* v) {
-                auto* k = static_cast<ClassSink*>(self);
-                if (!v || v == PROTO_NONE || v->isInteger(c) || v->isFloat(c) || v->asString(c))
-                    return;
-                const proto::ProtoObject* own = v->getOwnAttributeDirect(c, k->b->sym.className);
-                if (own && own != PROTO_NONE) k->all.push_back(v);
-            });
+    // The class, then those whose chain holds it, in name order.
     std::vector<std::pair<std::string, const proto::ProtoObject*>> classes{{className, cls}};
-    std::unordered_set<const proto::ProtoObject*> seen{cls};
     std::vector<std::pair<std::string, const proto::ProtoObject*>> users;
-    for (const proto::ProtoObject* k : classSink.all) {
-        if (!seen.insert(k).second || isMetaclass(b, ctx, k)) continue;
-        bool holds = false;
-        forClassAndAncestors(ctx, k, [&](const proto::ProtoObject* p) { holds = holds || p == cls; });
-        if (holds) users.emplace_back(ownClassName(b, ctx, k), k);
-    }
+    for (const proto::ProtoObject* k : classesHolding(rt, ctx, cls))
+        users.emplace_back(ownClassName(b, ctx, k), k);
     std::sort(users.begin(), users.end(),
               [](const auto& x, const auto& y) { return x.first < y.first; });
     classes.insert(classes.end(), users.begin(), users.end());
@@ -677,6 +630,9 @@ void declareInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
     const proto::ProtoString* hasConstKey = proto::ProtoString::createSymbol(ctx, "__has_constants__");
     const proto::ProtoString* str = names && names != PROTO_NONE ? names->asString(ctx) : nullptr;
     const bool meta = isMetaclass(b, ctx, cls);
+    // A class object that already records variables is being redeclared in
+    // place: classes whose chain holds it may gain or lose constants.
+    const bool inPlace = cls->hasOwnAttribute(ctx, ivKey) == PROTO_TRUE;
     const bool anyModifier = std::any_of(modifiers.begin(), modifiers.end(),
                                          [](IvarModifier m) { return m != IvarModifier::Plain; });
     if (meta && anyModifier)
@@ -743,7 +699,17 @@ void declareInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
         for (std::size_t i = 0; i < modifiers.size(); ++i)
             if (modifiers[i] == IvarModifier::Constant) ownConstants.push_back(declared[i]);
         checkConstantConstructorFree(rt, ctx, cls, ownConstants);
+        // M9 for the generated new: no user new on the class, nor, when it
+        // now declares constants in place, on a class whose chain holds it.
+        checkGeneratedNewFree(rt, ctx, cls, ownConstants);
     }
+    // Every instance template and constant cache built before this
+    // declaration may now be wrong (this class's or, for a subclass or a
+    // class using this one, an inherited variable). The epoch advances when
+    // the declaration ends, after its last record, and also when a later
+    // step throws (the generated new refuses a user new, M9), so no cache
+    // outlives the records it was built from.
+    struct AdvanceLayoutEpoch { ~AdvanceLayoutEpoch() { noteInstanceLayoutChanged(); } } advance;
     auto* mcls = const_cast<proto::ProtoObject*>(cls);
     mcls->setAttribute(ctx, ivKey, names);
     if (!meta) {
@@ -763,11 +729,13 @@ void declareInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
             mcls->removeAttribute(ctx, hasConstKey);
         // The generated constructor over every constant, own and inherited
         // (§6.2, D-d); a subclass that adds none inherits its superclass's.
+        // It also installs the generated new.
         installConstantConstructor(rt, ctx, cls);
+        // The generated new of every class whose chain holds this one: a
+        // subclass or a class using it as a mixin may have gained or lost
+        // constants through it.
+        if (inPlace) refreshDependentGeneratedNews(rt, ctx, cls);
     }
-    // Every instance template built before this declaration may now lack a
-    // variable (this class's or, for a subclass, an inherited one).
-    noteInstanceLayoutChanged();
 }
 } // namespace
 
@@ -777,6 +745,30 @@ void declareInstVarNames(STRuntime& rt, proto::ProtoContext* ctx,
 //
 // Used by MethodDecl compilation (F4-U3) to attach a compiled method wrapper
 // (a BlockClosure-shaped object) to a class proto under its selector symbol.
+// M9 (explicit-state spec §6.2, §12; maintainer ruling of 2026-11-23): a
+// class-side method of `cls` cannot take the selector of a method generated
+// for it: its generated constructor, its own or the one it inherits (read
+// through the chain, pre-flight ruling C9), or, for a class with constants,
+// own or inherited, the generated new that checks them. The compiler refuses
+// both for a class it can see; this refuses them at install time for every
+// other class, on both install paths (__installClassMethod:as: on the class,
+// __installMethod:as: on its metaclass), so no install bypasses the check.
+static void refuseGeneratedSelector(STRuntime& rt, proto::ProtoContext* ctx,
+                                    const proto::ProtoObject* cls, const std::string& selector,
+                                    const proto::ProtoObject* methodObj) {
+    const Bootstrap& b = rt.bootstrap();
+    std::string text;
+    if (selector == "new" && cls->getAttribute(ctx, b.sym.hasConstants) == PROTO_TRUE)
+        text = newRedefinitionText(ownClassName(b, ctx, cls));
+    else if (!selector.empty() && selector == constantConstructorOf(rt, ctx, cls))
+        text = constructorRedefinitionText(selector, ownClassName(b, ctx, cls));
+    else
+        return;
+    const BytecodeModule* code = blockCodeOf(ctx, methodObj->getOwnAttributeDirect(ctx, b.sym.bcPtr));
+    if (code) text += " (line " + std::to_string(code->methodLine()) + ")";
+    throw ClassedErrorSignal("Error", text);
+}
+
 const proto::ProtoObject* prim_Object_installMethod(STRuntime& rt,
                                                      proto::ProtoContext* ctx,
                                                      const proto::ProtoObject* r,
@@ -787,6 +779,13 @@ const proto::ProtoObject* prim_Object_installMethod(STRuntime& rt,
     // a[1] = selector symbol (ProtoString tagged as symbol)
     auto* selStr = a[1]->asString(ctx);
     if (!selStr) throw NativeError("__installMethod:as: selector must be a symbol");
+    // On a metaclass, the method is class-side for its sole instance (M9).
+    if (isMetaclass(rt.bootstrap(), ctx, r)) {
+        const proto::ProtoObject* cls =
+            r->getOwnAttributeDirect(ctx, rt.bootstrap().sym.soleInstance);
+        if (cls && cls != PROTO_NONE)
+            refuseGeneratedSelector(rt, ctx, cls, selStr->toStdString(ctx), a[0]);
+    }
     resolveLateVariables(rt, ctx, r, /*classSide=*/false, a[0], selStr->toStdString(ctx));
     stampDefiningClass(rt, ctx, r, a[0]);
     r->setAttribute(ctx, selStr, a[0]);
@@ -812,18 +811,8 @@ const proto::ProtoObject* prim_Object_installClassMethod(STRuntime& rt,
     if (!selStr)
         throw NativeError(
             "__installClassMethod:as: selector must be a symbol");
-    // M9 (explicit-state spec §6.2, §12): the generated constructor of the
-    // class, its own or the one it inherits (read through the chain,
-    // pre-flight ruling C9), cannot be redefined. The compiler refuses it for
-    // a class it can see; this refuses it for every other class.
     const std::string selector = selStr->toStdString(ctx);
-    if (!selector.empty() && selector == constantConstructorOf(rt, ctx, r)) {
-        const BytecodeModule* code =
-            blockCodeOf(ctx, a[0]->getOwnAttributeDirect(ctx, rt.bootstrap().sym.bcPtr));
-        std::string text = constructorRedefinitionText(selector, ownClassName(rt.bootstrap(), ctx, r));
-        if (code) text += " (line " + std::to_string(code->methodLine()) + ")";
-        throw ClassedErrorSignal("Error", text);
-    }
+    refuseGeneratedSelector(rt, ctx, r, selector, a[0]);
     resolveLateVariables(rt, ctx, r, /*classSide=*/true, a[0], selector);
     const proto::ProtoObject* meta = ensureMetaclass(rt.bootstrap(), ctx, r);
     stampDefiningClass(rt, ctx, meta, a[0]);
@@ -2318,16 +2307,6 @@ const proto::ProtoObject* prim_Behavior_constructConstants(STRuntime& rt, proto:
     return constructWithConstants(rt, ctx, r, a[0], a[1]);
 }
 
-// aClass __hasConstants   (private) → whether the class declares or inherits
-//   a constant: the one test `new` makes (plan decision D-e), the class's
-//   `__has_constants__` read through the chain.
-const proto::ProtoObject* prim_Behavior_hasConstants(STRuntime& rt, proto::ProtoContext* ctx,
-                                                     const proto::ProtoObject* r,
-                                                     const proto::ProtoObject* const*, int) {
-    return r->getAttribute(ctx, rt.bootstrap().sym.hasConstants) == PROTO_TRUE ? PROTO_TRUE
-                                                                               : PROTO_FALSE;
-}
-
 // aClass __checkConstantsOf: anInstance after: aSymbol   (private)
 //   The end-of-construction check of `new` (plan decision D-e) and of the
 //   generated constructor: every constant of the class must be set on
@@ -2346,8 +2325,8 @@ const proto::ProtoObject* prim_Behavior_checkConstantsOf(STRuntime& rt, proto::P
 // aClass __checkConstructed: anInstance selector: aSymbol   (private)
 //   The end-of-construction check of a class-side constructor that builds
 //   with basicNew and a setter (SortedCollection sortBlock:, Point x:y:, ...):
-//   for a class without constants (the cached `__has_constants__`, read
-//   through the chain) it answers anInstance at once, so such constructors
+//   for a class without constants (`__has_constants__`, read through the
+//   chain) it answers anInstance at once, so such constructors
 //   pay this one primitive call and no Smalltalk send; otherwise it is
 //   __checkConstantsOf:after: (M13, naming aSymbol). It sends no initialize.
 const proto::ProtoObject* prim_Behavior_checkConstructed(STRuntime& rt, proto::ProtoContext* ctx,
@@ -2880,7 +2859,6 @@ void installObjectPrimitives(STRuntime& rt) {
     bindPrimitive(rt, b.behaviorProto, "instVarModifierOf:", primitiveMethod<prim_Behavior_instVarModifierOf>);
     bindPrimitive(rt, b.behaviorProto, "__constructConstants:selector:",
                   primitiveMethod<prim_Behavior_constructConstants>);
-    bindPrimitive(rt, b.behaviorProto, "__hasConstants", primitiveMethod<prim_Behavior_hasConstants>);
     bindPrimitive(rt, b.behaviorProto, "__checkConstructed:selector:",
                   primitiveMethod<prim_Behavior_checkConstructed>);
     bindPrimitive(rt, b.behaviorProto, "__checkConstantsOf:after:",

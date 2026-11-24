@@ -103,6 +103,15 @@ inline std::string constructorRedefinitionText(const std::string& selector,
            + " and cannot be redefined; give your constructor another name";
 }
 
+// M9 for `new` on a class with constants: its class-side `new` is
+// generated, to run the end-of-construction check after `super new`
+// (explicit-state spec §6.2), and a user method cannot take its place.
+inline std::string newRedefinitionText(const std::string& className) {
+    return "new is generated for " + className
+           + ", which has constants: it runs super new and then checks them, and cannot be"
+             " redefined; give your constructor another name";
+}
+
 // Why `:=` to a modified instance variable is refused (explicit-state spec
 // §12): M1, M2 and M4.
 enum class AssignmentRefusal : uint8_t {

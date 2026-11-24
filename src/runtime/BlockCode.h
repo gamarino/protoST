@@ -37,6 +37,14 @@ namespace detail {
 extern std::atomic<std::uint64_t> g_sharedCodeCellsFinalized;
 } // namespace detail
 
+// Stamps the body of `methodObj` (and its blocks) with the identity of `cls`,
+// the method holder it is installed on, for `super`
+// (BytecodeModule::definingClassId): `cls` gets its `__class_id__`, a
+// process-unique integer, on its first install. A method object without
+// bytecode (a primitive) is left alone (STRuntime.cpp).
+void stampDefiningClass(STRuntime& rt, proto::ProtoContext* ctx,
+                        const proto::ProtoObject* cls, const proto::ProtoObject* methodObj);
+
 // The first closure over `module` in `rt`: creates its `__bc_ptr__` cell,
 // anchors it in the runtime's live registry and publishes it on the module
 // (STRuntime.cpp).
