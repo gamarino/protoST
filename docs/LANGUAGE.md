@@ -1304,17 +1304,18 @@ cannot be redefined; give your constructor another name`. A constructor of
 another name can call it. `new` stays available; then `initialize` must set
 the constants.
 
-**`new` on a class with constants is generated too.** The class answers a
-class-side `new` that runs `super new` (so `basicNew`, `initialize`, and any
-`new` an ancestor defines, such as `SortedCollection`'s) and then the
-end-of-construction check. It cannot be redefined either: a class-side `new`
-on a class with constants, own or inherited, is the compile error `new is
-generated for Account, which has constants: it runs super new and then checks
-them, and cannot be redefined; give your constructor another name`. The same
-error refuses such a method installed late, and a declaration that would give
-constants to a class, or to an ancestor of a class, that already has a
-class-side `new` of its own; the declaration then changes nothing. Set the
-state in `initialize`, or give a constructor that does more another name.
+**`new` on a class with constants checks them.** The class inherits a
+generated `new`, placed just above its own class side, that runs `super new`
+(so `basicNew`, `initialize`, and any `new` an ancestor defines, such as
+`SortedCollection`'s) and then the end-of-construction check. It is not one of
+the class's methods: `Account class selectors` does not list it and
+`Account class superclass` is still `Object class`. A class-side `new` of your
+own overrides it like any inherited method. One that calls `super new` gets the
+check; one written `^ self basicNew initialize` (the Pharo idiom) does not, and
+a constant it leaves unset surfaces at its first read. A subclass inherits
+whichever `new` its superclass answers; a subclass that declares constants of
+its own is checked by its own generated `new`, which runs the inherited `new`
+as its `super new`.
 
 <!-- snippet-group: modifiers -->
 ```smalltalk
@@ -1366,17 +1367,16 @@ be "set to nil": a field that is optional is write-once or plain.
   anywhere else: `new` on a class without constants is the 0.16.1 method,
   with no test and no extra send. The class with constants carries the cost,
   in its generated `new` (benchmarks/reports/2026-11-23-release-0.17.0-const-read.md).
-- Because `new` is generated, no class-side `new` can skip the check: the
-  Pharo idiom `^ self basicNew initialize` is refused on a class with
-  constants, as any other `new` is.
+- A class-side `new` override that calls `super new` gets the check. One
+  written `^ self basicNew initialize` (the Pharo idiom) does not.
 - `basicNew` stays allowed and skips the check. It is the raw allocator that
   serializers and loaders use, filling constants by reflection afterwards.
 
 **Reading an unset constant signals `UnsetConstantError`**
 ([§4.13.8](#4138-unsetconstanterror)) instead of answering nil. This covers
 every object that left construction without the check: one made by
-`basicNew` and filled partly or not at all, `basicNew initialize` written by
-hand included, when `initialize` forgot a constant. The mistake surfaces at the first read,
+`basicNew` and filled partly or not at all, and one made by a `new` override
+whose `initialize` forgot a constant. The mistake surfaces at the first read,
 naming the constant.
 
 <!-- snippet-group: modifiers -->
@@ -1690,11 +1690,10 @@ What a program sees when it gets the state rules wrong:
 - A constant assigned outside `initialize`, or in a closure there: a compile
   error. A second set at run time: `ModificationForbidden`. A constant still
   unset when `new` or the generated constructor ends: an `Error` naming it
-  and the constructor. A class-side `new`, or a method under the generated
-  constructor's selector, on a class with constants: a compile error, or an
-  `Error` when installed late. A constant read while unset, on an object made any
-  other way: an `UnsetConstantError` naming it; `instVarIsSet:` asks first
-  without any error.
+  and the constructor. A class-side method under the generated constructor's
+  selector: a compile error, or an `Error` when installed late. A constant
+  read while unset, on an object made any other way: an `UnsetConstantError`
+  naming it; `instVarIsSet:` asks first without any error.
 - A write-once variable assigned a value not `=` to the one installed:
   `ModificationForbidden`. An equal value is silent and answers the installed
   one.

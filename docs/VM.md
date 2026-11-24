@@ -501,7 +501,7 @@ its error class).
 | `__ivar_modifiers__` | a String of `kind:name` words for the class's **own** non-plain variables (`'constant:k writeOnce:w'`); plain variables are not listed |
 | `__has_constants__` | `true` on a class that declares or inherits a constant, read through the chain |
 | `__constant_constructor__` | the selector of the generated constructor this class owns (absent on a class that inherits its parent's) |
-| `__constant_new__` | the method object of the generated `new` this class installed on its metaclass (absent on a class without constants and on one whose metaclass lookup reaches an ancestor's generated `new` first); the only `new` that stale removal ever takes off a metaclass |
+| `__constant_new__` | the hidden parent holding the generated `new` of this class, first in its metaclass's parents (absent on a class without constants and on one that inherits an ancestor's); the only hidden parent that a re-plan ever places in or takes out of its metaclass's chain |
 | `__constant_cache__` | the constants a construction checks and the constructor selectors still valid for the class, keyed to the instance-layout epoch (no chain walk per construction) |
 | `__user_declared__` | set on every class user code declares; a redeclaration is compared with such a class only (M11) |
 | `__user_class__` | set by `__subclassNamed:` only: the textual path may re-run into this class object |
@@ -513,7 +513,7 @@ its error class).
 | `__setInstVarNames:modifiers:` | `Behavior` | the textual declaration with modifier clauses: the names in source order and the `kind:name` String, recorded through `declareInstVarNames`, the path every declaration form shares (M10, M11, the generated constructor) |
 | `__subclass:instanceVariableNames:modifiers:uses:` | `Behavior` | the textual `uses:` declaration with modifiers, declared once (ruling C8) |
 | `__constructConstants:selector:` | `Behavior` | the generated constructor's allocation: a new instance with the non-nil arguments written in one write group under the constants the selector names; a constructor that is out of date signals an `Error` naming the class to redeclare |
-| `__checkConstantsOf:after:` | `Behavior` | the end-of-construction check (M13) at the end of the generated `new` and the generated constructor: answers the instance, or signals and answers nil |
+| `__checkConstantsOf:after:` | `Behavior` | the end-of-construction check (M13) at the end of the generated `new` (in the hidden parent) and the generated constructor: answers the instance, or signals and answers nil |
 | `__checkConstructed:selector:` | `Behavior` | the same check at the end of a kernel or library constructor other than `new`; answers the instance at once, with no send, for a class without constants |
 | `__allInstVarNamesString` | `Behavior` | the names of `allInstVarNames` in layout order (superclass, then mixins, then own), each once |
 | `__checkedNew:` | `Object class` (kernel, `lib/kernel/object.st`) | the end of the `new` of `SortedCollection`, `WriteStream`, `Random` and `UUID`: sends `initialize` once and answers the instance; it checks nothing (a subclass with constants is checked by its generated `new`, which runs this `new` as `super new`) |
@@ -521,10 +521,9 @@ its error class).
 | `__copyWithInstVarValues:` | `Object` | a shallow copy whose declared variables are replaced, in one `setAttributes`, by the non-nil values given (`deepCopy`) |
 
 `__installClassMethod:as:` (older) also refuses a method under the selector of
-the generated constructor the chain records, and a `new` on a class with
-constants, own or inherited (M9); `__installMethod:as:` sent to a metaclass
-refuses the same two selectors for its sole instance, so neither install path
-bypasses the check. Both resolve late variables by modifier (section 2.5). The public messages
+the generated constructor the chain records (M9); `__installMethod:as:` sent
+to a metaclass refuses the same selector for its sole instance, so neither
+install path bypasses it. A class-side `new` installs on both paths. Both resolve late variables by modifier (section 2.5). The public messages
 `compareAndSet:from:to:`, `update:with:`, `setInstVar:from:to:` and
 `instVarIsSet:` are primitives on `Object` (`src/primitives/state_prims.cpp`).
 
@@ -551,12 +550,15 @@ On M13 the check signals in place and answers nil, so the constructor never
 answers a half-built instance. `--disasm` does not list the constructor: it
 is not in the program's module.
 
-**The generated `new`** (maintainer ruling of 2026-11-23). `Object class >>
-new` is the 0.16.1 method, `^ self basicNew initialize` in three statements,
-and checks nothing, so a class without constants pays nothing for them. A
-class with constants whose metaclass lookup would not reach a generated `new`
-before any other gets its own on its metaclass, built by
-`installGeneratedNew` (same file) when the declaration runs:
+**The generated `new`** (maintainer ruling of 2026-11-23, round 3).
+`Object class >> new` is the 0.16.1 method, `^ self basicNew initialize` in
+three statements, and checks nothing, so a class without constants pays
+nothing for them. A class with constants that declares some of its own, or
+whose metaclass lookup would not reach a generated `new` first, gets a
+**hidden parent**: an unnamed mutable object, built by `installGeneratedNew`
+(same file) when the declaration runs, and placed first in its metaclass's
+parent list, ahead of the superclass's metaclass. It holds only
+`__generated_new_of__` (its metaclass) and this method:
 
 ```text
 PUSH_SELF                                   receiver of the check
@@ -566,20 +568,38 @@ SEND_KEYWORD #__checkConstantsOf:after:            M13: the instance, or nil
 RETURN
 ```
 
-Its `super` is bound, through `stampDefiningClass` (`src/runtime/BlockCode.h`,
-the one class-id counter every install shares), to the metaclass it is
-installed on, so a kernel `new` above it (`SortedCollection`, `WriteStream`,
-`Random`, `UUID`) still runs first. A subclass without constants of its own
-inherits it through metaclass lookup; one whose lookup reaches another `new`
-first (a mixin's constants under a `SortedCollection` subclass) gets its own.
-Every declaration re-plans the class, and a declaration in place re-plans
-every class bound as a global whose chain holds it (`classesHolding`); a class
-that no longer needs its generated `new` loses it, and only the method object
-recorded under `__constant_new__` is ever removed. M9: a user `new` on the
-metaclass of a class with constants is refused by the compiler, by both
-install paths, and by a declaration that would give constants to a class, or
-to the superclass or mixin of a class, that holds one, before the declaration
-records anything.
+The method is stamped with the hidden parent's `__class_id__`
+(`stampDefiningClass`, `src/runtime/BlockCode.h`, the one class-id counter
+every install shares), and the hidden parent's own parents are the rest of
+the metaclass's chain, so its `super new` continues above it: a kernel `new`
+(`SortedCollection`, `WriteStream`, `Random`, `UUID`) still runs first. A
+user class-side `new` on the metaclass comes before the hidden parent and
+overrides it; its `super new` resolves into the hidden parent and runs the
+check (conformance 58), and `^ self basicNew initialize` skips it
+(conformance 89, M14 at the first read).
+
+Which `new` a class without constants of its own inherits: the first class on
+its chain that has a hidden parent decides (it inherits it), or the first
+kernel class whose metaclass holds a `new` (it gets its own hidden parent);
+a user-written `new` is transparent to that choice, so a subclass inherits
+whatever its superclass's override does. A metaclass created later is a child
+of its superclass's metaclass and so carries the hidden parent; one that
+exists already is re-parented in place (`setParents` on the mutable
+metaclass, after the hidden parent is fully built): every declaration re-plans
+its class, and a declaration in place re-plans every class bound as a global
+whose chain holds it (`classesHolding`). Each rebuilt chain drops every hidden
+parent and puts back the live one of each metaclass on it, right after that
+metaclass. Only the hidden parent recorded under `__constant_new__` and built
+for the class's current metaclass (`addBehavior:` and a class copy carry the
+original's record, and get their own) is ever placed or taken out. The class
+record and the metaclass's chain keep it reachable for the collector.
+
+Reflection never sees it: it owns no `__class_name__`, so no walk that looks
+for a named parent stops on it; a metaclass's `superclass` is computed from
+its class (`Account class superclass == Object class`); `selectors`,
+`includesSelector:` and `inspect` show the metaclass's own attributes; and
+`lookupSelector: #new` answers the metaclass the hidden parent was built for
+(`visibleHolder`).
 
 **`UnsetConstantError`** is captured when the kernel has loaded
 (`Bootstrap::unsetConstantErrorClass`, pinned in the live registry), and

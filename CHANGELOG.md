@@ -27,13 +27,13 @@ at 0.7.1, unchanged.
     (`Account number:owner:`), which writes them in one write group, sends
     `initialize` and runs the end-of-construction check. It cannot be
     redefined.
-  - **The generated `new`:** a class with constants also answers a generated
-    class-side `new`, which runs `super new` (an ancestor's `new` included,
-    such as `SortedCollection`'s) and then the end-of-construction check.
-    It cannot be redefined either: a class-side `new` on a class with
-    constants is a compile error, an install-time error, and refuses a
-    declaration that would give constants to a class, or to an ancestor of
-    a class, that has one (M9).
+  - **The generated `new`:** a class with constants inherits a generated
+    class-side `new`, held by a hidden parent of its metaclass, which runs
+    `super new` (an ancestor's `new` included, such as `SortedCollection`'s)
+    and then the end-of-construction check. Reflection does not show it
+    (`Account class superclass` is `Object class`, `selectors` does not
+    list it). A user class-side `new` overrides it: one that calls `super
+    new` is checked, one written `^ self basicNew initialize` is not.
   - **Write-once variables:** `:=` is a CAS from nil; a write that finds the
     variable set is silent when the installed value is `=` to the written one,
     and signals `ModificationForbidden` otherwise.
@@ -187,11 +187,13 @@ changes here.
   `cli_unset_constant_error_reserved` (the reserved global refused on every
   route), and the unit case that M14 keeps its class when the global is
   rebound from C++. `const-generated-new-never-stale.st`,
-  `const-generated-new-stale.st`, `const-generated-new-super.st` and
-  `const-generated-new-m9.st` cover the generated `new` under redeclaration,
-  `addBehavior:`, mixins and kernel `new`s, and its M9 refusals;
-  `cli_repl_generated_new_m9` covers the refusals of a declaration in place
-  and of the metaclass install path.
+  `const-generated-new-stale.st`, `const-generated-new-super.st`,
+  `const-generated-new-subclass-override.st`,
+  `const-generated-new-late-user-new.st` and `const-generated-new-hidden.st`
+  cover the generated `new` under redeclaration, `addBehavior:`, mixins,
+  kernel `new`s and user overrides, and its invisibility to reflection;
+  `cli_repl_generated_new_in_place` covers a metaclass re-parented by a
+  declaration in place and the M9 refusal on the metaclass install path.
   `cli_repl_redeclare_stale_method` covers the REPL redeclaration that brings
   a variable back with another modifier.
 - `tests/unit/test_ivar_modifiers.cpp` (`IvarModifiers:` cases), among them
