@@ -387,6 +387,18 @@ struct STRuntime::Impl {
     // sends in ~5 s we are far below this ceiling per worker.
     Semaphore workerSem;
 
+    // S50: the exit gate. A worker that leaves workerLoop waits on `exitSem`
+    // for ~STRuntime to let it go (one permit at a time), names itself in
+    // `leavingWorker` and releases `leftSem`, so that ~STRuntime joins exactly
+    // that thread before it lets the next one go. A thread's exit runs
+    // protoCore's teardown (~ProtoContext submits the young generation under a
+    // spin lock), and up to 256 workers leaving at once spun on that lock.
+    // Both waits are Semaphores (a futex on an int, every release notifies;
+    // S19), not std::atomic<pointer>::wait.
+    Semaphore exitSem;
+    Semaphore leftSem;
+    std::atomic<const proto::ProtoThread*> leavingWorker{nullptr};
+
     // F6 v6 (2026-05-23 night): pool-pause gate. Set true by
     // `STRuntime::stopProcessing`; checked at the top of every worker
     // iteration BEFORE drainOne. When true the worker blocks on
@@ -1320,6 +1332,17 @@ void STRuntime::wakeCappedIfJudgeable() {
 // per-worker stats globals.
 namespace { void printWorkerStatsAtExit(); }
 
+namespace {
+// S50: workers out of workerLoop and not yet joined, and the most of them at
+// once during the last ~STRuntime (STRuntime::maxWorkersLeavingAtOnce).
+std::atomic<int> g_workersLeaving{0};
+std::atomic<int> g_maxWorkersLeaving{0};
+}
+
+int STRuntime::maxWorkersLeavingAtOnce() {
+    return g_maxWorkersLeaving.load(std::memory_order_seq_cst);
+}
+
 STRuntime::~STRuntime() {
     // Errors raised by actors for sends nobody observed (see future_prims).
     reportUnobservedActorErrors();
@@ -1382,11 +1405,28 @@ STRuntime::~STRuntime() {
         // and the stop-the-world quorum does not wait for it (F6 v3 E5 found
         // the deadlock an unbracketed join causes). The region touches no
         // ProtoObject. It nests harmlessly if ProtoThread::join opens one too.
+        //
+        // S50: the workers leave one at a time. Each worker that is done
+        // waits at the exit gate (workerLoop's LeaveInTurn); this loop lets
+        // one go, takes the thread it names and joins it, so the next one
+        // leaves only after the previous thread has ended. A thread's end
+        // runs protoCore's teardown, whose young-generation submit takes a
+        // process-wide spin lock: released together, up to 256 workers spun
+        // on it, and under ThreadSanitizer on four CPUs that took longer than
+        // the test's 900 s bound (CI 45420985532). Every worker of `pool`
+        // reaches the gate exactly once, so the loop ends.
         {
             proto::ProtoContext::UnmanagedScope unmanaged(impl_->rootCtx);
-            for (auto* t : pool) {
+            g_workersLeaving.store(0, std::memory_order_seq_cst);
+            g_maxWorkersLeaving.store(0, std::memory_order_seq_cst);
+            for (std::size_t i = 0; i < pool.size(); ++i) {
+                impl_->exitSem.release();
+                impl_->leftSem.acquire();
+                const proto::ProtoThread* t =
+                    impl_->leavingWorker.exchange(nullptr, std::memory_order_seq_cst);
                 // newThread returns const ProtoThread*; join is non-const.
                 const_cast<proto::ProtoThread*>(t)->join(impl_->rootCtx);
+                g_workersLeaving.fetch_sub(1, std::memory_order_seq_cst);
             }
         }
         impl_->workers.clear();
@@ -1478,6 +1518,24 @@ void STRuntime::workerLoop(proto::ProtoContext* ctx) {
     // per worker so every blocked worker wakes, observes the flag, drains
     // whatever is left, and exits.
     t_workerOf = this;
+    // S50: however this function is left, the thread waits at the exit gate
+    // until ~STRuntime lets it go, then names itself for its join (see the
+    // destructor). The wait is unmanaged: a collection does not wait for it.
+    struct LeaveInTurn {
+        Impl& impl;
+        proto::ProtoContext* ctx;
+        ~LeaveInTurn() {
+            const proto::ProtoThread* self = proto::ProtoThread::getCurrentThread(ctx);
+            proto::ProtoContext::UnmanagedScope unmanaged(ctx);
+            impl.exitSem.acquire();
+            const int leaving = g_workersLeaving.fetch_add(1, std::memory_order_seq_cst) + 1;
+            int most = g_maxWorkersLeaving.load(std::memory_order_seq_cst);
+            while (leaving > most
+                   && !g_maxWorkersLeaving.compare_exchange_weak(most, leaving, std::memory_order_seq_cst)) {}
+            impl.leavingWorker.store(self, std::memory_order_seq_cst);
+            impl.leftSem.release();
+        }
+    } leaveInTurn{*impl_, ctx};
     if (t_workerStatsId < 0) {
         t_workerStatsId = g_nextWorkerStatsId.fetch_add(
             1, std::memory_order_relaxed) % kMaxWorkerStatsSlots;
