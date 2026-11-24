@@ -250,6 +250,10 @@ struct Bootstrap {
         // Whether a class declares or inherits a constant (explicit-state
         // spec §6.2, plan decision D-a): read by every `new` (D-e).
         const proto::ProtoString* hasConstants          = nullptr;  // __has_constants__
+        // The class's own cached answer to "has constants?" for one layout
+        // epoch (ConstantConstructor.h, classHasConstants): a SmallInteger,
+        // epoch * 2 + verdict.
+        const proto::ProtoString* hasConstantsVerdict   = nullptr;  // __has_constants_verdict__
         // 2026-06-15: actor priority bands (high/medium/low). `__priority__`
         // is a SmallInteger 0/1/2 stored on the actor; absence means medium.
         // The scheduler reads this on schedule() to pick which of three

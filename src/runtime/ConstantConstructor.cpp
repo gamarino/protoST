@@ -235,6 +235,23 @@ const proto::ProtoString* constantConstructorKey(proto::ProtoContext* ctx) {
     return proto::ProtoString::createSymbol(ctx, "__constant_constructor__");
 }
 
+bool classHasConstants(STRuntime& rt, proto::ProtoContext* ctx, const proto::ProtoObject* cls) {
+    const Bootstrap& b = rt.bootstrap();
+    // Read the epoch before the verdict, as constantCache does: a
+    // declaration landing after this load leaves a verdict marked older,
+    // which the next construction recomputes.
+    const long long epoch = instanceLayoutEpoch();
+    const proto::ProtoObject* v = cls->getOwnAttributeDirect(ctx, b.sym.hasConstantsVerdict);
+    if (v && proto::isSmallInt(v) && (proto::asSmallInt(v) >> 1) == epoch)
+        return (proto::asSmallInt(v) & 1) != 0;
+    const bool has = cls->getAttribute(ctx, b.sym.hasConstants) == PROTO_TRUE;
+    // One publication; two threads racing here publish the same answer for
+    // the same epoch, or the later one an answer for a later epoch. An
+    // immutable receiver is not updated in place and recomputes every time.
+    cls->setAttribute(ctx, b.sym.hasConstantsVerdict, ctx->fromLong(epoch * 2 + (has ? 1 : 0)));
+    return has;
+}
+
 std::string constantConstructorOf(STRuntime&, proto::ProtoContext* ctx,
                                   const proto::ProtoObject* cls) {
     if (!cls || cls == PROTO_NONE || cls->isInteger(ctx) || cls->isFloat(ctx) || cls->asString(ctx))

@@ -279,6 +279,7 @@ void bootstrapPrototypes(proto::ProtoSpace& sp, proto::ProtoContext* ctx, Bootst
     out.sym.instanceTemplateEpoch = S("__instance_template_epoch__");
     out.sym.instVarNames          = S("__instvar_names__");
     out.sym.hasConstants          = S("__has_constants__");
+    out.sym.hasConstantsVerdict   = S("__has_constants_verdict__");
     out.sym.priority        = S("__priority__");
     out.sym.data            = S("__data__");
     out.sym.isResumable     = S("isResumable");

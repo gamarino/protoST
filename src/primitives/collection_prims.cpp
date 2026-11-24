@@ -129,7 +129,7 @@ const proto::ProtoObject* instantiateAs(STRuntime& rt, proto::ProtoContext* ctx,
     bool understood = false;
     sendDynamic(rt, ctx, out, rt.bootstrap().sym.initialize,
                 nullptr, 0, &understood);
-    if (cls->getAttribute(ctx, rt.bootstrap().sym.hasConstants) == PROTO_TRUE)
+    if (classHasConstants(rt, ctx, cls))
         return checkConstantsSet(rt, ctx, cls, out, selector);
     return out;
 }

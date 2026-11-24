@@ -501,6 +501,7 @@ its error class).
 | `__ivar_modifiers__` | a String of `kind:name` words for the class's **own** non-plain variables (`'constant:k writeOnce:w'`); plain variables are not listed |
 | `__has_constants__` | `true` on a class that declares or inherits a constant, read through the chain |
 | `__constant_constructor__` | the selector of the generated constructor this class owns (absent on a class that inherits its parent's) |
+| `__has_constants_verdict__` | the class's own cached answer to whether it declares or inherits a constant, a SmallInteger `epoch * 2 + answer` keyed to the instance-layout epoch: after the first construction in an epoch, `new` and the kernel constructors read it with one own read instead of walking the chain for `__has_constants__` |
 | `__constant_cache__` | the constants a construction checks and the constructor selectors still valid for the class, keyed to the instance-layout epoch (no chain walk per construction) |
 | `__user_declared__` | set on every class user code declares; a redeclaration is compared with such a class only (M11) |
 | `__user_class__` | set by `__subclassNamed:` only: the textual path may re-run into this class object |
@@ -514,7 +515,7 @@ its error class).
 | `__constructConstants:selector:` | `Behavior` | the generated constructor's allocation: a new instance with the non-nil arguments written in one write group under the constants the selector names; a constructor that is out of date signals an `Error` naming the class to redeclare |
 | `__checkConstantsOf:after:` | `Behavior` | the end-of-construction check (M13) after `new` or the generated constructor: answers the instance, or signals and answers nil |
 | `__checkConstructed:selector:` | `Behavior` | the same check at the end of a kernel or library constructor other than `new`; answers the instance at once, with no send, for a class without constants |
-| `__hasConstants` | `Behavior` | reads `__has_constants__` (the test in `Object class >> new`) |
+| `__hasConstants` | `Behavior` | answers the class's `__has_constants_verdict__`, computing it from `__has_constants__` once per layout epoch (the test in `Object class >> new`) |
 | `__allInstVarNamesString` | `Behavior` | the names of `allInstVarNames` in layout order (superclass, then mixins, then own), each once |
 | `__checkedNew:` | `Object class` (kernel, `lib/kernel/object.st`) | the end of the `new` of `SortedCollection`, `WriteStream`, `Random` and `UUID`: sends `initialize` once, then `__checkConstructed:selector:` with `#new` |
 | `__rawInstVarNamed:` | `Object` | the attribute, or nil when unset, never checking (`deepCopy`, `inspect`) |
