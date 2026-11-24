@@ -2046,18 +2046,20 @@ const proto::ProtoObject* prim_Object_instVarNamedPut(STRuntime& rt, proto::Prot
     const proto::ProtoString* key = ivarKey(ctx, a[0]);
     TransientPin pinKey(ctx, reinterpret_cast<const proto::ProtoObject*>(key));
     const proto::ProtoObject* value = a[1] ? a[1] : PROTO_NONE;
-    static constexpr const char* kImmutable =
-        "instVarNamed:put: the receiver is an immutable value "
-        "(a block or a method); nothing was written";
     const std::string name = a[0]->asString(ctx)->toStdString(ctx);
     const IvarModifier mod = receiverModifierOf(rt, ctx, r, name, nullptr);
+    auto refuseImmutable = [&] {
+        return signalErrorNamed(rt, ctx, "ModificationForbidden",
+            immutableReceiverText("instVarNamed:put: cannot write", mod, name,
+                                  articleAndClassName(rt, ctx, r)));
+    };
     if (mod == IvarModifier::Plain) {
         // On an immutable receiver (a block closure, a method) protoCore's
         // setAttribute leaves the receiver unchanged and answers a new
         // object. Dropping that object would lose the write silently;
         // refuse instead.
         const proto::ProtoObject* written = r->setAttribute(ctx, key, value);
-        if (written != r) return signalErrorNamed(rt, ctx, "ModificationForbidden", kImmutable);
+        if (written != r) return refuseImmutable();
         return value;
     }
     const std::string owner = articleAndClassName(rt, ctx, r);
@@ -2076,7 +2078,7 @@ const proto::ProtoObject* prim_Object_instVarNamedPut(STRuntime& rt, proto::Prot
             constant
                 ? "the constant '" + name + "' of " + owner + " is already set; nothing was written"
                 : "instVarNamed:put: cannot replace the write-once variable '" + name + "' of "
-                  + owner);
+                  + owner + "; nothing was written");
     };
     if (value == PROTO_NONE) {
         // nil never sets a constant or a write-once variable.
@@ -2089,7 +2091,7 @@ const proto::ProtoObject* prim_Object_instVarNamedPut(STRuntime& rt, proto::Prot
         return value;
     // Neither modifier lets a set variable become unset again, so a CAS that
     // fails on an unset variable met an immutable receiver.
-    if (isUnset()) return signalErrorNamed(rt, ctx, "ModificationForbidden", kImmutable);
+    if (isUnset()) return refuseImmutable();
     return refuseSet();
 }
 
@@ -2148,7 +2150,8 @@ const proto::ProtoObject* prim_Object_copyWithInstVarValues(STRuntime& rt,
     if (copy == r || copy->setAttributes(ctx, static_cast<unsigned>(keys.size()), keys.data(),
                                          values.data()) != copy)
         throw ClassedErrorSignal("ModificationForbidden",
-                                 "deepCopy: the copy is an immutable value; nothing was written");
+                                 "deepCopy cannot write the copy of " + articleAndClassName(rt, ctx, r)
+                                 + ": the copy is immutable; nothing was written");
     return copy;
 }
 

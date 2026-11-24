@@ -1,4 +1,4 @@
-"EXPECT: #(nil nil 'alpha-key' false 'instVarNamed:put: cannot replace the write-once variable ''oid'' of a PBAtom' 'instVarNamed:put: cannot replace the write-once variable ''oid'' of a PBAtom' 'instVarNamed:put: cannot replace the write-once variable ''oid'' of a PBAtom' 'instVarNamed:put: cannot replace the write-once variable ''oid'' of a PBAtom' true)"
+"EXPECT: #(nil nil 'alpha-key' false 'instVarNamed:put: cannot replace the write-once variable ''oid'' of a PBAtom; nothing was written' 'instVarNamed:put: cannot replace the write-once variable ''oid'' of a PBAtom; nothing was written' 'instVarNamed:put: cannot replace the write-once variable ''oid'' of a PBAtom; nothing was written' 'instVarNamed:put: cannot replace the write-once variable ''oid'' of a PBAtom; nothing was written' true)"
 "Spec §6.5 and §11, M6, conformance 67: instVarNamed:put: fills a write-once
  variable only while it is unset (nil writes nothing). Once set, every
  reflective write signals ModificationForbidden (M6), even with an equal

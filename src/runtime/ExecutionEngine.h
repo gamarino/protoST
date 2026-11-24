@@ -372,7 +372,8 @@ private:
 #else
     __attribute__((noinline, cold))
 #endif
-    void refuseImmutableStore(proto::ProtoContext* ctx);
+    void refuseImmutableStore(proto::ProtoContext* ctx, const std::string& name,
+                              const proto::ProtoObject* self);
     // STORE_CONST_INSTVAR's write: a CAS of `val` from unset into the
     // constant named by constant `nameConst`, on the frame's `self`. Storing
     // nil into an unset constant does nothing. A set constant (M3) or an

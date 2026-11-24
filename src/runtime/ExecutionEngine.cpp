@@ -22,6 +22,7 @@
 #include "runtime/ValueFormat.h"
 #include "ExecutionEngine.h"
 #include "runtime/BlockCode.h"
+#include "runtime/IvarModifierKinds.h"
 
 namespace protoST {
 const proto::ProtoObject* raiseRejection(STRuntime& rt, proto::ProtoContext* ctx,
@@ -425,14 +426,15 @@ ExecutionEngine::storeInstVar(proto::ProtoContext* ctx, const Frame& f, uint32_t
     // assignment in BlockClosure methods; a method installed on BlockClosure
     // from a block made elsewhere still reaches it).
     if (self->setAttribute(ctx, sym, val) != self)
-        refuseImmutableStore(ctx);
+        refuseImmutableStore(ctx, f.m->constSymbol(nameConst), self);
 }
 
 void
-ExecutionEngine::refuseImmutableStore(proto::ProtoContext* ctx) {
+ExecutionEngine::refuseImmutableStore(proto::ProtoContext* ctx, const std::string& name,
+                                      const proto::ProtoObject* self) {
     signalErrorNamed(rt_, ctx, "ModificationForbidden",
-                     "instance variable assignment: the receiver is an "
-                     "immutable value; nothing was written");
+                     immutableReceiverText("cannot assign to", IvarModifier::Plain, name,
+                                           ivarOwnerDescription(ctx, self)));
 }
 
 void
@@ -469,9 +471,8 @@ ExecutionEngine::storeConstInstVar(proto::ProtoContext* ctx, const Frame& f, uin
         if (isUnset()) {
             // The CAS cannot write an immutable receiver.
             signalErrorNamed(rt_, ctx, "ModificationForbidden",
-                             "cannot assign to the constant '" + f.m->constSymbol(nameConst)
-                             + "' of " + owner()
-                             + ": the receiver is immutable; nothing was written");
+                             immutableReceiverText("cannot assign to", IvarModifier::Constant,
+                                                   f.m->constSymbol(nameConst), owner()));
             return;
         }
     }
@@ -541,9 +542,8 @@ ExecutionEngine::storeOnceInstVar(proto::ProtoContext* ctx, const Frame& f, uint
         // A write-once variable never becomes unset again once set, so a
         // CAS that fails on an unset variable met an immutable receiver.
         signalErrorNamed(rt_, ctx, "ModificationForbidden",
-                         "cannot assign to the write-once variable '" + name + "' of "
-                         + ivarOwnerDescription(ctx, self)
-                         + ": the receiver is immutable; nothing was written");
+                         immutableReceiverText("cannot assign to", IvarModifier::WriteOnce, name,
+                                               ivarOwnerDescription(ctx, self)));
         return PROTO_NONE;   // defensive: the signal is not resumable
     }
     if (w == val) return w;
@@ -2989,7 +2989,10 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                         // place; should it return, the frame is
                         // re-acquired before the run's values are cut.
                         const uint16_t count = e.count;
-                        refuseImmutableStore(ctx);
+                        // The run is refused whole; the text names its
+                        // first variable.
+                        refuseImmutableStore(ctx, f.m->constSymbol(f.m->instVarGroupEntry(first).nameConst),
+                                             self);
                         cutInstVarGroupValues(frames_.back(), count);
                         DISPATCH_DIRECT();
                         break;

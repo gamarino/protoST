@@ -135,8 +135,8 @@ const proto::ProtoObject* signalImmutableReceiver(STRuntime& rt, proto::ProtoCon
                                                   const proto::ProtoObject* r,
                                                   const char* selector, const StateTarget& t) {
     return signalErrorNamed(rt, ctx, "ModificationForbidden",
-        std::string(selector) + " cannot write the instance variable '" + t.name + "' of "
-        + receiverPhrase(rt, ctx, r) + ": the receiver is immutable; nothing was written");
+        immutableReceiverText(std::string(selector) + " cannot write", t.modifier, t.name,
+                              receiverPhrase(rt, ctx, r)));
 }
 
 // The CAS of the variable `key` from `expected` to `newValue`, on the

@@ -1,4 +1,4 @@
-"EXPECT: #(#('ModificationForbidden' 'instance variable assignment: the receiver is an immutable value; nothing was written') #('ModificationForbidden' 'instance variable assignment: the receiver is an immutable value; nothing was written') nil nil 2)"
+"EXPECT: #(#('ModificationForbidden' 'cannot assign to the instance variable ''x'' of a BlockClosure: the receiver is immutable; nothing was written') #('ModificationForbidden' 'cannot assign to the instance variable ''x'' of a BlockClosure: the receiver is immutable; nothing was written') nil nil 2)"
 "Spec §13.1 and §12, conformance 82: an instance-variable store whose
  receiver is an immutable value signals ModificationForbidden in place, so
  on: ModificationForbidden do: catches it by class. protoST 0.16.1 raised it

@@ -134,4 +134,26 @@ inline std::string assignmentRefusalText(AssignmentRefusal why, const std::strin
     return text + " (line " + std::to_string(line) + ")";
 }
 
+// A variable of modifier `m` as the error texts name it: "instance variable",
+// "constant", "write-once variable" or "atomic variable".
+inline const char* variableKindPhrase(IvarModifier m) {
+    switch (m) {
+    case IvarModifier::Plain:     return "instance variable";
+    case IvarModifier::Constant:  return "constant";
+    case IvarModifier::WriteOnce: return "write-once variable";
+    case IvarModifier::Atomic:    return "atomic variable";
+    }
+    return "instance variable";
+}
+
+// The refusal of a write to an immutable receiver (ModificationForbidden,
+// spec §6.5), in one form on every path: `action` is "cannot assign to" for
+// `:=` (the engine's stores) and "<selector> cannot write" for a message
+// (reflection, the CAS family); `owner` names the receiver ("a BlockClosure").
+inline std::string immutableReceiverText(const std::string& action, IvarModifier m,
+                                         const std::string& name, const std::string& owner) {
+    return action + " the " + variableKindPhrase(m) + " '" + name + "' of " + owner
+           + ": the receiver is immutable; nothing was written";
+}
+
 } // namespace protoST
