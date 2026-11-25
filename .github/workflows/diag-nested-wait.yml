@@ -1,8 +1,6 @@
 name: Diag macOS nested-wait hang under load
 
-# Temporary diagnostic (never merged), validating the S51 fix: loops the cli_actor_stress workload on
-# macOS against protoCore 3.6.1 and 3.6.2 and, on a hang, captures every
-# thread's stack.
+# Temporary diagnostic (never merged): loops the nested-wait CLI cases beside the ctest -j2 neighbours
 
 on:
   push:
