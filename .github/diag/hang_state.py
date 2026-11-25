@@ -29,42 +29,6 @@ def diag_addr(target):
     return None
 
 
-OPS = {1: "push", 2: "schedRead", 3: "cas", 4: "take", 5: "enqueue", 6: "dequeue",
-       7: "hasWork", 8: "fdRead", 9: "spill"}
-
-
-def sym_addr(target, name):
-    scl = target.FindSymbols(name)
-    for i in range(scl.GetSize()):
-        a = scl.GetContextAtIndex(i).GetSymbol().GetStartAddress().GetLoadAddress(target)
-        if a != lldb.LLDB_INVALID_ADDRESS:
-            return a
-    return None
-
-
-def dump_ring(target, proc, last=160):
-    base = sym_addr(target, "protost_ring")
-    nxt = sym_addr(target, "protost_ring_next")
-    if not base or not nxt:
-        print("ring: symbols not found"); return
-    n = rd(proc, nxt, 8)
-    print("ring: next=%s" % n)
-    start = max(0, n - last)
-    for seq in range(start, n):
-        w = rd(proc, base + 8 * (seq % 1024), 8)
-        if w is None:
-            continue
-        s, tid, op, arg = w >> 44, (w >> 36) & 0xFF, (w >> 28) & 0xFF, w & 0xFFFFFFF
-        desc = OPS.get(op, str(op))
-        if op == 3:
-            desc += " %d->%d ok=%d" % (arg & 0xF, (arg >> 4) & 0xF, (arg >> 8) & 1)
-        elif op == 7:
-            desc += " result=%d suspended=%d path=%d" % (arg & 1, (arg >> 1) & 1, arg >> 4)
-        else:
-            desc += " %d" % arg
-        print("  ev seq=%d(%d) t%d %s" % (seq, s, tid, desc))
-
-
 def run(debugger):
     target = debugger.GetSelectedTarget()
     proc = target.GetProcess()
@@ -106,5 +70,4 @@ def run(debugger):
                     t.GetFrameAtIndex(i + 1).GetFunctionName())
                 break
         print(line)
-    dump_ring(target, proc)
     print("=== END HANG STATE")

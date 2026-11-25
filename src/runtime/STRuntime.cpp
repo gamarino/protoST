@@ -70,13 +70,6 @@
 #endif
 #include "runtime/DiagCounters.h"
 std::atomic<std::intptr_t> protost_diag[16] = {};
-std::atomic<std::uint64_t> protost_ring[1024] = {};
-std::atomic<std::uint64_t> protost_ring_next{0};
-std::uint64_t protoST::diag::threadTag() {
-    static std::atomic<std::uint64_t> next{1};
-    thread_local std::uint64_t tag = next.fetch_add(1);
-    return tag;
-}
 
 namespace protoST { void installIntPrimitives(STRuntime& rt); }
 namespace protoST { void installMathPrimitives(STRuntime& rt); }
@@ -2156,7 +2149,6 @@ void STRuntime::enqueueReady(proto::ProtoContext* ctx,
         long long v = prio->asLong(ctx);
         if (v >= 0 && v < kNumPriorityBands) band = static_cast<int>(v);
     }
-    protoST::diag::ev(protoST::diag::evEnqueue, 0);
     impl_->readyStack[band].push(actor);
 
     // 3. Wake exactly one sleeping worker. If all workers are busy, this
@@ -2387,22 +2379,11 @@ long long STRuntime::schedState(proto::ProtoContext* ctx,
     return (s && s != PROTO_NONE) ? s->asLong(ctx) : 0;
 }
 
-static bool casSchedStateImpl(STRuntime& rt, proto::ProtoContext* ctx,
-                              const proto::ProtoObject* actor,
-                              long long from, long long to);
 bool STRuntime::casSchedState(proto::ProtoContext* ctx,
                               const proto::ProtoObject* actor,
                               long long from, long long to) {
-    const bool ok = casSchedStateImpl(*this, ctx, actor, from, to);
-    protoST::diag::ev(protoST::diag::evCas,
-        std::uint64_t(from & 0xF) | (std::uint64_t(to & 0xF) << 4) | (std::uint64_t(ok) << 8));
-    return ok;
-}
-static bool casSchedStateImpl(STRuntime& rt, proto::ProtoContext* ctx,
-                              const proto::ProtoObject* actor,
-                              long long from, long long to) {
     auto* a = const_cast<proto::ProtoObject*>(actor);
-    const proto::ProtoString* k = rt.bootstrap().sym.sched;
+    const proto::ProtoString* k = impl_->bootstrap.sym.sched;
     if (from == 0) {
         // "idle" is either an explicit SmallInteger 0 or the `__sched__`
         // attribute being ABSENT — an actor not built through the asActor
@@ -2480,7 +2461,6 @@ void STRuntime::schedule(proto::ProtoContext* ctx, const proto::ProtoObject* act
     //   2       a wakeup is already marked — nothing to do.
     for (;;) {
         long long s = schedState(ctx, actor);
-        protoST::diag::ev(protoST::diag::evSchedRead, std::uint64_t(s) & 0xF);
         if (s == 2) {
             SCHED_DIAG("schedule actor=" << actor << " already marked (2)");
             return;
@@ -2578,7 +2558,6 @@ private:
         const proto::ProtoMPSCQueue* queue = rt_.actorMailbox(ctx_, actor_);
         if (!queue) return false;
         const proto::ProtoList* batch = queue->takeAll(ctx_);
-        protoST::diag::ev(protoST::diag::evTake, batch ? std::uint64_t(batch->getSize(ctx_)) : 0);
         if (!batch || batch->getSize(ctx_) == 0) return false;
         adopt(batch);
         return true;
@@ -2609,7 +2588,6 @@ private:
     void spill() {
         const bool haveTail = batch_ && index_ < size_;
         if (!haveTail && !pendingDirty_) return;
-        protoST::diag::ev(protoST::diag::evSpill, haveTail ? 1 : 0);
         if (!haveTail) {
             const_cast<proto::ProtoObject*>(actor_)
                 ->setAttribute(ctx_, pendingKey_, PROTO_NONE);
@@ -2662,7 +2640,6 @@ bool STRuntime::drainTurn(proto::ProtoContext* ctx, bool oneMessage) {
     // exactly one wins the head; the loser re-reads and gets the next actor
     // or an empty queue.
     const proto::ProtoObject* actor = dequeueReady(ctx);
-    if (actor) protoST::diag::ev(protoST::diag::evDequeue, 0);
     if (!actor) return false;
     SCHED_DIAG("drainOne POP actor=" << actor);
 
@@ -3088,7 +3065,6 @@ void STRuntime::finishDrain(proto::ProtoContext* ctx,
     // the linearisation point — a wakeup can never be stranded.
     for (;;) {
         long long s = schedState(ctx, actor);
-        protoST::diag::ev(protoST::diag::evFdRead, std::uint64_t(s) & 0xF);
         if (s == 2) {
             // A wakeup arrived during the turn. Pre-fix this unconditionally
             // re-enqueued the actor, but the wakeup is just a flag — it does
@@ -3142,9 +3118,7 @@ void STRuntime::finishDrain(proto::ProtoContext* ctx,
                 // method, w >= 2, N >= 3 elements deadlocked because the
                 // third iteration's settle-before-yield race lost the
                 // re-schedule.
-                const bool hw2 = mailboxHasWork(ctx, actor);
-                protoST::diag::ev(protoST::diag::evHasWork, std::uint64_t(hw2) | (std::uint64_t(suspended) << 1) | (2u << 4));
-                if (hw2 || suspended) {
+                if (mailboxHasWork(ctx, actor) || suspended) {
                     enqueueReady(ctx, actor);
                     SCHED_DIAG("finishDrain RE-QUEUE actor=" << actor
                         << (suspended ? " (suspended wakeup)" : " (mailbox)"));
@@ -3170,9 +3144,7 @@ void STRuntime::finishDrain(proto::ProtoContext* ctx,
         // CAS above would have failed. So from here we only need to handle
         // work this turn-owner already knows about: a completed turn whose
         // mailbox still holds messages (one turn drains one message).
-        const bool hw1 = !suspended && mailboxHasWork(ctx, actor);
-        protoST::diag::ev(protoST::diag::evHasWork, std::uint64_t(hw1) | (std::uint64_t(suspended) << 1) | (1u << 4));
-        if (hw1) {
+        if (!suspended && mailboxHasWork(ctx, actor)) {
             // Re-claim and re-queue. If a concurrent schedule() already
             // re-claimed (0->1) and enqueued it, our CAS fails and we leave
             // it to them — enqueued exactly once either way.
