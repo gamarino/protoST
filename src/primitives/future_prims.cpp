@@ -585,9 +585,11 @@ const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* c
     // which releases the semaphore. The wait returns within one context
     // switch (~ 3 µs) of the settle.
     //
-    // The seq_cst pair between `mainWaitingOn` (set by waiter, read by
-    // settler) and the Future's `__state__` attribute (set by settler,
-    // read by waiter) makes the loop race-free: either the waiter sees
+    // The pairing between `mainWaitingOn` (set by waiter, read by settler)
+    // and the Future's `__state__` attribute (set by settler, read by
+    // waiter) makes the loop race-free. The state read is an acquire load,
+    // so the waiter's side needs the seq_cst fence in markMainWaitingOn
+    // (S51); with it, either the waiter sees
     // the settled state before calling acquire (no syscall — break
     // immediately), or the settler sees `mainWaitingOn == future` and
     // issues a release. Spurious wakes from unrelated settles never

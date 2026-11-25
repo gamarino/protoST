@@ -3,6 +3,19 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
+## Unreleased
+
+### Fixed
+
+- **S51: on macOS arm64 a program could hang waiting on a Future that had
+  already settled.** The program thread registered itself as the Future's
+  waiter and then re-read the Future's state with an acquire load, which the
+  hardware may complete before the registration is visible; the settling
+  worker then saw no waiter, and the program thread slept with nobody to wake
+  it. `cli_actor_stress` hit it once in CI and 11 times in about 150,000 runs
+  under load. `markMainWaitingOn` now fences after its store, as the worker
+  waits already did. x86 was not affected.
+
 ## 0.17.1 — 2026-11-24
 
 Patch release. **Requires protoCore 3.6.1**, as 0.17.0 did (the floor is

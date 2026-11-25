@@ -2187,6 +2187,13 @@ void STRuntime::markMainWaitingOn(const proto::ProtoObject* future) {
     // of the Future's state attribute. See the comment block on
     // `mainWaitingOn` in Impl for the full pairing argument.
     impl_->mainWaitingOn.store(future, std::memory_order_seq_cst);
+    // S51: the caller next re-reads the Future's state, a protoCore attribute
+    // loaded with acquire ordering, which a seq_cst store does not order
+    // before (on Apple arm64 the load is an LDAPR that may complete before
+    // this store is visible). The fence orders the registration before that
+    // read, pairing with the settle's seq_cst write of the state followed by
+    // notifyMainWaiterIfFor's seq_cst load, as in beginCappedPark.
+    std::atomic_thread_fence(std::memory_order_seq_cst);
 }
 
 void STRuntime::acquireMainWait(proto::ProtoContext* ctx) {
