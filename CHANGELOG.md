@@ -3,6 +3,22 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
+## Unreleased
+
+### Fixed
+
+- **S51: on macOS arm64 a message sent to an actor could be left unrun, and a
+  program waiting on its Future hung.** A sender pushes the message and then
+  reads the actor's scheduling flag; if the flag said a wakeup was already
+  marked, it returned without a compare-and-swap. The worker ending the actor's
+  turn cleared that mark, checked the mailbox, found it empty and released the
+  actor. Without a full fence on either side, arm64 let both reads see the old
+  values, so the message stayed in the mailbox with nothing scheduled.
+  `cli_actor_stress` hit it about once in 7,500 runs under load on GitHub's
+  macOS runners. `schedule()` and `finishDrain()` now fence between their write
+  and their read. x86 was not affected. Supersedes PR #35, whose hypothesis (the
+  program thread's Future wait registration) was disproven.
+
 ## 0.17.1 — 2026-11-24
 
 Patch release. **Requires protoCore 3.6.1**, as 0.17.0 did (the floor is
