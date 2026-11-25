@@ -107,7 +107,7 @@ jobs:
           # THE FLOOR JOB, the only one in this repository (cross-platform.yml
           # builds the pin on macOS and Windows). protoCore 3.6.1 (tag v3.6.1,
           # 00a90df3), SOVERSION 5: PROTOCORE_MIN_VERSION in CMakeLists.txt,
-          # the pin from protoST 0.13.0 to 0.17.0 (0.17.1 pins 3.6.2). 3.6.1 first provides
+          # the pin from protoST 0.13.0 to 0.17.0 (0.17.1 and 0.17.2 pin 3.6.2). 3.6.1 first provides
           # ProtoObject::newClone (the instance templates), so no older
           # protoCore links (3.4.0, f63adc08, was the floor up to 0.12.0).
           # Built on every event, the schedule included, so a change that

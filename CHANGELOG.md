@@ -3,7 +3,11 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
-## Unreleased
+## 0.17.2 — 2026-11-25
+
+Patch release. **Requires protoCore 3.6.1**, as 0.17.1 did (the floor is
+unchanged), and protoIO 0.7.1 at build time. The `.deb` is built against
+protoCore 3.6.2, as 0.17.1's was. No API or behaviour change besides the fix.
 
 ### Fixed
 
@@ -16,8 +20,7 @@ state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
   values, so the message stayed in the mailbox with nothing scheduled.
   `cli_actor_stress` hit it about once in 7,500 runs under load on GitHub's
   macOS runners. `schedule()` and `finishDrain()` now fence between their write
-  and their read. x86 was not affected. Supersedes PR #35, whose hypothesis (the
-  program thread's Future wait registration) was disproven.
+  and their read. x86 was not affected. PR #36.
 
 ## 0.17.1 — 2026-11-24
 
