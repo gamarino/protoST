@@ -6,7 +6,7 @@ name: Diag macOS cli_actor_stress hang
 
 on:
   push:
-    branches: ['diag/actor-stress-macos-realfix']
+    branches: ['diag/macos-loaded-ctest-failures']
 
 permissions:
   contents: read
@@ -15,7 +15,7 @@ jobs:
   loop:
     name: ${{ matrix.ref }} transitions=${{ matrix.transitions }} (${{ matrix.shard }})
     runs-on: macos-15
-    timeout-minutes: 85
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -26,6 +26,9 @@ jobs:
           - ref: v3.6.2
             transitions: '1'
             shard: e
+          - ref: v3.6.2
+            transitions: '1'
+            shard: f
           - ref: v3.6.1
             transitions: '1'
             shard: a
@@ -95,8 +98,17 @@ jobs:
           chmod +x loop.sh
           # The neighbours CI actually runs beside this test: the whole suite at -j2.
           ( n=0; while [ "$(date +%s)" -lt "$DEADLINE" ]; do
-              n=$((n+1)); ctest --test-dir protoST/build -j2 -E cli_actor_stress --timeout 300 -Q
-              echo "neighbour suite pass $n rc=$?"
+              n=$((n+1)); mkdir -p ctestlogs
+              ctest --test-dir protoST/build -j2 -E cli_actor_stress --timeout 300 --output-on-failure \
+                --output-log "ctestlogs/pass-$n.log" > /dev/null 2>&1
+              rc=$?
+              echo "neighbour suite pass $n rc=$rc"
+              if [ $rc -ne 0 ]; then
+                cp protoST/build/Testing/Temporary/LastTestsFailed.log "ctestlogs/failed-$n.txt" 2>/dev/null
+                echo "pass $n failed tests: $(sed 's/^[0-9]*://' ctestlogs/failed-$n.txt 2>/dev/null | tr '\n' ' ')"
+              else
+                rm -f "ctestlogs/pass-$n.log"
+              fi
             done ) & nb=$!
           ./loop.sh 1 & l1=$!
           ./loop.sh 2 & l2=$!
@@ -109,4 +121,10 @@ jobs:
           path: |
             lldb-*.txt
             sample-*.txt
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ctestlogs-${{ matrix.ref }}-t${{ matrix.transitions }}-${{ matrix.shard }}
+          path: ctestlogs/
           if-no-files-found: ignore
