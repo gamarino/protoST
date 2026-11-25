@@ -1,0 +1,89 @@
+name: Diag macOS nested-wait hang under load
+
+# Temporary diagnostic (never merged), validating the S51 fix: loops the cli_actor_stress workload on
+# macOS against protoCore 3.6.1 and 3.6.2 and, on a hang, captures every
+# thread's stack.
+
+on:
+  push:
+    branches: ['diag/macos-nested-wait-hang']
+
+permissions:
+  contents: read
+
+jobs:
+  loop:
+    name: ${{ matrix.ref }} transitions=${{ matrix.transitions }} (${{ matrix.shard }})
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: [v3.6.2]
+        transitions: ['1']
+        shard: [a, b, c, d, e, f]
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: protoST }
+      - uses: actions/checkout@v4
+        with: { repository: numaes/protoCore, ref: '${{ matrix.ref }}', path: protoCore }
+      - uses: actions/checkout@v4
+        with: { repository: gamarino/protoIO, ref: v0.7.1, path: protoIO }
+      - name: Dependencies
+        run: |
+          for f in readline openssl@3 ninja coreutils; do brew list "$f" >/dev/null 2>&1 || brew install "$f"; done
+          echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          echo "EXTRA_PREFIX=;$(brew --prefix readline)" >> "$GITHUB_ENV"
+      - name: Build protoCore and protoST (RelWithDebInfo)
+        run: |
+          cmake -S protoCore -B protoCore/build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build protoCore/build --parallel 4
+          cmake --install protoCore/build --prefix "$GITHUB_WORKSPACE/prefix"
+          cd protoST
+          cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPROTOCORE_REQUIRE_PACKAGE=ON \
+            "-DCMAKE_PREFIX_PATH=$GITHUB_WORKSPACE/prefix$EXTRA_PREFIX" "-DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR"
+          cmake --build build --parallel 4
+      - name: Loop the nested-wait cases beside ctest -j2 neighbours
+        run: |
+          set +e
+          DEADLINE=$(( $(date +%s) + 40*60 )); export DEADLINE
+          P=$PWD/protoST/build/protost; F=$PWD/protoST/tests/cli/fixtures
+          cat > loop.sh <<'SH'
+          #!/bin/bash
+          # loop.sh <label> <env-assignments> <fixture> <args...>: run with a 40 s bound; on a hang record
+          # whether the answer line was already printed (hang at exit) and capture every thread's stack.
+          L=$1; E=$2; FX=$3; shift 3; i=0; hangs=0; bad=0; maxs=0
+          while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+            i=$((i+1)); t0=$(date +%s)
+            env $E "$P" --print-last "$F/$FX" "$@" > out-$L.txt 2>&1 &
+            pid=$!; t=0
+            while kill -0 $pid 2>/dev/null && [ $t -lt 400 ]; do sleep 0.1; t=$((t+1)); done
+            if kill -0 $pid 2>/dev/null; then
+              hangs=$((hangs+1)); echo "::warning::$L hang at run $i; output so far: $(tail -c 300 out-$L.txt)"
+              if [ $hangs -le 2 ]; then
+                sudo lldb -p $pid --batch -o "thread backtrace all" > "lldb-$L-$i.txt" 2>&1
+                echo "=== lldb $L run $i: $(grep -c 'frame #0' lldb-$L-$i.txt) threads"
+              fi
+              kill -9 $pid; wait $pid 2>/dev/null
+            else
+              wait $pid; rc=$?; s=$(( $(date +%s) - t0 )); [ $s -gt $maxs ] && maxs=$s
+              [ $rc -ne 0 ] && { bad=$((bad+1)); echo "$L rc=$rc: $(tail -n 2 out-$L.txt)"; }
+            fi
+          done
+          echo "$L runs=$i hangs=$hangs bad=$bad max_seconds=$maxs"
+          SH
+          chmod +x loop.sh
+          export P F
+          ( n=0; while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+              n=$((n+1)); ctest --test-dir protoST/build -j2 -E "cli_actor_stress|cli_nested_wait_progress|cli_late_main_park" --timeout 300 -Q >/dev/null 2>&1
+            done ) & nb=$!
+          ./loop.sh chain2000 "PROTOST_WORKERS=1" nested_wait_chain.st 2000 & l1=$!
+          ./loop.sh chain5000 "PROTOST_WORKERS=1" nested_wait_chain.st 5000 & l2=$!
+          ./loop.sh latepark  "PROTOST_WORKERS=1 PROTOST_TEST_HOLD_MAIN_PARK=1" late_main_park.st & l3=$!
+          wait $l1 $l2 $l3 $nb
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hang-${{ matrix.shard }}
+          path: lldb-*.txt
+          if-no-files-found: ignore
