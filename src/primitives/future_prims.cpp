@@ -8,6 +8,7 @@
 #include "runtime/ExecutionEngine.h"
 #include "runtime/TransientPin.h"
 #include "runtime/TimerService.h"
+#include "runtime/DiagCounters.h"
 #include "runtime/NativeExceptionBridge.h"
 #include "primitives/state_prims.h"
 #include "runtime/UnhandledSTException.h"
@@ -225,6 +226,7 @@ bool settleFuture(STRuntime& rt, proto::ProtoContext* ctx,
     // S40: a settle can release a capped wait (STRuntime::confirmStuck); it
     // ends the quiescence epoch before anything of it is published.
     rt.noteProgress();
+    protoST::diag::bump(protoST::diag::kSettleClaims);
 
     // 1a. The winner hands an error on (see observeOnWin above): the source
     //     counts as observed before any waiter of `future` can run.
@@ -267,6 +269,8 @@ bool settleFuture(STRuntime& rt, proto::ProtoContext* ctx,
     //     makes the wait race-free: either the waiter sees the settled
     //     state and never parks, or it parks AFTER setting `mainWaitingOn`
     //     and the load below observes the pointer match.
+    if (protost_diag[protoST::diag::kMarkedFuture].load() == reinterpret_cast<std::intptr_t>(future))
+        protoST::diag::bump(protoST::diag::kSettledMarked);
     rt.notifyMainWaiterIfFor(future);
     // 4c. S43: and any pool worker parked at the helping cap on it.
     rt.wakeCappedWaitersFor(future);
@@ -595,7 +599,11 @@ const proto::ProtoObject* prim_Future_wait(STRuntime& rt, proto::ProtoContext* c
     // issues a release. Spurious wakes from unrelated settles never
     // happen because the notify is conditional on pointer match.
     rt.markMainWaitingOn(r);
-    while (readState(rt, ctx, r) == 0) {
+    for (;;) {
+        const long long st = readState(rt, ctx, r);
+        protoST::diag::put(protoST::diag::kLastStateRead, static_cast<std::intptr_t>(st));
+        if (st != 0) break;
+        protoST::diag::bump(protoST::diag::kWaitLoopZero);
         rt.acquireMainWait(ctx);
     }
     rt.markMainWaitingOn(nullptr);

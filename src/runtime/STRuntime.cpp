@@ -67,6 +67,8 @@
 #else
 #include <climits>
 #include <unistd.h>
+#include "runtime/DiagCounters.h"
+std::atomic<std::intptr_t> protost_diag[16] = {};
 #endif
 
 namespace protoST { void installIntPrimitives(STRuntime& rt); }
@@ -849,6 +851,9 @@ STRuntime::STRuntime(proto::ProtoSpace& hostSpace) : impl_(std::make_unique<Impl
 bool STRuntime::ownsSpace() const { return impl_->ownsSpace(); }
 
 void STRuntime::construct() {
+    protoST::diag::put(protoST::diag::kMainSemAddr, &impl_->mainWaitSem);
+    protoST::diag::put(protoST::diag::kWorkerSemAddr, &impl_->workerSem);
+    protoST::diag::put(protoST::diag::kMagic, std::intptr_t(0x5157));
     // S6: associate this runtime with its ProtoSpace, in two steps
     // (STModuleProvider.h). First the space's entry is reserved: a primitive
     // finds its runtime by its context's space (primitives.h, runtimeOf), so
@@ -2159,6 +2164,7 @@ void STRuntime::enqueueReady(proto::ProtoContext* ctx,
     // permits to wake any workers that parked on workerSem BEFORE the
     // pause was set.
     if (!impl_->processingPaused.load(std::memory_order_acquire)) {
+        protoST::diag::bump(protoST::diag::kWorkerRelease);
         impl_->workerSem.release();
     }
 }
@@ -2183,6 +2189,7 @@ void STRuntime::markMainWaitingOn(const proto::ProtoObject* future) {
     // (whatever it did before parking is behind every confirmation that
     // counts); it ends the epoch before the park is visible.
     if (future) { bumpEpoch(impl_->quiesce); wakeCappedIfJudgeable(); }
+    if (future) { protoST::diag::bump(protoST::diag::kMarkNonNull); protoST::diag::put(protoST::diag::kMarkedFuture, future); }
     // seq_cst so the settler's load is ordered against its prior store
     // of the Future's state attribute. See the comment block on
     // `mainWaitingOn` in Impl for the full pairing argument.
@@ -2221,7 +2228,9 @@ void STRuntime::acquireMainWait(proto::ProtoContext* ctx) {
     if (impl_->testHoldMainPark) holdMainParkForTest();
     impl_->mainBlocked.store(true, std::memory_order_seq_cst);
     noteProgress();
+    protoST::diag::bump(protoST::diag::kAcqEnter);
     impl_->mainWaitSem.acquire();
+    protoST::diag::bump(protoST::diag::kAcqExit);
     impl_->mainBlocked.store(false, std::memory_order_seq_cst);
 }
 
@@ -2347,7 +2356,11 @@ void STRuntime::notifyMainWaiterIfFor(const proto::ProtoObject* future) {
     // spurious-wake storm an "always release" design suffers in
     // multi-actor benchmarks (every unrelated settle would wake the
     // main once for nothing).
+    protoST::diag::bump(protoST::diag::kNotifyCalls);
+    protoST::diag::put(protoST::diag::kNotifyLastFut, future);
+    protoST::diag::put(protoST::diag::kNotifyLastSeen, impl_->mainWaitingOn.load(std::memory_order_seq_cst));
     if (impl_->mainWaitingOn.load(std::memory_order_seq_cst) == future) {
+        protoST::diag::bump(protoST::diag::kNotifyMatch);
         // S40 (review R1-I1): the program thread is runnable from here on,
         // though mainWaitingOn stays set until it runs. Recorded, and the
         // quiescence epoch ended, before the release: a round that completes

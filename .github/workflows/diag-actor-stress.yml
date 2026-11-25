@@ -6,7 +6,7 @@ name: Diag macOS cli_actor_stress hang
 
 on:
   push:
-    branches: ['diag/actor-stress-macos-fixed']
+    branches: ['diag/actor-stress-macos-instrumented']
 
 permissions:
   contents: read
@@ -50,6 +50,18 @@ jobs:
           cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPROTOCORE_REQUIRE_PACKAGE=ON \
             "-DCMAKE_PREFIX_PATH=$GITHUB_WORKSPACE/prefix$EXTRA_PREFIX" "-DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR"
           cmake --build build --parallel 4
+      - name: libc++ atomic wait/notify disassembly (system dylib)
+        run: |
+          set +x
+          sw_vers; uname -a
+          printf '3 + 4.\n' > tiny.st
+          sudo lldb protoST/build/protost --batch -o "breakpoint set -n exit" -o "process launch -- tiny.st" \
+            -o "image list libc++.1.dylib" \
+            -o "disassemble -n __libcpp_atomic_wait" -o "disassemble -n __libcpp_atomic_monitor" \
+            -o "disassemble -n __cxx_atomic_notify_one" -o "disassemble -n __cxx_atomic_notify_all" \
+            -o "script import sys; sys.path.insert(0, '$GITHUB_WORKSPACE/protoST/.github/diag'); import hang_state; hang_state.run(lldb.debugger)" \
+            -o "kill" > libcxx-disasm.txt 2>&1 || true
+          cat libcxx-disasm.txt
       - name: Loop the workload beside the real ctest -j2 neighbours
         env:
           PROTOCORE_SHAPE_TRANSITIONS: ${{ matrix.transitions }}
@@ -79,7 +91,7 @@ jobs:
             if kill -0 $pid 2>/dev/null; then
               hangs=$((hangs+1)); echo "::warning::loop $L hang at run $i (pid $pid)"
               if [ $hangs -le 2 ]; then
-                sudo lldb -p $pid --batch -o "thread backtrace all" > "lldb-$L-$i.txt" 2>&1
+                sudo lldb -p $pid --batch -o "script import sys; sys.path.insert(0, '$GITHUB_WORKSPACE/protoST/.github/diag'); import hang_state; hang_state.run(lldb.debugger)" -o "thread backtrace all" > "lldb-$L-$i.txt" 2>&1
                 sample $pid 2 -file "sample-$L-$i.txt" >/dev/null 2>&1
                 echo "=== lldb loop $L run $i"; cat "lldb-$L-$i.txt"
               fi
@@ -108,5 +120,6 @@ jobs:
           name: stacks-${{ matrix.ref }}-t${{ matrix.transitions }}-${{ matrix.shard }}
           path: |
             lldb-*.txt
+            libcxx-disasm.txt
             sample-*.txt
           if-no-files-found: ignore
