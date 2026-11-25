@@ -3,6 +3,35 @@
 All notable changes to protoST are recorded here. The living, item-by-item
 state of the language is tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
+## 0.17.1 — 2026-11-24
+
+Patch release. **Requires protoCore 3.6.1**, as 0.17.0 did (the floor is
+unchanged), and protoIO 0.7.1 at build time. CI now builds against protoCore
+3.6.2 (tag `v3.6.2`), and the `.deb` is built against it: 3.6.2 makes adding
+attributes to an object that already has more than 64 linear again (O(N^2)
+since 3.6.1), with no API or ABI change.
+
+### Fixed
+
+- **S50: a program could hang at shutdown after growing the worker pool.**
+  `~STRuntime` released every worker at once; each exiting thread runs
+  protoCore's thread teardown, which submits its young generation under a
+  process-wide spin lock with no backoff. With 256 workers under
+  ThreadSanitizer on four CPUs the spinners made no progress for minutes, and
+  the scheduled CI job timed out on `cli_nested_wait_progress` (run
+  45420985532). The workers now leave one at a time: each waits at an exit
+  gate, and `~STRuntime` releases one, joins it, then releases the next. The
+  unit case `S50: workers leave one at a time at shutdown` checks that at most
+  one worker is ever between leaving its loop and its join (structural, no
+  timing). PR #33.
+- **`--print-last` could lose its result.** The result was written to stdout
+  and left in its buffer while the runtime shut down; a shutdown that was slow
+  or killed discarded it. It is now flushed before `~STRuntime` runs.
+- **`cli_actor_stress` reported a hang as "exited 0".** The script read `$?`
+  after `if ! out=$(...)`, which is the negated status; a run that hit its
+  15 s timeout looked like a clean exit. It now reports a timeout as a
+  deadlock and any other failure with its real status.
+
 ## 0.17.0 — 2026-11-24
 
 Explicit state I: instance-variable modifiers on mutable

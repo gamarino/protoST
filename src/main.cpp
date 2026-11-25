@@ -341,7 +341,13 @@ int main(int argc, char** argv) {
             const proto::ProtoObject* r = nullptr;
             if (int status = runReporting(rt, rt.adoptModule(std::move(bc)), &r)) return status;
             // BL-3: shared formatter.
-            if (printLast) protoST::writeWholeLine(stdout, protoST::formatValue(rt, rt.rootCtx(), r));
+            // Flushed before ~STRuntime shuts the workers down: the result is
+            // the program's, and a shutdown that is slow or killed must not
+            // lose it in stdout's buffer (S50, CI 45420985532).
+            if (printLast) {
+                protoST::writeWholeLine(stdout, protoST::formatValue(rt, rt.rootCtx(), r));
+                std::fflush(stdout);
+            }
             return 0;
         } catch (const std::exception& e) {
             protoST::writeWholeLine(stderr, protoST::describeUncaught(e));

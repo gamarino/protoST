@@ -1,20 +1,20 @@
 # Installing protoST
 
-protoST 0.17.0 is a Smalltalk-syntax, actor-native runtime on protoCore. It is
+protoST 0.17.1 is a Smalltalk-syntax, actor-native runtime on protoCore. It is
 a consumer of protoCore, never a bundler of it: `bin/protost` links
 `libprotoCore.so.5`, and every package protoST produces declares a runtime
 dependency on protoCore's own package instead of shipping a copy.
 
 On a Debian or Ubuntu machine where protoCore's package is installed, the
 library is `/usr/lib/x86_64-linux-gnu/libprotoCore.so.5`, a link to
-`libprotoCore.so.<version>`. protoST 0.17.0, like 0.13.0 to 0.16.1, needs protoCore 3.6.1 or later
+`libprotoCore.so.<version>`. protoST 0.17.1, like 0.13.0 to 0.17.0, needs protoCore 3.6.1 or later
 (*Prerequisites*); 0.8.0 to 0.12.0 needed 3.4.0 (0.7.0 needed 3.0.0). Its `.deb`
-is built and tested against protoCore 3.6.1, the release to install with it,
-and depends on `protocore (>= 3.6.1)`. CI builds against protoCore 3.6.1 on
-Linux, macOS and Windows, and the floor job builds the same release, the
-declared minimum; it pins protoIO 0.7.1 (tag `v0.7.1`), which 0.16.1 and 0.17.0 require
-(see *Prerequisites*). The suite was last run locally (2026-11-24, 1631
-cases) against protoCore 3.6.1 (tag `v3.6.1`) and protoIO 0.7.1.
+is built and tested against protoCore 3.6.2, the release to install with it,
+and depends on `protocore (>= 3.6.2)`. CI builds against protoCore 3.6.2 on
+Linux, macOS and Windows, and the floor job builds 3.6.1, the
+declared minimum; it pins protoIO 0.7.1 (tag `v0.7.1`), which 0.16.1 to 0.17.1 require
+(see *Prerequisites*). The suite was last run locally (2026-11-24, 1632
+cases, all passing) against protoCore 3.6.2 (tag `v3.6.2`) and protoIO 0.7.1.
 
 ---
 
@@ -357,22 +357,22 @@ using the Linux packages:
 wsl --install -d Ubuntu-24.04
 
 # Then, in the Ubuntu shell: the two packages of the GitHub releases.
-wget https://github.com/numaes/protoCore/releases/download/v3.6.1/protoCore-3.6.1-Linux.deb
-wget https://github.com/gamarino/protoST/releases/download/v0.17.0/protost-0.17.0-Linux.deb
-sudo apt install ./protoCore-3.6.1-Linux.deb ./protost-0.17.0-Linux.deb
+wget https://github.com/numaes/protoCore/releases/download/v3.6.2/protoCore-3.6.2-Linux.deb
+wget https://github.com/gamarino/protoST/releases/download/v0.17.1/protost-0.17.1-Linux.deb
+sudo apt install ./protoCore-3.6.2-Linux.deb ./protost-0.17.1-Linux.deb
 protost --version
 ```
 
 The packages are attached to the GitHub releases
-[protoCore v3.6.1](https://github.com/numaes/protoCore/releases/tag/v3.6.1)
-and [protoST v0.17.0](https://github.com/gamarino/protoST/releases/tag/v0.17.0)
+[protoCore v3.6.2](https://github.com/numaes/protoCore/releases/tag/v3.6.2)
+and [protoST v0.17.1](https://github.com/gamarino/protoST/releases/tag/v0.17.1)
 (built on Ubuntu 24.04, x86_64). The same commands install them on Ubuntu
-24.04 itself. Built from source, protoST 0.17.0's floor is protoCore 3.6.1;
-the `.deb` depends on `protocore (>= 3.6.1)`, the release CI builds against
+24.04 itself. Built from source, protoST 0.17.1's floor is protoCore 3.6.1;
+the `.deb` depends on `protocore (>= 3.6.2)`, the release CI builds against
 (*Prerequisites*). The package also installs the FAST talk's demos, ready to
 run: `cd /usr/share/protoST/talks/2026-10-15-fas/demos && ./check_all.sh`
 (demo 4 needs `python3`). A machine that still has an older protoCore package (the
-3.0.0 of 0.7.0, or any release before 3.6.1) must upgrade it: the same `apt install` does. To build the packages instead, see §Packages
+3.0.0 of 0.7.0, or any release before 3.6.2) must upgrade it: the same `apt install` does. To build the packages instead, see §Packages
 below and protoCore's own `docs/INSTALLATION.md`.
 
 ---
