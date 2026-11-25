@@ -1,4 +1,5 @@
 // ExecutionEngine — non-recursive Smalltalk bytecode dispatcher.
+#include "runtime/DiagCounters.h"
 //
 // COOPERATIVE YIELD LIMITATION (F6 v3 v1):
 //   Block invocation via direct `value` / `value:` / `value:value:` / ...
@@ -1979,6 +1980,7 @@ ExecutionEngine::runLoop(proto::ProtoContext* ctx) {
                     // mailbox. The collector traces the queued messages, so the
                     // envelope needs no further root once it is pushed.
                     rt_.actorMailbox(ctx, recv)->push(ctx, msg);
+                    protoST::diag::ev(protoST::diag::evPush, 0);
 
                     // Schedule the actor for processing and stash the Future
                     // as the apparent result of the send. The push happens
