@@ -2439,6 +2439,21 @@ void STRuntime::schedule(proto::ProtoContext* ctx, const proto::ProtoObject* act
     //   1 -> 2  the actor is mid-turn — mark a pending wakeup, finishDrain
     //           will re-queue it;
     //   2       a wakeup is already marked — nothing to do.
+    //
+    // S51: the state-2 case returns on a plain read, with no compare-and-swap,
+    // so it does not take part in the flag's modification order. The caller
+    // made its work visible first (the mailbox push, or the registration of a
+    // Future waiter), and finishDrain reads the mailbox after its own CAS on
+    // the flag: a store-buffering pair (each thread writes one location, then
+    // reads the other). Release and acquire do not order a store before a
+    // later load (on arm64 the acquire load is an LDAPR that may complete
+    // before the earlier store is visible), so without a full fence on both
+    // sides the sender could read the stale 2 while finishDrain read the stale
+    // empty mailbox and released the actor: the message stayed queued with
+    // the flag at 0 and nothing scheduled. This fence pairs with the two in
+    // finishDrain; with a seq_cst fence on each side, at least one of the two
+    // reads sees the other thread's write.
+    std::atomic_thread_fence(std::memory_order_seq_cst);
     for (;;) {
         long long s = schedState(ctx, actor);
         if (s == 2) {
@@ -3041,8 +3056,15 @@ void STRuntime::finishDrain(proto::ProtoContext* ctx,
     // is 1 or 2 on entry (the actor was running this turn). There is no lock:
     // a concurrent SEND or future-settle calling schedule() either marks
     // 1->2 before our CAS 1->0 (so our CAS fails, we loop, see 2, re-queue)
-    // or sees state 0 after our CAS and enqueues the actor itself. The CAS is
-    // the linearisation point — a wakeup can never be stranded.
+    // or sees state 0 after our CAS and enqueues the actor itself.
+    //
+    // S51: the CAS alone is NOT the linearisation point. A sender that reads
+    // state 2 returns without a CAS (schedule()), so nothing orders its
+    // mailbox push against our CAS except fences: after each CAS that is
+    // followed by a mailbox check (2->1 and 1->0 below) there is a seq_cst
+    // fence, pairing with the one at the top of schedule(). Either the
+    // sender's read sees our write (it CASes, and our next CAS fails or it
+    // enqueues the actor itself), or our mailbox check sees its message.
     for (;;) {
         long long s = schedState(ctx, actor);
         if (s == 2) {
@@ -3073,6 +3095,9 @@ void STRuntime::finishDrain(proto::ProtoContext* ctx,
             // claiming exclusivity was a race that lost wakeups
             // (mt100k timed out at 30 s).
             if (casSchedState(ctx, actor, 2, 1)) {
+                // S51: orders the 2->1 write before the mailbox check
+                // (pairs with the fence at the top of schedule()).
+                std::atomic_thread_fence(std::memory_order_seq_cst);
                 // Won. Now safe to check the mailbox without racing the
                 // OTHER SEND's mailbox-then-sched ordering: any concurrent
                 // SEND that wins its 1 -> 2 transition will trap us at
@@ -3118,6 +3143,9 @@ void STRuntime::finishDrain(proto::ProtoContext* ctx,
         }
         // s == 1 — turn owner, no wakeup marked yet. Release the flag.
         if (!casSchedState(ctx, actor, 1, 0)) continue;  // became 2 — loop
+        // S51: orders the 1->0 write before the mailbox check (pairs with
+        // the fence at the top of schedule()).
+        std::atomic_thread_fence(std::memory_order_seq_cst);
 
         // Released (state 0). A SEND racing this CAS now sees 0 and enqueues
         // the actor itself; one that raced just before us marked 1->2 and the
