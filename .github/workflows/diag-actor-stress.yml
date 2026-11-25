@@ -15,19 +15,19 @@ jobs:
   loop:
     name: ${{ matrix.ref }} transitions=${{ matrix.transitions }} (${{ matrix.shard }})
     runs-on: macos-15
-    timeout-minutes: 90
+    timeout-minutes: 85
     strategy:
       fail-fast: false
       matrix:
-        ref: [v3.6.1, v3.6.2]
+        ref: [v3.6.2]
         transitions: ['1']
-        shard: [a, b]
+        shard: [a, b, c, d]
         include:
-          - ref: v3.6.2
-            transitions: '0'
+          - ref: v3.6.1
+            transitions: '1'
             shard: a
-          - ref: v3.6.2
-            transitions: '0'
+          - ref: v3.6.1
+            transitions: '1'
             shard: b
     steps:
       - uses: actions/checkout@v4
@@ -49,8 +49,8 @@ jobs:
           cd protoST
           cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPROTOCORE_REQUIRE_PACKAGE=ON \
             "-DCMAKE_PREFIX_PATH=$GITHUB_WORKSPACE/prefix$EXTRA_PREFIX" "-DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR"
-          cmake --build build --parallel 4 --target protost
-      - name: Loop the workload under load (3 loops + 2 CPU hogs)
+          cmake --build build --parallel 4
+      - name: Loop the workload beside the real ctest -j2 neighbours
         env:
           PROTOCORE_SHAPE_TRANSITIONS: ${{ matrix.transitions }}
         run: |
@@ -65,16 +65,20 @@ jobs:
           1 to: 1000 do: [ :i | sink ping ].
           (sink count) wait.
           ST
+          # Every loop is bounded by one wall-clock deadline, so the step always
+          # reaches its summary well inside the job timeout.
+          DEADLINE=$(( $(date +%s) + 50*60 )); export DEADLINE
           cat > loop.sh <<'SH'
           #!/bin/bash
-          L=$1; P=protoST/build/protost; hangs=0; bad=0; N=300
-          for i in $(seq 1 $N); do
+          L=$1; P=protoST/build/protost; i=0; hangs=0; bad=0
+          while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+            i=$((i+1))
             "$P" --print-last w.st > out-$L.txt 2>&1 &
             pid=$!; t=0
             while kill -0 $pid 2>/dev/null && [ $t -lt 300 ]; do sleep 0.1; t=$((t+1)); done
             if kill -0 $pid 2>/dev/null; then
               hangs=$((hangs+1)); echo "::warning::loop $L hang at run $i (pid $pid)"
-              if [ $hangs -le 1 ]; then
+              if [ $hangs -le 2 ]; then
                 sudo lldb -p $pid --batch -o "thread backtrace all" > "lldb-$L-$i.txt" 2>&1
                 sample $pid 2 -file "sample-$L-$i.txt" >/dev/null 2>&1
                 echo "=== lldb loop $L run $i"; cat "lldb-$L-$i.txt"
@@ -84,17 +88,20 @@ jobs:
               wait $pid; rc=$?; last=$(tail -1 out-$L.txt)
               if [ $rc -ne 0 ] || [ "$last" != 1000 ]; then bad=$((bad+1)); echo "loop $L bad run $i rc=$rc last='$last'"; fi
             fi
+            [ $((i % 100)) -eq 0 ] && echo "loop $L progress runs=$i hangs=$hangs bad=$bad"
           done
-          echo "loop $L runs=$N hangs=$hangs bad=$bad"
+          echo "loop $L runs=$i hangs=$hangs bad=$bad"
           SH
           chmod +x loop.sh
-          (while :; do :; done) & h1=$!
-          (while :; do :; done) & h2=$!
-          ./loop.sh 1 > l1.log 2>&1 & ./loop.sh 2 > l2.log 2>&1 & ./loop.sh 3 > l3.log 2>&1 &
-          wait %3 %4 %5 2>/dev/null; wait $(jobs -p | grep -v -e $h1 -e $h2) 2>/dev/null
-          kill $h1 $h2
-          cat l1.log l2.log l3.log
-          for f in l1.log l2.log l3.log; do tail -1 $f; done | sed "s/^/ref=${{ matrix.ref }} transitions=${{ matrix.transitions }} /" | tee -a "$GITHUB_STEP_SUMMARY"
+          # The neighbours CI actually runs beside this test: the whole suite at -j2.
+          ( n=0; while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+              n=$((n+1)); ctest --test-dir protoST/build -j2 -E cli_actor_stress --timeout 300 -Q
+              echo "neighbour suite pass $n rc=$?"
+            done ) & nb=$!
+          ./loop.sh 1 & l1=$!
+          ./loop.sh 2 & l2=$!
+          wait $l1 $l2 $nb
+          echo "ref=${{ matrix.ref }} transitions=${{ matrix.transitions }} shard=${{ matrix.shard }} done" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
