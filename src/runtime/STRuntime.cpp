@@ -67,9 +67,9 @@
 #else
 #include <climits>
 #include <unistd.h>
+#endif
 #include "runtime/DiagCounters.h"
 std::atomic<std::intptr_t> protost_diag[16] = {};
-#endif
 
 namespace protoST { void installIntPrimitives(STRuntime& rt); }
 namespace protoST { void installMathPrimitives(STRuntime& rt); }
