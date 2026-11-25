@@ -69,7 +69,8 @@
 #include <unistd.h>
 #endif
 #include "runtime/DiagCounters.h"
-std::atomic<std::intptr_t> protost_diag[16] = {};
+std::atomic<std::intptr_t> protost_diag[32] = {};
+bool protost_diag_fence = false;
 
 namespace protoST { void installIntPrimitives(STRuntime& rt); }
 namespace protoST { void installMathPrimitives(STRuntime& rt); }
@@ -854,6 +855,8 @@ void STRuntime::construct() {
     protoST::diag::put(protoST::diag::kMainSemAddr, &impl_->mainWaitSem);
     protoST::diag::put(protoST::diag::kWorkerSemAddr, &impl_->workerSem);
     protoST::diag::put(protoST::diag::kMagic, std::intptr_t(0x5157));
+    protost_diag_fence = std::getenv("PROTOST_DIAG_FENCE") != nullptr;
+    protoST::diag::put(protoST::diag::kFenceOn, std::intptr_t(protost_diag_fence));
     // S6: associate this runtime with its ProtoSpace, in two steps
     // (STModuleProvider.h). First the space's entry is reserved: a primitive
     // finds its runtime by its context's space (primitives.h, runtimeOf), so
@@ -2459,14 +2462,21 @@ void STRuntime::schedule(proto::ProtoContext* ctx, const proto::ProtoObject* act
     //   1 -> 2  the actor is mid-turn — mark a pending wakeup, finishDrain
     //           will re-queue it;
     //   2       a wakeup is already marked — nothing to do.
+    // CANDIDATE FIX (diag switch): order the caller's mailbox push before
+    // the read of __sched__ (store-buffering pair with finishDrain).
+    if (protost_diag_fence) std::atomic_thread_fence(std::memory_order_seq_cst);
     for (;;) {
         long long s = schedState(ctx, actor);
         if (s == 2) {
+            protoST::diag::rbump(protoST::diag::kSchedSaw2);
+            protoST::diag::rput(protoST::diag::kSchedLast, 2);
             SCHED_DIAG("schedule actor=" << actor << " already marked (2)");
             return;
         }
         if (s == 1) {
             if (casSchedState(ctx, actor, 1, 2)) {
+                protoST::diag::rbump(protoST::diag::kSched1to2);
+                protoST::diag::rput(protoST::diag::kSchedLast, 12);
                 SCHED_DIAG("schedule actor=" << actor << " marked wakeup (1->2)");
                 return;
             }
@@ -2474,6 +2484,8 @@ void STRuntime::schedule(proto::ProtoContext* ctx, const proto::ProtoObject* act
         }
         // s == 0
         if (casSchedState(ctx, actor, 0, 1)) {
+            protoST::diag::rbump(protoST::diag::kSched0to1);
+            protoST::diag::rput(protoST::diag::kSchedLast, 1);
             enqueueReady(ctx, actor);
             SCHED_DIAG("schedule actor=" << actor << " enqueued (0->1)");
             return;
@@ -2559,6 +2571,8 @@ private:
         if (!queue) return false;
         const proto::ProtoList* batch = queue->takeAll(ctx_);
         if (!batch || batch->getSize(ctx_) == 0) return false;
+        protost_diag[protoST::diag::kTaken].fetch_add(
+            static_cast<std::intptr_t>(batch->getSize(ctx_)), std::memory_order_relaxed);
         adopt(batch);
         return true;
     }
@@ -2641,6 +2655,7 @@ bool STRuntime::drainTurn(proto::ProtoContext* ctx, bool oneMessage) {
     // or an empty queue.
     const proto::ProtoObject* actor = dequeueReady(ctx);
     if (!actor) return false;
+    protoST::diag::rbump(protoST::diag::kTurns);
     SCHED_DIAG("drainOne POP actor=" << actor);
 
     // GC-root the popped actor for the whole turn. dequeueReady removed it
@@ -3093,6 +3108,7 @@ void STRuntime::finishDrain(proto::ProtoContext* ctx,
             // claiming exclusivity was a race that lost wakeups
             // (mt100k timed out at 30 s).
             if (casSchedState(ctx, actor, 2, 1)) {
+                if (protost_diag_fence) std::atomic_thread_fence(std::memory_order_seq_cst);
                 // Won. Now safe to check the mailbox without racing the
                 // OTHER SEND's mailbox-then-sched ordering: any concurrent
                 // SEND that wins its 1 -> 2 transition will trap us at
@@ -3119,6 +3135,7 @@ void STRuntime::finishDrain(proto::ProtoContext* ctx,
                 // third iteration's settle-before-yield race lost the
                 // re-schedule.
                 if (mailboxHasWork(ctx, actor) || suspended) {
+                    protoST::diag::rput(protoST::diag::kFdLast, 1);
                     enqueueReady(ctx, actor);
                     SCHED_DIAG("finishDrain RE-QUEUE actor=" << actor
                         << (suspended ? " (suspended wakeup)" : " (mailbox)"));
@@ -3128,6 +3145,8 @@ void STRuntime::finishDrain(proto::ProtoContext* ctx,
                 // re-marked state to 2, the CAS fails and we loop back
                 // to consume the now-real wakeup.
                 if (casSchedState(ctx, actor, 1, 0)) {
+                    protoST::diag::rbump(protoST::diag::kFdStaleRel);
+                    protoST::diag::rput(protoST::diag::kFdLast, 2);
                     unanchorActor(ctx, actor);
                     SCHED_DIAG("finishDrain RELEASE (stale wakeup) actor=" << actor);
                     return;
@@ -3138,6 +3157,7 @@ void STRuntime::finishDrain(proto::ProtoContext* ctx,
         }
         // s == 1 — turn owner, no wakeup marked yet. Release the flag.
         if (!casSchedState(ctx, actor, 1, 0)) continue;  // became 2 — loop
+        if (protost_diag_fence) std::atomic_thread_fence(std::memory_order_seq_cst);
 
         // Released (state 0). A SEND racing this CAS now sees 0 and enqueues
         // the actor itself; one that raced just before us marked 1->2 and the
@@ -3149,6 +3169,7 @@ void STRuntime::finishDrain(proto::ProtoContext* ctx,
             // re-claimed (0->1) and enqueued it, our CAS fails and we leave
             // it to them — enqueued exactly once either way.
             if (casSchedState(ctx, actor, 0, 1)) {
+                protoST::diag::rput(protoST::diag::kFdLast, 4);
                 enqueueReady(ctx, actor);
                 SCHED_DIAG("finishDrain RE-QUEUE (backlog) actor=" << actor);
             }
@@ -3166,6 +3187,7 @@ void STRuntime::finishDrain(proto::ProtoContext* ctx,
         // anchorActor / unanchorActor are gated on the `__anchored__` flag,
         // so the common non-suspending turn pays only one cheap attribute
         // read here — no hex-string key, no registry mutation.
+        if (!suspended) { protoST::diag::rbump(protoST::diag::kFdPlainRel); protoST::diag::rput(protoST::diag::kFdLast, 3); }
         if (suspended) anchorActor(ctx, actor);
         else           unanchorActor(ctx, actor);
         SCHED_DIAG("finishDrain RELEASE actor=" << actor

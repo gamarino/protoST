@@ -7,7 +7,10 @@ import lldb
 NAMES = ["markNonNull", "markedFuture", "acqEnter", "acqExit", "notifyCalls",
          "notifyMatch", "notifyLastFut", "notifyLastSeen", "settleClaims",
          "settledMarked", "waitLoopZero", "workerRelease", "mainSemAddr",
-         "workerSemAddr", "lastStateRead", "magic"]
+         "workerSemAddr", "lastStateRead", "magic",
+         "pushes", "schedSaw2", "sched1to2", "sched0to1", "schedLast", "taken",
+         "fdStaleRel", "fdPlainRel", "fdLast", "turns", "fenceOn",
+         "r27", "r28", "r29", "r30", "r31"]
 
 
 def rd(proc, addr, size):
@@ -41,7 +44,7 @@ def run(debugger):
             v = rd(proc, base + 8 * i, 8)
             vals.append(v)
             print("  diag[%2d] %-15s = %s (%s)" % (i, n, v, hex(v) if v is not None else "?"))
-    if len(vals) == 16:
+    if len(vals) >= 16:
         for label, a in (("mainWaitSem", vals[12]), ("workerSem", vals[13])):
             if a:
                 print("  %s count_ = %s" % (label, rd(proc, a, 4)))

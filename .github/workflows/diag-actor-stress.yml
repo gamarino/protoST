@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   loop:
-    name: ${{ matrix.ref }} transitions=${{ matrix.transitions }} (${{ matrix.shard }})
+    name: ${{ matrix.ref }} fence=${{ matrix.fence }} (${{ matrix.shard }})
     runs-on: macos-15
     timeout-minutes: 85
     strategy:
@@ -21,14 +21,8 @@ jobs:
       matrix:
         ref: [v3.6.2]
         transitions: ['1']
-        shard: [a, b, c, d]
-        include:
-          - ref: v3.6.2
-            transitions: '1'
-            shard: e
-          - ref: v3.6.1
-            transitions: '1'
-            shard: a
+        fence: ['0', '1']
+        shard: [a, b, c]
     steps:
       - uses: actions/checkout@v4
         with: { path: protoST }
@@ -66,6 +60,7 @@ jobs:
         env:
           PROTOCORE_SHAPE_TRANSITIONS: ${{ matrix.transitions }}
         run: |
+          if [ "${{ matrix.fence }}" = 1 ]; then export PROTOST_DIAG_FENCE=1; fi
           set +e
           cat > w.st <<'ST'
           Object subclass: #Sink instanceVariableNames: 'count'.
@@ -117,7 +112,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: stacks-${{ matrix.ref }}-t${{ matrix.transitions }}-${{ matrix.shard }}
+          name: stacks-${{ matrix.ref }}-f${{ matrix.fence }}-${{ matrix.shard }}
           path: |
             lldb-*.txt
             libcxx-disasm.txt
