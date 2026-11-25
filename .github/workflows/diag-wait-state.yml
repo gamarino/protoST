@@ -1,0 +1,104 @@
+name: Diag macOS lost wakeup state
+
+# Temporary diagnostic (never merged): short single-worker loops under load; dumps the runtime state on a hang
+
+on:
+  push:
+    branches: ['diag/macos-nested-wait-state']
+
+permissions:
+  contents: read
+
+jobs:
+  loop:
+    name: ${{ matrix.ref }} transitions=${{ matrix.transitions }} (${{ matrix.shard }})
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: [v3.6.2]
+        transitions: ['1']
+        shard: [a, b, c, d, e, f]
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: protoST }
+      - uses: actions/checkout@v4
+        with: { repository: numaes/protoCore, ref: '${{ matrix.ref }}', path: protoCore }
+      - uses: actions/checkout@v4
+        with: { repository: gamarino/protoIO, ref: v0.7.1, path: protoIO }
+      - name: Dependencies
+        run: |
+          for f in readline openssl@3 ninja coreutils; do brew list "$f" >/dev/null 2>&1 || brew install "$f"; done
+          echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          echo "EXTRA_PREFIX=;$(brew --prefix readline)" >> "$GITHUB_ENV"
+      - name: Build protoCore and protoST (RelWithDebInfo)
+        run: |
+          cmake -S protoCore -B protoCore/build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build protoCore/build --parallel 4
+          cmake --install protoCore/build --prefix "$GITHUB_WORKSPACE/prefix"
+          cd protoST
+          cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPROTOCORE_REQUIRE_PACKAGE=ON \
+            "-DCMAKE_PREFIX_PATH=$GITHUB_WORKSPACE/prefix$EXTRA_PREFIX" "-DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR"
+          cmake --build build --parallel 4
+      - name: Loop short single-worker cases beside ctest -j2 neighbours
+        run: |
+          set +e
+          DEADLINE=$(( $(date +%s) + 40*60 )); export DEADLINE
+          P=$PWD/protoST/build/protost; F=$PWD/protoST/tests/cli/fixtures; U=$PWD/protoST/build/protost_unit_tests
+          cat > dump.lldb <<'LL'
+          thread backtrace all
+          thread select 3
+          frame select 8
+          expression -- impl_->workerSem
+          expression -- impl_->mainWaitSem
+          expression -- impl_->queuedTasks
+          expression -- impl_->poolSize
+          expression -- impl_->mainWaitingOn
+          expression -- impl_->mainReleasedFor
+          expression -- impl_->mainBlocked
+          expression -- impl_->readyStack[0]
+          expression -- impl_->readyStack[1]
+          expression -- impl_->readyStack[2]
+          expression -- impl_->workerSem.release(1)
+          detach
+          quit
+          LL
+          cat > loop.sh <<'SH'
+          #!/bin/bash
+          # loop.sh <label> <cmd...>: bound 20 s. On a hang dump the runtime's state with lldb, then
+          # post one workerSem permit from the debugger and record whether the process revives.
+          L=$1; shift; i=0; hangs=0; slow=0; bad=0
+          while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+            i=$((i+1))
+            "$@" > out-$L.txt 2>&1 &
+            pid=$!; t=0
+            while kill -0 $pid 2>/dev/null && [ $t -lt 200 ]; do sleep 0.1; t=$((t+1)); done
+            if kill -0 $pid 2>/dev/null; then
+              hangs=$((hangs+1)); echo "::warning::$L hang at run $i"
+              if [ $hangs -le 3 ]; then
+                sudo lldb -p $pid --batch -s dump.lldb > "lldb-$L-$i.txt" 2>&1
+                for k in 1 2 3 4 5 6 7 8 9 10; do sleep 1; kill -0 $pid 2>/dev/null || break; done
+                if kill -0 $pid 2>/dev/null; then echo "$L run $i: NOT revived by a posted permit"; else echo "$L run $i: REVIVED by a posted permit"; fi
+              fi
+              kill -9 $pid 2>/dev/null; wait $pid 2>/dev/null
+            else
+              wait $pid; rc=$?; [ $rc -ne 0 ] && { bad=$((bad+1)); echo "$L rc=$rc: $(tail -n 2 out-$L.txt | cut -c1-200)"; }
+            fi
+          done
+          echo "$L runs=$i hangs=$hangs bad=$bad"
+          SH
+          chmod +x loop.sh
+          ( while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+              ctest --test-dir protoST/build -j2 -E "cli_actor_stress|cli_nested_wait_progress|cli_late_main_park" --timeout 300 -Q >/dev/null 2>&1
+            done ) & nb=$!
+          ./loop.sh chain30a env PROTOST_WORKERS=1 $P --print-last $F/nested_wait_chain.st 30 & l1=$!
+          ./loop.sh chain30b env PROTOST_WORKERS=1 $P --print-last $F/nested_wait_chain.st 30 & l2=$!
+          ./loop.sh unitBL2 env PROTOST_WORKERS=1 $U "BL-2: 400-link dependency chain runs on a SINGLE worker without stalling (cooperative, wide locals)" & l3=$!
+          wait $l1 $l2 $l3 $nb
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: state-${{ matrix.shard }}
+          path: lldb-*.txt
+          if-no-files-found: ignore
