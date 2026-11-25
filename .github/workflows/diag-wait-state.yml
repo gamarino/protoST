@@ -46,22 +46,12 @@ jobs:
           set +e
           DEADLINE=$(( $(date +%s) + 40*60 )); export DEADLINE
           P=$PWD/protoST/build/protost; F=$PWD/protoST/tests/cli/fixtures; U=$PWD/protoST/build/protost_unit_tests
-          cat > dump.lldb <<'LL'
+          cat > dump1.lldb <<'LL'
           thread backtrace all
           thread select 3
           frame select 8
-          expression -- impl_->workerSem
-          expression -- impl_->mainWaitSem
-          expression -- impl_->queuedTasks
-          expression -- impl_->poolSize
-          expression -- impl_->mainWaitingOn
-          expression -- impl_->mainReleasedFor
-          expression -- impl_->mainBlocked
-          expression -- impl_->readyStack[0]
-          expression -- impl_->readyStack[1]
-          expression -- impl_->readyStack[2]
-          expression -- impl_->workerSem.release(1)
-          detach
+          frame variable this
+          frame variable this->impl_
           quit
           LL
           cat > loop.sh <<'SH'
@@ -77,9 +67,13 @@ jobs:
             if kill -0 $pid 2>/dev/null; then
               hangs=$((hangs+1)); echo "::warning::$L hang at run $i"
               if [ $hangs -le 3 ]; then
-                sudo lldb -p $pid --batch -s dump.lldb > "lldb-$L-$i.txt" 2>&1
-                for k in 1 2 3 4 5 6 7 8 9 10; do sleep 1; kill -0 $pid 2>/dev/null || break; done
-                if kill -0 $pid 2>/dev/null; then echo "$L run $i: NOT revived by a posted permit"; else echo "$L run $i: REVIVED by a posted permit"; fi
+                sudo lldb -p $pid --batch -s dump1.lldb > "lldb-$L-$i.txt" 2>&1
+                IMPL=$(grep -A3 'this->impl_' "lldb-$L-$i.txt" | grep -o '__ptr_ = 0x[0-9a-f]*\|__value_ = 0x[0-9a-f]*\|= 0x[0-9a-f]*' | tail -1 | grep -o '0x[0-9a-f]*')
+                echo "$L run $i: impl=$IMPL"
+                if [ -n "$IMPL" ]; then
+                  { echo "expression -- *(protoST::STRuntime::Impl*)$IMPL"; echo "quit"; } > dump2-$L.lldb
+                  sudo lldb -p $pid --batch -s dump2-$L.lldb > "lldb-impl-$L-$i.txt" 2>&1
+                fi
               fi
               kill -9 $pid 2>/dev/null; wait $pid 2>/dev/null
             else
@@ -94,7 +88,7 @@ jobs:
             done ) & nb=$!
           ./loop.sh chain30a env PROTOST_WORKERS=1 $P --print-last $F/nested_wait_chain.st 30 & l1=$!
           ./loop.sh chain30b env PROTOST_WORKERS=1 $P --print-last $F/nested_wait_chain.st 30 & l2=$!
-          ./loop.sh unitBL2 env PROTOST_WORKERS=1 $U "BL-2: 400-link dependency chain runs on a SINGLE worker without stalling (cooperative, wide locals)" & l3=$!
+          ./loop.sh chain30c env PROTOST_WORKERS=1 $P --print-last $F/nested_wait_chain.st 30 & l3=$!
           wait $l1 $l2 $l3 $nb
       - uses: actions/upload-artifact@v4
         if: always()
